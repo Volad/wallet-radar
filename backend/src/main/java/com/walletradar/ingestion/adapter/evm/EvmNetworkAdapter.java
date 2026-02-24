@@ -1,10 +1,13 @@
-package com.walletradar.ingestion.adapter;
+package com.walletradar.ingestion.adapter.evm;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.walletradar.domain.NetworkId;
 import com.walletradar.domain.RawTransaction;
+import com.walletradar.ingestion.adapter.NetworkAdapter;
+import com.walletradar.ingestion.adapter.RpcEndpointRotator;
+import com.walletradar.ingestion.adapter.RpcException;
 import lombok.RequiredArgsConstructor;
 import org.bson.Document;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -25,6 +28,7 @@ public class EvmNetworkAdapter implements NetworkAdapter {
     private static final String TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 
     private final EvmRpcClient rpcClient;
+    @Qualifier("evmRotatorsByNetwork")
     private final Map<String, RpcEndpointRotator> rotatorsByNetwork;
     @Qualifier("evmDefaultRpcEndpointRotator")
     private final RpcEndpointRotator defaultRotator;

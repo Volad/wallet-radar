@@ -12,7 +12,7 @@
 - All `GET` endpoints make **zero RPC calls** and **zero heavy computation**
 - All monetary fields (`priceUsd`, `avco`, `pnl`, etc.) are returned as `String`
 - Timestamps are `ISO 8601` strings: `"2025-01-15T14:00:00Z"`
-- Network IDs: `ETHEREUM` | `ARBITRUM` | `OPTIMISM` | `BASE` | `BNB_CHAIN` | `POLYGON` | `AVALANCHE` | `MANTLE` | `SOLANA`
+- Network IDs: `ETHEREUM` | `ARBITRUM` | `OPTIMISM` | `BASE` | `BSC` | `POLYGON` | `AVALANCHE` | `MANTLE` | `SOLANA`
 - `crossWalletAvco` is always **global across all networks** — network filter does not change it
 - `202 Accepted` responses include a job or sync ID for polling
 

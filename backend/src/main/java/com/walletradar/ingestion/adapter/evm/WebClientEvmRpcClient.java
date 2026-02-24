@@ -1,5 +1,6 @@
-package com.walletradar.ingestion.adapter;
+package com.walletradar.ingestion.adapter.evm;
 
+import com.walletradar.ingestion.adapter.RpcException;
 import org.springframework.http.MediaType;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;

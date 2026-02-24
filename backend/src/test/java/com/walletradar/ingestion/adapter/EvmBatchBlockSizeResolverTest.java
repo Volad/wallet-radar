@@ -2,6 +2,7 @@ package com.walletradar.ingestion.adapter;
 
 import com.walletradar.domain.NetworkId;
 import com.walletradar.ingestion.config.IngestionNetworkProperties;
+import com.walletradar.ingestion.adapter.evm.EvmBatchBlockSizeResolver;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;

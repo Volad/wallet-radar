@@ -1,4 +1,4 @@
-package com.walletradar.ingestion.adapter;
+package com.walletradar.ingestion.adapter.evm;
 
 import reactor.core.publisher.Mono;
 

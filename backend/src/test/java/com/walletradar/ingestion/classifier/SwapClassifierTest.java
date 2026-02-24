@@ -2,11 +2,13 @@ package com.walletradar.ingestion.classifier;
 
 import com.walletradar.domain.EconomicEventType;
 import com.walletradar.domain.RawTransaction;
+import com.walletradar.ingestion.config.ProtocolRegistryProperties;
 import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -17,7 +19,9 @@ class SwapClassifierTest {
 
     @BeforeEach
     void setUp() {
-        registry = new DefaultProtocolRegistry();
+        ProtocolRegistryProperties props = new ProtocolRegistryProperties();
+        props.setNames(Map.of("0x7a250d5630b4cf539739df2c5dacb4c659f2488d", "Uniswap V2"));
+        registry = new DefaultProtocolRegistry(props);
         classifier = new SwapClassifier(registry);
     }
 

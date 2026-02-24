@@ -2,11 +2,13 @@ package com.walletradar.ingestion.classifier;
 
 import com.walletradar.domain.EconomicEventType;
 import com.walletradar.domain.RawTransaction;
+import com.walletradar.ingestion.config.ProtocolRegistryProperties;
 import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -17,7 +19,9 @@ class TransferClassifierTest {
 
     @BeforeEach
     void setUp() {
-        registry = new DefaultProtocolRegistry();
+        ProtocolRegistryProperties props = new ProtocolRegistryProperties();
+        props.setNames(Map.of());
+        registry = new DefaultProtocolRegistry(props);
         classifier = new TransferClassifier(registry);
     }
 

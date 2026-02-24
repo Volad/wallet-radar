@@ -1,10 +1,13 @@
-package com.walletradar.ingestion.adapter;
+package com.walletradar.ingestion.adapter.solana;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.walletradar.domain.NetworkId;
 import com.walletradar.domain.RawTransaction;
+import com.walletradar.ingestion.adapter.NetworkAdapter;
+import com.walletradar.ingestion.adapter.RpcEndpointRotator;
+import com.walletradar.ingestion.adapter.RpcException;
 import lombok.extern.slf4j.Slf4j;
 import org.bson.Document;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -32,7 +35,7 @@ public class SolanaNetworkAdapter implements NetworkAdapter {
     private final ObjectMapper objectMapper;
 
     public SolanaNetworkAdapter(SolanaRpcClient rpcClient,
-                                Map<String, RpcEndpointRotator> rotatorsByNetwork,
+                                @Qualifier("solanaRotatorsByNetwork") Map<String, RpcEndpointRotator> rotatorsByNetwork,
                                 @Qualifier("solanaDefaultRpcEndpointRotator") RpcEndpointRotator defaultRotator,
                                 ObjectMapper objectMapper) {
         this.rpcClient = rpcClient;

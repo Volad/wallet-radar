@@ -29,6 +29,7 @@ dependencies {
     testImplementation("org.testcontainers:testcontainers")
     testImplementation("org.testcontainers:mongodb")
     testImplementation("org.testcontainers:junit-jupiter")
+    testImplementation("com.tngtech.archunit:archunit-junit5:1.2.1")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 

@@ -113,9 +113,15 @@ com.walletradar
 ├── ingestion/
 │   ├── adapter/
 │   │   ├── NetworkAdapter        interface
-│   │   ├── EvmNetworkAdapter     eth_getLogs, batch size per network (default 2000), see ADR-011
-│   │   ├── SolanaNetworkAdapter  getSignaturesForAddress + SPL
-│   │   └── RpcEndpointRotator    round-robin, exponential backoff
+│   │   ├── RpcEndpointRotator    round-robin, exponential backoff
+│   │   ├── evm/
+│   │   │   ├── EvmNetworkAdapter     eth_getLogs, batch size per network (default 2000), see ADR-011
+│   │   │   ├── EvmRpcClient
+│   │   │   └── WebClientEvmRpcClient
+│   │   └── solana/
+│   │       ├── SolanaNetworkAdapter  getSignaturesForAddress + SPL
+│   │       ├── SolanaRpcClient
+│   │       └── WebClientSolanaRpcClient
 │   │   Config: network settings under walletradar.ingestion.network (per NetworkId): urls (RPC list), batch-block-size; see ADR-012.
 │   ├── classifier/
 │   │   ├── TxClassifier          dispatch by tx shape

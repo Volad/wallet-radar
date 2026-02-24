@@ -80,13 +80,10 @@ public class EconomicEventNormalizer {
     }
 
     /**
-     * Per 03-accounting: BUY events include gas in cost basis by default; TRANSFER and others excluded.
+     * Per 03-accounting and INV-12: only BUY and acquisition-type events include gas in cost basis; TRANSFER, STAKE, LEND excluded.
      */
     private static boolean gasIncludedInBasis(EconomicEventType eventType) {
         return eventType == EconomicEventType.SWAP_BUY
-                || eventType == EconomicEventType.BORROW
-                || eventType == EconomicEventType.STAKE_WITHDRAWAL
-                || eventType == EconomicEventType.LEND_WITHDRAWAL
-                || eventType == EconomicEventType.EXTERNAL_INBOUND;
+                || eventType == EconomicEventType.BORROW;
     }
 }
