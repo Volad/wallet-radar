@@ -4,6 +4,17 @@
 
 This file keeps the **dependency order** and a short reference; full task descriptions live in the per-feature files.
 
+**Completed tasks (update after each PR merge):**
+
+| Completed task IDs | Feature file |
+|--------------------|--------------|
+| T-001 … T-008      | 00-foundation.md, 00-ingestion-core.md |
+| T-015, T-016       | 00-cost-basis-engine.md |
+| T-017              | 05-override-recalc.md (partial) |
+| T-019, T-020       | 00-pricing.md |
+
+**Current step:** T-009, T-023 — `01-add-wallet-backfill.md`
+
 ---
 
 ## Foundation
