@@ -32,8 +32,7 @@ Backend:
 - Spring Boot
 - Gradle
 - MongoDB (self-hosted or Docker for dev)
-- Spring Data MongoDB
-- MapStruct
+- Spring Data MongoDB (persistence); no MapStruct — entity mapping manual or via Lombok
 - Jakarta Validation
 - Spring Cache (Caffeine for local cache)
 - OpenTelemetry (OTLP exporter optional)
