@@ -45,6 +45,22 @@ public class MyService {
 }
 ```
 
+## Logging
+
+- **@Slf4j** — use instead of `LoggerFactory.getLogger(MyClass.class)`. Lombok generates a static final field `log` (SLF4J). Do not declare or import `Logger` / `LoggerFactory` manually when using @Slf4j.
+
+Example:
+
+```java
+@Slf4j
+@Component
+public class MyService {
+    public void doSomething() {
+        log.warn("Something happened");
+    }
+}
+```
+
 ## Value objects / immutables
 
 - Use **@Getter** (and keep factory methods or private constructor) where the type is immutable (e.g. `Quantity`). No setters, no @NoArgsConstructor if that would break invariants.
