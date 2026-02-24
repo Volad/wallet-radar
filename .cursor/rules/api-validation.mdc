@@ -1,0 +1,28 @@
+---
+description: API request validation with Jakarta Bean Validation
+globs: backend/src/main/java/com/walletradar/api/**/*.java
+alwaysApply: false
+---
+
+# API Request Validation
+
+## Rule
+
+- **Use Jakarta Bean Validation** for request body and other inputs. Do **not** perform explicit validation inside controller methods. Exception: path/matrix parameter validation may be done manually in the controller (e.g. blank address → 400 with ErrorBody).
+- Annotate request body parameters with **`@Valid`**:
+  ```java
+  public ResponseEntity<?> addWallet(@RequestBody @Valid AddWalletRequest request)
+  ```
+- Put constraints on the **request DTO** (e.g. record or class): `@NotBlank`, `@NotNull`, `@NotEmpty`, `@Size`, `@Min`/`@Max`, or **custom constraints**.
+- Use **custom validators** when standard annotations are not enough (e.g. wallet address format, supported enum list):
+  - Define a constraint annotation (e.g. `@WalletAddress`, `@SupportedNetworks`) with `message()` default set to the API error code (e.g. `"INVALID_ADDRESS"`).
+  - Implement `ConstraintValidator<Annotation, Value>`; register with `@Constraint(validatedBy = ...)`.
+  - Optional: make validators Spring `@Component` if they need injected dependencies.
+- Handle validation failures in one place: **`@RestControllerAdvice`** that catches `WebExchangeBindException` (WebFlux) or `MethodArgumentNotValidException` (Web MVC) and returns **400** with a standard error body (e.g. `ErrorBody(error, message, timestamp) (e.g. ErrorBody.of(code, message)); use constraint message as error`). Use the constraint’s `message` when it matches API error codes.
+- Keep controllers **thin**: no `if (request == null || ...)` validation blocks; validation is declarative on the DTO and handled by the framework and the advice.
+
+## References
+
+- Request DTOs: `api/dto/`
+- Custom constraints: `api/validation/` (e.g. `WalletAddress`, `SupportedNetworks`)
+- Exception handler: `api/controller/ValidationExceptionHandler.java`

@@ -103,6 +103,8 @@ class WalletAndSyncIntegrationTest {
                 .exchange()
                 .expectStatus().isBadRequest()
                 .expectBody()
-                .jsonPath("$.code").isEqualTo("INVALID_ADDRESS");
+                .jsonPath("$.error").isEqualTo("INVALID_ADDRESS")
+                .jsonPath("$.message").exists()
+                .jsonPath("$.timestamp").exists();
     }
 }
