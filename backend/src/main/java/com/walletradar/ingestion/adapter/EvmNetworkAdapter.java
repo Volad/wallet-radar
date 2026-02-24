@@ -7,6 +7,7 @@ import com.walletradar.domain.NetworkId;
 import com.walletradar.domain.RawTransaction;
 import lombok.RequiredArgsConstructor;
 import org.bson.Document;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
 import java.util.*;
@@ -25,6 +26,7 @@ public class EvmNetworkAdapter implements NetworkAdapter {
 
     private final EvmRpcClient rpcClient;
     private final Map<String, RpcEndpointRotator> rotatorsByNetwork;
+    @Qualifier("evmDefaultRpcEndpointRotator")
     private final RpcEndpointRotator defaultRotator;
     private final ObjectMapper objectMapper;
     private final EvmBatchBlockSizeResolver batchBlockSizeResolver;

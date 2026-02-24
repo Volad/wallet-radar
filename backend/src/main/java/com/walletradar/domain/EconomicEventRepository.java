@@ -2,6 +2,7 @@ package com.walletradar.domain;
 
 import org.springframework.data.mongodb.repository.MongoRepository;
 
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -13,4 +14,7 @@ public interface EconomicEventRepository extends MongoRepository<EconomicEvent, 
     Optional<EconomicEvent> findByTxHashAndNetworkId(String txHash, NetworkId networkId);
 
     Optional<EconomicEvent> findByClientId(String clientId);
+
+    /** For InternalTransferReclassifier: find EXTERNAL_INBOUND events whose counterparty is in the given list. */
+    List<EconomicEvent> findByEventTypeAndCounterpartyAddressIn(EconomicEventType eventType, List<String> counterpartyAddresses);
 }

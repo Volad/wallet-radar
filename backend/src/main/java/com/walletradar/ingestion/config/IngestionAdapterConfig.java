@@ -3,7 +3,9 @@ package com.walletradar.ingestion.config;
 import com.walletradar.common.RetryPolicy;
 import com.walletradar.ingestion.adapter.EvmRpcClient;
 import com.walletradar.ingestion.adapter.RpcEndpointRotator;
+import com.walletradar.ingestion.adapter.SolanaRpcClient;
 import com.walletradar.ingestion.adapter.WebClientEvmRpcClient;
+import com.walletradar.ingestion.adapter.WebClientSolanaRpcClient;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -44,5 +46,16 @@ public class IngestionAdapterConfig {
     @Bean
     public EvmRpcClient evmRpcClient(WebClient.Builder webClientBuilder) {
         return new WebClientEvmRpcClient(webClientBuilder);
+    }
+
+    /** Default Solana RPC rotator when SOLANA has no urls in walletradar.ingestion.network. */
+    @Bean(name = "solanaDefaultRpcEndpointRotator")
+    public RpcEndpointRotator solanaDefaultRpcEndpointRotator() {
+        return new RpcEndpointRotator(List.of("https://api.mainnet-beta.solana.com"), RetryPolicy.defaultPolicy());
+    }
+
+    @Bean
+    public SolanaRpcClient solanaRpcClient(WebClient.Builder webClientBuilder) {
+        return new WebClientSolanaRpcClient(webClientBuilder);
     }
 }

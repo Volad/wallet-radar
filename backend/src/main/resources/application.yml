@@ -51,3 +51,9 @@ walletradar:
           - https://rpc.ankr.com/avalanche
           - https://avalanche-c-chain-rpc.publicnode.com
         batch-block-size: 2000
+      SOLANA:
+        urls:
+          - https://api.mainnet-beta.solana.com
+    solana:
+      # Max signatures per getSignaturesForAddress call (1-1000). Rate/batch limit.
+      signatures-limit: 1000
