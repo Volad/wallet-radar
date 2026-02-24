@@ -12,6 +12,7 @@ import java.time.Instant;
 /**
  * Async AVCO recalculation job (e.g. after override or manual compensating transaction).
  * Persisted in recalc_jobs; optional TTL cleanup (e.g. 24h).
+ * Recalc is full-wallet for now: executor runs AvcoEngine.recalculateForWallet(walletAddress) for all (network, asset) pairs of that wallet; networkId/assetContract are not stored on the job.
  */
 @Document(collection = "recalc_jobs")
 @NoArgsConstructor
