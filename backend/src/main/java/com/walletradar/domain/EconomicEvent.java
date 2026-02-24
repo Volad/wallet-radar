@@ -7,6 +7,7 @@ import lombok.Setter;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.index.CompoundIndex;
 import org.springframework.data.mongodb.core.index.CompoundIndexes;
+import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.math.BigDecimal;
@@ -51,5 +52,6 @@ public class EconomicEvent {
     private String counterpartyAddress;
     private boolean isInternalTransfer;
     private String protocolName;
+    @Indexed(unique = true, sparse = true)
     private String clientId;
 }

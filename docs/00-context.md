@@ -57,6 +57,7 @@ Manual compensating transactions may be **positive or negative** (reducing quant
 - **Public RPC only** — no dependency on paid indexers (Alchemy Growth, The Graph paid, Moralis paid)
 - **CoinGecko Free tier** — 50 req/min; throttled to 45 req/min internally; historical price fallback only
 - **2-year backfill window** — transactions before this window require manual entry
+- **EVM eth_getLogs batch block size** — configurable **per EVM network** (or at least different defaults for L1 vs L2), not a single global constant. Global default: **2000 blocks** when no per-network value is set. Invalid values (≤0 or above a reasonable cap) must not be applied; use default and log. Unknown or new EVM `networkId` → use global default; do not fail ingestion.
 
 ### Financial Constraints
 - Gas is converted to USD at the native token price at block time
