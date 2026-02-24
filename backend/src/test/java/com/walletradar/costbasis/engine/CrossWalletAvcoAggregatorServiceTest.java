@@ -1,5 +1,6 @@
 package com.walletradar.costbasis.engine;
 
+import com.walletradar.domain.CostBasisOverrideRepository;
 import com.walletradar.domain.EconomicEvent;
 import com.walletradar.domain.EconomicEventRepository;
 import com.walletradar.domain.EconomicEventType;
@@ -23,6 +24,9 @@ class CrossWalletAvcoAggregatorServiceTest {
 
     @Mock
     EconomicEventRepository economicEventRepository;
+
+    @Mock
+    CostBasisOverrideRepository costBasisOverrideRepository;
 
     @InjectMocks
     CrossWalletAvcoAggregatorService service;

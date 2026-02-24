@@ -64,7 +64,7 @@ class EconomicEventNormalizerTest {
     }
 
     @Test
-    void normalize_externalInbound_setsGasIncludedInBasisTrue() {
+    void normalize_externalInbound_setsGasIncludedInBasisFalse() {
         RawClassifiedEvent raw = new RawClassifiedEvent();
         raw.setEventType(EconomicEventType.EXTERNAL_INBOUND);
         raw.setWalletAddress("0xWallet");
@@ -72,7 +72,7 @@ class EconomicEventNormalizerTest {
 
         EconomicEvent e = normalizer.normalize(raw, "0xTxHash", NetworkId.ETHEREUM, Instant.EPOCH, null);
 
-        assertThat(e.isGasIncludedInBasis()).isTrue();
+        assertThat(e.isGasIncludedInBasis()).isFalse();
     }
 
     @Test

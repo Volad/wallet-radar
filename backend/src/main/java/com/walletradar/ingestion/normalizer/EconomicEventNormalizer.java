@@ -16,7 +16,7 @@ import java.util.stream.Collectors;
 
 /**
  * Converts raw classifier output to domain EconomicEvent (network-agnostic).
- * Sets gasIncludedInBasis per 03-accounting: true for BUY-type events, false otherwise.
+ * Sets gasIncludedInBasis per 03-accounting and INV-12: true only for SWAP_BUY and BORROW; false for all others (EXTERNAL_INBOUND, STAKE_WITHDRAWAL, LEND_WITHDRAWAL, etc.).
  */
 @Component
 @RequiredArgsConstructor
@@ -80,11 +80,10 @@ public class EconomicEventNormalizer {
     }
 
     /**
-     * Per 03-accounting and INV-12: only BUY and acquisition-type events include gas in cost basis; TRANSFER, STAKE, LEND excluded.
+     * Per 03-accounting and INV-12: gas in cost basis only for SWAP_BUY and BORROW. EXTERNAL_INBOUND, STAKE_WITHDRAWAL, LEND_WITHDRAWAL and all other types excluded.
      */
     private static boolean gasIncludedInBasis(EconomicEventType eventType) {
         return eventType == EconomicEventType.SWAP_BUY
-                || eventType == EconomicEventType.BORROW
-                || eventType == EconomicEventType.EXTERNAL_INBOUND;
+                || eventType == EconomicEventType.BORROW;
     }
 }

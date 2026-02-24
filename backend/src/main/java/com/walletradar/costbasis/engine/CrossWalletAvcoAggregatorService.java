@@ -1,6 +1,8 @@
 package com.walletradar.costbasis.engine;
 
 import com.walletradar.config.CaffeineConfig;
+import com.walletradar.domain.CostBasisOverride;
+import com.walletradar.domain.CostBasisOverrideRepository;
 import com.walletradar.domain.EconomicEvent;
 import com.walletradar.domain.EconomicEventRepository;
 import com.walletradar.domain.EconomicEventType;
@@ -14,11 +16,13 @@ import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
  * On-request cross-wallet AVCO aggregation (T-016). Loads events for asset across wallets, sorts by blockTimestamp ASC,
- * excludes INTERNAL_TRANSFER, runs AVCO on merged timeline. Never persists (INV-04). Cached per (sorted wallets, assetSymbol), TTL 5min.
+ * excludes INTERNAL_TRANSFER, runs AVCO on merged timeline. Applies active cost_basis_overrides per AC-06 (same as AvcoEngine).
+ * Never persists (INV-04). Cached per (sorted wallets, assetSymbol), TTL 5min.
  */
 @Service
 @RequiredArgsConstructor
@@ -29,6 +33,7 @@ public class CrossWalletAvcoAggregatorService {
     private static final RoundingMode ROUNDING = RoundingMode.HALF_UP;
 
     private final EconomicEventRepository economicEventRepository;
+    private final CostBasisOverrideRepository costBasisOverrideRepository;
 
     /**
      * Cache key: sorted wallet addresses + assetSymbol (per 02-architecture).
@@ -58,22 +63,40 @@ public class CrossWalletAvcoAggregatorService {
                 .filter(e -> e.getEventType() != EconomicEventType.INTERNAL_TRANSFER)
                 .collect(Collectors.toList());
 
+        List<String> onChainEventIds = filtered.stream()
+                .filter(e -> e.getTxHash() != null && e.getId() != null)
+                .map(EconomicEvent::getId)
+                .distinct()
+                .toList();
+        Map<String, BigDecimal> overridePrices = Map.of();
+        if (!onChainEventIds.isEmpty()) {
+            List<CostBasisOverride> overrides = costBasisOverrideRepository
+                    .findByEconomicEventIdInAndIsActiveTrue(onChainEventIds);
+            overridePrices = overrides.stream()
+                    .collect(Collectors.toMap(CostBasisOverride::getEconomicEventId, CostBasisOverride::getPriceUsd, (a, b) -> a));
+        }
+
         BigDecimal quantity = BigDecimal.ZERO;
         BigDecimal avco = BigDecimal.ZERO;
 
         for (EconomicEvent event : filtered) {
             BigDecimal qtyDelta = event.getQuantityDelta() != null ? event.getQuantityDelta() : BigDecimal.ZERO;
-            BigDecimal price = event.getPriceUsd() != null ? event.getPriceUsd() : BigDecimal.ZERO;
+            BigDecimal effectivePrice = effectivePrice(event, overridePrices);
             EconomicEventType type = event.getEventType();
 
             if (AvcoEventTypeHelper.isInflow(type, qtyDelta)) {
                 BigDecimal addQty = qtyDelta;
+                BigDecimal priceForBasis = effectivePrice;
+                if (event.isGasIncludedInBasis() && event.getGasCostUsd() != null && event.getGasCostUsd().compareTo(BigDecimal.ZERO) > 0
+                        && addQty.compareTo(BigDecimal.ZERO) > 0) {
+                    priceForBasis = effectivePrice.add(event.getGasCostUsd().divide(addQty, SCALE, ROUNDING));
+                }
                 if (quantity.compareTo(BigDecimal.ZERO) == 0) {
-                    avco = price;
+                    avco = priceForBasis;
                     quantity = addQty;
                 } else {
                     BigDecimal newQty = quantity.add(addQty);
-                    avco = (avco.multiply(quantity).add(price.multiply(addQty))).divide(newQty, SCALE, ROUNDING);
+                    avco = (avco.multiply(quantity).add(priceForBasis.multiply(addQty))).divide(newQty, SCALE, ROUNDING);
                     quantity = newQty;
                 }
             } else if (AvcoEventTypeHelper.isSellType(type) && qtyDelta.compareTo(BigDecimal.ZERO) < 0) {
@@ -85,5 +108,15 @@ public class CrossWalletAvcoAggregatorService {
 
         BigDecimal finalQty = quantity.max(BigDecimal.ZERO);
         return CrossWalletAvcoResult.of(avco, finalQty);
+    }
+
+    private static BigDecimal effectivePrice(EconomicEvent event, Map<String, BigDecimal> overridePrices) {
+        if (event.getEventType() == EconomicEventType.MANUAL_COMPENSATING) {
+            return event.getPriceUsd() != null ? event.getPriceUsd() : BigDecimal.ZERO;
+        }
+        if (event.getId() != null && overridePrices.containsKey(event.getId())) {
+            return overridePrices.get(event.getId());
+        }
+        return event.getPriceUsd() != null ? event.getPriceUsd() : BigDecimal.ZERO;
     }
 }
