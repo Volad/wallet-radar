@@ -84,6 +84,7 @@ public class EconomicEventNormalizer {
      */
     private static boolean gasIncludedInBasis(EconomicEventType eventType) {
         return eventType == EconomicEventType.SWAP_BUY
-                || eventType == EconomicEventType.BORROW;
+                || eventType == EconomicEventType.BORROW
+                || eventType == EconomicEventType.EXTERNAL_INBOUND;
     }
 }
