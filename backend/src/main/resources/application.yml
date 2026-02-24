@@ -75,3 +75,13 @@ walletradar:
         "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45": "Uniswap V3"
         "0xe592427a0aece92de3edee1f18e0157c05861564": "Uniswap V3"
         "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2": "Aave V3"
+  # Pricing: historical and spot resolvers (CoinGecko free API). T-019, T-020.
+  pricing:
+    coingecko-base-url: https://api.coingecko.com/api/v3
+    coingecko-historical-requests-per-minute: 45
+    connect-timeout-seconds: 10
+    read-timeout-seconds: 15
+    # Token contract address (lowercase) -> CoinGecko coin id for /coins/{id}/history and /simple/price
+    contract-to-coin-gecko-id:
+      "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2": "weth"
+      "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee": "ethereum"
