@@ -39,11 +39,12 @@ public class AvcoEngine {
     private final CostBasisOverrideRepository costBasisOverrideRepository;
 
     /**
-     * Recalculate AVCO and persist asset position for the given (wallet, network, asset).
+     * Replay from beginning: load economic events for (wallet, network, asset) in blockTimestamp ASC,
+     * apply cost_basis_overrides to on-chain events, recompute AVCO and persist asset position (03-accounting).
      * Loads events in blockTimestamp ASC (INV-01), applies overrides to on-chain events (INV-08),
      * computes realised P&amp;L on SELL (INV-07), sets hasIncompleteHistory if first event is SELL/transfer-out (INV-09).
      */
-    public void recalculate(String walletAddress, NetworkId networkId, String assetContract) {
+    public void replayFromBeginning(String walletAddress, NetworkId networkId, String assetContract) {
         List<EconomicEvent> events = economicEventRepository
                 .findByWalletAddressAndNetworkIdAndAssetContractOrderByBlockTimestampAsc(
                         walletAddress, networkId, assetContract);
@@ -147,7 +148,7 @@ public class AvcoEngine {
     }
 
     /**
-     * Recalculate AVCO for all (network, asset) pairs that have events for the given wallet.
+     * Replay from beginning for all (network, asset) pairs that have events for the given wallet.
      */
     public void recalculateForWallet(String walletAddress) {
         List<EconomicEvent> markers = economicEventRepository.findNetworkIdAndAssetContractByWalletAddress(walletAddress);
@@ -162,7 +163,7 @@ public class AvcoEngine {
         }
         for (String key : distinct) {
             int i = key.indexOf('\0');
-            recalculate(walletAddress, NetworkId.valueOf(key.substring(0, i)), key.substring(i + 1));
+            replayFromBeginning(walletAddress, NetworkId.valueOf(key.substring(0, i)), key.substring(i + 1));
         }
     }
 

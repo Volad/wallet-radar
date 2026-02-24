@@ -82,7 +82,7 @@ class AvcoEngineIntegrationTest {
 
         economicEventRepository.saveAll(List.of(buy, sell));
 
-        avcoEngine.recalculate(wallet, NetworkId.ETHEREUM, assetContract);
+        avcoEngine.replayFromBeginning(wallet, NetworkId.ETHEREUM, assetContract);
 
         AssetPosition position = assetPositionRepository
                 .findByWalletAddressAndNetworkIdAndAssetContract(wallet, "ETHEREUM", assetContract)

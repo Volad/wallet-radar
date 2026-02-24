@@ -60,7 +60,7 @@ class AvcoEngineTest {
         when(assetPositionRepository.findByWalletAddressAndNetworkIdAndAssetContract(WALLET, "ETHEREUM", ASSET_CONTRACT))
                 .thenReturn(Optional.of(new AssetPosition()));
 
-        avcoEngine.recalculate(WALLET, NetworkId.ETHEREUM, ASSET_CONTRACT);
+        avcoEngine.replayFromBeginning(WALLET, NetworkId.ETHEREUM, ASSET_CONTRACT);
 
         verify(assetPositionRepository).delete(any(AssetPosition.class));
         verify(assetPositionRepository, never()).save(any());
@@ -78,7 +78,7 @@ class AvcoEngineTest {
                 WALLET, NetworkId.ETHEREUM, ASSET_CONTRACT)).thenReturn(List.of(buy, sell));
         when(costBasisOverrideRepository.findByEconomicEventIdInAndIsActiveTrue(any())).thenReturn(List.of());
 
-        avcoEngine.recalculate(WALLET, NetworkId.ETHEREUM, ASSET_CONTRACT);
+        avcoEngine.replayFromBeginning(WALLET, NetworkId.ETHEREUM, ASSET_CONTRACT);
 
         ArgumentCaptor<AssetPosition> positionCaptor = ArgumentCaptor.forClass(AssetPosition.class);
         verify(assetPositionRepository).save(positionCaptor.capture());
@@ -102,7 +102,7 @@ class AvcoEngineTest {
                 WALLET, NetworkId.ETHEREUM, ASSET_CONTRACT)).thenReturn(List.of(sell));
         when(costBasisOverrideRepository.findByEconomicEventIdInAndIsActiveTrue(any())).thenReturn(List.of());
 
-        avcoEngine.recalculate(WALLET, NetworkId.ETHEREUM, ASSET_CONTRACT);
+        avcoEngine.replayFromBeginning(WALLET, NetworkId.ETHEREUM, ASSET_CONTRACT);
 
         ArgumentCaptor<AssetPosition> positionCaptor = ArgumentCaptor.forClass(AssetPosition.class);
         verify(assetPositionRepository).save(positionCaptor.capture());
@@ -126,7 +126,7 @@ class AvcoEngineTest {
         when(costBasisOverrideRepository.findByEconomicEventIdInAndIsActiveTrue(any()))
                 .thenReturn(List.of(override));
 
-        avcoEngine.recalculate(WALLET, NetworkId.ETHEREUM, ASSET_CONTRACT);
+        avcoEngine.replayFromBeginning(WALLET, NetworkId.ETHEREUM, ASSET_CONTRACT);
 
         ArgumentCaptor<AssetPosition> positionCaptor = ArgumentCaptor.forClass(AssetPosition.class);
         verify(assetPositionRepository).save(positionCaptor.capture());
@@ -158,7 +158,7 @@ class AvcoEngineTest {
                 WALLET, NetworkId.ETHEREUM, ASSET_CONTRACT)).thenReturn(List.of(buy, manual));
         when(costBasisOverrideRepository.findByEconomicEventIdInAndIsActiveTrue(List.of("e1"))).thenReturn(List.of());
 
-        avcoEngine.recalculate(WALLET, NetworkId.ETHEREUM, ASSET_CONTRACT);
+        avcoEngine.replayFromBeginning(WALLET, NetworkId.ETHEREUM, ASSET_CONTRACT);
 
         ArgumentCaptor<AssetPosition> positionCaptor = ArgumentCaptor.forClass(AssetPosition.class);
         verify(assetPositionRepository).save(positionCaptor.capture());
