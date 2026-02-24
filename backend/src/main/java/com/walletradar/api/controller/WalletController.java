@@ -5,6 +5,7 @@ import com.walletradar.api.dto.AddWalletResponse;
 import com.walletradar.api.dto.ErrorBody;
 import com.walletradar.api.dto.WalletStatusAllNetworksResponse;
 import com.walletradar.api.dto.WalletStatusResponse;
+import com.walletradar.domain.NetworkId;
 import com.walletradar.domain.SyncStatus;
 import com.walletradar.ingestion.job.WalletBackfillService;
 import com.walletradar.ingestion.job.WalletSyncStatusService;
@@ -29,14 +30,18 @@ public class WalletController {
     @PostMapping
     public ResponseEntity<?> addWallet(@RequestBody @Valid AddWalletRequest request) {
         String address = request.address().trim();
-        walletBackfillService.addWallet(address, request.networks());
-        String syncId = "wallet-" + address.substring(0, Math.min(10, address.length())) + "-" + request.networks().get(0).name();
+        var networks = request.networks();
+        walletBackfillService.addWallet(address, networks);
+        String networkLabel = (networks != null && !networks.isEmpty())
+                ? networks.get(0).name()
+                : "all";
+        String syncId = "wallet-" + address.substring(0, Math.min(10, address.length())) + "-" + networkLabel;
         return ResponseEntity.accepted().body(new AddWalletResponse(syncId, "Backfill started"));
     }
 
     @GetMapping("/{address}/status")
     public ResponseEntity<?> getStatus(@PathVariable String address, @RequestParam(required = false) String network) {
-        if (address == null || address.isBlank()) {
+        if (address == null || address.isBlank()) { 
             return ResponseEntity.badRequest().body(ErrorBody.of("INVALID_ADDRESS", "Address is required"));
         }
         String addr = address.trim();

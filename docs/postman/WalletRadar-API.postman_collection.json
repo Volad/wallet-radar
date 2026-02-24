@@ -1,0 +1,223 @@
+{
+  "info": {
+    "name": "WalletRadar API",
+    "description": "WalletRadar MVP API — docs/04-api.md. Base URL: {{baseUrl}}/api/v1",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8080" },
+    { "key": "walletAddress", "value": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045" },
+    { "key": "jobId", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "Wallets",
+      "item": [
+        {
+          "name": "Add Wallet",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"address\": \"{{walletAddress}}\",\n  \"networks\": [\"ETHEREUM\", \"ARBITRUM\"]\n}"
+            },
+            "url": "{{baseUrl}}/api/v1/wallets",
+            "description": "202 Accepted: backfill started. Response: syncId, message."
+          }
+        },
+        {
+          "name": "Get Wallet Status (all networks)",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/wallets/{{walletAddress}}/status",
+            "description": "200: status for all networks for this address. 404: no sync status."
+          }
+        },
+        {
+          "name": "Get Wallet Status (single network)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/wallets/{{walletAddress}}/status?network=ETHEREUM",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "wallets", "{{walletAddress}}", "status"],
+              "query": [{ "key": "network", "value": "ETHEREUM" }]
+            },
+            "description": "200: status for address×network. 404: no sync status for that pair."
+          }
+        },
+        {
+          "name": "Balance Refresh",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"wallets\": [\"{{walletAddress}}\"],\n  \"networks\": [\"ETHEREUM\", \"ARBITRUM\"]\n}"
+            },
+            "url": "{{baseUrl}}/api/v1/wallets/balances/refresh",
+            "description": "202: balance refresh triggered. T-014."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Sync",
+      "item": [
+        {
+          "name": "Trigger Manual Sync",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"wallets\": [\"{{walletAddress}}\"],\n  \"networks\": [\"ETHEREUM\", \"ARBITRUM\"]\n}"
+            },
+            "url": "{{baseUrl}}/api/v1/sync/refresh",
+            "description": "202: incremental sync triggered."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Assets",
+      "item": [
+        {
+          "name": "Get Asset List",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/assets?wallets={{walletAddress}}&network=ARBITRUM",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "assets"],
+              "query": [
+                { "key": "wallets", "value": "{{walletAddress}}" },
+                { "key": "network", "value": "ARBITRUM", "disabled": true }
+              ]
+            },
+            "description": "200: asset positions. network optional. T-024."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Transactions",
+      "item": [
+        {
+          "name": "Get Transaction History",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/assets/:assetId/transactions?limit=50&direction=DESC",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "assets", ":assetId", "transactions"],
+              "query": [
+                { "key": "cursor", "value": "" },
+                { "key": "limit", "value": "50" },
+                { "key": "direction", "value": "DESC" }
+              ],
+              "variable": [{ "key": "assetId", "value": "" }]
+            },
+            "description": "Cursor pagination. direction: DESC | ASC. T-025."
+          }
+        },
+        {
+          "name": "Manual Compensating Transaction",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"walletAddress\": \"{{walletAddress}}\",\n  \"networkId\": \"ETHEREUM\",\n  \"assetSymbol\": \"ETH\",\n  \"assetContract\": \"0x0000000000000000000000000000000000000000\",\n  \"quantityDelta\": \"0.5\",\n  \"priceUsd\": \"2000.00\",\n  \"note\": \"Reconciliation\",\n  \"clientId\": \"550e8400-e29b-41d4-a716-446655440000\"\n}"
+            },
+            "url": "{{baseUrl}}/api/v1/transactions/manual",
+            "description": "202: jobId. clientId = idempotency. T-018."
+          }
+        },
+        {
+          "name": "Set Override",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"priceUsd\": \"2500.00\",\n  \"note\": \"Airdrop — market price at receipt\"\n}"
+            },
+            "url": "{{baseUrl}}/api/v1/transactions/:eventId/override",
+            "description": "202: jobId. T-028.",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/transactions/:eventId/override",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "transactions", ":eventId", "override"],
+              "variable": [{ "key": "eventId", "value": "" }]
+            }
+          }
+        },
+        {
+          "name": "Revert Override",
+          "request": {
+            "method": "DELETE",
+            "url": "{{baseUrl}}/api/v1/transactions/:eventId/override",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/transactions/:eventId/override",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "transactions", ":eventId", "override"],
+              "variable": [{ "key": "eventId", "value": "" }]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Portfolio",
+      "item": [
+        {
+          "name": "Get Portfolio Snapshots",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/portfolio/snapshots?wallets={{walletAddress}}&range=7D",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "portfolio", "snapshots"],
+              "query": [
+                { "key": "wallets", "value": "{{walletAddress}}" },
+                { "key": "range", "value": "7D" }
+              ]
+            },
+            "description": "range: 1D | 7D | 1M | 1Y | ALL. T-026."
+          }
+        },
+        {
+          "name": "Get Asset Chart",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/charts/asset/:symbol?wallets={{walletAddress}}&range=7D",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "charts", "asset", ":symbol"],
+              "query": [
+                { "key": "wallets", "value": "{{walletAddress}}" },
+                { "key": "range", "value": "7D" }
+              ],
+              "variable": [{ "key": "symbol", "value": "ETH" }]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Recalc",
+      "item": [
+        {
+          "name": "Get Recalc Status",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/recalc/status/{{jobId}}",
+            "description": "200: status PENDING | RUNNING | COMPLETE | FAILED. newPerWalletAvco when COMPLETE. T-028."
+          }
+        }
+      ]
+    }
+  ]
+}

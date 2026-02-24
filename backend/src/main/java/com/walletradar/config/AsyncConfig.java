@@ -9,19 +9,32 @@ import java.util.concurrent.Executor;
 
 /**
  * Named thread pools per 02-architecture: backfill-executor, recalc-executor, sync-executor.
+ * Coordinator runs runBackfill (and blocks on join); worker pool runs runBackfillForNetwork per network.
  */
 @Configuration
 @EnableAsync
 public class AsyncConfig {
 
+    public static final String BACKFILL_COORDINATOR_EXECUTOR = "backfill-coordinator-executor";
     public static final String BACKFILL_EXECUTOR = "backfill-executor";
     public static final String RECALC_EXECUTOR = "recalc-executor";
     public static final String SYNC_EXECUTOR = "sync-executor";
 
+    /** Single-thread executor for backfill coordinator so it does not consume a slot in the worker pool. */
+    @Bean(name = BACKFILL_COORDINATOR_EXECUTOR)
+    public Executor backfillCoordinatorExecutor() {
+        ThreadPoolTaskExecutor e = new ThreadPoolTaskExecutor();
+        e.setCorePoolSize(1);
+        e.setMaxPoolSize(1);
+        e.setThreadNamePrefix("backfill-coord-");
+        e.initialize();
+        return e;
+    }
+
     @Bean(name = BACKFILL_EXECUTOR)
     public Executor backfillExecutor() {
         ThreadPoolTaskExecutor e = new ThreadPoolTaskExecutor();
-        e.setCorePoolSize(2);
+        e.setCorePoolSize(4);
         e.setMaxPoolSize(18);
         e.setThreadNamePrefix("backfill-");
         e.initialize();
@@ -41,8 +54,8 @@ public class AsyncConfig {
     @Bean(name = SYNC_EXECUTOR)
     public Executor syncExecutor() {
         ThreadPoolTaskExecutor e = new ThreadPoolTaskExecutor();
-        e.setCorePoolSize(3);
-        e.setMaxPoolSize(3);
+        e.setCorePoolSize(4);
+        e.setMaxPoolSize(4);
         e.setThreadNamePrefix("sync-");
         e.initialize();
         return e;

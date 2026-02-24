@@ -8,7 +8,7 @@ import org.springframework.stereotype.Component;
 import java.util.List;
 
 /**
- * Validates that the list contains only supported NetworkId values and is non-empty.
+ * Validates that the list contains only supported NetworkId values. Empty or null = valid (all networks).
  * Delegates to AddressValidator for a single source of truth.
  */
 @Component

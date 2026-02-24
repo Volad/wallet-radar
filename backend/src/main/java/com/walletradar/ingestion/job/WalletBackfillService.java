@@ -9,6 +9,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -23,9 +24,13 @@ public class WalletBackfillService {
 
     /**
      * Upsert sync_status PENDING for each (address, network), then publish WalletAddedEvent.
+     * If {@code networks} is null or empty, all supported networks are used.
      */
     public void addWallet(String address, List<NetworkId> networks) {
-        for (NetworkId networkId : networks) {
+        List<NetworkId> targetNetworks = (networks == null || networks.isEmpty())
+                ? Arrays.asList(NetworkId.values())
+                : networks;
+        for (NetworkId networkId : targetNetworks) {
             SyncStatus status = syncStatusRepository.findByWalletAddressAndNetworkId(address, networkId.name())
                     .orElse(new SyncStatus());
             if (status.getId() == null) {
@@ -40,6 +45,6 @@ public class WalletBackfillService {
             status.setUpdatedAt(Instant.now());
             syncStatusRepository.save(status);
         }
-        applicationEventPublisher.publishEvent(new WalletAddedEvent(address, networks));
+        applicationEventPublisher.publishEvent(new WalletAddedEvent(address, targetNetworks));
     }
 }
