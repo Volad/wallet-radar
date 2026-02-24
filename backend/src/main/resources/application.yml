@@ -8,6 +8,9 @@ spring:
 # Unified per-network ingestion config (ADR-012). Batch size semantics: ADR-011.
 walletradar:
   ingestion:
+    # Backfill window (T-009): blocks from current block. Default ~2 years Ethereum (12s block).
+    backfill:
+      window-blocks: 5256000
     network:
       ETHEREUM:
         urls:
