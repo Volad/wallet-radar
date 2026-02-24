@@ -31,15 +31,20 @@ import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
+
+import org.springframework.scheduling.annotation.Scheduled;
 
 import static com.walletradar.domain.SyncStatus.SyncStatusValue;
 
@@ -55,7 +60,21 @@ public class BackfillJobRunner {
 
     private record BackfillWorkItem(String walletAddress, NetworkId networkId) {}
 
+    /** Native token contract address per network for price resolution (gas cost). */
+    private static final Map<NetworkId, String> NATIVE_TOKEN_ADDRESS = Map.of(
+            NetworkId.ETHEREUM,  "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            NetworkId.ARBITRUM,  "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            NetworkId.OPTIMISM,  "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            NetworkId.BASE,      "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            NetworkId.MANTLE,    "0x78c1b0c915c4faa5fffa6cabf0219da63d7f4cb8",
+            NetworkId.POLYGON,   "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270",
+            NetworkId.BSC,       "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+            NetworkId.AVALANCHE, "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7",
+            NetworkId.SOLANA,    "So11111111111111111111111111111111111111112"
+    );
+
     private final BlockingQueue<BackfillWorkItem> backfillQueue = new LinkedBlockingQueue<>();
+    private final Set<String> inFlightItems = ConcurrentHashMap.newKeySet();
     private final AtomicBoolean workersStarted = new AtomicBoolean(false);
 
     private final List<NetworkAdapter> networkAdapters;
@@ -114,18 +133,28 @@ public class BackfillJobRunner {
         }
     }
 
-    /** Returns true if item was enqueued, false if skipped (unsupported). */
+    /** Returns true if item was enqueued, false if skipped (unsupported or already in-flight). */
     private boolean enqueueItemIfSupported(BackfillWorkItem item) {
+        String key = itemKey(item.walletAddress(), item.networkId());
+        if (!inFlightItems.add(key)) {
+            log.debug("Skipping enqueue for {} {} — already in-flight", item.walletAddress(), item.networkId());
+            return false;
+        }
         NetworkAdapter adapter = findAdapter(item.networkId());
         BlockHeightResolver heightResolver = findBlockHeightResolver(item.networkId());
         BlockTimestampResolver timestampResolver = findBlockTimestampResolver(item.networkId());
         if (adapter == null || heightResolver == null || timestampResolver == null) {
             log.info("Skipping backfill for {} (adapter/block resolver not available)", item.networkId());
+            inFlightItems.remove(key);
             syncProgressTracker.setComplete(item.walletAddress(), item.networkId().name());
             return false;
         }
         backfillQueue.offer(item);
         return true;
+    }
+
+    private static String itemKey(String walletAddress, NetworkId networkId) {
+        return walletAddress + ":" + networkId.name();
     }
 
     private void startWorkersIfNeeded() {
@@ -141,25 +170,34 @@ public class BackfillJobRunner {
         while (true) {
             try {
                 BackfillWorkItem item = backfillQueue.take();
-                NetworkAdapter adapter = findAdapter(item.networkId());
-                BlockHeightResolver heightResolver = findBlockHeightResolver(item.networkId());
-                BlockTimestampResolver timestampResolver = findBlockTimestampResolver(item.networkId());
-                if (adapter == null || heightResolver == null || timestampResolver == null) {
-                    syncProgressTracker.setComplete(item.walletAddress(), item.networkId().name());
-                    if (backfillQueue.isEmpty()) {
-                        backfillCoordinatorExecutor.execute(this::runReclassifyAndRecalc);
+                try {
+                    NetworkAdapter adapter = findAdapter(item.networkId());
+                    BlockHeightResolver heightResolver = findBlockHeightResolver(item.networkId());
+                    BlockTimestampResolver timestampResolver = findBlockTimestampResolver(item.networkId());
+                    if (adapter == null || heightResolver == null || timestampResolver == null) {
+                        syncProgressTracker.setComplete(item.walletAddress(), item.networkId().name());
+                        continue;
                     }
-                    continue;
-                }
-                runBackfillForNetwork(item.walletAddress(), item.networkId(), adapter, heightResolver, timestampResolver);
-                if (backfillQueue.isEmpty()) {
-                    backfillCoordinatorExecutor.execute(this::runReclassifyAndRecalc);
+                    runBackfillForNetwork(item.walletAddress(), item.networkId(), adapter, heightResolver, timestampResolver);
+                } finally {
+                    inFlightItems.remove(itemKey(item.walletAddress(), item.networkId()));
+                    triggerReclassifyIfAllDone();
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 log.debug("Backfill worker interrupted");
                 break;
             }
+        }
+    }
+
+    private void triggerReclassifyIfAllDone() {
+        if (!backfillQueue.isEmpty() || !inFlightItems.isEmpty()) return;
+        boolean hasActiveWork = !syncStatusRepository
+                .findByStatusIn(Set.of(SyncStatusValue.PENDING, SyncStatusValue.RUNNING))
+                .isEmpty();
+        if (!hasActiveWork) {
+            backfillCoordinatorExecutor.execute(this::runReclassifyAndRecalc);
         }
     }
 
@@ -209,6 +247,8 @@ public class BackfillJobRunner {
             long processedBlocks = 0;
             long start = fromBlock;
             Map<Long, Instant> blockTimestampCache = new HashMap<>();
+            Map<LocalDate, BigDecimal> nativePriceCache = new HashMap<>();
+            String nativeContract = NATIVE_TOKEN_ADDRESS.get(networkId);
 
             while (start <= toBlock) {
                 long end = Math.min(start + batchSize - 1, toBlock);
@@ -217,9 +257,10 @@ public class BackfillJobRunner {
                     Long blockNum = getBlockNumberFromRaw(tx);
                     if (blockNum == null) continue;
                     Instant blockTs = blockTimestampCache.computeIfAbsent(blockNum, n -> timestampResolver.getBlockTimestamp(networkId, n));
+                    BigDecimal nativePriceUsd = resolveNativePrice(nativeContract, networkId, blockTs, nativePriceCache);
                     List<RawClassifiedEvent> rawEvents = txClassifierDispatcher.classify(tx, walletAddress, sessionWallets);
                     List<EconomicEvent> events = economicEventNormalizer.normalizeAll(rawEvents,
-                            tx.getTxHash(), networkId, blockTs, BigDecimal.ZERO);
+                            tx.getTxHash(), networkId, blockTs, nativePriceUsd);
                     for (EconomicEvent event : events) {
                         resolvePriceAndFlag(event, networkId);
                         idempotentEventStore.upsert(event);
@@ -244,6 +285,46 @@ public class BackfillJobRunner {
         }
     }
 
+    /**
+     * Periodically re-enqueue FAILED backfill items whose backoff has expired.
+     * Items exceeding maxRetries are marked ABANDONED.
+     */
+    @Scheduled(fixedDelayString = "${walletradar.ingestion.backfill.retry-scheduler-interval-ms:120000}")
+    public void retryFailedBackfills() {
+        Instant now = Instant.now();
+        int maxRetries = backfillProperties.getMaxRetries();
+
+        List<SyncStatus> failed = syncStatusRepository.findByStatusIn(Set.of(SyncStatusValue.FAILED));
+        int enqueued = 0;
+        for (SyncStatus s : failed) {
+            if (s.getWalletAddress() == null || s.getNetworkId() == null) continue;
+
+            if (s.getRetryCount() >= maxRetries) {
+                s.setStatus(SyncStatusValue.ABANDONED);
+                s.setSyncBannerMessage("Abandoned after " + maxRetries + " retries");
+                s.setUpdatedAt(now);
+                syncStatusRepository.save(s);
+                log.info("Backfill ABANDONED for {} on {} after {} retries", s.getWalletAddress(), s.getNetworkId(), maxRetries);
+                continue;
+            }
+
+            if (s.getNextRetryAfter() != null && now.isBefore(s.getNextRetryAfter())) {
+                continue;
+            }
+
+            try {
+                NetworkId networkId = NetworkId.valueOf(s.getNetworkId());
+                BackfillWorkItem item = new BackfillWorkItem(s.getWalletAddress(), networkId);
+                if (enqueueItemIfSupported(item)) {
+                    enqueued++;
+                }
+            } catch (IllegalArgumentException ignored) { /* unknown network */ }
+        }
+        if (enqueued > 0) {
+            log.info("Retry scheduler: re-enqueued {} failed backfill(s)", enqueued);
+        }
+    }
+
     private Long getBlockNumberFromRaw(RawTransaction tx) {
         if (tx.getRawData() == null || !tx.getRawData().containsKey("blockNumber")) return null;
         Object bn = tx.getRawData().get("blockNumber");
@@ -255,6 +336,29 @@ public class BackfillJobRunner {
         } catch (NumberFormatException e) {
             return null;
         }
+    }
+
+    /**
+     * Resolve the native token's USD price for gas cost calculation.
+     * Cached per date (CoinGecko historical API granularity is daily).
+     */
+    private BigDecimal resolveNativePrice(String nativeContract, NetworkId networkId,
+                                          Instant blockTs, Map<LocalDate, BigDecimal> cache) {
+        if (nativeContract == null || blockTs == null) return BigDecimal.ZERO;
+        LocalDate date = blockTs.atOffset(ZoneOffset.UTC).toLocalDate();
+        return cache.computeIfAbsent(date, d -> {
+            HistoricalPriceRequest req = new HistoricalPriceRequest();
+            req.setAssetContract(nativeContract);
+            req.setNetworkId(networkId);
+            req.setBlockTimestamp(blockTs);
+            PriceResolutionResult result = historicalPriceResolverChain.resolve(req);
+            if (!result.isUnknown() && result.getPriceUsd().isPresent()) {
+                log.debug("Native price for {} on {}: {} USD", networkId, date, result.getPriceUsd().get());
+                return result.getPriceUsd().get();
+            }
+            log.warn("Native price UNKNOWN for {} on {}; gas costs will be zero", networkId, date);
+            return BigDecimal.ZERO;
+        });
     }
 
     private void resolvePriceAndFlag(EconomicEvent event, NetworkId networkId) {

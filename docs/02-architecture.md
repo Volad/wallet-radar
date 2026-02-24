@@ -87,7 +87,7 @@ com.walletradar/
 | `api` | All service interfaces via DI | Any repository or adapter directly |
 | `ingestion` | `pricing`, `domain`, `common` | `costbasis`, `snapshot`, `api` |
 | `costbasis` | `domain`, `common`, `pricing` (read-only) | `ingestion`, `snapshot`, `api` |
-| `pricing` | `common` | `ingestion`, `costbasis`, `snapshot`, `api` |
+| `pricing` | `domain`, `common` | `ingestion`, `costbasis`, `snapshot`, `api` |
 | `snapshot` | `costbasis` (read-only services), `pricing`, `domain` | `ingestion`, `api` |
 | `domain` | `common` | Any other module |
 
@@ -137,10 +137,12 @@ com.walletradar
 │   │   ├── EconomicEventNormalizer        raw → EconomicEvent
 │   │   └── GasCostCalculator             gas × native price → USD
 │   ├── job/
-│   │   ├── BackfillJobRunner             @EventListener(WalletAddedEvent)
+│   │   ├── BackfillJobRunner             @EventListener(WalletAddedEvent) + @Scheduled retry of FAILED
 │   │   ├── IncrementalSyncJob            @Scheduled fixedDelay=3_600_000
 │   │   ├── CurrentBalancePollJob         @Scheduled fixedRate=600_000  (every 10 min)
-│   │   └── SyncProgressTracker           progressPct + syncBannerMessage
+│   │   ├── SyncProgressTracker           progressPct + syncBannerMessage + retry backoff
+│   │   ├── WalletBackfillService         addWallet: upsert sync_status + publish WalletAddedEvent
+│   │   └── WalletSyncStatusService       read-only sync status for API layer
 │   └── store/
 │   │   ├── IdempotentEventStore          upsert on (txHash, networkId, walletAddress, assetContract) UNIQUE sparse; MANUAL by clientId
 │   │   └── OnChainBalanceStore           upsert on (walletAddress, networkId, assetContract) UNIQUE
@@ -152,6 +154,7 @@ com.walletradar
 │   │   │                                 applies cost_basis_overrides to on-chain events only; manual events carry own priceUsd
 │   │   │                                 computes realisedPnlUsd on SELL
 │   │   │                                 sets hasIncompleteHistory if first event=SELL
+│   │   ├── AvcoEventTypeHelper              classifies event types for AVCO formula
 │   │   └── CrossWalletAvcoAggregatorService   ON-REQUEST only, never stored
 │   ├── flag/
 │   │   ├── FlagService
@@ -170,9 +173,8 @@ com.walletradar
 │   ├── resolver/
 │   │   ├── StablecoinResolver            USDC/USDT/DAI/GHO/USDe/FRAX → $1.00
 │   │   ├── SwapDerivedResolver           tokenIn/tokenOut ratio
+│   │   ├── CounterpartPriceResolver      resolves counterpart token price (avoids recursion in SwapDerived)
 │   │   └── CoinGeckoHistoricalResolver   /coins/{id}/history + token bucket 45 req/min
-│   └── cache/
-│       └── PriceCacheConfig              spotPrice TTL 5min, historical TTL 24h
 │
 ├── snapshot/
 │   ├── SnapshotBuilder                   per-wallet snapshot, idempotent upsert
@@ -251,6 +253,12 @@ POST /wallets
       → scan economic_events WHERE counterpartyAddress IN {all session wallets}
       → reclassify EXTERNAL_INBOUND → INTERNAL_TRANSFER
       → replay AVCO for affected assets
+
+  On failure:
+  → sync_status(FAILED), retryCount++, nextRetryAfter = exponential backoff (2^n min, max 60 min) + jitter
+  → @Scheduled retryFailedBackfills (every 2 min) re-enqueues eligible FAILED items
+  → After maxRetries (default 5) → sync_status(ABANDONED)
+  → In-flight dedup: ConcurrentHashMap prevents duplicate enqueue of same (wallet, network)
 ```
 
 ### 2. Incremental Sync (Hourly Cron)

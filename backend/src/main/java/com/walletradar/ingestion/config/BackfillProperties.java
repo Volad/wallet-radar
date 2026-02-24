@@ -24,4 +24,16 @@ public class BackfillProperties {
      * Number of worker loops that drain the backfill queue. Default 4 (match backfill-executor core size).
      */
     private int workerThreads = 4;
+
+    /** Max retry attempts for a failed network backfill before marking ABANDONED. */
+    private int maxRetries = 5;
+
+    /** Base delay in minutes for exponential backoff between retries. */
+    private long retryBaseDelayMinutes = 2;
+
+    /** Maximum delay in minutes (backoff ceiling). */
+    private long retryMaxDelayMinutes = 60;
+
+    /** How often (ms) the retry scheduler polls for FAILED items. */
+    private long retrySchedulerIntervalMs = 120_000;
 }

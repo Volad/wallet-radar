@@ -9,6 +9,7 @@ import com.walletradar.ingestion.adapter.NetworkAdapter;
 import com.walletradar.ingestion.adapter.RpcEndpointRotator;
 import com.walletradar.ingestion.adapter.RpcException;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.bson.Document;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
@@ -21,11 +22,13 @@ import java.util.stream.StreamSupport;
  * Fetches ERC20 Transfer logs where the wallet is from or to, then enriches each tx with full receipt logs
  * so classifiers see Swap and other topics (e.g. Uniswap V3 Swap) and emit SWAP_BUY/SWAP_SELL instead of EXTERNAL_INBOUND.
  */
+@Slf4j
 @Component
 @RequiredArgsConstructor
 public class EvmNetworkAdapter implements NetworkAdapter {
 
     private static final String TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+    static final int MIN_CHUNK_SIZE = 50;
 
     private final EvmRpcClient rpcClient;
     @Qualifier("evmRotatorsByNetwork")
@@ -89,7 +92,6 @@ public class EvmNetworkAdapter implements NetworkAdapter {
                     String txHash = log.path("transactionHash").asText();
                     byTx.computeIfAbsent(txHash, k -> new ArrayList<>()).add(log);
                 }
-                // Enrich with full receipt logs so Swap (V2/V3) and other events are visible to classifiers.
                 for (String txHash : byTx.keySet()) {
                     List<JsonNode> fullLogs = getTransactionReceiptLogs(endpoint, txHash);
                     if (!fullLogs.isEmpty()) {
@@ -101,6 +103,20 @@ public class EvmNetworkAdapter implements NetworkAdapter {
                         .toList();
             } catch (Exception e) {
                 lastException = e;
+                if (isRangeTooWideError(e) && (toBlock - fromBlock) > MIN_CHUNK_SIZE) {
+                    log.warn("Reducing block range [{}-{}] due to RPC limitation on {}: {}",
+                            fromBlock, toBlock, endpoint, e.getMessage());
+                    long mid = fromBlock + (toBlock - fromBlock) / 2;
+                    List<RawTransaction> first = fetchChunkWithRetry(walletAddress, fromTopic, networkIdStr, fromBlock, mid, rotator);
+                    List<RawTransaction> second = fetchChunkWithRetry(walletAddress, fromTopic, networkIdStr, mid + 1, toBlock, rotator);
+                    List<RawTransaction> combined = new ArrayList<>(first);
+                    combined.addAll(second);
+                    return combined;
+                }
+                if (isRangeTooWideError(e)) {
+                    log.warn("RPC at {} requires address filter for eth_getLogs or block range is too narrow to split further. "
+                            + "Consider replacing with a more permissive RPC.", endpoint);
+                }
             }
         }
         String msg = "RPC failed after " + rotator.getMaxAttempts() + " attempts";
@@ -108,6 +124,15 @@ public class EvmNetworkAdapter implements NetworkAdapter {
             msg += ": " + lastException.getMessage();
         }
         throw new RpcException(msg, lastException);
+    }
+
+    public static boolean isRangeTooWideError(Exception e) {
+        if (e == null || e.getMessage() == null) return false;
+        String msg = e.getMessage().toLowerCase();
+        return msg.contains("-32701") || msg.contains("specify an address")
+                || msg.contains("query returned more than") || msg.contains("too many results")
+                || msg.contains("block range is too wide") || msg.contains("exceed maximum block range")
+                || msg.contains("log response size exceeded");
     }
 
     /** Fetches full receipt logs for a tx so Swap and other non-Transfer events are available to classifiers. */

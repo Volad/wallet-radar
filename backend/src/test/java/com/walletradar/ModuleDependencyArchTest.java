@@ -51,6 +51,46 @@ class ModuleDependencyArchTest {
     }
 
     @Test
+    void pricing_must_not_depend_on_ingestion_costbasis_snapshot_api() {
+        ArchRule rule = noClasses()
+                .that().resideInAPackage("..pricing..")
+                .should().dependOnClassesThat().resideInAnyPackage("..ingestion..", "..costbasis..", "..snapshot..", "..api..");
+        rule.check(classes);
+    }
+
+    @Test
+    void costbasis_must_not_depend_on_ingestion_snapshot_api() {
+        ArchRule rule = noClasses()
+                .that().resideInAPackage("..costbasis..")
+                .should().dependOnClassesThat().resideInAnyPackage("..ingestion..", "..snapshot..", "..api..");
+        rule.check(classes);
+    }
+
+    @Test
+    void costbasis_must_not_depend_on_config() {
+        ArchRule rule = noClasses()
+                .that().resideInAPackage("..costbasis..")
+                .should().dependOnClassesThat().resideInAPackage("..config..");
+        rule.check(classes);
+    }
+
+    @Test
+    void snapshot_must_not_depend_on_ingestion_api() {
+        ArchRule rule = noClasses()
+                .that().resideInAPackage("..snapshot..")
+                .should().dependOnClassesThat().resideInAnyPackage("..ingestion..", "..api..");
+        rule.allowEmptyShould(true).check(classes);
+    }
+
+    @Test
+    void api_should_not_import_repository_classes() {
+        ArchRule rule = noClasses()
+                .that().resideInAPackage("..api..")
+                .should().dependOnClassesThat().haveSimpleNameEndingWith("Repository");
+        rule.check(classes);
+    }
+
+    @Test
     void no_cyclic_dependencies_between_slices() {
         ArchRule rule = slices()
                 .matching("com.walletradar.(*)..")

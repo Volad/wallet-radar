@@ -12,14 +12,19 @@ walletradar:
     # L2s use many more blocks per year; set per-network window-blocks so backfill covers ~2 years (e.g. Arbitrum ~4 bl/s → 252M).
     backfill:
       window-blocks: 5256000
+      max-retries: 5
+      retry-base-delay-minutes: 2
+      retry-max-delay-minutes: 60
+      retry-scheduler-interval-ms: 120000
     network:
       # If backfill fails with "RPC failed after 5 attempts", public RPCs may be rate-limiting. Try: reduce batch-block-size (e.g. 500), or add a paid RPC URL (Alchemy/Infura) first in urls.
-      # Ankr (rpc.ankr.com) requires API key; use PublicNode / official / LlamaRPC only, or add Ankr URL with key.
+      # Ankr (rpc.ankr.com/eth) works without API key for reasonable request volumes. For heavy usage consider adding an API key.
       ETHEREUM:
         urls:
           - https://eth.llamarpc.com
           - https://ethereum.publicnode.com
-          - https://1rpc.io/eth
+          - https://rpc.ankr.com/eth
+          - https://eth.drpc.org
         batch-block-size: 2000
       ARBITRUM:
         urls:
@@ -37,7 +42,7 @@ walletradar:
         urls:
           - https://polygon-bor-rpc.publicnode.com
           - https://polygon.drpc.org
-          - https://1rpc.io/matic
+          - https://polygon.llamarpc.com
         batch-block-size: 2000
         window-blocks: 31560000    # ~2 years at ~2s/block
       BASE:
@@ -55,7 +60,6 @@ walletradar:
           - https://bsc-dataseed1.ninicoin.io
           - https://bsc-rpc.publicnode.com
           - https://bsc.drpc.org
-          - https://1rpc.io/bnb
         batch-block-size: 2000
         window-blocks: 21024000    # ~2 years at ~3s/block
       AVALANCHE:
@@ -63,7 +67,6 @@ walletradar:
           - https://api.avax.network/ext/bc/C/rpc
           - https://avalanche-c-chain-rpc.publicnode.com
           - https://avalanche.drpc.org
-          - https://1rpc.io/avax/c
         batch-block-size: 2000
         window-blocks: 31560000    # ~2 years at ~2s/block
       MANTLE:
@@ -101,3 +104,9 @@ walletradar:
     contract-to-coin-gecko-id:
       "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2": "weth"
       "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee": "ethereum"
+      # Native token wrapped addresses for gas cost pricing (FIX-C2)
+      "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270": "matic-network"
+      "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c": "binancecoin"
+      "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7": "avalanche-2"
+      "0x78c1b0c915c4faa5fffa6cabf0219da63d7f4cb8": "mantle"
+      "So11111111111111111111111111111111111111112": "solana"

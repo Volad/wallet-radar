@@ -10,10 +10,13 @@ import com.walletradar.ingestion.adapter.evm.EvmNetworkAdapter;
 import com.walletradar.ingestion.adapter.evm.EvmRpcClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import reactor.core.publisher.Mono;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -96,6 +99,70 @@ class EvmNetworkAdapterTest {
 
         List<RawTransaction> result = adapterWithResolver.fetchTransactions("0x1234", NetworkId.POLYGON, 1L, 10L);
         assertThat(result).isEmpty();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "eth_getLogs error: {\"code\":-32701,\"message\":\"Please specify an address\"}",
+            "query returned more than 10000 results",
+            "block range is too wide",
+            "exceed maximum block range",
+            "log response size exceeded",
+            "too many results in block range"
+    })
+    void isRangeTooWideError_recognizesKnownPatterns(String message) {
+        assertThat(EvmNetworkAdapter.isRangeTooWideError(new RuntimeException(message))).isTrue();
+    }
+
+    @Test
+    void isRangeTooWideError_returnsFalseForUnrelatedError() {
+        assertThat(EvmNetworkAdapter.isRangeTooWideError(new RuntimeException("connection timeout"))).isFalse();
+        assertThat(EvmNetworkAdapter.isRangeTooWideError(null)).isFalse();
+        assertThat(EvmNetworkAdapter.isRangeTooWideError(new RuntimeException())).isFalse();
+    }
+
+    @Test
+    void fetchTransactions_rangeTooWideError_splitsAndRetries() {
+        AtomicInteger callCount = new AtomicInteger(0);
+        String emptyResult = "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":[]}";
+        String rangeTooWideError = "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32701,\"message\":\"Please specify an address in your request\"}}";
+
+        EvmRpcClient splittingRpc = (endpointUrl, method, params) -> {
+            if (!"eth_getLogs".equals(method)) return Mono.just(emptyResult);
+            int call = callCount.incrementAndGet();
+            // First two calls (from+to logs for the full range) fail; subsequent smaller-range calls succeed
+            if (call <= 2) return Mono.just(rangeTooWideError);
+            return Mono.just(emptyResult);
+        };
+
+        RetryPolicy policy = new RetryPolicy(0, 0.0, 3);
+        RpcEndpointRotator r = new RpcEndpointRotator(List.of("https://test.rpc"), policy);
+        EvmBatchBlockSizeResolver resolver = new EvmBatchBlockSizeResolver(new IngestionNetworkProperties());
+        EvmNetworkAdapter splittingAdapter = new EvmNetworkAdapter(splittingRpc, Map.of("ETHEREUM", r), r, new ObjectMapper(), resolver);
+
+        // Range of 200 blocks — large enough to split (> MIN_CHUNK_SIZE=50)
+        List<RawTransaction> result = splittingAdapter.fetchTransactions("0x1234", NetworkId.ETHEREUM, 1L, 200L);
+        assertThat(result).isNotNull();
+        // The adapter must have made more calls than the initial 2 (it split and retried)
+        assertThat(callCount.get()).isGreaterThan(2);
+    }
+
+    @Test
+    void fetchTransactions_rangeTooWideError_tooSmallToSplit_propagatesError() {
+        String rangeTooWideError = "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32701,\"message\":\"Please specify an address in your request\"}}";
+
+        MockEvmRpcClient errorRpc = new MockEvmRpcClient();
+        errorRpc.setResponse(rangeTooWideError);
+
+        RetryPolicy policy = new RetryPolicy(0, 0.0, 3);
+        RpcEndpointRotator r = new RpcEndpointRotator(List.of("https://test.rpc"), policy);
+        EvmBatchBlockSizeResolver resolver = new EvmBatchBlockSizeResolver(new IngestionNetworkProperties());
+        EvmNetworkAdapter smallRangeAdapter = new EvmNetworkAdapter(errorRpc, Map.of("ETHEREUM", r), r, new ObjectMapper(), resolver);
+
+        // Range of 10 blocks — too small to split (< MIN_CHUNK_SIZE=50), should propagate error
+        assertThatThrownBy(() -> smallRangeAdapter.fetchTransactions("0x1234", NetworkId.ETHEREUM, 1L, 10L))
+                .isInstanceOf(RpcException.class)
+                .hasMessageContaining("RPC failed after");
     }
 
     private static IngestionNetworkProperties.NetworkIngestionEntry entry(int batchBlockSize) {

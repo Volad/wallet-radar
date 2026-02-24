@@ -32,12 +32,15 @@ public class SyncStatus {
     private String syncBannerMessage;
     private boolean backfillComplete;
     private Instant updatedAt;
+    private int retryCount;
+    private Instant nextRetryAfter;
 
     public enum SyncStatusValue {
         PENDING,
         RUNNING,
         COMPLETE,
         PARTIAL,
-        FAILED
+        FAILED,
+        ABANDONED
     }
 }

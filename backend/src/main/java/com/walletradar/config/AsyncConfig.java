@@ -54,8 +54,8 @@ public class AsyncConfig {
     @Bean(name = SYNC_EXECUTOR)
     public Executor syncExecutor() {
         ThreadPoolTaskExecutor e = new ThreadPoolTaskExecutor();
-        e.setCorePoolSize(4);
-        e.setMaxPoolSize(4);
+        e.setCorePoolSize(3);
+        e.setMaxPoolSize(3);
         e.setThreadNamePrefix("sync-");
         e.initialize();
         return e;

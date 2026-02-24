@@ -110,7 +110,7 @@ class OverrideRecalcIntegrationTest {
         String jobId = overrideService.setOverride(buyEventId, new BigDecimal("1.00"), "Override to 1.00");
 
         assertThat(jobId).isNotNull();
-        assertThat(costBasisOverrideRepository.findByEconomicEventIdAndIsActiveTrue(buyEventId)).isPresent();
+        assertThat(costBasisOverrideRepository.findByEconomicEventIdAndActiveTrue(buyEventId)).isPresent();
 
         // Poll until COMPLETE (async recalc runs on recalc-executor)
         RecalcJob job = pollUntilComplete(jobId, 100);

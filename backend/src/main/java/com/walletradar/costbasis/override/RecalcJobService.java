@@ -1,6 +1,5 @@
 package com.walletradar.costbasis.override;
 
-import com.walletradar.config.AsyncConfig;
 import com.walletradar.costbasis.engine.AvcoEngine;
 import com.walletradar.costbasis.event.OverrideSavedEvent;
 import com.walletradar.costbasis.event.RecalcCompleteEvent;
@@ -15,8 +14,6 @@ import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
-
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Set;
@@ -36,8 +33,7 @@ public class RecalcJobService {
     private final ApplicationEventPublisher applicationEventPublisher;
 
     @EventListener
-    @Async(AsyncConfig.RECALC_EXECUTOR)
-    @Transactional
+    @Async("recalc-executor")
     public void onOverrideSaved(OverrideSavedEvent event) {
         String jobId = event.getJobId();
         RecalcJob job = recalcJobRepository.findById(jobId).orElse(null);
@@ -93,7 +89,6 @@ public class RecalcJobService {
 
     /** Optional TTL cleanup: delete COMPLETE/FAILED jobs older than 24h. Runs every hour. */
     @Scheduled(fixedRate = 3600_000)
-    @Transactional
     public void deleteExpiredJobs() {
         Instant cutoff = Instant.now().minusSeconds(24 * 3600);
         recalcJobRepository.deleteByStatusInAndCompletedAtBefore(
