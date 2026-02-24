@@ -157,10 +157,9 @@ com.walletradar
 │   │   ├── FlagService
 │   │   └── FlagCode                      enum
 │   ├── override/
-│   │   ├── OverrideService
-│   │   ├── OverrideRevertService
+│   │   ├── OverrideService              setOverride, revertOverride (overrides stored via CostBasisOverrideRepository in domain)
 │   │   ├── RecalcJobService
-│   │   └── OverlayRepository
+│   │   └── CostBasisOverrideRepository  (domain) override persistence
 │   └── event/
 │       ├── OverrideSavedEvent
 │       └── RecalcCompleteEvent

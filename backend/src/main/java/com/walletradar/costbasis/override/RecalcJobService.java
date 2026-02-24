@@ -22,7 +22,7 @@ import java.time.Instant;
 import java.util.Set;
 
 /**
- * T-017: Consumes OverrideSavedEvent (and later manual-tx events); runs AvcoEngine.recalculate async on
+ * T-017: Consumes OverrideSavedEvent (and later manual-tx events); runs AvcoEngine.replayFromBeginning async on
  * recalc-executor; sets RecalcJob COMPLETE/FAILED; publishes RecalcCompleteEvent.
  */
 @Service
@@ -58,12 +58,13 @@ public class RecalcJobService {
         String assetContract = job.getAssetContract();
         if (walletAddress == null || networkIdStr == null || assetContract == null) {
             markFailed(job, "Missing wallet, network or asset");
+            applicationEventPublisher.publishEvent(new RecalcCompleteEvent(this, jobId, "FAILED"));
             return;
         }
 
         try {
             NetworkId networkId = NetworkId.valueOf(networkIdStr);
-            avcoEngine.recalculate(walletAddress, networkId, assetContract);
+            avcoEngine.replayFromBeginning(walletAddress, networkId, assetContract);
 
             BigDecimal newAvco = assetPositionRepository
                     .findByWalletAddressAndNetworkIdAndAssetContract(walletAddress, networkIdStr, assetContract)

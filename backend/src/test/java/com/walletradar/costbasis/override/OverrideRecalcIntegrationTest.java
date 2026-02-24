@@ -98,7 +98,7 @@ class OverrideRecalcIntegrationTest {
         assertThat(buyEventId).isNotNull();
 
         // Initial AVCO: 0.99, after sell remaining 50 @ 0.99, realisedPnl = (1.01-0.99)*50 = 1.00
-        avcoEngine.recalculate(wallet, NetworkId.ETHEREUM, assetContract);
+        avcoEngine.replayFromBeginning(wallet, NetworkId.ETHEREUM, assetContract);
 
         AssetPosition beforeOverride = assetPositionRepository
                 .findByWalletAddressAndNetworkIdAndAssetContract(wallet, "ETHEREUM", assetContract)

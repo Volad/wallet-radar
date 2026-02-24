@@ -13,7 +13,7 @@ import java.time.Instant;
 /**
  * Async AVCO recalculation job (e.g. after override or manual compensating transaction).
  * Persisted in recalc_jobs; optional TTL cleanup (e.g. 24h).
- * Executor runs AvcoEngine.recalculate(walletAddress, networkId, assetContract) for the affected (wallet, asset).
+ * Executor runs AvcoEngine.replayFromBeginning(walletAddress, networkId, assetContract) for the affected (wallet, asset).
  */
 @Document(collection = "recalc_jobs")
 @NoArgsConstructor

@@ -49,7 +49,7 @@ class RecalcJobServiceTest {
     RecalcJobService recalcJobService;
 
     @Test
-    @DisplayName("onOverrideSaved runs recalculate, sets COMPLETE and newPerWalletAvco, publishes RecalcCompleteEvent")
+    @DisplayName("onOverrideSaved runs replayFromBeginning, sets COMPLETE and newPerWalletAvco, publishes RecalcCompleteEvent")
     void onOverrideSaved_complete() {
         RecalcJob job = new RecalcJob();
         job.setId(JOB_ID);
@@ -67,7 +67,7 @@ class RecalcJobServiceTest {
 
         recalcJobService.onOverrideSaved(new OverrideSavedEvent(this, JOB_ID));
 
-        verify(avcoEngine).recalculate(WALLET, com.walletradar.domain.NetworkId.ETHEREUM, ASSET_CONTRACT);
+        verify(avcoEngine).replayFromBeginning(WALLET, com.walletradar.domain.NetworkId.ETHEREUM, ASSET_CONTRACT);
         verify(recalcJobRepository, atLeastOnce()).save(job);
         assertThat(job.getStatus()).isEqualTo(RecalcJob.RecalcStatus.COMPLETE);
         assertThat(job.getNewPerWalletAvco()).isEqualByComparingTo("2104.33");
@@ -87,7 +87,7 @@ class RecalcJobServiceTest {
 
         recalcJobService.onOverrideSaved(new OverrideSavedEvent(this, JOB_ID));
 
-        verify(avcoEngine, never()).recalculate(any(), any(), any());
+        verify(avcoEngine, never()).replayFromBeginning(any(), any(), any());
         verify(applicationEventPublisher, never()).publishEvent(any());
     }
 
@@ -101,7 +101,7 @@ class RecalcJobServiceTest {
 
         recalcJobService.onOverrideSaved(new OverrideSavedEvent(this, JOB_ID));
 
-        verify(avcoEngine, never()).recalculate(any(), any(), any());
+        verify(avcoEngine, never()).replayFromBeginning(any(), any(), any());
     }
 
     @Test
@@ -114,7 +114,7 @@ class RecalcJobServiceTest {
         job.setNetworkId(NETWORK_ID);
         job.setAssetContract(ASSET_CONTRACT);
         when(recalcJobRepository.findById(JOB_ID)).thenReturn(Optional.of(job));
-        doThrow(new RuntimeException("DB error")).when(avcoEngine).recalculate(eq(WALLET), any(), eq(ASSET_CONTRACT));
+        doThrow(new RuntimeException("DB error")).when(avcoEngine).replayFromBeginning(eq(WALLET), any(), eq(ASSET_CONTRACT));
 
         recalcJobService.onOverrideSaved(new OverrideSavedEvent(this, JOB_ID));
 

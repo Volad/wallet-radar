@@ -27,7 +27,7 @@ public interface EconomicEventRepository extends MongoRepository<EconomicEvent, 
     List<EconomicEvent> findByWalletAddressInAndAssetSymbolOrderByBlockTimestampAsc(
             List<String> walletAddresses, String assetSymbol);
 
-    /** For AvcoEngine.recalculateForWallet: distinct (networkId, assetContract) for a wallet. */
+    /** For AvcoEngine.recalculateForWallet (replay from beginning): distinct (networkId, assetContract) for a wallet. */
     @Query(value = "{ 'walletAddress' : ?0 }", fields = "{ 'networkId' : 1, 'assetContract' : 1 }")
     List<EconomicEvent> findNetworkIdAndAssetContractByWalletAddress(String walletAddress);
 }
