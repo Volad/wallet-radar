@@ -4,16 +4,36 @@ RPC adapters, classifiers, normalizer, event store. No separate user-facing feat
 
 ---
 
+## EVM batch block size (eth_getLogs) — product requirement
+
+Batch size for `eth_getLogs` ingestion must be **configurable per EVM network** (or at least different defaults for L1 vs L2), not a single global constant.
+
+| Requirement | Behaviour |
+|-------------|-----------|
+| **Config** | Batch size is read from configuration per `networkId` (e.g. `walletradar.ingestion.evm.batch-block-size[networkId]=N` or similar). |
+| **Global default** | **2000 blocks** when no per-network value is set. |
+| **Invalid values** | If configured value is ≤0 or above a reasonable cap: do not apply; use default and **log** (warning). |
+| **Unknown networkId** | For unknown or new EVM `networkId`: use **global default**; **do not fail** ingestion. |
+
+**Acceptance criteria (DoD)**
+- Batch size is read from config per `networkId`; global default is 2000 blocks.
+- Invalid values (≤0 or above cap) are rejected: default is used and a warning is logged.
+- Unknown/new EVM `networkId` uses global default and does not cause failure.
+
+**Architecture:** Batch size is resolved by ingestion config or EvmNetworkAdapter by `networkId`; config key e.g. `walletradar.ingestion.evm.batch-block-size[networkId]`. See **ADR-011** and **02-architecture.md** (ingestion adapter).
+
+---
+
 ## T-004 — NetworkAdapter interface and EVM adapter
 
 - **Module(s):** ingestion (adapter)
-- **Description:** Define `NetworkAdapter` interface (fetch transactions/blocks for a wallet×network, batch size contract). Implement `EvmNetworkAdapter`: `eth_getLogs` (or equivalent) in batches of 2000 blocks, RPC endpoint abstraction. Integrate `RpcEndpointRotator` with round-robin and exponential backoff (±20% jitter).
-- **Doc refs:** 02-architecture (ingestion/adapter), 00-context (EVM RPC)
-- **DoD:** Interface; EVM implementation; unit tests with mocked RPC; integration test against public RPC or Testcontainers if applicable.
+- **Description:** Define `NetworkAdapter` interface (fetch transactions/blocks for a wallet×network, batch size contract). Implement `EvmNetworkAdapter`: `eth_getLogs` (or equivalent) with **per-network configurable batch block size** (see "EVM batch block size" above; global default 2000). RPC endpoint abstraction. Integrate `RpcEndpointRotator` with round-robin and exponential backoff (±20% jitter).
+- **Doc refs:** 02-architecture (ingestion/adapter), 00-context (EVM RPC, EVM batch block size), this file (EVM batch block size).
+- **DoD:** Interface; EVM implementation with per-network batch size from config (default 2000); validation and logging for invalid values; unknown networkId → global default, no fail; unit tests with mocked RPC; integration test against public RPC or Testcontainers if applicable.
 - **Dependencies:** T-001, T-003
 
 **Acceptance criteria**
-- NetworkAdapter interface and EvmNetworkAdapter implemented; unit and integration tests pass.
+- NetworkAdapter interface and EvmNetworkAdapter implemented; batch size read from config per networkId; default 2000; invalid values → default + log; unknown networkId → global default, no failure; unit and integration tests pass.
 
 ---
 

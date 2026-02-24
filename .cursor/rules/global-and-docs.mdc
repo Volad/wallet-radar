@@ -1,0 +1,28 @@
+---
+description: Global conventions and documentation structure
+alwaysApply: true
+---
+
+# Global Conventions & Documentation
+
+## Language
+
+- **Generated documents** (docs, comments in code, README, ADRs): use **English**.
+- **Chat replies**: use **Russian** or **English** depending on the user's prompt language.
+
+## Repository
+
+- Project: **WalletRadar** — https://github.com/Volad/wallet-radar
+
+## Documentation Structure
+
+| File | Purpose |
+|------|---------|
+| `docs/00-context.md` | Product context, goals, not goals, limitations |
+| `docs/01-domain.md` | Entities, glossary, invariants |
+| `docs/02-architecture.md` | Modules architecture, data flow |
+| `docs/03-accounting.md` | Cost basis policy (AVG), PnL, costs |
+| `docs/04-api.md` | API contract or link to OpenAPI spec |
+| `docs/adr/*.md` | Architecture Decision Records — **one ADR per file**; each ADR must explain **why** and **when** the decision was made |
+
+When creating or updating docs, place content in the correct file and keep ADRs focused (one decision, one file).

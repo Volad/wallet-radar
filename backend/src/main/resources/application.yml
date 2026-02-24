@@ -4,3 +4,50 @@ spring:
   data:
     mongodb:
       uri: ${MONGODB_URI:mongodb://localhost:27017/walletradar}
+
+# Unified per-network ingestion config (ADR-012). Batch size semantics: ADR-011.
+walletradar:
+  ingestion:
+    network:
+      ETHEREUM:
+        urls:
+          - https://eth.llamarpc.com
+          - https://ethereum.publicnode.com
+          - https://rpc.ankr.com/eth
+        batch-block-size: 2000
+      ARBITRUM:
+        urls:
+          - https://arb1.arbitrum.io/rpc
+          - https://arbitrum.llamarpc.com
+          - https://rpc.ankr.com/arbitrum_one
+        batch-block-size: 5000
+      OPTIMISM:
+        urls:
+          - https://mainnet.optimism.io
+          - https://optimism.llamarpc.com
+          - https://rpc.ankr.com/optimism
+        batch-block-size: 5000
+      POLYGON:
+        urls:
+          - https://polygon.llamarpc.com
+          - https://rpc.ankr.com/polygon
+          - https://polygon-bor-rpc.publicnode.com
+        batch-block-size: 2000
+      BASE:
+        urls:
+          - https://mainnet.base.org
+          - https://base.llamarpc.com
+          - https://rpc.ankr.com/base
+        batch-block-size: 5000
+      BSC:
+        urls:
+          - https://bsc-dataseed.binance.org
+          - https://bsc.llamarpc.com
+          - https://rpc.ankr.com/bsc
+        batch-block-size: 2000
+      AVALANCHE:
+        urls:
+          - https://api.avax.network/ext/bc/C/rpc
+          - https://rpc.ankr.com/avalanche
+          - https://avalanche-c-chain-rpc.publicnode.com
+        batch-block-size: 2000

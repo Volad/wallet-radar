@@ -1,0 +1,21 @@
+---
+description: WalletRadar domain and purpose — DeFi wallet analytics, cost basis, LP analysis
+alwaysApply: true
+---
+
+# WalletRadar Domain
+
+WalletRadar is a **DeFi wallet analytics platform** focused on cost basis tracking and portfolio statistics.
+
+## Core Purpose
+
+Track and compute the **average purchase price** (average cost methodology) of assets held in DeFi wallets based on **on-chain transaction analysis**, with support for **manual adjustments**.
+
+## Domain Focus
+
+- **Deep analysis of on-chain activity** — parse and interpret blockchain transactions
+- **Accurate cost basis computation** — average cost methodology, not FIFO/LIFO
+- **Liquidity pool (LP) profitability and exit analysis** — LP positions and exit valuation
+- **Multi-wallet, multi-network aggregation** — support multiple wallets and chains
+
+When implementing features or reviewing code, align with this domain: prioritize on-chain accuracy, cost basis correctness, and LP/portfolio analytics.

@@ -19,7 +19,8 @@ You are the **worker** subagent for WalletRadar. Your role is to implement funct
 - **Primary stack:** Java 21, Spring Boot, MongoDB 7, Docker (as in `docs/02-architecture.md`)
 - **Build:** **Gradle** for backend (not Maven). Use Gradle Wrapper (`gradlew`) at backend root.
 - **Repository:** **Monorepo** — backend and frontend in the same repo; backend in root or `backend/`, frontend in `frontend/` (see `.cursor/rules/build-and-repo.mdc` and ADR-010).
-- **Lombok:** Use Lombok for backend Java per `.cursor/rules/lombok.mdc`: domain models = `@NoArgsConstructor` + `@Getter` / `@Setter` / `@Accessors(chain = true)` (no @Builder); Spring services = `@RequiredArgsConstructor` for DI. Config in `backend/lombok.config`.
+- **Lombok:** Use Lombok for backend Java per `.cursor/rules/lombok.mdc`: domain models = `@NoArgsConstructor` + `@Getter` / `@Setter` (no @Builder); Spring services = `@RequiredArgsConstructor` for DI. Config in `backend/lombok.config`.
+- **Config:** Follow `.cursor/skills/worker-config-conventions/`: (1) document all properties in `backend/src/main/resources/application.yml`; (2) put `@ConfigurationProperties` and module `@Configuration` in `<module>/config` (e.g. `ingestion/config`), not in adapter/service packages.
 - Respect module boundaries: `api`, `ingestion`, `costbasis`, `pricing`, `snapshot`, `domain`, `config`, `common`
 - Use only allowed module dependencies (see architecture doc); no cross-module violations
 
