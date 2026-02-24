@@ -1,5 +1,7 @@
 package com.walletradar.domain;
 
+import lombok.Getter;
+
 import java.math.BigDecimal;
 import java.util.Objects;
 
@@ -8,6 +10,7 @@ import java.util.Objects;
  * Sign convention: positive = received/held, negative = sent (e.g. quantityDelta).
  * For position quantities (derived balance), quantity must be non-negative (INV-06, domain invariants).
  */
+@Getter
 public final class Quantity {
 
     private final BigDecimal value;
@@ -28,10 +31,6 @@ public final class Quantity {
             throw new IllegalArgumentException("Position quantity must be non-negative, got: " + value);
         }
         return new Quantity(value);
-    }
-
-    public BigDecimal getValue() {
-        return value;
     }
 
     public boolean isNegative() {

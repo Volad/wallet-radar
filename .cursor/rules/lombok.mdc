@@ -1,0 +1,54 @@
+---
+description: Lombok usage for backend Java — models (NoArgsConstructor + chain setters), services (RequiredArgsConstructor). No @Builder.
+globs: backend/**/*.java
+alwaysApply: false
+---
+
+# Lombok (backend Java)
+
+Use Lombok in the backend as follows. Configuration is in `backend/lombok.config` (chain accessors, copyable annotations, etc.).
+
+## Domain / document models
+
+- **@NoArgsConstructor** — required for persistence and deserialization.
+- **@Getter @Setter** — no hand-written getters/setters. Chained setters are enabled globally via `backend/lombok.config` (`lombok.accessors.chain = true`).
+- **@EqualsAndHashCode(onlyExplicitlyIncluded = true)** — include only the field(s) that define identity (e.g. `@EqualsAndHashCode.Include` on `id`).
+- **Do not use @Builder** — use no-arg constructor + chained setters instead.
+
+Example:
+
+```java
+@NoArgsConstructor
+@Getter
+@Setter
+@EqualsAndHashCode(onlyExplicitlyIncluded = true)
+public class MyDocument {
+    @Id
+    @EqualsAndHashCode.Include
+    private String id;
+    private String name;
+}
+```
+
+## Spring services (and other DI beans)
+
+- **@RequiredArgsConstructor** — for constructor-based dependency injection of `final` fields. Prefer this over @Autowired on fields.
+
+Example:
+
+```java
+@Service
+@RequiredArgsConstructor
+public class MyService {
+    private final MyRepository repo;
+    private final OtherService other;
+}
+```
+
+## Value objects / immutables
+
+- Use **@Getter** (and keep factory methods or private constructor) where the type is immutable (e.g. `Quantity`). No setters, no @NoArgsConstructor if that would break invariants.
+
+## Do not use
+
+- **@Builder** — not used in this project.

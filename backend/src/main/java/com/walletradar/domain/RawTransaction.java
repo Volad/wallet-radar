@@ -1,5 +1,9 @@
 package com.walletradar.domain;
 
+import lombok.EqualsAndHashCode;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.index.CompoundIndex;
 import org.springframework.data.mongodb.core.mapping.Document;
@@ -10,43 +14,16 @@ import org.springframework.data.mongodb.core.mapping.Document;
  */
 @Document(collection = "raw_transactions")
 @CompoundIndex(name = "txHash_networkId", def = "{'txHash': 1, 'networkId': 1}", unique = true)
+@NoArgsConstructor
+@Getter
+@Setter
+@EqualsAndHashCode(onlyExplicitlyIncluded = true)
 public class RawTransaction {
 
     @Id
+    @EqualsAndHashCode.Include
     private String id;
     private String txHash;
     private String networkId;
     private org.bson.Document rawData;
-
-    public String getId() {
-        return id;
-    }
-
-    public void setId(String id) {
-        this.id = id;
-    }
-
-    public String getTxHash() {
-        return txHash;
-    }
-
-    public void setTxHash(String txHash) {
-        this.txHash = txHash;
-    }
-
-    public String getNetworkId() {
-        return networkId;
-    }
-
-    public void setNetworkId(String networkId) {
-        this.networkId = networkId;
-    }
-
-    public org.bson.Document getRawData() {
-        return rawData;
-    }
-
-    public void setRawData(org.bson.Document rawData) {
-        this.rawData = rawData;
-    }
 }
