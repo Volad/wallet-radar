@@ -1,5 +1,6 @@
-package com.walletradar.ingestion.adapter;
+package com.walletradar.ingestion.adapter.solana;
 
+import com.walletradar.ingestion.adapter.RpcException;
 import org.springframework.http.MediaType;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
@@ -7,13 +8,13 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
 import java.util.Map;
 
 /**
- * EVM JSON-RPC client using WebClient. Used by EvmNetworkAdapter.
+ * Solana JSON-RPC client using WebClient. Same JSON-RPC 2.0 protocol as EVM.
  */
-public class WebClientEvmRpcClient implements EvmRpcClient {
+public class WebClientSolanaRpcClient implements SolanaRpcClient {
 
     private final WebClient webClient;
 
-    public WebClientEvmRpcClient(WebClient.Builder builder) {
+    public WebClientSolanaRpcClient(WebClient.Builder builder) {
         this.webClient = builder.build();
     }
 

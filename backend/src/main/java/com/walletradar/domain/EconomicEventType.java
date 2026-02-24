@@ -16,5 +16,7 @@ public enum EconomicEventType {
     BORROW,
     REPAY,
     EXTERNAL_TRANSFER_OUT,
+    /** Inbound transfer from address not in session; may be reclassified to INTERNAL_TRANSFER when sender is added. */
+    EXTERNAL_INBOUND,
     MANUAL_COMPENSATING
 }
