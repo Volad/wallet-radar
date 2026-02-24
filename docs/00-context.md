@@ -50,6 +50,7 @@ Manual compensating transactions may be **positive or negative** (reducing quant
 ## Constraints & Limitations
 
 ### Technical Constraints
+- **Monorepo** — backend (Spring Boot) and frontend (Angular) are in the same repository; backend is built with **Gradle** (not Maven).
 - **No user accounts** — session is a browser-local ordered list of wallet addresses
 - **Reconciliation UX** — when derived quantity does not match on-chain balance (e.g. for wallets with history within the 2-year window), the UI shows a warning on the asset and the user can add a manual compensating transaction to align balance and AVCO
 - **Read-only access** — system never requests wallet signing or private keys

@@ -22,6 +22,11 @@ The **worker** subagent implements from this folder. Each file contains **one fe
 
 **Dependency order:** Implement 00-* first, then 01 → 02 → … → 09. See **mvp-implementation-tasks.md** for full dependency graph.
 
+## Build and repository
+
+- **Build:** **Gradle** for backend (not Maven). Use `gradlew` at backend root.
+- **Monorepo:** Backend and frontend in one repo; backend (e.g. root or `backend/`), frontend (e.g. `frontend/`). See **ADR-010** and `.cursor/rules/build-and-repo.mdc`.
+
 ## Workflow
 
 1. Read the task(s) and acceptance criteria from the relevant file (e.g. `01-add-wallet-backfill.md`).

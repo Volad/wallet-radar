@@ -2,7 +2,18 @@
 
 > **Version:** SAD v2.0 (updated per BA Review Report v1.0)  
 > **Style:** Modular Monolith → Microservices (Phase 3)  
-> **Stack:** Java 21 · Spring Boot · MongoDB 7 · Docker
+> **Stack:** Java 21 · Spring Boot · MongoDB 7 · Docker  
+> **Build:** Gradle (backend). **Repository:** Monorepo — backend and frontend in one repo.
+
+---
+
+## Build and repository layout
+
+- **Build tool:** **Gradle** for the backend (not Maven). Use Gradle Wrapper (`gradlew`) at backend root.
+- **Monorepo:** Backend and frontend live in the same repository.
+  - **Backend:** Gradle project (e.g. root or `backend/` subdirectory). All Java 21, Spring Boot, domain modules.
+  - **Frontend:** Angular app in a dedicated directory (e.g. `frontend/`). Own `package.json` and build.
+- Root may be a Gradle multi-project including the backend (and optionally frontend build), or `backend/` and `frontend/` may be built separately. See **ADR-010** for the decision.
 
 ---
 
