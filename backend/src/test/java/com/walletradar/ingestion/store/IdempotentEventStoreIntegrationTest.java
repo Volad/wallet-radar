@@ -42,8 +42,8 @@ class IdempotentEventStoreIntegrationTest {
     EconomicEventRepository repository;
 
     @Test
-    @DisplayName("double write same txHash+networkId results in single event")
-    void doubleWriteSameTx_singleEvent() {
+    @DisplayName("double write same txHash+networkId+wallet+assetContract results in single event (idempotent)")
+    void doubleWriteSameTxSameLeg_singleEvent() {
         EconomicEvent event = new EconomicEvent();
         event.setTxHash("0xidem123");
         event.setNetworkId(NetworkId.ETHEREUM);
@@ -65,24 +65,24 @@ class IdempotentEventStoreIntegrationTest {
         EconomicEvent event2 = new EconomicEvent();
         event2.setTxHash("0xidem123");
         event2.setNetworkId(NetworkId.ETHEREUM);
-        event2.setWalletAddress("0xwallet2");
+        event2.setWalletAddress("0xwallet");
         event2.setBlockTimestamp(Instant.parse("2025-01-15T11:00:00Z"));
-        event2.setEventType(EconomicEventType.SWAP_SELL);
+        event2.setEventType(EconomicEventType.SWAP_BUY);
         event2.setAssetSymbol("ETH");
         event2.setAssetContract("0x0000000000000000000000000000000000000000");
-        event2.setQuantityDelta(new BigDecimal("-0.5"));
+        event2.setQuantityDelta(new BigDecimal("1.1"));
         event2.setPriceUsd(new BigDecimal("2600"));
         event2.setPriceSource(PriceSource.SWAP_DERIVED);
-        event2.setTotalValueUsd(new BigDecimal("1300"));
+        event2.setTotalValueUsd(new BigDecimal("2860"));
         event2.setGasCostUsd(BigDecimal.ZERO);
-        event2.setGasIncludedInBasis(false);
+        event2.setGasIncludedInBasis(true);
 
         EconomicEvent second = store.upsert(event2);
         assertThat(second.getId()).isEqualTo(first.getId());
-        assertThat(second.getWalletAddress()).isEqualTo("0xwallet2");
-        assertThat(second.getEventType()).isEqualTo(EconomicEventType.SWAP_SELL);
+        assertThat(second.getQuantityDelta()).isEqualByComparingTo(new BigDecimal("1.1"));
 
-        assertThat(repository.findByTxHashAndNetworkId("0xidem123", NetworkId.ETHEREUM)).isPresent();
+        assertThat(repository.findByTxHashAndNetworkIdAndWalletAddressAndAssetContract(
+                "0xidem123", NetworkId.ETHEREUM, "0xwallet", "0x0000000000000000000000000000000000000000")).isPresent();
     }
 
     @Test

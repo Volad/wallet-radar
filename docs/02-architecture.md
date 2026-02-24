@@ -9,7 +9,7 @@
 
 ## Build and repository layout
 
-- **Build tool:** **Gradle** for the backend (not Maven). Use Gradle Wrapper (`gradlew`) at backend root.
+- **Build tool:** **Gradle** for the backend (not Maven). Gradle Wrapper at project root: `./gradlew`; backend tasks: `./gradlew :backend:test`, `./gradlew :backend:bootRun`, `./gradlew :backend:build`.
 - **Monorepo:** Backend and frontend live in the same repository.
   - **Backend:** Gradle project (e.g. root or `backend/` subdirectory). All Java 21, Spring Boot, domain modules.
   - **Frontend:** Angular app in a dedicated directory (e.g. `frontend/`). Own `package.json` and build.
@@ -115,7 +115,7 @@ com.walletradar
 │   │   ├── NetworkAdapter        interface
 │   │   ├── RpcEndpointRotator    round-robin, exponential backoff
 │   │   ├── evm/
-│   │   │   ├── EvmNetworkAdapter     eth_getLogs, batch size per network (default 2000), see ADR-011
+│   │   │   ├── EvmNetworkAdapter     eth_getLogs (Transfer), then eth_getTransactionReceipt per tx for full logs (Swap V2/V3)
 │   │   │   ├── EvmRpcClient
 │   │   │   └── WebClientEvmRpcClient
 │   │   └── solana/
@@ -142,7 +142,7 @@ com.walletradar
 │   │   ├── CurrentBalancePollJob         @Scheduled fixedRate=600_000  (every 10 min)
 │   │   └── SyncProgressTracker           progressPct + syncBannerMessage
 │   └── store/
-│   │   ├── IdempotentEventStore          upsert on txHash+networkId UNIQUE
+│   │   ├── IdempotentEventStore          upsert on (txHash, networkId, walletAddress, assetContract) UNIQUE sparse; MANUAL by clientId
 │   │   └── OnChainBalanceStore           upsert on (walletAddress, networkId, assetContract) UNIQUE
 │
 ├── costbasis/
@@ -207,7 +207,8 @@ com.walletradar
 
 | Pool | Threads | Used By |
 |------|---------|---------|
-| `backfill-executor` | 2 per network (max 18) | `BackfillJobRunner` parallel per-network fetch |
+| `backfill-coordinator-executor` | 1 | Runs `scheduleBackfillWork` and `runReclassifyAndRecalc` when all futures complete; does not consume worker threads |
+| `backfill-executor` | 4 (max 18) | Shared pool for all (wallet, network) backfill tasks; free threads take next PENDING/FAILED from queue |
 | `recalc-executor` | 4 | `AvcoEngine.replayFromBeginning` (@Async) — used after override and after manual compensating transaction |
 | `sync-executor` | 3 | `IncrementalSyncJob` parallel wallets |
 | `scheduler-pool` | 2 | `@Scheduled` cron jobs (IncrementalSync, SnapshotCron, **CurrentBalancePoll** every 10 min) |

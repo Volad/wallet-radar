@@ -15,6 +15,8 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -45,9 +47,12 @@ public class AvcoEngine {
      * computes realised P&amp;L on SELL (INV-07), sets hasIncompleteHistory if first event is SELL/transfer-out (INV-09).
      */
     public void replayFromBeginning(String walletAddress, NetworkId networkId, String assetContract) {
-        List<EconomicEvent> events = economicEventRepository
+        List<EconomicEvent> events = new ArrayList<>(economicEventRepository
                 .findByWalletAddressAndNetworkIdAndAssetContractOrderByBlockTimestampAsc(
-                        walletAddress, networkId, assetContract);
+                        walletAddress, networkId, assetContract));
+        events.sort(Comparator
+                .comparing(EconomicEvent::getBlockTimestamp, Comparator.nullsLast(Comparator.naturalOrder()))
+                .thenComparing(EconomicEvent::getLogIndex, Comparator.nullsLast(Comparator.naturalOrder())));
         if (events.isEmpty()) {
             removePositionIfPresent(walletAddress, networkId.name(), assetContract);
             return;

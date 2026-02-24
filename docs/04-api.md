@@ -3,7 +3,8 @@
 > **Version:** MVP v2.0  
 > **Base URL:** `/api/v1`  
 > **Auth:** None (no user accounts in MVP)  
-> **Format:** JSON. All monetary values serialised as `String` (BigDecimal precision, no floating point loss).
+> **Format:** JSON. All monetary values serialised as `String` (BigDecimal precision, no floating point loss).  
+> **Postman:** [docs/postman/WalletRadar-API.postman_collection.json](postman/WalletRadar-API.postman_collection.json) — import into Postman for all endpoints.
 
 ---
 

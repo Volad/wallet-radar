@@ -186,7 +186,7 @@ These rules must never be violated by any module:
 | INV-08 | A `cost_basis_override` with `isActive=true` supersedes the original `priceUsd` in all AVCO replays |
 | INV-09 | `hasIncompleteHistory=true` if the chronologically earliest event for an asset is a SELL or transfer-out |
 | INV-10 | GET endpoints make zero RPC calls and perform zero heavy computation on the request path |
-| INV-11 | `txHash + networkId` uniqueness is the idempotency key for all ingestion |
+| INV-11 | For on-chain events, idempotency key is `(txHash, networkId, walletAddress, assetContract)` — one tx can have multiple events (e.g. SWAP_SELL and SWAP_BUY). For MANUAL_COMPENSATING, idempotency is by `clientId`. |
 | INV-12 | Gas cost is included in cost basis for BUY events by default; excluded for all other event types unless explicitly overridden |
 | INV-13 | Manual compensating events have no txHash (or synthetic id); they are ordered by timestamp (user-provided or "end of timeline") and included in AVCO replay in `blockTimestamp ASC` order |
 | INV-14 | Idempotency for manual compensating transactions is enforced by `clientId` — duplicate clientId returns same event / no duplicate event |

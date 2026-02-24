@@ -59,14 +59,14 @@ class CacheAndExecutorConfigTest {
         assertThat(recalcExecutor).isNotNull();
         assertThat(syncExecutor).isNotNull();
         if (backfillExecutor instanceof ThreadPoolTaskExecutor b) {
-            assertThat(b.getCorePoolSize()).isEqualTo(2);
+            assertThat(b.getCorePoolSize()).isEqualTo(4);
             assertThat(b.getMaxPoolSize()).isEqualTo(18);
         }
         if (recalcExecutor instanceof ThreadPoolTaskExecutor r) {
             assertThat(r.getCorePoolSize()).isEqualTo(4);
         }
         if (syncExecutor instanceof ThreadPoolTaskExecutor s) {
-            assertThat(s.getCorePoolSize()).isEqualTo(3);
+            assertThat(s.getCorePoolSize()).isEqualTo(4);
         }
     }
 

@@ -9,57 +9,70 @@ spring:
 walletradar:
   ingestion:
     # Backfill window (T-009): blocks from current block. Default ~2 years Ethereum (12s block).
+    # L2s use many more blocks per year; set per-network window-blocks so backfill covers ~2 years (e.g. Arbitrum ~4 bl/s → 252M).
     backfill:
       window-blocks: 5256000
     network:
+      # If backfill fails with "RPC failed after 5 attempts", public RPCs may be rate-limiting. Try: reduce batch-block-size (e.g. 500), or add a paid RPC URL (Alchemy/Infura) first in urls.
+      # Ankr (rpc.ankr.com) requires API key; use PublicNode / official / LlamaRPC only, or add Ankr URL with key.
       ETHEREUM:
         urls:
           - https://eth.llamarpc.com
           - https://ethereum.publicnode.com
-          - https://rpc.ankr.com/eth
+          - https://1rpc.io/eth
         batch-block-size: 2000
       ARBITRUM:
         urls:
           - https://arb1.arbitrum.io/rpc
-          - https://arbitrum.llamarpc.com
-          - https://rpc.ankr.com/arbitrum_one
+          - https://arbitrum-one-rpc.publicnode.com
         batch-block-size: 5000
+        window-blocks: 252000000   # ~2 years at ~4 blocks/s
       OPTIMISM:
         urls:
           - https://mainnet.optimism.io
-          - https://optimism.llamarpc.com
-          - https://rpc.ankr.com/optimism
+          - https://optimism-rpc.publicnode.com
         batch-block-size: 5000
+        window-blocks: 252000000   # ~2 years at ~4 blocks/s
       POLYGON:
         urls:
-          - https://polygon.llamarpc.com
-          - https://rpc.ankr.com/polygon
           - https://polygon-bor-rpc.publicnode.com
+          - https://polygon.drpc.org
+          - https://1rpc.io/matic
         batch-block-size: 2000
+        window-blocks: 31560000    # ~2 years at ~2s/block
       BASE:
         urls:
           - https://mainnet.base.org
           - https://base.llamarpc.com
-          - https://rpc.ankr.com/base
+          - https://base-rpc.publicnode.com
         batch-block-size: 5000
+        window-blocks: 252000000   # ~2 years at ~4 blocks/s
+      # Some BSC public RPCs prune old blocks (e.g. "History has been pruned"); multiple endpoints improve retry.
       BSC:
         urls:
           - https://bsc-dataseed.binance.org
-          - https://bsc.llamarpc.com
-          - https://rpc.ankr.com/bsc
+          - https://bsc-dataseed1.defibit.io
+          - https://bsc-dataseed1.ninicoin.io
+          - https://bsc-rpc.publicnode.com
+          - https://bsc.drpc.org
+          - https://1rpc.io/bnb
         batch-block-size: 2000
+        window-blocks: 21024000    # ~2 years at ~3s/block
       AVALANCHE:
         urls:
           - https://api.avax.network/ext/bc/C/rpc
-          - https://rpc.ankr.com/avalanche
           - https://avalanche-c-chain-rpc.publicnode.com
+          - https://avalanche.drpc.org
+          - https://1rpc.io/avax/c
         batch-block-size: 2000
+        window-blocks: 31560000    # ~2 years at ~2s/block
       MANTLE:
         urls:
           - https://mantle-rpc.publicnode.com
-          - https://rpc.ankr.com/mantle
           - https://mantle.drpc.org
+          - https://rpc.mantle.xyz
         batch-block-size: 2000
+        window-blocks: 31560000    # ~2 years at ~2s/block
       SOLANA:
         urls:
           - https://api.mainnet-beta.solana.com

@@ -24,7 +24,7 @@ The **worker** subagent implements from this folder. Each file contains **one fe
 
 ## Build and repository
 
-- **Build:** **Gradle** for backend (not Maven). Use `gradlew` at backend root.
+- **Build:** **Gradle** for backend (not Maven). Use `./gradlew` at project root; e.g. `./gradlew :backend:test`, `./gradlew :backend:bootRun`.
 - **Monorepo:** Backend and frontend in one repo; backend (e.g. root or `backend/`), frontend (e.g. `frontend/`). See **ADR-010** and `.cursor/rules/build-and-repo.mdc`.
 
 ## Workflow

@@ -6,8 +6,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 /**
- * Upserts economic events keyed by (txHash, networkId) for on-chain events;
- * by clientId for MANUAL_COMPENSATING. No duplicate events for same tx (INV-11).
+ * Upserts economic events keyed by (txHash, networkId, walletAddress, assetContract) for on-chain events
+ * so one tx can have multiple events (e.g. SWAP_SELL and SWAP_BUY); by clientId for MANUAL_COMPENSATING (INV-11).
  */
 @Service
 @RequiredArgsConstructor
@@ -16,12 +16,14 @@ public class IdempotentEventStore {
     private final EconomicEventRepository repository;
 
     /**
-     * Upsert by (txHash, networkId) when present; by clientId for MANUAL_COMPENSATING.
+     * Upsert by (txHash, networkId, walletAddress, assetContract) when on-chain; by clientId for MANUAL_COMPENSATING.
      * Returns the saved or existing event (idempotent).
      */
     public EconomicEvent upsert(EconomicEvent event) {
-        if (event.getTxHash() != null && event.getNetworkId() != null) {
-            return repository.findByTxHashAndNetworkId(event.getTxHash(), event.getNetworkId())
+        if (event.getTxHash() != null && event.getNetworkId() != null
+                && event.getWalletAddress() != null && event.getAssetContract() != null) {
+            return repository.findByTxHashAndNetworkIdAndWalletAddressAndAssetContract(
+                            event.getTxHash(), event.getNetworkId(), event.getWalletAddress(), event.getAssetContract())
                     .map(existing -> copyEventInto(existing, event))
                     .map(repository::save)
                     .orElseGet(() -> repository.save(event));

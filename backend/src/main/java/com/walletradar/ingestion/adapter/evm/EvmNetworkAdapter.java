@@ -18,8 +18,8 @@ import java.util.stream.StreamSupport;
 
 /**
  * EVM adapter: eth_getLogs with per-network batch block size (ADR-011) and per-network RPC rotators (ADR-012).
- * Uses rotator for the request's networkId; if network is not in config, uses default rotator (single fallback URL).
- * Fetches ERC20 Transfer logs where the wallet is from or to, groups by txHash into RawTransaction.
+ * Fetches ERC20 Transfer logs where the wallet is from or to, then enriches each tx with full receipt logs
+ * so classifiers see Swap and other topics (e.g. Uniswap V3 Swap) and emit SWAP_BUY/SWAP_SELL instead of EXTERNAL_INBOUND.
  */
 @Component
 @RequiredArgsConstructor
@@ -89,6 +89,13 @@ public class EvmNetworkAdapter implements NetworkAdapter {
                     String txHash = log.path("transactionHash").asText();
                     byTx.computeIfAbsent(txHash, k -> new ArrayList<>()).add(log);
                 }
+                // Enrich with full receipt logs so Swap (V2/V3) and other events are visible to classifiers.
+                for (String txHash : byTx.keySet()) {
+                    List<JsonNode> fullLogs = getTransactionReceiptLogs(endpoint, txHash);
+                    if (!fullLogs.isEmpty()) {
+                        byTx.put(txHash, fullLogs);
+                    }
+                }
                 return byTx.entrySet().stream()
                         .map(e -> toRawTransaction(e.getKey(), networkIdStr, e.getValue()))
                         .toList();
@@ -96,7 +103,31 @@ public class EvmNetworkAdapter implements NetworkAdapter {
                 lastException = e;
             }
         }
-        throw new RpcException("RPC failed after " + rotator.getMaxAttempts() + " attempts", lastException);
+        String msg = "RPC failed after " + rotator.getMaxAttempts() + " attempts";
+        if (lastException != null && lastException.getMessage() != null && !lastException.getMessage().isBlank()) {
+            msg += ": " + lastException.getMessage();
+        }
+        throw new RpcException(msg, lastException);
+    }
+
+    /** Fetches full receipt logs for a tx so Swap and other non-Transfer events are available to classifiers. */
+    private List<JsonNode> getTransactionReceiptLogs(String endpoint, String txHash) {
+        try {
+            String json = rpcClient.call(endpoint, "eth_getTransactionReceipt", Collections.singletonList(txHash)).block();
+            if (json == null) return List.of();
+            JsonNode root = objectMapper.readTree(json);
+            JsonNode error = root.path("error");
+            if (!error.isMissingNode()) return List.of();
+            JsonNode result = root.path("result");
+            if (result.isMissingNode() || result.isNull() || !result.has("logs")) return List.of();
+            JsonNode logsArray = result.get("logs");
+            if (!logsArray.isArray()) return List.of();
+            List<JsonNode> list = new ArrayList<>();
+            logsArray.forEach(list::add);
+            return list;
+        } catch (Exception e) {
+            return List.of();
+        }
     }
 
     private List<JsonNode> ethGetLogs(String endpoint, long fromBlock, long toBlock, List<Object> topics, String address) {

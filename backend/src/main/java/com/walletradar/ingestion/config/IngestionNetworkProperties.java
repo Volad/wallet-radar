@@ -31,7 +31,9 @@ public class IngestionNetworkProperties {
     }
 
     /**
-     * One network's RPC URLs and eth_getLogs batch block size (ADR-011 semantics).
+     * One network's RPC URLs, eth_getLogs batch block size (ADR-011), and optional backfill window in blocks.
+     * When windowBlocks is set, backfill for this network uses it instead of the global backfill.window-blocks
+     * (so L2s with fast blocks can cover ~1 year: e.g. Arbitrum ~4 blocks/s → 126M blocks/year).
      */
     @NoArgsConstructor
     @Getter
@@ -40,6 +42,8 @@ public class IngestionNetworkProperties {
 
         private List<String> urls = new ArrayList<>();
         private Integer batchBlockSize;
+        /** Optional. Backfill window in blocks for this network; if null, global backfill.window-blocks is used. */
+        private Long windowBlocks;
 
         public void setUrls(List<String> urls) {
             this.urls = urls != null ? urls : new ArrayList<>();

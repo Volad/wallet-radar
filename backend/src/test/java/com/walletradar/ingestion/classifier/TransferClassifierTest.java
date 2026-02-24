@@ -2,27 +2,40 @@ package com.walletradar.ingestion.classifier;
 
 import com.walletradar.domain.EconomicEventType;
 import com.walletradar.domain.RawTransaction;
+import com.walletradar.ingestion.adapter.evm.EvmTokenDecimalsResolver;
 import com.walletradar.ingestion.config.ProtocolRegistryProperties;
 import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.when;
 
+@ExtendWith(MockitoExtension.class)
 class TransferClassifierTest {
 
     private TransferClassifier classifier;
     private ProtocolRegistry registry;
+
+    @Mock
+    private EvmTokenDecimalsResolver evmTokenDecimalsResolver;
 
     @BeforeEach
     void setUp() {
         ProtocolRegistryProperties props = new ProtocolRegistryProperties();
         props.setNames(Map.of());
         registry = new DefaultProtocolRegistry(props);
-        classifier = new TransferClassifier(registry);
+        lenient().when(evmTokenDecimalsResolver.getDecimals(anyString(), anyString())).thenReturn(18);
+        lenient().when(evmTokenDecimalsResolver.getSymbol(anyString(), anyString())).thenReturn("TOKEN");
+        classifier = new TransferClassifier(registry, evmTokenDecimalsResolver);
     }
 
     @Test
@@ -43,6 +56,7 @@ class TransferClassifierTest {
         String walletTopic = "0x" + "0".repeat(24) + "1234567890123456789012345678901234567890";
         String toTopic = "0x" + "0".repeat(24) + "5678567856785678567856785678567856785678";
         RawTransaction tx = new RawTransaction();
+        tx.setNetworkId("ETHEREUM");
         tx.setRawData(new Document("logs", List.of(
                 new Document("address", "0xToken")
                         .append("topics", List.of(TransferClassifier.TRANSFER_TOPIC, walletTopic, toTopic))
@@ -62,6 +76,7 @@ class TransferClassifierTest {
         String walletTopic = "0x" + "0".repeat(24) + "1234567890123456789012345678901234567890";
         String fromTopic = "0x" + "0".repeat(24) + "abcdabcdabcdabcdabcdabcdabcdabcdabcdabcd";
         RawTransaction tx = new RawTransaction();
+        tx.setNetworkId("ETHEREUM");
         tx.setRawData(new Document("logs", List.of(
                 new Document("address", "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2")
                         .append("topics", List.of(TransferClassifier.TRANSFER_TOPIC, fromTopic, walletTopic))
@@ -79,6 +94,7 @@ class TransferClassifierTest {
         String walletTopic = "0x" + "0".repeat(24) + "1234567890123456789012345678901234567890";
         String swapTopic = "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822";
         RawTransaction tx = new RawTransaction();
+        tx.setNetworkId("ETHEREUM");
         tx.setRawData(new Document("logs", List.of(
                 new Document("topics", List.of(swapTopic)),
                 new Document("address", "0xToken")
