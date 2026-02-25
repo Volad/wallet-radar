@@ -42,11 +42,17 @@ public class InlineSwapPriceEnricher {
         EconomicEvent buy = null;
 
         for (EconomicEvent e : txEvents) {
-            if (e.getEventType() == EconomicEventType.SWAP_SELL) sell = e;
-            else if (e.getEventType() == EconomicEventType.SWAP_BUY) buy = e;
+            if (e.getEventType() == EconomicEventType.SWAP_SELL) {
+                if (sell != null) return;
+                sell = e;
+            } else if (e.getEventType() == EconomicEventType.SWAP_BUY) {
+                if (buy != null) return;
+                buy = e;
+            }
         }
 
         if (sell == null || buy == null) return;
+        if (sell.getQuantityDelta() == null || buy.getQuantityDelta() == null) return;
         if (sell.getAssetContract() == null || buy.getAssetContract() == null) return;
         if (sell.getAssetContract().equalsIgnoreCase(buy.getAssetContract())) return;
 
@@ -75,7 +81,7 @@ public class InlineSwapPriceEnricher {
         BigDecimal stableAmount = stableLeg.getQuantityDelta().abs();
         BigDecimal otherAmount = target.getQuantityDelta().abs();
 
-        if (otherAmount.signum() == 0) return;
+        if (stableAmount.signum() == 0 || otherAmount.signum() == 0) return;
 
         BigDecimal priceUsd = stableAmount.divide(otherAmount, MathContext.DECIMAL128);
         target.setPriceUsd(priceUsd);

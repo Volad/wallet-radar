@@ -102,6 +102,105 @@ class InlineSwapPriceEnricherTest {
         assertThat(buy.getPriceUsd()).isNull();
     }
 
+    @Test
+    @DisplayName("Multi-hop swap (>1 SWAP_SELL in same tx): entire group skipped")
+    void multiHopSwap_multipleSwapSells_skipped() {
+        EconomicEvent sell1 = swapEvent("0xTX_MH", EconomicEventType.SWAP_SELL, USDC_CONTRACT, new BigDecimal("-100"));
+        EconomicEvent sell2 = swapEvent("0xTX_MH", EconomicEventType.SWAP_SELL, WBTC_CONTRACT, new BigDecimal("-0.001"));
+        EconomicEvent buy = swapEvent("0xTX_MH", EconomicEventType.SWAP_BUY, "0xETH", new BigDecimal("0.05"));
+
+        enricher.enrich(List.of(sell1, sell2, buy));
+
+        assertThat(sell1.getPriceUsd()).isNull();
+        assertThat(sell2.getPriceUsd()).isNull();
+        assertThat(buy.getPriceUsd()).isNull();
+    }
+
+    @Test
+    @DisplayName("Multi-hop swap (>1 SWAP_BUY in same tx): entire group skipped")
+    void multiHopSwap_multipleSwapBuys_skipped() {
+        EconomicEvent sell = swapEvent("0xTX_MH2", EconomicEventType.SWAP_SELL, USDC_CONTRACT, new BigDecimal("-200"));
+        EconomicEvent buy1 = swapEvent("0xTX_MH2", EconomicEventType.SWAP_BUY, WBTC_CONTRACT, new BigDecimal("0.001"));
+        EconomicEvent buy2 = swapEvent("0xTX_MH2", EconomicEventType.SWAP_BUY, "0xETH", new BigDecimal("0.05"));
+
+        enricher.enrich(List.of(sell, buy1, buy2));
+
+        assertThat(sell.getPriceUsd()).isNull();
+        assertThat(buy1.getPriceUsd()).isNull();
+        assertThat(buy2.getPriceUsd()).isNull();
+    }
+
+    @Test
+    @DisplayName("Single leg only (SWAP_SELL, no SWAP_BUY): no-op")
+    void singleLeg_noOp() {
+        EconomicEvent sell = swapEvent("0xTX_SINGLE", EconomicEventType.SWAP_SELL, USDC_CONTRACT, new BigDecimal("-50"));
+        EconomicEvent transfer = swapEvent("0xTX_SINGLE", EconomicEventType.EXTERNAL_INBOUND, WBTC_CONTRACT, new BigDecimal("1"));
+
+        enricher.enrich(List.of(sell, transfer));
+
+        assertThat(sell.getPriceUsd()).isNull();
+    }
+
+    @Test
+    @DisplayName("Zero volatile quantity: price not set (division by zero avoided)")
+    void zeroVolatileQuantity_skipped() {
+        when(stablecoinRegistry.isStablecoin(USDC_CONTRACT)).thenReturn(true);
+        when(stablecoinRegistry.isStablecoin(WBTC_CONTRACT)).thenReturn(false);
+
+        EconomicEvent sell = swapEvent("0xTX_ZERO", EconomicEventType.SWAP_SELL, USDC_CONTRACT, new BigDecimal("-10"));
+        EconomicEvent buy = swapEvent("0xTX_ZERO", EconomicEventType.SWAP_BUY, WBTC_CONTRACT, BigDecimal.ZERO);
+
+        enricher.enrich(List.of(sell, buy));
+
+        assertThat(sell.getPriceUsd()).isEqualByComparingTo(BigDecimal.ONE);
+        assertThat(buy.getPriceUsd()).isNull();
+    }
+
+    @Test
+    @DisplayName("Null txHash events are filtered out, no NPE")
+    void nullTxHash_filtered() {
+        EconomicEvent sell = swapEvent(null, EconomicEventType.SWAP_SELL, USDC_CONTRACT, new BigDecimal("-10"));
+        EconomicEvent buy = swapEvent(null, EconomicEventType.SWAP_BUY, WBTC_CONTRACT, new BigDecimal("0.001"));
+
+        enricher.enrich(List.of(sell, buy));
+
+        assertThat(sell.getPriceUsd()).isNull();
+        assertThat(buy.getPriceUsd()).isNull();
+    }
+
+    @Test
+    @DisplayName("Idempotency: calling enrich twice on same list yields same result")
+    void idempotency_sameResultOnDoubleCall() {
+        when(stablecoinRegistry.isStablecoin(USDC_CONTRACT)).thenReturn(true);
+        when(stablecoinRegistry.isStablecoin(WBTC_CONTRACT)).thenReturn(false);
+
+        EconomicEvent sell = swapEvent("0xTX_IDEMP", EconomicEventType.SWAP_SELL, USDC_CONTRACT, new BigDecimal("-10"));
+        EconomicEvent buy = swapEvent("0xTX_IDEMP", EconomicEventType.SWAP_BUY, WBTC_CONTRACT, new BigDecimal("0.00011"));
+
+        List<EconomicEvent> events = List.of(sell, buy);
+        enricher.enrich(events);
+
+        BigDecimal priceAfterFirst = buy.getPriceUsd();
+        BigDecimal totalAfterFirst = buy.getTotalValueUsd();
+
+        enricher.enrich(events);
+
+        assertThat(buy.getPriceUsd()).isEqualByComparingTo(priceAfterFirst);
+        assertThat(buy.getTotalValueUsd()).isEqualByComparingTo(totalAfterFirst);
+    }
+
+    @Test
+    @DisplayName("Null quantityDelta on one leg: group skipped gracefully")
+    void nullQuantityDelta_skipped() {
+        EconomicEvent sell = swapEvent("0xTX_NULL", EconomicEventType.SWAP_SELL, USDC_CONTRACT, null);
+        EconomicEvent buy = swapEvent("0xTX_NULL", EconomicEventType.SWAP_BUY, WBTC_CONTRACT, new BigDecimal("0.001"));
+
+        enricher.enrich(List.of(sell, buy));
+
+        assertThat(sell.getPriceUsd()).isNull();
+        assertThat(buy.getPriceUsd()).isNull();
+    }
+
     private static EconomicEvent swapEvent(String txHash, EconomicEventType eventType,
                                            String assetContract, BigDecimal quantityDelta) {
         EconomicEvent e = new EconomicEvent();
