@@ -31,6 +31,10 @@ public class SyncStatus {
     private Long lastBlockSynced;
     private String syncBannerMessage;
     private boolean backfillComplete;
+    /** Phase 1 done: raw fetch complete for this wallet×network (ADR-020). */
+    private boolean rawFetchComplete;
+    /** Phase 2 done: classification complete (ADR-020). */
+    private boolean classificationComplete;
     private Instant updatedAt;
     private int retryCount;
     private Instant nextRetryAfter;

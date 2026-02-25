@@ -69,9 +69,13 @@ class SolanaNetworkAdapterTest {
         RawTransaction tx = result.get(0);
         assertThat(tx.getTxHash()).isEqualTo("5h6xBEauJ3PK6SWCZ1PGjBvj8vDdWG3KpwATGy1ARAXFSDwt8GFXM7W5Ncn16wmqokgpiKRLuS83KUxyZyv2sUYv");
         assertThat(tx.getNetworkId()).isEqualTo("SOLANA");
+        assertThat(tx.getWalletAddress()).isEqualTo("WalletAddr11111111111111111111111111111111");
+        assertThat(tx.getSlot()).isEqualTo(114L);
         assertThat(tx.getRawData()).isNotNull();
-        assertThat(tx.getRawData().get("slot")).isEqualTo(114L);
-        assertThat(tx.getRawData().get("blockTime")).isEqualTo(1609459200L);
+        assertThat(tx.getRawData()).containsKeys("slot", "blockTime", "signature", "transaction");
+        assertThat(tx.getRawData().get("slot")).isNotNull();
+        assertThat(((Number) tx.getRawData().get("slot")).longValue()).isEqualTo(114L);
+        assertThat(((Number) tx.getRawData().get("blockTime")).longValue()).isEqualTo(1609459200L);
         assertThat(tx.getRawData().getString("signature")).isNotNull();
     }
 

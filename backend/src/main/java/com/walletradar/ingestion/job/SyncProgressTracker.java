@@ -40,7 +40,32 @@ public class SyncProgressTracker {
     }
 
     /**
-     * Set status to COMPLETE, clear banner, set backfillComplete=true, reset retry state.
+     * Set raw fetch complete (Phase 1 done). ADR-020.
+     */
+    public void setRawFetchComplete(String walletAddress, String networkId, Long lastBlockSynced) {
+        syncStatusRepository.findByWalletAddressAndNetworkId(walletAddress, networkId)
+                .ifPresent(s -> {
+                    s.setRawFetchComplete(true);
+                    s.setLastBlockSynced(lastBlockSynced);
+                    s.setUpdatedAt(Instant.now());
+                    syncStatusRepository.save(s);
+                });
+    }
+
+    /**
+     * Set classification complete (Phase 2 done). ADR-020.
+     */
+    public void setClassificationComplete(String walletAddress, String networkId) {
+        syncStatusRepository.findByWalletAddressAndNetworkId(walletAddress, networkId)
+                .ifPresent(s -> {
+                    s.setClassificationComplete(true);
+                    s.setUpdatedAt(Instant.now());
+                    syncStatusRepository.save(s);
+                });
+    }
+
+    /**
+     * Set status to COMPLETE, clear banner, set backfillComplete=true, rawFetchComplete=true, classificationComplete=true, reset retry state.
      */
     public void setComplete(String walletAddress, String networkId) {
         syncStatusRepository.findByWalletAddressAndNetworkId(walletAddress, networkId)
@@ -49,6 +74,8 @@ public class SyncProgressTracker {
                     s.setProgressPct(100);
                     s.setSyncBannerMessage(null);
                     s.setBackfillComplete(true);
+                    s.setRawFetchComplete(true);
+                    s.setClassificationComplete(true);
                     s.setRetryCount(0);
                     s.setNextRetryAfter(null);
                     s.setUpdatedAt(Instant.now());

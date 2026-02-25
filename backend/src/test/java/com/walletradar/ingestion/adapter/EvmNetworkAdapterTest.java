@@ -8,6 +8,7 @@ import com.walletradar.ingestion.config.IngestionNetworkProperties;
 import com.walletradar.ingestion.adapter.evm.EvmBatchBlockSizeResolver;
 import com.walletradar.ingestion.adapter.evm.EvmNetworkAdapter;
 import com.walletradar.ingestion.adapter.evm.EvmRpcClient;
+import com.walletradar.ingestion.adapter.evm.RpcRequest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -17,6 +18,7 @@ import reactor.core.publisher.Mono;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -62,12 +64,18 @@ class EvmNetworkAdapterTest {
     @Test
     void fetchTransactions_mockReturnsLogs_groupsByTxHash() {
         String walletTopic = "0x0000000000000000000000000000000000000000000000000000000000001234";
-        String json = """
+        String logsJson = """
                 {"jsonrpc":"2.0","id":1,"result":[
                   {"transactionHash":"0xabc","blockNumber":"0x64","address":"0xtoken","topics":["0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef","%s","0x0000000000000000000000000000000000000000000000000000000000005678"],"data":"0x1","logIndex":"0x0"}
                 ]}
                 """.formatted(walletTopic);
-        mockRpc.setResponse(json);
+        String receiptJson = """
+                {"jsonrpc":"2.0","id":1,"result":{"blockNumber":"0x64","blockHash":"0xhash","logs":[
+                  {"transactionHash":"0xabc","blockNumber":"0x64","address":"0xtoken","topics":["0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef","%s","0x0000000000000000000000000000000000000000000000000000000000005678"],"data":"0x1","logIndex":"0x0"}
+                ],"gasUsed":"0x5208","transactionHash":"0xabc"}}
+                """.formatted(walletTopic);
+        mockRpc.setResponse(logsJson);
+        mockRpc.setReceiptResponse(receiptJson);
 
         List<RawTransaction> result = adapter.fetchTransactions("0x1234", NetworkId.ETHEREUM, 1L, 1L);
 
@@ -75,8 +83,10 @@ class EvmNetworkAdapterTest {
         RawTransaction tx = result.get(0);
         assertThat(tx.getTxHash()).isEqualTo("0xabc");
         assertThat(tx.getNetworkId()).isEqualTo("ETHEREUM");
+        assertThat(tx.getWalletAddress()).isEqualTo("0x1234");
+        assertThat(tx.getBlockNumber()).isEqualTo(100L);
         assertThat(tx.getRawData()).isNotNull();
-        assertThat(tx.getRawData().get("blockNumber")).isEqualTo("0x64");
+        assertThat(tx.getRawData().get("blockNumber")).isNotNull();
         assertThat(tx.getRawData().getList("logs", org.bson.Document.class)).hasSizeGreaterThanOrEqualTo(1);
     }
 
@@ -127,12 +137,32 @@ class EvmNetworkAdapterTest {
         String emptyResult = "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":[]}";
         String rangeTooWideError = "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32701,\"message\":\"Please specify an address in your request\"}}";
 
-        EvmRpcClient splittingRpc = (endpointUrl, method, params) -> {
-            if (!"eth_getLogs".equals(method)) return Mono.just(emptyResult);
-            int call = callCount.incrementAndGet();
-            // First two calls (from+to logs for the full range) fail; subsequent smaller-range calls succeed
-            if (call <= 2) return Mono.just(rangeTooWideError);
-            return Mono.just(emptyResult);
+        EvmRpcClient splittingRpc = new EvmRpcClient() {
+            @Override
+            public Mono<String> call(String endpointUrl, String method, Object params) {
+                if (!"eth_getLogs".equals(method)) return Mono.just(emptyResult);
+                int call = callCount.incrementAndGet();
+                if (call <= 2) return Mono.just(rangeTooWideError);
+                return Mono.just(emptyResult);
+            }
+            @Override
+            public Mono<String> batchCall(String endpointUrl, List<RpcRequest> requests) {
+                // Simulate batch returning the range-too-wide error for the first batch call
+                int call = callCount.incrementAndGet();
+                if (call <= 2) {
+                    return Mono.just("[" +
+                            "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32701,\"message\":\"Please specify an address in your request\"}}," +
+                            "{\"jsonrpc\":\"2.0\",\"id\":2,\"error\":{\"code\":-32701,\"message\":\"Please specify an address in your request\"}}" +
+                            "]");
+                }
+                StringBuilder sb = new StringBuilder("[");
+                for (int i = 0; i < requests.size(); i++) {
+                    if (i > 0) sb.append(",");
+                    sb.append("{\"jsonrpc\":\"2.0\",\"id\":").append(i + 1).append(",\"result\":[]}");
+                }
+                sb.append("]");
+                return Mono.just(sb.toString());
+            }
         };
 
         RetryPolicy policy = new RetryPolicy(0, 0.0, 3);
@@ -165,6 +195,163 @@ class EvmNetworkAdapterTest {
                 .hasMessageContaining("RPC failed after");
     }
 
+    @Test
+    void fetchTransactions_batchGetLogs_usedByDefault() {
+        AtomicInteger batchCallCount = new AtomicInteger(0);
+        AtomicInteger singleCallCount = new AtomicInteger(0);
+        String emptyResult = "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":[]}";
+        String batchLogsEmpty = "[{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":[]},{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":[]}]";
+
+        EvmRpcClient trackingRpc = new EvmRpcClient() {
+            @Override
+            public Mono<String> call(String endpointUrl, String method, Object params) {
+                singleCallCount.incrementAndGet();
+                return Mono.just(emptyResult);
+            }
+            @Override
+            public Mono<String> batchCall(String endpointUrl, List<RpcRequest> requests) {
+                batchCallCount.incrementAndGet();
+                return Mono.just(batchLogsEmpty);
+            }
+        };
+
+        RpcEndpointRotator r = new RpcEndpointRotator(List.of("https://test.rpc"), RetryPolicy.defaultPolicy());
+        EvmBatchBlockSizeResolver resolver = new EvmBatchBlockSizeResolver(new IngestionNetworkProperties());
+        EvmNetworkAdapter batchAdapter = new EvmNetworkAdapter(trackingRpc, Map.of("ETHEREUM", r), r, new ObjectMapper(), resolver);
+
+        batchAdapter.fetchTransactions("0x1234", NetworkId.ETHEREUM, 1L, 1L);
+
+        assertThat(batchCallCount.get()).as("batchCall should be used for eth_getLogs").isGreaterThanOrEqualTo(1);
+        assertThat(singleCallCount.get()).as("single call should not be used when batch succeeds").isEqualTo(0);
+    }
+
+    @Test
+    void fetchTransactions_batchFails_fallsBackToSequential() {
+        AtomicInteger singleCallCount = new AtomicInteger(0);
+        String emptyResult = "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":[]}";
+
+        EvmRpcClient failBatchRpc = new EvmRpcClient() {
+            @Override
+            public Mono<String> call(String endpointUrl, String method, Object params) {
+                singleCallCount.incrementAndGet();
+                return Mono.just(emptyResult);
+            }
+            @Override
+            public Mono<String> batchCall(String endpointUrl, List<RpcRequest> requests) {
+                return Mono.error(new RpcException("Batch not supported by this RPC"));
+            }
+        };
+
+        RpcEndpointRotator r = new RpcEndpointRotator(List.of("https://test.rpc"), RetryPolicy.defaultPolicy());
+        EvmBatchBlockSizeResolver resolver = new EvmBatchBlockSizeResolver(new IngestionNetworkProperties());
+        EvmNetworkAdapter fallbackAdapter = new EvmNetworkAdapter(failBatchRpc, Map.of("ETHEREUM", r), r, new ObjectMapper(), resolver);
+
+        List<RawTransaction> result = fallbackAdapter.fetchTransactions("0x1234", NetworkId.ETHEREUM, 1L, 1L);
+
+        assertThat(result).isEmpty();
+        assertThat(singleCallCount.get()).as("sequential calls used as fallback").isGreaterThanOrEqualTo(2);
+    }
+
+    @Test
+    void fetchTransactions_batchReceipts_mapsLogsCorrectly() {
+        String walletTopic = "0x0000000000000000000000000000000000000000000000000000000000001234";
+        String transferTopic = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+
+        String batchLogsResponse = """
+                [
+                  {"jsonrpc":"2.0","id":1,"result":[
+                    {"transactionHash":"0xaaa","blockNumber":"0x1","address":"0xtoken","topics":["%s","%s","0x0000000000000000000000000000000000000000000000000000000000005678"],"data":"0x1","logIndex":"0x0"}
+                  ]},
+                  {"jsonrpc":"2.0","id":2,"result":[]}
+                ]
+                """.formatted(transferTopic, walletTopic);
+
+        String batchReceiptResponse = """
+                [
+                  {"jsonrpc":"2.0","id":1,"result":{"logs":[
+                    {"transactionHash":"0xaaa","blockNumber":"0x1","address":"0xtoken","topics":["%s","%s","0x0000000000000000000000000000000000000000000000000000000000005678"],"data":"0x1","logIndex":"0x0"},
+                    {"transactionHash":"0xaaa","blockNumber":"0x1","address":"0xrouter","topics":["0xswaptopic"],"data":"0xswapdata","logIndex":"0x1"}
+                  ]}}
+                ]
+                """.formatted(transferTopic, walletTopic);
+
+        AtomicReference<String> lastBatchMethod = new AtomicReference<>();
+        AtomicInteger batchCallCount = new AtomicInteger(0);
+
+        EvmRpcClient batchRpc = new EvmRpcClient() {
+            @Override
+            public Mono<String> call(String endpointUrl, String method, Object params) {
+                return Mono.just("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":[]}");
+            }
+            @Override
+            public Mono<String> batchCall(String endpointUrl, List<RpcRequest> requests) {
+                int callNum = batchCallCount.incrementAndGet();
+                if (!requests.isEmpty()) lastBatchMethod.set(requests.get(0).method());
+                if (callNum == 1) return Mono.just(batchLogsResponse);
+                return Mono.just(batchReceiptResponse);
+            }
+        };
+
+        RpcEndpointRotator r = new RpcEndpointRotator(List.of("https://test.rpc"), RetryPolicy.defaultPolicy());
+        EvmBatchBlockSizeResolver resolver = new EvmBatchBlockSizeResolver(new IngestionNetworkProperties());
+        EvmNetworkAdapter batchAdapter = new EvmNetworkAdapter(batchRpc, Map.of("ETHEREUM", r), r, new ObjectMapper(), resolver);
+
+        List<RawTransaction> result = batchAdapter.fetchTransactions("0x1234", NetworkId.ETHEREUM, 1L, 1L);
+
+        assertThat(result).hasSize(1);
+        RawTransaction tx = result.get(0);
+        assertThat(tx.getTxHash()).isEqualTo("0xaaa");
+        assertThat(tx.getRawData().getList("logs", org.bson.Document.class)).hasSize(2);
+        assertThat(batchCallCount.get()).isEqualTo(2);
+    }
+
+    @Test
+    void fetchTransactions_batchReceiptFails_fallsBackToSequentialReceipts() {
+        String walletTopic = "0x0000000000000000000000000000000000000000000000000000000000001234";
+        String transferTopic = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+
+        String batchLogsResponse = """
+                [
+                  {"jsonrpc":"2.0","id":1,"result":[
+                    {"transactionHash":"0xaaa","blockNumber":"0x1","address":"0xtoken","topics":["%s","%s","0x0000000000000000000000000000000000000000000000000000000000005678"],"data":"0x1","logIndex":"0x0"}
+                  ]},
+                  {"jsonrpc":"2.0","id":2,"result":[]}
+                ]
+                """.formatted(transferTopic, walletTopic);
+
+        String singleReceiptResponse = """
+                {"jsonrpc":"2.0","id":1,"result":{"logs":[
+                  {"transactionHash":"0xaaa","blockNumber":"0x1","address":"0xtoken","topics":["%s","%s","0x0000000000000000000000000000000000000000000000000000000000005678"],"data":"0x1","logIndex":"0x0"}
+                ]}}
+                """.formatted(transferTopic, walletTopic);
+
+        AtomicInteger batchCallCount = new AtomicInteger(0);
+        AtomicInteger singleCallCount = new AtomicInteger(0);
+
+        EvmRpcClient mixedRpc = new EvmRpcClient() {
+            @Override
+            public Mono<String> call(String endpointUrl, String method, Object params) {
+                singleCallCount.incrementAndGet();
+                return Mono.just(singleReceiptResponse);
+            }
+            @Override
+            public Mono<String> batchCall(String endpointUrl, List<RpcRequest> requests) {
+                int call = batchCallCount.incrementAndGet();
+                if (call == 1) return Mono.just(batchLogsResponse);
+                return Mono.error(new RpcException("Receipt batch not supported"));
+            }
+        };
+
+        RpcEndpointRotator r = new RpcEndpointRotator(List.of("https://test.rpc"), RetryPolicy.defaultPolicy());
+        EvmBatchBlockSizeResolver resolver = new EvmBatchBlockSizeResolver(new IngestionNetworkProperties());
+        EvmNetworkAdapter mixedAdapter = new EvmNetworkAdapter(mixedRpc, Map.of("ETHEREUM", r), r, new ObjectMapper(), resolver);
+
+        List<RawTransaction> result = mixedAdapter.fetchTransactions("0x1234", NetworkId.ETHEREUM, 1L, 1L);
+
+        assertThat(result).hasSize(1);
+        assertThat(singleCallCount.get()).as("sequential receipt calls used as fallback").isGreaterThanOrEqualTo(1);
+    }
+
     private static IngestionNetworkProperties.NetworkIngestionEntry entry(int batchBlockSize) {
         IngestionNetworkProperties.NetworkIngestionEntry e = new IngestionNetworkProperties.NetworkIngestionEntry();
         e.setUrls(List.of("https://example.com"));
@@ -174,14 +361,66 @@ class EvmNetworkAdapterTest {
 
     private static class MockEvmRpcClient implements EvmRpcClient {
         private String response = "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":[]}";
+        private String receiptResponse = null;
+        private String batchResponse = null;
+        private boolean batchShouldFail = false;
+        private static final ObjectMapper MAPPER = new ObjectMapper();
 
         void setResponse(String response) {
             this.response = response;
         }
 
+        void setReceiptResponse(String receiptResponse) {
+            this.receiptResponse = receiptResponse;
+        }
+
+        void setBatchResponse(String batchResponse) {
+            this.batchResponse = batchResponse;
+        }
+
+        void setBatchShouldFail(boolean fail) {
+            this.batchShouldFail = fail;
+        }
+
         @Override
         public Mono<String> call(String endpointUrl, String method, Object params) {
+            if ("eth_getTransactionReceipt".equals(method) && receiptResponse != null) {
+                return Mono.just(receiptResponse);
+            }
             return Mono.just(response);
+        }
+
+        @Override
+        public Mono<String> batchCall(String endpointUrl, List<RpcRequest> requests) {
+            if (batchShouldFail) {
+                return Mono.error(new RpcException("Batch not supported"));
+            }
+            if (batchResponse != null) {
+                return Mono.just(batchResponse);
+            }
+            String source = response;
+            if (!requests.isEmpty() && "eth_getTransactionReceipt".equals(requests.get(0).method()) && receiptResponse != null) {
+                source = receiptResponse;
+            }
+            try {
+                com.fasterxml.jackson.databind.JsonNode parsed = MAPPER.readTree(source);
+                boolean isError = !parsed.path("error").isMissingNode();
+                StringBuilder sb = new StringBuilder("[");
+                for (int i = 0; i < requests.size(); i++) {
+                    if (i > 0) sb.append(",");
+                    if (isError) {
+                        sb.append("{\"jsonrpc\":\"2.0\",\"id\":").append(i + 1)
+                          .append(",\"error\":").append(parsed.get("error").toString()).append("}");
+                    } else {
+                        sb.append("{\"jsonrpc\":\"2.0\",\"id\":").append(i + 1)
+                          .append(",\"result\":").append(parsed.get("result").toString()).append("}");
+                    }
+                }
+                sb.append("]");
+                return Mono.just(sb.toString());
+            } catch (Exception e) {
+                return Mono.error(e);
+            }
         }
     }
 }
