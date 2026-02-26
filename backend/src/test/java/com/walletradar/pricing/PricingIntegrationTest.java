@@ -24,6 +24,9 @@ import static org.assertj.core.api.Assertions.assertThat;
         com.walletradar.pricing.resolver.SwapDerivedResolver.class,
         com.walletradar.pricing.resolver.CounterpartPriceResolver.class,
         com.walletradar.pricing.resolver.CoinGeckoHistoricalResolver.class,
+        com.walletradar.pricing.resolver.ConfigOverrideContractResolver.class,
+        com.walletradar.pricing.resolver.CoinsListBulkResolver.class,
+        com.walletradar.pricing.resolver.ChainedContractToCoinGeckoIdResolver.class,
         com.walletradar.common.StablecoinRegistry.class
 }, webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @ActiveProfiles("test")

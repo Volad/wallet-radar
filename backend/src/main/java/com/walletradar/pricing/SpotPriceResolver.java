@@ -1,7 +1,9 @@
 package com.walletradar.pricing;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.walletradar.domain.NetworkId;
 import com.walletradar.pricing.config.PricingProperties;
+import com.walletradar.pricing.resolver.ContractToCoinGeckoIdResolver;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.annotation.Cacheable;
@@ -26,22 +28,33 @@ public class SpotPriceResolver {
 
     private final PricingProperties pricingProperties;
     private final WebClient.Builder webClientBuilder;
+    private final ContractToCoinGeckoIdResolver contractToCoinGeckoIdResolver;
 
     /**
-     * Resolve current USD price for the given token contract. Uses spotPriceCache (5min TTL).
-     * Returns empty when contract is not in contractToCoinGeckoId or API fails.
+     * Resolve current USD price for the given token contract. Uses config override only (network-agnostic).
+     * Prefer {@link #resolve(String, NetworkId)} when networkId is available.
      */
-    @Cacheable(cacheNames = "spotPriceCache", key = "#contractAddress")
     public Optional<BigDecimal> resolve(String contractAddress) {
+        return resolve(contractAddress, null);
+    }
+
+    /**
+     * Resolve current USD price for the given token contract and network. Uses spotPriceCache (5min TTL).
+     * Returns empty when coinId cannot be resolved or API fails.
+     */
+    @Cacheable(cacheNames = "spotPriceCache", key = "#contractAddress + '-' + (#networkId != null ? #networkId.name() : 'null')")
+    public Optional<BigDecimal> resolve(String contractAddress, NetworkId networkId) {
         if (contractAddress == null || contractAddress.isBlank()) {
             return Optional.empty();
         }
-        String coinId = pricingProperties.getContractToCoinGeckoId()
-                .get(contractAddress.toLowerCase().strip());
-        if (coinId == null || coinId.isBlank()) {
+        Optional<String> coinIdOpt = contractToCoinGeckoIdResolver.resolve(
+                contractAddress.toLowerCase().strip(),
+                networkId);
+        if (coinIdOpt.isEmpty()) {
             log.debug("No CoinGecko id for spot contract {}", contractAddress);
             return Optional.empty();
         }
+        String coinId = coinIdOpt.get();
         String url = pricingProperties.getCoingeckoBaseUrl() + "/simple/price?ids=" + coinId + "&vs_currencies=usd";
         try {
             WebClient client = webClientBuilder.build();

@@ -1,4 +1,4 @@
-package com.walletradar.ingestion.job;
+package com.walletradar.ingestion.wallet.query;
 
 import com.walletradar.domain.SyncStatus;
 import com.walletradar.domain.SyncStatusRepository;

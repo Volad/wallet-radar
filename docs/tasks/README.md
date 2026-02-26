@@ -19,8 +19,13 @@ The **worker** subagent implements from this folder. Each file contains **one fe
 | **07-reconciliation-get-assets.md** | Reconciliation + GET /assets | T-024, T-029 |
 | **08-transaction-history.md** | GET transaction history (paginated) | T-025 |
 | **09-portfolio-snapshots-charts.md** | Snapshots + charts | T-021, T-022, T-026, T-027 |
+| **10-backfill-refactoring.md** | Backfill package refactoring (SRP) | T-030 |
+| **11-inline-swap-price.md** | Inline price from swap when one leg is stablecoin (ADR-018) | T-031 |
+| **12-heuristic-swap-detection.md** | Heuristic swap detection: one asset out + one asset in (ADR-019) | T-032 |
+| **13-split-raw-fetch-classification.md** | Split raw fetch vs classification (ADR-020) | T-031 |
+| **14-deferred-price-cron-refactor.md** | Deferred price as cron job; remove ClassificationCompleteListener (ADR-021 amendment) | T-033 |
 
-**Dependency order:** Implement 00-* first, then 01 → 02 → … → 09. See **mvp-implementation-tasks.md** for full dependency graph.
+**Dependency order:** Implement 00-* first, then 01 → 02 → … → 09. Task 10 can be done any time after T-009 is complete. Task 11 (T-031) depends on T-009 (backfill). Task 12 (T-032) depends on T-009 and works with T-031 (inline swap price). See **mvp-implementation-tasks.md** for full dependency graph.
 
 ## Build and repository
 

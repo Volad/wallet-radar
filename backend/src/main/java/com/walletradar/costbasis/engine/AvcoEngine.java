@@ -67,7 +67,7 @@ public class AvcoEngine {
         Map<String, BigDecimal> overridePrices = Map.of();
         if (!onChainEventIds.isEmpty()) {
             List<CostBasisOverride> overrides = costBasisOverrideRepository
-                    .findByEconomicEventIdInAndIsActiveTrue(onChainEventIds);
+                    .findByEconomicEventIdInAndActiveTrue(onChainEventIds);
             overridePrices = overrides.stream()
                     .collect(Collectors.toMap(CostBasisOverride::getEconomicEventId, CostBasisOverride::getPriceUsd, (a, b) -> a));
         }

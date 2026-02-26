@@ -20,7 +20,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.Optional;
 
 /**
- * Resolves historical USD price via CoinGecko /coins/{id}/history. 45 req/min throttle, cache key (contractAddress, date) TTL 24h.
+ * Resolves historical USD price via CoinGecko /coins/{id}/history. 45 req/min throttle, cache key (contractAddress, networkId, date) TTL 24h.
  */
 @Component
 @RequiredArgsConstructor
@@ -34,18 +34,21 @@ public class CoinGeckoHistoricalResolver {
     private final PricingProperties pricingProperties;
     private final WebClient.Builder webClientBuilder;
     private final RateLimiter rateLimiter;
+    private final ContractToCoinGeckoIdResolver contractToCoinGeckoIdResolver;
 
-    @Cacheable(cacheNames = "historicalPriceCache", key = "#request.assetContract + '-' + #request.date")
+    @Cacheable(cacheNames = "historicalPriceCache", key = "#request == null ? 'null' : (#request.assetContract != null ? #request.assetContract : '') + '-' + (#request.networkId != null ? #request.networkId.name() : '') + '-' + (#request.date != null ? #request.date.toString() : '')")
     public PriceResolutionResult resolve(HistoricalPriceRequest request) {
         if (request == null || request.getAssetContract() == null || request.getDate() == null) {
             return PriceResolutionResult.unknown();
         }
-        String coinId = pricingProperties.getContractToCoinGeckoId()
-                .get(request.getAssetContract().toLowerCase().strip());
-        if (coinId == null || coinId.isBlank()) {
+        Optional<String> coinIdOpt = contractToCoinGeckoIdResolver.resolve(
+                request.getAssetContract().toLowerCase().strip(),
+                request.getNetworkId());
+        if (coinIdOpt.isEmpty()) {
             log.debug("No CoinGecko id for contract {}", request.getAssetContract());
             return PriceResolutionResult.unknown();
         }
+        String coinId = coinIdOpt.get();
         rateLimiter.acquire();
         String dateStr = request.getDate().format(DATE_FORMAT);
         String url = pricingProperties.getCoingeckoBaseUrl() + "/coins/" + coinId + "/history?date=" + dateStr + "&localization=false";

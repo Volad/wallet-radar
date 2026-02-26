@@ -44,6 +44,8 @@ public class IngestionNetworkProperties {
         private Integer batchBlockSize;
         /** Optional. Backfill window in blocks for this network; if null, global backfill.window-blocks is used. */
         private Long windowBlocks;
+        /** Average block time in seconds for this network. Used as fallback by EstimatingBlockTimestampResolver. */
+        private Double avgBlockTimeSeconds;
 
         public void setUrls(List<String> urls) {
             this.urls = urls != null ? urls : new ArrayList<>();

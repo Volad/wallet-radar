@@ -6,7 +6,7 @@ import lombok.Setter;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
- * Backfill job config (T-009). Window in blocks; ~2 years on Ethereum (12s block) ≈ 5.26M blocks.
+ * Backfill job config (T-009). Window in blocks; ~1 year on Ethereum (12s block) ≈ 2.63M blocks.
  * Worker count aligns with ADR-014 (queue + worker loops).
  */
 @ConfigurationProperties(prefix = "walletradar.ingestion.backfill")
@@ -16,12 +16,30 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public class BackfillProperties {
 
     /**
-     * Number of blocks to backfill from current block (per network). Default ~2 years Ethereum.
+     * Number of blocks to backfill from current block (per network). Default ~1 year Ethereum.
      */
-    private long windowBlocks = 5_256_000;
+    private long windowBlocks = 2_628_000;
 
     /**
      * Number of worker loops that drain the backfill queue. Default 4 (match backfill-executor core size).
      */
     private int workerThreads = 4;
+
+    /** Max retry attempts for a failed network backfill before marking ABANDONED. */
+    private int maxRetries = 5;
+
+    /** Base delay in minutes for exponential backoff between retries. */
+    private long retryBaseDelayMinutes = 2;
+
+    /** Maximum delay in minutes (backoff ceiling). */
+    private long retryMaxDelayMinutes = 60;
+
+    /** How often (ms) the retry scheduler polls for FAILED items. */
+    private long retrySchedulerIntervalMs = 120_000;
+
+    /** How often (ms) to run InternalTransferReclassifier when queue empty (ADR-021). Default 5 min. */
+    private long reclassifyScheduleIntervalMs = 300_000;
+
+    /** Number of parallel segments to split the block range into per network. Default 4. */
+    private int parallelSegments = 4;
 }

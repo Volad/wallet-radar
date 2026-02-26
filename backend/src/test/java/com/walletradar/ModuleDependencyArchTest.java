@@ -8,7 +8,6 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
-import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes;
 import static com.tngtech.archunit.library.dependencies.SlicesRuleDefinition.slices;
 
 /**
@@ -51,10 +50,82 @@ class ModuleDependencyArchTest {
     }
 
     @Test
+    void pricing_must_not_depend_on_ingestion_costbasis_snapshot_api() {
+        ArchRule rule = noClasses()
+                .that().resideInAPackage("..pricing..")
+                .should().dependOnClassesThat().resideInAnyPackage("..ingestion..", "..costbasis..", "..snapshot..", "..api..");
+        rule.check(classes);
+    }
+
+    @Test
+    void costbasis_must_not_depend_on_ingestion_snapshot_api() {
+        ArchRule rule = noClasses()
+                .that().resideInAPackage("..costbasis..")
+                .should().dependOnClassesThat().resideInAnyPackage("..ingestion..", "..snapshot..", "..api..");
+        rule.check(classes);
+    }
+
+    @Test
+    void costbasis_must_not_depend_on_config() {
+        ArchRule rule = noClasses()
+                .that().resideInAPackage("..costbasis..")
+                .should().dependOnClassesThat().resideInAPackage("..config..");
+        rule.check(classes);
+    }
+
+    @Test
+    void snapshot_must_not_depend_on_ingestion_api() {
+        ArchRule rule = noClasses()
+                .that().resideInAPackage("..snapshot..")
+                .should().dependOnClassesThat().resideInAnyPackage("..ingestion..", "..api..");
+        rule.allowEmptyShould(true).check(classes);
+    }
+
+    @Test
+    void api_should_not_import_repository_classes() {
+        ArchRule rule = noClasses()
+                .that().resideInAPackage("..api..")
+                .should().dependOnClassesThat().haveSimpleNameEndingWith("Repository");
+        rule.check(classes);
+    }
+
+    @Test
     void no_cyclic_dependencies_between_slices() {
         ArchRule rule = slices()
                 .matching("com.walletradar.(*)..")
                 .should().beFreeOfCycles();
+        rule.check(classes);
+    }
+
+    @Test
+    void ingestion_pipeline_must_not_depend_on_job_triggers() {
+        ArchRule rule = noClasses()
+                .that().resideInAPackage("..ingestion.pipeline..")
+                .should().dependOnClassesThat().resideInAPackage("..ingestion.job..");
+        rule.check(classes);
+    }
+
+    @Test
+    void ingestion_wallet_command_must_not_depend_on_job_triggers() {
+        ArchRule rule = noClasses()
+                .that().resideInAPackage("..ingestion.wallet.command..")
+                .should().dependOnClassesThat().resideInAPackage("..ingestion.job..");
+        rule.check(classes);
+    }
+
+    @Test
+    void ingestion_wallet_query_must_not_depend_on_job_triggers() {
+        ArchRule rule = noClasses()
+                .that().resideInAPackage("..ingestion.wallet.query..")
+                .should().dependOnClassesThat().resideInAPackage("..ingestion.job..");
+        rule.check(classes);
+    }
+
+    @Test
+    void ingestion_sync_progress_must_not_depend_on_job_triggers() {
+        ArchRule rule = noClasses()
+                .that().resideInAPackage("..ingestion.sync.progress..")
+                .should().dependOnClassesThat().resideInAPackage("..ingestion.job..");
         rule.check(classes);
     }
 }

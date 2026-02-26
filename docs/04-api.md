@@ -92,8 +92,9 @@ GET /api/v1/wallets/{address}/status?network={networkId}
 }
 ```
 
-`status` values: `PENDING` | `RUNNING` | `COMPLETE` | `PARTIAL` | `FAILED`  
-`syncBannerMessage` is `null` when `status=COMPLETE`
+`status` values: `PENDING` | `RUNNING` | `COMPLETE` | `PARTIAL` | `FAILED` | `ABANDONED`  
+`syncBannerMessage` is `null` when `status=COMPLETE`  
+`ABANDONED` means the network exceeded the maximum retry count (default 5) — user can re-add the wallet to reset.
 
 **Response `404 Not Found`:** No sync status for the given address (or for the given address×network when `network` is specified).
 

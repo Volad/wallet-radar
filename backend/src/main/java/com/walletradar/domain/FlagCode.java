@@ -6,6 +6,7 @@ package com.walletradar.domain;
 public enum FlagCode {
     EXTERNAL_INBOUND,
     PRICE_UNKNOWN,
+    PRICE_PENDING,
     LP_MANUAL_REQUIRED,
     REWARD_INBOUND,
     UNSUPPORTED_TYPE

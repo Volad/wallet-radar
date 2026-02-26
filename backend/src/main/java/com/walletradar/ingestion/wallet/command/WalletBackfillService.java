@@ -1,4 +1,4 @@
-package com.walletradar.ingestion.job;
+package com.walletradar.ingestion.wallet.command;
 
 import com.walletradar.domain.NetworkId;
 import com.walletradar.domain.SyncStatus;
@@ -9,6 +9,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
@@ -30,9 +31,13 @@ public class WalletBackfillService {
         List<NetworkId> targetNetworks = (networks == null || networks.isEmpty())
                 ? Arrays.asList(NetworkId.values())
                 : networks;
+        List<NetworkId> networksNeedingBackfill = new ArrayList<>();
         for (NetworkId networkId : targetNetworks) {
             SyncStatus status = syncStatusRepository.findByWalletAddressAndNetworkId(address, networkId.name())
                     .orElse(new SyncStatus());
+            if (status.isBackfillComplete()) {
+                continue;
+            }
             if (status.getId() == null) {
                 status.setWalletAddress(address);
                 status.setNetworkId(networkId.name());
@@ -42,9 +47,14 @@ public class WalletBackfillService {
             status.setLastBlockSynced(null);
             status.setSyncBannerMessage("Backfill queued");
             status.setBackfillComplete(false);
+            status.setRetryCount(0);
+            status.setNextRetryAfter(null);
             status.setUpdatedAt(Instant.now());
             syncStatusRepository.save(status);
+            networksNeedingBackfill.add(networkId);
         }
-        applicationEventPublisher.publishEvent(new WalletAddedEvent(address, targetNetworks));
+        if (!networksNeedingBackfill.isEmpty()) {
+            applicationEventPublisher.publishEvent(new WalletAddedEvent(address, networksNeedingBackfill));
+        }
     }
 }

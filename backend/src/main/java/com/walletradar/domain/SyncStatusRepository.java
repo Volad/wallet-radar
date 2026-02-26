@@ -7,7 +7,7 @@ import java.util.Optional;
 import java.util.Set;
 
 /**
- * Persistence for sync_status per (walletAddress, networkId). Used by BackfillJobRunner and API.
+ * Persistence for sync_status per (walletAddress, networkId). Used by backfill package and API.
  */
 public interface SyncStatusRepository extends MongoRepository<SyncStatus, String> {
 

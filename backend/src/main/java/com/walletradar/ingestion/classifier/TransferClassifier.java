@@ -5,20 +5,28 @@ import com.walletradar.domain.RawTransaction;
 import com.walletradar.ingestion.adapter.evm.EvmTokenDecimalsResolver;
 import lombok.RequiredArgsConstructor;
 import org.bson.Document;
+import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.math.RoundingMode;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * Classifies ERC20 Transfer logs. Emits EXTERNAL_TRANSFER_OUT for sends, EXTERNAL_INBOUND for receives.
- * InternalTransferDetector later reclassifies to INTERNAL_TRANSFER when counterparty is in session.
+ * When exactly one distinct asset flows out and exactly one distinct asset flows in (different assets),
+ * emits SWAP_SELL and SWAP_BUY instead (heuristic swap, ADR-019). InternalTransferDetector later
+ * reclassifies EXTERNAL_INBOUND to INTERNAL_TRANSFER when counterparty is in session.
  * Uses token decimals (e.g. WBTC=8, USDC=6) so quantityDelta is correct.
+ * TODO: Protocol precedence — do not apply heuristic when tx has BORROW/REPAY/LEND_* etc. (follow-up).
  */
 @Component
+@Order(100)
 @RequiredArgsConstructor
 public class TransferClassifier implements TxClassifier {
 
@@ -28,11 +36,17 @@ public class TransferClassifier implements TxClassifier {
     private static final String SWAP_TOPIC_V2 = "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822";
     /** Uniswap V3 Swap(address,address,int256,int256,uint160,uint128,int24) */
     private static final String SWAP_TOPIC_V3 = "0xc42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67";
+    /** Uniswap V3–style Swap with protocol fees (Velora, etc.): Swap(...,uint128,uint128) */
+    private static final String SWAP_TOPIC_V3_FEES = "0x19b47279256b2a23a1665c810c8d55a1758940ee09377d4f8d26497a3577dc83";
+
+    private static final Set<String> SWAP_TOPICS = Set.of(
+            SWAP_TOPIC_V2, SWAP_TOPIC_V3, SWAP_TOPIC_V3_FEES
+    );
 
     private static boolean hasSwapTopic(List<String> topics) {
         if (topics == null || topics.isEmpty()) return false;
         String t0 = topics.get(0);
-        return SWAP_TOPIC_V2.equalsIgnoreCase(t0) || SWAP_TOPIC_V3.equalsIgnoreCase(t0);
+        return SWAP_TOPICS.stream().anyMatch(t -> t.equalsIgnoreCase(t0));
     }
 
     private final ProtocolRegistry protocolRegistry;
@@ -59,6 +73,70 @@ public class TransferClassifier implements TxClassifier {
             return out;
         }
         String walletTopic = padAddressForTopic(walletAddress);
+
+        // Heuristic (ADR-019): exactly one distinct asset out, exactly one distinct asset in, different → swap
+        Map<String, BigDecimal> outflowQtyByContract = new LinkedHashMap<>();
+        Map<String, TransferMeta> outflowMetaByContract = new LinkedHashMap<>();
+        Map<String, BigDecimal> inflowQtyByContract = new LinkedHashMap<>();
+        Map<String, TransferMeta> inflowMetaByContract = new LinkedHashMap<>();
+
+        for (Document log : logs) {
+            List<String> topics = log.getList("topics", String.class);
+            if (topics == null || topics.size() < 3 || !TRANSFER_TOPIC.equalsIgnoreCase(topics.get(0))) {
+                continue;
+            }
+            String fromTopic = topics.get(1);
+            String toTopic = topics.get(2);
+            String tokenAddress = log.getString("address");
+            if (tokenAddress == null) continue;
+            BigInteger amount = parseAmount(log.getString("data"));
+            if (amount == null) continue;
+            int decimals = evmTokenDecimalsResolver.getDecimals(tx.getNetworkId(), tokenAddress);
+            BigDecimal divisor = BigDecimal.TEN.pow(decimals);
+            BigDecimal quantity = new BigDecimal(amount).divide(divisor, 18, RoundingMode.HALF_UP);
+            String symbol = evmTokenDecimalsResolver.getSymbol(tx.getNetworkId(), tokenAddress);
+            String protocolName = protocolRegistry.getProtocolName(tokenAddress).orElse(null);
+            Integer logIndex = parseLogIndex(log);
+            TransferMeta meta = new TransferMeta(symbol != null ? symbol : "", protocolName, logIndex);
+
+            if (walletTopic.equalsIgnoreCase(fromTopic)) {
+                outflowQtyByContract.merge(tokenAddress, quantity.negate(), BigDecimal::add);
+                outflowMetaByContract.putIfAbsent(tokenAddress, meta);
+            } else if (walletTopic.equalsIgnoreCase(toTopic)) {
+                inflowQtyByContract.merge(tokenAddress, quantity, BigDecimal::add);
+                inflowMetaByContract.putIfAbsent(tokenAddress, meta);
+            }
+        }
+
+        if (outflowQtyByContract.size() == 1 && inflowQtyByContract.size() == 1) {
+            String outflowContract = outflowQtyByContract.keySet().iterator().next();
+            String inflowContract = inflowQtyByContract.keySet().iterator().next();
+            if (!outflowContract.equals(inflowContract)) {
+                TransferMeta outMeta = outflowMetaByContract.get(outflowContract);
+                TransferMeta inMeta = inflowMetaByContract.get(inflowContract);
+                RawClassifiedEvent sell = new RawClassifiedEvent();
+                sell.setEventType(EconomicEventType.SWAP_SELL);
+                sell.setWalletAddress(walletAddress);
+                sell.setAssetContract(outflowContract);
+                sell.setAssetSymbol(outMeta != null ? outMeta.symbol : "");
+                sell.setQuantityDelta(outflowQtyByContract.get(outflowContract));
+                sell.setProtocolName(outMeta != null ? outMeta.protocolName : null);
+                sell.setLogIndex(outMeta != null ? outMeta.logIndex : null);
+                out.add(sell);
+                RawClassifiedEvent buy = new RawClassifiedEvent();
+                buy.setEventType(EconomicEventType.SWAP_BUY);
+                buy.setWalletAddress(walletAddress);
+                buy.setAssetContract(inflowContract);
+                buy.setAssetSymbol(inMeta != null ? inMeta.symbol : "");
+                buy.setQuantityDelta(inflowQtyByContract.get(inflowContract));
+                buy.setProtocolName(inMeta != null ? inMeta.protocolName : null);
+                buy.setLogIndex(inMeta != null ? inMeta.logIndex : null);
+                out.add(buy);
+                return out;
+            }
+        }
+
+        // Default: emit EXTERNAL_* per Transfer log
         for (Document log : logs) {
             List<String> topics = log.getList("topics", String.class);
             if (topics == null || topics.size() < 3) {
@@ -147,4 +225,6 @@ public class TransferClassifier implements TxClassifier {
         }
         return null;
     }
+
+    private record TransferMeta(String symbol, String protocolName, Integer logIndex) {}
 }

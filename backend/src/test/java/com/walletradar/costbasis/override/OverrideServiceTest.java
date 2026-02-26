@@ -95,7 +95,7 @@ class OverrideServiceTest {
     @DisplayName("setOverride throws OVERRIDE_EXISTS when active override already present")
     void setOverride_overrideExists() {
         when(economicEventRepository.findById(EVENT_ID)).thenReturn(Optional.of(onChainEvent));
-        when(costBasisOverrideRepository.findByEconomicEventIdAndIsActiveTrue(EVENT_ID))
+        when(costBasisOverrideRepository.findByEconomicEventIdAndActiveTrue(EVENT_ID))
                 .thenReturn(Optional.of(new CostBasisOverride()));
 
         assertThatThrownBy(() -> overrideService.setOverride(EVENT_ID, new BigDecimal("100"), "note"))
@@ -109,7 +109,7 @@ class OverrideServiceTest {
     @DisplayName("setOverride upserts override, creates job, publishes event and returns jobId")
     void setOverride_success() {
         when(economicEventRepository.findById(EVENT_ID)).thenReturn(Optional.of(onChainEvent));
-        when(costBasisOverrideRepository.findByEconomicEventIdAndIsActiveTrue(EVENT_ID)).thenReturn(Optional.empty());
+        when(costBasisOverrideRepository.findByEconomicEventIdAndActiveTrue(EVENT_ID)).thenReturn(Optional.empty());
         when(costBasisOverrideRepository.findFirstByEconomicEventId(EVENT_ID)).thenReturn(Optional.empty());
 
         RecalcJob savedJob = new RecalcJob();

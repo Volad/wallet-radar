@@ -76,7 +76,7 @@ class AvcoEngineTest {
 
         when(economicEventRepository.findByWalletAddressAndNetworkIdAndAssetContractOrderByBlockTimestampAsc(
                 WALLET, NetworkId.ETHEREUM, ASSET_CONTRACT)).thenReturn(List.of(buy, sell));
-        when(costBasisOverrideRepository.findByEconomicEventIdInAndIsActiveTrue(any())).thenReturn(List.of());
+        when(costBasisOverrideRepository.findByEconomicEventIdInAndActiveTrue(any())).thenReturn(List.of());
 
         avcoEngine.replayFromBeginning(WALLET, NetworkId.ETHEREUM, ASSET_CONTRACT);
 
@@ -100,7 +100,7 @@ class AvcoEngineTest {
 
         when(economicEventRepository.findByWalletAddressAndNetworkIdAndAssetContractOrderByBlockTimestampAsc(
                 WALLET, NetworkId.ETHEREUM, ASSET_CONTRACT)).thenReturn(List.of(sell));
-        when(costBasisOverrideRepository.findByEconomicEventIdInAndIsActiveTrue(any())).thenReturn(List.of());
+        when(costBasisOverrideRepository.findByEconomicEventIdInAndActiveTrue(any())).thenReturn(List.of());
 
         avcoEngine.replayFromBeginning(WALLET, NetworkId.ETHEREUM, ASSET_CONTRACT);
 
@@ -123,7 +123,7 @@ class AvcoEngineTest {
         override.setEconomicEventId("e1");
         override.setPriceUsd(new BigDecimal("900"));
         override.setActive(true);
-        when(costBasisOverrideRepository.findByEconomicEventIdInAndIsActiveTrue(any()))
+        when(costBasisOverrideRepository.findByEconomicEventIdInAndActiveTrue(any()))
                 .thenReturn(List.of(override));
 
         avcoEngine.replayFromBeginning(WALLET, NetworkId.ETHEREUM, ASSET_CONTRACT);
@@ -156,7 +156,7 @@ class AvcoEngineTest {
 
         when(economicEventRepository.findByWalletAddressAndNetworkIdAndAssetContractOrderByBlockTimestampAsc(
                 WALLET, NetworkId.ETHEREUM, ASSET_CONTRACT)).thenReturn(List.of(buy, manual));
-        when(costBasisOverrideRepository.findByEconomicEventIdInAndIsActiveTrue(List.of("e1"))).thenReturn(List.of());
+        when(costBasisOverrideRepository.findByEconomicEventIdInAndActiveTrue(List.of("e1"))).thenReturn(List.of());
 
         avcoEngine.replayFromBeginning(WALLET, NetworkId.ETHEREUM, ASSET_CONTRACT);
 

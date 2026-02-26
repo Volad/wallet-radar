@@ -18,6 +18,7 @@ public class CaffeineConfig {
 
     public static final String SPOT_PRICE_CACHE = "spotPriceCache";
     public static final String HISTORICAL_PRICE_CACHE = "historicalPriceCache";
+    public static final String COINS_LIST_BULK_CACHE = "coinsListBulkCache";
     public static final String SNAPSHOT_CACHE = "snapshotCache";
     public static final String CROSS_WALLET_AVCO_CACHE = "crossWalletAvcoCache";
     public static final String TOKEN_META_CACHE = "tokenMetaCache";

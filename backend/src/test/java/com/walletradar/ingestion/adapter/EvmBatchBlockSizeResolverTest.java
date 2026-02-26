@@ -66,7 +66,7 @@ class EvmBatchBlockSizeResolverTest {
     @Test
     void resolve_aboveCap_returnsDefault() {
         IngestionNetworkProperties properties = new IngestionNetworkProperties();
-        properties.setNetwork(Map.of("ETHEREUM", entry(15_000)));
+        properties.setNetwork(Map.of("ETHEREUM", entry(60_000)));
         EvmBatchBlockSizeResolver resolver = new EvmBatchBlockSizeResolver(properties);
 
         assertThat(resolver.resolve(NetworkId.ETHEREUM)).isEqualTo(2000);
