@@ -15,7 +15,7 @@
 ## T-023 — WalletController and SyncController
 
 - **Module(s):** api
-- **Description:** Implement `POST /api/v1/wallets` (body: address, networks): validate address and networks; upsert sync_status PENDING; publish WalletAddedEvent; return 202 with syncId/message. Implement `GET /api/v1/wallets/{address}/status?network=`: return sync status, progressPct, syncBannerMessage. Implement `POST /api/v1/sync/refresh` (body: wallets, networks): trigger incremental sync for given set; return 202.
+- **Description:** Implement `POST /api/v1/wallets` (body: address, networks): validate address and networks; upsert sync_status PENDING; publish WalletAddedEvent; trigger asynchronous initial balance refresh for the same wallet+network set; return 202 with syncId/message (non-blocking). Implement `GET /api/v1/wallets/{address}/status?network=`: return sync status, progressPct, syncBannerMessage. Implement `POST /api/v1/sync/refresh` (body: wallets, networks): trigger incremental sync for given set; return 202.
 - **Doc refs:** 04-api (Wallets, Trigger Manual Sync), 02-architecture (api)
 - **DoD:** Controllers; integration tests: POST wallets → 202 and status RUNNING; GET status; POST sync/refresh → 202.
 - **Dependencies:** T-009, T-010, T-011, T-014
@@ -25,6 +25,7 @@
 ## Acceptance criteria
 
 - Given a valid EVM (0x…) or Solana (Base58) address and a list of supported networks, `POST /api/v1/wallets` returns `202` with a `syncId` and message that backfill has started.
+- `POST /api/v1/wallets` also triggers asynchronous initial balance refresh for the same wallet+network set; this does not delay the `202` response.
 - After the call, `GET /api/v1/wallets/{address}/status?network={networkId}` returns `status` in `PENDING` or `RUNNING` and a non-null `syncBannerMessage` until backfill for that wallet×network is complete.
 - When backfill for a wallet×network finishes, `status` is `COMPLETE`, `syncBannerMessage` is `null`, and `backfillComplete` is `true` for that network.
 - Raw transactions are stored with **idempotency** on `(txHash, networkId)`; re-ingestion of the same tx does not create duplicate raw or economic events.
@@ -42,6 +43,7 @@
 ## Edge cases / tests
 
 - **Wallet with no transactions in 2-year window:** backfill completes quickly; `sync_status` is COMPLETE; no economic events; GET /assets returns empty or only positions from other networks.
+- **Wallet with no transactions but non-zero current balance:** initial balance refresh can populate on-chain quantity even when backfill yields no economic events.
 - **First event for an asset is SELL:** `hasIncompleteHistory === true`; AVCO is computed from available events only; realised P&L is still computed for the SELL.
 - **Duplicate tx (same txHash + networkId) ingested again:** no duplicate in `economic_events`; idempotent upsert behaviour.
 - **PRICE_UNKNOWN:** event is stored with flag; quantity delta is applied in AVCO; `hasUnresolvedFlags` / `unresolvedFlagCount` reflect it; no crash.

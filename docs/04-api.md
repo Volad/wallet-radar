@@ -43,6 +43,11 @@ POST /api/v1/wallets
 }
 ```
 
+**Behaviour note:**
+- `POST /wallets` is non-blocking: validation + enqueue background jobs, then immediate `202`.
+- The system starts backfill and also triggers an asynchronous initial balance refresh for the same wallet+network set.
+- Current balances usually appear before backfill completes; if not yet available, use `POST /wallets/balances/refresh`.
+
 ---
 
 ### Get Wallet Sync Status
@@ -123,7 +128,9 @@ POST /api/v1/sync/refresh
 
 ### Trigger Manual Balance Refresh
 
-Current balances are polled automatically every 10 minutes. The user can request an immediate refresh for specific wallets and networks.
+Current balances are polled automatically every 10 minutes.  
+In addition, an initial async balance refresh is triggered on `POST /wallets`.  
+The user can also request an immediate refresh for specific wallets and networks.
 
 ```
 POST /api/v1/wallets/balances/refresh

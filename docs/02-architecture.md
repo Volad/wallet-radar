@@ -261,6 +261,7 @@ ADR-021: **Backfill = Phase 1 only** (raw fetch & store). **Classifier** is a se
 ```
 POST /wallets
   → validate → upsert sync_status(PENDING) → 202 → WalletAddedEvent
+  → publish BalanceRefreshRequestedEvent(wallet, networks) [async, non-blocking]
   → BackfillJobRunner (@EventListener, backfill-executor) — orchestrator (ADR-017)
     → per-network parallel (CompletableFuture)
     → delegates to BackfillNetworkExecutor.runBackfillForNetwork()
@@ -307,6 +308,12 @@ POST /wallets
   → BackfillJobRunner: @Scheduled retryFailedBackfills (every 2 min) re-enqueues eligible FAILED items
   → After maxRetries (default 5) → sync_status(ABANDONED)
   → In-flight dedup: ConcurrentHashMap prevents duplicate enqueue of same (wallet, network)
+
+  In parallel (balance path):
+  → BalanceRefreshRequestedEvent listener calls shared BalanceRefreshService
+      → RPC native + token balances
+      → OnChainBalanceStore.upsert(walletAddress, networkId, assetContract|native, quantity, capturedAt)
+      → failures do not fail wallet add/backfill; retry via existing poll/manual paths
 ```
 
 **RawTransaction schema (raw_transactions collection):**
