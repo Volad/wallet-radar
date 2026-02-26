@@ -4,6 +4,7 @@ import com.walletradar.domain.NetworkId;
 import com.walletradar.domain.RawTransaction;
 import com.walletradar.domain.RawTransactionRepository;
 import com.walletradar.ingestion.adapter.NetworkAdapter;
+import com.walletradar.ingestion.filter.ScamFilter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -21,6 +22,7 @@ import java.util.concurrent.atomic.AtomicLong;
 public class RawFetchSegmentProcessor {
 
     private final RawTransactionRepository rawTransactionRepository;
+    private final ScamFilter scamFilter;
 
     /**
      * Process one block-range segment: fetch from RPC, upsert each RawTransaction.
@@ -44,6 +46,9 @@ public class RawFetchSegmentProcessor {
             long end = Math.min(start + batchSize - 1, segToBlock);
             List<RawTransaction> batch = adapter.fetchTransactions(walletAddress, networkId, start, end);
             for (RawTransaction tx : batch) {
+                if (scamFilter.isScam(tx)) {
+                    continue;
+                }
                 ensureId(tx);
                 rawTransactionRepository.save(tx);
             }

@@ -21,7 +21,7 @@ import java.util.stream.Collectors;
  * Configures RPC adapters from unified per-network config (ADR-012): per-network rotators + default rotator for unknown networks.
  */
 @Configuration
-@EnableConfigurationProperties({ IngestionNetworkProperties.class, ProtocolRegistryProperties.class, IngestionRetryProperties.class, BackfillProperties.class })
+@EnableConfigurationProperties({ IngestionNetworkProperties.class, ProtocolRegistryProperties.class, IngestionRetryProperties.class, BackfillProperties.class, ClassifierProperties.class, ScamFilterProperties.class })
 public class IngestionAdapterConfig {
 
     /** Fallback URL when a network has no entry or empty urls; used so adapter does not fail for unconfigured EVM networks. */

@@ -151,7 +151,7 @@ AssetSnapshot {
 | PriceSource | Description | Priority |
 |-------------|-------------|----------|
 | `STABLECOIN` | Hardcoded $1.00 for USDC/USDT/DAI/GHO/USDe/FRAX | 1 — overrides all |
-| `SWAP_DERIVED` | Calculated from tokenIn/tokenOut ratio in DEX swap event | 2 — preferred |
+| `SWAP_DERIVED` | From tokenIn/tokenOut ratio when one leg is a stablecoin (or chain to stablecoin); applied at ingestion when both legs of the swap are available (ADR-018). Swap detection may be topic-based (DEX) or heuristic: one asset out + one asset in in same tx (ADR-019); P2P/OTC atomic swaps in one tx are treated as swap with execution price. | 2 — preferred |
 | `COINGECKO` | CoinGecko `/coins/{id}/history` API call | 3 — fallback |
 | `MANUAL` | User-supplied override price | Applied over any source |
 | `UNKNOWN` | All resolvers failed — event flagged | Last resort |

@@ -22,7 +22,8 @@ import java.time.Instant;
     @CompoundIndex(name = "txHash_networkId_wallet_asset", def = "{'txHash': 1, 'networkId': 1, 'walletAddress': 1, 'assetContract': 1}", unique = true, sparse = true),
     @CompoundIndex(name = "wallet_network_block", def = "{'walletAddress': 1, 'networkId': 1, 'blockTimestamp': 1}"),
     @CompoundIndex(name = "wallet_asset_block", def = "{'walletAddress': 1, 'assetSymbol': 1, 'blockTimestamp': 1}"),
-    @CompoundIndex(name = "wallet_network_asset_block", def = "{'walletAddress': 1, 'networkId': 1, 'assetContract': 1, 'blockTimestamp': 1}")
+    @CompoundIndex(name = "wallet_network_asset_block", def = "{'walletAddress': 1, 'networkId': 1, 'assetContract': 1, 'blockTimestamp': 1}"),
+    @CompoundIndex(name = "flagCode_wallet", def = "{'flagCode': 1, 'walletAddress': 1}")
 })
 @NoArgsConstructor
 @Getter

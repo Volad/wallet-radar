@@ -1,7 +1,8 @@
 package com.walletradar.api.controller;
 
 import com.walletradar.domain.SyncStatusRepository;
-import com.walletradar.ingestion.job.BackfillJobRunner;
+import com.walletradar.ingestion.job.backfill.BackfillJobRunner;
+
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;

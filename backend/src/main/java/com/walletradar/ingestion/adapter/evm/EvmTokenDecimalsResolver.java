@@ -39,6 +39,17 @@ public class EvmTokenDecimalsResolver {
     /** Default when contract is not ERC20 or RPC fails. */
     public static final int DEFAULT_DECIMALS = 18;
 
+    private static final Map<String, Integer> KNOWN_DECIMALS = Map.of(
+            "ARBITRUM:0xaf88d065e77c8cc2239327c5edb3a432268e5831", 6,
+            "ARBITRUM:0x2f2a2543b76a4166549f7aab2e75bef0aefc5b0f", 8,
+            "ETHEREUM:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", 6,
+            "ETHEREUM:0xdac17f958d2ee523a2206206994597c13d831ec7", 6,
+            "ETHEREUM:0x2260fac5e5542a773aa44fbcfedf7c193bc2c599", 8,
+            "BASE:0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", 6,
+            "OPTIMISM:0x0b2c639c533813f4aa9d7837caf62653d097ff85", 6,
+            "POLYGON:0x3c499c542cef5e3811e1192ce70d8cc03d5c3359", 6
+    );
+
     private static String cacheKey(String networkId, String tokenAddress) {
         return networkId + ":" + (tokenAddress != null ? tokenAddress.toLowerCase() : "");
     }
@@ -83,6 +94,9 @@ public class EvmTokenDecimalsResolver {
     }
 
     private int fetchDecimals(String networkId, String tokenAddress) {
+        String key = cacheKey(networkId, tokenAddress);
+        Integer known = KNOWN_DECIMALS.get(key);
+        if (known != null) return known;
         RpcEndpointRotator rotator = rotatorsByNetwork.getOrDefault(networkId, defaultRotator);
         String endpoint = rotator.getNextEndpoint();
         List<Object> params = List.of(

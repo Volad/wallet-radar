@@ -1,7 +1,7 @@
 package com.walletradar.ingestion.job.backfill;
 
-import com.walletradar.common.StablecoinRegistry;
 import com.walletradar.domain.NetworkId;
+import com.walletradar.domain.RawFetchCompleteEvent;
 import com.walletradar.domain.RawTransaction;
 import com.walletradar.domain.RawTransactionRepository;
 import com.walletradar.domain.SyncStatus;
@@ -9,20 +9,15 @@ import com.walletradar.domain.SyncStatusRepository;
 import com.walletradar.ingestion.adapter.BlockHeightResolver;
 import com.walletradar.ingestion.adapter.BlockTimestampResolver;
 import com.walletradar.ingestion.adapter.NetworkAdapter;
-import com.walletradar.ingestion.classifier.TxClassifierDispatcher;
 import com.walletradar.ingestion.config.BackfillProperties;
 import com.walletradar.ingestion.config.IngestionNetworkProperties;
-import com.walletradar.ingestion.job.DeferredPriceResolutionJob;
-import com.walletradar.ingestion.job.InlineSwapPriceEnricher;
-import com.walletradar.ingestion.job.SyncProgressTracker;
-import com.walletradar.ingestion.normalizer.EconomicEventNormalizer;
-import com.walletradar.ingestion.store.IdempotentEventStore;
-import com.walletradar.pricing.HistoricalPriceResolverChain;
-import com.walletradar.pricing.PriceResolutionResult;
+import com.walletradar.ingestion.filter.ScamFilter;
+import com.walletradar.ingestion.sync.progress.SyncProgressTracker;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
@@ -39,6 +34,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -47,16 +43,11 @@ class BackfillNetworkExecutorTest {
 
     @Mock private BackfillProperties backfillProperties;
     @Mock private IngestionNetworkProperties ingestionNetworkProperties;
-    @Mock private TxClassifierDispatcher txClassifierDispatcher;
-    @Mock private EconomicEventNormalizer economicEventNormalizer;
-    @Mock private HistoricalPriceResolverChain historicalPriceResolverChain;
-    @Mock private IdempotentEventStore idempotentEventStore;
-    @Mock private StablecoinRegistry stablecoinRegistry;
     @Mock private ApplicationEventPublisher applicationEventPublisher;
     @Mock private SyncProgressTracker syncProgressTracker;
-    @Mock private DeferredPriceResolutionJob deferredPriceResolutionJob;
     @Mock private SyncStatusRepository syncStatusRepository;
     @Mock private RawTransactionRepository rawTransactionRepository;
+    @Mock private ScamFilter scamFilter;
 
     private RecordingNetworkAdapter recordingAdapter;
     private BackfillNetworkExecutor executor;
@@ -65,36 +56,20 @@ class BackfillNetworkExecutorTest {
     void setUp() {
         recordingAdapter = new RecordingNetworkAdapter(5000);
 
-        RawFetchSegmentProcessor rawFetchSegmentProcessor = new RawFetchSegmentProcessor(rawTransactionRepository);
-        InlineSwapPriceEnricher inlineSwapPriceEnricher = new InlineSwapPriceEnricher(stablecoinRegistry);
-        ClassificationProcessor classificationProcessor = new ClassificationProcessor(
-                rawTransactionRepository,
-                txClassifierDispatcher,
-                economicEventNormalizer,
-                inlineSwapPriceEnricher,
-                idempotentEventStore,
-                historicalPriceResolverChain
-        );
+        when(scamFilter.isScam(any())).thenReturn(false);
+        RawFetchSegmentProcessor rawFetchSegmentProcessor = new RawFetchSegmentProcessor(rawTransactionRepository, scamFilter);
 
         executor = new BackfillNetworkExecutor(
                 rawFetchSegmentProcessor,
-                classificationProcessor,
                 backfillProperties,
                 ingestionNetworkProperties,
                 syncProgressTracker,
-                deferredPriceResolutionJob,
                 applicationEventPublisher,
                 syncStatusRepository
         );
 
-        when(syncStatusRepository.findAll()).thenReturn(List.of(syncStatus("0xWALLET")));
         when(syncStatusRepository.findByWalletAddressAndNetworkId(anyString(), anyString()))
                 .thenReturn(Optional.empty());
-        when(historicalPriceResolverChain.resolve(any()))
-                .thenReturn(PriceResolutionResult.unknown());
-        when(rawTransactionRepository.findByWalletAddressAndNetworkIdAndBlockNumberBetweenOrderByBlockNumberAsc(
-                anyString(), anyString(), anyLong(), anyLong()))
-                .thenReturn(List.of());
     }
 
     @Test
@@ -190,6 +165,26 @@ class BackfillNetworkExecutorTest {
         long maxTo = calls.stream().mapToLong(c -> c[1]).max().orElse(-1);
         assertThat(minFrom).isEqualTo(1L);
         assertThat(maxTo).isEqualTo(50_000L);
+    }
+
+    @Test
+    @DisplayName("publishes RawFetchCompleteEvent after Phase 1 completes (ADR-021)")
+    void publishesRawFetchCompleteEvent() {
+        when(backfillProperties.getParallelSegments()).thenReturn(1);
+        when(backfillProperties.getWindowBlocks()).thenReturn(1_000L);
+
+        BlockHeightResolver heightResolver = new StubBlockHeightResolver(1_000L);
+        BlockTimestampResolver timestampResolver = new StubBlockTimestampResolver();
+
+        executor.runBackfillForNetwork("0xWALLET", NetworkId.ETHEREUM,
+                recordingAdapter, heightResolver, timestampResolver);
+
+        ArgumentCaptor<RawFetchCompleteEvent> captor = ArgumentCaptor.forClass(RawFetchCompleteEvent.class);
+        verify(applicationEventPublisher).publishEvent(captor.capture());
+        RawFetchCompleteEvent event = captor.getValue();
+        assertThat(event.walletAddress()).isEqualTo("0xWALLET");
+        assertThat(event.networkId()).isEqualTo("ETHEREUM");
+        assertThat(event.lastBlockSynced()).isEqualTo(1_000L);
     }
 
     // --- Test helpers ---

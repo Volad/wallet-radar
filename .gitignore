@@ -1,6 +1,7 @@
 # Build
 target/
 build/
+backend/bin/
 !.mvn/wrapper/maven-wrapper.jar
 .gradle/
 

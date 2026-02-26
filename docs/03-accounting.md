@@ -121,9 +121,9 @@ nativeTokenPrice is resolved using the same price chain as any other token (Stab
 Prices are resolved per event at the time of the transaction (historical price):
 
 ```
-Priority chain (HistoricalPriceResolver):
+Priority chain (HistoricalPriceResolver), and at ingestion (ADR-018):
   1. StablecoinResolver     USDC/USDT/DAI/GHO/USDe/FRAX → $1.00 always
-  2. SwapDerivedResolver    tokenIn/tokenOut ratio from DEX event (free, on-chain)
+  2. SwapDerivedResolver    tokenIn/tokenOut ratio from DEX event when one leg is stablecoin; applied at ingestion for stablecoin-leg swaps, else in Phase 2 (free, on-chain)
   3. CoinGeckoHistorical    /coins/{id}/history?date=DD-MM-YYYY (free, throttled)
   4. PRICE_UNKNOWN          flag event, AVCO still calculated with quantity changes
 ```

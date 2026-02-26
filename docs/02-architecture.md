@@ -125,12 +125,6 @@ com.walletradar
 │   │       ├── SolanaRpcClient
 │   │       └── WebClientSolanaRpcClient
 │   │   Config: network settings under walletradar.ingestion.network (per NetworkId): urls (RPC list), batch-block-size; see ADR-012.
-│   ├── backfill/
-│   │   ├── BackfillJobRunner             orchestrator: queue, worker loops, event listeners, retry scheduler (ADR-014, ADR-017)
-│   │   ├── BackfillNetworkExecutor       runs backfill for one (wallet, network): block range, segments, deferred price (ADR-017)
-│   │   ├── RawFetchSegmentProcessor      Phase 1: fetch from RPC → store FULL payload in raw_transactions (ADR-020)
-│   │   ├── ClassificationProcessor       Phase 2: read raw_transactions → classify → normalize → upsert economic_events (ADR-020)
-│   │   └── BackfillProgressCallback      functional interface for segment progress reporting
 │   ├── classifier/
 │   │   ├── TxClassifier          dispatch by tx shape
 │   │   ├── SwapClassifier
@@ -144,14 +138,32 @@ com.walletradar
 │   ├── normalizer/
 │   │   ├── EconomicEventNormalizer        raw → EconomicEvent
 │   │   └── GasCostCalculator             gas × native price → USD
+│   ├── pipeline/
+│   │   ├── classification/
+│   │   │   └── ClassificationProcessor       classify raw → normalize → upsert economic_events; processBatch for ClassifierJob (ADR-020, ADR-021)
+│   │   └── enrichment/
+│   │       └── InlineSwapPriceEnricher      inline stablecoin-leg swap pricing before upsert
+│   ├── sync/
+│   │   └── progress/
+│   │       └── SyncProgressTracker          progressPct + syncBannerMessage + retry backoff
+│   ├── wallet/
+│   │   ├── command/
+│   │   │   └── WalletBackfillService        addWallet: upsert sync_status + publish WalletAddedEvent
+│   │   └── query/
+│   │       └── WalletSyncStatusService      read-only sync status for API layer
 │   ├── job/
-│   │   ├── IncrementalSyncJob            @Scheduled fixedDelay=3_600_000
-│   │   ├── CurrentBalancePollJob         @Scheduled fixedRate=600_000  (every 10 min)
-│   │   ├── DeferredPriceResolutionJob    post-backfill: resolves PRICE_PENDING events grouped by (contract, date); minimizes CoinGecko calls (ADR-016)
-│   │   ├── RawTransactionClassifierJob   Phase 2: read raw_transactions (PENDING) → classify → normalize → upsert economic_events (ADR-020)
-│   │   ├── SyncProgressTracker           progressPct + syncBannerMessage + retry backoff
-│   │   ├── WalletBackfillService         addWallet: upsert sync_status + publish WalletAddedEvent
-│   │   └── WalletSyncStatusService       read-only sync status for API layer
+│   │   ├── backfill/
+│   │   │   ├── BackfillJobRunner             orchestrator: queue, worker loops, event listeners, retry scheduler, reclassify when idle (ADR-014, ADR-017, ADR-021)
+│   │   │   ├── BackfillNetworkExecutor       runs backfill for one (wallet, network): Phase 1 only; raw fetch → RawFetchCompleteEvent (ADR-021)
+│   │   │   ├── RawFetchSegmentProcessor      Phase 1: fetch from RPC → store FULL payload in raw_transactions (ADR-020)
+│   │   │   └── BackfillProgressCallback      functional interface for segment progress reporting
+│   │   ├── classification/
+│   │   │   └── RawTransactionClassifierJob   @Scheduled(90s) + RawFetchCompleteEvent: process PENDING raw in batches (ADR-021)
+│   │   ├── pricing/
+│   │   │   └── DeferredPriceResolutionJob    @Scheduled(2–5 min): find PRICE_PENDING wallets → resolve per wallet → RecalculateWalletRequestEvent (ADR-016, ADR-021)
+│   │   ├── sync/
+│   │   │   └── IncrementalSyncJob            @Scheduled fixedDelay=3_600_000
+│   │   └── CurrentBalancePollJob             @Scheduled fixedRate=600_000  (every 10 min)
 │   └── store/
 │   │   ├── IdempotentEventStore          upsert on (txHash, networkId, walletAddress, assetContract) UNIQUE sparse; MANUAL by clientId
 │   │   └── OnChainBalanceStore           upsert on (walletAddress, networkId, assetContract) UNIQUE
@@ -224,7 +236,7 @@ com.walletradar
 | `backfill-executor` | 4 (max 18) | Shared pool for all (wallet, network) backfill tasks and parallel block-range segments within each task (ADR-016 T-OPT-6); free threads take next PENDING/FAILED from queue |
 | `recalc-executor` | 4 | `AvcoEngine.replayFromBeginning` (@Async) — used after override and after manual compensating transaction |
 | `sync-executor` | 3 | `IncrementalSyncJob` parallel wallets |
-| `scheduler-pool` | 2 | `@Scheduled` cron jobs (IncrementalSync, SnapshotCron, **CurrentBalancePoll** every 10 min) |
+| `scheduler-pool` | 2 | `@Scheduled` cron jobs (IncrementalSync, SnapshotCron, CurrentBalancePoll, **DeferredPriceResolutionJob** every 2–5 min) |
 
 ---
 
@@ -244,7 +256,7 @@ com.walletradar
 
 ### 1. Initial Wallet Backfill
 
-Three-phase approach (ADR-020): **Phase 1** raw fetch & store; **Phase 2** classification; **Phase 3** deferred price resolution + AVCO. See ADR-016 (T-OPT) and ADR-020 (split fetch vs classify).
+ADR-021: **Backfill = Phase 1 only** (raw fetch & store). **Classifier** is a separate job with its own lifecycle. See ADR-016 (T-OPT), ADR-020 (split fetch vs classify), ADR-021 (classifier as separate process).
 
 ```
 POST /wallets
@@ -253,11 +265,9 @@ POST /wallets
     → per-network parallel (CompletableFuture)
     → delegates to BackfillNetworkExecutor.runBackfillForNetwork()
 
-      ── Phase 1: Raw Fetch & Store (BackfillNetworkExecutor + RawFetchSegmentProcessor) ──
+      ── Phase 1 ONLY: Raw Fetch & Store (BackfillNetworkExecutor + RawFetchSegmentProcessor) ──
 
       → BackfillNetworkExecutor:
-          → EstimatingBlockTimestampResolver: 2 anchor-block RPC calls per network
-              → linear interpolation for all intermediate block timestamps (T-OPT-1)
           → Block range split into N parallel segments (default 4, configurable)
               → small ranges (<10 000 blocks) processed sequentially (T-OPT-6)
               → each segment processed via CompletableFuture on backfill-executor
@@ -267,31 +277,27 @@ POST /wallets
           → Solana: getSignaturesForAddress + getTransaction
               → store full transaction + sigInfo (signature, slot, blockTime, err?, confirmationStatus?) in raw_transactions.rawData
           → Upsert raw_transactions (txHash, networkId) UNIQUE; set walletAddress, blockNumber/slot, classificationStatus=PENDING, createdAt
-          → BackfillProgressCallback.reportProgress() → update sync_status (progressPct, lastBlockSynced, rawFetchComplete when done)
+          → BackfillProgressCallback.reportProgress() → update sync_status (progressPct, lastBlockSynced)
+      → setRawFetchComplete() → publish RawFetchCompleteEvent(wallet, networkId, lastBlockSynced)
+      → setComplete() — backfillComplete = rawFetchComplete (ADR-021)
 
-      ── Phase 2: Classification (RawTransactionClassifierJob) ──
+      ── SEPARATE: RawTransactionClassifierJob (ADR-021) ──
 
-      → RawTransactionClassifierJob (triggered when raw fetch complete, or @Scheduled):
-          → Read raw_transactions WHERE (walletAddress, networkId, classificationStatus=PENDING) ORDER BY blockNumber/slot ASC
-          → TxClassifierDispatcher → EconomicEventNormalizer → InlineSwapPriceEnricher
-          → IdempotentEventStore.upsert() to economic_events
-          → Set raw_transactions.classificationStatus = COMPLETE (or FAILED on error; retry without re-fetch)
-      → On classification error: retry by re-running classifier on stored raw; no RPC re-fetch
+      Triggers: RawFetchCompleteEvent (immediate) + @Scheduled(90s)
+      → Read raw_transactions WHERE (walletAddress, networkId, classificationStatus=PENDING) ORDER BY blockNumber/slot ASC
+      → Per batch: EstimatingBlockTimestampResolver.calibrate() [2 RPC], nativePriceCache
+      → ClassificationProcessor.processBatch() → TxClassifierDispatcher → EconomicEventNormalizer → InlineSwapPriceEnricher
+      → IdempotentEventStore.upsert() to economic_events
+      → Set raw_transactions.classificationStatus = COMPLETE (or FAILED on error)
+      (no event published)
 
-      ── Phase 3: Deferred Price Resolution (BackfillNetworkExecutor) ──
+      ── DeferredPriceResolutionJob (@Scheduled 2–5 min) ──
 
-      → DeferredPriceResolutionJob.resolveForWallet()
-          → query economic_events WHERE flags contains PRICE_PENDING
-          → group by (assetContract, date) → one CoinGecko call per group (T-OPT-5)
-          → HistoricalPriceResolver (Stablecoin → Swap → CoinGecko/throttled → UNKNOWN)
-          → update priceUsd, remove PRICE_PENDING flag, add flags as needed
-      → AvcoEngine.recalculateForWallet()
-          → on SELL: compute realisedPnlUsd, avcoAtTimeOfSale
-          → if first event is SELL: set hasIncompleteHistory=true
+      → findDistinctWalletAddressesByFlagCode(PRICE_PENDING)
+      → for each wallet: resolveForWallet() → publish RecalculateWalletRequestEvent(walletAddress)
+      → AvcoEngine.recalculateForWallet() (async)
 
-  → [all networks complete]
-  → BackfillJobRunner: sync_status(COMPLETE), syncBannerMessage=null, classificationComplete=true
-  → InternalTransferReclassifier
+  → InternalTransferReclassifier: @Scheduled(5 min) when backfill queue empty
       → scan economic_events WHERE counterpartyAddress IN {all session wallets}
       → reclassify EXTERNAL_INBOUND → INTERNAL_TRANSFER
       → replay AVCO for affected assets

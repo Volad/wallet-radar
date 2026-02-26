@@ -3,7 +3,7 @@ package com.walletradar.ingestion.adapter;
 import com.walletradar.domain.NetworkId;
 
 /**
- * Resolves current block height for a network. Used by BackfillJobRunner to compute backfill range.
+ * Resolves current block height for a network. Used by backfill package to compute backfill range.
  */
 public interface BlockHeightResolver {
 

@@ -5,6 +5,8 @@ import org.springframework.http.MediaType;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -30,6 +32,27 @@ public class WebClientEvmRpcClient implements EvmRpcClient {
                 .uri(endpointUrl)
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(body)
+                .retrieve()
+                .bodyToMono(String.class)
+                .onErrorMap(WebClientResponseException.class, e -> new RpcException(e.getMessage(), e));
+    }
+
+    @Override
+    public reactor.core.publisher.Mono<String> batchCall(String endpointUrl, List<RpcRequest> requests) {
+        List<Map<String, Object>> batch = new ArrayList<>();
+        for (int i = 0; i < requests.size(); i++) {
+            RpcRequest req = requests.get(i);
+            batch.add(Map.of(
+                    "jsonrpc", "2.0",
+                    "id", i + 1,
+                    "method", req.method(),
+                    "params", req.params() != null ? req.params() : new Object[]{}
+            ));
+        }
+        return webClient.post()
+                .uri(endpointUrl)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(batch)
                 .retrieve()
                 .bodyToMono(String.class)
                 .onErrorMap(WebClientResponseException.class, e -> new RpcException(e.getMessage(), e));

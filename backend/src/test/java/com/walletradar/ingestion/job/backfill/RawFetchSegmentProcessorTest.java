@@ -5,6 +5,7 @@ import com.walletradar.domain.NetworkId;
 import com.walletradar.domain.RawTransaction;
 import com.walletradar.domain.RawTransactionRepository;
 import com.walletradar.ingestion.adapter.NetworkAdapter;
+import com.walletradar.ingestion.filter.ScamFilter;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -30,12 +31,14 @@ import static org.mockito.Mockito.when;
 class RawFetchSegmentProcessorTest {
 
     @Mock private RawTransactionRepository rawTransactionRepository;
+    @Mock private ScamFilter scamFilter;
 
     private RawFetchSegmentProcessor processor;
 
     @BeforeEach
     void setUp() {
-        processor = new RawFetchSegmentProcessor(rawTransactionRepository);
+        when(scamFilter.isScam(any())).thenReturn(false);
+        processor = new RawFetchSegmentProcessor(rawTransactionRepository, scamFilter);
         when(rawTransactionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
     }
 
@@ -91,6 +94,34 @@ class RawFetchSegmentProcessorTest {
 
         processor.processSegment("0xWALLET", NetworkId.ETHEREUM, adapter,
                 1L, 10L, 50, new AtomicLong(0), 10L, (pct, lastBlock, msg) -> {});
+
+        verify(rawTransactionRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("processSegment skips scam tx and does not save")
+    void processSegment_scamTx_skipped() {
+        when(scamFilter.isScam(any())).thenReturn(true);
+
+        NetworkAdapter adapter = new NetworkAdapter() {
+            @Override
+            public boolean supports(NetworkId networkId) { return true; }
+            @Override
+            public int getMaxBlockBatchSize() { return 50; }
+            @Override
+            public List<RawTransaction> fetchTransactions(String wallet, NetworkId network, long from, long to) {
+                RawTransaction tx = new RawTransaction();
+                tx.setTxHash("0xscam");
+                tx.setNetworkId("ETHEREUM");
+                tx.setWalletAddress(wallet);
+                tx.setBlockNumber(100L);
+                tx.setClassificationStatus(ClassificationStatus.PENDING);
+                return List.of(tx);
+            }
+        };
+
+        processor.processSegment("0xWALLET", NetworkId.ETHEREUM, adapter,
+                1L, 100L, 50, new AtomicLong(0), 100L, (pct, lastBlock, msg) -> {});
 
         verify(rawTransactionRepository, never()).save(any());
     }

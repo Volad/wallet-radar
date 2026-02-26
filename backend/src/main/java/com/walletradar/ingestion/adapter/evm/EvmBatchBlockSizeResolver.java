@@ -12,7 +12,7 @@ import org.springframework.stereotype.Component;
 public class EvmBatchBlockSizeResolver {
 
     public static final int DEFAULT_BATCH_BLOCK_SIZE = 2000;
-    public static final int MAX_BATCH_BLOCK_SIZE = 10_000;
+    public static final int MAX_BATCH_BLOCK_SIZE = 50_000;
 
     private final IngestionNetworkProperties properties;
 

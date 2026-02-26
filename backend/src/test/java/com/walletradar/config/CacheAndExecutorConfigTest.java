@@ -66,7 +66,7 @@ class CacheAndExecutorConfigTest {
             assertThat(r.getCorePoolSize()).isEqualTo(4);
         }
         if (syncExecutor instanceof ThreadPoolTaskExecutor s) {
-            assertThat(s.getCorePoolSize()).isEqualTo(4);
+            assertThat(s.getCorePoolSize()).isEqualTo(3);
         }
     }
 

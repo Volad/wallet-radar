@@ -24,10 +24,12 @@ class HistoricalPriceResolverChainTest {
         StablecoinResolver stablecoin = new StablecoinResolver(registry);
         com.walletradar.pricing.config.PricingProperties props = new com.walletradar.pricing.config.PricingProperties();
         props.getContractToCoinGeckoId().put("0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2", "weth");
+        var contractResolver = new com.walletradar.pricing.resolver.ConfigOverrideContractResolver(props);
         CoinGeckoHistoricalResolver coinGecko = new CoinGeckoHistoricalResolver(
                 props,
                 org.springframework.web.reactive.function.client.WebClient.builder(),
-                new com.walletradar.common.RateLimiter(45));
+                new com.walletradar.common.RateLimiter(45),
+                contractResolver);
         CounterpartPriceResolver counterpart = new CounterpartPriceResolver(stablecoin, coinGecko);
         SwapDerivedResolver swapDerived = new SwapDerivedResolver(counterpart);
         chain = new HistoricalPriceResolverChain(stablecoin, swapDerived, coinGecko);

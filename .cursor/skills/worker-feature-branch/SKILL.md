@@ -42,6 +42,7 @@ Implement **one feature per branch**. Do not mix features in a single branch.
 | Reconciliation + GET /assets | `feature/07-reconciliation-get-assets` | `docs/tasks/07-reconciliation-get-assets.md` |
 | Transaction history | `feature/08-transaction-history` | `docs/tasks/08-transaction-history.md` |
 | Portfolio snapshots + charts | `feature/09-portfolio-snapshots-charts` | `docs/tasks/09-portfolio-snapshots-charts.md` |
+| Split raw fetch + classification | `feature/13-split-raw-fetch-classification` | `docs/tasks/13-split-raw-fetch-classification.md` |
 
 ## Dependency order
 
@@ -60,6 +61,7 @@ Implement in this order so dependencies are ready:
 11. `feature/07-reconciliation-get-assets` (T-024, T-029)
 12. `feature/08-transaction-history` (T-025)
 13. `feature/09-portfolio-snapshots-charts` (T-021, T-022, T-026, T-027)
+14. `feature/13-split-raw-fetch-classification` (T-031) — after backfill and incremental sync
 
 ## Clarifications
 
