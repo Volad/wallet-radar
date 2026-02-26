@@ -16,6 +16,7 @@ walletradar:
     backfill:
       window-blocks: 5256000
       parallel-segments: 100
+      parallel-segment-workers: 200
       worker-threads: 4
       max-retries: 5
       retry-base-delay-minutes: 2
@@ -41,8 +42,7 @@ walletradar:
           - https://arb1.arbitrum.io/rpc
           - https://arbitrum.drpc.org
           - https://arbitrum.llamarpc.com
-          - https://rpc.ankr.com/arbitrum/${ANKR_API_KEY}
-        batch-block-size: 50000
+        batch-block-size: 20000
         window-blocks: 252000000   # ~2 years at ~4 blocks/s
         avg-block-time-seconds: 0.25
       OPTIMISM:
@@ -107,9 +107,9 @@ walletradar:
       signatures-limit: 1000
     # RPC retry: exponential backoff ± jitter. Defaults: base-delay-ms=1000, jitter-factor=0.2, max-attempts=5
     retry:
-      # base-delay-ms: 1000
+      base-delay-ms: 2000
       # jitter-factor: 0.2
-      # max-attempts: 5
+      max-attempts: 7
     # Classifier job (ADR-021): batch size and schedule for PENDING raw processing.
     classifier:
       batch-size: 1000

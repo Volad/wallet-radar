@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
@@ -48,10 +49,24 @@ class WalletBackfillServiceTest {
         assertThat(statusCaptor.getAllValues().get(0).getStatus()).isEqualTo(SyncStatus.SyncStatusValue.PENDING);
         assertThat(statusCaptor.getAllValues().get(0).getWalletAddress()).isEqualTo("0x742d35Cc6634C0532925a3b844Bc454e4438f44e");
 
-        ArgumentCaptor<WalletAddedEvent> eventCaptor = ArgumentCaptor.forClass(WalletAddedEvent.class);
-        verify(applicationEventPublisher).publishEvent(eventCaptor.capture());
-        assertThat(eventCaptor.getValue().walletAddress()).isEqualTo("0x742d35Cc6634C0532925a3b844Bc454e4438f44e");
-        assertThat(eventCaptor.getValue().networks()).containsExactly(NetworkId.ETHEREUM, NetworkId.ARBITRUM);
+        ArgumentCaptor<Object> eventsCaptor = ArgumentCaptor.forClass(Object.class);
+        verify(applicationEventPublisher, times(2)).publishEvent(eventsCaptor.capture());
+        List<Object> events = eventsCaptor.getAllValues();
+        assertThat(events.stream().filter(WalletAddedEvent.class::isInstance).count()).isEqualTo(1);
+        assertThat(events.stream().filter(com.walletradar.domain.BalanceRefreshRequestedEvent.class::isInstance).count()).isEqualTo(1);
+        WalletAddedEvent walletAddedEvent = (WalletAddedEvent) events.stream()
+                .filter(WalletAddedEvent.class::isInstance)
+                .findFirst()
+                .orElseThrow();
+        com.walletradar.domain.BalanceRefreshRequestedEvent balanceEvent =
+                (com.walletradar.domain.BalanceRefreshRequestedEvent) events.stream()
+                        .filter(com.walletradar.domain.BalanceRefreshRequestedEvent.class::isInstance)
+                        .findFirst()
+                        .orElseThrow();
+        assertThat(walletAddedEvent.walletAddress()).isEqualTo("0x742d35Cc6634C0532925a3b844Bc454e4438f44e");
+        assertThat(walletAddedEvent.networks()).containsExactly(NetworkId.ETHEREUM, NetworkId.ARBITRUM);
+        assertThat(balanceEvent.walletAddress()).isEqualTo("0x742d35Cc6634C0532925a3b844Bc454e4438f44e");
+        assertThat(balanceEvent.networks()).containsExactly(NetworkId.ETHEREUM, NetworkId.ARBITRUM);
     }
 
     @Test
@@ -75,14 +90,25 @@ class WalletBackfillServiceTest {
         verify(syncStatusRepository).save(statusCaptor.capture());
         assertThat(statusCaptor.getValue().getNetworkId()).isEqualTo(NetworkId.ARBITRUM.name());
 
-        ArgumentCaptor<WalletAddedEvent> eventCaptor = ArgumentCaptor.forClass(WalletAddedEvent.class);
-        verify(applicationEventPublisher).publishEvent(eventCaptor.capture());
-        assertThat(eventCaptor.getValue().networks()).containsExactly(NetworkId.ARBITRUM);
+        ArgumentCaptor<Object> eventsCaptor = ArgumentCaptor.forClass(Object.class);
+        verify(applicationEventPublisher, times(2)).publishEvent(eventsCaptor.capture());
+        List<Object> events = eventsCaptor.getAllValues();
+        WalletAddedEvent walletAddedEvent = (WalletAddedEvent) events.stream()
+                .filter(WalletAddedEvent.class::isInstance)
+                .findFirst()
+                .orElseThrow();
+        com.walletradar.domain.BalanceRefreshRequestedEvent balanceEvent =
+                (com.walletradar.domain.BalanceRefreshRequestedEvent) events.stream()
+                        .filter(com.walletradar.domain.BalanceRefreshRequestedEvent.class::isInstance)
+                        .findFirst()
+                        .orElseThrow();
+        assertThat(walletAddedEvent.networks()).containsExactly(NetworkId.ARBITRUM);
+        assertThat(balanceEvent.networks()).containsExactly(NetworkId.ETHEREUM, NetworkId.ARBITRUM);
     }
 
     @Test
-    @DisplayName("addWallet does not publish event when all networks are already complete")
-    void addWallet_allComplete_noEventPublished() {
+    @DisplayName("addWallet publishes balance refresh even when all networks are already complete")
+    void addWallet_allComplete_publishesBalanceRefreshOnly() {
         SyncStatus completeEth = new SyncStatus();
         completeEth.setId("id-eth");
         completeEth.setBackfillComplete(true);
@@ -98,7 +124,13 @@ class WalletBackfillServiceTest {
         walletBackfillService.addWallet("0xABC", List.of(NetworkId.ETHEREUM, NetworkId.ARBITRUM));
 
         verify(syncStatusRepository, never()).save(any());
-        verify(applicationEventPublisher, never()).publishEvent(any());
+        ArgumentCaptor<Object> eventsCaptor = ArgumentCaptor.forClass(Object.class);
+        verify(applicationEventPublisher, times(1)).publishEvent(eventsCaptor.capture());
+        List<Object> events = eventsCaptor.getAllValues();
+        assertThat(events.stream().filter(WalletAddedEvent.class::isInstance)).isEmpty();
+        com.walletradar.domain.BalanceRefreshRequestedEvent balanceEvent =
+                (com.walletradar.domain.BalanceRefreshRequestedEvent) events.get(0);
+        assertThat(balanceEvent.networks()).containsExactly(NetworkId.ETHEREUM, NetworkId.ARBITRUM);
     }
 
     @Test
@@ -133,8 +165,19 @@ class WalletBackfillServiceTest {
         walletBackfillService.addWallet("0x742d35Cc6634C0532925a3b844Bc454e4438f44e", Collections.emptyList());
 
         verify(syncStatusRepository, times(NetworkId.values().length)).save(any(SyncStatus.class));
-        ArgumentCaptor<WalletAddedEvent> eventCaptor = ArgumentCaptor.forClass(WalletAddedEvent.class);
-        verify(applicationEventPublisher).publishEvent(eventCaptor.capture());
-        assertThat(eventCaptor.getValue().networks()).containsExactly(NetworkId.values());
+        ArgumentCaptor<Object> eventsCaptor = ArgumentCaptor.forClass(Object.class);
+        verify(applicationEventPublisher, times(2)).publishEvent(eventsCaptor.capture());
+        List<Object> events = eventsCaptor.getAllValues();
+        WalletAddedEvent walletAddedEvent = (WalletAddedEvent) events.stream()
+                .filter(WalletAddedEvent.class::isInstance)
+                .findFirst()
+                .orElseThrow();
+        com.walletradar.domain.BalanceRefreshRequestedEvent balanceEvent =
+                (com.walletradar.domain.BalanceRefreshRequestedEvent) events.stream()
+                        .filter(com.walletradar.domain.BalanceRefreshRequestedEvent.class::isInstance)
+                        .findFirst()
+                        .orElseThrow();
+        assertThat(walletAddedEvent.networks()).containsExactly(NetworkId.values());
+        assertThat(balanceEvent.networks()).containsExactly(NetworkId.values());
     }
 }

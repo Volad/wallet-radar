@@ -143,6 +143,39 @@ class TransferClassifierTest {
     }
 
     @Test
+    void classify_oneAssetOutAndMintInToWallet_emitsExternalTransfersNotSwap() {
+        String wallet = "0x1234567890123456789012345678901234567890";
+        String walletTopic = "0x" + "0".repeat(24) + "1234567890123456789012345678901234567890";
+        String zeroTopic = "0x" + "0".repeat(64);
+        String usdc = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
+        String mcusdc = "0xA60643c90A542a95026c0f1dBdB0615Ff42019cF";
+        String toTopic = "0x" + "0".repeat(24) + "5678567856785678567856785678567856785678";
+
+        when(evmTokenDecimalsResolver.getDecimals(anyString(), eq(usdc))).thenReturn(6);
+        when(evmTokenDecimalsResolver.getDecimals(anyString(), eq(mcusdc))).thenReturn(18);
+        when(evmTokenDecimalsResolver.getSymbol(anyString(), eq(usdc))).thenReturn("USDC");
+        when(evmTokenDecimalsResolver.getSymbol(anyString(), eq(mcusdc))).thenReturn("MCUSDC");
+
+        RawTransaction tx = new RawTransaction();
+        tx.setNetworkId("ETHEREUM");
+        tx.setRawData(new Document("logs", List.of(
+                new Document("address", usdc)
+                        .append("topics", List.of(TransferClassifier.TRANSFER_TOPIC, walletTopic, toTopic))
+                        .append("data", "0x0000000000000000000000000000000000000000000000000000000065ec8780"), // 1710 USDC
+                new Document("address", mcusdc)
+                        .append("topics", List.of(TransferClassifier.TRANSFER_TOPIC, zeroTopic, walletTopic))
+                        .append("data", "0x00000000000000000000000000000000000000000000005b957ffd62c2788569")))); // 1689.426318... MCUSDC
+
+        List<RawClassifiedEvent> result = classifier.classify(tx, wallet);
+
+        assertThat(result).hasSize(2);
+        assertThat(result.stream().map(RawClassifiedEvent::getEventType))
+                .containsExactlyInAnyOrder(EconomicEventType.EXTERNAL_TRANSFER_OUT, EconomicEventType.EXTERNAL_INBOUND);
+        assertThat(result.stream().filter(e -> e.getEventType() == EconomicEventType.SWAP_SELL)).isEmpty();
+        assertThat(result.stream().filter(e -> e.getEventType() == EconomicEventType.SWAP_BUY)).isEmpty();
+    }
+
+    @Test
     void classify_twoTransfersOutSameAssetOneIn_emitsOneSwapSellAggregatedAndOneSwapBuy() {
         String wallet = "0x1234567890123456789012345678901234567890";
         String walletTopic = "0x" + "0".repeat(24) + "1234567890123456789012345678901234567890";

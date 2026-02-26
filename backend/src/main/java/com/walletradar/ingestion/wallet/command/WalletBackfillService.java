@@ -1,5 +1,6 @@
 package com.walletradar.ingestion.wallet.command;
 
+import com.walletradar.domain.BalanceRefreshRequestedEvent;
 import com.walletradar.domain.NetworkId;
 import com.walletradar.domain.SyncStatus;
 import com.walletradar.domain.SyncStatusRepository;
@@ -52,6 +53,9 @@ public class WalletBackfillService {
             status.setUpdatedAt(Instant.now());
             syncStatusRepository.save(status);
             networksNeedingBackfill.add(networkId);
+        }
+        if (!targetNetworks.isEmpty()) {
+            applicationEventPublisher.publishEvent(new BalanceRefreshRequestedEvent(address, targetNetworks));
         }
         if (!networksNeedingBackfill.isEmpty()) {
             applicationEventPublisher.publishEvent(new WalletAddedEvent(address, networksNeedingBackfill));

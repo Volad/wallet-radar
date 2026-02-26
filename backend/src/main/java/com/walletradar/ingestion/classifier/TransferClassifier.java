@@ -32,6 +32,7 @@ public class TransferClassifier implements TxClassifier {
 
     /** ERC20 Transfer(address,address,uint256) topic. */
     public static final String TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+    private static final String ZERO_ADDRESS_TOPIC = "0x0000000000000000000000000000000000000000000000000000000000000000";
     /** Uniswap V2 Swap(address,uint256,uint256,uint256,uint256) */
     private static final String SWAP_TOPIC_V2 = "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822";
     /** Uniswap V3 Swap(address,address,int256,int256,uint160,uint128,int24) */
@@ -79,6 +80,8 @@ public class TransferClassifier implements TxClassifier {
         Map<String, TransferMeta> outflowMetaByContract = new LinkedHashMap<>();
         Map<String, BigDecimal> inflowQtyByContract = new LinkedHashMap<>();
         Map<String, TransferMeta> inflowMetaByContract = new LinkedHashMap<>();
+        boolean hasWalletInboundMint = false;
+        boolean hasWalletOutboundBurn = false;
 
         for (Document log : logs) {
             List<String> topics = log.getList("topics", String.class);
@@ -102,13 +105,20 @@ public class TransferClassifier implements TxClassifier {
             if (walletTopic.equalsIgnoreCase(fromTopic)) {
                 outflowQtyByContract.merge(tokenAddress, quantity.negate(), BigDecimal::add);
                 outflowMetaByContract.putIfAbsent(tokenAddress, meta);
+                if (ZERO_ADDRESS_TOPIC.equalsIgnoreCase(toTopic)) {
+                    hasWalletOutboundBurn = true;
+                }
             } else if (walletTopic.equalsIgnoreCase(toTopic)) {
                 inflowQtyByContract.merge(tokenAddress, quantity, BigDecimal::add);
                 inflowMetaByContract.putIfAbsent(tokenAddress, meta);
+                if (ZERO_ADDRESS_TOPIC.equalsIgnoreCase(fromTopic)) {
+                    hasWalletInboundMint = true;
+                }
             }
         }
 
-        if (outflowQtyByContract.size() == 1 && inflowQtyByContract.size() == 1) {
+        if (!hasWalletInboundMint && !hasWalletOutboundBurn
+                && outflowQtyByContract.size() == 1 && inflowQtyByContract.size() == 1) {
             String outflowContract = outflowQtyByContract.keySet().iterator().next();
             String inflowContract = inflowQtyByContract.keySet().iterator().next();
             if (!outflowContract.equals(inflowContract)) {

@@ -42,4 +42,10 @@ public class BackfillProperties {
 
     /** Number of parallel segments to split the block range into per network. Default 4. */
     private int parallelSegments = 4;
+
+    /**
+     * Maximum number of segment workers running concurrently per wallet×network backfill.
+     * This caps real RPC pressure even when {@code parallelSegments} is high.
+     */
+    private int parallelSegmentWorkers = 4;
 }

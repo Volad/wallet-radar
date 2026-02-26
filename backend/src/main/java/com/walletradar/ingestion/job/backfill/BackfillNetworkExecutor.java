@@ -81,7 +81,9 @@ public class BackfillNetworkExecutor {
                         fromBlock, toBlock, batchSize, processedBlocks, totalBlocks, progressCallback);
             } else {
                 long segmentSize = totalBlocks / parallelSegments;
-                try (ExecutorService segmentExecutor = Executors.newVirtualThreadPerTaskExecutor()) {
+                int segmentWorkers = Math.max(1, backfillProperties.getParallelSegmentWorkers());
+                int effectiveWorkers = Math.min(parallelSegments, segmentWorkers);
+                try (ExecutorService segmentExecutor = Executors.newFixedThreadPool(effectiveWorkers)) {
                     List<CompletableFuture<Void>> futures = new ArrayList<>();
                     for (int i = 0; i < parallelSegments; i++) {
                         long segStart = fromBlock + i * segmentSize;
@@ -94,8 +96,8 @@ public class BackfillNetworkExecutor {
                                 segmentExecutor
                         ));
                     }
-                    log.info("Backfill Phase 1 (raw fetch) parallel segments scheduled for {} on {}: {} segments",
-                            walletAddress, networkIdStr, parallelSegments);
+                    log.info("Backfill Phase 1 (raw fetch) parallel segments scheduled for {} on {}: {} segments, {} active workers",
+                            walletAddress, networkIdStr, parallelSegments, effectiveWorkers);
                     CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
                     log.info("Backfill Phase 1 (raw fetch) complete for {} on {}", walletAddress, networkIdStr);
                 }
