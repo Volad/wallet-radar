@@ -20,7 +20,14 @@ public class CurrentBalancePollJob {
             fixedRateString = "${walletradar.ingestion.balance.poll-interval-ms:600000}",
             initialDelayString = "${walletradar.ingestion.balance.poll-interval-ms:600000}")
     public void runScheduled() {
-        balanceRefreshService.refreshAllKnownWalletNetworks();
+        long startedAt = System.currentTimeMillis();
+        log.info("CurrentBalancePollJob started");
+        try {
+            balanceRefreshService.refreshAllKnownWalletNetworks();
+            log.info("CurrentBalancePollJob finished: durationMs={}", System.currentTimeMillis() - startedAt);
+        } catch (Exception e) {
+            log.error("CurrentBalancePollJob failed: durationMs={}", System.currentTimeMillis() - startedAt, e);
+            throw e;
+        }
     }
 }
-

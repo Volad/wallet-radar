@@ -46,4 +46,9 @@ public interface RawTransactionRepository extends MongoRepository<RawTransaction
      */
     List<RawTransaction> findByWalletAddressAndNetworkIdAndClassificationStatusOrderBySlotAsc(
             String walletAddress, String networkId, ClassificationStatus status, Pageable pageable);
+
+    /**
+     * Global PENDING read for standalone classifier job (ADR-021).
+     */
+    List<RawTransaction> findByClassificationStatus(ClassificationStatus status, Pageable pageable);
 }

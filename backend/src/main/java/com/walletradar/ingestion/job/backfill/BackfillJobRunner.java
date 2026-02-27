@@ -1,23 +1,19 @@
 package com.walletradar.ingestion.job.backfill;
 
 import com.walletradar.domain.BackfillSegmentRepository;
-import com.walletradar.domain.EconomicEvent;
 import com.walletradar.domain.NetworkId;
-import com.walletradar.domain.RecalculateWalletRequestEvent;
 import com.walletradar.domain.SyncStatus;
 import com.walletradar.domain.SyncStatusRepository;
 import com.walletradar.domain.WalletAddedEvent;
 import com.walletradar.ingestion.adapter.BlockHeightResolver;
 import com.walletradar.ingestion.adapter.BlockTimestampResolver;
 import com.walletradar.ingestion.adapter.NetworkAdapter;
-import com.walletradar.ingestion.classifier.InternalTransferReclassifier;
 import com.walletradar.ingestion.config.BackfillProperties;
 import com.walletradar.ingestion.sync.progress.SyncProgressTracker;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -30,7 +26,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.stream.Collectors;
 
 import static com.walletradar.domain.SyncStatus.SyncStatusValue;
 
@@ -55,8 +50,6 @@ public class BackfillJobRunner {
     private final BackfillNetworkExecutor backfillNetworkExecutor;
     private final BackfillProperties backfillProperties;
     private final SyncProgressTracker syncProgressTracker;
-    private final InternalTransferReclassifier internalTransferReclassifier;
-    private final ApplicationEventPublisher applicationEventPublisher;
     private final SyncStatusRepository syncStatusRepository;
     private final BackfillSegmentRepository backfillSegmentRepository;
     @Qualifier("backfill-coordinator-executor")
@@ -167,14 +160,10 @@ public class BackfillJobRunner {
     }
 
     private void runReclassifyAndRecalc() {
-        Set<String> sessionWallets = syncStatusRepository.findAll().stream()
-                .map(SyncStatus::getWalletAddress)
-                .collect(Collectors.toSet());
-        List<EconomicEvent> reclassified = internalTransferReclassifier.reclassify(sessionWallets);
-        Set<String> affectedWallets = reclassified.stream().map(EconomicEvent::getWalletAddress).collect(Collectors.toSet());
-        for (String w : affectedWallets) {
-            applicationEventPublisher.publishEvent(new RecalculateWalletRequestEvent(w));
-        }
+        long startedAt = System.currentTimeMillis();
+        log.info("BackfillReclassifyJob started");
+        log.info("BackfillReclassifyJob finished: skipped=true, reason=raw-transaction-level-classification, durationMs={}",
+                System.currentTimeMillis() - startedAt);
     }
 
     public boolean isIdle() {
@@ -183,25 +172,66 @@ public class BackfillJobRunner {
 
     @Scheduled(fixedDelayString = "${walletradar.ingestion.backfill.reclassify-schedule-interval-ms:300000}")
     public void scheduledReclassifyWhenIdle() {
-        if (!isIdle()) return;
-        backfillCoordinatorExecutor.execute(this::runReclassifyAndRecalc);
+        long startedAt = System.currentTimeMillis();
+        log.info("BackfillScheduledReclassifyJob started");
+        try {
+            if (!isIdle()) {
+                log.info("BackfillScheduledReclassifyJob finished: skipped=true, reason=not_idle, durationMs={}",
+                        System.currentTimeMillis() - startedAt);
+                return;
+            }
+            backfillCoordinatorExecutor.execute(this::runReclassifyAndRecalc);
+            log.info("BackfillScheduledReclassifyJob finished: enqueued=true, durationMs={}",
+                    System.currentTimeMillis() - startedAt);
+        } catch (Exception e) {
+            log.error("BackfillScheduledReclassifyJob failed: durationMs={}", System.currentTimeMillis() - startedAt, e);
+            throw e;
+        }
     }
 
     @Scheduled(fixedDelayString = "${walletradar.ingestion.backfill.retry-scheduler-interval-ms:120000}")
     public void retryFailedBackfills() {
-        Instant now = Instant.now();
-        int maxRetries = backfillProperties.getMaxRetries();
+        long startedAt = System.currentTimeMillis();
+        log.info("BackfillRetryJob started");
+        try {
+            Instant now = Instant.now();
+            int maxRetries = backfillProperties.getMaxRetries();
 
-        List<SyncStatus> failed = syncStatusRepository.findByStatusIn(Set.of(SyncStatusValue.FAILED, SyncStatusValue.RUNNING));
-        int enqueued = 0;
-        for (SyncStatus s : failed) {
-            if (s.getWalletAddress() == null || s.getNetworkId() == null) continue;
-            boolean segmentMode = s.getId() != null && backfillSegmentRepository.existsBySyncStatusId(s.getId());
+            List<SyncStatus> failed = syncStatusRepository.findByStatusIn(Set.of(SyncStatusValue.FAILED, SyncStatusValue.RUNNING));
+            int enqueued = 0;
+            for (SyncStatus s : failed) {
+                if (s.getWalletAddress() == null || s.getNetworkId() == null) continue;
+                boolean segmentMode = s.getId() != null && backfillSegmentRepository.existsBySyncStatusId(s.getId());
 
-            if (s.getStatus() == SyncStatusValue.RUNNING) {
-                if (!segmentMode) {
+                if (s.getStatus() == SyncStatusValue.RUNNING) {
+                    if (!segmentMode) {
+                        continue;
+                    }
+                    try {
+                        NetworkId networkId = NetworkId.valueOf(s.getNetworkId());
+                        BackfillWorkItem item = new BackfillWorkItem(s.getWalletAddress(), networkId);
+                        if (enqueueItemIfSupported(item)) {
+                            enqueued++;
+                        }
+                    } catch (IllegalArgumentException ignored) { /* unknown network */ }
                     continue;
                 }
+
+                if (s.getRetryCount() >= maxRetries) {
+                    if (!segmentMode) {
+                        s.setStatus(SyncStatusValue.ABANDONED);
+                        s.setSyncBannerMessage("Abandoned after " + maxRetries + " retries");
+                        s.setUpdatedAt(now);
+                        syncStatusRepository.save(s);
+                        log.info("Backfill ABANDONED for {} on {} after {} retries", s.getWalletAddress(), s.getNetworkId(), maxRetries);
+                        continue;
+                    }
+                }
+
+                if (s.getNextRetryAfter() != null && now.isBefore(s.getNextRetryAfter())) {
+                    continue;
+                }
+
                 try {
                     NetworkId networkId = NetworkId.valueOf(s.getNetworkId());
                     BackfillWorkItem item = new BackfillWorkItem(s.getWalletAddress(), networkId);
@@ -209,34 +239,15 @@ public class BackfillJobRunner {
                         enqueued++;
                     }
                 } catch (IllegalArgumentException ignored) { /* unknown network */ }
-                continue;
             }
-
-            if (s.getRetryCount() >= maxRetries) {
-                if (!segmentMode) {
-                    s.setStatus(SyncStatusValue.ABANDONED);
-                    s.setSyncBannerMessage("Abandoned after " + maxRetries + " retries");
-                    s.setUpdatedAt(now);
-                    syncStatusRepository.save(s);
-                    log.info("Backfill ABANDONED for {} on {} after {} retries", s.getWalletAddress(), s.getNetworkId(), maxRetries);
-                    continue;
-                }
+            if (enqueued > 0) {
+                log.info("Retry scheduler: re-enqueued {} failed backfill(s)", enqueued);
             }
-
-            if (s.getNextRetryAfter() != null && now.isBefore(s.getNextRetryAfter())) {
-                continue;
-            }
-
-            try {
-                NetworkId networkId = NetworkId.valueOf(s.getNetworkId());
-                BackfillWorkItem item = new BackfillWorkItem(s.getWalletAddress(), networkId);
-                if (enqueueItemIfSupported(item)) {
-                    enqueued++;
-                }
-            } catch (IllegalArgumentException ignored) { /* unknown network */ }
-        }
-        if (enqueued > 0) {
-            log.info("Retry scheduler: re-enqueued {} failed backfill(s)", enqueued);
+            log.info("BackfillRetryJob finished: failedOrRunningChecked={}, reEnqueued={}, durationMs={}",
+                    failed.size(), enqueued, System.currentTimeMillis() - startedAt);
+        } catch (Exception e) {
+            log.error("BackfillRetryJob failed: durationMs={}", System.currentTimeMillis() - startedAt, e);
+            throw e;
         }
     }
 

@@ -38,10 +38,21 @@ public class NormalizedTransactionPricingJob {
 
     @Scheduled(fixedDelayString = "${walletradar.ingestion.normalized-pricing.schedule-interval-ms:120000}")
     public void runScheduled() {
-        List<NormalizedTransaction> pending = normalizedTransactionRepository
-                .findByStatusOrderByBlockTimestampAsc(NormalizedTransactionStatus.PENDING_PRICE);
-        for (NormalizedTransaction tx : pending) {
-            priceOne(tx);
+        long startedAt = System.currentTimeMillis();
+        log.info("NormalizedTransactionPricingJob started");
+        try {
+            List<NormalizedTransaction> pending = normalizedTransactionRepository
+                    .findByStatusOrderByBlockTimestampAsc(NormalizedTransactionStatus.PENDING_PRICE);
+            int processed = 0;
+            for (NormalizedTransaction tx : pending) {
+                priceOne(tx);
+                processed++;
+            }
+            log.info("NormalizedTransactionPricingJob finished: pending={}, processed={}, durationMs={}",
+                    pending.size(), processed, System.currentTimeMillis() - startedAt);
+        } catch (Exception e) {
+            log.error("NormalizedTransactionPricingJob failed: durationMs={}", System.currentTimeMillis() - startedAt, e);
+            throw e;
         }
     }
 

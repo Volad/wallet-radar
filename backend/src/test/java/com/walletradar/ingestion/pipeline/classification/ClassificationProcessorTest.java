@@ -29,7 +29,6 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -95,7 +94,7 @@ class ClassificationProcessorTest {
         event.setAssetContract("0xtoken");
         event.setAssetSymbol("TKN");
         event.setQuantityDelta(BigDecimal.ONE.negate());
-        when(txClassifierDispatcher.classify(any(), anyString(), any())).thenReturn(List.of(event));
+        when(txClassifierDispatcher.classify(any(), anyString())).thenReturn(List.of(event));
 
         BlockTimestampResolver resolver = new BlockTimestampResolver() {
             @Override
@@ -109,8 +108,7 @@ class ClassificationProcessorTest {
         estimator.calibrate(NetworkId.ETHEREUM, 1L, 200L, resolver, 12.0);
 
         processor.processBatch(List.of(raw), "0xWALLET", NetworkId.ETHEREUM,
-                estimator, new ConcurrentHashMap<>(), "0xeth",
-                Set.of("0xWALLET"));
+                estimator, new ConcurrentHashMap<>(), "0xeth");
 
         verify(idempotentEventStore).upsert(any());
         verify(idempotentNormalizedTransactionStore).upsert(any());
@@ -133,8 +131,7 @@ class ClassificationProcessorTest {
         estimator.calibrate(NetworkId.ETHEREUM, 1L, 100L, resolver, 12.0);
 
         processor.processBatch(List.of(), "0xWALLET", NetworkId.ETHEREUM,
-                estimator, new ConcurrentHashMap<>(), "0xeth",
-                Set.of("0xWALLET"));
+                estimator, new ConcurrentHashMap<>(), "0xeth");
 
         verify(idempotentEventStore, never()).upsert(any());
         verify(idempotentNormalizedTransactionStore, never()).upsert(any());

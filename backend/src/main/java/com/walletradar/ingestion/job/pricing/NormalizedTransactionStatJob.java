@@ -30,16 +30,27 @@ public class NormalizedTransactionStatJob {
 
     @Scheduled(fixedDelayString = "${walletradar.ingestion.normalized-stat.schedule-interval-ms:120000}")
     public void runScheduled() {
-        List<NormalizedTransaction> pending = normalizedTransactionRepository
-                .findByStatusOrderByBlockTimestampAsc(NormalizedTransactionStatus.PENDING_STAT);
-        Set<String> walletsToRecalc = new LinkedHashSet<>();
-        for (NormalizedTransaction tx : pending) {
-            if (confirmOne(tx)) {
-                walletsToRecalc.add(tx.getWalletAddress());
+        long startedAt = System.currentTimeMillis();
+        log.info("NormalizedTransactionStatJob started");
+        try {
+            List<NormalizedTransaction> pending = normalizedTransactionRepository
+                    .findByStatusOrderByBlockTimestampAsc(NormalizedTransactionStatus.PENDING_STAT);
+            Set<String> walletsToRecalc = new LinkedHashSet<>();
+            int confirmed = 0;
+            for (NormalizedTransaction tx : pending) {
+                if (confirmOne(tx)) {
+                    confirmed++;
+                    walletsToRecalc.add(tx.getWalletAddress());
+                }
             }
-        }
-        for (String wallet : walletsToRecalc) {
-            applicationEventPublisher.publishEvent(new RecalculateWalletRequestEvent(wallet));
+            for (String wallet : walletsToRecalc) {
+                applicationEventPublisher.publishEvent(new RecalculateWalletRequestEvent(wallet));
+            }
+            log.info("NormalizedTransactionStatJob finished: pending={}, confirmed={}, recalculationRequests={}, durationMs={}",
+                    pending.size(), confirmed, walletsToRecalc.size(), System.currentTimeMillis() - startedAt);
+        } catch (Exception e) {
+            log.error("NormalizedTransactionStatJob failed: durationMs={}", System.currentTimeMillis() - startedAt, e);
+            throw e;
         }
     }
 

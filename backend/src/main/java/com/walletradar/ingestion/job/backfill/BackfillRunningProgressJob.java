@@ -6,6 +6,7 @@ import com.walletradar.domain.SyncStatus;
 import com.walletradar.domain.SyncStatusRepository;
 import com.walletradar.ingestion.sync.progress.SyncProgressTracker;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -19,6 +20,7 @@ import java.util.Set;
  */
 @Component
 @RequiredArgsConstructor
+@Slf4j
 public class BackfillRunningProgressJob {
 
     private final SyncStatusRepository syncStatusRepository;
@@ -27,35 +29,46 @@ public class BackfillRunningProgressJob {
 
     @Scheduled(fixedDelayString = "${walletradar.ingestion.backfill.progress-update-interval-ms:2000}")
     public void updateRunningSyncProgress() {
-        List<SyncStatus> running = syncStatusRepository.findByStatusIn(Set.of(SyncStatus.SyncStatusValue.RUNNING));
-        for (SyncStatus sync : running) {
-            if (sync.getId() == null || sync.getWalletAddress() == null || sync.getNetworkId() == null) {
-                continue;
-            }
-            if (!backfillSegmentRepository.existsBySyncStatusId(sync.getId())) {
-                continue;
-            }
-            List<BackfillSegment> segments = backfillSegmentRepository.findBySyncStatusIdOrderBySegmentIndexAsc(sync.getId());
-            if (segments.isEmpty()) {
-                continue;
-            }
+        long startedAt = System.currentTimeMillis();
+        log.debug("BackfillRunningProgressJob started");
+        try {
+            List<SyncStatus> running = syncStatusRepository.findByStatusIn(Set.of(SyncStatus.SyncStatusValue.RUNNING));
+            int updated = 0;
+            for (SyncStatus sync : running) {
+                if (sync.getId() == null || sync.getWalletAddress() == null || sync.getNetworkId() == null) {
+                    continue;
+                }
+                if (!backfillSegmentRepository.existsBySyncStatusId(sync.getId())) {
+                    continue;
+                }
+                List<BackfillSegment> segments = backfillSegmentRepository.findBySyncStatusIdOrderBySegmentIndexAsc(sync.getId());
+                if (segments.isEmpty()) {
+                    continue;
+                }
 
-            int progressPct = averageSegmentProgressPct(segments);
-            long total = segments.size();
-            long complete = segments.stream().filter(s -> s.getStatus() == BackfillSegment.SegmentStatus.COMPLETE).count();
-            Long lastBlock = segments.stream()
-                    .filter(s -> s.getStatus() == BackfillSegment.SegmentStatus.COMPLETE)
-                    .map(BackfillSegment::getToBlock)
-                    .max(Comparator.naturalOrder())
-                    .orElse(null);
+                int progressPct = averageSegmentProgressPct(segments);
+                long total = segments.size();
+                long complete = segments.stream().filter(s -> s.getStatus() == BackfillSegment.SegmentStatus.COMPLETE).count();
+                Long lastBlock = segments.stream()
+                        .filter(s -> s.getStatus() == BackfillSegment.SegmentStatus.COMPLETE)
+                        .map(BackfillSegment::getToBlock)
+                        .max(Comparator.naturalOrder())
+                        .orElse(null);
 
-            syncProgressTracker.setRunning(
-                    sync.getWalletAddress(),
-                    sync.getNetworkId(),
-                    progressPct,
-                    lastBlock,
-                    "Raw fetch " + sync.getNetworkId() + ": " + complete + "/" + total + " segments complete"
-            );
+                syncProgressTracker.setRunning(
+                        sync.getWalletAddress(),
+                        sync.getNetworkId(),
+                        progressPct,
+                        lastBlock,
+                        "Raw fetch " + sync.getNetworkId() + ": " + complete + "/" + total + " segments complete"
+                );
+                updated++;
+            }
+            log.debug("BackfillRunningProgressJob finished: runningSyncs={}, updated={}, durationMs={}",
+                    running.size(), updated, System.currentTimeMillis() - startedAt);
+        } catch (Exception e) {
+            log.error("BackfillRunningProgressJob failed: durationMs={}", System.currentTimeMillis() - startedAt, e);
+            throw e;
         }
     }
 

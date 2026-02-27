@@ -35,6 +35,7 @@ public class RecalcJobService {
     @EventListener
     @Async("recalc-executor")
     public void onOverrideSaved(OverrideSavedEvent event) {
+        long startedAt = System.currentTimeMillis();
         String jobId = event.getJobId();
         RecalcJob job = recalcJobRepository.findById(jobId).orElse(null);
         if (job == null) {
@@ -48,6 +49,7 @@ public class RecalcJobService {
 
         job.setStatus(RecalcJob.RecalcStatus.RUNNING);
         recalcJobRepository.save(job);
+        log.info("RecalcJob {} started", jobId);
 
         String walletAddress = job.getWalletAddress();
         String networkIdStr = job.getNetworkId();
@@ -72,9 +74,11 @@ public class RecalcJobService {
             job.setNewPerWalletAvco(newAvco);
             recalcJobRepository.save(job);
             applicationEventPublisher.publishEvent(new RecalcCompleteEvent(this, jobId, "COMPLETE"));
-            log.info("RecalcJob {} COMPLETE for {} / {} / {}", jobId, walletAddress, networkIdStr, assetContract);
+            log.info("RecalcJob {} COMPLETE for {} / {} / {}: durationMs={}",
+                    jobId, walletAddress, networkIdStr, assetContract, System.currentTimeMillis() - startedAt);
         } catch (Exception e) {
-            log.error("RecalcJob {} failed: {}", jobId, e.getMessage(), e);
+            log.error("RecalcJob {} failed: durationMs={}, message={}",
+                    jobId, System.currentTimeMillis() - startedAt, e.getMessage(), e);
             markFailed(job, e.getMessage());
             applicationEventPublisher.publishEvent(new RecalcCompleteEvent(this, jobId, "FAILED"));
         }
@@ -90,8 +94,16 @@ public class RecalcJobService {
     /** Optional TTL cleanup: delete COMPLETE/FAILED jobs older than 24h. Runs every hour. */
     @Scheduled(fixedRate = 3600_000)
     public void deleteExpiredJobs() {
-        Instant cutoff = Instant.now().minusSeconds(24 * 3600);
-        recalcJobRepository.deleteByStatusInAndCompletedAtBefore(
-                Set.of(RecalcJob.RecalcStatus.COMPLETE, RecalcJob.RecalcStatus.FAILED), cutoff);
+        long startedAt = System.currentTimeMillis();
+        log.info("RecalcJobCleanupJob started");
+        try {
+            Instant cutoff = Instant.now().minusSeconds(24 * 3600);
+            recalcJobRepository.deleteByStatusInAndCompletedAtBefore(
+                    Set.of(RecalcJob.RecalcStatus.COMPLETE, RecalcJob.RecalcStatus.FAILED), cutoff);
+            log.info("RecalcJobCleanupJob finished: cutoff={}, durationMs={}", cutoff, System.currentTimeMillis() - startedAt);
+        } catch (Exception e) {
+            log.error("RecalcJobCleanupJob failed: durationMs={}", System.currentTimeMillis() - startedAt, e);
+            throw e;
+        }
     }
 }

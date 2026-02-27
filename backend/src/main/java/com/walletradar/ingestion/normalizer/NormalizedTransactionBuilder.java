@@ -74,7 +74,7 @@ public class NormalizedTransactionBuilder {
             return NormalizedLegRole.TRANSFER;
         }
         return switch (raw.getEventType()) {
-            case INTERNAL_TRANSFER, EXTERNAL_TRANSFER_OUT, EXTERNAL_INBOUND -> NormalizedLegRole.TRANSFER;
+            case EXTERNAL_TRANSFER_OUT, EXTERNAL_INBOUND -> NormalizedLegRole.TRANSFER;
             default -> {
                 BigDecimal qty = raw.getQuantityDelta() != null ? raw.getQuantityDelta() : BigDecimal.ZERO;
                 if (qty.signum() > 0) {
@@ -116,7 +116,6 @@ public class NormalizedTransactionBuilder {
     private static NormalizedTransactionType mapType(com.walletradar.domain.EconomicEventType type) {
         return switch (type) {
             case SWAP_BUY, SWAP_SELL -> NormalizedTransactionType.SWAP;
-            case INTERNAL_TRANSFER -> NormalizedTransactionType.INTERNAL_TRANSFER;
             case STAKE_DEPOSIT -> NormalizedTransactionType.STAKE_DEPOSIT;
             case STAKE_WITHDRAWAL -> NormalizedTransactionType.STAKE_WITHDRAWAL;
             case LP_ENTRY -> NormalizedTransactionType.LP_ENTRY;

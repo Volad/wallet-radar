@@ -349,8 +349,7 @@ public class AvcoEngine {
                 || type == NormalizedTransactionType.STAKE_WITHDRAWAL
                 || type == NormalizedTransactionType.LEND_WITHDRAWAL
                 || type == NormalizedTransactionType.EXTERNAL_INBOUND
-                || type == NormalizedTransactionType.MANUAL_COMPENSATING
-                || type == NormalizedTransactionType.INTERNAL_TRANSFER;
+                || type == NormalizedTransactionType.MANUAL_COMPENSATING;
     }
 
     private static boolean isNormalizedOutflow(BigDecimal qtyDelta) {

@@ -48,24 +48,21 @@ class CrossWalletAvcoAggregatorServiceTest {
     }
 
     @Test
-    @DisplayName("multi-wallet merged timeline: INTERNAL_TRANSFER excluded, AVCO correct")
-    void multiWallet_excludesInternalTransfer() {
+    @DisplayName("multi-wallet merged timeline: AVCO correct")
+    void multiWallet() {
         EconomicEvent buyA = event("0xA", Instant.parse("2025-01-01T10:00:00Z"), EconomicEventType.SWAP_BUY,
                 new BigDecimal("2"), new BigDecimal("1000"));
         EconomicEvent buyB = event("0xB", Instant.parse("2025-01-02T10:00:00Z"), EconomicEventType.SWAP_BUY,
                 new BigDecimal("1"), new BigDecimal("1500"));
-        EconomicEvent internal = event("0xA", Instant.parse("2025-01-03T10:00:00Z"), EconomicEventType.INTERNAL_TRANSFER,
-                new BigDecimal("-1"), new BigDecimal("1000"));
-        internal.setQuantityDelta(new BigDecimal("-1"));
         EconomicEvent sellB = event("0xB", Instant.parse("2025-01-04T10:00:00Z"), EconomicEventType.SWAP_SELL,
                 new BigDecimal("-1"), new BigDecimal("2000"));
 
         when(economicEventRepository.findByWalletAddressInAndAssetSymbolOrderByBlockTimestampAsc(
-                List.of("0xA", "0xB"), "ETH")).thenReturn(List.of(buyA, buyB, internal, sellB));
+                List.of("0xA", "0xB"), "ETH")).thenReturn(List.of(buyA, buyB, sellB));
 
         CrossWalletAvcoResult result = service.compute(List.of("0xA", "0xB"), "ETH");
 
-        // Exclude INTERNAL_TRANSFER: timeline is buy 2@1000, buy 1@1500, sell 1@2000. AVCO = (2*1000+1*1500)/3 = 1166.67, qty after = 2
+        // Timeline is buy 2@1000, buy 1@1500, sell 1@2000. AVCO = (2*1000+1*1500)/3 = 1166.67, qty after = 2
         assertThat(result.getCrossWalletAvco()).isEqualByComparingTo("1166.666666666666666667");
         assertThat(result.getQuantity()).isEqualByComparingTo("2");
     }

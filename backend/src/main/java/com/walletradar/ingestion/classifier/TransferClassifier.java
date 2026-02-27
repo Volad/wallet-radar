@@ -20,8 +20,7 @@ import java.util.Set;
 /**
  * Classifies ERC20 Transfer logs. Emits EXTERNAL_TRANSFER_OUT for sends, EXTERNAL_INBOUND for receives.
  * When exactly one distinct asset flows out and exactly one distinct asset flows in (different assets),
- * emits SWAP_SELL and SWAP_BUY instead (heuristic swap, ADR-019). InternalTransferDetector later
- * reclassifies EXTERNAL_INBOUND to INTERNAL_TRANSFER when counterparty is in session.
+ * emits SWAP_SELL and SWAP_BUY instead (heuristic swap, ADR-019).
  * Uses token decimals (e.g. WBTC=8, USDC=6) so quantityDelta is correct.
  * TODO: Protocol precedence — do not apply heuristic when tx has BORROW/REPAY/LEND_* etc. (follow-up).
  */

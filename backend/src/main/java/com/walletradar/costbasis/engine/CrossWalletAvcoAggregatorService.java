@@ -20,7 +20,7 @@ import java.util.stream.Collectors;
 
 /**
  * On-request cross-wallet AVCO aggregation (T-016). Loads events for asset across wallets, sorts by blockTimestamp ASC,
- * excludes INTERNAL_TRANSFER, runs AVCO on merged timeline. Applies active cost_basis_overrides per AC-06 (same as AvcoEngine).
+ * runs AVCO on merged timeline. Applies active cost_basis_overrides per AC-06 (same as AvcoEngine).
  * Never persists (INV-04). Cached per (sorted wallets, assetSymbol), TTL 5min.
  */
 @Service
@@ -47,7 +47,7 @@ public class CrossWalletAvcoAggregatorService {
     }
 
     /**
-     * Compute cross-wallet AVCO (and quantity) for the given wallets and asset. INTERNAL_TRANSFER excluded (AC-05).
+     * Compute cross-wallet AVCO (and quantity) for the given wallets and asset.
      * Result is never persisted. Cached 5min per (sorted wallets, assetSymbol).
      */
     @Cacheable(cacheNames = "crossWalletAvcoCache",
@@ -58,11 +58,8 @@ public class CrossWalletAvcoAggregatorService {
         }
         List<EconomicEvent> events = economicEventRepository
                 .findByWalletAddressInAndAssetSymbolOrderByBlockTimestampAsc(wallets, assetSymbol);
-        List<EconomicEvent> filtered = events.stream()
-                .filter(e -> e.getEventType() != EconomicEventType.INTERNAL_TRANSFER)
-                .collect(Collectors.toList());
 
-        List<String> onChainEventIds = filtered.stream()
+        List<String> onChainEventIds = events.stream()
                 .filter(e -> e.getTxHash() != null && e.getId() != null)
                 .map(EconomicEvent::getId)
                 .distinct()
@@ -78,7 +75,7 @@ public class CrossWalletAvcoAggregatorService {
         BigDecimal quantity = BigDecimal.ZERO;
         BigDecimal avco = BigDecimal.ZERO;
 
-        for (EconomicEvent event : filtered) {
+        for (EconomicEvent event : events) {
             BigDecimal qtyDelta = event.getQuantityDelta() != null ? event.getQuantityDelta() : BigDecimal.ZERO;
             BigDecimal effectivePrice = effectivePrice(event, overridePrices);
             EconomicEventType type = event.getEventType();

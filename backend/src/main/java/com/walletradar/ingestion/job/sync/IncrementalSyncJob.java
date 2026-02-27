@@ -19,6 +19,14 @@ public class IncrementalSyncJob {
 
     // @Scheduled(fixedDelay = 3_600_000) — uncomment when implemented
     public void run() {
-        log.debug("IncrementalSyncJob: not yet implemented (T-010)");
+        long startedAt = System.currentTimeMillis();
+        log.info("IncrementalSyncJob started");
+        try {
+            log.debug("IncrementalSyncJob: not yet implemented (T-010)");
+            log.info("IncrementalSyncJob finished: durationMs={}", System.currentTimeMillis() - startedAt);
+        } catch (Exception e) {
+            log.error("IncrementalSyncJob failed: durationMs={}", System.currentTimeMillis() - startedAt, e);
+            throw e;
+        }
     }
 }

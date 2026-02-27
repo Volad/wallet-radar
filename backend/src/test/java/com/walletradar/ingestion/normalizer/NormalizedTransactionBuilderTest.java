@@ -62,25 +62,6 @@ class NormalizedTransactionBuilderTest {
     }
 
     @Test
-    @DisplayName("builds internal transfer for INTERNAL_TRANSFER classifier output")
-    void buildsInternalTransfer() {
-        RawClassifiedEvent inbound = raw(EconomicEventType.INTERNAL_TRANSFER, "0xweth", "WETH", new BigDecimal("1"));
-        RawClassifiedEvent outbound = raw(EconomicEventType.INTERNAL_TRANSFER, "0xweth", "WETH", new BigDecimal("-1"));
-
-        NormalizedTransaction tx = builder.build(
-                "0xtx3",
-                NetworkId.ARBITRUM,
-                "0xwallet",
-                Instant.parse("2025-11-01T00:00:00Z"),
-                List.of(inbound, outbound)
-        );
-
-        assertThat(tx.getType()).isEqualTo(NormalizedTransactionType.INTERNAL_TRANSFER);
-        assertThat(tx.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
-        assertThat(tx.getLegs()).allSatisfy(leg -> assertThat(leg.getRole()).isEqualTo(NormalizedLegRole.TRANSFER));
-    }
-
-    @Test
     @DisplayName("swap missing inbound leg goes to PENDING_CLARIFICATION")
     void swapMissingLegPendingClarification() {
         RawClassifiedEvent sellOnly = raw(EconomicEventType.SWAP_SELL, "0xwstusr", "wstUSR", new BigDecimal("-1914.54"));

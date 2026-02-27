@@ -128,11 +128,11 @@ walletradar:
     # Clarification stage for normalized transactions (PENDING_CLARIFICATION).
     clarification:
       schedule-interval-ms: 120000
-      max-retries: 3
+      max-retries: 10
     # Pricing stage for normalized transactions (PENDING_PRICE).
     normalized-pricing:
       schedule-interval-ms: 120000
-      max-retries: 3
+      max-retries: 10
     # Final consistency stage for normalized transactions (PENDING_STAT).
     normalized-stat:
       schedule-interval-ms: 120000

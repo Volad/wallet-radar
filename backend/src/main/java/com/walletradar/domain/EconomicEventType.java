@@ -6,7 +6,6 @@ package com.walletradar.domain;
 public enum EconomicEventType {
     SWAP_BUY,
     SWAP_SELL,
-    INTERNAL_TRANSFER,
     STAKE_DEPOSIT,
     STAKE_WITHDRAWAL,
     LP_ENTRY,
@@ -16,7 +15,7 @@ public enum EconomicEventType {
     BORROW,
     REPAY,
     EXTERNAL_TRANSFER_OUT,
-    /** Inbound transfer from address not in session; may be reclassified to INTERNAL_TRANSFER when sender is added. */
+    /** Inbound transfer from external address. */
     EXTERNAL_INBOUND,
     MANUAL_COMPENSATING
 }

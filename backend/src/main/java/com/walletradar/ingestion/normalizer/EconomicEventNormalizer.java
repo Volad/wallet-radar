@@ -56,7 +56,7 @@ public class EconomicEventNormalizer {
         e.setFlagCode(raw.getFlagCode());
         e.setFlagResolved(false);
         e.setCounterpartyAddress(raw.getCounterpartyAddress());
-        e.setInternalTransfer(raw.getEventType() == EconomicEventType.INTERNAL_TRANSFER);
+        e.setInternalTransfer(false);
         e.setProtocolName(raw.getProtocolName());
         e.setLogIndex(raw.getLogIndex());
         e.setClientId(null);

@@ -20,8 +20,7 @@ public final class AvcoEventTypeHelper {
                 || type == EconomicEventType.STAKE_WITHDRAWAL
                 || type == EconomicEventType.LEND_WITHDRAWAL
                 || type == EconomicEventType.EXTERNAL_INBOUND
-                || type == EconomicEventType.MANUAL_COMPENSATING
-                || type == EconomicEventType.INTERNAL_TRANSFER; // dest: positive delta, use priceUsd as source AVCO
+                || type == EconomicEventType.MANUAL_COMPENSATING;
     }
 
     /** Events that decrease quantity and generate realised P&amp;L (INV-07). */
@@ -35,16 +34,12 @@ public final class AvcoEventTypeHelper {
         return type == EconomicEventType.STAKE_DEPOSIT
                 || type == EconomicEventType.LEND_DEPOSIT
                 || type == EconomicEventType.REPAY
-                || type == EconomicEventType.EXTERNAL_TRANSFER_OUT
-                || (type == EconomicEventType.INTERNAL_TRANSFER); // source: negative delta
+                || type == EconomicEventType.EXTERNAL_TRANSFER_OUT;
     }
 
     /** Positive quantity delta (inflow) for this event in AVCO. */
     public static boolean isInflow(EconomicEventType type, BigDecimal quantityDelta) {
         if (quantityDelta == null) return false;
-        if (type == EconomicEventType.INTERNAL_TRANSFER) {
-            return quantityDelta.compareTo(BigDecimal.ZERO) > 0;
-        }
         if (type == EconomicEventType.MANUAL_COMPENSATING) {
             return quantityDelta.compareTo(BigDecimal.ZERO) > 0;
         }

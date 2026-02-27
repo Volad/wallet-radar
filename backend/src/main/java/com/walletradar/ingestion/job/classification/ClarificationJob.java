@@ -34,10 +34,21 @@ public class ClarificationJob {
 
     @Scheduled(fixedDelayString = "${walletradar.ingestion.clarification.schedule-interval-ms:120000}")
     public void runScheduled() {
-        List<NormalizedTransaction> pending = normalizedTransactionRepository
-                .findByStatusOrderByBlockTimestampAsc(NormalizedTransactionStatus.PENDING_CLARIFICATION);
-        for (NormalizedTransaction tx : pending) {
-            clarifyOne(tx);
+        long startedAt = System.currentTimeMillis();
+        log.info("ClarificationJob started");
+        try {
+            List<NormalizedTransaction> pending = normalizedTransactionRepository
+                    .findByStatusOrderByBlockTimestampAsc(NormalizedTransactionStatus.PENDING_CLARIFICATION);
+            int processed = 0;
+            for (NormalizedTransaction tx : pending) {
+                clarifyOne(tx);
+                processed++;
+            }
+            log.info("ClarificationJob finished: pending={}, processed={}, durationMs={}",
+                    pending.size(), processed, System.currentTimeMillis() - startedAt);
+        } catch (Exception e) {
+            log.error("ClarificationJob failed: durationMs={}", System.currentTimeMillis() - startedAt, e);
+            throw e;
         }
     }
 

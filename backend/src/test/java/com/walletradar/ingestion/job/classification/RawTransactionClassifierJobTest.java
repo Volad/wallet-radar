@@ -4,8 +4,6 @@ import com.walletradar.domain.ClassificationStatus;
 import com.walletradar.domain.NetworkId;
 import com.walletradar.domain.RawTransaction;
 import com.walletradar.domain.RawTransactionRepository;
-import com.walletradar.domain.SyncStatus;
-import com.walletradar.domain.SyncStatusRepository;
 import com.walletradar.ingestion.adapter.BlockTimestampResolver;
 import com.walletradar.ingestion.config.ClassifierProperties;
 import com.walletradar.ingestion.config.IngestionNetworkProperties;
@@ -17,7 +15,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.data.domain.PageRequest;
 
 import java.time.Instant;
 import java.util.List;
@@ -35,7 +32,6 @@ import static org.mockito.Mockito.when;
 class RawTransactionClassifierJobTest {
 
     @Mock private RawTransactionRepository rawTransactionRepository;
-    @Mock private SyncStatusRepository syncStatusRepository;
     @Mock private ClassificationProcessor classificationProcessor;
     @Mock private ClassifierProperties classifierProperties;
     @Mock private IngestionNetworkProperties ingestionNetworkProperties;
@@ -54,7 +50,6 @@ class RawTransactionClassifierJobTest {
         };
         job = new RawTransactionClassifierJob(
                 rawTransactionRepository,
-                syncStatusRepository,
                 classificationProcessor,
                 classifierProperties,
                 ingestionNetworkProperties,
@@ -64,33 +59,27 @@ class RawTransactionClassifierJobTest {
     }
 
     @Test
-    @DisplayName("does nothing when no sync_status with rawFetchComplete")
-    void noWorkWhenNoRawFetchComplete() {
-        when(syncStatusRepository.findAll()).thenReturn(List.of());
+    @DisplayName("does nothing when no pending raw transactions")
+    void noWorkWhenNoPendingRawTransactions() {
+        when(rawTransactionRepository.findByClassificationStatus(eq(ClassificationStatus.PENDING), any()))
+                .thenReturn(List.of());
 
         job.runClassification();
 
-        verify(rawTransactionRepository, never()).findByWalletAddressAndNetworkIdAndClassificationStatusOrderByBlockNumberAsc(anyString(), anyString(), any(), any(PageRequest.class));
+        verify(classificationProcessor, never()).processBatch(any(), anyString(), any(), any(), any(), any());
     }
 
     @Test
     @DisplayName("processes PENDING raw and calls processBatch")
     void processesPendingAndCallsProcessBatch() {
-        SyncStatus syncStatus = new SyncStatus();
-        syncStatus.setWalletAddress("0xWALLET");
-        syncStatus.setNetworkId("ETHEREUM");
-        syncStatus.setRawFetchComplete(true);
-        when(syncStatusRepository.findAll()).thenReturn(List.of(syncStatus));
-
         RawTransaction raw = new RawTransaction();
         raw.setTxHash("0xabc");
         raw.setWalletAddress("0xWALLET");
         raw.setNetworkId("ETHEREUM");
         raw.setBlockNumber(100L);
         raw.setClassificationStatus(ClassificationStatus.PENDING);
-        when(rawTransactionRepository.findByWalletAddressAndNetworkIdAndClassificationStatusOrderByBlockNumberAsc(
-                eq("0xWALLET"), eq("ETHEREUM"), eq(ClassificationStatus.PENDING), any(PageRequest.class)))
-                .thenReturn(List.of(raw));
+        when(rawTransactionRepository.findByClassificationStatus(eq(ClassificationStatus.PENDING), any()))
+                .thenReturn(List.of(raw), List.of());
 
         var networkEntry = new IngestionNetworkProperties.NetworkIngestionEntry();
         networkEntry.setAvgBlockTimeSeconds(12.0);
@@ -104,7 +93,6 @@ class RawTransactionClassifierJobTest {
                 eq(NetworkId.ETHEREUM),
                 any(),
                 any(),
-                any(),
                 any()
         );
     }
@@ -112,17 +100,11 @@ class RawTransactionClassifierJobTest {
     @Test
     @DisplayName("skips when PENDING list is empty for wallet×network")
     void skipsWhenNoPending() {
-        SyncStatus syncStatus = new SyncStatus();
-        syncStatus.setWalletAddress("0xWALLET");
-        syncStatus.setNetworkId("ETHEREUM");
-        syncStatus.setRawFetchComplete(true);
-        when(syncStatusRepository.findAll()).thenReturn(List.of(syncStatus));
-        when(rawTransactionRepository.findByWalletAddressAndNetworkIdAndClassificationStatusOrderByBlockNumberAsc(
-                anyString(), anyString(), eq(ClassificationStatus.PENDING), any(PageRequest.class)))
+        when(rawTransactionRepository.findByClassificationStatus(eq(ClassificationStatus.PENDING), any()))
                 .thenReturn(List.of());
 
         job.runClassification();
 
-        verify(classificationProcessor, never()).processBatch(any(), anyString(), any(), any(), any(), any(), any());
+        verify(classificationProcessor, never()).processBatch(any(), anyString(), any(), any(), any(), any());
     }
 }

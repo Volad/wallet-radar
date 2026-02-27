@@ -5,8 +5,6 @@ import com.walletradar.domain.NetworkId;
 import com.walletradar.domain.RawFetchCompleteEvent;
 import com.walletradar.domain.RawTransaction;
 import com.walletradar.domain.RawTransactionRepository;
-import com.walletradar.domain.SyncStatus;
-import com.walletradar.domain.SyncStatusRepository;
 import com.walletradar.ingestion.adapter.BlockTimestampResolver;
 import com.walletradar.ingestion.adapter.evm.EstimatingBlockTimestampResolver;
 import com.walletradar.ingestion.config.ClassifierProperties;
@@ -17,14 +15,16 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.event.EventListener;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
@@ -50,7 +50,6 @@ public class RawTransactionClassifierJob {
     );
 
     private final RawTransactionRepository rawTransactionRepository;
-    private final SyncStatusRepository syncStatusRepository;
     private final ClassificationProcessor classificationProcessor;
     private final ClassifierProperties classifierProperties;
     private final IngestionNetworkProperties ingestionNetworkProperties;
@@ -58,91 +57,132 @@ public class RawTransactionClassifierJob {
 
     @Scheduled(fixedDelayString = "${walletradar.ingestion.classifier.schedule-interval-ms:90000}")
     public void runScheduled() {
-        log.debug("Classifier scheduled run triggered");
-        runClassification();
+        runClassification("scheduled");
     }
 
     @EventListener
     public void onRawFetchComplete(RawFetchCompleteEvent event) {
         log.info("Classifier triggered by RawFetchCompleteEvent for {} on {}", event.walletAddress(), event.networkId());
-        runClassification();
+        runClassification("event");
     }
 
     public void runClassification() {
-        Set<String> sessionWallets = syncStatusRepository.findAll().stream()
-                .map(SyncStatus::getWalletAddress)
-                .filter(a -> a != null && !a.isBlank())
-                .collect(Collectors.toSet());
+        runClassification("manual");
+    }
 
-        List<SyncStatus> withRawComplete = syncStatusRepository.findAll().stream()
-                .filter(s -> s.getWalletAddress() != null && s.getNetworkId() != null)
-                .toList();
-
-        if (withRawComplete.isEmpty()) {
-            log.debug("Classifier: no sync_status with rawFetchComplete, skipping");
-            return;
-        }
-
-        int batchSize = Math.max(100, classifierProperties.getBatchSize());
+    private void runClassification(String trigger) {
+        long startedAt = System.currentTimeMillis();
         int processed = 0;
-        log.debug("Classifier run: {} wallet×network pair(s) with rawFetchComplete, batchSize={}", withRawComplete.size(), batchSize);
+        int pairs = 0;
+        boolean failed = false;
+        log.info("RawTransactionClassifierJob started: trigger={}", trigger);
+        try {
+            int batchSize = Math.max(100, classifierProperties.getBatchSize());
+            int loops = 0;
 
-        for (SyncStatus s : withRawComplete) {
-            String walletAddress = s.getWalletAddress();
-            String networkIdStr = s.getNetworkId();
-            NetworkId networkId;
-            try {
-                networkId = NetworkId.valueOf(networkIdStr);
-            } catch (IllegalArgumentException e) {
-                continue;
-            }
-
-            List<RawTransaction> pending = networkId == NetworkId.SOLANA
-                    ? rawTransactionRepository.findByWalletAddressAndNetworkIdAndClassificationStatusOrderBySlotAsc(
-                    walletAddress, networkIdStr, ClassificationStatus.PENDING, PageRequest.of(0, batchSize))
-                    : rawTransactionRepository.findByWalletAddressAndNetworkIdAndClassificationStatusOrderByBlockNumberAsc(
-                    walletAddress, networkIdStr, ClassificationStatus.PENDING, PageRequest.of(0, batchSize));
-
-            if (pending.isEmpty()) continue;
-
-            log.info("Classifier processing {} PENDING raw for {} on {}", pending.size(), walletAddress, networkIdStr);
-
-            EstimatingBlockTimestampResolver estimator = null;
-            if (networkId != NetworkId.SOLANA) {
-                BlockTimestampResolver timestampResolver = findBlockTimestampResolver(networkId);
-                if (timestampResolver != null) {
-                    estimator = new EstimatingBlockTimestampResolver();
-                    long fromBlock = pending.stream()
-                            .map(r -> r.getBlockNumber() != null ? r.getBlockNumber() : ClassificationProcessor.getBlockNumberFromRaw(r))
-                            .filter(b -> b != null)
-                            .mapToLong(Long::longValue)
-                            .min()
-                            .orElse(0);
-                    long toBlock = pending.stream()
-                            .map(r -> r.getBlockNumber() != null ? r.getBlockNumber() : ClassificationProcessor.getBlockNumberFromRaw(r))
-                            .filter(b -> b != null)
-                            .mapToLong(Long::longValue)
-                            .max()
-                            .orElse(fromBlock);
-                    if (fromBlock <= toBlock) {
-                        double fallback = getFallbackAvgBlockTime(networkIdStr);
-                        estimator.calibrate(networkId, fromBlock, toBlock, timestampResolver, fallback);
+            while (true) {
+                List<RawTransaction> pendingBatch = rawTransactionRepository.findByClassificationStatus(
+                        ClassificationStatus.PENDING,
+                        PageRequest.of(0, batchSize, Sort.by(Sort.Direction.ASC, "createdAt"))
+                );
+                if (pendingBatch.isEmpty()) {
+                    if (loops == 0) {
+                        log.debug("Classifier: no PENDING raw transactions, skipping");
                     }
+                    break;
+                }
+                loops++;
+
+                List<RawTransaction> invalid = pendingBatch.stream()
+                        .filter(tx -> tx.getWalletAddress() == null || tx.getWalletAddress().isBlank()
+                                || tx.getNetworkId() == null || tx.getNetworkId().isBlank())
+                        .toList();
+                for (RawTransaction tx : invalid) {
+                    tx.setClassificationStatus(ClassificationStatus.FAILED);
+                    rawTransactionRepository.save(tx);
+                }
+
+                Map<String, List<RawTransaction>> grouped = pendingBatch.stream()
+                        .filter(tx -> tx.getWalletAddress() != null && !tx.getWalletAddress().isBlank())
+                        .filter(tx -> tx.getNetworkId() != null && !tx.getNetworkId().isBlank())
+                        .collect(Collectors.groupingBy(
+                                tx -> tx.getWalletAddress() + "|" + tx.getNetworkId(),
+                                LinkedHashMap::new,
+                                Collectors.toList()
+                        ));
+                pairs += grouped.size();
+
+                for (List<RawTransaction> pending : grouped.values()) {
+                    RawTransaction first = pending.get(0);
+                    String walletAddress = first.getWalletAddress();
+                    String networkIdStr = first.getNetworkId();
+                    NetworkId networkId;
+                    try {
+                        networkId = NetworkId.valueOf(networkIdStr);
+                    } catch (IllegalArgumentException e) {
+                        for (RawTransaction tx : pending) {
+                            tx.setClassificationStatus(ClassificationStatus.FAILED);
+                            rawTransactionRepository.save(tx);
+                        }
+                        continue;
+                    }
+
+                    if (networkId == NetworkId.SOLANA) {
+                        pending.sort(Comparator.comparing(
+                                RawTransaction::getSlot,
+                                Comparator.nullsLast(Long::compareTo)
+                        ));
+                    } else {
+                        pending.sort(Comparator.comparing(
+                                tx -> tx.getBlockNumber() != null ? tx.getBlockNumber() : ClassificationProcessor.getBlockNumberFromRaw(tx),
+                                Comparator.nullsLast(Long::compareTo)
+                        ));
+                    }
+
+                    log.info("Classifier processing {} PENDING raw for {} on {}", pending.size(), walletAddress, networkIdStr);
+
+                    EstimatingBlockTimestampResolver estimator = null;
+                    if (networkId != NetworkId.SOLANA) {
+                        BlockTimestampResolver timestampResolver = findBlockTimestampResolver(networkId);
+                        if (timestampResolver != null) {
+                            estimator = new EstimatingBlockTimestampResolver();
+                            long fromBlock = pending.stream()
+                                    .map(r -> r.getBlockNumber() != null ? r.getBlockNumber() : ClassificationProcessor.getBlockNumberFromRaw(r))
+                                    .filter(b -> b != null)
+                                    .mapToLong(Long::longValue)
+                                    .min()
+                                    .orElse(0);
+                            long toBlock = pending.stream()
+                                    .map(r -> r.getBlockNumber() != null ? r.getBlockNumber() : ClassificationProcessor.getBlockNumberFromRaw(r))
+                                    .filter(b -> b != null)
+                                    .mapToLong(Long::longValue)
+                                    .max()
+                                    .orElse(fromBlock);
+                            if (fromBlock <= toBlock) {
+                                double fallback = getFallbackAvgBlockTime(networkIdStr);
+                                estimator.calibrate(networkId, fromBlock, toBlock, timestampResolver, fallback);
+                            }
+                        }
+                    }
+
+                    Map<LocalDate, BigDecimal> nativePriceCache = new ConcurrentHashMap<>();
+                    String nativeContract = NATIVE_TOKEN_ADDRESS.get(networkId);
+
+                    classificationProcessor.processBatch(pending, walletAddress, networkId,
+                            estimator, nativePriceCache, nativeContract);
+
+                    processed += pending.size();
+                    log.debug("Classifier batch complete for {} on {}: {} raw classified", walletAddress, networkIdStr, pending.size());
                 }
             }
-
-            Map<LocalDate, BigDecimal> nativePriceCache = new ConcurrentHashMap<>();
-            String nativeContract = NATIVE_TOKEN_ADDRESS.get(networkId);
-
-            classificationProcessor.processBatch(pending, walletAddress, networkId,
-                    estimator, nativePriceCache, nativeContract, sessionWallets);
-
-            processed += pending.size();
-            log.debug("Classifier batch complete for {} on {}: {} raw classified", walletAddress, networkIdStr, pending.size());
-        }
-
-        if (processed > 0) {
-            log.info("Classifier run complete: {} raw transaction(s) processed across {} wallet×network pair(s)", processed, withRawComplete.size());
+        } catch (Exception e) {
+            failed = true;
+            log.error("RawTransactionClassifierJob failed: trigger={}, processed={}, durationMs={}",
+                    trigger, processed, System.currentTimeMillis() - startedAt, e);
+            throw e;
+        } finally {
+            log.info("RawTransactionClassifierJob finished: trigger={}, status={}, processed={}, walletNetworkPairs={}, durationMs={}",
+                    trigger, failed ? "FAILED" : "OK", processed, pairs, System.currentTimeMillis() - startedAt);
         }
     }
 

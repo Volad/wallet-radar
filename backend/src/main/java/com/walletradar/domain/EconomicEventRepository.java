@@ -17,9 +17,6 @@ public interface EconomicEventRepository extends MongoRepository<EconomicEvent, 
 
     Optional<EconomicEvent> findByClientId(String clientId);
 
-    /** For InternalTransferReclassifier: find EXTERNAL_INBOUND events whose counterparty is in the given list. */
-    List<EconomicEvent> findByEventTypeAndCounterpartyAddressIn(EconomicEventType eventType, List<String> counterpartyAddresses);
-
     /** For AvcoEngine: load events for (wallet, network, asset) in blockTimestamp ASC (INV-01). Includes MANUAL_COMPENSATING. */
     List<EconomicEvent> findByWalletAddressAndNetworkIdAndAssetContractOrderByBlockTimestampAsc(
             String walletAddress, NetworkId networkId, String assetContract);

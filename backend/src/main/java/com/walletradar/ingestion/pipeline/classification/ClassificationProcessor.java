@@ -28,7 +28,6 @@ import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 /**
  * Phase 2 (ADR-020, ADR-021): Read raw_transactions → classify → normalize → inline swap price → PRICE_PENDING → upsert.
@@ -55,8 +54,7 @@ public class ClassificationProcessor {
      */
     public void processBatch(List<RawTransaction> rawList, String walletAddress, NetworkId networkId,
                             EstimatingBlockTimestampResolver estimator,
-                            Map<LocalDate, BigDecimal> nativePriceCache, String nativeContract,
-                            Set<String> sessionWallets) {
+                            Map<LocalDate, BigDecimal> nativePriceCache, String nativeContract) {
         for (RawTransaction tx : rawList) {
             try {
                 Instant blockTs = resolveBlockTimestamp(tx, networkId, estimator);
@@ -66,7 +64,7 @@ public class ClassificationProcessor {
                     continue;
                 }
                 BigDecimal nativePriceUsd = resolveNativePrice(nativeContract, networkId, blockTs, nativePriceCache);
-                List<RawClassifiedEvent> rawEvents = txClassifierDispatcher.classify(tx, walletAddress, sessionWallets);
+                List<RawClassifiedEvent> rawEvents = txClassifierDispatcher.classify(tx, walletAddress);
                 NormalizedTransaction normalizedTransaction = normalizedTransactionBuilder.build(
                         tx.getTxHash(), networkId, walletAddress, blockTs, rawEvents);
                 idempotentNormalizedTransactionStore.upsert(normalizedTransaction);

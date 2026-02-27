@@ -5,7 +5,6 @@ package com.walletradar.domain;
  */
 public enum NormalizedTransactionType {
     SWAP,
-    INTERNAL_TRANSFER,
     STAKE_DEPOSIT,
     STAKE_WITHDRAWAL,
     LP_ENTRY,

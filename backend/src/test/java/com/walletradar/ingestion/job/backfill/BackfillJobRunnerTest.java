@@ -7,7 +7,6 @@ import com.walletradar.domain.SyncStatusRepository;
 import com.walletradar.ingestion.adapter.BlockHeightResolver;
 import com.walletradar.ingestion.adapter.BlockTimestampResolver;
 import com.walletradar.ingestion.adapter.NetworkAdapter;
-import com.walletradar.ingestion.classifier.InternalTransferReclassifier;
 import com.walletradar.ingestion.config.BackfillProperties;
 import com.walletradar.ingestion.sync.progress.SyncProgressTracker;
 import org.junit.jupiter.api.BeforeEach;
@@ -19,7 +18,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
-import org.springframework.context.ApplicationEventPublisher;
 
 import java.util.List;
 import java.util.Set;
@@ -41,8 +39,6 @@ class BackfillJobRunnerTest {
     @Mock private BackfillNetworkExecutor backfillNetworkExecutor;
     @Mock private BackfillProperties backfillProperties;
     @Mock private SyncProgressTracker syncProgressTracker;
-    @Mock private InternalTransferReclassifier internalTransferReclassifier;
-    @Mock private ApplicationEventPublisher applicationEventPublisher;
     @Mock private SyncStatusRepository syncStatusRepository;
     @Mock private BackfillSegmentRepository backfillSegmentRepository;
 
@@ -58,8 +54,6 @@ class BackfillJobRunnerTest {
                 backfillNetworkExecutor,
                 backfillProperties,
                 syncProgressTracker,
-                internalTransferReclassifier,
-                applicationEventPublisher,
                 syncStatusRepository,
                 backfillSegmentRepository,
                 direct,
@@ -70,7 +64,6 @@ class BackfillJobRunnerTest {
         when(networkAdapter.supports(NetworkId.ETHEREUM)).thenReturn(true);
         when(blockHeightResolver.supports(NetworkId.ETHEREUM)).thenReturn(true);
         when(blockTimestampResolver.supports(NetworkId.ETHEREUM)).thenReturn(true);
-        when(internalTransferReclassifier.reclassify(any(Set.class))).thenReturn(List.of());
     }
 
     @Test

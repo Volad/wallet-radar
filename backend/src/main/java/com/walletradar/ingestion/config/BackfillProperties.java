@@ -37,7 +37,7 @@ public class BackfillProperties {
     /** How often (ms) the retry scheduler polls for FAILED items. */
     private long retrySchedulerIntervalMs = 120_000;
 
-    /** How often (ms) to run InternalTransferReclassifier when queue empty (ADR-021). Default 5 min. */
+    /** How often (ms) to run the idle reclassification hook when queue is empty (ADR-021). Default 5 min. */
     private long reclassifyScheduleIntervalMs = 300_000;
 
     /** Number of parallel segments to split the block range into per network. Default 4. */
