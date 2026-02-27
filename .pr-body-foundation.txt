@@ -1,0 +1,26 @@
+## Summary
+Foundation implementation (T-001, T-002, T-003) for WalletRadar. Task file: [docs/tasks/00-foundation.md](docs/tasks/00-foundation.md).
+
+## Changes
+
+### T-001 — Domain model and value objects
+- **Domain types:** `EconomicEvent`, `AssetPosition`, `PortfolioSnapshot`, `AssetSnapshot` (all monetary fields `BigDecimal`).
+- **Enums:** `EconomicEventType`, `PriceSource`, `FlagCode`, `NetworkId`.
+- **Value object:** `Quantity` (with `positionQuantity` invariant: non-negative).
+- **Document entities for persistence:** `RecalcJob`, `RawTransaction`, `CostBasisOverride`, `SyncStatus`, `OnChainBalance`.
+- **Unit tests:** `QuantityTest`, `EconomicEventTest`, `AssetPositionTest`, `PortfolioSnapshotTest`.
+
+### T-002 — MongoDB collections and indexes
+- **MongoConfig:** `MongoCustomConversions` with `BigDecimal` ↔ `Decimal128` converters (INV-06, AC-07).
+- **Collections:** `raw_transactions`, `economic_events`, `asset_positions`, `portfolio_snapshots`, `cost_basis_overrides`, `sync_status`, `recalc_jobs`, `on_chain_balances` with indexes per 02-architecture (e.g. unique on `txHash+networkId` for events, `walletAddress+networkId+assetContract` for positions and on_chain_balances).
+- **Integration test:** `MongoDecimal128IntegrationTest` — persist and read documents with Decimal128 (Testcontainers MongoDB 7).
+
+### T-003 — Application config: caches, async, scheduler
+- **CaffeineConfig:** 5 caches — spotPrice (5min/500), historicalPrice (24h/10k), snapshot (60min/200), crossWalletAvco (5min/2k), tokenMeta (24h/5k).
+- **AsyncConfig:** `backfill-executor` (2–18 threads), `recalc-executor` (4), `sync-executor` (3).
+- **SchedulerConfig:** `scheduler-pool` (2 threads) for `@Scheduled` jobs.
+- **Test:** `CacheAndExecutorConfigTest` — caches and executors created and used.
+
+## Verification
+- **System-architect** verified alignment with [docs/01-domain.md](docs/01-domain.md) and [docs/02-architecture.md](docs/02-architecture.md). No blocking issues.
+- Build and all tests pass (`./mvnw compile test`).

@@ -15,14 +15,15 @@ import java.time.Instant;
 
 /**
  * Central domain object: normalised financial event. All monetary fields are BigDecimal (INV-06).
- * Manual compensating events have txHash=null and use clientId for idempotency.
+ * On-chain idempotency key: (txHash, networkId, walletAddress, assetContract) so one tx can have multiple events (e.g. SWAP_SELL + SWAP_BUY). Manual events: txHash=null, idempotency by clientId.
  */
 @Document(collection = "economic_events")
 @CompoundIndexes({
-    @CompoundIndex(name = "txHash_networkId", def = "{'txHash': 1, 'networkId': 1}", unique = true, sparse = true),
+    @CompoundIndex(name = "txHash_networkId_wallet_asset", def = "{'txHash': 1, 'networkId': 1, 'walletAddress': 1, 'assetContract': 1}", unique = true, sparse = true),
     @CompoundIndex(name = "wallet_network_block", def = "{'walletAddress': 1, 'networkId': 1, 'blockTimestamp': 1}"),
     @CompoundIndex(name = "wallet_asset_block", def = "{'walletAddress': 1, 'assetSymbol': 1, 'blockTimestamp': 1}"),
-    @CompoundIndex(name = "wallet_network_asset_block", def = "{'walletAddress': 1, 'networkId': 1, 'assetContract': 1, 'blockTimestamp': 1}")
+    @CompoundIndex(name = "wallet_network_asset_block", def = "{'walletAddress': 1, 'networkId': 1, 'assetContract': 1, 'blockTimestamp': 1}"),
+    @CompoundIndex(name = "flagCode_wallet", def = "{'flagCode': 1, 'walletAddress': 1}")
 })
 @NoArgsConstructor
 @Getter
@@ -53,6 +54,8 @@ public class EconomicEvent {
     private String counterpartyAddress;
     private boolean isInternalTransfer;
     private String protocolName;
+    /** Log index within the tx (from receipt) for deterministic AVCO ordering when blockTimestamp is equal. */
+    private Integer logIndex;
     @Indexed(unique = true, sparse = true)
     private String clientId;
 }

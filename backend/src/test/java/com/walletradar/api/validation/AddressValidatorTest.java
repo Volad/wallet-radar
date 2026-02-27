@@ -35,9 +35,9 @@ class AddressValidatorTest {
     }
 
     @Test
-    @DisplayName("Empty or null networks rejected")
-    void invalidNetworks() {
-        assertThat(validator.areValidNetworks(null)).isFalse();
-        assertThat(validator.areValidNetworks(List.of())).isFalse();
+    @DisplayName("Empty or null networks accepted (means all networks)")
+    void emptyOrNullNetworksAccepted() {
+        assertThat(validator.areValidNetworks(null)).isTrue();
+        assertThat(validator.areValidNetworks(List.of())).isTrue();
     }
 }

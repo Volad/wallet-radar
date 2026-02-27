@@ -13,8 +13,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
-
 import java.math.BigDecimal;
 import java.time.Instant;
 
@@ -41,14 +39,13 @@ public class OverrideService {
      *
      * @throws OverrideServiceException EVENT_NOT_FOUND if event missing or manual; OVERRIDE_EXISTS if active override already present
      */
-    @Transactional
     public String setOverride(String eventId, BigDecimal priceUsd, String note) {
         EconomicEvent event = economicEventRepository.findById(eventId)
                 .orElseThrow(() -> new OverrideServiceException(EVENT_NOT_FOUND, "Event not found: " + eventId));
         if (event.getEventType() == EconomicEventType.MANUAL_COMPENSATING) {
             throw new OverrideServiceException(EVENT_NOT_FOUND, "Override only for on-chain events");
         }
-        if (costBasisOverrideRepository.findByEconomicEventIdAndIsActiveTrue(eventId).isPresent()) {
+        if (costBasisOverrideRepository.findByEconomicEventIdAndActiveTrue(eventId).isPresent()) {
             throw new OverrideServiceException(OVERRIDE_EXISTS, "Active override already exists for event: " + eventId);
         }
 
@@ -71,7 +68,6 @@ public class OverrideService {
      *
      * @throws OverrideServiceException EVENT_NOT_FOUND if event not found
      */
-    @Transactional
     public String revertOverride(String eventId) {
         EconomicEvent event = economicEventRepository.findById(eventId)
                 .orElseThrow(() -> new OverrideServiceException(EVENT_NOT_FOUND, "Event not found: " + eventId));

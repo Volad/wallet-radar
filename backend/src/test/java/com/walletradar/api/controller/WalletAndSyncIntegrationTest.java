@@ -1,7 +1,9 @@
 package com.walletradar.api.controller;
 
 import com.walletradar.domain.SyncStatusRepository;
-import com.walletradar.ingestion.job.BackfillJobRunner;
+import com.walletradar.ingestion.job.backfill.BackfillJobRunner;
+import com.walletradar.ingestion.sync.balance.BalanceRefreshService;
+
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -43,6 +45,8 @@ class WalletAndSyncIntegrationTest {
 
     @MockBean
     BackfillJobRunner backfillJobRunner;
+    @MockBean
+    BalanceRefreshService balanceRefreshService;
 
     @Test
     @DisplayName("POST /wallets returns 202 and GET status returns 200")
@@ -81,6 +85,21 @@ class WalletAndSyncIntegrationTest {
                 .expectStatus().isAccepted()
                 .expectBody()
                 .jsonPath("$.message").isEqualTo("Incremental sync triggered");
+    }
+
+    @Test
+    @DisplayName("POST /wallets/balances/refresh returns 202")
+    void postBalanceRefresh() {
+        String body = """
+                {"wallets":["0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"],"networks":["ETHEREUM","ARBITRUM"]}
+                """;
+        webTestClient.post().uri("/api/v1/wallets/balances/refresh")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .exchange()
+                .expectStatus().isAccepted()
+                .expectBody()
+                .jsonPath("$.message").isEqualTo("Balance refresh triggered");
     }
 
     @Test

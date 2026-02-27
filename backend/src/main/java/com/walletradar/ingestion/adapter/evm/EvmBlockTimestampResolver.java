@@ -37,8 +37,21 @@ public class EvmBlockTimestampResolver implements BlockTimestampResolver {
     public Instant getBlockTimestamp(NetworkId networkId, long blockNumber) {
         String networkIdStr = networkId.name();
         RpcEndpointRotator rotator = rotatorsByNetwork.getOrDefault(networkIdStr, defaultRotator);
-        String endpoint = rotator.getNextEndpoint();
         String blockHex = "0x" + Long.toHexString(blockNumber);
+        Exception lastException = null;
+        for (int attempt = 0; attempt < rotator.getMaxAttempts(); attempt++) {
+            String endpoint = rotator.getNextEndpoint();
+            try {
+                return callGetBlockByNumber(endpoint, blockHex, blockNumber);
+            } catch (Exception e) {
+                lastException = e;
+            }
+        }
+        throw new RpcException("eth_getBlockByNumber failed after " + rotator.getMaxAttempts()
+                + " attempts for block " + blockNumber, lastException);
+    }
+
+    private Instant callGetBlockByNumber(String endpoint, String blockHex, long blockNumber) {
         String json = rpcClient.call(endpoint, "eth_getBlockByNumber", List.of(blockHex, false)).block();
         if (json == null) {
             throw new RpcException("eth_getBlockByNumber returned null");

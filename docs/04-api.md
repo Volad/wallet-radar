@@ -3,7 +3,8 @@
 > **Version:** MVP v2.0  
 > **Base URL:** `/api/v1`  
 > **Auth:** None (no user accounts in MVP)  
-> **Format:** JSON. All monetary values serialised as `String` (BigDecimal precision, no floating point loss).
+> **Format:** JSON. All monetary values serialised as `String` (BigDecimal precision, no floating point loss).  
+> **Postman:** [docs/postman/WalletRadar-API.postman_collection.json](postman/WalletRadar-API.postman_collection.json) — import into Postman for all endpoints.
 
 ---
 
@@ -15,6 +16,7 @@
 - Network IDs: `ETHEREUM` | `ARBITRUM` | `OPTIMISM` | `BASE` | `BSC` | `POLYGON` | `AVALANCHE` | `MANTLE` | `SOLANA`
 - `crossWalletAvco` is always **global across all networks** — network filter does not change it
 - `202 Accepted` responses include a job or sync ID for polling
+- Transaction history endpoints return only `CONFIRMED` normalized transactions by default (ADR-025)
 
 ---
 
@@ -41,6 +43,11 @@ POST /api/v1/wallets
   "message": "Backfill started"
 }
 ```
+
+**Behaviour note:**
+- `POST /wallets` is non-blocking: validation + enqueue background jobs, then immediate `202`.
+- The system starts backfill and also triggers an asynchronous initial balance refresh for the same wallet+network set.
+- Current balances usually appear before backfill completes; if not yet available, use `POST /wallets/balances/refresh`.
 
 ---
 
@@ -91,8 +98,10 @@ GET /api/v1/wallets/{address}/status?network={networkId}
 }
 ```
 
-`status` values: `PENDING` | `RUNNING` | `COMPLETE` | `PARTIAL` | `FAILED`  
-`syncBannerMessage` is `null` when `status=COMPLETE`
+`status` values: `PENDING` | `RUNNING` | `COMPLETE` | `PARTIAL` | `FAILED` | `ABANDONED`  
+`syncBannerMessage` is `null` when `status=COMPLETE`  
+`ABANDONED` applies to legacy/non-segment mode after max retries.  
+For segment-mode backfill (`backfill_segments` enabled), retry is unbounded and status stays `FAILED/RUNNING` until segments converge to `COMPLETE`.
 
 **Response `404 Not Found`:** No sync status for the given address (or for the given address×network when `network` is specified).
 
@@ -121,7 +130,9 @@ POST /api/v1/sync/refresh
 
 ### Trigger Manual Balance Refresh
 
-Current balances are polled automatically every 10 minutes. The user can request an immediate refresh for specific wallets and networks.
+Current balances are polled automatically every 10 minutes.  
+In addition, an initial async balance refresh is triggered on `POST /wallets`.  
+The user can also request an immediate refresh for specific wallets and networks.
 
 ```
 POST /api/v1/wallets/balances/refresh
@@ -241,6 +252,10 @@ GET /api/v1/assets/{assetId}/transactions?cursor={cursor}&limit=50&direction=DES
 ```
 
 `nextCursor` is `null` when there are no more pages.
+
+**Visibility rule:**
+- Default response includes only records with normalized transaction `status=CONFIRMED`.
+- Optional debug/admin mode may expose non-confirmed statuses separately.
 
 ---
 

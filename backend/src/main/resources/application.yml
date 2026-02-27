@@ -1,6 +1,9 @@
 spring:
   application:
     name: wallet-radar
+  threads:
+    virtual:
+      enabled: true
   data:
     mongodb:
       uri: ${MONGODB_URI:mongodb://localhost:27017/walletradar}
@@ -9,57 +12,104 @@ spring:
 walletradar:
   ingestion:
     # Backfill window (T-009): blocks from current block. Default ~2 years Ethereum (12s block).
+    # L2s: set per-network window-blocks so backfill covers ~2 years (e.g. Arbitrum ~4 bl/s → 252M).
     backfill:
       window-blocks: 5256000
+      parallel-segments: 100
+      parallel-segment-workers: 200
+      worker-threads: 4
+      progress-update-interval-ms: 2000
+      segment-stale-after-ms: 180000
+      max-retries: 5
+      retry-base-delay-minutes: 2
+      retry-max-delay-minutes: 60
+      retry-scheduler-interval-ms: 120000
+      reclassify-schedule-interval-ms: 300000
+    evm-rpc:
+      max-requests-per-second: 2000
+      endpoint-cooldown-ms: 3000
+      transient-error-cooldown-ms: 15000
+      batch-unsupported-cooldown-ms: 300000
+      local-limiter-log-threshold-ms: 1000
+      local-limiter-timeout-ms: 2000
     network:
+      # If backfill fails with "RPC failed after 5 attempts", public RPCs may be rate-limiting. Try: reduce batch-block-size (e.g. 500), or add a paid RPC URL (Alchemy/Infura) first in urls.
+      # avg-block-time-seconds: fallback for EstimatingBlockTimestampResolver when calibration
+      # anchor points are the same block (single-block range). During normal backfill the resolver
+      # computes actual avg block time from two RPC anchor calls.
       ETHEREUM:
         urls:
+          - https://rpc.ankr.com/eth/${ANKR_API_KEY:}
+          - https://lb.drpc.live/ethereum/${DRPC_API_KEY:}
           - https://eth.llamarpc.com
-          - https://ethereum.publicnode.com
-          - https://rpc.ankr.com/eth
-        batch-block-size: 2000
+          - https://cloudflare-eth.com
+        batch-block-size: 10000
+        avg-block-time-seconds: 12.0
       ARBITRUM:
         urls:
           - https://arb1.arbitrum.io/rpc
-          - https://arbitrum.llamarpc.com
-          - https://rpc.ankr.com/arbitrum_one
-        batch-block-size: 5000
+          - https://rpc.sentio.xyz/arbitrum-one
+          - https://arbitrum.api.onfinality.io/public
+#          - https://rpc.ankr.com/arbitrum/${ANKR_API_KEY:}
+          - https://lb.drpc.live/arbitrum/${DRPC_API_KEY:}
+        batch-block-size: 500
+        window-blocks: 252000000   # ~2 years at ~4 blocks/s
+        avg-block-time-seconds: 0.25
       OPTIMISM:
         urls:
+          - https://rpc.ankr.com/optimism/${ANKR_API_KEY:}
+          - https://lb.drpc.live/optimism/${DRPC_API_KEY:}
           - https://mainnet.optimism.io
-          - https://optimism.llamarpc.com
-          - https://rpc.ankr.com/optimism
-        batch-block-size: 5000
+          - https://optimism.drpc.org
+        batch-block-size: 1000
+        window-blocks: 252000000   # ~2 years at ~4 blocks/s
+        avg-block-time-seconds: 2.0
       POLYGON:
         urls:
-          - https://polygon.llamarpc.com
-          - https://rpc.ankr.com/polygon
-          - https://polygon-bor-rpc.publicnode.com
-        batch-block-size: 2000
+          - https://rpc.ankr.com/polygon/${ANKR_API_KEY:}
+          - https://lb.drpc.live/polygon/${DRPC_API_KEY:}
+          - https://polygon.drpc.org
+          - https://polygon-rpc.com
+        batch-block-size: 1000
+        window-blocks: 31560000    # ~2 years at ~2s/block
+        avg-block-time-seconds: 2.0
       BASE:
         urls:
+          - https://rpc.ankr.com/base/${ANKR_API_KEY:}
+          - https://lb.drpc.live/base/${DRPC_API_KEY:}
           - https://mainnet.base.org
           - https://base.llamarpc.com
-          - https://rpc.ankr.com/base
-        batch-block-size: 5000
+        batch-block-size: 1000
+        window-blocks: 31560000   # ~2 years at ~2s/block
+        avg-block-time-seconds: 2.0
+      # Some BSC public RPCs prune old blocks (e.g. "History has been pruned"); multiple endpoints improve retry.
       BSC:
         urls:
+          - https://rpc.ankr.com/bsc/${ANKR_API_KEY:}
+          - https://lb.drpc.live/bsc/${DRPC_API_KEY:}
           - https://bsc-dataseed.binance.org
-          - https://bsc.llamarpc.com
-          - https://rpc.ankr.com/bsc
-        batch-block-size: 2000
+          - https://bsc-dataseed1.defibit.io
+          - https://bsc-dataseed1.ninicoin.io
+        batch-block-size: 1000
+        window-blocks: 21024000    # ~2 years at ~3s/block
+        avg-block-time-seconds: 3.0
       AVALANCHE:
         urls:
+          - https://rpc.ankr.com/avalanche/${ANKR_API_KEY:}
+          - https://lb.drpc.live/avalanche/${DRPC_API_KEY:}
           - https://api.avax.network/ext/bc/C/rpc
-          - https://rpc.ankr.com/avalanche
-          - https://avalanche-c-chain-rpc.publicnode.com
-        batch-block-size: 2000
+          - https://avax.meowrpc.com
+        batch-block-size: 1000
+        window-blocks: 31560000    # ~2 years at ~2s/block
+        avg-block-time-seconds: 2.0
       MANTLE:
         urls:
-          - https://mantle-rpc.publicnode.com
-          - https://rpc.ankr.com/mantle
+          - https://rpc.mantle.xyz
           - https://mantle.drpc.org
-        batch-block-size: 2000
+          - https://mantle-mainnet.public.blastapi.io
+        batch-block-size: 1000
+        window-blocks: 31560000    # ~2 years at ~2s/block
+        avg-block-time-seconds: 2.0
       SOLANA:
         urls:
           - https://api.mainnet-beta.solana.com
@@ -68,9 +118,27 @@ walletradar:
       signatures-limit: 1000
     # RPC retry: exponential backoff ± jitter. Defaults: base-delay-ms=1000, jitter-factor=0.2, max-attempts=5
     retry:
-      # base-delay-ms: 1000
+      base-delay-ms: 2000
       # jitter-factor: 0.2
-      # max-attempts: 5
+      max-attempts: 7
+    # Classifier job (ADR-021): batch size and schedule for PENDING raw processing.
+    classifier:
+      batch-size: 1000
+      schedule-interval-ms: 90000
+    # Clarification stage for normalized transactions (PENDING_CLARIFICATION).
+    clarification:
+      schedule-interval-ms: 120000
+      max-retries: 3
+    # Pricing stage for normalized transactions (PENDING_PRICE).
+    normalized-pricing:
+      schedule-interval-ms: 120000
+      max-retries: 3
+    # Final consistency stage for normalized transactions (PENDING_STAT).
+    normalized-stat:
+      schedule-interval-ms: 120000
+    # Periodic on-chain balance refresh for all known wallet×network pairs.
+    balance:
+      poll-interval-ms: 600000
     # Protocol display name by contract address (EVM) or program id (Solana). Keys lowercase.
     protocol-registry:
       names:  # address (EVM) or program id (Solana) -> display name; lookup is case-insensitive
@@ -78,13 +146,33 @@ walletradar:
         "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45": "Uniswap V3"
         "0xe592427a0aece92de3edee1f18e0157c05861564": "Uniswap V3"
         "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2": "Aave V3"
-  # Pricing: historical and spot resolvers (CoinGecko free API). T-019, T-020.
+  # Pricing: historical and spot resolvers (CoinGecko free API). T-019, T-020, T-012.
   pricing:
     coingecko-base-url: https://api.coingecko.com/api/v3
     coingecko-historical-requests-per-minute: 45
     connect-timeout-seconds: 10
     read-timeout-seconds: 15
-    # Token contract address (lowercase) -> CoinGecko coin id for /coins/{id}/history and /simple/price
+    # Dynamic contract-to-CoinGecko-ID mapping (ADR-022). Config overrides take precedence.
+    contract-mapping:
+      enabled: true
+      coins-list-cache-ttl-hours: 24
+      onchain-fallback-enabled: false   # MVP: skip onchain API; use coins/list + overrides only
+    # Token contract address (lowercase) -> CoinGecko coin id (config override; network-agnostic)
     contract-to-coin-gecko-id:
       "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2": "weth"
       "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee": "ethereum"
+      # ARB (Arbitrum), MORPHO (Morpho) - avoid wrong fallback to ETH price
+      "0x912ce59144191c1204e64559fe8253a0e49e6548": "arbitrum"
+      "0x40bd670a58238e6e230c430bbb5ce6ec0d40df48": "morpho"
+      # Native token wrapped addresses for gas cost pricing (FIX-C2)
+      "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270": "matic-network"
+      "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c": "binancecoin"
+      "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7": "avalanche-2"
+      "0x78c1b0c915c4faa5fffa6cabf0219da63d7f4cb8": "mantle"
+      "So11111111111111111111111111111111111111112": "solana"
+  # Phishing/scam filter: skip ingestion of txs involving blocklisted addresses (contracts, EOAs).
+  scam-filter:
+    enabled: true
+    # Add known scam/drainer/phishing addresses (EVM: 0x..., case-insensitive). Example:
+    # blocklist:
+    #   - "0x..."

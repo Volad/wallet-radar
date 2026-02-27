@@ -50,7 +50,7 @@ The primary AVCO replay pattern — load all events for `(walletAddress, assetSy
 - **Positive:** No schema migrations for adding per-network fields to `raw_transactions`.
 - **Positive:** Snapshot documents with embedded asset arrays are fetched in a single read — no N+1 queries.
 - **Positive:** `Decimal128` enforced at storage layer — impossible to accidentally store a float.
-- **Negative:** No multi-document ACID transactions by default. Mitigated by: idempotent upserts on `txHash+networkId` UNIQUE index; AVCO is always fully replayed (not incrementally patched).
+- **Negative:** No multi-document ACID transactions by default. Mitigated by: idempotent upserts on `(txHash, networkId, walletAddress, assetContract)` UNIQUE sparse index for on-chain events (see ADR-013); AVCO is always fully replayed (not incrementally patched).
 - **Negative:** MongoDB's aggregation pipeline is less expressive than SQL for ad-hoc analytics. Acceptable — WalletRadar's query patterns are narrow and well-defined.
 - **Negative:** No referential integrity enforcement. Mitigated by application-layer invariants and ArchUnit tests.
 

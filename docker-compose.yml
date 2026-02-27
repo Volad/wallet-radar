@@ -1,0 +1,23 @@
+# WalletRadar — dependencies only (run backend with: ./gradlew :backend:bootRun)
+# Usage: docker compose up -d
+# Backend expects: MONGODB_URI=mongodb://localhost:27017/walletradar (default)
+
+services:
+  mongodb:
+    image: mongo:7
+    container_name: walletradar-mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    environment:
+      MONGO_INITDB_DATABASE: walletradar
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  mongodb_data:

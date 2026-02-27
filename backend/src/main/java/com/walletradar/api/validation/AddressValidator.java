@@ -24,8 +24,12 @@ public class AddressValidator {
         return EVM_ADDRESS.matcher(address.trim()).matches() || SOLANA_ADDRESS.matcher(address.trim()).matches();
     }
 
+    /**
+     * Empty or null = valid (means "all networks" in add-wallet flow).
+     * Non-empty = all elements must be supported.
+     */
     public boolean areValidNetworks(List<NetworkId> networks) {
-        if (networks == null || networks.isEmpty()) return false;
+        if (networks == null || networks.isEmpty()) return true;
         return networks.stream().allMatch(SUPPORTED_NETWORKS::contains);
     }
 }

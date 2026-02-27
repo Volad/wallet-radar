@@ -38,6 +38,23 @@ public class PricingProperties {
     /**
      * Map: token contract address (lowercase) -> CoinGecko coin id (e.g. "ethereum", "weth").
      * Used for /coins/{id}/history. Add entries for tokens you need historical prices for.
+     * Config overrides take precedence over dynamic lookup (ADR-022).
      */
     private Map<String, String> contractToCoinGeckoId = new HashMap<>();
+
+    /**
+     * Dynamic contract-to-CoinGecko-ID mapping (ADR-022).
+     */
+    private ContractMappingProperties contractMapping = new ContractMappingProperties();
+
+    @Getter
+    @Setter
+    public static class ContractMappingProperties {
+        /** Enable dynamic lookup from coins/list; when false, only config overrides are used. */
+        private boolean enabled = true;
+        /** TTL in hours for coins/list cache. */
+        private int coinsListCacheTtlHours = 24;
+        /** Enable onchain API fallback (skip for MVP; set false per spec). */
+        private boolean onchainFallbackEnabled = false;
+    }
 }

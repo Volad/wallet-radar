@@ -4,6 +4,17 @@
 
 This file keeps the **dependency order** and a short reference; full task descriptions live in the per-feature files.
 
+**Completed tasks (update after each PR merge):**
+
+| Completed task IDs | Feature file |
+|--------------------|--------------|
+| T-001 … T-008      | 00-foundation.md, 00-ingestion-core.md |
+| T-015, T-016       | 00-cost-basis-engine.md |
+| T-017              | 05-override-recalc.md (partial) |
+| T-019, T-020       | 00-pricing.md |
+
+**Current step:** T-034 … T-038 — `15-normalized-transactions-pipeline.md` (ADR-025 canonical pipeline rollout)
+
 ---
 
 ## Foundation
@@ -70,9 +81,9 @@ This file keeps the **dependency order** and a short reference; full task descri
 
 **T-009 — Backfill job and WalletAddedEvent**
 - **Module(s):** ingestion (job), api (wallet)
-- **Description:** On `WalletAddedEvent` (e.g. after POST /wallets), run `BackfillJobRunner` on `backfill-executor`: per-network parallel backfill (2 years). Per network: fetch via adapter → classify → normalize → resolve historical price (chain) → flag → IdempotentEventStore.upsert → trigger AVCO recalc for affected wallet×asset. Update `sync_status` (progressPct, syncBannerMessage, lastBlockSynced). On all networks complete: set status COMPLETE, run InternalTransferReclassifier.
+- **Description:** On `WalletAddedEvent` (e.g. after POST /wallets), run `BackfillJobRunner` on `backfill-executor`: per-network backfill (2 years) with persistent segment state in `backfill_segments` linked to `sync_status`. Segment progress is tracked by blocks; `sync_status.progressPct` is recomputed as average segment progress. On segment convergence: set `rawFetchComplete`, publish `RawFetchCompleteEvent`, set status COMPLETE.
 - **Doc refs:** 02-architecture (Data Flow 1 — Initial Wallet Backfill), 00-context (2-year backfill)
-- **DoD:** BackfillJobRunner, event listener; unit tests with mocks; integration test: add wallet → backfill runs and sync_status progresses (can use small window).
+- **DoD:** BackfillJobRunner + segment persistence + stale recovery; unit tests for segment plan/retry/finalization; integration test: add wallet → segments created and sync_status progresses by segments.
 - **Dependencies:** T-004, T-005, T-006, T-007, T-008, T-015 (AvcoEngine), T-017 (RecalcJob/event), pricing chain for historical (T-020)
 
 **T-010 — Incremental sync job**

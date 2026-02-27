@@ -8,11 +8,12 @@ import java.util.Optional;
 
 /**
  * Persistence for economic_events. Used by IdempotentEventStore (ingestion) and AvcoEngine (costbasis).
- * Uniqueness: (txHash, networkId) for on-chain events; clientId (sparse unique) for MANUAL_COMPENSATING (INV-11).
+ * Uniqueness: (txHash, networkId, walletAddress, assetContract) for on-chain events so one tx can have multiple legs (e.g. SWAP_SELL + SWAP_BUY); clientId for MANUAL_COMPENSATING (INV-11).
  */
-public interface EconomicEventRepository extends MongoRepository<EconomicEvent, String> {
+public interface EconomicEventRepository extends MongoRepository<EconomicEvent, String>, EconomicEventRepositoryCustom {
 
-    Optional<EconomicEvent> findByTxHashAndNetworkId(String txHash, NetworkId networkId);
+    Optional<EconomicEvent> findByTxHashAndNetworkIdAndWalletAddressAndAssetContract(
+            String txHash, NetworkId networkId, String walletAddress, String assetContract);
 
     Optional<EconomicEvent> findByClientId(String clientId);
 
@@ -30,4 +31,5 @@ public interface EconomicEventRepository extends MongoRepository<EconomicEvent, 
     /** For AvcoEngine.recalculateForWallet (replay from beginning): distinct (networkId, assetContract) for a wallet. */
     @Query(value = "{ 'walletAddress' : ?0 }", fields = "{ 'networkId' : 1, 'assetContract' : 1 }")
     List<EconomicEvent> findNetworkIdAndAssetContractByWalletAddress(String walletAddress);
+
 }

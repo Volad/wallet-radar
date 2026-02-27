@@ -11,10 +11,10 @@ import java.util.Optional;
 public interface CostBasisOverrideRepository extends MongoRepository<CostBasisOverride, String> {
 
     /** Active overrides for the given event ids (on-chain events only). */
-    List<CostBasisOverride> findByEconomicEventIdInAndIsActiveTrue(List<String> economicEventIds);
+    List<CostBasisOverride> findByEconomicEventIdInAndActiveTrue(List<String> economicEventIds);
 
     /** Check for existing active override (one per event); used for 409 OVERRIDE_EXISTS. */
-    Optional<CostBasisOverride> findByEconomicEventIdAndIsActiveTrue(String economicEventId);
+    Optional<CostBasisOverride> findByEconomicEventIdAndActiveTrue(String economicEventId);
 
     /** Find override for event (for revert: deactivate). One document per eventId by design. */
     Optional<CostBasisOverride> findFirstByEconomicEventId(String economicEventId);

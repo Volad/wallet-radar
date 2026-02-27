@@ -30,4 +30,6 @@ public class RawClassifiedEvent {
     private Long gasUsed;
     private BigInteger gasPriceWei;
     private FlagCode flagCode;
+    /** Log index within the tx (from receipt) for deterministic ordering when blockTimestamp is equal. */
+    private Integer logIndex;
 }

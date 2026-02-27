@@ -20,6 +20,7 @@ WalletRadar uses **AVCO (Average Cost / Weighted Average Cost)** for all cost ba
 - Also calculated on-request across all session wallets — **crossWalletAvco**
 - `crossWalletAvco` is **never stored** — computed fresh for exact wallet set in each API call
 - `crossWalletAvco` is **always global** across all networks — a network filter does not change the AVCO value
+- Replay input is canonical confirmed operation legs from `normalized_transactions` (ADR-025)
 
 ---
 
@@ -74,7 +75,7 @@ realisedPnlUsd = (sellPriceUsd − avcoAtTimeOfSale) × |sellQuantity|
 ```
 
 - Computed atomically during AVCO replay — never separately
-- Stored on each `SWAP_SELL` / `LP_EXIT` event in `economic_events.realisedPnlUsd`
+- Stored on confirmed SELL legs (`SWAP_SELL` / `LP_EXIT`) in canonical transaction records
 - `avcoAtTimeOfSale` is the AVCO **before** the sell quantity is deducted
 - Accumulated in `asset_positions.totalRealisedPnlUsd`
 
@@ -121,16 +122,16 @@ nativeTokenPrice is resolved using the same price chain as any other token (Stab
 Prices are resolved per event at the time of the transaction (historical price):
 
 ```
-Priority chain (HistoricalPriceResolver):
+Priority chain (HistoricalPriceResolver), and at ingestion (ADR-018):
   1. StablecoinResolver     USDC/USDT/DAI/GHO/USDe/FRAX → $1.00 always
-  2. SwapDerivedResolver    tokenIn/tokenOut ratio from DEX event (free, on-chain)
+  2. SwapDerivedResolver    tokenIn/tokenOut ratio from DEX event when one leg is stablecoin; applied at ingestion for stablecoin-leg swaps, else in Phase 2 (free, on-chain)
   3. CoinGeckoHistorical    /coins/{id}/history?date=DD-MM-YYYY (free, throttled)
   4. PRICE_UNKNOWN          flag event, AVCO still calculated with quantity changes
 ```
 
 **CoinGecko throttle:** token bucket at 45 req/min (leaving 5 req/min headroom for spot price calls). Deduplication via 24h Caffeine cache keyed on `(contractAddress, date)`.
 
-**PRICE_UNKNOWN events:** quantity changes are still applied to `asset_positions`. The unknown price is flagged for user review. On override, AVCO is recalculated from that event forward.
+**PRICE_UNKNOWN events:** quantity changes are still applied to `asset_positions`. The unknown price is flagged for user review. On override, AVCO is recalculated from that operation forward.
 
 ---
 
@@ -160,11 +161,11 @@ User can override the `priceUsd` of any **on-chain** event:
 
 ## Manual Compensating Transaction
 
-A **manual compensating transaction** is a synthetic economic event (no on-chain transaction). It is used to reconcile balance and/or AVCO when on-chain history is incomplete or incorrect.
+A **manual compensating transaction** is a synthetic normalized transaction (no on-chain transaction). It is used to reconcile balance and/or AVCO when on-chain history is incomplete or incorrect.
 
 - **Fields:** `quantityDelta` (required), `priceUsd` (required when `quantityDelta > 0`, for AVCO), optional timestamp (default or "end of timeline").
-- **Storage:** Stored in `economic_events` with `eventType=MANUAL_COMPENSATING`; no separate collection. Idempotency by `clientId`.
-- **AVCO:** The event is inserted into the event stream by timestamp. AVCO replay processes it in `blockTimestamp ASC` order like any other event — same BUY/SELL formula applies. **Override** (`cost_basis_overrides`) applies only to on-chain events; manual compensating events carry their own `priceUsd` and are not overridden.
+- **Storage:** Stored in `normalized_transactions` with `type=MANUAL_COMPENSATING`; idempotency by `clientId`.
+- **AVCO:** The operation legs are inserted into the timeline by timestamp. AVCO replay processes them in `blockTimestamp ASC` order like any other operation legs — same BUY/SELL formula applies. **Override** (`cost_basis_overrides`) applies only to on-chain operations; manual compensating operations carry their own `priceUsd` and are not overridden.
 - **Recalc:** Creating or deleting a manual compensating transaction triggers the same async AVCO replay (e.g. `AvcoEngine.replayFromBeginning`) as override; same `recalc-executor` and `GET /recalc/status/{jobId}` polling.
 
 ---

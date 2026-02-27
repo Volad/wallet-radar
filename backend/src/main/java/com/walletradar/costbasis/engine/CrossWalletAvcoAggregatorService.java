@@ -1,6 +1,5 @@
 package com.walletradar.costbasis.engine;
 
-import com.walletradar.config.CaffeineConfig;
 import com.walletradar.domain.CostBasisOverride;
 import com.walletradar.domain.CostBasisOverrideRepository;
 import com.walletradar.domain.EconomicEvent;
@@ -51,7 +50,7 @@ public class CrossWalletAvcoAggregatorService {
      * Compute cross-wallet AVCO (and quantity) for the given wallets and asset. INTERNAL_TRANSFER excluded (AC-05).
      * Result is never persisted. Cached 5min per (sorted wallets, assetSymbol).
      */
-    @Cacheable(cacheNames = CaffeineConfig.CROSS_WALLET_AVCO_CACHE,
+    @Cacheable(cacheNames = "crossWalletAvcoCache",
             key = "T(com.walletradar.costbasis.engine.CrossWalletAvcoAggregatorService).cacheKey(#wallets, #assetSymbol)")
     public CrossWalletAvcoResult compute(List<String> wallets, String assetSymbol) {
         if (wallets == null || wallets.isEmpty()) {
@@ -71,7 +70,7 @@ public class CrossWalletAvcoAggregatorService {
         Map<String, BigDecimal> overridePrices = Map.of();
         if (!onChainEventIds.isEmpty()) {
             List<CostBasisOverride> overrides = costBasisOverrideRepository
-                    .findByEconomicEventIdInAndIsActiveTrue(onChainEventIds);
+                    .findByEconomicEventIdInAndActiveTrue(onChainEventIds);
             overridePrices = overrides.stream()
                     .collect(Collectors.toMap(CostBasisOverride::getEconomicEventId, CostBasisOverride::getPriceUsd, (a, b) -> a));
         }
