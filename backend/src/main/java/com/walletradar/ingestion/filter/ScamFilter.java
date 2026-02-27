@@ -8,13 +8,14 @@ import org.bson.Document;
 import org.springframework.stereotype.Component;
 
 import java.math.BigInteger;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
 /**
- * Filters phishing/scam transactions from ingestion. Checks tx addresses (to, from, log contracts)
- * against a configurable blocklist. When enabled and a match is found, the transaction is skipped.
+ * Heuristic score-based scam/spam filter used during raw ingestion.
+ * Transactions with score >= dropThreshold are dropped.
  */
 @Component
 @Slf4j
@@ -23,145 +24,146 @@ public class ScamFilter {
 
     private static final String ERC20_TRANSFER_TOPIC0 =
             "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
-    private static final int MASS_AIRDROP_MIN_TRANSFER_LOGS = 20;
-    private static final int MASS_RELAY_SPAM_MIN_TRANSFER_LOGS = 30;
-    private static final int MASS_INBOUND_FANOUT_MIN_RECIPIENTS = 40;
-    private static final int ZERO_AMOUNT_POISONING_MIN_TRANSFER_LOGS = 100;
-    private static final int ZERO_AMOUNT_POISONING_MIN_ZERO_TRANSFERS = 20;
+    private static final String ERC20_APPROVAL_TOPIC0 =
+            "0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925";
 
     private final ScamFilterProperties properties;
 
     /**
-     * Returns true if the transaction involves a scam/phishing address and should be skipped.
+     * Returns true when transaction should be dropped as spam/scam.
      */
-    public boolean isScam(RawTransaction tx) {
-        if (!properties.isEnabled()) {
+    public boolean shouldDrop(RawTransaction tx) {
+        if (!properties.isEnabled() || tx == null) {
             return false;
         }
-        if (isLikelyRelayOrPoisoningSpam(tx)) {
-            log.debug("Scam filter: skipping tx {} on {} (heuristic: relay/poisoning spam)",
-                    tx.getTxHash(), tx.getNetworkId());
-            return true;
+
+        ScamEvaluation evaluation = evaluate(tx);
+        if (evaluation.drop()) {
+            log.debug("Scam filter: dropping tx {} on {} score={} signals={}",
+                    tx.getTxHash(), tx.getNetworkId(), evaluation.score(), evaluation.signals());
         }
-        if (isLikelySpamAirdrop(tx)) {
-            log.debug("Scam filter: skipping tx {} on {} (heuristic: unsolicited batch airdrop)",
-                    tx.getTxHash(), tx.getNetworkId());
-            return true;
+        return evaluation.drop();
+    }
+
+    private ScamEvaluation evaluate(RawTransaction tx) {
+        int score = 0;
+        List<String> signals = new ArrayList<>();
+
+        Document raw = tx.getRawData();
+        if (raw == null) {
+            return new ScamEvaluation(score, List.of(), false);
         }
 
         Set<String> blocklist = properties.getBlocklistNormalized();
-        if (blocklist.isEmpty()) {
-            return false;
-        }
-
-        Set<String> addresses = extractAddresses(tx);
-        for (String addr : addresses) {
-            if (addr != null && !addr.isBlank() && blocklist.contains(addr.toLowerCase())) {
-                log.debug("Scam filter: skipping tx {} on {} (blocklisted address: {})",
-                        tx.getTxHash(), tx.getNetworkId(), addr);
-                return true;
+        if (!blocklist.isEmpty()) {
+            Set<String> addresses = extractAddresses(tx);
+            for (String addr : addresses) {
+                if (addr != null && !addr.isBlank() && blocklist.contains(addr.toLowerCase())) {
+                    score += properties.getBlocklistScore();
+                    signals.add("BLOCKLIST_MATCH");
+                    break;
+                }
             }
         }
-        return false;
-    }
 
-    private boolean isLikelyRelayOrPoisoningSpam(RawTransaction tx) {
-        if (tx == null || tx.getRawData() == null) {
-            return false;
-        }
-        Document raw = tx.getRawData();
         if (!(raw.get("logs") instanceof List<?> logs)) {
-            return false;
-        }
-
-        String wallet = normalize(rawString(tx.getWalletAddress()));
-        String txSender = normalize(rawString(raw.get("from")));
-        if (wallet == null || txSender == null || wallet.equals(txSender)) {
-            return false;
-        }
-
-        TransferStats stats = collectTransferStats(logs, wallet);
-        if (stats.transferCount < MASS_RELAY_SPAM_MIN_TRANSFER_LOGS) {
-            return false;
-        }
-
-        boolean relaySweepSpam = stats.transferToWalletCount == 0 && stats.transferFromWalletCount >= 1;
-        boolean inboundFanoutSpam = stats.transferToWalletCount >= 1
-                && stats.transferFromWalletCount == 0
-                && stats.uniqueRecipients >= MASS_INBOUND_FANOUT_MIN_RECIPIENTS;
-        boolean zeroAmountPoisoning = stats.walletInvolved()
-                && stats.transferCount >= ZERO_AMOUNT_POISONING_MIN_TRANSFER_LOGS
-                && stats.zeroAmountTransferCount >= ZERO_AMOUNT_POISONING_MIN_ZERO_TRANSFERS;
-
-        return relaySweepSpam || inboundFanoutSpam || zeroAmountPoisoning;
-    }
-
-    private boolean isLikelySpamAirdrop(RawTransaction tx) {
-        if (tx == null || tx.getRawData() == null) {
-            return false;
-        }
-        Document raw = tx.getRawData();
-        if (!(raw.get("logs") instanceof List<?> logs) || logs.size() < MASS_AIRDROP_MIN_TRANSFER_LOGS) {
-            return false;
+            return finalizeEvaluation(score, signals);
         }
 
         String wallet = normalize(rawString(tx.getWalletAddress()));
         String txSender = normalize(rawString(raw.get("from")));
         String txTo = normalize(rawString(raw.get("to")));
-        if (wallet == null || txSender == null || txTo == null) {
+        TransferStats stats = collectTransferStats(logs, wallet);
+
+        boolean walletInitiated = wallet != null && wallet.equals(txSender);
+        boolean unsolicitedInboundOnly = wallet != null
+                && txSender != null
+                && !wallet.equals(txSender)
+                && stats.transferToWalletCount() >= 1
+                && stats.transferFromWalletCount() == 0;
+
+        if (unsolicitedInboundOnly) {
+            score += properties.getUnsolicitedInboundScore();
+            signals.add("UNSOLICITED_INBOUND_ONLY");
+        }
+
+        if (isLikelyRelaySweepSpam(stats)) {
+            score += properties.getRelaySweepScore();
+            signals.add("RELAY_SWEEP_SPAM");
+        }
+
+        if (isLikelyInboundFanoutSpam(stats)) {
+            score += properties.getInboundFanoutScore();
+            signals.add("INBOUND_FANOUT_SPAM");
+        }
+
+        if (isLikelyZeroAmountPoisoning(stats)) {
+            score += properties.getZeroAmountPoisoningScore();
+            signals.add("ZERO_AMOUNT_POISONING");
+        }
+
+        if (isLikelySpamAirdropPattern(stats, txSender, txTo, wallet)) {
+            score += properties.getMassAirdropScore();
+            signals.add("MASS_AIRDROP_PATTERN");
+        }
+
+        if (walletInitiated) {
+            score -= properties.getWalletInitiatedCredit();
+            signals.add("WALLET_INITIATED");
+            if (stats.approvalCount() > 0) {
+                score -= properties.getWalletApprovalCredit();
+                signals.add("WALLET_APPROVAL_PATTERN");
+            }
+        }
+
+        if (stats.transferFromWalletCount() > 0 && stats.transferToWalletCount() > 0) {
+            score -= properties.getMixedWalletFlowCredit();
+            signals.add("MIXED_WALLET_FLOW");
+        }
+
+        return finalizeEvaluation(score, signals);
+    }
+
+    private ScamEvaluation finalizeEvaluation(int score, List<String> signals) {
+        boolean drop = score >= properties.getDropThreshold();
+        return new ScamEvaluation(score, List.copyOf(signals), drop);
+    }
+
+    private boolean isLikelyRelaySweepSpam(TransferStats stats) {
+        return stats.transferCount() >= properties.getMassRelaySpamMinTransferLogs()
+                && stats.transferToWalletCount() == 0
+                && stats.transferFromWalletCount() >= 1;
+    }
+
+    private boolean isLikelyInboundFanoutSpam(TransferStats stats) {
+        return stats.transferCount() >= properties.getMassRelaySpamMinTransferLogs()
+                && stats.transferToWalletCount() >= 1
+                && stats.transferFromWalletCount() == 0
+                && stats.uniqueRecipients() >= properties.getMassInboundFanoutMinRecipients();
+    }
+
+    private boolean isLikelyZeroAmountPoisoning(TransferStats stats) {
+        return stats.walletInvolved()
+                && stats.transferCount() >= properties.getZeroAmountPoisoningMinTransferLogs()
+                && stats.zeroAmountTransferCount() >= properties.getZeroAmountPoisoningMinZeroTransfers();
+    }
+
+    private boolean isLikelySpamAirdropPattern(TransferStats stats, String txSender, String txTo, String wallet) {
+        if (wallet == null || txSender == null || txTo == null || wallet.equals(txSender)) {
             return false;
         }
-        // Only filter unsolicited inbound spam; if wallet initiated the tx, keep it.
-        if (wallet.equals(txSender)) {
+        if (stats.transferCount() < properties.getMassAirdropMinTransferLogs()) {
             return false;
         }
-
-        Set<String> tokenContracts = new HashSet<>();
-        Set<String> transferSenders = new HashSet<>();
-        Set<String> transferRecipients = new HashSet<>();
-        Set<String> transferValues = new HashSet<>();
-
-        for (Object o : logs) {
-            if (!(o instanceof Document log)) {
-                return false;
-            }
-            String logAddress = normalize(rawString(log.get("address")));
-            if (logAddress == null) {
-                return false;
-            }
-            tokenContracts.add(logAddress);
-
-            if (!(log.get("topics") instanceof List<?> topics) || topics.size() < 3) {
-                return false;
-            }
-            String topic0 = normalize(rawString(topics.get(0)));
-            if (!ERC20_TRANSFER_TOPIC0.equals(topic0)) {
-                return false;
-            }
-            String transferFrom = topicToAddress(topics.get(1));
-            String transferTo = topicToAddress(topics.get(2));
-            if (transferFrom == null || transferTo == null) {
-                return false;
-            }
-            transferSenders.add(transferFrom);
-            transferRecipients.add(transferTo);
-
-            String value = normalize(rawString(log.get("data")));
-            if (value == null) {
-                return false;
-            }
-            transferValues.add(value);
-        }
-
-        if (!transferRecipients.contains(wallet)) {
+        if (stats.transferToWalletCount() == 0) {
             return false;
         }
-        return tokenContracts.size() == 1
-                && tokenContracts.contains(txTo)
-                && transferSenders.size() == 1
-                && !transferSenders.contains(txSender)
-                && transferValues.size() == 1
-                && transferRecipients.size() >= MASS_AIRDROP_MIN_TRANSFER_LOGS;
+        return stats.tokenContracts().size() == 1
+                && stats.tokenContracts().contains(txTo)
+                && stats.transferSenders().size() == 1
+                && !stats.transferSenders().contains(txSender)
+                && stats.transferValues().size() == 1
+                && stats.uniqueRecipients() >= properties.getMassAirdropMinTransferLogs();
     }
 
     private Set<String> extractAddresses(RawTransaction tx) {
@@ -170,7 +172,6 @@ public class ScamFilter {
 
         Document raw = tx.getRawData();
 
-        // EVM: receipt has "to", "from", and logs with "address"
         if (raw.containsKey("logs") && raw.get("logs") instanceof List<?> logs) {
             for (Object o : logs) {
                 if (o instanceof Document log) {
@@ -220,18 +221,25 @@ public class ScamFilter {
         int zeroAmountTransferCount = 0;
         int transferFromWalletCount = 0;
         int transferToWalletCount = 0;
+        int approvalCount = 0;
         Set<String> recipients = new HashSet<>();
+        Set<String> senders = new HashSet<>();
+        Set<String> transferValues = new HashSet<>();
+        Set<String> tokenContracts = new HashSet<>();
 
         for (Object o : logs) {
             if (!(o instanceof Document log)) {
                 continue;
             }
             Object topicsObj = log.get("topics");
-            if (!(topicsObj instanceof List<?> topics) || topics.size() < 3) {
+            if (!(topicsObj instanceof List<?> topics) || topics.isEmpty()) {
                 continue;
             }
             String topic0 = normalize(rawString(topics.get(0)));
-            if (!ERC20_TRANSFER_TOPIC0.equals(topic0)) {
+            if (ERC20_APPROVAL_TOPIC0.equals(topic0)) {
+                approvalCount++;
+            }
+            if (!ERC20_TRANSFER_TOPIC0.equals(topic0) || topics.size() < 3) {
                 continue;
             }
             String transferFrom = topicToAddress(topics.get(1));
@@ -239,12 +247,22 @@ public class ScamFilter {
             if (transferFrom == null || transferTo == null) {
                 continue;
             }
+            String token = normalize(rawString(log.get("address")));
+            if (token == null) {
+                continue;
+            }
             transferCount++;
             recipients.add(transferTo);
-            if (wallet.equals(transferFrom)) {
+            senders.add(transferFrom);
+            tokenContracts.add(token);
+            String value = normalize(rawString(log.get("data")));
+            if (value != null) {
+                transferValues.add(value);
+            }
+            if (wallet != null && wallet.equals(transferFrom)) {
                 transferFromWalletCount++;
             }
-            if (wallet.equals(transferTo)) {
+            if (wallet != null && wallet.equals(transferTo)) {
                 transferToWalletCount++;
             }
             if (isZeroAmount(rawString(log.get("data")))) {
@@ -257,7 +275,11 @@ public class ScamFilter {
                 zeroAmountTransferCount,
                 transferFromWalletCount,
                 transferToWalletCount,
-                recipients.size()
+                recipients.size(),
+                Set.copyOf(senders),
+                Set.copyOf(transferValues),
+                Set.copyOf(tokenContracts),
+                approvalCount
         );
     }
 
@@ -280,12 +302,19 @@ public class ScamFilter {
         }
     }
 
+    private record ScamEvaluation(int score, List<String> signals, boolean drop) {
+    }
+
     private record TransferStats(
             int transferCount,
             int zeroAmountTransferCount,
             int transferFromWalletCount,
             int transferToWalletCount,
-            int uniqueRecipients
+            int uniqueRecipients,
+            Set<String> transferSenders,
+            Set<String> transferValues,
+            Set<String> tokenContracts,
+            int approvalCount
     ) {
         private boolean walletInvolved() {
             return transferFromWalletCount > 0 || transferToWalletCount > 0;

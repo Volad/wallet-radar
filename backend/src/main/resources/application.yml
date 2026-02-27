@@ -173,6 +173,21 @@ walletradar:
   # Phishing/scam filter: skip ingestion of txs involving blocklisted addresses (contracts, EOAs).
   scam-filter:
     enabled: true
+    drop-threshold: 100
+    blocklist-score: 1000
+    unsolicited-inbound-score: 35
+    mass-airdrop-score: 90
+    relay-sweep-score: 100
+    inbound-fanout-score: 85
+    zero-amount-poisoning-score: 95
+    wallet-initiated-credit: 60
+    mixed-wallet-flow-credit: 30
+    wallet-approval-credit: 20
+    mass-airdrop-min-transfer-logs: 20
+    mass-relay-spam-min-transfer-logs: 30
+    mass-inbound-fanout-min-recipients: 40
+    zero-amount-poisoning-min-transfer-logs: 100
+    zero-amount-poisoning-min-zero-transfers: 20
     # Add known scam/drainer/phishing addresses (EVM: 0x..., case-insensitive). Example:
     # blocklist:
     #   - "0x..."

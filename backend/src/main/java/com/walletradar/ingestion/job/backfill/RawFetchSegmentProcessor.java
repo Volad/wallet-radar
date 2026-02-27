@@ -52,7 +52,7 @@ public class RawFetchSegmentProcessor {
             List<RawTransaction> batch = adapter.fetchTransactions(walletAddress, networkId, start, end);
             List<RawTransaction> toUpsert = new ArrayList<>(batch.size());
             for (RawTransaction tx : batch) {
-                if (scamFilter.isScam(tx)) {
+                if (scamFilter.shouldDrop(tx)) {
                     continue;
                 }
                 ensureId(tx);

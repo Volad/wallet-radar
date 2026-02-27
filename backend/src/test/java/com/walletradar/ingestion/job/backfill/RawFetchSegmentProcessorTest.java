@@ -41,7 +41,7 @@ class RawFetchSegmentProcessorTest {
 
     @BeforeEach
     void setUp() {
-        when(scamFilter.isScam(any())).thenReturn(false);
+        when(scamFilter.shouldDrop(any())).thenReturn(false);
         processor = new RawFetchSegmentProcessor(mongoTemplate, scamFilter);
         when(mongoTemplate.bulkOps(BulkOperations.BulkMode.UNORDERED, RawTransaction.class)).thenReturn(bulkOperations);
         when(bulkOperations.upsert(any(Query.class), any(Update.class))).thenReturn(bulkOperations);
@@ -107,7 +107,7 @@ class RawFetchSegmentProcessorTest {
     @Test
     @DisplayName("processSegment skips scam tx and does not save")
     void processSegment_scamTx_skipped() {
-        when(scamFilter.isScam(any())).thenReturn(true);
+        when(scamFilter.shouldDrop(any())).thenReturn(true);
 
         NetworkAdapter adapter = new NetworkAdapter() {
             @Override

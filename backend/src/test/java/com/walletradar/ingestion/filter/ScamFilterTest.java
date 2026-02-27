@@ -32,7 +32,7 @@ class ScamFilterTest {
         props.setBlocklist(List.of());
         ScamFilter f = new ScamFilter(props);
         RawTransaction tx = txWithTo("0xanything");
-        assertThat(f.isScam(tx)).isFalse();
+        assertThat(f.shouldDrop(tx)).isFalse();
     }
 
     @Test
@@ -43,14 +43,14 @@ class ScamFilterTest {
         props.setBlocklist(List.of("0xscamcontract1111111111111111111111111111"));
         ScamFilter f = new ScamFilter(props);
         RawTransaction tx = txWithTo("0xscamcontract1111111111111111111111111111");
-        assertThat(f.isScam(tx)).isFalse();
+        assertThat(f.shouldDrop(tx)).isFalse();
     }
 
     @Test
     @DisplayName("returns true when tx to address is in blocklist")
     void toAddressInBlocklist_returnsTrue() {
         RawTransaction tx = txWithTo("0xscamcontract1111111111111111111111111111");
-        assertThat(filter.isScam(tx)).isTrue();
+        assertThat(filter.shouldDrop(tx)).isTrue();
     }
 
     @Test
@@ -67,21 +67,21 @@ class ScamFilterTest {
                 new Document("address", "0xother")
         ));
         tx.setRawData(raw);
-        assertThat(filter.isScam(tx)).isTrue();
+        assertThat(filter.shouldDrop(tx)).isTrue();
     }
 
     @Test
     @DisplayName("returns false when no address matches blocklist")
     void noMatch_returnsFalse() {
         RawTransaction tx = txWithTo("0xlegitcontract3333333333333333333333333333");
-        assertThat(filter.isScam(tx)).isFalse();
+        assertThat(filter.shouldDrop(tx)).isFalse();
     }
 
     @Test
     @DisplayName("blocklist check is case-insensitive")
     void caseInsensitive() {
         RawTransaction tx = txWithTo("0xSCAMCONTRACT1111111111111111111111111111");
-        assertThat(filter.isScam(tx)).isTrue();
+        assertThat(filter.shouldDrop(tx)).isTrue();
     }
 
     @Test
@@ -131,7 +131,7 @@ class ScamFilterTest {
         ));
         tx.setRawData(raw);
 
-        assertThat(f.isScam(tx)).isTrue();
+        assertThat(f.shouldDrop(tx)).isTrue();
     }
 
     @Test
@@ -175,7 +175,7 @@ class ScamFilterTest {
         ));
         tx.setRawData(raw);
 
-        assertThat(f.isScam(tx)).isFalse();
+        assertThat(f.shouldDrop(tx)).isFalse();
     }
 
     @Test
@@ -220,7 +220,7 @@ class ScamFilterTest {
         ));
         tx.setRawData(raw);
 
-        assertThat(f.isScam(tx)).isFalse();
+        assertThat(f.shouldDrop(tx)).isFalse();
     }
 
     @Test
@@ -250,7 +250,7 @@ class ScamFilterTest {
         raw.put("logs", logs);
         tx.setRawData(raw);
 
-        assertThat(f.isScam(tx)).isTrue();
+        assertThat(f.shouldDrop(tx)).isTrue();
     }
 
     @Test
@@ -280,7 +280,7 @@ class ScamFilterTest {
         raw.put("logs", logs);
         tx.setRawData(raw);
 
-        assertThat(f.isScam(tx)).isTrue();
+        assertThat(f.shouldDrop(tx)).isTrue();
     }
 
     @Test
@@ -311,7 +311,73 @@ class ScamFilterTest {
         raw.put("logs", logs);
         tx.setRawData(raw);
 
-        assertThat(f.isScam(tx)).isFalse();
+        assertThat(f.shouldDrop(tx)).isFalse();
+    }
+
+    @Test
+    @DisplayName("does not mark as scam for unsolicited relay payout with few transfer logs")
+    void unsolicitedRelayPayoutFewTransfers_notScam() {
+        ScamFilterProperties props = new ScamFilterProperties();
+        props.setEnabled(true);
+        ScamFilter f = new ScamFilter(props);
+
+        String wallet = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String relay = "0xf5042e6ffac5a625d4e7848e0b01373d8eb9e222";
+        String weth = "0x82af49447d8a07e3bd95bd0d56f35241523fbab1";
+        String sender = "0xf70da97812cb96acdf810712aa562db8dfa3dbef";
+        String amount = "0x00000000000000000000000000000000000000000000000000261a944954f754";
+
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0xfeca-like");
+        tx.setNetworkId("ARBITRUM");
+        tx.setWalletAddress(wallet);
+        Document raw = new Document();
+        raw.put("from", sender);
+        raw.put("to", relay);
+        raw.put("logs", List.of(
+                transferLog(weth, "0x0000000000000000000000000000000000000000", relay, amount),
+                customLog(relay, "0x93485dcd31a905e3ffd7b012abe3438fa8fa77f98ddc9f50e879d3fa7ccdc324"),
+                transferLog(weth, relay, relay, amount),
+                customLog(relay, "0x93485dcd31a905e3ffd7b012abe3438fa8fa77f98ddc9f50e879d3fa7ccdc324"),
+                transferLog(weth, relay, wallet, amount),
+                customLog(relay, "0x93485dcd31a905e3ffd7b012abe3438fa8fa77f98ddc9f50e879d3fa7ccdc324")
+        ));
+        tx.setRawData(raw);
+
+        assertThat(f.shouldDrop(tx)).isFalse();
+    }
+
+    @Test
+    @DisplayName("does not mark as scam for unsolicited complex settlement below fanout threshold")
+    void unsolicitedComplexSettlement_notScam() {
+        ScamFilterProperties props = new ScamFilterProperties();
+        props.setEnabled(true);
+        ScamFilter f = new ScamFilter(props);
+
+        String wallet = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String token = "0x82af49447d8a07e3bd95bd0d56f35241523fbab1";
+
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0x2a158-like");
+        tx.setNetworkId("ARBITRUM");
+        tx.setWalletAddress(wallet);
+        Document raw = new Document();
+        raw.put("from", "0x5f4ac8e6f6f8f7abf8b91f4a1dc7e7c6f908ad2f");
+        raw.put("to", "0xbbbfd134e9b44bfb5123898ba36b01de7ab93d98");
+
+        List<Document> logs = new ArrayList<>();
+        for (int i = 0; i < 32; i++) {
+            String from = hexAddress(i + 1000);
+            String to = hexAddress((i % 16) + 2000); // unique recipients stays below fanout threshold
+            logs.add(transferLog(token, from, to, "0x2"));
+        }
+        logs.add(transferLog(token, hexAddress(3001), wallet, "0x3"));
+        logs.add(customLog(hexAddress(4001), "0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925"));
+        logs.add(customLog(hexAddress(4002), "0x93485dcd31a905e3ffd7b012abe3438fa8fa77f98ddc9f50e879d3fa7ccdc324"));
+        raw.put("logs", logs);
+        tx.setRawData(raw);
+
+        assertThat(f.shouldDrop(tx)).isFalse();
     }
 
     private static RawTransaction txWithTo(String to) {
@@ -332,6 +398,12 @@ class ScamFilterTest {
                         addressTopic(to)
                 ))
                 .append("data", amount);
+    }
+
+    private static Document customLog(String address, String topic0) {
+        return new Document("address", address)
+                .append("topics", List.of(topic0))
+                .append("data", "0x0");
     }
 
     private static String addressTopic(String address) {

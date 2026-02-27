@@ -30,6 +30,81 @@ public class ScamFilterProperties {
     private List<String> blocklist = List.of();
 
     /**
+     * Final score threshold to drop a transaction.
+     */
+    private int dropThreshold = 100;
+
+    /**
+     * Score added when tx contains blocklisted address.
+     */
+    private int blocklistScore = 1000;
+
+    /**
+     * Score added for unsolicited inbound tx (sender != wallet, wallet only receives).
+     */
+    private int unsolicitedInboundScore = 35;
+
+    /**
+     * Score added for mass single-token unsolicited airdrop pattern.
+     */
+    private int massAirdropScore = 90;
+
+    /**
+     * Score added for relay sweep spam pattern.
+     */
+    private int relaySweepScore = 100;
+
+    /**
+     * Score added for inbound fanout spam pattern.
+     */
+    private int inboundFanoutScore = 85;
+
+    /**
+     * Score added for zero-amount poisoning pattern.
+     */
+    private int zeroAmountPoisoningScore = 95;
+
+    /**
+     * Score credit for wallet-initiated tx.
+     */
+    private int walletInitiatedCredit = 60;
+
+    /**
+     * Score credit when wallet has both inbound and outbound transfer legs in same tx.
+     */
+    private int mixedWalletFlowCredit = 30;
+
+    /**
+     * Score credit when wallet-initiated tx also includes approvals (common swap/deposit pattern).
+     */
+    private int walletApprovalCredit = 20;
+
+    /**
+     * Minimum transfer logs for mass unsolicited airdrop detection.
+     */
+    private int massAirdropMinTransferLogs = 20;
+
+    /**
+     * Minimum transfer logs for relay/fanout spam heuristics.
+     */
+    private int massRelaySpamMinTransferLogs = 30;
+
+    /**
+     * Minimum unique recipients for inbound fanout spam.
+     */
+    private int massInboundFanoutMinRecipients = 40;
+
+    /**
+     * Minimum transfer logs for zero-amount poisoning.
+     */
+    private int zeroAmountPoisoningMinTransferLogs = 100;
+
+    /**
+     * Minimum zero-amount transfers for zero-amount poisoning.
+     */
+    private int zeroAmountPoisoningMinZeroTransfers = 20;
+
+    /**
      * Normalized blocklist (lowercase) for fast lookup. Built from blocklist.
      */
     public Set<String> getBlocklistNormalized() {
