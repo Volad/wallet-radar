@@ -16,6 +16,7 @@
 - Network IDs: `ETHEREUM` | `ARBITRUM` | `OPTIMISM` | `BASE` | `BSC` | `POLYGON` | `AVALANCHE` | `MANTLE` | `SOLANA`
 - `crossWalletAvco` is always **global across all networks** — network filter does not change it
 - `202 Accepted` responses include a job or sync ID for polling
+- Transaction history endpoints return only `CONFIRMED` normalized transactions by default (ADR-025)
 
 ---
 
@@ -99,7 +100,8 @@ GET /api/v1/wallets/{address}/status?network={networkId}
 
 `status` values: `PENDING` | `RUNNING` | `COMPLETE` | `PARTIAL` | `FAILED` | `ABANDONED`  
 `syncBannerMessage` is `null` when `status=COMPLETE`  
-`ABANDONED` means the network exceeded the maximum retry count (default 5) — user can re-add the wallet to reset.
+`ABANDONED` applies to legacy/non-segment mode after max retries.  
+For segment-mode backfill (`backfill_segments` enabled), retry is unbounded and status stays `FAILED/RUNNING` until segments converge to `COMPLETE`.
 
 **Response `404 Not Found`:** No sync status for the given address (or for the given address×network when `network` is specified).
 
@@ -250,6 +252,10 @@ GET /api/v1/assets/{assetId}/transactions?cursor={cursor}&limit=50&direction=DES
 ```
 
 `nextCursor` is `null` when there are no more pages.
+
+**Visibility rule:**
+- Default response includes only records with normalized transaction `status=CONFIRMED`.
+- Optional debug/admin mode may expose non-confirmed statuses separately.
 
 ---
 

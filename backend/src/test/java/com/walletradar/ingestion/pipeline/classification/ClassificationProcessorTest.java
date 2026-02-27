@@ -8,10 +8,12 @@ import com.walletradar.ingestion.adapter.BlockTimestampResolver;
 import com.walletradar.ingestion.adapter.evm.EstimatingBlockTimestampResolver;
 import com.walletradar.ingestion.classifier.RawClassifiedEvent;
 import com.walletradar.ingestion.classifier.TxClassifierDispatcher;
+import com.walletradar.ingestion.normalizer.NormalizedTransactionBuilder;
 import com.walletradar.ingestion.pipeline.enrichment.InlineSwapPriceEnricher;
 import com.walletradar.ingestion.normalizer.EconomicEventNormalizer;
 import com.walletradar.ingestion.normalizer.GasCostCalculator;
 import com.walletradar.ingestion.store.IdempotentEventStore;
+import com.walletradar.ingestion.store.IdempotentNormalizedTransactionStore;
 import com.walletradar.pricing.HistoricalPriceResolverChain;
 import com.walletradar.pricing.PriceResolutionResult;
 import org.junit.jupiter.api.BeforeEach;
@@ -43,6 +45,8 @@ class ClassificationProcessorTest {
 
     @Mock private RawTransactionRepository rawTransactionRepository;
     @Mock private TxClassifierDispatcher txClassifierDispatcher;
+    @Mock private NormalizedTransactionBuilder normalizedTransactionBuilder;
+    @Mock private IdempotentNormalizedTransactionStore idempotentNormalizedTransactionStore;
     @Mock private IdempotentEventStore idempotentEventStore;
     @Mock private HistoricalPriceResolverChain historicalPriceResolverChain;
 
@@ -55,12 +59,16 @@ class ClassificationProcessorTest {
         processor = new ClassificationProcessor(
                 rawTransactionRepository,
                 txClassifierDispatcher,
+                normalizedTransactionBuilder,
+                idempotentNormalizedTransactionStore,
                 normalizer,
                 enricher,
                 idempotentEventStore,
                 historicalPriceResolverChain
         );
         when(historicalPriceResolverChain.resolve(any())).thenReturn(PriceResolutionResult.unknown());
+        when(normalizedTransactionBuilder.build(anyString(), any(), anyString(), any(), any()))
+                .thenReturn(new com.walletradar.domain.NormalizedTransaction());
     }
 
     @Test
@@ -105,6 +113,7 @@ class ClassificationProcessorTest {
                 Set.of("0xWALLET"));
 
         verify(idempotentEventStore).upsert(any());
+        verify(idempotentNormalizedTransactionStore).upsert(any());
         verify(rawTransactionRepository).save(raw);
         assertThat(raw.getClassificationStatus()).isEqualTo(ClassificationStatus.COMPLETE);
     }
@@ -128,5 +137,6 @@ class ClassificationProcessorTest {
                 Set.of("0xWALLET"));
 
         verify(idempotentEventStore, never()).upsert(any());
+        verify(idempotentNormalizedTransactionStore, never()).upsert(any());
     }
 }

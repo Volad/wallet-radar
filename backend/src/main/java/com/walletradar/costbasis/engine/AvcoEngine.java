@@ -8,6 +8,10 @@ import com.walletradar.domain.EconomicEventRepository;
 import com.walletradar.domain.AssetPositionRepository;
 import com.walletradar.domain.CostBasisOverrideRepository;
 import com.walletradar.domain.NetworkId;
+import com.walletradar.domain.NormalizedTransaction;
+import com.walletradar.domain.NormalizedTransactionRepository;
+import com.walletradar.domain.NormalizedTransactionStatus;
+import com.walletradar.domain.NormalizedTransactionType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -37,6 +41,7 @@ public class AvcoEngine {
     private static final RoundingMode ROUNDING = RoundingMode.HALF_UP;
 
     private final EconomicEventRepository economicEventRepository;
+    private final NormalizedTransactionRepository normalizedTransactionRepository;
     private final AssetPositionRepository assetPositionRepository;
     private final CostBasisOverrideRepository costBasisOverrideRepository;
 
@@ -47,6 +52,13 @@ public class AvcoEngine {
      * computes realised P&amp;L on SELL (INV-07), sets hasIncompleteHistory if first event is SELL/transfer-out (INV-09).
      */
     public void replayFromBeginning(String walletAddress, NetworkId networkId, String assetContract) {
+        if (replayFromConfirmedNormalized(walletAddress, networkId, assetContract)) {
+            return;
+        }
+        replayFromLegacyEconomicEvents(walletAddress, networkId, assetContract);
+    }
+
+    private void replayFromLegacyEconomicEvents(String walletAddress, NetworkId networkId, String assetContract) {
         List<EconomicEvent> events = new ArrayList<>(economicEventRepository
                 .findByWalletAddressAndNetworkIdAndAssetContractOrderByBlockTimestampAsc(
                         walletAddress, networkId, assetContract));
@@ -113,9 +125,14 @@ public class AvcoEngine {
                         && addQty.compareTo(BigDecimal.ZERO) > 0) {
                     priceForBasis = effectivePrice.add(event.getGasCostUsd().divide(addQty, SCALE, ROUNDING));
                 }
-                if (quantity.compareTo(BigDecimal.ZERO) == 0) {
-                    avco = priceForBasis;
-                    quantity = addQty;
+                if (quantity.compareTo(BigDecimal.ZERO) <= 0) {
+                    BigDecimal newQty = quantity.add(addQty);
+                    if (newQty.compareTo(BigDecimal.ZERO) > 0) {
+                        // Incomplete history may drive running qty below zero; once it turns positive,
+                        // restart AVCO from the first positive lot we can account for.
+                        avco = priceForBasis;
+                    }
+                    quantity = newQty;
                 } else {
                     BigDecimal newQty = quantity.add(addQty);
                     avco = (avco.multiply(quantity).add(priceForBasis.multiply(addQty))).divide(newQty, SCALE, ROUNDING);
@@ -152,10 +169,139 @@ public class AvcoEngine {
         assetPositionRepository.save(position);
     }
 
+    private boolean replayFromConfirmedNormalized(String walletAddress, NetworkId networkId, String assetContract) {
+        List<NormalizedTransaction> confirmed = normalizedTransactionRepository
+                .findByWalletAddressAndNetworkIdAndStatusOrderByBlockTimestampAsc(
+                        walletAddress, networkId, NormalizedTransactionStatus.CONFIRMED);
+        if (confirmed.isEmpty()) {
+            return false;
+        }
+
+        record LegCursor(NormalizedTransaction tx, NormalizedTransaction.Leg leg) {}
+
+        List<LegCursor> timeline = new ArrayList<>();
+        for (NormalizedTransaction tx : confirmed) {
+            if (tx.getLegs() == null) continue;
+            for (NormalizedTransaction.Leg leg : tx.getLegs()) {
+                if (leg.getAssetContract() == null || !leg.getAssetContract().equalsIgnoreCase(assetContract)) {
+                    continue;
+                }
+                timeline.add(new LegCursor(tx, leg));
+            }
+        }
+        timeline.sort(Comparator
+                .comparing((LegCursor c) -> c.tx().getBlockTimestamp(), Comparator.nullsLast(Comparator.naturalOrder()))
+                .thenComparing(c -> c.leg().getLogIndex(), Comparator.nullsLast(Comparator.naturalOrder())));
+
+        if (timeline.isEmpty()) {
+            removePositionIfPresent(walletAddress, networkId.name(), assetContract);
+            return true;
+        }
+
+        BigDecimal quantity = BigDecimal.ZERO;
+        BigDecimal avco = BigDecimal.ZERO;
+        BigDecimal totalRealisedPnlUsd = BigDecimal.ZERO;
+        BigDecimal totalGasPaidUsd = BigDecimal.ZERO;
+        boolean hasIncompleteHistory = false;
+        Instant lastEventTimestamp = null;
+        String assetSymbol = timeline.stream()
+                .map(c -> c.leg().getAssetSymbol())
+                .filter(s -> s != null && !s.isBlank())
+                .findFirst()
+                .orElse("");
+        boolean first = true;
+        Set<NormalizedTransaction> mutated = new HashSet<>();
+
+        for (LegCursor cursor : timeline) {
+            NormalizedTransaction tx = cursor.tx();
+            NormalizedTransaction.Leg leg = cursor.leg();
+            BigDecimal qtyDelta = leg.getQuantityDelta() != null ? leg.getQuantityDelta() : BigDecimal.ZERO;
+            BigDecimal effectivePrice = leg.getUnitPriceUsd() != null ? leg.getUnitPriceUsd() : BigDecimal.ZERO;
+
+            if (first) {
+                hasIncompleteHistory = isFirstNormalizedLegIncomplete(tx.getType(), qtyDelta);
+                first = false;
+            }
+            lastEventTimestamp = tx.getBlockTimestamp();
+
+            if (isNormalizedSellLeg(tx.getType(), qtyDelta)) {
+                BigDecimal sellQty = qtyDelta.abs();
+                BigDecimal avcoAtSale = avco;
+                BigDecimal realisedPnl = (effectivePrice.subtract(avcoAtSale)).multiply(sellQty).setScale(SCALE, ROUNDING);
+                leg.setAvcoAtTimeOfSale(avcoAtSale);
+                leg.setRealisedPnlUsd(realisedPnl);
+                mutated.add(tx);
+                totalRealisedPnlUsd = totalRealisedPnlUsd.add(realisedPnl);
+                quantity = quantity.add(qtyDelta);
+            } else if (isNormalizedInflow(tx.getType(), qtyDelta)) {
+                BigDecimal addQty = qtyDelta;
+                if (quantity.compareTo(BigDecimal.ZERO) <= 0) {
+                    BigDecimal newQty = quantity.add(addQty);
+                    if (newQty.compareTo(BigDecimal.ZERO) > 0) {
+                        avco = effectivePrice;
+                    }
+                    quantity = newQty;
+                } else {
+                    BigDecimal newQty = quantity.add(addQty);
+                    avco = (avco.multiply(quantity).add(effectivePrice.multiply(addQty))).divide(newQty, SCALE, ROUNDING);
+                    quantity = newQty;
+                }
+            } else if (isNormalizedOutflow(qtyDelta)) {
+                quantity = quantity.add(qtyDelta);
+            }
+        }
+
+        if (!mutated.isEmpty()) {
+            normalizedTransactionRepository.saveAll(mutated);
+        }
+
+        Instant now = Instant.now();
+        AssetPosition position = assetPositionRepository
+                .findByWalletAddressAndNetworkIdAndAssetContract(walletAddress, networkId.name(), assetContract)
+                .orElse(new AssetPosition());
+        position.setWalletAddress(walletAddress);
+        position.setNetworkId(networkId.name());
+        position.setAssetSymbol(assetSymbol);
+        position.setAssetContract(assetContract);
+        position.setQuantity(quantity.max(BigDecimal.ZERO));
+        position.setPerWalletAvco(avco);
+        position.setTotalCostBasisUsd(quantity.max(BigDecimal.ZERO).multiply(avco).setScale(SCALE, ROUNDING));
+        position.setTotalGasPaidUsd(totalGasPaidUsd);
+        position.setTotalRealisedPnlUsd(totalRealisedPnlUsd);
+        position.setHasIncompleteHistory(hasIncompleteHistory);
+        position.setHasUnresolvedFlags(false);
+        position.setUnresolvedFlagCount(0);
+        position.setLastEventTimestamp(lastEventTimestamp);
+        position.setLastCalculatedAt(now);
+        assetPositionRepository.save(position);
+        return true;
+    }
+
     /**
      * Replay from beginning for all (network, asset) pairs that have events for the given wallet.
      */
     public void recalculateForWallet(String walletAddress) {
+        List<NormalizedTransaction> confirmed = normalizedTransactionRepository
+                .findByWalletAddressAndStatusOrderByBlockTimestampAsc(walletAddress, NormalizedTransactionStatus.CONFIRMED);
+        if (!confirmed.isEmpty()) {
+            Set<String> pairs = new HashSet<>();
+            for (NormalizedTransaction tx : confirmed) {
+                if (tx.getNetworkId() == null || tx.getLegs() == null) {
+                    continue;
+                }
+                for (NormalizedTransaction.Leg leg : tx.getLegs()) {
+                    if (leg.getAssetContract() == null || leg.getAssetContract().isBlank()) {
+                        continue;
+                    }
+                    pairs.add(tx.getNetworkId().name() + "\0" + leg.getAssetContract());
+                }
+            }
+            for (String key : pairs) {
+                int i = key.indexOf('\0');
+                replayFromBeginning(walletAddress, NetworkId.valueOf(key.substring(0, i)), key.substring(i + 1));
+            }
+            return;
+        }
         List<EconomicEvent> markers = economicEventRepository.findNetworkIdAndAssetContractByWalletAddress(walletAddress);
         if (markers.isEmpty()) {
             return;
@@ -185,5 +331,36 @@ public class AvcoEngine {
     private void removePositionIfPresent(String walletAddress, String networkId, String assetContract) {
         assetPositionRepository.findByWalletAddressAndNetworkIdAndAssetContract(walletAddress, networkId, assetContract)
                 .ifPresent(assetPositionRepository::delete);
+    }
+
+    private static boolean isNormalizedSellLeg(NormalizedTransactionType type, BigDecimal qtyDelta) {
+        if (qtyDelta == null || qtyDelta.compareTo(BigDecimal.ZERO) >= 0) {
+            return false;
+        }
+        return type == NormalizedTransactionType.SWAP || type == NormalizedTransactionType.LP_EXIT;
+    }
+
+    private static boolean isNormalizedInflow(NormalizedTransactionType type, BigDecimal qtyDelta) {
+        if (qtyDelta == null || qtyDelta.compareTo(BigDecimal.ZERO) <= 0) {
+            return false;
+        }
+        return type == NormalizedTransactionType.SWAP
+                || type == NormalizedTransactionType.BORROW
+                || type == NormalizedTransactionType.STAKE_WITHDRAWAL
+                || type == NormalizedTransactionType.LEND_WITHDRAWAL
+                || type == NormalizedTransactionType.EXTERNAL_INBOUND
+                || type == NormalizedTransactionType.MANUAL_COMPENSATING
+                || type == NormalizedTransactionType.INTERNAL_TRANSFER;
+    }
+
+    private static boolean isNormalizedOutflow(BigDecimal qtyDelta) {
+        return qtyDelta != null && qtyDelta.compareTo(BigDecimal.ZERO) < 0;
+    }
+
+    private static boolean isFirstNormalizedLegIncomplete(NormalizedTransactionType type, BigDecimal qtyDelta) {
+        return isNormalizedSellLeg(type, qtyDelta)
+                || (qtyDelta != null && qtyDelta.compareTo(BigDecimal.ZERO) < 0
+                && type != NormalizedTransactionType.SWAP
+                && type != NormalizedTransactionType.LP_EXIT);
     }
 }

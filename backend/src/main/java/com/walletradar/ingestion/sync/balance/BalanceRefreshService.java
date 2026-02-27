@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.walletradar.config.AsyncConfig;
 import com.walletradar.domain.EconomicEventRepository;
 import com.walletradar.domain.NetworkId;
+import com.walletradar.domain.NormalizedTransactionRepository;
+import com.walletradar.domain.NormalizedTransactionStatus;
 import com.walletradar.domain.OnChainBalance;
 import com.walletradar.domain.OnChainBalanceRepository;
 import com.walletradar.domain.SyncStatus;
@@ -67,6 +69,7 @@ public class BalanceRefreshService {
     private final SyncStatusRepository syncStatusRepository;
     private final OnChainBalanceRepository onChainBalanceRepository;
     private final EconomicEventRepository economicEventRepository;
+    private final NormalizedTransactionRepository normalizedTransactionRepository;
     private final EvmTokenDecimalsResolver evmTokenDecimalsResolver;
     private final EvmRpcClient evmRpcClient;
     private final SolanaRpcClient solanaRpcClient;
@@ -182,6 +185,9 @@ public class BalanceRefreshService {
 
     private Set<String> resolveKnownTokenContracts(String walletAddress, NetworkId networkId) {
         Set<String> contracts = new LinkedHashSet<>();
+        contracts.addAll(normalizedTransactionRepository
+                .findDistinctAssetContractsByWalletAddressAndNetworkIdAndStatus(
+                        walletAddress, networkId, NormalizedTransactionStatus.CONFIRMED));
         contracts.addAll(economicEventRepository.findDistinctAssetContractsByWalletAddressAndNetworkId(walletAddress, networkId));
         contracts.addAll(onChainBalanceRepository.findByWalletAddressAndNetworkId(walletAddress, networkId.name()).stream()
                 .map(OnChainBalance::getAssetContract)
@@ -326,4 +332,3 @@ public class BalanceRefreshService {
         return NATIVE_CONTRACT.getOrDefault(networkId, EVM_NATIVE_CONTRACT);
     }
 }
-

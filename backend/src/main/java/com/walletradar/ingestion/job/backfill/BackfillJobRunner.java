@@ -1,5 +1,6 @@
 package com.walletradar.ingestion.job.backfill;
 
+import com.walletradar.domain.BackfillSegmentRepository;
 import com.walletradar.domain.EconomicEvent;
 import com.walletradar.domain.NetworkId;
 import com.walletradar.domain.RecalculateWalletRequestEvent;
@@ -57,6 +58,7 @@ public class BackfillJobRunner {
     private final InternalTransferReclassifier internalTransferReclassifier;
     private final ApplicationEventPublisher applicationEventPublisher;
     private final SyncStatusRepository syncStatusRepository;
+    private final BackfillSegmentRepository backfillSegmentRepository;
     @Qualifier("backfill-coordinator-executor")
     private final Executor backfillCoordinatorExecutor;
     @Qualifier("backfill-executor")
@@ -190,18 +192,35 @@ public class BackfillJobRunner {
         Instant now = Instant.now();
         int maxRetries = backfillProperties.getMaxRetries();
 
-        List<SyncStatus> failed = syncStatusRepository.findByStatusIn(Set.of(SyncStatusValue.FAILED));
+        List<SyncStatus> failed = syncStatusRepository.findByStatusIn(Set.of(SyncStatusValue.FAILED, SyncStatusValue.RUNNING));
         int enqueued = 0;
         for (SyncStatus s : failed) {
             if (s.getWalletAddress() == null || s.getNetworkId() == null) continue;
+            boolean segmentMode = s.getId() != null && backfillSegmentRepository.existsBySyncStatusId(s.getId());
+
+            if (s.getStatus() == SyncStatusValue.RUNNING) {
+                if (!segmentMode) {
+                    continue;
+                }
+                try {
+                    NetworkId networkId = NetworkId.valueOf(s.getNetworkId());
+                    BackfillWorkItem item = new BackfillWorkItem(s.getWalletAddress(), networkId);
+                    if (enqueueItemIfSupported(item)) {
+                        enqueued++;
+                    }
+                } catch (IllegalArgumentException ignored) { /* unknown network */ }
+                continue;
+            }
 
             if (s.getRetryCount() >= maxRetries) {
-                s.setStatus(SyncStatusValue.ABANDONED);
-                s.setSyncBannerMessage("Abandoned after " + maxRetries + " retries");
-                s.setUpdatedAt(now);
-                syncStatusRepository.save(s);
-                log.info("Backfill ABANDONED for {} on {} after {} retries", s.getWalletAddress(), s.getNetworkId(), maxRetries);
-                continue;
+                if (!segmentMode) {
+                    s.setStatus(SyncStatusValue.ABANDONED);
+                    s.setSyncBannerMessage("Abandoned after " + maxRetries + " retries");
+                    s.setUpdatedAt(now);
+                    syncStatusRepository.save(s);
+                    log.info("Backfill ABANDONED for {} on {} after {} retries", s.getWalletAddress(), s.getNetworkId(), maxRetries);
+                    continue;
+                }
             }
 
             if (s.getNextRetryAfter() != null && now.isBefore(s.getNextRetryAfter())) {

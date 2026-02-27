@@ -3,6 +3,7 @@ package com.walletradar.ingestion.sync.balance;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.walletradar.domain.EconomicEventRepository;
 import com.walletradar.domain.NetworkId;
+import com.walletradar.domain.NormalizedTransactionRepository;
 import com.walletradar.domain.OnChainBalance;
 import com.walletradar.domain.OnChainBalanceRepository;
 import com.walletradar.domain.SyncStatusRepository;
@@ -40,6 +41,8 @@ class BalanceRefreshServiceTest {
     @Mock
     private EconomicEventRepository economicEventRepository;
     @Mock
+    private NormalizedTransactionRepository normalizedTransactionRepository;
+    @Mock
     private EvmTokenDecimalsResolver evmTokenDecimalsResolver;
     @Mock
     private EvmRpcClient evmRpcClient;
@@ -56,6 +59,7 @@ class BalanceRefreshServiceTest {
                 syncStatusRepository,
                 onChainBalanceRepository,
                 economicEventRepository,
+                normalizedTransactionRepository,
                 evmTokenDecimalsResolver,
                 evmRpcClient,
                 solanaRpcClient,
@@ -75,6 +79,9 @@ class BalanceRefreshServiceTest {
 
         when(economicEventRepository.findDistinctAssetContractsByWalletAddressAndNetworkId(wallet, NetworkId.ARBITRUM))
                 .thenReturn(List.of(token));
+        when(normalizedTransactionRepository.findDistinctAssetContractsByWalletAddressAndNetworkIdAndStatus(
+                wallet, NetworkId.ARBITRUM, com.walletradar.domain.NormalizedTransactionStatus.CONFIRMED))
+                .thenReturn(List.of());
         when(onChainBalanceRepository.findByWalletAddressAndNetworkId(wallet, NetworkId.ARBITRUM.name()))
                 .thenReturn(List.of());
         when(onChainBalanceRepository.findByWalletAddressAndNetworkIdAndAssetContract(anyString(), anyString(), anyString()))
@@ -103,4 +110,3 @@ class BalanceRefreshServiceTest {
                 .isEqualTo(new java.math.BigDecimal("1710.000000000000000000"));
     }
 }
-

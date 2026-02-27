@@ -5,10 +5,13 @@ import com.walletradar.domain.NetworkId;
 import com.walletradar.domain.RawTransaction;
 import com.walletradar.common.RetryPolicy;
 import com.walletradar.ingestion.config.IngestionNetworkProperties;
+import com.walletradar.ingestion.config.IngestionEvmRpcProperties;
 import com.walletradar.ingestion.adapter.evm.EvmBatchBlockSizeResolver;
 import com.walletradar.ingestion.adapter.evm.EvmNetworkAdapter;
 import com.walletradar.ingestion.adapter.evm.EvmRpcClient;
 import com.walletradar.ingestion.adapter.evm.RpcRequest;
+import io.github.resilience4j.ratelimiter.RateLimiter;
+import io.github.resilience4j.ratelimiter.RateLimiterConfig;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -17,6 +20,8 @@ import reactor.core.publisher.Mono;
 
 import java.util.List;
 import java.util.Map;
+import java.time.Duration;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -28,6 +33,7 @@ class EvmNetworkAdapterTest {
     private EvmNetworkAdapter adapter;
     private MockEvmRpcClient mockRpc;
     private RpcEndpointRotator rotator;
+    private IngestionEvmRpcProperties evmRpcProperties;
 
     @BeforeEach
     void setUp() {
@@ -36,7 +42,8 @@ class EvmNetworkAdapterTest {
         IngestionNetworkProperties properties = new IngestionNetworkProperties();
         EvmBatchBlockSizeResolver resolver = new EvmBatchBlockSizeResolver(properties);
         Map<String, RpcEndpointRotator> rotatorsByNetwork = Map.of("ETHEREUM", rotator, "ARBITRUM", rotator);
-        adapter = new EvmNetworkAdapter(mockRpc, rotatorsByNetwork, rotator, new ObjectMapper(), resolver);
+        evmRpcProperties = evmRpcProps();
+        adapter = new EvmNetworkAdapter(mockRpc, rotatorsByNetwork, rotator, fastLimiter(), evmRpcProperties, new ObjectMapper(), resolver);
     }
 
     @Test
@@ -105,7 +112,7 @@ class EvmNetworkAdapterTest {
         properties.setNetwork(Map.of("ARBITRUM", entry(500)));
         EvmBatchBlockSizeResolver resolver = new EvmBatchBlockSizeResolver(properties);
         RpcEndpointRotator r = new RpcEndpointRotator(List.of("https://test.rpc"), RetryPolicy.defaultPolicy());
-        EvmNetworkAdapter adapterWithResolver = new EvmNetworkAdapter(mockRpc, Map.of("ARBITRUM", r), r, new ObjectMapper(), resolver);
+        EvmNetworkAdapter adapterWithResolver = new EvmNetworkAdapter(mockRpc, Map.of("ARBITRUM", r), r, fastLimiter(), evmRpcProps(), new ObjectMapper(), resolver);
 
         List<RawTransaction> result = adapterWithResolver.fetchTransactions("0x1234", NetworkId.POLYGON, 1L, 10L);
         assertThat(result).isEmpty();
@@ -168,7 +175,7 @@ class EvmNetworkAdapterTest {
         RetryPolicy policy = new RetryPolicy(0, 0.0, 3);
         RpcEndpointRotator r = new RpcEndpointRotator(List.of("https://test.rpc"), policy);
         EvmBatchBlockSizeResolver resolver = new EvmBatchBlockSizeResolver(new IngestionNetworkProperties());
-        EvmNetworkAdapter splittingAdapter = new EvmNetworkAdapter(splittingRpc, Map.of("ETHEREUM", r), r, new ObjectMapper(), resolver);
+        EvmNetworkAdapter splittingAdapter = new EvmNetworkAdapter(splittingRpc, Map.of("ETHEREUM", r), r, fastLimiter(), evmRpcProps(), new ObjectMapper(), resolver);
 
         // Range of 200 blocks — large enough to split (> MIN_CHUNK_SIZE=50)
         List<RawTransaction> result = splittingAdapter.fetchTransactions("0x1234", NetworkId.ETHEREUM, 1L, 200L);
@@ -187,7 +194,7 @@ class EvmNetworkAdapterTest {
         RetryPolicy policy = new RetryPolicy(0, 0.0, 3);
         RpcEndpointRotator r = new RpcEndpointRotator(List.of("https://test.rpc"), policy);
         EvmBatchBlockSizeResolver resolver = new EvmBatchBlockSizeResolver(new IngestionNetworkProperties());
-        EvmNetworkAdapter smallRangeAdapter = new EvmNetworkAdapter(errorRpc, Map.of("ETHEREUM", r), r, new ObjectMapper(), resolver);
+        EvmNetworkAdapter smallRangeAdapter = new EvmNetworkAdapter(errorRpc, Map.of("ETHEREUM", r), r, fastLimiter(), evmRpcProps(), new ObjectMapper(), resolver);
 
         // Range of 10 blocks — too small to split (< MIN_CHUNK_SIZE=50), should propagate error
         assertThatThrownBy(() -> smallRangeAdapter.fetchTransactions("0x1234", NetworkId.ETHEREUM, 1L, 10L))
@@ -217,7 +224,7 @@ class EvmNetworkAdapterTest {
 
         RpcEndpointRotator r = new RpcEndpointRotator(List.of("https://test.rpc"), RetryPolicy.defaultPolicy());
         EvmBatchBlockSizeResolver resolver = new EvmBatchBlockSizeResolver(new IngestionNetworkProperties());
-        EvmNetworkAdapter batchAdapter = new EvmNetworkAdapter(trackingRpc, Map.of("ETHEREUM", r), r, new ObjectMapper(), resolver);
+        EvmNetworkAdapter batchAdapter = new EvmNetworkAdapter(trackingRpc, Map.of("ETHEREUM", r), r, fastLimiter(), evmRpcProps(), new ObjectMapper(), resolver);
 
         batchAdapter.fetchTransactions("0x1234", NetworkId.ETHEREUM, 1L, 1L);
 
@@ -244,7 +251,7 @@ class EvmNetworkAdapterTest {
 
         RpcEndpointRotator r = new RpcEndpointRotator(List.of("https://test.rpc"), RetryPolicy.defaultPolicy());
         EvmBatchBlockSizeResolver resolver = new EvmBatchBlockSizeResolver(new IngestionNetworkProperties());
-        EvmNetworkAdapter fallbackAdapter = new EvmNetworkAdapter(failBatchRpc, Map.of("ETHEREUM", r), r, new ObjectMapper(), resolver);
+        EvmNetworkAdapter fallbackAdapter = new EvmNetworkAdapter(failBatchRpc, Map.of("ETHEREUM", r), r, fastLimiter(), evmRpcProps(), new ObjectMapper(), resolver);
 
         List<RawTransaction> result = fallbackAdapter.fetchTransactions("0x1234", NetworkId.ETHEREUM, 1L, 1L);
 
@@ -294,7 +301,7 @@ class EvmNetworkAdapterTest {
 
         RpcEndpointRotator r = new RpcEndpointRotator(List.of("https://test.rpc"), RetryPolicy.defaultPolicy());
         EvmBatchBlockSizeResolver resolver = new EvmBatchBlockSizeResolver(new IngestionNetworkProperties());
-        EvmNetworkAdapter batchAdapter = new EvmNetworkAdapter(batchRpc, Map.of("ETHEREUM", r), r, new ObjectMapper(), resolver);
+        EvmNetworkAdapter batchAdapter = new EvmNetworkAdapter(batchRpc, Map.of("ETHEREUM", r), r, fastLimiter(), evmRpcProps(), new ObjectMapper(), resolver);
 
         List<RawTransaction> result = batchAdapter.fetchTransactions("0x1234", NetworkId.ETHEREUM, 1L, 1L);
 
@@ -344,7 +351,7 @@ class EvmNetworkAdapterTest {
 
         RpcEndpointRotator r = new RpcEndpointRotator(List.of("https://test.rpc"), RetryPolicy.defaultPolicy());
         EvmBatchBlockSizeResolver resolver = new EvmBatchBlockSizeResolver(new IngestionNetworkProperties());
-        EvmNetworkAdapter mixedAdapter = new EvmNetworkAdapter(mixedRpc, Map.of("ETHEREUM", r), r, new ObjectMapper(), resolver);
+        EvmNetworkAdapter mixedAdapter = new EvmNetworkAdapter(mixedRpc, Map.of("ETHEREUM", r), r, fastLimiter(), evmRpcProps(), new ObjectMapper(), resolver);
 
         List<RawTransaction> result = mixedAdapter.fetchTransactions("0x1234", NetworkId.ETHEREUM, 1L, 1L);
 
@@ -352,11 +359,70 @@ class EvmNetworkAdapterTest {
         assertThat(singleCallCount.get()).as("sequential receipt calls used as fallback").isGreaterThanOrEqualTo(1);
     }
 
+    @Test
+    void fetchTransactions_rateLimitedEndpoint_rotatesToHealthyEndpoint() {
+        RetryPolicy policy = new RetryPolicy(0, 0.0, 3);
+        RpcEndpointRotator rotator = new RpcEndpointRotator(List.of("https://rate-limited.rpc", "https://healthy.rpc"), policy);
+        Map<String, Integer> endpointCalls = new ConcurrentHashMap<>();
+
+        EvmRpcClient rateLimitedRpc = new EvmRpcClient() {
+            @Override
+            public Mono<String> call(String endpointUrl, String method, Object params) {
+                endpointCalls.merge(endpointUrl, 1, Integer::sum);
+                return Mono.just("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":[]}");
+            }
+
+            @Override
+            public Mono<String> batchCall(String endpointUrl, List<RpcRequest> requests) {
+                endpointCalls.merge(endpointUrl, 1, Integer::sum);
+                if ("https://rate-limited.rpc".equals(endpointUrl)) {
+                    return Mono.just("[" +
+                            "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":429,\"message\":\"Too Many Requests\"}}," +
+                            "{\"jsonrpc\":\"2.0\",\"id\":2,\"error\":{\"code\":429,\"message\":\"Too Many Requests\"}}" +
+                            "]");
+                }
+                return Mono.just("[{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":[]},{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":[]}]");
+            }
+        };
+
+        EvmBatchBlockSizeResolver resolver = new EvmBatchBlockSizeResolver(new IngestionNetworkProperties());
+        EvmNetworkAdapter adapter = new EvmNetworkAdapter(
+                rateLimitedRpc,
+                Map.of("ETHEREUM", rotator),
+                rotator,
+                fastLimiter(),
+                evmRpcProps(),
+                new ObjectMapper(),
+                resolver
+        );
+
+        List<RawTransaction> result = adapter.fetchTransactions("0x1234", NetworkId.ETHEREUM, 1L, 1L);
+        assertThat(result).isEmpty();
+        assertThat(endpointCalls.getOrDefault("https://rate-limited.rpc", 0)).isGreaterThan(0);
+        assertThat(endpointCalls.getOrDefault("https://healthy.rpc", 0)).isGreaterThan(0);
+    }
+
     private static IngestionNetworkProperties.NetworkIngestionEntry entry(int batchBlockSize) {
         IngestionNetworkProperties.NetworkIngestionEntry e = new IngestionNetworkProperties.NetworkIngestionEntry();
         e.setUrls(List.of("https://example.com"));
         e.setBatchBlockSize(batchBlockSize);
         return e;
+    }
+
+    private static RateLimiter fastLimiter() {
+        RateLimiterConfig config = RateLimiterConfig.custom()
+                .limitRefreshPeriod(Duration.ofSeconds(1))
+                .limitForPeriod(1_000_000)
+                .timeoutDuration(Duration.ofMillis(1))
+                .build();
+        return RateLimiter.of("test-evm-fast-limiter", config);
+    }
+
+    private static IngestionEvmRpcProperties evmRpcProps() {
+        IngestionEvmRpcProperties props = new IngestionEvmRpcProperties();
+        props.setMaxRequestsPerSecond(100_000);
+        props.setEndpointCooldownMs(1_000);
+        return props;
     }
 
     private static class MockEvmRpcClient implements EvmRpcClient {

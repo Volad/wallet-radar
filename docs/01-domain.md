@@ -13,7 +13,9 @@
 | **Session** | The ordered set of wallet addresses currently tracked in the browser (localStorage). No backend user concept. |
 | **Network** | A supported blockchain (Ethereum, Arbitrum, Solana, etc.). Each wallet×network pair is synced independently. |
 | **Raw Transaction** | Immutable on-chain data as fetched from RPC. Never mutated after ingestion. |
-| **Economic Event** | A normalised, network-agnostic financial event derived from one or more raw transactions. The core domain entity. |
+| **Transaction Status Pipeline** | `PENDING_CLARIFICATION -> PENDING_PRICE -> PENDING_STAT -> CONFIRMED`; unresolved operations may move to `NEEDS_REVIEW`. |
+| **Normalized Transaction** | Canonical operation-level record derived from raw transaction. Contains `legs[]` used as AVCO input (ADR-025). |
+| **Economic Event** | Legacy event-level representation kept for backward compatibility during migration. |
 | **Event Type** | Classification of an economic event (see Event Types below). |
 | **AVCO** | Average Cost (Weighted Average). The accounting method used for all cost basis calculations. |
 | **perWalletAvco** | AVCO calculated using only events from one specific wallet address. |
@@ -23,7 +25,7 @@
 | **Realised P&L** | `(sellPrice − avcoAtTimeOfSale) × sellQuantity` — profit/loss crystallised at point of sale. |
 | **Flag** | A marker on an economic event indicating it requires human review or has incomplete data. |
 | **Override** | A user-supplied cost price that replaces the system-derived price for a specific **on-chain** event. Stored in `cost_basis_overrides`; triggers async AVCO recalculation. |
-| **Manual Compensating Transaction** | A synthetic economic event (no on-chain tx) created by the user to reconcile balance and/or AVCO. Has `quantityDelta` and optionally `priceUsd` (required when quantityDelta > 0 for AVCO). Stored with event type `MANUAL_COMPENSATING`; idempotency by `clientId`. Participates in AVCO replay in timestamp order. |
+| **Manual Compensating Transaction** | A synthetic normalized transaction (no on-chain tx) created by the user to reconcile balance and/or AVCO. Has `quantityDelta` and optionally `priceUsd` (required when quantityDelta > 0 for AVCO). Stored with type `MANUAL_COMPENSATING`; idempotency by `clientId`. Participates in AVCO replay in timestamp order. |
 | **Reconciliation** | Comparison of **on-chain balance** (from `on_chain_balances` / CurrentBalancePoll) with **derived quantity** (from `asset_positions.quantity`). For wallets with history younger than 2 years, a mismatch triggers a warning and suggests adding a manual compensating transaction; for older wallets, comparison is shown but correction is not required. |
 | **Snapshot** | A point-in-time record of portfolio state (positions, values, P&L) stored per wallet per hour. |
 | **Backfill** | The initial ingestion of 2 years of transaction history when a wallet is first added. |
@@ -31,15 +33,51 @@
 | **Price Source** | How the USD price for an event was determined (see Price Sources below). |
 | **Internal Transfer** | A transfer between two wallets both present in the current session. Does not affect AVCO. |
 | **Incomplete History** | When the 2-year backfill window starts with a SELL event — prior purchase history is unavailable. |
-| **On-Chain Balance** | Current asset quantity for a (wallet, network, asset) as returned by RPC at a point in time. Tracked **independently of backfill**; updated periodically (e.g. every 10 min) and on manual refresh. Used for reconciliation with derived quantity from economic events. |
+| **On-Chain Balance** | Current asset quantity for a (wallet, network, asset) as returned by RPC at a point in time. Tracked **independently of backfill**; updated periodically (e.g. every 10 min) and on manual refresh. Used for reconciliation with derived quantity from confirmed normalized transaction legs. |
 
 ---
 
 ## Core Entities
 
-### EconomicEvent
+### NormalizedTransaction (Canonical, ADR-025)
 
-The central domain object. Every financial action is represented as one or more economic events.
+Canonical operation object used by UI and accounting replay.
+
+```
+NormalizedTransaction {
+  txHash:               String
+  networkId:            NetworkId
+  walletAddress:        String
+  blockTimestamp:       DateTime
+  type:                 NormalizedTransactionType
+  status:               NormalizedTransactionStatus
+  legs:                 Leg[]
+  missingDataReasons:   String[]?
+  confidence:           String?       // HIGH | MEDIUM | LOW
+  createdAt:            DateTime
+  updatedAt:            DateTime
+  confirmedAt:          DateTime?
+}
+
+Leg {
+  role:                 String        // BUY | SELL | FEE | TRANSFER
+  assetSymbol:          String
+  assetContract:        String
+  quantityDelta:        Decimal       // positive=inbound, negative=outbound
+  unitPriceUsd:         Decimal?
+  valueUsd:             Decimal?
+  priceSource:          PriceSource?
+  isInferred:           Boolean
+  inferenceReason:      String?
+  confidence:           String?
+}
+```
+
+Only `CONFIRMED` normalized transactions are shown in UI by default and used as AVCO input.
+
+### EconomicEvent (Legacy)
+
+Legacy event-level object retained for migration/backward compatibility.
 
 ```
 EconomicEvent {
@@ -71,7 +109,7 @@ EconomicEvent {
 
 ### AssetPosition
 
-Derived state — always recomputable from economic events.
+Derived state — always recomputable from confirmed normalized transaction legs.
 
 ```
 AssetPosition {
@@ -79,7 +117,7 @@ AssetPosition {
   networkId:            String
   assetSymbol:          String
   assetContract:        String
-  quantity:             Decimal        // derived from economic events (AVCO replay)
+  quantity:             Decimal        // derived from confirmed operation legs (AVCO replay)
   perWalletAvco:        Decimal        // AVCO for this wallet only
   // crossWalletAvco: NOT stored — computed on-request
   totalCostBasisUsd:    Decimal        // quantity × perWalletAvco

@@ -4,14 +4,17 @@ import com.walletradar.domain.ClassificationStatus;
 import com.walletradar.domain.EconomicEvent;
 import com.walletradar.domain.FlagCode;
 import com.walletradar.domain.NetworkId;
+import com.walletradar.domain.NormalizedTransaction;
 import com.walletradar.domain.RawTransaction;
 import com.walletradar.domain.RawTransactionRepository;
 import com.walletradar.ingestion.adapter.evm.EstimatingBlockTimestampResolver;
 import com.walletradar.ingestion.classifier.RawClassifiedEvent;
 import com.walletradar.ingestion.classifier.TxClassifierDispatcher;
+import com.walletradar.ingestion.normalizer.NormalizedTransactionBuilder;
 import com.walletradar.ingestion.pipeline.enrichment.InlineSwapPriceEnricher;
 import com.walletradar.ingestion.normalizer.EconomicEventNormalizer;
 import com.walletradar.ingestion.store.IdempotentEventStore;
+import com.walletradar.ingestion.store.IdempotentNormalizedTransactionStore;
 import com.walletradar.pricing.HistoricalPriceRequest;
 import com.walletradar.pricing.HistoricalPriceResolverChain;
 import com.walletradar.pricing.PriceResolutionResult;
@@ -39,6 +42,8 @@ public class ClassificationProcessor {
 
     private final RawTransactionRepository rawTransactionRepository;
     private final TxClassifierDispatcher txClassifierDispatcher;
+    private final NormalizedTransactionBuilder normalizedTransactionBuilder;
+    private final IdempotentNormalizedTransactionStore idempotentNormalizedTransactionStore;
     private final EconomicEventNormalizer economicEventNormalizer;
     private final InlineSwapPriceEnricher inlineSwapPriceEnricher;
     private final IdempotentEventStore idempotentEventStore;
@@ -62,6 +67,9 @@ public class ClassificationProcessor {
                 }
                 BigDecimal nativePriceUsd = resolveNativePrice(nativeContract, networkId, blockTs, nativePriceCache);
                 List<RawClassifiedEvent> rawEvents = txClassifierDispatcher.classify(tx, walletAddress, sessionWallets);
+                NormalizedTransaction normalizedTransaction = normalizedTransactionBuilder.build(
+                        tx.getTxHash(), networkId, walletAddress, blockTs, rawEvents);
+                idempotentNormalizedTransactionStore.upsert(normalizedTransaction);
                 List<EconomicEvent> events = economicEventNormalizer.normalizeAll(rawEvents,
                         tx.getTxHash(), networkId, blockTs, nativePriceUsd);
                 inlineSwapPriceEnricher.enrich(events);

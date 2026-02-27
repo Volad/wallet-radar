@@ -3,7 +3,6 @@ package com.walletradar.ingestion.job.backfill;
 import com.walletradar.domain.ClassificationStatus;
 import com.walletradar.domain.NetworkId;
 import com.walletradar.domain.RawTransaction;
-import com.walletradar.domain.RawTransactionRepository;
 import com.walletradar.ingestion.adapter.NetworkAdapter;
 import com.walletradar.ingestion.filter.ScamFilter;
 import org.junit.jupiter.api.BeforeEach;
@@ -15,9 +14,13 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
+import org.springframework.data.mongodb.core.BulkOperations;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 
-import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -30,7 +33,8 @@ import static org.mockito.Mockito.when;
 @MockitoSettings(strictness = Strictness.LENIENT)
 class RawFetchSegmentProcessorTest {
 
-    @Mock private RawTransactionRepository rawTransactionRepository;
+    @Mock private MongoTemplate mongoTemplate;
+    @Mock private BulkOperations bulkOperations;
     @Mock private ScamFilter scamFilter;
 
     private RawFetchSegmentProcessor processor;
@@ -38,8 +42,9 @@ class RawFetchSegmentProcessorTest {
     @BeforeEach
     void setUp() {
         when(scamFilter.isScam(any())).thenReturn(false);
-        processor = new RawFetchSegmentProcessor(rawTransactionRepository, scamFilter);
-        when(rawTransactionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        processor = new RawFetchSegmentProcessor(mongoTemplate, scamFilter);
+        when(mongoTemplate.bulkOps(BulkOperations.BulkMode.UNORDERED, RawTransaction.class)).thenReturn(bulkOperations);
+        when(bulkOperations.upsert(any(Query.class), any(Update.class))).thenReturn(bulkOperations);
     }
 
     @Test
@@ -64,18 +69,19 @@ class RawFetchSegmentProcessorTest {
         };
 
         AtomicLong processed = new AtomicLong(0);
-        BackfillProgressCallback callback = (pct, lastBlock, msg) -> processed.addAndGet(1);
+        BackfillProgressCallback callback = (pct, lastBlock) -> processed.addAndGet(1);
 
         processor.processSegment("0xWALLET", NetworkId.ETHEREUM, adapter,
-                1L, 100L, 50, processed, 100L, callback);
+                1L, 100L, 50, callback);
 
-        ArgumentCaptor<RawTransaction> captor = ArgumentCaptor.forClass(RawTransaction.class);
-        verify(rawTransactionRepository, atLeastOnce()).save(captor.capture());
-        RawTransaction saved = captor.getValue();
-        assertThat(saved.getTxHash()).isEqualTo("0xabc");
-        assertThat(saved.getWalletAddress()).isEqualTo("0xWALLET");
-        assertThat(saved.getBlockNumber()).isEqualTo(100L);
-        assertThat(saved.getClassificationStatus()).isEqualTo(ClassificationStatus.PENDING);
+        ArgumentCaptor<Update> updateCaptor = ArgumentCaptor.forClass(Update.class);
+        verify(bulkOperations, atLeastOnce()).upsert(any(Query.class), updateCaptor.capture());
+        org.bson.Document setDoc = updateCaptor.getValue().getUpdateObject().get("$set", org.bson.Document.class);
+        assertThat(setDoc.getString("txHash")).isEqualTo("0xabc");
+        assertThat(setDoc.getString("walletAddress")).isEqualTo("0xWALLET");
+        assertThat(setDoc.get("blockNumber")).isEqualTo(100L);
+        assertThat(setDoc.get("classificationStatus")).isEqualTo(ClassificationStatus.PENDING);
+        verify(bulkOperations, atLeastOnce()).execute();
     }
 
     @Test
@@ -93,9 +99,9 @@ class RawFetchSegmentProcessorTest {
         };
 
         processor.processSegment("0xWALLET", NetworkId.ETHEREUM, adapter,
-                1L, 10L, 50, new AtomicLong(0), 10L, (pct, lastBlock, msg) -> {});
+                1L, 10L, 50, (pct, lastBlock) -> {});
 
-        verify(rawTransactionRepository, never()).save(any());
+        verify(mongoTemplate, never()).bulkOps(any(), any(Class.class));
     }
 
     @Test
@@ -121,8 +127,8 @@ class RawFetchSegmentProcessorTest {
         };
 
         processor.processSegment("0xWALLET", NetworkId.ETHEREUM, adapter,
-                1L, 100L, 50, new AtomicLong(0), 100L, (pct, lastBlock, msg) -> {});
+                1L, 100L, 50, (pct, lastBlock) -> {});
 
-        verify(rawTransactionRepository, never()).save(any());
+        verify(mongoTemplate, never()).bulkOps(any(), any(Class.class));
     }
 }

@@ -32,6 +32,4 @@ public interface EconomicEventRepository extends MongoRepository<EconomicEvent, 
     @Query(value = "{ 'walletAddress' : ?0 }", fields = "{ 'networkId' : 1, 'assetContract' : 1 }")
     List<EconomicEvent> findNetworkIdAndAssetContractByWalletAddress(String walletAddress);
 
-    /** For DeferredPriceResolutionJob: find events pending price resolution for a wallet. */
-    List<EconomicEvent> findByWalletAddressAndFlagCode(String walletAddress, FlagCode flagCode);
 }

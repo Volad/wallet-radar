@@ -6,8 +6,8 @@ import com.walletradar.domain.PriceSource;
 import com.walletradar.pricing.HistoricalPriceRequest;
 import com.walletradar.pricing.PriceResolutionResult;
 import com.walletradar.pricing.config.PricingProperties;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -23,7 +23,6 @@ import java.util.Optional;
  * Resolves historical USD price via CoinGecko /coins/{id}/history. 45 req/min throttle, cache key (contractAddress, networkId, date) TTL 24h.
  */
 @Component
-@RequiredArgsConstructor
 @Slf4j
 public class CoinGeckoHistoricalResolver {
 
@@ -35,6 +34,18 @@ public class CoinGeckoHistoricalResolver {
     private final WebClient.Builder webClientBuilder;
     private final RateLimiter rateLimiter;
     private final ContractToCoinGeckoIdResolver contractToCoinGeckoIdResolver;
+
+    public CoinGeckoHistoricalResolver(
+            PricingProperties pricingProperties,
+            WebClient.Builder webClientBuilder,
+            @Qualifier("coingeckoHistoricalRateLimiter") RateLimiter rateLimiter,
+            ContractToCoinGeckoIdResolver contractToCoinGeckoIdResolver
+    ) {
+        this.pricingProperties = pricingProperties;
+        this.webClientBuilder = webClientBuilder;
+        this.rateLimiter = rateLimiter;
+        this.contractToCoinGeckoIdResolver = contractToCoinGeckoIdResolver;
+    }
 
     @Cacheable(cacheNames = "historicalPriceCache", key = "#request == null ? 'null' : (#request.assetContract != null ? #request.assetContract : '') + '-' + (#request.networkId != null ? #request.networkId.name() : '') + '-' + (#request.date != null ? #request.date.toString() : '')")
     public PriceResolutionResult resolve(HistoricalPriceRequest request) {

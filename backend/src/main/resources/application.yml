@@ -18,11 +18,20 @@ walletradar:
       parallel-segments: 100
       parallel-segment-workers: 200
       worker-threads: 4
+      progress-update-interval-ms: 2000
+      segment-stale-after-ms: 180000
       max-retries: 5
       retry-base-delay-minutes: 2
       retry-max-delay-minutes: 60
       retry-scheduler-interval-ms: 120000
       reclassify-schedule-interval-ms: 300000
+    evm-rpc:
+      max-requests-per-second: 2000
+      endpoint-cooldown-ms: 3000
+      transient-error-cooldown-ms: 15000
+      batch-unsupported-cooldown-ms: 300000
+      local-limiter-log-threshold-ms: 1000
+      local-limiter-timeout-ms: 2000
     network:
       # If backfill fails with "RPC failed after 5 attempts", public RPCs may be rate-limiting. Try: reduce batch-block-size (e.g. 500), or add a paid RPC URL (Alchemy/Infura) first in urls.
       # avg-block-time-seconds: fallback for EstimatingBlockTimestampResolver when calibration
@@ -31,64 +40,66 @@ walletradar:
       ETHEREUM:
         urls:
           - https://rpc.ankr.com/eth/${ANKR_API_KEY:}
+          - https://lb.drpc.live/ethereum/${DRPC_API_KEY:}
           - https://eth.llamarpc.com
-          - https://eth.drpc.org
           - https://cloudflare-eth.com
         batch-block-size: 10000
         avg-block-time-seconds: 12.0
       ARBITRUM:
         urls:
-          - https://rpc.ankr.com/arbitrum/${ANKR_API_KEY:}
           - https://arb1.arbitrum.io/rpc
-          - https://arbitrum.drpc.org
-          - https://arbitrum.llamarpc.com
-        batch-block-size: 20000
+          - https://rpc.sentio.xyz/arbitrum-one
+          - https://arbitrum.api.onfinality.io/public
+#          - https://rpc.ankr.com/arbitrum/${ANKR_API_KEY:}
+          - https://lb.drpc.live/arbitrum/${DRPC_API_KEY:}
+        batch-block-size: 500
         window-blocks: 252000000   # ~2 years at ~4 blocks/s
         avg-block-time-seconds: 0.25
       OPTIMISM:
         urls:
           - https://rpc.ankr.com/optimism/${ANKR_API_KEY:}
+          - https://lb.drpc.live/optimism/${DRPC_API_KEY:}
           - https://mainnet.optimism.io
           - https://optimism.drpc.org
-          - https://rpc.ankr.com/optimism/${ANKR_API_KEY}
-        batch-block-size: 20000
+        batch-block-size: 1000
         window-blocks: 252000000   # ~2 years at ~4 blocks/s
         avg-block-time-seconds: 2.0
       POLYGON:
         urls:
           - https://rpc.ankr.com/polygon/${ANKR_API_KEY:}
+          - https://lb.drpc.live/polygon/${DRPC_API_KEY:}
           - https://polygon.drpc.org
           - https://polygon-rpc.com
-        batch-block-size: 5000
+        batch-block-size: 1000
         window-blocks: 31560000    # ~2 years at ~2s/block
         avg-block-time-seconds: 2.0
       BASE:
         urls:
           - https://rpc.ankr.com/base/${ANKR_API_KEY:}
+          - https://lb.drpc.live/base/${DRPC_API_KEY:}
           - https://mainnet.base.org
           - https://base.llamarpc.com
-          - https://base.drpc.org
-        batch-block-size: 20000
+        batch-block-size: 1000
         window-blocks: 31560000   # ~2 years at ~2s/block
         avg-block-time-seconds: 2.0
       # Some BSC public RPCs prune old blocks (e.g. "History has been pruned"); multiple endpoints improve retry.
       BSC:
         urls:
           - https://rpc.ankr.com/bsc/${ANKR_API_KEY:}
+          - https://lb.drpc.live/bsc/${DRPC_API_KEY:}
           - https://bsc-dataseed.binance.org
           - https://bsc-dataseed1.defibit.io
           - https://bsc-dataseed1.ninicoin.io
-          - https://bsc.drpc.org
-        batch-block-size: 5000
+        batch-block-size: 1000
         window-blocks: 21024000    # ~2 years at ~3s/block
         avg-block-time-seconds: 3.0
       AVALANCHE:
         urls:
           - https://rpc.ankr.com/avalanche/${ANKR_API_KEY:}
+          - https://lb.drpc.live/avalanche/${DRPC_API_KEY:}
           - https://api.avax.network/ext/bc/C/rpc
-          - https://avalanche.drpc.org
           - https://avax.meowrpc.com
-        batch-block-size: 5000
+        batch-block-size: 1000
         window-blocks: 31560000    # ~2 years at ~2s/block
         avg-block-time-seconds: 2.0
       MANTLE:
@@ -96,7 +107,7 @@ walletradar:
           - https://rpc.mantle.xyz
           - https://mantle.drpc.org
           - https://mantle-mainnet.public.blastapi.io
-        batch-block-size: 5000
+        batch-block-size: 1000
         window-blocks: 31560000    # ~2 years at ~2s/block
         avg-block-time-seconds: 2.0
       SOLANA:
@@ -114,9 +125,20 @@ walletradar:
     classifier:
       batch-size: 1000
       schedule-interval-ms: 90000
-    # Deferred price resolution (T-033): cron job finds PRICE_PENDING wallets, resolves prices, publishes RecalculateWalletRequestEvent.
-    deferred-price:
-      schedule-interval-ms: 180000   # 3 min (2–5 min acceptable)
+    # Clarification stage for normalized transactions (PENDING_CLARIFICATION).
+    clarification:
+      schedule-interval-ms: 120000
+      max-retries: 3
+    # Pricing stage for normalized transactions (PENDING_PRICE).
+    normalized-pricing:
+      schedule-interval-ms: 120000
+      max-retries: 3
+    # Final consistency stage for normalized transactions (PENDING_STAT).
+    normalized-stat:
+      schedule-interval-ms: 120000
+    # Periodic on-chain balance refresh for all known wallet×network pairs.
+    balance:
+      poll-interval-ms: 600000
     # Protocol display name by contract address (EVM) or program id (Solana). Keys lowercase.
     protocol-registry:
       names:  # address (EVM) or program id (Solana) -> display name; lookup is case-insensitive

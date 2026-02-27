@@ -24,8 +24,9 @@ The **worker** subagent implements from this folder. Each file contains **one fe
 | **12-heuristic-swap-detection.md** | Heuristic swap detection: one asset out + one asset in (ADR-019) | T-032 |
 | **13-split-raw-fetch-classification.md** | Split raw fetch vs classification (ADR-020) | T-031 |
 | **14-deferred-price-cron-refactor.md** | Deferred price as cron job; remove ClassificationCompleteListener (ADR-021 amendment) | T-033 |
+| **15-normalized-transactions-pipeline.md** | Canonical status-driven normalized transaction pipeline (ADR-025) | T-034 … T-038 |
 
-**Dependency order:** Implement 00-* first, then 01 → 02 → … → 09. Task 10 can be done any time after T-009 is complete. Task 11 (T-031) depends on T-009 (backfill). Task 12 (T-032) depends on T-009 and works with T-031 (inline swap price). See **mvp-implementation-tasks.md** for full dependency graph.
+**Dependency order:** Implement 00-* first, then 01 → 02 → … → 09. Task 10 can be done any time after T-009 is complete. Task 11 (T-031) depends on T-009 (backfill). Task 12 (T-032) depends on T-009 and works with T-031 (inline swap price). Task 15 (T-034..T-038) is the canonical ADR-025 pipeline rollout and should be implemented as one coordinated stream after current stability fixes. See **mvp-implementation-tasks.md** for full dependency graph.
 
 ## Build and repository
 

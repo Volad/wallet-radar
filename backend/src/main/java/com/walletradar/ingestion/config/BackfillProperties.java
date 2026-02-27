@@ -48,4 +48,14 @@ public class BackfillProperties {
      * This caps real RPC pressure even when {@code parallelSegments} is high.
      */
     private int parallelSegmentWorkers = 4;
+
+    /**
+     * Minimum interval between persisted sync_status RUNNING progress updates.
+     */
+    private long progressUpdateIntervalMs = 2_000;
+
+    /**
+     * Segment considered stale if no updates longer than this threshold; stale RUNNING is reset to PENDING.
+     */
+    private long segmentStaleAfterMs = 180_000;
 }
