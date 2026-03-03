@@ -1,8 +1,8 @@
 package com.walletradar.ingestion.job.backfill;
 
-import com.walletradar.domain.ClassificationStatus;
-import com.walletradar.domain.NetworkId;
-import com.walletradar.domain.RawTransaction;
+import com.walletradar.domain.transaction.raw.NormalizationStatus;
+import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.ingestion.adapter.NetworkAdapter;
 import com.walletradar.ingestion.filter.ScamFilter;
 import org.junit.jupiter.api.BeforeEach;
@@ -63,7 +63,7 @@ class RawFetchSegmentProcessorTest {
                 tx.setNetworkId("ETHEREUM");
                 tx.setWalletAddress(wallet);
                 tx.setBlockNumber(100L);
-                tx.setClassificationStatus(ClassificationStatus.PENDING);
+                tx.setNormalizationStatus(NormalizationStatus.PENDING);
                 return List.of(tx);
             }
         };
@@ -72,7 +72,7 @@ class RawFetchSegmentProcessorTest {
         BackfillProgressCallback callback = (pct, lastBlock) -> processed.addAndGet(1);
 
         processor.processSegment("0xWALLET", NetworkId.ETHEREUM, adapter,
-                1L, 100L, 50, callback);
+                1L, 100L, callback);
 
         ArgumentCaptor<Update> updateCaptor = ArgumentCaptor.forClass(Update.class);
         verify(bulkOperations, atLeastOnce()).upsert(any(Query.class), updateCaptor.capture());
@@ -80,7 +80,7 @@ class RawFetchSegmentProcessorTest {
         assertThat(setDoc.getString("txHash")).isEqualTo("0xabc");
         assertThat(setDoc.getString("walletAddress")).isEqualTo("0xWALLET");
         assertThat(setDoc.get("blockNumber")).isEqualTo(100L);
-        assertThat(setDoc.get("classificationStatus")).isEqualTo(ClassificationStatus.PENDING);
+        assertThat(setDoc.get("normalizationStatus")).isEqualTo(NormalizationStatus.PENDING);
         verify(bulkOperations, atLeastOnce()).execute();
     }
 
@@ -99,7 +99,7 @@ class RawFetchSegmentProcessorTest {
         };
 
         processor.processSegment("0xWALLET", NetworkId.ETHEREUM, adapter,
-                1L, 10L, 50, (pct, lastBlock) -> {});
+                1L, 10L, (pct, lastBlock) -> {});
 
         verify(mongoTemplate, never()).bulkOps(any(), any(Class.class));
     }
@@ -121,13 +121,13 @@ class RawFetchSegmentProcessorTest {
                 tx.setNetworkId("ETHEREUM");
                 tx.setWalletAddress(wallet);
                 tx.setBlockNumber(100L);
-                tx.setClassificationStatus(ClassificationStatus.PENDING);
+                tx.setNormalizationStatus(NormalizationStatus.PENDING);
                 return List.of(tx);
             }
         };
 
         processor.processSegment("0xWALLET", NetworkId.ETHEREUM, adapter,
-                1L, 100L, 50, (pct, lastBlock) -> {});
+                1L, 100L, (pct, lastBlock) -> {});
 
         verify(mongoTemplate, never()).bulkOps(any(), any(Class.class));
     }

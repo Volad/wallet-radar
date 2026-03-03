@@ -1,8 +1,8 @@
 package com.walletradar.ingestion.store;
 
-import com.walletradar.domain.NormalizedTransaction;
-import com.walletradar.domain.NormalizedTransactionRepository;
-import com.walletradar.domain.NormalizedTransactionStatus;
+import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -46,7 +46,9 @@ public class IdempotentNormalizedTransactionStore {
         }
         target.setBlockTimestamp(source.getBlockTimestamp());
         target.setType(source.getType());
-        target.setLegs(source.getLegs());
+        target.setGroupId(source.getGroupId());
+        target.setBoundaryStatuses(source.getBoundaryStatuses());
+        target.setFlows(source.getFlows());
         target.setMissingDataReasons(source.getMissingDataReasons());
         target.setConfidence(source.getConfidence());
         target.setClientId(source.getClientId());

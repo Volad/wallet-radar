@@ -1,3 +1,5 @@
+> **Status:** Archived (historical). Not an active requirement source.
+
 # Foundation (T-001, T-002, T-003)
 
 Infrastructure tasks with no separate user-facing feature. DoD serves as acceptance.

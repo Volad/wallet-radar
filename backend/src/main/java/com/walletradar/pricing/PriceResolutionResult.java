@@ -1,6 +1,6 @@
 package com.walletradar.pricing;
 
-import com.walletradar.domain.PriceSource;
+import com.walletradar.domain.common.PriceSource;
 import lombok.Getter;
 
 import java.math.BigDecimal;

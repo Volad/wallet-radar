@@ -1,8 +1,8 @@
 package com.walletradar.ingestion.classifier;
 
-import com.walletradar.domain.EconomicEventType;
-import com.walletradar.domain.RawTransaction;
-import com.walletradar.ingestion.adapter.evm.EvmTokenDecimalsResolver;
+import com.walletradar.domain.transaction.normalized.EconomicEventType;
+import com.walletradar.domain.transaction.raw.RawTransaction;
+import com.walletradar.ingestion.adapter.evm.rpc.EvmTokenDecimalsResolver;
 import com.walletradar.ingestion.config.ProtocolRegistryProperties;
 import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
@@ -175,5 +175,116 @@ class SwapClassifierTest {
         assertThat(buy.getAssetContract()).isEqualTo(ARB_WETH);
         assertThat(buy.getQuantityDelta()).isPositive();
         assertThat(buy.getQuantityDelta()).isBetween(new BigDecimal("0.01"), new BigDecimal("0.02"));
+    }
+
+    @Test
+    void classify_usesExplorerTokenMetaFallback_whenRpcMetaMissing() {
+        String wallet = "0x1A87f12aC07E9746e9B053B8D7EF1d45270D693f";
+        String walletTopic = "0x0000000000000000000000001a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String routerTopic = "0x00000000000000000000000089c6340b1a1f4b25d36cd8b063d49045caf3f818";
+        String stargateTopic = "0x0000000000000000000000001231deb6f5749ef6ce6943a275a1d3e7486f4eae";
+        String usdt0 = "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9";
+
+        when(evmTokenDecimalsResolver.getDecimals(eq("ARBITRUM"), eq(usdt0))).thenReturn(18);
+        when(evmTokenDecimalsResolver.getSymbol(eq("ARBITRUM"), eq(usdt0))).thenReturn("");
+        when(evmTokenDecimalsResolver.getDecimals(eq("ARBITRUM"), eq(ARB_USDC))).thenReturn(6);
+        when(evmTokenDecimalsResolver.getSymbol(eq("ARBITRUM"), eq(ARB_USDC))).thenReturn("USDC");
+
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0x4569887f1a59c086b5612072b1bf0e49c4059d7d171253a7ba6b0b947152e47d");
+        tx.setNetworkId("ARBITRUM");
+        tx.setRawData(new Document("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", usdt0)
+                        .append("tokenDecimal", "6")
+                        .append("tokenSymbol", "USD₮0"),
+                new Document("contractAddress", ARB_USDC)
+                        .append("tokenDecimal", "6")
+                        .append("tokenSymbol", "USDC")
+        ))).append("logs", List.of(
+                new Document("topics", List.of(SWAP_TOPIC_V3_FEES)),
+                new Document("address", usdt0)
+                        .append("topics", List.of(TransferClassifier.TRANSFER_TOPIC, walletTopic, routerTopic))
+                        .append("data", "0x00000000000000000000000000000000000000000000000000000000336dcae2"),
+                new Document("address", ARB_USDC)
+                        .append("topics", List.of(TransferClassifier.TRANSFER_TOPIC, stargateTopic, walletTopic))
+                        .append("data", "0x00000000000000000000000000000000000000000000000000000000336eb7d5")
+        )));
+
+        List<RawClassifiedEvent> result = classifier.classify(tx, wallet);
+
+        assertThat(result).hasSize(2);
+        RawClassifiedEvent sell = result.stream().filter(e -> e.getEventType() == EconomicEventType.SWAP_SELL).findFirst().orElseThrow();
+        RawClassifiedEvent buy = result.stream().filter(e -> e.getEventType() == EconomicEventType.SWAP_BUY).findFirst().orElseThrow();
+        assertThat(sell.getAssetContract()).isEqualTo(usdt0);
+        assertThat(sell.getAssetSymbol()).isEqualTo("USD₮0");
+        assertThat(sell.getQuantityDelta()).isEqualByComparingTo("-862.833378000000000000");
+        assertThat(buy.getAssetContract()).isEqualTo(ARB_USDC);
+        assertThat(buy.getQuantityDelta()).isEqualByComparingTo("862.894037000000000000");
+    }
+
+    @Test
+    void classify_oneSwapBuyAndNativeValue_emitsSyntheticNativeSwapSell() {
+        String wallet = "0x1A87f12aC07E9746e9B053B8D7EF1d45270D693f";
+        String walletTopic = "0x0000000000000000000000001a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String routerFromTopic = "0x0000000000000000000000006a000f20005980200259b80c5102003040001068";
+        String usdc = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
+        String swapTopic = "0xc42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67";
+
+        when(evmTokenDecimalsResolver.getDecimals(eq("BASE"), eq(usdc))).thenReturn(6);
+        when(evmTokenDecimalsResolver.getSymbol(eq("BASE"), eq(usdc))).thenReturn("USDC");
+
+        RawTransaction tx = new RawTransaction();
+        tx.setNetworkId("BASE");
+        tx.setRawData(new Document("from", wallet)
+                .append("to", "0x6a000f20005980200259b80c5102003040001068")
+                .append("value", "13443587162395032")
+                .append("logs", List.of(
+                        new Document("topics", List.of(swapTopic)),
+                        new Document("address", usdc)
+                                .append("topics", List.of(TransferClassifier.TRANSFER_TOPIC, routerFromTopic, walletTopic))
+                                .append("data", "0x0000000000000000000000000000000000000000000000000000000002625a00")
+                )));
+
+        List<RawClassifiedEvent> result = classifier.classify(tx, wallet);
+
+        assertThat(result).hasSize(2);
+        RawClassifiedEvent buy = result.stream().filter(e -> e.getEventType() == EconomicEventType.SWAP_BUY).findFirst().orElseThrow();
+        RawClassifiedEvent sell = result.stream().filter(e -> e.getEventType() == EconomicEventType.SWAP_SELL).findFirst().orElseThrow();
+        assertThat(buy.getAssetContract()).isEqualTo(usdc);
+        assertThat(buy.getQuantityDelta()).isEqualByComparingTo("40");
+        assertThat(sell.getAssetContract()).isEqualTo("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
+        assertThat(sell.getQuantityDelta()).isEqualByComparingTo("-0.013443587162395032");
+    }
+
+    @Test
+    void classify_oneSwapSellWithoutCounterLeg_downgradesToExternalTransferOut() {
+        String wallet = "0x1A87f12aC07E9746e9B053B8D7EF1d45270D693f";
+        String walletTopic = "0x0000000000000000000000001a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String poolTopic = "0x0000000000000000000000000a2854fbbd9b3ef66f17d47284e7f899b9509330";
+        String usdc = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
+        String swapTopic = "0xc42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67";
+
+        when(evmTokenDecimalsResolver.getDecimals(eq("BASE"), eq(usdc))).thenReturn(6);
+        when(evmTokenDecimalsResolver.getSymbol(eq("BASE"), eq(usdc))).thenReturn("USDC");
+
+        RawTransaction tx = new RawTransaction();
+        tx.setNetworkId("BASE");
+        tx.setRawData(new Document("from", wallet)
+                .append("to", "0x9dda6ef3d919c9bc8885d5560999a3640431e8e6")
+                .append("value", "0")
+                .append("logs", List.of(
+                        new Document("topics", List.of(swapTopic)),
+                        new Document("address", usdc)
+                                .append("topics", List.of(TransferClassifier.TRANSFER_TOPIC, walletTopic, poolTopic))
+                                .append("data", "0x000000000000000000000000000000000000000000000000000000000000627b")
+                )));
+
+        List<RawClassifiedEvent> result = classifier.classify(tx, wallet);
+
+        assertThat(result).hasSize(1);
+        RawClassifiedEvent outbound = result.getFirst();
+        assertThat(outbound.getEventType()).isEqualTo(EconomicEventType.EXTERNAL_TRANSFER_OUT);
+        assertThat(outbound.getAssetContract()).isEqualTo(usdc);
+        assertThat(outbound.getQuantityDelta()).isEqualByComparingTo("-0.025211");
     }
 }

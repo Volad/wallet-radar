@@ -1,6 +1,6 @@
 package com.walletradar.pricing;
 
-import com.walletradar.domain.NetworkId;
+import com.walletradar.domain.common.NetworkId;
 import com.walletradar.pricing.resolver.CoinGeckoHistoricalResolver;
 import com.walletradar.pricing.resolver.CounterpartPriceResolver;
 import com.walletradar.pricing.resolver.StablecoinResolver;
@@ -47,7 +47,7 @@ class HistoricalPriceResolverChainTest {
 
         assertThat(r.isUnknown()).isFalse();
         assertThat(r.getPriceUsd()).hasValueSatisfying(p -> assertThat(p).isEqualByComparingTo(BigDecimal.ONE));
-        assertThat(r.getPriceSource()).isEqualTo(com.walletradar.domain.PriceSource.STABLECOIN);
+        assertThat(r.getPriceSource()).isEqualTo(com.walletradar.domain.common.PriceSource.STABLECOIN);
     }
 
     @Test

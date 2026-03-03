@@ -1,11 +1,11 @@
 package com.walletradar.ingestion.job.backfill;
 
-import com.walletradar.domain.BackfillSegment;
-import com.walletradar.domain.BackfillSegmentRepository;
-import com.walletradar.domain.NetworkId;
-import com.walletradar.domain.RawFetchCompleteEvent;
-import com.walletradar.domain.SyncStatus;
-import com.walletradar.domain.SyncStatusRepository;
+import com.walletradar.domain.sync.BackfillSegment;
+import com.walletradar.domain.sync.BackfillSegmentRepository;
+import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.event.RawFetchCompleteEvent;
+import com.walletradar.domain.sync.SyncStatus;
+import com.walletradar.domain.sync.SyncStatusRepository;
 import com.walletradar.ingestion.adapter.BlockHeightResolver;
 import com.walletradar.ingestion.adapter.BlockTimestampResolver;
 import com.walletradar.ingestion.adapter.NetworkAdapter;
@@ -33,7 +33,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
-import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
@@ -87,9 +86,9 @@ class BackfillNetworkExecutorTest {
 
         when(syncStatusRepository.findByWalletAddressAndNetworkId(WALLET, NETWORK)).thenReturn(Optional.of(sync));
         when(backfillProperties.getWindowBlocks()).thenReturn(100L);
+        when(backfillProperties.getParallelSegments()).thenReturn(2);
         when(backfillProperties.getParallelSegmentWorkers()).thenReturn(2);
         when(backfillProperties.getSegmentStaleAfterMs()).thenReturn(180_000L);
-        when(networkAdapter.getMaxBlockBatchSize()).thenReturn(50);
         when(ingestionNetworkProperties.getNetwork()).thenReturn(Map.of());
 
         wireSegmentRepository();
@@ -99,13 +98,13 @@ class BackfillNetworkExecutorTest {
     @DisplayName("creates segment plan, executes all segments and finalizes sync")
     void createsSegmentsAndCompletes() {
         doAnswer(invocation -> {
-            BackfillProgressCallback callback = invocation.getArgument(6);
+            BackfillProgressCallback callback = invocation.getArgument(5);
             long segTo = invocation.getArgument(4);
             callback.reportProgress(100, segTo);
             return null;
         }).when(rawFetchSegmentProcessor).processSegment(
                 eq(WALLET), eq(NetworkId.ETHEREUM), eq(networkAdapter),
-                anyLong(), anyLong(), anyInt(), any(BackfillProgressCallback.class));
+                anyLong(), anyLong(), any(BackfillProgressCallback.class));
 
         executor.runBackfillForNetwork(
                 WALLET,
@@ -124,7 +123,7 @@ class BackfillNetworkExecutorTest {
 
         verify(rawFetchSegmentProcessor, times(2)).processSegment(
                 eq(WALLET), eq(NetworkId.ETHEREUM), eq(networkAdapter),
-                anyLong(), anyLong(), anyInt(), any(BackfillProgressCallback.class));
+                anyLong(), anyLong(), any(BackfillProgressCallback.class));
         verify(syncProgressTracker).setRawFetchComplete(WALLET, NETWORK, 100L);
         verify(syncProgressTracker).setComplete(WALLET, NETWORK);
         verify(applicationEventPublisher).publishEvent(any(RawFetchCompleteEvent.class));
@@ -143,13 +142,13 @@ class BackfillNetworkExecutorTest {
         putSegment(done);
 
         doAnswer(invocation -> {
-            BackfillProgressCallback callback = invocation.getArgument(6);
+            BackfillProgressCallback callback = invocation.getArgument(5);
             long segTo = invocation.getArgument(4);
             callback.reportProgress(100, segTo);
             return null;
         }).when(rawFetchSegmentProcessor).processSegment(
                 eq(WALLET), eq(NetworkId.ETHEREUM), eq(networkAdapter),
-                anyLong(), anyLong(), anyInt(), any(BackfillProgressCallback.class));
+                anyLong(), anyLong(), any(BackfillProgressCallback.class));
 
         executor.runBackfillForNetwork(
                 WALLET,
@@ -165,7 +164,7 @@ class BackfillNetworkExecutorTest {
 
         verify(rawFetchSegmentProcessor, times(1)).processSegment(
                 eq(WALLET), eq(NetworkId.ETHEREUM), eq(networkAdapter),
-                eq(1L), eq(50L), anyInt(), any(BackfillProgressCallback.class));
+                eq(1L), eq(50L), any(BackfillProgressCallback.class));
         verify(syncProgressTracker).setRawFetchComplete(WALLET, NETWORK, 100L);
         verify(syncProgressTracker).setComplete(WALLET, NETWORK);
     }
@@ -176,7 +175,7 @@ class BackfillNetworkExecutorTest {
         doThrow(new RuntimeException("boom"))
                 .when(rawFetchSegmentProcessor)
                 .processSegment(anyString(), any(NetworkId.class), any(NetworkAdapter.class),
-                        anyLong(), anyLong(), anyInt(), any(BackfillProgressCallback.class));
+                        anyLong(), anyLong(), any(BackfillProgressCallback.class));
 
         executor.runBackfillForNetwork(
                 WALLET,
@@ -208,13 +207,13 @@ class BackfillNetworkExecutorTest {
         putSegment(done);
 
         doAnswer(invocation -> {
-            BackfillProgressCallback callback = invocation.getArgument(6);
+            BackfillProgressCallback callback = invocation.getArgument(5);
             long segTo = invocation.getArgument(4);
             callback.reportProgress(100, segTo);
             return null;
         }).when(rawFetchSegmentProcessor).processSegment(
                 eq(WALLET), eq(NetworkId.ETHEREUM), eq(networkAdapter),
-                anyLong(), anyLong(), anyInt(), any(BackfillProgressCallback.class));
+                anyLong(), anyLong(), any(BackfillProgressCallback.class));
 
         executor.runBackfillForNetwork(
                 WALLET,
@@ -226,7 +225,7 @@ class BackfillNetworkExecutorTest {
 
         verify(rawFetchSegmentProcessor, times(1)).processSegment(
                 eq(WALLET), eq(NetworkId.ETHEREUM), eq(networkAdapter),
-                eq(26L), eq(50L), anyInt(), any(BackfillProgressCallback.class));
+                eq(26L), eq(50L), any(BackfillProgressCallback.class));
 
         BackfillSegment resumed = segments.get(SYNC_ID + ":0");
         assertThat(resumed.getStatus()).isEqualTo(BackfillSegment.SegmentStatus.COMPLETE);

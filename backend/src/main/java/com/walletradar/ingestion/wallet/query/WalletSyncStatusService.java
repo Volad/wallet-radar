@@ -1,7 +1,7 @@
 package com.walletradar.ingestion.wallet.query;
 
-import com.walletradar.domain.SyncStatus;
-import com.walletradar.domain.SyncStatusRepository;
+import com.walletradar.domain.sync.SyncStatus;
+import com.walletradar.domain.sync.SyncStatusRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 

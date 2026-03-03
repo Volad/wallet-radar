@@ -1,6 +1,6 @@
 package com.walletradar.pricing;
 
-import com.walletradar.domain.NetworkId;
+import com.walletradar.domain.common.NetworkId;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;

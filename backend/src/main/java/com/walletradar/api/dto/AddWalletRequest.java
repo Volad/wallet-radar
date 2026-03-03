@@ -2,7 +2,7 @@ package com.walletradar.api.dto;
 
 import com.walletradar.api.validation.SupportedNetworks;
 import com.walletradar.api.validation.WalletAddress;
-import com.walletradar.domain.NetworkId;
+import com.walletradar.domain.common.NetworkId;
 import jakarta.validation.constraints.NotBlank;
 
 import java.util.List;

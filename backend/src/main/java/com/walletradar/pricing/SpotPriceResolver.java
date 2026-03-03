@@ -1,7 +1,7 @@
 package com.walletradar.pricing;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.walletradar.domain.NetworkId;
+import com.walletradar.domain.common.NetworkId;
 import com.walletradar.pricing.config.PricingProperties;
 import com.walletradar.pricing.resolver.ContractToCoinGeckoIdResolver;
 import lombok.RequiredArgsConstructor;

@@ -1,10 +1,11 @@
 package com.walletradar.ingestion.job.pricing;
 
-import com.walletradar.domain.NormalizedTransaction;
-import com.walletradar.domain.NormalizedTransactionRepository;
-import com.walletradar.domain.NormalizedTransactionStatus;
-import com.walletradar.domain.NormalizedTransactionType;
-import com.walletradar.domain.RecalculateWalletRequestEvent;
+import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.domain.transaction.normalized.LpLifecycleBoundaryStatus;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.domain.event.RecalculateWalletRequestEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -13,6 +14,7 @@ import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -36,12 +38,19 @@ public class NormalizedTransactionStatJob {
             List<NormalizedTransaction> pending = normalizedTransactionRepository
                     .findByStatusOrderByBlockTimestampAsc(NormalizedTransactionStatus.PENDING_STAT);
             Set<String> walletsToRecalc = new LinkedHashSet<>();
+            Set<String> lpGroupsToRefresh = new LinkedHashSet<>();
             int confirmed = 0;
             for (NormalizedTransaction tx : pending) {
                 if (confirmOne(tx)) {
                     confirmed++;
                     walletsToRecalc.add(tx.getWalletAddress());
+                    if (isLpLifecycleType(tx.getType()) && tx.getGroupId() != null && !tx.getGroupId().isBlank()) {
+                        lpGroupsToRefresh.add(tx.getGroupId());
+                    }
                 }
+            }
+            for (String groupId : lpGroupsToRefresh) {
+                refreshBoundaryStatus(groupId);
             }
             for (String wallet : walletsToRecalc) {
                 applicationEventPublisher.publishEvent(new RecalculateWalletRequestEvent(wallet));
@@ -71,12 +80,12 @@ public class NormalizedTransactionStatJob {
     }
 
     private static List<String> statValidationErrors(NormalizedTransaction tx) {
-        if (tx.getLegs() == null || tx.getLegs().isEmpty()) {
+        if (tx.getFlows() == null || tx.getFlows().isEmpty()) {
             return List.of("MISSING_LEGS");
         }
         boolean hasInbound = false;
         boolean hasOutbound = false;
-        for (NormalizedTransaction.Leg leg : tx.getLegs()) {
+        for (NormalizedTransaction.Flow leg : tx.getFlows()) {
             BigDecimal qty = leg.getQuantityDelta();
             if (qty == null || qty.signum() == 0) {
                 return List.of("MISSING_QUANTITY");
@@ -95,9 +104,68 @@ public class NormalizedTransactionStatJob {
     }
 
     private static boolean isPriceRequired(NormalizedTransactionType type, BigDecimal qty) {
+        if (type == NormalizedTransactionType.LP_ADJUST
+                || type == NormalizedTransactionType.LP_POSITION_STAKE
+                || type == NormalizedTransactionType.LP_POSITION_UNSTAKE) {
+            return false;
+        }
         if (type == NormalizedTransactionType.SWAP) {
             return true;
         }
         return qty.signum() > 0;
+    }
+
+    private void refreshBoundaryStatus(String groupId) {
+        if (groupId == null || groupId.isBlank()) {
+            return;
+        }
+        List<NormalizedTransaction> grouped = normalizedTransactionRepository.findByGroupIdOrderByBlockTimestampAsc(groupId);
+        if (grouped.isEmpty()) {
+            return;
+        }
+        boolean hasOpening = grouped.stream().anyMatch(tx -> tx.getType() == NormalizedTransactionType.LP_ENTRY);
+        boolean hasClosing = grouped.stream().anyMatch(tx ->
+                tx.getType() == NormalizedTransactionType.LP_EXIT_FINAL
+                        || tx.getType() == NormalizedTransactionType.LP_EXIT);
+
+        List<LpLifecycleBoundaryStatus> boundary = new ArrayList<>(2);
+        if (!hasOpening) {
+            boundary.add(LpLifecycleBoundaryStatus.OPENING_MISSING);
+        }
+        if (!hasClosing) {
+            boundary.add(LpLifecycleBoundaryStatus.CLOSING_MISSING);
+        }
+
+        List<NormalizedTransaction> changed = new ArrayList<>();
+        for (NormalizedTransaction tx : grouped) {
+            if (!isLpLifecycleType(tx.getType())) {
+                continue;
+            }
+            List<LpLifecycleBoundaryStatus> current = tx.getBoundaryStatuses() != null
+                    ? tx.getBoundaryStatuses()
+                    : List.of();
+            if (!current.equals(boundary)) {
+                tx.setBoundaryStatuses(boundary);
+                tx.setUpdatedAt(Instant.now());
+                changed.add(tx);
+            }
+        }
+        if (!changed.isEmpty()) {
+            normalizedTransactionRepository.saveAll(changed);
+        }
+    }
+
+    private static boolean isLpLifecycleType(NormalizedTransactionType type) {
+        if (type == null) {
+            return false;
+        }
+        return type == NormalizedTransactionType.LP_ENTRY
+                || type == NormalizedTransactionType.LP_EXIT
+                || type == NormalizedTransactionType.LP_EXIT_PARTIAL
+                || type == NormalizedTransactionType.LP_EXIT_FINAL
+                || type == NormalizedTransactionType.LP_FEE_CLAIM
+                || type == NormalizedTransactionType.LP_ADJUST
+                || type == NormalizedTransactionType.LP_POSITION_STAKE
+                || type == NormalizedTransactionType.LP_POSITION_UNSTAKE;
     }
 }

@@ -1,3 +1,5 @@
+> **Status:** Archived (historical). Not an active requirement source.
+
 # Cost basis engine (T-015, T-016)
 
 Per-wallet AVCO and cross-wallet on-request aggregation. Used by backfill, override, manual tx, GET /assets.

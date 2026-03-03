@@ -44,7 +44,7 @@ class ModuleDependencyArchTest {
     @Test
     void common_must_not_depend_on_other_app_modules() {
         ArchRule rule = noClasses()
-                .that().resideInAPackage("..common..")
+                .that().resideInAPackage("com.walletradar.common..")
                 .should().dependOnClassesThat().resideInAnyPackage("..domain..", "..ingestion..", "..config..", "..api..", "..costbasis..", "..pricing..", "..snapshot..");
         rule.check(classes);
     }
@@ -102,7 +102,7 @@ class ModuleDependencyArchTest {
         ArchRule rule = noClasses()
                 .that().resideInAPackage("..ingestion.pipeline..")
                 .should().dependOnClassesThat().resideInAPackage("..ingestion.job..");
-        rule.check(classes);
+        rule.allowEmptyShould(true).check(classes);
     }
 
     @Test

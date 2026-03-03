@@ -1,6 +1,6 @@
 package com.walletradar.pricing.resolver;
 
-import com.walletradar.domain.NetworkId;
+import com.walletradar.domain.common.NetworkId;
 import com.walletradar.pricing.config.PricingProperties;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;

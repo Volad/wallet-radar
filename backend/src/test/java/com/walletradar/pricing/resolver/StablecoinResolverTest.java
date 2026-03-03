@@ -1,6 +1,6 @@
 package com.walletradar.pricing.resolver;
 
-import com.walletradar.domain.NetworkId;
+import com.walletradar.domain.common.NetworkId;
 import com.walletradar.pricing.HistoricalPriceRequest;
 import com.walletradar.pricing.PriceResolutionResult;
 import org.junit.jupiter.api.BeforeEach;
@@ -33,7 +33,7 @@ class StablecoinResolverTest {
 
         assertThat(r.isUnknown()).isFalse();
         assertThat(r.getPriceUsd()).contains(BigDecimal.ONE.setScale(18, java.math.RoundingMode.HALF_UP));
-        assertThat(r.getPriceSource()).isEqualTo(com.walletradar.domain.PriceSource.STABLECOIN);
+        assertThat(r.getPriceSource()).isEqualTo(com.walletradar.domain.common.PriceSource.STABLECOIN);
     }
 
     @Test

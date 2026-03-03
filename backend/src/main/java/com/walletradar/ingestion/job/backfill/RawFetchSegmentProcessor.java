@@ -1,7 +1,7 @@
 package com.walletradar.ingestion.job.backfill;
 
-import com.walletradar.domain.NetworkId;
-import com.walletradar.domain.RawTransaction;
+import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.ingestion.adapter.NetworkAdapter;
 import com.walletradar.ingestion.filter.ScamFilter;
 import lombok.RequiredArgsConstructor;
@@ -17,8 +17,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Phase 1 (ADR-020): Fetch from RPC → upsert to raw_transactions.
- * Idempotent on (txHash, networkId). Adapter sets walletAddress, classificationStatus, createdAt.
+ * Phase 1 (ADR-026): Fetch from chain source → upsert to raw_transactions.
+ * Idempotent on (txHash, networkId, walletAddress). Adapter sets walletAddress, normalizationStatus, createdAt.
  */
 @Component
 @Slf4j
@@ -38,44 +38,35 @@ public class RawFetchSegmentProcessor {
      * @param adapter         network adapter (EVM or Solana)
      * @param segFromBlock    segment start (block or slot)
      * @param segToBlock      segment end
-     * @param batchSize       adapter batch size
      * @param progressCallback segment progress reporter
      */
     public void processSegment(String walletAddress, NetworkId networkId, NetworkAdapter adapter,
-                               long segFromBlock, long segToBlock, int batchSize,
+                               long segFromBlock, long segToBlock,
                                BackfillProgressCallback progressCallback) {
-        long totalBlocks = segToBlock - segFromBlock + 1;
-        long processedBlocks = 0L;
-        long start = segFromBlock;
-        while (start <= segToBlock) {
-            long end = Math.min(start + batchSize - 1, segToBlock);
-            List<RawTransaction> batch = adapter.fetchTransactions(walletAddress, networkId, start, end);
-            List<RawTransaction> toUpsert = new ArrayList<>(batch.size());
-            for (RawTransaction tx : batch) {
-                if (scamFilter.shouldDrop(tx)) {
-                    continue;
-                }
-                ensureId(tx);
-                toUpsert.add(tx);
-                if (toUpsert.size() >= UPSERT_FLUSH_SIZE) {
-                    bulkUpsert(toUpsert);
-                    toUpsert.clear();
-                }
+        log.info("Processing segment for wallet {}, network {}, blocks {}-{}",
+                walletAddress, networkId, segFromBlock, segToBlock);
+        List<RawTransaction> batch = adapter.fetchTransactions(walletAddress, networkId, segFromBlock, segToBlock);
+        List<RawTransaction> toUpsert = new ArrayList<>(batch.size());
+        for (RawTransaction tx : batch) {
+            if (scamFilter.shouldDrop(tx)) {
+                continue;
             }
-            if (!toUpsert.isEmpty()) {
+            ensureId(tx);
+            toUpsert.add(tx);
+            if (toUpsert.size() >= UPSERT_FLUSH_SIZE) {
                 bulkUpsert(toUpsert);
+                toUpsert.clear();
             }
-            long blocksInBatch = end - start + 1;
-            processedBlocks += blocksInBatch;
-            int progressPct = totalBlocks <= 0 ? 100 : (int) Math.min(100, (processedBlocks * 100) / totalBlocks);
-            progressCallback.reportProgress(progressPct, end);
-            start = end + 1;
         }
+        if (!toUpsert.isEmpty()) {
+            bulkUpsert(toUpsert);
+        }
+        progressCallback.reportProgress(100, segToBlock);
     }
 
     private static void ensureId(RawTransaction tx) {
         if (tx.getId() == null || tx.getId().isBlank()) {
-            tx.setId(tx.getTxHash() + ":" + tx.getNetworkId());
+            tx.setId(tx.getTxHash() + ":" + tx.getNetworkId() + ":" + tx.getWalletAddress());
         }
     }
 
@@ -86,10 +77,14 @@ public class RawFetchSegmentProcessor {
             Update update = new Update()
                     .set("txHash", tx.getTxHash())
                     .set("networkId", tx.getNetworkId())
+                    .set("syncMethod", tx.getSyncMethod())
                     .set("walletAddress", tx.getWalletAddress())
                     .set("blockNumber", tx.getBlockNumber())
                     .set("slot", tx.getSlot())
-                    .set("classificationStatus", tx.getClassificationStatus())
+                    .set("normalizationStatus", tx.getNormalizationStatus())
+                    .set("retryCount", tx.getRetryCount())
+                    .set("lastError", tx.getLastError())
+                    .set("nextRetryAt", tx.getNextRetryAt())
                     .set("createdAt", tx.getCreatedAt())
                     .set("rawData", tx.getRawData());
             ops.upsert(query, update);

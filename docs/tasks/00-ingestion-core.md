@@ -1,3 +1,5 @@
+> **Status:** Archived (historical). Not an active requirement source.
+
 # Ingestion core (T-004, T-005, T-006, T-007, T-008)
 
 RPC adapters, classifiers, normalizer, event store. No separate user-facing feature; DoD serves as acceptance.

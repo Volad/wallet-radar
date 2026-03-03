@@ -1,3 +1,5 @@
+> **Status:** Archived (historical). Not an active requirement source.
+
 # Feature 5 & 7: Override (set / revert) + async recalc + Recalculation job status
 
 **Tasks:** T-017, T-028

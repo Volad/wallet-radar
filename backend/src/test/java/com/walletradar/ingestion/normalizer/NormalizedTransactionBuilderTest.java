@@ -1,11 +1,11 @@
 package com.walletradar.ingestion.normalizer;
 
-import com.walletradar.domain.EconomicEventType;
-import com.walletradar.domain.NetworkId;
-import com.walletradar.domain.NormalizedLegRole;
-import com.walletradar.domain.NormalizedTransaction;
-import com.walletradar.domain.NormalizedTransactionStatus;
-import com.walletradar.domain.NormalizedTransactionType;
+import com.walletradar.domain.transaction.normalized.EconomicEventType;
+import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
+import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.ingestion.classifier.RawClassifiedEvent;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -31,14 +31,17 @@ class NormalizedTransactionBuilderTest {
                 NetworkId.ARBITRUM,
                 "0xwallet",
                 Instant.parse("2025-10-06T09:11:09Z"),
-                List.of(sell, buy)
+                List.of(sell, buy),
+                new BigDecimal("0.95")
         );
 
         assertThat(tx.getType()).isEqualTo(NormalizedTransactionType.SWAP);
         assertThat(tx.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
         assertThat(tx.getMissingDataReasons()).isEmpty();
-        assertThat(tx.getLegs()).hasSize(2);
-        assertThat(tx.getLegs()).extracting(NormalizedTransaction.Leg::getRole)
+        assertThat(tx.getConfidence()).isEqualByComparingTo("0.95");
+        assertThat(tx.getFlows()).hasSize(2);
+        assertThat(tx.getFlows()).hasSize(2);
+        assertThat(tx.getFlows()).extracting(NormalizedTransaction.Flow::getRole)
                 .containsExactlyInAnyOrder(NormalizedLegRole.SELL, NormalizedLegRole.BUY);
     }
 
@@ -52,13 +55,15 @@ class NormalizedTransactionBuilderTest {
                 NetworkId.ETHEREUM,
                 "0xwallet",
                 Instant.parse("2025-11-01T00:00:00Z"),
-                List.of(out)
+                List.of(out),
+                new BigDecimal("0.88")
         );
 
         assertThat(tx.getType()).isEqualTo(NormalizedTransactionType.EXTERNAL_TRANSFER_OUT);
         assertThat(tx.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
-        assertThat(tx.getLegs()).hasSize(1);
-        assertThat(tx.getLegs().get(0).getRole()).isEqualTo(NormalizedLegRole.TRANSFER);
+        assertThat(tx.getFlows()).hasSize(1);
+        assertThat(tx.getFlows()).hasSize(1);
+        assertThat(tx.getFlows().get(0).getRole()).isEqualTo(NormalizedLegRole.TRANSFER);
     }
 
     @Test
@@ -71,12 +76,172 @@ class NormalizedTransactionBuilderTest {
                 NetworkId.ARBITRUM,
                 "0xwallet",
                 Instant.parse("2025-10-06T09:11:09Z"),
-                List.of(sellOnly)
+                List.of(sellOnly),
+                new BigDecimal("0.55")
         );
 
         assertThat(tx.getType()).isEqualTo(NormalizedTransactionType.SWAP);
         assertThat(tx.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_CLARIFICATION);
+        assertThat(tx.getConfidence()).isEqualByComparingTo("0.55");
         assertThat(tx.getMissingDataReasons()).contains("MISSING_SWAP_LEG");
+    }
+
+    @Test
+    @DisplayName("maps LP position exit event to LP_EXIT with TRANSFER flow role")
+    void mapsLpPositionExitToLpExitType() {
+        RawClassifiedEvent event = raw(EconomicEventType.LP_POSITION_EXIT, "0x46a15b0b27311cedf172ab29e4f4766fbe7f4364", "PCS-V3-POS", new BigDecimal("1"));
+        event.setPositionId("435853");
+
+        NormalizedTransaction tx = builder.build(
+                "0xtx-lp-pos-exit",
+                NetworkId.BASE,
+                "0xwallet",
+                Instant.parse("2025-10-15T01:05:39Z"),
+                List.of(event),
+                new BigDecimal("0.90")
+        );
+
+        assertThat(tx.getType()).isEqualTo(NormalizedTransactionType.LP_EXIT);
+        assertThat(tx.getGroupId()).isEqualTo("LP_POSITION:BASE:0xwallet:435853");
+        assertThat(tx.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        assertThat(tx.getFlows()).hasSize(1);
+        assertThat(tx.getFlows().get(0).getRole()).isEqualTo(NormalizedLegRole.TRANSFER);
+    }
+
+    @Test
+    @DisplayName("maps LP fee claim to dedicated normalized type")
+    void mapsLpFeeClaimType() {
+        RawClassifiedEvent event = raw(EconomicEventType.LP_FEE_CLAIM, "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", "USDC", new BigDecimal("2.147331"));
+        event.setPositionId("435853");
+
+        NormalizedTransaction tx = builder.build(
+                "0xtx-lp-fee-claim",
+                NetworkId.BASE,
+                "0xwallet",
+                Instant.parse("2025-10-15T01:06:11Z"),
+                List.of(event),
+                new BigDecimal("0.90")
+        );
+
+        assertThat(tx.getType()).isEqualTo(NormalizedTransactionType.LP_FEE_CLAIM);
+        assertThat(tx.getGroupId()).isEqualTo("LP_POSITION:BASE:0xwallet:435853");
+        assertThat(tx.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        assertThat(tx.getFlows()).hasSize(1);
+        assertThat(tx.getFlows().get(0).getQuantityDelta()).isEqualByComparingTo("2.147331");
+    }
+
+    @Test
+    @DisplayName("maps LP adjust to dedicated normalized type with TRANSFER role")
+    void mapsLpAdjustType() {
+        RawClassifiedEvent event = raw(EconomicEventType.LP_ADJUST, "0x46a15b0b27311cedf172ab29e4f4766fbe7f4364", "PCS-V3-POS", new BigDecimal("-1"));
+        event.setPositionId("435853");
+
+        NormalizedTransaction tx = builder.build(
+                "0xtx-lp-adjust",
+                NetworkId.BASE,
+                "0xwallet",
+                Instant.parse("2025-10-15T01:06:11Z"),
+                List.of(event),
+                new BigDecimal("0.90")
+        );
+
+        assertThat(tx.getType()).isEqualTo(NormalizedTransactionType.LP_ADJUST);
+        assertThat(tx.getGroupId()).isEqualTo("LP_POSITION:BASE:0xwallet:435853");
+        assertThat(tx.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        assertThat(tx.getFlows()).hasSize(1);
+        assertThat(tx.getFlows().get(0).getRole()).isEqualTo(NormalizedLegRole.TRANSFER);
+    }
+
+    @Test
+    @DisplayName("prefers LP type when LP and transfer events are mixed")
+    void prefersLpTypeOverExternalTransfers() {
+        RawClassifiedEvent lpExit = raw(
+                EconomicEventType.LP_EXIT,
+                "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                "USDC",
+                new BigDecimal("897.031359")
+        );
+        RawClassifiedEvent externalInbound = raw(
+                EconomicEventType.EXTERNAL_INBOUND,
+                "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                "USDC",
+                new BigDecimal("897.031359")
+        );
+
+        NormalizedTransaction tx = builder.build(
+                "0xtx-lp-mixed",
+                NetworkId.BASE,
+                "0xwallet",
+                Instant.parse("2025-10-15T01:06:11Z"),
+                List.of(lpExit, externalInbound),
+                new BigDecimal("0.90")
+        );
+
+        assertThat(tx.getType()).isEqualTo(NormalizedTransactionType.LP_EXIT);
+    }
+
+    @Test
+    @DisplayName("does not treat same-asset inbound and outbound as SWAP")
+    void sameAssetInboundOutboundIsNotSwap() {
+        RawClassifiedEvent outbound = raw(
+                EconomicEventType.EXTERNAL_TRANSFER_OUT,
+                "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                "USDC",
+                new BigDecimal("-13")
+        );
+        RawClassifiedEvent inbound = raw(
+                EconomicEventType.EXTERNAL_INBOUND,
+                "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                "USDC",
+                new BigDecimal("0.003837")
+        );
+
+        NormalizedTransaction tx = builder.build(
+                "0xtx-same-asset",
+                NetworkId.BASE,
+                "0xwallet",
+                Instant.parse("2025-10-15T01:06:11Z"),
+                List.of(outbound, inbound),
+                new BigDecimal("0.90")
+        );
+
+        assertThat(tx.getType()).isEqualTo(NormalizedTransactionType.EXTERNAL_TRANSFER_OUT);
+        assertThat(tx.getGroupId()).isNull();
+    }
+
+    @Test
+    @DisplayName("does not assign groupId for LP transaction without position id")
+    void noGroupIdWhenLpWithoutPositionId() {
+        RawClassifiedEvent event = raw(EconomicEventType.LP_ENTRY, "0xbb00000000000000000000000000000000000001", "BPT", new BigDecimal("5"));
+
+        NormalizedTransaction tx = builder.build(
+                "0xtx-lp-no-position",
+                NetworkId.ARBITRUM,
+                "0xwallet",
+                Instant.parse("2025-11-01T00:00:00Z"),
+                List.of(event),
+                new BigDecimal("0.88")
+        );
+
+        assertThat(tx.getType()).isEqualTo(NormalizedTransactionType.LP_ENTRY);
+        assertThat(tx.getGroupId()).isNull();
+    }
+
+    @Test
+    @DisplayName("builds UNCLASSIFIED when no classifier events are produced")
+    void buildsUnclassifiedWhenEventsMissing() {
+        NormalizedTransaction tx = builder.build(
+                "0xtx-empty",
+                NetworkId.BASE,
+                "0xwallet",
+                Instant.parse("2025-11-01T00:00:00Z"),
+                List.of(),
+                new BigDecimal("0.35")
+        );
+
+        assertThat(tx.getType()).isEqualTo(NormalizedTransactionType.UNCLASSIFIED);
+        assertThat(tx.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_CLARIFICATION);
+        assertThat(tx.getMissingDataReasons()).containsExactly("NO_CLASSIFICATION_EVIDENCE");
     }
 
     private static RawClassifiedEvent raw(EconomicEventType type, String contract, String symbol, BigDecimal qty) {

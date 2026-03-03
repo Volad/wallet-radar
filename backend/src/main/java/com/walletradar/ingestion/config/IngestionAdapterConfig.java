@@ -2,8 +2,8 @@ package com.walletradar.ingestion.config;
 
 import com.walletradar.common.RetryPolicy;
 import com.walletradar.ingestion.adapter.RpcEndpointRotator;
-import com.walletradar.ingestion.adapter.evm.EvmRpcClient;
-import com.walletradar.ingestion.adapter.evm.WebClientEvmRpcClient;
+import com.walletradar.ingestion.adapter.evm.rpc.EvmRpcClient;
+import com.walletradar.ingestion.adapter.evm.rpc.WebClientEvmRpcClient;
 import com.walletradar.ingestion.adapter.solana.SolanaRpcClient;
 import com.walletradar.ingestion.adapter.solana.WebClientSolanaRpcClient;
 import io.github.resilience4j.ratelimiter.RateLimiter;
@@ -24,7 +24,16 @@ import java.util.stream.Collectors;
  * Configures RPC adapters from unified per-network config (ADR-012): per-network rotators + default rotator for unknown networks.
  */
 @Configuration
-@EnableConfigurationProperties({ IngestionNetworkProperties.class, ProtocolRegistryProperties.class, IngestionRetryProperties.class, IngestionEvmRpcProperties.class, BackfillProperties.class, ClassifierProperties.class, ScamFilterProperties.class })
+@EnableConfigurationProperties({
+        IngestionNetworkProperties.class,
+        ProtocolRegistryProperties.class,
+        IngestionRetryProperties.class,
+        IngestionEvmRpcProperties.class,
+        BackfillProperties.class,
+        ClassifierProperties.class,
+        ScamFilterProperties.class,
+        IngestionExplorerProperties.class
+})
 public class IngestionAdapterConfig {
 
     /** Fallback URL when a network has no entry or empty urls; used so adapter does not fail for unconfigured EVM networks. */

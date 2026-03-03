@@ -1,6 +1,6 @@
 package com.walletradar.api.validation;
 
-import com.walletradar.domain.NetworkId;
+import com.walletradar.domain.common.NetworkId;
 import org.springframework.stereotype.Component;
 
 import java.util.List;

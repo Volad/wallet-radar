@@ -1,8 +1,9 @@
 package com.walletradar.ingestion.job.pricing;
 
-import com.walletradar.domain.NormalizedTransaction;
-import com.walletradar.domain.NormalizedTransactionRepository;
-import com.walletradar.domain.NormalizedTransactionStatus;
+import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.pricing.HistoricalPriceRequest;
 import com.walletradar.pricing.HistoricalPriceResolverChain;
 import com.walletradar.pricing.PriceResolutionResult;
@@ -57,16 +58,20 @@ public class NormalizedTransactionPricingJob {
     }
 
     void priceOne(NormalizedTransaction tx) {
-        if (tx.getLegs() == null || tx.getLegs().isEmpty()) {
+        if (tx.getFlows() == null || tx.getFlows().isEmpty()) {
             markNeedsReview(tx, "MISSING_LEGS");
             return;
         }
         Set<String> unresolvedReasons = new LinkedHashSet<>();
 
-        for (int i = 0; i < tx.getLegs().size(); i++) {
-            NormalizedTransaction.Leg leg = tx.getLegs().get(i);
+        for (int i = 0; i < tx.getFlows().size(); i++) {
+            NormalizedTransaction.Flow leg = tx.getFlows().get(i);
             if (leg.getQuantityDelta() == null || leg.getQuantityDelta().signum() == 0) {
                 unresolvedReasons.add("MISSING_QUANTITY");
+                continue;
+            }
+            boolean priceRequired = isPriceRequired(tx.getType(), leg.getQuantityDelta());
+            if (!priceRequired) {
                 continue;
             }
             if (leg.getUnitPriceUsd() != null) {
@@ -113,14 +118,26 @@ public class NormalizedTransactionPricingJob {
         normalizedTransactionRepository.save(tx);
     }
 
+    private static boolean isPriceRequired(NormalizedTransactionType type, BigDecimal qty) {
+        if (type == NormalizedTransactionType.LP_ADJUST
+                || type == NormalizedTransactionType.LP_POSITION_STAKE
+                || type == NormalizedTransactionType.LP_POSITION_UNSTAKE) {
+            return false;
+        }
+        if (type == NormalizedTransactionType.SWAP) {
+            return true;
+        }
+        return qty.signum() > 0;
+    }
+
     private static void fillSwapCounterpart(NormalizedTransaction tx, int index, HistoricalPriceRequest request) {
-        if (tx.getLegs() == null || tx.getLegs().size() < 2 || index >= tx.getLegs().size()) {
+        if (tx.getFlows() == null || tx.getFlows().size() < 2 || index >= tx.getFlows().size()) {
             return;
         }
-        NormalizedTransaction.Leg leg = tx.getLegs().get(index);
-        for (int i = 0; i < tx.getLegs().size(); i++) {
+        NormalizedTransaction.Flow leg = tx.getFlows().get(index);
+        for (int i = 0; i < tx.getFlows().size(); i++) {
             if (i == index) continue;
-            NormalizedTransaction.Leg counterpart = tx.getLegs().get(i);
+            NormalizedTransaction.Flow counterpart = tx.getFlows().get(i);
             if (counterpart.getAssetContract() == null || counterpart.getAssetContract().isBlank()
                     || counterpart.getQuantityDelta() == null || counterpart.getQuantityDelta().signum() == 0) {
                 continue;

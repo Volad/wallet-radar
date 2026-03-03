@@ -1,11 +1,11 @@
 package com.walletradar.config;
 
-import com.walletradar.domain.NetworkId;
-import com.walletradar.domain.NormalizedLegRole;
-import com.walletradar.domain.NormalizedTransaction;
-import com.walletradar.domain.NormalizedTransactionStatus;
-import com.walletradar.domain.NormalizedTransactionType;
-import com.walletradar.domain.PriceSource;
+import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
+import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.domain.common.PriceSource;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -51,12 +51,13 @@ class NormalizedTransactionMongoIntegrationTest {
         tx.setWalletAddress("0xwallet");
         tx.setBlockTimestamp(Instant.parse("2025-10-06T09:11:09Z"));
         tx.setType(NormalizedTransactionType.SWAP);
+        tx.setGroupId("LP_POSITION:BASE:0xwallet:435853");
         tx.setStatus(NormalizedTransactionStatus.PENDING_PRICE);
         tx.setCreatedAt(Instant.now());
         tx.setUpdatedAt(Instant.now());
         tx.setMissingDataReasons(List.of());
 
-        NormalizedTransaction.Leg sell = new NormalizedTransaction.Leg();
+        NormalizedTransaction.Flow sell = new NormalizedTransaction.Flow();
         sell.setRole(NormalizedLegRole.SELL);
         sell.setAssetContract("0xaaa");
         sell.setAssetSymbol("USDC");
@@ -65,7 +66,7 @@ class NormalizedTransactionMongoIntegrationTest {
         sell.setValueUsd(new BigDecimal("16.000000000000000000"));
         sell.setPriceSource(PriceSource.STABLECOIN);
 
-        NormalizedTransaction.Leg buy = new NormalizedTransaction.Leg();
+        NormalizedTransaction.Flow buy = new NormalizedTransaction.Flow();
         buy.setRole(NormalizedLegRole.BUY);
         buy.setAssetContract("0xbbb");
         buy.setAssetSymbol("ETH");
@@ -74,18 +75,19 @@ class NormalizedTransactionMongoIntegrationTest {
         buy.setValueUsd(new BigDecimal("16.000000000000000000"));
         buy.setPriceSource(PriceSource.SWAP_DERIVED);
 
-        tx.setLegs(List.of(sell, buy));
+        tx.setFlows(List.of(sell, buy));
 
         mongoTemplate.save(tx, "normalized_transactions");
         assertThat(tx.getId()).isNotNull();
 
         NormalizedTransaction read = mongoTemplate.findById(tx.getId(), NormalizedTransaction.class, "normalized_transactions");
         assertThat(read).isNotNull();
-        assertThat(read.getLegs()).hasSize(2);
-        assertThat(read.getLegs().get(0).getQuantityDelta()).isEqualByComparingTo("-16");
-        assertThat(read.getLegs().get(0).getUnitPriceUsd()).isEqualByComparingTo("1.000000000000000000");
-        assertThat(read.getLegs().get(1).getQuantityDelta()).isEqualByComparingTo("0.004");
-        assertThat(read.getLegs().get(1).getUnitPriceUsd()).isEqualByComparingTo("4000.000000000000000000");
+        assertThat(read.getFlows()).hasSize(2);
+        assertThat(read.getGroupId()).isEqualTo("LP_POSITION:BASE:0xwallet:435853");
+        assertThat(read.getFlows().get(0).getQuantityDelta()).isEqualByComparingTo("-16");
+        assertThat(read.getFlows().get(0).getUnitPriceUsd()).isEqualByComparingTo("1.000000000000000000");
+        assertThat(read.getFlows().get(1).getQuantityDelta()).isEqualByComparingTo("0.004");
+        assertThat(read.getFlows().get(1).getUnitPriceUsd()).isEqualByComparingTo("4000.000000000000000000");
     }
 
     @Test
@@ -96,6 +98,6 @@ class NormalizedTransactionMongoIntegrationTest {
 
         assertThat(names).contains("tx_network_wallet_uniq");
         assertThat(names).contains("wallet_network_status_block");
-        assertThat(names).contains("legs_asset_contract");
+        assertThat(names).contains("flows_asset_contract");
     }
 }

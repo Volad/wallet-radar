@@ -1,3 +1,5 @@
+> **Status:** Archived (historical). Not an active requirement source.
+
 # Feature 4: Current balance (poll + initial refresh on wallet add + manual refresh)
 
 **Tasks:** T-012, T-013, T-014

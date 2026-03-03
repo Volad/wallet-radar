@@ -69,7 +69,7 @@ $worker implement docs/tasks/15-normalized-transactions-pipeline.md (T-034..T-03
   - AVCO input source switches to confirmed normalized legs,
   - transaction history API returns only `CONFIRMED` by default,
   - derived positions/snapshots rebuilt from new canonical source.
-- **Assumption:** Existing `economic_events` state is not required for migration continuity.
+- **Assumption:** No backward-compatible replay from legacy pre-normalized storage is required.
 - **DoD:** integration tests for AVCO/PnL consistency on representative wallets; API visibility rule tests.
 - **Dependencies:** T-037, T-015, T-021, T-022, T-025
 

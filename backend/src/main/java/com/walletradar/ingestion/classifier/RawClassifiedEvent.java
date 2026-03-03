@@ -1,7 +1,7 @@
 package com.walletradar.ingestion.classifier;
 
-import com.walletradar.domain.EconomicEventType;
-import com.walletradar.domain.FlagCode;
+import com.walletradar.domain.transaction.normalized.EconomicEventType;
+import com.walletradar.domain.common.FlagCode;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
@@ -10,7 +10,7 @@ import java.math.BigDecimal;
 import java.math.BigInteger;
 
 /**
- * Raw event shape produced by classifiers; normalizer converts to domain EconomicEvent.
+ * Raw event shape produced by classifiers; builder converts this into normalized transaction legs.
  * No txHash, networkId, blockTimestamp here — they come from RawTransaction context.
  */
 @NoArgsConstructor
@@ -32,4 +32,9 @@ public class RawClassifiedEvent {
     private FlagCode flagCode;
     /** Log index within the tx (from receipt) for deterministic ordering when blockTimestamp is equal. */
     private Integer logIndex;
+    /**
+     * LP position identifier (e.g. concentrated-liquidity NFT tokenId for v3/v4 style pools).
+     * Optional; set only when classifier can deterministically resolve it.
+     */
+    private String positionId;
 }

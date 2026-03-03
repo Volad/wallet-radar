@@ -1,3 +1,5 @@
+> **Status:** Archived (historical). Not an active requirement source.
+
 # Feature 3: Incremental sync (hourly + manual refresh)
 
 **Tasks:** T-010, T-023 (POST /sync/refresh)

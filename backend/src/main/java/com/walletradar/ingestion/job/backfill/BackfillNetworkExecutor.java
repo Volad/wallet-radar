@@ -1,11 +1,11 @@
 package com.walletradar.ingestion.job.backfill;
 
-import com.walletradar.domain.BackfillSegment;
-import com.walletradar.domain.BackfillSegmentRepository;
-import com.walletradar.domain.NetworkId;
-import com.walletradar.domain.RawFetchCompleteEvent;
-import com.walletradar.domain.SyncStatus;
-import com.walletradar.domain.SyncStatusRepository;
+import com.walletradar.domain.sync.BackfillSegment;
+import com.walletradar.domain.sync.BackfillSegmentRepository;
+import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.event.RawFetchCompleteEvent;
+import com.walletradar.domain.sync.SyncStatus;
+import com.walletradar.domain.sync.SyncStatusRepository;
 import com.walletradar.ingestion.adapter.BlockHeightResolver;
 import com.walletradar.ingestion.adapter.BlockTimestampResolver;
 import com.walletradar.ingestion.adapter.NetworkAdapter;
@@ -24,7 +24,6 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Semaphore;
 
 /**
  * Runs backfill for one (wallet, network): Phase 1 (raw fetch) only (ADR-021).
@@ -70,8 +69,6 @@ public class BackfillNetworkExecutor {
                 log.info("Backfill already up to date for {} on {}", walletAddress, networkIdStr);
                 return;
             }
-            int batchSize = resolveBatchSizeForNetwork(networkIdStr, adapter);
-
             String syncStatusId = syncStatus.getId();
             List<BackfillSegment> allSegments = ensureSegments(syncStatusId, walletAddress, networkIdStr, fromBlock, toBlock);
             recoverStaleSegments(syncStatusId);
@@ -91,12 +88,11 @@ public class BackfillNetworkExecutor {
 
             int requestedWorkers = Math.max(1, backfillProperties.getParallelSegmentWorkers());
             int effectiveWorkers = Math.min(requestedWorkers, segmentsToRun.size());
-            Semaphore semaphore = new Semaphore(effectiveWorkers);
-            try (ExecutorService segmentExecutor = Executors.newVirtualThreadPerTaskExecutor()) {
+            try (ExecutorService segmentExecutor = Executors.newFixedThreadPool(effectiveWorkers)) {
                 List<CompletableFuture<Boolean>> futures = new ArrayList<>();
                 for (BackfillSegment segment : segmentsToRun) {
                     futures.add(CompletableFuture.supplyAsync(
-                            () -> processOneSegment(walletAddress, networkId, adapter, batchSize, segment, semaphore),
+                            () -> processOneSegment(walletAddress, networkId, adapter, segment),
                             segmentExecutor
                     ));
                 }
@@ -123,19 +119,6 @@ public class BackfillNetworkExecutor {
         return Math.max(1, backfillProperties.getWindowBlocks());
     }
 
-    private int resolveBatchSizeForNetwork(String networkIdStr, NetworkAdapter adapter) {
-        int fallback = Math.max(1, adapter.getMaxBlockBatchSize());
-        var networkMap = ingestionNetworkProperties.getNetwork();
-        if (networkMap == null) {
-            return fallback;
-        }
-        var entry = networkMap.get(networkIdStr);
-        if (entry == null || entry.getBatchBlockSize() == null || entry.getBatchBlockSize() <= 0) {
-            return fallback;
-        }
-        return entry.getBatchBlockSize();
-    }
-
     private List<BackfillSegment> ensureSegments(String syncStatusId, String walletAddress, String networkId,
                                                  long fromBlock, long toBlock) {
         List<BackfillSegment> existing = backfillSegmentRepository.findBySyncStatusIdOrderBySegmentIndexAsc(syncStatusId);
@@ -143,7 +126,7 @@ public class BackfillNetworkExecutor {
             return existing;
         }
         long totalBlocks = toBlock - fromBlock + 1;
-        int plannedSegments = Math.max(1, Math.min(MAX_SEGMENTS, backfillProperties.getParallelSegmentWorkers()));
+        int plannedSegments = Math.max(1, Math.min(MAX_SEGMENTS, backfillProperties.getParallelSegments()));
         int segmentCount = (int) Math.max(1, Math.min(totalBlocks, plannedSegments));
         long baseSize = totalBlocks / segmentCount;
         long remainder = totalBlocks % segmentCount;
@@ -190,13 +173,19 @@ public class BackfillNetworkExecutor {
     }
 
     private boolean processOneSegment(String walletAddress, NetworkId networkId, NetworkAdapter adapter,
-                                      int batchSize, BackfillSegment segment, Semaphore semaphore) {
-        boolean acquired = false;
+                                      BackfillSegment segment) {
         try {
-            semaphore.acquire();
-            acquired = true;
             long segmentToBlock = segment.getToBlock() == null ? 0L : segment.getToBlock();
             long effectiveFromBlock = resolveEffectiveFromBlock(segment);
+            log.info(
+                    "Starting backfill segment: wallet={}, network={}, segmentId={}, index={}, from={}, to={}",
+                    walletAddress,
+                    networkId.name(),
+                    segment.getId(),
+                    segment.getSegmentIndex(),
+                    effectiveFromBlock,
+                    segmentToBlock
+            );
             markSegmentRunning(segment.getId());
             if (effectiveFromBlock > segmentToBlock) {
                 markSegmentComplete(segment.getId());
@@ -206,22 +195,14 @@ public class BackfillNetworkExecutor {
                     updateSegmentProgress(segment.getId(), progressPct, lastBlockSynced);
             rawFetchSegmentProcessor.processSegment(
                     walletAddress, networkId, adapter,
-                    effectiveFromBlock, segmentToBlock, batchSize,
+                    effectiveFromBlock, segmentToBlock,
                     callback
             );
             markSegmentComplete(segment.getId());
             return true;
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            markSegmentFailed(segment.getId(), "Interrupted");
-            return false;
         } catch (Exception e) {
             markSegmentFailed(segment.getId(), e.getMessage());
             return false;
-        } finally {
-            if (acquired) {
-                semaphore.release();
-            }
         }
     }
 

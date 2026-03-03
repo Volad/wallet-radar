@@ -1,6 +1,6 @@
 package com.walletradar.ingestion.adapter;
 
-import com.walletradar.domain.NetworkId;
+import com.walletradar.domain.common.NetworkId;
 
 import java.time.Instant;
 

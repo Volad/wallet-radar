@@ -1,6 +1,6 @@
 package com.walletradar.ingestion.classifier;
 
-import com.walletradar.domain.RawTransaction;
+import com.walletradar.domain.transaction.raw.RawTransaction;
 
 import java.util.List;
 
@@ -17,5 +17,9 @@ public interface TxClassifier {
      * @param walletAddress the wallet we are classifying for (must be participant in tx)
      * @return list of raw classified events (can be empty if this classifier does not match)
      */
-    List<RawClassifiedEvent> classify(RawTransaction tx, String walletAddress);
+    default List<RawClassifiedEvent> classify(RawTransaction tx, String walletAddress) {
+        return classify(RawTransactionNormalizationView.wrap(tx), walletAddress);
+    }
+
+    List<RawClassifiedEvent> classify(RawTransactionNormalizationView txView, String walletAddress);
 }

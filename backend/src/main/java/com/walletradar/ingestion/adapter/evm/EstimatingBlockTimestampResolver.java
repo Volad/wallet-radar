@@ -1,6 +1,6 @@
 package com.walletradar.ingestion.adapter.evm;
 
-import com.walletradar.domain.NetworkId;
+import com.walletradar.domain.common.NetworkId;
 import com.walletradar.ingestion.adapter.BlockTimestampResolver;
 
 import java.time.Instant;

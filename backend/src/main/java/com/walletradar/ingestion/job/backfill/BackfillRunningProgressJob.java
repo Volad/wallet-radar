@@ -1,9 +1,9 @@
 package com.walletradar.ingestion.job.backfill;
 
-import com.walletradar.domain.BackfillSegment;
-import com.walletradar.domain.BackfillSegmentRepository;
-import com.walletradar.domain.SyncStatus;
-import com.walletradar.domain.SyncStatusRepository;
+import com.walletradar.domain.sync.BackfillSegment;
+import com.walletradar.domain.sync.BackfillSegmentRepository;
+import com.walletradar.domain.sync.SyncStatus;
+import com.walletradar.domain.sync.SyncStatusRepository;
 import com.walletradar.ingestion.sync.progress.SyncProgressTracker;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

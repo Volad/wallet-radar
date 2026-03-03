@@ -1,6 +1,6 @@
 package com.walletradar.pricing.resolver;
 
-import com.walletradar.domain.PriceSource;
+import com.walletradar.domain.common.PriceSource;
 import com.walletradar.pricing.HistoricalPriceRequest;
 import com.walletradar.pricing.resolver.CounterpartPriceResolver;
 import com.walletradar.pricing.PriceResolutionResult;

@@ -1,279 +1,250 @@
 # WalletRadar — Domain Model
 
-> **Version:** MVP v1.0  
-> **Last updated:** 2025
+> **Version:** MVP v2.1  
+> **Last updated:** 2026-02-28
 
 ---
 
 ## Glossary
 
 | Term | Definition |
-|------|-----------|
-| **Wallet** | A blockchain address (EVM `0x…` or Solana Base58). Read-only — no signing required. |
-| **Session** | The ordered set of wallet addresses currently tracked in the browser (localStorage). No backend user concept. |
-| **Network** | A supported blockchain (Ethereum, Arbitrum, Solana, etc.). Each wallet×network pair is synced independently. |
-| **Raw Transaction** | Immutable on-chain data as fetched from RPC. Never mutated after ingestion. |
-| **Transaction Status Pipeline** | `PENDING_CLARIFICATION -> PENDING_PRICE -> PENDING_STAT -> CONFIRMED`; unresolved operations may move to `NEEDS_REVIEW`. |
-| **Normalized Transaction** | Canonical operation-level record derived from raw transaction. Contains `legs[]` used as AVCO input (ADR-025). |
-| **Economic Event** | Legacy event-level representation kept for backward compatibility during migration. |
-| **Event Type** | Classification of an economic event (see Event Types below). |
-| **AVCO** | Average Cost (Weighted Average). The accounting method used for all cost basis calculations. |
-| **perWalletAvco** | AVCO calculated using only events from one specific wallet address. |
-| **crossWalletAvco** | AVCO calculated across all wallets in the current session, treating them as a single entity. Always computed on-request — never stored. |
-| **Cost Basis** | The total acquisition cost of a held asset position: `quantity × perWalletAvco`. |
-| **Unrealised P&L** | `(spotPrice − AVCO) × quantity` — profit/loss on current holdings. |
-| **Realised P&L** | `(sellPrice − avcoAtTimeOfSale) × sellQuantity` — profit/loss crystallised at point of sale. |
-| **Flag** | A marker on an economic event indicating it requires human review or has incomplete data. |
-| **Override** | A user-supplied cost price that replaces the system-derived price for a specific **on-chain** event. Stored in `cost_basis_overrides`; triggers async AVCO recalculation. |
-| **Manual Compensating Transaction** | A synthetic normalized transaction (no on-chain tx) created by the user to reconcile balance and/or AVCO. Has `quantityDelta` and optionally `priceUsd` (required when quantityDelta > 0 for AVCO). Stored with type `MANUAL_COMPENSATING`; idempotency by `clientId`. Participates in AVCO replay in timestamp order. |
-| **Reconciliation** | Comparison of **on-chain balance** (from `on_chain_balances` / CurrentBalancePoll) with **derived quantity** (from `asset_positions.quantity`). For wallets with history younger than 2 years, a mismatch triggers a warning and suggests adding a manual compensating transaction; for older wallets, comparison is shown but correction is not required. |
-| **Snapshot** | A point-in-time record of portfolio state (positions, values, P&L) stored per wallet per hour. |
-| **Backfill** | The initial ingestion of 2 years of transaction history when a wallet is first added. |
-| **Incremental Sync** | Hourly fetch of new transactions since the last known block. |
-| **Price Source** | How the USD price for an event was determined (see Price Sources below). |
-| **Internal Transfer** | A transfer between two wallets both present in the current session. Does not affect AVCO. |
-| **Incomplete History** | When the 2-year backfill window starts with a SELL event — prior purchase history is unavailable. |
-| **On-Chain Balance** | Current asset quantity for a (wallet, network, asset) as returned by RPC at a point in time. Tracked **independently of backfill**; updated periodically (e.g. every 10 min) and on manual refresh. Used for reconciliation with derived quantity from confirmed normalized transaction legs. |
+|------|------------|
+| **Wallet** | Read-only blockchain address tracked by the system (no signing, no private keys). |
+| **Network** | Supported chain (`NetworkId`) processed independently per wallet. |
+| **Raw Transaction** | Source transaction document stored in `raw_transactions` with provider payload in `rawData`. |
+| **Normalization Status** | Raw processing state: `PENDING` or `COMPLETE`. |
+| **Normalized Transaction** | Canonical operation document (`1 tx = 1 doc`) with `flows[]` used by pricing/stat/accounting pipeline. |
+| **Flow** | Canonical movement row inside normalized transaction (`quantityDelta`, role, asset, price fields). |
+| **Normalized Status Pipeline** | `PENDING_CLARIFICATION -> PENDING_PRICE -> PENDING_STAT -> CONFIRMED` (or `NEEDS_REVIEW`). |
+| **AVCO** | Weighted average acquisition cost used for cost basis and realised PnL. |
+| **perWalletAvco** | AVCO computed from one wallet only. |
+| **crossWalletAvco** | AVCO computed on request across selected wallets; never stored. |
+| **Override** | User-defined replacement price stored in `cost_basis_overrides`, applied in replay. |
+| **Manual Compensating Transaction** | Synthetic normalized transaction (`type=MANUAL_COMPENSATING`) for reconciliation fixes, idempotent by `clientId`. |
+| **Reconciliation** | Comparison between derived quantity (`asset_positions`) and on-chain quantity (`on_chain_balances`). |
 
 ---
 
 ## Core Entities
 
-### NormalizedTransaction (Canonical, ADR-025)
+### RawTransaction (`raw_transactions`)
 
-Canonical operation object used by UI and accounting replay.
+Immutable source payload with controlled enrichment during normalization.
 
+```text
+RawTransaction {
+  txHash: String
+  networkId: String
+  walletAddress: String
+  blockNumber: Long?    // EVM
+  slot: Long?           // Solana
+  normalizationStatus: PENDING | COMPLETE
+  retryCount: Int
+  lastError: String?
+  nextRetryAt: DateTime?
+  createdAt: DateTime
+  rawData: Document     // tx + explorer payload; optional merged receipt/log enrichments
+}
 ```
+
+### NormalizedTransaction (`normalized_transactions`)
+
+Canonical operation object used by UI and AVCO replay.
+
+```text
 NormalizedTransaction {
-  txHash:               String
-  networkId:            NetworkId
-  walletAddress:        String
-  blockTimestamp:       DateTime
-  type:                 NormalizedTransactionType
-  status:               NormalizedTransactionStatus
-  legs:                 Leg[]
-  missingDataReasons:   String[]?
-  confidence:           String?       // HIGH | MEDIUM | LOW
-  createdAt:            DateTime
-  updatedAt:            DateTime
-  confirmedAt:          DateTime?
+  txHash: String
+  networkId: NetworkId
+  walletAddress: String
+  blockTimestamp: DateTime
+  type: NormalizedTransactionType
+  status: NormalizedTransactionStatus
+  flows: Flow[]
+  missingDataReasons: String[]
+  confidence: Decimal      // [0..1]
+  clarificationAttempts: Int
+  pricingAttempts: Int
+  statAttempts: Int
+  createdAt: DateTime
+  updatedAt: DateTime
+  confirmedAt: DateTime?
+  clientId: String?        // for MANUAL_COMPENSATING idempotency
 }
 
-Leg {
-  role:                 String        // BUY | SELL | FEE | TRANSFER
-  assetSymbol:          String
-  assetContract:        String
-  quantityDelta:        Decimal       // positive=inbound, negative=outbound
-  unitPriceUsd:         Decimal?
-  valueUsd:             Decimal?
-  priceSource:          PriceSource?
-  isInferred:           Boolean
-  inferenceReason:      String?
-  confidence:           String?
-}
-```
-
-Only `CONFIRMED` normalized transactions are shown in UI by default and used as AVCO input.
-
-### EconomicEvent (Legacy)
-
-Legacy event-level object retained for migration/backward compatibility.
-
-```
-EconomicEvent {
-  txHash:               String?        // on-chain transaction hash; null for MANUAL_COMPENSATING (synthetic id used)
-  networkId:            NetworkId      // which chain
-  walletAddress:        String         // which wallet this event belongs to
-  blockTimestamp:       DateTime
-  eventType:            EconomicEventType
-  assetSymbol:          String         // e.g. "ETH", "USDC"
-  assetContract:        String         // token contract address (zero for native)
-  quantityDelta:        Decimal        // positive = received, negative = sent
-  priceUsd:             Decimal?       // USD price per token; required for MANUAL_COMPENSATING when quantityDelta > 0
-  priceSource:          PriceSource
-  totalValueUsd:        Decimal        // |quantityDelta| × priceUsd
-  gasCostUsd:           Decimal
-  gasIncludedInBasis:   Boolean
-  realisedPnlUsd:       Decimal?       // populated on SELL events only
-  avcoAtTimeOfSale:     Decimal?       // AVCO snapshot at moment of sale (audit)
-  flagCode:             FlagCode?
-  flagResolved:         Boolean
-  counterpartyAddress:  String?        // for transfer events
-  isInternalTransfer:   Boolean
-  protocolName:         String?        // "Uniswap V3", "Aave V3", etc.
-  clientId:             String?        // UUID for idempotency (MANUAL_COMPENSATING only)
+Flow {
+  role: BUY | SELL | TRANSFER
+  assetContract: String
+  assetSymbol: String
+  quantityDelta: Decimal       // positive=inbound, negative=outbound
+  unitPriceUsd: Decimal?
+  valueUsd: Decimal?
+  priceSource: PriceSource?
+  isInferred: Boolean
+  inferenceReason: String?
+  confidence: ConfidenceLevel?
+  avcoAtTimeOfSale: Decimal?
+  realisedPnlUsd: Decimal?
+  logIndex: Int?
 }
 ```
 
-**Manual compensating events** have no `txHash` (or use a synthetic event id). They have `quantityDelta` and optionally `priceUsd`; for positive `quantityDelta`, `priceUsd` is required for AVCO. They are stored in `economic_events` (with a marker, e.g. `eventType=MANUAL_COMPENSATING`) and participate in AVCO replay in `blockTimestamp` order like any other event.
+Only `status=CONFIRMED` documents are used for accounting replay and shown in default history responses.
 
-### AssetPosition
+### AssetPosition (`asset_positions`)
 
-Derived state — always recomputable from confirmed normalized transaction legs.
+Derived state per `(walletAddress, networkId, assetContract)`.
 
-```
+```text
 AssetPosition {
-  walletAddress:        String
-  networkId:            String
-  assetSymbol:          String
-  assetContract:        String
-  quantity:             Decimal        // derived from confirmed operation legs (AVCO replay)
-  perWalletAvco:        Decimal        // AVCO for this wallet only
-  // crossWalletAvco: NOT stored — computed on-request
-  totalCostBasisUsd:    Decimal        // quantity × perWalletAvco
-  totalGasPaidUsd:      Decimal
-  totalRealisedPnlUsd:  Decimal        // cumulative realised P&L for this asset
-  hasIncompleteHistory: Boolean        // true if first event in history is SELL
-  hasUnresolvedFlags:   Boolean
-  unresolvedFlagCount:  Int
-  lastEventTimestamp:   DateTime
-  lastCalculatedAt:     DateTime
-  // Reconciliation: either stored here or computed at read time from on_chain_balances vs quantity
-  onChainQuantity:      Decimal?       // from on_chain_balances at last poll (optional if computed at read)
-  onChainCapturedAt:    DateTime?     // when on-chain balance was captured
-  reconciliationStatus: String?       // MATCH | MISMATCH | NOT_APPLICABLE
+  walletAddress: String
+  networkId: String
+  assetSymbol: String
+  assetContract: String
+  quantity: Decimal
+  perWalletAvco: Decimal
+  totalCostBasisUsd: Decimal
+  totalGasPaidUsd: Decimal
+  totalRealisedPnlUsd: Decimal
+  hasIncompleteHistory: Boolean
+  hasUnresolvedFlags: Boolean
+  unresolvedFlagCount: Int
+  lastEventTimestamp: DateTime?
+  lastCalculatedAt: DateTime?
+  onChainQuantity: Decimal?
+  onChainCapturedAt: DateTime?
+  reconciliationStatus: MATCH | MISMATCH | NOT_APPLICABLE
 }
 ```
 
-Reconciliation status is either stored on `asset_positions` (e.g. updated when balances or positions change) or computed at read time by comparing `on_chain_balances.quantity` with `asset_positions.quantity` for the same (wallet, network, asset).
+### SyncState (`sync_status`, `backfill_segments`)
 
-### PortfolioSnapshot
+`SyncStatus` tracks wallet×network lifecycle. `BackfillSegment` tracks persistent segment progress and retries.
 
-Hourly point-in-time record. Per-wallet only — never aggregate.
+### OnChainBalance (`on_chain_balances`)
 
-```
-PortfolioSnapshot {
-  snapshotTime:     DateTime    // truncated to hour
-  walletAddress:    String      // always set — no null/aggregate snapshots
-  networkId:        String?     // null = all-network rollup for this wallet
-  assets:           AssetSnapshot[]
-  totalValueUsd:    Decimal
-  unresolvedCount:  Int
-}
+Latest observed native/token quantity for `(wallet, network, asset)` from balance refresh jobs.
 
-AssetSnapshot {
-  assetSymbol:      String
-  quantity:         Decimal
-  perWalletAvco:    Decimal
-  spotPriceUsd:     Decimal
-  valueUsd:         Decimal
-  unrealisedPnlUsd: Decimal
-  isResolved:       Boolean
+### Cost Basis Override (`cost_basis_overrides`)
+
+User override by normalized flow id:
+
+```text
+CostBasisOverride {
+  normalizedLegId: String
+  priceUsd: Decimal
+  isActive: Boolean
+  note: String?
+  createdAt: DateTime
 }
 ```
+
+### RecalcJob (`recalc_jobs`)
+
+Async AVCO replay status tracking after override/manual compensating updates.
 
 ---
 
-## Event Types
+## Canonical Transaction Types
 
-| EventType | AVCO Effect | Realised P&L | In Scope MVP |
-|-----------|-------------|--------------|--------------|
-| `SWAP_BUY` | Increases quantity and adjusts AVCO upward | — | ✅ |
-| `SWAP_SELL` | Decreases quantity; AVCO unchanged | ✅ computed | ✅ |
-| `INTERNAL_TRANSFER` | No AVCO change on either wallet | — | ✅ |
-| `STAKE_DEPOSIT` | Treated as transfer out (quantity decreases) | — | ✅ |
-| `STAKE_WITHDRAWAL` | Treated as transfer in at original AVCO | — | ✅ |
-| `LP_ENTRY` | Flagged `LP_MANUAL_REQUIRED` — complex IL | — | ⚠️ flagged |
-| `LP_EXIT` | Flagged `LP_MANUAL_REQUIRED` | ✅ if resolved | ⚠️ flagged |
-| `LEND_DEPOSIT` | Treated as transfer out | — | ✅ |
-| `LEND_WITHDRAWAL` | Treated as transfer in | — | ✅ |
-| `BORROW` | Increases quantity at current market price | — | ✅ |
-| `REPAY` | Decreases quantity | — | ✅ |
-| `EXTERNAL_TRANSFER_OUT` | Decreases quantity | — | ✅ |
-| `MANUAL_COMPENSATING` | Increases or decreases quantity; AVCO updated if priceUsd provided (required for positive delta) | — | ✅ |
+`NormalizedTransactionType`:
+
+| Type |
+|------|
+| `SWAP` |
+| `STAKE_DEPOSIT` |
+| `STAKE_WITHDRAWAL` |
+| `LP_ENTRY` |
+| `LP_EXIT` |
+| `LP_EXIT_PARTIAL` |
+| `LP_EXIT_FINAL` |
+| `LP_ADJUST` |
+| `LP_POSITION_STAKE` |
+| `LP_POSITION_UNSTAKE` |
+| `LP_FEE_CLAIM` |
+| `LEND_DEPOSIT` |
+| `LEND_WITHDRAWAL` |
+| `BORROW` |
+| `REPAY` |
+| `EXTERNAL_TRANSFER_OUT` |
+| `EXTERNAL_INBOUND` |
+| `MANUAL_COMPENSATING` |
+
+Internal classifier enum `EconomicEventType` is still used to build normalized `type`/`flows`, but canonical storage and accounting input is `normalized_transactions`.
+
+LP extensions for concentrated-liquidity (CL) protocols:
+
+- `LP_POSITION_ENTRY` (internal classifier event) maps to canonical `type=LP_ENTRY` for mint-style position creation.
+- `LP_POSITION_EXIT` (internal classifier event) maps to canonical `type=LP_EXIT` for burn-style position close.
+- For v3/v4 position mint tx, canonical `LP_ENTRY` must include economic principal outflows (wallet token spends), not only NFT lifecycle markers.
+- For v3/v4 custody transfer (`wallet <-> farm/strategy`) canonical types are `LP_POSITION_STAKE` / `LP_POSITION_UNSTAKE`.
+- `LP_EXIT_PARTIAL` / `LP_EXIT_FINAL` represent decrease-liquidity exits with and without final position close boundary.
+- `LP_ADJUST` is deprecated and kept as backward-compatible alias for legacy data only.
+- `LP_FEE_CLAIM` maps to canonical `type=LP_FEE_CLAIM`.
 
 ---
 
 ## Price Sources
 
-| PriceSource | Description | Priority |
-|-------------|-------------|----------|
-| `STABLECOIN` | Hardcoded $1.00 for USDC/USDT/DAI/GHO/USDe/FRAX | 1 — overrides all |
-| `SWAP_DERIVED` | From tokenIn/tokenOut ratio when one leg is a stablecoin (or chain to stablecoin); applied at ingestion when both legs of the swap are available (ADR-018). Swap detection may be topic-based (DEX) or heuristic: one asset out + one asset in in same tx (ADR-019); P2P/OTC atomic swaps in one tx are treated as swap with execution price. | 2 — preferred |
-| `COINGECKO` | CoinGecko `/coins/{id}/history` API call | 3 — fallback |
-| `MANUAL` | User-supplied override price | Applied over any source |
-| `UNKNOWN` | All resolvers failed — event flagged | Last resort |
-
----
-
-## Flag Codes
-
-| FlagCode | Meaning | Resolution |
-|----------|---------|------------|
-| `EXTERNAL_INBOUND` | Received tokens from unknown address (not in session) | Auto-resolved if sending wallet is later added to session |
-| `PRICE_UNKNOWN` | No price could be determined for this event | User provides manual override |
-| `LP_MANUAL_REQUIRED` | LP entry/exit requires manual review (impermanent loss complexity) | User reviews and confirms or overrides |
-| `REWARD_INBOUND` | Staking/farming reward received — classify as income | User confirms |
-| `UNSUPPORTED_TYPE` | Transaction shape not recognised by any classifier | Manual review |
+| PriceSource | Meaning | Priority |
+|-------------|---------|----------|
+| `STABLECOIN` | Hardcoded stablecoin parity | 1 |
+| `SWAP_DERIVED` | Ratio inferred from swap counterpart | 2 |
+| `COINGECKO` | Historical resolver fallback | 3 |
+| `MANUAL` | User override | override layer |
+| `UNKNOWN` | Unresolved pricing | last resort |
 
 ---
 
 ## Domain Invariants
 
-These rules must never be violated by any module:
-
 | # | Invariant |
 |---|-----------|
-| INV-01 | AVCO is always calculated in strict `blockTimestamp ASC` order |
-| INV-02 | Raw transactions are immutable — `rawData` field is never modified after ingestion |
-| INV-03 | `INTERNAL_TRANSFER` between session wallets never contributes to AVCO on either side |
-| INV-04 | `crossWalletAvco` is never stored — always computed on-request for the exact wallet set in the API call |
-| INV-05 | `crossWalletAvco` is always global across all networks — network filter never changes the AVCO value |
-| INV-06 | All monetary calculations use `Decimal128` / `BigDecimal` — no floating point until JSON serialisation boundary |
-| INV-07 | `realisedPnlUsd = (sellPriceUsd − avcoAtTimeOfSale) × |sellQuantity|` — computed atomically with AVCO replay |
-| INV-08 | A `cost_basis_override` with `isActive=true` supersedes the original `priceUsd` in all AVCO replays |
-| INV-09 | `hasIncompleteHistory=true` if the chronologically earliest event for an asset is a SELL or transfer-out |
-| INV-10 | GET endpoints make zero RPC calls and perform zero heavy computation on the request path |
-| INV-11 | For on-chain events, idempotency key is `(txHash, networkId, walletAddress, assetContract)` — one tx can have multiple events (e.g. SWAP_SELL and SWAP_BUY). For MANUAL_COMPENSATING, idempotency is by `clientId`. |
-| INV-12 | Gas cost is included in cost basis for BUY events by default; excluded for all other event types unless explicitly overridden |
-| INV-13 | Manual compensating events have no txHash (or synthetic id); they are ordered by timestamp (user-provided or "end of timeline") and included in AVCO replay in `blockTimestamp ASC` order |
-| INV-14 | Idempotency for manual compensating transactions is enforced by `clientId` — duplicate clientId returns same event / no duplicate event |
+| INV-01 | AVCO replay order is deterministic by `blockTimestamp ASC`, then stable intra-timestamp ordering. |
+| INV-02 | `raw_transactions` are append/enrich only during normalization; source identity (`txHash`,`networkId`,`walletAddress`) is immutable. |
+| INV-03 | Canonical accounting input is `normalized_transactions` with `status=CONFIRMED`. |
+| INV-04 | `crossWalletAvco` is computed on request and never persisted. |
+| INV-05 | Numeric values use `BigDecimal`/`Decimal128`; no floating-point arithmetic in domain calculations. |
+| INV-06 | Realised PnL for outbound sell flows is computed atomically with replay and stored on flow (`realisedPnlUsd`, `avcoAtTimeOfSale`). |
+| INV-07 | Active `cost_basis_overrides` supersede original flow price during replay. |
+| INV-08 | On-chain normalized tx idempotency key is `(txHash, networkId, walletAddress)` (unique one doc per tx). |
+| INV-09 | Manual compensating idempotency key is `clientId` (unique when provided). |
+| INV-10 | GET endpoints must be snapshot/data-store based (no RPC in request path). |
 
 ---
 
 ## Aggregate Rules
 
-### AVCO Formula
+### AVCO replay (simplified)
 
-```
-On BUY event (quantity Q at price P):
-  newAvco = (currentAvco × currentQty + P × Q) / (currentQty + Q)
-  newQty  = currentQty + Q
+```text
+BUY (qty>0):
+  newAvco = (currentAvco*currentQty + price*qty) / (currentQty + qty)
+  newQty  = currentQty + qty
 
-On SELL event (quantity Q at price P):
-  avcoAtTimeOfSale = currentAvco           // snapshot for audit
-  realisedPnlUsd   = (P − currentAvco) × Q
-  newAvco          = currentAvco           // AVCO unchanged on sell
-  newQty           = currentQty − Q
-
-On INTERNAL_TRANSFER:
-  Source wallet: newQty = currentQty − Q   // quantity decreases, AVCO unchanged
-  Dest wallet:   newQty = currentQty + Q   // quantity increases at source AVCO
-                 newAvco = weighted average if dest already holds the asset
+SELL (qty<0):
+  avcoAtTimeOfSale = currentAvco
+  realisedPnlUsd   = (sellPrice - currentAvco) * abs(qty)
+  newAvco          = currentAvco
+  newQty           = currentQty - abs(qty)
 ```
 
-### Cross-Wallet AVCO (on-request)
+### Cross-wallet AVCO
 
-```
-1. Load ALL economic_events for assetSymbol across all wallets[] in request
-2. Sort by blockTimestamp ASC (unified timeline)
-3. Skip INTERNAL_TRANSFER events (between own wallets)
-4. Run AVCO formula sequentially over merged timeline
-5. Return result — never persist
+```text
+1. Load CONFIRMED normalized transactions for selected wallets.
+2. Extract matching flows for target asset.
+3. Sort by blockTimestamp ASC (stable tie-breakers).
+4. Replay AVCO sequentially.
+5. Return computed value; do not persist.
 ```
 
 ### Reconciliation
 
-Reconciliation compares **on-chain quantity** with **derived quantity** (sum of quantityDelta from economic events) per (wallet, network, asset). See **ADR-009** for tolerance and 2-year rule.
+```text
+derivedQuantity  = asset_positions.quantity
+onChainQuantity  = on_chain_balances.quantity
+balanceDiff      = onChainQuantity - derivedQuantity
+status           = MATCH | MISMATCH | NOT_APPLICABLE
+```
 
-**Tolerance ε:** Absolute difference only (MVP). Default `ε = 1e-8` (config e.g. `walletradar.reconciliation.tolerance=1e-8`). Same units as quantity.
-
-| Status | Condition | Product behaviour |
-|--------|-----------|-------------------|
-| **MATCH** | On-chain data exists and \|onChainQuantity − derivedQuantity\| ≤ ε | No warning; balance and AVCO are considered aligned. |
-| **MISMATCH** | On-chain data exists and \|onChainQuantity − derivedQuantity\| > ε | If history is "young" (see below), show warning and prompt for manual compensating transaction; otherwise show comparison only, no required correction. |
-| **NOT_APPLICABLE** | No row in on_chain_balances for (wallet, network, asset) | No warning; onChainQuantity null or omitted. |
-
-**Young history (within 2 years):** For (walletAddress, networkId), history is young iff there is at least one event and **min(blockTimestamp)** ≥ now − 2 years. **showReconciliationWarning = true** only when status is **MISMATCH** and history is young. If history is not young (oldest event &lt; now − 2 years) or there are no events for that pair, **showReconciliationWarning = false**.
-
----
+For "young" histories (within backfill horizon), `MISMATCH` should surface warning and guide user to manual compensating transaction.

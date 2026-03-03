@@ -1,15 +1,15 @@
 package com.walletradar.ingestion.sync.balance;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.walletradar.domain.EconomicEventRepository;
-import com.walletradar.domain.NetworkId;
-import com.walletradar.domain.NormalizedTransactionRepository;
-import com.walletradar.domain.OnChainBalance;
-import com.walletradar.domain.OnChainBalanceRepository;
-import com.walletradar.domain.SyncStatusRepository;
+import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
+import com.walletradar.domain.portfolio.OnChainBalance;
+import com.walletradar.domain.portfolio.OnChainBalanceRepository;
+import com.walletradar.domain.sync.SyncStatusRepository;
 import com.walletradar.ingestion.adapter.RpcEndpointRotator;
-import com.walletradar.ingestion.adapter.evm.EvmRpcClient;
-import com.walletradar.ingestion.adapter.evm.EvmTokenDecimalsResolver;
+import com.walletradar.ingestion.adapter.evm.rpc.EvmRpcClient;
+import com.walletradar.ingestion.adapter.evm.rpc.EvmTokenDecimalsResolver;
 import com.walletradar.ingestion.adapter.solana.SolanaRpcClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -39,8 +39,6 @@ class BalanceRefreshServiceTest {
     @Mock
     private OnChainBalanceRepository onChainBalanceRepository;
     @Mock
-    private EconomicEventRepository economicEventRepository;
-    @Mock
     private NormalizedTransactionRepository normalizedTransactionRepository;
     @Mock
     private EvmTokenDecimalsResolver evmTokenDecimalsResolver;
@@ -58,7 +56,6 @@ class BalanceRefreshServiceTest {
         service = new BalanceRefreshService(
                 syncStatusRepository,
                 onChainBalanceRepository,
-                economicEventRepository,
                 normalizedTransactionRepository,
                 evmTokenDecimalsResolver,
                 evmRpcClient,
@@ -77,11 +74,9 @@ class BalanceRefreshServiceTest {
         String wallet = "0x1A87f12aC07E9746e9B053B8D7EF1d45270D693f";
         String token = "0xaf88d065e77c8cc2239327c5edb3a432268e5831";
 
-        when(economicEventRepository.findDistinctAssetContractsByWalletAddressAndNetworkId(wallet, NetworkId.ARBITRUM))
-                .thenReturn(List.of(token));
         when(normalizedTransactionRepository.findDistinctAssetContractsByWalletAddressAndNetworkIdAndStatus(
-                wallet, NetworkId.ARBITRUM, com.walletradar.domain.NormalizedTransactionStatus.CONFIRMED))
-                .thenReturn(List.of());
+                wallet, NetworkId.ARBITRUM, NormalizedTransactionStatus.CONFIRMED))
+                .thenReturn(List.of(token));
         when(onChainBalanceRepository.findByWalletAddressAndNetworkId(wallet, NetworkId.ARBITRUM.name()))
                 .thenReturn(List.of());
         when(onChainBalanceRepository.findByWalletAddressAndNetworkIdAndAssetContract(anyString(), anyString(), anyString()))

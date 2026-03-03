@@ -1,7 +1,7 @@
 package com.walletradar.ingestion.sync.progress;
 
-import com.walletradar.domain.SyncStatus;
-import com.walletradar.domain.SyncStatusRepository;
+import com.walletradar.domain.sync.SyncStatus;
+import com.walletradar.domain.sync.SyncStatusRepository;
 import com.walletradar.ingestion.config.BackfillProperties;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

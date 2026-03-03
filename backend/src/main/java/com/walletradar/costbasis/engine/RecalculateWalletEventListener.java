@@ -1,6 +1,6 @@
 package com.walletradar.costbasis.engine;
 
-import com.walletradar.domain.RecalculateWalletRequestEvent;
+import com.walletradar.domain.event.RecalculateWalletRequestEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.event.EventListener;

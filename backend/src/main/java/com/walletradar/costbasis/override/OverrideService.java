@@ -1,24 +1,25 @@
 package com.walletradar.costbasis.override;
 
-import com.walletradar.domain.CostBasisOverride;
-import com.walletradar.domain.CostBasisOverrideRepository;
-import com.walletradar.domain.EconomicEvent;
-import com.walletradar.domain.EconomicEventRepository;
-import com.walletradar.domain.EconomicEventType;
-import com.walletradar.domain.NetworkId;
-import com.walletradar.domain.RecalcJob;
-import com.walletradar.domain.RecalcJobRepository;
 import com.walletradar.costbasis.event.OverrideSavedEvent;
+import com.walletradar.domain.accounting.CostBasisOverride;
+import com.walletradar.domain.accounting.CostBasisOverrideRepository;
+import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.domain.accounting.RecalcJob;
+import com.walletradar.domain.accounting.RecalcJobRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
+
 import java.math.BigDecimal;
 import java.time.Instant;
 
 /**
  * T-017: PUT/DELETE override → upsert/deactivate in cost_basis_overrides; create RecalcJob (PENDING);
- * publish OverrideSavedEvent. On-chain events only; manual compensating events are not overridden (AC-09).
+ * publish OverrideSavedEvent. On-chain normalized legs only; manual compensating legs are not overridden.
  */
 @Service
 @RequiredArgsConstructor
@@ -28,74 +29,96 @@ public class OverrideService {
     public static final String EVENT_NOT_FOUND = "EVENT_NOT_FOUND";
     public static final String OVERRIDE_EXISTS = "OVERRIDE_EXISTS";
 
-    private final EconomicEventRepository economicEventRepository;
+    private final NormalizedTransactionRepository normalizedTransactionRepository;
     private final CostBasisOverrideRepository costBasisOverrideRepository;
     private final RecalcJobRepository recalcJobRepository;
     private final ApplicationEventPublisher applicationEventPublisher;
 
     /**
-     * Set manual price override for an on-chain event. Upserts override (isActive=true), creates RecalcJob,
-     * publishes OverrideSavedEvent. Returns jobId for polling.
-     *
-     * @throws OverrideServiceException EVENT_NOT_FOUND if event missing or manual; OVERRIDE_EXISTS if active override already present
+     * Set manual price override for normalized leg id (<normalizedTxId>:<legIndex>).
+     * Returns jobId for polling.
      */
     public String setOverride(String eventId, BigDecimal priceUsd, String note) {
-        EconomicEvent event = economicEventRepository.findById(eventId)
-                .orElseThrow(() -> new OverrideServiceException(EVENT_NOT_FOUND, "Event not found: " + eventId));
-        if (event.getEventType() == EconomicEventType.MANUAL_COMPENSATING) {
+        FlowRef ref = resolveLeg(eventId);
+        if (ref.tx().getType() == NormalizedTransactionType.MANUAL_COMPENSATING) {
             throw new OverrideServiceException(EVENT_NOT_FOUND, "Override only for on-chain events");
         }
-        if (costBasisOverrideRepository.findByEconomicEventIdAndActiveTrue(eventId).isPresent()) {
+        if (costBasisOverrideRepository.findByNormalizedLegIdAndActiveTrue(eventId).isPresent()) {
             throw new OverrideServiceException(OVERRIDE_EXISTS, "Active override already exists for event: " + eventId);
         }
 
-        CostBasisOverride override = costBasisOverrideRepository.findFirstByEconomicEventId(eventId)
+        CostBasisOverride override = costBasisOverrideRepository.findFirstByNormalizedLegId(eventId)
                 .orElse(new CostBasisOverride());
-        override.setEconomicEventId(eventId);
+        override.setNormalizedLegId(eventId);
         override.setPriceUsd(priceUsd);
         override.setNote(note);
         override.setActive(true);
         override.setCreatedAt(Instant.now());
         costBasisOverrideRepository.save(override);
 
-        String jobId = createRecalcJobAndPublish(event);
+        String jobId = createRecalcJobAndPublish(ref);
         log.info("Override set for event {}; recalc job {}", eventId, jobId);
         return jobId;
     }
 
     /**
-     * Revert override for an event (deactivate). Creates RecalcJob and publishes OverrideSavedEvent.
-     *
-     * @throws OverrideServiceException EVENT_NOT_FOUND if event not found
+     * Revert override for normalized leg id (<normalizedTxId>:<legIndex>).
      */
     public String revertOverride(String eventId) {
-        EconomicEvent event = economicEventRepository.findById(eventId)
-                .orElseThrow(() -> new OverrideServiceException(EVENT_NOT_FOUND, "Event not found: " + eventId));
-        if (event.getEventType() == EconomicEventType.MANUAL_COMPENSATING) {
+        FlowRef ref = resolveLeg(eventId);
+        if (ref.tx().getType() == NormalizedTransactionType.MANUAL_COMPENSATING) {
             throw new OverrideServiceException(EVENT_NOT_FOUND, "Override only for on-chain events");
         }
 
-        costBasisOverrideRepository.findFirstByEconomicEventId(eventId).ifPresent(o -> {
+        costBasisOverrideRepository.findFirstByNormalizedLegId(eventId).ifPresent(o -> {
             o.setActive(false);
             costBasisOverrideRepository.save(o);
         });
 
-        String jobId = createRecalcJobAndPublish(event);
+        String jobId = createRecalcJobAndPublish(ref);
         log.info("Override reverted for event {}; recalc job {}", eventId, jobId);
         return jobId;
     }
 
-    private String createRecalcJobAndPublish(EconomicEvent event) {
+    private FlowRef resolveLeg(String eventId) {
+        if (eventId == null || eventId.isBlank()) {
+            throw new OverrideServiceException(EVENT_NOT_FOUND, "Event not found: " + eventId);
+        }
+        int sep = eventId.lastIndexOf(':');
+        if (sep <= 0 || sep == eventId.length() - 1) {
+            throw new OverrideServiceException(EVENT_NOT_FOUND, "Event not found: " + eventId);
+        }
+        String txId = eventId.substring(0, sep);
+        int legIndex;
+        try {
+            legIndex = Integer.parseInt(eventId.substring(sep + 1));
+        } catch (NumberFormatException e) {
+            throw new OverrideServiceException(EVENT_NOT_FOUND, "Event not found: " + eventId);
+        }
+
+        NormalizedTransaction tx = normalizedTransactionRepository.findById(txId)
+                .orElseThrow(() -> new OverrideServiceException(EVENT_NOT_FOUND, "Event not found: " + eventId));
+        if (tx.getFlows() == null || legIndex < 0 || legIndex >= tx.getFlows().size()) {
+            throw new OverrideServiceException(EVENT_NOT_FOUND, "Event not found: " + eventId);
+        }
+        NormalizedTransaction.Flow leg = tx.getFlows().get(legIndex);
+        return new FlowRef(tx, leg);
+    }
+
+    private String createRecalcJobAndPublish(FlowRef ref) {
         RecalcJob job = new RecalcJob();
         job.setStatus(RecalcJob.RecalcStatus.PENDING);
-        job.setWalletAddress(event.getWalletAddress());
-        NetworkId networkId = event.getNetworkId();
+        job.setWalletAddress(ref.tx().getWalletAddress());
+        NetworkId networkId = ref.tx().getNetworkId();
         job.setNetworkId(networkId != null ? networkId.name() : null);
-        job.setAssetContract(event.getAssetContract());
-        job.setAssetSymbol(event.getAssetSymbol());
+        job.setAssetContract(ref.leg().getAssetContract());
+        job.setAssetSymbol(ref.leg().getAssetSymbol());
         job.setCreatedAt(Instant.now());
         job = recalcJobRepository.save(job);
         applicationEventPublisher.publishEvent(new OverrideSavedEvent(this, job.getId()));
         return job.getId();
+    }
+
+    private record FlowRef(NormalizedTransaction tx, NormalizedTransaction.Flow leg) {
     }
 }

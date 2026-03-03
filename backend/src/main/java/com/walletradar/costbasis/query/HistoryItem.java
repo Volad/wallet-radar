@@ -1,7 +1,7 @@
 package com.walletradar.costbasis.query;
 
-import com.walletradar.domain.NetworkId;
-import com.walletradar.domain.PriceSource;
+import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.common.PriceSource;
 
 import java.math.BigDecimal;
 import java.time.Instant;

@@ -1,9 +1,11 @@
 package com.walletradar.config;
 
-import com.walletradar.domain.EconomicEvent;
-import com.walletradar.domain.EconomicEventType;
-import com.walletradar.domain.NetworkId;
-import com.walletradar.domain.PriceSource;
+import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
+import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.domain.common.PriceSource;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -41,30 +43,36 @@ class MongoDecimal128IntegrationTest {
     @Test
     @DisplayName("persist and read document with Decimal128 monetary fields")
     void persistAndReadWithDecimal128() {
-        EconomicEvent event = new EconomicEvent();
-        event.setTxHash("0xabc123");
-        event.setNetworkId(NetworkId.ETHEREUM);
-        event.setWalletAddress("0xwallet");
-        event.setBlockTimestamp(Instant.parse("2025-01-15T10:00:00Z"));
-        event.setEventType(EconomicEventType.SWAP_BUY);
-        event.setAssetSymbol("ETH");
-        event.setAssetContract("0x0000000000000000000000000000000000000000");
-        event.setQuantityDelta(new BigDecimal("1.5"));
-        event.setPriceUsd(new BigDecimal("2500.123456789"));
-        event.setPriceSource(PriceSource.SWAP_DERIVED);
-        event.setTotalValueUsd(new BigDecimal("3750.1851851835"));
-        event.setGasCostUsd(new BigDecimal("2.50"));
-        event.setGasIncludedInBasis(true);
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setTxHash("0xabc123");
+        tx.setNetworkId(NetworkId.ETHEREUM);
+        tx.setWalletAddress("0xwallet");
+        tx.setBlockTimestamp(Instant.parse("2025-01-15T10:00:00Z"));
+        tx.setType(NormalizedTransactionType.SWAP);
+        tx.setStatus(NormalizedTransactionStatus.CONFIRMED);
+        tx.setConfidence(new BigDecimal("0.95"));
 
-        mongoTemplate.save(event, "economic_events");
-        assertThat(event.getId()).isNotNull();
+        NormalizedTransaction.Flow leg = new NormalizedTransaction.Flow();
+        leg.setRole(NormalizedLegRole.BUY);
+        leg.setAssetSymbol("ETH");
+        leg.setAssetContract("0x0000000000000000000000000000000000000000");
+        leg.setQuantityDelta(new BigDecimal("1.5"));
+        leg.setUnitPriceUsd(new BigDecimal("2500.123456789"));
+        leg.setPriceSource(PriceSource.SWAP_DERIVED);
+        leg.setValueUsd(new BigDecimal("3750.1851851835"));
+        leg.setRealisedPnlUsd(new BigDecimal("2.50"));
+        tx.setFlows(java.util.List.of(leg));
 
-        EconomicEvent read = mongoTemplate.findById(event.getId(), EconomicEvent.class, "economic_events");
+        mongoTemplate.save(tx, "normalized_transactions");
+        assertThat(tx.getId()).isNotNull();
+
+        NormalizedTransaction read = mongoTemplate.findById(tx.getId(), NormalizedTransaction.class, "normalized_transactions");
         assertThat(read).isNotNull();
-        assertThat(read.getQuantityDelta()).isEqualByComparingTo(new BigDecimal("1.5"));
-        assertThat(read.getPriceUsd()).isEqualByComparingTo(new BigDecimal("2500.123456789"));
-        assertThat(read.getTotalValueUsd()).isEqualByComparingTo(new BigDecimal("3750.1851851835"));
-        assertThat(read.getGasCostUsd()).isEqualByComparingTo(new BigDecimal("2.50"));
+        assertThat(read.getFlows()).hasSize(1);
+        assertThat(read.getFlows().get(0).getQuantityDelta()).isEqualByComparingTo(new BigDecimal("1.5"));
+        assertThat(read.getFlows().get(0).getUnitPriceUsd()).isEqualByComparingTo(new BigDecimal("2500.123456789"));
+        assertThat(read.getFlows().get(0).getValueUsd()).isEqualByComparingTo(new BigDecimal("3750.1851851835"));
+        assertThat(read.getFlows().get(0).getRealisedPnlUsd()).isEqualByComparingTo(new BigDecimal("2.50"));
         assertThat(read.getNetworkId()).isEqualTo(NetworkId.ETHEREUM);
     }
 }

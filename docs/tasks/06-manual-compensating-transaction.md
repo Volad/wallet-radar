@@ -1,3 +1,5 @@
+> **Status:** Archived (historical). Not an active requirement source.
+
 # Feature 6: Manual compensating transaction (add / delete) + recalc
 
 **Tasks:** T-018, T-028 (POST /transactions/manual, DELETE /transactions/manual/{eventId})

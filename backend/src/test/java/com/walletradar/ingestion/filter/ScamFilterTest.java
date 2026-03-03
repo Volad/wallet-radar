@@ -1,6 +1,6 @@
 package com.walletradar.ingestion.filter;
 
-import com.walletradar.domain.RawTransaction;
+import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.ingestion.config.ScamFilterProperties;
 import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
@@ -8,7 +8,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -51,6 +53,402 @@ class ScamFilterTest {
     void toAddressInBlocklist_returnsTrue() {
         RawTransaction tx = txWithTo("0xscamcontract1111111111111111111111111111");
         assertThat(filter.shouldDrop(tx)).isTrue();
+    }
+
+    @Test
+    @DisplayName("returns true for approve transaction by methodId")
+    void approveMethodId_returnsTrue() {
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0xapprove");
+        tx.setNetworkId("ARBITRUM");
+        tx.setWalletAddress("0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f");
+        Document raw = new Document();
+        raw.put("from", "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f");
+        raw.put("to", "0xaf88d065e77c8cc2239327c5edb3a432268e5831");
+        raw.put("value", "0");
+        raw.put("methodId", "0x095ea7b3");
+        raw.put("input", "0x095ea7b30000000000000000000000006ad2488743e93bfa35baf54c688de78c00bed9f0");
+        tx.setRawData(raw);
+
+        assertThat(filter.shouldDrop(tx)).isTrue();
+    }
+
+    @Test
+    @DisplayName("returns true for approve transaction from explorer tx payload")
+    void approveInExplorerTx_returnsTrue() {
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0xapprove-explorer");
+        tx.setNetworkId("ARBITRUM");
+        tx.setWalletAddress("0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f");
+        Document raw = new Document();
+        raw.put("from", "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f");
+        raw.put("to", "0xaf88d065e77c8cc2239327c5edb3a432268e5831");
+        raw.put("value", "0");
+        raw.put("explorer", new Document("tx", new Document()
+                .append("methodId", "0x095ea7b3")
+                .append("functionName", "approve(address spender, uint256 amount)")
+                .append("input", "0x095ea7b30000000000000000000000006ad2488743e93bfa35baf54c688de78c00bed9f0")));
+        tx.setRawData(raw);
+
+        assertThat(filter.shouldDrop(tx)).isTrue();
+    }
+
+    @Test
+    @DisplayName("returns true for approve transaction from explorer tx map payload")
+    void approveInExplorerTxMap_returnsTrue() {
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0xapprove-explorer-map");
+        tx.setNetworkId("BASE");
+        tx.setWalletAddress("0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f");
+        Document raw = new Document();
+        raw.put("from", "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f");
+        raw.put("to", "0xaf88d065e77c8cc2239327c5edb3a432268e5831");
+        raw.put("value", "0");
+        raw.put("explorer", new LinkedHashMap<>(Map.of(
+                "tx", new LinkedHashMap<>(Map.of(
+                        "methodId", "0x095ea7b3",
+                        "functionName", "approve(address spender, uint256 amount)",
+                        "input", "0x095ea7b30000000000000000000000006ad2488743e93bfa35baf54c688de78c00bed9f0"
+                ))
+        )));
+        tx.setRawData(raw);
+
+        assertThat(filter.shouldDrop(tx)).isTrue();
+    }
+
+    @Test
+    @DisplayName("returns true for failed swap without transfer effects")
+    void failedSwapWithoutTransferEffects_returnsTrue() {
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0x7b6ba6a6f9f9a84212684182bdc8ce590ab77160fef5c522ace2419c699f720e");
+        tx.setNetworkId("ARBITRUM");
+        tx.setWalletAddress("0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f");
+        Document raw = new Document();
+        raw.put("from", "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f");
+        raw.put("to", "0x6a000f20005980200259b80c5102003040001068");
+        raw.put("isError", "1");
+        raw.put("txreceipt_status", "0");
+        raw.put("methodId", "0xe3ead59e");
+        raw.put("functionName", "swapExactAmountIn(address executor,tuple swapData,uint256 partnerAndFee,bytes permit,bytes executorData)");
+        raw.put("explorer", new Document()
+                .append("tokenTransfers", List.of())
+                .append("internalTransfers", List.of()));
+        tx.setRawData(raw);
+
+        assertThat(filter.shouldDrop(tx)).isTrue();
+    }
+
+    @Test
+    @DisplayName("does not drop successful swap when transfer effects exist")
+    void successfulSwapWithTransferEffects_notDroppedByFailedSwapRule() {
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0xswap-success");
+        tx.setNetworkId("ARBITRUM");
+        tx.setWalletAddress("0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f");
+        Document raw = new Document();
+        raw.put("from", "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f");
+        raw.put("to", "0x6a000f20005980200259b80c5102003040001068");
+        raw.put("isError", "0");
+        raw.put("txreceipt_status", "1");
+        raw.put("methodId", "0xe3ead59e");
+        raw.put("functionName", "swapExactAmountIn(address executor,tuple swapData,uint256 partnerAndFee,bytes permit,bytes executorData)");
+        raw.put("explorer", new Document()
+                .append("tokenTransfers", List.of(
+                        new Document("from", "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f")
+                                .append("to", "0x6a000f20005980200259b80c5102003040001068")
+                                .append("contractAddress", "0xaf88d065e77c8cc2239327c5edb3a432268e5831")
+                                .append("value", "16000000")))
+                .append("internalTransfers", List.of()));
+        tx.setRawData(raw);
+
+        assertThat(filter.shouldDrop(tx)).isFalse();
+    }
+
+    @Test
+    @DisplayName("returns true for failed zero-value call without transfer effects")
+    void failedZeroValueWithoutTransferEffects_returnsTrue() {
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0xa88884a031efc35aebc4bb99fdda4b13fa0193a032fdbdbfd36c460c92f29cb5");
+        tx.setNetworkId("ARBITRUM");
+        tx.setWalletAddress("0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f");
+        Document raw = new Document();
+        raw.put("from", "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f");
+        raw.put("to", "0x1fa4431bc113d308bee1d46b0e98cb805fb48c13");
+        raw.put("status", "0x0");
+        raw.put("isError", "1");
+        raw.put("txreceipt_status", "0");
+        raw.put("value", "0");
+        raw.put("methodId", "0x374f435d");
+        raw.put("functionName", "multicall(tuple[] bundle)");
+        raw.put("explorer", new Document()
+                .append("tokenTransfers", List.of())
+                .append("internalTransfers", List.of()));
+        tx.setRawData(raw);
+
+        assertThat(filter.shouldDrop(tx)).isTrue();
+    }
+
+    @Test
+    @DisplayName("does not drop failed zero-value call when transfer effects exist")
+    void failedZeroValueWithTransferEffects_notDroppedByZeroValueRule() {
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0xfailed-zero-with-effects");
+        tx.setNetworkId("ARBITRUM");
+        tx.setWalletAddress("0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f");
+        Document raw = new Document();
+        raw.put("from", "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f");
+        raw.put("to", "0x1fa4431bc113d308bee1d46b0e98cb805fb48c13");
+        raw.put("status", "0x0");
+        raw.put("isError", "1");
+        raw.put("txreceipt_status", "0");
+        raw.put("value", "0");
+        raw.put("methodId", "0x374f435d");
+        raw.put("functionName", "multicall(tuple[] bundle)");
+        raw.put("explorer", new Document()
+                .append("tokenTransfers", List.of(
+                        new Document("from", "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f")
+                                .append("to", "0x9954afb60bb5a222714c478ac86990f221788b88")
+                                .append("contractAddress", "0xaf88d065e77c8cc2239327c5edb3a432268e5831")
+                                .append("value", "1000000")))
+                .append("internalTransfers", List.of()));
+        tx.setRawData(raw);
+
+        assertThat(filter.shouldDrop(tx)).isFalse();
+    }
+
+    @Test
+    @DisplayName("returns true for explorer token spoofing pattern without logs")
+    void explorerTokenSpoofingWithoutLogs_returnsTrue() {
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0xec6c8b6d1b86582a6c427dba498b56c63f62ec8d10daaccff6258c5eb7e60746");
+        tx.setNetworkId("ARBITRUM");
+        tx.setWalletAddress("0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f");
+
+        String wallet = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String recipient = "0x68bca627d2207eb98d33bc9f9cc63ffe8b665b7f";
+        Document raw = new Document();
+        raw.put("from", wallet);
+        raw.put("to", recipient);
+        raw.put("methodId", "0x0cf79e0a");
+        raw.put("explorer", new Document("tokenTransfers", List.of(
+                new Document("from", wallet)
+                        .append("to", recipient)
+                        .append("contractAddress", "0xaf88d065e77c8cc2239327c5edb3a432268e5831")
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenName", "USD Coin")
+                        .append("value", "0"),
+                new Document("from", wallet)
+                        .append("to", recipient)
+                        .append("contractAddress", "0x06d81db8464bc020051acfea2d734e90da611e1a")
+                        .append("tokenSymbol", "ꓴꓢꓓС")
+                        .append("tokenName", "ꓴꓢꓓС")
+                        .append("value", "305796700"),
+                new Document("from", wallet)
+                        .append("to", recipient)
+                        .append("contractAddress", "0x06d81db8464bc020051acfea2d734e90da611e1a")
+                        .append("tokenSymbol", "ꓴꓢꓓС")
+                        .append("tokenName", "ꓴꓢꓓС")
+                        .append("value", "10000000"),
+                new Document("from", wallet)
+                        .append("to", recipient)
+                        .append("contractAddress", "0xaf88d065e77c8cc2239327c5edb3a432268e5831")
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenName", "USD Coin")
+                        .append("value", "0")
+        )));
+        tx.setRawData(raw);
+
+        assertThat(filter.shouldDrop(tx)).isTrue();
+    }
+
+    @Test
+    @DisplayName("returns true for explorer token spoofing when tx sender is not wallet")
+    void explorerTokenSpoofingWhenSenderIsNotWallet_returnsTrue() {
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0xspoof-external-sender");
+        tx.setNetworkId("BASE");
+        tx.setWalletAddress("0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f");
+
+        String wallet = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String recipient = "0x68bca627d2207eb98d33bc9f9cc63ffe8b665b7f";
+        Document raw = new Document();
+        raw.put("from", "0xaea174f87e0222701cf9962d0b29ab9b2e7d4110");
+        raw.put("to", recipient);
+        raw.put("methodId", "0x12514bba");
+        raw.put("explorer", new Document("tokenTransfers", List.of(
+                new Document("from", wallet)
+                        .append("to", recipient)
+                        .append("contractAddress", "0xaf88d065e77c8cc2239327c5edb3a432268e5831")
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenName", "USD Coin")
+                        .append("value", "0"),
+                new Document("from", wallet)
+                        .append("to", recipient)
+                        .append("contractAddress", "0x06d81db8464bc020051acfea2d734e90da611e1a")
+                        .append("tokenSymbol", "ꓴꓢꓓС")
+                        .append("tokenName", "ꓴꓢꓓС")
+                        .append("value", "305796700")
+        )));
+        tx.setRawData(raw);
+
+        assertThat(filter.shouldDrop(tx)).isTrue();
+    }
+
+    @Test
+    @DisplayName("returns true for outbound zero-value spoof when tx sender is not wallet")
+    void outboundZeroValueSpoof_returnsTrue() {
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0xoutbound-zero-value-spoof");
+        tx.setNetworkId("BASE");
+        tx.setWalletAddress("0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f");
+
+        String wallet = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String recipient = "0xcd74a7b56aaaba5b19996e4149267ed7919b5dea";
+        Document raw = new Document();
+        raw.put("from", "0xaea174f87e0222701cf9962d0b29ab9b2e7d4110");
+        raw.put("to", "0xc3236716cbdc725b518ac0a5d830fbadcfd05032");
+        raw.put("value", "0");
+        raw.put("methodId", "12514bba");
+        raw.put("functionName", "transfer(uint256 amount)");
+        raw.put("explorer", new Document("tokenTransfers", List.of(
+                new Document("from", wallet)
+                        .append("to", recipient)
+                        .append("contractAddress", "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913")
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenName", "USDC")
+                        .append("tokenDecimal", "6")
+                        .append("value", "0")
+        )));
+        tx.setRawData(raw);
+
+        assertThat(filter.shouldDrop(tx)).isTrue();
+    }
+
+    @Test
+    @DisplayName("returns true for outbound zero-value spoof when explorer payload is map")
+    void outboundZeroValueSpoofWithMapExplorer_returnsTrue() {
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0xoutbound-zero-value-spoof-map");
+        tx.setNetworkId("BASE");
+        tx.setWalletAddress("0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f");
+
+        String wallet = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String recipient = "0xcd74a7b56aaaba5b19996e4149267ed7919b5dea";
+
+        Map<String, Object> transfer = new LinkedHashMap<>();
+        transfer.put("from", wallet);
+        transfer.put("to", recipient);
+        transfer.put("contractAddress", "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913");
+        transfer.put("tokenSymbol", "USDC");
+        transfer.put("tokenName", "USDC");
+        transfer.put("tokenDecimal", "6");
+        transfer.put("value", "0");
+
+        Map<String, Object> explorer = new LinkedHashMap<>();
+        explorer.put("tokenTransfers", List.of(transfer));
+
+        Document raw = new Document();
+        raw.put("from", "0xaea174f87e0222701cf9962d0b29ab9b2e7d4110");
+        raw.put("to", "0xc3236716cbdc725b518ac0a5d830fbadcfd05032");
+        raw.put("value", "0");
+        raw.put("methodId", "12514bba");
+        raw.put("functionName", "transfer(uint256 amount)");
+        raw.put("explorer", explorer);
+        tx.setRawData(raw);
+
+        assertThat(filter.shouldDrop(tx)).isTrue();
+    }
+
+    @Test
+    @DisplayName("returns true for wallet-initiated zero-value spoof with long transfer calldata")
+    void walletInitiatedZeroValueSpoofWithLongInput_returnsTrue() {
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0xwallet-initiated-zero-value-spoof");
+        tx.setNetworkId("BASE");
+        tx.setWalletAddress("0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f");
+
+        String wallet = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String recipient = "0xcd74a7b56aaaba5b19996e4149267ed7919b5dea";
+        String longInput = "0x12514bba" + "00".repeat(1500);
+
+        Document raw = new Document();
+        raw.put("from", wallet);
+        raw.put("to", recipient);
+        raw.put("value", "0");
+        raw.put("methodId", "12514bba");
+        raw.put("functionName", "transfer(uint256 amount)");
+        raw.put("input", longInput);
+        raw.put("explorer", new Document("tokenTransfers", List.of(
+                new Document("from", wallet)
+                        .append("to", recipient)
+                        .append("contractAddress", "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913")
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenName", "USDC")
+                        .append("tokenDecimal", "6")
+                        .append("value", "0")
+        )));
+        tx.setRawData(raw);
+
+        assertThat(filter.shouldDrop(tx)).isTrue();
+    }
+
+    @Test
+    @DisplayName("does not drop wallet-initiated zero-value transfer with short calldata")
+    void walletInitiatedZeroValueTransferWithShortInput_notDropped() {
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0xwallet-initiated-zero-value-short");
+        tx.setNetworkId("BASE");
+        tx.setWalletAddress("0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f");
+
+        String wallet = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String recipient = "0xcd74a7b56aaaba5b19996e4149267ed7919b5dea";
+
+        Document raw = new Document();
+        raw.put("from", wallet);
+        raw.put("to", recipient);
+        raw.put("value", "0");
+        raw.put("methodId", "12514bba");
+        raw.put("functionName", "transfer(uint256 amount)");
+        raw.put("input", "0x12514bba00000000");
+        raw.put("explorer", new Document("tokenTransfers", List.of(
+                new Document("from", wallet)
+                        .append("to", recipient)
+                        .append("contractAddress", "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913")
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenName", "USDC")
+                        .append("tokenDecimal", "6")
+                        .append("value", "0")
+        )));
+        tx.setRawData(raw);
+
+        assertThat(filter.shouldDrop(tx)).isFalse();
+    }
+
+    @Test
+    @DisplayName("does not drop regular explorer token transfers without spoofing")
+    void regularExplorerTokenTransfersWithoutSpoofing_notDropped() {
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0xlegit-explorer-transfer");
+        tx.setNetworkId("ARBITRUM");
+        tx.setWalletAddress("0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f");
+
+        String wallet = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String recipient = "0x68bca627d2207eb98d33bc9f9cc63ffe8b665b7f";
+        Document raw = new Document();
+        raw.put("from", wallet);
+        raw.put("to", recipient);
+        raw.put("methodId", "0xa9059cbb");
+        raw.put("explorer", new Document("tokenTransfers", List.of(
+                new Document("from", wallet)
+                        .append("to", recipient)
+                        .append("contractAddress", "0xaf88d065e77c8cc2239327c5edb3a432268e5831")
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenName", "USD Coin")
+                        .append("value", "12000000")
+        )));
+        tx.setRawData(raw);
+
+        assertThat(filter.shouldDrop(tx)).isFalse();
     }
 
     @Test
@@ -132,6 +530,187 @@ class ScamFilterTest {
         tx.setRawData(raw);
 
         assertThat(f.shouldDrop(tx)).isTrue();
+    }
+
+    @Test
+    @DisplayName("returns true for unsolicited phishing airdrop token metadata")
+    void unsolicitedPhishingAirdropMetadata_returnsTrue() {
+        ScamFilterProperties props = new ScamFilterProperties();
+        props.setEnabled(true);
+        ScamFilter f = new ScamFilter(props);
+
+        String wallet = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String token = "0x2610b04b069754c36e11e03d5ad266c1bfcd4951";
+        String transferSender = "0x82af49447d8a07e3bd95bd0d56f35241523fbab1";
+        String txSender = "0x06f191ee1fe6115caf61c728d7087a258a12b13e";
+
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0xphishing-airdrop");
+        tx.setNetworkId("ARBITRUM");
+        tx.setWalletAddress(wallet);
+        Document raw = new Document();
+        raw.put("from", txSender);
+        raw.put("to", token);
+        raw.put("value", "0");
+        raw.put("functionName", "Airdrop(address ad,address[] receivers,uint256 amount)");
+        raw.put("logs", List.of(
+                transferLog(token, transferSender, wallet, "0x0000000000000000000000000000000000000000000000000000000000000005")
+        ));
+        raw.put("explorer", new Document("tokenTransfers", List.of(
+                new Document("from", transferSender)
+                        .append("to", wallet)
+                        .append("contractAddress", token)
+                        .append("value", "5")
+                        .append("tokenName", "\u200B ETH-Tokens.us")
+                        .append("tokenSymbol", "Visit https://eth-tokens.us to claim Airdrop")
+                        .append("tokenDecimal", "0")
+                        .append("functionName", "Airdrop(address ad,address[] receivers,uint256 amount)")
+        )));
+        tx.setRawData(raw);
+
+        assertThat(f.shouldDrop(tx)).isTrue();
+    }
+
+    @Test
+    @DisplayName("does not drop unsolicited inbound without phishing token text")
+    void unsolicitedInboundWithoutPhishingText_notDropped() {
+        ScamFilterProperties props = new ScamFilterProperties();
+        props.setEnabled(true);
+        ScamFilter f = new ScamFilter(props);
+
+        String wallet = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String token = "0xaf88d065e77c8cc2239327c5edb3a432268e5831";
+        String txSender = "0x06f191ee1fe6115caf61c728d7087a258a12b13e";
+        String transferSender = "0x82af49447d8a07e3bd95bd0d56f35241523fbab1";
+
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0xunsolicited-legit-like");
+        tx.setNetworkId("ARBITRUM");
+        tx.setWalletAddress(wallet);
+        Document raw = new Document();
+        raw.put("from", txSender);
+        raw.put("to", token);
+        raw.put("value", "0");
+        raw.put("functionName", "transfer(address to,uint256 amount)");
+        raw.put("logs", List.of(
+                transferLog(token, transferSender, wallet, "0x0000000000000000000000000000000000000000000000000000000000000005")
+        ));
+        raw.put("explorer", new Document("tokenTransfers", List.of(
+                new Document("from", transferSender)
+                        .append("to", wallet)
+                        .append("contractAddress", token)
+                        .append("value", "5")
+                        .append("tokenName", "USD Coin")
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenDecimal", "6")
+        )));
+        tx.setRawData(raw);
+
+        assertThat(f.shouldDrop(tx)).isFalse();
+    }
+
+    @Test
+    @DisplayName("returns true for unsolicited multicall mass airdrop pattern")
+    void unsolicitedMulticallMassAirdrop_returnsTrue() {
+        ScamFilterProperties props = new ScamFilterProperties();
+        props.setEnabled(true);
+        ScamFilter f = new ScamFilter(props);
+
+        String wallet = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String sender = "0x20aebd617d2b0c20e32dbc3042e23570a416daac";
+        String token = "0xc4ec2d73a871e484affaf9f875f6c341d0112c50";
+
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0xunsolicited-multicall");
+        tx.setNetworkId("BASE");
+        tx.setWalletAddress(wallet);
+        Document raw = new Document();
+        raw.put("from", sender);
+        raw.put("to", wallet);
+        raw.put("methodId", "ac9650d8");
+        raw.put("functionName", "multicall(bytes[] data)");
+        raw.put("input", repeatTransferSelectorInput(24));
+        raw.put("explorer", new Document("tokenTransfers", List.of(
+                new Document("from", sender)
+                        .append("to", wallet)
+                        .append("contractAddress", token)
+                        .append("tokenSymbol", "MOLT")
+                        .append("tokenName", "Molt king")
+                        .append("tokenDecimal", "18")
+                        .append("value", "1000000000000000000")
+        )));
+        tx.setRawData(raw);
+
+        assertThat(f.shouldDrop(tx)).isTrue();
+    }
+
+    @Test
+    @DisplayName("does not mark as scam for unsolicited inbound with long but legit token name")
+    void unsolicitedInboundLongLegitTokenName_notDropped() {
+        ScamFilterProperties props = new ScamFilterProperties();
+        props.setEnabled(true);
+        ScamFilter f = new ScamFilter(props);
+
+        String wallet = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String sender = "0x06f191ee1fe6115caf61c728d7087a258a12b13e";
+        String token = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48";
+
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0xlong-legit-name");
+        tx.setNetworkId("BASE");
+        tx.setWalletAddress(wallet);
+        Document raw = new Document();
+        raw.put("from", sender);
+        raw.put("to", wallet);
+        raw.put("methodId", "0xa9059cbb");
+        raw.put("functionName", "transfer(address to,uint256 amount)");
+        raw.put("explorer", new Document("tokenTransfers", List.of(
+                new Document("from", sender)
+                        .append("to", wallet)
+                        .append("contractAddress", token)
+                        .append("tokenSymbol", "USDT")
+                        .append("tokenName", "L2 Standard Bridged USDT (Base)")
+                        .append("tokenDecimal", "6")
+                        .append("value", "1000000")
+        )));
+        tx.setRawData(raw);
+
+        assertThat(f.shouldDrop(tx)).isFalse();
+    }
+
+    @Test
+    @DisplayName("does not mark as scam when wallet initiated multicall transfer")
+    void walletInitiatedMulticall_notScam() {
+        ScamFilterProperties props = new ScamFilterProperties();
+        props.setEnabled(true);
+        ScamFilter f = new ScamFilter(props);
+
+        String wallet = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String token = "0xc4ec2d73a871e484affaf9f875f6c341d0112c50";
+        String recipient = "0x00000000000000000000000000000000000000aa";
+
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0xwallet-multicall");
+        tx.setNetworkId("BASE");
+        tx.setWalletAddress(wallet);
+        Document raw = new Document();
+        raw.put("from", wallet);
+        raw.put("to", token);
+        raw.put("methodId", "0xac9650d8");
+        raw.put("functionName", "multicall(bytes[] data)");
+        raw.put("input", repeatTransferSelectorInput(24));
+        raw.put("explorer", new Document("tokenTransfers", List.of(
+                new Document("from", wallet)
+                        .append("to", recipient)
+                        .append("contractAddress", token)
+                        .append("tokenSymbol", "MOLT")
+                        .append("tokenName", "Molt king")
+                        .append("tokenDecimal", "18")
+                        .append("value", "1000000000000000000")
+        )));
+        tx.setRawData(raw);
+
+        assertThat(f.shouldDrop(tx)).isFalse();
     }
 
     @Test
@@ -246,6 +825,36 @@ class ScamFilterTest {
             String from = hexAddress(i + 100);
             String to = hexAddress(i + 200);
             logs.add(transferLog(token, from, to, "0x1"));
+        }
+        raw.put("logs", logs);
+        tx.setRawData(raw);
+
+        assertThat(f.shouldDrop(tx)).isTrue();
+    }
+
+    @Test
+    @DisplayName("returns true for relay sweep spam when logs are plain maps")
+    void relaySweepSpamWithMapLogs_returnsTrue() {
+        ScamFilterProperties props = new ScamFilterProperties();
+        props.setEnabled(true);
+        ScamFilter f = new ScamFilter(props);
+
+        String wallet = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String token = "0xaf88d065e77c8cc2239327c5edb3a432268e5831";
+
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0xrelay-spam-map-logs");
+        tx.setNetworkId("ARBITRUM");
+        tx.setWalletAddress(wallet);
+        Document raw = new Document();
+        raw.put("from", "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        raw.put("to", "0x27117f7e48e07f9e23042931ab39fe02a62ec587");
+        List<Map<String, Object>> logs = new ArrayList<>();
+        logs.add(mapTransferLog(token, wallet, "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "0x1"));
+        for (int i = 1; i < 35; i++) {
+            String from = hexAddress(i + 100);
+            String to = hexAddress(i + 200);
+            logs.add(mapTransferLog(token, from, to, "0x1"));
         }
         raw.put("logs", logs);
         tx.setRawData(raw);
@@ -406,6 +1015,18 @@ class ScamFilterTest {
                 .append("data", "0x0");
     }
 
+    private static Map<String, Object> mapTransferLog(String token, String from, String to, String amount) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("address", token);
+        out.put("topics", List.of(
+                "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+                addressTopic(from),
+                addressTopic(to)
+        ));
+        out.put("data", amount);
+        return out;
+    }
+
     private static String addressTopic(String address) {
         String lower = address.toLowerCase();
         String hex = lower.startsWith("0x") ? lower.substring(2) : lower;
@@ -414,5 +1035,13 @@ class ScamFilterTest {
 
     private static String hexAddress(int seed) {
         return String.format("0x%040x", seed);
+    }
+
+    private static String repeatTransferSelectorInput(int count) {
+        StringBuilder sb = new StringBuilder("0xac9650d8");
+        for (int i = 0; i < count; i++) {
+            sb.append("00000000a9059cbb");
+        }
+        return sb.toString();
     }
 }

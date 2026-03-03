@@ -1,3 +1,5 @@
+> **Status:** Archived (historical). Not an active requirement source.
+
 # Pricing (T-019, T-020)
 
 Historical and spot price resolvers. Used by ingestion and snapshot.

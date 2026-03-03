@@ -1,9 +1,9 @@
 package com.walletradar.ingestion.job.backfill;
 
-import com.walletradar.domain.BackfillSegmentRepository;
-import com.walletradar.domain.NetworkId;
-import com.walletradar.domain.SyncStatus;
-import com.walletradar.domain.SyncStatusRepository;
+import com.walletradar.domain.sync.BackfillSegmentRepository;
+import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.sync.SyncStatus;
+import com.walletradar.domain.sync.SyncStatusRepository;
 import com.walletradar.ingestion.adapter.BlockHeightResolver;
 import com.walletradar.ingestion.adapter.BlockTimestampResolver;
 import com.walletradar.ingestion.adapter.NetworkAdapter;

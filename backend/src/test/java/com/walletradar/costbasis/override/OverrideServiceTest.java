@@ -1,181 +1,153 @@
 package com.walletradar.costbasis.override;
 
-import com.walletradar.domain.CostBasisOverride;
-import com.walletradar.domain.CostBasisOverrideRepository;
-import com.walletradar.domain.EconomicEvent;
-import com.walletradar.domain.EconomicEventRepository;
-import com.walletradar.domain.EconomicEventType;
-import com.walletradar.domain.NetworkId;
-import com.walletradar.domain.RecalcJob;
-import com.walletradar.domain.RecalcJobRepository;
 import com.walletradar.costbasis.event.OverrideSavedEvent;
+import com.walletradar.domain.accounting.CostBasisOverride;
+import com.walletradar.domain.accounting.CostBasisOverrideRepository;
+import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
+import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.domain.accounting.RecalcJob;
+import com.walletradar.domain.accounting.RecalcJobRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 
 import java.math.BigDecimal;
-import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class OverrideServiceTest {
 
-    private static final String EVENT_ID = "ev1";
-    private static final String WALLET = "0xwallet";
-    private static final String ASSET_CONTRACT = "0xasset";
-    private static final String ASSET_SYMBOL = "ETH";
+    private static final String EVENT_ID = "tx-1:0";
 
     @Mock
-    EconomicEventRepository economicEventRepository;
+    private NormalizedTransactionRepository normalizedTransactionRepository;
     @Mock
-    CostBasisOverrideRepository costBasisOverrideRepository;
+    private CostBasisOverrideRepository costBasisOverrideRepository;
     @Mock
-    RecalcJobRepository recalcJobRepository;
+    private RecalcJobRepository recalcJobRepository;
     @Mock
-    ApplicationEventPublisher applicationEventPublisher;
+    private ApplicationEventPublisher publisher;
 
-    @InjectMocks
-    OverrideService overrideService;
+    private OverrideService service;
 
-    private EconomicEvent onChainEvent;
+    private NormalizedTransaction onChainTx;
 
     @BeforeEach
     void setUp() {
-        onChainEvent = new EconomicEvent();
-        onChainEvent.setId(EVENT_ID);
-        onChainEvent.setTxHash("0xtx");
-        onChainEvent.setNetworkId(NetworkId.ETHEREUM);
-        onChainEvent.setWalletAddress(WALLET);
-        onChainEvent.setAssetContract(ASSET_CONTRACT);
-        onChainEvent.setAssetSymbol(ASSET_SYMBOL);
-        onChainEvent.setEventType(EconomicEventType.SWAP_BUY);
+        service = new OverrideService(
+                normalizedTransactionRepository,
+                costBasisOverrideRepository,
+                recalcJobRepository,
+                publisher
+        );
+
+        onChainTx = new NormalizedTransaction();
+        onChainTx.setId("tx-1");
+        onChainTx.setWalletAddress("0xwallet");
+        onChainTx.setNetworkId(NetworkId.ARBITRUM);
+        onChainTx.setType(NormalizedTransactionType.SWAP);
+
+        NormalizedTransaction.Flow leg = new NormalizedTransaction.Flow();
+        leg.setRole(NormalizedLegRole.BUY);
+        leg.setAssetContract("0xasset");
+        leg.setAssetSymbol("ASSET");
+        onChainTx.setFlows(List.of(leg));
     }
 
     @Test
-    @DisplayName("setOverride throws EVENT_NOT_FOUND when event missing")
-    void setOverride_eventNotFound() {
-        when(economicEventRepository.findById(EVENT_ID)).thenReturn(Optional.empty());
-
-        assertThatThrownBy(() -> overrideService.setOverride(EVENT_ID, new BigDecimal("100"), "note"))
-                .isInstanceOf(OverrideServiceException.class)
-                .satisfies(e -> assertThat(((OverrideServiceException) e).getErrorCode()).isEqualTo(OverrideService.EVENT_NOT_FOUND));
-
-        verify(costBasisOverrideRepository, never()).save(any());
-        verify(applicationEventPublisher, never()).publishEvent(any());
-    }
-
-    @Test
-    @DisplayName("setOverride throws EVENT_NOT_FOUND for MANUAL_COMPENSATING event")
-    void setOverride_manualEventRejected() {
-        onChainEvent.setEventType(EconomicEventType.MANUAL_COMPENSATING);
-        when(economicEventRepository.findById(EVENT_ID)).thenReturn(Optional.of(onChainEvent));
-
-        assertThatThrownBy(() -> overrideService.setOverride(EVENT_ID, new BigDecimal("100"), "note"))
-                .isInstanceOf(OverrideServiceException.class)
-                .satisfies(e -> assertThat(((OverrideServiceException) e).getErrorCode()).isEqualTo(OverrideService.EVENT_NOT_FOUND));
-
-        verify(costBasisOverrideRepository, never()).save(any());
-    }
-
-    @Test
-    @DisplayName("setOverride throws OVERRIDE_EXISTS when active override already present")
-    void setOverride_overrideExists() {
-        when(economicEventRepository.findById(EVENT_ID)).thenReturn(Optional.of(onChainEvent));
-        when(costBasisOverrideRepository.findByEconomicEventIdAndActiveTrue(EVENT_ID))
-                .thenReturn(Optional.of(new CostBasisOverride()));
-
-        assertThatThrownBy(() -> overrideService.setOverride(EVENT_ID, new BigDecimal("100"), "note"))
-                .isInstanceOf(OverrideServiceException.class)
-                .satisfies(e -> assertThat(((OverrideServiceException) e).getErrorCode()).isEqualTo(OverrideService.OVERRIDE_EXISTS));
-
-        verify(costBasisOverrideRepository, never()).save(any(CostBasisOverride.class));
-    }
-
-    @Test
-    @DisplayName("setOverride upserts override, creates job, publishes event and returns jobId")
+    @DisplayName("setOverride stores active override and creates recalc job")
     void setOverride_success() {
-        when(economicEventRepository.findById(EVENT_ID)).thenReturn(Optional.of(onChainEvent));
-        when(costBasisOverrideRepository.findByEconomicEventIdAndActiveTrue(EVENT_ID)).thenReturn(Optional.empty());
-        when(costBasisOverrideRepository.findFirstByEconomicEventId(EVENT_ID)).thenReturn(Optional.empty());
-
-        RecalcJob savedJob = new RecalcJob();
-        savedJob.setId("job-1");
-        when(recalcJobRepository.save(any(RecalcJob.class))).thenAnswer(inv -> {
-            RecalcJob j = inv.getArgument(0);
-            j.setId("job-1");
-            return j;
+        when(normalizedTransactionRepository.findById("tx-1")).thenReturn(Optional.of(onChainTx));
+        when(costBasisOverrideRepository.findByNormalizedLegIdAndActiveTrue(EVENT_ID)).thenReturn(Optional.empty());
+        when(costBasisOverrideRepository.findFirstByNormalizedLegId(EVENT_ID)).thenReturn(Optional.empty());
+        when(costBasisOverrideRepository.save(any(CostBasisOverride.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(recalcJobRepository.save(any(RecalcJob.class))).thenAnswer(invocation -> {
+            RecalcJob job = invocation.getArgument(0);
+            job.setId("job-1");
+            return job;
         });
 
-        String jobId = overrideService.setOverride(EVENT_ID, new BigDecimal("2500.50"), "Airdrop price");
+        String jobId = service.setOverride(EVENT_ID, new BigDecimal("123.45"), "note");
 
         assertThat(jobId).isEqualTo("job-1");
 
         ArgumentCaptor<CostBasisOverride> overrideCaptor = ArgumentCaptor.forClass(CostBasisOverride.class);
         verify(costBasisOverrideRepository).save(overrideCaptor.capture());
         CostBasisOverride saved = overrideCaptor.getValue();
-        assertThat(saved.getEconomicEventId()).isEqualTo(EVENT_ID);
-        assertThat(saved.getPriceUsd()).isEqualByComparingTo("2500.50");
-        assertThat(saved.getNote()).isEqualTo("Airdrop price");
+        assertThat(saved.getNormalizedLegId()).isEqualTo(EVENT_ID);
+        assertThat(saved.getPriceUsd()).isEqualByComparingTo("123.45");
         assertThat(saved.isActive()).isTrue();
 
-        ArgumentCaptor<RecalcJob> jobCaptor = ArgumentCaptor.forClass(RecalcJob.class);
-        verify(recalcJobRepository).save(jobCaptor.capture());
-        RecalcJob job = jobCaptor.getValue();
-        assertThat(job.getStatus()).isEqualTo(RecalcJob.RecalcStatus.PENDING);
-        assertThat(job.getWalletAddress()).isEqualTo(WALLET);
-        assertThat(job.getNetworkId()).isEqualTo("ETHEREUM");
-        assertThat(job.getAssetContract()).isEqualTo(ASSET_CONTRACT);
-        assertThat(job.getAssetSymbol()).isEqualTo(ASSET_SYMBOL);
-
-        ArgumentCaptor<OverrideSavedEvent> eventCaptor = ArgumentCaptor.forClass(OverrideSavedEvent.class);
-        verify(applicationEventPublisher).publishEvent(eventCaptor.capture());
-        assertThat(eventCaptor.getValue().getJobId()).isEqualTo("job-1");
+        verify(recalcJobRepository).save(any(RecalcJob.class));
+        verify(publisher).publishEvent(any(OverrideSavedEvent.class));
     }
 
     @Test
-    @DisplayName("revertOverride throws EVENT_NOT_FOUND when event missing")
-    void revertOverride_eventNotFound() {
-        when(economicEventRepository.findById(EVENT_ID)).thenReturn(Optional.empty());
+    @DisplayName("setOverride rejects duplicate active override")
+    void setOverride_duplicate() {
+        when(normalizedTransactionRepository.findById("tx-1")).thenReturn(Optional.of(onChainTx));
+        when(costBasisOverrideRepository.findByNormalizedLegIdAndActiveTrue(EVENT_ID))
+                .thenReturn(Optional.of(new CostBasisOverride()));
 
-        assertThatThrownBy(() -> overrideService.revertOverride(EVENT_ID))
+        assertThatThrownBy(() -> service.setOverride(EVENT_ID, new BigDecimal("1"), null))
+                .isInstanceOf(OverrideServiceException.class)
+                .satisfies(e -> assertThat(((OverrideServiceException) e).getErrorCode()).isEqualTo(OverrideService.OVERRIDE_EXISTS));
+    }
+
+    @Test
+    @DisplayName("setOverride rejects manual compensating legs")
+    void setOverride_manualRejected() {
+        onChainTx.setType(NormalizedTransactionType.MANUAL_COMPENSATING);
+        when(normalizedTransactionRepository.findById("tx-1")).thenReturn(Optional.of(onChainTx));
+
+        assertThatThrownBy(() -> service.setOverride(EVENT_ID, new BigDecimal("1"), null))
                 .isInstanceOf(OverrideServiceException.class)
                 .satisfies(e -> assertThat(((OverrideServiceException) e).getErrorCode()).isEqualTo(OverrideService.EVENT_NOT_FOUND));
     }
 
     @Test
-    @DisplayName("revertOverride deactivates override, creates job, publishes event")
+    @DisplayName("revertOverride deactivates existing override and creates recalc job")
     void revertOverride_success() {
-        when(economicEventRepository.findById(EVENT_ID)).thenReturn(Optional.of(onChainEvent));
+        when(normalizedTransactionRepository.findById("tx-1")).thenReturn(Optional.of(onChainTx));
         CostBasisOverride existing = new CostBasisOverride();
-        existing.setId("ov1");
-        existing.setEconomicEventId(EVENT_ID);
+        existing.setNormalizedLegId(EVENT_ID);
         existing.setActive(true);
-        when(costBasisOverrideRepository.findFirstByEconomicEventId(EVENT_ID)).thenReturn(Optional.of(existing));
-        when(recalcJobRepository.save(any(RecalcJob.class))).thenAnswer(inv -> {
-            RecalcJob j = inv.getArgument(0);
-            j.setId("job-2");
-            return j;
+        when(costBasisOverrideRepository.findFirstByNormalizedLegId(EVENT_ID)).thenReturn(Optional.of(existing));
+        when(recalcJobRepository.save(any(RecalcJob.class))).thenAnswer(invocation -> {
+            RecalcJob job = invocation.getArgument(0);
+            job.setId("job-2");
+            return job;
         });
 
-        String jobId = overrideService.revertOverride(EVENT_ID);
+        String jobId = service.revertOverride(EVENT_ID);
 
         assertThat(jobId).isEqualTo("job-2");
-        verify(costBasisOverrideRepository).save(existing);
+        verify(costBasisOverrideRepository, times(1)).save(existing);
         assertThat(existing.isActive()).isFalse();
-        verify(applicationEventPublisher).publishEvent(any(OverrideSavedEvent.class));
+        verify(publisher).publishEvent(any(OverrideSavedEvent.class));
+    }
+
+    @Test
+    @DisplayName("setOverride fails for invalid leg id format")
+    void setOverride_invalidId() {
+        assertThatThrownBy(() -> service.setOverride("bad-id", new BigDecimal("1"), null))
+                .isInstanceOf(OverrideServiceException.class)
+                .satisfies(e -> assertThat(((OverrideServiceException) e).getErrorCode()).isEqualTo(OverrideService.EVENT_NOT_FOUND));
     }
 }

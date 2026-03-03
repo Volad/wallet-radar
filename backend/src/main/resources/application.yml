@@ -15,8 +15,8 @@ walletradar:
     # L2s: set per-network window-blocks so backfill covers ~2 years (e.g. Arbitrum ~4 bl/s → 252M).
     backfill:
       window-blocks: 5256000
-      parallel-segments: 100
-      parallel-segment-workers: 200
+      parallel-segments: 2
+      parallel-segment-workers: 2
       worker-threads: 4
       progress-update-interval-ms: 2000
       segment-stale-after-ms: 180000
@@ -32,12 +32,25 @@ walletradar:
       batch-unsupported-cooldown-ms: 300000
       local-limiter-log-threshold-ms: 1000
       local-limiter-timeout-ms: 2000
+    explorer:
+      max-response-bytes: 16777216
+      max-pages-per-window: 10000
+      max-attempts: 5
+      base-delay-ms: 1000
+      jitter-factor: 0.2
+      request-timeout-ms: 15000
     network:
       # If backfill fails with "RPC failed after 5 attempts", public RPCs may be rate-limiting. Try: reduce batch-block-size (e.g. 500), or add a paid RPC URL (Alchemy/Infura) first in urls.
       # avg-block-time-seconds: fallback for EstimatingBlockTimestampResolver when calibration
       # anchor points are the same block (single-block range). During normal backfill the resolver
       # computes actual avg block time from two RPC anchor calls.
       ETHEREUM:
+        syncMethod: ETHERSCAN
+        chain-id: "1"
+        explorer:
+          etherscan:
+            base-url: https://api.etherscan.io
+            api-key: ${ETHEREUM_ETHERSCAN_API_KEY:}
         urls:
           - https://rpc.ankr.com/eth/${ANKR_API_KEY:}
           - https://lb.drpc.live/ethereum/${DRPC_API_KEY:}
@@ -46,16 +59,31 @@ walletradar:
         batch-block-size: 10000
         avg-block-time-seconds: 12.0
       ARBITRUM:
+        syncMethod: ETHERSCAN
+        chain-id: "42161"
+        explorer:
+          etherscan:
+            base-url: https://api.arbiscan.io
+            api-key: ${ARBITRUM_ETHERSCAN_API_KEY:}
         urls:
           - https://arb1.arbitrum.io/rpc
           - https://rpc.sentio.xyz/arbitrum-one
           - https://arbitrum.api.onfinality.io/public
+          - https://arbitrum-one-rpc.publicnode.com
+          - https://arbitrum.blockpi.network/v1/rpc/public
+          - https://arbitrum.meowrpc.com
 #          - https://rpc.ankr.com/arbitrum/${ANKR_API_KEY:}
           - https://lb.drpc.live/arbitrum/${DRPC_API_KEY:}
         batch-block-size: 500
         window-blocks: 252000000   # ~2 years at ~4 blocks/s
         avg-block-time-seconds: 0.25
       OPTIMISM:
+        syncMethod: BLOCKSCOUT
+        chain-id: "10"
+        explorer:
+          blockscout:
+            base-url: https://optimism.blockscout.com
+            api-key: ${OPTIMISM_BLOCKSCOUT_API_KEY:}
         urls:
           - https://rpc.ankr.com/optimism/${ANKR_API_KEY:}
           - https://lb.drpc.live/optimism/${DRPC_API_KEY:}
@@ -65,6 +93,12 @@ walletradar:
         window-blocks: 252000000   # ~2 years at ~4 blocks/s
         avg-block-time-seconds: 2.0
       POLYGON:
+        syncMethod: ETHERSCAN
+        chain-id: "137"
+        explorer:
+          etherscan:
+            base-url: https://api.polygonscan.com
+            api-key: ${POLYGON_ETHERSCAN_API_KEY:}
         urls:
           - https://rpc.ankr.com/polygon/${ANKR_API_KEY:}
           - https://lb.drpc.live/polygon/${DRPC_API_KEY:}
@@ -74,6 +108,12 @@ walletradar:
         window-blocks: 31560000    # ~2 years at ~2s/block
         avg-block-time-seconds: 2.0
       BASE:
+        syncMethod: BLOCKSCOUT
+        chain-id: "8453"
+        explorer:
+          blockscout:
+            base-url: https://base.blockscout.com
+            api-key: ${BASE_BLOCKSCOUT_API_KEY:}
         urls:
           - https://rpc.ankr.com/base/${ANKR_API_KEY:}
           - https://lb.drpc.live/base/${DRPC_API_KEY:}
@@ -84,6 +124,8 @@ walletradar:
         avg-block-time-seconds: 2.0
       # Some BSC public RPCs prune old blocks (e.g. "History has been pruned"); multiple endpoints improve retry.
       BSC:
+        syncMethod: BLOCKSCOUT
+        chain-id: "56"
         urls:
           - https://rpc.ankr.com/bsc/${ANKR_API_KEY:}
           - https://lb.drpc.live/bsc/${DRPC_API_KEY:}
@@ -94,6 +136,8 @@ walletradar:
         window-blocks: 21024000    # ~2 years at ~3s/block
         avg-block-time-seconds: 3.0
       AVALANCHE:
+        syncMethod: BLOCKSCOUT
+        chain-id: "43114"
         urls:
           - https://rpc.ankr.com/avalanche/${ANKR_API_KEY:}
           - https://lb.drpc.live/avalanche/${DRPC_API_KEY:}
@@ -103,6 +147,12 @@ walletradar:
         window-blocks: 31560000    # ~2 years at ~2s/block
         avg-block-time-seconds: 2.0
       MANTLE:
+        syncMethod: ETHERSCAN
+        chain-id: "5000"
+        explorer:
+          etherscan:
+            base-url: https://api.mantlescan.xyz
+            api-key: ${MANTLE_ETHERSCAN_API_KEY:}
         urls:
           - https://rpc.mantle.xyz
           - https://mantle.drpc.org
@@ -111,6 +161,7 @@ walletradar:
         window-blocks: 31560000    # ~2 years at ~2s/block
         avg-block-time-seconds: 2.0
       SOLANA:
+        syncMethod: RPC
         urls:
           - https://api.mainnet-beta.solana.com
     solana:
@@ -125,6 +176,11 @@ walletradar:
     classifier:
       batch-size: 1000
       schedule-interval-ms: 90000
+      receipt-enrichment-threshold: 0.85
+      needs-review-threshold: 0.60
+      receipt-enrichment-max-attempts: 3
+      receipt-enrichment-base-delay-ms: 1000
+      receipt-enrichment-jitter-factor: 0.2
     # Clarification stage for normalized transactions (PENDING_CLARIFICATION).
     clarification:
       schedule-interval-ms: 120000
@@ -145,6 +201,10 @@ walletradar:
         "0x7a250d5630b4cf539739df2c5dacb4c659f2488d": "Uniswap V2"
         "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45": "Uniswap V3"
         "0xe592427a0aece92de3edee1f18e0157c05861564": "Uniswap V3"
+        "0xc36442b4a4522e871399cd717abdd847ab11fe88": "Uniswap V3"
+        "0x46a15b0b27311cedf172ab29e4f4766fbe7f4364": "PancakeSwap V3"
+        "0xc6a2db661d5a5690172d8eb0a7dea2d3008665a3": "PancakeSwap V3"
+        "0x827922686190790b37229fd06084350e74485b72": "Aerodrome"
         "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2": "Aave V3"
   # Pricing: historical and spot resolvers (CoinGecko free API). T-019, T-020, T-012.
   pricing:
@@ -180,6 +240,7 @@ walletradar:
     relay-sweep-score: 100
     inbound-fanout-score: 85
     zero-amount-poisoning-score: 95
+    suspicious-multicall-airdrop-score: 100
     wallet-initiated-credit: 60
     mixed-wallet-flow-credit: 30
     wallet-approval-credit: 20
@@ -188,6 +249,7 @@ walletradar:
     mass-inbound-fanout-min-recipients: 40
     zero-amount-poisoning-min-transfer-logs: 100
     zero-amount-poisoning-min-zero-transfers: 20
+    suspicious-multicall-airdrop-min-transfer-calls: 20
     # Add known scam/drainer/phishing addresses (EVM: 0x..., case-insensitive). Example:
     # blocklist:
     #   - "0x..."

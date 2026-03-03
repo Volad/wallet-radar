@@ -1,3 +1,5 @@
+> **Status:** Archived (historical). Not an active requirement source.
+
 # Feature 2: Wallet sync status
 
 **Tasks:** T-011, T-023 (GET /wallets/{address}/status)

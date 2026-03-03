@@ -1,15 +1,15 @@
 package com.walletradar.ingestion.adapter;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.walletradar.domain.NetworkId;
-import com.walletradar.domain.RawTransaction;
+import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.common.RetryPolicy;
 import com.walletradar.ingestion.config.IngestionNetworkProperties;
 import com.walletradar.ingestion.config.IngestionEvmRpcProperties;
-import com.walletradar.ingestion.adapter.evm.EvmBatchBlockSizeResolver;
-import com.walletradar.ingestion.adapter.evm.EvmNetworkAdapter;
-import com.walletradar.ingestion.adapter.evm.EvmRpcClient;
-import com.walletradar.ingestion.adapter.evm.RpcRequest;
+import com.walletradar.ingestion.adapter.evm.rpc.EvmBatchBlockSizeResolver;
+import com.walletradar.ingestion.adapter.evm.rpc.EvmNetworkAdapter;
+import com.walletradar.ingestion.adapter.evm.rpc.EvmRpcClient;
+import com.walletradar.ingestion.adapter.evm.rpc.RpcRequest;
 import io.github.resilience4j.ratelimiter.RateLimiter;
 import io.github.resilience4j.ratelimiter.RateLimiterConfig;
 import org.junit.jupiter.api.BeforeEach;

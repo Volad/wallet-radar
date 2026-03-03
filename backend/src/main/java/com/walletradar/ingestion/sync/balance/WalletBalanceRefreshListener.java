@@ -1,7 +1,7 @@
 package com.walletradar.ingestion.sync.balance;
 
 import com.walletradar.config.AsyncConfig;
-import com.walletradar.domain.BalanceRefreshRequestedEvent;
+import com.walletradar.domain.event.BalanceRefreshRequestedEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.event.EventListener;

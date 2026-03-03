@@ -1,7 +1,7 @@
 # WalletRadar — Product Context
 
 > **Version:** MVP v1.0  
-> **Last updated:** 2025  
+> **Last updated:** 2026-02-28  
 > **Status:** Active development
 
 ---
@@ -21,7 +21,7 @@ Users add wallet addresses (read-only). The system ingests on-chain transaction 
 | G-01 | Accurate AVCO (Average Cost) cost basis tracking per asset, per wallet, and cross-wallet |
 | G-02 | Realised and unrealised P&L calculation with full audit trail |
 | G-03 | Multi-wallet, multi-network portfolio aggregation without user accounts |
-| G-04 | 2-year transaction history backfill from public RPC endpoints |
+| G-04 | 2-year transaction history backfill from public explorer APIs (Etherscan V2-compatible) with selective receipt enrichment |
 | G-05 | Transparent handling of unresolved events (flags, incomplete history, unknown prices) |
 | G-06 | Portfolio value charts with hourly granularity (1D / 7D / 1M / 1Y / ALL) |
 | G-07 | Manual intervention: override of cost price for any transaction (full recalculation) and manual compensating transaction to reconcile balance/AVCO when derived quantity does not match on-chain |
@@ -54,11 +54,12 @@ Manual compensating transactions may be **positive or negative** (reducing quant
 - **No user accounts** — session is a browser-local ordered list of wallet addresses
 - **Reconciliation UX** — when derived quantity does not match on-chain balance (e.g. for wallets with history within the 2-year window), the UI shows a warning on the asset and the user can add a manual compensating transaction to align balance and AVCO
 - **Read-only access** — system never requests wallet signing or private keys
-- **Public RPC only** — no dependency on paid indexers (Alchemy Growth, The Graph paid, Moralis paid)
+- **Public/free data sources only** — no dependency on paid indexers (Alchemy Growth, The Graph paid, Moralis paid)
 - **CoinGecko Free tier** — 50 req/min; throttled to 45 req/min internally; historical price fallback only
-- **Transaction workflow** — status-driven `normalized_transactions` pipeline (`PENDING_CLARIFICATION -> PENDING_PRICE -> PENDING_STAT -> CONFIRMED`); additional clarification RPC calls are selective and run only for `PENDING_CLARIFICATION`
+- **Transaction workflow** — status-driven `normalized_transactions` pipeline (`PENDING_CLARIFICATION -> PENDING_PRICE -> PENDING_STAT -> CONFIRMED`); additional receipt enrichment is selective and runs only for low-confidence/clarification cases
 - **2-year backfill window** — transactions before this window require manual entry
-- **EVM eth_getLogs batch block size** — configurable **per EVM network** (or at least different defaults for L1 vs L2), not a single global constant. Global default: **2000 blocks** when no per-network value is set. Invalid values (≤0 or above a reasonable cap) must not be applied; use default and log. Unknown or new EVM `networkId` → use global default; do not fail ingestion.
+- **EVM ingestion source (MVP v2)** — explorer-first (Etherscan V2-compatible API per network) with `page/offset` fetch and selective `getReceipt` enrichment for ambiguous transactions.
+- **Explorer paging default** — use `offset=5000` by default (configurable), with provider-aware fallback and retry/backoff on rate-limit/timeout.
 
 ### Financial Constraints
 - Gas is converted to USD at the native token price at block time
@@ -76,17 +77,18 @@ Manual compensating transactions may be **positive or negative** (reducing quant
 
 ## Supported Networks (MVP)
 
-| Network | Type | RPC Source |
-|---------|------|-----------|
-| Ethereum Mainnet | EVM | Cloudflare / Ankr Free |
-| Arbitrum One | EVM | Ankr Free / LlamaRPC |
-| Optimism | EVM | Ankr Free / LlamaRPC |
-| Base | EVM | Ankr Free / Official |
-| BNB Chain | EVM | Ankr Free |
-| Polygon | EVM | Ankr Free |
-| Avalanche C-Chain | EVM | Ankr Free |
-| Mantle | EVM | Official RPC |
-| Solana | SVM | Helius Free (100k req/day) |
+| Network | Type | Primary Source (MVP v2) |
+|---------|------|--------------------------|
+| Ethereum Mainnet | EVM | Etherscan V2 API |
+| Arbitrum One | EVM | Arbiscan API |
+| Optimism | EVM | Optimistic Etherscan API |
+| Base | EVM | Basescan API |
+| BNB Chain | EVM | BscScan API |
+| Polygon | EVM | Polygonscan API |
+| Avalanche C-Chain | EVM | Snowtrace API |
+| Mantle | EVM | Mantlescan API |
+| Linea | EVM | Lineascan API |
+| Solana | SVM | Out of scope for MVP v2 |
 
 ---
 
@@ -94,7 +96,7 @@ Manual compensating transactions may be **positive or negative** (reducing quant
 
 ```
 1. Open WalletRadar in browser
-2. Add wallet address (EVM 0x… or Solana Base58)
+2. Add wallet address (EVM 0x…)
 3. System starts 2-year backfill (background, shows progress banner)
 4. User sees partial portfolio as assets are indexed
 5. On backfill complete — full portfolio view with AVCO, P&L, charts

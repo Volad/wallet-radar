@@ -2,7 +2,7 @@ package com.walletradar.pricing.resolver;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.walletradar.common.RateLimiter;
-import com.walletradar.domain.PriceSource;
+import com.walletradar.domain.common.PriceSource;
 import com.walletradar.pricing.HistoricalPriceRequest;
 import com.walletradar.pricing.PriceResolutionResult;
 import com.walletradar.pricing.config.PricingProperties;

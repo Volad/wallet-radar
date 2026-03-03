@@ -1,3 +1,5 @@
+> **Status:** Archived (historical). Not an active requirement source.
+
 # Feature 10: Backfill Package Refactoring (SRP)
 
 **Tasks:** T-030

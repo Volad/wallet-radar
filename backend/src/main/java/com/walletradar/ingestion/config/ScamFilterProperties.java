@@ -65,6 +65,38 @@ public class ScamFilterProperties {
     private int zeroAmountPoisoningScore = 95;
 
     /**
+     * Score added when token symbol/name contains phishing URL or claim/visit bait text.
+     */
+    private int suspiciousAirdropTokenTextScore = 80;
+
+    /**
+     * Score added when unsolicited inbound token transfer has suspicious tiny integer amount (e.g. 1,5,10).
+     */
+    private int suspiciousAirdropTinyValueScore = 20;
+
+    /**
+     * Score added when unsolicited inbound token has zero decimals and suspicious display characters.
+     */
+    private int suspiciousAirdropZeroDecimalsScore = 15;
+
+    /**
+     * Score added when function name indicates airdrop distribution.
+     */
+    private int suspiciousAirdropFunctionScore = 20;
+
+    /**
+     * Score added when unsolicited inbound transfer comes from a multicall tx
+     * with many ERC20 transfer subcalls (mass airdrop-like pattern).
+     */
+    private int suspiciousMulticallAirdropScore = 100;
+
+    /**
+     * Minimum number of ERC20 transfer selectors in multicall input
+     * to treat transaction as suspicious mass airdrop.
+     */
+    private int suspiciousMulticallAirdropMinTransferCalls = 20;
+
+    /**
      * Score credit for wallet-initiated tx.
      */
     private int walletInitiatedCredit = 60;

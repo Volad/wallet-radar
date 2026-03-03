@@ -1,12 +1,12 @@
 package com.walletradar.api.controller;
 
-import com.walletradar.domain.NetworkId;
-import com.walletradar.domain.NormalizedLegRole;
-import com.walletradar.domain.NormalizedTransaction;
-import com.walletradar.domain.NormalizedTransactionRepository;
-import com.walletradar.domain.NormalizedTransactionStatus;
-import com.walletradar.domain.NormalizedTransactionType;
-import com.walletradar.domain.PriceSource;
+import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
+import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.domain.common.PriceSource;
 import com.walletradar.ingestion.job.backfill.BackfillJobRunner;
 import com.walletradar.ingestion.sync.balance.BalanceRefreshService;
 import org.junit.jupiter.api.DisplayName;
@@ -82,7 +82,7 @@ class TransactionControllerIntegrationTest {
         tx.setCreatedAt(Instant.now());
         tx.setUpdatedAt(Instant.now());
 
-        NormalizedTransaction.Leg leg = new NormalizedTransaction.Leg();
+        NormalizedTransaction.Flow leg = new NormalizedTransaction.Flow();
         leg.setRole(NormalizedLegRole.SELL);
         leg.setAssetContract("0xaf88");
         leg.setAssetSymbol("USDC");
@@ -90,7 +90,7 @@ class TransactionControllerIntegrationTest {
         leg.setUnitPriceUsd(BigDecimal.ONE);
         leg.setValueUsd(qty.abs());
         leg.setPriceSource(PriceSource.STABLECOIN);
-        tx.setLegs(List.of(leg));
+        tx.setFlows(List.of(leg));
         return tx;
     }
 }

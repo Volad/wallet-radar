@@ -2,7 +2,7 @@ package com.walletradar.pricing.resolver;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
-import com.walletradar.domain.NetworkId;
+import com.walletradar.domain.common.NetworkId;
 import com.walletradar.pricing.config.PricingProperties;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.junit.jupiter.api.BeforeEach;

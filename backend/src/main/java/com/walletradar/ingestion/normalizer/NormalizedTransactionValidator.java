@@ -1,7 +1,7 @@
 package com.walletradar.ingestion.normalizer;
 
-import com.walletradar.domain.NormalizedTransaction;
-import com.walletradar.domain.NormalizedTransactionType;
+import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 
 import java.math.BigDecimal;
 import java.util.LinkedHashSet;
@@ -18,16 +18,20 @@ public final class NormalizedTransactionValidator {
 
     public static List<String> missingDataReasons(
             NormalizedTransactionType type,
-            List<NormalizedTransaction.Leg> legs
+            List<NormalizedTransaction.Flow> legs
     ) {
         Set<String> reasons = new LinkedHashSet<>();
         if (legs == null || legs.isEmpty()) {
-            reasons.add("MISSING_LEGS");
+            if (type == NormalizedTransactionType.UNCLASSIFIED) {
+                reasons.add("NO_CLASSIFICATION_EVIDENCE");
+            } else {
+                reasons.add("MISSING_LEGS");
+            }
             return List.copyOf(reasons);
         }
         boolean hasInbound = false;
         boolean hasOutbound = false;
-        for (NormalizedTransaction.Leg leg : legs) {
+        for (NormalizedTransaction.Flow leg : legs) {
             if (leg.getAssetContract() == null || leg.getAssetContract().isBlank()) {
                 reasons.add("MISSING_ASSET_CONTRACT");
             }

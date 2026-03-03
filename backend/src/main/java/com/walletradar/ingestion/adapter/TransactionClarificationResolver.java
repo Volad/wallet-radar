@@ -1,8 +1,8 @@
 package com.walletradar.ingestion.adapter;
 
-import com.walletradar.domain.ConfidenceLevel;
-import com.walletradar.domain.NetworkId;
-import com.walletradar.domain.NormalizedTransaction;
+import com.walletradar.domain.common.ConfidenceLevel;
+import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 
 import java.util.List;
 import java.util.Optional;
@@ -17,7 +17,7 @@ public interface TransactionClarificationResolver {
     Optional<ClarificationResult> clarify(NormalizedTransaction transaction);
 
     record ClarificationResult(
-            List<NormalizedTransaction.Leg> inferredLegs,
+            List<NormalizedTransaction.Flow> inferredFlows,
             String inferenceReason,
             ConfidenceLevel confidence
     ) {

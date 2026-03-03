@@ -1,6 +1,6 @@
 package com.walletradar.ingestion.adapter;
 
-import com.walletradar.domain.NetworkId;
+import com.walletradar.domain.common.NetworkId;
 
 /**
  * Resolves current block height for a network. Used by backfill package to compute backfill range.

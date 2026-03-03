@@ -1,3 +1,5 @@
+> **Status:** Archived (historical). Not an active requirement source.
+
 # Feature 10: GET transaction history (paginated)
 
 **Tasks:** T-025

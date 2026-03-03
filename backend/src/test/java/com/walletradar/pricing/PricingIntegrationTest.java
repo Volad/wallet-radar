@@ -1,6 +1,6 @@
 package com.walletradar.pricing;
 
-import com.walletradar.domain.NetworkId;
+import com.walletradar.domain.common.NetworkId;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -53,7 +53,7 @@ class PricingIntegrationTest {
 
         assertThat(r.isUnknown()).isFalse();
         assertThat(r.getPriceUsd()).isPresent();
-        assertThat(r.getPriceSource()).isEqualTo(com.walletradar.domain.PriceSource.STABLECOIN);
+        assertThat(r.getPriceSource()).isEqualTo(com.walletradar.domain.common.PriceSource.STABLECOIN);
     }
 
     @Test

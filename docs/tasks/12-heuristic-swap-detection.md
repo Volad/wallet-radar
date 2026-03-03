@@ -1,3 +1,5 @@
+> **Status:** Archived (historical). Not an active requirement source.
+
 # Feature 12: Heuristic swap detection (outflow A + inflow B in same tx)
 
 **Tasks:** T-032

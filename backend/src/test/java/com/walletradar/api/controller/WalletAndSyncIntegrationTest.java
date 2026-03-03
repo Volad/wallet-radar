@@ -1,6 +1,6 @@
 package com.walletradar.api.controller;
 
-import com.walletradar.domain.SyncStatusRepository;
+import com.walletradar.domain.sync.SyncStatusRepository;
 import com.walletradar.ingestion.job.backfill.BackfillJobRunner;
 import com.walletradar.ingestion.sync.balance.BalanceRefreshService;
 

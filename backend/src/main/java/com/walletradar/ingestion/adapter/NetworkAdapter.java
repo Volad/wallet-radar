@@ -1,7 +1,7 @@
 package com.walletradar.ingestion.adapter;
 
-import com.walletradar.domain.NetworkId;
-import com.walletradar.domain.RawTransaction;
+import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.transaction.raw.RawTransaction;
 
 import java.util.List;
 

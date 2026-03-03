@@ -1,3 +1,5 @@
+> **Status:** Archived (historical). Not an active requirement source.
+
 # Feature 1: Add wallet + backfill
 
 **Tasks:** T-009, T-023

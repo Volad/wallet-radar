@@ -3,18 +3,17 @@ package com.walletradar.ingestion.sync.balance;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.walletradar.config.AsyncConfig;
-import com.walletradar.domain.EconomicEventRepository;
-import com.walletradar.domain.NetworkId;
-import com.walletradar.domain.NormalizedTransactionRepository;
-import com.walletradar.domain.NormalizedTransactionStatus;
-import com.walletradar.domain.OnChainBalance;
-import com.walletradar.domain.OnChainBalanceRepository;
-import com.walletradar.domain.SyncStatus;
-import com.walletradar.domain.SyncStatusRepository;
+import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
+import com.walletradar.domain.portfolio.OnChainBalance;
+import com.walletradar.domain.portfolio.OnChainBalanceRepository;
+import com.walletradar.domain.sync.SyncStatus;
+import com.walletradar.domain.sync.SyncStatusRepository;
 import com.walletradar.ingestion.adapter.RpcEndpointRotator;
 import com.walletradar.ingestion.adapter.RpcException;
-import com.walletradar.ingestion.adapter.evm.EvmRpcClient;
-import com.walletradar.ingestion.adapter.evm.EvmTokenDecimalsResolver;
+import com.walletradar.ingestion.adapter.evm.rpc.EvmRpcClient;
+import com.walletradar.ingestion.adapter.evm.rpc.EvmTokenDecimalsResolver;
 import com.walletradar.ingestion.adapter.solana.SolanaRpcClient;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -39,7 +38,7 @@ import java.util.Set;
 /**
  * Refreshes current on-chain balances for wallets/networks and stores them in on_chain_balances.
  * Strategy: always refresh native balance; refresh token balances for known asset contracts
- * (from economic_events and previously stored on_chain_balances for the same wallet×network).
+ * (from confirmed normalized_transactions and previously stored on_chain_balances for the same wallet×network).
  */
 @Service
 @RequiredArgsConstructor
@@ -68,7 +67,6 @@ public class BalanceRefreshService {
 
     private final SyncStatusRepository syncStatusRepository;
     private final OnChainBalanceRepository onChainBalanceRepository;
-    private final EconomicEventRepository economicEventRepository;
     private final NormalizedTransactionRepository normalizedTransactionRepository;
     private final EvmTokenDecimalsResolver evmTokenDecimalsResolver;
     private final EvmRpcClient evmRpcClient;
@@ -157,7 +155,7 @@ public class BalanceRefreshService {
         BigDecimal nativeQty = hexToDecimal(nativeHex, 18);
         upsertBalance(walletAddress, networkId.name(), nativeContract(networkId), nativeQty, now);
 
-        // Known tokens only: from economic_events + previously stored on_chain_balances.
+        // Known tokens only: from confirmed normalized_transactions + previously stored on_chain_balances.
         Set<String> tokenContracts = resolveKnownTokenContracts(walletAddress, networkId);
         for (String tokenContract : tokenContracts) {
             try {
@@ -188,7 +186,6 @@ public class BalanceRefreshService {
         contracts.addAll(normalizedTransactionRepository
                 .findDistinctAssetContractsByWalletAddressAndNetworkIdAndStatus(
                         walletAddress, networkId, NormalizedTransactionStatus.CONFIRMED));
-        contracts.addAll(economicEventRepository.findDistinctAssetContractsByWalletAddressAndNetworkId(walletAddress, networkId));
         contracts.addAll(onChainBalanceRepository.findByWalletAddressAndNetworkId(walletAddress, networkId.name()).stream()
                 .map(OnChainBalance::getAssetContract)
                 .toList());

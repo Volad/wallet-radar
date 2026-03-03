@@ -1,10 +1,10 @@
 package com.walletradar.ingestion.wallet.command;
 
-import com.walletradar.domain.BalanceRefreshRequestedEvent;
-import com.walletradar.domain.NetworkId;
-import com.walletradar.domain.SyncStatus;
-import com.walletradar.domain.SyncStatusRepository;
-import com.walletradar.domain.WalletAddedEvent;
+import com.walletradar.domain.event.BalanceRefreshRequestedEvent;
+import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.sync.SyncStatus;
+import com.walletradar.domain.sync.SyncStatusRepository;
+import com.walletradar.domain.event.WalletAddedEvent;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;

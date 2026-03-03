@@ -1,15 +1,17 @@
 package com.walletradar.costbasis.override;
 
 import com.walletradar.costbasis.engine.AvcoEngine;
-import com.walletradar.domain.AssetPosition;
-import com.walletradar.domain.AssetPositionRepository;
-import com.walletradar.domain.CostBasisOverrideRepository;
-import com.walletradar.domain.EconomicEvent;
-import com.walletradar.domain.EconomicEventRepository;
-import com.walletradar.domain.EconomicEventType;
-import com.walletradar.domain.NetworkId;
-import com.walletradar.domain.RecalcJob;
-import com.walletradar.domain.RecalcJobRepository;
+import com.walletradar.domain.accounting.AssetPosition;
+import com.walletradar.domain.accounting.AssetPositionRepository;
+import com.walletradar.domain.accounting.CostBasisOverrideRepository;
+import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
+import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.domain.accounting.RecalcJob;
+import com.walletradar.domain.accounting.RecalcJobRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -28,7 +30,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * T-017 DoD: integration test — PUT override → poll recalc status → COMPLETE and positions updated.
+ * Override + async recalc integration on canonical normalized transactions.
  */
 @SpringBootTest(properties = {
         "walletradar.ingestion.network.ETHEREUM.urls[0]=https://eth.llamarpc.com",
@@ -50,7 +52,7 @@ class OverrideRecalcIntegrationTest {
     @Autowired
     AvcoEngine avcoEngine;
     @Autowired
-    EconomicEventRepository economicEventRepository;
+    NormalizedTransactionRepository normalizedTransactionRepository;
     @Autowired
     CostBasisOverrideRepository costBasisOverrideRepository;
     @Autowired
@@ -65,37 +67,13 @@ class OverrideRecalcIntegrationTest {
         String assetContract = "0x0000000000000000000000000000000000000001";
         String assetSymbol = "USDC";
 
-        EconomicEvent buy = new EconomicEvent();
-        buy.setTxHash("0xtxOverride1");
-        buy.setNetworkId(NetworkId.ETHEREUM);
-        buy.setWalletAddress(wallet);
-        buy.setBlockTimestamp(Instant.parse("2025-01-01T10:00:00Z"));
-        buy.setEventType(EconomicEventType.SWAP_BUY);
-        buy.setAssetSymbol(assetSymbol);
-        buy.setAssetContract(assetContract);
-        buy.setQuantityDelta(new BigDecimal("100"));
-        buy.setPriceUsd(new BigDecimal("0.99"));
-        buy.setTotalValueUsd(new BigDecimal("99"));
-        buy.setGasCostUsd(BigDecimal.ZERO);
-        buy.setGasIncludedInBasis(true);
+        NormalizedTransaction buy = tx("tx-ov-1", wallet, Instant.parse("2025-01-01T10:00:00Z"),
+                leg(NormalizedLegRole.BUY, assetSymbol, assetContract, new BigDecimal("100"), new BigDecimal("0.99"), 1));
+        NormalizedTransaction sell = tx("tx-ov-2", wallet, Instant.parse("2025-01-02T10:00:00Z"),
+                leg(NormalizedLegRole.SELL, assetSymbol, assetContract, new BigDecimal("-50"), new BigDecimal("1.01"), 1));
 
-        EconomicEvent sell = new EconomicEvent();
-        sell.setTxHash("0xtxOverride2");
-        sell.setNetworkId(NetworkId.ETHEREUM);
-        sell.setWalletAddress(wallet);
-        sell.setBlockTimestamp(Instant.parse("2025-01-02T10:00:00Z"));
-        sell.setEventType(EconomicEventType.SWAP_SELL);
-        sell.setAssetSymbol(assetSymbol);
-        sell.setAssetContract(assetContract);
-        sell.setQuantityDelta(new BigDecimal("-50"));
-        sell.setPriceUsd(new BigDecimal("1.01"));
-        sell.setTotalValueUsd(new BigDecimal("50.5"));
-        sell.setGasCostUsd(BigDecimal.ZERO);
-        sell.setGasIncludedInBasis(false);
-
-        economicEventRepository.saveAll(List.of(buy, sell));
-        String buyEventId = buy.getId();
-        assertThat(buyEventId).isNotNull();
+        normalizedTransactionRepository.saveAll(List.of(buy, sell));
+        String buyEventId = buy.getId() + ":0";
 
         // Initial AVCO: 0.99, after sell remaining 50 @ 0.99, realisedPnl = (1.01-0.99)*50 = 1.00
         avcoEngine.replayFromBeginning(wallet, NetworkId.ETHEREUM, assetContract);
@@ -110,10 +88,9 @@ class OverrideRecalcIntegrationTest {
         String jobId = overrideService.setOverride(buyEventId, new BigDecimal("1.00"), "Override to 1.00");
 
         assertThat(jobId).isNotNull();
-        assertThat(costBasisOverrideRepository.findByEconomicEventIdAndActiveTrue(buyEventId)).isPresent();
+        assertThat(costBasisOverrideRepository.findByNormalizedLegIdAndActiveTrue(buyEventId)).isPresent();
 
-        // Poll until COMPLETE (async recalc runs on recalc-executor)
-        RecalcJob job = pollUntilComplete(jobId, 100);
+        RecalcJob job = pollUntilComplete(jobId, 120);
         assertThat(job.getStatus()).isEqualTo(RecalcJob.RecalcStatus.COMPLETE);
         assertThat(job.getNewPerWalletAvco()).isEqualByComparingTo("1.00");
         assertThat(job.getCompletedAt()).isNotNull();
@@ -139,5 +116,35 @@ class OverrideRecalcIntegrationTest {
             }
         }
         throw new AssertionError("RecalcJob " + jobId + " did not complete within " + maxAttempts + " attempts");
+    }
+
+    private static NormalizedTransaction tx(String txHash, String wallet, Instant timestamp, NormalizedTransaction.Flow leg) {
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setTxHash(txHash);
+        tx.setNetworkId(NetworkId.ETHEREUM);
+        tx.setWalletAddress(wallet);
+        tx.setBlockTimestamp(timestamp);
+        tx.setType(NormalizedTransactionType.SWAP);
+        tx.setStatus(NormalizedTransactionStatus.CONFIRMED);
+        tx.setFlows(List.of(leg));
+        return tx;
+    }
+
+    private static NormalizedTransaction.Flow leg(
+            NormalizedLegRole role,
+            String symbol,
+            String contract,
+            BigDecimal qty,
+            BigDecimal price,
+            Integer logIndex
+    ) {
+        NormalizedTransaction.Flow leg = new NormalizedTransaction.Flow();
+        leg.setRole(role);
+        leg.setAssetSymbol(symbol);
+        leg.setAssetContract(contract);
+        leg.setQuantityDelta(qty);
+        leg.setUnitPriceUsd(price);
+        leg.setLogIndex(logIndex);
+        return leg;
     }
 }

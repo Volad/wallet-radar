@@ -1,3 +1,5 @@
+> **Status:** Archived (historical). Not an active requirement source.
+
 # Feature 11: Inline swap price when one leg is stablecoin
 
 **Tasks:** T-031

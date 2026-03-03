@@ -1,7 +1,7 @@
 package com.walletradar.pricing.resolver;
 
 import com.walletradar.common.StablecoinRegistry;
-import com.walletradar.domain.PriceSource;
+import com.walletradar.domain.common.PriceSource;
 import com.walletradar.pricing.HistoricalPriceRequest;
 import com.walletradar.pricing.PriceResolutionResult;
 import lombok.RequiredArgsConstructor;

@@ -1,3 +1,5 @@
+> **Status:** Archived (historical). Not an active requirement source.
+
 # Feature 14: Deferred Price Resolution — Cron-Based Refactor
 
 **Tasks:** T-033  

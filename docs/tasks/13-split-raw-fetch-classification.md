@@ -1,3 +1,5 @@
+> **Status:** Archived (historical). Not an active requirement source.
+
 # Feature 13: Split Raw Fetch and Classification (T-031)
 
 **Tasks:** T-031

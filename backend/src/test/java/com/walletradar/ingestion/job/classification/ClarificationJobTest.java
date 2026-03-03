@@ -1,12 +1,12 @@
 package com.walletradar.ingestion.job.classification;
 
-import com.walletradar.domain.ConfidenceLevel;
-import com.walletradar.domain.NetworkId;
-import com.walletradar.domain.NormalizedLegRole;
-import com.walletradar.domain.NormalizedTransaction;
-import com.walletradar.domain.NormalizedTransactionRepository;
-import com.walletradar.domain.NormalizedTransactionStatus;
-import com.walletradar.domain.NormalizedTransactionType;
+import com.walletradar.domain.common.ConfidenceLevel;
+import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
+import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.ingestion.adapter.TransactionClarificationResolver;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -46,7 +46,7 @@ class ClarificationJobTest {
         NormalizedTransaction tx = pendingSwapWithoutBuy();
         when(clarificationResolver.supports(NetworkId.ARBITRUM)).thenReturn(true);
 
-        NormalizedTransaction.Leg inferred = new NormalizedTransaction.Leg();
+        NormalizedTransaction.Flow inferred = new NormalizedTransaction.Flow();
         inferred.setRole(NormalizedLegRole.BUY);
         inferred.setAssetContract("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
         inferred.setAssetSymbol("ETH");
@@ -61,10 +61,10 @@ class ClarificationJobTest {
         clarificationJob.clarifyOne(tx);
 
         assertThat(tx.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
-        assertThat(tx.getLegs()).hasSize(2);
-        assertThat(tx.getLegs().get(1).isInferred()).isTrue();
-        assertThat(tx.getLegs().get(1).getInferenceReason()).isEqualTo("INFERRED_FROM_TRACE");
-        assertThat(tx.getLegs().get(1).getConfidence()).isEqualTo(ConfidenceLevel.MEDIUM);
+        assertThat(tx.getFlows()).hasSize(2);
+        assertThat(tx.getFlows().get(1).isInferred()).isTrue();
+        assertThat(tx.getFlows().get(1).getInferenceReason()).isEqualTo("INFERRED_FROM_TRACE");
+        assertThat(tx.getFlows().get(1).getConfidence()).isEqualTo(ConfidenceLevel.MEDIUM);
         verify(normalizedTransactionRepository).save(tx);
     }
 
@@ -110,12 +110,12 @@ class ClarificationJobTest {
         tx.setMissingDataReasons(List.of("MISSING_SWAP_LEG"));
         tx.setClarificationAttempts(0);
 
-        NormalizedTransaction.Leg sell = new NormalizedTransaction.Leg();
+        NormalizedTransaction.Flow sell = new NormalizedTransaction.Flow();
         sell.setRole(NormalizedLegRole.SELL);
         sell.setAssetContract("0xwstusr");
         sell.setAssetSymbol("wstUSR");
         sell.setQuantityDelta(new BigDecimal("-100"));
-        tx.setLegs(List.of(sell));
+        tx.setFlows(List.of(sell));
         return tx;
     }
 }

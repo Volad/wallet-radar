@@ -1,8 +1,9 @@
 package com.walletradar.ingestion.job.classification;
 
-import com.walletradar.domain.NormalizedTransaction;
-import com.walletradar.domain.NormalizedTransactionRepository;
-import com.walletradar.domain.NormalizedTransactionStatus;
+import com.walletradar.domain.common.ConfidenceLevel;
+import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.ingestion.adapter.TransactionClarificationResolver;
 import com.walletradar.ingestion.normalizer.NormalizedTransactionValidator;
 import lombok.RequiredArgsConstructor;
@@ -11,6 +12,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -32,7 +34,7 @@ public class ClarificationJob {
     @Value("${walletradar.ingestion.clarification.max-retries:3}")
     private int maxRetries;
 
-    @Scheduled(fixedDelayString = "${walletradar.ingestion.clarification.schedule-interval-ms:120000}")
+//    @Scheduled(fixedDelayString = "${walletradar.ingestion.clarification.schedule-interval-ms:120000}")
     public void runScheduled() {
         long startedAt = System.currentTimeMillis();
         log.info("ClarificationJob started");
@@ -63,11 +65,11 @@ public class ClarificationJob {
 
         if (resultOpt.isPresent()) {
             TransactionClarificationResolver.ClarificationResult result = resultOpt.get();
-            List<NormalizedTransaction.Leg> mergedLegs = new ArrayList<>();
-            if (tx.getLegs() != null) {
-                mergedLegs.addAll(tx.getLegs());
+            List<NormalizedTransaction.Flow> mergedFlows = new ArrayList<>();
+            if (tx.getFlows() != null) {
+                mergedFlows.addAll(tx.getFlows());
             }
-            for (NormalizedTransaction.Leg inferred : result.inferredLegs()) {
+            for (NormalizedTransaction.Flow inferred : result.inferredFlows()) {
                 if (inferred.getInferenceReason() == null || inferred.getInferenceReason().isBlank()) {
                     inferred.setInferenceReason(result.inferenceReason());
                 }
@@ -75,13 +77,13 @@ public class ClarificationJob {
                     inferred.setConfidence(result.confidence());
                 }
                 inferred.setInferred(true);
-                mergedLegs.add(inferred);
+                mergedFlows.add(inferred);
             }
-            tx.setLegs(mergedLegs);
-            tx.setConfidence(result.confidence());
+            tx.setFlows(mergedFlows);
+            tx.setConfidence(confidenceScore(result.confidence()));
         }
 
-        List<String> recalculatedReasons = NormalizedTransactionValidator.missingDataReasons(tx.getType(), tx.getLegs());
+        List<String> recalculatedReasons = NormalizedTransactionValidator.missingDataReasons(tx.getType(), tx.getFlows());
         tx.setMissingDataReasons(recalculatedReasons);
         if (recalculatedReasons.isEmpty()) {
             tx.setStatus(NormalizedTransactionStatus.PENDING_PRICE);
@@ -99,5 +101,16 @@ public class ClarificationJob {
         }
         tx.setUpdatedAt(Instant.now());
         normalizedTransactionRepository.save(tx);
+    }
+
+    private static BigDecimal confidenceScore(ConfidenceLevel confidenceLevel) {
+        if (confidenceLevel == null) {
+            return BigDecimal.ZERO;
+        }
+        return switch (confidenceLevel) {
+            case HIGH -> new BigDecimal("0.90");
+            case MEDIUM -> new BigDecimal("0.70");
+            case LOW -> new BigDecimal("0.40");
+        };
     }
 }

@@ -1,11 +1,13 @@
 package com.walletradar.costbasis.engine;
 
-import com.walletradar.domain.AssetPosition;
-import com.walletradar.domain.AssetPositionRepository;
-import com.walletradar.domain.EconomicEvent;
-import com.walletradar.domain.EconomicEventRepository;
-import com.walletradar.domain.EconomicEventType;
-import com.walletradar.domain.NetworkId;
+import com.walletradar.domain.accounting.AssetPosition;
+import com.walletradar.domain.accounting.AssetPositionRepository;
+import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
+import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -41,46 +43,23 @@ class AvcoEngineIntegrationTest {
     @Autowired
     AvcoEngine avcoEngine;
     @Autowired
-    EconomicEventRepository economicEventRepository;
+    NormalizedTransactionRepository normalizedTransactionRepository;
     @Autowired
     AssetPositionRepository assetPositionRepository;
 
     @Test
-    @DisplayName("persist events then run engine then verify positions")
-    void persistEvents_runEngine_verifyPositions() {
+    @DisplayName("persist confirmed normalized tx then run engine then verify positions")
+    void persistNormalized_runEngine_verifyPositions() {
         String wallet = "0xintWallet";
         String assetContract = "0x0000000000000000000000000000000000000000";
         String assetSymbol = "ETH";
 
-        EconomicEvent buy = new EconomicEvent();
-        buy.setTxHash("0xtx1");
-        buy.setNetworkId(NetworkId.ETHEREUM);
-        buy.setWalletAddress(wallet);
-        buy.setBlockTimestamp(Instant.parse("2025-01-01T10:00:00Z"));
-        buy.setEventType(EconomicEventType.SWAP_BUY);
-        buy.setAssetSymbol(assetSymbol);
-        buy.setAssetContract(assetContract);
-        buy.setQuantityDelta(new BigDecimal("3"));
-        buy.setPriceUsd(new BigDecimal("2000"));
-        buy.setTotalValueUsd(new BigDecimal("6000"));
-        buy.setGasCostUsd(BigDecimal.ZERO);
-        buy.setGasIncludedInBasis(true);
+        NormalizedTransaction buy = tx("0xtx1", wallet, Instant.parse("2025-01-01T10:00:00Z"),
+                leg(NormalizedLegRole.BUY, assetSymbol, assetContract, new BigDecimal("3"), new BigDecimal("2000"), 1));
+        NormalizedTransaction sell = tx("0xtx2", wallet, Instant.parse("2025-01-02T10:00:00Z"),
+                leg(NormalizedLegRole.SELL, assetSymbol, assetContract, new BigDecimal("-1"), new BigDecimal("2500"), 1));
 
-        EconomicEvent sell = new EconomicEvent();
-        sell.setTxHash("0xtx2");
-        sell.setNetworkId(NetworkId.ETHEREUM);
-        sell.setWalletAddress(wallet);
-        sell.setBlockTimestamp(Instant.parse("2025-01-02T10:00:00Z"));
-        sell.setEventType(EconomicEventType.SWAP_SELL);
-        sell.setAssetSymbol(assetSymbol);
-        sell.setAssetContract(assetContract);
-        sell.setQuantityDelta(new BigDecimal("-1"));
-        sell.setPriceUsd(new BigDecimal("2500"));
-        sell.setTotalValueUsd(new BigDecimal("2500"));
-        sell.setGasCostUsd(BigDecimal.ZERO);
-        sell.setGasIncludedInBasis(false);
-
-        economicEventRepository.saveAll(List.of(buy, sell));
+        normalizedTransactionRepository.saveAll(List.of(buy, sell));
 
         avcoEngine.replayFromBeginning(wallet, NetworkId.ETHEREUM, assetContract);
 
@@ -93,11 +72,38 @@ class AvcoEngineIntegrationTest {
         assertThat(position.getTotalRealisedPnlUsd()).isEqualByComparingTo("500"); // (2500-2000)*1
         assertThat(position.isHasIncompleteHistory()).isFalse();
 
-        EconomicEvent sellReloaded = economicEventRepository.findAll().stream()
-                .filter(e -> "0xtx2".equals(e.getTxHash()))
-                .findFirst()
-                .orElseThrow();
-        assertThat(sellReloaded.getAvcoAtTimeOfSale()).isEqualByComparingTo("2000");
-        assertThat(sellReloaded.getRealisedPnlUsd()).isEqualByComparingTo("500");
+        NormalizedTransaction sellReloaded = normalizedTransactionRepository.findById(sell.getId()).orElseThrow();
+        assertThat(sellReloaded.getFlows().get(0).getAvcoAtTimeOfSale()).isEqualByComparingTo("2000");
+        assertThat(sellReloaded.getFlows().get(0).getRealisedPnlUsd()).isEqualByComparingTo("500");
+    }
+
+    private static NormalizedTransaction tx(String txHash, String wallet, Instant timestamp, NormalizedTransaction.Flow leg) {
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setTxHash(txHash);
+        tx.setNetworkId(NetworkId.ETHEREUM);
+        tx.setWalletAddress(wallet);
+        tx.setBlockTimestamp(timestamp);
+        tx.setType(NormalizedTransactionType.SWAP);
+        tx.setStatus(NormalizedTransactionStatus.CONFIRMED);
+        tx.setFlows(List.of(leg));
+        return tx;
+    }
+
+    private static NormalizedTransaction.Flow leg(
+            NormalizedLegRole role,
+            String symbol,
+            String contract,
+            BigDecimal qty,
+            BigDecimal price,
+            Integer logIndex
+    ) {
+        NormalizedTransaction.Flow leg = new NormalizedTransaction.Flow();
+        leg.setRole(role);
+        leg.setAssetSymbol(symbol);
+        leg.setAssetContract(contract);
+        leg.setQuantityDelta(qty);
+        leg.setUnitPriceUsd(price);
+        leg.setLogIndex(logIndex);
+        return leg;
     }
 }

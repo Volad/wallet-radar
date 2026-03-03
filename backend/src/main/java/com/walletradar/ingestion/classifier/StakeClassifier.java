@@ -1,6 +1,6 @@
 package com.walletradar.ingestion.classifier;
 
-import com.walletradar.domain.RawTransaction;
+import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -10,10 +10,11 @@ import java.util.List;
  * Can be extended to detect common staking contract patterns (e.g. Lido, Rocket Pool).
  */
 @Component
+@Order(110)
 public class StakeClassifier implements TxClassifier {
 
     @Override
-    public List<RawClassifiedEvent> classify(RawTransaction tx, String walletAddress) {
+    public List<RawClassifiedEvent> classify(RawTransactionNormalizationView txView, String walletAddress) {
         return List.of();
     }
 }

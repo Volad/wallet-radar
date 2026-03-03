@@ -1,13 +1,14 @@
 package com.walletradar.ingestion.job.pricing;
 
-import com.walletradar.domain.NetworkId;
-import com.walletradar.domain.NormalizedLegRole;
-import com.walletradar.domain.NormalizedTransaction;
-import com.walletradar.domain.NormalizedTransactionRepository;
-import com.walletradar.domain.NormalizedTransactionStatus;
-import com.walletradar.domain.NormalizedTransactionType;
-import com.walletradar.domain.PriceSource;
-import com.walletradar.domain.RecalculateWalletRequestEvent;
+import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.transaction.normalized.LpLifecycleBoundaryStatus;
+import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
+import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.domain.common.PriceSource;
+import com.walletradar.domain.event.RecalculateWalletRequestEvent;
 import com.walletradar.pricing.HistoricalPriceResolverChain;
 import com.walletradar.pricing.PriceResolutionResult;
 import org.junit.jupiter.api.BeforeEach;
@@ -58,7 +59,7 @@ class NormalizedTransactionPipelineJobsTest {
 
         pricingJob.priceOne(tx);
         assertThat(tx.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_STAT);
-        assertThat(tx.getLegs()).allSatisfy(leg -> {
+        assertThat(tx.getFlows()).allSatisfy(leg -> {
             assertThat(leg.getUnitPriceUsd()).isNotNull();
             assertThat(leg.getValueUsd()).isNotNull();
         });
@@ -89,6 +90,65 @@ class NormalizedTransactionPipelineJobsTest {
         assertThat(tx.getStatus()).isEqualTo(NormalizedTransactionStatus.NEEDS_REVIEW);
     }
 
+    @Test
+    @DisplayName("LP_ADJUST does not require price resolution and can be confirmed")
+    void lpAdjustSkipsPricing() {
+        NormalizedTransaction tx = pendingPriceLpAdjust();
+
+        pricingJob.priceOne(tx);
+
+        assertThat(tx.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_STAT);
+        verify(historicalPriceResolverChain, never()).resolve(any());
+
+        when(normalizedTransactionRepository.findByStatusOrderByBlockTimestampAsc(NormalizedTransactionStatus.PENDING_STAT))
+                .thenReturn(List.of(tx));
+        statJob.runScheduled();
+
+        assertThat(tx.getStatus()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+    }
+
+    @Test
+    @DisplayName("LP_POSITION_STAKE does not require price resolution and can be confirmed")
+    void lpPositionStakeSkipsPricing() {
+        NormalizedTransaction tx = pendingPriceLpPositionStake();
+
+        pricingJob.priceOne(tx);
+
+        assertThat(tx.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_STAT);
+        verify(historicalPriceResolverChain, never()).resolve(any());
+    }
+
+    @Test
+    @DisplayName("grouped LP tx without open/close boundaries gets OPENING_MISSING and CLOSING_MISSING")
+    void lpBoundaryStatusesAreRefreshedByGroup() {
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setTxHash("0xclaim-only");
+        tx.setNetworkId(NetworkId.BASE);
+        tx.setWalletAddress("0xwallet");
+        tx.setBlockTimestamp(Instant.parse("2026-02-06T07:15:13Z"));
+        tx.setType(NormalizedTransactionType.LP_FEE_CLAIM);
+        tx.setGroupId("LP_POSITION:BASE:0xwallet:938761");
+        tx.setStatus(NormalizedTransactionStatus.PENDING_STAT);
+        NormalizedTransaction.Flow pricedClaim = flow(NormalizedLegRole.BUY, "0x8335", "USDC", "1");
+        pricedClaim.setUnitPriceUsd(BigDecimal.ONE);
+        pricedClaim.setValueUsd(BigDecimal.ONE);
+        tx.setFlows(List.of(pricedClaim));
+
+        when(normalizedTransactionRepository.findByStatusOrderByBlockTimestampAsc(NormalizedTransactionStatus.PENDING_STAT))
+                .thenReturn(List.of(tx));
+        when(normalizedTransactionRepository.findByGroupIdOrderByBlockTimestampAsc(tx.getGroupId()))
+                .thenReturn(List.of(tx));
+
+        statJob.runScheduled();
+
+        assertThat(tx.getStatus()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(tx.getBoundaryStatuses()).containsExactly(
+                LpLifecycleBoundaryStatus.OPENING_MISSING,
+                LpLifecycleBoundaryStatus.CLOSING_MISSING
+        );
+        verify(normalizedTransactionRepository).saveAll(anyList());
+    }
+
     private static NormalizedTransaction pendingPriceSwap() {
         NormalizedTransaction tx = new NormalizedTransaction();
         tx.setTxHash("0xswap");
@@ -99,19 +159,70 @@ class NormalizedTransactionPipelineJobsTest {
         tx.setStatus(NormalizedTransactionStatus.PENDING_PRICE);
         tx.setPricingAttempts(0);
 
-        NormalizedTransaction.Leg sell = new NormalizedTransaction.Leg();
+        NormalizedTransaction.Flow sell = new NormalizedTransaction.Flow();
         sell.setRole(NormalizedLegRole.SELL);
         sell.setAssetContract("0xaf88");
         sell.setAssetSymbol("USDC");
         sell.setQuantityDelta(new BigDecimal("-16"));
 
-        NormalizedTransaction.Leg buy = new NormalizedTransaction.Leg();
+        NormalizedTransaction.Flow buy = new NormalizedTransaction.Flow();
         buy.setRole(NormalizedLegRole.BUY);
         buy.setAssetContract("0x82af");
         buy.setAssetSymbol("WETH");
         buy.setQuantityDelta(new BigDecimal("0.004"));
 
-        tx.setLegs(List.of(sell, buy));
+        tx.setFlows(List.of(sell, buy));
         return tx;
+    }
+
+    private static NormalizedTransaction pendingPriceLpAdjust() {
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setTxHash("0xlpadjust");
+        tx.setNetworkId(NetworkId.BASE);
+        tx.setWalletAddress("0xwallet");
+        tx.setBlockTimestamp(Instant.parse("2025-07-16T05:52:19Z"));
+        tx.setType(NormalizedTransactionType.LP_ADJUST);
+        tx.setStatus(NormalizedTransactionStatus.PENDING_PRICE);
+        tx.setPricingAttempts(0);
+
+        NormalizedTransaction.Flow transfer = new NormalizedTransaction.Flow();
+        transfer.setRole(NormalizedLegRole.TRANSFER);
+        transfer.setAssetContract("0x46a15b0b27311cedf172ab29e4f4766fbe7f4364");
+        transfer.setAssetSymbol("PCS-V3-POS");
+        transfer.setQuantityDelta(new BigDecimal("1"));
+
+        tx.setFlows(List.of(transfer));
+        return tx;
+    }
+
+    private static NormalizedTransaction pendingPriceLpPositionStake() {
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setTxHash("0xlpstake");
+        tx.setNetworkId(NetworkId.BASE);
+        tx.setWalletAddress("0xwallet");
+        tx.setBlockTimestamp(Instant.parse("2025-07-16T05:52:19Z"));
+        tx.setType(NormalizedTransactionType.LP_POSITION_STAKE);
+        tx.setStatus(NormalizedTransactionStatus.PENDING_PRICE);
+        tx.setPricingAttempts(0);
+
+        NormalizedTransaction.Flow transfer = new NormalizedTransaction.Flow();
+        transfer.setRole(NormalizedLegRole.TRANSFER);
+        transfer.setAssetContract("0x46a15b0b27311cedf172ab29e4f4766fbe7f4364");
+        transfer.setAssetSymbol("PCS-V3-POS");
+        transfer.setQuantityDelta(new BigDecimal("-1"));
+
+        tx.setFlows(List.of(transfer));
+        return tx;
+    }
+
+    private static NormalizedTransaction.Flow flow(
+            NormalizedLegRole role, String contract, String symbol, String qty
+    ) {
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(role);
+        flow.setAssetContract(contract);
+        flow.setAssetSymbol(symbol);
+        flow.setQuantityDelta(new BigDecimal(qty));
+        return flow;
     }
 }

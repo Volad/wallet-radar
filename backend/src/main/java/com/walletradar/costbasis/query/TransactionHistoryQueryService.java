@@ -1,9 +1,9 @@
 package com.walletradar.costbasis.query;
 
-import com.walletradar.domain.NormalizedTransaction;
-import com.walletradar.domain.NormalizedTransactionRepository;
-import com.walletradar.domain.NormalizedTransactionStatus;
-import com.walletradar.domain.NormalizedTransactionType;
+import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -30,29 +30,29 @@ public class TransactionHistoryQueryService {
         Cursor decodedCursor = decodeCursor(cursor);
         String needle = assetId == null ? "" : assetId.trim().toLowerCase(Locale.ROOT);
 
-        List<HistoryLeg> all = new ArrayList<>();
+        List<HistoryFlow> all = new ArrayList<>();
         List<NormalizedTransaction> confirmed = normalizedTransactionRepository
                 .findByStatusOrderByBlockTimestampAsc(NormalizedTransactionStatus.CONFIRMED);
         for (NormalizedTransaction tx : confirmed) {
-            if (tx.getLegs() == null) continue;
-            for (int i = 0; i < tx.getLegs().size(); i++) {
-                NormalizedTransaction.Leg leg = tx.getLegs().get(i);
+            if (tx.getFlows() == null) continue;
+            for (int i = 0; i < tx.getFlows().size(); i++) {
+                NormalizedTransaction.Flow leg = tx.getFlows().get(i);
                 if (!matchesAsset(leg, needle)) continue;
                 String eventId = tx.getId() + ":" + i;
-                all.add(new HistoryLeg(tx, leg, eventId));
+                all.add(new HistoryFlow(tx, leg, eventId));
             }
         }
 
-        Comparator<HistoryLeg> comparator = Comparator
-                .comparing((HistoryLeg h) -> h.tx().getBlockTimestamp(), Comparator.nullsLast(Comparator.naturalOrder()))
-                .thenComparing(HistoryLeg::eventId);
+        Comparator<HistoryFlow> comparator = Comparator
+                .comparing((HistoryFlow h) -> h.tx().getBlockTimestamp(), Comparator.nullsLast(Comparator.naturalOrder()))
+                .thenComparing(HistoryFlow::eventId);
         if (!asc) {
             comparator = comparator.reversed();
         }
         all.sort(comparator);
-        List<HistoryLeg> filtered = applyCursor(all, decodedCursor, asc);
+        List<HistoryFlow> filtered = applyCursor(all, decodedCursor, asc);
         boolean hasMore = filtered.size() > pageSize;
-        List<HistoryLeg> page = filtered.stream().limit(pageSize).toList();
+        List<HistoryFlow> page = filtered.stream().limit(pageSize).toList();
         String nextCursor = hasMore && !page.isEmpty() ? encodeCursor(page.get(page.size() - 1)) : null;
 
         List<HistoryItem> items = page.stream()
@@ -61,7 +61,7 @@ public class TransactionHistoryQueryService {
         return new HistoryPage(items, nextCursor, hasMore);
     }
 
-    private HistoryItem toDto(HistoryLeg h) {
+    private HistoryItem toDto(HistoryFlow h) {
         String eventType = toEventType(h.tx().getType(), h.leg().getQuantityDelta() != null ? h.leg().getQuantityDelta().signum() : 0);
         return new HistoryItem(
                 h.eventId(),
@@ -90,10 +90,10 @@ public class TransactionHistoryQueryService {
         return type != null ? type.name() : "UNKNOWN";
     }
 
-    private static List<HistoryLeg> applyCursor(List<HistoryLeg> all, Cursor cursor, boolean asc) {
+    private static List<HistoryFlow> applyCursor(List<HistoryFlow> all, Cursor cursor, boolean asc) {
         if (cursor == null) return all;
-        List<HistoryLeg> out = new ArrayList<>();
-        for (HistoryLeg h : all) {
+        List<HistoryFlow> out = new ArrayList<>();
+        for (HistoryFlow h : all) {
             int cmp = compareCursor(h, cursor);
             if (asc && cmp > 0) {
                 out.add(h);
@@ -105,21 +105,21 @@ public class TransactionHistoryQueryService {
         return out;
     }
 
-    private static int compareCursor(HistoryLeg h, Cursor cursor) {
+    private static int compareCursor(HistoryFlow h, Cursor cursor) {
         Instant ts = h.tx().getBlockTimestamp();
         int tsCmp = Comparator.nullsLast(Instant::compareTo).compare(ts, cursor.timestamp());
         if (tsCmp != 0) return tsCmp;
         return h.eventId().compareTo(cursor.eventId());
     }
 
-    private static boolean matchesAsset(NormalizedTransaction.Leg leg, String assetIdLower) {
+    private static boolean matchesAsset(NormalizedTransaction.Flow leg, String assetIdLower) {
         if (leg == null) return false;
         String byContract = leg.getAssetContract() != null ? leg.getAssetContract().toLowerCase(Locale.ROOT) : "";
         String bySymbol = leg.getAssetSymbol() != null ? leg.getAssetSymbol().toLowerCase(Locale.ROOT) : "";
         return byContract.equals(assetIdLower) || bySymbol.equals(assetIdLower);
     }
 
-    private static String encodeCursor(HistoryLeg h) {
+    private static String encodeCursor(HistoryFlow h) {
         String raw = (h.tx().getBlockTimestamp() != null ? h.tx().getBlockTimestamp().toString() : "") + "|" + h.eventId();
         return Base64.getUrlEncoder().withoutPadding().encodeToString(raw.getBytes(StandardCharsets.UTF_8));
     }
@@ -138,7 +138,7 @@ public class TransactionHistoryQueryService {
         }
     }
 
-    private record HistoryLeg(NormalizedTransaction tx, NormalizedTransaction.Leg leg, String eventId) {}
+    private record HistoryFlow(NormalizedTransaction tx, NormalizedTransaction.Flow leg, String eventId) {}
 
     private record Cursor(Instant timestamp, String eventId) {}
 }

@@ -31,7 +31,7 @@ public class IngestionNetworkProperties {
     }
 
     /**
-     * One network's RPC URLs, eth_getLogs batch block size (ADR-011), and optional backfill window in blocks.
+     * One network's sync method, chain id, RPC URLs, eth_getLogs batch block size (ADR-011), and optional backfill window.
      * When windowBlocks is set, backfill for this network uses it instead of the global backfill.window-blocks
      * (so L2s with fast blocks can cover ~1 year: e.g. Arbitrum ~4 blocks/s → 126M blocks/year).
      */
@@ -40,15 +40,48 @@ public class IngestionNetworkProperties {
     @Setter
     public static class NetworkIngestionEntry {
 
+        /** Preferred raw sync source for this network backfill. */
+        private SyncMethod syncMethod = SyncMethod.ETHERSCAN;
+        /** EVM chain id used by explorer integrations (e.g. Etherscan V2 `chainid`). */
+        private String chainId;
         private List<String> urls = new ArrayList<>();
         private Integer batchBlockSize;
         /** Optional. Backfill window in blocks for this network; if null, global backfill.window-blocks is used. */
         private Long windowBlocks;
         /** Average block time in seconds for this network. Used as fallback by EstimatingBlockTimestampResolver. */
         private Double avgBlockTimeSeconds;
+        /** Explorer source config for this network (etherscan/blockscout). */
+        private Explorer explorer = new Explorer();
 
         public void setUrls(List<String> urls) {
             this.urls = urls != null ? urls : new ArrayList<>();
+        }
+
+        public void setExplorer(Explorer explorer) {
+            this.explorer = explorer != null ? explorer : new Explorer();
+        }
+
+        @NoArgsConstructor
+        @Getter
+        @Setter
+        public static class Explorer {
+            private ExplorerSource etherscan;
+            private ExplorerSource blockscout;
+        }
+
+        @NoArgsConstructor
+        @Getter
+        @Setter
+        public static class ExplorerSource {
+            private String baseUrl;
+            private String apiKey;
+            private boolean enabled = true;
+        }
+
+        public enum SyncMethod {
+            ETHERSCAN,
+            BLOCKSCOUT,
+            RPC
         }
     }
 }

@@ -2,10 +2,10 @@ package com.walletradar.costbasis.override;
 
 import com.walletradar.costbasis.engine.AvcoEngine;
 import com.walletradar.costbasis.event.OverrideSavedEvent;
-import com.walletradar.domain.AssetPosition;
-import com.walletradar.domain.AssetPositionRepository;
-import com.walletradar.domain.RecalcJob;
-import com.walletradar.domain.RecalcJobRepository;
+import com.walletradar.domain.accounting.AssetPosition;
+import com.walletradar.domain.accounting.AssetPositionRepository;
+import com.walletradar.domain.accounting.RecalcJob;
+import com.walletradar.domain.accounting.RecalcJobRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -67,7 +67,7 @@ class RecalcJobServiceTest {
 
         recalcJobService.onOverrideSaved(new OverrideSavedEvent(this, JOB_ID));
 
-        verify(avcoEngine).replayFromBeginning(WALLET, com.walletradar.domain.NetworkId.ETHEREUM, ASSET_CONTRACT);
+        verify(avcoEngine).replayFromBeginning(WALLET, com.walletradar.domain.common.NetworkId.ETHEREUM, ASSET_CONTRACT);
         verify(recalcJobRepository, atLeastOnce()).save(job);
         assertThat(job.getStatus()).isEqualTo(RecalcJob.RecalcStatus.COMPLETE);
         assertThat(job.getNewPerWalletAvco()).isEqualByComparingTo("2104.33");

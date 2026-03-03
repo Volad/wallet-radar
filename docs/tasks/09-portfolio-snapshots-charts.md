@@ -1,3 +1,5 @@
+> **Status:** Archived (historical). Not an active requirement source.
+
 # Feature 11: Portfolio snapshots and charts (read path)
 
 **Tasks:** T-021, T-022, T-026, T-027

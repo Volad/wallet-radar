@@ -1,7 +1,7 @@
 package com.walletradar.api.dto;
 
 import com.walletradar.api.validation.SupportedNetworks;
-import com.walletradar.domain.NetworkId;
+import com.walletradar.domain.common.NetworkId;
 
 import java.util.List;
 

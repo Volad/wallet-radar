@@ -1,41 +1,44 @@
-# WalletRadar — Task List for Worker
+# WalletRadar — Requirements Task Index (Code-Aligned)
 
-The **worker** subagent implements from this folder. Each file contains **one feature** (or one infrastructure block) with its **implementation tasks** and **acceptance criteria**.
+This folder contains task documents.  
+Only tasks listed in **Active Requirements** are considered current requirements.
 
-## File layout
+## Active Requirements
 
-| File | Content | Task IDs |
-|------|---------|----------|
-| **00-foundation.md** | Domain model, MongoDB, config (caches, async, scheduler) | T-001, T-002, T-003 |
-| **00-ingestion-core.md** | Network adapters, classifiers, normalizer, IdempotentEventStore | T-004 … T-008 |
-| **00-cost-basis-engine.md** | AvcoEngine, CrossWalletAvcoAggregatorService | T-015, T-016 |
-| **00-pricing.md** | Historical + spot price resolvers | T-019, T-020 |
-| **01-add-wallet-backfill.md** | Add wallet + backfill | T-009, T-023 |
-| **02-wallet-sync-status.md** | GET wallet sync status | T-011, T-023 (partial) |
-| **03-incremental-sync.md** | Hourly sync + POST /sync/refresh | T-010, T-023 (partial) |
-| **04-current-balance.md** | Current balance poll (10 min) + manual refresh | T-012, T-013, T-014 |
-| **05-override-recalc.md** | Override + recalc job status | T-017, T-028 |
-| **06-manual-compensating-transaction.md** | Manual compensating transaction | T-018, T-028 (partial) |
-| **07-reconciliation-get-assets.md** | Reconciliation + GET /assets | T-024, T-029 |
-| **08-transaction-history.md** | GET transaction history (paginated) | T-025 |
-| **09-portfolio-snapshots-charts.md** | Snapshots + charts | T-021, T-022, T-026, T-027 |
-| **10-backfill-refactoring.md** | Backfill package refactoring (SRP) | T-030 |
-| **11-inline-swap-price.md** | Inline price from swap when one leg is stablecoin (ADR-018) | T-031 |
-| **12-heuristic-swap-detection.md** | Heuristic swap detection: one asset out + one asset in (ADR-019) | T-032 |
-| **13-split-raw-fetch-classification.md** | Split raw fetch vs classification (ADR-020) | T-031 |
-| **14-deferred-price-cron-refactor.md** | Deferred price as cron job; remove ClassificationCompleteListener (ADR-021 amendment) | T-033 |
-| **15-normalized-transactions-pipeline.md** | Canonical status-driven normalized transaction pipeline (ADR-025) | T-034 … T-038 |
+These files are aligned with the current backend implementation and are the only source of truth for worker execution:
 
-**Dependency order:** Implement 00-* first, then 01 → 02 → … → 09. Task 10 can be done any time after T-009 is complete. Task 11 (T-031) depends on T-009 (backfill). Task 12 (T-032) depends on T-009 and works with T-031 (inline swap price). Task 15 (T-034..T-038) is the canonical ADR-025 pipeline rollout and should be implemented as one coordinated stream after current stability fixes. See **mvp-implementation-tasks.md** for full dependency graph.
+- `15-normalized-transactions-pipeline.md`
+- `16-evm-explorer-ingestion-v2.md`
+- `17-scam-filter-hardening.md`
+- `18-lp-lifecycle-disambiguation.md`
+- `19-lp-v3v4-entry-economic-completeness.md`
+- `20-explorer-selective-enrichment-policy.md`
+- `21-classifier-fast-path-coverage-and-enrichment-optimization.md`
 
-## Build and repository
+## Archived (Not Current Requirements)
 
-- **Build:** **Gradle** for backend (not Maven). Use `./gradlew` at project root; e.g. `./gradlew :backend:test`, `./gradlew :backend:bootRun`.
-- **Monorepo:** Backend and frontend in one repo; backend (e.g. root or `backend/`), frontend (e.g. `frontend/`). See **ADR-010** and `.cursor/rules/build-and-repo.mdc`.
+The following files remain for historical context only.  
+They may reference removed or renamed components (`economic_events`, `IdempotentEventStore`, `RawTransactionClassifierJob`, `InternalTransferReclassifier`) and must not be used as implementation requirements without explicit reactivation:
 
-## Workflow
+- `00-foundation.md`
+- `00-ingestion-core.md`
+- `00-cost-basis-engine.md`
+- `00-pricing.md`
+- `01-add-wallet-backfill.md`
+- `02-wallet-sync-status.md`
+- `03-incremental-sync.md`
+- `04-current-balance.md`
+- `05-override-recalc.md`
+- `06-manual-compensating-transaction.md`
+- `07-reconciliation-get-assets.md`
+- `08-transaction-history.md`
+- `09-portfolio-snapshots-charts.md`
+- `10-backfill-refactoring.md`
+- `11-inline-swap-price.md`
+- `12-heuristic-swap-detection.md`
+- `13-split-raw-fetch-classification.md`
+- `14-deferred-price-cron-refactor.md`
 
-1. Read the task(s) and acceptance criteria from the relevant file (e.g. `01-add-wallet-backfill.md`).
-2. Follow `docs/01-domain.md`, `docs/02-architecture.md`, `docs/03-accounting.md`, `docs/04-api.md`.
-3. Satisfy DoD: implementation + unit tests + integration tests where applicable.
-4. If unclear, ask the system-architect. See **risk-notes.md** for open decisions.
+## Process Rule
+
+New requirements are added only by explicit direction from product owner and then documented in a new task file or as an update to one of the active files above.

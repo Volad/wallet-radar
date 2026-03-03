@@ -1,10 +1,10 @@
 package com.walletradar.ingestion.job.backfill;
 
-import com.walletradar.domain.BackfillSegmentRepository;
-import com.walletradar.domain.NetworkId;
-import com.walletradar.domain.SyncStatus;
-import com.walletradar.domain.SyncStatusRepository;
-import com.walletradar.domain.WalletAddedEvent;
+import com.walletradar.domain.sync.BackfillSegmentRepository;
+import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.sync.SyncStatus;
+import com.walletradar.domain.sync.SyncStatusRepository;
+import com.walletradar.domain.event.WalletAddedEvent;
 import com.walletradar.ingestion.adapter.BlockHeightResolver;
 import com.walletradar.ingestion.adapter.BlockTimestampResolver;
 import com.walletradar.ingestion.adapter.NetworkAdapter;
@@ -27,7 +27,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import static com.walletradar.domain.SyncStatus.SyncStatusValue;
+import static com.walletradar.domain.sync.SyncStatus.SyncStatusValue;
 
 /**
  * Orchestrator: queue management, worker loops, event listeners, scheduled retry, reclassify trigger.

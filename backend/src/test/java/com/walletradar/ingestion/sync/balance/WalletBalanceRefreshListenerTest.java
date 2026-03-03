@@ -1,7 +1,7 @@
 package com.walletradar.ingestion.sync.balance;
 
-import com.walletradar.domain.BalanceRefreshRequestedEvent;
-import com.walletradar.domain.NetworkId;
+import com.walletradar.domain.event.BalanceRefreshRequestedEvent;
+import com.walletradar.domain.common.NetworkId;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;

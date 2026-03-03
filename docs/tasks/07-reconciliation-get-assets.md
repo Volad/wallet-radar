@@ -1,3 +1,5 @@
+> **Status:** Archived (historical). Not an active requirement source.
+
 # Feature 8 & 9: Reconciliation (on-chain vs derived) + GET /assets with cross-wallet AVCO
 
 **Tasks:** T-024, T-029

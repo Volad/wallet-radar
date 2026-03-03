@@ -1,6 +1,6 @@
 package com.walletradar.pricing.config;
 
-import com.walletradar.domain.NetworkId;
+import com.walletradar.domain.common.NetworkId;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 

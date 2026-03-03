@@ -1,11 +1,11 @@
 package com.walletradar.ingestion.store;
 
-import com.walletradar.domain.NetworkId;
-import com.walletradar.domain.NormalizedLegRole;
-import com.walletradar.domain.NormalizedTransaction;
-import com.walletradar.domain.NormalizedTransactionRepository;
-import com.walletradar.domain.NormalizedTransactionStatus;
-import com.walletradar.domain.NormalizedTransactionType;
+import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
+import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -51,10 +51,12 @@ class IdempotentNormalizedTransactionStoreIntegrationTest {
         assertThat(saved1.getId()).isNotNull();
 
         NormalizedTransaction second = tx("0xidem-norm", new BigDecimal("-120"), NormalizedTransactionStatus.PENDING_PRICE);
+        second.setGroupId("LP_POSITION:BASE:0xwallet:435853");
         NormalizedTransaction saved2 = store.upsert(second);
 
         assertThat(saved2.getId()).isEqualTo(saved1.getId());
-        assertThat(saved2.getLegs().get(0).getQuantityDelta()).isEqualByComparingTo("-120");
+        assertThat(saved2.getFlows().get(0).getQuantityDelta()).isEqualByComparingTo("-120");
+        assertThat(saved2.getGroupId()).isEqualTo("LP_POSITION:BASE:0xwallet:435853");
         assertThat(repository.findAll()).hasSize(1);
     }
 
@@ -69,12 +71,12 @@ class IdempotentNormalizedTransactionStoreIntegrationTest {
         tx.setCreatedAt(Instant.now());
         tx.setUpdatedAt(Instant.now());
 
-        NormalizedTransaction.Leg leg = new NormalizedTransaction.Leg();
+        NormalizedTransaction.Flow leg = new NormalizedTransaction.Flow();
         leg.setRole(NormalizedLegRole.SELL);
         leg.setAssetContract("0xasset");
         leg.setAssetSymbol("ASSET");
         leg.setQuantityDelta(qty);
-        tx.setLegs(List.of(leg));
+        tx.setFlows(List.of(leg));
         return tx;
     }
 }
