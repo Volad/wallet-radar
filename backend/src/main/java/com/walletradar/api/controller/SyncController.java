@@ -2,10 +2,11 @@ package com.walletradar.api.controller;
 
 import com.walletradar.api.dto.SyncRefreshRequest;
 import com.walletradar.api.dto.SyncRefreshResponse;
-import org.springframework.http.ResponseEntity;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -16,7 +17,8 @@ import org.springframework.web.bind.annotation.RestController;
 public class SyncController {
 
     @PostMapping("/refresh")
-    public ResponseEntity<SyncRefreshResponse> refresh(@RequestBody SyncRefreshRequest request) {
-        return ResponseEntity.accepted().body(new SyncRefreshResponse("Incremental sync triggered"));
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public SyncRefreshResponse refresh(@RequestBody SyncRefreshRequest request) {
+        return new SyncRefreshResponse("Incremental sync triggered");
     }
 }

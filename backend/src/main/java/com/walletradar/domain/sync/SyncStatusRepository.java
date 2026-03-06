@@ -13,6 +13,8 @@ public interface SyncStatusRepository extends MongoRepository<SyncStatus, String
 
     List<SyncStatus> findByWalletAddress(String walletAddress);
 
+    List<SyncStatus> findByWalletAddressIn(List<String> walletAddresses);
+
     Optional<SyncStatus> findByWalletAddressAndNetworkId(String walletAddress, String networkId);
 
     /** Incomplete backfills (resume after restart). */

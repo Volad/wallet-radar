@@ -18,6 +18,7 @@ import reactor.core.publisher.Mono;
 import java.net.URI;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -49,9 +50,27 @@ class EtherscanV2ExplorerProviderTest {
         assertThat(query.getFirst("startblock")).isEqualTo("10");
         assertThat(query.getFirst("endblock")).isEqualTo("20");
         assertThat(query.getFirst("page")).isEqualTo("3");
-        assertThat(query.getFirst("offset")).isEqualTo("5000");
+        assertThat(query.getFirst("offset")).isEqualTo("1000");
         assertThat(query.getFirst("chainid")).isEqualTo("42161");
         assertThat(query.getFirst("apikey")).isEqualTo("arb-key");
+    }
+
+    @Test
+    void getTransactionsReturnsEmptyWhenPageExceedsEtherscanResultWindow() {
+        TestConfig config = baseProperties();
+        AtomicInteger requestCount = new AtomicInteger(0);
+        WebClient.Builder webClientBuilder = WebClient.builder()
+                .exchangeFunction(request -> {
+                    requestCount.incrementAndGet();
+                    return Mono.just(jsonResponse("{\"status\":\"1\",\"message\":\"OK\",\"result\":[]}"));
+                });
+        EtherscanV2ExplorerProvider provider = new EtherscanV2ExplorerProvider(
+                webClientBuilder, objectMapper, config.explorerProperties(), config.networkProperties());
+
+        List<ExplorerTransaction> result = provider.getTransactions("0xabc", NetworkId.ARBITRUM, 10L, 20L, 11);
+
+        assertThat(result).isEmpty();
+        assertThat(requestCount.get()).isZero();
     }
 
     @Test

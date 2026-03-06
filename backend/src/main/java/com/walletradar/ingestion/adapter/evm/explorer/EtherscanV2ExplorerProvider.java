@@ -33,7 +33,10 @@ import java.util.function.Function;
 @Slf4j
 public class EtherscanV2ExplorerProvider implements ExplorerProvider {
 
-    private static final int PAGE_SIZE = 5000;
+    // Etherscan-compatible APIs enforce PageNo * Offset <= 10000.
+    private static final int PAGE_SIZE = 1000;
+    private static final int MAX_RESULT_WINDOW = 10_000;
+    private static final int MAX_PAGE = MAX_RESULT_WINDOW / PAGE_SIZE;
     private static final String UNIFIED_V2_BASE_URL = "https://api.etherscan.io/v2/api";
 
     private final WebClient.Builder webClientBuilder;
@@ -111,13 +114,20 @@ public class EtherscanV2ExplorerProvider implements ExplorerProvider {
             String action,
             Function<Document, T> mapper
     ) {
+        int pageNumber = Math.max(1, page);
+        if (((long) pageNumber * PAGE_SIZE) > MAX_RESULT_WINDOW) {
+            log.debug("Skipping {} page {} on {}: page*offset exceeds API result window {}",
+                    action, pageNumber, networkId, MAX_RESULT_WINDOW);
+            return List.of();
+        }
+
         Map<String, String> params = new LinkedHashMap<>();
         params.put("module", "account");
         params.put("action", action);
         params.put("address", walletAddress);
         params.put("startblock", Long.toString(fromBlock));
         params.put("endblock", Long.toString(toBlock));
-        params.put("page", Integer.toString(Math.max(1, page)));
+        params.put("page", Integer.toString(pageNumber));
         params.put("offset", Integer.toString(PAGE_SIZE));
         params.put("sort", "asc");
 
@@ -128,6 +138,11 @@ public class EtherscanV2ExplorerProvider implements ExplorerProvider {
         JsonNode result = root.path("result");
         if (!result.isArray()) {
             return List.of();
+        }
+        if (pageNumber == MAX_PAGE && result.size() >= PAGE_SIZE) {
+            log.warn("Explorer result window limit reached on {} for action {} (page={}, offset={}). " +
+                            "Consider reducing backfill window size for this network to avoid truncation.",
+                    networkId, action, pageNumber, PAGE_SIZE);
         }
         List<T> out = new ArrayList<>();
         for (JsonNode node : result) {

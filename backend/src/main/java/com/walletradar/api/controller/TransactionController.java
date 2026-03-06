@@ -4,7 +4,6 @@ import com.walletradar.api.dto.TransactionHistoryResponse;
 import com.walletradar.costbasis.query.HistoryPage;
 import com.walletradar.costbasis.query.TransactionHistoryQueryService;
 import lombok.RequiredArgsConstructor;
-import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -22,14 +21,14 @@ public class TransactionController {
     private final TransactionHistoryQueryService transactionHistoryQueryService;
 
     @GetMapping("/{assetId}/transactions")
-    public ResponseEntity<TransactionHistoryResponse> getTransactions(
+    public TransactionHistoryResponse getTransactions(
             @PathVariable String assetId,
             @RequestParam(required = false) String cursor,
             @RequestParam(required = false) Integer limit,
             @RequestParam(required = false, defaultValue = "DESC") String direction
     ) {
         HistoryPage page = transactionHistoryQueryService.findByAsset(assetId, cursor, limit, direction);
-        return ResponseEntity.ok(new TransactionHistoryResponse(
+        return new TransactionHistoryResponse(
                 page.items().stream()
                         .map(item -> new com.walletradar.api.dto.TransactionHistoryItemResponse(
                                 item.eventId(),
@@ -52,6 +51,6 @@ public class TransactionController {
                         .toList(),
                 page.nextCursor(),
                 page.hasMore()
-        ));
+        );
     }
 }

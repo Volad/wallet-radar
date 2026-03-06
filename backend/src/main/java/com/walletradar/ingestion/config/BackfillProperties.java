@@ -40,22 +40,11 @@ public class BackfillProperties {
     /** How often (ms) to run the idle reclassification hook when queue is empty (ADR-021). Default 5 min. */
     private long reclassifyScheduleIntervalMs = 300_000;
 
-    /** Number of parallel segments to split the block range into per network. Default 2 (ADR-026). */
-    private int parallelSegments = 2;
-
-    /**
-     * Maximum number of segment workers running concurrently per wallet×network backfill.
-     * This caps real RPC pressure even when {@code parallelSegments} is high.
-     */
-    private int parallelSegmentWorkers = 2;
+    /** Segment execution profiles (defaults + optional by-rpc overrides). */
+    private BackfillSegmentsConfiguration segments = new BackfillSegmentsConfiguration();
 
     /**
      * Minimum interval between persisted sync_status RUNNING progress updates.
      */
     private long progressUpdateIntervalMs = 2_000;
-
-    /**
-     * Segment considered stale if no updates longer than this threshold; stale RUNNING is reset to PENDING.
-     */
-    private long segmentStaleAfterMs = 180_000;
 }

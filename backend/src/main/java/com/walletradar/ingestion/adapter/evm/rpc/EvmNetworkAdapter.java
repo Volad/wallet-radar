@@ -103,6 +103,7 @@ public class EvmNetworkAdapter implements NetworkAdapter {
 
     private List<RawTransaction> fetchChunkWithRetry(String walletAddress, String fromTopic, String networkIdStr, long fromBlock, long toBlock, RpcEndpointRotator rotator) {
         Exception lastException = null;
+        String lastEndpoint = null;
         for (int attempt = 0; attempt < rotator.getMaxAttempts(); attempt++) {
             if (attempt > 0) {
                 try {
@@ -113,6 +114,7 @@ public class EvmNetworkAdapter implements NetworkAdapter {
                 }
             }
             String endpoint = nextEndpoint(rotator);
+            lastEndpoint = endpoint;
             try {
                 List<JsonNode> fromLogs;
                 List<JsonNode> toLogs;
@@ -207,8 +209,14 @@ public class EvmNetworkAdapter implements NetworkAdapter {
                     log.warn("RPC at {} requires address filter for eth_getLogs or block range is too narrow to split further. "
                             + "Consider replacing with a more permissive RPC.", endpoint);
                 }
+                if (isUnknownBlockError(lastException)) {
+                    log.warn("Skipping block range [{}-{}] on {} (endpoint={}) due to persistent unknown-block error: {}",
+                            fromBlock, toBlock, networkIdStr, lastEndpoint, messageOf(lastException));
+                    return List.of();
+                }
             }
         }
+
         String msg = "RPC failed after " + rotator.getMaxAttempts() + " attempts";
         if (lastException != null && lastException.getMessage() != null && !lastException.getMessage().isBlank()) {
             msg += ": " + lastException.getMessage();
@@ -263,6 +271,15 @@ public class EvmNetworkAdapter implements NetworkAdapter {
                 || msg.contains("code:30") || msg.contains("code\":30")
                 || msg.contains("timed out") || msg.contains("timeout")
                 || msg.contains("503") || msg.contains("502") || msg.contains("504");
+    }
+
+    static boolean isUnknownBlockError(Exception e) {
+        if (e == null || e.getMessage() == null) return false;
+        String msg = e.getMessage().toLowerCase();
+        return msg.contains("unknown block")
+                || msg.contains("code:26")
+                || msg.contains("code\":26")
+                || msg.contains("code\": 26");
     }
 
     /**

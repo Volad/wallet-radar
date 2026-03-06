@@ -47,7 +47,8 @@ public class EvmNativeValueClarificationResolver implements TransactionClarifica
             NetworkId.POLYGON, "MATIC",
             NetworkId.BSC, "BNB",
             NetworkId.AVALANCHE, "AVAX",
-            NetworkId.MANTLE, "MNT"
+            NetworkId.MANTLE, "MNT",
+            NetworkId.LINEA, "ETH"
     );
     private static final Map<NetworkId, String> WRAPPED_NATIVE_CONTRACT = Map.of(
             NetworkId.ETHEREUM, "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
@@ -57,7 +58,8 @@ public class EvmNativeValueClarificationResolver implements TransactionClarifica
             NetworkId.POLYGON, "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270",
             NetworkId.BSC, "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
             NetworkId.AVALANCHE, "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7",
-            NetworkId.MANTLE, "0x78c1b0c915c4faa5fffa6cabf0219da63d7f4cb8"
+            NetworkId.MANTLE, "0x78c1b0c915c4faa5fffa6cabf0219da63d7f4cb8",
+            NetworkId.LINEA, "0xe5d7c2a44ffddf6b295a15c148167daaaf5cf34f"
     );
 
     private final EvmRpcClient evmRpcClient;

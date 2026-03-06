@@ -9,6 +9,8 @@ import com.walletradar.domain.sync.SyncStatusRepository;
 import com.walletradar.ingestion.adapter.BlockHeightResolver;
 import com.walletradar.ingestion.adapter.BlockTimestampResolver;
 import com.walletradar.ingestion.adapter.NetworkAdapter;
+import com.walletradar.ingestion.config.BackfillSegmentConfiguration;
+import com.walletradar.ingestion.config.BackfillSegmentsConfiguration;
 import com.walletradar.ingestion.config.BackfillProperties;
 import com.walletradar.ingestion.config.IngestionNetworkProperties;
 import com.walletradar.ingestion.sync.progress.SyncProgressTracker;
@@ -33,6 +35,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
@@ -86,9 +89,7 @@ class BackfillNetworkExecutorTest {
 
         when(syncStatusRepository.findByWalletAddressAndNetworkId(WALLET, NETWORK)).thenReturn(Optional.of(sync));
         when(backfillProperties.getWindowBlocks()).thenReturn(100L);
-        when(backfillProperties.getParallelSegments()).thenReturn(2);
-        when(backfillProperties.getParallelSegmentWorkers()).thenReturn(2);
-        when(backfillProperties.getSegmentStaleAfterMs()).thenReturn(180_000L);
+        when(backfillProperties.getSegments()).thenReturn(segmentProfiles(2, 2, 180_000L, 6, 4, 120_000L));
         when(ingestionNetworkProperties.getNetwork()).thenReturn(Map.of());
 
         wireSegmentRepository();
@@ -233,6 +234,114 @@ class BackfillNetworkExecutorTest {
         assertThat(resumed.getProgressPct()).isEqualTo(100);
     }
 
+    @Test
+    @DisplayName("uses by-rpc segment profile for RPC sync method")
+    void usesByRpcSegmentProfileWhenNetworkIsRpc() {
+        IngestionNetworkProperties.NetworkIngestionEntry entry = new IngestionNetworkProperties.NetworkIngestionEntry();
+        entry.setSyncMethod(IngestionNetworkProperties.NetworkIngestionEntry.SyncMethod.RPC);
+        entry.setBatchBlockSize(500);
+        when(ingestionNetworkProperties.getNetwork()).thenReturn(Map.of(NETWORK, entry));
+        when(backfillProperties.getSegments()).thenReturn(segmentProfiles(2, 2, 180_000L, 3, 1, 120_000L));
+
+        doAnswer(invocation -> {
+            BackfillProgressCallback callback = invocation.getArgument(5);
+            long segTo = invocation.getArgument(4);
+            callback.reportProgress(100, segTo);
+            return null;
+        }).when(rawFetchSegmentProcessor).processSegmentWithBlockCheckpoints(
+                eq(WALLET), eq(NetworkId.ETHEREUM), eq(networkAdapter),
+                anyLong(), anyLong(), eq(500), any(BackfillProgressCallback.class));
+
+        executor.runBackfillForNetwork(
+                WALLET,
+                NetworkId.ETHEREUM,
+                networkAdapter,
+                new FixedBlockHeightResolver(90L),
+                new NoopTimestampResolver()
+        );
+
+        List<BackfillSegment> all = findAllSegments();
+        assertThat(all).hasSize(3);
+        assertThat(all)
+                .extracting(BackfillSegment::getFromBlock, BackfillSegment::getToBlock)
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple(0L, 30L),
+                        org.assertj.core.groups.Tuple.tuple(31L, 60L),
+                        org.assertj.core.groups.Tuple.tuple(61L, 90L)
+                );
+        verify(rawFetchSegmentProcessor, times(3)).processSegmentWithBlockCheckpoints(
+                eq(WALLET), eq(NetworkId.ETHEREUM), eq(networkAdapter),
+                anyLong(), anyLong(), eq(500), any(BackfillProgressCallback.class));
+        verify(rawFetchSegmentProcessor, never()).processSegment(
+                anyString(), any(NetworkId.class), any(NetworkAdapter.class),
+                anyLong(), anyLong(), any(BackfillProgressCallback.class));
+    }
+
+    @Test
+    @DisplayName("falls back to defaults when by-rpc profile is missing or invalid")
+    void fallsBackToDefaultsWhenByRpcIsInvalid() {
+        IngestionNetworkProperties.NetworkIngestionEntry entry = new IngestionNetworkProperties.NetworkIngestionEntry();
+        entry.setSyncMethod(IngestionNetworkProperties.NetworkIngestionEntry.SyncMethod.RPC);
+        entry.setBatchBlockSize(500);
+        when(ingestionNetworkProperties.getNetwork()).thenReturn(Map.of(NETWORK, entry));
+        when(backfillProperties.getSegments()).thenReturn(segmentProfiles(2, 2, 180_000L, 0, 0, 0L));
+
+        doAnswer(invocation -> {
+            BackfillProgressCallback callback = invocation.getArgument(5);
+            long segTo = invocation.getArgument(4);
+            callback.reportProgress(100, segTo);
+            return null;
+        }).when(rawFetchSegmentProcessor).processSegmentWithBlockCheckpoints(
+                eq(WALLET), eq(NetworkId.ETHEREUM), eq(networkAdapter),
+                anyLong(), anyLong(), eq(500), any(BackfillProgressCallback.class));
+
+        executor.runBackfillForNetwork(
+                WALLET,
+                NetworkId.ETHEREUM,
+                networkAdapter,
+                new FixedBlockHeightResolver(100L),
+                new NoopTimestampResolver()
+        );
+
+        List<BackfillSegment> all = findAllSegments();
+        assertThat(all).hasSize(2);
+        assertThat(all)
+                .extracting(BackfillSegment::getFromBlock, BackfillSegment::getToBlock)
+                .containsExactly(org.assertj.core.groups.Tuple.tuple(1L, 50L), org.assertj.core.groups.Tuple.tuple(51L, 100L));
+    }
+
+    @Test
+    @DisplayName("keeps legacy segment processing for non-RPC sync methods")
+    void keepsLegacyProcessingForNonRpc() {
+        IngestionNetworkProperties.NetworkIngestionEntry entry = new IngestionNetworkProperties.NetworkIngestionEntry();
+        entry.setSyncMethod(IngestionNetworkProperties.NetworkIngestionEntry.SyncMethod.ETHERSCAN);
+        when(ingestionNetworkProperties.getNetwork()).thenReturn(Map.of(NETWORK, entry));
+
+        doAnswer(invocation -> {
+            BackfillProgressCallback callback = invocation.getArgument(5);
+            long segTo = invocation.getArgument(4);
+            callback.reportProgress(100, segTo);
+            return null;
+        }).when(rawFetchSegmentProcessor).processSegment(
+                eq(WALLET), eq(NetworkId.ETHEREUM), eq(networkAdapter),
+                anyLong(), anyLong(), any(BackfillProgressCallback.class));
+
+        executor.runBackfillForNetwork(
+                WALLET,
+                NetworkId.ETHEREUM,
+                networkAdapter,
+                new FixedBlockHeightResolver(100L),
+                new NoopTimestampResolver()
+        );
+
+        verify(rawFetchSegmentProcessor, times(2)).processSegment(
+                eq(WALLET), eq(NetworkId.ETHEREUM), eq(networkAdapter),
+                anyLong(), anyLong(), any(BackfillProgressCallback.class));
+        verify(rawFetchSegmentProcessor, never()).processSegmentWithBlockCheckpoints(
+                anyString(), any(NetworkId.class), any(NetworkAdapter.class),
+                anyLong(), anyLong(), anyInt(), any(BackfillProgressCallback.class));
+    }
+
     private void wireSegmentRepository() {
         when(backfillSegmentRepository.findBySyncStatusIdOrderBySegmentIndexAsc(anyString()))
                 .thenAnswer(invocation -> {
@@ -317,6 +426,30 @@ class BackfillNetworkExecutorTest {
                 .filter(s -> SYNC_ID.equals(s.getSyncStatusId()))
                 .sorted(Comparator.comparingInt(BackfillSegment::getSegmentIndex))
                 .toList();
+    }
+
+    private static BackfillSegmentsConfiguration segmentProfiles(
+            int defaultSegments,
+            int defaultWorkers,
+            long defaultStaleMs,
+            int rpcSegments,
+            int rpcWorkers,
+            long rpcStaleMs
+    ) {
+        BackfillSegmentConfiguration defaults = new BackfillSegmentConfiguration(
+                defaultStaleMs,
+                defaultSegments,
+                defaultWorkers
+        );
+        BackfillSegmentConfiguration byRpc = new BackfillSegmentConfiguration(
+                rpcStaleMs,
+                rpcSegments,
+                rpcWorkers
+        );
+        BackfillSegmentsConfiguration profiles = new BackfillSegmentsConfiguration();
+        profiles.setDefaults(defaults);
+        profiles.setByRpc(byRpc);
+        return profiles;
     }
 
     private BackfillSegment segment(int index, long from, long to, BackfillSegment.SegmentStatus status) {

@@ -14,7 +14,7 @@ This document lists only endpoints that are currently implemented in code.
 - `POST` trigger endpoints return `202 Accepted`.
 - `GET` endpoints are read-only and return persisted data.
 - Supported networks:
-  - `ETHEREUM`, `ARBITRUM`, `OPTIMISM`, `POLYGON`, `BASE`, `BSC`, `AVALANCHE`, `MANTLE`, `SOLANA`
+  - `ETHEREUM`, `ARBITRUM`, `OPTIMISM`, `POLYGON`, `BASE`, `BSC`, `AVALANCHE`, `MANTLE`, `LINEA`, `SOLANA`
 
 ---
 
@@ -92,6 +92,100 @@ All-networks response `200`:
 Status values:
 
 - `PENDING`, `RUNNING`, `COMPLETE`, `PARTIAL`, `FAILED`, `ABANDONED`
+
+---
+
+## Sessions
+
+### Add or replace session wallets
+
+`POST /api/v1/sessions`
+
+Request:
+
+```json
+{
+  "sessionId": "549b0aba-a9af-4789-b125-ebb86314a3f1",
+  "wallets": [
+    {
+      "address": "0x1A87f12aC07E9746e9B053B8D7EF1d45270D693f",
+      "label": "Wallet 1",
+      "color": "#22d3ee",
+      "networks": ["ETHEREUM", "ARBITRUM", "OPTIMISM", "POLYGON", "BASE", "BSC", "AVALANCHE", "MANTLE", "LINEA"]
+    }
+  ]
+}
+```
+
+Behavior:
+
+- Full payload validation (all-or-nothing).
+- Repeated `POST` with same `sessionId` replaces stored wallets/settings.
+- Triggers async backfill for each wallet×network.
+
+Response `202`:
+
+```json
+{
+  "sessionId": "549b0aba-a9af-4789-b125-ebb86314a3f1",
+  "message": "Session saved, backfill started"
+}
+```
+
+### Get session settings
+
+`GET /api/v1/sessions/{sessionId}`
+
+Response `200`:
+
+```json
+{
+  "sessionId": "549b0aba-a9af-4789-b125-ebb86314a3f1",
+  "wallets": [
+    {
+      "address": "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f",
+      "label": "Wallet 1",
+      "color": "#22d3ee",
+      "networks": ["ETHEREUM", "ARBITRUM"]
+    }
+  ]
+}
+```
+
+### Get session backfill status (polling)
+
+`GET /api/v1/sessions/{sessionId}/backfill-status`
+
+Response `200`:
+
+```json
+{
+  "sessionId": "549b0aba-a9af-4789-b125-ebb86314a3f1",
+  "status": "RUNNING",
+  "overallProgressPct": 35,
+  "totalTargets": 8,
+  "completedTargets": 2,
+  "wallets": [
+    {
+      "address": "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f",
+      "label": "Wallet 1",
+      "color": "#22d3ee",
+      "networks": [
+        {
+          "networkId": "ETHEREUM",
+          "status": "RUNNING",
+          "progressPct": 35,
+          "lastBlockSynced": 21800000,
+          "backfillComplete": false,
+          "syncBannerMessage": "Raw fetch ETHEREUM: 2/6 segments complete"
+        }
+      ]
+    }
+  ]
+}
+```
+
+Returns `404` when session is not found.
 
 ---
 

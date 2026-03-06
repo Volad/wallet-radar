@@ -40,7 +40,7 @@ public class RawTxNormalizationJob {
     private final IngestionNetworkProperties ingestionNetworkProperties;
     private final List<BlockTimestampResolver> blockTimestampResolvers;
 
-    @Scheduled(fixedDelayString = "${walletradar.ingestion.classifier.schedule-interval-ms:90000}")
+//    @Scheduled(fixedDelayString = "${walletradar.ingestion.classifier.schedule-interval-ms:90000}")
     public void runScheduled() {
         runNormalization("scheduled");
     }

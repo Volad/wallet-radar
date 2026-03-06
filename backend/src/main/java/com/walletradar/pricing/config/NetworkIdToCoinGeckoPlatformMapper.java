@@ -21,6 +21,7 @@ public final class NetworkIdToCoinGeckoPlatformMapper {
             NetworkId.BSC, "binance-smart-chain",
             NetworkId.AVALANCHE, "avalanche",
             NetworkId.MANTLE, "mantle",
+            NetworkId.LINEA, "linea",
             NetworkId.SOLANA, "solana"
     );
 

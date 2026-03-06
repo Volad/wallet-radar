@@ -9,6 +9,8 @@ import com.walletradar.domain.sync.SyncStatusRepository;
 import com.walletradar.ingestion.adapter.BlockHeightResolver;
 import com.walletradar.ingestion.adapter.BlockTimestampResolver;
 import com.walletradar.ingestion.adapter.NetworkAdapter;
+import com.walletradar.ingestion.config.BackfillSegmentConfiguration;
+import com.walletradar.ingestion.config.BackfillSegmentsConfiguration;
 import com.walletradar.ingestion.config.BackfillProperties;
 import com.walletradar.ingestion.config.IngestionNetworkProperties;
 import com.walletradar.ingestion.sync.progress.SyncProgressTracker;
@@ -42,7 +44,7 @@ public class BackfillNetworkExecutor {
     private final SyncStatusRepository syncStatusRepository;
     private final BackfillSegmentRepository backfillSegmentRepository;
 
-    private static final int MAX_SEGMENTS = 365;
+    private static final int MAX_SEGMENTS = 1000;
     private static final Set<BackfillSegment.SegmentStatus> EXECUTABLE_STATUSES = Set.of(
             BackfillSegment.SegmentStatus.PENDING,
             BackfillSegment.SegmentStatus.FAILED
@@ -54,6 +56,7 @@ public class BackfillNetworkExecutor {
         String networkIdStr = networkId.name();
         try {
             syncProgressTracker.setRunning(walletAddress, networkIdStr, 0, null, "Starting " + networkIdStr + "...");
+            SegmentExecutionConfig segmentConfig = resolveSegmentExecutionConfig(networkIdStr);
             SyncStatus syncStatus = syncStatusRepository.findByWalletAddressAndNetworkId(walletAddress, networkIdStr)
                     .orElseThrow(() -> new IllegalStateException("sync_status not found for " + walletAddress + " " + networkIdStr));
 
@@ -70,8 +73,9 @@ public class BackfillNetworkExecutor {
                 return;
             }
             String syncStatusId = syncStatus.getId();
-            List<BackfillSegment> allSegments = ensureSegments(syncStatusId, walletAddress, networkIdStr, fromBlock, toBlock);
-            recoverStaleSegments(syncStatusId);
+            List<BackfillSegment> allSegments = ensureSegments(
+                    syncStatusId, walletAddress, networkIdStr, fromBlock, toBlock, segmentConfig.parallelSegments());
+            recoverStaleSegments(syncStatusId, segmentConfig.segmentStaleAfterMs());
 
             List<BackfillSegment> segmentsToRun = backfillSegmentRepository
                     .findBySyncStatusIdAndStatusInOrderBySegmentIndexAsc(syncStatusId, EXECUTABLE_STATUSES);
@@ -86,7 +90,7 @@ public class BackfillNetworkExecutor {
                 return;
             }
 
-            int requestedWorkers = Math.max(1, backfillProperties.getParallelSegmentWorkers());
+            int requestedWorkers = Math.max(1, segmentConfig.parallelSegmentWorkers());
             int effectiveWorkers = Math.min(requestedWorkers, segmentsToRun.size());
             try (ExecutorService segmentExecutor = Executors.newFixedThreadPool(effectiveWorkers)) {
                 List<CompletableFuture<Boolean>> futures = new ArrayList<>();
@@ -120,13 +124,13 @@ public class BackfillNetworkExecutor {
     }
 
     private List<BackfillSegment> ensureSegments(String syncStatusId, String walletAddress, String networkId,
-                                                 long fromBlock, long toBlock) {
+                                                 long fromBlock, long toBlock, int requestedParallelSegments) {
         List<BackfillSegment> existing = backfillSegmentRepository.findBySyncStatusIdOrderBySegmentIndexAsc(syncStatusId);
         if (!existing.isEmpty()) {
             return existing;
         }
         long totalBlocks = toBlock - fromBlock + 1;
-        int plannedSegments = Math.max(1, Math.min(MAX_SEGMENTS, backfillProperties.getParallelSegments()));
+        int plannedSegments = Math.max(1, Math.min(MAX_SEGMENTS, requestedParallelSegments));
         int segmentCount = (int) Math.max(1, Math.min(totalBlocks, plannedSegments));
         long baseSize = totalBlocks / segmentCount;
         long remainder = totalBlocks % segmentCount;
@@ -156,8 +160,8 @@ public class BackfillNetworkExecutor {
         return backfillSegmentRepository.findBySyncStatusIdOrderBySegmentIndexAsc(syncStatusId);
     }
 
-    private void recoverStaleSegments(String syncStatusId) {
-        java.time.Instant staleBefore = java.time.Instant.now().minusMillis(Math.max(1_000L, backfillProperties.getSegmentStaleAfterMs()));
+    private void recoverStaleSegments(String syncStatusId, long segmentStaleAfterMs) {
+        java.time.Instant staleBefore = java.time.Instant.now().minusMillis(Math.max(1_000L, segmentStaleAfterMs));
         List<BackfillSegment> stale = backfillSegmentRepository.findBySyncStatusIdAndStatusAndUpdatedAtBefore(
                 syncStatusId, BackfillSegment.SegmentStatus.RUNNING, staleBefore);
         if (stale.isEmpty()) {
@@ -193,11 +197,20 @@ public class BackfillNetworkExecutor {
             }
             BackfillProgressCallback callback = (progressPct, lastBlockSynced) ->
                     updateSegmentProgress(segment.getId(), progressPct, lastBlockSynced);
-            rawFetchSegmentProcessor.processSegment(
-                    walletAddress, networkId, adapter,
-                    effectiveFromBlock, segmentToBlock,
-                    callback
-            );
+            if (shouldUseRpcCheckpointing(networkId)) {
+                rawFetchSegmentProcessor.processSegmentWithBlockCheckpoints(
+                        walletAddress, networkId, adapter,
+                        effectiveFromBlock, segmentToBlock,
+                        resolveRpcCheckpointBlockSpan(networkId.name(), adapter),
+                        callback
+                );
+            } else {
+                rawFetchSegmentProcessor.processSegment(
+                        walletAddress, networkId, adapter,
+                        effectiveFromBlock, segmentToBlock,
+                        callback
+                );
+            }
             markSegmentComplete(segment.getId());
             return true;
         } catch (Exception e) {
@@ -335,5 +348,85 @@ public class BackfillNetworkExecutor {
         }
         int pct = (int) ((processed * 100) / total);
         return Math.max(0, Math.min(100, pct));
+    }
+
+    private boolean shouldUseRpcCheckpointing(NetworkId networkId) {
+        if (networkId == NetworkId.SOLANA) {
+            return false;
+        }
+        IngestionNetworkProperties.NetworkIngestionEntry entry = ingestionNetworkProperties.getNetwork() != null
+                ? ingestionNetworkProperties.getNetwork().get(networkId.name())
+                : null;
+        return entry != null
+                && entry.getSyncMethod() == IngestionNetworkProperties.NetworkIngestionEntry.SyncMethod.RPC;
+    }
+
+    private int resolveRpcCheckpointBlockSpan(String networkIdStr, NetworkAdapter adapter) {
+        IngestionNetworkProperties.NetworkIngestionEntry entry = ingestionNetworkProperties.getNetwork() != null
+                ? ingestionNetworkProperties.getNetwork().get(networkIdStr)
+                : null;
+        Integer configuredBatchSize = entry != null ? entry.getBatchBlockSize() : null;
+        if (configuredBatchSize != null && configuredBatchSize > 0) {
+            return configuredBatchSize;
+        }
+        return Math.max(1, adapter.getMaxBlockBatchSize());
+    }
+
+    private SegmentExecutionConfig resolveSegmentExecutionConfig(String networkIdStr) {
+        BackfillSegmentsConfiguration segmentsConfig = backfillProperties.getSegments();
+        BackfillSegmentConfiguration defaults = segmentsConfig != null
+                ? segmentsConfig.getDefaults()
+                : null;
+        BackfillSegmentConfiguration byRpc = segmentsConfig != null
+                ? segmentsConfig.getByRpc()
+                : null;
+
+        long defaultStaleAfterMs = positiveOrDefault(
+                defaults != null ? defaults.getSegmentStaleAfterMs() : null,
+                BackfillSegmentConfiguration.DEFAULT_SEGMENT_STALE_AFTER_MS
+        );
+        int defaultParallelSegments = positiveOrDefault(
+                defaults != null ? defaults.getParallelSegments() : null,
+                BackfillSegmentConfiguration.DEFAULT_PARALLEL_SEGMENTS
+        );
+        int defaultParallelSegmentWorkers = positiveOrDefault(
+                defaults != null ? defaults.getParallelSegmentWorkers() : null,
+                BackfillSegmentConfiguration.DEFAULT_PARALLEL_SEGMENT_WORKERS
+        );
+
+        IngestionNetworkProperties.NetworkIngestionEntry networkEntry = ingestionNetworkProperties.getNetwork() != null
+                ? ingestionNetworkProperties.getNetwork().get(networkIdStr)
+                : null;
+        boolean useRpcProfile = networkEntry != null
+                && networkEntry.getSyncMethod() == IngestionNetworkProperties.NetworkIngestionEntry.SyncMethod.RPC;
+
+        if (!useRpcProfile) {
+            return new SegmentExecutionConfig(defaultStaleAfterMs, defaultParallelSegments, defaultParallelSegmentWorkers);
+        }
+
+        long staleAfterMs = positiveOrDefault(
+                byRpc != null ? byRpc.getSegmentStaleAfterMs() : null,
+                defaultStaleAfterMs
+        );
+        int parallelSegments = positiveOrDefault(
+                byRpc != null ? byRpc.getParallelSegments() : null,
+                defaultParallelSegments
+        );
+        int parallelSegmentWorkers = positiveOrDefault(
+                byRpc != null ? byRpc.getParallelSegmentWorkers() : null,
+                defaultParallelSegmentWorkers
+        );
+        return new SegmentExecutionConfig(staleAfterMs, parallelSegments, parallelSegmentWorkers);
+    }
+
+    private static long positiveOrDefault(Long value, long fallback) {
+        return value != null && value > 0 ? value : fallback;
+    }
+
+    private static int positiveOrDefault(Integer value, int fallback) {
+        return value != null && value > 0 ? value : fallback;
+    }
+
+    private record SegmentExecutionConfig(long segmentStaleAfterMs, int parallelSegments, int parallelSegmentWorkers) {
     }
 }

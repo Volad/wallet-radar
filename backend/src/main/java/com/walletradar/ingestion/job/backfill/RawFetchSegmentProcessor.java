@@ -46,6 +46,31 @@ public class RawFetchSegmentProcessor {
         log.info("Processing segment for wallet {}, network {}, blocks {}-{}",
                 walletAddress, networkId, segFromBlock, segToBlock);
         List<RawTransaction> batch = adapter.fetchTransactions(walletAddress, networkId, segFromBlock, segToBlock);
+        persistBatch(batch);
+        progressCallback.reportProgress(100, segToBlock);
+    }
+
+    /**
+     * RPC-safe segment processing with periodic block checkpoints.
+     * After each successful sub-range we persist progress, so retries continue from the last checkpoint.
+     */
+    public void processSegmentWithBlockCheckpoints(String walletAddress, NetworkId networkId, NetworkAdapter adapter,
+                                                   long segFromBlock, long segToBlock, int checkpointBlockSpan,
+                                                   BackfillProgressCallback progressCallback) {
+        log.info("Processing segment with checkpoints for wallet {}, network {}, blocks {}-{}, checkpointBlockSpan={}",
+                walletAddress, networkId, segFromBlock, segToBlock, checkpointBlockSpan);
+        long chunkSize = Math.max(1L, checkpointBlockSpan);
+        long from = segFromBlock;
+        while (from <= segToBlock) {
+            long to = Math.min(segToBlock, from + chunkSize - 1);
+            List<RawTransaction> batch = adapter.fetchTransactions(walletAddress, networkId, from, to);
+            persistBatch(batch);
+            progressCallback.reportProgress(100, to);
+            from = to + 1;
+        }
+    }
+
+    private void persistBatch(List<RawTransaction> batch) {
         List<RawTransaction> toUpsert = new ArrayList<>(batch.size());
         for (RawTransaction tx : batch) {
             if (scamFilter.shouldDrop(tx)) {
@@ -61,7 +86,6 @@ public class RawFetchSegmentProcessor {
         if (!toUpsert.isEmpty()) {
             bulkUpsert(toUpsert);
         }
-        progressCallback.reportProgress(100, segToBlock);
     }
 
     private static void ensureId(RawTransaction tx) {

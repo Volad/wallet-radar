@@ -80,7 +80,9 @@ public class TransferClassifier implements TxClassifier {
                 || LpClassifier.isLikelyLpExitPattern(tx, walletAddress, logs)
                 || LpClassifier.isLikelyLpPositionPattern(tx, walletAddress, logs)
                 || LpClassifier.isLikelyLpEntryFromPositionContext(tx, walletAddress, logs)
+                || LpClassifier.isLikelyLpEntryWithoutMintPattern(tx, walletAddress, logs)
                 || LpClassifier.isLikelyLpExitFromPositionContext(tx, walletAddress, logs)
+                || LpClassifier.isLikelyLpExitWithoutBurnPattern(tx, walletAddress, logs)
                 || LpClassifier.isLikelyLpFeeClaimPattern(tx, walletAddress, logs)) {
             return out;
         }
@@ -406,6 +408,7 @@ public class TransferClassifier implements TxClassifier {
             case "BSC" -> new NativeAsset("0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c", "BNB");
             case "AVALANCHE" -> new NativeAsset("0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7", "AVAX");
             case "MANTLE" -> new NativeAsset("0x78c1b0c915c4faa5fffa6cabf0219da63d7f4cb8", "MNT");
+            case "LINEA" -> new NativeAsset("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "ETH");
             default -> new NativeAsset("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "ETH");
         };
     }

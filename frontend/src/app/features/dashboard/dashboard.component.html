@@ -1,0 +1,814 @@
+<div class="dashboard-shell">
+  @if (viewState().status === 'loading') {
+    <section class="state-panel">
+      <div class="spinner" aria-hidden="true"></div>
+      <h2>Loading dashboard</h2>
+      <p>Preparing portfolio snapshot and transaction history.</p>
+    </section>
+  } @else if (viewState().status === 'error') {
+    <section class="state-panel error">
+      <h2>Unable to render dashboard</h2>
+      <p>{{ errorMessage() }}</p>
+    </section>
+  } @else {
+    <header class="topbar">
+      <div class="logo-wrap">
+        <span class="logo-mark" aria-hidden="true">⚡</span>
+        <span class="logo-text">WalletRadar</span>
+      </div>
+
+      <div class="metric-strip">
+        @for (metric of data().metrics; track metric.label) {
+          <div class="metric-item">
+            <span class="metric-label">{{ metric.label }}</span>
+            <span class="metric-value mono" [style.color]="metric.color">{{ metric.value }}</span>
+          </div>
+        }
+      </div>
+
+      <div class="topbar-spacer"></div>
+
+      @if (isBackfillVisible()) {
+        <div class="backfill-pill">
+          <span class="spinner mini" aria-hidden="true"></span>
+          <span class="backfill-label">Backfill {{ backfillProgressPct() }}%</span>
+          <div class="progress-track">
+            <div class="progress-fill" [style.width.%]="backfillProgressPct()"></div>
+          </div>
+          <span class="network-subline">{{ backfillNetworksLabel() }}</span>
+        </div>
+      }
+
+      @for (wallet of data().wallets; track wallet.id) {
+        <div class="wallet-chip">
+          <span class="wallet-dot" [style.background]="wallet.color" aria-hidden="true"></span>
+          <span class="mono">{{ shortAddress(wallet.address) }}</span>
+          <span>· {{ wallet.label }}</span>
+        </div>
+      }
+
+      <button type="button" class="wallet-add-btn" (click)="openAddWalletDialog()">+ Add wallet</button>
+    </header>
+
+    <div class="workspace">
+      <nav class="icon-nav" aria-label="Sections">
+        @for (sectionMeta of data().sections; track sectionMeta.id) {
+          <button
+            type="button"
+            class="icon-nav-btn"
+            [class.active]="section() === sectionMeta.id"
+            [class.soon]="sectionMeta.soon"
+            [style.--sectionColor]="sectionMeta.color"
+            [attr.aria-label]="sectionMeta.label"
+            [disabled]="sectionMeta.soon"
+            (click)="toggleSection(sectionMeta.id)">
+            <span class="section-glyph" aria-hidden="true">{{ getSectionIcon(sectionMeta.id) }}</span>
+            @if (sectionMeta.soon) {
+              <span class="soon-dot" aria-hidden="true"></span>
+            }
+          </button>
+        }
+      </nav>
+
+      <aside class="filters" [class.collapsed]="isFiltersCollapsed()">
+        <button type="button" class="filters-toggle" (click)="toggleFiltersCollapsed()">
+          @if (!isFiltersCollapsed()) {
+            <span>Filters</span>
+          }
+          @if (activeFilterCount() > 0 && !isFiltersCollapsed()) {
+            <span class="filter-count">{{ activeFilterCount() }}</span>
+          }
+          <span class="chevron" [class.rotated]="isFiltersCollapsed()">›</span>
+        </button>
+
+        @if (!isFiltersCollapsed()) {
+          <div class="filters-content">
+            <section class="filter-group">
+              <h3 class="side-label">Wallet</h3>
+              @for (wallet of data().wallets; track wallet.id) {
+                <button
+                  type="button"
+                  class="select-chip"
+                  [class.active]="isWalletSelected(wallet.id)"
+                  [style.--chipColor]="wallet.color"
+                  (click)="toggleWallet(wallet.id)">
+                  <span class="check-box" [class.checked]="isWalletSelected(wallet.id)"></span>
+                  <span class="wallet-dot" [style.background]="wallet.color" aria-hidden="true"></span>
+                  <span class="wallet-chip-content">
+                    <span>{{ wallet.label }}</span>
+                    <span class="mono muted">{{ shortAddress(wallet.address) }}</span>
+                  </span>
+                </button>
+              }
+            </section>
+
+            <section class="filter-group">
+              <h3 class="side-label">Network</h3>
+              @for (network of data().networks; track network.id) {
+                <button
+                  type="button"
+                  class="select-chip"
+                  [class.active]="isNetworkSelected(network.id)"
+                  [style.--chipColor]="network.color"
+                  (click)="toggleNetwork(network.id)">
+                  <span class="check-box" [class.checked]="isNetworkSelected(network.id)"></span>
+                  <span class="network-icon" aria-hidden="true">{{ network.icon }}</span>
+                  <span>{{ network.label }}</span>
+                </button>
+              }
+            </section>
+
+            @if (section() === 'tokens') {
+              <label class="toggle-row">
+                <input
+                  type="checkbox"
+                  [ngModel]="hideDustAssets()"
+                  (ngModelChange)="setHideDustAssets($event)" />
+                <span>Hide &lt;$0.50 assets</span>
+              </label>
+            }
+
+            @if (section() === 'lending') {
+              <div class="warning-note">
+                <strong>Liquidity risk</strong>
+                <p>Health factor is based on the latest on-chain sync.</p>
+              </div>
+            }
+
+            @if (activeFilterCount() > 0) {
+              <button type="button" class="clear-btn" (click)="clearFilters()">Clear all</button>
+            }
+          </div>
+        }
+      </aside>
+
+      <main class="content-area">
+        <div class="section-header">
+          @if (activeSection() !== null) {
+            <span class="section-header-icon" [style.color]="activeSection()!.color">{{ getSectionIcon(activeSection()!.id) }}</span>
+            <span class="section-header-title" [style.color]="activeSection()!.color">{{ activeSection()!.label }}</span>
+          }
+
+          @if (activeFilterCount() > 0) {
+            <span class="dot-divider" aria-hidden="true">·</span>
+            @for (walletId of selectedWalletIds(); track walletId) {
+              @let selectedWallet = getWalletById(walletId);
+              @if (selectedWallet !== null) {
+                <span class="scope-pill" [style.--scopeColor]="selectedWallet.color">
+                  <span class="wallet-dot" [style.background]="selectedWallet.color"></span>
+                  {{ selectedWallet.label }}
+                </span>
+              }
+            }
+            @for (networkId of selectedNetworkIds(); track networkId) {
+              @let selectedNetwork = getNetworkById(networkId);
+              @if (selectedNetwork !== null) {
+                <span class="scope-pill" [style.--scopeColor]="selectedNetwork.color">
+                  {{ selectedNetwork.icon }} {{ selectedNetwork.label }}
+                </span>
+              }
+            }
+          }
+        </div>
+
+        <div class="panes">
+          <section class="left-pane">
+            @if (section() === 'tokens') {
+              <div class="table-head tokens-grid">
+                <span></span>
+                <span>Asset</span>
+                <span class="align-right">Qty</span>
+                <span class="align-right">Avg Cost</span>
+                <span class="align-right">Price</span>
+                <span class="align-right">P&L</span>
+              </div>
+
+              <div class="table-body">
+                @for (asset of filteredTokenPositions(); track asset.symbol) {
+                  @let network = getNetworkById(asset.networkId);
+                  <article class="tokens-grid token-row">
+                    <div class="token-avatar">{{ asset.symbol.slice(0, 2) }}</div>
+                    <div class="token-meta">
+                      <div class="token-title">
+                        {{ asset.symbol }}
+                        @if (asset.issue === 'recon') {
+                          <span class="warn-mark" title="Needs reconciliation">⚠</span>
+                        }
+                        @if (network !== null) {
+                          <span [style.color]="network.color">{{ network.icon }}</span>
+                        }
+                      </div>
+                      <div class="token-subline">{{ formatUsd(asset.quantity * asset.priceUsd) }}</div>
+                    </div>
+                    <div class="mono align-right">{{ formatQuantity(asset.quantity) }}</div>
+                    <div class="mono align-right">{{ formatUsd(asset.avcoUsd) }}</div>
+                    <div class="mono align-right">{{ formatUsd(asset.priceUsd) }}</div>
+                    <div class="align-right">
+                      <div class="mono" [class.pos]="asset.unrealizedPnlPct >= 0" [class.neg]="asset.unrealizedPnlPct < 0">
+                        {{ formatPercent(asset.unrealizedPnlPct) }}
+                      </div>
+                      <div class="mono token-subline">{{ formatUsd(asset.unrealizedPnlUsd) }}</div>
+                    </div>
+                  </article>
+                } @empty {
+                  <div class="empty-block">No token positions for current filters.</div>
+                }
+              </div>
+
+              <footer class="table-footer">
+                <span class="mono muted">{{ filteredTokenPositions().length }} assets</span>
+                <span class="mono">{{ formatUsd(filteredTokenTotalUsd()) }} total</span>
+              </footer>
+            }
+
+            @if (section() === 'lp') {
+              <div class="lp-toolbar">
+                @for (tab of lpTabs; track tab) {
+                  <button
+                    type="button"
+                    class="lp-tab"
+                    [class.active]="lpTab() === tab"
+                    (click)="setLpTab(tab)">
+                    {{ tab[0].toUpperCase() + tab.slice(1) }}
+                  </button>
+                }
+                <span class="lp-fees">
+                  Total fees:
+                  <strong class="mono">{{ formatUsd(totalOpenLpFeesUsd()) }}</strong>
+                </span>
+              </div>
+
+              <div class="lp-list">
+                @for (position of filteredLpPositions(); track position.id) {
+                  @let network = getNetworkById(position.networkId);
+                  <article class="lp-card" [class.open]="position.status === 'open'">
+                    <div class="lp-card-head">
+                      <div>
+                        <h3>
+                          {{ position.pair }}
+                          <span class="pill" [class.pill-green]="position.status === 'open'" [class.pill-def]="position.status !== 'open'">
+                            {{ position.status }}
+                          </span>
+                          @if (position.nftId !== null) {
+                            <span class="mono muted tiny">{{ position.nftId }}</span>
+                          }
+                        </h3>
+                        <p class="muted small">
+                          {{ position.protocol }}
+                          @if (network !== null) {
+                            <span [style.color]="network.color">{{ network.icon }}</span>
+                          }
+                          {{ position.networkId }}
+                          <span class="muted">· {{ position.range }}</span>
+                        </p>
+                      </div>
+                      <div class="lp-value">
+                        <strong class="mono">{{ formatUsd(position.currentValueUsd) }}</strong>
+                        <span class="muted tiny">current value</span>
+                      </div>
+                    </div>
+
+                    <div class="lp-metrics">
+                      <div>
+                        <span class="muted tiny">Fees earned</span>
+                        <strong class="mono pos">{{ formatUsd(position.feesUsd) }}</strong>
+                      </div>
+                      <div>
+                        <span class="muted tiny">Imp. loss</span>
+                        <strong class="mono" [class.pos]="position.impermanentLossPct >= 0" [class.neg]="position.impermanentLossPct < 0">
+                          {{ formatPercent(position.impermanentLossPct) }}
+                        </strong>
+                        <span class="mono muted tiny">{{ formatUsd(position.impermanentLossUsd) }}</span>
+                      </div>
+                      <div>
+                        <span class="muted tiny">Total P&L</span>
+                        <strong class="mono" [class.pos]="position.totalPnlPct >= 0" [class.neg]="position.totalPnlPct < 0">
+                          {{ formatPercent(position.totalPnlPct) }}
+                        </strong>
+                        <span class="mono muted tiny">{{ formatUsd(position.totalPnlUsd) }}</span>
+                      </div>
+                      <div>
+                        <span class="muted tiny">Entered</span>
+                        <strong class="mono">{{ position.enteredDate }}</strong>
+                      </div>
+                    </div>
+                  </article>
+                } @empty {
+                  <div class="empty-block">No LP positions for current filters.</div>
+                }
+              </div>
+            }
+
+            @if (section() === 'lending') {
+              @let lending = lendingSummary();
+              <div class="lending-health">
+                <div>
+                  <span class="muted">Health factor</span>
+                  <strong class="mono" [style.color]="lending.healthColor">{{ lending.healthFactor.toFixed(2) }}</strong>
+                </div>
+                <div class="progress-track health">
+                  <div class="progress-fill" [style.background]="lending.healthColor" [style.width.%]="lending.healthProgress"></div>
+                </div>
+                <p class="muted">
+                  Supply <span class="mono pos">{{ formatUsd(lending.totalSupply) }}</span>
+                  · Borrow <span class="mono neg">{{ formatUsd(lending.totalBorrow) }}</span>
+                </p>
+              </div>
+
+              <div class="lending-grid-wrap">
+                <h3 class="side-label">Supply positions</h3>
+                <div class="lending-grid">
+                  @for (position of filteredLendingPositions(); track position.id) {
+                    @if (position.type === 'deposit') {
+                      @let network = getNetworkById(position.networkId);
+                      <article class="lending-row supply">
+                        <span class="flow-icon up">↑</span>
+                        <div>
+                          <div class="row-title">{{ position.asset }} <span class="muted tiny">· {{ position.protocol }}</span></div>
+                          <div class="muted tiny">{{ network?.icon }} {{ position.networkId }}</div>
+                        </div>
+                        <div class="mono align-right">{{ formatQuantity(position.quantity) }} {{ position.asset }}</div>
+                        <div class="mono align-right">{{ formatUsd(position.valueUsd) }}</div>
+                        <div class="mono align-right pos">{{ position.apyPct.toFixed(1) }}%</div>
+                        <div class="mono align-right pos">+{{ formatUsd(position.earnedUsd ?? 0) }}</div>
+                      </article>
+                    }
+                  }
+                </div>
+
+                <h3 class="side-label">Borrow positions</h3>
+                <div class="lending-grid">
+                  @for (position of filteredLendingPositions(); track position.id) {
+                    @if (position.type === 'borrow') {
+                      @let network = getNetworkById(position.networkId);
+                      <article class="lending-row borrow">
+                        <span class="flow-icon down">↓</span>
+                        <div>
+                          <div class="row-title">{{ position.asset }} <span class="muted tiny">· {{ position.protocol }}</span></div>
+                          <div class="muted tiny">{{ network?.icon }} {{ position.networkId }}</div>
+                        </div>
+                        <div class="mono align-right">{{ formatQuantity(position.quantity) }} {{ position.asset }}</div>
+                        <div class="mono align-right">{{ formatUsd(position.valueUsd) }}</div>
+                        <div class="mono align-right neg">{{ position.apyPct.toFixed(1) }}%</div>
+                        <div class="mono align-right neg">{{ formatUsd(position.interestUsd ?? 0) }}</div>
+                      </article>
+                    }
+                  }
+                </div>
+              </div>
+            }
+          </section>
+
+          <section class="tx-pane">
+            <header class="tx-header">
+              <span class="tx-title">Transactions</span>
+              <label class="search-wrap">
+                <span aria-hidden="true">⌕</span>
+                <input
+                  type="search"
+                  [ngModel]="transactionSearch()"
+                  (ngModelChange)="setTransactionSearch($event)"
+                  placeholder="Search hash or symbol" />
+              </label>
+              <span class="mono muted">{{ filteredTransactions().length }} txns</span>
+            </header>
+
+            <div class="tx-columns">
+              <span></span>
+              <span>Type / Hash</span>
+              <span>Flows</span>
+              <span>Network</span>
+              <span class="align-right">Date</span>
+              <span></span>
+            </div>
+
+            <div class="tx-list">
+              @for (tx of filteredTransactions(); track tx.id) {
+                @let network = getNetworkById(tx.networkId);
+                @let wallet = getWalletById(tx.walletId);
+                @let buyFlow = getFirstFlowByRole(tx, 'BUY');
+                @let sellFlow = getFirstFlowByRole(tx, 'SELL');
+                @let txMissingPrice = hasMissingPrice(tx);
+                @let txNeedsReview = isPendingReview(tx);
+                @let txExpanded = isTransactionExpanded(tx.id);
+                @let txEditing = isTransactionEditing(tx.id);
+                @let draft = editingDraft();
+
+                <article class="tx-row-wrap">
+                  <div
+                    class="tx-row"
+                    [class.expanded]="txExpanded"
+                    (click)="toggleTransactionExpanded(tx.id)">
+                    <div class="tx-state-dot">
+                      @if (txMissingPrice) {
+                        <span class="warn-mark">⚠</span>
+                      } @else if (txNeedsReview) {
+                        <span class="muted">◷</span>
+                      } @else {
+                        <span class="ok-dot"></span>
+                      }
+                    </div>
+
+                    <div class="tx-type-block">
+                      <div class="tx-type-main">
+                        <span>{{ prettifyLabel(tx.type) }}</span>
+                        @if (tx.hasOverride) {
+                          <span class="pill pill-purple">OVR</span>
+                        }
+                        @if (txMissingPrice) {
+                          <span class="pill pill-amber">PRICE?</span>
+                        }
+                        @if (txNeedsReview) {
+                          <span class="pill pill-purple">PENDING</span>
+                        }
+                      </div>
+                      <div class="mono muted tiny">{{ tx.hash }}</div>
+                    </div>
+
+                    <div class="tx-flow-preview">
+                      @if (buyFlow !== null) {
+                        <div class="mono pos small-flow">
+                          +{{ formatQuantity(buyFlow.quantity) }} {{ buyFlow.symbol }}
+                          @if (buyFlow.priceUsd !== null) {
+                            <span class="muted">${{ buyFlow.priceUsd }}</span>
+                          } @else {
+                            <span class="neg">?</span>
+                          }
+                        </div>
+                      }
+                      @if (sellFlow !== null) {
+                        <div class="mono neg small-flow">-{{ formatQuantity(sellFlow.quantity) }} {{ sellFlow.symbol }}</div>
+                      }
+                    </div>
+
+                    <div class="tx-meta-block">
+                      <div class="meta-line">
+                        <span [style.color]="network?.color">{{ network?.icon }}</span>
+                        <span class="wallet-dot" [style.background]="wallet?.color"></span>
+                        <span class="mono muted tiny">{{ wallet?.label }}</span>
+                      </div>
+                      <span [class]="getPillClass(getStatusVariant(tx.status))">{{ prettifyLabel(tx.status) }}</span>
+                    </div>
+
+                    <div class="mono muted align-right tiny">{{ tx.timestamp.split(' ')[0] }}</div>
+
+                    <div class="tx-row-action" (click)="$event.stopPropagation()">
+                      <button
+                        type="button"
+                        class="edit-btn"
+                        [class.active]="txEditing"
+                        (click)="startTransactionEdit(tx, $event)">
+                        {{ txEditing ? 'Editing' : 'Edit' }}
+                      </button>
+                    </div>
+                  </div>
+
+                  @if (txExpanded && !txEditing) {
+                    <div class="tx-expanded-view">
+                      <div class="tx-expanded-flows">
+                        @for (flow of tx.flows; track flow.role + flow.symbol + $index) {
+                          <div class="flow-card">
+                            <span class="flow-role" [style.color]="getFlowColor(flow.role)">{{ flow.role }}</span>
+                            <strong class="mono">{{ flow.role === 'BUY' ? '+' : '-' }}{{ formatQuantity(flow.quantity) }} {{ flow.symbol }}</strong>
+                            <div class="flow-foot">
+                              @if (flow.priceUsd !== null) {
+                                <span class="mono muted">${{ flow.priceUsd }}</span>
+                              } @else {
+                                <span class="warn-mark">No price</span>
+                              }
+                              <span class="source-pill" [style.--sourceColor]="getPriceSourceColor(flow.source)">{{ flow.source }}</span>
+                            </div>
+                          </div>
+                        }
+                      </div>
+
+                      @if (txMissingPrice) {
+                        <div class="inline-warning">
+                          <span>Missing price detected. AVCO is calculated without value for this flow.</span>
+                          <button type="button" class="inline-link" (click)="startTransactionEdit(tx, $event)">Set price</button>
+                        </div>
+                      }
+
+                      @if (tx.hasOverride) {
+                        <div class="inline-note">
+                          <span>Manual override is active for this transaction.</span>
+                          <button type="button" class="inline-link subtle">Revert</button>
+                        </div>
+                      }
+                    </div>
+                  }
+
+                  @if (txExpanded && txEditing && draft !== null && draft.id === tx.id) {
+                    <div class="tx-editor">
+                      <div class="inline-warning recalc">
+                        <span>Changing type or flows triggers AVCO recalculation from this transaction forward.</span>
+                      </div>
+
+                      <div class="editor-grid two-col">
+                        <div>
+                          <label class="side-label" for="type-{{ tx.id }}">Transaction type</label>
+                          <select
+                            id="type-{{ tx.id }}"
+                            [ngModel]="draft.type"
+                            (ngModelChange)="setDraftType($event)">
+                            @for (type of transactionTypes; track type) {
+                              <option [value]="type">{{ prettifyLabel(type) }}</option>
+                            }
+                          </select>
+                        </div>
+
+                        <div>
+                          <label class="side-label" for="time-{{ tx.id }}">Block timestamp</label>
+                          <input
+                            id="time-{{ tx.id }}"
+                            type="text"
+                            [ngModel]="draft.timestamp"
+                            (ngModelChange)="setDraftTimestamp($event)"
+                            placeholder="YYYY-MM-DD HH:mm" />
+                        </div>
+                      </div>
+
+                      <div>
+                        <div class="editor-title-row">
+                          <span class="side-label">Flows</span>
+                          <button type="button" class="add-flow-btn" (click)="addDraftFlow()">+ Add flow</button>
+                        </div>
+
+                        <div class="editor-flows">
+                          @for (flow of draft.flows; track flow.role + flow.symbol + $index; let flowIndex = $index) {
+                            <article class="editor-flow-card">
+                              <div class="role-toggle">
+                                @for (role of flowRoles; track role) {
+                                  <button
+                                    type="button"
+                                    [class.active]="flow.role === role"
+                                    [style.--roleColor]="getFlowColor(role)"
+                                    (click)="setDraftFlowRole(flowIndex, role)">
+                                    {{ role }}
+                                  </button>
+                                }
+                                @if (draft.flows.length > 1) {
+                                  <button type="button" class="trash-btn" (click)="removeDraftFlow(flowIndex)">Delete</button>
+                                }
+                              </div>
+
+                              <div class="editor-grid flow-grid">
+                                <div>
+                                  <label class="side-label" for="asset-{{ tx.id }}-{{ flowIndex }}">Asset</label>
+                                  <input
+                                    id="asset-{{ tx.id }}-{{ flowIndex }}"
+                                    type="text"
+                                    [ngModel]="flow.symbol"
+                                    (ngModelChange)="setDraftFlowSymbol(flowIndex, $event)"
+                                    placeholder="ETH" />
+                                </div>
+
+                                <div>
+                                  <label class="side-label" for="qty-{{ tx.id }}-{{ flowIndex }}">Quantity</label>
+                                  <input
+                                    id="qty-{{ tx.id }}-{{ flowIndex }}"
+                                    type="text"
+                                    [ngModel]="flow.quantity ?? ''"
+                                    (ngModelChange)="setDraftFlowQuantity(flowIndex, $event)"
+                                    placeholder="0.0000" />
+                                </div>
+
+                                <div>
+                                  <label class="side-label" for="price-{{ tx.id }}-{{ flowIndex }}">Price USD</label>
+                                  <input
+                                    id="price-{{ tx.id }}-{{ flowIndex }}"
+                                    type="text"
+                                    [class.warn]="flow.priceUsd === null"
+                                    [ngModel]="flow.priceUsd ?? ''"
+                                    (ngModelChange)="setDraftFlowPrice(flowIndex, $event)"
+                                    placeholder="0.00" />
+                                </div>
+
+                                <div>
+                                  <label class="side-label" for="source-{{ tx.id }}-{{ flowIndex }}">Source</label>
+                                  <select
+                                    id="source-{{ tx.id }}-{{ flowIndex }}"
+                                    [style.color]="getPriceSourceColor(flow.source)"
+                                    [ngModel]="flow.source"
+                                    (ngModelChange)="setDraftFlowSource(flowIndex, $event)">
+                                    @for (source of priceSources; track source) {
+                                      <option [value]="source">{{ source }}</option>
+                                    }
+                                  </select>
+                                </div>
+                              </div>
+
+                              @if (flow.quantity !== null && flow.priceUsd !== null) {
+                                <div class="mono tiny muted">
+                                  ≈ {{ formatUsd(flow.quantity * flow.priceUsd) }} · {{ flow.source }}
+                                </div>
+                              }
+
+                              @if (flow.priceUsd === null) {
+                                <div class="tiny warn-mark">No price: AVCO will use quantity only.</div>
+                              }
+                            </article>
+                          }
+                        </div>
+                      </div>
+
+                      <div>
+                        <label class="side-label" for="note-{{ tx.id }}">Note</label>
+                        <input
+                          id="note-{{ tx.id }}"
+                          type="text"
+                          [ngModel]="draft.note"
+                          (ngModelChange)="setDraftNote($event)"
+                          placeholder="Reason for edit" />
+                      </div>
+
+                      <div class="editor-actions">
+                        @if (missingPricesInDraft() > 0) {
+                          <span class="tiny warn-mark">{{ missingPricesInDraft() }} flow(s) missing price</span>
+                        }
+                        <button type="button" class="cancel-btn" (click)="cancelTransactionEdit()">Cancel</button>
+                        <button type="button" class="save-btn" [disabled]="saveState() === 'saving'" (click)="saveTransactionEdit()">
+                          @if (saveState() === 'saving') {
+                            Saving...
+                          } @else if (saveState() === 'saved') {
+                            Saved!
+                          } @else {
+                            Save & Recalc
+                          }
+                        </button>
+                      </div>
+                    </div>
+                  }
+                </article>
+              } @empty {
+                <div class="empty-block">No transactions match current filters.</div>
+              }
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    @if (isAddWalletDialogOpen()) {
+      <div class="wallet-dialog-overlay" role="presentation">
+        <section
+          class="wallet-dialog"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="wallet-dialog-title"
+          (click)="$event.stopPropagation()">
+          <header class="wallet-dialog-head">
+            <div>
+              <h2 id="wallet-dialog-title">Add wallets</h2>
+              <p class="wallet-dialog-subline">Read-only · no signing required · up to 10 addresses</p>
+            </div>
+            <button type="button" class="dialog-close-btn" (click)="closeAddWalletDialog()" aria-label="Close dialog">✕</button>
+          </header>
+
+          <form class="wallet-dialog-form" [formGroup]="addWalletsForm" (ngSubmit)="submitWallets()">
+            <div class="wallet-dialog-body">
+              <div class="wallet-list-section">
+                <div class="wallet-section-head">
+                  <div class="wallet-section-title">
+                    Wallet addresses
+                    @if (walletRows().length > 1) {
+                      <span class="wallet-valid-counter">
+                        {{ walletValidationSummary().ready }}/{{ walletRows().length }} valid
+                      </span>
+                    }
+                  </div>
+                  @if (walletRows().length < 10) {
+                    <button type="button" class="add-row-btn" (click)="addWalletField()" [disabled]="isWalletSubmitBusy()">
+                      + Add row
+                    </button>
+                  }
+                </div>
+
+                <div class="wallet-columns-head">
+                  <span></span>
+                  <span>Address</span>
+                  <span>Label</span>
+                  <span></span>
+                </div>
+
+                <div class="wallet-input-list" formArrayName="wallets">
+                  @for (walletGroup of walletRows(); track trackByIndex($index); let controlIndex = $index) {
+                    @let addressState = walletAddressState(walletGroup.controls.address, controlIndex);
+                    @let addressMessage = walletAddressMessage(walletGroup.controls.address, controlIndex);
+
+                    <div class="wallet-input-entry" [formGroupName]="controlIndex">
+                      <div class="wallet-input-row">
+                        <span class="wallet-color-dot" [style.background]="walletGroup.controls.color.value" aria-hidden="true"></span>
+                        <div class="wallet-address-wrap">
+                          <input
+                            class="wallet-address-input"
+                            id="wallet-address-{{ controlIndex }}"
+                            type="text"
+                            formControlName="address"
+                            placeholder="0x..."
+                            autocomplete="off"
+                            spellcheck="false"
+                            [class.ok]="addressState === 'ok'"
+                            [class.warn]="addressState === 'warn'"
+                            [class.error]="addressState === 'error' && (walletGroup.controls.address.touched || walletGroup.controls.address.dirty)"
+                            [attr.aria-invalid]="addressState === 'error' && (walletGroup.controls.address.touched || walletGroup.controls.address.dirty)" />
+                          @if (addressState !== 'empty') {
+                            <span
+                              class="wallet-state-icon"
+                              [class.ok]="addressState === 'ok'"
+                              [class.warn]="addressState === 'warn'"
+                              [class.error]="addressState === 'error'">
+                              @if (addressState === 'ok') {
+                                ✓
+                              } @else if (addressState === 'warn') {
+                                ⚠
+                              } @else {
+                                ✕
+                              }
+                            </span>
+                          }
+                        </div>
+
+                        <input
+                          class="wallet-label-input"
+                          id="wallet-label-{{ controlIndex }}"
+                          type="text"
+                          formControlName="label"
+                          placeholder="Label"
+                          maxlength="20"
+                          autocomplete="off"
+                          spellcheck="false" />
+
+                        @if (walletRows().length > 1) {
+                          <button type="button" class="remove-wallet-btn" (click)="removeWalletField(controlIndex)">🗑</button>
+                        }
+                      </div>
+
+                      @if (showWalletAddressMessage(walletGroup.controls.address, controlIndex) && addressMessage !== null) {
+                        <p class="input-message" [class.warn]="addressState === 'warn'" [class.error]="addressState === 'error'">
+                          {{ addressMessage }}
+                        </p>
+                      }
+                    </div>
+                  }
+                </div>
+
+                <p class="wallet-paste-hint">ⓘ Paste multiple addresses separated by newline or comma — rows auto-expand</p>
+              </div>
+
+              <div class="wallet-dialog-meta">
+                <div class="wallet-section-head">
+                  <div class="wallet-section-title">Networks · applied to all wallets</div>
+                </div>
+                <div class="network-grid-fixed">
+                  @for (network of evmNetworksPresentation; track network.id) {
+                    <span class="network-chip-fixed" [style.--networkColor]="network.color">
+                      <span>{{ network.icon }}</span>
+                      <span>{{ network.label }}</span>
+                    </span>
+                  }
+                </div>
+              </div>
+
+              <div class="wallet-info-strip">
+                <span>ⓘ</span>
+                <p>
+                  Backfill scans <strong>~2 years</strong> of transactions per wallet.
+                  Estimated <span class="mono">3-8 min</span> per wallet×network.
+                </p>
+              </div>
+            </div>
+
+            @if (walletSubmitMessage() !== null) {
+              <div
+                class="wallet-submit-message"
+                [class.error]="walletSubmitState() === 'error'"
+                [class.success]="walletSubmitState() === 'success'">
+                {{ walletSubmitMessage() }}
+              </div>
+            }
+
+            <footer class="wallet-dialog-actions">
+              @if (walletValidationSummary().ready > 0) {
+                <div class="wallet-dialog-summary">
+                  <span class="mono">{{ walletValidationSummary().ready }}</span>
+                  wallet(s) · <span class="mono">{{ supportedEvmNetworks.length }}</span> networks
+                </div>
+              }
+              <button type="button" class="cancel-btn" (click)="closeAddWalletDialog()" [disabled]="isWalletSubmitBusy()">
+                Cancel
+              </button>
+              <button type="submit" class="save-btn" [disabled]="!canSubmitWallets()">
+                @if (walletSubmitState() === 'submitting') {
+                  Sending...
+                } @else {
+                  Add Wallet(s)
+                }
+              </button>
+            </footer>
+          </form>
+        </section>
+      </div>
+    }
+  }
+</div>

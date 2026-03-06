@@ -17,6 +17,7 @@ class AddressValidatorTest {
     void validEvmAddress() {
         assertThat(validator.isValidAddress("0x742d35Cc6634C0532925a3b844Bc454e4438f44e")).isTrue();
         assertThat(validator.isValidAddress("0x0000000000000000000000000000000000000000")).isTrue();
+        assertThat(validator.isValidEvmAddress("0x742d35Cc6634C0532925a3b844Bc454e4438f44e")).isTrue();
     }
 
     @Test
@@ -26,6 +27,7 @@ class AddressValidatorTest {
         assertThat(validator.isValidAddress("")).isFalse();
         assertThat(validator.isValidAddress("0x123")).isFalse();
         assertThat(validator.isValidAddress("nothex")).isFalse();
+        assertThat(validator.isValidEvmAddress("8B8f12aC07E9746e9B053B8D7EF1d45270D693f")).isFalse();
     }
 
     @Test
@@ -39,5 +41,15 @@ class AddressValidatorTest {
     void emptyOrNullNetworksAccepted() {
         assertThat(validator.areValidNetworks(null)).isTrue();
         assertThat(validator.areValidNetworks(List.of())).isTrue();
+    }
+
+    @Test
+    @DisplayName("EVM networks validator rejects SOLANA and empty sets")
+    void evmNetworksValidation() {
+        assertThat(validator.areValidEvmNetworks(List.of(NetworkId.ETHEREUM, NetworkId.ARBITRUM))).isTrue();
+        assertThat(validator.areValidEvmNetworks(List.of(NetworkId.LINEA))).isTrue();
+        assertThat(validator.areValidEvmNetworks(List.of(NetworkId.SOLANA))).isFalse();
+        assertThat(validator.areValidEvmNetworks(List.of())).isFalse();
+        assertThat(validator.areValidEvmNetworks(null)).isFalse();
     }
 }

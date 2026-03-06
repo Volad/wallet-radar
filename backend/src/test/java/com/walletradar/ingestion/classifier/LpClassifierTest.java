@@ -141,6 +141,151 @@ class LpClassifierTest {
     }
 
     @Test
+    void classify_lfjAddLiquidityWithoutLpMint_emitsNetLpEntryLegs() {
+        String wallet = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String walletTopic = "0x0000000000000000000000001a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String pairTopic = "0x0000000000000000000000008573f98175d816d520248b5facf40d309b1c9cee";
+        String router = "0x18556da13313f3532c54711497a8fedac273220e";
+        String ausd = "0x00000000efe302beaa2b3e6e1b18d08d69a9012a";
+        String usdc = "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e";
+
+        when(evmTokenDecimalsResolver.getDecimals(eq("AVALANCHE"), eq(ausd))).thenReturn(6);
+        when(evmTokenDecimalsResolver.getDecimals(eq("AVALANCHE"), eq(usdc))).thenReturn(6);
+        when(evmTokenDecimalsResolver.getSymbol(eq("AVALANCHE"), eq(ausd))).thenReturn("AUSD");
+        when(evmTokenDecimalsResolver.getSymbol(eq("AVALANCHE"), eq(usdc))).thenReturn("USDC");
+
+        RawTransaction tx = new RawTransaction();
+        tx.setNetworkId("AVALANCHE");
+        tx.setRawData(new Document("from", wallet)
+                .append("to", router)
+                .append("methodId", "0xa3c7271a")
+                .append("functionName", "addLiquidity((address tokenX,address tokenY,...))")
+                .append("logs", List.of(
+                        new Document("address", ausd)
+                                .append("topics", List.of(TransferClassifier.TRANSFER_TOPIC, walletTopic, pairTopic))
+                                .append("data", "0x000000000000000000000000000000000000000000000000000000001dc13018")
+                                .append("logIndex", "0x1"),
+                        new Document("address", usdc)
+                                .append("topics", List.of(TransferClassifier.TRANSFER_TOPIC, walletTopic, pairTopic))
+                                .append("data", "0x000000000000000000000000000000000000000000000000000000001ddc29ea")
+                                .append("logIndex", "0x2"),
+                        new Document("address", ausd)
+                                .append("topics", List.of(TransferClassifier.TRANSFER_TOPIC, pairTopic, walletTopic))
+                                .append("data", "0x0000000000000000000000000000000000000000000000000000000000000003")
+                                .append("logIndex", "0x3"),
+                        new Document("address", usdc)
+                                .append("topics", List.of(TransferClassifier.TRANSFER_TOPIC, pairTopic, walletTopic))
+                                .append("data", "0x0000000000000000000000000000000000000000000000000000000000000003")
+                                .append("logIndex", "0x4")
+                )));
+
+        List<RawClassifiedEvent> events = classifier.classify(tx, wallet);
+        List<RawClassifiedEvent> transferEvents = transferClassifier.classify(tx, wallet);
+
+        assertThat(events).hasSize(2);
+        assertThat(events).allMatch(e -> e.getEventType() == EconomicEventType.LP_ENTRY);
+        assertThat(events.stream().allMatch(e -> e.getQuantityDelta().signum() < 0)).isTrue();
+        assertThat(events.stream()
+                .filter(e -> ausd.equals(e.getAssetContract()))
+                .findFirst()
+                .orElseThrow()
+                .getQuantityDelta()).isEqualByComparingTo("-499.200021");
+        assertThat(events.stream()
+                .filter(e -> usdc.equals(e.getAssetContract()))
+                .findFirst()
+                .orElseThrow()
+                .getQuantityDelta()).isEqualByComparingTo("-500.967911");
+        assertThat(transferEvents).isEmpty();
+    }
+
+    @Test
+    void classify_lfjRemoveLiquidityWithoutLpBurn_emitsLpExitInflows() {
+        String wallet = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String walletTopic = "0x0000000000000000000000001a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String pairTopic = "0x0000000000000000000000008573f98175d816d520248b5facf40d309b1c9cee";
+        String router = "0x18556da13313f3532c54711497a8fedac273220e";
+        String ausd = "0x00000000efe302beaa2b3e6e1b18d08d69a9012a";
+        String usdc = "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e";
+
+        when(evmTokenDecimalsResolver.getDecimals(eq("AVALANCHE"), eq(ausd))).thenReturn(6);
+        when(evmTokenDecimalsResolver.getDecimals(eq("AVALANCHE"), eq(usdc))).thenReturn(6);
+        when(evmTokenDecimalsResolver.getSymbol(eq("AVALANCHE"), eq(ausd))).thenReturn("AUSD");
+        when(evmTokenDecimalsResolver.getSymbol(eq("AVALANCHE"), eq(usdc))).thenReturn("USDC");
+
+        RawTransaction tx = new RawTransaction();
+        tx.setNetworkId("AVALANCHE");
+        tx.setRawData(new Document("from", wallet)
+                .append("to", router)
+                .append("methodId", "0xc22159b6")
+                .append("functionName", "removeLiquidity(address tokenX,address tokenY,uint16 binStep,...)")
+                .append("logs", List.of(
+                        new Document("address", ausd)
+                                .append("topics", List.of(TransferClassifier.TRANSFER_TOPIC, pairTopic, walletTopic))
+                                .append("data", "0x00000000000000000000000000000000000000000000000000000000062b9fb5")
+                                .append("logIndex", "0x1"),
+                        new Document("address", usdc)
+                                .append("topics", List.of(TransferClassifier.TRANSFER_TOPIC, pairTopic, walletTopic))
+                                .append("data", "0x0000000000000000000000000000000000000000000000000000000035711ffd")
+                                .append("logIndex", "0x2")
+                )));
+
+        List<RawClassifiedEvent> events = classifier.classify(tx, wallet);
+        List<RawClassifiedEvent> transferEvents = transferClassifier.classify(tx, wallet);
+
+        assertThat(events).hasSize(2);
+        assertThat(events).allMatch(e -> e.getEventType() == EconomicEventType.LP_EXIT);
+        assertThat(events.stream().allMatch(e -> e.getQuantityDelta().signum() > 0)).isTrue();
+        assertThat(events.stream()
+                .filter(e -> ausd.equals(e.getAssetContract()))
+                .findFirst()
+                .orElseThrow()
+                .getQuantityDelta()).isEqualByComparingTo("103.522229");
+        assertThat(events.stream()
+                .filter(e -> usdc.equals(e.getAssetContract()))
+                .findFirst()
+                .orElseThrow()
+                .getQuantityDelta()).isEqualByComparingTo("896.606205");
+        assertThat(transferEvents).isEmpty();
+    }
+
+    @Test
+    void classify_lfjRemoveLiquidityWithoutLpBurn_isDeterministic() {
+        String wallet = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String walletTopic = "0x0000000000000000000000001a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String pairTopic = "0x0000000000000000000000008573f98175d816d520248b5facf40d309b1c9cee";
+        String router = "0x18556da13313f3532c54711497a8fedac273220e";
+        String ausd = "0x00000000efe302beaa2b3e6e1b18d08d69a9012a";
+        String usdc = "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e";
+
+        when(evmTokenDecimalsResolver.getDecimals(eq("AVALANCHE"), eq(ausd))).thenReturn(6);
+        when(evmTokenDecimalsResolver.getDecimals(eq("AVALANCHE"), eq(usdc))).thenReturn(6);
+        when(evmTokenDecimalsResolver.getSymbol(eq("AVALANCHE"), eq(ausd))).thenReturn("AUSD");
+        when(evmTokenDecimalsResolver.getSymbol(eq("AVALANCHE"), eq(usdc))).thenReturn("USDC");
+
+        RawTransaction tx = new RawTransaction();
+        tx.setNetworkId("AVALANCHE");
+        tx.setRawData(new Document("from", wallet)
+                .append("to", router)
+                .append("methodId", "0xc22159b6")
+                .append("functionName", "removeLiquidity(address tokenX,address tokenY,uint16 binStep,...)")
+                .append("logs", List.of(
+                        new Document("address", ausd)
+                                .append("topics", List.of(TransferClassifier.TRANSFER_TOPIC, pairTopic, walletTopic))
+                                .append("data", "0x00000000000000000000000000000000000000000000000000000000062b9fb5")
+                                .append("logIndex", "0x1"),
+                        new Document("address", usdc)
+                                .append("topics", List.of(TransferClassifier.TRANSFER_TOPIC, pairTopic, walletTopic))
+                                .append("data", "0x0000000000000000000000000000000000000000000000000000000035711ffd")
+                                .append("logIndex", "0x2")
+                )));
+
+        List<RawClassifiedEvent> first = classifier.classify(tx, wallet);
+        List<RawClassifiedEvent> second = classifier.classify(tx, wallet);
+
+        assertThat(second).usingRecursiveComparison().isEqualTo(first);
+    }
+
+    @Test
     void classify_lpPositionNftTransferBackToWallet_emitsLpPositionUnstake() {
         String wallet = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
         String walletTopic = "0x0000000000000000000000001a87f12ac07e9746e9b053b8d7ef1d45270d693f";

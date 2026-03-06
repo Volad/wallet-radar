@@ -15,18 +15,24 @@ walletradar:
     # L2s: set per-network window-blocks so backfill covers ~2 years (e.g. Arbitrum ~4 bl/s → 252M).
     backfill:
       window-blocks: 5256000
-      parallel-segments: 2
-      parallel-segment-workers: 2
+      segments:
+        defaults:
+          segment-stale-after-ms: 180000
+          parallel-segments: 2
+          parallel-segment-workers: 2
+        by-rpc:
+          segment-stale-after-ms: 120000
+          parallel-segments: 424
+          parallel-segment-workers: 6
       worker-threads: 4
       progress-update-interval-ms: 2000
-      segment-stale-after-ms: 180000
       max-retries: 5
       retry-base-delay-minutes: 2
       retry-max-delay-minutes: 60
       retry-scheduler-interval-ms: 120000
       reclassify-schedule-interval-ms: 300000
     evm-rpc:
-      max-requests-per-second: 2000
+      max-requests-per-second: 1000
       endpoint-cooldown-ms: 3000
       transient-error-cooldown-ms: 15000
       batch-unsupported-cooldown-ms: 300000
@@ -82,7 +88,7 @@ walletradar:
         chain-id: "10"
         explorer:
           blockscout:
-            base-url: https://optimism.blockscout.com
+            base-url: https://explorer.optimism.io
             api-key: ${OPTIMISM_BLOCKSCOUT_API_KEY:}
         urls:
           - https://rpc.ankr.com/optimism/${ANKR_API_KEY:}
@@ -124,20 +130,21 @@ walletradar:
         avg-block-time-seconds: 2.0
       # Some BSC public RPCs prune old blocks (e.g. "History has been pruned"); multiple endpoints improve retry.
       BSC:
-        syncMethod: BLOCKSCOUT
+        syncMethod: RPC
         chain-id: "56"
         urls:
+#          - https://lb.drpc.live/bsc/${DRPC_API_KEY:}
           - https://rpc.ankr.com/bsc/${ANKR_API_KEY:}
-          - https://lb.drpc.live/bsc/${DRPC_API_KEY:}
-          - https://bsc-dataseed.binance.org
-          - https://bsc-dataseed1.defibit.io
-          - https://bsc-dataseed1.ninicoin.io
-        batch-block-size: 1000
-        window-blocks: 21024000    # ~2 years at ~3s/block
-        avg-block-time-seconds: 3.0
+        batch-block-size: 500
+        window-blocks: 31000000    # tuned to current wallet history coverage with safety margin
+        avg-block-time-seconds: 0.5
       AVALANCHE:
-        syncMethod: BLOCKSCOUT
+        syncMethod: ETHERSCAN
         chain-id: "43114"
+        explorer:
+          etherscan:
+            base-url: https://api.routescan.io/v2/network/mainnet/evm/43114/etherscan
+            api-key: ${AVALANCHE_ETHERSCAN_API_KEY:}
         urls:
           - https://rpc.ankr.com/avalanche/${ANKR_API_KEY:}
           - https://lb.drpc.live/avalanche/${DRPC_API_KEY:}
@@ -253,3 +260,19 @@ walletradar:
     # Add known scam/drainer/phishing addresses (EVM: 0x..., case-insensitive). Example:
     # blocklist:
     #   - "0x..."
+  # API CORS policy for local SPA development and browser preflight (OPTIONS).
+  api:
+    cors:
+      allowed-origins:
+        - http://localhost:4200
+        - http://127.0.0.1:4200
+      allowed-methods:
+        - GET
+        - POST
+        - PUT
+        - PATCH
+        - DELETE
+        - OPTIONS
+      allowed-headers:
+        - "*"
+      max-age-seconds: 3600

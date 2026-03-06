@@ -23,6 +23,12 @@ Current implementation baseline:
 - **T-047** — `19-lp-v3v4-entry-economic-completeness.md`
 - **T-048** — `20-explorer-selective-enrichment-policy.md`
 - **T-049** — `21-classifier-fast-path-coverage-and-enrichment-optimization.md`
+- **T-050** — `22-session-controller-and-backfill-status.md`
+- **T-051** — `23-backfill-segment-configuration-by-sync-method.md`
+
+## Current Step
+
+- **T-051** — Planned for implementation (backend config/executor refactor + tests).
 
 ## Removed From Active Requirements
 

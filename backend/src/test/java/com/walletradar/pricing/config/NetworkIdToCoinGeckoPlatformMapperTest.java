@@ -21,6 +21,7 @@ class NetworkIdToCoinGeckoPlatformMapperTest {
         assertThat(NetworkIdToCoinGeckoPlatformMapper.toPlatformId(NetworkId.BSC)).hasValue("binance-smart-chain");
         assertThat(NetworkIdToCoinGeckoPlatformMapper.toPlatformId(NetworkId.AVALANCHE)).hasValue("avalanche");
         assertThat(NetworkIdToCoinGeckoPlatformMapper.toPlatformId(NetworkId.MANTLE)).hasValue("mantle");
+        assertThat(NetworkIdToCoinGeckoPlatformMapper.toPlatformId(NetworkId.LINEA)).hasValue("linea");
         assertThat(NetworkIdToCoinGeckoPlatformMapper.toPlatformId(NetworkId.SOLANA)).hasValue("solana");
     }
 

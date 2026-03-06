@@ -12,5 +12,6 @@ public enum NetworkId {
     BSC,
     AVALANCHE,
     MANTLE,
+    LINEA,
     SOLANA
 }

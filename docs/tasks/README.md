@@ -14,6 +14,8 @@ These files are aligned with the current backend implementation and are the only
 - `19-lp-v3v4-entry-economic-completeness.md`
 - `20-explorer-selective-enrichment-policy.md`
 - `21-classifier-fast-path-coverage-and-enrichment-optimization.md`
+- `22-session-controller-and-backfill-status.md`
+- `23-backfill-segment-configuration-by-sync-method.md`
 
 ## Archived (Not Current Requirements)
 

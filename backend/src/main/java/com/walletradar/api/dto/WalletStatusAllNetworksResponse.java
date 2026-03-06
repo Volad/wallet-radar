@@ -5,7 +5,10 @@ import java.util.List;
 /**
  * GET /api/v1/wallets/{address}/status (all networks) response.
  */
-public record WalletStatusAllNetworksResponse(String walletAddress, List<NetworkStatusEntry> networks) {
+public record WalletStatusAllNetworksResponse(
+        String walletAddress,
+        List<NetworkStatusEntry> networks
+) {
 
     public record NetworkStatusEntry(
             String networkId,

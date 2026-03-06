@@ -21,6 +21,7 @@ import org.springframework.data.mongodb.core.query.Update;
 
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.List;
+import java.util.ArrayList;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -129,6 +130,38 @@ class RawFetchSegmentProcessorTest {
         processor.processSegment("0xWALLET", NetworkId.ETHEREUM, adapter,
                 1L, 100L, (pct, lastBlock) -> {});
 
+        verify(mongoTemplate, never()).bulkOps(any(), any(Class.class));
+    }
+
+    @Test
+    @DisplayName("processSegmentWithBlockCheckpoints reports progress per chunk for RPC resume")
+    void processSegmentWithBlockCheckpoints_reportsProgressPerChunk() {
+        List<String> ranges = new ArrayList<>();
+        NetworkAdapter adapter = new NetworkAdapter() {
+            @Override
+            public boolean supports(NetworkId networkId) { return true; }
+            @Override
+            public int getMaxBlockBatchSize() { return 50; }
+            @Override
+            public List<RawTransaction> fetchTransactions(String wallet, NetworkId network, long from, long to) {
+                ranges.add(from + "-" + to);
+                return List.of();
+            }
+        };
+        List<Long> checkpoints = new ArrayList<>();
+
+        processor.processSegmentWithBlockCheckpoints(
+                "0xWALLET",
+                NetworkId.BSC,
+                adapter,
+                1L,
+                10L,
+                4,
+                (pct, lastBlock) -> checkpoints.add(lastBlock)
+        );
+
+        assertThat(ranges).containsExactly("1-4", "5-8", "9-10");
+        assertThat(checkpoints).containsExactly(4L, 8L, 10L);
         verify(mongoTemplate, never()).bulkOps(any(), any(Class.class));
     }
 }

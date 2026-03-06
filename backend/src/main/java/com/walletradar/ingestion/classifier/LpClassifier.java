@@ -100,15 +100,32 @@ public class LpClassifier implements TxClassifier {
             "0x10ed43c718714eb63d5aa57b78b54704e256024e", // Pancake V2 Router
             "0x13f4ea83d0bd40e75c8222255bc855a974568dd4", // Pancake Universal Router
             "0xc873fecbd354f5a56e00e710b90ef4201db2448d", // Camelot Router
-            "0x60ae616a2155ee3d9a68541ba4544862310933d4"  // Trader Joe Router
+            "0x60ae616a2155ee3d9a68541ba4544862310933d4", // Trader Joe Router
+            "0x18556da13313f3532c54711497a8fedac273220e"  // LFJ/Trader Joe LB Router (Avalanche)
     );
 
     private static final Set<String> LP_ENTRY_FUNCTION_HINTS = Set.of(
             "addliquidity", "joinpool", "mint", "increaseliquidity"
     );
 
+    private static final Set<String> LP_ENTRY_NO_MINT_FUNCTION_HINTS = Set.of(
+            "addliquidity", "joinpool", "increaseliquidity"
+    );
+
+    private static final Set<String> LP_ENTRY_NO_MINT_SELECTOR_HINTS = Set.of(
+            "0xa3c7271a" // LFJ LB router addLiquidity((...))
+    );
+
     private static final Set<String> LP_EXIT_FUNCTION_HINTS = Set.of(
             "removeliquidity", "exitpool", "burn", "decreaseliquidity"
+    );
+
+    private static final Set<String> LP_EXIT_NO_BURN_FUNCTION_HINTS = Set.of(
+            "removeliquidity", "exitpool", "decreaseliquidity"
+    );
+
+    private static final Set<String> LP_EXIT_NO_BURN_SELECTOR_HINTS = Set.of(
+            "0xc22159b6" // LFJ LB router removeLiquidity(...)
     );
 
     // Pancake/Uniswap/Aerodrome CL position NFTs.
@@ -201,8 +218,23 @@ public class LpClassifier implements TxClassifier {
                 return entry;
             }
         }
+        if (isLikelyLpEntryWithoutMintPattern(tx, walletAddress, logs)) {
+            List<RawClassifiedEvent> entryWithoutMint = classifyLpEntryWithoutMintEvidence(tx, walletAddress, logs);
+            if (!entryWithoutMint.isEmpty()) {
+                return entryWithoutMint;
+            }
+        }
         if (isLikelyLpExitPattern(tx, walletAddress, logs)) {
-            return classifyLpExit(tx, walletAddress, logs);
+            List<RawClassifiedEvent> exit = classifyLpExit(tx, walletAddress, logs);
+            if (!exit.isEmpty()) {
+                return exit;
+            }
+        }
+        if (isLikelyLpExitWithoutBurnPattern(tx, walletAddress, logs)) {
+            List<RawClassifiedEvent> exitWithoutBurn = classifyLpExitWithoutBurnEvidence(tx, walletAddress, logs);
+            if (!exitWithoutBurn.isEmpty()) {
+                return exitWithoutBurn;
+            }
         }
         return List.of();
     }
@@ -290,6 +322,58 @@ public class LpClassifier implements TxClassifier {
         return !outflowContracts.isEmpty() && !mintToWalletContracts.isEmpty();
     }
 
+    static boolean isLikelyLpEntryWithoutMintPattern(
+            RawTransactionNormalizationView tx,
+            String walletAddress,
+            List<Document> logs
+    ) {
+        if (tx == null || walletAddress == null || walletAddress.isBlank() || logs == null || logs.isEmpty()) {
+            return false;
+        }
+        if (isFailedTx(tx)) {
+            return false;
+        }
+        String wallet = tx.normalizeAddressValue(walletAddress);
+        String txSender = tx.readRawOrExplorerAddress("from");
+        if (wallet == null || txSender == null || !wallet.equals(txSender)) {
+            return false;
+        }
+        if (!isLpEntryWithoutMintContext(tx)) {
+            return false;
+        }
+
+        String walletTopic = tx.padAddressForTopic(walletAddress);
+        Set<String> outflowContracts = new LinkedHashSet<>();
+        Set<String> inflowContracts = new LinkedHashSet<>();
+        boolean hasMintToWallet = false;
+        for (Document log : logs) {
+            List<String> topics = tx.getLogTopics(log);
+            if (topics == null || topics.size() < 3 || topics.size() >= 4 || !TRANSFER_TOPIC.equalsIgnoreCase(topics.get(0))) {
+                continue;
+            }
+            String tokenAddress = tx.normalizeAddressValue(tx.getLogAddress(log));
+            if (tokenAddress == null) {
+                continue;
+            }
+            String fromTopic = topics.get(1);
+            String toTopic = topics.get(2);
+            if (walletTopic.equalsIgnoreCase(fromTopic) && !ZERO_ADDRESS_TOPIC.equalsIgnoreCase(toTopic)) {
+                outflowContracts.add(tokenAddress);
+            } else if (walletTopic.equalsIgnoreCase(toTopic) && !ZERO_ADDRESS_TOPIC.equalsIgnoreCase(fromTopic)) {
+                inflowContracts.add(tokenAddress);
+            } else if (walletTopic.equalsIgnoreCase(toTopic) && ZERO_ADDRESS_TOPIC.equalsIgnoreCase(fromTopic)) {
+                hasMintToWallet = true;
+            }
+        }
+        if (hasMintToWallet) {
+            return false;
+        }
+        if (outflowContracts.size() < 2) {
+            return false;
+        }
+        return inflowContracts.isEmpty() || outflowContracts.containsAll(inflowContracts);
+    }
+
     static boolean isLikelyLpExitPattern(RawTransactionNormalizationView tx, String walletAddress, List<Document> logs) {
         if (tx == null || walletAddress == null || walletAddress.isBlank() || logs == null || logs.isEmpty()) {
             return false;
@@ -326,6 +410,61 @@ public class LpClassifier implements TxClassifier {
             }
         }
         return !burnFromWalletContracts.isEmpty() && !inflowContracts.isEmpty();
+    }
+
+    static boolean isLikelyLpExitWithoutBurnPattern(
+            RawTransactionNormalizationView tx,
+            String walletAddress,
+            List<Document> logs
+    ) {
+        if (tx == null || walletAddress == null || walletAddress.isBlank() || logs == null || logs.isEmpty()) {
+            return false;
+        }
+        if (isFailedTx(tx)) {
+            return false;
+        }
+        String wallet = tx.normalizeAddressValue(walletAddress);
+        String txSender = tx.readRawOrExplorerAddress("from");
+        if (wallet == null || txSender == null || !wallet.equals(txSender)) {
+            return false;
+        }
+        if (!isLpExitWithoutBurnContext(tx) || !isKnownLpRouterCall(tx)) {
+            return false;
+        }
+
+        String walletTopic = tx.padAddressForTopic(walletAddress);
+        Set<String> inflowContracts = new LinkedHashSet<>();
+        boolean hasWalletOutboundErc20 = false;
+        boolean hasWalletBurn = false;
+        boolean hasWalletMint = false;
+        for (Document log : logs) {
+            List<String> topics = tx.getLogTopics(log);
+            if (topics == null || topics.size() < 3 || topics.size() >= 4 || !TRANSFER_TOPIC.equalsIgnoreCase(topics.get(0))) {
+                continue;
+            }
+            String tokenAddress = tx.normalizeAddressValue(tx.getLogAddress(log));
+            if (tokenAddress == null) {
+                continue;
+            }
+            String fromTopic = topics.get(1);
+            String toTopic = topics.get(2);
+            if (walletTopic.equalsIgnoreCase(toTopic) && !ZERO_ADDRESS_TOPIC.equalsIgnoreCase(fromTopic)) {
+                inflowContracts.add(tokenAddress);
+            }
+            if (walletTopic.equalsIgnoreCase(fromTopic) && !ZERO_ADDRESS_TOPIC.equalsIgnoreCase(toTopic)) {
+                hasWalletOutboundErc20 = true;
+            }
+            if (walletTopic.equalsIgnoreCase(fromTopic) && ZERO_ADDRESS_TOPIC.equalsIgnoreCase(toTopic)) {
+                hasWalletBurn = true;
+            }
+            if (walletTopic.equalsIgnoreCase(toTopic) && ZERO_ADDRESS_TOPIC.equalsIgnoreCase(fromTopic)) {
+                hasWalletMint = true;
+            }
+        }
+        if (hasWalletBurn || hasWalletMint) {
+            return false;
+        }
+        return !inflowContracts.isEmpty() && !hasWalletOutboundErc20;
     }
 
     static boolean isLikelyLpPositionPattern(RawTransactionNormalizationView tx, String walletAddress, List<Document> logs) {
@@ -803,6 +942,48 @@ public class LpClassifier implements TxClassifier {
         return out;
     }
 
+    private List<RawClassifiedEvent> classifyLpEntryWithoutMintEvidence(
+            RawTransactionNormalizationView tx,
+            String walletAddress,
+            List<Document> logs
+    ) {
+        FlowSummary summary = collectFlowSummary(tx, walletAddress, logs);
+        if (summary.outflows.size() < 2) {
+            return List.of();
+        }
+        if (!summary.inflows.isEmpty() && !summary.outflows.keySet().containsAll(summary.inflows.keySet())) {
+            return List.of();
+        }
+
+        String txTo = tx.readRawOrExplorerAddress("to");
+        String txProtocol = normalizeProtocol(protocolRegistry.getProtocolName(txTo).orElse(null));
+        String positionId = resolvePositionId(tx, logs);
+
+        List<RawClassifiedEvent> out = new ArrayList<>();
+        for (String contract : summary.outflows.keySet()) {
+            BigDecimal outboundQty = summary.outflows.get(contract);
+            if (outboundQty == null || outboundQty.signum() >= 0) {
+                continue;
+            }
+            BigDecimal inboundQty = summary.inflows.getOrDefault(contract, BigDecimal.ZERO);
+            BigDecimal netQty = outboundQty.add(inboundQty);
+            if (netQty.signum() >= 0) {
+                continue;
+            }
+            RawClassifiedEvent event = new RawClassifiedEvent();
+            event.setEventType(EconomicEventType.LP_ENTRY);
+            event.setWalletAddress(walletAddress);
+            event.setAssetContract(contract);
+            event.setAssetSymbol(resolveSymbol(tx, contract, summary.metaByContract.get(contract)));
+            event.setQuantityDelta(netQty);
+            event.setProtocolName(resolveProtocolName(txTo, txProtocol, contract));
+            event.setLogIndex(summary.outflowLogIndex.get(contract));
+            event.setPositionId(positionId);
+            out.add(event);
+        }
+        return out;
+    }
+
     private List<RawClassifiedEvent> classifyLpEntry(RawTransactionNormalizationView tx, String walletAddress, List<Document> logs) {
         FlowSummary summary = collectFlowSummary(tx, walletAddress, logs);
         if (summary.outflows.isEmpty() || summary.inflows.isEmpty()) {
@@ -939,6 +1120,37 @@ public class LpClassifier implements TxClassifier {
             leg.setProtocolName(resolveProtocolName(txTo, txProtocol, contract));
             leg.setLogIndex(summary.inflowLogIndex.get(contract));
             out.add(leg);
+        }
+        return out;
+    }
+
+    private List<RawClassifiedEvent> classifyLpExitWithoutBurnEvidence(
+            RawTransactionNormalizationView tx,
+            String walletAddress,
+            List<Document> logs
+    ) {
+        FlowSummary summary = collectFlowSummary(tx, walletAddress, logs);
+        if (summary.inflows.isEmpty() || !summary.outflows.isEmpty()) {
+            return List.of();
+        }
+        String txTo = tx.readRawOrExplorerAddress("to");
+        String txProtocol = normalizeProtocol(protocolRegistry.getProtocolName(txTo).orElse(null));
+
+        List<RawClassifiedEvent> out = new ArrayList<>();
+        for (String contract : summary.inflows.keySet()) {
+            BigDecimal qty = summary.inflows.get(contract);
+            if (qty == null || qty.signum() <= 0) {
+                continue;
+            }
+            RawClassifiedEvent event = new RawClassifiedEvent();
+            event.setEventType(EconomicEventType.LP_EXIT);
+            event.setWalletAddress(walletAddress);
+            event.setAssetContract(contract);
+            event.setAssetSymbol(resolveSymbol(tx, contract, summary.metaByContract.get(contract)));
+            event.setQuantityDelta(qty);
+            event.setProtocolName(resolveProtocolName(txTo, txProtocol, contract));
+            event.setLogIndex(summary.inflowLogIndex.get(contract));
+            out.add(event);
         }
         return out;
     }
@@ -1208,6 +1420,48 @@ public class LpClassifier implements TxClassifier {
         }
         for (String hint : LP_EXIT_FUNCTION_HINTS) {
             if (functionName.contains(hint.toLowerCase(Locale.ROOT))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isLpExitWithoutBurnContext(RawTransactionNormalizationView tx) {
+        String functionName = tx.readRawOrExplorerLower("functionName");
+        if (functionName != null) {
+            for (String hint : LP_EXIT_NO_BURN_FUNCTION_HINTS) {
+                if (functionName.contains(hint.toLowerCase(Locale.ROOT))) {
+                    return true;
+                }
+            }
+        }
+        String input = tx.readRawOrExplorerLower("input");
+        if (input == null || input.isBlank()) {
+            return false;
+        }
+        for (String selector : LP_EXIT_NO_BURN_SELECTOR_HINTS) {
+            if (inputContainsSelector(input, selector)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isLpEntryWithoutMintContext(RawTransactionNormalizationView tx) {
+        String functionName = tx.readRawOrExplorerLower("functionName");
+        if (functionName != null) {
+            for (String hint : LP_ENTRY_NO_MINT_FUNCTION_HINTS) {
+                if (functionName.contains(hint.toLowerCase(Locale.ROOT))) {
+                    return true;
+                }
+            }
+        }
+        String input = tx.readRawOrExplorerLower("input");
+        if (input == null || input.isBlank()) {
+            return false;
+        }
+        for (String selector : LP_ENTRY_NO_MINT_SELECTOR_HINTS) {
+            if (inputContainsSelector(input, selector)) {
                 return true;
             }
         }

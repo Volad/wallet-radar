@@ -21,6 +21,8 @@ import reactor.core.publisher.Mono;
 import java.util.List;
 import java.util.Map;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -400,6 +402,81 @@ class EvmNetworkAdapterTest {
         assertThat(result).isEmpty();
         assertThat(endpointCalls.getOrDefault("https://rate-limited.rpc", 0)).isGreaterThan(0);
         assertThat(endpointCalls.getOrDefault("https://healthy.rpc", 0)).isGreaterThan(0);
+    }
+
+    @Test
+    void fetchTransactions_unknownBlockError_skipsWholeRange() {
+        String unknownBlockError = "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":26,\"message\":\"Unknown block\"}}";
+        String emptyResult = "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":[]}";
+        List<String> rangesSeen = Collections.synchronizedList(new ArrayList<>());
+
+        EvmRpcClient unknownBlockRpc = new EvmRpcClient() {
+            @Override
+            public Mono<String> call(String endpointUrl, String method, Object params) {
+                if (!"eth_getLogs".equals(method)) return Mono.just(emptyResult);
+                long[] range = extractRangeFromSingleCall(params);
+                rangesSeen.add(range[0] + "-" + range[1]);
+                if (containsBlock(range, 10L)) {
+                    return Mono.just(unknownBlockError);
+                }
+                return Mono.just(emptyResult);
+            }
+
+            @Override
+            public Mono<String> batchCall(String endpointUrl, List<RpcRequest> requests) {
+                if (requests.isEmpty()) {
+                    return Mono.just("[]");
+                }
+                long[] range = extractRangeFromBatchCall(requests);
+                if (containsBlock(range, 10L)) {
+                    return Mono.just("[" +
+                            "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":26,\"message\":\"Unknown block\"}}," +
+                            "{\"jsonrpc\":\"2.0\",\"id\":2,\"error\":{\"code\":26,\"message\":\"Unknown block\"}}" +
+                            "]");
+                }
+                return Mono.just("[{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":[]},{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":[]}]");
+            }
+        };
+
+        RetryPolicy policy = new RetryPolicy(0, 0.0, 2);
+        RpcEndpointRotator r = new RpcEndpointRotator(List.of("https://test.rpc"), policy);
+        EvmBatchBlockSizeResolver resolver = new EvmBatchBlockSizeResolver(new IngestionNetworkProperties());
+        EvmNetworkAdapter unknownBlockAdapter = new EvmNetworkAdapter(
+                unknownBlockRpc, Map.of("ETHEREUM", r), r, fastLimiter(), evmRpcProps(), new ObjectMapper(), resolver);
+
+        List<RawTransaction> result = unknownBlockAdapter.fetchTransactions("0x1234", NetworkId.ETHEREUM, 1L, 20L);
+
+        assertThat(result).isEmpty();
+        assertThat(rangesSeen).contains("1-20");
+        assertThat(rangesSeen).doesNotContain("10-10");
+    }
+
+    private static long[] extractRangeFromSingleCall(Object params) {
+        @SuppressWarnings("unchecked")
+        List<Object> paramList = (List<Object>) params;
+        @SuppressWarnings("unchecked")
+        Map<String, Object> filter = (Map<String, Object>) paramList.get(0);
+        return parseRange(filter);
+    }
+
+    private static long[] extractRangeFromBatchCall(List<RpcRequest> requests) {
+        @SuppressWarnings("unchecked")
+        List<Object> firstParams = (List<Object>) requests.get(0).params();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> filter = (Map<String, Object>) firstParams.get(0);
+        return parseRange(filter);
+    }
+
+    private static long[] parseRange(Map<String, Object> filter) {
+        String fromHex = String.valueOf(filter.get("fromBlock"));
+        String toHex = String.valueOf(filter.get("toBlock"));
+        long from = Long.parseLong(fromHex.substring(2), 16);
+        long to = Long.parseLong(toHex.substring(2), 16);
+        return new long[]{from, to};
+    }
+
+    private static boolean containsBlock(long[] range, long block) {
+        return block >= range[0] && block <= range[1];
     }
 
     private static IngestionNetworkProperties.NetworkIngestionEntry entry(int batchBlockSize) {

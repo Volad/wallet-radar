@@ -43,7 +43,7 @@ public class ScamFilter {
     private final ScamFilterProperties properties;
 
     /**
-     * Returns true when transaction should be dropped as spam/scam.
+     * Returns true when traRnsaction should be dropped as spam/scam.
      */
     public boolean shouldDrop(RawTransaction tx) {
         if (!properties.isEnabled() || tx == null) {

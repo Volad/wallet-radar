@@ -18,10 +18,27 @@ public class AddressValidator {
     private static final Pattern SOLANA_ADDRESS = Pattern.compile("^[1-9A-HJ-NP-Za-km-z]{32,44}$");
 
     private static final Set<NetworkId> SUPPORTED_NETWORKS = Set.of(NetworkId.values());
+    private static final Set<NetworkId> SUPPORTED_EVM_NETWORKS = Set.of(
+            NetworkId.ETHEREUM,
+            NetworkId.ARBITRUM,
+            NetworkId.OPTIMISM,
+            NetworkId.POLYGON,
+            NetworkId.BASE,
+            NetworkId.BSC,
+            NetworkId.AVALANCHE,
+            NetworkId.MANTLE,
+            NetworkId.LINEA
+    );
 
     public boolean isValidAddress(String address) {
         if (address == null || address.isBlank()) return false;
-        return EVM_ADDRESS.matcher(address.trim()).matches() || SOLANA_ADDRESS.matcher(address.trim()).matches();
+        String normalized = address.trim();
+        return EVM_ADDRESS.matcher(normalized).matches() || SOLANA_ADDRESS.matcher(normalized).matches();
+    }
+
+    public boolean isValidEvmAddress(String address) {
+        if (address == null || address.isBlank()) return false;
+        return EVM_ADDRESS.matcher(address.trim()).matches();
     }
 
     /**
@@ -31,5 +48,13 @@ public class AddressValidator {
     public boolean areValidNetworks(List<NetworkId> networks) {
         if (networks == null || networks.isEmpty()) return true;
         return networks.stream().allMatch(SUPPORTED_NETWORKS::contains);
+    }
+
+    /**
+     * Non-empty list of EVM-only networks.
+     */
+    public boolean areValidEvmNetworks(List<NetworkId> networks) {
+        if (networks == null || networks.isEmpty()) return false;
+        return networks.stream().allMatch(SUPPORTED_EVM_NETWORKS::contains);
     }
 }
