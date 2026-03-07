@@ -26,6 +26,13 @@ public class ScamFilter {
     private static final String ERC20_APPROVE_METHOD_ID = "0x095ea7b3";
     private static final String MULTICALL_METHOD_ID = "0xac9650d8";
     private static final String ERC20_TRANSFER_SELECTOR = "a9059cbb";
+    private static final Set<String> KNOWN_ZERO_VALUE_SPOOFING_FINGERPRINTS = Set.of(
+            "ARBITRUM|0x0cf79e0a|0x27117f7e48e07f9e23042931ab39fe02a62ec587",
+            "ARBITRUM|0xe94a5b23|0xc50005eb632e52e2d86096e5dae7b633609b348c",
+            "AVALANCHE|0xa9059cbb|0xd743caa0ad523bbeba05c29b666d66e05f18094d",
+            "AVALANCHE|0x12514bba|0x2915979685d52bc301d4a6204417f4f62887a1cd",
+            "ETHEREUM|0xa9059cbb|0xc6fd8084fb9b6a0768cf943c341049edd1085b82"
+    );
     private static final Set<String> KNOWN_SWAP_METHOD_IDS = Set.of(
             "0xe3ead59e"
     );
@@ -97,6 +104,10 @@ public class ScamFilter {
         String txTo = normalize(readRawOrExplorerTx(raw, "to"));
         if (isLikelyExplorerTokenSpoofing(raw, wallet, txSender, txTo)) {
             signals.add("TOKEN_SPOOFING_PATTERN");
+            return new ScamEvaluation(properties.getDropThreshold(), List.copyOf(signals), true);
+        }
+        if (isLikelyKnownZeroValueSpoofingPattern(tx.getNetworkId(), raw, wallet, txSender, txTo)) {
+            signals.add("KNOWN_ZERO_VALUE_SPOOFING_PATTERN");
             return new ScamEvaluation(properties.getDropThreshold(), List.copyOf(signals), true);
         }
         if (isLikelyOutboundZeroValueSpoofing(raw, wallet, txSender)) {
@@ -578,6 +589,53 @@ public class ScamFilter {
                 && !hasInboundToWallet;
     }
 
+    private static boolean isLikelyKnownZeroValueSpoofingPattern(
+            String networkId, Document raw, String wallet, String txSender, String txTo
+    ) {
+        if (networkId == null || raw == null || wallet == null || txSender == null || txTo == null || wallet.equals(txSender)) {
+            return false;
+        }
+
+        String methodId = normalizeMethodId(readRawOrExplorerTx(raw, "methodId"));
+        if (methodId == null) {
+            return false;
+        }
+
+        String fingerprint = networkId.strip().toUpperCase() + "|" + methodId + "|" + txTo;
+        if (!KNOWN_ZERO_VALUE_SPOOFING_FINGERPRINTS.contains(fingerprint)) {
+            return false;
+        }
+
+        BigInteger txValue = parseUnsignedNumeric(readRawOrExplorerTx(raw, "value"));
+        if (txValue == null || txValue.signum() != 0) {
+            return false;
+        }
+
+        List<Document> tokenTransfers = collectTokenTransfers(raw);
+        if (tokenTransfers.isEmpty()) {
+            return false;
+        }
+
+        boolean hasOutboundFromWallet = false;
+        for (Document transfer : tokenTransfers) {
+            String from = normalize(rawString(transfer.get("from")));
+            String to = normalize(rawString(transfer.get("to")));
+            BigInteger value = parseUnsignedNumeric(rawString(transfer.get("value")));
+
+            // Keep this rule strict: only all-zero spoofing payloads.
+            if (value == null || value.signum() != 0) {
+                return false;
+            }
+            if (wallet.equals(from) && !wallet.equals(to)) {
+                hasOutboundFromWallet = true;
+            }
+            if (wallet.equals(to) && !wallet.equals(from)) {
+                return false;
+            }
+        }
+        return hasOutboundFromWallet;
+    }
+
     private static boolean isLikelyWalletInitiatedZeroValueSpoofing(
             Document raw, String wallet, String txSender
     ) {
@@ -639,6 +697,14 @@ public class ScamFilter {
             }
         }
         return false;
+    }
+
+    private static String normalizeMethodId(String methodId) {
+        String normalized = normalize(methodId);
+        if (normalized == null) {
+            return null;
+        }
+        return normalized.startsWith("0x") ? normalized : "0x" + normalized;
     }
 
     private static boolean isSuspiciousTokenText(String value) {

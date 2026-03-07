@@ -360,6 +360,111 @@ class ScamFilterTest {
     }
 
     @Test
+    @DisplayName("returns true for known zero-value spoofing fingerprint pattern")
+    void knownZeroValueSpoofingFingerprint_returnsTrue() {
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0x035780202678618833c2cec4080d29ff9a5d42180df8bbc0da7de7472df8ad4f");
+        tx.setNetworkId("ARBITRUM");
+        tx.setWalletAddress("0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f");
+
+        String wallet = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        Document raw = new Document();
+        raw.put("from", "0x822c4d483e01ebac74330fd612d28716dc4c33d9");
+        raw.put("to", "0x27117f7e48e07f9e23042931ab39fe02a62ec587");
+        raw.put("value", "0");
+        raw.put("methodId", "0x0cf79e0a");
+        raw.put("explorer", new Document("tokenTransfers", List.of(
+                new Document("from", wallet)
+                        .append("to", "0x9f8b715510c25c815cb189c144573d99f7c61b62")
+                        .append("contractAddress", "0xaf88d065e77c8cc2239327c5edb3a432268e5831")
+                        .append("value", "0")
+        )));
+        tx.setRawData(raw);
+
+        assertThat(filter.shouldDrop(tx)).isTrue();
+    }
+
+    @Test
+    @DisplayName("does not drop known spoofing fingerprint when tx is wallet-initiated")
+    void knownZeroValueSpoofingFingerprint_walletInitiated_notDropped() {
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0xwallet-initiated-known-fingerprint");
+        tx.setNetworkId("ARBITRUM");
+        tx.setWalletAddress("0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f");
+
+        String wallet = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        Document raw = new Document();
+        raw.put("from", wallet);
+        raw.put("to", "0x27117f7e48e07f9e23042931ab39fe02a62ec587");
+        raw.put("value", "0");
+        raw.put("methodId", "0x0cf79e0a");
+        raw.put("explorer", new Document("tokenTransfers", List.of(
+                new Document("from", wallet)
+                        .append("to", "0x9f8b715510c25c815cb189c144573d99f7c61b62")
+                        .append("contractAddress", "0xaf88d065e77c8cc2239327c5edb3a432268e5831")
+                        .append("value", "0")
+        )));
+        tx.setRawData(raw);
+
+        assertThat(filter.shouldDrop(tx)).isFalse();
+    }
+
+    @Test
+    @DisplayName("does not drop known spoofing fingerprint when transfer value is non-zero")
+    void knownZeroValueSpoofingFingerprint_nonZeroTransfer_notDropped() {
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0xknown-fingerprint-non-zero");
+        tx.setNetworkId("AVALANCHE");
+        tx.setWalletAddress("0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f");
+
+        String wallet = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        Document raw = new Document();
+        raw.put("from", "0x00007915d1f9ff1d8a6d8b011af6f0ae204f7800");
+        raw.put("to", "0xd743caa0ad523bbeba05c29b666d66e05f18094d");
+        raw.put("value", "0");
+        raw.put("methodId", "0xa9059cbb");
+        raw.put("explorer", new Document("tokenTransfers", List.of(
+                new Document("from", wallet)
+                        .append("to", "0x2ea84921448af2a15d4bc442fd7fb09dfdbbac6d")
+                        .append("contractAddress", "0x9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7")
+                        .append("value", "1")
+        )));
+        tx.setRawData(raw);
+
+        assertThat(filter.shouldDrop(tx)).isFalse();
+    }
+
+    @Test
+    @DisplayName("does not drop wallet-initiated euler batch transaction")
+    void walletInitiatedEulerBatch_notDropped() {
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0xe3f3c0eaffcf6870c6e7860982b32e04017fe2addfbb9920691acae8664491f5");
+        tx.setNetworkId("UNICHAIN");
+        tx.setWalletAddress("0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f");
+
+        String wallet = "0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f";
+        Document raw = new Document();
+        raw.put("from", wallet);
+        raw.put("to", "0x2a1176964f5d7cae5406b627bf6166664fe83c60");
+        raw.put("value", "0");
+        raw.put("methodId", "0xc16ae7a4");
+        raw.put("functionName", "batch(tuple[] items)");
+        raw.put("explorer", new Document("tokenTransfers", List.of(
+                new Document("from", wallet)
+                        .append("to", "0x0000000000000000000000000000000000000000")
+                        .append("contractAddress", "0x1b0e3da51b2517e09ae74cd31b708e46b9158e8b")
+                        .append("value", "0"),
+                new Document("from", "0x1b0e3da51b2517e09ae74cd31b708e46b9158e8b")
+                        .append("to", wallet)
+                        .append("contractAddress", "0xe9c43e09c5fa733bcc2aeaa96063a4a60147aa09")
+                        .append("value", "0")
+        )));
+        tx.setRawData(raw);
+
+        assertThat(filter.shouldDrop(tx)).isFalse();
+    }
+
+    @Test
     @DisplayName("returns true for wallet-initiated zero-value spoof with long transfer calldata")
     void walletInitiatedZeroValueSpoofWithLongInput_returnsTrue() {
         RawTransaction tx = new RawTransaction();
