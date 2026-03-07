@@ -16,6 +16,12 @@ public interface ExplorerProvider {
 
     boolean supports(NetworkId networkId);
 
+    /**
+     * Returns latest chain head block number using explorer API.
+     * Returns null when unavailable/unsupported.
+     */
+    Long getCurrentBlockNumber(NetworkId networkId);
+
     List<ExplorerTransaction> getTransactions(String walletAddress, NetworkId networkId, long fromBlock, long toBlock, int page);
 
     List<ExplorerTokenTransfer> getTokenTransfers(String walletAddress, NetworkId networkId, long fromBlock, long toBlock, int page);

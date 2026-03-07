@@ -20,6 +20,7 @@ import com.walletradar.ingestion.classifier.SwapClassifier;
 import com.walletradar.ingestion.classifier.TransferClassifier;
 import com.walletradar.ingestion.classifier.TxClassifier;
 import com.walletradar.ingestion.classifier.TxClassifierDispatcher;
+import com.walletradar.ingestion.config.IngestionNetworkProperties;
 import org.bson.Document;
 import org.junit.jupiter.api.Test;
 
@@ -64,6 +65,8 @@ class ClassificationPolicyDryRunReportTest {
     private static final Set<EconomicEventType> OLD_FASTPATH_EVENT_TYPES = Set.of(
             EconomicEventType.SWAP_BUY,
             EconomicEventType.SWAP_SELL,
+            EconomicEventType.WRAP,
+            EconomicEventType.UNWRAP,
             EconomicEventType.EXTERNAL_TRANSFER_OUT,
             EconomicEventType.EXTERNAL_INBOUND,
             EconomicEventType.LP_ENTRY,
@@ -135,15 +138,20 @@ class ClassificationPolicyDryRunReportTest {
         EvmTokenDecimalsResolver decimalsResolver = mock(EvmTokenDecimalsResolver.class);
         when(decimalsResolver.getDecimals(anyString(), anyString())).thenReturn(EvmTokenDecimalsResolver.DEFAULT_DECIMALS);
         when(decimalsResolver.getSymbol(anyString(), anyString())).thenReturn("");
+        IngestionNetworkProperties ingestionNetworkProperties = new IngestionNetworkProperties();
+        IngestionNetworkProperties.NetworkIngestionEntry zksyncEntry = new IngestionNetworkProperties.NetworkIngestionEntry();
+        zksyncEntry.setSyntheticNativeContracts(List.of("0x000000000000000000000000000000000000800a"));
+        ingestionNetworkProperties.setNetwork(Map.of("ZKSYNC", zksyncEntry));
+        LendClassifier lendClassifier = new LendClassifier(protocolRegistry, decimalsResolver, ingestionNetworkProperties);
 
         List<TxClassifier> classifiers = List.of(
                 new NativeTransferClassifier(),
                 new PerpOrderClassifier(),
                 new BridgeCallClassifier(),
-                new LpClassifier(protocolRegistry, decimalsResolver),
-                new LendClassifier(protocolRegistry, decimalsResolver),
+                new LpClassifier(protocolRegistry, decimalsResolver, lendClassifier),
+                lendClassifier,
                 new SwapClassifier(protocolRegistry, decimalsResolver),
-                new TransferClassifier(protocolRegistry, decimalsResolver),
+                new TransferClassifier(protocolRegistry, decimalsResolver, lendClassifier),
                 new StakeClassifier()
         );
         return new TxClassifierDispatcher(classifiers);

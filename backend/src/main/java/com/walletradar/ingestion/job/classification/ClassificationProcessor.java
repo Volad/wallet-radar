@@ -4,6 +4,7 @@ import com.walletradar.common.RetryPolicy;
 import com.walletradar.domain.transaction.raw.NormalizationStatus;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.transaction.normalized.EconomicEventType;
+import com.walletradar.domain.transaction.normalized.ClassificationStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.raw.RawTransaction;
@@ -93,7 +94,9 @@ public class ClassificationProcessor {
             EconomicEventType.LP_POSITION_ENTRY,
             EconomicEventType.LP_POSITION_EXIT,
             EconomicEventType.LP_POSITION_STAKE,
-            EconomicEventType.LP_POSITION_UNSTAKE
+            EconomicEventType.LP_POSITION_UNSTAKE,
+            EconomicEventType.WRAP,
+            EconomicEventType.UNWRAP
     );
     private static final Set<String> LP_SENSITIVE_SELECTORS = Set.of(
             "0xac9650d8", // multicall(bytes[]) often wraps LP position ops
@@ -353,6 +356,7 @@ public class ClassificationProcessor {
         reasons.addAll(reviewReasons);
         normalizedTransaction.setMissingDataReasons(List.copyOf(reasons));
         normalizedTransaction.setStatus(NormalizedTransactionStatus.NEEDS_REVIEW);
+        normalizedTransaction.setClassificationStatus(ClassificationStatus.NEEDS_REVIEW);
     }
 
     private static BigDecimal normalizeThreshold(double rawThreshold) {

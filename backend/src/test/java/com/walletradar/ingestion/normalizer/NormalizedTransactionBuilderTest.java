@@ -2,10 +2,12 @@ package com.walletradar.ingestion.normalizer;
 
 import com.walletradar.domain.transaction.normalized.EconomicEventType;
 import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.transaction.normalized.ClassificationStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.domain.transaction.normalized.PricingStatus;
 import com.walletradar.ingestion.classifier.RawClassifiedEvent;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -37,6 +39,8 @@ class NormalizedTransactionBuilderTest {
 
         assertThat(tx.getType()).isEqualTo(NormalizedTransactionType.SWAP);
         assertThat(tx.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        assertThat(tx.getClassificationStatus()).isEqualTo(ClassificationStatus.CONFIRMED);
+        assertThat(tx.getPricingStatus()).isEqualTo(PricingStatus.PENDING);
         assertThat(tx.getMissingDataReasons()).isEmpty();
         assertThat(tx.getConfidence()).isEqualByComparingTo("0.95");
         assertThat(tx.getFlows()).hasSize(2);
@@ -228,6 +232,28 @@ class NormalizedTransactionBuilderTest {
     }
 
     @Test
+    @DisplayName("builds WRAP in PENDING_PRICE with TRANSFER roles")
+    void buildsWrapPendingPrice() {
+        RawClassifiedEvent out = raw(EconomicEventType.WRAP, "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "ETH", new BigDecimal("-1"));
+        RawClassifiedEvent in = raw(EconomicEventType.WRAP, "0x4200000000000000000000000000000000000006", "WETH", new BigDecimal("1"));
+
+        NormalizedTransaction tx = builder.build(
+                "0xwrap",
+                NetworkId.BASE,
+                "0xwallet",
+                Instant.parse("2025-10-06T09:11:09Z"),
+                List.of(out, in),
+                new BigDecimal("0.95")
+        );
+
+        assertThat(tx.getType()).isEqualTo(NormalizedTransactionType.WRAP);
+        assertThat(tx.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        assertThat(tx.getPricingStatus()).isEqualTo(PricingStatus.PENDING);
+        assertThat(tx.getFlows()).extracting(NormalizedTransaction.Flow::getRole)
+                .containsOnly(NormalizedLegRole.TRANSFER);
+    }
+
+    @Test
     @DisplayName("builds UNCLASSIFIED when no classifier events are produced")
     void buildsUnclassifiedWhenEventsMissing() {
         NormalizedTransaction tx = builder.build(
@@ -241,7 +267,30 @@ class NormalizedTransactionBuilderTest {
 
         assertThat(tx.getType()).isEqualTo(NormalizedTransactionType.UNCLASSIFIED);
         assertThat(tx.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_CLARIFICATION);
+        assertThat(tx.getClassificationStatus()).isEqualTo(ClassificationStatus.NEEDS_REVIEW);
         assertThat(tx.getMissingDataReasons()).containsExactly("NO_CLASSIFICATION_EVIDENCE");
+    }
+
+    @Test
+    @DisplayName("approval without economic legs does not enter clarification")
+    void approvalWithoutLegsDoesNotEnterClarification() {
+        RawClassifiedEvent approval = raw(EconomicEventType.APPROVAL, "0x1111111111111111111111111111111111111111", "", BigDecimal.ZERO);
+
+        NormalizedTransaction tx = builder.build(
+                "0xtx-approval",
+                NetworkId.BASE,
+                "0xwallet",
+                Instant.parse("2025-11-01T00:00:00Z"),
+                List.of(approval),
+                new BigDecimal("0.88")
+        );
+
+        assertThat(tx.getType()).isEqualTo(NormalizedTransactionType.APPROVAL);
+        assertThat(tx.getFlows()).isEmpty();
+        assertThat(tx.getMissingDataReasons()).isEmpty();
+        assertThat(tx.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_STAT);
+        assertThat(tx.getPricingStatus()).isEqualTo(PricingStatus.NOT_REQUIRED);
+        assertThat(tx.getClassificationStatus()).isEqualTo(ClassificationStatus.CONFIRMED);
     }
 
     private static RawClassifiedEvent raw(EconomicEventType type, String contract, String symbol, BigDecimal qty) {

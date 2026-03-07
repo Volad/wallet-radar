@@ -3,7 +3,9 @@ import { HttpClientTestingModule, HttpTestingController } from '@angular/common/
 
 import {
   AddSessionRequest,
+  RebuildSessionTransactionsResponse,
   SessionBackfillStatusResponse,
+  SessionTransactionsResponse,
 } from '../models/wallet-api.models';
 import { WalletApiService } from './wallet-api.service';
 
@@ -94,5 +96,62 @@ describe('WalletApiService', () => {
     req.flush(mockResponse);
 
     // assertions are performed in subscription callback
+  });
+
+  it('triggers session transactions rebuild via /sessions/{id}/transactions/rebuild', () => {
+    const sessionId = '549b0aba-a9af-4789-b125-ebb86314a3f1';
+    const response: RebuildSessionTransactionsResponse = {
+      sessionId,
+      projectedTransactions: 12,
+      message: 'Session transactions rebuilt',
+    };
+
+    service.rebuildSessionTransactions(sessionId).subscribe((result) => {
+      expect(result.projectedTransactions).toBe(12);
+      expect(result.message).toBe('Session transactions rebuilt');
+    });
+
+    const req = httpMock.expectOne(
+      `http://localhost:8080/api/v1/sessions/${encodeURIComponent(sessionId)}/transactions/rebuild`
+    );
+    expect(req.request.method).toBe('POST');
+    expect(req.request.body).toEqual({});
+    req.flush(response);
+  });
+
+  it('gets session transactions from /sessions/{id}/transactions with limit', () => {
+    const sessionId = '549b0aba-a9af-4789-b125-ebb86314a3f1';
+    const response: SessionTransactionsResponse = {
+      sessionId,
+      items: [
+        {
+          id: 's-1',
+          sourceType: 'CHAIN',
+          txHash: '0xabc',
+          networkId: 'BSC',
+          walletAddress: '0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f',
+          blockTimestamp: '2026-03-01T10:00:00Z',
+          type: 'SWAP',
+          bridgeStatus: null,
+          realisedPnlUsdTotal: 1.23,
+          avcoSnapshotVersion: null,
+          flows: [],
+        },
+      ],
+    };
+
+    service.getSessionTransactions(sessionId, 10).subscribe((result) => {
+      expect(result.items.length).toBe(1);
+      expect(result.items[0].txHash).toBe('0xabc');
+    });
+
+    const req = httpMock.expectOne(
+      (request) =>
+        request.url ===
+          `http://localhost:8080/api/v1/sessions/${encodeURIComponent(sessionId)}/transactions` &&
+        request.params.get('limit') === '10'
+    );
+    expect(req.request.method).toBe('GET');
+    req.flush(response);
   });
 });

@@ -27,7 +27,16 @@ public class ApprovalClassifier implements TxClassifier {
             "0xa22cb465", // setApprovalForAll(address,bool)
             "0x39509351", // increaseAllowance(address,uint256)
             "0xa457c2d7", // decreaseAllowance(address,uint256)
-            "0xc04a8a10"  // observed BASE permission call (Aave-style approval/delegation)
+            "0xc04a8a10", // approveDelegation(address,uint256)
+            "0x5a3b74b9", // setUserUseReserveAsCollateral(address,bool)
+            "0xf3995c67", // selfPermit(address,uint256,uint256,uint8,bytes32,bytes32)
+            "0xc2e3140a", // selfPermitIfNecessary(address,uint256,uint256,uint8,bytes32,bytes32)
+            "0x30f28b7a", // permitTransferFrom(((address,uint256),uint256,uint256),(address,uint256),address,bytes)
+            "0x137c29fe", // permitWitnessTransferFrom(((address,uint256),uint256,uint256),(address,uint256),address,bytes32,string,bytes)
+            "0xcc53287f", // lockdown((address token, address spender)[] approvals)
+            "0xfa6e671d", // setRelayerApproval(address sender, address relayer, bool approved)
+            "0x0de54ba0", // setMinterApproval(address minter, bool approval)
+            "0x110496e5"  // allow(address manager,bool isAllowed_)
     );
 
     private static final Set<String> APPROVAL_FUNCTION_HINTS = Set.of(
@@ -36,7 +45,11 @@ public class ApprovalClassifier implements TxClassifier {
             "increaseallowance(",
             "decreaseallowance(",
             "permit(",
-            "approvedelegation("
+            "approvedelegation(",
+            "lockdown(",
+            "setrelayerapproval(",
+            "setminterapproval(",
+            "allow("
     );
 
     @Override
@@ -75,12 +88,25 @@ public class ApprovalClassifier implements TxClassifier {
     }
 
     private static boolean hasEconomicTransferEffects(RawTransactionNormalizationView tx) {
-        if (!tx.explorerTokenTransfers().isEmpty() || !tx.explorerInternalTransfers().isEmpty()) {
-            return true;
+        for (Document transfer : tx.explorerTokenTransfers()) {
+            BigInteger value = tx.tokenTransferValue(transfer);
+            if (value != null && value.signum() > 0) {
+                return true;
+            }
+        }
+        for (Document transfer : tx.explorerInternalTransfers()) {
+            BigInteger value = tx.internalTransferValue(transfer);
+            if (value != null && value.signum() > 0) {
+                return true;
+            }
         }
         for (Document log : tx.logs()) {
             List<String> topics = tx.getLogTopics(log);
-            if (topics != null && !topics.isEmpty() && TRANSFER_TOPIC.equalsIgnoreCase(topics.getFirst())) {
+            if (topics == null || topics.isEmpty() || !TRANSFER_TOPIC.equalsIgnoreCase(topics.getFirst())) {
+                continue;
+            }
+            BigInteger amount = tx.getLogAmount(log);
+            if (amount != null && amount.signum() > 0) {
                 return true;
             }
         }

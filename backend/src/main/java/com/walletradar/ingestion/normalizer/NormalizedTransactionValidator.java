@@ -21,6 +21,9 @@ public final class NormalizedTransactionValidator {
             List<NormalizedTransaction.Flow> legs
     ) {
         Set<String> reasons = new LinkedHashSet<>();
+        if (type == NormalizedTransactionType.APPROVAL) {
+            return List.of();
+        }
         if (legs == null || legs.isEmpty()) {
             if (type == NormalizedTransactionType.UNCLASSIFIED) {
                 reasons.add("NO_CLASSIFICATION_EVIDENCE");

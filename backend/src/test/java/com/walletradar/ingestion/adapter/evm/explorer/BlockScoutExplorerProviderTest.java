@@ -129,6 +129,28 @@ class BlockScoutExplorerProviderTest {
     }
 
     @Test
+    void getCurrentBlockNumberUsesEthRpcEndpoint() {
+        TestConfig config = baseProperties();
+        AtomicReference<URI> lastUrl = new AtomicReference<>();
+        AtomicReference<HttpMethod> lastMethod = new AtomicReference<>();
+        WebClient.Builder webClientBuilder = WebClient.builder()
+                .exchangeFunction(request -> {
+                    lastUrl.set(request.url());
+                    lastMethod.set(request.method());
+                    return Mono.just(jsonResponse("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":\"0x65\"}"));
+                });
+        BlockScoutExplorerProvider provider = new BlockScoutExplorerProvider(
+                webClientBuilder, objectMapper, config.explorerProperties(), config.networkProperties());
+
+        Long block = provider.getCurrentBlockNumber(NetworkId.ARBITRUM);
+
+        assertThat(block).isEqualTo(101L);
+        assertThat(lastMethod.get()).isEqualTo(HttpMethod.POST);
+        assertThat(lastUrl.get()).isNotNull();
+        assertThat(lastUrl.get().getPath()).isEqualTo("/api/eth-rpc");
+    }
+
+    @Test
     void getReceiptReturnsNullWhenBlockscoutRpcEndpointReturnsBadRequest() {
         TestConfig config = baseProperties();
         WebClient.Builder webClientBuilder = WebClient.builder()

@@ -29,6 +29,15 @@ public class RoutingExplorerProvider implements ExplorerProvider {
     }
 
     @Override
+    public Long getCurrentBlockNumber(NetworkId networkId) {
+        ExplorerProvider provider = resolve(networkId);
+        if (provider == null) {
+            return null;
+        }
+        return provider.getCurrentBlockNumber(networkId);
+    }
+
+    @Override
     public List<ExplorerTransaction> getTransactions(String walletAddress, NetworkId networkId, long fromBlock, long toBlock, int page) {
         ExplorerProvider provider = resolve(networkId);
         if (provider == null) {

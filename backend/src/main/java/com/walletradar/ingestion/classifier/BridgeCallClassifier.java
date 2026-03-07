@@ -26,7 +26,12 @@ public class BridgeCallClassifier implements TxClassifier {
     private static final Set<String> KNOWN_BRIDGE_METHOD_IDS = Set.of(
             "0x3ce33bff", // MetaMask bridge(...)
             "0xfc5f1003", // observed Stargate/LI.FI bridge call
-            "0xae328590"  // observed Stargate/LI.FI bridge call
+            "0xae328590", // observed Stargate/LI.FI bridge call
+            "0x84d61c97", // relay request ingestion
+            "0xd7a08473", // relay/diamond execution wrapper
+            "0xcfc32570", // intent execution wrapper
+            "0xdeff4b24", // relay fill
+            "0xe2de2a03"  // relay redeem
     );
     private static final Set<String> KNOWN_NATIVE_BRIDGE_METHOD_IDS = Set.of(
             "0xf9068677"
@@ -140,6 +145,8 @@ public class BridgeCallClassifier implements TxClassifier {
             case "AVALANCHE" -> new NativeAsset("0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7", "AVAX");
             case "MANTLE" -> new NativeAsset("0x78c1b0c915c4faa5fffa6cabf0219da63d7f4cb8", "MNT");
             case "LINEA" -> new NativeAsset("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "ETH");
+            case "UNICHAIN" -> new NativeAsset("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "ETH");
+            case "ZKSYNC" -> new NativeAsset("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "ETH");
             default -> new NativeAsset("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "ETH");
         };
     }

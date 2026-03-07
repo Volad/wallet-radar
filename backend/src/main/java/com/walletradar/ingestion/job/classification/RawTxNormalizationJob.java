@@ -6,6 +6,7 @@ import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.domain.transaction.raw.RawTransactionRepository;
 import com.walletradar.ingestion.adapter.BlockTimestampResolver;
 import com.walletradar.ingestion.adapter.evm.EstimatingBlockTimestampResolver;
+import com.walletradar.ingestion.classifier.RawTransactionNormalizationView;
 import com.walletradar.ingestion.config.ClassifierProperties;
 import com.walletradar.ingestion.config.IngestionNetworkProperties;
 
@@ -40,7 +41,7 @@ public class RawTxNormalizationJob {
     private final IngestionNetworkProperties ingestionNetworkProperties;
     private final List<BlockTimestampResolver> blockTimestampResolvers;
 
-//    @Scheduled(fixedDelayString = "${walletradar.ingestion.classifier.schedule-interval-ms:90000}")
+    @Scheduled(fixedDelayString = "${walletradar.ingestion.classifier.schedule-interval-ms:90000}")
     public void runScheduled() {
         runNormalization("scheduled");
     }
@@ -187,6 +188,9 @@ public class RawTxNormalizationJob {
             String networkIdStr,
             List<RawTransaction> pending
     ) {
+        if (!requiresTimestampEstimation(pending)) {
+            return null;
+        }
         BlockTimestampResolver timestampResolver = findBlockTimestampResolver(networkId);
         if (timestampResolver == null) {
             return null;
@@ -212,6 +216,15 @@ public class RawTxNormalizationJob {
         double fallback = getFallbackAvgBlockTime(networkIdStr);
         estimator.calibrate(networkId, fromBlock, toBlock, timestampResolver, fallback);
         return estimator;
+    }
+
+    private boolean requiresTimestampEstimation(List<RawTransaction> pending) {
+        for (RawTransaction tx : pending) {
+            if (RawTransactionNormalizationView.wrap(tx).readTimestamp() == null) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private Long resolveBlockNumber(RawTransaction tx) {

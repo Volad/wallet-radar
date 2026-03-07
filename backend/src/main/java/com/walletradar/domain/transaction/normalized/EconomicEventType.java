@@ -6,6 +6,8 @@ package com.walletradar.domain.transaction.normalized;
 public enum EconomicEventType {
     SWAP_BUY,
     SWAP_SELL,
+    WRAP,
+    UNWRAP,
     STAKE_DEPOSIT,
     STAKE_WITHDRAWAL,
     LP_ENTRY,

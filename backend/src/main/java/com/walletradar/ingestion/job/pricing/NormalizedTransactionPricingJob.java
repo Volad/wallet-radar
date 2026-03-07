@@ -1,6 +1,7 @@
 package com.walletradar.ingestion.job.pricing;
 
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.domain.transaction.normalized.PricingStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
@@ -101,6 +102,7 @@ public class NormalizedTransactionPricingJob {
         tx.setUpdatedAt(Instant.now());
         if (unresolvedReasons.isEmpty()) {
             tx.setMissingDataReasons(List.of());
+            tx.setPricingStatus(resolveResolvedPricingStatus(tx.getType()));
             tx.setStatus(NormalizedTransactionStatus.PENDING_STAT);
             normalizedTransactionRepository.save(tx);
             return;
@@ -112,8 +114,10 @@ public class NormalizedTransactionPricingJob {
         tx.setMissingDataReasons(new ArrayList<>(unresolvedReasons));
         if (attempts >= Math.max(1, maxRetries)) {
             tx.setStatus(NormalizedTransactionStatus.NEEDS_REVIEW);
+            tx.setPricingStatus(PricingStatus.UNRESOLVED);
         } else {
             tx.setStatus(NormalizedTransactionStatus.PENDING_PRICE);
+            tx.setPricingStatus(PricingStatus.PENDING);
         }
         normalizedTransactionRepository.save(tx);
     }
@@ -121,13 +125,24 @@ public class NormalizedTransactionPricingJob {
     private static boolean isPriceRequired(NormalizedTransactionType type, BigDecimal qty) {
         if (type == NormalizedTransactionType.LP_ADJUST
                 || type == NormalizedTransactionType.LP_POSITION_STAKE
-                || type == NormalizedTransactionType.LP_POSITION_UNSTAKE) {
+                || type == NormalizedTransactionType.LP_POSITION_UNSTAKE
+                || type == NormalizedTransactionType.APPROVAL) {
             return false;
         }
         if (type == NormalizedTransactionType.SWAP) {
             return true;
         }
         return qty.signum() > 0;
+    }
+
+    private static PricingStatus resolveResolvedPricingStatus(NormalizedTransactionType type) {
+        if (type == NormalizedTransactionType.APPROVAL
+                || type == NormalizedTransactionType.LP_ADJUST
+                || type == NormalizedTransactionType.LP_POSITION_STAKE
+                || type == NormalizedTransactionType.LP_POSITION_UNSTAKE) {
+            return PricingStatus.NOT_REQUIRED;
+        }
+        return PricingStatus.RESOLVED;
     }
 
     private static void fillSwapCounterpart(NormalizedTransaction tx, int index, HistoricalPriceRequest request) {
@@ -152,6 +167,7 @@ public class NormalizedTransactionPricingJob {
     private void markNeedsReview(NormalizedTransaction tx, String reason) {
         tx.setStatus(NormalizedTransactionStatus.NEEDS_REVIEW);
         tx.setMissingDataReasons(List.of(reason));
+        tx.setPricingStatus(PricingStatus.UNRESOLVED);
         tx.setUpdatedAt(Instant.now());
         normalizedTransactionRepository.save(tx);
     }

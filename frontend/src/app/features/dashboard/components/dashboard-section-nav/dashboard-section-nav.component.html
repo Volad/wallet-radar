@@ -1,0 +1,18 @@
+<nav class="icon-nav" aria-label="Sections">
+  @for (sectionMeta of sections; track sectionMeta.id) {
+    <button
+      type="button"
+      class="icon-nav-btn"
+      [class.active]="activeSection === sectionMeta.id"
+      [class.soon]="sectionMeta.soon"
+      [style.--sectionColor]="sectionMeta.color"
+      [attr.aria-label]="sectionMeta.label"
+      [disabled]="sectionMeta.soon"
+      (click)="selectSection(sectionMeta)">
+      <span class="section-glyph" aria-hidden="true">{{ getSectionIcon(sectionMeta.id) }}</span>
+      @if (sectionMeta.soon) {
+        <span class="soon-dot" aria-hidden="true"></span>
+      }
+    </button>
+  }
+</nav>

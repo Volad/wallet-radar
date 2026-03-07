@@ -1,0 +1,173 @@
+:host {
+  display: block;
+}
+
+.spinner {
+  width: 1.3rem;
+  height: 1.3rem;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--wr-cyan) 25%, transparent);
+  border-top-color: var(--wr-cyan);
+  animation: wrSpin 0.8s linear infinite;
+  margin: 0 auto 0.8rem;
+
+  &.mini {
+    width: 0.7rem;
+    height: 0.7rem;
+    margin: 0;
+    border-width: 1.5px;
+  }
+}
+
+@keyframes wrSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.topbar {
+  min-height: 2.875rem;
+  border-bottom: 1px solid var(--wr-border);
+  background: color-mix(in srgb, var(--wr-surface) 92%, transparent);
+  backdrop-filter: blur(12px);
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 0 0.875rem;
+}
+
+.logo-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+.logo-mark {
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 0.35rem;
+  display: grid;
+  place-items: center;
+  background: var(--wr-cyan);
+  color: #000;
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.logo-text {
+  font-weight: 800;
+  font-size: 0.82rem;
+  letter-spacing: -0.02em;
+}
+
+.metric-strip {
+  display: flex;
+  align-items: center;
+  gap: 0.95rem;
+}
+
+.metric-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35rem;
+}
+
+.metric-label {
+  color: var(--wr-subtle);
+  font-size: 0.56rem;
+}
+
+.metric-value {
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.topbar-spacer {
+  flex: 1;
+}
+
+.backfill-pill {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  border: 1px solid var(--wr-cyan-mid);
+  background: var(--wr-cyan-soft);
+  border-radius: 0.35rem;
+  padding: 0.25rem 0.6rem;
+  flex-shrink: 0;
+}
+
+.backfill-label {
+  color: var(--wr-cyan);
+  font-size: 0.62rem;
+  font-weight: 600;
+}
+
+.progress-track {
+  width: 3.2rem;
+  height: 0.24rem;
+  border-radius: 0.3rem;
+  background: var(--wr-border);
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--wr-cyan);
+  border-radius: inherit;
+  transition: width 0.3s ease;
+}
+
+.network-subline {
+  color: var(--wr-subtle);
+  font-size: 0.56rem;
+}
+
+.wallet-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  border: 1px solid var(--wr-border);
+  background: var(--wr-elevated);
+  border-radius: 0.35rem;
+  padding: 0.22rem 0.48rem;
+  color: var(--wr-subtle);
+  font-size: 0.58rem;
+  flex-shrink: 0;
+}
+
+.wallet-dot {
+  width: 0.35rem;
+  height: 0.35rem;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.wallet-add-btn {
+  border: 0;
+  border-radius: 0.35rem;
+  background: var(--wr-cyan);
+  color: #000;
+  font-weight: 700;
+  font-size: 0.65rem;
+  padding: 0.34rem 0.7rem;
+  cursor: pointer;
+}
+
+.mono {
+  font-family: var(--wr-font-mono);
+}
+
+@media (max-width: 1280px) {
+  .topbar {
+    flex-wrap: wrap;
+    min-height: auto;
+    padding: 0.5rem 0.75rem;
+  }
+
+  .metric-strip {
+    order: 3;
+    width: 100%;
+  }
+}

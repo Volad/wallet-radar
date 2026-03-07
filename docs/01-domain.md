@@ -142,6 +142,28 @@ CostBasisOverride {
 
 Async AVCO replay status tracking after override/manual compensating updates.
 
+### SessionTransaction (`session_transactions`)
+
+Session-scoped projection row built from canonical normalized transactions and future session-specific adjustments.
+
+```text
+SessionTransaction {
+  sessionId: String
+  sourceType: CHAIN | MANUAL | OVERRIDE
+  sourceId: String
+  txHash: String?
+  networkId: NetworkId?
+  walletAddress: String?
+  blockTimestamp: DateTime?
+  type: NormalizedTransactionType?
+  sortKey: String
+  bridgeStatus: BRIDGE_OUT | BRIDGE_IN | MATCHED | REVIEW?
+  flows: SessionFlow[]
+  realisedPnlUsdTotal: Decimal?
+  avcoSnapshotVersion: Long?
+}
+```
+
 ---
 
 ## Canonical Transaction Types
@@ -170,6 +192,18 @@ Async AVCO replay status tracking after override/manual compensating updates.
 | `MANUAL_COMPENSATING` |
 
 Internal classifier enum `EconomicEventType` is still used to build normalized `type`/`flows`, but canonical storage and accounting input is `normalized_transactions`.
+
+### `EXTERNAL_INBOUND` fallback policy
+
+`EXTERNAL_INBOUND` is a transfer-fallback classification and is used only when higher-priority
+protocol classifiers do not match.
+
+For claim/withdraw/refund-like calls, `EXTERNAL_INBOUND` may be emitted even when
+`rawData.from == walletAddress`, because accounting uses net asset movement semantics rather than
+transaction sender role.
+
+In this case classifier output must contain only positive net inbound legs for the wallet after
+neutralizing paired wrap/burn mechanics in the same transaction.
 
 LP extensions for concentrated-liquidity (CL) protocols:
 

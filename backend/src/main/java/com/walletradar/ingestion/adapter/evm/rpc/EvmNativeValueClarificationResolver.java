@@ -39,27 +39,31 @@ public class EvmNativeValueClarificationResolver implements TransactionClarifica
     private static final String TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
     private static final String ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 
-    private static final Map<NetworkId, String> NATIVE_SYMBOL = Map.of(
-            NetworkId.ETHEREUM, "ETH",
-            NetworkId.ARBITRUM, "ETH",
-            NetworkId.OPTIMISM, "ETH",
-            NetworkId.BASE, "ETH",
-            NetworkId.POLYGON, "MATIC",
-            NetworkId.BSC, "BNB",
-            NetworkId.AVALANCHE, "AVAX",
-            NetworkId.MANTLE, "MNT",
-            NetworkId.LINEA, "ETH"
+    private static final Map<NetworkId, String> NATIVE_SYMBOL = Map.ofEntries(
+            Map.entry(NetworkId.ETHEREUM, "ETH"),
+            Map.entry(NetworkId.ARBITRUM, "ETH"),
+            Map.entry(NetworkId.OPTIMISM, "ETH"),
+            Map.entry(NetworkId.BASE, "ETH"),
+            Map.entry(NetworkId.POLYGON, "MATIC"),
+            Map.entry(NetworkId.BSC, "BNB"),
+            Map.entry(NetworkId.AVALANCHE, "AVAX"),
+            Map.entry(NetworkId.MANTLE, "MNT"),
+            Map.entry(NetworkId.LINEA, "ETH"),
+            Map.entry(NetworkId.UNICHAIN, "ETH"),
+            Map.entry(NetworkId.ZKSYNC, "ETH")
     );
-    private static final Map<NetworkId, String> WRAPPED_NATIVE_CONTRACT = Map.of(
-            NetworkId.ETHEREUM, "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
-            NetworkId.ARBITRUM, "0x82af49447d8a07e3bd95bd0d56f35241523fbab1",
-            NetworkId.OPTIMISM, "0x4200000000000000000000000000000000000006",
-            NetworkId.BASE, "0x4200000000000000000000000000000000000006",
-            NetworkId.POLYGON, "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270",
-            NetworkId.BSC, "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
-            NetworkId.AVALANCHE, "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7",
-            NetworkId.MANTLE, "0x78c1b0c915c4faa5fffa6cabf0219da63d7f4cb8",
-            NetworkId.LINEA, "0xe5d7c2a44ffddf6b295a15c148167daaaf5cf34f"
+    private static final Map<NetworkId, String> WRAPPED_NATIVE_CONTRACT = Map.ofEntries(
+            Map.entry(NetworkId.ETHEREUM, "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"),
+            Map.entry(NetworkId.ARBITRUM, "0x82af49447d8a07e3bd95bd0d56f35241523fbab1"),
+            Map.entry(NetworkId.OPTIMISM, "0x4200000000000000000000000000000000000006"),
+            Map.entry(NetworkId.BASE, "0x4200000000000000000000000000000000000006"),
+            Map.entry(NetworkId.POLYGON, "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270"),
+            Map.entry(NetworkId.BSC, "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c"),
+            Map.entry(NetworkId.AVALANCHE, "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7"),
+            Map.entry(NetworkId.MANTLE, "0x78c1b0c915c4faa5fffa6cabf0219da63d7f4cb8"),
+            Map.entry(NetworkId.LINEA, "0xe5d7c2a44ffddf6b295a15c148167daaaf5cf34f"),
+            Map.entry(NetworkId.UNICHAIN, "0x4200000000000000000000000000000000000006"),
+            Map.entry(NetworkId.ZKSYNC, "0x5aea5775959fbc2557cc8789bc1bf90a239d9a91")
     );
 
     private final EvmRpcClient evmRpcClient;

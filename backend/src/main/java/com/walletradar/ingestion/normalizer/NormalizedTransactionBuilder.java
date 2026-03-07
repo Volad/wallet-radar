@@ -1,10 +1,12 @@
 package com.walletradar.ingestion.normalizer;
 
 import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.transaction.normalized.ClassificationStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.domain.transaction.normalized.PricingStatus;
 import com.walletradar.ingestion.classifier.RawClassifiedEvent;
 import org.springframework.stereotype.Component;
 
@@ -48,6 +50,8 @@ public class NormalizedTransactionBuilder {
         List<String> reasons = NormalizedTransactionValidator.missingDataReasons(tx.getType(), tx.getFlows());
         tx.setMissingDataReasons(reasons);
         tx.setStatus(resolveInitialStatus(tx.getType(), reasons));
+        tx.setClassificationStatus(resolveClassificationStatus(tx.getType(), reasons));
+        tx.setPricingStatus(resolveInitialPricingStatus(tx.getType()));
         tx.setClarificationAttempts(0);
         tx.setPricingAttempts(0);
         tx.setStatAttempts(0);
@@ -84,7 +88,8 @@ public class NormalizedTransactionBuilder {
             return NormalizedLegRole.TRANSFER;
         }
         return switch (raw.getEventType()) {
-            case EXTERNAL_TRANSFER_OUT, EXTERNAL_INBOUND, LP_ADJUST, LP_POSITION_STAKE, LP_POSITION_UNSTAKE, LP_POSITION_ENTRY, LP_POSITION_EXIT, APPROVAL -> NormalizedLegRole.TRANSFER;
+            case EXTERNAL_TRANSFER_OUT, EXTERNAL_INBOUND, LP_ADJUST, LP_POSITION_STAKE, LP_POSITION_UNSTAKE,
+                 LP_POSITION_ENTRY, LP_POSITION_EXIT, APPROVAL, WRAP, UNWRAP -> NormalizedLegRole.TRANSFER;
             default -> {
                 BigDecimal qty = raw.getQuantityDelta() != null ? raw.getQuantityDelta() : BigDecimal.ZERO;
                 if (qty.signum() > 0) {
@@ -111,6 +116,12 @@ public class NormalizedTransactionBuilder {
         NormalizedTransactionType lpType = resolveLpPriorityType(types);
         if (lpType != null) {
             return lpType;
+        }
+        if (types.contains(com.walletradar.domain.transaction.normalized.EconomicEventType.WRAP)) {
+            return NormalizedTransactionType.WRAP;
+        }
+        if (types.contains(com.walletradar.domain.transaction.normalized.EconomicEventType.UNWRAP)) {
+            return NormalizedTransactionType.UNWRAP;
         }
         if (types.contains(com.walletradar.domain.transaction.normalized.EconomicEventType.SWAP_BUY)
                 || types.contains(com.walletradar.domain.transaction.normalized.EconomicEventType.SWAP_SELL)) {
@@ -206,6 +217,8 @@ public class NormalizedTransactionBuilder {
     private static NormalizedTransactionType mapType(com.walletradar.domain.transaction.normalized.EconomicEventType type) {
         return switch (type) {
             case SWAP_BUY, SWAP_SELL -> NormalizedTransactionType.SWAP;
+            case WRAP -> NormalizedTransactionType.WRAP;
+            case UNWRAP -> NormalizedTransactionType.UNWRAP;
             case STAKE_DEPOSIT -> NormalizedTransactionType.STAKE_DEPOSIT;
             case STAKE_WITHDRAWAL -> NormalizedTransactionType.STAKE_WITHDRAWAL;
             case LP_ENTRY -> NormalizedTransactionType.LP_ENTRY;
@@ -240,6 +253,33 @@ public class NormalizedTransactionBuilder {
             return NormalizedTransactionStatus.PENDING_STAT;
         }
         return NormalizedTransactionStatus.PENDING_PRICE;
+    }
+
+    private static ClassificationStatus resolveClassificationStatus(
+            NormalizedTransactionType type,
+            List<String> reasons
+    ) {
+        if (type == NormalizedTransactionType.UNCLASSIFIED) {
+            return ClassificationStatus.NEEDS_REVIEW;
+        }
+        if (reasons != null && reasons.contains("NO_CLASSIFICATION_EVIDENCE")) {
+            return ClassificationStatus.NEEDS_REVIEW;
+        }
+        return ClassificationStatus.CONFIRMED;
+    }
+
+    private static PricingStatus resolveInitialPricingStatus(NormalizedTransactionType type) {
+        if (!isPriceRequiredByType(type)) {
+            return PricingStatus.NOT_REQUIRED;
+        }
+        return PricingStatus.PENDING;
+    }
+
+    private static boolean isPriceRequiredByType(NormalizedTransactionType type) {
+        return type != NormalizedTransactionType.APPROVAL
+                && type != NormalizedTransactionType.LP_ADJUST
+                && type != NormalizedTransactionType.LP_POSITION_STAKE
+                && type != NormalizedTransactionType.LP_POSITION_UNSTAKE;
     }
 
     private static String resolveGroupId(

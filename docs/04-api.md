@@ -14,7 +14,7 @@ This document lists only endpoints that are currently implemented in code.
 - `POST` trigger endpoints return `202 Accepted`.
 - `GET` endpoints are read-only and return persisted data.
 - Supported networks:
-  - `ETHEREUM`, `ARBITRUM`, `OPTIMISM`, `POLYGON`, `BASE`, `BSC`, `AVALANCHE`, `MANTLE`, `LINEA`, `SOLANA`
+  - `ETHEREUM`, `ARBITRUM`, `OPTIMISM`, `POLYGON`, `BASE`, `BSC`, `AVALANCHE`, `MANTLE`, `LINEA`, `UNICHAIN`, `ZKSYNC`, `SOLANA`
 
 ---
 
@@ -111,7 +111,7 @@ Request:
       "address": "0x1A87f12aC07E9746e9B053B8D7EF1d45270D693f",
       "label": "Wallet 1",
       "color": "#22d3ee",
-      "networks": ["ETHEREUM", "ARBITRUM", "OPTIMISM", "POLYGON", "BASE", "BSC", "AVALANCHE", "MANTLE", "LINEA"]
+      "networks": ["ETHEREUM", "ARBITRUM", "OPTIMISM", "POLYGON", "BASE", "BSC", "AVALANCHE", "MANTLE", "LINEA", "UNICHAIN", "ZKSYNC"]
     }
   ]
 }
@@ -178,6 +178,71 @@ Response `200`:
           "lastBlockSynced": 21800000,
           "backfillComplete": false,
           "syncBannerMessage": "Raw fetch ETHEREUM: 2/6 segments complete"
+        }
+      ]
+    }
+  ]
+}
+```
+
+Returns `404` when session is not found.
+
+### Rebuild session transactions projection
+
+`POST /api/v1/sessions/{sessionId}/transactions/rebuild`
+
+Behavior:
+
+- Rebuilds CHAIN-sourced `session_transactions` from `normalized_transactions` (`status=CONFIRMED`) for wallets in the session.
+- Replaces previous CHAIN projection for that session idempotently.
+
+Response `202`:
+
+```json
+{
+  "sessionId": "549b0aba-a9af-4789-b125-ebb86314a3f1",
+  "projectedTransactions": 42,
+  "message": "Session transactions rebuilt"
+}
+```
+
+Returns `404` when session is not found.
+
+### Get session transactions (phase 1 timeline read)
+
+`GET /api/v1/sessions/{sessionId}/transactions?limit=50`
+
+Parameters:
+
+- `limit`: optional, default `50`, max `200`
+
+Response `200`:
+
+```json
+{
+  "sessionId": "549b0aba-a9af-4789-b125-ebb86314a3f1",
+  "items": [
+    {
+      "id": "549b0aba-a9af-4789-b125-ebb86314a3f1:CHAIN:normalized-1",
+      "sourceType": "CHAIN",
+      "txHash": "0xabc...",
+      "networkId": "BSC",
+      "walletAddress": "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f",
+      "blockTimestamp": "2026-03-01T10:00:00Z",
+      "type": "SWAP",
+      "bridgeStatus": null,
+      "realisedPnlUsdTotal": 12.34,
+      "avcoSnapshotVersion": null,
+      "flows": [
+        {
+          "role": "SELL",
+          "assetContract": "0x...",
+          "assetSymbol": "USDC",
+          "quantityDelta": -1,
+          "unitPriceUsd": 1.01,
+          "valueUsd": -1.01,
+          "priceSource": "SWAP_DERIVED",
+          "logIndex": 7
         }
       ]
     }

@@ -87,7 +87,9 @@ Manual compensating transactions may be **positive or negative** (reducing quant
 | Polygon | EVM | Polygonscan API |
 | Avalanche C-Chain | EVM | Snowtrace API |
 | Mantle | EVM | Mantlescan API |
-| Linea | EVM | Lineascan API |
+| Linea | EVM | Etherscan V2 API (`chainid=59144`) |
+| zkSync Era | EVM | Blockscout API |
+| Unichain | EVM | Etherscan V2 API (`chainid=130`) |
 | Solana | SVM | Out of scope for MVP v2 |
 
 ---

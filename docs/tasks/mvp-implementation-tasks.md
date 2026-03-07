@@ -25,10 +25,15 @@ Current implementation baseline:
 - **T-049** — `21-classifier-fast-path-coverage-and-enrichment-optimization.md`
 - **T-050** — `22-session-controller-and-backfill-status.md`
 - **T-051** — `23-backfill-segment-configuration-by-sync-method.md`
+- **T-052..T-056** — `24-session-transactions-phased-implementation.md`
+- **T-057** — `25-configurable-synthetic-native-contracts.md`
+- **T-058** — `26-zksync-lend-borrow-repay-synthetic-log-classification-fix.md`
+- **T-059** — `27-cross-network-selector-coverage-and-fallback-hardening.md`
+- **T-060..T-073** — `28-raw-vs-normalized-audit-remediation.md`
 
 ## Current Step
 
-- **T-051** — Planned for implementation (backend config/executor refactor + tests).
+- **T-070 (Re-run hardening)** — In implementation (lend-withdraw fallback + approval/noise + determinism).
 
 ## Removed From Active Requirements
 

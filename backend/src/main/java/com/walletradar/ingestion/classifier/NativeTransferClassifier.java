@@ -28,16 +28,18 @@ public class NativeTransferClassifier implements TxClassifier {
     private static final String UNWRAP_SELECTOR = "0x2e1a7d4d"; // withdraw(uint256)
     private static final String DEPOSIT_TOPIC = "0xe1fffcc4923d04b559f4d29a8bfc6cda04eb5b0d3c460751c2402c5c5cc9109c";
     private static final String WITHDRAWAL_TOPIC = "0x7fcf532c15f0a6db0bd6d0e038bea71d30d808c7d98cb3bf7268a95f7f1727f2";
-    private static final Map<String, WrappedNativeAsset> WRAPPED_NATIVE_BY_NETWORK = Map.of(
-            "ETHEREUM", new WrappedNativeAsset("0xc02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", "WETH"),
-            "ARBITRUM", new WrappedNativeAsset("0x82af49447d8a07e3bd95bd0d56f35241523fbab1", "WETH"),
-            "OPTIMISM", new WrappedNativeAsset("0x4200000000000000000000000000000000000006", "WETH"),
-            "BASE", new WrappedNativeAsset("0x4200000000000000000000000000000000000006", "WETH"),
-            "POLYGON", new WrappedNativeAsset("0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270", "WMATIC"),
-            "BSC", new WrappedNativeAsset("0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c", "WBNB"),
-            "AVALANCHE", new WrappedNativeAsset("0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7", "WAVAX"),
-            "MANTLE", new WrappedNativeAsset("0x78c1b0c915c4faa5fffa6cabf0219da63d7f4cb8", "WMNT"),
-            "LINEA", new WrappedNativeAsset("0xe5d7c2a44ffddf6b295a15c148167daaaf5cf34f", "WETH")
+    private static final Map<String, WrappedNativeAsset> WRAPPED_NATIVE_BY_NETWORK = Map.ofEntries(
+            Map.entry("ETHEREUM", new WrappedNativeAsset("0xc02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", "WETH")),
+            Map.entry("ARBITRUM", new WrappedNativeAsset("0x82af49447d8a07e3bd95bd0d56f35241523fbab1", "WETH")),
+            Map.entry("OPTIMISM", new WrappedNativeAsset("0x4200000000000000000000000000000000000006", "WETH")),
+            Map.entry("BASE", new WrappedNativeAsset("0x4200000000000000000000000000000000000006", "WETH")),
+            Map.entry("POLYGON", new WrappedNativeAsset("0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270", "WMATIC")),
+            Map.entry("BSC", new WrappedNativeAsset("0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c", "WBNB")),
+            Map.entry("AVALANCHE", new WrappedNativeAsset("0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7", "WAVAX")),
+            Map.entry("MANTLE", new WrappedNativeAsset("0x78c1b0c915c4faa5fffa6cabf0219da63d7f4cb8", "WMNT")),
+            Map.entry("LINEA", new WrappedNativeAsset("0xe5d7c2a44ffddf6b295a15c148167daaaf5cf34f", "WETH")),
+            Map.entry("UNICHAIN", new WrappedNativeAsset("0x4200000000000000000000000000000000000006", "WETH")),
+            Map.entry("ZKSYNC", new WrappedNativeAsset("0x5aea5775959fbc2557cc8789bc1bf90a239d9a91", "WETH"))
     );
 
     @Override
@@ -114,11 +116,11 @@ public class NativeTransferClassifier implements TxClassifier {
 
         RawClassifiedEvent sell = new RawClassifiedEvent();
         sell.setWalletAddress(walletAddress);
-        sell.setEventType(EconomicEventType.SWAP_SELL);
+        sell.setEventType(isWrap ? EconomicEventType.WRAP : EconomicEventType.UNWRAP);
         sell.setLogIndex(logIndex);
         RawClassifiedEvent buy = new RawClassifiedEvent();
         buy.setWalletAddress(walletAddress);
-        buy.setEventType(EconomicEventType.SWAP_BUY);
+        buy.setEventType(isWrap ? EconomicEventType.WRAP : EconomicEventType.UNWRAP);
         buy.setLogIndex(logIndex);
 
         if (isWrap) {
@@ -307,6 +309,8 @@ public class NativeTransferClassifier implements TxClassifier {
             case "AVALANCHE" -> new NativeAsset("0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7", "AVAX");
             case "MANTLE" -> new NativeAsset("0x78c1b0c915c4faa5fffa6cabf0219da63d7f4cb8", "MNT");
             case "LINEA" -> new NativeAsset("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "ETH");
+            case "UNICHAIN" -> new NativeAsset("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "ETH");
+            case "ZKSYNC" -> new NativeAsset("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "ETH");
             default -> new NativeAsset("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "ETH");
         };
     }

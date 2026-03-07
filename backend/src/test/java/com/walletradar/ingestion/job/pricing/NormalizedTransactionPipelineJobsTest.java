@@ -1,10 +1,12 @@
 package com.walletradar.ingestion.job.pricing;
 
 import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.transaction.normalized.ClassificationStatus;
 import com.walletradar.domain.transaction.normalized.LpLifecycleBoundaryStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
+import com.walletradar.domain.transaction.normalized.PricingStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.domain.common.PriceSource;
@@ -79,6 +81,7 @@ class NormalizedTransactionPipelineJobsTest {
     @DisplayName("unresolved price keeps record pending, then moves to NEEDS_REVIEW on retry limit")
     void unresolvedPricingPath() {
         NormalizedTransaction tx = pendingPriceSwap();
+        tx.setClassificationStatus(ClassificationStatus.CONFIRMED);
         when(historicalPriceResolverChain.resolve(any())).thenReturn(PriceResolutionResult.unknown());
 
         pricingJob.priceOne(tx);
@@ -88,6 +91,8 @@ class NormalizedTransactionPipelineJobsTest {
         tx.setPricingAttempts(1);
         pricingJob.priceOne(tx);
         assertThat(tx.getStatus()).isEqualTo(NormalizedTransactionStatus.NEEDS_REVIEW);
+        assertThat(tx.getClassificationStatus()).isEqualTo(ClassificationStatus.CONFIRMED);
+        assertThat(tx.getPricingStatus()).isEqualTo(PricingStatus.UNRESOLVED);
     }
 
     @Test
@@ -116,6 +121,33 @@ class NormalizedTransactionPipelineJobsTest {
 
         assertThat(tx.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_STAT);
         verify(historicalPriceResolverChain, never()).resolve(any());
+    }
+
+    @Test
+    @DisplayName("WRAP prices inbound leg and transitions to PENDING_STAT")
+    void wrapPricesInboundLeg() {
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setTxHash("0xwrap");
+        tx.setNetworkId(NetworkId.BASE);
+        tx.setWalletAddress("0xwallet");
+        tx.setBlockTimestamp(Instant.parse("2025-10-06T09:11:09Z"));
+        tx.setType(NormalizedTransactionType.WRAP);
+        tx.setStatus(NormalizedTransactionStatus.PENDING_PRICE);
+        tx.setPricingAttempts(0);
+        tx.setClassificationStatus(ClassificationStatus.CONFIRMED);
+
+        NormalizedTransaction.Flow nativeOut = flow(NormalizedLegRole.TRANSFER, "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "ETH", "-1");
+        NormalizedTransaction.Flow wrappedIn = flow(NormalizedLegRole.TRANSFER, "0x4200000000000000000000000000000000000006", "WETH", "1");
+        tx.setFlows(List.of(nativeOut, wrappedIn));
+
+        when(historicalPriceResolverChain.resolve(any()))
+                .thenReturn(PriceResolutionResult.known(new BigDecimal("3025.42"), PriceSource.COINGECKO));
+
+        pricingJob.priceOne(tx);
+
+        assertThat(tx.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_STAT);
+        assertThat(tx.getPricingStatus()).isEqualTo(PricingStatus.RESOLVED);
+        verify(historicalPriceResolverChain, times(1)).resolve(any());
     }
 
     @Test

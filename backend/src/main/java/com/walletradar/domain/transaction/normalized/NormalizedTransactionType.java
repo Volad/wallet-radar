@@ -5,6 +5,8 @@ package com.walletradar.domain.transaction.normalized;
  */
 public enum NormalizedTransactionType {
     SWAP,
+    WRAP,
+    UNWRAP,
     STAKE_DEPOSIT,
     STAKE_WITHDRAWAL,
     LP_ENTRY,

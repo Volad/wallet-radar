@@ -60,6 +60,26 @@ public class EtherscanV2ExplorerProvider implements ExplorerProvider {
     }
 
     @Override
+    public Long getCurrentBlockNumber(NetworkId networkId) {
+        Map<String, String> params = new LinkedHashMap<>();
+        params.put("module", "proxy");
+        params.put("action", "eth_blockNumber");
+        JsonNode root = call(networkId, params);
+        if (root == null) {
+            return null;
+        }
+        String blockHex = root.path("result").asText(null);
+        if (blockHex == null || !blockHex.startsWith("0x")) {
+            return null;
+        }
+        try {
+            return Long.parseLong(blockHex.substring(2), 16);
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    @Override
     public List<ExplorerTransaction> getTransactions(String walletAddress, NetworkId networkId, long fromBlock, long toBlock, int page) {
         return callAccountList(networkId, walletAddress, fromBlock, toBlock, page, "txlist", ExplorerTransaction::new);
     }

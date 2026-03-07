@@ -167,6 +167,51 @@ walletradar:
         batch-block-size: 1000
         window-blocks: 31560000    # ~2 years at ~2s/block
         avg-block-time-seconds: 2.0
+      LINEA:
+        syncMethod: ETHERSCAN
+        chain-id: "59144"
+        explorer:
+          etherscan:
+            base-url: https://api.etherscan.io
+            api-key: ${LINEA_ETHERSCAN_API_KEY:}
+        urls:
+          - https://rpc.linea.build
+          - https://linea-rpc.publicnode.com
+        batch-block-size: 1000
+        window-blocks: 31560000    # ~2 years at ~2s/block
+        avg-block-time-seconds: 2.0
+      UNICHAIN:
+        syncMethod: ETHERSCAN
+        chain-id: "130"
+        one-leg-lend-rules:
+          - contract: "0x2c7118c4c88b9841fcf839074c26ae8f035f2921"
+            selectors:
+              - "0xf2b9fdb8"
+        explorer:
+          etherscan:
+            base-url: https://api.etherscan.io
+            api-key: ${UNICHAIN_ETHERSCAN_API_KEY:}
+        urls:
+          - https://mainnet.unichain.org
+          - https://unichain-rpc.publicnode.com
+        batch-block-size: 1000
+        window-blocks: 31560000    # ~2 years at ~2s/block
+        avg-block-time-seconds: 2.0
+      ZKSYNC:
+        syncMethod: BLOCKSCOUT
+        chain-id: "324"
+        synthetic-native-contracts:
+          - "0x000000000000000000000000000000000000800a"
+        explorer:
+          blockscout:
+            base-url: https://zksync.blockscout.com
+            api-key: ${ZKSYNC_BLOCKSCOUT_API_KEY:}
+        urls:
+          - https://mainnet.era.zksync.io
+          - https://zksync.drpc.org
+        batch-block-size: 1000
+        window-blocks: 63072000    # ~2 years at ~1s/block
+        avg-block-time-seconds: 1.0
       SOLANA:
         syncMethod: RPC
         urls:

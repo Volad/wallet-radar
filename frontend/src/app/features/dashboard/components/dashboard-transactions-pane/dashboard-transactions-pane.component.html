@@ -1,0 +1,274 @@
+<section class="tx-pane">
+  <header class="tx-header">
+    <span class="tx-title">Transactions</span>
+    <label class="search-wrap">
+      <span aria-hidden="true">⌕</span>
+      <input
+        type="search"
+        [ngModel]="transactionSearch()"
+        (ngModelChange)="setTransactionSearch($event)"
+        placeholder="Search hash or symbol" />
+    </label>
+    <span class="mono muted">{{ filteredTransactions().length }} txns</span>
+  </header>
+
+  <div class="tx-columns">
+    <span></span>
+    <span>Type / Hash</span>
+    <span>Flows</span>
+    <span>Network</span>
+    <span class="align-right">Date</span>
+    <span></span>
+  </div>
+
+  <div class="tx-list">
+    @for (tx of filteredTransactions(); track tx.id) {
+      @let network = getNetworkById(tx.networkId);
+      @let wallet = getWalletById(tx.walletId);
+      @let buyFlow = getFirstFlowByRole(tx, 'BUY');
+      @let sellFlow = getFirstFlowByRole(tx, 'SELL');
+      @let txMissingPrice = hasMissingPrice(tx);
+      @let txNeedsReview = isPendingReview(tx);
+      @let txExpanded = isTransactionExpanded(tx.id);
+      @let txEditing = isTransactionEditing(tx.id);
+      @let draft = editingDraft();
+
+      <article class="tx-row-wrap">
+        <div class="tx-row" [class.expanded]="txExpanded" (click)="toggleTransactionExpanded(tx.id)">
+          <div class="tx-state-dot">
+            @if (txMissingPrice) {
+              <span class="warn-mark">⚠</span>
+            } @else if (txNeedsReview) {
+              <span class="muted">◷</span>
+            } @else {
+              <span class="ok-dot"></span>
+            }
+          </div>
+
+          <div class="tx-type-block">
+            <div class="tx-type-main">
+              <span>{{ prettifyLabel(tx.type) }}</span>
+              @if (tx.hasOverride) {
+                <span class="pill pill-purple">OVR</span>
+              }
+              @if (txMissingPrice) {
+                <span class="pill pill-amber">PRICE?</span>
+              }
+              @if (txNeedsReview) {
+                <span class="pill pill-purple">PENDING</span>
+              }
+            </div>
+            <div class="mono muted tiny">{{ tx.hash }}</div>
+          </div>
+
+          <div class="tx-flow-preview">
+            @if (buyFlow !== null) {
+              <div class="mono pos small-flow">
+                +{{ formatQuantity(buyFlow.quantity) }} {{ buyFlow.symbol }}
+                @if (buyFlow.priceUsd !== null) {
+                  <span class="muted">${{ buyFlow.priceUsd }}</span>
+                } @else {
+                  <span class="neg">?</span>
+                }
+              </div>
+            }
+            @if (sellFlow !== null) {
+              <div class="mono neg small-flow">-{{ formatQuantity(sellFlow.quantity) }} {{ sellFlow.symbol }}</div>
+            }
+          </div>
+
+          <div class="tx-meta-block">
+            <div class="meta-line">
+              <span [style.color]="network?.color">{{ network?.icon }}</span>
+              <span class="wallet-dot" [style.background]="wallet?.color"></span>
+              <span class="mono muted tiny">{{ wallet?.label }}</span>
+            </div>
+            <span [class]="getPillClass(getStatusVariant(tx.status))">{{ prettifyLabel(tx.status) }}</span>
+          </div>
+
+          <div class="mono muted align-right tiny">{{ tx.timestamp.split(' ')[0] }}</div>
+
+          <div class="tx-row-action" (click)="$event.stopPropagation()">
+            <button type="button" class="edit-btn" [class.active]="txEditing" (click)="startTransactionEdit(tx, $event)">
+              {{ txEditing ? 'Editing' : 'Edit' }}
+            </button>
+          </div>
+        </div>
+
+        @if (txExpanded && !txEditing) {
+          <div class="tx-expanded-view">
+            <div class="tx-expanded-flows">
+              @for (flow of tx.flows; track flow.role + flow.symbol + $index) {
+                <div class="flow-card">
+                  <span class="flow-role" [style.color]="getFlowColor(flow.role)">{{ flow.role }}</span>
+                  <strong class="mono">{{ flow.role === 'BUY' ? '+' : '-' }}{{ formatQuantity(flow.quantity) }} {{ flow.symbol }}</strong>
+                  <div class="flow-foot">
+                    @if (flow.priceUsd !== null) {
+                      <span class="mono muted">${{ flow.priceUsd }}</span>
+                    } @else {
+                      <span class="warn-mark">No price</span>
+                    }
+                    <span class="source-pill" [style.--sourceColor]="getPriceSourceColor(flow.source)">{{ flow.source }}</span>
+                  </div>
+                </div>
+              }
+            </div>
+
+            @if (txMissingPrice) {
+              <div class="inline-warning">
+                <span>Missing price detected. AVCO is calculated without value for this flow.</span>
+                <button type="button" class="inline-link" (click)="startTransactionEdit(tx, $event)">Set price</button>
+              </div>
+            }
+
+            @if (tx.hasOverride) {
+              <div class="inline-note">
+                <span>Manual override is active for this transaction.</span>
+                <button type="button" class="inline-link subtle">Revert</button>
+              </div>
+            }
+          </div>
+        }
+
+        @if (txExpanded && txEditing && draft !== null && draft.id === tx.id) {
+          <div class="tx-editor">
+            <div class="inline-warning recalc">
+              <span>Changing type or flows triggers AVCO recalculation from this transaction forward.</span>
+            </div>
+
+            <div class="editor-grid two-col">
+              <div>
+                <label class="side-label" for="type-{{ tx.id }}">Transaction type</label>
+                <select id="type-{{ tx.id }}" [ngModel]="draft.type" (ngModelChange)="setDraftType($event)">
+                  @for (type of transactionTypes; track type) {
+                    <option [value]="type">{{ prettifyLabel(type) }}</option>
+                  }
+                </select>
+              </div>
+
+              <div>
+                <label class="side-label" for="time-{{ tx.id }}">Block timestamp</label>
+                <input
+                  id="time-{{ tx.id }}"
+                  type="text"
+                  [ngModel]="draft.timestamp"
+                  (ngModelChange)="setDraftTimestamp($event)"
+                  placeholder="YYYY-MM-DD HH:mm" />
+              </div>
+            </div>
+
+            <div>
+              <div class="editor-title-row">
+                <span class="side-label">Flows</span>
+                <button type="button" class="add-flow-btn" (click)="addDraftFlow()">+ Add flow</button>
+              </div>
+
+              <div class="editor-flows">
+                @for (flow of draft.flows; track flow.role + flow.symbol + $index; let flowIndex = $index) {
+                  <article class="editor-flow-card">
+                    <div class="role-toggle">
+                      @for (role of flowRoles; track role) {
+                        <button
+                          type="button"
+                          [class.active]="flow.role === role"
+                          [style.--roleColor]="getFlowColor(role)"
+                          (click)="setDraftFlowRole(flowIndex, role)">
+                          {{ role }}
+                        </button>
+                      }
+                      @if (draft.flows.length > 1) {
+                        <button type="button" class="trash-btn" (click)="removeDraftFlow(flowIndex)">Delete</button>
+                      }
+                    </div>
+
+                    <div class="editor-grid flow-grid">
+                      <div>
+                        <label class="side-label" for="asset-{{ tx.id }}-{{ flowIndex }}">Asset</label>
+                        <input
+                          id="asset-{{ tx.id }}-{{ flowIndex }}"
+                          type="text"
+                          [ngModel]="flow.symbol"
+                          (ngModelChange)="setDraftFlowSymbol(flowIndex, $event)"
+                          placeholder="ETH" />
+                      </div>
+
+                      <div>
+                        <label class="side-label" for="qty-{{ tx.id }}-{{ flowIndex }}">Quantity</label>
+                        <input
+                          id="qty-{{ tx.id }}-{{ flowIndex }}"
+                          type="text"
+                          [ngModel]="flow.quantity ?? ''"
+                          (ngModelChange)="setDraftFlowQuantity(flowIndex, $event)"
+                          placeholder="0.0000" />
+                      </div>
+
+                      <div>
+                        <label class="side-label" for="price-{{ tx.id }}-{{ flowIndex }}">Price USD</label>
+                        <input
+                          id="price-{{ tx.id }}-{{ flowIndex }}"
+                          type="text"
+                          [class.warn]="flow.priceUsd === null"
+                          [ngModel]="flow.priceUsd ?? ''"
+                          (ngModelChange)="setDraftFlowPrice(flowIndex, $event)"
+                          placeholder="0.00" />
+                      </div>
+
+                      <div>
+                        <label class="side-label" for="source-{{ tx.id }}-{{ flowIndex }}">Source</label>
+                        <select
+                          id="source-{{ tx.id }}-{{ flowIndex }}"
+                          [style.color]="getPriceSourceColor(flow.source)"
+                          [ngModel]="flow.source"
+                          (ngModelChange)="setDraftFlowSource(flowIndex, $event)">
+                          @for (source of priceSources; track source) {
+                            <option [value]="source">{{ source }}</option>
+                          }
+                        </select>
+                      </div>
+                    </div>
+
+                    @if (flow.quantity !== null && flow.priceUsd !== null) {
+                      <div class="mono tiny muted">≈ {{ formatUsd(flow.quantity * flow.priceUsd) }} · {{ flow.source }}</div>
+                    }
+
+                    @if (flow.priceUsd === null) {
+                      <div class="tiny warn-mark">No price: AVCO will use quantity only.</div>
+                    }
+                  </article>
+                }
+              </div>
+            </div>
+
+            <div>
+              <label class="side-label" for="note-{{ tx.id }}">Note</label>
+              <input
+                id="note-{{ tx.id }}"
+                type="text"
+                [ngModel]="draft.note"
+                (ngModelChange)="setDraftNote($event)"
+                placeholder="Reason for edit" />
+            </div>
+
+            <div class="editor-actions">
+              @if (missingPricesInDraft() > 0) {
+                <span class="tiny warn-mark">{{ missingPricesInDraft() }} flow(s) missing price</span>
+              }
+              <button type="button" class="cancel-btn" (click)="cancelTransactionEdit()">Cancel</button>
+              <button type="button" class="save-btn" [disabled]="saveState() === 'saving'" (click)="saveTransactionEdit()">
+                @if (saveState() === 'saving') {
+                  Saving...
+                } @else if (saveState() === 'saved') {
+                  Saved!
+                } @else {
+                  Save & Recalc
+                }
+              </button>
+            </div>
+          </div>
+        }
+      </article>
+    } @empty {
+      <div class="empty-block">No transactions match current filters.</div>
+    }
+  </div>
+</section>

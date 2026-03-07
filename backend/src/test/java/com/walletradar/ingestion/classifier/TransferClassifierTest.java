@@ -3,6 +3,7 @@ package com.walletradar.ingestion.classifier;
 import com.walletradar.domain.transaction.normalized.EconomicEventType;
 import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.ingestion.adapter.evm.rpc.EvmTokenDecimalsResolver;
+import com.walletradar.ingestion.config.IngestionNetworkProperties;
 import com.walletradar.ingestion.config.ProtocolRegistryProperties;
 import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
@@ -23,6 +24,8 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class TransferClassifierTest {
 
+    private static final String ZKSYNC_WALLET = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+
     private TransferClassifier classifier;
     private ProtocolRegistry registry;
 
@@ -36,7 +39,12 @@ class TransferClassifierTest {
         registry = new DefaultProtocolRegistry(props);
         lenient().when(evmTokenDecimalsResolver.getDecimals(anyString(), anyString())).thenReturn(18);
         lenient().when(evmTokenDecimalsResolver.getSymbol(anyString(), anyString())).thenReturn("TOKEN");
-        classifier = new TransferClassifier(registry, evmTokenDecimalsResolver);
+        IngestionNetworkProperties ingestionNetworkProperties = new IngestionNetworkProperties();
+        IngestionNetworkProperties.NetworkIngestionEntry zksyncEntry = new IngestionNetworkProperties.NetworkIngestionEntry();
+        zksyncEntry.setSyntheticNativeContracts(List.of("0x000000000000000000000000000000000000800a"));
+        ingestionNetworkProperties.setNetwork(Map.of("ZKSYNC", zksyncEntry));
+        LendClassifier lendClassifier = new LendClassifier(registry, evmTokenDecimalsResolver, ingestionNetworkProperties);
+        classifier = new TransferClassifier(registry, evmTokenDecimalsResolver, lendClassifier);
     }
 
     @Test
@@ -305,6 +313,83 @@ class TransferClassifierTest {
         assertThat(buy.getAssetContract()).isEqualTo("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
         assertThat(buy.getAssetSymbol()).isEqualTo("ETH");
         assertThat(buy.getQuantityDelta()).isEqualByComparingTo("0.008561799836019201");
+    }
+
+    @Test
+    void classify_tokenOutPlusInternalNativeInAndSwapSelectorHint_emitsSwapWithNativeBuy() {
+        String wallet = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String walletTopic = "0x" + "0".repeat(24) + "1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String routerTopic = "0x" + "0".repeat(24) + "00c600b30fb0400701010f4b080409018b9006e0";
+        String usdc = "0xaf88d065e77c8cc2239327c5edb3a432268e5831";
+
+        when(evmTokenDecimalsResolver.getDecimals(anyString(), eq(usdc))).thenReturn(6);
+        when(evmTokenDecimalsResolver.getSymbol(anyString(), eq(usdc))).thenReturn("USDC");
+
+        RawTransaction tx = new RawTransaction();
+        tx.setNetworkId("ARBITRUM");
+        tx.setRawData(new Document("methodId", "0x07ed2379")
+                .append("logs", List.of(
+                        new Document("address", usdc)
+                                .append("topics", List.of(TransferClassifier.TRANSFER_TOPIC, walletTopic, routerTopic))
+                                .append("data", "0x0000000000000000000000000000000000000000000000000000000000f42400")))
+                .append("explorer", new Document("internalTransfers", List.of(
+                        new Document("from", "0x6a000f20005980200259b80c5102003040001068")
+                                .append("to", wallet)
+                                .append("value", "8561799836019201")
+                                .append("isError", "0")))));
+
+        List<RawClassifiedEvent> result = classifier.classify(tx, wallet);
+
+        assertThat(result).hasSize(2);
+        RawClassifiedEvent sell = result.stream().filter(e -> e.getEventType() == EconomicEventType.SWAP_SELL).findFirst().orElseThrow();
+        RawClassifiedEvent buy = result.stream().filter(e -> e.getEventType() == EconomicEventType.SWAP_BUY).findFirst().orElseThrow();
+        assertThat(sell.getAssetContract()).isEqualTo(usdc);
+        assertThat(sell.getQuantityDelta()).isEqualByComparingTo("-16");
+        assertThat(buy.getAssetContract()).isEqualTo("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
+        assertThat(buy.getQuantityDelta()).isEqualByComparingTo("0.008561799836019201");
+    }
+
+    @Test
+    void classify_swapSelectorWithRefund_sameAssetInOut_emitsNetSwap() {
+        String wallet = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String walletTopic = "0x" + "0".repeat(24) + "1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String routerTopic = "0x" + "0".repeat(24) + "6a000f20005980200259b80c5102003040001068";
+        String poolTopic = "0x" + "0".repeat(24) + "8573f98175d816d520248b5facf40d309b1c9cee";
+        String usdc = "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e";
+        String ausd = "0x00000000efe302beaa2b3e6e1b18d08d69a9012a";
+
+        when(evmTokenDecimalsResolver.getDecimals(eq("AVALANCHE"), eq(usdc))).thenReturn(6);
+        when(evmTokenDecimalsResolver.getDecimals(eq("AVALANCHE"), eq(ausd))).thenReturn(6);
+        when(evmTokenDecimalsResolver.getSymbol(eq("AVALANCHE"), eq(usdc))).thenReturn("USDC");
+        when(evmTokenDecimalsResolver.getSymbol(eq("AVALANCHE"), eq(ausd))).thenReturn("AUSD");
+
+        RawTransaction tx = new RawTransaction();
+        tx.setNetworkId("AVALANCHE");
+        tx.setRawData(new Document("from", wallet)
+                .append("to", "0x6a000f20005980200259b80c5102003040001068")
+                .append("methodId", "0x7f457675")
+                .append("functionName", "swapExactAmountOut(address,tuple,uint256,bytes,bytes)")
+                .append("logs", List.of(
+                        new Document("address", usdc)
+                                .append("topics", List.of(TransferClassifier.TRANSFER_TOPIC, walletTopic, routerTopic))
+                                .append("data", "0x000000000000000000000000000000000000000000000000000000001dd3fc8d"), // 500.432013
+                        new Document("address", usdc)
+                                .append("topics", List.of(TransferClassifier.TRANSFER_TOPIC, routerTopic, walletTopic))
+                                .append("data", "0x000000000000000000000000000000000000000000000000000000000007a120"), // 0.500000
+                        new Document("address", ausd)
+                                .append("topics", List.of(TransferClassifier.TRANSFER_TOPIC, poolTopic, walletTopic))
+                                .append("data", "0x000000000000000000000000000000000000000000000000000000001dd23b00")  // 500.316928
+                )));
+
+        List<RawClassifiedEvent> result = classifier.classify(tx, wallet);
+
+        assertThat(result).hasSize(2);
+        RawClassifiedEvent sell = result.stream().filter(e -> e.getEventType() == EconomicEventType.SWAP_SELL).findFirst().orElseThrow();
+        RawClassifiedEvent buy = result.stream().filter(e -> e.getEventType() == EconomicEventType.SWAP_BUY).findFirst().orElseThrow();
+        assertThat(sell.getAssetContract()).isEqualTo(usdc);
+        assertThat(sell.getQuantityDelta()).isEqualByComparingTo("-499.932013");
+        assertThat(buy.getAssetContract()).isEqualTo(ausd);
+        assertThat(buy.getQuantityDelta()).isEqualByComparingTo("500.316928");
     }
 
     @Test
@@ -776,5 +861,45 @@ class TransferClassifierTest {
         assertThat(inbound.getEventType()).isEqualTo(EconomicEventType.EXTERNAL_INBOUND);
         assertThat(inbound.getAssetContract()).isEqualTo(nft);
         assertThat(inbound.getQuantityDelta()).isEqualByComparingTo("1");
+    }
+
+    @Test
+    void classify_zkSyncDepositWithExtraNativeLegs_returnsEmptyBecauseLendTakesPrecedence() {
+        RawTransaction tx = ClassifierFixtureLoader
+                .loadRawTransaction("fixtures/classifier/zksync/lend-deposit-extra-native-legs.json");
+
+        List<RawClassifiedEvent> result = classifier.classify(tx, ZKSYNC_WALLET);
+
+        assertThat(result).isEmpty();
+    }
+
+    @Test
+    void classify_zkSyncWithdrawWithExtraNativeLegs_returnsEmptyBecauseLendTakesPrecedence() {
+        RawTransaction tx = ClassifierFixtureLoader
+                .loadRawTransaction("fixtures/classifier/zksync/lend-withdraw-extra-native-legs.json");
+
+        List<RawClassifiedEvent> result = classifier.classify(tx, ZKSYNC_WALLET);
+
+        assertThat(result).isEmpty();
+    }
+
+    @Test
+    void classify_zkSyncBorrowWithExtraNativeLegs_returnsEmptyBecauseLendTakesPrecedence() {
+        RawTransaction tx = ClassifierFixtureLoader
+                .loadRawTransaction("fixtures/classifier/zksync/borrow-extra-native-legs.json");
+
+        List<RawClassifiedEvent> result = classifier.classify(tx, ZKSYNC_WALLET);
+
+        assertThat(result).isEmpty();
+    }
+
+    @Test
+    void classify_zkSyncRepayWithExtraNativeLegs_returnsEmptyBecauseLendTakesPrecedence() {
+        RawTransaction tx = ClassifierFixtureLoader
+                .loadRawTransaction("fixtures/classifier/zksync/repay-extra-native-legs.json");
+
+        List<RawClassifiedEvent> result = classifier.classify(tx, ZKSYNC_WALLET);
+
+        assertThat(result).isEmpty();
     }
 }

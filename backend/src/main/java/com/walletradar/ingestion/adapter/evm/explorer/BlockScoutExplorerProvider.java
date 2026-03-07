@@ -61,6 +61,24 @@ public class BlockScoutExplorerProvider implements ExplorerProvider {
     }
 
     @Override
+    public Long getCurrentBlockNumber(NetworkId networkId) {
+        JsonNode root = callRpc(networkId, "eth_blockNumber", List.of());
+        JsonNode result = resultNode(root);
+        if (result == null || result.isMissingNode() || result.isNull()) {
+            return null;
+        }
+        String blockHex = result.asText(null);
+        if (blockHex == null || !blockHex.startsWith("0x")) {
+            return null;
+        }
+        try {
+            return Long.parseLong(blockHex.substring(2), 16);
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    @Override
     public List<ExplorerTransaction> getTransactions(String walletAddress, NetworkId networkId, long fromBlock, long toBlock, int page) {
         return callAccountList(networkId, walletAddress, fromBlock, toBlock, page, "txlist", PAGE_SIZE_TX, ExplorerTransaction::new);
     }

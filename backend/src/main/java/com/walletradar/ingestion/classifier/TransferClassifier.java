@@ -40,6 +40,13 @@ public class TransferClassifier implements TxClassifier {
     private static final String SWAP_TOPIC_V3_FEES = "0x19b47279256b2a23a1665c810c8d55a1758940ee09377d4f8d26497a3577dc83";
     private static final BigDecimal EVM_NATIVE_DECIMALS = BigDecimal.TEN.pow(18);
     private static final Set<String> CLAIM_METHOD_IDS = Set.of("0x71ee95c0");
+    private static final Set<String> KNOWN_SWAP_CALL_METHOD_IDS = Set.of(
+            "0x07ed2379",
+            "0x90411a32",
+            "0x73fc4457",
+            "0x7f457675",
+            "0xe21fd0e9"
+    );
 
     private static final Set<String> SWAP_TOPICS = Set.of(
             SWAP_TOPIC_V2, SWAP_TOPIC_V3, SWAP_TOPIC_V3_FEES
@@ -53,6 +60,7 @@ public class TransferClassifier implements TxClassifier {
 
     private final ProtocolRegistry protocolRegistry;
     private final EvmTokenDecimalsResolver evmTokenDecimalsResolver;
+    private final LendClassifier lendClassifier;
 
     @Override
     public List<RawClassifiedEvent> classify(RawTransactionNormalizationView tx, String walletAddress) {
@@ -72,10 +80,7 @@ public class TransferClassifier implements TxClassifier {
         if (hasSwap) {
             return out;
         }
-        if (LendClassifier.isLikelyVaultDepositPattern(tx, walletAddress, logs)
-                || LendClassifier.isLikelyVaultWithdrawalPattern(tx, walletAddress, logs)
-                || LendClassifier.isLikelyBorrowPattern(tx, walletAddress, logs)
-                || LendClassifier.isLikelyRepayPattern(tx, walletAddress, logs)
+        if (lendClassifier.isLikelyLendPattern(tx, walletAddress, logs)
                 || LpClassifier.isLikelyLpEntryPattern(tx, walletAddress, logs)
                 || LpClassifier.isLikelyLpExitPattern(tx, walletAddress, logs)
                 || LpClassifier.isLikelyLpPositionPattern(tx, walletAddress, logs)
@@ -130,6 +135,19 @@ public class TransferClassifier implements TxClassifier {
                 if (ZERO_ADDRESS_TOPIC.equalsIgnoreCase(fromTopic)) {
                     hasWalletInboundMint = true;
                 }
+            }
+        }
+
+        if (!hasWalletInboundMint && !hasWalletOutboundBurn && isLikelySwapCall(tx)) {
+            List<RawClassifiedEvent> netSwap = classifyNetSwapForKnownSwapCall(
+                    walletAddress,
+                    outflowQtyByContract,
+                    outflowMetaByContract,
+                    inflowQtyByContract,
+                    inflowMetaByContract
+            );
+            if (!netSwap.isEmpty()) {
+                return netSwap;
             }
         }
 
@@ -270,6 +288,77 @@ public class TransferClassifier implements TxClassifier {
         return out;
     }
 
+    private static List<RawClassifiedEvent> classifyNetSwapForKnownSwapCall(
+            String walletAddress,
+            Map<String, BigDecimal> outflowQtyByContract,
+            Map<String, TransferMeta> outflowMetaByContract,
+            Map<String, BigDecimal> inflowQtyByContract,
+            Map<String, TransferMeta> inflowMetaByContract
+    ) {
+        Map<String, BigDecimal> netByContract = new LinkedHashMap<>();
+        for (Map.Entry<String, BigDecimal> e : outflowQtyByContract.entrySet()) {
+            if (e.getKey() == null || e.getValue() == null) {
+                continue;
+            }
+            netByContract.merge(e.getKey(), e.getValue(), BigDecimal::add);
+        }
+        for (Map.Entry<String, BigDecimal> e : inflowQtyByContract.entrySet()) {
+            if (e.getKey() == null || e.getValue() == null) {
+                continue;
+            }
+            netByContract.merge(e.getKey(), e.getValue(), BigDecimal::add);
+        }
+
+        String sellContract = null;
+        String buyContract = null;
+        BigDecimal sellQty = null;
+        BigDecimal buyQty = null;
+        for (Map.Entry<String, BigDecimal> e : netByContract.entrySet()) {
+            BigDecimal qty = e.getValue();
+            if (qty == null || qty.signum() == 0) {
+                continue;
+            }
+            if (qty.signum() < 0) {
+                if (sellContract != null) {
+                    return List.of();
+                }
+                sellContract = e.getKey();
+                sellQty = qty;
+            } else {
+                if (buyContract != null) {
+                    return List.of();
+                }
+                buyContract = e.getKey();
+                buyQty = qty;
+            }
+        }
+        if (sellContract == null || buyContract == null || sellContract.equalsIgnoreCase(buyContract)) {
+            return List.of();
+        }
+
+        TransferMeta sellMeta = outflowMetaByContract.getOrDefault(sellContract, inflowMetaByContract.get(sellContract));
+        TransferMeta buyMeta = inflowMetaByContract.getOrDefault(buyContract, outflowMetaByContract.get(buyContract));
+
+        RawClassifiedEvent sell = new RawClassifiedEvent();
+        sell.setEventType(EconomicEventType.SWAP_SELL);
+        sell.setWalletAddress(walletAddress);
+        sell.setAssetContract(sellContract);
+        sell.setAssetSymbol(sellMeta != null ? sellMeta.symbol : "");
+        sell.setQuantityDelta(sellQty);
+        sell.setProtocolName(sellMeta != null ? sellMeta.protocolName : null);
+        sell.setLogIndex(sellMeta != null ? sellMeta.logIndex : null);
+
+        RawClassifiedEvent buy = new RawClassifiedEvent();
+        buy.setEventType(EconomicEventType.SWAP_BUY);
+        buy.setWalletAddress(walletAddress);
+        buy.setAssetContract(buyContract);
+        buy.setAssetSymbol(buyMeta != null ? buyMeta.symbol : "");
+        buy.setQuantityDelta(buyQty);
+        buy.setProtocolName(buyMeta != null ? buyMeta.protocolName : null);
+        buy.setLogIndex(buyMeta != null ? buyMeta.logIndex : null);
+        return List.of(sell, buy);
+    }
+
     private List<RawClassifiedEvent> classifyClaimInbounds(
             RawTransactionNormalizationView tx, String walletAddress, List<Document> logs
     ) {
@@ -343,6 +432,10 @@ public class TransferClassifier implements TxClassifier {
     }
 
     private static boolean isLikelySwapCall(RawTransactionNormalizationView tx) {
+        String selector = tx.selector();
+        if (selector != null && KNOWN_SWAP_CALL_METHOD_IDS.contains(selector)) {
+            return true;
+        }
         String functionName = tx.readRawOrExplorerTx("functionName");
         if (functionName == null) {
             return false;
@@ -409,6 +502,8 @@ public class TransferClassifier implements TxClassifier {
             case "AVALANCHE" -> new NativeAsset("0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7", "AVAX");
             case "MANTLE" -> new NativeAsset("0x78c1b0c915c4faa5fffa6cabf0219da63d7f4cb8", "MNT");
             case "LINEA" -> new NativeAsset("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "ETH");
+            case "UNICHAIN" -> new NativeAsset("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "ETH");
+            case "ZKSYNC" -> new NativeAsset("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "ETH");
             default -> new NativeAsset("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "ETH");
         };
     }

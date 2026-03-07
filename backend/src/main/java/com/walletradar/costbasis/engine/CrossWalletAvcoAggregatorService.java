@@ -158,6 +158,8 @@ public class CrossWalletAvcoAggregatorService {
             return false;
         }
         return type == NormalizedTransactionType.SWAP
+                || type == NormalizedTransactionType.WRAP
+                || type == NormalizedTransactionType.UNWRAP
                 || type == NormalizedTransactionType.BORROW
                 || type == NormalizedTransactionType.STAKE_WITHDRAWAL
                 || type == NormalizedTransactionType.LEND_WITHDRAWAL

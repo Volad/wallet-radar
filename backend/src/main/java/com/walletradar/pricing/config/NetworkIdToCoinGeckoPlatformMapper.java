@@ -12,17 +12,19 @@ public final class NetworkIdToCoinGeckoPlatformMapper {
 
     private NetworkIdToCoinGeckoPlatformMapper() {}
 
-    private static final java.util.Map<NetworkId, String> PLATFORM_IDS = java.util.Map.of(
-            NetworkId.ETHEREUM, "ethereum",
-            NetworkId.ARBITRUM, "arbitrum-one",
-            NetworkId.OPTIMISM, "optimism",
-            NetworkId.POLYGON, "polygon-pos",
-            NetworkId.BASE, "base",
-            NetworkId.BSC, "binance-smart-chain",
-            NetworkId.AVALANCHE, "avalanche",
-            NetworkId.MANTLE, "mantle",
-            NetworkId.LINEA, "linea",
-            NetworkId.SOLANA, "solana"
+    private static final java.util.Map<NetworkId, String> PLATFORM_IDS = java.util.Map.ofEntries(
+            java.util.Map.entry(NetworkId.ETHEREUM, "ethereum"),
+            java.util.Map.entry(NetworkId.ARBITRUM, "arbitrum-one"),
+            java.util.Map.entry(NetworkId.OPTIMISM, "optimism"),
+            java.util.Map.entry(NetworkId.POLYGON, "polygon-pos"),
+            java.util.Map.entry(NetworkId.BASE, "base"),
+            java.util.Map.entry(NetworkId.BSC, "binance-smart-chain"),
+            java.util.Map.entry(NetworkId.AVALANCHE, "avalanche"),
+            java.util.Map.entry(NetworkId.MANTLE, "mantle"),
+            java.util.Map.entry(NetworkId.LINEA, "linea"),
+            java.util.Map.entry(NetworkId.UNICHAIN, "unichain"),
+            java.util.Map.entry(NetworkId.ZKSYNC, "zksync"),
+            java.util.Map.entry(NetworkId.SOLANA, "solana")
     );
 
     /**

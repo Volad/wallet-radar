@@ -1,6 +1,7 @@
 package com.walletradar.ingestion.job.classification;
 
 import com.walletradar.domain.common.ConfidenceLevel;
+import com.walletradar.domain.transaction.normalized.ClassificationStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
@@ -87,6 +88,7 @@ public class ClarificationJob {
         tx.setMissingDataReasons(recalculatedReasons);
         if (recalculatedReasons.isEmpty()) {
             tx.setStatus(NormalizedTransactionStatus.PENDING_PRICE);
+            tx.setClassificationStatus(ClassificationStatus.CONFIRMED);
         } else {
             attempts++;
             tx.setClarificationAttempts(attempts);
@@ -95,6 +97,7 @@ public class ClarificationJob {
                 reasons.add("CLARIFICATION_UNRESOLVED");
                 tx.setMissingDataReasons(List.copyOf(reasons));
                 tx.setStatus(NormalizedTransactionStatus.NEEDS_REVIEW);
+                tx.setClassificationStatus(ClassificationStatus.NEEDS_REVIEW);
             } else {
                 tx.setStatus(NormalizedTransactionStatus.PENDING_CLARIFICATION);
             }

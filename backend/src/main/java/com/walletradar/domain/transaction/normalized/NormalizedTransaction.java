@@ -52,6 +52,10 @@ public class NormalizedTransaction {
      */
     private List<LpLifecycleBoundaryStatus> boundaryStatuses = new ArrayList<>();
     private NormalizedTransactionStatus status;
+    /** Classification certainty independent from pricing pipeline outcomes. */
+    private ClassificationStatus classificationStatus;
+    /** Pricing resolution state independent from classification certainty. */
+    private PricingStatus pricingStatus;
     @Setter(AccessLevel.NONE)
     private List<Flow> flows = new ArrayList<>();
     private List<String> missingDataReasons = new ArrayList<>();

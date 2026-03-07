@@ -1,10 +1,12 @@
 package com.walletradar.ingestion.job.pricing;
 
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.domain.transaction.normalized.ClassificationStatus;
 import com.walletradar.domain.transaction.normalized.LpLifecycleBoundaryStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.domain.transaction.normalized.PricingStatus;
 import com.walletradar.domain.event.RecalculateWalletRequestEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -69,14 +71,34 @@ public class NormalizedTransactionStatJob {
         if (!reasons.isEmpty()) {
             tx.setStatus(NormalizedTransactionStatus.NEEDS_REVIEW);
             tx.setMissingDataReasons(reasons);
+            if (isPricingOnlyReview(reasons)) {
+                tx.setPricingStatus(PricingStatus.UNRESOLVED);
+                if (tx.getClassificationStatus() == null) {
+                    tx.setClassificationStatus(ClassificationStatus.CONFIRMED);
+                }
+            } else {
+                tx.setClassificationStatus(ClassificationStatus.NEEDS_REVIEW);
+            }
             normalizedTransactionRepository.save(tx);
             return false;
         }
         tx.setStatus(NormalizedTransactionStatus.CONFIRMED);
         tx.setConfirmedAt(Instant.now());
         tx.setMissingDataReasons(List.of());
+        if (tx.getClassificationStatus() == null) {
+            tx.setClassificationStatus(ClassificationStatus.CONFIRMED);
+        }
+        if (tx.getPricingStatus() == null) {
+            tx.setPricingStatus(resolveResolvedPricingStatus(tx.getType()));
+        }
         normalizedTransactionRepository.save(tx);
         return true;
+    }
+
+    private static boolean isPricingOnlyReview(List<String> reasons) {
+        return reasons != null
+                && !reasons.isEmpty()
+                && reasons.stream().allMatch("MISSING_PRICE"::equals);
     }
 
     private static List<String> statValidationErrors(NormalizedTransaction tx) {
@@ -106,13 +128,24 @@ public class NormalizedTransactionStatJob {
     private static boolean isPriceRequired(NormalizedTransactionType type, BigDecimal qty) {
         if (type == NormalizedTransactionType.LP_ADJUST
                 || type == NormalizedTransactionType.LP_POSITION_STAKE
-                || type == NormalizedTransactionType.LP_POSITION_UNSTAKE) {
+                || type == NormalizedTransactionType.LP_POSITION_UNSTAKE
+                || type == NormalizedTransactionType.APPROVAL) {
             return false;
         }
         if (type == NormalizedTransactionType.SWAP) {
             return true;
         }
         return qty.signum() > 0;
+    }
+
+    private static PricingStatus resolveResolvedPricingStatus(NormalizedTransactionType type) {
+        if (type == NormalizedTransactionType.APPROVAL
+                || type == NormalizedTransactionType.LP_ADJUST
+                || type == NormalizedTransactionType.LP_POSITION_STAKE
+                || type == NormalizedTransactionType.LP_POSITION_UNSTAKE) {
+            return PricingStatus.NOT_REQUIRED;
+        }
+        return PricingStatus.RESOLVED;
     }
 
     private void refreshBoundaryStatus(String groupId) {

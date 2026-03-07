@@ -27,7 +27,9 @@ public class AddressValidator {
             NetworkId.BSC,
             NetworkId.AVALANCHE,
             NetworkId.MANTLE,
-            NetworkId.LINEA
+            NetworkId.LINEA,
+            NetworkId.UNICHAIN,
+            NetworkId.ZKSYNC
     );
 
     public boolean isValidAddress(String address) {

@@ -32,7 +32,7 @@ $worker implement docs/tasks/22-session-controller-and-backfill-status.md (T-050
 5. Validation is **all-or-nothing**: if any wallet in payload is invalid, return `400` and persist/start nothing.
 6. Session persistence has **no TTL** (stored indefinitely).
 7. Supported networks for this flow are fixed EVM set:
-   - `ETHEREUM`, `ARBITRUM`, `OPTIMISM`, `POLYGON`, `BASE`, `BSC`, `AVALANCHE`, `MANTLE`.
+   - `ETHEREUM`, `ARBITRUM`, `OPTIMISM`, `POLYGON`, `BASE`, `BSC`, `AVALANCHE`, `MANTLE`, `LINEA`, `UNICHAIN`, `ZKSYNC`.
 
 ### API contract (new)
 
@@ -56,7 +56,10 @@ Request (`AddSessionRequest`):
         "BASE",
         "BSC",
         "AVALANCHE",
-        "MANTLE"
+        "MANTLE",
+        "LINEA",
+        "UNICHAIN",
+        "ZKSYNC"
       ]
     }
   ]
@@ -99,7 +102,10 @@ Response (`200`):
         "BASE",
         "BSC",
         "AVALANCHE",
-        "MANTLE"
+        "MANTLE",
+        "LINEA",
+        "UNICHAIN",
+        "ZKSYNC"
       ]
     }
   ]

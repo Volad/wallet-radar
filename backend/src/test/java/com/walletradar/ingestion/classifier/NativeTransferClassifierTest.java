@@ -145,7 +145,7 @@ class NativeTransferClassifierTest {
     }
 
     @Test
-    void classify_wrappedNativeDeposit_emitsSwapSellAndSwapBuy() {
+    void classify_wrappedNativeDeposit_emitsWrapEvents() {
         String wallet = "0x1A87f12aC07E9746e9B053B8D7EF1d45270D693f";
         String walletTopic = "0x0000000000000000000000001a87f12ac07e9746e9b053b8d7ef1d45270d693f";
         String wrappedNative = "0x4200000000000000000000000000000000000006";
@@ -169,8 +169,10 @@ class NativeTransferClassifierTest {
         List<RawClassifiedEvent> events = classifier.classify(tx, wallet);
 
         assertThat(events).hasSize(2);
-        RawClassifiedEvent sell = events.stream().filter(e -> e.getEventType() == EconomicEventType.SWAP_SELL).findFirst().orElseThrow();
-        RawClassifiedEvent buy = events.stream().filter(e -> e.getEventType() == EconomicEventType.SWAP_BUY).findFirst().orElseThrow();
+        RawClassifiedEvent sell = events.stream().filter(e -> e.getQuantityDelta().signum() < 0).findFirst().orElseThrow();
+        RawClassifiedEvent buy = events.stream().filter(e -> e.getQuantityDelta().signum() > 0).findFirst().orElseThrow();
+        assertThat(sell.getEventType()).isEqualTo(EconomicEventType.WRAP);
+        assertThat(buy.getEventType()).isEqualTo(EconomicEventType.WRAP);
         assertThat(sell.getAssetContract()).isEqualTo("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
         assertThat(sell.getAssetSymbol()).isEqualTo("ETH");
         assertThat(sell.getQuantityDelta()).isEqualByComparingTo("-1");
@@ -180,7 +182,7 @@ class NativeTransferClassifierTest {
     }
 
     @Test
-    void classify_wrappedNativeWithdraw_emitsSwapSellAndSwapBuy() {
+    void classify_wrappedNativeWithdraw_emitsUnwrapEvents() {
         String wallet = "0x1A87f12aC07E9746e9B053B8D7EF1d45270D693f";
         String walletTopic = "0x0000000000000000000000001a87f12ac07e9746e9b053b8d7ef1d45270d693f";
         String wrappedNative = "0x4200000000000000000000000000000000000006";
@@ -204,8 +206,10 @@ class NativeTransferClassifierTest {
         List<RawClassifiedEvent> events = classifier.classify(tx, wallet);
 
         assertThat(events).hasSize(2);
-        RawClassifiedEvent sell = events.stream().filter(e -> e.getEventType() == EconomicEventType.SWAP_SELL).findFirst().orElseThrow();
-        RawClassifiedEvent buy = events.stream().filter(e -> e.getEventType() == EconomicEventType.SWAP_BUY).findFirst().orElseThrow();
+        RawClassifiedEvent sell = events.stream().filter(e -> e.getQuantityDelta().signum() < 0).findFirst().orElseThrow();
+        RawClassifiedEvent buy = events.stream().filter(e -> e.getQuantityDelta().signum() > 0).findFirst().orElseThrow();
+        assertThat(sell.getEventType()).isEqualTo(EconomicEventType.UNWRAP);
+        assertThat(buy.getEventType()).isEqualTo(EconomicEventType.UNWRAP);
         assertThat(sell.getAssetContract()).isEqualTo(wrappedNative);
         assertThat(sell.getAssetSymbol()).isEqualTo("WETH");
         assertThat(sell.getQuantityDelta()).isEqualByComparingTo("-1");
@@ -229,8 +233,10 @@ class NativeTransferClassifierTest {
         List<RawClassifiedEvent> events = classifier.classify(tx, wallet);
 
         assertThat(events).hasSize(2);
-        RawClassifiedEvent sell = events.stream().filter(e -> e.getEventType() == EconomicEventType.SWAP_SELL).findFirst().orElseThrow();
-        RawClassifiedEvent buy = events.stream().filter(e -> e.getEventType() == EconomicEventType.SWAP_BUY).findFirst().orElseThrow();
+        RawClassifiedEvent sell = events.stream().filter(e -> e.getQuantityDelta().signum() < 0).findFirst().orElseThrow();
+        RawClassifiedEvent buy = events.stream().filter(e -> e.getQuantityDelta().signum() > 0).findFirst().orElseThrow();
+        assertThat(sell.getEventType()).isEqualTo(EconomicEventType.WRAP);
+        assertThat(buy.getEventType()).isEqualTo(EconomicEventType.WRAP);
         assertThat(sell.getAssetContract()).isEqualTo("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
         assertThat(sell.getQuantityDelta()).isEqualByComparingTo("-0.00001");
         assertThat(buy.getAssetContract()).isEqualTo(wrappedNative);
@@ -253,8 +259,10 @@ class NativeTransferClassifierTest {
         List<RawClassifiedEvent> events = classifier.classify(tx, wallet);
 
         assertThat(events).hasSize(2);
-        RawClassifiedEvent sell = events.stream().filter(e -> e.getEventType() == EconomicEventType.SWAP_SELL).findFirst().orElseThrow();
-        RawClassifiedEvent buy = events.stream().filter(e -> e.getEventType() == EconomicEventType.SWAP_BUY).findFirst().orElseThrow();
+        RawClassifiedEvent sell = events.stream().filter(e -> e.getQuantityDelta().signum() < 0).findFirst().orElseThrow();
+        RawClassifiedEvent buy = events.stream().filter(e -> e.getQuantityDelta().signum() > 0).findFirst().orElseThrow();
+        assertThat(sell.getEventType()).isEqualTo(EconomicEventType.WRAP);
+        assertThat(buy.getEventType()).isEqualTo(EconomicEventType.WRAP);
         assertThat(sell.getAssetContract()).isEqualTo("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
         assertThat(sell.getQuantityDelta()).isEqualByComparingTo("-0.00001");
         assertThat(buy.getAssetContract()).isEqualTo(wrappedNative);
@@ -276,8 +284,10 @@ class NativeTransferClassifierTest {
         List<RawClassifiedEvent> events = classifier.classify(tx, wallet);
 
         assertThat(events).hasSize(2);
-        RawClassifiedEvent sell = events.stream().filter(e -> e.getEventType() == EconomicEventType.SWAP_SELL).findFirst().orElseThrow();
-        RawClassifiedEvent buy = events.stream().filter(e -> e.getEventType() == EconomicEventType.SWAP_BUY).findFirst().orElseThrow();
+        RawClassifiedEvent sell = events.stream().filter(e -> e.getQuantityDelta().signum() < 0).findFirst().orElseThrow();
+        RawClassifiedEvent buy = events.stream().filter(e -> e.getQuantityDelta().signum() > 0).findFirst().orElseThrow();
+        assertThat(sell.getEventType()).isEqualTo(EconomicEventType.UNWRAP);
+        assertThat(buy.getEventType()).isEqualTo(EconomicEventType.UNWRAP);
         assertThat(sell.getAssetContract()).isEqualTo(wrappedNative);
         assertThat(sell.getQuantityDelta()).isEqualByComparingTo("-0.00001");
         assertThat(buy.getAssetContract()).isEqualTo("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");

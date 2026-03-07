@@ -149,6 +149,7 @@ Notes:
 - CL/NFT LP path currently targets PancakeSwap, Uniswap, Aerodrome position NFTs.
 - For CL v3/v4 position mint, LP classifier emits economic `LP_ENTRY` flows from outbound principal tokens and links them by position id group.
 - Failed transactions (`status=0x0` / `isError=1`) are ignored by classifiers that require successful execution.
+- `EXTERNAL_INBOUND` is strictly a fallback from `TransferClassifier` and is emitted only when higher-priority classifiers do not match. For claim/withdraw/refund-like calls it may still be emitted even when `rawData.from == walletAddress` if net wallet movement is inbound after neutralizing same-tx wrap/burn mechanics.
 
 ---
 
@@ -178,6 +179,8 @@ This keeps malicious spam tokens out of canonical accounting flow.
 - `sync_status`: wallet×network sync lifecycle.
 - `backfill_segments`: persistent segment execution state.
 - `on_chain_balances`: latest observed balances for reconciliation.
+- `user_sessions`: persisted session wallet settings (label/color/networks).
+- `session_transactions`: session-scoped timeline projection sourced from normalized transactions.
 
 Key uniqueness constraints:
 

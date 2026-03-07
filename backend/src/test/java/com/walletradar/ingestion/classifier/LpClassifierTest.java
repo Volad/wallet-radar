@@ -3,6 +3,7 @@ package com.walletradar.ingestion.classifier;
 import com.walletradar.domain.transaction.normalized.EconomicEventType;
 import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.ingestion.adapter.evm.rpc.EvmTokenDecimalsResolver;
+import com.walletradar.ingestion.config.IngestionNetworkProperties;
 import com.walletradar.ingestion.config.ProtocolRegistryProperties;
 import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
@@ -44,8 +45,13 @@ class LpClassifierTest {
         ProtocolRegistry registry = new DefaultProtocolRegistry(props);
         lenient().when(evmTokenDecimalsResolver.getDecimals(anyString(), anyString())).thenReturn(18);
         lenient().when(evmTokenDecimalsResolver.getSymbol(anyString(), anyString())).thenReturn("TOKEN");
-        classifier = new LpClassifier(registry, evmTokenDecimalsResolver);
-        transferClassifier = new TransferClassifier(registry, evmTokenDecimalsResolver);
+        IngestionNetworkProperties ingestionNetworkProperties = new IngestionNetworkProperties();
+        IngestionNetworkProperties.NetworkIngestionEntry zksyncEntry = new IngestionNetworkProperties.NetworkIngestionEntry();
+        zksyncEntry.setSyntheticNativeContracts(List.of("0x000000000000000000000000000000000000800a"));
+        ingestionNetworkProperties.setNetwork(Map.of("ZKSYNC", zksyncEntry));
+        LendClassifier lendClassifier = new LendClassifier(registry, evmTokenDecimalsResolver, ingestionNetworkProperties);
+        classifier = new LpClassifier(registry, evmTokenDecimalsResolver, lendClassifier);
+        transferClassifier = new TransferClassifier(registry, evmTokenDecimalsResolver, lendClassifier);
     }
 
     @Test
@@ -681,6 +687,78 @@ class LpClassifierTest {
                 )));
 
         List<RawClassifiedEvent> transferEvents = transferClassifier.classify(tx, wallet);
+        assertThat(transferEvents).isEmpty();
+    }
+
+    @Test
+    void classify_lendSelectorWithLpLikeFlows_doesNotEmitLpEvents() {
+        String wallet = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String walletTopic = "0x0000000000000000000000001a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String zeroTopic = "0x0000000000000000000000000000000000000000000000000000000000000000";
+        String poolTopic = "0x0000000000000000000000008573f98175d816d520248b5facf40d309b1c9cee";
+        String lpToken = "0x1111111111111111111111111111111111111111";
+        String tokenA = "0x2222222222222222222222222222222222222222";
+        String tokenB = "0x3333333333333333333333333333333333333333";
+
+        RawTransaction tx = new RawTransaction();
+        tx.setNetworkId("AVALANCHE");
+        tx.setRawData(new Document("from", wallet)
+                .append("to", "0x18556da13313f3532c54711497a8fedac273220e")
+                .append("methodId", "0x69328dec")
+                .append("logs", List.of(
+                        new Document("address", lpToken)
+                                .append("topics", List.of(TransferClassifier.TRANSFER_TOPIC, walletTopic, zeroTopic))
+                                .append("data", "0x000000000000000000000000000000000000000000000000000000000000000a"),
+                        new Document("address", tokenA)
+                                .append("topics", List.of(TransferClassifier.TRANSFER_TOPIC, poolTopic, walletTopic))
+                                .append("data", "0x0000000000000000000000000000000000000000000000000000000000000005"),
+                        new Document("address", tokenB)
+                                .append("topics", List.of(TransferClassifier.TRANSFER_TOPIC, poolTopic, walletTopic))
+                                .append("data", "0x0000000000000000000000000000000000000000000000000000000000000005")
+                )));
+
+        List<RawClassifiedEvent> events = classifier.classify(tx, wallet);
+
+        assertThat(events).isEmpty();
+    }
+
+    @Test
+    void classify_zapOutSelector_withLpRoundtrip_emitsLpExitPartialProceeds() {
+        String wallet = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String walletTopic = "0x0000000000000000000000001a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String routerTopic = "0x00000000000000000000000070f61901658aafb7ae57da0c30695ce4417e72b9";
+        String lpToken = "0xc2535b24b47afc15379b55e3ad077bf720dbb34d";
+        String cmEth = "0xe6829d9a7ee3040e1276fa75293bde931859e8fa";
+
+        when(evmTokenDecimalsResolver.getDecimals(eq("MANTLE"), eq(cmEth))).thenReturn(18);
+        when(evmTokenDecimalsResolver.getSymbol(eq("MANTLE"), eq(cmEth))).thenReturn("cmETH");
+
+        RawTransaction tx = new RawTransaction();
+        tx.setNetworkId("MANTLE");
+        tx.setRawData(new Document("from", wallet)
+                .append("to", "0x70f61901658aafb7ae57da0c30695ce4417e72b9")
+                .append("methodId", "0x8b284b0e")
+                .append("functionName", "zapOutV3SingleToken(uint256,uint256,tuple,tuple,bool)")
+                .append("logs", List.of(
+                        new Document("address", lpToken)
+                                .append("topics", List.of(TransferClassifier.TRANSFER_TOPIC, walletTopic, routerTopic))
+                                .append("data", "0x0000000000000000000000000000000000000000000000008ac7230489e80000"), // 10.0
+                        new Document("address", lpToken)
+                                .append("topics", List.of(TransferClassifier.TRANSFER_TOPIC, routerTopic, walletTopic))
+                                .append("data", "0x0000000000000000000000000000000000000000000000008ac7230489e80000"), // 10.0
+                        new Document("address", cmEth)
+                                .append("topics", List.of(TransferClassifier.TRANSFER_TOPIC, routerTopic, walletTopic))
+                                .append("data", "0x0000000000000000000000000000000000000000000000001bc16d674ec80000")  // 2.0
+                )));
+
+        List<RawClassifiedEvent> lpEvents = classifier.classify(tx, wallet);
+        List<RawClassifiedEvent> transferEvents = transferClassifier.classify(tx, wallet);
+
+        assertThat(lpEvents).hasSize(1);
+        RawClassifiedEvent event = lpEvents.getFirst();
+        assertThat(event.getEventType()).isEqualTo(EconomicEventType.LP_EXIT_PARTIAL);
+        assertThat(event.getAssetContract()).isEqualTo(cmEth);
+        assertThat(event.getQuantityDelta()).isEqualByComparingTo("2");
         assertThat(transferEvents).isEmpty();
     }
 }

@@ -1,8 +1,15 @@
 package com.walletradar.api.controller;
 
 import com.walletradar.domain.session.UserSessionRepository;
+import com.walletradar.domain.transaction.session.SessionTransactionRepository;
+import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.sync.SyncStatus;
 import com.walletradar.domain.sync.SyncStatusRepository;
+import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
+import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.ingestion.job.backfill.BackfillJobRunner;
 import com.walletradar.ingestion.sync.balance.BalanceRefreshService;
 import org.junit.jupiter.api.BeforeEach;
@@ -21,6 +28,8 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
+import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -47,6 +56,10 @@ class SessionControllerIntegrationTest {
     private UserSessionRepository userSessionRepository;
     @Autowired
     private SyncStatusRepository syncStatusRepository;
+    @Autowired
+    private NormalizedTransactionRepository normalizedTransactionRepository;
+    @Autowired
+    private SessionTransactionRepository sessionTransactionRepository;
 
     @MockBean
     private BackfillJobRunner backfillJobRunner;
@@ -55,6 +68,8 @@ class SessionControllerIntegrationTest {
 
     @BeforeEach
     void cleanCollections() {
+        sessionTransactionRepository.deleteAll();
+        normalizedTransactionRepository.deleteAll();
         syncStatusRepository.deleteAll();
         userSessionRepository.deleteAll();
     }
@@ -266,5 +281,95 @@ class SessionControllerIntegrationTest {
                 .expectStatus().isOk()
                 .expectHeader().valueEquals("Access-Control-Allow-Origin", "http://localhost:4200")
                 .expectHeader().value("Access-Control-Allow-Methods", methods -> assertThat(methods).contains("POST"));
+    }
+
+    @Test
+    @DisplayName("POST /sessions/{sessionId}/transactions/rebuild projects confirmed normalized rows")
+    void rebuildSessionTransactions_projectsRows() {
+        String sessionId = "c29fbf34-4276-4ca5-b815-cc17f1f42034";
+        String address = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+
+        String body = """
+                {
+                  "sessionId":"c29fbf34-4276-4ca5-b815-cc17f1f42034",
+                  "wallets":[
+                    {
+                      "address":"0x1A87f12aC07E9746e9B053B8D7EF1d45270D693f",
+                      "label":"Wallet 1",
+                      "color":"#22d3ee",
+                      "networks":["BSC"]
+                    }
+                  ]
+                }
+                """;
+        webTestClient.post().uri("/api/v1/sessions")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .exchange()
+                .expectStatus().isAccepted();
+
+        NormalizedTransaction older = confirmedTx(
+                "n-1",
+                "0xaaa",
+                address,
+                Instant.parse("2026-03-01T10:00:00Z"),
+                BigDecimal.ZERO);
+        NormalizedTransaction newer = confirmedTx(
+                "n-2",
+                "0xbbb",
+                address,
+                Instant.parse("2026-03-02T10:00:00Z"),
+                new BigDecimal("12.34"));
+        normalizedTransactionRepository.saveAll(List.of(older, newer));
+
+        webTestClient.post().uri("/api/v1/sessions/" + sessionId + "/transactions/rebuild")
+                .exchange()
+                .expectStatus().isAccepted()
+                .expectBody()
+                .jsonPath("$.sessionId").isEqualTo(sessionId)
+                .jsonPath("$.projectedTransactions").isEqualTo(2)
+                .jsonPath("$.message").isEqualTo("Session transactions rebuilt");
+
+        webTestClient.get().uri("/api/v1/sessions/" + sessionId + "/transactions?limit=10")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.sessionId").isEqualTo(sessionId)
+                .jsonPath("$.items.length()").isEqualTo(2)
+                .jsonPath("$.items[0].txHash").isEqualTo("0xbbb")
+                .jsonPath("$.items[0].realisedPnlUsdTotal").isEqualTo(12.34)
+                .jsonPath("$.items[1].txHash").isEqualTo("0xaaa");
+    }
+
+    @Test
+    @DisplayName("GET /sessions/{sessionId}/transactions returns 404 for unknown session")
+    void getSessionTransactions_notFound() {
+        webTestClient.get().uri("/api/v1/sessions/6ba96356-484a-4d0d-82f9-46bbf198f818/transactions")
+                .exchange()
+                .expectStatus().isNotFound();
+    }
+
+    private static NormalizedTransaction confirmedTx(String id, String txHash, String walletAddress,
+                                                     Instant blockTimestamp, BigDecimal realisedPnlUsd) {
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setId(id);
+        tx.setTxHash(txHash);
+        tx.setWalletAddress(walletAddress);
+        tx.setNetworkId(NetworkId.BSC);
+        tx.setBlockTimestamp(blockTimestamp);
+        tx.setType(NormalizedTransactionType.SWAP);
+        tx.setStatus(NormalizedTransactionStatus.CONFIRMED);
+        tx.setCreatedAt(blockTimestamp);
+        tx.setUpdatedAt(blockTimestamp);
+
+        NormalizedTransaction.Flow sell = new NormalizedTransaction.Flow();
+        sell.setRole(NormalizedLegRole.SELL);
+        sell.setAssetContract("0xasset");
+        sell.setAssetSymbol("USDC");
+        sell.setQuantityDelta(new BigDecimal("-1"));
+        sell.setRealisedPnlUsd(realisedPnlUsd);
+        sell.setLogIndex(7);
+        tx.setFlows(List.of(sell));
+        return tx;
     }
 }

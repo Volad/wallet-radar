@@ -16,6 +16,11 @@ These files are aligned with the current backend implementation and are the only
 - `21-classifier-fast-path-coverage-and-enrichment-optimization.md`
 - `22-session-controller-and-backfill-status.md`
 - `23-backfill-segment-configuration-by-sync-method.md`
+- `24-session-transactions-phased-implementation.md`
+- `25-configurable-synthetic-native-contracts.md`
+- `26-zksync-lend-borrow-repay-synthetic-log-classification-fix.md`
+- `27-cross-network-selector-coverage-and-fallback-hardening.md`
+- `28-raw-vs-normalized-audit-remediation.md`
 
 ## Archived (Not Current Requirements)
 

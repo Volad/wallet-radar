@@ -7,7 +7,9 @@ export type EvmNetworkId =
   | 'BSC'
   | 'AVALANCHE'
   | 'MANTLE'
-  | 'LINEA';
+  | 'LINEA'
+  | 'UNICHAIN'
+  | 'ZKSYNC';
 
 export type SessionBackfillAggregateStatus =
   | 'PENDING'
@@ -70,6 +72,46 @@ export interface SessionBackfillStatusResponse {
   readonly wallets: ReadonlyArray<SessionBackfillWalletStatus>;
 }
 
+export type SessionTransactionSourceType = 'CHAIN' | 'MANUAL' | 'OVERRIDE';
+
+export type SessionBridgeStatus = 'BRIDGE_OUT' | 'BRIDGE_IN' | 'MATCHED' | 'REVIEW';
+
+export interface SessionTransactionFlowResponse {
+  readonly role: string | null;
+  readonly assetContract: string | null;
+  readonly assetSymbol: string | null;
+  readonly quantityDelta: number | null;
+  readonly unitPriceUsd: number | null;
+  readonly valueUsd: number | null;
+  readonly priceSource: string | null;
+  readonly logIndex: number | null;
+}
+
+export interface SessionTransactionItemResponse {
+  readonly id: string;
+  readonly sourceType: SessionTransactionSourceType | null;
+  readonly txHash: string | null;
+  readonly networkId: EvmNetworkId | null;
+  readonly walletAddress: string | null;
+  readonly blockTimestamp: string | null;
+  readonly type: string | null;
+  readonly bridgeStatus: SessionBridgeStatus | null;
+  readonly realisedPnlUsdTotal: number | null;
+  readonly avcoSnapshotVersion: number | null;
+  readonly flows: ReadonlyArray<SessionTransactionFlowResponse>;
+}
+
+export interface SessionTransactionsResponse {
+  readonly sessionId: string;
+  readonly items: ReadonlyArray<SessionTransactionItemResponse>;
+}
+
+export interface RebuildSessionTransactionsResponse {
+  readonly sessionId: string;
+  readonly projectedTransactions: number;
+  readonly message: string;
+}
+
 // Backward-compatible alias used across current component code.
 export type WalletAddRequestItem = AddSessionRequestItem;
 
@@ -94,4 +136,6 @@ export const SUPPORTED_EVM_NETWORKS: ReadonlyArray<EvmNetworkId> = [
   'AVALANCHE',
   'MANTLE',
   'LINEA',
+  'UNICHAIN',
+  'ZKSYNC',
 ];

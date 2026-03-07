@@ -191,4 +191,27 @@ class BridgeCallClassifierTest {
 
         assertThat(events).isEmpty();
     }
+
+    @Test
+    void classify_relayFillSelectorWithoutLogs_emitsExternalTransferOut() {
+        String wallet = "0x1A87f12aC07E9746e9B053B8D7EF1d45270D693f";
+
+        RawTransaction tx = new RawTransaction();
+        tx.setNetworkId("ARBITRUM");
+        tx.setRawData(new Document("from", wallet)
+                .append("to", "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                .append("value", "1000000000000000")
+                .append("methodId", "0xdeff4b24")
+                .append("input", "0xdeff4b24"));
+
+        List<RawClassifiedEvent> events = classifier.classify(tx, wallet);
+
+        assertThat(events).hasSize(1);
+        RawClassifiedEvent event = events.getFirst();
+        assertThat(event.getEventType()).isEqualTo(EconomicEventType.EXTERNAL_TRANSFER_OUT);
+        assertThat(event.getAssetContract()).isEqualTo("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
+        assertThat(event.getAssetSymbol()).isEqualTo("ETH");
+        assertThat(event.getQuantityDelta()).isEqualByComparingTo("-0.001");
+        assertThat(event.getCounterpartyAddress()).isEqualTo("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    }
 }

@@ -56,6 +56,21 @@ class EtherscanV2ExplorerProviderTest {
     }
 
     @Test
+    void getCurrentBlockNumberReadsProxyEthBlockNumber() {
+        TestConfig config = baseProperties();
+        WebClient.Builder webClientBuilder = WebClient.builder()
+                .exchangeFunction(request -> Mono.just(
+                        jsonResponse("{\"status\":\"1\",\"message\":\"OK\",\"result\":\"0x64\"}")
+                ));
+        EtherscanV2ExplorerProvider provider = new EtherscanV2ExplorerProvider(
+                webClientBuilder, objectMapper, config.explorerProperties(), config.networkProperties());
+
+        Long block = provider.getCurrentBlockNumber(NetworkId.ARBITRUM);
+
+        assertThat(block).isEqualTo(100L);
+    }
+
+    @Test
     void getTransactionsReturnsEmptyWhenPageExceedsEtherscanResultWindow() {
         TestConfig config = baseProperties();
         AtomicInteger requestCount = new AtomicInteger(0);

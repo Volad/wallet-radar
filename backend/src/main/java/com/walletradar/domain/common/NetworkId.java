@@ -13,5 +13,7 @@ public enum NetworkId {
     AVALANCHE,
     MANTLE,
     LINEA,
+    UNICHAIN,
+    ZKSYNC,
     SOLANA
 }

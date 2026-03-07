@@ -87,6 +87,12 @@ public class TransactionHistoryQueryService {
         if (type == NormalizedTransactionType.SWAP) {
             return qtySign >= 0 ? "SWAP_BUY" : "SWAP_SELL";
         }
+        if (type == NormalizedTransactionType.WRAP) {
+            return qtySign >= 0 ? "WRAP_IN" : "WRAP_OUT";
+        }
+        if (type == NormalizedTransactionType.UNWRAP) {
+            return qtySign >= 0 ? "UNWRAP_IN" : "UNWRAP_OUT";
+        }
         return type != null ? type.name() : "UNKNOWN";
     }
 

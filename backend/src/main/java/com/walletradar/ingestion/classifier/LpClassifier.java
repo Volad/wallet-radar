@@ -101,7 +101,8 @@ public class LpClassifier implements TxClassifier {
             "0x13f4ea83d0bd40e75c8222255bc855a974568dd4", // Pancake Universal Router
             "0xc873fecbd354f5a56e00e710b90ef4201db2448d", // Camelot Router
             "0x60ae616a2155ee3d9a68541ba4544862310933d4", // Trader Joe Router
-            "0x18556da13313f3532c54711497a8fedac273220e"  // LFJ/Trader Joe LB Router (Avalanche)
+            "0x18556da13313f3532c54711497a8fedac273220e", // LFJ/Trader Joe LB Router (Avalanche)
+            "0x70f61901658aafb7ae57da0c30695ce4417e72b9"  // EQB zap router (Mantle)
     );
 
     private static final Set<String> LP_ENTRY_FUNCTION_HINTS = Set.of(
@@ -121,11 +122,12 @@ public class LpClassifier implements TxClassifier {
     );
 
     private static final Set<String> LP_EXIT_NO_BURN_FUNCTION_HINTS = Set.of(
-            "removeliquidity", "exitpool", "decreaseliquidity"
+            "removeliquidity", "exitpool", "decreaseliquidity", "zapout"
     );
 
     private static final Set<String> LP_EXIT_NO_BURN_SELECTOR_HINTS = Set.of(
-            "0xc22159b6" // LFJ LB router removeLiquidity(...)
+            "0xc22159b6", // LFJ LB router removeLiquidity(...)
+            "0x8b284b0e"  // zapOutV3SingleToken(...)
     );
 
     // Pancake/Uniswap/Aerodrome CL position NFTs.
@@ -167,6 +169,7 @@ public class LpClassifier implements TxClassifier {
 
     private final ProtocolRegistry protocolRegistry;
     private final EvmTokenDecimalsResolver evmTokenDecimalsResolver;
+    private final LendClassifier lendClassifier;
 
     @Override
     public List<RawClassifiedEvent> classify(RawTransactionNormalizationView tx, String walletAddress) {
@@ -178,12 +181,14 @@ public class LpClassifier implements TxClassifier {
         }
         List<Document> logs = tx.logs();
         if (logs.isEmpty()) {
+            if (lendClassifier.hasKnownLendSelector(tx)) {
+                return List.of();
+            }
             return classifyLpPositionFromCalldataWithoutLogs(tx, walletAddress);
         }
 
-        // Prevent overlap with receipt-token vault/lend flows.
-        if (LendClassifier.isLikelyVaultDepositPattern(tx, walletAddress, logs)
-                || LendClassifier.isLikelyVaultWithdrawalPattern(tx, walletAddress, logs)) {
+        // Prevent overlap with lend flows (vault, borrow/repay, one-leg allowlist, native gateway).
+        if (lendClassifier.isLikelyLendPattern(tx, walletAddress, logs) || lendClassifier.hasKnownLendSelector(tx)) {
             return List.of();
         }
 
@@ -434,6 +439,7 @@ public class LpClassifier implements TxClassifier {
 
         String walletTopic = tx.padAddressForTopic(walletAddress);
         Set<String> inflowContracts = new LinkedHashSet<>();
+        Set<String> outboundContracts = new LinkedHashSet<>();
         boolean hasWalletOutboundErc20 = false;
         boolean hasWalletBurn = false;
         boolean hasWalletMint = false;
@@ -453,6 +459,7 @@ public class LpClassifier implements TxClassifier {
             }
             if (walletTopic.equalsIgnoreCase(fromTopic) && !ZERO_ADDRESS_TOPIC.equalsIgnoreCase(toTopic)) {
                 hasWalletOutboundErc20 = true;
+                outboundContracts.add(tokenAddress);
             }
             if (walletTopic.equalsIgnoreCase(fromTopic) && ZERO_ADDRESS_TOPIC.equalsIgnoreCase(toTopic)) {
                 hasWalletBurn = true;
@@ -464,7 +471,14 @@ public class LpClassifier implements TxClassifier {
         if (hasWalletBurn || hasWalletMint) {
             return false;
         }
-        return !inflowContracts.isEmpty() && !hasWalletOutboundErc20;
+        if (!hasWalletOutboundErc20) {
+            return !inflowContracts.isEmpty();
+        }
+        if (!isZapOutNoBurnContext(tx)) {
+            return false;
+        }
+        // Zap-out can include LP-token roundtrip: wallet out + wallet in on the same contract.
+        return !inflowContracts.isEmpty() && inflowContracts.containsAll(outboundContracts);
     }
 
     static boolean isLikelyLpPositionPattern(RawTransactionNormalizationView tx, String walletAddress, List<Document> logs) {
@@ -1130,11 +1144,51 @@ public class LpClassifier implements TxClassifier {
             List<Document> logs
     ) {
         FlowSummary summary = collectFlowSummary(tx, walletAddress, logs);
-        if (summary.inflows.isEmpty() || !summary.outflows.isEmpty()) {
+        boolean zapOutContext = isZapOutNoBurnContext(tx);
+        if (summary.inflows.isEmpty() || (!zapOutContext && !summary.outflows.isEmpty())) {
             return List.of();
         }
         String txTo = tx.readRawOrExplorerAddress("to");
         String txProtocol = normalizeProtocol(protocolRegistry.getProtocolName(txTo).orElse(null));
+
+        if (zapOutContext) {
+            Map<String, BigDecimal> netByContract = new LinkedHashMap<>();
+            for (Map.Entry<String, BigDecimal> e : summary.outflows.entrySet()) {
+                if (e.getKey() == null || e.getValue() == null) {
+                    continue;
+                }
+                netByContract.merge(e.getKey(), e.getValue(), BigDecimal::add);
+            }
+            for (Map.Entry<String, BigDecimal> e : summary.inflows.entrySet()) {
+                if (e.getKey() == null || e.getValue() == null) {
+                    continue;
+                }
+                netByContract.merge(e.getKey(), e.getValue(), BigDecimal::add);
+            }
+
+            List<RawClassifiedEvent> out = new ArrayList<>();
+            for (Map.Entry<String, BigDecimal> e : netByContract.entrySet()) {
+                String contract = e.getKey();
+                BigDecimal net = e.getValue();
+                if (net == null || net.signum() == 0) {
+                    continue;
+                }
+                // Keep this path conservative: if any asset is net negative, do not force LP exit.
+                if (net.signum() < 0) {
+                    return List.of();
+                }
+                RawClassifiedEvent event = new RawClassifiedEvent();
+                event.setEventType(EconomicEventType.LP_EXIT_PARTIAL);
+                event.setWalletAddress(walletAddress);
+                event.setAssetContract(contract);
+                event.setAssetSymbol(resolveSymbol(tx, contract, summary.metaByContract.get(contract)));
+                event.setQuantityDelta(net);
+                event.setProtocolName(resolveProtocolName(txTo, txProtocol, contract));
+                event.setLogIndex(summary.inflowLogIndex.get(contract));
+                out.add(event);
+            }
+            return out;
+        }
 
         List<RawClassifiedEvent> out = new ArrayList<>();
         for (String contract : summary.inflows.keySet()) {
@@ -1153,6 +1207,11 @@ public class LpClassifier implements TxClassifier {
             out.add(event);
         }
         return out;
+    }
+
+    private static boolean isZapOutNoBurnContext(RawTransactionNormalizationView tx) {
+        String selector = tx.selector();
+        return selector != null && selector.equalsIgnoreCase("0x8b284b0e");
     }
 
     private static boolean isLpPositionEntryContext(RawTransactionNormalizationView tx) {
@@ -1427,6 +1486,14 @@ public class LpClassifier implements TxClassifier {
     }
 
     private static boolean isLpExitWithoutBurnContext(RawTransactionNormalizationView tx) {
+        String selector = tx.selector();
+        if (selector != null) {
+            for (String known : LP_EXIT_NO_BURN_SELECTOR_HINTS) {
+                if (known.equalsIgnoreCase(selector)) {
+                    return true;
+                }
+            }
+        }
         String functionName = tx.readRawOrExplorerLower("functionName");
         if (functionName != null) {
             for (String hint : LP_EXIT_NO_BURN_FUNCTION_HINTS) {
@@ -1439,8 +1506,8 @@ public class LpClassifier implements TxClassifier {
         if (input == null || input.isBlank()) {
             return false;
         }
-        for (String selector : LP_EXIT_NO_BURN_SELECTOR_HINTS) {
-            if (inputContainsSelector(input, selector)) {
+        for (String knownSelector : LP_EXIT_NO_BURN_SELECTOR_HINTS) {
+            if (inputContainsSelector(input, knownSelector)) {
                 return true;
             }
         }
@@ -1448,6 +1515,14 @@ public class LpClassifier implements TxClassifier {
     }
 
     private static boolean isLpEntryWithoutMintContext(RawTransactionNormalizationView tx) {
+        String selector = tx.selector();
+        if (selector != null) {
+            for (String known : LP_ENTRY_NO_MINT_SELECTOR_HINTS) {
+                if (known.equalsIgnoreCase(selector)) {
+                    return true;
+                }
+            }
+        }
         String functionName = tx.readRawOrExplorerLower("functionName");
         if (functionName != null) {
             for (String hint : LP_ENTRY_NO_MINT_FUNCTION_HINTS) {
@@ -1460,8 +1535,8 @@ public class LpClassifier implements TxClassifier {
         if (input == null || input.isBlank()) {
             return false;
         }
-        for (String selector : LP_ENTRY_NO_MINT_SELECTOR_HINTS) {
-            if (inputContainsSelector(input, selector)) {
+        for (String knownSelector : LP_ENTRY_NO_MINT_SELECTOR_HINTS) {
+            if (inputContainsSelector(input, knownSelector)) {
                 return true;
             }
         }

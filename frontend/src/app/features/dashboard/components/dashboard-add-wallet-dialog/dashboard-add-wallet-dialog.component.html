@@ -1,0 +1,151 @@
+@if (isOpen) {
+  <div class="wallet-dialog-overlay" role="presentation">
+    <section
+      class="wallet-dialog"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="wallet-dialog-title"
+      (click)="$event.stopPropagation()">
+      <header class="wallet-dialog-head">
+        <div>
+          <h2 id="wallet-dialog-title">Add wallets</h2>
+          <p class="wallet-dialog-subline">Read-only · no signing required · up to 10 addresses</p>
+        </div>
+        <button type="button" class="dialog-close-btn" (click)="close.emit()" aria-label="Close dialog">✕</button>
+      </header>
+
+      <form class="wallet-dialog-form" [formGroup]="addWalletsForm" (ngSubmit)="onSubmit()">
+        <div class="wallet-dialog-body">
+          <div class="wallet-list-section">
+            <div class="wallet-section-head">
+              <div class="wallet-section-title">
+                Wallet addresses
+                @if (walletRows().length > 1) {
+                  <span class="wallet-valid-counter">{{ walletValidationSummary().ready }}/{{ walletRows().length }} valid</span>
+                }
+              </div>
+              @if (walletRows().length < 10) {
+                <button type="button" class="add-row-btn" (click)="addWalletField()" [disabled]="isSubmitBusy">
+                  + Add row
+                </button>
+              }
+            </div>
+
+            <div class="wallet-columns-head">
+              <span></span>
+              <span>Address</span>
+              <span>Label</span>
+              <span></span>
+            </div>
+
+            <div class="wallet-input-list" formArrayName="wallets">
+              @for (walletGroup of walletRows(); track trackByIndex($index); let controlIndex = $index) {
+                @let addressState = walletAddressState(walletGroup.controls.address, controlIndex);
+                @let addressMessage = walletAddressMessage(walletGroup.controls.address, controlIndex);
+
+                <div class="wallet-input-entry" [formGroupName]="controlIndex">
+                  <div class="wallet-input-row">
+                    <span class="wallet-color-dot" [style.background]="walletGroup.controls.color.value" aria-hidden="true"></span>
+                    <div class="wallet-address-wrap">
+                      <input
+                        class="wallet-address-input"
+                        id="wallet-address-{{ controlIndex }}"
+                        type="text"
+                        formControlName="address"
+                        placeholder="0x..."
+                        autocomplete="off"
+                        spellcheck="false"
+                        (paste)="onAddressPaste($event, controlIndex)"
+                        [class.ok]="addressState === 'ok'"
+                        [class.warn]="addressState === 'warn'"
+                        [class.error]="addressState === 'error' && (walletGroup.controls.address.touched || walletGroup.controls.address.dirty)"
+                        [attr.aria-invalid]="addressState === 'error' && (walletGroup.controls.address.touched || walletGroup.controls.address.dirty)" />
+                      @if (addressState !== 'empty') {
+                        <span class="wallet-state-icon" [class.ok]="addressState === 'ok'" [class.warn]="addressState === 'warn'" [class.error]="addressState === 'error'">
+                          @if (addressState === 'ok') {
+                            ✓
+                          } @else if (addressState === 'warn') {
+                            ⚠
+                          } @else {
+                            ✕
+                          }
+                        </span>
+                      }
+                    </div>
+
+                    <input
+                      class="wallet-label-input"
+                      id="wallet-label-{{ controlIndex }}"
+                      type="text"
+                      formControlName="label"
+                      placeholder="Label"
+                      maxlength="20"
+                      autocomplete="off"
+                      spellcheck="false" />
+
+                    @if (walletRows().length > 1) {
+                      <button type="button" class="remove-wallet-btn" (click)="removeWalletField(controlIndex)">🗑</button>
+                    }
+                  </div>
+
+                  @if (showWalletAddressMessage(walletGroup.controls.address, controlIndex) && addressMessage !== null) {
+                    <p class="input-message" [class.warn]="addressState === 'warn'" [class.error]="addressState === 'error'">
+                      {{ addressMessage }}
+                    </p>
+                  }
+                </div>
+              }
+            </div>
+
+            <p class="wallet-paste-hint">ⓘ Paste multiple addresses separated by newline or comma — rows auto-expand</p>
+          </div>
+
+          <div class="wallet-dialog-meta">
+            <div class="wallet-section-head">
+              <div class="wallet-section-title">Networks · applied to all wallets</div>
+            </div>
+            <div class="network-grid-fixed">
+              @for (network of evmNetworksPresentation; track network.id) {
+                <span class="network-chip-fixed" [style.--networkColor]="network.color">
+                  <span>{{ network.icon }}</span>
+                  <span>{{ network.label }}</span>
+                </span>
+              }
+            </div>
+          </div>
+
+          <div class="wallet-info-strip">
+            <span>ⓘ</span>
+            <p>
+              Backfill scans <strong>~2 years</strong> of transactions per wallet.
+              Estimated <span class="mono">3-8 min</span> per wallet×network.
+            </p>
+          </div>
+        </div>
+
+        @if (effectiveSubmitMessage() !== null) {
+          <div class="wallet-submit-message" [class.error]="submitState === 'error'" [class.success]="submitState === 'success'">
+            {{ effectiveSubmitMessage() }}
+          </div>
+        }
+
+        <footer class="wallet-dialog-actions">
+          @if (walletValidationSummary().ready > 0) {
+            <div class="wallet-dialog-summary">
+              <span class="mono">{{ walletValidationSummary().ready }}</span>
+              wallet(s) · <span class="mono">{{ supportedEvmNetworks.length }}</span> networks
+            </div>
+          }
+          <button type="button" class="cancel-btn" (click)="close.emit()" [disabled]="isSubmitBusy">Cancel</button>
+          <button type="submit" class="save-btn" [disabled]="!canSubmitWallets()">
+            @if (submitState === 'submitting') {
+              Sending...
+            } @else {
+              Add Wallet(s)
+            }
+          </button>
+        </footer>
+      </form>
+    </section>
+  </div>
+}
