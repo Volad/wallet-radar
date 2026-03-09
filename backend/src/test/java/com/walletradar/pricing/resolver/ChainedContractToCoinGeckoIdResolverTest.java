@@ -5,6 +5,7 @@ import com.walletradar.pricing.config.PricingProperties;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.core.io.DefaultResourceLoader;
 
 import java.util.Map;
 import java.util.Optional;
@@ -24,7 +25,11 @@ class ChainedContractToCoinGeckoIdResolverTest {
         com.github.benmanes.caffeine.cache.Cache<String, java.util.Map<String, String>> cache =
                 com.github.benmanes.caffeine.cache.Caffeine.newBuilder().maximumSize(1).build();
         cache.put("coins-list", java.util.Map.of());
-        CoinsListBulkResolver coinsList = new CoinsListBulkResolver(props, org.springframework.web.reactive.function.client.WebClient.builder(), cache);
+        CoinsListBulkResolver coinsList = new CoinsListBulkResolver(
+                props,
+                org.springframework.web.reactive.function.client.WebClient.builder(),
+                cache,
+                new DefaultResourceLoader());
         chain = new ChainedContractToCoinGeckoIdResolver(configOverride, coinsList);
     }
 

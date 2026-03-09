@@ -240,6 +240,117 @@ Reduce true low-evidence `UNCLASSIFIED` cases via deterministic enrichment hints
 
 ---
 
+## T-074 — Native/stable pricing coverage for canonical assets
+
+- **Module(s):** `common`, `pricing`, `docs`
+- **Roles:** `backend-dev`
+- **Source:** audit follow-up on `AUD-501`
+
+## Goal
+
+Remove avoidable `PENDING_PRICE` backlog for canonical native assets and known stablecoins that already have deterministic pricing policy.
+
+## Product Decisions (Locked)
+
+1. Canonical native contracts already mapped to CoinGecko ids must continue resolving without protocol-specific heuristics.
+2. `EURC` is treated as stablecoin and must resolve to `$1.00`.
+3. Do not broaden stablecoin policy beyond explicit contract allowlist.
+
+## Implementation Scope
+
+1. Extend `StablecoinRegistry` with audited `EURC` contract coverage.
+2. Add focused resolver tests proving:
+   - synthetic native `0xeeee...` path still resolves through historical chain,
+   - `EURC` resolves through stablecoin path.
+3. Keep resolver order unchanged (`STABLECOIN` before CoinGecko).
+
+## Required Tests
+
+1. `StablecoinRegistryTest.eurcContractsAreStablecoins`
+2. `HistoricalPriceResolverChainTest.stablecoinResolverHandlesEurc`
+
+## Acceptance Criteria (DoD)
+
+1. `EURC` no longer waits on CoinGecko and resolves via `PriceSource.STABLECOIN`.
+2. Existing native-resolution tests remain green.
+
+---
+
+## T-075 — Receipt/position asset pricing policy hardening
+
+- **Module(s):** `domain/transaction/normalized`, `ingestion/normalizer`, `ingestion/job/pricing`, `docs`
+- **Roles:** `backend-dev`
+- **Source:** audit follow-up on `AUD-503`
+
+## Goal
+
+Stop requiring direct market pricing for receipt-like legs whose economic meaning is already encoded by transaction type.
+
+## Product Decisions (Locked)
+
+1. `LEND_DEPOSIT` positive receipt legs are **not** direct price targets.
+2. `LP_ENTRY` positive receipt / position legs are **not** direct price targets.
+3. This change must stay conservative and type-driven; do not add broad symbol-based heuristics in pricing policy.
+
+## Implementation Scope
+
+1. Extend normalized pricing policy so `LEND_DEPOSIT` positive legs and `LP_ENTRY` positive legs skip direct pricing.
+2. Ensure builder/pricing job transition such rows from `PENDING_PRICE` to `PENDING_STAT` without resolver calls.
+3. Keep pricing behavior unchanged for:
+   - `LEND_WITHDRAWAL` underlying inbound,
+   - `BORROW` underlying inbound,
+   - `LP_FEE_CLAIM`,
+   - `SWAP`.
+
+## Required Tests
+
+1. `NormalizedTransactionBuilderTest.lendDepositSkipsPricingForReceiptLeg`
+2. `NormalizedTransactionBuilderTest.lpEntrySkipsPricingForReceiptLeg`
+3. `NormalizedTransactionPipelineJobsTest.lendDepositReceiptSkipsPricingResolver`
+4. `NormalizedTransactionPipelineJobsTest.lpEntryReceiptSkipsPricingResolver`
+
+## Acceptance Criteria (DoD)
+
+1. Canonical `LEND_DEPOSIT` and `LP_ENTRY` receipt legs no longer enter resolver-dependent `PENDING_PRICE`.
+2. Existing pricing/stat transitions remain unchanged for economic inbound assets.
+
+---
+
+## T-076 — Conservative transfer fallback guard for lend-like selector context
+
+- **Module(s):** `ingestion/classifier`, `docs`
+- **Roles:** `backend-dev`
+- **Source:** audit follow-up on `AUD-505`
+
+## Goal
+
+Prevent generic transfer/swap heuristics from classifying known lend-like selector contexts as `SWAP` or `EXTERNAL_*` when lend evidence is incomplete.
+
+## Product Decisions (Locked)
+
+1. When selector context is strongly lend-like but classifier evidence is incomplete, conservative abstention is preferred over false-positive transfer/swap classification.
+2. Guard must be limited to known lend selector families and wallet-sender context.
+3. No architecture changes or new transaction statuses.
+
+## Implementation Scope
+
+1. Add conservative lend-context detection usable by `TransferClassifier`.
+2. Make `TransferClassifier` abstain for wallet-sender tx with known lend selector context and wallet-relevant mint/burn or bidirectional transfer evidence.
+3. Keep existing transfer behavior unchanged for non-lend selector contexts.
+
+## Required Tests
+
+1. `TransferClassifierTest.classify_borrowSelectorDebtMintOnly_returnsEmptyForTransferClassifier`
+2. `TransferClassifierTest.classify_depositSelectorReceiptTransferOnly_returnsEmptyForTransferClassifier`
+3. Negative test proving ordinary two-leg swap heuristic still works outside lend selector context.
+
+## Acceptance Criteria (DoD)
+
+1. Known lend selector context no longer degrades to generic `SWAP` or `EXTERNAL_*` when receipt/debt evidence is partial.
+2. Existing swap and transfer fixtures remain green.
+
+---
+
 ## T-067 — Net-flow swap resolution for selector-led swaps with refund legs
 
 - **Module(s):** `ingestion/classifier`, `docs`

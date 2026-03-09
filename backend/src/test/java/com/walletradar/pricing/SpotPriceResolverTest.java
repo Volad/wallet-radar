@@ -14,24 +14,32 @@ import org.springframework.web.reactive.function.client.WebClient;
 
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 class SpotPriceResolverTest {
 
     private SpotPriceResolver resolver;
+    private AtomicReference<String> apiKeyValue;
 
     @BeforeEach
     void setUp() {
+        apiKeyValue = new AtomicReference<>();
         PricingProperties props = new PricingProperties();
         props.setCoingeckoBaseUrl("https://api.coingecko.com/api/v3");
+        props.setCoingeckoApiKey("cg-demo-key");
+        props.setCoingeckoApiKeyHeader("x-cg-demo-api-key");
         props.setContractToCoinGeckoId(Map.of("0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2", "weth"));
         var contractResolver = new ConfigOverrideContractResolver(props);
         WebClient.Builder webClientBuilder = WebClient.builder()
-                .exchangeFunction(req -> Mono.just(ClientResponse.create(HttpStatus.OK)
-                        .header("Content-Type", "application/json")
-                        .body("{\"weth\": {\"usd\": 3500.25}}")
-                        .build()));
+                .exchangeFunction(req -> {
+                    apiKeyValue.set(req.headers().getFirst("x-cg-demo-api-key"));
+                    return Mono.just(ClientResponse.create(HttpStatus.OK)
+                            .header("Content-Type", "application/json")
+                            .body("{\"weth\": {\"usd\": 3500.25}}")
+                            .build());
+                });
         resolver = new SpotPriceResolver(props, webClientBuilder, contractResolver);
     }
 
@@ -63,5 +71,6 @@ class SpotPriceResolverTest {
     void resolveWithoutNetworkIdUsesConfigOverride() {
         assertThat(resolver.resolve("0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"))
                 .isPresent();
+        assertThat(apiKeyValue.get()).isEqualTo("cg-demo-key");
     }
 }

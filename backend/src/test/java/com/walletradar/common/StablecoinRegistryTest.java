@@ -23,13 +23,14 @@ class StablecoinRegistryTest {
     }
 
     @Test
-    @DisplayName("USDT, DAI, GHO, USDe, FRAX are stablecoins")
+    @DisplayName("USDT, DAI, GHO, USDe, FRAX and audited EURC are stablecoins")
     void otherStablecoins() {
         assertThat(registry.isStablecoin("0xdac17f958d2ee523a2206206994597c13d831ec7")).isTrue();
         assertThat(registry.isStablecoin("0x6b175474e89094c44da98b954eedeac495271d0f")).isTrue();
         assertThat(registry.isStablecoin("0x40d16fc9686d086299136be70377984c4e2e770a")).isTrue();
         assertThat(registry.isStablecoin("0x4c9edd5852cd905f086c759e8383e09bff1e68b3")).isTrue();
         assertThat(registry.isStablecoin("0x853d955acef822db058eb8505911ed77f175b99e")).isTrue();
+        assertThat(registry.isStablecoin("0xc891eb4cbdeff6e073e859e987815ed1505c2acd")).isTrue();
     }
 
     @Test

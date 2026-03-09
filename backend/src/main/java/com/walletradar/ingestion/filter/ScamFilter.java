@@ -110,6 +110,10 @@ public class ScamFilter {
             signals.add("KNOWN_ZERO_VALUE_SPOOFING_PATTERN");
             return new ScamEvaluation(properties.getDropThreshold(), List.copyOf(signals), true);
         }
+        if (isLikelyKnownInboundSpamPattern(tx.getNetworkId(), raw, wallet, txSender)) {
+            signals.add("KNOWN_INBOUND_SPAM_FINGERPRINT");
+            return new ScamEvaluation(properties.getDropThreshold(), List.copyOf(signals), true);
+        }
         if (isLikelyOutboundZeroValueSpoofing(raw, wallet, txSender)) {
             signals.add("OUTBOUND_ZERO_VALUE_SPOOF");
             return new ScamEvaluation(properties.getDropThreshold(), List.copyOf(signals), true);
@@ -634,6 +638,54 @@ public class ScamFilter {
             }
         }
         return hasOutboundFromWallet;
+    }
+
+    private boolean isLikelyKnownInboundSpamPattern(
+            String networkId, Document raw, String wallet, String txSender
+    ) {
+        if (networkId == null || raw == null || wallet == null || txSender == null || wallet.equals(txSender)) {
+            return false;
+        }
+
+        Set<String> knownFingerprints = properties.getKnownInboundSpamFingerprintKeysNormalized();
+        if (knownFingerprints.isEmpty()) {
+            return false;
+        }
+
+        String methodId = normalizeMethodId(readRawOrExplorerTx(raw, "methodId"));
+        if (methodId == null) {
+            return false;
+        }
+
+        List<Document> tokenTransfers = collectTokenTransfers(raw);
+        if (tokenTransfers.isEmpty()) {
+            return false;
+        }
+
+        String networkKey = networkId.strip().toUpperCase();
+        boolean hasMatchedInbound = false;
+        for (Document transfer : tokenTransfers) {
+            String from = normalize(rawString(transfer.get("from")));
+            String to = normalize(rawString(transfer.get("to")));
+            String tokenContract = normalize(rawString(transfer.get("contractAddress")));
+
+            if (wallet.equals(from)) {
+                return false;
+            }
+            if (!wallet.equals(to)) {
+                continue;
+            }
+            if (tokenContract == null) {
+                return false;
+            }
+
+            String fingerprint = networkKey + "|" + tokenContract + "|" + methodId;
+            if (!knownFingerprints.contains(fingerprint)) {
+                return false;
+            }
+            hasMatchedInbound = true;
+        }
+        return hasMatchedInbound;
     }
 
     private static boolean isLikelyWalletInitiatedZeroValueSpoofing(

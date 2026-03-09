@@ -29,6 +29,7 @@ public class SessionTransactionCommandService {
     private final UserSessionRepository userSessionRepository;
     private final NormalizedTransactionRepository normalizedTransactionRepository;
     private final SessionTransactionRepository sessionTransactionRepository;
+    private final SessionBridgeLifecycleResolver sessionBridgeLifecycleResolver;
 
     public Optional<RebuildResult> rebuildChainTransactions(String sessionId) {
         if (sessionId == null || sessionId.isBlank()) {
@@ -57,6 +58,7 @@ public class SessionTransactionCommandService {
             }
         }
 
+        sessionBridgeLifecycleResolver.apply(projected);
         sessionTransactionRepository.deleteBySessionIdAndSourceType(normalizedSessionId, SessionTransactionSourceType.CHAIN);
         if (!projected.isEmpty()) {
             sessionTransactionRepository.saveAll(projected);

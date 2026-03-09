@@ -11,10 +11,10 @@ spring:
 # Unified per-network ingestion config (ADR-012). Batch size semantics: ADR-011.
 walletradar:
   ingestion:
-    # Backfill window (T-009): blocks from current block. Default ~2 years Ethereum (12s block).
-    # L2s: set per-network window-blocks so backfill covers ~2 years (e.g. Arbitrum ~4 bl/s → 252M).
+    # Backfill window (T-009): blocks from current block. Default calibrated from live chain data
+    # to cover approximately 2 years from 2024-03-08 with ~5% safety margin.
     backfill:
-      window-blocks: 5256000
+      window-blocks: 5500000
       segments:
         defaults:
           segment-stale-after-ms: 180000
@@ -63,6 +63,7 @@ walletradar:
           - https://eth.llamarpc.com
           - https://cloudflare-eth.com
         batch-block-size: 10000
+        window-blocks: 5500000    # measured ~2y span as of 2026-03-09, rounded +5%
         avg-block-time-seconds: 12.0
       ARBITRUM:
         syncMethod: ETHERSCAN
@@ -96,7 +97,7 @@ walletradar:
           - https://mainnet.optimism.io
           - https://optimism.drpc.org
         batch-block-size: 1000
-        window-blocks: 252000000   # ~2 years at ~4 blocks/s
+        window-blocks: 34000000    # measured ~2y span as of 2026-03-09, rounded +5%
         avg-block-time-seconds: 2.0
       POLYGON:
         syncMethod: ETHERSCAN
@@ -111,7 +112,7 @@ walletradar:
           - https://polygon.drpc.org
           - https://polygon-rpc.com
         batch-block-size: 1000
-        window-blocks: 31560000    # ~2 years at ~2s/block
+        window-blocks: 32000000    # measured ~2y span as of 2026-03-09, rounded +5%
         avg-block-time-seconds: 2.0
       BASE:
         syncMethod: BLOCKSCOUT
@@ -126,7 +127,7 @@ walletradar:
           - https://mainnet.base.org
           - https://base.llamarpc.com
         batch-block-size: 1000
-        window-blocks: 31560000   # ~2 years at ~2s/block
+        window-blocks: 34000000    # measured ~2y span as of 2026-03-09, rounded +5%
         avg-block-time-seconds: 2.0
       # Some BSC public RPCs prune old blocks (e.g. "History has been pruned"); multiple endpoints improve retry.
       BSC:
@@ -136,7 +137,7 @@ walletradar:
 #          - https://lb.drpc.live/bsc/${DRPC_API_KEY:}
           - https://rpc.ankr.com/bsc/${ANKR_API_KEY:}
         batch-block-size: 500
-        window-blocks: 31000000    # tuned to current wallet history coverage with safety margin
+        window-blocks: 52000000    # measured ~2y span as of 2026-03-09, rounded +5%
         avg-block-time-seconds: 0.5
       AVALANCHE:
         syncMethod: ETHERSCAN
@@ -151,7 +152,7 @@ walletradar:
           - https://api.avax.network/ext/bc/C/rpc
           - https://avax.meowrpc.com
         batch-block-size: 1000
-        window-blocks: 31560000    # ~2 years at ~2s/block
+        window-blocks: 40000000    # measured ~2y span as of 2026-03-09, rounded +5%
         avg-block-time-seconds: 2.0
       MANTLE:
         syncMethod: ETHERSCAN
@@ -165,7 +166,7 @@ walletradar:
           - https://mantle.drpc.org
           - https://mantle-mainnet.public.blastapi.io
         batch-block-size: 1000
-        window-blocks: 31560000    # ~2 years at ~2s/block
+        window-blocks: 35000000    # measured ~2y span as of 2026-03-09, rounded +5%
         avg-block-time-seconds: 2.0
       LINEA:
         syncMethod: ETHERSCAN
@@ -178,7 +179,7 @@ walletradar:
           - https://rpc.linea.build
           - https://linea-rpc.publicnode.com
         batch-block-size: 1000
-        window-blocks: 31560000    # ~2 years at ~2s/block
+        window-blocks: 29000000    # measured ~2y span as of 2026-03-09, rounded +5%
         avg-block-time-seconds: 2.0
       UNICHAIN:
         syncMethod: ETHERSCAN
@@ -195,7 +196,7 @@ walletradar:
           - https://mainnet.unichain.org
           - https://unichain-rpc.publicnode.com
         batch-block-size: 1000
-        window-blocks: 31560000    # ~2 years at ~2s/block
+        window-blocks: 45000000    # full current chain age +5% safety; chain is younger than 2y
         avg-block-time-seconds: 2.0
       ZKSYNC:
         syncMethod: BLOCKSCOUT
@@ -210,7 +211,7 @@ walletradar:
           - https://mainnet.era.zksync.io
           - https://zksync.drpc.org
         batch-block-size: 1000
-        window-blocks: 63072000    # ~2 years at ~1s/block
+        window-blocks: 43000000    # measured ~2y span as of 2026-03-09, rounded +5%
         avg-block-time-seconds: 1.0
       SOLANA:
         syncMethod: RPC
@@ -240,7 +241,7 @@ walletradar:
     # Pricing stage for normalized transactions (PENDING_PRICE).
     normalized-pricing:
       schedule-interval-ms: 120000
-      max-retries: 10
+      max-retries: 1000
     # Final consistency stage for normalized transactions (PENDING_STAT).
     normalized-stat:
       schedule-interval-ms: 120000
@@ -268,6 +269,8 @@ walletradar:
   # Pricing: historical and spot resolvers (CoinGecko free API). T-019, T-020, T-012.
   pricing:
     coingecko-base-url: https://api.coingecko.com/api/v3
+    coingecko-api-key: ${COINGECKO_API_KEY:}
+    coingecko-api-key-header: ${COINGECKO_API_KEY_HEADER:x-cg-demo-api-key}
     coingecko-historical-requests-per-minute: 45
     connect-timeout-seconds: 10
     read-timeout-seconds: 15
@@ -275,7 +278,14 @@ walletradar:
     contract-mapping:
       enabled: true
       coins-list-cache-ttl-hours: 24
+      coins-list-max-buffer-bytes: 8388608
+      preload-bundled-index: true
+      bundled-index-resource-path: classpath:/pricing/coingecko-platform-contract-index.json
       onchain-fallback-enabled: false   # MVP: skip onchain API; use coins/list + overrides only
+    historical-fallback:
+      enabled: true
+      max-demo-lookback-days: 365
+      resource-path: classpath:/pricing/missing-price-requests-older-300d-priced.json
     # Token contract address (lowercase) -> CoinGecko coin id (config override; network-agnostic)
     contract-to-coin-gecko-id:
       "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2": "weth"
@@ -309,6 +319,103 @@ walletradar:
     zero-amount-poisoning-min-transfer-logs: 100
     zero-amount-poisoning-min-zero-transfers: 20
     suspicious-multicall-airdrop-min-transfer-calls: 20
+    known-inbound-spam-fingerprints:
+      - network-id: BASE
+        token-contract: 0xed7b04a3fdcc4b0718f76ab796d58f39212815cc
+        method-id: 0x4bb9aaf9
+      - network-id: BASE
+        token-contract: 0x1e358596f48420fe4cd147dcc850661632125e21
+        method-id: 0xa06c1a33
+      - network-id: BASE
+        token-contract: 0xfae7d01301e2eeede488f0953547e712a56c5e1d
+        method-id: 0x729ad39e
+      - network-id: BASE
+        token-contract: 0x0bfa6eae01b2f46a55861a5c13f60b67ecba68fe
+        method-id: 0x983bc41b
+      - network-id: BASE
+        token-contract: 0x848f877c61bf68cd758ffb8f8aa9606e79a571a9
+        method-id: 0x983bc41b
+      - network-id: BASE
+        token-contract: 0xcdd42e83688e46e17ef6e330ff694afe950d36fe
+        method-id: 0x983bc41b
+      - network-id: BASE
+        token-contract: 0x1ce89cf4a098295d4ec294c3dd7e0e195f906626
+        method-id: 0x983bc41b
+      - network-id: BASE
+        token-contract: 0xf6b53ec90128b252ebb03026cd56f5219d793043
+        method-id: 0x983bc41b
+      - network-id: POLYGON
+        token-contract: 0xaa84c8b6cd6c57cd364510a5b05358da63133529
+        method-id: 0x9c96eec5
+      - network-id: POLYGON
+        token-contract: 0x60d983edd1d0aa333e1515407c494e387e573f3d
+        method-id: 0x9c96eec5
+      - network-id: POLYGON
+        token-contract: 0xad747c03ccaa7e549e88995a99e128cc012a9873
+        method-id: 0x9c96eec5
+      - network-id: POLYGON
+        token-contract: 0x72fdc6006cf1bce5898f1c484cfefc66486abd8a
+        method-id: 0xa06c1a33
+      - network-id: POLYGON
+        token-contract: 0xcd16cd4bb3b4da765623c38fac3792a5957ceedc
+        method-id: 0xa06c1a33
+      - network-id: POLYGON
+        token-contract: 0x80648b694b8e07246eb3224f0ad05d982dff3fd1
+        method-id: 0xa06c1a33
+      - network-id: POLYGON
+        token-contract: 0x667c03131fa9e04114ae9efcbb4cd43db15ec718
+        method-id: 0x729ad39e
+      - network-id: POLYGON
+        token-contract: 0xda654d1cd24c5a46d96ebb0410d4d4306620866f
+        method-id: 0x729ad39e
+      - network-id: POLYGON
+        token-contract: 0xf9450e3cd6bfba3ea1125ebc42920d1753fdd6ce
+        method-id: 0x9c96eec5
+      - network-id: POLYGON
+        token-contract: 0xe1030883a69968a08263a7919656bfd6176a1f02
+        method-id: 0x729ad39e
+      - network-id: POLYGON
+        token-contract: 0x1665c36475e0e15484460bc0603ea47ec7d57064
+        method-id: 0x729ad39e
+      - network-id: POLYGON
+        token-contract: 0x1f5aa67cbe587d8468ad376b87457b3189be42ad
+        method-id: 0x9c96eec5
+      - network-id: POLYGON
+        token-contract: 0x4a4a7dad16f58737eee041a25de479c8d82553c1
+        method-id: 0x729ad39e
+      - network-id: POLYGON
+        token-contract: 0xa563c58409f32265203e62d60a0439d03179bdcd
+        method-id: 0x9c96eec5
+      - network-id: POLYGON
+        token-contract: 0x4423fff9fc7feed73c27d00c5e88248397464dc4
+        method-id: 0x729ad39e
+      - network-id: POLYGON
+        token-contract: 0x98df426c1de3ee897aa1a09b4c07a5d58c435f7a
+        method-id: 0xa06c1a33
+      - network-id: POLYGON
+        token-contract: 0x463b1977299c342c20cba611c5947c495711b398
+        method-id: 0x9c96eec5
+      - network-id: POLYGON
+        token-contract: 0xc322d40afc9acb6858542398f0020fae5db38276
+        method-id: 0x9c96eec5
+      - network-id: POLYGON
+        token-contract: 0x77e532094985c8e6d7dab88603b1064694d165ef
+        method-id: 0x9c96eec5
+      - network-id: POLYGON
+        token-contract: 0x359994f54a03701c17c2f5161f6e16a3b80a058d
+        method-id: 0xa06c1a33
+      - network-id: POLYGON
+        token-contract: 0xb344789e6843efa7501ad7daf67bffa718623111
+        method-id: 0xa06c1a33
+      - network-id: OPTIMISM
+        token-contract: 0x4554b2d76802b214c71e7481e0da8cfcba70fa34
+        method-id: 0x9c96eec5
+      - network-id: UNICHAIN
+        token-contract: 0xeb923667062ff90c633910894467819ddc2b701e
+        method-id: 0x007b6643
+      - network-id: ARBITRUM
+        token-contract: 0x29103b9e35b3f5f65708804dcc5f945fae992416
+        method-id: 0xd43a632f
     # Add known scam/drainer/phishing addresses (EVM: 0x..., case-insensitive). Example:
     # blocklist:
     #   - "0x..."

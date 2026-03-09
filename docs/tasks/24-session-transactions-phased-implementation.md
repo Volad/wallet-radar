@@ -1,5 +1,17 @@
 # 24 — Session Transactions Phased Implementation
 
+## Status Snapshot (2026-03-07)
+
+- **T-052 is already implemented as-built**:
+  - `SessionTransaction` document/repository exist
+  - `POST /api/v1/sessions/{sessionId}/transactions/rebuild` exists
+  - `GET /api/v1/sessions/{sessionId}/transactions` exists
+  - domain/API docs already reflect Phase 1
+- Recent ingestion changes **did not change the session-layer architecture**.
+- Recent ingestion/classification changes **did change the prerequisites and sequencing** for the remaining phases:
+  - zero-value phishing/scam rows are now expected to be removed upstream before session projection
+  - remaining normalization remediation from `docs/tasks/28-raw-vs-normalized-audit-remediation.md` directly affects correctness of Phase 3 session-level accounting
+
 ## Task IDs
 
 - **T-052** — Phase 1: SessionTransaction foundation + projection/read API
@@ -13,8 +25,8 @@
 ## Worker Handoff Commands
 
 ```text
-$backend-dev implement docs/tasks/24-session-transactions-phased-implementation.md (T-052) end-to-end with tests
-$frontend-dev implement docs/tasks/24-session-transactions-phased-implementation.md (T-052) end-to-end with tests
+$backend-dev implement docs/tasks/24-session-transactions-phased-implementation.md (T-053) end-to-end with tests
+$frontend-dev implement docs/tasks/24-session-transactions-phased-implementation.md (T-053) end-to-end with tests
 ```
 
 ---
@@ -32,10 +44,32 @@ $frontend-dev implement docs/tasks/24-session-transactions-phased-implementation
    - `realisedPnlUsdTotal`
    - `avcoSnapshotVersion`
 5. Phase 5 scope is strictly limited to retry/idempotency hardening.
+6. Scam/phishing filtering and zero-value admin/no-op collapsing remain **upstream responsibilities** of raw ingestion and normalized classification; `session_transactions` must not introduce a second classification/filtering layer.
+7. Session projection continues to consume only canonical `normalized_transactions` with `status=CONFIRMED`.
 
 ---
 
-## Phase 1 — T-052 (Implement Now)
+## Impact Of Recent Changes
+
+1. **No architecture change for SessionTransaction**
+   - Separate `session_transactions` collection remains the correct design.
+   - Phase boundaries (`projection -> bridge pairing -> session AVCO -> manual rows -> idempotency`) remain valid.
+
+2. **Phase 1 is no longer planned work**
+   - It is already implemented in code and reflected in `docs/01-domain.md` and `docs/04-api.md`.
+   - This task file must treat T-052 as completed baseline, not as the current execution target.
+
+3. **Upstream hygiene is now an explicit dependency**
+   - Confirmed scam-like zero-value poisoning rows are expected to be dropped before they can appear in session projection.
+   - Remaining normalized remediation from `docs/tasks/28-raw-vs-normalized-audit-remediation.md` is a hard correctness dependency for session-level accounting totals.
+
+4. **Execution sequencing changes**
+   - `T-053` can proceed on top of the current Phase 1 baseline.
+   - `T-054` must be treated as dependent on the accounting-relevant normalization fixes from task `28`, especially lend-withdraw/native gateway and no-value terminalization items.
+
+---
+
+## Phase 1 — T-052 (Completed Baseline)
 
 ### Goal
 
@@ -84,6 +118,10 @@ Introduce a production-safe SessionTransaction foundation and first read path wi
 3. Existing `/sessions` and `/wallets` contracts remain backward-compatible.
 4. Backend and frontend tests for T-052 pass.
 
+### Status
+
+- Completed and available as current baseline for the next phases.
+
 ---
 
 ## Phase 2 — T-053
@@ -129,6 +167,7 @@ Compute accounting at session level from SessionTransactions.
    - `avcoSnapshotVersion`
 3. Keep per-leg AVCO/PnL out of SessionTransaction unless strict necessity emerges.
 4. Add replay idempotency tests and invariant coverage.
+5. Treat `docs/tasks/28-raw-vs-normalized-audit-remediation.md` as upstream dependency for accounting correctness before Phase 3 is considered production-ready.
 
 ### Frontend tasks
 
@@ -138,6 +177,7 @@ Compute accounting at session level from SessionTransactions.
 ### DoD
 
 - Session accounting replay is deterministic and repeatable.
+- Production readiness requires upstream normalized semantic fixes to be applied first for accounting-critical cases.
 
 ---
 

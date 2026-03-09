@@ -1,22 +1,34 @@
 package com.walletradar.pricing.resolver;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.walletradar.common.RateLimiter;
 import com.walletradar.domain.common.PriceSource;
 import com.walletradar.pricing.HistoricalPriceRequest;
 import com.walletradar.pricing.PriceResolutionResult;
 import com.walletradar.pricing.config.PricingProperties;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.core.io.Resource;
+import org.springframework.core.io.ResourceLoader;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StreamUtils;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
+import org.springframework.web.reactive.function.client.WebClient.RequestHeadersSpec;
 
+import java.io.InputStream;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.nio.charset.StandardCharsets;
+import java.time.Clock;
 import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -29,28 +41,53 @@ public class CoinGeckoHistoricalResolver {
     private static final int SCALE = 18;
     private static final RoundingMode ROUNDING = RoundingMode.HALF_UP;
     private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ISO_LOCAL_DATE; // YYYY-MM-DD
+    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private final PricingProperties pricingProperties;
     private final WebClient.Builder webClientBuilder;
     private final RateLimiter rateLimiter;
     private final ContractToCoinGeckoIdResolver contractToCoinGeckoIdResolver;
+    private final ResourceLoader resourceLoader;
+    private final Clock clock;
+    private final Map<String, BigDecimal> bundledHistoricalPriceIndex;
 
+    @Autowired
     public CoinGeckoHistoricalResolver(
             PricingProperties pricingProperties,
             WebClient.Builder webClientBuilder,
             @Qualifier("coingeckoHistoricalRateLimiter") RateLimiter rateLimiter,
-            ContractToCoinGeckoIdResolver contractToCoinGeckoIdResolver
+            ContractToCoinGeckoIdResolver contractToCoinGeckoIdResolver,
+            ResourceLoader resourceLoader
+    ) {
+        this(pricingProperties, webClientBuilder, rateLimiter, contractToCoinGeckoIdResolver, resourceLoader, Clock.systemUTC());
+    }
+
+    CoinGeckoHistoricalResolver(
+            PricingProperties pricingProperties,
+            WebClient.Builder webClientBuilder,
+            RateLimiter rateLimiter,
+            ContractToCoinGeckoIdResolver contractToCoinGeckoIdResolver,
+            ResourceLoader resourceLoader,
+            Clock clock
     ) {
         this.pricingProperties = pricingProperties;
         this.webClientBuilder = webClientBuilder;
         this.rateLimiter = rateLimiter;
         this.contractToCoinGeckoIdResolver = contractToCoinGeckoIdResolver;
+        this.resourceLoader = resourceLoader;
+        this.clock = clock;
+        this.bundledHistoricalPriceIndex = loadBundledHistoricalPriceIndex();
     }
 
     @Cacheable(cacheNames = "historicalPriceCache", key = "#request == null ? 'null' : (#request.assetContract != null ? #request.assetContract : '') + '-' + (#request.networkId != null ? #request.networkId.name() : '') + '-' + (#request.date != null ? #request.date.toString() : '')")
     public PriceResolutionResult resolve(HistoricalPriceRequest request) {
         if (request == null || request.getAssetContract() == null || request.getDate() == null) {
             return PriceResolutionResult.unknown();
+        }
+        if (shouldUseBundledHistoricalFallback(request.getDate())) {
+            return resolveBundledHistoricalPrice(request)
+                    .map(price -> PriceResolutionResult.known(price, PriceSource.COINGECKO))
+                    .orElseGet(PriceResolutionResult::unknown);
         }
         Optional<String> coinIdOpt = contractToCoinGeckoIdResolver.resolve(
                 request.getAssetContract().toLowerCase().strip(),
@@ -65,8 +102,7 @@ public class CoinGeckoHistoricalResolver {
         String url = pricingProperties.getCoingeckoBaseUrl() + "/coins/" + coinId + "/history?date=" + dateStr + "&localization=false";
         try {
             WebClient client = webClientBuilder.build();
-            String response = client.get()
-                    .uri(url)
+            String response = withApiKey(client.get().uri(url))
                     .retrieve()
                     .bodyToMono(String.class)
                     .block();
@@ -83,8 +119,7 @@ public class CoinGeckoHistoricalResolver {
 
     static Optional<BigDecimal> parseUsdPrice(String json) {
         try {
-            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
-            JsonNode root = mapper.readTree(json);
+            JsonNode root = MAPPER.readTree(json);
             JsonNode marketData = root.path("market_data");
             JsonNode currentPrice = marketData.path("current_price");
             JsonNode usd = currentPrice.path("usd");
@@ -95,5 +130,106 @@ public class CoinGeckoHistoricalResolver {
         } catch (Exception e) {
             return Optional.empty();
         }
+    }
+
+    static Map<String, BigDecimal> parseBundledHistoricalPriceIndex(String json) {
+        Map<String, BigDecimal> sumByKey = new HashMap<>();
+        Map<String, Integer> countByKey = new HashMap<>();
+        try {
+            JsonNode root = MAPPER.readTree(json);
+            if (!root.isArray()) {
+                return Map.of();
+            }
+            for (JsonNode entry : root) {
+                if (!"RESOLVED".equalsIgnoreCase(entry.path("lookupStatus").asText())) {
+                    continue;
+                }
+                JsonNode priceNode = entry.path("priceUsd");
+                if (!priceNode.isNumber()) {
+                    continue;
+                }
+                String network = entry.path("network").asText("");
+                String contract = entry.path("assetContract").asText("");
+                String dateTime = entry.path("dateTime").asText("");
+                if (network.isBlank() || contract.isBlank() || dateTime.length() < 10) {
+                    continue;
+                }
+                LocalDate date = LocalDate.parse(dateTime.substring(0, 10));
+                String key = bundledKey(network, contract, date);
+                sumByKey.merge(key, priceNode.decimalValue(), BigDecimal::add);
+                countByKey.merge(key, 1, Integer::sum);
+            }
+            Map<String, BigDecimal> averageByKey = new HashMap<>();
+            for (Map.Entry<String, BigDecimal> entry : sumByKey.entrySet()) {
+                int count = countByKey.getOrDefault(entry.getKey(), 1);
+                averageByKey.put(entry.getKey(), entry.getValue().divide(BigDecimal.valueOf(count), SCALE, ROUNDING));
+            }
+            return averageByKey;
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to parse bundled historical price index", e);
+        }
+    }
+
+    private Map<String, BigDecimal> loadBundledHistoricalPriceIndex() {
+        PricingProperties.HistoricalFallbackProperties fallback = pricingProperties.getHistoricalFallback();
+        if (fallback == null || !fallback.isEnabled()) {
+            return Map.of();
+        }
+        String resourcePath = fallback.getResourcePath();
+        try {
+            Resource resource = resourceLoader.getResource(resourcePath);
+            if (!resource.exists()) {
+                return Map.of();
+            }
+            try (InputStream inputStream = resource.getInputStream()) {
+                String json = StreamUtils.copyToString(inputStream, StandardCharsets.UTF_8);
+                Map<String, BigDecimal> index = parseBundledHistoricalPriceIndex(json);
+                log.info("Loaded bundled historical price snapshot from {} with {} daily entries",
+                        resourcePath, index.size());
+                return index;
+            }
+        } catch (Exception e) {
+            log.warn("Failed to load bundled historical price snapshot from {}: {}",
+                    resourcePath, e.getMessage());
+            return Map.of();
+        }
+    }
+
+    private boolean shouldUseBundledHistoricalFallback(LocalDate requestDate) {
+        PricingProperties.HistoricalFallbackProperties fallback = pricingProperties.getHistoricalFallback();
+        if (fallback == null || !fallback.isEnabled() || requestDate == null || isProApiConfigured()) {
+            return false;
+        }
+        LocalDate cutoffDate = LocalDate.now(clock.withZone(ZoneOffset.UTC))
+                .minusDays(Math.max(0, fallback.getMaxDemoLookbackDays()));
+        return requestDate.isBefore(cutoffDate);
+    }
+
+    private boolean isProApiConfigured() {
+        String header = pricingProperties.getCoingeckoApiKeyHeader();
+        String baseUrl = pricingProperties.getCoingeckoBaseUrl();
+        return "x-cg-pro-api-key".equalsIgnoreCase(header == null ? "" : header.strip())
+                || (baseUrl != null && baseUrl.contains("pro-api.coingecko.com"));
+    }
+
+    private Optional<BigDecimal> resolveBundledHistoricalPrice(HistoricalPriceRequest request) {
+        if (request.getNetworkId() == null || bundledHistoricalPriceIndex.isEmpty()) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(
+                bundledHistoricalPriceIndex.get(
+                        bundledKey(request.getNetworkId().name(), request.getAssetContract(), request.getDate())));
+    }
+
+    private static String bundledKey(String network, String contract, LocalDate date) {
+        return network + "|" + contract.toLowerCase().strip() + "|" + date;
+    }
+
+    private RequestHeadersSpec<?> withApiKey(RequestHeadersSpec<?> request) {
+        String apiKey = pricingProperties.getCoingeckoApiKey();
+        if (apiKey == null || apiKey.isBlank()) {
+            return request;
+        }
+        return request.header(pricingProperties.getCoingeckoApiKeyHeader(), apiKey.trim());
     }
 }

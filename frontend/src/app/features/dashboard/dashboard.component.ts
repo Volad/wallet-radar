@@ -9,9 +9,16 @@ import { COLORS, EMPTY_DASHBOARD_DATA } from '../../core/data/dashboard.mock';
 import {
   DashboardSection,
   DashboardViewState,
+  FlowRole,
   NetworkId,
+  NetworkInfo,
+  PriceSource,
   SectionMeta,
+  TransactionFlow,
+  TransactionItem,
+  TransactionType,
   WalletId,
+  WalletInfo,
 } from '../../core/models/dashboard.models';
 import { DashboardDataService } from '../../core/services/dashboard-data.service';
 import {
@@ -20,6 +27,9 @@ import {
   EvmNetworkId,
   SessionBackfillAggregateStatus,
   SessionBackfillStatusResponse,
+  SessionBridgeStatus,
+  SessionTransactionFlowResponse,
+  SessionTransactionItemResponse,
   SUPPORTED_EVM_NETWORKS,
 } from '../../core/models/wallet-api.models';
 import { WalletApiService } from '../../core/services/wallet-api.service';
@@ -57,6 +67,39 @@ const EVM_NETWORKS_PRESENTATION: ReadonlyArray<EvmNetworkPresentation> = [
   { id: 'ZKSYNC', icon: '◍', label: 'zkSync Era', color: '#8C8DFC' },
 ];
 
+const EVM_NETWORK_PRESENTATION_BY_ID = new Map<EvmNetworkId, EvmNetworkPresentation>(
+  EVM_NETWORKS_PRESENTATION.map((network) => [network.id, network] as const)
+);
+
+const TRANSACTION_TYPES_BY_ID = new Set<TransactionType>([
+  'SWAP',
+  'WRAP',
+  'UNWRAP',
+  'EXTERNAL_INBOUND',
+  'EXTERNAL_TRANSFER_OUT',
+  'LP_ENTRY',
+  'LP_EXIT',
+  'LP_EXIT_PARTIAL',
+  'LP_EXIT_FINAL',
+  'LP_FEE_CLAIM',
+  'LP_POSITION_STAKE',
+  'LP_POSITION_UNSTAKE',
+  'LEND_DEPOSIT',
+  'LEND_WITHDRAWAL',
+  'BORROW',
+  'REPAY',
+  'STAKE_DEPOSIT',
+  'STAKE_WITHDRAWAL',
+  'APPROVAL',
+  'UNCLASSIFIED',
+  'MANUAL_COMPENSATING',
+  'LP_ADJUST',
+]);
+
+const FLOW_ROLES = new Set<FlowRole>(['BUY', 'SELL', 'FEE', 'TRANSFER']);
+const PRICE_SOURCES = new Set<PriceSource>(['STABLECOIN', 'SWAP_DERIVED', 'COINGECKO', 'MANUAL', 'UNKNOWN']);
+const BRIDGE_STATUSES = new Set<SessionBridgeStatus>(['BRIDGE_OUT', 'BRIDGE_IN', 'MATCHED', 'REVIEW']);
+
 @Component({
   selector: 'wr-dashboard',
   standalone: true,
@@ -92,6 +135,9 @@ export class DashboardComponent {
   readonly isBackfillVisible = signal(false);
   readonly currentSessionId = signal<string | null>(null);
   readonly sessionBackfillStatus = signal<SessionBackfillStatusResponse | null>(null);
+  readonly sessionTransactions = signal<ReadonlyArray<TransactionItem>>([]);
+  readonly isSessionTransactionsLoading = signal(false);
+  readonly sessionTransactionsError = signal<string | null>(null);
 
   readonly viewState = toSignal(
     this.dashboardDataService.getDashboardData().pipe(
@@ -146,6 +192,96 @@ export class DashboardComponent {
 
   readonly selectedWalletFilter = computed(() => this.selectedWalletIds());
   readonly selectedNetworkFilter = computed(() => this.selectedNetworkIds());
+  readonly sessionWallets = computed<ReadonlyArray<WalletInfo>>(() => {
+    const status = this.sessionBackfillStatus();
+    if (status === null) {
+      return [];
+    }
+    return status.wallets.map((wallet) => ({
+      id: wallet.address.toLowerCase(),
+      label: wallet.label,
+      address: wallet.address.toLowerCase(),
+      color: wallet.color,
+    }));
+  });
+
+  readonly sessionNetworks = computed<ReadonlyArray<NetworkInfo>>(() => {
+    const status = this.sessionBackfillStatus();
+    if (status === null) {
+      return [];
+    }
+
+    const networkIds = new Set<EvmNetworkId>();
+    status.wallets.forEach((wallet) => {
+      wallet.networks.forEach((network) => {
+        networkIds.add(network.networkId);
+      });
+    });
+
+    return [...networkIds].map((networkId) => {
+      const presentation = EVM_NETWORK_PRESENTATION_BY_ID.get(networkId);
+      if (presentation !== undefined) {
+        return {
+          id: networkId,
+          icon: presentation.icon,
+          label: presentation.label,
+          color: presentation.color,
+        };
+      }
+      return {
+        id: networkId,
+        icon: '•',
+        label: networkId,
+        color: COLORS.textSubtle,
+      };
+    });
+  });
+
+  readonly transactionPaneWallets = computed(() => {
+    const sessionWallets = this.sessionWallets();
+    return sessionWallets.length > 0 ? sessionWallets : this.data().wallets;
+  });
+
+  readonly transactionPaneNetworks = computed(() => {
+    const sessionNetworks = this.sessionNetworks();
+    return sessionNetworks.length > 0 ? sessionNetworks : this.data().networks;
+  });
+
+  readonly transactionPaneSelectedWalletIds = computed(() => {
+    if (this.currentSessionId() !== null) {
+      return new Set<WalletId>();
+    }
+    return this.selectedWalletIds();
+  });
+
+  readonly transactionPaneSelectedNetworkIds = computed(() => {
+    if (this.currentSessionId() !== null) {
+      return new Set<NetworkId>();
+    }
+    return this.selectedNetworkIds();
+  });
+
+  readonly transactionPaneTransactions = computed(() => {
+    if (this.currentSessionId() !== null) {
+      return this.sessionTransactions();
+    }
+    return this.data().transactions;
+  });
+
+  readonly transactionPaneEmptyStateMessage = computed(() => {
+    if (this.currentSessionId() === null) {
+      return 'No transactions match current filters.';
+    }
+    const sessionTransactionsError = this.sessionTransactionsError();
+    if (sessionTransactionsError !== null) {
+      return sessionTransactionsError;
+    }
+    const backfillStatus = this.sessionBackfillStatus();
+    if (backfillStatus !== null && !this.isTerminalBackfillStatus(backfillStatus.status)) {
+      return 'Backfill is still running. Session transactions will appear after projection rebuild.';
+    }
+    return 'No session transactions match current filters.';
+  });
 
   readonly filteredTokenPositions = computed(() => {
     const selectedWallets = this.selectedWalletFilter();
@@ -344,6 +480,11 @@ export class DashboardComponent {
         this.walletSubmitMessage.set(message);
         this.isBackfillVisible.set(true);
         this.sessionBackfillStatus.set(null);
+        this.sessionTransactions.set([]);
+        this.sessionTransactionsError.set(null);
+        this.isSessionTransactionsLoading.set(false);
+        this.selectedWalletIds.set(new Set<WalletId>());
+        this.selectedNetworkIds.set(new Set<NetworkId>());
         this.startBackfillPolling(sessionId);
         this.isAddWalletDialogOpen.set(false);
       });
@@ -442,6 +583,7 @@ export class DashboardComponent {
         if (this.isTerminalBackfillStatus(status.status)) {
           this.isBackfillVisible.set(false);
           this.stopBackfillPolling();
+          this.refreshSessionTransactions(sessionId);
         }
       });
   }
@@ -477,11 +619,99 @@ export class DashboardComponent {
         this.sessionBackfillStatus.set(status);
         if (this.isTerminalBackfillStatus(status.status)) {
           this.isBackfillVisible.set(false);
+          this.refreshSessionTransactions(storedSessionId);
           return;
         }
         this.isBackfillVisible.set(true);
         this.startBackfillPolling(storedSessionId);
       });
+  }
+
+  private refreshSessionTransactions(sessionId: string): void {
+    this.isSessionTransactionsLoading.set(true);
+    this.sessionTransactionsError.set(null);
+
+    this.walletApiService
+      .rebuildSessionTransactions(sessionId)
+      .pipe(
+        takeUntilDestroyed(this.destroyRef),
+        switchMap(() => this.walletApiService.getSessionTransactions(sessionId, 100)),
+        map((response) => response.items.map((item) => this.toTransactionItem(item))),
+        catchError((error: HttpErrorResponse) => {
+          if (error.status === 404) {
+            this.clearSessionTracking(true);
+          }
+          this.sessionTransactionsError.set('Unable to load session transactions.');
+          return of<ReadonlyArray<TransactionItem>>([]);
+        })
+      )
+      .subscribe((transactions) => {
+        this.sessionTransactions.set(transactions);
+        this.isSessionTransactionsLoading.set(false);
+      });
+  }
+
+  private toTransactionItem(item: SessionTransactionItemResponse): TransactionItem {
+    const flows = item.flows.map((flow) => this.toTransactionFlow(flow));
+    const firstSymbol = flows.find((flow) => flow.symbol.length > 0)?.symbol ?? 'UNKNOWN';
+
+    return {
+      id: item.id,
+      hash: item.txHash ?? item.id,
+      timestamp: item.blockTimestamp ?? '',
+      type: this.toTransactionType(item.type),
+      symbol: firstSymbol,
+      networkId: item.networkId ?? 'UNKNOWN',
+      walletId: item.walletAddress?.toLowerCase() ?? 'unknown',
+      status: 'CONFIRMED',
+      issue: null,
+      bridgeStatus: this.toBridgeStatus(item.bridgeStatus),
+      hasOverride: item.sourceType === 'OVERRIDE',
+      flows,
+    };
+  }
+
+  private toTransactionFlow(flow: SessionTransactionFlowResponse): TransactionFlow {
+    const signedQuantity = flow.quantityDelta ?? 0;
+    return {
+      role: this.toFlowRole(flow.role, signedQuantity),
+      symbol: flow.assetSymbol?.trim().toUpperCase() ?? 'UNKNOWN',
+      quantity: Math.abs(signedQuantity),
+      signedQuantity,
+      priceUsd: flow.unitPriceUsd,
+      source: this.toPriceSource(flow.priceSource),
+    };
+  }
+
+  private toTransactionType(type: string | null): TransactionType {
+    if (type !== null && TRANSACTION_TYPES_BY_ID.has(type as TransactionType)) {
+      return type as TransactionType;
+    }
+    return 'UNCLASSIFIED';
+  }
+
+  private toFlowRole(role: string | null, signedQuantity: number): FlowRole {
+    if (role !== null && FLOW_ROLES.has(role as FlowRole)) {
+      return role as FlowRole;
+    }
+    if (signedQuantity < 0) {
+      return 'SELL';
+    }
+    return 'BUY';
+  }
+
+  private toPriceSource(priceSource: string | null): PriceSource {
+    if (priceSource !== null && PRICE_SOURCES.has(priceSource as PriceSource)) {
+      return priceSource as PriceSource;
+    }
+    return 'UNKNOWN';
+  }
+
+  private toBridgeStatus(bridgeStatus: string | null): SessionBridgeStatus | null {
+    if (bridgeStatus !== null && BRIDGE_STATUSES.has(bridgeStatus as SessionBridgeStatus)) {
+      return bridgeStatus as SessionBridgeStatus;
+    }
+    return null;
   }
 
   private toWalletSubmitError(error: HttpErrorResponse): string {
@@ -512,6 +742,9 @@ export class DashboardComponent {
     this.currentSessionId.set(null);
     this.sessionBackfillStatus.set(null);
     this.isBackfillVisible.set(false);
+    this.sessionTransactions.set([]);
+    this.sessionTransactionsError.set(null);
+    this.isSessionTransactionsLoading.set(false);
   }
 
   private toggleSetValue<T>(set: ReadonlySet<T>, value: T): ReadonlySet<T> {

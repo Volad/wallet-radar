@@ -8,7 +8,7 @@ import java.util.stream.Stream;
 
 /**
  * Registry of stablecoin contract addresses (any supported network).
- * Used by StablecoinResolver to return $1.00 for USDC, USDT, DAI, GHO, USDe, FRAX per 01-domain.
+ * Used by StablecoinResolver to return $1.00 for explicit stablecoin allowlist per 01-domain.
  */
 @Component
 public class StablecoinRegistry {
@@ -36,6 +36,8 @@ public class StablecoinRegistry {
             "0x40d16fc9686d086299136be70377984c4e2e770a",
             // USDe (Ethena)
             "0x4c9edd5852cd905f086c759e8383e09bff1e68b3",
+            // EURC
+            "0xc891eb4cbdeff6e073e859e987815ed1505c2acd",  // Avalanche EURC
             // FRAX
             "0x853d955acef822db058eb8505911ed77f175b99e"   // Ethereum FRAX
     ).map(String::toLowerCase).collect(Collectors.toUnmodifiableSet());

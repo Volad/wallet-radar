@@ -5,12 +5,19 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.pricing.config.NetworkIdToCoinGeckoPlatformMapper;
 import com.walletradar.pricing.config.PricingProperties;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.io.Resource;
+import org.springframework.core.io.ResourceLoader;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StreamUtils;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClient.RequestHeadersSpec;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
@@ -27,11 +34,32 @@ import java.util.Optional;
 public class CoinsListBulkResolver implements ContractToCoinGeckoIdResolver {
 
     private static final String CACHE_KEY = "coins-list";
+    private static final int DEFAULT_WEBCLIENT_BUFFER_BYTES = 256 * 1024;
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private final PricingProperties pricingProperties;
     private final WebClient.Builder webClientBuilder;
     private final com.github.benmanes.caffeine.cache.Cache<String, Map<String, String>> coinsListCache;
+    private final ResourceLoader resourceLoader;
+    private volatile WebClient coinsListClient;
+
+    @PostConstruct
+    void preloadBundledIndex() {
+        if (!pricingProperties.getContractMapping().isEnabled()
+                || !pricingProperties.getContractMapping().isPreloadBundledIndex()) {
+            return;
+        }
+        Map<String, String> bundledIndex = loadBundledIndex();
+        if (bundledIndex.isEmpty()) {
+            log.info("No bundled CoinGecko contract index loaded from {}",
+                    pricingProperties.getContractMapping().getBundledIndexResourcePath());
+            return;
+        }
+        coinsListCache.put(CACHE_KEY, bundledIndex);
+        log.info("Preloaded bundled CoinGecko contract index from {} with {} keys",
+                pricingProperties.getContractMapping().getBundledIndexResourcePath(),
+                bundledIndex.size());
+    }
 
     @Override
     public Optional<String> resolve(String contractAddress, NetworkId networkId) {
@@ -71,9 +99,9 @@ public class CoinsListBulkResolver implements ContractToCoinGeckoIdResolver {
     private Map<String, String> fetchAndBuildIndex() {
         String url = pricingProperties.getCoingeckoBaseUrl() + "/coins/list?include_platform=true";
         try {
-            String response = webClientBuilder.build()
+            String response = withApiKey(coinsListClient()
                     .get()
-                    .uri(url)
+                    .uri(url))
                     .retrieve()
                     .bodyToMono(String.class)
                     .block();
@@ -82,9 +110,59 @@ public class CoinsListBulkResolver implements ContractToCoinGeckoIdResolver {
             log.warn("CoinGecko coins/list failed: {} {}", e.getStatusCode(), e.getMessage());
             throw new RuntimeException("Coins list fetch failed", e);
         } catch (Exception e) {
-            log.warn("CoinGecko coins/list error: {}", e.getMessage());
+            log.warn("CoinGecko coins/list error (bufferBytes={}): {}",
+                    effectiveCoinsListBufferBytes(),
+                    e.getMessage());
             throw new RuntimeException("Coins list fetch failed", e);
         }
+    }
+
+    private Map<String, String> loadBundledIndex() {
+        String resourcePath = pricingProperties.getContractMapping().getBundledIndexResourcePath();
+        try {
+            Resource resource = resourceLoader.getResource(resourcePath);
+            if (!resource.exists()) {
+                return Map.of();
+            }
+            try (InputStream inputStream = resource.getInputStream()) {
+                String json = StreamUtils.copyToString(inputStream, StandardCharsets.UTF_8);
+                return parseBundledIndex(json);
+            }
+        } catch (Exception e) {
+            log.warn("Failed to load bundled CoinGecko contract index from {}: {}",
+                    resourcePath, e.getMessage());
+            return Map.of();
+        }
+    }
+
+    private WebClient coinsListClient() {
+        WebClient local = coinsListClient;
+        if (local != null) {
+            return local;
+        }
+        synchronized (this) {
+            if (coinsListClient == null) {
+                coinsListClient = webClientBuilder.clone()
+                        .codecs(configurer -> configurer.defaultCodecs().maxInMemorySize(effectiveCoinsListBufferBytes()))
+                        .build();
+            }
+            return coinsListClient;
+        }
+    }
+
+    private int effectiveCoinsListBufferBytes() {
+        return Math.max(
+                DEFAULT_WEBCLIENT_BUFFER_BYTES,
+                pricingProperties.getContractMapping().getCoinsListMaxBufferBytes()
+        );
+    }
+
+    private RequestHeadersSpec<?> withApiKey(RequestHeadersSpec<?> request) {
+        String apiKey = pricingProperties.getCoingeckoApiKey();
+        if (apiKey == null || apiKey.isBlank()) {
+            return request;
+        }
+        return request.header(pricingProperties.getCoingeckoApiKeyHeader(), apiKey.trim());
     }
 
     static Map<String, String> parseAndBuildIndex(String json) {
@@ -125,6 +203,43 @@ public class CoinsListBulkResolver implements ContractToCoinGeckoIdResolver {
             }
         } catch (Exception e) {
             throw new RuntimeException("Failed to parse coins list", e);
+        }
+        return index;
+    }
+
+    static Map<String, String> parseBundledIndex(String json) {
+        Map<String, String> index = new HashMap<>();
+        try {
+            JsonNode root = MAPPER.readTree(json);
+            JsonNode entriesNode = root;
+            if (root.isObject() && root.has("entries")) {
+                entriesNode = root.path("entries");
+            }
+            if (!entriesNode.isObject()) {
+                return index;
+            }
+            Iterator<Map.Entry<String, JsonNode>> fields = entriesNode.fields();
+            while (fields.hasNext()) {
+                Map.Entry<String, JsonNode> entry = fields.next();
+                if (!entry.getValue().isTextual()) {
+                    continue;
+                }
+                String key = entry.getKey();
+                String coinId = entry.getValue().asText();
+                if (key == null || key.isBlank() || coinId == null || coinId.isBlank()) {
+                    continue;
+                }
+                index.put(key, coinId);
+                int separator = key.indexOf(':');
+                if (separator >= 0 && separator + 1 < key.length()) {
+                    String contractLower = key.substring(separator + 1).toLowerCase().strip();
+                    if (!contractLower.isBlank()) {
+                        index.putIfAbsent(":" + contractLower, coinId);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to parse bundled contract index", e);
         }
         return index;
     }

@@ -1,8 +1,10 @@
-export type WalletId = 'w1' | 'w2';
-export type NetworkId = 'ETH' | 'ARB' | 'BASE' | 'OP' | 'POL';
+export type WalletId = string;
+export type NetworkId = string;
 
 export type TransactionType =
   | 'SWAP'
+  | 'WRAP'
+  | 'UNWRAP'
   | 'EXTERNAL_INBOUND'
   | 'EXTERNAL_TRANSFER_OUT'
   | 'LP_ENTRY'
@@ -18,12 +20,15 @@ export type TransactionType =
   | 'REPAY'
   | 'STAKE_DEPOSIT'
   | 'STAKE_WITHDRAWAL'
+  | 'APPROVAL'
+  | 'UNCLASSIFIED'
   | 'MANUAL_COMPENSATING'
   | 'LP_ADJUST';
 
 export type TransactionStatus = 'CONFIRMED' | 'PENDING_PRICE' | 'NEEDS_REVIEW';
 export type FlowRole = 'BUY' | 'SELL' | 'FEE' | 'TRANSFER';
 export type PriceSource = 'STABLECOIN' | 'SWAP_DERIVED' | 'COINGECKO' | 'MANUAL' | 'UNKNOWN';
+export type BridgeStatus = 'BRIDGE_OUT' | 'BRIDGE_IN' | 'MATCHED' | 'REVIEW';
 
 export type IssueCode = 'missing_price' | 'unconfirmed' | 'recon' | null;
 
@@ -105,6 +110,7 @@ export interface TransactionFlow {
   readonly role: FlowRole;
   readonly symbol: string;
   readonly quantity: number;
+  readonly signedQuantity?: number;
   readonly priceUsd: number | null;
   readonly source: PriceSource;
 }
@@ -119,6 +125,7 @@ export interface TransactionItem {
   readonly walletId: WalletId;
   readonly status: TransactionStatus;
   readonly issue: IssueCode;
+  readonly bridgeStatus?: BridgeStatus | null;
   readonly hasOverride: boolean;
   readonly note?: string;
   readonly flows: ReadonlyArray<TransactionFlow>;
@@ -167,6 +174,8 @@ export type DashboardViewState =
 
 export const TRANSACTION_TYPES: ReadonlyArray<TransactionType> = [
   'SWAP',
+  'WRAP',
+  'UNWRAP',
   'EXTERNAL_INBOUND',
   'EXTERNAL_TRANSFER_OUT',
   'LP_ENTRY',
@@ -182,6 +191,8 @@ export const TRANSACTION_TYPES: ReadonlyArray<TransactionType> = [
   'REPAY',
   'STAKE_DEPOSIT',
   'STAKE_WITHDRAWAL',
+  'APPROVAL',
+  'UNCLASSIFIED',
   'MANUAL_COMPENSATING',
   'LP_ADJUST',
 ];

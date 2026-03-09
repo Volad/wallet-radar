@@ -315,11 +315,14 @@
           </section>
 
           <wr-dashboard-transactions-pane
-            [wallets]="data().wallets"
-            [networks]="data().networks"
-            [selectedWalletIds]="selectedWalletIds()"
-            [selectedNetworkIds]="selectedNetworkIds()"
-            [sourceTransactions]="data().transactions"></wr-dashboard-transactions-pane>
+            [wallets]="transactionPaneWallets()"
+            [networks]="transactionPaneNetworks()"
+            [selectedWalletIds]="transactionPaneSelectedWalletIds()"
+            [selectedNetworkIds]="transactionPaneSelectedNetworkIds()"
+            [sourceTransactions]="transactionPaneTransactions()"
+            [isLoading]="isSessionTransactionsLoading()"
+            [isReadOnly]="currentSessionId() !== null"
+            [emptyStateMessage]="transactionPaneEmptyStateMessage()"></wr-dashboard-transactions-pane>
         </div>
       </main>
     </div>

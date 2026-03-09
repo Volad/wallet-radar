@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 
 import { COLORS } from '../../../../core/data/dashboard.mock';
 import {
+  BridgeStatus,
   EditableTransactionDraft,
   EditableTransactionFlow,
   FlowRole,
@@ -21,6 +22,7 @@ import {
 
 type SaveState = 'idle' | 'saving' | 'saved';
 type PillVariant = 'def' | 'cyan' | 'green' | 'red' | 'amber' | 'purple' | 'blue';
+type BridgeFilter = 'ALL' | BridgeStatus;
 
 @Component({
   selector: 'wr-dashboard-transactions-pane',
@@ -57,22 +59,30 @@ export class DashboardTransactionsPaneComponent {
     this.cancelTransactionEdit();
   }
 
+  @Input() isLoading = false;
+  @Input() isReadOnly = false;
+  @Input() emptyStateMessage = 'No transactions for current filters.';
+
   readonly colors = COLORS;
   readonly transactionTypes = TRANSACTION_TYPES;
   readonly priceSources = PRICE_SOURCES;
   readonly flowRoles: ReadonlyArray<FlowRole> = ['BUY', 'SELL', 'FEE', 'TRANSFER'];
+  readonly bridgeFilters: ReadonlyArray<BridgeFilter> = ['ALL', 'BRIDGE_OUT', 'BRIDGE_IN', 'MATCHED', 'REVIEW'];
 
   readonly transactionSearch = signal('');
+  readonly bridgeStatusFilter = signal<BridgeFilter>('ALL');
   readonly expandedTransactionIds = signal<ReadonlySet<string>>(new Set<string>());
   readonly editingTransactionId = signal<string | null>(null);
   readonly editingDraft = signal<EditableTransactionDraft | null>(null);
   readonly saveState = signal<SaveState>('idle');
   readonly transactions = signal<ReadonlyArray<TransactionItem>>([]);
+  readonly hasBridgeStatuses = computed(() => this.transactions().some((tx) => tx.bridgeStatus !== null && tx.bridgeStatus !== undefined));
 
   readonly filteredTransactions = computed(() => {
     const selectedWallets = this.selectedWalletIdsSignal();
     const selectedNetworks = this.selectedNetworkIdsSignal();
     const searchTerm = this.transactionSearch().trim().toLowerCase();
+    const bridgeFilter = this.bridgeStatusFilter();
 
     return this.transactions().filter((tx) => {
       if (selectedWallets.size > 0 && !selectedWallets.has(tx.walletId)) {
@@ -87,6 +97,9 @@ export class DashboardTransactionsPaneComponent {
         if (!matchHash && !matchSymbol) {
           return false;
         }
+      }
+      if (bridgeFilter !== 'ALL' && tx.bridgeStatus !== bridgeFilter) {
+        return false;
       }
 
       return true;
@@ -103,6 +116,14 @@ export class DashboardTransactionsPaneComponent {
 
   setTransactionSearch(value: string): void {
     this.transactionSearch.set(value);
+  }
+
+  setBridgeStatusFilter(value: BridgeFilter): void {
+    this.bridgeStatusFilter.set(value);
+  }
+
+  isBridgeFilterActive(value: BridgeFilter): boolean {
+    return this.bridgeStatusFilter() === value;
   }
 
   toggleTransactionExpanded(transactionId: string): void {
@@ -131,6 +152,9 @@ export class DashboardTransactionsPaneComponent {
 
   startTransactionEdit(tx: TransactionItem, event?: Event): void {
     event?.stopPropagation();
+    if (this.isReadOnly) {
+      return;
+    }
 
     this.editingTransactionId.set(tx.id);
     this.editingDraft.set(this.toEditableDraft(tx));
@@ -290,6 +314,36 @@ export class DashboardTransactionsPaneComponent {
     return `pill pill-${variant}`;
   }
 
+  getBridgeStatusVariant(status: BridgeStatus): PillVariant {
+    if (status === 'MATCHED') {
+      return 'green';
+    }
+    if (status === 'BRIDGE_OUT') {
+      return 'cyan';
+    }
+    if (status === 'BRIDGE_IN') {
+      return 'blue';
+    }
+    return 'purple';
+  }
+
+  getBridgeStatusLabel(status: BridgeStatus): string {
+    return status.replaceAll('_', ' ');
+  }
+
+  getBridgeStatusDescription(status: BridgeStatus): string {
+    if (status === 'MATCHED') {
+      return 'Matched bridge legs across this session.';
+    }
+    if (status === 'BRIDGE_OUT') {
+      return 'Outgoing bridge leg detected. Opposite leg is not matched yet.';
+    }
+    if (status === 'BRIDGE_IN') {
+      return 'Incoming bridge leg detected. Source leg is not matched yet.';
+    }
+    return 'Bridge matching is ambiguous. Review the opposite-leg candidates before accounting.';
+  }
+
   getFlowColor(role: FlowRole): string {
     if (role === 'BUY') {
       return COLORS.green;
@@ -309,11 +363,29 @@ export class DashboardTransactionsPaneComponent {
   }
 
   isPendingReview(tx: TransactionItem): boolean {
-    return tx.status === 'PENDING_PRICE' || tx.status === 'NEEDS_REVIEW';
+    return tx.status === 'PENDING_PRICE' || tx.status === 'NEEDS_REVIEW' || tx.bridgeStatus === 'REVIEW';
   }
 
-  getFirstFlowByRole(tx: TransactionItem, role: FlowRole) {
-    return tx.flows.find((flow) => flow.role === role) ?? null;
+  getPrimaryPositiveFlow(tx: TransactionItem) {
+    return tx.flows.find((flow) => this.getSignedQuantity(flow) > 0) ?? null;
+  }
+
+  getPrimaryNegativeFlow(tx: TransactionItem) {
+    return tx.flows.find((flow) => this.getSignedQuantity(flow) < 0) ?? null;
+  }
+
+  getSignedQuantity(flow: { readonly role: FlowRole; readonly quantity: number; readonly signedQuantity?: number }): number {
+    if (flow.signedQuantity !== undefined) {
+      return flow.signedQuantity;
+    }
+    if (flow.role === 'SELL' || flow.role === 'FEE') {
+      return -Math.abs(flow.quantity);
+    }
+    return Math.abs(flow.quantity);
+  }
+
+  getFlowPrefix(flow: { readonly role: FlowRole; readonly quantity: number; readonly signedQuantity?: number }): '+' | '-' {
+    return this.getSignedQuantity(flow) < 0 ? '-' : '+';
   }
 
   formatUsd(value: number): string {
@@ -323,15 +395,24 @@ export class DashboardTransactionsPaneComponent {
   }
 
   formatQuantity(value: number): string {
-    if (value >= 1000) {
-      return value.toLocaleString();
+    const absolute = Math.abs(value);
+    if (absolute >= 1000) {
+      return absolute.toLocaleString();
     }
 
-    if (value >= 1) {
-      return value.toFixed(4).replace(/0+$/u, '').replace(/\.$/u, '');
+    if (absolute >= 1) {
+      return absolute.toFixed(4).replace(/0+$/u, '').replace(/\.$/u, '');
     }
 
-    return value.toString();
+    return absolute.toString();
+  }
+
+  formatTimestampLabel(value: string): string {
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+      return value;
+    }
+    return parsed.toISOString().slice(0, 10);
   }
 
   prettifyLabel(value: string): string {

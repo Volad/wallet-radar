@@ -10,6 +10,7 @@ import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
+import org.springframework.web.reactive.function.client.WebClient.RequestHeadersSpec;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -58,8 +59,7 @@ public class SpotPriceResolver {
         String url = pricingProperties.getCoingeckoBaseUrl() + "/simple/price?ids=" + coinId + "&vs_currencies=usd";
         try {
             WebClient client = webClientBuilder.build();
-            String response = client.get()
-                    .uri(url)
+            String response = withApiKey(client.get().uri(url))
                     .retrieve()
                     .bodyToMono(String.class)
                     .block();
@@ -71,6 +71,14 @@ public class SpotPriceResolver {
             log.warn("CoinGecko spot price error for {}", coinId, e);
             return Optional.empty();
         }
+    }
+
+    private RequestHeadersSpec<?> withApiKey(RequestHeadersSpec<?> request) {
+        String apiKey = pricingProperties.getCoingeckoApiKey();
+        if (apiKey == null || apiKey.isBlank()) {
+            return request;
+        }
+        return request.header(pricingProperties.getCoingeckoApiKeyHeader(), apiKey.trim());
     }
 
     static Optional<BigDecimal> parseUsdPrice(String json, String coinId) {

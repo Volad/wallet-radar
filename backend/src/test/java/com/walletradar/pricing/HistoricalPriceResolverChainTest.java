@@ -8,6 +8,7 @@ import com.walletradar.pricing.resolver.SwapDerivedResolver;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.core.io.DefaultResourceLoader;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -29,7 +30,8 @@ class HistoricalPriceResolverChainTest {
                 props,
                 org.springframework.web.reactive.function.client.WebClient.builder(),
                 new com.walletradar.common.RateLimiter(45),
-                contractResolver);
+                contractResolver,
+                new DefaultResourceLoader());
         CounterpartPriceResolver counterpart = new CounterpartPriceResolver(stablecoin, coinGecko);
         SwapDerivedResolver swapDerived = new SwapDerivedResolver(counterpart);
         chain = new HistoricalPriceResolverChain(stablecoin, swapDerived, coinGecko);
@@ -41,6 +43,21 @@ class HistoricalPriceResolverChainTest {
         HistoricalPriceRequest req = new HistoricalPriceRequest();
         req.setAssetContract("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48");
         req.setNetworkId(NetworkId.ETHEREUM);
+        req.setBlockTimestamp(Instant.now());
+
+        PriceResolutionResult r = chain.resolve(req);
+
+        assertThat(r.isUnknown()).isFalse();
+        assertThat(r.getPriceUsd()).hasValueSatisfying(p -> assertThat(p).isEqualByComparingTo(BigDecimal.ONE));
+        assertThat(r.getPriceSource()).isEqualTo(com.walletradar.domain.common.PriceSource.STABLECOIN);
+    }
+
+    @Test
+    @DisplayName("audited EURC contract resolves through stablecoin path")
+    void eurcStablecoin() {
+        HistoricalPriceRequest req = new HistoricalPriceRequest();
+        req.setAssetContract("0xc891eb4cbdeff6e073e859e987815ed1505c2acd");
+        req.setNetworkId(NetworkId.AVALANCHE);
         req.setBlockTimestamp(Instant.now());
 
         PriceResolutionResult r = chain.resolve(req);

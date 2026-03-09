@@ -349,6 +349,74 @@ class SessionControllerIntegrationTest {
                 .expectStatus().isNotFound();
     }
 
+    @Test
+    @DisplayName("rebuild marks uniquely paired cross-network transfers as matched bridges")
+    void rebuildSessionTransactions_matchesBridgeLifecycle() {
+        String sessionId = "f2f0e53e-31df-40d5-8fb2-6fc95d004f89";
+        String sharedAddress = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String destinationAddress = "0xf03b52e8686b962e051a6075a06b96cb8a663021";
+
+        String body = """
+                {
+                  "sessionId":"f2f0e53e-31df-40d5-8fb2-6fc95d004f89",
+                  "wallets":[
+                    {
+                      "address":"0x1A87f12aC07E9746e9B053B8D7EF1d45270D693f",
+                      "label":"Wallet 1",
+                      "color":"#22d3ee",
+                      "networks":["ETHEREUM","ARBITRUM"]
+                    },
+                    {
+                      "address":"0xf03b52e8686b962e051a6075a06b96cb8a663021",
+                      "label":"Wallet 2",
+                      "color":"#a78bfa",
+                      "networks":["ETHEREUM","ARBITRUM"]
+                    }
+                  ]
+                }
+                """;
+        webTestClient.post().uri("/api/v1/sessions")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .exchange()
+                .expectStatus().isAccepted();
+
+        NormalizedTransaction bridgeOut = confirmedTransferTx(
+                "bridge-out",
+                "0xbridgeout",
+                sharedAddress,
+                NetworkId.ETHEREUM,
+                NormalizedTransactionType.EXTERNAL_TRANSFER_OUT,
+                Instant.parse("2026-03-02T10:00:00Z"),
+                new BigDecimal("-500"),
+                new BigDecimal("-500"));
+        NormalizedTransaction bridgeIn = confirmedTransferTx(
+                "bridge-in",
+                "0xbridgein",
+                destinationAddress,
+                NetworkId.ARBITRUM,
+                NormalizedTransactionType.EXTERNAL_INBOUND,
+                Instant.parse("2026-03-02T10:06:00Z"),
+                new BigDecimal("499"),
+                new BigDecimal("499"));
+        normalizedTransactionRepository.saveAll(List.of(bridgeOut, bridgeIn));
+
+        webTestClient.post().uri("/api/v1/sessions/" + sessionId + "/transactions/rebuild")
+                .exchange()
+                .expectStatus().isAccepted()
+                .expectBody()
+                .jsonPath("$.projectedTransactions").isEqualTo(2);
+
+        webTestClient.get().uri("/api/v1/sessions/" + sessionId + "/transactions?limit=10")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.items[0].txHash").isEqualTo("0xbridgein")
+                .jsonPath("$.items[0].bridgeStatus").isEqualTo("MATCHED")
+                .jsonPath("$.items[1].txHash").isEqualTo("0xbridgeout")
+                .jsonPath("$.items[1].bridgeStatus").isEqualTo("MATCHED");
+    }
+
     private static NormalizedTransaction confirmedTx(String id, String txHash, String walletAddress,
                                                      Instant blockTimestamp, BigDecimal realisedPnlUsd) {
         NormalizedTransaction tx = new NormalizedTransaction();
@@ -370,6 +438,46 @@ class SessionControllerIntegrationTest {
         sell.setRealisedPnlUsd(realisedPnlUsd);
         sell.setLogIndex(7);
         tx.setFlows(List.of(sell));
+        return tx;
+    }
+
+    private static NormalizedTransaction confirmedTransferTx(
+            String id,
+            String txHash,
+            String walletAddress,
+            NetworkId networkId,
+            NormalizedTransactionType type,
+            Instant blockTimestamp,
+            BigDecimal quantityDelta,
+            BigDecimal valueUsd
+    ) {
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setId(id);
+        tx.setTxHash(txHash);
+        tx.setWalletAddress(walletAddress);
+        tx.setNetworkId(networkId);
+        tx.setBlockTimestamp(blockTimestamp);
+        tx.setType(type);
+        tx.setStatus(NormalizedTransactionStatus.CONFIRMED);
+        tx.setCreatedAt(blockTimestamp);
+        tx.setUpdatedAt(blockTimestamp);
+
+        NormalizedTransaction.Flow transfer = new NormalizedTransaction.Flow();
+        transfer.setRole(NormalizedLegRole.TRANSFER);
+        transfer.setAssetContract("0xasset");
+        transfer.setAssetSymbol("USDC");
+        transfer.setQuantityDelta(quantityDelta);
+        transfer.setValueUsd(valueUsd);
+        transfer.setLogIndex(4);
+
+        NormalizedTransaction.Flow fee = new NormalizedTransaction.Flow();
+        fee.setRole(NormalizedLegRole.FEE);
+        fee.setAssetContract("0xfee");
+        fee.setAssetSymbol("ETH");
+        fee.setQuantityDelta(new BigDecimal("-0.0001"));
+        fee.setLogIndex(5);
+
+        tx.setFlows(List.of(transfer, fee));
         return tx;
     }
 }

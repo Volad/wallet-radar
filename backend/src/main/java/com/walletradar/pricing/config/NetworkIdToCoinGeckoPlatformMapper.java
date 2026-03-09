@@ -15,7 +15,7 @@ public final class NetworkIdToCoinGeckoPlatformMapper {
     private static final java.util.Map<NetworkId, String> PLATFORM_IDS = java.util.Map.ofEntries(
             java.util.Map.entry(NetworkId.ETHEREUM, "ethereum"),
             java.util.Map.entry(NetworkId.ARBITRUM, "arbitrum-one"),
-            java.util.Map.entry(NetworkId.OPTIMISM, "optimism"),
+            java.util.Map.entry(NetworkId.OPTIMISM, "optimistic-ethereum"),
             java.util.Map.entry(NetworkId.POLYGON, "polygon-pos"),
             java.util.Map.entry(NetworkId.BASE, "base"),
             java.util.Map.entry(NetworkId.BSC, "binance-smart-chain"),

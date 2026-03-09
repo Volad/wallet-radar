@@ -792,6 +792,60 @@ class TransferClassifierTest {
     }
 
     @Test
+    void classify_borrowSelectorDebtMintOnly_returnsEmptyForTransferClassifier() {
+        String wallet = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String walletTopic = "0x" + "0".repeat(24) + "1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String zeroTopic = "0x" + "0".repeat(64);
+        String pool = "0x794a61358d6845594f94dc1db02a252b5b4814ad";
+        String debtToken = "0x1234567890abcdef1234567890abcdef12345678";
+
+        RawTransaction tx = new RawTransaction();
+        tx.setNetworkId("ARBITRUM");
+        tx.setRawData(new Document("from", wallet)
+                .append("to", pool)
+                .append("methodId", "0xa415bcad")
+                .append("functionName", "borrow(address asset, uint256 amount, uint256 interestRateMode, uint16 referralCode, address onBehalfOf)")
+                .append("logs", List.of(
+                        new Document("address", debtToken)
+                                .append("topics", List.of(TransferClassifier.TRANSFER_TOPIC, zeroTopic, walletTopic))
+                                .append("data", "0x000000000000000000000000000000000000000000000000000000000005f5e1")
+                )));
+
+        List<RawClassifiedEvent> result = classifier.classify(tx, wallet);
+
+        assertThat(result).isEmpty();
+    }
+
+    @Test
+    void classify_depositSelectorReceiptTransferOnly_returnsEmptyForTransferClassifier() {
+        String wallet = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String walletTopic = "0x" + "0".repeat(24) + "1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String poolTopic = "0x" + "0".repeat(24) + "794a61358d6845594f94dc1db02a252b5b4814ad";
+        String pool = "0x794a61358d6845594f94dc1db02a252b5b4814ad";
+        String underlying = "0xaf88d065e77c8cc2239327c5edb3a432268e5831";
+        String receipt = "0x078f358208685046a11c85e8ad32895ded33a249";
+
+        RawTransaction tx = new RawTransaction();
+        tx.setNetworkId("ARBITRUM");
+        tx.setRawData(new Document("from", wallet)
+                .append("to", pool)
+                .append("methodId", "0x617ba037")
+                .append("functionName", "supply(address asset, uint256 amount, address onBehalfOf, uint16 referralCode)")
+                .append("logs", List.of(
+                        new Document("address", underlying)
+                                .append("topics", List.of(TransferClassifier.TRANSFER_TOPIC, walletTopic, poolTopic))
+                                .append("data", "0x000000000000000000000000000000000000000000000000000000000000291e"),
+                        new Document("address", receipt)
+                                .append("topics", List.of(TransferClassifier.TRANSFER_TOPIC, poolTopic, walletTopic))
+                                .append("data", "0x000000000000000000000000000000000000000000000000000000000000291f")
+                )));
+
+        List<RawClassifiedEvent> result = classifier.classify(tx, wallet);
+
+        assertThat(result).isEmpty();
+    }
+
+    @Test
     void classify_nftMintWithNativeValue_emitsSwapSellNativeAndSwapBuyNft() {
         String wallet = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
         String walletTopic = "0x" + "0".repeat(24) + "1a87f12ac07e9746e9b053b8d7ef1d45270d693f";

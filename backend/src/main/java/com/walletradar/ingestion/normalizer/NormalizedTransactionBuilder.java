@@ -4,6 +4,7 @@ import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.transaction.normalized.ClassificationStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionPricingPolicy;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.domain.transaction.normalized.PricingStatus;
@@ -249,10 +250,7 @@ public class NormalizedTransactionBuilder {
         if (reasons != null && !reasons.isEmpty()) {
             return NormalizedTransactionStatus.PENDING_CLARIFICATION;
         }
-        if (type == NormalizedTransactionType.APPROVAL) {
-            return NormalizedTransactionStatus.PENDING_STAT;
-        }
-        return NormalizedTransactionStatus.PENDING_PRICE;
+        return NormalizedTransactionPricingPolicy.readyStatus(type);
     }
 
     private static ClassificationStatus resolveClassificationStatus(
@@ -269,17 +267,11 @@ public class NormalizedTransactionBuilder {
     }
 
     private static PricingStatus resolveInitialPricingStatus(NormalizedTransactionType type) {
-        if (!isPriceRequiredByType(type)) {
-            return PricingStatus.NOT_REQUIRED;
-        }
-        return PricingStatus.PENDING;
+        return NormalizedTransactionPricingPolicy.initialPricingStatus(type);
     }
 
     private static boolean isPriceRequiredByType(NormalizedTransactionType type) {
-        return type != NormalizedTransactionType.APPROVAL
-                && type != NormalizedTransactionType.LP_ADJUST
-                && type != NormalizedTransactionType.LP_POSITION_STAKE
-                && type != NormalizedTransactionType.LP_POSITION_UNSTAKE;
+        return !NormalizedTransactionPricingPolicy.isTypeNeverPriced(type);
     }
 
     private static String resolveGroupId(

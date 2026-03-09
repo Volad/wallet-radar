@@ -5,6 +5,7 @@ import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
+import com.walletradar.domain.transaction.normalized.PricingStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.ingestion.adapter.TransactionClarificationResolver;
@@ -69,6 +70,32 @@ class ClarificationJobTest {
     }
 
     @Test
+    @DisplayName("successful wrap clarification skips pricing stage when pricing is not required")
+    void successfulWrapClarificationMovesToPendingStat() {
+        NormalizedTransaction tx = pendingWrapWithoutInbound();
+        when(clarificationResolver.supports(NetworkId.BASE)).thenReturn(true);
+
+        NormalizedTransaction.Flow inferred = new NormalizedTransaction.Flow();
+        inferred.setRole(NormalizedLegRole.TRANSFER);
+        inferred.setAssetContract("0x4200000000000000000000000000000000000006");
+        inferred.setAssetSymbol("WETH");
+        inferred.setQuantityDelta(BigDecimal.ONE);
+
+        when(clarificationResolver.clarify(tx)).thenReturn(Optional.of(
+                new TransactionClarificationResolver.ClarificationResult(
+                        List.of(inferred),
+                        "INFERRED_FROM_RECEIPT",
+                        ConfidenceLevel.MEDIUM)));
+
+        clarificationJob.clarifyOne(tx);
+
+        assertThat(tx.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_STAT);
+        assertThat(tx.getPricingStatus()).isEqualTo(PricingStatus.NOT_REQUIRED);
+        assertThat(tx.getClassificationStatus()).isEqualTo(com.walletradar.domain.transaction.normalized.ClassificationStatus.CONFIRMED);
+        verify(normalizedTransactionRepository).save(tx);
+    }
+
+    @Test
     @DisplayName("unresolved clarification reaches NEEDS_REVIEW after retries")
     void unresolvedClarificationNeedsReviewAfterRetries() {
         NormalizedTransaction tx = pendingSwapWithoutBuy();
@@ -116,6 +143,25 @@ class ClarificationJobTest {
         sell.setAssetSymbol("wstUSR");
         sell.setQuantityDelta(new BigDecimal("-100"));
         tx.setFlows(List.of(sell));
+        return tx;
+    }
+
+    private static NormalizedTransaction pendingWrapWithoutInbound() {
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setTxHash("0xwrap");
+        tx.setWalletAddress("0xwallet");
+        tx.setNetworkId(NetworkId.BASE);
+        tx.setType(NormalizedTransactionType.WRAP);
+        tx.setStatus(NormalizedTransactionStatus.PENDING_CLARIFICATION);
+        tx.setMissingDataReasons(List.of("MISSING_LEGS"));
+        tx.setClarificationAttempts(0);
+
+        NormalizedTransaction.Flow outbound = new NormalizedTransaction.Flow();
+        outbound.setRole(NormalizedLegRole.TRANSFER);
+        outbound.setAssetContract("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
+        outbound.setAssetSymbol("ETH");
+        outbound.setQuantityDelta(new BigDecimal("-1"));
+        tx.setFlows(List.of(outbound));
         return tx;
     }
 }

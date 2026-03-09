@@ -124,8 +124,8 @@ class NormalizedTransactionPipelineJobsTest {
     }
 
     @Test
-    @DisplayName("WRAP prices inbound leg and transitions to PENDING_STAT")
-    void wrapPricesInboundLeg() {
+    @DisplayName("stale WRAP row in PENDING_PRICE skips resolver and transitions to PENDING_STAT")
+    void wrapSkipsPricingResolver() {
         NormalizedTransaction tx = new NormalizedTransaction();
         tx.setTxHash("0xwrap");
         tx.setNetworkId(NetworkId.BASE);
@@ -140,14 +140,59 @@ class NormalizedTransactionPipelineJobsTest {
         NormalizedTransaction.Flow wrappedIn = flow(NormalizedLegRole.TRANSFER, "0x4200000000000000000000000000000000000006", "WETH", "1");
         tx.setFlows(List.of(nativeOut, wrappedIn));
 
-        when(historicalPriceResolverChain.resolve(any()))
-                .thenReturn(PriceResolutionResult.known(new BigDecimal("3025.42"), PriceSource.COINGECKO));
+        pricingJob.priceOne(tx);
+
+        assertThat(tx.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_STAT);
+        assertThat(tx.getPricingStatus()).isEqualTo(PricingStatus.NOT_REQUIRED);
+        verify(historicalPriceResolverChain, never()).resolve(any());
+    }
+
+    @Test
+    @DisplayName("stale LEND_DEPOSIT row in PENDING_PRICE skips resolver and transitions to PENDING_STAT")
+    void lendDepositReceiptSkipsPricingResolver() {
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setTxHash("0xlend");
+        tx.setNetworkId(NetworkId.ARBITRUM);
+        tx.setWalletAddress("0xwallet");
+        tx.setBlockTimestamp(Instant.parse("2025-10-06T09:11:09Z"));
+        tx.setType(NormalizedTransactionType.LEND_DEPOSIT);
+        tx.setStatus(NormalizedTransactionStatus.PENDING_PRICE);
+        tx.setPricingAttempts(0);
+        tx.setClassificationStatus(ClassificationStatus.CONFIRMED);
+
+        NormalizedTransaction.Flow underlyingOut = flow(NormalizedLegRole.SELL, "0xaf88", "USDC", "-100");
+        NormalizedTransaction.Flow receiptIn = flow(NormalizedLegRole.BUY, "0x078f", "aUSDC", "100");
+        tx.setFlows(List.of(underlyingOut, receiptIn));
 
         pricingJob.priceOne(tx);
 
         assertThat(tx.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_STAT);
-        assertThat(tx.getPricingStatus()).isEqualTo(PricingStatus.RESOLVED);
-        verify(historicalPriceResolverChain, times(1)).resolve(any());
+        assertThat(tx.getPricingStatus()).isEqualTo(PricingStatus.NOT_REQUIRED);
+        verify(historicalPriceResolverChain, never()).resolve(any());
+    }
+
+    @Test
+    @DisplayName("stale LP_ENTRY row in PENDING_PRICE skips resolver and transitions to PENDING_STAT")
+    void lpEntryReceiptSkipsPricingResolver() {
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setTxHash("0xlp-entry");
+        tx.setNetworkId(NetworkId.BASE);
+        tx.setWalletAddress("0xwallet");
+        tx.setBlockTimestamp(Instant.parse("2025-10-06T09:11:09Z"));
+        tx.setType(NormalizedTransactionType.LP_ENTRY);
+        tx.setStatus(NormalizedTransactionStatus.PENDING_PRICE);
+        tx.setPricingAttempts(0);
+        tx.setClassificationStatus(ClassificationStatus.CONFIRMED);
+
+        NormalizedTransaction.Flow underlyingOut = flow(NormalizedLegRole.SELL, "0x8335", "USDC", "-100");
+        NormalizedTransaction.Flow receiptIn = flow(NormalizedLegRole.BUY, "0x46a1", "UNI-V2", "5");
+        tx.setFlows(List.of(underlyingOut, receiptIn));
+
+        pricingJob.priceOne(tx);
+
+        assertThat(tx.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_STAT);
+        assertThat(tx.getPricingStatus()).isEqualTo(PricingStatus.NOT_REQUIRED);
+        verify(historicalPriceResolverChain, never()).resolve(any());
     }
 
     @Test

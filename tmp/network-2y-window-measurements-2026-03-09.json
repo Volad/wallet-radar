@@ -1,0 +1,13 @@
+[
+  {"network":"ETHEREUM","latestBlock":24618178,"targetBlock":19386734,"twoYearSpanBlocks":5231445,"recommendedWindowBlocks":5500000,"avgBlockTimeSecondsApprox":12.077416,"source":"rpc"},
+  {"network":"ARBITRUM","latestBlock":439891247,"targetBlock":188155042,"twoYearSpanBlocks":251736206,"recommendedWindowBlocks":265000000,"avgBlockTimeSecondsApprox":0.250986,"source":"rpc"},
+  {"network":"OPTIMISM","latestBlock":148719789,"targetBlock":117128612,"twoYearSpanBlocks":31591178,"recommendedWindowBlocks":34000000,"avgBlockTimeSecondsApprox":2.0,"source":"rpc"},
+  {"network":"POLYGON","latestBlock":83959163,"targetBlock":54391459,"twoYearSpanBlocks":29567705,"recommendedWindowBlocks":32000000,"avgBlockTimeSecondsApprox":2.136871,"source":"rpc"},
+  {"network":"BASE","latestBlock":43124508,"targetBlock":11533327,"twoYearSpanBlocks":31591182,"recommendedWindowBlocks":34000000,"avgBlockTimeSecondsApprox":2.0,"source":"rpc"},
+  {"network":"BSC","latestBlock":85538269,"targetBlock":36774380,"twoYearSpanBlocks":48763890,"recommendedWindowBlocks":52000000,"avgBlockTimeSecondsApprox":1.29568,"source":"rpc"},
+  {"network":"AVALANCHE","latestBlock":79938753,"targetBlock":42613804,"twoYearSpanBlocks":37324950,"recommendedWindowBlocks":40000000,"avgBlockTimeSecondsApprox":1.692765,"source":"rpc"},
+  {"network":"MANTLE","latestBlock":92454034,"targetBlock":59858630,"twoYearSpanBlocks":32595405,"recommendedWindowBlocks":35000000,"avgBlockTimeSecondsApprox":1.938383,"source":"rpc"},
+  {"network":"LINEA","latestBlock":29584379,"targetBlock":2749520,"twoYearSpanBlocks":26834860,"recommendedWindowBlocks":29000000,"avgBlockTimeSecondsApprox":2.354491,"source":"etherscan-proxy"},
+  {"network":"UNICHAIN","latestBlock":42290144,"targetBlock":0,"twoYearSpanBlocks":42290145,"recommendedWindowBlocks":45000000,"avgBlockTimeSecondsApprox":null,"source":"etherscan-proxy","note":"chain younger than 2 years; target date predates genesis"},
+  {"network":"ZKSYNC","latestBlock":68978951,"targetBlock":28400092,"twoYearSpanBlocks":40578860,"recommendedWindowBlocks":43000000,"avgBlockTimeSecondsApprox":null,"source":"rpc"}
+]

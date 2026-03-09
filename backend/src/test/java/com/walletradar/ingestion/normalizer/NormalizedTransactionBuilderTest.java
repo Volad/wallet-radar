@@ -135,7 +135,7 @@ class NormalizedTransactionBuilderTest {
     }
 
     @Test
-    @DisplayName("maps LP adjust to dedicated normalized type with TRANSFER role")
+    @DisplayName("maps LP adjust to dedicated normalized type and skips pricing stage")
     void mapsLpAdjustType() {
         RawClassifiedEvent event = raw(EconomicEventType.LP_ADJUST, "0x46a15b0b27311cedf172ab29e4f4766fbe7f4364", "PCS-V3-POS", new BigDecimal("-1"));
         event.setPositionId("435853");
@@ -151,7 +151,8 @@ class NormalizedTransactionBuilderTest {
 
         assertThat(tx.getType()).isEqualTo(NormalizedTransactionType.LP_ADJUST);
         assertThat(tx.getGroupId()).isEqualTo("LP_POSITION:BASE:0xwallet:435853");
-        assertThat(tx.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        assertThat(tx.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_STAT);
+        assertThat(tx.getPricingStatus()).isEqualTo(PricingStatus.NOT_REQUIRED);
         assertThat(tx.getFlows()).hasSize(1);
         assertThat(tx.getFlows().get(0).getRole()).isEqualTo(NormalizedLegRole.TRANSFER);
     }
@@ -232,8 +233,8 @@ class NormalizedTransactionBuilderTest {
     }
 
     @Test
-    @DisplayName("builds WRAP in PENDING_PRICE with TRANSFER roles")
-    void buildsWrapPendingPrice() {
+    @DisplayName("builds WRAP in PENDING_STAT with pricing not required")
+    void buildsWrapPendingStat() {
         RawClassifiedEvent out = raw(EconomicEventType.WRAP, "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "ETH", new BigDecimal("-1"));
         RawClassifiedEvent in = raw(EconomicEventType.WRAP, "0x4200000000000000000000000000000000000006", "WETH", new BigDecimal("1"));
 
@@ -247,8 +248,70 @@ class NormalizedTransactionBuilderTest {
         );
 
         assertThat(tx.getType()).isEqualTo(NormalizedTransactionType.WRAP);
-        assertThat(tx.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
-        assertThat(tx.getPricingStatus()).isEqualTo(PricingStatus.PENDING);
+        assertThat(tx.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_STAT);
+        assertThat(tx.getPricingStatus()).isEqualTo(PricingStatus.NOT_REQUIRED);
+        assertThat(tx.getFlows()).extracting(NormalizedTransaction.Flow::getRole)
+                .containsOnly(NormalizedLegRole.TRANSFER);
+    }
+
+    @Test
+    @DisplayName("builds LEND_DEPOSIT in PENDING_STAT with pricing not required for receipt leg")
+    void lendDepositSkipsPricingForReceiptLeg() {
+        RawClassifiedEvent out = raw(EconomicEventType.LEND_DEPOSIT, "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", "USDC", new BigDecimal("-100"));
+        RawClassifiedEvent in = raw(EconomicEventType.LEND_DEPOSIT, "0x078f358208685046a11c85e8ad32895ded33a249", "aUSDC", new BigDecimal("100"));
+
+        NormalizedTransaction tx = builder.build(
+                "0xlend-deposit",
+                NetworkId.ARBITRUM,
+                "0xwallet",
+                Instant.parse("2025-10-06T09:11:09Z"),
+                List.of(out, in),
+                new BigDecimal("0.95")
+        );
+
+        assertThat(tx.getType()).isEqualTo(NormalizedTransactionType.LEND_DEPOSIT);
+        assertThat(tx.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_STAT);
+        assertThat(tx.getPricingStatus()).isEqualTo(PricingStatus.NOT_REQUIRED);
+    }
+
+    @Test
+    @DisplayName("builds LP_ENTRY in PENDING_STAT with pricing not required for receipt leg")
+    void lpEntrySkipsPricingForReceiptLeg() {
+        RawClassifiedEvent out = raw(EconomicEventType.LP_ENTRY, "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", "USDC", new BigDecimal("-100"));
+        RawClassifiedEvent in = raw(EconomicEventType.LP_ENTRY, "0xbb00000000000000000000000000000000000001", "UNI-V2", new BigDecimal("5"));
+
+        NormalizedTransaction tx = builder.build(
+                "0xlp-entry",
+                NetworkId.ARBITRUM,
+                "0xwallet",
+                Instant.parse("2025-10-06T09:11:09Z"),
+                List.of(out, in),
+                new BigDecimal("0.95")
+        );
+
+        assertThat(tx.getType()).isEqualTo(NormalizedTransactionType.LP_ENTRY);
+        assertThat(tx.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_STAT);
+        assertThat(tx.getPricingStatus()).isEqualTo(PricingStatus.NOT_REQUIRED);
+    }
+
+    @Test
+    @DisplayName("builds UNWRAP in PENDING_STAT with pricing not required")
+    void buildsUnwrapPendingStat() {
+        RawClassifiedEvent out = raw(EconomicEventType.UNWRAP, "0x4200000000000000000000000000000000000006", "WETH", new BigDecimal("-1"));
+        RawClassifiedEvent in = raw(EconomicEventType.UNWRAP, "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "ETH", new BigDecimal("1"));
+
+        NormalizedTransaction tx = builder.build(
+                "0xunwrap",
+                NetworkId.BASE,
+                "0xwallet",
+                Instant.parse("2025-10-06T09:11:09Z"),
+                List.of(out, in),
+                new BigDecimal("0.95")
+        );
+
+        assertThat(tx.getType()).isEqualTo(NormalizedTransactionType.UNWRAP);
+        assertThat(tx.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_STAT);
+        assertThat(tx.getPricingStatus()).isEqualTo(PricingStatus.NOT_REQUIRED);
         assertThat(tx.getFlows()).extracting(NormalizedTransaction.Flow::getRole)
                 .containsOnly(NormalizedLegRole.TRANSFER);
     }

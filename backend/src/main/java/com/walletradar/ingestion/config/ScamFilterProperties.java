@@ -6,6 +6,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -137,6 +138,12 @@ public class ScamFilterProperties {
     private int zeroAmountPoisoningMinZeroTransfers = 20;
 
     /**
+     * Deterministic high-confidence inbound spam fingerprints captured from production data.
+     * Used as an upstream hard-drop before normalization/pricing.
+     */
+    private List<InboundSpamFingerprint> knownInboundSpamFingerprints = List.of();
+
+    /**
      * Normalized blocklist (lowercase) for fast lookup. Built from blocklist.
      */
     public Set<String> getBlocklistNormalized() {
@@ -147,5 +154,62 @@ public class ScamFilterProperties {
                 .filter(a -> a != null && !a.isBlank())
                 .map(a -> a.strip().toLowerCase())
                 .collect(Collectors.toCollection(HashSet::new));
+    }
+
+    /**
+     * Normalized known inbound spam fingerprints for fast lookup.
+     * Key format: NETWORK|tokenContract|methodId
+     */
+    public Set<String> getKnownInboundSpamFingerprintKeysNormalized() {
+        if (knownInboundSpamFingerprints == null || knownInboundSpamFingerprints.isEmpty()) {
+            return Set.of();
+        }
+        return knownInboundSpamFingerprints.stream()
+                .map(this::toNormalizedInboundSpamFingerprintKey)
+                .filter(key -> key != null && !key.isBlank())
+                .collect(Collectors.toCollection(HashSet::new));
+    }
+
+    private String toNormalizedInboundSpamFingerprintKey(InboundSpamFingerprint fingerprint) {
+        if (fingerprint == null) {
+            return null;
+        }
+        String networkId = normalizeNetworkId(fingerprint.getNetworkId());
+        String tokenContract = normalizeAddress(fingerprint.getTokenContract());
+        String methodId = normalizeMethodId(fingerprint.getMethodId());
+        if (networkId == null || tokenContract == null || methodId == null) {
+            return null;
+        }
+        return networkId + "|" + tokenContract + "|" + methodId;
+    }
+
+    private static String normalizeNetworkId(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value.strip().toUpperCase(Locale.ROOT);
+    }
+
+    private static String normalizeAddress(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value.strip().toLowerCase(Locale.ROOT);
+    }
+
+    private static String normalizeMethodId(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        String normalized = value.strip().toLowerCase(Locale.ROOT);
+        return normalized.startsWith("0x") ? normalized : "0x" + normalized;
+    }
+
+    @Getter
+    @Setter
+    public static class InboundSpamFingerprint {
+        private String networkId;
+        private String tokenContract;
+        private String methodId;
     }
 }

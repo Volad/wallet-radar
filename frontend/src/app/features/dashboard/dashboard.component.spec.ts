@@ -6,7 +6,7 @@ import { DASHBOARD_MOCK_DATA } from '../../core/data/dashboard.mock';
 import { DashboardDataService } from '../../core/services/dashboard-data.service';
 import { WalletApiService } from '../../core/services/wallet-api.service';
 import { SessionStorageService } from '../../core/services/session-storage.service';
-import { SessionBackfillStatusResponse } from '../../core/models/wallet-api.models';
+import { SessionBackfillStatusResponse, SessionTransactionsResponse } from '../../core/models/wallet-api.models';
 import { DashboardComponent } from './dashboard.component';
 
 describe('DashboardComponent (wallet submit flow)', () => {
@@ -35,6 +35,57 @@ describe('DashboardComponent (wallet submit flow)', () => {
       },
     ],
   };
+  const completeBackfill: SessionBackfillStatusResponse = {
+    ...runningBackfill,
+    status: 'COMPLETE',
+    overallProgressPct: 100,
+    completedTargets: 8,
+    totalTargets: 8,
+    wallets: [
+      {
+        ...runningBackfill.wallets[0],
+        networks: [
+          {
+            networkId: 'ETHEREUM',
+            status: 'COMPLETE',
+            progressPct: 100,
+            lastBlockSynced: 456,
+            backfillComplete: true,
+            syncBannerMessage: null,
+          },
+        ],
+      },
+    ],
+  };
+  const sessionTransactionsResponse: SessionTransactionsResponse = {
+    sessionId,
+    items: [
+      {
+        id: 'stx-1',
+        sourceType: 'CHAIN',
+        txHash: '0xbridge',
+        networkId: 'ETHEREUM',
+        walletAddress: '0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f',
+        blockTimestamp: '2026-03-06T10:00:00Z',
+        type: 'EXTERNAL_TRANSFER_OUT',
+        bridgeStatus: 'MATCHED',
+        realisedPnlUsdTotal: null,
+        avcoSnapshotVersion: null,
+        flows: [
+          {
+            role: 'TRANSFER',
+            assetContract: '0xasset',
+            assetSymbol: 'USDC',
+            quantityDelta: -100,
+            unitPriceUsd: 1,
+            valueUsd: -100,
+            priceSource: 'STABLECOIN',
+            logIndex: 0,
+          },
+        ],
+      },
+    ],
+  };
 
   let walletApiServiceSpy: jasmine.SpyObj<WalletApiService>;
   let sessionStorageServiceSpy: jasmine.SpyObj<SessionStorageService>;
@@ -44,6 +95,8 @@ describe('DashboardComponent (wallet submit flow)', () => {
       'addSession',
       'getSession',
       'getSessionBackfillStatus',
+      'rebuildSessionTransactions',
+      'getSessionTransactions',
     ]);
     sessionStorageServiceSpy = jasmine.createSpyObj<SessionStorageService>('SessionStorageService', [
       'getSessionId',
@@ -58,6 +111,14 @@ describe('DashboardComponent (wallet submit flow)', () => {
       })
     );
     walletApiServiceSpy.getSessionBackfillStatus.and.returnValue(of(runningBackfill));
+    walletApiServiceSpy.rebuildSessionTransactions.and.returnValue(
+      of({
+        sessionId,
+        projectedTransactions: 1,
+        message: 'Session transactions rebuilt',
+      })
+    );
+    walletApiServiceSpy.getSessionTransactions.and.returnValue(of(sessionTransactionsResponse));
 
     await TestBed.configureTestingModule({
       imports: [DashboardComponent],
@@ -160,5 +221,24 @@ describe('DashboardComponent (wallet submit flow)', () => {
 
     expect(sessionStorageServiceSpy.clearSessionId).toHaveBeenCalled();
     expect(component.isBackfillVisible()).toBeFalse();
+  }));
+
+  it('rebuilds and loads session transactions when backfill becomes terminal', fakeAsync(() => {
+    walletApiServiceSpy.getSessionBackfillStatus.and.returnValue(of(completeBackfill));
+    const fixture = TestBed.createComponent(DashboardComponent);
+    const component = fixture.componentInstance;
+    fixture.detectChanges();
+
+    component.addWalletsForm.controls.wallets.controls[0].controls.address.setValue(
+      '0x1A87f12aC07E9746e9B053B8D7EF1d45270D693f'
+    );
+    component.submitWallets();
+    tick();
+    fixture.detectChanges();
+
+    expect(walletApiServiceSpy.rebuildSessionTransactions).toHaveBeenCalledWith(sessionId);
+    expect(walletApiServiceSpy.getSessionTransactions).toHaveBeenCalledWith(sessionId, 100);
+    expect(component.transactionPaneTransactions()[0].hash).toBe('0xbridge');
+    expect(component.transactionPaneTransactions()[0].bridgeStatus).toBe('MATCHED');
   }));
 });

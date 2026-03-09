@@ -1,10 +1,10 @@
 package com.walletradar.ingestion.job.pricing;
 
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionPricingPolicy;
 import com.walletradar.domain.transaction.normalized.PricingStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
-import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.pricing.HistoricalPriceRequest;
 import com.walletradar.pricing.HistoricalPriceResolverChain;
 import com.walletradar.pricing.PriceResolutionResult;
@@ -71,7 +71,7 @@ public class NormalizedTransactionPricingJob {
                 unresolvedReasons.add("MISSING_QUANTITY");
                 continue;
             }
-            boolean priceRequired = isPriceRequired(tx.getType(), leg.getQuantityDelta());
+            boolean priceRequired = NormalizedTransactionPricingPolicy.isLegPriceRequired(tx.getType(), leg.getQuantityDelta());
             if (!priceRequired) {
                 continue;
             }
@@ -102,7 +102,7 @@ public class NormalizedTransactionPricingJob {
         tx.setUpdatedAt(Instant.now());
         if (unresolvedReasons.isEmpty()) {
             tx.setMissingDataReasons(List.of());
-            tx.setPricingStatus(resolveResolvedPricingStatus(tx.getType()));
+            tx.setPricingStatus(NormalizedTransactionPricingPolicy.resolvedPricingStatus(tx.getType()));
             tx.setStatus(NormalizedTransactionStatus.PENDING_STAT);
             normalizedTransactionRepository.save(tx);
             return;
@@ -120,29 +120,6 @@ public class NormalizedTransactionPricingJob {
             tx.setPricingStatus(PricingStatus.PENDING);
         }
         normalizedTransactionRepository.save(tx);
-    }
-
-    private static boolean isPriceRequired(NormalizedTransactionType type, BigDecimal qty) {
-        if (type == NormalizedTransactionType.LP_ADJUST
-                || type == NormalizedTransactionType.LP_POSITION_STAKE
-                || type == NormalizedTransactionType.LP_POSITION_UNSTAKE
-                || type == NormalizedTransactionType.APPROVAL) {
-            return false;
-        }
-        if (type == NormalizedTransactionType.SWAP) {
-            return true;
-        }
-        return qty.signum() > 0;
-    }
-
-    private static PricingStatus resolveResolvedPricingStatus(NormalizedTransactionType type) {
-        if (type == NormalizedTransactionType.APPROVAL
-                || type == NormalizedTransactionType.LP_ADJUST
-                || type == NormalizedTransactionType.LP_POSITION_STAKE
-                || type == NormalizedTransactionType.LP_POSITION_UNSTAKE) {
-            return PricingStatus.NOT_REQUIRED;
-        }
-        return PricingStatus.RESOLVED;
     }
 
     private static void fillSwapCounterpart(NormalizedTransaction tx, int index, HistoricalPriceRequest request) {

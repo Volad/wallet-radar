@@ -3,6 +3,7 @@ package com.walletradar.ingestion.job.pricing;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.ClassificationStatus;
 import com.walletradar.domain.transaction.normalized.LpLifecycleBoundaryStatus;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionPricingPolicy;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
@@ -114,7 +115,7 @@ public class NormalizedTransactionStatJob {
             }
             if (qty.signum() > 0) hasInbound = true;
             if (qty.signum() < 0) hasOutbound = true;
-            boolean priceRequired = isPriceRequired(tx.getType(), qty);
+            boolean priceRequired = NormalizedTransactionPricingPolicy.isLegPriceRequired(tx.getType(), qty);
             if (priceRequired && leg.getUnitPriceUsd() == null) {
                 return List.of("MISSING_PRICE");
             }
@@ -125,27 +126,8 @@ public class NormalizedTransactionStatJob {
         return List.of();
     }
 
-    private static boolean isPriceRequired(NormalizedTransactionType type, BigDecimal qty) {
-        if (type == NormalizedTransactionType.LP_ADJUST
-                || type == NormalizedTransactionType.LP_POSITION_STAKE
-                || type == NormalizedTransactionType.LP_POSITION_UNSTAKE
-                || type == NormalizedTransactionType.APPROVAL) {
-            return false;
-        }
-        if (type == NormalizedTransactionType.SWAP) {
-            return true;
-        }
-        return qty.signum() > 0;
-    }
-
     private static PricingStatus resolveResolvedPricingStatus(NormalizedTransactionType type) {
-        if (type == NormalizedTransactionType.APPROVAL
-                || type == NormalizedTransactionType.LP_ADJUST
-                || type == NormalizedTransactionType.LP_POSITION_STAKE
-                || type == NormalizedTransactionType.LP_POSITION_UNSTAKE) {
-            return PricingStatus.NOT_REQUIRED;
-        }
-        return PricingStatus.RESOLVED;
+        return NormalizedTransactionPricingPolicy.resolvedPricingStatus(type);
     }
 
     private void refreshBoundaryStatus(String groupId) {

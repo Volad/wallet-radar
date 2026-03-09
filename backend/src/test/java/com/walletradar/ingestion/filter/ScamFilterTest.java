@@ -435,6 +435,120 @@ class ScamFilterTest {
     }
 
     @Test
+    @DisplayName("returns true for known inbound spam fingerprint")
+    void knownInboundSpamFingerprint_returnsTrue() {
+        ScamFilterProperties props = new ScamFilterProperties();
+        props.setEnabled(true);
+        props.setKnownInboundSpamFingerprints(List.of(inboundSpamFingerprint(
+                "POLYGON",
+                "0x1665c36475e0e15484460bc0603ea47ec7d57064",
+                "729ad39e"
+        )));
+        ScamFilter f = new ScamFilter(props);
+
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0x09768aa81f61758bf98c02b846a658439c212db401cb45c835d79f87a6ebcac1");
+        tx.setNetworkId("POLYGON");
+        tx.setWalletAddress("0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f");
+
+        Document raw = new Document();
+        raw.put("from", "0x2791bca1f2de4661ed88a30c99a7a9449aa84174");
+        raw.put("to", "0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f");
+        raw.put("methodId", "0x729ad39e");
+        raw.put("explorer", new Document("tokenTransfers", List.of(
+                new Document("from", "0x2791bca1f2de4661ed88a30c99a7a9449aa84174")
+                        .append("to", "0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f")
+                        .append("contractAddress", "0x1665c36475e0e15484460bc0603ea47ec7d57064")
+                        .append("tokenSymbol", "780 $UЅDС - Redeem: (t.ly/cpool) - #38")
+                        .append("tokenName", "$UЅDС (t.ly/cpool) TOKEN DISTRIBUTION")
+                        .append("tokenDecimal", "0")
+                        .append("value", "1")
+        )));
+        tx.setRawData(raw);
+
+        assertThat(f.shouldDrop(tx)).isTrue();
+    }
+
+    @Test
+    @DisplayName("does not drop known inbound spam fingerprint when wallet initiated")
+    void knownInboundSpamFingerprint_walletInitiated_notDropped() {
+        ScamFilterProperties props = new ScamFilterProperties();
+        props.setEnabled(true);
+        props.setKnownInboundSpamFingerprints(List.of(inboundSpamFingerprint(
+                "BASE",
+                "0x1e358596f48420fe4cd147dcc850661632125e21",
+                "0xa06c1a33"
+        )));
+        ScamFilter f = new ScamFilter(props);
+
+        String wallet = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0xwallet-initiated-inbound-spam-fingerprint");
+        tx.setNetworkId("BASE");
+        tx.setWalletAddress(wallet);
+
+        Document raw = new Document();
+        raw.put("from", wallet);
+        raw.put("to", "0x8888888884f8b3a2f807bcab71274a6a70064d2d");
+        raw.put("methodId", "a06c1a33");
+        raw.put("explorer", new Document("tokenTransfers", List.of(
+                new Document("from", "0x8888888884f8b3a2f807bcab71274a6a70064d2d")
+                        .append("to", wallet)
+                        .append("contractAddress", "0x1e358596f48420fe4cd147dcc850661632125e21")
+                        .append("tokenSymbol", "Telegram @TronVanity88_bot")
+                        .append("tokenName", "Telegram @TronVanity88_bot")
+                        .append("tokenDecimal", "0")
+                        .append("value", "8888")
+        )));
+        tx.setRawData(raw);
+
+        assertThat(f.shouldDrop(tx)).isFalse();
+    }
+
+    @Test
+    @DisplayName("does not drop known inbound spam fingerprint when wallet also transfers out")
+    void knownInboundSpamFingerprint_mixedWalletFlow_notDropped() {
+        ScamFilterProperties props = new ScamFilterProperties();
+        props.setEnabled(true);
+        props.setKnownInboundSpamFingerprints(List.of(inboundSpamFingerprint(
+                "BASE",
+                "0x1e358596f48420fe4cd147dcc850661632125e21",
+                "a06c1a33"
+        )));
+        ScamFilter f = new ScamFilter(props);
+
+        String wallet = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0xmixed-wallet-flow-known-inbound-spam");
+        tx.setNetworkId("BASE");
+        tx.setWalletAddress(wallet);
+
+        Document raw = new Document();
+        raw.put("from", "0x8888888884f8b3a2f807bcab71274a6a70064d2d");
+        raw.put("to", wallet);
+        raw.put("methodId", "a06c1a33");
+        raw.put("explorer", new Document("tokenTransfers", List.of(
+                new Document("from", "0x8888888884f8b3a2f807bcab71274a6a70064d2d")
+                        .append("to", wallet)
+                        .append("contractAddress", "0x1e358596f48420fe4cd147dcc850661632125e21")
+                        .append("tokenSymbol", "Telegram @TronVanity88_bot")
+                        .append("tokenName", "Telegram @TronVanity88_bot")
+                        .append("tokenDecimal", "0")
+                        .append("value", "8888"),
+                new Document("from", wallet)
+                        .append("to", "0x1111111111111111111111111111111111111111")
+                        .append("contractAddress", "0xaf88d065e77c8cc2239327c5edb3a432268e5831")
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenName", "USD Coin")
+                        .append("tokenDecimal", "6")
+                        .append("value", "1000")
+        )));
+        tx.setRawData(raw);
+
+        assertThat(f.shouldDrop(tx)).isFalse();
+    }
+
+    @Test
     @DisplayName("does not drop wallet-initiated euler batch transaction")
     void walletInitiatedEulerBatch_notDropped() {
         RawTransaction tx = new RawTransaction();
@@ -1102,6 +1216,17 @@ class ScamFilterTest {
         raw.put("from", "0xwallet");
         tx.setRawData(raw);
         return tx;
+    }
+
+    private static ScamFilterProperties.InboundSpamFingerprint inboundSpamFingerprint(
+            String networkId, String tokenContract, String methodId
+    ) {
+        ScamFilterProperties.InboundSpamFingerprint fingerprint =
+                new ScamFilterProperties.InboundSpamFingerprint();
+        fingerprint.setNetworkId(networkId);
+        fingerprint.setTokenContract(tokenContract);
+        fingerprint.setMethodId(methodId);
+        return fingerprint;
     }
 
     private static Document transferLog(String token, String from, String to, String amount) {
