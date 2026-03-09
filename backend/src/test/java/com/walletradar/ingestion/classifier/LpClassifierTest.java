@@ -37,10 +37,17 @@ class LpClassifierTest {
         props.setNames(Map.ofEntries(
                 Map.entry("0xba12222222228d8ba445958a75a0704d566bf2c8", "Balancer"),
                 Map.entry("0xbb00000000000000000000000000000000000001", "Balancer"),
+                Map.entry("0x55f4c8aba71a1e923edc303eb4feff14608cc226", "Pancake Infinity"),
                 Map.entry("0x46a15b0b27311cedf172ab29e4f4766fbe7f4364", "PancakeSwap V3"),
+                Map.entry("0xa815e2ed7f7d5b0c49fda367f249232a1b9d2883", "PancakeSwap V3"),
                 Map.entry("0xc6a2db661d5a5690172d8eb0a7dea2d3008665a3", "PancakeSwap V3"),
                 Map.entry("0xc36442b4a4522e871399cd717abdd847ab11fe88", "Uniswap V3"),
-                Map.entry("0x827922686190790b37229fd06084350e74485b72", "Aerodrome")
+                Map.entry("0x943e6e07a7e8e791dafc44083e54041d743c46e9", "Uniswap V3"),
+                Map.entry("0x4529a01c7a0410167c5740c487a8de60232617bf", "Uniswap V4"),
+                Map.entry("0x1f98400000000000000000000000000000000004", "Uniswap V4"),
+                Map.entry("0x827922686190790b37229fd06084350e74485b72", "Aerodrome"),
+                Map.entry("0x416b433906b1b72fa758e166e239c43d68dc6f29", "Velodrome Slipstream"),
+                Map.entry("0x991d5546c4b442b4c5fdc4c8b8b8d131deb24702", "Slipstream")
         ));
         ProtocolRegistry registry = new DefaultProtocolRegistry(props);
         lenient().when(evmTokenDecimalsResolver.getDecimals(anyString(), anyString())).thenReturn(18);
@@ -554,6 +561,507 @@ class LpClassifierTest {
     }
 
     @Test
+    void classify_pancakeInfinityBscMintPositionWithOutboundToken_emitsLpEntryEconomicLeg() {
+        String wallet = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String walletTopic = "0x0000000000000000000000001a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String zeroTopic = "0x0000000000000000000000000000000000000000000000000000000000000000";
+        String infinityPositionManager = "0x55f4c8aba71a1e923edc303eb4feff14608cc226";
+        String xyz = "0x9e9035aafecb30cfd5355a10f93a270e33bc4293";
+        String vaultTopic = "0x000000000000000000000000238a358808379702088667322f80ac48bad5e6c4";
+        String tokenIdTopic = "0x000000000000000000000000000000000000000000000000000000000009d352";
+
+        when(evmTokenDecimalsResolver.getDecimals(eq("BSC"), eq(xyz))).thenReturn(18);
+        when(evmTokenDecimalsResolver.getSymbol(eq("BSC"), eq(xyz))).thenReturn("XYZ");
+
+        RawTransaction tx = new RawTransaction();
+        tx.setNetworkId("BSC");
+        tx.setRawData(new Document("from", wallet)
+                .append("to", infinityPositionManager)
+                .append("logs", List.of(
+                        new Document("address", infinityPositionManager)
+                                .append("topics", List.of(
+                                        TransferClassifier.TRANSFER_TOPIC,
+                                        zeroTopic,
+                                        walletTopic,
+                                        tokenIdTopic
+                                ))
+                                .append("data", "0x")
+                                .append("logIndex", "0xc9"),
+                        new Document("address", xyz)
+                                .append("topics", List.of(
+                                        TransferClassifier.TRANSFER_TOPIC,
+                                        walletTopic,
+                                        vaultTopic
+                                ))
+                                .append("data", "0x000000000000000000000000000000000000000000000fab8c4c3b325a3fffed")
+                                .append("logIndex", "0xcd")
+                )));
+
+        List<RawClassifiedEvent> events = classifier.classify(tx, wallet);
+
+        assertThat(events).hasSize(1);
+        RawClassifiedEvent event = events.getFirst();
+        assertThat(event.getEventType()).isEqualTo(EconomicEventType.LP_ENTRY);
+        assertThat(event.getAssetContract()).isEqualTo(xyz);
+        assertThat(event.getAssetSymbol()).isEqualTo("XYZ");
+        assertThat(event.getQuantityDelta()).isEqualByComparingTo("-73999.999999999999999981");
+        assertThat(event.getPositionId()).isEqualTo("643922");
+        assertThat(event.getProtocolName()).isEqualTo("pancake infinity");
+    }
+
+    @Test
+    void classify_unichainUniswapStylePositionManagerMintWithOutboundToken_emitsLpEntryEconomicLeg() {
+        String wallet = "0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f";
+        String walletTopic = "0x00000000000000000000000068bc3b81c853338eaaa21552f57437dfd7bf5b7f";
+        String manager = "0x943e6e07a7e8e791dafc44083e54041d743c46e9";
+        String managerTopic = "0x000000000000000000000000943e6e07a7e8e791dafc44083e54041d743c46e9";
+        String routerTopic = "0x00000000000000000000000065081cb48d74a32e9ccfed75164b8c09972dbcf1";
+        String zeroTopic = "0x0000000000000000000000000000000000000000000000000000000000000000";
+        String usdc = "0x078d782b760474a361dda0af3839290b0ef57ad6";
+        String weth = "0x4200000000000000000000000000000000000006";
+        String tokenIdTopic = "0x0000000000000000000000000000000000000000000000000000000000000338";
+
+        when(evmTokenDecimalsResolver.getDecimals(eq("UNICHAIN"), eq(usdc))).thenReturn(6);
+        when(evmTokenDecimalsResolver.getSymbol(eq("UNICHAIN"), eq(usdc))).thenReturn("USDC");
+
+        RawTransaction tx = new RawTransaction();
+        tx.setNetworkId("UNICHAIN");
+        tx.setRawData(new Document("from", wallet)
+                .append("to", manager)
+                .append("value", "207999999871136881")
+                .append("input", "0xac9650d8")
+                .append("logs", List.of(
+                        new Document("address", usdc)
+                                .append("topics", List.of(
+                                        TransferClassifier.TRANSFER_TOPIC,
+                                        walletTopic,
+                                        routerTopic
+                                ))
+                                .append("data", "0x000000000000000000000000000000000000000000000000000000001eaecb7c")
+                                .append("logIndex", "0x0"),
+                        new Document("address", weth)
+                                .append("topics", List.of(
+                                        "0xe1fffcc4923d04b559f4d29a8bfc6cda04eb5b0d3c460751c2402c5c5cc9109c",
+                                        managerTopic
+                                ))
+                                .append("data", "0x00000000000000000000000000000000000000000000000002e2bfbfd8e5358c")
+                                .append("logIndex", "0x1"),
+                        new Document("address", weth)
+                                .append("topics", List.of(
+                                        TransferClassifier.TRANSFER_TOPIC,
+                                        managerTopic,
+                                        routerTopic
+                                ))
+                                .append("data", "0x00000000000000000000000000000000000000000000000002e2bfbfd8e5358c")
+                                .append("logIndex", "0x2"),
+                        new Document("address", manager)
+                                .append("topics", List.of(
+                                        TransferClassifier.TRANSFER_TOPIC,
+                                        zeroTopic,
+                                        walletTopic,
+                                        tokenIdTopic
+                                ))
+                                .append("data", "0x")
+                                .append("logIndex", "0x4")
+                ))
+                .append("explorer", new Document("internalTransfers", List.of(
+                        new Document("from", manager)
+                                .append("to", wallet)
+                                .append("value", "60636360113893")
+                                .append("isError", "0")
+                ))));
+
+        List<RawClassifiedEvent> events = classifier.classify(tx, wallet);
+
+        assertThat(events).hasSize(2);
+        assertThat(events).extracting(RawClassifiedEvent::getEventType)
+                .containsOnly(EconomicEventType.LP_ENTRY);
+        assertThat(events).extracting(RawClassifiedEvent::getPositionId)
+                .containsOnly("824");
+        assertThat(events).extracting(RawClassifiedEvent::getAssetContract)
+                .containsExactlyInAnyOrder(usdc, "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
+
+        RawClassifiedEvent usdcLeg = events.stream()
+                .filter(event -> usdc.equalsIgnoreCase(event.getAssetContract()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(usdcLeg.getAssetSymbol()).isEqualTo("USDC");
+        assertThat(usdcLeg.getQuantityDelta()).isEqualByComparingTo("-514.771836");
+        assertThat(usdcLeg.getProtocolName()).isEqualTo("uniswap v3");
+
+        RawClassifiedEvent ethLeg = events.stream()
+                .filter(event -> "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee".equalsIgnoreCase(event.getAssetContract()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(ethLeg.getAssetSymbol()).isEqualTo("ETH");
+        assertThat(ethLeg.getQuantityDelta()).isEqualByComparingTo("-0.207939363511022988");
+        assertThat(ethLeg.getLogIndex()).isEqualTo(1);
+        assertThat(ethLeg.getProtocolName()).isEqualTo("uniswap v3");
+    }
+
+    @Test
+    void classify_unichainV3PartialExit_withInternalNativeSweep_emitsUsdcAndEth() {
+        String wallet = "0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f";
+        String walletTopic = "0x00000000000000000000000068bc3b81c853338eaaa21552f57437dfd7bf5b7f";
+        String manager = "0x943e6e07a7e8e791dafc44083e54041d743c46e9";
+        String usdc = "0x078d782b760474a361dda0af3839290b0ef57ad6";
+
+        when(evmTokenDecimalsResolver.getDecimals(eq("UNICHAIN"), eq(usdc))).thenReturn(6);
+        when(evmTokenDecimalsResolver.getSymbol(eq("UNICHAIN"), eq(usdc))).thenReturn("USDC");
+
+        RawTransaction tx = new RawTransaction();
+        tx.setNetworkId("UNICHAIN");
+        tx.setRawData(new Document("from", wallet)
+                .append("to", manager)
+                .append("methodId", "0xac9650d8")
+                .append("functionName", "multicall(bytes[] data)")
+                .append("input", "0xac9650d8...0c49ccbe...fc6f7865...")
+                .append("logs", List.of(
+                        new Document("address", usdc)
+                                .append("topics", List.of(
+                                        TransferClassifier.TRANSFER_TOPIC,
+                                        "0x000000000000000000000000943e6e07a7e8e791dafc44083e54041d743c46e9",
+                                        walletTopic
+                                ))
+                                .append("data", "0x000000000000000000000000000000000000000000000000000000001d312d4e")
+                ))
+                .append("explorer", new Document("internalTransfers", List.of(
+                        new Document("from", manager)
+                                .append("to", wallet)
+                                .append("value", "252982718838557593")
+                                .append("isError", "0")
+                ))));
+
+        List<RawClassifiedEvent> events = classifier.classify(tx, wallet);
+
+        assertThat(events).hasSize(2);
+        assertThat(events).extracting(RawClassifiedEvent::getEventType)
+                .containsOnly(EconomicEventType.LP_EXIT_PARTIAL);
+        assertThat(events).extracting(RawClassifiedEvent::getAssetContract)
+                .containsExactlyInAnyOrder(usdc, "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
+        assertThat(events.stream()
+                .filter(event -> usdc.equalsIgnoreCase(event.getAssetContract()))
+                .findFirst()
+                .orElseThrow()
+                .getQuantityDelta()).isEqualByComparingTo("489.762126");
+        assertThat(events.stream()
+                .filter(event -> "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee".equalsIgnoreCase(event.getAssetContract()))
+                .findFirst()
+                .orElseThrow()
+                .getQuantityDelta()).isEqualByComparingTo("0.252982718838557593");
+    }
+
+    @Test
+    void classify_unichainV3FeeClaim_withInternalNativeSweep_emitsUsdcAndEth() {
+        String wallet = "0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f";
+        String walletTopic = "0x00000000000000000000000068bc3b81c853338eaaa21552f57437dfd7bf5b7f";
+        String manager = "0x943e6e07a7e8e791dafc44083e54041d743c46e9";
+        String usdc = "0x078d782b760474a361dda0af3839290b0ef57ad6";
+
+        when(evmTokenDecimalsResolver.getDecimals(eq("UNICHAIN"), eq(usdc))).thenReturn(6);
+        when(evmTokenDecimalsResolver.getSymbol(eq("UNICHAIN"), eq(usdc))).thenReturn("USDC");
+
+        RawTransaction tx = new RawTransaction();
+        tx.setNetworkId("UNICHAIN");
+        tx.setRawData(new Document("from", wallet)
+                .append("to", manager)
+                .append("methodId", "0xac9650d8")
+                .append("functionName", "multicall(bytes[] data)")
+                .append("input", "0xac9650d8...fc6f7865...")
+                .append("logs", List.of(
+                        new Document("address", usdc)
+                                .append("topics", List.of(
+                                        TransferClassifier.TRANSFER_TOPIC,
+                                        "0x000000000000000000000000943e6e07a7e8e791dafc44083e54041d743c46e9",
+                                        walletTopic
+                                ))
+                                .append("data", "0x00000000000000000000000000000000000000000000000000000000004bf3de")
+                ))
+                .append("explorer", new Document("internalTransfers", List.of(
+                        new Document("from", manager)
+                                .append("to", wallet)
+                                .append("value", "1851514780985365")
+                                .append("isError", "0")
+                ))));
+
+        List<RawClassifiedEvent> events = classifier.classify(tx, wallet);
+
+        assertThat(events).hasSize(2);
+        assertThat(events).extracting(RawClassifiedEvent::getEventType)
+                .containsOnly(EconomicEventType.LP_FEE_CLAIM);
+        assertThat(events).extracting(RawClassifiedEvent::getAssetContract)
+                .containsExactlyInAnyOrder(usdc, "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
+        assertThat(events.stream()
+                .filter(event -> usdc.equalsIgnoreCase(event.getAssetContract()))
+                .findFirst()
+                .orElseThrow()
+                .getQuantityDelta()).isEqualByComparingTo("4.977630");
+        assertThat(events.stream()
+                .filter(event -> "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee".equalsIgnoreCase(event.getAssetContract()))
+                .findFirst()
+                .orElseThrow()
+                .getQuantityDelta()).isEqualByComparingTo("0.001851514780985365");
+    }
+
+    @Test
+    void classify_knownManagerIncreaseLiquidity_withoutNftMint_emitsLpEntry() {
+        String wallet = "0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f";
+        String walletTopic = "0x00000000000000000000000068bc3b81c853338eaaa21552f57437dfd7bf5b7f";
+        String manager = "0x943e6e07a7e8e791dafc44083e54041d743c46e9";
+        String managerTopic = "0x000000000000000000000000943e6e07a7e8e791dafc44083e54041d743c46e9";
+        String routerTopic = "0x00000000000000000000000065081cb48d74a32e9ccfed75164b8c09972dbcf1";
+        String usdc = "0x078d782b760474a361dda0af3839290b0ef57ad6";
+        String weth = "0x4200000000000000000000000000000000000006";
+
+        when(evmTokenDecimalsResolver.getDecimals(eq("UNICHAIN"), eq(usdc))).thenReturn(6);
+        when(evmTokenDecimalsResolver.getSymbol(eq("UNICHAIN"), eq(usdc))).thenReturn("USDC");
+
+        RawTransaction tx = new RawTransaction();
+        tx.setNetworkId("UNICHAIN");
+        tx.setRawData(new Document("from", wallet)
+                .append("to", manager)
+                .append("methodId", "0xac9650d8")
+                .append("functionName", "multicall(bytes[] data)")
+                .append("value", "19999999577008510")
+                .append("input", "0xac9650d8...219f5d17...")
+                .append("logs", List.of(
+                        new Document("address", usdc)
+                                .append("topics", List.of(
+                                        TransferClassifier.TRANSFER_TOPIC,
+                                        walletTopic,
+                                        routerTopic
+                                ))
+                                .append("data", "0x00000000000000000000000000000000000000000000000000000000029ccd57")
+                                .append("logIndex", "0x0"),
+                        new Document("address", weth)
+                                .append("topics", List.of(
+                                        "0xe1fffcc4923d04b559f4d29a8bfc6cda04eb5b0d3c460751c2402c5c5cc9109c",
+                                        managerTopic
+                                ))
+                                .append("data", "0x00000000000000000000000000000000000000000000000000470cfcf90d4b4d")
+                                .append("logIndex", "0x1"),
+                        new Document("address", weth)
+                                .append("topics", List.of(
+                                        TransferClassifier.TRANSFER_TOPIC,
+                                        managerTopic,
+                                        routerTopic
+                                ))
+                                .append("data", "0x00000000000000000000000000000000000000000000000000470cfcf90d4b4d")
+                                .append("logIndex", "0x2"),
+                        new Document("address", "0x65081cb48d74a32e9ccfed75164b8c09972dbcf1")
+                                .append("topics", List.of(
+                                        "0x7a53080ba414158be7ec69b987b5fb7d07dee101fe85488f0853ae16239d0bde",
+                                        managerTopic,
+                                        "0x000000000000000000000000000000000000000000000000000000000002fd5a",
+                                        "0x00000000000000000000000000000000000000000000000000000000000305c0"
+                                ))
+                                .append("data", "0x00")
+                                .append("logIndex", "0x3"),
+                        new Document("address", manager)
+                                .append("topics", List.of(
+                                        "0x3067048beee31b25b2f1681f88dac838c8bba36af25bfb2b7cf7473a5847e35f",
+                                        "0x0000000000000000000000000000000000000000000000000000000000000338"
+                                ))
+                                .append("data", "0x00")
+                                .append("logIndex", "0x4")
+                ))
+                .append("explorer", new Document("internalTransfers", List.of(
+                        new Document("from", manager)
+                                .append("to", wallet)
+                                .append("value", "995580862001")
+                                .append("isError", "0")
+                ))));
+
+        List<RawClassifiedEvent> events = classifier.classify(tx, wallet);
+
+        assertThat(events).hasSize(2);
+        assertThat(events).extracting(RawClassifiedEvent::getEventType)
+                .containsOnly(EconomicEventType.LP_ENTRY);
+        assertThat(events).extracting(RawClassifiedEvent::getAssetContract)
+                .containsExactlyInAnyOrder(usdc, "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
+    }
+
+    @Test
+    void classify_unichainV4PositionManagerMint_doesNotEmitPositionNftEconomicLeg() {
+        String wallet = "0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f";
+        String walletTopic = "0x00000000000000000000000068bc3b81c853338eaaa21552f57437dfd7bf5b7f";
+        String zeroTopic = "0x0000000000000000000000000000000000000000000000000000000000000000";
+        String manager = "0x4529a01c7a0410167c5740c487a8de60232617bf";
+        String usdt0 = "0x9151434b16b9763660705744891fa906f660ecc5";
+
+        when(evmTokenDecimalsResolver.getDecimals(eq("UNICHAIN"), eq(usdt0))).thenReturn(6);
+        when(evmTokenDecimalsResolver.getSymbol(eq("UNICHAIN"), eq(usdt0))).thenReturn("USD₮0");
+
+        RawTransaction tx = new RawTransaction();
+        tx.setNetworkId("UNICHAIN");
+        tx.setRawData(new Document("from", wallet)
+                .append("to", manager)
+                .append("methodId", "0xac9650d8")
+                .append("functionName", "multicall(bytes[] data)")
+                .append("value", "615779357568571248")
+                .append("input", "0xac9650d8")
+                .append("logs", List.of(
+                        new Document("address", "0x000000000022d473030f116ddee9f6b43ac78ba3")
+                                .append("topics", List.of(
+                                        "0xc6a377bfc4eb120024a8ac08eef205be16b817020812c73223e81d1bdb9708ec",
+                                        walletTopic,
+                                        "0x0000000000000000000000009151434b16b9763660705744891fa906f660ecc5",
+                                        "0x0000000000000000000000004529a01c7a0410167c5740c487a8de60232617bf"
+                                ))
+                                .append("data", "0x00")
+                                .append("logIndex", "0x0"),
+                        new Document("address", manager)
+                                .append("topics", List.of(
+                                        TransferClassifier.TRANSFER_TOPIC,
+                                        zeroTopic,
+                                        walletTopic,
+                                        "0x000000000000000000000000000000000000000000000000000000000000a717"
+                                ))
+                                .append("data", "0x")
+                                .append("logIndex", "0x1"),
+                        new Document("address", "0x1f98400000000000000000000000000000000004")
+                                .append("topics", List.of(
+                                        "0xf208f4912782fd25c7f114ca3723a2d5dd6f3bcc3ac8db5af63baa85f711d5ec",
+                                        "0x04b7dd024db64cfbe325191c818266e4776918cd9eaf021c26949a859e654b16",
+                                        "0x0000000000000000000000004529a01c7a0410167c5740c487a8de60232617bf"
+                                ))
+                                .append("data", "0x00")
+                                .append("logIndex", "0x2"),
+                        new Document("address", usdt0)
+                                .append("topics", List.of(
+                                        TransferClassifier.TRANSFER_TOPIC,
+                                        walletTopic,
+                                        "0x0000000000000000000000001f98400000000000000000000000000000000004"
+                                ))
+                                .append("data", "0x000000000000000000000000000000000000000000000000000000002fc52806")
+                                .append("logIndex", "0x3")
+                ))
+                .append("explorer", new Document("internalTransfers", List.of(
+                        new Document("from", manager)
+                                .append("to", wallet)
+                                .append("value", "15779357623930477")
+                                .append("isError", "0")
+                ))));
+
+        List<RawClassifiedEvent> events = classifier.classify(tx, wallet);
+        List<RawClassifiedEvent> transferEvents = transferClassifier.classify(tx, wallet);
+
+        assertThat(events).extracting(RawClassifiedEvent::getEventType)
+                .containsOnly(EconomicEventType.LP_ENTRY);
+        assertThat(events).extracting(RawClassifiedEvent::getAssetContract)
+                .doesNotContain(manager)
+                .contains(usdt0, "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
+        assertThat(events.stream()
+                .filter(event -> "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee".equalsIgnoreCase(event.getAssetContract()))
+                .findFirst()
+                .orElseThrow()
+                .getQuantityDelta()).isEqualByComparingTo("-0.599999999944640771");
+        assertThat(transferEvents).isEmpty();
+    }
+
+    @Test
+    void classify_zksyncPancakeV3PositionManagerMintWithOutboundToken_emitsLpEntryEconomicLeg() {
+        assertReceiptOnlyKnownManagerEmitsLpEntry(
+                "ZKSYNC",
+                "0xa815e2ed7f7d5b0c49fda367f249232a1b9d2883",
+                "0x5aea5775959fbc2557cc8789bc1bf90a239d9a91",
+                "ETH",
+                "PancakeSwap V3"
+        );
+    }
+
+    @Test
+    void classify_optimismSlipstreamPositionManagerMintWithOutboundToken_emitsLpEntryEconomicLeg() {
+        assertReceiptOnlyKnownManagerEmitsLpEntry(
+                "OPTIMISM",
+                "0x416b433906b1b72fa758e166e239c43d68dc6f29",
+                "0x4200000000000000000000000000000000000006",
+                "WETH",
+                "Velodrome Slipstream"
+        );
+    }
+
+    @Test
+    void classify_unichainSlipstreamNftMint_isRecognizedAsLpPositionEntry() {
+        String wallet = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String walletTopic = "0x0000000000000000000000001a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String zeroTopic = "0x0000000000000000000000000000000000000000000000000000000000000000";
+        String nftContract = "0x991d5546c4b442b4c5fdc4c8b8b8d131deb24702";
+        String tokenIdTopic = "0x0000000000000000000000000000000000000000000000000000000000000338";
+
+        RawTransaction tx = new RawTransaction();
+        tx.setNetworkId("UNICHAIN");
+        tx.setRawData(new Document("from", wallet)
+                .append("to", "0x63951637d667f23d5251dedc0f9123d22d8595be")
+                .append("logs", List.of(
+                        new Document("address", nftContract)
+                                .append("topics", List.of(
+                                        TransferClassifier.TRANSFER_TOPIC,
+                                        zeroTopic,
+                                        walletTopic,
+                                        tokenIdTopic
+                                ))
+                                .append("data", "0x")
+                                .append("logIndex", "0x11")
+                )));
+
+        List<RawClassifiedEvent> events = classifier.classify(tx, wallet);
+
+        assertThat(events).hasSize(1);
+        RawClassifiedEvent event = events.getFirst();
+        assertThat(event.getEventType()).isEqualTo(EconomicEventType.LP_POSITION_ENTRY);
+        assertThat(event.getAssetContract()).isEqualTo(nftContract);
+        assertThat(event.getPositionId()).isEqualTo("824");
+        assertThat(event.getProtocolName()).isEqualTo("slipstream");
+    }
+
+    @Test
+    void classify_positionMintAndOutboundToken_withoutKnownManagerContext_fallsBackToPositionLifecycle() {
+        String wallet = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String walletTopic = "0x0000000000000000000000001a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String zeroTopic = "0x0000000000000000000000000000000000000000000000000000000000000000";
+        String infinityPositionManager = "0x55f4c8aba71a1e923edc303eb4feff14608cc226";
+        String unknownRouter = "0x1111111111111111111111111111111111111111";
+        String xyz = "0x9e9035aafecb30cfd5355a10f93a270e33bc4293";
+        String vaultTopic = "0x000000000000000000000000238a358808379702088667322f80ac48bad5e6c4";
+        String tokenIdTopic = "0x000000000000000000000000000000000000000000000000000000000009d352";
+
+        when(evmTokenDecimalsResolver.getSymbol(eq("BSC"), eq(infinityPositionManager))).thenReturn("PCS-INFINITY-POSM");
+
+        RawTransaction tx = new RawTransaction();
+        tx.setNetworkId("BSC");
+        tx.setRawData(new Document("from", wallet)
+                .append("to", unknownRouter)
+                .append("logs", List.of(
+                        new Document("address", infinityPositionManager)
+                                .append("topics", List.of(
+                                        TransferClassifier.TRANSFER_TOPIC,
+                                        zeroTopic,
+                                        walletTopic,
+                                        tokenIdTopic
+                                ))
+                                .append("data", "0x")
+                                .append("logIndex", "0xc9"),
+                        new Document("address", xyz)
+                                .append("topics", List.of(
+                                        TransferClassifier.TRANSFER_TOPIC,
+                                        walletTopic,
+                                        vaultTopic
+                                ))
+                                .append("data", "0x000000000000000000000000000000000000000000000fab8c4c3b325a3fffed")
+                                .append("logIndex", "0xcd")
+                )));
+
+        List<RawClassifiedEvent> events = classifier.classify(tx, wallet);
+
+        assertThat(events).hasSize(1);
+        RawClassifiedEvent event = events.getFirst();
+        assertThat(event.getEventType()).isEqualTo(EconomicEventType.LP_POSITION_ENTRY);
+        assertThat(event.getAssetContract()).isEqualTo(infinityPositionManager);
+        assertThat(event.getPositionId()).isEqualTo("643922");
+    }
+
+    @Test
     void classify_decreaseLiquidityAndCollect_prefersLpExitPartialOverFeeClaim() {
         String wallet = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
         String walletTopic = "0x0000000000000000000000001a87f12ac07e9746e9b053b8d7ef1d45270d693f";
@@ -760,5 +1268,55 @@ class LpClassifierTest {
         assertThat(event.getAssetContract()).isEqualTo(cmEth);
         assertThat(event.getQuantityDelta()).isEqualByComparingTo("2");
         assertThat(transferEvents).isEmpty();
+    }
+
+    private void assertReceiptOnlyKnownManagerEmitsLpEntry(String networkId,
+                                                           String positionManager,
+                                                           String principalToken,
+                                                           String principalSymbol,
+                                                           String protocolName) {
+        String wallet = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String walletTopic = "0x0000000000000000000000001a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String zeroTopic = "0x0000000000000000000000000000000000000000000000000000000000000000";
+        String vaultTopic = "0x000000000000000000000000238a358808379702088667322f80ac48bad5e6c4";
+        String tokenIdTopic = "0x0000000000000000000000000000000000000000000000000000000000000338";
+
+        when(evmTokenDecimalsResolver.getDecimals(eq(networkId), eq(principalToken))).thenReturn(18);
+        when(evmTokenDecimalsResolver.getSymbol(eq(networkId), eq(principalToken))).thenReturn(principalSymbol);
+
+        RawTransaction tx = new RawTransaction();
+        tx.setNetworkId(networkId);
+        tx.setRawData(new Document("from", wallet)
+                .append("to", positionManager)
+                .append("logs", List.of(
+                        new Document("address", positionManager)
+                                .append("topics", List.of(
+                                        TransferClassifier.TRANSFER_TOPIC,
+                                        zeroTopic,
+                                        walletTopic,
+                                        tokenIdTopic
+                                ))
+                                .append("data", "0x")
+                                .append("logIndex", "0x1"),
+                        new Document("address", principalToken)
+                                .append("topics", List.of(
+                                        TransferClassifier.TRANSFER_TOPIC,
+                                        walletTopic,
+                                        vaultTopic
+                                ))
+                                .append("data", "0x0000000000000000000000000000000000000000000000000de0b6b3a7640000")
+                                .append("logIndex", "0x2")
+                )));
+
+        List<RawClassifiedEvent> events = classifier.classify(tx, wallet);
+
+        assertThat(events).hasSize(1);
+        RawClassifiedEvent event = events.getFirst();
+        assertThat(event.getEventType()).isEqualTo(EconomicEventType.LP_ENTRY);
+        assertThat(event.getAssetContract()).isEqualTo(principalToken);
+        assertThat(event.getAssetSymbol()).isEqualTo(principalSymbol);
+        assertThat(event.getQuantityDelta()).isEqualByComparingTo("-1");
+        assertThat(event.getPositionId()).isEqualTo("824");
+        assertThat(event.getProtocolName()).isEqualTo(protocolName.toLowerCase());
     }
 }

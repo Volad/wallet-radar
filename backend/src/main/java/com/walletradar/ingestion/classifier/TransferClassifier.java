@@ -2,7 +2,9 @@ package com.walletradar.ingestion.classifier;
 
 import com.walletradar.domain.transaction.normalized.EconomicEventType;
 import com.walletradar.ingestion.adapter.evm.rpc.EvmTokenDecimalsResolver;
-import lombok.RequiredArgsConstructor;
+import com.walletradar.ingestion.classifier.lp.LpDecisionEngine;
+import com.walletradar.ingestion.classifier.lp.LpEvidenceExtractor;
+import com.walletradar.ingestion.classifier.lp.LpProtocolRegistry;
 import org.bson.Document;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
@@ -22,11 +24,10 @@ import java.util.Set;
  * When exactly one distinct asset flows out and exactly one distinct asset flows in (different assets),
  * emits SWAP_SELL and SWAP_BUY instead (heuristic swap, ADR-019).
  * Uses token decimals (e.g. WBTC=8, USDC=6) so quantityDelta is correct.
- * TODO: Protocol precedence — do not apply heuristic when tx has BORROW/REPAY/LEND_* etc. (follow-up).
+ * Conservative precedence: abstains when stronger protocol families already match or selector context is lend-like.
  */
 @Component
 @Order(100)
-@RequiredArgsConstructor
 public class TransferClassifier implements TxClassifier {
 
     /** ERC20 Transfer(address,address,uint256) topic. */
@@ -61,6 +62,20 @@ public class TransferClassifier implements TxClassifier {
     private final ProtocolRegistry protocolRegistry;
     private final EvmTokenDecimalsResolver evmTokenDecimalsResolver;
     private final LendClassifier lendClassifier;
+    private final LpDecisionEngine lpDecisionEngine;
+
+    public TransferClassifier(
+            ProtocolRegistry protocolRegistry,
+            EvmTokenDecimalsResolver evmTokenDecimalsResolver,
+            LendClassifier lendClassifier
+    ) {
+        this.protocolRegistry = protocolRegistry;
+        this.evmTokenDecimalsResolver = evmTokenDecimalsResolver;
+        this.lendClassifier = lendClassifier;
+        LpProtocolRegistry lpProtocolRegistry = new LpProtocolRegistry();
+        LpEvidenceExtractor lpEvidenceExtractor = new LpEvidenceExtractor(lpProtocolRegistry, evmTokenDecimalsResolver);
+        this.lpDecisionEngine = new LpDecisionEngine(lpProtocolRegistry, lpEvidenceExtractor);
+    }
 
     @Override
     public List<RawClassifiedEvent> classify(RawTransactionNormalizationView tx, String walletAddress) {
@@ -81,14 +96,15 @@ public class TransferClassifier implements TxClassifier {
             return out;
         }
         if (lendClassifier.isLikelyLendPattern(tx, walletAddress, logs)
-                || LpClassifier.isLikelyLpEntryPattern(tx, walletAddress, logs)
-                || LpClassifier.isLikelyLpExitPattern(tx, walletAddress, logs)
-                || LpClassifier.isLikelyLpPositionPattern(tx, walletAddress, logs)
-                || LpClassifier.isLikelyLpEntryFromPositionContext(tx, walletAddress, logs)
-                || LpClassifier.isLikelyLpEntryWithoutMintPattern(tx, walletAddress, logs)
-                || LpClassifier.isLikelyLpExitFromPositionContext(tx, walletAddress, logs)
-                || LpClassifier.isLikelyLpExitWithoutBurnPattern(tx, walletAddress, logs)
-                || LpClassifier.isLikelyLpFeeClaimPattern(tx, walletAddress, logs)) {
+                || lendClassifier.hasKnownLendSelector(tx)
+                || lpDecisionEngine.isLikelyLpEntryPattern(tx, walletAddress, logs)
+                || lpDecisionEngine.isLikelyLpExitPattern(tx, walletAddress, logs)
+                || lpDecisionEngine.isLikelyLpPositionPattern(tx, walletAddress, logs)
+                || lpDecisionEngine.isLikelyLpEntryFromPositionContext(tx, walletAddress, logs)
+                || lpDecisionEngine.isLikelyLpEntryWithoutMintPattern(tx, walletAddress, logs)
+                || lpDecisionEngine.isLikelyLpExitFromPositionContext(tx, walletAddress, logs)
+                || lpDecisionEngine.isLikelyLpExitWithoutBurnPattern(tx, walletAddress, logs)
+                || lpDecisionEngine.isLikelyLpFeeClaimPattern(tx, walletAddress, logs)) {
             return out;
         }
         if (isLikelyClaimCall(tx)) {

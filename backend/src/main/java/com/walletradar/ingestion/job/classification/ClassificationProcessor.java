@@ -16,6 +16,7 @@ import com.walletradar.ingestion.adapter.evm.EstimatingBlockTimestampResolver;
 import com.walletradar.ingestion.classifier.RawClassifiedEvent;
 import com.walletradar.ingestion.classifier.RawTransactionNormalizationView;
 import com.walletradar.ingestion.classifier.TxClassifierDispatcher;
+import com.walletradar.ingestion.classifier.lp.LpProtocolRegistry;
 import com.walletradar.ingestion.config.ClassifierProperties;
 import com.walletradar.ingestion.normalizer.NormalizedTransactionBuilder;
 import com.walletradar.ingestion.store.IdempotentNormalizedTransactionStore;
@@ -107,6 +108,7 @@ public class ClassificationProcessor {
             "0x0c49ccbe", // decreaseLiquidity((...))
             "0xfc6f7865"  // collect((...))
     );
+    private static final LpProtocolRegistry LP_PROTOCOL_REGISTRY = new LpProtocolRegistry();
 
     private final RawTransactionRepository rawTransactionRepository;
     private final TxClassifierDispatcher txClassifierDispatcher;
@@ -420,6 +422,9 @@ public class ClassificationProcessor {
         if (!txView.explorerTokenTransfers().isEmpty() || !txView.explorerInternalTransfers().isEmpty()) {
             return false;
         }
+        if (LP_PROTOCOL_REGISTRY.isKnownLpSurfaceTarget(txView.readRawOrExplorerAddress("to"))) {
+            return false;
+        }
         String from = txView.readRawOrExplorerAddress("from");
         String to = txView.readRawOrExplorerAddress("to");
         if (from != null && from.equals(to)) {
@@ -457,6 +462,9 @@ public class ClassificationProcessor {
         if (confidence == null || lowThreshold == null || confidence.compareTo(lowThreshold) < 0) {
             return false;
         }
+        if (requiresLpReceiptEnrichment(txView, rawEvents)) {
+            return false;
+        }
         String selector = txView.selector();
         if (selector != null && LP_SENSITIVE_SELECTORS.contains(selector) && !containsLpSemantic(rawEvents)) {
             // LP-sensitive selectors are ambiguous without full receipt logs.
@@ -482,6 +490,19 @@ public class ClassificationProcessor {
             return true;
         }
         return false;
+    }
+
+    private static boolean requiresLpReceiptEnrichment(
+            RawTransactionNormalizationView txView,
+            List<RawClassifiedEvent> rawEvents
+    ) {
+        if (txView == null || txView.hasCanonicalLogs()) {
+            return false;
+        }
+        if (!LP_PROTOCOL_REGISTRY.isKnownLpSurfaceTarget(txView.readRawOrExplorerAddress("to"))) {
+            return false;
+        }
+        return !containsLpSemantic(rawEvents);
     }
 
     private static boolean containsLpSemantic(List<RawClassifiedEvent> rawEvents) {

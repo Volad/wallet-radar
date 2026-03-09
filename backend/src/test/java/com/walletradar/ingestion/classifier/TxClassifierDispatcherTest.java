@@ -69,6 +69,32 @@ class TxClassifierDispatcherTest {
     }
 
     @Test
+    void conflict_unichainV4PositionManagerMint_lpWinsOverSwap() {
+        TxClassifierDispatcher dispatcher = new TxClassifierDispatcher(List.of(
+                new GenericSwapClassifier(),
+                new LpSemanticClassifier()
+        ));
+
+        List<RawClassifiedEvent> events = dispatcher.classify(RawTransactionNormalizationView.wrap(null), "0xwallet");
+
+        assertThat(events).hasSize(1);
+        assertThat(events.getFirst().getEventType()).isEqualTo(EconomicEventType.LP_ENTRY);
+    }
+
+    @Test
+    void conflict_knownLpManager_enrichedReceipt_preventsTransferFallback() {
+        TxClassifierDispatcher dispatcher = new TxClassifierDispatcher(List.of(
+                new GenericTransferClassifier(),
+                new LpSemanticClassifier()
+        ));
+
+        List<RawClassifiedEvent> events = dispatcher.classify(RawTransactionNormalizationView.wrap(null), "0xwallet");
+
+        assertThat(events).hasSize(1);
+        assertThat(events.getFirst().getEventType()).isEqualTo(EconomicEventType.LP_ENTRY);
+    }
+
+    @Test
     void classify_sameInputManyTimes_isDeterministic() {
         TxClassifierDispatcher dispatcher = new TxClassifierDispatcher(List.of(
                 new GenericTransferClassifier(),
@@ -135,6 +161,20 @@ class TxClassifierDispatcherTest {
 
     @Order(20)
     private static class SwapSemanticClassifier implements TxClassifier {
+        @Override
+        public List<RawClassifiedEvent> classify(RawTransactionNormalizationView txView, String walletAddress) {
+            RawClassifiedEvent e = new RawClassifiedEvent();
+            e.setEventType(EconomicEventType.SWAP_SELL);
+            e.setWalletAddress(walletAddress);
+            e.setAssetContract("0xtoken");
+            e.setQuantityDelta(new BigDecimal("-1"));
+            e.setLogIndex(12);
+            return List.of(e);
+        }
+    }
+
+    @Order(20)
+    private static class GenericSwapClassifier implements TxClassifier {
         @Override
         public List<RawClassifiedEvent> classify(RawTransactionNormalizationView txView, String walletAddress) {
             RawClassifiedEvent e = new RawClassifiedEvent();

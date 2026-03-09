@@ -232,6 +232,113 @@ class ClassificationProcessorTest {
     }
 
     @Test
+    @DisplayName("known LP manager synthetic raw forces receipt enrichment before transfer fallback")
+    void knownLpManager_explorerOnlyRaw_forcesReceiptEnrichment() {
+        org.bson.Document rawData = new org.bson.Document("blockNumber", "0x64")
+                .append("to", "0x943e6e07a7e8e791dafc44083e54041d743c46e9")
+                .append("explorer", new org.bson.Document("tokenTransfers", List.of(
+                        new org.bson.Document("contractAddress", "0x078d782b760474a361dda0af3839290b0ef57ad6")
+                                .append("from", "0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f")
+                                .append("to", "0x65081cb48d74a32e9ccfed75164b8c09972dbcf1")
+                                .append("value", "1")
+                )));
+        RawTransaction raw = new RawTransaction();
+        raw.setTxHash("0xlp");
+        raw.setNetworkId("UNICHAIN");
+        raw.setWalletAddress("0xWALLET");
+        raw.setBlockNumber(100L);
+        raw.setRawData(rawData);
+        raw.setSyncMethod(RawSyncMethod.ETHERSCAN);
+
+        RawClassifiedEvent fallback = new RawClassifiedEvent();
+        fallback.setEventType(com.walletradar.domain.transaction.normalized.EconomicEventType.EXTERNAL_TRANSFER_OUT);
+        fallback.setWalletAddress("0xWALLET");
+        fallback.setAssetContract("0x078d782b760474a361dda0af3839290b0ef57ad6");
+        fallback.setAssetSymbol("USDC");
+        fallback.setQuantityDelta(BigDecimal.ONE.negate());
+
+        RawClassifiedEvent enriched = new RawClassifiedEvent();
+        enriched.setEventType(com.walletradar.domain.transaction.normalized.EconomicEventType.LP_ENTRY);
+        enriched.setWalletAddress("0xWALLET");
+        enriched.setAssetContract("0x078d782b760474a361dda0af3839290b0ef57ad6");
+        enriched.setAssetSymbol("USDC");
+        enriched.setQuantityDelta(BigDecimal.ONE.negate());
+
+        when(txClassifierDispatcher.classify(any(), anyString()))
+                .thenReturn(List.of(fallback), List.of(enriched));
+        when(explorerProvider.supports(NetworkId.UNICHAIN)).thenReturn(true);
+        when(explorerProvider.getReceipt("0xlp", NetworkId.UNICHAIN))
+                .thenReturn(new ExplorerReceipt(new org.bson.Document("blockNumber", "0x65")
+                        .append("logs", List.of())));
+        when(normalizedTransactionBuilder.build(anyString(), any(), anyString(), any(), any(), any()))
+                .thenReturn(new NormalizedTransaction());
+
+        BlockTimestampResolver resolver = new BlockTimestampResolver() {
+            @Override
+            public boolean supports(NetworkId networkId) { return true; }
+            @Override
+            public Instant getBlockTimestamp(NetworkId networkId, long blockNumber) {
+                return Instant.ofEpochSecond(1_700_000_000L + blockNumber * 12L);
+            }
+        };
+        EstimatingBlockTimestampResolver estimator = new EstimatingBlockTimestampResolver();
+        estimator.calibrate(NetworkId.UNICHAIN, 1L, 200L, resolver, 2.0);
+
+        processor.processBatch(List.of(raw), "0xWALLET", NetworkId.UNICHAIN, estimator);
+
+        verify(explorerProvider).getReceipt("0xlp", NetworkId.UNICHAIN);
+        verify(txClassifierDispatcher, times(2)).classify(any(), anyString());
+    }
+
+    @Test
+    @DisplayName("non-LP synthetic raw does not trigger extra receipt enrichment")
+    void nonLpSyntheticRaw_doesNotTriggerReceiptEnrichment() {
+        org.bson.Document rawData = new org.bson.Document("blockNumber", "0x64")
+                .append("to", "0x1111111111111111111111111111111111111111")
+                .append("explorer", new org.bson.Document("tokenTransfers", List.of(
+                        new org.bson.Document("contractAddress", "0x078d782b760474a361dda0af3839290b0ef57ad6")
+                                .append("from", "0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f")
+                                .append("to", "0x65081cb48d74a32e9ccfed75164b8c09972dbcf1")
+                                .append("value", "1")
+                )));
+        RawTransaction raw = new RawTransaction();
+        raw.setTxHash("0xnonlp");
+        raw.setNetworkId("UNICHAIN");
+        raw.setWalletAddress("0xWALLET");
+        raw.setBlockNumber(100L);
+        raw.setRawData(rawData);
+        raw.setSyncMethod(RawSyncMethod.ETHERSCAN);
+
+        RawClassifiedEvent fallback = new RawClassifiedEvent();
+        fallback.setEventType(com.walletradar.domain.transaction.normalized.EconomicEventType.EXTERNAL_TRANSFER_OUT);
+        fallback.setWalletAddress("0xWALLET");
+        fallback.setAssetContract("0x078d782b760474a361dda0af3839290b0ef57ad6");
+        fallback.setAssetSymbol("USDC");
+        fallback.setQuantityDelta(BigDecimal.ONE.negate());
+
+        when(txClassifierDispatcher.classify(any(), anyString())).thenReturn(List.of(fallback));
+        when(explorerProvider.supports(NetworkId.UNICHAIN)).thenReturn(true);
+        when(normalizedTransactionBuilder.build(anyString(), any(), anyString(), any(), any(), any()))
+                .thenReturn(new NormalizedTransaction());
+
+        BlockTimestampResolver resolver = new BlockTimestampResolver() {
+            @Override
+            public boolean supports(NetworkId networkId) { return true; }
+            @Override
+            public Instant getBlockTimestamp(NetworkId networkId, long blockNumber) {
+                return Instant.ofEpochSecond(1_700_000_000L + blockNumber * 12L);
+            }
+        };
+        EstimatingBlockTimestampResolver estimator = new EstimatingBlockTimestampResolver();
+        estimator.calibrate(NetworkId.UNICHAIN, 1L, 200L, resolver, 2.0);
+
+        processor.processBatch(List.of(raw), "0xWALLET", NetworkId.UNICHAIN, estimator);
+
+        verify(explorerProvider, never()).getReceipt(anyString(), any());
+        verify(txClassifierDispatcher, times(1)).classify(any(), anyString());
+    }
+
+    @Test
     @DisplayName("very low-confidence unresolved tx is marked NEEDS_REVIEW after receipt retries")
     void processBatch_lowConfidenceUnresolved_marksNeedsReview() {
         org.bson.Document rawData = new org.bson.Document("blockNumber", "0x64")

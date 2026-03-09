@@ -254,9 +254,16 @@ walletradar:
         "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45": "Uniswap V3"
         "0xe592427a0aece92de3edee1f18e0157c05861564": "Uniswap V3"
         "0xc36442b4a4522e871399cd717abdd847ab11fe88": "Uniswap V3"
+        "0x943e6e07a7e8e791dafc44083e54041d743c46e9": "Uniswap V3"
+        "0x4529a01c7a0410167c5740c487a8de60232617bf": "Uniswap V4"
+        "0x1f98400000000000000000000000000000000004": "Uniswap V4"
+        "0x55f4c8aba71a1e923edc303eb4feff14608cc226": "Pancake Infinity"
         "0x46a15b0b27311cedf172ab29e4f4766fbe7f4364": "PancakeSwap V3"
+        "0xa815e2ed7f7d5b0c49fda367f249232a1b9d2883": "PancakeSwap V3"
         "0xc6a2db661d5a5690172d8eb0a7dea2d3008665a3": "PancakeSwap V3"
         "0x827922686190790b37229fd06084350e74485b72": "Aerodrome"
+        "0x416b433906b1b72fa758e166e239c43d68dc6f29": "Velodrome Slipstream"
+        "0x991d5546c4b442b4c5fdc4c8b8b8d131deb24702": "Slipstream"
         "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2": "Aave V3"
   # Pricing: historical and spot resolvers (CoinGecko free API). T-019, T-020, T-012.
   pricing:
