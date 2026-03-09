@@ -478,6 +478,44 @@ class LpClassifierTest {
     }
 
     @Test
+    void classify_baseLpFeeClaimPreservesCakeSymbolFromExplorerMetadata() {
+        String wallet = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String walletTopic = "0x0000000000000000000000001a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String managerTopic = "0x000000000000000000000000c6a2db661d5a5690172d8eb0a7dea2d3008665a3";
+        String cake = "0x3055913c90fcc1a6ce9a358911721eeb942013a1";
+
+        when(evmTokenDecimalsResolver.getDecimals(eq("BASE"), eq(cake))).thenReturn(18);
+        when(evmTokenDecimalsResolver.getSymbol(eq("BASE"), eq(cake))).thenReturn("");
+
+        RawTransaction tx = new RawTransaction();
+        tx.setNetworkId("BASE");
+        tx.setRawData(new Document("from", wallet)
+                .append("to", "0xc6a2db661d5a5690172d8eb0a7dea2d3008665a3")
+                .append("methodId", "0x18fccc76")
+                .append("functionName", "harvest(uint256 tokenId)")
+                .append("input", "0x18fccc76000000000000000000000000000000000000000000000000000000000006a68d")
+                .append("logs", List.of(
+                        new Document("address", cake)
+                                .append("topics", List.of(TransferClassifier.TRANSFER_TOPIC, managerTopic, walletTopic))
+                                .append("data", "0x000000000000000000000000000000000000000000000000001bc16d674ec800")
+                                .append("logIndex", "0x8")
+                ))
+                .append("explorer", new Document("tokenTransfers", List.of(
+                        new Document("contractAddress", cake)
+                                .append("from", "0xc6a2db661d5a5690172d8eb0a7dea2d3008665a3")
+                                .append("to", wallet)
+                                .append("tokenSymbol", "CAKE")
+                                .append("tokenName", "PancakeSwap Token")
+                ))));
+
+        List<RawClassifiedEvent> events = classifier.classify(tx, wallet);
+
+        assertThat(events).hasSize(1);
+        assertThat(events.getFirst().getEventType()).isEqualTo(EconomicEventType.LP_FEE_CLAIM);
+        assertThat(events.getFirst().getAssetSymbol()).isEqualTo("CAKE");
+    }
+
+    @Test
     void classify_genericClaimWithoutLpEvidence_doesNotEmitLpEvents() {
         String wallet = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
         String walletTopic = "0x0000000000000000000000001a87f12ac07e9746e9b053b8d7ef1d45270d693f";

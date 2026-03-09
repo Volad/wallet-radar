@@ -22,22 +22,28 @@ public class StablecoinRegistry {
             "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",  // Base USDC
             "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d",  // BSC USDC
             "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e",  // Avalanche USDC
+            "0x176211869ca2b568f2a7d4ee941e073a821ee1ff",  // Linea USDC
+            "0x078d782b760474a361dda0af3839290b0ef57ad6",  // Unichain USDC
             // USDT
             "0xdac17f958d2ee523a2206206994597c13d831ec7",  // Ethereum USDT
             "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9",  // Arbitrum USDT
             "0x94b008aa00579c1307b0ef2c499ad98a8ce58e58",  // Optimism USDT
             "0xc2132d05d31c914a87c6611c10748aeb04b58e8f",  // Polygon USDT
             "0x50b7545627a5162f82a992c33d87cd8af3e9e401",  // Avalanche USDT (e.g. Bridge)
+            "0x9151434b16b9763660705744891fa906f660ecc5",  // Unichain USD₮0
             // DAI
             "0x6b175474e89094c44da98b954eedeac495271d0f",  // Ethereum DAI
             "0xda10009cbd5d07dd0cecc66161fc93d7c9000da1",  // Arbitrum DAI
             "0x8d11ec38a3eb5e956b052f67da8bdc9bef8abf3e",  // Optimism DAI (might be different)
             // GHO (Ethereum)
             "0x40d16fc9686d086299136be70377984c4e2e770a",
+            "0xfc421ad3c883bf9e7c4f42de845c4e4405799e73",  // Avalanche GHO
             // USDe (Ethena)
             "0x4c9edd5852cd905f086c759e8383e09bff1e68b3",
             // EURC
             "0xc891eb4cbdeff6e073e859e987815ed1505c2acd",  // Avalanche EURC
+            // USDC.e
+            "0x3355df6d4c9c3035724fd0e3914dE96A5a83aaf4",  // zkSync USDC.e
             // FRAX
             "0x853d955acef822db058eb8505911ed77f175b99e"   // Ethereum FRAX
     ).map(String::toLowerCase).collect(Collectors.toUnmodifiableSet());

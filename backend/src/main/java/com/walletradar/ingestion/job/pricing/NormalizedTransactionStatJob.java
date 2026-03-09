@@ -103,6 +103,9 @@ public class NormalizedTransactionStatJob {
     }
 
     private static List<String> statValidationErrors(NormalizedTransaction tx) {
+        if (tx.getType() == NormalizedTransactionType.APPROVAL) {
+            return List.of();
+        }
         if (tx.getFlows() == null || tx.getFlows().isEmpty()) {
             return List.of("MISSING_LEGS");
         }
@@ -115,7 +118,7 @@ public class NormalizedTransactionStatJob {
             }
             if (qty.signum() > 0) hasInbound = true;
             if (qty.signum() < 0) hasOutbound = true;
-            boolean priceRequired = NormalizedTransactionPricingPolicy.isLegPriceRequired(tx.getType(), qty);
+            boolean priceRequired = NormalizedTransactionPricingPolicy.isLegPriceRequired(tx, leg);
             if (priceRequired && leg.getUnitPriceUsd() == null) {
                 return List.of("MISSING_PRICE");
             }

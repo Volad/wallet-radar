@@ -34,6 +34,15 @@ class StablecoinRegistryTest {
     }
 
     @Test
+    @DisplayName("audited cross-network stable aliases are stablecoins")
+    void auditedStableAliasesAreStablecoins() {
+        assertThat(registry.isStablecoin("0x078d782b760474a361dda0af3839290b0ef57ad6")).isTrue();
+        assertThat(registry.isStablecoin("0x9151434b16b9763660705744891fa906f660ecc5")).isTrue();
+        assertThat(registry.isStablecoin("0xfc421ad3c883bf9e7c4f42de845c4e4405799e73")).isTrue();
+        assertThat(registry.isStablecoin("0x3355df6d4c9c3035724fd0e3914de96a5a83aaf4")).isTrue();
+    }
+
+    @Test
     @DisplayName("unknown contract is not stablecoin")
     void unknownContract() {
         assertThat(registry.isStablecoin("0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2")).isFalse();

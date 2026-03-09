@@ -290,6 +290,7 @@ walletradar:
     contract-to-coin-gecko-id:
       "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2": "weth"
       "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee": "ethereum"
+      "0x000000000000000000000000000000000000800a": "ethereum"
       # ARB (Arbitrum), MORPHO (Morpho) - avoid wrong fallback to ETH price
       "0x912ce59144191c1204e64559fe8253a0e49e6548": "arbitrum"
       "0x40bd670a58238e6e230c430bbb5ce6ec0d40df48": "morpho"
@@ -410,8 +411,17 @@ walletradar:
       - network-id: OPTIMISM
         token-contract: 0x4554b2d76802b214c71e7481e0da8cfcba70fa34
         method-id: 0x9c96eec5
+      - network-id: AVALANCHE
+        token-contract: 0x318c6a3cb85952641cd253b2311b0cee30f44822
+        method-id: 0xa9059cbb
+      - network-id: UNICHAIN
+        token-contract: 0x309aed2eebf9db4d7e51a7d2fdf557f7bbfe774a
+        method-id: 0xbf3b75a3
       - network-id: UNICHAIN
         token-contract: 0xeb923667062ff90c633910894467819ddc2b701e
+        method-id: 0x007b6643
+      - network-id: UNICHAIN
+        token-contract: 0x03a2dd6009c2f110aef74d1dd174a3e240122260
         method-id: 0x007b6643
       - network-id: ARBITRUM
         token-contract: 0x29103b9e35b3f5f65708804dcc5f945fae992416

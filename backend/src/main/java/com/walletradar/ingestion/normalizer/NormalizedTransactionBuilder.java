@@ -27,6 +27,9 @@ import java.util.Set;
 @Component
 public class NormalizedTransactionBuilder {
 
+    private static final String EVM_NATIVE_CONTRACT = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    private static final String ZKSYNC_PSEUDO_NATIVE = "0x000000000000000000000000000000000000800a";
+
     public NormalizedTransaction build(
             String txHash,
             NetworkId networkId,
@@ -42,7 +45,7 @@ public class NormalizedTransactionBuilder {
         tx.setBlockTimestamp(blockTimestamp);
         tx.setType(resolveType(rawEvents));
         tx.setGroupId(resolveGroupId(networkId, walletAddress, tx.getType(), rawEvents));
-        List<NormalizedTransaction.Flow> flows = toFlows(rawEvents);
+        List<NormalizedTransaction.Flow> flows = toFlows(networkId, rawEvents);
         tx.setFlows(flows);
         tx.setConfidence(confidence != null ? confidence : BigDecimal.ZERO);
         tx.setCreatedAt(Instant.now());
@@ -59,7 +62,7 @@ public class NormalizedTransactionBuilder {
         return tx;
     }
 
-    private static List<NormalizedTransaction.Flow> toFlows(List<RawClassifiedEvent> rawEvents) {
+    private static List<NormalizedTransaction.Flow> toFlows(NetworkId networkId, List<RawClassifiedEvent> rawEvents) {
         if (rawEvents == null || rawEvents.isEmpty()) {
             return List.of();
         }
@@ -75,7 +78,7 @@ public class NormalizedTransactionBuilder {
             NormalizedTransaction.Flow leg = new NormalizedTransaction.Flow();
             leg.setRole(resolveRole(raw));
             leg.setAssetContract(raw.getAssetContract() != null ? raw.getAssetContract() : "");
-            leg.setAssetSymbol(raw.getAssetSymbol() != null ? raw.getAssetSymbol() : "");
+            leg.setAssetSymbol(resolveAssetSymbol(networkId, raw));
             leg.setQuantityDelta(raw.getQuantityDelta() != null ? raw.getQuantityDelta() : BigDecimal.ZERO);
             leg.setInferred(false);
             leg.setLogIndex(raw.getLogIndex());
@@ -247,6 +250,10 @@ public class NormalizedTransactionBuilder {
             NormalizedTransactionType type,
             List<String> reasons
     ) {
+        if (type == NormalizedTransactionType.UNCLASSIFIED
+                || (reasons != null && reasons.contains("NO_CLASSIFICATION_EVIDENCE"))) {
+            return NormalizedTransactionStatus.NEEDS_REVIEW;
+        }
         if (reasons != null && !reasons.isEmpty()) {
             return NormalizedTransactionStatus.PENDING_CLARIFICATION;
         }
@@ -311,6 +318,38 @@ public class NormalizedTransactionBuilder {
                 || type == NormalizedTransactionType.LP_POSITION_STAKE
                 || type == NormalizedTransactionType.LP_POSITION_UNSTAKE
                 || type == NormalizedTransactionType.LP_FEE_CLAIM;
+    }
+
+    private static String resolveAssetSymbol(NetworkId networkId, RawClassifiedEvent raw) {
+        if (raw != null && raw.getAssetSymbol() != null && !raw.getAssetSymbol().isBlank()) {
+            return raw.getAssetSymbol();
+        }
+        if (raw == null || raw.getAssetContract() == null || raw.getAssetContract().isBlank()) {
+            return "";
+        }
+        String contract = raw.getAssetContract().trim().toLowerCase(Locale.ROOT);
+        if (ZKSYNC_PSEUDO_NATIVE.equals(contract)) {
+            return "ETH";
+        }
+        if (EVM_NATIVE_CONTRACT.equals(contract)) {
+            if (networkId == null) {
+                return "ETH";
+            }
+            return switch (networkId) {
+                case POLYGON -> "MATIC";
+                case BSC -> "BNB";
+                case AVALANCHE -> "AVAX";
+                case MANTLE -> "MNT";
+                default -> "ETH";
+            };
+        }
+        return switch (contract) {
+            case "0x3355df6d4c9c3035724fd0e3914de96a5a83aaf4" -> "USDC.e";
+            case "0x9151434b16b9763660705744891fa906f660ecc5" -> "USD₮0";
+            case "0xfc421ad3c883bf9e7c4f42de845c4e4405799e73" -> "GHO";
+            case "0x078d782b760474a361dda0af3839290b0ef57ad6" -> "USDC";
+            default -> "";
+        };
     }
 
 }

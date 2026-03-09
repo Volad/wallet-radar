@@ -91,6 +91,25 @@ class NormalizedTransactionBuilderTest {
     }
 
     @Test
+    @DisplayName("unclassified starts as review work and not pricing workload")
+    void unclassifiedStartsAsNotPriceableReviewWork() {
+        NormalizedTransaction tx = builder.build(
+                "0xunclassified",
+                NetworkId.ARBITRUM,
+                "0xwallet",
+                Instant.parse("2025-10-06T09:11:09Z"),
+                List.of(),
+                new BigDecimal("0.10")
+        );
+
+        assertThat(tx.getType()).isEqualTo(NormalizedTransactionType.UNCLASSIFIED);
+        assertThat(tx.getStatus()).isEqualTo(NormalizedTransactionStatus.NEEDS_REVIEW);
+        assertThat(tx.getPricingStatus()).isEqualTo(PricingStatus.NOT_REQUIRED);
+        assertThat(tx.getClassificationStatus()).isEqualTo(ClassificationStatus.NEEDS_REVIEW);
+        assertThat(tx.getMissingDataReasons()).containsExactly("NO_CLASSIFICATION_EVIDENCE");
+    }
+
+    @Test
     @DisplayName("maps LP position exit event to LP_EXIT with TRANSFER flow role")
     void mapsLpPositionExitToLpExitType() {
         RawClassifiedEvent event = raw(EconomicEventType.LP_POSITION_EXIT, "0x46a15b0b27311cedf172ab29e4f4766fbe7f4364", "PCS-V3-POS", new BigDecimal("1"));
@@ -255,6 +274,24 @@ class NormalizedTransactionBuilderTest {
     }
 
     @Test
+    @DisplayName("zksync pseudo native flow keeps ETH symbol when classifier symbol is blank")
+    void nativePseudoTokenFlowKeepsEthSymbol() {
+        RawClassifiedEvent out = raw(EconomicEventType.EXTERNAL_TRANSFER_OUT, "0x000000000000000000000000000000000000800a", "", new BigDecimal("-0.25"));
+
+        NormalizedTransaction tx = builder.build(
+                "0xzknative",
+                NetworkId.ZKSYNC,
+                "0xwallet",
+                Instant.parse("2025-10-06T09:11:09Z"),
+                List.of(out),
+                new BigDecimal("0.90")
+        );
+
+        assertThat(tx.getFlows()).hasSize(1);
+        assertThat(tx.getFlows().getFirst().getAssetSymbol()).isEqualTo("ETH");
+    }
+
+    @Test
     @DisplayName("builds LEND_DEPOSIT in PENDING_STAT with pricing not required for receipt leg")
     void lendDepositSkipsPricingForReceiptLeg() {
         RawClassifiedEvent out = raw(EconomicEventType.LEND_DEPOSIT, "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", "USDC", new BigDecimal("-100"));
@@ -329,8 +366,9 @@ class NormalizedTransactionBuilderTest {
         );
 
         assertThat(tx.getType()).isEqualTo(NormalizedTransactionType.UNCLASSIFIED);
-        assertThat(tx.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_CLARIFICATION);
+        assertThat(tx.getStatus()).isEqualTo(NormalizedTransactionStatus.NEEDS_REVIEW);
         assertThat(tx.getClassificationStatus()).isEqualTo(ClassificationStatus.NEEDS_REVIEW);
+        assertThat(tx.getPricingStatus()).isEqualTo(PricingStatus.NOT_REQUIRED);
         assertThat(tx.getMissingDataReasons()).containsExactly("NO_CLASSIFICATION_EVIDENCE");
     }
 

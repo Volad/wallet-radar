@@ -172,6 +172,67 @@ class NormalizedTransactionPipelineJobsTest {
     }
 
     @Test
+    @DisplayName("approval without flows skips pricing and confirms without review")
+    void approvalWithoutFlowsConfirmsWithoutReview() {
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setTxHash("0xapproval");
+        tx.setNetworkId(NetworkId.BASE);
+        tx.setWalletAddress("0xwallet");
+        tx.setBlockTimestamp(Instant.parse("2025-10-06T09:11:09Z"));
+        tx.setType(NormalizedTransactionType.APPROVAL);
+        tx.setStatus(NormalizedTransactionStatus.PENDING_PRICE);
+        tx.setPricingStatus(PricingStatus.NOT_REQUIRED);
+        tx.setClassificationStatus(ClassificationStatus.CONFIRMED);
+        tx.setFlows(List.of());
+
+        pricingJob.priceOne(tx);
+
+        assertThat(tx.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_STAT);
+        verify(historicalPriceResolverChain, never()).resolve(any());
+
+        when(normalizedTransactionRepository.findByStatusOrderByBlockTimestampAsc(NormalizedTransactionStatus.PENDING_STAT))
+                .thenReturn(List.of(tx));
+        statJob.runScheduled();
+
+        assertThat(tx.getStatus()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(tx.getClassificationStatus()).isEqualTo(ClassificationStatus.CONFIRMED);
+        assertThat(tx.getPricingStatus()).isEqualTo(PricingStatus.NOT_REQUIRED);
+    }
+
+    @Test
+    @DisplayName("external transfer out same-asset refund skips price lookup")
+    void externalTransferOutSameAssetRefundSkipsPriceLookup() {
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setTxHash("0xrefund");
+        tx.setNetworkId(NetworkId.ZKSYNC);
+        tx.setWalletAddress("0xwallet");
+        tx.setBlockTimestamp(Instant.parse("2025-10-06T09:11:09Z"));
+        tx.setType(NormalizedTransactionType.EXTERNAL_TRANSFER_OUT);
+        tx.setStatus(NormalizedTransactionStatus.PENDING_PRICE);
+        tx.setPricingAttempts(0);
+        tx.setClassificationStatus(ClassificationStatus.CONFIRMED);
+
+        NormalizedTransaction.Flow outbound = flow(
+                NormalizedLegRole.TRANSFER,
+                "0x000000000000000000000000000000000000800a",
+                "ETH",
+                "-0.400000000000000000"
+        );
+        NormalizedTransaction.Flow refund = flow(
+                NormalizedLegRole.TRANSFER,
+                "0x000000000000000000000000000000000000800a",
+                "ETH",
+                "0.000800000000000000"
+        );
+        tx.setFlows(List.of(outbound, refund));
+
+        pricingJob.priceOne(tx);
+
+        assertThat(tx.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_STAT);
+        verify(historicalPriceResolverChain, never()).resolve(any());
+    }
+
+    @Test
     @DisplayName("stale LP_ENTRY row in PENDING_PRICE skips resolver and transitions to PENDING_STAT")
     void lpEntryReceiptSkipsPricingResolver() {
         NormalizedTransaction tx = new NormalizedTransaction();

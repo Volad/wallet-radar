@@ -918,6 +918,35 @@ class TransferClassifierTest {
     }
 
     @Test
+    void classify_syntheticExplorerTransferPreservesTokenSymbolFallback() {
+        String wallet = "0x1234567890123456789012345678901234567890";
+        String walletTopic = "0x" + "0".repeat(24) + "1234567890123456789012345678901234567890";
+        String fromTopic = "0x" + "0".repeat(24) + "abcdabcdabcdabcdabcdabcdabcdabcdabcdabcd";
+        String arb = "0x912ce59144191c1204e64559fe8253a0e49e6548";
+
+        when(evmTokenDecimalsResolver.getSymbol(anyString(), eq(arb))).thenReturn("");
+
+        RawTransaction tx = new RawTransaction();
+        tx.setNetworkId("ARBITRUM");
+        tx.setRawData(new Document("logs", List.of(
+                new Document("address", arb)
+                        .append("topics", List.of(TransferClassifier.TRANSFER_TOPIC, fromTopic, walletTopic))
+                        .append("data", "0x0000000000000000000000000000000000000000000000000000000000989680")
+        )).append("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", arb)
+                        .append("from", "0xabcdabcdabcdabcdabcdabcdabcdabcdabcdabcd")
+                        .append("to", wallet)
+                        .append("tokenSymbol", "ARB")
+                        .append("tokenName", "Arbitrum")
+        ))));
+
+        List<RawClassifiedEvent> result = classifier.classify(tx, wallet);
+
+        assertThat(result).hasSize(1);
+        assertThat(result.getFirst().getAssetSymbol()).isEqualTo("ARB");
+    }
+
+    @Test
     void classify_zkSyncDepositWithExtraNativeLegs_returnsEmptyBecauseLendTakesPrecedence() {
         RawTransaction tx = ClassifierFixtureLoader
                 .loadRawTransaction("fixtures/classifier/zksync/lend-deposit-extra-native-legs.json");

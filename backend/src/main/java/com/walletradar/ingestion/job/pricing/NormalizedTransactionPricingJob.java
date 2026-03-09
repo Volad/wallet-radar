@@ -1,6 +1,7 @@
 package com.walletradar.ingestion.job.pricing;
 
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionPricingPolicy;
 import com.walletradar.domain.transaction.normalized.PricingStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
@@ -59,6 +60,21 @@ public class NormalizedTransactionPricingJob {
     }
 
     void priceOne(NormalizedTransaction tx) {
+        if (tx.getType() == NormalizedTransactionType.UNCLASSIFIED) {
+            tx.setStatus(NormalizedTransactionStatus.NEEDS_REVIEW);
+            tx.setPricingStatus(PricingStatus.NOT_REQUIRED);
+            tx.setUpdatedAt(Instant.now());
+            normalizedTransactionRepository.save(tx);
+            return;
+        }
+        if (NormalizedTransactionPricingPolicy.isTypeNeverPriced(tx.getType())) {
+            tx.setMissingDataReasons(List.of());
+            tx.setPricingStatus(NormalizedTransactionPricingPolicy.resolvedPricingStatus(tx.getType()));
+            tx.setStatus(NormalizedTransactionStatus.PENDING_STAT);
+            tx.setUpdatedAt(Instant.now());
+            normalizedTransactionRepository.save(tx);
+            return;
+        }
         if (tx.getFlows() == null || tx.getFlows().isEmpty()) {
             markNeedsReview(tx, "MISSING_LEGS");
             return;
@@ -71,7 +87,7 @@ public class NormalizedTransactionPricingJob {
                 unresolvedReasons.add("MISSING_QUANTITY");
                 continue;
             }
-            boolean priceRequired = NormalizedTransactionPricingPolicy.isLegPriceRequired(tx.getType(), leg.getQuantityDelta());
+            boolean priceRequired = NormalizedTransactionPricingPolicy.isLegPriceRequired(tx, leg);
             if (!priceRequired) {
                 continue;
             }
@@ -144,7 +160,9 @@ public class NormalizedTransactionPricingJob {
     private void markNeedsReview(NormalizedTransaction tx, String reason) {
         tx.setStatus(NormalizedTransactionStatus.NEEDS_REVIEW);
         tx.setMissingDataReasons(List.of(reason));
-        tx.setPricingStatus(PricingStatus.UNRESOLVED);
+        tx.setPricingStatus(tx.getType() == NormalizedTransactionType.UNCLASSIFIED
+                ? PricingStatus.NOT_REQUIRED
+                : PricingStatus.UNRESOLVED);
         tx.setUpdatedAt(Instant.now());
         normalizedTransactionRepository.save(tx);
     }

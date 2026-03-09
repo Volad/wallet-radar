@@ -117,6 +117,68 @@ class ScamFilterTest {
     }
 
     @Test
+    @DisplayName("drops known inbound spam fingerprint for promotional claim tx")
+    void knownInboundSpamFingerprintDropsPromotionalClaimTx() {
+        ScamFilterProperties props = new ScamFilterProperties();
+        props.setEnabled(true);
+        ScamFilterProperties.InboundSpamFingerprint fingerprint = new ScamFilterProperties.InboundSpamFingerprint();
+        fingerprint.setNetworkId("UNICHAIN");
+        fingerprint.setTokenContract("0x309aed2eebf9db4d7e51a7d2fdf557f7bbfe774a");
+        fingerprint.setMethodId("0xbf3b75a3");
+        props.setKnownInboundSpamFingerprints(List.of(fingerprint));
+        ScamFilter f = new ScamFilter(props);
+
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0xclaimable");
+        tx.setNetworkId("UNICHAIN");
+        tx.setWalletAddress("0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f");
+        tx.setRawData(new Document("from", "0x1f98400000000000000000000000000000000004")
+                .append("to", "0x1111111111111111111111111111111111111111")
+                .append("methodId", "0xbf3b75a3")
+                .append("explorer", new Document("tokenTransfers", List.of(
+                        new Document("contractAddress", "0x309aed2eebf9db4d7e51a7d2fdf557f7bbfe774a")
+                                .append("from", "0x1f98400000000000000000000000000000000004")
+                                .append("to", "0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f")
+                                .append("tokenSymbol", "Claimable: unichain-token.com")
+                                .append("tokenName", "UNC")
+                                .append("value", "1000000000000000000")
+                ))));
+
+        assertThat(f.shouldDrop(tx)).isTrue();
+    }
+
+    @Test
+    @DisplayName("does not drop wallet initiated tx by inbound spam fingerprint rule")
+    void walletInitiatedClaimLikeTxIsNotDroppedByInboundSpamRule() {
+        ScamFilterProperties props = new ScamFilterProperties();
+        props.setEnabled(true);
+        ScamFilterProperties.InboundSpamFingerprint fingerprint = new ScamFilterProperties.InboundSpamFingerprint();
+        fingerprint.setNetworkId("UNICHAIN");
+        fingerprint.setTokenContract("0x309aed2eebf9db4d7e51a7d2fdf557f7bbfe774a");
+        fingerprint.setMethodId("0xbf3b75a3");
+        props.setKnownInboundSpamFingerprints(List.of(fingerprint));
+        ScamFilter f = new ScamFilter(props);
+
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0xwallet-claim");
+        tx.setNetworkId("UNICHAIN");
+        tx.setWalletAddress("0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f");
+        tx.setRawData(new Document("from", "0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f")
+                .append("to", "0x1111111111111111111111111111111111111111")
+                .append("methodId", "0xbf3b75a3")
+                .append("explorer", new Document("tokenTransfers", List.of(
+                        new Document("contractAddress", "0x309aed2eebf9db4d7e51a7d2fdf557f7bbfe774a")
+                                .append("from", "0x1111111111111111111111111111111111111111")
+                                .append("to", "0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f")
+                                .append("tokenSymbol", "Claimable: unichain-token.com")
+                                .append("tokenName", "UNC")
+                                .append("value", "1000000000000000000")
+                ))));
+
+        assertThat(f.shouldDrop(tx)).isFalse();
+    }
+
+    @Test
     @DisplayName("returns true for failed swap without transfer effects")
     void failedSwapWithoutTransferEffects_returnsTrue() {
         RawTransaction tx = new RawTransaction();

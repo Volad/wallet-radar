@@ -12,8 +12,10 @@ import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.math.RoundingMode;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 
 public final class LpFlowAssembler {
@@ -46,6 +48,7 @@ public final class LpFlowAssembler {
         String txTo = tx.readRawOrExplorerAddress("to");
         String txProtocol = normalizeProtocol(protocolRegistry.getProtocolName(txTo).orElse(null));
         String positionId = lpEvidenceExtractor.resolvePositionId(tx, logs);
+        Map<String, LpEvidenceExtractor.TokenMeta> metaByContract = tokenMetaByContract(tx);
 
         List<RawClassifiedEvent> out = new ArrayList<>();
         for (Document log : logs) {
@@ -64,7 +67,7 @@ public final class LpFlowAssembler {
             if (amount == null || amount.signum() <= 0) {
                 continue;
             }
-            out.add(eventFromLog(EconomicEventType.LP_ENTRY, tx, walletAddress, txTo, txProtocol, positionId, log, tokenAddress, amount.negate(), false));
+            out.add(eventFromLog(EconomicEventType.LP_ENTRY, tx, walletAddress, txTo, txProtocol, positionId, log, tokenAddress, amount.negate(), false, metaByContract.get(tokenAddress)));
         }
 
         RawClassifiedEvent nativeLeg = inferNativeEntryOutflow(tx, walletAddress, logs, txTo, txProtocol, positionId, out);
@@ -84,6 +87,7 @@ public final class LpFlowAssembler {
         String txTo = tx.readRawOrExplorerAddress("to");
         String txProtocol = normalizeProtocol(protocolRegistry.getProtocolName(txTo).orElse(null));
         String positionId = lpEvidenceExtractor.resolvePositionId(tx, logs);
+        Map<String, LpEvidenceExtractor.TokenMeta> metaByContract = tokenMetaByContract(tx);
 
         List<RawClassifiedEvent> out = new ArrayList<>();
         for (Document log : logs) {
@@ -102,7 +106,7 @@ public final class LpFlowAssembler {
             if (amount == null || amount.signum() <= 0) {
                 continue;
             }
-            out.add(eventFromLog(exitType, tx, walletAddress, txTo, txProtocol, positionId, log, tokenAddress, amount, false));
+            out.add(eventFromLog(exitType, tx, walletAddress, txTo, txProtocol, positionId, log, tokenAddress, amount, false, metaByContract.get(tokenAddress)));
         }
 
         if (out.isEmpty()) {
@@ -124,7 +128,7 @@ public final class LpFlowAssembler {
                     if (amount == null || amount.signum() <= 0) {
                         continue;
                     }
-                    out.add(eventFromLog(exitType, tx, walletAddress, txTo, txProtocol, positionId, log, tokenAddress, amount, false));
+                    out.add(eventFromLog(exitType, tx, walletAddress, txTo, txProtocol, positionId, log, tokenAddress, amount, false, metaByContract.get(tokenAddress)));
                 }
             }
         }
@@ -145,6 +149,7 @@ public final class LpFlowAssembler {
         String txTo = tx.readRawOrExplorerAddress("to");
         String txProtocol = normalizeProtocol(protocolRegistry.getProtocolName(txTo).orElse(null));
         String positionId = lpEvidenceExtractor.resolvePositionId(tx, logs);
+        Map<String, LpEvidenceExtractor.TokenMeta> metaByContract = tokenMetaByContract(tx);
 
         List<RawClassifiedEvent> out = new ArrayList<>();
         for (Document log : logs) {
@@ -163,7 +168,7 @@ public final class LpFlowAssembler {
             if (amount == null || amount.signum() <= 0) {
                 continue;
             }
-            out.add(eventFromLog(EconomicEventType.LP_FEE_CLAIM, tx, walletAddress, txTo, txProtocol, positionId, log, tokenAddress, amount, false));
+            out.add(eventFromLog(EconomicEventType.LP_FEE_CLAIM, tx, walletAddress, txTo, txProtocol, positionId, log, tokenAddress, amount, false, metaByContract.get(tokenAddress)));
         }
 
         RawClassifiedEvent nativeLeg = inferNativePayout(EconomicEventType.LP_FEE_CLAIM, tx, walletAddress, logs, txTo, txProtocol, positionId, out);
@@ -297,7 +302,8 @@ public final class LpFlowAssembler {
             Document log,
             String tokenAddress,
             BigInteger amount,
-            boolean negate
+            boolean negate,
+            LpEvidenceExtractor.TokenMeta tokenMeta
     ) {
         int decimals = evmTokenDecimalsResolver.getDecimals(tx.networkId(), tokenAddress);
         BigDecimal quantity = new BigDecimal(amount.abs()).divide(BigDecimal.TEN.pow(decimals), 18, RoundingMode.HALF_UP);
@@ -308,7 +314,7 @@ public final class LpFlowAssembler {
         event.setEventType(eventType);
         event.setWalletAddress(walletAddress);
         event.setAssetContract(tokenAddress);
-        event.setAssetSymbol(resolveSymbol(tx, tokenAddress, null));
+        event.setAssetSymbol(resolveSymbol(tx, tokenAddress, tokenMeta));
         event.setQuantityDelta(quantity);
         event.setProtocolName(resolveProtocolName(txTo, txProtocol, tokenAddress));
         event.setLogIndex(tx.getLogIndex(log));
@@ -332,5 +338,22 @@ public final class LpFlowAssembler {
             value = "0x" + value;
         }
         return value.length() == 42 ? value : null;
+    }
+
+    private Map<String, LpEvidenceExtractor.TokenMeta> tokenMetaByContract(RawTransactionNormalizationView tx) {
+        Map<String, LpEvidenceExtractor.TokenMeta> out = new LinkedHashMap<>();
+        for (Document transfer : tx.explorerTokenTransfers()) {
+            String contract = tx.tokenTransferContract(transfer);
+            if (contract == null) {
+                continue;
+            }
+            String symbol = tx.tokenTransferSymbol(transfer);
+            String name = tx.tokenTransferName(transfer);
+            if ((symbol == null || symbol.isBlank()) && (name == null || name.isBlank())) {
+                continue;
+            }
+            out.putIfAbsent(contract, new LpEvidenceExtractor.TokenMeta(symbol, name));
+        }
+        return out;
     }
 }

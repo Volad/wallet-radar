@@ -114,6 +114,7 @@ public class TransferClassifier implements TxClassifier {
             }
         }
         String walletTopic = tx.padAddressForTopic(walletAddress);
+        Map<String, String> explorerSymbolByContract = explorerSymbolByContract(tx);
 
         // Heuristic (ADR-019): exactly one distinct asset out, exactly one distinct asset in, different → swap
         Map<String, BigDecimal> outflowQtyByContract = new LinkedHashMap<>();
@@ -134,7 +135,7 @@ public class TransferClassifier implements TxClassifier {
             if (tokenAddress == null) continue;
             BigDecimal quantity = transferQuantity(tx, log, topics, tokenAddress);
             if (quantity == null) continue;
-            String symbol = evmTokenDecimalsResolver.getSymbol(tx.networkId(), tokenAddress);
+            String symbol = resolveSymbol(tx, tokenAddress, explorerSymbolByContract);
             String protocolName = protocolRegistry.getProtocolName(tokenAddress).orElse(null);
             Integer logIndex = tx.getLogIndex(log);
             TransferMeta meta = new TransferMeta(symbol != null ? symbol : "", protocolName, logIndex);
@@ -274,7 +275,7 @@ public class TransferClassifier implements TxClassifier {
             if (quantity == null) {
                 continue;
             }
-            String symbol = evmTokenDecimalsResolver.getSymbol(tx.networkId(), tokenAddress);
+            String symbol = resolveSymbol(tx, tokenAddress, explorerSymbolByContract);
             String protocolName = protocolRegistry.getProtocolName(tokenAddress).orElse(null);
             Integer logIndex = tx.getLogIndex(log);
             if (walletTopic.equalsIgnoreCase(fromTopic)) {
@@ -382,6 +383,7 @@ public class TransferClassifier implements TxClassifier {
             return List.of();
         }
         String walletTopic = tx.padAddressForTopic(walletAddress);
+        Map<String, String> explorerSymbolByContract = explorerSymbolByContract(tx);
         Map<String, BigDecimal> netByContract = new LinkedHashMap<>();
         Map<String, TransferMeta> inboundMetaByContract = new LinkedHashMap<>();
 
@@ -401,7 +403,7 @@ public class TransferClassifier implements TxClassifier {
             int decimals = evmTokenDecimalsResolver.getDecimals(tx.networkId(), contract);
             BigDecimal divisor = BigDecimal.TEN.pow(decimals);
             BigDecimal quantity = new BigDecimal(amount).divide(divisor, 18, RoundingMode.HALF_UP);
-            String symbol = evmTokenDecimalsResolver.getSymbol(tx.networkId(), contract);
+            String symbol = resolveSymbol(tx, contract, explorerSymbolByContract);
             String protocolName = protocolRegistry.getProtocolName(contract).orElse(null);
             Integer logIndex = tx.getLogIndex(log);
 
@@ -445,6 +447,30 @@ public class TransferClassifier implements TxClassifier {
             events.add(inbound);
         }
         return events;
+    }
+
+    private Map<String, String> explorerSymbolByContract(RawTransactionNormalizationView tx) {
+        Map<String, String> out = new LinkedHashMap<>();
+        for (Document transfer : tx.explorerTokenTransfers()) {
+            String contract = tx.tokenTransferContract(transfer);
+            String symbol = tx.tokenTransferSymbol(transfer);
+            if (contract == null || symbol == null || symbol.isBlank()) {
+                continue;
+            }
+            out.putIfAbsent(contract.toLowerCase(Locale.ROOT), symbol);
+        }
+        return out;
+    }
+
+    private String resolveSymbol(RawTransactionNormalizationView tx, String tokenAddress, Map<String, String> explorerSymbols) {
+        String symbol = evmTokenDecimalsResolver.getSymbol(tx.networkId(), tokenAddress);
+        if (symbol != null && !symbol.isBlank()) {
+            return symbol;
+        }
+        if (tokenAddress == null || explorerSymbols == null || explorerSymbols.isEmpty()) {
+            return "";
+        }
+        return explorerSymbols.getOrDefault(tokenAddress.toLowerCase(Locale.ROOT), "");
     }
 
     private static boolean isLikelySwapCall(RawTransactionNormalizationView tx) {

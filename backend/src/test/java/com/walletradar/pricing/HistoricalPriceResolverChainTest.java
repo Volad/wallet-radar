@@ -3,6 +3,7 @@ package com.walletradar.pricing;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.pricing.resolver.CoinGeckoHistoricalResolver;
 import com.walletradar.pricing.resolver.CounterpartPriceResolver;
+import com.walletradar.pricing.resolver.NativeAssetResolver;
 import com.walletradar.pricing.resolver.StablecoinResolver;
 import com.walletradar.pricing.resolver.SwapDerivedResolver;
 import org.junit.jupiter.api.BeforeEach;
@@ -32,9 +33,10 @@ class HistoricalPriceResolverChainTest {
                 new com.walletradar.common.RateLimiter(45),
                 contractResolver,
                 new DefaultResourceLoader());
+        NativeAssetResolver nativeAssetResolver = new NativeAssetResolver(coinGecko);
         CounterpartPriceResolver counterpart = new CounterpartPriceResolver(stablecoin, coinGecko);
         SwapDerivedResolver swapDerived = new SwapDerivedResolver(counterpart);
-        chain = new HistoricalPriceResolverChain(stablecoin, swapDerived, coinGecko);
+        chain = new HistoricalPriceResolverChain(stablecoin, nativeAssetResolver, swapDerived, coinGecko);
     }
 
     @Test
@@ -58,6 +60,21 @@ class HistoricalPriceResolverChainTest {
         HistoricalPriceRequest req = new HistoricalPriceRequest();
         req.setAssetContract("0xc891eb4cbdeff6e073e859e987815ed1505c2acd");
         req.setNetworkId(NetworkId.AVALANCHE);
+        req.setBlockTimestamp(Instant.now());
+
+        PriceResolutionResult r = chain.resolve(req);
+
+        assertThat(r.isUnknown()).isFalse();
+        assertThat(r.getPriceUsd()).hasValueSatisfying(p -> assertThat(p).isEqualByComparingTo(BigDecimal.ONE));
+        assertThat(r.getPriceSource()).isEqualTo(com.walletradar.domain.common.PriceSource.STABLECOIN);
+    }
+
+    @Test
+    @DisplayName("audited stable aliases resolve through stablecoin path")
+    void auditedStableAliasesResolveToOneUsd() {
+        HistoricalPriceRequest req = new HistoricalPriceRequest();
+        req.setAssetContract("0x9151434b16b9763660705744891fa906f660ecc5");
+        req.setNetworkId(NetworkId.UNICHAIN);
         req.setBlockTimestamp(Instant.now());
 
         PriceResolutionResult r = chain.resolve(req);
