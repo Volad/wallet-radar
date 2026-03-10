@@ -248,6 +248,7 @@ public class ScamFilter {
 
         boolean inboundToWallet = false;
         boolean suspiciousTokenText = false;
+        boolean cleanInboundTokenText = false;
         boolean suspiciousTinyValue = false;
         boolean suspiciousZeroDecimalsWithOddText = false;
 
@@ -266,6 +267,8 @@ public class ScamFilter {
             String name = rawString(transfer.get("tokenName"));
             if (isSuspiciousTokenText(symbol) || isSuspiciousTokenText(name)) {
                 suspiciousTokenText = true;
+            } else {
+                cleanInboundTokenText = true;
             }
 
             BigInteger value = parseUnsignedNumeric(rawString(transfer.get("value")));
@@ -287,7 +290,7 @@ public class ScamFilter {
 
         int score = 0;
         List<String> signals = new ArrayList<>();
-        if (suspiciousTokenText) {
+        if (suspiciousTokenText && !cleanInboundTokenText) {
             score += properties.getSuspiciousAirdropTokenTextScore();
             signals.add("SUSPICIOUS_AIRDROP_TOKEN_TEXT");
         }
@@ -703,6 +706,9 @@ public class ScamFilter {
         if (txValue != null && txValue.signum() > 0) {
             return false;
         }
+        if (hasWalletInternalTransferEffect(raw, wallet)) {
+            return false;
+        }
 
         List<Document> tokenTransfers = collectTokenTransfers(raw);
         if (tokenTransfers.isEmpty()) {
@@ -723,11 +729,42 @@ public class ScamFilter {
             hasInboundToWallet = true;
             String symbol = rawString(transfer.get("tokenSymbol"));
             String name = rawString(transfer.get("tokenName"));
-            if (isPromotionalSpamText(symbol) || isPromotionalSpamText(name)) {
-                hasPromotionalText = true;
+            if (!isPromotionalSpamText(symbol) && !isPromotionalSpamText(name)) {
+                return false;
             }
+            hasPromotionalText = true;
         }
         return hasInboundToWallet && hasPromotionalText;
+    }
+
+    private static boolean hasWalletInternalTransferEffect(Document raw, String wallet) {
+        if (raw == null || wallet == null) {
+            return false;
+        }
+        Document explorer = toDocument(raw.get("explorer"));
+        if (explorer == null) {
+            return false;
+        }
+        Object internalTransfersObj = explorer.get("internalTransfers");
+        if (!(internalTransfersObj instanceof List<?> internalTransfers) || internalTransfers.isEmpty()) {
+            return false;
+        }
+        for (Object transferObj : internalTransfers) {
+            Document transfer = toDocument(transferObj);
+            if (transfer == null) {
+                continue;
+            }
+            String from = normalize(rawString(transfer.get("from")));
+            String to = normalize(rawString(transfer.get("to")));
+            BigInteger value = parseUnsignedNumeric(rawString(transfer.get("value")));
+            if (value == null || value.signum() <= 0) {
+                continue;
+            }
+            if ((wallet.equals(from) && !wallet.equals(to)) || (wallet.equals(to) && !wallet.equals(from))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static boolean isLikelyWalletInitiatedZeroValueSpoofing(

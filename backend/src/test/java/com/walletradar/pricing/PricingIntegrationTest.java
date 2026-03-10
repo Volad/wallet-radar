@@ -1,6 +1,8 @@
 package com.walletradar.pricing;
 
 import com.walletradar.domain.common.NetworkId;
+import com.walletradar.pricing.config.PricingProperties;
+import com.walletradar.pricing.resolver.ConfigOverrideContractResolver;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -21,6 +23,7 @@ import static org.assertj.core.api.Assertions.assertThat;
         com.walletradar.pricing.HistoricalPriceResolverChain.class,
         com.walletradar.pricing.SpotPriceResolver.class,
         com.walletradar.pricing.resolver.StablecoinResolver.class,
+        com.walletradar.pricing.resolver.NativeAssetResolver.class,
         com.walletradar.pricing.resolver.SwapDerivedResolver.class,
         com.walletradar.pricing.resolver.CounterpartPriceResolver.class,
         com.walletradar.pricing.resolver.CoinGeckoHistoricalResolver.class,
@@ -37,6 +40,12 @@ class PricingIntegrationTest {
 
     @Autowired
     HistoricalPriceResolver historicalPriceResolver;
+
+    @Autowired
+    PricingProperties pricingProperties;
+
+    @Autowired
+    ConfigOverrideContractResolver configOverrideContractResolver;
 
     @Autowired(required = false)
     CacheManager cacheManager;
@@ -63,5 +72,21 @@ class PricingIntegrationTest {
             assertThat(cacheManager.getCache(com.walletradar.config.CaffeineConfig.SPOT_PRICE_CACHE)).isNotNull();
             assertThat(cacheManager.getCache(com.walletradar.config.CaffeineConfig.HISTORICAL_PRICE_CACHE)).isNotNull();
         }
+    }
+
+    @Test
+    @DisplayName("application yml residual pricing overrides are bound and resolvable")
+    void applicationYamlResidualPricingOverridesAreBoundAndResolvable() {
+        assertThat(pricingProperties.getContractToCoinGeckoId())
+                .containsEntry("0x4200000000000000000000000000000000000006", "weth")
+                .containsEntry("0x5979d7b546e38e414f7e9822514be443a4800529", "wrapped-steth")
+                .containsEntry("0x3055913c90fcc1a6ce9a358911721eeb942013a1", "pancakeswap-token");
+
+        assertThat(configOverrideContractResolver.resolve("0x4200000000000000000000000000000000000006", NetworkId.BASE))
+                .hasValue("weth");
+        assertThat(configOverrideContractResolver.resolve("0x5979d7b546e38e414f7e9822514be443a4800529", NetworkId.ARBITRUM))
+                .hasValue("wrapped-steth");
+        assertThat(configOverrideContractResolver.resolve("0x3055913c90fcc1a6ce9a358911721eeb942013a1", NetworkId.BASE))
+                .hasValue("pancakeswap-token");
     }
 }

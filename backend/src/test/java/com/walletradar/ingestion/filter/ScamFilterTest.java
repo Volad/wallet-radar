@@ -210,6 +210,20 @@ class ScamFilterTest {
         tx.setRawData(new Document("from", "0x3333333333333333333333333333333333333333")
                 .append("to", "0x4444444444444444444444444444444444444444")
                 .append("value", "0")
+                .append("logs", List.of(
+                        transferLog(
+                                "0x72fdc6006cf1bce5898f1c484cfefc66486abd8a",
+                                "0x3333333333333333333333333333333333333333",
+                                "0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f",
+                                "0x1"
+                        ),
+                        transferLog(
+                                "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
+                                "0x3333333333333333333333333333333333333333",
+                                "0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f",
+                                "0x2625a0"
+                        )
+                ))
                 .append("explorer", new Document("tokenTransfers", List.of(
                         new Document("contractAddress", "0x72fdc6006cf1bce5898f1c484cfefc66486abd8a")
                                 .append("from", "0x3333333333333333333333333333333333333333")
@@ -240,6 +254,61 @@ class ScamFilterTest {
                                 .append("tokenName", "Reward")
                                 .append("value", "1000000000000000000")
                 ))));
+
+        assertThat(filter.shouldDrop(tx)).isFalse();
+    }
+
+    @Test
+    @DisplayName("promo dust mixed with legit inbound token survives")
+    void promotionalDustMixedWithLegitInboundTokenSurvives() {
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0xpromo-plus-legit");
+        tx.setNetworkId("POLYGON");
+        tx.setWalletAddress("0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f");
+        tx.setRawData(new Document("from", "0x3333333333333333333333333333333333333333")
+                .append("to", "0x4444444444444444444444444444444444444444")
+                .append("value", "0")
+                .append("explorer", new Document("tokenTransfers", List.of(
+                        new Document("contractAddress", "0x72fdc6006cf1bce5898f1c484cfefc66486abd8a")
+                                .append("from", "0x3333333333333333333333333333333333333333")
+                                .append("to", "0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f")
+                                .append("tokenSymbol", "Swap your Voucher on wr.do/s/ether")
+                                .append("tokenName", "Voucher")
+                                .append("value", "1000000000000000000"),
+                        new Document("contractAddress", "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174")
+                                .append("from", "0x3333333333333333333333333333333333333333")
+                                .append("to", "0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f")
+                                .append("tokenSymbol", "USDC")
+                                .append("tokenName", "USD Coin")
+                                .append("value", "2500000")
+                ))));
+
+        assertThat(filter.shouldDrop(tx)).isFalse();
+    }
+
+    @Test
+    @DisplayName("promo dust with native internal value survives")
+    void promotionalDustWithNativeInternalValueSurvives() {
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0xpromo-plus-native");
+        tx.setNetworkId("POLYGON");
+        tx.setWalletAddress("0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f");
+        tx.setRawData(new Document("from", "0x3333333333333333333333333333333333333333")
+                .append("to", "0x4444444444444444444444444444444444444444")
+                .append("value", "0")
+                .append("explorer", new Document("tokenTransfers", List.of(
+                        new Document("contractAddress", "0x72fdc6006cf1bce5898f1c484cfefc66486abd8a")
+                                .append("from", "0x3333333333333333333333333333333333333333")
+                                .append("to", "0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f")
+                                .append("tokenSymbol", "Swap your Voucher on wr.do/s/ether")
+                                .append("tokenName", "Voucher")
+                                .append("value", "1000000000000000000")
+                ))
+                        .append("internalTransfers", List.of(
+                                new Document("from", "0x4444444444444444444444444444444444444444")
+                                        .append("to", "0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f")
+                                        .append("value", "100000000000000000")
+                        ))));
 
         assertThat(filter.shouldDrop(tx)).isFalse();
     }
