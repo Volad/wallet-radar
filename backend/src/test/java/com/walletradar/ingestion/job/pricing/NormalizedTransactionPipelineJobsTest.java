@@ -233,6 +233,40 @@ class NormalizedTransactionPipelineJobsTest {
     }
 
     @Test
+    @DisplayName("legit residual price rows do not loop without reason")
+    void legitResidualPriceRowsDoNotLoopWithoutReason() {
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setTxHash("0xcake-claim");
+        tx.setNetworkId(NetworkId.BASE);
+        tx.setWalletAddress("0xwallet");
+        tx.setBlockTimestamp(Instant.parse("2026-03-01T12:00:00Z"));
+        tx.setType(NormalizedTransactionType.LP_FEE_CLAIM);
+        tx.setStatus(NormalizedTransactionStatus.PENDING_PRICE);
+        tx.setPricingAttempts(24);
+        tx.setClassificationStatus(ClassificationStatus.CONFIRMED);
+
+        NormalizedTransaction.Flow cakeClaim = flow(
+                NormalizedLegRole.BUY,
+                "0x3055913c90fcc1a6ce9a358911721eeb942013a1",
+                "CAKE",
+                "13.711859000400751417"
+        );
+        tx.setFlows(List.of(cakeClaim));
+
+        when(historicalPriceResolverChain.resolve(any()))
+                .thenReturn(PriceResolutionResult.known(new BigDecimal("2.75"), PriceSource.COINGECKO));
+
+        pricingJob.priceOne(tx);
+
+        assertThat(tx.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_STAT);
+        assertThat(tx.getPricingStatus()).isEqualTo(PricingStatus.RESOLVED);
+        assertThat(tx.getFlows()).allSatisfy(flow -> {
+            assertThat(flow.getUnitPriceUsd()).isNotNull();
+            assertThat(flow.getValueUsd()).isNotNull();
+        });
+    }
+
+    @Test
     @DisplayName("stale LP_ENTRY row in PENDING_PRICE skips resolver and transitions to PENDING_STAT")
     void lpEntryReceiptSkipsPricingResolver() {
         NormalizedTransaction tx = new NormalizedTransaction();

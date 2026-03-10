@@ -40,4 +40,36 @@ class NativeAssetResolverTest {
         assertThat(captor.getValue().getAssetContract())
                 .isEqualTo("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
     }
+
+    @Test
+    @DisplayName("wrapped native aliases on L2s resolve via ethereum canonical contract")
+    void wrappedNativeAliasesResolveViaEthereumCanonicalContract() {
+        CoinGeckoHistoricalResolver coinGeckoHistoricalResolver = mock(CoinGeckoHistoricalResolver.class);
+        when(coinGeckoHistoricalResolver.resolve(any()))
+                .thenReturn(PriceResolutionResult.known(new BigDecimal("2500"), PriceSource.COINGECKO));
+
+        NativeAssetResolver resolver = new NativeAssetResolver(coinGeckoHistoricalResolver);
+
+        HistoricalPriceRequest arbitrumWeth = new HistoricalPriceRequest();
+        arbitrumWeth.setAssetContract("0x82af49447d8a07e3bd95bd0d56f35241523fbab1");
+        arbitrumWeth.setNetworkId(NetworkId.ARBITRUM);
+        arbitrumWeth.setBlockTimestamp(Instant.parse("2026-02-01T00:00:00Z"));
+
+        HistoricalPriceRequest baseWeth = new HistoricalPriceRequest();
+        baseWeth.setAssetContract("0x4200000000000000000000000000000000000006");
+        baseWeth.setNetworkId(NetworkId.BASE);
+        baseWeth.setBlockTimestamp(Instant.parse("2026-02-01T00:00:00Z"));
+
+        resolver.resolve(arbitrumWeth);
+        resolver.resolve(baseWeth);
+
+        ArgumentCaptor<HistoricalPriceRequest> captor = ArgumentCaptor.forClass(HistoricalPriceRequest.class);
+        verify(coinGeckoHistoricalResolver, org.mockito.Mockito.times(2)).resolve(captor.capture());
+        assertThat(captor.getAllValues())
+                .extracting(HistoricalPriceRequest::getAssetContract)
+                .containsExactly(
+                        "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+                        "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+                );
+    }
 }

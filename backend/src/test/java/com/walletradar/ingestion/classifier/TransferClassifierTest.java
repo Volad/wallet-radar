@@ -533,6 +533,34 @@ class TransferClassifierTest {
     }
 
     @Test
+    void classify_knownLendSelectorWithGenericInboundShape_returnsEmptyForTransferClassifier() {
+        String wallet = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String walletTopic = "0x" + "0".repeat(24) + "1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String reserveTopic = "0x" + "0".repeat(24) + "078f358208685046a11c85e8ad32895ded33a249";
+        String underlying = "0xaf88d065e77c8cc2239327c5edb3a432268e5831";
+        String debtToken = "0x1234567890abcdef1234567890abcdef12345678";
+
+        RawTransaction tx = new RawTransaction();
+        tx.setNetworkId("ARBITRUM");
+        tx.setRawData(new Document("from", wallet)
+                .append("to", "0x794a61358d6845594f94dc1db02a252b5b4814ad")
+                .append("methodId", "0xa415bcad")
+                .append("functionName", "borrow(address asset, uint256 amount, uint256 interestRateMode, uint16 referralCode, address onBehalfOf)")
+                .append("logs", List.of(
+                        new Document("address", debtToken)
+                                .append("topics", List.of(TransferClassifier.TRANSFER_TOPIC, "0x" + "0".repeat(64), walletTopic))
+                                .append("data", "0x1"),
+                        new Document("address", underlying)
+                                .append("topics", List.of(TransferClassifier.TRANSFER_TOPIC, reserveTopic, walletTopic))
+                                .append("data", "0x1")
+                )));
+
+        List<RawClassifiedEvent> result = classifier.classify(tx, wallet);
+
+        assertThat(result).isEmpty();
+    }
+
+    @Test
     void classify_lpEntryPattern_returnsEmptyForTransferClassifier() {
         String wallet = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
         String walletTopic = "0x" + "0".repeat(24) + "1a87f12ac07e9746e9b053b8d7ef1d45270d693f";

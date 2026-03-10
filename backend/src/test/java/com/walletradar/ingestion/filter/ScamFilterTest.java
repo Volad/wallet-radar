@@ -179,6 +179,72 @@ class ScamFilterTest {
     }
 
     @Test
+    @DisplayName("drops promotional visit token before normalization")
+    void promotionalVisitTokenDropsBeforeNormalization() {
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0xvisit-spam");
+        tx.setNetworkId("POLYGON");
+        tx.setWalletAddress("0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f");
+        tx.setRawData(new Document("from", "0x1111111111111111111111111111111111111111")
+                .append("to", "0x2222222222222222222222222222222222222222")
+                .append("value", "0")
+                .append("explorer", new Document("tokenTransfers", List.of(
+                        new Document("contractAddress", "0xaa84c8b6cd6c57cd364510a5b05358da63133529")
+                                .append("from", "0x1111111111111111111111111111111111111111")
+                                .append("to", "0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f")
+                                .append("tokenSymbol", "wsETH Visit www.wseth.vip to claim reward")
+                                .append("tokenName", "Wrapped Scam ETH")
+                                .append("value", "1000000000000000000")
+                ))));
+
+        assertThat(filter.shouldDrop(tx)).isTrue();
+    }
+
+    @Test
+    @DisplayName("drops voucher promo token before normalization")
+    void voucherPromoTokenDropsBeforeNormalization() {
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0xvoucher-spam");
+        tx.setNetworkId("POLYGON");
+        tx.setWalletAddress("0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f");
+        tx.setRawData(new Document("from", "0x3333333333333333333333333333333333333333")
+                .append("to", "0x4444444444444444444444444444444444444444")
+                .append("value", "0")
+                .append("explorer", new Document("tokenTransfers", List.of(
+                        new Document("contractAddress", "0x72fdc6006cf1bce5898f1c484cfefc66486abd8a")
+                                .append("from", "0x3333333333333333333333333333333333333333")
+                                .append("to", "0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f")
+                                .append("tokenSymbol", "Swap your Voucher on wr.do/s/ether")
+                                .append("tokenName", "Voucher")
+                                .append("value", "1000000000000000000")
+                ))));
+
+        assertThat(filter.shouldDrop(tx)).isTrue();
+    }
+
+    @Test
+    @DisplayName("wallet initiated claim-like tx still survives promotional pattern rule")
+    void walletInitiatedClaimLikeTxStillSurvives() {
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0xwallet-promo");
+        tx.setNetworkId("POLYGON");
+        tx.setWalletAddress("0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f");
+        tx.setRawData(new Document("from", "0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f")
+                .append("to", "0x5555555555555555555555555555555555555555")
+                .append("value", "0")
+                .append("explorer", new Document("tokenTransfers", List.of(
+                        new Document("contractAddress", "0x72fdc6006cf1bce5898f1c484cfefc66486abd8a")
+                                .append("from", "0x5555555555555555555555555555555555555555")
+                                .append("to", "0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f")
+                                .append("tokenSymbol", "Claim Your Airdrop")
+                                .append("tokenName", "Reward")
+                                .append("value", "1000000000000000000")
+                ))));
+
+        assertThat(filter.shouldDrop(tx)).isFalse();
+    }
+
+    @Test
     @DisplayName("returns true for failed swap without transfer effects")
     void failedSwapWithoutTransferEffects_returnsTrue() {
         RawTransaction tx = new RawTransaction();

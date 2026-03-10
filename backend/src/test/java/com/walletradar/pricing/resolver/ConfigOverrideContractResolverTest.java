@@ -20,7 +20,10 @@ class ConfigOverrideContractResolverTest {
         PricingProperties props = new PricingProperties();
         props.setContractToCoinGeckoId(Map.of(
                 "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2", "weth",
-                "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", "usd-coin"));
+                "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", "usd-coin",
+                "0x5979d7b546e38e414f7e9822514be443a4800529", "wrapped-steth",
+                "0x3055913c90fcc1a6ce9a358911721eeb942013a1", "pancakeswap-token",
+                "0x4200000000000000000000000000000000000006", "weth"));
         resolver = new ConfigOverrideContractResolver(props);
     }
 
@@ -52,6 +55,17 @@ class ConfigOverrideContractResolverTest {
     @DisplayName("normalizes contract to lowercase")
     void normalizesToLowercase() {
         assertThat(resolver.resolve("0xC02AAA39B223FE8D0A0E5C4F27EAD9083C756CC2", NetworkId.ETHEREUM))
+                .hasValue("weth");
+    }
+
+    @Test
+    @DisplayName("returns overrides for remaining legit residual market assets")
+    void remainingLegitResidualAssetOverridesResolve() {
+        assertThat(resolver.resolve("0x5979d7b546e38e414f7e9822514be443a4800529", NetworkId.ARBITRUM))
+                .hasValue("wrapped-steth");
+        assertThat(resolver.resolve("0x3055913c90fcc1a6ce9a358911721eeb942013a1", NetworkId.BASE))
+                .hasValue("pancakeswap-token");
+        assertThat(resolver.resolve("0x4200000000000000000000000000000000000006", NetworkId.BASE))
                 .hasValue("weth");
     }
 }

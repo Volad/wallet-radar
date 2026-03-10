@@ -278,6 +278,55 @@ class LendClassifierTest {
     }
 
     @Test
+    void classify_aaveSupplyPattern_usesExplorerSymbolFallbackWhenResolverReturnsBlank() {
+        String wallet = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String walletTopic = "0x0000000000000000000000001a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String zeroTopic = "0x0000000000000000000000000000000000000000000000000000000000000000";
+        String pool = "0x794a61358d6845594f94dc1db02a252b5b4814ad";
+        String underlying = "0x2f2a2543b76a4166549f7aab2e75bef0aefc5b0f";
+        String receipt = "0x078f358208685046a11c85e8ad32895ded33a249";
+        String receiptTopic = "0x000000000000000000000000078f358208685046a11c85e8ad32895ded33a249";
+
+        when(evmTokenDecimalsResolver.getDecimals(eq("ARBITRUM"), eq(underlying))).thenReturn(8);
+        when(evmTokenDecimalsResolver.getDecimals(eq("ARBITRUM"), eq(receipt))).thenReturn(8);
+        when(evmTokenDecimalsResolver.getSymbol(eq("ARBITRUM"), eq(underlying))).thenReturn("");
+        when(evmTokenDecimalsResolver.getSymbol(eq("ARBITRUM"), eq(receipt))).thenReturn("");
+
+        RawTransaction tx = new RawTransaction();
+        tx.setNetworkId("ARBITRUM");
+        tx.setRawData(new Document("from", wallet)
+                .append("to", pool)
+                .append("methodId", "0x617ba037")
+                .append("functionName", "supply(address asset, uint256 amount, address onBehalfOf, uint16 referralCode)")
+                .append("logs", List.of(
+                        new Document("address", underlying)
+                                .append("topics", List.of(TransferClassifier.TRANSFER_TOPIC, walletTopic, receiptTopic))
+                                .append("data", "0x000000000000000000000000000000000000000000000000000000000000291e"),
+                        new Document("address", receipt)
+                                .append("topics", List.of(TransferClassifier.TRANSFER_TOPIC, zeroTopic, walletTopic))
+                                .append("data", "0x000000000000000000000000000000000000000000000000000000000000291f")
+                ))
+                .append("explorer", new Document("tokenTransfers", List.of(
+                        new Document("contractAddress", underlying)
+                                .append("tokenSymbol", "WBTC")
+                                .append("from", wallet)
+                                .append("to", receipt),
+                        new Document("contractAddress", receipt)
+                                .append("tokenSymbol", "aArbWBTC")
+                                .append("from", "0x0000000000000000000000000000000000000000")
+                                .append("to", wallet)
+                ))));
+
+        List<RawClassifiedEvent> events = classifier.classify(tx, wallet);
+
+        assertThat(events).hasSize(2);
+        RawClassifiedEvent out = events.stream().filter(e -> e.getQuantityDelta().signum() < 0).findFirst().orElseThrow();
+        RawClassifiedEvent in = events.stream().filter(e -> e.getQuantityDelta().signum() > 0).findFirst().orElseThrow();
+        assertThat(out.getAssetSymbol()).isEqualTo("WBTC");
+        assertThat(in.getAssetSymbol()).isEqualTo("aArbWBTC");
+    }
+
+    @Test
     void classify_aaveBorrowPattern_emitsBorrowUnderlying() {
         String wallet = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
         String walletTopic = "0x0000000000000000000000001a87f12ac07e9746e9b053b8d7ef1d45270d693f";

@@ -291,9 +291,13 @@ walletradar:
       "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2": "weth"
       "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee": "ethereum"
       "0x000000000000000000000000000000000000800a": "ethereum"
+      "0x82af49447d8a07e3bd95bd0d56f35241523fbab1": "weth"
+      "0x4200000000000000000000000000000000000006": "weth"
       # ARB (Arbitrum), MORPHO (Morpho) - avoid wrong fallback to ETH price
       "0x912ce59144191c1204e64559fe8253a0e49e6548": "arbitrum"
       "0x40bd670a58238e6e230c430bbb5ce6ec0d40df48": "morpho"
+      "0x5979d7b546e38e414f7e9822514be443a4800529": "wrapped-steth"
+      "0x3055913c90fcc1a6ce9a358911721eeb942013a1": "pancakeswap-token"
       # Native token wrapped addresses for gas cost pricing (FIX-C2)
       "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270": "matic-network"
       "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c": "binancecoin"

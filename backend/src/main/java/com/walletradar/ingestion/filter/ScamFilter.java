@@ -114,6 +114,10 @@ public class ScamFilter {
             signals.add("KNOWN_INBOUND_SPAM_FINGERPRINT");
             return new ScamEvaluation(properties.getDropThreshold(), List.copyOf(signals), true);
         }
+        if (isLikelyPromotionalInboundSpamPattern(raw, wallet, txSender)) {
+            signals.add("PROMOTIONAL_INBOUND_SPAM_PATTERN");
+            return new ScamEvaluation(properties.getDropThreshold(), List.copyOf(signals), true);
+        }
         if (isLikelyOutboundZeroValueSpoofing(raw, wallet, txSender)) {
             signals.add("OUTBOUND_ZERO_VALUE_SPOOF");
             return new ScamEvaluation(properties.getDropThreshold(), List.copyOf(signals), true);
@@ -688,6 +692,44 @@ public class ScamFilter {
         return hasMatchedInbound;
     }
 
+    private boolean isLikelyPromotionalInboundSpamPattern(
+            Document raw, String wallet, String txSender
+    ) {
+        if (raw == null || wallet == null || txSender == null || wallet.equals(txSender)) {
+            return false;
+        }
+
+        BigInteger txValue = parseUnsignedNumeric(readRawOrExplorerTx(raw, "value"));
+        if (txValue != null && txValue.signum() > 0) {
+            return false;
+        }
+
+        List<Document> tokenTransfers = collectTokenTransfers(raw);
+        if (tokenTransfers.isEmpty()) {
+            return false;
+        }
+
+        boolean hasInboundToWallet = false;
+        boolean hasPromotionalText = false;
+        for (Document transfer : tokenTransfers) {
+            String from = normalize(rawString(transfer.get("from")));
+            String to = normalize(rawString(transfer.get("to")));
+            if (wallet.equals(from) && !wallet.equals(to)) {
+                return false;
+            }
+            if (!wallet.equals(to) || wallet.equals(from)) {
+                continue;
+            }
+            hasInboundToWallet = true;
+            String symbol = rawString(transfer.get("tokenSymbol"));
+            String name = rawString(transfer.get("tokenName"));
+            if (isPromotionalSpamText(symbol) || isPromotionalSpamText(name)) {
+                hasPromotionalText = true;
+            }
+        }
+        return hasInboundToWallet && hasPromotionalText;
+    }
+
     private static boolean isLikelyWalletInitiatedZeroValueSpoofing(
             Document raw, String wallet, String txSender
     ) {
@@ -764,6 +806,9 @@ public class ScamFilter {
         if (normalized == null) {
             return false;
         }
+        if (isPromotionalSpamText(normalized)) {
+            return true;
+        }
         boolean hasUrlLike = normalized.contains("http")
                 || normalized.contains("www")
                 || normalized.contains("://")
@@ -773,7 +818,12 @@ public class ScamFilter {
                 || normalized.contains(".io")
                 || normalized.contains(".us")
                 || normalized.contains(".xyz")
-                || normalized.contains(".site");
+                || normalized.contains(".site")
+                || normalized.contains(".vip")
+                || normalized.contains(".top")
+                || normalized.contains(".bot")
+                || normalized.contains(".so")
+                || normalized.contains(".do");
         if (hasUrlLike) {
             return true;
         }
@@ -783,8 +833,28 @@ public class ScamFilter {
                 || normalized.contains("airdrop")
                 || normalized.contains("reward")
                 || normalized.contains("free")
-                || normalized.contains("mint");
+                || normalized.contains("mint")
+                || normalized.contains("voucher")
+                || normalized.contains("telegram")
+                || normalized.contains("verify");
         return hasBaitWords && (normalized.contains(".") || normalized.length() >= 40);
+    }
+
+    private static boolean isPromotionalSpamText(String value) {
+        String normalized = normalize(value);
+        if (normalized == null) {
+            return false;
+        }
+        return normalized.contains("telegram @")
+                || normalized.contains("visit www")
+                || normalized.contains("claim reward")
+                || normalized.contains("claim your airdrop")
+                || normalized.contains("swap your voucher")
+                || normalized.contains("voucher on ")
+                || normalized.contains("verify:")
+                || normalized.contains(".vip")
+                || normalized.contains(".top")
+                || normalized.contains(".bot");
     }
 
     private boolean isLikelyUnsolicitedMulticallAirdrop(Document raw, String wallet, String txSender) {

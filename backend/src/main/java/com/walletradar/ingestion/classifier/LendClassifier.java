@@ -142,6 +142,7 @@ public class LendClassifier implements TxClassifier {
             String walletAddress,
             List<Document> logs
     ) {
+        Map<String, String> explorerSymbols = explorerSymbolByContract(tx);
         Map<String, BigDecimal> mintInboundByContract = collectMintInboundByContract(tx, walletAddress, logs);
         Map<String, Integer> mintLogIndexByContract = collectMintInboundLogIndexByContract(tx, walletAddress, logs);
         String receiptContract = pickSingleContract(mintInboundByContract);
@@ -176,7 +177,7 @@ public class LendClassifier implements TxClassifier {
         in.setEventType(EconomicEventType.LEND_DEPOSIT);
         in.setWalletAddress(walletAddress);
         in.setAssetContract(receiptContract);
-        in.setAssetSymbol(evmTokenDecimalsResolver.getSymbol(tx.networkId(), receiptContract));
+        in.setAssetSymbol(resolveSymbol(tx, receiptContract, explorerSymbols));
         in.setQuantityDelta(receiptIn);
         in.setProtocolName(protocol);
         in.setLogIndex(mintLogIndexByContract.get(receiptContract));
@@ -212,6 +213,7 @@ public class LendClassifier implements TxClassifier {
             String walletAddress,
             List<Document> logs
     ) {
+        Map<String, String> explorerSymbols = explorerSymbolByContract(tx);
         Map<String, BigDecimal> burnOutByContract = collectBurnOutByContract(tx, walletAddress, logs);
         Map<String, Integer> burnLogIndexByContract = collectBurnLogIndexByContract(tx, walletAddress, logs);
         String receiptContract = pickSingleContract(burnOutByContract);
@@ -234,7 +236,7 @@ public class LendClassifier implements TxClassifier {
         out.setEventType(EconomicEventType.LEND_WITHDRAWAL);
         out.setWalletAddress(walletAddress);
         out.setAssetContract(receiptContract);
-        out.setAssetSymbol(evmTokenDecimalsResolver.getSymbol(tx.networkId(), receiptContract));
+        out.setAssetSymbol(resolveSymbol(tx, receiptContract, explorerSymbols));
         out.setQuantityDelta(receiptOut);
         out.setProtocolName(protocol);
         out.setLogIndex(burnLogIndexByContract.get(receiptContract));
@@ -331,6 +333,7 @@ public class LendClassifier implements TxClassifier {
             String walletAddress,
             List<Document> logs
     ) {
+        Map<String, String> explorerSymbols = explorerSymbolByContract(tx);
         IngestionNetworkProperties.NetworkIngestionEntry.OneLegLendRule rule = findOneLegLendRule(tx);
         if (rule == null) {
             return List.of();
@@ -349,7 +352,7 @@ public class LendClassifier implements TxClassifier {
         event.setEventType(EconomicEventType.LEND_DEPOSIT);
         event.setWalletAddress(walletAddress);
         event.setAssetContract(underlyingContract);
-        event.setAssetSymbol(evmTokenDecimalsResolver.getSymbol(tx.networkId(), underlyingContract));
+        event.setAssetSymbol(resolveSymbol(tx, underlyingContract, explorerSymbols));
         event.setQuantityDelta(outflow);
         event.setProtocolName(protocolRegistry.getProtocolName(rule.getContract()).orElse(null));
         event.setLogIndex(outflowLogIndexByContract.get(underlyingContract));
@@ -361,6 +364,7 @@ public class LendClassifier implements TxClassifier {
             String walletAddress,
             List<Document> logs
     ) {
+        Map<String, String> explorerSymbols = explorerSymbolByContract(tx);
         Map<String, BigDecimal> outflowByContract = collectOutboundByContractForOneLeg(tx, walletAddress, logs);
         Map<String, Integer> outflowLogIndexByContract = collectOutboundLogIndexByContractForOneLeg(tx, walletAddress, logs);
         Map<String, BigDecimal> inboundByContract = collectInboundByContractForOneLeg(tx, walletAddress, logs);
@@ -376,7 +380,7 @@ public class LendClassifier implements TxClassifier {
                 event.setEventType(EconomicEventType.LEND_WITHDRAWAL);
                 event.setWalletAddress(walletAddress);
                 event.setAssetContract(nonMintInboundContract);
-                event.setAssetSymbol(evmTokenDecimalsResolver.getSymbol(tx.networkId(), nonMintInboundContract));
+                event.setAssetSymbol(resolveSymbol(tx, nonMintInboundContract, explorerSymbols));
                 event.setQuantityDelta(nonMintInbound);
                 event.setProtocolName(protocolRegistry.getProtocolName(tx.readRawOrExplorerAddress("to")).orElse(null));
                 event.setLogIndex(nonMintInboundLogIndexByContract.get(nonMintInboundContract));
@@ -419,7 +423,7 @@ public class LendClassifier implements TxClassifier {
         event.setEventType(EconomicEventType.LEND_WITHDRAWAL);
         event.setWalletAddress(walletAddress);
         event.setAssetContract(contract);
-        event.setAssetSymbol(evmTokenDecimalsResolver.getSymbol(tx.networkId(), contract));
+        event.setAssetSymbol(resolveSymbol(tx, contract, explorerSymbols));
         event.setQuantityDelta(net);
         event.setProtocolName(protocolRegistry.getProtocolName(tx.readRawOrExplorerAddress("to")).orElse(null));
         if (net.signum() > 0) {
@@ -433,6 +437,7 @@ public class LendClassifier implements TxClassifier {
     private List<RawClassifiedEvent> classifyVaultDeposit(
             RawTransactionNormalizationView tx, String walletAddress, List<Document> logs
     ) {
+        Map<String, String> explorerSymbols = explorerSymbolByContract(tx);
         String walletTopic = tx.padAddressForTopic(walletAddress);
         Map<String, BigDecimal> outflowByContract = new LinkedHashMap<>();
         Map<String, Integer> outflowLogIndexByContract = new LinkedHashMap<>();
@@ -491,7 +496,7 @@ public class LendClassifier implements TxClassifier {
         out.setEventType(EconomicEventType.LEND_DEPOSIT);
         out.setWalletAddress(walletAddress);
         out.setAssetContract(underlyingContract);
-        out.setAssetSymbol(evmTokenDecimalsResolver.getSymbol(tx.networkId(), underlyingContract));
+        out.setAssetSymbol(resolveSymbol(tx, underlyingContract, explorerSymbols));
         out.setQuantityDelta(underlyingOut);
         out.setProtocolName(protocolRegistry.getProtocolName(receiptContract).orElse(null));
         out.setLogIndex(outflowLogIndexByContract.get(underlyingContract));
@@ -500,7 +505,7 @@ public class LendClassifier implements TxClassifier {
         in.setEventType(EconomicEventType.LEND_DEPOSIT);
         in.setWalletAddress(walletAddress);
         in.setAssetContract(receiptContract);
-        in.setAssetSymbol(evmTokenDecimalsResolver.getSymbol(tx.networkId(), receiptContract));
+        in.setAssetSymbol(resolveSymbol(tx, receiptContract, explorerSymbols));
         in.setQuantityDelta(receiptIn);
         in.setProtocolName(protocolRegistry.getProtocolName(receiptContract).orElse(null));
         in.setLogIndex(mintInboundLogIndexByContract.get(receiptContract));
@@ -511,6 +516,7 @@ public class LendClassifier implements TxClassifier {
     private List<RawClassifiedEvent> classifyBorrow(
             RawTransactionNormalizationView tx, String walletAddress, List<Document> logs
     ) {
+        Map<String, String> explorerSymbols = explorerSymbolByContract(tx);
         String walletTopic = tx.padAddressForTopic(walletAddress);
         Map<String, BigDecimal> inboundByContract = new LinkedHashMap<>();
         Map<String, Integer> inboundLogIndexByContract = new LinkedHashMap<>();
@@ -560,7 +566,7 @@ public class LendClassifier implements TxClassifier {
         event.setEventType(EconomicEventType.BORROW);
         event.setWalletAddress(walletAddress);
         event.setAssetContract(underlyingContract);
-        event.setAssetSymbol(evmTokenDecimalsResolver.getSymbol(tx.networkId(), underlyingContract));
+        event.setAssetSymbol(resolveSymbol(tx, underlyingContract, explorerSymbols));
         event.setQuantityDelta(quantity);
         event.setProtocolName(protocolRegistry.getProtocolName(tx.readRawOrExplorerAddress("to")).orElse(null));
         event.setLogIndex(inboundLogIndexByContract.get(underlyingContract));
@@ -570,6 +576,7 @@ public class LendClassifier implements TxClassifier {
     private List<RawClassifiedEvent> classifyRepay(
             RawTransactionNormalizationView tx, String walletAddress, List<Document> logs
     ) {
+        Map<String, String> explorerSymbols = explorerSymbolByContract(tx);
         String walletTopic = tx.padAddressForTopic(walletAddress);
         Map<String, BigDecimal> outflowByContract = new LinkedHashMap<>();
         Map<String, Integer> outflowLogIndexByContract = new LinkedHashMap<>();
@@ -622,7 +629,7 @@ public class LendClassifier implements TxClassifier {
         event.setEventType(EconomicEventType.REPAY);
         event.setWalletAddress(walletAddress);
         event.setAssetContract(underlyingContract);
-        event.setAssetSymbol(evmTokenDecimalsResolver.getSymbol(tx.networkId(), underlyingContract));
+        event.setAssetSymbol(resolveSymbol(tx, underlyingContract, explorerSymbols));
         event.setQuantityDelta(quantity);
         event.setProtocolName(protocolRegistry.getProtocolName(tx.readRawOrExplorerAddress("to")).orElse(null));
         event.setLogIndex(outflowLogIndexByContract.get(underlyingContract));
@@ -632,6 +639,7 @@ public class LendClassifier implements TxClassifier {
     private List<RawClassifiedEvent> classifyVaultWithdrawal(
             RawTransactionNormalizationView tx, String walletAddress, List<Document> logs
     ) {
+        Map<String, String> explorerSymbols = explorerSymbolByContract(tx);
         String walletTopic = tx.padAddressForTopic(walletAddress);
         Map<String, BigDecimal> burnOutByContract = new LinkedHashMap<>();
         Map<String, Integer> burnOutLogIndexByContract = new LinkedHashMap<>();
@@ -687,7 +695,7 @@ public class LendClassifier implements TxClassifier {
         out.setEventType(EconomicEventType.LEND_WITHDRAWAL);
         out.setWalletAddress(walletAddress);
         out.setAssetContract(receiptContract);
-        out.setAssetSymbol(evmTokenDecimalsResolver.getSymbol(tx.networkId(), receiptContract));
+        out.setAssetSymbol(resolveSymbol(tx, receiptContract, explorerSymbols));
         out.setQuantityDelta(receiptOut);
         out.setProtocolName(protocolRegistry.getProtocolName(receiptContract).orElse(null));
         out.setLogIndex(burnOutLogIndexByContract.get(receiptContract));
@@ -696,7 +704,7 @@ public class LendClassifier implements TxClassifier {
         in.setEventType(EconomicEventType.LEND_WITHDRAWAL);
         in.setWalletAddress(walletAddress);
         in.setAssetContract(underlyingContract);
-        in.setAssetSymbol(evmTokenDecimalsResolver.getSymbol(tx.networkId(), underlyingContract));
+        in.setAssetSymbol(resolveSymbol(tx, underlyingContract, explorerSymbols));
         in.setQuantityDelta(underlyingIn);
         in.setProtocolName(protocolRegistry.getProtocolName(receiptContract).orElse(null));
         in.setLogIndex(underlyingInboundLogIndexByContract.get(underlyingContract));
@@ -996,6 +1004,37 @@ public class LendClassifier implements TxClassifier {
             return true;
         }
         return findOneLegLendRule(tx) != null;
+    }
+
+    private Map<String, String> explorerSymbolByContract(RawTransactionNormalizationView tx) {
+        Map<String, String> out = new LinkedHashMap<>();
+        if (tx == null) {
+            return out;
+        }
+        for (Document transfer : tx.explorerTokenTransfers()) {
+            String contract = tx.tokenTransferContract(transfer);
+            String symbol = tx.tokenTransferSymbol(transfer);
+            if (contract == null || symbol == null || symbol.isBlank()) {
+                continue;
+            }
+            out.putIfAbsent(contract.toLowerCase(Locale.ROOT), symbol);
+        }
+        return out;
+    }
+
+    private String resolveSymbol(
+            RawTransactionNormalizationView tx,
+            String tokenAddress,
+            Map<String, String> explorerSymbols
+    ) {
+        String symbol = evmTokenDecimalsResolver.getSymbol(tx.networkId(), tokenAddress);
+        if (symbol != null && !symbol.isBlank()) {
+            return symbol;
+        }
+        if (tokenAddress == null || explorerSymbols == null || explorerSymbols.isEmpty()) {
+            return "";
+        }
+        return explorerSymbols.getOrDefault(tokenAddress.toLowerCase(Locale.ROOT), "");
     }
 
     private static String selectBorrowUnderlyingContract(Set<String> mintContracts, Set<String> inboundContracts) {
