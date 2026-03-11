@@ -16,9 +16,9 @@ public class CurrentBalancePollJob {
 
     private final BalanceRefreshService balanceRefreshService;
 
-    @Scheduled(
-            fixedRateString = "${walletradar.ingestion.balance.poll-interval-ms:600000}",
-            initialDelayString = "${walletradar.ingestion.balance.poll-interval-ms:600000}")
+//    @Scheduled(
+//            fixedRateString = "${walletradar.ingestion.balance.poll-interval-ms:600000}",
+//            initialDelayString = "${walletradar.ingestion.balance.poll-interval-ms:600000}")
     public void runScheduled() {
         long startedAt = System.currentTimeMillis();
         log.info("CurrentBalancePollJob started");
