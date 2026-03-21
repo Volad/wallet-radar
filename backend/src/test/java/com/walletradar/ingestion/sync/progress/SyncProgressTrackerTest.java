@@ -54,7 +54,7 @@ class SyncProgressTrackerTest {
     }
 
     @Test
-    @DisplayName("setComplete resets retryCount and nextRetryAfter; backfillComplete=rawFetchComplete (ADR-021)")
+    @DisplayName("setComplete resets retryCount and nextRetryAfter; backfillComplete follows rawFetchComplete")
     void setComplete_resetsRetryState() {
         SyncStatus status = new SyncStatus();
         status.setId("s1");
@@ -62,7 +62,7 @@ class SyncProgressTrackerTest {
         status.setNetworkId("ETHEREUM");
         status.setRetryCount(3);
         status.setNextRetryAfter(Instant.now().plusSeconds(600));
-        status.setRawFetchComplete(true); // ADR-021: setComplete is called after setRawFetchComplete
+        status.setRawFetchComplete(true);
         when(syncStatusRepository.findByWalletAddressAndNetworkId("0xABC", "ETHEREUM"))
                 .thenReturn(Optional.of(status));
 

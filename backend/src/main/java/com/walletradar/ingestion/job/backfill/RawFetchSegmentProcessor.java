@@ -17,8 +17,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Phase 1 (ADR-026): Fetch from chain source → upsert to raw_transactions.
- * Idempotent on (txHash, networkId, walletAddress). Adapter sets walletAddress, normalizationStatus, createdAt.
+ * Fetches raw transactions from chain sources and upserts them into raw_transactions.
+ * Idempotent on (txHash, networkId, walletAddress).
  */
 @Component
 @Slf4j

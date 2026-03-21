@@ -3,7 +3,7 @@ package com.walletradar.ingestion.adapter.evm.explorer.model;
 import org.bson.Document;
 
 /**
- * Explorer internal transfer in normalized common form.
+ * Explorer internal transfer payload wrapper.
  */
 public record ExplorerInternalTransfer(Document data) implements ExplorerPayload {
 
@@ -27,4 +27,3 @@ public record ExplorerInternalTransfer(Document data) implements ExplorerPayload
         return getString("timeStamp");
     }
 }
-

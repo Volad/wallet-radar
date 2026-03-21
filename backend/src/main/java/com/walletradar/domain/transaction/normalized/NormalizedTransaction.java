@@ -6,7 +6,6 @@ import com.walletradar.domain.common.PriceSource;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
-import lombok.AccessLevel;
 import lombok.Setter;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.index.CompoundIndex;
@@ -20,13 +19,32 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Canonical operation-level transaction object (ADR-025).
+ * Canonical accounting document produced by normalization for on-chain and Bybit evidence.
  */
 @Document(collection = "normalized_transactions")
 @CompoundIndexes({
-    @CompoundIndex(name = "tx_network_wallet_uniq", def = "{'txHash': 1, 'networkId': 1, 'walletAddress': 1}", unique = true, sparse = true),
-    @CompoundIndex(name = "wallet_network_status_block", def = "{'walletAddress': 1, 'networkId': 1, 'status': 1, 'blockTimestamp': 1}"),
-    @CompoundIndex(name = "flows_asset_contract", def = "{'flows.assetContract': 1}")
+        @CompoundIndex(
+                name = "normalized_onchain_identity_idx",
+                def = "{'txHash': 1, 'networkId': 1, 'walletAddress': 1}",
+                unique = true,
+                sparse = true
+        ),
+        @CompoundIndex(
+                name = "normalized_source_status_block_ts_idx",
+                def = "{'source': 1, 'status': 1, 'blockTimestamp': 1}"
+        ),
+        @CompoundIndex(
+                name = "normalized_wallet_status_block_tx_idx",
+                def = "{'walletAddress': 1, 'status': 1, 'blockTimestamp': 1, 'transactionIndex': 1}"
+        ),
+        @CompoundIndex(
+                name = "normalized_source_status_clarification_idx",
+                def = "{'source': 1, 'status': 1, 'clarificationAttempts': 1, 'updatedAt': 1, 'blockTimestamp': 1, 'transactionIndex': 1}"
+        ),
+        @CompoundIndex(
+                name = "normalized_flows_asset_contract_idx",
+                def = "{'flows.assetContract': 1}"
+        )
 })
 @NoArgsConstructor
 @Getter
@@ -37,43 +55,30 @@ public class NormalizedTransaction {
     @Id
     @EqualsAndHashCode.Include
     private String id;
+
     private String txHash;
     private NetworkId networkId;
     private String walletAddress;
+    private NormalizedTransactionSource source;
     private Instant blockTimestamp;
+    private Integer transactionIndex;
     private NormalizedTransactionType type;
-    /**
-     * Optional lifecycle grouping key (currently used for LP v3/v4 position-linked transactions).
-     */
-    @Indexed(sparse = true)
-    private String groupId;
-    /**
-     * Optional lifecycle boundary markers for grouped LP position history window.
-     */
-    private List<LpLifecycleBoundaryStatus> boundaryStatuses = new ArrayList<>();
     private NormalizedTransactionStatus status;
-    /** Classification certainty independent from pricing pipeline outcomes. */
-    private ClassificationStatus classificationStatus;
-    /** Pricing resolution state independent from classification certainty. */
-    private PricingStatus pricingStatus;
-    @Setter(AccessLevel.NONE)
+    private ClassificationSource classifiedBy;
     private List<Flow> flows = new ArrayList<>();
     private List<String> missingDataReasons = new ArrayList<>();
-    /** Numeric confidence score in range [0..1]. */
-    private BigDecimal confidence;
+    private ConfidenceLevel confidence;
+    @Indexed(name = "normalized_correlation_idx", sparse = true)
+    private String correlationId;
+    private String protocolName;
+    private String protocolVersion;
     private Integer clarificationAttempts;
     private Integer pricingAttempts;
     private Integer statAttempts;
     private Instant createdAt;
     private Instant updatedAt;
     private Instant confirmedAt;
-    @Indexed(unique = true, sparse = true)
     private String clientId;
-
-    public void setFlows(List<Flow> flows) {
-        List<Flow> canonical = flows != null ? new ArrayList<>(flows) : new ArrayList<>();
-        this.flows = canonical;
-    }
 
     @NoArgsConstructor
     @Getter
@@ -82,19 +87,15 @@ public class NormalizedTransaction {
         private NormalizedLegRole role;
         private String assetContract;
         private String assetSymbol;
-        /** Positive = inbound, negative = outbound. */
         private BigDecimal quantityDelta;
         private BigDecimal unitPriceUsd;
         private BigDecimal valueUsd;
         private PriceSource priceSource;
-        private boolean isInferred;
+        private Boolean isInferred;
         private String inferenceReason;
         private ConfidenceLevel confidence;
-        /** AVCO snapshot at moment of SELL confirmation/replay (audit). */
         private BigDecimal avcoAtTimeOfSale;
-        /** Realised PnL for SELL legs. */
         private BigDecimal realisedPnlUsd;
-        /** Deterministic ordering for legs inside same block timestamp. */
         private Integer logIndex;
     }
 }

@@ -30,8 +30,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import static com.walletradar.domain.sync.SyncStatus.SyncStatusValue;
 
 /**
- * Orchestrator: queue management, worker loops, event listeners, scheduled retry, reclassify trigger.
- * Delegates per-network backfill to {@link BackfillNetworkExecutor} (ADR-014, ADR-017).
+ * Orchestrates wallet backfill queueing, worker loops, startup resume, and retry handling.
  */
 @Component
 @Slf4j
@@ -139,7 +138,6 @@ public class BackfillJobRunner {
                             item.walletAddress(), item.networkId(), adapter, heightResolver, timestampResolver);
                 } finally {
                     inFlightItems.remove(itemKey(item.walletAddress(), item.networkId()));
-                    triggerReclassifyIfAllDone();
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -149,44 +147,8 @@ public class BackfillJobRunner {
         }
     }
 
-    private void triggerReclassifyIfAllDone() {
-        if (!backfillQueue.isEmpty() || !inFlightItems.isEmpty()) return;
-        boolean hasActiveWork = !syncStatusRepository
-                .findByStatusIn(Set.of(SyncStatusValue.PENDING, SyncStatusValue.RUNNING))
-                .isEmpty();
-        if (!hasActiveWork) {
-            backfillCoordinatorExecutor.execute(this::runReclassifyAndRecalc);
-        }
-    }
-
-    private void runReclassifyAndRecalc() {
-        long startedAt = System.currentTimeMillis();
-        log.info("BackfillReclassifyJob started");
-        log.info("BackfillReclassifyJob finished: skipped=true, reason=raw-transaction-level-classification, durationMs={}",
-                System.currentTimeMillis() - startedAt);
-    }
-
     public boolean isIdle() {
         return backfillQueue.isEmpty() && inFlightItems.isEmpty();
-    }
-
-    @Scheduled(fixedDelayString = "${walletradar.ingestion.backfill.reclassify-schedule-interval-ms:300000}")
-    public void scheduledReclassifyWhenIdle() {
-        long startedAt = System.currentTimeMillis();
-        log.info("BackfillScheduledReclassifyJob started");
-        try {
-            if (!isIdle()) {
-                log.info("BackfillScheduledReclassifyJob finished: skipped=true, reason=not_idle, durationMs={}",
-                        System.currentTimeMillis() - startedAt);
-                return;
-            }
-            backfillCoordinatorExecutor.execute(this::runReclassifyAndRecalc);
-            log.info("BackfillScheduledReclassifyJob finished: enqueued=true, durationMs={}",
-                    System.currentTimeMillis() - startedAt);
-        } catch (Exception e) {
-            log.error("BackfillScheduledReclassifyJob failed: durationMs={}", System.currentTimeMillis() - startedAt, e);
-            throw e;
-        }
     }
 
     @Scheduled(fixedDelayString = "${walletradar.ingestion.backfill.retry-scheduler-interval-ms:120000}")

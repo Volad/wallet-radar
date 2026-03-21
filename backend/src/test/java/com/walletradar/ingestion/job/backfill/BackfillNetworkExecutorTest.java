@@ -3,7 +3,6 @@ package com.walletradar.ingestion.job.backfill;
 import com.walletradar.domain.sync.BackfillSegment;
 import com.walletradar.domain.sync.BackfillSegmentRepository;
 import com.walletradar.domain.common.NetworkId;
-import com.walletradar.domain.event.RawFetchCompleteEvent;
 import com.walletradar.domain.sync.SyncStatus;
 import com.walletradar.domain.sync.SyncStatusRepository;
 import com.walletradar.ingestion.adapter.BlockHeightResolver;
@@ -22,7 +21,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
-import org.springframework.context.ApplicationEventPublisher;
 
 import java.time.Instant;
 import java.util.Collection;
@@ -59,7 +57,6 @@ class BackfillNetworkExecutorTest {
     @Mock private BackfillProperties backfillProperties;
     @Mock private IngestionNetworkProperties ingestionNetworkProperties;
     @Mock private SyncProgressTracker syncProgressTracker;
-    @Mock private ApplicationEventPublisher applicationEventPublisher;
     @Mock private SyncStatusRepository syncStatusRepository;
     @Mock private BackfillSegmentRepository backfillSegmentRepository;
     @Mock private NetworkAdapter networkAdapter;
@@ -74,7 +71,6 @@ class BackfillNetworkExecutorTest {
                 backfillProperties,
                 ingestionNetworkProperties,
                 syncProgressTracker,
-                applicationEventPublisher,
                 syncStatusRepository,
                 backfillSegmentRepository
         );
@@ -127,7 +123,6 @@ class BackfillNetworkExecutorTest {
                 anyLong(), anyLong(), any(BackfillProgressCallback.class));
         verify(syncProgressTracker).setRawFetchComplete(WALLET, NETWORK, 100L);
         verify(syncProgressTracker).setComplete(WALLET, NETWORK);
-        verify(applicationEventPublisher).publishEvent(any(RawFetchCompleteEvent.class));
     }
 
     @Test
@@ -191,7 +186,6 @@ class BackfillNetworkExecutorTest {
         assertThat(all).anyMatch(s -> s.getStatus() == BackfillSegment.SegmentStatus.FAILED);
 
         verify(syncProgressTracker).setFailed(eq(WALLET), eq(NETWORK), contains("segments failed"));
-        verify(applicationEventPublisher, never()).publishEvent(any(RawFetchCompleteEvent.class));
     }
 
     @Test

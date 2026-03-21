@@ -8,11 +8,11 @@ spring:
     mongodb:
       uri: ${MONGODB_URI:mongodb://localhost:27017/walletradar}
 
-# Unified per-network ingestion config (ADR-012). Batch size semantics: ADR-011.
+# Per-network ingestion config for raw backfill adapters.
 walletradar:
   ingestion:
-    # Backfill window (T-009): blocks from current block. Default calibrated from live chain data
-    # to cover approximately 2 years from 2024-03-08 with ~5% safety margin.
+    # Backfill window counted back from the current head.
+    # Defaults are calibrated from live chain data with a small safety margin.
     backfill:
       window-blocks: 5500000
       segments:
@@ -22,7 +22,7 @@ walletradar:
           parallel-segment-workers: 2
         by-rpc:
           segment-stale-after-ms: 120000
-          parallel-segments: 424
+          parallel-segments: 6
           parallel-segment-workers: 6
       worker-threads: 4
       progress-update-interval-ms: 2000
@@ -30,12 +30,12 @@ walletradar:
       retry-base-delay-minutes: 2
       retry-max-delay-minutes: 60
       retry-scheduler-interval-ms: 120000
-      reclassify-schedule-interval-ms: 300000
     evm-rpc:
       max-requests-per-second: 1000
       endpoint-cooldown-ms: 3000
       transient-error-cooldown-ms: 15000
       batch-unsupported-cooldown-ms: 300000
+      max-response-bytes: 16777216
       local-limiter-log-threshold-ms: 1000
       local-limiter-timeout-ms: 2000
     explorer:
@@ -133,11 +133,15 @@ walletradar:
       BSC:
         syncMethod: RPC
         chain-id: "56"
+        provider:
+          enabled: true
+          base-url: https://rpc.ankr.com/multichain/${ANKR_API_KEY:}
+          page-size: 100
         urls:
 #          - https://lb.drpc.live/bsc/${DRPC_API_KEY:}
           - https://rpc.ankr.com/bsc/${ANKR_API_KEY:}
-        batch-block-size: 500
-        window-blocks: 52000000    # measured ~2y span as of 2026-03-09, rounded +5%
+        batch-block-size: 250000
+        window-blocks: 31500000    # tuned from earliest verified wallet tx at block 56,750,955 with ~0.53M safety from last known head
         avg-block-time-seconds: 0.5
       AVALANCHE:
         syncMethod: ETHERSCAN
@@ -184,10 +188,6 @@ walletradar:
       UNICHAIN:
         syncMethod: ETHERSCAN
         chain-id: "130"
-        one-leg-lend-rules:
-          - contract: "0x2c7118c4c88b9841fcf839074c26ae8f035f2921"
-            selectors:
-              - "0xf2b9fdb8"
         explorer:
           etherscan:
             base-url: https://api.etherscan.io
@@ -198,11 +198,33 @@ walletradar:
         batch-block-size: 1000
         window-blocks: 45000000    # full current chain age +5% safety; chain is younger than 2y
         avg-block-time-seconds: 2.0
+      KATANA:
+        syncMethod: ETHERSCAN
+        chain-id: "747474"
+        explorer:
+          etherscan:
+            base-url: https://api.etherscan.io
+            api-key: ${KATANA_ETHERSCAN_API_KEY:}
+        urls:
+          - https://rpc.katana.network/
+        batch-block-size: 500
+        window-blocks: 28500000    # full current chain age +5% safety as of 2026-03-18; chain is younger than 2y
+        avg-block-time-seconds: 1.0
+      PLASMA:
+        syncMethod: ETHERSCAN
+        chain-id: "9745"
+        explorer:
+          etherscan:
+            base-url: https://api.etherscan.io
+            api-key: ${PLASMA_ETHERSCAN_API_KEY:}
+        urls:
+          - https://rpc.plasma.to
+        batch-block-size: 1000
+        window-blocks: 17800000    # full current chain age +5% safety as of 2026-03-18; chain is younger than 2y
+        avg-block-time-seconds: 1.0
       ZKSYNC:
         syncMethod: BLOCKSCOUT
         chain-id: "324"
-        synthetic-native-contracts:
-          - "0x000000000000000000000000000000000000800a"
         explorer:
           blockscout:
             base-url: https://zksync.blockscout.com
@@ -221,90 +243,22 @@ walletradar:
       # Max signatures per getSignaturesForAddress call (1-1000). Rate/batch limit.
       signatures-limit: 1000
     # RPC retry: exponential backoff ± jitter. Defaults: base-delay-ms=1000, jitter-factor=0.2, max-attempts=5
+  normalization:
+    on-chain:
+      enabled: false
+      batch-size: 250
+      schedule-interval-ms: 90000
+      retry-delay-seconds: 60
+    clarification:
+      enabled: false
+      batch-size: 100
+      schedule-interval-ms: 120000
+      retry-delay-seconds: 120
+      max-attempts: 3
     retry:
       base-delay-ms: 2000
       # jitter-factor: 0.2
       max-attempts: 7
-    # Classifier job (ADR-021): batch size and schedule for PENDING raw processing.
-    classifier:
-      batch-size: 1000
-      schedule-interval-ms: 90000
-      receipt-enrichment-threshold: 0.85
-      needs-review-threshold: 0.60
-      receipt-enrichment-max-attempts: 3
-      receipt-enrichment-base-delay-ms: 1000
-      receipt-enrichment-jitter-factor: 0.2
-    # Clarification stage for normalized transactions (PENDING_CLARIFICATION).
-    clarification:
-      schedule-interval-ms: 120000
-      max-retries: 10
-    # Pricing stage for normalized transactions (PENDING_PRICE).
-    normalized-pricing:
-      schedule-interval-ms: 120000
-      max-retries: 1000
-    # Final consistency stage for normalized transactions (PENDING_STAT).
-    normalized-stat:
-      schedule-interval-ms: 120000
-    # Periodic on-chain balance refresh for all known wallet×network pairs.
-    balance:
-      poll-interval-ms: 600000
-    # Protocol display name by contract address (EVM) or program id (Solana). Keys lowercase.
-    protocol-registry:
-      names:  # address (EVM) or program id (Solana) -> display name; lookup is case-insensitive
-        "0x7a250d5630b4cf539739df2c5dacb4c659f2488d": "Uniswap V2"
-        "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45": "Uniswap V3"
-        "0xe592427a0aece92de3edee1f18e0157c05861564": "Uniswap V3"
-        "0xc36442b4a4522e871399cd717abdd847ab11fe88": "Uniswap V3"
-        "0x943e6e07a7e8e791dafc44083e54041d743c46e9": "Uniswap V3"
-        "0x4529a01c7a0410167c5740c487a8de60232617bf": "Uniswap V4"
-        "0x1f98400000000000000000000000000000000004": "Uniswap V4"
-        "0x55f4c8aba71a1e923edc303eb4feff14608cc226": "Pancake Infinity"
-        "0x46a15b0b27311cedf172ab29e4f4766fbe7f4364": "PancakeSwap V3"
-        "0xa815e2ed7f7d5b0c49fda367f249232a1b9d2883": "PancakeSwap V3"
-        "0xc6a2db661d5a5690172d8eb0a7dea2d3008665a3": "PancakeSwap V3"
-        "0x827922686190790b37229fd06084350e74485b72": "Aerodrome"
-        "0x416b433906b1b72fa758e166e239c43d68dc6f29": "Velodrome Slipstream"
-        "0x991d5546c4b442b4c5fdc4c8b8b8d131deb24702": "Slipstream"
-        "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2": "Aave V3"
-  # Pricing: historical and spot resolvers (CoinGecko free API). T-019, T-020, T-012.
-  pricing:
-    coingecko-base-url: https://api.coingecko.com/api/v3
-    coingecko-api-key: ${COINGECKO_API_KEY:}
-    coingecko-api-key-header: ${COINGECKO_API_KEY_HEADER:x-cg-demo-api-key}
-    coingecko-historical-requests-per-minute: 45
-    connect-timeout-seconds: 10
-    read-timeout-seconds: 15
-    # Dynamic contract-to-CoinGecko-ID mapping (ADR-022). Config overrides take precedence.
-    contract-mapping:
-      enabled: true
-      coins-list-cache-ttl-hours: 24
-      coins-list-max-buffer-bytes: 8388608
-      preload-bundled-index: true
-      bundled-index-resource-path: classpath:/pricing/coingecko-platform-contract-index.json
-      onchain-fallback-enabled: false   # MVP: skip onchain API; use coins/list + overrides only
-    historical-fallback:
-      enabled: true
-      max-demo-lookback-days: 365
-      resource-path: classpath:/pricing/missing-price-requests-older-300d-priced.json
-    # Token contract address (lowercase) -> CoinGecko coin id (config override; network-agnostic)
-    contract-to-coin-gecko-id:
-      "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2": "weth"
-      "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee": "ethereum"
-      "0x000000000000000000000000000000000000800a": "ethereum"
-      "0x82af49447d8a07e3bd95bd0d56f35241523fbab1": "weth"
-      "0x4200000000000000000000000000000000000006": "weth"
-      # ARB (Arbitrum), MORPHO (Morpho) - avoid wrong fallback to ETH price
-      "0x912ce59144191c1204e64559fe8253a0e49e6548": "arbitrum"
-      "0x40bd670a58238e6e230c430bbb5ce6ec0d40df48": "morpho"
-      "0x5979d7b546e38e414f7e9822514be443a4800529": "wrapped-steth"
-      "0x3055913c90fcc1a6ce9a358911721eeb942013a1": "pancakeswap-token"
-      # Native token wrapped addresses for gas cost pricing (FIX-C2)
-      "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270": "matic-network"
-      "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c": "binancecoin"
-      "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7": "avalanche-2"
-      "0x78c1b0c915c4faa5fffa6cabf0219da63d7f4cb8": "mantle"
-      "So11111111111111111111111111111111111111112": "solana"
-  # Phishing/scam filter: skip ingestion of txs involving blocklisted addresses (contracts, EOAs).
   scam-filter:
     enabled: true
     drop-threshold: 100
@@ -430,9 +384,6 @@ walletradar:
       - network-id: ARBITRUM
         token-contract: 0x29103b9e35b3f5f65708804dcc5f945fae992416
         method-id: 0xd43a632f
-    # Add known scam/drainer/phishing addresses (EVM: 0x..., case-insensitive). Example:
-    # blocklist:
-    #   - "0x..."
   # API CORS policy for local SPA development and browser preflight (OPTIONS).
   api:
     cors:

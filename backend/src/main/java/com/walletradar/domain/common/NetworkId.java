@@ -14,6 +14,8 @@ public enum NetworkId {
     MANTLE,
     LINEA,
     UNICHAIN,
+    KATANA,
+    PLASMA,
     ZKSYNC,
     SOLANA
 }

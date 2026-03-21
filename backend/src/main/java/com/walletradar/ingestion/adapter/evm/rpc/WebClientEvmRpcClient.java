@@ -3,6 +3,7 @@ package com.walletradar.ingestion.adapter.evm.rpc;
 import com.walletradar.ingestion.adapter.RpcException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
+import org.springframework.web.reactive.function.client.ExchangeStrategies;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 
@@ -21,8 +22,14 @@ public class WebClientEvmRpcClient implements EvmRpcClient {
 
     private final WebClient webClient;
 
-    public WebClientEvmRpcClient(WebClient.Builder builder) {
-        this.webClient = builder.build();
+    public WebClientEvmRpcClient(WebClient.Builder builder, int maxResponseBytes) {
+        int maxBytes = Math.max(256 * 1024, maxResponseBytes);
+        ExchangeStrategies strategies = ExchangeStrategies.builder()
+                .codecs(cfg -> cfg.defaultCodecs().maxInMemorySize(maxBytes))
+                .build();
+        this.webClient = builder.clone()
+                .exchangeStrategies(strategies)
+                .build();
     }
 
     @Override
@@ -42,7 +49,8 @@ public class WebClientEvmRpcClient implements EvmRpcClient {
                 .onErrorMap(WebClientResponseException.class, e -> {
                     logHttp400(endpointUrl, method, e);
                     return toRpcException(endpointUrl, method, e);
-                });
+                })
+                .doOnError(e -> logRpcFailure(endpointUrl, method, e));
     }
 
     @Override
@@ -67,6 +75,10 @@ public class WebClientEvmRpcClient implements EvmRpcClient {
                     String operation = requests.isEmpty() ? "batch" : requests.get(0).method() + "(batch)";
                     logHttp400(endpointUrl, operation, e);
                     return toRpcException(endpointUrl, operation, e);
+                })
+                .doOnError(e -> {
+                    String operation = requests.isEmpty() ? "batch" : requests.get(0).method() + "(batch)";
+                    logRpcFailure(endpointUrl, operation, e);
                 });
     }
 
@@ -108,5 +120,30 @@ public class WebClientEvmRpcClient implements EvmRpcClient {
             return new RpcException(msg, e);
         }
         return new RpcException(e.getMessage(), e);
+    }
+
+    private void logRpcFailure(String endpointUrl, String operation, Throwable error) {
+        Throwable root = rootCause(error);
+        log.warn(
+                "RPC transport failure endpointHost={} operation={} errorClass={} message={} rootCauseClass={} rootCauseMessage={}",
+                endpointHost(endpointUrl),
+                operation,
+                error == null ? "unknown" : error.getClass().getName(),
+                trimForLog(error == null ? null : error.getMessage()),
+                root == null ? "unknown" : root.getClass().getName(),
+                trimForLog(root == null ? null : root.getMessage()),
+                error
+        );
+    }
+
+    private Throwable rootCause(Throwable error) {
+        if (error == null) {
+            return null;
+        }
+        Throwable current = error;
+        while (current.getCause() != null && current.getCause() != current) {
+            current = current.getCause();
+        }
+        return current;
     }
 }

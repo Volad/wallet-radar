@@ -3,26 +3,29 @@ package com.walletradar.domain.transaction.normalized;
 import com.walletradar.domain.common.NetworkId;
 import org.springframework.data.mongodb.repository.MongoRepository;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
 /**
- * Persistence for normalized_transactions canonical pipeline (ADR-025).
+ * Persistence for canonical normalized accounting documents.
  */
-public interface NormalizedTransactionRepository extends MongoRepository<NormalizedTransaction, String>, NormalizedTransactionRepositoryCustom {
+public interface NormalizedTransactionRepository extends MongoRepository<NormalizedTransaction, String> {
 
     Optional<NormalizedTransaction> findByTxHashAndNetworkIdAndWalletAddress(
-            String txHash, NetworkId networkId, String walletAddress);
+            String txHash,
+            NetworkId networkId,
+            String walletAddress
+    );
 
     Optional<NormalizedTransaction> findByClientId(String clientId);
 
-    List<NormalizedTransaction> findByStatusOrderByBlockTimestampAsc(NormalizedTransactionStatus status);
+    List<NormalizedTransaction> findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+            NormalizedTransactionStatus status
+    );
 
-    List<NormalizedTransaction> findByWalletAddressAndStatusOrderByBlockTimestampAsc(
-            String walletAddress, NormalizedTransactionStatus status);
-
-    List<NormalizedTransaction> findByWalletAddressAndNetworkIdAndStatusOrderByBlockTimestampAsc(
-            String walletAddress, NetworkId networkId, NormalizedTransactionStatus status);
-
-    List<NormalizedTransaction> findByGroupIdOrderByBlockTimestampAsc(String groupId);
+    List<NormalizedTransaction> findAllByWalletAddressInAndStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+            Collection<String> walletAddresses,
+            NormalizedTransactionStatus status
+    );
 }

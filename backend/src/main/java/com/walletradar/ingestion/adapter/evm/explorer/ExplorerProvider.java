@@ -10,7 +10,7 @@ import com.walletradar.ingestion.adapter.evm.explorer.model.ExplorerTransaction;
 import java.util.List;
 
 /**
- * Chain explorer provider abstraction (ADR-026).
+ * Chain explorer provider abstraction.
  */
 public interface ExplorerProvider {
 

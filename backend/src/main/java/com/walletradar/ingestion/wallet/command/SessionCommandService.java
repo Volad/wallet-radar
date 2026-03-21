@@ -24,6 +24,7 @@ public class SessionCommandService {
 
     private final UserSessionRepository userSessionRepository;
     private final WalletBackfillService walletBackfillService;
+    private final TrackedWalletProjectionService trackedWalletProjectionService;
 
     public SessionCommandResult addSession(String sessionId, List<SessionWalletPayload> walletEntries) {
         String normalizedSessionId = sessionId.trim();
@@ -40,10 +41,12 @@ public class SessionCommandService {
         if (session.getCreatedAt() == null) {
             session.setCreatedAt(now);
         }
+        List<UserSession.SessionWallet> previousWallets = new ArrayList<>(session.getWallets());
         session.setWallets(normalizedWallets);
         session.setUpdatedAt(now);
         session.setLastSeenAt(now);
         userSessionRepository.save(session);
+        trackedWalletProjectionService.replaceSessionWallets(previousWallets, normalizedWallets, now);
 
         for (UserSession.SessionWallet wallet : normalizedWallets) {
             walletBackfillService.addWallet(wallet.getAddress(), wallet.getNetworks());

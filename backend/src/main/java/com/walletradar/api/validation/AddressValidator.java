@@ -29,6 +29,8 @@ public class AddressValidator {
             NetworkId.MANTLE,
             NetworkId.LINEA,
             NetworkId.UNICHAIN,
+            NetworkId.KATANA,
+            NetworkId.PLASMA,
             NetworkId.ZKSYNC
     );
 

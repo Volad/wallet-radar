@@ -8,7 +8,7 @@ import java.util.Objects;
 /**
  * Value object for asset quantity. Encapsulates non-null BigDecimal.
  * Sign convention: positive = received/held, negative = sent (e.g. quantityDelta).
- * For position quantities (derived balance), quantity must be non-negative (INV-06, domain invariants).
+ * Position quantities must be non-negative.
  */
 @Getter
 public final class Quantity {

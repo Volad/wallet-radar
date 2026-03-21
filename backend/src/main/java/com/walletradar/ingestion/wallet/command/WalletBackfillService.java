@@ -1,6 +1,5 @@
 package com.walletradar.ingestion.wallet.command;
 
-import com.walletradar.domain.event.BalanceRefreshRequestedEvent;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.sync.SyncStatus;
 import com.walletradar.domain.sync.SyncStatusRepository;
@@ -15,7 +14,7 @@ import java.util.Arrays;
 import java.util.List;
 
 /**
- * Adds a wallet: upserts sync_status PENDING per network and publishes WalletAddedEvent (T-023).
+ * Adds a wallet by creating pending sync_status entries and publishing a backfill event.
  */
 @Service
 @RequiredArgsConstructor
@@ -53,9 +52,6 @@ public class WalletBackfillService {
             status.setUpdatedAt(Instant.now());
             syncStatusRepository.save(status);
             networksNeedingBackfill.add(networkId);
-        }
-        if (!targetNetworks.isEmpty()) {
-            applicationEventPublisher.publishEvent(new BalanceRefreshRequestedEvent(address, targetNetworks));
         }
         if (!networksNeedingBackfill.isEmpty()) {
             applicationEventPublisher.publishEvent(new WalletAddedEvent(address, networksNeedingBackfill));

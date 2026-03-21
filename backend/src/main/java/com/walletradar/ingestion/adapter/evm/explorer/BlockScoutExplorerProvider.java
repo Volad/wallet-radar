@@ -29,7 +29,7 @@ import java.util.Map;
 import java.util.function.Function;
 
 /**
- * Explorer provider for Blockscout module/action API endpoints (ADR-026).
+ * Explorer provider for Blockscout module/action API endpoints.
  */
 @Component
 @RequiredArgsConstructor

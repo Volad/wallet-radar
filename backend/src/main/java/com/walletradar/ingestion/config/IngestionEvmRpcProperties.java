@@ -26,6 +26,9 @@ public class IngestionEvmRpcProperties {
     /** Time to disable JSON-RPC batch mode for an endpoint after non-transient batch errors. */
     private long batchUnsupportedCooldownMs = 300_000;
 
+    /** Max response bytes buffered by the shared EVM RPC WebClient. */
+    private int maxResponseBytes = 16 * 1024 * 1024;
+
     /** Log local limiter waits longer than this threshold. */
     private long localLimiterLogThresholdMs = 100;
 

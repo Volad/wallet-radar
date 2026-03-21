@@ -16,6 +16,9 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -27,6 +30,8 @@ class SessionCommandServiceTest {
     private UserSessionRepository userSessionRepository;
     @Mock
     private WalletBackfillService walletBackfillService;
+    @Mock
+    private TrackedWalletProjectionService trackedWalletProjectionService;
 
     @InjectMocks
     private SessionCommandService sessionCommandService;
@@ -72,6 +77,13 @@ class SessionCommandServiceTest {
         assertThat(saved.getCreatedAt()).isEqualTo(Instant.parse("2026-03-04T10:00:00Z"));
         assertThat(saved.getUpdatedAt()).isNotNull();
 
+        verify(trackedWalletProjectionService).replaceSessionWallets(
+                argThat(wallets -> wallets.size() == 1 && "0xold".equals(wallets.get(0).getAddress())),
+                argThat(wallets -> wallets.size() == 1
+                        && "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f".equals(wallets.get(0).getAddress())),
+                any(Instant.class)
+        );
+
         verify(walletBackfillService).addWallet(
                 "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f",
                 List.of(NetworkId.ETHEREUM, NetworkId.ARBITRUM));
@@ -109,6 +121,7 @@ class SessionCommandServiceTest {
         assertThat(wallet.getColor()).isEqualTo("#34d399");
         assertThat(wallet.getNetworks()).containsExactly(NetworkId.ETHEREUM, NetworkId.ARBITRUM);
 
+        verify(trackedWalletProjectionService).replaceSessionWallets(anyList(), anyList(), any(Instant.class));
         verify(walletBackfillService, times(1))
                 .addWallet("0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f", wallet.getNetworks());
     }

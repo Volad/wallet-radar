@@ -1,22 +1,32 @@
 # WalletRadar — Architecture
 
-> **Version:** SAD v2.1 (as-built)  
-> **Last updated:** 2026-03-02  
+> **Version:** SAD v3 target summary
+> **Last updated:** 2026-03-21
 > **Style:** Modular monolith (Spring Boot)
+
+This document is the concise architecture summary for the v3 accounting rewrite.
+The full target design, decision log, data-flow details, and cost analysis are in
+[architecture-v3.md](architecture-v3.md).
 
 ---
 
-## 1. Architectural Style
+## 1. Scope
 
-WalletRadar is a modular monolith with explicit package boundaries and event-driven internal orchestration.
+The v3 milestone is intentionally narrow:
 
-Key principles:
+- keep existing raw collection (`raw_transactions`, `sync_status`, `backfill_segments`)
+- keep persisted `user_sessions`
+- keep an installation-wide tracked wallet universe for canonical normalization
+- rebuild normalization on top of raw evidence
+- rebuild pricing on top of canonical normalized flows
+- replay AVCO and reconciliation from canonical confirmed events
 
-- Canonical transaction model is `normalized_transactions` with `flows[]`.
-- Backfill and normalization are decoupled (`raw fetch` phase and `raw -> normalized` phase).
-- `GET` path is data-store based (no chain RPC calls on request path).
-- AVCO replay is deterministic and uses only `CONFIRMED` normalized transactions.
-- EVM ingestion is explorer-first with selective receipt enrichment for low-confidence cases.
+Not part of this milestone:
+
+- new onboarding/control-plane redesign
+- current-balance polling redesign
+- portfolio snapshot/chart redesign
+- additional CEX providers beyond Bybit
 
 ---
 
@@ -26,192 +36,163 @@ Key principles:
 Browser/API Client
     |
     v
-Spring Boot (modular monolith)
-    |- api/                controllers + DTO + validation
-    |- ingestion/          backfill, adapters, classifier, normalization pipeline
-    |- costbasis/          AVCO replay, overrides, transaction history query
-    |- pricing/            historical price resolver chain
-    |- domain/             documents, enums, repository interfaces
-    |- common/config/      shared utilities + wiring
+Spring Boot
+    |- api/session + api/wallet
+    |- session/               persisted user_sessions
+    |- wallet-universe/       tracked_wallets projection
+    |- ingestion/backfill/    existing raw collection
+    |- normalization/         on-chain + Bybit canonicalization
+    |- pricing/               historical USD resolution
+    |- costbasis/             AVCO replay + reconciliation
     |
-    +--> MongoDB (raw_transactions, normalized_transactions, asset_positions, ...)
-    +--> EVM Explorer APIs (txlist/tokentx/txlistinternal + selective receipt)
-    +--> EVM RPC endpoints (block/timestamp/decimals/native clarification/balances)
+    +--> MongoDB
+         user_sessions
+         sync_status / backfill_segments
+         tracked_wallets
+         raw_transactions
+         external_ledger_raw
+         normalized_transactions
+         asset_positions
 ```
 
 ---
 
-## 3. Package Map (as-built)
+## 3. Core Pipeline
 
-```text
-com.walletradar
-├── api/
-│   ├── controller/  WalletController, TransactionController, SyncController, BalanceController
-│   ├── dto/
-│   └── validation/
-├── ingestion/
-│   ├── adapter/
-│   │   ├── evm/
-│   │   │   ├── explorer/  ExplorerProvider, EtherscanV2ExplorerProvider, ExplorerEvmNetworkAdapter
-│   │   │   └── rpc/       EvmRpcClient + resolvers (height/timestamp/decimals/native)
-│   │   └── solana/
-│   ├── classifier/        NativeTransfer, PerpOrder, BridgeCall, Lend, LP, Swap, Transfer, Stake, RawTransactionNormalizationView
-│   ├── filter/            ScamFilter
-│   ├── job/
-│   │   ├── backfill/      BackfillJobRunner, BackfillNetworkExecutor, RawFetchSegmentProcessor
-│   │   ├── classification/ RawTxNormalizationJob, ClassificationProcessor, ConfidenceScorer, ClarificationJob
-│   │   ├── pricing/       NormalizedTransactionPricingJob, NormalizedTransactionStatJob
-│   │   └── sync/          IncrementalSyncJob
-│   ├── normalizer/        NormalizedTransactionBuilder, NormalizedTransactionValidator
-│   ├── store/             IdempotentNormalizedTransactionStore
-│   ├── sync/balance/      BalanceRefreshService
-│   └── wallet/            command/query services
-├── costbasis/
-│   ├── engine/            AvcoEngine, CrossWalletAvcoAggregatorService
-│   ├── override/          OverrideService
-│   └── query/             TransactionHistoryQueryService
-├── pricing/
-│   ├── HistoricalPriceResolverChain
-│   └── resolver/          Stablecoin, SwapDerived, CoinGecko, Counterpart resolvers
-├── domain/
-├── common/
-└── config/
-```
+### 3.1 Raw collection
 
----
+- Explorer-first EVM ingestion remains unchanged.
+- `ScamFilter` stays pre-persistence.
+- `ScamFilter` must use composite promo/phishing signals and preserve known
+  legitimate reward-claim routes that do not carry promo markers.
+- Raw docs land in `raw_transactions` with `normalizationStatus=PENDING`.
 
-## 4. Canonical Data Pipeline
+### 3.2 On-chain normalization
 
-### 4.1 Raw fetch (Phase 1)
+- Start only after raw backfill for wallet×network is complete.
+- If tx-level ordering metadata is incomplete, run raw ordering repair before canonical normalization.
+- Internal-transfer heuristics use the installation-wide tracked wallet universe, never an individual session payload.
+- Process in chronological order:
+  - `rawData.timeStamp ASC`
+  - `rawData.transactionIndex ASC`
+  - `txHash ASC`
+- `txHash` is the raw-stage tie-breaker because canonical `_id` does not exist yet during normalization.
+- Classification order:
+  - protocol registry
+  - method id
+  - function name
+  - transfer-pattern heuristics
+- `rawData.methodId` must be recovered from `rawData.input[0:10]` when the stored
+  selector is blank or `"0x"`.
+- Known wrapper selectors and known bridge/router methods must be resolved before generic `deposit` / `withdraw` / `multicall` name fallbacks can capture them.
+- Plain positive inbound transfer legs default to `EXTERNAL_INBOUND` unless
+  contract-aware reward or bridge evidence exists.
+- Promo/phishing inbound patterns must be removed from reward ambiguity handling before generic inbound defaults are applied.
+- Economic meaning follows backfill-available raw legs and contract identity.
+  Human-readable explorer page summaries are audit-only and never override
+  canonical classifier output.
+- Known bridge-entry selectors such as Across `depositV3` must resolve to
+  `BRIDGE_OUT` before generic vault/lending fallback can capture them.
+- Bridge-settlement selectors such as `fillV3Relay`, `fillRelay`, `redeemWithFee`, `execute302`, and `directFulfill` must be resolved as bridge continuity before broad `repay` / `redeem` / `withdraw` keyword fallback.
+- Known LP position-manager router containers such as `multicall` and
+  Uniswap-v4-style `modifyLiquidities` must be dispatched by contract-aware
+  inner method rules, not by broad router keywords.
+- Method-aware protocol bundles such as Morpho Bundler3 must be classified by
+  contract-scoped dispatch before generic `multicall` / `bundle` fallback.
+- Zero-amount token transfers without economic counterflow must never create `BUY` / `SELL` legs. Known setup/admin calls may resolve to `ADMIN_CONFIG`; unknown cases remain explicit review items.
+- Protocol-registry runtime data is loaded from `backend/src/main/resources/protocol-registry.json` only.
+- `event_topics` remain reference-only metadata and are ignored by the runtime classifier.
+- Registry entries marked with `specialHandler` dispatch into one deterministic handler result per raw tx.
+- If a special handler cannot support the observed method/function combination, the tx becomes `UNKNOWN -> NEEDS_REVIEW` with an explicit missing-data reason.
+- Evidence sources:
+  - `rawData.to`
+  - `rawData.methodId`
+  - `rawData.functionName`
+  - `rawData.explorer.tokenTransfers[]`
+  - `rawData.explorer.internalTransfers[]`
+  - direct native `rawData.value`
+- `rawData.logs[]` remain out of bounds.
 
-1. `WalletController` enqueues backfill via `WalletBackfillService`.
-2. `BackfillJobRunner` orchestrates wallet×network work queue and retries.
-3. `BackfillNetworkExecutor` plans and executes `backfill_segments`.
-4. `RawFetchSegmentProcessor` fetches tx data from `NetworkAdapter` and upserts into `raw_transactions`.
-5. `ScamFilter` can drop suspicious raw transactions before persistence.
-6. Successful raw docs stay with `normalizationStatus=PENDING`.
+### 3.3 Clarification
 
-### 4.2 Raw normalization (Phase 2)
+- Only for receipt-clarifiable records.
+- Low confidence alone is not enough to enter clarification.
+- Enrichment allowed:
+  - execution status
+  - gas
+  - created contract address
+- Low-confidence rows that are already economically coherent must proceed directly to `PENDING_PRICE`.
+- Unsupported semantic gaps must move directly to `NEEDS_REVIEW`.
+- Clarification must not treat synthetic logs as first-class classification input.
+- Clarification is not used to decide promo/phishing inbound, bridge-settlement continuity, LP position-manager multicalls, or zero-value no-op token calls.
 
-1. `RawTxNormalizationJob` polls `raw_transactions` with `normalizationStatus=PENDING`.
-2. `ClassificationProcessor`:
-   - wraps each raw tx once in `RawTransactionNormalizationView`;
-   - normalizes mixed BSON/JSON payload shape (`Map/List` -> `Document/List<Document>`) inside the view;
-   - routes all classifier access to raw payload through view accessors (`readRawOrExplorerTx`, `logs`, `explorerTokenTransfers`, `explorerInternalTransfers`);
-   - synthesizes missing ERC-20 transfer logs from explorer payload when needed;
-   - runs classifier dispatcher;
-   - computes numeric confidence (`[0..1]`);
-   - if confidence is low, performs selective `getReceipt` enrichment via `ExplorerProvider` and re-scores.
-3. `NormalizedTransactionBuilder` builds canonical `NormalizedTransaction` with `flows[]`.
-4. `IdempotentNormalizedTransactionStore` upserts by `(txHash, networkId, walletAddress)`.
-5. raw tx is marked `normalizationStatus=COMPLETE`.
+### 3.4 Bybit normalization
 
-### 4.3 Normalized pipeline
+- `external_ledger_raw` remains immutable source evidence.
+- `BybitTradePairer` uses a sliding `±5 sec` window for UTA trade pairing.
+- Matched Bybit withdraw/deposit and on-chain movements share a `correlationId`.
+- Canonical accounting docs still land in `normalized_transactions` for both `ON_CHAIN` and `BYBIT`.
+- Double-counting is prevented by `TRANSFER` semantics and replay carry-over rules, not by discarding one side of the source trail.
 
-Status flow:
+### 3.5 Pricing and replay
 
-```text
-PENDING_CLARIFICATION -> PENDING_PRICE -> PENDING_STAT -> CONFIRMED
-                                     \-> NEEDS_REVIEW (if unresolved)
-```
-
-- `ClarificationJob`: optional extra enrichment for `PENDING_CLARIFICATION`.
-- `NormalizedTransactionPricingJob`: resolves `unitPriceUsd`/`valueUsd` and moves to `PENDING_STAT` or `NEEDS_REVIEW`.
-- `NormalizedTransactionStatJob`: final consistency checks and moves to `CONFIRMED`, then triggers wallet recalc event.
-
-### 4.4 Cost basis replay
-
-- `AvcoEngine` replays only `status=CONFIRMED` normalized transactions.
-- Replay order is chronological and deterministic.
-- `OverrideService` stores price overrides and triggers recalculation jobs.
-- `CrossWalletAvcoAggregatorService` computes cross-wallet AVCO on request.
-
----
-
-## 5. Classifier Chain and Ordering
-
-`TxClassifierDispatcher` executes all `TxClassifier` beans by Spring `@Order`.
-
-| Order | Classifier | Purpose |
-|------:|------------|---------|
-| 50 | `NativeTransferClassifier` | Simple native transfer and internal-transfers-only native net flow |
-| 70 | `PerpOrderClassifier` | Heuristic perp order create calls without logs |
-| 75 | `BridgeCallClassifier` | Bridge/native bridge calls with value outflow heuristics |
-| 90 | `LendClassifier` | Deposit/withdraw/borrow/repay and vault-like flows |
-| 95 | `LpClassifier` | LP lifecycle state-machine: `LP_ENTRY`, `LP_FEE_CLAIM`, `LP_EXIT_PARTIAL/FINAL`, `LP_POSITION_STAKE/UNSTAKE` |
-| 99 | `SwapClassifier` | Swap detection and stablecoin leg extraction |
-| 100 | `TransferClassifier` | Generic ERC-20/native transfer fallback |
-| 110 | `StakeClassifier` | Stake-specific fallback patterns |
-
-Notes:
-
-- LP classifier includes curated protocol/router whitelist (top DeFi LP venues).
-- CL/NFT LP path currently targets PancakeSwap, Uniswap, Aerodrome position NFTs.
-- For CL v3/v4 position mint, LP classifier emits economic `LP_ENTRY` flows from outbound principal tokens and links them by position id group.
-- Failed transactions (`status=0x0` / `isError=1`) are ignored by classifiers that require successful execution.
-- `EXTERNAL_INBOUND` is strictly a fallback from `TransferClassifier` and is emitted only when higher-priority classifiers do not match. For claim/withdraw/refund-like calls it may still be emitted even when `rawData.from == walletAddress` if net wallet movement is inbound after neutralizing same-tx wrap/burn mechanics.
+- Pricing order:
+  - stablecoin parity
+  - swap-derived ratio
+  - wrapper/native mapping
+  - CoinGecko historical fallback
+  - `PRICE_UNKNOWN`
+- AVCO replay input is `normalized_transactions WHERE status=CONFIRMED`.
+- Replay order is deterministic:
+  - `blockTimestamp ASC`
+  - `transactionIndex ASC`
+  - `_id ASC`
+- `_id` is the canonical-stage tie-breaker after normalized documents have been materialized.
 
 ---
 
-## 6. Scam Filter (ingestion-time)
+## 4. Key Collections
 
-`ScamFilter` applies score-based heuristics and drops transactions when score >= `dropThreshold`.
-
-Current signals include:
-
-- direct blocklist match;
-- failed swap / failed zero-value no-transfer effects;
-- unsolicited inbound-only patterns;
-- mass relay/fanout and zero-amount poisoning;
-- suspicious airdrop metadata (URL/claim/visit token text, tiny integer airdrop values, zero decimals + odd text, `Airdrop` function markers).
-
-This keeps malicious spam tokens out of canonical accounting flow.
-
----
-
-## 7. Storage Model (key collections)
-
-- `raw_transactions`: explorer/RPC raw payload, normalization status, retry metadata.
-- `normalized_transactions`: canonical tx-level operation docs with `flows[]`, confidence, pipeline status.
-- `asset_positions`: derived AVCO and PnL state.
-- `cost_basis_overrides`: active/inactive manual price overrides.
-- `recalc_jobs`: async replay jobs.
-- `sync_status`: wallet×network sync lifecycle.
-- `backfill_segments`: persistent segment execution state.
-- `on_chain_balances`: latest observed balances for reconciliation.
-- `user_sessions`: persisted session wallet settings (label/color/networks).
-- `session_transactions`: session-scoped timeline projection sourced from normalized transactions.
-
-Key uniqueness constraints:
-
-- raw tx: `(txHash, networkId, walletAddress)`
-- normalized tx: `(txHash, networkId, walletAddress)` plus optional unique `clientId`
-- segment: `(syncStatusId, segmentIndex)`
+- `user_sessions`
+  Persisted wallet sets and selected networks keyed by client-generated `sessionId`.
+- `tracked_wallets`
+  Installation-wide wallet universe used by canonical normalization and transfer detection.
+- `sync_status`
+  Backfill lifecycle per wallet×network.
+- `backfill_segments`
+  Persistent segment orchestration and retries.
+- `raw_transactions`
+  Immutable on-chain evidence with controlled enrichment.
+- `external_ledger_raw`
+  Immutable Bybit import layer.
+- `normalized_transactions`
+  Canonical accounting stream for both on-chain and Bybit sources.
+- `asset_positions`
+  Materialized replay state and reconciliation flags.
 
 ---
 
-## 8. Module Dependency Rules
+## 5. Design Rules
 
-Target dependency direction:
-
-- `api` -> application services (`ingestion`, `costbasis`), never adapters directly.
-- `ingestion` -> `domain`, `common`, `pricing` (for pricing stage).
-- `costbasis` -> `domain` (+ readonly queries), no dependency on ingestion jobs.
-- `domain` contains data model and repository contracts only.
+- GET endpoints remain datastore-only.
+- Raw collections are source evidence; canonical accounting consumes normalized documents only.
+- `backend/src/main/resources/protocol-registry.json` is the only authoritative protocol-registry source for runtime classification.
+- `KATANA` and `PLASMA` are supported EVM networks in the v3 accounting layer.
+- WETH aliasing happens at replay time only.
+- Basis continuity applies to:
+  - wallet-internal transfers
+  - bridge matches
+  - lending and vault custody movements
+  - correlated Bybit <-> on-chain custody movements
 
 ---
 
-## 9. Current Boundaries vs Future
+## 6. Deferred Work
 
-Implemented and active now:
+Deferred until after v3 core is stable:
 
-- explorer-first EVM ingestion (ADR-026),
-- canonical normalized flow pipeline,
-- score-based scam filtering,
-- AVCO replay on confirmed normalized docs.
-
-Future/optional (not primary in current code path):
-
-- broader Solana parity,
-- additional snapshot/query modules,
-- microservice split (only after real scaling pressure).
+- current-balance polling
+- portfolio snapshots
+- broader transaction history projections
+- extra CEX connectors
+- microservice extraction

@@ -1,11 +1,11 @@
 package com.walletradar.domain.transaction.normalized;
 
 /**
- * Role of a leg in canonical normalized transaction.
+ * Canonical role of a normalized asset flow.
  */
 public enum NormalizedLegRole {
     BUY,
     SELL,
-    FEE,
-    TRANSFER
+    TRANSFER,
+    FEE
 }

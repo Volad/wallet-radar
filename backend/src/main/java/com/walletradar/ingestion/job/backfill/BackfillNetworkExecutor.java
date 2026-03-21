@@ -3,7 +3,6 @@ package com.walletradar.ingestion.job.backfill;
 import com.walletradar.domain.sync.BackfillSegment;
 import com.walletradar.domain.sync.BackfillSegmentRepository;
 import com.walletradar.domain.common.NetworkId;
-import com.walletradar.domain.event.RawFetchCompleteEvent;
 import com.walletradar.domain.sync.SyncStatus;
 import com.walletradar.domain.sync.SyncStatusRepository;
 import com.walletradar.ingestion.adapter.BlockHeightResolver;
@@ -16,7 +15,6 @@ import com.walletradar.ingestion.config.IngestionNetworkProperties;
 import com.walletradar.ingestion.sync.progress.SyncProgressTracker;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -28,8 +26,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Runs backfill for one (wallet, network): Phase 1 (raw fetch) only (ADR-021).
- * Classification, deferred price, and AVCO recalc are handled by separate jobs.
+ * Runs raw backfill for one wallet-network pair.
  */
 @Component
 @Slf4j
@@ -40,7 +37,6 @@ public class BackfillNetworkExecutor {
     private final BackfillProperties backfillProperties;
     private final IngestionNetworkProperties ingestionNetworkProperties;
     private final SyncProgressTracker syncProgressTracker;
-    private final ApplicationEventPublisher applicationEventPublisher;
     private final SyncStatusRepository syncStatusRepository;
     private final BackfillSegmentRepository backfillSegmentRepository;
 
@@ -214,7 +210,19 @@ public class BackfillNetworkExecutor {
             markSegmentComplete(segment.getId());
             return true;
         } catch (Exception e) {
-            markSegmentFailed(segment.getId(), e.getMessage());
+            String detail = errorDetail(e);
+            log.warn(
+                    "Backfill segment failed: wallet={}, network={}, segmentId={}, index={}, from={}, to={}, error={}",
+                    walletAddress,
+                    networkId.name(),
+                    segment.getId(),
+                    segment.getSegmentIndex(),
+                    segment.getFromBlock(),
+                    segment.getToBlock(),
+                    detail,
+                    e
+            );
+            markSegmentFailed(segment.getId(), detail);
             return false;
         }
     }
@@ -264,6 +272,38 @@ public class BackfillNetworkExecutor {
         });
     }
 
+    private String errorDetail(Throwable error) {
+        if (error == null) {
+            return "Unknown error";
+        }
+        StringBuilder detail = new StringBuilder();
+        appendThrowableDetail(detail, error);
+        Throwable cause = error.getCause();
+        int depth = 0;
+        while (cause != null && cause != error && depth < 4) {
+            detail.append(" <- ");
+            appendThrowableDetail(detail, cause);
+            cause = cause.getCause();
+            depth++;
+        }
+        String value = detail.toString().trim();
+        if (value.isBlank()) {
+            return error.getClass().getSimpleName();
+        }
+        return value.length() > 1000 ? value.substring(0, 1000) : value;
+    }
+
+    private void appendThrowableDetail(StringBuilder detail, Throwable error) {
+        if (error == null) {
+            return;
+        }
+        detail.append(error.getClass().getSimpleName());
+        String message = error.getMessage();
+        if (message != null && !message.isBlank()) {
+            detail.append(": ").append(message);
+        }
+    }
+
     private void finalizeSyncStatusFromSegments(String walletAddress, String networkId, String syncStatusId) {
         List<BackfillSegment> all = backfillSegmentRepository.findBySyncStatusIdOrderBySegmentIndexAsc(syncStatusId);
         if (all.isEmpty()) {
@@ -281,7 +321,6 @@ public class BackfillNetworkExecutor {
         if (complete == total) {
             Long lastSynced = maxCompletedToBlock != null ? maxCompletedToBlock : 0L;
             syncProgressTracker.setRawFetchComplete(walletAddress, networkId, lastSynced);
-            applicationEventPublisher.publishEvent(new RawFetchCompleteEvent(walletAddress, networkId, lastSynced));
             syncProgressTracker.setComplete(walletAddress, networkId);
             return;
         }

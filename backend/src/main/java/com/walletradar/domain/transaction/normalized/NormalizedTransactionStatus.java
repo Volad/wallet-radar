@@ -1,7 +1,7 @@
 package com.walletradar.domain.transaction.normalized;
 
 /**
- * Status pipeline for canonical normalized transactions (ADR-025).
+ * Status pipeline for canonical normalized transactions.
  */
 public enum NormalizedTransactionStatus {
     PENDING_CLARIFICATION,

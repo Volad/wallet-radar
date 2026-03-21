@@ -1,16 +1,16 @@
 # WalletRadar — Product Context
 
-> **Version:** MVP v1.0  
-> **Last updated:** 2026-02-28  
+> **Version:** MVP v3 target
+> **Last updated:** 2026-03-20
 > **Status:** Active development
 
 ---
 
 ## What is WalletRadar?
 
-WalletRadar is a **self-hosted, privacy-first DeFi portfolio analytics platform** that tracks cost basis, unrealised and realised P&L, and transaction history across multiple EVM-compatible networks and Solana — without requiring user registration or connecting wallets to a dApp.
+WalletRadar is a **self-hosted, privacy-first DeFi portfolio analytics platform** that tracks cost basis, unrealised and realised P&L, and transaction history across multiple EVM-compatible networks and Bybit ledger data — without requiring user registration or connecting wallets to a dApp.
 
-Users add wallet addresses (read-only). The system ingests on-chain transaction history, classifies economic events, applies Average Cost (AVCO) accounting, and presents a consolidated portfolio view across all tracked wallets and networks.
+Users add wallet addresses (read-only) into a persisted `user_sessions` model keyed by client-generated `sessionId`. The system ingests on-chain transaction history, normalizes economic events from on-chain raw data and Bybit raw ledger rows, applies Average Cost (AVCO) accounting, and presents a consolidated portfolio view across tracked wallets and supported accounting sources.
 
 ---
 
@@ -38,7 +38,7 @@ Users add wallet addresses (read-only). The system ingests on-chain transaction 
 | NG-03 | Rebase token support (stETH, aUSDC quantity changes not tracked) |
 | NG-04 | Fiat on/off ramp transaction detection |
 | NG-05 | NFT portfolio tracking |
-| NG-06 | CEX (Centralised Exchange) import |
+| NG-06 | Additional CEX providers or end-user CEX onboarding flows beyond the existing Bybit raw ledger source |
 | NG-07 | User registration, authentication, or multi-user access control |
 | NG-08 | Automated tax-loss harvesting recommendations |
 | NG-09 | Transactions older than 2 years from current date |
@@ -51,12 +51,13 @@ Manual compensating transactions may be **positive or negative** (reducing quant
 
 ### Technical Constraints
 - **Monorepo** — backend (Spring Boot) and frontend (Angular) are in the same repository; backend is built with **Gradle** (not Maven).
-- **No user accounts** — session is a browser-local ordered list of wallet addresses
+- **No user accounts** — session identity is a client-generated UUID, persisted server-side in `user_sessions`
 - **Reconciliation UX** — when derived quantity does not match on-chain balance (e.g. for wallets with history within the 2-year window), the UI shows a warning on the asset and the user can add a manual compensating transaction to align balance and AVCO
 - **Read-only access** — system never requests wallet signing or private keys
 - **Public/free data sources only** — no dependency on paid indexers (Alchemy Growth, The Graph paid, Moralis paid)
 - **CoinGecko Free tier** — 50 req/min; throttled to 45 req/min internally; historical price fallback only
-- **Transaction workflow** — status-driven `normalized_transactions` pipeline (`PENDING_CLARIFICATION -> PENDING_PRICE -> PENDING_STAT -> CONFIRMED`); additional receipt enrichment is selective and runs only for low-confidence/clarification cases
+- **Transaction workflow** — status-driven `normalized_transactions` pipeline where only receipt-clarifiable rows enter `PENDING_CLARIFICATION`; low-confidence rows without receipt gaps proceed directly to pricing or review
+- **Bybit source** — `external_ledger_raw` is already loaded in MongoDB and is sufficient for the current milestone; new interactive import UX is not required now
 - **2-year backfill window** — transactions before this window require manual entry
 - **EVM ingestion source (MVP v2)** — explorer-first (Etherscan V2-compatible API per network) with `page/offset` fetch and selective `getReceipt` enrichment for ambiguous transactions.
 - **Explorer paging default** — use `offset=5000` by default (configurable), with provider-aware fallback and retry/backoff on rate-limit/timeout.
@@ -77,20 +78,26 @@ Manual compensating transactions may be **positive or negative** (reducing quant
 
 ## Supported Networks (MVP)
 
-| Network | Type | Primary Source (MVP v2) |
-|---------|------|--------------------------|
-| Ethereum Mainnet | EVM | Etherscan V2 API |
-| Arbitrum One | EVM | Arbiscan API |
-| Optimism | EVM | Optimistic Etherscan API |
-| Base | EVM | Basescan API |
-| BNB Chain | EVM | BscScan API |
-| Polygon | EVM | Polygonscan API |
-| Avalanche C-Chain | EVM | Snowtrace API |
-| Mantle | EVM | Mantlescan API |
-| Linea | EVM | Etherscan V2 API (`chainid=59144`) |
-| zkSync Era | EVM | Blockscout API |
-| Unichain | EVM | Etherscan V2 API (`chainid=130`) |
-| Solana | SVM | Out of scope for MVP v2 |
+| Network | Type | NetworkId | Primary Source (MVP v2) |
+|---------|------|-----------|--------------------------|
+| Ethereum Mainnet | EVM | `ETHEREUM` | Etherscan V2 API |
+| Arbitrum One | EVM | `ARBITRUM` | Arbiscan API |
+| Optimism | EVM | `OPTIMISM` | Optimistic Etherscan API |
+| Base | EVM | `BASE` | Basescan API |
+| BNB Chain | EVM | `BSC` | BscScan API |
+| Polygon | EVM | `POLYGON` | Polygonscan API |
+| Avalanche C-Chain | EVM | `AVALANCHE` | Snowtrace API |
+| Mantle | EVM | `MANTLE` | Mantlescan API |
+| Linea | EVM | `LINEA` | Etherscan V2 API (`chainid=59144`) |
+| Katana | EVM | `KATANA` | Etherscan-compatible API |
+| Plasma | EVM | `PLASMA` | Etherscan-compatible API |
+| zkSync Era | EVM | `ZKSYNC` | Blockscout API |
+| Unichain | EVM | `UNICHAIN` | Etherscan V2 API (`chainid=130`) |
+| Solana | SVM | `SOLANA` | Out of scope for MVP v2 |
+
+Bybit scope:
+- `external_ledger_raw` is an in-scope source of truth for accounting reconstruction
+- only Bybit is in scope for CEX data in v3
 
 ---
 
@@ -98,14 +105,12 @@ Manual compensating transactions may be **positive or negative** (reducing quant
 
 ```
 1. Open WalletRadar in browser
-2. Add wallet address (EVM 0x…)
-3. System starts 2-year backfill (background, shows progress banner)
-4. User sees partial portfolio as assets are indexed
-5. On backfill complete — full portfolio view with AVCO, P&L, charts
-6. Add more wallets → system reclassifies internal transfers automatically
-7. Flag resolution — review events with unknown price or unsupported type
-8. Manual override — correct cost price for any event → async AVCO recalculation
-9. Reconciliation — when derived quantity does not match on-chain balance (e.g. for wallets with history within 2 years), the UI shows a warning on the asset and the user can add a manual compensating transaction to align balance and AVCO
+2. Create or reuse a `sessionId`
+3. Add wallet addresses and selected networks into the persisted session
+4. Existing backfill pipeline collects raw on-chain history
+5. Normalization and pricing convert raw on-chain and Bybit evidence into canonical accounting events
+6. AVCO replay computes per-wallet positions and reconciliation flags
+7. User reviews unresolved or incomplete-history cases
 ```
 
 ---
@@ -118,4 +123,4 @@ Manual compensating transactions may be **positive or negative** (reducing quant
 | `docs/02-architecture.md` | Module architecture, data flows |
 | `docs/03-accounting.md` | AVCO policy, P&L, cost basis rules |
 | `docs/04-api.md` | API contract |
-| `docs/adr/` | Architecture Decision Records |
+| `docs/architecture-v3.md` | Full target architecture for v3 normalization/pricing/accounting |

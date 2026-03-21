@@ -24,7 +24,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Explorer-first EVM adapter (ADR-026): txlist + tokentx + txlistinternal + transaction details.
+ * Explorer-backed EVM adapter that merges transaction, token transfer, and internal transfer pages.
  */
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE)

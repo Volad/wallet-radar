@@ -11,7 +11,7 @@ import java.time.Instant;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
- * Updates sync_status during backfill and incremental sync (T-009, T-011).
+ * Updates sync_status during raw backfill execution.
  */
 @Component
 @RequiredArgsConstructor
@@ -40,7 +40,7 @@ public class SyncProgressTracker {
     }
 
     /**
-     * Set raw fetch complete (Phase 1 done). ADR-020.
+     * Set raw fetch complete for a wallet×network.
      */
     public void setRawFetchComplete(String walletAddress, String networkId, Long lastBlockSynced) {
         syncStatusRepository.findByWalletAddressAndNetworkId(walletAddress, networkId)
@@ -53,22 +53,7 @@ public class SyncProgressTracker {
     }
 
     /**
-     * Set classification complete (Phase 2 done). ADR-020.
-     * @deprecated ADR-021: Backfill no longer sets this; classifier is continuous. Kept for backward compat.
-     */
-    @Deprecated
-    public void setClassificationComplete(String walletAddress, String networkId) {
-        syncStatusRepository.findByWalletAddressAndNetworkId(walletAddress, networkId)
-                .ifPresent(s -> {
-                    s.setClassificationComplete(true);
-                    s.setUpdatedAt(Instant.now());
-                    syncStatusRepository.save(s);
-                });
-    }
-
-    /**
-     * Set status to COMPLETE, clear banner, set backfillComplete=rawFetchComplete (ADR-021).
-     * Does NOT set classificationComplete — classifier is a separate continuous process.
+     * Set status to COMPLETE, clear banner, set backfillComplete=rawFetchComplete.
      */
     public void setComplete(String walletAddress, String networkId) {
         syncStatusRepository.findByWalletAddressAndNetworkId(walletAddress, networkId)

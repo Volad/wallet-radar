@@ -21,18 +21,18 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
- * Configures RPC adapters from unified per-network config (ADR-012): per-network rotators + default rotator for unknown networks.
+ * Configures per-network RPC rotators and shared RPC clients.
  */
 @Configuration
 @EnableConfigurationProperties({
         IngestionNetworkProperties.class,
-        ProtocolRegistryProperties.class,
         IngestionRetryProperties.class,
         IngestionEvmRpcProperties.class,
         BackfillProperties.class,
-        ClassifierProperties.class,
         ScamFilterProperties.class,
-        IngestionExplorerProperties.class
+        IngestionExplorerProperties.class,
+        OnChainNormalizationProperties.class,
+        OnChainClarificationProperties.class
 })
 public class IngestionAdapterConfig {
 
@@ -76,8 +76,8 @@ public class IngestionAdapterConfig {
     }
 
     @Bean
-    public EvmRpcClient evmRpcClient(WebClient.Builder webClientBuilder) {
-        return new WebClientEvmRpcClient(webClientBuilder);
+    public EvmRpcClient evmRpcClient(WebClient.Builder webClientBuilder, IngestionEvmRpcProperties evmRpcProperties) {
+        return new WebClientEvmRpcClient(webClientBuilder, evmRpcProperties.getMaxResponseBytes());
     }
 
     @Bean(name = "evmRpcRateLimiter")

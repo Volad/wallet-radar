@@ -7,7 +7,7 @@ import org.springframework.data.convert.WritingConverter;
 import java.math.BigDecimal;
 
 /**
- * Writes BigDecimal as Decimal128 in MongoDB (INV-06, AC-07).
+ * Writes BigDecimal as Decimal128 in MongoDB.
  */
 @WritingConverter
 public class BigDecimalToDecimal128Converter implements Converter<BigDecimal, Decimal128> {

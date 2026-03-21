@@ -34,6 +34,7 @@ class AddressValidatorTest {
     @DisplayName("Valid networks accepted")
     void validNetworks() {
         assertThat(validator.areValidNetworks(List.of(NetworkId.ETHEREUM, NetworkId.ARBITRUM))).isTrue();
+        assertThat(validator.areValidNetworks(List.of(NetworkId.KATANA, NetworkId.PLASMA))).isTrue();
     }
 
     @Test
@@ -49,6 +50,8 @@ class AddressValidatorTest {
         assertThat(validator.areValidEvmNetworks(List.of(NetworkId.ETHEREUM, NetworkId.ARBITRUM))).isTrue();
         assertThat(validator.areValidEvmNetworks(List.of(NetworkId.LINEA))).isTrue();
         assertThat(validator.areValidEvmNetworks(List.of(NetworkId.UNICHAIN))).isTrue();
+        assertThat(validator.areValidEvmNetworks(List.of(NetworkId.KATANA))).isTrue();
+        assertThat(validator.areValidEvmNetworks(List.of(NetworkId.PLASMA))).isTrue();
         assertThat(validator.areValidEvmNetworks(List.of(NetworkId.ZKSYNC))).isTrue();
         assertThat(validator.areValidEvmNetworks(List.of(NetworkId.SOLANA))).isFalse();
         assertThat(validator.areValidEvmNetworks(List.of())).isFalse();

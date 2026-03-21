@@ -16,7 +16,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 
 /**
- * POST /wallets, GET /wallets/{address}/status (T-023). Request validation via Jakarta @Valid.
+ * Wallet endpoints for backfill creation and status reads.
  */
 @RestController
 @RequestMapping("/api/v1/wallets")

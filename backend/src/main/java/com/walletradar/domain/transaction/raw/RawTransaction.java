@@ -11,16 +11,15 @@ import org.springframework.data.mongodb.core.mapping.Document;
 import java.time.Instant;
 
 /**
- * Immutable on-chain transaction data as fetched from chain source. Never mutated after ingestion (INV-02).
+ * Immutable on-chain transaction data as fetched from chain source.
  * Schema varies per network; rawData holds the full native payload (BSON Document).
- * ADR-026: EVM stores transaction details at fetch time; receipt may be appended later for selective clarification.
- * Solana stores full tx+sigInfo payload.
  */
 @Document(collection = "raw_transactions")
 @CompoundIndex(name = "txHash_networkId_wallet", def = "{'txHash': 1, 'networkId': 1, 'walletAddress': 1}", unique = true)
 @CompoundIndex(name = "wallet_network_block", def = "{'walletAddress': 1, 'networkId': 1, 'blockNumber': 1}")
 @CompoundIndex(name = "wallet_network_slot", def = "{'walletAddress': 1, 'networkId': 1, 'slot': 1}")
 @CompoundIndex(name = "wallet_network_status", def = "{'walletAddress': 1, 'networkId': 1, 'normalizationStatus': 1}")
+@CompoundIndex(name = "normalization_status_retry_idx", def = "{'normalizationStatus': 1, 'nextRetryAt': 1}")
 @NoArgsConstructor
 @Getter
 @Setter
@@ -40,14 +39,11 @@ public class RawTransaction {
     private Long blockNumber;
     /** Solana: from sigInfo; used for range queries. */
     private Long slot;
-    /** PENDING | COMPLETE — processor selects PENDING. */
     private NormalizationStatus normalizationStatus;
-    /** Retry metadata for transient normalization failures. */
     private Integer retryCount;
     private String lastError;
     private Instant nextRetryAt;
-    /** Debugging and retry ordering. */
     private Instant createdAt;
-    /** Full source payload: EVM = tx details (+ optional receipt enrichment), Solana = full tx + sigInfo. */
+    /** Full source payload: EVM = tx details/receipt/explorer payload, Solana = full tx + sigInfo. */
     private org.bson.Document rawData;
 }

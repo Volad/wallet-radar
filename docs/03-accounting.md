@@ -1,199 +1,209 @@
 # WalletRadar — Accounting Policy
 
-> **Version:** MVP v2.1  
-> **Accounting method:** AVCO (Average Cost / Weighted Average Cost)  
-> **Scope:** Cost basis, realised P&L, unrealised P&L, gas treatment
+> **Version:** v3 target
+> **Last updated:** 2026-03-21
+> **Accounting method:** AVCO
 
 ---
 
-## Accounting Method: AVCO
+## 1. Canonical Accounting Input
 
-WalletRadar uses **AVCO (Average Cost / Weighted Average Cost)** for all cost basis calculations.
+WalletRadar computes basis only from canonical documents in:
 
-**Why AVCO:**
-- Deterministic — same inputs always produce same result
-- No need to track individual lot identifiers
-- Well-suited for DeFi where token quantities frequently merge and split
+- `normalized_transactions WHERE status = CONFIRMED`
 
-**Scope of AVCO:**
-- Calculated per `(walletAddress, assetSymbol)` pair — **perWalletAvco**
-- Also calculated on-request across all session wallets — **crossWalletAvco**
-- `crossWalletAvco` is **never stored** — computed fresh for exact wallet set in each API call
-- `crossWalletAvco` is **always global** across all networks — a network filter does not change the AVCO value
-- Replay input is canonical confirmed operation flows from `normalized_transactions` (ADR-025)
+Canonical documents may originate from:
 
----
+- `source = ON_CHAIN`
+- `source = BYBIT`
 
-## AVCO Formula
+Raw collections remain source evidence:
 
-### On BUY / Receive Event
+- `raw_transactions`
+- `external_ledger_raw`
 
-```
-newAvco = (currentAvco × currentQty + eventPriceUsd × eventQty) / (currentQty + eventQty)
-newQty  = currentQty + eventQty
-```
+They are used for reconstruction and audit, but never replayed directly for AVCO.
 
-**Applies to:** `SWAP_BUY`, `BORROW`, `STAKE_WITHDRAWAL`, `LEND_WITHDRAWAL`, `LP_FEE_CLAIM`, `EXTERNAL_INBOUND`
-
-### On SELL / Send Event
-
-```
-avcoAtTimeOfSale = currentAvco          // snapshot for audit trail
-realisedPnlUsd   = (sellPriceUsd − avcoAtTimeOfSale) × sellQty
-newAvco          = currentAvco          // AVCO does NOT change on sell
-newQty           = currentQty − sellQty
-```
-
-**Applies to:** `SWAP_SELL`, `LP_EXIT`, `LP_EXIT_PARTIAL`, `LP_EXIT_FINAL`, `LEND_WITHDRAWAL` (token out)
-
-`LP_ADJUST`, `LP_POSITION_STAKE`, `LP_POSITION_UNSTAKE` do not represent economic buy/sell legs and must not change AVCO or realised P&L.
-For v3/v4 LP position opening, `LP_ENTRY` must carry outbound principal token flows so AVCO/replay sees economic cost basis movement.
-
-### On STAKE_DEPOSIT / LEND_DEPOSIT
-
-Treated as outflow — quantity decreases, AVCO unchanged.  
-No realised P&L is generated.
-
-### On BORROW
-
-Quantity increases at current market price.  
-Treated as acquisition for AVCO purposes.
+Economic meaning is derived from backfill-available raw evidence and canonical
+flows, not from human-readable explorer page summaries.
 
 ---
 
-## Realised P&L
+## 2. Replay Order
 
-```
-realisedPnlUsd = (sellPriceUsd − avcoAtTimeOfSale) × |sellQuantity|
-```
+Replay must be deterministic:
 
-- Computed atomically during AVCO replay — never separately
-- Stored on confirmed SELL flows (`SWAP_SELL` / `LP_EXIT*`) in canonical transaction records
-- `avcoAtTimeOfSale` is the AVCO **before** the sell quantity is deducted
-- Accumulated in `asset_positions.totalRealisedPnlUsd`
+1. `blockTimestamp ASC`
+2. `transactionIndex ASC`
+3. `_id ASC` as final tie-breaker
 
-**Positive value** = profit (sold above average cost)  
-**Negative value** = loss (sold below average cost)
+For Bybit canonical rows, `transactionIndex = 0`.
 
 ---
 
-## Unrealised P&L
+## 3. AVCO Rules
 
-```
-unrealisedPnlUsd = (spotPriceUsd − perWalletAvco) × quantity
-unrealisedPnlPct = (spotPriceUsd / perWalletAvco − 1) × 100
+### On BUY
+
+```text
+newAvco = (currentAvco * currentQty + priceUsd * deltaQty) / (currentQty + deltaQty)
+newQty  = currentQty + deltaQty
 ```
 
-- Computed at snapshot time using CoinGecko `/simple/price` spot price
-- Stored in `portfolio_snapshots.assets[].unrealisedPnlUsd`
-- **Not computed at read time** — served from snapshot
+### On SELL
+
+```text
+avcoAtSale   = currentAvco
+realisedPnl  = (sellPriceUsd - avcoAtSale) * abs(deltaQty)
+newQty       = currentQty - abs(deltaQty)
+newAvco      = currentAvco
+```
+
+### On TRANSFER
+
+- quantity moves
+- basis carries forward
+- no new acquisition lot is created
+- no realised PnL is created
+
+### On FEE
+
+- `FEE` is stored as a separate canonical flow
+- fee quantity reduces the fee asset quantity and contributes to `totalGasPaidUsd`
+- when policy capitalizes gas into an acquisition, replay may allocate fee USD into the same transaction's BUY basis
+- outside such capitalization, `FEE` does not create a new lot and does not create realised PnL for the target asset being acquired or disposed
+
+### On PRICE_UNKNOWN
+
+- quantity still updates
+- price fields remain null
+- `hasIncompleteHistory = true`
 
 ---
 
-## Gas Treatment
+## 4. Basis Continuity Rules
 
-| Scenario | Default behaviour |
-|----------|------------------|
-| BUY event gas | **Included in cost basis** (`gasIncludedInBasis=true`) |
-| SELL event gas | **Excluded from realised P&L** |
-| TRANSFER gas | **Excluded from cost basis** |
-| STAKE / LEND gas | **Excluded** |
+Basis continuity applies when the economic owner did not dispose of the asset:
 
-Gas cost in USD:
-```
-gasCostUsd = gasUsed × gasPriceWei × nativeTokenPriceUsd / 1e18
-```
+- `INTERNAL_TRANSFER`
+  Basis carries between tracked wallets.
+- `BRIDGE_OUT -> BRIDGE_IN`
+  Basis carries across networks when the bridge pair is correlated.
+- `BRIDGE_OUT(depositV3) -> BRIDGE_IN(fillV3Relay/fillRelay/redeemWithFee/execute302/directFulfill)`
+  Destination-side settlement remains bridge continuity, not repay or vault semantics.
+- `Bybit -> on-chain`
+  Same accounting universe. Correlate by `txHash` and shared `correlationId`.
+- `PROTOCOL_CUSTODY`
+  Basis moves into and out of custody without creating BUY/SELL.
+- `LENDING_DEPOSIT -> LENDING_WITHDRAW`
+  Principal basis moves between spot balance and receipt-token/custody state without realization.
+- `VAULT_DEPOSIT -> VAULT_WITHDRAW`
+  Basis moves between spot balance and vault-share/custody state without realization.
 
-nativeTokenPrice is resolved using the same price chain as any other token (Stablecoin → Swap-derived → CoinGecko).
+For matched Bybit withdraw/deposit:
 
-**Override:** user can toggle `gasIncludedInBasis` per event via the override mechanism.
-
----
-
-## Price Resolution
-
-Prices are resolved per event at the time of the transaction (historical price):
-
-```
-Priority chain (HistoricalPriceResolver), and at ingestion (ADR-018):
-  1. StablecoinResolver     USDC/USDT/DAI/GHO/USDe/FRAX → $1.00 always
-  2. SwapDerivedResolver    tokenIn/tokenOut ratio from DEX event when one leg is stablecoin; applied at ingestion for stablecoin-leg swaps, else in Phase 2 (free, on-chain)
-  3. CoinGeckoHistorical    /coins/{id}/history?date=DD-MM-YYYY (free, throttled)
-  4. PRICE_UNKNOWN          flag event, AVCO still calculated with quantity changes
-```
-
-**CoinGecko throttle:** token bucket at 45 req/min (leaving 5 req/min headroom for spot price calls). Deduplication via 24h Caffeine cache keyed on `(contractAddress, date)`.
-
-**PRICE_UNKNOWN events:** quantity changes are still applied to `asset_positions`. The unknown price is flagged for user review. On override, AVCO is recalculated from that operation forward.
+- both source sides remain traceable
+- canonical replay uses `TRANSFER` semantics only
+- no duplicate BUY/SELL is allowed
 
 ---
 
-## Incomplete History
+## 5. Asset Identity Rules
 
-When the 2-year backfill window starts with a SELL or transfer-out event (i.e., the asset was acquired before the window):
-
-- `asset_positions.hasIncompleteHistory = true`
-- AVCO is calculated from available events only — may be understated
-- UI displays warning: _"Transaction history before [date] not included — cost basis may be inaccurate"_
-
----
-
-## Manual Override
-
-User can override the `priceUsd` of any **on-chain** event:
-
-1. Override saved to `cost_basis_overrides` with `isActive=true`
-2. Async AVCO recalculation triggered (`RecalcJob`)
-3. All subsequent events replay with override applied (override applies to on-chain events only)
-4. `realisedPnlUsd` is recomputed for all SELL events after the override point
-
-**Revert:** deactivates override, restores original flag, and triggers the same async replay.
+- WETH-like wrappers are stored as-is
+- wrapper-to-native aliasing is applied only at replay/pricing time when policy allows
+- `stETH`, `mETH`, `rETH`, `wstETH`, and `cbETH` remain distinct assets
+- LP tokens, receipt tokens, vault shares, and custody markers are not treated as new basis lots unless explicitly modeled as economic principal
 
 ---
 
-## Manual Compensating Transaction
+## 6. Pricing Policy
 
-A **manual compensating transaction** is a synthetic normalized transaction (no on-chain transaction). It is used to reconcile balance and/or AVCO when on-chain history is incomplete or incorrect.
+Historical price resolution order:
 
-- **Fields:** `quantityDelta` (required), `priceUsd` (required when `quantityDelta > 0`, for AVCO), optional timestamp (default or "end of timeline").
-- **Storage:** Stored in `normalized_transactions` with `type=MANUAL_COMPENSATING`; idempotency by `clientId`.
-- **AVCO:** Manual compensating flows are inserted into the timeline by timestamp. AVCO replay processes them in `blockTimestamp ASC` order like any other flows — same BUY/SELL formula applies. **Override** (`cost_basis_overrides`) applies only to on-chain operations; manual compensating operations carry their own `priceUsd` and are not overridden.
-- **Recalc:** Creating or deleting a manual compensating transaction triggers the same async AVCO replay (e.g. `AvcoEngine.replayFromBeginning`) as override, via the same `recalc-executor`.
+1. stablecoin parity
+2. swap-derived price
+3. wrapper/native mapping
+4. CoinGecko historical fallback
+5. unresolved price flag
 
----
+Implications:
 
-## Cross-Wallet AVCO: Detailed Example
-
-**Setup:** User has Wallet A and Wallet B.
-
-```
-Timeline (merged, sorted by blockTimestamp):
-
-  t1  Wallet A  BUY  2 ETH @ $1000   → AVCO_A = $1000,  qty_A = 2
-  t2  Wallet B  BUY  1 ETH @ $1500   → AVCO_B = $1500,  qty_B = 1
-  t3  Wallet A  TRANSFER 1 ETH → B   → modelled as standard outflow/inflow flows
-  t4  Wallet B  SELL 1 ETH @ $2000   → realisedPnl on B
-
-Cross-wallet unified timeline:
-  t1  BUY  2 ETH @ $1000  → crossAvco = $1000,  crossQty = 2
-  t2  BUY  1 ETH @ $1500  → crossAvco = (1000×2 + 1500×1) / 3 = $1166.67, crossQty = 3
-  t4  SELL 1 ETH @ $2000  → realisedPnl = (2000 − 1166.67) × 1 = $833.33
-                          → crossAvco unchanged = $1166.67, crossQty = 2
-```
+- pricing failure does not remove quantity from replay
+- pricing gaps must be visible as warnings or blockers
+- CoinGecko is a fallback, not the primary pricing mechanism
 
 ---
 
-## Accounting Invariants
+## 7. Clarification Policy
 
-| # | Rule |
-|---|------|
-| AC-01 | AVCO replay always processes confirmed normalized flows in `blockTimestamp ASC` order |
-| AC-02 | `realisedPnlUsd` is computed at the same moment as AVCO — never separately |
-| AC-03 | `avcoAtTimeOfSale` is the AVCO **before** the sell quantity is subtracted |
-| AC-04 | `PRICE_UNKNOWN` flows still update quantity — only price-dependent fields are left as zero/null |
-| AC-05 | `crossWalletAvco` uses canonical confirmed normalized flows only |
-| AC-06 | Active `cost_basis_override` supersedes `priceUsd` in all AVCO replays |
-| AC-07 | All monetary arithmetic uses `Decimal128` (MongoDB) / `BigDecimal` (Java) — no floating point |
-| AC-08 | `crossWalletAvco` is global across all networks — network filter does not change its value |
-| AC-09 | Manual compensating transactions participate in AVCO replay in `blockTimestamp` order via their flows; they carry their own `priceUsd` (required for positive quantityDelta) and are not subject to `cost_basis_overrides` |
-| AC-10 | Reconciliation MATCH/MISMATCH uses **absolute** tolerance ε (default `1e-8`); young history and `showReconciliationWarning` per **ADR-009** |
+Clarification may enrich:
+
+- execution status
+- gas fields
+- created contract address
+
+Clarification is allowed only when those receipt-safe fields are actually missing.
+Low confidence alone does not move a row into clarification.
+
+Clarification may not:
+
+- treat synthetic `rawData.logs[]` as authoritative event evidence
+- silently rewrite economic meaning without traceable evidence
+
+Implications:
+
+- ambiguous `EXTERNAL_INBOUND` vs `REWARD_CLAIM` is not a clarification problem
+- plain positive inbound transfer defaults are not a clarification problem
+- promo/phishing suppression is not a clarification problem
+- wrapped-native `deposit()` / `withdraw(uint256)` is not a clarification problem
+- bridge entry / settlement selectors are not a clarification problem
+- LP position-manager `multicall` / `modifyLiquidities` routing is not a clarification problem
+- missing `transactionIndex` is a raw-repair problem before normalization, not a clarification retry
+
+---
+
+## 8. Supported Accounting Scope
+
+On-chain accounting networks:
+
+- `ETHEREUM`
+- `ARBITRUM`
+- `OPTIMISM`
+- `POLYGON`
+- `BASE`
+- `BSC`
+- `AVALANCHE`
+- `MANTLE`
+- `LINEA`
+- `UNICHAIN`
+- `ZKSYNC`
+- `KATANA`
+- `PLASMA`
+
+CEX accounting source:
+
+- `BYBIT`
+
+Out of scope for this milestone:
+
+- additional CEX providers
+- tax reporting
+- NFTs
+- rebase-token quantity tracking
+
+---
+
+## 9. Outputs
+
+The replay layer must be able to produce:
+
+- per-wallet asset quantity
+- per-wallet AVCO
+- realised PnL
+- incomplete-history flags
+- reconciliation status against available balance data
+
+All outputs must be derivable again from the same canonical inputs with identical ordering.
+
+For continuity events, replay must move quantity and carried basis without creating realised PnL.

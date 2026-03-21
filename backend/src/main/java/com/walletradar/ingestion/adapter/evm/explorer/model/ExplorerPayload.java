@@ -3,7 +3,7 @@ package com.walletradar.ingestion.adapter.evm.explorer.model;
 import org.bson.Document;
 
 /**
- * Common normalized explorer payload wrapper used by explorer adapters.
+ * Common explorer payload wrapper used by explorer adapters.
  */
 public interface ExplorerPayload {
 
@@ -30,4 +30,3 @@ public interface ExplorerPayload {
         return asText.isBlank() ? null : asText;
     }
 }
-

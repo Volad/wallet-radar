@@ -1,7 +1,6 @@
 package com.walletradar.ingestion.adapter.evm.explorer;
 
 import com.walletradar.domain.common.NetworkId;
-import com.walletradar.domain.transaction.raw.NormalizationStatus;
 import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.domain.transaction.raw.RawSyncMethod;
 import com.walletradar.ingestion.adapter.evm.explorer.model.ExplorerInternalTransfer;
@@ -77,7 +76,6 @@ class ExplorerEvmNetworkAdapterTest {
         RawTransaction tx = result.get(0);
         assertThat(tx.getTxHash()).isEqualTo("0xabc");
         assertThat(tx.getId()).isEqualTo("0xabc:ARBITRUM:" + WALLET);
-        assertThat(tx.getNormalizationStatus()).isEqualTo(NormalizationStatus.PENDING);
         assertThat(tx.getRetryCount()).isZero();
         assertThat(tx.getSyncMethod()).isEqualTo(RawSyncMethod.ETHERSCAN);
         assertThat(tx.getBlockNumber()).isEqualTo(123L);

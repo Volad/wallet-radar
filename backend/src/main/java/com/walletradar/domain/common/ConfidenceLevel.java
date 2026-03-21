@@ -1,7 +1,7 @@
 package com.walletradar.domain.common;
 
 /**
- * Confidence level for inferred legs and transaction clarification.
+ * Discrete confidence used on canonical normalized records and inferred flow details.
  */
 public enum ConfidenceLevel {
     HIGH,

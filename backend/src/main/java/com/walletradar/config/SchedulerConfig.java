@@ -6,7 +6,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 
 /**
- * Scheduler pool (2 threads) for @Scheduled jobs: IncrementalSync, SnapshotCron, CurrentBalancePoll.
+ * Scheduler pool for backfill retry and coordination jobs.
  */
 @Configuration
 @EnableScheduling

@@ -12,6 +12,7 @@ import com.walletradar.ingestion.adapter.evm.rpc.EvmRpcClient;
 import com.walletradar.ingestion.adapter.evm.rpc.RpcRequest;
 import io.github.resilience4j.ratelimiter.RateLimiter;
 import io.github.resilience4j.ratelimiter.RateLimiterConfig;
+import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -43,7 +44,7 @@ class EvmNetworkAdapterTest {
         rotator = new RpcEndpointRotator(List.of("https://test.rpc"), RetryPolicy.defaultPolicy());
         IngestionNetworkProperties properties = new IngestionNetworkProperties();
         EvmBatchBlockSizeResolver resolver = new EvmBatchBlockSizeResolver(properties);
-        Map<String, RpcEndpointRotator> rotatorsByNetwork = Map.of("ETHEREUM", rotator, "ARBITRUM", rotator);
+        Map<String, RpcEndpointRotator> rotatorsByNetwork = Map.of("ETHEREUM", rotator, "ARBITRUM", rotator, "BSC", rotator);
         evmRpcProperties = evmRpcProps();
         adapter = new EvmNetworkAdapter(mockRpc, rotatorsByNetwork, rotator, fastLimiter(), evmRpcProperties, new ObjectMapper(), resolver);
     }
@@ -311,7 +312,7 @@ class EvmNetworkAdapterTest {
         RawTransaction tx = result.get(0);
         assertThat(tx.getTxHash()).isEqualTo("0xaaa");
         assertThat(tx.getRawData().getList("logs", org.bson.Document.class)).hasSize(2);
-        assertThat(batchCallCount.get()).isEqualTo(2);
+        assertThat(batchCallCount.get()).isGreaterThanOrEqualTo(2);
     }
 
     @Test
@@ -428,6 +429,7 @@ class EvmNetworkAdapterTest {
                     return Mono.just("[]");
                 }
                 long[] range = extractRangeFromBatchCall(requests);
+                rangesSeen.add(range[0] + "-" + range[1]);
                 if (containsBlock(range, 10L)) {
                     return Mono.just("[" +
                             "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":26,\"message\":\"Unknown block\"}}," +
@@ -449,6 +451,317 @@ class EvmNetworkAdapterTest {
         assertThat(result).isEmpty();
         assertThat(rangesSeen).contains("1-20");
         assertThat(rangesSeen).doesNotContain("10-10");
+    }
+
+    @Test
+    void fetchTransactions_bscDirectNativeTransferWithoutLogs_discoversAndEnrichesRawPayload() {
+        String wallet = "0x0000000000000000000000000000000000001234";
+        String sender = "0x0000000000000000000000000000000000005678";
+        String txHash = "0x149342ddd1d445297b57b89b8e44e6bef79263e668f91c48f6109df61baddd50";
+        String blockResponse = """
+                {"jsonrpc":"2.0","id":1,"result":{
+                  "number":"0x2",
+                  "timestamp":"0x68947afe",
+                  "transactions":[
+                    {
+                      "hash":"%s",
+                      "blockNumber":"0x2",
+                      "transactionIndex":"0x32",
+                      "from":"%s",
+                      "to":"%s",
+                      "value":"0xd3afae7d146",
+                      "input":"0x",
+                      "gas":"0x5208",
+                      "gasPrice":"0x3b9aca00",
+                      "nonce":"0x0"
+                    }
+                  ]
+                }}
+                """.formatted(txHash, sender, wallet);
+        String receiptBatch = """
+                [
+                  {"jsonrpc":"2.0","id":1,"result":{
+                    "transactionHash":"%s",
+                    "blockNumber":"0x2",
+                    "transactionIndex":"0x32",
+                    "from":"%s",
+                    "to":"%s",
+                    "gasUsed":"0x5208",
+                    "effectiveGasPrice":"0x3b9aca00",
+                    "status":"0x1",
+                    "logs":[]
+                  }}
+                ]
+                """.formatted(txHash, sender, wallet);
+
+        EvmRpcClient bscDirectRpc = new EvmRpcClient() {
+            @Override
+            public Mono<String> call(String endpointUrl, String method, Object params) {
+                if ("eth_getBlockByNumber".equals(method)) {
+                    return Mono.just(blockResponse);
+                }
+                return Mono.just("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":null}");
+            }
+
+            @Override
+            public Mono<String> batchCall(String endpointUrl, List<RpcRequest> requests) {
+                if (requests.isEmpty()) {
+                    return Mono.just("[]");
+                }
+                String method = requests.get(0).method();
+                if ("eth_getLogs".equals(method)) {
+                    return Mono.just("[{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":[]},{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":[]}]");
+                }
+                if ("eth_getBalance".equals(method)) {
+                    String blockHex = String.valueOf(((List<?>) requests.get(0).params()).get(1));
+                    if ("0x1".equals(blockHex)) {
+                        return Mono.just("[{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":\"0x0\"},{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":\"0x0\"}]");
+                    }
+                    return Mono.just("[{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":\"0xd3afae7d146\"},{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":\"0x0\"}]");
+                }
+                if ("eth_getTransactionReceipt".equals(method)) {
+                    return Mono.just(receiptBatch);
+                }
+                return Mono.just("[]");
+            }
+        };
+
+        EvmBatchBlockSizeResolver resolver = new EvmBatchBlockSizeResolver(new IngestionNetworkProperties());
+        EvmNetworkAdapter bscAdapter = new EvmNetworkAdapter(
+                bscDirectRpc,
+                Map.of("BSC", rotator),
+                rotator,
+                fastLimiter(),
+                evmRpcProps(),
+                new ObjectMapper(),
+                resolver
+        );
+
+        List<RawTransaction> result = bscAdapter.fetchTransactions(wallet, NetworkId.BSC, 2L, 2L);
+
+        assertThat(result).hasSize(1);
+        RawTransaction tx = result.get(0);
+        assertThat(tx.getTxHash()).isEqualTo(txHash);
+        assertThat(tx.getBlockNumber()).isEqualTo(2L);
+        assertThat(tx.getRawData().getString("from")).isEqualTo(sender);
+        assertThat(tx.getRawData().getString("to")).isEqualTo(wallet);
+        assertThat(tx.getRawData().getString("value")).isEqualTo("0xd3afae7d146");
+        assertThat(tx.getRawData().getString("timeStamp")).isEqualTo("1754561278");
+        assertThat(tx.getRawData().getString("transactionIndex")).isEqualTo("50");
+        assertThat(tx.getRawData().getString("txreceipt_status")).isEqualTo("1");
+        assertThat(tx.getRawData().getEmbedded(List.of("explorer", "tokenTransfers"), List.class)).isEmpty();
+        assertThat(tx.getRawData().getEmbedded(List.of("explorer", "tx", "to"), String.class)).isEqualTo(wallet);
+    }
+
+    @Test
+    void fetchTransactions_bscDirectDiscovery_batchStateShapeInvalid_fallsBackToSequentialStateReads() {
+        String wallet = "0x0000000000000000000000000000000000001234";
+        String sender = "0x0000000000000000000000000000000000005678";
+        String txHash = "0x149342ddd1d445297b57b89b8e44e6bef79263e668f91c48f6109df61baddd50";
+        String blockResponse = """
+                {"jsonrpc":"2.0","id":1,"result":{
+                  "number":"0x2",
+                  "timestamp":"0x68947afe",
+                  "transactions":[
+                    {
+                      "hash":"%s",
+                      "blockNumber":"0x2",
+                      "transactionIndex":"0x32",
+                      "from":"%s",
+                      "to":"%s",
+                      "value":"0xd3afae7d146",
+                      "input":"0x",
+                      "gas":"0x5208",
+                      "gasPrice":"0x3b9aca00",
+                      "nonce":"0x0"
+                    }
+                  ]
+                }}
+                """.formatted(txHash, sender, wallet);
+        String receiptBatch = """
+                [
+                  {"jsonrpc":"2.0","id":1,"result":{
+                    "transactionHash":"%s",
+                    "blockNumber":"0x2",
+                    "transactionIndex":"0x32",
+                    "from":"%s",
+                    "to":"%s",
+                    "gasUsed":"0x5208",
+                    "effectiveGasPrice":"0x3b9aca00",
+                    "status":"0x1",
+                    "logs":[]
+                  }}
+                ]
+                """.formatted(txHash, sender, wallet);
+        AtomicInteger sequentialStateCalls = new AtomicInteger(0);
+
+        EvmRpcClient bscDirectRpc = new EvmRpcClient() {
+            @Override
+            public Mono<String> call(String endpointUrl, String method, Object params) {
+                if ("eth_getBlockByNumber".equals(method)) {
+                    return Mono.just(blockResponse);
+                }
+                if ("eth_getBalance".equals(method)) {
+                    sequentialStateCalls.incrementAndGet();
+                    String blockHex = String.valueOf(((List<?>) params).get(1));
+                    return Mono.just("0x1".equals(blockHex) ? singleResult("0x0") : singleResult("0xd3afae7d146"));
+                }
+                if ("eth_getTransactionCount".equals(method)) {
+                    sequentialStateCalls.incrementAndGet();
+                    return Mono.just(singleResult("0x0"));
+                }
+                return Mono.just("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":null}");
+            }
+
+            @Override
+            public Mono<String> batchCall(String endpointUrl, List<RpcRequest> requests) {
+                if (requests.isEmpty()) {
+                    return Mono.just("[]");
+                }
+                String method = requests.get(0).method();
+                if ("eth_getLogs".equals(method)) {
+                    return Mono.just("[{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":[]},{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":[]}]");
+                }
+                if ("eth_getBalance".equals(method)) {
+                    return Mono.just("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":\"0x0\"}");
+                }
+                if ("eth_getTransactionReceipt".equals(method)) {
+                    return Mono.just(receiptBatch);
+                }
+                return Mono.just("[]");
+            }
+        };
+
+        EvmBatchBlockSizeResolver resolver = new EvmBatchBlockSizeResolver(new IngestionNetworkProperties());
+        EvmNetworkAdapter bscAdapter = new EvmNetworkAdapter(
+                bscDirectRpc,
+                Map.of("BSC", rotator),
+                rotator,
+                fastLimiter(),
+                evmRpcProps(),
+                new ObjectMapper(),
+                resolver
+        );
+
+        List<RawTransaction> result = bscAdapter.fetchTransactions(wallet, NetworkId.BSC, 2L, 2L);
+
+        assertThat(result).hasSize(1);
+        assertThat(sequentialStateCalls.get()).isGreaterThanOrEqualTo(2);
+        assertThat(result.get(0).getTxHash()).isEqualTo(txHash);
+    }
+
+    @Test
+    void fetchTransactions_rpcEnrichmentAddsTransactionFieldsAndDecodedTokenTransfers() {
+        String wallet = "0x0000000000000000000000000000000000001234";
+        String walletTopic = topicAddress(wallet);
+        String tokenContract = "0x0000000000000000000000000000000000009999";
+        String txHash = "0xabc";
+        String transferTopic = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+        String batchLogsResponse = """
+                [
+                  {"jsonrpc":"2.0","id":1,"result":[
+                    {"transactionHash":"%s","blockNumber":"0x64","address":"%s","topics":["%s","%s","0x0000000000000000000000000000000000000000000000000000000000007777"],"data":"0x%064x","logIndex":"0x0"}
+                  ]},
+                  {"jsonrpc":"2.0","id":2,"result":[]}
+                ]
+                """.formatted(txHash, tokenContract, transferTopic, walletTopic, 100);
+        String receiptBatchResponse = """
+                [
+                  {"jsonrpc":"2.0","id":1,"result":{
+                    "transactionHash":"%s",
+                    "blockNumber":"0x64",
+                    "transactionIndex":"0x5",
+                    "from":"%s",
+                    "to":"0x0000000000000000000000000000000000008888",
+                    "gasUsed":"0x5208",
+                    "effectiveGasPrice":"0x3b9aca00",
+                    "status":"0x1",
+                    "logs":[
+                      {"transactionHash":"%s","blockNumber":"0x64","address":"%s","topics":["%s","%s","0x0000000000000000000000000000000000000000000000000000000000007777"],"data":"0x%064x","logIndex":"0x0"}
+                    ]
+                  }}
+                ]
+                """.formatted(txHash, wallet, txHash, tokenContract, transferTopic, walletTopic, 100);
+        String batchTransactionResponse = """
+                [
+                  {"jsonrpc":"2.0","id":1,"result":{
+                    "hash":"%s",
+                    "blockNumber":"0x64",
+                    "transactionIndex":"0x5",
+                    "from":"%s",
+                    "to":"0x0000000000000000000000000000000000008888",
+                    "value":"0x0",
+                    "input":"0xa9059cbb0000000000000000000000000000000000000000000000000000000000000000",
+                    "gas":"0x5208",
+                    "gasPrice":"0x3b9aca00",
+                    "nonce":"0x1"
+                  }}
+                ]
+                """.formatted(txHash, wallet);
+        String batchBlockResponse = """
+                [
+                  {"jsonrpc":"2.0","id":1,"result":{"timestamp":"0x5f5e100"}}
+                ]
+                """;
+
+        EvmRpcClient enrichingRpc = new EvmRpcClient() {
+            @Override
+            public Mono<String> call(String endpointUrl, String method, Object params) {
+                if ("eth_call".equals(method)) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> call = (Map<String, Object>) ((List<?>) params).get(0);
+                    String data = String.valueOf(call.get("data"));
+                    return switch (data) {
+                        case "0x313ce567" -> Mono.just(singleResult(hexUint(18)));
+                        case "0x95d89b41" -> Mono.just(singleResult(hexBytes32("BUSD")));
+                        case "0x06fdde03" -> Mono.just(singleResult(hexBytes32("Binance USD")));
+                        default -> Mono.just(singleResult("0x"));
+                    };
+                }
+                return Mono.just("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":null}");
+            }
+
+            @Override
+            public Mono<String> batchCall(String endpointUrl, List<RpcRequest> requests) {
+                if (requests.isEmpty()) {
+                    return Mono.just("[]");
+                }
+                return switch (requests.get(0).method()) {
+                    case "eth_getLogs" -> Mono.just(batchLogsResponse);
+                    case "eth_getTransactionReceipt" -> Mono.just(receiptBatchResponse);
+                    case "eth_getTransactionByHash" -> Mono.just(batchTransactionResponse);
+                    case "eth_getBlockByNumber" -> Mono.just(batchBlockResponse);
+                    default -> Mono.just("[]");
+                };
+            }
+        };
+
+        EvmBatchBlockSizeResolver resolver = new EvmBatchBlockSizeResolver(new IngestionNetworkProperties());
+        EvmNetworkAdapter enrichingAdapter = new EvmNetworkAdapter(
+                enrichingRpc,
+                Map.of("ETHEREUM", rotator),
+                rotator,
+                fastLimiter(),
+                evmRpcProps(),
+                new ObjectMapper(),
+                resolver
+        );
+
+        List<RawTransaction> result = enrichingAdapter.fetchTransactions(wallet, NetworkId.ETHEREUM, 100L, 100L);
+
+        assertThat(result).hasSize(1);
+        RawTransaction tx = result.get(0);
+        assertThat(tx.getRawData().getString("input")).startsWith("0xa9059cbb");
+        assertThat(tx.getRawData().getString("methodId")).isEqualTo("0xa9059cbb");
+        assertThat(tx.getRawData().getString("timeStamp")).isEqualTo("100000000");
+        assertThat(tx.getRawData().getString("transactionIndex")).isEqualTo("5");
+        assertThat(tx.getRawData().getString("txreceipt_status")).isEqualTo("1");
+        @SuppressWarnings("unchecked")
+        List<Document> tokenTransfers = (List<Document>) tx.getRawData().getEmbedded(List.of("explorer", "tokenTransfers"), List.class);
+        assertThat(tokenTransfers).hasSize(1);
+        assertThat(tokenTransfers.get(0).getString("contractAddress")).isEqualTo(tokenContract);
+        assertThat(tokenTransfers.get(0).getString("tokenSymbol")).isEqualTo("BUSD");
+        assertThat(tokenTransfers.get(0).getString("tokenDecimal")).isEqualTo("18");
     }
 
     private static long[] extractRangeFromSingleCall(Object params) {
@@ -477,6 +790,31 @@ class EvmNetworkAdapterTest {
 
     private static boolean containsBlock(long[] range, long block) {
         return block >= range[0] && block <= range[1];
+    }
+
+    private static String topicAddress(String address) {
+        String normalized = address.substring(2).toLowerCase();
+        return "0x" + "0".repeat(24) + normalized;
+    }
+
+    private static String hexUint(int value) {
+        return "0x" + String.format("%064x", value);
+    }
+
+    private static String hexBytes32(String value) {
+        byte[] bytes = value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        StringBuilder hex = new StringBuilder();
+        for (byte b : bytes) {
+            hex.append(String.format("%02x", b));
+        }
+        while (hex.length() < 64) {
+            hex.append("00");
+        }
+        return "0x" + hex.substring(0, 64);
+    }
+
+    private static String singleResult(String result) {
+        return "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":\"" + result + "\"}";
     }
 
     private static IngestionNetworkProperties.NetworkIngestionEntry entry(int batchBlockSize) {

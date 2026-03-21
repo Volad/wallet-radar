@@ -3,9 +3,9 @@ package com.walletradar.ingestion.adapter.evm.rpc;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.walletradar.domain.transaction.raw.NormalizationStatus;
 import com.walletradar.domain.transaction.raw.RawSyncMethod;
 import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.transaction.raw.NormalizationStatus;
 import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.ingestion.adapter.NetworkAdapter;
 import com.walletradar.ingestion.adapter.RpcEndpointRotator;
@@ -19,6 +19,8 @@ import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
+import java.math.BigInteger;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -26,9 +28,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.StreamSupport;
 
 /**
- * EVM adapter: eth_getLogs with per-network batch block size (ADR-011) and per-network RPC rotators (ADR-012).
- * Fetches ERC20 Transfer logs where the wallet is from or to, then enriches each tx with full receipt logs
- * so classifiers see Swap and other topics (e.g. Uniswap V3 Swap) and emit SWAP_BUY/SWAP_SELL instead of EXTERNAL_INBOUND.
+ * EVM adapter that fetches wallet-related Transfer logs and enriches each transaction with full receipts.
  */
 @Slf4j
 @Component
@@ -36,11 +36,15 @@ import java.util.stream.StreamSupport;
 public class EvmNetworkAdapter implements NetworkAdapter {
 
     private static final String TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+    private static final String ERC20_DECIMALS_SELECTOR = "0x313ce567";
+    private static final String ERC20_SYMBOL_SELECTOR = "0x95d89b41";
+    private static final String ERC20_NAME_SELECTOR = "0x06fdde03";
     static final int MIN_CHUNK_SIZE = 50;
     static final int MAX_BATCH_SIZE = 50;
 
     private final Map<String, Long> batchUnsupportedUntilMs = new ConcurrentHashMap<>();
     private final Map<String, Long> endpointCooldownUntilMs = new ConcurrentHashMap<>();
+    private final Map<String, TokenMetadata> tokenMetadataCache = new ConcurrentHashMap<>();
 
     private final EvmRpcClient rpcClient;
     @Qualifier("evmRotatorsByNetwork")
@@ -52,6 +56,7 @@ public class EvmNetworkAdapter implements NetworkAdapter {
     private final IngestionEvmRpcProperties evmRpcProperties;
     private final ObjectMapper objectMapper;
     private final EvmBatchBlockSizeResolver batchBlockSizeResolver;
+    private final DirectWalletRpcDiscovery directWalletRpcDiscovery;
 
     public EvmNetworkAdapter(
             EvmRpcClient rpcClient,
@@ -69,6 +74,7 @@ public class EvmNetworkAdapter implements NetworkAdapter {
         this.evmRpcProperties = evmRpcProperties;
         this.objectMapper = objectMapper;
         this.batchBlockSizeResolver = batchBlockSizeResolver;
+        this.directWalletRpcDiscovery = new DirectWalletRpcDiscovery(objectMapper);
     }
 
     @Override
@@ -132,6 +138,9 @@ public class EvmNetworkAdapter implements NetworkAdapter {
                                     endpoint, messageOf(batchEx));
                             throw batchEx;
                         }
+                        if (isRangeTooWideError(batchEx) || isUnknownBlockError(batchEx)) {
+                            throw batchEx;
+                        }
                         markBatchUnsupported(endpoint, "eth_getLogs", batchEx);
                         fromLogs = ethGetLogs(endpoint, fromBlock, toBlock, Arrays.asList(TRANSFER_TOPIC, fromTopic), null);
                         toLogs = ethGetLogs(endpoint, fromBlock, toBlock, Arrays.asList(TRANSFER_TOPIC, null, fromTopic), null);
@@ -140,22 +149,52 @@ public class EvmNetworkAdapter implements NetworkAdapter {
                     fromLogs = ethGetLogs(endpoint, fromBlock, toBlock, Arrays.asList(TRANSFER_TOPIC, fromTopic), null);
                     toLogs = ethGetLogs(endpoint, fromBlock, toBlock, Arrays.asList(TRANSFER_TOPIC, null, fromTopic), null);
                 }
-                Map<String, List<JsonNode>> byTx = new HashMap<>();
+                Set<String> txHashes = new LinkedHashSet<>();
                 for (JsonNode log : fromLogs) {
                     String txHash = log.path("transactionHash").asText();
-                    byTx.computeIfAbsent(txHash, k -> new ArrayList<>()).add(log);
+                    if (!txHash.isBlank()) {
+                        txHashes.add(txHash.toLowerCase(Locale.ROOT));
+                    }
                 }
                 for (JsonNode log : toLogs) {
                     String txHash = log.path("transactionHash").asText();
-                    byTx.computeIfAbsent(txHash, k -> new ArrayList<>()).add(log);
+                    if (!txHash.isBlank()) {
+                        txHashes.add(txHash.toLowerCase(Locale.ROOT));
+                    }
                 }
+
+                Map<String, DirectWalletRpcDiscovery.DiscoveredTransaction> directTransactions = supportsDirectWalletDiscovery(networkIdStr)
+                        ? directWalletRpcDiscovery.discover(
+                        endpoint,
+                        walletAddress,
+                        fromBlock,
+                        toBlock,
+                        new DirectWalletRpcDiscovery.RpcInvoker() {
+                            @Override
+                            public String call(String rpcEndpoint, String method, Object params) {
+                                return callRpc(rpcEndpoint, method, params);
+                            }
+
+                            @Override
+                            public String batchCall(String rpcEndpoint, List<RpcRequest> requests) {
+                                return batchCallRpc(rpcEndpoint, requests);
+                            }
+                        }
+                )
+                        : Map.of();
+                txHashes.addAll(directTransactions.keySet());
+
+                if (txHashes.isEmpty()) {
+                    return List.of();
+                }
+
                 Map<String, JsonNode> receiptsByTx = new HashMap<>();
                 boolean receiptsBatchSupported = batchSupported && isBatchSupported(endpoint);
                 if (receiptsBatchSupported) {
                     try {
-                        Map<String, JsonNode> batchReceipts = batchGetTransactionReceipts(endpoint, byTx.keySet());
+                        Map<String, JsonNode> batchReceipts = batchGetTransactionReceipts(endpoint, txHashes);
                         receiptsByTx.putAll(batchReceipts);
-                        for (String txHash : byTx.keySet()) {
+                        for (String txHash : txHashes) {
                             if (!receiptsByTx.containsKey(txHash)) {
                                 JsonNode fullReceipt = getFullTransactionReceipt(endpoint, txHash);
                                 if (fullReceipt != null) {
@@ -170,7 +209,7 @@ public class EvmNetworkAdapter implements NetworkAdapter {
                             throw batchEx;
                         }
                         markBatchUnsupported(endpoint, "eth_getTransactionReceipt(batch)", batchEx);
-                        for (String txHash : byTx.keySet()) {
+                        for (String txHash : txHashes) {
                             JsonNode fullReceipt = getFullTransactionReceipt(endpoint, txHash);
                             if (fullReceipt != null) {
                                 receiptsByTx.put(txHash, fullReceipt);
@@ -178,15 +217,37 @@ public class EvmNetworkAdapter implements NetworkAdapter {
                         }
                     }
                 } else {
-                    for (String txHash : byTx.keySet()) {
+                    for (String txHash : txHashes) {
                         JsonNode fullReceipt = getFullTransactionReceipt(endpoint, txHash);
                         if (fullReceipt != null) {
                             receiptsByTx.put(txHash, fullReceipt);
                         }
                     }
                 }
-                return receiptsByTx.entrySet().stream()
-                        .map(e -> toRawTransaction(e.getKey(), networkIdStr, e.getValue(), walletAddress))
+
+                Map<String, JsonNode> transactionsByTx = new HashMap<>();
+                directTransactions.forEach((txHash, discovered) -> transactionsByTx.put(txHash, discovered.transaction()));
+                Set<String> missingTransactions = new LinkedHashSet<>(txHashes);
+                missingTransactions.removeAll(transactionsByTx.keySet());
+                transactionsByTx.putAll(batchGetTransactionsByHash(endpoint, missingTransactions));
+
+                Map<Long, Long> timestampByBlock = new HashMap<>();
+                directTransactions.values().forEach(discovered ->
+                        timestampByBlock.put(discovered.blockNumber(), discovered.timestamp())
+                );
+                resolveMissingBlockTimestamps(endpoint, collectBlockNumbers(receiptsByTx, transactionsByTx), timestampByBlock);
+
+                return txHashes.stream()
+                        .map(txHash -> toRawTransaction(
+                                txHash,
+                                networkIdStr,
+                                receiptsByTx.get(txHash),
+                                transactionsByTx.get(txHash),
+                                timestampByBlock.get(resolveBlockNumber(receiptsByTx.get(txHash), transactionsByTx.get(txHash))),
+                                walletAddress,
+                                endpoint
+                        ))
+                        .filter(Objects::nonNull)
                         .toList();
             } catch (Exception e) {
                 lastException = e;
@@ -347,8 +408,12 @@ public class EvmNetworkAdapter implements NetworkAdapter {
         return filter;
     }
 
+    private boolean supportsDirectWalletDiscovery(String networkIdStr) {
+        return "BSC".equalsIgnoreCase(networkIdStr);
+    }
+
     /**
-     * Batch-fetch full transaction receipts (ADR-020). Returns full eth_getTransactionReceipt response per txHash.
+     * Batch-fetches full transaction receipts and returns the eth_getTransactionReceipt payload per tx hash.
      */
     private Map<String, JsonNode> batchGetTransactionReceipts(String endpoint, Set<String> txHashes) {
         if (txHashes.isEmpty()) return Map.of();
@@ -393,7 +458,134 @@ public class EvmNetworkAdapter implements NetworkAdapter {
         }
     }
 
-    /** Fetches full receipt (ADR-020) — blockNumber, blockHash, logs, gasUsed, status, from, to, etc. */
+    private Map<String, JsonNode> batchGetTransactionsByHash(String endpoint, Set<String> txHashes) {
+        if (txHashes.isEmpty()) {
+            return Map.of();
+        }
+        List<String> txHashList = new ArrayList<>(txHashes);
+        Map<String, JsonNode> result = new HashMap<>();
+        for (int i = 0; i < txHashList.size(); i += MAX_BATCH_SIZE) {
+            int end = Math.min(i + MAX_BATCH_SIZE, txHashList.size());
+            List<String> subBatch = txHashList.subList(i, end);
+            try {
+                List<RpcRequest> requests = subBatch.stream()
+                        .map(hash -> new RpcRequest("eth_getTransactionByHash", Collections.singletonList(hash)))
+                        .toList();
+                String json = batchCallRpc(endpoint, requests);
+                parseBatchTransactionResponse(json, subBatch, result);
+            } catch (Exception batchFailure) {
+                for (String txHash : subBatch) {
+                    JsonNode transaction = getTransactionByHash(endpoint, txHash);
+                    if (transaction != null) {
+                        result.put(txHash, transaction);
+                    }
+                }
+            }
+        }
+        return result;
+    }
+
+    private void parseBatchTransactionResponse(String json, List<String> txHashes, Map<String, JsonNode> result) {
+        JsonNode root;
+        try {
+            root = objectMapper.readTree(json);
+        } catch (JsonProcessingException e) {
+            throw new RpcException("Failed to parse batch transaction response", e);
+        }
+        if (!root.isArray()) {
+            throw new RpcException("Batch transaction: expected JSON array response");
+        }
+        Map<Integer, JsonNode> byId = new HashMap<>();
+        for (JsonNode response : root) {
+            byId.put(response.path("id").asInt(), response);
+        }
+        for (int i = 0; i < txHashes.size(); i++) {
+            JsonNode response = byId.get(i + 1);
+            if (response == null) {
+                continue;
+            }
+            JsonNode error = response.path("error");
+            if (!error.isMissingNode()) {
+                continue;
+            }
+            JsonNode transaction = response.path("result");
+            if (transaction.isMissingNode() || transaction.isNull()) {
+                continue;
+            }
+            result.put(txHashes.get(i), transaction);
+        }
+    }
+
+    private void resolveMissingBlockTimestamps(String endpoint, Set<Long> blockNumbers, Map<Long, Long> timestampByBlock) {
+        Set<Long> missing = new LinkedHashSet<>();
+        for (Long blockNumber : blockNumbers) {
+            if (blockNumber != null && blockNumber > 0L && !timestampByBlock.containsKey(blockNumber)) {
+                missing.add(blockNumber);
+            }
+        }
+        if (missing.isEmpty()) {
+            return;
+        }
+
+        List<Long> blockList = new ArrayList<>(missing);
+        for (int i = 0; i < blockList.size(); i += MAX_BATCH_SIZE) {
+            int end = Math.min(i + MAX_BATCH_SIZE, blockList.size());
+            List<Long> subBatch = blockList.subList(i, end);
+            try {
+                List<RpcRequest> requests = subBatch.stream()
+                        .map(blockNumber -> new RpcRequest(
+                                "eth_getBlockByNumber",
+                                List.of("0x" + Long.toHexString(blockNumber), false)
+                        ))
+                        .toList();
+                String json = batchCallRpc(endpoint, requests);
+                parseBatchBlockTimestampResponse(json, subBatch, timestampByBlock);
+            } catch (Exception batchFailure) {
+                for (Long blockNumber : subBatch) {
+                    Long epochSeconds = getBlockTimestamp(endpoint, blockNumber);
+                    if (epochSeconds != null) {
+                        timestampByBlock.put(blockNumber, epochSeconds);
+                    }
+                }
+            }
+        }
+    }
+
+    private void parseBatchBlockTimestampResponse(String json, List<Long> blockNumbers, Map<Long, Long> timestampByBlock) {
+        JsonNode root;
+        try {
+            root = objectMapper.readTree(json);
+        } catch (JsonProcessingException e) {
+            throw new RpcException("Failed to parse batch block response", e);
+        }
+        if (!root.isArray()) {
+            throw new RpcException("Batch block: expected JSON array response");
+        }
+        Map<Integer, JsonNode> byId = new HashMap<>();
+        for (JsonNode response : root) {
+            byId.put(response.path("id").asInt(), response);
+        }
+        for (int i = 0; i < blockNumbers.size(); i++) {
+            JsonNode response = byId.get(i + 1);
+            if (response == null) {
+                continue;
+            }
+            JsonNode error = response.path("error");
+            if (!error.isMissingNode()) {
+                continue;
+            }
+            JsonNode block = response.path("result");
+            if (block.isMissingNode() || block.isNull()) {
+                continue;
+            }
+            Long epochSeconds = parseHexLong(block.path("timestamp").asText(null));
+            if (epochSeconds != null) {
+                timestampByBlock.put(blockNumbers.get(i), epochSeconds);
+            }
+        }
+    }
+
+    /** Fetches the full receipt payload: blockNumber, blockHash, logs, gasUsed, status, from, to, and related fields. */
     private JsonNode getFullTransactionReceipt(String endpoint, String txHash) {
         try {
             String json = callRpc(endpoint, "eth_getTransactionReceipt", Collections.singletonList(txHash));
@@ -404,6 +596,48 @@ public class EvmNetworkAdapter implements NetworkAdapter {
             JsonNode result = root.path("result");
             if (result.isMissingNode() || result.isNull() || !result.has("logs")) return null;
             return result;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private JsonNode getTransactionByHash(String endpoint, String txHash) {
+        try {
+            String json = callRpc(endpoint, "eth_getTransactionByHash", Collections.singletonList(txHash));
+            if (json == null) {
+                return null;
+            }
+            JsonNode root = objectMapper.readTree(json);
+            JsonNode error = root.path("error");
+            if (!error.isMissingNode()) {
+                return null;
+            }
+            JsonNode result = root.path("result");
+            return result.isMissingNode() || result.isNull() ? null : result;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private Long getBlockTimestamp(String endpoint, Long blockNumber) {
+        if (blockNumber == null || blockNumber <= 0L) {
+            return null;
+        }
+        try {
+            String json = callRpc(endpoint, "eth_getBlockByNumber", List.of("0x" + Long.toHexString(blockNumber), false));
+            if (json == null) {
+                return null;
+            }
+            JsonNode root = objectMapper.readTree(json);
+            JsonNode error = root.path("error");
+            if (!error.isMissingNode()) {
+                return null;
+            }
+            JsonNode result = root.path("result");
+            if (result.isMissingNode() || result.isNull()) {
+                return null;
+            }
+            return parseHexLong(result.path("timestamp").asText(null));
         } catch (Exception e) {
             return null;
         }
@@ -432,9 +666,20 @@ public class EvmNetworkAdapter implements NetworkAdapter {
     }
 
     /**
-     * Build RawTransaction with full receipt in rawData (ADR-020). Classifiers read rawData.get("logs").
+     * Builds RawTransaction with the full receipt stored in rawData.
      */
-    private RawTransaction toRawTransaction(String txHash, String networkId, JsonNode receipt, String walletAddress) {
+    private RawTransaction toRawTransaction(
+            String txHash,
+            String networkId,
+            JsonNode receipt,
+            JsonNode transaction,
+            Long epochSeconds,
+            String walletAddress,
+            String endpoint
+    ) {
+        if (receipt == null && transaction == null) {
+            return null;
+        }
         RawTransaction tx = new RawTransaction();
         tx.setId(txHash + ":" + networkId + ":" + walletAddress);
         tx.setTxHash(txHash);
@@ -444,19 +689,400 @@ public class EvmNetworkAdapter implements NetworkAdapter {
         tx.setNormalizationStatus(NormalizationStatus.PENDING);
         tx.setRetryCount(0);
         tx.setCreatedAt(Instant.now());
-        Long blockNum = parseBlockNumber(receipt.path("blockNumber").asText());
+        Long blockNum = resolveBlockNumber(receipt, transaction);
         tx.setBlockNumber(blockNum);
-        Document rawData = jsonNodeToDocument(receipt);
+        Document rawData = buildRawPayload(networkId, endpoint, receipt, transaction, epochSeconds, txHash);
         tx.setRawData(rawData);
         return tx;
     }
 
-    private static Long parseBlockNumber(String hex) {
-        if (hex == null || !hex.startsWith("0x")) return 0L;
+    private Document buildRawPayload(
+            String networkId,
+            String endpoint,
+            JsonNode receipt,
+            JsonNode transaction,
+            Long epochSeconds,
+            String txHash
+    ) {
+        Document rawData = receipt == null ? new Document() : jsonNodeToDocument(receipt);
+        mergeTransactionFields(rawData, transaction);
+        if (epochSeconds != null) {
+            rawData.put("timeStamp", Long.toString(epochSeconds));
+        }
+        Long blockNumber = resolveBlockNumber(receipt, transaction);
+        if (blockNumber != null && blockNumber > 0L) {
+            rawData.put("blockNumber", Long.toString(blockNumber));
+        }
+        Integer transactionIndex = resolveTransactionIndex(receipt, transaction);
+        if (transactionIndex != null) {
+            rawData.put("transactionIndex", Integer.toString(transactionIndex));
+        }
+        String input = stringValue(rawData.get("input"));
+        if (input != null && input.length() >= 10) {
+            rawData.put("methodId", input.substring(0, 10).toLowerCase(Locale.ROOT));
+        }
+        String receiptStatus = normalizeReceiptStatus(receipt == null ? null : stringValue(receipt.path("status").asText(null)));
+        if (receiptStatus != null) {
+            rawData.put("txreceipt_status", receiptStatus);
+            rawData.put("isError", "0".equals(receiptStatus) ? "1" : "0");
+        }
+
+        Document explorer = new Document();
+        explorer.put("tx", buildExplorerTxDocument(rawData, txHash));
+        explorer.put("tokenTransfers", buildRpcTokenTransfers(endpoint, networkId, receipt));
+        explorer.put("internalTransfers", List.of());
+        rawData.put("explorer", explorer);
+        return rawData;
+    }
+
+    private void mergeTransactionFields(Document rawData, JsonNode transaction) {
+        if (rawData == null || transaction == null || transaction.isMissingNode() || transaction.isNull()) {
+            return;
+        }
+        copyIfPresent(rawData, "hash", transaction, "hash");
+        copyIfPresent(rawData, "blockHash", transaction, "blockHash");
+        copyIfPresent(rawData, "blockNumber", transaction, "blockNumber");
+        copyIfPresent(rawData, "from", transaction, "from");
+        copyIfPresent(rawData, "to", transaction, "to");
+        copyIfPresent(rawData, "input", transaction, "input");
+        copyIfPresent(rawData, "value", transaction, "value");
+        copyIfPresent(rawData, "nonce", transaction, "nonce");
+        copyIfPresent(rawData, "gas", transaction, "gas");
+        copyIfPresent(rawData, "gasPrice", transaction, "gasPrice");
+        copyIfPresent(rawData, "maxFeePerGas", transaction, "maxFeePerGas");
+        copyIfPresent(rawData, "maxPriorityFeePerGas", transaction, "maxPriorityFeePerGas");
+        copyIfPresent(rawData, "type", transaction, "type");
+        copyIfPresent(rawData, "transactionIndex", transaction, "transactionIndex");
+    }
+
+    private Document buildExplorerTxDocument(Document rawData, String txHash) {
+        Document explorerTx = new Document();
+        if (txHash != null) {
+            explorerTx.put("hash", txHash);
+            explorerTx.put("txhash", txHash);
+        }
+        copyIfPresent(explorerTx, "blockNumber", rawData, "blockNumber");
+        copyIfPresent(explorerTx, "timeStamp", rawData, "timeStamp");
+        copyIfPresent(explorerTx, "transactionIndex", rawData, "transactionIndex");
+        copyIfPresent(explorerTx, "from", rawData, "from");
+        copyIfPresent(explorerTx, "to", rawData, "to");
+        copyIfPresent(explorerTx, "input", rawData, "input");
+        copyIfPresent(explorerTx, "value", rawData, "value");
+        copyIfPresent(explorerTx, "methodId", rawData, "methodId");
+        copyIfPresent(explorerTx, "txreceipt_status", rawData, "txreceipt_status");
+        copyIfPresent(explorerTx, "isError", rawData, "isError");
+        return explorerTx;
+    }
+
+    private List<Document> buildRpcTokenTransfers(String endpoint, String networkId, JsonNode receipt) {
+        if (receipt == null || receipt.isMissingNode() || receipt.isNull()) {
+            return List.of();
+        }
+        JsonNode logs = receipt.path("logs");
+        if (!logs.isArray()) {
+            return List.of();
+        }
+        List<Document> transfers = new ArrayList<>();
+        for (JsonNode log : logs) {
+            if (!isErc20TransferLog(log)) {
+                continue;
+            }
+            String contractAddress = normalizeAddress(log.path("address").asText(null));
+            if (contractAddress == null) {
+                continue;
+            }
+            TokenMetadata metadata = resolveTokenMetadata(endpoint, networkId, contractAddress);
+            if (metadata.decimals() == null) {
+                continue;
+            }
+            Document transfer = new Document();
+            transfer.put("contractAddress", contractAddress);
+            transfer.put("from", topicAddress(log.path("topics").get(1).asText(null)));
+            transfer.put("to", topicAddress(log.path("topics").get(2).asText(null)));
+            transfer.put("value", parseHexQuantity(log.path("data").asText("0x0")).toString());
+            transfer.put("tokenDecimal", Integer.toString(metadata.decimals()));
+            if (metadata.symbol() != null) {
+                transfer.put("tokenSymbol", metadata.symbol());
+            }
+            if (metadata.name() != null) {
+                transfer.put("tokenName", metadata.name());
+            }
+            transfers.add(transfer);
+        }
+        return List.copyOf(transfers);
+    }
+
+    private TokenMetadata resolveTokenMetadata(String endpoint, String networkId, String contractAddress) {
+        String cacheKey = networkId + "|" + contractAddress.toLowerCase(Locale.ROOT);
+        return tokenMetadataCache.computeIfAbsent(cacheKey, key -> loadTokenMetadata(endpoint, contractAddress));
+    }
+
+    private TokenMetadata loadTokenMetadata(String endpoint, String contractAddress) {
+        Integer decimals = decodeUint256(callContract(endpoint, contractAddress, ERC20_DECIMALS_SELECTOR));
+        String symbol = decodeAbiString(callContract(endpoint, contractAddress, ERC20_SYMBOL_SELECTOR));
+        String name = decodeAbiString(callContract(endpoint, contractAddress, ERC20_NAME_SELECTOR));
+        return new TokenMetadata(decimals, symbol, name);
+    }
+
+    private String callContract(String endpoint, String contractAddress, String data) {
         try {
-            return Long.parseLong(hex.substring(2), 16);
+            String json = callRpc(
+                    endpoint,
+                    "eth_call",
+                    List.of(Map.of("to", contractAddress, "data", data), "latest")
+            );
+            JsonNode root = objectMapper.readTree(json);
+            JsonNode error = root.path("error");
+            if (!error.isMissingNode()) {
+                return null;
+            }
+            JsonNode result = root.path("result");
+            if (result.isMissingNode() || result.isNull()) {
+                return null;
+            }
+            return result.asText(null);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static Integer decodeUint256(String hexData) {
+        BigInteger value = parseHexQuantityOrNull(hexData);
+        if (value == null) {
+            return null;
+        }
+        try {
+            return value.intValueExact();
+        } catch (ArithmeticException ex) {
+            return null;
+        }
+    }
+
+    private static String decodeAbiString(String hexData) {
+        if (hexData == null || hexData.isBlank() || "0x".equalsIgnoreCase(hexData)) {
+            return null;
+        }
+        byte[] bytes = hexToBytes(hexData);
+        if (bytes.length == 0) {
+            return null;
+        }
+        if (bytes.length == 32) {
+            return trimAscii(bytes);
+        }
+        if (bytes.length < 64) {
+            return null;
+        }
+
+        int offset = decodeWordAsInt(bytes, 0);
+        if (offset < 0 || offset + 32 > bytes.length) {
+            return trimAscii(Arrays.copyOf(bytes, Math.min(bytes.length, 32)));
+        }
+        int length = decodeWordAsInt(bytes, offset);
+        int start = offset + 32;
+        if (length < 0 || start + length > bytes.length) {
+            return null;
+        }
+        return trimAscii(Arrays.copyOfRange(bytes, start, start + length));
+    }
+
+    private static int decodeWordAsInt(byte[] bytes, int offset) {
+        byte[] word = Arrays.copyOfRange(bytes, offset, Math.min(bytes.length, offset + 32));
+        if (word.length == 0) {
+            return -1;
+        }
+        try {
+            return new BigInteger(1, word).intValueExact();
+        } catch (ArithmeticException ex) {
+            return -1;
+        }
+    }
+
+    private static byte[] hexToBytes(String hexData) {
+        String normalized = hexData.startsWith("0x") || hexData.startsWith("0X")
+                ? hexData.substring(2)
+                : hexData;
+        if (normalized.length() % 2 != 0) {
+            normalized = "0" + normalized;
+        }
+        byte[] bytes = new byte[normalized.length() / 2];
+        for (int i = 0; i < normalized.length(); i += 2) {
+            bytes[i / 2] = (byte) Integer.parseInt(normalized.substring(i, i + 2), 16);
+        }
+        return bytes;
+    }
+
+    private static String trimAscii(byte[] bytes) {
+        int end = bytes.length;
+        while (end > 0 && bytes[end - 1] == 0) {
+            end--;
+        }
+        if (end <= 0) {
+            return null;
+        }
+        String decoded = new String(bytes, 0, end, StandardCharsets.UTF_8).trim();
+        return decoded.isBlank() ? null : decoded;
+    }
+
+    private static boolean isErc20TransferLog(JsonNode log) {
+        JsonNode topics = log.path("topics");
+        return topics.isArray()
+                && topics.size() == 3
+                && TRANSFER_TOPIC.equalsIgnoreCase(topics.get(0).asText());
+    }
+
+    private static String topicAddress(String topic) {
+        if (topic == null || topic.isBlank()) {
+            return null;
+        }
+        String normalized = topic.toLowerCase(Locale.ROOT);
+        if (!normalized.startsWith("0x") || normalized.length() < 42) {
+            return null;
+        }
+        return normalizeAddress("0x" + normalized.substring(normalized.length() - 40));
+    }
+
+    private static String normalizeAddress(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        String normalized = value.trim().toLowerCase(Locale.ROOT);
+        if (!normalized.startsWith("0x")) {
+            normalized = "0x" + normalized;
+        }
+        return normalized.length() == 42 ? normalized : null;
+    }
+
+    private static void copyIfPresent(Document target, String targetKey, JsonNode source, String sourceKey) {
+        if (target == null || source == null || source.isMissingNode() || source.isNull()) {
+            return;
+        }
+        JsonNode value = source.path(sourceKey);
+        if (value.isMissingNode() || value.isNull()) {
+            return;
+        }
+        target.put(targetKey, value.asText());
+    }
+
+    private static void copyIfPresent(Document target, String targetKey, Document source, String sourceKey) {
+        if (target == null || source == null) {
+            return;
+        }
+        Object value = source.get(sourceKey);
+        if (value != null) {
+            target.put(targetKey, value);
+        }
+    }
+
+    private static Long resolveBlockNumber(JsonNode receipt, JsonNode transaction) {
+        Long fromReceipt = parseBlockNumber(receipt == null ? null : receipt.path("blockNumber").asText(null));
+        if (fromReceipt != null && fromReceipt > 0L) {
+            return fromReceipt;
+        }
+        Long fromTransaction = parseBlockNumber(transaction == null ? null : transaction.path("blockNumber").asText(null));
+        return fromTransaction != null ? fromTransaction : 0L;
+    }
+
+    private static Integer resolveTransactionIndex(JsonNode receipt, JsonNode transaction) {
+        Integer fromReceipt = parseHexInteger(receipt == null ? null : receipt.path("transactionIndex").asText(null));
+        if (fromReceipt != null) {
+            return fromReceipt;
+        }
+        return parseHexInteger(transaction == null ? null : transaction.path("transactionIndex").asText(null));
+    }
+
+    private static Set<Long> collectBlockNumbers(Map<String, JsonNode> receiptsByTx, Map<String, JsonNode> transactionsByTx) {
+        Set<Long> blockNumbers = new LinkedHashSet<>();
+        receiptsByTx.values().forEach(receipt -> {
+            Long blockNumber = resolveBlockNumber(receipt, null);
+            if (blockNumber != null && blockNumber > 0L) {
+                blockNumbers.add(blockNumber);
+            }
+        });
+        transactionsByTx.values().forEach(transaction -> {
+            Long blockNumber = resolveBlockNumber(null, transaction);
+            if (blockNumber != null && blockNumber > 0L) {
+                blockNumbers.add(blockNumber);
+            }
+        });
+        return blockNumbers;
+    }
+
+    private static Long parseBlockNumber(String hex) {
+        if (hex == null || hex.isBlank()) return 0L;
+        try {
+            if (hex.startsWith("0x") || hex.startsWith("0X")) {
+                return Long.parseLong(hex.substring(2), 16);
+            }
+            return Long.parseLong(hex);
         } catch (NumberFormatException e) {
             return 0L;
+        }
+    }
+
+    private static Long parseHexLong(String hex) {
+        if (hex == null || hex.isBlank()) {
+            return null;
+        }
+        try {
+            if (hex.startsWith("0x") || hex.startsWith("0X")) {
+                return Long.parseLong(hex.substring(2), 16);
+            }
+            return Long.parseLong(hex);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private static Integer parseHexInteger(String hex) {
+        Long value = parseHexLong(hex);
+        if (value == null) {
+            return null;
+        }
+        return value > Integer.MAX_VALUE ? null : value.intValue();
+    }
+
+    private static String normalizeReceiptStatus(String status) {
+        if (status == null || status.isBlank()) {
+            return null;
+        }
+        if ("0".equals(status) || "1".equals(status)) {
+            return status;
+        }
+        Long numeric = parseHexLong(status);
+        if (numeric == null) {
+            return null;
+        }
+        return numeric == 0L ? "0" : "1";
+    }
+
+    private static String stringValue(Object value) {
+        if (value == null) {
+            return null;
+        }
+        String string = value.toString().trim();
+        return string.isEmpty() ? null : string;
+    }
+
+    private static BigInteger parseHexQuantity(String hex) {
+        BigInteger parsed = parseHexQuantityOrNull(hex);
+        return parsed == null ? BigInteger.ZERO : parsed;
+    }
+
+    private static BigInteger parseHexQuantityOrNull(String hex) {
+        if (hex == null || hex.isBlank()) {
+            return null;
+        }
+        String normalized = hex.trim();
+        if (normalized.startsWith("0x") || normalized.startsWith("0X")) {
+            normalized = normalized.substring(2);
+        }
+        if (normalized.isBlank()) {
+            return BigInteger.ZERO;
+        }
+        try {
+            return new BigInteger(normalized, 16);
+        } catch (NumberFormatException e) {
+            return null;
         }
     }
 
@@ -488,6 +1114,9 @@ public class EvmNetworkAdapter implements NetworkAdapter {
     private static String padAddressForTopic(String address) {
         String hex = address.toLowerCase().startsWith("0x") ? address.substring(2) : address;
         return "0x" + "0".repeat(24) + hex;
+    }
+
+    private record TokenMetadata(Integer decimals, String symbol, String name) {
     }
 
     private String callRpc(String endpoint, String method, Object params) {

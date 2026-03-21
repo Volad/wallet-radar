@@ -6,8 +6,8 @@ import lombok.Setter;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
- * Global EVM explorer-first runtime settings (ADR-026).
- * Per-network explorer sources (base-url/api-key) are configured in
+ * Shared explorer HTTP settings.
+ * Per-network explorer sources are configured in
  * {@code walletradar.ingestion.network.<NETWORK>.explorer.*}.
  */
 @ConfigurationProperties(prefix = "walletradar.ingestion.explorer")

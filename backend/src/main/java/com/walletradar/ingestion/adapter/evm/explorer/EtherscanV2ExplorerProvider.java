@@ -26,7 +26,7 @@ import java.time.Duration;
 import java.util.function.Function;
 
 /**
- * Explorer provider for Etherscan V2 and Etherscan-family APIs (ADR-026).
+ * Explorer provider for Etherscan V2 and compatible APIs.
  */
 @Component
 @RequiredArgsConstructor

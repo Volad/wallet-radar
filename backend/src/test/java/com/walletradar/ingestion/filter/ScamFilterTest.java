@@ -237,6 +237,29 @@ class ScamFilterTest {
     }
 
     @Test
+    @DisplayName("drops promotional cfd airdrop token before normalization")
+    void promotionalCfdAirdropTokenDropsBeforeNormalization() {
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0xcfd-spam");
+        tx.setNetworkId("PLASMA");
+        tx.setWalletAddress("0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f");
+        tx.setRawData(new Document("from", "0x3333333333333333333333333333333333333333")
+                .append("to", "0x4444444444444444444444444444444444444444")
+                .append("methodId", "0x1939c1ff")
+                .append("value", "0")
+                .append("explorer", new Document("tokenTransfers", List.of(
+                        new Document("contractAddress", "0x72fdc6006cf1bce5898f1c484cfefc66486abd8a")
+                                .append("from", "0x3333333333333333333333333333333333333333")
+                                .append("to", "0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f")
+                                .append("tokenSymbol", "www.baser.cfd - claim Your Base airdrop")
+                                .append("tokenName", "Base Promo Reward")
+                                .append("value", "1000000000000000000")
+                ))));
+
+        assertThat(filter.shouldDrop(tx)).isTrue();
+    }
+
+    @Test
     @DisplayName("wallet initiated claim-like tx still survives promotional pattern rule")
     void walletInitiatedClaimLikeTxStillSurvives() {
         RawTransaction tx = new RawTransaction();
@@ -309,6 +332,102 @@ class ScamFilterTest {
                                         .append("to", "0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f")
                                         .append("value", "100000000000000000")
                         ))));
+
+        assertThat(filter.shouldDrop(tx)).isFalse();
+    }
+
+    @Test
+    @DisplayName("legitimate Angle rewards claim survives scam filter")
+    void legitimateAngleRewardsClaimSurvivesScamFilter() {
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0x062cd8bea820f4ea798b082d42748b27580a4c99b96b3e297875ea527e5c6669");
+        tx.setNetworkId("BASE");
+        tx.setWalletAddress("0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f");
+        tx.setRawData(new Document("from", "0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f")
+                .append("to", "0x3ef3d8ba38ebe18db133cec108f4d14ce00dd9ae")
+                .append("value", "0")
+                .append("methodId", "0x71ee95c0")
+                .append("functionName", "claim(address user,address[] tokens,uint256[] amounts,bytes32[][] proofs)")
+                .append("explorer", new Document("tokenTransfers", List.of(
+                        new Document("contractAddress", "0x31429d5d7f7c932f9e4f6c722c9f8a1f0c2c6a1d")
+                                .append("from", "0x3ef3d8ba38ebe18db133cec108f4d14ce00dd9ae")
+                                .append("to", "0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f")
+                                .append("tokenSymbol", "ANGLE")
+                                .append("tokenName", "ANGLE")
+                                .append("value", "1250000000000000000")
+                ))));
+
+        assertThat(filter.shouldDrop(tx)).isFalse();
+    }
+
+    @Test
+    @DisplayName("legitimate Compound claim survives scam filter")
+    void legitimateCompoundClaimSurvivesScamFilter() {
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0x6244e72e0652dfc932579cb11a031e7a8bd257ff0c206311faf3b371adc13ef5");
+        tx.setNetworkId("UNICHAIN");
+        tx.setWalletAddress("0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f");
+        tx.setRawData(new Document("from", "0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f")
+                .append("to", "0x6f7d514bbd4aff3bcd1140b7344b32f063dee486")
+                .append("value", "0")
+                .append("methodId", "0xb7034f7e")
+                .append("functionName", "claim(address comet,address src,bool shouldAccrue)")
+                .append("explorer", new Document("tokenTransfers", List.of(
+                        new Document("contractAddress", "0xc000000000000000000000000000000000000001")
+                                .append("from", "0x6f7d514bbd4aff3bcd1140b7344b32f063dee486")
+                                .append("to", "0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f")
+                                .append("tokenSymbol", "COMP")
+                                .append("tokenName", "Compound")
+                                .append("value", "420000000000000000")
+                ))));
+
+        assertThat(filter.shouldDrop(tx)).isFalse();
+    }
+
+    @Test
+    @DisplayName("legitimate bridge redeemWithFee survives scam filter")
+    void legitimateBridgeRedeemWithFeeSurvivesScamFilter() {
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0xd2cdbd7a1ade37a8032b713e9844351d2f58fbd872851a0e88203b8fbb695c5f");
+        tx.setNetworkId("BASE");
+        tx.setWalletAddress("0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f");
+        tx.setRawData(new Document("from", "0x875d6d37ec55c8cf220b9e5080717549d8aa8eca")
+                .append("to", "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f")
+                .append("value", "0")
+                .append("methodId", "0xe2de2a03")
+                .append("functionName", "redeemWithFee(bytes cctpMsg, bytes cctpSigs, bytes encodedVm, tuple bridgeParams)")
+                .append("explorer", new Document("tokenTransfers", List.of(
+                        new Document("contractAddress", "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913")
+                                .append("from", "0x875d6d37ec55c8cf220b9e5080717549d8aa8eca")
+                                .append("to", "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f")
+                                .append("tokenSymbol", "USDC")
+                                .append("tokenName", "USDC")
+                                .append("value", "897975990")
+                ))));
+
+        assertThat(filter.shouldDrop(tx)).isFalse();
+    }
+
+    @Test
+    @DisplayName("legitimate claimWithRecipient survives scam filter")
+    void legitimateClaimWithRecipientSurvivesScamFilter() {
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0xf13356fe9449ec9e831395e0074622e88e362a8f317e6b110d093bfaa25d2702");
+        tx.setNetworkId("ARBITRUM");
+        tx.setWalletAddress("0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f");
+        tx.setRawData(new Document("from", "0x3ef3d8ba38ebe18db133cec108f4d14ce00dd9ae")
+                .append("to", "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f")
+                .append("value", "0")
+                .append("methodId", "0x9fb67b58")
+                .append("functionName", "claimWithRecipient(address[] users,address[] tokens,uint256[] amounts,bytes32[][] proofs,address[] recipients,bytes[] datas)")
+                .append("explorer", new Document("tokenTransfers", List.of(
+                        new Document("contractAddress", "0x912ce59144191c1204e64559fe8253a0e49e6548")
+                                .append("from", "0x3ef3d8ba38ebe18db133cec108f4d14ce00dd9ae")
+                                .append("to", "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f")
+                                .append("tokenSymbol", "ARB")
+                                .append("tokenName", "Arbitrum")
+                                .append("value", "7350151119837232735")
+                ))));
 
         assertThat(filter.shouldDrop(tx)).isFalse();
     }

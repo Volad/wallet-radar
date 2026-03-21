@@ -7,7 +7,7 @@ import org.springframework.data.convert.ReadingConverter;
 import java.math.BigDecimal;
 
 /**
- * Reads Decimal128 from MongoDB as BigDecimal (INV-06, AC-07).
+ * Reads Decimal128 from MongoDB as BigDecimal.
  */
 @ReadingConverter
 public class Decimal128ToBigDecimalConverter implements Converter<Decimal128, BigDecimal> {

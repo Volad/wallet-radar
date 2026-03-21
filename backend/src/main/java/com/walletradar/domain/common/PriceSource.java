@@ -1,11 +1,12 @@
 package com.walletradar.domain.common;
 
 /**
- * How the USD price for an event was determined. Priority: STABLECOIN &gt; SWAP_DERIVED &gt; COINGECKO &gt; MANUAL &gt; UNKNOWN.
+ * Canonical source of USD pricing used by normalized transaction flows.
  */
 public enum PriceSource {
     STABLECOIN,
     SWAP_DERIVED,
+    WRAPPER,
     COINGECKO,
     MANUAL,
     UNKNOWN

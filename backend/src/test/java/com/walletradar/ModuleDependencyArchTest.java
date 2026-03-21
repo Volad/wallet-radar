@@ -11,8 +11,7 @@ import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 import static com.tngtech.archunit.library.dependencies.SlicesRuleDefinition.slices;
 
 /**
- * Enforces module dependency rules from docs/02-architecture.md (Module Dependency Rules table).
- * Run in CI to keep package boundaries.
+ * Enforces package boundaries for the remaining backfill and session runtime.
  */
 class ModuleDependencyArchTest {
 
@@ -26,18 +25,18 @@ class ModuleDependencyArchTest {
     }
 
     @Test
-    void domain_must_only_depend_on_common() {
+    void domain_must_not_depend_on_runtime_layers() {
         ArchRule rule = noClasses()
                 .that().resideInAPackage("..domain..")
-                .should().dependOnClassesThat().resideInAnyPackage("..ingestion..", "..config..", "..api..", "..costbasis..", "..pricing..", "..snapshot..");
+                .should().dependOnClassesThat().resideInAnyPackage("..ingestion..", "..config..", "..api..", "..backend..");
         rule.check(classes);
     }
 
     @Test
-    void ingestion_must_not_depend_on_costbasis_snapshot_api() {
+    void ingestion_must_not_depend_on_api() {
         ArchRule rule = noClasses()
                 .that().resideInAPackage("..ingestion..")
-                .should().dependOnClassesThat().resideInAnyPackage("..costbasis..", "..snapshot..", "..api..");
+                .should().dependOnClassesThat().resideInAPackage("..api..");
         rule.check(classes);
     }
 
@@ -45,40 +44,8 @@ class ModuleDependencyArchTest {
     void common_must_not_depend_on_other_app_modules() {
         ArchRule rule = noClasses()
                 .that().resideInAPackage("com.walletradar.common..")
-                .should().dependOnClassesThat().resideInAnyPackage("..domain..", "..ingestion..", "..config..", "..api..", "..costbasis..", "..pricing..", "..snapshot..");
+                .should().dependOnClassesThat().resideInAnyPackage("..domain..", "..ingestion..", "..config..", "..api..", "..backend..");
         rule.check(classes);
-    }
-
-    @Test
-    void pricing_must_not_depend_on_ingestion_costbasis_snapshot_api() {
-        ArchRule rule = noClasses()
-                .that().resideInAPackage("..pricing..")
-                .should().dependOnClassesThat().resideInAnyPackage("..ingestion..", "..costbasis..", "..snapshot..", "..api..");
-        rule.check(classes);
-    }
-
-    @Test
-    void costbasis_must_not_depend_on_ingestion_snapshot_api() {
-        ArchRule rule = noClasses()
-                .that().resideInAPackage("..costbasis..")
-                .should().dependOnClassesThat().resideInAnyPackage("..ingestion..", "..snapshot..", "..api..");
-        rule.check(classes);
-    }
-
-    @Test
-    void costbasis_must_not_depend_on_config() {
-        ArchRule rule = noClasses()
-                .that().resideInAPackage("..costbasis..")
-                .should().dependOnClassesThat().resideInAPackage("..config..");
-        rule.check(classes);
-    }
-
-    @Test
-    void snapshot_must_not_depend_on_ingestion_api() {
-        ArchRule rule = noClasses()
-                .that().resideInAPackage("..snapshot..")
-                .should().dependOnClassesThat().resideInAnyPackage("..ingestion..", "..api..");
-        rule.allowEmptyShould(true).check(classes);
     }
 
     @Test
@@ -95,14 +62,6 @@ class ModuleDependencyArchTest {
                 .matching("com.walletradar.(*)..")
                 .should().beFreeOfCycles();
         rule.check(classes);
-    }
-
-    @Test
-    void ingestion_pipeline_must_not_depend_on_job_triggers() {
-        ArchRule rule = noClasses()
-                .that().resideInAPackage("..ingestion.pipeline..")
-                .should().dependOnClassesThat().resideInAPackage("..ingestion.job..");
-        rule.allowEmptyShould(true).check(classes);
     }
 
     @Test

@@ -3,7 +3,7 @@ package com.walletradar.ingestion.adapter.evm.explorer.model;
 import org.bson.Document;
 
 /**
- * Explorer receipt in normalized common form.
+ * Explorer receipt payload wrapper.
  */
 public record ExplorerReceipt(Document data) implements ExplorerPayload {
 
@@ -20,4 +20,3 @@ public record ExplorerReceipt(Document data) implements ExplorerPayload {
         return source != null && source.containsKey("logs") && source.get("logs") != null;
     }
 }
-

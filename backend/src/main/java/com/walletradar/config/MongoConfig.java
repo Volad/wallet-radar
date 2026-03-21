@@ -7,8 +7,8 @@ import org.springframework.data.mongodb.core.convert.MongoCustomConversions;
 import java.util.Arrays;
 
 /**
- * MongoDB configuration: Decimal128 codec for all monetary/quantity fields (INV-06, ADR-002).
- * Indexes are created from @CompoundIndex / @Indexed on domain documents at startup.
+ * MongoDB conversions for Decimal128-backed numeric fields.
+ * Indexes are created from document annotations at startup.
  */
 @Configuration
 public class MongoConfig {
