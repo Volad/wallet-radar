@@ -8,11 +8,13 @@ import com.walletradar.domain.transaction.raw.RawTransactionRepository;
 import com.walletradar.ingestion.config.OnChainClarificationProperties;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassificationResult;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassifier;
+import com.walletradar.ingestion.pipeline.classification.support.ClarificationEligibilitySupport;
 import com.walletradar.ingestion.pipeline.clarification.ClarificationReceiptEnrichment;
 import com.walletradar.ingestion.pipeline.clarification.ExplorerReceiptClarificationGateway;
 import com.walletradar.ingestion.pipeline.clarification.PendingClarificationQueryService;
 import com.walletradar.ingestion.pipeline.clarification.RawTransactionClarificationEnricher;
 import com.walletradar.ingestion.pipeline.onchain.OnChainNormalizedTransactionBuilder;
+import com.walletradar.ingestion.pipeline.onchain.OnChainRawTransactionView;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -59,7 +61,7 @@ public class OnChainClarificationService {
         Instant now = Instant.now();
         Optional<RawTransaction> rawTransactionOptional = rawTransactionRepository.findById(normalizedTransaction.getId());
         if (rawTransactionOptional.isEmpty()) {
-            markFailure(normalizedTransaction, "RAW_TRANSACTION_MISSING", now);
+            markFailure(normalizedTransaction, null, "RAW_TRANSACTION_MISSING", now);
             return false;
         }
 
@@ -82,7 +84,7 @@ public class OnChainClarificationService {
                     normalizedTransaction.getNetworkId()
             );
             if (enrichment.isEmpty()) {
-                markFailure(normalizedTransaction, "CLARIFICATION_RECEIPT_UNAVAILABLE", now);
+                markFailure(normalizedTransaction, rawTransaction, "CLARIFICATION_RECEIPT_UNAVAILABLE", now);
                 return false;
             }
 
@@ -90,6 +92,10 @@ public class OnChainClarificationService {
             rawTransactionRepository.save(rawTransaction);
 
             OnChainClassificationResult classificationResult = onChainClassifier.classify(rawTransaction);
+            if (classificationResult.status() == NormalizedTransactionStatus.PENDING_CLARIFICATION) {
+                markFailure(normalizedTransaction, rawTransaction, "CLARIFICATION_INSUFFICIENT_EVIDENCE", now);
+                return false;
+            }
             NormalizedTransaction clarified = builder.rebuildAfterClarification(
                     normalizedTransaction,
                     rawTransaction,
@@ -100,19 +106,22 @@ public class OnChainClarificationService {
             return true;
         } catch (RuntimeException ex) {
             log.warn("On-chain clarification failed for normalizedTxId={}: {}", normalizedTransaction.getId(), ex.getMessage());
-            markFailure(normalizedTransaction, ex.getClass().getSimpleName(), now);
+            markFailure(normalizedTransaction, rawTransaction, ex.getClass().getSimpleName(), now);
             return false;
         }
     }
 
-    private void markFailure(NormalizedTransaction normalizedTransaction, String reason, Instant now) {
+    private void markFailure(
+            NormalizedTransaction normalizedTransaction,
+            RawTransaction rawTransaction,
+            String reason,
+            Instant now
+    ) {
         int nextAttempts = safeAttempts(normalizedTransaction.getClarificationAttempts()) + 1;
         normalizedTransaction.setClarificationAttempts(nextAttempts);
         normalizedTransaction.setUpdatedAt(now);
 
-        List<String> reasons = new ArrayList<>(normalizedTransaction.getMissingDataReasons() == null
-                ? List.of()
-                : normalizedTransaction.getMissingDataReasons());
+        List<String> reasons = new ArrayList<>(initialReasons(normalizedTransaction, rawTransaction));
         addReason(reasons, reason);
         if (nextAttempts >= Math.max(1, properties.getMaxAttempts())) {
             normalizedTransaction.setStatus(NormalizedTransactionStatus.NEEDS_REVIEW);
@@ -122,6 +131,23 @@ public class OnChainClarificationService {
         }
         normalizedTransaction.setMissingDataReasons(reasons);
         normalizedTransactionRepository.save(normalizedTransaction);
+    }
+
+    private List<String> initialReasons(
+            NormalizedTransaction normalizedTransaction,
+            RawTransaction rawTransaction
+    ) {
+        List<String> existingReasons = normalizedTransaction.getMissingDataReasons() == null
+                ? List.of()
+                : normalizedTransaction.getMissingDataReasons();
+        if (rawTransaction == null) {
+            return existingReasons;
+        }
+        return ClarificationEligibilitySupport.mergeClarificationReasons(
+                OnChainRawTransactionView.wrap(rawTransaction),
+                normalizedTransaction.getType(),
+                existingReasons
+        );
     }
 
     private int safeAttempts(Integer attempts) {

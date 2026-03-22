@@ -56,8 +56,8 @@ class ScamFilterTest {
     }
 
     @Test
-    @DisplayName("returns true for approve transaction by methodId")
-    void approveMethodId_returnsTrue() {
+    @DisplayName("does not drop approve transaction by methodId")
+    void approveMethodId_returnsFalse() {
         RawTransaction tx = new RawTransaction();
         tx.setTxHash("0xapprove");
         tx.setNetworkId("ARBITRUM");
@@ -70,12 +70,12 @@ class ScamFilterTest {
         raw.put("input", "0x095ea7b30000000000000000000000006ad2488743e93bfa35baf54c688de78c00bed9f0");
         tx.setRawData(raw);
 
-        assertThat(filter.shouldDrop(tx)).isTrue();
+        assertThat(filter.shouldDrop(tx)).isFalse();
     }
 
     @Test
-    @DisplayName("returns true for approve transaction from explorer tx payload")
-    void approveInExplorerTx_returnsTrue() {
+    @DisplayName("does not drop approve transaction from explorer tx payload")
+    void approveInExplorerTx_returnsFalse() {
         RawTransaction tx = new RawTransaction();
         tx.setTxHash("0xapprove-explorer");
         tx.setNetworkId("ARBITRUM");
@@ -90,12 +90,12 @@ class ScamFilterTest {
                 .append("input", "0x095ea7b30000000000000000000000006ad2488743e93bfa35baf54c688de78c00bed9f0")));
         tx.setRawData(raw);
 
-        assertThat(filter.shouldDrop(tx)).isTrue();
+        assertThat(filter.shouldDrop(tx)).isFalse();
     }
 
     @Test
-    @DisplayName("returns true for approve transaction from explorer tx map payload")
-    void approveInExplorerTxMap_returnsTrue() {
+    @DisplayName("does not drop approve transaction from explorer tx map payload")
+    void approveInExplorerTxMap_returnsFalse() {
         RawTransaction tx = new RawTransaction();
         tx.setTxHash("0xapprove-explorer-map");
         tx.setNetworkId("BASE");
@@ -113,7 +113,7 @@ class ScamFilterTest {
         )));
         tx.setRawData(raw);
 
-        assertThat(filter.shouldDrop(tx)).isTrue();
+        assertThat(filter.shouldDrop(tx)).isFalse();
     }
 
     @Test
@@ -427,6 +427,55 @@ class ScamFilterTest {
                                 .append("tokenSymbol", "ARB")
                                 .append("tokenName", "Arbitrum")
                                 .append("value", "7350151119837232735")
+                ))));
+
+        assertThat(filter.shouldDrop(tx)).isFalse();
+    }
+
+    @Test
+    @DisplayName("legitimate claim selector recovered from calldata survives scam filter")
+    void legitimateClaimSelectorRecoveredFromCalldataSurvivesScamFilter() {
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0x01cac047506298691607efa4bdc158b8b8678ea69855fc2558e8aa18a515ee03");
+        tx.setNetworkId("ARBITRUM");
+        tx.setWalletAddress("0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f");
+        tx.setRawData(new Document("from", "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f")
+                .append("to", "0x3ef3d8ba38ebe18db133cec108f4d14ce00dd9ae")
+                .append("value", "0")
+                .append("methodId", "0x")
+                .append("input", "0x71ee95c0000000000000000000000000")
+                .append("functionName", "claim(address[] users,address[] tokens,uint256[] amounts,bytes32[][] proofs)")
+                .append("explorer", new Document("tokenTransfers", List.of(
+                        new Document("contractAddress", "0x912ce59144191c1204e64559fe8253a0e49e6548")
+                                .append("from", "0x3ef3d8ba38ebe18db133cec108f4d14ce00dd9ae")
+                                .append("to", "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f")
+                                .append("tokenSymbol", "ARB")
+                                .append("tokenName", "Arbitrum")
+                                .append("value", "2720809576252872031")
+                ))));
+
+        assertThat(filter.shouldDrop(tx)).isFalse();
+    }
+
+    @Test
+    @DisplayName("legitimate BSC merkle claim selector recovered from calldata survives scam filter")
+    void legitimateBscMerkleClaimSelectorRecoveredFromCalldataSurvivesScamFilter() {
+        RawTransaction tx = new RawTransaction();
+        tx.setTxHash("0xmerkle-bsc");
+        tx.setNetworkId("BSC");
+        tx.setWalletAddress("0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f");
+        tx.setRawData(new Document("from", "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f")
+                .append("to", "0xea64df3a17b5172bfaf0e4215660cdec22ee7d57")
+                .append("value", "0")
+                .append("methodId", "0x")
+                .append("input", "0x2f52ebb7000000000000000000000000")
+                .append("explorer", new Document("tokenTransfers", List.of(
+                        new Document("contractAddress", "0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82")
+                                .append("from", "0xea64df3a17b5172bfaf0e4215660cdec22ee7d57")
+                                .append("to", "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f")
+                                .append("tokenSymbol", "CAKE")
+                                .append("tokenName", "PancakeSwap Token")
+                                .append("value", "1000000000000000000")
                 ))));
 
         assertThat(filter.shouldDrop(tx)).isFalse();

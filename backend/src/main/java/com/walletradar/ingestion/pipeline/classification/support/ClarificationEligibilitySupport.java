@@ -3,6 +3,10 @@ package com.walletradar.ingestion.pipeline.classification.support;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.ingestion.pipeline.onchain.OnChainRawTransactionView;
 
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+
 /**
  * Decides whether a known on-chain transaction is genuinely receipt-clarifiable.
  */
@@ -15,15 +19,47 @@ public final class ClarificationEligibilitySupport {
             OnChainRawTransactionView view,
             NormalizedTransactionType type
     ) {
+        return !requiredClarificationReasons(view, type).isEmpty();
+    }
+
+    public static List<String> requiredClarificationReasons(
+            OnChainRawTransactionView view,
+            NormalizedTransactionType type
+    ) {
         if (view == null || type == null || type == NormalizedTransactionType.UNKNOWN) {
-            return false;
+            return List.of();
         }
+
+        List<String> reasons = new ArrayList<>();
         if (!view.hasExecutionStatusEvidence()) {
-            return true;
+            reasons.add("MISSING_EXECUTION_STATUS");
         }
-        if (view.isFeePayer() && (!view.hasGasUsed() || !view.hasGasPriceEvidence())) {
-            return true;
+        if (view.isFeePayer() && !view.hasGasPriceEvidence()) {
+            reasons.add("MISSING_EFFECTIVE_GAS_PRICE");
         }
-        return view.isContractCreation() && !view.hasContractAddress();
+        if (view.isFeePayer() && !view.hasGasUsed()) {
+            reasons.add("MISSING_GAS_USED");
+        }
+        if (view.isContractCreation() && !view.hasContractAddress()) {
+            reasons.add("MISSING_CONTRACT_ADDRESS");
+        }
+        return List.copyOf(reasons);
+    }
+
+    public static List<String> mergeClarificationReasons(
+            OnChainRawTransactionView view,
+            NormalizedTransactionType type,
+            List<String> existingReasons
+    ) {
+        LinkedHashSet<String> merged = new LinkedHashSet<>();
+        if (existingReasons != null) {
+            for (String reason : existingReasons) {
+                if (reason != null && !reason.isBlank()) {
+                    merged.add(reason);
+                }
+            }
+        }
+        merged.addAll(requiredClarificationReasons(view, type));
+        return List.copyOf(merged);
     }
 }

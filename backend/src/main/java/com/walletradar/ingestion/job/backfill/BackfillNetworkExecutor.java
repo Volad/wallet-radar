@@ -193,7 +193,7 @@ public class BackfillNetworkExecutor {
             }
             BackfillProgressCallback callback = (progressPct, lastBlockSynced) ->
                     updateSegmentProgress(segment.getId(), progressPct, lastBlockSynced);
-            if (shouldUseRpcCheckpointing(networkId)) {
+            if (shouldUseRpcCheckpointing(networkId, adapter)) {
                 rawFetchSegmentProcessor.processSegmentWithBlockCheckpoints(
                         walletAddress, networkId, adapter,
                         effectiveFromBlock, segmentToBlock,
@@ -389,7 +389,10 @@ public class BackfillNetworkExecutor {
         return Math.max(0, Math.min(100, pct));
     }
 
-    private boolean shouldUseRpcCheckpointing(NetworkId networkId) {
+    private boolean shouldUseRpcCheckpointing(NetworkId networkId, NetworkAdapter adapter) {
+        if (adapter == null || !adapter.supportsBlockCheckpointing()) {
+            return false;
+        }
         if (networkId == NetworkId.SOLANA) {
             return false;
         }

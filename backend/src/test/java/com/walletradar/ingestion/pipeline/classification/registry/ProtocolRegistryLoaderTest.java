@@ -60,12 +60,44 @@ class ProtocolRegistryLoaderTest {
                         "0x3ef3d8ba38ebe18db133cec108f4d14ce00dd9ae"
                 ))
                 .containsKey(new ProtocolRegistryLoader.RegistryKey(
+                        NetworkId.ARBITRUM,
+                        "0x3ef3d8ba38ebe18db133cec108f4d14ce00dd9ae"
+                ))
+                .containsKey(new ProtocolRegistryLoader.RegistryKey(
+                        NetworkId.PLASMA,
+                        "0x3ef3d8ba38ebe18db133cec108f4d14ce00dd9ae"
+                ))
+                .containsKey(new ProtocolRegistryLoader.RegistryKey(
+                        NetworkId.UNICHAIN,
+                        "0x3ef3d8ba38ebe18db133cec108f4d14ce00dd9ae"
+                ))
+                .containsKey(new ProtocolRegistryLoader.RegistryKey(
+                        NetworkId.ARBITRUM,
+                        "0x94312a608246cecfce6811db84b3ef4b2619054e"
+                ))
+                .containsKey(new ProtocolRegistryLoader.RegistryKey(
+                        NetworkId.MANTLE,
+                        "0x70f61901658aafb7ae57da0c30695ce4417e72b9"
+                ))
+                .containsKey(new ProtocolRegistryLoader.RegistryKey(
                         NetworkId.UNICHAIN,
                         "0x6f7d514bbd4aff3bcd1140b7344b32f063dee486"
                 ))
                 .containsKey(new ProtocolRegistryLoader.RegistryKey(
                         NetworkId.BSC,
                         "0x55f4c8aba71a1e923edc303eb4feff14608cc226"
+                ))
+                .containsKey(new ProtocolRegistryLoader.RegistryKey(
+                        NetworkId.OPTIMISM,
+                        "0x416b433906b1b72fa758e166e239c43d68dc6f29"
+                ))
+                .containsKey(new ProtocolRegistryLoader.RegistryKey(
+                        NetworkId.OPTIMISM,
+                        "0x0f5212f63ba8eab0fabd94fc2071d461d9d6ddb2"
+                ))
+                .containsKey(new ProtocolRegistryLoader.RegistryKey(
+                        NetworkId.OPTIMISM,
+                        "0xc762d18800b3f78ae56e9e61ad7be98a413d59de"
                 ))
                 .containsKey(new ProtocolRegistryLoader.RegistryKey(
                         NetworkId.BSC,

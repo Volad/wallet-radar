@@ -41,6 +41,17 @@ public class ScamFilter {
             "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
     private static final String ERC20_APPROVAL_TOPIC0 =
             "0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925";
+    private static final Set<String> KNOWN_LEGIT_BRIDGE_OR_REWARD_SELECTORS = Set.of(
+            "0xe2de2a03", // redeemWithFee
+            "0x9fb67b58", // claimWithRecipient
+            "0x71ee95c0", // Merkl / Angle claim
+            "0xb7034f7e", // Compound claim
+            "0xbe5013dc", // FLUID claim
+            "0x5eac6239", // Pendle claim
+            "0x8b681820", // BSC claim-by-proof
+            "0x379607f5", // stream claim
+            "0x2f52ebb7"  // merkle claim
+    );
     private static final Set<BigInteger> SUSPICIOUS_TINY_AIRDROP_VALUES = Set.of(
             BigInteger.ONE,
             BigInteger.valueOf(5),
@@ -77,7 +88,6 @@ public class ScamFilter {
 
         if (isApproveTransaction(raw)) {
             signals.add("APPROVE_TX");
-            return new ScamEvaluation(properties.getDropThreshold(), List.copyOf(signals), true);
         }
         if (isFailedSwapWithoutTransferEffects(tx, raw)) {
             signals.add("FAILED_SWAP_NO_TRANSFER_EFFECT");
@@ -418,11 +428,14 @@ public class ScamFilter {
     private static boolean isKnownLegitimateBridgeOrRewardRoute(Document raw) {
         String methodId = normalizeMethodId(readRawOrExplorerTx(raw, "methodId"));
         String functionName = normalize(readRawOrExplorerTx(raw, "functionName"));
-        if (matchesMethodId(methodId, "0xe2de2a03") || matchesMethodId(methodId, "0x9fb67b58")) {
+        if (methodId != null && KNOWN_LEGIT_BRIDGE_OR_REWARD_SELECTORS.contains(methodId)) {
             return true;
         }
         return functionName != null
-                && (functionName.contains("redeemwithfee") || functionName.contains("claimwithrecipient"));
+                && (functionName.contains("redeemwithfee")
+                || functionName.contains("claimwithrecipient")
+                || functionName.startsWith("claim(")
+                || functionName.contains("claimrewards"));
     }
 
     private static boolean isFailedSwapWithoutTransferEffects(RawTransaction tx, Document raw) {
@@ -501,9 +514,48 @@ public class ScamFilter {
         }
         Object direct = raw.get(field);
         if (direct != null && !direct.toString().isBlank()) {
-            return direct.toString();
+            String directValue = direct.toString();
+            if (!"methodId".equals(field) || !isBlankSelector(directValue)) {
+                return directValue;
+            }
         }
         Document explorer = toDocument(raw.get("explorer"));
+        if (explorer != null) {
+            Document tx = toDocument(explorer.get("tx"));
+            if (tx != null) {
+                Object nested = tx.get(field);
+                if (nested != null && !nested.toString().isBlank()) {
+                    String nestedValue = nested.toString();
+                    if (!"methodId".equals(field) || !isBlankSelector(nestedValue)) {
+                        return nestedValue;
+                    }
+                }
+            }
+        }
+        if ("methodId".equals(field)) {
+            return deriveMethodIdFromInput(raw, explorer);
+        }
+        return null;
+    }
+
+    private static boolean isBlankSelector(String value) {
+        String normalized = normalize(value);
+        return normalized == null || "0x".equals(normalized);
+    }
+
+    private static String deriveMethodIdFromInput(Document raw, Document explorer) {
+        String input = normalize(readInput(raw, explorer));
+        if (input == null || !input.startsWith("0x") || input.length() < 10) {
+            return null;
+        }
+        return input.substring(0, 10);
+    }
+
+    private static String readInput(Document raw, Document explorer) {
+        Object direct = raw.get("input");
+        if (direct != null && !direct.toString().isBlank()) {
+            return direct.toString();
+        }
         if (explorer == null) {
             return null;
         }
@@ -511,8 +563,8 @@ public class ScamFilter {
         if (tx == null) {
             return null;
         }
-        Object nested = tx.get(field);
-        return nested != null ? nested.toString() : null;
+        Object nested = tx.get("input");
+        return nested == null ? null : nested.toString();
     }
 
     private static boolean isLikelyExplorerTokenSpoofing(

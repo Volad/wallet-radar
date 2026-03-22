@@ -19,9 +19,11 @@ import org.springframework.stereotype.Component;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Explorer-backed EVM adapter that merges transaction, token transfer, and internal transfer pages.
@@ -31,6 +33,30 @@ import java.util.Map;
 @RequiredArgsConstructor
 @Slf4j
 public class ExplorerEvmNetworkAdapter implements NetworkAdapter {
+
+    private static final Set<String> TX_LEVEL_FALLBACK_KEYS = new LinkedHashSet<>(List.of(
+            "hash",
+            "txhash",
+            "blockHash",
+            "blockNumber",
+            "timeStamp",
+            "transactionIndex",
+            "nonce",
+            "gas",
+            "gasPrice",
+            "gasUsed",
+            "cumulativeGasUsed",
+            "input",
+            "methodId",
+            "functionName",
+            "confirmations",
+            "txreceipt_status",
+            "isError",
+            "status",
+            "maxFeePerGas",
+            "maxPriorityFeePerGas",
+            "type"
+    ));
 
     private final ExplorerProvider explorerProvider;
     private final IngestionExplorerProperties explorerProperties;
@@ -102,7 +128,7 @@ public class ExplorerEvmNetworkAdapter implements NetworkAdapter {
         } else {
             rawData = new Document();
         }
-        rawData.put("explorer", aggregate.toDocument());
+        rawData.put("explorer", aggregate.toDocument(txDetails));
         tx.setRawData(rawData);
 
         Long blockFromTx = parseHexOrDecimalBlock(txDetails != null ? txDetails.blockNumber() : null);
@@ -184,7 +210,19 @@ public class ExplorerEvmNetworkAdapter implements NetworkAdapter {
             if (!tokenTransfers.isEmpty()) {
                 ExplorerTokenTransfer firstTokenTransfer = tokenTransfers.get(0);
                 if (firstTokenTransfer != null) {
-                    return new ExplorerPayloadDetails(firstTokenTransfer.asDocument(), firstTokenTransfer.blockNumber());
+                    return new ExplorerPayloadDetails(
+                            sanitizeTransferFallback(firstTokenTransfer.asDocument()),
+                            firstTokenTransfer.blockNumber()
+                    );
+                }
+            }
+            if (!internalTransfers.isEmpty()) {
+                ExplorerInternalTransfer firstInternalTransfer = internalTransfers.get(0);
+                if (firstInternalTransfer != null) {
+                    return new ExplorerPayloadDetails(
+                            sanitizeTransferFallback(firstInternalTransfer.asDocument()),
+                            firstInternalTransfer.blockNumber()
+                    );
                 }
             }
             return null;
@@ -222,10 +260,10 @@ public class ExplorerEvmNetworkAdapter implements NetworkAdapter {
             return 0L;
         }
 
-        private Document toDocument() {
+        private Document toDocument(ExplorerPayloadDetails txDetails) {
             Document doc = new Document();
-            if (tx != null) {
-                doc.put("tx", tx.asDocument());
+            if (txDetails != null && !txDetails.asDocument().isEmpty()) {
+                doc.put("tx", txDetails.asDocument());
             }
             List<Document> tokenDocs = new ArrayList<>();
             for (ExplorerTokenTransfer n : tokenTransfers) {
@@ -239,6 +277,20 @@ public class ExplorerEvmNetworkAdapter implements NetworkAdapter {
             doc.put("internalTransfers", internalDocs);
             return doc;
         }
+    }
+
+    private static Document sanitizeTransferFallback(Document source) {
+        Document sanitized = new Document();
+        if (source == null || source.isEmpty()) {
+            return sanitized;
+        }
+        for (String key : TX_LEVEL_FALLBACK_KEYS) {
+            Object value = source.get(key);
+            if (value != null) {
+                sanitized.put(key, value);
+            }
+        }
+        return sanitized;
     }
 
     private record ExplorerPayloadDetails(Document document, String blockNumber) {

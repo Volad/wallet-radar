@@ -87,6 +87,7 @@ class BackfillNetworkExecutorTest {
         when(backfillProperties.getWindowBlocks()).thenReturn(100L);
         when(backfillProperties.getSegments()).thenReturn(segmentProfiles(2, 2, 180_000L, 6, 4, 120_000L));
         when(ingestionNetworkProperties.getNetwork()).thenReturn(Map.of());
+        when(networkAdapter.supportsBlockCheckpointing()).thenReturn(true);
 
         wireSegmentRepository();
     }
@@ -329,6 +330,40 @@ class BackfillNetworkExecutorTest {
         );
 
         verify(rawFetchSegmentProcessor, times(2)).processSegment(
+                eq(WALLET), eq(NetworkId.ETHEREUM), eq(networkAdapter),
+                anyLong(), anyLong(), any(BackfillProgressCallback.class));
+        verify(rawFetchSegmentProcessor, never()).processSegmentWithBlockCheckpoints(
+                anyString(), any(NetworkId.class), any(NetworkAdapter.class),
+                anyLong(), anyLong(), anyInt(), any(BackfillProgressCallback.class));
+    }
+
+    @Test
+    @DisplayName("skips RPC checkpointing when adapter requires one fetch pass per segment")
+    void skipsRpcCheckpointingWhenAdapterRequiresOneFetchPassPerSegment() {
+        IngestionNetworkProperties.NetworkIngestionEntry entry = new IngestionNetworkProperties.NetworkIngestionEntry();
+        entry.setSyncMethod(IngestionNetworkProperties.NetworkIngestionEntry.SyncMethod.RPC);
+        entry.setBatchBlockSize(500);
+        when(ingestionNetworkProperties.getNetwork()).thenReturn(Map.of(NETWORK, entry));
+        when(networkAdapter.supportsBlockCheckpointing()).thenReturn(false);
+
+        doAnswer(invocation -> {
+            BackfillProgressCallback callback = invocation.getArgument(5);
+            long segTo = invocation.getArgument(4);
+            callback.reportProgress(100, segTo);
+            return null;
+        }).when(rawFetchSegmentProcessor).processSegment(
+                eq(WALLET), eq(NetworkId.ETHEREUM), eq(networkAdapter),
+                anyLong(), anyLong(), any(BackfillProgressCallback.class));
+
+        executor.runBackfillForNetwork(
+                WALLET,
+                NetworkId.ETHEREUM,
+                networkAdapter,
+                new FixedBlockHeightResolver(100L),
+                new NoopTimestampResolver()
+        );
+
+        verify(rawFetchSegmentProcessor, times(6)).processSegment(
                 eq(WALLET), eq(NetworkId.ETHEREUM), eq(networkAdapter),
                 anyLong(), anyLong(), any(BackfillProgressCallback.class));
         verify(rawFetchSegmentProcessor, never()).processSegmentWithBlockCheckpoints(

@@ -61,17 +61,21 @@ public final class OnChainRawTransactionView {
     }
 
     public String fromAddress() {
-        return normalizeAddress(stringify(readRawField("from")));
+        return normalizeAddress(stringify(readTxLevelField("from", true)));
     }
 
     public String toAddress() {
-        return normalizeAddress(stringify(readRawField("to")));
+        return normalizeAddress(stringify(readTxLevelField("to", true)));
     }
 
     public String methodId() {
         String topLevelMethodId = normalizeSelector(stringify(readRawField("methodId")));
         if (topLevelMethodId != null) {
             return topLevelMethodId;
+        }
+        String explorerMethodId = normalizeSelector(stringify(readExplorerTxField("methodId")));
+        if (explorerMethodId != null) {
+            return explorerMethodId;
         }
 
         String input = inputData();
@@ -86,12 +90,12 @@ public final class OnChainRawTransactionView {
     }
 
     public String functionName() {
-        String value = stringify(readRawField("functionName"));
+        String value = stringify(readTxLevelField("functionName", false));
         return value == null ? null : value.trim().toLowerCase(Locale.ROOT);
     }
 
     public String inputData() {
-        String value = stringify(readRawField("input"));
+        String value = stringify(readTxLevelField("input", false));
         if (value == null) {
             return null;
         }
@@ -100,7 +104,7 @@ public final class OnChainRawTransactionView {
     }
 
     public BigInteger rawValue() {
-        return parseUnsignedInteger(readRawField("value"));
+        return parseUnsignedInteger(readTxLevelField("value", true));
     }
 
     public BigInteger gasUsed() {
@@ -125,6 +129,12 @@ public final class OnChainRawTransactionView {
     }
 
     public String contractAddress() {
+        if (readExplorerTxField("contractAddress") != null) {
+            return normalizeAddress(stringify(readExplorerTxField("contractAddress")));
+        }
+        if (isTransferRowBackedTopLevel()) {
+            return null;
+        }
         return normalizeAddress(stringify(readRawField("contractAddress")));
     }
 
@@ -273,12 +283,60 @@ public final class OnChainRawTransactionView {
         return rawData.get(key);
     }
 
+    private Object readTxLevelField(String key, boolean suppressTransferRowFallback) {
+        Object explorerValue = readExplorerTxField(key);
+        if (explorerValue != null) {
+            return explorerValue;
+        }
+        if (suppressTransferRowFallback && isTransferRowBackedTopLevel()) {
+            return null;
+        }
+        return readRawField(key);
+    }
+
+    private Object readExplorerTxField(String key) {
+        Document explorer = readExplorerSection();
+        if (explorer == null) {
+            return null;
+        }
+        Object txObject = explorer.get("tx");
+        if (!(txObject instanceof Document tx)) {
+            return null;
+        }
+        return tx.get(key);
+    }
+
     private Document readExplorerSection() {
         Object explorer = readRawField("explorer");
         if (explorer instanceof Document document) {
             return document;
         }
         return null;
+    }
+
+    private boolean isTransferRowBackedTopLevel() {
+        Document rawData = rawTransaction.getRawData();
+        if (rawData == null) {
+            return false;
+        }
+        if (readExplorerTxField("from") != null || readExplorerTxField("to") != null || readExplorerTxField("value") != null) {
+            return false;
+        }
+        List<Document> tokenTransfers = explorerTokenTransfers();
+        if (tokenTransfers.isEmpty()) {
+            return false;
+        }
+        Document firstTransfer = tokenTransfers.getFirst();
+        boolean carriesTokenMetadata = firstTransfer != null
+                && (rawData.containsKey("tokenSymbol") || rawData.containsKey("tokenName") || rawData.containsKey("tokenDecimal"));
+        if (!carriesTokenMetadata) {
+            return false;
+        }
+
+        return safeEquals(stringify(rawData.get("value")), stringify(firstTransfer.get("value")))
+                && safeEquals(normalizeAddress(stringify(rawData.get("from"))), tokenTransferFrom(firstTransfer))
+                && safeEquals(normalizeAddress(stringify(rawData.get("to"))), tokenTransferTo(firstTransfer))
+                && safeEquals(normalizeAddress(stringify(rawData.get("contractAddress"))), tokenTransferContract(firstTransfer));
     }
 
     private static List<Document> readDocumentList(Document parent, String key) {
@@ -339,5 +397,9 @@ public final class OnChainRawTransactionView {
 
     private static Integer parseInteger(Object value) {
         return RawOrderingMetadataResolver.parseFlexibleInteger(value);
+    }
+
+    private static boolean safeEquals(Object left, Object right) {
+        return left == null ? right == null : left.equals(right);
     }
 }

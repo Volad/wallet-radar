@@ -245,7 +245,7 @@ walletradar:
     # RPC retry: exponential backoff ± jitter. Defaults: base-delay-ms=1000, jitter-factor=0.2, max-attempts=5
   normalization:
     on-chain:
-      enabled: false
+      enabled: true
       batch-size: 250
       schedule-interval-ms: 90000
       retry-delay-seconds: 60

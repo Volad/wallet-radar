@@ -7,14 +7,15 @@ import com.walletradar.ingestion.adapter.RpcException;
 import com.walletradar.ingestion.adapter.evm.rpc.EvmRpcClient;
 import com.walletradar.ingestion.config.IngestionNetworkProperties;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.bson.Document;
 import org.springframework.stereotype.Component;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
 @Component
+@Slf4j
 @RequiredArgsConstructor
 public class AnkrTransactionsByAddressProvider {
 
@@ -28,28 +29,29 @@ public class AnkrTransactionsByAddressProvider {
             return List.of();
         }
         String endpoint = providerConfig.getBaseUrl();
-        int pageSize = providerConfig.getPageSize() != null && providerConfig.getPageSize() > 0
-                ? providerConfig.getPageSize()
-                : 100;
         String blockchain = blockchainCode(networkId);
         if (blockchain == null) {
             return List.of();
         }
 
-        List<Document> transactions = new ArrayList<>();
-        String pageToken = null;
-        do {
-            JsonNode result = callTransactionsByAddress(endpoint, walletAddress, blockchain, fromBlock, toBlock, pageSize, pageToken);
-            JsonNode transactionNodes = result.path("transactions");
-            if (transactionNodes.isArray()) {
-                for (JsonNode transactionNode : transactionNodes) {
-                    transactions.add(toDocument(transactionNode));
-                }
-            }
-            pageToken = textValue(result.path("nextPageToken"));
-        } while (pageToken != null && !pageToken.isBlank());
-
-        return List.copyOf(transactions);
+        JsonNode result = callTransactionsByAddress(endpoint, walletAddress, blockchain, fromBlock, toBlock);
+        String nextPageToken = textValue(result.path("nextPageToken"));
+        if (nextPageToken != null) {
+            log.warn(
+                    "ankr_getTransactionsByAddress returned nextPageToken for wallet={}, network={}, fromBlock={}, toBlock={}; "
+                            + "provider-first mode requires one response per segment",
+                    walletAddress,
+                    networkId,
+                    fromBlock,
+                    toBlock
+            );
+            throw new RpcException("ankr_getTransactionsByAddress returned nextPageToken for one-pass segment fetch");
+        }
+        JsonNode transactionNodes = result.path("transactions");
+        if (!transactionNodes.isArray() || transactionNodes.isEmpty()) {
+            return List.of();
+        }
+        return transactionNodesToDocuments(transactionNodes);
     }
 
     private JsonNode callTransactionsByAddress(
@@ -57,20 +59,14 @@ public class AnkrTransactionsByAddressProvider {
             String walletAddress,
             String blockchain,
             long fromBlock,
-            long toBlock,
-            int pageSize,
-            String pageToken
+            long toBlock
     ) {
         Document params = new Document("address", walletAddress)
                 .append("blockchain", blockchain)
                 .append("includeLogs", true)
                 .append("descOrder", false)
                 .append("fromBlock", fromBlock)
-                .append("toBlock", toBlock)
-                .append("pageSize", pageSize);
-        if (pageToken != null && !pageToken.isBlank()) {
-            params.append("pageToken", pageToken);
-        }
+                .append("toBlock", toBlock);
 
         String json = rpcClient.call(endpoint, "ankr_getTransactionsByAddress", params).block();
         try {
@@ -89,6 +85,14 @@ public class AnkrTransactionsByAddressProvider {
         } catch (Exception ex) {
             throw new RpcException("Failed to parse ankr_getTransactionsByAddress response", ex);
         }
+    }
+
+    private List<Document> transactionNodesToDocuments(JsonNode transactionNodes) {
+        java.util.ArrayList<Document> transactions = new java.util.ArrayList<>(transactionNodes.size());
+        for (JsonNode transactionNode : transactionNodes) {
+            transactions.add(toDocument(transactionNode));
+        }
+        return List.copyOf(transactions);
     }
 
     private IngestionNetworkProperties.NetworkIngestionEntry.Provider providerConfig(NetworkId networkId) {

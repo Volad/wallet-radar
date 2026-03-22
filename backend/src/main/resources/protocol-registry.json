@@ -395,6 +395,45 @@
       "confidence": "HIGH",
       "notes": "Liquidity-mining custody contract for PancakeSwap V3 LP position NFTs on Base. Handles staked-position liquidity changes and withdraw flows."
     },
+    "0x416b433906b1b72fa758e166e239c43d68dc6f29": {
+      "name": "Velodrome Slipstream Position Manager",
+      "protocol": "Velodrome",
+      "version": "Slipstream",
+      "family": "DEX",
+      "role": "POSITION_MANAGER",
+      "event_type": "LP_MINT",
+      "networks": [
+        "OPTIMISM"
+      ],
+      "confidence": "HIGH",
+      "notes": "Optimism concentrated-liquidity position manager. Supports direct mint, multicall collect/decrease flows, and LP NFT custody transfers."
+    },
+    "0x0f5212f63ba8eab0fabd94fc2071d461d9d6ddb2": {
+      "name": "Velodrome Slipstream Staking Contract",
+      "protocol": "Velodrome",
+      "version": "Slipstream",
+      "family": "DEX",
+      "role": "STAKE_CONTRACT",
+      "event_type": null,
+      "networks": [
+        "OPTIMISM"
+      ],
+      "confidence": "HIGH",
+      "notes": "LP-position custody contract on Optimism. Pure deposit(uint256)/withdraw(uint256) calls represent LP position stake/unstake, while reward-bearing paths remain method-aware."
+    },
+    "0xc762d18800b3f78ae56e9e61ad7be98a413d59de": {
+      "name": "Velodrome Slipstream Staking Contract",
+      "protocol": "Velodrome",
+      "version": "Slipstream",
+      "family": "DEX",
+      "role": "STAKE_CONTRACT",
+      "event_type": null,
+      "networks": [
+        "OPTIMISM"
+      ],
+      "confidence": "HIGH",
+      "notes": "LP-position custody contract on Optimism. Pure deposit(uint256)/withdraw(uint256) calls represent LP position stake/unstake, while reward-bearing paths remain method-aware."
+    },
     "0x7816f1711828c52eb3ca5a2f075a0c06e0548bd6": {
       "name": "SmartChefInitializable",
       "protocol": "PancakeSwap",
@@ -1637,10 +1676,42 @@
       "role": "REWARD_ROUTER",
       "event_type": "REWARD_CLAIM",
       "networks": [
-        "BASE"
+        "BASE",
+        "ETHEREUM",
+        "ARBITRUM",
+        "AVALANCHE",
+        "KATANA",
+        "PLASMA",
+        "UNICHAIN"
       ],
       "confidence": "HIGH",
       "notes": "Morpho / Angle reward-distribution contract. claim(...) is reward claim, not plain inbound."
+    },
+    "0x94312a608246cecfce6811db84b3ef4b2619054e": {
+      "name": "FLUID Rewards Distributor",
+      "protocol": "FLUID",
+      "version": "V1",
+      "family": "YIELD",
+      "role": "REWARD_ROUTER",
+      "event_type": "REWARD_CLAIM",
+      "networks": [
+        "ARBITRUM"
+      ],
+      "confidence": "HIGH",
+      "notes": "Claim distributor. claim(address recipient_,...) must remain REWARD_CLAIM when raw legs show inbound reward movement."
+    },
+    "0x70f61901658aafb7ae57da0c30695ce4417e72b9": {
+      "name": "Pendle Rewards Distributor",
+      "protocol": "Pendle",
+      "version": "V1",
+      "family": "YIELD",
+      "role": "REWARD_ROUTER",
+      "event_type": "REWARD_CLAIM",
+      "networks": [
+        "MANTLE"
+      ],
+      "confidence": "HIGH",
+      "notes": "claimRewards(uint256[] _pids) reward-distribution path. Must not fall back to plain inbound."
     },
     "0x6f7d514bbd4aff3bcd1140b7344b32f063dee486": {
       "name": "Compound Rewards",

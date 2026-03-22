@@ -26,4 +26,12 @@ public interface NetworkAdapter {
      * Maximum block range per single RPC call (e.g. 2000 for EVM eth_getLogs).
      */
     int getMaxBlockBatchSize();
+
+    /**
+     * Whether the backfill executor may split one segment into multiple block checkpoints.
+     * Provider-first adapters can disable this to guarantee exactly one fetch pass per segment.
+     */
+    default boolean supportsBlockCheckpointing() {
+        return true;
+    }
 }

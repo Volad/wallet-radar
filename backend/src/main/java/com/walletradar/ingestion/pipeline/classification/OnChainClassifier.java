@@ -18,6 +18,7 @@ import com.walletradar.ingestion.pipeline.classification.special.ProtocolSpecial
 import com.walletradar.ingestion.pipeline.classification.special.SpecialHandlerResult;
 import com.walletradar.ingestion.pipeline.classification.support.AdminConfigSupport;
 import com.walletradar.ingestion.pipeline.classification.support.BridgeSettlementSupport;
+import com.walletradar.ingestion.pipeline.classification.support.ClarificationEligibilitySupport;
 import com.walletradar.ingestion.pipeline.classification.support.InboundSignalSupport;
 import com.walletradar.ingestion.pipeline.classification.support.LpPositionLifecycleSupport;
 import com.walletradar.ingestion.pipeline.classification.support.NativeAssetSymbolResolver;
@@ -90,6 +91,7 @@ public class OnChainClassifier {
 
         if (view.isFailedExecution()) {
             return result(
+                    view,
                     NormalizedTransactionType.UNKNOWN,
                     NormalizedTransactionStatus.NEEDS_REVIEW,
                     ClassificationSource.HEURISTIC,
@@ -112,6 +114,16 @@ public class OnChainClassifier {
         }
 
         Optional<ProtocolRegistryEntry> bridgeSettlementEntry = findKnownBridgeSettlementEntry(view);
+        Optional<OnChainClassificationResult> bridgeSettlementMatch = classifyKnownBridgeSettlement(view, movementLegs, bridgeSettlementEntry);
+        if (bridgeSettlementMatch.isPresent()) {
+            return bridgeSettlementMatch.get();
+        }
+
+        Optional<OnChainClassificationResult> rewardRouteMatch = classifyKnownRewardRoute(view, movementLegs);
+        if (rewardRouteMatch.isPresent()) {
+            return rewardRouteMatch.get();
+        }
+
         Optional<OnChainClassificationResult> promoSpamMatch = classifyPromoSpamInbound(view, movementLegs);
         if (promoSpamMatch.isPresent()) {
             return promoSpamMatch.get();
@@ -134,6 +146,7 @@ public class OnChainClassifier {
         if (methodId != null && METHOD_ID_TYPES.containsKey(methodId)) {
             NormalizedTransactionType type = METHOD_ID_TYPES.get(methodId);
             return result(
+                view,
                 type,
                 OnChainClassificationSupport.initialStatus(view, type, ConfidenceLevel.MEDIUM),
                 ClassificationSource.METHOD_ID,
@@ -201,6 +214,7 @@ public class OnChainClassifier {
         }
 
         return Optional.of(result(
+                view,
                 type,
                 OnChainClassificationSupport.initialStatus(view, type, ConfidenceLevel.LOW),
                 ClassificationSource.FUNCTION_NAME,
@@ -220,6 +234,7 @@ public class OnChainClassifier {
         if (entry.specialHandler() != null) {
             SpecialHandlerResult specialHandlerResult = protocolSpecialHandlerDispatcher.dispatch(entry, view, movementLegs);
             return Optional.of(result(
+                    view,
                     specialHandlerResult.type(),
                     specialHandlerResult.status(),
                     ClassificationSource.PROTOCOL_REGISTRY,
@@ -255,6 +270,13 @@ public class OnChainClassifier {
             }
         }
 
+        if (entry.family() == ProtocolRegistryFamily.LENDING && entry.role() == ProtocolRegistryRole.POOL) {
+            NormalizedTransactionType type = resolveLendingPoolType(view);
+            if (type != null) {
+                return Optional.of(registryResult(view, entry, type, movementLegs));
+            }
+        }
+
         if (LpPositionLifecycleSupport.isDexStakeContract(entry)) {
             NormalizedTransactionType type = LpPositionLifecycleSupport.resolveDexStakeContractType(view, movementLegs);
             if (type != null) {
@@ -271,6 +293,7 @@ public class OnChainClassifier {
 
         if (entry.decomposeByLegs()) {
             return Optional.of(result(
+                    view,
                     NormalizedTransactionType.UNKNOWN,
                     NormalizedTransactionStatus.NEEDS_REVIEW,
                     ClassificationSource.PROTOCOL_REGISTRY,
@@ -323,6 +346,7 @@ public class OnChainClassifier {
         }
 
         return Optional.of(result(
+                view,
                 NormalizedTransactionType.UNKNOWN,
                 NormalizedTransactionStatus.NEEDS_REVIEW,
                 ClassificationSource.PROTOCOL_REGISTRY,
@@ -350,6 +374,7 @@ public class OnChainClassifier {
                 && summary.nativeOutbound()
                 && summary.hasWrappedInbound(wrappedContract)) {
             return Optional.of(result(
+                    view,
                     NormalizedTransactionType.WRAP,
                     NormalizedTransactionStatus.CONFIRMED,
                     ClassificationSource.METHOD_ID,
@@ -365,6 +390,7 @@ public class OnChainClassifier {
                 && summary.nativeInbound()
                 && summary.hasWrappedOutbound(wrappedContract)) {
             return Optional.of(result(
+                    view,
                     NormalizedTransactionType.UNWRAP,
                     NormalizedTransactionStatus.CONFIRMED,
                     ClassificationSource.METHOD_ID,
@@ -390,6 +416,7 @@ public class OnChainClassifier {
 
         if (summary.nativeOutbound() && summary.hasWrappedInbound(nativeAssetSymbolResolver.wrappedNativeContract(view.networkId()))) {
             return result(
+                    view,
                 NormalizedTransactionType.WRAP,
                 NormalizedTransactionStatus.CONFIRMED,
                 ClassificationSource.HEURISTIC,
@@ -403,6 +430,7 @@ public class OnChainClassifier {
 
         if (summary.nativeInbound() && summary.hasWrappedOutbound(nativeAssetSymbolResolver.wrappedNativeContract(view.networkId()))) {
             return result(
+                    view,
                 NormalizedTransactionType.UNWRAP,
                 NormalizedTransactionStatus.CONFIRMED,
                 ClassificationSource.HEURISTIC,
@@ -432,6 +460,7 @@ public class OnChainClassifier {
 
         if (isTrackedCounterparty(counterpartyTo, view.walletAddress()) || isTrackedCounterparty(counterpartyFrom, view.walletAddress())) {
             return result(
+                    view,
                     NormalizedTransactionType.INTERNAL_TRANSFER,
                     NormalizedTransactionStatus.CONFIRMED,
                     ClassificationSource.HEURISTIC,
@@ -445,6 +474,7 @@ public class OnChainClassifier {
 
         if (movementLegs.isEmpty()) {
             return result(
+                    view,
                     NormalizedTransactionType.UNKNOWN,
                     NormalizedTransactionStatus.NEEDS_REVIEW,
                     ClassificationSource.HEURISTIC,
@@ -460,6 +490,7 @@ public class OnChainClassifier {
             if (bridgeSettlementEntry.isPresent()) {
                 ProtocolRegistryEntry entry = bridgeSettlementEntry.get();
                 return result(
+                        view,
                         NormalizedTransactionType.BRIDGE_IN,
                         OnChainClassificationSupport.initialStatus(view, NormalizedTransactionType.BRIDGE_IN, entry.confidence()),
                         ClassificationSource.PROTOCOL_REGISTRY,
@@ -477,6 +508,7 @@ public class OnChainClassifier {
                     ? List.of("AMBIGUOUS_INBOUND_VS_REWARD")
                     : List.of();
             return result(
+                    view,
                     NormalizedTransactionType.EXTERNAL_INBOUND,
                     OnChainClassificationSupport.initialStatus(view, NormalizedTransactionType.EXTERNAL_INBOUND, ConfidenceLevel.LOW),
                     ClassificationSource.HEURISTIC,
@@ -497,6 +529,7 @@ public class OnChainClassifier {
         }
 
         return result(
+                view,
                 NormalizedTransactionType.UNKNOWN,
                 NormalizedTransactionStatus.NEEDS_REVIEW,
                 ClassificationSource.HEURISTIC,
@@ -514,6 +547,7 @@ public class OnChainClassifier {
             List<RawLeg> movementLegs
     ) {
         return result(
+                view,
                 type,
                 OnChainClassificationSupport.initialStatus(view, type, ConfidenceLevel.LOW),
                 ClassificationSource.HEURISTIC,
@@ -730,26 +764,13 @@ public class OnChainClassifier {
     }
 
     private boolean hasKnownRewardInbound(OnChainRawTransactionView view) {
-        String walletAddress = view.walletAddress();
-        if (walletAddress == null) {
-            return false;
-        }
-        for (Document transfer : view.explorerTokenTransfers()) {
-            if (!walletAddress.equals(view.tokenTransferTo(transfer))) {
-                continue;
-            }
-            Optional<ProtocolRegistryEntry> entry = protocolRegistryService.lookup(view.networkId(), view.tokenTransferFrom(transfer));
-            if (entry.isPresent() && isRewardEntry(entry.get())) {
-                return true;
-            }
-        }
-        return false;
+        return findKnownRewardEntry(view).isPresent();
     }
 
     private boolean hasKnownRewardContract(OnChainRawTransactionView view) {
         return protocolRegistryService.lookup(view.networkId(), view.toAddress())
-                .map(this::isRewardEntry)
-                .orElse(false);
+                .filter(this::isRewardEntry)
+                .isPresent();
     }
 
     private Optional<ProtocolRegistryEntry> findKnownBridgeSettlementEntry(OnChainRawTransactionView view) {
@@ -789,7 +810,114 @@ public class OnChainClassifier {
         candidates.putIfAbsent(value.contractAddress(), value);
     }
 
+    private Optional<OnChainClassificationResult> classifyKnownBridgeSettlement(
+            OnChainRawTransactionView view,
+            List<RawLeg> movementLegs,
+            Optional<ProtocolRegistryEntry> bridgeSettlementEntry
+    ) {
+        if (!BridgeSettlementSupport.isSettlementSelector(view)) {
+            return Optional.empty();
+        }
+        MovementSummary summary = MovementSummary.from(movementLegs, nativeAssetSymbolResolver.nativeSymbol(view.networkId()));
+        if (!summary.onlyInbound()) {
+            return Optional.empty();
+        }
+        if (bridgeSettlementEntry.isPresent()) {
+            ProtocolRegistryEntry entry = bridgeSettlementEntry.get();
+            return Optional.of(result(
+                    view,
+                    NormalizedTransactionType.BRIDGE_IN,
+                    OnChainClassificationSupport.initialStatus(view, NormalizedTransactionType.BRIDGE_IN, entry.confidence()),
+                    ClassificationSource.PROTOCOL_REGISTRY,
+                    entry.confidence(),
+                    OnChainClassificationSupport.toFlows(movementLegs, NormalizedTransactionType.BRIDGE_IN),
+                    List.of(),
+                    entry.protocolName(),
+                    entry.protocolVersion()
+            ));
+        }
+        return Optional.of(result(
+                view,
+                NormalizedTransactionType.BRIDGE_IN,
+                OnChainClassificationSupport.initialStatus(view, NormalizedTransactionType.BRIDGE_IN, ConfidenceLevel.MEDIUM),
+                ClassificationSource.METHOD_ID,
+                ConfidenceLevel.MEDIUM,
+                OnChainClassificationSupport.toFlows(movementLegs, NormalizedTransactionType.BRIDGE_IN),
+                List.of(),
+                null,
+                null
+        ));
+    }
+
+    private Optional<OnChainClassificationResult> classifyKnownRewardRoute(
+            OnChainRawTransactionView view,
+            List<RawLeg> movementLegs
+    ) {
+        if (!InboundSignalSupport.hasExplicitClaimSignal(view)) {
+            return Optional.empty();
+        }
+        Optional<ProtocolRegistryEntry> rewardEntry = findKnownRewardEntry(view);
+        if (rewardEntry.isEmpty()) {
+            return Optional.empty();
+        }
+
+        boolean hasInboundMovement = movementLegs.stream()
+                .anyMatch(leg -> !leg.fee() && leg.quantityDelta().signum() > 0);
+        if (hasInboundMovement) {
+            ProtocolRegistryEntry entry = rewardEntry.get();
+            return Optional.of(result(
+                    view,
+                    NormalizedTransactionType.REWARD_CLAIM,
+                    OnChainClassificationSupport.initialStatus(view, NormalizedTransactionType.REWARD_CLAIM, entry.confidence()),
+                    ClassificationSource.PROTOCOL_REGISTRY,
+                    entry.confidence(),
+                    OnChainClassificationSupport.toFlows(movementLegs, NormalizedTransactionType.REWARD_CLAIM),
+                    List.of(),
+                    entry.protocolName(),
+                    entry.protocolVersion()
+            ));
+        }
+
+        ProtocolRegistryEntry entry = rewardEntry.get();
+        return Optional.of(result(
+                view,
+                NormalizedTransactionType.UNKNOWN,
+                NormalizedTransactionStatus.NEEDS_REVIEW,
+                ClassificationSource.PROTOCOL_REGISTRY,
+                entry.confidence(),
+                OnChainClassificationSupport.toFlows(movementLegs, NormalizedTransactionType.UNKNOWN),
+                List.of("CLAIM_WITHOUT_MOVEMENT"),
+                entry.protocolName(),
+                entry.protocolVersion()
+        ));
+    }
+
+    private Optional<ProtocolRegistryEntry> findKnownRewardEntry(OnChainRawTransactionView view) {
+        Map<String, ProtocolRegistryEntry> candidates = new LinkedHashMap<>();
+        putRewardCandidate(candidates, protocolRegistryService.lookup(view.networkId(), view.toAddress()));
+        putRewardCandidate(candidates, protocolRegistryService.lookup(view.networkId(), view.fromAddress()));
+        for (Document transfer : view.explorerTokenTransfers()) {
+            putRewardCandidate(candidates, protocolRegistryService.lookup(view.networkId(), view.tokenTransferFrom(transfer)));
+        }
+        return candidates.values().stream().findFirst();
+    }
+
+    private void putRewardCandidate(
+            Map<String, ProtocolRegistryEntry> candidates,
+            Optional<ProtocolRegistryEntry> entry
+    ) {
+        if (entry.isEmpty()) {
+            return;
+        }
+        ProtocolRegistryEntry value = entry.get();
+        if (!isRewardEntry(value)) {
+            return;
+        }
+        candidates.putIfAbsent(value.contractAddress(), value);
+    }
+
     private OnChainClassificationResult result(
+            OnChainRawTransactionView view,
             NormalizedTransactionType type,
             NormalizedTransactionStatus status,
             ClassificationSource classifiedBy,
@@ -799,13 +927,16 @@ public class OnChainClassifier {
             String protocolName,
             String protocolVersion
     ) {
+        List<String> mergedMissingDataReasons = status == NormalizedTransactionStatus.PENDING_CLARIFICATION
+                ? ClarificationEligibilitySupport.mergeClarificationReasons(view, type, missingDataReasons)
+                : missingDataReasons;
         return new OnChainClassificationResult(
                 type,
                 status,
                 classifiedBy,
                 confidence,
                 flows,
-                missingDataReasons,
+                mergedMissingDataReasons,
                 protocolName,
                 protocolVersion
         );
@@ -850,6 +981,7 @@ public class OnChainClassifier {
             List<RawLeg> movementLegs
     ) {
         return result(
+                view,
                 type,
                 OnChainClassificationSupport.initialStatus(view, type, entry.confidence()),
                 ClassificationSource.PROTOCOL_REGISTRY,
@@ -871,6 +1003,7 @@ public class OnChainClassifier {
             return Optional.empty();
         }
         return Optional.of(result(
+                view,
                 NormalizedTransactionType.ADMIN_CONFIG,
                 NormalizedTransactionStatus.CONFIRMED,
                 match.get().classifiedBy(),
@@ -886,13 +1019,17 @@ public class OnChainClassifier {
             OnChainRawTransactionView view,
             List<RawLeg> movementLegs
     ) {
-        if (hasKnownRewardContract(view) || hasKnownRewardInbound(view) || findKnownBridgeSettlementEntry(view).isPresent()) {
+        if (hasKnownRewardContract(view)
+                || hasKnownRewardInbound(view)
+                || findKnownBridgeSettlementEntry(view).isPresent()
+                || BridgeSettlementSupport.isSettlementSelector(view)) {
             return Optional.empty();
         }
         if (!InboundSignalSupport.isPromoPhishingInbound(view, movementLegs)) {
             return Optional.empty();
         }
         return Optional.of(result(
+                view,
                 NormalizedTransactionType.UNKNOWN,
                 NormalizedTransactionStatus.NEEDS_REVIEW,
                 ClassificationSource.HEURISTIC,
@@ -911,7 +1048,21 @@ public class OnChainClassifier {
         if (!ZeroAmountTokenSupport.isZeroAmountOutboundOnly(view)) {
             return Optional.empty();
         }
+        if (ZeroAmountTokenSupport.isKnownNonEconomicFamily(view)) {
+            return Optional.of(result(
+                    view,
+                    NormalizedTransactionType.ADMIN_CONFIG,
+                    NormalizedTransactionStatus.CONFIRMED,
+                    ClassificationSource.HEURISTIC,
+                    ConfidenceLevel.MEDIUM,
+                    OnChainClassificationSupport.toFlows(movementLegs, NormalizedTransactionType.ADMIN_CONFIG),
+                    List.of(),
+                    null,
+                    null
+            ));
+        }
         return Optional.of(result(
+                view,
                 NormalizedTransactionType.UNKNOWN,
                 NormalizedTransactionStatus.NEEDS_REVIEW,
                 ClassificationSource.HEURISTIC,
@@ -921,6 +1072,31 @@ public class OnChainClassifier {
                 null,
                 null
         ));
+    }
+
+    private NormalizedTransactionType resolveLendingPoolType(OnChainRawTransactionView view) {
+        NormalizedTransactionType selectorType = METHOD_ID_TYPES.get(view.methodId());
+        if (selectorType == NormalizedTransactionType.LENDING_DEPOSIT
+                || selectorType == NormalizedTransactionType.LENDING_WITHDRAW
+                || selectorType == NormalizedTransactionType.BORROW
+                || selectorType == NormalizedTransactionType.REPAY) {
+            return selectorType;
+        }
+
+        String functionName = view.functionName();
+        if (containsAny(functionName, "withdraw", "redeem")) {
+            return NormalizedTransactionType.LENDING_WITHDRAW;
+        }
+        if (containsAny(functionName, "deposit", "supply")) {
+            return NormalizedTransactionType.LENDING_DEPOSIT;
+        }
+        if (functionName != null && functionName.contains("borrow")) {
+            return NormalizedTransactionType.BORROW;
+        }
+        if (functionName != null && functionName.contains("repay")) {
+            return NormalizedTransactionType.REPAY;
+        }
+        return null;
     }
 
     private static boolean safeEquals(String left, String right) {

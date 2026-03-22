@@ -92,7 +92,7 @@ class ExplorerEvmNetworkAdapterTest {
     }
 
     @Test
-    void fetchTransactionsUsesTokenTransferAsTxDetailsWhenTxListMissing() throws Exception {
+    void fetchTransactionsUsesSanitizedTokenTransferFallbackWhenTxListMissing() throws Exception {
         when(explorerProvider.supports(NetworkId.ARBITRUM)).thenReturn(true);
         when(explorerProvider.getTransactions(WALLET, NetworkId.ARBITRUM, 100L, 200L, 1))
                 .thenReturn(List.of());
@@ -120,10 +120,11 @@ class ExplorerEvmNetworkAdapterTest {
         assertThat(result).hasSize(1);
         RawTransaction tx = result.get(0);
         assertThat(tx.getBlockNumber()).isEqualTo(123L);
-        assertThat(tx.getRawData().get("explorer")).isNotNull();
-        assertThat(tx.getRawData()).containsEntry("from", "0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f");
-        assertThat(tx.getRawData()).containsEntry("to", "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f");
-        assertThat(tx.getRawData()).containsEntry("value", "1000000");
+        Document explorer = tx.getRawData().get("explorer", Document.class);
+        assertThat(explorer).isNotNull();
+        assertThat(explorer.get("tx", Document.class)).isNotNull();
+        assertThat(tx.getRawData()).doesNotContainKeys("from", "to", "value", "contractAddress", "tokenSymbol");
+        assertThat(tx.getRawData()).containsEntry("blockNumber", "123");
 
         verify(explorerProvider, never()).getTransaction("0xabc", NetworkId.ARBITRUM);
     }

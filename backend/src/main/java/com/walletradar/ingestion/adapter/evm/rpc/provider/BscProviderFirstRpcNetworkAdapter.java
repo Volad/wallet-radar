@@ -75,6 +75,11 @@ public class BscProviderFirstRpcNetworkAdapter implements NetworkAdapter {
         return configured != null && configured > 0 ? configured : 250_000;
     }
 
+    @Override
+    public boolean supportsBlockCheckpointing() {
+        return false;
+    }
+
     private IngestionNetworkProperties.NetworkIngestionEntry networkEntry() {
         return ingestionNetworkProperties.getNetwork() != null
                 ? ingestionNetworkProperties.getNetwork().get(NetworkId.BSC.name())

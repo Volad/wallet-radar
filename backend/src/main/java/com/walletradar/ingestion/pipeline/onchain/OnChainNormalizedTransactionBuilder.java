@@ -5,9 +5,11 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassificationResult;
+import com.walletradar.ingestion.pipeline.classification.support.ClarificationEligibilitySupport;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
+import java.util.List;
 
 /**
  * Builds canonical on-chain normalized documents from classifier output.
@@ -50,11 +52,6 @@ public class OnChainNormalizedTransactionBuilder {
         normalized.setStatAttempts(safeCounter(existing.getStatAttempts()));
         normalized.setCorrelationId(existing.getCorrelationId());
         normalized.setClientId(existing.getClientId());
-
-        NormalizedTransactionStatus status = normalized.getStatus();
-        if (status == NormalizedTransactionStatus.PENDING_CLARIFICATION) {
-            normalized.setStatus(NormalizedTransactionStatus.PENDING_PRICE);
-        }
         if (normalized.getStatus() == NormalizedTransactionStatus.CONFIRMED) {
             normalized.setConfirmedAt(existing.getConfirmedAt() != null ? existing.getConfirmedAt() : now);
         } else {
@@ -108,7 +105,15 @@ public class OnChainNormalizedTransactionBuilder {
         normalized.setClassifiedBy(classificationResult.classifiedBy());
         normalized.setConfidence(classificationResult.confidence());
         normalized.setFlows(classificationResult.flows());
-        normalized.setMissingDataReasons(classificationResult.missingDataReasons());
+        List<String> missingDataReasons = classificationResult.missingDataReasons();
+        if (classificationResult.status() == NormalizedTransactionStatus.PENDING_CLARIFICATION) {
+            missingDataReasons = ClarificationEligibilitySupport.mergeClarificationReasons(
+                    view,
+                    classificationResult.type(),
+                    missingDataReasons
+            );
+        }
+        normalized.setMissingDataReasons(missingDataReasons);
         normalized.setProtocolName(classificationResult.protocolName());
         normalized.setProtocolVersion(classificationResult.protocolVersion());
     }

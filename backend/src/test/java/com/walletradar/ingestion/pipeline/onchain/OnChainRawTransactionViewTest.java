@@ -6,6 +6,7 @@ import org.bson.Document;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.math.BigInteger;
 import java.time.Instant;
 import java.util.List;
 
@@ -103,6 +104,61 @@ class OnChainRawTransactionViewTest {
 
         assertThat(view.persistedLogs()).hasSize(1);
         assertThat(view.persistedLogs().getFirst().getString("address")).isEqualTo("0xtoken");
+    }
+
+    @Test
+    @DisplayName("suppresses direct native value when top-level raw is transfer-shaped")
+    void suppressesDirectNativeValueWhenTopLevelRawIsTransferShaped() {
+        OnChainRawTransactionView view = OnChainRawTransactionView.wrap(rawWith(new Document()
+                .append("timeStamp", "1700000000")
+                .append("transactionIndex", "1")
+                .append("from", "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                .append("to", "0x1111111111111111111111111111111111111111")
+                .append("value", "897975990")
+                .append("contractAddress", "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+                .append("tokenSymbol", "USDC")
+                .append("tokenName", "USD Coin")
+                .append("tokenDecimal", "6")
+                .append("methodId", "0xe2de2a03")
+                .append("explorer", new Document("tokenTransfers", List.of(
+                        new Document("contractAddress", "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+                                .append("from", "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                                .append("to", "0x1111111111111111111111111111111111111111")
+                                .append("value", "897975990")
+                                .append("tokenSymbol", "USDC")
+                                .append("tokenName", "USD Coin")
+                                .append("tokenDecimal", "6")
+                )))));
+
+        assertThat(view.methodId()).isEqualTo("0xe2de2a03");
+        assertThat(view.rawValue()).isNull();
+        assertThat(view.contractAddress()).isNull();
+    }
+
+    @Test
+    @DisplayName("prefers explorer tx fields over contaminated top-level values")
+    void prefersExplorerTxFieldsOverContaminatedTopLevelValues() {
+        OnChainRawTransactionView view = OnChainRawTransactionView.wrap(rawWith(new Document()
+                .append("timeStamp", "1700000000")
+                .append("transactionIndex", "1")
+                .append("from", "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                .append("to", "0x1111111111111111111111111111111111111111")
+                .append("value", "897975990")
+                .append("explorer", new Document()
+                        .append("tx", new Document()
+                                .append("from", "0x9999999999999999999999999999999999999999")
+                                .append("to", "0x8888888888888888888888888888888888888888")
+                                .append("value", "0x0"))
+                        .append("tokenTransfers", List.of(
+                                new Document("contractAddress", "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+                                        .append("from", "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                                        .append("to", "0x1111111111111111111111111111111111111111")
+                                        .append("value", "897975990")
+                        )))));
+
+        assertThat(view.fromAddress()).isEqualTo("0x9999999999999999999999999999999999999999");
+        assertThat(view.toAddress()).isEqualTo("0x8888888888888888888888888888888888888888");
+        assertThat(view.rawValue()).isEqualTo(BigInteger.ZERO);
     }
 
     private static RawTransaction rawWith(Document rawData) {

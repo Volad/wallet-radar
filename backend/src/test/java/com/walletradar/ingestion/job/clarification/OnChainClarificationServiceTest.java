@@ -160,7 +160,13 @@ class OnChainClarificationServiceTest {
         assertThat(normalizedCaptor.getValue().getStatus()).isEqualTo(NormalizedTransactionStatus.NEEDS_REVIEW);
         assertThat(normalizedCaptor.getValue().getClarificationAttempts()).isEqualTo(3);
         assertThat(normalizedCaptor.getValue().getMissingDataReasons())
-                .contains("CLARIFICATION_RECEIPT_UNAVAILABLE", "CLARIFICATION_ATTEMPTS_EXHAUSTED");
+                .contains(
+                        "MISSING_EXECUTION_STATUS",
+                        "MISSING_EFFECTIVE_GAS_PRICE",
+                        "MISSING_GAS_USED",
+                        "CLARIFICATION_RECEIPT_UNAVAILABLE",
+                        "CLARIFICATION_ATTEMPTS_EXHAUSTED"
+                );
     }
 
     @Test
@@ -204,6 +210,31 @@ class OnChainClarificationServiceTest {
         assertThat(saved.getType()).isEqualTo(NormalizedTransactionType.EXTERNAL_INBOUND);
         assertThat(saved.getClarificationAttempts()).isEqualTo(0);
         assertThat(saved.getMissingDataReasons()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("clarification marks insufficient enrichment instead of forcing pending price")
+    void clarificationMarksInsufficientEnrichmentInsteadOfForcingPendingPrice() {
+        NormalizedTransaction pending = pendingClarification(NormalizedTransactionType.SWAP);
+        RawTransaction rawTransaction = lowConfidenceSwapRaw();
+        when(rawTransactionRepository.findById(pending.getId())).thenReturn(Optional.of(rawTransaction));
+        when(clarificationGateway.fetch("0xabc", NetworkId.ETHEREUM))
+                .thenReturn(Optional.of(new ClarificationReceiptEnrichment("1", null, null, null)));
+
+        boolean clarified = service.clarify(pending);
+
+        assertThat(clarified).isFalse();
+
+        ArgumentCaptor<NormalizedTransaction> normalizedCaptor = ArgumentCaptor.forClass(NormalizedTransaction.class);
+        verify(normalizedTransactionRepository).save(normalizedCaptor.capture());
+        NormalizedTransaction saved = normalizedCaptor.getValue();
+        assertThat(saved.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_CLARIFICATION);
+        assertThat(saved.getClarificationAttempts()).isEqualTo(1);
+        assertThat(saved.getMissingDataReasons()).contains(
+                "MISSING_EFFECTIVE_GAS_PRICE",
+                "MISSING_GAS_USED",
+                "CLARIFICATION_INSUFFICIENT_EVIDENCE"
+        );
     }
 
     private static NormalizedTransaction pendingClarification(NormalizedTransactionType type) {

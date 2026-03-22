@@ -28,8 +28,10 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class BscProviderFirstRpcNetworkAdapterTest {
 
@@ -92,6 +94,46 @@ class BscProviderFirstRpcNetworkAdapterTest {
         assertThat(transfer.getString("tokenSymbol")).isEqualTo("USDT");
         assertThat(transfer.getString("tokenDecimal")).isEqualTo("6");
         assertThat(nativeRepairCalls.get()).isZero();
+    }
+
+    @Test
+    @DisplayName("provider-first BSC fetch uses one advanced API request without pagination params")
+    void providerFirstBscFetchUsesOneAdvancedApiRequestWithoutPaginationParams() {
+        AtomicInteger providerCalls = new AtomicInteger(0);
+        AtomicReference<Document> providerParams = new AtomicReference<>();
+        EvmRpcClient rpcClient = new EvmRpcClient() {
+            @Override
+            public Mono<String> call(String endpointUrl, String method, Object params) {
+                if ("ankr_getTransactionsByAddress".equals(method)) {
+                    providerCalls.incrementAndGet();
+                    providerParams.set(new Document((Document) params));
+                    return Mono.just(providerResponse(completeProviderTransaction()));
+                }
+                if ("eth_call".equals(method)) {
+                    return Mono.just(jsonResult("0x"));
+                }
+                return Mono.just("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":null}");
+            }
+
+            @Override
+            public Mono<String> batchCall(String endpointUrl, List<RpcRequest> requests) {
+                return Mono.just("[]");
+            }
+        };
+
+        BscProviderFirstRpcNetworkAdapter adapter = adapter(rpcClient, true);
+
+        List<RawTransaction> transactions = adapter.fetchTransactions(
+                "0x1A87f12aC07E9746e9B053B8D7EF1d45270D693f",
+                NetworkId.BSC,
+                56_000_000L,
+                57_000_000L
+        );
+
+        assertThat(transactions).hasSize(1);
+        assertThat(providerCalls.get()).isEqualTo(1);
+        assertThat(providerParams.get()).isNotNull();
+        assertThat(providerParams.get()).doesNotContainKeys("pageSize", "pageToken");
     }
 
     @Test
@@ -180,6 +222,36 @@ class BscProviderFirstRpcNetworkAdapterTest {
 
         assertThat(tx.getRawData().getList("ingestBlockers", String.class))
                 .contains("MISSING_TRANSACTION_INDEX", "MISSING_BLOCK_TIMESTAMP", "MISSING_RECEIPT_STATUS", "MISSING_GAS_USED");
+    }
+
+    @Test
+    @DisplayName("provider-first BSC fetch fails fast when Ankr returns paginated segment response")
+    void providerFirstBscFetchFailsFastWhenAnkrReturnsPaginatedSegmentResponse() {
+        EvmRpcClient rpcClient = new EvmRpcClient() {
+            @Override
+            public Mono<String> call(String endpointUrl, String method, Object params) {
+                if ("ankr_getTransactionsByAddress".equals(method)) {
+                    return Mono.just("""
+                            {"jsonrpc":"2.0","id":1,"result":{"transactions":[%s],"nextPageToken":"next-page"}}
+                            """.formatted(completeProviderTransaction().toJson()));
+                }
+                return Mono.just("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":null}");
+            }
+
+            @Override
+            public Mono<String> batchCall(String endpointUrl, List<RpcRequest> requests) {
+                return Mono.just("[]");
+            }
+        };
+
+        BscProviderFirstRpcNetworkAdapter adapter = adapter(rpcClient, true);
+
+        assertThatThrownBy(() -> adapter.fetchTransactions(
+                "0x1A87f12aC07E9746e9B053B8D7EF1d45270D693f",
+                NetworkId.BSC,
+                56_000_000L,
+                57_000_000L
+        )).hasMessageContaining("nextPageToken");
     }
 
     @Test
