@@ -113,30 +113,57 @@ Spring Boot
   - `rawData.explorer.internalTransfers[]`
   - direct native tx value only when it is canonical tx-level evidence
   - persisted real receipt logs when a method-aware handler explicitly needs them
+  - dedicated clarification-v2 receipt-log evidence when that evidence is
+    persisted into canonical raw shape and exposed through the same raw view
 - synthetic `rawData.logs[]` remain out of bounds.
 - Classification rules should follow protocol-source semantics when official
   contracts or protocol docs are available, not explorer UI labels.
 
 ### 3.3 Clarification
 
-- Only for receipt-clarifiable records.
-- Low confidence alone is not enough to enter clarification.
-- Enrichment allowed:
+- `Clarification v1` is the current production stage.
+- `Clarification v1` is only for receipt-clarifiable records.
+- Low confidence alone is not enough to enter `Clarification v1`.
+- `Clarification v1` enrichment allowed:
   - execution status
   - gas
   - created contract address
-- Clarification reasons must match the actual missing receipt-safe fields.
+- `Clarification v1` reasons must match the actual missing receipt-safe fields.
   `MISSING_CONTRACT_ADDRESS` is valid only when contract-creation intent is
   explicitly evidenced by the tx-shaped raw payload.
 - Missing `effectiveGasPrice` is a clarification reason even when legacy
   `gasPrice` is still usable for provisional fee math.
 - Low-confidence rows that are already economically coherent must proceed directly to `PENDING_PRICE`.
 - Unsupported semantic gaps must move directly to `NEEDS_REVIEW`.
-- Clarification must not treat synthetic logs as first-class classification input.
-- Clarification is not used to decide promo/phishing inbound, bridge-settlement continuity, LP position-manager multicalls, or zero-value no-op token calls.
-- Clarification is not used to upgrade per-wallet `CLAIM_WITHOUT_MOVEMENT` rows
+- `Clarification v1` must not treat synthetic logs as first-class classification input.
+- `Clarification v1` is not used to decide promo/phishing inbound, bridge-settlement continuity, LP position-manager multicalls, or zero-value no-op token calls.
+- `Clarification v1` is not used to upgrade per-wallet `CLAIM_WITHOUT_MOVEMENT` rows
   into `REWARD_CLAIM`.
-- Clarification rows must carry explicit missing receipt-safe reasons.
+- `Clarification v1` rows must carry explicit missing receipt-safe reasons.
+- `Clarification v2` is a separate planned enrichment path, not a widening of
+  the base `PENDING_CLARIFICATION` bucket.
+- `Clarification v2` may fetch full receipt logs only for an allowlisted set of
+  review families where the audit and official protocol semantics show that
+  receipt evidence can materially close the gap.
+- `Clarification v2` should persist both:
+  - the adapted clarification-evidence fields used by runtime classification
+  - the raw full receipt payload when the source makes it available
+- full receipt payload must remain separate from synthetic `rawData.logs[]` and
+  from the adapted canonical evidence fields.
+- `Clarification v2` may rerun classification only from canonical raw evidence
+  plus production-fetchable full receipt evidence.
+- Clarification enrichment must follow source lineage:
+  - RPC-backed raw -> RPC clarification
+  - Etherscan-family raw -> Etherscan-family clarification
+  - Blockscout-backed raw -> Blockscout clarification
+- Cross-source clarification fallback is allowed only when the configured
+  lineage-consistent source fails and that fallback path is explicitly
+  documented.
+- `Clarification v2` must not use traces, explorer UI summaries, or manual audit
+  notes as runtime evidence.
+- Families already closable from current raw, such as claim-family no-movement
+  rows and known Morpho handler gaps, must be fixed in classification rather
+  than deferred to `Clarification v2`.
 
 ### 3.4 Bybit normalization
 

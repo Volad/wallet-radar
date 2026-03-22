@@ -18,6 +18,14 @@ Implementation handoff:
 - [ ] Clarification uses receipt metadata only for status/gas/contract creation fields, does not rely on synthetic `rawData.logs[]`, and is entered only when those receipt-safe fields are actually missing.
 - [ ] Rows that enter `PENDING_CLARIFICATION` record explicit missing receipt-safe reasons; empty `missingDataReasons[]` is not acceptable for clarification-eligible rows.
 - [ ] Clarification reasons reflect the actually missing receipt-safe fields from canonical raw evidence. `MISSING_CONTRACT_ADDRESS` is allowed only when contract-creation intent is explicitly evidenced by the tx-shaped raw payload; missing `effectiveGasPrice` must not be masked by legacy `gasPrice`.
+- [ ] A live clarification row that is missing both execution status and `effectiveGasPrice` surfaces both reasons in `missingDataReasons[]`, even when the row is not a fee-payer acquisition/disposal row.
+- [ ] `Clarification v2`, if enabled, is a separate allowlisted enrichment path: it may fetch full receipt logs, but only for residual review families where the audit and official protocol semantics show that receipt evidence can materially close the gap.
+- [ ] `Clarification v2` persists full receipt logs in a dedicated clarification-evidence field and re-runs classification from canonical raw evidence plus that persisted receipt evidence; it does not use synthetic `rawData.logs[]`, traces, or explorer UI summaries.
+- [ ] Where the source exposes it, `Clarification v2` also persists the raw full receipt payload alongside the adapted clarification evidence so future deterministic enrichment can reuse it without a new network fetch.
+- [ ] Clarification enrichment follows raw-source lineage by default: RPC-backed raw uses RPC clarification, Etherscan-family raw uses Etherscan-family clarification, and Blockscout-backed raw uses Blockscout clarification.
+- [ ] `Clarification v2` source routing and storage are deterministic: the same raw row always chooses the same clarification source family and produces the same adapted evidence plus the same persisted raw receipt payload shape.
+- [ ] Rows already closable from current raw evidence, such as claim-family no-movement rows or known Morpho handler gaps, are fixed in classification and do not wait for `Clarification v2`.
+- [ ] Receipt-only cleanup/admin families may narrow to explicit non-economic terminal states, but receipt enrichment may not invent economic movement that is absent from persisted evidence.
 - [ ] Protocol-registry runtime data is loaded from `backend/src/main/resources/protocol-registry.json` only; `event_topics` are reference-only and ignored by the classifier.
 - [ ] Multi-function registry entries use explicit `specialHandler` dispatch and return one canonical result per raw tx.
 - [ ] Wrapped-native `deposit()` / `withdraw(uint256)` on known wrapper contracts classify as `WRAP` / `UNWRAP` before generic function-name fallback.
@@ -76,7 +84,14 @@ Implementation handoff:
 - Case: `claimWithRecipient(...)` on an allowlisted reward distributor carries real inbound token movement | Scope: In | Expected behaviour: canonical type is `REWARD_CLAIM` and promo/phishing heuristics do not override it.
 - Case: Known claim contract call has no inbound or outbound economic movement in raw | Scope: In | Expected behaviour: tx does not auto-become `REWARD_CLAIM`; it goes to explicit non-economic or review handling.
 - Case: Clarification-eligible row is missing `txreceipt_status` and `effectiveGasPrice` but is not a contract creation tx | Scope: In | Expected behaviour: `missingDataReasons[]` contains `MISSING_EXECUTION_STATUS` and `MISSING_EFFECTIVE_GAS_PRICE`, and does not contain `MISSING_CONTRACT_ADDRESS`.
+- Case: `PENDING_CLARIFICATION` row is a plain inbound receive and the tracked wallet is not the fee payer | Scope: In | Expected behaviour: clarification reasons still reflect all actually missing receipt-safe tx metadata needed by the clarification stage; the row is not mislabeled just because gas is paid by another address.
 - Case: Claim-family call is present for two tracked wallets but only one wallet receives the reward transfer | Scope: In | Expected behaviour: receiving wallet becomes `REWARD_CLAIM`; non-receiving wallet remains explicit `CLAIM_WITHOUT_MOVEMENT` or review and is not upgraded by clarification.
+- Case: Mantle merkle-style `claim(...)` call has no payout to the tracked wallet in current raw | Scope: In | Expected behaviour: row narrows to `CLAIM_WITHOUT_MOVEMENT` or equivalent explicit no-movement claim state during classification; it does not wait for clarification.
+- Case: Morpho Bundler `multicall` contains `morphoWithdrawCollateral(...)` and current raw already shows inbound asset movement | Scope: In | Expected behaviour: row is closed in the handler/classifier, not in clarification.
+- Case: Receipt-log enrichment is enabled for a Pancake CL exit family and full receipt logs reveal deterministic movement | Scope: In | Expected behaviour: `Clarification v2` may persist receipt logs and re-run classification into the correct LP-exit-related type.
+- Case: Raw row came from Blockscout-backed ingestion | Scope: In | Expected behaviour: clarification fetch uses Blockscout-compatible receipt/log endpoints first; it does not silently switch to RPC as the normal path.
+- Case: Receipt-log enrichment is enabled for a burn-only LP NFT cleanup family and receipt proves no asset movement | Scope: In | Expected behaviour: row may narrow only to an explicit non-economic terminal state; it does not become `LP_EXIT`.
+- Case: Explorer or RPC traces would explain a row but production `Clarification v2` does not persist those traces | Scope: In | Expected behaviour: the row stays explicit review; unsupported evidence sources are not used.
 - Case: Known lending `withdraw(...)` burns receipt token and returns underlying asset | Scope: In | Expected behaviour: canonical type is `LENDING_WITHDRAW`, not `LENDING_DEPOSIT`.
 - Case: Token transfer leg has zero quantity and no economic counterflow | Scope: In | Expected behaviour: tx does not produce economic movement; it routes to explicit no-op/admin handling or review.
 - Case: Known V3 position-manager `multicall` adds liquidity and mints NFT | Scope: In | Expected behaviour: tx becomes `LP_ENTRY`, not router `UNKNOWN`.
@@ -133,12 +148,13 @@ Implementation handoff:
 2. Wallet-universe projection — maintain one installation-wide tracked wallet set derived from persisted tracking state and use it as normalization input. Depends on: none.
 3. Protocol-registry runtime integration — load and validate the classpath registry, ignore `event_topics`, and expose deterministic contract lookup. Depends on: 1.
 4. On-chain normalization rewrite — rebuild classification, leg extraction, special-handler dispatch, wrapper/router fast-paths, and canonical construction from `raw_transactions` under strict ordering and evidence rules. Depends on: 1, 2, 3.
-5. Clarification rewrite — implement receipt-metadata enrichment with explicit prohibition on synthetic-log evidence and explicit eligibility gating so low confidence alone does not enter clarification. Depends on: 4.
-6. Pricing rewrite — implement the new resolver chain and unresolved-price handling. Depends on: 1, 4.
-7. Bybit normalization rewrite — pair UTA trades with sliding `±5 sec`, correlate withdraw/deposit rows by `txHash`, and emit canonical correlated docs. Depends on: 1.
-8. AVCO/reconciliation rewrite — replay confirmed canonical docs with transfer carry-over and correlation semantics. Depends on: 1, 6, 7.
-9. Determinism and blocker reporting — add explicit blocker/warning outputs and deterministic ordering guarantees across all replay inputs. Depends on: 4, 7, 8.
-10. Documentation pass — keep `architecture-v3.md`, `docs/02-architecture.md`, and `docs/03-accounting.md` aligned with the implemented rules. Depends on: 1-9.
+5. Clarification v1 rewrite — implement receipt-metadata enrichment with explicit prohibition on synthetic-log evidence and explicit eligibility gating so low confidence alone does not enter clarification. Depends on: 4.
+6. Clarification v2 selective enrichment — add allowlisted full-receipt-log persistence and bounded reclassification for residual review families that are provably closable from production receipt evidence. Depends on: 4, 5.
+7. Pricing rewrite — implement the new resolver chain and unresolved-price handling. Depends on: 1, 4.
+8. Bybit normalization rewrite — pair UTA trades with sliding `±5 sec`, correlate withdraw/deposit rows by `txHash`, and emit canonical correlated docs. Depends on: 1.
+9. AVCO/reconciliation rewrite — replay confirmed canonical docs with transfer carry-over and correlation semantics. Depends on: 1, 7, 8.
+10. Determinism and blocker reporting — add explicit blocker/warning outputs and deterministic ordering guarantees across all replay inputs. Depends on: 4, 8, 9.
+11. Documentation pass — keep `architecture-v3.md`, `docs/02-architecture.md`, and `docs/03-accounting.md` aligned with the implemented rules. Depends on: 1-10.
 
 ## Risk Notes / Assumptions / Open Questions
 
@@ -154,4 +170,7 @@ Implementation handoff:
 - Risk: tx-level fields are contaminated by transfer-row payloads and produce bogus native bridge legs | Mitigation: separate tx-row and transfer-row evidence at ingestion, read direct native value only from canonical tx-level fields, and re-normalize representative bridge-settlement fixtures.
 - Risk: legitimate clarification rows become opaque because `missingDataReasons[]` stays empty | Mitigation: require explicit receipt-safe missing reasons at normalization and clarification entry.
 - Risk: clarification reasons drift away from the real missing fields and hide the true blocker | Mitigation: compute reasons from the raw view, require explicit contract-creation evidence before emitting `MISSING_CONTRACT_ADDRESS`, and treat missing `effectiveGasPrice` independently from legacy `gasPrice`.
+- Risk: clarification readiness is declared too early because review-family debt is mixed with the real clarification blocker | Mitigation: treat promo/phishing, router overloads, zero-amount families, and `CLAIM_WITHOUT_MOVEMENT` as `NEEDS_REVIEW` work, not clarification debt.
 - Risk: per-wallet claim signer rows are force-promoted into reward acquisition | Mitigation: keep `CLAIM_WITHOUT_MOVEMENT` explicit when no inbound reward reaches the tracked wallet in persisted raw evidence.
+- Risk: `Clarification v2` turns into an unbounded second classifier and hides raw-quality debt | Mitigation: keep it allowlisted, persist only production-fetchable receipt evidence, and leave rows already closable from current raw in the classification backlog.
+- Risk: receipt-log enrichment starts depending on traces or explorer UI summaries that are unavailable in production | Mitigation: forbid traces and explorer summaries as runtime evidence, and require every `Clarification v2` rule to be justified by official protocol semantics plus receipt evidence alone.

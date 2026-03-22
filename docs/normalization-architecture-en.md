@@ -3,7 +3,7 @@
 > **Based on:** raw_transactions (Etherscan explorer payload) · protocol-registry.json · external_ledger_raw (Bybit)
 > **Output:** normalized_transactions with flows[] ready for Pricing → AVCO
 > **Status:** Draft for architect review
-> **Last updated:** 2026-03-21
+> **Last updated:** 2026-03-22
 
 ---
 
@@ -25,7 +25,8 @@ syncMethod            ETHERSCAN | BLOCKSCOUT | RPC
 rawData:
   .to                 recipient address (contract or EOA)
   .from               sender  (usually == walletAddress)
-  .value              native ETH/BNB/MNT in wei  (string)
+  .value              tx-level native ETH/BNB/MNT call value in wei  (string)
+                      Must never be populated from token-transfer rows.
   .input              calldata hex
   .methodId           first 4 bytes of input  ("0x????????")
                       may be blank or "0x" in explorer payloads;
@@ -39,6 +40,15 @@ rawData:
                                         If missing, run raw ordering repair
                                         before canonical normalization.
   .timeStamp          string unix epoch
+
+  .explorer.tx                        ← canonical tx-level payload, when available
+    .from
+    .to
+    .value
+    .input
+    .methodId
+    .transactionIndex
+    .timeStamp
 
   .explorer.tokenTransfers[]           ← ERC-20 movements with full metadata
     .from               token sender address
@@ -54,15 +64,24 @@ rawData:
     .value              wei string
     .isError            "0" | "1"
 
-  .logs[]                              ← SYNTHETIC only
+  .logs[]                              ← may be real provider-persisted receipt logs
+                                          OR synthetic transfer-derived logs
+                                          Synthetic rows carry
                                           __syntheticTransferLog: true
-                                          Generated from tokenTransfers.
-                                          Do NOT use as a data source — they
-                                          duplicate tokenTransfers with no
-                                          additional information.
+                                          and are never classification evidence.
+                                          Real persisted receipt logs may be
+                                          consumed only through the raw view /
+                                          method-aware handlers.
 ```
 
-**Critical constraint:** real receipt logs are not present. Event-topic-based detection is not available. Classification relies exclusively on backfill-available raw fields such as `to`, recovered `methodId`, `functionName`, `tokenTransfers`, `internalTransfers`, and direct native value. Human-readable explorer page summaries may assist offline audit only; they are not classifier evidence.
+**Critical constraint:** classification trusts only canonical tx-level raw fields,
+persisted transfer arrays, and persisted real receipt logs that came from backfill
+or from a dedicated clarification-v2 receipt-evidence field exposed through the
+same raw view.
+Human-readable explorer page summaries may assist offline audit only; they are not
+classifier evidence. If a source returns transfer-style payload rows, ingestion must
+separate them into tx-level fields plus `explorer.tokenTransfers[]` instead of
+letting transfer-row `value` or `to` contaminate the top-level tx shape.
 
 ---
 
@@ -127,7 +146,8 @@ Two runtime lookup structures are loaded at startup from the classpath resource
 `backend/src/main/resources/protocol-registry.json`.
 
 `event_topics` may remain in the JSON as reference metadata, but the runtime classifier
-does not load or use them because real receipt logs are not present in `raw_transactions`.
+does not load or use them because event-topic matching is not part of the accepted
+runtime contract.
 
 ```
 contracts     address.toLowerCase() → ProtocolEntry
@@ -270,6 +290,13 @@ PRE-00A Selector recovery prerequisite
         AND rawData.input length >= 10
         → use rawData.input[0:10].toLowerCase() as recovered method id
           for all remaining classifier steps
+
+PRE-00B Raw tx-shape prerequisite
+        if top-level tx fields disagree with canonical tx-level payload
+        and the source row is transfer-shaped
+        → classification and leg extraction must trust canonical tx-level fields
+          from the raw view / explorer.tx
+          do NOT treat transfer-row amount as direct native value
 
 PRE-01  Failed transaction
         if rawData.isError == "1" OR rawData.txreceipt_status == "0"
@@ -517,8 +544,8 @@ Applied when Steps 1–3 produced no result.
 inTokens   = { contractAddress → transfer }  where transfer.to   == walletAddress
 outTokens  = { contractAddress → transfer }  where transfer.from == walletAddress
 nativeIn   = Σ internalTransfers.value  where to == walletAddress AND isError == "0"
-           + rawData.value if rawData.to == walletAddress
-nativeOut  = rawData.value if rawData.from == walletAddress
+           + direct tx-level native value if canonical tx-level recipient == walletAddress
+nativeOut  = direct tx-level native value if canonical tx-level sender == walletAddress
              (gas is NOT included here; handled separately)
 ```
 
@@ -642,7 +669,7 @@ for each transfer in rawData.explorer.tokenTransfers:
     }
 ```
 
-### 5.2 Native asset legs  (source: internalTransfers + rawData.value)
+### 5.2 Native asset legs  (source: internalTransfers + canonical tx-level value)
 
 ```
 NATIVE-01  Internal transfers (ETH via contract calls)
@@ -655,14 +682,17 @@ NATIVE-01  Internal transfers (ETH via contract calls)
              if it.from.toLowerCase() == walletAddress:
                flows += Flow { assetSymbol: nativeSymbol(networkId), quantityDelta: -qty }
 
-NATIVE-02  Direct native transfer (rawData.value)
+NATIVE-02  Direct native transfer (canonical tx-level value)
            Only when internalTransfers do not already account for the same value.
-           value = BigDecimal(rawData.value ?? "0") / 1e18
+           value = BigDecimal(txLevelValue ?? "0") / 1e18
            if value > 0 AND NOT already covered by internalTransfers:
-             if rawData.to.toLowerCase() == walletAddress:
+             if txLevelTo.toLowerCase() == walletAddress:
                flows += Flow { assetSymbol: nativeSymbol(networkId), quantityDelta: +value }
-             if rawData.from.toLowerCase() == walletAddress:
+             if txLevelFrom.toLowerCase() == walletAddress:
                flows += Flow { assetSymbol: nativeSymbol(networkId), quantityDelta: -value }
+
+           If the persisted row is transfer-shaped and tx-level `value` is contaminated
+           by a token transfer amount, this rule must not emit a native leg.
 ```
 
 ### 5.3 Gas leg
@@ -970,6 +1000,24 @@ Clarification is intentionally narrow:
 - it does not decide zero-value token no-op semantics
 - it does not replace protocol-specific classifier coverage for wrappers, bridges,
   LP position managers, routers, or multicalls
+- every clarification-eligible row must carry explicit receipt-safe missing reasons
+
+Clarification v2 is a separate bounded extension, not a widening of the base
+clarification queue:
+
+- it may target only an allowlisted review-family set whose closure is supported
+  by the latest audit and by official protocol semantics
+- it may fetch full receipt logs, but not traces or explorer UI summaries
+- it must fetch clarification evidence from the same source family that produced
+  the raw row; cross-source fallback is exceptional and must be documented
+- it should persist both the adapted clarification evidence and the raw full
+  receipt payload when the source exposes it
+- it must keep that new evidence in a dedicated clarification-evidence area,
+  never as synthetic `rawData.logs[]`
+- it may re-run classification only from canonical raw evidence plus persisted
+  real receipt logs
+- rows already closable from current raw must stay classifier work, not
+  clarification-v2 work
 
 ### 7.1 Pricing resolution contract
 
@@ -1166,10 +1214,18 @@ INV-03  If tokenDecimal is missing:
         status → PENDING_CLARIFICATION
 
 INV-04  synthetic logs[] are not a data source.
-        All data comes from explorer.tokenTransfers[] and explorer.internalTransfers[].
+        Explorer-derived synthetic logs must not influence classification.
+        Persisted real receipt logs may be used only when they are explicitly
+        marked as backfill or clarification-v2 evidence and consumed through the
+        normal raw view.
 
 INV-04a protocol-registry `event_topics` are reference metadata only.
         They are not loaded into the runtime classifier.
+
+INV-04b tx-level fields and transfer-row payloads are separate evidence layers.
+        Token transfer rows may populate `explorer.tokenTransfers[]`, but they
+        must never overwrite tx-level `from`, `to`, `value`, `input`,
+        `methodId`, or `functionName`.
 
 INV-05  Continuity events use role = TRANSFER.
         AvcoEngine moves quantity and carried basis for TRANSFER,

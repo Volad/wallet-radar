@@ -2351,6 +2351,565 @@ Definition of done:
 - the latest live-audit findings are reproducible in tests
 - resolved families cannot silently regress without failing CI
 
+## Final Classification Closeout Slice — 2026-03-22 Deep Audit
+
+This slice supersedes older closeout ordering where it conflicts with the live
+Mongo audit recorded in:
+
+- `results/raw-classification-audit.md`
+- `results/blockers.md`
+- `results/warnings.md`
+- `data/derived/classification_stage_snapshot.json`
+- `data/derived/raw_cluster_audit.json`
+
+Resolved and not to be reopened without a regression fixture:
+
+- `BSC` provider-first coverage parity for the current wallet universe
+- bridge-flow contamination as a broad live diagnosis
+- `redeemWithFee(...)` / `fillV3Relay(...)` family routing to `BRIDGE_IN`
+- main Merkl family-wide closure on `0x3ef3...`
+- Pancake Infinity `BSC` `multicall` / `modifyLiquidities` generic `UNKNOWN`
+
+Current execution order:
+
+1. `BE-05E` clarification live parity closeout
+2. `BE-04AR` residual router overload families
+3. `BE-04AS` residual selector-recovery parity
+4. `BE-04AT` residual `CLASSIFICATION_FAILED` / `HANDLER_UNSUPPORTED_METHOD` family triage
+5. `BE-04AU` final zero-amount / no-op terminal policy
+6. `BE-04AV` review-state regression lock (`CLAIM_WITHOUT_MOVEMENT` + promo true positives)
+7. `BE-04AW` final rerun pack + repeat-audit handoff
+
+Do not treat the following as clarification blockers in this slice:
+
+- `PROMO_SPAM_PHISHING`
+- `ROUTER_METHOD_OVERLOAD_UNSUPPORTED`
+- `CLAIM_WITHOUT_MOVEMENT`
+- `ZERO_AMOUNT_TOKEN_TRANSFER`
+- narrow `CLASSIFICATION_FAILED` families
+
+The only current clarification blocker from the live snapshot is reason parity:
+`PENDING_CLARIFICATION` rows missing both execution status and
+`effectiveGasPrice` must surface both reasons deterministically.
+
+### BE-05E — Clarification Live Parity Closeout
+
+Purpose:
+- Close the last live blocker before clarification-readiness by making
+  persisted clarification reasons match the actual missing receipt-safe fields
+  seen in raw.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/onchain/**`
+- `backend/src/main/java/com/walletradar/ingestion/job/clarification/**`
+- clarification tests
+
+Implementation scope:
+- compute clarification reasons from canonical raw-view evidence only
+- surface `MISSING_EFFECTIVE_GAS_PRICE` on clarification rows whenever
+  `effectiveGasPrice` is actually missing in raw, even when the tracked wallet
+  is not the fee payer
+- keep `MISSING_GAS_USED` and `MISSING_CONTRACT_ADDRESS` narrow:
+  - `MISSING_GAS_USED` only when that field is actually missing
+  - `MISSING_CONTRACT_ADDRESS` only on explicit contract-creation rows
+- do not widen clarification queue membership in this task; fix parity and
+  explainability first
+
+Definition of done:
+- a live clarification row missing both execution status and effective gas price
+  persists both reasons after rerun
+- plain inbound clarification rows no longer hide missing `effectiveGasPrice`
+- clarification retry/rebuild paths preserve the corrected reason set
+
+Required tests:
+- non-fee-payer clarification row still records missing effective gas price
+- builder retry preserves `MISSING_EXECUTION_STATUS + MISSING_EFFECTIVE_GAS_PRICE`
+- explicit contract creation remains the only source of `MISSING_CONTRACT_ADDRESS`
+
+### BE-04AR — Residual Router Overload Families
+
+Purpose:
+- Close the small remaining router-overload queue where persisted raw is now
+  sufficient for deterministic method-aware routing.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- `backend/src/main/resources/protocol-registry.json`
+- router/LP tests
+
+Implementation scope:
+- re-evaluate only the current live residual overload families:
+  - Optimism `0x416b433906b1b72fa758e166e239c43d68dc6f29 + 0xac9650d8`
+  - zkSync `0xdaee41e335322c85ff2c5a6745c98e1351806e98 + 0x3593564c`
+  - Base `0x46a15b0b27311cedf172ab29e4f4766fbe7f4364 + 0xac9650d8`
+- use child-selector decode and persisted raw logs/legs only
+- if persisted raw is still insufficient, keep explicit review and do not
+  upgrade the row from explorer UI text alone
+
+Definition of done:
+- residual overload rows no longer remain open when persisted raw already gives
+  enough evidence for deterministic LP / swap / bridge routing
+- insufficient-evidence rows stay explicit review by design
+
+Required fixtures:
+- Optimism `0x927d3f45...`
+- zkSync `0xb7a9086d...`
+- Base `0x0a757aee...`
+
+Required tests:
+- child-selector decode from outer `multicall`
+- insufficient-evidence overload row that remains review
+- routed multi-leg overload row that resolves deterministically from raw
+
+### BE-04AS — Residual Selector-Recovery Parity
+
+Purpose:
+- Remove the remaining review rows that are still recoverable from persisted
+  calldata because some residual review path bypasses the raw view selector.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- `backend/src/main/java/com/walletradar/ingestion/filter/**`
+- selector recovery tests
+
+Implementation scope:
+- audit every review-path selector read and move it through the raw view when
+  it still reads top-level `rawData.methodId` directly
+- cover the current live residual recoverable rows on
+  `BASE`, `OPTIMISM`, `ETHEREUM`, `AVALANCHE`, and `ZKSYNC`
+
+Definition of done:
+- selector-recoverable live review rows no longer remain open only because
+  top-level `methodId` was blank
+
+Required tests:
+- recovered-selector review fixture
+- recovered-selector allowlist fixture
+
+### BE-04AT — Residual `CLASSIFICATION_FAILED` / `HANDLER_UNSUPPORTED_METHOD` Family Triage
+
+Purpose:
+- Collapse the remaining repeatable failure families into either deterministic
+  known outcomes or explicit intentional review states.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- `backend/src/main/resources/protocol-registry.json`
+- family-specific tests
+
+Implementation scope:
+- audit and close the repeatable live families first:
+  - Plasma `0x1939c1ff` rows with two token transfers
+  - Avalanche `batch(...)` `0xc16ae7a4`
+  - Mantle `claim(...)` `0x5d4df3bf`
+  - Arbitrum handler gap `0x374f435d`
+- if a family is truly non-economic spam/no-op, move it to deterministic review
+  with the correct reason instead of leaving generic `CLASSIFICATION_FAILED`
+- if a family has enough persisted raw for a known type, normalize it
+- if not enough evidence exists, keep it explicit review but with the narrowest
+  honest reason
+
+Definition of done:
+- repeatable residual failure families are no longer hidden behind generic
+  `CLASSIFICATION_FAILED` when a narrower deterministic outcome is possible
+
+Required tests:
+- family-specific regression for every closed repeatable group
+- unresolved family that intentionally stays explicit review
+
+### BE-04AU — Final Zero-Amount / No-Op Terminal Policy
+
+Purpose:
+- Finish the last small zero-amount/no-op set so the remaining rows are
+  intentionally terminal rather than policy leftovers.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- zero-amount policy tests
+
+Implementation scope:
+- document and implement the final policy for the current live residual set:
+  - Ethereum `0xa9059cbb`
+  - Arbitrum `0xe94a5b23`
+  - Unichain `0xc16ae7a4`
+- known non-economic paths may resolve to `ADMIN_CONFIG`
+- truly unknown paths remain `UNKNOWN/NEEDS_REVIEW/ZERO_AMOUNT_TOKEN_TRANSFER`
+
+Definition of done:
+- no live residual zero-amount row remains open only because policy was
+  undocumented
+- no row in this slice creates synthetic economic movement
+
+Required tests:
+- known residual family -> deterministic non-economic terminal state
+- unknown residual family -> explicit zero-amount review
+
+### BE-04AV — Review-State Regression Lock
+
+Purpose:
+- Freeze the families that are currently correct so future work does not
+  regress them while shrinking the remaining review queue.
+
+Primary write scope:
+- backend tests only
+
+Implementation scope:
+- keep `CLAIM_WITHOUT_MOVEMENT` explicit for non-receiving claim signers
+- keep true-positive promo/phishing clusters explicit review
+- ensure `redeemWithFee(...)`, `fillV3Relay(...)`, and resolved `BSC` LP rows do
+  not regress while other families are being closed
+
+Definition of done:
+- correct live review semantics are locked in durable regression coverage
+
+Required fixtures:
+- Arbitrum `0xf13356fe...`
+- BSC `0xa586770c...`
+- BSC `0xeb4fd02c...`
+- Plasma `0xcbee5437...`
+
+### BE-04AW — Final Rerun Pack + Repeat-Audit Handoff
+
+Purpose:
+- End the classification closeout slice with one rerun-ready pack that makes
+  the next audit mostly a verification pass.
+
+Primary write scope:
+- backend tests
+- task/docs updates if needed
+
+Implementation scope:
+- run targeted regression pack for:
+  - clarification live parity
+  - residual router overloads
+  - residual selector parity
+  - residual failure-family triage
+  - zero-amount terminal policy
+  - review-state regression lock
+- hand off rerun expectations explicitly to the next Mongo audit
+
+Definition of done:
+- rerun expectations are documented and test-backed
+- the next audit can decide clarification readiness from data, not from code
+  guesswork
+
+## Clarification v2 Transition Slice — 2026-03-22 Post-Classification Audit
+
+This slice starts after the classification closeout rerun validated that the
+remaining normalization debt is narrow review-tail work, not a systemic
+classification failure.
+
+Sources for this slice:
+
+- `results/raw-classification-audit.md`
+- `results/review-tail-classifiability-audit.md`
+- `results/receipt-closure-check.md`
+- `data/derived/review_tail_selected_tx_audit.json`
+- `data/derived/review_tail_receipt_summary.json`
+
+Architectural contract for this slice:
+
+- `Clarification v1` stays receipt-metadata only.
+- `Clarification v2` is a separate bounded enrichment job, not a widening of the
+  base `PENDING_CLARIFICATION` queue.
+- `Clarification v2` may use only production-fetchable full receipt evidence.
+- Clarification enrichment follows raw-source lineage by default:
+  - RPC-backed raw -> RPC clarification
+  - Etherscan-family raw -> Etherscan-family clarification
+  - Blockscout-backed raw -> Blockscout clarification
+- `Clarification v2` must not use traces, explorer UI labels, or analyst-only
+  notes as runtime inputs.
+- Rows already closable from current raw stay classification/handler work.
+
+Current execution order:
+
+1. `BE-04AX` claim-family no-movement closeout from current raw
+2. `BE-04AY` Morpho Bundler withdraw-collateral handler closeout
+3. `BE-05F` Clarification-v2 receipt-evidence contract + full receipt persistence + source-lineage routing
+4. `BE-05G` Clarification-v2 LP / router receipt-log closeout
+5. `BE-05H` Clarification-v2 batch/log closeout for Euler-style residuals
+6. `BE-05I` Clarification-v2 non-economic cleanup / admin families
+7. `BE-05J` intentional-review lock for receipt-insufficient families
+8. `BE-05K` Clarification-v2 rerun pack + repeat-audit handoff
+
+### BE-04AX — Claim-Family No-Movement Closeout From Current Raw
+
+Purpose:
+- Remove the remaining claim-family rows that still sit in generic
+  `CLASSIFICATION_FAILED` even though current raw already proves a deterministic
+  no-movement claim outcome.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- `backend/src/main/resources/protocol-registry.json`
+- claim-family tests
+
+Implementation scope:
+- close the audited Mantle family:
+  - `0x0045601c3c4c561012c108ea84a81e36eac24296 + 0x5d4df3bf`
+- keep the rule raw-only and wallet-scoped:
+  - known claim contract
+  - claim selector
+  - no inbound reward movement to the tracked wallet in persisted raw
+- normalize to `CLAIM_WITHOUT_MOVEMENT` or equivalent explicit no-movement claim
+  terminal semantics
+- do not wait for clarification
+
+Definition of done:
+- audited claim-family no-movement rows no longer remain generic
+  `CLASSIFICATION_FAILED`
+- receiving-wallet rows still become `REWARD_CLAIM`
+- non-receiving-wallet rows stay explicit no-movement claim outcomes
+
+Required fixtures:
+- Mantle `0x02b8f88942ef4bf12132e75b294ef5472d98fddcfd4ea5f9f3277c7492d967f7`
+- Arbitrum wallet-scoped split `0xf13356fe9449ec9e831395e0074622e88e362a8f317e6b110d093bfaa25d2702`
+
+Required tests:
+- claim-family no-movement row narrows from generic failure to explicit terminal state
+- same tx hash can still split to `REWARD_CLAIM` for a receiving tracked wallet
+
+### BE-04AY — Morpho Bundler `morphoWithdrawCollateral(...)` Handler Closeout
+
+Purpose:
+- Close the audited Arbitrum Morpho handler gap where current raw already proves
+  a collateral-withdraw path.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- Morpho handler tests
+
+Implementation scope:
+- extend Bundler handling for:
+  - target `0x9954afb60bb5a222714c478ac86990f221788b88`
+  - inner selector `0x1af3bbc6`
+  - verified ABI semantics `morphoWithdrawCollateral((address,address,address,address,uint256),uint256,address)`
+- require persisted inbound asset movement to the tracked wallet before closing
+  the row
+- normalize to the correct collateral/lending-withdraw continuity path
+- do not defer these rows to clarification
+
+Definition of done:
+- the audited Morpho residuals no longer remain
+  `HANDLER_UNSUPPORTED_METHOD`
+- classification stays raw-only and source-agnostic
+
+Required fixtures:
+- `0xb8d6c7042a0266e7c7a34f66a69e0e5e92bca3d5e69f7983cff9d1adfb7d67b7`
+- `0xcec238f36116929a51489063506964eaceb40bcb88ab711f148e6fdaa35f57e0`
+- `0xedf2ad26a41e6c82a6a31fffc3020d2c44599d647a7670ee72d32a090176d594`
+
+Required tests:
+- supported Morpho withdraw-collateral bundle closes to deterministic type
+- unsupported bundle method still stays explicit review
+
+### BE-05F — Clarification-v2 Receipt-Evidence Contract + Full Receipt Persistence + Source-Lineage Routing
+
+Purpose:
+- Introduce the bounded data contract for full-receipt enrichment without
+  turning clarification into an unbounded second classifier.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/job/clarification/**`
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/onchain/**`
+- raw-view / clarification model tests
+- docs or small schema helpers if needed
+
+Implementation scope:
+- keep current `Clarification v1` unchanged for receipt-safe metadata
+- add a separate `Clarification v2` path that may fetch:
+  - full receipt logs
+  - receipt status/gas fields already used by v1
+- persist both:
+  - adapted clarification evidence used by runtime classification
+  - raw full receipt payload when the source exposes it
+- persist full receipt logs under a dedicated clarification-evidence field
+  separate from synthetic `rawData.logs[]`
+- expose that evidence through the normal raw view so classification remains
+  source-agnostic
+- define an allowlist gate by family / selector / contract identity
+- route clarification fetch through the same source family that produced the raw
+  row unless an explicit documented fallback is triggered
+- implement this task in the following internal order:
+  - storage contract for adapted clarification evidence
+  - storage contract for raw full receipt payload
+  - lineage-consistent clarification source router
+  - raw-view exposure of clarification-v2 evidence
+- forbid:
+  - traces
+  - explorer UI summaries
+  - ad-hoc audit-only annotations
+
+Definition of done:
+- production code has an explicit, test-backed boundary between
+  `Clarification v1` and `Clarification v2`
+- classifier can consume clarification-v2 receipt logs only through the raw view
+- no synthetic log path can masquerade as real receipt evidence
+- lineage-consistent clarification source selection is deterministic and tested
+- future deterministic enrichment can reuse persisted full receipt payload
+  without requiring a repeat fetch when the source originally exposed it
+
+Required tests:
+- clarification-v2 receipt logs persist into dedicated evidence field
+- raw full receipt payload persists alongside adapted clarification evidence when available
+- raw view exposes clarification-v2 receipt logs but still ignores synthetic logs
+- non-allowlisted row cannot enter clarification-v2
+- RPC-backed raw chooses RPC clarification path
+- explorer-backed raw chooses its matching explorer-family clarification path
+
+### BE-05G — Clarification-v2 LP / Router Receipt-Log Closeout
+
+Purpose:
+- Close the audited residual LP/router family where current raw is insufficient
+  but full receipt logs are enough for deterministic LP-exit-related semantics.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/job/clarification/**`
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- LP/router clarification tests
+
+Implementation scope:
+- allowlist Pancake CL position-manager exit family:
+  - Base `0x46a15b0b27311cedf172ab29e4f4766fbe7f4364 + 0xac9650d8`
+- after clarification-v2 receipt fetch:
+  - consume real receipt logs
+  - decode known LP-exit-related event family
+  - derive deterministic terminal type only when receipt evidence closes the row
+- do not use explorer page summaries such as “Remove Liquidity” as runtime input
+
+Definition of done:
+- Base `0x0a757...` no longer remains overload review if full receipt evidence is
+  present
+- rows with the same outer container but still insufficient receipt evidence stay
+  explicit review
+
+Required fixtures:
+- Base `0x0a757aeeb58667c545017cd8e5cd60dc994a8945ed810c60ea2aed18688f4f7a`
+
+Required tests:
+- receipt-log-enriched Pancake CL exit closes deterministically
+- same family without sufficient receipt movement evidence stays review
+
+### BE-05H — Clarification-v2 Batch / Log Closeout For Euler-Style Residuals
+
+Purpose:
+- Use receipt-log enrichment only where it materially closes the remaining
+  Euler-style batch family, while preserving honest review for rows that still
+  lack movement evidence.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/job/clarification/**`
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- batch/log clarification tests
+
+Implementation scope:
+- allowlist the audited Avalanche batch family:
+  - `0xc16ae7a4 batch(...)`
+- close rows only when clarification-v2 receipt logs reveal enough transfer or
+  protocol evidence to derive deterministic movement semantics
+- explicitly keep rows like `0x509c...` in review when even full receipt lacks
+  economic movement evidence
+
+Definition of done:
+- `0x305f...` can be closed if the persisted clarification-v2 receipt logs remain
+  materially sufficient
+- `0x509c...` stays explicit review by design
+- no Euler batch row is upgraded from calldata intent alone
+
+Required fixtures:
+- Avalanche `0x305f37a69956a13001962216c845385996114876173bdbaef644bbe3baadf5df`
+- Avalanche `0x509c134b2795de71a1ee42db38b53af78003308e8c9ebf2b1bfa9ce8d348dcd2`
+
+Required tests:
+- receipt-log-rich Euler batch closes deterministically
+- wrapper-only/no-movement receipt remains review
+
+### BE-05I — Clarification-v2 Non-Economic Cleanup / Admin Families
+
+Purpose:
+- Narrow the audited receipt-helpful but non-economic residuals into explicit
+  terminal cleanup/admin states without inventing LP or trading movement.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/job/clarification/**`
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- non-economic clarification tests
+
+Implementation scope:
+- allowlist the audited receipt-helpful families:
+  - Optimism Velodrome Slipstream burn trio:
+    - `0x927d3f45...`
+    - `0xe1bc445f...`
+    - `0x90720700...`
+  - Optimism residual admin/governance candidate:
+    - `0x9867f9d2...`
+- if receipt proves only NFT cleanup / non-transfer protocol events:
+  - narrow to explicit non-economic terminal state such as cleanup/admin review
+  - do not mint `LP_EXIT`, `SWAP`, or other economic types
+
+Definition of done:
+- burn-only or governance-only receipt patterns are no longer generic overload
+  failures when the allowlisted family is proven
+- no non-economic clarification-v2 rule invents asset movement
+
+Required tests:
+- burn-only receipt family narrows to explicit non-economic terminal state
+- protocol-event-only receipt family narrows only when allowlisted
+
+### BE-05J — Intentional Review Lock For Receipt-Insufficient Families
+
+Purpose:
+- Freeze the families that must remain review even after the introduction of
+  clarification-v2, so future work does not quietly over-classify them.
+
+Primary write scope:
+- backend tests only
+
+Implementation scope:
+- keep explicit review for:
+  - no-evidence router/container rows that still lack transfers and receipt logs
+  - claim-without-movement rows that stay wallet-scoped no-movement outcomes
+  - Euler / batch rows whose full receipt still lacks movement evidence
+- keep `PROMO_SPAM_PHISHING` true positives stable
+
+Definition of done:
+- receipt-insufficient rows remain intentional review after clarification-v2 work
+- future rule additions cannot silently over-upgrade these families
+
+Required fixtures:
+- Avalanche `0x509c134b2795de71a1ee42db38b53af78003308e8c9ebf2b1bfa9ce8d348dcd2`
+- BSC `0xeb4fd02cba10c357ea4f5441c0783c5282c01fcaa1a85c661575471df592c5ef`
+- Arbitrum wallet-scoped `0xf13356fe9449ec9e831395e0074622e88e362a8f317e6b110d093bfaa25d2702`
+- Plasma `0xcbee5437edfe64d3abe9f7b6e0b02daf059405d348ae90ee08a81a53b933c0b6`
+
+### BE-05K — Clarification-v2 Rerun Pack + Repeat-Audit Handoff
+
+Purpose:
+- End the clarification-v2 transition slice with one rerun-ready pack that lets
+  the next audit decide from data which residuals are truly closed, which moved
+  to explicit non-economic states, and which still remain honest review.
+
+Primary write scope:
+- backend tests
+- task/docs updates if needed
+
+Implementation scope:
+- run targeted regression coverage for:
+  - claim-family no-movement closeout
+  - Morpho withdraw-collateral handler closeout
+  - clarification-v2 receipt-evidence contract
+  - LP/router receipt-log closeout
+  - Euler batch/log closeout
+  - non-economic cleanup/admin families
+  - intentional-review lock
+- document rerun expectations for the next Mongo audit
+
+Definition of done:
+- rerun expectations are documented and test-backed
+- the next audit can answer whether clarification-v2 materially shrank the
+  review tail without blurring intentional review states
+
 ## Mandatory Test Matrix
 
 At minimum, backend implementation must include automated coverage for:

@@ -1,4 +1,4 @@
-# WalletRadar — Accounting Policy
+д# WalletRadar — Accounting Policy
 
 > **Version:** v3 target
 > **Last updated:** 2026-03-22
@@ -145,20 +145,21 @@ Implications:
 
 ## 7. Clarification Policy
 
-Clarification may enrich:
+`Clarification v1` may enrich:
 
 - execution status
 - gas fields
 - created contract address
 
-Clarification is allowed only when those receipt-safe fields are actually missing.
+`Clarification v1` is allowed only when those receipt-safe fields are actually missing.
 Low confidence alone does not move a row into clarification.
 
-Clarification may not:
+`Clarification v1` may not:
 
 - treat synthetic `rawData.logs[]` as authoritative event evidence
 - silently rewrite economic meaning without traceable evidence
 - leave clarification-eligible rows without explicit missing receipt-safe reasons
+- under-report a currently missing receipt-safe field in `missingDataReasons[]`
 
 Implications:
 
@@ -171,8 +172,43 @@ Implications:
 - missing `transactionIndex` is a raw-repair problem before normalization, not a clarification retry
 - `MISSING_CONTRACT_ADDRESS` is not a generic clarification fallback; it is valid
   only for explicit contract-creation rows
+- missing `effectiveGasPrice` remains a clarification reason even when the
+  tracked wallet is not the tx fee payer; live clarification rows must reflect
+  the actual missing receipt-safe tx metadata
 - `CLAIM_WITHOUT_MOVEMENT` is a valid per-wallet terminal outcome when the claim
   signer does not receive the reward transfer in persisted raw evidence
+
+`Clarification v2` is a separate future stage with a different contract:
+
+- it may fetch and persist full receipt logs for an allowlisted residual-review set
+- it should persist both:
+  - the adapted clarification evidence used by runtime classification
+  - the raw full receipt payload, when the source exposes it
+- it must store those fields separately from synthetic `rawData.logs[]`
+- it may rerun classification only when official protocol semantics and the
+  fetched receipt evidence together make the row deterministic
+- it must fetch clarification evidence from the same source family that produced
+  the raw row:
+  - RPC-backed raw -> RPC clarification
+  - Etherscan-family raw -> Etherscan-family clarification
+  - Blockscout-backed raw -> Blockscout clarification
+- cross-source fallback is allowed only as an explicit documented fallback, not
+  as the default clarification path
+- it may narrow a row into an explicit non-economic terminal state when receipt
+  proves cleanup/admin behavior but not economic movement
+- it may not use traces, explorer page labels, or analyst-only notes as runtime
+  evidence
+- it must not be used for rows that are already closable from current raw
+  evidence, such as claim-family no-movement rows or known handler gaps
+
+Current audited `Clarification v2` candidate families:
+
+- concentrated-liquidity LP exit containers whose full receipt logs contain
+  sufficient movement evidence
+- selected Euler-style batch rows where full receipt logs reveal real asset
+  transfers
+- known burn-only / governance-only receipt patterns that may be narrowed to
+  explicit non-economic terminal states
 
 ---
 
