@@ -214,6 +214,392 @@ Execution priority for this audit-driven slice:
 11. `BE-04V`
 12. `BE-04W`
 
+## Repeat Classification Remediation Slice — 2026-03-22 Audit
+
+The repeat audit in `results/raw-classification-audit.md` adds a broader
+implementation slice. The goal is no longer only to reduce raw `NEEDS_REVIEW`,
+but to close the main semantic gaps that still block trustworthy classification.
+
+Execute in this order:
+
+1. `BE-05B` False-clarification collapse + existing-row re-triage
+2. `BE-04X` Selector-recovery closure on live classifier path
+3. `BE-04Y` Bridge-settlement continuity hardening
+4. `BE-04Z` Contract-aware reward-family expansion
+5. `BE-04AA` Claim/no-op differentiation on known claim contracts
+6. `BE-04AB` Lending withdraw semantic inversion fix
+7. `BE-04AC` CL position-manager multicall coverage across supported networks
+8. `BE-04AD` `modifyLiquidities` method-aware routing on Unichain and BSC
+9. `BE-04AE` ScamFilter precedence hardening over bridge/reward allowlists
+10. `BE-03F` BSC raw-completeness gate before marking sync complete
+11. `BE-04AF` Final classification regression pack + repeat-audit fixtures
+
+### BE-05B — False-Clarification Collapse + Existing-Row Re-Triage
+
+Purpose:
+- Remove the current false `PENDING_CLARIFICATION` backlog from the live path and
+  stop sending fully populated rows into clarification.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- `backend/src/main/java/com/walletradar/ingestion/job/clarification/**`
+- `backend/src/main/java/com/walletradar/ingestion/job/normalization/**`
+
+Implementation scope:
+- treat clarification as eligible only when receipt-safe fields are actually missing:
+  - `txreceipt_status`
+  - `gasUsed`
+  - `effectiveGasPrice`
+  - created contract address where applicable
+- rows that already have those fields must start in `PENDING_PRICE` or `NEEDS_REVIEW`
+- clarification job must short-circuit existing false rows and re-triage them instead
+  of looping them back into the same bucket
+- do not use confidence alone as clarification trigger
+
+Definition of done:
+- new normalization runs no longer create false `PENDING_CLARIFICATION`
+- current false clarification rows can be re-processed without manual Mongo surgery
+- clarification queue size becomes explainable by real missing enrichment only
+
+Required fixtures:
+- `0xd09408b311b762fc930bfb6190a9b3967c9b123ec7e6b89e9f29ceda01d46417`
+- `0x27978f7bf88cd7a4825b991ac6e461fa96be75b280add44236beb2e060c61ba3`
+- `0x565706c06b757b6cbf064cf36c884afcb78d314637ff906d11a6a09366cb2b07`
+
+Required tests:
+- row with full receipt-safe metadata starts in `PENDING_PRICE`
+- unsupported semantic gap starts in `NEEDS_REVIEW`
+- existing false clarification row is re-triaged on clarification run
+
+### BE-04X — Selector-Recovery Closure On Live Classifier Path
+
+Purpose:
+- Close the remaining gap where blank `methodId` is still leaking into
+  `CLASSIFICATION_FAILED` and `ROUTER_METHOD_OVERLOAD_UNSUPPORTED`.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/onchain/**`
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+
+Implementation scope:
+- guarantee that every classifier stage reads selector through one canonical
+  recovered view value
+- cover both plain method-id matching and router/handler dispatch inputs
+- ensure recovered selector is visible to review/blocker code paths too
+- do not add duplicate fallback logic inside support helpers
+
+Definition of done:
+- recoverable blank-selector rows stop failing only because `methodId` was empty
+- current recoverable review clusters on Optimism/Base/zkSync are reduced after re-run
+
+Required fixtures:
+- `0x0df0357f71d270827610838eb48d0c35fc1437e0da0c12d83211724dc1a28cac`
+- `0x927d3f458ada7e5ec67f77129e29edcaf2f69bd2b81490a42fec17c0cc3bd4fa`
+- `0x9613c2d1d324436be6f4da1053fe0a54ac9be62722cd3996dfce064a905b31d8`
+- `0xb7a9086def86956c896bb9a53326dacee73be2cf17c5741ea7c4e4e6f21c7afc`
+
+Required tests:
+- recovered selector reaches method-id rule
+- recovered selector reaches router-overload dispatch
+- recovered selector reaches review-reason generation
+
+### BE-04Y — Bridge-Settlement Continuity Hardening
+
+Purpose:
+- fix the current semantic drift where bridge destination-side settlement becomes
+  `REPAY` or promo/phishing review.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- `backend/src/main/resources/protocol-registry.json`
+
+Implementation scope:
+- classify these families as `BRIDGE_IN` on known bridge/settlement contracts:
+  - `redeemWithFee(...)`
+  - `fillV3Relay(...)`
+  - `fillRelay(...)`
+  - extend to existing documented settlement selectors such as `execute302` and `directFulfill`
+- ensure this routing runs before promo/spam heuristics and before generic
+  `repay` / `withdraw` function-name fallback
+- keep continuity semantics basis-neutral
+
+Definition of done:
+- destination-side bridge settlement no longer lands in `REPAY`
+- destination-side bridge settlement no longer lands in `PROMO_SPAM_PHISHING`
+
+Required fixtures:
+- `0xd2cdbd7a1ade37a8032b713e9844351d2f58fbd872851a0e88203b8fbb695c5f`
+- `0xbf62327840d7624bc1ae12b9213cf66593b671d238da8e9feea57d1b3833ed38`
+- `0x16a78ce7e8964eb95ef52d24ea618846e478a777b6df9d521884a30dc0b6ec1a`
+- `0x27978f7bf88cd7a4825b991ac6e461fa96be75b280add44236beb2e060c61ba3`
+- `0x565706c06b757b6cbf064cf36c884afcb78d314637ff906d11a6a09366cb2b07`
+
+Required tests:
+- `redeemWithFee(...)` -> `BRIDGE_IN`
+- `fillV3Relay(...)` -> `BRIDGE_IN`
+- `fillRelay(...)` -> `BRIDGE_IN`
+- bridge settlement bypasses promo-spam rule
+
+### BE-04Z — Contract-Aware Reward-Family Expansion
+
+Purpose:
+- stop classifying real reward claims as generic inbound, LP exit, lending deposit,
+  or review on known claim contracts.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- `backend/src/main/resources/protocol-registry.json`
+
+Implementation scope:
+- add and/or fix reward-family coverage for known claim contracts and selectors:
+  - `0x3ef3d8ba38ebe18db133cec108f4d14ce00dd9ae`
+    - `0x71ee95c0`
+    - `0x9fb67b58`
+  - FLUID `0xbe5013dc`
+  - Pendle `0x5eac6239`
+- rule must remain raw-only:
+  - known contract/selector
+  - real inbound economic movement in raw legs
+- do not rely on explorer-only labels or summaries
+
+Definition of done:
+- claim routes with real inbound reward movement normalize to `REWARD_CLAIM`
+- same family no longer leaks into `EXTERNAL_INBOUND`, `LP_EXIT`, or `LENDING_DEPOSIT`
+
+Required fixtures:
+- `0x01cac047506298691607efa4bdc158b8b8678ea69855fc2558e8aa18a515ee03`
+- `0xf13356fe9449ec9e831395e0074622e88e362a8f317e6b110d093bfaa25d2702`
+- `0x56a0cf989540c29873a8df829464dcee6c7d27cf8ae84bc82570ffce4a3ca401`
+- one audited FLUID claim hash from `results/`
+- one audited Pendle claim hash from `results/`
+
+Required tests:
+- known claim contract + inbound movement -> `REWARD_CLAIM`
+- `claimWithRecipient(...)` -> `REWARD_CLAIM`
+- claim contract does not fall to plain inbound if allowlisted
+
+### BE-04AA — Claim/No-Op Differentiation On Known Claim Contracts
+
+Purpose:
+- avoid silently promoting zero-movement claim calls to `REWARD_CLAIM` while also
+  avoiding bogus `UNKNOWN` for deterministic non-economic calls.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+
+Implementation scope:
+- on known claim contracts:
+  - if raw legs contain real inbound economic movement -> `REWARD_CLAIM`
+  - if no movement exists in raw -> explicit non-economic path or explicit review
+- do not invent reward legs from explorer UI text
+- do not use clarification to upgrade zero-movement claim calls
+
+Definition of done:
+- zero-transfer claim calls are no longer mislabeled as economic reward events
+- deterministic review/no-op policy exists for claim calls with no movement
+
+Required fixtures:
+- `0xb4e87a83eb3bdbdd797d601ff785cfb5ff767acbf736d61f47852d8a282c2240`
+- `0x879f8d4cbe88b90a0a761d90d504b0c13796b440cb1c9cc6a6d48d7d65233596`
+- `0x02a1ffe41b2026377618326dbe9cc1e6ad14f65706c8b1cbd3954d8fbae77a97`
+
+Required tests:
+- claim call with no movement does not auto-become `REWARD_CLAIM`
+- claim call with no movement is deterministic and reviewable
+
+### BE-04AB — Lending Withdraw Semantic Inversion Fix
+
+Purpose:
+- correct the current `withdraw(...) -> LENDING_DEPOSIT` inversion.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- registry/runtime metadata where needed
+
+Implementation scope:
+- ensure known lending withdraw selectors and/or registry roles classify as
+  `LENDING_WITHDRAW`
+- receipt-token burn + underlying inbound pattern must reinforce withdraw semantics
+- prevent registry static type from forcing wrong direction when selector says withdraw
+
+Definition of done:
+- live Avalanche `0x69328dec` family stops producing `LENDING_DEPOSIT`
+
+Required fixtures:
+- `0x422aac44d6c416f31957949e2dac80a756545b3b28d9f375444d0ef433b7f907`
+- at least one additional Avalanche `0x69328dec` tx
+- existing `supply(...)` fixture to prove deposit path is not regressed
+
+Required tests:
+- `withdraw(...)` -> `LENDING_WITHDRAW`
+- `supply(...)` still -> `LENDING_DEPOSIT`
+- receipt-token burn + underlying receive stays continuity-safe
+
+### BE-04AC — CL Position-Manager Multicall Coverage Across Supported Networks
+
+Purpose:
+- close the repeated `multicall(bytes[] data)` gap on CL position managers across
+  Ethereum, Arbitrum, Base, Unichain, and BSC.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/support/**`
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- registry entries if missing
+
+Implementation scope:
+- decode outer `0xac9650d8 multicall(bytes[] data)`
+- inspect inner calls and persisted raw evidence to identify:
+  - mint/new position
+  - increase liquidity
+  - decrease/collect exit path
+- keep classification source-agnostic:
+  - use only persisted raw and view/projection
+  - provider-backed real logs are allowed only if already persisted into raw
+
+Definition of done:
+- position-manager multicalls no longer default to `ROUTER_METHOD_OVERLOAD_UNSUPPORTED`
+- known mint/add-liquidity cases normalize to `LP_ENTRY`
+
+Required fixtures:
+- `0x48a9208f705d2b7ab7395fb10b9bca7768019c78796f4822cc4bb14003a652ce`
+- `0x3321a28e0e8a2ff77d0d43abf9d0b449ed902c26218e97a7dda81f6465a7ed67`
+- `0x51dc36fc93e51dde5fafd1ab92d000d06104394d3179e3e39f0fcaa54cc53231`
+- one Base `0x46a15...` multicall fixture from `results/`
+
+Required tests:
+- Uniswap/Pancake position-manager `multicall` mint -> `LP_ENTRY`
+- add-liquidity multicall -> `LP_ENTRY`
+- unsupported inner path still produces explicit review reason
+
+### BE-04AD — `modifyLiquidities` Method-Aware Routing On Unichain And BSC
+
+Purpose:
+- close the current concentrated-liquidity router gap on `0xdd46508f`.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/support/**`
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- registry entries for supported position managers
+
+Implementation scope:
+- decode `modifyLiquidities(bytes payload,uint256 deadline)`
+- derive final LP semantics from persisted raw evidence:
+  - add/increase -> `LP_ENTRY`
+  - remove/decrease/collect -> `LP_EXIT` or `LP_FEE_CLAIM` where applicable
+- support both current audited families:
+  - Unichain
+  - BSC Pancake Infinity, likely `XYZ/USDT` pool path
+
+Definition of done:
+- `modifyLiquidities` no longer lands in `REGISTRY_SPECIAL_HANDLER_REQUIRED`
+- BSC and Unichain CL families become explicit LP lifecycle events
+
+Required fixtures:
+- `0x0088de663d549fbc58dfa8dbba4180a346a580b1d6277254fa84a8ed9c27967a`
+- `0x091e356020745e6555732067a025cee9243dee6848c47dd8eb97259293735e70`
+- `0x8cd845033478862d78ae2214fa63e822a9dd217fab4c428801285eb1bb40d2e1`
+- `0x84c8a89f9b7578b709015561a23abe76758f1521d44d6819499e226db25e15f2`
+
+Required tests:
+- `modifyLiquidities` entry path -> `LP_ENTRY`
+- `modifyLiquidities` exit path -> `LP_EXIT`
+- fee-claim-only subcase -> `LP_FEE_CLAIM` if raw supports it
+
+### BE-04AE — ScamFilter Precedence Hardening Over Bridge/Reward Allowlists
+
+Purpose:
+- keep the useful spam filter while preventing it from overriding known legitimate
+  bridge and reward routes.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/filter/**`
+- classifier support where precedence is enforced
+
+Implementation scope:
+- run verified bridge/reward allowlists before promo/phishing heuristics
+- keep composite spam signals for real spam clusters
+- ensure provider-backed BSC claim routes survive the filter
+
+Definition of done:
+- legit bridge settlement is no longer dropped into promo/phishing review
+- legit reward claims are no longer dropped into promo/phishing review
+- obvious spam families remain filtered/reviewed
+
+Required fixtures:
+- `0xd2cdbd7a1ade37a8032b713e9844351d2f58fbd872851a0e88203b8fbb695c5f`
+- `0xf13356fe9449ec9e831395e0074622e88e362a8f317e6b110d093bfaa25d2702`
+- `0xa586770c653097bd905f0003edddcc59f295a8a64131a3ba0410d6fe43bb08e5`
+- `0xcbee5437edfe64d3abe9f7b6e0b02daf059405d348ae90ee08a81a53b933c0b6`
+- `0x23f8ed6d7db1af98174a9934718531d1e24f8c8f0e303882924fbb7b035eaa9e`
+
+Required tests:
+- `redeemWithFee(...)` bypasses scam rule
+- `claimWithRecipient(...)` bypasses scam rule
+- BSC legit claim fixture bypasses scam rule
+- known spam fixtures still fail filter/review
+
+### BE-03F — BSC Raw-Completeness Gate Before `COMPLETE`
+
+Purpose:
+- prevent the control plane from marking `BSC` complete when persisted raw coverage
+  is obviously incomplete for the tracked wallet universe.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/job/backfill/**`
+- `backend/src/main/java/com/walletradar/ingestion/adapter/evm/rpc/**`
+- sync-status / segment completion logic
+
+Implementation scope:
+- add a provider-first completeness sanity gate before `sync_status=COMPLETE`
+- if provider returns rows for one wallet but persisted raw remains empty or materially
+  below expected coverage, sync must stay incomplete/error
+- this is a backfill/control-plane task only; classifier remains source-agnostic
+
+Definition of done:
+- `BSC` cannot silently close with all rows on one wallet while two tracked wallets have zero raw
+- audit can trust `COMPLETE` as at least minimally sane for BSC
+
+Required fixtures:
+- current three BSC tracked wallets from Mongo
+- provider-backed coverage expectations from audited BSC run
+
+Required tests:
+- zero-raw wallet does not reach `COMPLETE`
+- incomplete provider persistence does not reach `COMPLETE`
+- healthy provider-first wallet can still reach `COMPLETE`
+
+### BE-04AF — Final Classification Regression Pack + Repeat-Audit Fixtures
+
+Purpose:
+- freeze the current repeat-audit findings into tests so the same semantic drift
+  cannot silently reappear.
+
+Primary write scope:
+- classifier tests
+- clarification tests
+- scam-filter tests
+- any fixture loaders used by those tests
+
+Implementation scope:
+- lift the repeat-audit hashes from `data/derived/classification_rule_fixtures.tsv`
+- cover at minimum:
+  - false clarification collapse
+  - selector recovery
+  - bridge settlement continuity
+  - reward-family expansion
+  - claim/no-op differentiation
+  - lending withdraw fix
+  - BSC `multicall` mint
+  - BSC `modifyLiquidities`
+  - scam-filter legit-claim/legit-bridge precedence
+
+Definition of done:
+- rerunning the full repeat-audit regression suite would catch the currently open
+  classification regressions
+
+Required tests:
+- one regression test per audited family, not one per network only
+
 ### BE-04D — Selector Recovery From Calldata
 
 Purpose:

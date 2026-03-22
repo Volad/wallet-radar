@@ -31,9 +31,13 @@ Implementation handoff:
 - [ ] Production classification is derived only from backfill-available raw evidence and receipt-safe clarification evidence; human-readable explorer page summaries never override raw legs.
 - [ ] Across `depositV3` classifies to `BRIDGE_OUT` on recognized bridge-entry contracts.
 - [ ] Bridge-settlement selectors such as `fillV3Relay`, `fillRelay`, `redeemWithFee`, `execute302`, and `directFulfill` classify to bridge continuity semantics rather than `REPAY` or `VAULT_*` fallback.
+- [ ] Legitimate `redeemWithFee(...)` bridge settlement and `claimWithRecipient(...)` reward routes must bypass promo/phishing review.
+- [ ] Known claim family `0x3ef3d8ba38ebe18db133cec108f4d14ce00dd9ae` classifies contract-aware: real inbound movement -> `REWARD_CLAIM`; no-movement claim call -> explicit non-economic or review path, never silent reward minting.
+- [ ] Known lending `withdraw(...)` selectors on lending pools classify to `LENDING_WITHDRAW`, not `LENDING_DEPOSIT`.
 - [ ] Zero-amount token transfers with no economic counterflow never create `BUY` / `SELL` movement; they resolve to contract-scoped admin/no-op handling or explicit review.
 - [ ] Position-manager `multicall` that mints or increases a V3 LP position normalizes to `LP_ENTRY`, not `UNKNOWN`.
 - [ ] Method-aware bundle routers such as Morpho Bundler3 and CL position-manager `modifyLiquidities` do not fall through to broad `multicall` / `deposit` / `withdraw` keyword fallback.
+- [ ] Concentrated-liquidity position-manager `multicall` and `modifyLiquidities` on `ETHEREUM`, `ARBITRUM`, `BASE`, `UNICHAIN`, and `BSC` are resolved through method-aware LP routing using persisted raw evidence only.
 - [ ] Missing `rawData.transactionIndex` is repaired before canonical normalization or surfaced explicitly as a blocker; no guessed ordering index is allowed.
 - [ ] Historical pricing follows the order: stablecoin parity -> swap-derived -> wrapper/native mapping -> CoinGecko historical -> unresolved price flag.
 - [ ] `PRICE_UNKNOWN` does not drop quantity from replay and sets incomplete-history signaling.
@@ -60,11 +64,16 @@ Implementation handoff:
 - Case: Backfill source is provider-first and persists real logs into raw | Scope: In | Expected behaviour: classifier may use those persisted raw logs through the normal view/projection; it does not branch on source or network to change semantics.
 - Case: Recognized bridge-entry `depositV3` call on Across | Scope: In | Expected behaviour: canonical type is `BRIDGE_OUT`, not `VAULT_DEPOSIT`.
 - Case: Bridge settlement tx uses `fillV3Relay` / `fillRelay` / `redeemWithFee` | Scope: In | Expected behaviour: canonical type follows bridge continuity semantics, not `REPAY` or generic vault/lending fallback.
+- Case: `claimWithRecipient(...)` on an allowlisted reward distributor carries real inbound token movement | Scope: In | Expected behaviour: canonical type is `REWARD_CLAIM` and promo/phishing heuristics do not override it.
+- Case: Known claim contract call has no inbound or outbound economic movement in raw | Scope: In | Expected behaviour: tx does not auto-become `REWARD_CLAIM`; it goes to explicit non-economic or review handling.
+- Case: Known lending `withdraw(...)` burns receipt token and returns underlying asset | Scope: In | Expected behaviour: canonical type is `LENDING_WITHDRAW`, not `LENDING_DEPOSIT`.
 - Case: Token transfer leg has zero quantity and no economic counterflow | Scope: In | Expected behaviour: tx does not produce economic movement; it routes to explicit no-op/admin handling or review.
 - Case: Known V3 position-manager `multicall` adds liquidity and mints NFT | Scope: In | Expected behaviour: tx becomes `LP_ENTRY`, not router `UNKNOWN`.
 - Case: Morpho Bundler3 `multicall` mixes protocol actions | Scope: In | Expected behaviour: method-aware contract routing decides final canonical type; broad bundle keywords do not decide it.
 - Case: CL position-manager `modifyLiquidities` changes a concentrated-liquidity position | Scope: In | Expected behaviour: canonical type follows decoded action set / legs, not generic `UNKNOWN`.
 - Case: Legitimate BSC claim route arrives from provider-backed raw with claim selector, inbound token transfer, and claim event | Scope: In | Expected behaviour: tx becomes `REWARD_CLAIM` and survives scam filtering.
+- Case: BSC Pancake Infinity `multicall(bytes[] data)` mints a position NFT | Scope: In | Expected behaviour: tx becomes `LP_ENTRY`, not router `UNKNOWN`.
+- Case: BSC Pancake Infinity `modifyLiquidities(bytes payload,uint256 deadline)` changes position state | Scope: In | Expected behaviour: tx resolves through method-aware LP routing, not `REGISTRY_SPECIAL_HANDLER_REQUIRED`.
 - Case: Raw tx is missing `transactionIndex` | Scope: In | Expected behaviour: tx enters bounded raw ordering repair before canonical normalization; ordering is never guessed.
 - Case: Registry contract is known but the special handler does not support the observed method | Scope: In | Expected behaviour: tx becomes `UNKNOWN`, `NEEDS_REVIEW`, and records `HANDLER_UNSUPPORTED_METHOD`.
 - Case: Price cannot be resolved for one leg | Scope: In | Expected behaviour: quantity remains in replay, asset state is marked incomplete.
