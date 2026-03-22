@@ -80,6 +80,33 @@ public final class LpPositionLifecycleSupport {
         };
     }
 
+    public static NormalizedTransactionType resolveDexStakeContractMulticallType(
+            OnChainRawTransactionView view,
+            List<RawLeg> movementLegs
+    ) {
+        if (!MULTICALL_SELECTOR.equals(String.valueOf(view.methodId()))) {
+            return null;
+        }
+
+        String inputData = view.inputData();
+        boolean decreaseLiquidity = CalldataDecodingSupport.containsEmbeddedSelector(inputData, DECREASE_LIQUIDITY_SELECTOR);
+        boolean collect = CalldataDecodingSupport.containsEmbeddedSelector(inputData, COLLECT_SELECTOR);
+        boolean burn = CalldataDecodingSupport.containsEmbeddedSelector(inputData, BURN_SELECTOR);
+
+        if ((decreaseLiquidity || burn) && hasInboundNonFeeLeg(movementLegs)) {
+            return NormalizedTransactionType.LP_EXIT;
+        }
+        if (collect && hasInboundNonFeeLeg(movementLegs) && !hasOutboundNonFeeLeg(movementLegs)) {
+            return hasAnyErc721TransferToWallet(view)
+                    ? NormalizedTransactionType.LP_EXIT
+                    : NormalizedTransactionType.LP_FEE_CLAIM;
+        }
+        if (hasAnyErc721TransferToWallet(view) && hasInboundNonFeeLeg(movementLegs)) {
+            return NormalizedTransactionType.LP_EXIT;
+        }
+        return null;
+    }
+
     public static NormalizedTransactionType resolvePositionManagerMulticallType(
             OnChainRawTransactionView view,
             List<RawLeg> movementLegs
@@ -217,6 +244,26 @@ public final class LpPositionLifecycleSupport {
                 continue;
             }
             if (!zeroAddressTopic(topics.get(1))) {
+                continue;
+            }
+            if (wallet.equals(topicAddress(topics.get(2)))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean hasAnyErc721TransferToWallet(OnChainRawTransactionView view) {
+        String wallet = OnChainRawTransactionView.normalizeAddress(view.walletAddress());
+        if (wallet == null) {
+            return false;
+        }
+        for (Document log : view.persistedLogs()) {
+            if (!ERC721_TRANSFER_TOPIC.equals(firstTopic(log))) {
+                continue;
+            }
+            List<String> topics = normalizedTopics(log);
+            if (topics.size() < 3) {
                 continue;
             }
             if (wallet.equals(topicAddress(topics.get(2)))) {

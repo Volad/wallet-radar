@@ -73,7 +73,8 @@ class OnChainNormalizedTransactionBuilderTest {
                 .append("txreceipt_status", "1")
                 .append("gasUsed", "21000")
                 .append("effectiveGasPrice", "5000000000")
-                .append("input", "0x6080604052"));
+                .append("input", "0x6080604052")
+                .append("creates", true));
 
         OnChainClassificationResult classificationResult = new OnChainClassificationResult(
                 NormalizedTransactionType.ADMIN_CONFIG,
@@ -89,5 +90,39 @@ class OnChainNormalizedTransactionBuilderTest {
         NormalizedTransaction normalized = builder.build(rawTransaction, classificationResult, Instant.parse("2026-03-22T12:00:00Z"));
 
         assertThat(normalized.getMissingDataReasons()).containsExactly("MISSING_CONTRACT_ADDRESS");
+    }
+
+    @Test
+    @DisplayName("build keeps missing effective gas price reason when only legacy gasPrice exists")
+    void buildKeepsMissingEffectiveGasPriceReasonWhenOnlyLegacyGasPriceExists() {
+        RawTransaction rawTransaction = new RawTransaction();
+        rawTransaction.setTxHash("0xghi");
+        rawTransaction.setNetworkId("ETHEREUM");
+        rawTransaction.setWalletAddress(WALLET);
+        rawTransaction.setRawData(new Document()
+                .append("timeStamp", "1700000000")
+                .append("transactionIndex", "3")
+                .append("from", WALLET)
+                .append("to", "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                .append("value", "0")
+                .append("txreceipt_status", "1")
+                .append("gasUsed", "21000")
+                .append("gasPrice", "5000000000")
+                .append("input", "0x095ea7b3000000000000000000000000"));
+
+        OnChainClassificationResult classificationResult = new OnChainClassificationResult(
+                NormalizedTransactionType.APPROVE,
+                NormalizedTransactionStatus.PENDING_CLARIFICATION,
+                ClassificationSource.METHOD_ID,
+                ConfidenceLevel.LOW,
+                List.of(),
+                List.of(),
+                null,
+                null
+        );
+
+        NormalizedTransaction normalized = builder.build(rawTransaction, classificationResult, Instant.parse("2026-03-22T12:00:00Z"));
+
+        assertThat(normalized.getMissingDataReasons()).containsExactly("MISSING_EFFECTIVE_GAS_PRICE");
     }
 }

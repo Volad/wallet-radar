@@ -1,7 +1,7 @@
 # WalletRadar — Architecture
 
 > **Version:** SAD v3 target summary
-> **Last updated:** 2026-03-21
+> **Last updated:** 2026-03-22
 > **Style:** Modular monolith (Spring Boot)
 
 This document is the concise architecture summary for the v3 accounting rewrite.
@@ -61,10 +61,13 @@ Spring Boot
 
 ### 3.1 Raw collection
 
-- Explorer-first EVM ingestion remains unchanged.
+- EVM ingestion may be explorer-first or provider-first by network, with bounded native RPC repair where configured.
 - `ScamFilter` stays pre-persistence.
 - `ScamFilter` must use composite promo/phishing signals and preserve known
   legitimate reward-claim routes that do not carry promo markers.
+- Tx-level fields must be canonicalized before persistence. Transfer-style payload
+  rows may populate `explorer.tokenTransfers[]`, but must not overwrite top-level
+  tx fields such as `from`, `to`, `value`, `input`, or `methodId`.
 - Raw docs land in `raw_transactions` with `normalizationStatus=PENDING`.
 
 ### 3.2 On-chain normalization
@@ -105,13 +108,14 @@ Spring Boot
 - Registry entries marked with `specialHandler` dispatch into one deterministic handler result per raw tx.
 - If a special handler cannot support the observed method/function combination, the tx becomes `UNKNOWN -> NEEDS_REVIEW` with an explicit missing-data reason.
 - Evidence sources:
-  - `rawData.to`
-  - `rawData.methodId`
-  - `rawData.functionName`
+  - canonical tx-level fields from the raw view / `explorer.tx`
   - `rawData.explorer.tokenTransfers[]`
   - `rawData.explorer.internalTransfers[]`
-  - direct native `rawData.value`
-- `rawData.logs[]` remain out of bounds.
+  - direct native tx value only when it is canonical tx-level evidence
+  - persisted real receipt logs when a method-aware handler explicitly needs them
+- synthetic `rawData.logs[]` remain out of bounds.
+- Classification rules should follow protocol-source semantics when official
+  contracts or protocol docs are available, not explorer UI labels.
 
 ### 3.3 Clarification
 
@@ -121,10 +125,18 @@ Spring Boot
   - execution status
   - gas
   - created contract address
+- Clarification reasons must match the actual missing receipt-safe fields.
+  `MISSING_CONTRACT_ADDRESS` is valid only when contract-creation intent is
+  explicitly evidenced by the tx-shaped raw payload.
+- Missing `effectiveGasPrice` is a clarification reason even when legacy
+  `gasPrice` is still usable for provisional fee math.
 - Low-confidence rows that are already economically coherent must proceed directly to `PENDING_PRICE`.
 - Unsupported semantic gaps must move directly to `NEEDS_REVIEW`.
 - Clarification must not treat synthetic logs as first-class classification input.
 - Clarification is not used to decide promo/phishing inbound, bridge-settlement continuity, LP position-manager multicalls, or zero-value no-op token calls.
+- Clarification is not used to upgrade per-wallet `CLAIM_WITHOUT_MOVEMENT` rows
+  into `REWARD_CLAIM`.
+- Clarification rows must carry explicit missing receipt-safe reasons.
 
 ### 3.4 Bybit normalization
 
@@ -177,6 +189,7 @@ Spring Boot
 - GET endpoints remain datastore-only.
 - Raw collections are source evidence; canonical accounting consumes normalized documents only.
 - `backend/src/main/resources/protocol-registry.json` is the only authoritative protocol-registry source for runtime classification.
+- Tx-level native value must never be reconstructed from token transfer-row amounts.
 - `KATANA` and `PLASMA` are supported EVM networks in the v3 accounting layer.
 - WETH aliasing happens at replay time only.
 - Basis continuity applies to:

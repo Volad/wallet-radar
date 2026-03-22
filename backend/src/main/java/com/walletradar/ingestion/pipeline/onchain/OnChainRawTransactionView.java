@@ -111,8 +111,12 @@ public final class OnChainRawTransactionView {
         return parseUnsignedInteger(readRawField("gasUsed"));
     }
 
+    public BigInteger effectiveGasPrice() {
+        return parseUnsignedInteger(readRawField("effectiveGasPrice"));
+    }
+
     public BigInteger gasPrice() {
-        BigInteger effectiveGasPrice = parseUnsignedInteger(readRawField("effectiveGasPrice"));
+        BigInteger effectiveGasPrice = effectiveGasPrice();
         return effectiveGasPrice != null ? effectiveGasPrice : parseUnsignedInteger(readRawField("gasPrice"));
     }
 
@@ -122,6 +126,10 @@ public final class OnChainRawTransactionView {
 
     public boolean hasGasPriceEvidence() {
         return gasPrice() != null;
+    }
+
+    public boolean hasEffectiveGasPriceEvidence() {
+        return effectiveGasPrice() != null;
     }
 
     public boolean hasExecutionStatusEvidence() {
@@ -143,7 +151,9 @@ public final class OnChainRawTransactionView {
     }
 
     public boolean isContractCreation() {
-        return toAddress() == null && inputData() != null && !"0x".equals(inputData());
+        return hasExplicitContractCreationSignal()
+                && inputData() != null
+                && !"0x".equals(inputData());
     }
 
     public boolean isFeePayer() {
@@ -295,15 +305,20 @@ public final class OnChainRawTransactionView {
     }
 
     private Object readExplorerTxField(String key) {
+        Document tx = explorerTxDocument();
+        if (tx == null) {
+            return null;
+        }
+        return tx.get(key);
+    }
+
+    private Document explorerTxDocument() {
         Document explorer = readExplorerSection();
         if (explorer == null) {
             return null;
         }
         Object txObject = explorer.get("tx");
-        if (!(txObject instanceof Document tx)) {
-            return null;
-        }
-        return tx.get(key);
+        return txObject instanceof Document tx ? tx : null;
     }
 
     private Document readExplorerSection() {
@@ -397,6 +412,43 @@ public final class OnChainRawTransactionView {
 
     private static Integer parseInteger(Object value) {
         return RawOrderingMetadataResolver.parseFlexibleInteger(value);
+    }
+
+    private boolean hasExplicitContractCreationSignal() {
+        return explicitBooleanField("creates")
+                || explicitBooleanField("contractCreation")
+                || explicitBooleanField("isContractCreation")
+                || explicitlyMissingTxToField();
+    }
+
+    private boolean explicitBooleanField(String key) {
+        Object explorerValue = readExplorerTxField(key);
+        if (parseBoolean(explorerValue)) {
+            return true;
+        }
+        return parseBoolean(readRawField(key));
+    }
+
+    private boolean explicitlyMissingTxToField() {
+        Document explorerTx = explorerTxDocument();
+        if (explorerTx != null && explorerTx.containsKey("to")) {
+            return normalizeAddress(stringify(explorerTx.get("to"))) == null;
+        }
+        Document rawData = rawTransaction.getRawData();
+        return rawData != null
+                && rawData.containsKey("to")
+                && normalizeAddress(stringify(rawData.get("to"))) == null;
+    }
+
+    private static boolean parseBoolean(Object value) {
+        if (value instanceof Boolean bool) {
+            return bool;
+        }
+        String text = stringify(value);
+        if (text == null) {
+            return false;
+        }
+        return "1".equals(text) || "true".equalsIgnoreCase(text) || "yes".equalsIgnoreCase(text);
     }
 
     private static boolean safeEquals(Object left, Object right) {

@@ -161,6 +161,31 @@ class OnChainRawTransactionViewTest {
         assertThat(view.rawValue()).isEqualTo(BigInteger.ZERO);
     }
 
+    @Test
+    @DisplayName("does not infer contract creation from a missing to key alone")
+    void doesNotInferContractCreationFromMissingToKeyAlone() {
+        OnChainRawTransactionView view = OnChainRawTransactionView.wrap(rawWith(new Document()
+                .append("timeStamp", "1700000000")
+                .append("transactionIndex", "1")
+                .append("from", "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                .append("input", "0x6080604052")));
+
+        assertThat(view.isContractCreation()).isFalse();
+    }
+
+    @Test
+    @DisplayName("treats explicit creates flag as contract creation")
+    void treatsExplicitCreatesFlagAsContractCreation() {
+        OnChainRawTransactionView view = OnChainRawTransactionView.wrap(rawWith(new Document()
+                .append("timeStamp", "1700000000")
+                .append("transactionIndex", "1")
+                .append("from", "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                .append("input", "0x6080604052")
+                .append("creates", true)));
+
+        assertThat(view.isContractCreation()).isTrue();
+    }
+
     private static RawTransaction rawWith(Document rawData) {
         RawTransaction rawTransaction = new RawTransaction();
         rawTransaction.setId("0xabc:" + NetworkId.ETHEREUM + ":0xwallet");

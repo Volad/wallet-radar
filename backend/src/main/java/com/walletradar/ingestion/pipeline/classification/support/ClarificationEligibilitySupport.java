@@ -19,7 +19,19 @@ public final class ClarificationEligibilitySupport {
             OnChainRawTransactionView view,
             NormalizedTransactionType type
     ) {
-        return !requiredClarificationReasons(view, type).isEmpty();
+        if (view == null || type == null || type == NormalizedTransactionType.UNKNOWN) {
+            return false;
+        }
+        if (!view.hasExecutionStatusEvidence()) {
+            return true;
+        }
+        if (view.isFeePayer() && !view.hasGasPriceEvidence()) {
+            return true;
+        }
+        if (view.isFeePayer() && !view.hasGasUsed()) {
+            return true;
+        }
+        return view.isContractCreation() && !view.hasContractAddress();
     }
 
     public static List<String> requiredClarificationReasons(
@@ -34,7 +46,7 @@ public final class ClarificationEligibilitySupport {
         if (!view.hasExecutionStatusEvidence()) {
             reasons.add("MISSING_EXECUTION_STATUS");
         }
-        if (view.isFeePayer() && !view.hasGasPriceEvidence()) {
+        if (view.isFeePayer() && !view.hasEffectiveGasPriceEvidence()) {
             reasons.add("MISSING_EFFECTIVE_GAS_PRICE");
         }
         if (view.isFeePayer() && !view.hasGasUsed()) {

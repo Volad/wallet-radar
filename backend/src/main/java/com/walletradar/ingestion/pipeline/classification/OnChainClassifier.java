@@ -333,6 +333,13 @@ public class OnChainClassifier {
             }
         }
 
+        if (entry.role() == ProtocolRegistryRole.STAKE_CONTRACT && entry.family() == ProtocolRegistryFamily.DEX) {
+            NormalizedTransactionType multicallType = LpPositionLifecycleSupport.resolveDexStakeContractMulticallType(view, movementLegs);
+            if (multicallType != null) {
+                return Optional.of(registryResult(view, entry, multicallType, movementLegs));
+            }
+        }
+
         if (isAcrossDepositV3(entry, view)) {
             return Optional.of(registryResult(view, entry, NormalizedTransactionType.BRIDGE_OUT, movementLegs));
         }
@@ -751,7 +758,12 @@ public class OnChainClassifier {
         if (summary.nativeOutbound() && summary.tokenInboundCount() == 1 && summary.tokenOutboundCount() == 0) {
             return true;
         }
-        return summary.nativeInbound() && summary.tokenOutboundCount() == 1 && summary.tokenInboundCount() == 0;
+        if (summary.nativeInbound() && summary.tokenOutboundCount() == 1 && summary.tokenInboundCount() == 0) {
+            return true;
+        }
+        return summary.tokenOutboundCount() >= 1
+                && summary.tokenInboundCount() >= 1
+                && !summary.sameAssetInAndOut();
     }
 
     private boolean isTrackedCounterparty(String address, String currentWallet) {

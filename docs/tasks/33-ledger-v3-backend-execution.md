@@ -1865,6 +1865,492 @@ Required tests:
 - full backend test suite for touched modules
 - targeted end-to-end replay scenario covering on-chain + Bybit correlation
 
+## Deep Classification Closeout Slice — 2026-03-22 Live Rerun Audit
+
+This slice supersedes older remediation priorities where they conflict.
+
+Do not reopen already resolved families from the live snapshot unless a regression
+fixture proves they broke again. Resolved in the current audit:
+
+- `BSC` provider-first ingestion now matches live provider coverage for the current wallet universe (`33 == 33`)
+- `redeemWithFee(...)` already routes to `BRIDGE_IN`
+- `fillV3Relay(...)` / `fillRelay(...)` already route to `BRIDGE_IN`
+- Avalanche `0x69328dec withdraw(...)` no longer inverts to `LENDING_DEPOSIT`
+- BSC Pancake Infinity `multicall` / `modifyLiquidities` are no longer generic `UNKNOWN`
+- `claimWithRecipient(...)` is no longer a live promo/phishing false-positive cluster
+- earlier mass bridge-flow contamination is no longer an active blocker on the representative bridge-in fixtures
+
+Current execution order:
+
+1. `BE-05D` clarification reason precision + contract-creation evidence guard
+2. `BE-04AM` remaining router overload closeout on dominant live families
+3. `BE-04AN` zero-amount / no-op terminal policy closeout
+4. `BE-04AO` selector-recovery final parity on review paths
+5. `BE-04AP` `CLAIM_WITHOUT_MOVEMENT` terminal semantics + regression hardening
+6. `BE-04AQ` final live-rerun regression pack + repeat-audit fixtures
+
+Do not spend new implementation effort on `BE-03F` in this slice. The current
+live audit already shows `BSC` provider coverage parity for the active wallet
+universe, and the RPC/provider control plane is expected to be rewritten later.
+
+### BE-03G — Raw Tx-Shape Canonicalization + Transfer-Row Separation
+
+Purpose:
+- Eliminate the current explorer/provider raw contamination where transfer-row payloads overwrite tx-level fields and create bogus native legs.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/adapter/**`
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/onchain/**`
+- raw mapping tests
+
+Implementation scope:
+- canonicalize tx-level fields from the dedicated tx payload (`explorer.tx` or provider tx object)
+- never let transfer-row payloads overwrite top-level:
+  - `from`
+  - `to`
+  - `value`
+  - `input`
+  - `methodId`
+  - `functionName`
+- ensure transfer-like payloads are persisted only under:
+  - `explorer.tokenTransfers[]`
+  - `explorer.internalTransfers[]`
+- preserve persisted real receipt logs separately from synthetic transfer-derived logs
+- keep classification source-agnostic: all fixes must land in canonical raw shape or raw view, not in `if network == ...` classifier branches
+
+Definition of done:
+- representative bridge/inbound rows no longer persist transfer-row token amount as top-level native `value`
+- canonical raw tx fields remain stable across explorer-first and provider-first ingestion
+- no new raw row can create a duplicated native leg purely because a token transfer row was promoted to tx scope
+
+Required fixtures:
+- Base `redeemWithFee(...)` `0xd2cdbd7a...`
+- Unichain `fillV3Relay(...)` `0x27978f7b...`
+- Base `execute302(...)` `0x0144c453...`
+- zkSync bridge-in `0x9187f4ca...`
+
+Required tests:
+- raw mapper test proving tx-level `value` is preserved when token transfer amount differs
+- regression test proving transfer-style payloads stay under `explorer.tokenTransfers[]`
+- raw-view test proving canonical tx-level fields win over contaminated top-level payload
+
+### BE-04AG — Native-Flow Guard For Contaminated Raw Rows
+
+Purpose:
+- Prevent financially dangerous duplicate native legs even before historical raw is re-backfilled.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/onchain/**`
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- normalization tests
+
+Implementation scope:
+- derive direct native value only from canonical tx-level evidence in the raw view
+- suppress direct native leg extraction when tx-level `value` is clearly contaminated by a transfer-row amount
+- keep internal transfer legs intact when they are real and corroborated
+- do not weaken bridge/reward labels; this task fixes flow semantics, not event labels
+
+Definition of done:
+- the representative contaminated rows no longer produce bogus native `BUY` / `TRANSFER` legs
+- bridge continuity rows keep correct labels and correct asset quantities
+
+Required tests:
+- Base `redeemWithFee(...)` does not emit ETH dust leg
+- Unichain `fillV3Relay(...)` does not emit ETH dust leg
+- Base `execute302(...)` does not duplicate USDE quantity as ETH
+- zkSync bridge-in does not double-count ETH as native + token
+
+### BE-03H — `BSC` Provider Persistence Parity For Approve-Only Rows
+
+Purpose:
+- Close the live gap where provider acquisition returns `33` tx for the active wallet but only `25` persist to `raw_transactions`.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/adapter/evm/rpc/provider/**`
+- `backend/src/main/java/com/walletradar/ingestion/adapter/evm/rpc/nativerpc/**`
+- BSC adapter tests
+
+Implementation scope:
+- persist every provider-returned tx hash for the segment unless the row is explicitly rejected by a documented blocker
+- ensure approve-only / no-movement rows survive mapping and persistence
+- do not mark provider acquisition successful for a segment while provider-returned rows are silently dropped during raw mapping
+- keep this as ingestion parity work; do not add `BSC`-specific classifier branches
+
+Definition of done:
+- the current audited active wallet persists all `33` provider rows or records explicit blockers for the missing hashes
+- the eight verified missing `approve(0x095ea7b3)` hashes appear in `raw_transactions`
+- later normalization of those rows resolves to `APPROVE`
+
+Required fixtures:
+- missing hashes from the audit:
+  - `0x37908ec5...`
+  - `0xba3ca393...`
+  - `0xa784bfed...`
+  - `0x6b82f05d...`
+  - `0xd7003539...`
+  - `0x2ad6116e...`
+  - `0x510b3896...`
+  - `0x5b68a8cc...`
+
+Required tests:
+- provider adapter regression for approve-only rows with logs/receipt
+- end-to-end segment test proving provider count parity on the audited wallet fixture
+
+### BE-05C — Clarification Reason Hygiene
+
+Purpose:
+- Keep the legitimate clarification queue explainable and auditable.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/job/clarification/**`
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- clarification tests
+
+Implementation scope:
+- every row entering `PENDING_CLARIFICATION` must carry explicit missing reasons:
+  - `MISSING_EXECUTION_STATUS`
+  - `MISSING_EFFECTIVE_GAS_PRICE`
+  - `MISSING_GAS_USED`
+  - `MISSING_CONTRACT_ADDRESS`
+- clarification re-triage must preserve or update those reasons deterministically
+- reason hygiene is additive only; it must not turn legitimate clarification rows into pricing/review rows by itself
+
+Definition of done:
+- no clarification-eligible row is created with empty `missingDataReasons[]`
+- current clarification backlog is explainable by receipt-safe missing fields alone
+
+Required tests:
+- normalization builder test for clarification reasons
+- clarification retry test preserving updated reason set
+
+### BE-04AH — Selector-Recovery Parity Across All Classifier Paths
+
+Purpose:
+- Close the remaining review rows that are still recoverable from persisted calldata.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- `backend/src/main/java/com/walletradar/ingestion/filter/**`
+- selector recovery tests
+
+Implementation scope:
+- ensure every classifier branch, scam-filter allowlist, and special handler reads selector from the raw view, not directly from raw BSON
+- remove remaining direct reads of top-level `rawData.methodId` where selector recovery from `input[0:10]` should apply
+- cover the current dominant recoverable families on `BASE`, `OPTIMISM`, `ETHEREUM`, `AVALANCHE`, and `ZKSYNC`
+
+Definition of done:
+- the remaining selector-recoverable `NEEDS_REVIEW` rows no longer stay unresolved only because top-level `methodId` is blank
+
+Required tests:
+- router overload fixture where `methodId == 0x` but calldata has selector
+- scam-filter allowlist fixture where recovered selector must bypass promo/phishing suppression
+
+### BE-04AI — Merkl Claim-Family Closure + Per-Wallet `CLAIM_WITHOUT_MOVEMENT`
+
+Purpose:
+- Finish the main reward-family closure without minting fake rewards for non-receiving tracked wallets.
+
+Primary write scope:
+- `backend/src/main/resources/protocol-registry.json`
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- reward-family tests
+
+Implementation scope:
+- extend contract-aware claim coverage for `0x3ef3d8ba38ebe18db133cec108f4d14ce00dd9ae`
+  across the remaining supported networks where raw evidence already exists
+- align rule design to Merkl `Distributor.sol` semantics:
+  - `claim(...)`
+  - `claimWithRecipient(...)`
+- classify only the receiving tracked wallet as `REWARD_CLAIM`
+- keep non-receiving tracked wallets and no-movement claim rows explicit as `CLAIM_WITHOUT_MOVEMENT` or review
+- do not use clarification to upgrade no-movement claim calls into reward acquisition
+
+Protocol sources:
+- Merkl `Distributor.sol`
+
+Definition of done:
+- Plasma and Unichain claim rows no longer collapse into generic `EXTERNAL_INBOUND`
+- per-wallet `claimWithRecipient(...)` semantics remain correct for both receiving and non-receiving tracked wallets
+
+Required tests:
+- real inbound Merkl claim
+- `claimWithRecipient(...)` duplicated across two tracked wallets
+- no-movement claim call stays explicit non-economic/review
+
+### BE-04AJ — Zero-Amount / No-Op Terminal Policy On Dominant Live Families
+
+Purpose:
+- Remove the remaining zero-amount/no-op families from ambiguous review where their non-economic meaning is already known.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- zero-amount family tests
+
+Implementation scope:
+- document and implement contract-aware terminal handling for the dominant live families:
+  - Avalanche zero-amount transfer clusters
+  - Arbitrum `0x0cf79e0a` clusters
+  - explicit setup / batch no-op families already proven non-economic
+- known non-economic families may resolve to `ADMIN_CONFIG`
+- unknown zero-amount families remain `NEEDS_REVIEW` with `ZERO_AMOUNT_TOKEN_TRANSFER`
+- no family in this slice may create synthetic `BUY` / `SELL`
+
+Definition of done:
+- dominant audited zero-amount families no longer stay open only because policy was undocumented
+- unknown families remain explicit and reviewable
+
+Required tests:
+- known zero-amount family -> `ADMIN_CONFIG`
+- unknown zero-amount family -> `UNKNOWN/NEEDS_REVIEW/ZERO_AMOUNT_TOKEN_TRANSFER`
+
+### BE-04AK — Remaining Router Overload And Empty-Selector Closeout
+
+Purpose:
+- Shrink the remaining `NEEDS_REVIEW` queue to genuinely rare edge cases.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- `backend/src/main/resources/protocol-registry.json`
+- router/LP tests
+
+Implementation scope:
+- close the dominant live router/LP clusters on:
+  - Base
+  - Ethereum
+  - zkSync
+  - Optimism
+  - Avalanche
+- prefer generic raw-evidence rules over network-specific branches
+- for concentrated-liquidity and farm routes, align decoding to protocol-source semantics:
+  - Pancake Infinity `CLPositionManager.sol`
+  - SmartChef `SmartChefInitializable.sol`
+  - Across `SpokePool.sol` where settlement / entry routing overlaps
+- unsupported overloads must remain explicit `NEEDS_REVIEW`, not broad `FUNCTION_NAME` fallback
+
+Definition of done:
+- dominant router overload clusters from the deep audit exit review or become explicit handler-unsupported rows with deterministic reasons
+
+Required tests:
+- Ethereum Uniswap/Pancake position-manager `multicall`
+- remaining Base router overload fixture
+- zkSync overload fixture
+- Optimism empty-selector fixture
+
+### BE-04AL — Final Classification Regression Pack + Repeat-Audit Fixtures
+
+Purpose:
+- Lock in the closeout and make the next Mongo audit primarily a data check, not a rediscovery exercise.
+
+Primary write scope:
+- backend tests only
+
+Implementation scope:
+- codify all representative hashes from the deep audit as regression fixtures
+- include protocol-source-backed fixtures for:
+  - Across
+  - Merkl
+  - Pancake Infinity CL
+  - SmartChef
+- include raw contamination fixtures and BSC approve-only persistence fixtures
+
+Definition of done:
+- the next repeat audit is expected to move from semantic bug-finding to residual edge-case validation
+
+Required tests:
+- contamination regression pack
+- bridge continuity pack
+- reward/no-movement pack
+- BSC provider parity pack
+- selector recovery pack
+
+### BE-05D — Clarification Reason Precision + Contract-Creation Evidence Guard
+
+Purpose:
+- Make the clarification queue trustworthy by aligning `missingDataReasons[]`
+  with the fields that are actually missing in canonical raw evidence.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/onchain/**`
+- `backend/src/main/java/com/walletradar/ingestion/job/clarification/**`
+- clarification tests
+
+Implementation scope:
+- compute clarification reasons from the raw view only
+- treat `MISSING_EFFECTIVE_GAS_PRICE` as independent from legacy `gasPrice`
+  fallback used for fee reconstruction
+- emit `MISSING_CONTRACT_ADDRESS` only when contract-creation intent is
+  explicitly evidenced by canonical tx-shaped raw payload
+- preserve and recompute the same reason set during normalization rebuilds and
+  clarification retries
+- do not retarget status by itself; this task fixes explainability, not queue
+  membership
+
+Definition of done:
+- current live clarification rows no longer carry spurious
+  `MISSING_CONTRACT_ADDRESS`
+- clarification rows missing only receipt status and effective gas price carry
+  those exact reasons
+- clarification retries keep deterministic reason hygiene
+
+Required tests:
+- builder test for missing effective gas price without contract creation
+- raw-view test proving absent `to` key alone does not imply contract creation
+- clarification retry test preserving corrected reason set
+
+### BE-04AM — Remaining Router Overload Closeout On Dominant Live Families
+
+Purpose:
+- Shrink the live `ROUTER_METHOD_OVERLOAD_UNSUPPORTED` and residual
+  `CLASSIFICATION_FAILED` queue to genuinely rare cases.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- `backend/src/main/resources/protocol-registry.json`
+- router/LP tests
+
+Implementation scope:
+- close the dominant live overload families on:
+  - Base Pancake/Uniswap-style position-manager `multicall(0xac9650d8)` rows
+  - Arbitrum Pancake V3 MasterChef `multicall(0xac9650d8)` rows
+  - zkSync routed `0x3593564c` rows with persisted ETH/USDC movement
+  - Optimism Slipstream multicall / empty-selector family only where persisted
+    raw evidence is sufficient
+- use official protocol-source semantics where available:
+  - Pancake Infinity `CLPositionManager.sol`
+  - Velodrome Slipstream `NonfungiblePositionManager.sol`
+  - Across `SpokePool.sol` when bridge routing overlaps
+- if persisted raw evidence is still insufficient, keep the row explicit review;
+  do not let explorer UI text silently redefine canonical output
+
+Definition of done:
+- dominant Base/Arbitrum router overload families resolve to deterministic LP or
+  bridge continuity semantics
+- zkSync `0x3593564c` no longer stays open only because the outer router method
+  is generic
+- Optimism empty-selector rows remain review only when raw evidence is truly
+  insufficient
+
+Required fixtures:
+- Base `0xfffcf721...`
+- Arbitrum `0x6537cd02...`
+- zkSync `0xb7a9086d...`
+- Optimism `0x927d3f45...`
+
+Required tests:
+- Base position-manager multicall exit/custody fixture
+- Arbitrum MasterChef multicall LP exit / fee-claim fixture
+- zkSync routed swap/bridge overload fixture
+- Optimism insufficient-evidence fixture that stays explicit review
+
+### BE-04AN — Zero-Amount / No-Op Terminal Policy Closeout
+
+Purpose:
+- Turn the dominant audited zero-amount families into deterministic
+  non-economic outcomes and leave only genuinely unknown families in review.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- zero-amount family tests
+
+Implementation scope:
+- finalize contract-aware terminal handling for the dominant live families:
+  - Arbitrum `0x0cf79e0a`
+  - Avalanche `a9059cbb` zero-amount clusters
+  - Avalanche/Base `0x12514bba` families
+- known non-economic families may resolve to `ADMIN_CONFIG`
+- unknown zero-amount families must remain `UNKNOWN/NEEDS_REVIEW` with
+  `ZERO_AMOUNT_TOKEN_TRANSFER`
+- no family in this slice may create synthetic `BUY` / `SELL`
+
+Definition of done:
+- the current dominant live zero-amount families no longer remain open only
+  because terminal policy was undocumented
+- unknown families stay explicit and auditable
+
+Required tests:
+- known zero-amount family -> `ADMIN_CONFIG`
+- unknown zero-amount family -> `UNKNOWN/NEEDS_REVIEW/ZERO_AMOUNT_TOKEN_TRANSFER`
+
+### BE-04AO — Selector-Recovery Final Parity On Review Paths
+
+Purpose:
+- Close the remaining review rows that are still recoverable from persisted
+  calldata, now that selector recovery is no longer the dominant blocker.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- `backend/src/main/java/com/walletradar/ingestion/filter/**`
+- selector recovery tests
+
+Implementation scope:
+- remove remaining direct reads of raw `methodId` in review-path logic,
+  allowlists, and special handlers
+- ensure recovered selector from `input[0:10]` is used consistently on the
+  residual Base/Optimism/Ethereum/Avalanche/ZkSync families still open in the
+  live audit
+
+Definition of done:
+- the remaining selector-recoverable live review rows no longer stay unresolved
+  only because top-level `methodId` is blank
+
+Required tests:
+- recovered-selector review fixture
+- recovered-selector allowlist fixture
+
+### BE-04AP — `CLAIM_WITHOUT_MOVEMENT` Terminal Semantics + Regression Hardening
+
+Purpose:
+- Freeze the correct per-wallet semantics for claim-family rows where the
+  tracked wallet signs the claim route but receives no reward movement.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- reward-family tests
+
+Implementation scope:
+- keep `CLAIM_WITHOUT_MOVEMENT` as an explicit terminal review outcome for
+  non-receiving tracked wallets on known claim distributors
+- do not auto-upgrade these rows during clarification
+- add regression coverage for the audited Arbitrum and BSC examples where one
+  tracked wallet receives the reward and another only signs the claim call
+
+Definition of done:
+- receiving tracked wallets become `REWARD_CLAIM`
+- non-receiving tracked wallets remain explicit `CLAIM_WITHOUT_MOVEMENT`
+- no clarification or reward allowlist path silently mints reward acquisition
+
+Required fixtures:
+- Arbitrum `0xf13356fe...`
+- BSC `0xa586770c...`
+- BSC `0xeb4fd02c...`
+
+Required tests:
+- duplicated claim tx across two tracked wallets
+- no-movement claim row remains explicit terminal review
+
+### BE-04AQ — Final Live-Rerun Regression Pack + Repeat-Audit Fixtures
+
+Purpose:
+- Lock the current live closeout so the next Mongo audit is mainly a data check,
+  not a rediscovery exercise.
+
+Primary write scope:
+- backend tests only
+
+Implementation scope:
+- codify representative hashes from the latest live rerun audit into durable
+  regression fixtures:
+  - clarification reason hygiene rows
+  - Base/Arbitrum/zkSync/Optimism router overload fixtures
+  - zero-amount/no-op families
+  - per-wallet claim-without-movement fixtures
+  - BSC provider parity fixtures already resolved in the live run
+
+Definition of done:
+- the latest live-audit findings are reproducible in tests
+- resolved families cannot silently regress without failing CI
+
 ## Mandatory Test Matrix
 
 At minimum, backend implementation must include automated coverage for:

@@ -1,7 +1,7 @@
 # WalletRadar — System Architecture
 
 > **Version:** SAD v3.1
-> **Date:** 2026-03-21
+> **Date:** 2026-03-22
 > **Style:** Modular monolith (Spring Boot)
 > **Status:** Accepted target architecture
 
@@ -14,8 +14,8 @@
 | # | Decision | Rationale |
 |---|----------|-----------|
 | D-01 | Modular monolith, not microservices | Single VPS, low operational cost, clear package boundaries, no network hop between normalization, pricing, and AVCO. |
-| D-02 | Data collection remains explorer-first and is already in place | The current backfill layer already populates `raw_transactions`, `sync_status`, and `backfill_segments`; v3 starts after raw collection, not before it. |
-| D-03 | `rawData.logs[]` are never classification evidence | Stored logs are synthetic from explorer token transfers. Clarification may enrich `status`, `gasUsed`, and `contractAddress`, but not reintroduce synthetic logs as primary evidence. |
+| D-02 | Raw collection stays source-aware, but classification stays source-agnostic | Backfill may use explorer-first, provider-first, or native-repair paths per network, but v3 classification still starts only from canonicalized `raw_transactions`, not from source-specific branches. |
+| D-03 | Synthetic logs are never classification evidence | Explorer-derived synthetic `rawData.logs[]` remain out of bounds. Real provider-persisted receipt logs may exist in canonical raw and may be consumed only through the normal raw view/projection. Clarification may enrich `status`, `gasUsed`, and `contractAddress`, but it never invents logs. |
 | D-04 | `user_sessions` are persisted on the backend | Session state is client-generated (`sessionId`) but stored in MongoDB so wallet sets, selected networks, and backfill status survive browser restarts. |
 | D-05 | Canonical normalization uses one installation-wide tracked wallet universe | `normalized_transactions` must not change meaning per session. Internal-transfer detection uses a global tracked-wallet projection, not per-session payloads. |
 | D-06 | `external_ledger_raw` is the immutable Bybit import layer; `normalized_transactions` is the canonical accounting layer | Raw Bybit rows remain source evidence. Basis replay and read models consume only canonical normalized documents, regardless of source. |
@@ -33,6 +33,11 @@
 | D-18 | Missing ordering metadata is repaired before canonical normalization | `transactionIndex` is a deterministic replay prerequisite. It must be repaired from tx-level evidence, never guessed, and never deferred into generic clarification. |
 | D-19 | Production classification trusts only backfill-available raw evidence | Explorer page summaries, tags, and human-readable descriptions may help audit sessions, but they never override raw legs, contract identity, or receipt-safe clarification evidence in runtime classification. |
 | D-20 | Scam filtering must be composite and precision-tested | Promo/phishing suppression stays upstream, but it must not drop legitimate reward-claim routes merely because a function name contains `claim` or `reward`. |
+| D-21 | Tx-level raw fields and transfer-row payloads must stay separated | Top-level tx fields such as `from`, `to`, `value`, `input`, `methodId`, and `functionName` must describe the transaction row only. Token-transfer row payloads may enrich `explorer.tokenTransfers[]`, but must never overwrite tx-level native value or counterparty identity. |
+| D-22 | Direct native-flow derivation is allowed only from canonical tx-level evidence | Token transfer quantities must never be reinterpreted as native `value`. If a source returns transfer-style payloads, ingestion must canonicalize tx-level fields before persistence and normalization must ignore contaminated top-level `value`. |
+| D-23 | Protocol-specific rule design follows protocol-source semantics when available | When official contracts or protocol docs exist, classifier rules should align to those method semantics rather than explorer UI labels or ad-hoc heuristics. |
+| D-24 | Clarification reasons must describe the real missing receipt-safe evidence | `MISSING_CONTRACT_ADDRESS` is valid only for explicit contract-creation rows; missing `effectiveGasPrice` is not satisfied by legacy `gasPrice` fallback used for fee math. |
+| D-25 | `CLAIM_WITHOUT_MOVEMENT` is a valid per-wallet terminal state | When a tracked wallet signs a known claim route but does not receive the reward transfer in persisted raw evidence, classification must not synthesize `REWARD_CLAIM`. |
 
 ### Assumptions
 
@@ -114,7 +119,7 @@
 - `wallet-universe`
   Owns the installation-wide `tracked_wallets` projection used by canonical normalization.
 - `ingestion.backfill`
-  Owns raw data collection only. Existing responsibility is preserved.
+  Owns source-aware raw data collection only. Existing responsibility is preserved, but provider-first and native-repair strategies may vary by network.
 - `ingestion.normalization`
   Owns raw transaction classification, leg extraction, canonical document construction, and Bybit normalization.
 - `pricing`
@@ -303,10 +308,12 @@ Read paths satisfied by indexes:
 ### 1. Existing raw collection remains the starting point
 
 - Session or wallet registration updates the `tracked_wallets` projection before normalization depends on it.
-- `BackfillJobRunner`, `BackfillNetworkExecutor`, and `RawFetchSegmentProcessor` remain responsible for explorer ingestion.
+- `BackfillJobRunner`, `BackfillNetworkExecutor`, and `RawFetchSegmentProcessor` remain responsible for raw ingestion orchestration.
+- Raw ingestion may be explorer-first or provider-first by network, with native RPC used as bounded repair only where configured.
 - `ScamFilter` stays ingestion-time and can drop obvious poison/spam documents before persistence.
 - `ScamFilter` uses composite promo/phishing signals and regression fixtures so
   legitimate claim distributors survive ingestion.
+- Ingestion must canonicalize tx-level fields before persistence. Transfer-style payload rows may populate `explorer.tokenTransfers[]`, but they must not leak their `value`, `to`, or `input` into the top-level tx shape.
 - Raw collection completes into `raw_transactions` with `normalizationStatus=PENDING`.
 
 ### 2. On-chain normalization
@@ -335,9 +342,11 @@ Read paths satisfied by indexes:
 15. Registry entries with `specialHandler` dispatch into one deterministic handler result over the already extracted legs.
 16. Unsupported special-handler methods become `UNKNOWN -> NEEDS_REVIEW` with explicit missing-data reasons; they do not silently fall through to generic heuristics.
 17. `LegExtractor` uses:
+   - canonical tx-level fields from the raw view / `explorer.tx`
    - `rawData.explorer.tokenTransfers[]`
    - `rawData.explorer.internalTransfers[]`
-   - direct native `rawData.value`
+   - direct native tx value only when it is canonical tx-level evidence
+   - persisted real receipt logs when a method-aware handler explicitly needs them
 18. Synthetic `rawData.logs[]` are ignored.
 19. Heuristics that depend on "own wallet" knowledge use the installation-wide `tracked_wallets` projection, never per-session wallet sets.
 20. Canonical docs land in `normalized_transactions` with:
@@ -355,7 +364,8 @@ Read paths satisfied by indexes:
 3. Clarification may update confidence and gas handling, but it does not promote synthetic logs into classifier evidence.
 4. Clarification is not a generic backlog for low-confidence heuristic classifications such as wrapped-native selector calls, ambiguous inbound-vs-reward cases, or unsupported router / LP-position methods.
 5. Clarification is also out of scope for promo/phishing inbound suppression, bridge-settlement semantics, and zero-value token no-op routing.
-6. After the configured retry budget:
+6. Rows that enter clarification must record explicit missing receipt-safe reasons; an empty `missingDataReasons[]` list is not acceptable for a clarification-eligible row.
+7. After the configured retry budget:
    - improved record -> `PENDING_PRICE`
    - unresolved record -> `NEEDS_REVIEW`
 
@@ -468,3 +478,11 @@ RPC and API rate-limit plan:
   Mitigation: stablecoin and swap-derived fast paths first, plus historical cache.
 - Risk: supported network docs drift from config
   Mitigation: keep architecture and context docs aligned with current `NetworkId` set, including `KATANA` and `PLASMA`.
+- Risk: tx-level raw fields are contaminated by transfer-row payloads and create bogus native legs
+  Mitigation: canonicalize tx-level fields at ingestion, read direct native value only from canonical tx-level evidence, and add regression fixtures for bridge-settlement rows.
+- Risk: provider-first `BSC` ingestion silently drops approve-only rows while marking sync complete
+  Mitigation: persist provider tx hashes before completeness is assumed and add parity tests on audited approve fixtures.
+- Risk: clarification rows stay technically valid but carry misleading `missingDataReasons[]`
+  Mitigation: compute clarification reasons from the raw view, require explicit contract-creation evidence before emitting `MISSING_CONTRACT_ADDRESS`, and keep `effectiveGasPrice` checks separate from legacy gas-price fallback.
+- Risk: per-wallet claim signer rows are silently promoted into reward acquisition
+  Mitigation: keep `CLAIM_WITHOUT_MOVEMENT` explicit and add duplicated-claim fixtures across multiple tracked wallets.

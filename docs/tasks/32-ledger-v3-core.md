@@ -16,6 +16,8 @@ Implementation handoff:
 - [ ] UTA derivative trade pairing uses a sliding `±5 sec` window, not a fixed time bucket.
 - [ ] Internal-transfer heuristics use one installation-wide tracked wallet universe, not per-session wallet sets.
 - [ ] Clarification uses receipt metadata only for status/gas/contract creation fields, does not rely on synthetic `rawData.logs[]`, and is entered only when those receipt-safe fields are actually missing.
+- [ ] Rows that enter `PENDING_CLARIFICATION` record explicit missing receipt-safe reasons; empty `missingDataReasons[]` is not acceptable for clarification-eligible rows.
+- [ ] Clarification reasons reflect the actually missing receipt-safe fields from canonical raw evidence. `MISSING_CONTRACT_ADDRESS` is allowed only when contract-creation intent is explicitly evidenced by the tx-shaped raw payload; missing `effectiveGasPrice` must not be masked by legacy `gasPrice`.
 - [ ] Protocol-registry runtime data is loaded from `backend/src/main/resources/protocol-registry.json` only; `event_topics` are reference-only and ignored by the classifier.
 - [ ] Multi-function registry entries use explicit `specialHandler` dispatch and return one canonical result per raw tx.
 - [ ] Wrapped-native `deposit()` / `withdraw(uint256)` on known wrapper contracts classify as `WRAP` / `UNWRAP` before generic function-name fallback.
@@ -27,12 +29,18 @@ Implementation handoff:
 - [ ] Scam filtering uses composite promo/phishing signals and must not drop known legitimate reward-claim routes that lack promo markers.
 - [ ] Source-specific backfill paths may enrich `raw_transactions`, but production classification remains source-agnostic and reads only canonical raw evidence through the normalization view/projection.
 - [ ] Real provider-emitted backfill logs and tx metadata may be persisted as canonical raw evidence; synthetic or invented `rawData.logs[]` remain forbidden.
+- [ ] Top-level tx fields in `raw_transactions` (`from`, `to`, `value`, `input`, `methodId`, `functionName`) always describe the tx row, never a token-transfer row; transfer-style payloads may enrich `explorer.tokenTransfers[]` only.
+- [ ] Direct native movement is derived only from canonical tx-level evidence; token transfer amounts must never create duplicate native legs.
 - [ ] `BSC` may use provider-first backfill with native RPC fallback for repair/missing fields, but classifier behavior must not branch on `BSC` or on ingestion source.
+- [ ] Provider-first `BSC` backfill persists approve-only and no-movement tx rows from the provider feed; they are not silently dropped during mapping or persistence.
 - [ ] Production classification is derived only from backfill-available raw evidence and receipt-safe clarification evidence; human-readable explorer page summaries never override raw legs.
+- [ ] Protocol-specific classification rules are justified by official protocol contracts/docs or equivalent primary sources when those sources exist; explorer UI labels alone are not sufficient rule authority.
 - [ ] Across `depositV3` classifies to `BRIDGE_OUT` on recognized bridge-entry contracts.
 - [ ] Bridge-settlement selectors such as `fillV3Relay`, `fillRelay`, `redeemWithFee`, `execute302`, and `directFulfill` classify to bridge continuity semantics rather than `REPAY` or `VAULT_*` fallback.
 - [ ] Legitimate `redeemWithFee(...)` bridge settlement and `claimWithRecipient(...)` reward routes must bypass promo/phishing review.
 - [ ] Known claim family `0x3ef3d8ba38ebe18db133cec108f4d14ce00dd9ae` classifies contract-aware: real inbound movement -> `REWARD_CLAIM`; no-movement claim call -> explicit non-economic or review path, never silent reward minting.
+- [ ] The same claim tx may classify differently per tracked wallet when only one tracked wallet actually receives the reward; non-receiving tracked wallets stay explicit `CLAIM_WITHOUT_MOVEMENT` or review, never synthetic `REWARD_CLAIM`.
+- [ ] `CLAIM_WITHOUT_MOVEMENT` is a valid per-wallet terminal outcome for claim-family calls where the tracked wallet signs the claim path but receives no inbound reward movement in persisted raw evidence.
 - [ ] Known lending `withdraw(...)` selectors on lending pools classify to `LENDING_WITHDRAW`, not `LENDING_DEPOSIT`.
 - [ ] Zero-amount token transfers with no economic counterflow never create `BUY` / `SELL` movement; they resolve to contract-scoped admin/no-op handling or explicit review.
 - [ ] Position-manager `multicall` that mints or increases a V3 LP position normalizes to `LP_ENTRY`, not `UNKNOWN`.
@@ -64,14 +72,18 @@ Implementation handoff:
 - Case: Backfill source is provider-first and persists real logs into raw | Scope: In | Expected behaviour: classifier may use those persisted raw logs through the normal view/projection; it does not branch on source or network to change semantics.
 - Case: Recognized bridge-entry `depositV3` call on Across | Scope: In | Expected behaviour: canonical type is `BRIDGE_OUT`, not `VAULT_DEPOSIT`.
 - Case: Bridge settlement tx uses `fillV3Relay` / `fillRelay` / `redeemWithFee` | Scope: In | Expected behaviour: canonical type follows bridge continuity semantics, not `REPAY` or generic vault/lending fallback.
+- Case: Explorer/provider payload is transfer-shaped and top-level `rawData.value` equals a token transfer amount | Scope: In | Expected behaviour: native leg extraction ignores the contaminated value and uses canonical tx-level evidence only.
 - Case: `claimWithRecipient(...)` on an allowlisted reward distributor carries real inbound token movement | Scope: In | Expected behaviour: canonical type is `REWARD_CLAIM` and promo/phishing heuristics do not override it.
 - Case: Known claim contract call has no inbound or outbound economic movement in raw | Scope: In | Expected behaviour: tx does not auto-become `REWARD_CLAIM`; it goes to explicit non-economic or review handling.
+- Case: Clarification-eligible row is missing `txreceipt_status` and `effectiveGasPrice` but is not a contract creation tx | Scope: In | Expected behaviour: `missingDataReasons[]` contains `MISSING_EXECUTION_STATUS` and `MISSING_EFFECTIVE_GAS_PRICE`, and does not contain `MISSING_CONTRACT_ADDRESS`.
+- Case: Claim-family call is present for two tracked wallets but only one wallet receives the reward transfer | Scope: In | Expected behaviour: receiving wallet becomes `REWARD_CLAIM`; non-receiving wallet remains explicit `CLAIM_WITHOUT_MOVEMENT` or review and is not upgraded by clarification.
 - Case: Known lending `withdraw(...)` burns receipt token and returns underlying asset | Scope: In | Expected behaviour: canonical type is `LENDING_WITHDRAW`, not `LENDING_DEPOSIT`.
 - Case: Token transfer leg has zero quantity and no economic counterflow | Scope: In | Expected behaviour: tx does not produce economic movement; it routes to explicit no-op/admin handling or review.
 - Case: Known V3 position-manager `multicall` adds liquidity and mints NFT | Scope: In | Expected behaviour: tx becomes `LP_ENTRY`, not router `UNKNOWN`.
 - Case: Morpho Bundler3 `multicall` mixes protocol actions | Scope: In | Expected behaviour: method-aware contract routing decides final canonical type; broad bundle keywords do not decide it.
 - Case: CL position-manager `modifyLiquidities` changes a concentrated-liquidity position | Scope: In | Expected behaviour: canonical type follows decoded action set / legs, not generic `UNKNOWN`.
 - Case: Legitimate BSC claim route arrives from provider-backed raw with claim selector, inbound token transfer, and claim event | Scope: In | Expected behaviour: tx becomes `REWARD_CLAIM` and survives scam filtering.
+- Case: BSC provider feed returns approve-only tx with receipt/logs but no economic movement | Scope: In | Expected behaviour: tx is persisted in `raw_transactions` and later normalizes to `APPROVE`, not silently dropped from raw coverage.
 - Case: BSC Pancake Infinity `multicall(bytes[] data)` mints a position NFT | Scope: In | Expected behaviour: tx becomes `LP_ENTRY`, not router `UNKNOWN`.
 - Case: BSC Pancake Infinity `modifyLiquidities(bytes payload,uint256 deadline)` changes position state | Scope: In | Expected behaviour: tx resolves through method-aware LP routing, not `REGISTRY_SPECIAL_HANDLER_REQUIRED`.
 - Case: Raw tx is missing `transactionIndex` | Scope: In | Expected behaviour: tx enters bounded raw ordering repair before canonical normalization; ordering is never guessed.
@@ -139,3 +151,7 @@ Implementation handoff:
 - Risk: explorer payload parity drifts by network and blocks confident classification, especially on `BSC` | Mitigation: keep raw-source completeness checks explicit and track incomplete explorer payloads as blockers instead of silently weakening rules.
 - Risk: provider-specific BSC backfill enriches raw but classifier accidentally becomes source-aware | Mitigation: persist provider evidence into canonical raw fields only and keep classifier inputs limited to `raw_transactions` view/projection.
 - Risk: provider API drift or partial payload on `BSC` reintroduces missing tx-level fields or logs | Mitigation: add provider-response validation, native repair fallback, and fixture-based regression tests from audited BSC hashes.
+- Risk: tx-level fields are contaminated by transfer-row payloads and produce bogus native bridge legs | Mitigation: separate tx-row and transfer-row evidence at ingestion, read direct native value only from canonical tx-level fields, and re-normalize representative bridge-settlement fixtures.
+- Risk: legitimate clarification rows become opaque because `missingDataReasons[]` stays empty | Mitigation: require explicit receipt-safe missing reasons at normalization and clarification entry.
+- Risk: clarification reasons drift away from the real missing fields and hide the true blocker | Mitigation: compute reasons from the raw view, require explicit contract-creation evidence before emitting `MISSING_CONTRACT_ADDRESS`, and treat missing `effectiveGasPrice` independently from legacy `gasPrice`.
+- Risk: per-wallet claim signer rows are force-promoted into reward acquisition | Mitigation: keep `CLAIM_WITHOUT_MOVEMENT` explicit when no inbound reward reaches the tracked wallet in persisted raw evidence.

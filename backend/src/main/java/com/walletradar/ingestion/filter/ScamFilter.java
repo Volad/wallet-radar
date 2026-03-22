@@ -411,7 +411,7 @@ public class ScamFilter {
     }
 
     private static boolean isApproveTransaction(Document raw) {
-        String methodId = normalize(readRawOrExplorerTx(raw, "methodId"));
+        String methodId = normalize(resolveMethodId(raw));
         if (ERC20_APPROVE_METHOD_ID.equals(methodId)) {
             return true;
         }
@@ -426,7 +426,7 @@ public class ScamFilter {
     }
 
     private static boolean isKnownLegitimateBridgeOrRewardRoute(Document raw) {
-        String methodId = normalizeMethodId(readRawOrExplorerTx(raw, "methodId"));
+        String methodId = normalizeMethodId(resolveMethodId(raw));
         String functionName = normalize(readRawOrExplorerTx(raw, "functionName"));
         if (methodId != null && KNOWN_LEGIT_BRIDGE_OR_REWARD_SELECTORS.contains(methodId)) {
             return true;
@@ -442,7 +442,7 @@ public class ScamFilter {
         if (tx == null || raw == null) {
             return false;
         }
-        String methodId = normalize(readRawOrExplorerTx(raw, "methodId"));
+        String methodId = normalize(resolveMethodId(raw));
         String functionName = normalize(readRawOrExplorerTx(raw, "functionName"));
         boolean isSwapCall = (methodId != null && KNOWN_SWAP_METHOD_IDS.contains(methodId))
                 || (functionName != null && functionName.contains("swap"));
@@ -675,7 +675,7 @@ public class ScamFilter {
             return false;
         }
 
-        String methodId = normalizeMethodId(readRawOrExplorerTx(raw, "methodId"));
+        String methodId = normalizeMethodId(resolveMethodId(raw));
         if (methodId == null) {
             return false;
         }
@@ -727,7 +727,7 @@ public class ScamFilter {
             return false;
         }
 
-        String methodId = normalizeMethodId(readRawOrExplorerTx(raw, "methodId"));
+        String methodId = normalizeMethodId(resolveMethodId(raw));
         if (methodId == null) {
             return false;
         }
@@ -879,7 +879,7 @@ public class ScamFilter {
             return false;
         }
 
-        String methodId = normalize(readRawOrExplorerTx(raw, "methodId"));
+        String methodId = normalize(resolveMethodId(raw));
         String functionName = normalize(readRawOrExplorerTx(raw, "functionName"));
         return "12514bba".equals(methodId)
                 || "0x12514bba".equals(methodId)
@@ -906,6 +906,18 @@ public class ScamFilter {
         return normalized.startsWith("0x") ? normalized : "0x" + normalized;
     }
 
+    private static String resolveMethodId(Document raw) {
+        String methodId = normalize(rawString(readRawOrExplorerTx(raw, "methodId")));
+        if (methodId != null && !"0x".equals(methodId)) {
+            return methodId;
+        }
+        String input = normalize(rawString(readRawOrExplorerTx(raw, "input")));
+        if (input != null && input.startsWith("0x") && input.length() >= 10) {
+            return input.substring(0, 10);
+        }
+        return methodId;
+    }
+
     private static boolean isSuspiciousTokenText(String value) {
         return PromoSpamTextSupport.isSuspiciousTokenText(value);
     }
@@ -921,7 +933,7 @@ public class ScamFilter {
         if (!hasInboundTokenTransferToWallet(raw, wallet)) {
             return false;
         }
-        String methodId = normalize(readRawOrExplorerTx(raw, "methodId"));
+        String methodId = normalize(resolveMethodId(raw));
         String functionName = normalize(readRawOrExplorerTx(raw, "functionName"));
         boolean multicall = matchesMethodId(methodId, MULTICALL_METHOD_ID)
                 || (functionName != null && functionName.contains("multicall"));

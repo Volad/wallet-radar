@@ -1,7 +1,7 @@
 # WalletRadar — Accounting Policy
 
 > **Version:** v3 target
-> **Last updated:** 2026-03-21
+> **Last updated:** 2026-03-22
 > **Accounting method:** AVCO
 
 ---
@@ -26,6 +26,10 @@ They are used for reconstruction and audit, but never replayed directly for AVCO
 
 Economic meaning is derived from backfill-available raw evidence and canonical
 flows, not from human-readable explorer page summaries.
+
+Tx-level native `value` participates in accounting only when it comes from
+canonical tx-level raw evidence. Token transfer-row amounts must never be
+reinterpreted as direct native movement.
 
 ---
 
@@ -99,6 +103,10 @@ Basis continuity applies when the economic owner did not dispose of the asset:
   Principal basis moves between spot balance and receipt-token/custody state without realization.
 - `VAULT_DEPOSIT -> VAULT_WITHDRAW`
   Basis moves between spot balance and vault-share/custody state without realization.
+- `REWARD_CLAIM`
+  Requires actual inbound reward movement to the tracked wallet. Claim calls with
+  no inbound movement stay explicit non-economic / review rows and must not mint
+  synthetic basis.
 
 For matched Bybit withdraw/deposit:
 
@@ -150,6 +158,7 @@ Clarification may not:
 
 - treat synthetic `rawData.logs[]` as authoritative event evidence
 - silently rewrite economic meaning without traceable evidence
+- leave clarification-eligible rows without explicit missing receipt-safe reasons
 
 Implications:
 
@@ -160,6 +169,10 @@ Implications:
 - bridge entry / settlement selectors are not a clarification problem
 - LP position-manager `multicall` / `modifyLiquidities` routing is not a clarification problem
 - missing `transactionIndex` is a raw-repair problem before normalization, not a clarification retry
+- `MISSING_CONTRACT_ADDRESS` is not a generic clarification fallback; it is valid
+  only for explicit contract-creation rows
+- `CLAIM_WITHOUT_MOVEMENT` is a valid per-wallet terminal outcome when the claim
+  signer does not receive the reward transfer in persisted raw evidence
 
 ---
 
