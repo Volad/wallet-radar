@@ -1,0 +1,740 @@
+{
+  "rawTotal": 3102,
+  "rawPending": 0,
+  "rawComplete": 3102,
+  "bybitRaw": 0,
+  "rawByNetwork": [
+    {
+      "_id": "ARBITRUM",
+      "count": 664
+    },
+    {
+      "_id": "BASE",
+      "count": 578
+    },
+    {
+      "_id": "AVALANCHE",
+      "count": 517
+    },
+    {
+      "_id": "OPTIMISM",
+      "count": 403
+    },
+    {
+      "_id": "UNICHAIN",
+      "count": 400
+    },
+    {
+      "_id": "MANTLE",
+      "count": 140
+    },
+    {
+      "_id": "PLASMA",
+      "count": 86
+    },
+    {
+      "_id": "ETHEREUM",
+      "count": 67
+    },
+    {
+      "_id": "ZKSYNC",
+      "count": 63
+    },
+    {
+      "_id": "KATANA",
+      "count": 61
+    },
+    {
+      "_id": "LINEA",
+      "count": 45
+    },
+    {
+      "_id": "POLYGON",
+      "count": 45
+    },
+    {
+      "_id": "BSC",
+      "count": 33
+    }
+  ],
+  "onChainStatus": [
+    {
+      "_id": "PENDING_PRICE",
+      "count": 1433
+    },
+    {
+      "_id": "CONFIRMED",
+      "count": 1135
+    },
+    {
+      "_id": "PENDING_CLARIFICATION",
+      "count": 300
+    },
+    {
+      "_id": "NEEDS_REVIEW",
+      "count": 234
+    }
+  ],
+  "classifiedBy": [
+    {
+      "_id": "HEURISTIC",
+      "count": 1220
+    },
+    {
+      "_id": "METHOD_ID",
+      "count": 1148
+    },
+    {
+      "_id": "PROTOCOL_REGISTRY",
+      "count": 441
+    },
+    {
+      "_id": "FUNCTION_NAME",
+      "count": 293
+    }
+  ],
+  "topTypes": [
+    {
+      "_id": "EXTERNAL_INBOUND",
+      "count": 598
+    },
+    {
+      "_id": "APPROVE",
+      "count": 493
+    },
+    {
+      "_id": "WRAP",
+      "count": 346
+    },
+    {
+      "_id": "SWAP",
+      "count": 309
+    },
+    {
+      "_id": "UNWRAP",
+      "count": 236
+    },
+    {
+      "_id": "UNKNOWN",
+      "count": 234
+    },
+    {
+      "_id": "EXTERNAL_TRANSFER_OUT",
+      "count": 207
+    },
+    {
+      "_id": "VAULT_WITHDRAW",
+      "count": 126
+    },
+    {
+      "_id": "LP_ENTRY",
+      "count": 102
+    },
+    {
+      "_id": "LENDING_DEPOSIT",
+      "count": 65
+    },
+    {
+      "_id": "LP_EXIT",
+      "count": 61
+    },
+    {
+      "_id": "REWARD_CLAIM",
+      "count": 53
+    },
+    {
+      "_id": "BRIDGE_IN",
+      "count": 50
+    },
+    {
+      "_id": "BRIDGE_OUT",
+      "count": 37
+    },
+    {
+      "_id": "LENDING_WITHDRAW",
+      "count": 34
+    },
+    {
+      "_id": "VAULT_DEPOSIT",
+      "count": 31
+    },
+    {
+      "_id": "INTERNAL_TRANSFER",
+      "count": 22
+    },
+    {
+      "_id": "BORROW",
+      "count": 21
+    },
+    {
+      "_id": "LP_POSITION_STAKE",
+      "count": 18
+    },
+    {
+      "_id": "LP_FEE_CLAIM",
+      "count": 17
+    }
+  ],
+  "reviewReasons": [
+    {
+      "_id": "PROMO_SPAM_PHISHING",
+      "count": 131
+    },
+    {
+      "_id": "ZERO_AMOUNT_TOKEN_TRANSFER",
+      "count": 38
+    },
+    {
+      "_id": "CLASSIFICATION_FAILED",
+      "count": 28
+    },
+    {
+      "_id": "ROUTER_METHOD_OVERLOAD_UNSUPPORTED",
+      "count": 21
+    },
+    {
+      "_id": "CLAIM_WITHOUT_MOVEMENT",
+      "count": 9
+    },
+    {
+      "_id": "FAILED_TRANSACTION",
+      "count": 4
+    },
+    {
+      "_id": "HANDLER_UNSUPPORTED_METHOD",
+      "count": 3
+    }
+  ],
+  "reviewClusters": [
+    {
+      "_id": {
+        "networkId": "POLYGON",
+        "reason": "PROMO_SPAM_PHISHING",
+        "type": "UNKNOWN"
+      },
+      "count": 43,
+      "sample": "0xde31a768fb9e9be163dedd2c805291671d4657fa2c3a13740b7909b1a16d1056"
+    },
+    {
+      "_id": {
+        "networkId": "PLASMA",
+        "reason": "PROMO_SPAM_PHISHING",
+        "type": "UNKNOWN"
+      },
+      "count": 33,
+      "sample": "0xcbee5437edfe64d3abe9f7b6e0b02daf059405d348ae90ee08a81a53b933c0b6"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "reason": "PROMO_SPAM_PHISHING",
+        "type": "UNKNOWN"
+      },
+      "count": 32,
+      "sample": "0x8f9e9d6571d7af48f29466517eb97f55f79c79a636236154eb321b707bbdfadc"
+    },
+    {
+      "_id": {
+        "networkId": "AVALANCHE",
+        "reason": "ZERO_AMOUNT_TOKEN_TRANSFER",
+        "type": "UNKNOWN"
+      },
+      "count": 18,
+      "sample": "0xf64be003679e600a679b42c56add6194ea931ca1054f2b659e0c0789a6852a89"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "PROMO_SPAM_PHISHING",
+        "type": "UNKNOWN"
+      },
+      "count": 14,
+      "sample": "0x5d89b602f1688bffd4c112ec0de5c2fbb44845fc9494e6eddbee7c3b7a106440"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "ZERO_AMOUNT_TOKEN_TRANSFER",
+        "type": "UNKNOWN"
+      },
+      "count": 11,
+      "sample": "0x035780202678618833c2cec4080d29ff9a5d42180df8bbc0da7de7472df8ad4f"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "reason": "ROUTER_METHOD_OVERLOAD_UNSUPPORTED",
+        "type": "UNKNOWN"
+      },
+      "count": 9,
+      "sample": "0xfffcf7210f3c836192d28401f32b99e2bd49f90795c4236d2fd87c00e86976f4"
+    },
+    {
+      "_id": {
+        "networkId": "OPTIMISM",
+        "reason": "CLASSIFICATION_FAILED",
+        "type": "UNKNOWN"
+      },
+      "count": 7,
+      "sample": "0x19e0f3b3c8d325e80000df1f95efbe65536ee060a8623e1d777f16cab5307caa"
+    },
+    {
+      "_id": {
+        "networkId": "UNICHAIN",
+        "reason": "PROMO_SPAM_PHISHING",
+        "type": "UNKNOWN"
+      },
+      "count": 7,
+      "sample": "0x86f5aeffd6c7eaacf759272acf7732cefb3f226fc27df42bd3d5e5727098d5a8"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "reason": "ZERO_AMOUNT_TOKEN_TRANSFER",
+        "type": "UNKNOWN"
+      },
+      "count": 7,
+      "sample": "0xdbc34e0309411a39b7222ea489849080da33e2f595a0f70a5ad2696f23e996cb"
+    },
+    {
+      "_id": {
+        "networkId": "OPTIMISM",
+        "reason": "ROUTER_METHOD_OVERLOAD_UNSUPPORTED",
+        "type": "UNKNOWN"
+      },
+      "count": 6,
+      "sample": "0x927d3f458ada7e5ec67f77129e29edcaf2f69bd2b81490a42fec17c0cc3bd4fa"
+    },
+    {
+      "_id": {
+        "networkId": "PLASMA",
+        "reason": "CLASSIFICATION_FAILED",
+        "type": "UNKNOWN"
+      },
+      "count": 5,
+      "sample": "0x72195d4543d7e466630a6eb9291e9b19c06857ecbca5859d6d0e2713fb132566"
+    },
+    {
+      "_id": {
+        "networkId": "AVALANCHE",
+        "reason": "CLASSIFICATION_FAILED",
+        "type": "UNKNOWN"
+      },
+      "count": 5,
+      "sample": "0x509c134b2795de71a1ee42db38b53af78003308e8c9ebf2b1bfa9ce8d348dcd2"
+    },
+    {
+      "_id": {
+        "networkId": "ZKSYNC",
+        "reason": "ROUTER_METHOD_OVERLOAD_UNSUPPORTED",
+        "type": "UNKNOWN"
+      },
+      "count": 4,
+      "sample": "0xb7a9086def86956c896bb9a53326dacee73be2cf17c5741ea7c4e4e6f21c7afc"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "HANDLER_UNSUPPORTED_METHOD",
+        "type": "UNKNOWN"
+      },
+      "count": 3,
+      "sample": "0xb8d6c7042a0266e7c7a34f66a69e0e5e92bca3d5e69f7983cff9d1adfb7d67b7"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "reason": "CLASSIFICATION_FAILED",
+        "type": "UNKNOWN"
+      },
+      "count": 3,
+      "sample": "0xb6b3ac27afac284fcd0ef13463719c34925dd37cfcfb52dcb2cc894a5271d566"
+    },
+    {
+      "_id": {
+        "networkId": "MANTLE",
+        "reason": "CLASSIFICATION_FAILED",
+        "type": "UNKNOWN"
+      },
+      "count": 3,
+      "sample": "0x02b8f88942ef4bf12132e75b294ef5472d98fddcfd4ea5f9f3277c7492d967f7"
+    },
+    {
+      "_id": {
+        "networkId": "OPTIMISM",
+        "reason": "PROMO_SPAM_PHISHING",
+        "type": "UNKNOWN"
+      },
+      "count": 2,
+      "sample": "0x23f8ed6d7db1af98174a9934718531d1e24f8c8f0e303882924fbb7b035eaa9e"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "ROUTER_METHOD_OVERLOAD_UNSUPPORTED",
+        "type": "UNKNOWN"
+      },
+      "count": 2,
+      "sample": "0x6537cd02cabd5828d2dd584aae02480699914e8bcd790215ce1c09b0fd581091"
+    },
+    {
+      "_id": {
+        "networkId": "KATANA",
+        "reason": "CLAIM_WITHOUT_MOVEMENT",
+        "type": "UNKNOWN"
+      },
+      "count": 2,
+      "sample": "0xb4e87a83eb3bdbdd797d601ff785cfb5ff767acbf736d61f47852d8a282c2240"
+    }
+  ],
+  "clarificationHealth": {
+    "total": 300,
+    "missingTxStatus": 300
+  },
+  "clarificationClusters": [
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC",
+        "reason": "MISSING_EXECUTION_STATUS"
+      },
+      "count": 69,
+      "sample": "0xd09408b311b762fc930bfb6190a9b3967c9b123ec7e6b89e9f29ceda01d46417"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC",
+        "reason": "MISSING_EXECUTION_STATUS"
+      },
+      "count": 36,
+      "sample": "0x468b7eb98bc517c4bca1c92612f60516765911af28ed050af956d1c76707f7b6"
+    },
+    {
+      "_id": {
+        "networkId": "AVALANCHE",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC",
+        "reason": "MISSING_EXECUTION_STATUS"
+      },
+      "count": 24,
+      "sample": "0xdb5ec079c62cf92c79a37c7bef669595e8a7ba5a0c204a9eb97d81fa7d79d19b"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "type": "EXTERNAL_TRANSFER_OUT",
+        "classifiedBy": "HEURISTIC",
+        "reason": "MISSING_EXECUTION_STATUS"
+      },
+      "count": 19,
+      "sample": "0x7097466ec80966d96b5f3d668617688fea6929f8bd41ecf6d9e7bda93d46438b"
+    },
+    {
+      "_id": {
+        "networkId": "MANTLE",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC",
+        "reason": "MISSING_EXECUTION_STATUS"
+      },
+      "count": 18,
+      "sample": "0x2723a876c79ea7c8c162d5f8c83f3824f93192d6bc1c13aa0acbb3c485fbab6d"
+    },
+    {
+      "_id": {
+        "networkId": "UNICHAIN",
+        "type": "BRIDGE_IN",
+        "classifiedBy": "METHOD_ID",
+        "reason": "MISSING_EXECUTION_STATUS"
+      },
+      "count": 17,
+      "sample": "0x565706c06b757b6cbf064cf36c884afcb78d314637ff906d11a6a09366cb2b07"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "type": "BRIDGE_IN",
+        "classifiedBy": "METHOD_ID",
+        "reason": "MISSING_EXECUTION_STATUS"
+      },
+      "count": 11,
+      "sample": "0x6b2516f93861268922f1ca01c9a96bf83c0e005ccc0fcb3b8c94f788cf667885"
+    },
+    {
+      "_id": {
+        "networkId": "AVALANCHE",
+        "type": "EXTERNAL_TRANSFER_OUT",
+        "classifiedBy": "HEURISTIC",
+        "reason": "MISSING_EXECUTION_STATUS"
+      },
+      "count": 10,
+      "sample": "0x07320718ffbd6ba19120af11e8f9d1c4224715bf9e5d91d61177827d958a0b3b"
+    },
+    {
+      "_id": {
+        "networkId": "OPTIMISM",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC",
+        "reason": "MISSING_EXECUTION_STATUS"
+      },
+      "count": 9,
+      "sample": "0x365f2b366beb0a33100e509f6ee5a56bc2d696b0bfb5b93c45c557482b0a6222"
+    },
+    {
+      "_id": {
+        "networkId": "ETHEREUM",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC",
+        "reason": "MISSING_EXECUTION_STATUS"
+      },
+      "count": 9,
+      "sample": "0x9f97a7e6de4d1bcdae4bc1c4c415806c8921aa63ac05a410e7b090adf69bf644"
+    },
+    {
+      "_id": {
+        "networkId": "AVALANCHE",
+        "type": "BRIDGE_IN",
+        "classifiedBy": "METHOD_ID",
+        "reason": "MISSING_EXECUTION_STATUS"
+      },
+      "count": 8,
+      "sample": "0x781778fb9eb9c3c681a92960bdcc2b06fb4b908fe5dc5eb32b6ac7a843f9bbfe"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "type": "VAULT_WITHDRAW",
+        "classifiedBy": "FUNCTION_NAME",
+        "reason": "MISSING_EXECUTION_STATUS"
+      },
+      "count": 8,
+      "sample": "0xe11ab43689786a2b518b8a058593926071a8cac4c99b02077c4ac82d6ac0848e"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "type": "VAULT_DEPOSIT",
+        "classifiedBy": "FUNCTION_NAME",
+        "reason": "MISSING_EXECUTION_STATUS"
+      },
+      "count": 8,
+      "sample": "0x9fab1650749416a4fcf94f02cf16abd99b80f3ec1f1a18851c6f891a21391579"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "type": "EXTERNAL_TRANSFER_OUT",
+        "classifiedBy": "HEURISTIC",
+        "reason": "MISSING_EXECUTION_STATUS"
+      },
+      "count": 7,
+      "sample": "0x85ae8700cc6370faa082a588fbe7fee49a66b4e8dbbf7696cf1bab3a6f35a67d"
+    },
+    {
+      "_id": {
+        "networkId": "UNICHAIN",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC",
+        "reason": "MISSING_EXECUTION_STATUS"
+      },
+      "count": 7,
+      "sample": "0x37ce55b814437dc225b40cd4b9d6dfd45254af2dcb84b2be2dbe08d04b808eb5"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "type": "BRIDGE_IN",
+        "classifiedBy": "METHOD_ID",
+        "reason": "MISSING_EXECUTION_STATUS"
+      },
+      "count": 6,
+      "sample": "0x436255b40b1c69dab81f7e0d34da103f7038639625171671df136436bdd14e30"
+    },
+    {
+      "_id": {
+        "networkId": "PLASMA",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC",
+        "reason": "MISSING_EXECUTION_STATUS"
+      },
+      "count": 6,
+      "sample": "0x46f0ebcf3641cfbca63e544317baec1fad6f01dfd275929633c3ed8793228ca4"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "type": "SWAP",
+        "classifiedBy": "HEURISTIC",
+        "reason": "MISSING_EXECUTION_STATUS"
+      },
+      "count": 6,
+      "sample": "0x4569887f1a59c086b5612072b1bf0e49c4059d7d171253a7ba6b0b947152e47d"
+    },
+    {
+      "_id": {
+        "networkId": "ETHEREUM",
+        "type": "SWAP",
+        "classifiedBy": "HEURISTIC",
+        "reason": "MISSING_EXECUTION_STATUS"
+      },
+      "count": 4,
+      "sample": "0xd876a4c3c55c987b049011dccff1aea652a4f80231030186448c5c9d8bb6e478"
+    },
+    {
+      "_id": {
+        "networkId": "ZKSYNC",
+        "type": "BRIDGE_IN",
+        "classifiedBy": "METHOD_ID",
+        "reason": "MISSING_EXECUTION_STATUS"
+      },
+      "count": 4,
+      "sample": "0x9187f4ca7774e9a9de9f760a22ef43e7a162a8020c15fdb80412b6d38af06c22"
+    }
+  ],
+  "selectorRecovery": {
+    "emptyMethodId": 1230,
+    "recoverableFromInput": 856,
+    "reviewRowsRecoverable": [
+      {
+        "n": 24
+      }
+    ]
+  },
+  "bscNormByStatus": [
+    {
+      "_id": "PENDING_PRICE",
+      "count": 23
+    },
+    {
+      "_id": "CONFIRMED",
+      "count": 8
+    },
+    {
+      "_id": "NEEDS_REVIEW",
+      "count": 2
+    }
+  ],
+  "bscTypes": [
+    {
+      "_id": {
+        "type": "APPROVE",
+        "status": "CONFIRMED",
+        "classifiedBy": "METHOD_ID"
+      },
+      "count": 8,
+      "sample": "0x37908ec5e77552b060fe5dba95c180f71fbe653de38308d033285327ad7a4386"
+    },
+    {
+      "_id": {
+        "type": "EXTERNAL_INBOUND",
+        "status": "PENDING_PRICE",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 7,
+      "sample": "0x149342ddd1d445297b57b89b8e44e6bef79263e668f91c48f6109df61baddd50"
+    },
+    {
+      "_id": {
+        "type": "STAKING_DEPOSIT",
+        "status": "PENDING_PRICE",
+        "classifiedBy": "PROTOCOL_REGISTRY"
+      },
+      "count": 4,
+      "sample": "0x2de9c04e35a6a1942db36af5afab317b1aa6ff08de4ce1c4622a7f23feedd698"
+    },
+    {
+      "_id": {
+        "type": "REWARD_CLAIM",
+        "status": "PENDING_PRICE",
+        "classifiedBy": "PROTOCOL_REGISTRY"
+      },
+      "count": 3,
+      "sample": "0x8d391cbda5bb54a3b1e5b01fa9fe971b439c0f21621ba205f4f441715cce7110"
+    },
+    {
+      "_id": {
+        "type": "LP_ENTRY",
+        "status": "PENDING_PRICE",
+        "classifiedBy": "PROTOCOL_REGISTRY"
+      },
+      "count": 3,
+      "sample": "0x51dc36fc93e51dde5fafd1ab92d000d06104394d3179e3e39f0fcaa54cc53231"
+    },
+    {
+      "_id": {
+        "type": "SWAP",
+        "status": "PENDING_PRICE",
+        "classifiedBy": "PROTOCOL_REGISTRY"
+      },
+      "count": 2,
+      "sample": "0x4d1b48bc6c3937f3379c59ee6eb048f7078eef9258c62a178b3cdb2d632bf42c"
+    },
+    {
+      "_id": {
+        "type": "LP_EXIT",
+        "status": "PENDING_PRICE",
+        "classifiedBy": "PROTOCOL_REGISTRY"
+      },
+      "count": 2,
+      "sample": "0x091e356020745e6555732067a025cee9243dee6848c47dd8eb97259293735e70"
+    },
+    {
+      "_id": {
+        "type": "UNKNOWN",
+        "status": "NEEDS_REVIEW",
+        "classifiedBy": "PROTOCOL_REGISTRY"
+      },
+      "count": 2,
+      "sample": "0xeb4fd02cba10c357ea4f5441c0783c5282c01fcaa1a85c661575471df592c5ef"
+    },
+    {
+      "_id": {
+        "type": "BRIDGE_OUT",
+        "status": "PENDING_PRICE",
+        "classifiedBy": "PROTOCOL_REGISTRY"
+      },
+      "count": 1,
+      "sample": "0x85c08d7cec5db1f282f37560dfdca602555a79dc29c806730d63cf599ff44c44"
+    },
+    {
+      "_id": {
+        "type": "EXTERNAL_TRANSFER_OUT",
+        "status": "PENDING_PRICE",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 1,
+      "sample": "0x80dc91ba8307ff445c5590c45eb761177f1b7c026303c1ced4aebf6a952df147"
+    }
+  ],
+  "bscRawWallets": [
+    {
+      "_id": "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f",
+      "count": 33
+    }
+  ],
+  "generatedAt": "2026-03-22T14:24:17.343957Z",
+  "bscProviderCoverage": {
+    "walletCounts": [
+      {
+        "walletAddress": "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f",
+        "count": 33,
+        "hasNextPage": false
+      },
+      {
+        "walletAddress": "0xf03b52e8686b962e051a6075a06b96cb8a663021",
+        "count": 0,
+        "hasNextPage": false
+      },
+      {
+        "walletAddress": "0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f",
+        "count": 0,
+        "hasNextPage": false
+      }
+    ],
+    "activeWalletRawCount": 33,
+    "activeWalletProviderCount": 33,
+    "activeWalletMissingCount": 0
+  }
+}

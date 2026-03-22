@@ -1,0 +1,2672 @@
+{
+  "reviewByFamily": [
+    {
+      "_id": {
+        "networkId": "PLASMA",
+        "reason": "PROMO_SPAM_PHISHING",
+        "methodId": "0x1939c1ff",
+        "inputPrefix": "deprecated",
+        "functionName": "",
+        "type": "UNKNOWN",
+        "classifiedBy": "HEURISTIC",
+        "tokenTransferCount": 1,
+        "internalTransferCount": 0
+      },
+      "count": 33,
+      "sample": "0xcbee5437edfe64d3abe9f7b6e0b02daf059405d348ae90ee08a81a53b933c0b6"
+    },
+    {
+      "_id": {
+        "networkId": "POLYGON",
+        "reason": "PROMO_SPAM_PHISHING",
+        "methodId": "0x729ad39e",
+        "inputPrefix": "deprecated",
+        "functionName": "airdrop(address[] users)",
+        "type": "UNKNOWN",
+        "classifiedBy": "HEURISTIC",
+        "tokenTransferCount": 1,
+        "internalTransferCount": 0
+      },
+      "count": 25,
+      "sample": "0xde31a768fb9e9be163dedd2c805291671d4657fa2c3a13740b7909b1a16d1056"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "reason": "PROMO_SPAM_PHISHING",
+        "methodId": "729ad39e",
+        "inputPrefix": "0x729ad39e",
+        "functionName": "airdrop(address[] _bots)",
+        "type": "UNKNOWN",
+        "classifiedBy": "HEURISTIC",
+        "tokenTransferCount": 1,
+        "internalTransferCount": 0
+      },
+      "count": 23,
+      "sample": "0x8f9e9d6571d7af48f29466517eb97f55f79c79a636236154eb321b707bbdfadc"
+    },
+    {
+      "_id": {
+        "networkId": "POLYGON",
+        "reason": "PROMO_SPAM_PHISHING",
+        "methodId": "0x9c96eec5",
+        "inputPrefix": "deprecated",
+        "functionName": "Rewards(address _from,address[] _to,uint256 amount)",
+        "type": "UNKNOWN",
+        "classifiedBy": "HEURISTIC",
+        "tokenTransferCount": 1,
+        "internalTransferCount": 0
+      },
+      "count": 12,
+      "sample": "0x1bd09d45e560806526465cfc6abc01897a4bfd10ae01d8f2138f6319cc38a352"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "ZERO_AMOUNT_TOKEN_TRANSFER",
+        "methodId": "0x0cf79e0a",
+        "inputPrefix": "deprecated",
+        "functionName": "",
+        "type": "UNKNOWN",
+        "classifiedBy": "HEURISTIC",
+        "tokenTransferCount": 1,
+        "internalTransferCount": 0
+      },
+      "count": 10,
+      "sample": "0x035780202678618833c2cec4080d29ff9a5d42180df8bbc0da7de7472df8ad4f"
+    },
+    {
+      "_id": {
+        "networkId": "AVALANCHE",
+        "reason": "ZERO_AMOUNT_TOKEN_TRANSFER",
+        "methodId": "0xa9059cbb",
+        "inputPrefix": "deprecated",
+        "functionName": "transfer(address recipient, uint256 amount) returns (bool)",
+        "type": "UNKNOWN",
+        "classifiedBy": "HEURISTIC",
+        "tokenTransferCount": 1,
+        "internalTransferCount": 0
+      },
+      "count": 10,
+      "sample": "0xd66783b739785740fcb8af737dc5f06a02df684adf72fadb4cc4eca07f78959b"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "PROMO_SPAM_PHISHING",
+        "methodId": "0x729ad39e",
+        "inputPrefix": "deprecated",
+        "functionName": "airdrop(address[] recipient)",
+        "type": "UNKNOWN",
+        "classifiedBy": "HEURISTIC",
+        "tokenTransferCount": 1,
+        "internalTransferCount": 0
+      },
+      "count": 9,
+      "sample": "0xa4147f30237827efaee0a3a404366f655d5614287ba55e6a8d8b064ca88557a6"
+    },
+    {
+      "_id": {
+        "networkId": "AVALANCHE",
+        "reason": "ZERO_AMOUNT_TOKEN_TRANSFER",
+        "methodId": "0x12514bba",
+        "inputPrefix": "deprecated",
+        "functionName": "transfer(uint256 amnt)",
+        "type": "UNKNOWN",
+        "classifiedBy": "HEURISTIC",
+        "tokenTransferCount": 1,
+        "internalTransferCount": 0
+      },
+      "count": 8,
+      "sample": "0xf64be003679e600a679b42c56add6194ea931ca1054f2b659e0c0789a6852a89"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "reason": "ROUTER_METHOD_OVERLOAD_UNSUPPORTED",
+        "to": "0xc6a2db661d5a5690172d8eb0a7dea2d3008665a3",
+        "methodId": "0x",
+        "inputPrefix": "0xac9650d8",
+        "type": "UNKNOWN",
+        "classifiedBy": "PROTOCOL_REGISTRY",
+        "tokenTransferCount": 1,
+        "internalTransferCount": 0
+      },
+      "count": 8,
+      "sample": "0xfffcf7210f3c836192d28401f32b99e2bd49f90795c4236d2fd87c00e86976f4"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "reason": "ZERO_AMOUNT_TOKEN_TRANSFER",
+        "methodId": "12514bba",
+        "inputPrefix": "0x12514bba",
+        "functionName": "transfer(uint256 amount)",
+        "type": "UNKNOWN",
+        "classifiedBy": "HEURISTIC",
+        "tokenTransferCount": 1,
+        "internalTransferCount": 0
+      },
+      "count": 7,
+      "sample": "0xdbc34e0309411a39b7222ea489849080da33e2f595a0f70a5ad2696f23e996cb"
+    },
+    {
+      "_id": {
+        "networkId": "OPTIMISM",
+        "reason": "ROUTER_METHOD_OVERLOAD_UNSUPPORTED",
+        "to": "0x416b433906b1b72fa758e166e239c43d68dc6f29",
+        "methodId": "0x",
+        "inputPrefix": "0xac9650d8",
+        "type": "UNKNOWN",
+        "classifiedBy": "PROTOCOL_REGISTRY",
+        "tokenTransferCount": 0,
+        "internalTransferCount": 0
+      },
+      "count": 6,
+      "sample": "0x927d3f458ada7e5ec67f77129e29edcaf2f69bd2b81490a42fec17c0cc3bd4fa"
+    },
+    {
+      "_id": {
+        "networkId": "POLYGON",
+        "reason": "PROMO_SPAM_PHISHING",
+        "methodId": "0xa06c1a33",
+        "inputPrefix": "deprecated",
+        "functionName": "transfer(address[] recipients)",
+        "type": "UNKNOWN",
+        "classifiedBy": "HEURISTIC",
+        "tokenTransferCount": 1,
+        "internalTransferCount": 0
+      },
+      "count": 6,
+      "sample": "0x3c1174060242dfcd9cbf29ee5ae71d07417a9bc4f950b5987ea5bb9337569392"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "reason": "PROMO_SPAM_PHISHING",
+        "methodId": "983bc41b",
+        "inputPrefix": "0x983bc41b",
+        "functionName": "airdrop(address[] user, address _token, uint256 balance)",
+        "type": "UNKNOWN",
+        "classifiedBy": "HEURISTIC",
+        "tokenTransferCount": 1,
+        "internalTransferCount": 0
+      },
+      "count": 6,
+      "sample": "0x9f5f3f48869e8da31eaf53d9f6a55119ab067cbe921618d15dbfc53817c534e5"
+    },
+    {
+      "_id": {
+        "networkId": "PLASMA",
+        "reason": "CLASSIFICATION_FAILED",
+        "methodId": "0x1939c1ff",
+        "inputPrefix": "deprecated",
+        "functionName": "",
+        "type": "UNKNOWN",
+        "classifiedBy": "HEURISTIC",
+        "tokenTransferCount": 2,
+        "internalTransferCount": 0
+      },
+      "count": 5,
+      "sample": "0x72195d4543d7e466630a6eb9291e9b19c06857ecbca5859d6d0e2713fb132566"
+    },
+    {
+      "_id": {
+        "networkId": "ZKSYNC",
+        "reason": "ROUTER_METHOD_OVERLOAD_UNSUPPORTED",
+        "to": "0xdaee41e335322c85ff2c5a6745c98e1351806e98",
+        "methodId": "0x3593564c",
+        "inputPrefix": "0x3593564c",
+        "type": "UNKNOWN",
+        "classifiedBy": "PROTOCOL_REGISTRY",
+        "tokenTransferCount": 5,
+        "internalTransferCount": 0
+      },
+      "count": 4,
+      "sample": "0xb7a9086def86956c896bb9a53326dacee73be2cf17c5741ea7c4e4e6f21c7afc"
+    },
+    {
+      "_id": {
+        "networkId": "AVALANCHE",
+        "reason": "CLASSIFICATION_FAILED",
+        "to": "0xddcbe30a761edd2e19bba930a977475265f36fa1",
+        "methodId": "0xc16ae7a4",
+        "inputPrefix": "0xc16ae7a4",
+        "functionName": "batch((address targetContract, address onBehalfOfAccount, uint256 value, bytes data)[] items) payable",
+        "type": "UNKNOWN",
+        "classifiedBy": "HEURISTIC",
+        "tokenTransferCount": 0,
+        "internalTransferCount": 0
+      },
+      "count": 4,
+      "sample": "0x509c134b2795de71a1ee42db38b53af78003308e8c9ebf2b1bfa9ce8d348dcd2"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "PROMO_SPAM_PHISHING",
+        "methodId": "0xbf3b75a3",
+        "inputPrefix": "deprecated",
+        "functionName": "Airdrop(address ad,address[] receivers,uint256 amount)",
+        "type": "UNKNOWN",
+        "classifiedBy": "HEURISTIC",
+        "tokenTransferCount": 1,
+        "internalTransferCount": 0
+      },
+      "count": 4,
+      "sample": "0x5d89b602f1688bffd4c112ec0de5c2fbb44845fc9494e6eddbee7c3b7a106440"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "HANDLER_UNSUPPORTED_METHOD",
+        "to": "0x1fa4431bc113d308bee1d46b0e98cb805fb48c13",
+        "methodId": "0x374f435d",
+        "inputPrefix": "0x374f435d",
+        "functionName": "multicall(tuple[] bundle)",
+        "type": "UNKNOWN",
+        "classifiedBy": "PROTOCOL_REGISTRY",
+        "tokenTransferCount": 1,
+        "internalTransferCount": 0
+      },
+      "count": 3,
+      "sample": "0xb8d6c7042a0266e7c7a34f66a69e0e5e92bca3d5e69f7983cff9d1adfb7d67b7"
+    },
+    {
+      "_id": {
+        "networkId": "UNICHAIN",
+        "reason": "PROMO_SPAM_PHISHING",
+        "methodId": "0x729ad39e",
+        "inputPrefix": "deprecated",
+        "functionName": "airdrop(address[] _accounts)",
+        "type": "UNKNOWN",
+        "classifiedBy": "HEURISTIC",
+        "tokenTransferCount": 1,
+        "internalTransferCount": 0
+      },
+      "count": 3,
+      "sample": "0x02c5a00c695c29f406506d13ed66eeac62f8a206e941472335f39d5e50e94caa"
+    },
+    {
+      "_id": {
+        "networkId": "UNICHAIN",
+        "reason": "PROMO_SPAM_PHISHING",
+        "methodId": "0x007b6643",
+        "inputPrefix": "deprecated",
+        "functionName": "",
+        "type": "UNKNOWN",
+        "classifiedBy": "HEURISTIC",
+        "tokenTransferCount": 1,
+        "internalTransferCount": 0
+      },
+      "count": 3,
+      "sample": "0xffc92102c13783854fb625efd2937d2b131c018cce6f93e6c7b91572e3c3f923"
+    },
+    {
+      "_id": {
+        "networkId": "ETHEREUM",
+        "reason": "CLAIM_WITHOUT_MOVEMENT",
+        "to": "0x3ef3d8ba38ebe18db133cec108f4d14ce00dd9ae",
+        "methodId": "0x71ee95c0",
+        "inputPrefix": "0x71ee95c0",
+        "functionName": "claim(address[] users, address[] tokens, uint256[] amounts, bytes32[][] proofs)",
+        "type": "UNKNOWN",
+        "classifiedBy": "PROTOCOL_REGISTRY",
+        "tokenTransferCount": 2,
+        "internalTransferCount": 0
+      },
+      "count": 2,
+      "sample": "0x56a0cf989540c29873a8df829464dcee6c7d27cf8ae84bc82570ffce4a3ca401"
+    },
+    {
+      "_id": {
+        "networkId": "BSC",
+        "reason": "CLAIM_WITHOUT_MOVEMENT",
+        "to": "0x5810c486c231803578d0ae7b3de97991784be11f",
+        "methodId": "0x8b681820",
+        "inputPrefix": "0x8b681820",
+        "type": "UNKNOWN",
+        "classifiedBy": "PROTOCOL_REGISTRY",
+        "tokenTransferCount": 2,
+        "internalTransferCount": 0
+      },
+      "count": 2,
+      "sample": "0xeb4fd02cba10c357ea4f5441c0783c5282c01fcaa1a85c661575471df592c5ef"
+    },
+    {
+      "_id": {
+        "networkId": "KATANA",
+        "reason": "CLAIM_WITHOUT_MOVEMENT",
+        "to": "0x3ef3d8ba38ebe18db133cec108f4d14ce00dd9ae",
+        "methodId": "0x71ee95c0",
+        "inputPrefix": "0x71ee95c0",
+        "functionName": "claim(address[] users,address[] tokens,uint256[] amounts,bytes32[][] proofs)",
+        "type": "UNKNOWN",
+        "classifiedBy": "PROTOCOL_REGISTRY",
+        "tokenTransferCount": 0,
+        "internalTransferCount": 0
+      },
+      "count": 2,
+      "sample": "0xb4e87a83eb3bdbdd797d601ff785cfb5ff767acbf736d61f47852d8a282c2240"
+    },
+    {
+      "_id": {
+        "networkId": "UNICHAIN",
+        "reason": "FAILED_TRANSACTION",
+        "to": "0x4529a01c7a0410167c5740c487a8de60232617bf",
+        "methodId": "0xdd46508f",
+        "inputPrefix": "0xdd46508f",
+        "functionName": "modifyLiquidities(bytes unlockData,uint256 deadline)",
+        "type": "UNKNOWN",
+        "classifiedBy": "HEURISTIC",
+        "tokenTransferCount": 0,
+        "internalTransferCount": 0
+      },
+      "count": 2,
+      "sample": "0x84c8a89f9b7578b709015561a23abe76758f1521d44d6819499e226db25e15f2"
+    },
+    {
+      "_id": {
+        "networkId": "MANTLE",
+        "reason": "CLASSIFICATION_FAILED",
+        "to": "0x0045601c3c4c561012c108ea84a81e36eac24296",
+        "methodId": "0x5d4df3bf",
+        "inputPrefix": "0x5d4df3bf",
+        "functionName": "claim(uint256 id,uint256 index,address account,uint256 amount,bytes32[] merkleProof)",
+        "type": "UNKNOWN",
+        "classifiedBy": "HEURISTIC",
+        "tokenTransferCount": 0,
+        "internalTransferCount": 0
+      },
+      "count": 2,
+      "sample": "0x02b8f88942ef4bf12132e75b294ef5472d98fddcfd4ea5f9f3277c7492d967f7"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "reason": "PROMO_SPAM_PHISHING",
+        "methodId": "a06c1a33",
+        "inputPrefix": "0xa06c1a33",
+        "functionName": "transfer(address[] walletAddress)",
+        "type": "UNKNOWN",
+        "classifiedBy": "HEURISTIC",
+        "tokenTransferCount": 1,
+        "internalTransferCount": 0
+      },
+      "count": 2,
+      "sample": "0xd5f46c5a029df3d9ece35919868d8cce57ba546d947dc1e7081913864a64c6af"
+    },
+    {
+      "_id": {
+        "networkId": "OPTIMISM",
+        "reason": "PROMO_SPAM_PHISHING",
+        "methodId": "9c96eec5",
+        "inputPrefix": "0x9c96eec5",
+        "functionName": "Rewards(address _from, address[] _to, uint256 amount)",
+        "type": "UNKNOWN",
+        "classifiedBy": "HEURISTIC",
+        "tokenTransferCount": 1,
+        "internalTransferCount": 0
+      },
+      "count": 2,
+      "sample": "0x23f8ed6d7db1af98174a9934718531d1e24f8c8f0e303882924fbb7b035eaa9e"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "ROUTER_METHOD_OVERLOAD_UNSUPPORTED",
+        "to": "0x5e09acf80c0296740ec5d6f643005a4ef8daa694",
+        "methodId": "0xac9650d8",
+        "inputPrefix": "0xac9650d8",
+        "functionName": "multicall(bytes[] data)",
+        "type": "UNKNOWN",
+        "classifiedBy": "PROTOCOL_REGISTRY",
+        "tokenTransferCount": 1,
+        "internalTransferCount": 1
+      },
+      "count": 2,
+      "sample": "0x6537cd02cabd5828d2dd584aae02480699914e8bcd790215ce1c09b0fd581091"
+    },
+    {
+      "_id": {
+        "networkId": "OPTIMISM",
+        "reason": "CLASSIFICATION_FAILED",
+        "to": "0x41c914ee0c7e1a5edcd0295623e6dc557b5abf3c",
+        "methodId": "0x",
+        "inputPrefix": "0x310bd74b",
+        "type": "UNKNOWN",
+        "classifiedBy": "HEURISTIC",
+        "tokenTransferCount": 0,
+        "internalTransferCount": 0
+      },
+      "count": 2,
+      "sample": "0xa382a8738fb0a8a66074f1d9259475537dd38869bb07664b9278d6a2974124db"
+    },
+    {
+      "_id": {
+        "networkId": "OPTIMISM",
+        "reason": "CLASSIFICATION_FAILED",
+        "to": "0xbc6043a5e50ba0c0213d2f7430a73e4590af97ad",
+        "methodId": "0x",
+        "inputPrefix": "0xb6b55f25",
+        "type": "UNKNOWN",
+        "classifiedBy": "HEURISTIC",
+        "tokenTransferCount": 0,
+        "internalTransferCount": 0
+      },
+      "count": 2,
+      "sample": "0x83978f62a0f05b662a87210263e923ad568d616f5dd8c420d0485e1e21828a61"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "reason": "PROMO_SPAM_PHISHING",
+        "methodId": "4bb9aaf9",
+        "inputPrefix": "0x4bb9aaf9",
+        "functionName": "phantomAirdrop(address[] recipients, uint256 amount)",
+        "type": "UNKNOWN",
+        "classifiedBy": "HEURISTIC",
+        "tokenTransferCount": 1,
+        "internalTransferCount": 0
+      },
+      "count": 1,
+      "sample": "0x24e08ed2ffb5130cff54bab664244a03f9640c12780b51b6cd4b54a0a3f59449"
+    },
+    {
+      "_id": {
+        "networkId": "KATANA",
+        "reason": "CLASSIFICATION_FAILED",
+        "to": "0x2659c6085d26144117d904c46b48b6d180393d27",
+        "methodId": "0xfc6f7865",
+        "inputPrefix": "0xfc6f7865",
+        "functionName": "collect(tuple params)",
+        "type": "UNKNOWN",
+        "classifiedBy": "HEURISTIC",
+        "tokenTransferCount": 0,
+        "internalTransferCount": 0
+      },
+      "count": 1,
+      "sample": "0x4673757b36119b4632f798ad4e0d72fbd170ee0b7be4e4901bd1155ab3881775"
+    },
+    {
+      "_id": {
+        "networkId": "UNICHAIN",
+        "reason": "CLASSIFICATION_FAILED",
+        "to": "0x2c7118c4c88b9841fcf839074c26ae8f035f2921",
+        "methodId": "0x110496e5",
+        "inputPrefix": "0x110496e5",
+        "functionName": "allow(address manager,bool isAllowed_)",
+        "type": "UNKNOWN",
+        "classifiedBy": "HEURISTIC",
+        "tokenTransferCount": 0,
+        "internalTransferCount": 0
+      },
+      "count": 1,
+      "sample": "0x3a00fee6baf13bddd3532d72e093e3e60972c4c1a7eefd1ca05d4f50c4934b5e"
+    },
+    {
+      "_id": {
+        "networkId": "UNICHAIN",
+        "reason": "CLAIM_WITHOUT_MOVEMENT",
+        "to": "0x3ef3d8ba38ebe18db133cec108f4d14ce00dd9ae",
+        "methodId": "0x71ee95c0",
+        "inputPrefix": "0x71ee95c0",
+        "functionName": "claim(address[] users,address[] tokens,uint256[] amounts,bytes32[][] proofs)",
+        "type": "UNKNOWN",
+        "classifiedBy": "PROTOCOL_REGISTRY",
+        "tokenTransferCount": 0,
+        "internalTransferCount": 0
+      },
+      "count": 1,
+      "sample": "0xb10350fc0440e7786a2046d6fa5b140781281e9e4aaba03a9b9bde6fece1932d"
+    },
+    {
+      "_id": {
+        "networkId": "ZKSYNC",
+        "reason": "FAILED_TRANSACTION",
+        "to": "0x2ec2c4c3dc212c990d1bc2b48b0392a3951d926e",
+        "methodId": "0xd7a08473",
+        "inputPrefix": "0xd7a08473",
+        "type": "UNKNOWN",
+        "classifiedBy": "HEURISTIC",
+        "tokenTransferCount": 3,
+        "internalTransferCount": 0
+      },
+      "count": 1,
+      "sample": "0x4cc559bcdd834b87f70b033e4a7c2d661432ba7eba2c7dcf619675660edcd2b0"
+    },
+    {
+      "_id": {
+        "networkId": "OPTIMISM",
+        "reason": "CLASSIFICATION_FAILED",
+        "to": "0x41c914ee0c7e1a5edcd0295623e6dc557b5abf3c",
+        "methodId": "0x",
+        "inputPrefix": "0x7ac09bf7",
+        "type": "UNKNOWN",
+        "classifiedBy": "HEURISTIC",
+        "tokenTransferCount": 0,
+        "internalTransferCount": 0
+      },
+      "count": 1,
+      "sample": "0x9867f9d202764ad9d019b0f89cb4b35e96cbc35bd5ac2fabea1edf5c7412bdf2"
+    },
+    {
+      "_id": {
+        "networkId": "OPTIMISM",
+        "reason": "CLASSIFICATION_FAILED",
+        "to": "0x4e1dcf7ad4e460cfd30791ccc4f9c8a4f820ec67",
+        "methodId": "0x",
+        "inputPrefix": "0x1688f0b9",
+        "type": "UNKNOWN",
+        "classifiedBy": "HEURISTIC",
+        "tokenTransferCount": 0,
+        "internalTransferCount": 0
+      },
+      "count": 1,
+      "sample": "0x19e0f3b3c8d325e80000df1f95efbe65536ee060a8623e1d777f16cab5307caa"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "reason": "CLASSIFICATION_FAILED",
+        "to": "0x24e6e0795b3c7c71d965fcc4f371803d1c1dca1e",
+        "methodId": "0x",
+        "inputPrefix": "0xc04a8a10",
+        "type": "UNKNOWN",
+        "classifiedBy": "HEURISTIC",
+        "tokenTransferCount": 0,
+        "internalTransferCount": 0
+      },
+      "count": 1,
+      "sample": "0xb6b3ac27afac284fcd0ef13463719c34925dd37cfcfb52dcb2cc894a5271d566"
+    },
+    {
+      "_id": {
+        "networkId": "ZKSYNC",
+        "reason": "CLASSIFICATION_FAILED",
+        "to": "0xde167bb9f640a3d6de7b8c16c28920755f5921f2",
+        "methodId": "0x27ad57d5",
+        "inputPrefix": "0x27ad57d5",
+        "type": "UNKNOWN",
+        "classifiedBy": "HEURISTIC",
+        "tokenTransferCount": 4,
+        "internalTransferCount": 0
+      },
+      "count": 1,
+      "sample": "0x9712e051e33e603b22039ef74ed946e78664695aa341a8825a516822aa5f8966"
+    },
+    {
+      "_id": {
+        "networkId": "UNICHAIN",
+        "reason": "ZERO_AMOUNT_TOKEN_TRANSFER",
+        "to": "0x2a1176964f5d7cae5406b627bf6166664fe83c60",
+        "methodId": "0xc16ae7a4",
+        "inputPrefix": "0xc16ae7a4",
+        "functionName": "batch(tuple[] items)",
+        "type": "UNKNOWN",
+        "classifiedBy": "HEURISTIC",
+        "tokenTransferCount": 2,
+        "internalTransferCount": 0
+      },
+      "count": 1,
+      "sample": "0xe3f3c0eaffcf6870c6e7860982b32e04017fe2addfbb9920691acae8664491f5"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "ZERO_AMOUNT_TOKEN_TRANSFER",
+        "methodId": "0xe94a5b23",
+        "inputPrefix": "deprecated",
+        "functionName": "",
+        "type": "UNKNOWN",
+        "classifiedBy": "HEURISTIC",
+        "tokenTransferCount": 1,
+        "internalTransferCount": 0
+      },
+      "count": 1,
+      "sample": "0x16422c25f785d9487bc95f032e9d64b5a966d173055650e6abb8953f3b031fe0"
+    },
+    {
+      "_id": {
+        "networkId": "OPTIMISM",
+        "reason": "CLASSIFICATION_FAILED",
+        "to": "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f",
+        "methodId": "0x",
+        "inputPrefix": "0xe9ae5c53",
+        "type": "UNKNOWN",
+        "classifiedBy": "HEURISTIC",
+        "tokenTransferCount": 0,
+        "internalTransferCount": 0
+      },
+      "count": 1,
+      "sample": "0x1232a2724f8d2c2e0aa436192b31298ef3351b74bf319c347b9ff569830e7a03"
+    },
+    {
+      "_id": {
+        "networkId": "MANTLE",
+        "reason": "CLASSIFICATION_FAILED",
+        "to": "0xed884f0460a634c69dbb7def54858465808aacef",
+        "methodId": "0x5e528956",
+        "inputPrefix": "0x5e528956",
+        "functionName": "convertFlexibleToLockup(uint256 duration,bool autoRenew)",
+        "type": "UNKNOWN",
+        "classifiedBy": "HEURISTIC",
+        "tokenTransferCount": 0,
+        "internalTransferCount": 0
+      },
+      "count": 1,
+      "sample": "0x0c0e3f778debe41826e28a2ad615f15cb71f379396a4b63f5add20b118670ec1"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "reason": "CLASSIFICATION_FAILED",
+        "to": "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f",
+        "methodId": "0x",
+        "inputPrefix": "0x",
+        "type": "UNKNOWN",
+        "classifiedBy": "HEURISTIC",
+        "tokenTransferCount": 0,
+        "internalTransferCount": 0
+      },
+      "count": 1,
+      "sample": "0x4ca384461c9a9b445e8a64827ea15ba120f442e63763f6b25dca86f8a6379723"
+    },
+    {
+      "_id": {
+        "networkId": "AVALANCHE",
+        "reason": "CLAIM_WITHOUT_MOVEMENT",
+        "to": "0x3ef3d8ba38ebe18db133cec108f4d14ce00dd9ae",
+        "methodId": "0x71ee95c0",
+        "inputPrefix": "0x71ee95c0",
+        "functionName": "claim(address[] users, address[] tokens, uint256[] amounts, bytes32[][] proofs) pure returns (bytes sensitiveArguments)",
+        "type": "UNKNOWN",
+        "classifiedBy": "PROTOCOL_REGISTRY",
+        "tokenTransferCount": 0,
+        "internalTransferCount": 0
+      },
+      "count": 1,
+      "sample": "0x02a1ffe41b2026377618326dbe9cc1e6ad14f65706c8b1cbd3954d8fbae77a97"
+    },
+    {
+      "_id": {
+        "networkId": "AVALANCHE",
+        "reason": "CLASSIFICATION_FAILED",
+        "to": "0x7037358a6f2c1d9e5cc9b4a29e7415a7060dadcc",
+        "methodId": "0x7050ccd9",
+        "inputPrefix": "0x7050ccd9",
+        "functionName": "getReward(address _account, bool _claimExtras) returns (bool)",
+        "type": "UNKNOWN",
+        "classifiedBy": "HEURISTIC",
+        "tokenTransferCount": 0,
+        "internalTransferCount": 0
+      },
+      "count": 1,
+      "sample": "0x508ad8c6695151cd84df379876cef4bd5c5370e8bdd660e54141a35ebe1d9d54"
+    },
+    {
+      "_id": {
+        "networkId": "ZKSYNC",
+        "reason": "FAILED_TRANSACTION",
+        "to": "0xb44958ff91b4b67d8d4db010e38ccffe52551ecb",
+        "methodId": "0x73fc4457",
+        "inputPrefix": "0x73fc4457",
+        "type": "UNKNOWN",
+        "classifiedBy": "HEURISTIC",
+        "tokenTransferCount": 3,
+        "internalTransferCount": 0
+      },
+      "count": 1,
+      "sample": "0x862e5488e69542a0b6bf4136358d46cb968d030b55dc867b9edfc7bce2a97b36"
+    },
+    {
+      "_id": {
+        "networkId": "UNICHAIN",
+        "reason": "PROMO_SPAM_PHISHING",
+        "methodId": "0xbf3b75a3",
+        "inputPrefix": "deprecated",
+        "functionName": "",
+        "type": "UNKNOWN",
+        "classifiedBy": "HEURISTIC",
+        "tokenTransferCount": 1,
+        "internalTransferCount": 0
+      },
+      "count": 1,
+      "sample": "0x86f5aeffd6c7eaacf759272acf7732cefb3f226fc27df42bd3d5e5727098d5a8"
+    },
+    {
+      "_id": {
+        "networkId": "KATANA",
+        "reason": "CLASSIFICATION_FAILED",
+        "to": "0x3067bdba0e6628497d527bef511c22da8b32ca3f",
+        "methodId": "0xb94c3609",
+        "inputPrefix": "0xb94c3609",
+        "functionName": "routeSingle(tuple tokenIn,bytes data)",
+        "type": "UNKNOWN",
+        "classifiedBy": "HEURISTIC",
+        "tokenTransferCount": 2,
+        "internalTransferCount": 0
+      },
+      "count": 1,
+      "sample": "0x67f4e9e1767850c427920a1238903ed6fc56e6cadd4d3defcacc7a99e1329499"
+    },
+    {
+      "_id": {
+        "networkId": "ETHEREUM",
+        "reason": "ZERO_AMOUNT_TOKEN_TRANSFER",
+        "methodId": "0xa9059cbb",
+        "inputPrefix": "deprecated",
+        "functionName": "transfer(address _to, uint256 _value)",
+        "type": "UNKNOWN",
+        "classifiedBy": "HEURISTIC",
+        "tokenTransferCount": 1,
+        "internalTransferCount": 0
+      },
+      "count": 1,
+      "sample": "0xa1b0fc5023d4c5c939f1f656aa716b320ff7d5b1a861f92a9b1fddf28b7a0e49"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "reason": "ROUTER_METHOD_OVERLOAD_UNSUPPORTED",
+        "to": "0x46a15b0b27311cedf172ab29e4f4766fbe7f4364",
+        "methodId": "0x",
+        "inputPrefix": "0xac9650d8",
+        "type": "UNKNOWN",
+        "classifiedBy": "PROTOCOL_REGISTRY",
+        "tokenTransferCount": 0,
+        "internalTransferCount": 0
+      },
+      "count": 1,
+      "sample": "0x0a757aeeb58667c545017cd8e5cd60dc994a8945ed810c60ea2aed18688f4f7a"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "CLAIM_WITHOUT_MOVEMENT",
+        "to": "0x3ef3d8ba38ebe18db133cec108f4d14ce00dd9ae",
+        "methodId": "0x9fb67b58",
+        "inputPrefix": "0x9fb67b58",
+        "functionName": "claimWithRecipient(address[] users,address[] tokens,uint256[] amounts,bytes32[][] proofs,address[] recipients,bytes[] datas)",
+        "type": "UNKNOWN",
+        "classifiedBy": "PROTOCOL_REGISTRY",
+        "tokenTransferCount": 0,
+        "internalTransferCount": 0
+      },
+      "count": 1,
+      "sample": "0xf13356fe9449ec9e831395e0074622e88e362a8f317e6b110d093bfaa25d2702"
+    },
+    {
+      "_id": {
+        "networkId": "ETHEREUM",
+        "reason": "CLASSIFICATION_FAILED",
+        "to": "0x4529a01c7a0410167c5740c487a8de60232617bf",
+        "methodId": "0xac9650d8",
+        "inputPrefix": "0xac9650d8",
+        "functionName": "multicall(bytes[] data)",
+        "type": "UNKNOWN",
+        "classifiedBy": "HEURISTIC",
+        "tokenTransferCount": 0,
+        "internalTransferCount": 0
+      },
+      "count": 1,
+      "sample": "0x504695248b7be49796e52895005019fa7ff268297e394078e336ec5a14cbcf54"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "reason": "CLASSIFICATION_FAILED",
+        "to": "0x6a000f20005980200259b80c5102003040001068",
+        "methodId": "0x",
+        "inputPrefix": "0x7f457675",
+        "type": "UNKNOWN",
+        "classifiedBy": "HEURISTIC",
+        "tokenTransferCount": 2,
+        "internalTransferCount": 0
+      },
+      "count": 1,
+      "sample": "0x71edb81701d7c95d92d5ad4ec43574db388c7e5e21974385374883b021e0f5da"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "PROMO_SPAM_PHISHING",
+        "methodId": "0xd43a632f",
+        "inputPrefix": "deprecated",
+        "functionName": "reward(address[] _addressList)",
+        "type": "UNKNOWN",
+        "classifiedBy": "HEURISTIC",
+        "tokenTransferCount": 1,
+        "internalTransferCount": 0
+      },
+      "count": 1,
+      "sample": "0xb84a11f68652006e1501faede236aa1e678c0f7284afcbc1b052b53946b06b8c"
+    }
+  ],
+  "clarificationByFamily": [
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0xa9059cbb",
+        "inputPrefix": "deprecated",
+        "functionName": "transfer(address to, uint256 amount)",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 51,
+      "sample": "0xd09408b311b762fc930bfb6190a9b3967c9b123ec7e6b89e9f29ceda01d46417"
+    },
+    {
+      "_id": {
+        "networkId": "AVALANCHE",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0xa9059cbb",
+        "inputPrefix": "deprecated",
+        "functionName": "transfer(address recipient, uint256 amount) returns (bool)",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 24,
+      "sample": "0xdb5ec079c62cf92c79a37c7bef669595e8a7ba5a0c204a9eb97d81fa7d79d19b"
+    },
+    {
+      "_id": {
+        "networkId": "MANTLE",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0xa9059cbb",
+        "inputPrefix": "deprecated",
+        "functionName": "transfer(address recipient,uint256 amount)",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 16,
+      "sample": "0x2723a876c79ea7c8c162d5f8c83f3824f93192d6bc1c13aa0acbb3c485fbab6d"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0x0cf79e0a",
+        "inputPrefix": "deprecated",
+        "functionName": "",
+        "type": "EXTERNAL_TRANSFER_OUT",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 15,
+      "sample": "0x7097466ec80966d96b5f3d668617688fea6929f8bd41ecf6d9e7bda93d46438b"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "ac9650d8",
+        "inputPrefix": "0xac9650d8",
+        "functionName": "multicall(bytes[] data)",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 11,
+      "sample": "0x4a1dd530fa1a0a8dc0f2bc5d0c3d9ab4aa12d497ca7af1806904d2a511425ff3"
+    },
+    {
+      "_id": {
+        "networkId": "UNICHAIN",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0xdeff4b24",
+        "inputPrefix": "deprecated",
+        "functionName": "fillRelay(tuple relayData,uint256 repaymentChainId,bytes32 repaymentAddress)",
+        "type": "BRIDGE_IN",
+        "classifiedBy": "METHOD_ID"
+      },
+      "count": 8,
+      "sample": "0x565706c06b757b6cbf064cf36c884afcb78d314637ff906d11a6a09366cb2b07"
+    },
+    {
+      "_id": {
+        "networkId": "AVALANCHE",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0xa9059cbb",
+        "inputPrefix": "deprecated",
+        "functionName": "transfer(address recipient, uint256 amount) returns (bool)",
+        "type": "EXTERNAL_TRANSFER_OUT",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 8,
+      "sample": "0x07320718ffbd6ba19120af11e8f9d1c4224715bf9e5d91d61177827d958a0b3b"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "a9059cbb",
+        "inputPrefix": "0xa9059cbb",
+        "functionName": "transfer(address to, uint256 amount)",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 7,
+      "sample": "0xccd8b33ca19b15ada864ad4a1e2f78aedea6c92b948e1aaecc8964c7c46eee93"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "12514bba",
+        "inputPrefix": "0x12514bba",
+        "functionName": "transfer(uint256 amount)",
+        "type": "EXTERNAL_TRANSFER_OUT",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 7,
+      "sample": "0x85ae8700cc6370faa082a588fbe7fee49a66b4e8dbbf7696cf1bab3a6f35a67d"
+    },
+    {
+      "_id": {
+        "networkId": "PLASMA",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0x1939c1ff",
+        "inputPrefix": "deprecated",
+        "functionName": "",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 6,
+      "sample": "0x46f0ebcf3641cfbca63e544317baec1fad6f01dfd275929633c3ed8793228ca4"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0xcfc32570",
+        "inputPrefix": "deprecated",
+        "functionName": "",
+        "type": "BRIDGE_IN",
+        "classifiedBy": "METHOD_ID"
+      },
+      "count": 5,
+      "sample": "0x826189720417ce31b983c2c7bb79f04ba4e330df80a0c016dab2bbee2fd61269"
+    },
+    {
+      "_id": {
+        "networkId": "OPTIMISM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "a9059cbb",
+        "inputPrefix": "0xa9059cbb",
+        "functionName": "transfer(address to, uint256 amount)",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 5,
+      "sample": "0x365f2b366beb0a33100e509f6ee5a56bc2d696b0bfb5b93c45c557482b0a6222"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0xdeff4b24",
+        "inputPrefix": "deprecated",
+        "functionName": "fillRelay(tuple relayData,uint256 repaymentChainId,bytes32 repaymentAddress)",
+        "type": "BRIDGE_IN",
+        "classifiedBy": "METHOD_ID"
+      },
+      "count": 5,
+      "sample": "0x6b2516f93861268922f1ca01c9a96bf83c0e005ccc0fcb3b8c94f788cf667885"
+    },
+    {
+      "_id": {
+        "networkId": "ETHEREUM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0xa9059cbb",
+        "inputPrefix": "deprecated",
+        "functionName": "transfer(address _to, uint256 _value)",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 5,
+      "sample": "0x9f97a7e6de4d1bcdae4bc1c4c415806c8921aa63ac05a410e7b090adf69bf644"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0xa9059cbb",
+        "inputPrefix": "deprecated",
+        "functionName": "transfer(address to, uint256 amount)",
+        "type": "EXTERNAL_TRANSFER_OUT",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 4,
+      "sample": "0xd98ab751b6f5ee4844aa489e8c2957769816db3c95ba62945e473c9b6c5eaf18"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0x88d695b2",
+        "inputPrefix": "deprecated",
+        "functionName": "batchTransfer(address[] recipients_, uint256[] amounts_)",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 4,
+      "sample": "0xef9675f9c9117c32d1ead38bf6019f2b8cb2fe725774d4d79f32c3ae7b1eb2ff"
+    },
+    {
+      "_id": {
+        "networkId": "AVALANCHE",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0x13d79a0b",
+        "inputPrefix": "deprecated",
+        "functionName": "settle(address[] tokens, uint256[] clearingPrices, (uint256 sellTokenIndex, uint256 buyTokenIndex, address receiver, uint256 sellAmount, uint256 buyAmount, uint32 validTo, bytes32 appData, uint256 feeAmount, uint256 flags, uint256 executedAmount, bytes signature)[] trades, (address target, uint256 value, bytes callData)[][3] interactions)",
+        "type": "SWAP",
+        "classifiedBy": "FUNCTION_NAME"
+      },
+      "count": 4,
+      "sample": "0x38499dc60b756f8ba203fd5284d6fa6003aba7e12db2acdb4230de105a47e482"
+    },
+    {
+      "_id": {
+        "networkId": "UNICHAIN",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0xcfc32570",
+        "inputPrefix": "deprecated",
+        "functionName": "",
+        "type": "BRIDGE_IN",
+        "classifiedBy": "METHOD_ID"
+      },
+      "count": 4,
+      "sample": "0x3d34d0f2ff9005294dd9fff30117fe47fa33c93f1e5820570c8c7ce9a66724ff"
+    },
+    {
+      "_id": {
+        "networkId": "AVALANCHE",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0xe2de2a03",
+        "inputPrefix": "deprecated",
+        "functionName": "redeemWithFee(bytes cctpMsg, bytes cctpSigs, bytes encodedVm, (uint8 payloadType, bytes32 destAddr, uint64 gasDrop, uint64 redeemFee, uint64 burnAmount, bytes32 burnToken, bytes32 customPayload) bridgeParams) payable",
+        "type": "BRIDGE_IN",
+        "classifiedBy": "METHOD_ID"
+      },
+      "count": 4,
+      "sample": "0xbf62327840d7624bc1ae12b9213cf66593b671d238da8e9feea57d1b3833ed38"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0xc30d8910",
+        "inputPrefix": "deprecated",
+        "functionName": "executeDeposit(bytes32 key,tuple oracleParams)",
+        "type": "VAULT_DEPOSIT",
+        "classifiedBy": "FUNCTION_NAME"
+      },
+      "count": 4,
+      "sample": "0x3ad60ac2e1c46805cebb2d0f8a5a1002364f701ebb88fdc7378a2b5bce06beab"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0xac9650d8",
+        "inputPrefix": "deprecated",
+        "functionName": "multicall(bytes[] data)",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 3,
+      "sample": "0x3321a28e0e8a2ff77d0d43abf9d0b449ed902c26218e97a7dda81f6465a7ed67"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0xe5c1bf6e",
+        "inputPrefix": "deprecated",
+        "functionName": "redeem(bytes cctpMsg,bytes cctpSigs)",
+        "type": "VAULT_WITHDRAW",
+        "classifiedBy": "FUNCTION_NAME"
+      },
+      "count": 3,
+      "sample": "0xe11ab43689786a2b518b8a058593926071a8cac4c99b02077c4ac82d6ac0848e"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0x2e1a7d4d",
+        "inputPrefix": "deprecated",
+        "functionName": "withdraw(uint256 amount)",
+        "type": "VAULT_WITHDRAW",
+        "classifiedBy": "FUNCTION_NAME"
+      },
+      "count": 3,
+      "sample": "0x32d5adf0e402f5f2811b8fd252282a05bc38fa3f409c849a1a45c14d16871005"
+    },
+    {
+      "_id": {
+        "networkId": "UNICHAIN",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0xe2de2a03",
+        "inputPrefix": "deprecated",
+        "functionName": "redeemWithFee(bytes cctpMsg,bytes cctpSigs,bytes encodedVm,tuple bridgeParams)",
+        "type": "BRIDGE_IN",
+        "classifiedBy": "METHOD_ID"
+      },
+      "count": 3,
+      "sample": "0x16a78ce7e8964eb95ef52d24ea618846e478a777b6df9d521884a30dc0b6ec1a"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "9ec68f0f",
+        "inputPrefix": "0x9ec68f0f",
+        "functionName": "multiSend(address _token, address[] _accounts, uint256[] _amounts)",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 3,
+      "sample": "0x97c1b7a4058c8ba98b264ad5047f77cb085e3721a8dc83b7dc3079163cb84864"
+    },
+    {
+      "_id": {
+        "networkId": "ZKSYNC",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "",
+        "inputPrefix": "0xdeff4b24",
+        "functionName": "",
+        "type": "BRIDGE_IN",
+        "classifiedBy": "METHOD_ID"
+      },
+      "count": 3,
+      "sample": "0x844bd3a8b3626ec3ed4c137f9ada5a61f8ab75220dbb5b28263510ffa5775a66"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "a06c1a33",
+        "inputPrefix": "0xa06c1a33",
+        "functionName": "transfer(address[] walletAddress)",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 2,
+      "sample": "0xf95fe439f656c65af3c7b6cffe2efba293b1982eb876ef2780b74394241222e8"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "",
+        "inputPrefix": "0xeec4378e",
+        "functionName": "",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 2,
+      "sample": "0x468b7eb98bc517c4bca1c92612f60516765911af28ed050af956d1c76707f7b6"
+    },
+    {
+      "_id": {
+        "networkId": "MANTLE",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0xcfc32570",
+        "inputPrefix": "deprecated",
+        "functionName": "",
+        "type": "BRIDGE_IN",
+        "classifiedBy": "METHOD_ID"
+      },
+      "count": 2,
+      "sample": "0xb71f4ec11c93dccd19e0215f473f9b3f6a61716f05e877a663730d37ceaae74c"
+    },
+    {
+      "_id": {
+        "networkId": "PLASMA",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0xdeff4b24",
+        "inputPrefix": "deprecated",
+        "functionName": "fillRelay(tuple relayData,uint256 repaymentChainId,bytes32 repaymentAddress)",
+        "type": "BRIDGE_IN",
+        "classifiedBy": "METHOD_ID"
+      },
+      "count": 2,
+      "sample": "0x64360ebfc17e0f2ec5750da79f7fef06ac79e207b9670cfec442e54a283fb837"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0xac9650d8",
+        "inputPrefix": "deprecated",
+        "functionName": "multicall(bytes[] data)",
+        "type": "SWAP",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 2,
+      "sample": "0x9fc947799f66aac8a55b669011afbbbe47e7c6786aceaf0df1cb25e588fb8823"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "e2de2a03",
+        "inputPrefix": "0xe2de2a03",
+        "functionName": "redeemWithFee(bytes cctpMsg, bytes cctpSigs, bytes encodedVm, (uint8,bytes32,uint64,uint64,uint64,bytes32,bytes32) bridgeParams)",
+        "type": "BRIDGE_IN",
+        "classifiedBy": "METHOD_ID"
+      },
+      "count": 2,
+      "sample": "0xd2cdbd7a1ade37a8032b713e9844351d2f58fbd872851a0e88203b8fbb695c5f"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0x30be5567",
+        "inputPrefix": "deprecated",
+        "functionName": "multicall(tuple[] calls,address refundTo,address nftRecipient)",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 2,
+      "sample": "0xfeca6855f3d5b7d25687e4de4d5f82742b827c8dcdb8eaa253cc81ef61350812"
+    },
+    {
+      "_id": {
+        "networkId": "POLYGON",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0xa9059cbb",
+        "inputPrefix": "deprecated",
+        "functionName": "transfer(address dst, uint256 rawAmount)",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 2,
+      "sample": "0x94bd752f0213ad5400835a9f1895c0b7c32ea855de1897ecd5919c25312ed20e"
+    },
+    {
+      "_id": {
+        "networkId": "AVALANCHE",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0xcfc32570",
+        "inputPrefix": "deprecated",
+        "functionName": "execute302((address receiver, (uint32 srcEid, bytes32 sender, uint64 nonce) origin, bytes32 guid, bytes message, bytes extraData, uint256 gasLimit) _executionParams) payable",
+        "type": "BRIDGE_IN",
+        "classifiedBy": "METHOD_ID"
+      },
+      "count": 2,
+      "sample": "0x9ff18d8d43168b6e9bcf850dd8d21f1140f08de91ba2c485aad28b2e7dcd261d"
+    },
+    {
+      "_id": {
+        "networkId": "AVALANCHE",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0x12514bba",
+        "inputPrefix": "deprecated",
+        "functionName": "transfer(uint256) payable",
+        "type": "EXTERNAL_TRANSFER_OUT",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 2,
+      "sample": "0x321efb893a994776c0f4cbfc764e6bb93935fc003884c9fe629a31a9ec51fd77"
+    },
+    {
+      "_id": {
+        "networkId": "UNICHAIN",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0xa9059cbb",
+        "inputPrefix": "deprecated",
+        "functionName": "transfer(address dst,uint256 wad)",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 2,
+      "sample": "0x37ce55b814437dc225b40cd4b9d6dfd45254af2dcb84b2be2dbe08d04b808eb5"
+    },
+    {
+      "_id": {
+        "networkId": "OPTIMISM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "88d695b2",
+        "inputPrefix": "0x88d695b2",
+        "functionName": "batchTransfer(address[] _tos, uint256[] _values)",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 2,
+      "sample": "0xfb0dce9034b71dac6ab8168a506095fbaa731bc5d6fa3e9f32bd65ed2dbef386"
+    },
+    {
+      "_id": {
+        "networkId": "ETHEREUM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0x00000033",
+        "inputPrefix": "deprecated",
+        "functionName": "matchTokenOrderByAdmin_k44j(uint256[] inputs)",
+        "type": "SWAP",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 2,
+      "sample": "0x7b42c8bf8d8809acc383d20ca40a2be494c1662c1ea7bfaa129d5cdf4b5ebc6a"
+    },
+    {
+      "_id": {
+        "networkId": "AVALANCHE",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0x6befa3a5",
+        "inputPrefix": "deprecated",
+        "functionName": "directFulfill(address tokenIn, uint256 amountIn, address mayanProtocol, bytes mayanData, (uint256 value, uint256 deadline, uint8 v, bytes32 r, bytes32 s) permitParams) payable",
+        "type": "BRIDGE_IN",
+        "classifiedBy": "METHOD_ID"
+      },
+      "count": 2,
+      "sample": "0x781778fb9eb9c3c681a92960bdcc2b06fb4b908fe5dc5eb32b6ac7a843f9bbfe"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "cfc32570",
+        "inputPrefix": "0xcfc32570",
+        "functionName": "execute302((address,(uint32,bytes32,uint64),bytes32,bytes,bytes,uint256) _executionParams)",
+        "type": "BRIDGE_IN",
+        "classifiedBy": "METHOD_ID"
+      },
+      "count": 2,
+      "sample": "0xc17de389344df781d16fb31145e3096f17777acc62fb67ca96510a41e9ae278a"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0xd0e30db0",
+        "inputPrefix": "deprecated",
+        "functionName": "deposit()",
+        "type": "VAULT_DEPOSIT",
+        "classifiedBy": "FUNCTION_NAME"
+      },
+      "count": 2,
+      "sample": "0xa467cc0897b4f063b5e5914223e122ed6906ad6b3243261517cfd72504d695be"
+    },
+    {
+      "_id": {
+        "networkId": "UNICHAIN",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0xeec4378e",
+        "inputPrefix": "deprecated",
+        "functionName": "",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 2,
+      "sample": "0x51e998e50acee79fd2f9e65986e7febad78c4d537095c888a13e6dfe4a2fa454"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0x9fb67b58",
+        "inputPrefix": "deprecated",
+        "functionName": "claimWithRecipient(address[] users,address[] tokens,uint256[] amounts,bytes32[][] proofs,address[] recipients,bytes[] datas)",
+        "type": "REWARD_CLAIM",
+        "classifiedBy": "PROTOCOL_REGISTRY"
+      },
+      "count": 1,
+      "sample": "0xf13356fe9449ec9e831395e0074622e88e362a8f317e6b110d093bfaa25d2702"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "",
+        "inputPrefix": "0x9f5bede5",
+        "functionName": "",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 1,
+      "sample": "0xeb4376c5c9893f7d7183e9ea3b5b62054a6db422deb62ff9a102e94fce467a9f"
+    },
+    {
+      "_id": {
+        "networkId": "OPTIMISM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "84d61c97",
+        "inputPrefix": "0x84d61c97",
+        "functionName": "receiveRequestV2Signed(bytes _callData, address _receiveSide, bytes signature)",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 1,
+      "sample": "0x8048a7c7a3609ead776327c63b46cd7b9c9c3f7d61af78493de6242fc2758ce2"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0x13d79a0b",
+        "inputPrefix": "deprecated",
+        "functionName": "",
+        "type": "SWAP",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 1,
+      "sample": "0x7427185e7fd484f7ef38d307af8e0bd5a232426056e0d485cf9ccd96bccb9f6e"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0x8a4068dd",
+        "inputPrefix": "deprecated",
+        "functionName": "transfer()",
+        "type": "SWAP",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 1,
+      "sample": "0x899a9810bb796c8327c7eb2bca8c5e489ffcdde073da9d768e88008f20a6b063"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0xa6fb97d1",
+        "inputPrefix": "deprecated",
+        "functionName": "withdraw(bytes32 root,address recipient,uint256 amount)",
+        "type": "VAULT_WITHDRAW",
+        "classifiedBy": "FUNCTION_NAME"
+      },
+      "count": 1,
+      "sample": "0xb47d87fa3d06d78033ca63633c7c5da976b635ad44ff7f19bc854484ee28c305"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "reason": "AMBIGUOUS_INBOUND_VS_REWARD",
+        "methodId": "729ad39e",
+        "inputPrefix": "0x729ad39e",
+        "functionName": "airdrop(address[] _bots)",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 1,
+      "sample": "0xe93b81f8b417e1274094313ecd7e88ecc750528a39128b935fecb48a4254ebc0"
+    },
+    {
+      "_id": {
+        "networkId": "ETHEREUM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0x8ec7d290",
+        "inputPrefix": "deprecated",
+        "functionName": "",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 1,
+      "sample": "0x99ecc6af49c532f05842c7958cc605f5202b870695cff1a7cbcce33d960be31c"
+    },
+    {
+      "_id": {
+        "networkId": "ETHEREUM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0xb552424a",
+        "inputPrefix": "deprecated",
+        "functionName": "",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 1,
+      "sample": "0x8fe8035533c19f2e47d528bfafae0954cf82c7822113c0272cbb791ca3e1f267"
+    },
+    {
+      "_id": {
+        "networkId": "ETHEREUM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0xded1f1a5",
+        "inputPrefix": "deprecated",
+        "functionName": "",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 1,
+      "sample": "0x5a22f68e256a4a62edbbe929908e07a87079da6c64f463138c505aad4588ee49"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0x4561136e",
+        "inputPrefix": "deprecated",
+        "functionName": "callDiamondWithPermit2Witness(bytes _diamondCalldata,address _signer,tuple _permit,bytes _signature)",
+        "type": "SWAP",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 1,
+      "sample": "0x4569887f1a59c086b5612072b1bf0e49c4059d7d171253a7ba6b0b947152e47d"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0x7c39d130",
+        "inputPrefix": "deprecated",
+        "functionName": "process(bytes _metadata,bytes _message)",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 1,
+      "sample": "0x7f6ccd24bac2737f9a41367c3e5b3712e6bfa9b8c40671558e924e1e63d75e68"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "e34a5d4d",
+        "inputPrefix": "0xe34a5d4d",
+        "functionName": "batchTransfer(address token, address from, address[] recipients, uint256[] amounts)",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 1,
+      "sample": "0x0222856b2adafaee60a7958d2e3873dfc06a5c5b9be7451a99dd4148f58ea7a9"
+    },
+    {
+      "_id": {
+        "networkId": "MANTLE",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0x33739082",
+        "inputPrefix": "deprecated",
+        "functionName": "permit2TransferAndMulticall(address user,tuple permit,tuple[] calls,address refundTo,address nftRecipient,bytes permitSignature)",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 1,
+      "sample": "0xc19885674bb62640f9b17e8a0ce1597102e974f2bc85155e79f32500dc4c2329"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0xfc6f7865",
+        "inputPrefix": "deprecated",
+        "functionName": "collect(tuple params)",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 1,
+      "sample": "0x10fa47883811cf54c6bdaf6f019d88b5563c89239357f355cf9b945821fb9680"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0x41d764f2",
+        "inputPrefix": "deprecated",
+        "functionName": "",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 1,
+      "sample": "0xc5534ce9ac22c1731e181b518c06711bfffa5f18f3734223c28d929f85db6c56"
+    },
+    {
+      "_id": {
+        "networkId": "ETHEREUM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0xbcf88f1e",
+        "inputPrefix": "deprecated",
+        "functionName": "",
+        "type": "SWAP",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 1,
+      "sample": "0xd876a4c3c55c987b049011dccff1aea652a4f80231030186448c5c9d8bb6e478"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "2e378115",
+        "inputPrefix": "0x2e378115",
+        "functionName": "fillV3Relay((address,address,address,address,address,uint256,uint256,uint256,uint32,uint32,uint32,bytes) relayData, uint256 repaymentChainId)",
+        "type": "BRIDGE_IN",
+        "classifiedBy": "METHOD_ID"
+      },
+      "count": 1,
+      "sample": "0xc6d787c0d3ee17ee968d841a3661f5d622203893643e078df69247832833003d"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "",
+        "inputPrefix": "0x72e291e2",
+        "functionName": "",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 1,
+      "sample": "0x738533600ba945b6e08d2619aede069b8adce74c86a22df8a791f1189992abfc"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "",
+        "inputPrefix": "0x2630aaad",
+        "functionName": "",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 1,
+      "sample": "0xa8178282251d2b1746a7f6412a4407de8854829e1b199e5f786e794ac8e91ef9"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "1239ec8c",
+        "inputPrefix": "0x1239ec8c",
+        "functionName": "batchTransfer(address token, address[] recipients, uint256[] amounts)",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 1,
+      "sample": "0x1c6ed7d5796c3b7612e6c74ac09e28f9e35c48ed628ab03238cf8b11a628b021"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0x5ee8ec8f",
+        "inputPrefix": "deprecated",
+        "functionName": "executeGlvDeposit(bytes32 key,tuple oracleParams)",
+        "type": "VAULT_DEPOSIT",
+        "classifiedBy": "FUNCTION_NAME"
+      },
+      "count": 1,
+      "sample": "0x9fab1650749416a4fcf94f02cf16abd99b80f3ec1f1a18851c6f891a21391579"
+    },
+    {
+      "_id": {
+        "networkId": "ZKSYNC",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "",
+        "inputPrefix": "0x30be5567",
+        "functionName": "",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 1,
+      "sample": "0x6cbda0a45b4e882a512d1cf64e46a6ec9657d8666565140c20847140667cb043"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0x2e378115",
+        "inputPrefix": "deprecated",
+        "functionName": "fillV3Relay(tuple relayData,uint256 repaymentChainId)",
+        "type": "BRIDGE_IN",
+        "classifiedBy": "METHOD_ID"
+      },
+      "count": 1,
+      "sample": "0xfe62cf58da6ce4fe8a7d658607915114cade9d5414251e1998659a1930685e2f"
+    },
+    {
+      "_id": {
+        "networkId": "UNICHAIN",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0x9f1b6858",
+        "inputPrefix": "deprecated",
+        "functionName": "sendBatchTokens(address token,uint256 tokenAmount,address[] targets)",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 1,
+      "sample": "0x2c2ea17b2b0552a67f29c006effed3ca555059394d079438046bcb2fed5ed27a"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0x13d79a0b",
+        "inputPrefix": "deprecated",
+        "functionName": "",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 1,
+      "sample": "0xd7abb9c0e819f445c2b806e1eddf9e69560b9c423765162b196a3c5fa8a678e0"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0xc96fea9f",
+        "inputPrefix": "deprecated",
+        "functionName": "executeWithdrawal(bytes32 key,tuple oracleParams)",
+        "type": "VAULT_WITHDRAW",
+        "classifiedBy": "FUNCTION_NAME"
+      },
+      "count": 1,
+      "sample": "0x977474f616af6a4227237ec7680f8c2023b7c626652ffda2349ba71f76cfb00e"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "88d695b2",
+        "inputPrefix": "0x88d695b2",
+        "functionName": "batchTransfer(address[] addresses, uint256[] amounts)",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 1,
+      "sample": "0xee5edacdec68aaaaf1620adc71de1e1ceae648dbef1c1b69a8650255e3117064"
+    },
+    {
+      "_id": {
+        "networkId": "MANTLE",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0xe4a974cc",
+        "inputPrefix": "deprecated",
+        "functionName": "expressExecuteWithToken(bytes32 commandId,string sourceChain,string sourceAddress,bytes payload,string symbol,uint256 amount)",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 1,
+      "sample": "0x6ddaf1b88fe5ec0a9d687803f22b033277edfb014d5d7f106bad5a36f9afefdc"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "57ecfd28",
+        "inputPrefix": "0x57ecfd28",
+        "functionName": "receiveMessage(bytes message, bytes attestation)",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 1,
+      "sample": "0xff8d1e86e9a9ead0b323794e6da5ecc2eeb8a8fd21a036f4d332073935d413df"
+    },
+    {
+      "_id": {
+        "networkId": "ETHEREUM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0x3b1102c3",
+        "inputPrefix": "deprecated",
+        "functionName": "",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 1,
+      "sample": "0xd012cc1be63c0cb2f057efa37f9aacaaf65d1685e9d8346f96c58d85df739978"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0xe4a974cc",
+        "inputPrefix": "deprecated",
+        "functionName": "expressExecuteWithToken(bytes32 commandId,string sourceChain,string sourceAddress,bytes payload,string symbol,uint256 amount)",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 1,
+      "sample": "0x7483c0fb94c87b3adef2cc9c713fde1262e4ab70ec2db01445ab56981c7879a6"
+    },
+    {
+      "_id": {
+        "networkId": "UNICHAIN",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0x6befa3a5",
+        "inputPrefix": "deprecated",
+        "functionName": "",
+        "type": "BRIDGE_IN",
+        "classifiedBy": "METHOD_ID"
+      },
+      "count": 1,
+      "sample": "0x60d456639f2061b4943c1e8f1002fff709a69da322a6c1493c5c94737ecbd08d"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0x33739082",
+        "inputPrefix": "deprecated",
+        "functionName": "permit2TransferAndMulticall(address user,tuple permit,tuple[] calls,address refundTo,address nftRecipient,bytes permitSignature)",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 1,
+      "sample": "0x2a1580f08e58ff279253aa8ae416eb8c3f884998c9e60ba44bd5f4fd76187f1c"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0x4fdb8d47",
+        "inputPrefix": "deprecated",
+        "functionName": "",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 1,
+      "sample": "0x9a2ed17307b8fe69ef297d90c4ee5794381e050746e727fabf6d58b7bd120a47"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "deff4b24",
+        "inputPrefix": "0xdeff4b24",
+        "functionName": "fillRelay((bytes32,bytes32,bytes32,bytes32,bytes32,uint256,uint256,uint256,uint256,uint32,uint32,bytes) relayData, uint256 repaymentChainId, bytes32 repaymentAddress)",
+        "type": "BRIDGE_IN",
+        "classifiedBy": "METHOD_ID"
+      },
+      "count": 1,
+      "sample": "0x436255b40b1c69dab81f7e0d34da103f7038639625171671df136436bdd14e30"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0x3593564c",
+        "inputPrefix": "deprecated",
+        "functionName": "execute(bytes commands,bytes[] inputs,uint256 deadline)",
+        "type": "SWAP",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 1,
+      "sample": "0x18028b7deddad1fd56be483dc8d90cddee8488e3bef1131ce31bcd4f20ace866"
+    },
+    {
+      "_id": {
+        "networkId": "UNICHAIN",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0x2e378115",
+        "inputPrefix": "deprecated",
+        "functionName": "fillV3Relay(tuple relayData,uint256 repaymentChainId)",
+        "type": "BRIDGE_IN",
+        "classifiedBy": "METHOD_ID"
+      },
+      "count": 1,
+      "sample": "0x27978f7bf88cd7a4825b991ac6e461fa96be75b280add44236beb2e060c61ba3"
+    },
+    {
+      "_id": {
+        "networkId": "UNICHAIN",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0x1c5cf072",
+        "inputPrefix": "deprecated",
+        "functionName": "",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 1,
+      "sample": "0x438761d2f071a6fcc146635a080c19a2a73e8f49db361a6a5af8b8796d7c13cf"
+    },
+    {
+      "_id": {
+        "networkId": "OPTIMISM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "66b9ca7b",
+        "inputPrefix": "0x66b9ca7b",
+        "functionName": "permitMulticall(address user, ((address,uint256)[],uint256,uint256) permit, address[] targets, bytes[] datas, uint256[] values, address refundTo, bytes permitSignature)",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 1,
+      "sample": "0xbdd28dacd0c62925efbb32bc388cec5972af270dd2ea77637ed1ff8390cba70c"
+    },
+    {
+      "_id": {
+        "networkId": "ZKSYNC",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "",
+        "inputPrefix": "0x535b355c",
+        "functionName": "",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 1,
+      "sample": "0xaddb9f05c6f75ff1db26a0ab70d6513496ad357c17dc927c385253303613af8b"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0x7b939232",
+        "inputPrefix": "deprecated",
+        "functionName": "depositV3(address depositor,address recipient,address inputToken,address outputToken,uint256 inputAmount,uint256 outputAmount,uint256 destinationChainId,address exclusiveRelayer,uint32 quoteTimestamp,uint32 fillDeadline,uint32 exclusivityDeadline,bytes message)",
+        "type": "VAULT_DEPOSIT",
+        "classifiedBy": "FUNCTION_NAME"
+      },
+      "count": 1,
+      "sample": "0x8fc7da0a6aba524098b75fb9c1bfa651b4b50a90850832393c1313a745ac1e13"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "",
+        "inputPrefix": "0x1786a230",
+        "functionName": "",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 1,
+      "sample": "0x04d7b5a5bceef204f21b535e9f453b57de261ff00cb5de8bd61b21a30bb6f5fb"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0x57ecfd28",
+        "inputPrefix": "deprecated",
+        "functionName": "receiveMessage(bytes message,bytes attestation)",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 1,
+      "sample": "0xb97610de9f29434bcf6319699b5e99b26da3e0305d3731a80c3d0287bd5a6f2f"
+    },
+    {
+      "_id": {
+        "networkId": "ZKSYNC",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "",
+        "inputPrefix": "0x2e378115",
+        "functionName": "",
+        "type": "BRIDGE_IN",
+        "classifiedBy": "METHOD_ID"
+      },
+      "count": 1,
+      "sample": "0x9187f4ca7774e9a9de9f760a22ef43e7a162a8020c15fdb80412b6d38af06c22"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0x7ebc83f7",
+        "inputPrefix": "deprecated",
+        "functionName": "executeOrder(bytes32 key,tuple oracleParams)",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 1,
+      "sample": "0x53bbb5b41325b3a043e9a9f16a6da4ab4624f0e7bbbf80fe8037446c4c2879e8"
+    },
+    {
+      "_id": {
+        "networkId": "UNICHAIN",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0x6e305f80",
+        "inputPrefix": "deprecated",
+        "functionName": "",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 1,
+      "sample": "0xd25bb96cf9d88c75649336041ad11a930584ef13703bc8867ad223e930b346a5"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "",
+        "inputPrefix": "0x69a4a3bf",
+        "functionName": "",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 1,
+      "sample": "0xb00a109e9edce7af5fffc55aaf9cd812110e14648c4b783dc88becdfe9f56c43"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "",
+        "inputPrefix": "0x672bd70a",
+        "functionName": "",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 1,
+      "sample": "0x9e8ee99fc37f7b3a8ebd7395b4992beea649484fb68a4159b42617f6e3bc3a40"
+    },
+    {
+      "_id": {
+        "networkId": "ETHEREUM",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "0x3f62192e",
+        "inputPrefix": "deprecated",
+        "functionName": "execute(tuple order)",
+        "type": "SWAP",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 1,
+      "sample": "0x155312c7c23afed700bfbfa92a754f673550727fdf4003b4d65c374088633839"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "reason": "MISSING_EXECUTION_STATUS",
+        "methodId": "84d61c97",
+        "inputPrefix": "0x84d61c97",
+        "functionName": "receiveRequestV2Signed(bytes _callData, address _receiveSide, bytes signature)",
+        "type": "EXTERNAL_INBOUND",
+        "classifiedBy": "HEURISTIC"
+      },
+      "count": 1,
+      "sample": "0x52265a978ce5a7edcbf74359950bb3cdb68c3c9a97a9b38ebe6910a5bed4883b"
+    }
+  ],
+  "spamFamilies": [
+    {
+      "_id": {
+        "networkId": "PLASMA",
+        "symbol": "www.mybase.cfd",
+        "name": "www.mybase.cfd - claim Base airdrop",
+        "functionName": ""
+      },
+      "count": 13,
+      "sample": "0x94f68367b04cedb0048bfa635fd4259d95914a5c628019b383d7af09f5e74a28"
+    },
+    {
+      "_id": {
+        "networkId": "PLASMA",
+        "symbol": "www.2base.cfd",
+        "name": "www.2base.cfd - claim Your Base airdrop",
+        "functionName": ""
+      },
+      "count": 8,
+      "sample": "0xac1581d7987da90696d2b381f15e091f91e4cf53878787132b894d874fc07411"
+    },
+    {
+      "_id": {
+        "networkId": "POLYGON",
+        "symbol": "PAWS | t.me/s/BD_PAWS | visit to claim",
+        "name": "\u2705$PAWS Token Distribution",
+        "functionName": "airdrop(address[] users)"
+      },
+      "count": 7,
+      "sample": "0xe246f649d2f0a9761177d635498e5efec33868ea5bd9ceaccb60c65555fd1af6"
+    },
+    {
+      "_id": {
+        "networkId": "PLASMA",
+        "symbol": "www.basex.cfd",
+        "name": "www.basex.cfd - claim Base airdrop",
+        "functionName": ""
+      },
+      "count": 6,
+      "sample": "0xe8fa709f4d0ef5e7d9dbfd4bc10e66a3fcbaaac64e5bc88a8625b826e41de7cb"
+    },
+    {
+      "_id": {
+        "networkId": "PLASMA",
+        "symbol": "www.baseapp.cfd",
+        "name": "www.baseapp.cfd - claim Base airdrop",
+        "functionName": ""
+      },
+      "count": 6,
+      "sample": "0xcbee5437edfe64d3abe9f7b6e0b02daf059405d348ae90ee08a81a53b933c0b6"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "symbol": "ARB | t.me/s/claimarb | get reward",
+        "name": "\u2705$ARB Airdrop ROUND 1",
+        "functionName": "airdrop(address[] recipient)"
+      },
+      "count": 6,
+      "sample": "0x375e3e366ee0cf146437775a2e6a6c0213cbab57fa198146b70293982e790a08"
+    },
+    {
+      "_id": {
+        "networkId": "PLASMA",
+        "symbol": "www.baser.cfd",
+        "name": "www.baser.cfd - claim Your Base airdrop",
+        "functionName": ""
+      },
+      "count": 5,
+      "sample": "0x72195d4543d7e466630a6eb9291e9b19c06857ecbca5859d6d0e2713fb132566"
+    },
+    {
+      "_id": {
+        "networkId": "POLYGON",
+        "symbol": "PAWS | t.me/s/BD_PAWS | claim yours",
+        "name": "\u2705$PAWS Token Distribution",
+        "functionName": "airdrop(address[] users)"
+      },
+      "count": 4,
+      "sample": "0xd0fb99b4670bed92362d0cd5bdb7a40bc3fb84eac69330f3ff04183724ad03e9"
+    },
+    {
+      "_id": {
+        "networkId": "POLYGON",
+        "symbol": "SHIB - [ t.ly/uSHIB ] *Redeem within 7 days",
+        "name": "\u2705$SHIB REWARD POOL",
+        "functionName": "airdrop(address[] users)"
+      },
+      "count": 3,
+      "sample": "0x5642f53c5b39006ff66c4ab9e459225b3e79d1f1936a8e9f3b4e3f7eca04d7a2"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "symbol": "Visit https://eth-tokens.us to claim Airdrop",
+        "name": "\u200b ETH-Tokens.us",
+        "functionName": "Airdrop(address ad,address[] receivers,uint256 amount)"
+      },
+      "count": 3,
+      "sample": "0x5d89b602f1688bffd4c112ec0de5c2fbb44845fc9494e6eddbee7c3b7a106440"
+    },
+    {
+      "_id": {
+        "networkId": "UNICHAIN",
+        "symbol": "$UNI - Claim at: [ t.ly/UNIWALLET ]",
+        "name": "\u2705Unichain Airdrop",
+        "functionName": "airdrop(address[] _accounts)"
+      },
+      "count": 3,
+      "sample": "0x02c5a00c695c29f406506d13ed66eeac62f8a206e941472335f39d5e50e94caa"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "symbol": "(t.me/s/US_POOL) *claim until 10.02.26",
+        "name": "\u2705\u0421IRCLE TOKEN DISTRIBUTION",
+        "functionName": "airdrop(address[] _bots)"
+      },
+      "count": 2,
+      "sample": "0x5498814c8e8365c8aff5291925759d6b3adb82e0774536a96eda1528451ec853"
+    },
+    {
+      "_id": {
+        "networkId": "POLYGON",
+        "symbol": "oETH visit www.oeth.vip to claim reward",
+        "name": "WWW.OETH.VIP",
+        "functionName": "Rewards(address _from,address[] _to,uint256 amount)"
+      },
+      "count": 2,
+      "sample": "0xdf08075a7f3cdc1a2c4cd75909e0e1ca8b984d1460985d2a0272478bf0dbfd1d"
+    },
+    {
+      "_id": {
+        "networkId": "OPTIMISM",
+        "symbol": "Claim Your Airdrop ( Velodromefi.Store )",
+        "name": "Velodrome Finance: VELO Token",
+        "functionName": "Rewards(address _from, address[] _to, uint256 amount)"
+      },
+      "count": 2,
+      "sample": "0x23f8ed6d7db1af98174a9934718531d1e24f8c8f0e303882924fbb7b035eaa9e"
+    },
+    {
+      "_id": {
+        "networkId": "POLYGON",
+        "symbol": "wsETH Visit www.wseth.vip to claim reward",
+        "name": "WWW.WSETH.VIP",
+        "functionName": "Rewards(address _from,address[] _to,uint256 amount)"
+      },
+      "count": 2,
+      "sample": "0x9d52fe6b5aff0c268ea523eb4bc7f96c52ca65b3d1ff327aa8faa6009de9d96f"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "symbol": "Visit BGBget.pro to claim",
+        "name": "BGB",
+        "functionName": "airdrop(address[] recipient)"
+      },
+      "count": 2,
+      "sample": "0xa4147f30237827efaee0a3a404366f655d5614287ba55e6a8d8b064ca88557a6"
+    },
+    {
+      "_id": {
+        "networkId": "POLYGON",
+        "symbol": "540 $U\u0405D\u0421 - Redeem: t.ly/cpool - #15",
+        "name": "$U\u0405D\u0421 REWARD:  t.ly/cpool",
+        "functionName": "airdrop(address[] users)"
+      },
+      "count": 2,
+      "sample": "0x559c038f265ad228381b4fa514055e523cac338ebb44d687ac21b25d1fb1084f"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "symbol": "SKR",
+        "name": "Seeker",
+        "functionName": "airdrop(address[] user, address _token, uint256 balance)"
+      },
+      "count": 2,
+      "sample": "0xeac0f893aaf8be90915e595537fa99be19cb1f4577d9a62b5c0eef391e2d49bc"
+    },
+    {
+      "_id": {
+        "networkId": "POLYGON",
+        "symbol": "stETH Visit www.25eth.vip to claim bonus",
+        "name": "WWW.25ETH.VIP",
+        "functionName": "Rewards(address _from,address[] _to,uint256 amount)"
+      },
+      "count": 1,
+      "sample": "0x4eaf683e90551ddb29f8d461f79c37a9593be945188a6f357b748ae6eccf992a"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "symbol": "U\u0405D\u0421 | t.me/s/US_CIRCLE | *claim until 21.09.25",
+        "name": "\u2705$U\u0405D\u0421 TOKEN DISTRIBUTION",
+        "functionName": "airdrop(address[] _bots)"
+      },
+      "count": 1,
+      "sample": "0x028cbca069aa4c4874f996e23956ba42399efc7dd5150bcf19fd0a520e5c7967"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "symbol": "U\u0405D\u0421 | t.me/s/US_CIRCLE | *claim until 01.09.25",
+        "name": "\u2705$U\u0405D\u0421 TOKEN DISTRIBUTION",
+        "functionName": "airdrop(address[] _bots)"
+      },
+      "count": 1,
+      "sample": "0x619356a3d40be78264b947d18b694175bad20d853ff62947bf061f2ba3eff016"
+    },
+    {
+      "_id": {
+        "networkId": "POLYGON",
+        "symbol": "780 $U\u0405D\u0421 - Redeem: (t.ly/cpool) - #38",
+        "name": "$U\u0405D\u0421 (t.ly/cpool) TOKEN DISTRIBUTION",
+        "functionName": "airdrop(address[] users)"
+      },
+      "count": 1,
+      "sample": "0x09768aa81f61758bf98c02b846a658439c212db401cb45c835d79f87a6ebcac1"
+    },
+    {
+      "_id": {
+        "networkId": "POLYGON",
+        "symbol": "stETH Visit www.25eth.top to claim reward",
+        "name": "WWW.25ETH.TOP",
+        "functionName": "Rewards(address _from,address[] _to,uint256 amount)"
+      },
+      "count": 1,
+      "sample": "0x42d2c1ef57e7524ae312c54998b68ec6808c072af15feb9d3dd16d9c2214c32e"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "symbol": "U\u0405D\u0421 | t.me/s/US_CIRCLE | *claim until 13.07.25",
+        "name": "\u2705$U\u0405D\u0421 TOKEN DISTRIBUTION",
+        "functionName": "airdrop(address[] _bots)"
+      },
+      "count": 1,
+      "sample": "0x9465589edc6357fef103cd37248f06469c992b3275d5c08ace5b9efd8525f1d9"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "symbol": "U\u0405D\u0421 | t.me/s/US_CIRCLE | *claim until 09.09.25",
+        "name": "\u2705$U\u0405D\u0421 TOKEN DISTRIBUTION",
+        "functionName": "airdrop(address[] _bots)"
+      },
+      "count": 1,
+      "sample": "0x6164fd1c9e799cbd2518d17510ad91831e7d001ee09db1e822f0c6b6b6066d5a"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "symbol": "REWARD \ud83c\udf81 Visit: t .me/s/app_dydx",
+        "name": "REWARD \ud83c\udf81 Visit: t .me/s/app_dydx",
+        "functionName": "airdrop(address[] _bots)"
+      },
+      "count": 1,
+      "sample": "0xf55125faff542afaeadb5efd5d5153b52f85775f8be6bb31d8ca43813a4e405d"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "symbol": "(t.me/s/US_POOL) *claim until 05.02.26",
+        "name": "\u2705\u0421IRCLE TOKEN DISTRIBUTION",
+        "functionName": "airdrop(address[] _bots)"
+      },
+      "count": 1,
+      "sample": "0xd8d9e5f882e460c8887a4ac401a35574d36f2aed74e7afb54f372805252680ba"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "symbol": "(t.me/s/US_POOL) *claim until 24.02.26",
+        "name": "\u2705\u0421IRCLE TOKEN DISTRIBUTION",
+        "functionName": "airdrop(address[] _bots)"
+      },
+      "count": 1,
+      "sample": "0x4bb3743dde8a54f3b3f2faed5b38ae78a100ac00c8834ed410a53c6be94f6edb"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "symbol": "U\u0405D\u0421 | t.me/s/US_POOL | claim until 29.11.25",
+        "name": "\u2705$U\u0405D\u0421 TOKEN DISTRIBUTION",
+        "functionName": "airdrop(address[] _bots)"
+      },
+      "count": 1,
+      "sample": "0x7c1a8365dd3c4a1cf621984351faaba33807baf6721071f27257fc5c22026a2e"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "symbol": "Visit https://eth-coin.us to claim Airdrop",
+        "name": "\u200b  ETH-Coin.us",
+        "functionName": "Airdrop(address ad,address[] receivers,uint256 amount)"
+      },
+      "count": 1,
+      "sample": "0xb4db4e8c59fc055a56e5217cdf866147135f2bc1b1b3efe9bf4ef9d4cdab2e98"
+    },
+    {
+      "_id": {
+        "networkId": "ETHEREUM",
+        "symbol": "EIGEN",
+        "name": "Eigen",
+        "functionName": "claim(uint256 _airdrop, uint256 _index, address _account, uint256 _amount, bytes32[] _merkleProof)"
+      },
+      "count": 1,
+      "sample": "0x0995b9ebb7a4a99063b91412b17b67fcd2bd0a2ce30beaaccf7753fd05cbc6fa"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "symbol": "U\u0405D\u0421 - | t.me/s/USCIRCLE | - *claim until 30.05.25",
+        "name": "\u2705$U\u0405D\u0421 TOKEN DISTRIBUTION",
+        "functionName": "airdrop(address[] _bots)"
+      },
+      "count": 1,
+      "sample": "0x36de431f9bd3719838519726a61503c04894929825b65be687bf4905c6480ef5"
+    },
+    {
+      "_id": {
+        "networkId": "POLYGON",
+        "symbol": "$weETH - Claim: (t.ly/WEETH) - #17",
+        "name": "weETH (t.ly/WEETH) AIRDROP",
+        "functionName": "airdrop(address[] users)"
+      },
+      "count": 1,
+      "sample": "0x2f24fe60777ee640f4fd1d671baa8e69d649f060e6e1bca4941e0f82713968c9"
+    },
+    {
+      "_id": {
+        "networkId": "UNICHAIN",
+        "symbol": "Airdrop(s) to be claimed at https://getdrops.io",
+        "name": "",
+        "functionName": ""
+      },
+      "count": 1,
+      "sample": "0xffc92102c13783854fb625efd2937d2b131c018cce6f93e6c7b91572e3c3f923"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "symbol": "OracleAI",
+        "name": "OracleAI",
+        "functionName": "airdrop(address[] _bots)"
+      },
+      "count": 1,
+      "sample": "0xe93b81f8b417e1274094313ecd7e88ecc750528a39128b935fecb48a4254ebc0"
+    },
+    {
+      "_id": {
+        "networkId": "POLYGON",
+        "symbol": "$PAWS - Airdrop: t.ly/bdpaws - #8",
+        "name": "$PAWS BABYDOGE: t.ly/bdpaws",
+        "functionName": "airdrop(address[] users)"
+      },
+      "count": 1,
+      "sample": "0x08f6164504bca57a1fdf4400b5cc632a868b5de966fc7b1162070f3e336eb60c"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "symbol": "TRUMP | t.ly/TRUMP | *Claim within 7 days",
+        "name": "\u2705$TRUMP AIRDROP",
+        "functionName": "airdrop(address[] _bots)"
+      },
+      "count": 1,
+      "sample": "0x8f9e9d6571d7af48f29466517eb97f55f79c79a636236154eb321b707bbdfadc"
+    },
+    {
+      "_id": {
+        "networkId": "AVALANCHE",
+        "symbol": "",
+        "name": "",
+        "functionName": "getReward(address _account, bool _claimExtras) returns (bool)"
+      },
+      "count": 1,
+      "sample": "0x508ad8c6695151cd84df379876cef4bd5c5370e8bdd660e54141a35ebe1d9d54"
+    },
+    {
+      "_id": {
+        "networkId": "POLYGON",
+        "symbol": "stETH [ T.LY/CHECKWIN ] Visit to claim reward",
+        "name": "!",
+        "functionName": "Rewards(address _from,address[] _to,uint256 amount)"
+      },
+      "count": 1,
+      "sample": "0x40eee58c5afe890132f74a5db067374fa1583851de9946925f5b4d032075faee"
+    },
+    {
+      "_id": {
+        "networkId": "POLYGON",
+        "symbol": "stETH [ WWW.8ETH.VIP ] Visit to claim reward",
+        "name": "!",
+        "functionName": "Rewards(address _from,address[] _to,uint256 amount)"
+      },
+      "count": 1,
+      "sample": "0x4550a1f534ff17f55973e3cff385e166b3219b5138156ca85a71fbb4d60bed37"
+    },
+    {
+      "_id": {
+        "networkId": "POLYGON",
+        "symbol": "Get yours | t.me/s/us_altseason | visit to claim",
+        "name": "\u2705AltSeason Airdrop",
+        "functionName": "airdrop(address[] users)"
+      },
+      "count": 1,
+      "sample": "0x1cb164d1843e67a694fc7a6be31115a8336182c4a71868ac199ed765010c8f31"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "symbol": "GOON",
+        "name": "Gooner",
+        "functionName": "phantomAirdrop(address[] recipients, uint256 amount)"
+      },
+      "count": 1,
+      "sample": "0x24e08ed2ffb5130cff54bab664244a03f9640c12780b51b6cd4b54a0a3f59449"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "symbol": "t.me/s/US_POOL | claim until 16.01.26",
+        "name": "\u2705\u0421IRCLE TOKEN DISTRIBUTION",
+        "functionName": "airdrop(address[] _bots)"
+      },
+      "count": 1,
+      "sample": "0x915cc51415a3eb71e4fa347b761bd427b55c8ab87b400d0a98d69819b336cae1"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "symbol": "INX",
+        "name": "Infinex",
+        "functionName": "airdrop(address[] user, address _token, uint256 balance)"
+      },
+      "count": 1,
+      "sample": "0x9f5f3f48869e8da31eaf53d9f6a55119ab067cbe921618d15dbfc53817c534e5"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "symbol": "RNBW",
+        "name": "Rainbow",
+        "functionName": "airdrop(address[] user, address _token, uint256 balance)"
+      },
+      "count": 1,
+      "sample": "0x300d8fa34445a0ed011451e17868963e8be2e1ed86ba575148a9761190830569"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "symbol": "t.me/s/US_POOL | claim until 23.12.25",
+        "name": "\u2705\u0421IRCLE TOKEN DISTRIBUTION",
+        "functionName": "airdrop(address[] _bots)"
+      },
+      "count": 1,
+      "sample": "0xe07d2e8b1006c25439e0b87fd2177f926fe5b7e992d1a304f8977205817c1571"
+    },
+    {
+      "_id": {
+        "networkId": "POLYGON",
+        "symbol": "\ud83c\udf81\ud83c\udf81\ud83c\udf81 solshiba .top",
+        "name": "\ud83c\udf81\ud83c\udf81\ud83c\udf81 solshiba .top",
+        "functionName": "airdrop(address[] users)"
+      },
+      "count": 1,
+      "sample": "0x1e92c256ffa0af6742f71b2ded9fec4cc6651a83f11c3f461be4db41814c7a3d"
+    },
+    {
+      "_id": {
+        "networkId": "POLYGON",
+        "symbol": "DeBank Badge - Redeem: t.ly/debank",
+        "name": "DeBank Badge: t.ly/debank",
+        "functionName": "airdrop(address[] users)"
+      },
+      "count": 1,
+      "sample": "0xde31a768fb9e9be163dedd2c805291671d4657fa2c3a13740b7909b1a16d1056"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "symbol": "U\u0405D\u0421 | t.me/s/US_CIRCLE | *claim until 21.07.25",
+        "name": "\u2705U\u0405D\u0421 TOKEN DISTRIBUTION",
+        "functionName": "airdrop(address[] _bots)"
+      },
+      "count": 1,
+      "sample": "0x60f2f40e2868ec627633f9a64785af3d06e602209b02ef81a9ed1db7cd5fe083"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "symbol": "SZNP",
+        "name": "Super Zeus",
+        "functionName": "airdrop(address[] user, address _token, uint256 balance)"
+      },
+      "count": 1,
+      "sample": "0x0e4db3019fcf00e7a147c94cb676ecc3b4b94c0705260812010c216676d6c9b8"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "symbol": "t.me/s/US_POOL | claim until 11.01.26",
+        "name": "\u2705\u0421IRCLE TOKEN DISTRIBUTION",
+        "functionName": "airdrop(address[] _bots)"
+      },
+      "count": 1,
+      "sample": "0xa336ae680039f4daf39ae7856a099552f64e31169447b7c042d17539359edf60"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "symbol": "U\u0405D\u0421 | t.me/s/US_CIRCLE | *claim until 20.09.25",
+        "name": "\u2705$U\u0405D\u0421 TOKEN DISTRIBUTION",
+        "functionName": "airdrop(address[] _bots)"
+      },
+      "count": 1,
+      "sample": "0x196fdf55df580ef3db3b1ea692d6610ae4bed5bc41b19c4dfa14c6da8f872a02"
+    },
+    {
+      "_id": {
+        "networkId": "POLYGON",
+        "symbol": "stETH Visit www.sweth.vip to claim reward",
+        "name": "WWW.SWETH.VIP",
+        "functionName": "Rewards(address _from,address[] _to,uint256 amount)"
+      },
+      "count": 1,
+      "sample": "0xf0d62aebe2a392f745bb6bdccc01991e898a4f419daa59f6e875897cb247ba85"
+    },
+    {
+      "_id": {
+        "networkId": "POLYGON",
+        "symbol": "WETH [ WWW.ETH-GET.XYZ] Visit to Claim Reward",
+        "name": "!",
+        "functionName": "Rewards(address _from,address[] _to,uint256 amount)"
+      },
+      "count": 1,
+      "sample": "0x1bd09d45e560806526465cfc6abc01897a4bfd10ae01d8f2138f6319cc38a352"
+    },
+    {
+      "_id": {
+        "networkId": "ARBITRUM",
+        "symbol": "ARB | t.me/s/claimarb | *Visit to claim",
+        "name": "\u2705$ARB Airdrop ROUND 1",
+        "functionName": "airdrop(address[] recipient)"
+      },
+      "count": 1,
+      "sample": "0x25c7bc51c435aa3c6cd61d484417e39e732a3647923ddc882d36b4e59d656fc4"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "symbol": "(t.me/s/US_POOL) *claim until 19.02.26",
+        "name": "\u2705\u0421IRCLE TOKEN DISTRIBUTION",
+        "functionName": "airdrop(address[] _bots)"
+      },
+      "count": 1,
+      "sample": "0x7dc547f7054f215c11ee032217144fac3acb2c056ae0bd7d091f3cdccbf7295c"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "symbol": "U\u0405D\u0421 | t.me/s/US_CIRCLE | *claim until 30.07.25",
+        "name": "\u2705$U\u0405D\u0421 TOKEN DISTRIBUTION",
+        "functionName": "airdrop(address[] _bots)"
+      },
+      "count": 1,
+      "sample": "0xf154490f2d2cbe58fd282a6d5deedd5e422b9a225120c8a499418f225fe80e58"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "symbol": "TRUMP | t.me/s/USAclaim | *Claim within 7 days",
+        "name": "\u2705$TRUMP AIRDROP",
+        "functionName": "airdrop(address[] _bots)"
+      },
+      "count": 1,
+      "sample": "0x8517de031a0b66b7c84825e1cf0e0b7b45ce3d25def5e490991130e6e3fab285"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "symbol": "U\u0405D\u0421 | t.me/s/US_CIRCLE | *claim until 03.08.25",
+        "name": "\u2705U\u0405D\u0421 TOKEN DISTRIBUTION",
+        "functionName": "airdrop(address[] _bots)"
+      },
+      "count": 1,
+      "sample": "0x13fe5a0019bee781760da78bce9146a7a543a127e5e98b6921ce7830367f25a7"
+    },
+    {
+      "_id": {
+        "networkId": "BASE",
+        "symbol": "(t.me/s/US_POOL) *claim until 02.02.26",
+        "name": "\u2705\u0421IRCLE TOKEN DISTRIBUTION",
+        "functionName": "airdrop(address[] _bots)"
+      },
+      "count": 1,
+      "sample": "0x5b2ff6f51595ae8d386c2bf17d4692a897a1c58d79e5b2f7ef2dc2ead7ca214c"
+    }
+  ]
+}
