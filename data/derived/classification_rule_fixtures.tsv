@@ -1,0 +1,16 @@
+txHash	networkId	expected	category	notes
+0xd2cdbd7a1ade37a8032b713e9844351d2f58fbd872851a0e88203b8fbb695c5f	BASE	BRIDGE_IN	clarification_ok	redeemWithFee now stays BRIDGE_IN with token-only flow; still needs clarification because execution status/effective gas price are missing
+0x27978f7bf88cd7a4825b991ac6e461fa96be75b280add44236beb2e060c61ba3	UNICHAIN	BRIDGE_IN	clarification_ok	fillV3Relay stays BRIDGE_IN; clarification remains valid for missing receipt-safe status
+0x37908ec5e77552b060fe5dba95c180f71fbe653de38308d033285327ad7a4386	BSC	APPROVE	resolved_ingestion	previously missing approve now persisted in raw and normalized as METHOD_ID/CONFIRMED
+0x510b38963290beb50e5740dda9c57c74b6db6379a11ace4f110722684e878d37	BSC	APPROVE	resolved_ingestion	previously missing approve now persisted in raw and normalized as METHOD_ID/CONFIRMED
+0x51dc36fc93e51dde5fafd1ab92d000d06104394d3179e3e39f0fcaa54cc53231	BSC	LP_ENTRY	confirmed	Pancake Infinity multicall mints position NFT and is normalized as LP_ENTRY
+0x0088de663d549fbc58dfa8dbba4180a346a580b1d6277254fa84a8ed9c27967a	BSC	LP_ENTRY	confirmed	Pancake Infinity modifyLiquidities is normalized as LP_ENTRY
+0xfffcf7210f3c836192d28401f32b99e2bd49f90795c4236d2fd87c00e86976f4	BASE	LP_POSITION_ROUTER	review_gap	Pancake V3/CL router overload; explorer shows NFT transfer, raw has inbound USDC from stake contract, needs method-aware LP exit or custody closure
+0x927d3f458ada7e5ec67f77129e29edcaf2f69bd2b81490a42fec17c0cc3bd4fa	OPTIMISM	LP_EXIT_OR_BURN	review_gap	explorer shows Slipstream position NFT burn, but current raw persists no legs; should stay review unless child-selector decode or richer raw supports classification
+0x6537cd02cabd5828d2dd584aae02480699914e8bcd790215ce1c09b0fd581091	ARBITRUM	LP_EXIT_OR_FEE_CLAIM	review_gap	PancakeSwap V3 MasterChef multicall with inbound USDC and inbound internal ETH; likely LP exit or fee-claim family
+0xb7a9086def86956c896bb9a53326dacee73be2cf17c5741ea7c4e4e6f21c7afc	ZKSYNC	ROUTED_SWAP_OR_BRIDGE	review_gap	0x3593564c universal-router style tx with ETH and USDC legs; needs method-aware router dispatch over persisted raw
+0xf13356fe9449ec9e831395e0074622e88e362a8f317e6b110d093bfaa25d2702	ARBITRUM	REWARD_CLAIM_OR_CLAIM_WITHOUT_MOVEMENT	dual_wallet_case	same tx is REWARD_CLAIM for receiving wallet and CLAIM_WITHOUT_MOVEMENT for non-receiving tracked wallet calling claimWithRecipient
+0xa586770c653097bd905f0003edddcc59f295a8a64131a3ba0410d6fe43bb08e5	BSC	CLAIM_WITHOUT_MOVEMENT	review_ok	claim-call on rewards contract but raw reward transfers do not reach tracked wallet; keep explicit review
+0xeb4fd02cba10c357ea4f5441c0783c5282c01fcaa1a85c661575471df592c5ef	BSC	CLAIM_WITHOUT_MOVEMENT	review_ok	claim-call on rewards contract but raw reward transfers do not reach tracked wallet; keep explicit review
+0xcbee5437edfe64d3abe9f7b6e0b02daf059405d348ae90ee08a81a53b933c0b6	PLASMA	PROMO_SPAM_PHISHING	confirmed	Plasma .cfd spam family remains a true positive
+0xf64be003679e600a679b42c56add6194ea931ca1054f2b659e0c0789a6852a89	AVALANCHE	NON_ECONOMIC_ZERO_AMOUNT	policy_gap	zero-amount transfer family should remain non-economic until final terminal type is documented
