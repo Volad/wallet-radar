@@ -107,6 +107,43 @@ class OnChainRawTransactionViewTest {
     }
 
     @Test
+    @DisplayName("clarification evidence logs override synthetic raw logs")
+    void clarificationEvidenceLogsOverrideSyntheticRawLogs() {
+        Document clarificationLog = new Document("address", "0xclarified")
+                .append("topics", List.of("0xreal"))
+                .append("data", "0x02");
+        OnChainRawTransactionView view = OnChainRawTransactionView.wrap(rawWith(new Document()
+                .append("timeStamp", "1700000000")
+                .append("transactionIndex", "1")
+                .append("logs", List.of(new Document("__syntheticTransferLog", true)
+                        .append("address", "0xsynthetic")))
+                .append("clarificationEvidence", new Document("receipt", new Document("logs", List.of(clarificationLog))))));
+
+        assertThat(view.persistedLogs()).hasSize(1);
+        assertThat(view.persistedLogs().getFirst().getString("address")).isEqualTo("0xclarified");
+        assertThat(view.hasClarificationEvidence()).isTrue();
+    }
+
+    @Test
+    @DisplayName("clarification transfers override empty explorer transfer arrays")
+    void clarificationTransfersOverrideEmptyExplorerTransferArrays() {
+        Document clarificationTransfer = new Document("contractAddress", "0xtoken")
+                .append("from", "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                .append("to", "0x1111111111111111111111111111111111111111")
+                .append("value", "100")
+                .append("tokenDecimal", "2")
+                .append("tokenSymbol", "TOK");
+        OnChainRawTransactionView view = OnChainRawTransactionView.wrap(rawWith(new Document()
+                .append("timeStamp", "1700000000")
+                .append("transactionIndex", "1")
+                .append("explorer", new Document("tokenTransfers", List.of()))
+                .append("clarificationEvidence", new Document("transfers", new Document("tokenTransfers", List.of(clarificationTransfer))))));
+
+        assertThat(view.explorerTokenTransfers()).hasSize(1);
+        assertThat(view.explorerTokenTransfers().getFirst().getString("tokenSymbol")).isEqualTo("TOK");
+    }
+
+    @Test
     @DisplayName("suppresses direct native value when top-level raw is transfer-shaped")
     void suppressesDirectNativeValueWhenTopLevelRawIsTransferShaped() {
         OnChainRawTransactionView view = OnChainRawTransactionView.wrap(rawWith(new Document()

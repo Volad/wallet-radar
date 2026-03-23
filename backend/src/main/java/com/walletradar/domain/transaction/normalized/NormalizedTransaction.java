@@ -42,6 +42,10 @@ import java.util.List;
                 def = "{'source': 1, 'status': 1, 'clarificationAttempts': 1, 'updatedAt': 1, 'blockTimestamp': 1, 'transactionIndex': 1}"
         ),
         @CompoundIndex(
+                name = "normalized_source_status_full_receipt_clarification_idx",
+                def = "{'source': 1, 'status': 1, 'fullReceiptClarificationAttempts': 1, 'updatedAt': 1, 'blockTimestamp': 1, 'transactionIndex': 1}"
+        ),
+        @CompoundIndex(
                 name = "normalized_flows_asset_contract_idx",
                 def = "{'flows.assetContract': 1}"
         )
@@ -73,6 +77,7 @@ public class NormalizedTransaction {
     private String protocolName;
     private String protocolVersion;
     private Integer clarificationAttempts;
+    private Integer fullReceiptClarificationAttempts;
     private Integer pricingAttempts;
     private Integer statAttempts;
     private Instant createdAt;

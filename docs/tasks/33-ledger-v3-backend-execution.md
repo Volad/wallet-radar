@@ -2594,7 +2594,7 @@ Definition of done:
 - the next audit can decide clarification readiness from data, not from code
   guesswork
 
-## Clarification v2 Transition Slice — 2026-03-22 Post-Classification Audit
+## Clarification Receipt-Enrichment Slice — 2026-03-22 Post-Classification Audit
 
 This slice starts after the classification closeout rerun validated that the
 remaining normalization debt is narrow review-tail work, not a systemic
@@ -2610,15 +2610,17 @@ Sources for this slice:
 
 Architectural contract for this slice:
 
-- `Clarification v1` stays receipt-metadata only.
-- `Clarification v2` is a separate bounded enrichment job, not a widening of the
-  base `PENDING_CLARIFICATION` queue.
-- `Clarification v2` may use only production-fetchable full receipt evidence.
+- Clarification stays one stage with two internal modes:
+  - metadata-safe enrichment for receipt-clarifiable rows
+  - allowlisted full-receipt enrichment for residual review families
+- Full receipt enrichment is not a widening of the base
+  `PENDING_CLARIFICATION` queue.
+- Clarification may use only production-fetchable full receipt evidence.
 - Clarification enrichment follows raw-source lineage by default:
   - RPC-backed raw -> RPC clarification
   - Etherscan-family raw -> Etherscan-family clarification
   - Blockscout-backed raw -> Blockscout clarification
-- `Clarification v2` must not use traces, explorer UI labels, or analyst-only
+- Clarification must not use traces, explorer UI labels, or analyst-only
   notes as runtime inputs.
 - Rows already closable from current raw stay classification/handler work.
 
@@ -2626,12 +2628,12 @@ Current execution order:
 
 1. `BE-04AX` claim-family no-movement closeout from current raw
 2. `BE-04AY` Morpho Bundler withdraw-collateral handler closeout
-3. `BE-05F` Clarification-v2 receipt-evidence contract + full receipt persistence + source-lineage routing
-4. `BE-05G` Clarification-v2 LP / router receipt-log closeout
-5. `BE-05H` Clarification-v2 batch/log closeout for Euler-style residuals
-6. `BE-05I` Clarification-v2 non-economic cleanup / admin families
+3. `BE-05F` Clarification receipt-evidence contract + full receipt persistence + source-lineage routing
+4. `BE-05G` Clarification LP / router receipt-log closeout
+5. `BE-05H` Clarification batch/log closeout for Euler-style residuals
+6. `BE-05I` Clarification non-economic cleanup / admin families
 7. `BE-05J` intentional-review lock for receipt-insufficient families
-8. `BE-05K` Clarification-v2 rerun pack + repeat-audit handoff
+8. `BE-05K` Clarification rerun pack + repeat-audit handoff
 
 ### BE-04AX — Claim-Family No-Movement Closeout From Current Raw
 
@@ -2704,7 +2706,7 @@ Required tests:
 - supported Morpho withdraw-collateral bundle closes to deterministic type
 - unsupported bundle method still stays explicit review
 
-### BE-05F — Clarification-v2 Receipt-Evidence Contract + Full Receipt Persistence + Source-Lineage Routing
+### BE-05F — Clarification Receipt-Evidence Contract + Full Receipt Persistence + Source-Lineage Routing
 
 Purpose:
 - Introduce the bounded data contract for full-receipt enrichment without
@@ -2717,10 +2719,10 @@ Primary write scope:
 - docs or small schema helpers if needed
 
 Implementation scope:
-- keep current `Clarification v1` unchanged for receipt-safe metadata
-- add a separate `Clarification v2` path that may fetch:
+- keep metadata-safe clarification behavior for receipt-clarifiable rows
+- add allowlisted full-receipt enrichment inside the same clarification stage:
   - full receipt logs
-  - receipt status/gas fields already used by v1
+  - receipt status/gas fields already used by metadata-safe clarification
 - persist both:
   - adapted clarification evidence used by runtime classification
   - raw full receipt payload when the source exposes it
@@ -2735,7 +2737,7 @@ Implementation scope:
   - storage contract for adapted clarification evidence
   - storage contract for raw full receipt payload
   - lineage-consistent clarification source router
-  - raw-view exposure of clarification-v2 evidence
+  - raw-view exposure of clarification receipt evidence
 - forbid:
   - traces
   - explorer UI summaries
@@ -2743,22 +2745,22 @@ Implementation scope:
 
 Definition of done:
 - production code has an explicit, test-backed boundary between
-  `Clarification v1` and `Clarification v2`
-- classifier can consume clarification-v2 receipt logs only through the raw view
+  metadata-safe clarification and allowlisted full-receipt clarification
+- classifier can consume clarification receipt logs only through the raw view
 - no synthetic log path can masquerade as real receipt evidence
 - lineage-consistent clarification source selection is deterministic and tested
 - future deterministic enrichment can reuse persisted full receipt payload
   without requiring a repeat fetch when the source originally exposed it
 
 Required tests:
-- clarification-v2 receipt logs persist into dedicated evidence field
+- clarification receipt logs persist into dedicated evidence field
 - raw full receipt payload persists alongside adapted clarification evidence when available
-- raw view exposes clarification-v2 receipt logs but still ignores synthetic logs
-- non-allowlisted row cannot enter clarification-v2
+- raw view exposes clarification receipt logs but still ignores synthetic logs
+- non-allowlisted row cannot enter full-receipt clarification
 - RPC-backed raw chooses RPC clarification path
 - explorer-backed raw chooses its matching explorer-family clarification path
 
-### BE-05G — Clarification-v2 LP / Router Receipt-Log Closeout
+### BE-05G — Clarification LP / Router Receipt-Log Closeout
 
 Purpose:
 - Close the audited residual LP/router family where current raw is insufficient
@@ -2772,7 +2774,7 @@ Primary write scope:
 Implementation scope:
 - allowlist Pancake CL position-manager exit family:
   - Base `0x46a15b0b27311cedf172ab29e4f4766fbe7f4364 + 0xac9650d8`
-- after clarification-v2 receipt fetch:
+- after clarification receipt fetch:
   - consume real receipt logs
   - decode known LP-exit-related event family
   - derive deterministic terminal type only when receipt evidence closes the row
@@ -2791,7 +2793,7 @@ Required tests:
 - receipt-log-enriched Pancake CL exit closes deterministically
 - same family without sufficient receipt movement evidence stays review
 
-### BE-05H — Clarification-v2 Batch / Log Closeout For Euler-Style Residuals
+### BE-05H — Clarification Batch / Log Closeout For Euler-Style Residuals
 
 Purpose:
 - Use receipt-log enrichment only where it materially closes the remaining
@@ -2806,13 +2808,13 @@ Primary write scope:
 Implementation scope:
 - allowlist the audited Avalanche batch family:
   - `0xc16ae7a4 batch(...)`
-- close rows only when clarification-v2 receipt logs reveal enough transfer or
+- close rows only when clarification receipt logs reveal enough transfer or
   protocol evidence to derive deterministic movement semantics
 - explicitly keep rows like `0x509c...` in review when even full receipt lacks
   economic movement evidence
 
 Definition of done:
-- `0x305f...` can be closed if the persisted clarification-v2 receipt logs remain
+- `0x305f...` can be closed if the persisted clarification receipt logs remain
   materially sufficient
 - `0x509c...` stays explicit review by design
 - no Euler batch row is upgraded from calldata intent alone
@@ -2825,7 +2827,7 @@ Required tests:
 - receipt-log-rich Euler batch closes deterministically
 - wrapper-only/no-movement receipt remains review
 
-### BE-05I — Clarification-v2 Non-Economic Cleanup / Admin Families
+### BE-05I — Clarification Non-Economic Cleanup / Admin Families
 
 Purpose:
 - Narrow the audited receipt-helpful but non-economic residuals into explicit
@@ -2851,7 +2853,7 @@ Implementation scope:
 Definition of done:
 - burn-only or governance-only receipt patterns are no longer generic overload
   failures when the allowlisted family is proven
-- no non-economic clarification-v2 rule invents asset movement
+- no non-economic clarification rule invents asset movement
 
 Required tests:
 - burn-only receipt family narrows to explicit non-economic terminal state
@@ -2861,7 +2863,7 @@ Required tests:
 
 Purpose:
 - Freeze the families that must remain review even after the introduction of
-  clarification-v2, so future work does not quietly over-classify them.
+  clarification receipt enrichment, so future work does not quietly over-classify them.
 
 Primary write scope:
 - backend tests only
@@ -2874,7 +2876,7 @@ Implementation scope:
 - keep `PROMO_SPAM_PHISHING` true positives stable
 
 Definition of done:
-- receipt-insufficient rows remain intentional review after clarification-v2 work
+- receipt-insufficient rows remain intentional review after clarification work
 - future rule additions cannot silently over-upgrade these families
 
 Required fixtures:
@@ -2883,10 +2885,10 @@ Required fixtures:
 - Arbitrum wallet-scoped `0xf13356fe9449ec9e831395e0074622e88e362a8f317e6b110d093bfaa25d2702`
 - Plasma `0xcbee5437edfe64d3abe9f7b6e0b02daf059405d348ae90ee08a81a53b933c0b6`
 
-### BE-05K — Clarification-v2 Rerun Pack + Repeat-Audit Handoff
+### BE-05K — Clarification Rerun Pack + Repeat-Audit Handoff
 
 Purpose:
-- End the clarification-v2 transition slice with one rerun-ready pack that lets
+- End the clarification transition slice with one rerun-ready pack that lets
   the next audit decide from data which residuals are truly closed, which moved
   to explicit non-economic states, and which still remain honest review.
 
@@ -2898,7 +2900,7 @@ Implementation scope:
 - run targeted regression coverage for:
   - claim-family no-movement closeout
   - Morpho withdraw-collateral handler closeout
-  - clarification-v2 receipt-evidence contract
+  - clarification receipt-evidence contract
   - LP/router receipt-log closeout
   - Euler batch/log closeout
   - non-economic cleanup/admin families
@@ -2907,8 +2909,294 @@ Implementation scope:
 
 Definition of done:
 - rerun expectations are documented and test-backed
-- the next audit can answer whether clarification-v2 materially shrank the
+- the next audit can answer whether clarification materially shrank the
   review tail without blurring intentional review states
+
+## Post-Clarification Pricing-Readiness Closeout — 2026-03-22 Deep Live Audit
+
+This corrective slice starts after the clarification rerun and targets the live
+gaps confirmed in `results/clarification/clarification-readiness-audit.md`.
+
+Sources for this slice:
+
+- `results/clarification/clarification-readiness-audit.md`
+- `results/clarification/confirmed_resolved_misclassifications.tsv`
+- `results/clarification/resolved_but_insufficient_evidence.tsv`
+- `results/clarification/live_snapshot.json`
+- `results/clarification/audit_summary.json`
+
+Primary official/market sources for rule authority:
+
+- WETH9:
+  `https://raw.githubusercontent.com/gnosis/canonical-weth/master/contracts/WETH9.sol`
+- Across `SpokePool.sol`:
+  `https://raw.githubusercontent.com/across-protocol/contracts/master/contracts/SpokePool.sol`
+- Trader Joe `LBRouter.sol`:
+  `https://raw.githubusercontent.com/traderjoe-xyz/joe-v2/main/src/LBRouter.sol`
+- Uniswap `NonfungiblePositionManager.sol`:
+  `https://raw.githubusercontent.com/Uniswap/v3-periphery/main/contracts/NonfungiblePositionManager.sol`
+- Pancake Infinity `CLPositionManager.sol`:
+  `https://raw.githubusercontent.com/pancakeswap/infinity-periphery/main/src/pool-cl/CLPositionManager.sol`
+- Pendle `ActionAddRemoveLiqV3.sol`:
+  `https://raw.githubusercontent.com/pendle-finance/pendle-core-v2-public/main/contracts/router/ActionAddRemoveLiqV3.sol`
+- GMX `ExchangeRouter.sol`:
+  `https://raw.githubusercontent.com/gmx-io/gmx-synthetics/main/contracts/router/ExchangeRouter.sol`
+- Merkl `Distributor.sol`:
+  `https://raw.githubusercontent.com/AngleProtocol/merkl-contracts/main/contracts/Distributor.sol`
+
+Execution order after `BE-05K`:
+
+1. `BE-05L` wrapped-native continuity parity closeout
+2. `BE-05M` Across bridge-entry semantic parity closeout
+3. `BE-05N` Trader Joe LB liquidity family correction
+4. `BE-05O` non-economic admin / no-op demotion from economic LP / vault families
+5. `BE-05P` economic evidence gate before pricing
+6. `BE-05Q` clarification evidence persistence live parity
+7. `BE-05R` pricing-readiness rerun pack + repeat-audit handoff
+
+### BE-05L — Wrapped-Native Continuity Parity Closeout
+
+Purpose:
+- Eliminate the confirmed wrap / unwrap misclassifications that currently leak
+  continuity rows into `VAULT_*` or `LENDING_WITHDRAW`.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- wrapper/native support helpers
+- wrap/unwrap regression tests
+
+Implementation scope:
+- enforce wrapper precedence for known wrapped-native contracts using:
+  - selector `0xd0e30db0 = deposit()`
+  - selector `0x2e1a7d4d = withdraw(uint256)`
+  - wrapped-token mint / burn evidence
+  - native continuity evidence from raw or persisted clarification evidence
+- close rows even when top-level `to` is weak or absent if canonical continuity
+  evidence is still sufficient
+- forbid fallback to generic `VAULT_DEPOSIT`, `VAULT_WITHDRAW`, or
+  `LENDING_WITHDRAW` once canonical wrap/unwrap evidence is present
+
+Definition of done:
+- the confirmed wrap / unwrap families from the live audit no longer resolve to
+  `VAULT_*` or `LENDING_WITHDRAW`
+- wrap/unwrap behavior is deterministic across `ETHEREUM`, `ARBITRUM`,
+  `AVALANCHE`, `PLASMA`, and `UNICHAIN`
+
+Required fixtures:
+- `0x11f7e79926cbb9eb85fbd39c171a561a69037a74e0ea87c499b2dc62a7dee958`
+- `0x32d5adf0e402f5f2811b8fd252282a05bc38fa3f409c849a1a45c14d16871005`
+- `0x41e1b02b3d27de7b86c3c25d21d116cf23085e1d67e70efa44cb4017eff1f72a`
+- `0xc2b13c1218a4f90d29319f9d21b0f479d6b262ba7ace3a66c1f4c66afb2b1ff6`
+- `0x26315fe4ce9e1da2694d790fc74142b5b6c0ee0b7e6630b8c2335fbfe95e5112`
+- `0x8d39e25b3122a24b8d47a477163c4f7f116c4d5e1e95b8f78e8f075807432e60`
+- `0xa467cc0897b4f063b5e5914223e122ed6906ad6b3243261517cfd72504d695be`
+- `0xb417ec3a2c7dbc4517dd14acae3c15e070bc99bd6401fecd5de645e6f32ba813`
+
+Required tests:
+- wrapper `deposit()` plus mint resolves to `WRAP`
+- wrapper `withdraw(uint256)` plus burn and native continuity resolves to
+  `UNWRAP`
+- generic vault/lending fallback remains unavailable once wrapper continuity is
+  proven
+
+### BE-05M — Across Bridge-Entry Semantic Parity Closeout
+
+Purpose:
+- Remove the residual bridge-entry misclassification where a recognized Across
+  deposit still falls into `VAULT_DEPOSIT`.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- bridge classification tests
+
+Implementation scope:
+- give recognized bridge-entry semantics precedence for:
+  - selector `0x7b939232 = depositV3(...)`
+  - known Across SpokePool identity
+  - outbound bridge-funding movement
+- forbid generic `deposit` / `VAULT_DEPOSIT` fallback for this family
+
+Definition of done:
+- the confirmed live residual no longer resolves to `VAULT_DEPOSIT`
+- bridge-entry rule remains raw-only and protocol-authoritative
+
+Required fixtures:
+- `0x8fc7da0a6aba524098b75fb9c1bfa651b4b50a90850832393c1313a745ac1e13`
+
+Required tests:
+- recognized Across `depositV3(...)` resolves to `BRIDGE_OUT`
+- unknown deposit-family rows without bridge identity still follow existing
+  generic routing
+
+### BE-05N — Trader Joe LB Liquidity Family Correction
+
+Purpose:
+- Correct the confirmed Avalanche Trader Joe liquidity rows that are still
+  mislabeled as lending deposits.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- liquidity-family tests
+
+Implementation scope:
+- recognize Trader Joe `LBRouter.addLiquidity(...)` as LP-entry semantics
+- require the saved raw liquidity-funding pattern:
+  - two outbound assets from the wallet
+  - optional small refunds
+- block `LENDING_DEPOSIT` fallback for this audited family
+
+Definition of done:
+- the audited Trader Joe rows resolve to `LP_ENTRY`
+- no Trader Joe add-liquidity row remains `LENDING_DEPOSIT`
+
+Required fixtures:
+- `0x129822279a741ce22568a6bfbe3a4387cde3641bc107a83a11b0d6fa4911e0b5`
+- `0x54a059e221fdbb4afc8c142706c6ecb39241bca714b03f5a9865dd3e7457317c`
+- `0x351c025d7644e4e04cf8f75ee01deadc5907c742f29e75e78945d55efb78235e`
+- `0xffd8c0b99555b0adafac163ef7465a0b0aa4cd50471f9cd0549ef7ab2df0e11e`
+- `0xbf5347c9923b9f114d0d403396ea469cb441c96002ca1e8754208a46b5b25b90`
+
+Required tests:
+- audited Trader Joe add-liquidity row resolves to `LP_ENTRY`
+- lending fallback still works for true lending deposit families
+
+### BE-05O — Non-Economic Admin / No-Op Demotion From Economic LP / Vault Families
+
+Purpose:
+- Remove the confirmed fee-only admin/config rows from priceable economic
+  families and narrow other audited fee-only cleanup cases away from economic
+  output when movement evidence is absent.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- admin/no-op tests
+
+Implementation scope:
+- demote `setMinterApproval(address,bool)` to explicit admin/config handling
+- audit and demote other fee-only resolved families when official semantics and
+  saved evidence prove cleanup/admin behavior without asset movement
+- keep economic LP/vault types unavailable for fee-only admin/config rows
+
+Definition of done:
+- `setMinterApproval(...)` no longer resolves to `LP_ENTRY`
+- fee-only admin/config families are explicit and non-economic
+- no demotion rule invents or destroys real movement evidence
+
+Required fixtures:
+- `0x1b330317bfa0f7d06b9de9b35d0f10c0d42bfaca462c9fba8c3a629ee4d5271f`
+- `0xebed08badbae682446a078d78c9d43b0ff2b4aea6b48944b6c663a9e27e5bde7`
+- `0x6f83d81c0fdb3e5bf839b0a3541e5578c7d300b0ce9a2d74207f2b9a0f94e4d4`
+- `0x18eb2089dfbc17194cf37107ca0fbd0b6508a3073590fd356d4ffa2be663a9da`
+- `0x6f50c885315d38a3e062b007a841d0fa77e6ed9127023e55c37d249bf523899c`
+
+Required tests:
+- approval/config family resolves to non-economic terminal type
+- fee-only cleanup row cannot remain priceable economic output without
+  supporting movement evidence
+
+### BE-05P — Economic Evidence Gate Before Pricing
+
+Purpose:
+- Stop resolved-but-under-evidenced economic rows from entering pricing and
+  later AVCO replay.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/onchain/**`
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- normalization / pricing-readiness tests
+
+Implementation scope:
+- define a structural gate for economic types:
+  - require non-fee movement evidence in raw or persisted clarification evidence
+  - treat fee-only rows as non-priceable unless their resolved type is explicit
+    non-economic continuity/admin
+- apply the gate before a row remains `PENDING_PRICE` or `CONFIRMED`
+- demote under-evidenced rows back to clarification or review when the gate
+  fails
+
+Definition of done:
+- the audited under-evidenced economic rows no longer remain price-ready
+  `LP_ENTRY` / `VAULT_WITHDRAW`
+- priceable rows have enough persisted movement evidence for later basis replay
+
+Required fixtures:
+- `0x0088de663d549fbc58dfa8dbba4180a346a580b1d6277254fa84a8ed9c27967a`
+- `0xbea1ddd320653adc3ba0b122d623f21f3101b2c5c6b8d741ef392b3e03366690`
+- `0xe2797d57f15c2c3cf8afc12382c294d59419797fee6f586ebeee8da7a2b36e41`
+- `0x2d48bdb1a6aa2e248020806de49d7a32bf8bf1db24926c16fc9ef82da556d445`
+- `0xe10f1066f25419378a4d559a59afa2e1dd23f0c361975fcac82dd0bdde64a24b`
+- `0x39bb9bf778e42713c18fe2d12f9c692ed07dcd53317e00c2cb63b90a2ed46a83`
+- `0x0c24997c61ef140fa5fdfdfaccbbc4da7ce658035a82981cfa3726f177970403`
+- `0x8a12876e2fd89183c3d2378693a27e9de064811f752236cf26d33415f37419fe`
+- `0x16af2f8aa057b07c98d0245e4952bf47cb03d8760453b117f60c94fe4527f0ff`
+- `0xfdf0b2d28f8272c9f37eb825452de1232ded73ce52f5dfdb3a07d8bccec281ba`
+- `0x52f759541668b75ee3aa2701707ad379c0db9f0616b18b39aa982e2e7bcea626`
+- `0xea0023491e31e75de35ebe0fac43512581da03c9498b977307571feed3f6699a`
+- `0x3415ccd28400e6eaf346a58f55d7a274f399f385aa47192daa45444c544099b6`
+- `0xdaea615fbabe4b7ae0a85bac8bc2478166a746c11ee5511681f37ed7783a2ac7`
+
+Required tests:
+- fee-only economic row fails pricing-readiness gate
+- row with persisted clarification movement evidence may pass the gate
+- explicit non-economic row remains allowed without priceable movement
+
+### BE-05Q — Clarification Evidence Persistence Live Parity
+
+Purpose:
+- Close the live mismatch where clarification attempts are recorded but
+  `raw_transactions` still lack persisted clarification evidence.
+
+Primary write scope:
+- clarification persistence layer
+- raw repository / mapping tests
+- normalization / clarification integration tests
+
+Implementation scope:
+- ensure successful clarification writes adapted evidence and raw full receipt
+  payload onto the raw row in the documented shape
+- keep normalized counters and raw evidence persistence in sync
+- prevent “attempt recorded, raw evidence absent” success paths
+
+Definition of done:
+- clarification attempts on normalized rows correspond to persisted
+  clarification evidence on raw rows
+- live rerun can prove clarification persistence from Mongo alone
+
+Required tests:
+- metadata-only clarification persists evidence on raw row
+- full-receipt clarification persists adapted evidence plus raw full receipt
+- failed clarification attempt does not masquerade as persisted success
+
+### BE-05R — Pricing-Readiness Rerun Pack + Repeat-Audit Handoff
+
+Purpose:
+- Finish the post-clarification corrective slice with one rerun-ready pack that
+  lets the next audit decide whether data is finally safe for pricing and AVCO.
+
+Primary write scope:
+- backend tests
+- task/docs updates if needed
+
+Implementation scope:
+- run targeted regression coverage for:
+  - wrap / unwrap continuity
+  - Across bridge-entry parity
+  - Trader Joe liquidity correction
+  - admin / no-op demotion
+  - pricing-readiness evidence gate
+  - clarification evidence persistence parity
+- document explicit rerun expectations for the next audit
+
+Definition of done:
+- rerun expectations are documented and test-backed
+- the next audit can answer pricing-readiness from data instead of code
+  guesswork
+- acceptance gate for the next audit is explicit:
+  - zero confirmed resolved wrapper / Across / Trader Joe / admin
+    misclassifications
+  - zero fee-only economic rows outside documented non-economic families
+  - persisted clarification evidence exists on raw rows that actually used
+    clarification
 
 ## Mandatory Test Matrix
 

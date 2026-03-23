@@ -19,7 +19,8 @@ public final class AdminConfigSupport {
             "0xcc53287f", // lockdown
             "0x14717656", // addOwnerWithThreshold
             "0x5a3b74b9", // setUserUseReserveAsCollateral
-            "0xe584b654"  // approveForAll
+            "0xe584b654", // approveForAll
+            "0x0de54ba0"  // setMinterApproval
     );
 
     private static final Map<String, Set<String>> CONTRACT_SCOPED_METHOD_IDS = Map.of(
@@ -33,7 +34,8 @@ public final class AdminConfigSupport {
             "addownerwiththreshold(",
             "setuserusereserveascollateral(",
             "approveforall(",
-            "setapprovalforall("
+            "setapprovalforall(",
+            "setminterapproval("
     );
 
     private AdminConfigSupport() {

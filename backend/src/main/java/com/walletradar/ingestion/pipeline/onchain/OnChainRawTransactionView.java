@@ -161,16 +161,32 @@ public final class OnChainRawTransactionView {
     }
 
     public List<Document> explorerTokenTransfers() {
+        List<Document> clarificationTransfers = readDocumentList(clarificationTransfersDocument(), "tokenTransfers");
+        if (!clarificationTransfers.isEmpty()) {
+            return clarificationTransfers;
+        }
         return readDocumentList(readExplorerSection(), "tokenTransfers");
     }
 
     public List<Document> explorerInternalTransfers() {
+        List<Document> clarificationTransfers = readDocumentList(clarificationTransfersDocument(), "internalTransfers");
+        if (!clarificationTransfers.isEmpty()) {
+            return clarificationTransfers;
+        }
         return readDocumentList(readExplorerSection(), "internalTransfers");
     }
 
     public List<Document> persistedLogs() {
+        List<Document> clarificationLogs = readDocumentList(clarificationReceiptDocument(), "logs");
+        if (!clarificationLogs.isEmpty()) {
+            return clarificationLogs;
+        }
         Document rawData = rawTransaction.getRawData();
-        return readDocumentList(rawData, "logs");
+        return filterSyntheticLogs(readDocumentList(rawData, "logs"));
+    }
+
+    public boolean hasClarificationEvidence() {
+        return clarificationEvidenceDocument() != null;
     }
 
     public String tokenTransferFrom(Document transfer) {
@@ -329,6 +345,29 @@ public final class OnChainRawTransactionView {
         return null;
     }
 
+    private Document clarificationEvidenceDocument() {
+        Object clarificationEvidence = readRawField("clarificationEvidence");
+        return clarificationEvidence instanceof Document document ? document : null;
+    }
+
+    private Document clarificationReceiptDocument() {
+        Document clarificationEvidence = clarificationEvidenceDocument();
+        if (clarificationEvidence == null) {
+            return null;
+        }
+        Object receipt = clarificationEvidence.get("receipt");
+        return receipt instanceof Document document ? document : null;
+    }
+
+    private Document clarificationTransfersDocument() {
+        Document clarificationEvidence = clarificationEvidenceDocument();
+        if (clarificationEvidence == null) {
+            return null;
+        }
+        Object transfers = clarificationEvidence.get("transfers");
+        return transfers instanceof Document document ? document : null;
+    }
+
     private boolean isTransferRowBackedTopLevel() {
         Document rawData = rawTransaction.getRawData();
         if (rawData == null) {
@@ -369,6 +408,27 @@ public final class OnChainRawTransactionView {
             }
         }
         return Collections.unmodifiableList(documents);
+    }
+
+    private static List<Document> filterSyntheticLogs(List<Document> logs) {
+        if (logs.isEmpty()) {
+            return logs;
+        }
+        List<Document> filtered = new ArrayList<>(logs.size());
+        for (Document log : logs) {
+            if (log == null) {
+                continue;
+            }
+            Object syntheticFlag = log.get("__syntheticTransferLog");
+            if (syntheticFlag instanceof Boolean synthetic && synthetic) {
+                continue;
+            }
+            if ("true".equalsIgnoreCase(stringify(syntheticFlag)) || "1".equals(stringify(syntheticFlag))) {
+                continue;
+            }
+            filtered.add(log);
+        }
+        return Collections.unmodifiableList(filtered);
     }
 
     private static String stringify(Object value) {

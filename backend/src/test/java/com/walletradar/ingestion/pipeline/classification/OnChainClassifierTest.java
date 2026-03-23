@@ -442,6 +442,38 @@ class OnChainClassifierTest {
     }
 
     @Test
+    @DisplayName("Plasma promo spam family with suspicious token text stays explicit review even with multiple transfers")
+    void plasmaPromoSpamFamilyWithSuspiciousTokenTextStaysExplicitReviewEvenWithMultipleTransfers() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.PLASMA);
+        rawTransaction.getRawData().put("from", COUNTERPARTY);
+        rawTransaction.getRawData().put("to", ROUTER);
+        rawTransaction.getRawData().put("methodId", "0x1939c1ff");
+        rawTransaction.getRawData().put("functionName", "claimRewards(bytes data)");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", TOKEN_A)
+                        .append("tokenSymbol", "www.baseapp.cfd - claim Base airdrop")
+                        .append("tokenName", "Spam Token")
+                        .append("tokenDecimal", "18")
+                        .append("from", COUNTERPARTY)
+                        .append("to", WALLET)
+                        .append("value", "1000000000000000000"),
+                new Document("contractAddress", TOKEN_B)
+                        .append("tokenSymbol", "SPAM")
+                        .append("tokenName", "Spam Token")
+                        .append("tokenDecimal", "18")
+                        .append("from", COUNTERPARTY)
+                        .append("to", "0x3333333333333333333333333333333333333333")
+                        .append("value", "1000000000000000000")
+        )).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.UNKNOWN);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.NEEDS_REVIEW);
+        assertThat(result.missingDataReasons()).containsExactly("PROMO_SPAM_PHISHING");
+    }
+
+    @Test
     @DisplayName("known type with missing receipt-safe fields stays in PENDING_CLARIFICATION")
     void knownTypeWithMissingReceiptSafeFieldsStaysInPendingClarification() {
         RawTransaction rawTransaction = tokenSwapRaw(NetworkId.ETHEREUM);
@@ -457,6 +489,34 @@ class OnChainClassifierTest {
                 "MISSING_EXECUTION_STATUS",
                 "MISSING_EFFECTIVE_GAS_PRICE",
                 "MISSING_GAS_USED"
+        );
+    }
+
+    @Test
+    @DisplayName("non fee payer clarification row still surfaces missing effective gas price")
+    void nonFeePayerClarificationRowStillSurfacesMissingEffectiveGasPrice() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.BASE);
+        rawTransaction.getRawData().put("from", COUNTERPARTY);
+        rawTransaction.getRawData().put("to", WALLET);
+        rawTransaction.getRawData().remove("txreceipt_status");
+        rawTransaction.getRawData().remove("gasPrice");
+        rawTransaction.getRawData().remove("effectiveGasPrice");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", TOKEN_A)
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenDecimal", "6")
+                        .append("from", COUNTERPARTY)
+                        .append("to", WALLET)
+                        .append("value", "1000000")
+        )).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.EXTERNAL_INBOUND);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_CLARIFICATION);
+        assertThat(result.missingDataReasons()).containsExactly(
+                "MISSING_EXECUTION_STATUS",
+                "MISSING_EFFECTIVE_GAS_PRICE"
         );
     }
 
@@ -755,6 +815,62 @@ class OnChainClassifierTest {
     }
 
     @Test
+    @DisplayName("explicit claim selector with inbound movement becomes reward claim without registry")
+    void explicitClaimSelectorWithInboundMovementBecomesRewardClaimWithoutRegistry() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.MANTLE);
+        rawTransaction.getRawData().put("from", COUNTERPARTY);
+        rawTransaction.getRawData().put("to", ROUTER);
+        rawTransaction.getRawData().put("methodId", "0x");
+        rawTransaction.getRawData().put("input", "0x5d4df3bf000000000000000000000000");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", TOKEN_A)
+                        .append("tokenSymbol", "MNT")
+                        .append("tokenName", "Mantle")
+                        .append("tokenDecimal", "18")
+                        .append("from", ROUTER)
+                        .append("to", WALLET)
+                        .append("value", "1000000000000000000")
+        )).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.REWARD_CLAIM);
+        assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.HEURISTIC);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+    }
+
+    @Test
+    @DisplayName("known Mantle merkle distributor without payout becomes claim without movement")
+    void knownMantleMerkleDistributorWithoutPayoutBecomesClaimWithoutMovement() {
+        String distributor = "0x0045601c3c4c561012c108ea84a81e36eac24296";
+        RawTransaction rawTransaction = baseRaw(NetworkId.MANTLE);
+        rawTransaction.getRawData().put("to", distributor);
+        rawTransaction.getRawData().put("methodId", "0x5d4df3bf");
+        rawTransaction.getRawData().put("functionName", "claim(uint256 id,uint256 index,address account,uint256 amount,bytes32[] merkleProof)");
+
+        when(protocolRegistryService.lookup(NetworkId.MANTLE, distributor))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        distributor,
+                        Set.of(NetworkId.MANTLE),
+                        ProtocolRegistryFamily.YIELD,
+                        ProtocolRegistryRole.REWARD_ROUTER,
+                        ProtocolRegistryEventType.REWARD_CLAIM,
+                        ConfidenceLevel.HIGH,
+                        "Merkle",
+                        "V1",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.UNKNOWN);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.NEEDS_REVIEW);
+        assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.PROTOCOL_REGISTRY);
+        assertThat(result.missingDataReasons()).containsExactly("CLAIM_WITHOUT_MOVEMENT");
+    }
+
+    @Test
     @DisplayName("zkSync LiFi bridge execute path resolves to BRIDGE_OUT through method-aware registry dispatch")
     void zksyncLifiBridgeExecutePathResolvesToBridgeOutThroughMethodAwareRegistryDispatch() {
         String lifiDiamond = "0x341e94069f53234fe6dabef707ad424830525715";
@@ -843,6 +959,55 @@ class OnChainClassifierTest {
                         .append("from", WALLET)
                         .append("to", pancakeUniversalRouter)
                         .append("value", "1000000"),
+                new Document("contractAddress", TOKEN_B)
+                        .append("tokenSymbol", "ETH")
+                        .append("tokenDecimal", "18")
+                        .append("from", pancakeUniversalRouter)
+                        .append("to", WALLET)
+                        .append("value", "250000000000000000")
+        )).append("internalTransfers", List.of()));
+        when(protocolRegistryService.lookup(NetworkId.ZKSYNC, pancakeUniversalRouter))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        pancakeUniversalRouter,
+                        Set.of(NetworkId.ZKSYNC),
+                        ProtocolRegistryFamily.DEX,
+                        ProtocolRegistryRole.ROUTER,
+                        ProtocolRegistryEventType.SWAP,
+                        ConfidenceLevel.HIGH,
+                        "PancakeSwap",
+                        "V3",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.SWAP);
+        assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.PROTOCOL_REGISTRY);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+    }
+
+    @Test
+    @DisplayName("zkSync router execute path with round-trip token legs still resolves to SWAP by net asset movement")
+    void zksyncRouterExecutePathWithRoundTripTokenLegsStillResolvesToSwapByNetAssetMovement() {
+        String pancakeUniversalRouter = "0xdaee41e335322c85ff2c5a6745c98e1351806e98";
+        RawTransaction rawTransaction = baseRaw(NetworkId.ZKSYNC);
+        rawTransaction.getRawData().put("to", pancakeUniversalRouter);
+        rawTransaction.getRawData().put("methodId", "0x3593564c");
+        rawTransaction.getRawData().put("functionName", "execute(bytes,bytes[],uint256)");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", TOKEN_A)
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenDecimal", "6")
+                        .append("from", WALLET)
+                        .append("to", pancakeUniversalRouter)
+                        .append("value", "1000000"),
+                new Document("contractAddress", TOKEN_A)
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenDecimal", "6")
+                        .append("from", pancakeUniversalRouter)
+                        .append("to", WALLET)
+                        .append("value", "250000"),
                 new Document("contractAddress", TOKEN_B)
                         .append("tokenSymbol", "ETH")
                         .append("tokenDecimal", "18")
@@ -1491,6 +1656,75 @@ class OnChainClassifierTest {
         rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
                 new Document("contractAddress", TOKEN_A)
                         .append("tokenSymbol", "USDt")
+                        .append("tokenDecimal", "6")
+                        .append("from", WALLET)
+                        .append("to", COUNTERPARTY)
+                        .append("value", "0")
+        )).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.ADMIN_CONFIG);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(result.missingDataReasons()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("known Ethereum zero-amount ERC20 transfer family becomes admin config")
+    void knownEthereumZeroAmountErc20TransferFamilyBecomesAdminConfig() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.ETHEREUM);
+        rawTransaction.getRawData().put("to", "0xc6fd8084fb9b6a0768cf943c341049edd1085b82");
+        rawTransaction.getRawData().put("methodId", "0xa9059cbb");
+        rawTransaction.getRawData().put("functionName", "transfer(address,uint256)");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", TOKEN_A)
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenDecimal", "6")
+                        .append("from", WALLET)
+                        .append("to", COUNTERPARTY)
+                        .append("value", "0")
+        )).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.ADMIN_CONFIG);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(result.missingDataReasons()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("recovered selector on known Arbitrum zero-amount family becomes admin config")
+    void recoveredSelectorOnKnownArbitrumZeroAmountFamilyBecomesAdminConfig() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.ARBITRUM);
+        rawTransaction.getRawData().put("to", "0xc50005eb632e52e2d86096e5dae7b633609b348c");
+        rawTransaction.getRawData().put("methodId", "0x");
+        rawTransaction.getRawData().put("input", "0xe94a5b23000000000000000000000000");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", TOKEN_A)
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenDecimal", "6")
+                        .append("from", WALLET)
+                        .append("to", COUNTERPARTY)
+                        .append("value", "0")
+        )).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.ADMIN_CONFIG);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(result.missingDataReasons()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("known Unichain zero-amount batch family becomes admin config")
+    void knownUnichainZeroAmountBatchFamilyBecomesAdminConfig() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.UNICHAIN);
+        rawTransaction.getRawData().put("to", "0x3333333333333333333333333333333333333333");
+        rawTransaction.getRawData().put("methodId", "0xc16ae7a4");
+        rawTransaction.getRawData().put("functionName", "batch(tuple[] items)");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", TOKEN_A)
+                        .append("tokenSymbol", "USDC")
                         .append("tokenDecimal", "6")
                         .append("from", WALLET)
                         .append("to", COUNTERPARTY)
@@ -2162,6 +2396,64 @@ class OnChainClassifierTest {
     }
 
     @Test
+    @DisplayName("clarification full receipt batch with share inbound and principal outbound becomes lending deposit")
+    void clarificationFullReceiptBatchWithShareInboundAndPrincipalOutboundBecomesLendingDeposit() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.AVALANCHE);
+        rawTransaction.setTxHash("0x305f37a69956a13001962216c845385996114876173bdbaef644bbe3baadf5df");
+        rawTransaction.getRawData().put("methodId", "0xc16ae7a4");
+        rawTransaction.getRawData().put("functionName", "batch(tuple[] items)");
+        rawTransaction.getRawData().put("clarificationEvidence", new Document()
+                .append("receipt", new Document("logs", List.of(
+                        new Document("address", "0xddcbe30a761edd2e19bba930a977475265f36fa1")
+                                .append("topics", List.of("0x6e9738e5aa38fe1517adbb480351ec386ece82947737b18badbcad1e911133ec"))
+                )))
+                .append("transfers", new Document("tokenTransfers", List.of(
+                        new Document("contractAddress", TOKEN_A)
+                                .append("tokenSymbol", "USDC")
+                                .append("tokenName", "USD Coin")
+                                .append("tokenDecimal", "6")
+                                .append("from", WALLET)
+                                .append("to", ROUTER)
+                                .append("value", "1000000"),
+                        new Document("contractAddress", TOKEN_B)
+                                .append("tokenSymbol", "eUSDC")
+                                .append("tokenName", "Euler USDC")
+                                .append("tokenDecimal", "6")
+                                .append("from", ROUTER)
+                                .append("to", WALLET)
+                                .append("value", "995000")
+                ))));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.LENDING_DEPOSIT);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+    }
+
+    @Test
+    @DisplayName("clarification full receipt burn-only cleanup family narrows to admin config")
+    void clarificationFullReceiptBurnOnlyCleanupFamilyNarrowsToAdminConfig() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.OPTIMISM);
+        rawTransaction.setTxHash("0x927d3f458ada7e5ec67f77129e29edcaf2f69bd2b81490a42fec17c0cc3bd4fa");
+        rawTransaction.getRawData().put("methodId", "0xac9650d8");
+        rawTransaction.getRawData().put("input", "0xac9650d80000000000000000000000000000000000000000000000000000000042966c68");
+        rawTransaction.getRawData().put("clarificationEvidence", new Document("receipt", new Document("logs", List.of(
+                new Document("address", "0xc762d18800b3f78ae56e9e61ad7be98a413d59de")
+                        .append("topics", List.of(
+                                "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+                                "0x0000000000000000000000001111111111111111111111111111111111111111",
+                                "0x0000000000000000000000000000000000000000000000000000000000000000"
+                        ))
+                        .append("data", "0x01")
+        ))));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.ADMIN_CONFIG);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+    }
+
+    @Test
     @DisplayName("settlement selector with inbound-only movement becomes bridge in even without registry match")
     void settlementSelectorWithInboundOnlyMovementBecomesBridgeInEvenWithoutRegistryMatch() {
         RawTransaction rawTransaction = baseRaw(NetworkId.UNICHAIN);
@@ -2316,6 +2608,51 @@ class OnChainClassifierTest {
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.LP_ENTRY);
         assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.PROTOCOL_REGISTRY);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.NEEDS_REVIEW);
+        assertThat(result.missingDataReasons()).contains("INSUFFICIENT_MOVEMENT_EVIDENCE");
+    }
+
+    @Test
+    @DisplayName("setMinterApproval is treated as admin config instead of LP entry")
+    void setMinterApprovalIsTreatedAsAdminConfigInsteadOfLpEntry() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.BASE);
+        rawTransaction.getRawData().put("methodId", "0x0de54ba0");
+        rawTransaction.getRawData().put("functionName", "setMinterApproval(address,bool)");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of()).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.ADMIN_CONFIG);
+        assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.METHOD_ID);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+    }
+
+    @Test
+    @DisplayName("Trader Joe addLiquidity stays LP entry and not lending deposit")
+    void traderJoeAddLiquidityStaysLpEntryAndNotLendingDeposit() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.AVALANCHE);
+        rawTransaction.getRawData().put("methodId", "0xe8e33700");
+        rawTransaction.getRawData().put("functionName",
+                "addLiquidity(address tokenX,address tokenY,uint256 amountX,uint256 amountY,uint256 amountXMin,uint256 amountYMin,address to,uint256 deadline)");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", TOKEN_A)
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenDecimal", "6")
+                        .append("from", WALLET)
+                        .append("to", ROUTER)
+                        .append("value", "1000000"),
+                new Document("contractAddress", TOKEN_B)
+                        .append("tokenSymbol", "AVAX")
+                        .append("tokenDecimal", "18")
+                        .append("from", WALLET)
+                        .append("to", ROUTER)
+                        .append("value", "2000000000000000000")
+        )).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.LP_ENTRY);
+        assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.FUNCTION_NAME);
         assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
     }
 

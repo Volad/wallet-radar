@@ -3,6 +3,7 @@ package com.walletradar.ingestion.pipeline.classification.special;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryEntry;
 import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistrySpecialHandlerType;
+import com.walletradar.ingestion.pipeline.classification.support.CalldataDecodingSupport;
 import com.walletradar.ingestion.pipeline.classification.support.RawLeg;
 import com.walletradar.ingestion.pipeline.onchain.OnChainRawTransactionView;
 import org.bson.Document;
@@ -18,6 +19,7 @@ import java.util.List;
 public class MorphoBundlerSpecialHandler implements ProtocolSpecialHandler {
 
     private static final String MULTICALL_SELECTOR = "0x374f435d";
+    private static final String WITHDRAW_COLLATERAL_SELECTOR = "0x1af3bbc6";
     private static final String ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 
     @Override
@@ -38,6 +40,9 @@ public class MorphoBundlerSpecialHandler implements ProtocolSpecialHandler {
 
         boolean hasOutbound = legs.stream().anyMatch(leg -> !leg.fee() && leg.quantityDelta().signum() < 0);
         boolean hasInbound = legs.stream().anyMatch(leg -> !leg.fee() && leg.quantityDelta().signum() > 0);
+        if (CalldataDecodingSupport.containsEmbeddedSelector(view.inputData(), WITHDRAW_COLLATERAL_SELECTOR) && hasInbound) {
+            return SpecialHandlerResult.of(view, NormalizedTransactionType.LENDING_WITHDRAW, entry.confidence(), legs);
+        }
         if (!hasOutbound || !hasInbound) {
             return SpecialHandlerResult.unsupported();
         }

@@ -14,9 +14,12 @@ public final class ZeroAmountTokenSupport {
 
     private static final Set<String> KNOWN_NON_ECONOMIC_METHOD_FAMILIES = Set.of(
             "ARBITRUM|0x0cf79e0a",
+            "ARBITRUM|0xe94a5b23",
             "AVALANCHE|0xa9059cbb",
             "AVALANCHE|0x12514bba",
-            "BASE|0x12514bba"
+            "BASE|0x12514bba",
+            "ETHEREUM|0xa9059cbb",
+            "UNICHAIN|0xc16ae7a4"
     );
 
     private ZeroAmountTokenSupport() {

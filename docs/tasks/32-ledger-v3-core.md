@@ -15,20 +15,22 @@ Implementation handoff:
 - [ ] Matched Bybit withdraw/deposit rows and on-chain txs share a `correlationId` and do not create duplicate BUY/SELL events in replay.
 - [ ] UTA derivative trade pairing uses a sliding `±5 sec` window, not a fixed time bucket.
 - [ ] Internal-transfer heuristics use one installation-wide tracked wallet universe, not per-session wallet sets.
-- [ ] Clarification uses receipt metadata only for status/gas/contract creation fields, does not rely on synthetic `rawData.logs[]`, and is entered only when those receipt-safe fields are actually missing.
+- [ ] The default clarification path uses receipt metadata only for status/gas/contract creation fields, does not rely on synthetic `rawData.logs[]`, and is entered only when those receipt-safe fields are actually missing.
 - [ ] Rows that enter `PENDING_CLARIFICATION` record explicit missing receipt-safe reasons; empty `missingDataReasons[]` is not acceptable for clarification-eligible rows.
 - [ ] Clarification reasons reflect the actually missing receipt-safe fields from canonical raw evidence. `MISSING_CONTRACT_ADDRESS` is allowed only when contract-creation intent is explicitly evidenced by the tx-shaped raw payload; missing `effectiveGasPrice` must not be masked by legacy `gasPrice`.
 - [ ] A live clarification row that is missing both execution status and `effectiveGasPrice` surfaces both reasons in `missingDataReasons[]`, even when the row is not a fee-payer acquisition/disposal row.
-- [ ] `Clarification v2`, if enabled, is a separate allowlisted enrichment path: it may fetch full receipt logs, but only for residual review families where the audit and official protocol semantics show that receipt evidence can materially close the gap.
-- [ ] `Clarification v2` persists full receipt logs in a dedicated clarification-evidence field and re-runs classification from canonical raw evidence plus that persisted receipt evidence; it does not use synthetic `rawData.logs[]`, traces, or explorer UI summaries.
-- [ ] Where the source exposes it, `Clarification v2` also persists the raw full receipt payload alongside the adapted clarification evidence so future deterministic enrichment can reuse it without a new network fetch.
+- [ ] Clarification may fetch full receipt logs only for an allowlisted residual-review set where the audit and official protocol semantics show that receipt evidence can materially close the gap.
+- [ ] Clarification persists full receipt logs in a dedicated clarification-evidence field and re-runs classification from canonical raw evidence plus that persisted receipt evidence; it does not use synthetic `rawData.logs[]`, traces, or explorer UI summaries.
+- [ ] Where the source exposes it, clarification also persists the raw full receipt payload alongside the adapted clarification evidence so future deterministic enrichment can reuse it without a new network fetch.
 - [ ] Clarification enrichment follows raw-source lineage by default: RPC-backed raw uses RPC clarification, Etherscan-family raw uses Etherscan-family clarification, and Blockscout-backed raw uses Blockscout clarification.
-- [ ] `Clarification v2` source routing and storage are deterministic: the same raw row always chooses the same clarification source family and produces the same adapted evidence plus the same persisted raw receipt payload shape.
-- [ ] Rows already closable from current raw evidence, such as claim-family no-movement rows or known Morpho handler gaps, are fixed in classification and do not wait for `Clarification v2`.
+- [ ] Clarification source routing and storage are deterministic: the same raw row always chooses the same clarification source family and produces the same adapted evidence plus the same persisted raw receipt payload shape.
+- [ ] Clarification is not considered complete for a row unless the fetched clarification evidence is actually persisted on the corresponding `raw_transactions` document; counters without persisted raw evidence are invalid.
+- [ ] Rows already closable from current raw evidence, such as claim-family no-movement rows or known Morpho handler gaps, are fixed in classification and do not wait for receipt-log clarification.
 - [ ] Receipt-only cleanup/admin families may narrow to explicit non-economic terminal states, but receipt enrichment may not invent economic movement that is absent from persisted evidence.
 - [ ] Protocol-registry runtime data is loaded from `backend/src/main/resources/protocol-registry.json` only; `event_topics` are reference-only and ignored by the classifier.
 - [ ] Multi-function registry entries use explicit `specialHandler` dispatch and return one canonical result per raw tx.
 - [ ] Wrapped-native `deposit()` / `withdraw(uint256)` on known wrapper contracts classify as `WRAP` / `UNWRAP` before generic function-name fallback.
+- [ ] Wrapped-native `deposit()` / `withdraw(uint256)` on known wrapper contracts still classify as `WRAP` / `UNWRAP` when top-level `to` is missing or weak, as long as persisted raw or persisted clarification evidence proves canonical mint/burn plus native continuity.
 - [ ] Blank or `"0x"` `rawData.methodId` is recovered from `rawData.input[0:10]` before method-id classification runs.
 - [ ] Known bridge/router methods are not allowed to collapse into generic `VAULT_*` or `EXTERNAL_*` types just because the decoded name contains `deposit`, `withdraw`, `multicall`, or `batch`.
 - [ ] Plain positive inbound transfer legs default to `EXTERNAL_INBOUND` unless reward-specific contract evidence or bridge continuity evidence exists.
@@ -44,16 +46,20 @@ Implementation handoff:
 - [ ] Production classification is derived only from backfill-available raw evidence and receipt-safe clarification evidence; human-readable explorer page summaries never override raw legs.
 - [ ] Protocol-specific classification rules are justified by official protocol contracts/docs or equivalent primary sources when those sources exist; explorer UI labels alone are not sufficient rule authority.
 - [ ] Across `depositV3` classifies to `BRIDGE_OUT` on recognized bridge-entry contracts.
+- [ ] Recognized bridge-entry methods such as Across `depositV3(...)` may not fall through to `VAULT_DEPOSIT` once selector, contract identity, and outbound bridge-funding movement are present.
 - [ ] Bridge-settlement selectors such as `fillV3Relay`, `fillRelay`, `redeemWithFee`, `execute302`, and `directFulfill` classify to bridge continuity semantics rather than `REPAY` or `VAULT_*` fallback.
 - [ ] Legitimate `redeemWithFee(...)` bridge settlement and `claimWithRecipient(...)` reward routes must bypass promo/phishing review.
 - [ ] Known claim family `0x3ef3d8ba38ebe18db133cec108f4d14ce00dd9ae` classifies contract-aware: real inbound movement -> `REWARD_CLAIM`; no-movement claim call -> explicit non-economic or review path, never silent reward minting.
 - [ ] The same claim tx may classify differently per tracked wallet when only one tracked wallet actually receives the reward; non-receiving tracked wallets stay explicit `CLAIM_WITHOUT_MOVEMENT` or review, never synthetic `REWARD_CLAIM`.
 - [ ] `CLAIM_WITHOUT_MOVEMENT` is a valid per-wallet terminal outcome for claim-family calls where the tracked wallet signs the claim path but receives no inbound reward movement in persisted raw evidence.
 - [ ] Known lending `withdraw(...)` selectors on lending pools classify to `LENDING_WITHDRAW`, not `LENDING_DEPOSIT`.
+- [ ] Trader Joe `LBRouter.addLiquidity(...)` classifies to `LP_ENTRY`, not `LENDING_DEPOSIT`, when persisted raw shows outbound asset funding and LP-liquidity semantics.
+- [ ] Approval or configuration calls such as `setMinterApproval(...)` never normalize into economic LP or vault types when persisted evidence is fee-only.
 - [ ] Zero-amount token transfers with no economic counterflow never create `BUY` / `SELL` movement; they resolve to contract-scoped admin/no-op handling or explicit review.
 - [ ] Position-manager `multicall` that mints or increases a V3 LP position normalizes to `LP_ENTRY`, not `UNKNOWN`.
 - [ ] Method-aware bundle routers such as Morpho Bundler3 and CL position-manager `modifyLiquidities` do not fall through to broad `multicall` / `deposit` / `withdraw` keyword fallback.
 - [ ] Concentrated-liquidity position-manager `multicall` and `modifyLiquidities` on `ETHEREUM`, `ARBITRUM`, `BASE`, `UNICHAIN`, and `BSC` are resolved through method-aware LP routing using persisted raw evidence only.
+- [ ] Economic rows may enter `PENDING_PRICE` or `CONFIRMED` only when persisted raw or persisted clarification evidence contains non-fee movement evidence sufficient for pricing and later basis replay; fee-only rows may remain priceable only when their resolved type is explicitly non-economic.
 - [ ] Missing `rawData.transactionIndex` is repaired before canonical normalization or surfaced explicitly as a blocker; no guessed ordering index is allowed.
 - [ ] Historical pricing follows the order: stablecoin parity -> swap-derived -> wrapper/native mapping -> CoinGecko historical -> unresolved price flag.
 - [ ] `PRICE_UNKNOWN` does not drop quantity from replay and sets incomplete-history signaling.
@@ -72,6 +78,7 @@ Implementation handoff:
 - Case: UTA trade has only one side present | Scope: In | Expected behaviour: orphan is classified conservatively and recorded for blocker tracking.
 - Case: On-chain tx has only synthetic `rawData.logs[]` evidence | Scope: In | Expected behaviour: logs are ignored; classifier uses explorer/native fields only.
 - Case: Wrapper contract call uses `deposit()` or `withdraw(uint256)` with no helpful function-name context | Scope: In | Expected behaviour: known wrapper selector wins and the tx becomes `WRAP` or `UNWRAP`, not generic `VAULT_*` or `EXTERNAL_*`.
+- Case: Wrapped-native withdraw row has weak or absent top-level `to`, but persisted raw shows wrapped-token burn plus native transfer back to wallet | Scope: In | Expected behaviour: canonical type is still `UNWRAP`, not `VAULT_WITHDRAW` or `LENDING_WITHDRAW`.
 - Case: `rawData.methodId` is `"0x"` but calldata contains a selector | Scope: In | Expected behaviour: selector is recovered from `rawData.input[0:10]` before method-id classification.
 - Case: Bridge/router function name contains `deposit` or `multicall` | Scope: In | Expected behaviour: known method/registry path wins over broad function-name fallback.
 - Case: Inbound transfer has no reward-specific evidence | Scope: In | Expected behaviour: tx defaults to `EXTERNAL_INBOUND` and may retain `AMBIGUOUS_INBOUND_VS_REWARD` as metadata; it does not wait in clarification for receipt metadata.
@@ -79,6 +86,8 @@ Implementation handoff:
 - Case: Explorer page summary says "Transfer" but raw legs show token out + native in | Scope: In | Expected behaviour: classifier follows raw legs and keeps swap-like semantics.
 - Case: Backfill source is provider-first and persists real logs into raw | Scope: In | Expected behaviour: classifier may use those persisted raw logs through the normal view/projection; it does not branch on source or network to change semantics.
 - Case: Recognized bridge-entry `depositV3` call on Across | Scope: In | Expected behaviour: canonical type is `BRIDGE_OUT`, not `VAULT_DEPOSIT`.
+- Case: Trader Joe `LBRouter.addLiquidity(...)` sends two assets out and may refund leftovers | Scope: In | Expected behaviour: canonical type is `LP_ENTRY`, not `LENDING_DEPOSIT`.
+- Case: `setMinterApproval(address,bool)` has zero token transfers, zero internal transfers, and fee-only flow | Scope: In | Expected behaviour: canonical type is explicit admin/config or another non-economic terminal state, never `LP_ENTRY`.
 - Case: Bridge settlement tx uses `fillV3Relay` / `fillRelay` / `redeemWithFee` | Scope: In | Expected behaviour: canonical type follows bridge continuity semantics, not `REPAY` or generic vault/lending fallback.
 - Case: Explorer/provider payload is transfer-shaped and top-level `rawData.value` equals a token transfer amount | Scope: In | Expected behaviour: native leg extraction ignores the contaminated value and uses canonical tx-level evidence only.
 - Case: `claimWithRecipient(...)` on an allowlisted reward distributor carries real inbound token movement | Scope: In | Expected behaviour: canonical type is `REWARD_CLAIM` and promo/phishing heuristics do not override it.
@@ -88,10 +97,11 @@ Implementation handoff:
 - Case: Claim-family call is present for two tracked wallets but only one wallet receives the reward transfer | Scope: In | Expected behaviour: receiving wallet becomes `REWARD_CLAIM`; non-receiving wallet remains explicit `CLAIM_WITHOUT_MOVEMENT` or review and is not upgraded by clarification.
 - Case: Mantle merkle-style `claim(...)` call has no payout to the tracked wallet in current raw | Scope: In | Expected behaviour: row narrows to `CLAIM_WITHOUT_MOVEMENT` or equivalent explicit no-movement claim state during classification; it does not wait for clarification.
 - Case: Morpho Bundler `multicall` contains `morphoWithdrawCollateral(...)` and current raw already shows inbound asset movement | Scope: In | Expected behaviour: row is closed in the handler/classifier, not in clarification.
-- Case: Receipt-log enrichment is enabled for a Pancake CL exit family and full receipt logs reveal deterministic movement | Scope: In | Expected behaviour: `Clarification v2` may persist receipt logs and re-run classification into the correct LP-exit-related type.
+- Case: Receipt-log enrichment is enabled for a Pancake CL exit family and full receipt logs reveal deterministic movement | Scope: In | Expected behaviour: clarification may persist receipt logs and re-run classification into the correct LP-exit-related type.
 - Case: Raw row came from Blockscout-backed ingestion | Scope: In | Expected behaviour: clarification fetch uses Blockscout-compatible receipt/log endpoints first; it does not silently switch to RPC as the normal path.
 - Case: Receipt-log enrichment is enabled for a burn-only LP NFT cleanup family and receipt proves no asset movement | Scope: In | Expected behaviour: row may narrow only to an explicit non-economic terminal state; it does not become `LP_EXIT`.
-- Case: Explorer or RPC traces would explain a row but production `Clarification v2` does not persist those traces | Scope: In | Expected behaviour: the row stays explicit review; unsupported evidence sources are not used.
+- Case: Row is already resolved to an economic type but persisted evidence still contains only fee flow | Scope: In | Expected behaviour: row does not remain price-ready; it must demote back to clarification or review unless the resolved type is explicitly non-economic.
+- Case: Explorer or RPC traces would explain a row but production clarification does not persist those traces | Scope: In | Expected behaviour: the row stays explicit review; unsupported evidence sources are not used.
 - Case: Known lending `withdraw(...)` burns receipt token and returns underlying asset | Scope: In | Expected behaviour: canonical type is `LENDING_WITHDRAW`, not `LENDING_DEPOSIT`.
 - Case: Token transfer leg has zero quantity and no economic counterflow | Scope: In | Expected behaviour: tx does not produce economic movement; it routes to explicit no-op/admin handling or review.
 - Case: Known V3 position-manager `multicall` adds liquidity and mints NFT | Scope: In | Expected behaviour: tx becomes `LP_ENTRY`, not router `UNKNOWN`.
@@ -148,9 +158,9 @@ Implementation handoff:
 2. Wallet-universe projection — maintain one installation-wide tracked wallet set derived from persisted tracking state and use it as normalization input. Depends on: none.
 3. Protocol-registry runtime integration — load and validate the classpath registry, ignore `event_topics`, and expose deterministic contract lookup. Depends on: 1.
 4. On-chain normalization rewrite — rebuild classification, leg extraction, special-handler dispatch, wrapper/router fast-paths, and canonical construction from `raw_transactions` under strict ordering and evidence rules. Depends on: 1, 2, 3.
-5. Clarification v1 rewrite — implement receipt-metadata enrichment with explicit prohibition on synthetic-log evidence and explicit eligibility gating so low confidence alone does not enter clarification. Depends on: 4.
-6. Clarification v2 selective enrichment — add allowlisted full-receipt-log persistence and bounded reclassification for residual review families that are provably closable from production receipt evidence. Depends on: 4, 5.
-7. Pricing rewrite — implement the new resolver chain and unresolved-price handling. Depends on: 1, 4.
+5. Clarification rewrite — implement receipt enrichment with explicit eligibility gating, metadata-safe defaults, allowlisted full-receipt persistence, and deterministic persistence of clarification evidence back onto `raw_transactions`. Depends on: 4.
+6. Clarification residual closeout — add bounded receipt-log reclassification, intentional-review lock for receipt-insufficient families, and evidence-persistence parity checks between normalized counters and raw evidence. Depends on: 4, 5.
+7. Pricing rewrite — implement the new resolver chain, unresolved-price handling, and an evidence gate that blocks fee-only economic rows from entering pricing or replay. Depends on: 1, 4, 5, 6.
 8. Bybit normalization rewrite — pair UTA trades with sliding `±5 sec`, correlate withdraw/deposit rows by `txHash`, and emit canonical correlated docs. Depends on: 1.
 9. AVCO/reconciliation rewrite — replay confirmed canonical docs with transfer carry-over and correlation semantics. Depends on: 1, 7, 8.
 10. Determinism and blocker reporting — add explicit blocker/warning outputs and deterministic ordering guarantees across all replay inputs. Depends on: 4, 8, 9.
@@ -172,5 +182,5 @@ Implementation handoff:
 - Risk: clarification reasons drift away from the real missing fields and hide the true blocker | Mitigation: compute reasons from the raw view, require explicit contract-creation evidence before emitting `MISSING_CONTRACT_ADDRESS`, and treat missing `effectiveGasPrice` independently from legacy `gasPrice`.
 - Risk: clarification readiness is declared too early because review-family debt is mixed with the real clarification blocker | Mitigation: treat promo/phishing, router overloads, zero-amount families, and `CLAIM_WITHOUT_MOVEMENT` as `NEEDS_REVIEW` work, not clarification debt.
 - Risk: per-wallet claim signer rows are force-promoted into reward acquisition | Mitigation: keep `CLAIM_WITHOUT_MOVEMENT` explicit when no inbound reward reaches the tracked wallet in persisted raw evidence.
-- Risk: `Clarification v2` turns into an unbounded second classifier and hides raw-quality debt | Mitigation: keep it allowlisted, persist only production-fetchable receipt evidence, and leave rows already closable from current raw in the classification backlog.
-- Risk: receipt-log enrichment starts depending on traces or explorer UI summaries that are unavailable in production | Mitigation: forbid traces and explorer summaries as runtime evidence, and require every `Clarification v2` rule to be justified by official protocol semantics plus receipt evidence alone.
+- Risk: clarification turns into an unbounded second classifier and hides raw-quality debt | Mitigation: keep receipt-log enrichment allowlisted, persist only production-fetchable receipt evidence, and leave rows already closable from current raw in the classification backlog.
+- Risk: receipt-log enrichment starts depending on traces or explorer UI summaries that are unavailable in production | Mitigation: forbid traces and explorer summaries as runtime evidence, and require every receipt-log clarification rule to be justified by official protocol semantics plus receipt evidence alone.

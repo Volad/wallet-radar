@@ -45,6 +45,13 @@ class MorphoBundlerSpecialHandlerTest {
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.SWAP);
     }
 
+    @Test
+    @DisplayName("withdraw-collateral bundle with inbound principal closes to LENDING_WITHDRAW")
+    void withdrawCollateralBundleWithInboundPrincipalClosesToLendingWithdraw() {
+        SpecialHandlerResult result = handler.classify(entry(), withdrawCollateralView(), withdrawCollateralLegs());
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.LENDING_WITHDRAW);
+    }
+
     private ProtocolRegistryEntry entry() {
         return new ProtocolRegistryEntry(
                 "0x1fa4431bc113d308bee1d46b0e98cb805fb48c13",
@@ -138,6 +145,26 @@ class MorphoBundlerSpecialHandlerTest {
         return OnChainRawTransactionView.wrap(rawTransaction);
     }
 
+    private OnChainRawTransactionView withdrawCollateralView() {
+        RawTransaction rawTransaction = baseRaw();
+        rawTransaction.setRawData(new Document()
+                .append("timeStamp", "1700000000")
+                .append("transactionIndex", "1")
+                .append("methodId", "0x374f435d")
+                .append("functionName", "multicall(tuple[] bundle)")
+                .append("input", "0x374f435d000000000000000000000000000000000000000000000000000000001af3bbc6")
+                .append("explorer", new Document("tokenTransfers", List.of(
+                        new Document("from", "0x6c247b1f6182318877311737bac0844baa518f5e")
+                                .append("to", "0x1111111111111111111111111111111111111111")
+                                .append("contractAddress", "0x41ca7586cc1311807b4605fbb748a3b8862b42b5")
+                                .append("tokenSymbol", "syrupUSDC")
+                                .append("tokenName", "Syrup USDC")
+                                .append("tokenDecimal", "6")
+                                .append("value", "1887722544")
+                ))));
+        return OnChainRawTransactionView.wrap(rawTransaction);
+    }
+
     private RawTransaction baseRaw() {
         RawTransaction rawTransaction = new RawTransaction();
         rawTransaction.setTxHash("0xabc");
@@ -164,6 +191,12 @@ class MorphoBundlerSpecialHandlerTest {
         return List.of(
                 RawLeg.asset("0xaaaa", "USDC", new BigDecimal("-1")),
                 RawLeg.asset("0xbbbb", "DAI", new BigDecimal("1"))
+        );
+    }
+
+    private List<RawLeg> withdrawCollateralLegs() {
+        return List.of(
+                RawLeg.asset("0x41ca7586cc1311807b4605fbb748a3b8862b42b5", "syrupUSDC", new BigDecimal("1887.722544"))
         );
     }
 }

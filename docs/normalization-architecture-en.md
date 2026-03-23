@@ -76,7 +76,7 @@ rawData:
 
 **Critical constraint:** classification trusts only canonical tx-level raw fields,
 persisted transfer arrays, and persisted real receipt logs that came from backfill
-or from a dedicated clarification-v2 receipt-evidence field exposed through the
+or from a dedicated clarification receipt-evidence field exposed through the
 same raw view.
 Human-readable explorer page summaries may assist offline audit only; they are not
 classifier evidence. If a source returns transfer-style payload rows, ingestion must
@@ -981,13 +981,13 @@ SCAM-03  If a promo/phishing tx survives raw persistence, normalization must sti
 | From | To | Condition |
 |---|---|---|
 | initial | PENDING_CLARIFICATION | type known AND receipt-safe fields are missing AND clarification source exists |
-| initial | PENDING_PRICE | evidence is sufficient for pricing, even if confidence remains LOW |
+| initial | PENDING_PRICE | evidence is sufficient for pricing, including non-FEE movement evidence for economic types, even if confidence remains LOW |
 | initial | CONFIRMED | type = APPROVE or ADMIN_CONFIG or INTERNAL_TRANSFER or WRAP/UNWRAP |
 | initial | NEEDS_REVIEW | type unknown OR ordering metadata cannot be repaired OR handler/method support is missing |
 | PENDING_CLARIFICATION | PENDING_PRICE | enrichment raised confidence |
 | PENDING_CLARIFICATION | NEEDS_REVIEW | max attempts (3) reached |
 | PENDING_PRICE | PENDING_STAT | all non-FEE flows have `unitPriceUsd` OR `priceSource = UNKNOWN` |
-| PENDING_PRICE | NEEDS_REVIEW | pricing input is structurally invalid after clarification |
+| PENDING_PRICE | NEEDS_REVIEW | pricing input is structurally invalid after clarification or still lacks persisted non-FEE movement evidence for an economic type |
 | PENDING_STAT | CONFIRMED | validation passed |
 | PENDING_STAT | NEEDS_REVIEW | validation failed (e.g. SWAP has no BUY leg) |
 
@@ -1002,8 +1002,8 @@ Clarification is intentionally narrow:
   LP position managers, routers, or multicalls
 - every clarification-eligible row must carry explicit receipt-safe missing reasons
 
-Clarification v2 is a separate bounded extension, not a widening of the base
-clarification queue:
+Clarification may optionally use full receipt enrichment for an allowlisted
+review set, but this is not a widening of the base clarification queue:
 
 - it may target only an allowlisted review-family set whose closure is supported
   by the latest audit and by official protocol semantics
@@ -1012,12 +1012,17 @@ clarification queue:
   the raw row; cross-source fallback is exceptional and must be documented
 - it should persist both the adapted clarification evidence and the raw full
   receipt payload when the source exposes it
+- clarification is not complete for a row unless that fetched evidence is
+  persisted back onto the raw row in a deterministic shape
 - it must keep that new evidence in a dedicated clarification-evidence area,
   never as synthetic `rawData.logs[]`
 - it may re-run classification only from canonical raw evidence plus persisted
   real receipt logs
 - rows already closable from current raw must stay classifier work, not
-  clarification-v2 work
+  clarification work
+- resolved economic rows that still have only fee flow must not advance to
+  pricing until raw or persisted clarification evidence closes their movement
+  semantics
 
 ### 7.1 Pricing resolution contract
 
@@ -1216,7 +1221,7 @@ INV-03  If tokenDecimal is missing:
 INV-04  synthetic logs[] are not a data source.
         Explorer-derived synthetic logs must not influence classification.
         Persisted real receipt logs may be used only when they are explicitly
-        marked as backfill or clarification-v2 evidence and consumed through the
+        marked as backfill or clarification evidence and consumed through the
         normal raw view.
 
 INV-04a protocol-registry `event_topics` are reference metadata only.

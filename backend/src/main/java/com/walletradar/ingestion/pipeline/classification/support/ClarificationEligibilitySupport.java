@@ -46,7 +46,7 @@ public final class ClarificationEligibilitySupport {
         if (!view.hasExecutionStatusEvidence()) {
             reasons.add("MISSING_EXECUTION_STATUS");
         }
-        if (view.isFeePayer() && !view.hasEffectiveGasPriceEvidence()) {
+        if (!view.hasEffectiveGasPriceEvidence()) {
             reasons.add("MISSING_EFFECTIVE_GAS_PRICE");
         }
         if (view.isFeePayer() && !view.hasGasUsed()) {

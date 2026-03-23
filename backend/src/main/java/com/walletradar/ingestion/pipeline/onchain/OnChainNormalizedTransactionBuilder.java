@@ -26,6 +26,7 @@ public class OnChainNormalizedTransactionBuilder {
         applyCanonicalFields(normalized, rawTransaction, classificationResult);
         normalized.setId(canonicalId(rawTransaction));
         normalized.setClarificationAttempts(0);
+        normalized.setFullReceiptClarificationAttempts(0);
         normalized.setPricingAttempts(0);
         normalized.setStatAttempts(0);
         normalized.setCreatedAt(now);
@@ -48,6 +49,7 @@ public class OnChainNormalizedTransactionBuilder {
         normalized.setCreatedAt(existing.getCreatedAt());
         normalized.setUpdatedAt(now);
         normalized.setClarificationAttempts(safeCounter(existing.getClarificationAttempts()) + 1);
+        normalized.setFullReceiptClarificationAttempts(safeCounter(existing.getFullReceiptClarificationAttempts()));
         normalized.setPricingAttempts(safeCounter(existing.getPricingAttempts()));
         normalized.setStatAttempts(safeCounter(existing.getStatAttempts()));
         normalized.setCorrelationId(existing.getCorrelationId());
@@ -72,6 +74,7 @@ public class OnChainNormalizedTransactionBuilder {
         normalized.setCreatedAt(existing.getCreatedAt());
         normalized.setUpdatedAt(now);
         normalized.setClarificationAttempts(safeCounter(existing.getClarificationAttempts()));
+        normalized.setFullReceiptClarificationAttempts(safeCounter(existing.getFullReceiptClarificationAttempts()));
         normalized.setPricingAttempts(safeCounter(existing.getPricingAttempts()));
         normalized.setStatAttempts(safeCounter(existing.getStatAttempts()));
         normalized.setCorrelationId(existing.getCorrelationId());

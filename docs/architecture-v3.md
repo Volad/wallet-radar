@@ -15,7 +15,7 @@
 |---|----------|-----------|
 | D-01 | Modular monolith, not microservices | Single VPS, low operational cost, clear package boundaries, no network hop between normalization, pricing, and AVCO. |
 | D-02 | Raw collection stays source-aware, but classification stays source-agnostic | Backfill may use explorer-first, provider-first, or native-repair paths per network, but v3 classification still starts only from canonicalized `raw_transactions`, not from source-specific branches. |
-| D-03 | Synthetic logs are never classification evidence | Explorer-derived synthetic `rawData.logs[]` remain out of bounds. Real provider-persisted receipt logs may exist in canonical raw and may be consumed only through the normal raw view/projection. Clarification v1 may enrich `status`, `gasUsed`, and `contractAddress`, but it never invents logs. Clarification v2, if enabled, should persist both adapted receipt evidence and the raw full receipt payload in dedicated evidence fields before classification may consume them. |
+| D-03 | Synthetic logs are never classification evidence | Explorer-derived synthetic `rawData.logs[]` remain out of bounds. Real provider-persisted receipt logs may exist in canonical raw and may be consumed only through the normal raw view/projection. Clarification may enrich `status`, `gasUsed`, and `contractAddress`, and for an allowlisted review set it may also persist adapted receipt evidence plus the raw full receipt payload in dedicated evidence fields before classification may consume them. Clarification is not complete unless that evidence is actually persisted on the raw row. |
 | D-04 | `user_sessions` are persisted on the backend | Session state is client-generated (`sessionId`) but stored in MongoDB so wallet sets, selected networks, and backfill status survive browser restarts. |
 | D-05 | Canonical normalization uses one installation-wide tracked wallet universe | `normalized_transactions` must not change meaning per session. Internal-transfer detection uses a global tracked-wallet projection, not per-session payloads. |
 | D-06 | `external_ledger_raw` is the immutable Bybit import layer; `normalized_transactions` is the canonical accounting layer | Raw Bybit rows remain source evidence. Basis replay and read models consume only canonical normalized documents, regardless of source. |
@@ -38,7 +38,8 @@
 | D-23 | Protocol-specific rule design follows protocol-source semantics when available | When official contracts or protocol docs exist, classifier rules should align to those method semantics rather than explorer UI labels or ad-hoc heuristics. |
 | D-24 | Clarification reasons must describe the real missing receipt-safe evidence | `MISSING_CONTRACT_ADDRESS` is valid only for explicit contract-creation rows; missing `effectiveGasPrice` is not satisfied by legacy `gasPrice` fallback used for fee math. |
 | D-25 | `CLAIM_WITHOUT_MOVEMENT` is a valid per-wallet terminal state | When a tracked wallet signs a known claim route but does not receive the reward transfer in persisted raw evidence, classification must not synthesize `REWARD_CLAIM`. |
-| D-26 | Clarification v2 is a bounded receipt-log enrichment path, not a generic second classifier | Only an allowlisted review-family set may use full receipt-log enrichment. Traces, explorer UI summaries, and analyst-only notes remain out of bounds. Rows already closable from current raw stay classification work, not clarification-v2 work. Clarification source must follow raw-source lineage by default. |
+| D-26 | Clarification is a bounded receipt-enrichment stage, not a generic second classifier | Metadata-only clarification remains the default. Full receipt-log enrichment is allowed only for an allowlisted review-family set. Traces, explorer UI summaries, and analyst-only notes remain out of bounds. Rows already closable from current raw stay classification work. Clarification source must follow raw-source lineage by default. |
+| D-27 | Pricing-ready economic rows require persisted movement evidence | Resolved economic rows may not proceed to pricing or replay from fee-only flow. Wrapped-native continuity, bridge-entry semantics, liquidity entry/exit semantics, and admin/config demotion must be correct before AVCO consumes the row. |
 
 ### Assumptions
 
@@ -86,8 +87,7 @@
 │   ProtocolRegistryLoader / SpecialHandlerDispatcher                   │
 │   MethodId / FunctionName / Heuristics                                │
 │   LegExtractor                                                        │
-│   ClarificationJob v1 (receipt metadata only)                         │
-│   ClarificationV2Job (allowlisted full receipt-log enrichment)        │
+│   ClarificationJob (metadata-safe + allowlisted full receipt)         │
 │   BybitLedgerNormalizer                                               │
 │   BybitTradePairer (±5 sec)                                           │
 │   BybitBridgeCorrelator                                               │
@@ -370,10 +370,10 @@ Read paths satisfied by indexes:
 7. After the configured retry budget:
    - improved record -> `PENDING_PRICE`
    - unresolved record -> `NEEDS_REVIEW`
-8. `Clarification v2` is a separate bounded job for allowlisted residual review families whose closure requires full receipt logs.
-9. `Clarification v2` should persist both the adapted clarification evidence and the raw full receipt payload, when the source exposes it, in dedicated clarification-evidence fields.
-10. `Clarification v2` must fetch receipt evidence from the same source family that produced the raw row unless an explicit documented fallback is triggered.
-11. `Clarification v2` must not use traces, explorer UI labels, or manual audit notes as runtime evidence.
+8. Clarification may fetch full receipt evidence only for allowlisted residual review families whose closure requires receipt logs.
+9. Clarification should persist both the adapted clarification evidence and the raw full receipt payload, when the source exposes it, in dedicated clarification-evidence fields.
+10. Clarification must fetch receipt evidence from the same source family that produced the raw row unless an explicit documented fallback is triggered.
+11. Clarification must not use traces, explorer UI labels, or manual audit notes as runtime evidence.
 
 ### 4. Pricing
 

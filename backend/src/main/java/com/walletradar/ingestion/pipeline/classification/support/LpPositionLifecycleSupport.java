@@ -44,12 +44,19 @@ public final class LpPositionLifecycleSupport {
             Optional<ProtocolRegistryEntry> decodedToEntry
     ) {
         return switch (String.valueOf(view.methodId())) {
-            case MINT_SELECTOR, STRUCT_MINT_SELECTOR, INCREASE_LIQUIDITY_SELECTOR -> NormalizedTransactionType.LP_ENTRY;
+            case MINT_SELECTOR, STRUCT_MINT_SELECTOR, INCREASE_LIQUIDITY_SELECTOR ->
+                    hasOutboundNonFeeLeg(movementLegs) || hasPositionNftMintLog(view)
+                            ? NormalizedTransactionType.LP_ENTRY
+                            : null;
             case DECREASE_LIQUIDITY_SELECTOR -> hasInboundNonFeeLeg(movementLegs)
                     ? NormalizedTransactionType.LP_EXIT
                     : NormalizedTransactionType.LP_FEE_CLAIM;
-            case COLLECT_SELECTOR -> NormalizedTransactionType.LP_FEE_CLAIM;
-            case BURN_SELECTOR -> NormalizedTransactionType.LP_EXIT;
+            case COLLECT_SELECTOR -> hasInboundNonFeeLeg(movementLegs)
+                    ? NormalizedTransactionType.LP_FEE_CLAIM
+                    : null;
+            case BURN_SELECTOR -> hasInboundNonFeeLeg(movementLegs)
+                    ? NormalizedTransactionType.LP_EXIT
+                    : null;
             case MODIFY_LIQUIDITIES_SELECTOR -> resolveModifyLiquiditiesType(view, movementLegs);
             case SAFE_TRANSFER_FROM_SELECTOR, SAFE_TRANSFER_FROM_WITH_DATA_SELECTOR ->
                     resolveSafeTransferType(decodedFromEntry, decodedToEntry).orElse(null);

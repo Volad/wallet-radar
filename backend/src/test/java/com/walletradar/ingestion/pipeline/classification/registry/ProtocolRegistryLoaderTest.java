@@ -80,6 +80,10 @@ class ProtocolRegistryLoaderTest {
                         "0x70f61901658aafb7ae57da0c30695ce4417e72b9"
                 ))
                 .containsKey(new ProtocolRegistryLoader.RegistryKey(
+                        NetworkId.MANTLE,
+                        "0x0045601c3c4c561012c108ea84a81e36eac24296"
+                ))
+                .containsKey(new ProtocolRegistryLoader.RegistryKey(
                         NetworkId.UNICHAIN,
                         "0x6f7d514bbd4aff3bcd1140b7344b32f063dee486"
                 ))

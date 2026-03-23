@@ -15,11 +15,12 @@ import com.walletradar.ingestion.config.OnChainClarificationProperties;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassifier;
 import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryService;
 import com.walletradar.ingestion.pipeline.classification.special.ProtocolSpecialHandlerDispatcher;
+import com.walletradar.ingestion.pipeline.clarification.ClarificationMode;
 import com.walletradar.ingestion.pipeline.classification.support.NativeAssetSymbolResolver;
 import com.walletradar.ingestion.pipeline.clarification.ClarificationReceiptEnrichment;
-import com.walletradar.ingestion.pipeline.clarification.ExplorerReceiptClarificationGateway;
 import com.walletradar.ingestion.pipeline.clarification.PendingClarificationQueryService;
 import com.walletradar.ingestion.pipeline.clarification.RawTransactionClarificationEnricher;
+import com.walletradar.ingestion.pipeline.clarification.ReceiptClarificationGateway;
 import com.walletradar.ingestion.pipeline.onchain.OnChainNormalizedTransactionBuilder;
 import com.walletradar.ingestion.wallet.query.TrackedWalletLookupService;
 import org.bson.Document;
@@ -55,7 +56,7 @@ class OnChainClarificationServiceTest {
     @Mock
     private PendingClarificationQueryService pendingClarificationQueryService;
     @Mock
-    private ExplorerReceiptClarificationGateway clarificationGateway;
+    private ReceiptClarificationGateway clarificationGateway;
     @Mock
     private RawTransactionRepository rawTransactionRepository;
     @Mock
@@ -105,12 +106,18 @@ class OnChainClarificationServiceTest {
         NormalizedTransaction pending = pendingClarification(NormalizedTransactionType.SWAP);
         RawTransaction rawTransaction = lowConfidenceSwapRaw();
         when(rawTransactionRepository.findById(pending.getId())).thenReturn(Optional.of(rawTransaction));
-        when(clarificationGateway.fetch("0xabc", NetworkId.ETHEREUM))
+        when(clarificationGateway.fetch(rawTransaction, ClarificationMode.METADATA_ONLY))
                 .thenReturn(Optional.of(new ClarificationReceiptEnrichment(
                         "1",
                         "21000",
                         "50000000000",
-                        "0x9999999999999999999999999999999999999999"
+                        "0x9999999999999999999999999999999999999999",
+                        null,
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        null,
+                        null
                 )));
 
         boolean clarified = service.clarify(pending);
@@ -148,7 +155,8 @@ class OnChainClarificationServiceTest {
         pending.setClarificationAttempts(2);
 
         when(rawTransactionRepository.findById(pending.getId())).thenReturn(Optional.of(lowConfidenceSwapRaw()));
-        when(clarificationGateway.fetch("0xabc", NetworkId.ETHEREUM)).thenReturn(Optional.empty());
+        when(clarificationGateway.fetch(any(RawTransaction.class), org.mockito.ArgumentMatchers.eq(ClarificationMode.METADATA_ONLY)))
+                .thenReturn(Optional.empty());
 
         boolean clarified = service.clarify(pending);
 
@@ -175,19 +183,41 @@ class OnChainClarificationServiceTest {
         NormalizedTransaction pending = pendingClarification(NormalizedTransactionType.VAULT_DEPOSIT);
         RawTransaction rawTransaction = lowConfidenceDepositWithSyntheticLogsRaw();
         when(rawTransactionRepository.findById(pending.getId())).thenReturn(Optional.of(rawTransaction));
-        when(clarificationGateway.fetch("0xabc", NetworkId.ETHEREUM))
-                .thenReturn(Optional.of(new ClarificationReceiptEnrichment("1", "21000", "50000000000", null)));
+        when(clarificationGateway.fetch(rawTransaction, ClarificationMode.METADATA_ONLY))
+                .thenReturn(Optional.of(new ClarificationReceiptEnrichment(
+                        "1",
+                        "21000",
+                        "50000000000",
+                        null,
+                        null,
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        null,
+                        null
+                )));
 
         boolean clarified = service.clarify(pending);
 
         assertThat(clarified).isTrue();
+
+        ArgumentCaptor<RawTransaction> rawCaptor = ArgumentCaptor.forClass(RawTransaction.class);
+        verify(rawTransactionRepository).save(rawCaptor.capture());
+        Document clarificationEvidence = rawCaptor.getValue().getRawData().get("clarificationEvidence", Document.class);
+        assertThat(clarificationEvidence).isNotNull();
+        assertThat(clarificationEvidence.getString("sourceFamily")).isNull();
+        assertThat(clarificationEvidence.get("receipt", Document.class))
+                .containsEntry("txReceiptStatus", "1")
+                .containsEntry("gasUsed", "21000")
+                .containsEntry("effectiveGasPrice", "50000000000");
 
         ArgumentCaptor<NormalizedTransaction> normalizedCaptor = ArgumentCaptor.forClass(NormalizedTransaction.class);
         verify(normalizedTransactionRepository).save(normalizedCaptor.capture());
         NormalizedTransaction saved = normalizedCaptor.getValue();
         assertThat(saved.getType()).isEqualTo(NormalizedTransactionType.VAULT_DEPOSIT);
         assertThat(saved.getClassifiedBy()).isEqualTo(ClassificationSource.FUNCTION_NAME);
-        assertThat(saved.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        assertThat(saved.getStatus()).isEqualTo(NormalizedTransactionStatus.NEEDS_REVIEW);
+        assertThat(saved.getMissingDataReasons()).contains("INSUFFICIENT_MOVEMENT_EVIDENCE");
     }
 
     @Test
@@ -218,8 +248,19 @@ class OnChainClarificationServiceTest {
         NormalizedTransaction pending = pendingClarification(NormalizedTransactionType.SWAP);
         RawTransaction rawTransaction = lowConfidenceSwapRaw();
         when(rawTransactionRepository.findById(pending.getId())).thenReturn(Optional.of(rawTransaction));
-        when(clarificationGateway.fetch("0xabc", NetworkId.ETHEREUM))
-                .thenReturn(Optional.of(new ClarificationReceiptEnrichment("1", null, null, null)));
+        when(clarificationGateway.fetch(rawTransaction, ClarificationMode.METADATA_ONLY))
+                .thenReturn(Optional.of(new ClarificationReceiptEnrichment(
+                        "1",
+                        null,
+                        null,
+                        null,
+                        null,
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        null,
+                        null
+                )));
 
         boolean clarified = service.clarify(pending);
 

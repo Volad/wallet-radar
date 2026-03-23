@@ -28,9 +28,6 @@ public final class WrappedNativeSupport {
         if (view == null || nativeAssetSymbolResolver == null) {
             return Optional.empty();
         }
-        if (!nativeAssetSymbolResolver.isWrappedNative(view.networkId(), view.toAddress())) {
-            return Optional.empty();
-        }
         return switch (view.methodId()) {
             case WRAP_SELECTOR -> Optional.of(NormalizedTransactionType.WRAP);
             case UNWRAP_SELECTOR -> Optional.of(NormalizedTransactionType.UNWRAP);

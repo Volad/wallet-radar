@@ -10,7 +10,7 @@ import org.springframework.stereotype.Component;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Scheduled driver for bounded low-confidence clarification.
+ * Scheduled driver for on-chain clarification with metadata and allowlisted full-receipt passes.
  */
 @Component
 @RequiredArgsConstructor
@@ -23,6 +23,7 @@ public class OnChainClarificationJob {
 
     private final OnChainClarificationProperties properties;
     private final OnChainClarificationService onChainClarificationService;
+    private final OnChainReceiptClarificationService onChainReceiptClarificationService;
 
     @Scheduled(fixedDelayString = "${walletradar.normalization.clarification.schedule-interval-ms:120000}")
     public void runScheduled() {
@@ -45,16 +46,36 @@ public class OnChainClarificationJob {
         int processed = 0;
         long startedAtNanos = StageExecutionLogSupport.logStart(log, STAGE_NAME, trigger);
         try {
-            while (true) {
-                int batchProcessed = onChainClarificationService.processNextBatch();
-                processed += batchProcessed;
-                if (batchProcessed == 0) {
-                    return processed;
-                }
+            processed += drainMetadataClarification();
+            if (properties.getFullReceipt().isEnabled()) {
+                processed += drainFullReceiptClarification();
             }
+            return processed;
         } finally {
             StageExecutionLogSupport.logFinish(log, STAGE_NAME, trigger, processed, startedAtNanos);
             running.set(false);
+        }
+    }
+
+    private int drainMetadataClarification() {
+        int processed = 0;
+        while (true) {
+            int batchProcessed = onChainClarificationService.processNextBatch();
+            processed += batchProcessed;
+            if (batchProcessed == 0) {
+                return processed;
+            }
+        }
+    }
+
+    private int drainFullReceiptClarification() {
+        int processed = 0;
+        while (true) {
+            int batchProcessed = onChainReceiptClarificationService.processNextBatch();
+            processed += batchProcessed;
+            if (batchProcessed == 0) {
+                return processed;
+            }
         }
     }
 }

@@ -18,6 +18,7 @@ public final class InboundSignalSupport {
             "0xb7034f7e", // Compound claim
             "0xbe5013dc", // FLUID claim
             "0x5eac6239", // Pendle claim
+            "0x5d4df3bf", // generic claim(uint256,address,...)
             "0x8b681820", // BSC claim
             "0x379607f5", // stream claim
             "0x2f52ebb7"  // merkle claim
@@ -30,6 +31,9 @@ public final class InboundSignalSupport {
             OnChainRawTransactionView view,
             List<RawLeg> movementLegs
     ) {
+        if (isKnownPromoSpamFamily(view)) {
+            return true;
+        }
         String walletAddress = view.walletAddress();
         if (walletAddress == null || walletAddress.equals(view.fromAddress())) {
             return false;
@@ -58,10 +62,30 @@ public final class InboundSignalSupport {
         return PromoSpamTextSupport.isSuspiciousTokenText(view.functionName());
     }
 
+    public static boolean isKnownPromoSpamFamily(OnChainRawTransactionView view) {
+        if (view == null || view.networkId() == null) {
+            return false;
+        }
+        if (!"PLASMA".equals(view.networkId().name()) || !"0x1939c1ff".equals(view.methodId())) {
+            return false;
+        }
+        for (Document transfer : view.explorerTokenTransfers()) {
+            if (PromoSpamTextSupport.isSuspiciousTokenText(view.tokenTransferSymbol(transfer))
+                    || PromoSpamTextSupport.isSuspiciousTokenText(view.tokenTransferName(transfer))) {
+                return true;
+            }
+        }
+        return PromoSpamTextSupport.isSuspiciousTokenText(view.functionName());
+    }
+
     public static boolean hasExplicitClaimSignal(OnChainRawTransactionView view) {
         String functionName = view.functionName();
-        return (functionName != null && functionName.contains("claim"))
-                || CLAIM_LIKE_SELECTORS.contains(view.methodId());
+        return hasExplicitClaimSelector(view)
+                || (functionName != null && functionName.contains("claim"));
+    }
+
+    public static boolean hasExplicitClaimSelector(OnChainRawTransactionView view) {
+        return CLAIM_LIKE_SELECTORS.contains(view.methodId());
     }
 
     public static boolean hasRewardLikeSignal(OnChainRawTransactionView view) {

@@ -9,10 +9,11 @@ import com.walletradar.ingestion.config.OnChainClarificationProperties;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassificationResult;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassifier;
 import com.walletradar.ingestion.pipeline.classification.support.ClarificationEligibilitySupport;
+import com.walletradar.ingestion.pipeline.clarification.ClarificationMode;
 import com.walletradar.ingestion.pipeline.clarification.ClarificationReceiptEnrichment;
-import com.walletradar.ingestion.pipeline.clarification.ExplorerReceiptClarificationGateway;
 import com.walletradar.ingestion.pipeline.clarification.PendingClarificationQueryService;
 import com.walletradar.ingestion.pipeline.clarification.RawTransactionClarificationEnricher;
+import com.walletradar.ingestion.pipeline.clarification.ReceiptClarificationGateway;
 import com.walletradar.ingestion.pipeline.onchain.OnChainNormalizedTransactionBuilder;
 import com.walletradar.ingestion.pipeline.onchain.OnChainRawTransactionView;
 import lombok.RequiredArgsConstructor;
@@ -34,7 +35,7 @@ public class OnChainClarificationService {
 
     private final PendingClarificationQueryService pendingClarificationQueryService;
     private final OnChainClarificationProperties properties;
-    private final ExplorerReceiptClarificationGateway clarificationGateway;
+    private final ReceiptClarificationGateway clarificationGateway;
     private final RawTransactionClarificationEnricher rawTransactionClarificationEnricher;
     private final RawTransactionRepository rawTransactionRepository;
     private final OnChainClassifier onChainClassifier;
@@ -54,7 +55,7 @@ public class OnChainClarificationService {
                 completed++;
             }
         }
-        return completed;
+         return completed;
     }
 
     public boolean clarify(NormalizedTransaction normalizedTransaction) {
@@ -80,8 +81,8 @@ public class OnChainClarificationService {
             }
 
             Optional<ClarificationReceiptEnrichment> enrichment = clarificationGateway.fetch(
-                    normalizedTransaction.getTxHash(),
-                    normalizedTransaction.getNetworkId()
+                    rawTransaction,
+                    ClarificationMode.METADATA_ONLY
             );
             if (enrichment.isEmpty()) {
                 markFailure(normalizedTransaction, rawTransaction, "CLARIFICATION_RECEIPT_UNAVAILABLE", now);

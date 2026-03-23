@@ -23,4 +23,24 @@ public class OnChainClarificationProperties {
     private long retryDelaySeconds = 120;
 
     private int maxAttempts = 3;
+
+    private FullReceipt fullReceipt = new FullReceipt();
+
+    public void setFullReceipt(FullReceipt fullReceipt) {
+        this.fullReceipt = fullReceipt != null ? fullReceipt : new FullReceipt();
+    }
+
+    @NoArgsConstructor
+    @Getter
+    @Setter
+    public static class FullReceipt {
+
+        private boolean enabled = false;
+
+        private int batchSize = 50;
+
+        private long retryDelaySeconds = 300;
+
+        private int maxAttempts = 1;
+    }
 }

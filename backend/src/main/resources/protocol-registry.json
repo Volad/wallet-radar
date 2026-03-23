@@ -1713,6 +1713,19 @@
       "confidence": "HIGH",
       "notes": "claimRewards(uint256[] _pids) reward-distribution path. Must not fall back to plain inbound."
     },
+    "0x0045601c3c4c561012c108ea84a81e36eac24296": {
+      "name": "Mantle Merkle Distributor",
+      "protocol": "Merkle",
+      "version": "V1",
+      "family": "YIELD",
+      "role": "REWARD_ROUTER",
+      "event_type": "REWARD_CLAIM",
+      "networks": [
+        "MANTLE"
+      ],
+      "confidence": "HIGH",
+      "notes": "claim(uint256,uint256,address,uint256,bytes32[]) on DistributeMerkleNativeUpgradeable proxy. No-movement claim rows must stay explicit CLAIM_WITHOUT_MOVEMENT."
+    },
     "0x6f7d514bbd4aff3bcd1140b7344b32f063dee486": {
       "name": "Compound Rewards",
       "protocol": "Compound",

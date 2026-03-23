@@ -125,4 +125,46 @@ class OnChainNormalizedTransactionBuilderTest {
 
         assertThat(normalized.getMissingDataReasons()).containsExactly("MISSING_EFFECTIVE_GAS_PRICE");
     }
+
+    @Test
+    @DisplayName("build surfaces missing effective gas price for non fee payer clarification rows")
+    void buildSurfacesMissingEffectiveGasPriceForNonFeePayerClarificationRows() {
+        RawTransaction rawTransaction = new RawTransaction();
+        rawTransaction.setTxHash("0xjkl");
+        rawTransaction.setNetworkId("ETHEREUM");
+        rawTransaction.setWalletAddress(WALLET);
+        rawTransaction.setRawData(new Document()
+                .append("timeStamp", "1700000000")
+                .append("transactionIndex", "4")
+                .append("from", "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                .append("to", WALLET)
+                .append("value", "0")
+                .append("input", "0x")
+                .append("explorer", new Document("tokenTransfers", List.of(
+                        new Document("contractAddress", "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+                                .append("tokenSymbol", "USDC")
+                                .append("tokenDecimal", "6")
+                                .append("from", "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                                .append("to", WALLET)
+                                .append("value", "1000000")
+                ))));
+
+        OnChainClassificationResult classificationResult = new OnChainClassificationResult(
+                NormalizedTransactionType.EXTERNAL_INBOUND,
+                NormalizedTransactionStatus.PENDING_CLARIFICATION,
+                ClassificationSource.HEURISTIC,
+                ConfidenceLevel.MEDIUM,
+                List.of(),
+                List.of(),
+                null,
+                null
+        );
+
+        NormalizedTransaction normalized = builder.build(rawTransaction, classificationResult, Instant.parse("2026-03-22T12:00:00Z"));
+
+        assertThat(normalized.getMissingDataReasons()).containsExactly(
+                "MISSING_EXECUTION_STATUS",
+                "MISSING_EFFECTIVE_GAS_PRICE"
+        );
+    }
 }

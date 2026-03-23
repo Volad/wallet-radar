@@ -250,11 +250,16 @@ walletradar:
       schedule-interval-ms: 90000
       retry-delay-seconds: 60
     clarification:
-      enabled: false
+      enabled: true
       batch-size: 100
       schedule-interval-ms: 120000
       retry-delay-seconds: 120
       max-attempts: 3
+      full-receipt:
+        enabled: true
+        batch-size: 50
+        retry-delay-seconds: 300
+        max-attempts: 1
     retry:
       base-delay-ms: 2000
       # jitter-factor: 0.2

@@ -145,16 +145,16 @@ Implications:
 
 ## 7. Clarification Policy
 
-`Clarification v1` may enrich:
+`Clarification` may enrich receipt-safe metadata:
 
 - execution status
 - gas fields
 - created contract address
 
-`Clarification v1` is allowed only when those receipt-safe fields are actually missing.
+Clarification is allowed only when those receipt-safe fields are actually missing.
 Low confidence alone does not move a row into clarification.
 
-`Clarification v1` may not:
+Metadata-only clarification may not:
 
 - treat synthetic `rawData.logs[]` as authoritative event evidence
 - silently rewrite economic meaning without traceable evidence
@@ -178,12 +178,15 @@ Implications:
 - `CLAIM_WITHOUT_MOVEMENT` is a valid per-wallet terminal outcome when the claim
   signer does not receive the reward transfer in persisted raw evidence
 
-`Clarification v2` is a separate future stage with a different contract:
+Clarification may additionally use full receipt evidence for an allowlisted
+residual-review set:
 
-- it may fetch and persist full receipt logs for an allowlisted residual-review set
+- it may fetch and persist full receipt logs for that allowlisted set
 - it should persist both:
   - the adapted clarification evidence used by runtime classification
   - the raw full receipt payload, when the source exposes it
+- clarification is not complete for a row unless that evidence is persisted on
+  the raw document in a deterministic shape
 - it must store those fields separately from synthetic `rawData.logs[]`
 - it may rerun classification only when official protocol semantics and the
   fetched receipt evidence together make the row deterministic
@@ -201,7 +204,18 @@ Implications:
 - it must not be used for rows that are already closable from current raw
   evidence, such as claim-family no-movement rows or known handler gaps
 
-Current audited `Clarification v2` candidate families:
+Pricing-readiness gate:
+
+- an economic row may move to `PENDING_PRICE` or `CONFIRMED` only when
+  persisted raw evidence or persisted clarification evidence proves non-fee
+  movement semantics that are sufficient for cost-basis replay
+- fee-only rows may remain resolved only when they belong to an explicit
+  non-economic family such as `APPROVE`, `ADMIN_CONFIG`, or another documented
+  terminal cleanup/admin type
+- wrapper continuity, bridge-entry semantics, liquidity entry/exit semantics,
+  and admin/config demotion must be correct before pricing/AVCO begins
+
+Current audited clarification candidate families for full receipt enrichment:
 
 - concentrated-liquidity LP exit containers whose full receipt logs contain
   sufficient movement evidence
