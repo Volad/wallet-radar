@@ -13,10 +13,31 @@ import java.util.Set;
 public final class ReceiptClarificationEligibilitySupport {
 
     private static final Set<String> NON_ECONOMIC_ALLOWLIST = Set.of(
+            "0x4673757b36119b4632f798ad4e0d72fbd170ee0b7be4e4901bd1155ab3881775",
+            "0x91bba2c00fc37a862f2c277e6f8378bf682156425919c66c1b37faa50e9d61b7",
             "0x927d3f458ada7e5ec67f77129e29edcaf2f69bd2b81490a42fec17c0cc3bd4fa",
+            "0x9c3a93479dd926c7a6e57395b14ab48ed73e673f5cb25f6c1ae6ac9b1bbf2c19",
+            "0xaf00ee8ac5154daa5f4f917d0929ddbacfb1d254ae3b228f3322312a39c798c8",
             "0xe1bc445ff05954e4d9211570bdaed633b0ddddc70ee36d043574d5b9dd1b9630",
-            "0x907207001069b6c5b1c0f9aa740736a81ed0f7e8c02b2735a31c772d5bb6603e",
-            "0x9867f9d202764ad9d019b0f89cb4b35e96cbc35bd5ac2fabea1edf5c7412bdf2"
+            "0x907207001069b6c5b1c0f9aa740736a81ed0f7e8c02b2735a31c772d5bb6603e"
+    );
+
+    private static final Set<String> HASH_ALLOWLIST_FOR_CLASSIFICATION_FAILED = Set.of(
+            "0x0a757aeeb58667c545017cd8e5cd60dc994a8945ed810c60ea2aed18688f4f7a",
+            "0x1232a2724f8d2c2e0aa436192b31298ef3351b74bf319c347b9ff569830e7a03",
+            "0x67f4e9e1767850c427920a1238903ed6fc56e6cadd4d3defcacc7a99e1329499",
+            "0x71edb81701d7c95d92d5ad4ec43574db388c7e5e21974385374883b021e0f5da",
+            "0x74abf9296937242aab88b493a37072458f003c50be937ac1670299e3aad6053e",
+            "0x83978f62a0f05b662a87210263e923ad568d616f5dd8c420d0485e1e21828a61"
+    );
+
+    private static final Set<String> HASH_ALLOWLIST_FOR_INSUFFICIENT_MOVEMENT = Set.of(
+            "0x0088de663d549fbc58dfa8dbba4180a346a580b1d6277254fa84a8ed9c27967a",
+            "0x4673757b36119b4632f798ad4e0d72fbd170ee0b7be4e4901bd1155ab3881775"
+    );
+
+    private static final Set<String> HASH_ALLOWLIST_FOR_GMX_SETTLEMENT = Set.of(
+            "0x53bbb5b41325b3a043e9a9f16a6da4ab4624f0e7bbbf80fe8037446c4c2879e8"
     );
 
     private ReceiptClarificationEligibilitySupport() {
@@ -32,7 +53,8 @@ public final class ReceiptClarificationEligibilitySupport {
         List<String> reasons = normalizedTransaction.getMissingDataReasons() == null
                 ? List.of()
                 : normalizedTransaction.getMissingDataReasons();
-        if (NON_ECONOMIC_ALLOWLIST.contains(String.valueOf(view.txHash()).toLowerCase())) {
+        String txHash = String.valueOf(view.txHash()).toLowerCase();
+        if (NON_ECONOMIC_ALLOWLIST.contains(txHash)) {
             return true;
         }
         if (view.networkId() != null
@@ -40,6 +62,18 @@ public final class ReceiptClarificationEligibilitySupport {
                 && "0x46a15b0b27311cedf172ab29e4f4766fbe7f4364".equals(view.toAddress())
                 && "0xac9650d8".equals(view.methodId())
                 && reasons.contains("ROUTER_METHOD_OVERLOAD_UNSUPPORTED")) {
+            return true;
+        }
+        if (HASH_ALLOWLIST_FOR_INSUFFICIENT_MOVEMENT.contains(txHash)
+                && reasons.contains("INSUFFICIENT_MOVEMENT_EVIDENCE")) {
+            return true;
+        }
+        if (HASH_ALLOWLIST_FOR_GMX_SETTLEMENT.contains(txHash)
+                && reasons.contains("GMX_ORDER_SETTLEMENT_UNRESOLVED")) {
+            return true;
+        }
+        if (HASH_ALLOWLIST_FOR_CLASSIFICATION_FAILED.contains(txHash)
+                && reasons.contains("CLASSIFICATION_FAILED")) {
             return true;
         }
         return "0xc16ae7a4".equals(view.methodId()) && reasons.contains("CLASSIFICATION_FAILED");

@@ -278,6 +278,46 @@ class OnChainClassifierTest {
     }
 
     @Test
+    @DisplayName("wrapped-native deposit selector with weak top-level fields still becomes WRAP")
+    void wrappedNativeDepositSelectorWithWeakTopLevelFieldsStillBecomesWrap() {
+        String wrappedNative = "0x82af49447d8a07e3bd95bd0d56f35241523fbab1";
+        RawTransaction rawTransaction = baseRaw(NetworkId.ARBITRUM);
+        rawTransaction.getRawData().remove("from");
+        rawTransaction.getRawData().remove("to");
+        rawTransaction.getRawData().remove("value");
+        rawTransaction.getRawData().put("methodId", "0xd0e30db0");
+        rawTransaction.getRawData().put("functionName", "deposit()");
+        rawTransaction.getRawData().put("input", "deprecated");
+        rawTransaction.getRawData().put("explorer", new Document("tx", new Document()
+                .append("methodId", "0xd0e30db0")
+                .append("functionName", "deposit()")
+                .append("input", "deprecated"))
+                .append("tokenTransfers", List.of(
+                        new Document("contractAddress", wrappedNative)
+                                .append("tokenSymbol", "WETH")
+                                .append("tokenDecimal", "18")
+                                .append("from", "0x0000000000000000000000000000000000000000")
+                                .append("to", WALLET)
+                                .append("value", "258000000000000000")
+                ))
+                .append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.WRAP);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.METHOD_ID);
+        assertThat(result.flows())
+                .filteredOn(flow -> flow.getRole() == NormalizedLegRole.TRANSFER && flow.getAssetSymbol().equals("ETH"))
+                .singleElement()
+                .satisfies(flow -> assertThat(flow.getQuantityDelta()).isEqualByComparingTo(new BigDecimal("-0.258000000000000000")));
+        assertThat(result.flows())
+                .filteredOn(flow -> flow.getRole() == NormalizedLegRole.TRANSFER && flow.getAssetSymbol().equals("WETH"))
+                .singleElement()
+                .satisfies(flow -> assertThat(flow.getQuantityDelta()).isEqualByComparingTo(new BigDecimal("0.258000000000000000")));
+    }
+
+    @Test
     @DisplayName("wrapped-native withdraw selector becomes UNWRAP with synthetic native inbound leg")
     void wrappedNativeWithdrawSelectorBecomesUnwrapWithSyntheticNativeInboundLeg() {
         RawTransaction rawTransaction = baseRaw(NetworkId.UNICHAIN);
@@ -310,6 +350,42 @@ class OnChainClassifierTest {
                 .filteredOn(flow -> flow.getRole() == NormalizedLegRole.TRANSFER && flow.getAssetSymbol().equals("ETH"))
                 .singleElement()
                 .satisfies(flow -> assertThat(flow.getQuantityDelta()).isEqualByComparingTo(new BigDecimal("1")));
+    }
+
+    @Test
+    @DisplayName("wrapped-native withdraw selector with internal continuity and weak top-level to still becomes UNWRAP")
+    void wrappedNativeWithdrawSelectorWithInternalContinuityAndWeakTopLevelToStillBecomesUnwrap() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.UNICHAIN);
+        rawTransaction.getRawData().remove("to");
+        rawTransaction.getRawData().put("methodId", "0x2e1a7d4d");
+        rawTransaction.getRawData().put("functionName", "withdraw(uint256 wad)");
+        rawTransaction.getRawData().put("input", "0x2e1a7d4d"
+                + "00000000000000000000000000000000000000000000000009b67e0669b0c936");
+        rawTransaction.getRawData().put("explorer", new Document("tx", new Document()
+                .append("methodId", "0x2e1a7d4d")
+                .append("functionName", "withdraw(uint256 wad)")
+                .append("input", "0x2e1a7d4d00000000000000000000000000000000000000000000000009b67e0669b0c936"))
+                .append("tokenTransfers", List.of())
+                .append("internalTransfers", List.of(
+                        new Document("from", WRAPPED_NATIVE_PREDEPLOY)
+                                .append("to", WALLET)
+                                .append("value", "699885358110787894")
+                                .append("isError", "0")
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.UNWRAP);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.METHOD_ID);
+        assertThat(result.flows())
+                .filteredOn(flow -> flow.getRole() == NormalizedLegRole.TRANSFER && flow.getAssetSymbol().equals("WETH"))
+                .singleElement()
+                .satisfies(flow -> assertThat(flow.getQuantityDelta()).isEqualByComparingTo(new BigDecimal("-0.699885358110787894")));
+        assertThat(result.flows())
+                .filteredOn(flow -> flow.getRole() == NormalizedLegRole.TRANSFER && flow.getAssetSymbol().equals("ETH"))
+                .singleElement()
+                .satisfies(flow -> assertThat(flow.getQuantityDelta()).isEqualByComparingTo(new BigDecimal("0.699885358110787894")));
     }
 
     @Test
@@ -437,7 +513,7 @@ class OnChainClassifierTest {
         OnChainClassificationResult result = classifier.classify(rawTransaction);
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.UNKNOWN);
-        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.NEEDS_REVIEW);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
         assertThat(result.missingDataReasons()).containsExactly("PROMO_SPAM_PHISHING");
     }
 
@@ -469,7 +545,7 @@ class OnChainClassifierTest {
         OnChainClassificationResult result = classifier.classify(rawTransaction);
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.UNKNOWN);
-        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.NEEDS_REVIEW);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
         assertThat(result.missingDataReasons()).containsExactly("PROMO_SPAM_PHISHING");
     }
 
@@ -540,6 +616,49 @@ class OnChainClassifierTest {
                 .thenReturn(Optional.of(new ProtocolRegistryEntry(
                         acrossSpokePool,
                         Set.of(NetworkId.UNICHAIN),
+                        ProtocolRegistryFamily.BRIDGE,
+                        ProtocolRegistryRole.BRIDGE_ENTRY,
+                        ProtocolRegistryEventType.BRIDGE_OUT,
+                        ConfidenceLevel.HIGH,
+                        "Across",
+                        "V2",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.BRIDGE_OUT);
+        assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.PROTOCOL_REGISTRY);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+    }
+
+    @Test
+    @DisplayName("across depositV3 uses transfer-backed SpokePool identity when top-level to is weak")
+    void acrossDepositV3UsesTransferBackedSpokePoolIdentityWhenTopLevelToIsWeak() {
+        String acrossSpokePool = "0xe35e9842fceaca96570b734083f4a58e8f7c5f2a";
+        RawTransaction rawTransaction = baseRaw(NetworkId.ARBITRUM);
+        rawTransaction.getRawData().remove("to");
+        rawTransaction.getRawData().remove("from");
+        rawTransaction.getRawData().put("methodId", "0x7b939232");
+        rawTransaction.getRawData().put("functionName", "depositV3(address depositor,address recipient,address inputToken,address outputToken,uint256 inputAmount,uint256 outputAmount,uint256 destinationChainId,address exclusiveRelayer,uint32 quoteTimestamp,uint32 fillDeadline,uint32 exclusivityDeadline,bytes message)");
+        rawTransaction.getRawData().put("input", "deprecated");
+        rawTransaction.getRawData().put("explorer", new Document("tx", new Document()
+                .append("methodId", "0x7b939232")
+                .append("functionName", "depositV3(address depositor,address recipient,address inputToken,address outputToken,uint256 inputAmount,uint256 outputAmount,uint256 destinationChainId,address exclusiveRelayer,uint32 quoteTimestamp,uint32 fillDeadline,uint32 exclusivityDeadline,bytes message)")
+                .append("input", "deprecated"))
+                .append("tokenTransfers", List.of(
+                        new Document("contractAddress", TOKEN_A)
+                                .append("tokenSymbol", "USDC")
+                                .append("tokenDecimal", "6")
+                                .append("from", WALLET)
+                                .append("to", acrossSpokePool)
+                                .append("value", "641214425")
+                )).append("internalTransfers", List.of()));
+        when(protocolRegistryService.lookup(NetworkId.ARBITRUM, acrossSpokePool))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        acrossSpokePool,
+                        Set.of(NetworkId.ARBITRUM),
                         ProtocolRegistryFamily.BRIDGE,
                         ProtocolRegistryRole.BRIDGE_ENTRY,
                         ProtocolRegistryEventType.BRIDGE_OUT,
@@ -865,7 +984,7 @@ class OnChainClassifierTest {
         OnChainClassificationResult result = classifier.classify(rawTransaction);
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.UNKNOWN);
-        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.NEEDS_REVIEW);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
         assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.PROTOCOL_REGISTRY);
         assertThat(result.missingDataReasons()).containsExactly("CLAIM_WITHOUT_MOVEMENT");
     }
@@ -1772,7 +1891,7 @@ class OnChainClassifierTest {
         OnChainClassificationResult result = classifier.classify(rawTransaction);
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.UNKNOWN);
-        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.NEEDS_REVIEW);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
         assertThat(result.missingDataReasons()).containsExactly("FAILED_TRANSACTION");
         verifyNoInteractions(protocolRegistryService, protocolSpecialHandlerDispatcher);
     }
@@ -1786,7 +1905,7 @@ class OnChainClassifierTest {
         OnChainClassificationResult result = classifier.classify(rawTransaction);
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.UNKNOWN);
-        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.NEEDS_REVIEW);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
         assertThat(result.missingDataReasons()).containsExactly("FAILED_TRANSACTION");
         verifyNoInteractions(protocolRegistryService, protocolSpecialHandlerDispatcher);
     }
@@ -2326,7 +2445,7 @@ class OnChainClassifierTest {
         OnChainClassificationResult result = classifier.classify(rawTransaction);
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.UNKNOWN);
-        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.NEEDS_REVIEW);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
         assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.PROTOCOL_REGISTRY);
         assertThat(result.missingDataReasons()).containsExactly("CLAIM_WITHOUT_MOVEMENT");
     }
@@ -2391,7 +2510,7 @@ class OnChainClassifierTest {
 
         assertThat(receiverResult.type()).isEqualTo(NormalizedTransactionType.REWARD_CLAIM);
         assertThat(signerResult.type()).isEqualTo(NormalizedTransactionType.UNKNOWN);
-        assertThat(signerResult.status()).isEqualTo(NormalizedTransactionStatus.NEEDS_REVIEW);
+        assertThat(signerResult.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
         assertThat(signerResult.missingDataReasons()).containsExactly("CLAIM_WITHOUT_MOVEMENT");
     }
 
@@ -2656,6 +2775,361 @@ class OnChainClassifierTest {
         assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
     }
 
+    @Test
+    @DisplayName("Plasma wrapped-native withdraw with native continuity becomes UNWRAP")
+    void plasmaWrappedNativeWithdrawWithNativeContinuityBecomesUnwrap() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.PLASMA);
+        rawTransaction.getRawData().put("to", "0x6100e367285b01f48d07953803a2d8dca5d19873");
+        rawTransaction.getRawData().put("methodId", "0x2e1a7d4d");
+        rawTransaction.getRawData().put("functionName", "withdraw(uint256 wad)");
+        rawTransaction.getRawData().put("input",
+                "0x2e1a7d4d000000000000000000000000000000000000000000000000043fb3f3f17f1268");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of())
+                .append("internalTransfers", List.of(
+                        new Document("from", "0x6100e367285b01f48d07953803a2d8dca5d19873")
+                                .append("to", WALLET)
+                                .append("value", "306002780400595560")
+                                .append("isError", "0")
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.UNWRAP);
+        assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.METHOD_ID);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+    }
+
+    @Test
+    @DisplayName("route-tagged LI.FI diamond call becomes BRIDGE_OUT")
+    void routeTaggedLifiDiamondCallBecomesBridgeOut() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.MANTLE);
+        rawTransaction.getRawData().put("to", "0xbdff0c1c8b0b779581c4ac3ba1f29667c366c56e");
+        rawTransaction.getRawData().put("methodId", "0xd7a08473");
+        rawTransaction.getRawData().put("functionName",
+                "callDiamondWithEIP2612Signature(address tokenAddress,uint256 amount,uint256 deadline,uint8 v,bytes32 r,bytes32 s,bytes diamondCalldata)");
+        rawTransaction.getRawData().put("input", "0xd7a08473" + asciiHex("jumper.exchange|symbiosis|lifi"));
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", TOKEN_A)
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenDecimal", "6")
+                        .append("from", WALLET)
+                        .append("to", "0xbdff0c1c8b0b779581c4ac3ba1f29667c366c56e")
+                        .append("value", "1000000")
+        )).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.BRIDGE_OUT);
+        assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.HEURISTIC);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+    }
+
+    @Test
+    @DisplayName("blank-method LI.FI route selector recovered from calldata becomes BRIDGE_OUT")
+    void blankMethodLifiRouteSelectorRecoveredFromCalldataBecomesBridgeOut() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.BASE);
+        rawTransaction.getRawData().put("to", "0x1231deb6f5749ef6ce6943a275a1d3e7486f4eae");
+        rawTransaction.getRawData().put("methodId", "0x");
+        rawTransaction.getRawData().put("functionName", "");
+        rawTransaction.getRawData().put("input", "0xfc5f1003" + asciiHex("jumper.exchange|gasZipBridge|across"));
+        rawTransaction.getRawData().put("value", "9000000000000000");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of()).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.BRIDGE_OUT);
+        assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.HEURISTIC);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+    }
+
+    @Test
+    @DisplayName("transferRemote with token out and native fee becomes BRIDGE_OUT")
+    void transferRemoteWithTokenOutAndNativeFeeBecomesBridgeOut() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.ARBITRUM);
+        rawTransaction.getRawData().put("to", "0xf5f93d26229482adca3e42f84d08d549cf131658");
+        rawTransaction.getRawData().put("methodId", "0x81b4e8b4");
+        rawTransaction.getRawData().put("functionName",
+                "transferRemote(uint32 _destination,bytes32 _recipient,uint256 _amountOrId)");
+        rawTransaction.getRawData().put("value", "63765140242285");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", TOKEN_A)
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenDecimal", "6")
+                        .append("from", WALLET)
+                        .append("to", "0xf5f93d26229482adca3e42f84d08d549cf131658")
+                        .append("value", "2000000")
+        )).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.BRIDGE_OUT);
+        assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.METHOD_ID);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+    }
+
+    @Test
+    @DisplayName("CCTP redeem with inbound USDC becomes BRIDGE_IN")
+    void cctpRedeemWithInboundUsdcBecomesBridgeIn() {
+        String bridgePayout = "0xc1062b7c5dc8e4b1df9f200fe360cdc0ed6e7741";
+        RawTransaction rawTransaction = baseRaw(NetworkId.ARBITRUM);
+        rawTransaction.getRawData().put("to", "0x0000000000000000000000000000000000000000");
+        rawTransaction.getRawData().put("methodId", "0xe5c1bf6e");
+        rawTransaction.getRawData().put("functionName", "redeem(bytes cctpMsg,bytes cctpSigs)");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0xaf88d065e77c8cc2239327c5edb3a432268e5831")
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenDecimal", "6")
+                        .append("from", bridgePayout)
+                        .append("to", WALLET)
+                        .append("value", "427946249")
+        )).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.BRIDGE_IN);
+        assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.METHOD_ID);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+    }
+
+    @Test
+    @DisplayName("GMX createOrder tuple path is demoted to review")
+    void gmxCreateOrderTuplePathIsDemotedToReview() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.ARBITRUM);
+        rawTransaction.getRawData().put("to", "0xba3cb449bd2b4adddbc894d8697f5170800eadec");
+        rawTransaction.getRawData().put("methodId", "0x322bba21");
+        rawTransaction.getRawData().put("functionName", "createOrder(tuple order)");
+        rawTransaction.getRawData().put("value", "27638811423349461");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of()).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.UNKNOWN);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(result.missingDataReasons()).contains("GMX_ORDER_INITIATION_PENDING");
+    }
+
+    @Test
+    @DisplayName("Pancake harvest with inbound reward becomes REWARD_CLAIM")
+    void pancakeHarvestWithInboundRewardBecomesRewardClaim() {
+        String masterChef = "0x5e09acf80c0296740ec5d6f643005a4ef8daa694";
+        RawTransaction rawTransaction = baseRaw(NetworkId.ARBITRUM);
+        rawTransaction.getRawData().put("to", masterChef);
+        rawTransaction.getRawData().put("methodId", "0x18fccc76");
+        rawTransaction.getRawData().put("functionName", "harvest(uint256 pid, address to)");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", TOKEN_B)
+                        .append("tokenSymbol", "Cake")
+                        .append("tokenDecimal", "18")
+                        .append("from", masterChef)
+                        .append("to", WALLET)
+                        .append("value", "1000000000000000000")
+        )).append("internalTransfers", List.of()));
+        when(protocolRegistryService.lookup(NetworkId.ARBITRUM, masterChef))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        masterChef,
+                        Set.of(NetworkId.ARBITRUM),
+                        ProtocolRegistryFamily.DEX,
+                        ProtocolRegistryRole.STAKE_CONTRACT,
+                        null,
+                        ConfidenceLevel.HIGH,
+                        "PancakeSwap",
+                        "V3",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.REWARD_CLAIM);
+        assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.PROTOCOL_REGISTRY);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+    }
+
+    @Test
+    @DisplayName("release with inbound token becomes REWARD_CLAIM")
+    void releaseWithInboundTokenBecomesRewardClaim() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.LINEA);
+        rawTransaction.getRawData().put("from", COUNTERPARTY);
+        rawTransaction.getRawData().put("to", "0x5828a3c0f07c6b841205d12660e0abb869bf98dc");
+        rawTransaction.getRawData().put("methodId", "0x86d1a69f");
+        rawTransaction.getRawData().put("functionName", "release()");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", TOKEN_A)
+                        .append("tokenSymbol", "LINEA")
+                        .append("tokenDecimal", "18")
+                        .append("from", "0x5828a3c0f07c6b841205d12660e0abb869bf98dc")
+                        .append("to", WALLET)
+                        .append("value", "1000000000000000000")
+        )).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.REWARD_CLAIM);
+        assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.FUNCTION_NAME);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+    }
+
+    @Test
+    @DisplayName("merkle claim with inbound payout becomes REWARD_CLAIM")
+    void merkleClaimWithInboundPayoutBecomesRewardClaim() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.ETHEREUM);
+        rawTransaction.getRawData().put("from", COUNTERPARTY);
+        rawTransaction.getRawData().put("to", "0xbac23ec6ccab8631f500ecb6c01ea0ee0b72ac69");
+        rawTransaction.getRawData().put("methodId", "0xae0b51df");
+        rawTransaction.getRawData().put("functionName", "claim(uint256 index, uint256 amount, bytes32[] merkleProof)");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", TOKEN_A)
+                        .append("tokenSymbol", "stRESOLV")
+                        .append("tokenDecimal", "18")
+                        .append("from", "0xbac23ec6ccab8631f500ecb6c01ea0ee0b72ac69")
+                        .append("to", WALLET)
+                        .append("value", "30000000000000000000")
+        )).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.REWARD_CLAIM);
+        assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.METHOD_ID);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+    }
+
+    @Test
+    @DisplayName("claimWithSig with inbound native payout becomes REWARD_CLAIM")
+    void claimWithSigWithInboundNativePayoutBecomesRewardClaim() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.AVALANCHE);
+        rawTransaction.getRawData().put("from", COUNTERPARTY);
+        rawTransaction.getRawData().put("to", "0x2f925542d1689258be55f87e17fcd8b7480d76f0");
+        rawTransaction.getRawData().put("methodId", "0x7796e4ce");
+        rawTransaction.getRawData().put("functionName",
+                "claimWithSig(address account, bytes32 key, uint256 amountMax, uint256 expireTime, bytes signature)");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of())
+                .append("internalTransfers", List.of(
+                        new Document("from", "0x2f925542d1689258be55f87e17fcd8b7480d76f0")
+                                .append("to", WALLET)
+                                .append("value", "27229307737197520")
+                                .append("isError", "0")
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.REWARD_CLAIM);
+        assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.METHOD_ID);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+    }
+
+    @Test
+    @DisplayName("LBHooks claim with inbound movement becomes LP_FEE_CLAIM")
+    void lbHooksClaimWithInboundMovementBecomesLpFeeClaim() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.AVALANCHE);
+        rawTransaction.getRawData().put("from", COUNTERPARTY);
+        rawTransaction.getRawData().put("to", "0xe104964852be626ee27762712e4de521066859c9");
+        rawTransaction.getRawData().put("methodId", "0x45718278");
+        rawTransaction.getRawData().put("functionName", "claim(address LBHooks, uint256[] ids)");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of())
+                .append("internalTransfers", List.of(
+                        new Document("from", "0xe104964852be626ee27762712e4de521066859c9")
+                                .append("to", WALLET)
+                                .append("value", "1000000000000000000")
+                                .append("isError", "0")
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.LP_FEE_CLAIM);
+        assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.FUNCTION_NAME);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+    }
+
+    @Test
+    @DisplayName("executeOrder is demoted to review instead of generic external inbound")
+    void executeOrderIsDemotedToReviewInsteadOfGenericExternalInbound() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.ARBITRUM);
+        rawTransaction.getRawData().put("from", COUNTERPARTY);
+        rawTransaction.getRawData().put("to", "0x70d95587d40a2caf56bd97485ab3eec10bee6336");
+        rawTransaction.getRawData().put("methodId", "0x7ebc83f7");
+        rawTransaction.getRawData().put("functionName", "executeOrder(bytes32 key,tuple oracleParams)");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", TOKEN_A)
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenDecimal", "6")
+                        .append("from", "0x70d95587d40a2caf56bd97485ab3eec10bee6336")
+                        .append("to", WALLET)
+                        .append("value", "1000000")
+        )).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.UNKNOWN);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.NEEDS_REVIEW);
+        assertThat(result.missingDataReasons()).contains("GMX_ORDER_SETTLEMENT_UNRESOLVED");
+    }
+
+    @Test
+    @DisplayName("claimSharesAndRequestRedeem becomes narrow review instead of EXTERNAL_TRANSFER_OUT")
+    void claimSharesAndRequestRedeemBecomesNarrowReviewInsteadOfExternalTransferOut() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.AVALANCHE);
+        rawTransaction.getRawData().put("to", "0x3048925b3ea5a8c12eecccb8810f5f7544db54af");
+        rawTransaction.getRawData().put("methodId", "0x5cfe2fe4");
+        rawTransaction.getRawData().put("functionName",
+                "claimSharesAndRequestRedeem(uint256 sharesToRedeem) returns (uint40 requestId)");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0x3048925b3ea5a8c12eecccb8810f5f7544db54af")
+                        .append("tokenSymbol", "turtleAvalancheUSDC")
+                        .append("tokenDecimal", "18")
+                        .append("from", WALLET)
+                        .append("to", "0x3048925b3ea5a8c12eecccb8810f5f7544db54af")
+                        .append("value", "2787570915169867351889")
+        )).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.UNKNOWN);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(result.missingDataReasons()).contains("PENDING_REDEEM_REQUEST");
+    }
+
+    @Test
+    @DisplayName("claim-like airdrop becomes narrow review instead of resolved inbound")
+    void claimLikeAirdropBecomesNarrowReviewInsteadOfResolvedInbound() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.BASE);
+        rawTransaction.getRawData().put("from", COUNTERPARTY);
+        rawTransaction.getRawData().put("to", "");
+        rawTransaction.getRawData().put("methodId", "0x729ad39e");
+        rawTransaction.getRawData().put("functionName", "airdrop(address[] _bots)");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0xfae7d01301e2eeede488f0953547e712a56c5e1d")
+                        .append("tokenSymbol", "OracleAI")
+                        .append("tokenDecimal", "18")
+                        .append("from", COUNTERPARTY)
+                        .append("to", WALLET)
+                        .append("value", "3000000000000000000")
+        )).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.UNKNOWN);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(result.missingDataReasons()).contains("CLAIM_LIKE_SPAM_OR_AIRDROP");
+    }
+
+    @Test
+    @DisplayName("fee-bearing claim admin action becomes narrow review")
+    void feeBearingClaimAdminActionBecomesNarrowReview() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.MANTLE);
+        rawTransaction.getRawData().put("to", "0x4205e56a69a0130a9e0828d45d0c84e45340a196");
+        rawTransaction.getRawData().put("methodId", "0xdc4b201d");
+        rawTransaction.getRawData().put("functionName",
+                "claim(tuple pinData,address adminTreasury,uint256 adminFee,uint256 signedAt,string cid,bytes signature)");
+        rawTransaction.getRawData().put("value", "1500000000000000000");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of()).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.ADMIN_CONFIG);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(result.missingDataReasons()).contains("FEE_BEARING_CLAIM_ADMIN_ACTION");
+    }
+
     private static RawTransaction tokenSwapRaw(NetworkId networkId) {
         RawTransaction rawTransaction = baseRaw(networkId);
         rawTransaction.getRawData()
@@ -2699,5 +3173,13 @@ class OnChainClassifierTest {
                 .append("gasPrice", "50000000000")
                 .append("explorer", new Document("tokenTransfers", List.of()).append("internalTransfers", List.of())));
         return rawTransaction;
+    }
+
+    private static String asciiHex(String value) {
+        StringBuilder hex = new StringBuilder();
+        for (char character : value.toCharArray()) {
+            hex.append(String.format("%02x", (int) character));
+        }
+        return hex.toString();
     }
 }

@@ -233,7 +233,7 @@ public final class LpPositionLifecycleSupport {
                 .anyMatch(leg -> !leg.fee() && leg.assetContract() != null && leg.quantityDelta().signum() > 0);
     }
 
-    private static boolean hasPositionNftMintLog(OnChainRawTransactionView view) {
+    public static boolean hasPositionNftMintLog(OnChainRawTransactionView view) {
         String positionManager = OnChainRawTransactionView.normalizeAddress(view.toAddress());
         String wallet = OnChainRawTransactionView.normalizeAddress(view.walletAddress());
         if (positionManager == null || wallet == null) {
@@ -260,7 +260,7 @@ public final class LpPositionLifecycleSupport {
         return false;
     }
 
-    private static boolean hasAnyErc721TransferToWallet(OnChainRawTransactionView view) {
+    public static boolean hasAnyErc721TransferToWallet(OnChainRawTransactionView view) {
         String wallet = OnChainRawTransactionView.normalizeAddress(view.walletAddress());
         if (wallet == null) {
             return false;

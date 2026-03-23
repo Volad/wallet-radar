@@ -18,6 +18,7 @@ import com.walletradar.ingestion.pipeline.classification.special.ProtocolSpecial
 import com.walletradar.ingestion.pipeline.classification.special.SpecialHandlerResult;
 import com.walletradar.ingestion.pipeline.classification.support.AdminConfigSupport;
 import com.walletradar.ingestion.pipeline.classification.support.BridgeSettlementSupport;
+import com.walletradar.ingestion.pipeline.classification.support.CalldataDecodingSupport;
 import com.walletradar.ingestion.pipeline.classification.support.ClarificationEligibilitySupport;
 import com.walletradar.ingestion.pipeline.classification.support.InboundSignalSupport;
 import com.walletradar.ingestion.pipeline.classification.support.LpPositionLifecycleSupport;
@@ -82,11 +83,58 @@ public class OnChainClassifier {
     );
 
     private static final Set<String> FULL_RECEIPT_NON_ECONOMIC_ALLOWLIST = Set.of(
+            "0x4673757b36119b4632f798ad4e0d72fbd170ee0b7be4e4901bd1155ab3881775",
+            "0x91bba2c00fc37a862f2c277e6f8378bf682156425919c66c1b37faa50e9d61b7",
             "0x927d3f458ada7e5ec67f77129e29edcaf2f69bd2b81490a42fec17c0cc3bd4fa",
+            "0x9c3a93479dd926c7a6e57395b14ab48ed73e673f5cb25f6c1ae6ac9b1bbf2c19",
+            "0xaf00ee8ac5154daa5f4f917d0929ddbacfb1d254ae3b228f3322312a39c798c8",
             "0xe1bc445ff05954e4d9211570bdaed633b0ddddc70ee36d043574d5b9dd1b9630",
             "0x907207001069b6c5b1c0f9aa740736a81ed0f7e8c02b2735a31c772d5bb6603e",
             "0x9867f9d202764ad9d019b0f89cb4b35e96cbc35bd5ac2fabea1edf5c7412bdf2"
     );
+
+    private static final Set<String> LI_FI_DIAMOND_ROUTE_SELECTORS = Set.of(
+            "0xd7a08473",
+            "0xe9ae5c53",
+            "0x0193b9fc",
+            "0xae328590",
+            "0xfc5f1003",
+            "0xa1f1ce43"
+    );
+
+    private static final Set<String> LI_FI_ROUTE_TAGS = Set.of(
+            "jumper.exchange",
+            "lifi",
+            "relay",
+            "relaydepository",
+            "symbiosis",
+            "stargatev2",
+            "stargatev2bus",
+            "mayan",
+            "mayanmctp",
+            "mayanfastmctp",
+            "cbridge",
+            "glacis",
+            "across",
+            "polymerstandard",
+            "gaszipbridge",
+            "gaszip"
+    );
+
+    private static final String TRANSFER_REMOTE_SELECTOR = "0x81b4e8b4";
+    private static final String PARASWAP_SWAP_EXACT_AMOUNT_OUT_SELECTOR = "0x7f457675";
+    private static final String ROUTE_SINGLE_SELECTOR = "0xb94c3609";
+    private static final String CREATE_ORDER_TUPLE_SELECTOR = "0x322bba21";
+    private static final String EXECUTE_ORDER_SELECTOR = "0x7ebc83f7";
+    private static final String MERKLE_CLAIM_SELECTOR = "0xae0b51df";
+    private static final String CLAIM_WITH_SIG_SELECTOR = "0x7796e4ce";
+    private static final String HARVEST_SELECTOR = "0x18fccc76";
+    private static final String RELEASE_SELECTOR = "0x86d1a69f";
+    private static final String GET_REWARD_SELECTOR = "0x7050ccd9";
+    private static final String LB_HOOKS_CLAIM_SELECTOR = "0x45718278";
+    private static final String PENDING_REDEEM_REQUEST_SELECTOR = "0x5cfe2fe4";
+    private static final String CLAIM_LIKE_AIRDROP_SELECTOR = "0x729ad39e";
+    private static final String FEE_BEARING_CLAIM_ADMIN_SELECTOR = "0xdc4b201d";
 
     private final ProtocolRegistryService protocolRegistryService;
     private final ProtocolSpecialHandlerDispatcher protocolSpecialHandlerDispatcher;
@@ -98,13 +146,11 @@ public class OnChainClassifier {
         List<RawLeg> movementLegs = extractMovementLegs(view);
 
         if (view.isFailedExecution()) {
-            return result(
+            return terminalUnknown(
                     view,
-                    NormalizedTransactionType.UNKNOWN,
-                    NormalizedTransactionStatus.NEEDS_REVIEW,
+                    movementLegs,
                     ClassificationSource.HEURISTIC,
                     ConfidenceLevel.LOW,
-                    List.of(),
                     List.of("FAILED_TRANSACTION"),
                     null,
                     null
@@ -130,6 +176,31 @@ public class OnChainClassifier {
         Optional<OnChainClassificationResult> rewardRouteMatch = classifyKnownRewardRoute(view, movementLegs);
         if (rewardRouteMatch.isPresent()) {
             return rewardRouteMatch.get();
+        }
+
+        Optional<OnChainClassificationResult> bridgeInitiationMatch = classifyKnownBridgeInitiation(view, movementLegs);
+        if (bridgeInitiationMatch.isPresent()) {
+            return bridgeInitiationMatch.get();
+        }
+
+        Optional<OnChainClassificationResult> claimIncomeMatch = classifyKnownClaimIncome(view, movementLegs);
+        if (claimIncomeMatch.isPresent()) {
+            return claimIncomeMatch.get();
+        }
+
+        Optional<OnChainClassificationResult> clarifiedEconomicMatch = classifyClarifiedEconomicReview(view, movementLegs);
+        if (clarifiedEconomicMatch.isPresent()) {
+            return clarifiedEconomicMatch.get();
+        }
+
+        Optional<OnChainClassificationResult> pendingOrderMatch = classifyKnownPendingOrderPath(view, movementLegs);
+        if (pendingOrderMatch.isPresent()) {
+            return pendingOrderMatch.get();
+        }
+
+        Optional<OnChainClassificationResult> warningFamilyMatch = classifyResolvedWarningFamilies(view, movementLegs);
+        if (warningFamilyMatch.isPresent()) {
+            return warningFamilyMatch.get();
         }
 
         Optional<OnChainClassificationResult> promoSpamMatch = classifyPromoSpamInbound(view, movementLegs);
@@ -189,6 +260,25 @@ public class OnChainClassifier {
         }
         String functionKey = functionKey(functionName);
         if (findKnownBridgeSettlementEntry(view).isPresent() && BridgeSettlementSupport.isSettlementSelector(view)) {
+            return Optional.empty();
+        }
+        Optional<ProtocolRegistryEntry> transferBackedBridgeEntry = findKnownBridgeEntryFromOutboundTransfer(view);
+        if (transferBackedBridgeEntry.isPresent() && isAcrossDepositV3(transferBackedBridgeEntry.get(), view)) {
+            ProtocolRegistryEntry entry = transferBackedBridgeEntry.get();
+            return Optional.of(result(
+                    view,
+                    NormalizedTransactionType.BRIDGE_OUT,
+                    OnChainClassificationSupport.initialStatus(view, NormalizedTransactionType.BRIDGE_OUT, entry.confidence()),
+                    ClassificationSource.PROTOCOL_REGISTRY,
+                    entry.confidence(),
+                    OnChainClassificationSupport.toFlows(movementLegs, NormalizedTransactionType.BRIDGE_OUT),
+                    List.of(),
+                    entry.protocolName(),
+                    entry.protocolVersion()
+            ));
+        }
+        if (WrappedNativeSupport.detectType(view, nativeAssetSymbolResolver).isPresent()
+                && WrappedNativeSupport.hasWrappedNativeIdentity(view, nativeAssetSymbolResolver)) {
             return Optional.empty();
         }
 
@@ -387,7 +477,7 @@ public class OnChainClassifier {
             List<RawLeg> movementLegs
     ) {
         Optional<NormalizedTransactionType> wrappedType = WrappedNativeSupport.detectType(view, nativeAssetSymbolResolver);
-        if (wrappedType.isEmpty()) {
+        if (wrappedType.isEmpty() || !WrappedNativeSupport.hasWrappedNativeIdentity(view, nativeAssetSymbolResolver)) {
             return Optional.empty();
         }
 
@@ -714,6 +804,10 @@ public class OnChainClassifier {
         return movementLegs.stream().filter(leg -> !leg.fee()).anyMatch(leg -> leg.quantityDelta().signum() < 0);
     }
 
+    private boolean hasAnyNegativeMovement(List<RawLeg> movementLegs) {
+        return movementLegs.stream().anyMatch(leg -> leg.quantityDelta().signum() < 0);
+    }
+
     private boolean requiresMethodAwareDispatch(ProtocolRegistryEntry entry, OnChainRawTransactionView view) {
         if (entry == null || view == null) {
             return false;
@@ -861,6 +955,25 @@ public class OnChainClassifier {
         return candidates.values().stream().findFirst();
     }
 
+    private Optional<ProtocolRegistryEntry> findKnownBridgeEntryFromOutboundTransfer(OnChainRawTransactionView view) {
+        if (!"0x7b939232".equals(view.methodId()) && !containsAny(view.functionName(), "depositv3")) {
+            return Optional.empty();
+        }
+        String walletAddress = view.walletAddress();
+        if (walletAddress == null) {
+            return Optional.empty();
+        }
+        Map<String, ProtocolRegistryEntry> candidates = new LinkedHashMap<>();
+        putBridgeCandidate(candidates, protocolRegistryService.lookup(view.networkId(), view.toAddress()));
+        for (Document transfer : view.explorerTokenTransfers()) {
+            if (!walletAddress.equals(view.tokenTransferFrom(transfer))) {
+                continue;
+            }
+            putBridgeCandidate(candidates, protocolRegistryService.lookup(view.networkId(), view.tokenTransferTo(transfer)));
+        }
+        return candidates.values().stream().findFirst();
+    }
+
     private boolean isRewardEntry(ProtocolRegistryEntry entry) {
         return entry.normalizedType() == NormalizedTransactionType.REWARD_CLAIM
                 || entry.family() == ProtocolRegistryFamily.YIELD
@@ -953,17 +1066,215 @@ public class OnChainClassifier {
         }
 
         ProtocolRegistryEntry entry = rewardEntry.get();
-        return Optional.of(result(
+        return Optional.of(terminalUnknown(
                 view,
-                NormalizedTransactionType.UNKNOWN,
-                NormalizedTransactionStatus.NEEDS_REVIEW,
+                movementLegs,
                 ClassificationSource.PROTOCOL_REGISTRY,
                 entry.confidence(),
-                OnChainClassificationSupport.toFlows(movementLegs, NormalizedTransactionType.UNKNOWN),
                 List.of("CLAIM_WITHOUT_MOVEMENT"),
                 entry.protocolName(),
                 entry.protocolVersion()
         ));
+    }
+
+    private Optional<OnChainClassificationResult> classifyKnownBridgeInitiation(
+            OnChainRawTransactionView view,
+            List<RawLeg> movementLegs
+    ) {
+        MovementSummary summary = MovementSummary.from(movementLegs, nativeAssetSymbolResolver.nativeSymbol(view.networkId()));
+        if (LI_FI_DIAMOND_ROUTE_SELECTORS.contains(view.methodId())
+                && hasOutbound(movementLegs)
+                && CalldataDecodingSupport.containsAnyAsciiFragment(view.inputData(), LI_FI_ROUTE_TAGS.toArray(String[]::new))) {
+            return Optional.of(result(
+                    view,
+                    NormalizedTransactionType.BRIDGE_OUT,
+                    OnChainClassificationSupport.initialStatus(view, NormalizedTransactionType.BRIDGE_OUT, ConfidenceLevel.MEDIUM),
+                    ClassificationSource.HEURISTIC,
+                    ConfidenceLevel.MEDIUM,
+                    OnChainClassificationSupport.toFlows(movementLegs, NormalizedTransactionType.BRIDGE_OUT),
+                    List.of(),
+                    null,
+                    null
+            ));
+        }
+        if ((TRANSFER_REMOTE_SELECTOR.equals(view.methodId()) || "transferremote".equals(functionKey(view.functionName())))
+                && hasOutbound(movementLegs)
+                && summary.nativeOutbound()
+                && summary.tokenOutboundCount() >= 1) {
+            return Optional.of(result(
+                    view,
+                    NormalizedTransactionType.BRIDGE_OUT,
+                    OnChainClassificationSupport.initialStatus(view, NormalizedTransactionType.BRIDGE_OUT, ConfidenceLevel.MEDIUM),
+                    ClassificationSource.METHOD_ID,
+                    ConfidenceLevel.MEDIUM,
+                    OnChainClassificationSupport.toFlows(movementLegs, NormalizedTransactionType.BRIDGE_OUT),
+                    List.of(),
+                    null,
+                    null
+            ));
+        }
+        return Optional.empty();
+    }
+
+    private Optional<OnChainClassificationResult> classifyKnownClaimIncome(
+            OnChainRawTransactionView view,
+            List<RawLeg> movementLegs
+    ) {
+        MovementSummary summary = MovementSummary.from(movementLegs, nativeAssetSymbolResolver.nativeSymbol(view.networkId()));
+        if (!summary.onlyInbound()) {
+            return Optional.empty();
+        }
+
+        String functionKey = functionKey(view.functionName());
+        Optional<ProtocolRegistryEntry> protocolEntry = protocolRegistryService.lookup(view.networkId(), view.toAddress());
+        if ((HARVEST_SELECTOR.equals(view.methodId()) || "harvest".equals(functionKey))
+                && protocolEntry.filter(LpPositionLifecycleSupport::isDexStakeContract).isPresent()) {
+            ProtocolRegistryEntry entry = protocolEntry.get();
+            return Optional.of(result(
+                    view,
+                    NormalizedTransactionType.REWARD_CLAIM,
+                    OnChainClassificationSupport.initialStatus(view, NormalizedTransactionType.REWARD_CLAIM, entry.confidence()),
+                    ClassificationSource.PROTOCOL_REGISTRY,
+                    entry.confidence(),
+                    OnChainClassificationSupport.toFlows(movementLegs, NormalizedTransactionType.REWARD_CLAIM),
+                    List.of(),
+                    entry.protocolName(),
+                    entry.protocolVersion()
+            ));
+        }
+
+        if ((RELEASE_SELECTOR.equals(view.methodId()) || "release".equals(functionKey))
+                || (GET_REWARD_SELECTOR.equals(view.methodId()) || "getreward".equals(functionKey))) {
+            return Optional.of(result(
+                    view,
+                    NormalizedTransactionType.REWARD_CLAIM,
+                    OnChainClassificationSupport.initialStatus(view, NormalizedTransactionType.REWARD_CLAIM, ConfidenceLevel.MEDIUM),
+                    ClassificationSource.FUNCTION_NAME,
+                    ConfidenceLevel.MEDIUM,
+                    OnChainClassificationSupport.toFlows(movementLegs, NormalizedTransactionType.REWARD_CLAIM),
+                    List.of(),
+                    null,
+                    null
+            ));
+        }
+
+        if ((MERKLE_CLAIM_SELECTOR.equals(view.methodId())
+                || CLAIM_WITH_SIG_SELECTOR.equals(view.methodId()))
+                && summary.onlyInbound()) {
+            return Optional.of(result(
+                    view,
+                    NormalizedTransactionType.REWARD_CLAIM,
+                    OnChainClassificationSupport.initialStatus(view, NormalizedTransactionType.REWARD_CLAIM, ConfidenceLevel.MEDIUM),
+                    ClassificationSource.METHOD_ID,
+                    ConfidenceLevel.MEDIUM,
+                    OnChainClassificationSupport.toFlows(movementLegs, NormalizedTransactionType.REWARD_CLAIM),
+                    List.of(),
+                    null,
+                    null
+            ));
+        }
+
+        if ((LB_HOOKS_CLAIM_SELECTOR.equals(view.methodId()) || "claim".equals(functionKey))
+                && containsAny(view.functionName(), "lbhooks")) {
+            return Optional.of(result(
+                    view,
+                    NormalizedTransactionType.LP_FEE_CLAIM,
+                    OnChainClassificationSupport.initialStatus(view, NormalizedTransactionType.LP_FEE_CLAIM, ConfidenceLevel.LOW),
+                    ClassificationSource.FUNCTION_NAME,
+                    ConfidenceLevel.LOW,
+                    OnChainClassificationSupport.toFlows(movementLegs, NormalizedTransactionType.LP_FEE_CLAIM),
+                    List.of(),
+                    null,
+                    null
+            ));
+        }
+
+        return Optional.empty();
+    }
+
+    private Optional<OnChainClassificationResult> classifyKnownPendingOrderPath(
+            OnChainRawTransactionView view,
+            List<RawLeg> movementLegs
+    ) {
+        String functionKey = functionKey(view.functionName());
+        if (PENDING_REDEEM_REQUEST_SELECTOR.equals(view.methodId())
+                || "claimsharesandrequestredeem".equals(functionKey)) {
+            return Optional.of(terminalUnknown(
+                    view,
+                    movementLegs,
+                    ClassificationSource.METHOD_ID,
+                    ConfidenceLevel.MEDIUM,
+                    List.of("PENDING_REDEEM_REQUEST"),
+                    null,
+                    null
+            ));
+        }
+        if (CREATE_ORDER_TUPLE_SELECTOR.equals(view.methodId()) || "createorder".equals(functionKey)) {
+            return Optional.of(terminalUnknown(
+                    view,
+                    movementLegs,
+                    ClassificationSource.FUNCTION_NAME,
+                    ConfidenceLevel.MEDIUM,
+                    List.of("GMX_ORDER_INITIATION_PENDING"),
+                    null,
+                    null
+            ));
+        }
+        if (EXECUTE_ORDER_SELECTOR.equals(view.methodId()) || "executeorder".equals(functionKey)) {
+            Optional<OnChainClassificationResult> clarifiedSettlement = classifyClarifiedExecuteOrder(view, movementLegs);
+            if (clarifiedSettlement.isPresent()) {
+                return clarifiedSettlement;
+            }
+            return Optional.of(result(
+                    view,
+                    NormalizedTransactionType.UNKNOWN,
+                    NormalizedTransactionStatus.NEEDS_REVIEW,
+                    ClassificationSource.FUNCTION_NAME,
+                    ConfidenceLevel.MEDIUM,
+                    OnChainClassificationSupport.toFlows(movementLegs, NormalizedTransactionType.UNKNOWN),
+                    List.of("GMX_ORDER_SETTLEMENT_UNRESOLVED"),
+                    null,
+                    null
+            ));
+        }
+        return Optional.empty();
+    }
+
+    private Optional<OnChainClassificationResult> classifyResolvedWarningFamilies(
+            OnChainRawTransactionView view,
+            List<RawLeg> movementLegs
+    ) {
+        MovementSummary summary = MovementSummary.from(movementLegs, nativeAssetSymbolResolver.nativeSymbol(view.networkId()));
+        String functionKey = functionKey(view.functionName());
+        if ((CLAIM_LIKE_AIRDROP_SELECTOR.equals(view.methodId()) || "airdrop".equals(functionKey))
+                && summary.onlyInbound()) {
+            return Optional.of(terminalUnknown(
+                    view,
+                    movementLegs,
+                    ClassificationSource.METHOD_ID,
+                    ConfidenceLevel.LOW,
+                    List.of("CLAIM_LIKE_SPAM_OR_AIRDROP"),
+                    null,
+                    null
+            ));
+        }
+        if ((FEE_BEARING_CLAIM_ADMIN_SELECTOR.equals(view.methodId())
+                || containsAny(view.functionName(), "claim(tuple pindata", "claim((tuple pindata"))
+                && !summary.onlyInbound()
+                && hasAnyNegativeMovement(movementLegs)) {
+            return Optional.of(result(
+                    view,
+                    NormalizedTransactionType.ADMIN_CONFIG,
+                    NormalizedTransactionStatus.CONFIRMED,
+                    ClassificationSource.METHOD_ID,
+                    ConfidenceLevel.MEDIUM,
+                    OnChainClassificationSupport.toFlows(movementLegs, NormalizedTransactionType.ADMIN_CONFIG),
+                    List.of("FEE_BEARING_CLAIM_ADMIN_ACTION"),
+                    null,
+                    null
+            ));
+        }
+        return Optional.empty();
     }
 
     private Optional<ProtocolRegistryEntry> findKnownRewardEntry(OnChainRawTransactionView view) {
@@ -1108,13 +1419,11 @@ public class OnChainClassifier {
         if (!InboundSignalSupport.isPromoPhishingInbound(view, movementLegs)) {
             return Optional.empty();
         }
-        return Optional.of(result(
+        return Optional.of(terminalUnknown(
                 view,
-                NormalizedTransactionType.UNKNOWN,
-                NormalizedTransactionStatus.NEEDS_REVIEW,
+                movementLegs,
                 ClassificationSource.HEURISTIC,
                 ConfidenceLevel.LOW,
-                List.of(),
                 List.of("PROMO_SPAM_PHISHING"),
                 null,
                 null
@@ -1184,6 +1493,67 @@ public class OnChainClassifier {
         ));
     }
 
+    private Optional<OnChainClassificationResult> classifyClarifiedEconomicReview(
+            OnChainRawTransactionView view,
+            List<RawLeg> movementLegs
+    ) {
+        String methodId = view.methodId();
+        MovementSummary summary = MovementSummary.from(movementLegs, nativeAssetSymbolResolver.nativeSymbol(view.networkId()));
+
+        if (PARASWAP_SWAP_EXACT_AMOUNT_OUT_SELECTOR.equals(methodId)
+                && hasDistinctNetInboundAndOutboundAssets(movementLegs)) {
+            return Optional.of(result(
+                    view,
+                    NormalizedTransactionType.SWAP,
+                    OnChainClassificationSupport.initialStatus(view, NormalizedTransactionType.SWAP, ConfidenceLevel.MEDIUM),
+                    ClassificationSource.METHOD_ID,
+                    ConfidenceLevel.MEDIUM,
+                    OnChainClassificationSupport.toFlows(movementLegs, NormalizedTransactionType.SWAP),
+                    List.of(),
+                    null,
+                    null
+            ));
+        }
+
+        if (ROUTE_SINGLE_SELECTOR.equals(methodId)
+                && view.hasFullReceiptClarificationEvidence()
+                && hasOutbound(movementLegs)
+                && LpPositionLifecycleSupport.hasAnyErc721TransferToWallet(view)) {
+            return Optional.of(result(
+                    view,
+                    NormalizedTransactionType.LP_ENTRY,
+                    OnChainClassificationSupport.initialStatus(view, NormalizedTransactionType.LP_ENTRY, ConfidenceLevel.MEDIUM),
+                    ClassificationSource.HEURISTIC,
+                    ConfidenceLevel.MEDIUM,
+                    OnChainClassificationSupport.toFlows(movementLegs, NormalizedTransactionType.LP_ENTRY),
+                    List.of(),
+                    null,
+                    null
+            ));
+        }
+
+        if (!view.hasFullReceiptClarificationEvidence()) {
+            return Optional.empty();
+        }
+        if (PARASWAP_SWAP_EXACT_AMOUNT_OUT_SELECTOR.equals(methodId)
+                && summary.nativeOutbound()
+                && summary.singleTokenIn()
+                && summary.tokenOutboundCount() == 0) {
+            return Optional.of(result(
+                    view,
+                    NormalizedTransactionType.SWAP,
+                    OnChainClassificationSupport.initialStatus(view, NormalizedTransactionType.SWAP, ConfidenceLevel.LOW),
+                    ClassificationSource.METHOD_ID,
+                    ConfidenceLevel.LOW,
+                    OnChainClassificationSupport.toFlows(movementLegs, NormalizedTransactionType.SWAP),
+                    List.of(),
+                    null,
+                    null
+            ));
+        }
+        return Optional.empty();
+    }
+
     private Optional<OnChainClassificationResult> classifyClarifiedBatchLendingPath(
             OnChainRawTransactionView view,
             List<RawLeg> movementLegs
@@ -1194,10 +1564,10 @@ public class OnChainClassifier {
         if (!"0xc16ae7a4".equals(view.methodId()) && !containsAny(view.functionName(), "batch")) {
             return Optional.empty();
         }
-        boolean shareInbound = hasShareLikeMovement(movementLegs, true);
-        boolean shareOutbound = hasShareLikeMovement(movementLegs, false);
-        boolean principalInbound = hasNonShareMovement(movementLegs, true);
-        boolean principalOutbound = hasNonShareMovement(movementLegs, false);
+        boolean shareInbound = hasShareLikeMovement(movementLegs, true) || hasMintedFungibleTransferToWallet(view);
+        boolean shareOutbound = hasShareLikeMovement(movementLegs, false) || hasBurnedFungibleTransferFromWallet(view);
+        boolean principalInbound = hasNonShareMovement(movementLegs, true) || hasAnyInboundFungibleTransferToWallet(view);
+        boolean principalOutbound = hasNonShareMovement(movementLegs, false) || hasAnyOutboundFungibleTransferFromWallet(view);
         if (shareInbound && principalOutbound) {
             return Optional.of(result(
                     view,
@@ -1219,6 +1589,56 @@ public class OnChainClassifier {
                     ClassificationSource.HEURISTIC,
                     ConfidenceLevel.LOW,
                     OnChainClassificationSupport.toFlows(movementLegs, NormalizedTransactionType.LENDING_WITHDRAW),
+                    List.of(),
+                    null,
+                    null
+            ));
+        }
+        return Optional.empty();
+    }
+
+    private Optional<OnChainClassificationResult> classifyClarifiedExecuteOrder(
+            OnChainRawTransactionView view,
+            List<RawLeg> movementLegs
+    ) {
+        if (!view.hasFullReceiptClarificationEvidence()) {
+            return Optional.empty();
+        }
+        MovementSummary summary = MovementSummary.from(movementLegs, nativeAssetSymbolResolver.nativeSymbol(view.networkId()));
+        if (hasDistinctNetInboundAndOutboundAssets(movementLegs)) {
+            return Optional.of(result(
+                    view,
+                    NormalizedTransactionType.SWAP,
+                    OnChainClassificationSupport.initialStatus(view, NormalizedTransactionType.SWAP, ConfidenceLevel.LOW),
+                    ClassificationSource.FUNCTION_NAME,
+                    ConfidenceLevel.LOW,
+                    OnChainClassificationSupport.toFlows(movementLegs, NormalizedTransactionType.SWAP),
+                    List.of(),
+                    null,
+                    null
+            ));
+        }
+        if (summary.onlyInbound()) {
+            return Optional.of(result(
+                    view,
+                    NormalizedTransactionType.PROTOCOL_CUSTODY_WITHDRAW,
+                    OnChainClassificationSupport.initialStatus(view, NormalizedTransactionType.PROTOCOL_CUSTODY_WITHDRAW, ConfidenceLevel.LOW),
+                    ClassificationSource.FUNCTION_NAME,
+                    ConfidenceLevel.LOW,
+                    OnChainClassificationSupport.toFlows(movementLegs, NormalizedTransactionType.PROTOCOL_CUSTODY_WITHDRAW),
+                    List.of(),
+                    null,
+                    null
+            ));
+        }
+        if (summary.onlyOutbound()) {
+            return Optional.of(result(
+                    view,
+                    NormalizedTransactionType.PROTOCOL_CUSTODY_DEPOSIT,
+                    OnChainClassificationSupport.initialStatus(view, NormalizedTransactionType.PROTOCOL_CUSTODY_DEPOSIT, ConfidenceLevel.LOW),
+                    ClassificationSource.FUNCTION_NAME,
+                    ConfidenceLevel.LOW,
+                    OnChainClassificationSupport.toFlows(movementLegs, NormalizedTransactionType.PROTOCOL_CUSTODY_DEPOSIT),
                     List.of(),
                     null,
                     null
@@ -1277,6 +1697,149 @@ public class OnChainClassifier {
                 || normalized.startsWith("e")
                 || normalized.startsWith("gt")
                 || normalized.startsWith("syrup");
+    }
+
+    private boolean hasMintedFungibleTransferToWallet(OnChainRawTransactionView view) {
+        String wallet = view.walletAddress();
+        if (wallet == null) {
+            return false;
+        }
+        for (Document log : view.persistedLogs()) {
+            if (!isErc20TransferLog(log)) {
+                continue;
+            }
+            if (wallet.equals(topicAddress(topicAt(log, 2)))
+                    && isZeroAddress(topicAddress(topicAt(log, 1)))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean hasBurnedFungibleTransferFromWallet(OnChainRawTransactionView view) {
+        String wallet = view.walletAddress();
+        if (wallet == null) {
+            return false;
+        }
+        for (Document log : view.persistedLogs()) {
+            if (!isErc20TransferLog(log)) {
+                continue;
+            }
+            if (wallet.equals(topicAddress(topicAt(log, 1)))
+                    && isZeroAddress(topicAddress(topicAt(log, 2)))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean hasAnyInboundFungibleTransferToWallet(OnChainRawTransactionView view) {
+        String wallet = view.walletAddress();
+        if (wallet == null) {
+            return false;
+        }
+        for (Document log : view.persistedLogs()) {
+            if (!isErc20TransferLog(log)) {
+                continue;
+            }
+            String from = topicAddress(topicAt(log, 1));
+            String to = topicAddress(topicAt(log, 2));
+            if (wallet.equals(to) && !isZeroAddress(from)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean hasAnyOutboundFungibleTransferFromWallet(OnChainRawTransactionView view) {
+        String wallet = view.walletAddress();
+        if (wallet == null) {
+            return false;
+        }
+        for (Document log : view.persistedLogs()) {
+            if (!isErc20TransferLog(log)) {
+                continue;
+            }
+            String from = topicAddress(topicAt(log, 1));
+            String to = topicAddress(topicAt(log, 2));
+            if (wallet.equals(from) && !isZeroAddress(to)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isErc20TransferLog(Document log) {
+        if (log == null) {
+            return false;
+        }
+        List<String> topics = normalizedTopics(log);
+        return topics.size() >= 3
+                && "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef".equals(topics.getFirst());
+    }
+
+    private List<String> normalizedTopics(Document log) {
+        if (log == null) {
+            return List.of();
+        }
+        Object topicsObject = log.get("topics");
+        if (!(topicsObject instanceof List<?> topics) || topics.isEmpty()) {
+            return List.of();
+        }
+        List<String> normalized = new ArrayList<>(topics.size());
+        for (Object topic : topics) {
+            String value = topic == null ? null : topic.toString();
+            if (value == null || value.isBlank()) {
+                continue;
+            }
+            normalized.add(value.toLowerCase(Locale.ROOT));
+        }
+        return List.copyOf(normalized);
+    }
+
+    private String topicAt(Document log, int index) {
+        List<String> topics = normalizedTopics(log);
+        if (index < 0 || index >= topics.size()) {
+            return null;
+        }
+        return topics.get(index);
+    }
+
+    private String topicAddress(String topic) {
+        if (topic == null) {
+            return null;
+        }
+        String normalized = topic.startsWith("0x") ? topic.substring(2) : topic;
+        if (normalized.length() < 40) {
+            return null;
+        }
+        return OnChainRawTransactionView.normalizeAddress(normalized.substring(normalized.length() - 40));
+    }
+
+    private boolean isZeroAddress(String address) {
+        return "0x0000000000000000000000000000000000000000".equals(address);
+    }
+
+    private OnChainClassificationResult terminalUnknown(
+            OnChainRawTransactionView view,
+            List<RawLeg> movementLegs,
+            ClassificationSource classifiedBy,
+            ConfidenceLevel confidence,
+            List<String> missingDataReasons,
+            String protocolName,
+            String protocolVersion
+    ) {
+        return result(
+                view,
+                NormalizedTransactionType.UNKNOWN,
+                NormalizedTransactionStatus.CONFIRMED,
+                classifiedBy,
+                confidence,
+                OnChainClassificationSupport.toFlows(movementLegs, NormalizedTransactionType.ADMIN_CONFIG),
+                missingDataReasons,
+                protocolName,
+                protocolVersion
+        );
     }
 
     private static boolean safeEquals(String left, String right) {

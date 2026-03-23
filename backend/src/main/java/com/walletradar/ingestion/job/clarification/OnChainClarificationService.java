@@ -90,11 +90,24 @@ public class OnChainClarificationService {
             }
 
             rawTransactionClarificationEnricher.merge(rawTransaction, enrichment.get());
+            int currentAttempts = rawTransactionClarificationEnricher.recordAttempt(
+                    rawTransaction,
+                    ClarificationMode.METADATA_ONLY,
+                    safeAttempts(normalizedTransaction.getClarificationAttempts()),
+                    null
+            );
             rawTransactionRepository.save(rawTransaction);
 
             OnChainClassificationResult classificationResult = onChainClassifier.classify(rawTransaction);
             if (classificationResult.status() == NormalizedTransactionStatus.PENDING_CLARIFICATION) {
-                markFailure(normalizedTransaction, rawTransaction, "CLARIFICATION_INSUFFICIENT_EVIDENCE", now);
+                markFailure(
+                        normalizedTransaction,
+                        rawTransaction,
+                        "CLARIFICATION_INSUFFICIENT_EVIDENCE",
+                        now,
+                        currentAttempts,
+                        false
+                );
                 return false;
             }
             NormalizedTransaction clarified = builder.rebuildAfterClarification(
@@ -118,7 +131,29 @@ public class OnChainClarificationService {
             String reason,
             Instant now
     ) {
-        int nextAttempts = safeAttempts(normalizedTransaction.getClarificationAttempts()) + 1;
+        markFailure(normalizedTransaction, rawTransaction, reason, now, null, true);
+    }
+
+    private void markFailure(
+            NormalizedTransaction normalizedTransaction,
+            RawTransaction rawTransaction,
+            String reason,
+            Instant now,
+            Integer existingAttempts,
+            boolean incrementRawAttempt
+    ) {
+        int nextAttempts = existingAttempts == null
+                ? safeAttempts(normalizedTransaction.getClarificationAttempts()) + 1
+                : Math.max(0, existingAttempts);
+        if (rawTransaction != null && incrementRawAttempt) {
+            nextAttempts = rawTransactionClarificationEnricher.recordAttempt(
+                    rawTransaction,
+                    ClarificationMode.METADATA_ONLY,
+                    safeAttempts(normalizedTransaction.getClarificationAttempts()),
+                    reason
+            );
+            rawTransactionRepository.save(rawTransaction);
+        }
         normalizedTransaction.setClarificationAttempts(nextAttempts);
         normalizedTransaction.setUpdatedAt(now);
 

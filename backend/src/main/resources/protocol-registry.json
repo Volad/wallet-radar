@@ -434,6 +434,19 @@
       "confidence": "HIGH",
       "notes": "LP-position custody contract on Optimism. Pure deposit(uint256)/withdraw(uint256) calls represent LP position stake/unstake, while reward-bearing paths remain method-aware."
     },
+    "0xbc6043a5e50ba0c0213d2f7430a73e4590af97ad": {
+      "name": "Velodrome Slipstream Staking Contract",
+      "protocol": "Velodrome",
+      "version": "Slipstream",
+      "family": "DEX",
+      "role": "STAKE_CONTRACT",
+      "event_type": null,
+      "networks": [
+        "OPTIMISM"
+      ],
+      "confidence": "HIGH",
+      "notes": "LP-position custody contract on Optimism. Pure deposit(uint256)/withdraw(uint256) calls represent LP position stake/unstake, while reward-bearing paths remain method-aware."
+    },
     "0x7816f1711828c52eb3ca5a2f075a0c06e0548bd6": {
       "name": "SmartChefInitializable",
       "protocol": "PancakeSwap",

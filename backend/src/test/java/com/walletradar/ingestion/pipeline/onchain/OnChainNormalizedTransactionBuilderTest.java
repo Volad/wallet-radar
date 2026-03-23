@@ -167,4 +167,91 @@ class OnChainNormalizedTransactionBuilderTest {
                 "MISSING_EFFECTIVE_GAS_PRICE"
         );
     }
+
+    @Test
+    @DisplayName("build infers clarification counters from persisted raw evidence")
+    void buildInfersClarificationCountersFromPersistedRawEvidence() {
+        RawTransaction rawTransaction = new RawTransaction();
+        rawTransaction.setTxHash("0xmno");
+        rawTransaction.setNetworkId("ETHEREUM");
+        rawTransaction.setWalletAddress(WALLET);
+        rawTransaction.setRawData(new Document()
+                .append("timeStamp", "1700000000")
+                .append("transactionIndex", "5")
+                .append("from", WALLET)
+                .append("to", "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                .append("value", "0")
+                .append("txreceipt_status", "1")
+                .append("gasUsed", "21000")
+                .append("effectiveGasPrice", "5000000000")
+                .append("clarificationEvidence", new Document()
+                        .append("sourceFamily", "RPC")
+                        .append("receipt", new Document("txReceiptStatus", "1"))
+                        .append("fullReceipt", new Document("status", "0x1"))));
+
+        OnChainClassificationResult classificationResult = new OnChainClassificationResult(
+                NormalizedTransactionType.SWAP,
+                NormalizedTransactionStatus.PENDING_PRICE,
+                ClassificationSource.METHOD_ID,
+                ConfidenceLevel.MEDIUM,
+                List.of(),
+                List.of(),
+                null,
+                null
+        );
+
+        NormalizedTransaction normalized = builder.build(rawTransaction, classificationResult, Instant.parse("2026-03-23T12:00:00Z"));
+
+        assertThat(normalized.getClarificationAttempts()).isEqualTo(1);
+        assertThat(normalized.getFullReceiptClarificationAttempts()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("rebuild after reclassification preserves clarification counters from raw evidence")
+    void rebuildAfterReclassificationPreservesClarificationCountersFromRawEvidence() {
+        RawTransaction rawTransaction = new RawTransaction();
+        rawTransaction.setTxHash("0xpqr");
+        rawTransaction.setNetworkId("ETHEREUM");
+        rawTransaction.setWalletAddress(WALLET);
+        rawTransaction.setRawData(new Document()
+                .append("timeStamp", "1700000000")
+                .append("transactionIndex", "6")
+                .append("from", WALLET)
+                .append("to", "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                .append("value", "0")
+                .append("txreceipt_status", "1")
+                .append("gasUsed", "21000")
+                .append("effectiveGasPrice", "5000000000")
+                .append("clarificationEvidence", new Document()
+                        .append("sourceFamily", "ETHERSCAN")
+                        .append("receipt", new Document("txReceiptStatus", "1"))
+                        .append("fullReceipt", new Document("status", "0x1"))));
+
+        NormalizedTransaction existing = new NormalizedTransaction();
+        existing.setId("0xpqr:ETHEREUM:" + WALLET);
+        existing.setCreatedAt(Instant.parse("2026-03-23T10:00:00Z"));
+        existing.setClarificationAttempts(0);
+        existing.setFullReceiptClarificationAttempts(0);
+
+        OnChainClassificationResult classificationResult = new OnChainClassificationResult(
+                NormalizedTransactionType.SWAP,
+                NormalizedTransactionStatus.PENDING_PRICE,
+                ClassificationSource.METHOD_ID,
+                ConfidenceLevel.MEDIUM,
+                List.of(),
+                List.of(),
+                null,
+                null
+        );
+
+        NormalizedTransaction normalized = builder.rebuildAfterReclassification(
+                existing,
+                rawTransaction,
+                classificationResult,
+                Instant.parse("2026-03-23T12:00:00Z")
+        );
+
+        assertThat(normalized.getClarificationAttempts()).isEqualTo(1);
+        assertThat(normalized.getFullReceiptClarificationAttempts()).isEqualTo(1);
+    }
 }

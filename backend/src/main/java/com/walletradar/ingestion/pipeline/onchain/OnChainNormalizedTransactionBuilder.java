@@ -22,11 +22,12 @@ public class OnChainNormalizedTransactionBuilder {
             OnChainClassificationResult classificationResult,
             Instant now
     ) {
+        OnChainRawTransactionView view = OnChainRawTransactionView.wrap(rawTransaction);
         NormalizedTransaction normalized = new NormalizedTransaction();
-        applyCanonicalFields(normalized, rawTransaction, classificationResult);
+        applyCanonicalFields(normalized, view, classificationResult);
         normalized.setId(canonicalId(rawTransaction));
-        normalized.setClarificationAttempts(0);
-        normalized.setFullReceiptClarificationAttempts(0);
+        normalized.setClarificationAttempts(clarificationAttemptBaseline(view));
+        normalized.setFullReceiptClarificationAttempts(fullReceiptClarificationAttemptBaseline(view));
         normalized.setPricingAttempts(0);
         normalized.setStatAttempts(0);
         normalized.setCreatedAt(now);
@@ -43,13 +44,14 @@ public class OnChainNormalizedTransactionBuilder {
             OnChainClassificationResult classificationResult,
             Instant now
     ) {
+        OnChainRawTransactionView view = OnChainRawTransactionView.wrap(rawTransaction);
         NormalizedTransaction normalized = new NormalizedTransaction();
-        applyCanonicalFields(normalized, rawTransaction, classificationResult);
+        applyCanonicalFields(normalized, view, classificationResult);
         normalized.setId(existing.getId());
         normalized.setCreatedAt(existing.getCreatedAt());
         normalized.setUpdatedAt(now);
-        normalized.setClarificationAttempts(safeCounter(existing.getClarificationAttempts()) + 1);
-        normalized.setFullReceiptClarificationAttempts(safeCounter(existing.getFullReceiptClarificationAttempts()));
+        normalized.setClarificationAttempts(clarificationAttemptBaseline(view));
+        normalized.setFullReceiptClarificationAttempts(fullReceiptClarificationAttemptBaseline(view));
         normalized.setPricingAttempts(safeCounter(existing.getPricingAttempts()));
         normalized.setStatAttempts(safeCounter(existing.getStatAttempts()));
         normalized.setCorrelationId(existing.getCorrelationId());
@@ -68,13 +70,14 @@ public class OnChainNormalizedTransactionBuilder {
             OnChainClassificationResult classificationResult,
             Instant now
     ) {
+        OnChainRawTransactionView view = OnChainRawTransactionView.wrap(rawTransaction);
         NormalizedTransaction normalized = new NormalizedTransaction();
-        applyCanonicalFields(normalized, rawTransaction, classificationResult);
+        applyCanonicalFields(normalized, view, classificationResult);
         normalized.setId(existing.getId());
         normalized.setCreatedAt(existing.getCreatedAt());
         normalized.setUpdatedAt(now);
-        normalized.setClarificationAttempts(safeCounter(existing.getClarificationAttempts()));
-        normalized.setFullReceiptClarificationAttempts(safeCounter(existing.getFullReceiptClarificationAttempts()));
+        normalized.setClarificationAttempts(clarificationAttemptBaseline(view));
+        normalized.setFullReceiptClarificationAttempts(fullReceiptClarificationAttemptBaseline(view));
         normalized.setPricingAttempts(safeCounter(existing.getPricingAttempts()));
         normalized.setStatAttempts(safeCounter(existing.getStatAttempts()));
         normalized.setCorrelationId(existing.getCorrelationId());
@@ -93,10 +96,9 @@ public class OnChainNormalizedTransactionBuilder {
 
     private void applyCanonicalFields(
             NormalizedTransaction normalized,
-            RawTransaction rawTransaction,
+            OnChainRawTransactionView view,
             OnChainClassificationResult classificationResult
     ) {
-        OnChainRawTransactionView view = OnChainRawTransactionView.wrap(rawTransaction);
         normalized.setTxHash(view.txHash());
         normalized.setNetworkId(view.networkId());
         normalized.setWalletAddress(view.walletAddress());
@@ -119,6 +121,14 @@ public class OnChainNormalizedTransactionBuilder {
         normalized.setMissingDataReasons(missingDataReasons);
         normalized.setProtocolName(classificationResult.protocolName());
         normalized.setProtocolVersion(classificationResult.protocolVersion());
+    }
+
+    private int clarificationAttemptBaseline(OnChainRawTransactionView view) {
+        return view == null ? 0 : view.clarificationAttemptCount();
+    }
+
+    private int fullReceiptClarificationAttemptBaseline(OnChainRawTransactionView view) {
+        return view == null ? 0 : view.fullReceiptClarificationAttemptCount();
     }
 
     private int safeCounter(Integer value) {

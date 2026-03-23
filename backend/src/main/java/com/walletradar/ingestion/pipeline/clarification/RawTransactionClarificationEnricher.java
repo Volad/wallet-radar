@@ -10,6 +10,11 @@ import org.springframework.stereotype.Component;
 @Component
 public class RawTransactionClarificationEnricher {
 
+    private static final String CLARIFICATION_ATTEMPTS_KEY = "clarificationAttempts";
+    private static final String FULL_RECEIPT_ATTEMPTS_KEY = "fullReceiptClarificationAttempts";
+    private static final String LAST_METADATA_FAILURE_REASON_KEY = "lastClarificationFailureReason";
+    private static final String LAST_FULL_RECEIPT_FAILURE_REASON_KEY = "lastFullReceiptClarificationFailureReason";
+
     public void merge(RawTransaction rawTransaction, ClarificationReceiptEnrichment enrichment) {
         if (rawTransaction.getRawData() == null) {
             rawTransaction.setRawData(new Document());
@@ -87,6 +92,48 @@ public class RawTransactionClarificationEnricher {
         rawData.put("clarificationEvidence", clarificationEvidence);
     }
 
+    public int recordAttempt(RawTransaction rawTransaction, ClarificationMode mode, String failureReason) {
+        return recordAttempt(rawTransaction, mode, 0, failureReason);
+    }
+
+    public int recordAttempt(
+            RawTransaction rawTransaction,
+            ClarificationMode mode,
+            int minimumAttempts,
+            String failureReason
+    ) {
+        if (rawTransaction.getRawData() == null) {
+            rawTransaction.setRawData(new Document());
+        }
+        Document rawData = rawTransaction.getRawData();
+        Document clarificationEvidence = rawData.get("clarificationEvidence", Document.class);
+        if (clarificationEvidence == null) {
+            clarificationEvidence = new Document();
+        }
+
+        String counterKey = mode == ClarificationMode.FULL_RECEIPT
+                ? FULL_RECEIPT_ATTEMPTS_KEY
+                : CLARIFICATION_ATTEMPTS_KEY;
+        int nextAttempts = Math.max(safeCounter(clarificationEvidence.get(counterKey)), Math.max(0, minimumAttempts)) + 1;
+        clarificationEvidence.put(counterKey, nextAttempts);
+
+        if (failureReason != null && !failureReason.isBlank()) {
+            clarificationEvidence.put(
+                    mode == ClarificationMode.FULL_RECEIPT
+                            ? LAST_FULL_RECEIPT_FAILURE_REASON_KEY
+                            : LAST_METADATA_FAILURE_REASON_KEY,
+                    failureReason
+            );
+        } else if (mode == ClarificationMode.FULL_RECEIPT) {
+            clarificationEvidence.remove(LAST_FULL_RECEIPT_FAILURE_REASON_KEY);
+        } else {
+            clarificationEvidence.remove(LAST_METADATA_FAILURE_REASON_KEY);
+        }
+
+        rawData.put("clarificationEvidence", clarificationEvidence);
+        return nextAttempts;
+    }
+
     private static boolean hasPersistableEvidence(ClarificationReceiptEnrichment enrichment) {
         return enrichment != null
                 && (enrichment.txReceiptStatus() != null
@@ -106,5 +153,19 @@ public class RawTransactionClarificationEnricher {
             }
         }
         return java.util.List.copyOf(copies);
+    }
+
+    private static int safeCounter(Object rawValue) {
+        if (rawValue instanceof Number number) {
+            return Math.max(0, number.intValue());
+        }
+        if (rawValue == null) {
+            return 0;
+        }
+        try {
+            return Math.max(0, Integer.parseInt(rawValue.toString().trim()));
+        } catch (NumberFormatException ex) {
+            return 0;
+        }
     }
 }

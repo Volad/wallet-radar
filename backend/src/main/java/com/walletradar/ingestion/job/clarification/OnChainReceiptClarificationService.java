@@ -61,7 +61,7 @@ public class OnChainReceiptClarificationService {
         Instant now = Instant.now();
         Optional<RawTransaction> rawTransactionOptional = rawTransactionRepository.findById(normalizedTransaction.getId());
         if (rawTransactionOptional.isEmpty()) {
-            markFailure(normalizedTransaction, "RAW_TRANSACTION_MISSING", now);
+            markFailure(normalizedTransaction, null, "RAW_TRANSACTION_MISSING", now);
             return false;
         }
         RawTransaction rawTransaction = rawTransactionOptional.get();
@@ -76,11 +76,17 @@ public class OnChainReceiptClarificationService {
                     ClarificationMode.FULL_RECEIPT
             );
             if (enrichment.isEmpty()) {
-                markFailure(normalizedTransaction, "CLARIFICATION_FULL_RECEIPT_UNAVAILABLE", now);
+                markFailure(normalizedTransaction, rawTransaction, "CLARIFICATION_FULL_RECEIPT_UNAVAILABLE", now);
                 return false;
             }
 
             rawTransactionClarificationEnricher.merge(rawTransaction, enrichment.get());
+            rawTransactionClarificationEnricher.recordAttempt(
+                    rawTransaction,
+                    ClarificationMode.FULL_RECEIPT,
+                    safeAttempts(normalizedTransaction.getFullReceiptClarificationAttempts()),
+                    null
+            );
             rawTransactionRepository.save(rawTransaction);
 
             OnChainClassificationResult classificationResult = onChainClassifier.classify(rawTransaction);
@@ -90,18 +96,32 @@ public class OnChainReceiptClarificationService {
                     classificationResult,
                     now
             );
-            reclassified.setFullReceiptClarificationAttempts(safeAttempts(normalizedTransaction.getFullReceiptClarificationAttempts()) + 1);
             normalizedTransactionRepository.save(reclassified);
             return true;
         } catch (RuntimeException ex) {
             log.warn("On-chain full-receipt clarification failed for normalizedTxId={}: {}", normalizedTransaction.getId(), ex.getMessage());
-            markFailure(normalizedTransaction, ex.getClass().getSimpleName(), now);
+            markFailure(normalizedTransaction, rawTransaction, ex.getClass().getSimpleName(), now);
             return false;
         }
     }
 
-    private void markFailure(NormalizedTransaction normalizedTransaction, String reason, Instant now) {
-        normalizedTransaction.setFullReceiptClarificationAttempts(safeAttempts(normalizedTransaction.getFullReceiptClarificationAttempts()) + 1);
+    private void markFailure(
+            NormalizedTransaction normalizedTransaction,
+            RawTransaction rawTransaction,
+            String reason,
+            Instant now
+    ) {
+        int nextAttempts = safeAttempts(normalizedTransaction.getFullReceiptClarificationAttempts()) + 1;
+        if (rawTransaction != null) {
+            nextAttempts = rawTransactionClarificationEnricher.recordAttempt(
+                    rawTransaction,
+                    ClarificationMode.FULL_RECEIPT,
+                    safeAttempts(normalizedTransaction.getFullReceiptClarificationAttempts()),
+                    reason
+            );
+            rawTransactionRepository.save(rawTransaction);
+        }
+        normalizedTransaction.setFullReceiptClarificationAttempts(nextAttempts);
         normalizedTransaction.setUpdatedAt(now);
         List<String> reasons = new ArrayList<>(normalizedTransaction.getMissingDataReasons() == null
                 ? List.of()

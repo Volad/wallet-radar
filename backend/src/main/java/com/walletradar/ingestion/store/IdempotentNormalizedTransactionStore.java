@@ -31,15 +31,23 @@ public class IdempotentNormalizedTransactionStore {
             Instant now
     ) {
         if (existing.getStatus() == NormalizedTransactionStatus.CONFIRMED) {
+            existing.setClarificationAttempts(normalizedCounter(candidate.getClarificationAttempts()));
+            existing.setFullReceiptClarificationAttempts(normalizedCounter(candidate.getFullReceiptClarificationAttempts()));
             existing.setUpdatedAt(now);
             return existing;
         }
         candidate.setId(existing.getId());
         candidate.setCreatedAt(existing.getCreatedAt() != null ? existing.getCreatedAt() : candidate.getCreatedAt());
+        candidate.setClarificationAttempts(normalizedCounter(candidate.getClarificationAttempts()));
+        candidate.setFullReceiptClarificationAttempts(normalizedCounter(candidate.getFullReceiptClarificationAttempts()));
         if (candidate.getConfirmedAt() == null) {
             candidate.setConfirmedAt(existing.getConfirmedAt());
         }
         candidate.setUpdatedAt(now);
         return candidate;
+    }
+
+    private int normalizedCounter(Integer value) {
+        return value == null ? 0 : Math.max(0, value);
     }
 }

@@ -161,7 +161,7 @@ class OnChainClarificationServiceTest {
         boolean clarified = service.clarify(pending);
 
         assertThat(clarified).isFalse();
-        verify(rawTransactionRepository, never()).save(any(RawTransaction.class));
+        verify(rawTransactionRepository).save(any(RawTransaction.class));
 
         ArgumentCaptor<NormalizedTransaction> normalizedCaptor = ArgumentCaptor.forClass(NormalizedTransaction.class);
         verify(normalizedTransactionRepository).save(normalizedCaptor.capture());

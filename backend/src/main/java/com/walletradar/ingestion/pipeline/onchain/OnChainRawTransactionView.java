@@ -181,12 +181,48 @@ public final class OnChainRawTransactionView {
         if (!clarificationLogs.isEmpty()) {
             return clarificationLogs;
         }
+        List<Document> fullReceiptLogs = readDocumentList(clarificationFullReceiptDocument(), "logs");
+        if (!fullReceiptLogs.isEmpty()) {
+            return fullReceiptLogs;
+        }
         Document rawData = rawTransaction.getRawData();
         return filterSyntheticLogs(readDocumentList(rawData, "logs"));
     }
 
     public boolean hasClarificationEvidence() {
         return clarificationEvidenceDocument() != null;
+    }
+
+    public boolean hasFullReceiptClarificationEvidence() {
+        if (clarificationEvidenceDocument() == null) {
+            return false;
+        }
+        if (clarificationEvidenceDocument().get("fullReceipt") instanceof Document) {
+            return true;
+        }
+        Document transfers = clarificationTransfersDocument();
+        if (transfers != null && (!readDocumentList(transfers, "tokenTransfers").isEmpty()
+                || !readDocumentList(transfers, "internalTransfers").isEmpty())) {
+            return true;
+        }
+        Document receipt = clarificationReceiptDocument();
+        return receipt != null && !readDocumentList(receipt, "logs").isEmpty();
+    }
+
+    public int clarificationAttemptCount() {
+        Integer explicitAttempts = parseInteger(clarificationEvidenceValue("clarificationAttempts"));
+        if (explicitAttempts != null) {
+            return Math.max(0, explicitAttempts);
+        }
+        return hasClarificationEvidence() ? 1 : 0;
+    }
+
+    public int fullReceiptClarificationAttemptCount() {
+        Integer explicitAttempts = parseInteger(clarificationEvidenceValue("fullReceiptClarificationAttempts"));
+        if (explicitAttempts != null) {
+            return Math.max(0, explicitAttempts);
+        }
+        return hasFullReceiptClarificationEvidence() ? 1 : 0;
     }
 
     public String tokenTransferFrom(Document transfer) {
@@ -366,6 +402,23 @@ public final class OnChainRawTransactionView {
         }
         Object transfers = clarificationEvidence.get("transfers");
         return transfers instanceof Document document ? document : null;
+    }
+
+    private Document clarificationFullReceiptDocument() {
+        Document clarificationEvidence = clarificationEvidenceDocument();
+        if (clarificationEvidence == null) {
+            return null;
+        }
+        Object fullReceipt = clarificationEvidence.get("fullReceipt");
+        return fullReceipt instanceof Document document ? document : null;
+    }
+
+    private Object clarificationEvidenceValue(String key) {
+        Document clarificationEvidence = clarificationEvidenceDocument();
+        if (clarificationEvidence == null) {
+            return null;
+        }
+        return clarificationEvidence.get(key);
     }
 
     private boolean isTransferRowBackedTopLevel() {

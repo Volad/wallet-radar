@@ -38,6 +38,7 @@ public class NativeAssetSymbolResolver {
             Map.entry(NetworkId.ZKSYNC, "0x5aea5775959fbc2557cc8789bc1bf90a239d9a91"),
             Map.entry(NetworkId.LINEA, "0xe5d7c2a44ffddf6b295a15c148167daaaf5cf34f"),
             Map.entry(NetworkId.MANTLE, "0xdeaddeaddeaddeaddeaddeaddeaddeaddead1111"),
+            Map.entry(NetworkId.PLASMA, "0x6100e367285b01f48d07953803a2d8dca5d19873"),
             Map.entry(NetworkId.BSC, "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c"),
             Map.entry(NetworkId.AVALANCHE, "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7")
     );
@@ -54,7 +55,8 @@ public class NativeAssetSymbolResolver {
             Map.entry(NetworkId.BSC, "WBNB"),
             Map.entry(NetworkId.POLYGON, "WETH"),
             Map.entry(NetworkId.AVALANCHE, "WAVAX"),
-            Map.entry(NetworkId.MANTLE, "WMNT")
+            Map.entry(NetworkId.MANTLE, "WMNT"),
+            Map.entry(NetworkId.PLASMA, "WXPL9")
     );
 
     public String nativeSymbol(NetworkId networkId) {

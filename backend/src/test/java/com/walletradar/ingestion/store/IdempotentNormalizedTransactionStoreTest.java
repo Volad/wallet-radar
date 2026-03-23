@@ -48,6 +48,33 @@ class IdempotentNormalizedTransactionStoreTest {
         assertThat(savedCaptor.getValue().getCreatedAt()).isEqualTo(originalCreatedAt);
     }
 
+    @Test
+    @DisplayName("confirmed merge preserves higher clarification counters from candidate")
+    void confirmedMergePreservesHigherClarificationCountersFromCandidate() {
+        IdempotentNormalizedTransactionStore store = new IdempotentNormalizedTransactionStore(repository);
+        Instant originalCreatedAt = Instant.parse("2026-03-19T10:00:00Z");
+
+        NormalizedTransaction existing = normalized("raw-id", originalCreatedAt);
+        existing.setStatus(NormalizedTransactionStatus.CONFIRMED);
+        existing.setClarificationAttempts(0);
+        existing.setFullReceiptClarificationAttempts(0);
+
+        NormalizedTransaction candidate = normalized("raw-id", Instant.parse("2026-03-19T11:00:00Z"));
+        candidate.setStatus(NormalizedTransactionStatus.CONFIRMED);
+        candidate.setClarificationAttempts(1);
+        candidate.setFullReceiptClarificationAttempts(1);
+
+        when(repository.findById("raw-id")).thenReturn(Optional.of(existing));
+        when(repository.save(org.mockito.ArgumentMatchers.any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        store.upsert(candidate);
+
+        ArgumentCaptor<NormalizedTransaction> savedCaptor = ArgumentCaptor.forClass(NormalizedTransaction.class);
+        verify(repository).save(savedCaptor.capture());
+        assertThat(savedCaptor.getValue().getClarificationAttempts()).isEqualTo(1);
+        assertThat(savedCaptor.getValue().getFullReceiptClarificationAttempts()).isEqualTo(1);
+    }
+
     private static NormalizedTransaction normalized(String id, Instant createdAt) {
         NormalizedTransaction normalizedTransaction = new NormalizedTransaction();
         normalizedTransaction.setId(id);

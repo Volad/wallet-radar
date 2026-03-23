@@ -38,7 +38,9 @@ public class PendingReceiptClarificationQueryService {
         );
         Criteria reasonsCriteria = Criteria.where("missingDataReasons").in(
                 "ROUTER_METHOD_OVERLOAD_UNSUPPORTED",
-                "CLASSIFICATION_FAILED"
+                "CLASSIFICATION_FAILED",
+                "INSUFFICIENT_MOVEMENT_EVIDENCE",
+                "GMX_ORDER_SETTLEMENT_UNRESOLVED"
         );
 
         Query query = new Query(new Criteria().andOperator(

@@ -16,6 +16,7 @@ public final class BridgeSettlementSupport {
             "0x2e378115", // fillV3Relay
             "0xdeff4b24", // fillRelay
             "0xe2de2a03", // redeemWithFee
+            "0xe5c1bf6e", // redeem(bytes cctpMsg,bytes cctpSigs)
             "0xcfc32570", // execute302
             "0x6befa3a5"  // directFulfill
     );
