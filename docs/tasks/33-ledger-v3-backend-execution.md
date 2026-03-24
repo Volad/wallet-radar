@@ -2915,15 +2915,15 @@ Definition of done:
 ## Post-Clarification Pricing-Readiness Closeout — 2026-03-22 Deep Live Audit
 
 This corrective slice starts after the clarification rerun and targets the live
-gaps confirmed in `results/clarification/clarification-readiness-audit.md`.
+gaps confirmed in `results/clarification/run/2/clarification-readiness-audit.md`.
 
 Sources for this slice:
 
-- `results/clarification/clarification-readiness-audit.md`
-- `results/clarification/confirmed_resolved_misclassifications.tsv`
-- `results/clarification/resolved_but_insufficient_evidence.tsv`
-- `results/clarification/live_snapshot.json`
-- `results/clarification/audit_summary.json`
+- `results/clarification/run/2/clarification-readiness-audit.md`
+- `results/clarification/run/2/confirmed_resolved_misclassifications.tsv`
+- `results/clarification/run/2/resolved_but_insufficient_evidence.tsv`
+- `results/clarification/run/2/live_snapshot.json`
+- `results/clarification/run/2/audit_summary.json`
 
 Primary official/market sources for rule authority:
 
@@ -2953,6 +2953,11 @@ Execution order after `BE-05K`:
 5. `BE-05P` economic evidence gate before pricing
 6. `BE-05Q` clarification evidence persistence live parity
 7. `BE-05R` pricing-readiness rerun pack + repeat-audit handoff
+
+Run/2 outcome:
+
+- `BE-05N`, `BE-05O`, `BE-05P`, and `BE-05Q` look materially closed in live data.
+- `BE-05L` and `BE-05M` are **not** closed from data and must be reopened from the run/2 audit output.
 
 ### BE-05L — Wrapped-Native Continuity Parity Closeout
 
@@ -3197,6 +3202,1883 @@ Definition of done:
   - zero fee-only economic rows outside documented non-economic families
   - persisted clarification evidence exists on raw rows that actually used
     clarification
+
+## Pricing-Readiness Residual Closeout — 2026-03-23 Run/2 Audit
+
+This residual slice exists because the live run/2 Mongo audit proved that the
+original `BE-05L` and `BE-05M` implementations were only partially successful.
+The remaining blockers are narrow, but they still prevent pricing / AVCO
+readiness because the affected rows are already resolved into priceable lanes.
+
+Sources for this residual slice:
+
+- `results/clarification/run/2/clarification-readiness-audit.md`
+- `results/clarification/run/2/confirmed_resolved_misclassifications.tsv`
+- `results/clarification/run/2/misclassification_flow_impact.json`
+- `results/clarification/run/2/live_snapshot.json`
+
+Execution order after run/2:
+
+1. `BE-05S` wrapped-native residual live closeout (reopens `BE-05L`)
+2. `BE-05T` Across `depositV3(...)` residual live closeout (reopens `BE-05M`)
+3. `BE-05U` pricing-readiness rerun pack + repeat-audit handoff
+
+### BE-05S — Wrapped-Native Residual Live Closeout (Reopens BE-05L)
+
+Purpose:
+- Eliminate the run/2 live residual where known wrapped-native selector rows
+  still resolve to `VAULT_DEPOSIT`, `VAULT_WITHDRAW`, or `LENDING_WITHDRAW`.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- wrapped-native support helpers
+- wrap / unwrap regression tests
+
+Implementation scope:
+- treat wrapped-native selector semantics as authoritative when both of the
+  following are true:
+  - selector is `0xd0e30db0 = deposit()` or `0x2e1a7d4d = withdraw(uint256)`
+  - canonical raw or persisted clarification evidence proves wrapper identity
+    plus the observable side of the 1:1 continuity
+- allow deterministic counterpart-leg synthesis from canonical wrapper
+  semantics when one side is missing but the other side is already proven in
+  saved evidence
+- do not require strong top-level `to` / `value` if the row already has:
+  - known wrapped-native contract identity
+  - selector continuity
+  - wrapped mint/burn or native transfer continuity
+- block registry or keyword fallback from winning once wrapper continuity is
+  proven
+
+Definition of done:
+- run/2 residual counts are eliminated:
+  - selector `0xd0e30db0` has no rows resolving to `VAULT_DEPOSIT`
+  - selector `0x2e1a7d4d` has no rows resolving to `VAULT_WITHDRAW` or
+    `LENDING_WITHDRAW`
+- the audited live hashes below resolve to `WRAP` / `UNWRAP`
+- no new backfill is required
+
+Required fixtures:
+- `0xa467cc0897b4f063b5e5914223e122ed6906ad6b3243261517cfd72504d695be`
+- `0xb417ec3a2c7dbc4517dd14acae3c15e070bc99bd6401fecd5de645e6f32ba813`
+- `0x11f7e79926cbb9eb85fbd39c171a561a69037a74e0ea87c499b2dc62a7dee958`
+- `0x8d39e25b3122a24b8d47a477163c4f7f116c4d5e1e95b8f78e8f075807432e60`
+- `0x26315fe4ce9e1da2694d790fc74142b5b6c0ee0b7e6630b8c2335fbfe95e5112`
+- `0xab780159d54fc765e5749c204c0f8d564571cfb0fd547f10dca788a94c8aae78`
+
+Required tests:
+- wrapped-native `deposit()` with weak top-level `to` or `value` still resolves
+  to `WRAP` when selector plus saved evidence proves canonical mint semantics
+- wrapped-native `withdraw(uint256)` with weak top-level `to` still resolves to
+  `UNWRAP` when selector plus saved evidence proves burn + native continuity
+- once wrapper continuity is proven, generic `VAULT_*` / `LENDING_WITHDRAW`
+  fallback cannot win
+
+### BE-05T — Across `depositV3(...)` Residual Live Closeout (Reopens BE-05M)
+
+Purpose:
+- Eliminate the run/2 residual where one recognized Across `depositV3(...)`
+  row still resolves to `VAULT_DEPOSIT`.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- bridge classification tests
+
+Implementation scope:
+- for selector `0x7b939232 = depositV3(...)`, accept either of these proof
+  paths for `BRIDGE_OUT`:
+  - canonical tx-level `to` is a known Across `SpokePool`
+  - canonical saved outbound bridge-funding transfer targets a known Across
+    `SpokePool`
+- prevent generic `deposit` / `VAULT_DEPOSIT` fallback when method-aware bridge
+  identity is proven through transfer evidence even if top-level `to` is weak
+  or contaminated
+
+Definition of done:
+- `0x8fc7da0a6aba524098b75fb9c1bfa651b4b50a90850832393c1313a745ac1e13`
+  resolves to `BRIDGE_OUT`
+- run/2 residual count for recognized Across `depositV3(...) -> VAULT_DEPOSIT`
+  becomes zero
+- no new backfill is required
+
+Required fixtures:
+- `0x8fc7da0a6aba524098b75fb9c1bfa651b4b50a90850832393c1313a745ac1e13`
+
+Required tests:
+- recognized Across `depositV3(...)` resolves to `BRIDGE_OUT` from tx-level
+  identity
+- recognized Across `depositV3(...)` resolves to `BRIDGE_OUT` from persisted
+  transfer-recipient identity when top-level `to` is weak
+- unknown deposit-family rows without bridge identity still follow existing
+  generic routing
+
+### BE-05U — Pricing-Readiness Residual Rerun Pack + Repeat-Audit Handoff
+
+Purpose:
+- Finish the residual run/2 blocker slice and hand the next rerun to
+  `financial-logic-auditor` with explicit live-data gates.
+
+Primary write scope:
+- backend tests
+- task/docs updates if needed
+
+Implementation scope:
+- run targeted regression coverage for:
+  - wrapped-native residual live fixtures
+  - Across residual live fixture
+- document rerun expectations for the next audit
+
+Definition of done:
+- the next audit gate is explicit and data-based:
+  - zero resolved wrapped-native selector leaks into `VAULT_DEPOSIT`,
+    `VAULT_WITHDRAW`, or `LENDING_WITHDRAW`
+  - zero resolved recognized Across `depositV3(...)` leaks into
+    `VAULT_DEPOSIT`
+  - zero new under-evidenced economic rows are introduced
+- rerun instructions remain `normalization + clarification` only; no backfill
+  is required for this residual slice
+
+## Pricing-Readiness Residual Closeout — 2026-03-23 Run/3 Audit
+
+This residual slice starts after the run/3 Mongo audit proved that pricing is
+still blocked by already-resolved semantic leaks. The main blockers are no
+longer clarification persistence or generalized evidence gaps; they are live
+misclassifications inside priceable or otherwise resolved lanes.
+
+Sources for this residual slice:
+
+- `results/clarification/run/3/clarification-readiness-audit.md`
+- `results/clarification/run/3/confirmed_resolved_misclassifications.tsv`
+- `results/clarification/run/3/resolved_but_insufficient_evidence.tsv`
+- `results/clarification/run/3/misclassification_flow_impact.json`
+- `results/clarification/run/3/remaining_review_tail.tsv`
+- `results/clarification/run/3/audit_summary.json`
+
+Primary official/market sources for rule authority:
+
+- Plasma contracts:
+  `https://plasma.to/docs/plasma-chain/network-information/plasma-contracts`
+- LI.FI smart-contract architecture:
+  `https://docs.li.fi/smart-contracts/overview`
+- LI.FI route execution / intents docs:
+  `https://docs.li.fi/integrate-li.fi-sdk/execute-routes-quotes`
+- Hyperlane Warp Route interface:
+  `https://docs.hyperlane.xyz/docs/applications/warp-routes/interface`
+- Hyperlane Warp Route types:
+  `https://docs.hyperlane.xyz/docs/protocol/warp-routes/warp-routes-types`
+- GMX `ExchangeRouter.sol`:
+  `https://raw.githubusercontent.com/gmx-io/gmx-synthetics/main/contracts/router/ExchangeRouter.sol`
+- Pancake `MasterChefV3.sol`:
+  `https://raw.githubusercontent.com/pancakeswap/pancake-v3-contracts/main/projects/masterchef-v3/contracts/MasterChefV3.sol`
+- OpenZeppelin `VestingWallet.sol`:
+  `https://raw.githubusercontent.com/OpenZeppelin/openzeppelin-contracts/master/contracts/finance/VestingWallet.sol`
+- Uniswap `NonfungiblePositionManager.sol`:
+  `https://raw.githubusercontent.com/Uniswap/v3-periphery/main/contracts/NonfungiblePositionManager.sol`
+- Pancake Infinity `CLPositionManager.sol`:
+  `https://raw.githubusercontent.com/pancakeswap/infinity-periphery/main/src/pool-cl/CLPositionManager.sol`
+- Pendle `ActionAddRemoveLiqV3.sol`:
+  `https://raw.githubusercontent.com/pendle-finance/pendle-core-v2-public/main/contracts/router/ActionAddRemoveLiqV3.sol`
+
+Execution order after run/3:
+
+1. `BE-05V` Plasma wrapped-native residual closeout (reopens `BE-05S` / `BE-05L`)
+2. `BE-05W` LI.FI / Jumper bridge-route semantic closeout
+3. `BE-05X` `transferRemote(...)` bridge-initiation semantic closeout
+4. `BE-05Y` GMX order-initiation demotion from priceable `EXTERNAL_TRANSFER_OUT`
+5. `BE-05Z` claim-income semantic closeout
+6. `BE-05AA` residual warning-family triage
+7. `BE-05AB` clarification telemetry parity closeout
+8. `BE-05AC` pricing-readiness rerun pack + repeat-audit handoff
+
+Run/3 outcome:
+
+- `BE-05T` looks materially closed in live data; recognized Across
+  `depositV3(...)` is no longer the dominant blocker.
+- `BE-05S` remains partially open because Plasma `WXPL9 withdraw(uint256)`
+  still leaks into `VAULT_WITHDRAW`.
+- pricing remains blocked by new live confirmed clusters:
+  - Plasma wrapped-native residuals
+  - LI.FI / Jumper bridge-initiation rows leaking into
+    `EXTERNAL_TRANSFER_OUT`
+  - `transferRemote(...)` rows leaking into `EXTERNAL_TRANSFER_OUT`
+  - GMX `createOrder(...)` leaking into priceable `EXTERNAL_TRANSFER_OUT`
+  - `harvest(...)` and `release()` leaking into `EXTERNAL_INBOUND`
+
+### BE-05V — Plasma Wrapped-Native Residual Closeout (Reopens BE-05S / BE-05L)
+
+Purpose:
+- Eliminate the last confirmed wrapped-native residuals on `PLASMA`, where
+  `WXPL9 withdraw(uint256)` still resolves to `VAULT_WITHDRAW` instead of
+  `UNWRAP`.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- wrapped-native support helpers
+- wrap / unwrap regression tests
+
+Implementation scope:
+- treat `PLASMA` `WXPL9` identity from the official contracts registry as
+  canonical wrapper identity
+- keep selector semantics authoritative for:
+  - `0xd0e30db0 = deposit()`
+  - `0x2e1a7d4d = withdraw(uint256)`
+- close rows when current raw or persisted clarification evidence proves:
+  - wrapper identity
+  - canonical mint / burn side
+  - native continuity side
+- forbid `VAULT_WITHDRAW` fallback once wrapper semantics are proven
+
+Definition of done:
+- `0xf8a6779b93a821950e49ac560fac94214b0f5bb8c650ced9d9d98e937d527450`
+  resolves to `UNWRAP`
+- `0xab780159d54fc765e5749c204c0f8d564571cfb0fd547f10dca788a94c8aae78`
+  resolves to `UNWRAP`
+- run/3 residual `PLASMA` wrapped-native count becomes zero
+
+Required fixtures:
+- `0xf8a6779b93a821950e49ac560fac94214b0f5bb8c650ced9d9d98e937d527450`
+- `0xab780159d54fc765e5749c204c0f8d564571cfb0fd547f10dca788a94c8aae78`
+
+Required tests:
+- official Plasma `WXPL9 withdraw(uint256)` resolves to `UNWRAP`
+- generic vault fallback remains unavailable once wrapper continuity is proven
+
+### BE-05W — LI.FI / Jumper Bridge-Route Semantic Closeout
+
+Purpose:
+- Remove the confirmed bridge-initiation rows that currently leak into
+  `EXTERNAL_TRANSFER_OUT` even though current raw already proves LI.FI / Jumper
+  route identity plus source-side funding movement.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- bridge/router classification helpers
+- bridge-route regression tests
+
+Implementation scope:
+- recognize LI.FI / Jumper initiation families:
+  - `callDiamondWithEIP2612Signature(...)`
+  - `callDiamondWithPermit2(...)`
+- use only saved raw / clarification evidence:
+  - selector
+  - known route-tag strings in calldata
+  - source-side outbound funding movement
+- normalize these rows to at least `BRIDGE_OUT`
+- do not rely on explorer UI route labels as runtime evidence
+
+Definition of done:
+- run/3 confirmed LI.FI / Jumper residual rows no longer resolve to
+  `EXTERNAL_TRANSFER_OUT`
+- route-tagged bridge initiations normalize to bridge continuity semantics
+  without new backfill
+
+Required fixtures:
+- `0xd7832186ea268ec19e4ebf263e372438bd8d87dafda1e4dfcafb27eb68250309`
+- `0x6e047abf4d509dfe8346bf7bc5d439b21cee4fe9b1ab938b62328c4de6951e92`
+- `0xccf7a88df410d47890eebda5f373c3875fe48f77a1229fac058c33637453f3bf`
+- `0x9a617889dccecb456b940f1230bae59660e94d525408a36477396d21cf3f993c`
+- `0xaa3d124a27a07ae43141e4db03c35bbe66eb419509ff28420e3aff2557a9d499`
+- `0x93f9d84635fa12506ffee1e145197452f22670008c7c574708928b8a88bbc2a8`
+- `0x42ab47215cb6f87e90fe27f3e1ed70808b8257972b82182b5f1c5e0e924754c4`
+- `0x425b32c1521f2b623c70645ec2fc1fd615f2cab49d7c2b37f250036dd32fcbb7`
+- `0xe1912c5f17b780faa5722005cc06a796426a156abe175bd5f5b49d21812626ca`
+
+Required tests:
+- LI.FI / Jumper bridge-route row resolves to `BRIDGE_OUT`
+- route-tagged bridge-initiation family does not collapse to
+  `EXTERNAL_TRANSFER_OUT`
+- unknown outbound transfer without bridge-route identity still follows
+  existing generic routing
+
+### BE-05X — `transferRemote(...)` Bridge-Initiation Semantic Closeout
+
+Purpose:
+- Close the confirmed cross-chain send family where `transferRemote(...)`
+  currently resolves to `EXTERNAL_TRANSFER_OUT` instead of bridge-initiation
+  continuity semantics.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- bridge-route tests
+
+Implementation scope:
+- recognize `transferRemote(uint32,bytes32,uint256)` as a bridge-initiation
+  family when current raw proves:
+  - token send into the router / bridge adapter
+  - native fee / gas payment for the message
+- align semantics with official Hyperlane Warp Route `TokenRouter`
+  documentation and verified contract behavior
+- normalize to `BRIDGE_OUT`
+
+Definition of done:
+- run/3 confirmed `transferRemote(...)` residual rows no longer resolve to
+  `EXTERNAL_TRANSFER_OUT`
+- bridge-initiation semantics are derived from saved evidence only
+
+Required fixtures:
+- `0xb1e9f65dd3492dc36db56354ba5f12a6772ed5cd5f546b4d095a48af8a741f62`
+- `0x4a2eb3ee44ab87cbdfe4a6dc59e9733e5541b4bc41ef796e78693d746ba9fb6a`
+- `0x5ca14340e17ce74a5bcdbef9fd1b72756f90ec41ee6394abb3dd8d6aff73d1fa`
+- `0x87967a7a55ee3e20e0ea99f95dfe37ea0789def007a8c033f6d091d8e84f6924`
+- `0x360988904f01f54f3cdbf38651e51ec9cd05633eb3f866ad284909e625c358ae`
+
+Required tests:
+- `transferRemote(...)` with token send + native message fee resolves to
+  `BRIDGE_OUT`
+- token send without bridge-route identity still follows existing generic
+  routing
+
+### BE-05Y — GMX Order-Initiation Demotion From Priceable `EXTERNAL_TRANSFER_OUT`
+
+Purpose:
+- Remove the confirmed GMX order-initiation leak where a pending order request
+  currently enters pricing as if it were a finalized disposal.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- GMX special-handler tests
+
+Implementation scope:
+- align with official `ExchangeRouter.createOrder(...)` semantics:
+  collateral transfer plus order creation is not final settlement
+- demote `createOrder(tuple order)` from priceable
+  `EXTERNAL_TRANSFER_OUT` into explicit non-priceable pending-order or review
+  semantics unless saved evidence proves final settlement
+- keep the rule raw-only
+
+Definition of done:
+- `0xb6b143aeeb3bada8c75347c49a7d8c5d3a2830a1f0da5b2e49a44a87a23c5105`
+  no longer remains priceable `EXTERNAL_TRANSFER_OUT`
+- pricing-readiness gate rejects pending-order initiation rows
+
+Required fixtures:
+- `0xb6b143aeeb3bada8c75347c49a7d8c5d3a2830a1f0da5b2e49a44a87a23c5105`
+
+Required tests:
+- GMX `createOrder(...)` no longer enters pricing as finalized disposal
+- final settlement families remain unaffected
+
+### BE-05Z — Claim-Income Semantic Closeout
+
+Purpose:
+- Remove the confirmed claim-income leaks where known reward / vesting payout
+  families still resolve to generic `EXTERNAL_INBOUND`.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- claim / income regression tests
+- registry entries if needed
+
+Implementation scope:
+- recognize Pancake `harvest(uint256,address)` as `REWARD_CLAIM` when saved raw
+  proves claim-family identity plus inbound reward movement
+- recognize vesting `release()` as explicit claim / income semantics when saved
+  raw proves payout into the tracked wallet
+- do not use explorer page summaries as runtime evidence
+
+Definition of done:
+- audited `harvest(...)` rows no longer resolve to `EXTERNAL_INBOUND`
+- audited `release()` rows no longer resolve to `EXTERNAL_INBOUND`
+- claim-income semantics remain wallet-scoped and evidence-backed
+
+Required fixtures:
+- `0x49c61e3e091fc071d634c2f0236340fa22756c4d6842ae8d24c6eed4412fdee9`
+- `0xa17d86c2ddcb839a3c2872133f9ba6d448e86f2bb9d64eef91f6750e59c3f0f8`
+- `0x61941de61deb7661e593e63ef2ba3e4da6ecb04eb22582b3d82bc930eecfd762`
+- `0xf6a0536a509a3af49259c15dded668dfefafcee639fa491e1c946ab26d2b5b1b`
+- `0xf124518909bf26468702ac7c8120415ed3b920fa5d6859727ca5c2e1e67e80e3`
+- `0xfc6b315f7ae67ac96218afe923bc9ea27eadc4c7ec5fd3b50d9c3305326578dc`
+
+Required tests:
+- Pancake `harvest(...)` resolves to `REWARD_CLAIM`
+- vesting `release()` resolves to explicit claim / income semantics
+- generic inbound still applies to unknown inbound rows without claim evidence
+
+### BE-05AA — Residual Warning-Family Triage
+
+Purpose:
+- Decide the two audited warning families narrowly and explicitly instead of
+  leaving them as silent generic outcomes or broad speculative fixes.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- warning-family tests
+- task/docs notes if final state is still review
+
+Implementation scope:
+- audit and either close or intentionally narrow:
+  - `claim(address LBHooks,uint256[] ids)`
+    `0x0bef999ae7808d602a1660c495b115e0d6e0c69a478b0492edd20ad3b00df45d`
+  - `executeOrder(bytes32 key,tuple oracleParams)`
+    `0x53bbb5b41325b3a043e9a9f16a6da4ab4624f0e7bbbf80fe8037446c4c2879e8`
+- if evidence remains insufficient, keep explicit review with a narrow reason
+  instead of generic fallback
+
+Definition of done:
+- both warning families are either deterministically classified or explicitly
+  locked to narrow review semantics
+- no broad heuristic is introduced from one-off audit guesses
+
+Required tests:
+- audited warning family either closes deterministically or remains explicit
+  narrow review
+
+### BE-05AB — Clarification Telemetry Parity Closeout
+
+Purpose:
+- Close the live observability warning where persisted clarification evidence is
+  present on raw rows but normalized clarification attempt counters stay zero.
+
+Primary write scope:
+- clarification persistence / normalization mapping
+- telemetry tests
+
+Implementation scope:
+- keep normalized counters consistent with persisted clarification evidence
+- when parity cannot be established, emit explicit telemetry warning instead of
+  silently presenting zero-attempt rows
+- preserve current runtime semantics; this is observability parity work, not a
+  pricing-semantic workaround
+
+Definition of done:
+- raw clarification evidence and normalized clarification counters stay in sync
+  after rerun
+- telemetry mismatch becomes an explicit, test-backed warning state rather than
+  silent drift
+
+Required tests:
+- persisted clarification evidence increments the corresponding normalized
+  attempt counters
+- mismatch path is surfaced explicitly when persistence and counters diverge
+
+### BE-05AC — Pricing-Readiness Rerun Pack + Repeat-Audit Handoff
+
+Purpose:
+- Finish the run/3 residual slice with one rerun-ready pack and explicit
+  live-data gate for the next audit.
+
+Primary write scope:
+- backend tests
+- task/docs updates if needed
+
+Implementation scope:
+- run targeted regression coverage for:
+  - Plasma wrapped-native residuals
+  - LI.FI / Jumper bridge-initiation rows
+  - `transferRemote(...)` bridge-initiation rows
+  - GMX order-initiation demotion
+  - claim-income semantic closeout
+  - warning-family triage
+  - clarification telemetry parity
+- document rerun expectations for the next audit
+
+Definition of done:
+- the next audit gate is explicit and data-based:
+  - zero resolved wrapped-native leaks into `VAULT_DEPOSIT`,
+    `VAULT_WITHDRAW`, or `LENDING_WITHDRAW`
+  - zero resolved route-tagged bridge-initiation leaks into
+    `EXTERNAL_TRANSFER_OUT`
+  - zero resolved claim-income leaks into `EXTERNAL_INBOUND`
+  - zero priceable GMX `createOrder(...)` rows without finalized settlement
+    semantics
+  - zero new under-evidenced economic rows
+  - clarification telemetry parity is live and observable
+- rerun instructions remain `normalization + clarification` only; no backfill
+  is required for this residual slice
+
+## Post-Clarification Pricing-Readiness Closeout — 2026-03-23 Run 4 Audit
+
+Primary sources used for this slice:
+
+- LI.FI user flows / route semantics:
+  `https://docs.li.fi/introduction/user-flows-and-examples/difference-between-quote-and-route`
+- LI.FI route transfer example:
+  `https://docs.li.fi/li.fi-api/li.fi-api/transferring-tokens-example`
+- Circle CCTP fees and message flow:
+  `https://developers.circle.com/cctp/concepts/fees`
+- Circle CCTP on HyperCore / destination-side redemption:
+  `https://developers.circle.com/cctp/cctp-on-hypercore`
+- Lagoon deposit / redeem flow:
+  `https://docs.lagoon.finance/developer-hub/integration/deposit-flow`
+- Lagoon vault controls:
+  `https://docs.lagoon.finance/vault/how-to/pause-a-vault`
+- LayerZero OFT overview:
+  `https://docs.layerzero.network/v2/developers/starknet/oft/overview`
+- GMX synthetics contracts:
+  `https://github.com/gmx-io/gmx-synthetics`
+- Uniswap Merkle Distributor reference:
+  `https://github.com/Uniswap/merkle-distributor`
+
+Execution order after run/4:
+
+1. `BE-05AD` residual LI.FI / Jumper selector-recovery route closeout
+2. `BE-05AE` Circle CCTP destination-side redeem bridge-in closeout
+3. `BE-05AF` explicit claim-family reward closeout
+4. `BE-05AG` pending redeem-request demotion from priceable `EXTERNAL_TRANSFER_OUT`
+5. `BE-05AH` resolved warning-family triage
+6. `BE-05AI` pricing-readiness rerun pack + repeat-audit handoff
+
+Run/4 outcome:
+
+- `BE-05V`, `BE-05X`, `BE-05Y`, `BE-05Z`, and `BE-05AB` look materially
+  closed in live Mongo data.
+- pricing remains blocked by four confirmed residual clusters:
+  - LI.FI / Jumper bridge-route rows leaking into `EXTERNAL_TRANSFER_OUT`
+  - Circle CCTP `redeem(...)` rows leaking into `VAULT_WITHDRAW`
+  - explicit receiver-wallet claim payout rows leaking into
+    `EXTERNAL_INBOUND`
+  - pending `claimSharesAndRequestRedeem(...)` rows leaking into priceable
+    `EXTERNAL_TRANSFER_OUT`
+
+### BE-05AD — Residual LI.FI / Jumper Selector-Recovery Route Closeout
+
+Purpose:
+- Close the seven remaining LI.FI / Jumper bridge-initiation rows that still
+  resolve to `EXTERNAL_TRANSFER_OUT` because bridge identity is present in
+  saved calldata but does not survive through top-level method fields.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- selector-recovery helpers
+- bridge-route regression tests
+
+Implementation scope:
+- recover selector from `rawData.input` when top-level `rawData.methodId` is
+  blank or `0x`
+- combine recovered selector with persisted LI.FI / Jumper route tags such as:
+  - `jumper.exchange`
+  - `relay`
+  - `across`
+  - `gasZipBridge`
+- require source-side outbound funding movement
+- normalize to at least `BRIDGE_OUT`
+- keep the rule raw-only; explorer UI route labels remain non-runtime evidence
+
+Definition of done:
+- the following rows no longer resolve to `EXTERNAL_TRANSFER_OUT`:
+  - `0x927cfa4d452608316410120af05d8b09c2f4d8d9cec5f9273457b7d8c3e47757`
+  - `0xa218071766d181cdbf9349364e00edbca3ecda12a0dc615a2c3a5eb2180a3c38`
+  - `0x4bd7b04bc2864b0012f19300690ae5cacb2806fdcc0b1612664d98b5015b48f6`
+  - `0x122fa9578beecb57f21bc0f65e8c1fa531e88d1809381aec4dc8c24a3495859f`
+  - `0x559460094fe1cfbcf37bb1fb4961f49809bb0f53a0787d02e0baedacec59f511`
+  - `0xb9ad84bba02b46c1b0bf2f01d1a05f98d4c886bae36c5487411f80892f3f894a`
+  - `0x4ca0b79ea7f374c8f90e4c13fc9da43a668f1d8352ae99b1d5a84ef4056ab4fb`
+- bridge-route rows remain wallet-scoped and no new backfill is required
+
+Required tests:
+- recovered selector + LI.FI / Jumper route tags + outbound source funding ->
+  `BRIDGE_OUT`
+- blank-method outbound transfer without route identity still follows existing
+  generic routing
+
+### BE-05AE — Circle CCTP Destination-Side Redeem Bridge-In Closeout
+
+Purpose:
+- Close the destination-side CCTP redeem rows that still resolve to
+  `VAULT_WITHDRAW` even though current raw plus clarification evidence already
+  proves bridged payout into the tracked wallet.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- bridge-settlement helpers
+- CCTP regression tests
+
+Implementation scope:
+- recognize `redeem(bytes cctpMsg,bytes cctpSigs)` as a destination-side bridge
+  completion family when persisted evidence shows inbound bridged payout
+- use official CCTP redeem semantics plus current raw / clarification evidence
+  only
+- normalize to `BRIDGE_IN`
+
+Definition of done:
+- the following rows no longer resolve to `VAULT_WITHDRAW`:
+  - `0xe11ab43689786a2b518b8a058593926071a8cac4c99b02077c4ac82d6ac0848e`
+  - `0x7970e3466ea26b51992ced5c2c2c352c82475dda75e45b7fa7543a92c3fe2cc0`
+  - `0xd410b4e727a8eaaac5f9c7d2d109e31ed5ae1505f5fd0308ebeb5a7dfe217b8f`
+- destination-side CCTP bridge completion becomes basis-carry continuity, not
+  vault withdrawal fallback
+
+Required tests:
+- `redeem(bytes cctpMsg,bytes cctpSigs)` + inbound bridged `USDC` ->
+  `BRIDGE_IN`
+- generic vault withdrawal without bridge evidence remains unaffected
+
+### BE-05AF — Explicit Claim-Family Reward Closeout
+
+Purpose:
+- Promote the remaining explicit receiver-wallet payout rows from generic
+  `EXTERNAL_INBOUND` to `REWARD_CLAIM` when current raw already proves
+  claim-family identity and payout into the tracked wallet.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- claim-family helpers / registry
+- reward regression tests
+
+Implementation scope:
+- close only deterministic receiver-wallet payout families:
+  - merkle `claim(...)`
+  - signed `claimWithSig(...)`
+- require both claim-family identity and persisted payout into the tracked
+  wallet
+- do not auto-promote suspicious claim-like families that still lack clean
+  protocol identity
+
+Definition of done:
+- the following rows no longer resolve to `EXTERNAL_INBOUND`:
+  - `0xa4bc20b7671f1f47fb98376158a26f56e3b4d20269425f2395e4a93a7713c89d`
+  - `0xf64da0b9d9aaf751fd0392063e47876d643b1055ac0073012d16a381c3ee062e`
+  - `0xf93ffc67e079e96f9971432f987699cf507ba26ad5ccbdb68deebd16208f880b`
+  - `0xbbef6f2b95cba300475b1a748ead1715b84699499dec6fa7d1245a427031ebdf`
+- promotion remains wallet-scoped and evidence-backed
+
+Required tests:
+- `claim(...)` + inbound payout -> `REWARD_CLAIM`
+- `claimWithSig(...)` + inbound payout -> `REWARD_CLAIM`
+- suspicious claim-like inbound without clean protocol identity still stays out
+  of automatic reward promotion
+
+### BE-05AG — Pending Redeem-Request Demotion From Priceable `EXTERNAL_TRANSFER_OUT`
+
+Purpose:
+- Keep request-initiation rows out of pricing until later settlement or cancel
+  evidence exists.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- pending-request tests
+
+Implementation scope:
+- recognize `claimSharesAndRequestRedeem(uint256 sharesToRedeem)` as a
+  request-initiation family
+- demote it from priceable `EXTERNAL_TRANSFER_OUT`
+- use explicit non-priceable pending-redeem/request-initiation semantics or
+  narrow review if a dedicated type is not yet available
+
+Definition of done:
+- `0xd4b8de8881f203bfe3ecca7c8cc4d47113b91f1029f9bb3e9af2c883fcb04aaa`
+  no longer remains priceable `EXTERNAL_TRANSFER_OUT`
+- pricing gate blocks request-initiation rows until later settlement evidence
+  exists
+
+Required tests:
+- `claimSharesAndRequestRedeem(...)` without settlement -> non-priceable
+- final settlement families remain unaffected
+
+### BE-05AH — Resolved Warning-Family Triage
+
+Purpose:
+- Decide the two remaining resolved warning families narrowly and explicitly
+  instead of leaving them as silent generic resolved fallbacks.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- warning-family tests
+
+Implementation scope:
+- audit and either narrow or intentionally review-lock:
+  - `0xe93b81f8b417e1274094313ecd7e88ecc750528a39128b935fecb48a4254ebc0`
+  - `0xee4a6a69a970c3baf97f16760d597b25b9c3d42a55f7e08d41129076582d411c`
+- do not introduce broad heuristics from one-off audit guesses
+
+Definition of done:
+- both warning families are either deterministically classified or explicitly
+  kept in narrow review semantics
+- no generic resolved fallback remains for these two rows
+
+Required tests:
+- audited warning family either closes deterministically or stays explicit
+  narrow review
+
+### BE-05AI — Pricing-Readiness Rerun Pack + Repeat-Audit Handoff
+
+Purpose:
+- Finish the run/4 residual slice with one rerun-ready pack and an explicit
+  live-data gate for the next audit.
+
+Primary write scope:
+- backend tests
+- task/docs updates if needed
+
+Implementation scope:
+- run targeted regression coverage for:
+  - LI.FI / Jumper selector-recovery bridge-route rows
+  - Circle CCTP destination-side redeem rows
+  - explicit receiver-wallet claim payout rows
+  - pending redeem-request initiation demotion
+  - warning-family triage
+- document rerun expectations for the next audit
+
+Definition of done:
+- the next audit gate is explicit and data-based:
+  - zero resolved LI.FI / Jumper route leaks into `EXTERNAL_TRANSFER_OUT`
+  - zero resolved Circle CCTP `redeem(...)` leaks into `VAULT_WITHDRAW`
+  - zero resolved explicit receiver-wallet claim payout leaks into
+    `EXTERNAL_INBOUND`
+  - zero resolved pending redeem-request initiation leaks into priceable
+    `EXTERNAL_TRANSFER_OUT`
+  - previously closed families remain closed
+  - no new under-evidenced economic rows appear
+- rerun instructions remain `normalization + clarification` only; no backfill
+  is required for this residual slice
+
+## Run/6 Review-Tail Reduction Slice — 2026-03-23 Offline Planning And Simulation
+
+This slice consumes the run/5 tail files and the run/6 offline rule-planning
+package. It is intentionally designed to avoid repeated trial-and-error reruns.
+The expected implementation order below is the last broad review-tail reduction
+pack before the remaining review rows become an explicit stop-condition.
+
+Sources for this slice:
+
+- `results/clarification/run/5/remaining_review_tail.tsv`
+- `results/clarification/run/5/resolved_but_insufficient_evidence.tsv`
+- `results/clarification/run/5/clarification_persistence_mismatches.tsv`
+- `results/clarification/run/6/review-tail-reduction-plan.md`
+- `results/clarification/run/6/review_tail_rule_recommendations.tsv`
+- `results/clarification/run/6/review_tail_row_actions.tsv`
+- `results/clarification/run/6/review_tail_simulation.json`
+- `results/clarification/run/6/clarification_persistence_simulation.json`
+- `results/clarification/run/6/review_tail_irreducible.tsv`
+
+Primary protocol / market references for this slice:
+
+- Aave credit delegation docs
+- Safe smart-account docs
+- Velodrome Slipstream repository
+- Uniswap V3 `NonfungiblePositionManager`
+- Euler documentation / repositories
+- GMX repository
+- LI.FI route / flow documentation
+- Lagoon redeem-request documentation
+- CoW `ethflowcontract` repository
+
+Execution order after run/6:
+
+1. `BE-05AJ` terminal demotion for safe current-raw review families
+2. `BE-05AK` clarification persistence and raw replay parity closeout
+3. `BE-05AL` same-source internal transfer persistence for native bridge clarification
+4. `BE-05AM` clarification closeout for Slipstream / CL lifecycle residuals
+5. `BE-05AN` clarification closeout for Euler batch residuals
+6. `BE-05AO` clarification closeout for ParaSwap / GMX / Katana residuals
+7. `BE-05AP` irreducible stop-condition lock
+8. `BE-05AQ` run/6 rerun pack + repeat-audit handoff
+
+Run/6 planning verdict:
+
+- no new backfill is required
+- projected review-tail reduction:
+  - `186 -> 22` from current-raw rules alone
+  - `22 -> 4` from clarification closeouts
+- projected clarification persistence mismatches: `294 -> 0`
+
+### BE-05AJ — Terminal Demotion For Safe Current-Raw Review Families
+
+Purpose:
+- Remove the large current-raw review families that are already semantically
+  understood and should not wait for clarification.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- rule/terminal-state tests
+
+Implementation scope:
+- move the following families out of `NEEDS_REVIEW` without clarification:
+  - spam / airdrop clusters
+  - explicit `CLAIM_WITHOUT_MOVEMENT`
+  - failed transactions
+  - documented admin / governance rows
+  - documented pending-request / pending-order initiation rows
+  - out-of-scope NFT / attestation mint rows
+- preferred target is an explicit terminal non-priceable lane
+- minimal safe fallback is a narrow non-priceable resolved state with the
+  original warning reason preserved
+
+Representative fixtures:
+- spam / airdrop:
+  - `0x1c0c7306d7e0bcab64d79197c83f46099c629560c386e17380e879f41881f5db`
+  - `0x25c7bc51c435aa3c6cd61d484417e39e732a3647923ddc882d36b4e59d656fc4`
+- claim-without-movement:
+  - `0xf13356fe9449ec9e831395e0074622e88e362a8f317e6b110d093bfaa25d2702`
+  - `0xa586770c653097bd905f0003edddcc59f295a8a64131a3ba0410d6fe43bb08e5`
+- admin / governance:
+  - `0xb6b3ac27afac284fcd0ef13463719c34925dd37cfcfb52dcb2cc894a5271d566`
+  - `0x19e0f3b3c8d325e80000df1f95efbe65536ee060a8623e1d777f16cab5307caa`
+  - `0x9867f9d202764ad9d019b0f89cb4b35e96cbc35bd5ac2fabea1edf5c7412bdf2`
+  - `0xa382a8738fb0a8a66074f1d9259475537dd38869bb07664b9278d6a2974124db`
+  - `0xcf10c62202254f334b8a7d8b37351f061de90eee142749a4fed1686532021fa5`
+  - `0x3a00fee6baf13bddd3532d72e093e3e60972c4c1a7eefd1ca05d4f50c4934b5e`
+  - `0x0c0e3f778debe41826e28a2ad615f15cb71f379396a4b63f5add20b118670ec1`
+- pending-request / pending-order:
+  - `0xd4b8de8881f203bfe3ecca7c8cc4d47113b91f1029f9bb3e9af2c883fcb04aaa`
+  - `0xb6b143aeeb3bada8c75347c49a7d8c5d3a2830a1f0da5b2e49a44a87a23c5105`
+- out-of-scope NFT / attestation:
+  - `0x3415ccd28400e6eaf346a58f55d7a274f399f385aa47192daa45444c544099b6`
+  - `0xdaea615fbabe4b7ae0a85bac8bc2478166a746c11ee5511681f37ed7783a2ac7`
+  - `0x6f83d81c0fdb3e5bf839b0a3541e5578c7d300b0ce9a2d74207f2b9a0f94e4d4`
+
+Definition of done:
+- the run/5 safe current-raw families no longer remain in `NEEDS_REVIEW`
+- none of these rows stay priceable
+- no clarification fetch is required to close them
+
+Required tests:
+- spam / airdrop -> explicit non-priceable terminal lane
+- claim-without-movement -> explicit terminal no-movement lane
+- failed transaction -> terminal failed lane
+- admin / governance / pending-request / pending-order -> explicit non-priceable lane
+- out-of-scope NFT / attestation -> explicit non-priceable out-of-scope lane
+
+### BE-05AK — Clarification Persistence And Raw Replay Parity Closeout
+
+Purpose:
+- Eliminate the run/5 `294` clarification persistence mismatches and make
+  clarification replay-safe from raw state alone.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/job/clarification/**`
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/onchain/**`
+- `backend/src/main/java/com/walletradar/ingestion/store/**`
+- clarification persistence tests
+
+Implementation scope:
+- every clarification path that increments:
+  - `clarificationAttempts`
+  - `fullReceiptClarificationAttempts`
+  must persist the supporting evidence on the raw row first
+- normalized clarification counters must be derived from persisted raw
+  clarification state, not from transient in-memory flow only
+- persist:
+  - adapted clarification evidence
+  - raw full receipt payload when available
+  - same-source provenance
+
+Definition of done:
+- live audit can show `clarification_persistence_mismatches = 0`
+- raw and normalized clarification state remain replay-safe after rerun
+
+Required tests:
+- clarification counter increment without raw persistence is impossible
+- persisted clarification evidence survives rerun replay
+- normalized counters reflect persisted raw clarification state
+
+### BE-05AL — Same-Source Internal Transfer Persistence For Native Bridge Clarification
+
+Purpose:
+- Support the allowlisted bridge families that require same-source internal
+  transfers in addition to receipt logs for deterministic closure.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/job/clarification/**`
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/onchain/**`
+- bridge clarification tests
+
+Implementation scope:
+- allow clarification to persist same-source internal transfers when:
+  - the family is explicitly allowlisted
+  - the source family that produced the raw row can expose those internal legs
+  - the internal transfers are required to reconstruct native bridge continuity
+- expose those persisted internal transfers through the raw view only
+- do not introduce cross-source default fallback
+
+Representative fixture:
+- `0x1232a2724f8d2c2e0aa436192b31298ef3351b74bf319c347b9ff569830e7a03`
+
+Definition of done:
+- allowlisted native bridge rows can close from clarification without backfill
+- the persisted internal-transfer shape is deterministic and lineage-safe
+
+Required tests:
+- same-source explorer-backed clarification persists internal transfers
+- non-allowlisted row cannot start persisting internal transfers
+- classification consumes those internal legs only through the raw view
+
+### BE-05AM — Clarification Closeout For Slipstream / CL Lifecycle Residuals
+
+Purpose:
+- Use full-receipt clarification to close the remaining concentrated-liquidity
+  lifecycle rows that are receipt-rich but under-evidenced in current raw.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/job/clarification/**`
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- CL lifecycle clarification tests
+
+Implementation scope:
+- allowlist and close the following families from persisted clarification
+  evidence:
+  - Slipstream cleanup / burn family -> explicit non-economic LP cleanup lane:
+    - `0x907207001069b6c5b1c0f9aa740736a81ed0f7e8c02b2735a31c772d5bb6603e`
+    - `0x91bba2c00fc37a862f2c277e6f8378bf682156425919c66c1b37faa50e9d61b7`
+    - `0x927d3f458ada7e5ec67f77129e29edcaf2f69bd2b81490a42fec17c0cc3bd4fa`
+    - `0x9c3a93479dd926c7a6e57395b14ab48ed73e673f5cb25f6c1ae6ac9b1bbf2c19`
+    - `0xaf00ee8ac5154daa5f4f917d0929ddbacfb1d254ae3b228f3322312a39c798c8`
+    - `0xe1bc445ff05954e4d9211570bdaed633b0ddddc70ee36d043574d5b9dd1b9630`
+  - Slipstream stake-contract family -> `LP_POSITION_STAKE`:
+    - `0x74abf9296937242aab88b493a37072458f003c50be937ac1670299e3aad6053e`
+    - `0x83978f62a0f05b662a87210263e923ad568d616f5dd8c420d0485e1e21828a61`
+  - zero-effect collect family -> explicit no-op collect lane:
+    - `0x4673757b36119b4632f798ad4e0d72fbd170ee0b7be4e4901bd1155ab3881775`
+  - Pancake / Infinity CL exit / modify-liquidity families:
+    - `0x0a757aeeb58667c545017cd8e5cd60dc994a8945ed810c60ea2aed18688f4f7a`
+    - `0x0088de663d549fbc58dfa8dbba4180a346a580b1d6277254fa84a8ed9c27967a`
+
+Definition of done:
+- these rows no longer remain in review when persisted clarification evidence
+  is sufficient
+- burn-only / cleanup-only rows do not become synthetic economic exits
+- zero-effect collect does not stay `LP_FEE_CLAIM / NEEDS_REVIEW`
+
+Required tests:
+- Slipstream cleanup family -> explicit non-economic cleanup
+- Slipstream stake family -> `LP_POSITION_STAKE`
+- zero-effect collect -> explicit no-op collect lane
+- Pancake / Infinity exit / modify-liquidity -> deterministic LP lifecycle type
+
+### BE-05AN — Clarification Closeout For Euler Batch Residuals
+
+Purpose:
+- Close the receipt-log-rich Euler-style batch rows while preserving the honest
+  wrapper-only stop-condition.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/job/clarification/**`
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- Euler clarification tests
+
+Implementation scope:
+- allowlist selector `0xc16ae7a4`
+- close only when persisted clarification logs reveal enough transfer/event
+  evidence to derive deterministic lending / collateral semantics
+- keep wrapper-only cases explicit review
+
+Closeable fixtures:
+- `0x1e0c429514e9cf892b0b6a11e3cfb290eff5c0c26a557c835496e4ba61717fdb`
+- `0x233c2b959739d298d1012405e9b3d7e535a87d590a81bcb304c6dc0cb3ce5e4f`
+- `0x305f37a69956a13001962216c845385996114876173bdbaef644bbe3baadf5df`
+
+Intentional stop-condition inside the family:
+- `0x509c134b2795de71a1ee42db38b53af78003308e8c9ebf2b1bfa9ce8d348dcd2`
+
+Definition of done:
+- the three receipt-log-rich Euler rows close deterministically
+- the wrapper-only row remains explicit review
+
+Required tests:
+- receipt-log-rich Euler batch closes
+- wrapper-only Euler batch stays review
+
+### BE-05AO — Clarification Closeout For ParaSwap / GMX / Katana Residuals
+
+Purpose:
+- Close the heterogeneous receipt-log-rich residuals that are already
+  validated by official protocol semantics and explorer-compatible evidence.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/job/clarification/**`
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- settlement / router clarification tests
+
+Implementation scope:
+- close:
+  - ParaSwap `swapExactAmountOut(...)`:
+    - `0x71edb81701d7c95d92d5ad4ec43574db388c7e5e21974385374883b021e0f5da`
+  - GMX `executeOrder(...)`:
+    - `0x53bbb5b41325b3a043e9a9f16a6da4ab4624f0e7bbbf80fe8037446c4c2879e8`
+  - LI.FI / Stargate native bridge route using same-source internal transfers:
+    - `0x1232a2724f8d2c2e0aa436192b31298ef3351b74bf319c347b9ff569830e7a03`
+  - Katana `routeSingle(...)` LP mint path:
+    - `0x67f4e9e1767850c427920a1238903ed6fc56e6cadd4d3defcacc7a99e1329499`
+
+Definition of done:
+- each family closes from persisted clarification evidence only
+- no explorer UI label is required at runtime
+- no new backfill is introduced for these closeouts
+
+Required tests:
+- ParaSwap clarified receipt -> `SWAP`
+- GMX clarified receipt -> deterministic settlement type
+- same-source native bridge clarification -> bridge continuity type
+- Katana clarified receipt -> LP-entry semantics
+
+### BE-05AP — Irreducible Stop-Condition Lock
+
+Purpose:
+- Freeze the rows that should remain in review after the run/6 pack so future
+  work does not force synthetic semantics just to reach zero review tail.
+
+Primary write scope:
+- backend tests
+- small docs/task updates if needed
+
+Intentional stop-condition fixtures:
+- `0x508ad8c6695151cd84df379876cef4bd5c5370e8bdd660e54141a35ebe1d9d54`
+- `0x504695248b7be49796e52895005019fa7ff268297e394078e336ec5a14cbcf54`
+- `0x509c134b2795de71a1ee42db38b53af78003308e8c9ebf2b1bfa9ce8d348dcd2`
+- `0x9712e051e33e603b22039ef74ed946e78664695aa341a8825a516822aa5f8966`
+
+Definition of done:
+- these rows remain explicit review unless a later slice brings stronger
+  protocol identity or movement evidence
+- no aggressive no-op or bridge demotion silently closes them
+
+Required tests:
+- each stop-condition fixture stays review
+- nearby supported families still close correctly
+
+### BE-05AQ — Run/6 Rerun Pack + Repeat-Audit Handoff
+
+Purpose:
+- Finish the run/6 closeout slice with one rerun-ready pack and a data-based
+  audit gate.
+
+Primary write scope:
+- backend tests
+- task/docs updates if needed
+
+Implementation scope:
+- run targeted regression coverage for:
+  - safe current-raw terminal demotions
+  - clarification persistence parity
+  - same-source internal transfer persistence
+  - Slipstream / CL lifecycle clarification closeouts
+  - Euler clarification closeouts
+  - ParaSwap / GMX / Katana clarification closeouts
+  - irreducible stop-condition lock
+- hand off the expected live-data gate explicitly
+
+Definition of done:
+- rerun instructions remain `normalization + clarification` only
+- no new backfill is required for this slice
+- the next audit gate is explicit and data-based:
+  - review tail reduces from `186` toward the projected `4`
+  - clarification persistence mismatches reduce from `294` to `0`
+  - only the documented irreducible stop-condition remains unresolved
+
+Required tests:
+- regression pack covering every new family in `run/6`
+- stop-condition lock tests
+
+## Run/7 Pricing-Readiness Reopen — 2026-03-23 Post-Rerun Audit
+
+This slice starts after the `run/7` live Mongo audit showed that the current
+rerun materially reduced the review tail, but still left:
+
+- `28` confirmed resolved semantic misclassifications in already priceable lanes
+- `299` clarification persistence mismatches between raw and normalized state
+- `18` remaining review rows
+
+Sources for this slice:
+
+- `results/clarification/run/7/clarification-readiness-audit.md`
+- `results/clarification/run/7/confirmed_resolved_misclassifications.tsv`
+- `results/clarification/run/7/clarification_persistence_mismatches.tsv`
+- `results/clarification/run/7/remaining_review_tail.tsv`
+- `results/clarification/run/7/resolved_warning_families.tsv`
+
+Required protocol sources for this slice:
+
+- Uniswap Multicall / V3 position-manager references
+- Velodrome Slipstream `NonfungiblePositionManager`
+- Pancake Infinity `CLPositionManager`
+- GMX repository
+- explorer verification pages for the full fixture hashes above
+
+Run/7 planning verdict:
+
+- no new backfill is required
+- `BE-05AK` is not closed from live data and must be reopened as a narrower
+  clarification-storage task
+- `BE-05AM` is not closed from live data and must be split into explicit
+  Base/BSC concentrated-liquidity proof tasks
+- pricing remains blocked by:
+  - clarification persistence that is not yet audit-visible from raw
+  - self-promotional inbound families that still remain priceable
+  - trusted Velodrome Slipstream lifecycle rows that still collapse into
+    generic transfer / inbound types
+
+Execution order after run/7:
+
+1. `BE-05AR` clarification canonical persistence contract closeout (reopens `BE-05AK`)
+2. `BE-05AS` self-promotional inbound demotion closeout
+3. `BE-05AT` Velodrome Slipstream active lifecycle closeout
+4. `BE-05AU` Pancake / Infinity concentrated-liquidity clarification proof closeout (reopens part of `BE-05AM`)
+5. `BE-05AV` run/7 residual clarification family reopen
+6. `BE-05AW` warning-family and stop-condition lock refresh
+7. `BE-05AZ` run/7 rerun pack + repeat-audit handoff
+
+### BE-05AR — Clarification Full-Receipt Persistence And Projection Contract Closeout (Reopens BE-05AK)
+
+Purpose:
+- Make clarification replay-safe from Mongo alone by persisting one canonical
+  clarification-evidence contract on the raw row, without changing any
+  classification or clarification semantics.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/job/clarification/**`
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/onchain/**`
+- `backend/src/main/java/com/walletradar/ingestion/store/**`
+- clarification persistence tests
+
+Implementation scope:
+- remove `ClarificationMode`; do not keep a code path that truncates an already
+  fetched receipt before persistence
+- persist one canonical raw-level clarification-evidence block that both:
+  - runtime classification/raw view read
+  - live Mongo audit scripts can detect
+- metadata-safe clarification may still copy scalar receipt fields into
+  `rawData.*`, but that alone must not be treated as successful clarification
+- any clarification source call that already fetched a receipt payload must
+  persist that source-native receipt payload in full
+- clarification may still persist:
+  - adapted clarification evidence
+  - raw full receipt payload when the source exposes it
+  - source-family provenance
+- normalize or migrate any legacy nested clarification shape so one final
+  contract exists going forward
+- `OnChainRawTransactionView` / the canonical raw projection becomes the only
+  sanctioned read path for clarification evidence; direct reads from raw BSON
+  clarification fields outside the raw view are removed
+- normalized clarification counters must be derivable from persisted raw
+  clarification state only
+- this task must not change:
+  - classification rule precedence
+  - clarification allowlists
+  - semantic mapping of tx families
+
+Representative mismatched hashes:
+- `0xd09408b311b762fc930bfb6190a9b3967c9b123ec7e6b89e9f29ceda01d46417`
+- `0x77049db19258823d40facea05468380cd836611c04fcea659bef78b2aee739a9`
+- `0xef9675f9c9117c32d1ead38bf6019f2b8cb2fe725774d4d79f32c3ae7b1eb2ff`
+- `0x0a757aeeb58667c545017cd8e5cd60dc994a8945ed810c60ea2aed18688f4f7a`
+- `0x0088de663d549fbc58dfa8dbba4180a346a580b1d6277254fa84a8ed9c27967a`
+
+Definition of done:
+- live audit can show `clarification_persistence_mismatches = 0`
+- rows with `fullReceiptClarificationAttempts > 0` also show persisted raw
+  clarification full receipt in the canonical raw contract
+- runtime raw view and audit scripts read the same persisted evidence shape
+- no runtime path keeps a `metadata-only` storage contract after receipt fetch
+- semantic classification outcomes stay controlled by existing rule tasks, not
+  by this infrastructure slice
+
+Required tests:
+- metadata-safe clarification fetch still persists the full fetched receipt
+- metadata clarification without canonical raw evidence persistence is impossible
+- full-receipt clarification persists canonical evidence and raw full receipt
+- rerun derives normalized clarification counters from persisted raw state only
+- runtime clarification consumers read evidence through `OnChainRawTransactionView` only
+
+### BE-05AS — Self-Promotional Inbound Demotion Closeout
+
+Purpose:
+- Remove the remaining self-promotional and spam-like inbound families from
+  priceable `EXTERNAL_INBOUND`.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- spam/airdrop classification tests
+
+Implementation scope:
+- demote the audited repeatable families into explicit non-priceable spam /
+  airdrop semantics:
+  - Base `multicall(bytes[] data)` token-drop cluster
+  - Plasma selector `0x1939c1ff`
+  - repeated spam-like selector `0xeec4378e`
+- keep the rule raw-only and deterministic:
+  - repeated family fingerprint
+  - no trustworthy protocol identity
+  - no economically meaningful counterparty semantics
+- do not let these rows proceed to pricing as `EXTERNAL_INBOUND`
+
+Representative fixtures:
+- Base:
+  - `0x1741a56b72a5f21af1a005fa488ae0b6646ec0d0fdce043b4f3bb185c668e5c6`
+  - `0x285963e00675d2af837ff2b4491a6401de1cb4c8ddc76d17e1b7254dd4ca5fc9`
+  - `0x369aec0da1b0191c7243ea94be3afbaf416633bd426234ad19c846683cf39ad4`
+  - `0xdf264bc19d87bace55ccb897072a83106b150c76e2c2d889f733df6d757d2e8a`
+- Plasma:
+  - `0x09500b02b55506d052abb1960c741f26f33ba399e89e024c27558e8e0da1c470`
+  - `0x422e1a6bffc63606027e14f60e1b4080dbfbb59776d4747c2a5af3f24d162500`
+  - `0x46f0ebcf3641cfbca63e544317baec1fad6f01dfd275929633c3ed8793228ca4`
+- residual selector cluster:
+  - `0x454cde45e691b585265ce2f3046c88b2c8a14695bd8df37332a00d25caf26f75`
+  - `0x468b7eb98bc517c4bca1c92612f60516765911af28ed050af956d1c76707f7b6`
+  - `0x51e998e50acee79fd2f9e65986e7febad78c4d537095c888a13e6dfe4a2fa454`
+  - `0xa3c4522954d9a824a71c370fc24907c270873ca318d7a19ca8a6d3cc682e2cde`
+
+Definition of done:
+- live rerun shows zero resolved self-promotional inbound families leaking into
+  priceable `EXTERNAL_INBOUND`
+- these rows resolve to explicit non-priceable spam / airdrop semantics
+
+Required tests:
+- Base `multicall` spam family -> explicit non-priceable spam lane
+- Plasma `0x1939c1ff` family -> explicit non-priceable spam lane
+- selector `0xeec4378e` family -> explicit non-priceable spam lane
+
+### BE-05AT — Velodrome Slipstream Active Lifecycle Closeout
+
+Purpose:
+- Close the remaining trusted Velodrome Slipstream lifecycle rows that still
+  leak into generic transfer / inbound semantics.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- Slipstream lifecycle tests
+
+Implementation scope:
+- for trusted position manager `0x416b433906b1b72fa758e166e239c43d68dc6f29`
+  and selector `0x219f5d17`, classify `increaseLiquidity(...)` as `LP_ENTRY`
+  when current raw or persisted clarification evidence proves liquidity-add
+  funding / position-growth semantics
+- for trusted stake contract `0xc762d18800b3f78ae56e9e61ad7be98a413d59de`,
+  classify:
+  - `deposit(uint256)` -> `LP_POSITION_STAKE`
+  - `withdraw(uint256)` -> `LP_POSITION_UNSTAKE`
+- ensure wrapper-like selectors on this trusted stake contract do not fall
+  through to generic `EXTERNAL_INBOUND` or wrapper semantics
+
+Representative fixtures:
+- `0x567597b49edc7d10b93236f1f52c9228df53399e4f45fe44f9e9724c2993021b`
+- `0x74d965522376cf8581c45b0d1ba10f483ec1110c600d1de3b013c3083fcf8348`
+- `0x787e754ebddd5b42b0b8e72492af31a5a895de12569e9e8ad16f39d771771df6`
+- `0x9d01d6180ba687243865f9257ce6d909d519a54cfc4c42b014aa9c85c5ec1c75`
+- `0xf2f2c8fe7486f8e6b6f09a7ff69513cf40fd1f66e5429c1f9eb374d651ffe538`
+- `0x49a8ba9b4d31c734d3d78ee840a664a51a9f75236147148d0b555f0028ffef65`
+- `0x84fa5b91a5c653f0dc1b9d4fc0b67420cd63adc02403da85e34504e21c49f69c`
+- `0xd4b663df0df33c126937f296a8123a4094dcdcc6ebad84725b9fe708db2ebc40`
+
+Definition of done:
+- live rerun shows zero trusted Slipstream `increaseLiquidity(...)` rows
+  leaking into `EXTERNAL_TRANSFER_OUT`
+- live rerun shows zero trusted Velodrome stake-contract actions leaking into
+  generic `EXTERNAL_INBOUND`
+
+Required tests:
+- trusted `increaseLiquidity(...)` -> `LP_ENTRY`
+- trusted stake-contract deposit -> `LP_POSITION_STAKE`
+- trusted stake-contract withdraw -> `LP_POSITION_UNSTAKE`
+
+### BE-05AU — Pancake / Infinity Concentrated-Liquidity Clarification Proof Closeout (Reopens Part Of BE-05AM)
+
+Purpose:
+- Close the audited Base and BSC concentrated-liquidity residuals using
+  persisted same-source clarification evidence only when that evidence proves
+  economic direction strongly enough.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/job/clarification/**`
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- concentrated-liquidity clarification tests
+
+Implementation scope:
+- Base `0x0a757aeeb58667c545017cd8e5cd60dc994a8945ed810c60ea2aed18688f4f7a`
+  may close to `LP_EXIT` only when persisted same-source clarification evidence
+  proves:
+  - trusted Pancake / Infinity position-manager identity
+  - `multicall(bytes[] data)` exit-family calldata
+  - real receipt logs showing collect / withdrawal continuity
+  - any required same-source internal native payout legs
+- BSC `0x0088de663d549fbc58dfa8dbba4180a346a580b1d6277254fa84a8ed9c27967a`
+  may close to `LP_ENTRY` only when persisted full receipt proves:
+  - `modifyLiquidities(...)` on trusted `CLPositionManager`
+  - positive liquidity-add amounts or explicit tracked-wallet funding into the
+    CL manager / pool
+- do not auto-promote `0x0088...` from contract identity plus selector plus a
+  generic `ModifyLiquidity` topic alone
+
+Definition of done:
+- `0x0a757...` closes to deterministic `LP_EXIT` once the persisted same-source
+  clarification evidence is present
+- `0x0088...` closes to deterministic `LP_ENTRY` only when positive
+  liquidity-add evidence is actually persisted; otherwise it remains explicit
+  review with `INSUFFICIENT_MOVEMENT_EVIDENCE`
+
+Required tests:
+- Base CL exit container with collect / withdrawal / payout evidence -> `LP_EXIT`
+- BSC `modifyLiquidities(...)` with positive liquidity-add proof -> `LP_ENTRY`
+- BSC `modifyLiquidities(...)` without positive add / funding proof -> stays review
+
+### BE-05AV — Run/7 Residual Clarification Family Reopen
+
+Purpose:
+- Reopen the receipt-helpful residual families from `run/7` that were expected
+  to close in earlier slices but are still visible in live review.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/job/clarification/**`
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- residual clarification tests
+
+Implementation scope:
+- verify and close from persisted clarification evidence where justified:
+  - Euler batch residuals:
+    - `0x1e0c429514e9cf892b0b6a11e3cfb290eff5c0c26a557c835496e4ba61717fdb`
+    - `0x233c2b959739d298d1012405e9b3d7e535a87d590a81bcb304c6dc0cb3ce5e4f`
+    - `0x305f37a69956a13001962216c845385996114876173bdbaef644bbe3baadf5df`
+  - ParaSwap:
+    - `0x71edb81701d7c95d92d5ad4ec43574db388c7e5e21974385374883b021e0f5da`
+  - Katana:
+    - `0x67f4e9e1767850c427920a1238903ed6fc56e6cadd4d3defcacc7a99e1329499`
+  - Slipstream cleanup family still in review:
+    - `0x907207001069b6c5b1c0f9aa740736a81ed0f7e8c02b2735a31c772d5bb6603e`
+    - `0x91bba2c00fc37a862f2c277e6f8378bf682156425919c66c1b37faa50e9d61b7`
+    - `0x927d3f458ada7e5ec67f77129e29edcaf2f69bd2b81490a42fec17c0cc3bd4fa`
+    - `0x9c3a93479dd926c7a6e57395b14ab48ed73e673f5cb25f6c1ae6ac9b1bbf2c19`
+    - `0xaf00ee8ac5154daa5f4f917d0929ddbacfb1d254ae3b228f3322312a39c798c8`
+    - `0xe1bc445ff05954e4d9211570bdaed633b0ddddc70ee36d043574d5b9dd1b9630`
+- keep the documented irreducible stop-condition explicit when full receipt
+  still fails to produce deterministic economic direction
+
+Definition of done:
+- receipt-helpful run/7 residual families either close deterministically from
+  persisted clarification evidence or are moved into the explicit documented
+  stop-condition set
+- no family remains in review merely because clarification evidence failed to
+  persist or failed to be consumed
+
+Required tests:
+- one closeable Euler / ParaSwap / Katana family closes from clarification
+- one Slipstream cleanup family narrows to explicit non-economic cleanup state
+- irreducible stop-condition fixtures still remain review
+
+### BE-05AW — Warning-Family And Stop-Condition Lock Refresh
+
+Purpose:
+- Freeze the remaining non-blocking warning families and the documented
+  stop-condition rows so future closeout work does not reintroduce priceable
+  leaks or synthetic semantics.
+
+Primary write scope:
+- backend tests
+- small task/docs updates if needed
+
+Implementation scope:
+- lock current warning families as non-blocking warnings unless a later slice
+  brings stronger protocol identity or persisted movement evidence
+- refresh the irreducible stop-condition fixtures against the current live tail
+
+Definition of done:
+- warning families stay warnings, not silent priceable regressions
+- stop-condition rows stay explicit review unless stronger evidence is added
+
+Required tests:
+- representative warning-family fixture remains warning/non-blocking
+- representative stop-condition fixture remains explicit review
+
+### BE-05AZ — Run/7 Rerun Pack + Repeat-Audit Handoff
+
+Purpose:
+- Finish the run/7 closeout slice with one rerun-ready pack and a strict
+  data-based gate for pricing readiness.
+
+Primary write scope:
+- backend tests
+- task/docs updates if needed
+
+Implementation scope:
+- run targeted regression coverage for:
+  - clarification canonical persistence contract
+  - self-promotional inbound demotion
+  - trusted Slipstream active lifecycle closeout
+  - Base/BSC concentrated-liquidity clarification proof
+  - reopened Euler / ParaSwap / Katana / Slipstream cleanup residuals
+  - warning-family / stop-condition lock
+- hand off the expected live-data gate explicitly
+
+Definition of done:
+- rerun instructions remain `normalization + clarification` only
+- no new backfill is required for this slice
+- the next audit gate is explicit and data-based:
+  - `clarification_persistence_mismatches = 0`
+  - zero resolved self-promotional inbound leaks into priceable `EXTERNAL_INBOUND`
+  - zero trusted Slipstream active lifecycle leaks into generic transfer /
+    inbound types
+  - Base `0x0a757...` and BSC `0x0088...` are either deterministically closed
+    from persisted clarification evidence or explicitly remain in the
+    documented stop-condition with the correct reason
+
+Required tests:
+- regression pack covering every new family in `run/7`
+- stop-condition and warning-family lock tests
+
+## Run/8 Follow-Up Slice
+
+Run/8 planning verdict:
+
+- no new backfill is required
+- `BE-05AR` is materially closed for pricing-readiness purposes:
+  - canonical top-level `clarificationEvidence` is persisted
+  - `clarification_persistence_mismatches = 0`
+  - legacy nested `rawData.clarificationEvidence` is now a data-shape warning,
+    not the main blocker, as long as runtime reads through
+    `OnChainRawTransactionView`
+- the remaining blocker is an explicit eight-row basis-relevant review tail
+  plus ten safe stop-condition rows that should no longer stay in review
+- pricing remains blocked until those families are either:
+  - deterministically closed from current raw plus persisted clarification
+    evidence, or
+  - explicitly demoted into non-priceable stop-condition semantics
+
+Official / primary sources used to define this slice:
+
+- Pancake Infinity `CLPositionManager`
+- Uniswap V3 `NonfungiblePositionManager`
+- Velodrome Slipstream `NonfungiblePositionManager`
+- GMX `ExchangeRouter`
+- Pendle `ActionAddRemoveLiqV3`
+- explorer verification pages for the full fixture hashes listed below
+
+Execution order after run/8:
+
+1. `BE-05BA` Base Pancake / Infinity LP-exit clarification closeout
+2. `BE-05BB` BSC Pancake / Infinity `modifyLiquidities(...)` proof closeout
+3. `BE-05BC` Euler batch receipt-driven economic closeout
+4. `BE-05BD` routed economic closeout for ParaSwap and Katana
+5. `BE-05BE` safe stop-condition demotion closeout
+6. `BE-05BF` zkSync residual verified-identity / stop-condition decision lock
+7. `BE-05BG` run/8 warning-family and canonical-shape lock refresh
+8. `BE-05BH` run/8 rerun pack + repeat-audit handoff
+
+### BE-05BA — Base Pancake / Infinity LP-Exit Clarification Closeout
+
+Purpose:
+- Close the remaining Base position-manager exit container from persisted
+  clarification evidence so it no longer blocks basis replay.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/onchain/**`
+- Base concentrated-liquidity clarification tests
+
+Implementation scope:
+- consume persisted same-source clarification evidence for
+  `0x0a757aeeb58667c545017cd8e5cd60dc994a8945ed810c60ea2aed18688f4f7a`
+- require all of:
+  - trusted Pancake / Infinity position-manager identity
+  - exit-family multicall continuity
+  - persisted collect / withdrawal / unwrap proof from the full receipt
+  - any required same-source native payout continuity
+- close to deterministic `LP_EXIT`
+- do not broaden this into selector-only LP-exit heuristics
+
+Definition of done:
+- `0x0a757aeeb58667c545017cd8e5cd60dc994a8945ed810c60ea2aed18688f4f7a`
+  leaves `NEEDS_REVIEW` as `LP_EXIT`
+- no new false-positive LP-exit promotion appears for weaker Base multicalls
+
+Required tests:
+- Base PM collect / withdrawal / unwrap continuity -> `LP_EXIT`
+- Base PM multicall without exit continuity stays review
+
+### BE-05BB — BSC Pancake / Infinity `modifyLiquidities(...)` Proof Closeout
+
+Purpose:
+- Promote the audited BSC concentrated-liquidity entry row only when persisted
+  full receipt proves real liquidity-add semantics.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- BSC concentrated-liquidity tests
+
+Implementation scope:
+- consume persisted full receipt proof for
+  `0x0088de663d549fbc58dfa8dbba4180a346a580b1d6277254fa84a8ed9c27967a`
+- allow promotion to `LP_ENTRY` only when persisted evidence proves either:
+  - positive liquidity-add amounts, or
+  - explicit tracked-wallet funding into the CL manager / pool
+- keep selector + contract identity + generic `ModifyLiquidity` topic
+  insufficient on their own
+
+Definition of done:
+- `0x0088de663d549fbc58dfa8dbba4180a346a580b1d6277254fa84a8ed9c27967a`
+  leaves `NEEDS_REVIEW` only when positive add/funding proof is consumed
+- weaker `modifyLiquidities(...)` rows without that proof remain explicit review
+
+Required tests:
+- BSC `modifyLiquidities(...)` with positive add/funding proof -> `LP_ENTRY`
+- BSC `modifyLiquidities(...)` without that proof stays review
+
+### BE-05BC — Euler Batch Receipt-Driven Economic Closeout
+
+Purpose:
+- Finish the audited Avalanche Euler batch family that is still basis-blocking
+  despite rich persisted full receipts.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- `backend/src/main/java/com/walletradar/ingestion/job/clarification/**`
+- Euler-family tests
+
+Implementation scope:
+- consume persisted full receipt evidence for:
+  - `0x1e0c429514e9cf892b0b6a11e3cfb290eff5c0c26a557c835496e4ba61717fdb`
+  - `0x233c2b959739d298d1012405e9b3d7e535a87d590a81bcb304c6dc0cb3ce5e4f`
+  - `0x305f37a69956a13001962216c845385996114876173bdbaef644bbe3baadf5df`
+- decode enough batch semantics to emit deterministic economic types from the
+  persisted logs and movements already stored in raw
+- do not leave these rows as generic `CLASSIFICATION_FAILED` once the decoder
+  can prove lending / collateral semantics
+
+Definition of done:
+- the three audited Euler batch rows leave `NEEDS_REVIEW`
+- no new generic Euler batch family regression appears on fee-only /
+  wrapper-only stop-condition rows
+
+Required tests:
+- one lending/collateral Euler batch fixture closes deterministically
+- one wrapper-only Euler batch fixture remains explicit stop-condition
+
+### BE-05BD — Routed Economic Closeout For ParaSwap And Katana
+
+Purpose:
+- Close the remaining routed economic rows that already have sufficient
+  persisted clarification evidence.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- routed-economy tests
+
+Implementation scope:
+- Base ParaSwap exact-out path:
+  - `0x71edb81701d7c95d92d5ad4ec43574db388c7e5e21974385374883b021e0f5da`
+  - use recovered selector `0x7f457675` plus persisted transfers/logs to close
+    to deterministic `SWAP`
+- Katana routeSingle path:
+  - `0x67f4e9e1767850c427920a1238903ed6fc56e6cadd4d3defcacc7a99e1329499`
+  - consume persisted routed economic continuity to close out of
+    `CLASSIFICATION_FAILED`
+- keep the rules raw-only / clarification-evidence-only; no explorer page
+  summary may become runtime evidence
+
+Definition of done:
+- the audited Base ParaSwap row leaves review as `SWAP`
+- the audited Katana routed row leaves generic `CLASSIFICATION_FAILED`
+- no new routed transfer row is force-promoted without persisted economic
+  continuity
+
+Required tests:
+- Base ParaSwap exact-out fixture -> `SWAP`
+- Katana `routeSingle(...)` fixture closes from persisted clarification evidence
+
+### BE-05BE — Safe Stop-Condition Demotion Closeout
+
+Purpose:
+- Remove known non-economic cleanup / fee-only rows from `NEEDS_REVIEW` so the
+  remaining tail reflects only basis-relevant uncertainty.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- stop-condition tests
+
+Implementation scope:
+- demote the audited safe stop-condition rows into explicit non-priceable
+  terminal states:
+  - Velodrome cleanup burn family:
+    - `0x907207001069b6c5b1c0f9aa740736a81ed0f7e8c02b2735a31c772d5bb6603e`
+    - `0x91bba2c00fc37a862f2c277e6f8378bf682156425919c66c1b37faa50e9d61b7`
+    - `0x927d3f458ada7e5ec67f77129e29edcaf2f69bd2b81490a42fec17c0cc3bd4fa`
+    - `0x9c3a93479dd926c7a6e57395b14ab48ed73e673f5cb25f6c1ae6ac9b1bbf2c19`
+    - `0xaf00ee8ac5154daa5f4f917d0929ddbacfb1d254ae3b228f3322312a39c798c8`
+    - `0xe1bc445ff05954e4d9211570bdaed633b0ddddc70ee36d043574d5b9dd1b9630`
+  - Katana zero-effect collect:
+    - `0x4673757b36119b4632f798ad4e0d72fbd170ee0b7be4e4901bd1155ab3881775`
+  - fee-only / no-evidence stop-condition rows:
+    - `0x508ad8c6695151cd84df379876cef4bd5c5370e8bdd660e54141a35ebe1d9d54`
+    - `0x509c134b2795de71a1ee42db38b53af78003308e8c9ebf2b1bfa9ce8d348dcd2`
+    - `0x504695248b7be49796e52895005019fa7ff268297e394078e336ec5a14cbcf54`
+- do not invent economic flow for these rows; terminal non-priceable semantics
+  are the intended outcome
+
+Definition of done:
+- the ten audited safe stop-condition rows leave `NEEDS_REVIEW`
+- they become explicit non-priceable terminal rows
+
+Required tests:
+- one Velodrome cleanup-burn fixture -> explicit non-economic cleanup
+- one zero-effect collect fixture -> explicit non-economic collect
+- one fee-only zero-evidence fixture -> explicit terminal stop-condition
+
+### BE-05BF — zkSync Residual Verified-Identity / Stop-Condition Decision Lock
+
+Purpose:
+- Prevent the remaining zkSync economically material residual from staying a
+  silent generic review row without an explicit decision path.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- docs/task notes if needed
+- zkSync residual tests
+
+Implementation scope:
+- analyze and lock the handling of
+  `0x9712e051e33e603b22039ef74ed946e78664695aa341a8825a516822aa5f8966`
+- if stronger verified protocol identity can be established from current raw
+  plus persisted clarification evidence, close to deterministic canonical type
+- otherwise keep it as an explicit documented basis-blocking stop-condition,
+  not a generic mixed review row
+
+Definition of done:
+- the row is no longer a semantically vague generic review row
+- backend behavior matches the documented decision
+
+Required tests:
+- fixture either closes deterministically with verified identity or stays an
+  explicit documented stop-condition
+
+### BE-05BG — Run/8 Warning-Family And Canonical-Shape Lock Refresh
+
+Purpose:
+- Freeze the new post-`run/8` steady state so future work does not reintroduce
+  resolved-lane leaks or clarification-shape ambiguity.
+
+Primary write scope:
+- backend tests
+- small task/docs updates if needed
+
+Implementation scope:
+- lock the current resolved warning families as non-blocking terminal rows
+- lock canonical top-level clarification evidence as the only runtime-visible
+  shape
+- keep legacy nested clarification shape as non-runtime warning only
+
+Definition of done:
+- warning families stay non-blocking and non-priceable
+- runtime still reads canonical clarification evidence only through the raw
+  view/projection
+
+Required tests:
+- representative warning-family fixture remains non-blocking
+- representative canonical clarification-evidence read path stays top-level only
+
+### BE-05BH — Run/8 Rerun Pack + Repeat-Audit Handoff
+
+Purpose:
+- Finish the `run/8` closeout slice with one rerun-ready pack and a strict
+  pricing-readiness audit gate.
+
+Primary write scope:
+- backend tests
+- task/docs updates if needed
+
+Implementation scope:
+- run targeted regression coverage for:
+  - Base Pancake / Infinity LP exit
+  - BSC `modifyLiquidities(...)`
+  - Euler batch closeout
+  - Base ParaSwap and Katana routed paths
+  - safe stop-condition demotion
+  - zkSync residual decision lock
+  - warning-family / canonical-shape lock
+- hand off the next live-data gate explicitly
+
+Definition of done:
+- rerun instructions remain `normalization + clarification` only
+- no new backfill is required for this slice
+- next audit gate is explicit and data-based:
+  - `clarification_persistence_mismatches = 0`
+  - zero run/8 basis-blocking review rows across the audited families
+  - audited safe stop-condition rows no longer remain in `NEEDS_REVIEW`
+
+Required tests:
+- regression pack covering every new family in `run/8`
+- stop-condition and canonical-shape lock tests
+
+## Run/9 Follow-Up Slice
+
+Run/9 planning verdict:
+
+- no new backfill is required
+- resolved lane is materially clean:
+  - `confirmed_resolved_misclassifications = 0`
+  - `resolved_but_insufficient_evidence = 0`
+- clarification persistence is no longer a blocker:
+  - canonical top-level `clarificationEvidence` exists on all clarified rows
+  - `clarification_persistence_mismatches = 0`
+  - legacy nested clarification shape is gone in live Mongo
+- pricing remains blocked by:
+  - four basis-blocking review rows
+  - one safe stop-condition row that should no longer remain in review
+
+Official / primary sources used to define this slice:
+
+- Euler EVC Integration Guide
+- Euler EVC playground reference
+- Pancake Infinity `CLPositionManager`
+- Pancake Infinity `ICLPoolManager`
+- Uniswap V3 `NonfungiblePositionManager`
+- Velodrome Slipstream `NonfungiblePositionManager`
+- GMX `ExchangeRouter`
+- Pendle `ActionAddRemoveLiqV3`
+- explorer verification pages for the full fixture hashes listed below
+
+Execution order after run/9:
+
+1. `BE-05BI` Base Pancake / Infinity LP-exit receipt closeout
+2. `BE-05BJ` Avalanche Euler EVC batch economic decoder closeout
+3. `BE-05BK` BSC Pancake Infinity zero-effect `modifyLiquidities(...)` demotion
+4. `BE-05BL` run/9 warning-family and stop-condition lock refresh
+5. `BE-05BM` run/9 rerun pack + repeat-audit handoff
+
+### BE-05BI — Base Pancake / Infinity LP-Exit Receipt Closeout
+
+Purpose:
+- Close the last Base basis-blocking concentrated-liquidity exit row from
+  already persisted clarification evidence.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/onchain/**`
+- Base concentrated-liquidity tests
+
+Implementation scope:
+- consume persisted full receipt evidence for
+  `0x0a757aeeb58667c545017cd8e5cd60dc994a8945ed810c60ea2aed18688f4f7a`
+- require all of:
+  - trusted Pancake / Infinity position-manager identity
+  - `multicall(bytes[] data)` exit-family continuity
+  - persisted `DecreaseLiquidity` / `Burn` / `Collect` proof
+  - persisted withdrawal / unwrap continuity and any required native payout
+    continuity
+- close deterministically to `LP_EXIT`
+- do not broaden this into selector-only LP-exit heuristics
+
+Definition of done:
+- `0x0a757aeeb58667c545017cd8e5cd60dc994a8945ed810c60ea2aed18688f4f7a`
+  leaves `NEEDS_REVIEW` as `LP_EXIT`
+- weaker Base position-manager multicalls without the same continuity remain
+  explicit review
+
+Required tests:
+- Base PM `multicall` with persisted decrease/collect/withdraw continuity ->
+  `LP_EXIT`
+- Base PM `multicall` without exit continuity stays review
+
+### BE-05BJ — Avalanche Euler EVC Batch Economic Decoder Closeout
+
+Purpose:
+- Finish the last basis-blocking Euler EVC batch family using the already
+  persisted full receipts.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- Euler-family tests
+
+Implementation scope:
+- decode enough batch semantics for:
+  - `0x1e0c429514e9cf892b0b6a11e3cfb290eff5c0c26a557c835496e4ba61717fdb`
+  - `0x233c2b959739d298d1012405e9b3d7e535a87d590a81bcb304c6dc0cb3ce5e4f`
+  - `0x305f37a69956a13001962216c845385996114876173bdbaef644bbe3baadf5df`
+- use only current raw plus already persisted clarification full receipts
+- align semantics with official Euler EVC batching / sub-account model
+- close to deterministic economic types instead of generic
+  `CLASSIFICATION_FAILED`
+- keep fee-only or wrapper-only Euler residuals in explicit terminal
+  stop-condition semantics if they still lack economic movement proof
+
+Definition of done:
+- the three audited Euler rows leave `NEEDS_REVIEW`
+- no new generic Euler batch regression appears on non-economic rows
+
+Required tests:
+- one deposit/collateral Euler batch fixture closes deterministically
+- one borrow/withdraw or swap-like Euler batch fixture closes deterministically
+- one fee-only / wrapper-only Euler residual remains explicit stop-condition
+
+### BE-05BK — BSC Pancake Infinity Zero-Effect `modifyLiquidities(...)` Demotion
+
+Purpose:
+- Remove the last safe review row without inventing LP-entry basis where the
+  persisted receipt proves no economic effect.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- BSC concentrated-liquidity stop-condition tests
+
+Implementation scope:
+- narrow
+  `0x0088de663d549fbc58dfa8dbba4180a346a580b1d6277254fa84a8ed9c27967a`
+  out of `NEEDS_REVIEW`
+- treat persisted proof of:
+  - pool-manager `ModifyLiquidity` with `liquidityDelta = 0`
+  - CLPositionManager `ModifyLiquidity` with `liquidityChange = 0`
+  - `feesAccrued = 0`
+  - no token/internal transfers
+  as explicit non-economic stop-condition semantics
+- do not promote this family to `LP_ENTRY` unless stronger positive add/funding
+  proof exists
+
+Definition of done:
+- `0x0088de663d549fbc58dfa8dbba4180a346a580b1d6277254fa84a8ed9c27967a`
+  leaves `NEEDS_REVIEW`
+- the resulting type is explicit non-priceable terminal semantics
+- future zero-effect `modifyLiquidities(...)` rows do not leak back into
+  `LP_ENTRY / NEEDS_REVIEW`
+
+Required tests:
+- zero-effect BSC `modifyLiquidities(...)` fixture -> explicit non-economic
+  terminal state
+- positive add/funding proof fixture still closes to `LP_ENTRY`
+
+### BE-05BL — Run/9 Warning-Family And Stop-Condition Lock Refresh
+
+Purpose:
+- Freeze the new post-`run/9` steady state so future work does not reintroduce
+  resolved-lane leaks or return safe stop-conditions back into review.
+
+Primary write scope:
+- backend tests
+- small task/docs updates if needed
+
+Implementation scope:
+- lock resolved warning families as non-blocking terminal rows
+- lock canonical top-level clarification evidence as the only runtime-visible
+  clarification shape
+- lock `0x0088...`-style zero-effect CL manager calls as non-priceable
+  stop-conditions, not basis blockers
+
+Definition of done:
+- warning families stay non-blocking and non-priceable
+- runtime still reads canonical clarification evidence only through the raw
+  view / projection
+- zero-effect CL manager calls remain outside the pricing gate
+
+Required tests:
+- representative warning-family fixture remains non-blocking
+- representative canonical clarification-evidence read path stays top-level only
+- representative zero-effect CL fixture remains non-priceable
+
+### BE-05BM — Run/9 Rerun Pack + Repeat-Audit Handoff
+
+Purpose:
+- Finish the `run/9` closeout slice with one rerun-ready pack and a strict
+  pricing-readiness audit gate.
+
+Primary write scope:
+- backend tests
+- task/docs updates if needed
+
+Implementation scope:
+- run targeted regression coverage for:
+  - Base Pancake / Infinity LP exit closeout
+  - Avalanche Euler EVC batch closeout
+  - BSC zero-effect `modifyLiquidities(...)` demotion
+  - warning-family / stop-condition lock refresh
+- hand off the next live-data gate explicitly
+
+Definition of done:
+- rerun instructions remain `normalization + clarification` only
+- no new backfill is required for this slice
+- next audit gate is explicit and data-based:
+  - `clarification_persistence_mismatches = 0`
+  - zero run/9 basis-blocking review rows across the audited families
+  - the audited BSC zero-effect `modifyLiquidities(...)` row no longer remains
+    in `NEEDS_REVIEW`
+
+Required tests:
+- regression pack covering every new family in `run/9`
+- stop-condition and canonical-shape lock tests
 
 ## Mandatory Test Matrix
 

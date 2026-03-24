@@ -1,7 +1,7 @@
 д# WalletRadar — Accounting Policy
 
 > **Version:** v3 target
-> **Last updated:** 2026-03-22
+> **Last updated:** 2026-03-24
 > **Accounting method:** AVCO
 
 ---
@@ -185,9 +185,22 @@ residual-review set:
 - it should persist both:
   - the adapted clarification evidence used by runtime classification
   - the raw full receipt payload, when the source exposes it
+- if a clarification source call already fetched a receipt payload, that
+  source-native payload is persisted in full even when the current row uses
+  only metadata-safe clarification semantics
+- it must persist that clarification evidence in one canonical raw-level
+  location that live Mongo audits and runtime classification both read
 - clarification is not complete for a row unless that evidence is persisted on
   the raw document in a deterministic shape
+- metadata-safe clarification versus receipt-log-backed clarification is a
+  semantic policy only; it must not truncate an already fetched receipt before
+  persistence
 - it must store those fields separately from synthetic `rawData.logs[]`
+- runtime classification and normalization access clarification evidence only
+  through `OnChainRawTransactionView` / the canonical raw projection
+- it may also persist same-source internal transfers for an allowlisted
+  native-bridge subset when those internal legs are required for deterministic
+  bridge continuity
 - it may rerun classification only when official protocol semantics and the
   fetched receipt evidence together make the row deterministic
 - it must fetch clarification evidence from the same source family that produced
@@ -203,6 +216,42 @@ residual-review set:
   evidence
 - it must not be used for rows that are already closable from current raw
   evidence, such as claim-family no-movement rows or known handler gaps
+- safe current-raw non-economic families should leave `NEEDS_REVIEW` before
+  clarification is even attempted, including spam / airdrop clusters,
+  explicit `CLAIM_WITHOUT_MOVEMENT`, failed transactions, documented admin /
+  governance actions, pending-request / pending-order initiation rows, and
+  out-of-scope NFT or attestation mints
+- if clarification still leaves only weak protocol identity, zero logs, or
+  wrapper-only bookkeeping evidence, the row remains in the documented
+  irreducible stop-condition set and is not forced into synthetic economic
+  semantics
+
+Clarification success does not by itself make the dataset pricing-ready.
+Pricing remains blocked while a live post-rerun audit still shows:
+
+- resolved wrapped-native selector rows leaking into `VAULT_DEPOSIT`,
+  `VAULT_WITHDRAW`, or `LENDING_WITHDRAW`
+- resolved recognized Across `depositV3(...)` rows leaking into `VAULT_DEPOSIT`
+- resolved route-tagged bridge-initiation rows leaking into
+  `EXTERNAL_TRANSFER_OUT`, including LI.FI / Jumper `callDiamondWith*`
+  families and `transferRemote(...)`
+- resolved Circle CCTP `redeem(bytes cctpMsg,bytes cctpSigs)` rows leaking into
+  `VAULT_WITHDRAW`
+- resolved explicit receiver-wallet `claim(...)` / `claimWithSig(...)` payout
+  rows leaking into `EXTERNAL_INBOUND`
+- resolved pending `claimSharesAndRequestRedeem(...)` rows leaking into
+  priceable `EXTERNAL_TRANSFER_OUT`
+- resolved claim-income rows leaking into `EXTERNAL_INBOUND`, including
+  Pancake `harvest(...)` and vesting `release()`
+- priceable GMX `createOrder(...)` rows leaking into `EXTERNAL_TRANSFER_OUT`
+  before final settlement semantics exist
+- clarification persistence mismatches where normalized clarification counters
+  are ahead of persisted raw clarification evidence
+- a broad repeatable review-tail family that should already be deterministic
+  from current raw or allowlisted clarification evidence
+
+Those are classification-time basis-semantics failures, not clarification-tail
+warnings.
 
 Pricing-readiness gate:
 
@@ -212,17 +261,49 @@ Pricing-readiness gate:
 - fee-only rows may remain resolved only when they belong to an explicit
   non-economic family such as `APPROVE`, `ADMIN_CONFIG`, or another documented
   terminal cleanup/admin type
-- wrapper continuity, bridge-entry semantics, liquidity entry/exit semantics,
-  and admin/config demotion must be correct before pricing/AVCO begins
+- wrapper continuity, bridge-entry semantics, route-tagged bridge-initiation
+  semantics, claim-income semantics, order-initiation demotion, liquidity
+  entry/exit semantics, spam / airdrop demotion, and admin/config demotion
+  must be correct before pricing/AVCO begins
+- pricing/AVCO may start only when the residual review tail has been reduced to
+  the documented irreducible stop-condition set; broad repeatable review
+  families are still a basis blocker even when clarification is otherwise
+  complete
+- after `run/9`, the resolved lane is materially clean and
+  `clarification_persistence_mismatches = 0`; pricing is still blocked only by
+  the audited residual basis blocker set:
+  - Base Pancake / Infinity LP-exit container
+    `0x0a757aeeb58667c545017cd8e5cd60dc994a8945ed810c60ea2aed18688f4f7a`
+  - Avalanche Euler batch rows
+    `0x1e0c429514e9cf892b0b6a11e3cfb290eff5c0c26a557c835496e4ba61717fdb`,
+    `0x233c2b959739d298d1012405e9b3d7e535a87d590a81bcb304c6dc0cb3ce5e4f`,
+    `0x305f37a69956a13001962216c845385996114876173bdbaef644bbe3baadf5df`
+- the remaining BSC Pancake / Infinity row
+  `0x0088de663d549fbc58dfa8dbba4180a346a580b1d6277254fa84a8ed9c27967a`
+  is no longer treated as a basis blocker once persisted receipt evidence
+  proves zero-effect `modifyLiquidities(...)`; it should leave review as an
+  explicit non-priceable terminal stop-condition
 
 Current audited clarification candidate families for full receipt enrichment:
 
-- concentrated-liquidity LP exit containers whose full receipt logs contain
-  sufficient movement evidence
+- Slipstream cleanup-burn, stake-contract, and zero-effect collect families
+- Pancake / Infinity concentrated-liquidity exit and `modifyLiquidities`
+  families
 - selected Euler-style batch rows where full receipt logs reveal real asset
   transfers
-- known burn-only / governance-only receipt patterns that may be narrowed to
-  explicit non-economic terminal states
+- ParaSwap `swapExactAmountOut(...)`
+- GMX `executeOrder(...)`
+- Katana `routeSingle(...)`
+- allowlisted native bridge families whose same-source internal transfers are
+  required for deterministic bridge continuity
+- Pancake / Infinity CL exit containers that prove collect / withdrawal /
+  unwrap continuity from same-source clarification evidence
+- Pancake / Infinity `modifyLiquidities(...)` rows that prove positive
+  liquidity-add or tracked-wallet funding direction from persisted full receipt
+- once those receipt-helpful families are closed, any remaining review row must
+  either:
+  - be a documented safe stop-condition with no basis impact, or
+  - remain an explicit basis blocker that still prevents pricing/AVCO
 
 ---
 

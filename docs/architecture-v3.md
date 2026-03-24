@@ -1,7 +1,7 @@
 # WalletRadar — System Architecture
 
 > **Version:** SAD v3.1
-> **Date:** 2026-03-22
+> **Date:** 2026-03-24
 > **Style:** Modular monolith (Spring Boot)
 > **Status:** Accepted target architecture
 
@@ -15,7 +15,7 @@
 |---|----------|-----------|
 | D-01 | Modular monolith, not microservices | Single VPS, low operational cost, clear package boundaries, no network hop between normalization, pricing, and AVCO. |
 | D-02 | Raw collection stays source-aware, but classification stays source-agnostic | Backfill may use explorer-first, provider-first, or native-repair paths per network, but v3 classification still starts only from canonicalized `raw_transactions`, not from source-specific branches. |
-| D-03 | Synthetic logs are never classification evidence | Explorer-derived synthetic `rawData.logs[]` remain out of bounds. Real provider-persisted receipt logs may exist in canonical raw and may be consumed only through the normal raw view/projection. Clarification may enrich `status`, `gasUsed`, and `contractAddress`, and for an allowlisted review set it may also persist adapted receipt evidence plus the raw full receipt payload in dedicated evidence fields before classification may consume them. Clarification is not complete unless that evidence is actually persisted on the raw row. |
+| D-03 | Synthetic logs are never classification evidence | Explorer-derived synthetic `rawData.logs[]` remain out of bounds. Real provider-persisted receipt logs may exist in canonical raw and may be consumed only through the normal raw view/projection. Clarification may enrich `status`, `gasUsed`, and `contractAddress`, and for an allowlisted review set it may also persist adapted receipt evidence plus the raw full receipt payload in dedicated evidence fields before classification may consume them. If a clarification source call already fetched a receipt payload, that source-native payload is persisted in full; metadata-safe versus receipt-log-backed clarification is a usage policy, not a storage-truncation policy. Clarification is not complete unless that evidence is actually persisted on the raw row in one canonical raw-level storage contract that runtime classification and live Mongo audits both read. |
 | D-04 | `user_sessions` are persisted on the backend | Session state is client-generated (`sessionId`) but stored in MongoDB so wallet sets, selected networks, and backfill status survive browser restarts. |
 | D-05 | Canonical normalization uses one installation-wide tracked wallet universe | `normalized_transactions` must not change meaning per session. Internal-transfer detection uses a global tracked-wallet projection, not per-session payloads. |
 | D-06 | `external_ledger_raw` is the immutable Bybit import layer; `normalized_transactions` is the canonical accounting layer | Raw Bybit rows remain source evidence. Basis replay and read models consume only canonical normalized documents, regardless of source. |
@@ -38,8 +38,10 @@
 | D-23 | Protocol-specific rule design follows protocol-source semantics when available | When official contracts or protocol docs exist, classifier rules should align to those method semantics rather than explorer UI labels or ad-hoc heuristics. |
 | D-24 | Clarification reasons must describe the real missing receipt-safe evidence | `MISSING_CONTRACT_ADDRESS` is valid only for explicit contract-creation rows; missing `effectiveGasPrice` is not satisfied by legacy `gasPrice` fallback used for fee math. |
 | D-25 | `CLAIM_WITHOUT_MOVEMENT` is a valid per-wallet terminal state | When a tracked wallet signs a known claim route but does not receive the reward transfer in persisted raw evidence, classification must not synthesize `REWARD_CLAIM`. |
-| D-26 | Clarification is a bounded receipt-enrichment stage, not a generic second classifier | Metadata-only clarification remains the default. Full receipt-log enrichment is allowed only for an allowlisted review-family set. Traces, explorer UI summaries, and analyst-only notes remain out of bounds. Rows already closable from current raw stay classification work. Clarification source must follow raw-source lineage by default. |
-| D-27 | Pricing-ready economic rows require persisted movement evidence | Resolved economic rows may not proceed to pricing or replay from fee-only flow. Wrapped-native continuity, bridge-entry semantics, liquidity entry/exit semantics, and admin/config demotion must be correct before AVCO consumes the row. |
+| D-26 | Clarification is a bounded receipt-enrichment stage, not a generic second classifier | Metadata-only clarification remains the default. Full receipt-log enrichment is allowed only for an allowlisted review-family set. Traces, explorer UI summaries, and analyst-only notes remain out of bounds. Rows already closable from current raw stay classification work. Clarification source must follow raw-source lineage by default and may persist same-source internal transfers only for allowlisted native-bridge families that truly require those legs. |
+| D-27 | Pricing-ready economic rows require persisted movement evidence | Resolved economic rows may not proceed to pricing or replay from fee-only flow. Wrapped-native continuity, bridge-entry semantics, liquidity entry/exit semantics, bridge settlement continuity, and admin/config demotion must be correct before AVCO consumes the row. |
+| D-28 | Pricing readiness is validated from live data, not from task completion alone | A rerun is not pricing-ready until the post-rerun Mongo audit shows zero resolved wrapped-native leaks into `VAULT_*` / `LENDING_WITHDRAW`, zero resolved recognized bridge-entry leaks into `VAULT_DEPOSIT`, zero route-tagged bridge-initiation leaks into `EXTERNAL_TRANSFER_OUT`, zero claim-income leaks into `EXTERNAL_INBOUND`, zero self-promotional or spam-like inbound families leaking into priceable `EXTERNAL_INBOUND`, zero known Slipstream LP lifecycle leaks (`increaseLiquidity(...)`, trusted stake-contract actions) into generic transfer / inbound types, zero priceable GMX order-initiation rows leaking into `EXTERNAL_TRANSFER_OUT`, zero clarification persistence mismatches between raw and normalized state, and zero economically material review families that should already be deterministic from current raw or allowlisted clarification evidence. In the current `run/9` state, the remaining gate is the explicit four-row basis-blocking review tail, not resolved-lane leakage. |
+| D-29 | Safe review-tail reduction happens before any new evidence expansion | Spam / airdrop clusters, explicit `CLAIM_WITHOUT_MOVEMENT`, failed transactions, admin / governance actions, pending-request / pending-order families, and out-of-scope NFT or attestation mints should leave `NEEDS_REVIEW` from current raw. Clarification is reserved for receipt-closeable residuals, and the remaining irreducible stop-condition must stay explicit instead of being forced into synthetic economic types. After `run/9`, safe stop-condition rows should no longer remain in review once persisted receipt evidence proves zero-effect cleanup/admin semantics, such as the audited Pancake Infinity `modifyLiquidities(...)` row with `liquidityDelta = 0`, `liquidityChange = 0`, and `feesAccrued = 0`. |
 
 ### Assumptions
 
@@ -335,30 +337,32 @@ Read paths satisfied by indexes:
 6. Known wrapped-native selectors and known bridge/router methods are resolved before generic `deposit` / `withdraw` / `multicall` function-name fallback can assign broad `VAULT_*` or `EXTERNAL_*` types.
 7. Plain positive inbound transfer legs default to `EXTERNAL_INBOUND` unless contract-aware reward or bridge evidence exists.
 8. Promo/phishing inbound patterns are excluded before reward ambiguity handling and before default `EXTERNAL_INBOUND` assignment.
-9. Known bridge-entry methods such as `depositV3` and bridge-settlement selectors such as `fillV3Relay`, `fillRelay`, `redeemWithFee`, `execute302`, and `directFulfill` resolve to bridge continuity semantics, not generic `REPAY`, `LENDING_WITHDRAW`, or `VAULT_WITHDRAW`.
-10. LP position-manager router containers such as `multicall` and Uniswap-v4-style `modifyLiquidities` dispatch by contract-aware inner method rules, not broad router keywords.
-11. Method-aware protocol bundles such as Morpho Bundler3 dispatch by contract-specific rules before generic `multicall` or `bundle` fallback.
-12. Zero-amount token transfers with no economic counterflow never create economic movement; they resolve to contract-scoped admin/no-op handling or explicit review.
-13. Protocol-registry runtime data is loaded from `backend/src/main/resources/protocol-registry.json` only.
-14. Registry `event_topics` remain reference metadata and are not loaded into the classifier.
-15. Registry entries with `specialHandler` dispatch into one deterministic handler result over the already extracted legs.
-16. Unsupported special-handler methods become `UNKNOWN -> NEEDS_REVIEW` with explicit missing-data reasons; they do not silently fall through to generic heuristics.
-17. `LegExtractor` uses:
+9. Known bridge-entry methods such as `depositV3`, route-tagged bridge-initiation families such as LI.FI / Jumper `callDiamondWith*`, `transferRemote(...)`, and bridge-settlement selectors such as `fillV3Relay`, `fillRelay`, `redeemWithFee`, `execute302`, and `directFulfill` resolve to bridge continuity semantics, not generic `REPAY`, `LENDING_WITHDRAW`, `VAULT_WITHDRAW`, or `EXTERNAL_TRANSFER_OUT`.
+10. Claim-income families such as Pancake `harvest(...)` and vesting `release()` resolve to explicit claim / income semantics before generic `EXTERNAL_INBOUND` fallback can win.
+11. GMX `createOrder(...)` and similar order-initiation rows are not finalized disposals and may not become priceable `EXTERNAL_TRANSFER_OUT` rows until persisted evidence proves final settlement.
+12. LP position-manager router containers such as `multicall` and Uniswap-v4-style `modifyLiquidities` dispatch by contract-aware inner method rules, not broad router keywords.
+13. Method-aware protocol bundles such as Morpho Bundler3 dispatch by contract-specific rules before generic `multicall` or `bundle` fallback.
+14. Zero-amount token transfers with no economic counterflow never create economic movement; they resolve to contract-scoped admin/no-op handling or explicit review.
+15. Protocol-registry runtime data is loaded from `backend/src/main/resources/protocol-registry.json` only.
+16. Registry `event_topics` remain reference metadata and are not loaded into the classifier.
+17. Registry entries with `specialHandler` dispatch into one deterministic handler result over the already extracted legs.
+18. Unsupported special-handler methods become `UNKNOWN -> NEEDS_REVIEW` with explicit missing-data reasons; they do not silently fall through to generic heuristics.
+19. `LegExtractor` uses:
    - canonical tx-level fields from the raw view / `explorer.tx`
    - `rawData.explorer.tokenTransfers[]`
    - `rawData.explorer.internalTransfers[]`
    - direct native tx value only when it is canonical tx-level evidence
    - persisted real receipt logs when a method-aware handler explicitly needs them
-18. Synthetic `rawData.logs[]` are ignored.
-19. Heuristics that depend on "own wallet" knowledge use the installation-wide `tracked_wallets` projection, never per-session wallet sets.
-20. Canonical docs land in `normalized_transactions` with:
+20. Synthetic `rawData.logs[]` are ignored.
+21. Heuristics that depend on "own wallet" knowledge use the installation-wide `tracked_wallets` projection, never per-session wallet sets.
+22. Canonical docs land in `normalized_transactions` with:
    - `PENDING_PRICE` when evidence is sufficient
    - `PENDING_CLARIFICATION` only when receipt metadata may help and is currently missing
    - `NEEDS_REVIEW` when classification is still unresolved
 
 ### 3. Clarification
 
-1. `ClarificationJob v1` fetches explorer/RPC receipt metadata only for receipt-clarifiable records.
+1. `ClarificationJob` fetches lineage-consistent receipt metadata for receipt-clarifiable records and may fetch full receipt evidence only for an allowlisted residual-review set.
 2. Allowed enrichments:
    - execution status
    - gas used / effective gas price
@@ -367,13 +371,15 @@ Read paths satisfied by indexes:
 4. Clarification is not a generic backlog for low-confidence heuristic classifications such as wrapped-native selector calls, ambiguous inbound-vs-reward cases, or unsupported router / LP-position methods.
 5. Clarification is also out of scope for promo/phishing inbound suppression, bridge-settlement semantics, and zero-value token no-op routing.
 6. Rows that enter clarification must record explicit missing receipt-safe reasons; an empty `missingDataReasons[]` list is not acceptable for a clarification-eligible row.
-7. After the configured retry budget:
+7. Route-tagged LI.FI / Jumper bridge-initiation leaks, Circle CCTP `redeem(...)` destination-side bridge-in semantics, explicit receiver-wallet claim payout semantics, and pending redeem-request initiation semantics remain classification-time responsibilities when current raw plus persisted clarification evidence already make those rows deterministic.
+8. After the configured retry budget:
    - improved record -> `PENDING_PRICE`
    - unresolved record -> `NEEDS_REVIEW`
-8. Clarification may fetch full receipt evidence only for allowlisted residual review families whose closure requires receipt logs.
-9. Clarification should persist both the adapted clarification evidence and the raw full receipt payload, when the source exposes it, in dedicated clarification-evidence fields.
-10. Clarification must fetch receipt evidence from the same source family that produced the raw row unless an explicit documented fallback is triggered.
-11. Clarification must not use traces, explorer UI labels, or manual audit notes as runtime evidence.
+9. Clarification may fetch full receipt evidence only for allowlisted residual review families whose closure requires receipt logs.
+10. Clarification should persist both the adapted clarification evidence and the raw full receipt payload, when the source exposes it, in dedicated clarification-evidence fields.
+11. Clarification must fetch receipt evidence from the same source family that produced the raw row unless an explicit documented fallback is triggered.
+12. Persisted `clarificationEvidence` on raw rows and normalized clarification attempt counters must remain live-parity safe; silent drift is a warning, not an acceptable steady state.
+13. Clarification must not use traces, explorer UI labels, or manual audit notes as runtime evidence.
 
 ### 4. Pricing
 
@@ -389,6 +395,16 @@ Price resolution order:
    Last resort historical price lookup keyed by `(assetContract, date)`
 5. `PRICE_UNKNOWN`
    Quantity still participates in replay; price stays null and `hasIncompleteHistory` becomes true
+6. Pricing is released only after a live post-rerun audit proves there are no:
+   - resolved wrapped-native leaks into `VAULT_*` / `LENDING_WITHDRAW`
+   - resolved recognized bridge-entry leaks into `VAULT_DEPOSIT`
+   - route-tagged bridge-initiation leaks into `EXTERNAL_TRANSFER_OUT`
+   - Circle CCTP `redeem(...)` leaks into `VAULT_WITHDRAW`
+   - explicit receiver-wallet claim payout leaks into `EXTERNAL_INBOUND`
+   - pending redeem-request initiation leaks into priceable
+     `EXTERNAL_TRANSFER_OUT`
+   - claim-income leaks into `EXTERNAL_INBOUND`
+   - priceable GMX `createOrder(...)` rows without finalized settlement semantics
 
 ### 5. Bybit normalization
 
