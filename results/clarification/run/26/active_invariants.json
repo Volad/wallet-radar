@@ -1,0 +1,13 @@
+{
+  "swapMissingBuy": 0,
+  "swapMissingSell": 0,
+  "lpEntryPrincipalMismatch": 0,
+  "lpExitAnyBuyCount": 1,
+  "borrowRoleMismatch": 0,
+  "repayRoleMismatch": 0,
+  "rewardClaimRoleMismatch": 0,
+  "classicStakingPrincipalMismatch": 0,
+  "bridgePairEvidenceRequiredActive": 0,
+  "bybitConfirmedUnknown": 0,
+  "persistedInternalTransfer": 0
+}

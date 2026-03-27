@@ -1,0 +1,62 @@
+[
+  {
+    "source": "Euler Docs",
+    "url": "https://docs.euler.finance/user-guide/batch-transactions/",
+    "relevance": "Euler batch / looping / rebalance semantics",
+    "note": "Used to validate that batch combines multi-step actions and that the residual share-to-share family can be modeled as continuity instead of a plain deposit or withdraw."
+  },
+  {
+    "source": "Euler Docs",
+    "url": "https://docs.euler.finance/user-guide/borrowing-assets/",
+    "relevance": "Debt-side semantics",
+    "note": "Used to validate borrow-backed collateral workflows and loop-open / loop-decrease / loop-close interpretation."
+  },
+  {
+    "source": "Euler Docs",
+    "url": "https://docs.euler.finance/user-guide/supplying-assets/",
+    "relevance": "Collateral supply semantics",
+    "note": "Used to validate share-mint side of Euler positions."
+  },
+  {
+    "source": "Resolv Docs",
+    "url": "https://docs.resolv.xyz/litepaper/using-resolv/usr",
+    "relevance": "Resolv staking / unstaking context",
+    "note": "Used to validate request-plus-settlement continuity for staked-token withdrawal lifecycle."
+  },
+  {
+    "source": "GMX Synthetics Repo",
+    "url": "https://github.com/gmx-io/gmx-synthetics",
+    "relevance": "Async deposit request/execute lifecycle",
+    "note": "Used to validate createDeposit / executeDeposit split and async carry-over semantics."
+  },
+  {
+    "source": "Bybit API Docs",
+    "url": "https://bybit-exchange.github.io/docs/v5/account/transaction-log",
+    "relevance": "Bybit ledger semantics",
+    "note": "Used to validate that the residual Bybit tail is limited to orphan UTA trade legs and unsupported loan families."
+  },
+  {
+    "source": "Bybit API Docs",
+    "url": "https://bybit-exchange.github.io/docs/v5/asset/exchange",
+    "relevance": "Bybit convert / exchange semantics",
+    "note": "Used as supporting reference for CEX swap semantics and to ensure the excluded tail is not a hidden convert-family regression."
+  },
+  {
+    "source": "Pendle Docs",
+    "url": "https://docs.pendle.finance/",
+    "relevance": "Pendle LP / reward bundle semantics",
+    "note": "Used to validate reward-side BUY inside LP exit bundle as expected, non-principal flow."
+  },
+  {
+    "source": "Uniswap Docs",
+    "url": "https://docs.uniswap.org/concepts/protocol/concentrated-liquidity",
+    "relevance": "LP entry/exit continuity semantics",
+    "note": "Used as leader-market reference for LP principal continuity expectations."
+  },
+  {
+    "source": "PancakeSwap Docs",
+    "url": "https://docs.pancakeswap.finance/",
+    "relevance": "LP / staking semantics",
+    "note": "Used as leader-market cross-check for continuity versus economic reward separation."
+  }
+]
