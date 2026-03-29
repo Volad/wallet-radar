@@ -3,16 +3,18 @@ package com.walletradar.ingestion.pipeline.classification.special;
 import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryEntry;
 import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistrySpecialHandlerType;
 import com.walletradar.ingestion.pipeline.classification.support.RawLeg;
-import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 
-@Slf4j
 @Component
 public class ProtocolSpecialHandlerDispatcher {
+
+    private static final Logger log = LoggerFactory.getLogger(ProtocolSpecialHandlerDispatcher.class);
 
     private final Map<ProtocolRegistrySpecialHandlerType, ProtocolSpecialHandler> handlers;
 

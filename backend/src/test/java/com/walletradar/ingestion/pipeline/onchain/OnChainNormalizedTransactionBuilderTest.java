@@ -46,6 +46,11 @@ class OnChainNormalizedTransactionBuilderTest {
                 List.of(),
                 List.of(),
                 null,
+                false,
+                null,
+                false,
+                null,
+                null,
                 null
         );
 
@@ -84,6 +89,11 @@ class OnChainNormalizedTransactionBuilderTest {
                 List.of(),
                 List.of(),
                 null,
+                false,
+                null,
+                false,
+                null,
+                null,
                 null
         );
 
@@ -118,6 +128,11 @@ class OnChainNormalizedTransactionBuilderTest {
                 List.of(),
                 List.of(),
                 null,
+                false,
+                null,
+                false,
+                null,
+                null,
                 null
         );
 
@@ -150,12 +165,17 @@ class OnChainNormalizedTransactionBuilderTest {
                 ))));
 
         OnChainClassificationResult classificationResult = new OnChainClassificationResult(
-                NormalizedTransactionType.EXTERNAL_INBOUND,
+                NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
                 NormalizedTransactionStatus.PENDING_CLARIFICATION,
                 ClassificationSource.HEURISTIC,
                 ConfidenceLevel.MEDIUM,
                 List.of(),
                 List.of(),
+                null,
+                false,
+                null,
+                false,
+                null,
                 null,
                 null
         );
@@ -175,6 +195,12 @@ class OnChainNormalizedTransactionBuilderTest {
         rawTransaction.setTxHash("0xmno");
         rawTransaction.setNetworkId("ETHEREUM");
         rawTransaction.setWalletAddress(WALLET);
+        rawTransaction.setClarificationEvidence(new Document()
+                .append("clarificationAttempts", 1)
+                .append("fullReceiptClarificationAttempts", 1)
+                .append("sourceFamily", "RPC")
+                .append("receipt", new Document("txReceiptStatus", "1"))
+                .append("fullReceipt", new Document("status", "0x1")));
         rawTransaction.setRawData(new Document()
                 .append("timeStamp", "1700000000")
                 .append("transactionIndex", "5")
@@ -183,11 +209,7 @@ class OnChainNormalizedTransactionBuilderTest {
                 .append("value", "0")
                 .append("txreceipt_status", "1")
                 .append("gasUsed", "21000")
-                .append("effectiveGasPrice", "5000000000")
-                .append("clarificationEvidence", new Document()
-                        .append("sourceFamily", "RPC")
-                        .append("receipt", new Document("txReceiptStatus", "1"))
-                        .append("fullReceipt", new Document("status", "0x1"))));
+                .append("effectiveGasPrice", "5000000000"));
 
         OnChainClassificationResult classificationResult = new OnChainClassificationResult(
                 NormalizedTransactionType.SWAP,
@@ -196,6 +218,11 @@ class OnChainNormalizedTransactionBuilderTest {
                 ConfidenceLevel.MEDIUM,
                 List.of(),
                 List.of(),
+                null,
+                false,
+                null,
+                false,
+                null,
                 null,
                 null
         );
@@ -207,12 +234,61 @@ class OnChainNormalizedTransactionBuilderTest {
     }
 
     @Test
+    @DisplayName("build copies correlation metadata from classifier output")
+    void buildCopiesCorrelationMetadataFromClassifierOutput() {
+        RawTransaction rawTransaction = new RawTransaction();
+        rawTransaction.setTxHash("0xcorr");
+        rawTransaction.setNetworkId("ARBITRUM");
+        rawTransaction.setWalletAddress(WALLET);
+        rawTransaction.setRawData(new Document()
+                .append("timeStamp", "1700000000")
+                .append("transactionIndex", "7")
+                .append("from", WALLET)
+                .append("to", "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                .append("value", "0")
+                .append("txreceipt_status", "1")
+                .append("gasUsed", "21000")
+                .append("effectiveGasPrice", "5000000000"));
+
+        OnChainClassificationResult classificationResult = new OnChainClassificationResult(
+                NormalizedTransactionType.LP_ENTRY_REQUEST,
+                NormalizedTransactionStatus.PENDING_PRICE,
+                ClassificationSource.HEURISTIC,
+                ConfidenceLevel.MEDIUM,
+                List.of(),
+                List.of(),
+                "gmx:request:1",
+                false,
+                null,
+                true,
+                "TEST_EXCLUSION",
+                "Test Protocol",
+                "v1"
+        );
+
+        NormalizedTransaction normalized = builder.build(rawTransaction, classificationResult, Instant.parse("2026-03-26T12:00:00Z"));
+
+        assertThat(normalized.getCorrelationId()).isEqualTo("gmx:request:1");
+        assertThat(normalized.getContinuityCandidate()).isFalse();
+        assertThat(normalized.getMatchedCounterparty()).isNull();
+        assertThat(normalized.getExcludedFromAccounting()).isTrue();
+        assertThat(normalized.getAccountingExclusionReason()).isEqualTo("TEST_EXCLUSION");
+        assertThat(normalized.getProtocolName()).isEqualTo("Test Protocol");
+    }
+
+    @Test
     @DisplayName("rebuild after reclassification preserves clarification counters from raw evidence")
     void rebuildAfterReclassificationPreservesClarificationCountersFromRawEvidence() {
         RawTransaction rawTransaction = new RawTransaction();
         rawTransaction.setTxHash("0xpqr");
         rawTransaction.setNetworkId("ETHEREUM");
         rawTransaction.setWalletAddress(WALLET);
+        rawTransaction.setClarificationEvidence(new Document()
+                .append("clarificationAttempts", 1)
+                .append("fullReceiptClarificationAttempts", 1)
+                .append("sourceFamily", "ETHERSCAN")
+                .append("receipt", new Document("txReceiptStatus", "1"))
+                .append("fullReceipt", new Document("status", "0x1")));
         rawTransaction.setRawData(new Document()
                 .append("timeStamp", "1700000000")
                 .append("transactionIndex", "6")
@@ -221,11 +297,7 @@ class OnChainNormalizedTransactionBuilderTest {
                 .append("value", "0")
                 .append("txreceipt_status", "1")
                 .append("gasUsed", "21000")
-                .append("effectiveGasPrice", "5000000000")
-                .append("clarificationEvidence", new Document()
-                        .append("sourceFamily", "ETHERSCAN")
-                        .append("receipt", new Document("txReceiptStatus", "1"))
-                        .append("fullReceipt", new Document("status", "0x1"))));
+                .append("effectiveGasPrice", "5000000000"));
 
         NormalizedTransaction existing = new NormalizedTransaction();
         existing.setId("0xpqr:ETHEREUM:" + WALLET);
@@ -240,6 +312,11 @@ class OnChainNormalizedTransactionBuilderTest {
                 ConfidenceLevel.MEDIUM,
                 List.of(),
                 List.of(),
+                null,
+                false,
+                null,
+                false,
+                null,
                 null,
                 null
         );

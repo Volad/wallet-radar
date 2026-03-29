@@ -3,6 +3,7 @@ package com.walletradar.ingestion.pipeline.clarification;
 import com.walletradar.domain.transaction.raw.RawSyncMethod;
 import com.walletradar.ingestion.adapter.evm.explorer.model.ExplorerReceipt;
 import com.walletradar.ingestion.pipeline.onchain.OnChainRawTransactionView;
+import com.walletradar.ingestion.pipeline.support.BsonCoercionSupport;
 import org.bson.Document;
 
 import java.util.List;
@@ -28,7 +29,6 @@ public record ClarificationReceiptEnrichment(
 
     public static Optional<ClarificationReceiptEnrichment> fromReceipt(
             ExplorerReceipt receipt,
-            ClarificationMode mode,
             RawSyncMethod sourceFamily,
             List<Document> tokenTransfers,
             List<Document> internalTransfers
@@ -38,7 +38,6 @@ public record ClarificationReceiptEnrichment(
         }
         return fromReceiptDocument(
                 receipt.asDocument(),
-                mode,
                 sourceFamily,
                 tokenTransfers,
                 internalTransfers
@@ -47,33 +46,27 @@ public record ClarificationReceiptEnrichment(
 
     public static Optional<ClarificationReceiptEnrichment> fromReceiptDocument(
             Document receipt,
-            ClarificationMode mode,
             RawSyncMethod sourceFamily,
             List<Document> tokenTransfers,
             List<Document> internalTransfers
     ) {
-        if (receipt == null) {
+        Document normalizedReceipt = BsonCoercionSupport.asDocument(receipt);
+        if (normalizedReceipt == null) {
             return Optional.empty();
         }
 
-        String txReceiptStatus = normalizeStatus(receipt.getString("status"));
-        String gasUsed = trimToNull(receipt.getString("gasUsed"));
-        String effectiveGasPrice = trimToNull(receipt.getString("effectiveGasPrice"));
+        String txReceiptStatus = normalizeStatus(normalizedReceipt.getString("status"));
+        String gasUsed = trimToNull(normalizedReceipt.getString("gasUsed"));
+        String effectiveGasPrice = trimToNull(normalizedReceipt.getString("effectiveGasPrice"));
         if (effectiveGasPrice == null) {
-            effectiveGasPrice = trimToNull(receipt.getString("gasPrice"));
+            effectiveGasPrice = trimToNull(normalizedReceipt.getString("gasPrice"));
         }
-        String contractAddress = OnChainRawTransactionView.normalizeAddress(receipt.getString("contractAddress"));
-        String blockNumber = trimToNull(receipt.getString("blockNumber"));
-        List<Document> receiptLogs = mode == ClarificationMode.FULL_RECEIPT
-                ? copyDocuments(readDocumentList(receipt, "logs"))
-                : List.of();
-        List<Document> copiedTokenTransfers = mode == ClarificationMode.FULL_RECEIPT
-                ? copyDocuments(tokenTransfers)
-                : List.of();
-        List<Document> copiedInternalTransfers = mode == ClarificationMode.FULL_RECEIPT
-                ? copyDocuments(internalTransfers)
-                : List.of();
-        Document fullReceiptPayload = mode == ClarificationMode.FULL_RECEIPT ? new Document(receipt) : null;
+        String contractAddress = OnChainRawTransactionView.normalizeAddress(normalizedReceipt.getString("contractAddress"));
+        String blockNumber = trimToNull(normalizedReceipt.getString("blockNumber"));
+        List<Document> receiptLogs = copyDocuments(readDocumentList(normalizedReceipt, "logs"));
+        List<Document> copiedTokenTransfers = copyDocuments(tokenTransfers);
+        List<Document> copiedInternalTransfers = copyDocuments(internalTransfers);
+        Document fullReceiptPayload = BsonCoercionSupport.copyDocument(normalizedReceipt);
 
         if (txReceiptStatus == null
                 && gasUsed == null
@@ -100,10 +93,10 @@ public record ClarificationReceiptEnrichment(
     }
 
     public boolean hasFullReceiptEvidence() {
-        return !receiptLogs.isEmpty()
+        return fullReceiptPayload != null
+                || !receiptLogs.isEmpty()
                 || !tokenTransfers.isEmpty()
-                || !internalTransfers.isEmpty()
-                || fullReceiptPayload != null;
+                || !internalTransfers.isEmpty();
     }
 
     private static String normalizeStatus(String value) {
@@ -133,17 +126,7 @@ public record ClarificationReceiptEnrichment(
         if (parent == null) {
             return List.of();
         }
-        Object raw = parent.get(key);
-        if (!(raw instanceof List<?> items) || items.isEmpty()) {
-            return List.of();
-        }
-        List<Document> documents = new java.util.ArrayList<>(items.size());
-        for (Object item : items) {
-            if (item instanceof Document document) {
-                documents.add(new Document(document));
-            }
-        }
-        return List.copyOf(documents);
+        return BsonCoercionSupport.asDocumentList(parent.get(key));
     }
 
     private static List<Document> copyDocuments(List<Document> documents) {
@@ -153,7 +136,7 @@ public record ClarificationReceiptEnrichment(
         List<Document> copies = new java.util.ArrayList<>(documents.size());
         for (Document document : documents) {
             if (document != null) {
-                copies.add(new Document(document));
+                copies.add(BsonCoercionSupport.copyDocument(document));
             }
         }
         return List.copyOf(copies);

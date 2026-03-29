@@ -26,6 +26,7 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-validation")
     implementation("com.github.ben-manes.caffeine:caffeine")
     implementation("io.github.resilience4j:resilience4j-ratelimiter:2.2.0")
+    implementation("org.bouncycastle:bcprov-jdk18on:1.80")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("org.testcontainers:testcontainers")

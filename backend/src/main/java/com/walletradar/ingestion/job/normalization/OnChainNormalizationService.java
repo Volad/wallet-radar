@@ -13,12 +13,15 @@ import com.walletradar.ingestion.pipeline.classification.OnChainClassificationRe
 import com.walletradar.ingestion.pipeline.onchain.OnChainNormalizedTransactionBuilder;
 import com.walletradar.ingestion.pipeline.onchain.OnChainRawTransactionView;
 import com.walletradar.ingestion.pipeline.onchain.PendingRawTransactionQueryService;
+import com.walletradar.ingestion.pipeline.clarification.OnChainLifecycleLinkService;
+import com.walletradar.ingestion.pipeline.clarification.RelatedLifecycleDiscoveryService;
 import com.walletradar.ingestion.pipeline.onchain.repair.ExplorerRawOrderingRepairGateway;
 import com.walletradar.ingestion.pipeline.onchain.support.RawOrderingMetadataResolver;
 import com.walletradar.ingestion.pipeline.onchain.support.ResolvedRawOrderingMetadata;
 import com.walletradar.ingestion.store.IdempotentNormalizedTransactionStore;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -33,8 +36,9 @@ import java.util.Set;
  */
 @Service
 @RequiredArgsConstructor
-@Slf4j
 public class OnChainNormalizationService {
+
+    private static final Logger log = LoggerFactory.getLogger(OnChainNormalizationService.class);
 
     private static final Comparator<RawTransaction> RAW_ORDER = Comparator
             .comparing(
@@ -54,6 +58,8 @@ public class OnChainNormalizationService {
     private final IdempotentNormalizedTransactionStore normalizedTransactionStore;
     private final RawTransactionRepository rawTransactionRepository;
     private final ExplorerRawOrderingRepairGateway explorerRawOrderingRepairGateway;
+    private final RelatedLifecycleDiscoveryService relatedLifecycleDiscoveryService;
+    private final OnChainLifecycleLinkService onChainLifecycleLinkService;
 
     public int processNextBatch() {
         List<RawTransaction> batch = new ArrayList<>(
@@ -93,8 +99,10 @@ public class OnChainNormalizationService {
 
         try {
             OnChainClassificationResult classificationResult = onChainClassifier.classify(rawTransaction);
-            normalizedTransactionStore.upsert(builder.build(rawTransaction, classificationResult, now));
+            var normalized = normalizedTransactionStore.upsert(builder.build(rawTransaction, classificationResult, now));
+            onChainLifecycleLinkService.link(rawTransaction, normalized);
             markComplete(rawTransaction);
+            relatedLifecycleDiscoveryService.discoverAndNormalize(rawTransaction, classificationResult);
             return true;
         } catch (RuntimeException ex) {
             log.warn("On-chain normalization shell failed for rawTxId={}: {}", rawTransaction.getId(), ex.getMessage());
@@ -158,6 +166,11 @@ public class OnChainNormalizationService {
                 ConfidenceLevel.LOW,
                 List.of(),
                 List.copyOf(reasons),
+                null,
+                false,
+                null,
+                false,
+                null,
                 null,
                 null
         );

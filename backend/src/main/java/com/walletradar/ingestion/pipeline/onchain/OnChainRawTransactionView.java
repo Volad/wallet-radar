@@ -3,6 +3,7 @@ package com.walletradar.ingestion.pipeline.onchain;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.ingestion.pipeline.onchain.support.RawOrderingMetadataResolver;
+import com.walletradar.ingestion.pipeline.support.BsonCoercionSupport;
 import org.bson.Document;
 
 import java.math.BigDecimal;
@@ -161,7 +162,9 @@ public final class OnChainRawTransactionView {
     }
 
     public List<Document> explorerTokenTransfers() {
-        List<Document> clarificationTransfers = readDocumentList(clarificationTransfersDocument(), "tokenTransfers");
+        List<Document> clarificationTransfers = shouldExposeReceiptClarificationEvidence()
+                ? readDocumentList(clarificationTransfersDocument(), "tokenTransfers")
+                : List.of();
         if (!clarificationTransfers.isEmpty()) {
             return clarificationTransfers;
         }
@@ -169,7 +172,9 @@ public final class OnChainRawTransactionView {
     }
 
     public List<Document> explorerInternalTransfers() {
-        List<Document> clarificationTransfers = readDocumentList(clarificationTransfersDocument(), "internalTransfers");
+        List<Document> clarificationTransfers = shouldExposeReceiptClarificationEvidence()
+                ? readDocumentList(clarificationTransfersDocument(), "internalTransfers")
+                : List.of();
         if (!clarificationTransfers.isEmpty()) {
             return clarificationTransfers;
         }
@@ -177,13 +182,17 @@ public final class OnChainRawTransactionView {
     }
 
     public List<Document> persistedLogs() {
-        List<Document> clarificationLogs = readDocumentList(clarificationReceiptDocument(), "logs");
-        if (!clarificationLogs.isEmpty()) {
-            return clarificationLogs;
-        }
-        List<Document> fullReceiptLogs = readDocumentList(clarificationFullReceiptDocument(), "logs");
+        List<Document> fullReceiptLogs = shouldExposeReceiptClarificationEvidence()
+                ? readDocumentList(clarificationFullReceiptDocument(), "logs")
+                : List.of();
         if (!fullReceiptLogs.isEmpty()) {
             return fullReceiptLogs;
+        }
+        List<Document> clarificationLogs = shouldExposeReceiptClarificationEvidence()
+                ? readDocumentList(clarificationReceiptDocument(), "logs")
+                : List.of();
+        if (!clarificationLogs.isEmpty()) {
+            return clarificationLogs;
         }
         Document rawData = rawTransaction.getRawData();
         return filterSyntheticLogs(readDocumentList(rawData, "logs"));
@@ -194,10 +203,10 @@ public final class OnChainRawTransactionView {
     }
 
     public boolean hasFullReceiptClarificationEvidence() {
-        if (clarificationEvidenceDocument() == null) {
+        if (!shouldExposeReceiptClarificationEvidence()) {
             return false;
         }
-        if (clarificationEvidenceDocument().get("fullReceipt") instanceof Document) {
+        if (clarificationFullReceiptDocument() != null) {
             return true;
         }
         Document transfers = clarificationTransfersDocument();
@@ -222,7 +231,7 @@ public final class OnChainRawTransactionView {
         if (explicitAttempts != null) {
             return Math.max(0, explicitAttempts);
         }
-        return hasFullReceiptClarificationEvidence() ? 1 : 0;
+        return 0;
     }
 
     public String tokenTransferFrom(Document transfer) {
@@ -369,21 +378,18 @@ public final class OnChainRawTransactionView {
         if (explorer == null) {
             return null;
         }
-        Object txObject = explorer.get("tx");
-        return txObject instanceof Document tx ? tx : null;
+        return BsonCoercionSupport.asDocument(explorer.get("tx"));
     }
 
     private Document readExplorerSection() {
-        Object explorer = readRawField("explorer");
-        if (explorer instanceof Document document) {
-            return document;
-        }
-        return null;
+        return BsonCoercionSupport.asDocument(readRawField("explorer"));
     }
 
     private Document clarificationEvidenceDocument() {
-        Object clarificationEvidence = readRawField("clarificationEvidence");
-        return clarificationEvidence instanceof Document document ? document : null;
+        if (rawTransaction.getClarificationEvidence() != null) {
+            return BsonCoercionSupport.asDocument(rawTransaction.getClarificationEvidence());
+        }
+        return BsonCoercionSupport.asDocument(readRawField("clarificationEvidence"));
     }
 
     private Document clarificationReceiptDocument() {
@@ -391,8 +397,7 @@ public final class OnChainRawTransactionView {
         if (clarificationEvidence == null) {
             return null;
         }
-        Object receipt = clarificationEvidence.get("receipt");
-        return receipt instanceof Document document ? document : null;
+        return BsonCoercionSupport.asDocument(clarificationEvidence.get("receipt"));
     }
 
     private Document clarificationTransfersDocument() {
@@ -400,8 +405,7 @@ public final class OnChainRawTransactionView {
         if (clarificationEvidence == null) {
             return null;
         }
-        Object transfers = clarificationEvidence.get("transfers");
-        return transfers instanceof Document document ? document : null;
+        return BsonCoercionSupport.asDocument(clarificationEvidence.get("transfers"));
     }
 
     private Document clarificationFullReceiptDocument() {
@@ -409,8 +413,7 @@ public final class OnChainRawTransactionView {
         if (clarificationEvidence == null) {
             return null;
         }
-        Object fullReceipt = clarificationEvidence.get("fullReceipt");
-        return fullReceipt instanceof Document document ? document : null;
+        return BsonCoercionSupport.asDocument(clarificationEvidence.get("fullReceipt"));
     }
 
     private Object clarificationEvidenceValue(String key) {
@@ -419,6 +422,27 @@ public final class OnChainRawTransactionView {
             return null;
         }
         return clarificationEvidence.get(key);
+    }
+
+    private boolean shouldExposeReceiptClarificationEvidence() {
+        Integer explicitAttempts = parseInteger(clarificationEvidenceValue("fullReceiptClarificationAttempts"));
+        if (explicitAttempts != null && explicitAttempts > 0) {
+            return true;
+        }
+        Document clarificationEvidence = clarificationEvidenceDocument();
+        if (clarificationEvidence == null || clarificationEvidence.isEmpty()) {
+            return false;
+        }
+        Document fullReceipt = clarificationFullReceiptDocument();
+        if (fullReceipt != null && !fullReceipt.isEmpty()) {
+            return true;
+        }
+        Document receipt = clarificationReceiptDocument();
+        if (receipt != null && !receipt.isEmpty()) {
+            return true;
+        }
+        Document transfers = clarificationTransfersDocument();
+        return transfers != null && !transfers.isEmpty();
     }
 
     private boolean isTransferRowBackedTopLevel() {
@@ -450,17 +474,7 @@ public final class OnChainRawTransactionView {
         if (parent == null) {
             return List.of();
         }
-        Object raw = parent.get(key);
-        if (!(raw instanceof List<?> items) || items.isEmpty()) {
-            return List.of();
-        }
-        List<Document> documents = new ArrayList<>(items.size());
-        for (Object item : items) {
-            if (item instanceof Document document) {
-                documents.add(document);
-            }
-        }
-        return Collections.unmodifiableList(documents);
+        return Collections.unmodifiableList(new ArrayList<>(BsonCoercionSupport.asDocumentList(parent.get(key))));
     }
 
     private static List<Document> filterSyntheticLogs(List<Document> logs) {

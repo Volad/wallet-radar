@@ -11,6 +11,7 @@ import com.walletradar.ingestion.adapter.evm.explorer.model.ExplorerTransactionD
 import com.walletradar.ingestion.adapter.evm.explorer.model.ExplorerTransaction;
 import com.walletradar.ingestion.config.IngestionExplorerProperties;
 import com.walletradar.ingestion.config.IngestionNetworkProperties;
+import com.walletradar.ingestion.pipeline.support.BsonCoercionSupport;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.bson.Document;
@@ -120,6 +121,58 @@ public class BlockScoutExplorerProvider implements ExplorerProvider {
             return null;
         }
         return new ExplorerReceipt(toDocument(result));
+    }
+
+    public List<ExplorerTokenTransfer> getTransactionTokenTransfers(String txHash, NetworkId networkId) {
+        JsonNode root = callTransactionSubresource(networkId, txHash, "token-transfers");
+        JsonNode items = itemsNode(root);
+        if (items == null || !items.isArray()) {
+            return List.of();
+        }
+        List<ExplorerTokenTransfer> out = new ArrayList<>();
+        for (JsonNode node : items) {
+            Document raw = toDocument(node);
+            Document token = BsonCoercionSupport.asDocument(raw.get("token"));
+            Document from = BsonCoercionSupport.asDocument(raw.get("from"));
+            Document to = BsonCoercionSupport.asDocument(raw.get("to"));
+            Document normalized = new Document();
+            normalized.put("hash", stringValue(raw.get("transaction_hash")));
+            normalized.put("blockNumber", stringifyNumber(raw.get("block_number")));
+            normalized.put("timeStamp", stringValue(raw.get("timestamp")));
+            normalized.put("contractAddress", stringValue(token == null ? null : token.get("address_hash")));
+            normalized.put("from", stringValue(from == null ? null : from.get("hash")));
+            normalized.put("to", stringValue(to == null ? null : to.get("hash")));
+            normalized.put("value", stringValue(raw.get("total")));
+            normalized.put("tokenDecimal", stringValue(token == null ? null : token.get("decimals")));
+            normalized.put("tokenSymbol", stringValue(token == null ? null : token.get("symbol")));
+            normalized.put("tokenName", stringValue(token == null ? null : token.get("name")));
+            out.add(new ExplorerTokenTransfer(normalized));
+        }
+        return List.copyOf(out);
+    }
+
+    public List<ExplorerInternalTransfer> getTransactionInternalTransfers(String txHash, NetworkId networkId) {
+        JsonNode root = callTransactionSubresource(networkId, txHash, "internal-transactions");
+        JsonNode items = itemsNode(root);
+        if (items == null || !items.isArray()) {
+            return List.of();
+        }
+        List<ExplorerInternalTransfer> out = new ArrayList<>();
+        for (JsonNode node : items) {
+            Document raw = toDocument(node);
+            Document from = BsonCoercionSupport.asDocument(raw.get("from"));
+            Document to = BsonCoercionSupport.asDocument(raw.get("to"));
+            Document normalized = new Document();
+            normalized.put("hash", stringValue(raw.get("transaction_hash")));
+            normalized.put("blockNumber", stringifyNumber(raw.get("block_number")));
+            normalized.put("timeStamp", stringValue(raw.get("timestamp")));
+            normalized.put("from", stringValue(from == null ? null : from.get("hash")));
+            normalized.put("to", stringValue(to == null ? null : to.get("hash")));
+            normalized.put("value", stringValue(raw.get("value")));
+            normalized.put("isError", isSuccessful(raw) ? "0" : "1");
+            out.add(new ExplorerInternalTransfer(normalized));
+        }
+        return List.copyOf(out);
     }
 
     private <T> List<T> callAccountList(
@@ -279,6 +332,53 @@ public class BlockScoutExplorerProvider implements ExplorerProvider {
         } else {
             log.warn("Blockscout tx-details call failed on {} after retries: txHash={}, cause=unknown",
                     networkId, txHash);
+        }
+        return null;
+    }
+
+    private JsonNode callTransactionSubresource(NetworkId networkId, String txHash, String subresource) {
+        ResolvedExplorerConfig cfg = resolveConfig(networkId);
+        if (cfg == null || cfg.entry() == null || txHash == null || txHash.isBlank() || subresource == null || subresource.isBlank()) {
+            return null;
+        }
+        RetryPolicy retryPolicy = new RetryPolicy(
+                Math.max(100L, explorerProperties.getBaseDelayMs()),
+                Math.max(0.0, explorerProperties.getJitterFactor()),
+                Math.max(1, explorerProperties.getMaxAttempts())
+        );
+
+        Exception last = null;
+        Map<String, String> queryParams = new LinkedHashMap<>();
+        if (cfg.entry().getApiKey() != null && !cfg.entry().getApiKey().isBlank()) {
+            queryParams.put("apikey", cfg.entry().getApiKey());
+        }
+
+        for (int attempt = 0; attempt < retryPolicy.getMaxAttempts(); attempt++) {
+            if (attempt > 0) {
+                sleepQuietly(retryPolicy.delayMs(attempt - 1));
+            }
+            try {
+                JsonNode root = execute(buildV2TransactionSubresourceUrl(cfg, txHash, subresource, queryParams));
+                if (root == null) {
+                    continue;
+                }
+                if (isV2Error(root)) {
+                    throw new IllegalStateException("Blockscout tx-subresource error: " + errorMessage(root));
+                }
+                return root;
+            } catch (Exception e) {
+                if (isNotFound(e)) {
+                    return null;
+                }
+                last = e;
+            }
+        }
+        if (last != null) {
+            log.warn("Blockscout tx-subresource call failed on {} after retries: txHash={}, subresource={}, cause={}",
+                    networkId, txHash, subresource, last.getMessage(), last);
+        } else {
+            log.warn("Blockscout tx-subresource call failed on {} after retries: txHash={}, subresource={}, cause=unknown",
+                    networkId, txHash, subresource);
         }
         return null;
     }
@@ -517,6 +617,66 @@ public class BlockScoutExplorerProvider implements ExplorerProvider {
         return builder.build(true).toUriString();
     }
 
+    private static String buildV2TransactionSubresourceUrl(
+            ResolvedExplorerConfig cfg,
+            String txHash,
+            String subresource,
+            Map<String, String> params
+    ) {
+        IngestionNetworkProperties.NetworkIngestionEntry.ExplorerSource entry = cfg.entry();
+        String baseUrl = entry.getBaseUrl().trim();
+        String encodedHash = UriUtils.encodePathSegment(txHash, StandardCharsets.UTF_8);
+        String encodedSubresource = UriUtils.encodePathSegment(subresource, StandardCharsets.UTF_8);
+        UriComponentsBuilder builder;
+        if (baseUrl.endsWith("/api/v2")) {
+            builder = UriComponentsBuilder.fromHttpUrl(baseUrl + "/transactions/" + encodedHash + "/" + encodedSubresource);
+        } else if (baseUrl.endsWith("/api/v2/")) {
+            builder = UriComponentsBuilder.fromHttpUrl(baseUrl + "transactions/" + encodedHash + "/" + encodedSubresource);
+        } else if (baseUrl.endsWith("/")) {
+            builder = UriComponentsBuilder.fromHttpUrl(baseUrl + "api/v2/transactions/" + encodedHash + "/" + encodedSubresource);
+        } else {
+            builder = UriComponentsBuilder.fromHttpUrl(baseUrl + "/api/v2/transactions/" + encodedHash + "/" + encodedSubresource);
+        }
+        if (params != null) {
+            for (Map.Entry<String, String> p : params.entrySet()) {
+                builder.queryParam(p.getKey(), p.getValue());
+            }
+        }
+        return builder.build(true).toUriString();
+    }
+
+    private static JsonNode itemsNode(JsonNode root) {
+        if (root == null || root.isMissingNode() || root.isNull()) {
+            return null;
+        }
+        JsonNode items = root.path("items");
+        return items.isMissingNode() ? null : items;
+    }
+
+    private static boolean isSuccessful(Document raw) {
+        Object success = raw == null ? null : raw.get("success");
+        if (success instanceof Boolean value) {
+            return value;
+        }
+        String text = stringValue(success);
+        return text == null || !"false".equalsIgnoreCase(text);
+    }
+
+    private static String stringifyNumber(Object value) {
+        if (value instanceof Number number) {
+            return Long.toString(number.longValue());
+        }
+        return stringValue(value);
+    }
+
+    private static String stringValue(Object value) {
+        if (value == null) {
+            return null;
+        }
+        String text = value.toString().trim();
+        return text.isEmpty() ? null : text;
+    }
+
     private static void sleepQuietly(long ms) {
         try {
             Thread.sleep(ms);
@@ -543,7 +703,7 @@ public class BlockScoutExplorerProvider implements ExplorerProvider {
         if (node == null || node.isNull() || node.isMissingNode()) {
             return new Document();
         }
-        return objectMapper.convertValue(node, Document.class);
+        return BsonCoercionSupport.asDocument(objectMapper.convertValue(node, Document.class));
     }
 
     private record ResolvedExplorerConfig(IngestionNetworkProperties.NetworkIngestionEntry.ExplorerSource entry) {

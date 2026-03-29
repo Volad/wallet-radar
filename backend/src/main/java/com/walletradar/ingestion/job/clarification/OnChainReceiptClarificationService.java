@@ -7,16 +7,18 @@ import com.walletradar.domain.transaction.raw.RawTransactionRepository;
 import com.walletradar.ingestion.config.OnChainClarificationProperties;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassificationResult;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassifier;
-import com.walletradar.ingestion.pipeline.clarification.ClarificationMode;
 import com.walletradar.ingestion.pipeline.clarification.ClarificationReceiptEnrichment;
+import com.walletradar.ingestion.pipeline.clarification.OnChainLifecycleLinkService;
 import com.walletradar.ingestion.pipeline.clarification.PendingReceiptClarificationQueryService;
-import com.walletradar.ingestion.pipeline.clarification.ReceiptClarificationEligibilitySupport;
 import com.walletradar.ingestion.pipeline.clarification.RawTransactionClarificationEnricher;
+import com.walletradar.ingestion.pipeline.clarification.ReceiptClarificationEligibilitySupport;
 import com.walletradar.ingestion.pipeline.clarification.ReceiptClarificationGateway;
+import com.walletradar.ingestion.pipeline.clarification.RelatedLifecycleDiscoveryService;
 import com.walletradar.ingestion.pipeline.onchain.OnChainNormalizedTransactionBuilder;
 import com.walletradar.ingestion.pipeline.onchain.OnChainRawTransactionView;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -29,8 +31,9 @@ import java.util.Optional;
  */
 @Service
 @RequiredArgsConstructor
-@Slf4j
 public class OnChainReceiptClarificationService {
+
+    private static final Logger log = LoggerFactory.getLogger(OnChainReceiptClarificationService.class);
 
     private final PendingReceiptClarificationQueryService pendingReceiptClarificationQueryService;
     private final OnChainClarificationProperties properties;
@@ -40,6 +43,8 @@ public class OnChainReceiptClarificationService {
     private final OnChainClassifier onChainClassifier;
     private final OnChainNormalizedTransactionBuilder builder;
     private final NormalizedTransactionRepository normalizedTransactionRepository;
+    private final RelatedLifecycleDiscoveryService relatedLifecycleDiscoveryService;
+    private final OnChainLifecycleLinkService onChainLifecycleLinkService;
 
     public int processNextBatch() {
         List<NormalizedTransaction> batch = pendingReceiptClarificationQueryService.loadNextBatch(
@@ -71,19 +76,15 @@ public class OnChainReceiptClarificationService {
         }
 
         try {
-            Optional<ClarificationReceiptEnrichment> enrichment = clarificationGateway.fetch(
-                    rawTransaction,
-                    ClarificationMode.FULL_RECEIPT
-            );
+            Optional<ClarificationReceiptEnrichment> enrichment = clarificationGateway.fetchReceiptWithTransferEvidence(rawTransaction);
             if (enrichment.isEmpty()) {
                 markFailure(normalizedTransaction, rawTransaction, "CLARIFICATION_FULL_RECEIPT_UNAVAILABLE", now);
                 return false;
             }
 
             rawTransactionClarificationEnricher.merge(rawTransaction, enrichment.get());
-            rawTransactionClarificationEnricher.recordAttempt(
+            rawTransactionClarificationEnricher.recordFullReceiptAttempt(
                     rawTransaction,
-                    ClarificationMode.FULL_RECEIPT,
                     safeAttempts(normalizedTransaction.getFullReceiptClarificationAttempts()),
                     null
             );
@@ -96,7 +97,9 @@ public class OnChainReceiptClarificationService {
                     classificationResult,
                     now
             );
-            normalizedTransactionRepository.save(reclassified);
+            reclassified = normalizedTransactionRepository.save(reclassified);
+            onChainLifecycleLinkService.link(rawTransaction, reclassified);
+            relatedLifecycleDiscoveryService.discoverAndNormalize(rawTransaction, classificationResult);
             return true;
         } catch (RuntimeException ex) {
             log.warn("On-chain full-receipt clarification failed for normalizedTxId={}: {}", normalizedTransaction.getId(), ex.getMessage());
@@ -113,9 +116,8 @@ public class OnChainReceiptClarificationService {
     ) {
         int nextAttempts = safeAttempts(normalizedTransaction.getFullReceiptClarificationAttempts()) + 1;
         if (rawTransaction != null) {
-            nextAttempts = rawTransactionClarificationEnricher.recordAttempt(
+            nextAttempts = rawTransactionClarificationEnricher.recordFullReceiptAttempt(
                     rawTransaction,
-                    ClarificationMode.FULL_RECEIPT,
                     safeAttempts(normalizedTransaction.getFullReceiptClarificationAttempts()),
                     reason
             );

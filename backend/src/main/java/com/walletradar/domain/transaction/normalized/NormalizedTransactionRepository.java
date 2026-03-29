@@ -20,6 +20,12 @@ public interface NormalizedTransactionRepository extends MongoRepository<Normali
 
     Optional<NormalizedTransaction> findByClientId(String clientId);
 
+    List<NormalizedTransaction> findAllByTxHashAndNetworkIdAndSource(
+            String txHash,
+            NetworkId networkId,
+            NormalizedTransactionSource source
+    );
+
     List<NormalizedTransaction> findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
             NormalizedTransactionStatus status
     );
@@ -27,5 +33,12 @@ public interface NormalizedTransactionRepository extends MongoRepository<Normali
     List<NormalizedTransaction> findAllByWalletAddressInAndStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
             Collection<String> walletAddresses,
             NormalizedTransactionStatus status
+    );
+
+    List<NormalizedTransaction> findAllByCorrelationIdInAndSourceAndWalletAddressAndNetworkId(
+            Collection<String> correlationIds,
+            NormalizedTransactionSource source,
+            String walletAddress,
+            NetworkId networkId
     );
 }

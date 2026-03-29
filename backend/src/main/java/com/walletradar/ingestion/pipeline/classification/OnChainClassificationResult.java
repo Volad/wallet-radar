@@ -18,6 +18,11 @@ public record OnChainClassificationResult(
         ConfidenceLevel confidence,
         List<NormalizedTransaction.Flow> flows,
         List<String> missingDataReasons,
+        String correlationId,
+        Boolean continuityCandidate,
+        String matchedCounterparty,
+        Boolean excludedFromAccounting,
+        String accountingExclusionReason,
         String protocolName,
         String protocolVersion
 ) {

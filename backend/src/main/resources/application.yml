@@ -79,7 +79,7 @@ walletradar:
           - https://arbitrum-one-rpc.publicnode.com
           - https://arbitrum.blockpi.network/v1/rpc/public
           - https://arbitrum.meowrpc.com
-#          - https://rpc.ankr.com/arbitrum/${ANKR_API_KEY:}
+          #          - https://rpc.ankr.com/arbitrum/${ANKR_API_KEY:}
           - https://lb.drpc.live/arbitrum/${DRPC_API_KEY:}
         batch-block-size: 500
         window-blocks: 252000000   # ~2 years at ~4 blocks/s
@@ -138,7 +138,7 @@ walletradar:
           base-url: https://rpc.ankr.com/multichain/${ANKR_API_KEY:}
           page-size: 100
         urls:
-#          - https://lb.drpc.live/bsc/${DRPC_API_KEY:}
+          #          - https://lb.drpc.live/bsc/${DRPC_API_KEY:}
           - https://rpc.ankr.com/bsc/${ANKR_API_KEY:}
         batch-block-size: 250000
         window-blocks: 31500000    # tuned from earliest verified wallet tx at block 56,750,955 with ~0.53M safety from last known head
@@ -243,27 +243,52 @@ walletradar:
       # Max signatures per getSignaturesForAddress call (1-1000). Rate/batch limit.
       signatures-limit: 1000
     # RPC retry: exponential backoff ± jitter. Defaults: base-delay-ms=1000, jitter-factor=0.2, max-attempts=5
+    retry:
+      base-delay-ms: 2000
+      # jitter-factor: 0.2
+      max-attempts: 7
   normalization:
     on-chain:
       enabled: true
       batch-size: 250
       schedule-interval-ms: 90000
       retry-delay-seconds: 60
+    bybit:
+      enabled: true
+      batch-size: 250
+      schedule-interval-ms: 90000
     clarification:
       enabled: true
       batch-size: 100
-      schedule-interval-ms: 120000
       retry-delay-seconds: 120
       max-attempts: 3
       full-receipt:
         enabled: true
         batch-size: 50
         retry-delay-seconds: 300
-        max-attempts: 1
-    retry:
-      base-delay-ms: 2000
-      # jitter-factor: 0.2
-      max-attempts: 7
+        max-attempts: 2
+      related-discovery:
+        enabled: true
+        forward-block-window: 750000
+        max-pages: 3
+
+  costbasis:
+    enabled: false
+    validation-batch-size: 250
+    schedule-interval-ms: 120000
+    retry-delay-seconds: 120
+
+  pricing:
+    enabled: false
+    batch-size: 150
+    schedule-interval-ms: 120000
+    retry-delay-seconds: 120
+    external:
+      request-timeout-ms: 10000
+      binance:
+        base-url: https://api.binance.com
+      coin-gecko:
+        base-url: https://api.coingecko.com/api/v3
   scam-filter:
     enabled: true
     drop-threshold: 100

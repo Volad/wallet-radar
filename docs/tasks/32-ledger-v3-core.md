@@ -96,22 +96,21 @@ Implementation handoff:
 - [ ] Economic rows may enter `PENDING_PRICE` or `CONFIRMED` only when persisted raw or persisted clarification evidence contains non-fee movement evidence sufficient for pricing and later basis replay; fee-only rows may remain priceable only when their resolved type is explicitly non-economic.
 - [ ] Pricing / AVCO does not start until the post-rerun live audit shows zero resolved wrapped-native continuity leaks, zero resolved recognized Across `depositV3(...)` leaks, zero route-tagged bridge-initiation leaks into `EXTERNAL_TRANSFER_OUT`, zero Circle CCTP `redeem(...)` leaks into `VAULT_WITHDRAW`, zero explicit receiver-wallet claim payout leaks into `EXTERNAL_INBOUND`, zero pending redeem-request initiation leaks into priceable `EXTERNAL_TRANSFER_OUT`, and zero priceable GMX `createOrder(...)` rows without finalized settlement semantics.
 - [ ] Pricing / AVCO does not start until the post-rerun live audit also shows zero resolved self-promotional / spam-like inbound families leaking into priceable `EXTERNAL_INBOUND`, zero trusted Velodrome Slipstream `increaseLiquidity(...)` rows leaking into `EXTERNAL_TRANSFER_OUT`, and zero trusted Velodrome stake-contract actions leaking into generic `EXTERNAL_INBOUND`.
-- [ ] Pricing / AVCO does not start until the post-rerun live audit also shows zero run/9 basis-blocking review rows across the audited families:
-  - Base Pancake / Infinity LP-exit container
-    `0x0a757aeeb58667c545017cd8e5cd60dc994a8945ed810c60ea2aed18688f4f7a`
-  - Avalanche Euler `batch(...)`
-    `0x1e0c429514e9cf892b0b6a11e3cfb290eff5c0c26a557c835496e4ba61717fdb`
-  - Avalanche Euler `batch(...)`
-    `0x233c2b959739d298d1012405e9b3d7e535a87d590a81bcb304c6dc0cb3ce5e4f`
-  - Avalanche Euler `batch(...)`
-    `0x305f37a69956a13001962216c845385996114876173bdbaef644bbe3baadf5df`
-- [ ] Pricing / AVCO does not start until the post-rerun live audit also shows that safe stop-condition rows which already have explicit non-economic semantics no longer remain in `NEEDS_REVIEW`.
+- [ ] Pricing / AVCO starts only after the post-rerun live audit shows zero priceable resolved-lane promo/spam leakage; the post-`run/13` gate is already green and must stay green on future reruns.
+- [ ] `NEEDS_REVIEW = 0` and `PENDING_CLARIFICATION = 0` are necessary but still not sufficient signals on their own; the live audit remains the release gate for pricing.
 - [ ] `0x0088de663d549fbc58dfa8dbba4180a346a580b1d6277254fa84a8ed9c27967a` may close as `LP_ENTRY` only if persisted proof shows positive liquidity-add or tracked-wallet funding into the CL manager / pool. When persisted receipt instead proves zero-effect `modifyLiquidities(...)` (`liquidityDelta = 0`, `liquidityChange = 0`, `feesAccrued = 0`) and no economic transfers, the row must narrow to an explicit non-priceable terminal stop-condition and leave `NEEDS_REVIEW`.
 - [ ] The run/6 closeout slice requires `normalization + clarification` rerun only; no new backfill is required to achieve the planned review-tail reduction.
 - [ ] The run/7 closeout slice also requires `normalization + clarification` rerun only; no new backfill is required for the remaining pricing blockers or clarification replay-safety fixes.
-- [ ] The run/9 closeout slice requires `normalization + clarification` rerun only; no new backfill is required for the remaining pricing blockers or safe stop-condition demotion work.
+- [ ] The post-`run/13` pricing milestone requires no new backfill; the current raw and normalized datasets are sufficient to begin implementing and validating pricing.
 - [ ] Missing `rawData.transactionIndex` is repaired before canonical normalization or surfaced explicitly as a blocker; no guessed ordering index is allowed.
-- [ ] Historical pricing follows the order: stablecoin parity -> swap-derived -> wrapper/native mapping -> CoinGecko historical -> unresolved price flag.
+- [ ] Historical pricing follows the order: stablecoin parity -> exact execution price from canonical source evidence -> swap-derived -> wrapper/native mapping -> Binance historical -> CoinGecko historical fallback -> unresolved price flag.
+- [ ] `SWAP` pricing uses canonical wallet-boundary execution ratio before any external candle source.
+- [ ] `LP_ENTRY`, `LP_EXIT`, matched bridge continuity, protocol custody, lending continuity, vault continuity, and staking continuity do not require principal market pricing to preserve basis; only explicit fee or reward side-flows require pricing.
+- [ ] `EXTERNAL_INBOUND`, `REWARD_CLAIM`, and `LP_FEE_CLAIM` use receive-time fair market value when deterministic tx-local pricing does not already exist.
+- [ ] `EXTERNAL_TRANSFER_OUT` uses event-time fair market value unless the row has already been normalized into explicit continuity or pending-request semantics.
+- [ ] Binance is the primary external market-data source for listed assets; CoinGecko is bounded fallback and may not be the assumed backbone for a two-year long-tail DeFi pricing pipeline.
+- [ ] Bybit trade rows use exact ledger execution price before any external market-data lookup.
+- [ ] Bybit withdraw/deposit correlation is required before final unified AVCO replay, but Bybit ledger data is not required to resolve on-chain tx prices themselves.
 - [ ] `PRICE_UNKNOWN` does not drop quantity from replay and sets incomplete-history signaling.
 - [ ] AVCO replay is deterministic by `blockTimestamp ASC`, then `transactionIndex ASC`, then `_id ASC`.
 - [ ] `KATANA` and `PLASMA` are treated as supported accounting networks in docs, requirements, and replay rules.
@@ -150,6 +149,14 @@ Implementation handoff:
 - Case: `claimSharesAndRequestRedeem(uint256 sharesToRedeem)` burns or transfers vault shares but no settlement asset has arrived yet | Scope: In | Expected behaviour: row stays non-priceable pending-redeem/request-initiation semantics, not `EXTERNAL_TRANSFER_OUT`.
 - Case: raw row persists `clarificationEvidence`, but the paired normalized row still shows zero clarification attempt counters | Scope: In | Expected behaviour: row is surfaced as a telemetry mismatch and cannot be silently treated as if clarification never ran.
 - Case: current raw already proves a spam / airdrop family from repeated inbound-only fingerprints | Scope: In | Expected behaviour: row leaves `NEEDS_REVIEW` for an explicit non-priceable terminal spam / airdrop lane; clarification is not required.
+- Case: `SWAP` has one stablecoin leg and one volatile leg | Scope: In | Expected behaviour: volatile leg price is derived from the executed ratio, not from Binance/CoinGecko candle.
+- Case: `SWAP` has two volatile legs but one leg has deterministic external price at block time | Scope: In | Expected behaviour: the known leg is priced externally once and the other is derived from the same executed ratio.
+- Case: `LP_ENTRY` deposits principal into concentrated-liquidity custody | Scope: In | Expected behaviour: principal basis carries into custody; pricing is required only for explicit fee/reward subflows, not to mint synthetic BUY/SELL.
+- Case: `LP_EXIT` returns principal plus collected fees | Scope: In | Expected behaviour: returned principal is continuity, collected fee delta is priced as `LP_FEE_CLAIM`.
+- Case: matched `BRIDGE_OUT` plus `BRIDGE_IN` pair across networks | Scope: In | Expected behaviour: principal carries basis with no duplicated external pricing on both sides.
+- Case: unmatched bridge send remains explicit continuity/pending family | Scope: In | Expected behaviour: the pricing stage does not invent a synthetic disposal just to assign USD.
+- Case: Bybit trade row already carries exact execution price | Scope: In | Expected behaviour: pricing uses the ledger execution price and does not call Binance/CoinGecko for the principal leg.
+- Case: token is unlisted on Binance and has no deterministic tx-local pricing | Scope: In | Expected behaviour: CoinGecko fallback is attempted when supported; otherwise the row becomes `PRICE_UNKNOWN` with incomplete-history signaling.
 - Case: current raw already proves `CLAIM_WITHOUT_MOVEMENT` for the tracked wallet | Scope: In | Expected behaviour: row leaves `NEEDS_REVIEW` for an explicit terminal no-movement claim state; it does not wait for clarification.
 - Case: current raw proves an admin / governance / pending-request family such as `approveDelegation(...)`, `createProxyWithNonce(...)`, `vote(...)`, `reset(...)`, `allow(...)`, or `claimSharesAndRequestRedeem(...)` | Scope: In | Expected behaviour: row narrows to explicit non-priceable terminal semantics and does not remain generic review.
 - Case: Trader Joe `LBRouter.addLiquidity(...)` sends two assets out and may refund leftovers | Scope: In | Expected behaviour: canonical type is `LP_ENTRY`, not `LENDING_DEPOSIT`.
@@ -235,7 +242,7 @@ Implementation handoff:
 4. On-chain normalization rewrite — rebuild classification, leg extraction, special-handler dispatch, wrapper/router fast-paths, and canonical construction from `raw_transactions` under strict ordering and evidence rules. Depends on: 1, 2, 3.
 5. Clarification rewrite — implement receipt enrichment with explicit eligibility gating, metadata-safe defaults, allowlisted full-receipt persistence, and deterministic persistence of clarification evidence back onto `raw_transactions`. Depends on: 4.
 6. Clarification residual closeout — add bounded receipt-log reclassification, intentional-review lock for receipt-insufficient families, and evidence-persistence parity checks between normalized counters and raw evidence. Depends on: 4, 5.
-7. Pricing rewrite — implement the new resolver chain, unresolved-price handling, and an evidence gate that blocks fee-only economic rows from entering pricing or replay. Depends on: 1, 4, 5, 6.
+7. Pricing rewrite — implement event-local resolvers first, Binance primary external source, CoinGecko bounded fallback, Bybit execution-price reuse, deterministic historical price caching, and an evidence gate that blocks fee-only economic rows from entering pricing or replay. Depends on: 1, 4, 5, 6.
 8. Bybit normalization rewrite — pair UTA trades with sliding `±5 sec`, correlate withdraw/deposit rows by `txHash`, and emit canonical correlated docs. Depends on: 1.
 9. AVCO/reconciliation rewrite — replay confirmed canonical docs with transfer carry-over and correlation semantics. Depends on: 1, 7, 8.
 10. Determinism and blocker reporting — add explicit blocker/warning outputs and deterministic ordering guarantees across all replay inputs. Depends on: 4, 8, 9.
@@ -245,6 +252,7 @@ Implementation handoff:
 
 - Assumption: raw collection quality is already sufficient; this milestone starts after data acquisition.
 - Assumption: Bybit remains the only CEX source in the near term.
+- Assumption: Binance coverage is sufficient for majors and listed assets, but not for the full DeFi long tail; tx-local pricing and explicit `PRICE_UNKNOWN` remain first-class behaviors.
 - Risk: transfer carry-over semantics are implemented incompletely and reintroduce double-counting | Mitigation: require correlation tests covering matched deposit/withdraw pairs.
 - Risk: network support drifts from code/config again | Mitigation: keep docs aligned with `NetworkId` and pricing/normalization coverage.
 - Risk: unresolved-price behavior gets treated as hard failure | Mitigation: preserve quantity movement and surface explicit incomplete-history flags.
@@ -270,4 +278,5 @@ Implementation handoff:
 - Risk: clarification observability drifts so raw shows persisted receipt evidence while normalized counters still claim no clarification happened | Mitigation: add live-parity checks between raw clarification evidence and normalized clarification attempt counters, and treat drift as a warning that must be fixed before readiness is declared.
 - Risk: clarification writes receipt-safe scalar fields into `rawData.*` but fails to persist the authoritative clarification-evidence block in one canonical raw-level location | Mitigation: enforce one canonical clarification storage contract that both runtime classification and live Mongo audits read, and derive normalized clarification counters from that persisted raw state only.
 - Risk: self-promotional Base / Plasma spam clusters are treated as priceable `EXTERNAL_INBOUND` and pollute inventory, pricing, and AVCO | Mitigation: demote repeatable spam / airdrop families into explicit non-priceable terminal semantics before pricing.
+- Open question: whether a self-hosted long-tail DEX price index is needed after MVP if Binance plus bounded CoinGecko fallback still leaves too many non-listed assets unresolved.
 - Risk: concentrated-liquidity container calls are over-promoted from contract identity alone | Mitigation: require persisted proof of economic direction, such as collect / withdrawal / unwrap continuity for Base `0x0a757...` and positive liquidity-add or tracked-wallet funding evidence for BSC `0x0088...`, before they can leave review.

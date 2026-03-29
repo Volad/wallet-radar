@@ -44,7 +44,7 @@ public final class LpPositionLifecycleSupport {
             Optional<ProtocolRegistryEntry> decodedToEntry
     ) {
         return switch (String.valueOf(view.methodId())) {
-            case MINT_SELECTOR, STRUCT_MINT_SELECTOR, INCREASE_LIQUIDITY_SELECTOR ->
+            case MINT_SELECTOR, STRUCT_MINT_SELECTOR, INCREASE_LIQUIDITY_SELECTOR, MASTER_CHEF_INCREASE_LIQUIDITY_SELECTOR ->
                     hasOutboundNonFeeLeg(movementLegs) || hasPositionNftMintLog(view)
                             ? NormalizedTransactionType.LP_ENTRY
                             : null;
@@ -69,12 +69,8 @@ public final class LpPositionLifecycleSupport {
             List<RawLeg> movementLegs
     ) {
         return switch (String.valueOf(view.methodId())) {
-            case STAKE_DEPOSIT_SELECTOR -> hasNonFeeMovement(movementLegs)
-                    ? null
-                    : NormalizedTransactionType.LP_POSITION_STAKE;
-            case STAKE_WITHDRAW_SELECTOR -> hasNonFeeMovement(movementLegs)
-                    ? null
-                    : NormalizedTransactionType.LP_POSITION_UNSTAKE;
+            case STAKE_DEPOSIT_SELECTOR -> NormalizedTransactionType.LP_POSITION_STAKE;
+            case STAKE_WITHDRAW_SELECTOR -> NormalizedTransactionType.LP_POSITION_UNSTAKE;
             case MASTER_CHEF_INCREASE_LIQUIDITY_SELECTOR -> hasNonFeeMovement(movementLegs)
                     ? NormalizedTransactionType.LP_ENTRY
                     : null;

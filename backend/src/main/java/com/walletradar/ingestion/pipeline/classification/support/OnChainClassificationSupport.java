@@ -9,8 +9,11 @@ import com.walletradar.ingestion.pipeline.onchain.OnChainRawTransactionView;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 public final class OnChainClassificationSupport {
+
+    private static final String ZKSYNC_NATIVE_TOKEN_CONTRACT = "0x000000000000000000000000000000000000800a";
 
     private OnChainClassificationSupport() {
     }
@@ -55,6 +58,15 @@ public final class OnChainClassificationSupport {
                 || type == NormalizedTransactionType.UNWRAP) {
             return NormalizedTransactionStatus.CONFIRMED;
         }
+        if (type == NormalizedTransactionType.DERIVATIVE_ORDER_REQUEST
+                || type == NormalizedTransactionType.DERIVATIVE_ORDER_EXECUTION
+                || type == NormalizedTransactionType.DERIVATIVE_ORDER_CANCEL
+                || type == NormalizedTransactionType.DERIVATIVE_POSITION_INCREASE
+                || type == NormalizedTransactionType.DERIVATIVE_POSITION_DECREASE) {
+            return ClarificationEligibilitySupport.requiresClarification(view, type)
+                    ? NormalizedTransactionStatus.PENDING_CLARIFICATION
+                    : NormalizedTransactionStatus.PENDING_PRICE;
+        }
         return ClarificationEligibilitySupport.requiresClarification(view, type)
                 ? NormalizedTransactionStatus.PENDING_CLARIFICATION
                 : NormalizedTransactionStatus.PENDING_PRICE;
@@ -73,12 +85,35 @@ public final class OnChainClassificationSupport {
         }
         return switch (type) {
             case SWAP -> leg.quantityDelta().signum() > 0 ? NormalizedLegRole.BUY : NormalizedLegRole.SELL;
-            case BORROW, REWARD_CLAIM, EXTERNAL_INBOUND, STAKING_DEPOSIT, STAKING_WITHDRAW ->
+            case BORROW -> resolveBorrowRole(leg);
+            case REWARD_CLAIM,
+                    EXTERNAL_TRANSFER_IN,
+                    STAKING_DEPOSIT,
+                    STAKING_WITHDRAW,
+                    DEX_ORDER_REQUEST,
+                    DEX_ORDER_SETTLEMENT ->
                     leg.quantityDelta().signum() > 0 ? NormalizedLegRole.BUY : NormalizedLegRole.SELL;
-            case REPAY, EXTERNAL_TRANSFER_OUT ->
-                    leg.quantityDelta().signum() < 0 ? NormalizedLegRole.SELL : NormalizedLegRole.BUY;
-            case LP_ENTRY -> leg.quantityDelta().signum() < 0 ? NormalizedLegRole.SELL : NormalizedLegRole.TRANSFER;
-            case LP_EXIT -> leg.quantityDelta().signum() > 0 ? NormalizedLegRole.BUY : NormalizedLegRole.TRANSFER;
+            case REPAY -> resolveRepayRole(leg);
+            case EXTERNAL_TRANSFER_OUT -> leg.quantityDelta().signum() < 0 ? NormalizedLegRole.SELL : NormalizedLegRole.BUY;
+            case STAKING_WITHDRAW_REQUEST,
+                    LP_ENTRY_REQUEST,
+                    LP_ENTRY_SETTLEMENT,
+                    LP_EXIT_REQUEST,
+                    LP_EXIT_SETTLEMENT,
+                    LP_ENTRY,
+                    LP_EXIT,
+                    LP_EXIT_PARTIAL,
+                    LP_EXIT_FINAL,
+                    LP_ADJUST,
+                    LENDING_LOOP_OPEN,
+                    LENDING_LOOP_REBALANCE,
+                    LENDING_LOOP_DECREASE,
+                    LENDING_LOOP_CLOSE,
+                    DERIVATIVE_ORDER_REQUEST,
+                    DERIVATIVE_ORDER_EXECUTION,
+                    DERIVATIVE_ORDER_CANCEL,
+                    DERIVATIVE_POSITION_INCREASE,
+                    DERIVATIVE_POSITION_DECREASE -> NormalizedLegRole.TRANSFER;
             case LP_FEE_CLAIM -> leg.quantityDelta().signum() > 0 ? NormalizedLegRole.BUY : NormalizedLegRole.TRANSFER;
             case LENDING_DEPOSIT,
                     LENDING_WITHDRAW,
@@ -98,5 +133,33 @@ public final class OnChainClassificationSupport {
                     APPROVE -> NormalizedLegRole.TRANSFER;
             default -> leg.quantityDelta().signum() > 0 ? NormalizedLegRole.BUY : NormalizedLegRole.SELL;
         };
+    }
+
+    private static NormalizedLegRole resolveBorrowRole(RawLeg leg) {
+        if (isDebtMarkerLeg(leg) || isZkSyncSettlementNativeLeg(leg)) {
+            return NormalizedLegRole.TRANSFER;
+        }
+        return leg.quantityDelta().signum() > 0 ? NormalizedLegRole.BUY : NormalizedLegRole.TRANSFER;
+    }
+
+    private static NormalizedLegRole resolveRepayRole(RawLeg leg) {
+        if (isDebtMarkerLeg(leg) || isZkSyncSettlementNativeLeg(leg)) {
+            return NormalizedLegRole.TRANSFER;
+        }
+        return leg.quantityDelta().signum() < 0 ? NormalizedLegRole.SELL : NormalizedLegRole.TRANSFER;
+    }
+
+    private static boolean isDebtMarkerLeg(RawLeg leg) {
+        if (leg == null || leg.assetSymbol() == null) {
+            return false;
+        }
+        String normalized = leg.assetSymbol().trim().toLowerCase(Locale.ROOT);
+        return normalized.startsWith("variabledebt") || normalized.startsWith("stabledebt");
+    }
+
+    private static boolean isZkSyncSettlementNativeLeg(RawLeg leg) {
+        return leg != null
+                && leg.assetContract() != null
+                && ZKSYNC_NATIVE_TOKEN_CONTRACT.equalsIgnoreCase(leg.assetContract());
     }
 }

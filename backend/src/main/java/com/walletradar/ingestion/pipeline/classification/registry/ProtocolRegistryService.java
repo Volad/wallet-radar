@@ -2,7 +2,8 @@ package com.walletradar.ingestion.pipeline.classification.registry;
 
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.ingestion.pipeline.onchain.OnChainRawTransactionView;
-import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.Map;
@@ -11,9 +12,10 @@ import java.util.Optional;
 /**
  * Runtime lookup over the classpath-backed protocol registry.
  */
-@Slf4j
 @Service
 public class ProtocolRegistryService {
+
+    private static final Logger log = LoggerFactory.getLogger(ProtocolRegistryService.class);
 
     private final Map<ProtocolRegistryLoader.RegistryKey, ProtocolRegistryEntry> entriesByKey;
     private final Map<String, String> methodDescriptions;

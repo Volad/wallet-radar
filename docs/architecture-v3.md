@@ -38,10 +38,12 @@
 | D-23 | Protocol-specific rule design follows protocol-source semantics when available | When official contracts or protocol docs exist, classifier rules should align to those method semantics rather than explorer UI labels or ad-hoc heuristics. |
 | D-24 | Clarification reasons must describe the real missing receipt-safe evidence | `MISSING_CONTRACT_ADDRESS` is valid only for explicit contract-creation rows; missing `effectiveGasPrice` is not satisfied by legacy `gasPrice` fallback used for fee math. |
 | D-25 | `CLAIM_WITHOUT_MOVEMENT` is a valid per-wallet terminal state | When a tracked wallet signs a known claim route but does not receive the reward transfer in persisted raw evidence, classification must not synthesize `REWARD_CLAIM`. |
-| D-26 | Clarification is a bounded receipt-enrichment stage, not a generic second classifier | Metadata-only clarification remains the default. Full receipt-log enrichment is allowed only for an allowlisted review-family set. Traces, explorer UI summaries, and analyst-only notes remain out of bounds. Rows already closable from current raw stay classification work. Clarification source must follow raw-source lineage by default and may persist same-source internal transfers only for allowlisted native-bridge families that truly require those legs. |
+| D-26 | Clarification is a bounded receipt-enrichment stage, not a generic second classifier | Metadata-safe clarification usage remains the default decision mode, but if a source call already fetched a receipt payload the source-native receipt must be persisted in full. Full receipt-log enrichment is allowed only for an allowlisted review-family set. Traces, explorer UI summaries, and analyst-only notes remain out of bounds. Rows already closable from current raw stay classification work. Clarification source must follow raw-source lineage by default and may persist same-source internal transfers only for allowlisted native-bridge families that truly require those legs. |
 | D-27 | Pricing-ready economic rows require persisted movement evidence | Resolved economic rows may not proceed to pricing or replay from fee-only flow. Wrapped-native continuity, bridge-entry semantics, liquidity entry/exit semantics, bridge settlement continuity, and admin/config demotion must be correct before AVCO consumes the row. |
-| D-28 | Pricing readiness is validated from live data, not from task completion alone | A rerun is not pricing-ready until the post-rerun Mongo audit shows zero resolved wrapped-native leaks into `VAULT_*` / `LENDING_WITHDRAW`, zero resolved recognized bridge-entry leaks into `VAULT_DEPOSIT`, zero route-tagged bridge-initiation leaks into `EXTERNAL_TRANSFER_OUT`, zero claim-income leaks into `EXTERNAL_INBOUND`, zero self-promotional or spam-like inbound families leaking into priceable `EXTERNAL_INBOUND`, zero known Slipstream LP lifecycle leaks (`increaseLiquidity(...)`, trusted stake-contract actions) into generic transfer / inbound types, zero priceable GMX order-initiation rows leaking into `EXTERNAL_TRANSFER_OUT`, zero clarification persistence mismatches between raw and normalized state, and zero economically material review families that should already be deterministic from current raw or allowlisted clarification evidence. In the current `run/9` state, the remaining gate is the explicit four-row basis-blocking review tail, not resolved-lane leakage. |
-| D-29 | Safe review-tail reduction happens before any new evidence expansion | Spam / airdrop clusters, explicit `CLAIM_WITHOUT_MOVEMENT`, failed transactions, admin / governance actions, pending-request / pending-order families, and out-of-scope NFT or attestation mints should leave `NEEDS_REVIEW` from current raw. Clarification is reserved for receipt-closeable residuals, and the remaining irreducible stop-condition must stay explicit instead of being forced into synthetic economic types. After `run/9`, safe stop-condition rows should no longer remain in review once persisted receipt evidence proves zero-effect cleanup/admin semantics, such as the audited Pancake Infinity `modifyLiquidities(...)` row with `liquidityDelta = 0`, `liquidityChange = 0`, and `feesAccrued = 0`. |
+| D-28 | Pricing readiness is validated from live data, not from task completion alone | A rerun is not pricing-ready until the post-rerun Mongo audit shows zero resolved wrapped-native leaks into `VAULT_*` / `LENDING_WITHDRAW`, zero resolved recognized bridge-entry leaks into `VAULT_DEPOSIT`, zero route-tagged bridge-initiation leaks into `EXTERNAL_TRANSFER_OUT`, zero claim-income leaks into `EXTERNAL_INBOUND`, zero self-promotional or spam-like inbound families leaking into priceable `EXTERNAL_INBOUND`, zero known Slipstream LP lifecycle leaks (`increaseLiquidity(...)`, trusted stake-contract actions) into generic transfer / inbound types, zero priceable GMX order-initiation rows leaking into `EXTERNAL_TRANSFER_OUT`, zero clarification persistence mismatches between raw and normalized state, and zero economically material review families that should already be deterministic from current raw or allowlisted clarification evidence. The post-`run/13` audit cleared that gate for normalization/clarification, so the active milestone is pricing rather than more semantic cleanup. |
+| D-29 | Safe review-tail reduction happens before any new evidence expansion | Spam / airdrop clusters, explicit `CLAIM_WITHOUT_MOVEMENT`, failed transactions, admin / governance actions, pending-request / pending-order families, and out-of-scope NFT or attestation mints should leave `NEEDS_REVIEW` from current raw. Clarification is reserved for receipt-closeable residuals, and the remaining irreducible stop-condition must stay explicit instead of being forced into synthetic economic types. That review-tail policy remains in force even though the current post-`run/13` state has already reduced the tail to zero. |
+| D-30 | Pricing prefers event-local evidence before external market data | Stablecoin parity, exact source execution price, swap-derived ratio, and wrapper/native aliasing are higher-quality than generic historical candles and must win whenever the canonical row already proves them. |
+| D-31 | Binance is the primary external price source; CoinGecko is bounded fallback | Binance offers free public market data and a public archive for listed assets. CoinGecko remains a limited fallback for assets or windows Binance cannot cover. Long-tail DeFi pricing should rely on tx-local execution semantics before external lookup. |
 
 ### Assumptions
 
@@ -65,7 +67,8 @@
 │ ETH ARB OP POLYGON BASE BSC AVAX MANTLE LINEA UNICHAIN ZKSYNC        │
 │ KATANA PLASMA                                                         │
 │                                                                       │
-│ CoinGecko historical API            Bybit NDJSON already in Mongo     │
+│ Binance market data + archive         CoinGecko fallback              │
+│ Bybit NDJSON already in Mongo                                       │
 └──────────────┬──────────────────────────────┬──────────────────────────┘
                │                              │
                ▼                              ▼
@@ -128,6 +131,23 @@
   Owns raw transaction classification, leg extraction, canonical document construction, and Bybit normalization.
 - `pricing`
   Owns historical USD resolution for normalized flows.
+  Internal package split:
+  - `pricing.application`
+    orchestration and stage entry points
+  - `pricing.domain`
+    pricing request/result models and internal policy objects
+  - `pricing.resolver.event`
+    stablecoin, execution, swap-derived, and wrapper resolvers
+  - `pricing.resolver.external`
+    external-source interface plus fallback orchestration only
+  - `pricing.resolver.external.binance`
+    Binance-specific adapter and symbol mapping
+  - `pricing.resolver.external.coingecko`
+    CoinGecko-specific adapter and mapping
+  - `pricing.persistence`
+    historical price cache models and repositories
+  - `pricing.telemetry`
+    pricing metrics and structured logging helpers
 - `costbasis`
   Owns deterministic AVCO replay, basis continuity rules, and reconciliation outputs.
 - `domain`
@@ -145,6 +165,12 @@ session        -> domain, wallet-universe
 wallet-universe -> domain
 ingestion.*    -> domain, pricing, common, config
 pricing        -> domain, common
+pricing.application -> pricing.domain, pricing.resolver.., pricing.persistence
+pricing.resolver.event -> pricing.domain
+pricing.resolver.external -> pricing.domain, pricing.persistence, common
+pricing.resolver.external.binance -> pricing.resolver.external, pricing.domain, common
+pricing.resolver.external.coingecko -> pricing.resolver.external, pricing.domain, common
+pricing.persistence -> pricing.domain
 costbasis      -> domain, common
 domain         -> (nothing)
 config/common  -> (nothing)
@@ -276,6 +302,27 @@ Indexes:
 - `{ correlationId: 1 }` sparse
 - `{ "flows.assetContract": 1 }`
 
+### `historical_prices`
+
+Purpose:
+- Deterministic historical price cache used by the pricing stage only.
+
+Key fields:
+- `assetKey`
+- `networkId`
+- `symbol`
+- `bucketStart`
+- `bucketResolution`
+- `source`
+- `priceUsd`
+- `quoteSymbol`
+- `fetchedAt`
+
+Indexes:
+- `{ assetKey: 1, bucketStart: 1, source: 1 }` unique
+- `{ symbol: 1, bucketStart: 1, source: 1 }`
+- `{ fetchedAt: 1 }`
+
 ### `asset_positions`
 
 Purpose:
@@ -302,6 +349,7 @@ Read paths satisfied by indexes:
 - tracked wallet universe lookups for normalization heuristics
 - normalization job polling for raw tx
 - pricing polling for canonical documents
+- historical price cache lookups by asset and time bucket
 - deterministic replay reads per wallet and per source
 - reconciliation and missing-data reporting
 
@@ -383,19 +431,55 @@ Read paths satisfied by indexes:
 
 ### 4. Pricing
 
-Price resolution order:
+Pricing stages:
 
-1. `StablecoinResolver`
-   `USDC`, `USDT`, `DAI`, `USDE`, `GHO`, `FRAX`, and configured stable variants -> `$1.00`
-2. `SwapDerivedResolver`
-   If a swap has a stablecoin side, derive the non-stable leg price directly from the swap ratio
-3. `WrapperResolver`
-   Wrapped native assets resolve to the native price path
-4. `CoinGeckoHistoricalResolver`
-   Last resort historical price lookup keyed by `(assetContract, date)`
-5. `PRICE_UNKNOWN`
-   Quantity still participates in replay; price stays null and `hasIncompleteHistory` becomes true
-6. Pricing is released only after a live post-rerun audit proves there are no:
+1. `EventLocalPriceResolver`
+   - `StablecoinResolver`
+     configured canonical stablecoins -> `$1.00`
+   - `ExecutionPriceResolver`
+     use exact execution price already carried by the canonical row, for
+     example Bybit filled trades
+   - `SwapDerivedResolver`
+     derive the boundary-leg unit price from the executed swap ratio
+   - `WrapperResolver`
+     wrapped native assets inherit the underlying native price path
+2. `ExternalMarketPriceResolver`
+   - `BinanceHistoricalResolver`
+     primary external source for assets with deterministic Binance symbol
+     mapping
+   - `CoinGeckoHistoricalResolver`
+     bounded fallback for assets or windows Binance cannot cover
+3. `PRICE_UNKNOWN`
+   Quantity still participates in replay; price stays null and
+   `hasIncompleteHistory` becomes true
+
+Transaction-type contract:
+
+- `SWAP`
+  Price from canonical net execution ratio; do not price router intermediates
+  independently.
+- `LP_ENTRY`, `LP_EXIT`, matched `BRIDGE_OUT` / `BRIDGE_IN`,
+  `INTERNAL_TRANSFER`, `PROTOCOL_CUSTODY`, `LENDING_*`, `VAULT_*`,
+  `LP_POSITION_STAKE`, `LP_POSITION_UNSTAKE`
+  Principal is continuity-only. Market pricing is optional for valuation but
+  not required for basis carry-over.
+- `REWARD_CLAIM`, `LP_FEE_CLAIM`, `EXTERNAL_INBOUND`
+  Acquire at receive-time fair market value.
+- `EXTERNAL_TRANSFER_OUT`
+  Dispose at event-time fair market value unless another explicit continuity or
+  pending-request semantic already won in normalization.
+- matched Bybit deposit/withdraw plus on-chain leg
+  price fees only; do not price the principal twice.
+
+External source policy:
+
+- Prefer Binance market data and public historical archive for listed assets.
+- Use CoinGecko only as bounded fallback, not as the assumed backbone of the
+  two-year pricing pipeline.
+- Long-tail DeFi assets should prefer event-local swap-derived pricing before
+  any external candle lookup.
+
+Pricing is released only after a live post-rerun audit proves there are no:
    - resolved wrapped-native leaks into `VAULT_*` / `LENDING_WITHDRAW`
    - resolved recognized bridge-entry leaks into `VAULT_DEPOSIT`
    - route-tagged bridge-initiation leaks into `EXTERNAL_TRANSFER_OUT`
@@ -422,6 +506,9 @@ Price resolution order:
    - unmatched withdrawal -> `EXTERNAL_TRANSFER_OUT`
    - unmatched deposit -> `EXTERNAL_INBOUND`
 6. Paired trades are written as `SWAP` documents with `source=BYBIT` and `transactionIndex=0`.
+7. Bybit trade rows should carry exact execution price into the pricing stage so
+   external market-data lookup is reserved for fees, transfers, or rows whose
+   ledger evidence does not already provide deterministic countervalue.
 
 ### 6. AVCO replay and reconciliation
 

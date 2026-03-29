@@ -1,7 +1,7 @@
 # WalletRadar — Product Context
 
 > **Version:** MVP v3 target
-> **Last updated:** 2026-03-20
+> **Last updated:** 2026-03-27
 > **Status:** Active development
 
 ---
@@ -42,6 +42,7 @@ Users add wallet addresses (read-only) into a persisted `user_sessions` model ke
 | NG-07 | User registration, authentication, or multi-user access control |
 | NG-08 | Automated tax-loss harvesting recommendations |
 | NG-09 | Transactions older than 2 years from current date |
+| NG-10 | Generic derivative / perpetual accounting beyond the audited GMX V2 order, position, close, cancel, and GM / GLV pool lifecycle currently covered by normalization and clarification |
 
 Manual compensating transactions may be **positive or negative** (reducing quantity); both are in scope for MVP to allow full reconciliation.
 
@@ -55,7 +56,7 @@ Manual compensating transactions may be **positive or negative** (reducing quant
 - **Reconciliation UX** — when derived quantity does not match on-chain balance (e.g. for wallets with history within the 2-year window), the UI shows a warning on the asset and the user can add a manual compensating transaction to align balance and AVCO
 - **Read-only access** — system never requests wallet signing or private keys
 - **Public/free data sources only** — no dependency on paid indexers (Alchemy Growth, The Graph paid, Moralis paid)
-- **CoinGecko Free tier** — 50 req/min; throttled to 45 req/min internally; historical price fallback only
+- **Pricing sources** — event-local tx pricing first, Binance market data as the primary external source for listed assets, CoinGecko as bounded historical fallback only
 - **Transaction workflow** — status-driven `normalized_transactions` pipeline where only receipt-clarifiable rows enter `PENDING_CLARIFICATION`; low-confidence rows without receipt gaps proceed directly to pricing or review
 - **Bybit source** — `external_ledger_raw` is already loaded in MongoDB and is sufficient for the current milestone; new interactive import UX is not required now
 - **2-year backfill window** — transactions before this window require manual entry

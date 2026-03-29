@@ -1,7 +1,7 @@
 # WalletRadar — Architecture
 
 > **Version:** SAD v3 target summary
-> **Last updated:** 2026-03-24
+> **Last updated:** 2026-03-29
 > **Style:** Modular monolith (Spring Boot)
 
 This document is the concise architecture summary for the v3 accounting rewrite.
@@ -87,11 +87,14 @@ Spring Boot
   - transfer-pattern heuristics
 - `rawData.methodId` must be recovered from `rawData.input[0:10]` when the stored
   selector is blank or `"0x"`.
+- Router/container subcalls are derived from the saved top-level
+  `rawData.input` only. They are decoder/projection output, not separate raw tx
+  documents.
 - Known wrapper selectors and known bridge/router methods must be resolved before generic `deposit` / `withdraw` / `multicall` name fallbacks can capture them.
-- Plain positive inbound transfer legs default to `EXTERNAL_INBOUND` unless
+- Plain positive inbound transfer legs default to `EXTERNAL_TRANSFER_IN` unless
   contract-aware reward or bridge evidence exists.
 - Promo/phishing inbound patterns must be removed from reward ambiguity handling before generic inbound defaults are applied.
-- Repeated self-promotional inbound families such as Base `multicall(bytes[] data)` token-drop rows, Plasma selector `0x1939c1ff`, and repeated selector `0xeec4378e` must narrow before generic `EXTERNAL_INBOUND` can win.
+- Repeated self-promotional inbound families such as Base `multicall(bytes[] data)` token-drop rows, Plasma selector `0x1939c1ff`, and repeated selector `0xeec4378e` must narrow before generic `EXTERNAL_TRANSFER_IN` can win.
 - Economic meaning follows backfill-available raw legs and contract identity.
   Human-readable explorer page summaries are audit-only and never override
   canonical classifier output.
@@ -101,6 +104,28 @@ Spring Boot
 - Known LP position-manager router containers such as `multicall` and
   Uniswap-v4-style `modifyLiquidities` must be dispatched by contract-aware
   inner method rules, not by broad router keywords.
+- LP lifecycle type resolution and LP principal role assignment are separate
+  concerns. `LP_ENTRY` / `LP_EXIT` stay canonical LP families, but underlying
+  principal legs inside those rows must persist as continuity `TRANSFER`
+  flows, not as synthetic `BUY` / `SELL`.
+- `STAKING_DEPOSIT` / `STAKING_WITHDRAW` are also role-sensitive.
+  Liquid-staking mint/redeem paths such as `AVAX -> sAVAX` stay economic
+  `SELL` / `BUY`, while classic stake-contract custody paths such as Pancake
+  SmartChef `deposit(uint256)` keep principal/proof-token legs in continuity
+  `TRANSFER` and only explicit harvested reward side-flows remain economic
+  `BUY`.
+- Aave-style `BORROW` / `REPAY` families may contain debt-marker mint/burn legs
+  and chain-specific execution-settlement refund legs in the same tx. Those
+  marker / settlement legs must persist as continuity `TRANSFER`, while the
+  reserve-asset principal remains the only economic `BUY` / `SELL` leg.
+- `REWARD_CLAIM` rows may contain self-canceling wrapper / marker pairs inside
+  the same tx. Exact same-asset same-quantity in/out pairs must not persist as
+  economic `BUY` / `SELL`; they are continuity-only no-op evidence.
+- Some real protocol bundles may legitimately mix continuity and reward legs in
+  one canonical row. Pendle `zapOutV3SingleToken(...)` on the Mantle reward
+  distributor is currently such a bundle: LP marker churn must not remain
+  `BUY` / `SELL`, the principal output must remain continuity, and only the
+  true reward leg may stay economic.
 - Method-aware protocol bundles such as Morpho Bundler3 must be classified by
   contract-scoped dispatch before generic `multicall` / `bundle` fallback.
 - Zero-amount token transfers without economic counterflow must never create `BUY` / `SELL` legs. Known setup/admin calls may resolve to `ADMIN_CONFIG`; unknown cases remain explicit review items.
@@ -129,6 +154,22 @@ Spring Boot
 - Route-tagged bridge-initiation families such as LI.FI / Jumper
   `callDiamondWith*` paths and `transferRemote(...)` must resolve before
   generic `EXTERNAL_TRANSFER_OUT` fallback can win.
+- Source-chain bridge-start selectors such as
+  `swapAndStartBridgeTokensViaMayan(...)`,
+  `swapAndStartBridgeTokensViaStargate(...)`, and
+  `swapAndStartBridgeTokensViaSquid(...)` must resolve to `BRIDGE_OUT` before
+  generic `SWAP` or `EXTERNAL_TRANSFER_OUT` fallback can win.
+- Those explicit source-chain bridge-start selectors are objective bridge facts
+  even when the eventual destination asset differs from the source asset. They
+  must remain `BRIDGE_OUT`, but later replay may treat the correlated route as
+  plain basis continuity only when the bridged asset identity is preserved.
+- Explicit source-chain bridge-start rows must remain eligible for bounded
+  full-receipt clarification so WalletRadar can persist receipt logs and
+  transfer evidence for later protocol-aware bridge-pair reconstruction.
+- Generic routed aggregator outbound-only rows, including 1inch-style router
+  sends, must not be promoted to `BRIDGE_OUT` from time-window proximity or
+  destination-wallet heuristics alone. Without production-available bridge
+  evidence they remain owner-agnostic `EXTERNAL_TRANSFER_OUT`.
 - Route-tagged LI.FI / Jumper bridge initiations remain bridge semantics even
   when top-level `methodId` is blank, as long as the selector is recoverable
   from saved calldata and the calldata still carries official route-tag
@@ -137,10 +178,10 @@ Spring Boot
   with persisted bridged payout movement must resolve to `BRIDGE_IN` before
   generic `VAULT_WITHDRAW` fallback can win.
 - Claim-income families such as `harvest(...)` and `release()` must resolve to
-  explicit claim / income semantics before generic `EXTERNAL_INBOUND` fallback
+  explicit claim / income semantics before generic `EXTERNAL_TRANSFER_IN` fallback
   can win.
 - Explicit receiver-wallet `claim(...)` / `claimWithSig(...)` payout rows must
-  resolve to `REWARD_CLAIM` before generic `EXTERNAL_INBOUND` fallback can win.
+  resolve to `REWARD_CLAIM` before generic `EXTERNAL_TRANSFER_IN` fallback can win.
 - Request-initiation families such as
   `claimSharesAndRequestRedeem(uint256 sharesToRedeem)` are not finalized
   disposals and may not remain priceable `EXTERNAL_TRANSFER_OUT` rows until
@@ -148,43 +189,246 @@ Spring Boot
 - GMX `createOrder(...)` and similar order-initiation rows are not finalized
   disposals and may not become priceable `EXTERNAL_TRANSFER_OUT` rows until
   persisted evidence proves final settlement.
+- GMX V2 `OrderVault + OrderCreated` families are not LP-entry semantics.
+  They must resolve to explicit derivative order lifecycle types inside the
+  active accounting scope.
+- GMX V2 `executeOrder(...)` families must be classified from persisted
+  EventEmitter receipt logs:
+  - `PositionIncrease` → `DERIVATIVE_POSITION_INCREASE`
+  - `PositionDecrease` → `DERIVATIVE_POSITION_DECREASE`
+  - `OrderExecuted` without position evidence → `DERIVATIVE_ORDER_EXECUTION`
+  - `OrderCancelled` without execution → `DERIVATIVE_ORDER_CANCEL`
+- `GMX` terminal keeper typing may not depend only on EventEmitter-decoded
+  human-readable labels. Once the same persisted receipt already contains
+  authoritative `GMX` EventEmitter evidence, additional same-receipt structured
+  lifecycle logs may refine the generic terminal type into
+  `DERIVATIVE_POSITION_INCREASE` or `DERIVATIVE_POSITION_DECREASE`.
+- `GMX` EventEmitter topic identity is canonical and case-sensitive. Runtime may
+  not lower-case event names before hashing them for topic comparison.
+- GMX keeper / execution rows may not fall back to `EXTERNAL_TRANSFER_IN` /
+  `EXTERNAL_TRANSFER_OUT` just because the explorer source omitted top-level
+  `from/to/methodId/functionName`. Clarification must fetch and persist the full
+  receipt, then the classifier must resolve the derivative lifecycle from
+  EventEmitter logs.
+- GMX helper `multicall(bytes[])` order requests must be decoded from saved
+  `rawData.input`. Inner helper subcalls remain projection-only evidence; they
+  must not be materialized as separate raw documents.
+- Selector collisions must be resolved by contract + calldata shape, not by the
+  selector alone. The audited `0x322bba21` family proves this: it may be
+  `GMX createOrder(tuple)` or `CoW Swap ETH Flow createOrder(EthFlowOrder.Data)`
+  depending on the target contract and payload layout.
+- Audited CoW async spot-order families must resolve into explicit lifecycle
+  semantics instead of leaking into generic transfers:
+  - request-side `createOrder(EthFlowOrder.Data)` → `DEX_ORDER_REQUEST`
+  - settlement-side `GPv2Settlement` trade completion → `DEX_ORDER_SETTLEMENT`
+- CoW request-side correlation must come from deterministic protocol evidence
+  available at normalization time from saved calldata. Settlement-side
+  correlation must come from persisted `Trade(...)` receipt logs. If those logs
+  are missing in the initial raw shape, clarification must fetch the full
+  receipt from the same source family.
+- Persisted clarification evidence is runtime-authoritative whenever it exists
+  in canonical raw shape. A stale or missing clarification-attempt counter may
+  not hide already persisted `fullReceipt` / `receipt` / `transfers` evidence
+  from classification.
+- GMX async request / execute families such as helper `multicall(bytes[] data)`
+  deposit requests plus `executeDeposit(...)` / `executeGlvDeposit(...)`
+  settlement may not remain active priceable rows unless the runtime can
+  deterministically correlate the request-side principal with the later
+  execution-side settlement from current raw plus persisted clarification
+  evidence. When that key already exists in persisted logs, the rows should
+  resolve into explicit async lifecycle semantics (`LP_ENTRY_REQUEST` /
+  `LP_ENTRY_SETTLEMENT`) instead of blocker review.
+- The same GMX / GLV rule applies to additional request / settlement families:
+  if request-side or keeper-side evidence is missing in the initial raw shape,
+  clarification must fetch it from the same source family before the tx is
+  allowed to stay unresolved in on-chain review.
+  - helper `multicall(bytes[])` + outbound `GM/GLV` share burn →
+    `LP_EXIT_REQUEST`
+  - keeper `executeWithdrawal(...)` or clarified `WithdrawalExecuted` /
+    `GlvWithdrawalExecuted` tx → `LP_EXIT_SETTLEMENT`
+- For audited `GMX / GLV` async exits, request-side classification is
+  lifecycle-shape-driven. The audited helper selector family plus audited
+  withdrawal-request subcall family and burned share asset are sufficient even
+  when the top-level router address is not in the registry.
+- For audited `GMX / GLV` async exits, the runtime should first use decoded
+  `bytes[]` subcall selectors and then fall back to saved raw calldata selector
+  fragments only when the decoded path is incomplete. The fallback remains
+  valid only together with audited helper selectors, outbound-only movement,
+  and burned `GM/GLV` share principal.
+- For audited `GMX` derivative lifecycles, clarification may also fetch
+  additional real keeper txs when bounded same-source explorer transfer scans
+  prove that the wallet participated in a later execution or cancellation tx
+  that is still absent from `raw_transactions`.
+- Those discovered keeper txs remain ordinary raw docs. They must be persisted
+  and normalized, not represented as synthetic child steps on the original row.
+- For audited `GMX` derivative lifecycles, terminal sibling stop / bracket
+  state must also be persisted once the closing keeper receipt already proves
+  `OrderCancelled(AUTO_CANCEL)` for the sibling request key.
+- Once that terminal state is proved, the affected request rows must also gain
+  a visible `matchedCounterparty` link to the keeper tx; they may not remain
+  operationally orphaned.
+- Request / settlement / terminal linking is a shared runtime concern. Once a
+  row has deterministic `correlationId`, normalization, clarification, and
+  related-lifecycle discovery must all use the same linker to materialize
+  `matchedCounterparty` on every same-wallet same-network counterpart row.
+- For exact async request/settlement pairs, the linker must materialize
+  bidirectional `matchedCounterparty` on both rows. Only accepted asymmetric
+  terminal derivative cases may remain one-terminal-to-many-request linkage.
+- `correlationId` selection must follow protocol lifecycle scope, not raw
+  receipt-log encounter order. When a `GMX / GLV` settlement receipt contains
+  both an intermediate deposit key and a higher-scope GLV key, runtime must
+  persist the higher-scope GLV key.
+- CoW settlement detection may not depend solely on top-level explorer
+  `to/from/functionName` fields. If persisted `fullReceipt.logs` already prove
+  the GPv2 `Trade(...)` digest, the settlement row must resolve to
+  `DEX_ORDER_SETTLEMENT`.
+- If a CoW settlement or GMX pool-exit settlement first lands in the active
+  lane as a generic inbound transfer because the receipt was missing, receipt
+  clarification must be allowed to fetch the same-source receipt and reclassify
+  the row in place.
+- Burn-only unbonding / redeem-initiation rows such as
+  `initiateWithdrawal(uint256)` may not collapse into finalized
+  `LENDING_WITHDRAW` / `VAULT_WITHDRAW` semantics while the eventual receive-side
+  settlement is still deferred. They should resolve into explicit request
+  semantics (for the audited Resolv family: `STAKING_WITHDRAW_REQUEST`) and
+  later claim payout rows should carry the same `correlationId`.
+- For the audited Resolv family, the later `withdraw(...)` claim payout is
+  continuity settlement, not a fresh economic acquisition. It stays
+  `STAKING_WITHDRAW`, but its principal payout leg must persist as `TRANSFER`,
+  not as `BUY`.
 - Trader Joe `LBRouter.addLiquidity(...)` is LP-entry semantics, not lending.
 - Approval/configuration families such as `setMinterApproval(...)` are
   non-economic and must not resolve to LP or vault types from fee-only flow.
 - Economic rows must not proceed to pricing unless canonical raw evidence or
   persisted clarification evidence proves non-fee movement semantics that are
   sufficient for later basis replay.
+- Receipt-log-rich batch families such as audited Euler `batch(...)` rows may
+  not auto-upgrade from debt/share marker evidence alone. Without a financially
+  complete decoder they remain explicit blocker rows, not active
+  `LENDING_DEPOSIT` / `LENDING_WITHDRAW`. The audited Euler rows close only when
+  clarification already proves the borrow / transfer / swap / supply path on
+  current persisted evidence.
+- For the audited Euler leverage / looping family, WalletRadar uses a pragmatic
+  canonical share-position model:
+  - `LENDING_LOOP_OPEN` records acquisition of the collateral-share position
+    using event-local implied price from the clarified stable-like supply leg
+  - `LENDING_LOOP_REBALANCE` records share-to-share restructure / migration
+    inside the same Euler loop family with continuity-only basis carry and no
+    realized exit
+  - `LENDING_LOOP_DECREASE` records partial unwind as disposal of collateral
+    shares against wallet-visible returned value
+  - `LENDING_LOOP_CLOSE` records final unwind as terminal disposal of the
+    remaining collateral-share position into wallet-visible assets
+  - debt-marker evidence remains in raw / clarification evidence and is not
+    persisted as a standalone canonical asset-lot flow
+- Pricing must separate:
+  - tx-local price evidence such as stablecoin parity, exact source execution
+    price, swap-derived ratio, and wrapper/native aliasing
+  - external market-data fallback such as Binance and then CoinGecko
+- Audited Euler loop rows may carry pre-resolved event-local prices directly in
+  canonical flows when current clarification evidence already proves the
+  stable-like supply / return amount behind the share-position move. Those
+  prices belong to normalization output, not to external pricing fallback.
+- Pricing must treat `TRANSFER` as non-priceable regardless of the parent tx
+  type. Continuity-type rows may still carry explicit `BUY` / `SELL` side flows
+  (for example reward or fee side legs inside an LP exit bundle), and those
+  economic side flows must remain priceable.
+- Binance is the primary external market-data source for pricing, but not the
+  primary overall pricing source; tx-local execution semantics win whenever the
+  canonical row already proves them.
+- CoinGecko remains limited fallback coverage and must not be the only assumed
+  path for long-tail two-year DeFi pricing.
+- Bybit ledger data is not required to price on-chain rows themselves, but it
+  is required before final AVCO/replay when WalletRadar computes one accounting
+  universe across on-chain and Bybit evidence.
+- Persisted canonical transfer types must stay owner-agnostic:
+  - wallet / Bybit / wallet-to-wallet movement facts persist as
+    `EXTERNAL_TRANSFER_OUT` / `EXTERNAL_TRANSFER_IN`
+  - bridge facts persist as `BRIDGE_OUT` / `BRIDGE_IN`
+  - ownership-aware continuity is carried by `correlationId`,
+    `continuityCandidate`, and `matchedCounterparty`, then resolved during replay
+- Wallet-local `SWAP` requires both wallet-visible legs:
+  - at least one non-fee `SELL`
+  - at least one non-fee `BUY`
+  If a known aggregator/router row proves only outbound wallet movement, it
+  must leave the `SWAP` lane before pricing.
+- Recognized aggregator/router routes with outbound-only wallet movement and no
+  wallet-visible `BUY` leg demote to owner-agnostic `EXTERNAL_TRANSFER_OUT`
+  unless bridge semantics are proven earlier.
+- Matched Bybit deposit/withdraw plus on-chain bridge/custody legs use
+  continuity pricing rules and may not create duplicated principal pricing on
+  both sides.
+- Basis-relevant Bybit inbound families may not silently normalize into
+  `UNKNOWN / CONFIRMED`:
+  - raw `fund_asset_changes` rows with inbound canonical semantics must
+    materialize as `EXTERNAL_TRANSFER_IN`
+  - synthetic `withdraw_deposit` inbound rows must also materialize as
+    `EXTERNAL_TRANSFER_IN`
+  - if a basis-relevant Bybit raw row has canonical semantics that the
+    normalizer cannot map, the row must go to `NEEDS_REVIEW`, not to silent
+    `CONFIRMED UNKNOWN`
+- Residual Bybit `uta_derivatives` orphan legs with
+  `UTA_TRADE_PAIR_NOT_FOUND` are insufficient-evidence rows and may not remain
+  priceable. They must leave the `PENDING_PRICE` lane unless another official
+  Bybit source reconstructs the missing counter-leg.
+- Deterministically known but unsupported / incomplete Bybit rows may stay
+  persisted as `NEEDS_REVIEW` only when they also carry:
+  - `excludedFromAccounting = true`
+  - `accountingExclusionReason = <explicit reason>`
+  This keeps the audit trail visible while removing the row from active pricing
+  and replay gates.
+- Current exclusion families are intentionally narrow:
+  - residual `UTA_TRADE_PAIR_NOT_FOUND` orphan legs
+  - `BYBIT_LOAN_SEMANTICS_UNSUPPORTED` rows
+- Pricing and replay readiness must count only blocking review rows
+  (`status = NEEDS_REVIEW AND excludedFromAccounting != true`).
+- Operational telemetry must expose both:
+  - blocking review rows
+  - excluded review rows
+- Active priceable `SWAP` rows must also satisfy the wallet-boundary swap-shape
+  invariant:
+  - at least one `BUY` leg
+  - at least one `SELL` leg
 - Pricing readiness is a live-data gate, not a code-complete claim: successful
   tests or reruns are insufficient if the post-rerun Mongo audit still finds
+  any of:
+  - active async request / settlement lifecycle leaks such as GMX deposit
+    request multicalls or `executeDeposit(...)` settlement rows in priceable
+    families
+  - burn-only unbonding / redeem-initiation rows still modeled as finalized
+    withdraws
+  - audited Euler batch rows silently reopened into active lending families
   resolved wrapped-native continuity leaking into `VAULT_*` /
   `LENDING_WITHDRAW`, recognized bridge-entry rows leaking into
   `VAULT_DEPOSIT`, route-tagged bridge initiations leaking into
   `EXTERNAL_TRANSFER_OUT`, Circle CCTP `redeem(...)` rows leaking into
   `VAULT_WITHDRAW`, explicit receiver-wallet claim payout rows leaking into
-  `EXTERNAL_INBOUND`, pending redeem-request initiation rows leaking into
+  `EXTERNAL_TRANSFER_IN`, pending redeem-request initiation rows leaking into
   priceable `EXTERNAL_TRANSFER_OUT`, claim-income rows leaking into
-  `EXTERNAL_INBOUND`, priceable GMX order-initiation rows leaking into
-  `EXTERNAL_TRANSFER_OUT`, clarification persistence mismatches between raw and
-  normalized state, or a broad repeatable review family that should have
-  become deterministic from current raw or allowlisted clarification evidence.
-- In the current post-`run/9` state, resolved-lane leakage and clarification
-  persistence are no longer the primary blocker.
-- The remaining pricing gate is a narrow review tail that must close from
-  current raw plus already persisted clarification evidence:
-  - Base Pancake / Infinity LP-exit container
-    `0x0a757aeeb58667c545017cd8e5cd60dc994a8945ed810c60ea2aed18688f4f7a`
-  - Avalanche Euler batch rows
-    `0x1e0c429514e9cf892b0b6a11e3cfb290eff5c0c26a557c835496e4ba61717fdb`,
-    `0x233c2b959739d298d1012405e9b3d7e535a87d590a81bcb304c6dc0cb3ce5e4f`,
-    `0x305f37a69956a13001962216c845385996114876173bdbaef644bbe3baadf5df`
-- The only remaining safe stop-condition review row is
-  `0x0088de663d549fbc58dfa8dbba4180a346a580b1d6277254fa84a8ed9c27967a`
-  on BSC. Persisted receipt evidence currently proves a zero-effect
-  `modifyLiquidities(...)` call (`liquidityDelta = 0`, `liquidityChange = 0`,
-  `feesAccrued = 0`), so this row should leave `NEEDS_REVIEW`, but it is not
-  itself the reason pricing stays blocked.
-- No new backfill is required for the current blocker set; the intended
-  closeout remains `normalization + clarification` only.
+  `EXTERNAL_TRANSFER_IN`, priceable GMX order-initiation rows leaking into
+  `EXTERNAL_TRANSFER_OUT`, basis-relevant Bybit inbound raw rows leaking into
+  `CONFIRMED UNKNOWN`, priceable Bybit `UTA_TRADE_PAIR_NOT_FOUND` rows,
+  active `SWAP` rows leaking through without a wallet-visible `BUY` or `SELL`
+  leg, known bridge-start selectors leaking into plain `SWAP`,
+  clarification persistence mismatches between raw and normalized state, or a
+  broad repeatable review family that should have become deterministic from
+  current raw or allowlisted clarification evidence.
+- The post-`run/13` live audit has cleared the normalization/clarification gate:
+  - `PENDING_CLARIFICATION = 0`
+  - `NEEDS_REVIEW = 0`
+  - `clarification_persistence_mismatches = 0`
+  - `confirmed resolved misclassifications = 0`
+- The next active milestone is pricing, not additional clarification-tail
+  cleanup.
+- The post-`run/16` blocker set is no longer a silent semantic mismatch in
+  resolved rows; it is an explicit Bybit exclusion-tail policy decision.
+- Current raw is already sufficient for this closeout because the audited
+  method families, token identity, sender shape, and wallet-history isolation
+  for the affected asset contracts are all provable from persisted raw and
+  Mongo state.
+- No new backfill is required for the current blocker set; a normalization
+  rerun is sufficient after the classifier demotion slice, although a standard
+  `normalization + clarification` rerun remains operationally safe.
 
 ### 3.3 Clarification
 
@@ -203,8 +447,8 @@ Spring Boot
 - Low-confidence rows that are already economically coherent must proceed directly to `PENDING_PRICE`.
 - Unsupported semantic gaps must move directly to `NEEDS_REVIEW`.
 - Clarification must not treat synthetic logs as first-class classification input.
-- Metadata-only clarification is not used to decide promo/phishing inbound, bridge-settlement continuity, LP position-manager multicalls, or zero-value no-op token calls.
-- Metadata-only clarification is not used to upgrade per-wallet `CLAIM_WITHOUT_MOVEMENT` rows
+- Metadata-safe clarification usage alone is not used to decide promo/phishing inbound, bridge-settlement continuity, LP position-manager multicalls, or zero-value no-op token calls.
+- Metadata-safe clarification usage alone is not used to upgrade per-wallet `CLAIM_WITHOUT_MOVEMENT` rows
   into `REWARD_CLAIM`.
 - Clarification is not the place to repair route-tagged LI.FI / Jumper bridge
   initiation leaks, Circle CCTP `redeem(...)` destination-side bridge-in
@@ -295,6 +539,7 @@ Spring Boot
   - stablecoin parity
   - swap-derived ratio
   - wrapper/native mapping
+  - Binance historical market data
   - CoinGecko historical fallback
   - `PRICE_UNKNOWN`
 - AVCO replay input is `normalized_transactions WHERE status=CONFIRMED`.
@@ -307,15 +552,20 @@ Spring Boot
     families and `transferRemote(...)`
   - zero resolved Circle CCTP `redeem(...)` leaks into `VAULT_WITHDRAW`
   - zero resolved explicit receiver-wallet claim payout leaks into
-    `EXTERNAL_INBOUND`, including merkle `claim(...)` and signed
+    `EXTERNAL_TRANSFER_IN`, including merkle `claim(...)` and signed
     `claimWithSig(...)`
   - zero resolved pending redeem-request initiation leaks into priceable
     `EXTERNAL_TRANSFER_OUT`, including
     `claimSharesAndRequestRedeem(...)`
-  - zero resolved claim-income leaks into `EXTERNAL_INBOUND`, including
+  - zero resolved claim-income leaks into `EXTERNAL_TRANSFER_IN`, including
     Pancake `harvest(...)` and vesting `release()`
   - zero priceable GMX `createOrder(...)` rows without finalized settlement
     semantics
+  - zero active `SWAP` rows without both wallet-visible `BUY` and `SELL` legs
+  - zero routed bridge-start selectors
+    `swapAndStartBridgeTokensViaMayan(...)`,
+    `swapAndStartBridgeTokensViaStargate(...)`, and
+    `swapAndStartBridgeTokensViaSquid(...)` leaking into `SWAP`
 - Replay order is deterministic:
   - `blockTimestamp ASC`
   - `transactionIndex ASC`
@@ -357,7 +607,10 @@ Spring Boot
   - wallet-internal transfers
   - bridge matches
   - lending and vault custody movements
+  - LP principal moving into and out of LP custody
   - correlated Bybit <-> on-chain custody movements
+- LP receipt markers (`LP token`, `BPT`, position NFT) are continuity markers
+  only and must not open independent basis lines during replay.
 
 ---
 

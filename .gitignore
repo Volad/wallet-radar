@@ -19,5 +19,9 @@ backend/bin/
 .env
 .env.local
 
+# Local data exports
+bybit-ledger/
+bybit-ledger.zip
+
 # R / misc
 .Rhistory

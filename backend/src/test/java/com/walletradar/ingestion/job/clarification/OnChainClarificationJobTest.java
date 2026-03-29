@@ -1,5 +1,6 @@
 package com.walletradar.ingestion.job.clarification;
 
+import com.walletradar.domain.event.OnChainNormalizationCompletedEvent;
 import com.walletradar.ingestion.config.OnChainClarificationProperties;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -50,6 +51,25 @@ class OnChainClarificationJobTest {
         int processed = job.runClarification();
 
         assertThat(processed).isEqualTo(1);
+        verify(metadataService, times(2)).processNextBatch();
+        verify(receiptService, never()).processNextBatch();
+    }
+
+    @Test
+    @DisplayName("clarification job starts immediately on normalization completion event")
+    void clarificationJobStartsOnNormalizationCompletionEvent() {
+        OnChainClarificationProperties properties = new OnChainClarificationProperties();
+        properties.setEnabled(true);
+        properties.getFullReceipt().setEnabled(false);
+
+        OnChainClarificationService metadataService = mock(OnChainClarificationService.class);
+        OnChainReceiptClarificationService receiptService = mock(OnChainReceiptClarificationService.class);
+        when(metadataService.processNextBatch()).thenReturn(4, 0);
+
+        OnChainClarificationJob job = new OnChainClarificationJob(properties, metadataService, receiptService);
+
+        job.onOnChainNormalizationCompleted(new OnChainNormalizationCompletedEvent(5, "manual"));
+
         verify(metadataService, times(2)).processNextBatch();
         verify(receiptService, never()).processNextBatch();
     }

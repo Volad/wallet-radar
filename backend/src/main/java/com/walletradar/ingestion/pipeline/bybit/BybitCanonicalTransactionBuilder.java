@@ -1,0 +1,436 @@
+package com.walletradar.ingestion.pipeline.bybit;
+
+import com.walletradar.domain.common.Decimal128Support;
+import com.walletradar.domain.common.PriceSource;
+import com.walletradar.domain.transaction.externalledger.ExternalLedgerRaw;
+import com.walletradar.domain.transaction.normalized.ClassificationSource;
+import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
+import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import org.springframework.stereotype.Component;
+
+import java.math.BigDecimal;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Optional;
+import java.util.stream.Collectors;
+
+/**
+ * Builds canonical normalized docs from Bybit source rows.
+ */
+@Component
+public class BybitCanonicalTransactionBuilder {
+
+    public NormalizedTransaction buildTradePair(
+            ExternalLedgerRaw left,
+            ExternalLedgerRaw right,
+            Instant now
+    ) {
+        NormalizedTransaction transaction = baseTransaction(pairId(left, right), left, NormalizedTransactionType.SWAP, now);
+        TradeLeg buyLeg;
+        TradeLeg sellLeg;
+        try {
+            buyLeg = resolveTradeLeg(left);
+            sellLeg = resolveTradeLeg(right);
+        } catch (IllegalStateException error) {
+            return buildMalformedTrade(left, now, "UTA_TRADE_ROLE_MISSING");
+        }
+        if (buyLeg.role() == sellLeg.role()) {
+            return buildMalformedTrade(left, now, "UTA_TRADE_ROLE_AMBIGUOUS");
+        }
+        ExternalLedgerRaw buyRow = buyLeg.role() == NormalizedLegRole.BUY ? left : right;
+        ExternalLedgerRaw sellRow = sellLeg.role() == NormalizedLegRole.SELL ? right : left;
+
+        List<NormalizedTransaction.Flow> flows = new ArrayList<>();
+        flows.add(flow(
+                NormalizedLegRole.BUY,
+                buyRow.getAssetSymbol(),
+                abs(buyRow.getQuantityRaw()),
+                firstNonNull(buyRow.getFilledPrice(), sellRow.getFilledPrice()),
+                PriceSource.EXECUTION
+        ));
+        flows.add(flow(
+                NormalizedLegRole.SELL,
+                sellRow.getAssetSymbol(),
+                negate(abs(sellRow.getQuantityRaw())),
+                null,
+                null
+        ));
+        appendFeeFlow(flows, firstFeeRow(left, right));
+        transaction.setFlows(flows);
+        initializeStatus(transaction, now);
+        return transaction;
+    }
+
+    public NormalizedTransaction buildOrphanTrade(
+            ExternalLedgerRaw row,
+            Instant now
+    ) {
+        TradeLeg tradeLeg;
+        try {
+            tradeLeg = resolveTradeLeg(row);
+        } catch (IllegalStateException error) {
+            return buildMalformedTrade(row, now, "UTA_TRADE_ROLE_MISSING");
+        }
+        NormalizedLegRole role = tradeLeg.role();
+        NormalizedTransactionType type = role == NormalizedLegRole.BUY
+                ? NormalizedTransactionType.EXTERNAL_TRANSFER_IN
+                : NormalizedTransactionType.EXTERNAL_TRANSFER_OUT;
+
+        NormalizedTransaction transaction = baseTransaction(row.getId(), row, type, now);
+        List<NormalizedTransaction.Flow> flows = List.of(flow(
+                role,
+                row.getAssetSymbol(),
+                role == NormalizedLegRole.BUY ? abs(row.getQuantityRaw()) : negate(abs(row.getQuantityRaw())),
+                row.getFilledPrice(),
+                row.getFilledPrice() == null ? null : PriceSource.EXECUTION
+        ));
+        transaction.setFlows(new ArrayList<>(flows));
+        transaction.setMissingDataReasons(List.of("UTA_TRADE_PAIR_NOT_FOUND"));
+        transaction.setStatus(NormalizedTransactionStatus.NEEDS_REVIEW);
+        markExcludedFromAccounting(transaction, "UTA_TRADE_PAIR_NOT_FOUND");
+        return transaction;
+    }
+
+    public NormalizedTransaction buildMappedRow(
+            ExternalLedgerRaw row,
+            Instant now
+    ) {
+        Optional<NormalizedTransactionType> mappedType = mapCanonicalType(row.getCanonicalType());
+        if (mappedType.isEmpty() && hasExplicitBasisRelevantCanonicalType(row)) {
+            return buildNeedsReviewRow(row, now, "BYBIT_CANONICAL_TYPE_UNMAPPED");
+        }
+        NormalizedTransactionType type = mappedType.orElse(NormalizedTransactionType.UNKNOWN);
+        NormalizedTransaction transaction = baseTransaction(normalizedId(row), row, type, now);
+        transaction.setFlows(new ArrayList<>(mappedFlows(row, type)));
+        initializeStatus(transaction, now);
+        return transaction;
+    }
+
+    public NormalizedTransaction buildConvertCluster(
+            List<ExternalLedgerRaw> rows,
+            Instant now
+    ) {
+        ExternalLedgerRaw anchor = rows.stream()
+                .min(Comparator.comparing(ExternalLedgerRaw::getTimeUtc).thenComparing(ExternalLedgerRaw::getId))
+                .orElseThrow();
+        NormalizedTransaction transaction = baseTransaction(clusterId("convert", rows), anchor, NormalizedTransactionType.SWAP, now);
+        transaction.setFlows(aggregateClusterFlows(rows));
+        initializeStatus(transaction, now);
+        return transaction;
+    }
+
+    public NormalizedTransaction buildStakingPair(
+            ExternalLedgerRaw left,
+            ExternalLedgerRaw right,
+            Instant now
+    ) {
+        ExternalLedgerRaw anchor = left.getId().compareTo(right.getId()) <= 0 ? left : right;
+        NormalizedTransaction transaction = baseTransaction(pairId(left, right), anchor, NormalizedTransactionType.STAKING_DEPOSIT, now);
+        transaction.setFlows(aggregateClusterFlows(List.of(left, right)));
+        initializeStatus(transaction, now);
+        return transaction;
+    }
+
+    public NormalizedTransaction buildNeedsReviewRow(
+            ExternalLedgerRaw row,
+            Instant now,
+            String missingReason
+    ) {
+        NormalizedTransactionType type = mapCanonicalType(row.getCanonicalType())
+                .orElse(NormalizedTransactionType.UNKNOWN);
+        NormalizedTransaction transaction = baseTransaction(normalizedId(row), row, type, now);
+        transaction.setFlows(new ArrayList<>());
+        transaction.setMissingDataReasons(List.of(missingReason));
+        transaction.setStatus(NormalizedTransactionStatus.NEEDS_REVIEW);
+        return transaction;
+    }
+
+    public NormalizedTransaction buildExcludedReviewRow(
+            ExternalLedgerRaw row,
+            Instant now,
+            String missingReason
+    ) {
+        NormalizedTransaction transaction = buildNeedsReviewRow(row, now, missingReason);
+        markExcludedFromAccounting(transaction, missingReason);
+        return transaction;
+    }
+
+    public void markMatchedContinuityCandidate(
+            NormalizedTransaction transaction,
+            String correlationId,
+            String matchedCounterparty,
+            Instant now
+    ) {
+        transaction.setCorrelationId(correlationId);
+        transaction.setContinuityCandidate(true);
+        transaction.setMatchedCounterparty(matchedCounterparty);
+        if (transaction.getStatus() != NormalizedTransactionStatus.NEEDS_REVIEW
+                && transaction.getStatus() != NormalizedTransactionStatus.PENDING_CLARIFICATION) {
+            transaction.setStatus(NormalizedTransactionStatus.CONFIRMED);
+            transaction.setConfirmedAt(transaction.getConfirmedAt() != null ? transaction.getConfirmedAt() : now);
+        }
+        transaction.setUpdatedAt(now);
+    }
+
+    private NormalizedTransaction baseTransaction(
+            String id,
+            ExternalLedgerRaw row,
+            NormalizedTransactionType type,
+            Instant now
+    ) {
+        NormalizedTransaction transaction = new NormalizedTransaction();
+        transaction.setId(id);
+        transaction.setTxHash(row.getTxHash());
+        transaction.setNetworkId(row.getNetworkId());
+        transaction.setWalletAddress(row.getWalletRef() != null && !row.getWalletRef().isBlank()
+                ? row.getWalletRef()
+                : "BYBIT:" + row.getUid());
+        transaction.setSource(NormalizedTransactionSource.BYBIT);
+        transaction.setBlockTimestamp(row.getTimeUtc());
+        transaction.setTransactionIndex(0);
+        transaction.setType(type);
+        transaction.setClassifiedBy(ClassificationSource.HEURISTIC);
+        transaction.setClarificationAttempts(0);
+        transaction.setFullReceiptClarificationAttempts(0);
+        transaction.setPricingAttempts(0);
+        transaction.setStatAttempts(0);
+        transaction.setCreatedAt(now);
+        transaction.setUpdatedAt(now);
+        transaction.setMissingDataReasons(new ArrayList<>());
+        transaction.setExcludedFromAccounting(false);
+        return transaction;
+    }
+
+    private void markExcludedFromAccounting(
+            NormalizedTransaction transaction,
+            String exclusionReason
+    ) {
+        transaction.setExcludedFromAccounting(true);
+        transaction.setAccountingExclusionReason(exclusionReason);
+    }
+
+    private void initializeStatus(NormalizedTransaction transaction, Instant now) {
+        boolean hasBuyOrSell = transaction.getFlows().stream()
+                .anyMatch(flow -> flow.getRole() == NormalizedLegRole.BUY || flow.getRole() == NormalizedLegRole.SELL);
+        if (hasBuyOrSell) {
+            transaction.setStatus(NormalizedTransactionStatus.PENDING_PRICE);
+            return;
+        }
+        transaction.setStatus(NormalizedTransactionStatus.CONFIRMED);
+        transaction.setConfirmedAt(now);
+    }
+
+    private List<NormalizedTransaction.Flow> mappedFlows(
+            ExternalLedgerRaw row,
+            NormalizedTransactionType type
+    ) {
+        BigDecimal quantity = abs(row.getQuantityRaw());
+        return switch (type) {
+            case REWARD_CLAIM -> List.of(flow(NormalizedLegRole.BUY, row.getAssetSymbol(), quantity, null, null));
+            case VAULT_DEPOSIT -> List.of(flow(NormalizedLegRole.TRANSFER, row.getAssetSymbol(), negate(quantity), null, null));
+            case VAULT_WITHDRAW -> List.of(flow(NormalizedLegRole.TRANSFER, row.getAssetSymbol(), quantity, null, null));
+            case EXTERNAL_TRANSFER_IN -> List.of(flow(NormalizedLegRole.BUY, row.getAssetSymbol(), quantity, null, null));
+            case EXTERNAL_TRANSFER_OUT -> List.of(flow(NormalizedLegRole.SELL, row.getAssetSymbol(), negate(quantity), null, null));
+            case BORROW -> List.of(flow(NormalizedLegRole.SELL, row.getAssetSymbol(), negate(quantity), null, null));
+            case REPAY -> List.of(flow(NormalizedLegRole.BUY, row.getAssetSymbol(), quantity, null, null));
+            case STAKING_DEPOSIT -> List.of(flow(
+                    row.getQuantityRaw() != null && row.getQuantityRaw().signum() < 0 ? NormalizedLegRole.SELL : NormalizedLegRole.BUY,
+                    row.getAssetSymbol(),
+                    row.getQuantityRaw() != null && row.getQuantityRaw().signum() < 0 ? negate(quantity) : quantity,
+                    null,
+                    null
+            ));
+            default -> List.of();
+        };
+    }
+
+    private Optional<NormalizedTransactionType> mapCanonicalType(String canonicalType) {
+        String normalized = normalizeCanonicalLiteral(canonicalType);
+        if (normalized == null) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(NormalizedTransactionType.valueOf(normalized));
+        } catch (IllegalArgumentException ignored) {
+            return Optional.empty();
+        }
+    }
+
+    private String mappedCanonicalLiteral(String canonicalType) {
+        return mapCanonicalType(canonicalType)
+                .map(Enum::name)
+                .orElseGet(() -> normalizeCanonicalLiteral(canonicalType));
+    }
+
+    private String normalizeCanonicalLiteral(String canonicalType) {
+        if (canonicalType == null || canonicalType.isBlank()) {
+            return null;
+        }
+        String normalized = canonicalType.trim().toUpperCase(Locale.ROOT);
+        return switch (normalized) {
+            case "EXTERNAL_INBOUND" -> NormalizedTransactionType.EXTERNAL_TRANSFER_IN.name();
+            default -> normalized;
+        };
+    }
+
+    private void appendFeeFlow(List<NormalizedTransaction.Flow> flows, ExternalLedgerRaw feeRow) {
+        if (feeRow == null || feeRow.getFeePaid() == null || feeRow.getFeePaid().signum() == 0) {
+            return;
+        }
+        flows.add(flow(
+                NormalizedLegRole.FEE,
+                feeRow.getAssetSymbol(),
+                negate(abs(feeRow.getFeePaid())),
+                feeRow.getFilledPrice(),
+                feeRow.getFilledPrice() == null ? null : PriceSource.EXECUTION
+        ));
+    }
+
+    private ExternalLedgerRaw firstFeeRow(ExternalLedgerRaw left, ExternalLedgerRaw right) {
+        if (left.getFeePaid() != null && left.getFeePaid().signum() != 0) {
+            return left;
+        }
+        if (right.getFeePaid() != null && right.getFeePaid().signum() != 0) {
+            return right;
+        }
+        return null;
+    }
+
+    private String pairId(ExternalLedgerRaw left, ExternalLedgerRaw right) {
+        return left.getId().compareTo(right.getId()) <= 0
+                ? left.getId() + "|" + right.getId()
+                : right.getId() + "|" + left.getId();
+    }
+
+    private String clusterId(String prefix, List<ExternalLedgerRaw> rows) {
+        return prefix + ":" + rows.stream()
+                .map(ExternalLedgerRaw::getId)
+                .sorted()
+                .collect(Collectors.joining("|"));
+    }
+
+    private String normalizedId(ExternalLedgerRaw row) {
+        String canonicalIdLiteral = mappedCanonicalLiteral(row.getCanonicalType());
+        if ("withdraw_deposit".equals(normalize(row.getSourceFileType()))
+                && row.getTxHash() != null
+                && !row.getTxHash().isBlank()
+                && row.getNetworkId() != null
+                && canonicalIdLiteral != null
+                && row.getAssetSymbol() != null
+                && row.getQuantityRaw() != null) {
+            return String.join(":",
+                    "BYBIT",
+                    normalize(row.getUid()),
+                    "withdraw_deposit",
+                    row.getNetworkId().name(),
+                    row.getTxHash().toLowerCase(Locale.ROOT),
+                    canonicalIdLiteral,
+                    row.getAssetSymbol(),
+                    abs(row.getQuantityRaw()).stripTrailingZeros().toPlainString()
+            );
+        }
+        return row.getId();
+    }
+
+    private NormalizedTransaction buildMalformedTrade(
+            ExternalLedgerRaw row,
+            Instant now,
+            String missingReason
+    ) {
+        NormalizedTransaction transaction = baseTransaction(row.getId(), row, NormalizedTransactionType.UNKNOWN, now);
+        transaction.setFlows(new ArrayList<>());
+        transaction.setMissingDataReasons(List.of(missingReason));
+        transaction.setStatus(NormalizedTransactionStatus.NEEDS_REVIEW);
+        return transaction;
+    }
+
+    private TradeLeg resolveTradeLeg(ExternalLedgerRaw row) {
+        if (row.getQuantityRaw() != null && row.getQuantityRaw().signum() > 0) {
+            return new TradeLeg(NormalizedLegRole.BUY);
+        }
+        if (row.getQuantityRaw() != null && row.getQuantityRaw().signum() < 0) {
+            return new TradeLeg(NormalizedLegRole.SELL);
+        }
+        if ("BUY".equalsIgnoreCase(row.getUtaLegRole()) || "BUY".equalsIgnoreCase(row.getUtaDirection())) {
+            return new TradeLeg(NormalizedLegRole.BUY);
+        }
+        if ("SELL".equalsIgnoreCase(row.getUtaLegRole()) || "SELL".equalsIgnoreCase(row.getUtaDirection())) {
+            return new TradeLeg(NormalizedLegRole.SELL);
+        }
+        throw new IllegalStateException("UTA trade row is missing leg role");
+    }
+
+    private record TradeLeg(NormalizedLegRole role) {
+    }
+
+    private List<NormalizedTransaction.Flow> aggregateClusterFlows(List<ExternalLedgerRaw> rows) {
+        Map<FlowKey, BigDecimal> aggregated = new LinkedHashMap<>();
+        for (ExternalLedgerRaw row : rows) {
+            if (row.getQuantityRaw() == null || row.getQuantityRaw().signum() == 0 || row.getAssetSymbol() == null) {
+                continue;
+            }
+            NormalizedLegRole role = row.getQuantityRaw().signum() > 0 ? NormalizedLegRole.BUY : NormalizedLegRole.SELL;
+            BigDecimal quantity = role == NormalizedLegRole.BUY
+                    ? abs(row.getQuantityRaw())
+                    : negate(abs(row.getQuantityRaw()));
+            FlowKey key = new FlowKey(role, row.getAssetSymbol());
+            aggregated.merge(key, quantity, BigDecimal::add);
+        }
+        return aggregated.entrySet().stream()
+                .map(entry -> flow(entry.getKey().role(), entry.getKey().assetSymbol(), entry.getValue(), null, null))
+                .toList();
+    }
+
+    private NormalizedTransaction.Flow flow(
+            NormalizedLegRole role,
+            String assetSymbol,
+            BigDecimal quantityDelta,
+            BigDecimal unitPriceUsd,
+            PriceSource priceSource
+    ) {
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(role);
+        flow.setAssetSymbol(assetSymbol);
+        flow.setQuantityDelta(quantityDelta);
+        BigDecimal persistedUnitPriceUsd = Decimal128Support.normalize(unitPriceUsd);
+        flow.setUnitPriceUsd(persistedUnitPriceUsd);
+        flow.setPriceSource(priceSource);
+        flow.setValueUsd(persistedUnitPriceUsd == null || quantityDelta == null
+                ? null
+                : Decimal128Support.normalize(quantityDelta.abs().multiply(persistedUnitPriceUsd)));
+        return flow;
+    }
+
+    private BigDecimal abs(BigDecimal value) {
+        return value == null ? null : value.abs();
+    }
+
+    private BigDecimal negate(BigDecimal value) {
+        return value == null ? null : value.negate();
+    }
+
+    private BigDecimal firstNonNull(BigDecimal left, BigDecimal right) {
+        return left != null ? left : right;
+    }
+
+    private boolean hasExplicitBasisRelevantCanonicalType(ExternalLedgerRaw row) {
+        return Boolean.TRUE.equals(row.getBasisRelevant())
+                && row.getCanonicalType() != null
+                && !row.getCanonicalType().isBlank();
+    }
+
+    private String normalize(String value) {
+        return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private record FlowKey(NormalizedLegRole role, String assetSymbol) {
+    }
+}

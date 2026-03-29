@@ -2,8 +2,10 @@ package com.walletradar.ingestion.adapter.evm.explorer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.walletradar.domain.common.NetworkId;
+import com.walletradar.ingestion.adapter.evm.explorer.model.ExplorerInternalTransfer;
 import com.walletradar.ingestion.adapter.evm.explorer.model.ExplorerReceipt;
 import com.walletradar.ingestion.adapter.evm.explorer.model.ExplorerTransactionDetails;
+import com.walletradar.ingestion.adapter.evm.explorer.model.ExplorerTokenTransfer;
 import com.walletradar.ingestion.adapter.evm.explorer.model.ExplorerTransaction;
 import com.walletradar.ingestion.config.IngestionExplorerProperties;
 import com.walletradar.ingestion.config.IngestionNetworkProperties;
@@ -18,6 +20,7 @@ import reactor.core.publisher.Mono;
 
 import java.net.URI;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -227,6 +230,48 @@ class BlockScoutExplorerProviderTest {
         ExplorerTransactionDetails details = provider.getTransactionDetails("0xmissing", NetworkId.ARBITRUM);
 
         assertThat(details).isNull();
+    }
+
+    @Test
+    void transactionSubresourcesHandleNestedMapShapeWithoutClassCast() {
+        TestConfig config = baseProperties();
+        AtomicReference<Integer> callCount = new AtomicReference<>(0);
+        WebClient.Builder webClientBuilder = WebClient.builder()
+                .exchangeFunction(request -> {
+                    int call = callCount.getAndSet(callCount.get() + 1);
+                    if (call == 0) {
+                        return Mono.just(jsonResponse("""
+                                {"status":"1","message":"OK","items":[{"transaction_hash":"0xhash","block_number":123,"timestamp":"2026-03-24T09:00:00.000000Z","total":"100","token":{"address_hash":"0xtoken","decimals":"18","symbol":"WETH","name":"Wrapped Ether"},"from":{"hash":"0xfrom"},"to":{"hash":"0xto"}}]}
+                                """));
+                    }
+                    return Mono.just(jsonResponse("""
+                            {"status":"1","message":"OK","items":[{"transaction_hash":"0xhash","block_number":123,"timestamp":"2026-03-24T09:00:00.000000Z","value":"100","success":true,"from":{"hash":"0xfrom"},"to":{"hash":"0xto"}}]}
+                            """));
+                });
+        BlockScoutExplorerProvider provider = new BlockScoutExplorerProvider(
+                webClientBuilder, objectMapper, config.explorerProperties(), config.networkProperties());
+
+        List<ExplorerTokenTransfer> tokenTransfers = provider.getTransactionTokenTransfers("0xhash", NetworkId.ARBITRUM);
+        List<ExplorerInternalTransfer> internalTransfers = provider.getTransactionInternalTransfers("0xhash", NetworkId.ARBITRUM);
+
+        assertThat(tokenTransfers).singleElement().satisfies(transfer -> {
+            assertThat(transfer.hash()).isEqualTo("0xhash");
+            assertThat(transfer.asDocument()).containsAllEntriesOf(Map.of(
+                    "contractAddress", "0xtoken",
+                    "from", "0xfrom",
+                    "to", "0xto",
+                    "value", "100"
+            ));
+        });
+        assertThat(internalTransfers).singleElement().satisfies(transfer -> {
+            assertThat(transfer.hash()).isEqualTo("0xhash");
+            assertThat(transfer.asDocument()).containsAllEntriesOf(Map.of(
+                    "from", "0xfrom",
+                    "to", "0xto",
+                    "value", "100",
+                    "isError", "0"
+            ));
+        });
     }
 
     @Test

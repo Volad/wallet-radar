@@ -12,6 +12,8 @@ import java.util.List;
  */
 public final class ClarificationEligibilitySupport {
 
+    public static final String BRIDGE_PAIR_EVIDENCE_REQUIRED = "BRIDGE_PAIR_EVIDENCE_REQUIRED";
+
     private ClarificationEligibilitySupport() {
     }
 

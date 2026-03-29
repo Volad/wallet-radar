@@ -9,7 +9,6 @@ import com.walletradar.ingestion.config.OnChainClarificationProperties;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassificationResult;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassifier;
 import com.walletradar.ingestion.pipeline.classification.support.ClarificationEligibilitySupport;
-import com.walletradar.ingestion.pipeline.clarification.ClarificationMode;
 import com.walletradar.ingestion.pipeline.clarification.ClarificationReceiptEnrichment;
 import com.walletradar.ingestion.pipeline.clarification.PendingClarificationQueryService;
 import com.walletradar.ingestion.pipeline.clarification.RawTransactionClarificationEnricher;
@@ -17,7 +16,8 @@ import com.walletradar.ingestion.pipeline.clarification.ReceiptClarificationGate
 import com.walletradar.ingestion.pipeline.onchain.OnChainNormalizedTransactionBuilder;
 import com.walletradar.ingestion.pipeline.onchain.OnChainRawTransactionView;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -30,8 +30,9 @@ import java.util.Optional;
  */
 @Service
 @RequiredArgsConstructor
-@Slf4j
 public class OnChainClarificationService {
+
+    private static final Logger log = LoggerFactory.getLogger(OnChainClarificationService.class);
 
     private final PendingClarificationQueryService pendingClarificationQueryService;
     private final OnChainClarificationProperties properties;
@@ -80,19 +81,15 @@ public class OnChainClarificationService {
                 return true;
             }
 
-            Optional<ClarificationReceiptEnrichment> enrichment = clarificationGateway.fetch(
-                    rawTransaction,
-                    ClarificationMode.METADATA_ONLY
-            );
+            Optional<ClarificationReceiptEnrichment> enrichment = clarificationGateway.fetchReceipt(rawTransaction);
             if (enrichment.isEmpty()) {
                 markFailure(normalizedTransaction, rawTransaction, "CLARIFICATION_RECEIPT_UNAVAILABLE", now);
                 return false;
             }
 
             rawTransactionClarificationEnricher.merge(rawTransaction, enrichment.get());
-            int currentAttempts = rawTransactionClarificationEnricher.recordAttempt(
+            int currentAttempts = rawTransactionClarificationEnricher.recordMetadataAttempt(
                     rawTransaction,
-                    ClarificationMode.METADATA_ONLY,
                     safeAttempts(normalizedTransaction.getClarificationAttempts()),
                     null
             );
@@ -146,9 +143,8 @@ public class OnChainClarificationService {
                 ? safeAttempts(normalizedTransaction.getClarificationAttempts()) + 1
                 : Math.max(0, existingAttempts);
         if (rawTransaction != null && incrementRawAttempt) {
-            nextAttempts = rawTransactionClarificationEnricher.recordAttempt(
+            nextAttempts = rawTransactionClarificationEnricher.recordMetadataAttempt(
                     rawTransaction,
-                    ClarificationMode.METADATA_ONLY,
                     safeAttempts(normalizedTransaction.getClarificationAttempts()),
                     reason
             );

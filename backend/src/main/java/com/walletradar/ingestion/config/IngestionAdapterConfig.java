@@ -32,7 +32,8 @@ import java.util.stream.Collectors;
         ScamFilterProperties.class,
         IngestionExplorerProperties.class,
         OnChainNormalizationProperties.class,
-        OnChainClarificationProperties.class
+        OnChainClarificationProperties.class,
+        BybitNormalizationProperties.class
 })
 public class IngestionAdapterConfig {
 

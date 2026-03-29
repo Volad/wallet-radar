@@ -34,12 +34,16 @@ Parallelism allowed:
 
 ## Immediate Continuation From Current Partial Implementation
 
-The current codebase already contains `BE-03` foundations and a partial `BE-04`
-classifier skeleton. The next executor slice must proceed in this order:
+The current codebase has already completed the normalization/clarification
+closeout required for pricing readiness. The next executor slice must proceed
+in this order:
 
-1. `BE-04A` Protocol-registry source consolidation + loader/validator
-2. `BE-04B` Single-result special-handler contract + dispatcher
-3. `BE-04C` Registry-backed classifier rollout + coverage tests
+1. `BE-06A` Pricing source contract + historical price cache
+2. `BE-06B` Event-local resolvers for stablecoin, execution, swap-derived, and wrapper pricing
+3. `BE-06C` Binance historical market-data adapter + deterministic symbol mapping
+4. `BE-06D` CoinGecko bounded fallback + unresolved-price behavior
+5. `BE-06E` Bybit pricing integration and continuity-safe pricing rules
+6. `BE-06F` Pricing rerun pack + AVCO-start data gate
 
 ### BE-04A — Protocol-Registry Source Consolidation + Loader/Validator
 
@@ -1706,20 +1710,46 @@ Required tests:
 ### BE-06 — Pricing
 
 Purpose:
-- Implement the approved pricing chain and unresolved-price behavior.
+- Implement the approved pricing pipeline, including event-local pricing,
+  external market-data fallback, unresolved-price behavior, and source-aware
+  handling for Bybit canonical rows.
 
 Primary write scope:
 - `backend/src/main/java/com/walletradar/pricing/**` or restored equivalent module boundary
 - pricing job and resolver chain
+- Mongo persistence for historical price cache
 
 Implementation scope:
 - resolver order:
   - stablecoin parity
+  - exact execution price from canonical source evidence
   - swap-derived
   - wrapper/native
+  - Binance historical
   - CoinGecko historical
   - `PRICE_UNKNOWN`
+- transaction-type contract:
+  - `SWAP` prices from canonical wallet-boundary execution ratio before any
+    external candle source
+  - `LP_ENTRY`, `LP_EXIT`, matched bridge continuity, protocol custody,
+    lending continuity, vault continuity, and staking continuity do not require
+    principal market pricing for basis carry-over
+  - `EXTERNAL_INBOUND`, `REWARD_CLAIM`, and `LP_FEE_CLAIM` acquire at
+    receive-time fair market value
+  - `EXTERNAL_TRANSFER_OUT` disposes at event-time fair market value unless an
+    explicit continuity or pending-request semantic already won
+  - matched Bybit deposit/withdraw plus on-chain leg prices fees only and may
+    not price the principal twice
+- external source strategy:
+  - primary external source is Binance market data for listed assets
+  - CoinGecko is bounded fallback only
+  - long-tail DeFi assets must prefer tx-local swap-derived pricing before
+    generic external market lookup
+- price cache:
+  - persist deterministic historical price buckets by asset + time + source
+  - avoid repeated Binance / CoinGecko calls during reruns and replay
 - `WRAPPER` price source support
+- `EXECUTION` and `BINANCE` price source support
 - unresolved-price handling:
   - quantity remains valid for replay
   - price fields remain null
@@ -1728,15 +1758,185 @@ Implementation scope:
 
 Definition of done:
 - pricing does not block quantity continuity
+- event-local evidence wins over external market data whenever the canonical row
+  already proves execution price or exact swap ratio
 - wrapper/native mapping works without unnecessary CoinGecko lookups
+- Binance lookup is used before CoinGecko for listed assets
+- Bybit trades reuse ledger execution price without unnecessary external lookup
+- historical price cache deduplicates repeated rerun lookups deterministically
 - non-FEE flow pricing behavior matches the docs
 
 Required tests:
 - stablecoin resolver test
+- exact execution resolver test
 - swap-derived resolver test
 - wrapper/native resolver test
+- Binance historical resolver test
+- Binance-miss -> CoinGecko fallback test
+- LP continuity row does not require principal market price test
+- matched Bybit deposit/withdraw avoids duplicated principal pricing test
 - `PRICE_UNKNOWN` non-blocking test
 - pricing-job status transition test
+
+Immediate executor split for `BE-06`:
+
+1. `BE-06A` Pricing source contract + historical price cache
+2. `BE-06B` Event-local resolvers for stablecoin, execution, swap-derived, and wrapper pricing
+3. `BE-06C` Binance historical market-data adapter + deterministic symbol mapping
+4. `BE-06D` CoinGecko bounded fallback + unresolved-price behavior
+5. `BE-06E` Bybit pricing integration and continuity-safe pricing rules
+6. `BE-06F` Pricing rerun pack + AVCO-start data gate
+
+#### BE-06A — Pricing Source Contract + Historical Price Cache
+
+Purpose:
+- Introduce the canonical pricing inputs/outputs before external adapters are added.
+
+Primary write scope:
+- pricing domain model
+- `historical_prices` persistence contract
+- pricing repository/index wiring
+
+Implementation scope:
+- add `EXECUTION`, `BINANCE`, `COINGECKO`, `UNKNOWN` source semantics to the
+  pricing layer
+- key cache rows by deterministic asset identity + time bucket + source
+- support rerun-safe upsert behavior
+
+Definition of done:
+- pricing stage reads/writes one canonical price-cache shape
+- reruns do not duplicate cache rows or change meaning
+
+Required tests:
+- cache upsert/idempotency test
+- price-source enum/serialization test
+
+#### BE-06B — Event-Local Resolvers For Stablecoin, Execution, Swap-Derived, And Wrapper Pricing
+
+Purpose:
+- Price rows from canonical tx evidence before any external market lookup.
+
+Primary write scope:
+- event-local resolver chain
+- normalized flow pricing mapper
+
+Implementation scope:
+- stablecoin parity
+- exact execution price from canonical source evidence
+- swap-derived ratio from canonical wallet-boundary legs
+- wrapper/native alias pricing
+- explicit continuity handling for LP/bridge/lending/vault/custody rows
+
+Definition of done:
+- swaps use tx-local execution ratio first
+- continuity rows do not require synthetic principal market price
+- reward/fee side-flows are still priceable when needed
+
+Required tests:
+- stablecoin swap anchor test
+- two-leg swap with one externally priced anchor test
+- LP continuity principal no-price-required test
+- bridge continuity principal no-price-required test
+
+#### BE-06C — Binance Historical Market-Data Adapter + Deterministic Symbol Mapping
+
+Purpose:
+- Make Binance the primary external market-data source for listed assets.
+
+Primary write scope:
+- Binance adapter/client
+- symbol mapping / alias mapping
+- cache-fill logic
+
+Implementation scope:
+- use Binance market-data endpoints and archive-compatible lookup strategy
+- deterministic mapping from canonical asset identity to Binance trading pair
+- respect listing/delist windows and avoid symbol-guess drift
+- support native majors and known wrapped aliases through canonical mapping
+
+Definition of done:
+- listed assets price from Binance before CoinGecko is attempted
+- mapping behavior is deterministic and auditable
+
+Required tests:
+- listed asset happy path
+- delisted / unavailable symbol test
+- wrapped alias mapping test
+
+#### BE-06D — CoinGecko Bounded Fallback + Unresolved-Price Behavior
+
+Purpose:
+- Preserve coverage when Binance cannot price the row, without turning
+  CoinGecko into the backbone of the pipeline.
+
+Primary write scope:
+- CoinGecko adapter/client
+- fallback orchestration
+- unresolved-price state handling
+
+Implementation scope:
+- attempt CoinGecko only after Binance miss or unsupported mapping
+- keep request volume bounded and cache-backed
+- surface `PRICE_UNRESOLVABLE` / `UNKNOWN` without dropping quantity
+
+Definition of done:
+- Binance miss flows deterministically into CoinGecko fallback or `UNKNOWN`
+- unresolved-price rows continue replay with incomplete-history signaling
+
+Required tests:
+- Binance miss -> CoinGecko hit test
+- Binance miss -> CoinGecko miss -> `PRICE_UNKNOWN` test
+
+#### BE-06E — Bybit Pricing Integration And Continuity-Safe Pricing Rules
+
+Purpose:
+- Make the pricing stage source-aware enough to consume Bybit canonical docs
+  without duplicating principal pricing across the unified accounting universe.
+
+Primary write scope:
+- pricing rules for `source=BYBIT`
+- continuity correlation handling
+
+Implementation scope:
+- use exact Bybit execution price for paired trades
+- matched withdraw/deposit plus on-chain leg prices fees only and preserves
+  principal continuity
+- unmatched Bybit deposit/withdraw rows price as ordinary external
+  inbound/outbound only when correlation is absent
+
+Definition of done:
+- Bybit trades do not call external market-data sources for principal price when
+  the ledger already provides it
+- matched Bybit transfer pairs do not mint duplicated priced acquisitions or
+  disposals
+
+Required tests:
+- Bybit trade execution-price reuse test
+- matched withdraw correlation no-double-pricing test
+- unmatched deposit/outbound pricing fallback test
+
+#### BE-06F — Pricing Rerun Pack + AVCO-Start Data Gate
+
+Purpose:
+- Prove the pricing stage is data-ready before AVCO replay starts.
+
+Primary write scope:
+- pricing job orchestration
+- observability / blocker output
+
+Implementation scope:
+- rerun pricing over normalized docs after resolver chain lands
+- emit explicit blocker/warning outputs for unresolved pricing
+- produce a live-data gate that must be green before AVCO replay starts
+
+Definition of done:
+- pricing can rerun idempotently over the same normalized set
+- unresolved rows remain explicit and auditable
+- AVCO start depends on data gate, not on code completion claim
+
+Required tests:
+- pricing rerun idempotency test
+- pricing blocker emission test
 
 ### BE-07 — Bybit Normalization
 
@@ -5079,6 +5279,248 @@ Definition of done:
 Required tests:
 - regression pack covering every new family in `run/9`
 - stop-condition and canonical-shape lock tests
+
+Run/11 planning verdict:
+
+- no new backfill is required
+- review-tail volume is no longer the pricing blocker:
+  - `NEEDS_REVIEW = 0`
+  - `PENDING_CLARIFICATION = 0`
+- clarification persistence is no longer the pricing blocker:
+  - `clarification_persistence_mismatches = 0`
+  - canonical top-level `clarificationEvidence` is present on clarified rows
+- pricing remains blocked by ten audited resolved-lane promo-like inbound
+  rows that already sit in priceable
+  `EXTERNAL_INBOUND / PENDING_PRICE`
+- these rows would create false zero-cost inbound lots and contaminate AVCO,
+  cost basis, and move-basis replay
+- current raw is sufficient for the closeout:
+  - audited method families are already persisted
+  - token identity and sender shape are already persisted on the raw rows
+  - wallet-history isolation for the affected asset contracts is provable from
+    current Mongo
+  - no clarification redesign is required for this slice
+
+Official / primary sources used to define this slice:
+
+- explorer verification pages for the full audited hashes listed below
+- official protocol references already validated in the preceding slices remain
+  authoritative for the resolved LP / lending / bridge families that must not
+  regress:
+  - Euler EVC Integration Guide
+  - Pancake Infinity `CLPositionManager`
+  - Pancake Infinity `ICLPoolManager`
+  - Uniswap V3 `NonfungiblePositionManager`
+  - Pendle `ActionAddRemoveLiqV3`
+  - GMX `ExchangeRouter`
+
+Execution order after run/12:
+
+1. `BE-05BR` Avalanche homoglyph stablecoin spoof demotion closeout
+2. `BE-05BS` Ethereum self-drop promo token demotion closeout
+3. `BE-05BT` Base / Unichain batched promo distribution demotion closeout
+4. `BE-05BU` Polygon / Arbitrum distributor-transfer promo demotion closeout
+5. `BE-05BV` run/12 resolved-lane promo stop-condition lock
+6. `BE-05BW` run/12 rerun pack + repeat-audit handoff
+
+### BE-05BR — Avalanche Homoglyph Stablecoin Spoof Demotion Closeout
+
+Purpose:
+- Remove the audited Avalanche homoglyph `UЅDС` spoof inbound family from the
+  priceable resolved lane before pricing can mint fake stablecoin lots.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- Avalanche inbound / promo demotion tests
+
+Implementation scope:
+- demote the audited current-raw spoof family on non-canonical token contract
+  `0x318c6a3cb85952641cd253b2311b0cee30f44822` from
+  `EXTERNAL_INBOUND / PENDING_PRICE` into explicit non-priceable terminal
+  semantics such as `UNKNOWN / CONFIRMED / PROMO_SPAM_PHISHING`
+- cover the current audited hashes:
+  - `0x7877f061ff3612b38da3d9f09829ac2fb789154a391a0611f7cf316a98be2585`
+  - `0xb6949a71c32d3b2c2d1f84a9f0720030c4fca8806fefab48414743c1a9c94267`
+- use only current raw evidence:
+  - homoglyph `UЅDС` token identity
+  - non-canonical contract address
+  - repeated sender/distribution shape
+- do not regress legitimate canonical stablecoin inbound transfers
+
+Definition of done:
+- the audited homoglyph `UЅDС` rows no longer remain priceable
+  `EXTERNAL_INBOUND / PENDING_PRICE`
+- legitimate canonical stablecoin transfers remain economic
+
+Required tests:
+- audited homoglyph `UЅDС` fixture -> explicit non-priceable promo lane
+- canonical stablecoin transfer fixture remains economic
+
+### BE-05BS — Ethereum Self-Drop Promo Token Demotion Closeout
+
+Purpose:
+- Remove the audited Ethereum token-contract self-drop promo families from the
+  resolved priceable inbound lane.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- Ethereum self-drop promo tests
+
+Implementation scope:
+- demote direct token-contract self-drop inbound rows, where the token contract
+  is also the transfer sender and current raw shows no later wallet history for
+  the asset, into explicit non-priceable promo/spam terminal semantics
+- cover the audited hashes:
+  - `0xd012cc1be63c0cb2f057efa37f9aacaaf65d1685e9d8346f96c58d85df739978`
+  - `0x8fe8035533c19f2e47d528bfafae0954cf82c7822113c0272cbb791ca3e1f267`
+  - `0x99ecc6af49c532f05842c7958cc605f5202b870695cff1a7cbcce33d960be31c`
+- keep legitimate reward distributors and ordinary token transfers outside this
+  demotion
+
+Definition of done:
+- the audited Ethereum self-drop rows leave priceable
+  `EXTERNAL_INBOUND / PENDING_PRICE`
+- legitimate ERC-20 inbound transfers do not regress into promo/spam
+
+Required tests:
+- self-drop promo fixture -> explicit non-priceable promo lane
+- legitimate inbound ERC-20 transfer fixture remains economic
+
+### BE-05BT — Base / Unichain Batched Promo Distribution Demotion Closeout
+
+Purpose:
+- Remove the remaining audited batched promo distributions from Base and
+  Unichain without regressing legitimate batched economic inbound.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- Base / Unichain batched promo tests
+
+Implementation scope:
+- demote the audited current-raw batched promo families into explicit
+  non-priceable promo/spam terminal semantics:
+  - Base `batchTransfer(address token, address[] recipients, uint256[] amounts)`
+    / selector `0x1239ec8c`:
+    `0x1c6ed7d5796c3b7612e6c74ac09e28f9e35c48ed628ab03238cf8b11a628b021`
+  - Unichain
+    `sendBatchTokens(address token,uint256 tokenAmount,address[] targets)` /
+    selector `0x9f1b6858`:
+    `0x2c2ea17b2b0552a67f29c006effed3ca555059394d079438046bcb2fed5ed27a`
+- use only persisted raw evidence:
+  - batched fan-out method family
+  - inbound-only movement
+  - promotional token identity
+  - no later wallet history for the same asset
+- do not regress legitimate batched reward / bridge / LP / lending rows
+
+Definition of done:
+- the audited Base and Unichain batched promo rows no longer remain priceable
+  `EXTERNAL_INBOUND / PENDING_PRICE`
+- legitimate batched economic rows remain economic
+
+Required tests:
+- Base `batchTransfer(...)` promo fixture -> explicit non-priceable promo lane
+- Unichain `sendBatchTokens(...)` promo fixture -> explicit non-priceable
+  promo lane
+- representative legitimate batched inbound fixture remains economic
+
+### BE-05BU — Polygon / Arbitrum Distributor-Transfer Promo Demotion Closeout
+
+Purpose:
+- Remove the remaining audited one-off distributor-transfer promo rows from the
+  resolved priceable lane on Polygon and Arbitrum.
+
+Primary write scope:
+- `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/**`
+- Polygon / Arbitrum promo demotion tests
+
+Implementation scope:
+- demote the audited current-raw distributor-transfer families into explicit
+  non-priceable promo/spam terminal semantics:
+  - Polygon `ZHT Token` distributor transfers:
+    `0x94bd752f0213ad5400835a9f1895c0b7c32ea855de1897ecd5919c25312ed20e`
+    `0xbff90aa7171b084be578a4b0dc2351cb24ba3e823f4cb6134ac432b7edda15a0`
+  - Arbitrum `xAUUSD` one-off distributor transfer:
+    `0x9a2ed17307b8fe69ef297d90c4ee5794381e050746e727fabf6d58b7bd120a47`
+- use only current raw + current Mongo evidence:
+  - fixed distributor sender pattern
+  - token identity
+  - one-off wallet history for the asset contract
+- keep legitimate token transfers outside this demotion
+
+Definition of done:
+- the audited Polygon and Arbitrum rows leave priceable
+  `EXTERNAL_INBOUND / PENDING_PRICE`
+- legitimate token transfers do not regress into promo/spam
+
+Required tests:
+- Polygon `ZHT` promo fixture -> explicit non-priceable promo lane
+- Arbitrum `xAUUSD` promo fixture -> explicit non-priceable promo lane
+- legitimate inbound transfer fixture remains economic
+
+### BE-05BV — Run/12 Resolved-Lane Promo Stop-Condition Lock
+
+Purpose:
+- Freeze the post-`run/12` steady state so future reruns do not reintroduce
+  resolved-lane promo-like inbound leakage into pricing.
+
+Primary write scope:
+- backend tests
+- small classifier/docs updates if needed
+
+Implementation scope:
+- lock all ten audited run/12 promo-like families as explicit non-priceable
+  terminal rows
+- ensure `NEEDS_REVIEW = 0` does not become the only readiness signal in tests
+- ensure these families do not silently fall back to generic
+  `EXTERNAL_INBOUND / PENDING_PRICE`
+- preserve the already-correct resolved LP / lending / bridge rows from
+  `run/12`
+
+Definition of done:
+- all ten audited run/12 hashes stay outside the priceable inbound lane
+- resolved-lane promo-like families remain explicit terminal non-priceable rows
+- legitimate reward, bridge, lending, and LP rows do not regress
+
+Required tests:
+- regression pack covering each audited run/12 family
+- representative legitimate inbound transfer fixture remains economic
+- readiness test that asserts zero audited promo-like leaks in resolved lane
+
+### BE-05BW — Run/12 Rerun Pack + Repeat-Audit Handoff
+
+Purpose:
+- Finish the run/12 closeout slice with a single rerun-ready pack and the next
+  live-data pricing gate.
+
+Primary write scope:
+- backend tests
+- task/docs updates if needed
+
+Implementation scope:
+- run targeted regression coverage for:
+  - Avalanche homoglyph spoof demotion
+  - Ethereum self-drop demotion
+  - Base / Unichain batched promo demotion
+  - Polygon / Arbitrum distributor-transfer demotion
+  - resolved-lane promo stop-condition lock
+- hand off the next live-data gate explicitly
+
+Definition of done:
+- no new backfill is required for this slice
+- rerun instructions are explicit:
+  - minimum required rerun: `normalization`
+  - acceptable end-to-end rerun: `normalization + clarification`
+- next audit gate is explicit and data-based:
+  - zero confirmed resolved promo-like inbound rows remain in priceable
+    `EXTERNAL_INBOUND / PENDING_PRICE`
+  - the audited ten hashes no longer leak into pricing
+  - clarification persistence remains at `0` mismatches
+
+Required tests:
+- regression pack covering every new family in `run/12`
+- no-regression checks for the previously closed LP / lending / stop-condition
+  rows
 
 ## Mandatory Test Matrix
 

@@ -1,23 +1,25 @@
 package com.walletradar.ingestion.job.clarification;
 
+import com.walletradar.domain.event.OnChainNormalizationCompletedEvent;
 import com.walletradar.ingestion.config.OnChainClarificationProperties;
 import com.walletradar.ingestion.job.support.StageExecutionLogSupport;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.scheduling.annotation.Scheduled;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Scheduled driver for on-chain clarification with metadata and allowlisted full-receipt passes.
+ * Event-driven driver for on-chain clarification with metadata and allowlisted full-receipt passes.
  */
 @Component
 @RequiredArgsConstructor
-@Slf4j
 public class OnChainClarificationJob {
 
     private static final String STAGE_NAME = "on-chain-clarification";
+    private static final Logger log = LoggerFactory.getLogger(OnChainClarificationJob.class);
 
     private final AtomicBoolean running = new AtomicBoolean(false);
 
@@ -25,16 +27,16 @@ public class OnChainClarificationJob {
     private final OnChainClarificationService onChainClarificationService;
     private final OnChainReceiptClarificationService onChainReceiptClarificationService;
 
-    @Scheduled(fixedDelayString = "${walletradar.normalization.clarification.schedule-interval-ms:120000}")
-    public void runScheduled() {
-        if (!properties.isEnabled()) {
-            return;
-        }
-        runClarification("scheduled");
-    }
-
     public int runClarification() {
         return runClarification("manual");
+    }
+
+    @EventListener
+    public void onOnChainNormalizationCompleted(OnChainNormalizationCompletedEvent event) {
+        if (!properties.isEnabled() || event == null || event.processed() <= 0) {
+            return;
+        }
+        runClarification("normalization-completed");
     }
 
     private int runClarification(String trigger) {

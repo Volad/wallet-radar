@@ -29,7 +29,7 @@ public class GmxV2ExchangeRouterSpecialHandler implements ProtocolSpecialHandler
     ) {
         String methodId = view.methodId();
         if (CREATE_ORDER.equals(methodId) || SpecialHandlerSupport.contains(view.functionName(), "createorder")) {
-            return SpecialHandlerResult.of(view, NormalizedTransactionType.PROTOCOL_CUSTODY_DEPOSIT, entry.confidence(), legs);
+            return SpecialHandlerResult.unsupported();
         }
         if (CREATE_DEPOSIT.equals(methodId) || SpecialHandlerSupport.contains(view.functionName(), "createdeposit")) {
             return SpecialHandlerResult.of(view, NormalizedTransactionType.LP_ENTRY, entry.confidence(), legs);

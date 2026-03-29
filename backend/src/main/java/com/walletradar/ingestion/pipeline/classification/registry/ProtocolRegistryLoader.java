@@ -6,7 +6,8 @@ import com.walletradar.domain.common.ConfidenceLevel;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.ingestion.pipeline.onchain.OnChainRawTransactionView;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Component;
 
@@ -22,12 +23,12 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
-@Slf4j
 @Component
 @RequiredArgsConstructor
 public class ProtocolRegistryLoader {
 
     static final String RESOURCE_PATH = "protocol-registry.json";
+    private static final Logger log = LoggerFactory.getLogger(ProtocolRegistryLoader.class);
 
     private final ObjectMapper objectMapper;
 

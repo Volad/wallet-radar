@@ -5,8 +5,10 @@ package com.walletradar.domain.common;
  */
 public enum PriceSource {
     STABLECOIN,
+    EXECUTION,
     SWAP_DERIVED,
     WRAPPER,
+    BINANCE,
     COINGECKO,
     MANUAL,
     UNKNOWN

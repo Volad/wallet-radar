@@ -46,4 +46,6 @@ public class RawTransaction {
     private Instant createdAt;
     /** Full source payload: EVM = tx details/receipt/explorer payload, Solana = full tx + sigInfo. */
     private org.bson.Document rawData;
+    /** Canonical clarification evidence persisted from post-fetch enrichment. */
+    private org.bson.Document clarificationEvidence;
 }

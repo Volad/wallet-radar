@@ -8,7 +8,9 @@ import org.junit.jupiter.api.Test;
 
 import java.math.BigInteger;
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -112,16 +114,61 @@ class OnChainRawTransactionViewTest {
         Document clarificationLog = new Document("address", "0xclarified")
                 .append("topics", List.of("0xreal"))
                 .append("data", "0x02");
-        OnChainRawTransactionView view = OnChainRawTransactionView.wrap(rawWith(new Document()
+        RawTransaction rawTransaction = rawWith(new Document()
                 .append("timeStamp", "1700000000")
                 .append("transactionIndex", "1")
                 .append("logs", List.of(new Document("__syntheticTransferLog", true)
-                        .append("address", "0xsynthetic")))
-                .append("clarificationEvidence", new Document("receipt", new Document("logs", List.of(clarificationLog))))));
+                        .append("address", "0xsynthetic"))));
+        rawTransaction.setClarificationEvidence(new Document()
+                .append("fullReceiptClarificationAttempts", 1)
+                .append("receipt", new Document("logs", List.of(clarificationLog))));
+        OnChainRawTransactionView view = OnChainRawTransactionView.wrap(rawTransaction);
 
         assertThat(view.persistedLogs()).hasSize(1);
         assertThat(view.persistedLogs().getFirst().getString("address")).isEqualTo("0xclarified");
         assertThat(view.hasClarificationEvidence()).isTrue();
+    }
+
+    @Test
+    @DisplayName("full receipt logs take precedence over narrower receipt logs")
+    void fullReceiptLogsTakePrecedenceOverReceiptLogs() {
+        RawTransaction rawTransaction = rawWith(new Document()
+                .append("timeStamp", "1700000000")
+                .append("transactionIndex", "1"));
+        rawTransaction.setClarificationEvidence(new Document()
+                .append("fullReceiptClarificationAttempts", 1)
+                .append("receipt", new Document("logs", List.of(
+                        new Document("address", "0xreceipt").append("topics", List.of("0xreceipt"))
+                )))
+                .append("fullReceipt", new Document("logs", List.of(
+                        new Document("address", "0xfull").append("topics", List.of("0xfull"))
+                ))));
+
+        OnChainRawTransactionView view = OnChainRawTransactionView.wrap(rawTransaction);
+
+        assertThat(view.persistedLogs()).singleElement().extracting(log -> log.getString("address")).isEqualTo("0xfull");
+    }
+
+    @Test
+    @DisplayName("canonical top-level clarification evidence wins over legacy nested shape")
+    void canonicalTopLevelClarificationEvidenceWinsOverLegacyNestedShape() {
+        RawTransaction rawTransaction = rawWith(new Document()
+                .append("timeStamp", "1700000000")
+                .append("transactionIndex", "1")
+                .append("clarificationEvidence", new Document()
+                        .append("fullReceiptClarificationAttempts", 1)
+                        .append("receipt", new Document("logs", List.of(
+                                new Document("address", "0xlegacy").append("topics", List.of("0xlegacy"))
+                        )))));
+        rawTransaction.setClarificationEvidence(new Document()
+                .append("fullReceiptClarificationAttempts", 1)
+                .append("receipt", new Document("logs", List.of(
+                        new Document("address", "0xcanonical").append("topics", List.of("0xcanonical"))
+                ))));
+
+        OnChainRawTransactionView view = OnChainRawTransactionView.wrap(rawTransaction);
+
+        assertThat(view.persistedLogs()).singleElement().extracting(log -> log.getString("address")).isEqualTo("0xcanonical");
     }
 
     @Test
@@ -133,14 +180,83 @@ class OnChainRawTransactionViewTest {
                 .append("value", "100")
                 .append("tokenDecimal", "2")
                 .append("tokenSymbol", "TOK");
-        OnChainRawTransactionView view = OnChainRawTransactionView.wrap(rawWith(new Document()
+        RawTransaction rawTransaction = rawWith(new Document()
                 .append("timeStamp", "1700000000")
                 .append("transactionIndex", "1")
-                .append("explorer", new Document("tokenTransfers", List.of()))
-                .append("clarificationEvidence", new Document("transfers", new Document("tokenTransfers", List.of(clarificationTransfer))))));
+                .append("explorer", new Document("tokenTransfers", List.of())));
+        rawTransaction.setClarificationEvidence(new Document()
+                .append("fullReceiptClarificationAttempts", 1)
+                .append("transfers", new Document("tokenTransfers", List.of(clarificationTransfer))));
+        OnChainRawTransactionView view = OnChainRawTransactionView.wrap(rawTransaction);
 
         assertThat(view.explorerTokenTransfers()).hasSize(1);
         assertThat(view.explorerTokenTransfers().getFirst().getString("tokenSymbol")).isEqualTo("TOK");
+    }
+
+    @Test
+    @DisplayName("clarification evidence accepts nested linked-hash-map shape from Mongo")
+    void clarificationEvidenceAcceptsNestedLinkedHashMapShapeFromMongo() {
+        Map<String, Object> clarificationLog = new LinkedHashMap<>();
+        clarificationLog.put("address", "0xclarified");
+        clarificationLog.put("topics", List.of("0xreal"));
+        clarificationLog.put("data", "0x02");
+
+        Map<String, Object> clarificationTransfer = new LinkedHashMap<>();
+        clarificationTransfer.put("contractAddress", "0xtoken");
+        clarificationTransfer.put("from", "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        clarificationTransfer.put("to", "0x1111111111111111111111111111111111111111");
+        clarificationTransfer.put("value", "100");
+        clarificationTransfer.put("tokenDecimal", "2");
+        clarificationTransfer.put("tokenSymbol", "TOK");
+
+        Map<String, Object> clarificationReceipt = new LinkedHashMap<>();
+        clarificationReceipt.put("logs", List.of(clarificationLog));
+
+        Map<String, Object> clarificationTransfers = new LinkedHashMap<>();
+        clarificationTransfers.put("tokenTransfers", List.of(clarificationTransfer));
+
+        Map<String, Object> fullReceipt = new LinkedHashMap<>();
+        fullReceipt.put("logs", List.of(clarificationLog));
+
+        RawTransaction rawTransaction = rawWith(new Document()
+                .append("timeStamp", "1700000000")
+                .append("transactionIndex", "1"));
+        rawTransaction.setClarificationEvidence(new Document()
+                .append("fullReceiptClarificationAttempts", 1)
+                .append("receipt", clarificationReceipt)
+                .append("transfers", clarificationTransfers)
+                .append("fullReceipt", fullReceipt));
+
+        OnChainRawTransactionView view = OnChainRawTransactionView.wrap(rawTransaction);
+
+        assertThat(view.hasClarificationEvidence()).isTrue();
+        assertThat(view.hasFullReceiptClarificationEvidence()).isTrue();
+        assertThat(view.persistedLogs()).singleElement().extracting(log -> log.getString("address")).isEqualTo("0xclarified");
+        assertThat(view.explorerTokenTransfers()).singleElement().extracting(transfer -> transfer.getString("tokenSymbol")).isEqualTo("TOK");
+    }
+
+    @Test
+    @DisplayName("persisted full receipt evidence is exposed even when explicit attempt counter is missing")
+    void persistedFullReceiptEvidenceIsExposedWithoutExplicitAttemptCounter() {
+        Document rawLog = new Document("address", "0xraw").append("topics", List.of("0xtopic"));
+        RawTransaction rawTransaction = rawWith(new Document()
+                .append("timeStamp", "1700000000")
+                .append("transactionIndex", "1")
+                .append("logs", List.of(rawLog)));
+        rawTransaction.setClarificationEvidence(new Document()
+                .append("clarificationAttempts", 1)
+                .append("receipt", new Document("logs", List.of(
+                        new Document("address", "0xclarified").append("topics", List.of("0xclarified"))
+                )))
+                .append("fullReceipt", new Document("logs", List.of(
+                        new Document("address", "0xclarified-full").append("topics", List.of("0xclarified-full"))
+                ))));
+
+        OnChainRawTransactionView view = OnChainRawTransactionView.wrap(rawTransaction);
+
+        assertThat(view.hasClarificationEvidence()).isTrue();
+        assertThat(view.hasFullReceiptClarificationEvidence()).isTrue();
+        assertThat(view.persistedLogs()).singleElement().extracting(log -> log.getString("address")).isEqualTo("0xclarified-full");
     }
 
     @Test

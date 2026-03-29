@@ -1,6 +1,7 @@
 package com.walletradar.ingestion.pipeline.clarification;
 
 import com.walletradar.domain.transaction.raw.RawTransaction;
+import com.walletradar.ingestion.pipeline.support.BsonCoercionSupport;
 import org.bson.Document;
 import org.springframework.stereotype.Component;
 
@@ -37,15 +38,12 @@ public class RawTransactionClarificationEnricher {
             return;
         }
 
-        Document clarificationEvidence = rawData.get("clarificationEvidence", Document.class);
-        if (clarificationEvidence == null) {
-            clarificationEvidence = new Document();
-        }
+        Document clarificationEvidence = canonicalClarificationEvidence(rawTransaction);
         if (enrichment.sourceFamily() != null) {
             clarificationEvidence.put("sourceFamily", enrichment.sourceFamily().name());
         }
 
-        Document receiptEvidence = clarificationEvidence.get("receipt", Document.class);
+        Document receiptEvidence = BsonCoercionSupport.asDocument(clarificationEvidence.get("receipt"));
         if (receiptEvidence == null) {
             receiptEvidence = new Document();
         }
@@ -71,47 +69,62 @@ public class RawTransactionClarificationEnricher {
             clarificationEvidence.put("receipt", receiptEvidence);
         }
 
-        if (enrichment.hasFullReceiptEvidence()) {
-            Document transfersEvidence = clarificationEvidence.get("transfers", Document.class);
-            if (transfersEvidence == null) {
-                transfersEvidence = new Document();
-            }
-            if (!enrichment.tokenTransfers().isEmpty()) {
-                transfersEvidence.put("tokenTransfers", copyDocuments(enrichment.tokenTransfers()));
-            }
-            if (!enrichment.internalTransfers().isEmpty()) {
-                transfersEvidence.put("internalTransfers", copyDocuments(enrichment.internalTransfers()));
-            }
-            if (!transfersEvidence.isEmpty()) {
-                clarificationEvidence.put("transfers", transfersEvidence);
-            }
-            if (enrichment.fullReceiptPayload() != null) {
-                clarificationEvidence.put("fullReceipt", new Document(enrichment.fullReceiptPayload()));
-            }
+        Document transfersEvidence = BsonCoercionSupport.asDocument(clarificationEvidence.get("transfers"));
+        if (transfersEvidence == null) {
+            transfersEvidence = new Document();
         }
-        rawData.put("clarificationEvidence", clarificationEvidence);
+        if (!enrichment.tokenTransfers().isEmpty()) {
+            transfersEvidence.put("tokenTransfers", copyDocuments(enrichment.tokenTransfers()));
+        }
+        if (!enrichment.internalTransfers().isEmpty()) {
+            transfersEvidence.put("internalTransfers", copyDocuments(enrichment.internalTransfers()));
+        }
+        if (!transfersEvidence.isEmpty()) {
+            clarificationEvidence.put("transfers", transfersEvidence);
+        }
+        if (enrichment.fullReceiptPayload() != null) {
+            clarificationEvidence.put("fullReceipt", BsonCoercionSupport.copyDocument(enrichment.fullReceiptPayload()));
+        }
+
+        persistCanonicalClarificationEvidence(rawTransaction, clarificationEvidence);
     }
 
-    public int recordAttempt(RawTransaction rawTransaction, ClarificationMode mode, String failureReason) {
-        return recordAttempt(rawTransaction, mode, 0, failureReason);
+    public int recordMetadataAttempt(RawTransaction rawTransaction, String failureReason) {
+        return recordMetadataAttempt(rawTransaction, 0, failureReason);
     }
 
-    public int recordAttempt(
+    public int recordMetadataAttempt(
             RawTransaction rawTransaction,
-            ClarificationMode mode,
+            int minimumAttempts,
+            String failureReason
+    ) {
+        return recordAttempt(rawTransaction, false, minimumAttempts, failureReason);
+    }
+
+    public int recordFullReceiptAttempt(RawTransaction rawTransaction, String failureReason) {
+        return recordFullReceiptAttempt(rawTransaction, 0, failureReason);
+    }
+
+    public int recordFullReceiptAttempt(
+            RawTransaction rawTransaction,
+            int minimumAttempts,
+            String failureReason
+    ) {
+        return recordAttempt(rawTransaction, true, minimumAttempts, failureReason);
+    }
+
+    private int recordAttempt(
+            RawTransaction rawTransaction,
+            boolean fullReceiptAttempt,
             int minimumAttempts,
             String failureReason
     ) {
         if (rawTransaction.getRawData() == null) {
             rawTransaction.setRawData(new Document());
         }
-        Document rawData = rawTransaction.getRawData();
-        Document clarificationEvidence = rawData.get("clarificationEvidence", Document.class);
-        if (clarificationEvidence == null) {
-            clarificationEvidence = new Document();
-        }
+        Document clarificationEvidence = canonicalClarificationEvidence(rawTransaction);
 
-        String counterKey = mode == ClarificationMode.FULL_RECEIPT
+        String counterKey = fullReceiptAttempt
                 ? FULL_RECEIPT_ATTEMPTS_KEY
                 : CLARIFICATION_ATTEMPTS_KEY;
         int nextAttempts = Math.max(safeCounter(clarificationEvidence.get(counterKey)), Math.max(0, minimumAttempts)) + 1;
@@ -119,19 +132,37 @@ public class RawTransactionClarificationEnricher {
 
         if (failureReason != null && !failureReason.isBlank()) {
             clarificationEvidence.put(
-                    mode == ClarificationMode.FULL_RECEIPT
+                    fullReceiptAttempt
                             ? LAST_FULL_RECEIPT_FAILURE_REASON_KEY
                             : LAST_METADATA_FAILURE_REASON_KEY,
                     failureReason
             );
-        } else if (mode == ClarificationMode.FULL_RECEIPT) {
+        } else if (fullReceiptAttempt) {
             clarificationEvidence.remove(LAST_FULL_RECEIPT_FAILURE_REASON_KEY);
         } else {
             clarificationEvidence.remove(LAST_METADATA_FAILURE_REASON_KEY);
         }
 
-        rawData.put("clarificationEvidence", clarificationEvidence);
+        persistCanonicalClarificationEvidence(rawTransaction, clarificationEvidence);
         return nextAttempts;
+    }
+
+    private static Document canonicalClarificationEvidence(RawTransaction rawTransaction) {
+        if (rawTransaction.getClarificationEvidence() != null) {
+            return BsonCoercionSupport.copyDocument(rawTransaction.getClarificationEvidence());
+        }
+        if (rawTransaction.getRawData() == null) {
+            return new Document();
+        }
+        Document legacy = BsonCoercionSupport.asDocument(rawTransaction.getRawData().get("clarificationEvidence"));
+        return legacy == null ? new Document() : legacy;
+    }
+
+    private static void persistCanonicalClarificationEvidence(RawTransaction rawTransaction, Document clarificationEvidence) {
+        rawTransaction.setClarificationEvidence(BsonCoercionSupport.copyDocument(clarificationEvidence));
+        if (rawTransaction.getRawData() != null) {
+            rawTransaction.getRawData().remove("clarificationEvidence");
+        }
     }
 
     private static boolean hasPersistableEvidence(ClarificationReceiptEnrichment enrichment) {
@@ -149,7 +180,7 @@ public class RawTransactionClarificationEnricher {
         java.util.List<Document> copies = new java.util.ArrayList<>(documents.size());
         for (Document document : documents) {
             if (document != null) {
-                copies.add(new Document(document));
+                copies.add(BsonCoercionSupport.copyDocument(document));
             }
         }
         return java.util.List.copyOf(copies);

@@ -3,7 +3,7 @@
 > **Based on:** raw_transactions (Etherscan explorer payload) · protocol-registry.json · external_ledger_raw (Bybit)
 > **Output:** normalized_transactions with flows[] ready for Pricing → AVCO
 > **Status:** Draft for architect review
-> **Last updated:** 2026-03-22
+> **Last updated:** 2026-03-28
 
 ---
 
@@ -82,6 +82,13 @@ Human-readable explorer page summaries may assist offline audit only; they are n
 classifier evidence. If a source returns transfer-style payload rows, ingestion must
 separate them into tx-level fields plus `explorer.tokenTransfers[]` instead of
 letting transfer-row `value` or `to` contaminate the top-level tx shape.
+Async request / execute families and burn-only unbonding requests must not be
+promoted into active priceable rows unless current raw plus persisted
+clarification evidence is sufficient to reconstruct the full basis lifecycle.
+Container / router subcalls remain decoder output derived from saved
+`rawData.input`; they are not materialized as standalone raw transactions.
+`GMX` EventEmitter hashed topics are compared against canonical event names;
+runtime may not lower-case event names before hashing them.
 
 ---
 
@@ -159,7 +166,7 @@ method_ids    "0x????????"          → description string
 | Field | Values |
 |---|---|
 | `family` | DEX · LENDING · STAKING · BRIDGE · CUSTODY · AGGREGATOR · YIELD · WRAPPER · PERP |
-| `event_type` | SWAP · LP_MINT · LP_BURN · LENDING_DEPOSIT · LENDING_WITHDRAW · BORROW · REPAY · STAKING_DEPOSIT · STAKING_WITHDRAW · VAULT_DEPOSIT · VAULT_WITHDRAW · BRIDGE_OUT · PROTOCOL_CUSTODY_DEPOSIT · REWARD_CLAIM · null |
+| `event_type` | SWAP · LP_MINT · LP_BURN · LENDING_DEPOSIT · LENDING_WITHDRAW · LENDING_LOOP_OPEN · LENDING_LOOP_REBALANCE · LENDING_LOOP_DECREASE · LENDING_LOOP_CLOSE · BORROW · REPAY · STAKING_DEPOSIT · STAKING_WITHDRAW · VAULT_DEPOSIT · VAULT_WITHDRAW · BRIDGE_OUT · PROTOCOL_CUSTODY_DEPOSIT · REWARD_CLAIM · null |
 | `role` | ROUTER · POOL · POSITION_MANAGER · FACTORY · BRIDGE_ENTRY · BRIDGE_EXIT · STAKE_CONTRACT · VAULT · REWARD_ROUTER · WRAPPER_TOKEN · WRAPPER_CONTRACT · ORDER_VAULT · EXCHANGE_ROUTER · POSITION_ROUTER · ORDER_BOOK |
 | `confidence` | HIGH · MEDIUM |
 | `decomposeByLegs` | boolean — if true, the contract is not safe to classify by one static `event_type` alone |
@@ -233,6 +240,31 @@ createdAt         Instant
 updatedAt         Instant
 ```
 
+Blocking `NEEDS_REVIEW` is preferable to silent active-lane corruption for:
+
+- request / execute lifecycle families such as GMX deposit helpers plus
+  `executeDeposit(...)`
+- burn-only unbonding initiations such as `initiateWithdrawal(...)`
+- receipt-log-rich Euler `batch(...)` rows whose full economic lifecycle is not
+  yet decoder-complete
+
+When current persisted raw already proves the lifecycle key or clarified
+transfer path, those families should leave blocker review and resolve into
+explicit canonical async/request or economic types instead of staying
+`UNKNOWN`.
+
+For the audited Euler loop family, the canonical model is intentionally
+pragmatic:
+
+- the collateral-share position is the economic asset tracked in canonical flows
+- stable-like clarified supply / return amounts provide the event-local implied
+  share price
+- share-to-share Euler restructures are modeled explicitly as
+  `LENDING_LOOP_REBALANCE` continuity rows instead of generic LP or UNKNOWN
+  fallbacks
+- debt-marker evidence remains in raw / clarification evidence and is not
+  replayed as a standalone asset lot
+
 ---
 
 ## 3. Normalized Transaction Types
@@ -240,26 +272,42 @@ updatedAt         Instant
 ```
 SWAP                        Token A exchanged for token B
 LP_ENTRY                    Liquidity provided to a pool
+LP_ENTRY_REQUEST            Async LP-entry request / escrow step
+LP_ENTRY_SETTLEMENT         Async LP-entry execute / settlement step
+LP_EXIT_REQUEST             Async LP-exit request / share-burn step
+LP_EXIT_SETTLEMENT          Async LP-exit execute / settlement step
 LP_EXIT                     Liquidity withdrawn from a pool
 LP_FEE_CLAIM                Accumulated LP fees collected without removing position
 LP_POSITION_STAKE           LP NFT position transferred to farm/strategy
 LP_POSITION_UNSTAKE         LP NFT position returned from farm/strategy
 LENDING_DEPOSIT             Asset supplied to a lending protocol
 LENDING_WITHDRAW            Asset withdrawn from a lending protocol
+LENDING_LOOP_OPEN           Euler-style borrow-backed loop / multiply opening
+LENDING_LOOP_REBALANCE      Euler-style share-to-share rebalance / restructure
+LENDING_LOOP_DECREASE       Euler-style partial deleverage / unwind
+LENDING_LOOP_CLOSE          Euler-style final unwind into wallet-visible asset
 BORROW                      Loan taken from a lending protocol
 REPAY                       Loan repaid to a lending protocol
 STAKING_DEPOSIT             ETH/token staked  (ETH → stETH / mETH / rETH)
+STAKING_WITHDRAW_REQUEST    Burn / cooldown initiation before later unstake claim
 STAKING_WITHDRAW            Staked position unwound
 VAULT_DEPOSIT               Deposit into a yield vault  (ERC-4626 or similar)
 VAULT_WITHDRAW              Withdrawal from a yield vault
 BRIDGE_OUT                  Asset sent to another network via bridge
 BRIDGE_IN                   Asset received from another network via bridge
+DEX_ORDER_REQUEST           Async spot-order request / escrow funding
+DEX_ORDER_SETTLEMENT        Async spot-order settlement / payout completion
+DERIVATIVE_ORDER_REQUEST    Deterministic derivative order request / collateral lock
+DERIVATIVE_ORDER_EXECUTION  Derivative order executed without position-direction decode
+DERIVATIVE_ORDER_CANCEL     Derivative order cancelled / unlock path
+DERIVATIVE_POSITION_INCREASE Executed derivative increase / open
+DERIVATIVE_POSITION_DECREASE Executed derivative decrease / close
 PROTOCOL_CUSTODY_DEPOSIT    Asset transferred to protocol custody  (Hyperliquid, GMX perp)
 PROTOCOL_CUSTODY_WITHDRAW   Asset returned from protocol custody
 REWARD_CLAIM                Rewards received  (fee claim, airdrop, staking yield)
-EXTERNAL_INBOUND            Token/ETH received from an unrecognized address
+EXTERNAL_TRANSFER_IN        Token/ETH received from an external counterparty
 EXTERNAL_TRANSFER_OUT       Token/ETH sent to an unrecognized address
-INTERNAL_TRANSFER           Transfer between the user's own tracked wallets
+INTERNAL_TRANSFER           Legacy continuity marker; new reruns must derive continuity from metadata instead of persisting this type
 APPROVE                     Token spend allowance  (no asset movement, not basis-relevant)
 ADMIN_CONFIG                Wallet/protocol config call  (no asset movement, fee-only if gas exists)
 WRAP                        Native token → wrapped token  (ETH → WETH)
@@ -357,8 +405,8 @@ if entry != null AND networkId ∈ entry.networks:
               modifyLiquidities            → decode supported action set and classify
                                              as LP lifecycle by inner legs / action ids
               0x0c49ccbe decreaseLiquidity →
-                if BUY flows present       → LP_EXIT
-                if only FEE flows          → LP_FEE_CLAIM
+                if inbound non-fee movement present → LP_EXIT
+                if only FEE flows                  → LP_FEE_CLAIM
               0xfc6f7865 collect           → LP_FEE_CLAIM
               0x00f714ce burn              → LP_EXIT
             confidence = HIGH
@@ -434,12 +482,22 @@ Bridge settlement methods
 GMX methods
   0xec51b4c9  createIncreasePosition       → PROTOCOL_CUSTODY_DEPOSIT
   0x6eba5d0c  createDecreasePosition       → PROTOCOL_CUSTODY_WITHDRAW
-  0x0ad58d2f  createOrder        (V2)      → PROTOCOL_CUSTODY_DEPOSIT
+  0x0ad58d2f  createOrder        (V2)      → do NOT classify here
+                                             use GMX V2 derivative order lifecycle
   0x2e7eff49  createDeposit      (V2)      → LP_ENTRY
-  0x87d66368  createWithdrawal   (V2)      → LP_EXIT
+  0x87d66368  createWithdrawal   (V2)      → LP_EXIT_REQUEST
+  0xc96fea9f  executeWithdrawal  (V2)      → LP_EXIT_SETTLEMENT
   0xb88a802f  claimFees                    → REWARD_CLAIM
   0x9e6b0e50  mintAndStakeGlp              → LP_ENTRY
   0x0f3aa554  unstakeAndRedeemGlp          → LP_EXIT
+  note: audited `GMX / GLV` async exit requests may confirm the withdrawal
+        subcall family either from decoded `bytes[]` selectors or, when decode
+        is incomplete, from saved raw calldata selector fragments together with
+        helper-funding selectors, outbound-only movement, and burned share
+        principal
+  note: when a `GMX / GLV` settlement receipt contains both an intermediate
+        deposit-executed key and a higher-scope GLV-executed key, normalization
+        must persist the higher-scope GLV key as `correlationId`
 
 Pendle methods
   0x4e7ed11c  swapExactTokenForPt          → SWAP  (buy PT)
@@ -486,6 +544,13 @@ Reward-like names such as `claim`, `reward`, or `airdrop` are also not sufficien
 when token metadata shows obvious promo/phishing markers. Bridge-settlement names
 such as `repay`, `redeem`, or `fillRelay` must be resolved by selector / contract
 before broad keyword fallback can assign lending or vault semantics.
+Bridge-start names such as `swapAndStartBridgeTokensViaMayan`,
+`swapAndStartBridgeTokensViaStargate`, and `swapAndStartBridgeTokensViaSquid`
+must resolve before broad `swap` keyword fallback can assign `SWAP`.
+Those explicit source-chain bridge-start selectors may still require bounded
+full-receipt clarification for later pair reconstruction, but that extra
+evidence need must not change the owner-agnostic source-side type away from
+`BRIDGE_OUT`.
 
 ```
 fn = rawData.functionName.toLowerCase()
@@ -588,22 +653,30 @@ H-08  REWARD_CLAIM — only inbound, no outbound
       AND rawData.from NOT IN trackedWalletUniverse
       AND rawData.from IN knownRewardDistributorSet                    → REWARD_CLAIM
 
-H-09  EXTERNAL_INBOUND — plain inbound default
+H-09  EXTERNAL_TRANSFER_IN — plain inbound default
       inTokens.notEmpty() AND outTokens.isEmpty() AND nativeOut == 0
       AND rawData.from NOT IN trackedWalletUniverse
-      AND no reward-like signal exists                                 → EXTERNAL_INBOUND
+      AND no reward-like signal exists                                 → EXTERNAL_TRANSFER_IN
 
-H-10  EXTERNAL_INBOUND — reward-like but unproven
+H-10  EXTERNAL_TRANSFER_IN — reward-like but unproven
       inTokens.notEmpty() AND outTokens.isEmpty() AND nativeOut == 0
       AND rawData.from NOT IN trackedWalletUniverse
       AND reward-like signal exists
-      AND rawData.from NOT IN knownRewardDistributorSet                → EXTERNAL_INBOUND
+      AND rawData.from NOT IN knownRewardDistributorSet                → EXTERNAL_TRANSFER_IN
       missingDataReasons += "AMBIGUOUS_INBOUND_VS_REWARD"
 
 H-11  EXTERNAL_TRANSFER_OUT — only outbound, no inbound
       outTokens.notEmpty() AND inTokens.isEmpty()
       AND rawData.to NOT IN trackedWalletUniverse
       AND rawData.to NOT IN protocolRegistry                           → EXTERNAL_TRANSFER_OUT
+
+H-11A EXTERNAL_TRANSFER_OUT — routed aggregator send without wallet BUY
+      outTokens.notEmpty() AND inTokens.isEmpty()
+      AND canonical contract is a known aggregator/router
+      AND no higher-priority bridge-start rule matched                 → EXTERNAL_TRANSFER_OUT
+      A wallet-local `SWAP` requires both wallet-visible legs.
+      Time-window proximity to a later inbound on another chain is not enough
+      to promote this family into `BRIDGE_OUT`.
 
 H-12  ZERO_AMOUNT token no-op
       outTokens.notEmpty() AND all outbound token values == 0
@@ -614,10 +687,12 @@ H-12  ZERO_AMOUNT token no-op
                                                                          status = NEEDS_REVIEW
                                                                          missingDataReasons += "ZERO_AMOUNT_TOKEN_TRANSFER"
 
-H-13  INTERNAL_TRANSFER — wallet to installation's own tracked wallet
+H-13  continuity candidate metadata for installation-known counterparties
       rawData.to IN trackedWalletUniverse OR rawData.from IN trackedWalletUniverse
-                                                                       → INTERNAL_TRANSFER
-      confidence = HIGH  (exception: heuristic step, but result is reliable)
+                                                                       → persist owner-agnostic EXTERNAL_TRANSFER_OUT / EXTERNAL_TRANSFER_IN
+      continuityCandidate = true
+      matchedCounterparty = tracked wallet address
+      confidence = HIGH
 
 H-14  LENDING_DEPOSIT — receipt token pattern
       IN token symbol starts with "a", "c", or "s" (aUSDC, cETH, sDAI)
@@ -635,6 +710,36 @@ H-16  UNKNOWN — nothing matched
         confidence = LOW
         status = NEEDS_REVIEW
         missingDataReasons += "CLASSIFICATION_FAILED"
+```
+
+### Step 4A — Active-Lane Swap Invariant
+
+Before a candidate row can remain `type = SWAP` in the active pricing lane:
+
+```text
+SWAP-INV-01  wallet-boundary swap shape
+             if candidate type == SWAP
+             AND non-fee BUY legs == 0
+             AND a higher-priority bridge-start rule did not match
+             AND outbound-only aggregator/router evidence is present
+             → demote to EXTERNAL_TRANSFER_OUT
+
+SWAP-INV-02  bridge-start source legs
+             if candidate function / selector proves
+               swapAndStartBridgeTokensViaMayan(...)
+               swapAndStartBridgeTokensViaStargate(...)
+               swapAndStartBridgeTokensViaSquid(...)
+             AND wallet-visible movement is source-side outbound
+             → BRIDGE_OUT
+             if persisted full-receipt bridge evidence is still absent
+             → missingDataReasons += BRIDGE_PAIR_EVIDENCE_REQUIRED
+
+SWAP-INV-03  unresolved malformed swap shape
+             if candidate type == SWAP
+             AND (non-fee BUY legs == 0 OR non-fee SELL legs == 0)
+             AND no deterministic transfer/bridge demotion applies
+             → status = NEEDS_REVIEW
+               missingDataReasons += "SWAP_SHAPE_INCOMPLETE"
 ```
 
 ---
@@ -732,21 +837,31 @@ BORROW
 REPAY
   OUT (repayment)      → SELL
 
-STAKING_DEPOSIT  (e.g. ETH → stETH)
-  OUT (ETH)            → SELL
-  IN  (stETH / mETH)   → BUY  (separate asset, distinct basis line — not an ETH alias)
+STAKING_DEPOSIT
+  liquid staking (e.g. ETH → stETH)
+    OUT (ETH)          → SELL
+    IN  (stETH / mETH) → BUY  (separate asset, distinct basis line — not an ETH alias)
+  classic stake-contract custody (e.g. Pancake SmartChef deposit(uint256))
+    OUT principal      → TRANSFER
+    IN  proof marker   → TRANSFER
+    IN  harvested reward → BUY
 
 STAKING_WITHDRAW
-  OUT (stETH / mETH)   → SELL
-  IN  (ETH)            → BUY
+  liquid staking unwind
+    OUT (stETH / mETH) → SELL
+    IN  (ETH)          → BUY
+  classic stake-contract custody unwind
+    OUT proof marker   → TRANSFER
+    IN  principal      → TRANSFER
+    IN  harvested reward → BUY
 
 LP_ENTRY
-  OUT flows (tokens into pool)  → SELL
-  IN  (LP token / NFT)          → TRANSFER  (LP token is not tracked for basis)
+  OUT underlying principal flows → TRANSFER
+  IN  (LP token / NFT)           → TRANSFER  (LP token is not tracked for basis)
 
 LP_EXIT
-  OUT (LP token / NFT)          → TRANSFER
-  IN  flows (tokens from pool)  → BUY
+  OUT (LP token / NFT)           → TRANSFER
+  IN  underlying principal flows → TRANSFER
 
 LP_FEE_CLAIM
   IN flows              → BUY  (new lot at market price)
@@ -772,17 +887,44 @@ PROTOCOL_CUSTODY_DEPOSIT  (Hyperliquid, GMX perp)
 PROTOCOL_CUSTODY_WITHDRAW
   IN  → TRANSFER  (basis returns)
 
+DEX_ORDER_REQUEST
+  request-side sell asset → SELL until replay correlates final settlement
+  same-tx gas / protocol fee → FEE
+  does not fall back to EXTERNAL_TRANSFER_OUT once the protocol order request
+  is proven
+
+DEX_ORDER_SETTLEMENT
+  settlement-side received asset → BUY
+  same-correlation replay finalizes the async spot swap
+  does not fall back to EXTERNAL_TRANSFER_IN once the protocol settlement is
+  proven
+
+DERIVATIVE_ORDER_REQUEST / DERIVATIVE_ORDER_EXECUTION /
+DERIVATIVE_ORDER_CANCEL / DERIVATIVE_POSITION_INCREASE /
+DERIVATIVE_POSITION_DECREASE
+  all non-fee flows → TRANSFER
+  do not model the market underlying as spot BUY / SELL
+  request / execution / settlement accounting must follow collateral, fee, and
+  realized payout semantics instead of synthetic spot lots
+
 REWARD_CLAIM
   IN flows → BUY  (new lot at fair market value on claim date)
 
-EXTERNAL_INBOUND
+EXTERNAL_TRANSFER_IN
   IN flows → BUY
 
 EXTERNAL_TRANSFER_OUT
   OUT flows → SELL
 
 INTERNAL_TRANSFER
-  all flows → TRANSFER  (basis is carried across wallets; no realised PnL and no new acquisition lot)
+  legacy only
+  new reruns use EXTERNAL_TRANSFER_IN / EXTERNAL_TRANSFER_OUT plus continuity metadata,
+  then replay upgrades matched pairs into basis carry-over
+
+BRIDGE_OUT / BRIDGE_IN
+  source/destination bridge facts remain owner-agnostic
+  same-asset correlated pairs may carry basis during replay
+  asset-changing correlated routes are not plain move-basis continuity
 
 WRAP  (ETH → WETH)
   OUT native → TRANSFER
@@ -895,7 +1037,7 @@ BRIDGE-04  Destination-side bridge settlement methods such as
            `fillV3Relay`, `fillRelay`, `redeemWithFee`, `execute302`,
            and `directFulfill` on recognized bridge contracts are
            `BRIDGE_IN` continuity events, not `REPAY`, `LENDING_WITHDRAW`,
-           or generic `EXTERNAL_INBOUND`.
+           or generic `EXTERNAL_TRANSFER_IN`.
 ```
 
 ### 6.5 LP tokens — not tracked for basis
@@ -903,9 +1045,11 @@ BRIDGE-04  Destination-side bridge settlement methods such as
 ```
 LP-01  LP tokens (Uniswap V2 pair, Balancer BPT, Curve LP token) do not
        have an independent basis line.
-       At LP_ENTRY: IN LP token → role = TRANSFER (not BUY)
-       At LP_EXIT:  OUT LP token → role = TRANSFER (not SELL)
-       Basis is tracked through the underlying token flows.
+       At LP_ENTRY: OUT underlying principal → role = TRANSFER (not SELL)
+       At LP_ENTRY: IN LP token              → role = TRANSFER (not BUY)
+       At LP_EXIT:  OUT LP token             → role = TRANSFER (not SELL)
+       At LP_EXIT:  IN underlying principal  → role = TRANSFER (not BUY)
+       Basis is tracked through LP custody continuity, not through LP receipt assets.
 
 LP-02  Uniswap V3 NFT position
        IN/OUT NFT → role = TRANSFER, assetSymbol = "UNI_V3_POSITION"
@@ -950,7 +1094,7 @@ SCAM-02  Known legitimate reward-claim routes must not be dropped merely because
          Legitimate claim distributors require explicit regression fixtures.
 
 SCAM-03  If a promo/phishing tx survives raw persistence, normalization must still
-         keep it out of reward ambiguity and out of ordinary EXTERNAL_INBOUND defaulting.
+         keep it out of reward ambiguity and out of ordinary EXTERNAL_TRANSFER_IN defaulting.
 ```
 
 ---
@@ -1012,6 +1156,9 @@ review set, but this is not a widening of the base clarification queue:
   the raw row; cross-source fallback is exceptional and must be documented
 - it should persist both the adapted clarification evidence and the raw full
   receipt payload when the source exposes it
+- for audited async protocol lifecycles, it may also fetch and persist related
+  real txs from the same source family when current protocol evidence already
+  proves that a missing keeper / settlement tx belongs to the same lifecycle
 - clarification is not complete for a row unless that fetched evidence is
   persisted back onto the raw row in a deterministic shape
 - it must keep that new evidence in a dedicated clarification-evidence area,
@@ -1099,9 +1246,13 @@ BYBIT-PAIR-01  Pair rows using a sliding ±5 second window.
                  ]
 
                If pair NOT found (orphan leg):
-                 utaLegRole = BUY  → EXTERNAL_INBOUND,  flows = [BUY leg]
-                 utaLegRole = SELL → EXTERNAL_TRANSFER_OUT, flows = [SELL leg]
+                 preserve the observed leg as transfer-shaped evidence
                  missingDataReasons += "UTA_TRADE_PAIR_NOT_FOUND"
+                 status = NEEDS_REVIEW
+                 excludedFromAccounting = true
+                 accountingExclusionReason = "UTA_TRADE_PAIR_NOT_FOUND"
+                 do not leave the row in the priceable lane unless another
+                 official Bybit source reconstructs the missing leg
 
 BYBIT-PAIR-02  Contract symbol parsing
                parseBase("ETHUSDT")  → "ETH"
@@ -1117,7 +1268,8 @@ BYBIT-PAIR-02  Contract symbol parsing
 
 ```
 REWARD_CLAIM   (Earn Interest · Launchpool Yield · Airdrop)
-  flows = [{ role: BUY, assetSymbol, quantityDelta: +|quantityRaw| }]
+  flows = reward BUY legs only
+  exact same-asset same-quantity in/out marker pairs are removed from active economics
   unitPriceUsd → PricingJob (CoinGecko by date)
 
 VAULT_DEPOSIT  (Earn Subscription · Launchpool Subscription)
@@ -1128,8 +1280,9 @@ VAULT_WITHDRAW  (Earn Redemption · Launchpool Withdrawal)
   flows = [{ role: TRANSFER, assetSymbol, quantityDelta: +|quantityRaw| }]
   Semantics: basis returned from vault
 
-EXTERNAL_INBOUND  (Deposit)
+EXTERNAL_TRANSFER_IN  (Deposit)
   flows = [{ role: BUY, assetSymbol, quantityDelta: +|quantityRaw| }]
+  legacy raw canonicalType `EXTERNAL_INBOUND` must map here
 
 EXTERNAL_TRANSFER_OUT  (Withdraw)
   flows = [{ role: SELL, assetSymbol, quantityDelta: -|quantityRaw| }]
@@ -1143,10 +1296,12 @@ STAKING_DEPOSIT  (ETH 2.0 Stake + Mint combined)
   ]
 
 BORROW  (Pledge Assets)
-  flows = [{ role: SELL, assetSymbol, quantityDelta: -|quantityRaw| }]
+  reserve asset principal = BUY
+  debt-marker mint legs and execution settlement / refund legs = TRANSFER
 
 REPAY  (Repay Principal)
-  flows = [{ role: BUY, assetSymbol, quantityDelta: +|quantityRaw| }]
+  reserve asset principal = SELL
+  debt-marker burn legs and execution settlement / refund legs = TRANSFER
 
 FEE  (Repay Interest · bonus recollect)
   flows = [{ role: FEE, assetSymbol, quantityDelta: -|quantityRaw| }]
@@ -1167,8 +1322,17 @@ BYBIT-BRIDGE-01  For each Withdraw row in withdraw_deposit where txHash != null:
                      - keep the Bybit row as source evidence
                      - create a BYBIT canonical document with walletAddress = BYBIT:<uid>
                      - create/use the corresponding ON_CHAIN canonical document with the same correlationId
-                     - both sides use TRANSFER flows only
-                     - replay treats the pair as one basis-carry movement, not as BUY+SELL
+                     - persist owner-agnostic transfer type on both sides
+                     - set continuityCandidate = true
+
+BYBIT-BRIDGE-02  For withdraw_deposit inbound rows with canonical inbound
+                 semantics:
+                   - synthetic normalized rows must materialize as
+                     EXTERNAL_TRANSFER_IN
+                   - they may not fall through to CONFIRMED UNKNOWN
+                   - if mapping fails, emit NEEDS_REVIEW with an explicit
+                     unmapped-canonical reason
+                     - replay treats the pair as one basis-carry movement when both sides are inside the active accounting universe
 
                  Not found:
                    onChainCorrelation.status = UNMATCHED
@@ -1182,7 +1346,7 @@ BYBIT-BRIDGE-02  For each Deposit row:
                  and txHash matches. If found:
                    - assign the same correlationId
                    - keep both source sides traceable
-                   - model both canonical sides as TRANSFER
+                   - persist owner-agnostic transfer type plus continuity metadata
 ```
 
 ### 8.5 Bybit status initialization
@@ -1197,6 +1361,13 @@ BYBIT-STATUS-01  If the canonical row contains BUY or SELL flows:
 BYBIT-STATUS-02  If the canonical row contains TRANSFER-only flows:
                  initial status = CONFIRMED after canonical validation
                  because no price lookup is required for basis continuity
+
+BYBIT-STATUS-03  Explicitly unsupported but deterministic review families may
+                 remain persisted as:
+                   status = NEEDS_REVIEW
+                   excludedFromAccounting = true
+                 They stay visible for audit, but are outside active pricing
+                 and replay scope.
 
 BYBIT-STATUS-03  basisRelevant = false rows do not create normalized_transactions.
                  They remain in external_ledger_raw only.

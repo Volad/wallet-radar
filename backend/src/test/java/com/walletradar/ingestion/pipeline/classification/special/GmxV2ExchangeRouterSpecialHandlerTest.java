@@ -25,9 +25,11 @@ class GmxV2ExchangeRouterSpecialHandlerTest {
     private final GmxV2ExchangeRouterSpecialHandler handler = new GmxV2ExchangeRouterSpecialHandler();
 
     @Test
-    @DisplayName("createOrder becomes protocol custody deposit")
-    void createOrderBecomesProtocolCustodyDeposit() {
-        assertType("0x0ad58d2f", "createOrder(CreateOrderParams)", NormalizedTransactionType.PROTOCOL_CUSTODY_DEPOSIT);
+    @DisplayName("createOrder is not classified by the generic special handler")
+    void createOrderIsNotClassifiedByGenericSpecialHandler() {
+        SpecialHandlerResult result = handler.classify(entry(), view("0x0ad58d2f", "createOrder(CreateOrderParams)"), legs());
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.UNKNOWN);
+        assertThat(result.missingDataReasons()).contains("HANDLER_UNSUPPORTED_METHOD");
     }
 
     @Test

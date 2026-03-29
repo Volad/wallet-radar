@@ -2,6 +2,9 @@ package com.walletradar.ingestion.pipeline.clarification;
 
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.domain.common.NetworkId;
+import com.walletradar.ingestion.pipeline.classification.support.ClarificationEligibilitySupport;
 import com.walletradar.ingestion.pipeline.onchain.OnChainRawTransactionView;
 
 import java.util.List;
@@ -36,9 +39,16 @@ public final class ReceiptClarificationEligibilitySupport {
             "0x4673757b36119b4632f798ad4e0d72fbd170ee0b7be4e4901bd1155ab3881775"
     );
 
-    private static final Set<String> HASH_ALLOWLIST_FOR_GMX_SETTLEMENT = Set.of(
-            "0x53bbb5b41325b3a043e9a9f16a6da4ab4624f0e7bbbf80fe8037446c4c2879e8"
-    );
+    private static final String GMX_HELPER_SEND_WNT_SELECTOR = "7d39aaf1";
+    private static final String GMX_HELPER_SEND_TOKENS_SELECTOR = "e6d66ac8";
+    private static final String GMX_DEPOSIT_REQUEST_CORRELATION_REQUIRED = "GMX_DEPOSIT_REQUEST_CORRELATION_REQUIRED";
+    private static final String GMX_DEPOSIT_SETTLEMENT_CORRELATION_REQUIRED = "GMX_DEPOSIT_SETTLEMENT_CORRELATION_REQUIRED";
+    private static final String GMX_WITHDRAWAL_REQUEST_CORRELATION_REQUIRED = "GMX_WITHDRAWAL_REQUEST_CORRELATION_REQUIRED";
+    private static final String GMX_WITHDRAWAL_SETTLEMENT_CORRELATION_REQUIRED = "GMX_WITHDRAWAL_SETTLEMENT_CORRELATION_REQUIRED";
+    private static final String GMX_DERIVATIVE_REQUEST_CORRELATION_REQUIRED = "GMX_DERIVATIVE_REQUEST_CORRELATION_REQUIRED";
+    private static final String GMX_DERIVATIVE_EXECUTION_EVIDENCE_REQUIRED = "GMX_DERIVATIVE_EXECUTION_EVIDENCE_REQUIRED";
+    private static final String COW_ORDER_SETTLEMENT_CORRELATION_REQUIRED = "COW_ORDER_SETTLEMENT_CORRELATION_REQUIRED";
+    private static final String GPV2_SETTLEMENT_SELECTOR = "0x13d79a0b";
 
     private ReceiptClarificationEligibilitySupport() {
     }
@@ -47,12 +57,52 @@ public final class ReceiptClarificationEligibilitySupport {
         if (normalizedTransaction == null || view == null) {
             return false;
         }
-        if (normalizedTransaction.getStatus() != NormalizedTransactionStatus.NEEDS_REVIEW) {
-            return false;
-        }
         List<String> reasons = normalizedTransaction.getMissingDataReasons() == null
                 ? List.of()
                 : normalizedTransaction.getMissingDataReasons();
+        boolean bridgeEvidenceCandidate = normalizedTransaction.getStatus() == NormalizedTransactionStatus.PENDING_PRICE
+                && normalizedTransaction.getType() == NormalizedTransactionType.BRIDGE_OUT;
+        boolean gmxDerivativeExecutionCandidate = isGmxDerivativeExecutionCandidate(normalizedTransaction, view);
+        boolean gmxPoolExitSettlementCandidate = isGmxPoolExitSettlementCandidate(normalizedTransaction, view);
+        boolean cowSettlementCandidate = isCowSettlementCandidate(normalizedTransaction, view);
+        boolean gmxPendingClarificationCandidate = isGmxPendingClarificationCandidate(normalizedTransaction, reasons);
+        if (normalizedTransaction.getStatus() != NormalizedTransactionStatus.NEEDS_REVIEW
+                && !bridgeEvidenceCandidate
+                && !gmxDerivativeExecutionCandidate
+                && !gmxPoolExitSettlementCandidate
+                && !cowSettlementCandidate
+                && !gmxPendingClarificationCandidate) {
+            return false;
+        }
+        if (bridgeEvidenceCandidate
+                && reasons.contains(ClarificationEligibilitySupport.BRIDGE_PAIR_EVIDENCE_REQUIRED)) {
+            return true;
+        }
+        if (normalizedTransaction.getStatus() == NormalizedTransactionStatus.PENDING_CLARIFICATION
+                && reasons.contains(GMX_DERIVATIVE_REQUEST_CORRELATION_REQUIRED)
+                && isGmxDerivativeRequest(normalizedTransaction)) {
+            return true;
+        }
+        if (normalizedTransaction.getStatus() == NormalizedTransactionStatus.PENDING_CLARIFICATION
+                && reasons.contains(GMX_DERIVATIVE_EXECUTION_EVIDENCE_REQUIRED)
+                && isGmxDerivativeExecutionFamily(normalizedTransaction)) {
+            return true;
+        }
+        if (normalizedTransaction.getStatus() == NormalizedTransactionStatus.PENDING_CLARIFICATION
+                && reasons.contains(COW_ORDER_SETTLEMENT_CORRELATION_REQUIRED)
+                && normalizedTransaction.getType() == NormalizedTransactionType.DEX_ORDER_SETTLEMENT
+                && "CoW Swap".equalsIgnoreCase(normalizedTransaction.getProtocolName())) {
+            return true;
+        }
+        if (gmxDerivativeExecutionCandidate) {
+            return true;
+        }
+        if (gmxPoolExitSettlementCandidate) {
+            return true;
+        }
+        if (cowSettlementCandidate) {
+            return true;
+        }
         String txHash = String.valueOf(view.txHash()).toLowerCase();
         if (NON_ECONOMIC_ALLOWLIST.contains(txHash)) {
             return true;
@@ -68,8 +118,18 @@ public final class ReceiptClarificationEligibilitySupport {
                 && reasons.contains("INSUFFICIENT_MOVEMENT_EVIDENCE")) {
             return true;
         }
-        if (HASH_ALLOWLIST_FOR_GMX_SETTLEMENT.contains(txHash)
-                && reasons.contains("GMX_ORDER_SETTLEMENT_UNRESOLVED")) {
+        if (reasons.contains(GMX_DEPOSIT_REQUEST_CORRELATION_REQUIRED)
+                && "0xac9650d8".equals(view.methodId())
+                && view.inputData() != null
+                && view.inputData().contains(GMX_HELPER_SEND_WNT_SELECTOR)
+                && view.inputData().contains(GMX_HELPER_SEND_TOKENS_SELECTOR)) {
+            return true;
+        }
+        if (reasons.contains(GMX_DEPOSIT_SETTLEMENT_CORRELATION_REQUIRED)
+                && ("0xc30d8910".equals(view.methodId())
+                || "0x5ee8ec8f".equals(view.methodId())
+                || String.valueOf(view.functionName()).contains("executedeposit")
+                || String.valueOf(view.functionName()).contains("executeglvdeposit"))) {
             return true;
         }
         if (HASH_ALLOWLIST_FOR_CLASSIFICATION_FAILED.contains(txHash)
@@ -77,5 +137,144 @@ public final class ReceiptClarificationEligibilitySupport {
             return true;
         }
         return "0xc16ae7a4".equals(view.methodId()) && reasons.contains("CLASSIFICATION_FAILED");
+    }
+
+    private static boolean isGmxPendingClarificationCandidate(
+            NormalizedTransaction normalizedTransaction,
+            List<String> reasons
+    ) {
+        if (normalizedTransaction == null
+                || normalizedTransaction.getStatus() != NormalizedTransactionStatus.PENDING_CLARIFICATION
+                || reasons == null
+                || reasons.isEmpty()) {
+            return false;
+        }
+        if (reasons.contains(GMX_DERIVATIVE_REQUEST_CORRELATION_REQUIRED)
+                && isGmxDerivativeRequest(normalizedTransaction)) {
+            return true;
+        }
+        if (reasons.contains(GMX_DERIVATIVE_EXECUTION_EVIDENCE_REQUIRED)
+                && isGmxDerivativeExecutionFamily(normalizedTransaction)) {
+            return true;
+        }
+        if (reasons.contains(COW_ORDER_SETTLEMENT_CORRELATION_REQUIRED)
+                && normalizedTransaction.getType() == NormalizedTransactionType.DEX_ORDER_SETTLEMENT
+                && "CoW Swap".equalsIgnoreCase(normalizedTransaction.getProtocolName())) {
+            return true;
+        }
+        if (reasons.contains(GMX_DEPOSIT_REQUEST_CORRELATION_REQUIRED)
+                && normalizedTransaction.getType() == NormalizedTransactionType.LP_ENTRY_REQUEST
+                && "GMX".equalsIgnoreCase(normalizedTransaction.getProtocolName())) {
+            return true;
+        }
+        if (reasons.contains(GMX_WITHDRAWAL_REQUEST_CORRELATION_REQUIRED)
+                && normalizedTransaction.getType() == NormalizedTransactionType.LP_EXIT_REQUEST
+                && "GMX".equalsIgnoreCase(normalizedTransaction.getProtocolName())) {
+            return true;
+        }
+        if (reasons.contains(GMX_DEPOSIT_SETTLEMENT_CORRELATION_REQUIRED)
+                && normalizedTransaction.getType() == NormalizedTransactionType.LP_ENTRY_SETTLEMENT
+                && "GMX".equalsIgnoreCase(normalizedTransaction.getProtocolName())) {
+            return true;
+        }
+        return reasons.contains(GMX_WITHDRAWAL_SETTLEMENT_CORRELATION_REQUIRED)
+                && normalizedTransaction.getType() == NormalizedTransactionType.LP_EXIT_SETTLEMENT
+                && "GMX".equalsIgnoreCase(normalizedTransaction.getProtocolName());
+    }
+
+    private static boolean isGmxDerivativeRequest(NormalizedTransaction normalizedTransaction) {
+        return normalizedTransaction != null
+                && normalizedTransaction.getType() == NormalizedTransactionType.DERIVATIVE_ORDER_REQUEST
+                && "GMX".equalsIgnoreCase(normalizedTransaction.getProtocolName());
+    }
+
+    private static boolean isGmxDerivativeExecutionFamily(NormalizedTransaction normalizedTransaction) {
+        if (normalizedTransaction == null || !"GMX".equalsIgnoreCase(normalizedTransaction.getProtocolName())) {
+            return false;
+        }
+        return normalizedTransaction.getType() == NormalizedTransactionType.DERIVATIVE_ORDER_EXECUTION
+                || normalizedTransaction.getType() == NormalizedTransactionType.DERIVATIVE_ORDER_CANCEL
+                || normalizedTransaction.getType() == NormalizedTransactionType.DERIVATIVE_POSITION_INCREASE
+                || normalizedTransaction.getType() == NormalizedTransactionType.DERIVATIVE_POSITION_DECREASE;
+    }
+
+    private static boolean isGmxDerivativeExecutionCandidate(
+            NormalizedTransaction normalizedTransaction,
+            OnChainRawTransactionView view
+    ) {
+        if (normalizedTransaction == null
+                || view == null
+                || normalizedTransaction.getStatus() != NormalizedTransactionStatus.PENDING_PRICE) {
+            return false;
+        }
+        if (normalizedTransaction.getType() != NormalizedTransactionType.EXTERNAL_TRANSFER_IN
+                && normalizedTransaction.getType() != NormalizedTransactionType.EXTERNAL_TRANSFER_OUT) {
+            return false;
+        }
+        if (view.networkId() != NetworkId.ARBITRUM || view.hasFullReceiptClarificationEvidence()) {
+            return false;
+        }
+        boolean missingTopLevelTxContext = (view.fromAddress() == null || view.toAddress() == null)
+                && (view.functionName() == null || view.functionName().isBlank())
+                && (view.inputData() == null
+                || view.inputData().isBlank()
+                || "deprecated".equalsIgnoreCase(view.inputData()));
+        if (!missingTopLevelTxContext) {
+            return false;
+        }
+        return !view.explorerTokenTransfers().isEmpty() || !view.explorerInternalTransfers().isEmpty();
+    }
+
+    private static boolean isGmxPoolExitSettlementCandidate(
+            NormalizedTransaction normalizedTransaction,
+            OnChainRawTransactionView view
+    ) {
+        if (normalizedTransaction == null
+                || view == null
+                || normalizedTransaction.getStatus() != NormalizedTransactionStatus.PENDING_PRICE) {
+            return false;
+        }
+        if (normalizedTransaction.getType() != NormalizedTransactionType.EXTERNAL_TRANSFER_IN
+                && normalizedTransaction.getType() != NormalizedTransactionType.VAULT_WITHDRAW) {
+            return false;
+        }
+        if (view.networkId() != NetworkId.ARBITRUM || view.hasFullReceiptClarificationEvidence()) {
+            return false;
+        }
+        boolean missingTopLevelTxContext = (view.fromAddress() == null || view.toAddress() == null)
+                && (view.functionName() == null || view.functionName().isBlank())
+                && (view.inputData() == null
+                || view.inputData().isBlank()
+                || "deprecated".equalsIgnoreCase(view.inputData()));
+        boolean explicitWithdrawalSelector = "0xc96fea9f".equals(view.methodId());
+        if (!missingTopLevelTxContext && !explicitWithdrawalSelector) {
+            return false;
+        }
+        return !view.explorerTokenTransfers().isEmpty() || !view.explorerInternalTransfers().isEmpty();
+    }
+
+    private static boolean isCowSettlementCandidate(
+            NormalizedTransaction normalizedTransaction,
+            OnChainRawTransactionView view
+    ) {
+        if (normalizedTransaction == null
+                || view == null
+                || normalizedTransaction.getStatus() != NormalizedTransactionStatus.PENDING_PRICE
+                || normalizedTransaction.getType() != NormalizedTransactionType.EXTERNAL_TRANSFER_IN) {
+            return false;
+        }
+        if (view.networkId() != NetworkId.ARBITRUM || view.hasFullReceiptClarificationEvidence()) {
+            return false;
+        }
+        boolean missingTopLevelTxContext = (view.fromAddress() == null || view.toAddress() == null)
+                && (view.functionName() == null || view.functionName().isBlank())
+                && (view.inputData() == null
+                || view.inputData().isBlank()
+                || "deprecated".equalsIgnoreCase(view.inputData()));
+        boolean explicitSettlementSelector = GPV2_SETTLEMENT_SELECTOR.equals(view.methodId());
+        if (!missingTopLevelTxContext && !explicitSettlementSelector) {
+            return false;
+        }
+        return !view.explorerTokenTransfers().isEmpty() || !view.explorerInternalTransfers().isEmpty();
     }
 }

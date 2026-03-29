@@ -46,6 +46,26 @@ import java.util.List;
                 def = "{'source': 1, 'status': 1, 'fullReceiptClarificationAttempts': 1, 'updatedAt': 1, 'blockTimestamp': 1, 'transactionIndex': 1}"
         ),
         @CompoundIndex(
+                name = "normalized_source_status_pricing_idx",
+                def = "{'source': 1, 'status': 1, 'pricingAttempts': 1, 'updatedAt': 1, 'blockTimestamp': 1, 'transactionIndex': 1}"
+        ),
+        @CompoundIndex(
+                name = "normalized_status_stat_idx",
+                def = "{'status': 1, 'statAttempts': 1, 'updatedAt': 1, 'blockTimestamp': 1, 'transactionIndex': 1}"
+        ),
+        @CompoundIndex(
+                name = "normalized_source_missing_reason_idx",
+                def = "{'source': 1, 'missingDataReasons': 1}"
+        ),
+        @CompoundIndex(
+                name = "normalized_status_missing_reason_idx",
+                def = "{'status': 1, 'missingDataReasons': 1}"
+        ),
+        @CompoundIndex(
+                name = "normalized_status_excluded_block_ts_idx",
+                def = "{'status': 1, 'excludedFromAccounting': 1, 'blockTimestamp': 1, 'transactionIndex': 1}"
+        ),
+        @CompoundIndex(
                 name = "normalized_flows_asset_contract_idx",
                 def = "{'flows.assetContract': 1}"
         )
@@ -74,6 +94,10 @@ public class NormalizedTransaction {
     private ConfidenceLevel confidence;
     @Indexed(name = "normalized_correlation_idx", sparse = true)
     private String correlationId;
+    private Boolean continuityCandidate;
+    private String matchedCounterparty;
+    private Boolean excludedFromAccounting;
+    private String accountingExclusionReason;
     private String protocolName;
     private String protocolVersion;
     private Integer clarificationAttempts;

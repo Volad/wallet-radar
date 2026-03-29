@@ -54,7 +54,15 @@ public class OnChainNormalizedTransactionBuilder {
         normalized.setFullReceiptClarificationAttempts(fullReceiptClarificationAttemptBaseline(view));
         normalized.setPricingAttempts(safeCounter(existing.getPricingAttempts()));
         normalized.setStatAttempts(safeCounter(existing.getStatAttempts()));
-        normalized.setCorrelationId(existing.getCorrelationId());
+        if (normalized.getCorrelationId() == null || normalized.getCorrelationId().isBlank()) {
+            normalized.setCorrelationId(existing.getCorrelationId());
+        }
+        if (normalized.getContinuityCandidate() == null) {
+            normalized.setContinuityCandidate(existing.getContinuityCandidate());
+        }
+        if (normalized.getMatchedCounterparty() == null || normalized.getMatchedCounterparty().isBlank()) {
+            normalized.setMatchedCounterparty(existing.getMatchedCounterparty());
+        }
         normalized.setClientId(existing.getClientId());
         if (normalized.getStatus() == NormalizedTransactionStatus.CONFIRMED) {
             normalized.setConfirmedAt(existing.getConfirmedAt() != null ? existing.getConfirmedAt() : now);
@@ -80,7 +88,15 @@ public class OnChainNormalizedTransactionBuilder {
         normalized.setFullReceiptClarificationAttempts(fullReceiptClarificationAttemptBaseline(view));
         normalized.setPricingAttempts(safeCounter(existing.getPricingAttempts()));
         normalized.setStatAttempts(safeCounter(existing.getStatAttempts()));
-        normalized.setCorrelationId(existing.getCorrelationId());
+        if (normalized.getCorrelationId() == null || normalized.getCorrelationId().isBlank()) {
+            normalized.setCorrelationId(existing.getCorrelationId());
+        }
+        if (normalized.getContinuityCandidate() == null) {
+            normalized.setContinuityCandidate(existing.getContinuityCandidate());
+        }
+        if (normalized.getMatchedCounterparty() == null || normalized.getMatchedCounterparty().isBlank()) {
+            normalized.setMatchedCounterparty(existing.getMatchedCounterparty());
+        }
         normalized.setClientId(existing.getClientId());
         if (normalized.getStatus() == NormalizedTransactionStatus.CONFIRMED) {
             normalized.setConfirmedAt(existing.getConfirmedAt() != null ? existing.getConfirmedAt() : now);
@@ -121,6 +137,11 @@ public class OnChainNormalizedTransactionBuilder {
         normalized.setMissingDataReasons(missingDataReasons);
         normalized.setProtocolName(classificationResult.protocolName());
         normalized.setProtocolVersion(classificationResult.protocolVersion());
+        normalized.setCorrelationId(classificationResult.correlationId());
+        normalized.setContinuityCandidate(Boolean.TRUE.equals(classificationResult.continuityCandidate()));
+        normalized.setMatchedCounterparty(classificationResult.matchedCounterparty());
+        normalized.setExcludedFromAccounting(Boolean.TRUE.equals(classificationResult.excludedFromAccounting()));
+        normalized.setAccountingExclusionReason(classificationResult.accountingExclusionReason());
     }
 
     private int clarificationAttemptBaseline(OnChainRawTransactionView view) {

@@ -15,7 +15,6 @@ import com.walletradar.ingestion.config.OnChainClarificationProperties;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassifier;
 import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryService;
 import com.walletradar.ingestion.pipeline.classification.special.ProtocolSpecialHandlerDispatcher;
-import com.walletradar.ingestion.pipeline.clarification.ClarificationMode;
 import com.walletradar.ingestion.pipeline.classification.support.NativeAssetSymbolResolver;
 import com.walletradar.ingestion.pipeline.clarification.ClarificationReceiptEnrichment;
 import com.walletradar.ingestion.pipeline.clarification.PendingClarificationQueryService;
@@ -106,17 +105,17 @@ class OnChainClarificationServiceTest {
         NormalizedTransaction pending = pendingClarification(NormalizedTransactionType.SWAP);
         RawTransaction rawTransaction = lowConfidenceSwapRaw();
         when(rawTransactionRepository.findById(pending.getId())).thenReturn(Optional.of(rawTransaction));
-        when(clarificationGateway.fetch(rawTransaction, ClarificationMode.METADATA_ONLY))
+        when(clarificationGateway.fetchReceipt(rawTransaction))
                 .thenReturn(Optional.of(new ClarificationReceiptEnrichment(
                         "1",
                         "21000",
                         "50000000000",
                         "0x9999999999999999999999999999999999999999",
                         null,
+                        List.of(new Document("address", ROUTER)),
                         List.of(),
                         List.of(),
-                        List.of(),
-                        null,
+                        new Document("status", "0x1").append("logs", List.of(new Document("address", ROUTER))),
                         null
                 )));
 
@@ -131,6 +130,10 @@ class OnChainClarificationServiceTest {
         assertThat(rawCaptor.getValue().getRawData().getString("effectiveGasPrice")).isEqualTo("50000000000");
         assertThat(rawCaptor.getValue().getRawData().getString("contractAddress"))
                 .isEqualTo("0x9999999999999999999999999999999999999999");
+        assertThat(rawCaptor.getValue().getClarificationEvidence()).isNotNull();
+        assertThat(rawCaptor.getValue().getClarificationEvidence().get("fullReceipt", Document.class))
+                .containsEntry("status", "0x1");
+        assertThat(rawCaptor.getValue().getRawData().containsKey("clarificationEvidence")).isFalse();
 
         ArgumentCaptor<NormalizedTransaction> normalizedCaptor = ArgumentCaptor.forClass(NormalizedTransaction.class);
         verify(normalizedTransactionRepository).save(normalizedCaptor.capture());
@@ -155,7 +158,7 @@ class OnChainClarificationServiceTest {
         pending.setClarificationAttempts(2);
 
         when(rawTransactionRepository.findById(pending.getId())).thenReturn(Optional.of(lowConfidenceSwapRaw()));
-        when(clarificationGateway.fetch(any(RawTransaction.class), org.mockito.ArgumentMatchers.eq(ClarificationMode.METADATA_ONLY)))
+        when(clarificationGateway.fetchReceipt(any(RawTransaction.class)))
                 .thenReturn(Optional.empty());
 
         boolean clarified = service.clarify(pending);
@@ -183,7 +186,7 @@ class OnChainClarificationServiceTest {
         NormalizedTransaction pending = pendingClarification(NormalizedTransactionType.VAULT_DEPOSIT);
         RawTransaction rawTransaction = lowConfidenceDepositWithSyntheticLogsRaw();
         when(rawTransactionRepository.findById(pending.getId())).thenReturn(Optional.of(rawTransaction));
-        when(clarificationGateway.fetch(rawTransaction, ClarificationMode.METADATA_ONLY))
+        when(clarificationGateway.fetchReceipt(rawTransaction))
                 .thenReturn(Optional.of(new ClarificationReceiptEnrichment(
                         "1",
                         "21000",
@@ -193,7 +196,7 @@ class OnChainClarificationServiceTest {
                         List.of(),
                         List.of(),
                         List.of(),
-                        null,
+                        new Document("status", "0x1"),
                         null
                 )));
 
@@ -203,13 +206,16 @@ class OnChainClarificationServiceTest {
 
         ArgumentCaptor<RawTransaction> rawCaptor = ArgumentCaptor.forClass(RawTransaction.class);
         verify(rawTransactionRepository).save(rawCaptor.capture());
-        Document clarificationEvidence = rawCaptor.getValue().getRawData().get("clarificationEvidence", Document.class);
+        Document clarificationEvidence = rawCaptor.getValue().getClarificationEvidence();
         assertThat(clarificationEvidence).isNotNull();
         assertThat(clarificationEvidence.getString("sourceFamily")).isNull();
         assertThat(clarificationEvidence.get("receipt", Document.class))
                 .containsEntry("txReceiptStatus", "1")
                 .containsEntry("gasUsed", "21000")
                 .containsEntry("effectiveGasPrice", "50000000000");
+        assertThat(clarificationEvidence.get("fullReceipt", Document.class))
+                .containsEntry("status", "0x1");
+        assertThat(rawCaptor.getValue().getRawData().containsKey("clarificationEvidence")).isFalse();
 
         ArgumentCaptor<NormalizedTransaction> normalizedCaptor = ArgumentCaptor.forClass(NormalizedTransaction.class);
         verify(normalizedTransactionRepository).save(normalizedCaptor.capture());
@@ -223,7 +229,7 @@ class OnChainClarificationServiceTest {
     @Test
     @DisplayName("clarification short-circuits when transaction is no longer receipt-clarifiable")
     void clarificationShortCircuitsWhenTransactionIsNoLongerReceiptClarifiable() {
-        NormalizedTransaction pending = pendingClarification(NormalizedTransactionType.EXTERNAL_INBOUND);
+        NormalizedTransaction pending = pendingClarification(NormalizedTransactionType.EXTERNAL_TRANSFER_IN);
         RawTransaction rawTransaction = receiptCompleteInboundRaw();
         when(rawTransactionRepository.findById(pending.getId())).thenReturn(Optional.of(rawTransaction));
 
@@ -237,7 +243,7 @@ class OnChainClarificationServiceTest {
         verify(normalizedTransactionRepository).save(normalizedCaptor.capture());
         NormalizedTransaction saved = normalizedCaptor.getValue();
         assertThat(saved.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
-        assertThat(saved.getType()).isEqualTo(NormalizedTransactionType.EXTERNAL_INBOUND);
+        assertThat(saved.getType()).isEqualTo(NormalizedTransactionType.EXTERNAL_TRANSFER_IN);
         assertThat(saved.getClarificationAttempts()).isEqualTo(0);
         assertThat(saved.getMissingDataReasons()).isEmpty();
     }
@@ -248,7 +254,7 @@ class OnChainClarificationServiceTest {
         NormalizedTransaction pending = pendingClarification(NormalizedTransactionType.SWAP);
         RawTransaction rawTransaction = lowConfidenceSwapRaw();
         when(rawTransactionRepository.findById(pending.getId())).thenReturn(Optional.of(rawTransaction));
-        when(clarificationGateway.fetch(rawTransaction, ClarificationMode.METADATA_ONLY))
+        when(clarificationGateway.fetchReceipt(rawTransaction))
                 .thenReturn(Optional.of(new ClarificationReceiptEnrichment(
                         "1",
                         null,
@@ -258,7 +264,7 @@ class OnChainClarificationServiceTest {
                         List.of(),
                         List.of(),
                         List.of(),
-                        null,
+                        new Document("status", "0x1"),
                         null
                 )));
 

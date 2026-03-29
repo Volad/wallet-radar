@@ -1,7 +1,7 @@
 # WalletRadar — Domain Model
 
 > **Version:** MVP v3 target
-> **Last updated:** 2026-03-21
+> **Last updated:** 2026-03-29
 
 ---
 
@@ -19,6 +19,7 @@
 | **Normalization Status** | Raw processing state: `PENDING` or `COMPLETE`. |
 | **Normalized Transaction** | Canonical operation document (`1 tx = 1 doc`) with `flows[]` used by pricing/stat/accounting pipeline. |
 | **Flow** | Canonical movement row inside normalized transaction (`quantityDelta`, role, asset, price fields). |
+| **Self-canceling pair** | Same-asset same-quantity inbound and outbound legs inside one tx that net to zero and therefore represent wrapper / marker continuity rather than economic acquisition or disposal. |
 | **Normalized Status Pipeline** | Receipt-clarifiable rows may pass through `PENDING_CLARIFICATION -> PENDING_PRICE -> PENDING_STAT -> CONFIRMED`; low-confidence rows without receipt gaps may go directly to `PENDING_PRICE` or `NEEDS_REVIEW`. |
 | **User Session** | Persisted wallet set keyed by client-generated `sessionId` in `user_sessions`. |
 | **AVCO** | Weighted average acquisition cost used for cost basis and realised PnL. |
@@ -95,6 +96,10 @@ NormalizedTransaction {
   missingDataReasons: String[]
   confidence: Decimal      // [0..1]
   correlationId: String?
+  continuityCandidate: Boolean
+  matchedCounterparty: String?
+  excludedFromAccounting: Boolean
+  accountingExclusionReason: String?
   clarificationAttempts: Int
   pricingAttempts: Int
   statAttempts: Int
@@ -121,6 +126,14 @@ Flow {
 }
 ```
 
+Flow-role intent:
+
+- `BUY` / `SELL` are economic acquisition / disposal legs that must be priceable.
+- `TRANSFER` is continuity-only movement and must not require market pricing by itself.
+- A canonical tx may mix continuity and economic legs in one row when the tx is
+  a real bundle and current raw evidence can still separate those legs
+  deterministically.
+
 Only `status=CONFIRMED` documents are used for accounting replay and shown in default history responses.
 
 Status intent:
@@ -133,6 +146,19 @@ Status intent:
   proceeds to `PENDING_PRICE`.
 - If semantic meaning is still unresolved after deterministic classifier rules,
   the row goes directly to `NEEDS_REVIEW`.
+- `excludedFromAccounting=true` means the row remains persisted and audit-visible,
+  but it is intentionally outside the active pricing / replay scope.
+- `NEEDS_REVIEW` therefore has two sub-cases:
+  - blocking review rows (`excludedFromAccounting != true`)
+  - audit-only excluded rows (`excludedFromAccounting = true`)
+- Blocking review rows may include semantically recognized but still
+  basis-incomplete async lifecycle families, such as request/execute protocol
+  flows or batch transactions whose current raw / clarification evidence is not
+  yet sufficient for deterministic replay.
+- Deterministically recognized but currently unsupported families may also stay
+  `NEEDS_REVIEW` when they are explicitly marked
+  `excludedFromAccounting=true`; residual Bybit orphan / unsupported loan rows
+  are the reference example.
 
 ### ExternalLedgerRaw (`external_ledger_raw`)
 
@@ -255,7 +281,10 @@ Async AVCO replay status tracking after override/manual compensating updates.
 |------|
 | `SWAP` |
 | `STAKING_DEPOSIT` |
+| `STAKING_WITHDRAW_REQUEST` |
 | `STAKING_WITHDRAW` |
+| `LP_ENTRY_REQUEST` |
+| `LP_ENTRY_SETTLEMENT` |
 | `LP_ENTRY` |
 | `LP_EXIT` |
 | `LP_EXIT_PARTIAL` |
@@ -266,17 +295,23 @@ Async AVCO replay status tracking after override/manual compensating updates.
 | `LP_FEE_CLAIM` |
 | `LENDING_DEPOSIT` |
 | `LENDING_WITHDRAW` |
+| `LENDING_LOOP_OPEN` |
+| `LENDING_LOOP_REBALANCE` |
+| `LENDING_LOOP_DECREASE` |
+| `LENDING_LOOP_CLOSE` |
 | `BORROW` |
 | `REPAY` |
 | `VAULT_DEPOSIT` |
 | `VAULT_WITHDRAW` |
 | `BRIDGE_OUT` |
 | `BRIDGE_IN` |
+| `DEX_ORDER_REQUEST` |
+| `DEX_ORDER_SETTLEMENT` |
 | `PROTOCOL_CUSTODY_DEPOSIT` |
 | `PROTOCOL_CUSTODY_WITHDRAW` |
 | `REWARD_CLAIM` |
 | `EXTERNAL_TRANSFER_OUT` |
-| `EXTERNAL_INBOUND` |
+| `EXTERNAL_TRANSFER_IN` |
 | `INTERNAL_TRANSFER` |
 | `APPROVE` |
 | `ADMIN_CONFIG` |
@@ -285,7 +320,58 @@ Async AVCO replay status tracking after override/manual compensating updates.
 | `UNKNOWN` |
 | `MANUAL_COMPENSATING` |
 
+Staking families keep one canonical type name but support two economic shapes:
+
+- liquid staking:
+  principal leaves as economic `SELL`, derivative asset arrives as economic
+  `BUY`
+- classic stake-contract custody:
+  principal moves as continuity `TRANSFER`, while any same-tx harvested reward
+  remains economic `BUY`
+
 `MANUAL_COMPENSATING` is synthetic and is not produced by raw normalization.
+
+Async request / settlement families are explicit canonical rows, not implicit
+review states:
+
+- `LP_ENTRY_REQUEST` holds request-side principal escrow / execution-fee funding
+  for audited async LP-entry families such as GMX deposit requests
+- `LP_ENTRY_SETTLEMENT` holds the later execute-side receipt / refund settlement
+  for the same audited lifecycle
+- `LP_EXIT_REQUEST` holds request-side share burn plus execution-fee escrow for
+  audited async LP-exit families such as GMX / GLV withdrawal requests
+- `LP_EXIT_SETTLEMENT` holds the later keeper-side payout / refund settlement
+  for the same audited async LP-exit lifecycle
+- `STAKING_WITHDRAW_REQUEST` holds burn-only cooldown / unbonding initiation
+  before the later payout claim arrives
+- `LENDING_LOOP_OPEN` holds audited borrow-backed Euler-style loop / multiply
+  openings as one canonical share-position acquisition row
+- `LENDING_LOOP_REBALANCE` holds audited share-to-share Euler restructures where
+  basis moves between loop-share assets without wallet-visible realized exit
+- `LENDING_LOOP_DECREASE` holds audited partial deleverage / partial unwind rows
+  where a loop share position is reduced and wallet-visible value returns
+- `LENDING_LOOP_CLOSE` holds audited final unwind rows where a loop share
+  position is fully exited back into wallet-visible assets
+- `DEX_ORDER_REQUEST` holds audited async spot-order request / escrow funding
+  before later DEX settlement, for example CoW Eth Flow request rows
+- `DEX_ORDER_SETTLEMENT` holds the later settlement-side completion of the same
+  audited async spot-order lifecycle and shares the same `correlationId`
+- `DERIVATIVE_ORDER_REQUEST` holds audited GMX V2 order-intent funding and
+  keeper-execution-fee escrow before keeper execution or cancellation
+- `DERIVATIVE_POSITION_INCREASE` holds the keeper-side execution that opens or
+  increases a GMX V2 position
+- `DERIVATIVE_POSITION_DECREASE` holds the keeper-side execution that decreases
+  or fully closes a GMX V2 position
+- `DERIVATIVE_ORDER_CANCEL` holds audited GMX V2 order cancellation without a
+  successful execution
+- sibling stop / bracket requests may keep `type=DERIVATIVE_ORDER_REQUEST`, but
+  their later auto-cancel terminal state must still be persisted once the
+  terminal keeper tx already proves it
+
+For audited async protocol lifecycles, clarification may fetch and persist
+related real transactions when the currently persisted raw row already proves the
+protocol family but the terminal keeper / settlement tx is still absent from
+Mongo.
 
 ---
 
@@ -329,12 +415,12 @@ Handler rules:
 - no Mongo reads/writes
 - no synthetic `rawData.logs[]`
 
-### `EXTERNAL_INBOUND` fallback policy
+### `EXTERNAL_TRANSFER_IN` fallback policy
 
-`EXTERNAL_INBOUND` is a transfer-fallback classification and is used only when higher-priority
+`EXTERNAL_TRANSFER_IN` is a transfer-fallback classification and is used only when higher-priority
 protocol classifiers do not match.
 
-For claim/withdraw/refund-like calls, `EXTERNAL_INBOUND` may be emitted even when
+For claim/withdraw/refund-like calls, `EXTERNAL_TRANSFER_IN` may be emitted even when
 `rawData.from == walletAddress`, because accounting uses net asset movement semantics rather than
 transaction sender role.
 
@@ -344,19 +430,49 @@ neutralizing paired wrap/burn mechanics in the same transaction.
 Additional constraints:
 
 - Plain positive inbound `transfer(address,uint256)` / `transferFrom(...)` legs default to
-  `EXTERNAL_INBOUND` unless contract-aware reward or bridge evidence exists.
+  `EXTERNAL_TRANSFER_IN` unless contract-aware reward or bridge evidence exists.
+- Outbound-only aggregator/router calls without a wallet-visible inbound counter-asset do not
+  persist as `SWAP`; they demote to owner-agnostic `EXTERNAL_TRANSFER_OUT` unless a higher-priority
+  bridge classifier proves `BRIDGE_OUT`.
 - Promo/phishing token metadata excludes the tx from both `REWARD_CLAIM` and ordinary
-  `EXTERNAL_INBOUND`; the tx must be filtered upstream or surfaced as explicit review.
+  `EXTERNAL_TRANSFER_IN`; the tx must be filtered upstream or surfaced as explicit review.
 - Explorer page summaries are audit aids only. Canonical production classification is derived
   from backfill-available raw evidence and extracted legs, not from human-readable explorer labels.
 - Zero-amount token-only movements are non-economic and must not normalize into
-  `EXTERNAL_INBOUND` or `EXTERNAL_TRANSFER_OUT`.
+  `EXTERNAL_TRANSFER_IN` or `EXTERNAL_TRANSFER_OUT`.
+
+### Owner-Agnostic Transfer Semantics
+
+`normalized_transactions.type` must stay independent from the current accounting universe.
+
+- Plain inbound transfer facts persist as `EXTERNAL_TRANSFER_IN`.
+- Plain outbound transfer facts persist as `EXTERNAL_TRANSFER_OUT`.
+- Bridge facts persist as `BRIDGE_OUT` / `BRIDGE_IN`.
+- `INTERNAL_TRANSFER` is a legacy normalized type and must not be emitted for new reruns.
+- Ownership-aware continuity is expressed separately via:
+  - `correlationId`
+  - `continuityCandidate`
+  - `matchedCounterparty`
+- For async lifecycle families, `correlationId` must persist the highest-scope
+  protocol lifecycle key already proved by current raw plus persisted
+  clarification evidence.
+- For exact async request/settlement pairs, `matchedCounterparty` must be
+  materialized on both rows once both sides exist in the active lane.
+
+Implications:
+
+- Wallet-to-wallet and wallet-to-Bybit movements do not become persisted `INTERNAL_TRANSFER`
+  merely because the current installation can correlate both sides.
+- The same canonical transfer row may behave as carry-over continuity in one accounting universe
+  and as external disposal/acquisition in another; that decision belongs to replay, not to raw normalization.
 
 LP extensions for concentrated-liquidity (CL) protocols:
 
 - `LP_POSITION_ENTRY` (internal classifier event) maps to canonical `type=LP_ENTRY` for mint-style position creation.
 - `LP_POSITION_EXIT` (internal classifier event) maps to canonical `type=LP_EXIT` for burn-style position close.
 - For v3/v4 position mint tx, canonical `LP_ENTRY` must include economic principal outflows (wallet token spends), not only NFT lifecycle markers.
+- Underlying principal legs inside `LP_ENTRY`, `LP_EXIT`, `LP_EXIT_PARTIAL`, and `LP_EXIT_FINAL` are continuity-only `TRANSFER` flows, not `BUY` / `SELL`.
+- LP receipt markers (`LP token`, `BPT`, CL NFT) may still appear in canonical flows, but they remain continuity markers rather than independent basis assets.
 - For v3/v4 custody transfer (`wallet <-> farm/strategy`) canonical types are `LP_POSITION_STAKE` / `LP_POSITION_UNSTAKE`.
 - `LP_EXIT_PARTIAL` / `LP_EXIT_FINAL` represent decrease-liquidity exits with and without final position close boundary.
 - `LP_ADJUST` is deprecated and kept as backward-compatible alias for legacy data only.
@@ -369,9 +485,11 @@ LP extensions for concentrated-liquidity (CL) protocols:
 | PriceSource | Meaning | Priority |
 |-------------|---------|----------|
 | `STABLECOIN` | Hardcoded stablecoin parity | 1 |
-| `SWAP_DERIVED` | Ratio inferred from swap counterpart | 2 |
-| `WRAPPER` | Wrapped/native asset price inherited from the underlying native asset | 3 |
-| `COINGECKO` | Historical resolver fallback | 4 |
+| `EXECUTION` | Exact execution price carried by canonical source evidence such as a Bybit trade fill | 2 |
+| `SWAP_DERIVED` | Ratio inferred from the net swap counterpart inside the same canonical tx | 3 |
+| `WRAPPER` | Wrapped/native asset price inherited from the underlying native asset | 4 |
+| `BINANCE` | Historical market-data resolver for assets that have deterministic Binance symbol mapping | 5 |
+| `COINGECKO` | Historical resolver fallback when Binance coverage is unavailable or insufficient | 6 |
 | `MANUAL` | User override | override layer |
 | `UNKNOWN` | Unresolved pricing | last resort |
 

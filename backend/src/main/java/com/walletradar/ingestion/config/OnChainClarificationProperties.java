@@ -18,16 +18,59 @@ public class OnChainClarificationProperties {
 
     private int batchSize = 100;
 
-    private long scheduleIntervalMs = 120_000;
-
     private long retryDelaySeconds = 120;
 
     private int maxAttempts = 3;
 
     private FullReceipt fullReceipt = new FullReceipt();
+    private RelatedDiscovery relatedDiscovery = new RelatedDiscovery();
 
     public void setFullReceipt(FullReceipt fullReceipt) {
         this.fullReceipt = fullReceipt != null ? fullReceipt : new FullReceipt();
+    }
+
+    public void setRelatedDiscovery(RelatedDiscovery relatedDiscovery) {
+        this.relatedDiscovery = relatedDiscovery != null ? relatedDiscovery : new RelatedDiscovery();
+    }
+
+    public boolean isEnabled() {
+        return enabled;
+    }
+
+    public void setEnabled(boolean enabled) {
+        this.enabled = enabled;
+    }
+
+    public int getBatchSize() {
+        return batchSize;
+    }
+
+    public void setBatchSize(int batchSize) {
+        this.batchSize = batchSize;
+    }
+
+    public long getRetryDelaySeconds() {
+        return retryDelaySeconds;
+    }
+
+    public void setRetryDelaySeconds(long retryDelaySeconds) {
+        this.retryDelaySeconds = retryDelaySeconds;
+    }
+
+    public int getMaxAttempts() {
+        return maxAttempts;
+    }
+
+    public void setMaxAttempts(int maxAttempts) {
+        this.maxAttempts = maxAttempts;
+    }
+
+    public FullReceipt getFullReceipt() {
+        return fullReceipt;
+    }
+
+    public RelatedDiscovery getRelatedDiscovery() {
+        return relatedDiscovery;
     }
 
     @NoArgsConstructor
@@ -41,6 +84,74 @@ public class OnChainClarificationProperties {
 
         private long retryDelaySeconds = 300;
 
-        private int maxAttempts = 1;
+        private int maxAttempts = 2;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public int getBatchSize() {
+            return batchSize;
+        }
+
+        public void setBatchSize(int batchSize) {
+            this.batchSize = batchSize;
+        }
+
+        public long getRetryDelaySeconds() {
+            return retryDelaySeconds;
+        }
+
+        public void setRetryDelaySeconds(long retryDelaySeconds) {
+            this.retryDelaySeconds = retryDelaySeconds;
+        }
+
+        public int getMaxAttempts() {
+            return maxAttempts;
+        }
+
+        public void setMaxAttempts(int maxAttempts) {
+            this.maxAttempts = maxAttempts;
+        }
+    }
+
+    @NoArgsConstructor
+    @Getter
+    @Setter
+    public static class RelatedDiscovery {
+
+        private boolean enabled = true;
+
+        private long forwardBlockWindow = 750_000L;
+
+        private int maxPages = 3;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public long getForwardBlockWindow() {
+            return forwardBlockWindow;
+        }
+
+        public void setForwardBlockWindow(long forwardBlockWindow) {
+            this.forwardBlockWindow = forwardBlockWindow;
+        }
+
+        public int getMaxPages() {
+            return maxPages;
+        }
+
+        public void setMaxPages(int maxPages) {
+            this.maxPages = maxPages;
+        }
     }
 }
