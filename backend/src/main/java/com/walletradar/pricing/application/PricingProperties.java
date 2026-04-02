@@ -31,9 +31,30 @@ public class PricingProperties {
 
         private long requestTimeoutMs = 10_000L;
 
+        private Bybit bybit = new Bybit();
+
+        private Ecb ecb = new Ecb();
+
         private Binance binance = new Binance();
 
         private CoinGecko coinGecko = new CoinGecko();
+    }
+
+    @NoArgsConstructor
+    @Getter
+    @Setter
+    public static class Bybit {
+
+        private String baseUrl = "https://api.bybit.com";
+    }
+
+    @NoArgsConstructor
+    @Getter
+    @Setter
+    public static class Ecb {
+
+        private String baseUrl = "https://data-api.ecb.europa.eu";
+        private int backfillDays = 7;
     }
 
     @NoArgsConstructor

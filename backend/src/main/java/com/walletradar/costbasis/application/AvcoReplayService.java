@@ -1,5 +1,6 @@
 package com.walletradar.costbasis.application;
 
+import com.walletradar.accounting.support.AccountingAssetFamilySupport;
 import com.walletradar.accounting.support.BridgeAssetFamilySupport;
 import com.walletradar.costbasis.domain.AssetPosition;
 import com.walletradar.costbasis.domain.AssetPositionRepository;
@@ -42,7 +43,7 @@ public class AvcoReplayService {
     public int replayConfirmed() {
         List<NormalizedTransaction> ordered = confirmedReplayQueryService.loadOrderedConfirmed();
         Map<AssetKey, PositionState> positions = new LinkedHashMap<>();
-        Map<AssetKey, ContinuityBucket> continuityBuckets = new LinkedHashMap<>();
+        Map<ContinuityKey, ContinuityBucket> continuityBuckets = new LinkedHashMap<>();
         Map<String, Deque<CarryTransfer>> pendingTransfers = new LinkedHashMap<>();
         Map<String, AsyncLifecycleBucket> asyncLifecycleBuckets = new LinkedHashMap<>();
         Map<String, AsyncSpotOrderBucket> asyncSpotOrderBuckets = new LinkedHashMap<>();
@@ -87,7 +88,7 @@ public class AvcoReplayService {
             NormalizedTransaction transaction,
             NormalizedTransaction.Flow flow,
             Map<AssetKey, PositionState> positions,
-            Map<AssetKey, ContinuityBucket> continuityBuckets,
+            Map<ContinuityKey, ContinuityBucket> continuityBuckets,
             Map<String, Deque<CarryTransfer>> pendingTransfers,
             Map<String, AsyncLifecycleBucket> asyncLifecycleBuckets,
             Map<String, AsyncSpotOrderBucket> asyncSpotOrderBuckets
@@ -618,15 +619,35 @@ public class AvcoReplayService {
             NormalizedTransaction transaction,
             NormalizedTransaction.Flow flow,
             PositionState position,
-            Map<AssetKey, ContinuityBucket> continuityBuckets,
+            Map<ContinuityKey, ContinuityBucket> continuityBuckets,
             Map<String, Deque<CarryTransfer>> pendingTransfers
     ) {
+        if (isFamilyEquivalentCustodyTransfer(transaction, flow)) {
+            ContinuityBucket bucket = continuityBuckets.computeIfAbsent(
+                    continuityKey(transaction, flow),
+                    ignored -> new ContinuityBucket()
+            );
+            if (flow.getQuantityDelta().signum() < 0) {
+                moveToContinuityBucket(flow, position, bucket);
+            } else {
+                restoreFromContinuityBucket(flow, position, bucket);
+            }
+            return;
+        }
         if (isBucketOutbound(transaction, flow)) {
-            moveToContinuityBucket(flow, position, continuityBuckets.computeIfAbsent(assetKey(transaction, flow), ignored -> new ContinuityBucket()));
+            moveToContinuityBucket(
+                    flow,
+                    position,
+                    continuityBuckets.computeIfAbsent(continuityKey(transaction, flow), ignored -> new ContinuityBucket())
+            );
             return;
         }
         if (isBucketInbound(transaction, flow)) {
-            restoreFromContinuityBucket(flow, position, continuityBuckets.computeIfAbsent(assetKey(transaction, flow), ignored -> new ContinuityBucket()));
+            restoreFromContinuityBucket(
+                    flow,
+                    position,
+                    continuityBuckets.computeIfAbsent(continuityKey(transaction, flow), ignored -> new ContinuityBucket())
+            );
             return;
         }
 
@@ -754,13 +775,41 @@ public class AvcoReplayService {
         if (flows.isEmpty()) {
             return true;
         }
-        String first = assetKey(transaction, flows.getFirst()).assetIdentity();
+        String first = continuityIdentity(transaction, flows.getFirst());
         for (int index = 1; index < flows.size(); index++) {
-            if (!first.equals(assetKey(transaction, flows.get(index)).assetIdentity())) {
+            if (!first.equals(continuityIdentity(transaction, flows.get(index)))) {
                 return false;
             }
         }
         return true;
+    }
+
+    private boolean isFamilyEquivalentCustodyTransfer(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow
+    ) {
+        if (transaction == null
+                || flow == null
+                || flow.getRole() != NormalizedLegRole.TRANSFER
+                || flow.getQuantityDelta() == null
+                || flow.getQuantityDelta().signum() == 0) {
+            return false;
+        }
+        String continuityIdentity = AccountingAssetFamilySupport.continuityIdentity(flow);
+        if (continuityIdentity == null || !continuityIdentity.startsWith("FAMILY:")) {
+            return false;
+        }
+        return switch (transaction.getType()) {
+            case PROTOCOL_CUSTODY_DEPOSIT,
+                    PROTOCOL_CUSTODY_WITHDRAW,
+                    LENDING_DEPOSIT,
+                    LENDING_WITHDRAW,
+                    STAKING_DEPOSIT,
+                    STAKING_WITHDRAW,
+                    VAULT_DEPOSIT,
+                    VAULT_WITHDRAW -> true;
+            default -> false;
+        };
     }
 
     private boolean allHaveKnownPrices(List<NormalizedTransaction.Flow> flows) {
@@ -918,7 +967,7 @@ public class AvcoReplayService {
         }
 
         String quantityKey = flow.getQuantityDelta().abs().stripTrailingZeros().toPlainString();
-        String assetKey = assetKey(transaction, flow).assetIdentity();
+        String assetKey = continuityIdentity(transaction, flow);
         if (transaction.getCorrelationId() != null && !transaction.getCorrelationId().isBlank()) {
             return "corr:" + transaction.getCorrelationId() + ":" + assetKey + ":" + quantityKey;
         }
@@ -942,12 +991,34 @@ public class AvcoReplayService {
         return BridgeAssetFamilySupport.continuityIdentity(flow);
     }
 
+    private String continuityIdentity(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow
+    ) {
+        String identity = AccountingAssetFamilySupport.continuityIdentity(flow);
+        if (identity != null) {
+            return identity;
+        }
+        return assetKey(transaction, flow).assetIdentity();
+    }
+
+    private ContinuityKey continuityKey(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow
+    ) {
+        return new ContinuityKey(
+                transaction.getWalletAddress(),
+                transaction.getNetworkId(),
+                continuityIdentity(transaction, flow)
+        );
+    }
+
     private boolean sameAssetIdentity(
             NormalizedTransaction transaction,
             NormalizedTransaction.Flow left,
             NormalizedTransaction.Flow right
     ) {
-        return assetKey(transaction, left).assetIdentity().equals(assetKey(transaction, right).assetIdentity());
+        return continuityIdentity(transaction, left).equals(continuityIdentity(transaction, right));
     }
 
     private record AsyncLifecycleBucket(Map<String, Deque<CarryTransfer>> carriesByAsset) {
@@ -1156,6 +1227,13 @@ public class AvcoReplayService {
         String id() {
             return walletAddress + ":" + Objects.toString(networkId, "BYBIT") + ":" + assetContract;
         }
+    }
+
+    private record ContinuityKey(
+            String walletAddress,
+            com.walletradar.domain.common.NetworkId networkId,
+            String continuityIdentity
+    ) {
     }
 
     private static final class PositionState {

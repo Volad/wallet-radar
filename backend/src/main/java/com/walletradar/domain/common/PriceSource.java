@@ -8,6 +8,8 @@ public enum PriceSource {
     EXECUTION,
     SWAP_DERIVED,
     WRAPPER,
+    ECB,
+    BYBIT,
     BINANCE,
     COINGECKO,
     MANUAL,

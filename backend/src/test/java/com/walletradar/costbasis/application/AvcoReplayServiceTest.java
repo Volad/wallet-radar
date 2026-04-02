@@ -127,6 +127,103 @@ class AvcoReplayServiceTest {
     }
 
     @Test
+    void matchedBybitEthTransferCarriesBasisIntoWrappedOnChainAsset() {
+        NormalizedTransaction bybitBuy = tx("1", null, 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flow(NormalizedLegRole.BUY, "ETH", "1", "100", PriceSource.EXECUTION));
+        bybitBuy.setWalletAddress("BYBIT:uid-1");
+        bybitBuy.setSource(NormalizedTransactionSource.BYBIT);
+        bybitBuy.setNetworkId(null);
+
+        NormalizedTransaction bybitTransfer = tx("2", "0xcorr", 1, NormalizedTransactionType.EXTERNAL_TRANSFER_OUT,
+                flow(NormalizedLegRole.SELL, "ETH", "-1", null, null));
+        bybitTransfer.setWalletAddress("BYBIT:uid-1");
+        bybitTransfer.setSource(NormalizedTransactionSource.BYBIT);
+        bybitTransfer.setNetworkId(null);
+        bybitTransfer.setCorrelationId("corr-eth-1");
+        bybitTransfer.setContinuityCandidate(true);
+        bybitTransfer.setMatchedCounterparty("0xwallet");
+
+        NormalizedTransaction onChainTransfer = tx("3", "0xcorr", 1, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flow(NormalizedLegRole.BUY, "WETH", "1", null, null));
+        onChainTransfer.setWalletAddress("0xwallet");
+        onChainTransfer.setNetworkId(NetworkId.MANTLE);
+        onChainTransfer.setCorrelationId("corr-eth-1");
+        onChainTransfer.setContinuityCandidate(true);
+        onChainTransfer.setMatchedCounterparty("BYBIT:uid-1");
+
+        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                NormalizedTransactionStatus.CONFIRMED
+        )).thenReturn(List.of(bybitBuy, bybitTransfer, onChainTransfer));
+
+        AvcoReplayService service = service();
+        service.replayConfirmed();
+
+        ArgumentCaptor<List<AssetPosition>> captor = ArgumentCaptor.forClass(List.class);
+        verify(assetPositionRepository).saveAll(captor.capture());
+        assertThat(captor.getValue()).anySatisfy(position -> {
+            if ("WETH".equals(position.getAssetSymbol())) {
+                assertThat(position.getQuantity()).isEqualByComparingTo("1");
+                assertThat(position.getPerWalletAvco()).isEqualByComparingTo("100");
+                assertThat(position.getHasIncompleteHistory()).isFalse();
+            }
+        });
+    }
+
+    @Test
+    void aaveReceiptTokenPreservesEthFamilyBasisAfterBybitMoveBasis() {
+        NormalizedTransaction bybitBuy = tx("1", null, 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flow(NormalizedLegRole.BUY, "ETH", "3.06", "2000", PriceSource.EXECUTION));
+        bybitBuy.setWalletAddress("BYBIT:uid-1");
+        bybitBuy.setSource(NormalizedTransactionSource.BYBIT);
+        bybitBuy.setNetworkId(null);
+
+        NormalizedTransaction bybitTransfer = tx("2", "0xa5e755", 1, NormalizedTransactionType.EXTERNAL_TRANSFER_OUT,
+                flow(NormalizedLegRole.SELL, "ETH", "-3.06", null, null));
+        bybitTransfer.setWalletAddress("BYBIT:uid-1");
+        bybitTransfer.setSource(NormalizedTransactionSource.BYBIT);
+        bybitTransfer.setNetworkId(null);
+        bybitTransfer.setCorrelationId("BYBIT:MANTLE:0xa5e755");
+        bybitTransfer.setContinuityCandidate(true);
+        bybitTransfer.setMatchedCounterparty("0x1a87");
+
+        NormalizedTransaction onChainReceive = tx("3", "0xa5e755", 1, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flow(NormalizedLegRole.BUY, "WETH", "3.06", null, null));
+        onChainReceive.setWalletAddress("0x1a87");
+        onChainReceive.setNetworkId(NetworkId.MANTLE);
+        onChainReceive.setCorrelationId("BYBIT:MANTLE:0xa5e755");
+        onChainReceive.setContinuityCandidate(true);
+        onChainReceive.setMatchedCounterparty("BYBIT:uid-1");
+
+        NormalizedTransaction aaveDeposit = tx("4", "0x3b8592", 2, NormalizedTransactionType.LENDING_DEPOSIT,
+                flow(NormalizedLegRole.TRANSFER, "WETH", "-3.06", null, null),
+                flow(NormalizedLegRole.TRANSFER, "aManWETH", "3.059999999999999999", null, null));
+        aaveDeposit.setWalletAddress("0x1a87");
+        aaveDeposit.setNetworkId(NetworkId.MANTLE);
+
+        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                NormalizedTransactionStatus.CONFIRMED
+        )).thenReturn(List.of(bybitBuy, bybitTransfer, onChainReceive, aaveDeposit));
+
+        AvcoReplayService service = service();
+        service.replayConfirmed();
+
+        ArgumentCaptor<List<AssetPosition>> captor = ArgumentCaptor.forClass(List.class);
+        verify(assetPositionRepository).saveAll(captor.capture());
+        assertThat(captor.getValue()).anySatisfy(position -> {
+            if ("aManWETH".equals(position.getAssetSymbol())) {
+                assertThat(position.getQuantity()).isEqualByComparingTo("3.059999999999999999");
+                assertThat(position.getTotalCostBasisUsd()).isEqualByComparingTo("6120");
+                assertThat(position.getPerWalletAvco()).isEqualByComparingTo("2000.000000000000000653594771241830");
+                assertThat(position.getHasIncompleteHistory()).isFalse();
+            }
+        }).anySatisfy(position -> {
+            if ("WETH".equals(position.getAssetSymbol())) {
+                assertThat(position.getQuantity()).isZero();
+            }
+        });
+    }
+
+    @Test
     void correlatedBridgePairCarriesBasisAcrossNetworksWhenPlainMoveBasisIsProven() {
         NormalizedTransaction sourceBuy = tx("1", "0xbuy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
                 flow(NormalizedLegRole.BUY, "USDC", "100", "1", PriceSource.STABLECOIN));

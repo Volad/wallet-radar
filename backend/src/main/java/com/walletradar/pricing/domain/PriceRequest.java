@@ -1,6 +1,7 @@
 package com.walletradar.pricing.domain;
 
 import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 
 import java.time.Instant;
 import java.util.Locale;
@@ -11,6 +12,7 @@ import java.util.Objects;
  */
 public record PriceRequest(
         String normalizedTransactionId,
+        NormalizedTransactionSource transactionSource,
         NetworkId networkId,
         String assetContract,
         String assetSymbol,
@@ -19,15 +21,16 @@ public record PriceRequest(
 
     public PriceRequest {
         Objects.requireNonNull(normalizedTransactionId, "normalizedTransactionId");
-        Objects.requireNonNull(networkId, "networkId");
+        Objects.requireNonNull(transactionSource, "transactionSource");
         Objects.requireNonNull(assetSymbol, "assetSymbol");
         Objects.requireNonNull(occurredAt, "occurredAt");
     }
 
     public String assetKey() {
+        String scope = networkId == null ? "GLOBAL" : networkId.name();
         if (assetContract != null && !assetContract.isBlank()) {
-            return networkId + ":" + assetContract.trim().toLowerCase(Locale.ROOT);
+            return scope + ":" + assetContract.trim().toLowerCase(Locale.ROOT);
         }
-        return networkId + ":SYMBOL:" + assetSymbol.trim().toUpperCase(Locale.ROOT);
+        return scope + ":SYMBOL:" + assetSymbol.trim().toUpperCase(Locale.ROOT);
     }
 }

@@ -1,6 +1,7 @@
 package com.walletradar.pricing.resolver.external.binance;
 
 import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.pricing.domain.PriceRequest;
 import com.walletradar.pricing.resolver.external.ExternalPriceMappingService;
 import org.junit.jupiter.api.Test;
@@ -15,6 +16,7 @@ class BinanceSymbolMapperTest {
 
         assertThat(mapper.candidateSymbols(new PriceRequest(
                 "tx-1",
+                NormalizedTransactionSource.ON_CHAIN,
                 NetworkId.BASE,
                 "0x4200000000000000000000000000000000000006",
                 "WETH",

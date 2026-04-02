@@ -281,7 +281,7 @@ walletradar:
         max-pages: 3
 
   costbasis:
-    enabled: false
+    enabled: true
     validation-batch-size: 250
     schedule-interval-ms: 120000
     retry-delay-seconds: 120
@@ -293,12 +293,17 @@ walletradar:
       baseline-dir:
 
   pricing:
-    enabled: false
+    enabled: true
     batch-size: 150
     schedule-interval-ms: 120000
     retry-delay-seconds: 120
     external:
       request-timeout-ms: 10000
+      ecb:
+        base-url: https://data-api.ecb.europa.eu
+        backfill-days: 7
+      bybit:
+        base-url: https://api.bybit.com
       binance:
         base-url: https://api.binance.com
       coin-gecko:

@@ -30,14 +30,15 @@ public class PriceExternalSourceOrchestrator {
                 historicalPriceCacheService,
                 "historicalPriceCacheService"
         );
-        this.externalSources = Objects.requireNonNull(externalSources, "externalSources")
-                .stream()
-                .sorted(Comparator.comparingInt(source -> sourcePriority(source.source())))
-                .toList();
+        this.externalSources = List.copyOf(Objects.requireNonNull(externalSources, "externalSources"));
     }
 
     public Optional<PriceQuote> resolve(PriceRequest request) {
-        for (ExternalPriceSource externalSource : externalSources) {
+        List<ExternalPriceSource> prioritizedSources = externalSources.stream()
+                .filter(source -> source.supports(request))
+                .sorted(Comparator.comparingInt(source -> sourcePriority(request, source.source())))
+                .toList();
+        for (ExternalPriceSource externalSource : prioritizedSources) {
             Optional<PriceQuote> cached = historicalPriceCacheService.findQuote(request, externalSource.source());
             if (cached.isPresent()) {
                 return cached;
@@ -63,10 +64,12 @@ public class PriceExternalSourceOrchestrator {
         return Optional.empty();
     }
 
-    private int sourcePriority(PriceSource source) {
+    private int sourcePriority(PriceRequest request, PriceSource source) {
         return switch (source) {
-            case BINANCE -> 0;
-            case COINGECKO -> 1;
+            case ECB -> 0;
+            case BYBIT -> 1;
+            case BINANCE -> 2;
+            case COINGECKO -> 3;
             default -> 100;
         };
     }

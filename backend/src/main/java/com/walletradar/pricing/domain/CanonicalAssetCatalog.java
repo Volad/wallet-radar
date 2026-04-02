@@ -26,6 +26,11 @@ public final class CanonicalAssetCatalog {
             "AUSD"
     );
 
+    private static final Set<String> EUR_STABLE_SYMBOLS = Set.of(
+            "EURC",
+            "EUROC"
+    );
+
     private static final Map<NetworkId, Set<String>> USD_STABLE_CONTRACTS = Map.ofEntries(
             Map.entry(NetworkId.ETHEREUM, Set.of(
                     "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
@@ -154,6 +159,10 @@ public final class CanonicalAssetCatalog {
 
     public static Optional<String> coinGeckoId(String assetSymbol) {
         return Optional.ofNullable(COINGECKO_IDS.get(canonicalMarketSymbol(assetSymbol)));
+    }
+
+    public static boolean isEuroStablecoin(String assetSymbol) {
+        return EUR_STABLE_SYMBOLS.contains(canonicalMarketSymbol(assetSymbol));
     }
 
     public static String normalizeContract(String contract) {

@@ -2,6 +2,7 @@ package com.walletradar.pricing.resolver.external.binance;
 
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.common.PriceSource;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.pricing.domain.PriceRequest;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -26,7 +27,14 @@ class BinancePriceSourceAdapterTest {
 
     @Test
     void listedAssetResolvesFromBinance() {
-        PriceRequest request = new PriceRequest("tx-1", NetworkId.BASE, null, "ETH", Instant.parse("2026-03-25T10:15:00Z"));
+        PriceRequest request = new PriceRequest(
+                "tx-1",
+                NormalizedTransactionSource.ON_CHAIN,
+                NetworkId.BASE,
+                null,
+                "ETH",
+                Instant.parse("2026-03-25T10:15:00Z")
+        );
         when(symbolMapper.candidateSymbols(request)).thenReturn(List.of("ETHUSDT"));
         when(klineClient.fetchKline("ETHUSDT", request.occurredAt())).thenReturn(Optional.of(
                 new BinanceKlineClient.BinanceKline(
@@ -47,7 +55,14 @@ class BinancePriceSourceAdapterTest {
 
     @Test
     void unavailableSymbolReturnsEmpty() {
-        PriceRequest request = new PriceRequest("tx-1", NetworkId.BASE, null, "XYZ", Instant.parse("2026-03-25T10:15:00Z"));
+        PriceRequest request = new PriceRequest(
+                "tx-1",
+                NormalizedTransactionSource.ON_CHAIN,
+                NetworkId.BASE,
+                null,
+                "XYZ",
+                Instant.parse("2026-03-25T10:15:00Z")
+        );
         when(symbolMapper.candidateSymbols(request)).thenReturn(List.of("XYZUSDT"));
         when(klineClient.fetchKline("XYZUSDT", request.occurredAt())).thenReturn(Optional.empty());
 

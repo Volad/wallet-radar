@@ -31,6 +31,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -44,6 +45,39 @@ class ReceiptClarificationGatewayTest {
     private EvmRpcClient rpcClient;
     @Mock
     private RpcTokenTransferResolver rpcTokenTransferResolver;
+
+    @Test
+    @DisplayName("persisted transfer evidence short-circuits external fetch for receipt clarification")
+    void persistedTransferEvidenceShortCircuitsExternalFetchForReceiptClarification() {
+        IngestionNetworkProperties networkProperties = networkProperties(NetworkId.BASE, IngestionNetworkProperties.NetworkIngestionEntry.SyncMethod.BLOCKSCOUT);
+        ReceiptClarificationGateway gateway = new ReceiptClarificationGateway(
+                etherscanProvider,
+                blockScoutProvider,
+                rpcClient,
+                rpcTokenTransferResolver,
+                networkProperties,
+                new ObjectMapper()
+        );
+
+        RawTransaction rawTransaction = raw(NetworkId.BASE, RawSyncMethod.BLOCKSCOUT, "0xpersisted");
+        rawTransaction.setClarificationEvidence(new Document()
+                .append("sourceFamily", "BLOCKSCOUT")
+                .append("transfers", new Document("tokenTransfers", List.of(
+                        new Document("contractAddress", "0x4200000000000000000000000000000000000006")
+                                .append("tokenSymbol", "WETH")
+                                .append("tokenDecimal", "18")
+                                .append("from", "0xpm")
+                                .append("to", rawTransaction.getWalletAddress())
+                                .append("value", "100000000000000000")
+                ))));
+
+        Optional<ClarificationReceiptEnrichment> enrichment = gateway.fetchReceiptWithTransferEvidence(rawTransaction);
+
+        assertThat(enrichment).isPresent();
+        assertThat(enrichment.get().sourceFamily()).isEqualTo(RawSyncMethod.BLOCKSCOUT);
+        assertThat(enrichment.get().tokenTransfers()).hasSize(1);
+        verifyNoInteractions(etherscanProvider, blockScoutProvider, rpcClient, rpcTokenTransferResolver);
+    }
 
     @Test
     @DisplayName("rpc-backed metadata clarification still persists full fetched receipt")

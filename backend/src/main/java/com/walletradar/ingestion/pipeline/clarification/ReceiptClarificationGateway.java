@@ -55,6 +55,64 @@ public class ReceiptClarificationGateway {
         return fetch(rawTransaction, true);
     }
 
+    public Optional<ClarificationReceiptEnrichment> fromPersistedEvidence(
+            RawTransaction rawTransaction,
+            boolean includeTransferEvidence
+    ) {
+        if (rawTransaction == null) {
+            return Optional.empty();
+        }
+        Document clarificationEvidence = persistedClarificationEvidence(rawTransaction);
+        if (clarificationEvidence == null || clarificationEvidence.isEmpty()) {
+            return Optional.empty();
+        }
+
+        Document receiptDocument = BsonCoercionSupport.asDocument(clarificationEvidence.get("receipt"));
+        Document fullReceiptDocument = BsonCoercionSupport.asDocument(clarificationEvidence.get("fullReceipt"));
+        Document transfersDocument = BsonCoercionSupport.asDocument(clarificationEvidence.get("transfers"));
+
+        List<Document> receiptLogs = readDocumentList(fullReceiptDocument, "logs");
+        if (receiptLogs.isEmpty()) {
+            receiptLogs = readDocumentList(receiptDocument, "logs");
+        }
+        List<Document> tokenTransfers = readDocumentList(transfersDocument, "tokenTransfers");
+        List<Document> internalTransfers = readDocumentList(transfersDocument, "internalTransfers");
+        Document fullReceiptPayload = BsonCoercionSupport.copyDocument(fullReceiptDocument);
+        RawSyncMethod sourceFamily = resolvePersistedSourceFamily(clarificationEvidence, rawTransaction.getSyncMethod());
+
+        ClarificationReceiptEnrichment enrichment = new ClarificationReceiptEnrichment(
+                firstNonBlank(stringify(receiptDocument == null ? null : receiptDocument.get("txReceiptStatus")),
+                        normalizeStatus(stringify(fullReceiptDocument == null ? null : fullReceiptDocument.get("status")))),
+                firstNonBlank(stringify(receiptDocument == null ? null : receiptDocument.get("gasUsed")),
+                        stringify(fullReceiptDocument == null ? null : fullReceiptDocument.get("gasUsed"))),
+                firstNonBlank(stringify(receiptDocument == null ? null : receiptDocument.get("effectiveGasPrice")),
+                        stringify(receiptDocument == null ? null : receiptDocument.get("gasPrice")),
+                        stringify(fullReceiptDocument == null ? null : fullReceiptDocument.get("effectiveGasPrice")),
+                        stringify(fullReceiptDocument == null ? null : fullReceiptDocument.get("gasPrice"))),
+                firstNonBlank(
+                        OnChainRawTransactionView.normalizeAddress(stringify(receiptDocument == null ? null : receiptDocument.get("contractAddress"))),
+                        OnChainRawTransactionView.normalizeAddress(stringify(fullReceiptDocument == null ? null : fullReceiptDocument.get("contractAddress")))
+                ),
+                firstNonBlank(stringify(receiptDocument == null ? null : receiptDocument.get("blockNumber")),
+                        stringify(fullReceiptDocument == null ? null : fullReceiptDocument.get("blockNumber"))),
+                List.copyOf(receiptLogs),
+                List.copyOf(tokenTransfers),
+                List.copyOf(internalTransfers),
+                fullReceiptPayload,
+                sourceFamily
+        );
+
+        if (includeTransferEvidence) {
+            return enrichment.hasFullReceiptEvidence()
+                    ? Optional.of(enrichment)
+                    : Optional.empty();
+        }
+        if (!hasPersistedMetadataEvidence(enrichment)) {
+            return Optional.empty();
+        }
+        return Optional.of(enrichment);
+    }
+
     public List<String> findWalletRelatedTransactionHashes(
             String walletAddress,
             NetworkId networkId,
@@ -270,6 +328,10 @@ public class ReceiptClarificationGateway {
         if (rawTransaction == null) {
             return Optional.empty();
         }
+        Optional<ClarificationReceiptEnrichment> persisted = fromPersistedEvidence(rawTransaction, includeTransferEvidence);
+        if (persisted.isPresent()) {
+            return persisted;
+        }
         OnChainRawTransactionView view = OnChainRawTransactionView.wrap(rawTransaction);
         NetworkId networkId = view.networkId();
         String txHash = view.txHash();
@@ -290,6 +352,65 @@ public class ReceiptClarificationGateway {
             case BLOCKSCOUT -> fetchFromExplorer(blockScoutProvider, rawTransaction, view, includeTransferEvidence, sourceFamily);
             case RPC -> fetchFromRpc(rawTransaction, view, includeTransferEvidence, sourceFamily);
         };
+    }
+
+    private Document persistedClarificationEvidence(RawTransaction rawTransaction) {
+        if (rawTransaction.getClarificationEvidence() != null) {
+            return BsonCoercionSupport.asDocument(rawTransaction.getClarificationEvidence());
+        }
+        if (rawTransaction.getRawData() == null) {
+            return null;
+        }
+        return BsonCoercionSupport.asDocument(rawTransaction.getRawData().get("clarificationEvidence"));
+    }
+
+    private RawSyncMethod resolvePersistedSourceFamily(Document clarificationEvidence, RawSyncMethod fallback) {
+        String rawValue = stringify(clarificationEvidence == null ? null : clarificationEvidence.get("sourceFamily"));
+        if (rawValue == null) {
+            return fallback;
+        }
+        try {
+            return RawSyncMethod.valueOf(rawValue.trim().toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException ignored) {
+            return fallback;
+        }
+    }
+
+    private boolean hasPersistedMetadataEvidence(ClarificationReceiptEnrichment enrichment) {
+        return enrichment != null
+                && (enrichment.txReceiptStatus() != null
+                || enrichment.gasUsed() != null
+                || enrichment.effectiveGasPrice() != null
+                || enrichment.contractAddress() != null
+                || enrichment.blockNumber() != null
+                || !enrichment.receiptLogs().isEmpty()
+                || enrichment.fullReceiptPayload() != null);
+    }
+
+    private String normalizeStatus(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        String normalized = value.trim().toLowerCase(Locale.ROOT);
+        if ("0x1".equals(normalized) || "1".equals(normalized)) {
+            return "1";
+        }
+        if ("0x0".equals(normalized) || "0".equals(normalized)) {
+            return "0";
+        }
+        return null;
+    }
+
+    private String firstNonBlank(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
     }
 
     private ExplorerProvider providerFor(RawSyncMethod sourceFamily, NetworkId networkId) {

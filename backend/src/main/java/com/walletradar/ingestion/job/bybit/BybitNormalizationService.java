@@ -10,6 +10,7 @@ import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.domain.transaction.raw.RawTransactionRepository;
 import com.walletradar.ingestion.pipeline.bybit.BybitCanonicalTransactionBuilder;
 import com.walletradar.ingestion.pipeline.bybit.BybitTradePairer;
+import com.walletradar.ingestion.pipeline.bybit.BybitTransferShadowPairer;
 import com.walletradar.ingestion.pipeline.bybit.PendingExternalLedgerRowQueryService;
 import com.walletradar.ingestion.store.IdempotentNormalizedTransactionStore;
 import com.walletradar.ingestion.wallet.query.TrackedWalletLookupService;
@@ -32,10 +33,12 @@ import java.util.Optional;
 public class BybitNormalizationService {
 
     private static final String EXTERNAL_CUSTODY_EXCLUSION_REASON = "EXTERNAL_CUSTODY_UNTRACKED_VENUE";
+    private static final String WITHDRAWAL_SHADOW_EXCLUSION_REASON = "BYBIT_WITHDRAWAL_SHADOW_ROW";
 
     private final PendingExternalLedgerRowQueryService pendingExternalLedgerRowQueryService;
     private final ExternalLedgerRawRepository externalLedgerRawRepository;
     private final BybitTradePairer bybitTradePairer;
+    private final BybitTransferShadowPairer bybitTransferShadowPairer;
     private final BybitCanonicalTransactionBuilder builder;
     private final IdempotentNormalizedTransactionStore normalizedTransactionStore;
     private final NormalizedTransactionRepository normalizedTransactionRepository;
@@ -87,6 +90,10 @@ public class BybitNormalizationService {
             return true;
         }
 
+        if (isWithdrawalShadowRow(row)) {
+            return normalizeWithdrawalShadowRow(row, now);
+        }
+
         NormalizedTransaction normalized = builder.buildMappedRow(row, now);
         if (isBridgeCandidate(row, normalized)) {
             correlateBridge(row, normalized, now);
@@ -120,6 +127,15 @@ public class BybitNormalizationService {
         }
         String type = normalize(row.getCanonicalType());
         return "borrow".equals(type) || "repay".equals(type);
+    }
+
+    private boolean isWithdrawalShadowRow(ExternalLedgerRaw row) {
+        return "fund_asset_changes".equals(normalize(row.getSourceFileType()))
+                && "external_transfer_out".equals(normalize(row.getCanonicalType()))
+                && "withdraw".equals(normalize(row.getBybitType()))
+                && "bybit".equals(normalize(row.getChain()))
+                && row.getTxHash() == null
+                && row.getNetworkId() == null;
     }
 
     private boolean normalizeTradeRow(ExternalLedgerRaw row, Instant now) {
@@ -172,6 +188,16 @@ public class BybitNormalizationService {
 
         NormalizedTransaction review = builder.buildNeedsReviewRow(row, now, "BYBIT_ETH2_PAIR_NOT_FOUND");
         normalizedTransactionStore.upsert(review);
+        markConfirmed(row);
+        return true;
+    }
+
+    private boolean normalizeWithdrawalShadowRow(ExternalLedgerRaw row, Instant now) {
+        NormalizedTransaction normalized = builder.buildMappedRow(row, now);
+        if (bybitTransferShadowPairer.findChainAwareWithdrawalSibling(row).isPresent()) {
+            builder.markWithdrawalShadowExcluded(normalized, now, WITHDRAWAL_SHADOW_EXCLUSION_REASON);
+        }
+        normalizedTransactionStore.upsert(normalized);
         markConfirmed(row);
         return true;
     }

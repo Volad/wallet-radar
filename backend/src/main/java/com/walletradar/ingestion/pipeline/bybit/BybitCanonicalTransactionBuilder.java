@@ -185,6 +185,22 @@ public class BybitCanonicalTransactionBuilder {
             Instant now,
             String exclusionReason
     ) {
+        markExcludedContinuityLikeRow(transaction, now, exclusionReason);
+    }
+
+    public void markWithdrawalShadowExcluded(
+            NormalizedTransaction transaction,
+            Instant now,
+            String exclusionReason
+    ) {
+        markExcludedContinuityLikeRow(transaction, now, exclusionReason);
+    }
+
+    private void markExcludedContinuityLikeRow(
+            NormalizedTransaction transaction,
+            Instant now,
+            String exclusionReason
+    ) {
         transaction.setCorrelationId(null);
         transaction.setMatchedCounterparty(null);
         transaction.setContinuityCandidate(false);
@@ -261,7 +277,13 @@ public class BybitCanonicalTransactionBuilder {
     ) {
         BigDecimal quantity = abs(row.getQuantityRaw());
         return switch (type) {
-            case REWARD_CLAIM -> List.of(flow(NormalizedLegRole.BUY, row.getAssetSymbol(), quantity, null, null));
+            case REWARD_CLAIM -> List.of(flow(
+                    NormalizedLegRole.BUY,
+                    row.getAssetSymbol(),
+                    rewardClaimQuantity(row),
+                    null,
+                    null
+            ));
             case VAULT_DEPOSIT -> List.of(flow(NormalizedLegRole.TRANSFER, row.getAssetSymbol(), negate(quantity), null, null));
             case VAULT_WITHDRAW -> List.of(flow(NormalizedLegRole.TRANSFER, row.getAssetSymbol(), quantity, null, null));
             case EXTERNAL_TRANSFER_IN -> List.of(flow(NormalizedLegRole.BUY, row.getAssetSymbol(), quantity, null, null));
@@ -446,6 +468,19 @@ public class BybitCanonicalTransactionBuilder {
 
     private BigDecimal firstNonNull(BigDecimal left, BigDecimal right) {
         return left != null ? left : right;
+    }
+
+    private BigDecimal rewardClaimQuantity(ExternalLedgerRaw row) {
+        BigDecimal quantity = firstNonZero(abs(row.getQuantityRaw()), abs(row.getCashFlow()));
+        quantity = firstNonZero(quantity, abs(row.getChange()));
+        return quantity;
+    }
+
+    private BigDecimal firstNonZero(BigDecimal left, BigDecimal right) {
+        if (left != null && left.signum() != 0) {
+            return left;
+        }
+        return right;
     }
 
     private boolean hasExplicitBasisRelevantCanonicalType(ExternalLedgerRaw row) {

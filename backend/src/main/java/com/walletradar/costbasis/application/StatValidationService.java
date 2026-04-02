@@ -6,6 +6,7 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.pricing.application.PriceableFlowPolicy;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -98,7 +99,9 @@ public class StatValidationService {
             if (flow.getQuantityDelta() == null || flow.getQuantityDelta().compareTo(BigDecimal.ZERO) == 0) {
                 reasons.add(FLOW_QUANTITY_MISSING_REASON);
             }
-            if (flow.getUnitPriceUsd() == null && flow.getPriceSource() != PriceSource.UNKNOWN) {
+            if (PriceableFlowPolicy.requiresMarketPrice(transaction, flow)
+                    && flow.getUnitPriceUsd() == null
+                    && flow.getPriceSource() != PriceSource.UNKNOWN) {
                 reasons.add(FLOW_PRICE_MISSING_REASON);
             }
             if (flow.getRole() == NormalizedLegRole.BUY) {

@@ -9,6 +9,7 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionReposi
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.domain.transaction.raw.RawSyncMethod;
 import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.domain.transaction.raw.RawTransactionRepository;
 import com.walletradar.ingestion.config.OnChainClarificationProperties;
@@ -114,6 +115,36 @@ class MetadataClarificationWorkflowHandlerTest {
         lenient().when(normalizedTransactionRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
         lenient().when(rawTransactionRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
         lenient().when(protocolRegistryService.lookup(any(), any())).thenReturn(Optional.empty());
+    }
+
+    @Test
+    @DisplayName("persisted metadata evidence is reused before external receipt fetch")
+    void persistedMetadataEvidenceIsReusedBeforeExternalReceiptFetch() {
+        NormalizedTransaction pending = pendingClarification(NormalizedTransactionType.SWAP);
+        RawTransaction rawTransaction = lowConfidenceSwapRaw();
+        when(rawTransactionRepository.findById(pending.getId())).thenReturn(Optional.of(rawTransaction));
+        when(clarificationGateway.fromPersistedEvidence(rawTransaction, false))
+                .thenReturn(Optional.of(new ClarificationReceiptEnrichment(
+                        "1",
+                        "21000",
+                        "50000000000",
+                        "0x9999999999999999999999999999999999999999",
+                        null,
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        new Document("status", "0x1"),
+                        RawSyncMethod.BLOCKSCOUT
+                )));
+
+        boolean clarified = service.clarify(pending);
+
+        assertThat(clarified).isTrue();
+        verify(clarificationGateway, never()).fetchReceipt(rawTransaction);
+
+        ArgumentCaptor<NormalizedTransaction> normalizedCaptor = ArgumentCaptor.forClass(NormalizedTransaction.class);
+        verify(normalizedTransactionRepository).save(normalizedCaptor.capture());
+        assertThat(normalizedCaptor.getValue().getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
     }
 
     @Test

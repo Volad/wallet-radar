@@ -107,6 +107,29 @@ class BybitCanonicalTransactionBuilderTest {
     }
 
     @Test
+    void rewardClaimFallsBackToCashFlowWhenQuantityRawMissing() {
+        BybitCanonicalTransactionBuilder builder = new BybitCanonicalTransactionBuilder();
+        ExternalLedgerRaw row = new ExternalLedgerRaw();
+        row.setId("bonus-1");
+        row.setUid("33625378");
+        row.setWalletRef("BYBIT:33625378");
+        row.setTimeUtc(Instant.parse("2026-03-25T12:00:00Z"));
+        row.setCanonicalType("REWARD_CLAIM");
+        row.setBasisRelevant(true);
+        row.setAssetSymbol("USDT");
+        row.setCashFlow(new BigDecimal("0.2"));
+        row.setChange(new BigDecimal("0.2"));
+
+        var transaction = builder.buildMappedRow(row, Instant.parse("2026-03-25T12:01:00Z"));
+
+        assertThat(transaction.getType()).isEqualTo(NormalizedTransactionType.REWARD_CLAIM);
+        assertThat(transaction.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        assertThat(transaction.getFlows()).hasSize(1);
+        assertThat(transaction.getFlows().get(0).getRole()).isEqualTo(NormalizedLegRole.BUY);
+        assertThat(transaction.getFlows().get(0).getQuantityDelta()).isEqualByComparingTo("0.2");
+    }
+
+    @Test
     void unmappedBasisRelevantCanonicalTypeBecomesNeedsReview() {
         BybitCanonicalTransactionBuilder builder = new BybitCanonicalTransactionBuilder();
         ExternalLedgerRaw row = new ExternalLedgerRaw();

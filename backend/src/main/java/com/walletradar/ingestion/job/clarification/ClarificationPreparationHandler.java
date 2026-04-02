@@ -86,7 +86,12 @@ final class ClarificationPreparationHandler {
             Instant now,
             int maxAttempts
     ) {
-        Optional<ClarificationReceiptEnrichment> enrichment = clarificationGateway.fetchReceipt(rawTransaction);
+        Optional<ClarificationReceiptEnrichment> enrichment = safeOptional(
+                clarificationGateway.fromPersistedEvidence(rawTransaction, false)
+        );
+        if (enrichment.isEmpty()) {
+            enrichment = safeOptional(clarificationGateway.fetchReceipt(rawTransaction));
+        }
         if (enrichment.isEmpty()) {
             clarificationFailureHandler.markMetadataFailure(
                     normalizedTransaction,
@@ -104,7 +109,12 @@ final class ClarificationPreparationHandler {
             RawTransaction rawTransaction,
             Instant now
     ) {
-        Optional<ClarificationReceiptEnrichment> enrichment = clarificationGateway.fetchReceiptWithTransferEvidence(rawTransaction);
+        Optional<ClarificationReceiptEnrichment> enrichment = safeOptional(
+                clarificationGateway.fromPersistedEvidence(rawTransaction, true)
+        );
+        if (enrichment.isEmpty()) {
+            enrichment = safeOptional(clarificationGateway.fetchReceiptWithTransferEvidence(rawTransaction));
+        }
         if (enrichment.isEmpty()) {
             clarificationFailureHandler.markReceiptFailure(
                     normalizedTransaction,
@@ -114,5 +124,9 @@ final class ClarificationPreparationHandler {
             );
         }
         return enrichment;
+    }
+
+    private Optional<ClarificationReceiptEnrichment> safeOptional(Optional<ClarificationReceiptEnrichment> enrichment) {
+        return enrichment == null ? Optional.empty() : enrichment;
     }
 }

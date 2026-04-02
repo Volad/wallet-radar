@@ -26,6 +26,7 @@ public record PriceResolutionContext(
     public PriceRequest toPriceRequest() {
         return new PriceRequest(
                 transaction.getId(),
+                transaction.getSource(),
                 transaction.getNetworkId(),
                 flow.getAssetContract(),
                 flow.getAssetSymbol(),

@@ -51,6 +51,7 @@ import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -128,6 +129,39 @@ class ReceiptClarificationWorkflowHandlerTest {
     }
 
     @Test
+    @DisplayName("persisted full receipt evidence prevents redundant receipt clarification fetch")
+    void persistedFullReceiptEvidencePreventsRedundantReceiptClarificationFetch() {
+        NormalizedTransaction pending = reviewTx(
+                "0x0a757aeeb58667c545017cd8e5cd60dc994a8945ed810c60ea2aed18688f4f7a",
+                NetworkId.BASE,
+                "ROUTER_METHOD_OVERLOAD_UNSUPPORTED"
+        );
+        RawTransaction rawTransaction = baseLpExitRaw();
+        rawTransaction.setClarificationEvidence(new Document()
+                .append("sourceFamily", "ETHERSCAN")
+                .append("receipt", new Document("txReceiptStatus", "1")
+                        .append("logs", List.of(new Document("address", POSITION_MANAGER)
+                                .append("topics", List.of("0xlegacy")))))
+                .append("transfers", new Document("tokenTransfers", List.of(
+                        new Document("contractAddress", "0x4200000000000000000000000000000000000006")
+                                .append("tokenSymbol", "WETH")
+                                .append("tokenName", "Wrapped Ether")
+                                .append("tokenDecimal", "18")
+                                .append("from", POSITION_MANAGER)
+                                .append("to", WALLET)
+                                .append("value", "100000000000000000")
+                ))));
+        when(rawTransactionRepository.findById(pending.getId())).thenReturn(Optional.of(rawTransaction));
+
+        boolean clarified = service.clarify(pending);
+
+        assertThat(clarified).isFalse();
+        verifyNoInteractions(clarificationGateway);
+        verify(rawTransactionRepository, never()).save(any(RawTransaction.class));
+        verify(normalizedTransactionRepository, never()).save(any());
+    }
+
+    @Test
     @DisplayName("allowlisted Base LP exit row closes after full receipt clarification transfer enrichment")
     void allowlistedBaseLpExitRowClosesAfterFullReceiptClarificationTransferEnrichment() {
         NormalizedTransaction pending = reviewTx("0x0a757aeeb58667c545017cd8e5cd60dc994a8945ed810c60ea2aed18688f4f7a", NetworkId.BASE, "ROUTER_METHOD_OVERLOAD_UNSUPPORTED");
@@ -192,8 +226,8 @@ class ReceiptClarificationWorkflowHandlerTest {
     }
 
     @Test
-    @DisplayName("full receipt clarification tolerates nested linked-hash-map clarification evidence")
-    void fullReceiptClarificationToleratesNestedLinkedHashMapClarificationEvidence() {
+    @DisplayName("nested linked-hash-map clarification evidence prevents redundant full receipt fetch")
+    void nestedLinkedHashMapClarificationEvidencePreventsRedundantFullReceiptFetch() {
         NormalizedTransaction pending = reviewTx("0x0a757aeeb58667c545017cd8e5cd60dc994a8945ed810c60ea2aed18688f4f7a", NetworkId.BASE, "ROUTER_METHOD_OVERLOAD_UNSUPPORTED");
         pending.setFullReceiptClarificationAttempts(1);
         RawTransaction rawTransaction = baseLpExitRaw();
@@ -217,47 +251,13 @@ class ReceiptClarificationWorkflowHandlerTest {
                         )))
                 ))));
         when(rawTransactionRepository.findById(pending.getId())).thenReturn(Optional.of(rawTransaction));
-        when(protocolRegistryService.lookup(NetworkId.BASE, POSITION_MANAGER))
-                .thenReturn(Optional.of(new ProtocolRegistryEntry(
-                        POSITION_MANAGER,
-                        Set.of(NetworkId.BASE),
-                        ProtocolRegistryFamily.DEX,
-                        ProtocolRegistryRole.POSITION_MANAGER,
-                        null,
-                        ConfidenceLevel.HIGH,
-                        "Pancake",
-                        "Infinity",
-                        false,
-                        null
-                )));
-        when(clarificationGateway.fetchReceiptWithTransferEvidence(rawTransaction))
-                .thenReturn(Optional.of(new ClarificationReceiptEnrichment(
-                        "1",
-                        "195742",
-                        "4044313",
-                        null,
-                        "0x2",
-                        List.of(new Document("address", POSITION_MANAGER)
-                                .append("topics", List.of("0x26f6a048ee9138f2c0ce266f322cb99228e8d619ae2bff30c67f8dcf9d2377b4"))),
-                        List.of(new Document("contractAddress", "0x4200000000000000000000000000000000000006")
-                                .append("tokenSymbol", "WETH")
-                                .append("tokenName", "Wrapped Ether")
-                                .append("tokenDecimal", "18")
-                                .append("from", POSITION_MANAGER)
-                                .append("to", WALLET)
-                                .append("value", "100000000000000000")),
-                        List.of(),
-                        new Document("status", "0x1"),
-                        RawSyncMethod.BLOCKSCOUT
-                )));
 
         boolean clarified = service.clarify(pending);
 
-        assertThat(clarified).isTrue();
-        ArgumentCaptor<RawTransaction> rawCaptor = ArgumentCaptor.forClass(RawTransaction.class);
-        verify(rawTransactionRepository).save(rawCaptor.capture());
-        assertThat(rawCaptor.getValue().getClarificationEvidence().get("receipt", Document.class))
-                .containsEntry("txReceiptStatus", "1");
+        assertThat(clarified).isFalse();
+        verifyNoInteractions(clarificationGateway);
+        verify(rawTransactionRepository, never()).save(any(RawTransaction.class));
+        verify(normalizedTransactionRepository, never()).save(any());
     }
 
     @Test

@@ -13,5 +13,9 @@ public interface ExternalPriceSource {
 
     PriceSource source();
 
+    default boolean supports(PriceRequest request) {
+        return true;
+    }
+
     Optional<PriceQuote> resolve(PriceRequest request);
 }

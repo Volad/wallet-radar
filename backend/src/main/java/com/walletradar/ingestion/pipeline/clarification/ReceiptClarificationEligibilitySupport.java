@@ -59,6 +59,9 @@ public final class ReceiptClarificationEligibilitySupport {
         if (normalizedTransaction == null || view == null) {
             return false;
         }
+        if (view.hasFullReceiptClarificationEvidence()) {
+            return false;
+        }
         List<String> reasons = normalizedTransaction.getMissingDataReasons() == null
                 ? List.of()
                 : normalizedTransaction.getMissingDataReasons();

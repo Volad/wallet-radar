@@ -14,6 +14,7 @@ import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.domain.transaction.raw.RawTransactionRepository;
 import com.walletradar.ingestion.pipeline.bybit.BybitCanonicalTransactionBuilder;
 import com.walletradar.ingestion.pipeline.bybit.BybitTradePairer;
+import com.walletradar.ingestion.pipeline.bybit.BybitTransferShadowPairer;
 import com.walletradar.ingestion.pipeline.bybit.PendingExternalLedgerRowQueryService;
 import com.walletradar.ingestion.store.IdempotentNormalizedTransactionStore;
 import com.walletradar.ingestion.wallet.query.TrackedWalletLookupService;
@@ -42,6 +43,8 @@ class BybitNormalizationServiceTest {
     private ExternalLedgerRawRepository externalLedgerRawRepository;
     @Mock
     private BybitTradePairer bybitTradePairer;
+    @Mock
+    private BybitTransferShadowPairer bybitTransferShadowPairer;
     @Mock
     private IdempotentNormalizedTransactionStore normalizedTransactionStore;
     @Mock
@@ -377,11 +380,52 @@ class BybitNormalizationServiceTest {
         assertThat(captor.getValue().getAccountingExclusionReason()).isEqualTo("BYBIT_LOAN_SEMANTICS_UNSUPPORTED");
     }
 
+    @Test
+    void fundAssetWithdrawalShadowRowIsExcludedWhenChainAwareSiblingExists() {
+        ExternalLedgerRaw shadow = new ExternalLedgerRaw();
+        shadow.setId("shadow-1");
+        shadow.setUid("uid-1");
+        shadow.setWalletRef("BYBIT:uid-1");
+        shadow.setSourceFileType("fund_asset_changes");
+        shadow.setBybitType("Withdraw");
+        shadow.setCanonicalType("EXTERNAL_TRANSFER_OUT");
+        shadow.setChain("BYBIT");
+        shadow.setStatus(ExternalLedgerRawStatus.RAW);
+        shadow.setTimeUtc(Instant.parse("2026-02-19T08:14:22Z"));
+        shadow.setAssetSymbol("ETH");
+        shadow.setQuantityRaw(new BigDecimal("-3.06"));
+        shadow.setBasisRelevant(true);
+
+        ExternalLedgerRaw sibling = new ExternalLedgerRaw();
+        sibling.setId("withdraw-1");
+
+        when(pendingExternalLedgerRowQueryService.loadNextBatch(10)).thenReturn(List.of(shadow));
+        when(externalLedgerRawRepository.findById(shadow.getId())).thenReturn(Optional.of(shadow));
+        when(bybitTransferShadowPairer.findChainAwareWithdrawalSibling(shadow)).thenReturn(Optional.of(sibling));
+
+        BybitNormalizationService service = service();
+        int processed = service.processNextBatch(10);
+
+        assertThat(processed).isEqualTo(1);
+        ArgumentCaptor<NormalizedTransaction> captor = ArgumentCaptor.forClass(NormalizedTransaction.class);
+        verify(normalizedTransactionStore).upsert(captor.capture());
+        NormalizedTransaction saved = captor.getValue();
+        assertThat(saved.getType()).isEqualTo(NormalizedTransactionType.EXTERNAL_TRANSFER_OUT);
+        assertThat(saved.getStatus()).isEqualTo(NormalizedTransactionStatus.NEEDS_REVIEW);
+        assertThat(saved.getExcludedFromAccounting()).isTrue();
+        assertThat(saved.getAccountingExclusionReason()).isEqualTo("BYBIT_WITHDRAWAL_SHADOW_ROW");
+        assertThat(saved.getCorrelationId()).isNull();
+        assertThat(saved.getContinuityCandidate()).isFalse();
+        assertThat(saved.getFlows()).extracting(NormalizedTransaction.Flow::getRole)
+                .containsExactly(NormalizedLegRole.TRANSFER);
+    }
+
     private BybitNormalizationService service() {
         return new BybitNormalizationService(
                 pendingExternalLedgerRowQueryService,
                 externalLedgerRawRepository,
                 bybitTradePairer,
+                bybitTransferShadowPairer,
                 new BybitCanonicalTransactionBuilder(),
                 normalizedTransactionStore,
                 normalizedTransactionRepository,

@@ -357,6 +357,31 @@ class PriceResolutionServiceTest {
     }
 
     @Test
+    void bybitRowWithoutNetworkIdStillPricesSafely() {
+        PriceResolutionService service = service();
+        NormalizedTransaction transaction = transaction(
+                NormalizedTransactionSource.BYBIT,
+                NormalizedTransactionType.EXTERNAL_TRANSFER_OUT,
+                null,
+                flow(NormalizedLegRole.SELL, null, "ETH", "-0.5")
+        );
+        transaction.setNetworkId(null);
+        when(externalSources.resolve(argThat(matchesSymbol("ETH")))).thenReturn(Optional.of(new PriceQuote(
+                new BigDecimal("2500"),
+                PriceSource.BINANCE,
+                transaction.getBlockTimestamp(),
+                "USD",
+                "ETHUSDT"
+        )));
+
+        NormalizedTransaction priced = service.resolve(transaction, Instant.parse("2026-03-25T12:00:00Z"));
+
+        assertThat(priced.getFlows().get(0).getUnitPriceUsd()).isEqualByComparingTo("2500");
+        assertThat(priced.getFlows().get(0).getPriceSource()).isEqualTo(PriceSource.BINANCE);
+        verify(externalSources).resolve(argThat(matchesSymbol("ETH")));
+    }
+
+    @Test
     void unresolvedPriceDoesNotBlockConfirmation() {
         PriceResolutionService service = service();
         NormalizedTransaction transaction = transaction(
@@ -373,6 +398,24 @@ class PriceResolutionServiceTest {
         assertThat(priced.getMissingDataReasons()).contains(PriceableFlowPolicy.PRICE_UNRESOLVABLE_REASON);
         assertThat(priced.getFlows().get(0).getUnitPriceUsd()).isNull();
         assertThat(priced.getFlows().get(0).getPriceSource()).isEqualTo(PriceSource.UNKNOWN);
+    }
+
+    @Test
+    void stalePriceUnresolvableReasonClearsWhenAllRequiredFlowsArePriced() {
+        PriceResolutionService service = service();
+        NormalizedTransaction transaction = transaction(
+                NormalizedTransactionSource.ON_CHAIN,
+                NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                null,
+                flow(NormalizedLegRole.BUY, "0xdead", "USDC", "100", "1", PriceSource.STABLECOIN)
+        );
+        transaction.setMissingDataReasons(List.of(PriceableFlowPolicy.PRICE_UNRESOLVABLE_REASON));
+
+        NormalizedTransaction priced = service.resolve(transaction, Instant.parse("2026-03-25T12:00:00Z"));
+
+        assertThat(priced.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_STAT);
+        assertThat(priced.getMissingDataReasons()).doesNotContain(PriceableFlowPolicy.PRICE_UNRESOLVABLE_REASON);
+        verify(externalSources, never()).resolve(org.mockito.ArgumentMatchers.any());
     }
 
     private PriceResolutionService service() {
@@ -418,6 +461,20 @@ class PriceResolutionServiceTest {
         flow.setAssetContract(assetContract);
         flow.setAssetSymbol(assetSymbol);
         flow.setQuantityDelta(new BigDecimal(quantity));
+        return flow;
+    }
+
+    private NormalizedTransaction.Flow flow(
+            NormalizedLegRole role,
+            String assetContract,
+            String assetSymbol,
+            String quantity,
+            String unitPriceUsd,
+            PriceSource priceSource
+    ) {
+        NormalizedTransaction.Flow flow = flow(role, assetContract, assetSymbol, quantity);
+        flow.setUnitPriceUsd(new BigDecimal(unitPriceUsd));
+        flow.setPriceSource(priceSource);
         return flow;
     }
 

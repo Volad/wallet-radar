@@ -4,6 +4,8 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.domain.transaction.raw.RawTransaction;
+import com.walletradar.domain.transaction.raw.RawTransactionRepository;
 import com.walletradar.ingestion.pipeline.classification.reason.ClassificationReasonCode;
 import com.walletradar.ingestion.pipeline.classification.support.ClarificationEligibilitySupport;
 import lombok.RequiredArgsConstructor;
@@ -31,10 +33,13 @@ public class PendingReceiptClarificationQueryService {
     private static final long COW_SETTLEMENT_CORRELATION_WINDOW_SECONDS = 86_400L;
 
     private final MongoOperations mongoOperations;
+    private final RawTransactionRepository rawTransactionRepository;
+    private final ReceiptClarificationGateway receiptClarificationGateway;
 
     public List<NormalizedTransaction> loadNextBatch(int batchSize, int maxAttempts, long retryDelaySeconds) {
         int boundedBatchSize = Math.max(1, batchSize);
         int boundedMaxAttempts = Math.max(1, maxAttempts);
+        int selectionLimit = Math.max(boundedBatchSize, boundedBatchSize * 4);
         Instant retryCutoff = Instant.now().minusSeconds(Math.max(0L, retryDelaySeconds));
 
         Criteria attemptsCriteria = new Criteria().orOperator(
@@ -115,10 +120,12 @@ public class PendingReceiptClarificationQueryService {
                 Sort.Order.asc("transactionIndex"),
                 Sort.Order.asc("_id")
         ));
-        query.limit(boundedBatchSize);
-        List<NormalizedTransaction> selected = new ArrayList<>(mongoOperations.find(query, NormalizedTransaction.class));
+        query.limit(selectionLimit);
+        List<NormalizedTransaction> selected = excludeRowsWithPersistedReceiptEvidence(
+                mongoOperations.find(query, NormalizedTransaction.class)
+        );
         if (selected.size() >= boundedBatchSize) {
-            return selected;
+            return List.copyOf(selected.subList(0, boundedBatchSize));
         }
 
         Map<String, NormalizedTransaction> deduplicated = new LinkedHashMap<>();
@@ -166,7 +173,10 @@ public class PendingReceiptClarificationQueryService {
                 break;
             }
         }
-        return List.copyOf(deduplicated.values());
+        List<NormalizedTransaction> filtered = excludeRowsWithPersistedReceiptEvidence(deduplicated.values());
+        return filtered.size() <= boundedBatchSize
+                ? List.copyOf(filtered)
+                : List.copyOf(filtered.subList(0, boundedBatchSize));
     }
 
     private List<NormalizedTransaction> loadGmxDerivativeExecutionCandidates(
@@ -228,7 +238,7 @@ public class PendingReceiptClarificationQueryService {
                     Sort.Order.asc("transactionIndex"),
                     Sort.Order.asc("_id")
             ));
-            candidateQuery.limit(limit);
+            candidateQuery.limit(Math.max(limit, limit * 4));
 
             for (NormalizedTransaction candidate : mongoOperations.find(candidateQuery, NormalizedTransaction.class)) {
                 candidates.putIfAbsent(candidate.getId(), candidate);
@@ -300,7 +310,7 @@ public class PendingReceiptClarificationQueryService {
                     Sort.Order.asc("transactionIndex"),
                     Sort.Order.asc("_id")
             ));
-            candidateQuery.limit(limit);
+            candidateQuery.limit(Math.max(limit, limit * 4));
 
             for (NormalizedTransaction candidate : mongoOperations.find(candidateQuery, NormalizedTransaction.class)) {
                 candidates.putIfAbsent(candidate.getId(), candidate);
@@ -310,5 +320,40 @@ public class PendingReceiptClarificationQueryService {
             }
         }
         return List.copyOf(candidates.values());
+    }
+
+    private List<NormalizedTransaction> excludeRowsWithPersistedReceiptEvidence(
+            Iterable<NormalizedTransaction> candidates
+    ) {
+        List<NormalizedTransaction> rows = new ArrayList<>();
+        List<String> rawIds = new ArrayList<>();
+        for (NormalizedTransaction candidate : candidates) {
+            if (candidate == null || candidate.getId() == null || candidate.getId().isBlank()) {
+                continue;
+            }
+            rows.add(candidate);
+            rawIds.add(candidate.getId());
+        }
+        if (rows.isEmpty()) {
+            return List.of();
+        }
+
+        Map<String, RawTransaction> rawsById = new LinkedHashMap<>();
+        for (RawTransaction rawTransaction : rawTransactionRepository.findAllById(rawIds)) {
+            if (rawTransaction != null && rawTransaction.getId() != null) {
+                rawsById.put(rawTransaction.getId(), rawTransaction);
+            }
+        }
+
+        List<NormalizedTransaction> filtered = new ArrayList<>(rows.size());
+        for (NormalizedTransaction row : rows) {
+            RawTransaction rawTransaction = rawsById.get(row.getId());
+            if (rawTransaction != null
+                    && receiptClarificationGateway.fromPersistedEvidence(rawTransaction, true).isPresent()) {
+                continue;
+            }
+            filtered.add(row);
+        }
+        return filtered;
     }
 }

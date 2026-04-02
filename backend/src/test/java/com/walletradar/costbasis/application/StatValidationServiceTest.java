@@ -72,6 +72,28 @@ class StatValidationServiceTest {
         assertThat(captor.getValue().getMissingDataReasons()).contains(StatValidationService.SWAP_MISSING_BUY_LEG_REASON);
     }
 
+    @Test
+    void continuityTransferWithoutPrincipalMarketPriceStillPromotes() {
+        NormalizedTransaction transaction = transaction(
+                NormalizedTransactionType.BRIDGE_OUT,
+                flow(NormalizedLegRole.TRANSFER, "USDC", "-1000", null, null),
+                flow(NormalizedLegRole.FEE, "ETH", "-0.001", "2500", PriceSource.BINANCE)
+        );
+        when(pendingStatQueryService.loadNextBatch(25, 60)).thenReturn(List.of(transaction));
+
+        StatValidationService service = new StatValidationService(pendingStatQueryService, normalizedTransactionRepository);
+        StatValidationOutcome outcome = service.processNextBatch(25, 60);
+
+        assertThat(outcome.processed()).isEqualTo(1);
+        assertThat(outcome.promotedToConfirmed()).isEqualTo(1);
+        assertThat(outcome.demotedToNeedsReview()).isZero();
+
+        ArgumentCaptor<NormalizedTransaction> captor = ArgumentCaptor.forClass(NormalizedTransaction.class);
+        verify(normalizedTransactionRepository).save(captor.capture());
+        assertThat(captor.getValue().getStatus()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(captor.getValue().getMissingDataReasons()).doesNotContain(StatValidationService.FLOW_PRICE_MISSING_REASON);
+    }
+
     private NormalizedTransaction transaction(
             NormalizedTransactionType type,
             NormalizedTransaction.Flow... flows
@@ -101,7 +123,7 @@ class StatValidationServiceTest {
         flow.setRole(role);
         flow.setAssetSymbol(assetSymbol);
         flow.setQuantityDelta(new BigDecimal(quantity));
-        flow.setUnitPriceUsd(new BigDecimal(unitPriceUsd));
+        flow.setUnitPriceUsd(unitPriceUsd == null ? null : new BigDecimal(unitPriceUsd));
         flow.setPriceSource(priceSource);
         return flow;
     }
