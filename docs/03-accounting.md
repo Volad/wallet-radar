@@ -39,6 +39,18 @@ reinterpreted as direct native movement.
 
 ## 2. Replay Order
 
+Stage preconditions before replay starts:
+
+1. raw backfill complete for the live session scope
+2. on-chain normalization complete
+3. on-chain clarification complete
+4. Bybit normalization complete
+5. exact `Bybit <-> on-chain` rematch complete
+6. pricing gate green
+
+`move basis` is part of accounting replay itself. It is not a standalone stage
+inserted between normalization and pricing.
+
 Replay must be deterministic:
 
 1. `blockTimestamp ASC`
@@ -96,17 +108,83 @@ Basis continuity applies when the economic owner did not dispose of the asset:
 - `BRIDGE_OUT -> BRIDGE_IN`
   Basis carries across networks only when the bridge pair is correlated and the
   bridged asset identity is preserved across the pair.
+- the destination leg may land on another tracked wallet from the same user
+  universe; replay still treats that as tracked-universe continuity rather than
+  an external venue exit
+- official route ids are not the only admissible continuity proof. Audited
+  same-wallet bridge pairs may also carry basis when runtime proves one unique
+  deterministic pair from current canonical rows:
+  - source bridge row is protocol-proven
+  - destination row is already explicit `BRIDGE_IN`
+  - tracked wallet is the same
+  - networks differ
+  - principal asset family matches
+  - timestamp delta and quantity drift remain inside a bounded audited window
+  - no competing destination candidate exists
+- official LI.FI / Jumper status tracking may prove the destination-side pair
+  and upgrade an audited inbound row from `EXTERNAL_TRANSFER_IN` to
+  `BRIDGE_IN`, but replay must still keep `continuityCandidate = false` unless
+  the current canonical legs prove plain same-asset carry
+- official LI.FI / Jumper status rows with `sendingTxHash == receivingTxHash`
+  are status echoes, not destination settlements; they must never create
+  self-linked bridge continuity
 - `BRIDGE_OUT(depositV3) -> BRIDGE_IN(fillV3Relay/fillRelay/redeemWithFee/execute302/directFulfill)`
   Destination-side settlement remains bridge continuity, not repay or vault semantics.
+- official `Mayan/CCTP` source confirmation may prove a fee-bearing settlement
+  pair without relying on a short time-gap heuristic:
+  - source raw proves `swapAndStartBridgeTokensViaMayan(...)`
+  - official Mayan source-tx status is terminal and returns the receiving tx hash
+  - destination canonical row belongs to that receiving tx hash and the official
+    destination wallet when present
+  - destination may be promoted from inbound-only `EXTERNAL_TRANSFER_IN` to
+    `BRIDGE_IN`
+  - same-family carry remains valid even when destination quantity is lower than
+    source quantity
+  - source-minus-destination quantity delta is bridge / settlement cost embedded
+    in the carried basis, not synthetic sale realization
+- audited same-wallet `Across` pairs may receive synthetic pair correlation
+  when the source-side `depositV3(...)` bridge start is already protocol-proven
+  and the destination `BRIDGE_IN` row is the unique bounded fit under the
+  current canonical evidence
 - asset-changing bridge routes
   A correlated bridge route may still be objective `BRIDGE_OUT -> BRIDGE_IN`
   semantics without qualifying for plain move-basis continuity. If the source
   asset and destination asset differ, replay must not silently carry the same
   lot across the pair as if it were a same-asset bridge.
+  - exception: audited bridge-family-equivalent assets may still qualify for
+    continuity carry when policy explicitly maps them into one canonical asset
+    family and the route evidence proves bridge settlement rather than market
+    conversion
+  - example: `vbUSDC -> USDC` may be treated as one `USDC` family for move
+    basis when the audited bridge route proves custody/settlement continuity
+    instead of an economic swap
 - correlated `EXTERNAL_TRANSFER_OUT -> EXTERNAL_TRANSFER_IN`
   Basis carries only when replay confirms that both sides belong to the same accounting universe.
+- `Bybit <-> external venue (for example MEXC)`
+  These rows are not on-chain bridge continuity by default.
+  - they may represent off-ledger custody movement between Bybit and an
+    untracked external venue
+  - they must remain `EXTERNAL_TRANSFER_IN/OUT` unless a tracked-universe leg is
+    actually proven
+  - the future target model is `external custody / unknown external source`
+    inventory
+  - until that dedicated move-basis contract exists, normalization must park
+    them in an explicit excluded audit lane rather than replay them as synthetic
+    `BUY` / `SELL`
+  - replay must not silently fabricate same-universe bridge continuity or
+    one-to-one move-basis carry
+  - automatic basis restoration from that external bucket is allowed only under
+    a separate high-confidence policy; without such proof, incoming rows remain
+    explicit external-source inventory rather than synthetic `BUY`
 - `Bybit -> on-chain`
   Same-universe continuity is replay-derived from `correlationId`, `continuityCandidate`, and matched counterpart evidence.
+  - normalization may materialize this continuity late on rerun when an already
+    imported Bybit `withdraw_deposit` row still sits in `UNMATCHED`, but the
+    exact on-chain leg is now present in persisted Mongo evidence
+  - rows carrying `BRIDGE_ON_CHAIN_LEG_NOT_FOUND` are not move-basis-ready
+    until the on-chain leg is actually matched
+  - etalon parity alone is not enough here; replay readiness requires real
+    continuity materialization or explicit exclusion from accounting scope
 - `PROTOCOL_CUSTODY`
   Basis moves into and out of custody without creating BUY/SELL.
 - `LENDING_DEPOSIT -> LENDING_WITHDRAW`
@@ -205,6 +283,9 @@ For matched Bybit withdraw/deposit:
 - WETH-like wrappers are stored as-is
 - wrapper-to-native aliasing is applied only at replay/pricing time when policy allows
 - `stETH`, `mETH`, `rETH`, `wstETH`, and `cbETH` remain distinct assets
+- audited bridge-family-equivalent stable wrappers may map into one canonical
+  stable family for move-basis continuity even when the canonical normalized
+  asset ids remain distinct
 - LP tokens, receipt tokens, vault shares, and custody markers are not treated as new basis lots unless explicitly modeled as economic principal
 
 ---

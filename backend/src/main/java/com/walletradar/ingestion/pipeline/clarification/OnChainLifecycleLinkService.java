@@ -7,8 +7,9 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.ingestion.pipeline.classification.support.GmxEventTopicSupport;
 import com.walletradar.ingestion.pipeline.onchain.OnChainRawTransactionView;
-import lombok.RequiredArgsConstructor;
 import org.bson.Document;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -20,20 +21,51 @@ import java.util.Locale;
 import java.util.Set;
 
 /**
- * Materializes same-wallet same-network lifecycle linkage once correlation evidence is known.
+ * Materializes deterministic lifecycle and bridge linkage once correlation evidence is known.
  */
 @Service
-@RequiredArgsConstructor
 public class OnChainLifecycleLinkService {
 
     private static final String GMX_ORDER_CANCELLED_EVENT = GmxEventTopicSupport.topicHash("OrderCancelled");
     private static final String GMX_ORDER_EXECUTED_EVENT = GmxEventTopicSupport.topicHash("OrderExecuted");
 
     private final NormalizedTransactionRepository normalizedTransactionRepository;
+    @Nullable
+    private final LiFiBridgePairLinkService liFiBridgePairLinkService;
+    @Nullable
+    private final MayanCctpBridgePairLinkService mayanCctpBridgePairLinkService;
+    @Nullable
+    private final AcrossBridgePairLinkService acrossBridgePairLinkService;
+
+    @Autowired
+    public OnChainLifecycleLinkService(
+            NormalizedTransactionRepository normalizedTransactionRepository,
+            @Nullable LiFiBridgePairLinkService liFiBridgePairLinkService,
+            @Nullable MayanCctpBridgePairLinkService mayanCctpBridgePairLinkService,
+            @Nullable AcrossBridgePairLinkService acrossBridgePairLinkService
+    ) {
+        this.normalizedTransactionRepository = normalizedTransactionRepository;
+        this.liFiBridgePairLinkService = liFiBridgePairLinkService;
+        this.mayanCctpBridgePairLinkService = mayanCctpBridgePairLinkService;
+        this.acrossBridgePairLinkService = acrossBridgePairLinkService;
+    }
+
+    public OnChainLifecycleLinkService(NormalizedTransactionRepository normalizedTransactionRepository) {
+        this(normalizedTransactionRepository, null, null, null);
+    }
 
     public void link(RawTransaction rawTransaction, NormalizedTransaction normalizedTransaction) {
         if (rawTransaction == null || normalizedTransaction == null) {
             return;
+        }
+        if (liFiBridgePairLinkService != null) {
+            liFiBridgePairLinkService.link(rawTransaction, normalizedTransaction);
+        }
+        if (mayanCctpBridgePairLinkService != null) {
+            mayanCctpBridgePairLinkService.link(rawTransaction, normalizedTransaction);
+        }
+        if (acrossBridgePairLinkService != null) {
+            acrossBridgePairLinkService.link(normalizedTransaction);
         }
         Set<String> correlationIds = relatedCorrelationIds(rawTransaction, normalizedTransaction);
         if (correlationIds.isEmpty()

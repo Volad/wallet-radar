@@ -127,6 +127,91 @@ class AvcoReplayServiceTest {
     }
 
     @Test
+    void correlatedBridgePairCarriesBasisAcrossNetworksWhenPlainMoveBasisIsProven() {
+        NormalizedTransaction sourceBuy = tx("1", "0xbuy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flow(NormalizedLegRole.BUY, "USDC", "100", "1", PriceSource.STABLECOIN));
+        sourceBuy.setNetworkId(NetworkId.BASE);
+
+        NormalizedTransaction bridgeOut = tx("2", "0xbridge-out", 1, NormalizedTransactionType.BRIDGE_OUT,
+                flow(NormalizedLegRole.TRANSFER, "USDC", "-100", null, null));
+        bridgeOut.setNetworkId(NetworkId.BASE);
+        bridgeOut.setCorrelationId("bridge:lifi:0xbridge-out");
+        bridgeOut.setContinuityCandidate(true);
+        bridgeOut.setMatchedCounterparty("0xbridge-in");
+
+        NormalizedTransaction bridgeIn = tx("3", "0xbridge-in", 2, NormalizedTransactionType.BRIDGE_IN,
+                flow(NormalizedLegRole.TRANSFER, "USDC", "100", null, null));
+        bridgeIn.setNetworkId(NetworkId.ARBITRUM);
+        bridgeIn.setCorrelationId("bridge:lifi:0xbridge-out");
+        bridgeIn.setContinuityCandidate(true);
+        bridgeIn.setMatchedCounterparty("0xbridge-out");
+
+        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                NormalizedTransactionStatus.CONFIRMED
+        )).thenReturn(List.of(sourceBuy, bridgeOut, bridgeIn));
+
+        AvcoReplayService service = service();
+        service.replayConfirmed();
+
+        ArgumentCaptor<List<AssetPosition>> captor = ArgumentCaptor.forClass(List.class);
+        verify(assetPositionRepository).saveAll(captor.capture());
+        AssetPosition base = captor.getValue().stream()
+                .filter(position -> position.getNetworkId() == NetworkId.BASE)
+                .findFirst()
+                .orElseThrow();
+        AssetPosition arbitrum = captor.getValue().stream()
+                .filter(position -> position.getNetworkId() == NetworkId.ARBITRUM)
+                .findFirst()
+                .orElseThrow();
+
+        assertThat(base.getQuantity()).isZero();
+        assertThat(arbitrum.getQuantity()).isEqualByComparingTo("100");
+        assertThat(arbitrum.getPerWalletAvco()).isEqualByComparingTo("1");
+    }
+
+    @Test
+    void familyEquivalentBridgePairCarriesBasisAcrossNetworksEvenWhenDestinationQuantityDiffers() {
+        NormalizedTransaction sourceBuy = tx("1", "0xbuy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flow(NormalizedLegRole.BUY, "vbUSDC", "28.997378", "1", PriceSource.STABLECOIN));
+        sourceBuy.setNetworkId(NetworkId.KATANA);
+        sourceBuy.getFlows().getFirst().setAssetContract("0x203a662b0bd271a6ed5a60edfbd04bfce608fd36");
+
+        NormalizedTransaction bridgeOut = tx("2", "0xbridge-out", 1, NormalizedTransactionType.BRIDGE_OUT,
+                flow(NormalizedLegRole.TRANSFER, "vbUSDC", "-28.997378", null, null));
+        bridgeOut.setNetworkId(NetworkId.KATANA);
+        bridgeOut.getFlows().getFirst().setAssetContract("0x203a662b0bd271a6ed5a60edfbd04bfce608fd36");
+        bridgeOut.setCorrelationId("bridge:lifi:0xbridge-out");
+        bridgeOut.setContinuityCandidate(true);
+        bridgeOut.setMatchedCounterparty("0xbridge-in");
+
+        NormalizedTransaction bridgeIn = tx("3", "0xbridge-in", 2, NormalizedTransactionType.BRIDGE_IN,
+                flow(NormalizedLegRole.TRANSFER, "USDC", "28.920966", null, null));
+        bridgeIn.setNetworkId(NetworkId.ARBITRUM);
+        bridgeIn.getFlows().getFirst().setAssetContract("0xaf88d065e77c8cc2239327c5edb3a432268e5831");
+        bridgeIn.setCorrelationId("bridge:lifi:0xbridge-out");
+        bridgeIn.setContinuityCandidate(true);
+        bridgeIn.setMatchedCounterparty("0xbridge-out");
+
+        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                NormalizedTransactionStatus.CONFIRMED
+        )).thenReturn(List.of(sourceBuy, bridgeOut, bridgeIn));
+
+        AvcoReplayService service = service();
+        service.replayConfirmed();
+
+        ArgumentCaptor<List<AssetPosition>> captor = ArgumentCaptor.forClass(List.class);
+        verify(assetPositionRepository).saveAll(captor.capture());
+        AssetPosition arbitrum = captor.getValue().stream()
+                .filter(position -> position.getNetworkId() == NetworkId.ARBITRUM)
+                .findFirst()
+                .orElseThrow();
+
+        assertThat(arbitrum.getQuantity()).isEqualByComparingTo("28.920966");
+        assertThat(arbitrum.getTotalCostBasisUsd()).isEqualByComparingTo("28.997378");
+        assertThat(arbitrum.getPerWalletAvco()).isEqualByComparingTo("1.002642097086245321127931895497543");
+    }
+
+    @Test
     void lpPrincipalContinuityUsesBucketAndIgnoresReceiptMarkers() {
         NormalizedTransaction sourceBuy = tx("1", "0xbuy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
                 flow(NormalizedLegRole.BUY, "USDC", "100", "1", PriceSource.STABLECOIN));

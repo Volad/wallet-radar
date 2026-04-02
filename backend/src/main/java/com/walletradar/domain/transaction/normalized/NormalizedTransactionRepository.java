@@ -41,4 +41,15 @@ public interface NormalizedTransactionRepository extends MongoRepository<Normali
             String walletAddress,
             NetworkId networkId
     );
+
+    List<NormalizedTransaction> findAllByMatchedCounterpartyAndWalletAddressAndSource(
+            String matchedCounterparty,
+            String walletAddress,
+            NormalizedTransactionSource source
+    );
+
+    List<NormalizedTransaction> findAllByMatchedCounterpartyAndSource(
+            String matchedCounterparty,
+            NormalizedTransactionSource source
+    );
 }

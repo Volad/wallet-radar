@@ -1,0 +1,16 @@
+{
+  "key": "balancer",
+  "protocol": "Balancer",
+  "version": "v2",
+  "aliases": ["Balancer", "Balancer V2"],
+  "capabilities": ["VAULT_ROUTER", "LP_LIFECYCLE", "SWAPS"],
+  "families": ["DEX"],
+  "clarificationHints": ["FULL_RECEIPT"],
+  "markers": {
+    "functionNames": {
+      "lpEntry": ["joinpool", "join"],
+      "lpExit": ["exitpool", "exit"],
+      "swap": ["swap", "batchswap"]
+    }
+  }
+}

@@ -4,6 +4,7 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.ingestion.pipeline.classification.reason.ClassificationReasonCode;
 import com.walletradar.ingestion.pipeline.classification.support.ClarificationEligibilitySupport;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Sort;
@@ -46,11 +47,11 @@ public class PendingReceiptClarificationQueryService {
                 Criteria.where("updatedAt").lte(retryCutoff)
         );
         Criteria reviewReasonsCriteria = Criteria.where("missingDataReasons").in(
-                "ROUTER_METHOD_OVERLOAD_UNSUPPORTED",
-                "CLASSIFICATION_FAILED",
-                "INSUFFICIENT_MOVEMENT_EVIDENCE",
-                "GMX_DEPOSIT_REQUEST_CORRELATION_REQUIRED",
-                "GMX_DEPOSIT_SETTLEMENT_CORRELATION_REQUIRED"
+                ClassificationReasonCode.ROUTER_METHOD_OVERLOAD_UNSUPPORTED.code(),
+                ClassificationReasonCode.CLASSIFICATION_FAILED.code(),
+                ClassificationReasonCode.INSUFFICIENT_MOVEMENT_EVIDENCE.code(),
+                ClassificationReasonCode.GMX_DEPOSIT_REQUEST_CORRELATION_REQUIRED.code(),
+                ClassificationReasonCode.GMX_DEPOSIT_SETTLEMENT_CORRELATION_REQUIRED.code()
         );
         Criteria reviewTailCriteria = new Criteria().andOperator(
                 Criteria.where("status").is(NormalizedTransactionStatus.NEEDS_REVIEW),
@@ -71,24 +72,30 @@ public class PendingReceiptClarificationQueryService {
                         NormalizedTransactionType.DERIVATIVE_POSITION_DECREASE
                 ),
                 Criteria.where("missingDataReasons").in(
-                        "GMX_DEPOSIT_REQUEST_CORRELATION_REQUIRED",
-                        "GMX_DEPOSIT_SETTLEMENT_CORRELATION_REQUIRED",
-                        "GMX_WITHDRAWAL_REQUEST_CORRELATION_REQUIRED",
-                        "GMX_WITHDRAWAL_SETTLEMENT_CORRELATION_REQUIRED",
-                        "GMX_DERIVATIVE_REQUEST_CORRELATION_REQUIRED",
-                        "GMX_DERIVATIVE_EXECUTION_EVIDENCE_REQUIRED"
+                        ClassificationReasonCode.GMX_DEPOSIT_REQUEST_CORRELATION_REQUIRED.code(),
+                        ClassificationReasonCode.GMX_DEPOSIT_SETTLEMENT_CORRELATION_REQUIRED.code(),
+                        ClassificationReasonCode.GMX_WITHDRAWAL_REQUEST_CORRELATION_REQUIRED.code(),
+                        ClassificationReasonCode.GMX_WITHDRAWAL_SETTLEMENT_CORRELATION_REQUIRED.code(),
+                        ClassificationReasonCode.GMX_DERIVATIVE_REQUEST_CORRELATION_REQUIRED.code(),
+                        ClassificationReasonCode.GMX_DERIVATIVE_EXECUTION_EVIDENCE_REQUIRED.code()
                 )
         );
         Criteria cowPendingClarificationCriteria = new Criteria().andOperator(
                 Criteria.where("status").is(NormalizedTransactionStatus.PENDING_CLARIFICATION),
                 Criteria.where("protocolName").is("CoW Swap"),
                 Criteria.where("type").is(NormalizedTransactionType.DEX_ORDER_SETTLEMENT),
-                Criteria.where("missingDataReasons").in("COW_ORDER_SETTLEMENT_CORRELATION_REQUIRED")
+                Criteria.where("missingDataReasons").in(ClassificationReasonCode.COW_ORDER_SETTLEMENT_CORRELATION_REQUIRED.code())
         );
         Criteria bridgeEvidenceCriteria = new Criteria().andOperator(
                 Criteria.where("status").is(NormalizedTransactionStatus.PENDING_PRICE),
                 Criteria.where("type").is(NormalizedTransactionType.BRIDGE_OUT),
                 Criteria.where("missingDataReasons").in(ClarificationEligibilitySupport.BRIDGE_PAIR_EVIDENCE_REQUIRED)
+        );
+        Criteria oneInchNativeSettlementCriteria = new Criteria().andOperator(
+                Criteria.where("status").is(NormalizedTransactionStatus.PENDING_PRICE),
+                Criteria.where("type").is(NormalizedTransactionType.EXTERNAL_TRANSFER_OUT),
+                Criteria.where("protocolName").is("1inch"),
+                Criteria.where("missingDataReasons").in(ClassificationReasonCode.ROUTED_AGGREGATOR_OUTBOUND_ONLY.code())
         );
 
         Query query = new Query(new Criteria().andOperator(
@@ -99,7 +106,8 @@ public class PendingReceiptClarificationQueryService {
                         reviewTailCriteria,
                         gmxPendingClarificationCriteria,
                         cowPendingClarificationCriteria,
-                        bridgeEvidenceCriteria
+                        bridgeEvidenceCriteria,
+                        oneInchNativeSettlementCriteria
                 )
         ));
         query.with(Sort.by(

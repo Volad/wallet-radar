@@ -180,6 +180,33 @@ public class BybitCanonicalTransactionBuilder {
         transaction.setUpdatedAt(now);
     }
 
+    public void markExternalCustodyExcluded(
+            NormalizedTransaction transaction,
+            Instant now,
+            String exclusionReason
+    ) {
+        transaction.setCorrelationId(null);
+        transaction.setMatchedCounterparty(null);
+        transaction.setContinuityCandidate(false);
+        transaction.setConfirmedAt(null);
+        transaction.setStatus(NormalizedTransactionStatus.NEEDS_REVIEW);
+        transaction.setUpdatedAt(now);
+        transaction.getMissingDataReasons().remove("BRIDGE_ON_CHAIN_LEG_NOT_FOUND");
+        if (!transaction.getMissingDataReasons().contains(exclusionReason)) {
+            transaction.getMissingDataReasons().add(exclusionReason);
+        }
+        for (NormalizedTransaction.Flow flow : transaction.getFlows()) {
+            if (flow == null || flow.getRole() == NormalizedLegRole.FEE) {
+                continue;
+            }
+            flow.setRole(NormalizedLegRole.TRANSFER);
+            flow.setUnitPriceUsd(null);
+            flow.setValueUsd(null);
+            flow.setPriceSource(null);
+        }
+        markExcludedFromAccounting(transaction, exclusionReason);
+    }
+
     private NormalizedTransaction baseTransaction(
             String id,
             ExternalLedgerRaw row,

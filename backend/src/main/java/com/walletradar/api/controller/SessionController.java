@@ -77,6 +77,9 @@ public class SessionController {
                 view.overallProgressPct(),
                 view.totalTargets(),
                 view.completedTargets(),
+                view.pipelineStage(),
+                view.pipelineStatus(),
+                view.pipelineMessage(),
                 view.wallets().stream()
                         .map(wallet -> new SessionBackfillStatusResponse.SessionWalletBackfillStatus(
                                 wallet.address(),

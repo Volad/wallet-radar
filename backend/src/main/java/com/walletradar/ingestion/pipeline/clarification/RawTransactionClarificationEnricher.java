@@ -89,6 +89,30 @@ public class RawTransactionClarificationEnricher {
         persistCanonicalClarificationEvidence(rawTransaction, clarificationEvidence);
     }
 
+    public void mergeProtocolStatus(RawTransaction rawTransaction, Document protocolStatusEvidence) {
+        mergeClarificationEvidence(rawTransaction, "protocolStatus", protocolStatusEvidence);
+    }
+
+    public void mergeClarificationEvidence(
+            RawTransaction rawTransaction,
+            String evidenceKey,
+            Document evidence
+    ) {
+        if (rawTransaction == null
+                || evidenceKey == null
+                || evidenceKey.isBlank()
+                || evidence == null
+                || evidence.isEmpty()) {
+            return;
+        }
+        if (rawTransaction.getRawData() == null) {
+            rawTransaction.setRawData(new Document());
+        }
+        Document clarificationEvidence = canonicalClarificationEvidence(rawTransaction);
+        clarificationEvidence.put(evidenceKey, BsonCoercionSupport.copyDocument(evidence));
+        persistCanonicalClarificationEvidence(rawTransaction, clarificationEvidence);
+    }
+
     public int recordMetadataAttempt(RawTransaction rawTransaction, String failureReason) {
         return recordMetadataAttempt(rawTransaction, 0, failureReason);
     }

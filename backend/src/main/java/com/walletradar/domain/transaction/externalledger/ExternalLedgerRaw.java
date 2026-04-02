@@ -27,6 +27,10 @@ import java.time.Instant;
                 def = "{'uid': 1, 'timeUtc': 1}"
         ),
         @CompoundIndex(
+                name = "external_ledger_session_status_idx",
+                def = "{'sessionId': 1, 'status': 1}"
+        ),
+        @CompoundIndex(
                 name = "external_ledger_tx_hash_idx",
                 def = "{'txHash': 1}",
                 sparse = true
@@ -34,6 +38,10 @@ import java.time.Instant;
         @CompoundIndex(
                 name = "external_ledger_bridge_corr_status_idx",
                 def = "{'sourceFileType': 1, 'onChainCorrelation.status': 1}"
+        ),
+        @CompoundIndex(
+                name = "external_ledger_bridge_retry_idx",
+                def = "{'status': 1, 'sourceFileType': 1, 'onChainCorrelation.status': 1, 'timeUtc': 1}"
         )
 })
 @NoArgsConstructor

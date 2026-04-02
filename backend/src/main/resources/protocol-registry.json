@@ -616,6 +616,8 @@
       "role": "BRIDGE_ENTRY",
       "event_type": null,
       "networks": [
+        "ETHEREUM",
+        "BASE",
         "BSC"
       ],
       "confidence": "HIGH",

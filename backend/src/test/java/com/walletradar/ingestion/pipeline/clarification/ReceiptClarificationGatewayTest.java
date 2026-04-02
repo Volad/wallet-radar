@@ -25,6 +25,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
@@ -73,6 +74,62 @@ class ReceiptClarificationGatewayTest {
         verify(rpcTokenTransferResolver, never()).buildTokenTransfersFromDocuments(any(), any(), any());
         verify(etherscanProvider, never()).getReceipt(any(), any());
         verify(blockScoutProvider, never()).getReceipt(any(), any());
+    }
+
+    @Test
+    @DisplayName("rpc-backed fetchRawTransactionByHash builds raw evidence for targeted LI.FI receiving discovery")
+    void rpcBackedFetchRawTransactionByHashBuildsRawEvidence() {
+        IngestionNetworkProperties networkProperties = networkProperties(NetworkId.BSC, IngestionNetworkProperties.NetworkIngestionEntry.SyncMethod.RPC);
+        ReceiptClarificationGateway gateway = new ReceiptClarificationGateway(
+                etherscanProvider,
+                blockScoutProvider,
+                rpcClient,
+                rpcTokenTransferResolver,
+                networkProperties,
+                new ObjectMapper()
+        );
+
+        List<Document> derivedTransfers = List.of(new Document("contractAddress", "0x55d398326f99059ff775485246999027b3197955")
+                .append("from", "0x8c826f795466e39acbff1bb4eeeb759609377ba1")
+                .append("to", "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f")
+                .append("value", "1000000")
+                .append("tokenDecimal", "18")
+                .append("tokenSymbol", "USDT"));
+        when(rpcClient.call("https://rpc.example", "eth_getTransactionByHash", List.of("0xrecv")))
+                .thenReturn(Mono.just("""
+                        {"jsonrpc":"2.0","id":1,"result":{"hash":"0xrecv","blockNumber":"0x10","transactionIndex":"0x2","from":"0x8c826f795466e39acbff1bb4eeeb759609377ba1","to":"0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f","input":"0xa9059cbb0000000000000000000000001a87f12ac07e9746e9b053b8d7ef1d45270d693f","value":"0x0"}} 
+                        """));
+        when(rpcClient.call("https://rpc.example", "eth_getTransactionReceipt", List.of("0xrecv")))
+                .thenReturn(Mono.just("""
+                        {"jsonrpc":"2.0","id":1,"result":{"status":"0x1","blockNumber":"0x10","transactionIndex":"0x2","gasUsed":"0x5208","effectiveGasPrice":"0x3b9aca00","logs":[{"address":"0x55d398326f99059ff775485246999027b3197955","topics":["0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef","0x0000000000000000000000008c826f795466e39acbff1bb4eeeb759609377ba1","0x0000000000000000000000001a87f12ac07e9746e9b053b8d7ef1d45270d693f"],"data":"0x0de0b6b3a7640000"}]}}
+                        """));
+        when(rpcClient.call("https://rpc.example", "eth_getBlockByNumber", List.of("0x10", false)))
+                .thenReturn(Mono.just("""
+                        {"jsonrpc":"2.0","id":1,"result":{"timestamp":"0x65f1e100"}}
+                        """));
+        when(rpcTokenTransferResolver.buildTokenTransfersFromDocuments(
+                eq("https://rpc.example"),
+                eq(NetworkId.BSC.name()),
+                anyList()
+        )).thenReturn(derivedTransfers);
+
+        Optional<RawTransaction> rawTransaction = gateway.fetchRawTransactionByHash(
+                "0xrecv",
+                NetworkId.BSC,
+                "0x1A87f12ac07e9746e9B053B8D7EF1d45270D693f",
+                null
+        );
+
+        assertThat(rawTransaction).isPresent();
+        assertThat(rawTransaction.get().getSyncMethod()).isEqualTo(RawSyncMethod.RPC);
+        assertThat(rawTransaction.get().getId()).isEqualTo("0xrecv:BSC:0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f");
+        assertThat(rawTransaction.get().getRawData().getString("timeStamp")).isEqualTo("1710350592");
+        assertThat(rawTransaction.get().getRawData().getString("methodId")).isEqualTo("0xa9059cbb");
+        assertThat(((Document) rawTransaction.get().getRawData().get("explorer")).getList("tokenTransfers", Document.class))
+                .hasSize(1);
+        assertThat(rawTransaction.get().getClarificationEvidence()).isNotNull();
+        verify(etherscanProvider, never()).getTransaction(any(), any());
+        verify(blockScoutProvider, never()).getTransaction(any(), any());
     }
 
     @Test

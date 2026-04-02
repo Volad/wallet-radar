@@ -1,0 +1,18 @@
+{
+  "key": "cow",
+  "protocol": "CoW Swap",
+  "version": "v1",
+  "aliases": ["CoW Swap", "CowSwap", "CoWSwap"],
+  "capabilities": ["ASYNC_REQUEST_SETTLEMENT", "ETH_FLOW"],
+  "families": ["DEX", "AGGREGATOR"],
+  "clarificationHints": ["FULL_RECEIPT", "RELATED_TX_BY_CORRELATION"],
+  "markers": {
+    "methodSelectors": {
+      "ethFlowRequest": ["0x322bba21"],
+      "settlement": ["0x13d79a0b"]
+    },
+    "eventTopics": {
+      "trade": ["0xa07a543ab8a018198e99ca0184c93fe9050a79400a0a723441f84de1d972cc17"]
+    }
+  }
+}

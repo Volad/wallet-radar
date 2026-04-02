@@ -1,11 +1,18 @@
 package com.walletradar.pricing.application;
 
+import com.walletradar.domain.event.BybitNormalizationCompletedEvent;
+import com.walletradar.domain.event.PricingCompletedEvent;
+import com.walletradar.session.application.SessionPipelineStateService;
 import com.walletradar.telemetry.PipelineTelemetrySnapshot;
 import com.walletradar.telemetry.PipelineTelemetrySnapshotService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
+
+import java.util.ArrayList;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.verify;
@@ -45,7 +52,9 @@ class PricingJobTest {
                 2L
         ));
 
-        PricingJob job = new PricingJob(properties, pricingJobService, pricingDataGateService, pipelineTelemetrySnapshotService);
+        ApplicationEventPublisher publisher = org.mockito.Mockito.mock(ApplicationEventPublisher.class);
+        SessionPipelineStateService pipelineStateService = org.mockito.Mockito.mock(SessionPipelineStateService.class);
+        PricingJob job = new PricingJob(properties, pricingJobService, pricingDataGateService, pipelineTelemetrySnapshotService, publisher, pipelineStateService);
         int processed = job.runPricing();
 
         assertThat(processed).isEqualTo(3);
@@ -76,12 +85,52 @@ class PricingJobTest {
                 0L
         ));
 
-        PricingJob job = new PricingJob(properties, pricingJobService, pricingDataGateService, pipelineTelemetrySnapshotService);
+        ApplicationEventPublisher publisher = org.mockito.Mockito.mock(ApplicationEventPublisher.class);
+        SessionPipelineStateService pipelineStateService = org.mockito.Mockito.mock(SessionPipelineStateService.class);
+        PricingJob job = new PricingJob(properties, pricingJobService, pricingDataGateService, pipelineTelemetrySnapshotService, publisher, pipelineStateService);
 
         int firstRun = job.runPricing();
         int secondRun = job.runPricing();
 
         assertThat(firstRun).isZero();
         assertThat(secondRun).isZero();
+    }
+
+    @Test
+    void bybitCompletionPublishesPricingCompletionEvenForEmptyDrain() {
+        PricingProperties properties = new PricingProperties();
+        properties.setEnabled(true);
+        when(pricingJobService.processNextBatch()).thenReturn(0);
+        when(pricingDataGateService.snapshot()).thenReturn(new PricingDataGateSnapshot(
+                0L,
+                0L,
+                0L,
+                0L,
+                0L,
+                true
+        ));
+        when(pipelineTelemetrySnapshotService.snapshot()).thenReturn(new PipelineTelemetrySnapshot(
+                0L,
+                0L,
+                0L,
+                0L,
+                0L,
+                0L,
+                0L,
+                0L
+        ));
+
+        List<Object> events = new ArrayList<>();
+        ApplicationEventPublisher publisher = events::add;
+        SessionPipelineStateService pipelineStateService = org.mockito.Mockito.mock(SessionPipelineStateService.class);
+        PricingJob job = new PricingJob(properties, pricingJobService, pricingDataGateService, pipelineTelemetrySnapshotService, publisher, pipelineStateService);
+
+        job.onBybitNormalizationCompleted(new BybitNormalizationCompletedEvent("session-1", 0, "clarification-completed"));
+
+        assertThat(events).singleElement().isInstanceOfSatisfying(PricingCompletedEvent.class, event -> {
+            assertThat(event.sessionId()).isEqualTo("session-1");
+            assertThat(event.processed()).isZero();
+            assertThat(event.trigger()).isEqualTo("bybit-normalization-completed");
+        });
     }
 }

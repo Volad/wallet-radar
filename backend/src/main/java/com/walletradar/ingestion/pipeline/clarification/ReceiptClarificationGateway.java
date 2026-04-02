@@ -102,6 +102,10 @@ public class ReceiptClarificationGateway {
         if (txHash == null || txHash.isBlank() || networkId == null || walletAddress == null || walletAddress.isBlank()) {
             return Optional.empty();
         }
+        RawSyncMethod resolvedSourceFamily = sourceFamily != null ? sourceFamily : sourceFamilyFromConfig(networkId);
+        if (resolvedSourceFamily == RawSyncMethod.RPC) {
+            return fetchRawTransactionByHashFromRpc(txHash, networkId, walletAddress);
+        }
         ExplorerProvider provider = providerFor(sourceFamily, networkId);
         if (provider == null) {
             return Optional.empty();
@@ -143,7 +147,7 @@ public class ReceiptClarificationGateway {
         rawTransaction.setId(txHash.toLowerCase(Locale.ROOT) + ":" + networkId.name() + ":" + walletAddress.toLowerCase(Locale.ROOT));
         rawTransaction.setTxHash(txHash.toLowerCase(Locale.ROOT));
         rawTransaction.setNetworkId(networkId.name());
-        rawTransaction.setSyncMethod(sourceFamily != null ? sourceFamily : sourceFamilyFromConfig(networkId));
+        rawTransaction.setSyncMethod(resolvedSourceFamily);
         rawTransaction.setWalletAddress(walletAddress.toLowerCase(Locale.ROOT));
         rawTransaction.setNormalizationStatus(NormalizationStatus.PENDING);
         rawTransaction.setRetryCount(0);
@@ -170,6 +174,90 @@ public class ReceiptClarificationGateway {
                         tokenTransfers,
                         internalTransfers
                 );
+        enrichment.ifPresent(candidate -> {
+            RawTransactionClarificationEnricher enricher = new RawTransactionClarificationEnricher();
+            enricher.merge(rawTransaction, candidate);
+            enricher.recordFullReceiptAttempt(rawTransaction, 0, null);
+        });
+        return Optional.of(rawTransaction);
+    }
+
+    private Optional<RawTransaction> fetchRawTransactionByHashFromRpc(
+            String txHash,
+            NetworkId networkId,
+            String walletAddress
+    ) {
+        String endpoint = primaryRpcEndpoint(networkId);
+        if (endpoint == null) {
+            return Optional.empty();
+        }
+
+        JsonNode txNode = rpcResult(endpoint, "eth_getTransactionByHash", List.of(txHash));
+        JsonNode receiptNode = rpcResult(endpoint, "eth_getTransactionReceipt", List.of(txHash));
+        if (txNode == null && receiptNode == null) {
+            return Optional.empty();
+        }
+
+        Document txDocument = toDocument(txNode);
+        Document receiptDocument = toDocument(receiptNode);
+        Document rawData = txDocument != null ? new Document(txDocument) : new Document();
+        mergeRpcReceipt(rawData, receiptDocument);
+        enrichRpcTimestamp(endpoint, rawData);
+        normalizeRpcRaw(rawData);
+
+        List<Document> receiptLogs = readDocumentList(rawData, "logs");
+        List<Document> tokenTransfers = receiptLogs.isEmpty()
+                ? List.of()
+                : List.copyOf(rpcTokenTransferResolver.buildTokenTransfersFromDocuments(
+                endpoint,
+                networkId.name(),
+                receiptLogs
+        ));
+
+        RawTransaction rawTransaction = new RawTransaction();
+        rawTransaction.setId(txHash.toLowerCase(Locale.ROOT) + ":" + networkId.name() + ":" + walletAddress.toLowerCase(Locale.ROOT));
+        rawTransaction.setTxHash(txHash.toLowerCase(Locale.ROOT));
+        rawTransaction.setNetworkId(networkId.name());
+        rawTransaction.setSyncMethod(RawSyncMethod.RPC);
+        rawTransaction.setWalletAddress(walletAddress.toLowerCase(Locale.ROOT));
+        rawTransaction.setNormalizationStatus(NormalizationStatus.PENDING);
+        rawTransaction.setRetryCount(0);
+        rawTransaction.setCreatedAt(Instant.now());
+        Long blockNumber = parseFlexibleLong(stringify(rawData.get("blockNumber")));
+        if (blockNumber > 0) {
+            rawTransaction.setBlockNumber(blockNumber);
+        }
+
+        Document explorer = new Document();
+        Document explorerTx = new Document();
+        copyIfPresent(explorerTx, "hash", rawData, "hash");
+        copyIfPresent(explorerTx, "txhash", rawData, "hash");
+        copyIfPresent(explorerTx, "blockNumber", rawData, "blockNumber");
+        copyIfPresent(explorerTx, "timeStamp", rawData, "timeStamp");
+        copyIfPresent(explorerTx, "transactionIndex", rawData, "transactionIndex");
+        copyIfPresent(explorerTx, "from", rawData, "from");
+        copyIfPresent(explorerTx, "to", rawData, "to");
+        copyIfPresent(explorerTx, "input", rawData, "input");
+        copyIfPresent(explorerTx, "value", rawData, "value");
+        copyIfPresent(explorerTx, "methodId", rawData, "methodId");
+        copyIfPresent(explorerTx, "txreceipt_status", rawData, "txreceipt_status");
+        copyIfPresent(explorerTx, "isError", rawData, "isError");
+        if (!explorerTx.isEmpty()) {
+            explorer.put("tx", explorerTx);
+        }
+        explorer.put("tokenTransfers", copyDocuments(tokenTransfers));
+        explorer.put("internalTransfers", List.of());
+        rawData.put("explorer", explorer);
+        rawTransaction.setRawData(rawData);
+
+        Optional<ClarificationReceiptEnrichment> enrichment = receiptDocument == null
+                ? Optional.empty()
+                : ClarificationReceiptEnrichment.fromReceiptDocument(
+                receiptDocument,
+                RawSyncMethod.RPC,
+                tokenTransfers,
+                List.of()
+        );
         enrichment.ifPresent(candidate -> {
             RawTransactionClarificationEnricher enricher = new RawTransactionClarificationEnricher();
             enricher.merge(rawTransaction, candidate);
@@ -538,6 +626,130 @@ public class ReceiptClarificationGateway {
 
     private static boolean sameHash(String left, String right) {
         return left != null && right != null && left.equalsIgnoreCase(right);
+    }
+
+    private JsonNode rpcResult(String endpoint, String method, Object params) {
+        try {
+            String json = rpcClient.call(endpoint, method, params).block();
+            if (json == null || json.isBlank()) {
+                return null;
+            }
+            JsonNode root = objectMapper.readTree(json);
+            JsonNode error = root.path("error");
+            if (!error.isMissingNode() && !error.isNull() && !error.isEmpty()) {
+                return null;
+            }
+            JsonNode result = root.path("result");
+            return result.isMissingNode() || result.isNull() ? null : result;
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    private Document toDocument(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull() || !node.isObject()) {
+            return null;
+        }
+        try {
+            return Document.parse(objectMapper.writeValueAsString(node));
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    private void mergeRpcReceipt(Document rawData, Document receiptDocument) {
+        if (rawData == null || receiptDocument == null) {
+            return;
+        }
+        copyIfPresent(rawData, "blockHash", receiptDocument, "blockHash");
+        copyIfPresent(rawData, "blockNumber", receiptDocument, "blockNumber");
+        copyIfPresent(rawData, "transactionIndex", receiptDocument, "transactionIndex");
+        copyIfPresent(rawData, "contractAddress", receiptDocument, "contractAddress");
+        copyIfPresent(rawData, "gasUsed", receiptDocument, "gasUsed");
+        copyIfPresent(rawData, "cumulativeGasUsed", receiptDocument, "cumulativeGasUsed");
+        copyIfPresent(rawData, "effectiveGasPrice", receiptDocument, "effectiveGasPrice");
+        List<Document> logs = readDocumentList(receiptDocument, "logs");
+        if (!logs.isEmpty()) {
+            rawData.put("logs", copyDocuments(logs));
+        }
+        String status = normalizeReceiptStatus(stringify(receiptDocument.get("status")));
+        if (status != null) {
+            rawData.put("txreceipt_status", status);
+            rawData.put("isError", "0".equals(status) ? "1" : "0");
+        }
+    }
+
+    private void enrichRpcTimestamp(String endpoint, Document rawData) {
+        if (endpoint == null || rawData == null || stringify(rawData.get("timeStamp")) != null) {
+            return;
+        }
+        Long blockNumber = parseFlexibleLong(stringify(rawData.get("blockNumber")));
+        if (blockNumber == null || blockNumber <= 0) {
+            return;
+        }
+        JsonNode blockNode = rpcResult(endpoint, "eth_getBlockByNumber", List.of("0x" + Long.toHexString(blockNumber), false));
+        if (blockNode == null) {
+            return;
+        }
+        String timestamp = blockNode.path("timestamp").asText(null);
+        Long epochSeconds = parseFlexibleLong(timestamp);
+        if (epochSeconds != null) {
+            rawData.put("timeStamp", Long.toString(epochSeconds));
+        }
+    }
+
+    private void normalizeRpcRaw(Document rawData) {
+        if (rawData == null) {
+            return;
+        }
+        Long blockNumber = parseFlexibleLong(stringify(rawData.get("blockNumber")));
+        if (blockNumber != null) {
+            rawData.put("blockNumber", Long.toString(blockNumber));
+        }
+        Long transactionIndex = parseFlexibleLong(stringify(rawData.get("transactionIndex")));
+        if (transactionIndex != null) {
+            rawData.put("transactionIndex", Long.toString(transactionIndex));
+        }
+        Long timestamp = parseFlexibleLong(stringify(rawData.get("timeStamp")));
+        if (timestamp != null) {
+            rawData.put("timeStamp", Long.toString(timestamp));
+        }
+        String input = stringify(rawData.get("input"));
+        if (input != null && input.length() >= 10 && stringify(rawData.get("methodId")) == null) {
+            rawData.put("methodId", input.substring(0, 10).toLowerCase(Locale.ROOT));
+        }
+    }
+
+    private void copyIfPresent(Document target, String targetKey, Document source, String sourceKey) {
+        if (target == null || source == null) {
+            return;
+        }
+        Object value = source.get(sourceKey);
+        if (value != null) {
+            target.put(targetKey, value);
+        }
+    }
+
+    private String stringify(Object value) {
+        if (value == null) {
+            return null;
+        }
+        String text = value.toString().trim();
+        return text.isEmpty() ? null : text;
+    }
+
+    private String normalizeReceiptStatus(String status) {
+        if (status == null || status.isBlank()) {
+            return null;
+        }
+        if ("0".equals(status) || "1".equals(status)) {
+            return status;
+        }
+        Long numeric = parseFlexibleLong(status);
+        if (numeric == null) {
+            return null;
+        }
+        return numeric == 0L ? "0" : "1";
     }
 
     private static List<Document> readDocumentList(Document parent, String key) {

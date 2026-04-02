@@ -68,6 +68,14 @@ import java.util.List;
         @CompoundIndex(
                 name = "normalized_flows_asset_contract_idx",
                 def = "{'flows.assetContract': 1}"
+        ),
+        @CompoundIndex(
+                name = "normalized_wallet_counterparty_source_idx",
+                def = "{'walletAddress': 1, 'matchedCounterparty': 1, 'source': 1}"
+        ),
+        @CompoundIndex(
+                name = "normalized_source_type_counterparty_block_idx",
+                def = "{'source': 1, 'type': 1, 'matchedCounterparty': 1, 'blockTimestamp': 1, 'transactionIndex': 1}"
         )
 })
 @NoArgsConstructor

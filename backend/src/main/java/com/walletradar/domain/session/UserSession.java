@@ -6,6 +6,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 import org.springframework.data.annotation.Id;
+import org.springframework.data.mongodb.core.index.CompoundIndex;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.time.Instant;
@@ -17,6 +18,7 @@ import java.util.List;
  * Session identity is provided by client-generated UUID (sessionId).
  */
 @Document(collection = "user_sessions")
+@CompoundIndex(name = "wallets_address_idx", def = "{'wallets.address': 1}")
 @NoArgsConstructor
 @Getter
 @Setter
@@ -28,6 +30,7 @@ public class UserSession {
     private String id;
 
     private List<SessionWallet> wallets = new ArrayList<>();
+    private PipelineState pipelineState;
     private Instant createdAt;
     private Instant updatedAt;
     private Instant lastSeenAt;
@@ -41,5 +44,30 @@ public class UserSession {
         private String label;
         private String color;
         private List<NetworkId> networks = new ArrayList<>();
+    }
+
+    @NoArgsConstructor
+    @Getter
+    @Setter
+    public static class PipelineState {
+        private PipelineStage stage;
+        private PipelineStatus status;
+        private String message;
+        private Instant updatedAt;
+    }
+
+    public enum PipelineStage {
+        BACKFILL,
+        ON_CHAIN_NORMALIZATION,
+        ON_CHAIN_CLARIFICATION,
+        BYBIT_NORMALIZATION,
+        PRICING,
+        ACCOUNTING_REPLAY
+    }
+
+    public enum PipelineStatus {
+        RUNNING,
+        COMPLETE,
+        FAILED
     }
 }

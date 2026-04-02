@@ -16,6 +16,7 @@ import com.walletradar.ingestion.pipeline.bybit.BybitCanonicalTransactionBuilder
 import com.walletradar.ingestion.pipeline.bybit.BybitTradePairer;
 import com.walletradar.ingestion.pipeline.bybit.PendingExternalLedgerRowQueryService;
 import com.walletradar.ingestion.store.IdempotentNormalizedTransactionStore;
+import com.walletradar.ingestion.wallet.query.TrackedWalletLookupService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -47,6 +48,8 @@ class BybitNormalizationServiceTest {
     private NormalizedTransactionRepository normalizedTransactionRepository;
     @Mock
     private RawTransactionRepository rawTransactionRepository;
+    @Mock
+    private TrackedWalletLookupService trackedWalletLookupService;
 
     @Test
     void orphanLegFallsBackToExplicitUnmatchedCanonicalRow() {
@@ -179,6 +182,102 @@ class BybitNormalizationServiceTest {
     }
 
     @Test
+    void confirmedUnmatchedBridgeIsReprocessedWhenExactOnChainLegNowExists() {
+        ExternalLedgerRaw deposit = bridgeRow("bridge-deposit", "EXTERNAL_INBOUND");
+        deposit.setStatus(ExternalLedgerRawStatus.CONFIRMED);
+        deposit.getOnChainCorrelation().setStatus("UNMATCHED");
+
+        NormalizedTransaction onChain = onChainTx("on-chain-2", NormalizedTransactionType.EXTERNAL_TRANSFER_OUT, NormalizedLegRole.SELL);
+        RawTransaction raw = new RawTransaction();
+        raw.setId("raw-2");
+
+        when(pendingExternalLedgerRowQueryService.loadNextBatch(10)).thenReturn(List.of());
+        when(pendingExternalLedgerRowQueryService.loadNextBridgeRematchBatch(10)).thenReturn(List.of(deposit));
+        when(externalLedgerRawRepository.findById(deposit.getId())).thenReturn(Optional.of(deposit));
+        when(rawTransactionRepository.findAllByTxHashAndNetworkId("0xbridge", "ARBITRUM")).thenReturn(List.of(raw));
+        when(normalizedTransactionRepository.findAllByTxHashAndNetworkIdAndSource(
+                "0xbridge",
+                NetworkId.ARBITRUM,
+                NormalizedTransactionSource.ON_CHAIN
+        )).thenReturn(List.of(onChain));
+
+        BybitNormalizationService service = service();
+        int processed = service.processNextBatch(10);
+
+        assertThat(processed).isEqualTo(1);
+        ArgumentCaptor<NormalizedTransaction> bybitCaptor = ArgumentCaptor.forClass(NormalizedTransaction.class);
+        verify(normalizedTransactionStore).upsert(bybitCaptor.capture());
+        assertThat(bybitCaptor.getValue().getCorrelationId()).isEqualTo("BYBIT:ARBITRUM:0xbridge");
+        assertThat(bybitCaptor.getValue().getContinuityCandidate()).isTrue();
+        assertThat(bybitCaptor.getValue().getMissingDataReasons()).isEmpty();
+
+        ArgumentCaptor<NormalizedTransaction> onChainCaptor = ArgumentCaptor.forClass(NormalizedTransaction.class);
+        verify(normalizedTransactionRepository).save(onChainCaptor.capture());
+        assertThat(onChainCaptor.getValue().getMatchedCounterparty()).isEqualTo("BYBIT:uid-1");
+        assertThat(deposit.getOnChainCorrelation().getStatus()).isEqualTo("MATCHED");
+        assertThat(deposit.getOnChainCorrelation().getMatchedDocId()).isEqualTo("raw-2");
+    }
+
+    @Test
+    void unmatchedExternalVenueRowBecomesExternalCustodyInsteadOfBridgeGap() {
+        ExternalLedgerRaw deposit = bridgeRow("external-custody-in", "EXTERNAL_INBOUND");
+        deposit.setReceivedAddress("0x2ea8cb6f614a3c579d1d09474573387d3c16ac6d");
+
+        when(pendingExternalLedgerRowQueryService.loadNextBatch(10)).thenReturn(List.of(deposit));
+        when(externalLedgerRawRepository.findById(deposit.getId())).thenReturn(Optional.of(deposit));
+        when(rawTransactionRepository.findAllByTxHashAndNetworkId("0xbridge", "ARBITRUM")).thenReturn(List.of());
+        when(normalizedTransactionRepository.findAllByTxHashAndNetworkIdAndSource(
+                "0xbridge",
+                NetworkId.ARBITRUM,
+                NormalizedTransactionSource.ON_CHAIN
+        )).thenReturn(List.of());
+        when(trackedWalletLookupService.contains("0x2ea8cb6f614a3c579d1d09474573387d3c16ac6d")).thenReturn(false);
+
+        BybitNormalizationService service = service();
+        int processed = service.processNextBatch(10);
+
+        assertThat(processed).isEqualTo(1);
+        ArgumentCaptor<NormalizedTransaction> bybitCaptor = ArgumentCaptor.forClass(NormalizedTransaction.class);
+        verify(normalizedTransactionStore).upsert(bybitCaptor.capture());
+        assertThat(bybitCaptor.getValue().getType()).isEqualTo(NormalizedTransactionType.EXTERNAL_TRANSFER_IN);
+        assertThat(bybitCaptor.getValue().getStatus()).isEqualTo(NormalizedTransactionStatus.NEEDS_REVIEW);
+        assertThat(bybitCaptor.getValue().getExcludedFromAccounting()).isTrue();
+        assertThat(bybitCaptor.getValue().getAccountingExclusionReason()).isEqualTo("EXTERNAL_CUSTODY_UNTRACKED_VENUE");
+        assertThat(bybitCaptor.getValue().getMissingDataReasons())
+                .contains("EXTERNAL_CUSTODY_UNTRACKED_VENUE")
+                .doesNotContain("BRIDGE_ON_CHAIN_LEG_NOT_FOUND");
+        assertThat(bybitCaptor.getValue().getFlows()).extracting(NormalizedTransaction.Flow::getRole)
+                .containsExactly(NormalizedLegRole.TRANSFER);
+        assertThat(deposit.getOnChainCorrelation().getStatus()).isEqualTo("EXTERNAL_CUSTODY");
+    }
+
+    @Test
+    void unmatchedTrackedWalletAddressStillRemainsBridgeGap() {
+        ExternalLedgerRaw withdraw = bridgeRow("tracked-gap", "EXTERNAL_TRANSFER_OUT");
+        withdraw.setReceivedAddress("0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f");
+
+        when(pendingExternalLedgerRowQueryService.loadNextBatch(10)).thenReturn(List.of(withdraw));
+        when(externalLedgerRawRepository.findById(withdraw.getId())).thenReturn(Optional.of(withdraw));
+        when(rawTransactionRepository.findAllByTxHashAndNetworkId("0xbridge", "ARBITRUM")).thenReturn(List.of());
+        when(normalizedTransactionRepository.findAllByTxHashAndNetworkIdAndSource(
+                "0xbridge",
+                NetworkId.ARBITRUM,
+                NormalizedTransactionSource.ON_CHAIN
+        )).thenReturn(List.of());
+        when(trackedWalletLookupService.contains("0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f")).thenReturn(true);
+
+        BybitNormalizationService service = service();
+        int processed = service.processNextBatch(10);
+
+        assertThat(processed).isEqualTo(1);
+        ArgumentCaptor<NormalizedTransaction> bybitCaptor = ArgumentCaptor.forClass(NormalizedTransaction.class);
+        verify(normalizedTransactionStore).upsert(bybitCaptor.capture());
+        assertThat(bybitCaptor.getValue().getType()).isEqualTo(NormalizedTransactionType.EXTERNAL_TRANSFER_OUT);
+        assertThat(bybitCaptor.getValue().getMissingDataReasons()).contains("BRIDGE_ON_CHAIN_LEG_NOT_FOUND");
+        assertThat(withdraw.getOnChainCorrelation().getStatus()).isEqualTo("UNMATCHED");
+    }
+
+    @Test
     void utaRewardClaimDoesNotEnterTradePairingPath() {
         ExternalLedgerRaw reward = new ExternalLedgerRaw();
         reward.setId("reward-1");
@@ -286,7 +385,8 @@ class BybitNormalizationServiceTest {
                 new BybitCanonicalTransactionBuilder(),
                 normalizedTransactionStore,
                 normalizedTransactionRepository,
-                rawTransactionRepository
+                rawTransactionRepository,
+                trackedWalletLookupService
         );
     }
 

@@ -1,5 +1,6 @@
 package com.walletradar.costbasis.application;
 
+import com.walletradar.accounting.support.BridgeAssetFamilySupport;
 import com.walletradar.costbasis.domain.AssetPosition;
 import com.walletradar.costbasis.domain.AssetPositionRepository;
 import com.walletradar.costbasis.domain.ReconciliationStatus;
@@ -164,6 +165,8 @@ public class AvcoReplayService {
                 || (transaction.getTxHash() != null && !transaction.getTxHash().isBlank()))
                 && (transaction.getType() == NormalizedTransactionType.EXTERNAL_TRANSFER_IN
                 || transaction.getType() == NormalizedTransactionType.EXTERNAL_TRANSFER_OUT
+                || transaction.getType() == NormalizedTransactionType.BRIDGE_IN
+                || transaction.getType() == NormalizedTransactionType.BRIDGE_OUT
                 || transaction.getType() == NormalizedTransactionType.INTERNAL_TRANSFER);
     }
 
@@ -907,6 +910,13 @@ public class AvcoReplayService {
     }
 
     private String transferKey(NormalizedTransaction transaction, NormalizedTransaction.Flow flow) {
+        if (transaction.getCorrelationId() != null && !transaction.getCorrelationId().isBlank()) {
+            String bridgeFamilyIdentity = bridgeFamilyIdentity(transaction, flow);
+            if (bridgeFamilyIdentity != null) {
+                return "bridge-family:" + transaction.getCorrelationId() + ":" + bridgeFamilyIdentity;
+            }
+        }
+
         String quantityKey = flow.getQuantityDelta().abs().stripTrailingZeros().toPlainString();
         String assetKey = assetKey(transaction, flow).assetIdentity();
         if (transaction.getCorrelationId() != null && !transaction.getCorrelationId().isBlank()) {
@@ -916,6 +926,20 @@ public class AvcoReplayService {
             return "tx:" + transaction.getTxHash() + ":" + assetKey + ":" + quantityKey;
         }
         return null;
+    }
+
+    private String bridgeFamilyIdentity(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow
+    ) {
+        if (transaction == null || flow == null || !Boolean.TRUE.equals(transaction.getContinuityCandidate())) {
+            return null;
+        }
+        if (transaction.getType() != NormalizedTransactionType.BRIDGE_OUT
+                && transaction.getType() != NormalizedTransactionType.BRIDGE_IN) {
+            return null;
+        }
+        return BridgeAssetFamilySupport.continuityIdentity(flow);
     }
 
     private boolean sameAssetIdentity(

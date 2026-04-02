@@ -1,7 +1,9 @@
 package com.walletradar.ingestion.job.normalization;
 
 import com.walletradar.domain.event.OnChainNormalizationCompletedEvent;
+import com.walletradar.domain.event.SessionBackfillCompletedEvent;
 import com.walletradar.ingestion.config.OnChainNormalizationProperties;
+import com.walletradar.session.application.SessionPipelineStateService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.ApplicationEventPublisher;
@@ -28,8 +30,9 @@ class OnChainNormalizationJobTest {
 
         List<Object> events = new ArrayList<>();
         ApplicationEventPublisher publisher = events::add;
+        SessionPipelineStateService pipelineStateService = mock(SessionPipelineStateService.class);
 
-        OnChainNormalizationJob job = new OnChainNormalizationJob(properties, normalizationService, publisher);
+        OnChainNormalizationJob job = new OnChainNormalizationJob(properties, normalizationService, publisher, pipelineStateService);
 
         int processed = job.runNormalization();
 
@@ -50,12 +53,37 @@ class OnChainNormalizationJobTest {
         when(normalizationService.processNextBatch()).thenReturn(0);
 
         ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
+        SessionPipelineStateService pipelineStateService = mock(SessionPipelineStateService.class);
 
-        OnChainNormalizationJob job = new OnChainNormalizationJob(properties, normalizationService, publisher);
+        OnChainNormalizationJob job = new OnChainNormalizationJob(properties, normalizationService, publisher, pipelineStateService);
 
         int processed = job.runNormalization();
 
         assertThat(processed).isZero();
         verify(publisher, never()).publishEvent(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    @DisplayName("live-session trigger publishes completion event even for empty drain")
+    void liveSessionTriggerPublishesCompletionEventForEmptyDrain() {
+        OnChainNormalizationProperties properties = new OnChainNormalizationProperties();
+        properties.setEnabled(true);
+
+        OnChainNormalizationService normalizationService = mock(OnChainNormalizationService.class);
+        when(normalizationService.processNextBatch()).thenReturn(0);
+
+        List<Object> events = new ArrayList<>();
+        ApplicationEventPublisher publisher = events::add;
+        SessionPipelineStateService pipelineStateService = mock(SessionPipelineStateService.class);
+
+        OnChainNormalizationJob job = new OnChainNormalizationJob(properties, normalizationService, publisher, pipelineStateService);
+
+        job.onSessionBackfillCompleted(new SessionBackfillCompletedEvent("session-1", 2, 26));
+
+        assertThat(events).singleElement().isInstanceOfSatisfying(OnChainNormalizationCompletedEvent.class, event -> {
+            assertThat(event.sessionId()).isEqualTo("session-1");
+            assertThat(event.processed()).isZero();
+            assertThat(event.trigger()).contains("session-backfill-completed:session-1");
+        });
     }
 }

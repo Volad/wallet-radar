@@ -1,0 +1,4 @@
+interface:
+  display_name: "Financial Logic Auditor"
+  short_description: "Rebuild ledger history and AVCO"
+  default_prompt: "Use $financial-logic-auditor to reconstruct ledger history from Mongo raw sources and compute AVCO."

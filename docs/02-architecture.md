@@ -59,6 +59,30 @@ Spring Boot
 
 ## 3. Core Pipeline
 
+Live-session orchestration is event-driven:
+
+- raw backfill completion is the primary trigger
+- stage schedulers are not used for live-session orchestration
+- one session-level watchdog may re-emit raw backfill completion when durable
+  `sync_status` proves the session is already complete but the original
+  completion event was missed
+- the approved live-session order is:
+  1. raw backfill
+  2. on-chain normalization
+  3. on-chain clarification
+  4. Bybit normalization
+  5. exact `Bybit <-> on-chain` rematch
+  6. pricing
+  7. accounting replay
+
+Important accounting note:
+
+- `move basis` is not a separate ingestion stage
+- it is evaluated inside accounting replay together with `AVCO`, realized cost
+  basis, and reconciliation
+- live-session progress is persisted in `user_sessions.pipelineState`, while
+  wallet×network raw ingestion progress remains in `sync_status`
+
 ### 3.1 Raw collection
 
 - EVM ingestion may be explorer-first or provider-first by network, with bounded native RPC repair where configured.
@@ -73,6 +97,8 @@ Spring Boot
 ### 3.2 On-chain normalization
 
 - Start only after raw backfill for wallet×network is complete.
+- For a live session, the on-chain normalization drain must start from
+  session-level backfill completion, not from the next cron tick.
 - If tx-level ordering metadata is incomplete, run raw ordering repair before canonical normalization.
 - Internal-transfer heuristics use the installation-wide tracked wallet universe, never an individual session payload.
 - Process in chronological order:
@@ -87,6 +113,9 @@ Spring Boot
   - transfer-pattern heuristics
 - `rawData.methodId` must be recovered from `rawData.input[0:10]` when the stored
   selector is blank or `"0x"`.
+- recovered selector-level non-economic evidence such as
+  `approve(address,uint256)` must outrank address-only protocol family fallback
+  when economic movement is absent.
 - Router/container subcalls are derived from the saved top-level
   `rawData.input` only. They are decoder/projection output, not separate raw tx
   documents.
@@ -131,7 +160,8 @@ Spring Boot
 - Zero-amount token transfers without economic counterflow must never create `BUY` / `SELL` legs. Known setup/admin calls may resolve to `ADMIN_CONFIG`; unknown cases remain explicit review items.
 - Protocol-registry runtime data is loaded from `backend/src/main/resources/protocol-registry.json` only.
 - `event_topics` remain reference-only metadata and are ignored by the runtime classifier.
-- Registry entries marked with `specialHandler` dispatch into one deterministic handler result per raw tx.
+- Registry entries marked with `specialHandler` route into deterministic
+  protocol semantics and then into family-owned final type mapping.
 - If a special handler cannot support the observed method/function combination, the tx becomes `UNKNOWN -> NEEDS_REVIEW` with an explicit missing-data reason.
 - Evidence sources:
   - canonical tx-level fields from the raw view / `explorer.tx`
@@ -166,6 +196,12 @@ Spring Boot
 - Explicit source-chain bridge-start rows must remain eligible for bounded
   full-receipt clarification so WalletRadar can persist receipt logs and
   transfer evidence for later protocol-aware bridge-pair reconstruction.
+- For audited LI.FI / Jumper bridge starts, clarification may also persist the
+  official receiving tx hash so the runtime can later materialize the
+  destination-side `BRIDGE_IN` row without timestamp-only heuristics.
+- Route-proven LI.FI source bridge starts may also be revisited by a bounded
+  post-clarification protocol-owned sweep so destination-side `BRIDGE_IN`
+  materialization does not depend on accidental clarification order.
 - Generic routed aggregator outbound-only rows, including 1inch-style router
   sends, must not be promoted to `BRIDGE_OUT` from time-window proximity or
   destination-wallet heuristics alone. Without production-available bridge
@@ -174,6 +210,12 @@ Spring Boot
   when top-level `methodId` is blank, as long as the selector is recoverable
   from saved calldata and the calldata still carries official route-tag
   evidence.
+- the same route-tagged `LI.FI / Jumper` bridge-start rule also applies when
+  the recovered selector is outside the current narrow explicit selector list,
+  as long as current raw still proves:
+  - a known bridge-router contract
+  - bridge-route provider tags
+  - positive native funding or equivalent outbound movement
 - Circle CCTP destination-side `redeem(bytes cctpMsg,bytes cctpSigs)` rows
   with persisted bridged payout movement must resolve to `BRIDGE_IN` before
   generic `VAULT_WITHDRAW` fallback can win.
@@ -527,9 +569,24 @@ Spring Boot
 
 ### 3.4 Bybit normalization
 
+- For a live session, `Bybit` normalization starts only after on-chain
+  clarification has completed.
+- A late exact rematch pass may then materialize `Bybit <-> on-chain`
+  continuity when the exact on-chain leg is now present in persisted raw and
+  canonical state.
+- `Bybit` normalization is started only from the session pipeline event chain,
+  not from a stage scheduler.
+
 - `external_ledger_raw` remains immutable source evidence.
 - `BybitTradePairer` uses a sliding `±5 sec` window for UTA trade pairing.
 - Matched Bybit withdraw/deposit and on-chain movements share a `correlationId`.
+- Unmatched Bybit withdraw/deposit rows with
+  `BRIDGE_ON_CHAIN_LEG_NOT_FOUND` remain explicit continuity blockers until the
+  runtime can materialize both `correlationId` and `matchedCounterparty`.
+- If the unmatched venue address is outside the tracked wallet universe and no
+  exact tracked-universe on-chain leg exists, the row must resolve to explicit
+  external-custody policy rather than pretending to be a missing tracked bridge
+  leg.
 - Canonical accounting docs still land in `normalized_transactions` for both `ON_CHAIN` and `BYBIT`.
 - Double-counting is prevented by `TRANSFER` semantics and replay carry-over rules, not by discarding one side of the source trail.
 

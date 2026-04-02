@@ -172,24 +172,25 @@ method_ids    "0x????????"          → description string
 | `decomposeByLegs` | boolean — if true, the contract is not safe to classify by one static `event_type` alone |
 | `specialHandler` | null \| `BALANCER_VAULT` \| `GMX_V2_EXCHANGE_ROUTER` \| `PENDLE_ROUTER` \| `MORPHO_BUNDLER` |
 
-**Special-handler contract**
+**Special-handler routing contract**
 
-Special handlers operate after raw legs have already been extracted by the common
-`LegExtractor` and must return exactly one canonical result for the raw tx.
+`specialHandler` is a registry/discovery hint only. Runtime classification
+routes such entries through protocol semantics first and then through the owning
+family classifier.
 
 ```
-SpecialHandler.classify(
-  ProtocolEntry entry,
-  RawTransactionNormalizationView view,
-  List<RawLeg> legs
-) -> SpecialHandlerResult
+ProtocolSemanticClassifier.classify(
+  ProtocolSemanticContext(view, discovery, legs)
+) -> ProtocolSemanticHint[]
 
-SpecialHandlerResult:
-  type
-  flows[]
+ProtocolSemanticHint:
+  protocolKey
+  semanticType
+  protocolName
+  protocolVersion
+  correlationId?
+  suggestedType
   confidence
-  status
-  missingDataReasons[]
 ```
 
 Rules:
@@ -197,7 +198,7 @@ Rules:
 - no RPC calls
 - no Mongo reads/writes
 - no synthetic `rawData.logs[]`
-- deterministic for the same `(entry, view, legs)` input
+- deterministic for the same `(view, discovery, legs)` input
 - unsupported method/function combination → `UNKNOWN`, `NEEDS_REVIEW`,
   `missingDataReasons += HANDLER_UNSUPPORTED_METHOD`
 
@@ -373,8 +374,8 @@ if entry != null AND networkId ∈ entry.networks:
 
   REG-00  Explicit special handler
           if entry.specialHandler != null:
-            result = specialHandler(entry.specialHandler).classify(entry, view, legs)
-            if result supported:
+            hints = protocolSemantics.classify(view, entry, legs)
+            if hints produce a family-owned decision:
               classifiedBy = PROTOCOL_REGISTRY
               STOP
             else:
@@ -1414,9 +1415,10 @@ INV-06  Classification steps execute in strict order:
         Registry → MethodId → FunctionName → Heuristic.
         A Registry match is never overridden by a lower-priority step.
 
-INV-06a Registry special handlers receive the already extracted raw legs and
-        return exactly one canonical result for the raw tx.
-        Unsupported methods become `UNKNOWN -> NEEDS_REVIEW`.
+INV-06a Registry special-handler entries are resolved by deterministic protocol
+        semantics over the already extracted raw legs, then mapped by the
+        owning family classifier. Unsupported methods become
+        `UNKNOWN -> NEEDS_REVIEW`.
 
 INV-07  APPROVE → flows = [], status = CONFIRMED immediately.
         No PricingJob call needed.

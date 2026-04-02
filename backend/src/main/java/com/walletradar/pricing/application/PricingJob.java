@@ -1,17 +1,22 @@
 package com.walletradar.pricing.application;
 
+import com.walletradar.domain.event.BybitNormalizationCompletedEvent;
+import com.walletradar.domain.event.PricingCompletedEvent;
+import com.walletradar.domain.session.UserSession;
 import com.walletradar.pricing.telemetry.PricingLogSupport;
+import com.walletradar.session.application.SessionPipelineStateService;
 import com.walletradar.telemetry.PipelineTelemetrySnapshot;
 import com.walletradar.telemetry.PipelineTelemetrySnapshotService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Scheduled driver for the pricing stage.
+ * Event-driven driver for the pricing stage.
  */
 @Component
 @RequiredArgsConstructor
@@ -26,20 +31,26 @@ public class PricingJob {
     private final PricingJobService pricingJobService;
     private final PricingDataGateService pricingDataGateService;
     private final PipelineTelemetrySnapshotService pipelineTelemetrySnapshotService;
-
-    @Scheduled(fixedDelayString = "${walletradar.pricing.schedule-interval-ms:120000}")
-    public void runScheduled() {
-        if (!pricingProperties.isEnabled()) {
-            return;
-        }
-        runPricing("scheduled");
-    }
+    private final ApplicationEventPublisher applicationEventPublisher;
+    private final SessionPipelineStateService sessionPipelineStateService;
 
     public int runPricing() {
-        return runPricing("manual");
+        return runPricing("manual", null, false);
+    }
+
+    @EventListener
+    public void onBybitNormalizationCompleted(BybitNormalizationCompletedEvent event) {
+        if (!pricingProperties.isEnabled() || event == null) {
+            return;
+        }
+        runPricing("bybit-normalization-completed", event.sessionId(), true);
     }
 
     private int runPricing(String trigger) {
+        return runPricing(trigger, null, false);
+    }
+
+    private int runPricing(String trigger, String sessionId, boolean publishWhenEmpty) {
         if (!running.compareAndSet(false, true)) {
             log.debug("PricingJob skipped: already running, trigger={}", trigger);
             return 0;
@@ -48,6 +59,11 @@ public class PricingJob {
         int processed = 0;
         long startedAtNanos = PricingLogSupport.logStart(log, STAGE_NAME, trigger);
         try {
+            sessionPipelineStateService.markStageRunning(
+                    sessionId,
+                    UserSession.PipelineStage.PRICING,
+                    "Pricing running"
+            );
             while (true) {
                 int batchProcessed = pricingJobService.processNextBatch();
                 processed += batchProcessed;
@@ -63,9 +79,22 @@ public class PricingJob {
                             snapshot.unresolvedPriceCount()
                     );
                     logPipelineSnapshot();
+                    sessionPipelineStateService.markStageComplete(
+                            sessionId,
+                            UserSession.PipelineStage.PRICING,
+                            "Pricing complete"
+                    );
+                    publishCompletionEvent(sessionId, processed, trigger, publishWhenEmpty);
                     return processed;
                 }
             }
+        } catch (RuntimeException error) {
+            sessionPipelineStateService.markStageFailed(
+                    sessionId,
+                    UserSession.PipelineStage.PRICING,
+                    error.getMessage()
+            );
+            throw error;
         } finally {
             PricingLogSupport.logFinish(log, STAGE_NAME, trigger, processed, startedAtNanos);
             running.set(false);
@@ -85,5 +114,12 @@ public class PricingJob {
                 snapshot.needsReviewCount(),
                 snapshot.excludedNeedsReviewCount()
         );
+    }
+
+    private void publishCompletionEvent(String sessionId, int processed, String trigger, boolean publishWhenEmpty) {
+        if (processed <= 0 && !publishWhenEmpty) {
+            return;
+        }
+        applicationEventPublisher.publishEvent(new PricingCompletedEvent(sessionId, processed, trigger));
     }
 }

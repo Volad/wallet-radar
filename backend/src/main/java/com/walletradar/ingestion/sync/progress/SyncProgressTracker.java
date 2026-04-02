@@ -1,9 +1,12 @@
 package com.walletradar.ingestion.sync.progress;
 
+import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.event.WalletNetworkBackfillCompletedEvent;
 import com.walletradar.domain.sync.SyncStatus;
 import com.walletradar.domain.sync.SyncStatusRepository;
 import com.walletradar.ingestion.config.BackfillProperties;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
@@ -19,6 +22,7 @@ public class SyncProgressTracker {
 
     private final SyncStatusRepository syncStatusRepository;
     private final BackfillProperties backfillProperties;
+    private final ApplicationEventPublisher applicationEventPublisher;
 
     /**
      * Set status to RUNNING and optional banner. Idempotent if already RUNNING.
@@ -66,6 +70,7 @@ public class SyncProgressTracker {
                     s.setNextRetryAfter(null);
                     s.setUpdatedAt(Instant.now());
                     syncStatusRepository.save(s);
+                    publishBackfillCompletion(walletAddress, networkId, s.isBackfillComplete());
                 });
     }
 
@@ -94,5 +99,18 @@ public class SyncProgressTracker {
         long delayMinutes = Math.min(baseMinutes * (1L << Math.min(retryCount - 1, 30)), maxMinutes);
         long jitterSeconds = ThreadLocalRandom.current().nextLong(0, Math.max(1, delayMinutes * 15));
         return Instant.now().plus(Duration.ofMinutes(delayMinutes)).plusSeconds(jitterSeconds);
+    }
+
+    private void publishBackfillCompletion(String walletAddress, String networkId, boolean backfillComplete) {
+        if (!backfillComplete) {
+            return;
+        }
+        try {
+            applicationEventPublisher.publishEvent(
+                    new WalletNetworkBackfillCompletedEvent(walletAddress, NetworkId.valueOf(networkId))
+            );
+        } catch (IllegalArgumentException ignored) {
+            // Unknown network ids should not block backfill completion persistence.
+        }
     }
 }

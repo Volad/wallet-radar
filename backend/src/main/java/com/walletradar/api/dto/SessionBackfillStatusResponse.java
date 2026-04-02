@@ -11,6 +11,9 @@ public record SessionBackfillStatusResponse(
         Integer overallProgressPct,
         Integer totalTargets,
         Integer completedTargets,
+        String pipelineStage,
+        String pipelineStatus,
+        String pipelineMessage,
         List<SessionWalletBackfillStatus> wallets
 ) {
     public record SessionWalletBackfillStatus(

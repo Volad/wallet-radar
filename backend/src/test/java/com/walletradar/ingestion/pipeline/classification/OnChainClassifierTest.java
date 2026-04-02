@@ -14,11 +14,10 @@ import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegist
 import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryRole;
 import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryService;
 import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistrySpecialHandlerType;
-import com.walletradar.ingestion.pipeline.classification.special.ProtocolSpecialHandlerDispatcher;
+import com.walletradar.ingestion.pipeline.classification.reason.ClassificationReasonCode;
 import com.walletradar.ingestion.pipeline.classification.support.ClarificationEligibilitySupport;
 import com.walletradar.ingestion.pipeline.classification.support.CowSwapSupport;
 import com.walletradar.ingestion.pipeline.classification.support.GmxEventTopicSupport;
-import com.walletradar.ingestion.pipeline.classification.special.SpecialHandlerResult;
 import com.walletradar.ingestion.pipeline.classification.support.NativeAssetSymbolResolver;
 import com.walletradar.ingestion.wallet.query.TrackedWalletLookupService;
 import org.bson.Document;
@@ -54,8 +53,6 @@ class OnChainClassifierTest {
     @Mock
     private ProtocolRegistryService protocolRegistryService;
     @Mock
-    private ProtocolSpecialHandlerDispatcher protocolSpecialHandlerDispatcher;
-    @Mock
     private TrackedWalletLookupService trackedWalletLookupService;
 
     private OnChainClassifier classifier;
@@ -65,7 +62,6 @@ class OnChainClassifierTest {
         org.mockito.Mockito.lenient().when(protocolRegistryService.lookup(any(), any())).thenReturn(Optional.empty());
         classifier = new OnChainClassifier(
                 protocolRegistryService,
-                protocolSpecialHandlerDispatcher,
                 trackedWalletLookupService,
                 new NativeAssetSymbolResolver()
         );
@@ -114,9 +110,6 @@ class OnChainClassifierTest {
                         true,
                         ProtocolRegistrySpecialHandlerType.BALANCER_VAULT
                 )));
-        when(protocolSpecialHandlerDispatcher.dispatch(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyList()))
-                .thenReturn(SpecialHandlerResult.unsupported());
-
         OnChainClassificationResult result = classifier.classify(rawTransaction);
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.UNKNOWN);
@@ -281,7 +274,6 @@ class OnChainClassifierTest {
                 .filteredOn(flow -> flow.getRole() == NormalizedLegRole.TRANSFER && flow.getAssetSymbol().equals("WETH"))
                 .singleElement()
                 .satisfies(flow -> assertThat(flow.getQuantityDelta()).isEqualByComparingTo(new BigDecimal("1")));
-        verifyNoInteractions(protocolRegistryService, protocolSpecialHandlerDispatcher);
     }
 
     @Test
@@ -1444,10 +1436,186 @@ class OnChainClassifierTest {
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.EXTERNAL_TRANSFER_OUT);
         assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.PROTOCOL_REGISTRY);
         assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
-        assertThat(result.missingDataReasons()).contains("ROUTED_AGGREGATOR_OUTBOUND_ONLY");
+        assertThat(result.missingDataReasons()).contains(ClassificationReasonCode.ROUTED_AGGREGATOR_OUTBOUND_ONLY.code());
         assertThat(result.flows())
                 .filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
                 .allSatisfy(flow -> assertThat(flow.getRole()).isEqualTo(NormalizedLegRole.SELL));
+    }
+
+    @Test
+    @DisplayName("1inch native-output swap recovers wallet native buy leg from wrapped-native unwrap evidence")
+    void oneInchNativeOutputSwapRecoversWalletNativeBuyLegFromWrappedNativeUnwrapEvidence() {
+        String oneInchRouter = "0x111111125421ca6dc452d289314280a0f8842a65";
+        String executor = "0x4444444444444444444444444444444444444444";
+        RawTransaction rawTransaction = baseRaw(NetworkId.BSC);
+        rawTransaction.getRawData().put("to", oneInchRouter);
+        rawTransaction.getRawData().put("methodId", "0x07ed2379");
+        rawTransaction.getRawData().put("input", oneInchSwapInput(
+                executor,
+                TOKEN_A,
+                "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+                oneInchRouter,
+                WALLET,
+                "1000000",
+                "1"
+        ));
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", TOKEN_A)
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenDecimal", "6")
+                        .append("from", WALLET)
+                        .append("to", oneInchRouter)
+                        .append("value", "1000000"),
+                new Document("contractAddress", "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c")
+                        .append("tokenSymbol", "WBNB")
+                        .append("tokenDecimal", "18")
+                        .append("from", "0x5555555555555555555555555555555555555555")
+                        .append("to", executor)
+                        .append("value", "500000000000000000"),
+                new Document("contractAddress", "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c")
+                        .append("tokenSymbol", "WBNB")
+                        .append("tokenDecimal", "18")
+                        .append("from", executor)
+                        .append("to", "0x0000000000000000000000000000000000000000")
+                        .append("value", "500000000000000000")
+        )).append("internalTransfers", List.of()));
+        when(protocolRegistryService.lookup(NetworkId.BSC, oneInchRouter))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        oneInchRouter,
+                        Set.of(NetworkId.BSC),
+                        ProtocolRegistryFamily.AGGREGATOR,
+                        ProtocolRegistryRole.ROUTER,
+                        ProtocolRegistryEventType.SWAP,
+                        ConfidenceLevel.HIGH,
+                        "1inch",
+                        "V6",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.SWAP);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        assertThat(result.flows())
+                .filteredOn(flow -> flow.getRole() == NormalizedLegRole.SELL)
+                .singleElement()
+                .satisfies(flow -> {
+                    assertThat(flow.getAssetSymbol()).isEqualTo("USDC");
+                    assertThat(flow.getQuantityDelta()).isEqualByComparingTo(new BigDecimal("-1.0"));
+                });
+        assertThat(result.flows())
+                .filteredOn(flow -> flow.getRole() == NormalizedLegRole.BUY)
+                .singleElement()
+                .satisfies(flow -> {
+                    assertThat(flow.getAssetSymbol()).isEqualTo("BNB");
+                    assertThat(flow.getQuantityDelta()).isEqualByComparingTo(new BigDecimal("0.5"));
+                });
+        assertThat(result.flows())
+                .filteredOn(flow -> flow.getRole() == NormalizedLegRole.FEE)
+                .singleElement()
+                .satisfies(flow -> {
+                    assertThat(flow.getAssetSymbol()).isEqualTo("BNB");
+                    assertThat(flow.getQuantityDelta()).isLessThan(BigDecimal.ZERO);
+                });
+    }
+
+    @Test
+    @DisplayName("1inch RPC native-output swap recovers wallet native buy leg from wrapped-native withdrawal log")
+    void oneInchRpcNativeOutputSwapRecoversWalletNativeBuyLegFromWrappedNativeWithdrawalLog() {
+        String oneInchRouter = "0x111111125421ca6dc452d289314280a0f8842a65";
+        String intermediary = "0x8c864d0c8e476bf9eb9d620c10e1296fb0e2f940";
+        String wrappedBnb = "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c";
+        RawTransaction rawTransaction = baseRaw(NetworkId.BSC);
+        rawTransaction.getRawData().put("to", oneInchRouter);
+        rawTransaction.getRawData().put("methodId", "0x07ed2379");
+        rawTransaction.getRawData().put("input", oneInchSwapInput(
+                intermediary,
+                TOKEN_A,
+                "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+                intermediary,
+                WALLET,
+                "12000000",
+                "1"
+        ));
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", TOKEN_A)
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenDecimal", "6")
+                        .append("from", WALLET)
+                        .append("to", intermediary)
+                        .append("value", "12000000"),
+                new Document("contractAddress", wrappedBnb)
+                        .append("tokenSymbol", "WBNB")
+                        .append("tokenDecimal", "18")
+                        .append("from", "0xc4dc171d499b3f5340bffed8433bddcec8d33b04")
+                        .append("to", intermediary)
+                        .append("value", "1265420489474075")
+        )).append("internalTransfers", List.of()));
+        rawTransaction.setClarificationEvidence(new Document()
+                .append("fullReceiptClarificationAttempts", 1)
+                .append("receipt", new Document("logs", List.of(
+                        new Document("address", wrappedBnb)
+                                .append("topics", List.of(
+                                        "0x7fcf532c15f0a6db0bd6d0e038bea71d30d808c7d98cb3bf7268a95bf5081b65",
+                                        "0x0000000000000000000000008c864d0c8e476bf9eb9d620c10e1296fb0e2f940"
+                                ))
+                                .append("data", "0x00000000000000000000000000000000000000000000000000047ee4aac4401b")
+                )))
+                .append("transfers", new Document("tokenTransfers", List.of(
+                        new Document("contractAddress", TOKEN_A)
+                                .append("tokenSymbol", "USDC")
+                                .append("tokenDecimal", "6")
+                                .append("from", WALLET)
+                                .append("to", intermediary)
+                                .append("value", "12000000"),
+                        new Document("contractAddress", wrappedBnb)
+                                .append("tokenSymbol", "WBNB")
+                                .append("tokenDecimal", "18")
+                                .append("from", "0xc4dc171d499b3f5340bffed8433bddcec8d33b04")
+                                .append("to", intermediary)
+                                .append("value", "1265420489474075")
+                ))));
+        when(protocolRegistryService.lookup(NetworkId.BSC, oneInchRouter))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        oneInchRouter,
+                        Set.of(NetworkId.BSC),
+                        ProtocolRegistryFamily.AGGREGATOR,
+                        ProtocolRegistryRole.ROUTER,
+                        ProtocolRegistryEventType.SWAP,
+                        ConfidenceLevel.HIGH,
+                        "1inch",
+                        "V6",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.SWAP);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        assertThat(result.flows())
+                .filteredOn(flow -> flow.getRole() == NormalizedLegRole.SELL)
+                .singleElement()
+                .satisfies(flow -> {
+                    assertThat(flow.getAssetSymbol()).isEqualTo("USDC");
+                    assertThat(flow.getQuantityDelta()).isEqualByComparingTo(new BigDecimal("-12.0"));
+                });
+        assertThat(result.flows())
+                .filteredOn(flow -> flow.getRole() == NormalizedLegRole.BUY)
+                .singleElement()
+                .satisfies(flow -> {
+                    assertThat(flow.getAssetSymbol()).isEqualTo("BNB");
+                    assertThat(flow.getQuantityDelta()).isEqualByComparingTo("0.001265420489474075");
+                });
+        assertThat(result.flows())
+                .filteredOn(flow -> flow.getRole() == NormalizedLegRole.FEE)
+                .singleElement()
+                .satisfies(flow -> {
+                    assertThat(flow.getAssetSymbol()).isEqualTo("BNB");
+                    assertThat(flow.getQuantityDelta()).isLessThan(BigDecimal.ZERO);
+                });
+        assertThat(result.missingDataReasons()).doesNotContain(ClassificationReasonCode.ROUTED_AGGREGATOR_OUTBOUND_ONLY.code());
     }
 
     @Test
@@ -2015,6 +2183,40 @@ class OnChainClassifierTest {
     }
 
     @Test
+    @DisplayName("trusted Slipstream position manager recovered approve selector remains APPROVE")
+    void trustedSlipstreamPositionManagerRecoveredApproveSelectorRemainsApprove() {
+        String positionManager = "0x416b433906b1b72fa758e166e239c43d68dc6f29";
+        RawTransaction rawTransaction = baseRaw(NetworkId.OPTIMISM);
+        rawTransaction.getRawData().put("to", positionManager);
+        rawTransaction.getRawData().put("methodId", "0x");
+        rawTransaction.getRawData().put("functionName", "");
+        rawTransaction.getRawData().put("input", "0x095ea7b3"
+                + "000000000000000000000000bc6043a5e50ba0c0213d2f7430a73e4590af97ad"
+                + "0000000000000000000000000000000000000000000000000000000000238891");
+        rawTransaction.getRawData().put("value", "0");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of()).append("internalTransfers", List.of()));
+        when(protocolRegistryService.lookup(NetworkId.OPTIMISM, positionManager))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        positionManager,
+                        Set.of(NetworkId.OPTIMISM),
+                        ProtocolRegistryFamily.DEX,
+                        ProtocolRegistryRole.POSITION_MANAGER,
+                        ProtocolRegistryEventType.LP_MINT,
+                        ConfidenceLevel.HIGH,
+                        "Velodrome",
+                        "Slipstream",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.APPROVE);
+        assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.METHOD_ID);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+    }
+
+    @Test
     @DisplayName("dex stake contract withdraw without asset movement becomes LP_POSITION_UNSTAKE")
     void dexStakeContractWithdrawWithoutAssetMovementBecomesLpPositionUnstake() {
         String stakeContract = "0xc6a2db661d5a5690172d8eb0a7dea2d3008665a3";
@@ -2182,8 +2384,6 @@ class OnChainClassifierTest {
                     assertThat(flow.getRole()).isEqualTo(NormalizedLegRole.FEE);
                     assertThat(flow.getAssetSymbol()).isEqualTo("AVAX");
                 });
-        verifyNoInteractions(protocolRegistryService);
-        verifyNoInteractions(protocolSpecialHandlerDispatcher);
     }
 
     @Test
@@ -2199,7 +2399,6 @@ class OnChainClassifierTest {
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.ADMIN_CONFIG);
         assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
         assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.METHOD_ID);
-        verifyNoInteractions(protocolRegistryService);
     }
 
     @Test
@@ -2394,7 +2593,6 @@ class OnChainClassifierTest {
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.UNKNOWN);
         assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
         assertThat(result.missingDataReasons()).containsExactly("FAILED_TRANSACTION");
-        verifyNoInteractions(protocolRegistryService, protocolSpecialHandlerDispatcher);
     }
 
     @Test
@@ -2408,7 +2606,6 @@ class OnChainClassifierTest {
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.UNKNOWN);
         assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
         assertThat(result.missingDataReasons()).containsExactly("FAILED_TRANSACTION");
-        verifyNoInteractions(protocolRegistryService, protocolSpecialHandlerDispatcher);
     }
 
     @Test
@@ -3997,13 +4194,91 @@ class OnChainClassifierTest {
     @Test
     @DisplayName("blank-method LI.FI route selector recovered from calldata becomes BRIDGE_OUT")
     void blankMethodLifiRouteSelectorRecoveredFromCalldataBecomesBridgeOut() {
+        String bridgeEntry = "0x1231deb6f5749ef6ce6943a275a1d3e7486f4eae";
         RawTransaction rawTransaction = baseRaw(NetworkId.BASE);
-        rawTransaction.getRawData().put("to", "0x1231deb6f5749ef6ce6943a275a1d3e7486f4eae");
+        rawTransaction.getRawData().put("to", bridgeEntry);
         rawTransaction.getRawData().put("methodId", "0x");
         rawTransaction.getRawData().put("functionName", "");
         rawTransaction.getRawData().put("input", "0xfc5f1003" + asciiHex("jumper.exchange|gasZipBridge|across"));
         rawTransaction.getRawData().put("value", "9000000000000000");
         rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of()).append("internalTransfers", List.of()));
+        when(protocolRegistryService.lookup(NetworkId.BASE, bridgeEntry))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        bridgeEntry,
+                        Set.of(NetworkId.BASE),
+                        ProtocolRegistryFamily.BRIDGE,
+                        ProtocolRegistryRole.BRIDGE_ENTRY,
+                        null,
+                        ConfidenceLevel.HIGH,
+                        "LiFi",
+                        "V1",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.BRIDGE_OUT);
+        assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.HEURISTIC);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+    }
+
+    @Test
+    @DisplayName("route-tagged LI.FI bridge selector outside explicit allowlist still becomes BRIDGE_OUT")
+    void routeTaggedLiFiBridgeSelectorOutsideExplicitAllowlistStillBecomesBridgeOut() {
+        String bridgeEntry = "0x1231deb6f5749ef6ce6943a275a1d3e7486f4eae";
+        RawTransaction rawTransaction = baseRaw(NetworkId.ETHEREUM);
+        rawTransaction.getRawData().put("to", bridgeEntry);
+        rawTransaction.getRawData().put("methodId", "0xae328590");
+        rawTransaction.getRawData().put("functionName", "");
+        rawTransaction.getRawData().put("input", "0xae328590" + asciiHex("relay|jumper.exchange"));
+        rawTransaction.getRawData().put("value", "1393882801667435");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of()).append("internalTransfers", List.of()));
+        when(protocolRegistryService.lookup(NetworkId.ETHEREUM, bridgeEntry))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        bridgeEntry,
+                        Set.of(NetworkId.ETHEREUM),
+                        ProtocolRegistryFamily.BRIDGE,
+                        ProtocolRegistryRole.BRIDGE_ENTRY,
+                        null,
+                        ConfidenceLevel.HIGH,
+                        "LiFi",
+                        "V1",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.BRIDGE_OUT);
+        assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.HEURISTIC);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+    }
+
+    @Test
+    @DisplayName("blank-method route-tagged LI.FI bridge selector outside explicit allowlist still becomes BRIDGE_OUT")
+    void blankMethodRouteTaggedLiFiBridgeSelectorOutsideExplicitAllowlistStillBecomesBridgeOut() {
+        String bridgeEntry = "0x1231deb6f5749ef6ce6943a275a1d3e7486f4eae";
+        RawTransaction rawTransaction = baseRaw(NetworkId.BASE);
+        rawTransaction.getRawData().put("to", bridgeEntry);
+        rawTransaction.getRawData().put("methodId", "0x");
+        rawTransaction.getRawData().put("functionName", "");
+        rawTransaction.getRawData().put("input", "0xa1f1ce43" + asciiHex("across|jumper.exchange"));
+        rawTransaction.getRawData().put("value", "11139382465917016");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of()).append("internalTransfers", List.of()));
+        when(protocolRegistryService.lookup(NetworkId.BASE, bridgeEntry))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        bridgeEntry,
+                        Set.of(NetworkId.BASE),
+                        ProtocolRegistryFamily.BRIDGE,
+                        ProtocolRegistryRole.BRIDGE_ENTRY,
+                        null,
+                        ConfidenceLevel.HIGH,
+                        "LiFi",
+                        "V1",
+                        false,
+                        null
+                )));
 
         OnChainClassificationResult result = classifier.classify(rawTransaction);
 
@@ -5505,6 +5780,28 @@ class OnChainClassifierTest {
         payload.append(offsets);
         encodedElements.forEach(payload::append);
         return "0xac9650d8" + payload;
+    }
+
+    private static String oneInchSwapInput(
+            String executor,
+            String srcToken,
+            String dstToken,
+            String srcReceiver,
+            String dstReceiver,
+            String amount,
+            String minReturnAmount
+    ) {
+        return "0x07ed2379"
+                + paddedAddress(executor)
+                + paddedAddress(srcToken)
+                + paddedAddress(dstToken)
+                + paddedAddress(srcReceiver)
+                + paddedAddress(dstReceiver)
+                + paddedUint(amount)
+                + paddedUint(minReturnAmount)
+                + paddedUint("0")
+                + paddedUint("288")
+                + paddedUint("0");
     }
 
     private static String paddedAddress(String address) {

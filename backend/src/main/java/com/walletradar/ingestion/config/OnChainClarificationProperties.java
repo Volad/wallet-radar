@@ -24,6 +24,8 @@ public class OnChainClarificationProperties {
 
     private FullReceipt fullReceipt = new FullReceipt();
     private RelatedDiscovery relatedDiscovery = new RelatedDiscovery();
+    private LiFiStatus liFiStatus = new LiFiStatus();
+    private MayanStatus mayanStatus = new MayanStatus();
 
     public void setFullReceipt(FullReceipt fullReceipt) {
         this.fullReceipt = fullReceipt != null ? fullReceipt : new FullReceipt();
@@ -31,6 +33,14 @@ public class OnChainClarificationProperties {
 
     public void setRelatedDiscovery(RelatedDiscovery relatedDiscovery) {
         this.relatedDiscovery = relatedDiscovery != null ? relatedDiscovery : new RelatedDiscovery();
+    }
+
+    public void setLiFiStatus(LiFiStatus liFiStatus) {
+        this.liFiStatus = liFiStatus != null ? liFiStatus : new LiFiStatus();
+    }
+
+    public void setMayanStatus(MayanStatus mayanStatus) {
+        this.mayanStatus = mayanStatus != null ? mayanStatus : new MayanStatus();
     }
 
     public boolean isEnabled() {
@@ -71,6 +81,14 @@ public class OnChainClarificationProperties {
 
     public RelatedDiscovery getRelatedDiscovery() {
         return relatedDiscovery;
+    }
+
+    public LiFiStatus getLiFiStatus() {
+        return liFiStatus;
+    }
+
+    public MayanStatus getMayanStatus() {
+        return mayanStatus;
     }
 
     @NoArgsConstructor
@@ -152,6 +170,78 @@ public class OnChainClarificationProperties {
 
         public void setMaxPages(int maxPages) {
             this.maxPages = maxPages;
+        }
+    }
+
+    @NoArgsConstructor
+    @Getter
+    @Setter
+    public static class LiFiStatus {
+
+        private boolean enabled = true;
+
+        private String baseUrl = "https://li.quest";
+
+        private long timeoutMs = 5000;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public String getBaseUrl() {
+            return baseUrl;
+        }
+
+        public void setBaseUrl(String baseUrl) {
+            this.baseUrl = baseUrl;
+        }
+
+        public long getTimeoutMs() {
+            return timeoutMs;
+        }
+
+        public void setTimeoutMs(long timeoutMs) {
+            this.timeoutMs = timeoutMs;
+        }
+    }
+
+    @NoArgsConstructor
+    @Getter
+    @Setter
+    public static class MayanStatus {
+
+        private boolean enabled = true;
+
+        private String baseUrl = "https://explorer-api.mayan.finance";
+
+        private long timeoutMs = 5000;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public String getBaseUrl() {
+            return baseUrl;
+        }
+
+        public void setBaseUrl(String baseUrl) {
+            this.baseUrl = baseUrl;
+        }
+
+        public long getTimeoutMs() {
+            return timeoutMs;
+        }
+
+        public void setTimeoutMs(long timeoutMs) {
+            this.timeoutMs = timeoutMs;
         }
     }
 }

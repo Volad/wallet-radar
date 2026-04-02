@@ -1,0 +1,22 @@
+{
+  "key": "morpho",
+  "protocol": "Morpho",
+  "version": "bundler3",
+  "aliases": ["Morpho", "Morpho Bundler3"],
+  "capabilities": ["BUNDLE_ROUTER", "METHOD_AWARE_WITHDRAW", "VAULT_LIKE_BUNDLE"],
+  "families": ["AGGREGATOR", "LENDING", "VAULT"],
+  "clarificationHints": ["FULL_RECEIPT"],
+  "markers": {
+    "methodSelectors": {
+      "bundlerMulticall": ["0x374f435d"],
+      "withdrawCollateral": ["0x1af3bbc6"]
+    },
+    "functionNames": {
+      "bundlerMulticall": ["multicall", "bundle"]
+    },
+    "assetMarkers": {
+      "shareSymbolMarkers": ["gt", "syrup"],
+      "shareNameMarkers": ["vault", "syrup"]
+    }
+  }
+}

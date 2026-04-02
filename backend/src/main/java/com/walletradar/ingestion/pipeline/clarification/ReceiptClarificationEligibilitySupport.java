@@ -4,6 +4,7 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.domain.common.NetworkId;
+import com.walletradar.ingestion.pipeline.classification.reason.ClassificationReasonCode;
 import com.walletradar.ingestion.pipeline.classification.support.ClarificationEligibilitySupport;
 import com.walletradar.ingestion.pipeline.onchain.OnChainRawTransactionView;
 
@@ -41,14 +42,15 @@ public final class ReceiptClarificationEligibilitySupport {
 
     private static final String GMX_HELPER_SEND_WNT_SELECTOR = "7d39aaf1";
     private static final String GMX_HELPER_SEND_TOKENS_SELECTOR = "e6d66ac8";
-    private static final String GMX_DEPOSIT_REQUEST_CORRELATION_REQUIRED = "GMX_DEPOSIT_REQUEST_CORRELATION_REQUIRED";
-    private static final String GMX_DEPOSIT_SETTLEMENT_CORRELATION_REQUIRED = "GMX_DEPOSIT_SETTLEMENT_CORRELATION_REQUIRED";
-    private static final String GMX_WITHDRAWAL_REQUEST_CORRELATION_REQUIRED = "GMX_WITHDRAWAL_REQUEST_CORRELATION_REQUIRED";
-    private static final String GMX_WITHDRAWAL_SETTLEMENT_CORRELATION_REQUIRED = "GMX_WITHDRAWAL_SETTLEMENT_CORRELATION_REQUIRED";
-    private static final String GMX_DERIVATIVE_REQUEST_CORRELATION_REQUIRED = "GMX_DERIVATIVE_REQUEST_CORRELATION_REQUIRED";
-    private static final String GMX_DERIVATIVE_EXECUTION_EVIDENCE_REQUIRED = "GMX_DERIVATIVE_EXECUTION_EVIDENCE_REQUIRED";
-    private static final String COW_ORDER_SETTLEMENT_CORRELATION_REQUIRED = "COW_ORDER_SETTLEMENT_CORRELATION_REQUIRED";
+    private static final String GMX_DEPOSIT_REQUEST_CORRELATION_REQUIRED = ClassificationReasonCode.GMX_DEPOSIT_REQUEST_CORRELATION_REQUIRED.code();
+    private static final String GMX_DEPOSIT_SETTLEMENT_CORRELATION_REQUIRED = ClassificationReasonCode.GMX_DEPOSIT_SETTLEMENT_CORRELATION_REQUIRED.code();
+    private static final String GMX_WITHDRAWAL_REQUEST_CORRELATION_REQUIRED = ClassificationReasonCode.GMX_WITHDRAWAL_REQUEST_CORRELATION_REQUIRED.code();
+    private static final String GMX_WITHDRAWAL_SETTLEMENT_CORRELATION_REQUIRED = ClassificationReasonCode.GMX_WITHDRAWAL_SETTLEMENT_CORRELATION_REQUIRED.code();
+    private static final String GMX_DERIVATIVE_REQUEST_CORRELATION_REQUIRED = ClassificationReasonCode.GMX_DERIVATIVE_REQUEST_CORRELATION_REQUIRED.code();
+    private static final String GMX_DERIVATIVE_EXECUTION_EVIDENCE_REQUIRED = ClassificationReasonCode.GMX_DERIVATIVE_EXECUTION_EVIDENCE_REQUIRED.code();
+    private static final String COW_ORDER_SETTLEMENT_CORRELATION_REQUIRED = ClassificationReasonCode.COW_ORDER_SETTLEMENT_CORRELATION_REQUIRED.code();
     private static final String GPV2_SETTLEMENT_SELECTOR = "0x13d79a0b";
+    private static final String ROUTED_AGGREGATOR_OUTBOUND_ONLY = ClassificationReasonCode.ROUTED_AGGREGATOR_OUTBOUND_ONLY.code();
 
     private ReceiptClarificationEligibilitySupport() {
     }
@@ -66,12 +68,14 @@ public final class ReceiptClarificationEligibilitySupport {
         boolean gmxPoolExitSettlementCandidate = isGmxPoolExitSettlementCandidate(normalizedTransaction, view);
         boolean cowSettlementCandidate = isCowSettlementCandidate(normalizedTransaction, view);
         boolean gmxPendingClarificationCandidate = isGmxPendingClarificationCandidate(normalizedTransaction, reasons);
+        boolean oneInchNativeSettlementCandidate = isOneInchNativeSettlementCandidate(normalizedTransaction, reasons);
         if (normalizedTransaction.getStatus() != NormalizedTransactionStatus.NEEDS_REVIEW
                 && !bridgeEvidenceCandidate
                 && !gmxDerivativeExecutionCandidate
                 && !gmxPoolExitSettlementCandidate
                 && !cowSettlementCandidate
-                && !gmxPendingClarificationCandidate) {
+                && !gmxPendingClarificationCandidate
+                && !oneInchNativeSettlementCandidate) {
             return false;
         }
         if (bridgeEvidenceCandidate
@@ -103,6 +107,9 @@ public final class ReceiptClarificationEligibilitySupport {
         if (cowSettlementCandidate) {
             return true;
         }
+        if (oneInchNativeSettlementCandidate) {
+            return true;
+        }
         String txHash = String.valueOf(view.txHash()).toLowerCase();
         if (NON_ECONOMIC_ALLOWLIST.contains(txHash)) {
             return true;
@@ -111,11 +118,11 @@ public final class ReceiptClarificationEligibilitySupport {
                 && view.toAddress() != null
                 && "0x46a15b0b27311cedf172ab29e4f4766fbe7f4364".equals(view.toAddress())
                 && "0xac9650d8".equals(view.methodId())
-                && reasons.contains("ROUTER_METHOD_OVERLOAD_UNSUPPORTED")) {
+                && reasons.contains(ClassificationReasonCode.ROUTER_METHOD_OVERLOAD_UNSUPPORTED.code())) {
             return true;
         }
         if (HASH_ALLOWLIST_FOR_INSUFFICIENT_MOVEMENT.contains(txHash)
-                && reasons.contains("INSUFFICIENT_MOVEMENT_EVIDENCE")) {
+                && reasons.contains(ClassificationReasonCode.INSUFFICIENT_MOVEMENT_EVIDENCE.code())) {
             return true;
         }
         if (reasons.contains(GMX_DEPOSIT_REQUEST_CORRELATION_REQUIRED)
@@ -133,10 +140,11 @@ public final class ReceiptClarificationEligibilitySupport {
             return true;
         }
         if (HASH_ALLOWLIST_FOR_CLASSIFICATION_FAILED.contains(txHash)
-                && reasons.contains("CLASSIFICATION_FAILED")) {
+                && reasons.contains(ClassificationReasonCode.CLASSIFICATION_FAILED.code())) {
             return true;
         }
-        return "0xc16ae7a4".equals(view.methodId()) && reasons.contains("CLASSIFICATION_FAILED");
+        return "0xc16ae7a4".equals(view.methodId())
+                && reasons.contains(ClassificationReasonCode.CLASSIFICATION_FAILED.code());
     }
 
     private static boolean isGmxPendingClarificationCandidate(
@@ -180,6 +188,17 @@ public final class ReceiptClarificationEligibilitySupport {
         return reasons.contains(GMX_WITHDRAWAL_SETTLEMENT_CORRELATION_REQUIRED)
                 && normalizedTransaction.getType() == NormalizedTransactionType.LP_EXIT_SETTLEMENT
                 && "GMX".equalsIgnoreCase(normalizedTransaction.getProtocolName());
+    }
+
+    private static boolean isOneInchNativeSettlementCandidate(
+            NormalizedTransaction normalizedTransaction,
+            List<String> reasons
+    ) {
+        return normalizedTransaction != null
+                && normalizedTransaction.getStatus() == NormalizedTransactionStatus.PENDING_PRICE
+                && normalizedTransaction.getType() == NormalizedTransactionType.EXTERNAL_TRANSFER_OUT
+                && "1inch".equalsIgnoreCase(normalizedTransaction.getProtocolName())
+                && reasons.contains(ROUTED_AGGREGATOR_OUTBOUND_ONLY);
     }
 
     private static boolean isGmxDerivativeRequest(NormalizedTransaction normalizedTransaction) {

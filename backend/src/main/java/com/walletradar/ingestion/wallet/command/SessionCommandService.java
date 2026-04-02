@@ -3,6 +3,7 @@ package com.walletradar.ingestion.wallet.command;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.domain.session.UserSessionRepository;
+import com.walletradar.session.application.SessionPipelineStateService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -25,6 +26,7 @@ public class SessionCommandService {
     private final UserSessionRepository userSessionRepository;
     private final WalletBackfillService walletBackfillService;
     private final TrackedWalletProjectionService trackedWalletProjectionService;
+    private final SessionPipelineStateService sessionPipelineStateService;
 
     public SessionCommandResult addSession(String sessionId, List<SessionWalletPayload> walletEntries) {
         String normalizedSessionId = sessionId.trim();
@@ -47,6 +49,11 @@ public class SessionCommandService {
         session.setLastSeenAt(now);
         userSessionRepository.save(session);
         trackedWalletProjectionService.replaceSessionWallets(previousWallets, normalizedWallets, now);
+        sessionPipelineStateService.markStageRunning(
+                normalizedSessionId,
+                UserSession.PipelineStage.BACKFILL,
+                "Raw backfill started"
+        );
 
         for (UserSession.SessionWallet wallet : normalizedWallets) {
             walletBackfillService.addWallet(wallet.getAddress(), wallet.getNetworks());

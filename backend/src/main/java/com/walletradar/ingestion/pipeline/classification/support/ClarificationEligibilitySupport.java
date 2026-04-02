@@ -1,6 +1,7 @@
 package com.walletradar.ingestion.pipeline.classification.support;
 
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.ingestion.pipeline.classification.reason.ClassificationReasonCode;
 import com.walletradar.ingestion.pipeline.onchain.OnChainRawTransactionView;
 
 import java.util.ArrayList;
@@ -12,7 +13,7 @@ import java.util.List;
  */
 public final class ClarificationEligibilitySupport {
 
-    public static final String BRIDGE_PAIR_EVIDENCE_REQUIRED = "BRIDGE_PAIR_EVIDENCE_REQUIRED";
+    public static final String BRIDGE_PAIR_EVIDENCE_REQUIRED = ClassificationReasonCode.BRIDGE_PAIR_EVIDENCE_REQUIRED.code();
 
     private ClarificationEligibilitySupport() {
     }
@@ -46,16 +47,16 @@ public final class ClarificationEligibilitySupport {
 
         List<String> reasons = new ArrayList<>();
         if (!view.hasExecutionStatusEvidence()) {
-            reasons.add("MISSING_EXECUTION_STATUS");
+            reasons.add(ClassificationReasonCode.MISSING_EXECUTION_STATUS.code());
         }
         if (!view.hasEffectiveGasPriceEvidence()) {
-            reasons.add("MISSING_EFFECTIVE_GAS_PRICE");
+            reasons.add(ClassificationReasonCode.MISSING_EFFECTIVE_GAS_PRICE.code());
         }
         if (view.isFeePayer() && !view.hasGasUsed()) {
-            reasons.add("MISSING_GAS_USED");
+            reasons.add(ClassificationReasonCode.MISSING_GAS_USED.code());
         }
         if (view.isContractCreation() && !view.hasContractAddress()) {
-            reasons.add("MISSING_CONTRACT_ADDRESS");
+            reasons.add(ClassificationReasonCode.MISSING_CONTRACT_ADDRESS.code());
         }
         return List.copyOf(reasons);
     }

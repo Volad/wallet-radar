@@ -262,6 +262,14 @@ walletradar:
       batch-size: 100
       retry-delay-seconds: 120
       max-attempts: 3
+      li-fi-status:
+        enabled: true
+        base-url: https://li.quest
+        timeout-ms: 5000
+      mayan-status:
+        enabled: true
+        base-url: https://explorer-api.mayan.finance
+        timeout-ms: 5000
       full-receipt:
         enabled: true
         batch-size: 50
@@ -277,6 +285,12 @@ walletradar:
     validation-batch-size: 250
     schedule-interval-ms: 120000
     retry-delay-seconds: 120
+  tools:
+    classification-baseline:
+      enabled: false
+      mode: EXPORT
+      output-dir: results/refactor-baseline/adr-001/manual
+      baseline-dir:
 
   pricing:
     enabled: false

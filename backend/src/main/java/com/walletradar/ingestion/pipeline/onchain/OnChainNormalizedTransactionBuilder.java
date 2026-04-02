@@ -2,10 +2,10 @@ package com.walletradar.ingestion.pipeline.onchain;
 
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
-import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassificationResult;
-import com.walletradar.ingestion.pipeline.classification.support.ClarificationEligibilitySupport;
+import com.walletradar.ingestion.pipeline.classification.reason.ClarificationPolicyService;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
@@ -16,6 +16,17 @@ import java.util.List;
  */
 @Component
 public class OnChainNormalizedTransactionBuilder {
+
+    private final ClarificationPolicyService clarificationPolicyService;
+
+    @Autowired
+    public OnChainNormalizedTransactionBuilder(ClarificationPolicyService clarificationPolicyService) {
+        this.clarificationPolicyService = clarificationPolicyService;
+    }
+
+    public OnChainNormalizedTransactionBuilder() {
+        this(new ClarificationPolicyService());
+    }
 
     public NormalizedTransaction build(
             RawTransaction rawTransaction,
@@ -128,7 +139,7 @@ public class OnChainNormalizedTransactionBuilder {
         normalized.setFlows(classificationResult.flows());
         List<String> missingDataReasons = classificationResult.missingDataReasons();
         if (classificationResult.status() == NormalizedTransactionStatus.PENDING_CLARIFICATION) {
-            missingDataReasons = ClarificationEligibilitySupport.mergeClarificationReasons(
+            missingDataReasons = clarificationPolicyService.mergeClassifierReasons(
                     view,
                     classificationResult.type(),
                     missingDataReasons

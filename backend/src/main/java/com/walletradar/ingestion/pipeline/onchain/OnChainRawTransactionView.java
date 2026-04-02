@@ -11,8 +11,10 @@ import java.math.BigInteger;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 /**
  * Safe typed accessor over the raw BSON payload used by the normalization worker.
@@ -165,20 +167,16 @@ public final class OnChainRawTransactionView {
         List<Document> clarificationTransfers = shouldExposeReceiptClarificationEvidence()
                 ? readDocumentList(clarificationTransfersDocument(), "tokenTransfers")
                 : List.of();
-        if (!clarificationTransfers.isEmpty()) {
-            return clarificationTransfers;
-        }
-        return readDocumentList(readExplorerSection(), "tokenTransfers");
+        List<Document> explorerTransfers = readDocumentList(readExplorerSection(), "tokenTransfers");
+        return mergeTokenTransferEvidence(clarificationTransfers, explorerTransfers);
     }
 
     public List<Document> explorerInternalTransfers() {
         List<Document> clarificationTransfers = shouldExposeReceiptClarificationEvidence()
                 ? readDocumentList(clarificationTransfersDocument(), "internalTransfers")
                 : List.of();
-        if (!clarificationTransfers.isEmpty()) {
-            return clarificationTransfers;
-        }
-        return readDocumentList(readExplorerSection(), "internalTransfers");
+        List<Document> explorerTransfers = readDocumentList(readExplorerSection(), "internalTransfers");
+        return mergeInternalTransferEvidence(clarificationTransfers, explorerTransfers);
     }
 
     public List<Document> persistedLogs() {
@@ -475,6 +473,92 @@ public final class OnChainRawTransactionView {
             return List.of();
         }
         return Collections.unmodifiableList(new ArrayList<>(BsonCoercionSupport.asDocumentList(parent.get(key))));
+    }
+
+    private static List<Document> mergeTokenTransferEvidence(
+            List<Document> clarificationTransfers,
+            List<Document> explorerTransfers
+    ) {
+        return mergeDocumentsByKey(
+                clarificationTransfers,
+                explorerTransfers,
+                OnChainRawTransactionView::tokenTransferMergeKey
+        );
+    }
+
+    private static List<Document> mergeInternalTransferEvidence(
+            List<Document> clarificationTransfers,
+            List<Document> explorerTransfers
+    ) {
+        return mergeDocumentsByKey(
+                clarificationTransfers,
+                explorerTransfers,
+                OnChainRawTransactionView::internalTransferMergeKey
+        );
+    }
+
+    private static List<Document> mergeDocumentsByKey(
+            List<Document> primary,
+            List<Document> secondary,
+            java.util.function.Function<Document, String> keyBuilder
+    ) {
+        if (primary.isEmpty()) {
+            return secondary;
+        }
+        if (secondary.isEmpty()) {
+            return primary;
+        }
+        Map<String, Document> merged = new LinkedHashMap<>();
+        appendMergedDocuments(merged, primary, keyBuilder);
+        appendMergedDocuments(merged, secondary, keyBuilder);
+        return Collections.unmodifiableList(new ArrayList<>(merged.values()));
+    }
+
+    private static void appendMergedDocuments(
+            Map<String, Document> target,
+            List<Document> source,
+            java.util.function.Function<Document, String> keyBuilder
+    ) {
+        for (Document document : source) {
+            if (document == null) {
+                continue;
+            }
+            String key = keyBuilder.apply(document);
+            target.putIfAbsent(key, document);
+        }
+    }
+
+    private static String tokenTransferMergeKey(Document transfer) {
+        return mergeKey(
+                "token",
+                normalizeAddress(stringify(transfer.get("contractAddress"))),
+                normalizeAddress(stringify(transfer.get("tokenAddress"))),
+                normalizeAddress(stringify(transfer.get("from"))),
+                normalizeAddress(stringify(transfer.get("to"))),
+                stringify(transfer.get("value")),
+                stringify(transfer.get("tokenSymbol")),
+                stringify(transfer.get("tokenDecimal"))
+        );
+    }
+
+    private static String internalTransferMergeKey(Document transfer) {
+        return mergeKey(
+                "internal",
+                normalizeAddress(stringify(transfer.get("from"))),
+                normalizeAddress(stringify(transfer.get("to"))),
+                stringify(transfer.get("value")),
+                stringify(transfer.get("isError")),
+                stringify(transfer.get("traceId")),
+                stringify(transfer.get("type"))
+        );
+    }
+
+    private static String mergeKey(String prefix, String... parts) {
+        StringBuilder key = new StringBuilder(prefix);
+        for (String part : parts) {
+            key.append('|').append(part == null ? "" : part);
+        }
+        return key.toString();
     }
 
     private static List<Document> filterSyntheticLogs(List<Document> logs) {

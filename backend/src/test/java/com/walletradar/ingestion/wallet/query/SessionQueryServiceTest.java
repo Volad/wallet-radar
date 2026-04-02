@@ -48,6 +48,8 @@ class SessionQueryServiceTest {
         assertThat(status.overallProgressPct()).isEqualTo(0);
         assertThat(status.totalTargets()).isEqualTo(2);
         assertThat(status.completedTargets()).isEqualTo(0);
+        assertThat(status.pipelineStage()).isNull();
+        assertThat(status.pipelineStatus()).isNull();
         assertThat(status.wallets()).hasSize(1);
         assertThat(status.wallets().get(0).networks()).hasSize(2);
         assertThat(status.wallets().get(0).networks().get(0).status()).isEqualTo("PENDING");
@@ -120,6 +122,29 @@ class SessionQueryServiceTest {
         assertThat(status.status()).isEqualTo("FAILED");
         assertThat(status.overallProgressPct()).isEqualTo(60);
         assertThat(status.completedTargets()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("findBackfillStatus exposes persisted session pipeline state")
+    void findBackfillStatus_exposesPipelineState() {
+        UserSession session = session(
+                "s-5",
+                wallet("0xabc", "Wallet 1", "#22d3ee", List.of(NetworkId.ETHEREUM))
+        );
+        UserSession.PipelineState pipelineState = new UserSession.PipelineState();
+        pipelineState.setStage(UserSession.PipelineStage.BYBIT_NORMALIZATION);
+        pipelineState.setStatus(UserSession.PipelineStatus.RUNNING);
+        pipelineState.setMessage("Bybit normalization running");
+        session.setPipelineState(pipelineState);
+
+        when(userSessionRepository.findById("s-5")).thenReturn(Optional.of(session));
+        when(syncStatusRepository.findByWalletAddressIn(List.of("0xabc"))).thenReturn(List.of());
+
+        SessionQueryService.SessionBackfillStatusView status = sessionQueryService.findBackfillStatus("s-5").orElseThrow();
+
+        assertThat(status.pipelineStage()).isEqualTo("BYBIT_NORMALIZATION");
+        assertThat(status.pipelineStatus()).isEqualTo("RUNNING");
+        assertThat(status.pipelineMessage()).isEqualTo("Bybit normalization running");
     }
 
     @Test

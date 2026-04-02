@@ -110,6 +110,15 @@ public class SessionQueryService {
                 overallProgress,
                 (int) totalTargets,
                 (int) completedTargets,
+                session.getPipelineState() == null || session.getPipelineState().getStage() == null
+                        ? null
+                        : session.getPipelineState().getStage().name(),
+                session.getPipelineState() == null || session.getPipelineState().getStatus() == null
+                        ? null
+                        : session.getPipelineState().getStatus().name(),
+                session.getPipelineState() == null
+                        ? null
+                        : session.getPipelineState().getMessage(),
                 walletStatuses
         );
     }
@@ -209,6 +218,9 @@ public class SessionQueryService {
             Integer overallProgressPct,
             Integer totalTargets,
             Integer completedTargets,
+            String pipelineStage,
+            String pipelineStatus,
+            String pipelineMessage,
             List<WalletBackfillStatusView> wallets
     ) {
     }

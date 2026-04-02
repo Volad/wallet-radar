@@ -1,8 +1,8 @@
 # ADR-001: Refactor On-Chain Classification into Orchestrator, Protocol Semantics, and Family Classifiers
 
-Status: Proposed
+Status: Accepted
 Date: 2026-03-28
-Owners: Architecture proposal only, not yet accepted for implementation
+Owners: Accepted architecture, implemented baseline-safe on 2026-03-31
 
 ## Context
 
@@ -36,8 +36,9 @@ Adopt a future strangler refactor of the on-chain classification layer with thre
 2. Protocol-specific semantics move into protocol semantic classifiers.
 3. Final normalized type selection moves into family classifiers.
 
-This ADR is a proposal for future implementation. It does not authorize a big-bang rewrite.
-Implementation must be incremental and golden-master guarded.
+This ADR is accepted and implemented. The migration was executed incrementally,
+kept under row-level baseline verification, and completed without approved
+semantic drift.
 
 ## Target Architecture
 
@@ -122,6 +123,7 @@ Family classifiers own normalized type selection at the accounting family level.
 
 Planned families:
 
+- `SpamClassifier`
 - `NonEconomicClassifier`
 - `SwapClassifier`
 - `BridgeClassifier`
@@ -135,16 +137,17 @@ Planned families:
 
 Recommended chain order:
 
-1. `NonEconomicClassifier`
-2. `TradingClassifier`
-3. `LpClassifier`
-4. `LendingClassifier`
-5. `VaultClassifier`
-6. `StakingClassifier`
-7. `BridgeClassifier`
-8. `SwapClassifier`
-9. `TransferClassifier`
-10. `DefaultClassifier`
+1. `SpamClassifier`
+2. `NonEconomicClassifier`
+3. `TradingClassifier`
+4. `LpClassifier`
+5. `LendingClassifier`
+6. `VaultClassifier`
+7. `StakingClassifier`
+8. `BridgeClassifier`
+9. `SwapClassifier`
+10. `TransferClassifier`
+11. `DefaultClassifier`
 
 Rationale:
 
@@ -169,6 +172,7 @@ com.walletradar.ingestion.pipeline.classification.reason
 
 com.walletradar.ingestion.pipeline.classification.onchain.family
   OnChainFamilyClassifier
+  SpamClassifier
   NonEconomicClassifier
   SwapClassifier
   BridgeClassifier
@@ -272,18 +276,24 @@ Recommended family ownership:
   - `INTERNAL_TRANSFER` only if still needed in canonical on-chain scope
   - optionally `REWARD_CLAIM`
 
+- `SpamClassifier`
+  - `SPAM`
+
 - `NonEconomicClassifier`
   - `APPROVE`
-  - `ADMIN_CONFIG`
   - failed or non-economic stop conditions
-  - spam or phishing sink to `UNKNOWN` with explicit reason code
+  - `ADMIN_CONFIG` and similar administrative shapes remain reason codes,
+    not normalized types
 
 - `DefaultClassifier`
   - `UNKNOWN`
 
 ### Important Scope Notes
 
-- `ADMIN_CONFIG` must not be grouped under spam semantics.
+- `SPAM` is a dedicated sink type and must not be collapsed into generic
+  `UNKNOWN` when the protocol/family evidence already proves spam semantics.
+- `ADMIN_CONFIG` must not be grouped under spam semantics and must remain a
+  reason code, not a normalized type.
 - `PROTOCOL_CUSTODY_*` must not be lost between lending and transfer families.
 - `VAULT_*` should remain separate from lending unless a future accepted ADR explicitly merges them.
 - `REWARD_CLAIM` may stay inside `TransferClassifier` for pragmatism, but a future `IncomeClassifier` would be semantically cleaner.
@@ -341,6 +351,55 @@ Those belong in protocol-specific support code or protocol-local resources such 
 - `resources/protocols/gmx-v2.json`
 - `resources/protocols/cow.json`
 - `resources/protocols/euler.json`
+
+Protocol-local resources are the preferred place for:
+
+- protocol selector maps
+- event topic hashes
+- protocol-specific ABI fragments
+- protocol lifecycle states
+- clarification lookup hints
+
+The global registry remains coarse-grained discovery metadata only.
+
+## Normalization Rule Documentation
+
+Classification and clarification rules must be documented explicitly outside
+implementation code.
+
+Required documentation set:
+
+- one family rule document per family classifier
+- one protocol rule document per protocol-owned lifecycle
+
+Recommended layout:
+
+- `docs/normalization/families/spam.md`
+- `docs/normalization/families/non-economic.md`
+- `docs/normalization/families/swap.md`
+- `docs/normalization/families/bridge.md`
+- `docs/normalization/families/lp.md`
+- `docs/normalization/families/lending.md`
+- `docs/normalization/families/vault.md`
+- `docs/normalization/families/staking.md`
+- `docs/normalization/families/trading.md`
+- `docs/normalization/families/transfer.md`
+- `docs/normalization/families/default.md`
+- `docs/normalization/protocols/gmx-v2.md`
+- `docs/normalization/protocols/cow-swap.md`
+- `docs/normalization/protocols/euler.md`
+- `docs/normalization/protocols/aave.md`
+- `docs/normalization/protocols/uniswap.md`
+
+Each rule document should define:
+
+- protocol or family scope
+- authoritative evidence sources from `RawTransactionView`
+- required clarification evidence
+- normalized types it may emit
+- disallowed fallbacks
+- correlation and `matchedCounterparty` rules
+- regression fixtures and production invariants
 
 ## Missing Data Reasons and Clarification
 
@@ -418,16 +477,17 @@ Implementation phases:
 
 Recommended extraction order:
 
-1. `NonEconomicClassifier`
-2. `SwapClassifier`
-3. `BridgeClassifier`
-4. `LpClassifier`
-5. `LendingClassifier`
-6. `VaultClassifier`
-7. `StakingClassifier`
-8. `TradingClassifier`
-9. `TransferClassifier`
-10. `DefaultClassifier`
+1. `SpamClassifier`
+2. `NonEconomicClassifier`
+3. `SwapClassifier`
+4. `BridgeClassifier`
+5. `LpClassifier`
+6. `LendingClassifier`
+7. `VaultClassifier`
+8. `StakingClassifier`
+9. `TradingClassifier`
+10. `TransferClassifier`
+11. `DefaultClassifier`
 
 ## Regression Safety Requirements
 
@@ -436,9 +496,13 @@ This refactor must not change classification output silently.
 Required validation:
 
 - golden-master regression over the full production raw corpus
+- full row-level golden snapshot over the full normalized corpus
 - equality checks for:
+  - normalized `_id`
+  - tx hash identity
   - `type`
   - `status`
+  - clarification flags
   - `flows`
   - `missingDataReasons`
   - `correlationId`
@@ -446,6 +510,9 @@ Required validation:
   - `protocolName`
   - `protocolVersion`
   - `excludedFromAccounting`
+
+Aggregate counts are necessary but not sufficient. Phase gates must fail when
+count-level parity hides row-level drift in concrete transaction classification.
 - protocol-focused fixture coverage for:
   - GMX pool lifecycle
   - GMX derivative lifecycle
@@ -511,3 +578,7 @@ If this ADR is accepted in the future, the next step should be a separate execut
 - a golden-master harness task
 - phase-by-phase extraction tasks
 - parity checkpoints after every family extraction
+
+Current implementation-plan companion:
+
+- [docs/tasks/55-adr001-classification-clarification-strangler-migration-plan.md](../tasks/55-adr001-classification-clarification-strangler-migration-plan.md)

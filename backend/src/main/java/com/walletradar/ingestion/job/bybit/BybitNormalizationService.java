@@ -12,6 +12,7 @@ import com.walletradar.ingestion.pipeline.bybit.BybitCanonicalTransactionBuilder
 import com.walletradar.ingestion.pipeline.bybit.BybitTradePairer;
 import com.walletradar.ingestion.pipeline.bybit.PendingExternalLedgerRowQueryService;
 import com.walletradar.ingestion.store.IdempotentNormalizedTransactionStore;
+import com.walletradar.ingestion.wallet.query.TrackedWalletLookupService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -30,6 +31,8 @@ import java.util.Optional;
 @Slf4j
 public class BybitNormalizationService {
 
+    private static final String EXTERNAL_CUSTODY_EXCLUSION_REASON = "EXTERNAL_CUSTODY_UNTRACKED_VENUE";
+
     private final PendingExternalLedgerRowQueryService pendingExternalLedgerRowQueryService;
     private final ExternalLedgerRawRepository externalLedgerRawRepository;
     private final BybitTradePairer bybitTradePairer;
@@ -37,13 +40,17 @@ public class BybitNormalizationService {
     private final IdempotentNormalizedTransactionStore normalizedTransactionStore;
     private final NormalizedTransactionRepository normalizedTransactionRepository;
     private final RawTransactionRepository rawTransactionRepository;
+    private final TrackedWalletLookupService trackedWalletLookupService;
 
     public int processNextBatch(int batchSize) {
         List<ExternalLedgerRaw> batch = pendingExternalLedgerRowQueryService.loadNextBatch(batchSize);
+        if (batch.isEmpty()) {
+            batch = pendingExternalLedgerRowQueryService.loadNextBridgeRematchBatch(batchSize);
+        }
         int processed = 0;
         for (ExternalLedgerRaw candidate : batch) {
             Optional<ExternalLedgerRaw> current = externalLedgerRawRepository.findById(candidate.getId());
-            if (current.isEmpty() || current.orElseThrow().getStatus() != ExternalLedgerRawStatus.RAW) {
+            if (current.isEmpty() || !isProcessable(current.orElseThrow())) {
                 continue;
             }
             if (normalize(current.orElseThrow(), Instant.now())) {
@@ -51,6 +58,16 @@ public class BybitNormalizationService {
             }
         }
         return processed;
+    }
+
+    private boolean isProcessable(ExternalLedgerRaw row) {
+        if (row.getStatus() == ExternalLedgerRawStatus.RAW) {
+            return true;
+        }
+        return row.getStatus() == ExternalLedgerRawStatus.CONFIRMED
+                && "withdraw_deposit".equals(normalize(row.getSourceFileType()))
+                && row.getOnChainCorrelation() != null
+                && "unmatched".equals(normalize(row.getOnChainCorrelation().getStatus()));
     }
 
     boolean normalize(ExternalLedgerRaw row, Instant now) {
@@ -179,6 +196,10 @@ public class BybitNormalizationService {
                 NormalizedTransactionSource.ON_CHAIN
         );
         if (rawMatches.isEmpty() || normalizedMatches.isEmpty()) {
+            if (isExternalCustodyCandidate(row)) {
+                markExternalCustody(row, bybitTransaction, now);
+                return;
+            }
             ensureCorrelation(row).setStatus("UNMATCHED");
             bybitTransaction.getMissingDataReasons().add("BRIDGE_ON_CHAIN_LEG_NOT_FOUND");
             return;
@@ -226,6 +247,25 @@ public class BybitNormalizationService {
 
     private String correlationId(ExternalLedgerRaw row) {
         return "BYBIT:" + row.getNetworkId().name() + ":" + row.getTxHash().toLowerCase(Locale.ROOT);
+    }
+
+    private boolean isExternalCustodyCandidate(ExternalLedgerRaw row) {
+        if (row == null || row.getReceivedAddress() == null || row.getReceivedAddress().isBlank()) {
+            return false;
+        }
+        return !trackedWalletLookupService.contains(row.getReceivedAddress());
+    }
+
+    private void markExternalCustody(
+            ExternalLedgerRaw row,
+            NormalizedTransaction bybitTransaction,
+            Instant now
+    ) {
+        ExternalLedgerRaw.OnChainCorrelation correlation = ensureCorrelation(row);
+        correlation.setStatus("EXTERNAL_CUSTODY");
+        correlation.setCorrelationId(null);
+        correlation.setMatchedDocId(null);
+        builder.markExternalCustodyExcluded(bybitTransaction, now, EXTERNAL_CUSTODY_EXCLUSION_REASON);
     }
 
     private String normalize(String value) {

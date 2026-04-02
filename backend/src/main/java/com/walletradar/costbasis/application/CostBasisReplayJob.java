@@ -1,20 +1,23 @@
 package com.walletradar.costbasis.application;
 
+import com.walletradar.domain.event.PricingCompletedEvent;
+import com.walletradar.domain.session.UserSession;
 import com.walletradar.costbasis.domain.AssetPositionRepository;
 import com.walletradar.ingestion.job.support.StageExecutionLogSupport;
 import com.walletradar.pricing.application.PricingDataGateService;
 import com.walletradar.pricing.application.PricingDataGateSnapshot;
+import com.walletradar.session.application.SessionPipelineStateService;
 import com.walletradar.telemetry.PipelineTelemetrySnapshot;
 import com.walletradar.telemetry.PipelineTelemetrySnapshotService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Scheduled driver for stat validation and deterministic AVCO replay.
+ * Event-driven driver for stat validation and deterministic AVCO replay.
  */
 @Component
 @RequiredArgsConstructor
@@ -32,20 +35,21 @@ public class CostBasisReplayJob {
     private final AvcoReplayService avcoReplayService;
     private final AssetPositionRepository assetPositionRepository;
     private final PipelineTelemetrySnapshotService pipelineTelemetrySnapshotService;
-
-    @Scheduled(fixedDelayString = "${walletradar.costbasis.schedule-interval-ms:120000}")
-    public void runScheduled() {
-        if (!properties.isEnabled()) {
-            return;
-        }
-        runReplay("scheduled", false);
-    }
+    private final SessionPipelineStateService sessionPipelineStateService;
 
     public int runReplay() {
-        return runReplay("manual", true);
+        return runReplay("manual", null, true);
     }
 
-    private int runReplay(String trigger, boolean forceReplay) {
+    @EventListener
+    public void onPricingCompleted(PricingCompletedEvent event) {
+        if (!properties.isEnabled() || event == null) {
+            return;
+        }
+        runReplay("pricing-completed", event.sessionId(), true);
+    }
+
+    private int runReplay(String trigger, String sessionId, boolean forceReplay) {
         if (!running.compareAndSet(false, true)) {
             log.debug("CostBasisReplayJob skipped: already running, trigger={}", trigger);
             return 0;
@@ -55,6 +59,11 @@ public class CostBasisReplayJob {
         int replayed = 0;
         long startedAtNanos = StageExecutionLogSupport.logStart(log, STAGE_NAME, trigger);
         try {
+            sessionPipelineStateService.markStageRunning(
+                    sessionId,
+                    UserSession.PipelineStage.ACCOUNTING_REPLAY,
+                    "Accounting replay running"
+            );
             int promoted = 0;
             int demoted = 0;
             while (true) {
@@ -85,6 +94,11 @@ public class CostBasisReplayJob {
                 );
                 logStatOutcome(promoted, demoted, statProcessed);
                 logSnapshot();
+                sessionPipelineStateService.markStageComplete(
+                        sessionId,
+                        UserSession.PipelineStage.ACCOUNTING_REPLAY,
+                        "Accounting replay complete"
+                );
                 return 0;
             }
 
@@ -97,7 +111,19 @@ public class CostBasisReplayJob {
 
             logStatOutcome(promoted, demoted, statProcessed);
             logSnapshot();
+            sessionPipelineStateService.markStageComplete(
+                    sessionId,
+                    UserSession.PipelineStage.ACCOUNTING_REPLAY,
+                    "Accounting replay complete"
+            );
             return replayed;
+        } catch (RuntimeException error) {
+            sessionPipelineStateService.markStageFailed(
+                    sessionId,
+                    UserSession.PipelineStage.ACCOUNTING_REPLAY,
+                    error.getMessage()
+            );
+            throw error;
         } finally {
             StageExecutionLogSupport.logFinish(log, STAGE_NAME, trigger, statProcessed + replayed, startedAtNanos);
             running.set(false);

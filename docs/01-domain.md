@@ -384,31 +384,32 @@ Mongo.
 - Registry entries may declare `decomposeByLegs=true` together with `specialHandler`
   when one contract can produce multiple canonical outcomes depending on `methodId`,
   `functionName`, and extracted legs.
-- For the current v3 milestone, a `SpecialHandler` must return exactly one canonical
-  result for one raw transaction so the `1 tx = 1 doc` invariant stays intact.
-- If a special handler does not support the observed method/function combination, the
-  classifier must emit `UNKNOWN`, set `status=NEEDS_REVIEW`, and add
-  `HANDLER_UNSUPPORTED_METHOD`.
+- For the current v3 milestone, a `specialHandler` registry flag is only a
+  discovery/runtime-routing hint. The canonical flow is:
+  `registry entry -> protocol semantic hint(s) -> family-owned final type`.
+- If a special-handler entry does not support the observed method/function
+  combination, the classifier must emit `UNKNOWN`, set `status=NEEDS_REVIEW`,
+  and add `HANDLER_UNSUPPORTED_METHOD`.
 
-Conceptual handler contract:
+Conceptual semantic-routing contract:
 
 ```text
-SpecialHandler.classify(
-  ProtocolRegistryEntry entry,
-  RawTransactionNormalizationView view,
-  List<RawLeg> legs
-) -> SpecialHandlerResult
+ProtocolSemanticClassifier.classify(
+  ProtocolSemanticContext(view, discovery, legs)
+) -> ProtocolSemanticHint[]
 
-SpecialHandlerResult {
-  type
-  flows[]
+ProtocolSemanticHint {
+  protocolKey
+  semanticType
+  protocolName
+  protocolVersion
+  correlationId?
+  suggestedType
   confidence
-  status
-  missingDataReasons[]
 }
 ```
 
-Handler rules:
+Routing rules:
 
 - deterministic and side-effect free
 - no RPC access
@@ -510,7 +511,7 @@ LP extensions for concentrated-liquidity (CL) protocols:
 | INV-09 | Production classification may use only evidence that exists in `raw_transactions` at backfill time or receipt-safe clarification time; explorer summary text is never canonical evidence. |
 | INV-10 | Manual compensating idempotency key is `clientId` (unique when provided). |
 | INV-11 | GET endpoints must be snapshot/data-store based (no RPC in request path). |
-| INV-12 | Protocol-registry special handlers are pure deterministic functions over raw view + extracted legs and return exactly one canonical result or `NEEDS_REVIEW`. |
+| INV-12 | Protocol-registry special-handler entries resolve through deterministic protocol semantics plus family-owned final mapping; unsupported methods become `UNKNOWN -> NEEDS_REVIEW`. |
 
 ---
 

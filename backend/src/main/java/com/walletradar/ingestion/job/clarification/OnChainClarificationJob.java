@@ -1,11 +1,15 @@
 package com.walletradar.ingestion.job.clarification;
 
+import com.walletradar.domain.event.OnChainClarificationCompletedEvent;
 import com.walletradar.domain.event.OnChainNormalizationCompletedEvent;
+import com.walletradar.domain.session.UserSession;
 import com.walletradar.ingestion.config.OnChainClarificationProperties;
 import com.walletradar.ingestion.job.support.StageExecutionLogSupport;
+import com.walletradar.session.application.SessionPipelineStateService;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
@@ -26,20 +30,24 @@ public class OnChainClarificationJob {
     private final OnChainClarificationProperties properties;
     private final OnChainClarificationService onChainClarificationService;
     private final OnChainReceiptClarificationService onChainReceiptClarificationService;
+    private final ClarificationBatchDrainer clarificationBatchDrainer;
+    private final ClarificationPostProcessingHandler clarificationPostProcessingHandler;
+    private final ApplicationEventPublisher applicationEventPublisher;
+    private final SessionPipelineStateService sessionPipelineStateService;
 
     public int runClarification() {
-        return runClarification("manual");
+        return runClarification("manual", null, false);
     }
 
     @EventListener
     public void onOnChainNormalizationCompleted(OnChainNormalizationCompletedEvent event) {
-        if (!properties.isEnabled() || event == null || event.processed() <= 0) {
+        if (!properties.isEnabled() || event == null) {
             return;
         }
-        runClarification("normalization-completed");
+        runClarification("normalization-completed", event.sessionId(), true);
     }
 
-    private int runClarification(String trigger) {
+    private int runClarification(String trigger, String sessionId, boolean publishWhenEmpty) {
         if (!running.compareAndSet(false, true)) {
             log.debug("OnChainClarificationJob skipped: already running, trigger={}", trigger);
             return 0;
@@ -48,36 +56,40 @@ public class OnChainClarificationJob {
         int processed = 0;
         long startedAtNanos = StageExecutionLogSupport.logStart(log, STAGE_NAME, trigger);
         try {
-            processed += drainMetadataClarification();
+            sessionPipelineStateService.markStageRunning(
+                    sessionId,
+                    UserSession.PipelineStage.ON_CHAIN_CLARIFICATION,
+                    "On-chain clarification running"
+            );
+            processed += clarificationBatchDrainer.drain(onChainClarificationService::processNextBatch);
             if (properties.getFullReceipt().isEnabled()) {
-                processed += drainFullReceiptClarification();
+                processed += clarificationBatchDrainer.drain(onChainReceiptClarificationService::processNextBatch);
             }
+            processed += clarificationPostProcessingHandler.reconcileBridgePairs(Math.max(500, properties.getBatchSize()));
+            sessionPipelineStateService.markStageComplete(
+                    sessionId,
+                    UserSession.PipelineStage.ON_CHAIN_CLARIFICATION,
+                    "On-chain clarification complete"
+            );
+            publishCompletionEvent(sessionId, processed, trigger, publishWhenEmpty);
             return processed;
+        } catch (RuntimeException error) {
+            sessionPipelineStateService.markStageFailed(
+                    sessionId,
+                    UserSession.PipelineStage.ON_CHAIN_CLARIFICATION,
+                    error.getMessage()
+            );
+            throw error;
         } finally {
             StageExecutionLogSupport.logFinish(log, STAGE_NAME, trigger, processed, startedAtNanos);
             running.set(false);
         }
     }
 
-    private int drainMetadataClarification() {
-        int processed = 0;
-        while (true) {
-            int batchProcessed = onChainClarificationService.processNextBatch();
-            processed += batchProcessed;
-            if (batchProcessed == 0) {
-                return processed;
-            }
+    private void publishCompletionEvent(String sessionId, int processed, String trigger, boolean publishWhenEmpty) {
+        if (processed <= 0 && !publishWhenEmpty) {
+            return;
         }
-    }
-
-    private int drainFullReceiptClarification() {
-        int processed = 0;
-        while (true) {
-            int batchProcessed = onChainReceiptClarificationService.processNextBatch();
-            processed += batchProcessed;
-            if (batchProcessed == 0) {
-                return processed;
-            }
-        }
+        applicationEventPublisher.publishEvent(new OnChainClarificationCompletedEvent(sessionId, processed, trigger));
     }
 }
