@@ -57,6 +57,9 @@ walletradar:
           etherscan:
             base-url: https://api.etherscan.io
             api-key: ${ETHEREUM_ETHERSCAN_API_KEY:}
+        provider:
+          enabled: true
+          base-url: https://rpc.ankr.com/multichain/${ANKR_API_KEY:}
         urls:
           - https://rpc.ankr.com/eth/${ANKR_API_KEY:}
           - https://lb.drpc.live/ethereum/${DRPC_API_KEY:}
@@ -72,6 +75,9 @@ walletradar:
           etherscan:
             base-url: https://api.arbiscan.io
             api-key: ${ARBITRUM_ETHERSCAN_API_KEY:}
+        provider:
+          enabled: true
+          base-url: https://rpc.ankr.com/multichain/${ANKR_API_KEY:}
         urls:
           - https://arb1.arbitrum.io/rpc
           - https://rpc.sentio.xyz/arbitrum-one
@@ -91,6 +97,9 @@ walletradar:
           blockscout:
             base-url: https://explorer.optimism.io
             api-key: ${OPTIMISM_BLOCKSCOUT_API_KEY:}
+        provider:
+          enabled: true
+          base-url: https://rpc.ankr.com/multichain/${ANKR_API_KEY:}
         urls:
           - https://rpc.ankr.com/optimism/${ANKR_API_KEY:}
           - https://lb.drpc.live/optimism/${DRPC_API_KEY:}
@@ -106,6 +115,9 @@ walletradar:
           etherscan:
             base-url: https://api.polygonscan.com
             api-key: ${POLYGON_ETHERSCAN_API_KEY:}
+        provider:
+          enabled: true
+          base-url: https://rpc.ankr.com/multichain/${ANKR_API_KEY:}
         urls:
           - https://rpc.ankr.com/polygon/${ANKR_API_KEY:}
           - https://lb.drpc.live/polygon/${DRPC_API_KEY:}
@@ -121,6 +133,9 @@ walletradar:
           blockscout:
             base-url: https://base.blockscout.com
             api-key: ${BASE_BLOCKSCOUT_API_KEY:}
+        provider:
+          enabled: true
+          base-url: https://rpc.ankr.com/multichain/${ANKR_API_KEY:}
         urls:
           - https://rpc.ankr.com/base/${ANKR_API_KEY:}
           - https://lb.drpc.live/base/${DRPC_API_KEY:}
@@ -150,6 +165,9 @@ walletradar:
           etherscan:
             base-url: https://api.routescan.io/v2/network/mainnet/evm/43114/etherscan
             api-key: ${AVALANCHE_ETHERSCAN_API_KEY:}
+        provider:
+          enabled: true
+          base-url: https://rpc.ankr.com/multichain/${ANKR_API_KEY:}
         urls:
           - https://rpc.ankr.com/avalanche/${ANKR_API_KEY:}
           - https://lb.drpc.live/avalanche/${DRPC_API_KEY:}
@@ -179,6 +197,9 @@ walletradar:
           etherscan:
             base-url: https://api.etherscan.io
             api-key: ${LINEA_ETHERSCAN_API_KEY:}
+        provider:
+          enabled: true
+          base-url: https://rpc.ankr.com/multichain/${ANKR_API_KEY:}
         urls:
           - https://rpc.linea.build
           - https://linea-rpc.publicnode.com
@@ -280,7 +301,7 @@ walletradar:
         forward-block-window: 750000
         max-pages: 3
 
-  costbasis:
+  zbasis:
     enabled: true
     validation-batch-size: 250
     schedule-interval-ms: 120000

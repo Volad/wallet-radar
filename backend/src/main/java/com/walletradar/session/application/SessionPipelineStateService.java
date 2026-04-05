@@ -24,6 +24,10 @@ public class SessionPipelineStateService {
         update(sessionId, stage, UserSession.PipelineStatus.COMPLETE, message);
     }
 
+    public void markStageBlocked(String sessionId, UserSession.PipelineStage stage, String message) {
+        update(sessionId, stage, UserSession.PipelineStatus.BLOCKED, message);
+    }
+
     public void markStageFailed(String sessionId, UserSession.PipelineStage stage, String message) {
         update(sessionId, stage, UserSession.PipelineStatus.FAILED, message);
     }

@@ -14,6 +14,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
+import java.time.Instant;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -33,6 +34,9 @@ public class CostBasisReplayJob {
     private final PendingStatQueryService pendingStatQueryService;
     private final StatValidationService statValidationService;
     private final AvcoReplayService avcoReplayService;
+    private final OnChainBalanceRefreshService onChainBalanceRefreshService;
+    private final AssetPositionReconciliationService assetPositionReconciliationService;
+    private final ReconciledHoldingsMaterializationService reconciledHoldingsMaterializationService;
     private final AssetPositionRepository assetPositionRepository;
     private final PipelineTelemetrySnapshotService pipelineTelemetrySnapshotService;
     private final SessionPipelineStateService sessionPipelineStateService;
@@ -82,6 +86,11 @@ public class CostBasisReplayJob {
             PricingDataGateSnapshot gateSnapshot = pricingDataGateService.snapshot();
             long pendingStatCount = pendingStatQueryService.countPending();
             if (!gateSnapshot.avcoReady() || pendingStatCount > 0L) {
+                String blockedMessage = String.format(
+                        "Accounting replay blocked: active review or pending stat remains (pendingStat=%d, blockingNeedsReview=%d)",
+                        pendingStatCount,
+                        gateSnapshot.needsReviewCount()
+                );
                 log.info(
                         "Costbasis replay gate blocked: avcoReady={}, pendingStat={}, pendingPrice={}, pendingClarification={}, blockingNeedsReview={}, excludedNeedsReview={}, unresolvedPrice={}",
                         gateSnapshot.avcoReady(),
@@ -94,10 +103,10 @@ public class CostBasisReplayJob {
                 );
                 logStatOutcome(promoted, demoted, statProcessed);
                 logSnapshot();
-                sessionPipelineStateService.markStageComplete(
+                sessionPipelineStateService.markStageBlocked(
                         sessionId,
                         UserSession.PipelineStage.ACCOUNTING_REPLAY,
-                        "Accounting replay complete"
+                        blockedMessage
                 );
                 return 0;
             }
@@ -108,6 +117,15 @@ public class CostBasisReplayJob {
             } else {
                 log.info("Costbasis replay skipped: no pending stat rows and asset_positions already materialized");
             }
+            Instant evidenceCapturedAt = Instant.now();
+            int refreshedBalances = onChainBalanceRefreshService.refreshCurrentBalances(evidenceCapturedAt);
+            assetPositionReconciliationService.reconcile(evidenceCapturedAt);
+            int reconciledHoldings = reconciledHoldingsMaterializationService.materialize(evidenceCapturedAt);
+            log.info(
+                    "Costbasis on-chain balance refresh outcome: refreshed={}, reconciledHoldings={}",
+                    refreshedBalances,
+                    reconciledHoldings
+            );
 
             logStatOutcome(promoted, demoted, statProcessed);
             logSnapshot();

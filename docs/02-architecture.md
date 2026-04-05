@@ -1,7 +1,7 @@
 # WalletRadar — Architecture
 
 > **Version:** SAD v3 target summary
-> **Last updated:** 2026-03-29
+> **Last updated:** 2026-04-03
 > **Style:** Modular monolith (Spring Boot)
 
 This document is the concise architecture summary for the v3 accounting rewrite.
@@ -378,6 +378,10 @@ Important accounting note:
 - Binance is the primary external market-data source for pricing, but not the
   primary overall pricing source; tx-local execution semantics win whenever the
   canonical row already proves them.
+- Bybit historical market data is preferred before Binance when tx-local
+  execution evidence is absent.
+- Euro-backed stablecoins such as `EURC` should prefer official `ECB` EUR/USD
+  FX data before exchange-market fallbacks.
 - CoinGecko remains limited fallback coverage and must not be the only assumed
   path for long-tail two-year DeFi pricing.
 - Bybit ledger data is not required to price on-chain rows themselves, but it
@@ -400,6 +404,20 @@ Important accounting note:
 - Matched Bybit deposit/withdraw plus on-chain bridge/custody legs use
   continuity pricing rules and may not create duplicated principal pricing on
   both sides.
+- Replay continuity is family-aware for audited custody-equivalent wrappers.
+  The current audited family includes `ETH`, network `WETH`, `Aave WETH`
+  receipt wrappers, and `vbETH`, so `Bybit ETH -> on-chain WETH -> aManWETH`
+  moves basis without synthetic disposal or reacquisition.
+- `zkSync` Aave gateway selectors are a narrow method-aware exception owned by
+  normalization, not by replay:
+  - `0x80500d20` `withdrawETH(...)` -> `LENDING_WITHDRAW`
+  - `0x02c205f0` `supplyWithPermit(...)` -> `LENDING_DEPOSIT`
+  - `0x474cf53d` `depositETH(...)` -> `LENDING_DEPOSIT`
+  The override must also prove the expected `ETH/WETH/aZksWETH`
+  wallet-boundary shape before generic unwrap / LP / heuristic lanes run.
+- Exchange-side `fund_asset_changes` withdrawal shadow rows that duplicate a
+  matched chain-aware `withdraw_deposit` leg remain persisted for audit, but
+  they are excluded from accounting and pricing lanes.
 - Basis-relevant Bybit inbound families may not silently normalize into
   `UNKNOWN / CONFIRMED`:
   - raw `fund_asset_changes` rows with inbound canonical semantics must
@@ -648,7 +666,13 @@ Important accounting note:
 - `normalized_transactions`
   Canonical accounting stream for both on-chain and Bybit sources.
 - `asset_positions`
-  Materialized replay state and reconciliation flags.
+  Materialized internal replay state and reconciliation flags.
+- `on_chain_balances`
+  Latest observed current-balance evidence produced by the bounded post-replay
+  refresh pass and used by reconciliation.
+- `reconciled_holdings`
+  Bounded read model that joins current on-chain balance evidence with replayed
+  basis fields for user-facing holdings and operator audits.
 
 ---
 
@@ -658,6 +682,15 @@ Important accounting note:
 - Raw collections are source evidence; canonical accounting consumes normalized documents only.
 - `backend/src/main/resources/protocol-registry.json` is the only authoritative protocol-registry source for runtime classification.
 - Tx-level native value must never be reconstructed from token transfer-row amounts.
+- Tx-level native value must not duplicate a wallet-boundary movement already
+  proven by an audited native-token alias transfer on the same network.
+- On native-alias networks, an alias transfer that exactly equals the audited
+  tx gas fee and targets the audited system fee sink must be materialized once
+  as fee evidence; normalization must not emit both that transfer and a second
+  explicit fee leg.
+- On `zkSync`, wallet `<-> 0x0000000000000000000000000000000000008001`
+  native-alias movements are fee lifecycle evidence, including refunds. They
+  must be netted out of principal movement extraction for fee-paying wallets.
 - `KATANA` and `PLASMA` are supported EVM networks in the v3 accounting layer.
 - WETH aliasing happens at replay time only.
 - Basis continuity applies to:
@@ -668,6 +701,75 @@ Important accounting note:
   - correlated Bybit <-> on-chain custody movements
 - LP receipt markers (`LP token`, `BPT`, position NFT) are continuity markers
   only and must not open independent basis lines during replay.
+- Continuity replay must be chronology-safe:
+  - inbound same-universe transfer quantity becomes immediately available when
+    the inbound row is encountered
+  - if the matched source carry arrives later in ordered replay, it attaches
+    basis to the already-materialized destination position
+  - late source carry must not create quantity a second time
+- `asset_positions` must not be treated as the final user-facing holdings table
+  before reconciliation against `on_chain_balances`.
+- `on_chain_balances` refresh is bounded by tracked wallets plus the confirmed
+  on-chain canonical asset universe. It is not an unbounded wallet scanner.
+- provider-native current balances must normalize zero-address contract payloads
+  (`0x0000000000000000000000000000000000000000`) into native accounting
+  identity rather than persisting them as synthetic token contracts.
+- The replay pipeline order is:
+  - canonical replay
+  - `on_chain_balances` refresh
+  - `asset_positions` reconciliation
+  - `reconciled_holdings` materialization
+- user-facing current holdings must read from `reconciled_holdings.currentQuantity`
+  rather than from replay quantity in `asset_positions`.
+- `reconciled_holdings` may retain zero live-balance rows for operator/audit
+  visibility, but product holdings views must filter to `currentHolding = true`.
+- replay must persist quantity deficits explicitly:
+  - when an outbound replay step consumes more quantity than the current replay
+    bucket contains, that deficit must survive as `quantityShortfall`
+  - the deficit must not disappear behind floor-to-zero quantity alone
+- `reconciled_holdings` must expose conservative basis-provability fields:
+  - `basisBackedDerivedQuantity`
+  - `currentCoveredQuantity`
+  - `currentUncoveredQuantity`
+  - `currentCostBasisProvable`
+- product and audit consumers must distinguish:
+  - live current quantity
+  - current quantity that is still basis-backed
+  - current quantity that is live-positive but not yet provable from replayed
+    basis
+- `SWAP_DERIVED` pricing is allowed only when the priced canonical asset appears
+  once among non-fee swap flows. Multi-leg same-canonical swap rows must fall
+  back to safer pricing sources.
+- when a current holding still mismatches live on-chain state, repair
+  deterministic upstream normalization semantics before widening replay rules;
+  run 12 `zkSync` Aave gateway remediation follows that contract.
+- same-wallet `Across` continuity may be source-led:
+  - audited source `BRIDGE_OUT / Across` may link to a unique bounded inbound
+    row that is still typed `EXTERNAL_TRANSFER_IN`
+  - source-side `BRIDGE_OUT / Across` typing may rely on stored calldata route
+    parameters plus wallet-boundary funding when explorer transfer lists do not
+    retain intermediate helper / settlement hops
+  - when linked, that inbound row may be promoted to `BRIDGE_IN` and receive
+    `correlationId`, `matchedCounterparty`, and `continuityCandidate`
+  - bounded matching must remain wallet-equal, cross-network, quantity-close,
+    and time-windowed
+- hash-specific stop-conditions are allowed only for rows whose wallet-boundary
+  principal meaning is still genuinely unverified; once current raw evidence
+  proves deterministic outbound principal movement, normalization must preserve
+  that movement through an explicit canonical fallback rather than suppress it
+  behind `UNKNOWN`.
+- replay gate stops are not successful completion:
+  - if active `NEEDS_REVIEW` or pending stat rows still block replay, session
+    state must persist as `ACCOUNTING_REPLAY / BLOCKED`
+  - `COMPLETE` is reserved for paths that actually reached replay and
+    post-replay materialization
+- stale `ACCOUNTING_REPLAY / RUNNING` state may be healed only by the resume
+  watchdog and only when:
+  - the session has no pending upstream work
+  - `asset_positions`, `on_chain_balances`, and `reconciled_holdings` already
+    exist
+  - replay is currently a global derived-state lane and no stronger
+    `sessionId`-scoped completion evidence exists yet
 
 ---
 
@@ -675,8 +777,10 @@ Important accounting note:
 
 Deferred until after v3 core is stable:
 
-- current-balance polling
 - portfolio snapshots
+- user-facing holdings and portfolio APIs on top of `reconciled_holdings`
+- unmatched live-balance discrepancy model
+- Solana balance refresh
 - broader transaction history projections
 - extra CEX connectors
 - microservice extraction

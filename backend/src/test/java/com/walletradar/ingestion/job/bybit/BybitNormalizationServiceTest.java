@@ -401,7 +401,7 @@ class BybitNormalizationServiceTest {
 
         when(pendingExternalLedgerRowQueryService.loadNextBatch(10)).thenReturn(List.of(shadow));
         when(externalLedgerRawRepository.findById(shadow.getId())).thenReturn(Optional.of(shadow));
-        when(bybitTransferShadowPairer.findChainAwareWithdrawalSibling(shadow)).thenReturn(Optional.of(sibling));
+        when(bybitTransferShadowPairer.findChainAwareTransferSibling(shadow)).thenReturn(Optional.of(sibling));
 
         BybitNormalizationService service = service();
         int processed = service.processNextBatch(10);
@@ -413,9 +413,47 @@ class BybitNormalizationServiceTest {
         assertThat(saved.getType()).isEqualTo(NormalizedTransactionType.EXTERNAL_TRANSFER_OUT);
         assertThat(saved.getStatus()).isEqualTo(NormalizedTransactionStatus.NEEDS_REVIEW);
         assertThat(saved.getExcludedFromAccounting()).isTrue();
-        assertThat(saved.getAccountingExclusionReason()).isEqualTo("BYBIT_WITHDRAWAL_SHADOW_ROW");
+        assertThat(saved.getAccountingExclusionReason()).isEqualTo("BYBIT_TRANSFER_SHADOW_ROW");
         assertThat(saved.getCorrelationId()).isNull();
         assertThat(saved.getContinuityCandidate()).isFalse();
+        assertThat(saved.getFlows()).extracting(NormalizedTransaction.Flow::getRole)
+                .containsExactly(NormalizedLegRole.TRANSFER);
+    }
+
+    @Test
+    void fundAssetDepositShadowRowIsExcludedWhenChainAwareSiblingExists() {
+        ExternalLedgerRaw shadow = new ExternalLedgerRaw();
+        shadow.setId("shadow-deposit-1");
+        shadow.setUid("uid-1");
+        shadow.setWalletRef("BYBIT:uid-1");
+        shadow.setSourceFileType("fund_asset_changes");
+        shadow.setBybitType("Deposit");
+        shadow.setCanonicalType("EXTERNAL_INBOUND");
+        shadow.setChain("BYBIT");
+        shadow.setStatus(ExternalLedgerRawStatus.RAW);
+        shadow.setTimeUtc(Instant.parse("2026-02-19T08:14:22Z"));
+        shadow.setAssetSymbol("ETH");
+        shadow.setQuantityRaw(new BigDecimal("0.699"));
+        shadow.setBasisRelevant(true);
+
+        ExternalLedgerRaw sibling = new ExternalLedgerRaw();
+        sibling.setId("deposit-1");
+
+        when(pendingExternalLedgerRowQueryService.loadNextBatch(10)).thenReturn(List.of(shadow));
+        when(externalLedgerRawRepository.findById(shadow.getId())).thenReturn(Optional.of(shadow));
+        when(bybitTransferShadowPairer.findChainAwareTransferSibling(shadow)).thenReturn(Optional.of(sibling));
+
+        BybitNormalizationService service = service();
+        int processed = service.processNextBatch(10);
+
+        assertThat(processed).isEqualTo(1);
+        ArgumentCaptor<NormalizedTransaction> captor = ArgumentCaptor.forClass(NormalizedTransaction.class);
+        verify(normalizedTransactionStore).upsert(captor.capture());
+        NormalizedTransaction saved = captor.getValue();
+        assertThat(saved.getType()).isEqualTo(NormalizedTransactionType.EXTERNAL_TRANSFER_IN);
+        assertThat(saved.getStatus()).isEqualTo(NormalizedTransactionStatus.NEEDS_REVIEW);
+        assertThat(saved.getExcludedFromAccounting()).isTrue();
+        assertThat(saved.getAccountingExclusionReason()).isEqualTo("BYBIT_TRANSFER_SHADOW_ROW");
         assertThat(saved.getFlows()).extracting(NormalizedTransaction.Flow::getRole)
                 .containsExactly(NormalizedLegRole.TRANSFER);
     }

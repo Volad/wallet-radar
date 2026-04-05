@@ -1,7 +1,7 @@
 # WalletRadar — Accounting Policy
 
 > **Version:** v3 target
-> **Last updated:** 2026-03-28
+> **Last updated:** 2026-04-03
 > **Accounting method:** AVCO
 
 ---
@@ -50,6 +50,9 @@ Stage preconditions before replay starts:
 
 `move basis` is part of accounting replay itself. It is not a standalone stage
 inserted between normalization and pricing.
+
+If replay stops here because the gate is still red, the session stage is
+`ACCOUNTING_REPLAY / BLOCKED`, not `COMPLETE`.
 
 Replay must be deterministic:
 
@@ -146,6 +149,17 @@ Basis continuity applies when the economic owner did not dispose of the asset:
   when the source-side `depositV3(...)` bridge start is already protocol-proven
   and the destination `BRIDGE_IN` row is the unique bounded fit under the
   current canonical evidence
+- audited same-wallet `Across` pairs may also be source-led when the source tx
+  is already `BRIDGE_OUT / Across` but the destination still normalized as
+  inbound-only `EXTERNAL_TRANSFER_IN`
+  - source-side `BRIDGE_OUT / Across` may be proven from stored calldata route
+    parameters plus wallet-boundary funding even when the saved explorer
+    transfer list contains only boundary transfers and omits intermediate helper
+    / settlement hops
+  - if the destination is the unique bounded fit, clarification may promote it
+    into `BRIDGE_IN`
+  - replay continuity then uses the promoted destination plus
+    `correlationId`, `matchedCounterparty`, and `continuityCandidate`
 - asset-changing bridge routes
   A correlated bridge route may still be objective `BRIDGE_OUT -> BRIDGE_IN`
   semantics without qualifying for plain move-basis continuity. If the source
@@ -160,6 +174,17 @@ Basis continuity applies when the economic owner did not dispose of the asset:
     instead of an economic swap
 - correlated `EXTERNAL_TRANSFER_OUT -> EXTERNAL_TRANSFER_IN`
   Basis carries only when replay confirms that both sides belong to the same accounting universe.
+- inbound-first continuity ordering
+  Replay must be chronology-safe when the destination-side continuity row is
+  encountered before the matched source-side carry row in the ordered stream.
+  - the inbound row must materialize quantity immediately so later canonical
+    outflows can consume the real current holding
+  - until source carry is attached, that inbound quantity remains explicit
+    incomplete-history inventory
+  - when the matched source carry later arrives, replay attaches basis to the
+    already-materialized destination position without minting quantity again
+  - end-of-replay synthetic quantity backfill for those inbound rows is not a
+    valid replacement for chronology-safe replay
 - `Bybit <-> external venue (for example MEXC)`
   These rows are not on-chain bridge continuity by default.
   - they may represent off-ledger custody movement between Bybit and an
@@ -191,6 +216,11 @@ Basis continuity applies when the economic owner did not dispose of the asset:
   Principal basis moves between spot balance and receipt-token/custody state without realization.
 - `VAULT_DEPOSIT -> VAULT_WITHDRAW`
   Basis moves between spot balance and vault-share/custody state without realization.
+- Matched `Bybit -> on-chain` withdrawals
+  The chain-aware `withdraw_deposit` row is the principal continuity leg. Any
+  exchange-side `fund_asset_changes` withdrawal shadow row for the same move is
+  audit-visible but excluded from accounting and must not remain an active
+  realized `SELL`.
 - Async request / execute lifecycles
   Basis may move only when the runtime can deterministically correlate the
   request-side principal with the later settlement-side execution. Request
@@ -282,6 +312,31 @@ For matched Bybit withdraw/deposit:
 
 - WETH-like wrappers are stored as-is
 - wrapper-to-native aliasing is applied only at replay/pricing time when policy allows
+- tx-level native `value` must not create a second native movement when the
+  same wallet-boundary fact is already present via an audited native-token
+  alias transfer
+- on native-alias networks, the audited alias transfer that exactly matches the
+  tx gas fee to the audited system fee sink is fee evidence, not independent
+  principal movement
+- on `zkSync`, fee-sink refund legs from
+  `0x0000000000000000000000000000000000008001` belong to the same fee
+  lifecycle and must also be excluded from principal movement before replay
+- replay may use audited accounting families for carry-only continuity even when
+  the persisted normalized asset ids remain distinct
+- the current audited `ETH` continuity family includes `ETH`, network `WETH`,
+  `aEthWETH`, `aArbWETH`, `aLinWETH`, `aManWETH`, `aZksWETH`, and `vbETH`
+- gateway-style Aave custody methods on `zkSync` remain continuity, not
+  disposal / reacquisition:
+  - `withdrawETH(...)` is `LENDING_WITHDRAW`
+  - `supplyWithPermit(...)` is `LENDING_DEPOSIT`
+  - `depositETH(...)` is `LENDING_DEPOSIT`
+- routed native sends with deterministic raw outbound principal on `zkSync`
+  must preserve that outbound principal in canonical normalization even when the
+  protocol identity is still low-confidence; they may not fall through to a
+  hash-specific `UNKNOWN` stop-condition once the movement is proven
+- audited routed `Across` sends on `zkSync` must normalize as `BRIDGE_OUT` once
+  current raw route evidence proves the helper path and same-wallet destination
+  parameters
 - `stETH`, `mETH`, `rETH`, `wstETH`, and `cbETH` remain distinct assets
 - audited bridge-family-equivalent stable wrappers may map into one canonical
   stable family for move-basis continuity even when the canonical normalized
@@ -298,17 +353,26 @@ Historical price resolution order:
 2. exact execution price from canonical source evidence
 3. swap-derived price
 4. wrapper/native mapping
-5. Binance historical market data
-6. CoinGecko historical fallback
-7. unresolved price flag
+5. ECB EUR/USD FX for euro-backed stablecoins
+6. Bybit historical market data
+7. Binance historical market data
+8. CoinGecko historical fallback
+9. unresolved price flag
 
 Implications:
 
 - pricing failure does not remove quantity from replay
 - pricing gaps must be visible as warnings or blockers
+- euro-backed stablecoins such as `EURC` may price from official ECB EUR/USD FX
+- Bybit market data may be used before Binance
 - Binance is the primary external market-data source, not the primary overall
   pricing source
 - CoinGecko is a limited fallback, not the primary pricing mechanism
+- `SWAP_DERIVED` is valid only when the priced canonical asset appears once
+  among non-fee swap flows in the same canonical row
+- if the same canonical asset appears multiple times in one `SWAP`, tx-local
+  ratio pricing must be skipped and the flow must fall back to safer pricing
+  sources instead of persisting an impossible synthetic price
 
 Transaction-type pricing contract:
 
@@ -511,6 +575,10 @@ External market-data source policy:
 
 - Binance is the preferred external source for listed assets because it offers
   free public market data and a public historical archive.
+- `EURC` and similar euro-backed stablecoins should prefer official ECB
+  EUR/USD reference data over exchange-market pricing.
+- Bybit market data may be used before Binance when it offers better coverage
+  or fresher market support for the priced asset.
 - CoinGecko remains a fallback for assets or historical windows that Binance
   cannot cover, but it must not be treated as the only viable path for a
   two-year DeFi backfill.
@@ -734,3 +802,52 @@ The replay layer must be able to produce:
 All outputs must be derivable again from the same canonical inputs with identical ordering.
 
 For continuity events, replay must move quantity and carried basis without creating realised PnL.
+
+`asset_positions` is internal replay output, not the final user-facing holdings
+projection.
+
+After replay completes, WalletRadar must refresh `on_chain_balances` from the
+bounded tracked-wallet on-chain asset universe and then reconcile replay output
+by accounting identity.
+
+Provider-native balances are still native evidence even when the upstream
+provider returns `contractAddress = 0x0000000000000000000000000000000000000000`.
+That payload must normalize into `NATIVE:<NETWORK>` before reconciliation and
+must never be persisted as an ERC-20-like contract identity.
+
+That reconciliation must populate:
+
+- `onChainQuantity`
+- `onChainCapturedAt`
+- `reconciliationStatus`
+
+Zero live balances are valid evidence and must remain persisted. Missing
+evidence is still `NOT_APPLICABLE`, not synthetic zero.
+
+After reconciliation, WalletRadar must materialize `reconciled_holdings`:
+
+- `currentQuantity` comes from `on_chain_balances`
+- basis and PnL fields come from `asset_positions`
+- `currentHolding = true` when `currentQuantity > 0`
+- zero live balances may remain persisted for audit/operator use
+- replay quantity deficits must survive into the holdings model:
+  - `quantityShortfall` is persisted on `asset_positions`
+  - `basisBackedDerivedQuantity = max(quantity - quantityShortfall, 0)`
+  - `currentCoveredQuantity = min(currentQuantity, basisBackedDerivedQuantity)`
+  - `currentUncoveredQuantity = currentQuantity - currentCoveredQuantity`
+  - `currentCostBasisProvable = currentUncoveredQuantity == 0`
+- current live accrual beyond replay-carried principal is uncovered current
+  quantity, not silently basis-backed principal
+- live-positive rows with zero carried basis must remain explicit uncovered
+  current quantity, not synthetic basis
+
+User-facing holdings and portfolio totals must be computed from
+`reconciled_holdings` filtered to `currentHolding = true`, not directly from
+`asset_positions.quantity`.
+
+For authoritative AVCO answers:
+
+- the fully provable current subtotal is the set of rows where
+  `currentCostBasisProvable = true`
+- rows with `currentUncoveredQuantity > 0` remain live-valid holdings, but
+  their full current quantity is not yet fully covered by replay-carried basis

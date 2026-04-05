@@ -67,6 +67,7 @@ public class UserSession {
 
     public enum PipelineStatus {
         RUNNING,
+        BLOCKED,
         COMPLETE,
         FAILED
     }

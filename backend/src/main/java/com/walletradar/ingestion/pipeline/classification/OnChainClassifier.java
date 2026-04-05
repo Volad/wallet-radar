@@ -37,6 +37,8 @@ import com.walletradar.ingestion.pipeline.classification.onchain.family.LpRegist
 import com.walletradar.ingestion.pipeline.classification.onchain.family.VaultClassifier;
 import com.walletradar.ingestion.pipeline.classification.onchain.family.VaultSemanticClassifier;
 import com.walletradar.ingestion.pipeline.classification.onchain.family.WrappedNativeClassifier;
+import com.walletradar.ingestion.pipeline.classification.onchain.family.ZkSyncAaveGatewayClassifier;
+import com.walletradar.ingestion.pipeline.classification.onchain.family.ZkSyncAcrossRoutedBridgeClassifier;
 import com.walletradar.ingestion.pipeline.classification.onchain.protocol.balancer.BalancerProtocolSemanticClassifier;
 import com.walletradar.ingestion.pipeline.classification.onchain.protocol.cow.CowSwapProtocolSemanticClassifier;
 import com.walletradar.ingestion.pipeline.classification.onchain.protocol.euler.EulerProtocolSemanticClassifier;
@@ -139,6 +141,8 @@ public class OnChainClassifier {
                 new PreSpamAdminConfigClassifier(),
                 new SpamClassifier(protocolRegistryService),
                 new NonEconomicClassifier(),
+                new ZkSyncAcrossRoutedBridgeClassifier(),
+                new ZkSyncAaveGatewayClassifier(),
                 new SwapSemanticClassifier(),
                 new LpSemanticClassifier(),
                 new LendingSemanticClassifier(),

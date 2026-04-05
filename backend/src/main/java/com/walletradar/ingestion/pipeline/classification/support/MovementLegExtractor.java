@@ -1,5 +1,6 @@
 package com.walletradar.ingestion.pipeline.classification.support;
 
+import com.walletradar.domain.common.NetworkId;
 import com.walletradar.ingestion.pipeline.onchain.OnChainRawTransactionView;
 import org.bson.Document;
 import org.springframework.stereotype.Component;
@@ -16,6 +17,7 @@ import java.util.List;
 public class MovementLegExtractor {
 
     private static final String EULER_BATCH_ROUTER = "0xddcbe30a761edd2e19bba930a977475265f36fa1";
+    private static final String ZKSYNC_SYSTEM_FEE_SINK = "0x0000000000000000000000000000000000008001";
 
     private final NativeAssetSymbolResolver nativeAssetSymbolResolver;
 
@@ -31,6 +33,9 @@ public class MovementLegExtractor {
         }
 
         for (Document transfer : view.explorerTokenTransfers()) {
+            if (isNativeAliasFeeLifecycleTransfer(view, transfer)) {
+                continue;
+            }
             BigDecimal quantity = view.tokenTransferQuantity(transfer);
             if (quantity == null || quantity.signum() == 0) {
                 continue;
@@ -62,7 +67,8 @@ public class MovementLegExtractor {
             }
         }
 
-        if (!isDirectValueCoveredByInternalTransfer(view)) {
+        if (!isDirectValueCoveredByInternalTransfer(view)
+                && !isDirectValueCoveredByNativeAliasTransfer(view)) {
             BigInteger rawValue = view.rawValue();
             if (rawValue != null && rawValue.signum() > 0) {
                 BigDecimal quantity = new BigDecimal(rawValue).movePointLeft(18);
@@ -79,10 +85,9 @@ public class MovementLegExtractor {
         legs = OneInchNativeSettlementSupport.enrichLegs(view, nativeAssetSymbolResolver, legs);
 
         if (walletAddress.equals(view.fromAddress())) {
-            BigInteger gasUsed = view.gasUsed();
-            BigInteger gasPrice = view.gasPrice();
-            if (gasUsed != null && gasPrice != null && gasUsed.signum() > 0 && gasPrice.signum() > 0) {
-                BigDecimal gasQuantity = new BigDecimal(gasUsed.multiply(gasPrice)).movePointLeft(18).negate();
+            BigInteger gasFeeValue = gasFeeValue(view);
+            if (gasFeeValue != null && gasFeeValue.signum() > 0) {
+                BigDecimal gasQuantity = new BigDecimal(gasFeeValue).movePointLeft(18).negate();
                 legs.add(RawLeg.fee(nativeAssetSymbolResolver.nativeSymbol(view.networkId()), gasQuantity));
             }
         }
@@ -107,12 +112,68 @@ public class MovementLegExtractor {
             }
             BigInteger transferValue = quantity.movePointRight(18).toBigInteger();
             if (rawValue.equals(transferValue)
-                    && safeEquals(from, view.internalTransferFrom(transfer))
-                    && safeEquals(to, view.internalTransferTo(transfer))) {
+                    && sameAddress(from, view.internalTransferFrom(transfer))
+                    && sameAddress(to, view.internalTransferTo(transfer))) {
                 return true;
             }
         }
         return false;
+    }
+
+    private boolean isDirectValueCoveredByNativeAliasTransfer(OnChainRawTransactionView view) {
+        BigInteger rawValue = view.rawValue();
+        if (rawValue == null || rawValue.signum() == 0) {
+            return false;
+        }
+        String from = view.fromAddress();
+        String to = view.toAddress();
+        for (Document transfer : view.explorerTokenTransfers()) {
+            if (!nativeAssetSymbolResolver.isNativeAliasContract(
+                    view.networkId(),
+                    view.tokenTransferContract(transfer)
+            )) {
+                continue;
+            }
+            BigDecimal quantity = view.tokenTransferQuantity(transfer);
+            if (quantity == null) {
+                continue;
+            }
+            BigInteger transferValue = quantity.movePointRight(18).toBigInteger();
+            if (rawValue.equals(transferValue)
+                    && sameAddress(from, view.tokenTransferFrom(transfer))
+                    && sameAddress(to, view.tokenTransferTo(transfer))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isNativeAliasFeeLifecycleTransfer(OnChainRawTransactionView view, Document transfer) {
+        if (view.networkId() != NetworkId.ZKSYNC || !view.isFeePayer()) {
+            return false;
+        }
+        if (!nativeAssetSymbolResolver.isNativeAliasContract(view.networkId(), view.tokenTransferContract(transfer))) {
+            return false;
+        }
+        String from = view.tokenTransferFrom(transfer);
+        String to = view.tokenTransferTo(transfer);
+        if (!matchesWalletAccount(view, from) && !matchesWalletAccount(view, to)) {
+            return false;
+        }
+        if (!sameAddress(ZKSYNC_SYSTEM_FEE_SINK, from) && !sameAddress(ZKSYNC_SYSTEM_FEE_SINK, to)) {
+            return false;
+        }
+        BigDecimal quantity = view.tokenTransferQuantity(transfer);
+        return quantity != null && quantity.signum() > 0;
+    }
+
+    private BigInteger gasFeeValue(OnChainRawTransactionView view) {
+        BigInteger gasUsed = view.gasUsed();
+        BigInteger gasPrice = view.gasPrice();
+        if (gasUsed == null || gasPrice == null || gasUsed.signum() <= 0 || gasPrice.signum() <= 0) {
+            return null;
+        }
+        return gasUsed.multiply(gasPrice);
     }
 
     private boolean matchesWalletAccount(OnChainRawTransactionView view, String address) {
@@ -139,7 +200,9 @@ public class MovementLegExtractor {
                 && wallet.substring(0, 40).equals(candidate.substring(0, 40));
     }
 
-    private boolean safeEquals(String left, String right) {
-        return left != null && left.equals(right);
+    private boolean sameAddress(String left, String right) {
+        String normalizedLeft = OnChainRawTransactionView.normalizeAddress(left);
+        String normalizedRight = OnChainRawTransactionView.normalizeAddress(right);
+        return normalizedLeft != null && normalizedLeft.equals(normalizedRight);
     }
 }

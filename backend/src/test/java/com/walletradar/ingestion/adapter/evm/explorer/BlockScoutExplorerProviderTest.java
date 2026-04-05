@@ -18,6 +18,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.util.UriComponentsBuilder;
 import reactor.core.publisher.Mono;
 
+import java.math.BigInteger;
 import java.net.URI;
 import java.util.List;
 import java.util.Map;
@@ -230,6 +231,79 @@ class BlockScoutExplorerProviderTest {
         ExplorerTransactionDetails details = provider.getTransactionDetails("0xmissing", NetworkId.ARBITRUM);
 
         assertThat(details).isNull();
+    }
+
+    @Test
+    void getNativeBalanceUsesV2AddressEndpoint() {
+        TestConfig config = baseProperties();
+        AtomicReference<URI> lastUrl = new AtomicReference<>();
+        WebClient.Builder webClientBuilder = WebClient.builder()
+                .exchangeFunction(request -> {
+                    lastUrl.set(request.url());
+                    return Mono.just(jsonResponse("""
+                            {"hash":"0xabc","coin_balance":"123456789"}
+                            """));
+                });
+        BlockScoutExplorerProvider provider = new BlockScoutExplorerProvider(
+                webClientBuilder, objectMapper, config.explorerProperties(), config.networkProperties());
+
+        BigInteger balance = provider.getNativeBalance("0xabc", NetworkId.ARBITRUM);
+
+        assertThat(balance).isEqualTo(new BigInteger("123456789"));
+        assertThat(lastUrl.get()).isNotNull();
+        assertThat(lastUrl.get().getPath()).isEqualTo("/api/v2/addresses/0xabc");
+        MultiValueMap<String, String> query = UriComponentsBuilder.fromUri(lastUrl.get()).build().getQueryParams();
+        assertThat(query.getFirst("apikey")).isEqualTo("arb-blockscout-key");
+    }
+
+    @Test
+    void getTokenBalancesUsesV2AddressTokenBalancesEndpoint() {
+        TestConfig config = baseProperties();
+        AtomicReference<URI> lastUrl = new AtomicReference<>();
+        WebClient.Builder webClientBuilder = WebClient.builder()
+                .exchangeFunction(request -> {
+                    lastUrl.set(request.url());
+                    return Mono.just(jsonResponse("""
+                            [{"value":"1000000","token":{"address_hash":"0xtoken","decimals":"6","symbol":"USDC"}}]
+                            """));
+                });
+        BlockScoutExplorerProvider provider = new BlockScoutExplorerProvider(
+                webClientBuilder, objectMapper, config.explorerProperties(), config.networkProperties());
+
+        Map<String, BlockScoutExplorerProvider.TokenBalanceSnapshot> balances =
+                provider.getTokenBalances("0xabc", NetworkId.ARBITRUM);
+
+        assertThat(balances).containsEntry(
+                "0xtoken",
+                new BlockScoutExplorerProvider.TokenBalanceSnapshot(new BigInteger("1000000"), 6)
+        );
+        assertThat(lastUrl.get()).isNotNull();
+        assertThat(lastUrl.get().getPath()).isEqualTo("/api/v2/addresses/0xabc/token-balances");
+        MultiValueMap<String, String> query = UriComponentsBuilder.fromUri(lastUrl.get()).build().getQueryParams();
+        assertThat(query.getFirst("apikey")).isEqualTo("arb-blockscout-key");
+    }
+
+    @Test
+    void getTokenDecimalsUsesV2TokenEndpoint() {
+        TestConfig config = baseProperties();
+        AtomicReference<URI> lastUrl = new AtomicReference<>();
+        WebClient.Builder webClientBuilder = WebClient.builder()
+                .exchangeFunction(request -> {
+                    lastUrl.set(request.url());
+                    return Mono.just(jsonResponse("""
+                            {"address":"0xtoken","decimals":"18","symbol":"WETH"}
+                            """));
+                });
+        BlockScoutExplorerProvider provider = new BlockScoutExplorerProvider(
+                webClientBuilder, objectMapper, config.explorerProperties(), config.networkProperties());
+
+        Integer decimals = provider.getTokenDecimals("0xtoken", NetworkId.ARBITRUM);
+
+        assertThat(decimals).isEqualTo(18);
+        assertThat(lastUrl.get()).isNotNull();
+        assertThat(lastUrl.get().getPath()).isEqualTo("/api/v2/tokens/0xtoken");
+        MultiValueMap<String, String> query = UriComponentsBuilder.fromUri(lastUrl.get()).build().getQueryParams();
+        assertThat(query.getFirst("apikey")).isEqualTo("arb-blockscout-key");
     }
 
     @Test

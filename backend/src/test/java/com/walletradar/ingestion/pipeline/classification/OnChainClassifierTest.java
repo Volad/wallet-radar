@@ -4068,12 +4068,21 @@ class OnChainClassifierTest {
     }
 
     @Test
-    @DisplayName("zkSync unverified routed send becomes explicit terminal stop condition")
-    void zkSyncUnverifiedRoutedSendBecomesExplicitTerminalStopCondition() {
+    @DisplayName("zkSync routed Across send with fee refunds resolves to BRIDGE_OUT and keeps only net fee")
+    void zkSyncRoutedAcrossSendWithFeeRefundsResolvesToBridgeOut() {
         RawTransaction rawTransaction = baseRaw(NetworkId.ZKSYNC);
         rawTransaction.setTxHash("0x9712e051e33e603b22039ef74ed946e78664695aa341a8825a516822aa5f8966");
         rawTransaction.getRawData().put("to", "0xde167bb9f640a3d6de7b8c16c28920755f5921f2");
         rawTransaction.getRawData().put("methodId", "0x27ad57d5");
+        rawTransaction.getRawData().put(
+                "input",
+                "0x27ad57d5"
+                        + WALLET.substring(2)
+                        + "b456e051867625d320a7a793897058eb7eb6093b"
+                        + "82af49447d8a07e3bd95bd0d56f35241523fbab1"
+        );
+        rawTransaction.getRawData().put("gasUsed", "1");
+        rawTransaction.getRawData().put("gasPrice", "24078882500000");
         rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
                 new Document("contractAddress", "0x000000000000000000000000000000000000800a")
                         .append("tokenSymbol", "ETH")
@@ -4086,16 +4095,274 @@ class OnChainClassifierTest {
                         .append("tokenSymbol", "ETH")
                         .append("tokenName", "Ether")
                         .append("tokenDecimal", "18")
+                        .append("from", "0x0000000000000000000000000000000000008001")
+                        .append("to", WALLET)
+                        .append("value", "11512507800000"),
+                new Document("contractAddress", "0x000000000000000000000000000000000000800a")
+                        .append("tokenSymbol", "ETH")
+                        .append("tokenName", "Ether")
+                        .append("tokenDecimal", "18")
                         .append("from", WALLET)
                         .append("to", "0xde167bb9f640a3d6de7b8c16c28920755f5921f2")
+                        .append("value", "689595000000000000"),
+                new Document("contractAddress", "0x000000000000000000000000000000000000800a")
+                        .append("tokenSymbol", "ETH")
+                        .append("tokenName", "Ether")
+                        .append("tokenDecimal", "18")
+                        .append("from", "0x0000000000000000000000000000000000008001")
+                        .append("to", WALLET)
+                        .append("value", "22937451250000"),
+                new Document("contractAddress", "0x000000000000000000000000000000000000800a")
+                        .append("tokenSymbol", "ETH")
+                        .append("tokenName", "Ether")
+                        .append("tokenDecimal", "18")
+                        .append("from", "0xde167bb9f640a3d6de7b8c16c28920755f5921f2")
+                        .append("to", "0xb456e051867625d320a7a793897058eb7eb6093b")
+                        .append("value", "689595000000000000"),
+                new Document("contractAddress", "0x000000000000000000000000000000000000800a")
+                        .append("tokenSymbol", "ETH")
+                        .append("tokenName", "Ether")
+                        .append("tokenDecimal", "18")
+                        .append("from", "0xb456e051867625d320a7a793897058eb7eb6093b")
+                        .append("to", "0xe0b015e54d54fc84a6cb9b666099c46ade9335ff")
+                        .append("value", "689595000000000000"),
+                new Document("contractAddress", "0x000000000000000000000000000000000000800a")
+                        .append("tokenSymbol", "ETH")
+                        .append("tokenName", "Ether")
+                        .append("tokenDecimal", "18")
+                        .append("from", "0xe0b015e54d54fc84a6cb9b666099c46ade9335ff")
+                        .append("to", "0x5aea5775959fbc2557cc8789bc1bf90a239d9a91")
                         .append("value", "689595000000000000")
         )).append("internalTransfers", List.of()));
 
         OnChainClassificationResult result = classifier.classify(rawTransaction);
 
-        assertThat(result.type()).isEqualTo(NormalizedTransactionType.UNKNOWN);
-        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
-        assertThat(result.missingDataReasons()).containsExactly("UNVERIFIED_ROUTED_SEND");
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.BRIDGE_OUT);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.HEURISTIC);
+        assertThat(result.protocolName()).isEqualTo("Across");
+        assertThat(result.flows())
+                .filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
+                .singleElement()
+                .satisfies(flow -> {
+                    assertThat(flow.getAssetContract()).isEqualTo("0x000000000000000000000000000000000000800a");
+                    assertThat(flow.getAssetSymbol()).isEqualTo("ETH");
+                    assertThat(flow.getQuantityDelta()).isEqualByComparingTo("-0.689595");
+                });
+        assertThat(result.flows())
+                .filteredOn(flow -> flow.getRole() == NormalizedLegRole.FEE)
+                .singleElement()
+                .satisfies(flow -> assertThat(flow.getQuantityDelta()).isEqualByComparingTo("-0.0000240788825"));
+    }
+
+    @Test
+    @DisplayName("zkSync routed Across send resolves from stored boundary-only raw evidence")
+    void zkSyncRoutedAcrossSendResolvesFromStoredBoundaryOnlyRawEvidence() {
+        String actualWallet = "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        RawTransaction rawTransaction = baseRaw(NetworkId.ZKSYNC);
+        rawTransaction.setTxHash("0x9712e051e33e603b22039ef74ed946e78664695aa341a8825a516822aa5f8966");
+        rawTransaction.setWalletAddress(actualWallet);
+        rawTransaction.getRawData().put("to", "0xde167bb9f640a3d6de7b8c16c28920755f5921f2");
+        rawTransaction.getRawData().put("from", actualWallet);
+        rawTransaction.getRawData().put("methodId", "0x27ad57d5");
+        rawTransaction.getRawData().put("value", "689595000000000000");
+        rawTransaction.getRawData().put("gasUsed", "532130");
+        rawTransaction.getRawData().put("gasPrice", "45250000");
+        rawTransaction.getRawData().put(
+                "input",
+                "0x27ad57d50000000000000000000000000000000000000000000000000000000000000020"
+                        + "0000000000000000000000000000000000000000000000000000000000000000"
+                        + "0000000000000000000000000000000000000000000000000991eeffb5e2b000"
+                        + "0000000000000000000000000000000000000000000000000000000000000080"
+                        + "0000000000000000000000000000000000000000000000000000000000000046"
+                        + "0000000000000000000000000000000000000000000000000000000000000001"
+                        + "0000000000000000000000000000000000000000000000000000000000000020"
+                        + "0000000000000000000000000000000000000000000000000000000000000001"
+                        + "0000000000000000000000000000000000000000000000000000000000000040"
+                        + "0000000000000000000000000000000000000000000000000000000000000034"
+                        + "0000000000000000000000000000000000000000000000000000000000000002"
+                        + "0000000000000000000000000000000000000000000000000000000000000000"
+                        + "00000000000000000000000082af49447d8a07e3bd95bd0d56f35241523fbab1"
+                        + "0000000000000000000000000000000000000000000000000991eeffb5e2b000"
+                        + "000000000000000000000000000000000000000000000000099196da00e145ee"
+                        + "0000000000000000000000001a87f12ac07e9746e9b053b8d7ef1d45270d693f"
+                        + "000000000000000000000000b456e051867625d320a7a793897058eb7eb6093b"
+                        + "0000000000000000000000000000000000000000000000000000000000000140"
+                        + "0000000000000000000000000000000000000000000000000000000000000a4b"
+                        + "100000000000000000000000060ac95ec1153aa8199751917ede25d0ca49a36e2"
+                        + "00000000000000000000000000000000000000000000000000000000000001e0"
+                        + "0000000000000000000000000000000000000000000000000000000000000080"
+                        + "000000000000000000000000394311a6aaa0d8e3411d8b62de4578d41322d1bd"
+                        + "0000000000000000000000000000000000000000000000000000000000000009"
+                        + "00000000000000000000000000000000000000000000000000000000693137f3"
+                        + "0000000000000000000000000000000000000000000000000000000069315413"
+                        + "0000000000000000000000000000000000000000000000000000000000000120"
+                        + "0000000000000000000000000000000000000000000000000000000000000040"
+                        + "0000000000000000000000001a87f12ac07e9746e9b053b8d7ef1d45270d693f"
+                        + "0000000000000000000000000000000000000000000000000000000000000001"
+                        + "0000000000000000000000000000000000000000000000000000000000000020"
+                        + "0000000000000000000000000000000000000000000000000000000000000005"
+                        + "0000000000000000000000000000000000000000000000000000000000000040"
+                        + "0000000000000000000000000000000000000000000000000000000000000040"
+                        + "0000000000000000000000001a87f12ac07e9746e9b053b8d7ef1d45270d693f"
+                        + "000000000000000000000000000000000000000000000000099196da00e145ee"
+                        + "0000000000000000000000000000000000000000000000000000000000000120"
+                        + "0000000000000000000000000000000000000000000000000000000000000002"
+                        + "0000000000000000000000000000000000000000000000000000000000000000"
+                        + "0000000000000000000000000000000000000000000000000000000000000000"
+                        + "0000000000000000000000000000000000000000000000000000000000000000"
+                        + "0000000000000000000000000000000000000000000000000000000000000000"
+                        + "00000000000000000000000000000000000000000000000000000000000000e0"
+                        + "0000000000000000000000000000000000000000000000000000000000000000"
+        );
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0x000000000000000000000000000000000000800a")
+                        .append("tokenSymbol", "ETH")
+                        .append("tokenName", "Ether")
+                        .append("tokenDecimal", "18")
+                        .append("from", actualWallet)
+                        .append("to", "0x0000000000000000000000000000000000008001")
+                        .append("value", "58528841550000"),
+                new Document("contractAddress", "0x000000000000000000000000000000000000800a")
+                        .append("tokenSymbol", "ETH")
+                        .append("tokenName", "Ether")
+                        .append("tokenDecimal", "18")
+                        .append("from", "0x0000000000000000000000000000000000008001")
+                        .append("to", actualWallet)
+                        .append("value", "11512507800000"),
+                new Document("contractAddress", "0x000000000000000000000000000000000000800a")
+                        .append("tokenSymbol", "ETH")
+                        .append("tokenName", "Ether")
+                        .append("tokenDecimal", "18")
+                        .append("from", actualWallet)
+                        .append("to", "0xde167bb9f640a3d6de7b8c16c28920755f5921f2")
+                        .append("value", "689595000000000000"),
+                new Document("contractAddress", "0x000000000000000000000000000000000000800a")
+                        .append("tokenSymbol", "ETH")
+                        .append("tokenName", "Ether")
+                        .append("tokenDecimal", "18")
+                        .append("from", "0x0000000000000000000000000000000000008001")
+                        .append("to", actualWallet)
+                        .append("value", "22937451250000")
+        )).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.BRIDGE_OUT);
+        assertThat(result.protocolName()).isEqualTo("Across");
+        assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.HEURISTIC);
+        assertThat(result.flows())
+                .filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
+                .singleElement()
+                .satisfies(flow -> assertThat(flow.getQuantityDelta()).isEqualByComparingTo("-0.689595"));
+    }
+
+    @Test
+    @DisplayName("zkSync native alias inbound covered by tx value does not duplicate symbol-only ETH leg")
+    void zkSyncNativeAliasInboundCoveredByTxValueDoesNotDuplicateSymbolOnlyEthLeg() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.ZKSYNC);
+        rawTransaction.getRawData().put("from", COUNTERPARTY);
+        rawTransaction.getRawData().put("to", WALLET);
+        rawTransaction.getRawData().put("value", "32893451503674712");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0x000000000000000000000000000000000000800a")
+                        .append("tokenSymbol", "ETH")
+                        .append("tokenName", "Ether")
+                        .append("tokenDecimal", "18")
+                        .append("from", COUNTERPARTY)
+                        .append("to", WALLET)
+                        .append("value", "32893451503674712")
+        )).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.EXTERNAL_TRANSFER_IN);
+        assertThat(result.flows())
+                .filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
+                .singleElement()
+                .satisfies(flow -> {
+                    assertThat(flow.getAssetContract()).isEqualTo("0x000000000000000000000000000000000000800a");
+                    assertThat(flow.getAssetSymbol()).isEqualTo("ETH");
+                    assertThat(flow.getQuantityDelta()).isEqualByComparingTo("0.032893451503674712");
+                });
+    }
+
+    @Test
+    @DisplayName("zkSync bridge settlement covered by tx value does not duplicate symbol-only ETH leg")
+    void zkSyncBridgeSettlementCoveredByTxValueDoesNotDuplicateSymbolOnlyEthLeg() {
+        String bridgeContract = "0x875d6d37ec55c8cf220b9e5080717549d8aa8eca";
+        RawTransaction rawTransaction = baseRaw(NetworkId.ZKSYNC);
+        rawTransaction.getRawData().put("from", bridgeContract);
+        rawTransaction.getRawData().put("to", WALLET);
+        rawTransaction.getRawData().put("value", "32893451503674712");
+        rawTransaction.getRawData().put("methodId", "0xcfc32570");
+        rawTransaction.getRawData().put("functionName", "execute302((address,(uint32,bytes32,uint64),bytes32,bytes,bytes,uint256) _executionParams)");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0x000000000000000000000000000000000000800a")
+                        .append("tokenSymbol", "ETH")
+                        .append("tokenName", "Ether")
+                        .append("tokenDecimal", "18")
+                        .append("from", bridgeContract)
+                        .append("to", WALLET)
+                        .append("value", "32893451503674712")
+        )).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.BRIDGE_IN);
+        assertThat(result.flows())
+                .filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
+                .singleElement()
+                .satisfies(flow -> {
+                    assertThat(flow.getAssetContract()).isEqualTo("0x000000000000000000000000000000000000800a");
+                    assertThat(flow.getAssetSymbol()).isEqualTo("ETH");
+                    assertThat(flow.getQuantityDelta()).isEqualByComparingTo("0.032893451503674712");
+                });
+    }
+
+    @Test
+    @DisplayName("zkSync bridge start covered by tx value does not duplicate symbol-only ETH leg")
+    void zkSyncBridgeStartCoveredByTxValueDoesNotDuplicateSymbolOnlyEthLeg() {
+        String lifiDiamond = "0x341e94069f53234fe6dabef707ad424830525715";
+        RawTransaction rawTransaction = baseRaw(NetworkId.ZKSYNC);
+        rawTransaction.getRawData().put("to", lifiDiamond);
+        rawTransaction.getRawData().put("methodId", "0xae0b91e5");
+        rawTransaction.getRawData().put("functionName", "execute(bytes,bytes[],uint256)");
+        rawTransaction.getRawData().put("value", "421105918108654720");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0x000000000000000000000000000000000000800a")
+                        .append("tokenSymbol", "ETH")
+                        .append("tokenName", "Ether")
+                        .append("tokenDecimal", "18")
+                        .append("from", WALLET)
+                        .append("to", lifiDiamond)
+                        .append("value", "421105918108654720")
+        )).append("internalTransfers", List.of()));
+        when(protocolRegistryService.lookup(NetworkId.ZKSYNC, lifiDiamond))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        lifiDiamond,
+                        Set.of(NetworkId.ZKSYNC),
+                        ProtocolRegistryFamily.BRIDGE,
+                        ProtocolRegistryRole.BRIDGE_ENTRY,
+                        ProtocolRegistryEventType.BRIDGE_OUT,
+                        ConfidenceLevel.HIGH,
+                        "LiFi",
+                        "Diamond",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.BRIDGE_OUT);
+        assertThat(result.flows())
+                .filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
+                .singleElement()
+                .satisfies(flow -> {
+                    assertThat(flow.getAssetContract()).isEqualTo("0x000000000000000000000000000000000000800a");
+                    assertThat(flow.getAssetSymbol()).isEqualTo("ETH");
+                    assertThat(flow.getQuantityDelta()).isEqualByComparingTo("-0.421105918108654720");
+                });
     }
 
     @Test
@@ -5452,11 +5719,180 @@ class OnChainClassifierTest {
         assertThat(result.flows()).filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
                 .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getRole())
                 .containsExactlyInAnyOrder(
-                        "ETH:TRANSFER",
-                        "ETH:TRANSFER",
                         "variableDebtZksUSDC:TRANSFER",
                         "USDC:BUY"
                 );
+    }
+
+    @Test
+    @DisplayName("zkSync native alias fee transfer matching gas is emitted once and keeps raw native net")
+    void zkSyncNativeAliasFeeTransferMatchingGasIsEmittedOnceAndKeepsRawNativeNet() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.ZKSYNC);
+        rawTransaction.setTxHash("0x69aa8504aabff01fa86c3f8910ecb186f7d5568e7594c4c1dcfa044291d9f021");
+        rawTransaction.getRawData().put("to", "0x78e30497a3c7527d953c6b1e3541b021a98ac43c");
+        rawTransaction.getRawData().put("methodId", "0xa415bcad");
+        rawTransaction.getRawData().put("functionName", "borrow(address,uint256,uint256,uint16,address)");
+        rawTransaction.getRawData().put("gasUsed", "1");
+        rawTransaction.getRawData().put("gasPrice", "51074328540000");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0x000000000000000000000000000000000000800a")
+                        .append("tokenSymbol", "ETH")
+                        .append("tokenDecimal", "18")
+                        .append("from", WALLET)
+                        .append("to", "0x0000000000000000000000000000000000008001")
+                        .append("value", "51074328540000"),
+                new Document("contractAddress", "0x000000000000000000000000000000000000800a")
+                        .append("tokenSymbol", "ETH")
+                        .append("tokenDecimal", "18")
+                        .append("from", "0x0000000000000000000000000000000000008001")
+                        .append("to", WALLET)
+                        .append("value", "14500292040000"),
+                new Document("contractAddress", "0x0049250d15a8550c5a14baa5af5b662a93a525b9")
+                        .append("tokenSymbol", "variableDebtZksUSDC")
+                        .append("tokenDecimal", "6")
+                        .append("from", "0x0000000000000000000000000000000000000000")
+                        .append("to", WALLET)
+                        .append("value", "1200000001"),
+                new Document("contractAddress", "0x1d17cbcf0d6d143135ae902365d2e5e2a16538d4")
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenDecimal", "6")
+                        .append("from", COUNTERPARTY)
+                        .append("to", WALLET)
+                        .append("value", "1200000000")
+        )).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.BORROW);
+        assertThat(result.flows())
+                .filteredOn(flow -> "ETH".equals(flow.getAssetSymbol()) && flow.getRole() == NormalizedLegRole.FEE)
+                .singleElement()
+                .satisfies(flow -> assertThat(flow.getQuantityDelta()).isEqualByComparingTo("-0.00005107432854"));
+        assertThat(result.flows())
+                .filteredOn(flow -> "ETH".equals(flow.getAssetSymbol()) && flow.getRole() != NormalizedLegRole.FEE)
+                .isEmpty();
+
+        BigDecimal ethNet = result.flows().stream()
+                .filter(flow -> "ETH".equals(flow.getAssetSymbol()))
+                .map(NormalizedTransaction.Flow::getQuantityDelta)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        assertThat(ethNet).isEqualByComparingTo("-0.00005107432854");
+    }
+
+    @Test
+    @DisplayName("zkSync Aave withdrawETH resolves to lending withdraw before generic fallback")
+    void zkSyncAaveWithdrawEthResolvesToLendingWithdraw() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.ZKSYNC);
+        rawTransaction.setTxHash("0xb20600840451280027707eee9330bfbea5737063ec9f648cca425657d61aa35a");
+        rawTransaction.getRawData().put("methodId", "0x80500d20");
+        rawTransaction.getRawData().put("functionName", "withdrawETH(address,uint256,address)");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0xb7b93bcf82519bb757fd18b23a389245dbd8ca64")
+                        .append("tokenSymbol", "aZksWETH")
+                        .append("tokenDecimal", "18")
+                        .append("from", WALLET)
+                        .append("to", "0x0000000000000000000000000000000000000000")
+                        .append("value", "620119937887953280"),
+                new Document("contractAddress", "0x000000000000000000000000000000000000800a")
+                        .append("tokenSymbol", "ETH")
+                        .append("tokenDecimal", "18")
+                        .append("from", COUNTERPARTY)
+                        .append("to", WALLET)
+                        .append("value", "620119937887953280")
+        )).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.LENDING_WITHDRAW);
+        assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.METHOD_ID);
+        assertThat(result.protocolName()).isEqualTo("Aave");
+        assertThat(result.flows()).filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
+                .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getQuantityDelta().stripTrailingZeros().toPlainString())
+                .containsExactlyInAnyOrder(
+                        "aZksWETH:-0.62011993788795328",
+                        "ETH:0.62011993788795328"
+                );
+    }
+
+    @Test
+    @DisplayName("zkSync Aave supplyWithPermit resolves to lending deposit instead of unwrap")
+    void zkSyncAaveSupplyWithPermitResolvesToLendingDeposit() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.ZKSYNC);
+        rawTransaction.setTxHash("0xcfe0fd4d86b0116fecf0ffaaba0a41c5b26a174a7360981e968a6b2ed57f4e96");
+        rawTransaction.getRawData().put("methodId", "0x02c205f0");
+        rawTransaction.getRawData().put(
+                "functionName",
+                "supplyWithPermit(address,uint256,address,uint16,uint256,uint8,bytes32,bytes32)"
+        );
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0x5aea5775959fbc2557cc8789bc1bf90a239d9a91")
+                        .append("tokenSymbol", "WETH")
+                        .append("tokenDecimal", "18")
+                        .append("from", WALLET)
+                        .append("to", COUNTERPARTY)
+                        .append("value", "966986134250302027"),
+                new Document("contractAddress", "0xb7b93bcf82519bb757fd18b23a389245dbd8ca64")
+                        .append("tokenSymbol", "aZksWETH")
+                        .append("tokenDecimal", "18")
+                        .append("from", "0x0000000000000000000000000000000000000000")
+                        .append("to", WALLET)
+                        .append("value", "966986587248377320")
+        )).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.LENDING_DEPOSIT);
+        assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.METHOD_ID);
+        assertThat(result.protocolName()).isEqualTo("Aave");
+        assertThat(result.flows()).filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
+                .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getQuantityDelta().stripTrailingZeros().toPlainString())
+                .containsExactlyInAnyOrder(
+                        "WETH:-0.966986134250302027",
+                        "aZksWETH:0.96698658724837732"
+                );
+    }
+
+    @Test
+    @DisplayName("zkSync Aave depositETH resolves to lending deposit instead of LP exit")
+    void zkSyncAaveDepositEthResolvesToLendingDeposit() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.ZKSYNC);
+        rawTransaction.setTxHash("0xb7f3cd6b871b410276f3254618cf24572385408e376cdfd442b3cc58d82288ee");
+        rawTransaction.getRawData().put("methodId", "0x474cf53d");
+        rawTransaction.getRawData().put("functionName", "depositETH(address,address,uint16)");
+        rawTransaction.getRawData().put("value", "620119937887953280");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0xb7b93bcf82519bb757fd18b23a389245dbd8ca64")
+                        .append("tokenSymbol", "aZksWETH")
+                        .append("tokenDecimal", "18")
+                        .append("from", "0x0000000000000000000000000000000000000000")
+                        .append("to", WALLET)
+                        .append("value", "620119937887953280")
+        )).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.LENDING_DEPOSIT);
+        assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.METHOD_ID);
+        assertThat(result.protocolName()).isEqualTo("Aave");
+        assertThat(result.flows()).filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
+                .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getQuantityDelta().stripTrailingZeros().toPlainString())
+                .containsExactlyInAnyOrder(
+                        "ETH:-0.62011993788795328",
+                        "aZksWETH:0.62011993788795328"
+                );
+    }
+
+    @Test
+    @DisplayName("zkSync Aave gateway selector does not fire without audited receipt shape")
+    void zkSyncAaveGatewaySelectorRequiresAuditedReceiptShape() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.ZKSYNC);
+        rawTransaction.getRawData().put("methodId", "0x474cf53d");
+        rawTransaction.getRawData().put("functionName", "depositETH(address,address,uint16)");
+        rawTransaction.getRawData().put("value", "100000000000000000");
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isNotEqualTo(NormalizedTransactionType.LENDING_DEPOSIT);
     }
 
     @Test
@@ -5500,8 +5936,6 @@ class OnChainClassifierTest {
         assertThat(result.flows()).filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
                 .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getRole())
                 .containsExactlyInAnyOrder(
-                        "ETH:TRANSFER",
-                        "ETH:TRANSFER",
                         "variableDebtZksUSDC:TRANSFER",
                         "USDC:SELL"
                 );

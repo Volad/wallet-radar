@@ -33,7 +33,7 @@ import java.util.Optional;
 public class BybitNormalizationService {
 
     private static final String EXTERNAL_CUSTODY_EXCLUSION_REASON = "EXTERNAL_CUSTODY_UNTRACKED_VENUE";
-    private static final String WITHDRAWAL_SHADOW_EXCLUSION_REASON = "BYBIT_WITHDRAWAL_SHADOW_ROW";
+    private static final String TRANSFER_SHADOW_EXCLUSION_REASON = "BYBIT_TRANSFER_SHADOW_ROW";
 
     private final PendingExternalLedgerRowQueryService pendingExternalLedgerRowQueryService;
     private final ExternalLedgerRawRepository externalLedgerRawRepository;
@@ -90,8 +90,8 @@ public class BybitNormalizationService {
             return true;
         }
 
-        if (isWithdrawalShadowRow(row)) {
-            return normalizeWithdrawalShadowRow(row, now);
+        if (isTransferShadowRow(row)) {
+            return normalizeTransferShadowRow(row, now);
         }
 
         NormalizedTransaction normalized = builder.buildMappedRow(row, now);
@@ -129,13 +129,19 @@ public class BybitNormalizationService {
         return "borrow".equals(type) || "repay".equals(type);
     }
 
-    private boolean isWithdrawalShadowRow(ExternalLedgerRaw row) {
-        return "fund_asset_changes".equals(normalize(row.getSourceFileType()))
-                && "external_transfer_out".equals(normalize(row.getCanonicalType()))
-                && "withdraw".equals(normalize(row.getBybitType()))
-                && "bybit".equals(normalize(row.getChain()))
-                && row.getTxHash() == null
-                && row.getNetworkId() == null;
+    private boolean isTransferShadowRow(ExternalLedgerRaw row) {
+        if (!"fund_asset_changes".equals(normalize(row.getSourceFileType()))
+                || !"bybit".equals(normalize(row.getChain()))
+                || row.getTxHash() != null
+                || row.getNetworkId() != null) {
+            return false;
+        }
+        String canonicalType = normalize(row.getCanonicalType());
+        if ("external_transfer_out".equals(canonicalType) && "withdraw".equals(normalize(row.getBybitType()))) {
+            return true;
+        }
+        return ("external_transfer_in".equals(canonicalType) || "external_inbound".equals(canonicalType))
+                && "deposit".equals(normalize(row.getBybitType()));
     }
 
     private boolean normalizeTradeRow(ExternalLedgerRaw row, Instant now) {
@@ -192,10 +198,10 @@ public class BybitNormalizationService {
         return true;
     }
 
-    private boolean normalizeWithdrawalShadowRow(ExternalLedgerRaw row, Instant now) {
+    private boolean normalizeTransferShadowRow(ExternalLedgerRaw row, Instant now) {
         NormalizedTransaction normalized = builder.buildMappedRow(row, now);
-        if (bybitTransferShadowPairer.findChainAwareWithdrawalSibling(row).isPresent()) {
-            builder.markWithdrawalShadowExcluded(normalized, now, WITHDRAWAL_SHADOW_EXCLUSION_REASON);
+        if (bybitTransferShadowPairer.findChainAwareTransferSibling(row).isPresent()) {
+            builder.markTransferShadowExcluded(normalized, now, TRANSFER_SHADOW_EXCLUSION_REASON);
         }
         normalizedTransactionStore.upsert(normalized);
         markConfirmed(row);

@@ -116,6 +116,41 @@ class AcrossBridgePairLinkServiceTest {
         assertThat(firstDestination.getMatchedCounterparty()).isNull();
     }
 
+    @Test
+    @DisplayName("same-wallet Across destination can promote bounded external inbound row into BRIDGE_IN")
+    void sameWalletAcrossDestinationCanPromoteBoundedExternalInboundRowIntoBridgeIn() {
+        NormalizedTransaction source = bridgeOut(
+                "0x9712e051e33e603b22039ef74ed946e78664695aa341a8825a516822aa5f8966",
+                NetworkId.ZKSYNC,
+                "ETH",
+                "-0.689595000000000000"
+        );
+        NormalizedTransaction destination = externalInbound(
+                "0xc88e8268f32c3cc5ef29c604f69a359422de22d452e255534c3399e9f478be41",
+                NetworkId.ARBITRUM,
+                "ETH",
+                "0.689498081026196974",
+                source.getBlockTimestamp().plusSeconds(11)
+        );
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(source));
+
+        boolean changed = service.link(destination);
+
+        assertThat(changed).isTrue();
+        assertThat(destination.getType()).isEqualTo(NormalizedTransactionType.BRIDGE_IN);
+        assertThat(destination.getProtocolName()).isEqualTo("Across");
+        assertThat(destination.getMatchedCounterparty()).isEqualTo(source.getTxHash());
+        assertThat(destination.getCorrelationId()).isEqualTo("bridge:across:" + source.getTxHash());
+        assertThat(destination.getContinuityCandidate()).isTrue();
+        assertThat(destination.getFlows()).allSatisfy(flow -> {
+            if (flow.getRole() != NormalizedLegRole.FEE) {
+                assertThat(flow.getRole()).isEqualTo(NormalizedLegRole.TRANSFER);
+            }
+        });
+    }
+
     private NormalizedTransaction bridgeOut(String txHash, NetworkId networkId, String symbol, String qty) {
         NormalizedTransaction transaction = base(txHash, networkId, NormalizedTransactionType.BRIDGE_OUT, Instant.parse("2026-03-31T10:15:00Z"));
         transaction.setProtocolName("Across");
@@ -131,6 +166,18 @@ class AcrossBridgePairLinkServiceTest {
             Instant blockTimestamp
     ) {
         NormalizedTransaction transaction = base(txHash, networkId, NormalizedTransactionType.BRIDGE_IN, blockTimestamp);
+        transaction.setFlows(List.of(flow(symbol, qty)));
+        return transaction;
+    }
+
+    private NormalizedTransaction externalInbound(
+            String txHash,
+            NetworkId networkId,
+            String symbol,
+            String qty,
+            Instant blockTimestamp
+    ) {
+        NormalizedTransaction transaction = base(txHash, networkId, NormalizedTransactionType.EXTERNAL_TRANSFER_IN, blockTimestamp);
         transaction.setFlows(List.of(flow(symbol, qty)));
         return transaction;
     }

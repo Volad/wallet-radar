@@ -5,6 +5,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Native and wrapped-native symbol/address mapping for classifier heuristics.
@@ -59,6 +60,11 @@ public class NativeAssetSymbolResolver {
             Map.entry(NetworkId.PLASMA, "WXPL9")
     );
 
+    private static final Map<NetworkId, Set<String>> NATIVE_ALIAS_CONTRACTS = Map.of(
+            NetworkId.ZKSYNC,
+            Set.of("0x000000000000000000000000000000000000800a")
+    );
+
     public String nativeSymbol(NetworkId networkId) {
         return NATIVE_SYMBOLS.getOrDefault(networkId, "UNKNOWN_NATIVE");
     }
@@ -77,5 +83,13 @@ public class NativeAssetSymbolResolver {
             return false;
         }
         return configured.equals(contractAddress.trim().toLowerCase(Locale.ROOT));
+    }
+
+    public boolean isNativeAliasContract(NetworkId networkId, String contractAddress) {
+        if (networkId == null || contractAddress == null) {
+            return false;
+        }
+        String normalized = contractAddress.trim().toLowerCase(Locale.ROOT);
+        return NATIVE_ALIAS_CONTRACTS.getOrDefault(networkId, Set.of()).contains(normalized);
     }
 }

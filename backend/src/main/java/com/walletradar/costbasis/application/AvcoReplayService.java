@@ -1,6 +1,7 @@
 package com.walletradar.costbasis.application;
 
 import com.walletradar.accounting.support.AccountingAssetFamilySupport;
+import com.walletradar.accounting.support.AccountingAssetIdentitySupport;
 import com.walletradar.accounting.support.BridgeAssetFamilySupport;
 import com.walletradar.costbasis.domain.AssetPosition;
 import com.walletradar.costbasis.domain.AssetPositionRepository;
@@ -76,8 +77,6 @@ public class AvcoReplayService {
             updatedTransactions.add(replayed);
         }
 
-        resolveUnmatchedIncomingTransfers(positions, pendingTransfers);
-
         assetPositionRepository.deleteAll();
         assetPositionRepository.saveAll(materializePositions(positions, now));
         normalizedTransactionRepository.saveAll(updatedTransactions);
@@ -132,7 +131,7 @@ public class AvcoReplayService {
         position.lastEventTimestamp = laterOf(position.lastEventTimestamp, transaction.getBlockTimestamp());
 
         if (shouldTreatAsContinuityTransfer(transaction, flow)) {
-            applyTransfer(transaction, asTransferFlow(flow), position, continuityBuckets, pendingTransfers);
+            applyTransfer(transaction, asTransferFlow(flow), position, positions, continuityBuckets, pendingTransfers);
             return;
         }
 
@@ -140,7 +139,7 @@ public class AvcoReplayService {
             case BUY -> applyBuy(flow, position);
             case SELL -> applySell(flow, position);
             case FEE -> applyFee(flow, position);
-            case TRANSFER -> applyTransfer(transaction, flow, position, continuityBuckets, pendingTransfers);
+            case TRANSFER -> applyTransfer(transaction, flow, position, positions, continuityBuckets, pendingTransfers);
         }
     }
 
@@ -558,67 +557,66 @@ public class AvcoReplayService {
             BigDecimal acquisitionCost = quantity.multiply(flow.getUnitPriceUsd(), MC);
             position.totalCostBasisUsd = position.totalCostBasisUsd.add(acquisitionCost);
             position.quantity = position.quantity.add(quantity);
-            position.perWalletAvco = safeDivide(position.totalCostBasisUsd, position.quantity);
+            recomputePerWalletAvco(position);
             return;
         }
         position.quantity = position.quantity.add(quantity);
-        position.hasIncompleteHistory = true;
-        position.hasUnresolvedFlags = true;
-        position.unresolvedFlagCount++;
+        markUnresolved(position);
     }
 
     private void applySell(NormalizedTransaction.Flow flow, PositionState position) {
-        BigDecimal quantity = flow.getQuantityDelta().abs();
-        if (position.perWalletAvco != null) {
-            flow.setAvcoAtTimeOfSale(position.perWalletAvco);
-            BigDecimal relievedCost = quantity.multiply(position.perWalletAvco, MC);
+        BigDecimal requestedQuantity = flow.getQuantityDelta().abs();
+        BigDecimal avcoAtTimeOfSale = position.perWalletAvco;
+        QuantityConsumption consumption = consumeQuantity(position, requestedQuantity);
+        BigDecimal soldQuantity = consumption.appliedQuantity();
+        if (consumption.shortfallQuantity().signum() > 0) {
+            recordQuantityShortfall(position, consumption.shortfallQuantity());
+        }
+        if (avcoAtTimeOfSale != null && soldQuantity.signum() > 0) {
+            flow.setAvcoAtTimeOfSale(avcoAtTimeOfSale);
+            BigDecimal relievedCost = soldQuantity.multiply(avcoAtTimeOfSale, MC);
             position.totalCostBasisUsd = nonNegative(position.totalCostBasisUsd.subtract(relievedCost, MC));
-            if (hasKnownPrice(flow)) {
-                BigDecimal realised = flow.getUnitPriceUsd().subtract(position.perWalletAvco, MC).multiply(quantity, MC);
+            if (hasKnownPrice(flow) && consumption.shortfallQuantity().signum() == 0) {
+                BigDecimal realised = flow.getUnitPriceUsd().subtract(avcoAtTimeOfSale, MC).multiply(soldQuantity, MC);
                 flow.setRealisedPnlUsd(realised);
                 position.totalRealisedPnlUsd = position.totalRealisedPnlUsd.add(realised);
             } else {
-                position.hasIncompleteHistory = true;
-                position.hasUnresolvedFlags = true;
-                position.unresolvedFlagCount++;
+                markUnresolved(position);
             }
-        } else {
-            position.hasIncompleteHistory = true;
-            position.hasUnresolvedFlags = true;
-            position.unresolvedFlagCount++;
+        } else if (requestedQuantity.signum() > 0) {
+            markUnresolved(position);
         }
-        position.quantity = nonNegative(position.quantity.subtract(quantity, MC));
-        position.perWalletAvco = position.quantity.signum() == 0
-                ? null
-                : safeDivide(position.totalCostBasisUsd, position.quantity);
+        recomputePerWalletAvco(position);
     }
 
     private void applyFee(NormalizedTransaction.Flow flow, PositionState position) {
-        BigDecimal quantity = flow.getQuantityDelta().abs();
-        position.quantity = nonNegative(position.quantity.subtract(quantity, MC));
+        BigDecimal requestedQuantity = flow.getQuantityDelta().abs();
+        BigDecimal avcoAtTimeOfCharge = position.perWalletAvco;
+        QuantityConsumption consumption = consumeQuantity(position, requestedQuantity);
+        BigDecimal chargedQuantity = consumption.appliedQuantity();
+        if (consumption.shortfallQuantity().signum() > 0) {
+            recordQuantityShortfall(position, consumption.shortfallQuantity());
+        }
         if (hasKnownPrice(flow)) {
-            BigDecimal feeCost = quantity.multiply(flow.getUnitPriceUsd(), MC);
+            BigDecimal feeCost = chargedQuantity.multiply(flow.getUnitPriceUsd(), MC);
             position.totalGasPaidUsd = position.totalGasPaidUsd.add(feeCost);
-            if (position.perWalletAvco != null) {
+            if (avcoAtTimeOfCharge != null && chargedQuantity.signum() > 0) {
                 position.totalCostBasisUsd = nonNegative(position.totalCostBasisUsd.subtract(
-                        quantity.multiply(position.perWalletAvco, MC),
+                        chargedQuantity.multiply(avcoAtTimeOfCharge, MC),
                         MC
                 ));
             }
         } else {
-            position.hasIncompleteHistory = true;
-            position.hasUnresolvedFlags = true;
-            position.unresolvedFlagCount++;
+            markUnresolved(position);
         }
-        position.perWalletAvco = position.quantity.signum() == 0
-                ? null
-                : safeDivide(position.totalCostBasisUsd, position.quantity);
+        recomputePerWalletAvco(position);
     }
 
     private void applyTransfer(
             NormalizedTransaction transaction,
             NormalizedTransaction.Flow flow,
             PositionState position,
+            Map<AssetKey, PositionState> positions,
             Map<ContinuityKey, ContinuityBucket> continuityBuckets,
             Map<String, Deque<CarryTransfer>> pendingTransfers
     ) {
@@ -659,12 +657,21 @@ public class AvcoReplayService {
 
         if (flow.getQuantityDelta().signum() < 0) {
             CarryTransfer carry = removeFromPosition(flow, position);
-            pendingTransfers.computeIfAbsent(transferKey, ignored -> new ArrayDeque<>()).addLast(carry);
+            Deque<CarryTransfer> queue = pendingTransfers.computeIfAbsent(transferKey, ignored -> new ArrayDeque<>());
+            if (!queue.isEmpty() && queue.peekFirst().pendingInbound()) {
+                CarryTransfer pendingInbound = queue.removeFirst();
+                attachLateCarryToPendingInbound(positions, pendingInbound, carry);
+                if (queue.isEmpty()) {
+                    pendingTransfers.remove(transferKey);
+                }
+                return;
+            }
+            queue.addLast(carry);
             return;
         }
 
         Deque<CarryTransfer> queue = pendingTransfers.get(transferKey);
-        if (queue != null && !queue.isEmpty()) {
+        if (queue != null && !queue.isEmpty() && !queue.peekFirst().pendingInbound()) {
             CarryTransfer carry = queue.removeFirst();
             restoreToPosition(flow, position, carry.avco(), carry.costBasisUsd());
             if (queue.isEmpty()) {
@@ -673,6 +680,7 @@ public class AvcoReplayService {
             return;
         }
 
+        materializePendingInbound(flow, position);
         pendingTransfers.computeIfAbsent(transferKey, ignored -> new ArrayDeque<>())
                 .addLast(CarryTransfer.pendingInbound(flow.getQuantityDelta().abs(), position.assetKey));
     }
@@ -705,20 +713,21 @@ public class AvcoReplayService {
     }
 
     private CarryTransfer removeFromPosition(NormalizedTransaction.Flow flow, PositionState position) {
-        BigDecimal quantity = flow.getQuantityDelta().abs();
+        BigDecimal requestedQuantity = flow.getQuantityDelta().abs();
         BigDecimal avco = position.perWalletAvco;
-        BigDecimal cost = avco == null ? BigDecimal.ZERO : quantity.multiply(avco, MC);
-        position.quantity = nonNegative(position.quantity.subtract(quantity, MC));
+        QuantityConsumption consumption = consumeQuantity(position, requestedQuantity);
+        BigDecimal cost = avco == null
+                ? BigDecimal.ZERO
+                : consumption.appliedQuantity().multiply(avco, MC);
         position.totalCostBasisUsd = nonNegative(position.totalCostBasisUsd.subtract(cost, MC));
-        position.perWalletAvco = position.quantity.signum() == 0
-                ? null
-                : safeDivide(position.totalCostBasisUsd, position.quantity);
-        if (avco == null) {
-            position.hasIncompleteHistory = true;
-            position.hasUnresolvedFlags = true;
-            position.unresolvedFlagCount++;
+        recomputePerWalletAvco(position);
+        if (consumption.shortfallQuantity().signum() > 0) {
+            recordQuantityShortfall(position, consumption.shortfallQuantity());
         }
-        return new CarryTransfer(quantity, cost, avco, false, position.assetKey);
+        if (avco == null) {
+            markUnresolved(position);
+        }
+        return new CarryTransfer(requestedQuantity, cost, avco, false, position.assetKey);
     }
 
     private void restoreToPosition(
@@ -729,25 +738,86 @@ public class AvcoReplayService {
     ) {
         position.quantity = position.quantity.add(flow.getQuantityDelta().abs());
         position.totalCostBasisUsd = position.totalCostBasisUsd.add(cost);
-        position.perWalletAvco = avco != null
-                ? safeDivide(position.totalCostBasisUsd, position.quantity)
-                : position.perWalletAvco;
+        if (avco != null) {
+            recomputePerWalletAvco(position);
+        }
         if (avco == null) {
-            position.hasIncompleteHistory = true;
-            position.hasUnresolvedFlags = true;
-            position.unresolvedFlagCount++;
+            markUnresolved(position);
         }
     }
 
     private void applyUnknownTransfer(NormalizedTransaction.Flow flow, PositionState position) {
         if (flow.getQuantityDelta().signum() > 0) {
             position.quantity = position.quantity.add(flow.getQuantityDelta().abs());
-        } else {
-            position.quantity = nonNegative(position.quantity.subtract(flow.getQuantityDelta().abs(), MC));
+            markUnresolved(position);
+            return;
         }
+        QuantityConsumption consumption = consumeQuantity(position, flow.getQuantityDelta().abs());
+        if (consumption.shortfallQuantity().signum() > 0) {
+            recordQuantityShortfall(position, consumption.shortfallQuantity());
+        }
+        markUnresolved(position);
+    }
+
+    private void materializePendingInbound(NormalizedTransaction.Flow flow, PositionState position) {
+        position.quantity = position.quantity.add(flow.getQuantityDelta().abs());
+        markUnresolved(position);
+    }
+
+    private void attachLateCarryToPendingInbound(
+            Map<AssetKey, PositionState> positions,
+            CarryTransfer pendingInbound,
+            CarryTransfer carry
+    ) {
+        PositionState destination = positions.computeIfAbsent(
+                pendingInbound.assetKey(),
+                ignored -> new PositionState(pendingInbound.assetKey())
+        );
+        destination.totalCostBasisUsd = destination.totalCostBasisUsd.add(carry.costBasisUsd());
+        destination.perWalletAvco = destination.quantity.signum() == 0
+                ? null
+                : safeDivide(destination.totalCostBasisUsd, destination.quantity);
+        if (carry.avco() != null) {
+            resolveTemporaryUnresolved(destination);
+        }
+    }
+
+    private void markUnresolved(PositionState position) {
         position.hasIncompleteHistory = true;
         position.hasUnresolvedFlags = true;
         position.unresolvedFlagCount++;
+    }
+
+    private void recordQuantityShortfall(PositionState position, BigDecimal quantityShortfall) {
+        if (quantityShortfall == null || quantityShortfall.signum() <= 0) {
+            return;
+        }
+        position.quantityShortfall = position.quantityShortfall.add(quantityShortfall);
+        markUnresolved(position);
+    }
+
+    private QuantityConsumption consumeQuantity(PositionState position, BigDecimal requestedQuantity) {
+        BigDecimal availableQuantity = position.quantity == null ? BigDecimal.ZERO : position.quantity;
+        BigDecimal appliedQuantity = requestedQuantity.min(availableQuantity);
+        BigDecimal shortfallQuantity = nonNegative(requestedQuantity.subtract(appliedQuantity, MC));
+        position.quantity = nonNegative(availableQuantity.subtract(appliedQuantity, MC));
+        return new QuantityConsumption(appliedQuantity, shortfallQuantity);
+    }
+
+    private void recomputePerWalletAvco(PositionState position) {
+        position.perWalletAvco = position.quantity.signum() == 0
+                ? null
+                : safeDivide(position.totalCostBasisUsd, position.quantity);
+    }
+
+    private void resolveTemporaryUnresolved(PositionState position) {
+        if (position.unresolvedFlagCount > 0) {
+            position.unresolvedFlagCount--;
+        }
+        if (position.unresolvedFlagCount == 0) {
+            position.hasIncompleteHistory = false;
+            position.hasUnresolvedFlags = false;
+        }
     }
 
     private void applyFallbackSettlementFlow(
@@ -882,24 +952,6 @@ public class AvcoReplayService {
         restoreToPosition(flow, position, avco, allocatedCost);
     }
 
-    private void resolveUnmatchedIncomingTransfers(
-            Map<AssetKey, PositionState> positions,
-            Map<String, Deque<CarryTransfer>> pendingTransfers
-    ) {
-        for (Deque<CarryTransfer> queue : pendingTransfers.values()) {
-            for (CarryTransfer carry : queue) {
-                if (!carry.pendingInbound()) {
-                    continue;
-                }
-                PositionState position = positions.computeIfAbsent(carry.assetKey(), ignored -> new PositionState(carry.assetKey()));
-                position.quantity = position.quantity.add(carry.quantity());
-                position.hasIncompleteHistory = true;
-                position.hasUnresolvedFlags = true;
-                position.unresolvedFlagCount++;
-            }
-        }
-    }
-
     private List<AssetPosition> materializePositions(
             Map<AssetKey, PositionState> positions,
             Instant now
@@ -917,6 +969,7 @@ public class AvcoReplayService {
             position.setTotalCostBasisUsd(state.totalCostBasisUsd);
             position.setTotalGasPaidUsd(state.totalGasPaidUsd);
             position.setTotalRealisedPnlUsd(state.totalRealisedPnlUsd);
+            position.setQuantityShortfall(state.quantityShortfall);
             position.setHasIncompleteHistory(state.hasIncompleteHistory);
             position.setHasUnresolvedFlags(state.hasUnresolvedFlags);
             position.setUnresolvedFlagCount(state.unresolvedFlagCount);
@@ -1116,12 +1169,12 @@ public class AvcoReplayService {
     }
 
     private AssetKey assetKey(NormalizedTransaction transaction, NormalizedTransaction.Flow flow) {
-        String assetContract = normalizeContract(flow.getAssetContract());
+        String assetContract = AccountingAssetIdentitySupport.positionAssetIdentity(transaction, flow);
         String assetSymbol = normalizeSymbol(flow.getAssetSymbol());
         String assetIdentity = assetContract != null ? assetContract : "SYMBOL:" + assetSymbol;
         return new AssetKey(
                 transaction.getWalletAddress(),
-                transaction.getNetworkId(),
+                AccountingAssetIdentitySupport.positionNetwork(transaction),
                 assetContract != null ? assetContract : assetIdentity,
                 assetSymbol,
                 assetIdentity
@@ -1243,6 +1296,7 @@ public class AvcoReplayService {
         private BigDecimal totalCostBasisUsd = BigDecimal.ZERO;
         private BigDecimal totalGasPaidUsd = BigDecimal.ZERO;
         private BigDecimal totalRealisedPnlUsd = BigDecimal.ZERO;
+        private BigDecimal quantityShortfall = BigDecimal.ZERO;
         private boolean hasIncompleteHistory;
         private boolean hasUnresolvedFlags;
         private int unresolvedFlagCount;
@@ -1273,6 +1327,12 @@ public class AvcoReplayService {
     private record AsyncSpotOrderCarry(
             CarryTransfer carry,
             NormalizedTransaction.Flow requestFlow
+    ) {
+    }
+
+    private record QuantityConsumption(
+            BigDecimal appliedQuantity,
+            BigDecimal shortfallQuantity
     ) {
     }
 }

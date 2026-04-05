@@ -89,6 +89,36 @@ class PriceResolutionServiceTest {
     }
 
     @Test
+    void multiLegSameCanonicalSwapFallsBackToExternalPriceInsteadOfSwapDerived() {
+        PriceResolutionService service = service();
+        NormalizedTransaction transaction = transaction(
+                NormalizedTransactionSource.ON_CHAIN,
+                NormalizedTransactionType.SWAP,
+                null,
+                flow(NormalizedLegRole.SELL, "0x000000000000000000000000000000000000800a", "ETH", "-0.00005147300208"),
+                flow(NormalizedLegRole.BUY, "0x000000000000000000000000000000000000800a", "ETH", "0.00001012463808"),
+                flow(NormalizedLegRole.BUY, "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", "USDC", "800.14231")
+        );
+        when(externalSources.resolve(argThat(matchesSymbol("ETH")))).thenReturn(Optional.of(new PriceQuote(
+                new BigDecimal("3200"),
+                PriceSource.BINANCE,
+                transaction.getBlockTimestamp(),
+                "USD",
+                "ETHUSDT"
+        )));
+
+        NormalizedTransaction priced = service.resolve(transaction, Instant.parse("2026-03-25T12:00:00Z"));
+
+        assertThat(priced.getFlows().get(0).getUnitPriceUsd()).isEqualByComparingTo("3200");
+        assertThat(priced.getFlows().get(0).getPriceSource()).isEqualTo(PriceSource.BINANCE);
+        assertThat(priced.getFlows().get(1).getUnitPriceUsd()).isEqualByComparingTo("3200");
+        assertThat(priced.getFlows().get(1).getPriceSource()).isEqualTo(PriceSource.WRAPPER);
+        assertThat(priced.getFlows().get(2).getUnitPriceUsd()).isEqualByComparingTo("1");
+        assertThat(priced.getFlows().get(2).getPriceSource()).isEqualTo(PriceSource.STABLECOIN);
+        verify(externalSources).resolve(argThat(matchesSymbol("ETH")));
+    }
+
+    @Test
     void lpContinuityPrincipalDoesNotRequireSyntheticPrincipalPricing() {
         PriceResolutionService service = service();
         NormalizedTransaction transaction = transaction(

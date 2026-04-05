@@ -1,6 +1,8 @@
 package com.walletradar.ingestion.pipeline.clarification;
 
 import com.walletradar.accounting.support.BridgeAssetFamilySupport;
+import com.walletradar.domain.common.ConfidenceLevel;
+import com.walletradar.domain.transaction.normalized.ClassificationSource;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
@@ -34,7 +36,7 @@ import java.util.Optional;
 @RequiredArgsConstructor
 public class AcrossBridgePairLinkService {
 
-    private static final Duration MAX_TIME_DELTA = Duration.ofSeconds(5);
+    private static final Duration MAX_TIME_DELTA = Duration.ofSeconds(15);
     private static final BigDecimal MAX_RELATIVE_QTY_DIFF = new BigDecimal("0.005");
     private static final int CANDIDATE_LIMIT = 12;
 
@@ -120,7 +122,10 @@ public class AcrossBridgePairLinkService {
     private List<NormalizedTransaction> loadDestinationCandidates(NormalizedTransaction source) {
         Query query = new Query(new Criteria().andOperator(
                 Criteria.where("source").is(NormalizedTransactionSource.ON_CHAIN),
-                Criteria.where("type").is(NormalizedTransactionType.BRIDGE_IN),
+                new Criteria().orOperator(
+                        Criteria.where("type").is(NormalizedTransactionType.BRIDGE_IN),
+                        Criteria.where("type").is(NormalizedTransactionType.EXTERNAL_TRANSFER_IN)
+                ),
                 Criteria.where("walletAddress").is(source.getWalletAddress()),
                 Criteria.where("blockTimestamp").gte(source.getBlockTimestamp().minus(MAX_TIME_DELTA))
                         .lte(source.getBlockTimestamp().plus(MAX_TIME_DELTA)),
@@ -209,12 +214,38 @@ public class AcrossBridgePairLinkService {
             updates.add(source);
         }
 
-        if (!sameHash(destination.getMatchedCounterparty(), source.getTxHash())
-                || !sameCorrelation(destination.getCorrelationId(), correlationId)
-                || !Objects.equals(destination.getContinuityCandidate(), continuityCandidate)) {
+        boolean destinationChanged = false;
+        if (destination.getType() == NormalizedTransactionType.EXTERNAL_TRANSFER_IN && isInboundOnly(destination)) {
+            destination.setType(NormalizedTransactionType.BRIDGE_IN);
+            retagInboundFlowsAsBridgeTransfer(destination);
+            if (destination.getClassifiedBy() == null) {
+                destination.setClassifiedBy(ClassificationSource.HEURISTIC);
+            }
+            if (destination.getConfidence() == null || destination.getConfidence() == ConfidenceLevel.LOW) {
+                destination.setConfidence(ConfidenceLevel.MEDIUM);
+            }
+            if (!hasText(destination.getProtocolName()) && hasText(source.getProtocolName())) {
+                destination.setProtocolName(source.getProtocolName());
+            }
+            if (!hasText(destination.getProtocolVersion()) && hasText(source.getProtocolVersion())) {
+                destination.setProtocolVersion(source.getProtocolVersion());
+            }
+            destinationChanged = true;
+        }
+        if (!sameHash(destination.getMatchedCounterparty(), source.getTxHash())) {
             destination.setMatchedCounterparty(source.getTxHash());
+            destinationChanged = true;
+        }
+        if (!sameCorrelation(destination.getCorrelationId(), correlationId)) {
             destination.setCorrelationId(correlationId);
+            destinationChanged = true;
+        }
+        if (!Objects.equals(destination.getContinuityCandidate(), continuityCandidate)) {
             destination.setContinuityCandidate(continuityCandidate);
+            destinationChanged = true;
+        }
+        if (destinationChanged) {
+            destination.setMatchedCounterparty(source.getTxHash());
             destination.setUpdatedAt(now);
             updates.add(destination);
         }
@@ -273,9 +304,44 @@ public class AcrossBridgePairLinkService {
     private boolean isDestinationCandidate(NormalizedTransaction transaction) {
         return transaction != null
                 && transaction.getSource() == NormalizedTransactionSource.ON_CHAIN
-                && transaction.getType() == NormalizedTransactionType.BRIDGE_IN
+                && isMaterializableDestination(transaction)
                 && hasText(transaction.getWalletAddress())
                 && transaction.getBlockTimestamp() != null;
+    }
+
+    private boolean isMaterializableDestination(NormalizedTransaction destination) {
+        if (destination == null) {
+            return false;
+        }
+        if (destination.getType() == NormalizedTransactionType.BRIDGE_IN) {
+            return true;
+        }
+        return destination.getType() == NormalizedTransactionType.EXTERNAL_TRANSFER_IN
+                && isInboundOnly(destination);
+    }
+
+    private boolean isInboundOnly(NormalizedTransaction transaction) {
+        if (transaction == null || transaction.getFlows() == null) {
+            return false;
+        }
+        boolean hasInbound = transaction.getFlows().stream()
+                .filter(Objects::nonNull)
+                .filter(flow -> flow.getRole() != NormalizedLegRole.FEE)
+                .anyMatch(flow -> flow.getQuantityDelta() != null && flow.getQuantityDelta().signum() > 0);
+        boolean hasOutbound = transaction.getFlows().stream()
+                .filter(Objects::nonNull)
+                .filter(flow -> flow.getRole() != NormalizedLegRole.FEE)
+                .anyMatch(flow -> flow.getQuantityDelta() != null && flow.getQuantityDelta().signum() < 0);
+        return hasInbound && !hasOutbound;
+    }
+
+    private void retagInboundFlowsAsBridgeTransfer(NormalizedTransaction transaction) {
+        for (NormalizedTransaction.Flow flow : transaction.getFlows()) {
+            if (flow == null || flow.getRole() == NormalizedLegRole.FEE) {
+                continue;
+            }
+            flow.setRole(NormalizedLegRole.TRANSFER);
+        }
     }
 
     private boolean sameWallet(NormalizedTransaction left, NormalizedTransaction right) {

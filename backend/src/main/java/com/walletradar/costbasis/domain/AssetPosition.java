@@ -51,6 +51,7 @@ public class AssetPosition {
     private BigDecimal totalCostBasisUsd;
     private BigDecimal totalGasPaidUsd;
     private BigDecimal totalRealisedPnlUsd;
+    private BigDecimal quantityShortfall;
     private Boolean hasIncompleteHistory;
     private Boolean hasUnresolvedFlags;
     private Integer unresolvedFlagCount;

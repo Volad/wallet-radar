@@ -8,7 +8,6 @@ import org.springframework.core.Ordered;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -19,9 +18,6 @@ import java.util.Set;
  */
 @Component
 public class DefaultClassifier implements OnChainFamilyClassifier {
-
-    private static final String UNVERIFIED_ROUTED_SEND_HASH =
-            "0x9712e051e33e603b22039ef74ed946e78664695aa341a8825a516822aa5f8966";
 
     private static final Map<String, List<String>> TERMINAL_STOP_CONDITION_REASONS = Map.of(
             "0x0088de663d549fbc58dfa8dbba4180a346a580b1d6277254fa84a8ed9c27967a",
@@ -54,23 +50,14 @@ public class DefaultClassifier implements OnChainFamilyClassifier {
         if (txHash == null) {
             return Optional.empty();
         }
-        String normalizedHash = txHash.toLowerCase(Locale.ROOT);
-        if (UNVERIFIED_ROUTED_SEND_HASH.equals(normalizedHash)) {
-            return Optional.of(FamilyDecisionSupport.terminalUnknown(
-                    ClassificationSource.METHOD_ID,
-                    ConfidenceLevel.LOW,
-                    context.movementLegs(),
-                    List.of("UNVERIFIED_ROUTED_SEND")
-            ));
-        }
-        if (!TERMINAL_STOP_CONDITION_HASHES.contains(normalizedHash)) {
+        if (!TERMINAL_STOP_CONDITION_HASHES.contains(txHash.toLowerCase(java.util.Locale.ROOT))) {
             return Optional.empty();
         }
         return Optional.of(FamilyDecisionSupport.terminalUnknown(
                 ClassificationSource.HEURISTIC,
                 ConfidenceLevel.LOW,
                 context.movementLegs(),
-                TERMINAL_STOP_CONDITION_REASONS.getOrDefault(normalizedHash, List.of())
+                TERMINAL_STOP_CONDITION_REASONS.getOrDefault(txHash.toLowerCase(java.util.Locale.ROOT), List.of())
         ));
     }
 }

@@ -4,6 +4,7 @@ import com.walletradar.domain.common.PriceSource;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.pricing.domain.CanonicalAssetCatalog;
 import com.walletradar.pricing.domain.PriceQuote;
 import com.walletradar.pricing.domain.PriceResolutionContext;
 import org.springframework.core.annotation.Order;
@@ -28,6 +29,9 @@ public class SwapDerivedPriceResolver implements EventLocalPriceResolver {
                 || context.flow().getRole() == NormalizedLegRole.FEE
                 || context.flow().getQuantityDelta() == null
                 || context.flow().getQuantityDelta().signum() == 0) {
+            return Optional.empty();
+        }
+        if (hasMultipleSameCanonicalFlows(context)) {
             return Optional.empty();
         }
 
@@ -57,5 +61,27 @@ public class SwapDerivedPriceResolver implements EventLocalPriceResolver {
             ));
         }
         return Optional.empty();
+    }
+
+    private boolean hasMultipleSameCanonicalFlows(PriceResolutionContext context) {
+        int sameCanonicalCount = 0;
+        for (NormalizedTransaction.Flow sibling : context.flows()) {
+            if (sibling == null
+                    || sibling.getRole() == NormalizedLegRole.FEE
+                    || sibling.getQuantityDelta() == null
+                    || sibling.getQuantityDelta().signum() == 0) {
+                continue;
+            }
+            if (CanonicalAssetCatalog.sameCanonicalSymbol(
+                    context.flow().getAssetSymbol(),
+                    sibling.getAssetSymbol()
+            )) {
+                sameCanonicalCount++;
+                if (sameCanonicalCount > 1) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 }

@@ -149,6 +149,15 @@ Implemented:
 - session-level authoritative pipeline state in `user_sessions.pipelineState`
 - session-level watchdog scheduler that re-emits backfill completion when raw
   backfill is already complete and pipeline work is still pending
+- session-level watchdog now resumes from the next live stage, not only from
+  raw backfill:
+  - pending raw or empty normalized scope -> re-emit backfill completion
+  - pending clarification -> resume clarification chain
+  - raw / unmatched Bybit work -> resume Bybit normalization
+  - pending price -> resume pricing
+  - pending stat or empty positions with confirmed rows -> resume accounting replay
+- stale `pipelineState = RUNNING` no longer blocks recovery forever; the
+  watchdog treats old running state as recoverable and resumes from live data
 - live-session event chain:
   - session backfill complete -> on-chain normalization
   - on-chain normalization complete -> clarification

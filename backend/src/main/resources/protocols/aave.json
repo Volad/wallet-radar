@@ -8,14 +8,14 @@
   "clarificationHints": ["FULL_RECEIPT"],
   "markers": {
     "methodSelectors": {
-      "lendingDeposit": ["0x617ba037", "0xe8eda9df", "0x852a12e3"],
-      "lendingWithdraw": ["0x69328dec", "0xdb006a75"],
+      "lendingDeposit": ["0x617ba037", "0xe8eda9df", "0x852a12e3", "0x02c205f0", "0x474cf53d"],
+      "lendingWithdraw": ["0x69328dec", "0xdb006a75", "0x80500d20"],
       "borrow": ["0xa415bcad"],
       "repay": ["0x573ade81"]
     },
     "functionNames": {
-      "lendingDeposit": ["supply", "deposit", "supplywithpermit"],
-      "lendingWithdraw": ["withdraw", "redeem"],
+      "lendingDeposit": ["supply", "deposit", "supplywithpermit", "depositeth"],
+      "lendingWithdraw": ["withdraw", "redeem", "withdraweth"],
       "borrow": ["borrow"],
       "repay": ["repay", "repaywithpermit", "repaywithatokens"]
     },

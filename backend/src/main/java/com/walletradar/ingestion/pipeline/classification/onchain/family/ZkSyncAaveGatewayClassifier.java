@@ -1,0 +1,117 @@
+package com.walletradar.ingestion.pipeline.classification.onchain.family;
+
+import com.walletradar.domain.common.ConfidenceLevel;
+import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.transaction.normalized.ClassificationSource;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.ingestion.pipeline.classification.ClassificationDecision;
+import com.walletradar.ingestion.pipeline.classification.OnChainClassificationContext;
+import com.walletradar.ingestion.pipeline.classification.support.OnChainClassificationSupport;
+import com.walletradar.ingestion.pipeline.classification.support.ParityFlowSupport;
+import com.walletradar.ingestion.pipeline.classification.support.RawLeg;
+import org.springframework.core.Ordered;
+import org.springframework.stereotype.Component;
+
+import java.util.List;
+import java.util.Locale;
+import java.util.Optional;
+
+/**
+ * Narrow audited override for zkSync Aave gateway selectors that currently escape into
+ * generic unwrap / LP fallback lanes.
+ */
+@Component
+public class ZkSyncAaveGatewayClassifier implements OnChainFamilyClassifier {
+
+    private static final String WITHDRAW_ETH_SELECTOR = "0x80500d20";
+    private static final String SUPPLY_WITH_PERMIT_SELECTOR = "0x02c205f0";
+    private static final String DEPOSIT_ETH_SELECTOR = "0x474cf53d";
+
+    private static final String NATIVE_ETH_SYMBOL = "ETH";
+    private static final String WRAPPED_ETH_SYMBOL = "WETH";
+    private static final String ZKSYNC_AAVE_RECEIPT_SYMBOL = "AZKSWETH";
+
+    @Override
+    public OnChainClassificationInsertionPoint insertionPoint() {
+        return OnChainClassificationInsertionPoint.PRE_PROTOCOL_REVIEW;
+    }
+
+    @Override
+    public int getOrder() {
+        return Ordered.HIGHEST_PRECEDENCE + 140;
+    }
+
+    @Override
+    public Optional<ClassificationDecision> classify(OnChainClassificationContext context) {
+        if (context == null || context.view() == null || context.view().networkId() != NetworkId.ZKSYNC) {
+            return Optional.empty();
+        }
+        return switch (context.view().methodId()) {
+            case WITHDRAW_ETH_SELECTOR -> classifyWithdrawEth(context);
+            case SUPPLY_WITH_PERMIT_SELECTOR -> classifySupplyWithPermit(context);
+            case DEPOSIT_ETH_SELECTOR -> classifyDepositEth(context);
+            default -> Optional.empty();
+        };
+    }
+
+    private Optional<ClassificationDecision> classifyWithdrawEth(OnChainClassificationContext context) {
+        if (!hasOutbound(context.movementLegs(), ZKSYNC_AAVE_RECEIPT_SYMBOL)
+                || !hasInbound(context.movementLegs(), NATIVE_ETH_SYMBOL)) {
+            return Optional.empty();
+        }
+        return Optional.of(build(context, NormalizedTransactionType.LENDING_WITHDRAW));
+    }
+
+    private Optional<ClassificationDecision> classifySupplyWithPermit(OnChainClassificationContext context) {
+        if (!hasOutbound(context.movementLegs(), WRAPPED_ETH_SYMBOL)
+                || !hasInbound(context.movementLegs(), ZKSYNC_AAVE_RECEIPT_SYMBOL)) {
+            return Optional.empty();
+        }
+        return Optional.of(build(context, NormalizedTransactionType.LENDING_DEPOSIT));
+    }
+
+    private Optional<ClassificationDecision> classifyDepositEth(OnChainClassificationContext context) {
+        if (!hasOutbound(context.movementLegs(), NATIVE_ETH_SYMBOL)
+                || !hasInbound(context.movementLegs(), ZKSYNC_AAVE_RECEIPT_SYMBOL)) {
+            return Optional.empty();
+        }
+        return Optional.of(build(context, NormalizedTransactionType.LENDING_DEPOSIT));
+    }
+
+    private ClassificationDecision build(
+            OnChainClassificationContext context,
+            NormalizedTransactionType type
+    ) {
+        return FamilyDecisionSupport.buildWithView(
+                context.view(),
+                type,
+                OnChainClassificationSupport.initialStatus(context.view(), type, ConfidenceLevel.MEDIUM),
+                ClassificationSource.METHOD_ID,
+                ConfidenceLevel.MEDIUM,
+                ParityFlowSupport.flows(context.view(), context.movementLegs(), type),
+                List.of(),
+                "Aave",
+                "V3"
+        );
+    }
+
+    private boolean hasInbound(List<RawLeg> movementLegs, String symbol) {
+        return movementLegs.stream()
+                .filter(leg -> leg != null && !leg.fee() && leg.quantityDelta() != null)
+                .anyMatch(leg -> leg.quantityDelta().signum() > 0 && matchesSymbol(leg, symbol));
+    }
+
+    private boolean hasOutbound(List<RawLeg> movementLegs, String symbol) {
+        return movementLegs.stream()
+                .filter(leg -> leg != null && !leg.fee() && leg.quantityDelta() != null)
+                .anyMatch(leg -> leg.quantityDelta().signum() < 0 && matchesSymbol(leg, symbol));
+    }
+
+    private boolean matchesSymbol(RawLeg leg, String symbol) {
+        if (leg == null || symbol == null) {
+            return false;
+        }
+        String normalizedLegSymbol = leg.assetSymbol() == null ? "" : leg.assetSymbol().trim().toUpperCase(Locale.ROOT);
+        return symbol.equals(normalizedLegSymbol);
+    }
+}

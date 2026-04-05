@@ -2,6 +2,7 @@ package com.walletradar.costbasis.application;
 
 import com.walletradar.costbasis.domain.AssetPositionRepository;
 import com.walletradar.domain.event.PricingCompletedEvent;
+import com.walletradar.domain.session.UserSession;
 import com.walletradar.pricing.application.PricingDataGateService;
 import com.walletradar.pricing.application.PricingDataGateSnapshot;
 import com.walletradar.session.application.SessionPipelineStateService;
@@ -9,10 +10,13 @@ import com.walletradar.telemetry.PipelineTelemetrySnapshot;
 import com.walletradar.telemetry.PipelineTelemetrySnapshotService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -28,6 +32,12 @@ class CostBasisReplayJobTest {
     private StatValidationService statValidationService;
     @Mock
     private AvcoReplayService avcoReplayService;
+    @Mock
+    private OnChainBalanceRefreshService onChainBalanceRefreshService;
+    @Mock
+    private AssetPositionReconciliationService assetPositionReconciliationService;
+    @Mock
+    private ReconciledHoldingsMaterializationService reconciledHoldingsMaterializationService;
     @Mock
     private AssetPositionRepository assetPositionRepository;
     @Mock
@@ -53,6 +63,9 @@ class CostBasisReplayJobTest {
                 pendingStatQueryService,
                 statValidationService,
                 avcoReplayService,
+                onChainBalanceRefreshService,
+                assetPositionReconciliationService,
+                reconciledHoldingsMaterializationService,
                 assetPositionRepository,
                 pipelineTelemetrySnapshotService,
                 sessionPipelineStateService
@@ -62,6 +75,18 @@ class CostBasisReplayJobTest {
 
         assertThat(replayed).isEqualTo(7);
         verify(avcoReplayService).replayConfirmed();
+        InOrder inOrder = org.mockito.Mockito.inOrder(
+                avcoReplayService,
+                onChainBalanceRefreshService,
+                assetPositionReconciliationService,
+                reconciledHoldingsMaterializationService
+        );
+        inOrder.verify(avcoReplayService).replayConfirmed();
+        inOrder.verify(onChainBalanceRefreshService).refreshCurrentBalances(org.mockito.ArgumentMatchers.any());
+        inOrder.verify(assetPositionReconciliationService).reconcile(org.mockito.ArgumentMatchers.any());
+        inOrder.verify(reconciledHoldingsMaterializationService).materialize(org.mockito.ArgumentMatchers.any());
+        verify(assetPositionReconciliationService).reconcile(org.mockito.ArgumentMatchers.any());
+        verify(reconciledHoldingsMaterializationService).materialize(org.mockito.ArgumentMatchers.any());
     }
 
     @Test
@@ -78,6 +103,9 @@ class CostBasisReplayJobTest {
                 pendingStatQueryService,
                 statValidationService,
                 avcoReplayService,
+                onChainBalanceRefreshService,
+                assetPositionReconciliationService,
+                reconciledHoldingsMaterializationService,
                 assetPositionRepository,
                 pipelineTelemetrySnapshotService,
                 sessionPipelineStateService
@@ -87,6 +115,14 @@ class CostBasisReplayJobTest {
 
         assertThat(replayed).isZero();
         verify(avcoReplayService, never()).replayConfirmed();
+        verify(onChainBalanceRefreshService, never()).refreshCurrentBalances(org.mockito.ArgumentMatchers.any());
+        verify(assetPositionReconciliationService, never()).reconcile(org.mockito.ArgumentMatchers.any());
+        verify(reconciledHoldingsMaterializationService, never()).materialize(org.mockito.ArgumentMatchers.any());
+        verify(sessionPipelineStateService).markStageBlocked(
+                eq(null),
+                eq(UserSession.PipelineStage.ACCOUNTING_REPLAY),
+                contains("Accounting replay blocked")
+        );
     }
 
     @Test
@@ -106,6 +142,9 @@ class CostBasisReplayJobTest {
                 pendingStatQueryService,
                 statValidationService,
                 avcoReplayService,
+                onChainBalanceRefreshService,
+                assetPositionReconciliationService,
+                reconciledHoldingsMaterializationService,
                 assetPositionRepository,
                 pipelineTelemetrySnapshotService,
                 sessionPipelineStateService
@@ -114,6 +153,9 @@ class CostBasisReplayJobTest {
         job.runReplay();
 
         verify(avcoReplayService).replayConfirmed();
+        verify(onChainBalanceRefreshService).refreshCurrentBalances(org.mockito.ArgumentMatchers.any());
+        verify(assetPositionReconciliationService).reconcile(org.mockito.ArgumentMatchers.any());
+        verify(reconciledHoldingsMaterializationService).materialize(org.mockito.ArgumentMatchers.any());
     }
 
     @Test
@@ -132,6 +174,9 @@ class CostBasisReplayJobTest {
                 pendingStatQueryService,
                 statValidationService,
                 avcoReplayService,
+                onChainBalanceRefreshService,
+                assetPositionReconciliationService,
+                reconciledHoldingsMaterializationService,
                 assetPositionRepository,
                 pipelineTelemetrySnapshotService,
                 sessionPipelineStateService
@@ -140,6 +185,9 @@ class CostBasisReplayJobTest {
         job.onPricingCompleted(new PricingCompletedEvent("session-1", 0, "bybit-normalization-completed"));
 
         verify(avcoReplayService).replayConfirmed();
+        verify(onChainBalanceRefreshService).refreshCurrentBalances(org.mockito.ArgumentMatchers.any());
+        verify(assetPositionReconciliationService).reconcile(org.mockito.ArgumentMatchers.any());
+        verify(reconciledHoldingsMaterializationService).materialize(org.mockito.ArgumentMatchers.any());
     }
 
     private CostBasisProperties properties() {

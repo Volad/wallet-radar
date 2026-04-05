@@ -21,11 +21,13 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
 import org.springframework.web.util.UriComponentsBuilder;
 import org.springframework.web.util.UriUtils;
 
+import java.math.BigInteger;
 import java.time.Duration;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.function.Function;
 
@@ -121,6 +123,48 @@ public class BlockScoutExplorerProvider implements ExplorerProvider {
             return null;
         }
         return new ExplorerReceipt(toDocument(result));
+    }
+
+    public BigInteger getNativeBalance(String walletAddress, NetworkId networkId) {
+        JsonNode root = callAddressInfo(networkId, walletAddress);
+        if (root == null) {
+            return null;
+        }
+        return parseDecimalValue(root.path("coin_balance"));
+    }
+
+    public Map<String, TokenBalanceSnapshot> getTokenBalances(String walletAddress, NetworkId networkId) {
+        JsonNode root = callAddressTokenBalances(networkId, walletAddress);
+        if (root == null) {
+            return Map.of();
+        }
+        JsonNode items = root.isArray() ? root : root.path("items");
+        if (!items.isArray()) {
+            return Map.of();
+        }
+        Map<String, TokenBalanceSnapshot> balances = new LinkedHashMap<>();
+        for (JsonNode item : items) {
+            JsonNode token = item.path("token");
+            String contractAddress = token.path("address_hash").asText(null);
+            BigInteger rawQuantity = parseDecimalValue(item.path("value"));
+            Integer decimals = parseOptionalInteger(token.path("decimals"));
+            if (contractAddress == null || contractAddress.isBlank() || rawQuantity == null || decimals == null) {
+                continue;
+            }
+            balances.putIfAbsent(
+                    contractAddress.toLowerCase(Locale.ROOT),
+                    new TokenBalanceSnapshot(rawQuantity, decimals)
+            );
+        }
+        return Map.copyOf(balances);
+    }
+
+    public Integer getTokenDecimals(String contractAddress, NetworkId networkId) {
+        JsonNode root = callTokenInfo(networkId, contractAddress);
+        if (root == null) {
+            return null;
+        }
+        return parseOptionalInteger(root.path("decimals"));
     }
 
     public List<ExplorerTokenTransfer> getTransactionTokenTransfers(String txHash, NetworkId networkId) {
@@ -336,6 +380,45 @@ public class BlockScoutExplorerProvider implements ExplorerProvider {
         return null;
     }
 
+    private JsonNode callAddressInfo(NetworkId networkId, String walletAddress) {
+        ResolvedExplorerConfig cfg = resolveConfig(networkId);
+        if (cfg == null || cfg.entry() == null || walletAddress == null || walletAddress.isBlank()) {
+            return null;
+        }
+        return callV2(
+                networkId,
+                buildV2AddressUrl(cfg, walletAddress, apiKeyParams(cfg)),
+                "address-info",
+                walletAddress
+        );
+    }
+
+    private JsonNode callAddressTokenBalances(NetworkId networkId, String walletAddress) {
+        ResolvedExplorerConfig cfg = resolveConfig(networkId);
+        if (cfg == null || cfg.entry() == null || walletAddress == null || walletAddress.isBlank()) {
+            return null;
+        }
+        return callV2(
+                networkId,
+                buildV2AddressSubresourceUrl(cfg, walletAddress, "token-balances", apiKeyParams(cfg)),
+                "address-token-balances",
+                walletAddress
+        );
+    }
+
+    private JsonNode callTokenInfo(NetworkId networkId, String contractAddress) {
+        ResolvedExplorerConfig cfg = resolveConfig(networkId);
+        if (cfg == null || cfg.entry() == null || contractAddress == null || contractAddress.isBlank()) {
+            return null;
+        }
+        return callV2(
+                networkId,
+                buildV2TokenUrl(cfg, contractAddress, apiKeyParams(cfg)),
+                "token-info",
+                contractAddress
+        );
+    }
+
     private JsonNode callTransactionSubresource(NetworkId networkId, String txHash, String subresource) {
         ResolvedExplorerConfig cfg = resolveConfig(networkId);
         if (cfg == null || cfg.entry() == null || txHash == null || txHash.isBlank() || subresource == null || subresource.isBlank()) {
@@ -379,6 +462,44 @@ public class BlockScoutExplorerProvider implements ExplorerProvider {
         } else {
             log.warn("Blockscout tx-subresource call failed on {} after retries: txHash={}, subresource={}, cause=unknown",
                     networkId, txHash, subresource);
+        }
+        return null;
+    }
+
+    private JsonNode callV2(NetworkId networkId, String url, String operation, String subject) {
+        RetryPolicy retryPolicy = new RetryPolicy(
+                Math.max(100L, explorerProperties.getBaseDelayMs()),
+                Math.max(0.0, explorerProperties.getJitterFactor()),
+                Math.max(1, explorerProperties.getMaxAttempts())
+        );
+
+        Exception last = null;
+        for (int attempt = 0; attempt < retryPolicy.getMaxAttempts(); attempt++) {
+            if (attempt > 0) {
+                sleepQuietly(retryPolicy.delayMs(attempt - 1));
+            }
+            try {
+                JsonNode root = execute(url);
+                if (root == null) {
+                    continue;
+                }
+                if (isV2Error(root)) {
+                    throw new IllegalStateException("Blockscout " + operation + " error: " + errorMessage(root));
+                }
+                return root;
+            } catch (Exception e) {
+                if (isNotFound(e)) {
+                    return null;
+                }
+                last = e;
+            }
+        }
+        if (last != null) {
+            log.warn("Blockscout {} call failed on {} after retries: subject={}, cause={}",
+                    operation, networkId, subject, last.getMessage(), last);
+        } else {
+            log.warn("Blockscout {} call failed on {} after retries: subject={}, cause=unknown",
+                    operation, networkId, subject);
         }
         return null;
     }
@@ -617,6 +738,28 @@ public class BlockScoutExplorerProvider implements ExplorerProvider {
         return builder.build(true).toUriString();
     }
 
+    private static String buildV2AddressUrl(ResolvedExplorerConfig cfg, String walletAddress, Map<String, String> params) {
+        IngestionNetworkProperties.NetworkIngestionEntry.ExplorerSource entry = cfg.entry();
+        String baseUrl = entry.getBaseUrl().trim();
+        String encodedAddress = UriUtils.encodePathSegment(walletAddress, StandardCharsets.UTF_8);
+        UriComponentsBuilder builder;
+        if (baseUrl.endsWith("/api/v2")) {
+            builder = UriComponentsBuilder.fromHttpUrl(baseUrl + "/addresses/" + encodedAddress);
+        } else if (baseUrl.endsWith("/api/v2/")) {
+            builder = UriComponentsBuilder.fromHttpUrl(baseUrl + "addresses/" + encodedAddress);
+        } else if (baseUrl.endsWith("/")) {
+            builder = UriComponentsBuilder.fromHttpUrl(baseUrl + "api/v2/addresses/" + encodedAddress);
+        } else {
+            builder = UriComponentsBuilder.fromHttpUrl(baseUrl + "/api/v2/addresses/" + encodedAddress);
+        }
+        if (params != null) {
+            for (Map.Entry<String, String> p : params.entrySet()) {
+                builder.queryParam(p.getKey(), p.getValue());
+            }
+        }
+        return builder.build(true).toUriString();
+    }
+
     private static String buildV2TransactionSubresourceUrl(
             ResolvedExplorerConfig cfg,
             String txHash,
@@ -636,6 +779,56 @@ public class BlockScoutExplorerProvider implements ExplorerProvider {
             builder = UriComponentsBuilder.fromHttpUrl(baseUrl + "api/v2/transactions/" + encodedHash + "/" + encodedSubresource);
         } else {
             builder = UriComponentsBuilder.fromHttpUrl(baseUrl + "/api/v2/transactions/" + encodedHash + "/" + encodedSubresource);
+        }
+        if (params != null) {
+            for (Map.Entry<String, String> p : params.entrySet()) {
+                builder.queryParam(p.getKey(), p.getValue());
+            }
+        }
+        return builder.build(true).toUriString();
+    }
+
+    private static String buildV2AddressSubresourceUrl(
+            ResolvedExplorerConfig cfg,
+            String walletAddress,
+            String subresource,
+            Map<String, String> params
+    ) {
+        IngestionNetworkProperties.NetworkIngestionEntry.ExplorerSource entry = cfg.entry();
+        String baseUrl = entry.getBaseUrl().trim();
+        String encodedAddress = UriUtils.encodePathSegment(walletAddress, StandardCharsets.UTF_8);
+        String encodedSubresource = UriUtils.encodePathSegment(subresource, StandardCharsets.UTF_8);
+        UriComponentsBuilder builder;
+        if (baseUrl.endsWith("/api/v2")) {
+            builder = UriComponentsBuilder.fromHttpUrl(baseUrl + "/addresses/" + encodedAddress + "/" + encodedSubresource);
+        } else if (baseUrl.endsWith("/api/v2/")) {
+            builder = UriComponentsBuilder.fromHttpUrl(baseUrl + "addresses/" + encodedAddress + "/" + encodedSubresource);
+        } else if (baseUrl.endsWith("/")) {
+            builder = UriComponentsBuilder.fromHttpUrl(baseUrl + "api/v2/addresses/" + encodedAddress + "/" + encodedSubresource);
+        } else {
+            builder = UriComponentsBuilder.fromHttpUrl(baseUrl + "/api/v2/addresses/" + encodedAddress + "/" + encodedSubresource);
+        }
+        if (params != null) {
+            for (Map.Entry<String, String> p : params.entrySet()) {
+                builder.queryParam(p.getKey(), p.getValue());
+            }
+        }
+        return builder.build(true).toUriString();
+    }
+
+    private static String buildV2TokenUrl(ResolvedExplorerConfig cfg, String contractAddress, Map<String, String> params) {
+        IngestionNetworkProperties.NetworkIngestionEntry.ExplorerSource entry = cfg.entry();
+        String baseUrl = entry.getBaseUrl().trim();
+        String encodedAddress = UriUtils.encodePathSegment(contractAddress, StandardCharsets.UTF_8);
+        UriComponentsBuilder builder;
+        if (baseUrl.endsWith("/api/v2")) {
+            builder = UriComponentsBuilder.fromHttpUrl(baseUrl + "/tokens/" + encodedAddress);
+        } else if (baseUrl.endsWith("/api/v2/")) {
+            builder = UriComponentsBuilder.fromHttpUrl(baseUrl + "tokens/" + encodedAddress);
+        } else if (baseUrl.endsWith("/")) {
+            builder = UriComponentsBuilder.fromHttpUrl(baseUrl + "api/v2/tokens/" + encodedAddress);
+        } else {
+            builder = UriComponentsBuilder.fromHttpUrl(baseUrl + "/api/v2/tokens/" + encodedAddress);
         }
         if (params != null) {
             for (Map.Entry<String, String> p : params.entrySet()) {
@@ -699,11 +892,52 @@ public class BlockScoutExplorerProvider implements ExplorerProvider {
         return webClientResponseException.getStatusCode().value() == 404;
     }
 
+    private static BigInteger parseDecimalValue(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return null;
+        }
+        String value = node.asText(null);
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            return new BigInteger(value);
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    private static Integer parseOptionalInteger(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return null;
+        }
+        String value = node.asText(null);
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            return Integer.parseInt(value);
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    private static Map<String, String> apiKeyParams(ResolvedExplorerConfig cfg) {
+        IngestionNetworkProperties.NetworkIngestionEntry.ExplorerSource entry = cfg.entry();
+        if (entry == null || entry.getApiKey() == null || entry.getApiKey().isBlank()) {
+            return Map.of();
+        }
+        return Map.of("apikey", entry.getApiKey());
+    }
+
     private Document toDocument(JsonNode node) {
         if (node == null || node.isNull() || node.isMissingNode()) {
             return new Document();
         }
         return BsonCoercionSupport.asDocument(objectMapper.convertValue(node, Document.class));
+    }
+
+    public record TokenBalanceSnapshot(BigInteger rawQuantity, int decimals) {
     }
 
     private record ResolvedExplorerConfig(IngestionNetworkProperties.NetworkIngestionEntry.ExplorerSource entry) {

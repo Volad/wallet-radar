@@ -188,7 +188,7 @@ public class BybitCanonicalTransactionBuilder {
         markExcludedContinuityLikeRow(transaction, now, exclusionReason);
     }
 
-    public void markWithdrawalShadowExcluded(
+    public void markTransferShadowExcluded(
             NormalizedTransaction transaction,
             Instant now,
             String exclusionReason

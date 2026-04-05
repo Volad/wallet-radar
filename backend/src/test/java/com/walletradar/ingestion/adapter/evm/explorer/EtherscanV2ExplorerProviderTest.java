@@ -71,6 +71,66 @@ class EtherscanV2ExplorerProviderTest {
     }
 
     @Test
+    void getNativeBalanceBuildsExplorerBalanceRequest() {
+        TestConfig config = baseProperties();
+        AtomicReference<URI> lastUrl = new AtomicReference<>();
+        WebClient.Builder webClientBuilder = WebClient.builder()
+                .exchangeFunction(request -> {
+                    lastUrl.set(request.url());
+                    return Mono.just(jsonResponse("{\"status\":\"1\",\"message\":\"OK\",\"result\":\"1230000000000000000\"}"));
+                });
+        EtherscanV2ExplorerProvider provider = new EtherscanV2ExplorerProvider(
+                webClientBuilder, objectMapper, config.explorerProperties(), config.networkProperties());
+
+        java.math.BigInteger balance = provider.getNativeBalance("0xabc", NetworkId.ARBITRUM);
+
+        assertThat(balance).isEqualTo(new java.math.BigInteger("1230000000000000000"));
+        MultiValueMap<String, String> query = UriComponentsBuilder.fromUri(lastUrl.get()).build().getQueryParams();
+        assertThat(query.getFirst("module")).isEqualTo("account");
+        assertThat(query.getFirst("action")).isEqualTo("balance");
+        assertThat(query.getFirst("address")).isEqualTo("0xabc");
+        assertThat(query.getFirst("tag")).isEqualTo("latest");
+    }
+
+    @Test
+    void getTokenBalanceBuildsExplorerTokenBalanceRequest() {
+        TestConfig config = baseProperties();
+        AtomicReference<URI> lastUrl = new AtomicReference<>();
+        WebClient.Builder webClientBuilder = WebClient.builder()
+                .exchangeFunction(request -> {
+                    lastUrl.set(request.url());
+                    return Mono.just(jsonResponse("{\"status\":\"1\",\"message\":\"OK\",\"result\":\"2500000\"}"));
+                });
+        EtherscanV2ExplorerProvider provider = new EtherscanV2ExplorerProvider(
+                webClientBuilder, objectMapper, config.explorerProperties(), config.networkProperties());
+
+        java.math.BigInteger balance = provider.getTokenBalance("0xabc", "0xdef", NetworkId.ARBITRUM);
+
+        assertThat(balance).isEqualTo(new java.math.BigInteger("2500000"));
+        MultiValueMap<String, String> query = UriComponentsBuilder.fromUri(lastUrl.get()).build().getQueryParams();
+        assertThat(query.getFirst("module")).isEqualTo("account");
+        assertThat(query.getFirst("action")).isEqualTo("tokenbalance");
+        assertThat(query.getFirst("address")).isEqualTo("0xabc");
+        assertThat(query.getFirst("contractaddress")).isEqualTo("0xdef");
+        assertThat(query.getFirst("tag")).isEqualTo("latest");
+    }
+
+    @Test
+    void getTokenDecimalsReadsTokenDecimalFromTokenTransfers() {
+        TestConfig config = baseProperties();
+        WebClient.Builder webClientBuilder = WebClient.builder()
+                .exchangeFunction(request -> Mono.just(
+                        jsonResponse("{\"status\":\"1\",\"message\":\"OK\",\"result\":[{\"tokenDecimal\":\"18\"}]}")
+                ));
+        EtherscanV2ExplorerProvider provider = new EtherscanV2ExplorerProvider(
+                webClientBuilder, objectMapper, config.explorerProperties(), config.networkProperties());
+
+        Integer decimals = provider.getTokenDecimals("0xabc", "0xdef", NetworkId.ARBITRUM);
+
+        assertThat(decimals).isEqualTo(18);
+    }
+
+    @Test
     void getTransactionsReturnsEmptyWhenPageExceedsEtherscanResultWindow() {
         TestConfig config = baseProperties();
         AtomicInteger requestCount = new AtomicInteger(0);

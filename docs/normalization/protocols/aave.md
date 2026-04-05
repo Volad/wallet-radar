@@ -16,6 +16,7 @@ Active runtime profile:
 Current intended runtime ownership:
 
 - pool method selectors
+- gateway method selectors for chain-specific native-ETH entry / exit paths
 - protocol-wide function-name markers
 - debt-token / aToken marker groups
 - event-name groups for `Supply / Deposit / Withdraw / Borrow / Repay`
@@ -32,6 +33,12 @@ Current active runtime usage:
   - `repay`
 - function-name markers remain parity-safe fallback inside the same resource
   contract
+- audited `zkSync` gateway selectors now also belong to the same `Aave`
+  semantic contract:
+  - `0x80500d20` `withdrawETH(address,uint256,address)`
+  - `0x02c205f0`
+    `supplyWithPermit(address,uint256,address,uint16,uint256,uint8,bytes32,bytes32)`
+  - `0x474cf53d` `depositETH(address,address,uint16)`
 
 ## Authoritative Evidence
 
@@ -56,6 +63,11 @@ Current active runtime usage:
 - reserve asset is the economic principal for borrow/repay
 - debt token mint/burn remains continuity-only
 - settlement or refund dust must not become synthetic economic legs
+- on `zkSync`, an audited native-alias transfer to the audited system fee sink
+  that exactly matches `gasUsed * gasPrice` is fee evidence and must not be
+  emitted again as both transfer and fee
+- gateway-native `ETH` and receipt-token `aZksWETH` remain custody continuity
+  within the audited `ETH` family; they are not unwrap / LP lifecycle events
 
 ## Family Handoff
 
@@ -70,6 +82,8 @@ Current active runtime usage:
 
 - do not emit debt-marker `BUY` / `SELL`
 - do not let generic transfer fallback override proven Aave semantics
+- do not let generic `UNWRAP`, `LP_EXIT`, or residual heuristic fallback
+  override audited `zkSync` Aave gateway selectors
 
 ## Baseline and Regression Anchors
 

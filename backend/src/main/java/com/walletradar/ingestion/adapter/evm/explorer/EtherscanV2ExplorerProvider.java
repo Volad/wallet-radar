@@ -23,6 +23,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.time.Duration;
+import java.math.BigInteger;
 import java.util.function.Function;
 
 /**
@@ -123,6 +124,55 @@ public class EtherscanV2ExplorerProvider implements ExplorerProvider {
             return null;
         }
         return new ExplorerReceipt(toDocument(root.path("result")));
+    }
+
+    public BigInteger getNativeBalance(String walletAddress, NetworkId networkId) {
+        Map<String, String> params = new LinkedHashMap<>();
+        params.put("module", "account");
+        params.put("action", "balance");
+        params.put("address", walletAddress);
+        params.put("tag", "latest");
+        JsonNode root = call(networkId, params);
+        return parseDecimalResult(root);
+    }
+
+    public BigInteger getTokenBalance(String walletAddress, String contractAddress, NetworkId networkId) {
+        Map<String, String> params = new LinkedHashMap<>();
+        params.put("module", "account");
+        params.put("action", "tokenbalance");
+        params.put("contractaddress", contractAddress);
+        params.put("address", walletAddress);
+        params.put("tag", "latest");
+        JsonNode root = call(networkId, params);
+        return parseDecimalResult(root);
+    }
+
+    public Integer getTokenDecimals(String walletAddress, String contractAddress, NetworkId networkId) {
+        Map<String, String> params = new LinkedHashMap<>();
+        params.put("module", "account");
+        params.put("action", "tokentx");
+        params.put("contractaddress", contractAddress);
+        params.put("address", walletAddress);
+        params.put("page", "1");
+        params.put("offset", "1");
+        params.put("sort", "desc");
+        JsonNode root = call(networkId, params);
+        if (root == null) {
+            return null;
+        }
+        JsonNode result = root.path("result");
+        if (!result.isArray() || result.isEmpty()) {
+            return null;
+        }
+        String decimals = result.get(0).path("tokenDecimal").asText(null);
+        if (decimals == null || decimals.isBlank()) {
+            return null;
+        }
+        try {
+            return Integer.parseInt(decimals);
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
     }
 
     private <T> List<T> callAccountList(
@@ -271,12 +321,33 @@ public class EtherscanV2ExplorerProvider implements ExplorerProvider {
         if (root == null) {
             return true;
         }
-        return "0".equals(root.path("status").asText(""))
-                && !root.path("message").asText("").equalsIgnoreCase("No transactions found");
+        String status = root.path("status").asText("");
+        if ("0".equals(status)) {
+            return !root.path("message").asText("").equalsIgnoreCase("No transactions found");
+        }
+        if (status.isBlank()) {
+            return root.path("result").isMissingNode();
+        }
+        return false;
     }
 
     private static String errorMessage(JsonNode root) {
         return root.path("result").asText(root.path("message").asText("unknown explorer error"));
+    }
+
+    private BigInteger parseDecimalResult(JsonNode root) {
+        if (root == null) {
+            return null;
+        }
+        String result = root.path("result").asText(null);
+        if (result == null || result.isBlank()) {
+            return null;
+        }
+        try {
+            return new BigInteger(result);
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
     }
 
     private static boolean isDeprecatedV1(String message) {

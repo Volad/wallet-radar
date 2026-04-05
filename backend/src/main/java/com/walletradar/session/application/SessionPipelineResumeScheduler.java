@@ -46,6 +46,7 @@ public class SessionPipelineResumeScheduler {
     private final SyncStatusRepository syncStatusRepository;
     private final MongoOperations mongoOperations;
     private final ApplicationEventPublisher applicationEventPublisher;
+    private final SessionPipelineStateService sessionPipelineStateService;
 
     @Scheduled(fixedDelayString = "${walletradar.pipeline.resume-interval-ms:60000}")
     public void resumeReadySessions() {
@@ -81,7 +82,9 @@ public class SessionPipelineResumeScheduler {
             return null;
         }
         List<String> addresses = trackedAddresses(session);
-        if (hasPendingRaw(addresses) || !hasNormalizedRows(addresses)) {
+        boolean pendingRaw = hasPendingRaw(addresses);
+        boolean hasNormalized = hasNormalizedRows(addresses);
+        if (pendingRaw || !hasNormalized) {
             int targetCount = targetCount(session);
             return new ResumeAction(
                     UserSession.PipelineStage.ON_CHAIN_NORMALIZATION,
@@ -89,32 +92,53 @@ public class SessionPipelineResumeScheduler {
                     new SessionBackfillCompletedEvent(session.getId(), session.getWallets().size(), targetCount)
             );
         }
-        if (hasPendingClarification(addresses)) {
+        boolean pendingClarification = hasPendingClarification(addresses);
+        if (pendingClarification) {
             return new ResumeAction(
                     UserSession.PipelineStage.ON_CHAIN_CLARIFICATION,
                     "pending-clarification",
                     new OnChainNormalizationCompletedEvent(session.getId(), 0, "resume-watchdog")
             );
         }
-        if (hasPendingBybitWork(session)) {
+        boolean pendingBybit = hasPendingBybitWork(session);
+        if (pendingBybit) {
             return new ResumeAction(
                     UserSession.PipelineStage.BYBIT_NORMALIZATION,
                     "raw-bybit-or-unmatched-rematch",
                     new OnChainClarificationCompletedEvent(session.getId(), 0, "resume-watchdog")
             );
         }
-        if (hasPendingPrice(addresses)) {
+        boolean pendingPrice = hasPendingPrice(addresses);
+        if (pendingPrice) {
             return new ResumeAction(
                     UserSession.PipelineStage.PRICING,
                     "pending-price",
                     new BybitNormalizationCompletedEvent(session.getId(), 0, "resume-watchdog")
             );
         }
-        if (hasPendingStat(addresses) || requiresReplayBootstrap(addresses)) {
+        boolean pendingStat = hasPendingStat(addresses);
+        boolean replayBootstrapRequired = requiresReplayBootstrap(addresses);
+        if (pendingStat || replayBootstrapRequired) {
             return new ResumeAction(
                     UserSession.PipelineStage.ACCOUNTING_REPLAY,
                     "pending-stat-or-empty-positions",
                     new PricingCompletedEvent(session.getId(), 0, "resume-watchdog")
+            );
+        }
+        if (shouldHealReplayCompletion(
+                session,
+                pendingRaw,
+                hasNormalized,
+                pendingClarification,
+                pendingBybit,
+                pendingPrice,
+                pendingStat,
+                replayBootstrapRequired
+        )) {
+            sessionPipelineStateService.markStageComplete(
+                    session.getId(),
+                    UserSession.PipelineStage.ACCOUNTING_REPLAY,
+                    "Accounting replay complete"
             );
         }
         return null;
@@ -220,6 +244,37 @@ public class SessionPipelineResumeScheduler {
             return false;
         }
         return updatedAt.isAfter(Instant.now().minus(RUNNING_STATE_STALE_AFTER));
+    }
+
+    private boolean shouldHealReplayCompletion(
+            UserSession session,
+            boolean pendingRaw,
+            boolean hasNormalized,
+            boolean pendingClarification,
+            boolean pendingBybit,
+            boolean pendingPrice,
+            boolean pendingStat,
+            boolean replayBootstrapRequired
+    ) {
+        UserSession.PipelineState pipelineState = session.getPipelineState();
+        if (pipelineState == null
+                || pipelineState.getStage() != UserSession.PipelineStage.ACCOUNTING_REPLAY
+                || pipelineState.getStatus() != UserSession.PipelineStatus.RUNNING
+                || hasFreshRunningState(session)) {
+            return false;
+        }
+        if (pendingRaw
+                || !hasNormalized
+                || pendingClarification
+                || pendingBybit
+                || pendingPrice
+                || pendingStat
+                || replayBootstrapRequired) {
+            return false;
+        }
+        return mongoOperations.exists(new Query(), "asset_positions")
+                && mongoOperations.exists(new Query(), "on_chain_balances")
+                && mongoOperations.exists(new Query(), "reconciled_holdings");
     }
 
     private List<String> trackedAddresses(UserSession session) {

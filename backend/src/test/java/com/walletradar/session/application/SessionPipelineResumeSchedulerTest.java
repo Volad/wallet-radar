@@ -42,6 +42,8 @@ class SessionPipelineResumeSchedulerTest {
     private MongoOperations mongoOperations;
     @Mock
     private ApplicationEventPublisher applicationEventPublisher;
+    @Mock
+    private SessionPipelineStateService sessionPipelineStateService;
 
     @Test
     void publishesBackfillResumeEventWhenPendingRawExists() {
@@ -186,12 +188,45 @@ class SessionPipelineResumeSchedulerTest {
         verify(applicationEventPublisher).publishEvent(any(OnChainNormalizationCompletedEvent.class));
     }
 
+    @Test
+    void staleAccountingReplayRunningStateHealsToCompleteWhenReplayOutputsExist() {
+        UserSession session = session("session-1", wallet("0xabc", List.of(NetworkId.ETHEREUM)));
+        UserSession.PipelineState state = new UserSession.PipelineState();
+        state.setStage(UserSession.PipelineStage.ACCOUNTING_REPLAY);
+        state.setStatus(UserSession.PipelineStatus.RUNNING);
+        state.setUpdatedAt(Instant.now().minusSeconds(3600));
+        session.setPipelineState(state);
+
+        when(userSessionRepository.findAll()).thenReturn(List.of(session));
+        when(syncStatusRepository.findByWalletAddressIn(List.of("0xabc"))).thenReturn(List.of(
+                syncStatus("0xabc", NetworkId.ETHEREUM, true)
+        ));
+        when(mongoOperations.exists(any(Query.class), eq(RawTransaction.class))).thenReturn(false);
+        when(mongoOperations.exists(any(Query.class), eq("normalized_transactions"))).thenReturn(true);
+        when(mongoOperations.exists(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(false, false, false, false);
+        when(mongoOperations.exists(any(Query.class), eq(ExternalLedgerRaw.class))).thenReturn(false, false);
+        when(mongoOperations.exists(any(Query.class), eq("asset_positions"))).thenReturn(true);
+        when(mongoOperations.exists(any(Query.class), eq("on_chain_balances"))).thenReturn(true);
+        when(mongoOperations.exists(any(Query.class), eq("reconciled_holdings"))).thenReturn(true);
+
+        scheduler().resumeReadySessions();
+
+        verify(applicationEventPublisher, never()).publishEvent(any());
+        verify(sessionPipelineStateService).markStageComplete(
+                "session-1",
+                UserSession.PipelineStage.ACCOUNTING_REPLAY,
+                "Accounting replay complete"
+        );
+    }
+
     private SessionPipelineResumeScheduler scheduler() {
         return new SessionPipelineResumeScheduler(
                 userSessionRepository,
                 syncStatusRepository,
                 mongoOperations,
-                applicationEventPublisher
+                applicationEventPublisher,
+                sessionPipelineStateService
         );
     }
 
