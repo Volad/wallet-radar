@@ -1,10 +1,12 @@
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500&family=Syne:wght@500;600;700&display=swap');
 
 :host {
-  display: block;
+  display: flex;
+  height: 100%;
   flex: 1;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
 }
 
 .asset-ledger-shell {
@@ -19,6 +21,8 @@
   --mono: 'JetBrains Mono', monospace;
   --sans: 'Syne', sans-serif;
   flex: 1;
+  width: 100%;
+  height: 100%;
   min-width: 0;
   min-height: 0;
   display: flex;
@@ -36,13 +40,18 @@
   flex-direction: column;
   min-height: 0;
   flex-shrink: 0;
+  overflow-y: scroll;
+  overflow-x: hidden;
+  scrollbar-gutter: stable both-edges;
 }
 
 .asset-ledger-content {
   flex: 1;
   min-width: 0;
   min-height: 0;
-  overflow: auto;
+  overflow-y: scroll;
+  overflow-x: hidden;
+  scrollbar-gutter: stable both-edges;
   display: flex;
   flex-direction: column;
   padding: 1rem 1.1rem 1.25rem;
@@ -51,14 +60,41 @@
 .filters-head {
   padding: 0.85rem 0.8rem 0.7rem;
   border-bottom: 1px solid var(--b0);
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--s1);
 }
 
 .filters-content {
+  flex: 1 1 auto;
   padding: 0.65rem 0.55rem;
   display: flex;
   flex-direction: column;
   gap: 0.7rem;
-  overflow: auto;
+}
+
+.asset-ledger-filters,
+.asset-ledger-content,
+.tx-table-wrap {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(59, 130, 246, 0.5) rgba(255, 255, 255, 0.04);
+
+  &::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.03);
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background: rgba(59, 130, 246, 0.48);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
 }
 
 .back-nav {
@@ -128,6 +164,16 @@ h2 {
 
 .content-head {
   margin-bottom: 1rem;
+}
+
+.content-summary-sticky {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  background:
+    linear-gradient(180deg, rgba(8, 9, 14, 0.98), rgba(8, 9, 14, 0.94));
+  padding-bottom: 0.9rem;
+  margin-bottom: 0.1rem;
 }
 
 .filters-summary {
@@ -586,6 +632,241 @@ canvas#chart {
   margin-top: 2px;
 }
 
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 22px 0 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--b0);
+}
+
+.section-toggle {
+  width: 100%;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.section-chevron {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1;
+  transition: transform 0.14s ease;
+
+  &.collapsed {
+    transform: rotate(180deg);
+  }
+}
+
+.ledger-section.collapsed {
+  .section-head {
+    margin-bottom: 0;
+  }
+}
+
+.section-head-log {
+  margin-top: 26px;
+}
+
+.section-title {
+  font-family: var(--sans);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  display: block;
+}
+
+.section-sub {
+  font-size: 10px;
+  color: var(--muted);
+  display: block;
+  margin-top: 4px;
+}
+
+.mini-wrap,
+.pnl-wrap {
+  position: relative;
+  width: 100%;
+  border: 1px solid var(--b0);
+  border-radius: 8px;
+  background:
+    radial-gradient(circle at top, rgba(59, 130, 246, 0.05), transparent 48%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.015), rgba(255, 255, 255, 0));
+  overflow: hidden;
+}
+
+#qty-chart,
+#pnl-chart {
+  display: block;
+  width: 100%;
+}
+
+.pnl-head {
+  margin-top: 28px;
+}
+
+.pnl-legend {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  font-size: 10px;
+  color: var(--muted);
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+
+  span {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.pos-dot {
+  background: rgba(34, 197, 94, 0.33);
+  border: 1px solid rgba(34, 197, 94, 0.55);
+}
+
+.neg-dot {
+  background: rgba(239, 68, 68, 0.33);
+  border: 1px solid rgba(239, 68, 68, 0.55);
+}
+
+.cum-dot {
+  background: rgba(59, 130, 246, 0.32);
+  border: 1px solid rgba(59, 130, 246, 0.55);
+}
+
+.tx-table-wrap {
+  overflow-x: auto;
+  overflow-y: scroll;
+  max-height: min(42vh, 34rem);
+  scrollbar-gutter: stable both-edges;
+  border: 1px solid var(--b0);
+  border-radius: 8px;
+  background: var(--s1);
+}
+
+.tx-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.tx-table th {
+  font-size: 9px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--b2);
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.tx-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--b0);
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.tx-table th.r,
+.tx-table td.r {
+  text-align: right;
+}
+
+.tx-table tr {
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.tx-table tr:hover td {
+  background: var(--s2);
+}
+
+.tx-table tr.active td {
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.tx-table tr.active td:first-child {
+  box-shadow: inset 2px 0 0 #3b82f6;
+}
+
+.tx-type-cell {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.tx-icon-wrap {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.tx-type-name {
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.tx-net {
+  font-size: 9px;
+  color: var(--muted);
+  margin-top: 1px;
+}
+
+.qty-delta {
+  font-weight: 500;
+}
+
+.avco-change {
+  font-size: 9px;
+  color: var(--muted);
+  margin-top: 1px;
+}
+
+.avco-arrow {
+  color: #3b82f6;
+}
+
+.flows-cell {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  max-width: 280px;
+}
+
+.muted-c {
+  color: var(--muted);
+}
+
+.empty-log {
+  text-align: center;
+  color: var(--muted);
+  padding: 14px 10px;
+  cursor: default;
+}
+
 .state-panel {
   margin: 12vh auto 0;
   width: min(34rem, calc(100vw - 2rem));
@@ -646,6 +927,11 @@ canvas#chart {
     border-bottom: 1px solid var(--b0);
     max-height: 20rem;
   }
+
+  .section-head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
 }
 
 @media (max-width: 640px) {
@@ -663,5 +949,9 @@ canvas#chart {
 
   .tool-window {
     min-width: 0;
+  }
+
+  .pnl-legend {
+    gap: 10px;
   }
 }

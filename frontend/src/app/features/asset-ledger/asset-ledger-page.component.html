@@ -80,23 +80,55 @@
         </aside>
 
         <main class="asset-ledger-content">
-          <header class="content-head">
-            <div>
-              <div class="eyebrow">Move basis</div>
-              <div class="content-title-row">
-                <h2>{{ data.displaySymbol }}</h2>
-                <span class="pill" [attr.title]="formatQuantity(data.current.coveredQuantity, 12)">
-                  {{ formatQuantity(data.current.coveredQuantity, 3) }} covered
-                </span>
-                @if (data.current.uncoveredQuantity > 0) {
-                  <span class="pill warning" [attr.title]="formatQuantity(data.current.uncoveredQuantity, 12)">
-                    {{ formatQuantity(data.current.uncoveredQuantity, 3) }} uncovered
+          <div class="content-summary-sticky">
+            <header class="content-head">
+              <div>
+                <div class="eyebrow">Move basis</div>
+                <div class="content-title-row">
+                  <h2>{{ data.displaySymbol }}</h2>
+                  <span class="pill" [attr.title]="formatQuantity(data.current.coveredQuantity, 12)">
+                    {{ formatQuantity(data.current.coveredQuantity, 3) }} covered
                   </span>
-                }
+                  @if (data.current.uncoveredQuantity > 0) {
+                    <span class="pill warning" [attr.title]="formatQuantity(data.current.uncoveredQuantity, 12)">
+                      {{ formatQuantity(data.current.uncoveredQuantity, 3) }} uncovered
+                    </span>
+                  }
+                </div>
+                <p class="sub">{{ data.subtitle }}</p>
               </div>
-              <p class="sub">{{ data.subtitle }}</p>
+            </header>
+
+            <div class="stats">
+              <div class="sc">
+                <div class="sc-l">AVCO</div>
+                <div class="sc-v avco">{{ formatUsd(data.current.avcoUsd, 0) }}</div>
+                <div class="sc-s">avg cost / {{ data.displaySymbol }}</div>
+              </div>
+              <div class="sc">
+                <div class="sc-l">qty held</div>
+                <div class="sc-v" [attr.title]="formatQuantity(data.current.quantity, 12)">
+                  {{ formatQuantity(data.current.quantity, 3) }} {{ data.displaySymbol }}
+                </div>
+                <div class="sc-s">net position</div>
+              </div>
+              <div class="sc">
+                <div class="sc-l">realised PnL</div>
+                <div
+                  class="sc-v"
+                  [class.pos]="data.current.realisedPnlUsd >= 0"
+                  [class.neg]="data.current.realisedPnlUsd < 0">
+                  {{ formatSignedUsd(data.current.realisedPnlUsd, 0) }}
+                </div>
+                <div class="sc-s">all SELL events</div>
+              </div>
+              <div class="sc">
+                <div class="sc-l">gas paid</div>
+                <div class="sc-v">{{ formatUsd(data.current.gasPaidUsd, 0) }}</div>
+                <div class="sc-s">USD equiv</div>
+              </div>
             </div>
-          </header>
+          </div>
 
           <div class="cv-wrap">
             <canvas
@@ -144,35 +176,153 @@
             </div>
           }
 
-          <div class="stats">
-            <div class="sc">
-              <div class="sc-l">AVCO</div>
-              <div class="sc-v avco">{{ formatUsd(data.current.avcoUsd, 0) }}</div>
-              <div class="sc-s">avg cost / {{ data.displaySymbol }}</div>
-            </div>
-            <div class="sc">
-              <div class="sc-l">qty held</div>
-              <div class="sc-v" [attr.title]="formatQuantity(data.current.quantity, 12)">
-                {{ formatQuantity(data.current.quantity, 3) }} {{ data.displaySymbol }}
+          <section class="ledger-section" [class.collapsed]="isSectionCollapsed('position')">
+            <button type="button" class="section-head section-toggle" (click)="toggleSection('position')">
+              <span>
+                <span class="section-title">Position size</span>
+                <span class="section-sub">{{ data.displaySymbol }} held over time</span>
+              </span>
+              <span class="section-chevron" [class.collapsed]="isSectionCollapsed('position')">⌃</span>
+            </button>
+            @if (!isSectionCollapsed('position')) {
+              <div class="mini-wrap">
+                <canvas
+                  #qtyChartCanvas
+                  id="qty-chart"
+                  (mousemove)="onQuantityChartPointerMove($event)"
+                  (click)="onQuantityChartClick($event)"
+                  (mouseleave)="onSupplementalChartPointerLeave()"
+                  aria-label="Asset position size timeline"
+                  role="img"></canvas>
               </div>
-              <div class="sc-s">net position</div>
-            </div>
-            <div class="sc">
-              <div class="sc-l">realised PnL</div>
-              <div
-                class="sc-v"
-                [class.pos]="data.current.realisedPnlUsd >= 0"
-                [class.neg]="data.current.realisedPnlUsd < 0">
-                {{ formatSignedUsd(data.current.realisedPnlUsd, 0) }}
+            }
+          </section>
+
+          <section class="ledger-section" [class.collapsed]="isSectionCollapsed('pnl')">
+            <button type="button" class="section-head pnl-head section-toggle" (click)="toggleSection('pnl')">
+              <span>
+                <span class="section-title">Realised P&amp;L</span>
+                <span class="section-sub">Filtered disposal events and cumulative path</span>
+              </span>
+              <span class="section-chevron" [class.collapsed]="isSectionCollapsed('pnl')">⌃</span>
+            </button>
+            @if (!isSectionCollapsed('pnl')) {
+              <div class="pnl-legend" aria-hidden="true">
+                <span><span class="dot pos-dot"></span>Profit</span>
+                <span><span class="dot neg-dot"></span>Loss</span>
+                <span><span class="dot cum-dot"></span>Cumulative</span>
               </div>
-              <div class="sc-s">all SELL events</div>
-            </div>
-            <div class="sc">
-              <div class="sc-l">gas paid</div>
-              <div class="sc-v">{{ formatUsd(data.current.gasPaidUsd, 0) }}</div>
-              <div class="sc-s">USD equiv</div>
-            </div>
+              <div class="pnl-wrap">
+                <canvas
+                  #pnlChartCanvas
+                  id="pnl-chart"
+                  (mousemove)="onPnlChartPointerMove($event)"
+                  (click)="onPnlChartClick($event)"
+                  (mouseleave)="onSupplementalChartPointerLeave()"
+                  aria-label="Realised P and L timeline"
+                  role="img"></canvas>
+              </div>
+            }
+          </section>
+
+          <section class="ledger-section" [class.collapsed]="isSectionCollapsed('log')">
+            <button type="button" class="section-head section-head-log section-toggle" (click)="toggleSection('log')">
+              <span>
+                <span class="section-title">Event log</span>
+                <span class="section-sub">{{ eventLogCountLabel() }}</span>
+              </span>
+              <span class="section-chevron" [class.collapsed]="isSectionCollapsed('log')">⌃</span>
+            </button>
+            @if (!isSectionCollapsed('log')) {
+          <div class="tx-table-wrap">
+            <table class="tx-table">
+              <thead>
+                <tr>
+                  <th style="width: 220px">Type</th>
+                  <th>Date</th>
+                  <th class="r">Qty Δ</th>
+                  <th class="r">Unit price</th>
+                  <th class="r">AVCO before → after</th>
+                  <th class="r">Realised PnL</th>
+                  <th>Price source</th>
+                  <th>Flows</th>
+                </tr>
+              </thead>
+              <tbody>
+                @if (eventLogMarkers().length > 0) {
+                  @for (marker of eventLogMarkers(); track marker.id) {
+                    <tr
+                      [class.active]="isLogRowActive(marker.id)"
+                      (mouseenter)="onLogRowPointerEnter(marker, $event)"
+                      (mouseleave)="onLogRowPointerLeave()"
+                      (click)="selectMarkerFromLog(marker, $event)">
+                      <td>
+                        <div class="tx-type-cell">
+                          <span class="tx-icon-wrap" [style.color]="marker.color">{{ marker.glyph }}</span>
+                          <div>
+                            <div class="tx-type-name">{{ marker.label }}</div>
+                            <div class="tx-net">{{ marker.networkLabel }}</div>
+                          </div>
+                        </div>
+                      </td>
+                      <td>{{ formatEventDateTime(marker.timestamp) }}</td>
+                      <td class="r">
+                        <span
+                          class="qty-delta"
+                          [class.pos]="marker.quantityDelta > 0"
+                          [class.neg]="marker.quantityDelta < 0">
+                          {{ formatSignedQuantity(marker.quantityDelta, 6) }}
+                        </span>
+                      </td>
+                      <td class="r">{{ formatUsd(marker.priceUsd, 2) }}</td>
+                      <td class="r">
+                        <div>{{ formatUsd(marker.avcoBeforeUsd, 2) }} <span class="avco-arrow">→</span> {{ formatUsd(marker.avcoAfterUsd, 2) }}</div>
+                        @if (marker.basisSummary !== 'No basis effect') {
+                          <div class="avco-change">{{ marker.basisSummary }}</div>
+                        }
+                      </td>
+                      <td class="r">
+                        @if ((marker.realisedPnlDeltaUsd ?? 0) !== 0) {
+                          <span
+                            [class.pos]="(marker.realisedPnlDeltaUsd ?? 0) > 0"
+                            [class.neg]="(marker.realisedPnlDeltaUsd ?? 0) < 0">
+                            {{ formatSignedUsd(marker.realisedPnlDeltaUsd, 2) }}
+                          </span>
+                        } @else {
+                          <span class="muted-c">—</span>
+                        }
+                      </td>
+                      <td>{{ marker.priceSource ?? '—' }}</td>
+                      <td>
+                        @if (marker.flows.length > 0) {
+                          <div class="flows-cell">
+                            @for (flow of marker.flows; track flow.role + ':' + flow.assetSymbol + ':' + flow.quantityLabel) {
+                              <span
+                                class="fr"
+                                [class.fr-buy]="flow.className === 'buy'"
+                                [class.fr-sell]="flow.className === 'sell'"
+                                [class.fr-transfer]="flow.className === 'transfer'"
+                                [class.fr-fee]="flow.className === 'fee'">
+                                {{ flow.role }} {{ flow.assetSymbol }}
+                              </span>
+                            }
+                          </div>
+                        } @else {
+                          <span class="muted-c">No flows</span>
+                        }
+                      </td>
+                    </tr>
+                  }
+                } @else {
+                  <tr>
+                    <td colspan="8" class="empty-log">No events match current range and filters.</td>
+                  </tr>
+                }
+              </tbody>
+            </table>
           </div>
+            }
+          </section>
         </main>
       }
     }

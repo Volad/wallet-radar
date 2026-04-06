@@ -119,6 +119,21 @@ interface RenderedMarkerView {
   readonly hasStem: boolean;
 }
 
+interface RenderedPointView {
+  readonly markerId: string;
+  readonly x: number;
+  readonly y: number;
+  readonly radius: number;
+}
+
+interface RenderedPnlMarkerView extends RenderedPointView {
+  readonly barLeft: number;
+  readonly barRight: number;
+  readonly barTop: number;
+  readonly barBottom: number;
+  readonly cumulativeY: number;
+}
+
 const ETH_FAMILY_SYMBOLS = new Set(['ETH', 'WETH', 'AETHWETH', 'AARBWETH', 'ALINWETH', 'AMANWETH', 'AZKSWETH', 'VBETH']);
 const BTC_FAMILY_SYMBOLS = new Set(['BTC', 'WBTC', 'AARBWBTC', 'AETHWBTC', 'ALINWBTC', 'AMANWBTC', 'AZKSWBTC']);
 const AVAX_FAMILY_SYMBOLS = new Set(['AVAX', 'WAVAX', 'SAVAX', 'AAVAWAVAX', 'AAVASAVAX']);
@@ -142,6 +157,8 @@ const CHART = {
   top: 28,
   bottom: 56,
 };
+const QTY_CHART_HEIGHT = 176;
+const PNL_CHART_HEIGHT = 208;
 
 type IconRenderer = (ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number) => void;
 
@@ -547,13 +564,18 @@ export class AssetLedgerPageComponent {
   readonly selectedBasisEffects = signal<ReadonlySet<string>>(new Set<string>());
   readonly selectedPreset = signal<QuickPresetKey>('economics');
   readonly copiedTxHash = signal<string | null>(null);
+  readonly collapsedSections = signal<ReadonlySet<string>>(new Set<string>());
 
   @ViewChild('chartCanvas') private chartCanvasRef?: ElementRef<HTMLCanvasElement>;
+  @ViewChild('qtyChartCanvas') private qtyChartCanvasRef?: ElementRef<HTMLCanvasElement>;
+  @ViewChild('pnlChartCanvas') private pnlChartCanvasRef?: ElementRef<HTMLCanvasElement>;
   @ViewChild('rangeShell') private rangeShellRef?: ElementRef<HTMLDivElement>;
   @ViewChildren('legendCanvas') private legendCanvasRefs?: QueryList<ElementRef<HTMLCanvasElement>>;
 
   private resizeObserver?: ResizeObserver;
   private renderedMarkers: ReadonlyArray<RenderedMarkerView> = [];
+  private quantityRenderedMarkers: ReadonlyArray<RenderedPointView> = [];
+  private pnlRenderedMarkers: ReadonlyArray<RenderedPnlMarkerView> = [];
   private copyResetTimerId: number | null = null;
   private rangeDragState: { startClientX: number; startIndex: number; endIndex: number } | null = null;
 
@@ -700,10 +722,29 @@ export class AssetLedgerPageComponent {
 
   readonly tooltipMarker = computed(() => {
     const activeId = this.pinnedMarkerId() ?? this.hoveredMarkerId();
-    if (activeId === null) {
+    const data = this.assetData();
+    if (activeId === null || data === null) {
       return null;
     }
-    return this.visibleMarkers().find((marker) => marker.id === activeId) ?? null;
+    return data.markerLookup[activeId] ?? null;
+  });
+
+  readonly realisedPnlMarkers = computed(() =>
+    this.visibleMarkers().filter((marker) => Math.abs(marker.realisedPnlDeltaUsd ?? 0) > 0.0000001)
+  );
+
+  readonly eventLogMarkers = computed(() => [...this.visibleMarkers()].reverse());
+
+  readonly eventLogCountLabel = computed(() => {
+    const visibleCount = this.eventLogMarkers().length;
+    const totalCount = this.windowMarkers().length;
+    if (totalCount === 0) {
+      return 'No events in range';
+    }
+    if (visibleCount === totalCount) {
+      return `${visibleCount} events`;
+    }
+    return `${visibleCount} of ${totalCount} events`;
   });
 
   setHoveredMarker(markerId: string | null): void {
@@ -857,6 +898,71 @@ export class AssetLedgerPageComponent {
     return `${value.slice(0, 10)}…${value.slice(-6)}`;
   }
 
+  formatEventDateTime(value: string): string {
+    if (value.length === 0) {
+      return '—';
+    }
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return value;
+    }
+    return new Intl.DateTimeFormat('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(date);
+  }
+
+  isLogRowActive(markerId: string): boolean {
+    return this.tooltipMarker()?.id === markerId;
+  }
+
+  isSectionCollapsed(sectionKey: string): boolean {
+    return this.collapsedSections().has(sectionKey);
+  }
+
+  toggleSection(sectionKey: string): void {
+    const next = new Set(this.collapsedSections());
+    if (next.has(sectionKey)) {
+      next.delete(sectionKey);
+    } else {
+      next.add(sectionKey);
+    }
+    this.collapsedSections.set(next);
+  }
+
+  selectMarkerFromLog(marker: MarkerView, event?: MouseEvent): void {
+    this.pinnedMarkerId.set(marker.id);
+    this.hoveredMarkerId.set(marker.id);
+    if (event !== undefined) {
+      this.positionTooltip(event.clientX, event.clientY);
+    } else {
+      this.positionTooltip(window.innerWidth - 320, 180);
+    }
+    this.renderChart();
+    this.renderSupplementalCharts();
+  }
+
+  onLogRowPointerEnter(marker: MarkerView, event: MouseEvent): void {
+    if (this.pinnedMarkerId() !== null) {
+      return;
+    }
+    this.hoveredMarkerId.set(marker.id);
+    this.positionTooltip(event.clientX, event.clientY);
+    this.renderChart();
+    this.renderSupplementalCharts();
+  }
+
+  onLogRowPointerLeave(): void {
+    if (this.pinnedMarkerId() !== null) {
+      return;
+    }
+    this.hoveredMarkerId.set(null);
+    this.renderChart();
+    this.renderSupplementalCharts();
+  }
+
   onChartPointerMove(event: MouseEvent): void {
     if (this.pinnedMarkerId() !== null) {
       return;
@@ -876,12 +982,55 @@ export class AssetLedgerPageComponent {
     this.renderChart();
   }
 
+  onQuantityChartPointerMove(event: MouseEvent): void {
+    if (this.pinnedMarkerId() !== null) {
+      return;
+    }
+    const markerId = this.findRenderedPointMarker(
+      this.qtyChartCanvasRef?.nativeElement,
+      this.quantityRenderedMarkers,
+      event
+    );
+    if (markerId !== null) {
+      this.hoveredMarkerId.set(markerId);
+      this.positionTooltip(event.clientX, event.clientY);
+    } else {
+      this.hoveredMarkerId.set(null);
+    }
+    this.renderChart();
+    this.renderSupplementalCharts();
+  }
+
+  onPnlChartPointerMove(event: MouseEvent): void {
+    if (this.pinnedMarkerId() !== null) {
+      return;
+    }
+    const markerId = this.findRenderedPnlMarker(this.pnlChartCanvasRef?.nativeElement, event);
+    if (markerId !== null) {
+      this.hoveredMarkerId.set(markerId);
+      this.positionTooltip(event.clientX, event.clientY);
+    } else {
+      this.hoveredMarkerId.set(null);
+    }
+    this.renderChart();
+    this.renderSupplementalCharts();
+  }
+
   onChartPointerLeave(): void {
     if (this.pinnedMarkerId() !== null) {
       return;
     }
     this.hoveredMarkerId.set(null);
     this.renderChart();
+  }
+
+  onSupplementalChartPointerLeave(): void {
+    if (this.pinnedMarkerId() !== null) {
+      return;
+    }
+    this.hoveredMarkerId.set(null);
+    this.renderChart();
+    this.renderSupplementalCharts();
   }
 
   onChartClick(event: MouseEvent): void {
@@ -905,6 +1054,20 @@ export class AssetLedgerPageComponent {
     this.hoveredMarkerId.set(bestMarker.markerId);
     this.positionTooltip(event.clientX, event.clientY);
     this.renderChart();
+  }
+
+  onQuantityChartClick(event: MouseEvent): void {
+    const markerId = this.findRenderedPointMarker(
+      this.qtyChartCanvasRef?.nativeElement,
+      this.quantityRenderedMarkers,
+      event
+    );
+    this.togglePinnedMarker(markerId, event.clientX, event.clientY);
+  }
+
+  onPnlChartClick(event: MouseEvent): void {
+    const markerId = this.findRenderedPnlMarker(this.pnlChartCanvasRef?.nativeElement, event);
+    this.togglePinnedMarker(markerId, event.clientX, event.clientY);
   }
 
   async copyTxHash(txHash: string): Promise<void> {
@@ -941,7 +1104,7 @@ export class AssetLedgerPageComponent {
     if (!(target instanceof Element)) {
       return;
     }
-    if (target.closest('#tip') !== null || target.closest('#chart') !== null) {
+    if (target.closest('#tip') !== null || target.closest('#chart') !== null || target.closest('#qty-chart') !== null || target.closest('#pnl-chart') !== null) {
       return;
     }
     if (this.pinnedMarkerId() !== null) {
@@ -999,6 +1162,7 @@ export class AssetLedgerPageComponent {
       this.disabledTypeKeys.set(new Set(DEFAULT_DISABLED_TYPE_KEYS));
       this.selectedBasisEffects.set(new Set([...basisKeys].filter((key) => !DEFAULT_HIDDEN_BASIS_EFFECTS.has(key))));
       this.selectedPreset.set('economics');
+      this.collapsedSections.set(new Set<string>());
       this.hoveredMarkerId.set(null);
       this.pinnedMarkerId.set(null);
       this.copiedTxHash.set(null);
@@ -1023,6 +1187,7 @@ export class AssetLedgerPageComponent {
       queueMicrotask(() => {
         this.renderLegendIcons();
         this.renderChart();
+        this.renderSupplementalCharts();
       });
     });
     effect(() => {
@@ -1032,14 +1197,18 @@ export class AssetLedgerPageComponent {
       this.rangeEndIndex();
       this.disabledTypeKeys();
       this.selectedBasisEffects();
-      queueMicrotask(() => this.renderChart());
+      this.collapsedSections();
+      queueMicrotask(() => {
+        this.renderChart();
+        this.renderSupplementalCharts();
+      });
     });
     effect(() => {
       const activeMarkerId = this.pinnedMarkerId() ?? this.hoveredMarkerId();
       if (activeMarkerId === null) {
         return;
       }
-      const stillVisible = this.visibleMarkers().some((marker) => marker.id === activeMarkerId);
+      const stillVisible = this.windowMarkers().some((marker) => marker.id === activeMarkerId);
       if (!stillVisible) {
         this.hoveredMarkerId.set(null);
         this.pinnedMarkerId.set(null);
@@ -1425,14 +1594,24 @@ export class AssetLedgerPageComponent {
   }
 
   ngAfterViewInit(): void {
-    const canvas = this.chartCanvasRef?.nativeElement;
-    const parent = canvas?.parentElement;
-    if (parent !== null && parent !== undefined) {
-      this.resizeObserver = new ResizeObserver(() => this.renderChart());
-      this.resizeObserver.observe(parent);
-    }
+    const canvases = [
+      this.chartCanvasRef?.nativeElement,
+      this.qtyChartCanvasRef?.nativeElement,
+      this.pnlChartCanvasRef?.nativeElement,
+    ];
+    this.resizeObserver = new ResizeObserver(() => {
+      this.renderChart();
+      this.renderSupplementalCharts();
+    });
+    canvases.forEach((canvas) => {
+      const parent = canvas?.parentElement;
+      if (parent !== null && parent !== undefined) {
+        this.resizeObserver?.observe(parent);
+      }
+    });
     this.renderLegendIcons();
     this.renderChart();
+    this.renderSupplementalCharts();
   }
 
   ngOnDestroy(): void {
@@ -1705,6 +1884,252 @@ export class AssetLedgerPageComponent {
     });
   }
 
+  private renderSupplementalCharts(): void {
+    this.renderQuantityChart();
+    this.renderPnlChart();
+  }
+
+  private renderQuantityChart(): void {
+    const canvas = this.qtyChartCanvasRef?.nativeElement;
+    const windowMarkers = this.windowMarkers();
+    const visibleMarkers = this.visibleMarkers();
+    if (canvas === undefined) {
+      return;
+    }
+    if (this.isSectionCollapsed('position')) {
+      this.quantityRenderedMarkers = [];
+      return;
+    }
+
+    const { ctx, cssWidth, cssHeight } = this.prepareResponsiveCanvas(canvas, QTY_CHART_HEIGHT);
+    if (ctx === null) {
+      return;
+    }
+
+    const pad = { top: 18, right: 20, bottom: 34, left: 72 };
+    this.paintChartBackground(ctx, cssWidth, cssHeight, pad);
+
+    if (windowMarkers.length === 0) {
+      this.quantityRenderedMarkers = [];
+      this.paintEmptyChartState(ctx, cssWidth, cssHeight, 'No position history in selected range.');
+      return;
+    }
+
+    const values = windowMarkers.map((marker) => marker.quantityAfter);
+    const minValue = Math.min(...values);
+    const maxValue = Math.max(...values);
+    const span = Math.max(maxValue - minValue, Math.max(Math.abs(maxValue), 1) * 0.03);
+    const paddedMin = Math.max(0, minValue - span * 0.18);
+    const paddedMax = maxValue + span * 0.18;
+    const innerHeight = cssHeight - pad.top - pad.bottom;
+
+    const projectY = (value: number): number => {
+      const ratio = (value - paddedMin) / Math.max(paddedMax - paddedMin, 1e-9);
+      return cssHeight - pad.bottom - ratio * innerHeight;
+    };
+    const projectX = this.buildTimeProjector(windowMarkers, cssWidth, pad.left, pad.right);
+
+    for (let index = 0; index <= 4; index += 1) {
+      const value = paddedMin + ((paddedMax - paddedMin) * index) / 4;
+      const y = projectY(value);
+      ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(pad.left, y);
+      ctx.lineTo(cssWidth - pad.right, y);
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(82,88,112,.7)';
+      ctx.font = '9px JetBrains Mono, monospace';
+      ctx.textAlign = 'right';
+      ctx.fillText(this.formatQuantity(value, 3), pad.left - 8, y + 3);
+    }
+
+    ctx.beginPath();
+    windowMarkers.forEach((marker, index) => {
+      const x = projectX(index);
+      const y = projectY(marker.quantityAfter);
+      if (index === 0) {
+        ctx.moveTo(x, y);
+      } else {
+        ctx.lineTo(x, y);
+      }
+    });
+    ctx.strokeStyle = 'rgba(34, 211, 238, 0.9)';
+    ctx.lineWidth = 1.8;
+    ctx.stroke();
+
+    ctx.beginPath();
+    windowMarkers.forEach((marker, index) => {
+      const x = projectX(index);
+      const y = projectY(marker.quantityAfter);
+      if (index === 0) {
+        ctx.moveTo(x, y);
+      } else {
+        ctx.lineTo(x, y);
+      }
+    });
+    ctx.lineTo(projectX(windowMarkers.length - 1), cssHeight - pad.bottom);
+    ctx.lineTo(projectX(0), cssHeight - pad.bottom);
+    ctx.closePath();
+    const gradient = ctx.createLinearGradient(0, pad.top, 0, cssHeight);
+    gradient.addColorStop(0, 'rgba(34, 211, 238, 0.18)');
+    gradient.addColorStop(1, 'rgba(34, 211, 238, 0.02)');
+    ctx.fillStyle = gradient;
+    ctx.fill();
+
+    const visibleIds = new Set(visibleMarkers.map((marker) => marker.id));
+    this.quantityRenderedMarkers = windowMarkers.map((marker, markerIndex) => ({
+      markerId: marker.id,
+      x: projectX(markerIndex),
+      y: projectY(marker.quantityAfter),
+      radius: visibleIds.has(marker.id) ? 5 : 4,
+    }));
+
+    windowMarkers.forEach((marker, markerIndex) => {
+      const x = projectX(markerIndex);
+      const y = projectY(marker.quantityAfter);
+      const isVisible = visibleIds.has(marker.id);
+      const isActive = this.isLogRowActive(marker.id);
+      ctx.beginPath();
+      ctx.arc(x, y, isActive ? 4.8 : isVisible ? 3.2 : 2.4, 0, Math.PI * 2);
+      ctx.fillStyle = isVisible ? marker.color : 'rgba(148,163,184,.55)';
+      ctx.fill();
+      if (isActive) {
+        ctx.beginPath();
+        ctx.arc(x, y, 8, 0, Math.PI * 2);
+        ctx.strokeStyle = `${marker.color}44`;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
+    });
+
+    this.paintTimelineAxis(ctx, windowMarkers, projectX, cssHeight, pad.bottom);
+  }
+
+  private renderPnlChart(): void {
+    const canvas = this.pnlChartCanvasRef?.nativeElement;
+    const markers = this.realisedPnlMarkers();
+    if (canvas === undefined) {
+      return;
+    }
+    if (this.isSectionCollapsed('pnl')) {
+      this.pnlRenderedMarkers = [];
+      return;
+    }
+
+    const { ctx, cssWidth, cssHeight } = this.prepareResponsiveCanvas(canvas, PNL_CHART_HEIGHT);
+    if (ctx === null) {
+      return;
+    }
+
+    const pad = { top: 18, right: 20, bottom: 34, left: 72 };
+    this.paintChartBackground(ctx, cssWidth, cssHeight, pad);
+
+    if (markers.length === 0) {
+      this.pnlRenderedMarkers = [];
+      this.paintEmptyChartState(ctx, cssWidth, cssHeight, 'No realised P&L events under current filters.');
+      return;
+    }
+
+    const cumulativeValues: number[] = [];
+    let cumulative = 0;
+    markers.forEach((marker) => {
+      cumulative += marker.realisedPnlDeltaUsd ?? 0;
+      cumulativeValues.push(cumulative);
+    });
+    const pnlValues = markers.map((marker) => marker.realisedPnlDeltaUsd ?? 0);
+    const domainMin = Math.min(0, ...pnlValues, ...cumulativeValues);
+    const domainMax = Math.max(0, ...pnlValues, ...cumulativeValues);
+    const span = Math.max(domainMax - domainMin, 1);
+    const paddedMin = domainMin - span * 0.12;
+    const paddedMax = domainMax + span * 0.12;
+    const innerHeight = cssHeight - pad.top - pad.bottom;
+
+    const projectY = (value: number): number => {
+      const ratio = (value - paddedMin) / Math.max(paddedMax - paddedMin, 1e-9);
+      return cssHeight - pad.bottom - ratio * innerHeight;
+    };
+    const projectX = this.buildTimeProjector(markers, cssWidth, pad.left, pad.right);
+
+    for (let index = 0; index <= 4; index += 1) {
+      const value = paddedMin + ((paddedMax - paddedMin) * index) / 4;
+      const y = projectY(value);
+      ctx.strokeStyle = Math.abs(value) < span * 0.02 ? 'rgba(59,130,246,.2)' : 'rgba(255,255,255,0.04)';
+      ctx.lineWidth = Math.abs(value) < span * 0.02 ? 1.4 : 1;
+      ctx.beginPath();
+      ctx.moveTo(pad.left, y);
+      ctx.lineTo(cssWidth - pad.right, y);
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(82,88,112,.7)';
+      ctx.font = '9px JetBrains Mono, monospace';
+      ctx.textAlign = 'right';
+      ctx.fillText(this.formatSignedUsd(value, 0), pad.left - 8, y + 3);
+    }
+
+    const barSpacing = markers.length <= 1 ? 46 : projectX(1) - projectX(0);
+    const barWidth = Math.max(6, Math.min(18, barSpacing * 0.36));
+    const zeroY = projectY(0);
+
+    this.pnlRenderedMarkers = markers.map((marker, index) => {
+      const value = marker.realisedPnlDeltaUsd ?? 0;
+      const x = projectX(index);
+      const y = projectY(value);
+      const top = Math.min(y, zeroY);
+      const height = Math.max(2, Math.abs(zeroY - y));
+      ctx.fillStyle = value >= 0 ? 'rgba(34,197,94,.34)' : 'rgba(239,68,68,.34)';
+      ctx.strokeStyle = value >= 0 ? 'rgba(34,197,94,.7)' : 'rgba(239,68,68,.72)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.roundRect(x - barWidth / 2, top, barWidth, height, 3);
+      ctx.fill();
+      ctx.stroke();
+      return {
+        markerId: marker.id,
+        x,
+        y,
+        radius: 5,
+        barLeft: x - barWidth / 2,
+        barRight: x + barWidth / 2,
+        barTop: top,
+        barBottom: top + height,
+        cumulativeY: projectY(cumulativeValues[index] ?? 0),
+      };
+    });
+
+    ctx.beginPath();
+    cumulativeValues.forEach((value, index) => {
+      const x = projectX(index);
+      const y = projectY(value);
+      if (index === 0) {
+        ctx.moveTo(x, y);
+      } else {
+        ctx.lineTo(x, y);
+      }
+    });
+    ctx.strokeStyle = 'rgba(59,130,246,.9)';
+    ctx.lineWidth = 1.8;
+    ctx.stroke();
+
+    markers.forEach((marker, index) => {
+      if (!this.isLogRowActive(marker.id)) {
+        return;
+      }
+      const x = projectX(index);
+      const y = projectY(cumulativeValues[index] ?? 0);
+      ctx.beginPath();
+      ctx.arc(x, y, 4.5, 0, Math.PI * 2);
+      ctx.fillStyle = '#3b82f6';
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(x, y, 9, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(59,130,246,.28)';
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
+    });
+
+    this.paintTimelineAxis(ctx, markers, projectX, cssHeight, pad.bottom);
+  }
+
   private paintIconCanvas(
     canvas: HTMLCanvasElement,
     color: string,
@@ -1729,6 +2154,137 @@ export class AssetLedgerPageComponent {
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     icon(ctx, size / 2, size / 2, size * 0.48);
+  }
+
+  private prepareResponsiveCanvas(
+    canvas: HTMLCanvasElement,
+    cssHeight: number
+  ): { ctx: CanvasRenderingContext2D | null; cssWidth: number; cssHeight: number } {
+    const parentRect = canvas.parentElement?.getBoundingClientRect();
+    const cssWidth = Math.max(Math.floor(parentRect?.width ?? 1020), 320);
+    const dpr = window.devicePixelRatio || 1;
+
+    canvas.style.width = `${cssWidth}px`;
+    canvas.style.height = `${cssHeight}px`;
+    canvas.width = Math.floor(cssWidth * dpr);
+    canvas.height = Math.floor(cssHeight * dpr);
+
+    const ctx = canvas.getContext('2d');
+    if (ctx !== null) {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.scale(dpr, dpr);
+      ctx.clearRect(0, 0, cssWidth, cssHeight);
+    }
+
+    return { ctx, cssWidth, cssHeight };
+  }
+
+  private paintChartBackground(
+    ctx: CanvasRenderingContext2D,
+    cssWidth: number,
+    cssHeight: number,
+    pad: { top: number; right: number; bottom: number; left: number }
+  ): void {
+    ctx.fillStyle = 'rgba(255,255,255,0.01)';
+    ctx.fillRect(0, 0, cssWidth, cssHeight);
+    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(pad.left, pad.top, cssWidth - pad.left - pad.right, cssHeight - pad.top - pad.bottom);
+  }
+
+  private paintEmptyChartState(
+    ctx: CanvasRenderingContext2D,
+    cssWidth: number,
+    cssHeight: number,
+    message: string
+  ): void {
+    ctx.fillStyle = 'rgba(82,88,112,.88)';
+    ctx.font = '11px JetBrains Mono, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(message, cssWidth / 2, cssHeight / 2);
+  }
+
+  private buildTimeProjector(
+    markers: ReadonlyArray<MarkerView>,
+    cssWidth: number,
+    padLeft: number,
+    padRight: number
+  ): (index: number) => number {
+    const innerWidth = cssWidth - padLeft - padRight;
+    const timestamps = markers.map((marker) => this.parseMarkerTimestamp(marker.timestamp));
+    const knownTimestamps = timestamps.filter((value): value is number => value !== null);
+    const minTimestamp = knownTimestamps.length > 0 ? Math.min(...knownTimestamps) : null;
+    const maxTimestamp = knownTimestamps.length > 0 ? Math.max(...knownTimestamps) : null;
+    const useTimeScale = minTimestamp !== null && maxTimestamp !== null && maxTimestamp > minTimestamp;
+
+    const targetXForIndex = (index: number): number => {
+      if (markers.length <= 1) {
+        return padLeft + innerWidth / 2;
+      }
+      if (!useTimeScale) {
+        return padLeft + (innerWidth * index) / (markers.length - 1);
+      }
+      const markerTimestamp = timestamps[index];
+      if (markerTimestamp === null || minTimestamp === null || maxTimestamp === null) {
+        return padLeft + (innerWidth * index) / (markers.length - 1);
+      }
+      const ratio = (markerTimestamp - minTimestamp) / Math.max(maxTimestamp - minTimestamp, 1);
+      return padLeft + innerWidth * ratio;
+    };
+
+    const minimumMarkerGap =
+      markers.length <= 18 ? 18 : markers.length <= 40 ? 14 : markers.length <= 90 ? 10 : 7;
+    const xTargets = markers.map((_, index) => targetXForIndex(index));
+    const xPositions = [...xTargets];
+    if (xPositions.length > 1) {
+      for (let index = 1; index < xPositions.length; index += 1) {
+        xPositions[index] = Math.max(xPositions[index], xPositions[index - 1] + minimumMarkerGap);
+      }
+      const maxX = cssWidth - padRight;
+      const overflow = xPositions.at(-1)! - maxX;
+      if (overflow > 0) {
+        for (let index = 0; index < xPositions.length; index += 1) {
+          xPositions[index] -= overflow;
+        }
+      }
+      const minX = padLeft;
+      const underflow = minX - xPositions[0];
+      if (underflow > 0) {
+        for (let index = 0; index < xPositions.length; index += 1) {
+          xPositions[index] += underflow;
+        }
+      }
+      for (let index = xPositions.length - 2; index >= 0; index -= 1) {
+        xPositions[index] = Math.min(xPositions[index], xPositions[index + 1] - minimumMarkerGap);
+      }
+    }
+
+    return (index: number) => xPositions[index] ?? padLeft + innerWidth / 2;
+  }
+
+  private paintTimelineAxis(
+    ctx: CanvasRenderingContext2D,
+    markers: ReadonlyArray<MarkerView>,
+    projectX: (index: number) => number,
+    cssHeight: number,
+    bottomPad: number
+  ): void {
+    let previousTickX = Number.NEGATIVE_INFINITY;
+    markers.forEach((marker, index) => {
+      const x = projectX(index);
+      ctx.beginPath();
+      ctx.arc(x, cssHeight - bottomPad + 14, 2.2, 0, Math.PI * 2);
+      ctx.fillStyle = `${marker.color}88`;
+      ctx.fill();
+      const isLast = index === markers.length - 1;
+      if (x - previousTickX >= 72 || isLast) {
+        ctx.fillStyle = 'rgba(82,88,112,.58)';
+        ctx.font = '8.5px JetBrains Mono, monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText(this.formatTimelineDate(marker.timestamp), x, cssHeight - bottomPad + 28);
+        previousTickX = x;
+      }
+    });
   }
 
   private formatTimelineDate(value: string): string {
@@ -1788,10 +2344,81 @@ export class AssetLedgerPageComponent {
     return bestMarker !== null && bestDistance <= maxDistance ? bestMarker : null;
   }
 
+  private findRenderedPointMarker(
+    canvas: HTMLCanvasElement | undefined,
+    renderedMarkers: ReadonlyArray<RenderedPointView>,
+    event: MouseEvent
+  ): string | null {
+    if (canvas === undefined || renderedMarkers.length === 0) {
+      return null;
+    }
+    const rect = canvas.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    let bestMatch: RenderedPointView | null = null;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (const marker of renderedMarkers) {
+      const dx = x - marker.x;
+      const dy = y - marker.y;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      if (distance <= marker.radius + 8 && distance < bestDistance) {
+        bestDistance = distance;
+        bestMatch = marker;
+      }
+    }
+    return bestMatch?.markerId ?? null;
+  }
+
+  private findRenderedPnlMarker(canvas: HTMLCanvasElement | undefined, event: MouseEvent): string | null {
+    if (canvas === undefined || this.pnlRenderedMarkers.length === 0) {
+      return null;
+    }
+    const rect = canvas.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    let bestMatch: RenderedPnlMarkerView | null = null;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (const marker of this.pnlRenderedMarkers) {
+      const insideBar =
+        x >= marker.barLeft - 4 &&
+        x <= marker.barRight + 4 &&
+        y >= marker.barTop - 4 &&
+        y <= marker.barBottom + 4;
+      if (insideBar) {
+        return marker.markerId;
+      }
+      const dx = x - marker.x;
+      const dy = y - marker.cumulativeY;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      if (distance <= marker.radius + 6 && distance < bestDistance) {
+        bestDistance = distance;
+        bestMatch = marker;
+      }
+    }
+    return bestMatch?.markerId ?? null;
+  }
+
   private clearPinnedTooltip(): void {
     this.pinnedMarkerId.set(null);
     this.hoveredMarkerId.set(null);
     this.renderChart();
+    this.renderSupplementalCharts();
+  }
+
+  private togglePinnedMarker(markerId: string | null, clientX: number, clientY: number): void {
+    if (markerId === null) {
+      this.clearPinnedTooltip();
+      return;
+    }
+    if (this.pinnedMarkerId() === markerId) {
+      this.clearPinnedTooltip();
+      return;
+    }
+    this.pinnedMarkerId.set(markerId);
+    this.hoveredMarkerId.set(markerId);
+    this.positionTooltip(clientX, clientY);
+    this.renderChart();
+    this.renderSupplementalCharts();
   }
 
   private positionTooltip(clientX: number, clientY: number): void {

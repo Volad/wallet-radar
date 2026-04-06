@@ -555,8 +555,11 @@
 
 .asset-ledger-workspace {
   flex: 1;
+  display: flex;
+  height: 100%;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
 }
 
 .icon-nav {
