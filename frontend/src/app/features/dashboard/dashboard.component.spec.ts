@@ -257,4 +257,42 @@ describe('DashboardComponent (wallet submit flow)', () => {
     expect(component.transactionPaneTransactions()[0].hash).toBe('0xbridge');
     expect(component.transactionPaneTransactions()[0].bridgeStatus).toBe('MATCHED');
   }));
+
+  it('preserves backend price sources like BYBIT without degrading them to UNKNOWN', fakeAsync(() => {
+    walletApiServiceSpy.getSessionBackfillStatus.and.returnValue(of(completeBackfill));
+    walletApiServiceSpy.getSessionTransactions.and.returnValue(
+      of({
+        ...sessionTransactionsResponse,
+        items: [
+          {
+            ...sessionTransactionsResponse.items[0],
+            flows: [
+              {
+                ...sessionTransactionsResponse.items[0].flows[0],
+                role: 'FEE',
+                assetSymbol: 'ETH',
+                quantityDelta: -0.0001,
+                unitPriceUsd: 2153.2,
+                valueUsd: -0.21532,
+                priceSource: 'BYBIT',
+              },
+            ],
+          },
+        ],
+      })
+    );
+
+    const fixture = TestBed.createComponent(DashboardComponent);
+    const component = fixture.componentInstance;
+    fixture.detectChanges();
+
+    component.addWalletsForm.controls.wallets.controls[0].controls.address.setValue(
+      '0x1A87f12aC07E9746e9B053B8D7EF1d45270D693f'
+    );
+    component.submitWallets();
+    tick();
+    fixture.detectChanges();
+
+    expect(component.transactionPaneTransactions()[0].flows[0].source).toBe('BYBIT');
+  }));
 });

@@ -382,7 +382,10 @@ export class DashboardTransactionsPaneComponent {
     return 'red';
   }
 
-  getPriceSourceColor(source: PriceSource): string {
+  getPriceSourceColor(source: PriceSource | null): string {
+    if (source === null) {
+      return COLORS.textSubtle;
+    }
     if (source === 'STABLECOIN') {
       return COLORS.green;
     }
@@ -391,6 +394,21 @@ export class DashboardTransactionsPaneComponent {
     }
     if (source === 'COINGECKO') {
       return COLORS.purple;
+    }
+    if (source === 'BYBIT') {
+      return '#f4b53f';
+    }
+    if (source === 'BINANCE') {
+      return '#f0b90b';
+    }
+    if (source === 'ECB') {
+      return '#60a5fa';
+    }
+    if (source === 'EXECUTION') {
+      return '#22c55e';
+    }
+    if (source === 'WRAPPER') {
+      return '#a78bfa';
     }
     if (source === 'MANUAL') {
       return COLORS.amber;
@@ -559,7 +577,7 @@ export class DashboardTransactionsPaneComponent {
         symbol: flow.symbol,
         quantity: flow.quantity,
         priceUsd: flow.priceUsd,
-        source: flow.source,
+        source: flow.source ?? 'MANUAL',
       })),
     };
   }

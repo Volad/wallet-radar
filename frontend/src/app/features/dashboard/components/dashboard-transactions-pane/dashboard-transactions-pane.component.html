@@ -184,7 +184,9 @@
                       } @else {
                         <span class="warn-mark">No price</span>
                       }
-                      <span class="source-pill" [style.--sourceColor]="getPriceSourceColor(flow.source)">{{ flow.source }}</span>
+                      @if (flow.source !== null) {
+                        <span class="source-pill" [style.--sourceColor]="getPriceSourceColor(flow.source)">{{ flow.source }}</span>
+                      }
                     </div>
                   </div>
                 }

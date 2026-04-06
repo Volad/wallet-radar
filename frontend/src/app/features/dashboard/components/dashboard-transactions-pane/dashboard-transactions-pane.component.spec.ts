@@ -113,6 +113,32 @@ describe('DashboardTransactionsPaneComponent', () => {
     expect(text).not.toContain('PRICE?');
   });
 
+  it('does not render UNKNOWN source pill for flows without price source', () => {
+    component.sourceTransactions = [
+      {
+        ...transactions[0],
+        flows: [
+          {
+            role: 'TRANSFER',
+            symbol: 'USDC',
+            quantity: 100,
+            signedQuantity: 100,
+            priceUsd: null,
+            source: null,
+          },
+        ],
+      },
+    ];
+    fixture.detectChanges();
+
+    component.toggleTransactionExpanded('tx-1');
+    fixture.detectChanges();
+
+    const text = fixture.nativeElement.textContent as string;
+    expect(text).not.toContain('UNKNOWN');
+    expect(text).toContain('No price');
+  });
+
   it('renders external counterparty text without EX badge on receiving side', () => {
     component.sourceTransactions = [
       {

@@ -28,7 +28,17 @@ export type TransactionType =
 
 export type TransactionStatus = 'CONFIRMED' | 'PENDING_PRICE' | 'NEEDS_REVIEW';
 export type FlowRole = 'BUY' | 'SELL' | 'FEE' | 'TRANSFER';
-export type PriceSource = 'STABLECOIN' | 'SWAP_DERIVED' | 'COINGECKO' | 'MANUAL' | 'UNKNOWN';
+export type PriceSource =
+  | 'STABLECOIN'
+  | 'SWAP_DERIVED'
+  | 'COINGECKO'
+  | 'MANUAL'
+  | 'UNKNOWN'
+  | 'BYBIT'
+  | 'BINANCE'
+  | 'ECB'
+  | 'EXECUTION'
+  | 'WRAPPER';
 export type BridgeStatus = 'BRIDGE_OUT' | 'BRIDGE_IN' | 'MATCHED' | 'REVIEW';
 export type TransactionBridgeFilter = 'ALL' | BridgeStatus;
 export type TransactionSpamFilter = 'HIDE_SPAM' | 'ALL' | 'SPAM_ONLY';
@@ -124,7 +134,7 @@ export interface TransactionFlow {
   readonly quantity: number;
   readonly signedQuantity?: number;
   readonly priceUsd: number | null;
-  readonly source: PriceSource;
+  readonly source: PriceSource | null;
 }
 
 export interface TransactionItem {
@@ -216,5 +226,10 @@ export const PRICE_SOURCES: ReadonlyArray<PriceSource> = [
   'SWAP_DERIVED',
   'COINGECKO',
   'MANUAL',
+  'BYBIT',
+  'BINANCE',
+  'ECB',
+  'EXECUTION',
+  'WRAPPER',
   'UNKNOWN',
 ];

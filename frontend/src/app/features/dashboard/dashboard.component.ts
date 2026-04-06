@@ -110,7 +110,18 @@ const TRANSACTION_TYPES_BY_ID = new Set<TransactionType>([
 ]);
 
 const FLOW_ROLES = new Set<FlowRole>(['BUY', 'SELL', 'FEE', 'TRANSFER']);
-const PRICE_SOURCES = new Set<PriceSource>(['STABLECOIN', 'SWAP_DERIVED', 'COINGECKO', 'MANUAL', 'UNKNOWN']);
+const PRICE_SOURCES = new Set<PriceSource>([
+  'STABLECOIN',
+  'SWAP_DERIVED',
+  'COINGECKO',
+  'MANUAL',
+  'UNKNOWN',
+  'BYBIT',
+  'BINANCE',
+  'ECB',
+  'EXECUTION',
+  'WRAPPER',
+]);
 const BRIDGE_STATUSES = new Set<SessionBridgeStatus>(['BRIDGE_OUT', 'BRIDGE_IN', 'MATCHED', 'REVIEW']);
 
 @Component({
@@ -1004,8 +1015,11 @@ export class DashboardComponent {
     return 'BUY';
   }
 
-  private toPriceSource(priceSource: string | null): PriceSource {
-    if (priceSource !== null && PRICE_SOURCES.has(priceSource as PriceSource)) {
+  private toPriceSource(priceSource: string | null): PriceSource | null {
+    if (priceSource === null) {
+      return null;
+    }
+    if (PRICE_SOURCES.has(priceSource as PriceSource)) {
       return priceSource as PriceSource;
     }
     return 'UNKNOWN';
