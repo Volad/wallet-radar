@@ -123,7 +123,10 @@ export class DashboardDataService {
   private toNetworkInfo(networkId: string): NetworkInfo {
     const presentation = EVM_NETWORK_PRESENTATION_BY_ID.get(networkId as EvmNetworkId);
     if (presentation !== undefined) {
-      return presentation;
+      return {
+        ...presentation,
+        id: networkId,
+      };
     }
     return {
       id: networkId,
