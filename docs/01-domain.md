@@ -683,6 +683,12 @@ Additional constraints:
   `withdrawETH(...)`, `supplyWithPermit(...)`, and `depositETH(...)` must
   normalize as lending continuity, not as generic unwrap / LP / residual
   transfer families.
+- For Aave-style `BORROW` / `REPAY`, `protocolName = Aave` may be attached by
+  the generic selector lane only when current evidence proves both:
+  - the selector is canonical `borrow(...)` or `repay(...)`
+  - the same tx contains `variableDebt*` or `stableDebt*` marker movement
+  Registry address discovery remains the authoritative source for exact pool
+  identity and `protocolVersion`.
 - Another audited narrow override exists for `zkSync` routed `Across` sends:
   selector `0x27ad57d5` must resolve as source-side `BRIDGE_OUT` when current
   stored raw evidence proves the same-wallet `Across` route from calldata plus
@@ -770,6 +776,7 @@ LP extensions for concentrated-liquidity (CL) protocols:
 | INV-19 | When `ACCOUNTING_REPLAY` stops before replay/materialization because active blockers still exist, session pipeline state must persist as `BLOCKED`, not `COMPLETE`. |
 | INV-20 | Provider-native balances that arrive with `contractAddress = 0x0000000000000000000000000000000000000000` must still normalize to native accounting identity `NATIVE:<NETWORK>`, not to an ERC-20 contract identity. |
 | INV-21 | A stale `ACCOUNTING_REPLAY / RUNNING` session may be healed to `COMPLETE` only when the session has no pending raw/clarification/pricing/stat work and derived replay outputs are already materialized. |
+| INV-22 | Generic selector fallback may attach `protocolName = Aave` for `BORROW` / `REPAY` only when the same tx also proves Aave debt-marker continuity through `variableDebt*` or `stableDebt*` movement; selector hit alone is insufficient. |
 
 ---
 

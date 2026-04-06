@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "last_updated": "2026-03-17",
+  "last_updated": "2026-04-06",
   "description": "WalletRadar Protocol Registry — contract address to DeFi protocol classification mapping",
   "supported_networks": [
     "ETHEREUM",
@@ -708,6 +708,19 @@
         "LINEA"
       ],
       "confidence": "MEDIUM"
+    },
+    "0x78e30497a3c7527d953c6b1e3541b021a98ac43c": {
+      "name": "Aave V3 Pool",
+      "protocol": "Aave",
+      "version": "V3",
+      "family": "LENDING",
+      "role": "POOL",
+      "event_type": "LENDING_DEPOSIT",
+      "networks": [
+        "ZKSYNC"
+      ],
+      "confidence": "HIGH",
+      "notes": "zkSync Era Aave V3 pool. Supply=LENDING_DEPOSIT, Withdraw=LENDING_WITHDRAW, Borrow=BORROW, Repay=REPAY"
     },
     "── LENDING: Aave V2 ──────────────────────────────────────────────────": {},
     "0x7d2768de32b0b80b7a3454c06bdac94a69ddc7a9": {

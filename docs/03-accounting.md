@@ -427,6 +427,11 @@ For matched Bybit withdraw/deposit:
   - `withdrawETH(...)` is `LENDING_WITHDRAW`
   - `supplyWithPermit(...)` is `LENDING_DEPOSIT`
   - `depositETH(...)` is `LENDING_DEPOSIT`
+- generic Aave `BORROW` / `REPAY` rows may still carry `protocol = Aave`
+  without an address-level registry hit when the tx proves canonical
+  Aave debt-marker continuity (`variableDebt*` / `stableDebt*`) alongside the
+  selector. That protocol handoff affects labeling only; reserve/debt flow
+  accounting semantics stay unchanged.
 - routed native sends with deterministic raw outbound principal on `zkSync`
   must preserve that outbound principal in canonical normalization even when the
   protocol identity is still low-confidence; they may not fall through to a

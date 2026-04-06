@@ -5983,6 +5983,7 @@ class OnChainClassifierTest {
         OnChainClassificationResult result = classifier.classify(rawTransaction);
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.BORROW);
+        assertThat(result.protocolName()).isEqualTo("Aave");
         assertThat(result.flows()).filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
                 .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getRole())
                 .containsExactlyInAnyOrder(
@@ -6200,12 +6201,36 @@ class OnChainClassifierTest {
         OnChainClassificationResult result = classifier.classify(rawTransaction);
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.REPAY);
+        assertThat(result.protocolName()).isEqualTo("Aave");
         assertThat(result.flows()).filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
                 .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getRole())
                 .containsExactlyInAnyOrder(
                         "variableDebtZksUSDC:TRANSFER",
                         "USDC:SELL"
                 );
+    }
+
+    @Test
+    @DisplayName("generic repay selector without Aave debt marker does not assume protocol handoff")
+    void genericRepaySelectorWithoutAaveDebtMarkerKeepsProtocolNull() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.ZKSYNC);
+        rawTransaction.setTxHash("0x6d16bf9098770891d7ac26d6d0de7bb5bdfbdf5f980b1dc68a5f40da12345678");
+        rawTransaction.getRawData().put("to", COUNTERPARTY);
+        rawTransaction.getRawData().put("methodId", "0x573ade81");
+        rawTransaction.getRawData().put("functionName", "repay(address,uint256,uint256,address)");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0x1d17cbcf0d6d143135ae902365d2e5e2a16538d4")
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenDecimal", "6")
+                        .append("from", WALLET)
+                        .append("to", COUNTERPARTY)
+                        .append("value", "2000000")
+        )).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.REPAY);
+        assertThat(result.protocolName()).isNull();
     }
 
     @Test

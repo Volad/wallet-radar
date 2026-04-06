@@ -39,6 +39,12 @@ public class MethodIdClassifier implements OnChainFamilyClassifier {
         ConfidenceLevel confidence = type == NormalizedTransactionType.APPROVE
                 ? ConfidenceLevel.HIGH
                 : ConfidenceLevel.MEDIUM;
+        String protocolName = null;
+        String protocolVersion = null;
+        if ((type == NormalizedTransactionType.BORROW || type == NormalizedTransactionType.REPAY)
+                && OnChainClassificationSupport.hasAaveDebtMarker(context.movementLegs())) {
+            protocolName = "Aave";
+        }
         return Optional.of(FamilyDecisionSupport.buildWithView(
                 context.view(),
                 type,
@@ -46,7 +52,9 @@ public class MethodIdClassifier implements OnChainFamilyClassifier {
                 ClassificationSource.METHOD_ID,
                 confidence,
                 OnChainClassificationSupport.toFlows(context.movementLegs(), type),
-                List.of()
+                List.of(),
+                protocolName,
+                protocolVersion
         ));
     }
 }

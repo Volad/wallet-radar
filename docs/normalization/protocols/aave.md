@@ -26,6 +26,12 @@ Current active runtime usage:
 
 - `LendingRegistryClassifier` reads `aave.json` before generic selector
   fallback for `LENDING_DEPOSIT / LENDING_WITHDRAW / BORROW / REPAY`
+- when the address-level registry match is missing, a narrow selector fallback
+  may still attach `protocolName = Aave` for `BORROW / REPAY` only when both
+  conditions hold:
+  - selector resolves to canonical `BORROW` or `REPAY`
+  - current movement evidence contains `variableDebt*` or `stableDebt*`
+    marker legs
 - the current baseline-safe selector groups are:
   - `lendingDeposit`
   - `lendingWithdraw`
@@ -57,6 +63,11 @@ Current active runtime usage:
 
 - clarification is optional and used mainly for composite or containerized calls
 - simple pool interactions should remain classifiable from current raw evidence
+- address-level registry remains the authoritative source for
+  `protocolVersion`
+- the selector + debt-marker fallback is allowed to set `protocolName = Aave`
+  even when the exact pool address is still missing from the registry, but it
+  must not infer `protocolVersion` or contract identity on its own
 
 ## Flow Rules
 
@@ -84,6 +95,10 @@ Current active runtime usage:
 - do not let generic transfer fallback override proven Aave semantics
 - do not let generic `UNWRAP`, `LP_EXIT`, or residual heuristic fallback
   override audited `zkSync` Aave gateway selectors
+- do not treat `variableDebt*` / `stableDebt*` marker legs alone as universal
+  protocol proof
+- do not treat bare `borrow(...)` / `repay(...)` selector hits without
+  Aave-style debt markers as sufficient to set `protocolName = Aave`
 
 ## Baseline and Regression Anchors
 

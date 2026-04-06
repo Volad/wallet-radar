@@ -164,6 +164,11 @@ Important accounting note:
   and chain-specific execution-settlement refund legs in the same tx. Those
   marker / settlement legs must persist as continuity `TRANSFER`, while the
   reserve-asset principal remains the only economic `BUY` / `SELL` leg.
+- Address-level protocol registry remains the primary protocol handoff for Aave
+  lending pools. A generic selector fallback may attach `protocolName = Aave`
+  only for `BORROW` / `REPAY` when the same tx also proves
+  `variableDebt*` / `stableDebt*` continuity. That narrow fallback must not
+  infer exact pool address or `protocolVersion`.
 - `REWARD_CLAIM` rows may contain self-canceling wrapper / marker pairs inside
   the same tx. Exact same-asset same-quantity in/out pairs must not persist as
   economic `BUY` / `SELL`; they are continuity-only no-op evidence.

@@ -85,6 +85,13 @@ public final class OnChainClassificationSupport {
         return initialStatus(null, type, confidence);
     }
 
+    public static boolean hasAaveDebtMarker(List<RawLeg> movementLegs) {
+        if (movementLegs == null || movementLegs.isEmpty()) {
+            return false;
+        }
+        return movementLegs.stream().anyMatch(OnChainClassificationSupport::isDebtMarkerLeg);
+    }
+
     private static NormalizedLegRole resolveRole(
             NormalizedTransactionType type,
             RawLeg leg,
