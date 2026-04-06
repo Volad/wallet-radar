@@ -1,10 +1,111 @@
 <div class="asset-ledger-shell">
   @if (viewState().status === 'loading') {
-    <section class="state-panel">
-      <div class="spinner" aria-hidden="true"></div>
-      <h2>Loading asset ledger</h2>
-      <p>Rebuilding timeline, current basis, and event overlay for the selected asset family.</p>
-    </section>
+    <aside class="asset-ledger-filters loading-shell" aria-hidden="true">
+      <div class="filters-head">
+        <div class="loading-line loading-line-back"></div>
+        <div class="loading-line loading-line-eyebrow"></div>
+        <div class="loading-line loading-line-title"></div>
+        <div class="loading-line loading-line-subtitle"></div>
+      </div>
+      <div class="filters-content loading-filters">
+        <div class="loading-section">
+          <div class="loading-line loading-line-label"></div>
+          <div class="loading-row"></div>
+          <div class="loading-row"></div>
+          <div class="loading-row"></div>
+          <div class="loading-row"></div>
+        </div>
+        <div class="loading-section">
+          <div class="loading-line loading-line-label"></div>
+          <div class="loading-row short"></div>
+        </div>
+        <div class="loading-section">
+          <div class="loading-line loading-line-label"></div>
+          <div class="loading-box"></div>
+        </div>
+        <div class="loading-section">
+          <div class="loading-line loading-line-label"></div>
+          <div class="loading-row"></div>
+          <div class="loading-row"></div>
+          <div class="loading-row"></div>
+        </div>
+      </div>
+    </aside>
+
+    <main class="asset-ledger-content loading-content">
+      <div class="content-summary-sticky">
+        <header class="content-head">
+          <div>
+            <div class="loading-line loading-line-eyebrow"></div>
+            <div class="loading-title-row">
+              <div class="loading-line loading-line-main-title"></div>
+              <div class="loading-pill"></div>
+              <div class="loading-pill warning"></div>
+            </div>
+            <div class="loading-line loading-line-subtitle wide"></div>
+          </div>
+        </header>
+
+        <div class="stats loading-stats">
+          <div class="sc">
+            <div class="loading-line loading-line-stat-label"></div>
+            <div class="loading-line loading-line-stat-value"></div>
+            <div class="loading-line loading-line-stat-sub"></div>
+          </div>
+          <div class="sc">
+            <div class="loading-line loading-line-stat-label"></div>
+            <div class="loading-line loading-line-stat-value"></div>
+            <div class="loading-line loading-line-stat-sub"></div>
+          </div>
+          <div class="sc">
+            <div class="loading-line loading-line-stat-label"></div>
+            <div class="loading-line loading-line-stat-value"></div>
+            <div class="loading-line loading-line-stat-sub"></div>
+          </div>
+          <div class="sc">
+            <div class="loading-line loading-line-stat-label"></div>
+            <div class="loading-line loading-line-stat-value"></div>
+            <div class="loading-line loading-line-stat-sub"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="cv-wrap loading-card">
+        <div class="spinner" aria-hidden="true"></div>
+        <div class="loading-copy">
+          <h2>Loading asset ledger</h2>
+          <p>Rebuilding timeline, current basis, and event overlay for the selected asset family.</p>
+        </div>
+      </div>
+
+      <div class="chart-range loading-range">
+        <div class="range-meta">
+          <div class="loading-line loading-line-range-label"></div>
+          <div class="loading-line loading-line-range-window"></div>
+        </div>
+        <div class="loading-range-track"></div>
+      </div>
+
+      <section class="ledger-section">
+        <div class="section-head">
+          <span>
+            <span class="section-title">Position size</span>
+            <span class="section-sub">Loading series…</span>
+          </span>
+        </div>
+        <div class="mini-wrap loading-card loading-mini"></div>
+      </section>
+
+      <section class="ledger-section">
+        <div class="section-head">
+          <span>
+            <span class="section-title">Realised P&amp;L</span>
+            <span class="section-sub">Loading series…</span>
+          </span>
+        </div>
+        <div class="pnl-wrap loading-card loading-mini"></div>
+      </section>
+    </main>
   } @else {
     @if (errorMessage(); as errorMessage) {
       <section class="state-panel error">
@@ -25,54 +126,68 @@
           </div>
 
           <div class="filters-content">
-            <div class="filters-summary">
-              <span class="scope-pill">{{ selectedTypeCount() }} tx types</span>
-              <span class="scope-pill">{{ selectedBasisCount() }} basis rules</span>
-              <span class="scope-pill">{{ visibleWindowLabel() }}</span>
-            </div>
+            <section class="filter-group">
+              <div class="side-label-row">
+                <h3 class="side-label">Tx types</h3>
+                <button type="button" class="toggle-all-btn" (click)="toggleAllTypes()">
+                  toggle all
+                </button>
+              </div>
+              @for (item of data.legendItems; track item.key) {
+                <button
+                  type="button"
+                  class="filter-row type-row"
+                  [class.active]="isTypeSelected(item.typeKey)"
+                  [style.--chipColor]="item.color"
+                  (click)="toggleTypeVisibility(item.typeKey)">
+                  <canvas #legendCanvas class="type-icon-canvas" [attr.data-type]="item.typeKey"></canvas>
+                  <span class="check-box" [class.checked]="isTypeSelected(item.typeKey)"></span>
+                  <span class="filter-row-label">{{ item.label }}</span>
+                </button>
+              }
+            </section>
+
+            <section class="filter-group">
+              <h3 class="side-label">Basis rules</h3>
+              @for (basisFilter of basisFilterOptions(); track basisFilter.key) {
+                <button
+                  type="button"
+                  class="filter-row basis-row"
+                  [class.active]="isBasisEffectSelected(basisFilter.key)"
+                  [style.--chipColor]="basisFilter.color"
+                  (click)="toggleBasisEffect(basisFilter.key)">
+                  <span class="check-box" [class.checked]="isBasisEffectSelected(basisFilter.key)"></span>
+                  <span class="filter-row-label">{{ basisFilter.label }}</span>
+                </button>
+              }
+            </section>
+
+            <section class="filter-group filter-group-range">
+              <h3 class="side-label">Date range</h3>
+              <div class="sidebar-range-box">
+                <span>{{ visibleWindowStartLabel() }}</span>
+                <svg width="14" height="7" viewBox="0 0 14 7" aria-hidden="true">
+                  <path
+                    d="M0 3.5h10M7.5 1l2.5 2.5-2.5 2.5"
+                    stroke="currentColor"
+                    stroke-width="1.2"
+                    fill="none"
+                    stroke-linecap="round" />
+                </svg>
+                <span>{{ visibleWindowEndLabel() }}</span>
+              </div>
+            </section>
 
             <section class="filter-group">
               <h3 class="side-label">Quick presets</h3>
               @for (preset of quickPresets; track preset.key) {
                 <button
                   type="button"
-                  class="select-chip preset-chip"
+                  class="preset-row"
                   [class.active]="selectedPreset() === preset.key"
-                  [style.--chipColor]="'#3b82f6'"
                   (click)="applyQuickPreset(preset.key)">
-                  <span class="check-box" [class.checked]="selectedPreset() === preset.key"></span>
+                  <span class="preset-radio" [class.checked]="selectedPreset() === preset.key"></span>
                   <span>{{ preset.label }}</span>
-                </button>
-              }
-            </section>
-
-            <section class="filter-group">
-              <h3 class="side-label">Transaction type</h3>
-              @for (item of data.legendItems; track item.key) {
-                <button
-                  type="button"
-                  class="select-chip type-chip"
-                  [class.active]="isTypeSelected(item.typeKey)"
-                  [style.--chipColor]="item.color"
-                  (click)="toggleTypeVisibility(item.typeKey)">
-                  <span class="check-box" [class.checked]="isTypeSelected(item.typeKey)"></span>
-                  <canvas #legendCanvas [attr.data-type]="item.typeKey"></canvas>
-                  <span>{{ item.label }}</span>
-                </button>
-              }
-            </section>
-
-            <section class="filter-group">
-              <h3 class="side-label">Basis type</h3>
-              @for (basisFilter of basisFilterOptions(); track basisFilter.key) {
-                <button
-                  type="button"
-                  class="select-chip basis-chip"
-                  [class.active]="isBasisEffectSelected(basisFilter.key)"
-                  [style.--chipColor]="basisFilter.color"
-                  (click)="toggleBasisEffect(basisFilter.key)">
-                  <span class="check-box" [class.checked]="isBasisEffectSelected(basisFilter.key)"></span>
-                  <span>{{ basisFilter.label }}</span>
                 </button>
               }
             </section>
@@ -146,7 +261,7 @@
             <div class="chart-range">
               <div class="range-meta">
                 <span class="tool-label">Range</span>
-                <span class="tool-window">{{ visibleWindowLabel() }}</span>
+                <span class="tool-window">{{ visibleWindowStartLabel() }} · {{ visibleWindowEndLabel() }}</span>
               </div>
               <div
                 #rangeShell
@@ -155,6 +270,7 @@
                 [style.--range-start.%]="rangeStartPercent()"
                 [style.--range-end.%]="rangeEndPercent()">
                 <div class="range-track"></div>
+                <canvas #rangePreviewCanvas class="range-preview-canvas" aria-hidden="true"></canvas>
                 <div class="range-selection" (mousedown)="onRangeSelectionPointerDown($event)"></div>
                 <input
                   #rangeStartSlider
@@ -252,6 +368,7 @@
               <thead>
                 <tr>
                   <th style="width: 220px">Type</th>
+                  <th>Protocol</th>
                   <th>Date</th>
                   <th class="r">Qty Δ</th>
                   <th class="r">Unit price</th>
@@ -266,20 +383,23 @@
                   @for (marker of eventLogMarkers(); track marker.id) {
                     <tr
                       [class.active]="isLogRowActive(marker.id)"
-                      (mouseenter)="onLogRowPointerEnter(marker, $event)"
+                      (mouseenter)="onLogRowPointerEnter(marker)"
                       (mouseleave)="onLogRowPointerLeave()"
                       (click)="selectMarkerFromLog(marker, $event)">
                       <td>
                         <div class="tx-type-cell">
                           <span class="tx-icon-wrap" [style.color]="marker.color">{{ marker.glyph }}</span>
-                          <div>
+                          <div class="tx-type-copy">
                             <div class="tx-type-name">{{ marker.label }}</div>
                             <div class="tx-net">{{ marker.networkLabel }}</div>
                           </div>
                         </div>
                       </td>
-                      <td>{{ formatEventDateTime(marker.timestamp) }}</td>
-                      <td class="r">
+                      <td>
+                        <span class="protocol-cell">{{ marker.displayVenue ?? '—' }}</span>
+                      </td>
+                      <td class="mono-cell">{{ formatEventDateTime(marker.timestamp) }}</td>
+                      <td class="r mono-cell">
                         <span
                           class="qty-delta"
                           [class.pos]="marker.quantityDelta > 0"
@@ -287,14 +407,14 @@
                           {{ formatSignedQuantity(marker.quantityDelta, 6) }}
                         </span>
                       </td>
-                      <td class="r">{{ formatUsd(marker.priceUsd, 2) }}</td>
-                      <td class="r">
+                      <td class="r mono-cell">{{ formatUsd(marker.priceUsd, 2) }}</td>
+                      <td class="r mono-cell">
                         <div>{{ formatUsd(marker.avcoBeforeUsd, 2) }} <span class="avco-arrow">→</span> {{ formatUsd(marker.avcoAfterUsd, 2) }}</div>
                         @if (marker.basisSummary !== 'No basis effect') {
                           <div class="avco-change">{{ marker.basisSummary }}</div>
                         }
                       </td>
-                      <td class="r">
+                      <td class="r mono-cell">
                         @if ((marker.realisedPnlDeltaUsd ?? 0) !== 0) {
                           <span
                             [class.pos]="(marker.realisedPnlDeltaUsd ?? 0) > 0"
@@ -305,7 +425,13 @@
                           <span class="muted-c">—</span>
                         }
                       </td>
-                      <td>{{ marker.priceSource ?? '—' }}</td>
+                      <td>
+                        @if (marker.priceSource; as priceSource) {
+                          <span class="source-pill">{{ priceSource }}</span>
+                        } @else {
+                          <span class="muted-c">—</span>
+                        }
+                      </td>
                       <td>
                         @if (marker.flows.length > 0) {
                           <div class="flows-cell">
@@ -328,7 +454,7 @@
                   }
                 } @else {
                   <tr>
-                    <td colspan="8" class="empty-log">No events match current range and filters.</td>
+                    <td colspan="9" class="empty-log">No events match current range and filters.</td>
                   </tr>
                 }
               </tbody>

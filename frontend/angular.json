@@ -80,6 +80,10 @@
             },
             "development": {
               "buildTarget": "wallet-radar-frontend:build:development"
+            },
+            "local-compose": {
+              "buildTarget": "wallet-radar-frontend:build:development",
+              "proxyConfig": "proxy.local-compose.conf.js"
             }
           },
           "defaultConfiguration": "development"

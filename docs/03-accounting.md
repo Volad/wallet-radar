@@ -367,6 +367,17 @@ Basis continuity applies when the economic owner did not dispose of the asset:
   `LENDING_DEPOSIT` / `LENDING_WITHDRAW` semantics. If the batch decoder cannot
   reconstruct the real wallet-boundary economic lifecycle, the row remains
   explicit review and never enters pricing.
+- Euler simple vault rows stay on the plain lending policy only after
+  clarification proves the lifecycle:
+  - `stable -> share` is `LENDING_DEPOSIT`
+  - `share -> stable` is `LENDING_WITHDRAW`
+  - without reliable clarification they remain
+    `UNKNOWN / PENDING_CLARIFICATION`
+  - they enter receipt clarification before pricing/replay
+  - if clarification still cannot prove the lifecycle, they remain
+    `NEEDS_REVIEW`
+  - replay derives partial vs fully exited state from position continuity, not
+    from the normalized type label
 - audited Euler loop rows
   WalletRadar models the audited Euler looping family as a share-position
   lifecycle, not as a plain lending deposit/withdraw:

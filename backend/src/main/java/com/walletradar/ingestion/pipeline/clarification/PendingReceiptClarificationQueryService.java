@@ -56,7 +56,8 @@ public class PendingReceiptClarificationQueryService {
                 ClassificationReasonCode.CLASSIFICATION_FAILED.code(),
                 ClassificationReasonCode.INSUFFICIENT_MOVEMENT_EVIDENCE.code(),
                 ClassificationReasonCode.GMX_DEPOSIT_REQUEST_CORRELATION_REQUIRED.code(),
-                ClassificationReasonCode.GMX_DEPOSIT_SETTLEMENT_CORRELATION_REQUIRED.code()
+                ClassificationReasonCode.GMX_DEPOSIT_SETTLEMENT_CORRELATION_REQUIRED.code(),
+                ClassificationReasonCode.EULER_BATCH_DECODER_REQUIRED.code()
         );
         Criteria reviewTailCriteria = new Criteria().andOperator(
                 Criteria.where("status").is(NormalizedTransactionStatus.NEEDS_REVIEW),
@@ -102,6 +103,11 @@ public class PendingReceiptClarificationQueryService {
                 Criteria.where("protocolName").is("1inch"),
                 Criteria.where("missingDataReasons").in(ClassificationReasonCode.ROUTED_AGGREGATOR_OUTBOUND_ONLY.code())
         );
+        Criteria eulerPendingClarificationCriteria = new Criteria().andOperator(
+                Criteria.where("status").is(NormalizedTransactionStatus.PENDING_CLARIFICATION),
+                Criteria.where("protocolName").is("Euler"),
+                Criteria.where("missingDataReasons").in(ClassificationReasonCode.EULER_BATCH_DECODER_REQUIRED.code())
+        );
 
         Query query = new Query(new Criteria().andOperator(
                 Criteria.where("source").is(NormalizedTransactionSource.ON_CHAIN),
@@ -112,7 +118,8 @@ public class PendingReceiptClarificationQueryService {
                         gmxPendingClarificationCriteria,
                         cowPendingClarificationCriteria,
                         bridgeEvidenceCriteria,
-                        oneInchNativeSettlementCriteria
+                        oneInchNativeSettlementCriteria,
+                        eulerPendingClarificationCriteria
                 )
         ));
         query.with(Sort.by(

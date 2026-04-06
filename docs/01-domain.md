@@ -573,6 +573,13 @@ review states:
   where a loop share position is reduced and wallet-visible value returns
 - `LENDING_LOOP_CLOSE` holds audited final unwind rows where a loop share
   position is fully exited back into wallet-visible assets
+- Euler simple vault rows remain plain lending lifecycle, not loop lifecycle,
+  but only when clarification proves the lifecycle:
+  - `stable -> share` is `LENDING_DEPOSIT`
+  - `share -> stable` is `LENDING_WITHDRAW`
+  - unproven batch rows stay `UNKNOWN / PENDING_CLARIFICATION`
+  - partial vs final vault withdraw is derived later from replay/UI state, not
+    from the normalized type itself
 - `DEX_ORDER_REQUEST` holds audited async spot-order request / escrow funding
   before later DEX settlement, for example CoW Eth Flow request rows
 - `DEX_ORDER_SETTLEMENT` holds the later settlement-side completion of the same

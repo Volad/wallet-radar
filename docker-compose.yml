@@ -41,10 +41,12 @@ services:
     working_dir: /workspace/frontend
     env_file:
       - .env
+    environment:
+      API_PROXY_TARGET: http://backend:8080
     volumes:
       - ./:/workspace
       - frontend_node_modules:/workspace/frontend/node_modules
-    command: ["sh", "-lc", "npm install && npm run start -- --host 0.0.0.0 --port 4200"]
+    command: ["sh", "-lc", "npm install && npm run start:local-compose -- --host 0.0.0.0 --port 4200"]
     depends_on:
       - backend
     ports:

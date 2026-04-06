@@ -182,6 +182,81 @@ const FALLBACK_ICON: IconRenderer = (ctx, cx, cy, r) => {
   ctx.stroke();
 };
 
+function heuristicTypeMeta(typeKey: string): TypeVisualMeta {
+  const key = typeKey.toUpperCase();
+  if (key.includes('SWAP')) {
+    return TYPE_META['SWAP'];
+  }
+  if (key.includes('LENDING') || key.includes('LOOP')) {
+    if (key.includes('WITHDRAW') || key.includes('DECREASE') || key.includes('CLOSE')) {
+      return TYPE_META['LENDING_WITHDRAW'];
+    }
+    if (key.includes('BORROW')) {
+      return TYPE_META['BORROW'];
+    }
+    if (key.includes('REPAY')) {
+      return TYPE_META['REPAY'];
+    }
+    return TYPE_META['LENDING_DEPOSIT'];
+  }
+  if (key.includes('STAK')) {
+    if (key.includes('WITHDRAW') || key.includes('UNSTAKE')) {
+      return TYPE_META['STAKING_WITHDRAW'];
+    }
+    return TYPE_META['STAKING_DEPOSIT'];
+  }
+  if (key.includes('BRIDGE')) {
+    if (key.includes('OUT')) {
+      return TYPE_META['BRIDGE_OUT'];
+    }
+    return TYPE_META['BRIDGE_IN'];
+  }
+  if (key.includes('INTERNAL_TRANSFER')) {
+    return TYPE_META['INTERNAL_TRANSFER'];
+  }
+  if (key.includes('EXTERNAL_TRANSFER_OUT')) {
+    return TYPE_META['EXTERNAL_TRANSFER_OUT'];
+  }
+  if (key.includes('EXTERNAL_TRANSFER_IN')) {
+    return TYPE_META['EXTERNAL_TRANSFER_IN'];
+  }
+  if (key.includes('TRANSFER')) {
+    return TYPE_META['INTERNAL_TRANSFER'];
+  }
+  if (key.includes('REWARD') || key.includes('CLAIM')) {
+    return TYPE_META['REWARD_CLAIM'];
+  }
+  if (key.includes('VAULT')) {
+    return TYPE_META['VAULT_DEPOSIT'];
+  }
+  if (key.includes('LP')) {
+    if (key.includes('EXIT') || key.includes('REMOVE')) {
+      return TYPE_META['LP_EXIT'];
+    }
+    return TYPE_META['LP_ENTRY'];
+  }
+  if (key.includes('WRAP')) {
+    if (key.includes('UN')) {
+      return TYPE_META['UNWRAP'];
+    }
+    return TYPE_META['WRAP'];
+  }
+  if (key.includes('FEE') || key.includes('GAS')) {
+    return {
+      label: typeKey.replace(/_/g, ' '),
+      glyph: '•',
+      color: '#fbbf24',
+      icon: FALLBACK_ICON,
+    };
+  }
+  return {
+    label: typeKey.replace(/_/g, ' '),
+    glyph: '•',
+    color: '#3b82f6',
+    icon: FALLBACK_ICON,
+  };
+}
+
 const TYPE_META: Readonly<Record<string, TypeVisualMeta>> = {
   SWAP: {
     label: 'Swap',
@@ -556,6 +631,7 @@ export class AssetLedgerPageComponent {
 
   readonly hoveredMarkerId = signal<string | null>(null);
   readonly pinnedMarkerId = signal<string | null>(null);
+  readonly showTooltip = signal(false);
   readonly tooltipPosition = signal({ left: 0, top: 0 });
   readonly rangeStartIndex = signal<number>(0);
   readonly rangeEndIndex = signal<number>(0);
@@ -570,6 +646,7 @@ export class AssetLedgerPageComponent {
   @ViewChild('chartCanvas') private chartCanvasRef?: ElementRef<HTMLCanvasElement>;
   @ViewChild('qtyChartCanvas') private qtyChartCanvasRef?: ElementRef<HTMLCanvasElement>;
   @ViewChild('pnlChartCanvas') private pnlChartCanvasRef?: ElementRef<HTMLCanvasElement>;
+  @ViewChild('rangePreviewCanvas') private rangePreviewCanvasRef?: ElementRef<HTMLCanvasElement>;
   @ViewChild('rangeShell') private rangeShellRef?: ElementRef<HTMLDivElement>;
   @ViewChildren('legendCanvas') private legendCanvasRefs?: QueryList<ElementRef<HTMLCanvasElement>>;
 
@@ -700,6 +777,22 @@ export class AssetLedgerPageComponent {
     return from === to ? from : `${from} – ${to}`;
   });
 
+  readonly visibleWindowStartLabel = computed(() => {
+    const markers = this.windowMarkers();
+    if (markers.length === 0) {
+      return '—';
+    }
+    return this.formatShortDate(markers[0].timestamp);
+  });
+
+  readonly visibleWindowEndLabel = computed(() => {
+    const markers = this.windowMarkers();
+    if (markers.length === 0) {
+      return '—';
+    }
+    return this.formatShortDate(markers.at(-1)?.timestamp ?? markers[0].timestamp);
+  });
+
   readonly rangeStartPercent = computed(() => {
     const maxIndex = this.maxMarkerIndex();
     if (maxIndex <= 0) {
@@ -722,6 +815,9 @@ export class AssetLedgerPageComponent {
   });
 
   readonly tooltipMarker = computed(() => {
+    if (!this.showTooltip()) {
+      return null;
+    }
     const activeId = this.pinnedMarkerId() ?? this.hoveredMarkerId();
     const data = this.assetData();
     if (activeId === null || data === null) {
@@ -759,7 +855,19 @@ export class AssetLedgerPageComponent {
 
   setHoveredMarker(markerId: string | null): void {
     this.hoveredMarkerId.set(markerId);
+    this.showTooltip.set(false);
     this.renderChart();
+  }
+
+  toggleAllTypes(): void {
+    const data = this.assetData();
+    if (data === null) {
+      return;
+    }
+    const allTypeKeys = new Set(data.legendItems.map((item) => item.typeKey));
+    const hasVisibleType = data.legendItems.some((item) => this.isTypeSelected(item.typeKey));
+    this.disabledTypeKeys.set(hasVisibleType ? allTypeKeys : new Set<string>());
+    this.selectedPreset.set('all');
   }
 
   toggleTypeVisibility(typeKey: string): void {
@@ -830,6 +938,7 @@ export class AssetLedgerPageComponent {
     this.selectedPreset.set(preset);
     this.hoveredMarkerId.set(null);
     this.pinnedMarkerId.set(null);
+    this.showTooltip.set(false);
   }
 
   onRangeStartInput(value: string): void {
@@ -929,7 +1038,7 @@ export class AssetLedgerPageComponent {
   }
 
   isLogRowActive(markerId: string): boolean {
-    return this.tooltipMarker()?.id === markerId;
+    return this.pinnedMarkerId() === markerId || this.hoveredMarkerId() === markerId;
   }
 
   isSectionCollapsed(sectionKey: string): boolean {
@@ -947,23 +1056,20 @@ export class AssetLedgerPageComponent {
   }
 
   selectMarkerFromLog(marker: MarkerView, event?: MouseEvent): void {
+    event?.stopPropagation();
     this.pinnedMarkerId.set(marker.id);
-    this.hoveredMarkerId.set(marker.id);
-    if (event !== undefined) {
-      this.positionTooltip(event.clientX, event.clientY);
-    } else {
-      this.positionTooltip(window.innerWidth - 320, 180);
-    }
+    this.hoveredMarkerId.set(null);
+    this.showTooltip.set(false);
     this.renderChart();
     this.renderSupplementalCharts();
   }
 
-  onLogRowPointerEnter(marker: MarkerView, event: MouseEvent): void {
+  onLogRowPointerEnter(marker: MarkerView): void {
     if (this.pinnedMarkerId() !== null) {
       return;
     }
     this.hoveredMarkerId.set(marker.id);
-    this.positionTooltip(event.clientX, event.clientY);
+    this.showTooltip.set(false);
     this.renderChart();
     this.renderSupplementalCharts();
   }
@@ -973,6 +1079,7 @@ export class AssetLedgerPageComponent {
       return;
     }
     this.hoveredMarkerId.set(null);
+    this.showTooltip.set(false);
     this.renderChart();
     this.renderSupplementalCharts();
   }
@@ -991,6 +1098,7 @@ export class AssetLedgerPageComponent {
     const bestMarker = this.findNearestRenderedMarker(x, y, 16);
     if (bestMarker !== null) {
       this.hoveredMarkerId.set(bestMarker.markerId);
+      this.showTooltip.set(true);
       this.positionTooltip(event.clientX, event.clientY);
     }
     this.renderChart();
@@ -1007,9 +1115,11 @@ export class AssetLedgerPageComponent {
     );
     if (markerId !== null) {
       this.hoveredMarkerId.set(markerId);
+      this.showTooltip.set(true);
       this.positionTooltip(event.clientX, event.clientY);
     } else {
       this.hoveredMarkerId.set(null);
+      this.showTooltip.set(false);
     }
     this.renderChart();
     this.renderSupplementalCharts();
@@ -1022,9 +1132,11 @@ export class AssetLedgerPageComponent {
     const markerId = this.findRenderedPnlMarker(this.pnlChartCanvasRef?.nativeElement, event);
     if (markerId !== null) {
       this.hoveredMarkerId.set(markerId);
+      this.showTooltip.set(true);
       this.positionTooltip(event.clientX, event.clientY);
     } else {
       this.hoveredMarkerId.set(null);
+      this.showTooltip.set(false);
     }
     this.renderChart();
     this.renderSupplementalCharts();
@@ -1035,6 +1147,7 @@ export class AssetLedgerPageComponent {
       return;
     }
     this.hoveredMarkerId.set(null);
+    this.showTooltip.set(false);
     this.renderChart();
   }
 
@@ -1043,6 +1156,7 @@ export class AssetLedgerPageComponent {
       return;
     }
     this.hoveredMarkerId.set(null);
+    this.showTooltip.set(false);
     this.renderChart();
     this.renderSupplementalCharts();
   }
@@ -1066,6 +1180,7 @@ export class AssetLedgerPageComponent {
     }
     this.pinnedMarkerId.set(bestMarker.markerId);
     this.hoveredMarkerId.set(bestMarker.markerId);
+    this.showTooltip.set(true);
     this.positionTooltip(event.clientX, event.clientY);
     this.renderChart();
   }
@@ -1202,6 +1317,7 @@ export class AssetLedgerPageComponent {
         this.renderLegendIcons();
         this.renderChart();
         this.renderSupplementalCharts();
+        this.renderRangePreview();
       });
     });
     effect(() => {
@@ -1215,6 +1331,7 @@ export class AssetLedgerPageComponent {
       queueMicrotask(() => {
         this.renderChart();
         this.renderSupplementalCharts();
+        this.renderRangePreview();
       });
     });
     effect(() => {
@@ -1224,10 +1341,11 @@ export class AssetLedgerPageComponent {
       }
       const stillVisible = this.windowMarkers().some((marker) => marker.id === activeMarkerId);
       if (!stillVisible) {
-        this.hoveredMarkerId.set(null);
-        this.pinnedMarkerId.set(null);
-      }
-    });
+      this.hoveredMarkerId.set(null);
+      this.pinnedMarkerId.set(null);
+      this.showTooltip.set(false);
+    }
+  });
   }
 
   private toViewModel(session: SessionResponse, ledger: SessionAssetLedgerResponse): AssetLedgerViewModel {
@@ -1465,6 +1583,13 @@ export class AssetLedgerPageComponent {
     if (primaryFlow === null) {
       return { unitPriceUsd: null, amountUsd: null, priceSource: null };
     }
+    if (primaryFlow.unitPriceUsd !== null || primaryFlow.valueUsd !== null || primaryFlow.priceSource !== null) {
+      return {
+        unitPriceUsd: primaryFlow.unitPriceUsd ?? null,
+        amountUsd: primaryFlow.valueUsd ?? null,
+        priceSource: primaryFlow.priceSource ?? null,
+      };
+    }
     if (this.isExternalLedgerEvent(event)) {
       const familyFlow = event?.flows.find((flow) => this.flowMatchesFamily(flow, familyIdentity)) ?? null;
       if (familyFlow !== null) {
@@ -1479,11 +1604,7 @@ export class AssetLedgerPageComponent {
         }
       }
     }
-    return {
-      unitPriceUsd: primaryFlow.unitPriceUsd ?? null,
-      amountUsd: primaryFlow.valueUsd ?? null,
-      priceSource: primaryFlow.priceSource ?? null,
-    };
+    return { unitPriceUsd: null, amountUsd: null, priceSource: null };
   }
 
   private primaryFlow(
@@ -1582,12 +1703,7 @@ export class AssetLedgerPageComponent {
     if (typeKey in TYPE_META) {
       return TYPE_META[typeKey];
     }
-    return {
-      label: typeKey.replace(/_/g, ' '),
-      glyph: '•',
-      color: '#94a3b8',
-      icon: FALLBACK_ICON,
-    };
+    return heuristicTypeMeta(typeKey);
   }
 
   private familyDisplaySymbol(familyIdentity: string): string {
@@ -1648,6 +1764,7 @@ export class AssetLedgerPageComponent {
       this.chartCanvasRef?.nativeElement,
       this.qtyChartCanvasRef?.nativeElement,
       this.pnlChartCanvasRef?.nativeElement,
+      this.rangePreviewCanvasRef?.nativeElement,
     ];
     this.resizeObserver = new ResizeObserver(() => {
       this.renderChart();
@@ -1662,6 +1779,7 @@ export class AssetLedgerPageComponent {
     this.renderLegendIcons();
     this.renderChart();
     this.renderSupplementalCharts();
+    this.renderRangePreview();
   }
 
   ngOnDestroy(): void {
@@ -1681,6 +1799,69 @@ export class AssetLedgerPageComponent {
       const typeKey = canvas.dataset['type'] ?? 'OTHER';
       const meta = this.metaForType(typeKey);
       this.paintIconCanvas(canvas, meta.color, meta.icon, 28);
+    });
+  }
+
+  private renderRangePreview(): void {
+    const canvas = this.rangePreviewCanvasRef?.nativeElement;
+    const markers = this.assetData()?.markers ?? [];
+    const visibleIds = new Set(this.visibleMarkers().map((marker) => marker.id));
+    if (canvas === undefined) {
+      return;
+    }
+
+    const parentRect = canvas.parentElement?.getBoundingClientRect();
+    const cssWidth = Math.max(Math.floor(parentRect?.width ?? 240), 240);
+    const cssHeight = 32;
+    const dpr = window.devicePixelRatio || 1;
+
+    canvas.style.width = `${cssWidth}px`;
+    canvas.style.height = `${cssHeight}px`;
+    canvas.width = Math.floor(cssWidth * dpr);
+    canvas.height = Math.floor(cssHeight * dpr);
+
+    const ctx = canvas.getContext('2d');
+    if (ctx === null) {
+      return;
+    }
+
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, cssWidth, cssHeight);
+
+    if (markers.length === 0) {
+      return;
+    }
+
+    const height = cssHeight;
+    const selectionStart = (this.rangeStartPercent() / 100) * cssWidth;
+    const selectionEnd = (this.rangeEndPercent() / 100) * cssWidth;
+    const projectX = this.buildTimeProjector(markers, cssWidth, 0, 0);
+
+    ctx.fillStyle = 'rgba(255,255,255,.04)';
+    ctx.beginPath();
+    ctx.roundRect(0, height * 0.28, cssWidth, height * 0.44, 3);
+    ctx.fill();
+
+    const selectionWidth = Math.max(selectionEnd - selectionStart, 2);
+    ctx.fillStyle = 'rgba(34,211,238,.16)';
+    ctx.beginPath();
+    ctx.roundRect(selectionStart, height * 0.22, selectionWidth, height * 0.56, 2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(34,211,238,.45)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.roundRect(selectionStart, height * 0.22, selectionWidth, height * 0.56, 2);
+    ctx.stroke();
+
+    markers.forEach((marker, index) => {
+      const meta = this.metaForType(marker.typeKey);
+      const x = projectX(index);
+      const active = visibleIds.has(marker.id);
+      ctx.beginPath();
+      ctx.arc(x, height * 0.5, 2.5, 0, Math.PI * 2);
+      ctx.fillStyle = active ? `${meta.color}cc` : `${meta.color}22`;
+      ctx.fill();
     });
   }
 
@@ -1867,11 +2048,11 @@ export class AssetLedgerPageComponent {
       ctx.stroke();
     });
 
-    const baseRadius = windowMarkers.length > 56 ? 6 : windowMarkers.length > 28 ? 8 : 10;
+    const baseRadius = 10;
     visibleMarkers.forEach((marker, index) => {
       const rendered = this.renderedMarkers[index];
-      const active = this.hoveredMarkerId() === marker.id;
-      const radius = active ? baseRadius + 4 : baseRadius;
+      const active = this.isLogRowActive(marker.id);
+      const radius = active ? 14 : baseRadius;
       ctx.save();
       if (active) {
         ctx.shadowColor = marker.color;
@@ -2451,6 +2632,7 @@ export class AssetLedgerPageComponent {
   private clearPinnedTooltip(): void {
     this.pinnedMarkerId.set(null);
     this.hoveredMarkerId.set(null);
+    this.showTooltip.set(false);
     this.renderChart();
     this.renderSupplementalCharts();
   }
@@ -2466,6 +2648,7 @@ export class AssetLedgerPageComponent {
     }
     this.pinnedMarkerId.set(markerId);
     this.hoveredMarkerId.set(markerId);
+    this.showTooltip.set(true);
     this.positionTooltip(clientX, clientY);
     this.renderChart();
     this.renderSupplementalCharts();

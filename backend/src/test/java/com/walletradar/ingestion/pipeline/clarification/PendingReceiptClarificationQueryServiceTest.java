@@ -78,6 +78,53 @@ class PendingReceiptClarificationQueryServiceTest {
         verify(receiptClarificationGateway).fromPersistedEvidence(rawTransaction, true);
     }
 
+    @Test
+    void loadsEulerPendingClarificationRowsForReceiptEnrichment() {
+        PendingReceiptClarificationQueryService service = new PendingReceiptClarificationQueryService(
+                mongoOperations,
+                rawTransactionRepository,
+                receiptClarificationGateway
+        );
+
+        NormalizedTransaction candidate = new NormalizedTransaction();
+        candidate.setId("0xeuler:ARBITRUM:" + WALLET);
+        candidate.setTxHash("0xeuler");
+        candidate.setNetworkId(NetworkId.ARBITRUM);
+        candidate.setWalletAddress(WALLET);
+        candidate.setSource(NormalizedTransactionSource.ON_CHAIN);
+        candidate.setBlockTimestamp(Instant.ofEpochSecond(1_700_000_000L));
+        candidate.setTransactionIndex(1);
+        candidate.setType(NormalizedTransactionType.UNKNOWN);
+        candidate.setStatus(NormalizedTransactionStatus.PENDING_CLARIFICATION);
+        candidate.setClassifiedBy(ClassificationSource.HEURISTIC);
+        candidate.setProtocolName("Euler");
+        candidate.setMissingDataReasons(List.of(ClassificationReasonCode.EULER_BATCH_DECODER_REQUIRED.code()));
+        candidate.setFullReceiptClarificationAttempts(0);
+        candidate.setUpdatedAt(Instant.parse("2026-03-22T10:00:00Z"));
+
+        RawTransaction rawTransaction = new RawTransaction();
+        rawTransaction.setId(candidate.getId());
+        rawTransaction.setTxHash(candidate.getTxHash());
+        rawTransaction.setNetworkId(NetworkId.ARBITRUM.name());
+        rawTransaction.setWalletAddress(WALLET);
+        rawTransaction.setRawData(new Document()
+                .append("methodId", "0xc16ae7a4")
+                .append("to", "0x6302ef0f34100cddfb5489fbcb6ee1aa95cd1066"));
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(candidate));
+        when(rawTransactionRepository.findAllById(List.of(candidate.getId()))).thenReturn(List.of(rawTransaction));
+        when(receiptClarificationGateway.fromPersistedEvidence(rawTransaction, true)).thenReturn(Optional.empty());
+
+        List<NormalizedTransaction> batch = service.loadNextBatch(1, 2, 120);
+
+        assertThat(batch).singleElement().satisfies(row -> {
+            assertThat(row.getId()).isEqualTo(candidate.getId());
+            assertThat(row.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_CLARIFICATION);
+            assertThat(row.getProtocolName()).isEqualTo("Euler");
+        });
+    }
+
     private static NormalizedTransaction reviewCandidate() {
         NormalizedTransaction normalizedTransaction = new NormalizedTransaction();
         normalizedTransaction.setId("0xabc:BASE:" + WALLET);

@@ -367,6 +367,21 @@ Important accounting note:
   `LENDING_DEPOSIT` / `LENDING_WITHDRAW`. The audited Euler rows close only when
   clarification already proves the borrow / transfer / swap / supply path on
   current persisted evidence.
+- Euler protocol ownership is split into two runtime lanes:
+  - simple vault lane:
+    `stable -> share` = `LENDING_DEPOSIT`,
+    `share -> stable` = `LENDING_WITHDRAW`,
+    but only when receipt-backed clarification proves the wallet-boundary
+    lifecycle
+  - audited loop-router lane:
+    `LENDING_LOOP_OPEN`, `LENDING_LOOP_REBALANCE`,
+    `LENDING_LOOP_DECREASE`, `LENDING_LOOP_CLOSE`
+- The loop lane must not be inferred from `share burn -> stable return` alone.
+  It remains reserved for the audited Euler loop router path and related
+  protocol evidence. Non-loop-router batch rows must stay on the simple lending
+  lane only when clarification proves that lifecycle; otherwise they remain
+  `UNKNOWN / PENDING_CLARIFICATION` rows and enter the receipt-clarification
+  queue.
 - For the audited Euler leverage / looping family, WalletRadar uses a pragmatic
   canonical share-position model:
   - `LENDING_LOOP_OPEN` records acquisition of the collateral-share position

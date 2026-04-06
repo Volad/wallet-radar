@@ -70,6 +70,14 @@ public class LendingClassifier implements OnChainFamilyClassifier {
             return Optional.empty();
         }
 
+        if (isEulerBatchClarificationRequired(context.view(), context.movementLegs())) {
+            return Optional.of(pendingReceiptClarification(
+                    context.view(),
+                    context.movementLegs(),
+                    List.of(EULER_BATCH_DECODER_REQUIRED)
+            ));
+        }
+
         Optional<ClassificationDecision> eulerLoopDecision = classifyEulerLoopPath(context.view(), context.movementLegs());
         if (eulerLoopDecision.isPresent()) {
             return eulerLoopDecision;
@@ -125,6 +133,60 @@ public class LendingClassifier implements OnChainFamilyClassifier {
         }
 
         return Optional.empty();
+    }
+
+    private boolean isEulerBatchClarificationRequired(
+            OnChainRawTransactionView view,
+            List<RawLeg> movementLegs
+    ) {
+        return !view.hasFullReceiptClarificationEvidence()
+                && hasEulerLikeBatchEvidence(view, movementLegs);
+    }
+
+    private boolean hasEulerLikeBatchEvidence(
+            OnChainRawTransactionView view,
+            List<RawLeg> movementLegs
+    ) {
+        if (EULER_BATCH_ROUTER.equals(view.toAddress())) {
+            return true;
+        }
+        if (movementLegs != null && movementLegs.stream().anyMatch(this::isEulerLikeMovement)) {
+            return true;
+        }
+        for (Document transfer : view.explorerTokenTransfers()) {
+            if (isEulerLikeTransfer(view, transfer)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isEulerLikeMovement(RawLeg leg) {
+        return leg != null
+                && !leg.fee()
+                && isEulerLikeAssetSymbol(leg.assetSymbol());
+    }
+
+    private boolean isEulerLikeTransfer(OnChainRawTransactionView view, Document transfer) {
+        return isEulerLikeAssetSymbol(view.tokenTransferSymbol(transfer))
+                || isEulerLikeAssetName(view.tokenTransferName(transfer));
+    }
+
+    private boolean isEulerLikeAssetSymbol(String assetSymbol) {
+        if (assetSymbol == null || assetSymbol.isBlank()) {
+            return false;
+        }
+        String normalized = assetSymbol.trim().toUpperCase(Locale.ROOT);
+        return normalized.startsWith("E")
+                && (normalized.contains("-") || normalized.contains("DEBT"));
+    }
+
+    private boolean isEulerLikeAssetName(String assetName) {
+        if (assetName == null || assetName.isBlank()) {
+            return false;
+        }
+        String normalized = assetName.trim().toLowerCase(Locale.ROOT);
+        return normalized.contains("euler") || normalized.contains("evk vault");
     }
 
     private Optional<ClassificationDecision> classifyFromSemantics(OnChainClassificationContext context) {
@@ -402,6 +464,24 @@ public class LendingClassifier implements OnChainFamilyClassifier {
                 ConfidenceLevel.LOW,
                 OnChainClassificationSupport.toFlows(movementLegs, NormalizedTransactionType.UNKNOWN),
                 missingDataReasons
+        );
+    }
+
+    private ClassificationDecision pendingReceiptClarification(
+            OnChainRawTransactionView view,
+            List<RawLeg> movementLegs,
+            List<String> missingDataReasons
+    ) {
+        return FamilyDecisionSupport.buildWithView(
+                view,
+                NormalizedTransactionType.UNKNOWN,
+                NormalizedTransactionStatus.PENDING_CLARIFICATION,
+                ClassificationSource.HEURISTIC,
+                ConfidenceLevel.LOW,
+                OnChainClassificationSupport.toFlows(movementLegs, NormalizedTransactionType.UNKNOWN),
+                missingDataReasons,
+                "Euler",
+                null
         );
     }
 

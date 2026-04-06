@@ -3406,8 +3406,233 @@ class OnChainClassifierTest {
     }
 
     @Test
-    @DisplayName("Euler batch with debt mint and collateral share mint stays explicit review until decoder is complete")
-    void eulerBatchWithDebtMintAndCollateralShareMintStaysExplicitReview() {
+    @DisplayName("Arbitrum Euler eUSDC-6 deposit stays explicit review until clarification proves lifecycle")
+    void arbitrumEulerSimpleVaultDepositWithoutClarificationStaysExplicitReview() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.ARBITRUM);
+        rawTransaction.setTxHash("0x8e940d70131f8a52fd6bc1d84cec901f44b2981b065680ae285cc00d4c29d124");
+        rawTransaction.getRawData().put("to", "0x6302ef0f34100cddfb5489fbcb6ee1aa95cd1066");
+        rawTransaction.getRawData().put("methodId", "0xc16ae7a4");
+        rawTransaction.getRawData().put("functionName", "batch(tuple[] items)");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0xaf88d065e77c8cc2239327c5edb3a432268e5831")
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenName", "USD Coin")
+                        .append("tokenDecimal", "6")
+                        .append("from", WALLET)
+                        .append("to", "0x44c10da836d2abe881b77bbb0b3dce5f85c0c1cc")
+                        .append("value", "2243571465"),
+                new Document("contractAddress", "0x44c10da836d2abe881b77bbb0b3dce5f85c0c1cc")
+                        .append("tokenSymbol", "eUSDC-6")
+                        .append("tokenName", "EVK Vault eUSDC-6")
+                        .append("tokenDecimal", "6")
+                        .append("from", "0x0000000000000000000000000000000000000000")
+                        .append("to", WALLET)
+                        .append("value", "2212415353")
+        )).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.UNKNOWN);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_CLARIFICATION);
+        assertThat(result.protocolName()).isEqualTo("Euler");
+        assertThat(result.missingDataReasons()).contains("EULER_BATCH_DECODER_REQUIRED");
+    }
+
+    @Test
+    @DisplayName("Arbitrum Euler eUSDC-6 deposit resolves to lending deposit when clarification proves lifecycle")
+    void arbitrumEulerSimpleVaultDepositResolvesToLendingDeposit() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.ARBITRUM);
+        rawTransaction.setTxHash("0x8e940d70131f8a52fd6bc1d84cec901f44b2981b065680ae285cc00d4c29d124");
+        rawTransaction.getRawData().put("to", "0x6302ef0f34100cddfb5489fbcb6ee1aa95cd1066");
+        rawTransaction.getRawData().put("methodId", "0xc16ae7a4");
+        rawTransaction.getRawData().put("functionName", "batch(tuple[] items)");
+        List<Document> tokenTransfers = List.of(
+                new Document("contractAddress", "0xaf88d065e77c8cc2239327c5edb3a432268e5831")
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenName", "USD Coin")
+                        .append("tokenDecimal", "6")
+                        .append("from", WALLET)
+                        .append("to", "0x44c10da836d2abe881b77bbb0b3dce5f85c0c1cc")
+                        .append("value", "2243571465"),
+                new Document("contractAddress", "0x44c10da836d2abe881b77bbb0b3dce5f85c0c1cc")
+                        .append("tokenSymbol", "eUSDC-6")
+                        .append("tokenName", "EVK Vault eUSDC-6")
+                        .append("tokenDecimal", "6")
+                        .append("from", "0x0000000000000000000000000000000000000000")
+                        .append("to", WALLET)
+                        .append("value", "2212415353")
+        );
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", tokenTransfers).append("internalTransfers", List.of()));
+        rawTransaction.setClarificationEvidence(new Document()
+                .append("fullReceiptClarificationAttempts", 1)
+                .append("fullReceipt", new Document("logs", List.of()))
+                .append("transfers", new Document("tokenTransfers", tokenTransfers)));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.LENDING_DEPOSIT);
+        assertThat(result.protocolName()).isEqualTo("Euler");
+        assertThat(result.flows()).filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
+                .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getQuantityDelta().stripTrailingZeros().toPlainString())
+                .containsExactlyInAnyOrder(
+                        "USDC:-2243.571465",
+                        "eUSDC-6:2212.415353"
+                );
+    }
+
+    @Test
+    @DisplayName("Arbitrum Euler eUSDC-6 partial withdraw stays explicit review until clarification proves lifecycle")
+    void arbitrumEulerSimpleVaultPartialWithdrawWithoutClarificationStaysExplicitReview() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.ARBITRUM);
+        rawTransaction.setTxHash("0x9aad9182c92e4eb4cfb9e560c5695f8d6dc650b3e95cd2ab351fed4cfbf3ed8d");
+        rawTransaction.getRawData().put("to", "0x6302ef0f34100cddfb5489fbcb6ee1aa95cd1066");
+        rawTransaction.getRawData().put("methodId", "0xc16ae7a4");
+        rawTransaction.getRawData().put("functionName", "batch(tuple[] items)");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0x44c10da836d2abe881b77bbb0b3dce5f85c0c1cc")
+                        .append("tokenSymbol", "eUSDC-6")
+                        .append("tokenName", "EVK Vault eUSDC-6")
+                        .append("tokenDecimal", "6")
+                        .append("from", WALLET)
+                        .append("to", "0x0000000000000000000000000000000000000000")
+                        .append("value", "1479515661"),
+                new Document("contractAddress", "0xaf88d065e77c8cc2239327c5edb3a432268e5831")
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenName", "USD Coin")
+                        .append("tokenDecimal", "6")
+                        .append("from", "0x44c10da836d2abe881b77bbb0b3dce5f85c0c1cc")
+                        .append("to", WALLET)
+                        .append("value", "1501000000")
+        )).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.UNKNOWN);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_CLARIFICATION);
+        assertThat(result.protocolName()).isEqualTo("Euler");
+        assertThat(result.missingDataReasons()).contains("EULER_BATCH_DECODER_REQUIRED");
+    }
+
+    @Test
+    @DisplayName("Arbitrum Euler eUSDC-6 partial withdraw resolves to lending withdraw when clarification proves lifecycle")
+    void arbitrumEulerSimpleVaultPartialWithdrawResolvesToLendingWithdraw() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.ARBITRUM);
+        rawTransaction.setTxHash("0x9aad9182c92e4eb4cfb9e560c5695f8d6dc650b3e95cd2ab351fed4cfbf3ed8d");
+        rawTransaction.getRawData().put("to", "0x6302ef0f34100cddfb5489fbcb6ee1aa95cd1066");
+        rawTransaction.getRawData().put("methodId", "0xc16ae7a4");
+        rawTransaction.getRawData().put("functionName", "batch(tuple[] items)");
+        List<Document> tokenTransfers = List.of(
+                new Document("contractAddress", "0x44c10da836d2abe881b77bbb0b3dce5f85c0c1cc")
+                        .append("tokenSymbol", "eUSDC-6")
+                        .append("tokenName", "EVK Vault eUSDC-6")
+                        .append("tokenDecimal", "6")
+                        .append("from", WALLET)
+                        .append("to", "0x0000000000000000000000000000000000000000")
+                        .append("value", "1479515661"),
+                new Document("contractAddress", "0xaf88d065e77c8cc2239327c5edb3a432268e5831")
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenName", "USD Coin")
+                        .append("tokenDecimal", "6")
+                        .append("from", "0x44c10da836d2abe881b77bbb0b3dce5f85c0c1cc")
+                        .append("to", WALLET)
+                        .append("value", "1501000000")
+        );
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", tokenTransfers).append("internalTransfers", List.of()));
+        rawTransaction.setClarificationEvidence(new Document()
+                .append("fullReceiptClarificationAttempts", 1)
+                .append("fullReceipt", new Document("logs", List.of()))
+                .append("transfers", new Document("tokenTransfers", tokenTransfers)));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.LENDING_WITHDRAW);
+        assertThat(result.protocolName()).isEqualTo("Euler");
+        assertThat(result.flows()).filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
+                .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getQuantityDelta().stripTrailingZeros().toPlainString())
+                .containsExactlyInAnyOrder(
+                        "eUSDC-6:-1479.515661",
+                        "USDC:1501"
+                );
+    }
+
+    @Test
+    @DisplayName("Arbitrum Euler eUSDC-6 final withdraw stays explicit review until clarification proves lifecycle")
+    void arbitrumEulerSimpleVaultFinalWithdrawWithoutClarificationStaysExplicitReview() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.ARBITRUM);
+        rawTransaction.setTxHash("0x248f9dd324adbd9d60172a002d217d712fd6cee501dac05ee3a2460f83eb4bbd");
+        rawTransaction.getRawData().put("to", "0x6302ef0f34100cddfb5489fbcb6ee1aa95cd1066");
+        rawTransaction.getRawData().put("methodId", "0xc16ae7a4");
+        rawTransaction.getRawData().put("functionName", "batch(tuple[] items)");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0x44c10da836d2abe881b77bbb0b3dce5f85c0c1cc")
+                        .append("tokenSymbol", "eUSDC-6")
+                        .append("tokenName", "EVK Vault eUSDC-6")
+                        .append("tokenDecimal", "6")
+                        .append("from", WALLET)
+                        .append("to", "0x0000000000000000000000000000000000000000")
+                        .append("value", "732899692"),
+                new Document("contractAddress", "0xaf88d065e77c8cc2239327c5edb3a432268e5831")
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenName", "USD Coin")
+                        .append("tokenDecimal", "6")
+                        .append("from", "0x44c10da836d2abe881b77bbb0b3dce5f85c0c1cc")
+                        .append("to", WALLET)
+                        .append("value", "746016993")
+        )).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.UNKNOWN);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_CLARIFICATION);
+        assertThat(result.protocolName()).isEqualTo("Euler");
+        assertThat(result.missingDataReasons()).contains("EULER_BATCH_DECODER_REQUIRED");
+    }
+
+    @Test
+    @DisplayName("Arbitrum Euler eUSDC-6 final withdraw resolves to lending withdraw when clarification proves lifecycle")
+    void arbitrumEulerSimpleVaultFinalWithdrawResolvesToLendingWithdraw() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.ARBITRUM);
+        rawTransaction.setTxHash("0x248f9dd324adbd9d60172a002d217d712fd6cee501dac05ee3a2460f83eb4bbd");
+        rawTransaction.getRawData().put("to", "0x6302ef0f34100cddfb5489fbcb6ee1aa95cd1066");
+        rawTransaction.getRawData().put("methodId", "0xc16ae7a4");
+        rawTransaction.getRawData().put("functionName", "batch(tuple[] items)");
+        List<Document> tokenTransfers = List.of(
+                new Document("contractAddress", "0x44c10da836d2abe881b77bbb0b3dce5f85c0c1cc")
+                        .append("tokenSymbol", "eUSDC-6")
+                        .append("tokenName", "EVK Vault eUSDC-6")
+                        .append("tokenDecimal", "6")
+                        .append("from", WALLET)
+                        .append("to", "0x0000000000000000000000000000000000000000")
+                        .append("value", "732899692"),
+                new Document("contractAddress", "0xaf88d065e77c8cc2239327c5edb3a432268e5831")
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenName", "USD Coin")
+                        .append("tokenDecimal", "6")
+                        .append("from", "0x44c10da836d2abe881b77bbb0b3dce5f85c0c1cc")
+                        .append("to", WALLET)
+                        .append("value", "746016993")
+        );
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", tokenTransfers).append("internalTransfers", List.of()));
+        rawTransaction.setClarificationEvidence(new Document()
+                .append("fullReceiptClarificationAttempts", 1)
+                .append("fullReceipt", new Document("logs", List.of()))
+                .append("transfers", new Document("tokenTransfers", tokenTransfers)));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.LENDING_WITHDRAW);
+        assertThat(result.protocolName()).isEqualTo("Euler");
+        assertThat(result.flows()).filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
+                .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getQuantityDelta().stripTrailingZeros().toPlainString())
+                .containsExactlyInAnyOrder(
+                        "eUSDC-6:-732.899692",
+                        "USDC:746.016993"
+                );
+    }
+
+    @Test
+    @DisplayName("Euler batch with debt mint and collateral share mint stays explicit review when clarification still cannot prove lifecycle")
+    void eulerBatchWithDebtMintAndCollateralShareMintStaysExplicitReviewAfterClarification() {
         String subaccount = "0x1111111111111111111111111111111111111110";
         RawTransaction rawTransaction = baseRaw(NetworkId.AVALANCHE);
         rawTransaction.setTxHash("0x1e0c429514e9cf892b0b6a11e3cfb290eff5c0c26a557c835496e4ba61717fdb");
@@ -3525,7 +3750,7 @@ class OnChainClassifierTest {
     }
 
     @Test
-    @DisplayName("Euler batch share migration resolves to lending loop rebalance and suppresses same-asset roundtrip marker")
+    @DisplayName("Euler batch share migration resolves to lending loop rebalance when clarification proves lifecycle")
     void eulerBatchShareMigrationResolvesToLendingLoopRebalance() {
         String subaccount = "0x1111111111111111111111111111111111111110";
         RawTransaction rawTransaction = baseRaw(NetworkId.AVALANCHE);
@@ -3533,7 +3758,7 @@ class OnChainClassifierTest {
         rawTransaction.getRawData().put("to", "0xddcbe30a761edd2e19bba930a977475265f36fa1");
         rawTransaction.getRawData().put("methodId", "0xc16ae7a4");
         rawTransaction.getRawData().put("functionName", "batch((address targetContract, address onBehalfOfAccount, uint256 value, bytes data)[] items) payable");
-        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+        List<Document> tokenTransfers = List.of(
                 new Document("contractAddress", "0xa45189636c04388adbb4d865100dd155e55682ec")
                         .append("tokenSymbol", "edeUSD-1")
                         .append("tokenDecimal", "18")
@@ -3546,7 +3771,12 @@ class OnChainClassifierTest {
                         .append("from", subaccount)
                         .append("to", WALLET)
                         .append("value", "1444591868")
-        )).append("internalTransfers", List.of()));
+        );
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", tokenTransfers).append("internalTransfers", List.of()));
+        rawTransaction.setClarificationEvidence(new Document()
+                .append("fullReceiptClarificationAttempts", 1)
+                .append("fullReceipt", new Document("logs", List.of()))
+                .append("transfers", new Document("tokenTransfers", tokenTransfers)));
 
         OnChainClassificationResult result = classifier.classify(rawTransaction);
 
@@ -3570,14 +3800,14 @@ class OnChainClassifierTest {
     }
 
     @Test
-    @DisplayName("Euler batch share burn plus replacement mint resolves to lending loop rebalance with same-asset dust refund")
+    @DisplayName("Euler batch share burn plus replacement mint resolves to lending loop rebalance with clarification")
     void eulerBatchShareBurnMintWithDustResolvesToLendingLoopRebalance() {
         RawTransaction rawTransaction = baseRaw(NetworkId.AVALANCHE);
         rawTransaction.setTxHash("0x56ef233104fabcf809fbad26d5956f0450398cfd90a583fadfe6c7613a7bd332");
         rawTransaction.getRawData().put("to", "0xddcbe30a761edd2e19bba930a977475265f36fa1");
         rawTransaction.getRawData().put("methodId", "0xc16ae7a4");
         rawTransaction.getRawData().put("functionName", "batch((address targetContract, address onBehalfOfAccount, uint256 value, bytes data)[] items) payable");
-        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+        List<Document> tokenTransfers = List.of(
                 new Document("contractAddress", "0xa45189636c04388adbb4d865100dd155e55682ec")
                         .append("tokenSymbol", "edeUSD-1")
                         .append("tokenDecimal", "18")
@@ -3596,7 +3826,12 @@ class OnChainClassifierTest {
                         .append("from", "0x0000000000000000000000000000000000000000")
                         .append("to", WALLET)
                         .append("value", "1983988")
-        )).append("internalTransfers", List.of()));
+        );
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", tokenTransfers).append("internalTransfers", List.of()));
+        rawTransaction.setClarificationEvidence(new Document()
+                .append("fullReceiptClarificationAttempts", 1)
+                .append("fullReceipt", new Document("logs", List.of()))
+                .append("transfers", new Document("tokenTransfers", tokenTransfers)));
 
         OnChainClassificationResult result = classifier.classify(rawTransaction);
 
@@ -3616,14 +3851,14 @@ class OnChainClassifierTest {
     }
 
     @Test
-    @DisplayName("Euler batch partial unwind resolves to lending loop decrease with tx-local share price")
+    @DisplayName("Euler batch partial unwind resolves to lending loop decrease when clarification proves lifecycle")
     void eulerBatchPartialUnwindResolvesToLendingLoopDecrease() {
         RawTransaction rawTransaction = baseRaw(NetworkId.AVALANCHE);
         rawTransaction.setTxHash("0x46177d31314a31e6934fdaca01c8d24d50a5e260de4b66fd1dda74e990d3d69d");
         rawTransaction.getRawData().put("to", "0xddcbe30a761edd2e19bba930a977475265f36fa1");
         rawTransaction.getRawData().put("methodId", "0xc16ae7a4");
         rawTransaction.getRawData().put("functionName", "batch((address targetContract, address onBehalfOfAccount, uint256 value, bytes data)[] items) payable");
-        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+        List<Document> tokenTransfers = List.of(
                 new Document("contractAddress", "0x39de0f00189306062d79edec6dca5bb6bfd108f9")
                         .append("tokenSymbol", "eUSDC-2")
                         .append("tokenDecimal", "6")
@@ -3636,7 +3871,12 @@ class OnChainClassifierTest {
                         .append("from", ROUTER)
                         .append("to", WALLET)
                         .append("value", "1039254268973979242470")
-        )).append("internalTransfers", List.of()));
+        );
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", tokenTransfers).append("internalTransfers", List.of()));
+        rawTransaction.setClarificationEvidence(new Document()
+                .append("fullReceiptClarificationAttempts", 1)
+                .append("fullReceipt", new Document("logs", List.of()))
+                .append("transfers", new Document("tokenTransfers", tokenTransfers)));
 
         OnChainClassificationResult result = classifier.classify(rawTransaction);
 
@@ -3664,14 +3904,14 @@ class OnChainClassifierTest {
     }
 
     @Test
-    @DisplayName("Euler batch share burn with USDC payout resolves to lending loop close")
+    @DisplayName("Euler batch share burn with USDC payout resolves to lending loop close when clarification proves lifecycle")
     void eulerBatchShareBurnWithUsdPayoutResolvesToLendingLoopClose() {
         RawTransaction rawTransaction = baseRaw(NetworkId.AVALANCHE);
         rawTransaction.setTxHash("0xf9db2e5ecd31eb22ed030b64e63c68f4f940d5f6f7a828ced74e0e9d0fd3ba5a");
         rawTransaction.getRawData().put("to", "0xddcbe30a761edd2e19bba930a977475265f36fa1");
         rawTransaction.getRawData().put("methodId", "0xc16ae7a4");
         rawTransaction.getRawData().put("functionName", "batch((address targetContract, address onBehalfOfAccount, uint256 value, bytes data)[] items) payable");
-        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+        List<Document> tokenTransfers = List.of(
                 new Document("contractAddress", "0x39de0f00189306062d79edec6dca5bb6bfd108f9")
                         .append("tokenSymbol", "eUSDC-2")
                         .append("tokenDecimal", "6")
@@ -3684,7 +3924,12 @@ class OnChainClassifierTest {
                         .append("from", "0x39de0f00189306062d79edec6dca5bb6bfd108f9")
                         .append("to", WALLET)
                         .append("value", "2121363989")
-        )).append("internalTransfers", List.of()));
+        );
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", tokenTransfers).append("internalTransfers", List.of()));
+        rawTransaction.setClarificationEvidence(new Document()
+                .append("fullReceiptClarificationAttempts", 1)
+                .append("fullReceipt", new Document("logs", List.of()))
+                .append("transfers", new Document("tokenTransfers", tokenTransfers)));
 
         OnChainClassificationResult result = classifier.classify(rawTransaction);
 

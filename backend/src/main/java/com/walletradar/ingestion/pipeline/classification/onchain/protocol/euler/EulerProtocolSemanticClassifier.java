@@ -68,7 +68,11 @@ public class EulerProtocolSemanticClassifier implements ProtocolSemanticClassifi
         }
 
         OnChainRawTransactionView view = context.view();
+        if (!view.hasFullReceiptClarificationEvidence()) {
+            return List.of();
+        }
         List<RawLeg> movementLegs = context.movementLegs();
+        boolean auditedLoopRouter = isAuditedLoopRouter(view);
 
         if (isEulerBorrowBackedCollateralOpen(view, movementLegs)
                 && view.hasFullReceiptClarificationEvidence()
@@ -76,33 +80,31 @@ public class EulerProtocolSemanticClassifier implements ProtocolSemanticClassifi
             return List.of(hint(SEMANTIC_LENDING_LOOP_OPEN));
         }
 
-        if (detectEulerLoopRebalancePattern(movementLegs).isPresent()) {
+        if (auditedLoopRouter && detectEulerLoopRebalancePattern(movementLegs).isPresent()) {
             return List.of(hint(SEMANTIC_LENDING_LOOP_REBALANCE));
         }
 
-        Optional<Document> shareOutboundTransfer = findEulerLoopShareOutboundTransfer(view);
-        if (shareOutboundTransfer.isPresent()) {
-            Optional<Document> returnedStableTransfer = findEulerLoopReturnedStableTransfer(view);
-            if (returnedStableTransfer.isPresent()) {
-                BigDecimal stableUnitPrice = resolveEulerStableLikeUnitPrice(returnedStableTransfer.orElseThrow());
-                BigDecimal shareQuantity = view.tokenTransferQuantity(shareOutboundTransfer.orElseThrow());
-                BigDecimal returnedQuantity = view.tokenTransferQuantity(returnedStableTransfer.orElseThrow());
-                if (stableUnitPrice != null
-                        && shareQuantity != null
-                        && returnedQuantity != null
-                        && shareQuantity.signum() > 0
-                        && returnedQuantity.signum() > 0) {
-                    return List.of(hint(
-                            isZeroAddress(view.tokenTransferTo(shareOutboundTransfer.orElseThrow()))
-                                    ? SEMANTIC_LENDING_LOOP_CLOSE
-                                    : SEMANTIC_LENDING_LOOP_DECREASE
-                    ));
+        if (auditedLoopRouter) {
+            Optional<Document> shareOutboundTransfer = findEulerLoopShareOutboundTransfer(view);
+            if (shareOutboundTransfer.isPresent()) {
+                Optional<Document> returnedStableTransfer = findEulerLoopReturnedStableTransfer(view);
+                if (returnedStableTransfer.isPresent()) {
+                    BigDecimal stableUnitPrice = resolveEulerStableLikeUnitPrice(returnedStableTransfer.orElseThrow());
+                    BigDecimal shareQuantity = view.tokenTransferQuantity(shareOutboundTransfer.orElseThrow());
+                    BigDecimal returnedQuantity = view.tokenTransferQuantity(returnedStableTransfer.orElseThrow());
+                    if (stableUnitPrice != null
+                            && shareQuantity != null
+                            && returnedQuantity != null
+                            && shareQuantity.signum() > 0
+                            && returnedQuantity.signum() > 0) {
+                        return List.of(hint(
+                                isZeroAddress(view.tokenTransferTo(shareOutboundTransfer.orElseThrow()))
+                                        ? SEMANTIC_LENDING_LOOP_CLOSE
+                                        : SEMANTIC_LENDING_LOOP_DECREASE
+                        ));
+                    }
                 }
             }
-        }
-
-        if (!view.hasFullReceiptClarificationEvidence()) {
-            return List.of();
         }
 
         boolean shareInbound = hasShareLikeMovement(movementLegs, true)
@@ -151,6 +153,10 @@ public class EulerProtocolSemanticClassifier implements ProtocolSemanticClassifi
     private boolean isClarifiedBatchCandidate(OnChainRawTransactionView view) {
         return matchesMethodSelector(view.methodId(), "batch", "0xc16ae7a4")
                 || matchesFunctionMarker(view.functionName(), "batch", "batch");
+    }
+
+    private boolean isAuditedLoopRouter(OnChainRawTransactionView view) {
+        return EULER_BATCH_ROUTER.equals(view.toAddress());
     }
 
     private boolean isEulerBorrowBackedCollateralOpen(

@@ -114,6 +114,60 @@ class EulerProtocolSemanticClassifierTest {
         });
     }
 
+    @Test
+    void nonLoopRouterShareBurnWithStableReturnDoesNotEmitHintWithoutClarification() {
+        RawTransaction rawTransaction = baseRaw();
+        rawTransaction.setTxHash("0x9aad9182c92e4eb4cfb9e560c5695f8d6dc650b3e95cd2ab351fed4cfbf3ed8d");
+        rawTransaction.getRawData().put("to", "0x6302ef0f34100cddfb5489fbcb6ee1aa95cd1066");
+        rawTransaction.getRawData().put("methodId", "0xc16ae7a4");
+        rawTransaction.getRawData().put("functionName", "batch(tuple[] items)");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0x44c10da836d2abe881b77bbb0b3dce5f85c0c1cc")
+                        .append("tokenSymbol", "eUSDC-6")
+                        .append("tokenDecimal", "6")
+                        .append("from", WALLET)
+                        .append("to", "0x0000000000000000000000000000000000000000")
+                        .append("value", "1479515661"),
+                new Document("contractAddress", "0xaf88d065e77c8cc2239327c5edb3a432268e5831")
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenDecimal", "6")
+                        .append("from", "0x44c10da836d2abe881b77bbb0b3dce5f85c0c1cc")
+                        .append("to", WALLET)
+                        .append("value", "1501000000")
+        )).append("internalTransfers", List.of()));
+
+        List<ProtocolSemanticHint> hints = classifier.classify(context(rawTransaction));
+
+        assertThat(hints).isEmpty();
+    }
+
+    @Test
+    void nonLoopRouterStableOutShareMintDoesNotEmitHintWithoutClarification() {
+        RawTransaction rawTransaction = baseRaw();
+        rawTransaction.setTxHash("0x8e940d70131f8a52fd6bc1d84cec901f44b2981b065680ae285cc00d4c29d124");
+        rawTransaction.getRawData().put("to", "0x6302ef0f34100cddfb5489fbcb6ee1aa95cd1066");
+        rawTransaction.getRawData().put("methodId", "0xc16ae7a4");
+        rawTransaction.getRawData().put("functionName", "batch(tuple[] items)");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0xaf88d065e77c8cc2239327c5edb3a432268e5831")
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenDecimal", "6")
+                        .append("from", WALLET)
+                        .append("to", "0x44c10da836d2abe881b77bbb0b3dce5f85c0c1cc")
+                        .append("value", "2243571465"),
+                new Document("contractAddress", "0x44c10da836d2abe881b77bbb0b3dce5f85c0c1cc")
+                        .append("tokenSymbol", "eUSDC-6")
+                        .append("tokenDecimal", "6")
+                        .append("from", "0x0000000000000000000000000000000000000000")
+                        .append("to", WALLET)
+                        .append("value", "2212415353")
+        )).append("internalTransfers", List.of()));
+
+        List<ProtocolSemanticHint> hints = classifier.classify(context(rawTransaction));
+
+        assertThat(hints).isEmpty();
+    }
+
     private ProtocolSemanticContext context(RawTransaction rawTransaction) {
         OnChainRawTransactionView view = OnChainRawTransactionView.wrap(rawTransaction);
         List<RawLeg> movementLegs = movementLegExtractor.extract(view);

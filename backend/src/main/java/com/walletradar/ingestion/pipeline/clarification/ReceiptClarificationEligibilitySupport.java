@@ -49,6 +49,7 @@ public final class ReceiptClarificationEligibilitySupport {
     private static final String GMX_DERIVATIVE_REQUEST_CORRELATION_REQUIRED = ClassificationReasonCode.GMX_DERIVATIVE_REQUEST_CORRELATION_REQUIRED.code();
     private static final String GMX_DERIVATIVE_EXECUTION_EVIDENCE_REQUIRED = ClassificationReasonCode.GMX_DERIVATIVE_EXECUTION_EVIDENCE_REQUIRED.code();
     private static final String COW_ORDER_SETTLEMENT_CORRELATION_REQUIRED = ClassificationReasonCode.COW_ORDER_SETTLEMENT_CORRELATION_REQUIRED.code();
+    private static final String EULER_BATCH_DECODER_REQUIRED = ClassificationReasonCode.EULER_BATCH_DECODER_REQUIRED.code();
     private static final String GPV2_SETTLEMENT_SELECTOR = "0x13d79a0b";
     private static final String ROUTED_AGGREGATOR_OUTBOUND_ONLY = ClassificationReasonCode.ROUTED_AGGREGATOR_OUTBOUND_ONLY.code();
 
@@ -72,13 +73,15 @@ public final class ReceiptClarificationEligibilitySupport {
         boolean cowSettlementCandidate = isCowSettlementCandidate(normalizedTransaction, view);
         boolean gmxPendingClarificationCandidate = isGmxPendingClarificationCandidate(normalizedTransaction, reasons);
         boolean oneInchNativeSettlementCandidate = isOneInchNativeSettlementCandidate(normalizedTransaction, reasons);
+        boolean eulerPendingClarificationCandidate = isEulerPendingClarificationCandidate(normalizedTransaction, reasons, view);
         if (normalizedTransaction.getStatus() != NormalizedTransactionStatus.NEEDS_REVIEW
                 && !bridgeEvidenceCandidate
                 && !gmxDerivativeExecutionCandidate
                 && !gmxPoolExitSettlementCandidate
                 && !cowSettlementCandidate
                 && !gmxPendingClarificationCandidate
-                && !oneInchNativeSettlementCandidate) {
+                && !oneInchNativeSettlementCandidate
+                && !eulerPendingClarificationCandidate) {
             return false;
         }
         if (bridgeEvidenceCandidate
@@ -111,6 +114,9 @@ public final class ReceiptClarificationEligibilitySupport {
             return true;
         }
         if (oneInchNativeSettlementCandidate) {
+            return true;
+        }
+        if (eulerPendingClarificationCandidate) {
             return true;
         }
         String txHash = String.valueOf(view.txHash()).toLowerCase();
@@ -202,6 +208,18 @@ public final class ReceiptClarificationEligibilitySupport {
                 && normalizedTransaction.getType() == NormalizedTransactionType.EXTERNAL_TRANSFER_OUT
                 && "1inch".equalsIgnoreCase(normalizedTransaction.getProtocolName())
                 && reasons.contains(ROUTED_AGGREGATOR_OUTBOUND_ONLY);
+    }
+
+    private static boolean isEulerPendingClarificationCandidate(
+            NormalizedTransaction normalizedTransaction,
+            List<String> reasons,
+            OnChainRawTransactionView view
+    ) {
+        return normalizedTransaction != null
+                && normalizedTransaction.getStatus() == NormalizedTransactionStatus.PENDING_CLARIFICATION
+                && "Euler".equalsIgnoreCase(normalizedTransaction.getProtocolName())
+                && reasons.contains(EULER_BATCH_DECODER_REQUIRED)
+                && "0xc16ae7a4".equals(view.methodId());
     }
 
     private static boolean isGmxDerivativeRequest(NormalizedTransaction normalizedTransaction) {
