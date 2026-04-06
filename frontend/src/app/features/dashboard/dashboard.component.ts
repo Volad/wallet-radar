@@ -333,6 +333,11 @@ export class DashboardComponent {
     return sessionNetworks.length > 0 ? sessionNetworks : this.data().networks;
   });
 
+  readonly filterNetworks = computed<ReadonlyArray<NetworkInfo>>(() => {
+    const sessionNetworks = this.sessionNetworks();
+    return sessionNetworks.length > 0 ? sessionNetworks : this.data().networks;
+  });
+
   readonly transactionPaneTransactions = computed(() => {
     if (this.currentSessionId() !== null) {
       return this.sessionTransactions();
@@ -721,7 +726,7 @@ export class DashboardComponent {
   }
 
   getNetworkById(networkId: NetworkId) {
-    return this.data().networks.find((network) => network.id === networkId) ?? null;
+    return this.filterNetworks().find((network) => network.id === networkId) ?? null;
   }
 
   getWalletById(walletId: WalletId) {

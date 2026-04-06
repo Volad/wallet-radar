@@ -33,16 +33,19 @@ export class DashboardDataService {
       color: wallet.color,
     }));
 
-    const networkIds = new Set<EvmNetworkId>();
+    const networkIds = new Set<string>();
     response.wallets.forEach((wallet) => {
       wallet.networks.forEach((networkId) => {
         networkIds.add(networkId);
       });
     });
+    response.tokenPositions.forEach((position) => {
+      networkIds.add(position.networkId);
+    });
 
-    const networks: ReadonlyArray<NetworkInfo> = [...networkIds]
-      .map((networkId) => EVM_NETWORK_PRESENTATION_BY_ID.get(networkId))
-      .filter((network): network is NonNullable<typeof network> => network !== undefined);
+    const networks: ReadonlyArray<NetworkInfo> = [...networkIds].map((networkId) =>
+      this.toNetworkInfo(networkId)
+    );
 
     const metrics: ReadonlyArray<PortfolioMetric> = [
       {
@@ -115,5 +118,18 @@ export class DashboardDataService {
       return issue;
     }
     return null;
+  }
+
+  private toNetworkInfo(networkId: string): NetworkInfo {
+    const presentation = EVM_NETWORK_PRESENTATION_BY_ID.get(networkId as EvmNetworkId);
+    if (presentation !== undefined) {
+      return presentation;
+    }
+    return {
+      id: networkId,
+      icon: '•',
+      label: networkId,
+      color: COLORS.textSubtle,
+    };
   }
 }

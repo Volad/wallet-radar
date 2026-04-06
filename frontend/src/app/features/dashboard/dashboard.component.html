@@ -68,7 +68,7 @@
 
               <section class="filter-group">
                 <h3 class="side-label">Network</h3>
-                @for (network of data().networks; track network.id) {
+                @for (network of filterNetworks(); track network.id) {
                   <button
                     type="button"
                     class="select-chip"
