@@ -234,6 +234,19 @@
               <span class="section-chevron" [class.collapsed]="isSectionCollapsed('log')">⌃</span>
             </button>
             @if (!isSectionCollapsed('log')) {
+          <div class="event-log-toolbar">
+            <label class="event-log-search">
+              <span class="event-log-search-label">Filter events</span>
+              <input
+                #eventLogSearchInput
+                type="text"
+                [value]="eventLogSearch()"
+                placeholder="Search tx hash, protocol, flow, network, type..."
+                autocomplete="off"
+                spellcheck="false"
+                (input)="updateEventLogSearch(eventLogSearchInput.value)" />
+            </label>
+          </div>
           <div class="tx-table-wrap">
             <table class="tx-table">
               <thead>
@@ -349,7 +362,7 @@
           </div>
           <div class="tr">
             <span class="k">protocol</span>
-            <span class="v">{{ marker.displayVenue }}</span>
+            <span class="v">{{ marker.displayVenue ?? '—' }}</span>
           </div>
           <div class="tr">
             <span class="k">qty delta</span>

@@ -81,7 +81,7 @@ interface MarkerView {
   readonly color: string;
   readonly label: string;
   readonly protocolName: string | null;
-  readonly displayVenue: string;
+  readonly displayVenue: string | null;
   readonly lifecycleKind: string | null;
   readonly networkLabel: string;
   readonly quantityDelta: number;
@@ -565,6 +565,7 @@ export class AssetLedgerPageComponent {
   readonly selectedPreset = signal<QuickPresetKey>('economics');
   readonly copiedTxHash = signal<string | null>(null);
   readonly collapsedSections = signal<ReadonlySet<string>>(new Set<string>());
+  readonly eventLogSearch = signal('');
 
   @ViewChild('chartCanvas') private chartCanvasRef?: ElementRef<HTMLCanvasElement>;
   @ViewChild('qtyChartCanvas') private qtyChartCanvasRef?: ElementRef<HTMLCanvasElement>;
@@ -733,18 +734,27 @@ export class AssetLedgerPageComponent {
     this.visibleMarkers().filter((marker) => Math.abs(marker.realisedPnlDeltaUsd ?? 0) > 0.0000001)
   );
 
-  readonly eventLogMarkers = computed(() => [...this.visibleMarkers()].reverse());
+  readonly eventLogBaseMarkers = computed(() => [...this.visibleMarkers()].reverse());
+
+  readonly eventLogMarkers = computed(() => {
+    const query = this.normalizeSearchQuery(this.eventLogSearch());
+    const markers = this.eventLogBaseMarkers();
+    if (query.length === 0) {
+      return markers;
+    }
+    return markers.filter((marker) => this.markerSearchHaystack(marker).includes(query));
+  });
 
   readonly eventLogCountLabel = computed(() => {
     const visibleCount = this.eventLogMarkers().length;
-    const totalCount = this.windowMarkers().length;
-    if (totalCount === 0) {
+    const filteredCount = this.eventLogBaseMarkers().length;
+    if (filteredCount === 0) {
       return 'No events in range';
     }
-    if (visibleCount === totalCount) {
+    if (visibleCount === filteredCount) {
       return `${visibleCount} events`;
     }
-    return `${visibleCount} of ${totalCount} events`;
+    return `${visibleCount} of ${filteredCount} events`;
   });
 
   setHoveredMarker(markerId: string | null): void {
@@ -761,6 +771,10 @@ export class AssetLedgerPageComponent {
     }
     this.disabledTypeKeys.set(next);
     this.selectedPreset.set('all');
+  }
+
+  updateEventLogSearch(value: string): void {
+    this.eventLogSearch.set(value);
   }
 
   isTypeVisible(typeKey: string): boolean {
@@ -1381,17 +1395,14 @@ export class AssetLedgerPageComponent {
   private resolveVenueLabel(
     entry: SessionAssetLedgerTimelineEntryResponse,
     event: SessionAssetLedgerEventOverlayResponse | null
-  ): string {
+  ): string | null {
     if (entry.protocolName !== null && entry.protocolName.trim().length > 0) {
       return entry.protocolName;
     }
     if (event?.protocolName != null && event.protocolName.trim().length > 0) {
       return event.protocolName;
     }
-    if (this.isExternalLedgerEvent(event)) {
-      return `EXTERNAL LEDGER (${entry.normalizedType ?? 'EVENT'})`;
-    }
-    return entry.lifecycleKind ?? '—';
+    return null;
   }
 
   private resolveNetworkLabel(
@@ -1405,6 +1416,45 @@ export class AssetLedgerPageComponent {
       return `EXTERNAL LEDGER · ${entry.normalizedType ?? 'EVENT'}`;
     }
     return 'UNKNOWN';
+  }
+
+  private normalizeSearchQuery(value: string | null): string {
+    return value?.trim().toLowerCase() ?? '';
+  }
+
+  private markerSearchHaystack(marker: MarkerView): string {
+    const fields: Array<string> = [
+      marker.id,
+      marker.txHash,
+      marker.typeKey,
+      marker.label,
+      marker.protocolName ?? '',
+      marker.displayVenue ?? '',
+      marker.lifecycleKind ?? '',
+      marker.networkLabel,
+      marker.timestamp,
+      marker.pathFrom,
+      marker.pathTo,
+      marker.basisSummary,
+      marker.priceSource ?? '',
+      marker.primaryFlowLabel ?? '',
+      marker.quantityDelta.toString(),
+      marker.amountUsd?.toString() ?? '',
+      marker.quantityAfter.toString(),
+      marker.coveredQuantityAfter.toString(),
+      marker.uncoveredQuantityAfter.toString(),
+      marker.totalCostBasisAfterUsd?.toString() ?? '',
+      marker.avcoBeforeUsd?.toString() ?? '',
+      marker.avcoAfterUsd?.toString() ?? '',
+      marker.realisedPnlDeltaUsd?.toString() ?? '',
+      marker.gasDeltaUsd?.toString() ?? '',
+      marker.priceUsd?.toString() ?? '',
+      marker.basisEffects.join(' '),
+    ];
+    marker.flows.forEach((flow) => {
+      fields.push(flow.role, flow.assetSymbol, flow.quantityLabel, flow.className);
+    });
+    return fields.join(' ').toLowerCase();
   }
 
   private resolveDisplayQuote(

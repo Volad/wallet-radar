@@ -751,6 +751,52 @@ canvas#chart {
   border: 1px solid rgba(59, 130, 246, 0.55);
 }
 
+.event-log-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.event-log-search {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  width: min(34rem, 100%);
+}
+
+.event-log-search-label {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.event-log-search input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--b0);
+  border-radius: 8px;
+  background: rgba(15, 18, 32, 0.92);
+  color: var(--text);
+  padding: 10px 12px;
+  font-size: 12px;
+  outline: none;
+  transition: border-color 0.14s ease, box-shadow 0.14s ease, background 0.14s ease;
+}
+
+.event-log-search input::placeholder {
+  color: var(--muted);
+}
+
+.event-log-search input:focus {
+  border-color: rgba(59, 130, 246, 0.6);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.14);
+  background: rgba(15, 18, 32, 0.98);
+}
+
 .tx-table-wrap {
   overflow-x: auto;
   overflow-y: scroll;
