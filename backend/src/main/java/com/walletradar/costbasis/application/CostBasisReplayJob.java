@@ -2,7 +2,7 @@ package com.walletradar.costbasis.application;
 
 import com.walletradar.domain.event.PricingCompletedEvent;
 import com.walletradar.domain.session.UserSession;
-import com.walletradar.costbasis.domain.AssetPositionRepository;
+import com.walletradar.costbasis.domain.AssetLedgerPointRepository;
 import com.walletradar.ingestion.job.support.StageExecutionLogSupport;
 import com.walletradar.pricing.application.PricingDataGateService;
 import com.walletradar.pricing.application.PricingDataGateSnapshot;
@@ -35,9 +35,7 @@ public class CostBasisReplayJob {
     private final StatValidationService statValidationService;
     private final AvcoReplayService avcoReplayService;
     private final OnChainBalanceRefreshService onChainBalanceRefreshService;
-    private final AssetPositionReconciliationService assetPositionReconciliationService;
-    private final ReconciledHoldingsMaterializationService reconciledHoldingsMaterializationService;
-    private final AssetPositionRepository assetPositionRepository;
+    private final AssetLedgerPointRepository assetLedgerPointRepository;
     private final PipelineTelemetrySnapshotService pipelineTelemetrySnapshotService;
     private final SessionPipelineStateService sessionPipelineStateService;
 
@@ -111,20 +109,17 @@ public class CostBasisReplayJob {
                 return 0;
             }
 
-            boolean shouldReplay = forceReplay || promoted > 0 || assetPositionRepository.count() == 0L;
+            boolean shouldReplay = forceReplay || promoted > 0 || assetLedgerPointRepository.count() == 0L;
             if (shouldReplay) {
                 replayed = avcoReplayService.replayConfirmed();
             } else {
-                log.info("Costbasis replay skipped: no pending stat rows and asset_positions already materialized");
+                log.info("Costbasis replay skipped: no pending stat rows and asset_ledger_points already materialized");
             }
             Instant evidenceCapturedAt = Instant.now();
             int refreshedBalances = onChainBalanceRefreshService.refreshCurrentBalances(evidenceCapturedAt);
-            assetPositionReconciliationService.reconcile(evidenceCapturedAt);
-            int reconciledHoldings = reconciledHoldingsMaterializationService.materialize(evidenceCapturedAt);
             log.info(
-                    "Costbasis on-chain balance refresh outcome: refreshed={}, reconciledHoldings={}",
-                    refreshedBalances,
-                    reconciledHoldings
+                    "Costbasis on-chain balance refresh outcome: refreshed={}",
+                    refreshedBalances
             );
 
             logStatOutcome(promoted, demoted, statProcessed);
@@ -160,7 +155,7 @@ public class CostBasisReplayJob {
     private void logSnapshot() {
         PipelineTelemetrySnapshot snapshot = pipelineTelemetrySnapshotService.snapshot();
         log.info(
-                "Pipeline telemetry snapshot: onChainNormalized={}, bybitNormalized={}, pendingStat={}, unmatchedBybitBridge={}, orphanUtaLeg={}, unresolvedPrice={}, blockingNeedsReview={}, excludedNeedsReview={}, assetPositions={}",
+                "Pipeline telemetry snapshot: onChainNormalized={}, bybitNormalized={}, pendingStat={}, unmatchedBybitBridge={}, orphanUtaLeg={}, unresolvedPrice={}, blockingNeedsReview={}, excludedNeedsReview={}, assetLedgerPoints={}",
                 snapshot.onChainNormalizedCount(),
                 snapshot.bybitNormalizedCount(),
                 snapshot.pendingStatCount(),
@@ -169,7 +164,7 @@ public class CostBasisReplayJob {
                 snapshot.unresolvedPriceCount(),
                 snapshot.needsReviewCount(),
                 snapshot.excludedNeedsReviewCount(),
-                assetPositionRepository.count()
+                assetLedgerPointRepository.count()
         );
     }
 }

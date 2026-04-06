@@ -3066,8 +3066,8 @@ class OnChainClassifierTest {
     }
 
     @Test
-    @DisplayName("liquid staking submit keeps principal sell and derivative buy")
-    void liquidStakingSubmitKeepsEconomicSwapSemantics() {
+    @DisplayName("liquid staking submit keeps principal and derivative as continuity transfers")
+    void liquidStakingSubmitKeepsContinuityTransferSemantics() {
         RawTransaction rawTransaction = baseRaw(NetworkId.AVALANCHE);
         rawTransaction.getRawData().put("to", COUNTERPARTY);
         rawTransaction.getRawData().put("functionName", "submit()");
@@ -3087,7 +3087,7 @@ class OnChainClassifierTest {
         assertThat(result.flows())
                 .filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
                 .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getRole().name())
-                .containsExactlyInAnyOrder("AVAX:SELL", "sAVAX:BUY");
+                .containsExactlyInAnyOrder("AVAX:TRANSFER", "sAVAX:TRANSFER");
     }
 
     @Test
@@ -5651,6 +5651,28 @@ class OnChainClassifierTest {
                         .append("from", COUNTERPARTY)
                         .append("to", WALLET)
                         .append("value", "3000000000000000000")
+        )).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.UNKNOWN);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(result.missingDataReasons()).contains("CLAIM_LIKE_SPAM_OR_AIRDROP");
+    }
+
+    @Test
+    @DisplayName("claim-like airdrop still becomes narrow review when explorer proves inbound but movement legs do not materialize")
+    void claimLikeAirdropUsesExplorerInboundEvidenceWhenMovementLegsDoNotMaterialize() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.BASE);
+        rawTransaction.getRawData().put("from", COUNTERPARTY);
+        rawTransaction.getRawData().put("to", "");
+        rawTransaction.getRawData().put("methodId", "0x729ad39e");
+        rawTransaction.getRawData().put("functionName", "airdrop(address[] _bots)");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0xfae7d01301e2eeede488f0953547e712a56c5e1d")
+                        .append("tokenSymbol", "OracleAI")
+                        .append("from", COUNTERPARTY)
+                        .append("to", WALLET)
         )).append("internalTransfers", List.of()));
 
         OnChainClassificationResult result = classifier.classify(rawTransaction);

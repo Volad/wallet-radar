@@ -1,4 +1,4 @@
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpParams } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { Observable } from 'rxjs';
 
@@ -6,8 +6,11 @@ import { environment } from '../../../environments/environment';
 import {
   AddSessionRequest,
   AddSessionResponse,
+  GetSessionTransactionsRequest,
   RebuildSessionTransactionsResponse,
+  SessionAssetLedgerResponse,
   SessionBackfillStatusResponse,
+  SessionDashboardResponse,
   SessionResponse,
   SessionTransactionsResponse,
 } from '../models/wallet-api.models';
@@ -32,6 +35,12 @@ export class WalletApiService {
     );
   }
 
+  getSessionDashboard(sessionId: string): Observable<SessionDashboardResponse> {
+    return this.httpClient.get<SessionDashboardResponse>(
+      `${this.sessionsEndpoint}/${encodeURIComponent(sessionId)}/dashboard`
+    );
+  }
+
   rebuildSessionTransactions(sessionId: string): Observable<RebuildSessionTransactionsResponse> {
     return this.httpClient.post<RebuildSessionTransactionsResponse>(
       `${this.sessionsEndpoint}/${encodeURIComponent(sessionId)}/transactions/rebuild`,
@@ -41,11 +50,44 @@ export class WalletApiService {
 
   getSessionTransactions(
     sessionId: string,
-    limit = 50
+    request: GetSessionTransactionsRequest = {}
   ): Observable<SessionTransactionsResponse> {
+    let params = new HttpParams()
+      .set('limit', String(request.limit ?? 50))
+      .set('offset', String(request.offset ?? 0));
+    if (request.search !== undefined && request.search !== null && request.search.trim().length > 0) {
+      params = params.set('search', request.search.trim());
+    }
+    if (request.bridgeStatus !== undefined && request.bridgeStatus !== null) {
+      params = params.set('bridgeStatus', request.bridgeStatus);
+    }
+    if (request.spamFilter !== undefined && request.spamFilter !== null) {
+      params = params.set('spamFilter', request.spamFilter);
+    }
+    for (const walletId of request.walletIds ?? []) {
+      params = params.append('walletId', walletId);
+    }
+    for (const networkId of request.networkIds ?? []) {
+      params = params.append('networkId', networkId);
+    }
+
     return this.httpClient.get<SessionTransactionsResponse>(
       `${this.sessionsEndpoint}/${encodeURIComponent(sessionId)}/transactions`,
-      { params: { limit } }
+      { params }
+    );
+  }
+
+  getSessionAssetLedger(
+    sessionId: string,
+    familyIdentity: string
+  ): Observable<SessionAssetLedgerResponse> {
+    return this.httpClient.get<SessionAssetLedgerResponse>(
+      `${this.sessionsEndpoint}/${encodeURIComponent(sessionId)}/asset-ledger`,
+      {
+        params: {
+          familyIdentity,
+        },
+      }
     );
   }
 

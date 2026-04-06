@@ -19,6 +19,7 @@ import java.util.List;
  */
 @Document(collection = "user_sessions")
 @CompoundIndex(name = "wallets_address_idx", def = "{'wallets.address': 1}")
+@CompoundIndex(name = "accounting_universe_idx", def = "{'accountingUniverseId': 1}")
 @NoArgsConstructor
 @Getter
 @Setter
@@ -29,6 +30,7 @@ public class UserSession {
     @EqualsAndHashCode.Include
     private String id;
 
+    private String accountingUniverseId;
     private List<SessionWallet> wallets = new ArrayList<>();
     private PipelineState pipelineState;
     private Instant createdAt;

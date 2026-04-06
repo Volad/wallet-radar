@@ -1,6 +1,6 @@
 package com.walletradar.costbasis.application;
 
-import com.walletradar.costbasis.domain.AssetPositionRepository;
+import com.walletradar.costbasis.domain.AssetLedgerPointRepository;
 import com.walletradar.domain.event.PricingCompletedEvent;
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.pricing.application.PricingDataGateService;
@@ -35,11 +35,7 @@ class CostBasisReplayJobTest {
     @Mock
     private OnChainBalanceRefreshService onChainBalanceRefreshService;
     @Mock
-    private AssetPositionReconciliationService assetPositionReconciliationService;
-    @Mock
-    private ReconciledHoldingsMaterializationService reconciledHoldingsMaterializationService;
-    @Mock
-    private AssetPositionRepository assetPositionRepository;
+    private AssetLedgerPointRepository assetLedgerPointRepository;
     @Mock
     private PipelineTelemetrySnapshotService pipelineTelemetrySnapshotService;
     @Mock
@@ -64,9 +60,7 @@ class CostBasisReplayJobTest {
                 statValidationService,
                 avcoReplayService,
                 onChainBalanceRefreshService,
-                assetPositionReconciliationService,
-                reconciledHoldingsMaterializationService,
-                assetPositionRepository,
+                assetLedgerPointRepository,
                 pipelineTelemetrySnapshotService,
                 sessionPipelineStateService
         );
@@ -75,18 +69,9 @@ class CostBasisReplayJobTest {
 
         assertThat(replayed).isEqualTo(7);
         verify(avcoReplayService).replayConfirmed();
-        InOrder inOrder = org.mockito.Mockito.inOrder(
-                avcoReplayService,
-                onChainBalanceRefreshService,
-                assetPositionReconciliationService,
-                reconciledHoldingsMaterializationService
-        );
+        InOrder inOrder = org.mockito.Mockito.inOrder(avcoReplayService, onChainBalanceRefreshService);
         inOrder.verify(avcoReplayService).replayConfirmed();
         inOrder.verify(onChainBalanceRefreshService).refreshCurrentBalances(org.mockito.ArgumentMatchers.any());
-        inOrder.verify(assetPositionReconciliationService).reconcile(org.mockito.ArgumentMatchers.any());
-        inOrder.verify(reconciledHoldingsMaterializationService).materialize(org.mockito.ArgumentMatchers.any());
-        verify(assetPositionReconciliationService).reconcile(org.mockito.ArgumentMatchers.any());
-        verify(reconciledHoldingsMaterializationService).materialize(org.mockito.ArgumentMatchers.any());
     }
 
     @Test
@@ -104,9 +89,7 @@ class CostBasisReplayJobTest {
                 statValidationService,
                 avcoReplayService,
                 onChainBalanceRefreshService,
-                assetPositionReconciliationService,
-                reconciledHoldingsMaterializationService,
-                assetPositionRepository,
+                assetLedgerPointRepository,
                 pipelineTelemetrySnapshotService,
                 sessionPipelineStateService
         );
@@ -116,8 +99,6 @@ class CostBasisReplayJobTest {
         assertThat(replayed).isZero();
         verify(avcoReplayService, never()).replayConfirmed();
         verify(onChainBalanceRefreshService, never()).refreshCurrentBalances(org.mockito.ArgumentMatchers.any());
-        verify(assetPositionReconciliationService, never()).reconcile(org.mockito.ArgumentMatchers.any());
-        verify(reconciledHoldingsMaterializationService, never()).materialize(org.mockito.ArgumentMatchers.any());
         verify(sessionPipelineStateService).markStageBlocked(
                 eq(null),
                 eq(UserSession.PipelineStage.ACCOUNTING_REPLAY),
@@ -132,7 +113,7 @@ class CostBasisReplayJobTest {
         when(statValidationService.processNextBatch(25, 60)).thenReturn(new StatValidationOutcome(0, 0, 0));
         when(pricingDataGateService.snapshot()).thenReturn(new PricingDataGateSnapshot(0L, 0L, 0L, 0L, 2L, true));
         when(pendingStatQueryService.countPending()).thenReturn(0L);
-        when(assetPositionRepository.count()).thenReturn(2L);
+        when(assetLedgerPointRepository.count()).thenReturn(2L);
         when(avcoReplayService.replayConfirmed()).thenReturn(3);
         when(pipelineTelemetrySnapshotService.snapshot()).thenReturn(snapshot());
 
@@ -143,9 +124,7 @@ class CostBasisReplayJobTest {
                 statValidationService,
                 avcoReplayService,
                 onChainBalanceRefreshService,
-                assetPositionReconciliationService,
-                reconciledHoldingsMaterializationService,
-                assetPositionRepository,
+                assetLedgerPointRepository,
                 pipelineTelemetrySnapshotService,
                 sessionPipelineStateService
         );
@@ -154,8 +133,6 @@ class CostBasisReplayJobTest {
 
         verify(avcoReplayService).replayConfirmed();
         verify(onChainBalanceRefreshService).refreshCurrentBalances(org.mockito.ArgumentMatchers.any());
-        verify(assetPositionReconciliationService).reconcile(org.mockito.ArgumentMatchers.any());
-        verify(reconciledHoldingsMaterializationService).materialize(org.mockito.ArgumentMatchers.any());
     }
 
     @Test
@@ -175,9 +152,7 @@ class CostBasisReplayJobTest {
                 statValidationService,
                 avcoReplayService,
                 onChainBalanceRefreshService,
-                assetPositionReconciliationService,
-                reconciledHoldingsMaterializationService,
-                assetPositionRepository,
+                assetLedgerPointRepository,
                 pipelineTelemetrySnapshotService,
                 sessionPipelineStateService
         );
@@ -186,8 +161,6 @@ class CostBasisReplayJobTest {
 
         verify(avcoReplayService).replayConfirmed();
         verify(onChainBalanceRefreshService).refreshCurrentBalances(org.mockito.ArgumentMatchers.any());
-        verify(assetPositionReconciliationService).reconcile(org.mockito.ArgumentMatchers.any());
-        verify(reconciledHoldingsMaterializationService).materialize(org.mockito.ArgumentMatchers.any());
     }
 
     private CostBasisProperties properties() {

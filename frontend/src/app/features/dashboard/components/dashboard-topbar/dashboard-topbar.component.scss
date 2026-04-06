@@ -39,26 +39,36 @@
 .logo-wrap {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: 0.48rem;
   flex-shrink: 0;
 }
 
 .logo-mark {
-  width: 1.5rem;
-  height: 1.5rem;
-  border-radius: 0.35rem;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
   display: grid;
   place-items: center;
-  background: var(--wr-cyan);
-  color: #000;
-  font-size: 0.7rem;
-  font-weight: 700;
+  background: #07111c;
+  border: 1px solid color-mix(in srgb, var(--wr-cyan) 18%, var(--wr-border));
+  box-shadow:
+    0 0 0 1px rgba(71, 255, 190, 0.04) inset,
+    0 8px 18px rgba(0, 0, 0, 0.26);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.logo-mark-image {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
 }
 
 .logo-text {
   font-weight: 800;
-  font-size: 0.82rem;
-  letter-spacing: -0.02em;
+  font-size: 0.85rem;
+  letter-spacing: -0.025em;
 }
 
 .metric-strip {

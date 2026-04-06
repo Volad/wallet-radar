@@ -1,7 +1,7 @@
 # WalletRadar — Accounting Policy
 
 > **Version:** v3 target
-> **Last updated:** 2026-04-03
+> **Last updated:** 2026-04-06
 > **Accounting method:** AVCO
 
 ---
@@ -27,6 +27,30 @@ They are used for reconstruction and audit, but never replayed directly for AVCO
 Rows with `excludedFromAccounting = true` remain persisted for audit and operator
 visibility, but are outside the active accounting scope. They never enter pricing
 gates or AVCO replay.
+
+For session-facing history reads, the active scope is:
+
+- `user_sessions.accountingUniverseId`
+- not `user_sessions.wallets` alone
+
+`user_sessions.wallets` remains the current UI subset for:
+
+- backfill targets
+- current on-chain balance display
+
+The accounting universe is the stable owner scope for:
+
+- move-basis continuity history
+- AVCO/cost-basis timeline reads
+- custodial refs such as `BYBIT:<uid>`
+
+Dashboard current-holding warnings are read-time diagnostics, not replay-state
+fields. They must distinguish:
+
+- `yield_accrual`
+- `coverage_gap`
+- `history_flags`
+- `missing_replay_point`
 
 Economic meaning is derived from backfill-available raw evidence and canonical
 flows, not from human-readable explorer page summaries.
@@ -101,6 +125,68 @@ newAvco      = currentAvco
 - quantity still updates
 - price fields remain null
 - `hasIncompleteHistory = true`
+
+---
+
+## Current Holding Diagnostics
+
+Current holding diagnostics are derived from:
+
+- latest exact-bucket replay point
+- current on-chain quantity
+
+They are not replay events and must not mutate AVCO state by themselves.
+
+### `yield_accrual`
+
+Use when:
+
+- current quantity is above covered quantity
+- latest replay point is clean
+- latest replay point belongs to an interest-bearing continuity bucket such as
+  `LENDING`, `STAKING`, or `VAULT` with `basisEffect = REALLOCATE_IN`
+
+Interpretation:
+
+- principal basis is intact
+- the uncovered tail is passive yield since the last materialized tx
+
+### `coverage_gap`
+
+Use when:
+
+- current quantity is above covered quantity
+- the row does not qualify for `yield_accrual`
+
+Interpretation:
+
+- current balance is larger than provable basis-backed quantity
+- this is the main current-state basis gap class
+
+### `history_flags`
+
+Use when:
+
+- current quantity is fully covered
+- latest replay point still carries `hasIncompleteHistoryAfter` or
+  `hasUnresolvedFlagsAfter`
+
+Interpretation:
+
+- current balance may still be economically usable
+- but historical provenance remains audit-sensitive
+
+### `missing_replay_point`
+
+Use when:
+
+- live balance exists
+- no latest replay point exists for the exact bucket
+
+Interpretation:
+
+- current holding exists without replay materialization
+- this is stronger than a generic history warning
 
 ---
 
@@ -487,14 +573,19 @@ Transaction-type pricing contract:
   - Reserve asset sent by the wallet is a `SELL`.
   - Debt-marker burn legs and execution-settlement refund legs are `TRANSFER`.
 - `STAKING_DEPOSIT`
-  - Liquid-staking conversions such as `AVAX -> sAVAX` stay economic
-    `SELL principal / BUY derivative`.
+  - Liquid-staking conversions such as `AVAX -> sAVAX` or `ETH -> METH` keep
+    principal and derivative legs as continuity `TRANSFER`.
+  - Replay carries cost basis from the principal asset into the liquid staking
+    derivative and must not realize PnL on the conversion itself.
   - Classic stake-contract deposits such as Pancake SmartChef
     `deposit(uint256)` keep staked principal and proof-token markers as
     `TRANSFER`.
   - Any same-tx harvested reward token remains `BUY`.
 - `STAKING_WITHDRAW`
-  - Liquid-staking unwind stays economic `SELL derivative / BUY principal`.
+  - Liquid-staking unwind keeps derivative burn and principal return as
+    continuity `TRANSFER`.
+  - Replay restores carried basis from the derivative back into the principal
+    asset without realizing PnL on the unwind itself.
   - Classic stake-contract withdraw keeps returned principal and proof-token
     markers as `TRANSFER`.
   - Any same-tx harvested reward token remains `BUY`.
@@ -793,6 +884,7 @@ Out of scope for this milestone:
 
 The replay layer must be able to produce:
 
+- immutable asset-ledger points
 - per-wallet asset quantity
 - per-wallet AVCO
 - realised PnL
@@ -803,8 +895,97 @@ All outputs must be derivable again from the same canonical inputs with identica
 
 For continuity events, replay must move quantity and carried basis without creating realised PnL.
 
-`asset_positions` is internal replay output, not the final user-facing holdings
-projection.
+### 9.1 Asset Ledger Timeline
+
+Replay must persist one immutable `AssetLedgerPoint` for every applied state
+transition on one exact asset bucket.
+
+That timeline is the primary source for:
+
+- asset-detail AVCO / cost-basis history
+- economic-event overlay markers
+- operator and audit debugging of the first broken or suspicious replay step
+
+Each point must include:
+
+- exact bucket identity: `accountingAssetIdentity`
+- continuity family identity: `accountingFamilyIdentity`
+- lifecycle grouping:
+  - `normalizedType`
+  - `lifecycleKind`
+  - `lifecycleStage`
+- basis interpretation: `basisEffect`
+- deterministic order fields
+- `quantityBefore/After`
+- `totalCostBasisBeforeUsd/AfterUsd`
+- `avcoBeforeUsd/AfterUsd`
+- explicit unresolved diagnostics:
+  - `quantityShortfallDelta`
+  - `quantityShortfallAfter`
+  - `uncoveredQuantityDelta`
+  - `uncoveredQuantityAfter`
+  - `basisBackedQuantityAfter`
+  - `hasIncompleteHistoryAfter`
+  - `hasUnresolvedFlagsAfter`
+  - `unresolvedFlagCountAfter`
+
+`basisEffect` intent:
+
+- `ACQUIRE`
+  economic acquisition; basis increases from priced inbound quantity
+- `DISPOSE`
+  economic disposal; carried basis decreases and realized PnL may be created
+- `CARRY_OUT`
+  quantity and carried basis leave the current bucket into a continuity bucket
+- `CARRY_IN`
+  quantity and carried basis restore from a continuity bucket into the current bucket
+- `REALLOCATE_OUT`
+  quantity/basis leaves one bucket as part of an async lifecycle or LP/vault custody transition
+- `REALLOCATE_IN`
+  quantity/basis restores into another bucket from an async lifecycle or settlement bucket
+- `GAS_ONLY`
+  fee-only replay step; no acquisition lot
+- `UNKNOWN`
+  replay mutated state conservatively but could not prove the exact economic meaning
+
+`lifecycleStage` intent:
+
+- `SINGLE`
+- `REQUEST`
+- `SETTLEMENT`
+- `SOURCE`
+- `DESTINATION`
+
+`lifecycleKind` intent:
+
+- `SPOT`
+- `TRANSFER`
+- `BRIDGE`
+- `CUSTODY`
+- `LENDING`
+- `STAKING`
+- `VAULT`
+- `LP`
+- `ORDER`
+- `LOOP`
+- `WRAP`
+- `REWARD`
+- `DERIVATIVE`
+- `MANUAL`
+- `UNKNOWN`
+
+Family/lifecycle policy:
+
+- `ETH` family continuity applies to `ETH`, `WETH`, and audited receipt/custody
+  wrappers already mapped into one accounting family
+- `USDC` family continuity applies to audited stable wrappers already mapped
+  into one accounting family
+- all other assets default to exact-asset family identity unless explicit
+  policy broadens them
+- lifecycle pairing still comes from canonical normalization and clarification
+  (`correlationId`, `matchedCounterparty`, `continuityCandidate`)
+- the ledger timeline does not invent lifecycle pairing; it records what replay
+  actually did with already-correlated rows
 
 After replay completes, WalletRadar must refresh `on_chain_balances` from the
 bounded tracked-wallet on-chain asset universe and then reconcile replay output
@@ -815,35 +996,46 @@ provider returns `contractAddress = 0x0000000000000000000000000000000000000000`.
 That payload must normalize into `NATIVE:<NETWORK>` before reconciliation and
 must never be persisted as an ERC-20-like contract identity.
 
-That reconciliation must populate:
-
-- `onChainQuantity`
-- `onChainCapturedAt`
-- `reconciliationStatus`
-
 Zero live balances are valid evidence and must remain persisted. Missing
 evidence is still `NOT_APPLICABLE`, not synthetic zero.
 
-After reconciliation, WalletRadar must materialize `reconciled_holdings`:
+Current holdings are derived on read:
 
 - `currentQuantity` comes from `on_chain_balances`
-- basis and PnL fields come from `asset_positions`
+- basis and PnL fields come from the latest exact-bucket `AssetLedgerPoint`
 - `currentHolding = true` when `currentQuantity > 0`
-- zero live balances may remain persisted for audit/operator use
-- replay quantity deficits must survive into the holdings model:
-  - `quantityShortfall` is persisted on `asset_positions`
-  - `basisBackedDerivedQuantity = max(quantity - quantityShortfall, 0)`
+- replay quantity deficits remain explicit:
+  - `quantityShortfall = latest(quantityShortfallAfter)`
+  - `uncoveredQuantity = latest(uncoveredQuantityAfter)`
+  - `basisBackedDerivedQuantity = max(derivedQuantity - uncoveredQuantity, 0)`
   - `currentCoveredQuantity = min(currentQuantity, basisBackedDerivedQuantity)`
   - `currentUncoveredQuantity = currentQuantity - currentCoveredQuantity`
   - `currentCostBasisProvable = currentUncoveredQuantity == 0`
+- `quantityShortfall` is a lifetime audit counter for historical coverage gaps;
+  it must not erase basis coverage for later acquisitions once the missing
+  quantity is no longer held
 - current live accrual beyond replay-carried principal is uncovered current
   quantity, not silently basis-backed principal
 - live-positive rows with zero carried basis must remain explicit uncovered
   current quantity, not synthetic basis
 
-User-facing holdings and portfolio totals must be computed from
-`reconciled_holdings` filtered to `currentHolding = true`, not directly from
-`asset_positions.quantity`.
+User-facing holdings and portfolio totals must be computed from derived
+`asset_ledger_points + on_chain_balances`, not from a persisted compatibility
+snapshot.
+
+User-facing asset history must be computed from session-filtered
+`asset_ledger_points`.
+
+Session-level asset history rules:
+
+- filter wallet-level points by the session wallet set
+- filter by `accountingFamilyIdentity`
+- preserve deterministic order
+- aggregate `quantityDelta`, `costBasisDeltaUsd`, `realisedPnlDeltaUsd`, and
+  `gasDeltaUsd` on read
+- recompute session-level AVCO from aggregated post-point state
+- overlay economic events from the same ordered trace; do not re-fetch or
+  re-derive them from RPC during the request path
 
 For authoritative AVCO answers:
 

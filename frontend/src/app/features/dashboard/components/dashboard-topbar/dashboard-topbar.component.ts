@@ -16,7 +16,9 @@ export class DashboardTopbarComponent {
   @Input({ required: true }) wallets: ReadonlyArray<WalletInfo> = [];
   @Input({ required: true }) isBackfillVisible = false;
   @Input({ required: true }) backfillProgressPct = 0;
-  @Input({ required: true }) backfillNetworksLabel = '';
+  @Input({ required: true }) statusLabel = '';
+  @Input({ required: true }) statusSubline = '';
+  @Input({ required: true }) showProgress = true;
 
   @Output() addWallet = new EventEmitter<void>();
 

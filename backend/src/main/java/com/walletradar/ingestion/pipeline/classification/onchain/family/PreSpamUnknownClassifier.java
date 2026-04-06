@@ -4,6 +4,7 @@ import com.walletradar.domain.common.ConfidenceLevel;
 import com.walletradar.domain.transaction.normalized.ClassificationSource;
 import com.walletradar.ingestion.pipeline.classification.ClassificationDecision;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassificationContext;
+import org.bson.Document;
 import org.springframework.core.Ordered;
 import org.springframework.stereotype.Component;
 
@@ -43,7 +44,7 @@ public class PreSpamUnknownClassifier implements OnChainFamilyClassifier {
             ));
         }
         if ((CLAIM_LIKE_AIRDROP_SELECTOR.equals(context.view().methodId()) || "airdrop".equals(functionKey))
-                && onlyInbound(context)) {
+                && hasClaimLikeInboundEvidence(context)) {
             return Optional.of(FamilyDecisionSupport.terminalUnknown(
                     ClassificationSource.METHOD_ID,
                     ConfidenceLevel.LOW,
@@ -66,11 +67,33 @@ public class PreSpamUnknownClassifier implements OnChainFamilyClassifier {
         return normalized;
     }
 
+    private boolean hasClaimLikeInboundEvidence(OnChainClassificationContext context) {
+        return onlyInbound(context)
+                || (hasExplorerInboundTokenTransferToWallet(context) && !hasNonFeeOutbound(context));
+    }
+
     private boolean onlyInbound(OnChainClassificationContext context) {
         boolean hasInbound = context.movementLegs().stream()
                 .anyMatch(leg -> !leg.fee() && leg.quantityDelta().signum() > 0);
-        boolean hasOutbound = context.movementLegs().stream()
+        return hasInbound && !hasNonFeeOutbound(context);
+    }
+
+    private boolean hasNonFeeOutbound(OnChainClassificationContext context) {
+        return context.movementLegs().stream()
                 .anyMatch(leg -> !leg.fee() && leg.quantityDelta().signum() < 0);
-        return hasInbound && !hasOutbound;
+    }
+
+    private boolean hasExplorerInboundTokenTransferToWallet(OnChainClassificationContext context) {
+        String walletAddress = context.view().walletAddress();
+        if (walletAddress == null) {
+            return false;
+        }
+        for (Document transfer : context.view().explorerTokenTransfers()) {
+            if (walletAddress.equals(context.view().tokenTransferTo(transfer))
+                    && !walletAddress.equals(context.view().tokenTransferFrom(transfer))) {
+                return true;
+            }
+        }
+        return false;
     }
 }

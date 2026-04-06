@@ -1,7 +1,7 @@
 # WalletRadar — Architecture
 
 > **Version:** SAD v3 target summary
-> **Last updated:** 2026-04-03
+> **Last updated:** 2026-04-05
 > **Style:** Modular monolith (Spring Boot)
 
 This document is the concise architecture summary for the v3 accounting rewrite.
@@ -39,20 +39,23 @@ Browser/API Client
 Spring Boot
     |- api/session + api/wallet
     |- session/               persisted user_sessions
+    |- accounting-universe/   stable owner scope for asset-ledger reads
     |- wallet-universe/       tracked_wallets projection
     |- ingestion/backfill/    existing raw collection
     |- normalization/         on-chain + Bybit canonicalization
     |- pricing/               historical USD resolution
-    |- costbasis/             AVCO replay + reconciliation
+    |- costbasis/             AVCO replay + asset ledger + reconciliation
     |
     +--> MongoDB
          user_sessions
+         accounting_universes
          sync_status / backfill_segments
          tracked_wallets
          raw_transactions
          external_ledger_raw
          normalized_transactions
-         asset_positions
+         asset_ledger_points
+         on_chain_balances
 ```
 
 ---
@@ -82,6 +85,19 @@ Important accounting note:
   basis, and reconciliation
 - live-session progress is persisted in `user_sessions.pipelineState`, while
   wallet×network raw ingestion progress remains in `sync_status`
+
+### 3.3 Session scope vs accounting universe
+
+- `user_sessions.wallets` is the current UI-selected on-chain wallet subset
+- `user_sessions.accountingUniverseId` points to a stable additive
+  `accounting_universes` document
+- universe members may include:
+  - on-chain wallet addresses
+  - custodial refs such as `BYBIT:<uid>`
+- read models that explain cost basis and AVCO history must use the accounting
+  universe, not the current wallet subset only
+- this keeps the same historical ETH acquisition path visible even when current
+  session composition changes later
 
 ### 3.1 Raw collection
 
@@ -138,11 +154,12 @@ Important accounting note:
   principal legs inside those rows must persist as continuity `TRANSFER`
   flows, not as synthetic `BUY` / `SELL`.
 - `STAKING_DEPOSIT` / `STAKING_WITHDRAW` are also role-sensitive.
-  Liquid-staking mint/redeem paths such as `AVAX -> sAVAX` stay economic
-  `SELL` / `BUY`, while classic stake-contract custody paths such as Pancake
-  SmartChef `deposit(uint256)` keep principal/proof-token legs in continuity
-  `TRANSFER` and only explicit harvested reward side-flows remain economic
-  `BUY`.
+  Liquid-staking mint/redeem paths such as `AVAX -> sAVAX` and audited Bybit
+  `ETH -> METH` staking rows keep principal and derivative legs in continuity
+  `TRANSFER` inside the same base-asset family. Classic stake-contract custody
+  paths such as Pancake SmartChef `deposit(uint256)` also keep
+  principal/proof-token legs in continuity `TRANSFER`, while only explicit
+  harvested reward side-flows remain economic `BUY`.
 - Aave-style `BORROW` / `REPAY` families may contain debt-marker mint/burn legs
   and chain-specific execution-settlement refund legs in the same tx. Those
   marker / settlement legs must persist as continuity `TRANSFER`, while the
@@ -665,14 +682,13 @@ Important accounting note:
   Immutable Bybit import layer.
 - `normalized_transactions`
   Canonical accounting stream for both on-chain and Bybit sources.
-- `asset_positions`
-  Materialized internal replay state and reconciliation flags.
+- `asset_ledger_points`
+  Immutable replay trace per wallet-network-asset bucket. Source of truth for
+  asset history, accounting debug, and session-level asset AVCO/cost-basis
+  timeline reads.
 - `on_chain_balances`
   Latest observed current-balance evidence produced by the bounded post-replay
   refresh pass and used by reconciliation.
-- `reconciled_holdings`
-  Bounded read model that joins current on-chain balance evidence with replayed
-  basis fields for user-facing holdings and operator audits.
 
 ---
 
@@ -701,14 +717,18 @@ Important accounting note:
   - correlated Bybit <-> on-chain custody movements
 - LP receipt markers (`LP token`, `BPT`, position NFT) are continuity markers
   only and must not open independent basis lines during replay.
+- `asset_ledger_points` is the immutable replay truth:
+  - replay writes it directly while applying accounting consequences
+  - UI history reads use it directly
+  - audit/debug starts from it, not from terminal snapshots
 - Continuity replay must be chronology-safe:
   - inbound same-universe transfer quantity becomes immediately available when
     the inbound row is encountered
   - if the matched source carry arrives later in ordered replay, it attaches
     basis to the already-materialized destination position
   - late source carry must not create quantity a second time
-- `asset_positions` must not be treated as the final user-facing holdings table
-  before reconciliation against `on_chain_balances`.
+- session-level AVCO/cost-basis history is computed on read from wallet-level
+  `asset_ledger_points`; cross-wallet AVCO remains unstored.
 - `on_chain_balances` refresh is bounded by tracked wallets plus the confirmed
   on-chain canonical asset universe. It is not an unbounded wallet scanner.
 - provider-native current balances must normalize zero-address contract payloads
@@ -716,18 +736,23 @@ Important accounting note:
   identity rather than persisting them as synthetic token contracts.
 - The replay pipeline order is:
   - canonical replay
+  - `asset_ledger_points` persistence
   - `on_chain_balances` refresh
-  - `asset_positions` reconciliation
-  - `reconciled_holdings` materialization
-- user-facing current holdings must read from `reconciled_holdings.currentQuantity`
-  rather than from replay quantity in `asset_positions`.
-- `reconciled_holdings` may retain zero live-balance rows for operator/audit
-  visibility, but product holdings views must filter to `currentHolding = true`.
+- user-facing asset detail history APIs must read from `asset_ledger_points`
+  filtered to the requested session wallet set and asset family.
+- user-facing current holdings must be derived on read from
+  `asset_ledger_points` plus `on_chain_balances`.
 - replay must persist quantity deficits explicitly:
   - when an outbound replay step consumes more quantity than the current replay
     bucket contains, that deficit must survive as `quantityShortfall`
   - the deficit must not disappear behind floor-to-zero quantity alone
-- `reconciled_holdings` must expose conservative basis-provability fields:
+- replay must persist current uncovered quantity separately from lifetime
+  deficit:
+  - uncovered quantity must move with continuity carry into the destination
+    bucket when the economic quantity is still held
+  - later covered acquisitions must not be zeroed out by historical lifetime
+    shortfall from already-spent quantity
+- current-holdings reads must expose conservative basis-provability fields:
   - `basisBackedDerivedQuantity`
   - `currentCoveredQuantity`
   - `currentUncoveredQuantity`
@@ -758,6 +783,38 @@ Important accounting note:
   proves deterministic outbound principal movement, normalization must preserve
   that movement through an explicit canonical fallback rather than suppress it
   behind `UNKNOWN`.
+- replay bootstrap and stale-heal checks must be session-scoped:
+  - unrelated `asset_ledger_points` rows must not satisfy replay bootstrap for
+    the current session
+  - unrelated `on_chain_balances` rows must not heal a stale
+    `ACCOUNTING_REPLAY / RUNNING` into `COMPLETE`
+
+### 5.1 Asset Ledger Timeline Contract
+
+`asset_ledger_points` must support two read modes without extra RPC:
+
+1. exact-bucket debug
+   - keyed by `(walletAddress, networkId, accountingAssetIdentity)`
+   - shows the exact replay state transitions that produced the final bucket
+2. session-family history
+   - filtered by session wallet set plus `accountingFamilyIdentity`
+   - aggregated on read into one AVCO/cost-basis curve for the asset detail page
+
+Each immutable point must carry:
+
+- exact bucket identity: `accountingAssetIdentity`
+- continuity family identity: `accountingFamilyIdentity`
+- lifecycle grouping: `normalizedType`, `lifecycleKind`, `lifecycleStage`
+- basis semantics: `basisEffect`
+- deterministic order fields
+- before/after state
+- explicit unresolved / shortfall diagnostics
+
+This contract lets the UI:
+
+- draw the AVCO/cost-basis curve for one asset inside one session
+- overlay economic events as markers from the same ordered trace
+- open the exact point where replay first became incomplete or suspicious
 - replay gate stops are not successful completion:
   - if active `NEEDS_REVIEW` or pending stat rows still block replay, session
     state must persist as `ACCOUNTING_REPLAY / BLOCKED`
@@ -766,8 +823,7 @@ Important accounting note:
 - stale `ACCOUNTING_REPLAY / RUNNING` state may be healed only by the resume
   watchdog and only when:
   - the session has no pending upstream work
-  - `asset_positions`, `on_chain_balances`, and `reconciled_holdings` already
-    exist
+  - `asset_ledger_points` and `on_chain_balances` already exist
   - replay is currently a global derived-state lane and no stronger
     `sessionId`-scoped completion evidence exists yet
 
@@ -778,7 +834,8 @@ Important accounting note:
 Deferred until after v3 core is stable:
 
 - portfolio snapshots
-- user-facing holdings and portfolio APIs on top of `reconciled_holdings`
+- user-facing holdings and portfolio APIs on top of derived
+  `asset_ledger_points + on_chain_balances`
 - unmatched live-balance discrepancy model
 - Solana balance refresh
 - broader transaction history projections

@@ -16,315 +16,380 @@
       [wallets]="data().wallets"
       [isBackfillVisible]="isBackfillVisible()"
       [backfillProgressPct]="backfillProgressPct()"
-      [backfillNetworksLabel]="backfillNetworksLabel()"
+      [statusLabel]="pipelineStatusLabel()"
+      [statusSubline]="pipelineStatusSubline()"
+      [showProgress]="showPipelineProgress()"
       (addWallet)="openAddWalletDialog()"></wr-dashboard-topbar>
 
     <div class="workspace">
       <wr-dashboard-section-nav
         [sections]="data().sections"
-        [activeSection]="section()"
+        [activeSection]="isAssetLedgerMode() ? 'tokens' : section()"
         (sectionChange)="toggleSection($event)"></wr-dashboard-section-nav>
 
-      <aside class="filters" [class.collapsed]="isFiltersCollapsed()">
-        <button type="button" class="filters-toggle" (click)="toggleFiltersCollapsed()">
-          @if (!isFiltersCollapsed()) {
-            <span>Filters</span>
-          }
-          @if (activeFilterCount() > 0 && !isFiltersCollapsed()) {
-            <span class="filter-count">{{ activeFilterCount() }}</span>
-          }
-          <span class="chevron" [class.rotated]="isFiltersCollapsed()">›</span>
-        </button>
-
-        @if (!isFiltersCollapsed()) {
-          <div class="filters-content">
-            <section class="filter-group">
-              <h3 class="side-label">Wallet</h3>
-              @for (wallet of data().wallets; track wallet.id) {
-                <button
-                  type="button"
-                  class="select-chip"
-                  [class.active]="isWalletSelected(wallet.id)"
-                  [style.--chipColor]="wallet.color"
-                  (click)="toggleWallet(wallet.id)">
-                  <span class="check-box" [class.checked]="isWalletSelected(wallet.id)"></span>
-                  <span class="wallet-dot" [style.background]="wallet.color" aria-hidden="true"></span>
-                  <span class="wallet-chip-content">
-                    <span>{{ wallet.label }}</span>
-                    <span class="mono muted">{{ shortAddress(wallet.address) }}</span>
-                  </span>
-                </button>
-              }
-            </section>
-
-            <section class="filter-group">
-              <h3 class="side-label">Network</h3>
-              @for (network of data().networks; track network.id) {
-                <button
-                  type="button"
-                  class="select-chip"
-                  [class.active]="isNetworkSelected(network.id)"
-                  [style.--chipColor]="network.color"
-                  (click)="toggleNetwork(network.id)">
-                  <span class="check-box" [class.checked]="isNetworkSelected(network.id)"></span>
-                  <span class="network-icon" aria-hidden="true">{{ network.icon }}</span>
-                  <span>{{ network.label }}</span>
-                </button>
-              }
-            </section>
-
-            @if (section() === 'tokens') {
-              <label class="toggle-row">
-                <input
-                  type="checkbox"
-                  [ngModel]="hideDustAssets()"
-                  (ngModelChange)="setHideDustAssets($event)" />
-                <span>Hide &lt;$0.50 assets</span>
-              </label>
+      @if (isAssetLedgerMode() && assetLedgerSessionId() !== null && assetLedgerFamilyIdentity() !== null) {
+        <wr-asset-ledger-page
+          class="asset-ledger-workspace"
+          [sessionId]="assetLedgerSessionId()!"
+          [familyIdentity]="assetLedgerFamilyIdentity()!"
+          (back)="closeAssetLedger()"></wr-asset-ledger-page>
+      } @else {
+        <aside class="filters" [class.collapsed]="isFiltersCollapsed()">
+          <button type="button" class="filters-toggle" (click)="toggleFiltersCollapsed()">
+            @if (!isFiltersCollapsed()) {
+              <span>Filters</span>
             }
+            @if (activeFilterCount() > 0 && !isFiltersCollapsed()) {
+              <span class="filter-count">{{ activeFilterCount() }}</span>
+            }
+            <span class="chevron" [class.rotated]="isFiltersCollapsed()">›</span>
+          </button>
 
-            @if (section() === 'lending') {
-              <div class="warning-note">
-                <strong>Liquidity risk</strong>
-                <p>Health factor is based on the latest on-chain sync.</p>
-              </div>
+          @if (!isFiltersCollapsed()) {
+            <div class="filters-content">
+              <section class="filter-group">
+                <h3 class="side-label">Wallet</h3>
+                @for (wallet of data().wallets; track wallet.id) {
+                  <button
+                    type="button"
+                    class="select-chip"
+                    [class.active]="isWalletSelected(wallet.id)"
+                    [style.--chipColor]="wallet.color"
+                    (click)="toggleWallet(wallet.id)">
+                    <span class="check-box" [class.checked]="isWalletSelected(wallet.id)"></span>
+                    <span class="wallet-dot" [style.background]="wallet.color" aria-hidden="true"></span>
+                    <span class="wallet-chip-content">
+                      <span>{{ wallet.label }}</span>
+                      <span class="mono muted">{{ shortAddress(wallet.address) }}</span>
+                    </span>
+                  </button>
+                }
+              </section>
+
+              <section class="filter-group">
+                <h3 class="side-label">Network</h3>
+                @for (network of data().networks; track network.id) {
+                  <button
+                    type="button"
+                    class="select-chip"
+                    [class.active]="isNetworkSelected(network.id)"
+                    [style.--chipColor]="network.color"
+                    (click)="toggleNetwork(network.id)">
+                    <span class="check-box" [class.checked]="isNetworkSelected(network.id)"></span>
+                    <span class="network-icon" aria-hidden="true">{{ network.icon }}</span>
+                    <span>{{ network.label }}</span>
+                  </button>
+                }
+              </section>
+
+              @if (section() === 'tokens') {
+                <section class="filter-group">
+                  <h3 class="side-label">Settings</h3>
+                  <button
+                    type="button"
+                    class="select-chip setting-chip"
+                    [class.active]="hideDustAssets()"
+                    [style.--chipColor]="colors.cyan"
+                    (click)="setHideDustAssets(!hideDustAssets())">
+                    <span class="check-box" [class.checked]="hideDustAssets()"></span>
+                    <span class="setting-chip-text">Hide &lt; $0.5 assets</span>
+                  </button>
+                </section>
+              }
+
+              @if (section() === 'lending') {
+                <div class="warning-note">
+                  <strong>Liquidity risk</strong>
+                  <p>Health factor is based on the latest on-chain sync.</p>
+                </div>
+              }
+
+              @if (activeFilterCount() > 0) {
+                <button type="button" class="clear-btn" (click)="clearFilters()">Clear all</button>
+              }
+            </div>
+          }
+        </aside>
+
+        <main class="content-area">
+          <div class="section-header">
+            @if (activeSection() !== null) {
+              <span class="section-header-icon" [style.color]="activeSection()!.color">{{ getSectionIcon(activeSection()!.id) }}</span>
+              <span class="section-header-title" [style.color]="activeSection()!.color">{{ activeSection()!.label }}</span>
             }
 
             @if (activeFilterCount() > 0) {
-              <button type="button" class="clear-btn" (click)="clearFilters()">Clear all</button>
+              <span class="dot-divider" aria-hidden="true">·</span>
+              @for (walletId of selectedWalletIds(); track walletId) {
+                @let selectedWallet = getWalletById(walletId);
+                @if (selectedWallet !== null) {
+                  <span class="scope-pill" [style.--scopeColor]="selectedWallet.color">
+                    <span class="wallet-dot" [style.background]="selectedWallet.color"></span>
+                    {{ selectedWallet.label }}
+                  </span>
+                }
+              }
+              @for (networkId of selectedNetworkIds(); track networkId) {
+                @let selectedNetwork = getNetworkById(networkId);
+                @if (selectedNetwork !== null) {
+                  <span class="scope-pill" [style.--scopeColor]="selectedNetwork.color">
+                    {{ selectedNetwork.icon }} {{ selectedNetwork.label }}
+                  </span>
+                }
+              }
             }
           </div>
-        }
-      </aside>
 
-      <main class="content-area">
-        <div class="section-header">
-          @if (activeSection() !== null) {
-            <span class="section-header-icon" [style.color]="activeSection()!.color">{{ getSectionIcon(activeSection()!.id) }}</span>
-            <span class="section-header-title" [style.color]="activeSection()!.color">{{ activeSection()!.label }}</span>
-          }
-
-          @if (activeFilterCount() > 0) {
-            <span class="dot-divider" aria-hidden="true">·</span>
-            @for (walletId of selectedWalletIds(); track walletId) {
-              @let selectedWallet = getWalletById(walletId);
-              @if (selectedWallet !== null) {
-                <span class="scope-pill" [style.--scopeColor]="selectedWallet.color">
-                  <span class="wallet-dot" [style.background]="selectedWallet.color"></span>
-                  {{ selectedWallet.label }}
-                </span>
-              }
-            }
-            @for (networkId of selectedNetworkIds(); track networkId) {
-              @let selectedNetwork = getNetworkById(networkId);
-              @if (selectedNetwork !== null) {
-                <span class="scope-pill" [style.--scopeColor]="selectedNetwork.color">
-                  {{ selectedNetwork.icon }} {{ selectedNetwork.label }}
-                </span>
-              }
-            }
-          }
-        </div>
-
-        <div class="panes">
-          <section class="left-pane">
-            @if (section() === 'tokens') {
-              <div class="table-head tokens-grid">
-                <span></span>
-                <span>Asset</span>
-                <span class="align-right">Qty</span>
-                <span class="align-right">Avg Cost</span>
-                <span class="align-right">Price</span>
-                <span class="align-right">P&L</span>
-              </div>
+          <div class="panes">
+            <section class="left-pane">
+              @if (section() === 'tokens') {
+                <div class="table-head tokens-grid">
+                  <span></span>
+                  <span>Asset</span>
+                  <span class="align-right">Qty</span>
+                  <span class="align-right">Net</span>
+                  <span class="align-right">Avg Cost</span>
+                  <span class="align-right">Price</span>
+                  <span class="align-right">P&L</span>
+                </div>
 
               <div class="table-body">
-                @for (asset of filteredTokenPositions(); track asset.symbol) {
-                  @let network = getNetworkById(asset.networkId);
-                  <article class="tokens-grid token-row">
-                    <div class="token-avatar">{{ asset.symbol.slice(0, 2) }}</div>
-                    <div class="token-meta">
-                      <div class="token-title">
-                        {{ asset.symbol }}
-                        @if (asset.issue === 'recon') {
-                          <span class="warn-mark" title="Needs reconciliation">⚠</span>
-                        }
-                        @if (network !== null) {
-                          <span [style.color]="network.color">{{ network.icon }}</span>
-                        }
-                      </div>
-                      <div class="token-subline">{{ formatUsd(asset.quantity * asset.priceUsd) }}</div>
-                    </div>
-                    <div class="mono align-right">{{ formatQuantity(asset.quantity) }}</div>
-                    <div class="mono align-right">{{ formatUsd(asset.avcoUsd) }}</div>
-                    <div class="mono align-right">{{ formatUsd(asset.priceUsd) }}</div>
-                    <div class="align-right">
-                      <div class="mono" [class.pos]="asset.unrealizedPnlPct >= 0" [class.neg]="asset.unrealizedPnlPct < 0">
-                        {{ formatPercent(asset.unrealizedPnlPct) }}
-                      </div>
-                      <div class="mono token-subline">{{ formatUsd(asset.unrealizedPnlUsd) }}</div>
-                    </div>
-                  </article>
-                } @empty {
-                  <div class="empty-block">No token positions for current filters.</div>
-                }
-              </div>
-
-              <footer class="table-footer">
-                <span class="mono muted">{{ filteredTokenPositions().length }} assets</span>
-                <span class="mono">{{ formatUsd(filteredTokenTotalUsd()) }} total</span>
-              </footer>
-            }
-
-            @if (section() === 'lp') {
-              <div class="lp-toolbar">
-                @for (tab of lpTabs; track tab) {
-                  <button
-                    type="button"
-                    class="lp-tab"
-                    [class.active]="lpTab() === tab"
-                    (click)="setLpTab(tab)">
-                    {{ tab[0].toUpperCase() + tab.slice(1) }}
-                  </button>
-                }
-                <span class="lp-fees">
-                  Total fees:
-                  <strong class="mono">{{ formatUsd(totalOpenLpFeesUsd()) }}</strong>
-                </span>
-              </div>
-
-              <div class="lp-list">
-                @for (position of filteredLpPositions(); track position.id) {
-                  @let network = getNetworkById(position.networkId);
-                  <article class="lp-card" [class.open]="position.status === 'open'">
-                    <div class="lp-card-head">
-                      <div>
-                        <h3>
-                          {{ position.pair }}
-                          <span class="pill" [class.pill-green]="position.status === 'open'" [class.pill-def]="position.status !== 'open'">
-                            {{ position.status }}
+                  @for (asset of filteredTokenFamilies(); track asset.familyIdentity) {
+                    <article
+                      class="tokens-grid token-row"
+                      [class.interactive]="canOpenAssetLedger()"
+                      [attr.role]="canOpenAssetLedger() ? 'button' : null"
+                      [attr.tabindex]="canOpenAssetLedger() ? 0 : null"
+                      (click)="openAssetLedger(asset)"
+                      (keydown.enter)="openAssetLedger(asset)"
+                    (keydown.space)="openAssetLedger(asset)">
+                      <div class="token-avatar">{{ asset.symbol.slice(0, 2) }}</div>
+                      <div class="token-meta">
+                        <div class="token-title">
+                          <span>{{ asset.symbol }}</span>
+                          @if (asset.issue !== null) {
+                            <span
+                              class="token-scope-anchor warn-mark-anchor"
+                              [attr.data-tooltip]="issueTitle(asset.issue)"
+                              [attr.aria-label]="issueTitle(asset.issue)">
+                              <span class="warn-mark">⚠</span>
+                            </span>
+                          }
+                          <span class="token-title-wallets" aria-label="Wallets">
+                            @for (walletId of asset.walletIds; track walletId) {
+                              @let wallet = getWalletById(walletId);
+                              <span
+                                class="token-scope-anchor token-title-wallet-anchor"
+                                [attr.data-tooltip]="walletLabel(walletId)"
+                                [attr.aria-label]="walletLabel(walletId)">
+                                <span
+                                  class="token-wallet-dot"
+                                  [style.background]="wallet?.color ?? colors.textSubtle"></span>
+                              </span>
+                            }
                           </span>
-                          @if (position.nftId !== null) {
-                            <span class="mono muted tiny">{{ position.nftId }}</span>
-                          }
-                        </h3>
-                        <p class="muted small">
-                          {{ position.protocol }}
-                          @if (network !== null) {
-                            <span [style.color]="network.color">{{ network.icon }}</span>
-                          }
-                          {{ position.networkId }}
-                          <span class="muted">· {{ position.range }}</span>
-                        </p>
-                      </div>
-                      <div class="lp-value">
-                        <strong class="mono">{{ formatUsd(position.currentValueUsd) }}</strong>
-                        <span class="muted tiny">current value</span>
-                      </div>
-                    </div>
-
-                    <div class="lp-metrics">
-                      <div>
-                        <span class="muted tiny">Fees earned</span>
-                        <strong class="mono pos">{{ formatUsd(position.feesUsd) }}</strong>
-                      </div>
-                      <div>
-                        <span class="muted tiny">Imp. loss</span>
-                        <strong class="mono" [class.pos]="position.impermanentLossPct >= 0" [class.neg]="position.impermanentLossPct < 0">
-                          {{ formatPercent(position.impermanentLossPct) }}
-                        </strong>
-                        <span class="mono muted tiny">{{ formatUsd(position.impermanentLossUsd) }}</span>
-                      </div>
-                      <div>
-                        <span class="muted tiny">Total P&L</span>
-                        <strong class="mono" [class.pos]="position.totalPnlPct >= 0" [class.neg]="position.totalPnlPct < 0">
-                          {{ formatPercent(position.totalPnlPct) }}
-                        </strong>
-                        <span class="mono muted tiny">{{ formatUsd(position.totalPnlUsd) }}</span>
-                      </div>
-                      <div>
-                        <span class="muted tiny">Entered</span>
-                        <strong class="mono">{{ position.enteredDate }}</strong>
-                      </div>
-                    </div>
-                  </article>
-                } @empty {
-                  <div class="empty-block">No LP positions for current filters.</div>
-                }
-              </div>
-            }
-
-            @if (section() === 'lending') {
-              @let lending = lendingSummary();
-              <div class="lending-health">
-                <div>
-                  <span class="muted">Health factor</span>
-                  <strong class="mono" [style.color]="lending.healthColor">{{ lending.healthFactor.toFixed(2) }}</strong>
-                </div>
-                <div class="progress-track health">
-                  <div class="progress-fill" [style.background]="lending.healthColor" [style.width.%]="lending.healthProgress"></div>
-                </div>
-                <p class="muted">
-                  Supply <span class="mono pos">{{ formatUsd(lending.totalSupply) }}</span>
-                  · Borrow <span class="mono neg">{{ formatUsd(lending.totalBorrow) }}</span>
-                </p>
-              </div>
-
-              <div class="lending-grid-wrap">
-                <h3 class="side-label">Supply positions</h3>
-                <div class="lending-grid">
-                  @for (position of filteredLendingPositions(); track position.id) {
-                    @if (position.type === 'deposit') {
-                      @let network = getNetworkById(position.networkId);
-                      <article class="lending-row supply">
-                        <span class="flow-icon up">↑</span>
-                        <div>
-                          <div class="row-title">{{ position.asset }} <span class="muted tiny">· {{ position.protocol }}</span></div>
-                          <div class="muted tiny">{{ network?.icon }} {{ position.networkId }}</div>
                         </div>
-                        <div class="mono align-right">{{ formatQuantity(position.quantity) }} {{ position.asset }}</div>
-                        <div class="mono align-right">{{ formatUsd(position.valueUsd) }}</div>
-                        <div class="mono align-right pos">{{ position.apyPct.toFixed(1) }}%</div>
-                        <div class="mono align-right pos">+{{ formatUsd(position.earnedUsd ?? 0) }}</div>
-                      </article>
-                    }
+                        <div class="token-scope-stack">
+                          <div class="token-scope-row">
+                            <span class="token-scope-label">Networks</span>
+                            <span class="token-scope-group" aria-label="Networks">
+                              @for (networkId of asset.networkIds; track networkId) {
+                                @let network = getNetworkById(networkId);
+                                <span
+                                  class="token-scope-anchor"
+                                  [attr.data-tooltip]="networkLabel(networkId)"
+                                  [attr.aria-label]="networkLabel(networkId)">
+                                  <span
+                                    class="token-network-icon"
+                                    [style.color]="network?.color ?? colors.textSubtle">
+                                    {{ network?.icon ?? '•' }}
+                                  </span>
+                                </span>
+                              }
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="mono align-right" [attr.title]="formatQuantityFull(asset.quantity)">{{ formatQuantity(asset.quantity) }}</div>
+                      <div class="mono align-right" [attr.title]="formatUsd(asset.currentValueUsd)">{{ formatUsd(asset.currentValueUsd) }}</div>
+                      <div class="mono align-right" [attr.title]="formatUsd(asset.avcoUsd)">{{ formatUsd(asset.avcoUsd) }}</div>
+                      <div class="mono align-right" [attr.title]="formatUsd(asset.priceUsd)">{{ formatUsd(asset.priceUsd) }}</div>
+                      <div class="align-right">
+                        <div class="mono" [class.pos]="asset.unrealizedPnlPct >= 0" [class.neg]="asset.unrealizedPnlPct < 0">
+                          {{ formatPercent(asset.unrealizedPnlPct) }}
+                        </div>
+                        <div class="mono token-subline">{{ formatUsd(asset.unrealizedPnlUsd) }}</div>
+                      </div>
+                    </article>
+                  } @empty {
+                    <div class="empty-block">No token positions for current filters.</div>
                   }
                 </div>
 
-                <h3 class="side-label">Borrow positions</h3>
-                <div class="lending-grid">
-                  @for (position of filteredLendingPositions(); track position.id) {
-                    @if (position.type === 'borrow') {
-                      @let network = getNetworkById(position.networkId);
-                      <article class="lending-row borrow">
-                        <span class="flow-icon down">↓</span>
+                <footer class="table-footer">
+                  <span class="mono muted">{{ filteredTokenFamilies().length }} assets</span>
+                  <span class="mono">{{ formatUsd(filteredTokenTotalUsd()) }} total</span>
+                </footer>
+              }
+
+              @if (section() === 'lp') {
+                <div class="lp-toolbar">
+                  @for (tab of lpTabs; track tab) {
+                    <button
+                      type="button"
+                      class="lp-tab"
+                      [class.active]="lpTab() === tab"
+                      (click)="setLpTab(tab)">
+                      {{ tab[0].toUpperCase() + tab.slice(1) }}
+                    </button>
+                  }
+                  <span class="lp-fees">
+                    Total fees:
+                    <strong class="mono">{{ formatUsd(totalOpenLpFeesUsd()) }}</strong>
+                  </span>
+                </div>
+
+                <div class="lp-list">
+                  @for (position of filteredLpPositions(); track position.id) {
+                    @let network = getNetworkById(position.networkId);
+                    <article class="lp-card" [class.open]="position.status === 'open'">
+                      <div class="lp-card-head">
                         <div>
-                          <div class="row-title">{{ position.asset }} <span class="muted tiny">· {{ position.protocol }}</span></div>
-                          <div class="muted tiny">{{ network?.icon }} {{ position.networkId }}</div>
+                          <h3>
+                            {{ position.pair }}
+                            <span class="pill" [class.pill-green]="position.status === 'open'" [class.pill-def]="position.status !== 'open'">
+                              {{ position.status }}
+                            </span>
+                            @if (position.nftId !== null) {
+                              <span class="mono muted tiny">{{ position.nftId }}</span>
+                            }
+                          </h3>
+                          <p class="muted small">
+                            {{ position.protocol }}
+                            @if (network !== null) {
+                              <span [style.color]="network.color">{{ network.icon }}</span>
+                            }
+                            {{ position.networkId }}
+                            <span class="muted">· {{ position.range }}</span>
+                          </p>
                         </div>
-                        <div class="mono align-right">{{ formatQuantity(position.quantity) }} {{ position.asset }}</div>
-                        <div class="mono align-right">{{ formatUsd(position.valueUsd) }}</div>
-                        <div class="mono align-right neg">{{ position.apyPct.toFixed(1) }}%</div>
-                        <div class="mono align-right neg">{{ formatUsd(position.interestUsd ?? 0) }}</div>
-                      </article>
-                    }
+                        <div class="lp-value">
+                          <strong class="mono">{{ formatUsd(position.currentValueUsd) }}</strong>
+                          <span class="muted tiny">current value</span>
+                        </div>
+                      </div>
+
+                      <div class="lp-metrics">
+                        <div>
+                          <span class="muted tiny">Fees earned</span>
+                          <strong class="mono pos">{{ formatUsd(position.feesUsd) }}</strong>
+                        </div>
+                        <div>
+                          <span class="muted tiny">Imp. loss</span>
+                          <strong class="mono" [class.pos]="position.impermanentLossPct >= 0" [class.neg]="position.impermanentLossPct < 0">
+                            {{ formatPercent(position.impermanentLossPct) }}
+                          </strong>
+                          <span class="mono muted tiny">{{ formatUsd(position.impermanentLossUsd) }}</span>
+                        </div>
+                        <div>
+                          <span class="muted tiny">Total P&L</span>
+                          <strong class="mono" [class.pos]="position.totalPnlPct >= 0" [class.neg]="position.totalPnlPct < 0">
+                            {{ formatPercent(position.totalPnlPct) }}
+                          </strong>
+                          <span class="mono muted tiny">{{ formatUsd(position.totalPnlUsd) }}</span>
+                        </div>
+                        <div>
+                          <span class="muted tiny">Entered</span>
+                          <strong class="mono">{{ position.enteredDate }}</strong>
+                        </div>
+                      </div>
+                    </article>
+                  } @empty {
+                    <div class="empty-block">No LP positions for current filters.</div>
                   }
                 </div>
-              </div>
-            }
-          </section>
+              }
 
-          <wr-dashboard-transactions-pane
-            [wallets]="transactionPaneWallets()"
-            [networks]="transactionPaneNetworks()"
-            [selectedWalletIds]="transactionPaneSelectedWalletIds()"
-            [selectedNetworkIds]="transactionPaneSelectedNetworkIds()"
-            [sourceTransactions]="transactionPaneTransactions()"
-            [isLoading]="isSessionTransactionsLoading()"
-            [isReadOnly]="currentSessionId() !== null"
-            [emptyStateMessage]="transactionPaneEmptyStateMessage()"></wr-dashboard-transactions-pane>
-        </div>
-      </main>
+              @if (section() === 'lending') {
+                @let lending = lendingSummary();
+                <div class="lending-health">
+                  <div>
+                    <span class="muted">Health factor</span>
+                    <strong class="mono" [style.color]="lending.healthColor">{{ lending.healthFactor.toFixed(2) }}</strong>
+                  </div>
+                  <div class="progress-track health">
+                    <div class="progress-fill" [style.background]="lending.healthColor" [style.width.%]="lending.healthProgress"></div>
+                  </div>
+                  <p class="muted">
+                    Supply <span class="mono pos">{{ formatUsd(lending.totalSupply) }}</span>
+                    · Borrow <span class="mono neg">{{ formatUsd(lending.totalBorrow) }}</span>
+                  </p>
+                </div>
+
+                <div class="lending-grid-wrap">
+                  <h3 class="side-label">Supply positions</h3>
+                  <div class="lending-grid">
+                    @for (position of filteredLendingPositions(); track position.id) {
+                      @if (position.type === 'deposit') {
+                        @let network = getNetworkById(position.networkId);
+                        <article class="lending-row supply">
+                          <span class="flow-icon up">↑</span>
+                          <div>
+                            <div class="row-title">{{ position.asset }} <span class="muted tiny">· {{ position.protocol }}</span></div>
+                            <div class="muted tiny">{{ network?.icon }} {{ position.networkId }}</div>
+                          </div>
+                          <div class="mono align-right" [attr.title]="formatQuantityFull(position.quantity)">{{ formatQuantity(position.quantity) }} {{ position.asset }}</div>
+                          <div class="mono align-right">{{ formatUsd(position.valueUsd) }}</div>
+                          <div class="mono align-right pos">{{ position.apyPct.toFixed(1) }}%</div>
+                          <div class="mono align-right pos">+{{ formatUsd(position.earnedUsd ?? 0) }}</div>
+                        </article>
+                      }
+                    }
+                  </div>
+
+                  <h3 class="side-label">Borrow positions</h3>
+                  <div class="lending-grid">
+                    @for (position of filteredLendingPositions(); track position.id) {
+                      @if (position.type === 'borrow') {
+                        @let network = getNetworkById(position.networkId);
+                        <article class="lending-row borrow">
+                          <span class="flow-icon down">↓</span>
+                          <div>
+                            <div class="row-title">{{ position.asset }} <span class="muted tiny">· {{ position.protocol }}</span></div>
+                            <div class="muted tiny">{{ network?.icon }} {{ position.networkId }}</div>
+                          </div>
+                          <div class="mono align-right" [attr.title]="formatQuantityFull(position.quantity)">{{ formatQuantity(position.quantity) }} {{ position.asset }}</div>
+                          <div class="mono align-right">{{ formatUsd(position.valueUsd) }}</div>
+                          <div class="mono align-right neg">{{ position.apyPct.toFixed(1) }}%</div>
+                          <div class="mono align-right neg">{{ formatUsd(position.interestUsd ?? 0) }}</div>
+                        </article>
+                      }
+                    }
+                  </div>
+                </div>
+              }
+            </section>
+
+            <wr-dashboard-transactions-pane
+              [wallets]="transactionPaneWallets()"
+              [networks]="transactionPaneNetworks()"
+              [sourceTransactions]="transactionPaneTransactions()"
+              [transactionSearchValue]="transactionSearch()"
+              [bridgeStatusFilterValue]="transactionBridgeStatusFilter()"
+              [spamFilterValue]="transactionSpamFilter()"
+              [page]="transactionPage()"
+              [pageSize]="transactionPageSize"
+              [totalCount]="sessionTransactionsTotalCount()"
+              [isLoading]="isSessionTransactionsLoading()"
+              [isReadOnly]="currentSessionId() !== null"
+              [emptyStateMessage]="transactionPaneEmptyStateMessage()"
+              (transactionSearchChange)="onTransactionSearchChange($event)"
+              (bridgeStatusFilterChange)="onTransactionBridgeFilterChange($event)"
+              (spamFilterChange)="onTransactionSpamFilterChange($event)"
+              (pageChange)="onTransactionPageChange($event)"></wr-dashboard-transactions-pane>
+          </div>
+        </main>
+      }
     </div>
 
     <wr-dashboard-add-wallet-dialog

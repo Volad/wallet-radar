@@ -1,7 +1,7 @@
 # WalletRadar — Domain Model
 
 > **Version:** MVP v3 target
-> **Last updated:** 2026-04-03
+> **Last updated:** 2026-04-06
 
 ---
 
@@ -27,8 +27,10 @@
 | **crossWalletAvco** | AVCO computed on request across selected wallets; never stored. |
 | **Override** | User-defined replacement price stored in `cost_basis_overrides`, applied in replay. |
 | **Manual Compensating Transaction** | Synthetic normalized transaction (`type=MANUAL_COMPENSATING`) for reconciliation fixes, idempotent by `clientId`. |
-| **Reconciliation** | Comparison between derived quantity (`asset_positions`) and on-chain quantity (`on_chain_balances`). |
-| **Reconciled Holding** | Post-replay read-model row in `reconciled_holdings` that combines current on-chain quantity evidence with replayed basis fields for one wallet-network-asset identity. |
+| **Asset Ledger Point** | Immutable replay trace row in `asset_ledger_points` for one applied accounting transition on one wallet-network-asset bucket. |
+| **Reconciliation** | Comparison between latest exact-bucket replay state from `asset_ledger_points` and current on-chain quantity in `on_chain_balances`. |
+| **Current Holding View** | Read-time holding state derived from latest exact-bucket `asset_ledger_points` plus `on_chain_balances`; not a persisted collection. |
+| **Dashboard Issue Class** | Read-time diagnostic label for one current holding row. It is derived from current coverage and latest replay-state flags, not from a separate persisted collection. |
 
 ---
 
@@ -186,45 +188,55 @@ ExternalLedgerRaw {
 }
 ```
 
-### AssetPosition (`asset_positions`)
+### Replay Current State
 
-Internal replay state per `(walletAddress, accountingNetworkId, accountingAssetIdentity)`.
+WalletRadar no longer persists `asset_positions` or `reconciled_holdings`.
 
-```text
-AssetPosition {
-  walletAddress: String
-  networkId: String
-  assetSymbol: String
-  assetContract: String
-  quantity: Decimal
-  perWalletAvco: Decimal
-  totalCostBasisUsd: Decimal
-  totalGasPaidUsd: Decimal
-  totalRealisedPnlUsd: Decimal
-  quantityShortfall: Decimal
-  hasIncompleteHistory: Boolean
-  hasUnresolvedFlags: Boolean
-  unresolvedFlagCount: Int
-  lastEventTimestamp: DateTime?
-  lastCalculatedAt: DateTime?
-  onChainQuantity: Decimal?
-  onChainCapturedAt: DateTime?
-  reconciliationStatus: MATCH | MISMATCH | NOT_APPLICABLE
-}
-```
+The replay truth is:
 
-`asset_positions` is not the final user-facing holdings table.
+- immutable `asset_ledger_points`
+- current live evidence in `on_chain_balances`
 
-It is replay materialization plus reconciliation metadata used to derive
-`reconciled_holdings`.
+Latest replay state for one exact bucket is derived from the last
+`AssetLedgerPoint` ordered by:
 
-`quantityShortfall` is a conservative replay diagnostic:
+- `blockTimestamp`
+- `transactionIndex`
+- `normalizedTransactionId`
+- `flowIndex`
+- `replaySequence`
+
+`quantityShortfallAfter` on the latest point is the conservative replay
+diagnostic:
 
 - it increases when replay tries to consume more quantity than the currently
   replayed bucket contains
-- it means “the system knows some historical quantity is missing or still
-  unresolved”
+- it means some historical quantity is missing or unresolved
 - it must not be treated as synthetic quantity or synthetic cost basis
+
+### Dashboard Issue Classes
+
+Dashboard current-holding reads may expose one diagnostic `issue` per
+wallet-network-family row:
+
+- `yield_accrual`
+  - current live quantity is slightly above basis-backed quantity
+  - latest replay point is otherwise clean
+  - expected for interest-bearing receipt balances such as `aToken` or
+    liquid-staking derivatives after passive accrual
+- `coverage_gap`
+  - current live quantity is larger than basis-backed quantity
+  - this is a real current-basis coverage problem unless a stricter
+    interest-bearing policy downgrades it to `yield_accrual`
+- `history_flags`
+  - current quantity is fully covered
+  - latest replay point still carries incomplete-history or unresolved flags
+- `missing_replay_point`
+  - live balance exists
+  - no latest replay point exists for the exact bucket
+
+These issue classes are read-time diagnostics for the dashboard and must not be
+stored as separate mutable truth state.
 
 ### SyncState (`sync_status`, `backfill_segments`)
 
@@ -237,6 +249,7 @@ Persisted session wallet settings:
 ```text
 UserSession {
   id: String             // client-generated sessionId
+  accountingUniverseId: String
   wallets: [
     {
       address: String
@@ -251,6 +264,39 @@ UserSession {
 }
 ```
 
+### AccountingUniverse (`accounting_universes`)
+
+Stable owner/accounting scope used by replay-derived history reads.
+
+```text
+AccountingUniverse {
+  id: String
+  members: [
+    {
+      ref: String                // wallet address or custody ref such as BYBIT:<uid>
+      type: ON_CHAIN_WALLET | EXCHANGE_ACCOUNT
+      provider: String?          // e.g. BYBIT
+      networks: NetworkId[]      // on-chain wallets only
+      firstSeenAt: DateTime
+      lastSeenAt: DateTime
+    }
+  ]
+  createdAt: DateTime
+  updatedAt: DateTime
+}
+```
+
+Rules:
+
+- the universe is additive; historical members are not removed automatically
+  when the current UI session changes its visible wallet subset
+- `UserSession.wallets` is the current UI scope
+- `AccountingUniverse.members` is the stable owner scope for:
+  - asset-ledger timeline reads
+  - continuity/debug history across on-chain wallets and custodial refs
+- current `BYBIT` custody refs are synchronized from `external_ledger_raw`
+  evidence for the session and persisted as universe members
+
 ### TrackedWallet (`tracked_wallets`)
 
 Installation-wide projection used by normalization and transfer correlation:
@@ -264,29 +310,118 @@ TrackedWallet {
 }
 ```
 
+### AssetLedgerPoint (`asset_ledger_points`)
+
+Immutable replay-trace row for one applied accounting transition on one
+`(walletAddress, networkId, accountingAssetIdentity)` bucket.
+
+`AssetLedgerPoint` is the primary debug and history layer for:
+
+- AVCO / cost-basis timeline
+- carry-basis continuity across transfers, bridges, custody, and async lifecycles
+- operator audit of the first point where replay became incomplete, uncovered, or suspicious
+
+```text
+AssetLedgerPoint {
+  walletAddress: String
+  networkId: String
+  accountingAssetIdentity: String
+  accountingFamilyIdentity: String
+  familyDisplaySymbol: String
+  assetSymbol: String
+  assetContract: String?
+
+  normalizedTransactionId: String
+  txHash: String?
+  correlationId: String?
+  lifecycleChainId: String?
+  matchedCounterparty: String?
+  continuityCandidate: Boolean
+
+  blockTimestamp: DateTime
+  transactionIndex: Int?
+  flowIndex: Int
+  replaySequence: Long
+
+  normalizedType: String
+  lifecycleKind: String
+  lifecycleStage: String
+  basisEffect: String
+  protocolName: String?
+
+  quantityDelta: Decimal
+  costBasisDeltaUsd: Decimal
+  realisedPnlDeltaUsd: Decimal
+  gasDeltaUsd: Decimal
+  quantityShortfallDelta: Decimal
+  uncoveredQuantityDelta: Decimal
+
+  quantityBefore: Decimal
+  quantityAfter: Decimal
+  totalCostBasisBeforeUsd: Decimal
+  totalCostBasisAfterUsd: Decimal
+  avcoBeforeUsd: Decimal?
+  avcoAfterUsd: Decimal?
+
+  basisBackedQuantityAfter: Decimal
+  quantityShortfallAfter: Decimal
+  uncoveredQuantityAfter: Decimal
+  hasIncompleteHistoryAfter: Boolean
+  hasUnresolvedFlagsAfter: Boolean
+  unresolvedFlagCountAfter: Int
+
+  createdAt: DateTime
+}
+```
+
+Rules:
+
+- one point = one replay-applied state transition on one exact asset bucket
+- points are immutable
+- ordering is deterministic:
+  - `blockTimestamp ASC`
+  - `transactionIndex ASC`
+  - `normalizedTransactionId ASC`
+  - `flowIndex ASC`
+  - `replaySequence ASC`
+- `accountingAssetIdentity` is the exact replay bucket identity
+- `accountingFamilyIdentity` is the continuity family used for move-basis and
+  history aggregation
+- when no broader family policy exists, `accountingFamilyIdentity` falls back to
+  the exact asset identity
+- `quantityShortfall*` is a lifetime audit metric for historical coverage gaps;
+  it is not the current uncovered holding quantity
+- `uncoveredQuantity*` is the current held quantity that still lacks provable
+  carried basis after the replay step
+- `basisBackedQuantityAfter = max(quantityAfter - uncoveredQuantityAfter, 0)`
+- session asset history is not persisted separately; it is aggregated on read
+  from wallet-level `asset_ledger_points` scoped by the session's
+  `accountingUniverseId`
+
 ### OnChainBalance (`on_chain_balances`)
 
 Latest observed live quantity evidence for `(wallet, network, asset)` from the
 post-replay balance-refresh pass.
 
-### ReconciledHolding (`reconciled_holdings`)
+### Current Holding View
 
-Bounded read-model row derived from:
+Current holdings are computed on read from:
 
-- `asset_positions`
+- latest exact-bucket replay state in `asset_ledger_points`
 - `on_chain_balances`
 
-The row is keyed by `(walletAddress, networkId, accountingAssetIdentity)` and
-stores:
+The logical row is keyed by `(walletAddress, networkId, accountingAssetIdentity)`
+and exposes:
 
 ```text
-ReconciledHolding {
+CurrentHoldingView {
   walletAddress: String
   networkId: String
+  accountingAssetIdentity: String
+  accountingFamilyIdentity: String
   assetSymbol: String
-  assetContract: String
+  assetContract: String?
   currentQuantity: Decimal
-  currentHolding: Boolean
   derivedQuantity: Decimal?
   basisBackedDerivedQuantity: Decimal
   currentCoveredQuantity: Decimal
@@ -301,23 +436,23 @@ ReconciledHolding {
   hasUnresolvedFlags: Boolean?
   unresolvedFlagCount: Int?
   lastEventTimestamp: DateTime?
-  onChainCapturedAt: DateTime
+  onChainCapturedAt: DateTime?
   reconciliationStatus: MATCH | MISMATCH | NOT_APPLICABLE
-  materializedAt: DateTime
 }
 ```
 
 Rules:
 
 - current quantity always comes from `on_chain_balances`
-- basis fields come from `asset_positions` when a replay row exists
-- `basisBackedDerivedQuantity = max(asset_positions.quantity - quantityShortfall, 0)`
+- basis fields come from the latest replayed `AssetLedgerPoint`
+- `basisBackedDerivedQuantity = max(derivedQuantity - uncoveredQuantity, 0)`
 - `currentCoveredQuantity = min(currentQuantity, basisBackedDerivedQuantity)`
 - `currentUncoveredQuantity = currentQuantity - currentCoveredQuantity`
 - `currentCostBasisProvable = currentUncoveredQuantity == 0`
-- rows may persist with `currentQuantity = 0` as operator/audit evidence
-- user-facing current holdings must filter to `currentHolding = true`
-- `BYBIT` inventory never materializes into `reconciled_holdings`
+- historical `quantityShortfall` remains visible for audit, but must not poison
+  later covered acquisitions or current provability once the previously missing
+  quantity is no longer held
+- the view is derived at query time and is not persisted
 
 The runtime producer is bounded to:
 
@@ -405,11 +540,12 @@ Async AVCO replay status tracking after override/manual compensating updates.
 | `UNKNOWN` |
 | `MANUAL_COMPENSATING` |
 
-Staking families keep one canonical type name but support two economic shapes:
+Staking families keep one canonical type name but support two lifecycle shapes:
 
-- liquid staking:
-  principal leaves as economic `SELL`, derivative asset arrives as economic
-  `BUY`
+- liquid staking conversion:
+  principal and liquid-staking derivative legs remain continuity `TRANSFER`
+  inside the same base-asset family; explicit reward side-flows may still stay
+  economic `BUY`
 - classic stake-contract custody:
   principal moves as continuity `TRANSFER`, while any same-tx harvested reward
   remains economic `BUY`
@@ -659,7 +795,7 @@ SELL (qty<0):
 ### Reconciliation
 
 ```text
-derivedQuantity  = asset_positions.quantity
+derivedQuantity  = latest(asset_ledger_points.quantityAfter) for exact bucket
 onChainQuantity  = on_chain_balances.quantity
 balanceDiff      = onChainQuantity - derivedQuantity
 status           = MATCH | MISMATCH | NOT_APPLICABLE
@@ -670,13 +806,15 @@ For "young" histories (within backfill horizon), `MISMATCH` should surface warni
 ### Current holdings projection
 
 ```text
-currentQuantity  = reconciled_holdings.currentQuantity
+currentQuantity  = on_chain_balances.quantity
 currentHolding   = currentQuantity > 0
-basisFields      = reconciled_holdings.* basis columns copied from asset_positions
+basisFields      = latest(asset_ledger_points.*After) for exact bucket
 ```
 
-User-facing current holdings must read from `reconciled_holdings`, not directly
-from `asset_positions`.
+User-facing current holdings must be derived from `asset_ledger_points` plus
+`on_chain_balances`, not from a persisted compatibility snapshot.
+
+User-facing asset history and debug reads must use `asset_ledger_points`.
 
 For continuity transfers, replay may materialize inbound quantity before the
 matched source carry is seen in the ordered stream. In that case, the later

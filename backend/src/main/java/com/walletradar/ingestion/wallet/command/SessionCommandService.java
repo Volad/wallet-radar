@@ -3,6 +3,7 @@ package com.walletradar.ingestion.wallet.command;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.domain.session.UserSessionRepository;
+import com.walletradar.session.application.AccountingUniverseService;
 import com.walletradar.session.application.SessionPipelineStateService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -27,6 +28,7 @@ public class SessionCommandService {
     private final WalletBackfillService walletBackfillService;
     private final TrackedWalletProjectionService trackedWalletProjectionService;
     private final SessionPipelineStateService sessionPipelineStateService;
+    private final AccountingUniverseService accountingUniverseService;
 
     public SessionCommandResult addSession(String sessionId, List<SessionWalletPayload> walletEntries) {
         String normalizedSessionId = sessionId.trim();
@@ -45,9 +47,14 @@ public class SessionCommandService {
         }
         List<UserSession.SessionWallet> previousWallets = new ArrayList<>(session.getWallets());
         session.setWallets(normalizedWallets);
+        if (session.getAccountingUniverseId() == null || session.getAccountingUniverseId().isBlank()) {
+            session.setAccountingUniverseId("ACCOUNTING_UNIVERSE:" + normalizedSessionId);
+        }
         session.setUpdatedAt(now);
         session.setLastSeenAt(now);
         userSessionRepository.save(session);
+        accountingUniverseService.ensureSessionWalletMembership(session, now);
+        accountingUniverseService.ensureBybitMembership(normalizedSessionId, now);
         trackedWalletProjectionService.replaceSessionWallets(previousWallets, normalizedWallets, now);
         sessionPipelineStateService.markStageRunning(
                 normalizedSessionId,

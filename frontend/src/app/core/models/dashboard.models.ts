@@ -18,6 +18,7 @@ export type TransactionType =
   | 'LEND_WITHDRAWAL'
   | 'BORROW'
   | 'REPAY'
+  | 'REWARD_CLAIM'
   | 'STAKE_DEPOSIT'
   | 'STAKE_WITHDRAWAL'
   | 'APPROVAL'
@@ -29,8 +30,18 @@ export type TransactionStatus = 'CONFIRMED' | 'PENDING_PRICE' | 'NEEDS_REVIEW';
 export type FlowRole = 'BUY' | 'SELL' | 'FEE' | 'TRANSFER';
 export type PriceSource = 'STABLECOIN' | 'SWAP_DERIVED' | 'COINGECKO' | 'MANUAL' | 'UNKNOWN';
 export type BridgeStatus = 'BRIDGE_OUT' | 'BRIDGE_IN' | 'MATCHED' | 'REVIEW';
+export type TransactionBridgeFilter = 'ALL' | BridgeStatus;
+export type TransactionSpamFilter = 'HIDE_SPAM' | 'ALL' | 'SPAM_ONLY';
 
-export type IssueCode = 'missing_price' | 'unconfirmed' | 'recon' | null;
+export type IssueCode =
+  | 'spam'
+  | 'missing_price'
+  | 'unconfirmed'
+  | 'yield_accrual'
+  | 'coverage_gap'
+  | 'history_flags'
+  | 'missing_replay_point'
+  | null;
 
 export type DashboardSection = 'tokens' | 'lp' | 'lending' | 'staking';
 
@@ -60,6 +71,7 @@ export interface BackfillInfo {
 }
 
 export interface TokenPosition {
+  readonly familyIdentity: string;
   readonly symbol: string;
   readonly name: string;
   readonly quantity: number;
@@ -123,6 +135,7 @@ export interface TransactionItem {
   readonly symbol: string;
   readonly networkId: NetworkId;
   readonly walletId: WalletId;
+  readonly matchedCounterparty?: string | null;
   readonly status: TransactionStatus;
   readonly issue: IssueCode;
   readonly bridgeStatus?: BridgeStatus | null;
@@ -189,6 +202,7 @@ export const TRANSACTION_TYPES: ReadonlyArray<TransactionType> = [
   'LEND_WITHDRAWAL',
   'BORROW',
   'REPAY',
+  'REWARD_CLAIM',
   'STAKE_DEPOSIT',
   'STAKE_WITHDRAWAL',
   'APPROVAL',

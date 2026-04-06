@@ -1,5 +1,6 @@
 package com.walletradar.ingestion.pipeline.bybit;
 
+import com.walletradar.accounting.support.AccountingAssetFamilySupport;
 import com.walletradar.domain.common.Decimal128Support;
 import com.walletradar.domain.common.PriceSource;
 import com.walletradar.domain.transaction.externalledger.ExternalLedgerRaw;
@@ -20,6 +21,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -27,6 +29,19 @@ import java.util.stream.Collectors;
  */
 @Component
 public class BybitCanonicalTransactionBuilder {
+
+    private static final Set<String> STABLECOIN_SYMBOLS = Set.of(
+            "USDT",
+            "USDC",
+            "USDE",
+            "USDS",
+            "USDD",
+            "DAI",
+            "FDUSD",
+            "PYUSD",
+            "TUSD",
+            "USD1"
+    );
 
     public NormalizedTransaction buildTradePair(
             ExternalLedgerRaw left,
@@ -47,23 +62,38 @@ public class BybitCanonicalTransactionBuilder {
         }
         ExternalLedgerRaw buyRow = buyLeg.role() == NormalizedLegRole.BUY ? left : right;
         ExternalLedgerRaw sellRow = sellLeg.role() == NormalizedLegRole.SELL ? right : left;
+        BigDecimal executionPrice = firstNonNull(buyRow.getFilledPrice(), sellRow.getFilledPrice());
 
         List<NormalizedTransaction.Flow> flows = new ArrayList<>();
+        FlowPricing buyPricing = tradeFlowPricing(
+                buyRow.getAssetSymbol(),
+                NormalizedLegRole.BUY,
+                buyRow.getAssetSymbol(),
+                sellRow.getAssetSymbol(),
+                executionPrice
+        );
         flows.add(flow(
                 NormalizedLegRole.BUY,
                 buyRow.getAssetSymbol(),
                 abs(buyRow.getQuantityRaw()),
-                firstNonNull(buyRow.getFilledPrice(), sellRow.getFilledPrice()),
-                PriceSource.EXECUTION
+                buyPricing.unitPriceUsd(),
+                buyPricing.priceSource()
         ));
+        FlowPricing sellPricing = tradeFlowPricing(
+                sellRow.getAssetSymbol(),
+                NormalizedLegRole.SELL,
+                buyRow.getAssetSymbol(),
+                sellRow.getAssetSymbol(),
+                executionPrice
+        );
         flows.add(flow(
                 NormalizedLegRole.SELL,
                 sellRow.getAssetSymbol(),
                 negate(abs(sellRow.getQuantityRaw())),
-                null,
-                null
+                sellPricing.unitPriceUsd(),
+                sellPricing.priceSource()
         ));
-        appendFeeFlow(flows, firstFeeRow(left, right));
+        appendFeeFlow(flows, firstFeeRow(left, right), buyRow, sellRow, executionPrice);
         transaction.setFlows(flows);
         initializeStatus(transaction, now);
         return transaction;
@@ -85,12 +115,13 @@ public class BybitCanonicalTransactionBuilder {
                 : NormalizedTransactionType.EXTERNAL_TRANSFER_OUT;
 
         NormalizedTransaction transaction = baseTransaction(row.getId(), row, type, now);
+        FlowPricing pricing = orphanTradePricing(row);
         List<NormalizedTransaction.Flow> flows = List.of(flow(
                 role,
                 row.getAssetSymbol(),
                 role == NormalizedLegRole.BUY ? abs(row.getQuantityRaw()) : negate(abs(row.getQuantityRaw())),
-                row.getFilledPrice(),
-                row.getFilledPrice() == null ? null : PriceSource.EXECUTION
+                pricing.unitPriceUsd(),
+                pricing.priceSource()
         ));
         transaction.setFlows(new ArrayList<>(flows));
         transaction.setMissingDataReasons(List.of("UTA_TRADE_PAIR_NOT_FOUND"));
@@ -134,7 +165,7 @@ public class BybitCanonicalTransactionBuilder {
     ) {
         ExternalLedgerRaw anchor = left.getId().compareTo(right.getId()) <= 0 ? left : right;
         NormalizedTransaction transaction = baseTransaction(pairId(left, right), anchor, NormalizedTransactionType.STAKING_DEPOSIT, now);
-        transaction.setFlows(aggregateClusterFlows(List.of(left, right)));
+        transaction.setFlows(stakingPairFlows(left, right));
         initializeStatus(transaction, now);
         return transaction;
     }
@@ -290,15 +321,25 @@ public class BybitCanonicalTransactionBuilder {
             case EXTERNAL_TRANSFER_OUT -> List.of(flow(NormalizedLegRole.SELL, row.getAssetSymbol(), negate(quantity), null, null));
             case BORROW -> List.of(flow(NormalizedLegRole.SELL, row.getAssetSymbol(), negate(quantity), null, null));
             case REPAY -> List.of(flow(NormalizedLegRole.BUY, row.getAssetSymbol(), quantity, null, null));
-            case STAKING_DEPOSIT -> List.of(flow(
-                    row.getQuantityRaw() != null && row.getQuantityRaw().signum() < 0 ? NormalizedLegRole.SELL : NormalizedLegRole.BUY,
+            case STAKING_DEPOSIT, STAKING_WITHDRAW -> List.of(flow(
+                    NormalizedLegRole.TRANSFER,
                     row.getAssetSymbol(),
-                    row.getQuantityRaw() != null && row.getQuantityRaw().signum() < 0 ? negate(quantity) : quantity,
+                    signedQuantity(row),
                     null,
                     null
             ));
             default -> List.of();
         };
+    }
+
+    private List<NormalizedTransaction.Flow> stakingPairFlows(ExternalLedgerRaw left, ExternalLedgerRaw right) {
+        if (!sameContinuityFamily(left, right)) {
+            return aggregateClusterFlows(List.of(left, right));
+        }
+        return List.of(
+                flow(NormalizedLegRole.TRANSFER, left.getAssetSymbol(), signedQuantity(left), null, null),
+                flow(NormalizedLegRole.TRANSFER, right.getAssetSymbol(), signedQuantity(right), null, null)
+        );
     }
 
     private Optional<NormalizedTransactionType> mapCanonicalType(String canonicalType) {
@@ -330,16 +371,23 @@ public class BybitCanonicalTransactionBuilder {
         };
     }
 
-    private void appendFeeFlow(List<NormalizedTransaction.Flow> flows, ExternalLedgerRaw feeRow) {
+    private void appendFeeFlow(
+            List<NormalizedTransaction.Flow> flows,
+            ExternalLedgerRaw feeRow,
+            ExternalLedgerRaw buyRow,
+            ExternalLedgerRaw sellRow,
+            BigDecimal executionPrice
+    ) {
         if (feeRow == null || feeRow.getFeePaid() == null || feeRow.getFeePaid().signum() == 0) {
             return;
         }
+        FlowPricing feePricing = feeFlowPricing(feeRow, buyRow, sellRow, executionPrice);
         flows.add(flow(
                 NormalizedLegRole.FEE,
                 feeRow.getAssetSymbol(),
                 negate(abs(feeRow.getFeePaid())),
-                feeRow.getFilledPrice(),
-                feeRow.getFilledPrice() == null ? null : PriceSource.EXECUTION
+                feePricing.unitPriceUsd(),
+                feePricing.priceSource()
         ));
     }
 
@@ -466,8 +514,101 @@ public class BybitCanonicalTransactionBuilder {
         return value == null ? null : value.negate();
     }
 
+    private BigDecimal signedQuantity(ExternalLedgerRaw row) {
+        if (row == null || row.getQuantityRaw() == null) {
+            return null;
+        }
+        BigDecimal quantity = abs(row.getQuantityRaw());
+        return row.getQuantityRaw().signum() < 0 ? negate(quantity) : quantity;
+    }
+
     private BigDecimal firstNonNull(BigDecimal left, BigDecimal right) {
         return left != null ? left : right;
+    }
+
+    private FlowPricing orphanTradePricing(ExternalLedgerRaw row) {
+        if (isStablecoin(row.getAssetSymbol())) {
+            return new FlowPricing(BigDecimal.ONE, PriceSource.STABLECOIN);
+        }
+        return row.getFilledPrice() == null
+                ? FlowPricing.none()
+                : new FlowPricing(row.getFilledPrice(), PriceSource.EXECUTION);
+    }
+
+    private FlowPricing feeFlowPricing(
+            ExternalLedgerRaw feeRow,
+            ExternalLedgerRaw buyRow,
+            ExternalLedgerRaw sellRow,
+            BigDecimal executionPrice
+    ) {
+        if (isStablecoin(feeRow.getAssetSymbol())) {
+            return new FlowPricing(BigDecimal.ONE, PriceSource.STABLECOIN);
+        }
+        if (symbolEquals(feeRow.getAssetSymbol(), buyRow.getAssetSymbol())) {
+            return tradeFlowPricing(
+                    feeRow.getAssetSymbol(),
+                    NormalizedLegRole.BUY,
+                    buyRow.getAssetSymbol(),
+                    sellRow.getAssetSymbol(),
+                    executionPrice
+            );
+        }
+        if (symbolEquals(feeRow.getAssetSymbol(), sellRow.getAssetSymbol())) {
+            return tradeFlowPricing(
+                    feeRow.getAssetSymbol(),
+                    NormalizedLegRole.SELL,
+                    buyRow.getAssetSymbol(),
+                    sellRow.getAssetSymbol(),
+                    executionPrice
+            );
+        }
+        return FlowPricing.none();
+    }
+
+    private FlowPricing tradeFlowPricing(
+            String assetSymbol,
+            NormalizedLegRole role,
+            String buyAssetSymbol,
+            String sellAssetSymbol,
+            BigDecimal executionPrice
+    ) {
+        if (isStablecoin(assetSymbol)) {
+            return new FlowPricing(BigDecimal.ONE, PriceSource.STABLECOIN);
+        }
+        if (executionPrice == null) {
+            return FlowPricing.none();
+        }
+        boolean buyStablecoin = isStablecoin(buyAssetSymbol);
+        boolean sellStablecoin = isStablecoin(sellAssetSymbol);
+        if (buyStablecoin ^ sellStablecoin) {
+            String pricedAsset = buyStablecoin ? sellAssetSymbol : buyAssetSymbol;
+            if (symbolEquals(assetSymbol, pricedAsset)) {
+                return new FlowPricing(executionPrice, PriceSource.EXECUTION);
+            }
+            return FlowPricing.none();
+        }
+        return role == NormalizedLegRole.BUY
+                ? new FlowPricing(executionPrice, PriceSource.EXECUTION)
+                : FlowPricing.none();
+    }
+
+    private boolean isStablecoin(String assetSymbol) {
+        if (assetSymbol == null || assetSymbol.isBlank()) {
+            return false;
+        }
+        return STABLECOIN_SYMBOLS.contains(assetSymbol.trim().toUpperCase(Locale.ROOT));
+    }
+
+    private boolean symbolEquals(String left, String right) {
+        return normalize(left).equals(normalize(right));
+    }
+
+    private boolean sameContinuityFamily(ExternalLedgerRaw left, ExternalLedgerRaw right) {
+        String leftFamily = AccountingAssetFamilySupport.continuityIdentity(left == null ? null : left.getAssetSymbol(), null);
+        String rightFamily = AccountingAssetFamilySupport.continuityIdentity(right == null ? null : right.getAssetSymbol(), null);
+        return leftFamily != null
+                && leftFamily.startsWith("FAMILY:")
+                && leftFamily.equals(rightFamily);
     }
 
     private BigDecimal rewardClaimQuantity(ExternalLedgerRaw row) {
@@ -494,5 +635,11 @@ public class BybitCanonicalTransactionBuilder {
     }
 
     private record FlowKey(NormalizedLegRole role, String assetSymbol) {
+    }
+
+    private record FlowPricing(BigDecimal unitPriceUsd, PriceSource priceSource) {
+        private static FlowPricing none() {
+            return new FlowPricing(null, null);
+        }
     }
 }

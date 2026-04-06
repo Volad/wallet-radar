@@ -1,8 +1,9 @@
 import { fakeAsync, TestBed, tick } from '@angular/core/testing';
 import { HttpErrorResponse } from '@angular/common/http';
+import { provideRouter } from '@angular/router';
 import { of, throwError } from 'rxjs';
 
-import { DASHBOARD_MOCK_DATA } from '../../core/data/dashboard.mock';
+import { EMPTY_DASHBOARD_DATA } from '../../core/data/dashboard.constants';
 import { DashboardDataService } from '../../core/services/dashboard-data.service';
 import { WalletApiService } from '../../core/services/wallet-api.service';
 import { SessionStorageService } from '../../core/services/session-storage.service';
@@ -59,6 +60,10 @@ describe('DashboardComponent (wallet submit flow)', () => {
   };
   const sessionTransactionsResponse: SessionTransactionsResponse = {
     sessionId,
+    offset: 0,
+    limit: 50,
+    totalCount: 1,
+    hasMore: false,
     items: [
       {
         id: 'stx-1',
@@ -66,8 +71,11 @@ describe('DashboardComponent (wallet submit flow)', () => {
         txHash: '0xbridge',
         networkId: 'ETHEREUM',
         walletAddress: '0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f',
+        matchedCounterparty: 'BYBIT:33625378',
         blockTimestamp: '2026-03-06T10:00:00Z',
         type: 'EXTERNAL_TRANSFER_OUT',
+        status: 'PENDING_PRICE',
+        issue: 'missing_price',
         bridgeStatus: 'MATCHED',
         realisedPnlUsdTotal: null,
         avcoSnapshotVersion: null,
@@ -123,10 +131,11 @@ describe('DashboardComponent (wallet submit flow)', () => {
     await TestBed.configureTestingModule({
       imports: [DashboardComponent],
       providers: [
+        provideRouter([]),
         {
           provide: DashboardDataService,
           useValue: {
-            getDashboardData: () => of(DASHBOARD_MOCK_DATA),
+            getDashboardData: () => of(EMPTY_DASHBOARD_DATA),
           },
         },
         {
@@ -236,8 +245,15 @@ describe('DashboardComponent (wallet submit flow)', () => {
     tick();
     fixture.detectChanges();
 
-    expect(walletApiServiceSpy.rebuildSessionTransactions).toHaveBeenCalledWith(sessionId);
-    expect(walletApiServiceSpy.getSessionTransactions).toHaveBeenCalledWith(sessionId, 100);
+    expect(walletApiServiceSpy.getSessionTransactions).toHaveBeenCalledWith(sessionId, {
+      limit: 50,
+      offset: 0,
+      search: '',
+      bridgeStatus: 'ALL',
+      spamFilter: 'HIDE_SPAM',
+      walletIds: undefined,
+      networkIds: undefined,
+    });
     expect(component.transactionPaneTransactions()[0].hash).toBe('0xbridge');
     expect(component.transactionPaneTransactions()[0].bridgeStatus).toBe('MATCHED');
   }));

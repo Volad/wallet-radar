@@ -1,8 +1,7 @@
 package com.walletradar.costbasis.application;
 
-import com.walletradar.costbasis.domain.AssetPosition;
-import com.walletradar.costbasis.domain.AssetPositionRepository;
-import com.walletradar.costbasis.domain.ReconciliationStatus;
+import com.walletradar.costbasis.domain.AssetLedgerPoint;
+import com.walletradar.costbasis.domain.AssetLedgerPointRepository;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.common.PriceSource;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
@@ -19,7 +18,10 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.verify;
@@ -31,7 +33,7 @@ class AvcoReplayServiceTest {
     @Mock
     private NormalizedTransactionRepository normalizedTransactionRepository;
     @Mock
-    private AssetPositionRepository assetPositionRepository;
+    private AssetLedgerPointRepository assetLedgerPointRepository;
 
     @Test
     void deterministicReplayOrderingUsesIdAsFinalTieBreaker() {
@@ -43,8 +45,7 @@ class AvcoReplayServiceTest {
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(List.of(sell, buy));
 
-        AvcoReplayService service = service();
-        service.replayConfirmed();
+        service().replayConfirmed();
 
         ArgumentCaptor<List<NormalizedTransaction>> txCaptor = ArgumentCaptor.forClass(List.class);
         verify(normalizedTransactionRepository).saveAll(txCaptor.capture());
@@ -52,8 +53,8 @@ class AvcoReplayServiceTest {
                 .filter(tx -> "b".equals(tx.getId()))
                 .findFirst()
                 .orElseThrow();
-        assertThat(replayedSell.getFlows().get(0).getAvcoAtTimeOfSale()).isEqualByComparingTo("10");
-        assertThat(replayedSell.getFlows().get(0).getRealisedPnlUsd()).isEqualByComparingTo("10");
+        assertThat(replayedSell.getFlows().getFirst().getAvcoAtTimeOfSale()).isEqualByComparingTo("10");
+        assertThat(replayedSell.getFlows().getFirst().getRealisedPnlUsd()).isEqualByComparingTo("10");
     }
 
     @Test
@@ -61,30 +62,134 @@ class AvcoReplayServiceTest {
         NormalizedTransaction sourceBuy = tx("1", "0xbuy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
                 flow(NormalizedLegRole.BUY, "ETH", "1", "100", PriceSource.BINANCE));
         sourceBuy.setWalletAddress("wallet-a");
+
         NormalizedTransaction sourceTransfer = tx("2", "0xtransfer", 1, NormalizedTransactionType.EXTERNAL_TRANSFER_OUT,
                 flow(NormalizedLegRole.SELL, "ETH", "-1", null, null));
         sourceTransfer.setWalletAddress("wallet-a");
         sourceTransfer.setContinuityCandidate(true);
         sourceTransfer.setMatchedCounterparty("wallet-b");
+
         NormalizedTransaction destTransfer = tx("3", "0xtransfer", 1, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
                 flow(NormalizedLegRole.BUY, "ETH", "1", null, null));
         destTransfer.setWalletAddress("wallet-b");
         destTransfer.setContinuityCandidate(true);
         destTransfer.setMatchedCounterparty("wallet-a");
+
         when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(List.of(sourceBuy, sourceTransfer, destTransfer));
 
-        AvcoReplayService service = service();
-        service.replayConfirmed();
+        service().replayConfirmed();
 
-        ArgumentCaptor<List<AssetPosition>> captor = ArgumentCaptor.forClass(List.class);
-        verify(assetPositionRepository).saveAll(captor.capture());
-        AssetPosition source = captor.getValue().stream().filter(position -> "wallet-a".equals(position.getWalletAddress())).findFirst().orElseThrow();
-        AssetPosition dest = captor.getValue().stream().filter(position -> "wallet-b".equals(position.getWalletAddress())).findFirst().orElseThrow();
-        assertThat(source.getQuantity()).isZero();
-        assertThat(dest.getQuantity()).isEqualByComparingTo("1");
-        assertThat(dest.getPerWalletAvco()).isEqualByComparingTo("100");
+        List<AssetLedgerPoint> points = capturedLedgerPoints();
+        AssetLedgerPoint source = latestPoint(points, "wallet-a", NetworkId.BASE, "ETH", null);
+        AssetLedgerPoint destination = latestPoint(points, "wallet-b", NetworkId.BASE, "ETH", null);
+        assertThat(source.getQuantityAfter()).isZero();
+        assertThat(destination.getQuantityAfter()).isEqualByComparingTo("1");
+        assertThat(destination.getAvcoAfterUsd()).isEqualByComparingTo("100");
+        assertThat(destination.getTotalCostBasisAfterUsd()).isEqualByComparingTo("100");
+    }
+
+    @Test
+    void continuityTransferKeepsUncoveredTailOnDestinationInsteadOfPoisoningFutureCoverage() {
+        NormalizedTransaction sourceBuy = tx("1", "0xbuy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flow(NormalizedLegRole.BUY, "ETH", "1", "100", PriceSource.BINANCE));
+        sourceBuy.setWalletAddress("wallet-a");
+
+        NormalizedTransaction sourceTransfer = tx("2", "0xbridge-out", 1, NormalizedTransactionType.BRIDGE_OUT,
+                flow(NormalizedLegRole.TRANSFER, "ETH", "-1.5", null, null));
+        sourceTransfer.setWalletAddress("wallet-a");
+        sourceTransfer.setCorrelationId("bridge:1");
+        sourceTransfer.setContinuityCandidate(true);
+        sourceTransfer.setMatchedCounterparty("wallet-b");
+
+        NormalizedTransaction destinationTransfer = tx("3", "0xbridge-in", 2, NormalizedTransactionType.BRIDGE_IN,
+                flow(NormalizedLegRole.TRANSFER, "ETH", "1.5", null, null));
+        destinationTransfer.setWalletAddress("wallet-b");
+        destinationTransfer.setNetworkId(NetworkId.ARBITRUM);
+        destinationTransfer.setCorrelationId("bridge:1");
+        destinationTransfer.setContinuityCandidate(true);
+        destinationTransfer.setMatchedCounterparty("wallet-a");
+
+        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                NormalizedTransactionStatus.CONFIRMED
+        )).thenReturn(List.of(sourceBuy, sourceTransfer, destinationTransfer));
+
+        service().replayConfirmed();
+
+        List<AssetLedgerPoint> points = capturedLedgerPoints();
+        AssetLedgerPoint source = latestPoint(points, "wallet-a", NetworkId.BASE, "ETH", null);
+        AssetLedgerPoint destination = latestPoint(points, "wallet-b", NetworkId.ARBITRUM, "ETH", null);
+        assertThat(source.getQuantityAfter()).isZero();
+        assertThat(source.getQuantityShortfallAfter()).isEqualByComparingTo("0.5");
+        assertThat(destination.getQuantityAfter()).isEqualByComparingTo("1.5");
+        assertThat(destination.getBasisBackedQuantityAfter()).isEqualByComparingTo("1");
+        assertThat(destination.getUncoveredQuantityAfter()).isEqualByComparingTo("0.5");
+        assertThat(destination.getTotalCostBasisAfterUsd()).isEqualByComparingTo("100");
+        assertThat(destination.getAvcoAfterUsd()).isEqualByComparingTo("100");
+    }
+
+    @Test
+    void laterCoveredAcquisitionIsNotZeroedOutByHistoricalLifetimeShortfall() {
+        NormalizedTransaction buy = tx("1", "0xbuy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flow(NormalizedLegRole.BUY, "ETH", "1", "100", PriceSource.BINANCE));
+
+        NormalizedTransaction oversizedFee = tx("2", "0xfee", 1, NormalizedTransactionType.ADMIN_CONFIG,
+                flow(NormalizedLegRole.FEE, "ETH", "-1.5", "100", PriceSource.BINANCE));
+
+        NormalizedTransaction laterBuy = tx("3", "0xbuy-later", 2, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flow(NormalizedLegRole.BUY, "ETH", "0.2", "200", PriceSource.BINANCE));
+
+        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                NormalizedTransactionStatus.CONFIRMED
+        )).thenReturn(List.of(buy, oversizedFee, laterBuy));
+
+        service().replayConfirmed();
+
+        AssetLedgerPoint point = latestPoint(capturedLedgerPoints(), "0xwallet", NetworkId.BASE, "ETH", null);
+        assertThat(point.getQuantityAfter()).isEqualByComparingTo("0.2");
+        assertThat(point.getBasisBackedQuantityAfter()).isEqualByComparingTo("0.2");
+        assertThat(point.getUncoveredQuantityAfter()).isZero();
+        assertThat(point.getQuantityShortfallAfter()).isEqualByComparingTo("0.5");
+        assertThat(point.getTotalCostBasisAfterUsd()).isEqualByComparingTo("40");
+        assertThat(point.getAvcoAfterUsd()).isEqualByComparingTo("200");
+    }
+
+    @Test
+    void replayPersistsAssetLedgerPointsWithFamilyAndBeforeAfterState() {
+        NormalizedTransaction buy = tx("1", "0xbuy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flow(NormalizedLegRole.BUY, "ETH", "1", "100", PriceSource.BINANCE));
+        NormalizedTransaction bridgeOut = tx("2", "0xbridge-out", 1, NormalizedTransactionType.BRIDGE_OUT,
+                flow(NormalizedLegRole.TRANSFER, "ETH", "-1", null, null));
+        bridgeOut.setCorrelationId("bridge:1");
+        bridgeOut.setContinuityCandidate(true);
+        bridgeOut.setMatchedCounterparty("0xbridge-in");
+
+        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                NormalizedTransactionStatus.CONFIRMED
+        )).thenReturn(List.of(buy, bridgeOut));
+
+        service().replayConfirmed();
+
+        List<AssetLedgerPoint> points = capturedLedgerPoints();
+        assertThat(points).hasSize(2);
+        assertThat(points).anySatisfy(point -> {
+            if ("1".equals(point.getNormalizedTransactionId())) {
+                assertThat(point.getAccountingFamilyIdentity()).isEqualTo("FAMILY:ETH");
+                assertThat(point.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.ACQUIRE);
+                assertThat(point.getQuantityBefore()).isZero();
+                assertThat(point.getQuantityAfter()).isEqualByComparingTo("1");
+                assertThat(point.getTotalCostBasisAfterUsd()).isEqualByComparingTo("100");
+            }
+        }).anySatisfy(point -> {
+            if ("2".equals(point.getNormalizedTransactionId())) {
+                assertThat(point.getLifecycleKind()).isEqualTo(AssetLedgerPoint.LifecycleKind.BRIDGE);
+                assertThat(point.getLifecycleStage()).isEqualTo(AssetLedgerPoint.LifecycleStage.SOURCE);
+                assertThat(point.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.CARRY_OUT);
+                assertThat(point.getQuantityAfter()).isZero();
+                assertThat(point.getTotalCostBasisAfterUsd()).isZero();
+            }
+        });
     }
 
     @Test
@@ -113,790 +218,96 @@ class AvcoReplayServiceTest {
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(List.of(sourceBuy, inboundFirst, sourceLater, destinationSpend));
 
-        AvcoReplayService service = service();
-        service.replayConfirmed();
+        service().replayConfirmed();
 
-        ArgumentCaptor<List<AssetPosition>> captor = ArgumentCaptor.forClass(List.class);
-        verify(assetPositionRepository).saveAll(captor.capture());
-        AssetPosition destination = captor.getValue().stream()
-                .filter(position -> "wallet-b".equals(position.getWalletAddress()) && "ETH".equals(position.getAssetSymbol()))
-                .findFirst()
-                .orElseThrow();
-        assertThat(destination.getQuantity()).isZero();
-        assertThat(destination.getTotalCostBasisUsd()).isZero();
-        assertThat(destination.getHasIncompleteHistory()).isFalse();
+        AssetLedgerPoint destination = latestPoint(capturedLedgerPoints(), "wallet-b", NetworkId.BASE, "ETH", null);
+        assertThat(destination.getQuantityAfter()).isZero();
+        assertThat(destination.getTotalCostBasisAfterUsd()).isZero();
+        assertThat(destination.getHasIncompleteHistoryAfter()).isFalse();
     }
 
     @Test
-    void unmatchedInboundTransferStillMaterializesQuantitySoonEnoughForLaterSpend() {
-        NormalizedTransaction inboundBridge = tx("1", "0xbridge-in", 0, NormalizedTransactionType.BRIDGE_IN,
-                flow(NormalizedLegRole.TRANSFER, "ETH", "1", null, null));
-        inboundBridge.setWalletAddress("wallet-a");
-        inboundBridge.setCorrelationId("bridge:lifi:0xbridge-in");
-        inboundBridge.setContinuityCandidate(true);
-
-        NormalizedTransaction laterSpend = tx("2", "0xlp-entry", 1, NormalizedTransactionType.LP_ENTRY,
-                flow(NormalizedLegRole.TRANSFER, "ETH", "-1", null, null));
-        laterSpend.setWalletAddress("wallet-a");
-
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
-                NormalizedTransactionStatus.CONFIRMED
-        )).thenReturn(List.of(inboundBridge, laterSpend));
-
-        AvcoReplayService service = service();
-        service.replayConfirmed();
-
-        ArgumentCaptor<List<AssetPosition>> captor = ArgumentCaptor.forClass(List.class);
-        verify(assetPositionRepository).saveAll(captor.capture());
-        AssetPosition eth = captor.getValue().stream()
-                .filter(position -> "wallet-a".equals(position.getWalletAddress()) && "ETH".equals(position.getAssetSymbol()))
-                .findFirst()
-                .orElseThrow();
-        assertThat(eth.getQuantity()).isZero();
-    }
-
-    @Test
-    void outboundBeyondKnownQuantityTracksShortfallInsteadOfSilentlyForgettingIt() {
+    void bridgeDestinationCarryInPreservesBasisAcrossNetworks() {
         NormalizedTransaction buy = tx("1", "0xbuy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
                 flow(NormalizedLegRole.BUY, "ETH", "1", "100", PriceSource.BINANCE));
         buy.setWalletAddress("wallet-a");
-
-        NormalizedTransaction sell = tx("2", "0xsell", 1, NormalizedTransactionType.EXTERNAL_TRANSFER_OUT,
-                flow(NormalizedLegRole.SELL, "ETH", "-2", "150", PriceSource.BINANCE));
-        sell.setWalletAddress("wallet-a");
-
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
-                NormalizedTransactionStatus.CONFIRMED
-        )).thenReturn(List.of(buy, sell));
-
-        AvcoReplayService service = service();
-        service.replayConfirmed();
-
-        ArgumentCaptor<List<AssetPosition>> captor = ArgumentCaptor.forClass(List.class);
-        verify(assetPositionRepository).saveAll(captor.capture());
-        AssetPosition eth = captor.getValue().stream()
-                .filter(position -> "wallet-a".equals(position.getWalletAddress()) && "ETH".equals(position.getAssetSymbol()))
-                .findFirst()
-                .orElseThrow();
-        assertThat(eth.getQuantity()).isZero();
-        assertThat(eth.getTotalCostBasisUsd()).isZero();
-        assertThat(eth.getQuantityShortfall()).isEqualByComparingTo("1");
-        assertThat(eth.getHasIncompleteHistory()).isTrue();
-    }
-
-    @Test
-    void matchedBybitTransferDoesNotDoubleCountAcrossAccountingUniverse() {
-        NormalizedTransaction bybitBuy = tx("1", null, 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
-                flow(NormalizedLegRole.BUY, "ETH", "1", "100", PriceSource.EXECUTION));
-        bybitBuy.setWalletAddress("BYBIT:uid-1");
-        bybitBuy.setSource(NormalizedTransactionSource.BYBIT);
-        bybitBuy.setNetworkId(null);
-
-        NormalizedTransaction bybitTransfer = tx("2", "0xcorr", 1, NormalizedTransactionType.EXTERNAL_TRANSFER_OUT,
-                flow(NormalizedLegRole.SELL, "ETH", "-1", null, null));
-        bybitTransfer.setWalletAddress("BYBIT:uid-1");
-        bybitTransfer.setSource(NormalizedTransactionSource.BYBIT);
-        bybitTransfer.setNetworkId(NetworkId.ARBITRUM);
-        bybitTransfer.setCorrelationId("corr-1");
-        bybitTransfer.setContinuityCandidate(true);
-        bybitTransfer.setMatchedCounterparty("0xwallet");
-
-        NormalizedTransaction onChainTransfer = tx("3", "0xcorr", 1, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
-                flow(NormalizedLegRole.BUY, "ETH", "1", null, null));
-        onChainTransfer.setWalletAddress("0xwallet");
-        onChainTransfer.setCorrelationId("corr-1");
-        onChainTransfer.setContinuityCandidate(true);
-        onChainTransfer.setMatchedCounterparty("BYBIT:uid-1");
-
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
-                NormalizedTransactionStatus.CONFIRMED
-        )).thenReturn(List.of(bybitBuy, bybitTransfer, onChainTransfer));
-
-        AvcoReplayService service = service();
-        service.replayConfirmed();
-
-        ArgumentCaptor<List<AssetPosition>> captor = ArgumentCaptor.forClass(List.class);
-        verify(assetPositionRepository).saveAll(captor.capture());
-        BigDecimal totalQty = captor.getValue().stream()
-                .map(AssetPosition::getQuantity)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-        assertThat(totalQty).isEqualByComparingTo("1");
-        BigDecimal bybitQty = captor.getValue().stream()
-                .filter(position -> "BYBIT:uid-1".equals(position.getWalletAddress()))
-                .map(AssetPosition::getQuantity)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-        assertThat(bybitQty).isZero();
-    }
-
-    @Test
-    void matchedBybitEthTransferCarriesBasisIntoWrappedOnChainAsset() {
-        NormalizedTransaction bybitBuy = tx("1", null, 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
-                flow(NormalizedLegRole.BUY, "ETH", "1", "100", PriceSource.EXECUTION));
-        bybitBuy.setWalletAddress("BYBIT:uid-1");
-        bybitBuy.setSource(NormalizedTransactionSource.BYBIT);
-        bybitBuy.setNetworkId(null);
-
-        NormalizedTransaction bybitTransfer = tx("2", "0xcorr", 1, NormalizedTransactionType.EXTERNAL_TRANSFER_OUT,
-                flow(NormalizedLegRole.SELL, "ETH", "-1", null, null));
-        bybitTransfer.setWalletAddress("BYBIT:uid-1");
-        bybitTransfer.setSource(NormalizedTransactionSource.BYBIT);
-        bybitTransfer.setNetworkId(NetworkId.MANTLE);
-        bybitTransfer.setCorrelationId("corr-eth-1");
-        bybitTransfer.setContinuityCandidate(true);
-        bybitTransfer.setMatchedCounterparty("0xwallet");
-
-        NormalizedTransaction onChainTransfer = tx("3", "0xcorr", 1, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
-                flow(NormalizedLegRole.BUY, "WETH", "1", null, null));
-        onChainTransfer.setWalletAddress("0xwallet");
-        onChainTransfer.setNetworkId(NetworkId.MANTLE);
-        onChainTransfer.setCorrelationId("corr-eth-1");
-        onChainTransfer.setContinuityCandidate(true);
-        onChainTransfer.setMatchedCounterparty("BYBIT:uid-1");
-
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
-                NormalizedTransactionStatus.CONFIRMED
-        )).thenReturn(List.of(bybitBuy, bybitTransfer, onChainTransfer));
-
-        AvcoReplayService service = service();
-        service.replayConfirmed();
-
-        ArgumentCaptor<List<AssetPosition>> captor = ArgumentCaptor.forClass(List.class);
-        verify(assetPositionRepository).saveAll(captor.capture());
-        assertThat(captor.getValue()).anySatisfy(position -> {
-            if ("WETH".equals(position.getAssetSymbol())) {
-                assertThat(position.getQuantity()).isEqualByComparingTo("1");
-                assertThat(position.getPerWalletAvco()).isEqualByComparingTo("100");
-                assertThat(position.getHasIncompleteHistory()).isFalse();
-            }
-        });
-    }
-
-    @Test
-    void aaveReceiptTokenPreservesEthFamilyBasisAfterBybitMoveBasis() {
-        NormalizedTransaction bybitBuy = tx("1", null, 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
-                flow(NormalizedLegRole.BUY, "ETH", "3.06", "2000", PriceSource.EXECUTION));
-        bybitBuy.setWalletAddress("BYBIT:uid-1");
-        bybitBuy.setSource(NormalizedTransactionSource.BYBIT);
-        bybitBuy.setNetworkId(null);
-
-        NormalizedTransaction bybitTransfer = tx("2", "0xa5e755", 1, NormalizedTransactionType.EXTERNAL_TRANSFER_OUT,
-                flow(NormalizedLegRole.SELL, "ETH", "-3.06", null, null));
-        bybitTransfer.setWalletAddress("BYBIT:uid-1");
-        bybitTransfer.setSource(NormalizedTransactionSource.BYBIT);
-        bybitTransfer.setNetworkId(null);
-        bybitTransfer.setCorrelationId("BYBIT:MANTLE:0xa5e755");
-        bybitTransfer.setContinuityCandidate(true);
-        bybitTransfer.setMatchedCounterparty("0x1a87");
-
-        NormalizedTransaction onChainReceive = tx("3", "0xa5e755", 1, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
-                flow(NormalizedLegRole.BUY, "WETH", "3.06", null, null));
-        onChainReceive.setWalletAddress("0x1a87");
-        onChainReceive.setNetworkId(NetworkId.MANTLE);
-        onChainReceive.setCorrelationId("BYBIT:MANTLE:0xa5e755");
-        onChainReceive.setContinuityCandidate(true);
-        onChainReceive.setMatchedCounterparty("BYBIT:uid-1");
-
-        NormalizedTransaction aaveDeposit = tx("4", "0x3b8592", 2, NormalizedTransactionType.LENDING_DEPOSIT,
-                flow(NormalizedLegRole.TRANSFER, "WETH", "-3.06", null, null),
-                flow(NormalizedLegRole.TRANSFER, "aManWETH", "3.059999999999999999", null, null));
-        aaveDeposit.setWalletAddress("0x1a87");
-        aaveDeposit.setNetworkId(NetworkId.MANTLE);
-
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
-                NormalizedTransactionStatus.CONFIRMED
-        )).thenReturn(List.of(bybitBuy, bybitTransfer, onChainReceive, aaveDeposit));
-
-        AvcoReplayService service = service();
-        service.replayConfirmed();
-
-        ArgumentCaptor<List<AssetPosition>> captor = ArgumentCaptor.forClass(List.class);
-        verify(assetPositionRepository).saveAll(captor.capture());
-        assertThat(captor.getValue()).anySatisfy(position -> {
-            if ("aManWETH".equals(position.getAssetSymbol())) {
-                assertThat(position.getQuantity()).isEqualByComparingTo("3.059999999999999999");
-                assertThat(position.getTotalCostBasisUsd()).isEqualByComparingTo("6120");
-                assertThat(position.getPerWalletAvco()).isEqualByComparingTo("2000.000000000000000653594771241830");
-                assertThat(position.getHasIncompleteHistory()).isFalse();
-            }
-        }).anySatisfy(position -> {
-            if ("WETH".equals(position.getAssetSymbol())) {
-                assertThat(position.getQuantity()).isZero();
-            }
-        });
-    }
-
-    @Test
-    void zksyncAaveGatewayLifecycleDoesNotLeakNativeEthAfterRedeposit() {
-        NormalizedTransaction wethBuy = tx("1", "0xweth-buy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
-                flow(NormalizedLegRole.BUY, "WETH", "0.966986134250302027", "2000", PriceSource.BINANCE));
-        wethBuy.setNetworkId(NetworkId.ZKSYNC);
-        wethBuy.getFlows().getFirst().setAssetContract("0x5aea5775959fbc2557cc8789bc1bf90a239d9a91");
-
-        NormalizedTransaction supplyWithPermit = tx("2", "0xcfe0fd4d86b0116fecf0ffaaba0a41c5b26a174a7360981e968a6b2ed57f4e96", 1,
-                NormalizedTransactionType.LENDING_DEPOSIT,
-                flow(NormalizedLegRole.TRANSFER, "WETH", "-0.966986134250302027", null, null),
-                flow(NormalizedLegRole.TRANSFER, "aZksWETH", "0.966986587248377320", null, null));
-        supplyWithPermit.setNetworkId(NetworkId.ZKSYNC);
-        supplyWithPermit.getFlows().get(0).setAssetContract("0x5aea5775959fbc2557cc8789bc1bf90a239d9a91");
-        supplyWithPermit.getFlows().get(1).setAssetContract("0xb7b93bcf82519bb757fd18b23a389245dbd8ca64");
-
-        NormalizedTransaction withdrawEth = tx("3", "0xb20600840451280027707eee9330bfbea5737063ec9f648cca425657d61aa35a", 2,
-                NormalizedTransactionType.LENDING_WITHDRAW,
-                flow(NormalizedLegRole.TRANSFER, "aZksWETH", "-0.620119937887953280", null, null),
-                flow(NormalizedLegRole.TRANSFER, "ETH", "0.620119937887953280", null, null));
-        withdrawEth.setNetworkId(NetworkId.ZKSYNC);
-        withdrawEth.getFlows().get(0).setAssetContract("0xb7b93bcf82519bb757fd18b23a389245dbd8ca64");
-        withdrawEth.getFlows().get(1).setAssetContract("0x000000000000000000000000000000000000800a");
-
-        NormalizedTransaction depositEth = tx("4", "0xb7f3cd6b871b410276f3254618cf24572385408e376cdfd442b3cc58d82288ee", 3,
-                NormalizedTransactionType.LENDING_DEPOSIT,
-                flow(NormalizedLegRole.TRANSFER, "ETH", "-0.620119937887953280", null, null),
-                flow(NormalizedLegRole.TRANSFER, "aZksWETH", "0.620119937887953280", null, null));
-        depositEth.setNetworkId(NetworkId.ZKSYNC);
-        depositEth.getFlows().get(0).setAssetContract("0x000000000000000000000000000000000000800a");
-        depositEth.getFlows().get(1).setAssetContract("0xb7b93bcf82519bb757fd18b23a389245dbd8ca64");
-
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
-                NormalizedTransactionStatus.CONFIRMED
-        )).thenReturn(List.of(wethBuy, supplyWithPermit, withdrawEth, depositEth));
-
-        AvcoReplayService service = service();
-        service.replayConfirmed();
-
-        ArgumentCaptor<List<AssetPosition>> captor = ArgumentCaptor.forClass(List.class);
-        verify(assetPositionRepository).saveAll(captor.capture());
-
-        BigDecimal zksyncEthQuantity = captor.getValue().stream()
-                .filter(position -> position.getNetworkId() == NetworkId.ZKSYNC)
-                .filter(position -> "ETH".equals(position.getAssetSymbol()))
-                .map(AssetPosition::getQuantity)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-        assertThat(zksyncEthQuantity).isZero();
-
-        assertThat(captor.getValue()).anySatisfy(position -> {
-            if (position.getNetworkId() == NetworkId.ZKSYNC && "aZksWETH".equals(position.getAssetSymbol())) {
-                assertThat(position.getQuantity()).isEqualByComparingTo("0.966986587248377320");
-                assertThat(position.getTotalCostBasisUsd()).isEqualByComparingTo("1933.972268500604054000");
-                assertThat(position.getHasIncompleteHistory()).isFalse();
-            }
-        });
-    }
-
-    @Test
-    void nativeAliasRowsCollapseIntoSingleReplayHoldingsBucket() {
-        NormalizedTransaction symbolBuy = tx("1", "0xnative-buy-1", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
-                flow(NormalizedLegRole.BUY, "ETH", "0.5", "100", PriceSource.BINANCE));
-        symbolBuy.setNetworkId(NetworkId.ZKSYNC);
-
-        NormalizedTransaction aliasBuy = tx("2", "0xnative-buy-2", 1, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
-                flow(NormalizedLegRole.BUY, "ETH", "1.0", "200", PriceSource.BINANCE));
-        aliasBuy.setNetworkId(NetworkId.ZKSYNC);
-        aliasBuy.getFlows().getFirst().setAssetContract("0x000000000000000000000000000000000000800a");
-
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
-                NormalizedTransactionStatus.CONFIRMED
-        )).thenReturn(List.of(symbolBuy, aliasBuy));
-
-        AvcoReplayService service = service();
-        service.replayConfirmed();
-
-        ArgumentCaptor<List<AssetPosition>> captor = ArgumentCaptor.forClass(List.class);
-        verify(assetPositionRepository).saveAll(captor.capture());
-        assertThat(captor.getValue()).singleElement().satisfies(position -> {
-            assertThat(position.getNetworkId()).isEqualTo(NetworkId.ZKSYNC);
-            assertThat(position.getAssetSymbol()).isEqualTo("ETH");
-            assertThat(position.getAssetContract()).isEqualTo("NATIVE:ZKSYNC");
-            assertThat(position.getQuantity()).isEqualByComparingTo("1.5");
-            assertThat(position.getTotalCostBasisUsd()).isEqualByComparingTo("250");
-            assertThat(position.getPerWalletAvco()).isEqualByComparingTo("166.6666666666666666666666666666667");
-        });
-    }
-
-    @Test
-    void correlatedBridgePairCarriesBasisAcrossNetworksWhenPlainMoveBasisIsProven() {
-        NormalizedTransaction sourceBuy = tx("1", "0xbuy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
-                flow(NormalizedLegRole.BUY, "USDC", "100", "1", PriceSource.STABLECOIN));
-        sourceBuy.setNetworkId(NetworkId.BASE);
+        buy.setNetworkId(NetworkId.BASE);
 
         NormalizedTransaction bridgeOut = tx("2", "0xbridge-out", 1, NormalizedTransactionType.BRIDGE_OUT,
-                flow(NormalizedLegRole.TRANSFER, "USDC", "-100", null, null));
+                flow(NormalizedLegRole.TRANSFER, "ETH", "-1", null, null));
+        bridgeOut.setWalletAddress("wallet-a");
         bridgeOut.setNetworkId(NetworkId.BASE);
-        bridgeOut.setCorrelationId("bridge:lifi:0xbridge-out");
+        bridgeOut.setCorrelationId("bridge:1");
         bridgeOut.setContinuityCandidate(true);
-        bridgeOut.setMatchedCounterparty("0xbridge-in");
+        bridgeOut.setMatchedCounterparty("wallet-a");
 
         NormalizedTransaction bridgeIn = tx("3", "0xbridge-in", 2, NormalizedTransactionType.BRIDGE_IN,
-                flow(NormalizedLegRole.TRANSFER, "USDC", "100", null, null));
+                flow(NormalizedLegRole.TRANSFER, "ETH", "1", null, null));
+        bridgeIn.setWalletAddress("wallet-a");
         bridgeIn.setNetworkId(NetworkId.ARBITRUM);
-        bridgeIn.setCorrelationId("bridge:lifi:0xbridge-out");
+        bridgeIn.setCorrelationId("bridge:1");
         bridgeIn.setContinuityCandidate(true);
-        bridgeIn.setMatchedCounterparty("0xbridge-out");
+        bridgeIn.setMatchedCounterparty("wallet-a");
 
         when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
-        )).thenReturn(List.of(sourceBuy, bridgeOut, bridgeIn));
+        )).thenReturn(List.of(buy, bridgeOut, bridgeIn));
 
-        AvcoReplayService service = service();
-        service.replayConfirmed();
+        service().replayConfirmed();
 
-        ArgumentCaptor<List<AssetPosition>> captor = ArgumentCaptor.forClass(List.class);
-        verify(assetPositionRepository).saveAll(captor.capture());
-        AssetPosition base = captor.getValue().stream()
-                .filter(position -> position.getNetworkId() == NetworkId.BASE)
-                .findFirst()
-                .orElseThrow();
-        AssetPosition arbitrum = captor.getValue().stream()
-                .filter(position -> position.getNetworkId() == NetworkId.ARBITRUM)
-                .findFirst()
-                .orElseThrow();
-
-        assertThat(base.getQuantity()).isZero();
-        assertThat(arbitrum.getQuantity()).isEqualByComparingTo("100");
-        assertThat(arbitrum.getPerWalletAvco()).isEqualByComparingTo("1");
+        AssetLedgerPoint destination = latestPoint(capturedLedgerPoints(), "wallet-a", NetworkId.ARBITRUM, "ETH", null);
+        assertThat(destination.getQuantityAfter()).isEqualByComparingTo("1");
+        assertThat(destination.getTotalCostBasisAfterUsd()).isEqualByComparingTo("100");
+        assertThat(destination.getAvcoAfterUsd()).isEqualByComparingTo("100");
+        assertThat(destination.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.CARRY_IN);
     }
 
     @Test
-    void familyEquivalentBridgePairCarriesBasisAcrossNetworksEvenWhenDestinationQuantityDiffers() {
-        NormalizedTransaction sourceBuy = tx("1", "0xbuy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
-                flow(NormalizedLegRole.BUY, "vbUSDC", "28.997378", "1", PriceSource.STABLECOIN));
-        sourceBuy.setNetworkId(NetworkId.KATANA);
-        sourceBuy.getFlows().getFirst().setAssetContract("0x203a662b0bd271a6ed5a60edfbd04bfce608fd36");
+    void liquidStakingConversionCarriesFullBasisIntoDerivativeWithoutRealizedPnl() {
+        NormalizedTransaction buy = tx("1", "0xbuy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flow(NormalizedLegRole.BUY, "ETH", "1", "1000", PriceSource.BINANCE));
+        buy.setWalletAddress("wallet-a");
 
-        NormalizedTransaction bridgeOut = tx("2", "0xbridge-out", 1, NormalizedTransactionType.BRIDGE_OUT,
-                flow(NormalizedLegRole.TRANSFER, "vbUSDC", "-28.997378", null, null));
-        bridgeOut.setNetworkId(NetworkId.KATANA);
-        bridgeOut.getFlows().getFirst().setAssetContract("0x203a662b0bd271a6ed5a60edfbd04bfce608fd36");
-        bridgeOut.setCorrelationId("bridge:lifi:0xbridge-out");
-        bridgeOut.setContinuityCandidate(true);
-        bridgeOut.setMatchedCounterparty("0xbridge-in");
-
-        NormalizedTransaction bridgeIn = tx("3", "0xbridge-in", 2, NormalizedTransactionType.BRIDGE_IN,
-                flow(NormalizedLegRole.TRANSFER, "USDC", "28.920966", null, null));
-        bridgeIn.setNetworkId(NetworkId.ARBITRUM);
-        bridgeIn.getFlows().getFirst().setAssetContract("0xaf88d065e77c8cc2239327c5edb3a432268e5831");
-        bridgeIn.setCorrelationId("bridge:lifi:0xbridge-out");
-        bridgeIn.setContinuityCandidate(true);
-        bridgeIn.setMatchedCounterparty("0xbridge-out");
+        NormalizedTransaction stake = tx(
+                "2",
+                "0xstake",
+                1,
+                NormalizedTransactionType.STAKING_DEPOSIT,
+                flow(NormalizedLegRole.TRANSFER, "ETH", "-1", null, null),
+                flow(NormalizedLegRole.TRANSFER, "METH", "0.95", null, null)
+        );
+        stake.setWalletAddress("wallet-a");
 
         when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
-        )).thenReturn(List.of(sourceBuy, bridgeOut, bridgeIn));
+        )).thenReturn(List.of(buy, stake));
 
-        AvcoReplayService service = service();
-        service.replayConfirmed();
+        service().replayConfirmed();
 
-        ArgumentCaptor<List<AssetPosition>> captor = ArgumentCaptor.forClass(List.class);
-        verify(assetPositionRepository).saveAll(captor.capture());
-        AssetPosition arbitrum = captor.getValue().stream()
-                .filter(position -> position.getNetworkId() == NetworkId.ARBITRUM)
-                .findFirst()
-                .orElseThrow();
-
-        assertThat(arbitrum.getQuantity()).isEqualByComparingTo("28.920966");
-        assertThat(arbitrum.getTotalCostBasisUsd()).isEqualByComparingTo("28.997378");
-        assertThat(arbitrum.getPerWalletAvco()).isEqualByComparingTo("1.002642097086245321127931895497543");
-    }
-
-    @Test
-    void inboundFirstFamilyEquivalentBridgeCarryAttachesBasisWithoutDuplicateQuantity() {
-        NormalizedTransaction sourceBuy = tx("1", "0xbuy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
-                flow(NormalizedLegRole.BUY, "vbUSDC", "28.997378", "1", PriceSource.STABLECOIN));
-        sourceBuy.setNetworkId(NetworkId.KATANA);
-        sourceBuy.getFlows().getFirst().setAssetContract("0x203a662b0bd271a6ed5a60edfbd04bfce608fd36");
-
-        NormalizedTransaction bridgeInFirst = tx("2a", "0xbridge-in", 1, NormalizedTransactionType.BRIDGE_IN,
-                flow(NormalizedLegRole.TRANSFER, "USDC", "28.920966", null, null));
-        bridgeInFirst.setNetworkId(NetworkId.ARBITRUM);
-        bridgeInFirst.getFlows().getFirst().setAssetContract("0xaf88d065e77c8cc2239327c5edb3a432268e5831");
-        bridgeInFirst.setCorrelationId("bridge:lifi:0xbridge-out");
-        bridgeInFirst.setContinuityCandidate(true);
-        bridgeInFirst.setMatchedCounterparty("0xbridge-out");
-
-        NormalizedTransaction bridgeOutLater = tx("2b", "0xbridge-out", 1, NormalizedTransactionType.BRIDGE_OUT,
-                flow(NormalizedLegRole.TRANSFER, "vbUSDC", "-28.997378", null, null));
-        bridgeOutLater.setNetworkId(NetworkId.KATANA);
-        bridgeOutLater.getFlows().getFirst().setAssetContract("0x203a662b0bd271a6ed5a60edfbd04bfce608fd36");
-        bridgeOutLater.setCorrelationId("bridge:lifi:0xbridge-out");
-        bridgeOutLater.setContinuityCandidate(true);
-        bridgeOutLater.setMatchedCounterparty("0xbridge-in");
-
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
-                NormalizedTransactionStatus.CONFIRMED
-        )).thenReturn(List.of(sourceBuy, bridgeInFirst, bridgeOutLater));
-
-        AvcoReplayService service = service();
-        service.replayConfirmed();
-
-        ArgumentCaptor<List<AssetPosition>> captor = ArgumentCaptor.forClass(List.class);
-        verify(assetPositionRepository).saveAll(captor.capture());
-        AssetPosition arbitrum = captor.getValue().stream()
-                .filter(position -> position.getNetworkId() == NetworkId.ARBITRUM)
-                .findFirst()
-                .orElseThrow();
-
-        assertThat(arbitrum.getQuantity()).isEqualByComparingTo("28.920966");
-        assertThat(arbitrum.getTotalCostBasisUsd()).isEqualByComparingTo("28.997378");
-        assertThat(arbitrum.getPerWalletAvco()).isEqualByComparingTo("1.002642097086245321127931895497543");
-        assertThat(arbitrum.getHasIncompleteHistory()).isFalse();
-    }
-
-    @Test
-    void lpPrincipalContinuityUsesBucketAndIgnoresReceiptMarkers() {
-        NormalizedTransaction sourceBuy = tx("1", "0xbuy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
-                flow(NormalizedLegRole.BUY, "USDC", "100", "1", PriceSource.STABLECOIN));
-        NormalizedTransaction lpEntry = tx("2", "0xlp-entry", 1, NormalizedTransactionType.LP_ENTRY,
-                flow(NormalizedLegRole.TRANSFER, "USDC", "-100", null, null),
-                flow(NormalizedLegRole.TRANSFER, "BPT", "10", null, null));
-        NormalizedTransaction lpExit = tx("3", "0xlp-exit", 2, NormalizedTransactionType.LP_EXIT,
-                flow(NormalizedLegRole.TRANSFER, "BPT", "-10", null, null),
-                flow(NormalizedLegRole.TRANSFER, "USDC", "100", null, null));
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
-                NormalizedTransactionStatus.CONFIRMED
-        )).thenReturn(List.of(sourceBuy, lpEntry, lpExit));
-
-        AvcoReplayService service = service();
-        service.replayConfirmed();
-
-        ArgumentCaptor<List<AssetPosition>> captor = ArgumentCaptor.forClass(List.class);
-        verify(assetPositionRepository).saveAll(captor.capture());
-        assertThat(captor.getValue()).singleElement().satisfies(position -> {
-            assertThat(position.getAssetSymbol()).isEqualTo("USDC");
-            assertThat(position.getQuantity()).isEqualByComparingTo("100");
-            assertThat(position.getPerWalletAvco()).isEqualByComparingTo("1");
-            assertThat(position.getHasIncompleteHistory()).isFalse();
-        });
-    }
-
-    @Test
-    void lpExitBundleRestoresPrincipalAndKeepsRewardAsEconomicBuy() {
-        NormalizedTransaction sourceBuy = tx("1", "0xbuy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
-                flow(NormalizedLegRole.BUY, "cmETH", "1", "100", PriceSource.BINANCE));
-        NormalizedTransaction lpEntry = tx("2", "0xlp-entry", 1, NormalizedTransactionType.LP_ENTRY,
-                flow(NormalizedLegRole.TRANSFER, "cmETH", "-1", null, null));
-        NormalizedTransaction lpExitBundle = tx("3", "0xlp-exit-bundle", 2, NormalizedTransactionType.LP_EXIT,
-                flow(NormalizedLegRole.TRANSFER, "cmETH", "1", null, null),
-                flow(NormalizedLegRole.BUY, "PENDLE", "0.1", "5", PriceSource.BINANCE));
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
-                NormalizedTransactionStatus.CONFIRMED
-        )).thenReturn(List.of(sourceBuy, lpEntry, lpExitBundle));
-
-        AvcoReplayService service = service();
-        service.replayConfirmed();
-
-        ArgumentCaptor<List<AssetPosition>> captor = ArgumentCaptor.forClass(List.class);
-        verify(assetPositionRepository).saveAll(captor.capture());
-        assertThat(captor.getValue()).anySatisfy(position -> {
-            if ("cmETH".equals(position.getAssetSymbol())) {
-                assertThat(position.getQuantity()).isEqualByComparingTo("1");
-                assertThat(position.getPerWalletAvco()).isEqualByComparingTo("100");
-            }
-        }).anySatisfy(position -> {
-            if ("PENDLE".equals(position.getAssetSymbol())) {
-                assertThat(position.getQuantity()).isEqualByComparingTo("0.1");
-                assertThat(position.getPerWalletAvco()).isEqualByComparingTo("5");
-            }
-        });
-    }
-
-    @Test
-    void classicStakingContinuityMovesPrincipalIntoBucketAndKeepsRewardEconomic() {
-        NormalizedTransaction sourceBuy = tx("1", "0xbuy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
-                flow(NormalizedLegRole.BUY, "CAKE", "10", "2", PriceSource.BINANCE));
-        NormalizedTransaction stakingDeposit = tx("2", "0xstake", 1, NormalizedTransactionType.STAKING_DEPOSIT,
-                flow(NormalizedLegRole.TRANSFER, "CAKE", "-5", null, null),
-                flow(NormalizedLegRole.BUY, "U", "1", "3", PriceSource.BINANCE));
-        NormalizedTransaction stakingWithdraw = tx("3", "0xunstake", 2, NormalizedTransactionType.STAKING_WITHDRAW,
-                flow(NormalizedLegRole.TRANSFER, "CAKE", "5", null, null),
-                flow(NormalizedLegRole.BUY, "U", "0.5", "4", PriceSource.BINANCE));
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
-                NormalizedTransactionStatus.CONFIRMED
-        )).thenReturn(List.of(sourceBuy, stakingDeposit, stakingWithdraw));
-
-        AvcoReplayService service = service();
-        service.replayConfirmed();
-
-        ArgumentCaptor<List<AssetPosition>> captor = ArgumentCaptor.forClass(List.class);
-        verify(assetPositionRepository).saveAll(captor.capture());
-        assertThat(captor.getValue()).anySatisfy(position -> {
-            if ("CAKE".equals(position.getAssetSymbol())) {
-                assertThat(position.getQuantity()).isEqualByComparingTo("10");
-                assertThat(position.getPerWalletAvco()).isEqualByComparingTo("2");
-                assertThat(position.getHasIncompleteHistory()).isFalse();
-            }
-        }).anySatisfy(position -> {
-            if ("U".equals(position.getAssetSymbol())) {
-                assertThat(position.getQuantity()).isEqualByComparingTo("1.5");
-                assertThat(position.getPerWalletAvco()).isEqualByComparingTo("3.333333333333333333333333333333333");
-            }
-        });
-    }
-
-    @Test
-    void asyncLpRequestSettlementCarriesBasisAcrossCorrelationId() {
-        NormalizedTransaction sourceBuy = tx("1", "0xbuy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
-                flow(NormalizedLegRole.BUY, "USDC", "100", "1", PriceSource.STABLECOIN));
-        NormalizedTransaction request = tx("2", "0xgmx-request", 1, NormalizedTransactionType.LP_ENTRY_REQUEST,
-                flow(NormalizedLegRole.TRANSFER, "USDC", "-100", null, null));
-        request.setCorrelationId("gmx-deposit:1");
-        request.setProtocolName("GMX");
-        NormalizedTransaction settlement = tx("3", "0xgmx-settlement", 2, NormalizedTransactionType.LP_ENTRY_SETTLEMENT,
-                flow(NormalizedLegRole.TRANSFER, "GM", "10", null, null));
-        settlement.setCorrelationId("gmx-deposit:1");
-        settlement.setProtocolName("GMX");
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
-                NormalizedTransactionStatus.CONFIRMED
-        )).thenReturn(List.of(sourceBuy, request, settlement));
-
-        AvcoReplayService service = service();
-        service.replayConfirmed();
-
-        ArgumentCaptor<List<AssetPosition>> captor = ArgumentCaptor.forClass(List.class);
-        verify(assetPositionRepository).saveAll(captor.capture());
-        assertThat(captor.getValue()).anySatisfy(position -> {
-            if ("GM".equals(position.getAssetSymbol())) {
-                assertThat(position.getQuantity()).isEqualByComparingTo("10");
-                assertThat(position.getPerWalletAvco()).isEqualByComparingTo("10");
-                assertThat(position.getHasIncompleteHistory()).isFalse();
-            }
-        }).anySatisfy(position -> {
-            if ("USDC".equals(position.getAssetSymbol())) {
-                assertThat(position.getQuantity()).isZero();
-            }
-        });
-    }
-
-    @Test
-    void asyncLpExitSettlementRestoresRefundCarryBeforeAllocatingShareBasis() {
-        NormalizedTransaction shareBuy = tx("1", "0xshare-buy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
-                flow(NormalizedLegRole.BUY, "GLV", "10", "10", PriceSource.BINANCE));
-        NormalizedTransaction ethBuy = tx("2", "0xeth-buy", 1, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
-                flow(NormalizedLegRole.BUY, "ETH", "0.01", "2000", PriceSource.BINANCE));
-        NormalizedTransaction request = tx("3", "0xgmx-exit-request", 2, NormalizedTransactionType.LP_EXIT_REQUEST,
-                flow(NormalizedLegRole.TRANSFER, "GLV", "-10", null, null),
-                flow(NormalizedLegRole.TRANSFER, "ETH", "-0.001", null, null));
-        request.setCorrelationId("gmx-withdrawal:1");
-        request.setProtocolName("GMX");
-        NormalizedTransaction settlement = tx("4", "0xgmx-exit-settlement", 3, NormalizedTransactionType.LP_EXIT_SETTLEMENT,
-                flow(NormalizedLegRole.TRANSFER, "WETH", "0.03", null, null),
-                flow(NormalizedLegRole.TRANSFER, "ETH", "0.001", null, null));
-        settlement.setCorrelationId("gmx-withdrawal:1");
-        settlement.setProtocolName("GMX");
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
-                NormalizedTransactionStatus.CONFIRMED
-        )).thenReturn(List.of(shareBuy, ethBuy, request, settlement));
-
-        AvcoReplayService service = service();
-        service.replayConfirmed();
-
-        ArgumentCaptor<List<AssetPosition>> captor = ArgumentCaptor.forClass(List.class);
-        verify(assetPositionRepository).saveAll(captor.capture());
-        assertThat(captor.getValue()).anySatisfy(position -> {
-            if ("ETH".equals(position.getAssetSymbol())) {
-                assertThat(position.getQuantity()).isEqualByComparingTo("0.01");
-                assertThat(position.getPerWalletAvco()).isEqualByComparingTo("2000");
-            }
-        }).anySatisfy(position -> {
-            if ("WETH".equals(position.getAssetSymbol())) {
-                assertThat(position.getQuantity()).isEqualByComparingTo("0.03");
-                assertThat(position.getPerWalletAvco()).isEqualByComparingTo("3333.333333333333333333333333333333");
-                assertThat(position.getHasIncompleteHistory()).isFalse();
-            }
-        }).anySatisfy(position -> {
-            if ("GLV".equals(position.getAssetSymbol())) {
-                assertThat(position.getQuantity()).isZero();
-            }
-        });
-    }
-
-    @Test
-    void asyncDexOrderRequestSettlementRealisesSourcePnlAndSeedsDestinationBasis() {
-        NormalizedTransaction sourceBuy = tx("1", "0xbuy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
-                flow(NormalizedLegRole.BUY, "ETH", "1", "2000", PriceSource.BINANCE));
-        NormalizedTransaction request = tx("2", "0xcow-request", 1, NormalizedTransactionType.DEX_ORDER_REQUEST,
-                flow(NormalizedLegRole.SELL, "ETH", "-0.5", null, null));
-        request.setCorrelationId("cow-order:1");
-        request.setProtocolName("CoW Swap");
-        NormalizedTransaction settlement = tx("3", "0xcow-settlement", 2, NormalizedTransactionType.DEX_ORDER_SETTLEMENT,
-                flow(NormalizedLegRole.BUY, "wstETH", "0.4", "3000", PriceSource.BINANCE));
-        settlement.setCorrelationId("cow-order:1");
-        settlement.setProtocolName("CoW Swap");
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
-                NormalizedTransactionStatus.CONFIRMED
-        )).thenReturn(List.of(sourceBuy, request, settlement));
-
-        AvcoReplayService service = service();
-        service.replayConfirmed();
+        List<AssetLedgerPoint> points = capturedLedgerPoints();
+        AssetLedgerPoint eth = latestPoint(points, "wallet-a", NetworkId.BASE, "ETH", null);
+        AssetLedgerPoint meth = latestPoint(points, "wallet-a", NetworkId.BASE, "METH", null);
+        assertThat(eth.getQuantityAfter()).isZero();
+        assertThat(eth.getTotalCostBasisAfterUsd()).isZero();
+        assertThat(eth.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.REALLOCATE_OUT);
+        assertThat(meth.getQuantityAfter()).isEqualByComparingTo("0.95");
+        assertThat(meth.getBasisBackedQuantityAfter()).isEqualByComparingTo("0.95");
+        assertThat(meth.getUncoveredQuantityAfter()).isZero();
+        assertThat(meth.getTotalCostBasisAfterUsd()).isEqualByComparingTo("1000");
+        assertThat(meth.getAvcoAfterUsd()).isEqualByComparingTo("1052.631578947368421052631578947368");
+        assertThat(meth.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.REALLOCATE_IN);
 
         ArgumentCaptor<List<NormalizedTransaction>> txCaptor = ArgumentCaptor.forClass(List.class);
         verify(normalizedTransactionRepository).saveAll(txCaptor.capture());
-        NormalizedTransaction replayedRequest = txCaptor.getValue().stream()
+        NormalizedTransaction replayedStake = txCaptor.getValue().stream()
                 .filter(tx -> "2".equals(tx.getId()))
                 .findFirst()
                 .orElseThrow();
-        assertThat(replayedRequest.getFlows().getFirst().getAvcoAtTimeOfSale()).isEqualByComparingTo("2000");
-        assertThat(replayedRequest.getFlows().getFirst().getRealisedPnlUsd()).isEqualByComparingTo("200");
-
-        ArgumentCaptor<List<AssetPosition>> captor = ArgumentCaptor.forClass(List.class);
-        verify(assetPositionRepository).saveAll(captor.capture());
-        assertThat(captor.getValue()).anySatisfy(position -> {
-            if ("ETH".equals(position.getAssetSymbol())) {
-                assertThat(position.getQuantity()).isEqualByComparingTo("0.5");
-                assertThat(position.getPerWalletAvco()).isEqualByComparingTo("2000");
-            }
-        }).anySatisfy(position -> {
-            if ("wstETH".equals(position.getAssetSymbol())) {
-                assertThat(position.getQuantity()).isEqualByComparingTo("0.4");
-                assertThat(position.getPerWalletAvco()).isEqualByComparingTo("3000");
-                assertThat(position.getHasIncompleteHistory()).isFalse();
-            }
-        });
-    }
-
-    @Test
-    void resolvAsyncWithdrawCarriesBasisFromStakedReceiptIntoUnderlyingSettlement() {
-        NormalizedTransaction stakedBuy = tx("1", "0xstake-buy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
-                flow(NormalizedLegRole.BUY, "stRESOLV", "30", "2", PriceSource.BINANCE));
-        NormalizedTransaction request = tx("2", "0xunstake-request", 1, NormalizedTransactionType.STAKING_WITHDRAW_REQUEST,
-                flow(NormalizedLegRole.TRANSFER, "stRESOLV", "-30", null, null));
-        request.setCorrelationId("resolv-unstake:0xwallet:30");
-        request.setProtocolName("Resolv");
-        NormalizedTransaction settlement = tx("3", "0xunstake-claim", 2, NormalizedTransactionType.STAKING_WITHDRAW,
-                flow(NormalizedLegRole.TRANSFER, "RESOLV", "30", null, null));
-        settlement.setCorrelationId("resolv-unstake:0xwallet:30");
-        settlement.setProtocolName("Resolv");
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
-                NormalizedTransactionStatus.CONFIRMED
-        )).thenReturn(List.of(stakedBuy, request, settlement));
-
-        AvcoReplayService service = service();
-        service.replayConfirmed();
-
-        ArgumentCaptor<List<AssetPosition>> captor = ArgumentCaptor.forClass(List.class);
-        verify(assetPositionRepository).saveAll(captor.capture());
-        assertThat(captor.getValue()).anySatisfy(position -> {
-            if ("RESOLV".equals(position.getAssetSymbol())) {
-                assertThat(position.getQuantity()).isEqualByComparingTo("30");
-                assertThat(position.getPerWalletAvco()).isEqualByComparingTo("2");
-                assertThat(position.getHasIncompleteHistory()).isFalse();
-            }
-        }).anySatisfy(position -> {
-            if ("stRESOLV".equals(position.getAssetSymbol())) {
-                assertThat(position.getQuantity()).isZero();
-            }
-        });
-    }
-
-    @Test
-    void eulerLoopShareFlowsReplayDeterministicallyWithoutCustomCarry() {
-        NormalizedTransaction open = tx("1", "0xeuler-open", 0, NormalizedTransactionType.LENDING_LOOP_OPEN,
-                flow(NormalizedLegRole.BUY, "eUSDC-2", "100", "1.02", PriceSource.SWAP_DERIVED));
-        NormalizedTransaction decrease = tx("2", "0xeuler-decrease", 1, NormalizedTransactionType.LENDING_LOOP_DECREASE,
-                flow(NormalizedLegRole.SELL, "eUSDC-2", "-40", "1.05", PriceSource.SWAP_DERIVED),
-                flow(NormalizedLegRole.BUY, "USDC", "42", "1", PriceSource.STABLECOIN));
-        NormalizedTransaction close = tx("3", "0xeuler-close", 2, NormalizedTransactionType.LENDING_LOOP_CLOSE,
-                flow(NormalizedLegRole.SELL, "eUSDC-2", "-60", "1.10", PriceSource.SWAP_DERIVED),
-                flow(NormalizedLegRole.BUY, "USDC", "66", "1", PriceSource.STABLECOIN));
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
-                NormalizedTransactionStatus.CONFIRMED
-        )).thenReturn(List.of(open, decrease, close));
-
-        AvcoReplayService service = service();
-        service.replayConfirmed();
-
-        ArgumentCaptor<List<AssetPosition>> captor = ArgumentCaptor.forClass(List.class);
-        verify(assetPositionRepository).saveAll(captor.capture());
-        assertThat(captor.getValue()).anySatisfy(position -> {
-            if ("eUSDC-2".equals(position.getAssetSymbol())) {
-                assertThat(position.getQuantity()).isZero();
-                assertThat(position.getTotalRealisedPnlUsd()).isEqualByComparingTo("6.00");
-            }
-        }).anySatisfy(position -> {
-            if ("USDC".equals(position.getAssetSymbol())) {
-                assertThat(position.getQuantity()).isEqualByComparingTo("108");
-                assertThat(position.getPerWalletAvco()).isEqualByComparingTo("1");
-                assertThat(position.getHasIncompleteHistory()).isFalse();
-            }
-        });
-    }
-
-    @Test
-    void eulerLoopRebalanceCarriesBasisIntoReplacementShareWithoutRealisedPnl() {
-        NormalizedTransaction open = tx("1", "0xeuler-open", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
-                flow(NormalizedLegRole.BUY, "eUSDC-2", "100", "1.02", PriceSource.BINANCE));
-        NormalizedTransaction rebalance = tx("2", "0xeuler-rebalance", 1, NormalizedTransactionType.LENDING_LOOP_REBALANCE,
-                flow(NormalizedLegRole.TRANSFER, "eUSDC-2", "-100", null, null),
-                flow(NormalizedLegRole.TRANSFER, "edeUSD-1", "2", null, null));
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
-                NormalizedTransactionStatus.CONFIRMED
-        )).thenReturn(List.of(open, rebalance));
-
-        AvcoReplayService service = service();
-        service.replayConfirmed();
-
-        ArgumentCaptor<List<AssetPosition>> captor = ArgumentCaptor.forClass(List.class);
-        verify(assetPositionRepository).saveAll(captor.capture());
-        assertThat(captor.getValue()).anySatisfy(position -> {
-            if ("eUSDC-2".equals(position.getAssetSymbol())) {
-                assertThat(position.getQuantity()).isZero();
-                assertThat(position.getTotalRealisedPnlUsd()).isZero();
-            }
-        }).anySatisfy(position -> {
-            if ("edeUSD-1".equals(position.getAssetSymbol())) {
-                assertThat(position.getQuantity()).isEqualByComparingTo("2");
-                assertThat(position.getPerWalletAvco()).isEqualByComparingTo("51");
-                assertThat(position.getHasIncompleteHistory()).isFalse();
-            }
-        });
-    }
-
-    @Test
-    void eulerLoopRebalanceRestoresDustToSourceAssetBeforeMovingRemainingBasis() {
-        NormalizedTransaction open = tx("1", "0xeuler-open", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
-                flow(NormalizedLegRole.BUY, "edeUSD-1", "2", "50", PriceSource.BINANCE));
-        NormalizedTransaction rebalance = tx("2", "0xeuler-rebalance", 1, NormalizedTransactionType.LENDING_LOOP_REBALANCE,
-                flow(NormalizedLegRole.TRANSFER, "edeUSD-1", "-2", null, null),
-                flow(NormalizedLegRole.TRANSFER, "edeUSD-1", "0.1", null, null),
-                flow(NormalizedLegRole.TRANSFER, "eUSDC-2", "1", null, null));
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
-                NormalizedTransactionStatus.CONFIRMED
-        )).thenReturn(List.of(open, rebalance));
-
-        AvcoReplayService service = service();
-        service.replayConfirmed();
-
-        ArgumentCaptor<List<AssetPosition>> captor = ArgumentCaptor.forClass(List.class);
-        verify(assetPositionRepository).saveAll(captor.capture());
-        assertThat(captor.getValue()).anySatisfy(position -> {
-            if ("edeUSD-1".equals(position.getAssetSymbol())) {
-                assertThat(position.getQuantity()).isEqualByComparingTo("0.1");
-                assertThat(position.getPerWalletAvco()).isEqualByComparingTo("50");
-            }
-        }).anySatisfy(position -> {
-            if ("eUSDC-2".equals(position.getAssetSymbol())) {
-                assertThat(position.getQuantity()).isEqualByComparingTo("1");
-                assertThat(position.getPerWalletAvco()).isEqualByComparingTo("95");
-                assertThat(position.getHasIncompleteHistory()).isFalse();
-            }
-        });
-    }
-
-    @Test
-    void feeHandlingReducesFeeAssetAndTracksGasUsd() {
-        NormalizedTransaction feeTx = tx("fee", "0xfee", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
-                flow(NormalizedLegRole.BUY, "ETH", "1", "100", PriceSource.BINANCE),
-                flow(NormalizedLegRole.FEE, "ETH", "-0.1", "100", PriceSource.BINANCE));
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
-                NormalizedTransactionStatus.CONFIRMED
-        )).thenReturn(List.of(feeTx));
-
-        AvcoReplayService service = service();
-        service.replayConfirmed();
-
-        ArgumentCaptor<List<AssetPosition>> captor = ArgumentCaptor.forClass(List.class);
-        verify(assetPositionRepository).saveAll(captor.capture());
-        AssetPosition position = captor.getValue().get(0);
-        assertThat(position.getQuantity()).isEqualByComparingTo("0.9");
-        assertThat(position.getTotalGasPaidUsd()).isEqualByComparingTo("10");
+        assertThat(replayedStake.getFlows())
+                .allSatisfy(flow -> {
+                    assertThat(flow.getAvcoAtTimeOfSale()).isNull();
+                    assertThat(flow.getRealisedPnlUsd()).isNull();
+                });
     }
 
     @Test
@@ -907,22 +318,56 @@ class AvcoReplayServiceTest {
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(List.of(unknownBuy));
 
-        AvcoReplayService service = service();
-        service.replayConfirmed();
+        service().replayConfirmed();
 
-        ArgumentCaptor<List<AssetPosition>> captor = ArgumentCaptor.forClass(List.class);
-        verify(assetPositionRepository).saveAll(captor.capture());
-        AssetPosition position = captor.getValue().get(0);
-        assertThat(position.getQuantity()).isEqualByComparingTo("10");
-        assertThat(position.getHasIncompleteHistory()).isTrue();
-        assertThat(position.getReconciliationStatus()).isEqualTo(ReconciliationStatus.NOT_APPLICABLE);
+        AssetLedgerPoint point = latestPoint(capturedLedgerPoints(), "0xwallet", NetworkId.BASE, "TOKEN", null);
+        assertThat(point.getQuantityAfter()).isEqualByComparingTo("10");
+        assertThat(point.getHasIncompleteHistoryAfter()).isTrue();
+        assertThat(point.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.ACQUIRE);
+    }
+
+    private List<AssetLedgerPoint> capturedLedgerPoints() {
+        ArgumentCaptor<List<AssetLedgerPoint>> captor = ArgumentCaptor.forClass(List.class);
+        verify(assetLedgerPointRepository).saveAll(captor.capture());
+        return captor.getValue();
+    }
+
+    private AssetLedgerPoint latestPoint(
+            List<AssetLedgerPoint> points,
+            String walletAddress,
+            NetworkId networkId,
+            String assetSymbol,
+            String assetContract
+    ) {
+        return latestPointsByBucket(points).values().stream()
+                .filter(point -> walletAddress.equals(point.getWalletAddress()))
+                .filter(point -> networkId == point.getNetworkId())
+                .filter(point -> assetSymbol.equals(point.getAssetSymbol()))
+                .filter(point -> assetContract == null
+                        || assetContract.equals(point.getAssetContract()))
+                .findFirst()
+                .orElseThrow();
+    }
+
+    private Map<String, AssetLedgerPoint> latestPointsByBucket(List<AssetLedgerPoint> points) {
+        Map<String, AssetLedgerPoint> latest = new LinkedHashMap<>();
+        for (AssetLedgerPoint point : points.stream()
+                .sorted(Comparator.comparing(AssetLedgerPoint::getReplaySequence))
+                .toList()) {
+            latest.put(point.getWalletAddress()
+                    + "|"
+                    + point.getNetworkId()
+                    + "|"
+                    + point.getAccountingAssetIdentity(), point);
+        }
+        return latest;
     }
 
     private AvcoReplayService service() {
         return new AvcoReplayService(
                 new ConfirmedReplayQueryService(normalizedTransactionRepository),
                 normalizedTransactionRepository,
-                assetPositionRepository
+                assetLedgerPointRepository
         );
     }
 
@@ -944,27 +389,23 @@ class AvcoReplayServiceTest {
         transaction.setBlockTimestamp(Instant.parse("2026-03-25T10:00:00Z"));
         transaction.setTransactionIndex(txIndex);
         transaction.setFlows(List.of(flows));
-        transaction.setMissingDataReasons(List.of());
         return transaction;
     }
 
     private NormalizedTransaction.Flow flow(
             NormalizedLegRole role,
             String symbol,
-            String quantity,
+            String quantityDelta,
             String unitPriceUsd,
             PriceSource priceSource
     ) {
         NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
         flow.setRole(role);
         flow.setAssetSymbol(symbol);
-        flow.setQuantityDelta(new BigDecimal(quantity));
-        if (unitPriceUsd != null) {
-            flow.setUnitPriceUsd(new BigDecimal(unitPriceUsd));
-            flow.setValueUsd(flow.getQuantityDelta().abs().multiply(new BigDecimal(unitPriceUsd)));
-        }
+        flow.setAssetContract(null);
+        flow.setQuantityDelta(new BigDecimal(quantityDelta));
+        flow.setUnitPriceUsd(unitPriceUsd == null ? null : new BigDecimal(unitPriceUsd));
         flow.setPriceSource(priceSource);
         return flow;
     }
-
 }

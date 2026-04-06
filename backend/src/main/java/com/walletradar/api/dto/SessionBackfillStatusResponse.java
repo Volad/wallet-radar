@@ -14,8 +14,18 @@ public record SessionBackfillStatusResponse(
         String pipelineStage,
         String pipelineStatus,
         String pipelineMessage,
+        PhaseProgress phaseProgress,
         List<SessionWalletBackfillStatus> wallets
 ) {
+    public record PhaseProgress(
+            String phase,
+            Integer progressPct,
+            Long processedCount,
+            Long leftCount,
+            Long totalCount
+    ) {
+    }
+
     public record SessionWalletBackfillStatus(
             String address,
             String label,

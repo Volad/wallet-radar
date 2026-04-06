@@ -28,9 +28,12 @@ settlement families.
 ## Flow Rules
 
 - classic stake custody keeps principal as continuity `TRANSFER`
+- liquid staking principal conversions keep both base-asset and derivative
+  principal legs as continuity `TRANSFER` when current raw proves the same
+  audited base-asset family
 - explicit reward side-flows may remain economic
-- liquid staking may still be economic where the approved accounting contract
-  says so
+- do not realize disposal-style `SELL` / `BUY` on audited liquid staking
+  conversions by default
 
 ## Correlation Rules
 

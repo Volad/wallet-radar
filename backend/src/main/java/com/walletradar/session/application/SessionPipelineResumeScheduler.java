@@ -121,7 +121,7 @@ public class SessionPipelineResumeScheduler {
         if (pendingStat || replayBootstrapRequired) {
             return new ResumeAction(
                     UserSession.PipelineStage.ACCOUNTING_REPLAY,
-                    "pending-stat-or-empty-positions",
+                    "pending-stat-or-empty-ledger",
                     new PricingCompletedEvent(session.getId(), 0, "resume-watchdog")
             );
         }
@@ -226,7 +226,7 @@ public class SessionPipelineResumeScheduler {
         if (!mongoOperations.exists(confirmedQuery, NormalizedTransaction.class)) {
             return false;
         }
-        return !mongoOperations.exists(new Query(), "asset_positions");
+        return !hasAssetLedgerRows(addresses);
     }
 
     private boolean hasNormalizedRows(List<String> addresses) {
@@ -272,9 +272,19 @@ public class SessionPipelineResumeScheduler {
                 || replayBootstrapRequired) {
             return false;
         }
-        return mongoOperations.exists(new Query(), "asset_positions")
-                && mongoOperations.exists(new Query(), "on_chain_balances")
-                && mongoOperations.exists(new Query(), "reconciled_holdings");
+        List<String> addresses = trackedAddresses(session);
+        return hasAssetLedgerRows(addresses)
+                && hasOnChainBalanceRows(addresses);
+    }
+
+    private boolean hasAssetLedgerRows(List<String> addresses) {
+        Query query = new Query(Criteria.where("walletAddress").in(addresses));
+        return mongoOperations.exists(query, "asset_ledger_points");
+    }
+
+    private boolean hasOnChainBalanceRows(List<String> addresses) {
+        Query query = new Query(Criteria.where("walletAddress").in(addresses));
+        return mongoOperations.exists(query, "on_chain_balances");
     }
 
     private List<String> trackedAddresses(UserSession session) {

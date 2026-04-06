@@ -283,6 +283,28 @@ class PriceResolutionServiceTest {
     }
 
     @Test
+    void bybitEthSoldIntoStablecoinDoesNotExplodeViaSwapDerived() {
+        PriceResolutionService service = service();
+        NormalizedTransaction transaction = transaction(
+                NormalizedTransactionSource.BYBIT,
+                NormalizedTransactionType.SWAP,
+                null,
+                flowWithPrice(NormalizedLegRole.BUY, null, "USDT", "42.9606579", "1", PriceSource.STABLECOIN),
+                flowWithPrice(NormalizedLegRole.SELL, null, "ETH", "-0.01299", "3307.21", PriceSource.EXECUTION),
+                flowWithPrice(NormalizedLegRole.FEE, null, "USDT", "-0.0429606579", "1", PriceSource.STABLECOIN)
+        );
+
+        NormalizedTransaction priced = service.resolve(transaction, Instant.parse("2026-03-25T12:00:00Z"));
+
+        assertThat(priced.getFlows().get(0).getUnitPriceUsd()).isEqualByComparingTo("1");
+        assertThat(priced.getFlows().get(0).getValueUsd()).isEqualByComparingTo("42.9606579");
+        assertThat(priced.getFlows().get(1).getUnitPriceUsd()).isEqualByComparingTo("3307.21");
+        assertThat(priced.getFlows().get(1).getValueUsd()).isEqualByComparingTo("42.9606579");
+        assertThat(priced.getFlows().get(2).getUnitPriceUsd()).isEqualByComparingTo("1");
+        verify(externalSources, never()).resolve(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
     void matchedBybitTransferPricesOnlyFeeAndPreservesPrincipalContinuity() {
         PriceResolutionService service = service();
         NormalizedTransaction transaction = transaction(

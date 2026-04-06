@@ -301,7 +301,7 @@ walletradar:
         forward-block-window: 750000
         max-pages: 3
 
-  zbasis:
+  costbasis:
     enabled: true
     validation-batch-size: 250
     schedule-interval-ms: 120000

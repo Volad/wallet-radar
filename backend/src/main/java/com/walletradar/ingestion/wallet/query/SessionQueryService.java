@@ -5,7 +5,13 @@ import com.walletradar.domain.session.UserSession;
 import com.walletradar.domain.session.UserSessionRepository;
 import com.walletradar.domain.sync.SyncStatus;
 import com.walletradar.domain.sync.SyncStatusRepository;
+import com.walletradar.domain.transaction.externalledger.ExternalLedgerRaw;
+import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.session.application.AccountingUniverseService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.mongodb.core.MongoOperations;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -24,8 +30,15 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class SessionQueryService {
 
+    private static final Criteria ACTIVE_ACCOUNTING_CRITERIA = new Criteria().orOperator(
+            Criteria.where("excludedFromAccounting").exists(false),
+            Criteria.where("excludedFromAccounting").is(Boolean.FALSE)
+    );
+
     private final UserSessionRepository userSessionRepository;
     private final SyncStatusRepository syncStatusRepository;
+    private final AccountingUniverseService accountingUniverseService;
+    private final MongoOperations mongoOperations;
 
     public Optional<SessionView> findSession(String sessionId) {
         if (sessionId == null || sessionId.isBlank()) {
@@ -119,8 +132,53 @@ public class SessionQueryService {
                 session.getPipelineState() == null
                         ? null
                         : session.getPipelineState().getMessage(),
+                phaseProgress(session, totalTargets, completedTargets, overallProgress),
                 walletStatuses
         );
+    }
+
+    private PhaseProgressView phaseProgress(
+            UserSession session,
+            long totalTargets,
+            long completedTargets,
+            int overallProgress
+    ) {
+        String stage = session.getPipelineState() == null || session.getPipelineState().getStage() == null
+                ? UserSession.PipelineStage.BACKFILL.name()
+                : session.getPipelineState().getStage().name();
+        AccountingUniverseService.AccountingUniverseScope scope = accountingUniverseService.resolveScope(session);
+        List<String> onChainWalletRefs = scope.onChainWalletRefs();
+        List<String> memberRefs = scope.memberRefs();
+
+        return switch (stage) {
+            case "ON_CHAIN_NORMALIZATION" -> progressFromCounts(
+                    stage,
+                    countRawTransactions(onChainWalletRefs),
+                    countRawTransactions(onChainWalletRefs, "COMPLETE")
+            );
+            case "ON_CHAIN_CLARIFICATION" -> progressFromCounts(
+                    stage,
+                    countOnChainClarificationTotal(onChainWalletRefs),
+                    countOnChainClarificationProcessed(onChainWalletRefs)
+            );
+            case "BYBIT_NORMALIZATION" -> progressFromCounts(
+                    stage,
+                    countExternalLedgerRows(session.getId()),
+                    countExternalLedgerRows(session.getId(), "CONFIRMED")
+            );
+            case "PRICING" -> progressFromCounts(
+                    stage,
+                    countPricingTotal(memberRefs),
+                    countPricingProcessed(memberRefs)
+            );
+            case "ACCOUNTING_REPLAY" -> progressFromCounts(
+                    stage,
+                    countReplayTotal(memberRefs),
+                    countReplayProcessed(memberRefs)
+            );
+            case "BACKFILL" -> progressFromCounts(stage, totalTargets, completedTargets, overallProgress);
+            default -> progressFromCounts(stage, totalTargets, completedTargets, overallProgress);
+        };
     }
 
     private Map<String, SyncStatus> indexSyncStatuses(List<String> addresses) {
@@ -183,6 +241,128 @@ public class SessionQueryService {
         return Math.max(0, Math.min(100, progressPct));
     }
 
+    private PhaseProgressView progressFromCounts(String phase, long totalCount, long processedCount) {
+        long normalizedProcessed = Math.max(0, Math.min(processedCount, totalCount));
+        long leftCount = Math.max(0, totalCount - normalizedProcessed);
+        int progressPct = totalCount == 0 ? 100 : clampProgress((int) Math.round((double) normalizedProcessed * 100.0 / totalCount));
+        return new PhaseProgressView(phase, progressPct, normalizedProcessed, leftCount, totalCount);
+    }
+
+    private PhaseProgressView progressFromCounts(String phase, long totalCount, long processedCount, int fallbackPct) {
+        long normalizedProcessed = Math.max(0, Math.min(processedCount, totalCount));
+        long leftCount = Math.max(0, totalCount - normalizedProcessed);
+        int progressPct = totalCount == 0 ? clampProgress(fallbackPct) : clampProgress((int) Math.round((double) normalizedProcessed * 100.0 / totalCount));
+        return new PhaseProgressView(phase, progressPct, normalizedProcessed, leftCount, totalCount);
+    }
+
+    private long countRawTransactions(List<String> walletAddresses) {
+        if (walletAddresses.isEmpty()) {
+            return 0;
+        }
+        Query query = Query.query(Criteria.where("walletAddress").in(walletAddresses));
+        return mongoOperations.count(query, "raw_transactions");
+    }
+
+    private long countRawTransactions(List<String> walletAddresses, String normalizationStatus) {
+        if (walletAddresses.isEmpty()) {
+            return 0;
+        }
+        Query query = Query.query(new Criteria().andOperator(
+                Criteria.where("walletAddress").in(walletAddresses),
+                Criteria.where("normalizationStatus").is(normalizationStatus)
+        ));
+        return mongoOperations.count(query, "raw_transactions");
+    }
+
+    private long countOnChainClarificationTotal(List<String> walletAddresses) {
+        if (walletAddresses.isEmpty()) {
+            return 0;
+        }
+        Query query = Query.query(new Criteria().andOperator(
+                Criteria.where("walletAddress").in(walletAddresses),
+                Criteria.where("source").is("ON_CHAIN")
+        ));
+        return mongoOperations.count(query, NormalizedTransaction.class);
+    }
+
+    private long countOnChainClarificationProcessed(List<String> walletAddresses) {
+        if (walletAddresses.isEmpty()) {
+            return 0;
+        }
+        Query query = Query.query(new Criteria().andOperator(
+                Criteria.where("walletAddress").in(walletAddresses),
+                Criteria.where("source").is("ON_CHAIN"),
+                Criteria.where("status").ne("PENDING_CLARIFICATION")
+        ));
+        return mongoOperations.count(query, NormalizedTransaction.class);
+    }
+
+    private long countExternalLedgerRows(String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) {
+            return 0;
+        }
+        Query query = Query.query(Criteria.where("sessionId").is(sessionId));
+        return mongoOperations.count(query, ExternalLedgerRaw.class);
+    }
+
+    private long countExternalLedgerRows(String sessionId, String status) {
+        if (sessionId == null || sessionId.isBlank()) {
+            return 0;
+        }
+        Query query = Query.query(new Criteria().andOperator(
+                Criteria.where("sessionId").is(sessionId),
+                Criteria.where("status").is(status)
+        ));
+        return mongoOperations.count(query, ExternalLedgerRaw.class);
+    }
+
+    private long countPricingTotal(List<String> walletAddresses) {
+        if (walletAddresses.isEmpty()) {
+            return 0;
+        }
+        Query query = Query.query(new Criteria().andOperator(
+                Criteria.where("walletAddress").in(walletAddresses),
+                Criteria.where("status").in("PENDING_PRICE", "PENDING_STAT", "CONFIRMED"),
+                ACTIVE_ACCOUNTING_CRITERIA
+        ));
+        return mongoOperations.count(query, NormalizedTransaction.class);
+    }
+
+    private long countPricingProcessed(List<String> walletAddresses) {
+        if (walletAddresses.isEmpty()) {
+            return 0;
+        }
+        Query query = Query.query(new Criteria().andOperator(
+                Criteria.where("walletAddress").in(walletAddresses),
+                Criteria.where("status").in("PENDING_STAT", "CONFIRMED"),
+                ACTIVE_ACCOUNTING_CRITERIA
+        ));
+        return mongoOperations.count(query, NormalizedTransaction.class);
+    }
+
+    private long countReplayTotal(List<String> walletAddresses) {
+        if (walletAddresses.isEmpty()) {
+            return 0;
+        }
+        Query query = Query.query(new Criteria().andOperator(
+                Criteria.where("walletAddress").in(walletAddresses),
+                Criteria.where("status").is("CONFIRMED"),
+                ACTIVE_ACCOUNTING_CRITERIA
+        ));
+        return mongoOperations.count(query, NormalizedTransaction.class);
+    }
+
+    private long countReplayProcessed(List<String> walletAddresses) {
+        if (walletAddresses.isEmpty()) {
+            return 0;
+        }
+        Query query = Query.query(new Criteria().andOperator(
+                Criteria.where("walletAddress").in(walletAddresses),
+                Criteria.where("normalizedTransactionId").ne(null)
+        ));
+        return mongoOperations.findDistinct(query, "normalizedTransactionId", "asset_ledger_points", String.class).size();
+    }
+
     private static SyncStatus pickLatest(SyncStatus a, SyncStatus b) {
         Instant aUpdated = a.getUpdatedAt();
         Instant bUpdated = b.getUpdatedAt();
@@ -221,7 +401,17 @@ public class SessionQueryService {
             String pipelineStage,
             String pipelineStatus,
             String pipelineMessage,
+            PhaseProgressView phaseProgress,
             List<WalletBackfillStatusView> wallets
+    ) {
+    }
+
+    public record PhaseProgressView(
+            String phase,
+            Integer progressPct,
+            Long processedCount,
+            Long leftCount,
+            Long totalCount
     ) {
     }
 

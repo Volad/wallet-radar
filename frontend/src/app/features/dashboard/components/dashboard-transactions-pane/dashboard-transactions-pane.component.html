@@ -22,7 +22,18 @@
         }
       </div>
     }
-    <span class="mono muted">{{ filteredTransactions().length }} txns</span>
+    <div class="bridge-filter-row" aria-label="Spam filters">
+      @for (filter of spamFilters; track filter) {
+        <button
+          type="button"
+          class="bridge-filter-chip"
+          [class.active]="isSpamFilterActive(filter)"
+          (click)="setSpamFilter(filter)">
+          {{ filter === 'HIDE_SPAM' ? 'NO SPAM' : filter === 'SPAM_ONLY' ? 'SPAM' : 'ALL TX' }}
+        </button>
+      }
+    </div>
+    <span class="mono muted">{{ totalCountSignal() }} txns</span>
   </header>
 
   <div class="tx-columns">
@@ -34,14 +45,9 @@
     <span></span>
   </div>
 
-  <div class="tx-list">
-    @if (isLoading) {
-      <div class="tx-empty-state">
-        <div class="spinner" aria-hidden="true"></div>
-        <span>Loading session transactions...</span>
-      </div>
-    } @else {
-      @for (tx of filteredTransactions(); track tx.id) {
+  <div class="tx-list" [class.loading]="isLoading">
+    @if (paginatedTransactions().length > 0) {
+      @for (tx of paginatedTransactions(); track tx.id) {
         @let network = getNetworkById(tx.networkId);
         @let wallet = getWalletById(tx.walletId);
         @let positiveFlow = getPrimaryPositiveFlow(tx);
@@ -81,12 +87,25 @@
                 }
               </div>
               <div class="mono muted tiny">{{ tx.hash }}</div>
+              @if (txCounterpartyDirection(tx); as counterpartyDirection) {
+                <div class="mono muted tiny tx-counterparty-row">
+                  <span>{{ counterpartyDirection }}</span>
+                  <span
+                    class="mono muted tiny tx-counterparty"
+                    [attr.data-tooltip]="counterpartyTooltip(tx)"
+                    [attr.aria-label]="counterpartyTooltip(tx)">
+                    {{ txCounterpartyRef(tx) }}
+                  </span>
+                </div>
+              }
             </div>
 
             <div class="tx-flow-preview">
               @if (positiveFlow !== null) {
                 <div class="mono pos small-flow">
-                  +{{ formatQuantity(getSignedQuantity(positiveFlow)) }} {{ positiveFlow.symbol }}
+                  <span [attr.title]="formatQuantityFull(getSignedQuantity(positiveFlow))">
+                    +{{ formatQuantity(getSignedQuantity(positiveFlow)) }} {{ positiveFlow.symbol }}
+                  </span>
                   @if (positiveFlow.priceUsd !== null) {
                     <span class="muted">${{ positiveFlow.priceUsd }}</span>
                   } @else {
@@ -96,17 +115,43 @@
               }
               @if (negativeFlow !== null) {
                 <div class="mono neg small-flow">
-                  -{{ formatQuantity(getSignedQuantity(negativeFlow)) }} {{ negativeFlow.symbol }}
+                  <span [attr.title]="formatQuantityFull(getSignedQuantity(negativeFlow))">
+                    -{{ formatQuantity(getSignedQuantity(negativeFlow)) }} {{ negativeFlow.symbol }}
+                  </span>
                 </div>
               }
             </div>
 
             <div class="tx-meta-block">
               <div class="meta-line">
-                <span [style.color]="network?.color">{{ network?.icon }}</span>
-                <span class="wallet-dot" [style.background]="wallet?.color"></span>
-                <span class="mono muted tiny">{{ wallet?.label }}</span>
+                <span
+                  class="tx-scope-anchor"
+                  [attr.data-tooltip]="networkTooltip(tx)"
+                  [attr.aria-label]="networkTooltip(tx)">
+                  <span [style.color]="network?.color">{{ network?.icon }}</span>
+                </span>
+                @if (isExternalLedgerWallet(tx)) {
+                  <span
+                    class="tx-scope-anchor tx-external-anchor tx-meta-external-anchor"
+                    [attr.data-tooltip]="walletTooltip(tx)"
+                    [attr.aria-label]="walletTooltip(tx)">
+                    <span class="external-ledger-badge">EX</span>
+                  </span>
+                } @else {
+                  <span
+                    class="tx-scope-anchor"
+                    [attr.data-tooltip]="walletTooltip(tx)"
+                    [attr.aria-label]="walletTooltip(tx)">
+                    <span class="wallet-dot" [style.background]="wallet?.color"></span>
+                  </span>
+                  <span class="mono muted tiny">{{ wallet?.label }}</span>
+                }
               </div>
+              @if (isExternalLedgerWallet(tx)) {
+                <div class="tx-meta-marker-row">
+                  <span class="mono muted tiny">{{ tx.walletId }}</span>
+                </div>
+              }
               <span [class]="getPillClass(getStatusVariant(tx.status))">{{ prettifyLabel(tx.status) }}</span>
             </div>
 
@@ -130,7 +175,9 @@
                 @for (flow of tx.flows; track flow.role + flow.symbol + $index) {
                   <div class="flow-card">
                     <span class="flow-role" [style.color]="getFlowColor(flow.role)">{{ flow.role }}</span>
-                    <strong class="mono">{{ getFlowPrefix(flow) }}{{ formatQuantity(getSignedQuantity(flow)) }} {{ flow.symbol }}</strong>
+                    <strong class="mono" [attr.title]="formatQuantityFull(getSignedQuantity(flow))">
+                      {{ getFlowPrefix(flow) }}{{ formatQuantity(getSignedQuantity(flow)) }} {{ flow.symbol }}
+                    </strong>
                     <div class="flow-foot">
                       @if (flow.priceUsd !== null) {
                         <span class="mono muted">${{ flow.priceUsd }}</span>
@@ -304,11 +351,35 @@
             </div>
           }
         </article>
-      } @empty {
+      }
+    } @else if (!isLoading) {
         <div class="tx-empty-state">
           <span>{{ emptyStateMessage }}</span>
         </div>
-      }
+    }
+
+    @if (isLoading) {
+      <div class="tx-loading-overlay" aria-live="polite" aria-busy="true">
+        <div class="spinner" aria-hidden="true"></div>
+        <span>Loading session transactions...</span>
+      </div>
     }
   </div>
+
+  @if (!isLoading && totalCountSignal() > 0) {
+    <footer class="tx-pagination">
+      <span class="mono muted tiny">{{ pageStart() }}-{{ pageEnd() }} of {{ totalCountSignal() }}</span>
+      <div class="tx-pagination-actions">
+        <button type="button" class="page-btn" [disabled]="isLoading || pageSignal() === 0" (click)="previousPage($event)">Prev</button>
+        <span class="mono muted tiny">Page {{ currentPageNumber() }} / {{ totalPages() }}</span>
+        <button
+          type="button"
+          class="page-btn"
+          [disabled]="isLoading || pageSignal() >= totalPages() - 1"
+          (click)="nextPage($event)">
+          Next
+        </button>
+      </div>
+    </footer>
+  }
 </section>

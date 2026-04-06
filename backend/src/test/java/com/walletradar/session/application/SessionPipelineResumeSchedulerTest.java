@@ -25,6 +25,7 @@ import java.time.Instant;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
@@ -206,9 +207,8 @@ class SessionPipelineResumeSchedulerTest {
         when(mongoOperations.exists(any(Query.class), eq(NormalizedTransaction.class)))
                 .thenReturn(false, false, false, false);
         when(mongoOperations.exists(any(Query.class), eq(ExternalLedgerRaw.class))).thenReturn(false, false);
-        when(mongoOperations.exists(any(Query.class), eq("asset_positions"))).thenReturn(true);
+        when(mongoOperations.exists(any(Query.class), eq("asset_ledger_points"))).thenReturn(true);
         when(mongoOperations.exists(any(Query.class), eq("on_chain_balances"))).thenReturn(true);
-        when(mongoOperations.exists(any(Query.class), eq("reconciled_holdings"))).thenReturn(true);
 
         scheduler().resumeReadySessions();
 
@@ -218,6 +218,60 @@ class SessionPipelineResumeSchedulerTest {
                 UserSession.PipelineStage.ACCOUNTING_REPLAY,
                 "Accounting replay complete"
         );
+    }
+
+    @Test
+    void replayBootstrapRemainsRequiredWhenOnlyUnrelatedLedgerRowsExist() {
+        UserSession session = session("session-1", wallet("0xabc", List.of(NetworkId.ETHEREUM)));
+        when(userSessionRepository.findAll()).thenReturn(List.of(session));
+        when(syncStatusRepository.findByWalletAddressIn(List.of("0xabc"))).thenReturn(List.of(
+                syncStatus("0xabc", NetworkId.ETHEREUM, true)
+        ));
+        when(mongoOperations.exists(any(Query.class), eq(RawTransaction.class))).thenReturn(false);
+        when(mongoOperations.exists(any(Query.class), eq("normalized_transactions"))).thenReturn(true);
+        when(mongoOperations.exists(any(Query.class), eq(ExternalLedgerRaw.class))).thenReturn(false, false);
+        when(mongoOperations.exists(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(false, false, false, true);
+        when(mongoOperations.exists(argThat(query -> containsWalletAddress(query, "0xabc")), eq("asset_ledger_points")))
+                .thenReturn(false);
+
+        scheduler().resumeReadySessions();
+
+        assertPublishedEvent(PricingCompletedEvent.class, event -> {
+            assertThat(event.sessionId()).isEqualTo("session-1");
+            assertThat(event.trigger()).isEqualTo("resume-watchdog");
+        });
+    }
+
+    @Test
+    void staleReplayRunningDoesNotHealFromUnrelatedDerivedRows() {
+        UserSession session = session("session-1", wallet("0xabc", List.of(NetworkId.ETHEREUM)));
+        UserSession.PipelineState state = new UserSession.PipelineState();
+        state.setStage(UserSession.PipelineStage.ACCOUNTING_REPLAY);
+        state.setStatus(UserSession.PipelineStatus.RUNNING);
+        state.setUpdatedAt(Instant.now().minusSeconds(3600));
+        session.setPipelineState(state);
+
+        when(userSessionRepository.findAll()).thenReturn(List.of(session));
+        when(syncStatusRepository.findByWalletAddressIn(List.of("0xabc"))).thenReturn(List.of(
+                syncStatus("0xabc", NetworkId.ETHEREUM, true)
+        ));
+        when(mongoOperations.exists(any(Query.class), eq(RawTransaction.class))).thenReturn(false);
+        when(mongoOperations.exists(any(Query.class), eq("normalized_transactions"))).thenReturn(true);
+        when(mongoOperations.exists(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(false, false, false, false);
+        when(mongoOperations.exists(any(Query.class), eq(ExternalLedgerRaw.class))).thenReturn(false, false);
+        when(mongoOperations.exists(argThat(query -> containsWalletAddress(query, "0xabc")), eq("asset_ledger_points")))
+                .thenReturn(false);
+
+        scheduler().resumeReadySessions();
+
+        verify(sessionPipelineStateService, never()).markStageComplete(
+                eq("session-1"),
+                eq(UserSession.PipelineStage.ACCOUNTING_REPLAY),
+                any()
+        );
+        verify(applicationEventPublisher, never()).publishEvent(any());
     }
 
     private SessionPipelineResumeScheduler scheduler() {
@@ -256,5 +310,12 @@ class SessionPipelineResumeSchedulerTest {
         status.setNetworkId(networkId.name());
         status.setBackfillComplete(complete);
         return status;
+    }
+
+    private static boolean containsWalletAddress(Query query, String walletAddress) {
+        if (query == null || query.getQueryObject() == null) {
+            return false;
+        }
+        return query.getQueryObject().toJson().contains(walletAddress);
     }
 }

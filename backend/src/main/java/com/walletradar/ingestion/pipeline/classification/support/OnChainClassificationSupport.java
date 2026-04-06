@@ -1,5 +1,6 @@
 package com.walletradar.ingestion.pipeline.classification.support;
 
+import com.walletradar.accounting.support.AccountingAssetFamilySupport;
 import com.walletradar.domain.common.ConfidenceLevel;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
@@ -8,8 +9,12 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.ingestion.pipeline.onchain.OnChainRawTransactionView;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 
 public final class OnChainClassificationSupport {
 
@@ -27,6 +32,7 @@ public final class OnChainClassificationSupport {
             return flows;
         }
         boolean feeOnlyType = type == NormalizedTransactionType.ADMIN_CONFIG;
+        Set<String> liquidStakingFamilies = liquidStakingContinuityFamilies(movementLegs, type);
         for (RawLeg leg : movementLegs) {
             if (feeOnlyType && !leg.fee()) {
                 continue;
@@ -35,7 +41,7 @@ public final class OnChainClassificationSupport {
             flow.setAssetContract(leg.assetContract());
             flow.setAssetSymbol(leg.assetSymbol());
             flow.setQuantityDelta(leg.quantityDelta());
-            flow.setRole(resolveRole(type, leg));
+            flow.setRole(resolveRole(type, leg, liquidStakingFamilies));
             flows.add(flow);
         }
         return flows;
@@ -79,20 +85,28 @@ public final class OnChainClassificationSupport {
         return initialStatus(null, type, confidence);
     }
 
-    private static NormalizedLegRole resolveRole(NormalizedTransactionType type, RawLeg leg) {
+    private static NormalizedLegRole resolveRole(
+            NormalizedTransactionType type,
+            RawLeg leg,
+            Set<String> liquidStakingFamilies
+    ) {
         if (leg.fee()) {
             return NormalizedLegRole.FEE;
+        }
+        if ((type == NormalizedTransactionType.STAKING_DEPOSIT || type == NormalizedTransactionType.STAKING_WITHDRAW)
+                && isLiquidStakingContinuityLeg(leg, liquidStakingFamilies)) {
+            return NormalizedLegRole.TRANSFER;
         }
         return switch (type) {
             case SWAP -> leg.quantityDelta().signum() > 0 ? NormalizedLegRole.BUY : NormalizedLegRole.SELL;
             case BORROW -> resolveBorrowRole(leg);
             case REWARD_CLAIM,
                     EXTERNAL_TRANSFER_IN,
-                    STAKING_DEPOSIT,
-                    STAKING_WITHDRAW,
                     DEX_ORDER_REQUEST,
                     DEX_ORDER_SETTLEMENT ->
                     leg.quantityDelta().signum() > 0 ? NormalizedLegRole.BUY : NormalizedLegRole.SELL;
+            case STAKING_DEPOSIT,
+                    STAKING_WITHDRAW -> leg.quantityDelta().signum() > 0 ? NormalizedLegRole.BUY : NormalizedLegRole.SELL;
             case REPAY -> resolveRepayRole(leg);
             case EXTERNAL_TRANSFER_OUT -> leg.quantityDelta().signum() < 0 ? NormalizedLegRole.SELL : NormalizedLegRole.BUY;
             case STAKING_WITHDRAW_REQUEST,
@@ -161,5 +175,47 @@ public final class OnChainClassificationSupport {
         return leg != null
                 && leg.assetContract() != null
                 && ZKSYNC_NATIVE_TOKEN_CONTRACT.equalsIgnoreCase(leg.assetContract());
+    }
+
+    private static boolean isLiquidStakingContinuityLeg(RawLeg leg, Set<String> liquidStakingFamilies) {
+        if (leg == null || liquidStakingFamilies.isEmpty()) {
+            return false;
+        }
+        String continuityIdentity = AccountingAssetFamilySupport.continuityIdentity(leg.assetSymbol(), leg.assetContract());
+        return continuityIdentity != null && liquidStakingFamilies.contains(continuityIdentity);
+    }
+
+    private static Set<String> liquidStakingContinuityFamilies(
+            List<RawLeg> movementLegs,
+            NormalizedTransactionType type
+    ) {
+        if (movementLegs == null
+                || movementLegs.isEmpty()
+                || (type != NormalizedTransactionType.STAKING_DEPOSIT && type != NormalizedTransactionType.STAKING_WITHDRAW)) {
+            return Set.of();
+        }
+        Map<String, Boolean> hasInbound = new LinkedHashMap<>();
+        Map<String, Boolean> hasOutbound = new LinkedHashMap<>();
+        for (RawLeg leg : movementLegs) {
+            if (leg == null || leg.fee() || leg.quantityDelta() == null || leg.quantityDelta().signum() == 0) {
+                continue;
+            }
+            String continuityIdentity = AccountingAssetFamilySupport.continuityIdentity(leg.assetSymbol(), leg.assetContract());
+            if (continuityIdentity == null || !continuityIdentity.startsWith("FAMILY:")) {
+                continue;
+            }
+            if (leg.quantityDelta().signum() > 0) {
+                hasInbound.put(continuityIdentity, true);
+            } else {
+                hasOutbound.put(continuityIdentity, true);
+            }
+        }
+        Set<String> matchedFamilies = new LinkedHashSet<>();
+        for (String continuityIdentity : hasInbound.keySet()) {
+            if (Boolean.TRUE.equals(hasOutbound.get(continuityIdentity))) {
+                matchedFamilies.add(continuityIdentity);
+            }
+        }
+        return matchedFamilies;
     }
 }

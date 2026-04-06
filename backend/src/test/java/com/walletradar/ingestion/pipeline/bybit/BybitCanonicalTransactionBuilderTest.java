@@ -34,6 +34,32 @@ class BybitCanonicalTransactionBuilderTest {
     }
 
     @Test
+    void stablecoinTradeAssignsExecutionPriceToRiskAssetAndOneDollarToQuoteAndFee() {
+        BybitCanonicalTransactionBuilder builder = new BybitCanonicalTransactionBuilder();
+        ExternalLedgerRaw usdtBuy = trade("usdt-buy", "BUY", "USDT", "42.9606579");
+        usdtBuy.setFilledPrice(new BigDecimal("3307.21"));
+        usdtBuy.setFeePaid(new BigDecimal("-0.0429606579"));
+        ExternalLedgerRaw ethSell = trade("eth-sell", "SELL", "ETH", "-0.01299");
+        ethSell.setFilledPrice(new BigDecimal("3307.21"));
+
+        var transaction = builder.buildTradePair(usdtBuy, ethSell, Instant.parse("2026-03-25T12:00:00Z"));
+
+        assertThat(transaction.getFlows()).hasSize(3);
+        assertThat(transaction.getFlows().get(0).getAssetSymbol()).isEqualTo("USDT");
+        assertThat(transaction.getFlows().get(0).getUnitPriceUsd()).isEqualByComparingTo("1");
+        assertThat(transaction.getFlows().get(0).getPriceSource()).isEqualTo(PriceSource.STABLECOIN);
+        assertThat(transaction.getFlows().get(0).getValueUsd()).isEqualByComparingTo("42.9606579");
+        assertThat(transaction.getFlows().get(1).getAssetSymbol()).isEqualTo("ETH");
+        assertThat(transaction.getFlows().get(1).getUnitPriceUsd()).isEqualByComparingTo("3307.21");
+        assertThat(transaction.getFlows().get(1).getPriceSource()).isEqualTo(PriceSource.EXECUTION);
+        assertThat(transaction.getFlows().get(1).getValueUsd()).isEqualByComparingTo("42.9606579");
+        assertThat(transaction.getFlows().get(2).getAssetSymbol()).isEqualTo("USDT");
+        assertThat(transaction.getFlows().get(2).getUnitPriceUsd()).isEqualByComparingTo("1");
+        assertThat(transaction.getFlows().get(2).getPriceSource()).isEqualTo(PriceSource.STABLECOIN);
+        assertThat(transaction.getFlows().get(2).getValueUsd()).isEqualByComparingTo("0.0429606579");
+    }
+
+    @Test
     void transferOnlyVaultRowStartsConfirmed() {
         BybitCanonicalTransactionBuilder builder = new BybitCanonicalTransactionBuilder();
         ExternalLedgerRaw row = new ExternalLedgerRaw();
@@ -217,6 +243,43 @@ class BybitCanonicalTransactionBuilderTest {
                     assertThat(flow.getAssetSymbol()).isEqualTo("ONDO");
                     assertThat(flow.getQuantityDelta()).isEqualByComparingTo("-2");
                 });
+    }
+
+    @Test
+    void stakingPairKeepsSameFamilyLiquidStakingAsContinuityTransfer() {
+        BybitCanonicalTransactionBuilder builder = new BybitCanonicalTransactionBuilder();
+        ExternalLedgerRaw stake = new ExternalLedgerRaw();
+        stake.setId("stake");
+        stake.setUid("33625378");
+        stake.setWalletRef("BYBIT:33625378");
+        stake.setTimeUtc(Instant.parse("2025-03-12T20:08:36Z"));
+        stake.setSourceFileType("fund_asset_changes");
+        stake.setBybitType("ETH 2.0");
+        stake.setCanonicalType("STAKING_DEPOSIT");
+        stake.setAssetSymbol("ETH");
+        stake.setQuantityRaw(new BigDecimal("-0.709"));
+
+        ExternalLedgerRaw mint = new ExternalLedgerRaw();
+        mint.setId("mint");
+        mint.setUid("33625378");
+        mint.setWalletRef("BYBIT:33625378");
+        mint.setTimeUtc(Instant.parse("2025-03-12T20:37:05Z"));
+        mint.setSourceFileType("fund_asset_changes");
+        mint.setBybitType("ETH 2.0");
+        mint.setCanonicalType("STAKING_DEPOSIT");
+        mint.setAssetSymbol("METH");
+        mint.setQuantityRaw(new BigDecimal("0.66865026"));
+
+        var transaction = builder.buildStakingPair(stake, mint, Instant.parse("2026-03-25T12:01:00Z"));
+
+        assertThat(transaction.getType()).isEqualTo(NormalizedTransactionType.STAKING_DEPOSIT);
+        assertThat(transaction.getStatus()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(transaction.getFlows())
+                .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getRole().name() + ":" + flow.getQuantityDelta())
+                .containsExactlyInAnyOrder(
+                        "ETH:TRANSFER:-0.709",
+                        "METH:TRANSFER:0.66865026"
+                );
     }
 
     @Test

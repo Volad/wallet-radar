@@ -1,8 +1,8 @@
 import { CommonModule } from '@angular/common';
-import { ChangeDetectionStrategy, Component, Input, computed, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, EventEmitter, Input, Output, computed, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 
-import { COLORS } from '../../../../core/data/dashboard.mock';
+import { COLORS } from '../../../../core/data/dashboard.constants';
 import {
   BridgeStatus,
   EditableTransactionDraft,
@@ -18,11 +18,12 @@ import {
   TRANSACTION_TYPES,
   WalletId,
   WalletInfo,
+  TransactionBridgeFilter,
+  TransactionSpamFilter,
 } from '../../../../core/models/dashboard.models';
 
 type SaveState = 'idle' | 'saving' | 'saved';
 type PillVariant = 'def' | 'cyan' | 'green' | 'red' | 'amber' | 'purple' | 'blue';
-type BridgeFilter = 'ALL' | BridgeStatus;
 
 @Component({
   selector: 'wr-dashboard-transactions-pane',
@@ -35,8 +36,6 @@ type BridgeFilter = 'ALL' | BridgeStatus;
 export class DashboardTransactionsPaneComponent {
   private readonly walletsSignal = signal<ReadonlyArray<WalletInfo>>([]);
   private readonly networksSignal = signal<ReadonlyArray<NetworkInfo>>([]);
-  private readonly selectedWalletIdsSignal = signal<ReadonlySet<WalletId>>(new Set<WalletId>());
-  private readonly selectedNetworkIdsSignal = signal<ReadonlySet<NetworkId>>(new Set<NetworkId>());
 
   @Input({ required: true }) set wallets(value: ReadonlyArray<WalletInfo>) {
     this.walletsSignal.set(value ?? []);
@@ -46,12 +45,26 @@ export class DashboardTransactionsPaneComponent {
     this.networksSignal.set(value ?? []);
   }
 
-  @Input({ required: true }) set selectedWalletIds(value: ReadonlySet<WalletId>) {
-    this.selectedWalletIdsSignal.set(value ?? new Set<WalletId>());
+  @Input() set transactionSearchValue(value: string) {
+    this.transactionSearch.set(value ?? '');
   }
 
-  @Input({ required: true }) set selectedNetworkIds(value: ReadonlySet<NetworkId>) {
-    this.selectedNetworkIdsSignal.set(value ?? new Set<NetworkId>());
+  @Input() set bridgeStatusFilterValue(value: TransactionBridgeFilter) {
+    this.bridgeStatusFilter.set(value ?? 'ALL');
+  }
+
+  @Input() set spamFilterValue(value: TransactionSpamFilter) {
+    this.spamFilter.set(value ?? 'HIDE_SPAM');
+  }
+
+  @Input() set page(value: number) {
+    this.pageSignal.set(Math.max(0, value ?? 0));
+  }
+
+  @Input() pageSize = 50;
+
+  @Input() set totalCount(value: number) {
+    this.totalCountSignal.set(Math.max(0, value ?? 0));
   }
 
   @Input({ required: true }) set sourceTransactions(value: ReadonlyArray<TransactionItem>) {
@@ -63,48 +76,41 @@ export class DashboardTransactionsPaneComponent {
   @Input() isReadOnly = false;
   @Input() emptyStateMessage = 'No transactions for current filters.';
 
+  @Output() readonly transactionSearchChange = new EventEmitter<string>();
+  @Output() readonly bridgeStatusFilterChange = new EventEmitter<TransactionBridgeFilter>();
+  @Output() readonly spamFilterChange = new EventEmitter<TransactionSpamFilter>();
+  @Output() readonly pageChange = new EventEmitter<number>();
+
   readonly colors = COLORS;
   readonly transactionTypes = TRANSACTION_TYPES;
   readonly priceSources = PRICE_SOURCES;
   readonly flowRoles: ReadonlyArray<FlowRole> = ['BUY', 'SELL', 'FEE', 'TRANSFER'];
-  readonly bridgeFilters: ReadonlyArray<BridgeFilter> = ['ALL', 'BRIDGE_OUT', 'BRIDGE_IN', 'MATCHED', 'REVIEW'];
+  readonly bridgeFilters: ReadonlyArray<TransactionBridgeFilter> = ['ALL', 'BRIDGE_OUT', 'BRIDGE_IN', 'MATCHED', 'REVIEW'];
+  readonly spamFilters: ReadonlyArray<TransactionSpamFilter> = ['HIDE_SPAM', 'ALL', 'SPAM_ONLY'];
 
   readonly transactionSearch = signal('');
-  readonly bridgeStatusFilter = signal<BridgeFilter>('ALL');
+  readonly bridgeStatusFilter = signal<TransactionBridgeFilter>('ALL');
+  readonly spamFilter = signal<TransactionSpamFilter>('HIDE_SPAM');
+  readonly pageSignal = signal(0);
+  readonly totalCountSignal = signal(0);
   readonly expandedTransactionIds = signal<ReadonlySet<string>>(new Set<string>());
   readonly editingTransactionId = signal<string | null>(null);
   readonly editingDraft = signal<EditableTransactionDraft | null>(null);
   readonly saveState = signal<SaveState>('idle');
   readonly transactions = signal<ReadonlyArray<TransactionItem>>([]);
   readonly hasBridgeStatuses = computed(() => this.transactions().some((tx) => tx.bridgeStatus !== null && tx.bridgeStatus !== undefined));
-
-  readonly filteredTransactions = computed(() => {
-    const selectedWallets = this.selectedWalletIdsSignal();
-    const selectedNetworks = this.selectedNetworkIdsSignal();
-    const searchTerm = this.transactionSearch().trim().toLowerCase();
-    const bridgeFilter = this.bridgeStatusFilter();
-
-    return this.transactions().filter((tx) => {
-      if (selectedWallets.size > 0 && !selectedWallets.has(tx.walletId)) {
-        return false;
-      }
-      if (selectedNetworks.size > 0 && !selectedNetworks.has(tx.networkId)) {
-        return false;
-      }
-      if (searchTerm.length > 0) {
-        const matchHash = tx.hash.toLowerCase().includes(searchTerm);
-        const matchSymbol = tx.symbol.toLowerCase().includes(searchTerm);
-        if (!matchHash && !matchSymbol) {
-          return false;
-        }
-      }
-      if (bridgeFilter !== 'ALL' && tx.bridgeStatus !== bridgeFilter) {
-        return false;
-      }
-
-      return true;
-    });
+  readonly totalPages = computed(() => {
+    const total = this.totalCountSignal();
+    return total === 0 ? 1 : Math.ceil(total / this.pageSize);
   });
+  readonly paginatedTransactions = computed(() => this.transactions());
+  readonly pageStart = computed(() => {
+    if (this.totalCountSignal() === 0) {
+      return 0;
+    }
+    return this.pageSignal() * this.pageSize + 1;
+  });
+  readonly pageEnd = computed(() => Math.min(this.pageStart() + this.transactions().length - 1, this.totalCountSignal()));
 
   readonly missingPricesInDraft = computed(() => {
     const draft = this.editingDraft();
@@ -116,14 +122,45 @@ export class DashboardTransactionsPaneComponent {
 
   setTransactionSearch(value: string): void {
     this.transactionSearch.set(value);
+    this.transactionSearchChange.emit(value);
   }
 
-  setBridgeStatusFilter(value: BridgeFilter): void {
+  setBridgeStatusFilter(value: TransactionBridgeFilter): void {
     this.bridgeStatusFilter.set(value);
+    this.bridgeStatusFilterChange.emit(value);
   }
 
-  isBridgeFilterActive(value: BridgeFilter): boolean {
+  isBridgeFilterActive(value: TransactionBridgeFilter): boolean {
     return this.bridgeStatusFilter() === value;
+  }
+
+  setSpamFilter(value: TransactionSpamFilter): void {
+    this.spamFilter.set(value);
+    this.spamFilterChange.emit(value);
+  }
+
+  isSpamFilterActive(value: TransactionSpamFilter): boolean {
+    return this.spamFilter() === value;
+  }
+
+  previousPage(event?: Event): void {
+    event?.preventDefault();
+    event?.stopPropagation();
+    const nextPage = Math.max(0, this.pageSignal() - 1);
+    this.pageSignal.set(nextPage);
+    this.pageChange.emit(nextPage);
+  }
+
+  nextPage(event?: Event): void {
+    event?.preventDefault();
+    event?.stopPropagation();
+    const nextPage = Math.min(this.totalPages() - 1, this.pageSignal() + 1);
+    this.pageSignal.set(nextPage);
+    this.pageChange.emit(nextPage);
+  }
+
+  currentPageNumber(): number {
+    return this.totalPages() === 0 ? 0 : Math.min(this.pageSignal(), this.totalPages() - 1) + 1;
   }
 
   toggleTransactionExpanded(transactionId: string): void {
@@ -282,6 +319,58 @@ export class DashboardTransactionsPaneComponent {
     return this.walletsSignal().find((wallet) => wallet.id === walletId) ?? null;
   }
 
+  txCounterpartyRef(tx: TransactionItem): string | null {
+    const matchedCounterparty = tx.matchedCounterparty?.trim();
+    if (matchedCounterparty === undefined || matchedCounterparty === null || matchedCounterparty.length === 0) {
+      return null;
+    }
+    return matchedCounterparty;
+  }
+
+  txCounterpartyDirection(tx: TransactionItem): string | null {
+    const matchedCounterparty = this.txCounterpartyRef(tx);
+    if (matchedCounterparty === null) {
+      return null;
+    }
+    return tx.type === 'EXTERNAL_INBOUND' ? 'From' : 'To';
+  }
+
+  isExternalLedgerAssociation(tx: TransactionItem): boolean {
+    return this.externalLedgerRef(tx) !== null;
+  }
+
+  isExternalLedgerWallet(tx: TransactionItem): boolean {
+    return this.isExternalLedgerRef(tx.walletId);
+  }
+
+  counterpartyTooltip(tx: TransactionItem): string | null {
+    return this.externalLedgerRef(tx) ?? this.txCounterpartyRef(tx);
+  }
+
+  private externalLedgerRef(tx: TransactionItem): string | null {
+    const matchedCounterparty = this.txCounterpartyRef(tx);
+    if (matchedCounterparty !== null && this.isExternalLedgerRef(matchedCounterparty)) {
+      return matchedCounterparty;
+    }
+    return this.isExternalLedgerRef(tx.walletId) ? tx.walletId : null;
+  }
+
+  private isExternalLedgerRef(ref: string | null | undefined): ref is string {
+    if (ref === null || ref === undefined) {
+      return false;
+    }
+    const normalized = ref.trim();
+    return normalized.length > 0 && !normalized.startsWith('0x') && normalized.includes(':');
+  }
+
+  walletTooltip(tx: TransactionItem): string {
+    return this.getWalletById(tx.walletId)?.label ?? tx.walletId;
+  }
+
+  networkTooltip(tx: TransactionItem): string {
+    return this.getNetworkById(tx.networkId)?.label ?? tx.networkId;
+  }
+
   getStatusVariant(status: TransactionStatus): PillVariant {
     if (status === 'CONFIRMED') {
       return 'green';
@@ -359,11 +448,15 @@ export class DashboardTransactionsPaneComponent {
   }
 
   hasMissingPrice(tx: TransactionItem): boolean {
-    return tx.flows.some((flow) => flow.priceUsd === null);
+    return tx.issue === 'missing_price';
   }
 
   isPendingReview(tx: TransactionItem): boolean {
     return tx.status === 'PENDING_PRICE' || tx.status === 'NEEDS_REVIEW' || tx.bridgeStatus === 'REVIEW';
+  }
+
+  isSpamTransaction(tx: TransactionItem): boolean {
+    return tx.issue === 'spam';
   }
 
   getPrimaryPositiveFlow(tx: TransactionItem) {
@@ -397,14 +490,22 @@ export class DashboardTransactionsPaneComponent {
   formatQuantity(value: number): string {
     const absolute = Math.abs(value);
     if (absolute >= 1000) {
-      return absolute.toLocaleString();
+      return absolute.toLocaleString(undefined, {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 3,
+      });
     }
+    return absolute.toLocaleString(undefined, {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 3,
+    });
+  }
 
-    if (absolute >= 1) {
-      return absolute.toFixed(4).replace(/0+$/u, '').replace(/\.$/u, '');
-    }
-
-    return absolute.toString();
+  formatQuantityFull(value: number): string {
+    return Math.abs(value).toLocaleString(undefined, {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 12,
+    });
   }
 
   formatTimestampLabel(value: string): string {

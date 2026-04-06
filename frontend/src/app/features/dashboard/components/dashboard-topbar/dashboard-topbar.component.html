@@ -1,6 +1,8 @@
 <header class="topbar">
   <div class="logo-wrap">
-    <span class="logo-mark" aria-hidden="true">⚡</span>
+    <span class="logo-mark" aria-hidden="true">
+      <img class="logo-mark-image" src="walletradar-mark.jpg" alt="" />
+    </span>
     <span class="logo-text">WalletRadar</span>
   </div>
 
@@ -18,11 +20,13 @@
   @if (isBackfillVisible) {
     <div class="backfill-pill">
       <span class="spinner mini" aria-hidden="true"></span>
-      <span class="backfill-label">Backfill {{ backfillProgressPct }}%</span>
-      <div class="progress-track">
-        <div class="progress-fill" [style.width.%]="backfillProgressPct"></div>
-      </div>
-      <span class="network-subline">{{ backfillNetworksLabel }}</span>
+      <span class="backfill-label">{{ statusLabel }}</span>
+      @if (showProgress) {
+        <div class="progress-track">
+          <div class="progress-fill" [style.width.%]="backfillProgressPct"></div>
+        </div>
+      }
+      <span class="network-subline">{{ statusSubline }}</span>
     </div>
   }
 

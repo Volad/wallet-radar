@@ -10,7 +10,7 @@ import {
 } from '@angular/forms';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 
-import { COLORS } from '../../../../core/data/dashboard.mock';
+import { COLORS } from '../../../../core/data/dashboard.constants';
 import { WalletInfo } from '../../../../core/models/dashboard.models';
 import { AddSessionRequestItem, EvmNetworkId } from '../../../../core/models/wallet-api.models';
 

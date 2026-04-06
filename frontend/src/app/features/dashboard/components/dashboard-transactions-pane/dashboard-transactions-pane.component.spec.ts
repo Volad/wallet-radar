@@ -1,7 +1,7 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 
 import { DashboardTransactionsPaneComponent } from './dashboard-transactions-pane.component';
-import { TransactionItem, WalletInfo, NetworkInfo } from '../../../../core/models/dashboard.models';
+import { NetworkInfo, TransactionItem, WalletInfo } from '../../../../core/models/dashboard.models';
 
 describe('DashboardTransactionsPaneComponent', () => {
   let fixture: ComponentFixture<DashboardTransactionsPaneComponent>;
@@ -23,22 +23,16 @@ describe('DashboardTransactionsPaneComponent', () => {
       label: 'Ethereum',
       color: '#627EEA',
     },
-    {
-      id: 'ARBITRUM',
-      icon: '△',
-      label: 'Arbitrum',
-      color: '#28A0F0',
-    },
   ];
 
   const transactions: ReadonlyArray<TransactionItem> = [
     {
-      id: 'tx-review',
+      id: 'tx-1',
       hash: '0xreview',
       timestamp: '2026-03-06T10:00:00Z',
       type: 'EXTERNAL_INBOUND',
       symbol: 'USDC',
-      networkId: 'ARBITRUM',
+      networkId: 'ETHEREUM',
       walletId: '0xwallet-a',
       status: 'CONFIRMED',
       issue: null,
@@ -55,29 +49,6 @@ describe('DashboardTransactionsPaneComponent', () => {
         },
       ],
     },
-    {
-      id: 'tx-matched',
-      hash: '0xmatched',
-      timestamp: '2026-03-06T09:00:00Z',
-      type: 'EXTERNAL_TRANSFER_OUT',
-      symbol: 'USDC',
-      networkId: 'ETHEREUM',
-      walletId: '0xwallet-a',
-      status: 'CONFIRMED',
-      issue: null,
-      bridgeStatus: 'MATCHED',
-      hasOverride: false,
-      flows: [
-        {
-          role: 'TRANSFER',
-          symbol: 'USDC',
-          quantity: 100,
-          signedQuantity: -100,
-          priceUsd: 1,
-          source: 'STABLECOIN',
-        },
-      ],
-    },
   ];
 
   beforeEach(async () => {
@@ -89,33 +60,98 @@ describe('DashboardTransactionsPaneComponent', () => {
     component = fixture.componentInstance;
     component.wallets = wallets;
     component.networks = networks;
-    component.selectedWalletIds = new Set();
-    component.selectedNetworkIds = new Set();
     component.sourceTransactions = transactions;
+    component.totalCount = 101;
+    component.page = 1;
+    component.pageSize = 50;
     component.isReadOnly = true;
     fixture.detectChanges();
   });
 
-  it('renders review bridge badge and copy for expanded review transaction', () => {
-    const rows = fixture.nativeElement.querySelectorAll('.tx-row');
-    rows[0].click();
-    fixture.detectChanges();
-
+  it('renders paging metadata from server response', () => {
     const text = fixture.nativeElement.textContent as string;
-    expect(text).toContain('REVIEW');
-    expect(text).toContain('Bridge matching is ambiguous.');
+    expect(text).toContain('101 txns');
+    expect(text).toContain('51-51 of 101');
+    expect(text).toContain('Page 2 / 3');
   });
 
-  it('filters transactions by bridge status chip', () => {
-    const chips = [...fixture.nativeElement.querySelectorAll('.bridge-filter-chip')] as HTMLButtonElement[];
-    const reviewChip = chips.find((chip) => chip.textContent?.trim() === 'REVIEW');
+  it('emits search and filter changes', () => {
+    const searchSpy = jasmine.createSpy('search');
+    const bridgeSpy = jasmine.createSpy('bridge');
+    const spamSpy = jasmine.createSpy('spam');
 
-    expect(reviewChip).toBeDefined();
-    reviewChip?.click();
+    component.transactionSearchChange.subscribe(searchSpy);
+    component.bridgeStatusFilterChange.subscribe(bridgeSpy);
+    component.spamFilterChange.subscribe(spamSpy);
+
+    const searchInput = fixture.nativeElement.querySelector('input[type="search"]') as HTMLInputElement;
+    searchInput.value = 'eth';
+    searchInput.dispatchEvent(new Event('input'));
+
+    const chips = [...fixture.nativeElement.querySelectorAll('.bridge-filter-chip')] as HTMLButtonElement[];
+    chips.find((chip) => chip.textContent?.trim() === 'REVIEW')?.click();
+    chips.find((chip) => chip.textContent?.trim() === 'SPAM')?.click();
+    fixture.detectChanges();
+
+    expect(searchSpy).toHaveBeenCalledWith('eth');
+    expect(bridgeSpy).toHaveBeenCalledWith('REVIEW');
+    expect(spamSpy).toHaveBeenCalledWith('SPAM_ONLY');
+  });
+
+  it('emits page changes', () => {
+    const pageSpy = jasmine.createSpy('page');
+    component.pageChange.subscribe(pageSpy);
+
+    const nextButton = [...fixture.nativeElement.querySelectorAll('.page-btn')] as HTMLButtonElement[];
+    nextButton[1].click();
+
+    expect(pageSpy).toHaveBeenCalledWith(2);
+  });
+
+  it('does not show PRICE label for transfer-only rows without missing_price issue', () => {
+    const text = fixture.nativeElement.textContent as string;
+    expect(text).not.toContain('PRICE?');
+  });
+
+  it('renders external counterparty text without EX badge on receiving side', () => {
+    component.sourceTransactions = [
+      {
+        ...transactions[0],
+        type: 'EXTERNAL_INBOUND',
+        matchedCounterparty: 'BYBIT:33625378',
+      },
+    ];
     fixture.detectChanges();
 
     const text = fixture.nativeElement.textContent as string;
-    expect(text).toContain('0xreview');
-    expect(text).not.toContain('0xmatched');
+    expect(text).toContain('From');
+    expect(text).toContain('BYBIT:33625378');
+
+    const metaBadge = fixture.nativeElement.querySelector('.tx-meta-external-anchor') as HTMLElement | null;
+    expect(metaBadge).toBeNull();
+  });
+
+  it('renders external-ledger badge only in meta column for bybit-side transfer rows', () => {
+    component.sourceTransactions = [
+      {
+        ...transactions[0],
+        type: 'EXTERNAL_TRANSFER_OUT',
+        walletId: 'BYBIT:33625378',
+        matchedCounterparty: '0xwallet-a',
+      },
+    ];
+    fixture.detectChanges();
+
+    const text = fixture.nativeElement.textContent as string;
+    expect(text).toContain('To');
+    expect(text).toContain('0xwallet-a');
+    expect(text).toContain('BYBIT:33625378');
+
+    const metaBadge = fixture.nativeElement.querySelector('.tx-meta-external-anchor') as HTMLElement | null;
+    expect(metaBadge).not.toBeNull();
+    expect(metaBadge?.getAttribute('data-tooltip')).toBe('BYBIT:33625378');
+
+    const counterpartyBadge = fixture.nativeElement.querySelector('.tx-counterparty-row .tx-external-anchor') as HTMLElement | null;
+    expect(counterpartyBadge).toBeNull();
   });
 });
