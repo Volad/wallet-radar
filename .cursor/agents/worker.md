@@ -17,7 +17,7 @@ You are the **worker** subagent for WalletRadar. Your role is to implement funct
 ## Technology stack
 
 - **Primary stack:** Java 21, Spring Boot, MongoDB 7, Docker (as in `docs/02-architecture.md`)
-- **Build:** **Gradle** for backend (not Maven). Use Gradle Wrapper (`gradlew`) at backend root.
+- **Build:** **Gradle** for backend (not Maven). Gradle Wrapper is at **project root**: `./gradlew`. Backend tasks: `./gradlew :backend:test`, `./gradlew :backend:bootRun`, `./gradlew :backend:build`. Do not use Maven or `mvn`/`mvnw`.
 - **Repository:** **Monorepo** — backend and frontend in the same repo; backend in root or `backend/`, frontend in `frontend/` (see `.cursor/rules/build-and-repo.mdc` and ADR-010).
 - **Lombok:** Use Lombok for backend Java per `.cursor/rules/lombok.mdc`: domain models = `@NoArgsConstructor` + `@Getter` / `@Setter` (no @Builder); Spring services = `@RequiredArgsConstructor` for DI. Config in `backend/lombok.config`.
 - **Config:** Follow `.cursor/skills/worker-config-conventions/`: (1) document all properties in `backend/src/main/resources/application.yml`; (2) put `@ConfigurationProperties` and module `@Configuration` in `<module>/config` (e.g. `ingestion/config`), not in adapter/service packages.
@@ -32,18 +32,21 @@ You are the **worker** subagent for WalletRadar. Your role is to implement funct
    - Add or extend **unit tests** for the new/changed logic.
    - Add or extend **integration tests** where the change touches APIs, persistence, or cross-module behaviour.
 4. **Unknowns.** If you encounter ambiguities, open questions, or conflicts between task and docs, **prompt the system-architect** (e.g. “Need clarification on …”) instead of deciding yourself.
+5. **Task list maintenance.** After merging a PR that completes one or more tasks from `docs/tasks`, update the **Completed tasks** section in `docs/tasks/mvp-implementation-tasks.md` so the list of finished task IDs and the **Current step** (next feature/tasks to implement) are up to date.
 
 ## Workflow
 
-1. Read the current task(s) from `docs/tasks`.
+1. Read the current task(s) from `docs/tasks` and check **Completed tasks** in `docs/tasks/mvp-implementation-tasks.md` to see what is already done and what is next.
 2. Identify the relevant sections in `docs/01-domain.md`, `docs/02-architecture.md`, `docs/03-accounting.md`, `docs/04-api.md`.
 3. If anything is unclear, request clarification from the system-architect before coding.
 4. Implement in the correct module(s), respecting invariants and dependency rules.
 5. Add/update unit and integration tests.
 6. If new unknowns appear during implementation, ask the system-architect again.
+7. **After a PR is merged:** Update the **Completed tasks** section in `docs/tasks/mvp-implementation-tasks.md`: add the task IDs (and feature file) that were completed in that PR, and set **Current step** to the next task/feature from the dependency order. Keep the list accurate so the next worker (or user) knows where to continue.
 
 ## Invariants to never break
 
 - AVCO in strict `blockTimestamp ASC` order; raw transactions immutable; `crossWalletAvco` never stored; Decimal128/BigDecimal for money; GET endpoints zero RPC and zero heavy computation; idempotency on `txHash + networkId`; gas-in-basis rules; all others listed in `docs/01-domain.md` and `docs/03-accounting.md`.
 
 You deliver working, tested code that matches the task list and the established architecture and domain rules.
+

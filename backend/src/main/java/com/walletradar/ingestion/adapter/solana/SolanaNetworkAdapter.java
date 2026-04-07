@@ -3,8 +3,10 @@ package com.walletradar.ingestion.adapter.solana;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.walletradar.domain.NetworkId;
-import com.walletradar.domain.RawTransaction;
+import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.transaction.raw.NormalizationStatus;
+import com.walletradar.domain.transaction.raw.RawTransaction;
+import com.walletradar.domain.transaction.raw.RawSyncMethod;
 import com.walletradar.ingestion.adapter.NetworkAdapter;
 import com.walletradar.ingestion.adapter.RpcEndpointRotator;
 import com.walletradar.ingestion.adapter.RpcException;
@@ -14,6 +16,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -105,7 +108,7 @@ public class SolanaNetworkAdapter implements NetworkAdapter {
                     if (sigInfo.path("err").isNull() == false) {
                         continue;
                     }
-                    RawTransaction tx = getTransactionAndBuildRaw(endpoint, signature, networkIdStr, sigInfo, rotator);
+                    RawTransaction tx = getTransactionAndBuildRaw(endpoint, signature, networkIdStr, walletAddress, sigInfo, rotator);
                     if (tx != null) {
                         txs.add(tx);
                     }
@@ -143,7 +146,8 @@ public class SolanaNetworkAdapter implements NetworkAdapter {
         return list;
     }
 
-    private RawTransaction getTransactionAndBuildRaw(String endpoint, String signature, String networkIdStr, JsonNode sigInfo, RpcEndpointRotator rotator) {
+    private RawTransaction getTransactionAndBuildRaw(String endpoint, String signature, String networkIdStr,
+                                                      String walletAddress, JsonNode sigInfo, RpcEndpointRotator rotator) {
         Exception lastException = null;
         for (int attempt = 0; attempt < rotator.getMaxAttempts(); attempt++) {
             if (attempt > 0) {
@@ -167,15 +171,18 @@ public class SolanaNetworkAdapter implements NetworkAdapter {
                     return null;
                 }
                 RawTransaction tx = new RawTransaction();
+                tx.setId(signature + ":" + networkIdStr + ":" + walletAddress);
                 tx.setTxHash(signature);
                 tx.setNetworkId(networkIdStr);
+                tx.setSyncMethod(RawSyncMethod.RPC);
+                tx.setWalletAddress(walletAddress);
+                tx.setNormalizationStatus(NormalizationStatus.PENDING);
+                tx.setRetryCount(0);
+                tx.setCreatedAt(Instant.now());
+                long slotVal = sigInfo.has("slot") ? sigInfo.get("slot").asLong() : 0L;
+                tx.setSlot(slotVal);
                 Document rawData = new Document("signature", signature);
-                if (sigInfo.has("slot")) {
-                    rawData.put("slot", sigInfo.get("slot").asLong());
-                }
-                if (sigInfo.has("blockTime") && !sigInfo.get("blockTime").isNull()) {
-                    rawData.put("blockTime", sigInfo.get("blockTime").asLong());
-                }
+                sigInfo.fields().forEachRemaining(f -> rawData.put(f.getKey(), jsonNodeToBsonValue(f.getValue())));
                 rawData.put("transaction", result.toString());
                 tx.setRawData(rawData);
                 return tx;
@@ -184,6 +191,24 @@ public class SolanaNetworkAdapter implements NetworkAdapter {
             }
         }
         log.warn("getTransaction failed for {} after retries: {}", signature, lastException != null ? lastException.getMessage() : "");
+        return null;
+    }
+
+    private static Object jsonNodeToBsonValue(JsonNode n) {
+        if (n == null || n.isNull()) return null;
+        if (n.isNumber()) return n.isIntegralNumber() ? n.asLong() : n.asDouble();
+        if (n.isBoolean()) return n.asBoolean();
+        if (n.isTextual()) return n.asText();
+        if (n.isArray()) {
+            List<Object> list = new ArrayList<>();
+            n.forEach(c -> list.add(jsonNodeToBsonValue(c)));
+            return list;
+        }
+        if (n.isObject()) {
+            org.bson.Document doc = new org.bson.Document();
+            n.fields().forEachRemaining(f -> doc.put(f.getKey(), jsonNodeToBsonValue(f.getValue())));
+            return doc;
+        }
         return null;
     }
 }

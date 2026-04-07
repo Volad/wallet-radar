@@ -1,0 +1,2362 @@
+{
+  "version": "1.0.0",
+  "last_updated": "2026-04-06",
+  "description": "WalletRadar Protocol Registry — contract address to DeFi protocol classification mapping",
+  "supported_networks": [
+    "ETHEREUM",
+    "ARBITRUM",
+    "BASE",
+    "OPTIMISM",
+    "POLYGON",
+    "BSC",
+    "AVALANCHE",
+    "ZKSYNC",
+    "LINEA",
+    "MANTLE",
+    "UNICHAIN",
+    "KATANA",
+    "PLASMA"
+  ],
+  "families": [
+    "DEX",
+    "LENDING",
+    "STAKING",
+    "BRIDGE",
+    "CUSTODY",
+    "AGGREGATOR",
+    "YIELD",
+    "WRAPPER",
+    "PERP"
+  ],
+  "event_types": [
+    "SWAP",
+    "LP_MINT",
+    "LP_BURN",
+    "LENDING_DEPOSIT",
+    "LENDING_WITHDRAW",
+    "BORROW",
+    "REPAY",
+    "STAKING_DEPOSIT",
+    "STAKING_WITHDRAW",
+    "VAULT_DEPOSIT",
+    "VAULT_WITHDRAW",
+    "BRIDGE_OUT",
+    "BRIDGE_IN",
+    "PROTOCOL_CUSTODY_DEPOSIT",
+    "PROTOCOL_CUSTODY_WITHDRAW",
+    "REWARD_CLAIM"
+  ],
+  "contracts": {
+    "── DEX: Uniswap ──────────────────────────────────────────────────────": {},
+    "0xe592427a0aece92de3edee1f18e0157c05861564": {
+      "name": "Uniswap V3 SwapRouter",
+      "protocol": "Uniswap",
+      "version": "V3",
+      "family": "DEX",
+      "role": "ROUTER",
+      "event_type": "SWAP",
+      "networks": [
+        "ETHEREUM",
+        "ARBITRUM",
+        "OPTIMISM",
+        "POLYGON"
+      ],
+      "confidence": "HIGH"
+    },
+    "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45": {
+      "name": "Uniswap V3 SwapRouter02",
+      "protocol": "Uniswap",
+      "version": "V3",
+      "family": "DEX",
+      "role": "ROUTER",
+      "event_type": "SWAP",
+      "networks": [
+        "ETHEREUM",
+        "ARBITRUM",
+        "OPTIMISM",
+        "POLYGON",
+        "BASE",
+        "BSC",
+        "AVALANCHE"
+      ],
+      "confidence": "HIGH"
+    },
+    "0x3fc91a3afd70395cd496c647d5a6cc9d4b2b7fad": {
+      "name": "Uniswap Universal Router",
+      "protocol": "Uniswap",
+      "version": "V3",
+      "family": "DEX",
+      "role": "ROUTER",
+      "event_type": "SWAP",
+      "networks": [
+        "ETHEREUM",
+        "ARBITRUM",
+        "OPTIMISM",
+        "POLYGON",
+        "BASE",
+        "BSC",
+        "AVALANCHE",
+        "ZKSYNC",
+        "LINEA"
+      ],
+      "confidence": "HIGH"
+    },
+    "0x1f98431c8ad98523631ae4a59f267346ea31f984": {
+      "name": "Uniswap V3 Factory",
+      "protocol": "Uniswap",
+      "version": "V3",
+      "family": "DEX",
+      "role": "FACTORY",
+      "event_type": "LP_MINT",
+      "networks": [
+        "ETHEREUM",
+        "ARBITRUM",
+        "OPTIMISM",
+        "POLYGON",
+        "BASE"
+      ],
+      "confidence": "HIGH",
+      "notes": "Factory deploys pools; LP_MINT/LP_BURN on pool contracts, not factory"
+    },
+    "0xc36442b4a4522e871399cd717abdd847ab11fe88": {
+      "name": "Uniswap V3 NonfungiblePositionManager",
+      "protocol": "Uniswap",
+      "version": "V3",
+      "family": "DEX",
+      "role": "POSITION_MANAGER",
+      "event_type": "LP_MINT",
+      "networks": [
+        "ETHEREUM",
+        "ARBITRUM",
+        "OPTIMISM",
+        "POLYGON",
+        "BASE"
+      ],
+      "confidence": "HIGH",
+      "notes": "Mint/Burn/Collect on this contract = LP position management"
+    },
+    "0x5c69bee701ef814a2b6a3edd4b1652cb9cc5aa6f": {
+      "name": "Uniswap V2 Factory",
+      "protocol": "Uniswap",
+      "version": "V2",
+      "family": "DEX",
+      "role": "FACTORY",
+      "event_type": "LP_MINT",
+      "networks": [
+        "ETHEREUM"
+      ],
+      "confidence": "HIGH"
+    },
+    "0x7a250d5630b4cf539739df2c5dacb4c659f2488d": {
+      "name": "Uniswap V2 Router02",
+      "protocol": "Uniswap",
+      "version": "V2",
+      "family": "DEX",
+      "role": "ROUTER",
+      "event_type": "SWAP",
+      "networks": [
+        "ETHEREUM",
+        "ARBITRUM",
+        "OPTIMISM",
+        "POLYGON",
+        "BASE"
+      ],
+      "confidence": "HIGH"
+    },
+    "── DEX: SushiSwap ────────────────────────────────────────────────────": {},
+    "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506": {
+      "name": "SushiSwap Router",
+      "protocol": "SushiSwap",
+      "version": "V2",
+      "family": "DEX",
+      "role": "ROUTER",
+      "event_type": "SWAP",
+      "networks": [
+        "ETHEREUM",
+        "ARBITRUM",
+        "OPTIMISM",
+        "POLYGON",
+        "BSC",
+        "AVALANCHE"
+      ],
+      "confidence": "HIGH"
+    },
+    "0x0dc8e47a1196bcb590485ee8bf832c5c68a52f4b": {
+      "name": "SushiSwap RouteProcessor3 (Katana)",
+      "protocol": "SushiSwap",
+      "version": "V3",
+      "family": "DEX",
+      "role": "ROUTER",
+      "event_type": "SWAP",
+      "networks": [
+        "KATANA"
+      ],
+      "confidence": "HIGH",
+      "notes": "Canonical SushiSwap V3 router on Katana. Same bytecode as Arbitrum/Base deployments via CREATE2. Verify on katanascan.com"
+    },
+    "── DEX: Curve Finance ────────────────────────────────────────────────": {},
+    "0x99a58482bd75cbab83b27ec03ca68ff489b5788f": {
+      "name": "Curve Router NG",
+      "protocol": "Curve",
+      "version": "NG",
+      "family": "DEX",
+      "role": "ROUTER",
+      "event_type": "SWAP",
+      "networks": [
+        "ETHEREUM",
+        "ARBITRUM",
+        "OPTIMISM",
+        "POLYGON",
+        "BASE",
+        "BSC",
+        "AVALANCHE"
+      ],
+      "confidence": "HIGH"
+    },
+    "0xf18056bbd320e96a48e3fbf8bc061322531aac99": {
+      "name": "Curve Router",
+      "protocol": "Curve",
+      "version": "V1",
+      "family": "DEX",
+      "role": "ROUTER",
+      "event_type": "SWAP",
+      "networks": [
+        "ETHEREUM"
+      ],
+      "confidence": "HIGH"
+    },
+    "── DEX: Balancer ─────────────────────────────────────────────────────": {},
+    "0xba12222222228d8ba445958a75a0704d566bf2c8": {
+      "name": "Balancer Vault",
+      "protocol": "Balancer",
+      "version": "V2",
+      "family": "DEX",
+      "role": "VAULT",
+      "event_type": null,
+      "networks": [
+        "ETHEREUM",
+        "ARBITRUM",
+        "OPTIMISM",
+        "POLYGON",
+        "BASE",
+        "AVALANCHE",
+        "ZKSYNC"
+      ],
+      "decomposeByLegs": true,
+      "specialHandler": "BALANCER_VAULT",
+      "confidence": "HIGH",
+      "notes": "Single vault for all Balancer V2 pools. Also handles LP_MINT/LP_BURN via joinPool/exitPool"
+    },
+    "── DEX: Aerodrome (Base) ─────────────────────────────────────────────": {},
+    "0xcf77a3ba9a5ca399b7c97c74d54e5b1beb874e43": {
+      "name": "Aerodrome Router",
+      "protocol": "Aerodrome",
+      "version": "V2",
+      "family": "DEX",
+      "role": "ROUTER",
+      "event_type": "SWAP",
+      "networks": [
+        "BASE"
+      ],
+      "confidence": "HIGH"
+    },
+    "0x6cb442acf35158d5eda88fe602221b67b400be3e": {
+      "name": "Aerodrome Universal Router",
+      "protocol": "Aerodrome",
+      "version": "V2",
+      "family": "DEX",
+      "role": "ROUTER",
+      "event_type": "SWAP",
+      "networks": [
+        "BASE"
+      ],
+      "confidence": "HIGH"
+    },
+    "── DEX: Velodrome (Optimism) ─────────────────────────────────────────": {},
+    "0xa062ae8a9c5e11aaa026fc2670b0d65ccc8b2858": {
+      "name": "Velodrome Router",
+      "protocol": "Velodrome",
+      "version": "V2",
+      "family": "DEX",
+      "role": "ROUTER",
+      "event_type": "SWAP",
+      "networks": [
+        "OPTIMISM"
+      ],
+      "confidence": "HIGH"
+    },
+    "── DEX: Camelot (Arbitrum) ───────────────────────────────────────────": {},
+    "0xc873fecbd354f5a56e00e710b90ef4201db2448d": {
+      "name": "Camelot Router",
+      "protocol": "Camelot",
+      "version": "V2",
+      "family": "DEX",
+      "role": "ROUTER",
+      "event_type": "SWAP",
+      "networks": [
+        "ARBITRUM"
+      ],
+      "confidence": "HIGH"
+    },
+    "── DEX: PancakeSwap (BSC + multichain) ───────────────────────────────": {},
+    "0x10ed43c718714eb63d5aa57b78b54704e256024e": {
+      "name": "PancakeSwap V2 Router",
+      "protocol": "PancakeSwap",
+      "version": "V2",
+      "family": "DEX",
+      "role": "ROUTER",
+      "event_type": "SWAP",
+      "networks": [
+        "BSC"
+      ],
+      "confidence": "HIGH"
+    },
+    "0x13f4ea83d0bd40e75c8222255bc855a974568dd4": {
+      "name": "PancakeSwap V3 SmartRouter",
+      "protocol": "PancakeSwap",
+      "version": "V3",
+      "family": "DEX",
+      "role": "ROUTER",
+      "event_type": "SWAP",
+      "networks": [
+        "BSC",
+        "ETHEREUM",
+        "ARBITRUM",
+        "BASE",
+        "LINEA"
+      ],
+      "confidence": "HIGH"
+    },
+    "0x46a15b0b27311cedf172ab29e4f4766fbe7f4364": {
+      "name": "PancakeSwap V3 Nonfungible Position Manager",
+      "protocol": "PancakeSwap",
+      "version": "V3",
+      "family": "DEX",
+      "role": "POSITION_MANAGER",
+      "event_type": "LP_MINT",
+      "networks": [
+        "ARBITRUM",
+        "BASE"
+      ],
+      "confidence": "HIGH",
+      "notes": "V3 LP position NFT manager on Arbitrum and Base. Handles mint/increase/decrease/collect and LP NFT transfers into farming contracts."
+    },
+    "0x55f4c8aba71a1e923edc303eb4feff14608cc226": {
+      "name": "Pancake Infinity CLPositionManager",
+      "protocol": "PancakeSwap",
+      "version": "Infinity",
+      "family": "DEX",
+      "role": "POSITION_MANAGER",
+      "event_type": null,
+      "networks": [
+        "BSC"
+      ],
+      "confidence": "HIGH",
+      "decomposeByLegs": true,
+      "notes": "BSC concentrated-liquidity position manager. multicall(bytes[]) and modifyLiquidities(bytes,uint256) must be resolved from canonical raw legs/log-backed evidence."
+    },
+    "0x4529a01c7a0410167c5740c487a8de60232617bf": {
+      "name": "Unichain Position Manager",
+      "protocol": "Uniswap",
+      "version": "V4",
+      "family": "DEX",
+      "role": "POSITION_MANAGER",
+      "event_type": null,
+      "networks": [
+        "UNICHAIN"
+      ],
+      "confidence": "HIGH",
+      "decomposeByLegs": true,
+      "notes": "Method-aware concentrated-liquidity position manager. modifyLiquidities must be decoded from resulting actions/legs."
+    },
+    "0x5e09acf80c0296740ec5d6f643005a4ef8daa694": {
+      "name": "PancakeSwap V3 MasterChef",
+      "protocol": "PancakeSwap",
+      "version": "V3",
+      "family": "DEX",
+      "role": "STAKE_CONTRACT",
+      "event_type": null,
+      "networks": [
+        "ARBITRUM"
+      ],
+      "confidence": "HIGH",
+      "notes": "Liquidity-mining custody contract for PancakeSwap V3 LP position NFTs on Arbitrum. Used to identify LP_POSITION_STAKE/UNSTAKE and staked-position liquidity changes."
+    },
+    "0xc6a2db661d5a5690172d8eb0a7dea2d3008665a3": {
+      "name": "PancakeSwap V3 MasterChef",
+      "protocol": "PancakeSwap",
+      "version": "V3",
+      "family": "DEX",
+      "role": "STAKE_CONTRACT",
+      "event_type": null,
+      "networks": [
+        "BASE"
+      ],
+      "confidence": "HIGH",
+      "notes": "Liquidity-mining custody contract for PancakeSwap V3 LP position NFTs on Base. Handles staked-position liquidity changes and withdraw flows."
+    },
+    "0x416b433906b1b72fa758e166e239c43d68dc6f29": {
+      "name": "Velodrome Slipstream Position Manager",
+      "protocol": "Velodrome",
+      "version": "Slipstream",
+      "family": "DEX",
+      "role": "POSITION_MANAGER",
+      "event_type": "LP_MINT",
+      "networks": [
+        "OPTIMISM"
+      ],
+      "confidence": "HIGH",
+      "notes": "Optimism concentrated-liquidity position manager. Supports direct mint, multicall collect/decrease flows, and LP NFT custody transfers."
+    },
+    "0x0f5212f63ba8eab0fabd94fc2071d461d9d6ddb2": {
+      "name": "Velodrome Slipstream Staking Contract",
+      "protocol": "Velodrome",
+      "version": "Slipstream",
+      "family": "DEX",
+      "role": "STAKE_CONTRACT",
+      "event_type": null,
+      "networks": [
+        "OPTIMISM"
+      ],
+      "confidence": "HIGH",
+      "notes": "LP-position custody contract on Optimism. Pure deposit(uint256)/withdraw(uint256) calls represent LP position stake/unstake, while reward-bearing paths remain method-aware."
+    },
+    "0xc762d18800b3f78ae56e9e61ad7be98a413d59de": {
+      "name": "Velodrome Slipstream Staking Contract",
+      "protocol": "Velodrome",
+      "version": "Slipstream",
+      "family": "DEX",
+      "role": "STAKE_CONTRACT",
+      "event_type": null,
+      "networks": [
+        "OPTIMISM"
+      ],
+      "confidence": "HIGH",
+      "notes": "LP-position custody contract on Optimism. Pure deposit(uint256)/withdraw(uint256) calls represent LP position stake/unstake, while reward-bearing paths remain method-aware."
+    },
+    "0xbc6043a5e50ba0c0213d2f7430a73e4590af97ad": {
+      "name": "Velodrome Slipstream Staking Contract",
+      "protocol": "Velodrome",
+      "version": "Slipstream",
+      "family": "DEX",
+      "role": "STAKE_CONTRACT",
+      "event_type": null,
+      "networks": [
+        "OPTIMISM"
+      ],
+      "confidence": "HIGH",
+      "notes": "LP-position custody contract on Optimism. Pure deposit(uint256)/withdraw(uint256) calls represent LP position stake/unstake, while reward-bearing paths remain method-aware."
+    },
+    "0x7816f1711828c52eb3ca5a2f075a0c06e0548bd6": {
+      "name": "SmartChefInitializable",
+      "protocol": "PancakeSwap",
+      "version": "V1",
+      "family": "STAKING",
+      "role": "STAKE_CONTRACT",
+      "event_type": "STAKING_DEPOSIT",
+      "networks": [
+        "BSC"
+      ],
+      "confidence": "HIGH",
+      "notes": "deposit(uint256) remains STAKING_DEPOSIT even when the same tx also claims/distributes rewards."
+    },
+    "0xdaee41e335322c85ff2c5a6745c98e1351806e98": {
+      "name": "PancakeSwap Universal Router",
+      "protocol": "PancakeSwap",
+      "version": "V3",
+      "family": "DEX",
+      "role": "ROUTER",
+      "event_type": "SWAP",
+      "networks": [
+        "ZKSYNC"
+      ],
+      "confidence": "HIGH",
+      "notes": "Universal router on zkSync Era. Uses method-aware dispatch for execute(bytes,bytes[],uint256) overloads."
+    },
+    "── DEX: QuickSwap (Polygon) ──────────────────────────────────────────": {},
+    "0xa5e0829caced8ffdd4de3c43696c57f7d7a678ff": {
+      "name": "QuickSwap V2 Router",
+      "protocol": "QuickSwap",
+      "version": "V2",
+      "family": "DEX",
+      "role": "ROUTER",
+      "event_type": "SWAP",
+      "networks": [
+        "POLYGON"
+      ],
+      "confidence": "HIGH"
+    },
+    "0xf5b509bb0909a69b1c207e495f687a596c168e12": {
+      "name": "QuickSwap V3 AlgebraRouter",
+      "protocol": "QuickSwap",
+      "version": "V3",
+      "family": "DEX",
+      "role": "ROUTER",
+      "event_type": "SWAP",
+      "networks": [
+        "POLYGON"
+      ],
+      "confidence": "HIGH"
+    },
+    "── DEX: TraderJoe (Avalanche) ────────────────────────────────────────": {},
+    "0xb4315e873dbcf96ffd0acd8ea43f689d8c20fb30": {
+      "name": "TraderJoe LBRouter V2.2",
+      "protocol": "TraderJoe",
+      "version": "V2.2",
+      "family": "DEX",
+      "role": "ROUTER",
+      "event_type": "SWAP",
+      "networks": [
+        "AVALANCHE",
+        "ARBITRUM",
+        "BSC"
+      ],
+      "confidence": "HIGH"
+    },
+    "── AGGREGATORS ────────────────────────────────────────────────────────": {},
+    "0x1111111254eeb25477b68fb85ed929f73a960582": {
+      "name": "1inch Aggregation Router V5",
+      "protocol": "1inch",
+      "version": "V5",
+      "family": "AGGREGATOR",
+      "role": "ROUTER",
+      "event_type": "SWAP",
+      "networks": [
+        "ETHEREUM",
+        "ARBITRUM",
+        "OPTIMISM",
+        "POLYGON",
+        "BASE",
+        "BSC",
+        "AVALANCHE",
+        "ZKSYNC",
+        "LINEA"
+      ],
+      "confidence": "HIGH"
+    },
+    "0x111111125421ca6dc452d289314280a0f8842a65": {
+      "name": "1inch Aggregation Router V6",
+      "protocol": "1inch",
+      "version": "V6",
+      "family": "AGGREGATOR",
+      "role": "ROUTER",
+      "event_type": "SWAP",
+      "networks": [
+        "ETHEREUM",
+        "ARBITRUM",
+        "OPTIMISM",
+        "POLYGON",
+        "BASE",
+        "BSC",
+        "AVALANCHE",
+        "ZKSYNC",
+        "LINEA",
+        "MANTLE"
+      ],
+      "confidence": "HIGH"
+    },
+    "0xdef1c0ded9bec7f1a1670819833240f027b25eff": {
+      "name": "0x Exchange Proxy",
+      "protocol": "0x Protocol",
+      "version": "V4",
+      "family": "AGGREGATOR",
+      "role": "ROUTER",
+      "event_type": "SWAP",
+      "networks": [
+        "ETHEREUM",
+        "ARBITRUM",
+        "OPTIMISM",
+        "POLYGON",
+        "BASE",
+        "BSC",
+        "AVALANCHE"
+      ],
+      "confidence": "HIGH"
+    },
+    "0x216b4b4ba9f3e719726886d34a177484278bfcae": {
+      "name": "Paraswap AugustusSwapper V6",
+      "protocol": "Paraswap",
+      "version": "V6",
+      "family": "AGGREGATOR",
+      "role": "ROUTER",
+      "event_type": "SWAP",
+      "networks": [
+        "ETHEREUM",
+        "ARBITRUM",
+        "OPTIMISM",
+        "POLYGON",
+        "BASE",
+        "BSC",
+        "AVALANCHE"
+      ],
+      "confidence": "HIGH"
+    },
+    "0xdef171fe48cf0115b1d80b88dc8eab59176fee57": {
+      "name": "Paraswap AugustusSwapper V5",
+      "protocol": "Paraswap",
+      "version": "V5",
+      "family": "AGGREGATOR",
+      "role": "ROUTER",
+      "event_type": "SWAP",
+      "networks": [
+        "ETHEREUM",
+        "ARBITRUM",
+        "OPTIMISM",
+        "POLYGON",
+        "BSC",
+        "AVALANCHE"
+      ],
+      "confidence": "HIGH"
+    },
+    "0x1231deb6f5749ef6ce6943a275a1d3e7486f4eae": {
+      "name": "LI.FI Diamond",
+      "protocol": "LiFi",
+      "version": "V1",
+      "family": "BRIDGE",
+      "role": "BRIDGE_ENTRY",
+      "event_type": null,
+      "networks": [
+        "ETHEREUM",
+        "BASE",
+        "BSC"
+      ],
+      "confidence": "HIGH",
+      "notes": "Method-aware bridge entry router. swapAndStartBridgeTokensViaMayan(...) is BRIDGE_OUT when canonical raw shows bridge-entry semantics."
+    },
+    "0x6131b5fae19ea4f9d964eac0408e4408b66337b5": {
+      "name": "KyberSwap MetaAggregationRouterV2",
+      "protocol": "KyberSwap",
+      "version": "V2",
+      "family": "AGGREGATOR",
+      "role": "ROUTER",
+      "event_type": "SWAP",
+      "networks": [
+        "ETHEREUM",
+        "ARBITRUM",
+        "OPTIMISM",
+        "POLYGON",
+        "BASE",
+        "BSC",
+        "AVALANCHE",
+        "ZKSYNC",
+        "LINEA"
+      ],
+      "confidence": "HIGH"
+    },
+    "── LENDING: Aave V3 ──────────────────────────────────────────────────": {},
+    "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2": {
+      "name": "Aave V3 Pool",
+      "protocol": "Aave",
+      "version": "V3",
+      "family": "LENDING",
+      "role": "POOL",
+      "event_type": "LENDING_DEPOSIT",
+      "networks": [
+        "ETHEREUM"
+      ],
+      "confidence": "HIGH",
+      "notes": "Supply=LENDING_DEPOSIT, Withdraw=LENDING_WITHDRAW, Borrow=BORROW, Repay=REPAY"
+    },
+    "0x794a61358d6845594f94dc1db02a252b5b4814ad": {
+      "name": "Aave V3 Pool",
+      "protocol": "Aave",
+      "version": "V3",
+      "family": "LENDING",
+      "role": "POOL",
+      "event_type": "LENDING_DEPOSIT",
+      "networks": [
+        "ARBITRUM",
+        "OPTIMISM",
+        "POLYGON",
+        "AVALANCHE"
+      ],
+      "confidence": "HIGH",
+      "notes": "Same proxy address deployed across multiple chains"
+    },
+    "0xa238dd80c259a72e81d7e4664a9801593f98d1c5": {
+      "name": "Aave V3 Pool",
+      "protocol": "Aave",
+      "version": "V3",
+      "family": "LENDING",
+      "role": "POOL",
+      "event_type": "LENDING_DEPOSIT",
+      "networks": [
+        "BASE"
+      ],
+      "confidence": "HIGH"
+    },
+    "0x6807dc923806fe8fd134338eabca509979a7e0cb": {
+      "name": "Aave V3 Pool",
+      "protocol": "Aave",
+      "version": "V3",
+      "family": "LENDING",
+      "role": "POOL",
+      "event_type": "LENDING_DEPOSIT",
+      "networks": [
+        "BSC"
+      ],
+      "confidence": "HIGH"
+    },
+    "0x3a85d5c9e3a8c12f71c0e5d9ada50dfc7e8e5b47": {
+      "name": "Aave V3 Pool",
+      "protocol": "Aave",
+      "version": "V3",
+      "family": "LENDING",
+      "role": "POOL",
+      "event_type": "LENDING_DEPOSIT",
+      "networks": [
+        "LINEA"
+      ],
+      "confidence": "MEDIUM"
+    },
+    "0x78e30497a3c7527d953c6b1e3541b021a98ac43c": {
+      "name": "Aave V3 Pool",
+      "protocol": "Aave",
+      "version": "V3",
+      "family": "LENDING",
+      "role": "POOL",
+      "event_type": "LENDING_DEPOSIT",
+      "networks": [
+        "ZKSYNC"
+      ],
+      "confidence": "HIGH",
+      "notes": "zkSync Era Aave V3 pool. Supply=LENDING_DEPOSIT, Withdraw=LENDING_WITHDRAW, Borrow=BORROW, Repay=REPAY"
+    },
+    "── LENDING: Aave V2 ──────────────────────────────────────────────────": {},
+    "0x7d2768de32b0b80b7a3454c06bdac94a69ddc7a9": {
+      "name": "Aave V2 LendingPool",
+      "protocol": "Aave",
+      "version": "V2",
+      "family": "LENDING",
+      "role": "POOL",
+      "event_type": "LENDING_DEPOSIT",
+      "networks": [
+        "ETHEREUM"
+      ],
+      "confidence": "HIGH"
+    },
+    "0x8dff5e27ea6b7ac08ebfdf9eb090f32ee9a30fcf": {
+      "name": "Aave V2 LendingPool",
+      "protocol": "Aave",
+      "version": "V2",
+      "family": "LENDING",
+      "role": "POOL",
+      "event_type": "LENDING_DEPOSIT",
+      "networks": [
+        "POLYGON"
+      ],
+      "confidence": "HIGH"
+    },
+    "── LENDING: Compound V3 ──────────────────────────────────────────────": {},
+    "0xc3d688b66703497daa19211eedff47f25384cdc3": {
+      "name": "Compound V3 cUSDCv3 (Comet)",
+      "protocol": "Compound",
+      "version": "V3",
+      "family": "LENDING",
+      "role": "POOL",
+      "event_type": "LENDING_DEPOSIT",
+      "networks": [
+        "ETHEREUM"
+      ],
+      "confidence": "HIGH"
+    },
+    "0xa17581a9e3356d9a858b789d68b4d866e593ae94": {
+      "name": "Compound V3 cWETHv3 (Comet)",
+      "protocol": "Compound",
+      "version": "V3",
+      "family": "LENDING",
+      "role": "POOL",
+      "event_type": "LENDING_DEPOSIT",
+      "networks": [
+        "ETHEREUM"
+      ],
+      "confidence": "HIGH"
+    },
+    "0xa5edbdd9646f8dff606d7448e414884c7d905dca": {
+      "name": "Compound V3 cUSDCv3 (Comet)",
+      "protocol": "Compound",
+      "version": "V3",
+      "family": "LENDING",
+      "role": "POOL",
+      "event_type": "LENDING_DEPOSIT",
+      "networks": [
+        "ARBITRUM"
+      ],
+      "confidence": "HIGH"
+    },
+    "0x2e44e174f7d53f0212823acc11c01a11d58c5bcb": {
+      "name": "Compound V3 cUSDCv3 (Comet)",
+      "protocol": "Compound",
+      "version": "V3",
+      "family": "LENDING",
+      "role": "POOL",
+      "event_type": "LENDING_DEPOSIT",
+      "networks": [
+        "OPTIMISM"
+      ],
+      "confidence": "HIGH"
+    },
+    "0xf25212e676d1f7f89cd72ffee66158f541246445": {
+      "name": "Compound V3 cUSDCv3 (Comet)",
+      "protocol": "Compound",
+      "version": "V3",
+      "family": "LENDING",
+      "role": "POOL",
+      "event_type": "LENDING_DEPOSIT",
+      "networks": [
+        "POLYGON"
+      ],
+      "confidence": "HIGH"
+    },
+    "── LENDING: Compound V2 ──────────────────────────────────────────────": {},
+    "0x4ddc2d193948926d02f9b1fe9e1daa0718270ed5": {
+      "name": "Compound V2 cETH",
+      "protocol": "Compound",
+      "version": "V2",
+      "family": "LENDING",
+      "role": "POOL",
+      "event_type": "LENDING_DEPOSIT",
+      "networks": [
+        "ETHEREUM"
+      ],
+      "confidence": "HIGH"
+    },
+    "0x5d3a536e4d6dbd6114cc1ead35777bab948e3643": {
+      "name": "Compound V2 cDAI",
+      "protocol": "Compound",
+      "version": "V2",
+      "family": "LENDING",
+      "role": "POOL",
+      "event_type": "LENDING_DEPOSIT",
+      "networks": [
+        "ETHEREUM"
+      ],
+      "confidence": "HIGH"
+    },
+    "── LENDING: MorphoBlue ───────────────────────────────────────────────": {},
+    "0xbbbbbbbbbb9cc5e90e3b3af64bdaf62c37eeffcb": {
+      "name": "MorphoBlue (Katana)",
+      "protocol": "Morpho",
+      "version": "Blue",
+      "family": "LENDING",
+      "role": "POOL",
+      "event_type": "LENDING_DEPOSIT",
+      "networks": [
+        "KATANA"
+      ],
+      "confidence": "HIGH",
+      "notes": "MorphoBlue uses same deterministic address (CREATE2) across all chains including Katana (chainId 747474). Confirmed in morpho-blue-api-metadata repo which lists chainId 747474."
+    },
+    "0x1fa4431bc113d308bee1d46b0e98cb805fb48c13": {
+      "name": "Morpho Bundler3",
+      "protocol": "Morpho",
+      "version": "Bundler3",
+      "family": "AGGREGATOR",
+      "role": "ROUTER",
+      "event_type": null,
+      "networks": [
+        "ARBITRUM"
+      ],
+      "confidence": "HIGH",
+      "decomposeByLegs": true,
+      "specialHandler": "MORPHO_BUNDLER",
+      "notes": "Method-aware bundler for Morpho vault/lending flows on Arbitrum. Do not classify from generic multicall keywords."
+    },
+    "── LENDING: Radiant (Arbitrum) ───────────────────────────────────────": {},
+    "0xf4b1486dd74d07706052a33d31d7c0aafd0659e1": {
+      "name": "Radiant V2 LendingPool",
+      "protocol": "Radiant",
+      "version": "V2",
+      "family": "LENDING",
+      "role": "POOL",
+      "event_type": "LENDING_DEPOSIT",
+      "networks": [
+        "ARBITRUM",
+        "BSC"
+      ],
+      "confidence": "HIGH"
+    },
+    "── LENDING: BENQI (Avalanche) ────────────────────────────────────────": {},
+    "0x486af39519b4dc9a7fccd318217352830e8ad9b4": {
+      "name": "BENQI Comptroller",
+      "protocol": "BENQI",
+      "version": "V1",
+      "family": "LENDING",
+      "role": "POOL",
+      "event_type": "LENDING_DEPOSIT",
+      "networks": [
+        "AVALANCHE"
+      ],
+      "confidence": "HIGH"
+    },
+    "── STAKING: Lido ─────────────────────────────────────────────────────": {},
+    "0xae7ab96520de3a18e5e111b5eaab095312d7fe84": {
+      "name": "Lido stETH",
+      "protocol": "Lido",
+      "version": "V1",
+      "family": "STAKING",
+      "role": "STAKE_CONTRACT",
+      "event_type": "STAKING_DEPOSIT",
+      "networks": [
+        "ETHEREUM"
+      ],
+      "confidence": "HIGH",
+      "notes": "submit() = STAKING_DEPOSIT; rebasing token — balance increases over time"
+    },
+    "0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0": {
+      "name": "Lido wstETH",
+      "protocol": "Lido",
+      "version": "V1",
+      "family": "WRAPPER",
+      "role": "WRAPPER_CONTRACT",
+      "event_type": "STAKING_DEPOSIT",
+      "networks": [
+        "ETHEREUM"
+      ],
+      "confidence": "HIGH",
+      "notes": "wrap/unwrap stETH <> wstETH; non-rebasing wrapper; same cost basis chain"
+    },
+    "── STAKING: Rocket Pool ──────────────────────────────────────────────": {},
+    "0xae78736cd615f374d3085123a210448e74fc6393": {
+      "name": "Rocket Pool rETH",
+      "protocol": "Rocket Pool",
+      "version": "V1",
+      "family": "STAKING",
+      "role": "STAKE_CONTRACT",
+      "event_type": "STAKING_DEPOSIT",
+      "networks": [
+        "ETHEREUM"
+      ],
+      "confidence": "HIGH",
+      "notes": "rETH is yield-bearing derivative; exchange rate changes over time"
+    },
+    "0xdd3f50f8a6cafbe9b31a427582963f465e745af8": {
+      "name": "Rocket Pool Deposit Pool",
+      "protocol": "Rocket Pool",
+      "version": "V1",
+      "family": "STAKING",
+      "role": "STAKE_CONTRACT",
+      "event_type": "STAKING_DEPOSIT",
+      "networks": [
+        "ETHEREUM"
+      ],
+      "confidence": "HIGH"
+    },
+    "── STAKING: Frax ETH ─────────────────────────────────────────────────": {},
+    "0x5e8422345238f34275888049021821e8e08caa1f": {
+      "name": "Frax frxETH Minter",
+      "protocol": "Frax",
+      "version": "V1",
+      "family": "STAKING",
+      "role": "STAKE_CONTRACT",
+      "event_type": "STAKING_DEPOSIT",
+      "networks": [
+        "ETHEREUM"
+      ],
+      "confidence": "HIGH"
+    },
+    "0xac3e018457b222d93114458476f3e3416abbe38f": {
+      "name": "Frax sfrxETH",
+      "protocol": "Frax",
+      "version": "V1",
+      "family": "STAKING",
+      "role": "STAKE_CONTRACT",
+      "event_type": "STAKING_DEPOSIT",
+      "networks": [
+        "ETHEREUM"
+      ],
+      "confidence": "HIGH",
+      "notes": "ERC4626 vault; deposit frxETH get sfrxETH"
+    },
+    "── YIELD: Convex Finance ─────────────────────────────────────────────": {},
+    "0xf403c135812408bfbe8713b5a23a04b3d48aae31": {
+      "name": "Convex Booster",
+      "protocol": "Convex",
+      "version": "V1",
+      "family": "YIELD",
+      "role": "VAULT",
+      "event_type": "VAULT_DEPOSIT",
+      "networks": [
+        "ETHEREUM"
+      ],
+      "confidence": "HIGH",
+      "notes": "deposit/withdraw Curve LP tokens for boosted CRV rewards"
+    },
+    "── YIELD: Yearn Finance ──────────────────────────────────────────────": {},
+    "0x50c1a2ea0a861a967d9d0ffe2ae4012c2e053804": {
+      "name": "Yearn Vault (generic)",
+      "protocol": "Yearn",
+      "version": "V2",
+      "family": "YIELD",
+      "role": "VAULT",
+      "event_type": "VAULT_DEPOSIT",
+      "networks": [
+        "ETHEREUM"
+      ],
+      "confidence": "MEDIUM",
+      "notes": "Many Yearn vault addresses; this is a common one. Use ERC4626 interface detection"
+    },
+    "── YIELD: Beefy Finance ──────────────────────────────────────────────": {},
+    "0x453d4ba9a2d594314df88564248497f7d74d6b2c": {
+      "name": "Beefy Vault (generic)",
+      "protocol": "Beefy",
+      "version": "V6",
+      "family": "YIELD",
+      "role": "VAULT",
+      "event_type": "VAULT_DEPOSIT",
+      "networks": [
+        "BSC",
+        "POLYGON",
+        "AVALANCHE",
+        "ARBITRUM",
+        "OPTIMISM"
+      ],
+      "confidence": "MEDIUM",
+      "notes": "Many Beefy vault addresses. Detect via ERC4626 + Beefy factory"
+    },
+    "── PROTOCOL CUSTODY: Hyperliquid ─────────────────────────────────────": {},
+    "0x2df1c51e09aecf9cacb7bc98cb1742757f163df7": {
+      "name": "Hyperliquid Bridge2",
+      "protocol": "Hyperliquid",
+      "version": "V2",
+      "family": "CUSTODY",
+      "role": "BRIDGE_ENTRY",
+      "event_type": "PROTOCOL_CUSTODY_DEPOSIT",
+      "networks": [
+        "ARBITRUM"
+      ],
+      "confidence": "HIGH",
+      "notes": "USDC deposit to Hyperliquid L1. Withdrawal handled by validators, no L2 tx. NetWorth ~$3.8B"
+    },
+    "── BRIDGES: Native L1↔L2 ─────────────────────────────────────────────": {},
+    "0x8315177ab297ba92a06054ce80a67ed4dbd7ed3a": {
+      "name": "Arbitrum Bridge (Inbox)",
+      "protocol": "Arbitrum",
+      "version": "V1",
+      "family": "BRIDGE",
+      "role": "BRIDGE_ENTRY",
+      "event_type": "BRIDGE_OUT",
+      "networks": [
+        "ETHEREUM"
+      ],
+      "confidence": "HIGH",
+      "notes": "ETH/token deposits from Ethereum to Arbitrum One. On Arbitrum side: funds arrive at wallet"
+    },
+    "0x72ce9c846789fdb6fc1f34ac4ad25dd9ef7031ef": {
+      "name": "Arbitrum L1 Gateway Router",
+      "protocol": "Arbitrum",
+      "version": "V1",
+      "family": "BRIDGE",
+      "role": "BRIDGE_ENTRY",
+      "event_type": "BRIDGE_OUT",
+      "networks": [
+        "ETHEREUM"
+      ],
+      "confidence": "HIGH"
+    },
+    "0x5288c571fd7ad117bea99bf60fe0846c4e84f933": {
+      "name": "Arbitrum L2 Gateway Router",
+      "protocol": "Arbitrum",
+      "version": "V1",
+      "family": "BRIDGE",
+      "role": "BRIDGE_EXIT",
+      "event_type": "BRIDGE_OUT",
+      "networks": [
+        "ARBITRUM"
+      ],
+      "confidence": "HIGH",
+      "notes": "Withdrawal from Arbitrum to Ethereum. Funds arrive on L1 after 7-day challenge period"
+    },
+    "0x99c9fc46f92e8a1c0dec1b1747d010903e884be1": {
+      "name": "Optimism L1StandardBridge",
+      "protocol": "Optimism",
+      "version": "V1",
+      "family": "BRIDGE",
+      "role": "BRIDGE_ENTRY",
+      "event_type": "BRIDGE_OUT",
+      "networks": [
+        "ETHEREUM"
+      ],
+      "confidence": "HIGH"
+    },
+    "0x4200000000000000000000000000000000000010": {
+      "name": "L2StandardBridge (Katana → Ethereum)",
+      "protocol": "Katana/AggLayer",
+      "version": "V1",
+      "family": "BRIDGE",
+      "role": "BRIDGE_EXIT",
+      "event_type": "BRIDGE_OUT",
+      "networks": [
+        "KATANA"
+      ],
+      "confidence": "HIGH",
+      "notes": "OP Stack predeploy. Withdrawal from Katana to Ethereum via AggLayer / Polygon CDK bridge."
+    },
+    "0x4200000000000000000000000000000000000007": {
+      "name": "L2CrossDomainMessenger (OP Stack)",
+      "protocol": "Optimism/Base",
+      "version": "V1",
+      "family": "BRIDGE",
+      "role": "BRIDGE_EXIT",
+      "event_type": "BRIDGE_OUT",
+      "networks": [
+        "OPTIMISM",
+        "BASE"
+      ],
+      "confidence": "HIGH",
+      "notes": "Predeploy; message passing. Usually paired with L2StandardBridge"
+    },
+    "0x3154cf16ccdb4c6d922629664174b904d80f2c35": {
+      "name": "Base L1StandardBridge",
+      "protocol": "Base",
+      "version": "V1",
+      "family": "BRIDGE",
+      "role": "BRIDGE_ENTRY",
+      "event_type": "BRIDGE_OUT",
+      "networks": [
+        "ETHEREUM"
+      ],
+      "confidence": "HIGH"
+    },
+    "0x32400084c286cf3e17e7b677ea9583e60a000324": {
+      "name": "zkSync Era L1 Diamond Proxy",
+      "protocol": "zkSync Era",
+      "version": "V1",
+      "family": "BRIDGE",
+      "role": "BRIDGE_ENTRY",
+      "event_type": "BRIDGE_OUT",
+      "networks": [
+        "ETHEREUM"
+      ],
+      "confidence": "HIGH",
+      "notes": "Main L1 entry for zkSync Era. Handles ETH and ERC-20 deposits"
+    },
+    "0x11f943b2c77b743ab90f4a0ae7d5a4e7fca3e102": {
+      "name": "zkSync Era L1 ERC20 Bridge",
+      "protocol": "zkSync Era",
+      "version": "V1",
+      "family": "BRIDGE",
+      "role": "BRIDGE_ENTRY",
+      "event_type": "BRIDGE_OUT",
+      "networks": [
+        "ETHEREUM"
+      ],
+      "confidence": "MEDIUM"
+    },
+    "0xd19d4b5d358258f05d7b411e21a1460d11b0876f": {
+      "name": "Linea L1 Message Service",
+      "protocol": "Linea",
+      "version": "V1",
+      "family": "BRIDGE",
+      "role": "BRIDGE_ENTRY",
+      "event_type": "BRIDGE_OUT",
+      "networks": [
+        "ETHEREUM"
+      ],
+      "confidence": "MEDIUM"
+    },
+    "0x508ca82df566dcd1b0de8296e70a96332cd644ec": {
+      "name": "Linea L1 Token Bridge",
+      "protocol": "Linea",
+      "version": "V1",
+      "family": "BRIDGE",
+      "role": "BRIDGE_ENTRY",
+      "event_type": "BRIDGE_OUT",
+      "networks": [
+        "ETHEREUM"
+      ],
+      "confidence": "MEDIUM"
+    },
+    "0xa2ee6fce4acb62d95448729cdb781e3beb62504a": {
+      "name": "Polygon POS Bridge (Ethereum)",
+      "protocol": "Polygon",
+      "version": "V1",
+      "family": "BRIDGE",
+      "role": "BRIDGE_ENTRY",
+      "event_type": "BRIDGE_OUT",
+      "networks": [
+        "ETHEREUM"
+      ],
+      "confidence": "HIGH"
+    },
+    "0x401f6c983ea34274ec46f84d70b31c151321188b": {
+      "name": "Polygon Plasma Bridge",
+      "protocol": "Polygon",
+      "version": "Plasma",
+      "family": "BRIDGE",
+      "role": "BRIDGE_ENTRY",
+      "event_type": "BRIDGE_OUT",
+      "networks": [
+        "ETHEREUM"
+      ],
+      "confidence": "HIGH"
+    },
+    "── BRIDGES: Across Protocol ──────────────────────────────────────────": {},
+    "0x5c7bcd6e7de5423a257d81b442095a1a6ced35c5": {
+      "name": "Across SpokePool",
+      "protocol": "Across",
+      "version": "V2",
+      "family": "BRIDGE",
+      "role": "BRIDGE_ENTRY",
+      "event_type": "BRIDGE_OUT",
+      "networks": [
+        "ETHEREUM"
+      ],
+      "confidence": "HIGH",
+      "notes": "deposit() = BRIDGE_OUT; fillRelay() = BRIDGE_IN for relayer. Speed: ~2min"
+    },
+    "0xe35e9842fceaca96570b734083f4a58e8f7c5f2a": {
+      "name": "Across SpokePool",
+      "protocol": "Across",
+      "version": "V2",
+      "family": "BRIDGE",
+      "role": "BRIDGE_ENTRY",
+      "event_type": "BRIDGE_OUT",
+      "networks": [
+        "ARBITRUM"
+      ],
+      "confidence": "HIGH"
+    },
+    "0x09aea4b2242abc8bb4bb78d537a67a245a7bec64": {
+      "name": "Across SpokePool",
+      "protocol": "Across",
+      "version": "V2",
+      "family": "BRIDGE",
+      "role": "BRIDGE_ENTRY",
+      "event_type": "BRIDGE_OUT",
+      "networks": [
+        "BASE",
+        "UNICHAIN"
+      ],
+      "confidence": "HIGH"
+    },
+    "0x6f26bf09b1c792e3228e5467807a900a503c0281": {
+      "name": "Across SpokePool",
+      "protocol": "Across",
+      "version": "V2",
+      "family": "BRIDGE",
+      "role": "BRIDGE_ENTRY",
+      "event_type": "BRIDGE_OUT",
+      "networks": [
+        "OPTIMISM"
+      ],
+      "confidence": "HIGH"
+    },
+    "0x69b5c72837769ef1e7c164abc6515dcff217f920": {
+      "name": "Across SpokePool",
+      "protocol": "Across",
+      "version": "V2",
+      "family": "BRIDGE",
+      "role": "BRIDGE_ENTRY",
+      "event_type": "BRIDGE_OUT",
+      "networks": [
+        "POLYGON"
+      ],
+      "confidence": "HIGH"
+    },
+    "0x9295ee1d8c5b022be115a2ad3c30c72e34e7f096": {
+      "name": "Across SpokePool",
+      "protocol": "Across",
+      "version": "V2",
+      "family": "BRIDGE",
+      "role": "BRIDGE_ENTRY",
+      "event_type": "BRIDGE_OUT",
+      "networks": [
+        "ZKSYNC"
+      ],
+      "confidence": "MEDIUM"
+    },
+    "0x341e94069f53234fe6dabef707ad424830525715": {
+      "name": "LI.FI Diamond",
+      "protocol": "LiFi",
+      "version": "Diamond",
+      "family": "BRIDGE",
+      "role": "BRIDGE_ENTRY",
+      "event_type": "BRIDGE_OUT",
+      "networks": [
+        "ZKSYNC"
+      ],
+      "confidence": "HIGH",
+      "notes": "LI.FI bridge entry on zkSync Era. Uses method-aware dispatch for execute-style bridge calldata."
+    },
+    "── BRIDGES: Stargate ─────────────────────────────────────────────────": {},
+    "0x8731d54e9d02c286767d56ac03e8037c07e01e98": {
+      "name": "Stargate Router",
+      "protocol": "Stargate",
+      "version": "V1",
+      "family": "BRIDGE",
+      "role": "BRIDGE_ENTRY",
+      "event_type": "BRIDGE_OUT",
+      "networks": [
+        "ETHEREUM"
+      ],
+      "confidence": "HIGH"
+    },
+    "0x53bf833a5d6c4dda888f69c22c88c9f356a41614": {
+      "name": "Stargate Router",
+      "protocol": "Stargate",
+      "version": "V1",
+      "family": "BRIDGE",
+      "role": "BRIDGE_ENTRY",
+      "event_type": "BRIDGE_OUT",
+      "networks": [
+        "ARBITRUM"
+      ],
+      "confidence": "HIGH"
+    },
+    "0xb0d502e938ed5f4df2e681fe6e419ff29631d62b": {
+      "name": "Stargate Router",
+      "protocol": "Stargate",
+      "version": "V1",
+      "family": "BRIDGE",
+      "role": "BRIDGE_ENTRY",
+      "event_type": "BRIDGE_OUT",
+      "networks": [
+        "OPTIMISM"
+      ],
+      "confidence": "HIGH"
+    },
+    "0x45a01e4e04f14f7a4a6702c74187c5f6222033cd": {
+      "name": "Stargate Router",
+      "protocol": "Stargate",
+      "version": "V1",
+      "family": "BRIDGE",
+      "role": "BRIDGE_ENTRY",
+      "event_type": "BRIDGE_OUT",
+      "networks": [
+        "POLYGON",
+        "AVALANCHE"
+      ],
+      "confidence": "HIGH"
+    },
+    "── BRIDGES: Hop Protocol ─────────────────────────────────────────────": {},
+    "0xb8901acb165ed027e32754e0ffe830802919727f": {
+      "name": "Hop Bridge (ETH)",
+      "protocol": "Hop Protocol",
+      "version": "V1",
+      "family": "BRIDGE",
+      "role": "BRIDGE_ENTRY",
+      "event_type": "BRIDGE_OUT",
+      "networks": [
+        "ETHEREUM"
+      ],
+      "confidence": "HIGH",
+      "notes": "L1 bridge for ETH canonical"
+    },
+    "0x3e4a3a4796d16c0cd582c382691998f7c06420b6": {
+      "name": "Hop Bridge (USDC)",
+      "protocol": "Hop Protocol",
+      "version": "V1",
+      "family": "BRIDGE",
+      "role": "BRIDGE_ENTRY",
+      "event_type": "BRIDGE_OUT",
+      "networks": [
+        "ETHEREUM"
+      ],
+      "confidence": "HIGH",
+      "notes": "L1 bridge for USDC"
+    },
+    "0x33ceb27b39d2bb7d2e61f7564d3df29344020417": {
+      "name": "Hop AMM Wrapper (ARB)",
+      "protocol": "Hop Protocol",
+      "version": "V1",
+      "family": "BRIDGE",
+      "role": "BRIDGE_ENTRY",
+      "event_type": "BRIDGE_OUT",
+      "networks": [
+        "ARBITRUM"
+      ],
+      "confidence": "HIGH",
+      "notes": "L2 swap + bridge via Hop AMM"
+    },
+    "── BRIDGES: deBridge ─────────────────────────────────────────────────": {},
+    "0x43de2d77bf8027e25dbd179b491e8d64f38398aa": {
+      "name": "deBridge Gate",
+      "protocol": "deBridge",
+      "version": "V1",
+      "family": "BRIDGE",
+      "role": "BRIDGE_ENTRY",
+      "event_type": "BRIDGE_OUT",
+      "networks": [
+        "ETHEREUM",
+        "ARBITRUM",
+        "OPTIMISM",
+        "POLYGON",
+        "BASE",
+        "BSC",
+        "AVALANCHE"
+      ],
+      "confidence": "HIGH"
+    },
+    "── BRIDGES: LayerZero / CCTP ─────────────────────────────────────────": {},
+    "0xbd3fa81b58ba92a82136038b25adec7066af3155": {
+      "name": "Circle CCTP TokenMessenger",
+      "protocol": "Circle CCTP",
+      "version": "V1",
+      "family": "BRIDGE",
+      "role": "BRIDGE_ENTRY",
+      "event_type": "BRIDGE_OUT",
+      "networks": [
+        "ETHEREUM",
+        "ARBITRUM",
+        "OPTIMISM",
+        "POLYGON",
+        "BASE",
+        "AVALANCHE"
+      ],
+      "confidence": "HIGH",
+      "notes": "Native USDC cross-chain burn/mint via Circle CCTP"
+    },
+    "── WRAPPED NATIVE TOKENS ─────────────────────────────────────────────": {},
+    "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2": {
+      "name": "WETH",
+      "protocol": "Canonical",
+      "version": "V1",
+      "family": "WRAPPER",
+      "role": "WRAPPER_TOKEN",
+      "event_type": null,
+      "networks": [
+        "ETHEREUM"
+      ],
+      "confidence": "HIGH",
+      "notes": "ETH↔WETH are equivalent for cost basis purposes; no new basis event on wrap/unwrap"
+    },
+    "0x4200000000000000000000000000000000000006": {
+      "name": "WETH (Katana OP Stack predeploy)",
+      "protocol": "Canonical",
+      "version": "V1",
+      "family": "WRAPPER",
+      "role": "WRAPPER_TOKEN",
+      "event_type": null,
+      "networks": [
+        "OPTIMISM",
+        "BASE",
+        "UNICHAIN",
+        "KATANA"
+      ],
+      "confidence": "HIGH",
+      "notes": "Standard OP Stack predeploy at 0x4200...0006. ETH↔WETH preserve cost basis."
+    },
+    "0x82af49447d8a07e3bd95bd0d56f35241523fbab1": {
+      "name": "WETH",
+      "protocol": "Canonical",
+      "version": "V1",
+      "family": "WRAPPER",
+      "role": "WRAPPER_TOKEN",
+      "event_type": null,
+      "networks": [
+        "ARBITRUM"
+      ],
+      "confidence": "HIGH"
+    },
+    "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619": {
+      "name": "WETH",
+      "protocol": "Canonical",
+      "version": "V1",
+      "family": "WRAPPER",
+      "role": "WRAPPER_TOKEN",
+      "event_type": null,
+      "networks": [
+        "POLYGON"
+      ],
+      "confidence": "HIGH"
+    },
+    "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c": {
+      "name": "WBNB",
+      "protocol": "Canonical",
+      "version": "V1",
+      "family": "WRAPPER",
+      "role": "WRAPPER_TOKEN",
+      "event_type": null,
+      "networks": [
+        "BSC"
+      ],
+      "confidence": "HIGH",
+      "notes": "BNB↔WBNB equivalent"
+    },
+    "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7": {
+      "name": "WAVAX",
+      "protocol": "Canonical",
+      "version": "V1",
+      "family": "WRAPPER",
+      "role": "WRAPPER_TOKEN",
+      "event_type": null,
+      "networks": [
+        "AVALANCHE"
+      ],
+      "confidence": "HIGH"
+    },
+    "0x5aea5775959fbc2557cc8789bc1bf90a239d9a91": {
+      "name": "WETH (zkSync Era)",
+      "protocol": "Canonical",
+      "version": "V1",
+      "family": "WRAPPER",
+      "role": "WRAPPER_TOKEN",
+      "event_type": null,
+      "networks": [
+        "ZKSYNC"
+      ],
+      "confidence": "HIGH"
+    },
+    "0xe5d7c2a44ffddf6b295a15c148167daaaf5cf34f": {
+      "name": "WETH (Linea)",
+      "protocol": "Canonical",
+      "version": "V1",
+      "family": "WRAPPER",
+      "role": "WRAPPER_TOKEN",
+      "event_type": null,
+      "networks": [
+        "LINEA"
+      ],
+      "confidence": "HIGH"
+    },
+    "0xdeaddeaddeaddeaddeaddeaddeaddeaddead1111": {
+      "name": "WETH (Mantle)",
+      "protocol": "Canonical",
+      "version": "V1",
+      "family": "WRAPPER",
+      "role": "WRAPPER_TOKEN",
+      "event_type": null,
+      "networks": [
+        "MANTLE"
+      ],
+      "confidence": "HIGH"
+    },
+    "── PERP/SPOT: GMX ────────────────────────────────────────────────────": {},
+    "0x489ee077994b6658eafa855c308275ead8097c4a": {
+      "name": "GMX V1 Vault",
+      "protocol": "GMX",
+      "version": "V1",
+      "family": "PERP",
+      "role": "VAULT",
+      "event_type": "SWAP",
+      "networks": [
+        "ARBITRUM"
+      ],
+      "confidence": "HIGH",
+      "notes": "V1 core vault: swap/increase/decrease position. Swap events = SWAP; increasePosition = PROTOCOL_CUSTODY_DEPOSIT (perp open); decreasePosition = PROTOCOL_CUSTODY_WITHDRAW (perp close/reduce)"
+    },
+    "0xabbc5f99639c9b6bcb58544ddf04efa6802f4064": {
+      "name": "GMX V1 Router",
+      "protocol": "GMX",
+      "version": "V1",
+      "family": "PERP",
+      "role": "ROUTER",
+      "event_type": "SWAP",
+      "networks": [
+        "ARBITRUM"
+      ],
+      "confidence": "HIGH",
+      "notes": "V1 router: swap + position management entrypoint"
+    },
+    "0xb87a436b93ffe9d75c5cfa7bacfff96430b09868": {
+      "name": "GMX V1 PositionRouter",
+      "protocol": "GMX",
+      "version": "V1",
+      "family": "PERP",
+      "role": "POSITION_ROUTER",
+      "event_type": "PROTOCOL_CUSTODY_DEPOSIT",
+      "networks": [
+        "ARBITRUM"
+      ],
+      "confidence": "HIGH",
+      "notes": "createIncreasePosition = PROTOCOL_CUSTODY_DEPOSIT; createDecreasePosition = PROTOCOL_CUSTODY_WITHDRAW"
+    },
+    "0x09f77e8a13de9a35a7231028187e9fd5db8a2acb": {
+      "name": "GMX V1 OrderBook",
+      "protocol": "GMX",
+      "version": "V1",
+      "family": "PERP",
+      "role": "ORDER_BOOK",
+      "event_type": "PROTOCOL_CUSTODY_DEPOSIT",
+      "networks": [
+        "ARBITRUM"
+      ],
+      "confidence": "HIGH",
+      "notes": "Limit orders; createIncreaseOrder/createDecreaseOrder = deferred position intent"
+    },
+    "0x7c68c7866a64fa2160f78eeae12217ffbf871fa8": {
+      "name": "GMX V2 ExchangeRouter (v2.0)",
+      "protocol": "GMX",
+      "version": "V2.0",
+      "family": "PERP",
+      "role": "EXCHANGE_ROUTER",
+      "event_type": null,
+      "networks": [
+        "ARBITRUM"
+      ],
+      "decomposeByLegs": true,
+      "specialHandler": "GMX_V2_EXCHANGE_ROUTER",
+      "confidence": "HIGH",
+      "notes": "Original V2 router. createOrder=perp position; createDeposit=LP_MINT (GM pool); createWithdrawal=LP_BURN"
+    },
+    "0x602b805eedddbbd9ddff44a7dcbd46cb07849685": {
+      "name": "GMX V2 ExchangeRouter (v2.1)",
+      "protocol": "GMX",
+      "version": "V2.1",
+      "family": "PERP",
+      "role": "EXCHANGE_ROUTER",
+      "event_type": null,
+      "networks": [
+        "ARBITRUM"
+      ],
+      "decomposeByLegs": true,
+      "specialHandler": "GMX_V2_EXCHANGE_ROUTER",
+      "confidence": "HIGH",
+      "notes": "V2.1 router; same semantics as v2.0"
+    },
+    "0x87d66368cd08a7ca42252f5ab44b2fb6d1fb8d15": {
+      "name": "GMX V2 ExchangeRouter (latest)",
+      "protocol": "GMX",
+      "version": "V2.2",
+      "family": "PERP",
+      "role": "EXCHANGE_ROUTER",
+      "event_type": null,
+      "networks": [
+        "ARBITRUM"
+      ],
+      "decomposeByLegs": true,
+      "specialHandler": "GMX_V2_EXCHANGE_ROUTER",
+      "confidence": "HIGH",
+      "notes": "Current mainnet router as of late 2025"
+    },
+    "0x31ef83a530fde1b38ee9a18093a333d8bbbc40d5": {
+      "name": "GMX V2 OrderVault",
+      "protocol": "GMX",
+      "version": "V2",
+      "family": "PERP",
+      "role": "ORDER_VAULT",
+      "event_type": "PROTOCOL_CUSTODY_DEPOSIT",
+      "networks": [
+        "ARBITRUM"
+      ],
+      "confidence": "HIGH",
+      "notes": "Collateral is transferred to OrderVault before ExchangeRouter.createOrder; token flow here = collateral lock"
+    },
+    "0x9ab2de34a33fb459b538c43f251eb825645e8595": {
+      "name": "GMX V1 Vault",
+      "protocol": "GMX",
+      "version": "V1",
+      "family": "PERP",
+      "role": "VAULT",
+      "event_type": "SWAP",
+      "networks": [
+        "AVALANCHE"
+      ],
+      "confidence": "HIGH",
+      "notes": "GMX V1 vault on Avalanche. Same semantics as Arbitrum V1 vault"
+    },
+    "0xfff6d276bc37c61a23f06410dce4a400f66420f8": {
+      "name": "GMX V1 PositionRouter",
+      "protocol": "GMX",
+      "version": "V1",
+      "family": "PERP",
+      "role": "POSITION_ROUTER",
+      "event_type": "PROTOCOL_CUSTODY_DEPOSIT",
+      "networks": [
+        "AVALANCHE"
+      ],
+      "confidence": "HIGH"
+    },
+    "0xa21b83e579f4315951ba658654c371520bdcb866": {
+      "name": "GMX V1 PositionManager",
+      "protocol": "GMX",
+      "version": "V1",
+      "family": "PERP",
+      "role": "POSITION_MANAGER",
+      "event_type": "PROTOCOL_CUSTODY_DEPOSIT",
+      "networks": [
+        "AVALANCHE"
+      ],
+      "confidence": "HIGH"
+    },
+    "0xb70b91ce0771d3f4c81d87660f71da31d48eb3b3": {
+      "name": "GMX V1 RewardRouter V2",
+      "protocol": "GMX",
+      "version": "V1",
+      "family": "YIELD",
+      "role": "REWARD_ROUTER",
+      "event_type": "REWARD_CLAIM",
+      "networks": [
+        "AVALANCHE"
+      ],
+      "confidence": "HIGH",
+      "notes": "stake/unstake GLP/GMX; claimFees; mintAndStakeGlp = LP_MINT"
+    },
+    "0x82147c5a7e850ea4e28155df107f2590fd4ba327": {
+      "name": "GMX V1 RewardRouter (old)",
+      "protocol": "GMX",
+      "version": "V1",
+      "family": "YIELD",
+      "role": "REWARD_ROUTER",
+      "event_type": "REWARD_CLAIM",
+      "networks": [
+        "AVALANCHE"
+      ],
+      "confidence": "MEDIUM",
+      "notes": "Legacy reward router; superseded by V2 above"
+    },
+    "0x3ef3d8ba38ebe18db133cec108f4d14ce00dd9ae": {
+      "name": "Angle Protocol: Distributor",
+      "protocol": "Angle",
+      "version": "V1",
+      "family": "YIELD",
+      "role": "REWARD_ROUTER",
+      "event_type": "REWARD_CLAIM",
+      "networks": [
+        "BASE",
+        "ETHEREUM",
+        "ARBITRUM",
+        "AVALANCHE",
+        "KATANA",
+        "PLASMA",
+        "UNICHAIN"
+      ],
+      "confidence": "HIGH",
+      "notes": "Morpho / Angle reward-distribution contract. claim(...) is reward claim, not plain inbound."
+    },
+    "0x94312a608246cecfce6811db84b3ef4b2619054e": {
+      "name": "FLUID Rewards Distributor",
+      "protocol": "FLUID",
+      "version": "V1",
+      "family": "YIELD",
+      "role": "REWARD_ROUTER",
+      "event_type": "REWARD_CLAIM",
+      "networks": [
+        "ARBITRUM"
+      ],
+      "confidence": "HIGH",
+      "notes": "Claim distributor. claim(address recipient_,...) must remain REWARD_CLAIM when raw legs show inbound reward movement."
+    },
+    "0x70f61901658aafb7ae57da0c30695ce4417e72b9": {
+      "name": "Pendle Rewards Distributor",
+      "protocol": "Pendle",
+      "version": "V1",
+      "family": "YIELD",
+      "role": "REWARD_ROUTER",
+      "event_type": "REWARD_CLAIM",
+      "networks": [
+        "MANTLE"
+      ],
+      "confidence": "HIGH",
+      "notes": "claimRewards(uint256[] _pids) reward-distribution path. Must not fall back to plain inbound."
+    },
+    "0x0045601c3c4c561012c108ea84a81e36eac24296": {
+      "name": "Mantle Merkle Distributor",
+      "protocol": "Merkle",
+      "version": "V1",
+      "family": "YIELD",
+      "role": "REWARD_ROUTER",
+      "event_type": "REWARD_CLAIM",
+      "networks": [
+        "MANTLE"
+      ],
+      "confidence": "HIGH",
+      "notes": "claim(uint256,uint256,address,uint256,bytes32[]) on DistributeMerkleNativeUpgradeable proxy. No-movement claim rows must stay explicit CLAIM_WITHOUT_MOVEMENT."
+    },
+    "0x6f7d514bbd4aff3bcd1140b7344b32f063dee486": {
+      "name": "Compound Rewards",
+      "protocol": "Compound",
+      "version": "V3",
+      "family": "YIELD",
+      "role": "REWARD_ROUTER",
+      "event_type": "REWARD_CLAIM",
+      "networks": [
+        "UNICHAIN"
+      ],
+      "confidence": "HIGH",
+      "notes": "claim(address comet,address src,bool shouldAccrue) on Unichain reward distributor."
+    },
+    "0x5810c486c231803578d0ae7b3de97991784be11f": {
+      "name": "BSC Reward Distributor",
+      "protocol": "Rewards",
+      "version": "V1",
+      "family": "YIELD",
+      "role": "REWARD_ROUTER",
+      "event_type": "REWARD_CLAIM",
+      "networks": [
+        "BSC"
+      ],
+      "confidence": "HIGH",
+      "notes": "Claim-by-proof reward distributor. 0x8b681820 claim path must remain REWARD_CLAIM, not phishing."
+    },
+    "0xea64df3a17b5172bfaf0e4215660cdec22ee7d57": {
+      "name": "BSC Merkle Distributor",
+      "protocol": "Rewards",
+      "version": "V1",
+      "family": "YIELD",
+      "role": "REWARD_ROUTER",
+      "event_type": "REWARD_CLAIM",
+      "networks": [
+        "BSC"
+      ],
+      "confidence": "HIGH",
+      "notes": "Merkle claim distributor. 0x2f52ebb7 claim path must remain REWARD_CLAIM."
+    },
+    "0x212102fc6d0ed9ee784b25404db02b22b1e6dc42": {
+      "name": "BSC Stream Rewards Distributor",
+      "protocol": "Rewards",
+      "version": "V1",
+      "family": "YIELD",
+      "role": "REWARD_ROUTER",
+      "event_type": "REWARD_CLAIM",
+      "networks": [
+        "BSC"
+      ],
+      "confidence": "HIGH",
+      "notes": "Streaming claim distributor. 0x379607f5 claim(uint256) path must remain REWARD_CLAIM."
+    },
+    "── GMX V2 event_topics note ─────────────────────────────────────────": {},
+    "── YIELD TOKENIZATION: Pendle Finance ───────────────────────────────": {},
+    "0x00000000005bbb0ef59571e58418f9a4357b68a0": {
+      "name": "Pendle RouterV3",
+      "protocol": "Pendle",
+      "version": "V3",
+      "family": "YIELD",
+      "role": "ROUTER",
+      "event_type": null,
+      "networks": [
+        "ETHEREUM",
+        "ARBITRUM",
+        "BASE",
+        "OPTIMISM",
+        "BSC",
+        "MANTLE"
+      ],
+      "decomposeByLegs": true,
+      "specialHandler": "PENDLE_ROUTER",
+      "confidence": "HIGH",
+      "notes": "Diamond proxy router (EIP-2535). Same address on all chains via CREATE2. swapExactTokenForPt = SWAP (buy PT). swapExactPtForToken = SWAP (sell PT / redeem). addLiquiditySingleToken / addLiquidityDualTokenAndPt = LP_MINT (yield LP). removeLiquiditySingleToken / removeLiquidityDualTokenAndPt = LP_BURN. IMPORTANT: PT and YT are separate derivative tokens — PT buy ≠ STAKING_DEPOSIT; model as SWAP with derivative output."
+    },
+    "0x0000000001e4ef00d069e71d6ba041b0a16f7ea0": {
+      "name": "Pendle RouterV4",
+      "protocol": "Pendle",
+      "version": "V4",
+      "family": "YIELD",
+      "role": "ROUTER",
+      "event_type": null,
+      "networks": [
+        "ETHEREUM",
+        "ARBITRUM",
+        "BASE",
+        "OPTIMISM",
+        "BSC",
+        "MANTLE"
+      ],
+      "decomposeByLegs": true,
+      "specialHandler": "PENDLE_ROUTER",
+      "confidence": "HIGH",
+      "notes": "Successor to RouterV3; same Diamond proxy pattern. All RouterV3 semantics apply. Check tx.to to distinguish V3 vs V4 calls in history."
+    },
+    "0x1a6fcc85557bc4fb7b534ed835a03ef056552d52": {
+      "name": "Pendle MarketFactoryV3",
+      "protocol": "Pendle",
+      "version": "V3",
+      "family": "YIELD",
+      "role": "FACTORY",
+      "event_type": "LP_MINT",
+      "networks": [
+        "ETHEREUM"
+      ],
+      "confidence": "HIGH",
+      "notes": "Deploys Pendle market pools (SY/PT/YT triads). Factory txs themselves are LP_MINT market creation events, not user actions."
+    },
+    "0x1b6d3e5da9004668e14ca39d1553e9a46fe842b3": {
+      "name": "Pendle Router (legacy)",
+      "protocol": "Pendle",
+      "version": "V2",
+      "family": "YIELD",
+      "role": "ROUTER",
+      "event_type": "VAULT_DEPOSIT",
+      "networks": [
+        "ETHEREUM"
+      ],
+      "confidence": "MEDIUM",
+      "notes": "Legacy pre-V3 router on Ethereum. Superseded by RouterV3. Still present in older transaction history."
+    },
+    "── DEX: Camelot V3 (Arbitrum) ───────────────────────────────────────": {},
+    "0x1f721e2e82f6676fce4ea07a5958cf098d339e18": {
+      "name": "Camelot V3 SwapRouter (Algebra)",
+      "protocol": "Camelot",
+      "version": "V3",
+      "family": "DEX",
+      "role": "ROUTER",
+      "event_type": "SWAP",
+      "networks": [
+        "ARBITRUM"
+      ],
+      "confidence": "HIGH",
+      "notes": "Camelot V3 uses Algebra Integral (concentrated liquidity, dynamic fees). exactInputSingle / exactInput = SWAP. Distinct from Camelot V2 Router (0xc873fecbd354f5a56e00e710b90ef4201db2448d)."
+    },
+    "0x00c7f3082833e796a5b3e4bd59f6642ff44dcd15": {
+      "name": "Camelot V3 NonfungiblePositionManager (Algebra)",
+      "protocol": "Camelot",
+      "version": "V3",
+      "family": "DEX",
+      "role": "POSITION_MANAGER",
+      "event_type": "LP_MINT",
+      "networks": [
+        "ARBITRUM"
+      ],
+      "confidence": "HIGH",
+      "notes": "NFT position manager for Camelot V3 concentrated liquidity pools. mint() = LP_MINT. decreaseLiquidity() + collect() = LP_BURN. collect() alone = LP_FEE_CLAIM (fees only, no principal withdrawal). increaseLiquidity() = LP_MINT (add to existing position). Same interface as Uniswap V3 NonfungiblePositionManager."
+    },
+    "0x1a3c9b1d2f0529d97f2afc5136cc23e58f1fd35b": {
+      "name": "Camelot V3 AlgebraFactory",
+      "protocol": "Camelot",
+      "version": "V3",
+      "family": "DEX",
+      "role": "FACTORY",
+      "event_type": "LP_MINT",
+      "networks": [
+        "ARBITRUM"
+      ],
+      "confidence": "HIGH",
+      "notes": "Deploys Camelot V3 (Algebra) pools. Pool contracts emit Mint/Burn/Swap/Collect events."
+    },
+    "── KATANA (chainId: 747474) ─────────────────────────────────────": {},
+    "── PLASMA (chainId: 9745) ───────────────────────────────────────": {},
+    "0x1b35fba9357fd9bda7ed0429c8bbabe1e8cc88fc": {
+      "name": "Uniswap V3 Universal Router (Plasma)",
+      "protocol": "Uniswap",
+      "version": "V3",
+      "family": "DEX",
+      "role": "ROUTER",
+      "event_type": "SWAP",
+      "networks": [
+        "PLASMA"
+      ],
+      "confidence": "HIGH",
+      "notes": "Official address from plasma.to/docs/plasma-chain/network-information/ecosystem-contracts"
+    },
+    "0x807f4e281b7a3b324825c64ca53c69f0b418de40": {
+      "name": "Uniswap V3 SwapRouter02 (Plasma)",
+      "protocol": "Uniswap",
+      "version": "V3",
+      "family": "DEX",
+      "role": "ROUTER",
+      "event_type": "SWAP",
+      "networks": [
+        "PLASMA"
+      ],
+      "confidence": "HIGH",
+      "notes": "Official address from Plasma ecosystem contracts docs"
+    },
+    "0x743e03cceb4af2efa3cc76838f6e8b50b63f184c": {
+      "name": "Uniswap V3 NonfungiblePositionManager (Plasma)",
+      "protocol": "Uniswap",
+      "version": "V3",
+      "family": "DEX",
+      "role": "POSITION_MANAGER",
+      "event_type": "LP_MINT",
+      "networks": [
+        "PLASMA"
+      ],
+      "confidence": "HIGH",
+      "notes": "Official address from Plasma ecosystem contracts docs. mint/burn/collect = LP lifecycle"
+    },
+    "0xcb2436774c3e191c85056d248ef4260ce5f27a9d": {
+      "name": "Uniswap V3 Factory (Plasma)",
+      "protocol": "Uniswap",
+      "version": "V3",
+      "family": "DEX",
+      "role": "FACTORY",
+      "event_type": "LP_MINT",
+      "networks": [
+        "PLASMA"
+      ],
+      "confidence": "HIGH",
+      "notes": "Official address from Plasma ecosystem contracts docs"
+    },
+    "0x91716c4eda1fb55e84bf8b4c7085f84285c19085": {
+      "name": "Fluid DexFactory (Plasma)",
+      "protocol": "Fluid",
+      "version": "V1",
+      "family": "DEX",
+      "role": "FACTORY",
+      "event_type": "SWAP",
+      "networks": [
+        "PLASMA"
+      ],
+      "confidence": "HIGH",
+      "notes": "Fluid DEX on Plasma. DexFactory deploys isolated pools. Fluid also has lending (LendingFactory)."
+    },
+    "0x52aa899454998be5b000ad077a46bbe360f4e497": {
+      "name": "Fluid Liquidity Layer (Plasma)",
+      "protocol": "Fluid",
+      "version": "V1",
+      "family": "LENDING",
+      "role": "POOL",
+      "event_type": "LENDING_DEPOSIT",
+      "networks": [
+        "PLASMA"
+      ],
+      "confidence": "HIGH",
+      "notes": "Core Fluid liquidity layer — supply/borrow routing. Official from Plasma docs."
+    },
+    "0xff5cb29241f002ffed2eaa224e3e996d24a6e8d1": {
+      "name": "Curve Router (Plasma)",
+      "protocol": "Curve",
+      "version": "NG",
+      "family": "DEX",
+      "role": "ROUTER",
+      "event_type": "SWAP",
+      "networks": [
+        "PLASMA"
+      ],
+      "confidence": "HIGH",
+      "notes": "Official Curve Router NG on Plasma from plasma.to ecosystem contracts"
+    },
+    "0x663dc15d3c1ac63ff12e45ab68fea3f0a883c251": {
+      "name": "deBridge DeBridgeRouter (Plasma)",
+      "protocol": "deBridge",
+      "version": "V1",
+      "family": "BRIDGE",
+      "role": "BRIDGE_ENTRY",
+      "event_type": "BRIDGE_OUT",
+      "networks": [
+        "PLASMA"
+      ],
+      "confidence": "HIGH",
+      "notes": "Official deBridge router on Plasma. Note: different address from other chains (0x43de... is Ethereum/others)."
+    },
+    "0xef4fb24ad0916217251f553c0596f8edc630eb66": {
+      "name": "deBridge DlnSource (Plasma)",
+      "protocol": "deBridge",
+      "version": "DLN",
+      "family": "BRIDGE",
+      "role": "BRIDGE_ENTRY",
+      "event_type": "BRIDGE_OUT",
+      "networks": [
+        "PLASMA"
+      ],
+      "confidence": "HIGH",
+      "notes": "DLN = Decentralized Liquidity Network, deBridge's fast bridge variant"
+    },
+    "0x6100e367285b01f48d07953803a2d8dca5d19873": {
+      "name": "WETH9 (Plasma / CCIP)",
+      "protocol": "Canonical",
+      "version": "V1",
+      "family": "WRAPPER",
+      "role": "WRAPPER_TOKEN",
+      "event_type": null,
+      "networks": [
+        "PLASMA"
+      ],
+      "confidence": "HIGH",
+      "notes": "WETH on Plasma. Note: Plasma's native token is XPL (not ETH). WETH here is bridged ERC-20. ETH↔WETH basis rule still applies for the WETH token itself."
+    },
+    "── MANTLE DEX: FusionX Finance ─────────────────────────────────": {},
+    "0x5989fb161568b9f133edf5cf6787f5597762797f": {
+      "name": "FusionX V3 SwapRouter",
+      "protocol": "FusionX",
+      "version": "V3",
+      "family": "DEX",
+      "role": "ROUTER",
+      "event_type": "SWAP",
+      "networks": [
+        "MANTLE"
+      ],
+      "confidence": "HIGH",
+      "notes": "Official from docs.fusionx.finance/developers/smart-contracts-mantle-mainnet/v3-smart-contracts"
+    },
+    "0x4bf659ca398a73aaf73818f0c64c838b9e229c08": {
+      "name": "FusionX V3 Smart Router",
+      "protocol": "FusionX",
+      "version": "V3",
+      "family": "DEX",
+      "role": "ROUTER",
+      "event_type": "SWAP",
+      "networks": [
+        "MANTLE"
+      ],
+      "confidence": "HIGH",
+      "notes": "Smart Router (aggregates V2+V3 routes). Preferred entrypoint for FusionX swaps."
+    },
+    "0x5752f085206ab87d8a5ef6166779658add455774": {
+      "name": "FusionX V3 NonfungiblePositionManager",
+      "protocol": "FusionX",
+      "version": "V3",
+      "family": "DEX",
+      "role": "POSITION_MANAGER",
+      "event_type": "LP_MINT",
+      "networks": [
+        "MANTLE"
+      ],
+      "confidence": "HIGH",
+      "notes": "NFT LP positions. mint/decreaseLiquidity/collect = LP lifecycle. Interface identical to Uniswap V3 NonfungiblePositionManager."
+    },
+    "0x530d2766d1988cc1c000c8b7d00334c14b69ad71": {
+      "name": "FusionX V3 Factory",
+      "protocol": "FusionX",
+      "version": "V3",
+      "family": "DEX",
+      "role": "FACTORY",
+      "event_type": "LP_MINT",
+      "networks": [
+        "MANTLE"
+      ],
+      "confidence": "HIGH",
+      "notes": "Official from FusionX docs"
+    },
+    "── MANTLE DEX: Merchant Moe ────────────────────────────────────": {},
+    "0xeaee7ee68874218c3558b40063c42b82d3e7232a": {
+      "name": "Merchant Moe MoeRouter (Classic AMM)",
+      "protocol": "Merchant Moe",
+      "version": "V1",
+      "family": "DEX",
+      "role": "ROUTER",
+      "event_type": "SWAP",
+      "networks": [
+        "MANTLE"
+      ],
+      "confidence": "HIGH",
+      "notes": "Classic AMM router (V2-style). Official from docs.merchantmoe.com/resources/contracts"
+    },
+    "0x013e138ef6008ae5fdfde29700e3f2bc61d21e3a": {
+      "name": "Merchant Moe LB Router 2.2 (Liquidity Book)",
+      "protocol": "Merchant Moe",
+      "version": "LB2.2",
+      "family": "DEX",
+      "role": "ROUTER",
+      "event_type": "SWAP",
+      "networks": [
+        "MANTLE"
+      ],
+      "confidence": "HIGH",
+      "notes": "Liquidity Book router (TraderJoe-style discretized liquidity). LP positions are ERC-1155 bins, not NFTs. LP_MINT = addLiquidity; LP_BURN = removeLiquidity."
+    },
+    "0xa6630671775c4ea2743840f9a5016dcf2a104054": {
+      "name": "Merchant Moe LB Factory 2.2",
+      "protocol": "Merchant Moe",
+      "version": "LB2.2",
+      "family": "DEX",
+      "role": "FACTORY",
+      "event_type": "LP_MINT",
+      "networks": [
+        "MANTLE"
+      ],
+      "confidence": "HIGH",
+      "notes": "Official from Merchant Moe docs"
+    },
+    "0x45a62b090df48243f12a21897e7ed91863e2c86b": {
+      "name": "Merchant Moe LFJ Aggregator Router",
+      "protocol": "Merchant Moe",
+      "version": "V1",
+      "family": "AGGREGATOR",
+      "role": "ROUTER",
+      "event_type": "SWAP",
+      "networks": [
+        "MANTLE"
+      ],
+      "confidence": "HIGH",
+      "notes": "Aggregator that routes across Classic AMM + LB pools. Official from Merchant Moe docs."
+    }
+  },
+  "event_topics": {
+    "description": "Keccak256 topic0 hashes for key DeFi events — use for log-based classification",
+    "erc20_transfer": {
+      "topic": "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+      "event": "Transfer(address indexed from, address indexed to, uint256 value)"
+    },
+    "uniswap_v2_swap": {
+      "topic": "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822",
+      "event": "Swap(address indexed sender, uint amount0In, uint amount1In, uint amount0Out, uint amount1Out, address indexed to)"
+    },
+    "uniswap_v3_swap": {
+      "topic": "0xc42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67",
+      "event": "Swap(address indexed sender, address indexed recipient, int256 amount0, int256 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick)"
+    },
+    "uniswap_v3_mint": {
+      "topic": "0x7a53080ba414158be7ec69b987b5fb7d07dee101fe85488f0853ae16239d0bde",
+      "event": "Mint(address sender, address indexed owner, int24 indexed tickLower, int24 indexed tickUpper, uint128 amount, uint256 amount0, uint256 amount1)"
+    },
+    "uniswap_v3_burn": {
+      "topic": "0x0c396cd989a39f4459b5fa1aed6a9a8dcdbc45908acfd67e028cd568da98982c",
+      "event": "Burn(address indexed owner, int24 indexed tickLower, int24 indexed tickUpper, uint128 amount, uint256 amount0, uint256 amount1)"
+    },
+    "uniswap_v3_collect": {
+      "topic": "0x70935338e69775456a85ddef226c395fb668b63fa0115f5f20610b388e6ca9c0",
+      "event": "Collect(address indexed owner, address recipient, int24 indexed tickLower, int24 indexed tickUpper, uint128 amount0, uint128 amount1)"
+    },
+    "aave_v3_supply": {
+      "topic": "0x2b627736bca15cd5381dcf80b0bf11fd197d62a23dd7b3dcba5042b0784cac9d",
+      "event": "Supply(address indexed reserve, address user, address indexed onBehalfOf, uint256 amount, uint16 indexed referralCode)"
+    },
+    "aave_v3_withdraw": {
+      "topic": "0x3115d1449a7b732c986cba18244e897a450f61e1bb8d589cd2e69e6c8924f9f7",
+      "event": "Withdraw(address indexed reserve, address indexed user, address indexed to, uint256 amount)"
+    },
+    "aave_v3_borrow": {
+      "topic": "0xb3d084820fb1a9decffb176436bd02558d15fac9b0ddfed8c465bc7359d7dce0",
+      "event": "Borrow(address indexed reserve, address user, address indexed onBehalfOf, uint256 amount, uint8 interestRateMode, uint256 borrowRate, uint16 indexed referralCode)"
+    },
+    "aave_v3_repay": {
+      "topic": "0xa534c8dbe71f871f9f3530e97a74601fea17b426cae02e1c5aee42c96c784051",
+      "event": "Repay(address indexed reserve, address indexed user, address indexed repayer, uint256 amount, bool useATokens)"
+    },
+    "balancer_swap": {
+      "topic": "0x2170c741c41531aec20e7c107c24eecfdd15e69c9bb0a8dd37b1840b9e0b207b",
+      "event": "Swap(bytes32 indexed poolId, address indexed tokenIn, address indexed tokenOut, uint256 amountIn, uint256 amountOut)"
+    },
+    "across_funds_deposited": {
+      "topic": "0xa123dc29aebf7d0c3322c408d74d packed... (V3 differs)",
+      "event": "FundsDeposited / V3FundsDeposited"
+    },
+    "lido_submitted": {
+      "topic": "0x96a25c8ce0baabc1fdefd93e9ed25d8e092a3332f3aa9a41722b5697231d1d1a",
+      "event": "Submitted(address indexed sender, uint256 amount, address referral)"
+    },
+    "erc4626_deposit": {
+      "topic": "0xdcbc1c05240f31ff3ad067ef1ee35ce4997762752e3a095284754544f4c709d7",
+      "event": "Deposit(address indexed caller, address indexed owner, uint256 assets, uint256 shares)"
+    },
+    "erc4626_withdraw": {
+      "topic": "0xfbde797d201c681b91056529119e0b02407c7bb96a4a2c75c01fc9667232c8db",
+      "event": "Withdraw(address indexed caller, address indexed receiver, address indexed owner, uint256 assets, uint256 shares)"
+    },
+    "gmx_v1_swap": {
+      "topic": "0x0874b2d545cb271cdbda4e093020c452328b24af12382ed62c4d00f5c26709db",
+      "event": "Swap(address account, address tokenIn, address tokenOut, uint256 amountIn, uint256 amountOut, uint256 amountOutAfterFees, uint256 feeBasisPoints)"
+    },
+    "gmx_v1_increase_position": {
+      "topic": "0x2fe68525253654c21998f35787a8d0f361905ef647c854092430ab65f2f15022",
+      "event": "IncreasePosition(bytes32 key, address account, address collateralToken, address indexToken, uint256 collateralDelta, uint256 sizeDelta, bool isLong, uint256 price, uint256 fee)"
+    },
+    "gmx_v1_decrease_position": {
+      "topic": "0x93d75d64d1f84fc6f430a64fc578bdd4c1e090e90ea2d51773e626d19de56d30",
+      "event": "DecreasePosition(bytes32 key, address account, address collateralToken, address indexToken, uint256 collateralDelta, uint256 sizeDelta, bool isLong, uint256 price, uint256 fee)"
+    },
+    "gmx_v2_order_created": {
+      "topic": "0xf0ae52b5e5b8ea8b2fbd9b6dfbbf3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b",
+      "event": "OrderCreated(bytes32 key, Order.Props order) [approximate — verify from gmx-synthetics EventEmitter]"
+    },
+    "pendle_swap_pt_for_token": {
+      "topic": "0x829000a5bc6a12d46e30cdcecd7c56b1efd88f6d7d059da6734a04f3764557c",
+      "event": "SwapPtAndToken(address indexed caller, address indexed market, address indexed token, int256 netPtToAccount, int256 netTokenToAccount, int256 netSyFeeFromMarket)"
+    },
+    "pendle_swap_yt_for_token": {
+      "topic": "0x0874b2d545cb271cdbda4e093020c452328b24af12382ed62c4d00f5c26709dd",
+      "event": "SwapYtAndToken(address indexed caller, address indexed market, address indexed token, int256 netYtToAccount, int256 netTokenToAccount)"
+    },
+    "pendle_add_liquidity": {
+      "topic": "0x4be3bc94b55f0ee5bca3e10b90bde032a6e8b7e8b8c9bcf82bdbb5a3e1c86513",
+      "event": "AddLiquidity(address indexed caller, address indexed market, address indexed receiver, uint256 netLpOut, uint256 netSyUsed, uint256 netPtUsed)"
+    },
+    "pendle_remove_liquidity": {
+      "topic": "0x4af1a3615a7cf8a4c4dc7b5d75c1cf8dfaeb4754e4ff5b8e6e2e1f5a54b0c4c",
+      "event": "RemoveLiquidity(address indexed caller, address indexed market, address indexed receiver, uint256 netLpToRemove, uint256 netSyOut, uint256 netPtOut)"
+    }
+  },
+  "method_ids": {
+    "description": "4-byte function selectors for common DeFi methods",
+    "0xb6b55f25": "deposit(uint256 amount)",
+    "0x2e1a7d4d": "withdraw(uint256 amount)",
+    "0xe2bbb158": "deposit(uint256 _pid, uint256 _amount)",
+    "0x441a3e70": "withdraw(uint256 _pid, uint256 _amount)",
+    "0xa9059cbb": "transfer(address to, uint256 amount)",
+    "0x23b872dd": "transferFrom(address from, address to, uint256 amount)",
+    "0x095ea7b3": "approve(address spender, uint256 amount)",
+    "0x7ff36ab5": "swapExactETHForTokens(...)",
+    "0x18cbafe5": "swapExactTokensForETH(...)",
+    "0x38ed1739": "swapExactTokensForTokens(...)",
+    "0x414bf389": "exactInputSingle(...) [Uniswap V3]",
+    "0xc04b8d59": "exactInput(...) [Uniswap V3]",
+    "0xdb3e2198": "exactOutputSingle(...) [Uniswap V3]",
+    "0x12210e8a": "refundETH() [Uniswap]",
+    "0x4659a494": "sweep(...) [Uniswap]",
+    "0x88316456": "mint(...) [Uniswap V3 NFT PM]",
+    "0x0c49ccbe": "decreaseLiquidity(...) [Uniswap V3 NFT PM]",
+    "0x4f1eb3d8": "increaseLiquidity(...) [Uniswap V3 NFT PM]",
+    "0xfc6f7865": "collect(...) [Uniswap V3 NFT PM]",
+    "0x00f714ce": "burn(uint256 tokenId) [Uniswap V3 NFT PM]",
+    "0x617ba037": "supply(...) [Aave V3]",
+    "0x69328dec": "withdraw(...) [Aave V3]",
+    "0xa415bcad": "borrow(...) [Aave V3]",
+    "0x573ade81": "repay(...) [Aave V3]",
+    "0x852a12e3": "mint(uint256 mintAmount) [Compound V2]",
+    "0xdb006a75": "redeemUnderlying(uint256 redeemAmount) [Compound V2]",
+    "0xe8eda9df": "deposit(...) [Aave V2]",
+    "0xa5d4d0cc": "send(...) [Stargate bridge]",
+    "0x9fbf10fc": "send(...) [Stargate OFT V2]",
+    "0xb88a802f": "claimFees() [GMX V1 RewardRouter]",
+    "0x9e6b0e50": "mintAndStakeGlp(address,uint256,uint256,uint256) [GMX V1]",
+    "0x0f3aa554": "unstakeAndRedeemGlp(address,uint256,uint256,address) [GMX V1]",
+    "0xec51b4c9": "createIncreasePosition(...) [GMX V1 PositionRouter]",
+    "0x6eba5d0c": "createDecreasePosition(...) [GMX V1 PositionRouter]",
+    "0x0ad58d2f": "createOrder(CreateOrderParams) [GMX V2 ExchangeRouter]",
+    "0x2e7eff49": "createDeposit(CreateDepositParams) [GMX V2 ExchangeRouter]",
+    "0x87d66368": "createWithdrawal(CreateWithdrawalParams) [GMX V2 ExchangeRouter]",
+    "0x4e7ed11c": "swapExactTokenForPt(...) [Pendle RouterV3]",
+    "0x7e1fe8c0": "swapExactPtForToken(...) [Pendle RouterV3]",
+    "0xf7f3d2af": "swapExactTokenForYt(...) [Pendle RouterV3]",
+    "0x01a5fe2a": "swapExactYtForToken(...) [Pendle RouterV3]",
+    "0xb0c7e3f8": "addLiquiditySingleToken(...) [Pendle RouterV3]",
+    "0x1ef4b0d8": "removeLiquiditySingleToken(...) [Pendle RouterV3]",
+    "0x03bef7c5": "redeemPyToToken(...) [Pendle RouterV3 — redeem expired PT/YT]"
+  },
+  "notes": {
+    "how_to_use": [
+      "1. Lookup tx.to (lowercase) in contracts map",
+      "2. If found: use event_type as primary classification with HIGH confidence",
+      "3. If not found: use event_topics to detect event type from logs",
+      "4. If still uncertain: use method_ids from tx.input first 4 bytes",
+      "5. If all fail: classify as UNKNOWN_DEFI_PATTERN and add to review queue"
+    ],
+    "confidence_levels": {
+      "HIGH": "Address verified from official docs or on-chain. Use directly.",
+      "MEDIUM": "Address inferred from secondary sources. Cross-check with logs before using."
+    },
+    "known_gaps": [
+      "Beefy/Yearn individual vault addresses — too many to enumerate; use ERC4626 detection",
+      "Hop Protocol full bridge address matrix (per token per chain) — partial coverage",
+      "Old Across V1 SpokePool addresses — superseded by V2 above"
+    ],
+    "update_process": "When encountering UNKNOWN_DEFI_PATTERN: 1) identify contract via Etherscan/Blockscout label 2) add entry here 3) re-run classification"
+  },
+  "network_info": {
+    "KATANA": {
+      "chain_id": 747474,
+      "native_token": "ETH",
+      "rpc": "https://rpc.katana.network/",
+      "explorer": "https://katanascan.com/",
+      "type": "L2 OP Stack (Polygon AggLayer + SP1 ZK proofs)",
+      "core_protocols": [
+        "SushiSwap V3",
+        "MorphoBlue",
+        "Vertex Protocol"
+      ],
+      "bridge_l1": "AggLayer / Polygon CDK OptimismPortal"
+    },
+    "PLASMA": {
+      "chain_id": 9745,
+      "native_token": "XPL",
+      "rpc": "https://rpc.plasma.to",
+      "explorer": "https://plasmascan.to/",
+      "type": "Stablecoin-first L1 (EVM-compatible)",
+      "core_protocols": [
+        "Uniswap V3",
+        "Fluid",
+        "Curve",
+        "deBridge",
+        "Stargate"
+      ],
+      "notes": "XPL is gas token (NOT ETH). WETH is bridged ERC-20. USDT transfers are zero-fee native feature."
+    },
+    "MANTLE": {
+      "chain_id": 5000,
+      "native_token": "MNT",
+      "rpc": "https://rpc.mantle.xyz",
+      "explorer": "https://explorer.mantle.xyz/",
+      "type": "L2 Optimistic Rollup (EigenDA)",
+      "core_protocols": [
+        "FusionX V3",
+        "Merchant Moe LB",
+        "Agni Finance",
+        "1inch V6",
+        "Pendle V3/V4"
+      ],
+      "notes": "MNT is gas token. WETH = 0xdeaddeaddeaddeaddeaddeaddeaddeaddead1111"
+    }
+  }
+}

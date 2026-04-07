@@ -1,0 +1,42 @@
+<header class="topbar">
+  <div class="logo-wrap">
+    <span class="logo-mark" aria-hidden="true">
+      <img class="logo-mark-image" src="walletradar-mark.jpg" alt="" />
+    </span>
+    <span class="logo-text">WalletRadar</span>
+  </div>
+
+  <div class="metric-strip">
+    @for (metric of metrics; track metric.label) {
+      <div class="metric-item">
+        <span class="metric-label">{{ metric.label }}</span>
+        <span class="metric-value mono" [style.color]="metric.color">{{ metric.value }}</span>
+      </div>
+    }
+  </div>
+
+  <div class="topbar-spacer"></div>
+
+  @if (isBackfillVisible) {
+    <div class="backfill-pill">
+      <span class="spinner mini" aria-hidden="true"></span>
+      <span class="backfill-label">{{ statusLabel }}</span>
+      @if (showProgress) {
+        <div class="progress-track">
+          <div class="progress-fill" [style.width.%]="backfillProgressPct"></div>
+        </div>
+      }
+      <span class="network-subline">{{ statusSubline }}</span>
+    </div>
+  }
+
+  @for (wallet of wallets; track wallet.id) {
+    <div class="wallet-chip">
+      <span class="wallet-dot" [style.background]="wallet.color" aria-hidden="true"></span>
+      <span class="mono">{{ shortAddress(wallet.address) }}</span>
+      <span>· {{ wallet.label }}</span>
+    </div>
+  }
+
+  <button type="button" class="wallet-add-btn" (click)="addWallet.emit()">+ Add wallet</button>
+</header>

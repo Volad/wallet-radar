@@ -3,8 +3,7 @@ package com.walletradar.api.dto;
 import java.time.Instant;
 
 /**
- * Standard error response body per docs/04-api.md: error (code), message, timestamp (ISO 8601).
- * Used for validation 400, GET status 400, and future 404/5xx.
+ * Standard API error response body.
  */
 public record ErrorBody(String error, String message, Instant timestamp) {
 

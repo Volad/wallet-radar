@@ -1,0 +1,51 @@
+{
+  "key": "gmx-v2",
+  "protocol": "GMX",
+  "version": "v2",
+  "aliases": ["GMX", "GMX V2"],
+  "capabilities": ["ASYNC_REQUEST_SETTLEMENT", "KEEPER_EXECUTION", "DERIVATIVES", "POOL_LIFECYCLE", "MULTICALL_SUBCALLS"],
+  "families": ["PERP", "DEX", "CUSTODY"],
+  "clarificationHints": ["FULL_RECEIPT", "RELATED_TX_BY_CORRELATION"],
+  "markers": {
+    "methodSelectors": {
+      "orderRequest": ["0x0ad58d2f", "0x322bba21"],
+      "multicall": ["0xac9650d8"],
+      "executeOrder": ["0x7ebc83f7"],
+      "exchangeRouterLpEntry": ["0x2e7eff49"],
+      "exchangeRouterLpExit": ["0x87d66368"],
+      "depositSettlement": ["0xc30d8910"],
+      "glvDepositSettlement": ["0x5ee8ec8f"],
+      "withdrawalSettlement": ["0xc96fea9f"]
+    },
+    "functionNames": {
+      "exchangeRouterLpEntry": ["createdeposit"],
+      "exchangeRouterLpExit": ["createwithdrawal"]
+    },
+    "eventNames": {
+      "orderCreated": ["OrderCreated"],
+      "orderExecuted": ["OrderExecuted"],
+      "orderCancelled": ["OrderCancelled"],
+      "positionIncrease": ["PositionIncrease"],
+      "positionDecrease": ["PositionDecrease"],
+      "withdrawalCreated": ["WithdrawalCreated"],
+      "withdrawalExecuted": ["WithdrawalExecuted"],
+      "glvWithdrawalCreated": ["GlvWithdrawalCreated"],
+      "glvWithdrawalExecuted": ["GlvWithdrawalExecuted"]
+    },
+    "eventTopics": {
+      "eventEmitter": ["0x468a25a7ba624ceea6e540ad6f49171b52495b648417ae91bca21676d8a24dc5"],
+      "depositExecuted": ["0x2856020a9644603d22d7b029b5649a55d708b88d9049150f146ac26c4107b880"],
+      "glvDepositExecuted": ["0x168af62e3da2e23e63dfeb41b97ea0feef3c7a45e72ebc59e924f19ae915f14e"]
+    },
+    "subcallSelectors": {
+      "helperFunding": ["0x7d39aaf1", "0xe6d66ac8"],
+      "helperSendWnt": ["0x7d39aaf1"],
+      "helperSendTokens": ["0xe6d66ac8"],
+      "derivativeOrderRequest": ["0x6996807b", "0x0ad58d2f", "0x322bba21"],
+      "withdrawalRequest": ["0x647c6fa4", "0x4e78dc23"]
+    },
+    "assetMarkers": {
+      "shareSymbolPrefixes": ["gm:", "glv"]
+    }
+  }
+}

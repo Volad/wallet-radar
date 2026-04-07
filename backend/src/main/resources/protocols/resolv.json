@@ -1,0 +1,9 @@
+{
+  "key": "resolv",
+  "protocol": "Resolv",
+  "version": "v1",
+  "aliases": ["Resolv"],
+  "capabilities": ["STAKING_WITHDRAW_LIFECYCLE"],
+  "families": ["STAKING"],
+  "clarificationHints": []
+}

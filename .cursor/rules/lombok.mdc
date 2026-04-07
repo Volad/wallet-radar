@@ -1,4 +1,4 @@
----
+пр---
 description: Lombok usage for backend Java — models (NoArgsConstructor + chain setters), services (RequiredArgsConstructor). No @Builder.
 globs: backend/**/*.java
 alwaysApply: false

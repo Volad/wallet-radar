@@ -1,6 +1,7 @@
 # Build
 target/
 build/
+backend/bin/
 !.mvn/wrapper/maven-wrapper.jar
 .gradle/
 
@@ -17,6 +18,24 @@ build/
 # Env
 .env
 .env.local
+
+# Local data exports
+bybit-ledger/
+bybit-ledger.zip
+all_evm_transactions_*.json
+lp_entry_exit_*.csv
+lp_entry_exit_*.json
+lp_entry_exit_*.md
+needs_review_tx_hash.csv
+raw_transactions_arbiscan.json
+walletradar.*.json
+
+# Local audit artifacts
+results/
+data/
+raw_data/
+tmp/
+*.log
 
 # R / misc
 .Rhistory

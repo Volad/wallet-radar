@@ -1,0 +1,4 @@
+display_name: Backend Dev
+short_description: Implements Java backend features in WalletRadar.
+default_prompt: |
+  Use $backend-dev to implement WalletRadar backend tasks with tests and role boundaries.

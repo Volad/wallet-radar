@@ -1,0 +1,28 @@
+{
+  "key": "euler",
+  "protocol": "Euler",
+  "version": "v1",
+  "aliases": ["Euler"],
+  "capabilities": ["BATCH_ROUTER", "LENDING_LOOP_LIFECYCLE"],
+  "families": ["LENDING"],
+  "clarificationHints": ["FULL_RECEIPT"],
+  "markers": {
+    "methodSelectors": {
+      "batch": ["0xc16ae7a4"],
+      "borrowSubcall": ["0x4b3fd148"]
+    },
+    "functionNames": {
+      "batch": ["batch"]
+    },
+    "eventTopics": {
+      "callWithContext": ["0x6e9738e5aa38fe1517adbb480351ec386ece82947737b18badbcad1e911133ec"],
+      "borrow": ["0xcbc04eca7e9da35cb1393a6135a199ca52e450d5e9251cbd99f7847d33a36750"]
+    },
+    "assetMarkers": {
+      "shareSymbolPrefixes": ["a", "c", "s", "e", "gt", "syrup"],
+      "debtSymbolFragments": ["debt"],
+      "stableSymbols": ["usdc", "usdt", "usdt0", "usd₮0", "deusd"],
+      "stableContracts": ["0xb57b25851fe2311cc3fe511c8f10e868932e0680"]
+    }
+  }
+}

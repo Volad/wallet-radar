@@ -1,7 +1,7 @@
 package com.walletradar.ingestion.adapter;
 
-import com.walletradar.domain.NetworkId;
-import com.walletradar.domain.RawTransaction;
+import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.transaction.raw.RawTransaction;
 
 import java.util.List;
 
@@ -26,4 +26,12 @@ public interface NetworkAdapter {
      * Maximum block range per single RPC call (e.g. 2000 for EVM eth_getLogs).
      */
     int getMaxBlockBatchSize();
+
+    /**
+     * Whether the backfill executor may split one segment into multiple block checkpoints.
+     * Provider-first adapters can disable this to guarantee exactly one fetch pass per segment.
+     */
+    default boolean supportsBlockCheckpointing() {
+        return true;
+    }
 }

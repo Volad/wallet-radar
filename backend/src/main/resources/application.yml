@@ -1,66 +1,263 @@
 spring:
   application:
     name: wallet-radar
+  threads:
+    virtual:
+      enabled: true
   data:
     mongodb:
       uri: ${MONGODB_URI:mongodb://localhost:27017/walletradar}
 
-# Unified per-network ingestion config (ADR-012). Batch size semantics: ADR-011.
+# Per-network ingestion config for raw backfill adapters.
 walletradar:
   ingestion:
-    # Backfill window (T-009): blocks from current block. Default ~2 years Ethereum (12s block).
+    # Backfill window counted back from the current head.
+    # Defaults are calibrated from live chain data with a small safety margin.
     backfill:
-      window-blocks: 5256000
+      window-blocks: 5500000
+      segments:
+        defaults:
+          segment-stale-after-ms: 180000
+          parallel-segments: 2
+          parallel-segment-workers: 2
+        by-rpc:
+          segment-stale-after-ms: 120000
+          parallel-segments: 6
+          parallel-segment-workers: 6
+      worker-threads: 4
+      progress-update-interval-ms: 2000
+      max-retries: 5
+      retry-base-delay-minutes: 2
+      retry-max-delay-minutes: 60
+      retry-scheduler-interval-ms: 120000
+    evm-rpc:
+      max-requests-per-second: 1000
+      endpoint-cooldown-ms: 3000
+      transient-error-cooldown-ms: 15000
+      batch-unsupported-cooldown-ms: 300000
+      max-response-bytes: 16777216
+      local-limiter-log-threshold-ms: 1000
+      local-limiter-timeout-ms: 2000
+    explorer:
+      max-response-bytes: 16777216
+      max-pages-per-window: 10000
+      max-attempts: 5
+      base-delay-ms: 1000
+      jitter-factor: 0.2
+      request-timeout-ms: 15000
     network:
+      # If backfill fails with "RPC failed after 5 attempts", public RPCs may be rate-limiting. Try: reduce batch-block-size (e.g. 500), or add a paid RPC URL (Alchemy/Infura) first in urls.
+      # avg-block-time-seconds: fallback for EstimatingBlockTimestampResolver when calibration
+      # anchor points are the same block (single-block range). During normal backfill the resolver
+      # computes actual avg block time from two RPC anchor calls.
       ETHEREUM:
+        syncMethod: ETHERSCAN
+        chain-id: "1"
+        explorer:
+          etherscan:
+            base-url: https://api.etherscan.io
+            api-key: ${ETHEREUM_ETHERSCAN_API_KEY:}
+        provider:
+          enabled: true
+          base-url: https://rpc.ankr.com/multichain/${ANKR_API_KEY:}
         urls:
+          - https://rpc.ankr.com/eth/${ANKR_API_KEY:}
+          - https://lb.drpc.live/ethereum/${DRPC_API_KEY:}
           - https://eth.llamarpc.com
-          - https://ethereum.publicnode.com
-          - https://rpc.ankr.com/eth
-        batch-block-size: 2000
+          - https://cloudflare-eth.com
+        batch-block-size: 10000
+        window-blocks: 5500000    # measured ~2y span as of 2026-03-09, rounded +5%
+        avg-block-time-seconds: 12.0
       ARBITRUM:
+        syncMethod: ETHERSCAN
+        chain-id: "42161"
+        explorer:
+          etherscan:
+            base-url: https://api.arbiscan.io
+            api-key: ${ARBITRUM_ETHERSCAN_API_KEY:}
+        provider:
+          enabled: true
+          base-url: https://rpc.ankr.com/multichain/${ANKR_API_KEY:}
         urls:
           - https://arb1.arbitrum.io/rpc
-          - https://arbitrum.llamarpc.com
-          - https://rpc.ankr.com/arbitrum_one
-        batch-block-size: 5000
+          - https://rpc.sentio.xyz/arbitrum-one
+          - https://arbitrum.api.onfinality.io/public
+          - https://arbitrum-one-rpc.publicnode.com
+          - https://arbitrum.blockpi.network/v1/rpc/public
+          - https://arbitrum.meowrpc.com
+          #          - https://rpc.ankr.com/arbitrum/${ANKR_API_KEY:}
+          - https://lb.drpc.live/arbitrum/${DRPC_API_KEY:}
+        batch-block-size: 500
+        window-blocks: 252000000   # ~2 years at ~4 blocks/s
+        avg-block-time-seconds: 0.25
       OPTIMISM:
+        syncMethod: BLOCKSCOUT
+        chain-id: "10"
+        explorer:
+          blockscout:
+            base-url: https://explorer.optimism.io
+            api-key: ${OPTIMISM_BLOCKSCOUT_API_KEY:}
+        provider:
+          enabled: true
+          base-url: https://rpc.ankr.com/multichain/${ANKR_API_KEY:}
         urls:
+          - https://rpc.ankr.com/optimism/${ANKR_API_KEY:}
+          - https://lb.drpc.live/optimism/${DRPC_API_KEY:}
           - https://mainnet.optimism.io
-          - https://optimism.llamarpc.com
-          - https://rpc.ankr.com/optimism
-        batch-block-size: 5000
+          - https://optimism.drpc.org
+        batch-block-size: 1000
+        window-blocks: 34000000    # measured ~2y span as of 2026-03-09, rounded +5%
+        avg-block-time-seconds: 2.0
       POLYGON:
+        syncMethod: ETHERSCAN
+        chain-id: "137"
+        explorer:
+          etherscan:
+            base-url: https://api.polygonscan.com
+            api-key: ${POLYGON_ETHERSCAN_API_KEY:}
+        provider:
+          enabled: true
+          base-url: https://rpc.ankr.com/multichain/${ANKR_API_KEY:}
         urls:
-          - https://polygon.llamarpc.com
-          - https://rpc.ankr.com/polygon
-          - https://polygon-bor-rpc.publicnode.com
-        batch-block-size: 2000
+          - https://rpc.ankr.com/polygon/${ANKR_API_KEY:}
+          - https://lb.drpc.live/polygon/${DRPC_API_KEY:}
+          - https://polygon.drpc.org
+          - https://polygon-rpc.com
+        batch-block-size: 1000
+        window-blocks: 32000000    # measured ~2y span as of 2026-03-09, rounded +5%
+        avg-block-time-seconds: 2.0
       BASE:
+        syncMethod: BLOCKSCOUT
+        chain-id: "8453"
+        explorer:
+          blockscout:
+            base-url: https://base.blockscout.com
+            api-key: ${BASE_BLOCKSCOUT_API_KEY:}
+        provider:
+          enabled: true
+          base-url: https://rpc.ankr.com/multichain/${ANKR_API_KEY:}
         urls:
+          - https://rpc.ankr.com/base/${ANKR_API_KEY:}
+          - https://lb.drpc.live/base/${DRPC_API_KEY:}
           - https://mainnet.base.org
           - https://base.llamarpc.com
-          - https://rpc.ankr.com/base
-        batch-block-size: 5000
+        batch-block-size: 1000
+        window-blocks: 34000000    # measured ~2y span as of 2026-03-09, rounded +5%
+        avg-block-time-seconds: 2.0
+      # Some BSC public RPCs prune old blocks (e.g. "History has been pruned"); multiple endpoints improve retry.
       BSC:
+        syncMethod: RPC
+        chain-id: "56"
+        provider:
+          enabled: true
+          base-url: https://rpc.ankr.com/multichain/${ANKR_API_KEY:}
+          page-size: 100
         urls:
-          - https://bsc-dataseed.binance.org
-          - https://bsc.llamarpc.com
-          - https://rpc.ankr.com/bsc
-        batch-block-size: 2000
+          #          - https://lb.drpc.live/bsc/${DRPC_API_KEY:}
+          - https://rpc.ankr.com/bsc/${ANKR_API_KEY:}
+        batch-block-size: 250000
+        window-blocks: 31500000    # tuned from earliest verified wallet tx at block 56,750,955 with ~0.53M safety from last known head
+        avg-block-time-seconds: 0.5
       AVALANCHE:
+        syncMethod: ETHERSCAN
+        chain-id: "43114"
+        explorer:
+          etherscan:
+            base-url: https://api.routescan.io/v2/network/mainnet/evm/43114/etherscan
+            api-key: ${AVALANCHE_ETHERSCAN_API_KEY:}
+        provider:
+          enabled: true
+          base-url: https://rpc.ankr.com/multichain/${ANKR_API_KEY:}
         urls:
+          - https://rpc.ankr.com/avalanche/${ANKR_API_KEY:}
+          - https://lb.drpc.live/avalanche/${DRPC_API_KEY:}
           - https://api.avax.network/ext/bc/C/rpc
-          - https://rpc.ankr.com/avalanche
-          - https://avalanche-c-chain-rpc.publicnode.com
-        batch-block-size: 2000
+          - https://avax.meowrpc.com
+        batch-block-size: 1000
+        window-blocks: 40000000    # measured ~2y span as of 2026-03-09, rounded +5%
+        avg-block-time-seconds: 2.0
       MANTLE:
+        syncMethod: ETHERSCAN
+        chain-id: "5000"
+        explorer:
+          etherscan:
+            base-url: https://api.mantlescan.xyz
+            api-key: ${MANTLE_ETHERSCAN_API_KEY:}
         urls:
-          - https://mantle-rpc.publicnode.com
-          - https://rpc.ankr.com/mantle
+          - https://rpc.mantle.xyz
           - https://mantle.drpc.org
-        batch-block-size: 2000
+          - https://mantle-mainnet.public.blastapi.io
+        batch-block-size: 1000
+        window-blocks: 35000000    # measured ~2y span as of 2026-03-09, rounded +5%
+        avg-block-time-seconds: 2.0
+      LINEA:
+        syncMethod: ETHERSCAN
+        chain-id: "59144"
+        explorer:
+          etherscan:
+            base-url: https://api.etherscan.io
+            api-key: ${LINEA_ETHERSCAN_API_KEY:}
+        provider:
+          enabled: true
+          base-url: https://rpc.ankr.com/multichain/${ANKR_API_KEY:}
+        urls:
+          - https://rpc.linea.build
+          - https://linea-rpc.publicnode.com
+        batch-block-size: 1000
+        window-blocks: 29000000    # measured ~2y span as of 2026-03-09, rounded +5%
+        avg-block-time-seconds: 2.0
+      UNICHAIN:
+        syncMethod: ETHERSCAN
+        chain-id: "130"
+        explorer:
+          etherscan:
+            base-url: https://api.etherscan.io
+            api-key: ${UNICHAIN_ETHERSCAN_API_KEY:}
+        urls:
+          - https://mainnet.unichain.org
+          - https://unichain-rpc.publicnode.com
+        batch-block-size: 1000
+        window-blocks: 45000000    # full current chain age +5% safety; chain is younger than 2y
+        avg-block-time-seconds: 2.0
+      KATANA:
+        syncMethod: ETHERSCAN
+        chain-id: "747474"
+        explorer:
+          etherscan:
+            base-url: https://api.etherscan.io
+            api-key: ${KATANA_ETHERSCAN_API_KEY:}
+        urls:
+          - https://rpc.katana.network/
+        batch-block-size: 500
+        window-blocks: 28500000    # full current chain age +5% safety as of 2026-03-18; chain is younger than 2y
+        avg-block-time-seconds: 1.0
+      PLASMA:
+        syncMethod: ETHERSCAN
+        chain-id: "9745"
+        explorer:
+          etherscan:
+            base-url: https://api.etherscan.io
+            api-key: ${PLASMA_ETHERSCAN_API_KEY:}
+        urls:
+          - https://rpc.plasma.to
+        batch-block-size: 1000
+        window-blocks: 17800000    # full current chain age +5% safety as of 2026-03-18; chain is younger than 2y
+        avg-block-time-seconds: 1.0
+      ZKSYNC:
+        syncMethod: BLOCKSCOUT
+        chain-id: "324"
+        explorer:
+          blockscout:
+            base-url: https://zksync.blockscout.com
+            api-key: ${ZKSYNC_BLOCKSCOUT_API_KEY:}
+        urls:
+          - https://mainnet.era.zksync.io
+          - https://zksync.drpc.org
+        batch-block-size: 1000
+        window-blocks: 43000000    # measured ~2y span as of 2026-03-09, rounded +5%
+        avg-block-time-seconds: 1.0
       SOLANA:
+        syncMethod: RPC
         urls:
           - https://api.mainnet-beta.solana.com
     solana:
@@ -68,23 +265,208 @@ walletradar:
       signatures-limit: 1000
     # RPC retry: exponential backoff ± jitter. Defaults: base-delay-ms=1000, jitter-factor=0.2, max-attempts=5
     retry:
-      # base-delay-ms: 1000
+      base-delay-ms: 2000
       # jitter-factor: 0.2
-      # max-attempts: 5
-    # Protocol display name by contract address (EVM) or program id (Solana). Keys lowercase.
-    protocol-registry:
-      names:  # address (EVM) or program id (Solana) -> display name; lookup is case-insensitive
-        "0x7a250d5630b4cf539739df2c5dacb4c659f2488d": "Uniswap V2"
-        "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45": "Uniswap V3"
-        "0xe592427a0aece92de3edee1f18e0157c05861564": "Uniswap V3"
-        "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2": "Aave V3"
-  # Pricing: historical and spot resolvers (CoinGecko free API). T-019, T-020.
+      max-attempts: 7
+  normalization:
+    on-chain:
+      enabled: true
+      batch-size: 250
+      schedule-interval-ms: 90000
+      retry-delay-seconds: 60
+    bybit:
+      enabled: true
+      batch-size: 250
+      schedule-interval-ms: 90000
+    clarification:
+      enabled: true
+      batch-size: 100
+      retry-delay-seconds: 120
+      max-attempts: 3
+      li-fi-status:
+        enabled: true
+        base-url: https://li.quest
+        timeout-ms: 5000
+      mayan-status:
+        enabled: true
+        base-url: https://explorer-api.mayan.finance
+        timeout-ms: 5000
+      full-receipt:
+        enabled: true
+        batch-size: 50
+        retry-delay-seconds: 300
+        max-attempts: 2
+      related-discovery:
+        enabled: true
+        forward-block-window: 750000
+        max-pages: 3
+
+  costbasis:
+    enabled: true
+    validation-batch-size: 250
+    schedule-interval-ms: 120000
+    retry-delay-seconds: 120
+  tools:
+    classification-baseline:
+      enabled: false
+      mode: EXPORT
+      output-dir: results/refactor-baseline/adr-001/manual
+      baseline-dir:
+
   pricing:
-    coingecko-base-url: https://api.coingecko.com/api/v3
-    coingecko-historical-requests-per-minute: 45
-    connect-timeout-seconds: 10
-    read-timeout-seconds: 15
-    # Token contract address (lowercase) -> CoinGecko coin id for /coins/{id}/history and /simple/price
-    contract-to-coin-gecko-id:
-      "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2": "weth"
-      "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee": "ethereum"
+    enabled: true
+    batch-size: 150
+    schedule-interval-ms: 120000
+    retry-delay-seconds: 120
+    external:
+      request-timeout-ms: 10000
+      ecb:
+        base-url: https://data-api.ecb.europa.eu
+        backfill-days: 7
+      bybit:
+        base-url: https://api.bybit.com
+      binance:
+        base-url: https://api.binance.com
+      coin-gecko:
+        base-url: https://api.coingecko.com/api/v3
+  scam-filter:
+    enabled: true
+    drop-threshold: 100
+    blocklist-score: 1000
+    unsolicited-inbound-score: 35
+    mass-airdrop-score: 90
+    relay-sweep-score: 100
+    inbound-fanout-score: 85
+    zero-amount-poisoning-score: 95
+    suspicious-multicall-airdrop-score: 100
+    wallet-initiated-credit: 60
+    mixed-wallet-flow-credit: 30
+    wallet-approval-credit: 20
+    mass-airdrop-min-transfer-logs: 20
+    mass-relay-spam-min-transfer-logs: 30
+    mass-inbound-fanout-min-recipients: 40
+    zero-amount-poisoning-min-transfer-logs: 100
+    zero-amount-poisoning-min-zero-transfers: 20
+    suspicious-multicall-airdrop-min-transfer-calls: 20
+    known-inbound-spam-fingerprints:
+      - network-id: BASE
+        token-contract: 0xed7b04a3fdcc4b0718f76ab796d58f39212815cc
+        method-id: 0x4bb9aaf9
+      - network-id: BASE
+        token-contract: 0x1e358596f48420fe4cd147dcc850661632125e21
+        method-id: 0xa06c1a33
+      - network-id: BASE
+        token-contract: 0xfae7d01301e2eeede488f0953547e712a56c5e1d
+        method-id: 0x729ad39e
+      - network-id: BASE
+        token-contract: 0x0bfa6eae01b2f46a55861a5c13f60b67ecba68fe
+        method-id: 0x983bc41b
+      - network-id: BASE
+        token-contract: 0x848f877c61bf68cd758ffb8f8aa9606e79a571a9
+        method-id: 0x983bc41b
+      - network-id: BASE
+        token-contract: 0xcdd42e83688e46e17ef6e330ff694afe950d36fe
+        method-id: 0x983bc41b
+      - network-id: BASE
+        token-contract: 0x1ce89cf4a098295d4ec294c3dd7e0e195f906626
+        method-id: 0x983bc41b
+      - network-id: BASE
+        token-contract: 0xf6b53ec90128b252ebb03026cd56f5219d793043
+        method-id: 0x983bc41b
+      - network-id: POLYGON
+        token-contract: 0xaa84c8b6cd6c57cd364510a5b05358da63133529
+        method-id: 0x9c96eec5
+      - network-id: POLYGON
+        token-contract: 0x60d983edd1d0aa333e1515407c494e387e573f3d
+        method-id: 0x9c96eec5
+      - network-id: POLYGON
+        token-contract: 0xad747c03ccaa7e549e88995a99e128cc012a9873
+        method-id: 0x9c96eec5
+      - network-id: POLYGON
+        token-contract: 0x72fdc6006cf1bce5898f1c484cfefc66486abd8a
+        method-id: 0xa06c1a33
+      - network-id: POLYGON
+        token-contract: 0xcd16cd4bb3b4da765623c38fac3792a5957ceedc
+        method-id: 0xa06c1a33
+      - network-id: POLYGON
+        token-contract: 0x80648b694b8e07246eb3224f0ad05d982dff3fd1
+        method-id: 0xa06c1a33
+      - network-id: POLYGON
+        token-contract: 0x667c03131fa9e04114ae9efcbb4cd43db15ec718
+        method-id: 0x729ad39e
+      - network-id: POLYGON
+        token-contract: 0xda654d1cd24c5a46d96ebb0410d4d4306620866f
+        method-id: 0x729ad39e
+      - network-id: POLYGON
+        token-contract: 0xf9450e3cd6bfba3ea1125ebc42920d1753fdd6ce
+        method-id: 0x9c96eec5
+      - network-id: POLYGON
+        token-contract: 0xe1030883a69968a08263a7919656bfd6176a1f02
+        method-id: 0x729ad39e
+      - network-id: POLYGON
+        token-contract: 0x1665c36475e0e15484460bc0603ea47ec7d57064
+        method-id: 0x729ad39e
+      - network-id: POLYGON
+        token-contract: 0x1f5aa67cbe587d8468ad376b87457b3189be42ad
+        method-id: 0x9c96eec5
+      - network-id: POLYGON
+        token-contract: 0x4a4a7dad16f58737eee041a25de479c8d82553c1
+        method-id: 0x729ad39e
+      - network-id: POLYGON
+        token-contract: 0xa563c58409f32265203e62d60a0439d03179bdcd
+        method-id: 0x9c96eec5
+      - network-id: POLYGON
+        token-contract: 0x4423fff9fc7feed73c27d00c5e88248397464dc4
+        method-id: 0x729ad39e
+      - network-id: POLYGON
+        token-contract: 0x98df426c1de3ee897aa1a09b4c07a5d58c435f7a
+        method-id: 0xa06c1a33
+      - network-id: POLYGON
+        token-contract: 0x463b1977299c342c20cba611c5947c495711b398
+        method-id: 0x9c96eec5
+      - network-id: POLYGON
+        token-contract: 0xc322d40afc9acb6858542398f0020fae5db38276
+        method-id: 0x9c96eec5
+      - network-id: POLYGON
+        token-contract: 0x77e532094985c8e6d7dab88603b1064694d165ef
+        method-id: 0x9c96eec5
+      - network-id: POLYGON
+        token-contract: 0x359994f54a03701c17c2f5161f6e16a3b80a058d
+        method-id: 0xa06c1a33
+      - network-id: POLYGON
+        token-contract: 0xb344789e6843efa7501ad7daf67bffa718623111
+        method-id: 0xa06c1a33
+      - network-id: OPTIMISM
+        token-contract: 0x4554b2d76802b214c71e7481e0da8cfcba70fa34
+        method-id: 0x9c96eec5
+      - network-id: AVALANCHE
+        token-contract: 0x318c6a3cb85952641cd253b2311b0cee30f44822
+        method-id: 0xa9059cbb
+      - network-id: UNICHAIN
+        token-contract: 0x309aed2eebf9db4d7e51a7d2fdf557f7bbfe774a
+        method-id: 0xbf3b75a3
+      - network-id: UNICHAIN
+        token-contract: 0xeb923667062ff90c633910894467819ddc2b701e
+        method-id: 0x007b6643
+      - network-id: UNICHAIN
+        token-contract: 0x03a2dd6009c2f110aef74d1dd174a3e240122260
+        method-id: 0x007b6643
+      - network-id: ARBITRUM
+        token-contract: 0x29103b9e35b3f5f65708804dcc5f945fae992416
+        method-id: 0xd43a632f
+  # API CORS policy for local SPA development and browser preflight (OPTIONS).
+  api:
+    cors:
+      allowed-origins:
+        - http://localhost:4200
+        - http://127.0.0.1:4200
+      allowed-methods:
+        - GET
+        - POST
+        - PUT
+        - PATCH
+        - DELETE
+        - OPTIONS
+      allowed-headers:
+        - "*"
+      max-age-seconds: 3600

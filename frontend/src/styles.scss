@@ -1,0 +1,75 @@
+:root {
+  --wr-font-sans: 'DM Sans', 'Segoe UI', sans-serif;
+  --wr-font-mono: 'IBM Plex Mono', 'SFMono-Regular', Menlo, monospace;
+
+  --wr-bg: #07090f;
+  --wr-surface: #0b0d18;
+  --wr-elevated: #0f1220;
+  --wr-hover: #121628;
+  --wr-border: #181d30;
+  --wr-border-strong: #222840;
+
+  --wr-text: #dde3f0;
+  --wr-subtle: #4a5878;
+  --wr-muted: #252e42;
+
+  --wr-cyan: #22d3ee;
+  --wr-cyan-soft: #22d3ee14;
+  --wr-cyan-mid: #22d3ee38;
+  --wr-green: #34d399;
+  --wr-green-soft: #34d39914;
+  --wr-green-mid: #34d39938;
+  --wr-red: #f87171;
+  --wr-red-soft: #f8717114;
+  --wr-red-mid: #f8717138;
+  --wr-amber: #fbbf24;
+  --wr-amber-soft: #fbbf2414;
+  --wr-amber-mid: #fbbf2438;
+  --wr-purple: #a78bfa;
+  --wr-purple-soft: #a78bfa14;
+  --wr-purple-mid: #a78bfa38;
+  --wr-blue: #60a5fa;
+  --wr-blue-soft: #60a5fa14;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+}
+
+body {
+  background: radial-gradient(circle at 20% -10%, #19203d 0, transparent 46%), var(--wr-bg);
+  color: var(--wr-text);
+  font-family: var(--wr-font-sans);
+  font-size: 13px;
+  line-height: 1.45;
+  overflow: hidden;
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+
+::-webkit-scrollbar {
+  width: 3px;
+  height: 3px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--wr-border-strong);
+  border-radius: 999px;
+}

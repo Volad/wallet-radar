@@ -2,26 +2,39 @@ package com.walletradar.ingestion.config;
 
 import com.walletradar.common.RetryPolicy;
 import com.walletradar.ingestion.adapter.RpcEndpointRotator;
-import com.walletradar.ingestion.adapter.evm.EvmRpcClient;
-import com.walletradar.ingestion.adapter.evm.WebClientEvmRpcClient;
+import com.walletradar.ingestion.adapter.evm.rpc.EvmRpcClient;
+import com.walletradar.ingestion.adapter.evm.rpc.WebClientEvmRpcClient;
 import com.walletradar.ingestion.adapter.solana.SolanaRpcClient;
 import com.walletradar.ingestion.adapter.solana.WebClientSolanaRpcClient;
+import io.github.resilience4j.ratelimiter.RateLimiter;
+import io.github.resilience4j.ratelimiter.RateLimiterConfig;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.reactive.function.client.WebClient;
 
+import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
- * Configures RPC adapters from unified per-network config (ADR-012): per-network rotators + default rotator for unknown networks.
+ * Configures per-network RPC rotators and shared RPC clients.
  */
 @Configuration
-@EnableConfigurationProperties({ IngestionNetworkProperties.class, ProtocolRegistryProperties.class, IngestionRetryProperties.class, BackfillProperties.class })
+@EnableConfigurationProperties({
+        IngestionNetworkProperties.class,
+        IngestionRetryProperties.class,
+        IngestionEvmRpcProperties.class,
+        BackfillProperties.class,
+        ScamFilterProperties.class,
+        IngestionExplorerProperties.class,
+        OnChainNormalizationProperties.class,
+        OnChainClarificationProperties.class,
+        BybitNormalizationProperties.class
+})
 public class IngestionAdapterConfig {
 
     /** Fallback URL when a network has no entry or empty urls; used so adapter does not fail for unconfigured EVM networks. */
@@ -64,8 +77,19 @@ public class IngestionAdapterConfig {
     }
 
     @Bean
-    public EvmRpcClient evmRpcClient(WebClient.Builder webClientBuilder) {
-        return new WebClientEvmRpcClient(webClientBuilder);
+    public EvmRpcClient evmRpcClient(WebClient.Builder webClientBuilder, IngestionEvmRpcProperties evmRpcProperties) {
+        return new WebClientEvmRpcClient(webClientBuilder, evmRpcProperties.getMaxResponseBytes());
+    }
+
+    @Bean(name = "evmRpcRateLimiter")
+    public RateLimiter evmRpcRateLimiter(IngestionEvmRpcProperties evmRpcProperties) {
+        int rps = Math.max(1, evmRpcProperties.getMaxRequestsPerSecond());
+        RateLimiterConfig config = RateLimiterConfig.custom()
+                .limitRefreshPeriod(Duration.ofSeconds(1))
+                .limitForPeriod(rps)
+                .timeoutDuration(Duration.ofMillis(Math.max(0L, evmRpcProperties.getLocalLimiterTimeoutMs())))
+                .build();
+        return RateLimiter.of("evm-rpc", config);
     }
 
     /** Default Solana RPC rotator when SOLANA has no urls in walletradar.ingestion.network. */

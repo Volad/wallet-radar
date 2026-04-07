@@ -1,0 +1,21 @@
+{
+  "key": "pendle",
+  "protocol": "Pendle",
+  "version": "v2",
+  "aliases": ["Pendle", "Pendle V2"],
+  "capabilities": ["LP_LIFECYCLE", "REWARD_BUNDLES", "ZAP_OUT"],
+  "families": ["DEX", "YIELD"],
+  "clarificationHints": ["FULL_RECEIPT"],
+  "markers": {
+    "methodSelectors": {
+      "swap": ["0x4e7ed11c", "0x7e1fe8c0", "0xf7f3d2af", "0x01a5fe2a", "0x03bef7c5"],
+      "lpEntry": ["0xb0c7e3f8"],
+      "lpExit": ["0x1ef4b0d8"]
+    },
+    "functionNames": {
+      "swap": ["swapexacttokenforpt", "swapexactptfortoken", "swapexacttokenforyt", "swapexactytfortoken", "redeempytotoken"],
+      "lpEntry": ["addliquiditysingletoken", "addliquiditydualtokenandpt"],
+      "lpExit": ["removeliquiditysingletoken", "removeliquiditydualtokenandpt"]
+    }
+  }
+}

@@ -1,0 +1,4 @@
+interface:
+  display_name: "TxClassification Auditor"
+  short_description: "Audit tx classification determinism and invariants."
+  default_prompt: "Use $tx-classification-auditor to review this classifier change for conflicts, determinism, and accounting-safe flows."

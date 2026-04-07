@@ -7,7 +7,7 @@ alwaysApply: true
 
 ## Build tool
 
-- **Backend:** **Gradle** (not Maven). Use Gradle for the Spring Boot backend: `build.gradle.kts` or `build.gradle`, Gradle Wrapper (`gradlew`).
+- **Backend:** **Gradle** (not Maven). Use Gradle for the Spring Boot backend: `build.gradle.kts` in `backend/`, **Gradle Wrapper at project root** (`./gradlew`). Run backend tasks from repo root, e.g. `./gradlew :backend:test`, `./gradlew :backend:bootRun`, `./gradlew :backend:build`.
 - **Frontend:** npm/yarn for Angular; may be orchestrated from root Gradle or standalone (see monorepo layout).
 
 ## Repository layout: monorepo

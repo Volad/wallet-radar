@@ -1,8 +1,8 @@
 package com.walletradar.ingestion.adapter;
 
-import com.walletradar.domain.NetworkId;
+import com.walletradar.domain.common.NetworkId;
 import com.walletradar.ingestion.config.IngestionNetworkProperties;
-import com.walletradar.ingestion.adapter.evm.EvmBatchBlockSizeResolver;
+import com.walletradar.ingestion.adapter.evm.rpc.EvmBatchBlockSizeResolver;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -66,7 +66,7 @@ class EvmBatchBlockSizeResolverTest {
     @Test
     void resolve_aboveCap_returnsDefault() {
         IngestionNetworkProperties properties = new IngestionNetworkProperties();
-        properties.setNetwork(Map.of("ETHEREUM", entry(15_000)));
+        properties.setNetwork(Map.of("ETHEREUM", entry(60_000)));
         EvmBatchBlockSizeResolver resolver = new EvmBatchBlockSizeResolver(properties);
 
         assertThat(resolver.resolve(NetworkId.ETHEREUM)).isEqualTo(2000);

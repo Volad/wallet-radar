@@ -1,0 +1,59 @@
+services:
+  mongodb:
+    image: mongo:7
+    container_name: walletradar-mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    environment:
+      MONGO_INITDB_DATABASE: walletradar
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    image: gradle:8.10-jdk21
+    container_name: walletradar-backend
+    working_dir: /workspace
+    env_file:
+      - .env
+    environment:
+      MONGODB_URI: mongodb://mongodb:27017/walletradar
+      SPRING_DATA_MONGODB_URI: mongodb://mongodb:27017/walletradar
+    volumes:
+      - ./:/workspace
+      - gradle_cache:/home/gradle/.gradle
+    command: ["gradle", ":backend:bootRun", "--no-daemon"]
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    ports:
+      - "8082:8080"
+    restart: unless-stopped
+
+  frontend:
+    image: node:22
+    container_name: walletradar-frontend
+    working_dir: /workspace/frontend
+    env_file:
+      - .env
+    environment:
+      API_PROXY_TARGET: http://backend:8080
+    volumes:
+      - ./:/workspace
+      - frontend_node_modules:/workspace/frontend/node_modules
+    command: ["sh", "-lc", "npm install && npm run start:local-compose -- --host 0.0.0.0 --port 4200"]
+    depends_on:
+      - backend
+    ports:
+      - "4202:4200"
+    restart: unless-stopped
+
+volumes:
+  mongodb_data:
+  gradle_cache:
+  frontend_node_modules:

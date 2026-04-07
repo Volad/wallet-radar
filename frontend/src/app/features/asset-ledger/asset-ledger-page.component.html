@@ -1,0 +1,584 @@
+<div class="asset-ledger-shell">
+  @if (viewState().status === 'loading') {
+    <aside class="asset-ledger-filters loading-shell" aria-hidden="true">
+      <div class="filters-head">
+        <div class="loading-line loading-line-back"></div>
+        <div class="loading-line loading-line-eyebrow"></div>
+        <div class="loading-line loading-line-title"></div>
+        <div class="loading-line loading-line-subtitle"></div>
+      </div>
+      <div class="filters-content loading-filters">
+        <div class="loading-section">
+          <div class="loading-line loading-line-label"></div>
+          <div class="loading-row"></div>
+          <div class="loading-row"></div>
+          <div class="loading-row"></div>
+          <div class="loading-row"></div>
+        </div>
+        <div class="loading-section">
+          <div class="loading-line loading-line-label"></div>
+          <div class="loading-row short"></div>
+        </div>
+        <div class="loading-section">
+          <div class="loading-line loading-line-label"></div>
+          <div class="loading-box"></div>
+        </div>
+        <div class="loading-section">
+          <div class="loading-line loading-line-label"></div>
+          <div class="loading-row"></div>
+          <div class="loading-row"></div>
+          <div class="loading-row"></div>
+        </div>
+      </div>
+    </aside>
+
+    <main class="asset-ledger-content loading-content">
+      <div class="content-summary-sticky">
+        <header class="content-head">
+          <div>
+            <div class="loading-line loading-line-eyebrow"></div>
+            <div class="loading-title-row">
+              <div class="loading-line loading-line-main-title"></div>
+              <div class="loading-pill"></div>
+              <div class="loading-pill warning"></div>
+            </div>
+            <div class="loading-line loading-line-subtitle wide"></div>
+          </div>
+        </header>
+
+        <div class="stats loading-stats">
+          <div class="sc">
+            <div class="loading-line loading-line-stat-label"></div>
+            <div class="loading-line loading-line-stat-value"></div>
+            <div class="loading-line loading-line-stat-sub"></div>
+          </div>
+          <div class="sc">
+            <div class="loading-line loading-line-stat-label"></div>
+            <div class="loading-line loading-line-stat-value"></div>
+            <div class="loading-line loading-line-stat-sub"></div>
+          </div>
+          <div class="sc">
+            <div class="loading-line loading-line-stat-label"></div>
+            <div class="loading-line loading-line-stat-value"></div>
+            <div class="loading-line loading-line-stat-sub"></div>
+          </div>
+          <div class="sc">
+            <div class="loading-line loading-line-stat-label"></div>
+            <div class="loading-line loading-line-stat-value"></div>
+            <div class="loading-line loading-line-stat-sub"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="cv-wrap loading-card">
+        <div class="spinner" aria-hidden="true"></div>
+        <div class="loading-copy">
+          <h2>Loading asset ledger</h2>
+          <p>Rebuilding timeline, current basis, and event overlay for the selected asset family.</p>
+        </div>
+      </div>
+
+      <div class="chart-range loading-range">
+        <div class="range-meta">
+          <div class="loading-line loading-line-range-label"></div>
+          <div class="loading-line loading-line-range-window"></div>
+        </div>
+        <div class="loading-range-track"></div>
+      </div>
+
+      <section class="ledger-section">
+        <div class="section-head">
+          <span>
+            <span class="section-title">Position size</span>
+            <span class="section-sub">Loading series…</span>
+          </span>
+        </div>
+        <div class="mini-wrap loading-card loading-mini"></div>
+      </section>
+
+      <section class="ledger-section">
+        <div class="section-head">
+          <span>
+            <span class="section-title">Realised P&amp;L</span>
+            <span class="section-sub">Loading series…</span>
+          </span>
+        </div>
+        <div class="pnl-wrap loading-card loading-mini"></div>
+      </section>
+    </main>
+  } @else {
+    @if (errorMessage(); as errorMessage) {
+      <section class="state-panel error">
+        <h2>Unable to render asset ledger</h2>
+        <p>{{ errorMessage }}</p>
+      </section>
+    } @else {
+      @if (assetData(); as data) {
+        <aside class="asset-ledger-filters" aria-label="Timeline filters">
+          <div class="filters-head">
+            <button type="button" class="back-nav back-btn" (click)="back.emit()">← Back to tokens</button>
+            <div class="eyebrow">Move basis</div>
+            <div class="filter-symbol-row">
+              <h1>{{ data.displaySymbol }}</h1>
+              <span class="pill">{{ data.familyIdentity }}</span>
+            </div>
+            <p class="sub">{{ data.subtitle }}</p>
+          </div>
+
+          <div class="filters-content">
+            <section class="filter-group">
+              <div class="side-label-row">
+                <h3 class="side-label">Tx types</h3>
+                <button type="button" class="toggle-all-btn" (click)="toggleAllTypes()">
+                  toggle all
+                </button>
+              </div>
+              @for (item of data.legendItems; track item.key) {
+                <button
+                  type="button"
+                  class="filter-row type-row"
+                  [class.active]="isTypeSelected(item.typeKey)"
+                  [style.--chipColor]="item.color"
+                  (click)="toggleTypeVisibility(item.typeKey)">
+                  <canvas #legendCanvas class="type-icon-canvas" [attr.data-type]="item.typeKey"></canvas>
+                  <span class="check-box" [class.checked]="isTypeSelected(item.typeKey)"></span>
+                  <span class="filter-row-label">{{ item.label }}</span>
+                </button>
+              }
+            </section>
+
+            <section class="filter-group">
+              <h3 class="side-label">Basis rules</h3>
+              @for (basisFilter of basisFilterOptions(); track basisFilter.key) {
+                <button
+                  type="button"
+                  class="filter-row basis-row"
+                  [class.active]="isBasisEffectSelected(basisFilter.key)"
+                  [style.--chipColor]="basisFilter.color"
+                  (click)="toggleBasisEffect(basisFilter.key)">
+                  <span class="check-box" [class.checked]="isBasisEffectSelected(basisFilter.key)"></span>
+                  <span class="filter-row-label">{{ basisFilter.label }}</span>
+                </button>
+              }
+            </section>
+
+            <section class="filter-group filter-group-range">
+              <h3 class="side-label">Date range</h3>
+              <div class="sidebar-range-box">
+                <span>{{ visibleWindowStartLabel() }}</span>
+                <svg width="14" height="7" viewBox="0 0 14 7" aria-hidden="true">
+                  <path
+                    d="M0 3.5h10M7.5 1l2.5 2.5-2.5 2.5"
+                    stroke="currentColor"
+                    stroke-width="1.2"
+                    fill="none"
+                    stroke-linecap="round" />
+                </svg>
+                <span>{{ visibleWindowEndLabel() }}</span>
+              </div>
+            </section>
+
+            <section class="filter-group">
+              <h3 class="side-label">Quick presets</h3>
+              @for (preset of quickPresets; track preset.key) {
+                <button
+                  type="button"
+                  class="preset-row"
+                  [class.active]="selectedPreset() === preset.key"
+                  (click)="applyQuickPreset(preset.key)">
+                  <span class="preset-radio" [class.checked]="selectedPreset() === preset.key"></span>
+                  <span>{{ preset.label }}</span>
+                </button>
+              }
+            </section>
+          </div>
+        </aside>
+
+        <main class="asset-ledger-content">
+          <div class="content-summary-sticky">
+            <header class="content-head">
+              <div>
+                <div class="eyebrow">Move basis</div>
+                <div class="content-title-row">
+                  <h2>{{ data.displaySymbol }}</h2>
+                  <span class="pill" [attr.title]="formatQuantity(data.current.coveredQuantity, 12)">
+                    {{ formatQuantity(data.current.coveredQuantity, 3) }} covered
+                  </span>
+                  @if (data.current.uncoveredQuantity > 0) {
+                    <span class="pill warning" [attr.title]="formatQuantity(data.current.uncoveredQuantity, 12)">
+                      {{ formatQuantity(data.current.uncoveredQuantity, 3) }} uncovered
+                    </span>
+                  }
+                </div>
+                <p class="sub">{{ data.subtitle }}</p>
+              </div>
+            </header>
+
+            <div class="stats">
+              <div class="sc">
+                <div class="sc-l">AVCO</div>
+                <div class="sc-v avco">{{ formatUsd(data.current.avcoUsd, 0) }}</div>
+                <div class="sc-s">avg cost / {{ data.displaySymbol }}</div>
+              </div>
+              <div class="sc">
+                <div class="sc-l">qty held</div>
+                <div class="sc-v" [attr.title]="formatQuantity(data.current.quantity, 12)">
+                  {{ formatQuantity(data.current.quantity, 3) }} {{ data.displaySymbol }}
+                </div>
+                <div class="sc-s">net position</div>
+              </div>
+              <div class="sc">
+                <div class="sc-l">realised PnL</div>
+                <div
+                  class="sc-v"
+                  [class.pos]="data.current.realisedPnlUsd >= 0"
+                  [class.neg]="data.current.realisedPnlUsd < 0">
+                  {{ formatSignedUsd(data.current.realisedPnlUsd, 0) }}
+                </div>
+                <div class="sc-s">all SELL events</div>
+              </div>
+              <div class="sc">
+                <div class="sc-l">gas paid</div>
+                <div class="sc-v">{{ formatUsd(data.current.gasPaidUsd, 0) }}</div>
+                <div class="sc-s">USD equiv</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="cv-wrap">
+            <canvas
+              #chartCanvas
+              id="chart"
+              (mousemove)="onChartPointerMove($event)"
+              (click)="onChartClick($event)"
+              (mouseleave)="onChartPointerLeave()"
+              (wheel)="onChartWheel($event)"
+              aria-label="Asset AVCO timeline"
+              role="img"></canvas>
+          </div>
+
+          @if (maxMarkerIndex() > 0) {
+            <div class="chart-range">
+              <div class="range-meta">
+                <span class="tool-label">Range</span>
+                <span class="tool-window">{{ visibleWindowStartLabel() }} · {{ visibleWindowEndLabel() }}</span>
+              </div>
+              <div
+                #rangeShell
+                class="range-shell"
+                [class.dragging]="isRangeDragging()"
+                [style.--range-start.%]="rangeStartPercent()"
+                [style.--range-end.%]="rangeEndPercent()">
+                <div class="range-track"></div>
+                <canvas #rangePreviewCanvas class="range-preview-canvas" aria-hidden="true"></canvas>
+                <div class="range-selection" (mousedown)="onRangeSelectionPointerDown($event)"></div>
+                <input
+                  #rangeStartSlider
+                  class="range-input range-input-start"
+                  type="range"
+                  min="0"
+                  [max]="maxMarkerIndex()"
+                  [value]="rangeStartIndex()"
+                  (input)="onRangeStartInput(rangeStartSlider.value)" />
+                <input
+                  #rangeEndSlider
+                  class="range-input range-input-end"
+                  type="range"
+                  min="0"
+                  [max]="maxMarkerIndex()"
+                  [value]="rangeEndIndex()"
+                  (input)="onRangeEndInput(rangeEndSlider.value)" />
+              </div>
+            </div>
+          }
+
+          <section class="ledger-section" [class.collapsed]="isSectionCollapsed('position')">
+            <button type="button" class="section-head section-toggle" (click)="toggleSection('position')">
+              <span>
+                <span class="section-title">Position size</span>
+                <span class="section-sub">{{ data.displaySymbol }} held over time</span>
+              </span>
+              <span class="section-chevron" [class.collapsed]="isSectionCollapsed('position')">⌃</span>
+            </button>
+            @if (!isSectionCollapsed('position')) {
+              <div class="mini-wrap">
+                <canvas
+                  #qtyChartCanvas
+                  id="qty-chart"
+                  (mousemove)="onQuantityChartPointerMove($event)"
+                  (click)="onQuantityChartClick($event)"
+                  (mouseleave)="onSupplementalChartPointerLeave()"
+                  aria-label="Asset position size timeline"
+                  role="img"></canvas>
+              </div>
+            }
+          </section>
+
+          <section class="ledger-section" [class.collapsed]="isSectionCollapsed('pnl')">
+            <button type="button" class="section-head pnl-head section-toggle" (click)="toggleSection('pnl')">
+              <span>
+                <span class="section-title">Realised P&amp;L</span>
+                <span class="section-sub">Filtered disposal events and cumulative path</span>
+              </span>
+              <span class="section-chevron" [class.collapsed]="isSectionCollapsed('pnl')">⌃</span>
+            </button>
+            @if (!isSectionCollapsed('pnl')) {
+              <div class="pnl-legend" aria-hidden="true">
+                <span><span class="dot pos-dot"></span>Profit</span>
+                <span><span class="dot neg-dot"></span>Loss</span>
+                <span><span class="dot cum-dot"></span>Cumulative</span>
+              </div>
+              <div class="pnl-wrap">
+                <canvas
+                  #pnlChartCanvas
+                  id="pnl-chart"
+                  (mousemove)="onPnlChartPointerMove($event)"
+                  (click)="onPnlChartClick($event)"
+                  (mouseleave)="onSupplementalChartPointerLeave()"
+                  aria-label="Realised P and L timeline"
+                  role="img"></canvas>
+              </div>
+            }
+          </section>
+
+          <section class="ledger-section" [class.collapsed]="isSectionCollapsed('log')">
+            <button type="button" class="section-head section-head-log section-toggle" (click)="toggleSection('log')">
+              <span>
+                <span class="section-title">Event log</span>
+                <span class="section-sub">{{ eventLogCountLabel() }}</span>
+              </span>
+              <span class="section-chevron" [class.collapsed]="isSectionCollapsed('log')">⌃</span>
+            </button>
+            @if (!isSectionCollapsed('log')) {
+          <div class="event-log-toolbar">
+            <label class="event-log-search">
+              <span class="event-log-search-label">Filter events</span>
+              <input
+                #eventLogSearchInput
+                type="text"
+                [value]="eventLogSearch()"
+                placeholder="Search tx hash, protocol, flow, network, type..."
+                autocomplete="off"
+                spellcheck="false"
+                (input)="updateEventLogSearch(eventLogSearchInput.value)" />
+            </label>
+          </div>
+          <div class="tx-table-wrap">
+            <table class="tx-table">
+              <thead>
+                <tr>
+                  <th style="width: 220px">Type</th>
+                  <th>Protocol</th>
+                  <th>Date</th>
+                  <th class="r">Qty Δ</th>
+                  <th class="r">Unit price</th>
+                  <th class="r">AVCO before → after</th>
+                  <th class="r">Realised PnL</th>
+                  <th>Price source</th>
+                  <th>Flows</th>
+                </tr>
+              </thead>
+              <tbody>
+                @if (eventLogMarkers().length > 0) {
+                  @for (marker of eventLogMarkers(); track marker.id) {
+                    <tr
+                      [class.active]="isLogRowActive(marker.id)"
+                      (mouseenter)="onLogRowPointerEnter(marker)"
+                      (mouseleave)="onLogRowPointerLeave()"
+                      (click)="selectMarkerFromLog(marker, $event)">
+                      <td>
+                        <div class="tx-type-cell">
+                          <span class="tx-icon-wrap" [style.color]="marker.color">{{ marker.glyph }}</span>
+                          <div class="tx-type-copy">
+                            <div class="tx-type-name">{{ marker.label }}</div>
+                            <div class="tx-net">{{ marker.networkLabel }}</div>
+                          </div>
+                        </div>
+                      </td>
+                      <td>
+                        <span class="protocol-cell">{{ marker.displayVenue ?? '—' }}</span>
+                      </td>
+                      <td class="mono-cell">{{ formatEventDateTime(marker.timestamp) }}</td>
+                      <td class="r mono-cell">
+                        <span
+                          class="qty-delta"
+                          [class.pos]="marker.quantityDelta > 0"
+                          [class.neg]="marker.quantityDelta < 0">
+                          {{ formatSignedQuantity(marker.quantityDelta, 6) }}
+                        </span>
+                      </td>
+                      <td class="r mono-cell">{{ formatUsd(marker.priceUsd, 2) }}</td>
+                      <td class="r mono-cell">
+                        <div>{{ formatUsd(marker.avcoBeforeUsd, 2) }} <span class="avco-arrow">→</span> {{ formatUsd(marker.avcoAfterUsd, 2) }}</div>
+                        @if (marker.basisSummary !== 'No basis effect') {
+                          <div class="avco-change">{{ marker.basisSummary }}</div>
+                        }
+                      </td>
+                      <td class="r mono-cell">
+                        @if ((marker.realisedPnlDeltaUsd ?? 0) !== 0) {
+                          <span
+                            [class.pos]="(marker.realisedPnlDeltaUsd ?? 0) > 0"
+                            [class.neg]="(marker.realisedPnlDeltaUsd ?? 0) < 0">
+                            {{ formatSignedUsd(marker.realisedPnlDeltaUsd, 2) }}
+                          </span>
+                        } @else {
+                          <span class="muted-c">—</span>
+                        }
+                      </td>
+                      <td>
+                        @if (marker.priceSource; as priceSource) {
+                          <span class="source-pill">{{ priceSource }}</span>
+                        } @else {
+                          <span class="muted-c">—</span>
+                        }
+                      </td>
+                      <td>
+                        @if (marker.flows.length > 0) {
+                          <div class="flows-cell">
+                            @for (flow of marker.flows; track flow.role + ':' + flow.assetSymbol + ':' + flow.quantityLabel) {
+                              <span
+                                class="fr"
+                                [class.fr-buy]="flow.className === 'buy'"
+                                [class.fr-sell]="flow.className === 'sell'"
+                                [class.fr-transfer]="flow.className === 'transfer'"
+                                [class.fr-fee]="flow.className === 'fee'">
+                                {{ flow.role }} {{ flow.assetSymbol }}
+                              </span>
+                            }
+                          </div>
+                        } @else {
+                          <span class="muted-c">No flows</span>
+                        }
+                      </td>
+                    </tr>
+                  }
+                } @else {
+                  <tr>
+                    <td colspan="9" class="empty-log">No events match current range and filters.</td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
+            }
+          </section>
+        </main>
+      }
+    }
+  }
+
+  @if (tooltipMarker(); as marker) {
+    <div
+      id="tip"
+      class="show"
+      [style.left.px]="tooltipPosition().left"
+      [style.top.px]="tooltipPosition().top">
+      <div class="ti">
+        <div class="ti-head">
+          <span class="ti-badge" [style.background]="marker.color + '26'" [style.color]="marker.color">
+            {{ marker.label }}
+          </span>
+          <span class="ti-net">{{ marker.networkLabel }}</span>
+        </div>
+
+        <div class="ti-body">
+          <div class="tr">
+            <span class="k">date</span>
+            <span class="v">{{ marker.timestamp | date: 'mediumDate' }}</span>
+          </div>
+          <div class="tr">
+            <span class="k">protocol</span>
+            <span class="v">{{ marker.displayVenue ?? '—' }}</span>
+          </div>
+          <div class="tr">
+            <span class="k">qty delta</span>
+            <span class="v" [class.pos]="marker.quantityDelta > 0" [class.neg]="marker.quantityDelta < 0">
+              {{ formatSignedQuantity(marker.quantityDelta, 6) }}
+            </span>
+          </div>
+          <div class="tr">
+            <span class="k">amount</span>
+            <span class="v">{{ formatUsd(marker.amountUsd, 2) }}</span>
+          </div>
+          <div class="tr">
+            <span class="k">unit price</span>
+            <span class="v">{{ formatUsd(marker.priceUsd, 2) }}</span>
+          </div>
+          <div class="tr">
+            <span class="k">price source</span>
+            <span class="v">{{ marker.priceSource ?? '—' }}</span>
+          </div>
+          <div class="tr tx-row">
+            <span class="k">tx hash</span>
+            <span class="v tx-value" [title]="marker.txHash">{{ shortHash(marker.txHash) }}</span>
+            <button type="button" class="copy-btn" (click)="copyTxHash(marker.txHash)">
+              {{ copiedTxHash() === marker.txHash ? 'Copied' : 'Copy' }}
+            </button>
+          </div>
+          <div class="tdiv"></div>
+          <div class="tr">
+            <span class="k">AVCO before</span>
+            <span class="v">{{ formatUsd(marker.avcoBeforeUsd, 2) }}</span>
+          </div>
+          <div class="tr">
+            <span class="k">AVCO after</span>
+            <span class="v">{{ formatUsd(marker.avcoAfterUsd, 2) }}</span>
+          </div>
+          @if ((marker.realisedPnlDeltaUsd ?? 0) !== 0) {
+            <div class="tr">
+              <span class="k">realised PnL</span>
+              <span
+                class="v"
+                [class.pos]="(marker.realisedPnlDeltaUsd ?? 0) > 0"
+                [class.neg]="(marker.realisedPnlDeltaUsd ?? 0) < 0">
+                {{ formatSignedUsd(marker.realisedPnlDeltaUsd, 2) }}
+              </span>
+            </div>
+          }
+          @if (marker.basisSummary !== 'No basis effect') {
+            <div class="tr">
+              <span class="k">basis</span>
+              <span class="v neu">{{ marker.basisSummary }}</span>
+            </div>
+          }
+        </div>
+
+        <div class="ti-path">
+          <span class="pn">{{ marker.pathFrom }}</span>
+          <svg width="18" height="10" viewBox="0 0 18 10" aria-hidden="true" style="flex-shrink: 0">
+            <path
+              d="M0 5h14M10 1l4 4-4 4"
+              stroke="rgba(82,88,112,.7)"
+              stroke-width="1.2"
+              fill="none" />
+          </svg>
+          <span class="pn">{{ marker.pathTo }}</span>
+        </div>
+
+        <div class="ti-flows">
+          <div class="ti-ft">canonical flows</div>
+          @if (marker.flows.length > 0) {
+            @for (flow of marker.flows; track flow.role + ':' + flow.assetSymbol + ':' + flow.quantityLabel) {
+              <div class="frow">
+                <span
+                  class="fr"
+                  [class.fr-buy]="flow.className === 'buy'"
+                  [class.fr-sell]="flow.className === 'sell'"
+                  [class.fr-transfer]="flow.className === 'transfer'"
+                  [class.fr-fee]="flow.className === 'fee'">
+                  {{ flow.role }}
+                </span>
+                <span class="fa">{{ flow.assetSymbol }}</span>
+                <span class="fq">{{ flow.quantityLabel }}</span>
+              </div>
+            }
+          } @else {
+            <div class="frow">
+              <span class="fa">No canonical flows recorded.</span>
+            </div>
+          }
+        </div>
+      </div>
+    </div>
+  }
+</div>

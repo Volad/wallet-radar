@@ -1,436 +1,572 @@
 # WalletRadar — API Contract
 
-> **Version:** MVP v2.0  
-> **Base URL:** `/api/v1`  
-> **Auth:** None (no user accounts in MVP)  
-> **Format:** JSON. All monetary values serialised as `String` (BigDecimal precision, no floating point loss).
+> **Version:** v3 current backend surface
+> **Last updated:** 2026-04-06
+> **Status:** Active contract for the currently implemented REST endpoints
 
 ---
 
-## General Conventions
+## 1. Scope
 
-- All `GET` endpoints make **zero RPC calls** and **zero heavy computation**
-- All monetary fields (`priceUsd`, `avco`, `pnl`, etc.) are returned as `String`
-- Timestamps are `ISO 8601` strings: `"2025-01-15T14:00:00Z"`
-- Network IDs: `ETHEREUM` | `ARBITRUM` | `OPTIMISM` | `BASE` | `BSC` | `POLYGON` | `AVALANCHE` | `MANTLE` | `SOLANA`
-- `crossWalletAvco` is always **global across all networks** — network filter does not change it
-- `202 Accepted` responses include a job or sync ID for polling
+This document describes the API that is currently implemented in the backend.
+
+In scope now:
+
+- persisted session management
+- wallet backfill creation
+- wallet and session backfill-status reads
+- session-level transaction-history reads
+- session-level asset-ledger timeline reads
+
+Not in scope in this contract:
+
+- generic normalization, pricing, or portfolio-wide transaction-history read APIs
+- portfolio snapshots
+- override or manual compensating transaction APIs
 
 ---
 
-## Wallets
+## 2. Conventions
 
-### Add Wallet
+- Base path: `/api/v1`
+- Content type: `application/json`
+- `sessionId` is client-generated and persisted server-side in `user_sessions`
+- Session endpoints accept EVM networks only
+- Wallet endpoints accept supported backend `NetworkId` values; `null` or empty `networks` means "all supported networks"
 
-```
-POST /api/v1/wallets
-```
+Supported EVM `NetworkId` values for session payloads:
 
-**Request body:**
+- `ETHEREUM`
+- `ARBITRUM`
+- `OPTIMISM`
+- `POLYGON`
+- `BASE`
+- `BSC`
+- `AVALANCHE`
+- `MANTLE`
+- `LINEA`
+- `UNICHAIN`
+- `ZKSYNC`
+- `KATANA`
+- `PLASMA`
+
+---
+
+## 3. Error Model
+
+All handled API errors return:
+
 ```json
 {
-  "address": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+  "error": "INVALID_ADDRESS",
+  "message": "Invalid wallet address format",
+  "timestamp": "2026-03-19T12:34:56Z"
+}
+```
+
+Error codes currently produced by validation and controller guards:
+
+- `INVALID_ADDRESS`
+- `INVALID_NETWORK`
+- `INVALID_SESSION_ID`
+- `INVALID_LABEL`
+- `INVALID_COLOR`
+- `INVALID_REQUEST`
+- `SESSION_NOT_FOUND`
+- `STATUS_NOT_FOUND`
+
+Typical status codes:
+
+- `202 Accepted` for async creation/start operations
+- `200 OK` for reads
+- `400 Bad Request` for validation and malformed input
+- `404 Not Found` for missing session or sync-status resources
+
+---
+
+## 4. Session Endpoints
+
+### `POST /api/v1/sessions`
+
+Creates or refreshes a persisted session wallet set and triggers backfill orchestration through the session command path.
+
+Request:
+
+```json
+{
+  "sessionId": "d290f1ee-6c54-4b01-90e6-d701748f0851",
+  "wallets": [
+    {
+      "address": "0x1234567890abcdef1234567890abcdef12345678",
+      "label": "Main wallet",
+      "color": "#4F46E5",
+      "networks": ["ETHEREUM", "ARBITRUM", "BASE"]
+    }
+  ]
+}
+```
+
+Validation rules:
+
+- `sessionId` is required and must pass server-side session-id validation
+- `wallets` must be non-empty
+- each wallet requires:
+  - EVM address
+  - non-blank `label`
+  - `color` in `#RRGGBB` format
+  - non-empty EVM-only `networks`
+
+Response: `202 Accepted`
+
+```json
+{
+  "sessionId": "d290f1ee-6c54-4b01-90e6-d701748f0851",
+  "message": "Session accepted"
+}
+```
+
+Note:
+
+- the exact response message is service-defined; clients should not branch on its text
+
+### `GET /api/v1/sessions/{sessionId}`
+
+Returns the persisted session wallet set.
+
+Response: `200 OK`
+
+```json
+{
+  "sessionId": "d290f1ee-6c54-4b01-90e6-d701748f0851",
+  "wallets": [
+    {
+      "address": "0x1234567890abcdef1234567890abcdef12345678",
+      "label": "Main wallet",
+      "color": "#4F46E5",
+      "networks": ["ETHEREUM", "ARBITRUM", "BASE"]
+    }
+  ]
+}
+```
+
+Errors:
+
+- `404 SESSION_NOT_FOUND`
+
+### `GET /api/v1/sessions/{sessionId}/backfill-status`
+
+Returns session-level backfill status aggregated across wallets and networks.
+
+Response: `200 OK`
+
+```json
+{
+  "sessionId": "d290f1ee-6c54-4b01-90e6-d701748f0851",
+  "status": "IN_PROGRESS",
+  "overallProgressPct": 67,
+  "totalTargets": 6,
+  "completedTargets": 4,
+  "wallets": [
+    {
+      "address": "0x1234567890abcdef1234567890abcdef12345678",
+      "label": "Main wallet",
+      "color": "#4F46E5",
+      "networks": [
+        {
+          "networkId": "ETHEREUM",
+          "status": "COMPLETE",
+          "progressPct": 100,
+          "lastBlockSynced": 21999999,
+          "backfillComplete": true,
+          "syncBannerMessage": null
+        }
+      ]
+    }
+  ]
+}
+```
+
+Errors:
+
+- `404 SESSION_NOT_FOUND`
+
+### `POST /api/v1/sessions/{sessionId}/transactions/rebuild`
+
+Refreshes the session transaction read scope and returns the current number of
+transaction rows visible for that session. This is a read-through projection
+over `normalized_transactions`; no dedicated persisted session-transaction
+collection is required in the current implementation.
+
+Response: `200 OK`
+
+```json
+{
+  "sessionId": "d290f1ee-6c54-4b01-90e6-d701748f0851",
+  "projectedTransactions": 245,
+  "message": "Session transactions refreshed from canonical normalized transactions"
+}
+```
+
+Errors:
+
+- `404 SESSION_NOT_FOUND`
+
+### `GET /api/v1/sessions/{sessionId}/transactions`
+
+Returns the most recent session-visible normalized transactions. The visibility
+scope is the session accounting universe, not only the currently selected
+on-chain wallets. This allows the session history to include related custody
+refs such as `BYBIT:<uid>` when they belong to the same accounting universe.
+
+Query params:
+
+- `limit` optional, default `50`
+- accepted range: `1..500`
+- `offset` optional, default `0`
+- accepted range: `0..`
+- `search` optional, case-insensitive match against `txHash` and `flows.assetSymbol`
+- `bridgeStatus` optional:
+  - `ALL`
+  - `BRIDGE_OUT`
+  - `BRIDGE_IN`
+  - `MATCHED`
+  - `REVIEW`
+- `spamFilter` optional:
+  - `HIDE_SPAM` default
+  - `ALL`
+  - `SPAM_ONLY`
+- `walletId` optional, repeatable
+  - filters to the requested wallet refs within the session accounting universe
+- `networkId` optional, repeatable
+  - filters to the requested networks within the session accounting universe
+
+Response: `200 OK`
+
+```json
+{
+  "sessionId": "d290f1ee-6c54-4b01-90e6-d701748f0851",
+  "offset": 25,
+  "limit": 25,
+  "totalCount": 245,
+  "hasMore": true,
+  "items": [
+    {
+      "id": "0xabc...|0xdef...",
+      "sourceType": "CHAIN",
+      "txHash": "0xabc123",
+      "networkId": "BASE",
+      "walletAddress": "0x1234567890abcdef1234567890abcdef12345678",
+      "matchedCounterparty": "BYBIT:33625378",
+      "blockTimestamp": "2026-04-06T12:34:56Z",
+      "type": "EXTERNAL_TRANSFER_OUT",
+      "status": "CONFIRMED",
+      "issue": null,
+      "bridgeStatus": "MATCHED",
+      "realisedPnlUsdTotal": "12.50",
+      "avcoSnapshotVersion": null,
+      "flows": [
+        {
+          "role": "SELL",
+          "assetContract": null,
+          "assetSymbol": "ETH",
+          "quantityDelta": "-0.5",
+          "unitPriceUsd": "2100",
+          "valueUsd": "-1050",
+          "priceSource": "COINGECKO",
+          "logIndex": 0
+        }
+      ]
+    }
+  ]
+}
+```
+
+Notes:
+
+- `sourceType` currently distinguishes only `CHAIN` and `MANUAL`; a dedicated
+  external-ledger source label is not part of the current REST contract.
+- `type` is mapped to the existing dashboard transaction taxonomy
+  (`EXTERNAL_INBOUND`, `LEND_DEPOSIT`, `STAKE_DEPOSIT`, etc.) so the current
+  SPA can render it without an additional taxonomy migration.
+- `status` is the current canonical normalized status:
+  - `CONFIRMED`
+  - `PENDING_PRICE`
+  - `NEEDS_REVIEW`
+- `matchedCounterparty` is present for continuity-linked transfers such as
+  bridge legs and external-ledger custody moves
+- `issue` is a lightweight UI hint:
+  - `spam` when the row is a spam/phishing artifact returned by `spamFilter=ALL|SPAM_ONLY`,
+    including explicit exclusion-tagged spam and narrow review rows such as
+    `CLAIM_LIKE_SPAM_OR_AIRDROP`
+  - `missing_price` when the row still lacks accounting prices
+  - `unconfirmed` when the row is not yet confirmed for another reason
+  - `null` otherwise
+- `bridgeStatus` values:
+  - `BRIDGE_OUT`
+  - `BRIDGE_IN`
+  - `MATCHED`
+  - `REVIEW`
+- rows with spam/phishing semantics are omitted unless they are explicitly requested
+  through the spam filter; this includes exclusion-tagged spam and normalized rows
+  carrying explicit spam-like `missingDataReasons`
+
+Errors:
+
+- `400 INVALID_TRANSACTIONS_QUERY`
+- `404 SESSION_NOT_FOUND`
+
+---
+
+## 5. Wallet Endpoints
+
+### `POST /api/v1/wallets`
+
+Starts wallet backfill creation through the wallet command path.
+
+Request:
+
+```json
+{
+  "address": "0x1234567890abcdef1234567890abcdef12345678",
   "networks": ["ETHEREUM", "ARBITRUM"]
 }
 ```
 
-**Response `202 Accepted`:**
+Rules:
+
+- `address` is required
+- `networks` may be omitted or empty; that means "all supported networks"
+- wallet validation accepts supported backend address formats
+
+Response: `202 Accepted`
+
 ```json
 {
-  "syncId": "wallet-0xd8dA...-ETHEREUM",
+  "syncId": "wallet-0x12345678-ETHEREUM",
   "message": "Backfill started"
 }
 ```
 
----
+Note:
 
-### Get Wallet Sync Status
+- `syncId` is a convenience response field, not a canonical resource identifier
 
-```
-GET /api/v1/wallets/{address}/status?network={networkId}
-```
+### `GET /api/v1/wallets/{address}/status?network={NETWORK_ID}`
 
-**Query parameters:**
-- `network` — **optional**. If **omitted**: return status for **all networks** for this address. If **present**: return status for that network only (or 404 if no sync_status for that pair).
+Returns backfill status for one wallet on one network.
 
-**Response `200 OK` when `network` is present (single network):**
+Response: `200 OK`
+
 ```json
 {
-  "walletAddress": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+  "walletAddress": "0x1234567890abcdef1234567890abcdef12345678",
   "networkId": "ETHEREUM",
-  "status": "RUNNING",
-  "progressPct": 34,
-  "lastBlockSynced": 21800000,
+  "status": "IN_PROGRESS",
+  "progressPct": 67,
+  "lastBlockSynced": 21999999,
   "backfillComplete": false,
-  "syncBannerMessage": "Syncing Ethereum: 34% complete"
+  "syncBannerMessage": "Backfill is running"
 }
 ```
 
-**Response `200 OK` when `network` is omitted (all networks for address):**
+Errors:
+
+- `400 INVALID_ADDRESS`
+- `400 INVALID_NETWORK`
+- `404 STATUS_NOT_FOUND`
+
+### `GET /api/v1/wallets/{address}/status`
+
+Returns backfill status for all known networks for one wallet.
+
+Response: `200 OK`
+
 ```json
 {
-  "walletAddress": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+  "walletAddress": "0x1234567890abcdef1234567890abcdef12345678",
   "networks": [
     {
       "networkId": "ETHEREUM",
-      "status": "RUNNING",
-      "progressPct": 34,
-      "lastBlockSynced": 21800000,
-      "backfillComplete": false,
-      "syncBannerMessage": "Syncing Ethereum: 34% complete"
+      "status": "COMPLETE",
+      "progressPct": 100,
+      "lastBlockSynced": 21999999,
+      "backfillComplete": true,
+      "syncBannerMessage": null
     },
     {
       "networkId": "ARBITRUM",
-      "status": "COMPLETE",
-      "progressPct": 100,
-      "lastBlockSynced": 185000000,
-      "backfillComplete": true,
-      "syncBannerMessage": null
+      "status": "IN_PROGRESS",
+      "progressPct": 67,
+      "lastBlockSynced": 318888888,
+      "backfillComplete": false,
+      "syncBannerMessage": "Backfill is running"
     }
   ]
 }
 ```
 
-`status` values: `PENDING` | `RUNNING` | `COMPLETE` | `PARTIAL` | `FAILED`  
-`syncBannerMessage` is `null` when `status=COMPLETE`
+Errors:
 
-**Response `404 Not Found`:** No sync status for the given address (or for the given address×network when `network` is specified).
+- `400 INVALID_ADDRESS`
+- `404 STATUS_NOT_FOUND`
 
 ---
 
-### Trigger Manual Sync
+## 6. Compatibility Notes
 
-```
-POST /api/v1/sync/refresh
-```
+- This contract intentionally documents only the endpoints that exist in the current backend.
+- Future normalization, pricing, reconciliation, and portfolio APIs must be added here when implemented.
+- GET endpoints remain datastore-only; no RPC calls are part of the request path contract.
 
-**Request body:**
+---
+
+## 7. Asset Ledger Timeline Endpoint
+
+### `GET /api/v1/sessions/{sessionId}/asset-ledger?familyIdentity={FAMILY_ID}`
+
+Returns the session asset-ledger timeline for one accounting family.
+
+Purpose:
+
+- drive the asset detail chart for AVCO / cost-basis history
+- provide event overlay markers
+- expose raw immutable replay points for audit/debug
+
+Request rules:
+
+- `sessionId` must exist
+- `familyIdentity` is required
+- the current backend contract expects the exact stored family identity such as:
+  - `FAMILY:ETH`
+  - `FAMILY:USDC`
+  - an exact asset identity fallback such as `0x...contract` or `NATIVE:BASE`
+
+Response: `200 OK`
+
 ```json
 {
-  "wallets": ["0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"],
-  "networks": ["ETHEREUM", "ARBITRUM"]
-}
-```
-
-**Response `202 Accepted`:**
-```json
-{ "message": "Incremental sync triggered" }
-```
-
----
-
-### Trigger Manual Balance Refresh
-
-Current balances are polled automatically every 10 minutes. The user can request an immediate refresh for specific wallets and networks.
-
-```
-POST /api/v1/wallets/balances/refresh
-```
-
-**Request body:**
-```json
-{
-  "wallets": ["0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"],
-  "networks": ["ETHEREUM", "ARBITRUM"]
-}
-```
-
-**Response `202 Accepted`:**
-```json
-{ "message": "Balance refresh triggered" }
-```
-
-Updated on-chain balances appear on the next GET /assets (or dedicated balances endpoint); no polling of job status required.
-
----
-
-## Assets
-
-### Get Asset List
-
-```
-GET /api/v1/assets?wallets=0xA,0xB&network=ARBITRUM
-```
-
-`wallets` — comma-separated list (required)  
-`network` — optional filter; omit for all networks
-
-**Response `200 OK`:**
-```json
-[
-  {
-    "assetSymbol": "ETH",
-    "assetContract": "0x0000000000000000000000000000000000000000",
-    "networkId": "ARBITRUM",
-    "quantity": "1.532000000000000000",
-    "derivedQuantity": "1.532000000000000000",
-    "onChainQuantity": "1.532000000000000000",
-    "balanceDiscrepancy": "0",
-    "reconciliationStatus": "MATCH",
-    "showReconciliationWarning": false,
-    "perWalletAvco": "1850.25",
-    "crossWalletAvco": "1723.40",
-    "crossWalletAvcoNote": "Across all networks & wallets in session",
-    "spotPriceUsd": "2100.00",
-    "valueUsd": "3217.20",
-    "unrealisedPnlUsd": "382.97",
-    "unrealisedPnlPct": "13.49",
-    "realisedPnlUsd": "210.50",
-    "totalRealisedPnlUsd": "1842.75",
-    "hasUnresolvedFlags": false,
-    "unresolvedFlagCount": 0,
-    "hasIncompleteHistory": false,
-    "lastEventTimestamp": "2025-01-10T08:23:41Z"
-  }
-]
-```
-
-Reconciliation fields:
-- `derivedQuantity` — quantity from AVCO/economic events (same as `quantity`; explicit for comparison).
-- `onChainQuantity` — current balance from `on_chain_balances` at last poll (or `null` if not available).
-- `balanceDiscrepancy` — `onChainQuantity − derivedQuantity` (string); zero or null when not applicable.
-- `reconciliationStatus` — `MATCH` | `MISMATCH` | `NOT_APPLICABLE` (e.g. no on-chain data, or wallet older than 2 years).
-- `showReconciliationWarning` — `true` when status is `MISMATCH` and wallet history is "young" (e.g. &lt; 2 years), to suggest adding a manual compensating transaction.
-
-**Note:** `crossWalletAvco` is always computed across **all networks and all wallets** in the `?wallets=` parameter, regardless of the `?network=` filter.
-
----
-
-## Transactions
-
-### Get Transaction History (Paginated)
-
-```
-GET /api/v1/assets/{assetId}/transactions?cursor={cursor}&limit=50&direction=DESC
-```
-
-**Parameters:**
-- `cursor` — opaque base64 cursor (omit for first page)
-- `limit` — items per page; default `50`, max `200`
-- `direction` — `DESC` (newest first, default) | `ASC` (oldest first)
-
-**Response `200 OK`:**
-```json
-{
-  "items": [
+  "sessionId": "d290f1ee-6c54-4b01-90e6-d701748f0851",
+  "familyIdentity": "FAMILY:ETH",
+  "current": {
+    "quantity": "3.0681",
+    "coveredQuantity": "3.0600",
+    "uncoveredQuantity": "0.0081",
+    "totalCostBasisUsd": "6058.10",
+    "avcoUsd": "1974.00",
+    "realisedPnlUsd": "0",
+    "gasPaidUsd": "0"
+  },
+  "timeline": [
     {
-      "eventId": "507f1f77bcf86cd799439011",
-      "txHash": "0xabc123...",
-      "networkId": "ETHEREUM",
-      "walletAddress": "0xd8dA...",
-      "blockTimestamp": "2025-01-10T08:23:41Z",
-      "eventType": "SWAP_BUY",
-      "assetSymbol": "ETH",
-      "quantityDelta": "0.500000000000000000",
-      "priceUsd": "1800.00",
-      "priceSource": "SWAP_DERIVED",
-      "totalValueUsd": "900.00",
-      "gasCostUsd": "3.20",
-      "gasIncludedInBasis": true,
-      "realisedPnlUsd": null,
-      "avcoAtTimeOfSale": null,
-      "protocolName": "Uniswap V3",
-      "flagCode": null,
-      "flagResolved": true,
-      "hasOverride": false
+      "blockTimestamp": "2026-03-01T10:00:00Z",
+      "txHash": "0xabc...",
+      "normalizedTransactionId": "67d0...",
+      "normalizedType": "BRIDGE_OUT",
+      "lifecycleKind": "BRIDGE",
+      "lifecycleStage": "SOURCE",
+      "basisEffects": ["CARRY_OUT", "GAS_ONLY"],
+      "quantityDelta": "-1.000000000000000000",
+      "costBasisDeltaUsd": "-2000.00",
+      "realisedPnlDeltaUsd": "0",
+      "gasDeltaUsd": "2.50",
+      "quantityAfter": "2.0681",
+      "coveredQuantityAfter": "2.0600",
+      "uncoveredQuantityAfter": "0.0081",
+      "totalCostBasisAfterUsd": "4058.10",
+      "avcoAfterUsd": "1962.44"
     }
   ],
-  "nextCursor": "eyJibG9ja1RpbWVzdGFtcCI6IjIwMjUtMDEtMDlUMTI6MDA6MDBaIiwidHhIYXNoIjoiMHhhYmMxMjMifQ==",
-  "hasMore": true
-}
-```
-
-`nextCursor` is `null` when there are no more pages.
-
----
-
-## Portfolio Snapshots
-
-### Get Portfolio Time-Series
-
-```
-GET /api/v1/portfolio/snapshots?wallets=0xA,0xB&range=7D
-```
-
-**Parameters:**
-- `wallets` — comma-separated (required)
-- `range` — `1D` | `7D` | `1M` | `1Y` | `ALL`
-
-**Response `200 OK`:**
-```json
-{
-  "range": "7D",
-  "wallets": ["0xA", "0xB"],
-  "dataPoints": [
+  "events": [
     {
-      "timestamp": "2025-01-15T14:00:00Z",
-      "totalValueUsd": "12450.30",
-      "unrealisedPnlUsd": "1820.45",
-      "unresolvedValueUsd": "0.00",
-      "unresolvedCount": 0
+      "normalizedTransactionId": "67d0...",
+      "txHash": "0xabc...",
+      "blockTimestamp": "2026-03-01T10:00:00Z",
+      "normalizedType": "BRIDGE_OUT",
+      "lifecycleKind": "BRIDGE",
+      "walletAddresses": ["0x1234..."],
+      "networkIds": ["ZKSYNC"]
+    }
+  ],
+  "ledgerPoints": [
+    {
+      "walletAddress": "0x1234...",
+      "networkId": "ZKSYNC",
+      "accountingAssetIdentity": "NATIVE:ZKSYNC",
+      "accountingFamilyIdentity": "FAMILY:ETH",
+      "blockTimestamp": "2026-03-01T10:00:00Z",
+      "replaySequence": 144,
+      "basisEffect": "CARRY_OUT",
+      "quantityBefore": "1.689595",
+      "quantityAfter": "1.000000",
+      "totalCostBasisBeforeUsd": "3370.00",
+      "totalCostBasisAfterUsd": "2000.00",
+      "basisBackedQuantityAfter": "1.000000",
+      "uncoveredQuantityDelta": "0",
+      "hasIncompleteHistoryAfter": false,
+      "quantityShortfallAfter": "0",
+      "uncoveredQuantityAfter": "0"
     }
   ]
 }
 ```
 
-**Note:** `totalValueUsd` is the in-memory aggregate of per-wallet snapshots for the requested `wallets` set. Zero RPC calls. Zero heavy computation on request path.
+Notes:
 
----
+- `timeline` is aggregated on read across the session's stable
+  `accountingUniverseId`, not only the currently visible wallet subset
+- `current.totalCostBasisUsd` and `current.avcoUsd` are provable basis values
+  for `current.coveredQuantity`
+- `events` is the lightweight overlay surface for the UI
+- `ledgerPoints` is the raw immutable replay trace for audit/debug
+- the request path is datastore-only; it performs no RPC or explorer calls
 
-### Get Asset Chart Data
+Errors:
 
-```
-GET /api/v1/charts/asset/{symbol}?wallets=0xA,0xB&range=7D
-```
+- `404 SESSION_NOT_FOUND`
+- `400 INVALID_REQUEST` when `familyIdentity` is blank
+## Session Dashboard
 
-**Response `200 OK`:**
-```json
-{
-  "assetSymbol": "ETH",
-  "range": "7D",
-  "dataPoints": [
-    {
-      "timestamp": "2025-01-15T14:00:00Z",
-      "valueUsd": "3217.20",
-      "spotPriceUsd": "2100.00",
-      "perWalletAvco": "1850.25",
-      "unrealisedPnlUsd": "382.97"
-    }
-  ]
-}
-```
+- `GET /api/v1/sessions/{sessionId}/dashboard`
+- Returns current session-scoped dashboard snapshot backed by `on_chain_balances` and latest `asset_ledger_points`
+- current live quantities still come from the session wallet subset
+- replay history used for timeline/debug may include broader accounting-universe
+  members such as `BYBIT:<uid>`
+- `tokenPositions` are current live quantities with conservative provable `avcoUsd` / PnL
+- `summary.totalUnrealizedPnlPct` is based on provable covered basis only
+- `tokenPositions[].issue` is a read-time diagnostic class, not a persisted
+  reconciliation collection state
 
----
+Current dashboard token-position issue values:
 
-## Manual Compensating Transaction
+- `yield_accrual`
+  - live quantity is above covered quantity because an interest-bearing balance
+    accrued after the last materialized tx
+- `coverage_gap`
+  - live quantity is above covered quantity and does not qualify as passive
+    accrual
+- `history_flags`
+  - live quantity is fully covered, but latest replay point still carries
+    incomplete-history or unresolved flags
+- `missing_replay_point`
+  - live balance exists, but no latest replay point exists for the exact bucket
+- `missing_price`
+  - reserved for price-availability diagnostics
 
-Add a synthetic event to reconcile balance and/or AVCO (e.g. after detecting on-chain vs derived mismatch).
-
-```
-POST /api/v1/transactions/manual
-```
-
-Alternative path: `POST /api/v1/wallets/{address}/manual-transactions` (same semantics, wallet in path).
-
-**Request body:**
-```json
-{
-  "walletAddress": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
-  "networkId": "ETHEREUM",
-  "assetSymbol": "ETH",
-  "assetContract": "0x0000000000000000000000000000000000000000",
-  "quantityDelta": "0.5",
-  "priceUsd": "2000.00",
-  "timestamp": "2025-01-15T12:00:00Z",
-  "note": "Reconciliation: airdrop not in history",
-  "clientId": "550e8400-e29b-41d4-a716-446655440000"
-}
-```
-
-- `assetSymbol` or `assetContract` (one required).
-- `quantityDelta` (string) — positive = receive, negative = send.
-- `priceUsd` (string) — **required when quantityDelta > 0** (for AVCO).
-- `timestamp` (optional, ISO 8601) — defaults to "end of timeline" or submission time.
-- `clientId` (UUID) — idempotency key; duplicate request with same clientId returns existing event / 200.
-
-**Response `202 Accepted`:**
-```json
-{
-  "jobId": "3fa85f64-5717-4562-b3fc-2c963f66afa8",
-  "message": "Manual transaction saved. Recalculation in progress."
-}
-```
-
-Poll `GET /api/v1/recalc/status/{jobId}` (same as override) until `status=COMPLETE`.
-
-**Optional:** `DELETE /api/v1/transactions/manual/{eventId}` — remove the manual event and trigger AVCO recalc; response 202 with `jobId`.
-
----
-
-## Overrides
-
-### Set Manual Price Override
-
-```
-PUT /api/v1/transactions/{eventId}/override
-```
-
-**Request body:**
-```json
-{
-  "priceUsd": "2500.00",
-  "note": "Airdrop — used market price at receipt time"
-}
-```
-
-**Response `202 Accepted`:**
-```json
-{
-  "jobId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
-  "message": "Override saved. Recalculation in progress."
-}
-```
-
----
-
-### Revert Override
-
-```
-DELETE /api/v1/transactions/{eventId}/override
-```
-
-**Response `202 Accepted`:**
-```json
-{
-  "jobId": "3fa85f64-5717-4562-b3fc-2c963f66afa7",
-  "message": "Override reverted. Recalculation in progress."
-}
-```
-
----
-
-## Recalculation Jobs
-
-### Get Recalculation Status
-
-```
-GET /api/v1/recalc/status/{jobId}
-```
-
-Used for both **override** (PUT/DELETE override) and **manual compensating transaction** (POST manual, DELETE manual) recalculations.
-
-**Response `200 OK`:**
-```json
-{
-  "jobId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
-  "status": "COMPLETE",
-  "newPerWalletAvco": "2104.33",
-  "completedAt": "2025-01-15T14:02:05Z"
-}
-```
-
-`status` values: `PENDING` | `RUNNING` | `COMPLETE` | `FAILED`  
-`newPerWalletAvco` is `null` until `status=COMPLETE`  
-Poll every 2 seconds. Jobs are auto-deleted 24h after completion.
-
----
-
-## Error Responses
+Example token-position entry:
 
 ```json
 {
-  "error": "WALLET_NOT_FOUND",
-  "message": "No sync status found for 0xd8dA... on ETHEREUM",
-  "timestamp": "2025-01-15T14:00:00Z"
+  "familyIdentity": "FAMILY:ETH",
+  "symbol": "ETH",
+  "name": "Ethereum",
+  "quantity": "3.065880428473694856",
+  "priceUsd": "1985.3",
+  "avcoUsd": "2349.840198149151237779344109742893",
+  "unrealizedPnlPct": "-15.51",
+  "unrealizedPnlUsd": "-1115.49",
+  "realizedPnlUsd": "0",
+  "networkId": "MANTLE",
+  "walletAddress": "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f",
+  "issue": "yield_accrual"
 }
 ```
-
-| HTTP Code | Error Code | Meaning |
-|-----------|-----------|---------|
-| `400` | `INVALID_ADDRESS` | Address format invalid |
-| `400` | `INVALID_NETWORK` | Network ID not supported |
-| `404` | `WALLET_NOT_FOUND` | Wallet not yet added |
-| `404` | `EVENT_NOT_FOUND` | Transaction event ID not found |
-| `404` | `JOB_NOT_FOUND` | Recalc job ID not found or expired |
-| `409` | `OVERRIDE_EXISTS` | Active override already exists for this event |
-| `500` | `INTERNAL_ERROR` | Unexpected server error |

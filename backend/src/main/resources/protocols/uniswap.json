@@ -1,0 +1,9 @@
+{
+  "key": "uniswap",
+  "protocol": "Uniswap",
+  "version": "v3",
+  "aliases": ["Uniswap", "Uniswap V3"],
+  "capabilities": ["LP_POSITION_NFT", "ROUTER_SWAPS"],
+  "families": ["DEX"],
+  "clarificationHints": []
+}

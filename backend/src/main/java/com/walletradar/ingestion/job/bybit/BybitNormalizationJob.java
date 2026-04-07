@@ -1,0 +1,115 @@
+package com.walletradar.ingestion.job.bybit;
+
+import com.walletradar.domain.event.BybitNormalizationCompletedEvent;
+import com.walletradar.domain.event.OnChainClarificationCompletedEvent;
+import com.walletradar.domain.session.UserSession;
+import com.walletradar.ingestion.config.BybitNormalizationProperties;
+import com.walletradar.ingestion.job.support.StageExecutionLogSupport;
+import com.walletradar.session.application.SessionPipelineStateService;
+import com.walletradar.telemetry.PipelineTelemetrySnapshot;
+import com.walletradar.telemetry.PipelineTelemetrySnapshotService;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.context.event.EventListener;
+import org.springframework.stereotype.Component;
+
+import java.util.concurrent.atomic.AtomicBoolean;
+
+/**
+ * Event-driven driver for Bybit normalization.
+ */
+@Component
+@RequiredArgsConstructor
+@Slf4j
+public class BybitNormalizationJob {
+
+    private static final String STAGE_NAME = "bybit-normalization";
+
+    private final AtomicBoolean running = new AtomicBoolean(false);
+
+    private final BybitNormalizationProperties properties;
+    private final BybitNormalizationService bybitNormalizationService;
+    private final PipelineTelemetrySnapshotService pipelineTelemetrySnapshotService;
+    private final ApplicationEventPublisher applicationEventPublisher;
+    private final SessionPipelineStateService sessionPipelineStateService;
+
+    public int runNormalization() {
+        return runNormalization("manual", null, false);
+    }
+
+    @EventListener
+    public void onOnChainClarificationCompleted(OnChainClarificationCompletedEvent event) {
+        if (!properties.isEnabled() || event == null) {
+            return;
+        }
+        runNormalization("clarification-completed", event.sessionId(), true);
+    }
+
+    private int runNormalization(String trigger) {
+        return runNormalization(trigger, null, false);
+    }
+
+    private int runNormalization(String trigger, String sessionId, boolean publishWhenEmpty) {
+        if (!running.compareAndSet(false, true)) {
+            log.debug("BybitNormalizationJob skipped: already running, trigger={}", trigger);
+            return 0;
+        }
+
+        int processed = 0;
+        long startedAtNanos = StageExecutionLogSupport.logStart(log, STAGE_NAME, trigger);
+        try {
+            sessionPipelineStateService.markStageRunning(
+                    sessionId,
+                    UserSession.PipelineStage.BYBIT_NORMALIZATION,
+                    "Bybit normalization running"
+            );
+            while (true) {
+                int batchProcessed = bybitNormalizationService.processNextBatch(properties.getBatchSize());
+                processed += batchProcessed;
+                if (batchProcessed == 0) {
+                    logPipelineSnapshot();
+                    sessionPipelineStateService.markStageComplete(
+                            sessionId,
+                            UserSession.PipelineStage.BYBIT_NORMALIZATION,
+                            "Bybit normalization complete"
+                    );
+                    publishCompletionEvent(sessionId, processed, trigger, publishWhenEmpty);
+                    return processed;
+                }
+            }
+        } catch (RuntimeException error) {
+            sessionPipelineStateService.markStageFailed(
+                    sessionId,
+                    UserSession.PipelineStage.BYBIT_NORMALIZATION,
+                    error.getMessage()
+            );
+            throw error;
+        } finally {
+            StageExecutionLogSupport.logFinish(log, STAGE_NAME, trigger, processed, startedAtNanos);
+            running.set(false);
+        }
+    }
+
+    private void logPipelineSnapshot() {
+        PipelineTelemetrySnapshot snapshot = pipelineTelemetrySnapshotService.snapshot();
+        log.info(
+                "Pipeline telemetry snapshot: onChainNormalized={}, bybitNormalized={}, pendingStat={}, unmatchedBybitBridge={}, orphanUtaLeg={}, unresolvedPrice={}, blockingNeedsReview={}, excludedNeedsReview={}",
+                snapshot.onChainNormalizedCount(),
+                snapshot.bybitNormalizedCount(),
+                snapshot.pendingStatCount(),
+                snapshot.unmatchedBybitBridgeCount(),
+                snapshot.orphanUtaLegCount(),
+                snapshot.unresolvedPriceCount(),
+                snapshot.needsReviewCount(),
+                snapshot.excludedNeedsReviewCount()
+        );
+    }
+
+    private void publishCompletionEvent(String sessionId, int processed, String trigger, boolean publishWhenEmpty) {
+        if (processed <= 0 && !publishWhenEmpty) {
+            return;
+        }
+        applicationEventPublisher.publishEvent(new BybitNormalizationCompletedEvent(sessionId, processed, trigger));
+    }
+}

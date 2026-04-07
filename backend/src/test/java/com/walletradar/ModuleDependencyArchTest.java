@@ -8,12 +8,10 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
-import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes;
 import static com.tngtech.archunit.library.dependencies.SlicesRuleDefinition.slices;
 
 /**
- * Enforces module dependency rules from docs/02-architecture.md (Module Dependency Rules table).
- * Run in CI to keep package boundaries.
+ * Enforces package boundaries for the remaining backfill and session runtime.
  */
 class ModuleDependencyArchTest {
 
@@ -27,26 +25,34 @@ class ModuleDependencyArchTest {
     }
 
     @Test
-    void domain_must_only_depend_on_common() {
+    void domain_must_not_depend_on_runtime_layers() {
         ArchRule rule = noClasses()
                 .that().resideInAPackage("..domain..")
-                .should().dependOnClassesThat().resideInAnyPackage("..ingestion..", "..config..", "..api..", "..costbasis..", "..pricing..", "..snapshot..");
+                .should().dependOnClassesThat().resideInAnyPackage("..ingestion..", "..config..", "..api..", "..backend..");
         rule.check(classes);
     }
 
     @Test
-    void ingestion_must_not_depend_on_costbasis_snapshot_api() {
+    void ingestion_must_not_depend_on_api() {
         ArchRule rule = noClasses()
                 .that().resideInAPackage("..ingestion..")
-                .should().dependOnClassesThat().resideInAnyPackage("..costbasis..", "..snapshot..", "..api..");
+                .should().dependOnClassesThat().resideInAPackage("..api..");
         rule.check(classes);
     }
 
     @Test
     void common_must_not_depend_on_other_app_modules() {
         ArchRule rule = noClasses()
-                .that().resideInAPackage("..common..")
-                .should().dependOnClassesThat().resideInAnyPackage("..domain..", "..ingestion..", "..config..", "..api..", "..costbasis..", "..pricing..", "..snapshot..");
+                .that().resideInAPackage("com.walletradar.common..")
+                .should().dependOnClassesThat().resideInAnyPackage("..domain..", "..ingestion..", "..config..", "..api..", "..backend..");
+        rule.check(classes);
+    }
+
+    @Test
+    void api_should_not_import_repository_classes() {
+        ArchRule rule = noClasses()
+                .that().resideInAPackage("..api..")
+                .should().dependOnClassesThat().haveSimpleNameEndingWith("Repository");
         rule.check(classes);
     }
 
@@ -55,6 +61,30 @@ class ModuleDependencyArchTest {
         ArchRule rule = slices()
                 .matching("com.walletradar.(*)..")
                 .should().beFreeOfCycles();
+        rule.check(classes);
+    }
+
+    @Test
+    void ingestion_wallet_command_must_not_depend_on_job_triggers() {
+        ArchRule rule = noClasses()
+                .that().resideInAPackage("..ingestion.wallet.command..")
+                .should().dependOnClassesThat().resideInAPackage("..ingestion.job..");
+        rule.check(classes);
+    }
+
+    @Test
+    void ingestion_wallet_query_must_not_depend_on_job_triggers() {
+        ArchRule rule = noClasses()
+                .that().resideInAPackage("..ingestion.wallet.query..")
+                .should().dependOnClassesThat().resideInAPackage("..ingestion.job..");
+        rule.check(classes);
+    }
+
+    @Test
+    void ingestion_sync_progress_must_not_depend_on_job_triggers() {
+        ArchRule rule = noClasses()
+                .that().resideInAPackage("..ingestion.sync.progress..")
+                .should().dependOnClassesThat().resideInAPackage("..ingestion.job..");
         rule.check(classes);
     }
 }
