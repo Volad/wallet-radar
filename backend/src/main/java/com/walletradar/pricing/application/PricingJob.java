@@ -30,6 +30,7 @@ public class PricingJob {
     private final PricingProperties pricingProperties;
     private final PricingJobService pricingJobService;
     private final PricingDataGateService pricingDataGateService;
+    private final StalePriceUnresolvedRepairService stalePriceUnresolvedRepairService;
     private final PipelineTelemetrySnapshotService pipelineTelemetrySnapshotService;
     private final ApplicationEventPublisher applicationEventPublisher;
     private final SessionPipelineStateService sessionPipelineStateService;
@@ -68,6 +69,10 @@ public class PricingJob {
                 int batchProcessed = pricingJobService.processNextBatch();
                 processed += batchProcessed;
                 if (batchProcessed == 0) {
+                    int repaired = repairStalePriceReasons();
+                    if (repaired > 0) {
+                        log.info("Stale unresolved-price cleanup repaired={} rows", repaired);
+                    }
                     PricingDataGateSnapshot snapshot = pricingDataGateService.snapshot();
                     log.info(
                             "Pricing data gate snapshot: avcoReady={}, pendingPrice={}, pendingClarification={}, blockingNeedsReview={}, excludedNeedsReview={}, unresolvedPrice={}",
@@ -98,6 +103,17 @@ public class PricingJob {
         } finally {
             PricingLogSupport.logFinish(log, STAGE_NAME, trigger, processed, startedAtNanos);
             running.set(false);
+        }
+    }
+
+    private int repairStalePriceReasons() {
+        int repaired = 0;
+        while (true) {
+            int batch = stalePriceUnresolvedRepairService.repairNextBatch(pricingProperties.getBatchSize());
+            repaired += batch;
+            if (batch == 0) {
+                return repaired;
+            }
         }
     }
 

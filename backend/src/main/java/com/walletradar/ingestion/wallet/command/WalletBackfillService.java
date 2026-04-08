@@ -38,7 +38,11 @@ public class WalletBackfillService {
             if (status.isBackfillComplete()) {
                 continue;
             }
+            if (status.getSourceKind() == null) {
+                status.setSourceKind(SyncStatus.SourceKind.ONCHAIN);
+            }
             if (status.getId() == null) {
+                status.setSourceKind(SyncStatus.SourceKind.ONCHAIN);
                 status.setWalletAddress(address);
                 status.setNetworkId(networkId.name());
             }

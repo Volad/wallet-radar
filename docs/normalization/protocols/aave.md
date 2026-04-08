@@ -74,6 +74,34 @@ Current active runtime usage:
 - reserve asset is the economic principal for borrow/repay
 - debt token mint/burn remains continuity-only
 - settlement or refund dust must not become synthetic economic legs
+- simple `LENDING_DEPOSIT / LENDING_WITHDRAW` rows with one reserve-asset leg
+  and one receipt-token leg replay as an atomic family-equivalent carry pair
+  even when normalized flow order lists the receipt leg first
+- audited rebasing WETH receipts on `Aave` require a stricter canonical split
+  already during normalization:
+  - audited receipt symbols:
+    - `aEthWETH`
+    - `aArbWETH`
+    - `aLinWETH`
+    - `aManWETH`
+    - `aZksWETH`
+  - `LENDING_DEPOSIT`
+    - principal outbound remains `TRANSFER`
+    - receipt inbound up to the same principal quantity remains `TRANSFER`
+    - any positive receipt excess becomes `BUY`
+  - `LENDING_WITHDRAW`
+    - receipt outbound remains `TRANSFER`
+    - underlying inbound up to the same receipt quantity remains `TRANSFER`
+    - any positive underlying excess becomes `BUY`
+  - this rule materializes rebasing yield at the touched tx instead of letting
+    replay treat the whole receipt delta as principal continuity
+- minor quantity drift between reserve asset and `aToken` leg is treated as
+  quantity drift inside the same continuity family:
+  - full source cost basis remains on the destination leg
+  - only unmatched destination excess remains uncovered
+- for the audited rebasing WETH receipts above, the "unmatched destination
+  excess" must be emitted as explicit canonical acquisition, not left implicit
+  inside one oversized `TRANSFER` flow
 - on `zkSync`, an audited native-alias transfer to the audited system fee sink
   that exactly matches `gasUsed * gasPrice` is fee evidence and must not be
   emitted again as both transfer and fee

@@ -7,8 +7,10 @@ import com.walletradar.domain.event.OnChainNormalizationCompletedEvent;
 import com.walletradar.domain.event.PricingCompletedEvent;
 import com.walletradar.domain.event.SessionBackfillCompletedEvent;
 import com.walletradar.domain.session.UserSession;
+import com.walletradar.domain.sync.BackfillSegmentRepository;
 import com.walletradar.domain.sync.SyncStatus;
 import com.walletradar.domain.sync.SyncStatusRepository;
+import com.walletradar.domain.transaction.bybit.BybitExtractedEvent;
 import com.walletradar.domain.transaction.externalledger.ExternalLedgerRaw;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.raw.RawTransaction;
@@ -29,6 +31,7 @@ import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -39,6 +42,10 @@ class SessionPipelineResumeSchedulerTest {
     private com.walletradar.domain.session.UserSessionRepository userSessionRepository;
     @Mock
     private SyncStatusRepository syncStatusRepository;
+    @Mock
+    private BackfillSegmentRepository backfillSegmentRepository;
+    @Mock
+    private AccountingUniverseService accountingUniverseService;
     @Mock
     private MongoOperations mongoOperations;
     @Mock
@@ -64,6 +71,33 @@ class SessionPipelineResumeSchedulerTest {
         assertPublishedEvent(SessionBackfillCompletedEvent.class, event -> {
             assertThat(event.sessionId()).isEqualTo("session-1");
             assertThat(event.targetCount()).isEqualTo(2);
+        });
+    }
+
+    @Test
+    void integrationOnlySessionCanResumeFromBackfillCompletion() {
+        UserSession session = new UserSession();
+        session.setId("session-1");
+        session.setWallets(List.of());
+        UserSession.SessionIntegration integration = new UserSession.SessionIntegration();
+        integration.setIntegrationId("BYBIT-33625378");
+        integration.setAccountRef("BYBIT:33625378");
+        integration.setStatus(UserSession.IntegrationStatus.READY);
+        session.setIntegrations(List.of(integration));
+
+        when(userSessionRepository.findAll()).thenReturn(List.of(session));
+        when(backfillSegmentRepository.countByIntegrationId("BYBIT-33625378")).thenReturn(6L);
+        when(backfillSegmentRepository.countByIntegrationIdAndStatus("BYBIT-33625378", com.walletradar.domain.sync.BackfillSegment.SegmentStatus.COMPLETE))
+                .thenReturn(6L);
+        when(mongoOperations.exists(any(Query.class), eq(RawTransaction.class))).thenReturn(false);
+        when(mongoOperations.exists(any(Query.class), eq("normalized_transactions"))).thenReturn(false);
+
+        scheduler().resumeReadySessions();
+
+        assertPublishedEvent(SessionBackfillCompletedEvent.class, event -> {
+            assertThat(event.sessionId()).isEqualTo("session-1");
+            assertThat(event.walletCount()).isZero();
+            assertThat(event.targetCount()).isEqualTo(1);
         });
     }
 
@@ -98,7 +132,29 @@ class SessionPipelineResumeSchedulerTest {
         when(mongoOperations.exists(any(Query.class), eq("normalized_transactions"))).thenReturn(true);
         when(mongoOperations.exists(any(Query.class), eq(NormalizedTransaction.class)))
                 .thenReturn(false, false, false, false, false);
+        when(mongoOperations.exists(any(Query.class), eq(BybitExtractedEvent.class))).thenReturn(false, false);
         when(mongoOperations.exists(any(Query.class), eq(ExternalLedgerRaw.class))).thenReturn(true);
+
+        scheduler().resumeReadySessions();
+
+        assertPublishedEvent(OnChainClarificationCompletedEvent.class, event -> {
+            assertThat(event.sessionId()).isEqualTo("session-1");
+            assertThat(event.trigger()).isEqualTo("resume-watchdog");
+        });
+    }
+
+    @Test
+    void resumesBybitWhenExtractedRowsExist() {
+        UserSession session = session("session-1", wallet("0xabc", List.of(NetworkId.ETHEREUM)));
+        when(userSessionRepository.findAll()).thenReturn(List.of(session));
+        when(syncStatusRepository.findByWalletAddressIn(List.of("0xabc"))).thenReturn(List.of(
+                syncStatus("0xabc", NetworkId.ETHEREUM, true)
+        ));
+        when(mongoOperations.exists(any(Query.class), eq(RawTransaction.class))).thenReturn(false);
+        when(mongoOperations.exists(any(Query.class), eq("normalized_transactions"))).thenReturn(true);
+        when(mongoOperations.exists(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(false, false, false, false, false);
+        when(mongoOperations.exists(any(Query.class), eq(BybitExtractedEvent.class))).thenReturn(true);
 
         scheduler().resumeReadySessions();
 
@@ -117,6 +173,7 @@ class SessionPipelineResumeSchedulerTest {
         ));
         when(mongoOperations.exists(any(Query.class), eq(RawTransaction.class))).thenReturn(false);
         when(mongoOperations.exists(any(Query.class), eq("normalized_transactions"))).thenReturn(true);
+        when(mongoOperations.exists(any(Query.class), eq(BybitExtractedEvent.class))).thenReturn(false, false);
         when(mongoOperations.exists(any(Query.class), eq(ExternalLedgerRaw.class))).thenReturn(false, false);
         when(mongoOperations.exists(any(Query.class), eq(NormalizedTransaction.class)))
                 .thenReturn(false, true, false, false);
@@ -138,6 +195,7 @@ class SessionPipelineResumeSchedulerTest {
         ));
         when(mongoOperations.exists(any(Query.class), eq(RawTransaction.class))).thenReturn(false);
         when(mongoOperations.exists(any(Query.class), eq("normalized_transactions"))).thenReturn(true);
+        when(mongoOperations.exists(any(Query.class), eq(BybitExtractedEvent.class))).thenReturn(false, false);
         when(mongoOperations.exists(any(Query.class), eq(ExternalLedgerRaw.class))).thenReturn(false, false);
         when(mongoOperations.exists(any(Query.class), eq(NormalizedTransaction.class)))
                 .thenReturn(false, false, false, true);
@@ -206,6 +264,7 @@ class SessionPipelineResumeSchedulerTest {
         when(mongoOperations.exists(any(Query.class), eq("normalized_transactions"))).thenReturn(true);
         when(mongoOperations.exists(any(Query.class), eq(NormalizedTransaction.class)))
                 .thenReturn(false, false, false, false);
+        when(mongoOperations.exists(any(Query.class), eq(BybitExtractedEvent.class))).thenReturn(false, false);
         when(mongoOperations.exists(any(Query.class), eq(ExternalLedgerRaw.class))).thenReturn(false, false);
         when(mongoOperations.exists(any(Query.class), eq("asset_ledger_points"))).thenReturn(true);
         when(mongoOperations.exists(any(Query.class), eq("on_chain_balances"))).thenReturn(true);
@@ -229,10 +288,11 @@ class SessionPipelineResumeSchedulerTest {
         ));
         when(mongoOperations.exists(any(Query.class), eq(RawTransaction.class))).thenReturn(false);
         when(mongoOperations.exists(any(Query.class), eq("normalized_transactions"))).thenReturn(true);
+        when(mongoOperations.exists(any(Query.class), eq(BybitExtractedEvent.class))).thenReturn(false, false);
         when(mongoOperations.exists(any(Query.class), eq(ExternalLedgerRaw.class))).thenReturn(false, false);
         when(mongoOperations.exists(any(Query.class), eq(NormalizedTransaction.class)))
                 .thenReturn(false, false, false, true);
-        when(mongoOperations.exists(argThat(query -> containsWalletAddress(query, "0xabc")), eq("asset_ledger_points")))
+        when(mongoOperations.exists(argThat(query -> containsAccountingUniverseId(query, "session-1")), eq("asset_ledger_points")))
                 .thenReturn(false);
 
         scheduler().resumeReadySessions();
@@ -260,8 +320,9 @@ class SessionPipelineResumeSchedulerTest {
         when(mongoOperations.exists(any(Query.class), eq("normalized_transactions"))).thenReturn(true);
         when(mongoOperations.exists(any(Query.class), eq(NormalizedTransaction.class)))
                 .thenReturn(false, false, false, false);
+        when(mongoOperations.exists(any(Query.class), eq(BybitExtractedEvent.class))).thenReturn(false, false);
         when(mongoOperations.exists(any(Query.class), eq(ExternalLedgerRaw.class))).thenReturn(false, false);
-        when(mongoOperations.exists(argThat(query -> containsWalletAddress(query, "0xabc")), eq("asset_ledger_points")))
+        when(mongoOperations.exists(argThat(query -> containsAccountingUniverseId(query, "session-1")), eq("asset_ledger_points")))
                 .thenReturn(false);
 
         scheduler().resumeReadySessions();
@@ -275,9 +336,29 @@ class SessionPipelineResumeSchedulerTest {
     }
 
     private SessionPipelineResumeScheduler scheduler() {
+        lenient().when(accountingUniverseService.resolveScope(any(UserSession.class))).thenAnswer(invocation -> {
+            UserSession session = invocation.getArgument(0);
+            List<String> onChainWalletRefs = session.getWallets() == null ? List.of() : session.getWallets().stream()
+                    .map(UserSession.SessionWallet::getAddress)
+                    .toList();
+            List<String> memberRefs = new java.util.ArrayList<>(onChainWalletRefs);
+            if (session.getIntegrations() != null) {
+                session.getIntegrations().stream()
+                        .map(UserSession.SessionIntegration::getAccountRef)
+                        .filter(java.util.Objects::nonNull)
+                        .forEach(memberRefs::add);
+            }
+            return new AccountingUniverseService.AccountingUniverseScope(
+                    session.getId(),
+                    List.copyOf(memberRefs),
+                    List.copyOf(onChainWalletRefs)
+            );
+        });
         return new SessionPipelineResumeScheduler(
                 userSessionRepository,
                 syncStatusRepository,
+                backfillSegmentRepository,
+                accountingUniverseService,
                 mongoOperations,
                 applicationEventPublisher,
                 sessionPipelineStateService
@@ -317,5 +398,13 @@ class SessionPipelineResumeSchedulerTest {
             return false;
         }
         return query.getQueryObject().toJson().contains(walletAddress);
+    }
+
+    private static boolean containsAccountingUniverseId(Query query, String accountingUniverseId) {
+        if (query == null || query.getQueryObject() == null) {
+            return false;
+        }
+        return query.getQueryObject().toJson().contains("\"accountingUniverseId\"") &&
+                query.getQueryObject().toJson().contains(accountingUniverseId);
     }
 }

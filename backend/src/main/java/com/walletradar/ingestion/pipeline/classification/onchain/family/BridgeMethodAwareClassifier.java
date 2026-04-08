@@ -67,7 +67,7 @@ public class BridgeMethodAwareClassifier implements OnChainFamilyClassifier {
                 OnChainClassificationSupport.initialStatus(context.view(), BRIDGE_OUT, entry.confidence()),
                 PROTOCOL_REGISTRY,
                 entry.confidence(),
-                OnChainClassificationSupport.toFlows(context.movementLegs(), BRIDGE_OUT),
+                OnChainClassificationSupport.toFlows(context.view(), context.movementLegs(), BRIDGE_OUT),
                 List.of(),
                 null,
                 null,

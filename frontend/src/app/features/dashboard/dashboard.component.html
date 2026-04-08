@@ -14,20 +14,24 @@
     <wr-dashboard-topbar
       [metrics]="data().metrics"
       [wallets]="data().wallets"
+      [integrations]="sessionIntegrations()"
       [isBackfillVisible]="isBackfillVisible()"
       [backfillProgressPct]="backfillProgressPct()"
       [statusLabel]="pipelineStatusLabel()"
       [statusSubline]="pipelineStatusSubline()"
-      [showProgress]="showPipelineProgress()"
-      (addWallet)="openAddWalletDialog()"></wr-dashboard-topbar>
+      [showProgress]="showPipelineProgress()"></wr-dashboard-topbar>
 
     <div class="workspace">
       <wr-dashboard-section-nav
         [sections]="data().sections"
         [activeSection]="isAssetLedgerMode() ? 'tokens' : section()"
-        (sectionChange)="toggleSection($event)"></wr-dashboard-section-nav>
+        [isSettingsActive]="isSettingsMode()"
+        (sectionChange)="toggleSection($event)"
+        (settingsSelect)="openSettings()"></wr-dashboard-section-nav>
 
-      @if (isAssetLedgerMode() && assetLedgerSessionId() !== null && assetLedgerFamilyIdentity() !== null) {
+      @if (isSettingsMode()) {
+        <wr-settings-page class="settings-workspace"></wr-settings-page>
+      } @else if (isAssetLedgerMode() && assetLedgerSessionId() !== null && assetLedgerFamilyIdentity() !== null) {
         <wr-asset-ledger-page
           class="asset-ledger-workspace"
           [sessionId]="assetLedgerSessionId()!"
@@ -35,15 +39,21 @@
           (back)="closeAssetLedger()"></wr-asset-ledger-page>
       } @else {
         <aside class="filters" [class.collapsed]="isFiltersCollapsed()">
-          <button type="button" class="filters-toggle" (click)="toggleFiltersCollapsed()">
+          <div class="filters-head">
+            <button type="button" class="filters-toggle" (click)="toggleFiltersCollapsed()">
+              @if (!isFiltersCollapsed()) {
+                <span>Filters</span>
+              }
+              @if (activeFilterCount() > 0 && !isFiltersCollapsed()) {
+                <span class="filter-count">{{ activeFilterCount() }}</span>
+              }
+              <span class="chevron" [class.rotated]="isFiltersCollapsed()">›</span>
+            </button>
             @if (!isFiltersCollapsed()) {
-              <span>Filters</span>
+              <div class="eyebrow">Dashboard</div>
+              <p class="filters-sub">Wallets, integrations, and networks</p>
             }
-            @if (activeFilterCount() > 0 && !isFiltersCollapsed()) {
-              <span class="filter-count">{{ activeFilterCount() }}</span>
-            }
-            <span class="chevron" [class.rotated]="isFiltersCollapsed()">›</span>
-          </button>
+          </div>
 
           @if (!isFiltersCollapsed()) {
             <div class="filters-content">
@@ -57,14 +67,39 @@
                     [style.--chipColor]="wallet.color"
                     (click)="toggleWallet(wallet.id)">
                     <span class="check-box" [class.checked]="isWalletSelected(wallet.id)"></span>
-                    <span class="wallet-dot" [style.background]="wallet.color" aria-hidden="true"></span>
+                    <span class="filter-icon-slot" aria-hidden="true">
+                      <span class="filter-wallet-dot" [style.background]="wallet.color"></span>
+                    </span>
                     <span class="wallet-chip-content">
-                      <span>{{ wallet.label }}</span>
-                      <span class="mono muted">{{ shortAddress(wallet.address) }}</span>
+                      <span class="filter-row-label wallet-primary">{{ wallet.label }}</span>
+                      <span class="filter-row-meta mono muted">{{ shortAddress(wallet.address) }}</span>
                     </span>
                   </button>
                 }
               </section>
+
+              @if (filterIntegrations().length > 0) {
+                <section class="filter-group">
+                  <h3 class="side-label">Integration</h3>
+                  @for (integration of filterIntegrations(); track integration.id) {
+                    <button
+                      type="button"
+                      class="select-chip"
+                      [class.active]="isIntegrationSelected(integration.accountRef)"
+                      [style.--chipColor]="integration.color"
+                      (click)="toggleIntegration(integration.accountRef)">
+                      <span class="check-box" [class.checked]="isIntegrationSelected(integration.accountRef)"></span>
+                      <span class="filter-icon-slot" [style.color]="integration.color" aria-hidden="true">
+                        <span class="integration-filter-icon">{{ integration.icon }}</span>
+                      </span>
+                      <span class="wallet-chip-content">
+                        <span class="filter-row-label wallet-primary">{{ integration.label }}</span>
+                        <span class="filter-row-meta mono muted">{{ integration.accountRef }}</span>
+                      </span>
+                    </button>
+                  }
+                </section>
+              }
 
               <section class="filter-group">
                 <h3 class="side-label">Network</h3>
@@ -76,26 +111,13 @@
                     [style.--chipColor]="network.color"
                     (click)="toggleNetwork(network.id)">
                     <span class="check-box" [class.checked]="isNetworkSelected(network.id)"></span>
-                    <span class="network-icon" aria-hidden="true">{{ network.icon }}</span>
-                    <span>{{ network.label }}</span>
+                    <span class="filter-icon-slot" [style.color]="network.color" aria-hidden="true">
+                      <span class="network-icon">{{ network.icon }}</span>
+                    </span>
+                    <span class="filter-row-label">{{ network.label }}</span>
                   </button>
                 }
               </section>
-
-              @if (section() === 'tokens') {
-                <section class="filter-group">
-                  <h3 class="side-label">Settings</h3>
-                  <button
-                    type="button"
-                    class="select-chip setting-chip"
-                    [class.active]="hideDustAssets()"
-                    [style.--chipColor]="colors.cyan"
-                    (click)="setHideDustAssets(!hideDustAssets())">
-                    <span class="check-box" [class.checked]="hideDustAssets()"></span>
-                    <span class="setting-chip-text">Hide &lt; $0.5 assets</span>
-                  </button>
-                </section>
-              }
 
               @if (section() === 'lending') {
                 <div class="warning-note">
@@ -137,6 +159,14 @@
                   </span>
                 }
               }
+              @for (accountRef of selectedIntegrationRefs(); track accountRef) {
+                @let selectedIntegration = getIntegrationByRef(accountRef);
+                @if (selectedIntegration !== null) {
+                  <span class="scope-pill" [style.--scopeColor]="selectedIntegration.color">
+                    {{ selectedIntegration.icon }} {{ selectedIntegration.label }}
+                  </span>
+                }
+              }
             }
           </div>
 
@@ -167,7 +197,7 @@
                       <div class="token-meta">
                         <div class="token-title">
                           <span>{{ asset.symbol }}</span>
-                          @if (asset.issue !== null) {
+                          @if (showReconciliationWarnings() && asset.issue !== null) {
                             <span
                               class="token-scope-anchor warn-mark-anchor"
                               [attr.data-tooltip]="issueTitle(asset.issue)"

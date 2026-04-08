@@ -2,27 +2,39 @@ package com.walletradar.api.controller;
 
 import com.walletradar.api.dto.AddSessionRequest;
 import com.walletradar.api.dto.AddSessionResponse;
+import com.walletradar.api.dto.DeleteIntegrationResponse;
+import com.walletradar.api.dto.PutSessionSettingsRequest;
 import com.walletradar.api.dto.RebuildSessionTransactionsResponse;
 import com.walletradar.api.dto.SessionBackfillStatusResponse;
 import com.walletradar.api.dto.SessionDashboardResponse;
+import com.walletradar.api.dto.SessionSettingsResponse;
 import com.walletradar.api.dto.SessionTransactionsResponse;
 import com.walletradar.api.dto.SessionResponse;
+import com.walletradar.api.dto.UpsertBybitIntegrationRequest;
+import com.walletradar.api.dto.UpsertBybitIntegrationResponse;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.ingestion.wallet.command.SessionCommandService;
 import com.walletradar.ingestion.wallet.query.SessionDashboardQueryService;
 import com.walletradar.ingestion.wallet.query.SessionQueryService;
 import com.walletradar.ingestion.wallet.query.SessionTransactionsQueryService;
+import com.walletradar.session.application.SessionIntegrationCommandService;
+import com.walletradar.session.application.SessionSettingsCommandService;
+import com.walletradar.session.application.SessionSettingsQueryService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.util.List;
 import java.util.Locale;
@@ -39,6 +51,9 @@ public class SessionController {
     private final SessionQueryService sessionQueryService;
     private final SessionDashboardQueryService sessionDashboardQueryService;
     private final SessionTransactionsQueryService sessionTransactionsQueryService;
+    private final SessionSettingsQueryService sessionSettingsQueryService;
+    private final SessionSettingsCommandService sessionSettingsCommandService;
+    private final SessionIntegrationCommandService sessionIntegrationCommandService;
 
     @PostMapping
     @ResponseStatus(HttpStatus.ACCEPTED)
@@ -66,6 +81,77 @@ public class SessionController {
         return sessionQueryService.findBackfillStatus(normalizedSessionIdOrThrow(sessionId))
                 .map(this::toBackfillStatusResponse)
                 .orElseThrow(() -> new ApiNotFoundException("SESSION_NOT_FOUND", "Session not found"));
+    }
+
+    @GetMapping("/{sessionId}/settings")
+    public SessionSettingsResponse getSessionSettings(@PathVariable String sessionId) {
+        return sessionSettingsQueryService.findSessionSettings(normalizedSessionIdOrThrow(sessionId))
+                .map(this::toSessionSettingsResponse)
+                .orElseThrow(() -> new ApiNotFoundException("SESSION_NOT_FOUND", "Session not found"));
+    }
+
+    @PutMapping("/{sessionId}/settings")
+    public Mono<SessionSettingsResponse> putSessionSettings(
+            @PathVariable String sessionId,
+            @RequestBody @Valid PutSessionSettingsRequest request
+    ) {
+        String normalizedSessionId = normalizedSessionIdOrThrow(sessionId);
+        return Mono.fromCallable(() -> sessionSettingsCommandService.overwriteSessionSettings(normalizedSessionId, request)
+                        .flatMap(saved -> sessionSettingsQueryService.findSessionSettings(normalizedSessionId))
+                        .map(this::toSessionSettingsResponse)
+                        .orElseThrow(() -> new ApiNotFoundException("SESSION_NOT_FOUND", "Session not found")))
+                .subscribeOn(Schedulers.boundedElastic())
+                .onErrorMap(IllegalArgumentException.class,
+                        exception -> new ApiBadRequestException("INVALID_SETTINGS_REQUEST", exception.getMessage()));
+    }
+
+    @PutMapping("/{sessionId}/integrations/bybit")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public Mono<UpsertBybitIntegrationResponse> upsertBybitIntegration(
+            @PathVariable String sessionId,
+            @RequestBody @Valid UpsertBybitIntegrationRequest request
+    ) {
+        String normalizedSessionId = normalizedSessionIdOrThrow(sessionId);
+        return Mono.fromCallable(() -> sessionIntegrationCommandService.upsertBybit(
+                                normalizedSessionId,
+                                request.displayName(),
+                                request.apiKey(),
+                                request.apiSecret()
+                        )
+                        .map(result -> new UpsertBybitIntegrationResponse(
+                                result.integrationId(),
+                                result.provider(),
+                                result.status(),
+                                result.displayName(),
+                                result.accountRef(),
+                                result.maskedKey(),
+                                result.message()
+                        ))
+                        .orElseThrow(() -> new ApiNotFoundException("SESSION_NOT_FOUND", "Session not found")))
+                .subscribeOn(Schedulers.boundedElastic())
+                .onErrorMap(IllegalArgumentException.class, exception -> {
+                    if ("Integration not found".equals(exception.getMessage())) {
+                        return new ApiNotFoundException("INTEGRATION_NOT_FOUND", exception.getMessage());
+                    }
+                    return new ApiBadRequestException("INVALID_REQUEST", exception.getMessage());
+                });
+    }
+
+    @DeleteMapping("/{sessionId}/integrations/{integrationId}")
+    public DeleteIntegrationResponse deleteIntegration(
+            @PathVariable String sessionId,
+            @PathVariable String integrationId
+    ) {
+        try {
+            return sessionIntegrationCommandService.removeIntegration(
+                            normalizedSessionIdOrThrow(sessionId),
+                            integrationId
+                    )
+                    .map(result -> new DeleteIntegrationResponse(result.integrationId(), result.message()))
+                    .orElseThrow(() -> new ApiNotFoundException("SESSION_NOT_FOUND", "Session not found"));
+        } catch (IllegalArgumentException exception) {
+            throw new ApiNotFoundException("INTEGRATION_NOT_FOUND", exception.getMessage());
+        }
     }
 
     @GetMapping("/{sessionId}/dashboard")
@@ -201,6 +287,41 @@ public class SessionController {
                                 position.issue()
                 ))
                         .toList()
+        );
+    }
+
+    private SessionSettingsResponse toSessionSettingsResponse(SessionSettingsQueryService.SessionSettingsView view) {
+        return new SessionSettingsResponse(
+                view.sessionId(),
+                view.wallets().stream()
+                        .map(wallet -> new SessionSettingsResponse.WalletEntry(
+                                wallet.address(),
+                                wallet.label(),
+                                wallet.color(),
+                                wallet.networks()
+                        ))
+                        .toList(),
+                view.integrations().stream()
+                        .map(integration -> new SessionSettingsResponse.IntegrationEntry(
+                                integration.integrationId(),
+                                integration.provider(),
+                                integration.status(),
+                                integration.displayName(),
+                                integration.accountRef(),
+                                integration.maskedKey(),
+                                integration.readOnly(),
+                                integration.capabilities(),
+                                integration.lastValidatedAt(),
+                                integration.lastSyncAt(),
+                                integration.lastError(),
+                                integration.totalSegments(),
+                                integration.completedSegments(),
+                                integration.failedSegments(),
+                                integration.progressPct()
+                        ))
+                        .toList(),
+                view.hideSmallAssets(),
+                view.showReconciliationWarnings()
         );
     }
 

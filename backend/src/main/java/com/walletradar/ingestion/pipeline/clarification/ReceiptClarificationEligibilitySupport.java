@@ -60,12 +60,13 @@ public final class ReceiptClarificationEligibilitySupport {
         if (normalizedTransaction == null || view == null) {
             return false;
         }
-        if (view.hasFullReceiptClarificationEvidence()) {
-            return false;
-        }
         List<String> reasons = normalizedTransaction.getMissingDataReasons() == null
                 ? List.of()
                 : normalizedTransaction.getMissingDataReasons();
+        if (view.hasFullReceiptClarificationEvidence()
+                && !requiresTransferEvidenceRecovery(normalizedTransaction, reasons, view)) {
+            return false;
+        }
         boolean bridgeEvidenceCandidate = normalizedTransaction.getStatus() == NormalizedTransactionStatus.PENDING_PRICE
                 && normalizedTransaction.getType() == NormalizedTransactionType.BRIDGE_OUT;
         boolean gmxDerivativeExecutionCandidate = isGmxDerivativeExecutionCandidate(normalizedTransaction, view);
@@ -220,6 +221,24 @@ public final class ReceiptClarificationEligibilitySupport {
                 && "Euler".equalsIgnoreCase(normalizedTransaction.getProtocolName())
                 && reasons.contains(EULER_BATCH_DECODER_REQUIRED)
                 && "0xc16ae7a4".equals(view.methodId());
+    }
+
+    private static boolean requiresTransferEvidenceRecovery(
+            NormalizedTransaction normalizedTransaction,
+            List<String> reasons,
+            OnChainRawTransactionView view
+    ) {
+        if (normalizedTransaction == null || view == null || reasons == null || reasons.isEmpty()) {
+            return false;
+        }
+        if (!"0xc16ae7a4".equals(view.methodId())) {
+            return false;
+        }
+        if (!view.explorerTokenTransfers().isEmpty() || !view.explorerInternalTransfers().isEmpty()) {
+            return false;
+        }
+        return reasons.contains(ClassificationReasonCode.CLASSIFICATION_FAILED.code())
+                || reasons.contains(EULER_BATCH_DECODER_REQUIRED);
     }
 
     private static boolean isGmxDerivativeRequest(NormalizedTransaction normalizedTransaction) {

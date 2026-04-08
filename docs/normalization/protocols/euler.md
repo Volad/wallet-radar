@@ -56,6 +56,8 @@ Current active semantic hints:
 
 - clarification is allowed when current raw evidence cannot distinguish simple
   supply/withdraw from loop open/rebalance/decrease/close
+- clarification is not complete for Euler `batch(...)` rows when only receipt
+  logs were persisted and transfer evidence is still empty
 - if production evidence still cannot prove the lifecycle, fallback must remain
   conservative and the row must stay `UNKNOWN / PENDING_CLARIFICATION`
 - raw explorer transfers alone are not enough to open Euler lifecycle into
@@ -81,6 +83,9 @@ Current active semantic hints:
   lifecycle
 - the `EULER_BATCH_DECODER_REQUIRED` reason must route those rows into the
   automatic receipt-clarification queue
+- receipt-only clarified Euler rows with empty `tokenTransfers` /
+  `internalTransfers` remain retryable for transfer-evidence recovery; they must
+  not be treated as fully clarified
 
 ## Disallowed Fallbacks
 

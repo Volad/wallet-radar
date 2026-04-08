@@ -56,7 +56,6 @@ class SessionTransactionsQueryServiceTest {
     void readsSessionTransactionsFromAccountingUniverseScope() {
         UserSession session = new UserSession();
         session.setId("session-1");
-        session.setAccountingUniverseId("ACCOUNTING_UNIVERSE:session-1");
         UserSession.SessionWallet wallet = new UserSession.SessionWallet();
         wallet.setAddress("0x1A87f12aC07E9746e9B053B8D7EF1d45270D693f");
         wallet.setLabel("Main");
@@ -105,7 +104,7 @@ class SessionTransactionsQueryServiceTest {
 
         when(userSessionRepository.findById("session-1")).thenReturn(Optional.of(session));
         when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
-                "ACCOUNTING_UNIVERSE:session-1",
+                "session-1",
                 List.of(wallet.getAddress(), "BYBIT:33625378"),
                 List.of(wallet.getAddress())
         ));
@@ -429,7 +428,7 @@ class SessionTransactionsQueryServiceTest {
 
         assertThat(result.projectedTransactions()).isEqualTo(17);
         assertThat(result.message()).contains("canonical normalized transactions");
-        verify(accountingUniverseService).ensureBybitMembership(eq("session-1"), any(Instant.class));
+        verify(accountingUniverseService).resolveScope(session);
     }
 
     @Test

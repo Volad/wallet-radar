@@ -3,7 +3,7 @@ package com.walletradar.ingestion.wallet.command;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.domain.session.UserSessionRepository;
-import com.walletradar.session.application.AccountingUniverseService;
+import com.walletradar.session.application.AccountingUniverseSyncService;
 import com.walletradar.session.application.SessionPipelineStateService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -28,7 +28,7 @@ public class SessionCommandService {
     private final WalletBackfillService walletBackfillService;
     private final TrackedWalletProjectionService trackedWalletProjectionService;
     private final SessionPipelineStateService sessionPipelineStateService;
-    private final AccountingUniverseService accountingUniverseService;
+    private final AccountingUniverseSyncService accountingUniverseSyncService;
 
     public SessionCommandResult addSession(String sessionId, List<SessionWalletPayload> walletEntries) {
         String normalizedSessionId = sessionId.trim();
@@ -47,15 +47,29 @@ public class SessionCommandService {
         }
         List<UserSession.SessionWallet> previousWallets = new ArrayList<>(session.getWallets());
         session.setWallets(normalizedWallets);
-        if (session.getAccountingUniverseId() == null || session.getAccountingUniverseId().isBlank()) {
-            session.setAccountingUniverseId("ACCOUNTING_UNIVERSE:" + normalizedSessionId);
+        if (session.getIntegrations() == null) {
+            session.setIntegrations(new ArrayList<>());
+        }
+        if (session.getSettings() == null) {
+            session.setSettings(defaultSettings());
+        } else {
+            applySettingsDefaults(session.getSettings());
         }
         session.setUpdatedAt(now);
         session.setLastSeenAt(now);
+        accountingUniverseSyncService.sync(session, now);
         userSessionRepository.save(session);
-        accountingUniverseService.ensureSessionWalletMembership(session, now);
-        accountingUniverseService.ensureBybitMembership(normalizedSessionId, now);
         trackedWalletProjectionService.replaceSessionWallets(previousWallets, normalizedWallets, now);
+
+        if (normalizedWallets.isEmpty()) {
+            sessionPipelineStateService.markStageComplete(
+                    normalizedSessionId,
+                    UserSession.PipelineStage.BACKFILL,
+                    "Empty session created"
+            );
+            return new SessionCommandResult(normalizedSessionId, "Session created");
+        }
+
         sessionPipelineStateService.markStageRunning(
                 normalizedSessionId,
                 UserSession.PipelineStage.BACKFILL,
@@ -87,6 +101,22 @@ public class SessionCommandService {
             wallet.setNetworks(new ArrayList<>(combinedNetworks));
         }
         return new ArrayList<>(merged.values());
+    }
+
+    private UserSession.SessionSettings defaultSettings() {
+        UserSession.SessionSettings settings = new UserSession.SessionSettings();
+        settings.setHideSmallAssets(Boolean.TRUE);
+        settings.setShowReconciliationWarnings(Boolean.TRUE);
+        return settings;
+    }
+
+    private void applySettingsDefaults(UserSession.SessionSettings settings) {
+        if (settings.getHideSmallAssets() == null) {
+            settings.setHideSmallAssets(Boolean.TRUE);
+        }
+        if (settings.getShowReconciliationWarnings() == null) {
+            settings.setShowReconciliationWarnings(Boolean.TRUE);
+        }
     }
 
     public record SessionWalletPayload(

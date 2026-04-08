@@ -51,7 +51,6 @@ class SessionDashboardQueryServiceTest {
     void buildsCurrentTokenRowsFromOnChainAndLatestLedgerState() {
         UserSession session = new UserSession();
         session.setId("session-1");
-        session.setAccountingUniverseId("ACCOUNTING_UNIVERSE:session-1");
         UserSession.SessionWallet wallet = new UserSession.SessionWallet();
         wallet.setAddress("0x1A87f12aC07E9746e9B053B8D7EF1d45270D693f");
         wallet.setLabel("Main");
@@ -100,7 +99,7 @@ class SessionDashboardQueryServiceTest {
 
         when(userSessionRepository.findById("session-1")).thenReturn(Optional.of(session));
         when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
-                "ACCOUNTING_UNIVERSE:session-1",
+                "session-1",
                 List.of(wallet.getAddress(), "BYBIT:33625378"),
                 List.of(wallet.getAddress())
         ));
@@ -132,7 +131,6 @@ class SessionDashboardQueryServiceTest {
     void groupsWbtcAndAaveWbtcIntoSingleBtcFamilyRow() {
         UserSession session = new UserSession();
         session.setId("session-btc");
-        session.setAccountingUniverseId("ACCOUNTING_UNIVERSE:session-btc");
         UserSession.SessionWallet wallet = new UserSession.SessionWallet();
         wallet.setAddress("0x1A87f12aC07E9746e9B053B8D7EF1d45270D693f");
         wallet.setLabel("Main");
@@ -191,7 +189,7 @@ class SessionDashboardQueryServiceTest {
 
         when(userSessionRepository.findById("session-btc")).thenReturn(Optional.of(session));
         when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
-                "ACCOUNTING_UNIVERSE:session-btc",
+                "session-btc",
                 List.of(wallet.getAddress()),
                 List.of(wallet.getAddress())
         ));
@@ -217,7 +215,6 @@ class SessionDashboardQueryServiceTest {
     void classifiesDashboardIssuesByCurrentCoverageAndHistoryState() {
         UserSession session = new UserSession();
         session.setId("session-issues");
-        session.setAccountingUniverseId("ACCOUNTING_UNIVERSE:session-issues");
         UserSession.SessionWallet wallet = new UserSession.SessionWallet();
         wallet.setAddress("0x1A87f12aC07E9746e9B053B8D7EF1d45270D693f");
         wallet.setLabel("Main");
@@ -315,7 +312,7 @@ class SessionDashboardQueryServiceTest {
 
         when(userSessionRepository.findById("session-issues")).thenReturn(Optional.of(session));
         when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
-                "ACCOUNTING_UNIVERSE:session-issues",
+                "session-issues",
                 List.of(wallet.getAddress()),
                 List.of(wallet.getAddress())
         ));

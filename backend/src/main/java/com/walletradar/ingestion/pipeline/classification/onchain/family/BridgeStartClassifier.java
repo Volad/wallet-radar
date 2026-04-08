@@ -181,7 +181,11 @@ public class BridgeStartClassifier implements OnChainFamilyClassifier {
                 OnChainClassificationSupport.initialStatus(context.view(), NormalizedTransactionType.BRIDGE_OUT, confidence),
                 classifiedBy,
                 confidence,
-                OnChainClassificationSupport.toFlows(context.movementLegs(), NormalizedTransactionType.BRIDGE_OUT),
+                OnChainClassificationSupport.toFlows(
+                        context.view(),
+                        context.movementLegs(),
+                        NormalizedTransactionType.BRIDGE_OUT
+                ),
                 missingDataReasons,
                 null,
                 null,

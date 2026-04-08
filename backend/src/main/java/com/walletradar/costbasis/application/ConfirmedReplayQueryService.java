@@ -7,6 +7,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.util.Comparator;
+import java.util.Collection;
 import java.util.List;
 
 /**
@@ -25,6 +26,16 @@ public class ConfirmedReplayQueryService {
 
     public List<NormalizedTransaction> loadOrderedConfirmed() {
         return normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                NormalizedTransactionStatus.CONFIRMED
+        ).stream().sorted(REPLAY_ORDER).toList();
+    }
+
+    public List<NormalizedTransaction> loadOrderedConfirmed(Collection<String> walletAddresses) {
+        if (walletAddresses == null || walletAddresses.isEmpty()) {
+            return List.of();
+        }
+        return normalizedTransactionRepository.findAllByWalletAddressInAndStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                walletAddresses,
                 NormalizedTransactionStatus.CONFIRMED
         ).stream().sorted(REPLAY_ORDER).toList();
     }

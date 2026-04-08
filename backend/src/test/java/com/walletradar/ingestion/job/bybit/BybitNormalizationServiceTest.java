@@ -1,6 +1,9 @@
 package com.walletradar.ingestion.job.bybit;
 
 import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.transaction.bybit.BybitExtractedEvent;
+import com.walletradar.domain.transaction.bybit.BybitExtractedEventRepository;
+import com.walletradar.domain.transaction.bybit.BybitExtractedEventStatus;
 import com.walletradar.domain.transaction.externalledger.ExternalLedgerRaw;
 import com.walletradar.domain.transaction.externalledger.ExternalLedgerRawRepository;
 import com.walletradar.domain.transaction.externalledger.ExternalLedgerRawStatus;
@@ -18,6 +21,10 @@ import com.walletradar.ingestion.pipeline.bybit.BybitTransferShadowPairer;
 import com.walletradar.ingestion.pipeline.bybit.PendingExternalLedgerRowQueryService;
 import com.walletradar.ingestion.store.IdempotentNormalizedTransactionStore;
 import com.walletradar.ingestion.wallet.query.TrackedWalletLookupService;
+import com.walletradar.integration.bybit.BybitExtractedEventMapper;
+import com.walletradar.integration.bybit.BybitExtractedTradePairer;
+import com.walletradar.integration.bybit.BybitExtractedTransferShadowPairer;
+import com.walletradar.integration.bybit.PendingBybitExtractedRowQueryService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -38,6 +45,14 @@ import static org.mockito.Mockito.when;
 class BybitNormalizationServiceTest {
 
     @Mock
+    private PendingBybitExtractedRowQueryService pendingBybitExtractedRowQueryService;
+    @Mock
+    private BybitExtractedEventRepository bybitExtractedEventRepository;
+    @Mock
+    private BybitExtractedTradePairer bybitExtractedTradePairer;
+    @Mock
+    private BybitExtractedTransferShadowPairer bybitExtractedTransferShadowPairer;
+    @Mock
     private PendingExternalLedgerRowQueryService pendingExternalLedgerRowQueryService;
     @Mock
     private ExternalLedgerRawRepository externalLedgerRawRepository;
@@ -53,6 +68,25 @@ class BybitNormalizationServiceTest {
     private RawTransactionRepository rawTransactionRepository;
     @Mock
     private TrackedWalletLookupService trackedWalletLookupService;
+
+    @Test
+    void extractedTradeLaneIsProcessedBeforeLegacyRawRows() {
+        BybitExtractedEvent extracted = extractedTradeRow("extracted-trade-1", "BUY");
+        ExternalLedgerRaw legacy = tradeRow("legacy-trade-1", "BUY");
+
+        when(pendingBybitExtractedRowQueryService.loadNextBatch(10)).thenReturn(List.of(extracted));
+        when(bybitExtractedEventRepository.findById(extracted.getId())).thenReturn(Optional.of(extracted));
+        when(bybitExtractedTradePairer.findOppositeLeg(extracted)).thenReturn(Optional.empty());
+
+        BybitNormalizationService service = service();
+        int processed = service.processNextBatch(10);
+
+        assertThat(processed).isEqualTo(1);
+        verify(normalizedTransactionStore).upsert(org.mockito.ArgumentMatchers.any(NormalizedTransaction.class));
+        verify(externalLedgerRawRepository, never()).findById(legacy.getId());
+        verify(bybitExtractedEventRepository).save(extracted);
+        assertThat(extracted.getStatus()).isEqualTo(BybitExtractedEventStatus.CONFIRMED);
+    }
 
     @Test
     void orphanLegFallsBackToExplicitUnmatchedCanonicalRow() {
@@ -352,6 +386,44 @@ class BybitNormalizationServiceTest {
     }
 
     @Test
+    void extractedOnChainEarnSubscriptionPairBecomesConfirmedStakingDeposit() {
+        BybitExtractedEvent ethLeg = extractedLiquidStakingRow(
+                "cmeth-eth-leg",
+                "ETH",
+                "-0.11384604",
+                Instant.parse("2025-04-28T17:47:36Z")
+        );
+        BybitExtractedEvent cmethLeg = extractedLiquidStakingRow(
+                "cmeth-receipt-leg",
+                "CMETH",
+                "0.10687862",
+                Instant.parse("2025-04-28T17:52:26Z")
+        );
+
+        when(pendingBybitExtractedRowQueryService.loadNextBatch(10)).thenReturn(List.of(ethLeg));
+        when(bybitExtractedEventRepository.findById(ethLeg.getId())).thenReturn(Optional.of(ethLeg));
+        when(bybitExtractedTradePairer.findLiquidStakingCounterLeg(ethLeg)).thenReturn(Optional.of(cmethLeg));
+
+        BybitNormalizationService service = service();
+        int processed = service.processNextBatch(10);
+
+        assertThat(processed).isEqualTo(1);
+        ArgumentCaptor<NormalizedTransaction> captor = ArgumentCaptor.forClass(NormalizedTransaction.class);
+        verify(normalizedTransactionStore).upsert(captor.capture());
+        NormalizedTransaction saved = captor.getValue();
+        assertThat(saved.getType()).isEqualTo(NormalizedTransactionType.STAKING_DEPOSIT);
+        assertThat(saved.getStatus()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(saved.getFlows())
+                .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getRole() + ":" + flow.getQuantityDelta())
+                .containsExactlyInAnyOrder(
+                        "ETH:TRANSFER:-0.11384604",
+                        "CMETH:TRANSFER:0.10687862"
+                );
+        verify(bybitExtractedEventRepository).save(ethLeg);
+        verify(bybitExtractedEventRepository).save(cmethLeg);
+    }
+
+    @Test
     void loanRowsAreDemotedOutOfPriceableLane() {
         ExternalLedgerRaw row = new ExternalLedgerRaw();
         row.setId("loan-1");
@@ -460,10 +532,15 @@ class BybitNormalizationServiceTest {
 
     private BybitNormalizationService service() {
         return new BybitNormalizationService(
+                pendingBybitExtractedRowQueryService,
+                bybitExtractedEventRepository,
+                bybitExtractedTradePairer,
+                bybitExtractedTransferShadowPairer,
                 pendingExternalLedgerRowQueryService,
                 externalLedgerRawRepository,
                 bybitTradePairer,
                 bybitTransferShadowPairer,
+                new BybitExtractedEventMapper(),
                 new BybitCanonicalTransactionBuilder(),
                 normalizedTransactionStore,
                 normalizedTransactionRepository,
@@ -487,6 +564,47 @@ class BybitNormalizationServiceTest {
         row.setQuantityRaw(new BigDecimal("1"));
         row.setFilledPrice(new BigDecimal("2500"));
         row.setCashFlow(new BigDecimal("1"));
+        row.setBasisRelevant(true);
+        return row;
+    }
+
+    private BybitExtractedEvent extractedTradeRow(String id, String direction) {
+        BybitExtractedEvent row = new BybitExtractedEvent();
+        row.setId(id);
+        row.setUid("uid-1");
+        row.setWalletRef("BYBIT:uid-1");
+        row.setSourceFileType("uta_derivatives");
+        row.setCanonicalType("SWAP");
+        row.setStatus(BybitExtractedEventStatus.RAW);
+        row.setTimeUtc(Instant.parse("2026-03-25T10:00:00Z"));
+        row.setUtaDirection(direction);
+        row.setUtaContract("ETHUSDT");
+        row.setAssetSymbol("ETH");
+        row.setQuantityRaw(new BigDecimal("1"));
+        row.setFilledPrice(new BigDecimal("2500"));
+        row.setCashFlow(new BigDecimal("1"));
+        row.setBasisRelevant(true);
+        return row;
+    }
+
+    private BybitExtractedEvent extractedLiquidStakingRow(
+            String id,
+            String assetSymbol,
+            String quantityRaw,
+            Instant timeUtc
+    ) {
+        BybitExtractedEvent row = new BybitExtractedEvent();
+        row.setId(id);
+        row.setUid("uid-1");
+        row.setWalletRef("BYBIT:uid-1");
+        row.setSourceFileType("fund_asset_changes");
+        row.setBybitType("Earn");
+        row.setBybitDescription("On-chain Earn subscription");
+        row.setCanonicalType("STAKING_DEPOSIT");
+        row.setStatus(BybitExtractedEventStatus.RAW);
+        row.setTimeUtc(timeUtc);
+        row.setAssetSymbol(assetSymbol);
+        row.setQuantityRaw(new BigDecimal(quantityRaw));
         row.setBasisRelevant(true);
         return row;
     }

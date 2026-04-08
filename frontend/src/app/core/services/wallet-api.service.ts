@@ -6,13 +6,18 @@ import { environment } from '../../../environments/environment';
 import {
   AddSessionRequest,
   AddSessionResponse,
+  DeleteIntegrationResponse,
   GetSessionTransactionsRequest,
+  PutSessionSettingsRequest,
   RebuildSessionTransactionsResponse,
   SessionAssetLedgerResponse,
   SessionBackfillStatusResponse,
   SessionDashboardResponse,
+  SessionSettingsResponse,
   SessionResponse,
   SessionTransactionsResponse,
+  UpsertBybitIntegrationRequest,
+  UpsertBybitIntegrationResponse,
 } from '../models/wallet-api.models';
 
 @Injectable({ providedIn: 'root' })
@@ -27,6 +32,35 @@ export class WalletApiService {
 
   getSession(sessionId: string): Observable<SessionResponse> {
     return this.httpClient.get<SessionResponse>(`${this.sessionsEndpoint}/${encodeURIComponent(sessionId)}`);
+  }
+
+  getSessionSettings(sessionId: string): Observable<SessionSettingsResponse> {
+    return this.httpClient.get<SessionSettingsResponse>(
+      `${this.sessionsEndpoint}/${encodeURIComponent(sessionId)}/settings`
+    );
+  }
+
+  putSessionSettings(sessionId: string, payload: PutSessionSettingsRequest): Observable<SessionSettingsResponse> {
+    return this.httpClient.put<SessionSettingsResponse>(
+      `${this.sessionsEndpoint}/${encodeURIComponent(sessionId)}/settings`,
+      payload
+    );
+  }
+
+  upsertBybitIntegration(
+    sessionId: string,
+    payload: UpsertBybitIntegrationRequest
+  ): Observable<UpsertBybitIntegrationResponse> {
+    return this.httpClient.put<UpsertBybitIntegrationResponse>(
+      `${this.sessionsEndpoint}/${encodeURIComponent(sessionId)}/integrations/bybit`,
+      payload
+    );
+  }
+
+  deleteIntegration(sessionId: string, integrationId: string): Observable<DeleteIntegrationResponse> {
+    return this.httpClient.delete<DeleteIntegrationResponse>(
+      `${this.sessionsEndpoint}/${encodeURIComponent(sessionId)}/integrations/${encodeURIComponent(integrationId)}`
+    );
   }
 
   getSessionBackfillStatus(sessionId: string): Observable<SessionBackfillStatusResponse> {

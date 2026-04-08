@@ -15,4 +15,15 @@
       }
     </button>
   }
+
+  <div class="icon-nav-spacer"></div>
+
+  <button
+    type="button"
+    class="icon-nav-btn settings-btn"
+    [class.active]="isSettingsActive"
+    aria-label="Settings"
+    (click)="openSettings()">
+    <span class="section-glyph" aria-hidden="true">⚙</span>
+  </button>
 </nav>

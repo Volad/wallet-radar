@@ -19,7 +19,7 @@ import java.util.List;
  */
 @Document(collection = "user_sessions")
 @CompoundIndex(name = "wallets_address_idx", def = "{'wallets.address': 1}")
-@CompoundIndex(name = "accounting_universe_idx", def = "{'accountingUniverseId': 1}")
+@CompoundIndex(name = "integration_account_ref_idx", def = "{'integrations.accountRef': 1}")
 @NoArgsConstructor
 @Getter
 @Setter
@@ -32,6 +32,8 @@ public class UserSession {
 
     private String accountingUniverseId;
     private List<SessionWallet> wallets = new ArrayList<>();
+    private List<SessionIntegration> integrations = new ArrayList<>();
+    private SessionSettings settings;
     private PipelineState pipelineState;
     private Instant createdAt;
     private Instant updatedAt;
@@ -46,6 +48,54 @@ public class UserSession {
         private String label;
         private String color;
         private List<NetworkId> networks = new ArrayList<>();
+    }
+
+    @NoArgsConstructor
+    @Getter
+    @Setter
+    public static class SessionIntegration {
+        private String integrationId;
+        private IntegrationProvider provider;
+        private IntegrationStatus status;
+        private String displayName;
+        private String accountRef;
+        private EncryptedSecret encryptedCredentials;
+        private boolean readOnly;
+        private List<String> capabilities = new ArrayList<>();
+        private IntegrationSyncState syncState;
+        private Instant createdAt;
+        private Instant updatedAt;
+        private Instant lastValidatedAt;
+        private Instant lastSyncAt;
+        private String lastError;
+    }
+
+    @NoArgsConstructor
+    @Getter
+    @Setter
+    public static class EncryptedSecret {
+        private String keyVersion;
+        private String nonceB64;
+        private String ciphertextB64;
+        private String maskedKey;
+    }
+
+    @NoArgsConstructor
+    @Getter
+    @Setter
+    public static class IntegrationSyncState {
+        private Integer totalSegments;
+        private Integer completedSegments;
+        private Integer failedSegments;
+        private Integer progressPct;
+    }
+
+    @NoArgsConstructor
+    @Getter
+    @Setter
+    public static class SessionSettings {
+        private Boolean hideSmallAssets;
+        private Boolean showReconciliationWarnings;
     }
 
     @NoArgsConstructor
@@ -72,5 +122,21 @@ public class UserSession {
         BLOCKED,
         COMPLETE,
         FAILED
+    }
+
+    public enum IntegrationProvider {
+        BYBIT,
+        BINANCE,
+        OKX,
+        MEXC,
+        DZENGI
+    }
+
+    public enum IntegrationStatus {
+        CONNECTED,
+        BACKFILLING,
+        READY,
+        ERROR,
+        DISABLED
     }
 }

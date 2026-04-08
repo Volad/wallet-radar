@@ -80,6 +80,36 @@ class ReceiptClarificationGatewayTest {
     }
 
     @Test
+    @DisplayName("persisted receipt logs without transfer evidence stay retryable for transfer clarification")
+    void persistedReceiptLogsWithoutTransferEvidenceStayRetryableForTransferClarification() {
+        IngestionNetworkProperties networkProperties = networkProperties(NetworkId.AVALANCHE, IngestionNetworkProperties.NetworkIngestionEntry.SyncMethod.ETHERSCAN);
+        ReceiptClarificationGateway gateway = new ReceiptClarificationGateway(
+                etherscanProvider,
+                blockScoutProvider,
+                rpcClient,
+                rpcTokenTransferResolver,
+                networkProperties,
+                new ObjectMapper()
+        );
+
+        RawTransaction rawTransaction = raw(NetworkId.AVALANCHE, RawSyncMethod.ETHERSCAN, "0xreceipt-only");
+        rawTransaction.setClarificationEvidence(new Document()
+                .append("sourceFamily", "ETHERSCAN")
+                .append("receipt", new Document("logs", List.of(
+                        new Document("address", "0xddcbe30a761edd2e19bba930a977475265f36fa1")
+                                .append("topics", List.of("0xborrow"))
+                ))));
+
+        Optional<ClarificationReceiptEnrichment> transferEnrichment = gateway.fromPersistedEvidence(rawTransaction, true);
+        Optional<ClarificationReceiptEnrichment> metadataEnrichment = gateway.fromPersistedEvidence(rawTransaction, false);
+
+        assertThat(transferEnrichment).isEmpty();
+        assertThat(metadataEnrichment).isPresent();
+        assertThat(metadataEnrichment.get().receiptLogs()).hasSize(1);
+        verifyNoInteractions(etherscanProvider, blockScoutProvider, rpcClient, rpcTokenTransferResolver);
+    }
+
+    @Test
     @DisplayName("rpc-backed metadata clarification still persists full fetched receipt")
     void rpcBackedMetadataClarificationStillPersistsFullFetchedReceipt() {
         IngestionNetworkProperties networkProperties = networkProperties(NetworkId.BSC, IngestionNetworkProperties.NetworkIngestionEntry.SyncMethod.RPC);

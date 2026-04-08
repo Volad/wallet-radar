@@ -45,7 +45,6 @@ class AssetLedgerQueryServiceTest {
     void sessionFamilyLedgerAggregatesWalletLevelPointsIntoOneTimeline() {
         UserSession session = new UserSession();
         session.setId("session-1");
-        session.setAccountingUniverseId("ACCOUNTING_UNIVERSE:session-1");
         UserSession.SessionWallet walletA = new UserSession.SessionWallet();
         walletA.setAddress("wallet-a");
         walletA.setNetworks(List.of(NetworkId.BASE));
@@ -127,8 +126,8 @@ class AssetLedgerQueryServiceTest {
                 List.of("wallet-a", "wallet-b", "BYBIT:33625378"),
                 List.of("wallet-a", "wallet-b")
         ));
-        when(assetLedgerPointRepository.findAllByWalletAddressInAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
-                List.of("wallet-a", "wallet-b", "BYBIT:33625378"),
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-1",
                 "FAMILY:ETH"
         )).thenReturn(List.of(bybitBuy, buy, bridgeOut, bridgeIn));
         when(normalizedTransactionRepository.findAllById(List.of("0", "1", "2")))
@@ -166,6 +165,7 @@ class AssetLedgerQueryServiceTest {
         assertThat(view.current().uncoveredQuantity()).isZero();
         assertThat(view.current().totalCostBasisUsd()).isEqualByComparingTo("100");
         assertThat(view.current().avcoUsd()).isEqualByComparingTo("100");
+        assertThat(view.current().uncoveredBuckets()).isEmpty();
         assertThat(view.events()).hasSize(3);
         assertThat(view.events().get(0).protocolName()).isEqualTo("Bybit");
         assertThat(view.ledgerPoints()).hasSize(4);
@@ -202,8 +202,8 @@ class AssetLedgerQueryServiceTest {
                 List.of("wallet-a"),
                 List.of("wallet-a")
         ));
-        when(assetLedgerPointRepository.findAllByWalletAddressInAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
-                List.of("wallet-a"),
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-2",
                 "FAMILY:ETH"
         )).thenReturn(List.of(buy));
         when(normalizedTransactionRepository.findAllById(List.of("1")))
@@ -224,6 +224,150 @@ class AssetLedgerQueryServiceTest {
 
         assertThat(view.timeline()).hasSize(1);
         assertThat(view.current().quantity()).isEqualByComparingTo("1");
+        assertThat(view.current().uncoveredBuckets()).isEmpty();
+    }
+
+    @Test
+    void sessionFamilyLedgerExposesUncoveredBucketDiagnosticsForCurrentState() {
+        UserSession session = new UserSession();
+        session.setId("session-3");
+        UserSession.SessionWallet wallet = new UserSession.SessionWallet();
+        wallet.setAddress("wallet-a");
+        wallet.setNetworks(List.of(NetworkId.BASE));
+        session.setWallets(List.of(wallet));
+
+        AssetLedgerPoint wrapPoint = point(
+                "1",
+                "wallet-a",
+                NetworkId.BASE,
+                "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.CARRY_IN,
+                AssetLedgerPoint.LifecycleKind.WRAP,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "1",
+                "0",
+                "0",
+                "0",
+                "1",
+                "0"
+        );
+        wrapPoint.setAssetSymbol("WETH");
+        wrapPoint.setAssetContract("0x4200000000000000000000000000000000000006");
+        wrapPoint.setAccountingAssetIdentity("0x4200000000000000000000000000000000000006");
+        wrapPoint.setBasisBackedQuantityAfter(BigDecimal.ZERO);
+        wrapPoint.setUncoveredQuantityAfter(new BigDecimal("1"));
+        wrapPoint.setHasIncompleteHistoryAfter(true);
+        wrapPoint.setHasUnresolvedFlagsAfter(true);
+        wrapPoint.setUnresolvedFlagCountAfter(2);
+
+        when(userSessionRepository.findById("session-3")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "ACCOUNTING_UNIVERSE:session-3",
+                List.of("wallet-a"),
+                List.of("wallet-a")
+        ));
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-3",
+                "FAMILY:ETH"
+        )).thenReturn(List.of(wrapPoint));
+        when(normalizedTransactionRepository.findAllById(List.of("1"))).thenReturn(List.of());
+        OnChainBalance wethBalance = balance("wallet-a", NetworkId.BASE, "WETH", "1");
+        wethBalance.setAssetContract("0x4200000000000000000000000000000000000006");
+        when(mongoOperations.find(any(), eq(OnChainBalance.class))).thenReturn(List.of(wethBalance));
+
+        AssetLedgerQueryService service = new AssetLedgerQueryService(
+                userSessionRepository,
+                assetLedgerPointRepository,
+                normalizedTransactionRepository,
+                accountingUniverseService,
+                mongoOperations
+        );
+        AssetLedgerQueryService.SessionAssetLedgerView view = service.findSessionFamilyLedger("session-3", "FAMILY:ETH")
+                .orElseThrow();
+
+        assertThat(view.current().quantity()).isEqualByComparingTo("1");
+        assertThat(view.current().coveredQuantity()).isZero();
+        assertThat(view.current().uncoveredQuantity()).isEqualByComparingTo("1");
+        assertThat(view.current().uncoveredBuckets()).singleElement().satisfies(bucket -> {
+            assertThat(bucket.assetSymbol()).isEqualTo("WETH");
+            assertThat(bucket.uncoveredReason()).isEqualTo("coverage_gap");
+            assertThat(bucket.latestNormalizedType()).isEqualTo("BRIDGE");
+            assertThat(bucket.latestBasisEffect()).isEqualTo("CARRY_IN");
+            assertThat(bucket.hasIncompleteHistory()).isTrue();
+            assertThat(bucket.hasUnresolvedFlags()).isTrue();
+            assertThat(bucket.unresolvedFlagCount()).isEqualTo(2);
+        });
+    }
+
+    @Test
+    void sessionFamilyLedgerLabelsInterestBearingCurrentDriftAsYieldAccrual() {
+        UserSession session = new UserSession();
+        session.setId("session-4");
+        UserSession.SessionWallet wallet = new UserSession.SessionWallet();
+        wallet.setAddress("wallet-a");
+        wallet.setNetworks(List.of(NetworkId.MANTLE));
+        session.setWallets(List.of(wallet));
+
+        AssetLedgerPoint lendingPoint = point(
+                "1",
+                "wallet-a",
+                NetworkId.MANTLE,
+                "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.REALLOCATE_IN,
+                AssetLedgerPoint.LifecycleKind.LENDING,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "3.06",
+                "6058.10",
+                "0",
+                "0",
+                "3.06",
+                "6058.10"
+        );
+        lendingPoint.setAssetSymbol("aManWETH");
+        lendingPoint.setAssetContract("0xea00000000000000000000000000000000000000");
+        lendingPoint.setAccountingAssetIdentity("0xea00000000000000000000000000000000000000");
+        lendingPoint.setNormalizedType("LENDING_DEPOSIT");
+        lendingPoint.setProtocolName("Aave");
+        lendingPoint.setBasisBackedQuantityAfter(new BigDecimal("3.06"));
+        lendingPoint.setUncoveredQuantityAfter(BigDecimal.ZERO);
+        lendingPoint.setHasIncompleteHistoryAfter(false);
+        lendingPoint.setHasUnresolvedFlagsAfter(false);
+        lendingPoint.setUnresolvedFlagCountAfter(0);
+
+        when(userSessionRepository.findById("session-4")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "ACCOUNTING_UNIVERSE:session-4",
+                List.of("wallet-a"),
+                List.of("wallet-a")
+        ));
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-4",
+                "FAMILY:ETH"
+        )).thenReturn(List.of(lendingPoint));
+        when(normalizedTransactionRepository.findAllById(List.of("1"))).thenReturn(List.of());
+        OnChainBalance balance = balance("wallet-a", NetworkId.MANTLE, "aManWETH", "3.066185599746344040");
+        balance.setAssetContract("0xea00000000000000000000000000000000000000");
+        when(mongoOperations.find(any(), eq(OnChainBalance.class))).thenReturn(List.of(balance));
+
+        AssetLedgerQueryService service = new AssetLedgerQueryService(
+                userSessionRepository,
+                assetLedgerPointRepository,
+                normalizedTransactionRepository,
+                accountingUniverseService,
+                mongoOperations
+        );
+        AssetLedgerQueryService.SessionAssetLedgerView view = service.findSessionFamilyLedger("session-4", "FAMILY:ETH")
+                .orElseThrow();
+
+        assertThat(view.current().uncoveredQuantity()).isEqualByComparingTo("0.006185599746344040");
+        assertThat(view.current().uncoveredBuckets()).singleElement().satisfies(bucket -> {
+            assertThat(bucket.assetSymbol()).isEqualTo("aManWETH");
+            assertThat(bucket.uncoveredReason()).isEqualTo("yield_accrual");
+            assertThat(bucket.latestNormalizedType()).isEqualTo("LENDING_DEPOSIT");
+            assertThat(bucket.latestBasisEffect()).isEqualTo("REALLOCATE_IN");
+            assertThat(bucket.hasIncompleteHistory()).isFalse();
+            assertThat(bucket.hasUnresolvedFlags()).isFalse();
+        });
     }
 
     private NormalizedTransaction normalized(

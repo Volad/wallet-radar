@@ -1,7 +1,7 @@
 # WalletRadar — Domain Model
 
 > **Version:** MVP v3 target
-> **Last updated:** 2026-04-06
+> **Last updated:** 2026-04-08
 
 ---
 
@@ -14,20 +14,29 @@
 | **Raw Transaction** | Source transaction document stored in `raw_transactions` with provider payload in `rawData`. |
 | **Protocol Registry** | Classpath lookup table loaded from `backend/src/main/resources/protocol-registry.json` for high-confidence contract-aware classification. |
 | **Special Handler** | Deterministic registry-linked classifier for multi-function contracts. Receives the raw normalization view plus already extracted legs and returns one canonical result for the raw tx. |
-| **External Ledger Row** | Immutable Bybit source row stored in `external_ledger_raw`. |
+| **Session Integration** | Persisted external-system connection embedded in `user_sessions.integrations[]` and owned by one session. |
+| **Integration Raw Event** | Immutable provider API payload row stored in `integration_raw_events`. |
+| **Bybit Extracted Event** | Bybit-specific extracted staging row stored in `bybit_extracted_events` and rebuilt from immutable provider raw events during backfill. |
 | **Tracked Wallet Universe** | Installation-wide projection of all tracked wallet addresses used by canonical normalization heuristics. |
 | **Normalization Status** | Raw processing state: `PENDING` or `COMPLETE`. |
 | **Normalized Transaction** | Canonical operation document (`1 tx = 1 doc`) with `flows[]` used by pricing/stat/accounting pipeline. |
 | **Flow** | Canonical movement row inside normalized transaction (`quantityDelta`, role, asset, price fields). |
 | **Self-canceling pair** | Same-asset same-quantity inbound and outbound legs inside one tx that net to zero and therefore represent wrapper / marker continuity rather than economic acquisition or disposal. |
 | **Normalized Status Pipeline** | Receipt-clarifiable rows may pass through `PENDING_CLARIFICATION -> PENDING_PRICE -> PENDING_STAT -> CONFIRMED`; low-confidence rows without receipt gaps may go directly to `PENDING_PRICE` or `NEEDS_REVIEW`. |
-| **User Session** | Persisted wallet set keyed by client-generated `sessionId` in `user_sessions`. |
+| **User Session** | Persisted workspace record keyed by client-generated `sessionId` in `user_sessions`; stores wallets, integrations, settings, and pipeline state. |
 | **AVCO** | Weighted average acquisition cost used for cost basis and realised PnL. |
 | **perWalletAvco** | AVCO computed from one wallet only. |
 | **crossWalletAvco** | AVCO computed on request across selected wallets; never stored. |
 | **Override** | User-defined replacement price stored in `cost_basis_overrides`, applied in replay. |
 | **Manual Compensating Transaction** | Synthetic normalized transaction (`type=MANUAL_COMPENSATING`) for reconciliation fixes, idempotent by `clientId`. |
-| **Asset Ledger Point** | Immutable replay trace row in `asset_ledger_points` for one applied accounting transition on one wallet-network-asset bucket. |
+| **Accounting Universe** | Stable additive owner scope persisted in `accounting_universes`; used by replay/history continuity and session-scoped reads. |
+| **Asset Ledger Point** | Immutable replay trace row in `asset_ledger_points` for one applied accounting transition on one wallet-network-asset bucket inside one accounting universe. |
+| **Pass-through corridor** | Deterministic replay-only reservation that preserves exact carried basis from one proven continuity inbound into one later proven outbound/custody source leg without letting that carry pool into unrelated inventory first. |
+| **Correlated carry ingress repair** | Replay-only unique-fit attachment that restores already-proven same-family carry across a correlated inbound when provider rounding truncated the destination quantity. |
+| **Linked bridge carry repair** | Replay-only bridge-specific carry path for already-linked same-family `BRIDGE_OUT -> BRIDGE_IN` pairs. It preserves full source cost basis on the destination leg even when bridge settlement quantity drifts, while leaving only the unmatched excess as uncovered. |
+| **Asset-changing bridge settlement carry** | Replay-only conservative settlement rule for already-linked `BRIDGE_OUT(source asset) -> BRIDGE_IN(destination asset)` route pairs where `continuityCandidate = false`. It reallocates source cost basis into the destination acquisition while preserving the source covered/uncovered ratio on the received asset. |
+| **Order-insensitive family custody replay** | Replay rule for simple audited family-equivalent custody transactions (`principal out + receipt in`) that applies carry atomically even when normalized flow order is `receipt in` first. This prevents false uncovered receipt inventory on Aave-style deposits. |
+| **Rebasing receipt accrual split** | Canonical normalization rule for audited rebasing receipt tokens where tx-local receipt balance delta exceeds principal moved in the same continuity family. Principal quantity remains `TRANSFER`, while the excess rebasing delta materializes as a separate `BUY` acquisition that must be priced and replayed explicitly. |
 | **Reconciliation** | Comparison between latest exact-bucket replay state from `asset_ledger_points` and current on-chain quantity in `on_chain_balances`. |
 | **Current Holding View** | Read-time holding state derived from latest exact-bucket `asset_ledger_points` plus `on_chain_balances`; not a persisted collection. |
 | **Dashboard Issue Class** | Read-time diagnostic label for one current holding row. It is derived from current coverage and latest replay-state flags, not from a separate persisted collection. |
@@ -163,30 +172,97 @@ Status intent:
   `excludedFromAccounting=true`; residual Bybit orphan / unsupported loan rows
   are the reference example.
 
-### ExternalLedgerRaw (`external_ledger_raw`)
+### IntegrationRawEvent (`integration_raw_events`)
 
-Immutable Bybit evidence layer.
+Immutable provider-neutral external evidence layer.
 
 ```text
-ExternalLedgerRaw {
-  _id: String            // BYBIT:uid:filename:rowIndex
+IntegrationRawEvent {
+  id: String
+  sessionId: String
+  integrationId: String
+  provider: String
+  accountRef: String
+  stream: String
+  providerEventKey: String
+  occurredAt: DateTime?
+  fetchedAt: DateTime
+  segmentId: String
+  payload: Document
+  ingestHash: String
+}
+```
+
+### BybitExtractedEvent (`bybit_extracted_events`)
+
+Provider-owned extracted staging rebuilt from `integration_raw_events` during
+Bybit backfill.
+
+```text
+BybitExtractedEvent {
+  id: String
+  integrationRawEventId: String
+  providerEventKey: String
+  sourceStream: String
   sourceFileType: String
-  timeUtc: DateTime
+  uid: String
+  sessionId: String
+  integrationId: String
+  timeUtc: DateTime?
   assetSymbol: String?
   quantityRaw: Decimal?
   canonicalType: String?
-  basisRelevant: Boolean
-  outOfScope: Boolean
+  bybitType: String?
+  chain: String?
   txHash: String?
   networkId: NetworkId?
+  receivedAddress: String?
+  walletRef: String?
   onChainCorrelation: {
-    status: PENDING | MATCHED | UNMATCHED
+    status: String?
     correlationId: String?
     matchedDocId: String?
   }
   status: RAW | CONFIRMED
+  importedAt: DateTime
 }
 ```
+
+### Pass-through corridor reservation (replay-only)
+
+`Pass-through corridor` is not a persisted collection. It is a deterministic
+replay planning artifact built from already-confirmed canonical rows before AVCO
+replay starts.
+
+Purpose:
+
+- preserve exact carry for proven transit paths
+- avoid poisoning that carry through pooled inventory when continuity inbound is
+  followed by one later deterministic outbound/custody source leg
+
+First approved slice:
+
+- venue transit on custodial refs such as `BYBIT:<uid>`
+- same-wallet same-network `BRIDGE_IN -> custody-deposit source leg`
+
+Guardrails:
+
+- corridor planning is replay-only
+- it never upgrades or rewrites canonical transaction type
+- it may use only current canonical fields already persisted on
+  `normalized_transactions`
+- if uniqueness is not provable, no corridor reservation is created
+
+Rules:
+
+- this is a rebuildable provider staging layer, not the immutable source of truth
+- Bybit normalization reads `bybit_extracted_events` first
+- for Bybit funding-account semantics, `sourceFileType=fund_asset_changes`
+  must be rebuilt primarily from the `Funding Account Transaction History`
+  stream, not from a stitched mix of narrower transfer / convert / earn
+  endpoints
+- `external_ledger_raw` remains migration-only compatibility input for older
+  sessions until the legacy path is deleted
 
 ### Replay Current State
 
@@ -242,14 +318,44 @@ stored as separate mutable truth state.
 
 `SyncStatus` tracks wallet×network lifecycle. `BackfillSegment` tracks persistent segment progress and retries.
 
+```text
+BackfillSegment {
+  id: String
+  sessionId: String?
+  sourceKind: ONCHAIN | INTEGRATION
+  segmentKind: BLOCK_RANGE | TIME_RANGE | CURSOR_PAGE
+  status: PENDING | RUNNING | COMPLETE | FAILED
+  retryCount: Int
+  processedCount: Long?
+  updatedAt: DateTime
+
+  // on-chain lane
+  syncStatusId: String?
+  walletAddress: String?
+  networkId: String?
+  segmentIndex: Int?
+  fromBlock: Long?
+  toBlock: Long?
+  lastProcessedBlock: Long?
+
+  // integration lane
+  integrationId: String?
+  provider: String?
+  accountRef: String?
+  stream: String?
+  fromTime: DateTime?
+  toTime: DateTime?
+  cursor: String?
+}
+```
+
 ### UserSession (`user_sessions`)
 
-Persisted session wallet settings:
+Persisted session workspace settings:
 
 ```text
 UserSession {
   id: String             // client-generated sessionId
-  accountingUniverseId: String
   wallets: [
     {
       address: String
@@ -258,44 +364,44 @@ UserSession {
       networks: NetworkId[]
     }
   ]
+  integrations: [
+    {
+      integrationId: String
+      provider: String
+      status: CONNECTED | BACKFILLING | READY | ERROR | DISABLED
+      displayName: String
+      accountRef: String
+      encryptedCredentials: {
+        keyVersion: String
+        nonceB64: String
+        ciphertextB64: String
+        maskedKey: String
+      }
+      capabilities: String[]
+      createdAt: DateTime
+      updatedAt: DateTime
+      lastValidatedAt: DateTime?
+      lastSyncAt: DateTime?
+      lastError: String?
+    }
+  ]
+  settings: {
+    hideSmallAssets: Boolean?
+  }
   createdAt: DateTime
   updatedAt: DateTime
   lastSeenAt: DateTime
 }
 ```
 
-### AccountingUniverse (`accounting_universes`)
-
-Stable owner/accounting scope used by replay-derived history reads.
-
-```text
-AccountingUniverse {
-  id: String
-  members: [
-    {
-      ref: String                // wallet address or custody ref such as BYBIT:<uid>
-      type: ON_CHAIN_WALLET | EXCHANGE_ACCOUNT
-      provider: String?          // e.g. BYBIT
-      networks: NetworkId[]      // on-chain wallets only
-      firstSeenAt: DateTime
-      lastSeenAt: DateTime
-    }
-  ]
-  createdAt: DateTime
-  updatedAt: DateTime
-}
-```
-
 Rules:
 
-- the universe is additive; historical members are not removed automatically
-  when the current UI session changes its visible wallet subset
-- `UserSession.wallets` is the current UI scope
-- `AccountingUniverse.members` is the stable owner scope for:
-  - asset-ledger timeline reads
-  - continuity/debug history across on-chain wallets and custodial refs
-- current `BYBIT` custody refs are synchronized from `external_ledger_raw`
-  evidence for the session and persisted as universe members
+- `UserSession.wallets` and `UserSession.integrations` together define the
+  session scope
+- external venue account refs such as `BYBIT:<uid>` are attached directly to
+  `integrations[]`
+- the new target design does not require a separate persisted
+  `accounting_universes` control-plane aggregate
 
 ### TrackedWallet (`tracked_wallets`)
 
@@ -323,6 +429,7 @@ Immutable replay-trace row for one applied accounting transition on one
 
 ```text
 AssetLedgerPoint {
+  accountingUniverseId: String
   walletAddress: String
   networkId: String
   accountingAssetIdentity: String
@@ -389,19 +496,26 @@ Rules:
   history aggregation
 - when no broader family policy exists, `accountingFamilyIdentity` falls back to
   the exact asset identity
+- replay may still use a narrower correlated transfer alias key for
+  already-proven `correlationId` carry matching; that replay-local key does not
+  redefine persisted `accountingFamilyIdentity`
 - `quantityShortfall*` is a lifetime audit metric for historical coverage gaps;
   it is not the current uncovered holding quantity
 - `uncoveredQuantity*` is the current held quantity that still lacks provable
   carried basis after the replay step
 - `basisBackedQuantityAfter = max(quantityAfter - uncoveredQuantityAfter, 0)`
 - session asset history is not persisted separately; it is aggregated on read
-  from wallet-level `asset_ledger_points` scoped by the session's
+  from wallet-level `asset_ledger_points` scoped by the session's stable
   `accountingUniverseId`
 
 ### OnChainBalance (`on_chain_balances`)
 
 Latest observed live quantity evidence for `(wallet, network, asset)` from the
 post-replay balance-refresh pass.
+
+`OnChainBalance` rows are session-scoped current evidence and therefore carry
+`sessionId`; they must not be shared across unrelated sessions even when the
+same wallet address is tracked elsewhere.
 
 ### Current Holding View
 
@@ -544,8 +658,9 @@ Staking families keep one canonical type name but support two lifecycle shapes:
 
 - liquid staking conversion:
   principal and liquid-staking derivative legs remain continuity `TRANSFER`
-  inside the same base-asset family; explicit reward side-flows may still stay
-  economic `BUY`
+  inside the same base-asset family; audited Bybit receipt-wrapper pairs such
+  as `ETH -> METH` and `ETH -> CMETH` follow this shape; explicit reward
+  side-flows may still stay economic `BUY`
 - classic stake-contract custody:
   principal moves as continuity `TRANSFER`, while any same-tx harvested reward
   remains economic `BUY`
@@ -683,6 +798,14 @@ Additional constraints:
   `withdrawETH(...)`, `supplyWithPermit(...)`, and `depositETH(...)` must
   normalize as lending continuity, not as generic unwrap / LP / residual
   transfer families.
+- For audited rebasing `Aave` WETH receipts (`aEthWETH`, `aArbWETH`,
+  `aLinWETH`, `aManWETH`, `aZksWETH`), canonical normalization must not emit the
+  full rebasing receipt delta as one continuity transfer when tx-local receipt
+  balance change exceeds the principal moved in the same tx.
+  Instead:
+  - matched principal quantity remains continuity `TRANSFER`
+  - positive receipt-side excess is a separate `BUY`
+  - positive underlying-side excess on withdraw is a separate `BUY`
 - For Aave-style `BORROW` / `REPAY`, `protocolName = Aave` may be attached by
   the generic selector lane only when current evidence proves both:
   - the selector is canonical `borrow(...)` or `repay(...)`
@@ -777,6 +900,8 @@ LP extensions for concentrated-liquidity (CL) protocols:
 | INV-20 | Provider-native balances that arrive with `contractAddress = 0x0000000000000000000000000000000000000000` must still normalize to native accounting identity `NATIVE:<NETWORK>`, not to an ERC-20 contract identity. |
 | INV-21 | A stale `ACCOUNTING_REPLAY / RUNNING` session may be healed to `COMPLETE` only when the session has no pending raw/clarification/pricing/stat work and derived replay outputs are already materialized. |
 | INV-22 | Generic selector fallback may attach `protocolName = Aave` for `BORROW` / `REPAY` only when the same tx also proves Aave debt-marker continuity through `variableDebt*` or `stableDebt*` movement; selector hit alone is insufficient. |
+| INV-23 | Audited rebasing Aave WETH receipt drift must normalize as `principal TRANSFER + accrual BUY`, not as one oversized receipt continuity transfer. |
+| INV-24 | A route-funded asset-changing `BRIDGE_OUT` source tx with one token principal leg plus one native tx-value funding leg must normalize the token leg as `TRANSFER` and the native funding leg as `FEE`; the native route funding must not survive as a second principal transfer leg. |
 
 ---
 
@@ -833,3 +958,13 @@ User-facing asset history and debug reads must use `asset_ledger_points`.
 For continuity transfers, replay may materialize inbound quantity before the
 matched source carry is seen in the ordered stream. In that case, the later
 carry may attach basis only and must not add duplicate quantity.
+
+## External Integrations Policy
+
+- External venues are connected through session-owned integrations, not through
+  manual file preloading.
+- Provider-specific enrichment belongs to `BACKFILL`.
+- External-provider normalization must consume only persisted provider evidence.
+- Post-normalization provider clarification is out of scope for the new model.
+- If a provider event is still ambiguous after the full provider backfill pass,
+  it becomes explicit review work rather than a deferred provider lookup.

@@ -94,6 +94,11 @@ public final class CanonicalAssetCatalog {
 
     private static final Map<String, String> SYMBOL_ALIASES = Map.ofEntries(
             Map.entry("WETH", "ETH"),
+            Map.entry("AETHWETH", "ETH"),
+            Map.entry("AARBWETH", "ETH"),
+            Map.entry("ALINWETH", "ETH"),
+            Map.entry("AMANWETH", "ETH"),
+            Map.entry("AZKSWETH", "ETH"),
             Map.entry("WBNB", "BNB"),
             Map.entry("WAVAX", "AVAX"),
             Map.entry("WMNT", "MNT"),

@@ -76,6 +76,21 @@ public final class PriceableFlowPolicy {
                 && flow.getPriceSource() != com.walletradar.domain.common.PriceSource.UNKNOWN;
     }
 
+    public static boolean hasReplayRelevantUnresolvedPrice(NormalizedTransaction transaction) {
+        if (transaction == null || transaction.getFlows() == null) {
+            return false;
+        }
+        for (NormalizedTransaction.Flow flow : transaction.getFlows()) {
+            if (!requiresMarketPrice(transaction, flow)) {
+                continue;
+            }
+            if (!hasResolvedPrice(flow)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public static boolean hasNoEconomicQuantity(NormalizedTransaction.Flow flow) {
         return flow == null
                 || flow.getQuantityDelta() == null

@@ -6,4 +6,6 @@ import org.springframework.data.mongodb.repository.MongoRepository;
  * Persistence for latest observed on-chain balance evidence.
  */
 public interface OnChainBalanceRepository extends MongoRepository<OnChainBalance, String> {
+
+    void deleteAllBySessionId(String sessionId);
 }

@@ -126,6 +126,29 @@
           </div>
 
           <div class="filters-content">
+            @let families = eventFamilyFilters();
+            @if (families.length > 0) {
+              <section class="filter-group">
+                <h3 class="side-label">Event families</h3>
+                @for (family of families; track family.key) {
+                  <button
+                    type="button"
+                    class="filter-row family-row"
+                    [class.active]="isEventFamilySelected(family.key)"
+                    [class.mixed]="isEventFamilyMixed(family.key)"
+                    [style.--chipColor]="family.color"
+                    (click)="toggleEventFamily(family.key)">
+                    <span
+                      class="check-box"
+                      [class.checked]="isEventFamilySelected(family.key)"
+                      [class.mixed]="isEventFamilyMixed(family.key)"></span>
+                    <span class="filter-row-label">{{ family.label }}</span>
+                    <span class="family-count">{{ family.eventCount }}</span>
+                  </button>
+                }
+              </section>
+            }
+
             <section class="filter-group">
               <div class="side-label-row">
                 <h3 class="side-label">Tx types</h3>
@@ -271,7 +294,10 @@
                 [style.--range-end.%]="rangeEndPercent()">
                 <div class="range-track"></div>
                 <canvas #rangePreviewCanvas class="range-preview-canvas" aria-hidden="true"></canvas>
-                <div class="range-selection" (mousedown)="onRangeSelectionPointerDown($event)"></div>
+                <div class="range-selection" (mousedown)="onRangeSelectionPointerDown($event, 'move')">
+                  <div class="range-handle range-handle-start" (mousedown)="onRangeSelectionPointerDown($event, 'start')"></div>
+                  <div class="range-handle range-handle-end" (mousedown)="onRangeSelectionPointerDown($event, 'end')"></div>
+                </div>
                 <input
                   #rangeStartSlider
                   class="range-input range-input-start"

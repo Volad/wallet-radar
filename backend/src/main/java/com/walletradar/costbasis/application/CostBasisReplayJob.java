@@ -2,10 +2,12 @@ package com.walletradar.costbasis.application;
 
 import com.walletradar.domain.event.PricingCompletedEvent;
 import com.walletradar.domain.session.UserSession;
+import com.walletradar.domain.session.UserSessionRepository;
 import com.walletradar.costbasis.domain.AssetLedgerPointRepository;
 import com.walletradar.ingestion.job.support.StageExecutionLogSupport;
 import com.walletradar.pricing.application.PricingDataGateService;
 import com.walletradar.pricing.application.PricingDataGateSnapshot;
+import com.walletradar.session.application.AccountingUniverseService;
 import com.walletradar.session.application.SessionPipelineStateService;
 import com.walletradar.telemetry.PipelineTelemetrySnapshot;
 import com.walletradar.telemetry.PipelineTelemetrySnapshotService;
@@ -30,6 +32,8 @@ public class CostBasisReplayJob {
     private final AtomicBoolean running = new AtomicBoolean(false);
 
     private final CostBasisProperties properties;
+    private final UserSessionRepository userSessionRepository;
+    private final AccountingUniverseService accountingUniverseService;
     private final PricingDataGateService pricingDataGateService;
     private final PendingStatQueryService pendingStatQueryService;
     private final StatValidationService statValidationService;
@@ -57,21 +61,46 @@ public class CostBasisReplayJob {
             return 0;
         }
 
+        long startedAtNanos = StageExecutionLogSupport.logStart(log, STAGE_NAME, trigger);
+        int processed = 0;
+        try {
+            if (sessionId == null || sessionId.isBlank()) {
+                for (UserSession session : userSessionRepository.findAll()) {
+                    processed += runReplayForSession(trigger, session, forceReplay);
+                }
+                return processed;
+            }
+            processed = userSessionRepository.findById(sessionId.trim())
+                    .map(session -> runReplayForSession(trigger, session, forceReplay))
+                    .orElse(0);
+            return processed;
+        } catch (RuntimeException error) {
+            throw error;
+        } finally {
+            StageExecutionLogSupport.logFinish(log, STAGE_NAME, trigger, processed, startedAtNanos);
+            running.set(false);
+        }
+    }
+
+    private int runReplayForSession(String trigger, UserSession session, boolean forceReplay) {
+        String sessionId = session.getId();
+        AccountingUniverseService.AccountingUniverseScope scope = accountingUniverseService.resolveScope(session);
+        sessionPipelineStateService.markStageRunning(
+                sessionId,
+                UserSession.PipelineStage.ACCOUNTING_REPLAY,
+                "Accounting replay running"
+        );
+
         int statProcessed = 0;
         int replayed = 0;
-        long startedAtNanos = StageExecutionLogSupport.logStart(log, STAGE_NAME, trigger);
+        int promoted = 0;
+        int demoted = 0;
         try {
-            sessionPipelineStateService.markStageRunning(
-                    sessionId,
-                    UserSession.PipelineStage.ACCOUNTING_REPLAY,
-                    "Accounting replay running"
-            );
-            int promoted = 0;
-            int demoted = 0;
             while (true) {
                 StatValidationOutcome outcome = statValidationService.processNextBatch(
                         properties.getValidationBatchSize(),
-                        properties.getRetryDelaySeconds()
+                        properties.getRetryDelaySeconds(),
+                        scope.memberRefs()
                 );
                 statProcessed += outcome.processed();
                 promoted += outcome.promotedToConfirmed();
@@ -81,8 +110,8 @@ public class CostBasisReplayJob {
                 }
             }
 
-            PricingDataGateSnapshot gateSnapshot = pricingDataGateService.snapshot();
-            long pendingStatCount = pendingStatQueryService.countPending();
+            PricingDataGateSnapshot gateSnapshot = pricingDataGateService.snapshot(scope.memberRefs());
+            long pendingStatCount = pendingStatQueryService.countPending(scope.memberRefs());
             if (!gateSnapshot.avcoReady() || pendingStatCount > 0L) {
                 String blockedMessage = String.format(
                         "Accounting replay blocked: active review or pending stat remains (pendingStat=%d, blockingNeedsReview=%d)",
@@ -90,7 +119,8 @@ public class CostBasisReplayJob {
                         gateSnapshot.needsReviewCount()
                 );
                 log.info(
-                        "Costbasis replay gate blocked: avcoReady={}, pendingStat={}, pendingPrice={}, pendingClarification={}, blockingNeedsReview={}, excludedNeedsReview={}, unresolvedPrice={}",
+                        "Costbasis replay gate blocked: sessionId={}, avcoReady={}, pendingStat={}, pendingPrice={}, pendingClarification={}, blockingNeedsReview={}, excludedNeedsReview={}, unresolvedPrice={}",
+                        sessionId,
                         gateSnapshot.avcoReady(),
                         pendingStatCount,
                         gateSnapshot.pendingPriceCount(),
@@ -109,16 +139,26 @@ public class CostBasisReplayJob {
                 return 0;
             }
 
-            boolean shouldReplay = forceReplay || promoted > 0 || assetLedgerPointRepository.count() == 0L;
+            boolean shouldReplay = forceReplay
+                    || promoted > 0
+                    || assetLedgerPointRepository.countByAccountingUniverseId(scope.accountingUniverseId()) == 0L;
             if (shouldReplay) {
-                replayed = avcoReplayService.replayConfirmed();
+                replayed = avcoReplayService.replayConfirmed(scope.accountingUniverseId(), scope.memberRefs());
             } else {
-                log.info("Costbasis replay skipped: no pending stat rows and asset_ledger_points already materialized");
+                log.info(
+                        "Costbasis replay skipped: sessionId={}, no pending stat rows and universe ledger already materialized",
+                        sessionId
+                );
             }
             Instant evidenceCapturedAt = Instant.now();
-            int refreshedBalances = onChainBalanceRefreshService.refreshCurrentBalances(evidenceCapturedAt);
+            int refreshedBalances = onChainBalanceRefreshService.refreshCurrentBalances(
+                    sessionId,
+                    scope.onChainWalletRefs(),
+                    evidenceCapturedAt
+            );
             log.info(
-                    "Costbasis on-chain balance refresh outcome: refreshed={}",
+                    "Costbasis on-chain balance refresh outcome: sessionId={}, refreshed={}",
+                    sessionId,
                     refreshedBalances
             );
 
@@ -137,9 +177,6 @@ public class CostBasisReplayJob {
                     error.getMessage()
             );
             throw error;
-        } finally {
-            StageExecutionLogSupport.logFinish(log, STAGE_NAME, trigger, statProcessed + replayed, startedAtNanos);
-            running.set(false);
         }
     }
 

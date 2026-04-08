@@ -57,11 +57,11 @@ public class AssetLedgerQueryService {
 
     private SessionAssetLedgerView toView(UserSession session, String familyIdentity) {
         AccountingUniverseService.AccountingUniverseScope universeScope = accountingUniverseService.resolveScope(session);
-        List<AssetLedgerPoint> points = universeScope.memberRefs().isEmpty()
+        List<AssetLedgerPoint> points = universeScope.accountingUniverseId() == null || universeScope.accountingUniverseId().isBlank()
                 ? List.of()
                 : assetLedgerPointRepository
-                .findAllByWalletAddressInAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
-                        universeScope.memberRefs(),
+                .findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                        universeScope.accountingUniverseId(),
                         familyIdentity
                 );
         Map<String, NormalizedTransaction> normalizedById = findNormalizedTransactions(points);
@@ -134,7 +134,7 @@ public class AssetLedgerQueryService {
             BigDecimal gasPaidUsd
     ) {
         AllowedScope allowedScope = AllowedScope.from(session.getWallets());
-        List<OnChainBalance> scopedBalances = loadOnChainBalances(allowedScope.walletAddresses()).stream()
+        List<OnChainBalance> scopedBalances = loadOnChainBalances(session.getId(), allowedScope.walletAddresses()).stream()
                 .filter(balance -> allowedScope.includes(balance.getWalletAddress(), balance.getNetworkId()))
                 .toList();
         Map<BucketKey, OnChainBalance> latestBalances = latestBalanceByBucket(scopedBalances);
@@ -143,6 +143,7 @@ public class AssetLedgerQueryService {
         BigDecimal quantity = BigDecimal.ZERO;
         BigDecimal coveredQuantity = BigDecimal.ZERO;
         BigDecimal totalCostBasisUsd = BigDecimal.ZERO;
+        List<UncoveredBucketView> uncoveredBuckets = new ArrayList<>();
         for (OnChainBalance balance : latestBalances.values()) {
             if (!matchesFamily(balance, familyIdentity, latestPointByBucket)) {
                 continue;
@@ -165,11 +166,32 @@ public class AssetLedgerQueryService {
                         MC
                 );
             }
+            BigDecimal exactUncoveredQuantity = currentQuantity.subtract(exactCoveredQuantity, MC).max(BigDecimal.ZERO);
+            if (exactUncoveredQuantity.signum() > 0) {
+                uncoveredBuckets.add(new UncoveredBucketView(
+                        balance.getWalletAddress(),
+                        balance.getNetworkId() == null ? null : balance.getNetworkId().name(),
+                        balance.getAssetSymbol(),
+                        balance.getAssetContract(),
+                        currentQuantity,
+                        exactCoveredQuantity,
+                        exactUncoveredQuantity,
+                        uncoveredReason(latestPoint, currentQuantity, exactCoveredQuantity),
+                        latestPoint == null ? null : latestPoint.getTxHash(),
+                        latestPoint == null ? null : latestPoint.getNormalizedType(),
+                        latestPoint == null || latestPoint.getBasisEffect() == null ? null : latestPoint.getBasisEffect().name(),
+                        latestPoint == null ? null : latestPoint.getProtocolName(),
+                        latestPoint != null && Boolean.TRUE.equals(latestPoint.getHasIncompleteHistoryAfter()),
+                        latestPoint != null && Boolean.TRUE.equals(latestPoint.getHasUnresolvedFlagsAfter()),
+                        latestPoint == null ? 0 : latestPoint.getUnresolvedFlagCountAfter()
+                ));
+            }
         }
         BigDecimal uncoveredQuantity = quantity.subtract(coveredQuantity, MC).max(BigDecimal.ZERO);
         BigDecimal avcoUsd = coveredQuantity.signum() <= 0
                 ? null
                 : totalCostBasisUsd.divide(coveredQuantity, MC);
+        uncoveredBuckets.sort((left, right) -> right.uncoveredQuantity().compareTo(left.uncoveredQuantity()));
         return new CurrentStateView(
                 quantity,
                 coveredQuantity,
@@ -177,7 +199,8 @@ public class AssetLedgerQueryService {
                 totalCostBasisUsd,
                 avcoUsd,
                 realisedPnlUsd,
-                gasPaidUsd
+                gasPaidUsd,
+                List.copyOf(uncoveredBuckets)
         );
     }
 
@@ -238,11 +261,14 @@ public class AssetLedgerQueryService {
         return normalizedById;
     }
 
-    private List<OnChainBalance> loadOnChainBalances(List<String> walletAddresses) {
+    private List<OnChainBalance> loadOnChainBalances(String sessionId, List<String> walletAddresses) {
         if (walletAddresses.isEmpty()) {
             return List.of();
         }
-        Query query = Query.query(Criteria.where("walletAddress").in(walletAddresses))
+        Query query = Query.query(new Criteria().andOperator(
+                        Criteria.where("sessionId").is(sessionId),
+                        Criteria.where("walletAddress").in(walletAddresses)
+                ))
                 .with(Sort.by(
                         Sort.Order.asc("walletAddress"),
                         Sort.Order.asc("networkId"),
@@ -332,7 +358,27 @@ public class AssetLedgerQueryService {
             BigDecimal totalCostBasisUsd,
             BigDecimal avcoUsd,
             BigDecimal realisedPnlUsd,
-            BigDecimal gasPaidUsd
+            BigDecimal gasPaidUsd,
+            List<UncoveredBucketView> uncoveredBuckets
+    ) {
+    }
+
+    public record UncoveredBucketView(
+            String walletAddress,
+            String networkId,
+            String assetSymbol,
+            String assetContract,
+            BigDecimal quantity,
+            BigDecimal coveredQuantity,
+            BigDecimal uncoveredQuantity,
+            String uncoveredReason,
+            String latestTxHash,
+            String latestNormalizedType,
+            String latestBasisEffect,
+            String latestProtocolName,
+            boolean hasIncompleteHistory,
+            boolean hasUnresolvedFlags,
+            Integer unresolvedFlagCount
     ) {
     }
 
@@ -607,6 +653,40 @@ public class AssetLedgerQueryService {
 
     private static String normalizeSymbol(String symbol) {
         return symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
+    }
+
+    private static String uncoveredReason(
+            AssetLedgerPoint latestPoint,
+            BigDecimal currentQuantity,
+            BigDecimal coveredQuantity
+    ) {
+        if (latestPoint == null) {
+            return "missing_replay_point";
+        }
+        boolean uncoveredQuantity = coveredQuantity == null || currentQuantity == null
+                ? true
+                : coveredQuantity.compareTo(currentQuantity) < 0;
+        boolean incompleteHistory = Boolean.TRUE.equals(latestPoint.getHasIncompleteHistoryAfter());
+        boolean unresolvedFlags = Boolean.TRUE.equals(latestPoint.getHasUnresolvedFlagsAfter());
+        if (uncoveredQuantity && !incompleteHistory && !unresolvedFlags && isYieldAccrualCandidate(latestPoint)) {
+            return "yield_accrual";
+        }
+        if (uncoveredQuantity) {
+            return "coverage_gap";
+        }
+        if (incompleteHistory || unresolvedFlags) {
+            return "history_flags";
+        }
+        return null;
+    }
+
+    private static boolean isYieldAccrualCandidate(AssetLedgerPoint latestPoint) {
+        if (latestPoint == null || latestPoint.getBasisEffect() != AssetLedgerPoint.BasisEffect.REALLOCATE_IN) {
+            return false;
+        }
+        return latestPoint.getLifecycleKind() == AssetLedgerPoint.LifecycleKind.LENDING
+                || latestPoint.getLifecycleKind() == AssetLedgerPoint.LifecycleKind.STAKING
+                || latestPoint.getLifecycleKind() == AssetLedgerPoint.LifecycleKind.VAULT;
     }
 
     private static boolean blank(String value) {

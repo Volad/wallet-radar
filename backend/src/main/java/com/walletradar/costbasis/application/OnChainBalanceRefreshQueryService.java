@@ -33,6 +33,18 @@ public class OnChainBalanceRefreshQueryService {
                 .map(TrackedWallet::getAddress)
                 .filter(Objects::nonNull)
                 .toList();
+        return loadCandidates(trackedWallets);
+    }
+
+    public List<BalanceRefreshCandidate> loadCandidates(List<String> walletAddresses) {
+        List<String> trackedWallets = walletAddresses == null
+                ? List.of()
+                : walletAddresses.stream()
+                .filter(Objects::nonNull)
+                .map(value -> value.trim().toLowerCase(Locale.ROOT))
+                .filter(value -> !value.isBlank())
+                .distinct()
+                .toList();
         if (trackedWallets.isEmpty()) {
             return List.of();
         }

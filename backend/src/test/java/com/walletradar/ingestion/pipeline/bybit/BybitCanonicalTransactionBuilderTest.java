@@ -283,6 +283,45 @@ class BybitCanonicalTransactionBuilderTest {
     }
 
     @Test
+    void stakingPairKeepsCmethSubscriptionAsContinuityTransfer() {
+        BybitCanonicalTransactionBuilder builder = new BybitCanonicalTransactionBuilder();
+        ExternalLedgerRaw stake = new ExternalLedgerRaw();
+        stake.setId("stake-cmeth");
+        stake.setUid("33625378");
+        stake.setWalletRef("BYBIT:33625378");
+        stake.setTimeUtc(Instant.parse("2025-04-28T17:47:36Z"));
+        stake.setSourceFileType("fund_asset_changes");
+        stake.setBybitType("Earn");
+        stake.setBybitDescription("On-chain Earn subscription");
+        stake.setCanonicalType("STAKING_DEPOSIT");
+        stake.setAssetSymbol("ETH");
+        stake.setQuantityRaw(new BigDecimal("-0.11384604"));
+
+        ExternalLedgerRaw mint = new ExternalLedgerRaw();
+        mint.setId("mint-cmeth");
+        mint.setUid("33625378");
+        mint.setWalletRef("BYBIT:33625378");
+        mint.setTimeUtc(Instant.parse("2025-04-28T17:52:26Z"));
+        mint.setSourceFileType("fund_asset_changes");
+        mint.setBybitType("Earn");
+        mint.setBybitDescription("On-chain Earn subscription");
+        mint.setCanonicalType("STAKING_DEPOSIT");
+        mint.setAssetSymbol("CMETH");
+        mint.setQuantityRaw(new BigDecimal("0.10687862"));
+
+        var transaction = builder.buildStakingPair(stake, mint, Instant.parse("2026-03-25T12:01:00Z"));
+
+        assertThat(transaction.getType()).isEqualTo(NormalizedTransactionType.STAKING_DEPOSIT);
+        assertThat(transaction.getStatus()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(transaction.getFlows())
+                .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getRole().name() + ":" + flow.getQuantityDelta())
+                .containsExactlyInAnyOrder(
+                        "ETH:TRANSFER:-0.11384604",
+                        "CMETH:TRANSFER:0.10687862"
+                );
+    }
+
+    @Test
     void duplicateWithdrawDepositRowsShareSameCanonicalId() {
         BybitCanonicalTransactionBuilder builder = new BybitCanonicalTransactionBuilder();
         ExternalLedgerRaw first = new ExternalLedgerRaw();

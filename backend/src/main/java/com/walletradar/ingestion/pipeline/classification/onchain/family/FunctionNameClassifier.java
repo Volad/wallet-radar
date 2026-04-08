@@ -74,7 +74,11 @@ public class FunctionNameClassifier implements OnChainFamilyClassifier {
                     OnChainClassificationSupport.initialStatus(context.view(), NormalizedTransactionType.BRIDGE_OUT, entry.confidence()),
                     ClassificationSource.PROTOCOL_REGISTRY,
                     entry.confidence(),
-                    OnChainClassificationSupport.toFlows(context.movementLegs(), NormalizedTransactionType.BRIDGE_OUT),
+                    OnChainClassificationSupport.toFlows(
+                            context.view(),
+                            context.movementLegs(),
+                            NormalizedTransactionType.BRIDGE_OUT
+                    ),
                     List.of(),
                     entry.protocolName(),
                     entry.protocolVersion()

@@ -62,6 +62,16 @@ export interface WalletInfo {
   readonly color: string;
 }
 
+export interface IntegrationInfo {
+  readonly id: string;
+  readonly provider: string;
+  readonly label: string;
+  readonly accountRef: string;
+  readonly color: string;
+  readonly icon: string;
+  readonly status: string | null;
+}
+
 export interface NetworkInfo {
   readonly id: NetworkId;
   readonly icon: string;

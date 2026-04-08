@@ -11,11 +11,13 @@ import {
   EMPTY_DASHBOARD_DATA,
   EVM_NETWORKS_PRESENTATION,
   EVM_NETWORK_PRESENTATION_BY_ID,
+  INTEGRATION_PRESENTATION_BY_PROVIDER,
 } from '../../core/data/dashboard.constants';
 import {
   DashboardSection,
   DashboardViewState,
   FlowRole,
+  IntegrationInfo,
   IssueCode,
   NetworkId,
   NetworkInfo,
@@ -38,6 +40,7 @@ import {
   SessionBackfillAggregateStatus,
   SessionBackfillStatusResponse,
   SessionBridgeStatus,
+  SessionIntegrationResponse,
   SessionTransactionsBridgeFilter,
   SessionTransactionFlowResponse,
   SessionTransactionItemResponse,
@@ -54,9 +57,11 @@ import { DashboardSectionNavComponent } from './components/dashboard-section-nav
 import { DashboardTopbarComponent } from './components/dashboard-topbar/dashboard-topbar.component';
 import { DashboardTransactionsPaneComponent } from './components/dashboard-transactions-pane/dashboard-transactions-pane.component';
 import { AssetLedgerPageComponent } from '../asset-ledger/asset-ledger-page.component';
+import { SettingsPageComponent } from '../settings/settings-page.component';
 
 type LpTab = 'all' | 'open' | 'closed';
 type SessionTransactionsLoadPhase = 'idle' | 'intermediate' | 'final';
+type FilterSelectionMode = 'all' | 'custom';
 type WalletFormGroup = FormGroup<{
   address: FormControl<string>;
   label: FormControl<string>;
@@ -135,6 +140,7 @@ const BRIDGE_STATUSES = new Set<SessionBridgeStatus>(['BRIDGE_OUT', 'BRIDGE_IN',
     DashboardAddWalletDialogComponent,
     DashboardTransactionsPaneComponent,
     AssetLedgerPageComponent,
+    SettingsPageComponent,
   ],
   templateUrl: './dashboard.component.html',
   styleUrl: './dashboard.component.scss',
@@ -194,6 +200,10 @@ export class DashboardComponent {
   );
   readonly assetLedgerSessionId = computed(() => this.routeAssetLedgerSelection().sessionId ?? this.currentSessionId());
   readonly isAssetLedgerMode = computed(() => this.assetLedgerFamilyIdentity() !== null);
+  readonly isSettingsMode = toSignal(
+    this.route.data.pipe(map((data) => data['mode'] === 'settings')),
+    { initialValue: this.route.snapshot.data['mode'] === 'settings' }
+  );
 
   readonly viewState = toSignal(
     toObservable(
@@ -216,9 +226,15 @@ export class DashboardComponent {
   );
 
   readonly section = signal<DashboardSection>('tokens');
+  readonly walletFilterMode = signal<FilterSelectionMode>('all');
   readonly selectedWalletIds = signal<ReadonlySet<WalletId>>(new Set<WalletId>());
+  readonly integrationFilterMode = signal<FilterSelectionMode>('all');
+  readonly selectedIntegrationRefs = signal<ReadonlySet<string>>(new Set<string>());
+  readonly networkFilterMode = signal<FilterSelectionMode>('all');
   readonly selectedNetworkIds = signal<ReadonlySet<NetworkId>>(new Set<NetworkId>());
+  readonly sessionIntegrations = signal<ReadonlyArray<IntegrationInfo>>([]);
   readonly hideDustAssets = signal(true);
+  readonly showReconciliationWarnings = signal(true);
   readonly isFiltersCollapsed = signal(false);
   readonly lpTab = signal<LpTab>('all');
 
@@ -272,12 +288,41 @@ export class DashboardComponent {
     return this.data().sections.find((sectionMeta) => sectionMeta.id === this.section()) ?? null;
   });
 
+  readonly availableWalletIds = computed<ReadonlyArray<WalletId>>(() => this.data().wallets.map((wallet) => wallet.id));
+  readonly availableIntegrationRefs = computed<ReadonlyArray<string>>(() =>
+    this.sessionIntegrations().map((integration) => integration.accountRef)
+  );
+  readonly availableNetworkIds = computed<ReadonlyArray<NetworkId>>(() => this.filterNetworks().map((network) => network.id));
+
   readonly activeFilterCount = computed(() => {
-    return this.selectedWalletIds().size + this.selectedNetworkIds().size;
+    const hiddenWallets = this.walletFilterMode() === 'all'
+      ? 0
+      : Math.max(0, this.availableWalletIds().length - this.selectedWalletIds().size);
+    const hiddenIntegrations = this.integrationFilterMode() === 'all'
+      ? 0
+      : Math.max(0, this.availableIntegrationRefs().length - this.selectedIntegrationRefs().size);
+    const hiddenNetworks = this.networkFilterMode() === 'all'
+      ? 0
+      : Math.max(0, this.availableNetworkIds().length - this.selectedNetworkIds().size);
+
+    return hiddenWallets + hiddenIntegrations + hiddenNetworks;
   });
 
-  readonly selectedWalletFilter = computed(() => this.selectedWalletIds());
-  readonly selectedNetworkFilter = computed(() => this.selectedNetworkIds());
+  readonly selectedWalletFilter = computed(() =>
+    this.walletFilterMode() === 'all'
+      ? new Set<WalletId>(this.availableWalletIds())
+      : new Set<WalletId>(this.selectedWalletIds())
+  );
+  readonly selectedIntegrationFilter = computed(() =>
+    this.integrationFilterMode() === 'all'
+      ? new Set<string>(this.availableIntegrationRefs())
+      : new Set<string>(this.selectedIntegrationRefs())
+  );
+  readonly selectedNetworkFilter = computed(() =>
+    this.networkFilterMode() === 'all'
+      ? new Set<NetworkId>(this.availableNetworkIds())
+      : new Set<NetworkId>(this.selectedNetworkIds())
+  );
   readonly sessionWallets = computed<ReadonlyArray<WalletInfo>>(() => {
     const status = this.sessionBackfillStatus();
     if (status === null) {
@@ -290,6 +335,15 @@ export class DashboardComponent {
       color: wallet.color,
     }));
   });
+
+  readonly transactionPaneIntegrations = computed<ReadonlyArray<WalletInfo>>(() =>
+    this.sessionIntegrations().map((integration) => ({
+      id: integration.accountRef.toLowerCase(),
+      label: integration.label,
+      address: integration.accountRef,
+      color: integration.color,
+    }))
+  );
 
   readonly sessionNetworks = computed<ReadonlyArray<NetworkInfo>>(() => {
     const status = this.sessionBackfillStatus();
@@ -325,8 +379,11 @@ export class DashboardComponent {
 
   readonly transactionPaneWallets = computed(() => {
     const sessionWallets = this.sessionWallets();
-    return sessionWallets.length > 0 ? sessionWallets : this.data().wallets;
+    const baseWallets = sessionWallets.length > 0 ? sessionWallets : this.data().wallets;
+    return this.mergeWalletScopes(baseWallets, this.transactionPaneIntegrations());
   });
+
+  readonly filterIntegrations = computed(() => this.sessionIntegrations());
 
   readonly transactionPaneNetworks = computed(() => {
     const sessionNetworks = this.sessionNetworks();
@@ -362,10 +419,14 @@ export class DashboardComponent {
 
   readonly filteredTokenPositions = computed(() => {
     const selectedWallets = this.selectedWalletFilter();
+    const hasCustomIntegrationFilter = this.integrationFilterMode() === 'custom';
     const selectedNetworks = this.selectedNetworkFilter();
     const hideDust = this.hideDustAssets();
 
     return this.data().tokenPositions.filter((asset) => {
+      if (hasCustomIntegrationFilter) {
+        return false;
+      }
       if (hideDust && asset.quantity * asset.priceUsd < 0.5) {
         return false;
       }
@@ -454,10 +515,14 @@ export class DashboardComponent {
 
   readonly filteredLpPositions = computed(() => {
     const selectedWallets = this.selectedWalletFilter();
+    const hasCustomIntegrationFilter = this.integrationFilterMode() === 'custom';
     const selectedNetworks = this.selectedNetworkFilter();
     const currentTab = this.lpTab();
 
     return this.data().lpPositions.filter((position) => {
+      if (hasCustomIntegrationFilter) {
+        return false;
+      }
       if (currentTab !== 'all' && position.status !== currentTab) {
         return false;
       }
@@ -474,9 +539,13 @@ export class DashboardComponent {
 
   readonly filteredLendingPositions = computed(() => {
     const selectedWallets = this.selectedWalletFilter();
+    const hasCustomIntegrationFilter = this.integrationFilterMode() === 'custom';
     const selectedNetworks = this.selectedNetworkFilter();
 
     return this.data().lendingPositions.filter((position) => {
+      if (hasCustomIntegrationFilter) {
+        return false;
+      }
       if (selectedWallets.size > 0 && !selectedWallets.has(position.walletId)) {
         return false;
       }
@@ -572,6 +641,11 @@ export class DashboardComponent {
     if (sectionMeta?.soon) {
       return;
     }
+    if (this.isSettingsMode()) {
+      this.section.set(sectionId);
+      void this.router.navigate(['/']);
+      return;
+    }
     if (this.isAssetLedgerMode()) {
       this.section.set(sectionId);
       this.closeAssetLedger();
@@ -580,18 +654,52 @@ export class DashboardComponent {
     this.section.set(sectionId);
   }
 
+  openSettings(): void {
+    if (this.isSettingsMode()) {
+      return;
+    }
+    this.selectedAssetFamilyIdentity.set(null);
+    void this.router.navigate(['/settings']);
+  }
+
   toggleWallet(walletId: WalletId): void {
-    this.selectedWalletIds.set(this.toggleSetValue(this.selectedWalletIds(), walletId));
+    if (this.walletFilterMode() === 'all') {
+      this.walletFilterMode.set('custom');
+      this.selectedWalletIds.set(new Set(this.availableWalletIds().filter((id) => id !== walletId)));
+    } else {
+      this.selectedWalletIds.set(this.toggleSetValue(this.selectedWalletIds(), walletId));
+    }
+    this.resetTransactionPageAndRefresh();
+  }
+
+  toggleIntegration(accountRef: string): void {
+    if (this.integrationFilterMode() === 'all') {
+      this.integrationFilterMode.set('custom');
+      this.selectedIntegrationRefs.set(
+        new Set(this.availableIntegrationRefs().filter((ref) => ref !== accountRef))
+      );
+    } else {
+      this.selectedIntegrationRefs.set(this.toggleSetValue(this.selectedIntegrationRefs(), accountRef));
+    }
     this.resetTransactionPageAndRefresh();
   }
 
   toggleNetwork(networkId: NetworkId): void {
-    this.selectedNetworkIds.set(this.toggleSetValue(this.selectedNetworkIds(), networkId));
+    if (this.networkFilterMode() === 'all') {
+      this.networkFilterMode.set('custom');
+      this.selectedNetworkIds.set(new Set(this.availableNetworkIds().filter((id) => id !== networkId)));
+    } else {
+      this.selectedNetworkIds.set(this.toggleSetValue(this.selectedNetworkIds(), networkId));
+    }
     this.resetTransactionPageAndRefresh();
   }
 
   clearFilters(): void {
+    this.walletFilterMode.set('all');
     this.selectedWalletIds.set(new Set<WalletId>());
+    this.integrationFilterMode.set('all');
+    this.selectedIntegrationRefs.set(new Set<string>());
+    this.networkFilterMode.set('all');
     this.selectedNetworkIds.set(new Set<NetworkId>());
     this.resetTransactionPageAndRefresh();
   }
@@ -694,20 +802,32 @@ export class DashboardComponent {
         this.sessionTransactionsError.set(null);
         this.isSessionTransactionsLoading.set(false);
         this.sessionTransactionsLoadPhase.set('idle');
+        this.walletFilterMode.set('all');
         this.selectedWalletIds.set(new Set<WalletId>());
+        this.integrationFilterMode.set('all');
+        this.selectedIntegrationRefs.set(new Set<string>());
+        this.networkFilterMode.set('all');
         this.selectedNetworkIds.set(new Set<NetworkId>());
+        this.sessionIntegrations.set([]);
+        this.hideDustAssets.set(true);
+        this.showReconciliationWarnings.set(true);
         this.dashboardRefreshNonce.update((value) => value + 1);
+        this.loadSessionPreferences(sessionId);
         this.startBackfillPolling(sessionId);
         this.isAddWalletDialogOpen.set(false);
       });
   }
 
   isWalletSelected(walletId: WalletId): boolean {
-    return this.selectedWalletIds().has(walletId);
+    return this.selectedWalletFilter().has(walletId);
+  }
+
+  isIntegrationSelected(accountRef: string): boolean {
+    return this.selectedIntegrationFilter().has(accountRef);
   }
 
   isNetworkSelected(networkId: NetworkId): boolean {
-    return this.selectedNetworkIds().has(networkId);
+    return this.selectedNetworkFilter().has(networkId);
   }
 
   getSectionIcon(sectionId: DashboardSection): string {
@@ -731,6 +851,11 @@ export class DashboardComponent {
 
   getWalletById(walletId: WalletId) {
     return this.data().wallets.find((wallet) => wallet.id === walletId) ?? null;
+  }
+
+  getIntegrationByRef(accountRef: string): IntegrationInfo | null {
+    const normalized = accountRef.trim().toLowerCase();
+    return this.sessionIntegrations().find((integration) => integration.accountRef.toLowerCase() === normalized) ?? null;
   }
 
   formatUsd(value: number): string {
@@ -854,6 +979,7 @@ export class DashboardComponent {
     }
 
     this.currentSessionId.set(storedSessionId);
+    this.loadSessionPreferences(storedSessionId);
     this.loadSessionBackfillStatus(storedSessionId);
   }
 
@@ -886,6 +1012,29 @@ export class DashboardComponent {
         }
         this.isBackfillVisible.set(true);
         this.startBackfillPolling(sessionId);
+      });
+  }
+
+  private loadSessionPreferences(sessionId: string): void {
+    this.walletApiService
+      .getSessionSettings(sessionId)
+      .pipe(
+        takeUntilDestroyed(this.destroyRef),
+        catchError(() => EMPTY)
+      )
+      .subscribe((settings) => {
+        this.hideDustAssets.set(settings.hideSmallAssets ?? true);
+        this.showReconciliationWarnings.set(settings.showReconciliationWarnings ?? true);
+        const integrations = settings.integrations
+          .map((integration) => this.toIntegrationInfo(integration))
+          .filter((integration): integration is IntegrationInfo => integration !== null);
+        this.sessionIntegrations.set(integrations);
+        const allowedRefs = new Set(integrations.map((integration) => integration.accountRef));
+        if (this.integrationFilterMode() === 'custom') {
+          this.selectedIntegrationRefs.set(
+            new Set([...this.selectedIntegrationRefs()].filter((accountRef) => allowedRefs.has(accountRef)))
+          );
+        }
       });
   }
 
@@ -952,17 +1101,34 @@ export class DashboardComponent {
   }
 
   private buildSessionTransactionsRequest(): GetSessionTransactionsRequest {
+    const walletRefs =
+      this.walletFilterMode() === 'all' && this.integrationFilterMode() === 'all'
+        ? []
+        : [
+            ...(this.walletFilterMode() === 'all'
+              ? this.availableWalletIds()
+              : Array.from(this.selectedWalletIds())),
+            ...(this.integrationFilterMode() === 'all'
+              ? this.availableIntegrationRefs()
+              : Array.from(this.selectedIntegrationRefs())),
+          ];
+
     return {
       limit: this.transactionPageSize,
       offset: this.transactionPage() * this.transactionPageSize,
       search: this.transactionSearch(),
       bridgeStatus: this.transactionBridgeStatusFilter(),
       spamFilter: this.transactionSpamFilter(),
-      walletIds: this.selectedWalletIds().size > 0 ? Array.from(this.selectedWalletIds()) : undefined,
+      walletIds:
+        this.walletFilterMode() === 'all' && this.integrationFilterMode() === 'all'
+          ? undefined
+          : walletRefs.length > 0
+            ? walletRefs
+            : ['__NO_SCOPE__'],
       networkIds:
-        this.selectedNetworkIds().size > 0
-          ? (Array.from(this.selectedNetworkIds()) as ReadonlyArray<EvmNetworkId>)
-          : undefined,
+        this.networkFilterMode() === 'all'
+          ? undefined
+          : (Array.from(this.selectedNetworkIds()) as ReadonlyArray<EvmNetworkId>),
     };
   }
 
@@ -1104,7 +1270,7 @@ export class DashboardComponent {
   }
 
   walletLabel(walletId: WalletId): string {
-    return this.getWalletById(walletId)?.label ?? walletId;
+    return this.getWalletById(walletId)?.label ?? this.getIntegrationByRef(walletId)?.label ?? walletId;
   }
 
   private clearSessionTracking(clearStorage: boolean): void {
@@ -1121,6 +1287,48 @@ export class DashboardComponent {
     this.isSessionTransactionsLoading.set(false);
     this.sessionTransactionsLoadPhase.set('idle');
     this.transactionPage.set(0);
+    this.walletFilterMode.set('all');
+    this.selectedWalletIds.set(new Set<WalletId>());
+    this.integrationFilterMode.set('all');
+    this.selectedIntegrationRefs.set(new Set<string>());
+    this.networkFilterMode.set('all');
+    this.selectedNetworkIds.set(new Set<NetworkId>());
+    this.sessionIntegrations.set([]);
+    this.hideDustAssets.set(true);
+    this.showReconciliationWarnings.set(true);
+  }
+
+  private toIntegrationInfo(integration: SessionIntegrationResponse): IntegrationInfo | null {
+    const accountRef = integration.accountRef?.trim();
+    const provider = integration.provider?.trim().toUpperCase() ?? '';
+    if (!accountRef || !provider || integration.status === 'DISABLED') {
+      return null;
+    }
+
+    const presentation = INTEGRATION_PRESENTATION_BY_PROVIDER.get(provider);
+    return {
+      id: integration.integrationId,
+      provider,
+      label: integration.displayName?.trim() || presentation?.label || provider,
+      accountRef,
+      color: presentation?.color ?? COLORS.textSubtle,
+      icon: presentation?.icon ?? '◎',
+      status: integration.status,
+    };
+  }
+
+  private mergeWalletScopes(
+    wallets: ReadonlyArray<WalletInfo>,
+    integrations: ReadonlyArray<WalletInfo>
+  ): ReadonlyArray<WalletInfo> {
+    const merged = new Map<string, WalletInfo>();
+    for (const wallet of wallets) {
+      merged.set(wallet.id, wallet);
+    }
+    for (const integration of integrations) {
+      merged.set(integration.id, integration);
+    }
+    return [...merged.values()];
   }
 
   private toggleSetValue<T>(set: ReadonlySet<T>, value: T): ReadonlySet<T> {

@@ -14,6 +14,9 @@ This document does not redefine general `SWAP`, `REWARD_CLAIM`, `BORROW`, or
 `REPAY` semantics inside Bybit. It owns only the continuity boundary between
 Bybit ledger rows and wallet-visible on-chain movements.
 
+It also preserves the current standalone venue-fee policy for extracted Bybit
+rows that are not custody continuity events.
+
 ## Runtime Ownership
 
 - Bybit normalization:
@@ -32,6 +35,38 @@ Bybit ledger rows and wallet-visible on-chain movements.
   - same source / destination network continuity
 
 ## Classification Rules
+
+### Standalone venue fees
+
+- Bybit extracted rows such as:
+  - `TRANSACTION_LOG / BONUS_RECOLLECT`
+  - `FUNDING_HISTORY / Loans / Repay Interest`
+  remain canonical `FEE` rows.
+- They are real account outflows, but they are not standalone basis-opening
+  acquisition or disposal rows.
+- Therefore they must remain:
+  - `canonicalType = FEE`
+  - `basisRelevant = false`
+- They must not enter the active Bybit canonical-builder lane where only
+  basis-driving canonical types are materialized into `normalized_transactions`.
+
+### Audited liquid-staking receipt wrappers
+
+- Official Bybit `Earn / On-chain Earn subscription` lifecycles for audited
+  `ETH`-family receipt wrappers such as `METH -> CMETH` follow the same policy
+  as audited `ETH -> METH`:
+  - canonical type is `STAKING_DEPOSIT`
+  - principal and derivative legs remain continuity `TRANSFER`
+  - no realized PnL is created on the conversion itself
+- Pairing is deterministic normalization-time work, not clarification:
+  - same user/account
+  - same official Bybit lifecycle description when present
+  - opposite signed quantities
+  - same audited accounting family
+  - exact or nearest absolute quantity match inside a bounded multi-hour window
+- A positive receipt leg may not persist as a standalone contradictory
+  `VAULT_DEPOSIT` / `STAKING_DEPOSIT` blocker when the official paired earn
+  lifecycle is provable.
 
 ### Matched continuity
 
@@ -101,6 +136,10 @@ Bybit ledger rows and wallet-visible on-chain movements.
     external-custody accounting lane exists
 - A separate excluded tail of `11` Bybit `NEEDS_REVIEW` rows remains acceptable
   only because `excludedFromAccounting = true`.
+- Operator dashboards must distinguish:
+  - active blocking review rows
+  - excluded audit-only review rows
+  Treating the combined count as one blocker overstates the true replay risk.
 
 ## Regression Anchors
 

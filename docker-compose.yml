@@ -24,6 +24,7 @@ services:
     environment:
       MONGODB_URI: mongodb://mongodb:27017/walletradar
       SPRING_DATA_MONGODB_URI: mongodb://mongodb:27017/walletradar
+      WALLETRADAR_SESSION_SECRETS_KEY_FILE: /workspace/.secrets/session-crypto.key
     volumes:
       - ./:/workspace
       - gradle_cache:/home/gradle/.gradle
@@ -46,7 +47,7 @@ services:
     volumes:
       - ./:/workspace
       - frontend_node_modules:/workspace/frontend/node_modules
-    command: ["sh", "-lc", "npm install && npm run start:local-compose -- --host 0.0.0.0 --port 4200"]
+    command: ["sh", "-lc", "npm install && npm run start:local-compose -- --host 0.0.0.0 --port 4200 --public-host localhost:4202 --disable-host-check"]
     depends_on:
       - backend
     ports:

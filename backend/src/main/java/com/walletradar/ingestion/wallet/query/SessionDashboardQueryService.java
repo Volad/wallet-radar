@@ -63,8 +63,8 @@ public class SessionDashboardQueryService {
         AccountingUniverseService.AccountingUniverseScope universeScope = accountingUniverseService.resolveScope(session);
         List<String> walletAddresses = allowedScope.walletAddresses();
 
-        List<AssetLedgerPoint> scopedLedgerPoints = loadAssetLedgerPoints(universeScope.memberRefs());
-        List<OnChainBalance> scopedBalances = loadOnChainBalances(walletAddresses).stream()
+        List<AssetLedgerPoint> scopedLedgerPoints = loadAssetLedgerPoints(universeScope.accountingUniverseId());
+        List<OnChainBalance> scopedBalances = loadOnChainBalances(session.getId(), walletAddresses).stream()
                 .filter(balance -> allowedScope.includes(balance.getWalletAddress(), balance.getNetworkId()))
                 .toList();
 
@@ -175,11 +175,14 @@ public class SessionDashboardQueryService {
         );
     }
 
-    private List<OnChainBalance> loadOnChainBalances(Collection<String> walletAddresses) {
+    private List<OnChainBalance> loadOnChainBalances(String sessionId, Collection<String> walletAddresses) {
         if (walletAddresses.isEmpty()) {
             return List.of();
         }
-        Query query = Query.query(Criteria.where("walletAddress").in(walletAddresses))
+        Query query = Query.query(new Criteria().andOperator(
+                        Criteria.where("sessionId").is(sessionId),
+                        Criteria.where("walletAddress").in(walletAddresses)
+                ))
                 .with(Sort.by(
                         Sort.Order.asc("walletAddress"),
                         Sort.Order.asc("networkId"),
@@ -189,11 +192,11 @@ public class SessionDashboardQueryService {
         return mongoOperations.find(query, OnChainBalance.class);
     }
 
-    private List<AssetLedgerPoint> loadAssetLedgerPoints(Collection<String> walletAddresses) {
-        if (walletAddresses.isEmpty()) {
+    private List<AssetLedgerPoint> loadAssetLedgerPoints(String accountingUniverseId) {
+        if (accountingUniverseId == null || accountingUniverseId.isBlank()) {
             return List.of();
         }
-        Query query = Query.query(Criteria.where("walletAddress").in(walletAddresses))
+        Query query = Query.query(Criteria.where("accountingUniverseId").is(accountingUniverseId))
                 .with(Sort.by(
                         Sort.Order.asc("walletAddress"),
                         Sort.Order.asc("networkId"),

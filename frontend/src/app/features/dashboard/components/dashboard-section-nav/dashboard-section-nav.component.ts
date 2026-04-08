@@ -14,14 +14,20 @@ import { DashboardSection, SectionMeta } from '../../../../core/models/dashboard
 export class DashboardSectionNavComponent {
   @Input({ required: true }) sections: ReadonlyArray<SectionMeta> = [];
   @Input({ required: true }) activeSection: DashboardSection = 'tokens';
+  @Input() isSettingsActive = false;
 
   @Output() sectionChange = new EventEmitter<DashboardSection>();
+  @Output() settingsSelect = new EventEmitter<void>();
 
   selectSection(section: SectionMeta): void {
     if (section.soon) {
       return;
     }
     this.sectionChange.emit(section.id);
+  }
+
+  openSettings(): void {
+    this.settingsSelect.emit();
   }
 
   getSectionIcon(sectionId: DashboardSection): string {

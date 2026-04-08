@@ -1,0 +1,457 @@
+<section class="settings-layout">
+  @if (!hasSession()) {
+    <section class="settings-state-card">
+      <h2>No active session</h2>
+      <p>Open the dashboard first and create or restore a session.</p>
+      <div class="state-card-actions">
+        <button type="button" class="primary-btn" [disabled]="signingIn()" (click)="createEmptySession()">
+          {{ signingIn() ? 'Signing in…' : 'Sign in' }}
+        </button>
+      </div>
+    </section>
+  } @else if (loading()) {
+    <section class="settings-state-card">
+      <h2>Loading settings</h2>
+      <p>Preparing wallet, integration, and session preferences.</p>
+    </section>
+  } @else {
+    <aside class="settings-sidebar">
+      <div class="settings-sidebar-head">
+        <span class="settings-sidebar-head-icon">⚙</span>
+        <span>Settings</span>
+      </div>
+
+      <div class="settings-sidebar-scroll">
+        @for (section of sections; track section.id) {
+          <button
+            type="button"
+            class="settings-sidebar-item"
+            [class.active]="activeSection() === section.id"
+            (click)="setActiveSection(section.id)">
+            <span class="settings-sidebar-item-icon">{{ section.icon }}</span>
+            <span class="settings-sidebar-item-label">{{ section.label }}</span>
+            @if (section.id === 'wallets') {
+              <span class="settings-sidebar-item-badge">{{ sectionBadge().wallets }}</span>
+            }
+          </button>
+        }
+
+        <div class="settings-sidebar-divider"></div>
+
+        @for (ghostSection of ['Appearance', 'Notifications', 'About']; track ghostSection) {
+          <button type="button" class="settings-sidebar-item ghost" disabled>
+            <span class="settings-sidebar-item-label">{{ ghostSection }}</span>
+          </button>
+        }
+      </div>
+    </aside>
+
+    <main class="settings-main">
+      @if (error(); as errorMessage) {
+        <div class="settings-banner error">{{ errorMessage }}</div>
+      }
+
+      @if (saveMessage(); as infoMessage) {
+        <div class="settings-banner success">{{ infoMessage }}</div>
+      }
+
+      @if (activeSection() === 'wallets') {
+        <section class="settings-section wallets-section">
+          <div class="section-head wallets-head wallets-head-v2">
+            <div>
+              <div class="section-title wallets-page-title">Wallets &amp; Networks</div>
+              <div class="section-subline wallets-page-subline">
+                Read-only · no signing required · up to {{ maxWallets }} wallets
+              </div>
+            </div>
+          </div>
+
+          @if (!hasSavedWallets() && !isWalletEditing()) {
+            <section class="wallet-empty-state-card">
+              <div class="wallet-empty-state-illustration">👛</div>
+              <div class="wallet-empty-state-title">No wallets yet</div>
+              <div class="wallet-empty-state-copy">
+                Add your EVM addresses to start tracking cost basis, P&amp;L and transaction history across all
+                supported networks.
+              </div>
+              <button type="button" class="primary-btn large wallet-empty-state-action" (click)="startAddWallet()">
+                Add On-Chain Wallet
+              </button>
+              <div class="wallet-empty-state-footnote">
+                All supported networks are included automatically. You can queue up to {{ maxWallets }} wallets.
+              </div>
+              <div class="wallet-empty-state-hint">You can paste multiple addresses one by one and save the full list below.</div>
+            </section>
+          }
+
+          @if (hasSavedWallets()) {
+            <div class="wallet-saved-list">
+              <div class="wallet-saved-head">
+                <div></div>
+                <div></div>
+                <div>Label</div>
+                <div>EVM Address</div>
+                <div>Networks</div>
+                <div></div>
+              </div>
+
+              <div class="wallet-saved-stack">
+                @for (wallet of walletsDraft(); track wallet.id; let index = $index) {
+                  <article class="wallet-saved-card" [style.--walletAccent]="wallet.color">
+                    <div class="wallet-saved-row">
+                      <div class="wallet-saved-stripe"></div>
+                      <div class="wallet-saved-index">{{ index + 1 < 10 ? '0' + (index + 1) : index + 1 }}</div>
+                      <div class="wallet-saved-label">{{ wallet.label || '—' }}</div>
+                      <div class="wallet-saved-address mono">{{ wallet.address }}</div>
+                      <button type="button" class="wallet-saved-networks-toggle" (click)="toggleSavedWalletNetworks(wallet.id)">
+                        <span class="wallet-saved-networks-copy">All networks</span>
+                        <span class="wallet-draft-chevron" [class.open]="wallet.networksOpen">⌄</span>
+                      </button>
+                      <button type="button" class="wallet-saved-remove" (click)="removeWallet(wallet.id)" aria-label="Remove wallet">
+                        🗑
+                      </button>
+                    </div>
+
+                    @if (wallet.networksOpen) {
+                      <div class="wallet-draft-network-panel">
+                        <div class="wallet-draft-network-grid">
+                          @for (network of networksPresentation; track network.id) {
+                            <div class="wallet-draft-network-chip" [style.--networkColor]="network.color">
+                              <span class="network-chip-icon">{{ network.icon }}</span>
+                              <span>{{ network.label }}</span>
+                            </div>
+                          }
+                        </div>
+                      </div>
+                    }
+                  </article>
+                }
+              </div>
+            </div>
+          }
+
+          @if (hasWalletsDraft()) {
+            <div class="wallet-draft-zone">
+              @if (isWalletEditing() && hasSavedWallets()) {
+                <div class="wallet-draft-divider">
+                  <span></span>
+                  <span>New wallets</span>
+                  <span></span>
+                </div>
+              } @else if (isWalletEditing()) {
+                <div class="wallet-saved-head wallet-draft-head">
+                  <div></div>
+                  <div></div>
+                  <div>Label</div>
+                  <div>EVM Address</div>
+                  <div>Networks</div>
+                  <div></div>
+                </div>
+              }
+
+              @if (isWalletEditing()) {
+                <div class="wallet-draft-stack">
+                  @for (wallet of pendingWallets(); track wallet.id; let index = $index) {
+                    <article class="wallet-draft-row" [style.--walletAccent]="wallet.color">
+                      <div class="wallet-draft-main">
+                        <div class="wallet-draft-stripe"></div>
+                        <div class="wallet-draft-index">
+                          {{ walletsDraft().length + index + 1 < 10 ? '0' + (walletsDraft().length + index + 1) : walletsDraft().length + index + 1 }}
+                        </div>
+                        <input
+                          class="wallet-draft-inline-input wallet-draft-inline-label"
+                          type="text"
+                          [value]="wallet.label"
+                          (input)="updatePendingWalletField(wallet.id, 'label', $any($event.target).value)"
+                          placeholder="Label"
+                          maxlength="40"
+                          autocomplete="off"
+                          spellcheck="false" />
+                        <div class="wallet-draft-inline-address-wrap">
+                          <input
+                            class="wallet-draft-inline-input wallet-draft-inline-address"
+                            [class.ok]="wallet.address.trim().length > 0 && walletAddressError(wallet.id) === null"
+                            [class.err]="wallet.address.trim().length > 0 && walletAddressError(wallet.id) !== null"
+                            type="text"
+                            [value]="wallet.address"
+                            (input)="updatePendingWalletField(wallet.id, 'address', $any($event.target).value)"
+                            placeholder="0x… EVM address"
+                            autocomplete="off"
+                            spellcheck="false" />
+                          @if (wallet.address.trim().length > 0) {
+                            <span class="wallet-draft-inline-indicator" [class.ok]="walletAddressError(wallet.id) === null" [class.err]="walletAddressError(wallet.id) !== null">
+                              {{ walletAddressError(wallet.id) === null ? '✓' : '✕' }}
+                            </span>
+                          }
+                        </div>
+                        <button type="button" class="wallet-draft-networks-toggle" (click)="togglePendingWalletNetworks(wallet.id)">
+                          <span>All networks</span>
+                          <span class="wallet-draft-chevron" [class.open]="wallet.networksOpen">⌄</span>
+                        </button>
+                        <button type="button" class="wallet-draft-remove" (click)="removeWallet(wallet.id)" aria-label="Remove wallet">🗑</button>
+                      </div>
+
+                      @if (wallet.networksOpen) {
+                        <div class="wallet-draft-network-panel">
+                          <div class="wallet-draft-network-grid">
+                            @for (network of networksPresentation; track network.id) {
+                              <div class="wallet-draft-network-chip" [style.--networkColor]="network.color">
+                                <span class="network-chip-icon">{{ network.icon }}</span>
+                                <span>{{ network.label }}</span>
+                              </div>
+                            }
+                          </div>
+                        </div>
+                      }
+
+                      @if (walletAddressError(wallet.id); as walletError) {
+                        <div class="wallet-draft-error">
+                          {{ walletError }}
+                        </div>
+                      }
+                    </article>
+                  }
+                </div>
+              }
+
+              @if (canAddMoreWallets()) {
+                <button type="button" class="wallet-draft-add-another" (click)="startAddWallet()">
+                  + Add another wallet
+                  <span>(or paste multiple addresses)</span>
+                </button>
+              }
+
+              <div class="wallet-draft-info">
+                Backfill scans ~2 years per wallet. <span class="mono">3–8 min</span> per network. Partial results
+                appear as indexing runs.
+              </div>
+
+              @if (isWalletEditing() && pendingWallets().length > 1) {
+                <div class="wallet-draft-summary">
+                  <span class="wallet-draft-summary-ok">{{ validPendingWalletCount() }}</span>
+                  /{{ pendingWallets().length }} wallets valid
+                  @if (hasInvalidPendingWallets()) {
+                    <span class="wallet-draft-summary-warn">· fix errors to continue</span>
+                  }
+                </div>
+              }
+
+              @if (isWalletEditing() || walletListDirty()) {
+                <div class="wallet-draft-actions">
+                  @if (isWalletEditing()) {
+                    <button type="button" class="secondary-btn" (click)="discardPendingWallets()">Discard</button>
+                  }
+                  <button
+                    type="button"
+                    class="primary-btn wallet-save-btn"
+                    [disabled]="!canSaveWallets() || savingScope() === 'wallets'"
+                    (click)="saveWallets()">
+                    {{ savingScope() === 'wallets' ? 'Saving…' : 'Save wallet settings' }}
+                  </button>
+                </div>
+              }
+            </div>
+          }
+        </section>
+      }
+
+      @if (activeSection() === 'integrations') {
+        <section class="settings-section">
+          <div class="section-head static">
+            <div>
+              <div class="section-title">Integrations</div>
+              <div class="section-subline">
+                Connect exchange accounts to import trading history alongside on-chain data.
+              </div>
+            </div>
+          </div>
+
+          <article class="integration-card">
+            <div class="integration-card-head">
+              <div class="integration-mark">B</div>
+
+              <div class="integration-copy">
+                <div class="integration-title-row">
+                  <span class="integration-title">Bybit</span>
+                  <span class="tag">CEX</span>
+                  @if (bybitIntegration() !== null) {
+                    <span class="tag success">Connected</span>
+                  }
+                </div>
+
+                <div class="integration-subline">
+                  @if (bybitIntegration(); as integration) {
+                    "{{ integration.displayName }}" · {{ integration.accountRef }}
+                  } @else {
+                    Import trading history and balances from Bybit.
+                  }
+                </div>
+              </div>
+
+              @if (bybitIntegration(); as integration) {
+                <span
+                  class="status-pill"
+                  [class.ready]="statusTone(integration) === 'ready'"
+                  [class.busy]="statusTone(integration) === 'busy'"
+                  [class.error]="statusTone(integration) === 'error'">
+                  {{ integration.status ?? 'UNKNOWN' }}
+                </span>
+              } @else {
+                <span class="status-pill">NOT CONNECTED</span>
+              }
+            </div>
+
+            <div class="instruction-card">
+              <div class="instruction-head">How to get API credentials</div>
+
+              <div class="instruction-steps">
+                @for (step of [
+                  'Log in to Bybit and open Account → API Management.',
+                  'Create a new API key with read-only permissions.',
+                  'Copy API key and secret. The secret is shown only once.',
+                  'Paste both values below and save. No withdrawal permission is required.'
+                ]; track step; let index = $index) {
+                  <div class="instruction-step">
+                    <span class="instruction-step-index">{{ index + 1 }}</span>
+                    <span class="instruction-step-copy">{{ step }}</span>
+                  </div>
+                }
+              </div>
+
+              <a
+                class="instruction-link"
+                href="https://www.bybit.com/app/user/api-management"
+                target="_blank"
+                rel="noreferrer">
+                Open Bybit API Management
+              </a>
+            </div>
+
+            @if (bybitIntegration(); as integration) {
+              <div class="integration-summary">
+                <div class="summary-row">
+                  <span>Account</span>
+                  <span class="mono">{{ integration.accountRef }}</span>
+                </div>
+                <div class="summary-row">
+                  <span>Masked key</span>
+                  <span class="mono">{{ integration.maskedKey }}</span>
+                </div>
+                <div class="summary-row">
+                  <span>Validated</span>
+                  <span>{{ integration.lastValidatedAt ? (integration.lastValidatedAt | date: 'medium') : '—' }}</span>
+                </div>
+                <div class="summary-row">
+                  <span>Progress</span>
+                  <span>{{ integration.completedSegments }} / {{ integration.totalSegments }}</span>
+                </div>
+                <div class="progress-track">
+                  <div class="progress-fill" [style.width.%]="integration.progressPct"></div>
+                </div>
+              </div>
+            }
+
+            <form class="integration-form" [formGroup]="bybitForm">
+              <label class="editor-field-block">
+                <span class="field-label">Integration name</span>
+                <input class="ifield" type="text" formControlName="displayName" maxlength="80" />
+              </label>
+
+              <label class="editor-field-block">
+                <span class="field-label">API key</span>
+                <input class="ifield" type="password" formControlName="apiKey" autocomplete="off" />
+              </label>
+
+              <label class="editor-field-block">
+                <span class="field-label">API secret</span>
+                <div class="field-input-wrap">
+                  <input
+                    class="ifield"
+                    [type]="showBybitSecret() ? 'text' : 'password'"
+                    formControlName="apiSecret"
+                    autocomplete="off" />
+                  <button type="button" class="field-toggle-btn" (click)="toggleBybitSecretVisibility()">
+                    {{ showBybitSecret() ? 'Hide' : 'Show' }}
+                  </button>
+                </div>
+              </label>
+            </form>
+
+            <div class="integration-warning-card">
+              Use <strong>read-only</strong> API keys only. Never enable trading or withdrawal permissions.
+            </div>
+
+            <div class="editor-actions">
+              @if (bybitIntegration() !== null) {
+                <button
+                  type="button"
+                  class="danger-btn"
+                  [disabled]="savingScope() === 'integrations'"
+                  (click)="disconnectBybit()">
+                  Disconnect
+                </button>
+              }
+
+              <div class="editor-actions-spacer"></div>
+
+              <button
+                type="button"
+                class="secondary-btn"
+                [disabled]="savingScope() === 'integrations'"
+                (click)="resetBybitDraft()">
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                class="primary-btn"
+                [disabled]="savingScope() === 'integrations'"
+                (click)="saveBybit()">
+                {{ savingScope() === 'integrations' ? 'Saving…' : (bybitIntegration() === null ? 'Connect' : 'Update') }}
+              </button>
+            </div>
+          </article>
+        </section>
+      }
+
+      @if (activeSection() === 'general') {
+        <section class="settings-section">
+          <div class="section-head static">
+            <div>
+              <div class="section-title">General</div>
+              <div class="section-subline">App-wide preferences</div>
+            </div>
+          </div>
+
+          <form class="general-list" [formGroup]="generalForm">
+            <label class="general-row">
+              <span class="general-label">Hide assets below $0.50</span>
+              <span class="toggle">
+                <input type="checkbox" formControlName="hideSmallAssets" />
+                <span class="tsl"></span>
+              </span>
+            </label>
+
+            <label class="general-row">
+              <span class="general-label">Show reconciliation warnings</span>
+              <span class="toggle">
+                <input type="checkbox" formControlName="showReconciliationWarnings" />
+                <span class="tsl"></span>
+              </span>
+            </label>
+          </form>
+
+          <div class="section-footer-actions">
+            <button
+              type="button"
+              class="primary-btn"
+              [disabled]="savingScope() === 'general'"
+              (click)="saveGeneral()">
+              {{ savingScope() === 'general' ? 'Saving…' : 'Save general settings' }}
+            </button>
+          </div>
+        </section>
+      }
+    </main>
+  }
+</section>

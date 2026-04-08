@@ -56,6 +56,10 @@ families.
 
 - bridge families must remain continuity-safe and may not fabricate spot
   realization where only movement is proven
+- asset-changing bridge routes remain `BRIDGE_OUT -> BRIDGE_IN` even when
+  replay later restores destination acquisition cost from the source leg
+- such route-settlement repair does not change canonical bridge typing and does
+  not turn the pair into `continuityCandidate = true` plain carry
 
 ## Current Runtime Scope
 
@@ -66,6 +70,10 @@ families.
 - route-tagged `LI.FI / Jumper` bridge-start rows with positive native funding
   or equivalent outbound movement remain `BRIDGE_OUT` when current raw calldata
   already proves bridge provider tags
+- when such a source row has one outbound token principal leg plus one native
+  outbound leg that exactly matches tx `value`, the native leg is canonical
+  route funding / cost and must normalize as `FEE`, not as a second principal
+  `TRANSFER`
 - method-aware bridge-out (`Across depositV3`, bridge-entry overloads proven by
   registry) resolves as `BRIDGE_OUT`
 - post-clarification same-wallet `Across` source/destination pairs may receive
@@ -75,6 +83,11 @@ families.
   `swapAndStartBridgeTokensViaMayan(...) -> redeemWithFee(...)` pair even when
   settlement arrives much later and destination quantity is lower because of
   relayer / settlement fees
+- already-linked asset-changing bridge pairs may receive replay-only
+  destination cost restoration when:
+  - the route key is deterministic
+  - the pair is unique
+  - source and destination each contribute one principal transfer leg
 - registry-backed bridge contracts keep `protocolName` and `protocolVersion`
 - unsupported bridge/router overloads terminate through the explicit final
   fallback stage, not through a hidden legacy path

@@ -139,6 +139,9 @@ public class BackfillNetworkExecutor {
             }
             BackfillSegment s = new BackfillSegment();
             s.setId(syncStatusId + ":" + i);
+            s.setSessionId(null);
+            s.setSourceKind(BackfillSegment.SourceKind.ONCHAIN);
+            s.setSegmentKind(BackfillSegment.SegmentKind.BLOCK_RANGE);
             s.setSyncStatusId(syncStatusId);
             s.setWalletAddress(walletAddress);
             s.setNetworkId(networkId);

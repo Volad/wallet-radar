@@ -8,25 +8,55 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.ingestion.pipeline.onchain.OnChainRawTransactionView;
 
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 public final class OnChainClassificationSupport {
 
     private static final String ZKSYNC_NATIVE_TOKEN_CONTRACT = "0x000000000000000000000000000000000000800a";
+    private static final Set<String> BRIDGE_ROUTE_START_SELECTORS = Set.of(
+            "0x30c48952",
+            "0xa6010a66",
+            "0xa8f66666"
+    );
+    private static final Set<String> BRIDGE_ROUTE_START_FUNCTION_KEYS = Set.of(
+            "swapandstartbridgetokensviamayan",
+            "swapandstartbridgetokensviastargate",
+            "swapandstartbridgetokensviasquid"
+    );
+    private static final Set<String> AUDITED_AAVE_ETH_RECEIPT_SYMBOLS = Set.of(
+            "AETHWETH",
+            "AARBWETH",
+            "ALINWETH",
+            "AMANWETH",
+            "AZKSWETH"
+    );
 
     private OnChainClassificationSupport() {
     }
 
     public static List<NormalizedTransaction.Flow> toFlows(
+            OnChainRawTransactionView view,
             List<RawLeg> movementLegs,
             NormalizedTransactionType type
     ) {
+        List<NormalizedTransaction.Flow> auditedAaveRebasingFlows = auditedAaveRebasingFlows(movementLegs, type);
+        if (auditedAaveRebasingFlows != null) {
+            return auditedAaveRebasingFlows;
+        }
+        List<NormalizedTransaction.Flow> routeFundedBridgeSourceFlows =
+                routeFundedBridgeSourceFlows(view, movementLegs, type);
+        if (routeFundedBridgeSourceFlows != null) {
+            return routeFundedBridgeSourceFlows;
+        }
         List<NormalizedTransaction.Flow> flows = new ArrayList<>();
         if (type == NormalizedTransactionType.APPROVE) {
             return flows;
@@ -45,6 +75,200 @@ public final class OnChainClassificationSupport {
             flows.add(flow);
         }
         return flows;
+    }
+
+    public static List<NormalizedTransaction.Flow> toFlows(
+            List<RawLeg> movementLegs,
+            NormalizedTransactionType type
+    ) {
+        return toFlows(null, movementLegs, type);
+    }
+
+    private static List<NormalizedTransaction.Flow> auditedAaveRebasingFlows(
+            List<RawLeg> movementLegs,
+            NormalizedTransactionType type
+    ) {
+        if (movementLegs == null
+                || movementLegs.isEmpty()
+                || (type != NormalizedTransactionType.LENDING_DEPOSIT
+                && type != NormalizedTransactionType.LENDING_WITHDRAW)) {
+            return null;
+        }
+        List<RawLeg> effectiveLegs = movementLegs.stream()
+                .filter(leg -> leg != null && !leg.fee() && leg.quantityDelta() != null && leg.quantityDelta().signum() != 0)
+                .toList();
+        if (effectiveLegs.size() != 2) {
+            return null;
+        }
+
+        RawLeg outbound = effectiveLegs.stream()
+                .filter(leg -> leg.quantityDelta().signum() < 0)
+                .findFirst()
+                .orElse(null);
+        RawLeg inbound = effectiveLegs.stream()
+                .filter(leg -> leg.quantityDelta().signum() > 0)
+                .findFirst()
+                .orElse(null);
+        if (outbound == null || inbound == null) {
+            return null;
+        }
+
+        if (type == NormalizedTransactionType.LENDING_DEPOSIT) {
+            if (!isAuditedAaveReceipt(outbound) && isAuditedAaveReceipt(inbound)
+                    && sameAuditedAaveEthFamily(outbound, inbound)) {
+                BigDecimal principalQuantity = outbound.quantityDelta().abs();
+                BigDecimal receiptQuantity = inbound.quantityDelta().abs();
+                BigDecimal excessQuantity = receiptQuantity.subtract(principalQuantity);
+                if (excessQuantity.signum() <= 0) {
+                    return null;
+                }
+                List<NormalizedTransaction.Flow> flows = new ArrayList<>();
+                flows.add(buildFlow(
+                        NormalizedLegRole.TRANSFER,
+                        outbound.assetContract(),
+                        outbound.assetSymbol(),
+                        outbound.quantityDelta()
+                ));
+                flows.add(buildFlow(
+                        NormalizedLegRole.TRANSFER,
+                        inbound.assetContract(),
+                        inbound.assetSymbol(),
+                        principalQuantity
+                ));
+                flows.add(buildFlow(
+                        NormalizedLegRole.BUY,
+                        inbound.assetContract(),
+                        inbound.assetSymbol(),
+                        excessQuantity
+                ));
+                appendFeeFlows(flows, movementLegs);
+                return flows;
+            }
+            return null;
+        }
+
+        if (isAuditedAaveReceipt(outbound) && !isAuditedAaveReceipt(inbound)
+                && sameAuditedAaveEthFamily(outbound, inbound)) {
+            BigDecimal receiptQuantity = outbound.quantityDelta().abs();
+            BigDecimal principalQuantity = inbound.quantityDelta().abs();
+            BigDecimal excessQuantity = principalQuantity.subtract(receiptQuantity);
+            if (excessQuantity.signum() <= 0) {
+                return null;
+            }
+            List<NormalizedTransaction.Flow> flows = new ArrayList<>();
+            flows.add(buildFlow(
+                    NormalizedLegRole.TRANSFER,
+                    outbound.assetContract(),
+                    outbound.assetSymbol(),
+                    outbound.quantityDelta()
+            ));
+            flows.add(buildFlow(
+                    NormalizedLegRole.TRANSFER,
+                    inbound.assetContract(),
+                    inbound.assetSymbol(),
+                    receiptQuantity
+            ));
+            flows.add(buildFlow(
+                    NormalizedLegRole.BUY,
+                    inbound.assetContract(),
+                    inbound.assetSymbol(),
+                    excessQuantity
+            ));
+            appendFeeFlows(flows, movementLegs);
+            return flows;
+        }
+        return null;
+    }
+
+    private static List<NormalizedTransaction.Flow> routeFundedBridgeSourceFlows(
+            OnChainRawTransactionView view,
+            List<RawLeg> movementLegs,
+            NormalizedTransactionType type
+    ) {
+        if (type != NormalizedTransactionType.BRIDGE_OUT
+                || view == null
+                || movementLegs == null
+                || movementLegs.isEmpty()
+                || !isRouteFundedBridgeSource(view)) {
+            return null;
+        }
+        RouteFundedBridgeSourceSelection selection = selectRouteFundedBridgeSourceLegs(view, movementLegs);
+        if (selection == null) {
+            return null;
+        }
+        List<NormalizedTransaction.Flow> flows = new ArrayList<>();
+        flows.add(buildFlow(
+                NormalizedLegRole.TRANSFER,
+                selection.principalLeg().assetContract(),
+                selection.principalLeg().assetSymbol(),
+                selection.principalLeg().quantityDelta()
+        ));
+        flows.add(buildFlow(
+                NormalizedLegRole.FEE,
+                selection.routeFundingLeg().assetContract(),
+                selection.routeFundingLeg().assetSymbol(),
+                selection.routeFundingLeg().quantityDelta()
+        ));
+        appendFeeFlows(flows, movementLegs);
+        return flows;
+    }
+
+    private static boolean isRouteFundedBridgeSource(OnChainRawTransactionView view) {
+        if (view == null || view.rawValue() == null || view.rawValue().signum() <= 0) {
+            return false;
+        }
+        if (LiFiRouteSupport.hasRouteTag(view)) {
+            return true;
+        }
+        if (BRIDGE_ROUTE_START_SELECTORS.contains(view.methodId())) {
+            return true;
+        }
+        return BRIDGE_ROUTE_START_FUNCTION_KEYS.contains(functionKey(view.functionName()));
+    }
+
+    private static RouteFundedBridgeSourceSelection selectRouteFundedBridgeSourceLegs(
+            OnChainRawTransactionView view,
+            List<RawLeg> movementLegs
+    ) {
+        List<RawLeg> effectiveLegs = movementLegs.stream()
+                .filter(leg -> leg != null
+                        && !leg.fee()
+                        && leg.quantityDelta() != null
+                        && leg.quantityDelta().signum() < 0)
+                .toList();
+        if (effectiveLegs.size() != 2) {
+            return null;
+        }
+        BigDecimal rawValueQuantity = nativeValueQuantity(view.rawValue());
+        if (rawValueQuantity == null || rawValueQuantity.signum() <= 0) {
+            return null;
+        }
+
+        RawLeg routeFundingLeg = effectiveLegs.stream()
+                .filter(leg -> leg.assetContract() == null || leg.assetContract().isBlank())
+                .filter(leg -> leg.quantityDelta().abs().compareTo(rawValueQuantity) == 0)
+                .findFirst()
+                .orElse(null);
+        if (routeFundingLeg == null) {
+            return null;
+        }
+
+        RawLeg principalLeg = effectiveLegs.stream()
+                .filter(leg -> leg != routeFundingLeg)
+                .filter(leg -> leg.assetContract() != null && !leg.assetContract().isBlank())
+                .findFirst()
+                .orElse(null);
+        if (principalLeg == null) {
+            return null;
+        }
+        return new RouteFundedBridgeSourceSelection(principalLeg, routeFundingLeg);
+    }
+
+    private static BigDecimal nativeValueQuantity(BigInteger rawValue) {
+        if (rawValue == null || rawValue.signum() <= 0) {
+            return null;
+        }
+        return new BigDecimal(rawValue).movePointLeft(18);
     }
 
     public static NormalizedTransactionStatus initialStatus(
@@ -184,6 +408,50 @@ public final class OnChainClassificationSupport {
                 && ZKSYNC_NATIVE_TOKEN_CONTRACT.equalsIgnoreCase(leg.assetContract());
     }
 
+    private static boolean isAuditedAaveReceipt(RawLeg leg) {
+        if (leg == null || leg.assetSymbol() == null) {
+            return false;
+        }
+        return AUDITED_AAVE_ETH_RECEIPT_SYMBOLS.contains(leg.assetSymbol().trim().toUpperCase(Locale.ROOT));
+    }
+
+    private static boolean sameAuditedAaveEthFamily(RawLeg left, RawLeg right) {
+        String leftIdentity = AccountingAssetFamilySupport.continuityIdentity(left.assetSymbol(), left.assetContract());
+        String rightIdentity = AccountingAssetFamilySupport.continuityIdentity(right.assetSymbol(), right.assetContract());
+        return Objects.equals("FAMILY:ETH", leftIdentity) && Objects.equals(leftIdentity, rightIdentity);
+    }
+
+    private static void appendFeeFlows(
+            List<NormalizedTransaction.Flow> flows,
+            List<RawLeg> movementLegs
+    ) {
+        for (RawLeg leg : movementLegs) {
+            if (leg == null || !leg.fee() || leg.quantityDelta() == null || leg.quantityDelta().signum() == 0) {
+                continue;
+            }
+            flows.add(buildFlow(
+                    NormalizedLegRole.FEE,
+                    leg.assetContract(),
+                    leg.assetSymbol(),
+                    leg.quantityDelta()
+            ));
+        }
+    }
+
+    private static NormalizedTransaction.Flow buildFlow(
+            NormalizedLegRole role,
+            String assetContract,
+            String assetSymbol,
+            BigDecimal quantityDelta
+    ) {
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(role);
+        flow.setAssetContract(assetContract);
+        flow.setAssetSymbol(assetSymbol);
+        flow.setQuantityDelta(quantityDelta);
+        return flow;
+    }
+
     private static boolean isLiquidStakingContinuityLeg(RawLeg leg, Set<String> liquidStakingFamilies) {
         if (leg == null || liquidStakingFamilies.isEmpty()) {
             return false;
@@ -224,5 +492,23 @@ public final class OnChainClassificationSupport {
             }
         }
         return matchedFamilies;
+    }
+
+    private static String functionKey(String functionName) {
+        if (functionName == null) {
+            return "";
+        }
+        String normalized = functionName.trim().toLowerCase(Locale.ROOT);
+        int signatureSeparator = normalized.indexOf('(');
+        if (signatureSeparator > 0) {
+            return normalized.substring(0, signatureSeparator);
+        }
+        return normalized;
+    }
+
+    private record RouteFundedBridgeSourceSelection(
+            RawLeg principalLeg,
+            RawLeg routeFundingLeg
+    ) {
     }
 }

@@ -22,7 +22,27 @@ public record SessionAssetLedgerResponse(
             BigDecimal totalCostBasisUsd,
             BigDecimal avcoUsd,
             BigDecimal realisedPnlUsd,
-            BigDecimal gasPaidUsd
+            BigDecimal gasPaidUsd,
+            List<UncoveredBucket> uncoveredBuckets
+    ) {
+    }
+
+    public record UncoveredBucket(
+            String walletAddress,
+            String networkId,
+            String assetSymbol,
+            String assetContract,
+            BigDecimal quantity,
+            BigDecimal coveredQuantity,
+            BigDecimal uncoveredQuantity,
+            String uncoveredReason,
+            String latestTxHash,
+            String latestNormalizedType,
+            String latestBasisEffect,
+            String latestProtocolName,
+            Boolean hasIncompleteHistory,
+            Boolean hasUnresolvedFlags,
+            Integer unresolvedFlagCount
     ) {
     }
 

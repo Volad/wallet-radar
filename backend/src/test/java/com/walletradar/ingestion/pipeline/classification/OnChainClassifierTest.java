@@ -230,6 +230,76 @@ class OnChainClassifierTest {
     }
 
     @Test
+    @DisplayName("Aave deposit with rebasing receipt excess splits principal continuity from accrued receipt")
+    void aaveDepositWithRebasingReceiptExcessSplitsPrincipalContinuityFromAccrual() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.ARBITRUM);
+        rawTransaction.getRawData().put("methodId", "0x617ba037");
+        rawTransaction.getRawData().put("functionName", "supply(address,uint256,address,uint16)");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0x82af49447d8a07e3bd95bd0d56f35241523fbab1")
+                        .append("tokenSymbol", "WETH")
+                        .append("tokenDecimal", "18")
+                        .append("from", WALLET)
+                        .append("to", PROTOCOL)
+                        .append("value", "798000000000000000"),
+                new Document("contractAddress", "0xe50fa9b3c56ffb159cb0fca61f5c9d750e8128c8")
+                        .append("tokenSymbol", "aArbWETH")
+                        .append("tokenDecimal", "18")
+                        .append("from", PROTOCOL)
+                        .append("to", WALLET)
+                        .append("value", "798355982952963328")
+        )).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.LENDING_DEPOSIT);
+        assertThat(result.flows()).filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
+                .extracting(flow -> flow.getAssetSymbol()
+                        + ":" + flow.getRole()
+                        + ":" + flow.getQuantityDelta().stripTrailingZeros().toPlainString())
+                .containsExactlyInAnyOrder(
+                        "WETH:TRANSFER:-0.798",
+                        "aArbWETH:TRANSFER:0.798",
+                        "aArbWETH:BUY:0.000355982952963328"
+                );
+    }
+
+    @Test
+    @DisplayName("Aave withdraw with rebasing underlying excess splits principal continuity from accrued receipt")
+    void aaveWithdrawWithRebasingUnderlyingExcessSplitsPrincipalContinuityFromAccrual() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.ARBITRUM);
+        rawTransaction.getRawData().put("methodId", "0x69328dec");
+        rawTransaction.getRawData().put("functionName", "withdraw(address,uint256,address)");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0xe50fa9b3c56ffb159cb0fca61f5c9d750e8128c8")
+                        .append("tokenSymbol", "aArbWETH")
+                        .append("tokenDecimal", "18")
+                        .append("from", WALLET)
+                        .append("to", "0x0000000000000000000000000000000000000000")
+                        .append("value", "3045871023828205936"),
+                new Document("contractAddress", "0x82af49447d8a07e3bd95bd0d56f35241523fbab1")
+                        .append("tokenSymbol", "WETH")
+                        .append("tokenDecimal", "18")
+                        .append("from", PROTOCOL)
+                        .append("to", WALLET)
+                        .append("value", "3048250993852645231")
+        )).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.LENDING_WITHDRAW);
+        assertThat(result.flows()).filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
+                .extracting(flow -> flow.getAssetSymbol()
+                        + ":" + flow.getRole()
+                        + ":" + flow.getQuantityDelta().stripTrailingZeros().toPlainString())
+                .containsExactlyInAnyOrder(
+                        "aArbWETH:TRANSFER:-3.045871023828205936",
+                        "WETH:TRANSFER:3.045871023828205936",
+                        "WETH:BUY:0.002379970024439295"
+                );
+    }
+
+    @Test
     @DisplayName("plasma native symbol is XPL including gas leg")
     void plasmaNativeSymbolIsXpl() {
         RawTransaction rawTransaction = baseRaw(NetworkId.PLASMA);
@@ -1399,6 +1469,58 @@ class OnChainClassifierTest {
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.BRIDGE_OUT);
         assertThat(result.missingDataReasons()).doesNotContain(ClarificationEligibilitySupport.BRIDGE_PAIR_EVIDENCE_REQUIRED);
+    }
+
+    @Test
+    @DisplayName("route-funded squid bridge source keeps token principal as transfer and downgrades tx-value funding to fee")
+    void routeFundedSquidBridgeSourceDowngradesTxValueFundingToFee() {
+        String lifiDiamond = "0x1231deb6f5749ef6ce6943a275a1d3e7486f4eae";
+        RawTransaction rawTransaction = baseRaw(NetworkId.MANTLE);
+        rawTransaction.getRawData().put("to", lifiDiamond);
+        rawTransaction.getRawData().put("methodId", "0xa8f66666");
+        rawTransaction.getRawData().put(
+                "functionName",
+                "swapAndStartBridgeTokensViaSquid(tuple _bridgeData,tuple[] _swapData,tuple _squidData)"
+        );
+        rawTransaction.getRawData().put("value", "84340262615309958");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", TOKEN_A)
+                        .append("tokenSymbol", "USDT")
+                        .append("tokenDecimal", "6")
+                        .append("from", WALLET)
+                        .append("to", lifiDiamond)
+                        .append("value", "21814030")
+        )).append("internalTransfers", List.of()));
+        when(protocolRegistryService.lookup(NetworkId.MANTLE, lifiDiamond))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        lifiDiamond,
+                        Set.of(NetworkId.MANTLE),
+                        ProtocolRegistryFamily.BRIDGE,
+                        ProtocolRegistryRole.BRIDGE_ENTRY,
+                        null,
+                        ConfidenceLevel.HIGH,
+                        "LiFi",
+                        "V1",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.BRIDGE_OUT);
+        assertThat(result.flows())
+                .filteredOn(flow -> flow.getRole() == NormalizedLegRole.TRANSFER)
+                .singleElement()
+                .satisfies(flow -> {
+                    assertThat(flow.getAssetSymbol()).isEqualTo("USDT");
+                    assertThat(flow.getQuantityDelta()).isEqualByComparingTo("-21.81403");
+                });
+        assertThat(result.flows())
+                .filteredOn(flow -> flow.getRole() == NormalizedLegRole.FEE)
+                .anySatisfy(flow -> {
+                    assertThat(flow.getAssetSymbol()).isEqualTo("MNT");
+                    assertThat(flow.getQuantityDelta()).isEqualByComparingTo("-0.084340262615309958");
+                });
     }
 
     @Test
@@ -6113,10 +6235,13 @@ class OnChainClassifierTest {
         assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.METHOD_ID);
         assertThat(result.protocolName()).isEqualTo("Aave");
         assertThat(result.flows()).filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
-                .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getQuantityDelta().stripTrailingZeros().toPlainString())
+                .extracting(flow -> flow.getAssetSymbol()
+                        + ":" + flow.getRole()
+                        + ":" + flow.getQuantityDelta().stripTrailingZeros().toPlainString())
                 .containsExactlyInAnyOrder(
-                        "WETH:-0.966986134250302027",
-                        "aZksWETH:0.96698658724837732"
+                        "WETH:TRANSFER:-0.966986134250302027",
+                        "aZksWETH:TRANSFER:0.966986134250302027",
+                        "aZksWETH:BUY:0.000000452998075293"
                 );
     }
 

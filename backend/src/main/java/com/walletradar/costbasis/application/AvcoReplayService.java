@@ -19,6 +19,7 @@ import java.math.MathContext;
 import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -36,22 +37,41 @@ import java.util.Set;
 public class AvcoReplayService {
 
     private static final MathContext MC = MathContext.DECIMAL128;
+    private static final BigDecimal CORRELATED_TRANSFER_RELATIVE_TOLERANCE = new BigDecimal("0.000001");
+    private static final BigDecimal CORRELATED_TRANSFER_ABSOLUTE_TOLERANCE = new BigDecimal("0.00000001");
+    private static final BigDecimal CORRELATED_TRANSFER_MAX_TOLERANCE = new BigDecimal("0.0001");
+    private static final Map<String, String> CORRELATED_TRANSFER_SYMBOL_ALIASES = Map.ofEntries(
+            Map.entry("USDT0", "USDT"),
+            Map.entry("USD₮0", "USDT")
+    );
 
     private final ConfirmedReplayQueryService confirmedReplayQueryService;
     private final NormalizedTransactionRepository normalizedTransactionRepository;
     private final AssetLedgerPointRepository assetLedgerPointRepository;
 
     public int replayConfirmed() {
-        List<NormalizedTransaction> ordered = confirmedReplayQueryService.loadOrderedConfirmed();
+        return replayConfirmed(null, null);
+    }
+
+    public int replayConfirmed(String accountingUniverseId, Collection<String> memberRefs) {
+        List<NormalizedTransaction> ordered = memberRefs == null || memberRefs.isEmpty()
+                ? confirmedReplayQueryService.loadOrderedConfirmed()
+                : confirmedReplayQueryService.loadOrderedConfirmed(memberRefs);
+        PassThroughCorridorPlan passThroughCorridorPlan = buildPassThroughCorridorPlan(ordered);
         Map<AssetKey, PositionState> positions = new LinkedHashMap<>();
         Map<ContinuityKey, ContinuityBucket> continuityBuckets = new LinkedHashMap<>();
         Map<String, Deque<CarryTransfer>> pendingTransfers = new LinkedHashMap<>();
+        Map<String, CarryTransfer> reservedPassThroughCarries = new LinkedHashMap<>();
         Map<String, AsyncLifecycleBucket> asyncLifecycleBuckets = new LinkedHashMap<>();
         Map<String, AsyncSpotOrderBucket> asyncSpotOrderBuckets = new LinkedHashMap<>();
         List<NormalizedTransaction> updatedTransactions = new ArrayList<>();
         List<AssetLedgerPoint> ledgerPoints = new ArrayList<>();
         Instant now = Instant.now();
-        LedgerPointCollector ledgerPointCollector = new LedgerPointCollector(ledgerPoints, now);
+        LedgerPointCollector ledgerPointCollector = new LedgerPointCollector(
+                normalizedAccountingUniverseId(accountingUniverseId),
+                ledgerPoints,
+                now
+        );
 
         for (NormalizedTransaction transaction : ordered) {
             NormalizedTransaction replayed = copyTransaction(transaction);
@@ -71,6 +91,25 @@ public class AvcoReplayService {
                         positions,
                         continuityBuckets,
                         pendingTransfers,
+                        passThroughCorridorPlan,
+                        reservedPassThroughCarries,
+                        asyncLifecycleBuckets,
+                        asyncSpotOrderBuckets,
+                        ledgerPointCollector
+                );
+                updatedTransactions.add(replayed);
+                continue;
+            }
+            SimpleFamilyCustodySelection familyCustodySelection = selectSimpleFamilyEquivalentCustodyFlows(replayed);
+            if (!familyCustodySelection.pairs().isEmpty()) {
+                applySimpleFamilyEquivalentCustodyFlows(
+                        replayed,
+                        familyCustodySelection,
+                        positions,
+                        continuityBuckets,
+                        pendingTransfers,
+                        passThroughCorridorPlan,
+                        reservedPassThroughCarries,
                         asyncLifecycleBuckets,
                         asyncSpotOrderBuckets,
                         ledgerPointCollector
@@ -87,6 +126,8 @@ public class AvcoReplayService {
                         positions,
                         continuityBuckets,
                         pendingTransfers,
+                        passThroughCorridorPlan,
+                        reservedPassThroughCarries,
                         asyncLifecycleBuckets,
                         asyncSpotOrderBuckets,
                         ledgerPointCollector
@@ -95,12 +136,22 @@ public class AvcoReplayService {
             updatedTransactions.add(replayed);
         }
 
-        assetLedgerPointRepository.deleteAll();
+        if (accountingUniverseId == null || accountingUniverseId.isBlank()) {
+            assetLedgerPointRepository.deleteAll();
+        } else {
+            assetLedgerPointRepository.deleteAllByAccountingUniverseId(accountingUniverseId);
+        }
         if (!ledgerPoints.isEmpty()) {
             assetLedgerPointRepository.saveAll(ledgerPoints);
         }
         normalizedTransactionRepository.saveAll(updatedTransactions);
         return updatedTransactions.size();
+    }
+
+    private String normalizedAccountingUniverseId(String accountingUniverseId) {
+        return accountingUniverseId == null || accountingUniverseId.isBlank()
+                ? "GLOBAL"
+                : accountingUniverseId.trim();
     }
 
     private boolean isLiquidStakingContinuityTransaction(NormalizedTransaction transaction) {
@@ -113,6 +164,8 @@ public class AvcoReplayService {
             Map<AssetKey, PositionState> positions,
             Map<ContinuityKey, ContinuityBucket> continuityBuckets,
             Map<String, Deque<CarryTransfer>> pendingTransfers,
+            PassThroughCorridorPlan passThroughCorridorPlan,
+            Map<String, CarryTransfer> reservedPassThroughCarries,
             Map<String, AsyncLifecycleBucket> asyncLifecycleBuckets,
             Map<String, AsyncSpotOrderBucket> asyncSpotOrderBuckets,
             LedgerPointCollector ledgerPointCollector
@@ -127,6 +180,8 @@ public class AvcoReplayService {
                         positions,
                         continuityBuckets,
                         pendingTransfers,
+                        passThroughCorridorPlan,
+                        reservedPassThroughCarries,
                         asyncLifecycleBuckets,
                         asyncSpotOrderBuckets,
                         ledgerPointCollector
@@ -185,6 +240,8 @@ public class AvcoReplayService {
                     positions,
                     continuityBuckets,
                     pendingTransfers,
+                    passThroughCorridorPlan,
+                    reservedPassThroughCarries,
                     asyncLifecycleBuckets,
                     asyncSpotOrderBuckets,
                     ledgerPointCollector
@@ -338,6 +395,155 @@ public class AvcoReplayService {
         return new LiquidStakingFlowSelection(outbound, inbound);
     }
 
+    private SimpleFamilyCustodySelection selectSimpleFamilyEquivalentCustodyFlows(NormalizedTransaction transaction) {
+        if (transaction == null
+                || transaction.getFlows() == null
+                || transaction.getFlows().isEmpty()
+                || !isSimpleFamilyEquivalentCustodyType(transaction.getType())) {
+            return SimpleFamilyCustodySelection.empty();
+        }
+
+        Map<String, List<IndexedFlow>> flowsByFamily = new LinkedHashMap<>();
+        for (IndexedFlow indexedFlow : indexedFlows(transaction)) {
+            NormalizedTransaction.Flow flow = indexedFlow.flow();
+            if (flow == null
+                    || flow.getRole() != NormalizedLegRole.TRANSFER
+                    || flow.getQuantityDelta() == null
+                    || flow.getQuantityDelta().signum() == 0) {
+                continue;
+            }
+            String continuityIdentity = AccountingAssetFamilySupport.continuityIdentity(flow);
+            if (continuityIdentity == null || !continuityIdentity.startsWith("FAMILY:")) {
+                continue;
+            }
+            flowsByFamily.computeIfAbsent(continuityIdentity, ignored -> new ArrayList<>()).add(indexedFlow);
+        }
+
+        List<SimpleFamilyCustodyPair> pairs = new ArrayList<>();
+        Map<Integer, IndexedFlow> selectedByIndex = new LinkedHashMap<>();
+        for (List<IndexedFlow> familyFlows : flowsByFamily.values()) {
+            if (familyFlows.size() != 2) {
+                continue;
+            }
+            IndexedFlow first = familyFlows.get(0);
+            IndexedFlow second = familyFlows.get(1);
+            if (first.flow().getQuantityDelta().signum() == second.flow().getQuantityDelta().signum()) {
+                continue;
+            }
+            if (Objects.equals(assetIdentity(transaction, first.flow()), assetIdentity(transaction, second.flow()))) {
+                continue;
+            }
+            IndexedFlow outbound = first.flow().getQuantityDelta().signum() < 0 ? first : second;
+            IndexedFlow inbound = outbound == first ? second : first;
+            pairs.add(new SimpleFamilyCustodyPair(outbound, inbound));
+            selectedByIndex.put(outbound.index(), outbound);
+            selectedByIndex.put(inbound.index(), inbound);
+        }
+        if (pairs.isEmpty()) {
+            return SimpleFamilyCustodySelection.empty();
+        }
+        pairs.sort(java.util.Comparator.comparingInt(pair -> Math.min(pair.outbound().index(), pair.inbound().index())));
+        return new SimpleFamilyCustodySelection(pairs, selectedByIndex);
+    }
+
+    private boolean isSimpleFamilyEquivalentCustodyType(NormalizedTransactionType type) {
+        if (type == null) {
+            return false;
+        }
+        return switch (type) {
+            case PROTOCOL_CUSTODY_DEPOSIT,
+                    PROTOCOL_CUSTODY_WITHDRAW,
+                    LENDING_DEPOSIT,
+                    LENDING_WITHDRAW,
+                    WRAP,
+                    UNWRAP,
+                    VAULT_DEPOSIT,
+                    VAULT_WITHDRAW -> true;
+            default -> false;
+        };
+    }
+
+    private void applySimpleFamilyEquivalentCustodyFlows(
+            NormalizedTransaction transaction,
+            SimpleFamilyCustodySelection selection,
+            Map<AssetKey, PositionState> positions,
+            Map<ContinuityKey, ContinuityBucket> continuityBuckets,
+            Map<String, Deque<CarryTransfer>> pendingTransfers,
+            PassThroughCorridorPlan passThroughCorridorPlan,
+            Map<String, CarryTransfer> reservedPassThroughCarries,
+            Map<String, AsyncLifecycleBucket> asyncLifecycleBuckets,
+            Map<String, AsyncSpotOrderBucket> asyncSpotOrderBuckets,
+            LedgerPointCollector ledgerPointCollector
+    ) {
+        for (SimpleFamilyCustodyPair pair : selection.pairs()) {
+            IndexedFlow outbound = pair.outbound();
+            IndexedFlow inbound = pair.inbound();
+
+            AssetKey outboundAssetKey = assetKey(transaction, outbound.flow());
+            PositionState outboundPosition = positions.computeIfAbsent(outboundAssetKey, ignored -> new PositionState(outboundAssetKey));
+            outboundPosition.lastEventTimestamp = laterOf(outboundPosition.lastEventTimestamp, transaction.getBlockTimestamp());
+            PositionSnapshot outboundBefore = snapshot(outboundPosition);
+            CarryTransfer carry = removeTransferCarry(
+                    transaction,
+                    outbound.flow(),
+                    outbound.index(),
+                    outboundPosition,
+                    passThroughCorridorPlan,
+                    reservedPassThroughCarries
+            );
+            ledgerPointCollector.record(
+                    transaction,
+                    outbound.flow(),
+                    outbound.index(),
+                    outboundPosition.assetKey,
+                    outboundBefore,
+                    outboundPosition,
+                    AssetLedgerPoint.BasisEffect.REALLOCATE_OUT
+            );
+
+            AssetKey inboundAssetKey = assetKey(transaction, inbound.flow());
+            PositionState inboundPosition = positions.computeIfAbsent(inboundAssetKey, ignored -> new PositionState(inboundAssetKey));
+            inboundPosition.lastEventTimestamp = laterOf(inboundPosition.lastEventTimestamp, transaction.getBlockTimestamp());
+            PositionSnapshot inboundBefore = snapshot(inboundPosition);
+            CarryTransfer effectiveCarry = bridgeInboundCarry(carry, inbound.flow().getQuantityDelta().abs(), inboundPosition.assetKey);
+            restoreToPosition(
+                    inbound.flow().getQuantityDelta().abs(),
+                    inboundPosition,
+                    effectiveCarry.costBasisUsd(),
+                    effectiveCarry.uncoveredQuantity(),
+                    effectiveCarry.avco()
+            );
+            ledgerPointCollector.record(
+                    transaction,
+                    inbound.flow(),
+                    inbound.index(),
+                    inboundPosition.assetKey,
+                    inboundBefore,
+                    inboundPosition,
+                    AssetLedgerPoint.BasisEffect.REALLOCATE_IN
+            );
+        }
+
+        for (IndexedFlow indexedFlow : indexedFlows(transaction)) {
+            if (selection.selectedByIndex().containsKey(indexedFlow.index())) {
+                continue;
+            }
+            applyFlow(
+                    transaction,
+                    indexedFlow.flow(),
+                    indexedFlow.index(),
+                    positions,
+                    continuityBuckets,
+                    pendingTransfers,
+                    passThroughCorridorPlan,
+                    reservedPassThroughCarries,
+                    asyncLifecycleBuckets,
+                    asyncSpotOrderBuckets,
+                    ledgerPointCollector
+            );
+        }
+    }
+
     private List<IndexedFlow> indexedFlows(NormalizedTransaction transaction) {
         List<IndexedFlow> indexed = new ArrayList<>();
         if (transaction == null || transaction.getFlows() == null) {
@@ -356,6 +562,8 @@ public class AvcoReplayService {
             Map<AssetKey, PositionState> positions,
             Map<ContinuityKey, ContinuityBucket> continuityBuckets,
             Map<String, Deque<CarryTransfer>> pendingTransfers,
+            PassThroughCorridorPlan passThroughCorridorPlan,
+            Map<String, CarryTransfer> reservedPassThroughCarries,
             Map<String, AsyncLifecycleBucket> asyncLifecycleBuckets,
             Map<String, AsyncSpotOrderBucket> asyncSpotOrderBuckets,
             LedgerPointCollector ledgerPointCollector
@@ -448,6 +656,8 @@ public class AvcoReplayService {
                     positions,
                     continuityBuckets,
                     pendingTransfers,
+                    passThroughCorridorPlan,
+                    reservedPassThroughCarries,
                     ledgerPointCollector
             );
             ledgerPointCollector.record(transaction, flow, flowIndex, position.assetKey, before, position, basisEffect);
@@ -467,6 +677,8 @@ public class AvcoReplayService {
                         positions,
                         continuityBuckets,
                         pendingTransfers,
+                        passThroughCorridorPlan,
+                        reservedPassThroughCarries,
                         ledgerPointCollector
                 );
                 ledgerPointCollector.record(transaction, flow, flowIndex, position.assetKey, before, position, basisEffect);
@@ -1104,15 +1316,53 @@ public class AvcoReplayService {
             Map<AssetKey, PositionState> positions,
             Map<ContinuityKey, ContinuityBucket> continuityBuckets,
             Map<String, Deque<CarryTransfer>> pendingTransfers,
+            PassThroughCorridorPlan passThroughCorridorPlan,
+            Map<String, CarryTransfer> reservedPassThroughCarries,
             LedgerPointCollector ledgerPointCollector
     ) {
+        if (isLinkedBridgeContinuityTransfer(transaction, flow)) {
+            return applyLinkedBridgeTransfer(
+                    transaction,
+                    flow,
+                    flowIndex,
+                    position,
+                    positions,
+                    pendingTransfers,
+                    passThroughCorridorPlan,
+                    reservedPassThroughCarries,
+                    ledgerPointCollector
+            );
+        }
+        if (isLinkedBridgeSettlementTransfer(transaction, flow)) {
+            return applyLinkedBridgeSettlementTransfer(
+                    transaction,
+                    flow,
+                    flowIndex,
+                    position,
+                    positions,
+                    pendingTransfers,
+                    passThroughCorridorPlan,
+                    reservedPassThroughCarries,
+                    ledgerPointCollector
+            );
+        }
         if (isFamilyEquivalentCustodyTransfer(transaction, flow)) {
             ContinuityBucket bucket = continuityBuckets.computeIfAbsent(
                     continuityKey(transaction, flow),
                     ignored -> new ContinuityBucket()
             );
             if (flow.getQuantityDelta().signum() < 0) {
-                moveToContinuityBucket(flow, position, bucket);
+                moveToContinuityBucket(
+                        removeTransferCarry(
+                                transaction,
+                                flow,
+                                flowIndex,
+                                position,
+                                passThroughCorridorPlan,
+                                reservedPassThroughCarries
+                        ),
+                        bucket
+                );
                 return AssetLedgerPoint.BasisEffect.REALLOCATE_OUT;
             }
             restoreFromContinuityBucket(flow, position, bucket);
@@ -1120,8 +1370,14 @@ public class AvcoReplayService {
         }
         if (isBucketOutbound(transaction, flow)) {
             moveToContinuityBucket(
-                    flow,
-                    position,
+                    removeTransferCarry(
+                            transaction,
+                            flow,
+                            flowIndex,
+                            position,
+                            passThroughCorridorPlan,
+                            reservedPassThroughCarries
+                    ),
                     continuityBuckets.computeIfAbsent(continuityKey(transaction, flow), ignored -> new ContinuityBucket())
             );
             return AssetLedgerPoint.BasisEffect.REALLOCATE_OUT;
@@ -1142,10 +1398,18 @@ public class AvcoReplayService {
         }
 
         if (flow.getQuantityDelta().signum() < 0) {
-            CarryTransfer carry = removeFromPosition(flow, position);
+            CarryTransfer carry = removeTransferCarry(
+                    transaction,
+                    flow,
+                    flowIndex,
+                    position,
+                    passThroughCorridorPlan,
+                    reservedPassThroughCarries
+            );
             Deque<CarryTransfer> queue = pendingTransfers.computeIfAbsent(transferKey, ignored -> new ArrayDeque<>());
-            if (!queue.isEmpty() && queue.peekFirst().pendingInbound()) {
-                CarryTransfer pendingInbound = queue.removeFirst();
+            int pendingInboundIndex = findUniqueCompatibleQueueIndex(queue, true, carry.quantity());
+            if (pendingInboundIndex >= 0) {
+                CarryTransfer pendingInbound = removeQueueElement(queue, pendingInboundIndex);
                 attachLateCarryToPendingInbound(
                         transaction,
                         flow,
@@ -1165,14 +1429,23 @@ public class AvcoReplayService {
         }
 
         Deque<CarryTransfer> queue = pendingTransfers.get(transferKey);
-        if (queue != null && !queue.isEmpty() && !queue.peekFirst().pendingInbound()) {
-            CarryTransfer carry = queue.removeFirst();
+        int carryIndex = findUniqueCompatibleQueueIndex(queue, false, flow.getQuantityDelta().abs());
+        if (carryIndex >= 0) {
+            CarryTransfer carry = removeQueueElement(queue, carryIndex);
+            CarryTransfer effectiveCarry = sliceCarryTransfer(carry, flow.getQuantityDelta().abs(), position.assetKey);
             restoreToPosition(
                     flow.getQuantityDelta().abs(),
                     position,
-                    carry.costBasisUsd(),
-                    carry.uncoveredQuantity(),
-                    carry.avco()
+                    effectiveCarry.costBasisUsd(),
+                    effectiveCarry.uncoveredQuantity(),
+                    effectiveCarry.avco()
+            );
+            reservePassThroughCarryIfPlanned(
+                    transaction,
+                    flowIndex,
+                    effectiveCarry,
+                    passThroughCorridorPlan,
+                    reservedPassThroughCarries
             );
             if (queue.isEmpty()) {
                 pendingTransfers.remove(transferKey);
@@ -1186,12 +1459,161 @@ public class AvcoReplayService {
         return continuityBasisEffect(transaction, flow);
     }
 
-    private void moveToContinuityBucket(
+    private AssetLedgerPoint.BasisEffect applyLinkedBridgeTransfer(
+            NormalizedTransaction transaction,
             NormalizedTransaction.Flow flow,
+            int flowIndex,
             PositionState position,
+            Map<AssetKey, PositionState> positions,
+            Map<String, Deque<CarryTransfer>> pendingTransfers,
+            PassThroughCorridorPlan passThroughCorridorPlan,
+            Map<String, CarryTransfer> reservedPassThroughCarries,
+            LedgerPointCollector ledgerPointCollector
+    ) {
+        String bridgeTransferKey = bridgeTransferKey(transaction, flow);
+        if (bridgeTransferKey == null) {
+            applyUnknownTransfer(flow, position);
+            return AssetLedgerPoint.BasisEffect.UNKNOWN;
+        }
+
+        if (flow.getQuantityDelta().signum() < 0) {
+            CarryTransfer carry = removeTransferCarry(
+                    transaction,
+                    flow,
+                    flowIndex,
+                    position,
+                    passThroughCorridorPlan,
+                    reservedPassThroughCarries
+            );
+            Deque<CarryTransfer> queue = pendingTransfers.computeIfAbsent(bridgeTransferKey, ignored -> new ArrayDeque<>());
+            int pendingInboundIndex = findUniqueBridgeQueueIndex(queue, true);
+            if (pendingInboundIndex >= 0) {
+                CarryTransfer pendingInbound = removeQueueElement(queue, pendingInboundIndex);
+                attachLateBridgeCarryToPendingInbound(
+                        transaction,
+                        flow,
+                        flowIndex,
+                        positions,
+                        pendingInbound,
+                        carry,
+                        ledgerPointCollector
+                );
+                if (queue.isEmpty()) {
+                    pendingTransfers.remove(bridgeTransferKey);
+                }
+                return continuityBasisEffect(transaction, flow);
+            }
+            queue.addLast(carry);
+            return continuityBasisEffect(transaction, flow);
+        }
+
+        Deque<CarryTransfer> queue = pendingTransfers.get(bridgeTransferKey);
+        int carryIndex = findUniqueBridgeQueueIndex(queue, false);
+        if (carryIndex >= 0) {
+            CarryTransfer carry = removeQueueElement(queue, carryIndex);
+            CarryTransfer effectiveCarry = bridgeInboundCarry(carry, flow.getQuantityDelta().abs(), position.assetKey);
+            restoreToPosition(
+                    flow.getQuantityDelta().abs(),
+                    position,
+                    effectiveCarry.costBasisUsd(),
+                    effectiveCarry.uncoveredQuantity(),
+                    effectiveCarry.avco()
+            );
+            reservePassThroughCarryIfPlanned(
+                    transaction,
+                    flowIndex,
+                    effectiveCarry,
+                    passThroughCorridorPlan,
+                    reservedPassThroughCarries
+            );
+            if (queue.isEmpty()) {
+                pendingTransfers.remove(bridgeTransferKey);
+            }
+            return continuityBasisEffect(transaction, flow);
+        }
+
+        materializePendingInbound(flow, position);
+        pendingTransfers.computeIfAbsent(bridgeTransferKey, ignored -> new ArrayDeque<>())
+                .addLast(CarryTransfer.pendingInbound(flow.getQuantityDelta().abs(), position.assetKey));
+        return continuityBasisEffect(transaction, flow);
+    }
+
+    private AssetLedgerPoint.BasisEffect applyLinkedBridgeSettlementTransfer(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow,
+            int flowIndex,
+            PositionState position,
+            Map<AssetKey, PositionState> positions,
+            Map<String, Deque<CarryTransfer>> pendingTransfers,
+            PassThroughCorridorPlan passThroughCorridorPlan,
+            Map<String, CarryTransfer> reservedPassThroughCarries,
+            LedgerPointCollector ledgerPointCollector
+    ) {
+        String settlementKey = bridgeSettlementKey(transaction, flow);
+        if (settlementKey == null) {
+            applyUnknownTransfer(flow, position);
+            return AssetLedgerPoint.BasisEffect.UNKNOWN;
+        }
+
+        if (flow.getQuantityDelta().signum() < 0) {
+            CarryTransfer carry = removeTransferCarry(
+                    transaction,
+                    flow,
+                    flowIndex,
+                    position,
+                    passThroughCorridorPlan,
+                    reservedPassThroughCarries
+            );
+            Deque<CarryTransfer> queue = pendingTransfers.computeIfAbsent(settlementKey, ignored -> new ArrayDeque<>());
+            int pendingInboundIndex = findUniqueBridgeQueueIndex(queue, true);
+            if (pendingInboundIndex >= 0) {
+                CarryTransfer pendingInbound = removeQueueElement(queue, pendingInboundIndex);
+                attachLateBridgeSettlementCarryToPendingInbound(
+                        transaction,
+                        flow,
+                        flowIndex,
+                        positions,
+                        pendingInbound,
+                        carry,
+                        ledgerPointCollector
+                );
+                if (queue.isEmpty()) {
+                    pendingTransfers.remove(settlementKey);
+                }
+                return routeSettlementBasisEffect(flow);
+            }
+            queue.addLast(carry);
+            return routeSettlementBasisEffect(flow);
+        }
+
+        Deque<CarryTransfer> queue = pendingTransfers.get(settlementKey);
+        int carryIndex = findUniqueBridgeQueueIndex(queue, false);
+        if (carryIndex >= 0) {
+            CarryTransfer carry = removeQueueElement(queue, carryIndex);
+            CarryTransfer effectiveCarry = bridgeSettlementInboundCarry(carry, flow.getQuantityDelta().abs(), position.assetKey);
+            restoreToPosition(
+                    flow.getQuantityDelta().abs(),
+                    position,
+                    effectiveCarry.costBasisUsd(),
+                    effectiveCarry.uncoveredQuantity(),
+                    effectiveCarry.avco()
+            );
+            if (queue.isEmpty()) {
+                pendingTransfers.remove(settlementKey);
+            }
+            return routeSettlementBasisEffect(flow);
+        }
+
+        materializePendingInbound(flow, position);
+        pendingTransfers.computeIfAbsent(settlementKey, ignored -> new ArrayDeque<>())
+                .addLast(CarryTransfer.pendingInbound(flow.getQuantityDelta().abs(), position.assetKey));
+        return routeSettlementBasisEffect(flow);
+    }
+
+    private void moveToContinuityBucket(
+            CarryTransfer carry,
             ContinuityBucket bucket
     ) {
-        CarryTransfer carry = removeFromPosition(flow, position);
         bucket.add(carry);
     }
 
@@ -1239,6 +1661,189 @@ public class AvcoReplayService {
                 false,
                 position.assetKey
         );
+    }
+
+    private CarryTransfer removeTransferCarry(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow,
+            int flowIndex,
+            PositionState position,
+            PassThroughCorridorPlan passThroughCorridorPlan,
+            Map<String, CarryTransfer> reservedPassThroughCarries
+    ) {
+        String flowRef = flowRef(transaction, flowIndex);
+        CarryTransfer reservedCarry = reservedPassThroughCarries.remove(flowRef);
+        if (reservedCarry == null) {
+            return removeFromPosition(flow, position);
+        }
+        BigDecimal requestedQuantity = flow.getQuantityDelta().abs();
+        CarryTransfer reservedPortion = sliceCarryTransfer(reservedCarry, requestedQuantity, position.assetKey);
+        consumeReservedCarry(position, reservedPortion);
+        BigDecimal remainingQuantity = nonNegative(requestedQuantity.subtract(reservedPortion.quantity(), MC));
+        if (remainingQuantity.signum() == 0) {
+            return reservedPortion;
+        }
+        CarryTransfer pooledRemainder = removeFromPosition(copyFlowWithQuantity(flow, flow.getQuantityDelta().signum() < 0
+                ? remainingQuantity.negate()
+                : remainingQuantity), position);
+        return mergeCarryTransfers(position.assetKey, reservedPortion, pooledRemainder);
+    }
+
+    private void reservePassThroughCarryIfPlanned(
+            NormalizedTransaction transaction,
+            int flowIndex,
+            CarryTransfer carry,
+            PassThroughCorridorPlan passThroughCorridorPlan,
+            Map<String, CarryTransfer> reservedPassThroughCarries
+    ) {
+        PassThroughCorridor corridor = passThroughCorridorPlan.byInboundFlowRef().get(flowRef(transaction, flowIndex));
+        if (corridor == null || carry == null || carry.quantity() == null || carry.quantity().signum() <= 0) {
+            return;
+        }
+        reservedPassThroughCarries.put(
+                corridor.outboundFlowRef(),
+                sliceCarryTransfer(carry, corridor.reservedQuantity(), carry.assetKey())
+        );
+    }
+
+    private CarryTransfer sliceCarryTransfer(
+            CarryTransfer carry,
+            BigDecimal requestedQuantity,
+            AssetKey assetKey
+    ) {
+        if (carry == null || requestedQuantity == null || requestedQuantity.signum() <= 0) {
+            return new CarryTransfer(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, null, false, assetKey);
+        }
+        BigDecimal effectiveQuantity = requestedQuantity.min(carry.quantity());
+        BigDecimal effectiveCoveredQuantity = effectiveQuantity.min(carry.coveredQuantity());
+        BigDecimal effectiveUncoveredQuantity = nonNegative(effectiveQuantity.subtract(effectiveCoveredQuantity, MC));
+        BigDecimal effectiveAvco = carry.avco();
+        BigDecimal effectiveCost = effectiveAvco == null
+                ? BigDecimal.ZERO
+                : effectiveCoveredQuantity.multiply(effectiveAvco, MC);
+        return new CarryTransfer(
+                effectiveQuantity,
+                effectiveCoveredQuantity,
+                effectiveUncoveredQuantity,
+                effectiveCost,
+                effectiveAvco,
+                false,
+                assetKey
+        );
+    }
+
+    private CarryTransfer bridgeInboundCarry(
+            CarryTransfer sourceCarry,
+            BigDecimal destinationQuantity,
+            AssetKey assetKey
+    ) {
+        if (sourceCarry == null || destinationQuantity == null || destinationQuantity.signum() <= 0) {
+            return new CarryTransfer(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, null, false, assetKey);
+        }
+        BigDecimal coveredQuantity = destinationQuantity.min(sourceCarry.coveredQuantity());
+        BigDecimal uncoveredQuantity = nonNegative(destinationQuantity.subtract(coveredQuantity, MC));
+        BigDecimal costBasisUsd = sourceCarry.costBasisUsd();
+        BigDecimal avco = coveredQuantity.signum() <= 0
+                ? null
+                : safeDivide(costBasisUsd, coveredQuantity);
+        return new CarryTransfer(
+                destinationQuantity,
+                coveredQuantity,
+                uncoveredQuantity,
+                costBasisUsd,
+                avco,
+                false,
+                assetKey
+        );
+    }
+
+    private CarryTransfer bridgeSettlementInboundCarry(
+            CarryTransfer sourceCarry,
+            BigDecimal destinationQuantity,
+            AssetKey assetKey
+    ) {
+        if (sourceCarry == null || destinationQuantity == null || destinationQuantity.signum() <= 0) {
+            return new CarryTransfer(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, null, false, assetKey);
+        }
+        BigDecimal sourceQuantity = sourceCarry.quantity();
+        if (sourceQuantity == null || sourceQuantity.signum() <= 0) {
+            return new CarryTransfer(
+                    destinationQuantity,
+                    BigDecimal.ZERO,
+                    destinationQuantity,
+                    BigDecimal.ZERO,
+                    null,
+                    false,
+                    assetKey
+            );
+        }
+        BigDecimal sourceCoveredQuantity = sourceCarry.coveredQuantity().min(sourceQuantity);
+        BigDecimal coverageRatio = safeDivide(sourceCoveredQuantity, sourceQuantity);
+        BigDecimal coveredQuantity = coverageRatio == null
+                ? BigDecimal.ZERO
+                : destinationQuantity.multiply(coverageRatio, MC).min(destinationQuantity);
+        BigDecimal uncoveredQuantity = nonNegative(destinationQuantity.subtract(coveredQuantity, MC));
+        BigDecimal costBasisUsd = sourceCarry.costBasisUsd();
+        BigDecimal avco = coveredQuantity.signum() <= 0
+                ? null
+                : safeDivide(costBasisUsd, coveredQuantity);
+        return new CarryTransfer(
+                destinationQuantity,
+                coveredQuantity,
+                uncoveredQuantity,
+                costBasisUsd,
+                avco,
+                false,
+                assetKey
+        );
+    }
+
+    private void consumeReservedCarry(PositionState position, CarryTransfer carry) {
+        if (carry == null || carry.quantity() == null || carry.quantity().signum() <= 0) {
+            return;
+        }
+        position.quantity = nonNegative(position.quantity.subtract(carry.quantity(), MC));
+        position.uncoveredQuantity = nonNegative(position.uncoveredQuantity.subtract(carry.uncoveredQuantity(), MC));
+        position.totalCostBasisUsd = nonNegative(position.totalCostBasisUsd.subtract(carry.costBasisUsd(), MC));
+        recomputePerWalletAvco(position);
+    }
+
+    private CarryTransfer mergeCarryTransfers(
+            AssetKey assetKey,
+            CarryTransfer left,
+            CarryTransfer right
+    ) {
+        BigDecimal quantity = safeAdd(left == null ? null : left.quantity(), right == null ? null : right.quantity());
+        BigDecimal coveredQuantity = safeAdd(left == null ? null : left.coveredQuantity(), right == null ? null : right.coveredQuantity());
+        BigDecimal uncoveredQuantity = safeAdd(left == null ? null : left.uncoveredQuantity(), right == null ? null : right.uncoveredQuantity());
+        BigDecimal costBasisUsd = safeAdd(left == null ? null : left.costBasisUsd(), right == null ? null : right.costBasisUsd());
+        BigDecimal avco = coveredQuantity.signum() <= 0 ? null : safeDivide(costBasisUsd, coveredQuantity);
+        return new CarryTransfer(quantity, coveredQuantity, uncoveredQuantity, costBasisUsd, avco, false, assetKey);
+    }
+
+    private BigDecimal safeAdd(BigDecimal left, BigDecimal right) {
+        return (left == null ? BigDecimal.ZERO : left).add(right == null ? BigDecimal.ZERO : right, MC);
+    }
+
+    private NormalizedTransaction.Flow copyFlowWithQuantity(
+            NormalizedTransaction.Flow original,
+            BigDecimal quantityDelta
+    ) {
+        NormalizedTransaction.Flow copy = new NormalizedTransaction.Flow();
+        copy.setRole(original.getRole());
+        copy.setAssetContract(original.getAssetContract());
+        copy.setAssetSymbol(original.getAssetSymbol());
+        copy.setQuantityDelta(quantityDelta);
+        copy.setUnitPriceUsd(original.getUnitPriceUsd());
+        copy.setValueUsd(original.getValueUsd());
+        copy.setPriceSource(original.getPriceSource());
+        copy.setIsInferred(original.getIsInferred());
+        copy.setInferenceReason(original.getInferenceReason());
+        copy.setConfidence(original.getConfidence());
+        copy.setAvcoAtTimeOfSale(original.getAvcoAtTimeOfSale());
+        copy.setRealisedPnlUsd(original.getRealisedPnlUsd());
+        copy.setLogIndex(original.getLogIndex());
+        return copy;
     }
 
     private void restoreToPosition(
@@ -1304,11 +1909,12 @@ public class AvcoReplayService {
                 ignored -> new PositionState(pendingInbound.assetKey())
         );
         PositionSnapshot before = snapshot(destination);
-        BigDecimal coveredResolvedQuantity = carry.coveredQuantity().min(pendingInbound.quantity());
+        CarryTransfer effectiveCarry = sliceCarryTransfer(carry, pendingInbound.quantity(), pendingInbound.assetKey());
+        BigDecimal coveredResolvedQuantity = effectiveCarry.coveredQuantity();
         destination.uncoveredQuantity = nonNegative(destination.uncoveredQuantity.subtract(coveredResolvedQuantity, MC));
-        destination.totalCostBasisUsd = destination.totalCostBasisUsd.add(carry.costBasisUsd());
+        destination.totalCostBasisUsd = destination.totalCostBasisUsd.add(effectiveCarry.costBasisUsd());
         recomputePerWalletAvco(destination);
-        if (carry.avco() != null && carry.uncoveredQuantity().signum() == 0) {
+        if (effectiveCarry.avco() != null && effectiveCarry.uncoveredQuantity().signum() == 0) {
             resolveTemporaryUnresolved(destination);
         }
         ledgerPointCollector.record(
@@ -1319,6 +1925,72 @@ public class AvcoReplayService {
                 before,
                 destination,
                 AssetLedgerPoint.BasisEffect.CARRY_IN
+        );
+    }
+
+    private void attachLateBridgeCarryToPendingInbound(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow,
+            int flowIndex,
+            Map<AssetKey, PositionState> positions,
+            CarryTransfer pendingInbound,
+            CarryTransfer carry,
+            LedgerPointCollector ledgerPointCollector
+    ) {
+        PositionState destination = positions.computeIfAbsent(
+                pendingInbound.assetKey(),
+                ignored -> new PositionState(pendingInbound.assetKey())
+        );
+        PositionSnapshot before = snapshot(destination);
+        CarryTransfer effectiveCarry = bridgeInboundCarry(carry, pendingInbound.quantity(), pendingInbound.assetKey());
+        BigDecimal coveredResolvedQuantity = effectiveCarry.coveredQuantity();
+        destination.uncoveredQuantity = nonNegative(destination.uncoveredQuantity.subtract(coveredResolvedQuantity, MC));
+        destination.totalCostBasisUsd = destination.totalCostBasisUsd.add(effectiveCarry.costBasisUsd());
+        recomputePerWalletAvco(destination);
+        if (effectiveCarry.avco() != null && destination.uncoveredQuantity.signum() == 0) {
+            resolveTemporaryUnresolved(destination);
+        }
+        ledgerPointCollector.record(
+                transaction,
+                flow,
+                flowIndex,
+                destination.assetKey,
+                before,
+                destination,
+                AssetLedgerPoint.BasisEffect.CARRY_IN
+        );
+    }
+
+    private void attachLateBridgeSettlementCarryToPendingInbound(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow,
+            int flowIndex,
+            Map<AssetKey, PositionState> positions,
+            CarryTransfer pendingInbound,
+            CarryTransfer carry,
+            LedgerPointCollector ledgerPointCollector
+    ) {
+        PositionState destination = positions.computeIfAbsent(
+                pendingInbound.assetKey(),
+                ignored -> new PositionState(pendingInbound.assetKey())
+        );
+        PositionSnapshot before = snapshot(destination);
+        CarryTransfer effectiveCarry = bridgeSettlementInboundCarry(carry, pendingInbound.quantity(), pendingInbound.assetKey());
+        BigDecimal coveredResolvedQuantity = effectiveCarry.coveredQuantity();
+        destination.uncoveredQuantity = nonNegative(destination.uncoveredQuantity.subtract(coveredResolvedQuantity, MC));
+        destination.totalCostBasisUsd = destination.totalCostBasisUsd.add(effectiveCarry.costBasisUsd());
+        recomputePerWalletAvco(destination);
+        if (effectiveCarry.avco() != null && destination.uncoveredQuantity.signum() == 0) {
+            resolveTemporaryUnresolved(destination);
+        }
+        ledgerPointCollector.record(
+                transaction,
+                flow,
+                flowIndex,
+                destination.assetKey,
+                before,
+                destination,
+                AssetLedgerPoint.BasisEffect.REALLOCATE_IN
         );
     }
 
@@ -1563,21 +2235,34 @@ public class AvcoReplayService {
 
     private String transferKey(NormalizedTransaction transaction, NormalizedTransaction.Flow flow) {
         if (transaction.getCorrelationId() != null && !transaction.getCorrelationId().isBlank()) {
-            String bridgeFamilyIdentity = bridgeFamilyIdentity(transaction, flow);
-            if (bridgeFamilyIdentity != null) {
-                return "bridge-family:" + transaction.getCorrelationId() + ":" + bridgeFamilyIdentity;
+            String assetKey = correlatedTransferIdentity(transaction, flow);
+            if (Boolean.TRUE.equals(transaction.getContinuityCandidate())) {
+                return "corr-family:" + transaction.getCorrelationId() + ":" + assetKey;
             }
         }
 
         String quantityKey = flow.getQuantityDelta().abs().stripTrailingZeros().toPlainString();
         String assetKey = continuityIdentity(transaction, flow);
         if (transaction.getCorrelationId() != null && !transaction.getCorrelationId().isBlank()) {
-            return "corr:" + transaction.getCorrelationId() + ":" + assetKey + ":" + quantityKey;
+            return "corr:" + transaction.getCorrelationId() + ":" + correlatedTransferIdentity(transaction, flow) + ":" + quantityKey;
         }
         if (transaction.getTxHash() != null && !transaction.getTxHash().isBlank()) {
             return "tx:" + transaction.getTxHash() + ":" + assetKey + ":" + quantityKey;
         }
         return null;
+    }
+
+    private String bridgeTransferKey(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow
+    ) {
+        String bridgeFamilyIdentity = bridgeFamilyIdentity(transaction, flow);
+        if (bridgeFamilyIdentity == null
+                || transaction.getCorrelationId() == null
+                || transaction.getCorrelationId().isBlank()) {
+            return null;
+        }
+        return "bridge:" + transaction.getCorrelationId() + ":" + bridgeFamilyIdentity;
     }
 
     private String bridgeFamilyIdentity(
@@ -1603,6 +2288,316 @@ public class AvcoReplayService {
             return identity;
         }
         return assetKey(transaction, flow).assetIdentity();
+    }
+
+    private String correlatedTransferIdentity(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow
+    ) {
+        String identity = continuityIdentity(transaction, flow);
+        if (identity == null || identity.isBlank()) {
+            return identity;
+        }
+        if (identity.startsWith("FAMILY:")) {
+            return identity;
+        }
+        String canonicalSymbol = canonicalCorrelatedTransferSymbol(flow == null ? null : flow.getAssetSymbol());
+        if (canonicalSymbol == null || canonicalSymbol.isBlank()) {
+            return identity;
+        }
+        return "SYMBOL:" + canonicalSymbol;
+    }
+
+    private String canonicalCorrelatedTransferSymbol(String assetSymbol) {
+        if (assetSymbol == null || assetSymbol.isBlank()) {
+            return null;
+        }
+        String normalized = assetSymbol.trim().toUpperCase(Locale.ROOT);
+        return CORRELATED_TRANSFER_SYMBOL_ALIASES.getOrDefault(normalized, normalized);
+    }
+
+    private PassThroughCorridorPlan buildPassThroughCorridorPlan(List<NormalizedTransaction> ordered) {
+        Map<PassThroughScopeKey, Deque<PassThroughCandidate>> openInboundCandidates = new LinkedHashMap<>();
+        Map<String, PassThroughCorridor> byInboundFlowRef = new LinkedHashMap<>();
+        Map<String, PassThroughCorridor> byOutboundFlowRef = new LinkedHashMap<>();
+
+        for (NormalizedTransaction transaction : ordered) {
+            PassThroughCandidate outboundCandidate = selectPassThroughOutboundCandidate(transaction);
+            if (outboundCandidate != null) {
+                PassThroughScopeKey scopeKey = outboundCandidate.scopeKey();
+                Deque<PassThroughCandidate> queue = openInboundCandidates.get(scopeKey);
+                if (queue != null && queue.size() == 1) {
+                    PassThroughCandidate inboundCandidate = queue.peekFirst();
+                    if (quantitiesCompatible(inboundCandidate.quantity(), outboundCandidate.quantity())) {
+                        queue.removeFirst();
+                        PassThroughCorridor corridor = new PassThroughCorridor(
+                                inboundCandidate.flowRef(),
+                                outboundCandidate.flowRef(),
+                                outboundCandidate.quantity()
+                        );
+                        byInboundFlowRef.put(inboundCandidate.flowRef(), corridor);
+                        byOutboundFlowRef.put(outboundCandidate.flowRef(), corridor);
+                    } else {
+                        queue.clear();
+                    }
+                } else if (queue != null) {
+                    queue.clear();
+                }
+                if (queue != null && queue.isEmpty()) {
+                    openInboundCandidates.remove(scopeKey);
+                }
+            }
+
+            PassThroughCandidate inboundCandidate = selectPassThroughInboundCandidate(transaction);
+            if (inboundCandidate != null) {
+                openInboundCandidates.computeIfAbsent(inboundCandidate.scopeKey(), ignored -> new ArrayDeque<>())
+                        .addLast(inboundCandidate);
+            }
+        }
+        return new PassThroughCorridorPlan(byInboundFlowRef, byOutboundFlowRef);
+    }
+
+    private PassThroughCandidate selectPassThroughInboundCandidate(NormalizedTransaction transaction) {
+        if (transaction == null
+                || !Boolean.TRUE.equals(transaction.getContinuityCandidate())
+                || !isPassThroughInboundType(transaction.getType())) {
+            return null;
+        }
+        List<IndexedFlow> positivePrincipalFlows = indexedFlows(transaction).stream()
+                .filter(indexedFlow -> isPrincipalFlow(indexedFlow.flow()) && indexedFlow.flow().getQuantityDelta().signum() > 0)
+                .toList();
+        if (positivePrincipalFlows.size() != 1) {
+            return null;
+        }
+        IndexedFlow inboundFlow = positivePrincipalFlows.getFirst();
+        AssetKey assetKey = assetKey(transaction, inboundFlow.flow());
+        return new PassThroughCandidate(
+                flowRef(transaction, inboundFlow.index()),
+                new PassThroughScopeKey(passThroughScope(transaction), assetKey.assetIdentity()),
+                inboundFlow.flow().getQuantityDelta().abs()
+        );
+    }
+
+    private PassThroughCandidate selectPassThroughOutboundCandidate(NormalizedTransaction transaction) {
+        if (transaction == null) {
+            return null;
+        }
+        if (!isPassThroughOutboundType(transaction)) {
+            return null;
+        }
+        List<IndexedFlow> negativePrincipalFlows = indexedFlows(transaction).stream()
+                .filter(indexedFlow -> isPrincipalFlow(indexedFlow.flow()) && indexedFlow.flow().getQuantityDelta().signum() < 0)
+                .toList();
+        if (negativePrincipalFlows.size() != 1) {
+            return null;
+        }
+        IndexedFlow outboundFlow = negativePrincipalFlows.getFirst();
+        AssetKey assetKey = assetKey(transaction, outboundFlow.flow());
+        return new PassThroughCandidate(
+                flowRef(transaction, outboundFlow.index()),
+                new PassThroughScopeKey(passThroughScope(transaction), assetKey.assetIdentity()),
+                outboundFlow.flow().getQuantityDelta().abs()
+        );
+    }
+
+    private boolean isPrincipalFlow(NormalizedTransaction.Flow flow) {
+        return flow != null
+                && flow.getRole() != NormalizedLegRole.FEE
+                && flow.getQuantityDelta() != null
+                && flow.getQuantityDelta().signum() != 0;
+    }
+
+    private boolean isPassThroughInboundType(NormalizedTransactionType type) {
+        return type == NormalizedTransactionType.EXTERNAL_TRANSFER_IN
+                || type == NormalizedTransactionType.BRIDGE_IN
+                || type == NormalizedTransactionType.INTERNAL_TRANSFER;
+    }
+
+    private boolean isPassThroughOutboundType(NormalizedTransaction transaction) {
+        if (transaction == null || transaction.getType() == null) {
+            return false;
+        }
+        if (Boolean.TRUE.equals(transaction.getContinuityCandidate())
+                && (transaction.getType() == NormalizedTransactionType.EXTERNAL_TRANSFER_OUT
+                || transaction.getType() == NormalizedTransactionType.BRIDGE_OUT
+                || transaction.getType() == NormalizedTransactionType.INTERNAL_TRANSFER)) {
+            return true;
+        }
+        return switch (transaction.getType()) {
+            case PROTOCOL_CUSTODY_DEPOSIT,
+                    LENDING_DEPOSIT,
+                    STAKING_DEPOSIT,
+                    VAULT_DEPOSIT,
+                    LP_ENTRY -> true;
+            default -> false;
+        };
+    }
+
+    private String passThroughScope(NormalizedTransaction transaction) {
+        if (transaction.getWalletAddress() != null && transaction.getWalletAddress().startsWith("BYBIT:")) {
+            return "VENUE:" + transaction.getWalletAddress();
+        }
+        return "WALLET_NETWORK:" + transaction.getWalletAddress() + ":" + Objects.toString(transaction.getNetworkId(), "BYBIT");
+    }
+
+    private boolean quantitiesCompatible(BigDecimal inboundQuantity, BigDecimal outboundQuantity) {
+        if (inboundQuantity == null
+                || outboundQuantity == null
+                || inboundQuantity.signum() <= 0
+                || outboundQuantity.signum() <= 0) {
+            return false;
+        }
+        BigDecimal tolerance = inboundQuantity.multiply(new BigDecimal("0.002"), MC).max(new BigDecimal("0.000001"));
+        return outboundQuantity.compareTo(inboundQuantity.add(tolerance, MC)) <= 0;
+    }
+
+    private int findUniqueCompatibleQueueIndex(
+            Deque<CarryTransfer> queue,
+            boolean pendingInbound,
+            BigDecimal targetQuantity
+    ) {
+        if (queue == null || queue.isEmpty() || targetQuantity == null || targetQuantity.signum() <= 0) {
+            return -1;
+        }
+        int matchedIndex = -1;
+        int index = 0;
+        for (CarryTransfer candidate : queue) {
+            if (candidate == null || candidate.pendingInbound() != pendingInbound) {
+                index++;
+                continue;
+            }
+            if (!correlatedTransferQuantitiesCompatible(candidate.quantity(), targetQuantity)) {
+                index++;
+                continue;
+            }
+            if (matchedIndex >= 0) {
+                return -1;
+            }
+            matchedIndex = index;
+            index++;
+        }
+        return matchedIndex;
+    }
+
+    private int findUniqueBridgeQueueIndex(
+            Deque<CarryTransfer> queue,
+            boolean pendingInbound
+    ) {
+        if (queue == null || queue.isEmpty()) {
+            return -1;
+        }
+        int matchedIndex = -1;
+        int index = 0;
+        for (CarryTransfer candidate : queue) {
+            if (candidate == null || candidate.pendingInbound() != pendingInbound) {
+                index++;
+                continue;
+            }
+            if (matchedIndex >= 0) {
+                return -1;
+            }
+            matchedIndex = index;
+            index++;
+        }
+        return matchedIndex;
+    }
+
+    private CarryTransfer removeQueueElement(Deque<CarryTransfer> queue, int index) {
+        if (queue == null || index < 0 || index >= queue.size()) {
+            return null;
+        }
+        int currentIndex = 0;
+        for (var iterator = queue.iterator(); iterator.hasNext(); ) {
+            CarryTransfer candidate = iterator.next();
+            if (currentIndex == index) {
+                iterator.remove();
+                return candidate;
+            }
+            currentIndex++;
+        }
+        return null;
+    }
+
+    private boolean correlatedTransferQuantitiesCompatible(
+            BigDecimal leftQuantity,
+            BigDecimal rightQuantity
+    ) {
+        if (leftQuantity == null
+                || rightQuantity == null
+                || leftQuantity.signum() <= 0
+                || rightQuantity.signum() <= 0) {
+            return false;
+        }
+        BigDecimal delta = leftQuantity.subtract(rightQuantity, MC).abs();
+        BigDecimal baseline = leftQuantity.max(rightQuantity);
+        BigDecimal tolerance = baseline.multiply(CORRELATED_TRANSFER_RELATIVE_TOLERANCE, MC)
+                .max(CORRELATED_TRANSFER_ABSOLUTE_TOLERANCE)
+                .min(CORRELATED_TRANSFER_MAX_TOLERANCE);
+        return delta.compareTo(tolerance) <= 0;
+    }
+
+    private String flowRef(NormalizedTransaction transaction, int flowIndex) {
+        return transaction.getId() + ":" + flowIndex;
+    }
+
+    private boolean isLinkedBridgeContinuityTransfer(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow
+    ) {
+        return flow != null
+                && flow.getRole() == NormalizedLegRole.TRANSFER
+                && flow.getQuantityDelta() != null
+                && flow.getQuantityDelta().signum() != 0
+                && bridgeTransferKey(transaction, flow) != null;
+    }
+
+    private boolean isLinkedBridgeSettlementTransfer(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow
+    ) {
+        return flow != null
+                && flow.getRole() == NormalizedLegRole.TRANSFER
+                && flow.getQuantityDelta() != null
+                && flow.getQuantityDelta().signum() != 0
+                && bridgeSettlementKey(transaction, flow) != null;
+    }
+
+    private String bridgeSettlementKey(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow
+    ) {
+        if (transaction == null
+                || flow == null
+                || transaction.getType() == null
+                || flow.getRole() != NormalizedLegRole.TRANSFER
+                || flow.getQuantityDelta() == null
+                || flow.getQuantityDelta().signum() == 0
+                || transaction.getCorrelationId() == null
+                || transaction.getCorrelationId().isBlank()
+                || transaction.getMatchedCounterparty() == null
+                || transaction.getMatchedCounterparty().isBlank()
+                || Boolean.TRUE.equals(transaction.getContinuityCandidate())
+                || !hasSinglePrincipalTransferFlow(transaction)) {
+            return null;
+        }
+        if (transaction.getType() != NormalizedTransactionType.BRIDGE_OUT
+                && transaction.getType() != NormalizedTransactionType.BRIDGE_IN) {
+            return null;
+        }
+        return "bridge-settlement:" + transaction.getCorrelationId();
+    }
+
+    private boolean hasSinglePrincipalTransferFlow(NormalizedTransaction transaction) {
+        if (transaction == null || transaction.getFlows() == null || transaction.getFlows().isEmpty()) {
+            return false;
+        }
+        long principalTransfers = transaction.getFlows().stream()
+                .filter(flow -> flow != null
+                        && flow.getRole() == NormalizedLegRole.TRANSFER
+                        && flow.getQuantityDelta() != null
+                        && flow.getQuantityDelta().signum() != 0)
+                .count();
+        return principalTransfers == 1;
     }
 
     private ContinuityKey continuityKey(
@@ -1892,6 +2887,15 @@ public class AvcoReplayService {
         };
     }
 
+    private AssetLedgerPoint.BasisEffect routeSettlementBasisEffect(NormalizedTransaction.Flow flow) {
+        if (flow == null || flow.getQuantityDelta() == null || flow.getQuantityDelta().signum() == 0) {
+            return AssetLedgerPoint.BasisEffect.UNKNOWN;
+        }
+        return flow.getQuantityDelta().signum() < 0
+                ? AssetLedgerPoint.BasisEffect.REALLOCATE_OUT
+                : AssetLedgerPoint.BasisEffect.REALLOCATE_IN;
+    }
+
     private static BigDecimal nonNegative(BigDecimal value) {
         return value.signum() < 0 ? BigDecimal.ZERO : value;
     }
@@ -1922,6 +2926,32 @@ public class AvcoReplayService {
             String walletAddress,
             com.walletradar.domain.common.NetworkId networkId,
             String continuityIdentity
+    ) {
+    }
+
+    private record PassThroughScopeKey(
+            String scope,
+            String assetIdentity
+    ) {
+    }
+
+    private record PassThroughCandidate(
+            String flowRef,
+            PassThroughScopeKey scopeKey,
+            BigDecimal quantity
+    ) {
+    }
+
+    private record PassThroughCorridor(
+            String inboundFlowRef,
+            String outboundFlowRef,
+            BigDecimal reservedQuantity
+    ) {
+    }
+
+    private record PassThroughCorridorPlan(
+            Map<String, PassThroughCorridor> byInboundFlowRef,
+            Map<String, PassThroughCorridor> byOutboundFlowRef
     ) {
     }
 
@@ -1978,10 +3008,12 @@ public class AvcoReplayService {
 
     private static final class LedgerPointCollector {
         private long replaySequence;
+        private final String accountingUniverseId;
         private final List<AssetLedgerPoint> points;
         private final Instant createdAt;
 
-        private LedgerPointCollector(List<AssetLedgerPoint> points, Instant createdAt) {
+        private LedgerPointCollector(String accountingUniverseId, List<AssetLedgerPoint> points, Instant createdAt) {
+            this.accountingUniverseId = accountingUniverseId;
             this.points = points;
             this.createdAt = createdAt;
         }
@@ -2000,7 +3032,8 @@ public class AvcoReplayService {
             }
             long sequence = replaySequence++;
             AssetLedgerPoint point = new AssetLedgerPoint();
-            point.setId(transaction.getId() + ":" + flowIndex + ":" + sequence);
+            point.setId(accountingUniverseId + ":" + transaction.getId() + ":" + flowIndex + ":" + sequence);
+            point.setAccountingUniverseId(accountingUniverseId);
             point.setWalletAddress(assetKey.walletAddress());
             point.setNetworkId(assetKey.networkId());
             point.setAccountingAssetIdentity(assetKey.assetIdentity());
@@ -2124,6 +3157,21 @@ public class AvcoReplayService {
     ) {
         private static LiquidStakingFlowSelection empty() {
             return new LiquidStakingFlowSelection(List.of(), List.of());
+        }
+    }
+
+    private record SimpleFamilyCustodyPair(
+            IndexedFlow outbound,
+            IndexedFlow inbound
+    ) {
+    }
+
+    private record SimpleFamilyCustodySelection(
+            List<SimpleFamilyCustodyPair> pairs,
+            Map<Integer, IndexedFlow> selectedByIndex
+    ) {
+        private static SimpleFamilyCustodySelection empty() {
+            return new SimpleFamilyCustodySelection(List.of(), Map.of());
         }
     }
 

@@ -1,7 +1,7 @@
 # WalletRadar — Accounting Policy
 
 > **Version:** v3 target
-> **Last updated:** 2026-04-06
+> **Last updated:** 2026-04-08
 > **Accounting method:** AVCO
 
 ---
@@ -30,15 +30,10 @@ gates or AVCO replay.
 
 For session-facing history reads, the active scope is:
 
-- `user_sessions.accountingUniverseId`
-- not `user_sessions.wallets` alone
+- `user_sessions.wallets[].address`
+- `user_sessions.integrations[].accountRef`
 
-`user_sessions.wallets` remains the current UI subset for:
-
-- backfill targets
-- current on-chain balance display
-
-The accounting universe is the stable owner scope for:
+`user_sessions` is the stable owner scope for:
 
 - move-basis continuity history
 - AVCO/cost-basis timeline reads
@@ -119,6 +114,10 @@ newAvco      = currentAvco
 - fee quantity reduces the fee asset quantity and contributes to `totalGasPaidUsd`
 - when policy capitalizes gas into an acquisition, replay may allocate fee USD into the same transaction's BUY basis
 - outside such capitalization, `FEE` does not create a new lot and does not create realised PnL for the target asset being acquired or disposed
+- standalone venue fees from external integrations, such as Bybit
+  `BONUS_RECOLLECT` or funding-account `Repay Interest`, remain canonical
+  `FEE` outflows but do not belong to the active basis-opening normalization
+  lane
 
 ### On PRICE_UNKNOWN
 
@@ -231,6 +230,16 @@ Basis continuity applies when the economic owner did not dispose of the asset:
     source quantity
   - source-minus-destination quantity delta is bridge / settlement cost embedded
     in the carried basis, not synthetic sale realization
+- for already-linked same-family `BRIDGE_OUT -> BRIDGE_IN` pairs, replay must
+  use a bridge-specific carry path rather than the generic correlated-transfer
+  quantity matcher
+  - destination lower than source:
+    full source cost basis moves onto the smaller destination quantity
+  - destination higher than source:
+    full source cost basis still moves, and only the excess destination
+    quantity remains uncovered
+  - replay must not proportionally scale source cost basis down merely because
+    bridge settlement quantity drifted
 - audited same-wallet `Across` pairs may receive synthetic pair correlation
   when the source-side `depositV3(...)` bridge start is already protocol-proven
   and the destination `BRIDGE_IN` row is the unique bounded fit under the
@@ -254,12 +263,126 @@ Basis continuity applies when the economic owner did not dispose of the asset:
   - exception: audited bridge-family-equivalent assets may still qualify for
     continuity carry when policy explicitly maps them into one canonical asset
     family and the route evidence proves bridge settlement rather than market
-    conversion
-  - example: `vbUSDC -> USDC` may be treated as one `USDC` family for move
-    basis when the audited bridge route proves custody/settlement continuity
-    instead of an economic swap
+- already-linked asset-changing bridge settlement
+  Replay may still restore destination acquisition cost for an already-linked
+  `BRIDGE_OUT(source asset) -> BRIDGE_IN(destination asset)` route pair even
+  when `continuityCandidate = false`.
+  Approved first slice:
+  - shared deterministic `correlationId`
+  - exact `matchedCounterparty`
+  - one principal transfer leg on the source row
+  - one principal transfer leg on the destination row
+  - no competing pending source or destination candidate under that route key
+  Accounting effect:
+  - source-side quantity and source-side cost basis leave the source bucket as a
+    route-settlement reallocation
+  - destination-side quantity is restored with source carried cost basis
+  - destination covered quantity is computed from the source covered-share ratio
+    (`coveredSourceQty / totalSourceQty`)
+  - if source was fully covered, destination is fully covered
+  - if source was partially uncovered, destination inherits the same covered /
+    uncovered proportion
+  - this slice does not synthesize realized PnL for the source disposal; it is
+    a conservative book-value settlement repair until canonical route
+    settlement pricing is modeled explicitly
+  - if the route key is ambiguous, replay must fall back to explicit uncovered
+    destination materialization rather than guessing
+  - source-side route funding such as tx-level native `value` on audited routed
+    bridge starts is route cost, not a second principal transfer leg, when the
+    source row already proves one outbound token principal leg plus one native
+    leg that exactly matches tx `value`
+
+### 4.1 Replay pass-through corridor policy
+
+Continuity carry may be reserved inside replay when a proven continuity inbound
+is followed by one later deterministic outbound/custody source leg and WalletRadar
+can prove that the carry should remain isolated from unrelated inventory.
+
+This policy exists to prevent AVCO drift caused by pooled inventory when the
+economic owner did not intentionally re-open a fresh mixed lot.
+
+Approved slice:
+
+1. Custodial venue transit
+   - `on-chain -> BYBIT:<uid> -> on-chain`
+   - the venue-side inbound and later venue-side outbound may reserve the exact
+     carried basis when the venue wallet is the same and no competing
+     same-bucket negative principal flow appears before the paired outbound
+
+2. Same-wallet immediate custody path
+   - `BRIDGE_IN -> LENDING_DEPOSIT`
+   - `BRIDGE_IN -> VAULT_DEPOSIT`
+   - `BRIDGE_IN -> STAKING_DEPOSIT`
+   - `BRIDGE_IN -> PROTOCOL_CUSTODY_DEPOSIT`
+   - `BRIDGE_IN -> LP_ENTRY`
+   - the bridge-carried principal may be reserved into the custody-source
+     outflow before pooled spot inventory can consume it
+
+Deterministic restrictions:
+
+- reservation uses only already-confirmed canonical rows
+- reservation never changes canonical transaction types
+- reservation is exact-bucket, not portfolio-wide
+- if uniqueness is ambiguous, replay must not create a reservation
+- unmatched quantity remainder stays in the ordinary pooled position
+
+Accounting effect:
+
+- reserved carry is restored into the inbound bucket as usual
+- later paired outbound consumes reserved carry first
+- only remaining quantity, if any, falls back to pooled AVCO consumption
+- downstream destination/custody leg therefore receives the carried cost more
+  accurately than generic pooled replay would allow
+
+### 4.2 Correlated same-family carry ingress policy
+
+Replay may also attach continuity carry across a correlated `CARRY_OUT ->
+CARRY_IN` pair even when the destination-side quantity is rounded by an
+external venue or provider.
+
+This is a replay repair for already-proven continuity. It is not a
+reclassification rule.
+
+Approved use:
+
+- correlated same-family `EXTERNAL_TRANSFER_OUT -> EXTERNAL_TRANSFER_IN`
+- typical case: `on-chain -> BYBIT:<uid>` ingress rounded to venue precision
+- same policy may apply to any external provider that truncates display/export
+  quantity but still preserves deterministic continuity identity
+
+Deterministic restrictions:
+
+- both rows already have the same deterministic `correlationId`
+- both rows are already marked `continuityCandidate = true`
+- replay matches on the same continuity identity / audited asset family
+- replay may ignore tiny provider precision loss only inside a bounded
+  near-zero tolerance
+- the candidate fit must be unique; if more than one carry candidate fits,
+  replay must not attach any carry automatically
+- no economic slippage, market conversion, or cross-asset route may be
+  normalized through this policy
+
+Accounting effect:
+
+- if the unique correlated carry is found, destination `CARRY_IN` restores the
+  same covered/uncovered composition as the source-side carry
+- if the fit is not unique or not tolerance-compatible, replay falls back to
+  the existing pending inbound / pooled AVCO path
+
+Examples:
+
+- valid: `ETH -> ETH` same-family transfer from `ARBITRUM` into `BYBIT:<uid>`
+  where Bybit truncates `0.592974594039008539` into `0.59297459`
+- invalid: `USDC -> ETH` bridge route with shared `correlationId`; this is
+  still an asset-changing route, not plain carry continuity
+  - it may qualify for the separate asset-changing bridge settlement lane, but
+    not for same-family correlated carry ingress
+- example: `vbUSDC -> USDC` may be treated as one `USDC` family for move
+  basis when the audited bridge route proves custody/settlement continuity
+  instead of an economic swap
 - correlated `EXTERNAL_TRANSFER_OUT -> EXTERNAL_TRANSFER_IN`
-  Basis carries only when replay confirms that both sides belong to the same accounting universe.
+  Basis carries only when replay confirms that both sides belong to the same
+  live session scope.
 - inbound-first continuity ordering
   Replay must be chronology-safe when the destination-side continuity row is
   encountered before the matched source-side carry row in the ordered stream.
@@ -302,6 +425,10 @@ Basis continuity applies when the economic owner did not dispose of the asset:
   Principal basis moves between spot balance and receipt-token/custody state without realization.
 - `VAULT_DEPOSIT -> VAULT_WITHDRAW`
   Basis moves between spot balance and vault-share/custody state without realization.
+  - audited family-equivalent receipt-wrapper conversions such as
+    `yvvbETH -> vbETH` keep both principal legs as continuity `TRANSFER`
+    inside the same base-asset family; replay carries basis forward and leaves
+    only any quantity mismatch as uncovered tail
 - Matched `Bybit -> on-chain` withdrawals
   The chain-aware `withdraw_deposit` row is the principal continuity leg. Any
   exchange-side `fund_asset_changes` withdrawal shadow row for the same move is
@@ -421,7 +548,8 @@ For matched Bybit withdraw/deposit:
 - replay may use audited accounting families for carry-only continuity even when
   the persisted normalized asset ids remain distinct
 - the current audited `ETH` continuity family includes `ETH`, network `WETH`,
-  `aEthWETH`, `aArbWETH`, `aLinWETH`, `aManWETH`, `aZksWETH`, and `vbETH`
+  `aEthWETH`, `aArbWETH`, `aLinWETH`, `aManWETH`, `aZksWETH`, `vbETH`,
+  `yvvbETH`, `mETH`, and `cmETH`
 - gateway-style Aave custody methods on `zkSync` remain continuity, not
   disposal / reacquisition:
   - `withdrawETH(...)` is `LENDING_WITHDRAW`
@@ -535,6 +663,13 @@ Transaction-type pricing contract:
   - Principal is continuity, not a new buy/sell.
   - Use the underlying native asset price for valuation and fee accounting
     only.
+  - Replay must treat canonical wrapped/native pairs such as `ETH <-> WETH`
+    with the same atomic family-equivalent carry rule already used for simple
+    audited custody rows:
+    - source principal basis leaves the outbound leg
+    - destination wrapped/native leg receives that carried basis
+    - inbound-first flow order must not create a synthetic uncovered receipt
+      lot
 - correlated `EXTERNAL_TRANSFER_OUT` / `EXTERNAL_TRANSFER_IN`,
   correlated `BRIDGE_OUT` / `BRIDGE_IN`,
   `PROTOCOL_CUSTODY`, `LENDING_DEPOSIT` / `LENDING_WITHDRAW`,
@@ -591,6 +726,16 @@ Transaction-type pricing contract:
 - `STAKING_DEPOSIT`
   - Liquid-staking conversions such as `AVAX -> sAVAX` or `ETH -> METH` keep
     principal and derivative legs as continuity `TRANSFER`.
+  - Audited Bybit `Earn / On-chain Earn subscription` receipt wrappers such as
+    `ETH -> CMETH` follow the same liquid-staking continuity policy.
+  - Audited Bybit liquid-staking pairs may settle asynchronously inside one
+    official earn lifecycle. Deterministic pairing therefore may use a bounded
+    multi-hour window when all of the following hold:
+    - same user/account
+    - same official Bybit lifecycle description when present
+    - opposite signed quantities
+    - same audited accounting family
+    - exact or nearest absolute quantity match
   - Replay carries cost basis from the principal asset into the liquid staking
     derivative and must not realize PnL on the conversion itself.
   - Classic stake-contract deposits such as Pancake SmartChef
@@ -609,6 +754,17 @@ Transaction-type pricing contract:
   - persisted canonical type stays `EXTERNAL_TRANSFER_OUT` / `EXTERNAL_TRANSFER_IN`
   - same-universe continuity is resolved only during replay
   - do not price the principal twice on both sides once continuity correlation is active
+- review telemetry
+  - `blockingNeedsReview` means rows that still participate in active pricing /
+    replay gating.
+  - `excludedNeedsReview` means audit-visible rows that are intentionally kept
+    outside active accounting scope via `excludedFromAccounting=true`.
+  - Operators must not treat `blockingNeedsReview + excludedNeedsReview` as one
+    homogeneous failure count.
+- pricing hygiene
+  - `PRICE_UNRESOLVABLE` is a current-state signal, not an immutable scar.
+  - Once every replay-relevant flow on a row has a resolved price, the stale
+    `PRICE_UNRESOLVABLE` reason must be cleared before replay-gate evaluation.
 - `UTA_TRADE_PAIR_NOT_FOUND`
   - a residual orphan leg is insufficient evidence, not a priceable acquisition
     or disposal
@@ -998,14 +1154,55 @@ Family/lifecycle policy:
   into one accounting family
 - all other assets default to exact-asset family identity unless explicit
   policy broadens them
+- correlated external transfer replay may still use a replay-local canonical
+  symbol alias key for already-proven continuity when exact source contract
+  identity and destination provider symbol identity differ
+- that alias key is bounded to replay matching only and does not expand
+  persisted portfolio family aggregation by itself
 - lifecycle pairing still comes from canonical normalization and clarification
   (`correlationId`, `matchedCounterparty`, `continuityCandidate`)
 - the ledger timeline does not invent lifecycle pairing; it records what replay
   actually did with already-correlated rows
+- simple audited family-equivalent custody rows with exactly one principal
+  outbound transfer and one receipt inbound transfer replay as one atomic carry
+  pair even when normalized flow order is inbound-first
+- this rule is required for Aave-style `ETH/WETH <-> aToken` deposits and
+  withdraws where canonical transfer ordering may not match economic carry
+  direction
+- audited rebasing `Aave` WETH receipt rows require one extra normalization
+  rule before replay:
+  - if receipt-side quantity on deposit is larger than tx-local principal moved,
+    replayable canonical flows must be:
+    - principal `TRANSFER` out
+    - principal-sized receipt `TRANSFER` in
+    - receipt excess `BUY`
+  - if underlying-side quantity on withdraw is larger than tx-local receipt
+    burned, canonical flows must be:
+    - receipt `TRANSFER` out
+    - receipt-sized underlying `TRANSFER` in
+    - underlying excess `BUY`
+  - this excess is passive accrued yield materialized at the touched tx, not a
+    fresh uncovered principal lot
+- the same rule applies to canonical `WRAP / UNWRAP` rows for audited
+  wrapped-native pairs
+- for those rows replay keeps full source cost basis on the destination leg and
+  leaves only destination excess quantity uncovered
+
+External integration rule:
+
+- provider-specific enrichment must complete during external `BACKFILL`
+- Bybit runtime uses:
+  - immutable `integration_raw_events`
+  - rebuildable `bybit_extracted_events`
+  - canonical `normalized_transactions`
+- canonical normalization may not call provider APIs
+- ambiguous provider rows after full backfill enrichment must remain
+  `UNKNOWN / NEEDS_REVIEW`; they do not enter a later provider clarification
+  lane
 
 After replay completes, WalletRadar must refresh `on_chain_balances` from the
-bounded tracked-wallet on-chain asset universe and then reconcile replay output
-by accounting identity.
+current session wallet subset only and then reconcile replay output by
+accounting identity.
 
 Provider-native balances are still native evidence even when the upstream
 provider returns `contractAddress = 0x0000000000000000000000000000000000000000`.
@@ -1042,9 +1239,17 @@ snapshot.
 User-facing asset history must be computed from session-filtered
 `asset_ledger_points`.
 
+Replay lineage rules:
+
+- `asset_ledger_points` is universe-scoped and must carry `accountingUniverseId`
+- `on_chain_balances` is session-scoped and must carry `sessionId`
+- carry continuity may only be attached within the active accounting universe
+- installation-wide tracked-wallet heuristics may still help canonical typing,
+  but they must not force basis inheritance across unrelated owner scopes
+
 Session-level asset history rules:
 
-- filter wallet-level points by the session wallet set
+- filter wallet-level points by the session's stable `accountingUniverseId`
 - filter by `accountingFamilyIdentity`
 - preserve deterministic order
 - aggregate `quantityDelta`, `costBasisDeltaUsd`, `realisedPnlDeltaUsd`, and
@@ -1052,6 +1257,14 @@ Session-level asset history rules:
 - recompute session-level AVCO from aggregated post-point state
 - overlay economic events from the same ordered trace; do not re-fetch or
   re-derive them from RPC during the request path
+
+External provider policy:
+
+- provider-specific enrichment belongs to external backfill
+- normalization must not call provider APIs
+- if persisted provider evidence is still insufficient after the provider
+  backfill/hydration pass, the row becomes explicit review work rather than a
+  late provider-clarification candidate
 
 For authoritative AVCO answers:
 

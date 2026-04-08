@@ -1,7 +1,7 @@
 # WalletRadar — API Contract
 
 > **Version:** v3 current backend surface
-> **Last updated:** 2026-04-06
+> **Last updated:** 2026-04-07
 > **Status:** Active contract for the currently implemented REST endpoints
 
 ---
@@ -13,6 +13,7 @@ This document describes the API that is currently implemented in the backend.
 In scope now:
 
 - persisted session management
+- persisted session settings and integrations
 - wallet backfill creation
 - wallet and session backfill-status reads
 - session-level transaction-history reads
@@ -153,9 +154,157 @@ Errors:
 
 - `404 SESSION_NOT_FOUND`
 
+### `GET /api/v1/sessions/{sessionId}/settings`
+
+Returns the persisted session workspace view including wallets and external
+integrations. Secret material is never returned.
+
+Response: `200 OK`
+
+```json
+{
+  "sessionId": "d290f1ee-6c54-4b01-90e6-d701748f0851",
+  "wallets": [
+    {
+      "address": "0x1234567890abcdef1234567890abcdef12345678",
+      "label": "Main wallet",
+      "color": "#4F46E5",
+      "networks": ["ETHEREUM", "ARBITRUM", "BASE"]
+    }
+  ],
+  "hideSmallAssets": true,
+  "showReconciliationWarnings": true,
+  "integrations": [
+    {
+      "integrationId": "bybit-main",
+      "provider": "BYBIT",
+      "status": "CONNECTED",
+      "displayName": "Bybit main",
+      "accountRef": "BYBIT:33625378",
+      "maskedKey": "zQ1n...A9K2",
+      "readOnly": true,
+      "lastValidatedAt": "2026-04-07T10:00:00Z",
+      "lastSyncAt": null,
+      "lastError": null
+    }
+  ]
+}
+```
+
+Errors:
+
+- `404 SESSION_NOT_FOUND`
+
+### `PUT /api/v1/sessions/{sessionId}/settings`
+
+Overwrites the persisted session workspace configuration for the provided
+session:
+
+- wallets
+- visible integration configuration
+- general UI settings
+
+Integration secrets remain write-only. If an existing Bybit integration is
+included with empty `apiKey` and `apiSecret`, the server preserves the stored
+encrypted secret and only updates visible metadata like `displayName`.
+
+Request:
+
+```json
+{
+  "wallets": [
+    {
+      "address": "0x1234567890abcdef1234567890abcdef12345678",
+      "label": "Main wallet",
+      "color": "#4F46E5",
+      "networks": ["ETHEREUM", "ARBITRUM", "BASE"]
+    }
+  ],
+  "integrations": [
+    {
+      "provider": "BYBIT",
+      "displayName": "Bybit main",
+      "apiKey": "",
+      "apiSecret": ""
+    }
+  ],
+  "hideSmallAssets": true,
+  "showReconciliationWarnings": true
+}
+```
+
+Response: `200 OK`
+
+Returns the same shape as `GET /api/v1/sessions/{sessionId}/settings`.
+
+Errors:
+
+- `400 INVALID_SETTINGS_REQUEST`
+- `404 SESSION_NOT_FOUND`
+
+### `PUT /api/v1/sessions/{sessionId}/integrations/bybit`
+
+Creates or updates a session-owned Bybit integration and starts initial
+backfill planning for the last two years.
+
+Backfill is multi-stream and performs provider-side enrichment during
+acquisition. Bybit normalization later consumes the extracted staging produced
+by that backfill; it does not call Bybit APIs itself.
+
+Request:
+
+```json
+{
+  "displayName": "Bybit main",
+  "apiKey": "example-api-key",
+  "apiSecret": "example-api-secret"
+}
+```
+
+Response: `202 Accepted`
+
+```json
+{
+  "integrationId": "bybit-main",
+  "provider": "BYBIT",
+  "status": "BACKFILLING",
+  "displayName": "Bybit main",
+  "accountRef": "BYBIT:33625378",
+  "maskedKey": "zQ1n...A9K2",
+  "message": "Bybit integration saved, backfill planned"
+}
+```
+
+Errors:
+
+- `400 INVALID_REQUEST`
+- `404 SESSION_NOT_FOUND`
+
+### `DELETE /api/v1/sessions/{sessionId}/integrations/{integrationId}`
+
+Disables and removes one persisted session integration configuration.
+
+Response: `200 OK`
+
+```json
+{
+  "integrationId": "bybit-main",
+  "message": "Integration removed"
+}
+```
+
+Errors:
+
+- `404 SESSION_NOT_FOUND`
+- `404 INTEGRATION_NOT_FOUND`
+
 ### `GET /api/v1/sessions/{sessionId}/backfill-status`
 
-Returns session-level backfill status aggregated across wallets and networks.
+Returns session-level backfill status aggregated across all enabled backfill
+targets:
+
+- wallet×network on-chain targets
+- enabled integration targets
 
 Response: `200 OK`
 
@@ -214,9 +363,10 @@ Errors:
 ### `GET /api/v1/sessions/{sessionId}/transactions`
 
 Returns the most recent session-visible normalized transactions. The visibility
-scope is the session accounting universe, not only the currently selected
+scope is the session workspace scope, not only the currently selected
 on-chain wallets. This allows the session history to include related custody
-refs such as `BYBIT:<uid>` when they belong to the same accounting universe.
+refs such as `BYBIT:<uid>` when they belong to the same session via connected
+integrations.
 
 Query params:
 
@@ -454,7 +604,26 @@ Response: `200 OK`
     "totalCostBasisUsd": "6058.10",
     "avcoUsd": "1974.00",
     "realisedPnlUsd": "0",
-    "gasPaidUsd": "0"
+    "gasPaidUsd": "0",
+    "uncoveredBuckets": [
+      {
+        "walletAddress": "0x1234...",
+        "networkId": "MANTLE",
+        "assetSymbol": "AMANWETH",
+        "assetContract": "0xea...",
+        "quantity": "3.0661",
+        "coveredQuantity": "3.0600",
+        "uncoveredQuantity": "0.0061",
+        "uncoveredReason": "yield_accrual",
+        "latestTxHash": "0x3b85...",
+        "latestNormalizedType": "LENDING_DEPOSIT",
+        "latestBasisEffect": "REALLOCATE_IN",
+        "latestProtocolName": "Aave",
+        "hasIncompleteHistory": false,
+        "hasUnresolvedFlags": false,
+        "unresolvedFlagCount": 0
+      }
+    ]
   },
   "timeline": [
     {
@@ -510,6 +679,28 @@ Response: `200 OK`
 }
 ```
 
+`current.uncoveredBuckets` is a diagnostic surface for the live current family
+state only.
+
+Interpretation:
+
+- `yield_accrual`
+  - the current positive bucket is an interest-bearing continuity bucket and
+    live quantity drift is passive accrual since the latest clean replay point
+- `coverage_gap`
+  - the current bucket is only partially covered and does not qualify as clean
+    passive accrual
+- `history_flags`
+  - reserved for parity with dashboard issue semantics; indicates historical
+    provenance flags when a future API slice returns a covered-but-flagged
+    current bucket
+- `missing_replay_point`
+  - a current live balance bucket exists, but no matching latest ledger bucket
+    was found for the same session scope
+
+This field does not invent basis. It explains why the current family quantity
+is still partially uncovered after replay.
+
 Notes:
 
 - `timeline` is aggregated on read across the session's stable
@@ -528,7 +719,8 @@ Errors:
 
 - `GET /api/v1/sessions/{sessionId}/dashboard`
 - Returns current session-scoped dashboard snapshot backed by `on_chain_balances` and latest `asset_ledger_points`
-- current live quantities still come from the session wallet subset
+- current live quantities still come from the session wallet subset and
+  `on_chain_balances WHERE sessionId = {sessionId}`
 - replay history used for timeline/debug may include broader accounting-universe
   members such as `BYBIT:<uid>`
 - `tokenPositions` are current live quantities with conservative provable `avcoUsd` / PnL

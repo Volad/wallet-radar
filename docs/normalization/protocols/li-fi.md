@@ -42,6 +42,10 @@ destination bridge-pair evidence for the `LI.FI / Jumper` route family.
     allowlist
 - the route tag plus wallet-boundary outbound funding is enough for source-side
   bridge-initiation semantics
+- if the same source row also carries tx-level native `value` and exactly one
+  outbound token principal leg, the native `value` leg is route funding / cost
+  and must normalize as `FEE` instead of surviving as a second principal
+  `TRANSFER`
 - when official LI.FI status evidence resolves the receiving tx hash and the
   destination tx already exists in the current normalized outcome, the
   destination-side inbound row becomes `BRIDGE_IN`
@@ -70,6 +74,14 @@ destination bridge-pair evidence for the `LI.FI / Jumper` route family.
 - audited bridge-family-equivalent stable wrappers such as `vbUSDC -> USDC`
   may still qualify for move-basis continuity when the route is proven and
   accounting policy explicitly maps both sides into one stable family
+- asset-changing route pairs such as `USDC -> ETH` must keep
+  `continuityCandidate = false`
+- once the pair is already linked by official LI.FI status plus canonical
+  destination settlement, replay may still apply conservative
+  route-settlement basis restoration on the destination asset:
+  - source cost basis is reallocated into destination acquisition
+  - source covered/uncovered ratio is preserved on destination quantity
+  - this is not the same as plain move-basis continuity
 
 ## Clarification Rules
 

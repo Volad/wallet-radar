@@ -1,5 +1,6 @@
 package com.walletradar.ingestion.pipeline.bybit;
 
+import com.walletradar.accounting.support.AccountingAssetFamilySupport;
 import com.walletradar.domain.transaction.externalledger.ExternalLedgerRaw;
 import com.walletradar.domain.transaction.externalledger.ExternalLedgerRawStatus;
 import lombok.RequiredArgsConstructor;
@@ -25,7 +26,7 @@ public class BybitTradePairer {
 
     private static final long WINDOW_SECONDS = 5L;
     private static final long CONVERT_WINDOW_SECONDS = 2L;
-    private static final long ETH2_WINDOW_SECONDS = 3600L;
+    private static final long LIQUID_STAKING_WINDOW_SECONDS = 6L * 3600L;
 
     private final MongoOperations mongoOperations;
 
@@ -89,12 +90,29 @@ public class BybitTradePairer {
         return mongoOperations.find(query, ExternalLedgerRaw.class);
     }
 
-    public Optional<ExternalLedgerRaw> findEthStakingCounterLeg(ExternalLedgerRaw row) {
+    public Optional<ExternalLedgerRaw> findLiquidStakingCounterLeg(ExternalLedgerRaw row) {
         Instant center = row.getTimeUtc();
         if (center == null || row.getUid() == null || row.getAssetSymbol() == null || row.getQuantityRaw() == null) {
             return Optional.empty();
         }
-        Query query = new Query(new Criteria().andOperator(
+        Query query = new Query(liquidStakingCriteria(row, center));
+        query.with(Sort.by(Sort.Order.asc("timeUtc"), Sort.Order.asc("_id")));
+        List<ExternalLedgerRaw> candidates = mongoOperations.find(query, ExternalLedgerRaw.class);
+        return candidates.stream()
+                .filter(candidate -> candidate.getQuantityRaw() != null
+                        && candidate.getQuantityRaw().signum() == -row.getQuantityRaw().signum())
+                .filter(candidate -> sameLiquidStakingFamily(row, candidate))
+                .min(Comparator
+                        .comparingInt((ExternalLedgerRaw candidate) -> exactAbsQuantityMatch(row, candidate) ? 0 : 1)
+                        .thenComparingDouble(candidate -> liquidStakingMagnitudePenalty(row, candidate))
+                        .thenComparingLong((ExternalLedgerRaw candidate) ->
+                                Math.abs(candidate.getTimeUtc().getEpochSecond() - center.getEpochSecond()))
+                        .thenComparing(ExternalLedgerRaw::getTimeUtc)
+                        .thenComparing(ExternalLedgerRaw::getId));
+    }
+
+    private Criteria liquidStakingCriteria(ExternalLedgerRaw row, Instant center) {
+        List<Criteria> criteria = new java.util.ArrayList<>(List.of(
                 Criteria.where("_id").ne(row.getId()),
                 Criteria.where("status").is(ExternalLedgerRawStatus.RAW),
                 Criteria.where("sourceFileType").is(row.getSourceFileType()),
@@ -102,19 +120,32 @@ public class BybitTradePairer {
                 Criteria.where("bybitType").is(row.getBybitType()),
                 Criteria.where("assetSymbol").ne(row.getAssetSymbol()),
                 Criteria.where("quantityRaw").exists(true),
-                Criteria.where("timeUtc").gte(center.minusSeconds(ETH2_WINDOW_SECONDS))
-                        .lte(center.plusSeconds(ETH2_WINDOW_SECONDS))
+                Criteria.where("timeUtc").gte(center.minusSeconds(LIQUID_STAKING_WINDOW_SECONDS))
+                        .lte(center.plusSeconds(LIQUID_STAKING_WINDOW_SECONDS))
         ));
-        query.with(Sort.by(Sort.Order.asc("timeUtc"), Sort.Order.asc("_id")));
-        List<ExternalLedgerRaw> candidates = mongoOperations.find(query, ExternalLedgerRaw.class);
-        return candidates.stream()
-                .filter(candidate -> candidate.getQuantityRaw() != null
-                        && candidate.getQuantityRaw().signum() == -row.getQuantityRaw().signum())
-                .min(Comparator
-                        .comparingLong((ExternalLedgerRaw candidate) ->
-                                Math.abs(candidate.getTimeUtc().getEpochSecond() - center.getEpochSecond()))
-                        .thenComparing(ExternalLedgerRaw::getTimeUtc)
-                        .thenComparing(ExternalLedgerRaw::getId));
+        if (row.getBybitDescription() != null && !row.getBybitDescription().isBlank()) {
+            criteria.add(Criteria.where("bybitDescription").is(row.getBybitDescription()));
+        }
+        return new Criteria().andOperator(criteria.toArray(Criteria[]::new));
+    }
+
+    private boolean sameLiquidStakingFamily(ExternalLedgerRaw left, ExternalLedgerRaw right) {
+        String leftFamily = AccountingAssetFamilySupport.continuityIdentity(left.getAssetSymbol(), null);
+        String rightFamily = AccountingAssetFamilySupport.continuityIdentity(right.getAssetSymbol(), null);
+        return leftFamily != null && leftFamily.equals(rightFamily);
+    }
+
+    private boolean exactAbsQuantityMatch(ExternalLedgerRaw left, ExternalLedgerRaw right) {
+        return left.getQuantityRaw() != null
+                && right.getQuantityRaw() != null
+                && left.getQuantityRaw().abs().compareTo(right.getQuantityRaw().abs()) == 0;
+    }
+
+    private double liquidStakingMagnitudePenalty(ExternalLedgerRaw left, ExternalLedgerRaw right) {
+        if (left.getQuantityRaw() == null || right.getQuantityRaw() == null) {
+            return Double.MAX_VALUE;
+        }
+        return left.getQuantityRaw().abs().subtract(right.getQuantityRaw().abs()).abs().doubleValue();
     }
 
     private String normalize(String value) {

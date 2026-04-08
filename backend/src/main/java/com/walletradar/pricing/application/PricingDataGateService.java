@@ -8,6 +8,8 @@ import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.stereotype.Service;
 
+import java.util.Collection;
+
 /**
  * Produces live pricing readiness counters used by BE-06F handoff.
  */
@@ -41,13 +43,52 @@ public class PricingDataGateService {
         );
     }
 
+    public PricingDataGateSnapshot snapshot(Collection<String> walletAddresses) {
+        if (walletAddresses == null || walletAddresses.isEmpty()) {
+            return new PricingDataGateSnapshot(0L, 0L, 0L, 0L, 0L, true);
+        }
+        long pendingPriceCount = countByStatus(walletAddresses, NormalizedTransactionStatus.PENDING_PRICE);
+        long pendingClarificationCount = countByStatus(walletAddresses, NormalizedTransactionStatus.PENDING_CLARIFICATION);
+        long needsReviewCount = countBlockingNeedsReview(walletAddresses);
+        long excludedNeedsReviewCount = countExcludedNeedsReview(walletAddresses);
+        long unresolvedPriceCount = countUnresolvedPrice(walletAddresses);
+        boolean avcoReady = pendingPriceCount == 0L
+                && pendingClarificationCount == 0L
+                && needsReviewCount == 0L;
+        return new PricingDataGateSnapshot(
+                pendingPriceCount,
+                pendingClarificationCount,
+                needsReviewCount,
+                unresolvedPriceCount,
+                excludedNeedsReviewCount,
+                avcoReady
+        );
+    }
+
     private long countByStatus(NormalizedTransactionStatus status) {
         Query query = new Query(Criteria.where("status").is(status));
         return mongoOperations.count(query, NormalizedTransaction.class);
     }
 
+    private long countByStatus(Collection<String> walletAddresses, NormalizedTransactionStatus status) {
+        Query query = new Query(new Criteria().andOperator(
+                Criteria.where("walletAddress").in(walletAddresses),
+                Criteria.where("status").is(status)
+        ));
+        return mongoOperations.count(query, NormalizedTransaction.class);
+    }
+
     private long countBlockingNeedsReview() {
         Query query = new Query(new Criteria().andOperator(
+                Criteria.where("status").is(NormalizedTransactionStatus.NEEDS_REVIEW),
+                ACTIVE_ACCOUNTING_CRITERIA
+        ));
+        return mongoOperations.count(query, NormalizedTransaction.class);
+    }
+
+    private long countBlockingNeedsReview(Collection<String> walletAddresses) {
+        Query query = new Query(new Criteria().andOperator(
+                Criteria.where("walletAddress").in(walletAddresses),
                 Criteria.where("status").is(NormalizedTransactionStatus.NEEDS_REVIEW),
                 ACTIVE_ACCOUNTING_CRITERIA
         ));
@@ -62,8 +103,25 @@ public class PricingDataGateService {
         return mongoOperations.count(query, NormalizedTransaction.class);
     }
 
+    private long countExcludedNeedsReview(Collection<String> walletAddresses) {
+        Query query = new Query(new Criteria().andOperator(
+                Criteria.where("walletAddress").in(walletAddresses),
+                Criteria.where("status").is(NormalizedTransactionStatus.NEEDS_REVIEW),
+                EXCLUDED_ACCOUNTING_CRITERIA
+        ));
+        return mongoOperations.count(query, NormalizedTransaction.class);
+    }
+
     private long countUnresolvedPrice() {
         Query query = new Query(Criteria.where("missingDataReasons").in(PriceableFlowPolicy.PRICE_UNRESOLVABLE_REASON));
+        return mongoOperations.count(query, NormalizedTransaction.class);
+    }
+
+    private long countUnresolvedPrice(Collection<String> walletAddresses) {
+        Query query = new Query(new Criteria().andOperator(
+                Criteria.where("walletAddress").in(walletAddresses),
+                Criteria.where("missingDataReasons").in(PriceableFlowPolicy.PRICE_UNRESOLVABLE_REASON)
+        ));
         return mongoOperations.count(query, NormalizedTransaction.class);
     }
 }

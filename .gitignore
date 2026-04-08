@@ -37,5 +37,9 @@ raw_data/
 tmp/
 *.log
 
+# Local secrets / backups
+.secrets/
+backups/
+
 # R / misc
 .Rhistory

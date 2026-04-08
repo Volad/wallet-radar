@@ -3,8 +3,11 @@ package com.walletradar.ingestion.wallet.query;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.domain.session.UserSessionRepository;
+import com.walletradar.domain.sync.BackfillSegment;
+import com.walletradar.domain.sync.BackfillSegmentRepository;
 import com.walletradar.domain.sync.SyncStatus;
 import com.walletradar.domain.sync.SyncStatusRepository;
+import com.walletradar.domain.transaction.bybit.BybitExtractedEvent;
 import com.walletradar.domain.transaction.externalledger.ExternalLedgerRaw;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.session.application.AccountingUniverseService;
@@ -37,6 +40,7 @@ public class SessionQueryService {
 
     private final UserSessionRepository userSessionRepository;
     private final SyncStatusRepository syncStatusRepository;
+    private final BackfillSegmentRepository backfillSegmentRepository;
     private final AccountingUniverseService accountingUniverseService;
     private final MongoOperations mongoOperations;
 
@@ -114,8 +118,37 @@ public class SessionQueryService {
             ));
         }
 
-        int overallProgress = totalTargets == 0 ? 0 : (int) Math.round((double) progressSum / totalTargets);
-        String aggregateStatus = resolveAggregateStatus(totalTargets, completedTargets, hasRunning, hasFailed, hasAnyStatus);
+        for (UserSession.SessionIntegration integration : enabledIntegrations(session)) {
+            totalTargets++;
+            IntegrationBackfillTargetView integrationStatus = integrationBackfillTarget(integration);
+            progressSum += integrationStatus.progressPct();
+            if (integrationStatus.complete()) {
+                completedTargets++;
+            }
+            if (integrationStatus.running()) {
+                hasRunning = true;
+            }
+            if (integrationStatus.failed()) {
+                hasFailed = true;
+            }
+            hasAnyStatus = true;
+        }
+
+        boolean emptyBackfillComplete = totalTargets == 0
+                && session.getPipelineState() != null
+                && session.getPipelineState().getStage() == UserSession.PipelineStage.BACKFILL
+                && session.getPipelineState().getStatus() == UserSession.PipelineStatus.COMPLETE;
+        int overallProgress = emptyBackfillComplete
+                ? 100
+                : totalTargets == 0 ? 0 : (int) Math.round((double) progressSum / totalTargets);
+        String aggregateStatus = resolveAggregateStatus(
+                totalTargets,
+                completedTargets,
+                hasRunning,
+                hasFailed,
+                hasAnyStatus,
+                emptyBackfillComplete
+        );
 
         return new SessionBackfillStatusView(
                 session.getId(),
@@ -163,8 +196,8 @@ public class SessionQueryService {
             );
             case "BYBIT_NORMALIZATION" -> progressFromCounts(
                     stage,
-                    countExternalLedgerRows(session.getId()),
-                    countExternalLedgerRows(session.getId(), "CONFIRMED")
+                    countBybitStagingRows(session.getId()),
+                    countBybitStagingRows(session.getId(), "CONFIRMED")
             );
             case "PRICING" -> progressFromCounts(
                     stage,
@@ -174,7 +207,7 @@ public class SessionQueryService {
             case "ACCOUNTING_REPLAY" -> progressFromCounts(
                     stage,
                     countReplayTotal(memberRefs),
-                    countReplayProcessed(memberRefs)
+                    countReplayProcessed(scope)
             );
             case "BACKFILL" -> progressFromCounts(stage, totalTargets, completedTargets, overallProgress);
             default -> progressFromCounts(stage, totalTargets, completedTargets, overallProgress);
@@ -186,6 +219,7 @@ public class SessionQueryService {
             return Map.of();
         }
         return syncStatusRepository.findByWalletAddressIn(addresses).stream()
+                .filter(s -> s.getSourceKind() == null || s.getSourceKind() == SyncStatus.SourceKind.ONCHAIN)
                 .filter(s -> s.getWalletAddress() != null && s.getNetworkId() != null)
                 .collect(Collectors.toMap(
                         s -> pairKey(s.getWalletAddress(), s.getNetworkId()),
@@ -217,7 +251,11 @@ public class SessionQueryService {
     }
 
     private static String resolveAggregateStatus(long totalTargets, long completedTargets,
-                                                 boolean hasRunning, boolean hasFailed, boolean hasAnyStatus) {
+                                                 boolean hasRunning, boolean hasFailed,
+                                                 boolean hasAnyStatus, boolean emptyBackfillComplete) {
+        if (emptyBackfillComplete) {
+            return SyncStatus.SyncStatusValue.COMPLETE.name();
+        }
         if (totalTargets > 0 && completedTargets == totalTargets) {
             return SyncStatus.SyncStatusValue.COMPLETE.name();
         }
@@ -239,6 +277,60 @@ public class SessionQueryService {
 
     private static int clampProgress(int progressPct) {
         return Math.max(0, Math.min(100, progressPct));
+    }
+
+    private List<UserSession.SessionIntegration> enabledIntegrations(UserSession session) {
+        if (session.getIntegrations() == null || session.getIntegrations().isEmpty()) {
+            return List.of();
+        }
+        return session.getIntegrations().stream()
+                .filter(integration -> integration != null
+                        && integration.getStatus() != UserSession.IntegrationStatus.DISABLED
+                        && integration.getIntegrationId() != null
+                        && !integration.getIntegrationId().isBlank())
+                .toList();
+    }
+
+    private IntegrationBackfillTargetView integrationBackfillTarget(UserSession.SessionIntegration integration) {
+        SyncStatus integrationSync = syncStatusRepository.findLatestByIntegrationId(integration.getIntegrationId()).orElse(null);
+        if (integrationSync != null) {
+            boolean complete = integrationSync.isBackfillComplete();
+            boolean failed = integrationSync.getStatus() == SyncStatus.SyncStatusValue.FAILED
+                    || integrationSync.getStatus() == SyncStatus.SyncStatusValue.ABANDONED;
+            boolean running = integrationSync.getStatus() == SyncStatus.SyncStatusValue.RUNNING
+                    || integrationSync.getStatus() == SyncStatus.SyncStatusValue.PENDING;
+            return new IntegrationBackfillTargetView(
+                    clampProgress(integrationSync.getProgressPct() == null ? 0 : integrationSync.getProgressPct()),
+                    complete,
+                    running && !complete && !failed,
+                    failed
+            );
+        }
+        long totalSegments = backfillSegmentRepository.countByIntegrationId(integration.getIntegrationId());
+        long completedSegments = backfillSegmentRepository.countByIntegrationIdAndStatus(
+                integration.getIntegrationId(),
+                BackfillSegment.SegmentStatus.COMPLETE
+        );
+        long failedSegments = backfillSegmentRepository.countByIntegrationIdAndStatus(
+                integration.getIntegrationId(),
+                BackfillSegment.SegmentStatus.FAILED
+        );
+        int progressPct;
+        boolean complete;
+        boolean running;
+        boolean failed;
+        if (totalSegments > 0) {
+            progressPct = clampProgress((int) Math.round((double) completedSegments * 100.0 / totalSegments));
+            complete = completedSegments >= totalSegments;
+            failed = failedSegments > 0 && !complete;
+            running = !complete && !failed;
+        } else {
+            complete = integration.getStatus() == UserSession.IntegrationStatus.READY;
+            failed = integration.getStatus() == UserSession.IntegrationStatus.ERROR;
+            running = !complete && !failed;
+            progressPct = complete ? 100 : 0;
+        }
+        return new IntegrationBackfillTargetView(progressPct, complete, running, failed);
     }
 
     private PhaseProgressView progressFromCounts(String phase, long totalCount, long processedCount) {
@@ -297,15 +389,18 @@ public class SessionQueryService {
         return mongoOperations.count(query, NormalizedTransaction.class);
     }
 
-    private long countExternalLedgerRows(String sessionId) {
+    private long countBybitStagingRows(String sessionId) {
         if (sessionId == null || sessionId.isBlank()) {
             return 0;
         }
         Query query = Query.query(Criteria.where("sessionId").is(sessionId));
+        if (mongoOperations.exists(query, BybitExtractedEvent.class)) {
+            return mongoOperations.count(query, BybitExtractedEvent.class);
+        }
         return mongoOperations.count(query, ExternalLedgerRaw.class);
     }
 
-    private long countExternalLedgerRows(String sessionId, String status) {
+    private long countBybitStagingRows(String sessionId, String status) {
         if (sessionId == null || sessionId.isBlank()) {
             return 0;
         }
@@ -313,6 +408,10 @@ public class SessionQueryService {
                 Criteria.where("sessionId").is(sessionId),
                 Criteria.where("status").is(status)
         ));
+        Query sessionQuery = Query.query(Criteria.where("sessionId").is(sessionId));
+        if (mongoOperations.exists(sessionQuery, BybitExtractedEvent.class)) {
+            return mongoOperations.count(query, BybitExtractedEvent.class);
+        }
         return mongoOperations.count(query, ExternalLedgerRaw.class);
     }
 
@@ -352,12 +451,17 @@ public class SessionQueryService {
         return mongoOperations.count(query, NormalizedTransaction.class);
     }
 
-    private long countReplayProcessed(List<String> walletAddresses) {
-        if (walletAddresses.isEmpty()) {
+    private long countReplayProcessed(AccountingUniverseService.AccountingUniverseScope scope) {
+        if (scope == null || scope.memberRefs().isEmpty()) {
             return 0;
         }
-        Query query = Query.query(new Criteria().andOperator(
-                Criteria.where("walletAddress").in(walletAddresses),
+        Query query = scope.accountingUniverseId() == null || scope.accountingUniverseId().isBlank()
+                ? Query.query(new Criteria().andOperator(
+                Criteria.where("walletAddress").in(scope.memberRefs()),
+                Criteria.where("normalizedTransactionId").ne(null)
+        ))
+                : Query.query(new Criteria().andOperator(
+                Criteria.where("accountingUniverseId").is(scope.accountingUniverseId()),
                 Criteria.where("normalizedTransactionId").ne(null)
         ));
         return mongoOperations.findDistinct(query, "normalizedTransactionId", "asset_ledger_points", String.class).size();
@@ -430,6 +534,14 @@ public class SessionQueryService {
             Long lastBlockSynced,
             Boolean backfillComplete,
             String syncBannerMessage
+    ) {
+    }
+
+    private record IntegrationBackfillTargetView(
+            int progressPct,
+            boolean complete,
+            boolean running,
+            boolean failed
     ) {
     }
 }

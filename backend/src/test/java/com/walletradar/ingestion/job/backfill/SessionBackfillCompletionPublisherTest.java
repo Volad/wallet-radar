@@ -4,6 +4,8 @@ import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.event.SessionBackfillCompletedEvent;
 import com.walletradar.domain.event.WalletNetworkBackfillCompletedEvent;
 import com.walletradar.domain.session.UserSession;
+import com.walletradar.domain.sync.BackfillSegment;
+import com.walletradar.domain.sync.BackfillSegmentRepository;
 import com.walletradar.domain.session.UserSessionRepository;
 import com.walletradar.domain.sync.SyncStatus;
 import com.walletradar.domain.sync.SyncStatusRepository;
@@ -30,6 +32,8 @@ class SessionBackfillCompletionPublisherTest {
     @Mock
     private SyncStatusRepository syncStatusRepository;
     @Mock
+    private BackfillSegmentRepository backfillSegmentRepository;
+    @Mock
     private ApplicationEventPublisher applicationEventPublisher;
     @Mock
     private SessionPipelineStateService sessionPipelineStateService;
@@ -52,6 +56,7 @@ class SessionBackfillCompletionPublisherTest {
         SessionBackfillCompletionPublisher publisher = new SessionBackfillCompletionPublisher(
                 userSessionRepository,
                 syncStatusRepository,
+                backfillSegmentRepository,
                 applicationEventPublisher,
                 sessionPipelineStateService
         );
@@ -81,6 +86,7 @@ class SessionBackfillCompletionPublisherTest {
         SessionBackfillCompletionPublisher publisher = new SessionBackfillCompletionPublisher(
                 userSessionRepository,
                 syncStatusRepository,
+                backfillSegmentRepository,
                 applicationEventPublisher,
                 sessionPipelineStateService
         );
@@ -88,6 +94,69 @@ class SessionBackfillCompletionPublisherTest {
         publisher.onWalletNetworkBackfillCompleted(new WalletNetworkBackfillCompletedEvent("0xabc", NetworkId.ETHEREUM));
 
         verify(applicationEventPublisher, never()).publishEvent(org.mockito.ArgumentMatchers.any(SessionBackfillCompletedEvent.class));
+    }
+
+    @Test
+    void doesNotPublishUntilEnabledIntegrationSegmentsComplete() {
+        UserSession session = session(
+                "session-1",
+                wallet("0xabc", List.of(NetworkId.ETHEREUM))
+        );
+        UserSession.SessionIntegration integration = new UserSession.SessionIntegration();
+        integration.setIntegrationId("BYBIT-33625378");
+        integration.setStatus(UserSession.IntegrationStatus.BACKFILLING);
+        session.setIntegrations(List.of(integration));
+
+        when(userSessionRepository.findAllByWalletsAddress("0xabc")).thenReturn(List.of(session));
+        when(syncStatusRepository.findByWalletAddressIn(List.of("0xabc"))).thenReturn(List.of(
+                syncStatus("0xabc", NetworkId.ETHEREUM, true)
+        ));
+        when(backfillSegmentRepository.countByIntegrationId("BYBIT-33625378")).thenReturn(4L);
+        when(backfillSegmentRepository.countByIntegrationIdAndStatus("BYBIT-33625378", BackfillSegment.SegmentStatus.COMPLETE))
+                .thenReturn(3L);
+
+        SessionBackfillCompletionPublisher publisher = new SessionBackfillCompletionPublisher(
+                userSessionRepository,
+                syncStatusRepository,
+                backfillSegmentRepository,
+                applicationEventPublisher,
+                sessionPipelineStateService
+        );
+
+        publisher.onWalletNetworkBackfillCompleted(new WalletNetworkBackfillCompletedEvent("0xabc", NetworkId.ETHEREUM));
+
+        verify(applicationEventPublisher, never()).publishEvent(org.mockito.ArgumentMatchers.any(SessionBackfillCompletedEvent.class));
+    }
+
+    @Test
+    void publishesForIntegrationOnlySessionWhenSegmentsAreComplete() {
+        UserSession session = new UserSession();
+        session.setId("session-1");
+        session.setWallets(List.of());
+        UserSession.SessionIntegration integration = new UserSession.SessionIntegration();
+        integration.setIntegrationId("BYBIT-33625378");
+        integration.setStatus(UserSession.IntegrationStatus.READY);
+        session.setIntegrations(List.of(integration));
+
+        when(userSessionRepository.findById("session-1")).thenReturn(java.util.Optional.of(session));
+        when(backfillSegmentRepository.countByIntegrationId("BYBIT-33625378")).thenReturn(5L);
+        when(backfillSegmentRepository.countByIntegrationIdAndStatus("BYBIT-33625378", BackfillSegment.SegmentStatus.COMPLETE))
+                .thenReturn(5L);
+
+        SessionBackfillCompletionPublisher publisher = new SessionBackfillCompletionPublisher(
+                userSessionRepository,
+                syncStatusRepository,
+                backfillSegmentRepository,
+                applicationEventPublisher,
+                sessionPipelineStateService
+        );
+
+        publisher.maybePublishSessionCompletionBySessionId("session-1");
+
+        ArgumentCaptor<SessionBackfillCompletedEvent> captor = ArgumentCaptor.forClass(SessionBackfillCompletedEvent.class);
+        verify(applicationEventPublisher).publishEvent(captor.capture());
+        assertThat(captor.getValue().walletCount()).isZero();
+        assertThat(captor.getValue().targetCount()).isEqualTo(1);
     }
 
     private static UserSession session(String id, UserSession.SessionWallet... wallets) {

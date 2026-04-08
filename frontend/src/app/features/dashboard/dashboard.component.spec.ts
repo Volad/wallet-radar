@@ -12,6 +12,25 @@ import { DashboardComponent } from './dashboard.component';
 
 describe('DashboardComponent (wallet submit flow)', () => {
   const sessionId = '549b0aba-a9af-4789-b125-ebb86314a3f1';
+  const dashboardData = {
+    ...EMPTY_DASHBOARD_DATA,
+    wallets: [
+      {
+        id: '0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f',
+        label: 'Wallet 1',
+        address: '0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f',
+        color: '#22d3ee',
+      },
+    ],
+    networks: [
+      {
+        id: 'ETHEREUM',
+        icon: '⟠',
+        label: 'Ethereum',
+        color: '#627EEA',
+      },
+    ],
+  };
   const runningBackfill: SessionBackfillStatusResponse = {
     sessionId,
     status: 'RUNNING',
@@ -102,6 +121,7 @@ describe('DashboardComponent (wallet submit flow)', () => {
     walletApiServiceSpy = jasmine.createSpyObj<WalletApiService>('WalletApiService', [
       'addSession',
       'getSession',
+      'getSessionSettings',
       'getSessionBackfillStatus',
       'rebuildSessionTransactions',
       'getSessionTransactions',
@@ -116,6 +136,15 @@ describe('DashboardComponent (wallet submit flow)', () => {
       of({
         sessionId,
         message: 'Session saved, backfill started',
+      })
+    );
+    walletApiServiceSpy.getSessionSettings.and.returnValue(
+      of({
+        sessionId,
+        wallets: [],
+        integrations: [],
+        hideSmallAssets: true,
+        showReconciliationWarnings: true,
       })
     );
     walletApiServiceSpy.getSessionBackfillStatus.and.returnValue(of(runningBackfill));
@@ -135,7 +164,7 @@ describe('DashboardComponent (wallet submit flow)', () => {
         {
           provide: DashboardDataService,
           useValue: {
-            getDashboardData: () => of(EMPTY_DASHBOARD_DATA),
+            getDashboardData: () => of(dashboardData),
           },
         },
         {
@@ -294,5 +323,53 @@ describe('DashboardComponent (wallet submit flow)', () => {
     fixture.detectChanges();
 
     expect(component.transactionPaneTransactions()[0].flows[0].source).toBe('BYBIT');
+  }));
+
+  it('treats wallet and integration filters as checked by default', fakeAsync(() => {
+    sessionStorageServiceSpy.getSessionId.and.returnValue(sessionId);
+    walletApiServiceSpy.getSessionBackfillStatus.and.returnValue(of(completeBackfill));
+    walletApiServiceSpy.getSessionSettings.and.returnValue(
+      of({
+        sessionId,
+        wallets: [],
+        integrations: [
+          {
+            integrationId: 'BYBIT-33625378',
+            provider: 'BYBIT',
+            status: 'READY',
+            displayName: 'Bybit',
+            accountRef: 'BYBIT:33625378',
+            maskedKey: '****abcd',
+            readOnly: true,
+            capabilities: ['READ'],
+            lastValidatedAt: null,
+            lastSyncAt: null,
+            lastError: null,
+            totalSegments: 10,
+            completedSegments: 10,
+            failedSegments: 0,
+            progressPct: 100,
+          },
+        ],
+        hideSmallAssets: true,
+        showReconciliationWarnings: true,
+      })
+    );
+
+    const fixture = TestBed.createComponent(DashboardComponent);
+    const component = fixture.componentInstance;
+    fixture.detectChanges();
+    tick();
+    fixture.detectChanges();
+
+    expect(component.isWalletSelected('0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f')).toBeTrue();
+    expect(component.isNetworkSelected('ETHEREUM')).toBeTrue();
+    expect(component.isIntegrationSelected('BYBIT:33625378')).toBeTrue();
+
+    component.toggleIntegration('BYBIT:33625378');
+    tick();
+    fixture.detectChanges();
+
+    expect(component.isIntegrationSelected('BYBIT:33625378')).toBeFalse();
   }));
 });

@@ -26,6 +26,8 @@ class PricingJobTest {
     @Mock
     private PricingDataGateService pricingDataGateService;
     @Mock
+    private StalePriceUnresolvedRepairService stalePriceUnresolvedRepairService;
+    @Mock
     private PipelineTelemetrySnapshotService pipelineTelemetrySnapshotService;
 
     @Test
@@ -52,9 +54,10 @@ class PricingJobTest {
                 2L
         ));
 
+        when(stalePriceUnresolvedRepairService.repairNextBatch(properties.getBatchSize())).thenReturn(0);
         ApplicationEventPublisher publisher = org.mockito.Mockito.mock(ApplicationEventPublisher.class);
         SessionPipelineStateService pipelineStateService = org.mockito.Mockito.mock(SessionPipelineStateService.class);
-        PricingJob job = new PricingJob(properties, pricingJobService, pricingDataGateService, pipelineTelemetrySnapshotService, publisher, pipelineStateService);
+        PricingJob job = new PricingJob(properties, pricingJobService, pricingDataGateService, stalePriceUnresolvedRepairService, pipelineTelemetrySnapshotService, publisher, pipelineStateService);
         int processed = job.runPricing();
 
         assertThat(processed).isEqualTo(3);
@@ -85,9 +88,10 @@ class PricingJobTest {
                 0L
         ));
 
+        when(stalePriceUnresolvedRepairService.repairNextBatch(properties.getBatchSize())).thenReturn(0, 0);
         ApplicationEventPublisher publisher = org.mockito.Mockito.mock(ApplicationEventPublisher.class);
         SessionPipelineStateService pipelineStateService = org.mockito.Mockito.mock(SessionPipelineStateService.class);
-        PricingJob job = new PricingJob(properties, pricingJobService, pricingDataGateService, pipelineTelemetrySnapshotService, publisher, pipelineStateService);
+        PricingJob job = new PricingJob(properties, pricingJobService, pricingDataGateService, stalePriceUnresolvedRepairService, pipelineTelemetrySnapshotService, publisher, pipelineStateService);
 
         int firstRun = job.runPricing();
         int secondRun = job.runPricing();
@@ -123,7 +127,8 @@ class PricingJobTest {
         List<Object> events = new ArrayList<>();
         ApplicationEventPublisher publisher = events::add;
         SessionPipelineStateService pipelineStateService = org.mockito.Mockito.mock(SessionPipelineStateService.class);
-        PricingJob job = new PricingJob(properties, pricingJobService, pricingDataGateService, pipelineTelemetrySnapshotService, publisher, pipelineStateService);
+        when(stalePriceUnresolvedRepairService.repairNextBatch(properties.getBatchSize())).thenReturn(0);
+        PricingJob job = new PricingJob(properties, pricingJobService, pricingDataGateService, stalePriceUnresolvedRepairService, pipelineTelemetrySnapshotService, publisher, pipelineStateService);
 
         job.onBybitNormalizationCompleted(new BybitNormalizationCompletedEvent("session-1", 0, "clarification-completed"));
 

@@ -38,5 +38,11 @@
     </div>
   }
 
-  <button type="button" class="wallet-add-btn" (click)="addWallet.emit()">+ Add wallet</button>
+  @for (integration of integrations; track integration.id) {
+    <div class="wallet-chip integration-chip" [style.--integrationColor]="integration.color">
+      <span class="integration-icon" [style.color]="integration.color" aria-hidden="true">{{ integration.icon }}</span>
+      <span class="mono">{{ shortIntegrationRef(integration.accountRef) }}</span>
+      <span>· {{ integration.label }}</span>
+    </div>
+  }
 </header>

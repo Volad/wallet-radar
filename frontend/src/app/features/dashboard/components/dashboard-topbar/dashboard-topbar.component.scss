@@ -147,11 +147,21 @@
   flex-shrink: 0;
 }
 
+.integration-chip {
+  border-color: color-mix(in srgb, var(--integrationColor) 28%, var(--wr-border));
+  background: color-mix(in srgb, var(--integrationColor) 10%, var(--wr-elevated));
+}
+
 .wallet-dot {
   width: 0.35rem;
   height: 0.35rem;
   border-radius: 50%;
   flex-shrink: 0;
+}
+
+.integration-icon {
+  font-size: 0.72rem;
+  line-height: 1;
 }
 
 .wallet-add-btn {
@@ -163,6 +173,13 @@
   font-size: 0.65rem;
   padding: 0.34rem 0.7rem;
   cursor: pointer;
+  text-decoration: none;
+}
+
+.settings-link {
+  background: transparent;
+  color: var(--wr-text);
+  border: 1px solid var(--wr-border);
 }
 
 .mono {

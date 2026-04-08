@@ -6,6 +6,7 @@ import com.walletradar.ingestion.config.BackfillProperties;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.context.ApplicationEventPublisher;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
@@ -25,6 +26,8 @@ class SyncProgressTrackerTest {
     private SyncStatusRepository syncStatusRepository;
     @Mock
     private BackfillProperties backfillProperties;
+    @Mock
+    private ApplicationEventPublisher applicationEventPublisher;
 
     @InjectMocks
     private SyncProgressTracker tracker;

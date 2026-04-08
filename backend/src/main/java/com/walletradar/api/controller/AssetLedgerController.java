@@ -40,7 +40,26 @@ public class AssetLedgerController {
                         view.current().totalCostBasisUsd(),
                         view.current().avcoUsd(),
                         view.current().realisedPnlUsd(),
-                        view.current().gasPaidUsd()
+                        view.current().gasPaidUsd(),
+                        view.current().uncoveredBuckets().stream()
+                                .map(bucket -> new SessionAssetLedgerResponse.UncoveredBucket(
+                                        bucket.walletAddress(),
+                                        bucket.networkId(),
+                                        bucket.assetSymbol(),
+                                        bucket.assetContract(),
+                                        bucket.quantity(),
+                                        bucket.coveredQuantity(),
+                                        bucket.uncoveredQuantity(),
+                                        bucket.uncoveredReason(),
+                                        bucket.latestTxHash(),
+                                        bucket.latestNormalizedType(),
+                                        bucket.latestBasisEffect(),
+                                        bucket.latestProtocolName(),
+                                        bucket.hasIncompleteHistory(),
+                                        bucket.hasUnresolvedFlags(),
+                                        bucket.unresolvedFlagCount()
+                                ))
+                                .toList()
                 ),
                 view.timeline().stream()
                         .map(entry -> new SessionAssetLedgerResponse.TimelineEntry(

@@ -67,6 +67,16 @@ interface BasisFilterView {
   readonly color: string;
 }
 
+type EventFamilyKey = 'lp' | 'bridge' | 'transfer' | 'lending' | 'reward' | 'staking';
+
+interface EventFamilyFilterView {
+  readonly key: EventFamilyKey;
+  readonly label: string;
+  readonly color: string;
+  readonly typeKeys: ReadonlyArray<string>;
+  readonly eventCount: number;
+}
+
 interface QuickPresetView {
   readonly key: QuickPresetKey;
   readonly label: string;
@@ -134,6 +144,8 @@ interface RenderedPnlMarkerView extends RenderedPointView {
   readonly cumulativeY: number;
 }
 
+type RangeDragMode = 'move' | 'start' | 'end';
+
 const ETH_FAMILY_SYMBOLS = new Set(['ETH', 'WETH', 'AETHWETH', 'AARBWETH', 'ALINWETH', 'AMANWETH', 'AZKSWETH', 'VBETH']);
 const BTC_FAMILY_SYMBOLS = new Set(['BTC', 'WBTC', 'AARBWBTC', 'AETHWBTC', 'ALINWBTC', 'AMANWBTC', 'AZKSWBTC']);
 const AVAX_FAMILY_SYMBOLS = new Set(['AVAX', 'WAVAX', 'SAVAX', 'AAVAWAVAX', 'AAVASAVAX']);
@@ -169,6 +181,11 @@ interface TypeVisualMeta {
   readonly icon: IconRenderer;
 }
 
+interface TypeDisplayOverride {
+  readonly label: string;
+  readonly baseType: string;
+}
+
 const FALLBACK_ICON: IconRenderer = (ctx, cx, cy, r) => {
   const a = r * 0.45;
   ctx.beginPath();
@@ -184,77 +201,99 @@ const FALLBACK_ICON: IconRenderer = (ctx, cx, cy, r) => {
 
 function heuristicTypeMeta(typeKey: string): TypeVisualMeta {
   const key = typeKey.toUpperCase();
+  const label = prettifyTypeLabel(typeKey);
   if (key.includes('SWAP')) {
-    return TYPE_META['SWAP'];
+    return { ...TYPE_META['SWAP'], label };
   }
   if (key.includes('LENDING') || key.includes('LOOP')) {
     if (key.includes('WITHDRAW') || key.includes('DECREASE') || key.includes('CLOSE')) {
-      return TYPE_META['LENDING_WITHDRAW'];
+      return { ...TYPE_META['LENDING_WITHDRAW'], label };
     }
     if (key.includes('BORROW')) {
-      return TYPE_META['BORROW'];
+      return { ...TYPE_META['BORROW'], label };
     }
     if (key.includes('REPAY')) {
-      return TYPE_META['REPAY'];
+      return { ...TYPE_META['REPAY'], label };
     }
-    return TYPE_META['LENDING_DEPOSIT'];
+    return { ...TYPE_META['LENDING_DEPOSIT'], label };
   }
   if (key.includes('STAK')) {
     if (key.includes('WITHDRAW') || key.includes('UNSTAKE')) {
-      return TYPE_META['STAKING_WITHDRAW'];
+      return { ...TYPE_META['STAKING_WITHDRAW'], label };
     }
-    return TYPE_META['STAKING_DEPOSIT'];
+    return { ...TYPE_META['STAKING_DEPOSIT'], label };
   }
   if (key.includes('BRIDGE')) {
     if (key.includes('OUT')) {
-      return TYPE_META['BRIDGE_OUT'];
+      return { ...TYPE_META['BRIDGE_OUT'], label };
     }
-    return TYPE_META['BRIDGE_IN'];
+    return { ...TYPE_META['BRIDGE_IN'], label };
   }
   if (key.includes('INTERNAL_TRANSFER')) {
-    return TYPE_META['INTERNAL_TRANSFER'];
+    return { ...TYPE_META['INTERNAL_TRANSFER'], label };
   }
   if (key.includes('EXTERNAL_TRANSFER_OUT')) {
-    return TYPE_META['EXTERNAL_TRANSFER_OUT'];
+    return { ...TYPE_META['EXTERNAL_TRANSFER_OUT'], label };
   }
   if (key.includes('EXTERNAL_TRANSFER_IN')) {
-    return TYPE_META['EXTERNAL_TRANSFER_IN'];
+    return { ...TYPE_META['EXTERNAL_TRANSFER_IN'], label };
   }
   if (key.includes('TRANSFER')) {
-    return TYPE_META['INTERNAL_TRANSFER'];
+    return { ...TYPE_META['INTERNAL_TRANSFER'], label };
   }
   if (key.includes('REWARD') || key.includes('CLAIM')) {
-    return TYPE_META['REWARD_CLAIM'];
+    return { ...TYPE_META['REWARD_CLAIM'], label };
   }
   if (key.includes('VAULT')) {
-    return TYPE_META['VAULT_DEPOSIT'];
+    return { ...TYPE_META['VAULT_DEPOSIT'], label };
   }
   if (key.includes('LP')) {
     if (key.includes('EXIT') || key.includes('REMOVE')) {
-      return TYPE_META['LP_EXIT'];
+      return { ...TYPE_META['LP_EXIT'], label };
     }
-    return TYPE_META['LP_ENTRY'];
+    return { ...TYPE_META['LP_ENTRY'], label };
   }
   if (key.includes('WRAP')) {
     if (key.includes('UN')) {
-      return TYPE_META['UNWRAP'];
+      return { ...TYPE_META['UNWRAP'], label };
     }
-    return TYPE_META['WRAP'];
+    return { ...TYPE_META['WRAP'], label };
   }
   if (key.includes('FEE') || key.includes('GAS')) {
     return {
-      label: typeKey.replace(/_/g, ' '),
+      label,
       glyph: '•',
       color: '#fbbf24',
       icon: FALLBACK_ICON,
     };
   }
   return {
-    label: typeKey.replace(/_/g, ' '),
+    label,
     glyph: '•',
     color: '#3b82f6',
     icon: FALLBACK_ICON,
   };
+}
+
+function prettifyTypeLabel(typeKey: string): string {
+  return typeKey
+    .trim()
+    .split('_')
+    .filter((part) => part.length > 0)
+    .map((part) => {
+      const key = part.toUpperCase();
+      switch (key) {
+        case 'LP':
+          return 'LP';
+        case 'DEX':
+          return 'DEX';
+        case 'PNL':
+          return 'PnL';
+        default:
+          return `${key.slice(0, 1)}${key.slice(1).toLowerCase()}`;
+      }
+    })
+    .join(' ');
 }
 
 const TYPE_META: Readonly<Record<string, TypeVisualMeta>> = {
@@ -279,7 +318,7 @@ const TYPE_META: Readonly<Record<string, TypeVisualMeta>> = {
     },
   },
   LENDING_DEPOSIT: {
-    label: 'Lend deposit',
+    label: 'Lending deposit',
     glyph: '⊕',
     color: '#34d399',
     icon: (ctx, cx, cy, r) => {
@@ -297,7 +336,7 @@ const TYPE_META: Readonly<Record<string, TypeVisualMeta>> = {
     },
   },
   LENDING_WITHDRAW: {
-    label: 'Lend withdraw',
+    label: 'Lending withdraw',
     glyph: '⊖',
     color: '#34d399',
     icon: (ctx, cx, cy, r) => {
@@ -349,7 +388,7 @@ const TYPE_META: Readonly<Record<string, TypeVisualMeta>> = {
     },
   },
   STAKING_DEPOSIT: {
-    label: 'Stake',
+    label: 'Stake deposit',
     glyph: '⬒',
     color: '#fbbf24',
     icon: (ctx, cx, cy, r) => {
@@ -484,7 +523,7 @@ const TYPE_META: Readonly<Record<string, TypeVisualMeta>> = {
     },
   },
   EXTERNAL_TRANSFER_OUT: {
-    label: 'Send out',
+    label: 'External send',
     glyph: '↑',
     color: '#f97316',
     icon: (ctx, cx, cy, r) => {
@@ -505,7 +544,7 @@ const TYPE_META: Readonly<Record<string, TypeVisualMeta>> = {
     },
   },
   EXTERNAL_TRANSFER_IN: {
-    label: 'Receive',
+    label: 'External receive',
     glyph: '↓',
     color: '#4ade80',
     icon: (ctx, cx, cy, r) => {
@@ -596,7 +635,7 @@ const TYPE_META: Readonly<Record<string, TypeVisualMeta>> = {
     },
   },
   PROTOCOL_CUSTODY_DEPOSIT: {
-    label: 'Protocol custody',
+    label: 'Protocol custody in',
     glyph: '⌘',
     color: '#f472b6',
     icon: (ctx, cx, cy, r) => {
@@ -612,6 +651,52 @@ const TYPE_META: Readonly<Record<string, TypeVisualMeta>> = {
       ctx.fill();
     },
   },
+  OTHER: {
+    label: 'Other',
+    glyph: '•',
+    color: '#3b82f6',
+    icon: FALLBACK_ICON,
+  },
+};
+
+const TYPE_DISPLAY_OVERRIDES: Readonly<Record<string, TypeDisplayOverride>> = {
+  STAKING_WITHDRAW_REQUEST: { label: 'Unstake request', baseType: 'STAKING_WITHDRAW' },
+  LP_ENTRY_REQUEST: { label: 'LP add request', baseType: 'LP_ENTRY' },
+  LP_ENTRY_SETTLEMENT: { label: 'LP add settlement', baseType: 'LP_ENTRY' },
+  LP_EXIT_REQUEST: { label: 'LP remove request', baseType: 'LP_EXIT' },
+  LP_EXIT_SETTLEMENT: { label: 'LP remove settlement', baseType: 'LP_EXIT' },
+  LP_EXIT_PARTIAL: { label: 'LP remove partial', baseType: 'LP_EXIT' },
+  LP_EXIT_FINAL: { label: 'LP remove final', baseType: 'LP_EXIT' },
+  LP_ADJUST: { label: 'LP adjust', baseType: 'LP_ENTRY' },
+  LP_POSITION_STAKE: { label: 'LP stake', baseType: 'LP_ENTRY' },
+  LP_POSITION_UNSTAKE: { label: 'LP unstake', baseType: 'LP_EXIT' },
+  LP_FEE_CLAIM: { label: 'LP fee claim', baseType: 'REWARD_CLAIM' },
+  LENDING_LOOP_OPEN: { label: 'Loop open', baseType: 'LENDING_DEPOSIT' },
+  LENDING_LOOP_REBALANCE: { label: 'Loop rebalance', baseType: 'LENDING_DEPOSIT' },
+  LENDING_LOOP_DECREASE: { label: 'Loop decrease', baseType: 'LENDING_WITHDRAW' },
+  LENDING_LOOP_CLOSE: { label: 'Loop close', baseType: 'LENDING_WITHDRAW' },
+  VAULT_WITHDRAW: { label: 'Vault withdraw', baseType: 'VAULT_DEPOSIT' },
+  PROTOCOL_CUSTODY_WITHDRAW: { label: 'Protocol custody out', baseType: 'PROTOCOL_CUSTODY_DEPOSIT' },
+  DEX_ORDER_REQUEST: { label: 'DEX order request', baseType: 'SWAP' },
+  DEX_ORDER_SETTLEMENT: { label: 'DEX order settlement', baseType: 'SWAP' },
+  DERIVATIVE_ORDER_REQUEST: { label: 'Derivative order request', baseType: 'SWAP' },
+  DERIVATIVE_ORDER_EXECUTION: { label: 'Derivative execution', baseType: 'SWAP' },
+  DERIVATIVE_ORDER_CANCEL: { label: 'Derivative cancel', baseType: 'SWAP' },
+  DERIVATIVE_POSITION_INCREASE: { label: 'Position increase', baseType: 'SWAP' },
+  DERIVATIVE_POSITION_DECREASE: { label: 'Position decrease', baseType: 'SWAP' },
+  APPROVE: { label: 'Approve', baseType: 'OTHER' },
+  ADMIN_CONFIG: { label: 'Admin config', baseType: 'OTHER' },
+  MANUAL_COMPENSATING: { label: 'Manual compensating', baseType: 'OTHER' },
+  UNKNOWN: { label: 'Unknown', baseType: 'OTHER' },
+};
+
+const EVENT_FAMILY_META: Readonly<Record<EventFamilyKey, { label: string; color: string }>> = {
+  lp: { label: 'LP', color: '#818cf8' },
+  bridge: { label: 'Bridge', color: '#06b6d4' },
+  transfer: { label: 'Transfer', color: '#3b82f6' },
+  lending: { label: 'Lending', color: '#34d399' },
+  reward: { label: 'Reward', color: '#f472b6' },
+  staking: { label: 'Staking', color: '#fbbf24' },
 };
 
 @Component({
@@ -655,7 +740,12 @@ export class AssetLedgerPageComponent {
   private quantityRenderedMarkers: ReadonlyArray<RenderedPointView> = [];
   private pnlRenderedMarkers: ReadonlyArray<RenderedPnlMarkerView> = [];
   private copyResetTimerId: number | null = null;
-  private rangeDragState: { startClientX: number; startIndex: number; endIndex: number } | null = null;
+  private rangeDragState: {
+    mode: RangeDragMode;
+    startClientX: number;
+    startIndex: number;
+    endIndex: number;
+  } | null = null;
 
   readonly viewState = toSignal(
     combineLatest({
@@ -713,6 +803,33 @@ export class AssetLedgerPageComponent {
       label: this.formatBasisEffectLabel(key),
       color: this.basisEffectColor(key),
     }));
+  });
+
+  readonly eventFamilyFilters = computed(() => {
+    const data = this.assetData();
+    if (data === null) {
+      return [] as ReadonlyArray<EventFamilyFilterView>;
+    }
+
+    const families: EventFamilyFilterView[] = [];
+    (Object.keys(EVENT_FAMILY_META) as EventFamilyKey[]).forEach((familyKey) => {
+      const typeKeys = [...new Set(
+          data.legendItems
+            .map((item) => item.typeKey)
+            .filter((typeKey) => this.eventFamilyForType(typeKey) === familyKey)
+      )];
+      const eventCount = data.markers.filter((marker) => this.eventFamilyForType(marker.typeKey) === familyKey).length;
+      if (typeKeys.length > 0) {
+        families.push({
+          key: familyKey,
+          label: EVENT_FAMILY_META[familyKey].label,
+          color: EVENT_FAMILY_META[familyKey].color,
+          typeKeys,
+          eventCount,
+        });
+      }
+    });
+    return families;
   });
 
   readonly quickPresets: ReadonlyArray<QuickPresetView> = [
@@ -881,6 +998,24 @@ export class AssetLedgerPageComponent {
     this.selectedPreset.set('all');
   }
 
+  toggleEventFamily(familyKey: EventFamilyKey): void {
+    const family = this.eventFamilyFilters().find((item) => item.key === familyKey);
+    if (family === undefined) {
+      return;
+    }
+    const next = new Set(this.disabledTypeKeys());
+    const allVisible = family.typeKeys.every((typeKey) => !next.has(typeKey));
+    family.typeKeys.forEach((typeKey) => {
+      if (allVisible) {
+        next.add(typeKey);
+      } else {
+        next.delete(typeKey);
+      }
+    });
+    this.disabledTypeKeys.set(next);
+    this.selectedPreset.set('all');
+  }
+
   updateEventLogSearch(value: string): void {
     this.eventLogSearch.set(value);
   }
@@ -891,6 +1026,20 @@ export class AssetLedgerPageComponent {
 
   isTypeSelected(typeKey: string): boolean {
     return !this.disabledTypeKeys().has(typeKey);
+  }
+
+  isEventFamilySelected(familyKey: EventFamilyKey): boolean {
+    const family = this.eventFamilyFilters().find((item) => item.key === familyKey);
+    return family === undefined ? false : family.typeKeys.every((typeKey) => this.isTypeSelected(typeKey));
+  }
+
+  isEventFamilyMixed(familyKey: EventFamilyKey): boolean {
+    const family = this.eventFamilyFilters().find((item) => item.key === familyKey);
+    if (family === undefined) {
+      return false;
+    }
+    const visibleCount = family.typeKeys.filter((typeKey) => this.isTypeSelected(typeKey)).length;
+    return visibleCount > 0 && visibleCount < family.typeKeys.length;
   }
 
   toggleBasisEffect(key: string): void {
@@ -963,13 +1112,14 @@ export class AssetLedgerPageComponent {
     event.preventDefault();
   }
 
-  onRangeSelectionPointerDown(event: MouseEvent): void {
+  onRangeSelectionPointerDown(event: MouseEvent, mode: RangeDragMode = 'move'): void {
     if (this.maxMarkerIndex() <= 0) {
       return;
     }
     event.preventDefault();
     event.stopPropagation();
     this.rangeDragState = {
+      mode,
       startClientX: event.clientX,
       startIndex: this.rangeStartIndex(),
       endIndex: this.rangeEndIndex(),
@@ -1256,13 +1406,26 @@ export class AssetLedgerPageComponent {
     if (maxIndex <= 0) {
       return;
     }
-    const rangeSpan = Math.max(1, dragState.endIndex - dragState.startIndex);
     const deltaX = event.clientX - dragState.startClientX;
     const deltaIndex = Math.round((deltaX / width) * maxIndex);
-    const maxStart = Math.max(0, maxIndex - rangeSpan);
-    const nextStart = Math.max(0, Math.min(dragState.startIndex + deltaIndex, maxStart));
-    this.rangeStartIndex.set(nextStart);
-    this.rangeEndIndex.set(Math.min(maxIndex, nextStart + rangeSpan));
+
+    if (dragState.mode === 'move') {
+      const rangeSpan = Math.max(1, dragState.endIndex - dragState.startIndex);
+      const maxStart = Math.max(0, maxIndex - rangeSpan);
+      const nextStart = Math.max(0, Math.min(dragState.startIndex + deltaIndex, maxStart));
+      this.rangeStartIndex.set(nextStart);
+      this.rangeEndIndex.set(Math.min(maxIndex, nextStart + rangeSpan));
+      return;
+    }
+
+    if (dragState.mode === 'start') {
+      const nextStart = Math.max(0, Math.min(dragState.startIndex + deltaIndex, dragState.endIndex - 1));
+      this.rangeStartIndex.set(nextStart);
+      return;
+    }
+
+    const nextEnd = Math.max(dragState.startIndex + 1, Math.min(dragState.endIndex + deltaIndex, maxIndex));
+    this.rangeEndIndex.set(nextEnd);
   }
 
   @HostListener('document:mouseup')
@@ -1686,14 +1849,6 @@ export class AssetLedgerPageComponent {
         return 'STAKING_DEPOSIT';
       case 'STAKE_WITHDRAWAL':
         return 'STAKING_WITHDRAW';
-      case 'LP_ENTRY_REQUEST':
-      case 'LP_ENTRY_SETTLEMENT':
-        return 'LP_ENTRY';
-      case 'LP_EXIT_REQUEST':
-      case 'LP_EXIT_SETTLEMENT':
-      case 'LP_EXIT_PARTIAL':
-      case 'LP_EXIT_FINAL':
-        return 'LP_EXIT';
       default:
         return normalizedType ?? 'OTHER';
     }
@@ -1703,7 +1858,36 @@ export class AssetLedgerPageComponent {
     if (typeKey in TYPE_META) {
       return TYPE_META[typeKey];
     }
+    if (typeKey in TYPE_DISPLAY_OVERRIDES) {
+      const override = TYPE_DISPLAY_OVERRIDES[typeKey];
+      return {
+        ...TYPE_META[override.baseType],
+        label: override.label,
+      };
+    }
     return heuristicTypeMeta(typeKey);
+  }
+
+  private eventFamilyForType(typeKey: string): EventFamilyKey | null {
+    if (typeKey.startsWith('LP_')) {
+      return 'lp';
+    }
+    if (typeKey === 'BRIDGE_IN' || typeKey === 'BRIDGE_OUT') {
+      return 'bridge';
+    }
+    if (typeKey === 'INTERNAL_TRANSFER' || typeKey === 'EXTERNAL_TRANSFER_IN' || typeKey === 'EXTERNAL_TRANSFER_OUT') {
+      return 'transfer';
+    }
+    if (typeKey.startsWith('LENDING_') || typeKey === 'BORROW' || typeKey === 'REPAY') {
+      return 'lending';
+    }
+    if (typeKey === 'REWARD_CLAIM') {
+      return 'reward';
+    }
+    if (typeKey.startsWith('STAKING_')) {
+      return 'staking';
+    }
+    return null;
   }
 
   private familyDisplaySymbol(familyIdentity: string): string {

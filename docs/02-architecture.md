@@ -1,7 +1,7 @@
 # WalletRadar — Architecture
 
 > **Version:** SAD v3 target summary
-> **Last updated:** 2026-04-05
+> **Last updated:** 2026-04-08
 > **Style:** Modular monolith (Spring Boot)
 
 This document is the concise architecture summary for the v3 accounting rewrite.
@@ -12,14 +12,16 @@ The full target design, decision log, data-flow details, and cost analysis are i
 
 ## 1. Scope
 
-The v3 milestone is intentionally narrow:
+The current target extends v3 toward an integration-first control plane:
 
 - keep existing raw collection (`raw_transactions`, `sync_status`, `backfill_segments`)
 - keep persisted `user_sessions`
-- keep an installation-wide tracked wallet universe for canonical normalization
+- keep an installation-wide tracked wallet universe for canonical on-chain normalization
 - rebuild normalization on top of raw evidence
 - rebuild pricing on top of canonical normalized flows
 - replay AVCO and reconciliation from canonical confirmed events
+- add session-owned external integrations starting with Bybit API
+- generalize `backfill_segments` so the same backfill infrastructure can drive on-chain and integration acquisition
 
 Not part of this milestone:
 
@@ -38,21 +40,21 @@ Browser/API Client
     v
 Spring Boot
     |- api/session + api/wallet
-    |- session/               persisted user_sessions
-    |- accounting-universe/   stable owner scope for asset-ledger reads
+    |- session/               persisted user_sessions + integrations + settings
     |- wallet-universe/       tracked_wallets projection
-    |- ingestion/backfill/    existing raw collection
-    |- normalization/         on-chain + Bybit canonicalization
+    |- ingestion/backfill/    on-chain + integration segment execution
+    |- integration/           provider connectors + raw-event ingestion
+    |- normalization/         on-chain + provider canonicalization
     |- pricing/               historical USD resolution
     |- costbasis/             AVCO replay + asset ledger + reconciliation
     |
     +--> MongoDB
          user_sessions
-         accounting_universes
          sync_status / backfill_segments
          tracked_wallets
          raw_transactions
-         external_ledger_raw
+         integration_raw_events
+         bybit_extracted_events
          normalized_transactions
          asset_ledger_points
          on_chain_balances
@@ -73,10 +75,10 @@ Live-session orchestration is event-driven:
   1. raw backfill
   2. on-chain normalization
   3. on-chain clarification
-  4. Bybit normalization
-  5. exact `Bybit <-> on-chain` rematch
+  4. external-integration normalization
+  5. exact custody / bridge rematch
   6. pricing
-  7. accounting replay
+ 7. accounting replay
 
 Important accounting note:
 
@@ -86,18 +88,61 @@ Important accounting note:
 - live-session progress is persisted in `user_sessions.pipelineState`, while
   wallet×network raw ingestion progress remains in `sync_status`
 
-### 3.3 Session scope vs accounting universe
+### 3.4 Replay pass-through corridors
 
-- `user_sessions.wallets` is the current UI-selected on-chain wallet subset
-- `user_sessions.accountingUniverseId` points to a stable additive
-  `accounting_universes` document
-- universe members may include:
-  - on-chain wallet addresses
-  - custodial refs such as `BYBIT:<uid>`
-- read models that explain cost basis and AVCO history must use the accounting
-  universe, not the current wallet subset only
-- this keeps the same historical ETH acquisition path visible even when current
-  session composition changes later
+Accounting replay may build deterministic `pass-through corridors` before the
+forward AVCO loop starts.
+
+The corridor planner is part of replay, not normalization.
+
+Responsibilities:
+
+- scan already-confirmed canonical rows in replay order
+- detect one unique proven continuity inbound
+- reserve its exact carry for one later unique proven outbound/custody source
+  leg
+- keep that reserved carry out of unrelated pooled inventory consumption
+- repair already-proven correlated `CARRY_OUT -> CARRY_IN` rows when provider
+  rounding changed only the destination quantity precision
+
+The first approved corridor families are:
+
+- `EXTERNAL_TRANSFER_IN/BRIDGE_IN` on `BYBIT:<uid>` followed by one later
+  `EXTERNAL_TRANSFER_OUT`
+- same-wallet same-network `BRIDGE_IN` followed by one later custody-source
+  outflow such as:
+  - `LENDING_DEPOSIT`
+  - `VAULT_DEPOSIT`
+  - `STAKING_DEPOSIT`
+  - `PROTOCOL_CUSTODY_DEPOSIT`
+  - `LP_ENTRY`
+
+Determinism requirements:
+
+- one unique open inbound candidate in scope
+- exact replay bucket identity must match
+- no competing same-bucket negative principal flow may appear before the paired
+  outbound
+- quantity drift must stay inside a bounded tolerance
+- correlated carry-ingress repair may only use:
+  - shared deterministic `correlationId`
+  - `continuityCandidate = true`
+  - same continuity identity / audited family
+  - a tiny provider-rounding tolerance
+  - one unique compatible carry candidate
+
+If any of the above fails, replay falls back to the existing pooled AVCO path.
+
+### 3.3 Session scope
+
+- `user_sessions` is the user-owned workspace aggregate
+- session scope is derived from:
+  - `wallets[].address`
+  - `integrations[].accountRef`
+- custodial refs such as `BYBIT:<uid>` therefore belong directly to the
+  session integration
+- the new target design no longer relies on a separate persisted
+  `accounting_universes` control-plane aggregate
 
 ### 3.1 Raw collection
 
@@ -109,14 +154,62 @@ Important accounting note:
   rows may populate `explorer.tokenTransfers[]`, but must not overwrite top-level
   tx fields such as `from`, `to`, `value`, `input`, or `methodId`.
 - Raw docs land in `raw_transactions` with `normalizationStatus=PENDING`.
+- external provider payloads land in `integration_raw_events`
+- provider-side fetch, hydration, and stitching must happen during `BACKFILL`
+- Bybit backfill also materializes `bybit_extracted_events` as a rebuildable
+  provider-owned staging layer before canonical normalization
+- normalization must not call external provider APIs
 
-### 3.2 On-chain normalization
+### 3.1.1 External integration backfill
 
-- Start only after raw backfill for wallet×network is complete.
-- For a live session, the on-chain normalization drain must start from
-  session-level backfill completion, not from the next cron tick.
+- `backfill_segments` is the single orchestration collection for:
+  - `sourceKind=ONCHAIN`
+  - `sourceKind=INTEGRATION`
+- `BackfillJobRunner` is the single orchestration entrypoint for shared
+  `backfill_segments`
+- shared integration planning owns segment replacement and persistence
+- provider-specific planners only return segment specs for their provider
+- provider-specific implementations do not own their own schedulers; they only
+  implement segment execution
+- on-chain segments remain `BLOCK_RANGE`
+- external segments are typically `TIME_RANGE`, and may use `CURSOR_PAGE` only
+  when the provider stream truly requires persisted cursor checkpoints
+- Bybit acquisition is multi-stream:
+  - `TRANSACTION_LOG`
+  - `EXECUTION_HISTORY` by category (`linear`, `inverse`, `spot`, `option`)
+  - `FUNDING_HISTORY`
+  - `DEPOSIT`
+  - `WITHDRAWAL`
+  - future enrichment-only lanes such as dedicated convert / earn / loan
+    endpoints may still exist, but `fund_asset_changes` parity is owned by the
+    funding-account ledger
+- provider enrichment for Bybit is split into:
+  - immutable `integration_raw_events`
+  - rebuildable `bybit_extracted_events`
+  - canonical `normalized_transactions`
+- session-level raw completion requires both:
+  - wallet×network on-chain completion in `sync_status`
+  - enabled integration segment completion in `backfill_segments`
+- if a provider event remains ambiguous after the full provider backfill pass,
+  it must not enter a later provider-clarification loop
+
+### 3.2 Normalization
+
+- Start only after raw backfill for the relevant source scope is complete.
+- For a live session, normalization must start from session-level backfill
+  completion, not from the next cron tick.
+- Bybit normalization drains `bybit_extracted_events` first; legacy
+  `external_ledger_raw` remains migration-only fallback for older sessions
+  until the old import path is removed.
 - If tx-level ordering metadata is incomplete, run raw ordering repair before canonical normalization.
 - Internal-transfer heuristics use the installation-wide tracked wallet universe, never an individual session payload.
+- audited rebasing `Aave` WETH receipt rows must split principal continuity from
+  accrued balance growth during normalization itself:
+  - matched principal quantity stays `TRANSFER`
+  - tx-local receipt/underlying excess becomes a separate positive acquisition
+    leg
+  - this avoids pushing rebasing drift into replay as synthetic uncovered
+    principal
 - Process in chronological order:
   - `rawData.timeStamp ASC`
   - `rawData.transactionIndex ASC`
@@ -155,11 +248,22 @@ Important accounting note:
   flows, not as synthetic `BUY` / `SELL`.
 - `STAKING_DEPOSIT` / `STAKING_WITHDRAW` are also role-sensitive.
   Liquid-staking mint/redeem paths such as `AVAX -> sAVAX` and audited Bybit
-  `ETH -> METH` staking rows keep principal and derivative legs in continuity
-  `TRANSFER` inside the same base-asset family. Classic stake-contract custody
-  paths such as Pancake SmartChef `deposit(uint256)` also keep
+  `ETH -> METH` / `ETH -> CMETH` staking rows keep principal and derivative
+  legs in continuity `TRANSFER` inside the same base-asset family. Classic
+  stake-contract custody paths such as Pancake SmartChef `deposit(uint256)` also keep
   principal/proof-token legs in continuity `TRANSFER`, while only explicit
   harvested reward side-flows remain economic `BUY`.
+- Audited Bybit liquid-staking pairers are bounded but not same-minute only.
+  Receipt-wrapper pairs such as `METH -> CMETH` may settle hours apart inside
+  the same official `On-chain Earn subscription` lifecycle. Runtime pairing
+  therefore uses a bounded multi-hour window plus:
+  - same user/account
+  - same Bybit lifecycle description when present
+  - opposite transfer direction
+  - same audited accounting family
+  - exact or nearest quantity match
+  This remains deterministic normalization-time evidence, not operator
+  clarification.
 - Aave-style `BORROW` / `REPAY` families may contain debt-marker mint/burn legs
   and chain-specific execution-settlement refund legs in the same tx. Those
   marker / settlement legs must persist as continuity `TRANSFER`, while the
@@ -185,6 +289,11 @@ Important accounting note:
 - Registry entries marked with `specialHandler` route into deterministic
   protocol semantics and then into family-owned final type mapping.
 - If a special handler cannot support the observed method/function combination, the tx becomes `UNKNOWN -> NEEDS_REVIEW` with an explicit missing-data reason.
+- Pricing hygiene runs before replay-gate evaluation. Rows that still carry
+  `PRICE_UNRESOLVABLE` from an older pass but no longer have any replay-relevant
+  unpriced flow must be repaired before the pricing stage publishes its
+  completion event and before downstream replay decides whether the session is
+  AVCO-ready.
 - Evidence sources:
   - canonical tx-level fields from the raw view / `explorer.tx`
   - `rawData.explorer.tokenTransfers[]`
@@ -443,8 +552,9 @@ Important accounting note:
   both sides.
 - Replay continuity is family-aware for audited custody-equivalent wrappers.
   The current audited family includes `ETH`, network `WETH`, `Aave WETH`
-  receipt wrappers, and `vbETH`, so `Bybit ETH -> on-chain WETH -> aManWETH`
-  moves basis without synthetic disposal or reacquisition.
+  receipt wrappers, `vbETH`, `yvvbETH`, `mETH`, and `cmETH`, so
+  `Bybit ETH -> on-chain WETH -> aManWETH` and upstream `yvvbETH -> vbETH`
+  wrapper restores move basis without synthetic disposal or reacquisition.
 - `zkSync` Aave gateway selectors are a narrow method-aware exception owned by
   normalization, not by replay:
   - `0x80500d20` `withdrawETH(...)` -> `LENDING_WITHDRAW`
@@ -749,8 +859,13 @@ Important accounting note:
   - late source carry must not create quantity a second time
 - session-level AVCO/cost-basis history is computed on read from wallet-level
   `asset_ledger_points`; cross-wallet AVCO remains unstored.
-- `on_chain_balances` refresh is bounded by tracked wallets plus the confirmed
-  on-chain canonical asset universe. It is not an unbounded wallet scanner.
+- replay-derived persistence is owner-aware:
+  - `asset_ledger_points` rows carry `accountingUniverseId`
+  - `on_chain_balances` rows carry `sessionId`
+  - unrelated sessions must not share derived replay or live-balance evidence
+- `on_chain_balances` refresh is bounded by the current session wallet subset
+  plus the confirmed on-chain canonical asset universe for those wallets. It is
+  not an unbounded wallet scanner.
 - provider-native current balances must normalize zero-address contract payloads
   (`0x0000000000000000000000000000000000000000`) into native accounting
   identity rather than persisting them as synthetic token contracts.
@@ -759,9 +874,14 @@ Important accounting note:
   - `asset_ledger_points` persistence
   - `on_chain_balances` refresh
 - user-facing asset detail history APIs must read from `asset_ledger_points`
-  filtered to the requested session wallet set and asset family.
+  filtered to the requested session `accountingUniverseId` and asset family.
 - user-facing current holdings must be derived on read from
   `asset_ledger_points` plus `on_chain_balances`.
+- canonical classification may still use installation-wide tracked-wallet
+  discovery, but replay-time carry eligibility must remain bounded by the
+  session's accounting universe. Cross-owner transfers must therefore degrade
+  conservatively to uncovered inbound rather than inherit basis from an
+  unrelated session.
 - replay must persist quantity deficits explicitly:
   - when an outbound replay step consumes more quantity than the current replay
     bucket contains, that deficit must survive as `quantityShortfall`
@@ -830,6 +950,79 @@ Each immutable point must carry:
 - before/after state
 - explicit unresolved / shortfall diagnostics
 
+Correlated external-ingress rule:
+
+- replay transfer matching may use a replay-local canonical symbol alias key
+  when:
+  - the row is already continuity-proven by `correlationId` and
+    `continuityCandidate`
+  - the default continuity identity is not already a `FAMILY:*` identity
+- this alias key exists only to repair carry continuity across contract-identified
+  on-chain rows and symbol-identified venue rows
+- it must not silently broaden global family aggregation for portfolio reads
+
+Linked bridge carry rule:
+
+- already-linked same-family `BRIDGE_OUT -> BRIDGE_IN` rows must not reuse the
+  generic correlated-transfer quantity matcher
+- replay must treat them as a bridge-specific carry lane keyed by
+  `correlationId + bridge family`
+- when destination quantity is lower than source quantity, the full source cost
+  basis stays on the destination leg and the quantity delta is interpreted as
+  bridge / settlement cost embedded in the carry
+- when destination quantity is higher than source quantity, replay carries the
+  full source cost basis and leaves only the excess destination quantity
+  uncovered
+- ambiguity-safe guard remains: if the bridge key resolves to more than one
+  pending opposite-side candidate, replay falls back to unresolved inbound
+  materialization instead of guessing
+
+Linked asset-changing bridge settlement rule:
+
+- already-linked `BRIDGE_OUT -> BRIDGE_IN` route pairs with
+  `continuityCandidate = false` must not reuse the generic same-asset transfer
+  matcher
+- replay treats them as a dedicated route-settlement lane keyed by
+  deterministic `correlationId`
+- first approved slice requires:
+  - one principal transfer out on the source row
+  - one principal transfer in on the destination row
+  - unique correlated pair with no competing pending candidate
+- source-side native tx-value route funding on routed bridge starts such as
+  `swapAndStartBridgeTokensViaSquid(...)` is not a second principal transfer leg
+  when:
+  - exactly one token outbound principal leg exists on the source row
+  - one native outbound leg exactly matches tx `value`
+  - the bridge-start route is already proven by audited routed bridge semantics
+- replay reallocates source carried cost basis into the destination asset
+  instead of leaving the destination fully uncovered
+- destination covered quantity is derived from the source covered-share ratio,
+  not from source/destination quantity equality
+- this lane is intentionally conservative:
+  - it preserves acquisition basis on the received asset
+  - it does not yet synthesize explicit realized PnL for non-stable source
+    asset disposal
+- if ambiguity appears, replay must fall back to unresolved inbound
+  materialization
+
+Order-insensitive family custody rule:
+
+- simple audited family-equivalent custody transactions with one principal
+  outbound transfer and one receipt inbound transfer must replay as an atomic
+  carry pair
+- this same replay rule also applies to canonical `WRAP` / `UNWRAP` rows such
+  as `ETH <-> WETH`; wrapped/native continuity is not allowed to materialize as
+  a new uncovered acquisition just because the normalized flow order is
+  inbound-first
+- replay resolves that pair by audited family identity and direction, not by
+  the raw normalized flow order inside the transaction
+- inbound-first normalized flow order must not materialize the receipt leg as
+  uncovered before the paired principal outflow is processed
+- minor quantity drift between principal and receipt is handled with the same
+  carry principle as linked bridges:
+  - full source cost basis remains on the destination leg
+  - only the unmatched excess destination quantity remains uncovered
+
 This contract lets the UI:
 
 - draw the AVCO/cost-basis curve for one asset inside one session
@@ -844,8 +1037,14 @@ This contract lets the UI:
   watchdog and only when:
   - the session has no pending upstream work
   - `asset_ledger_points` and `on_chain_balances` already exist
-  - replay is currently a global derived-state lane and no stronger
-    `sessionId`-scoped completion evidence exists yet
+  - the replay trace exists for the same `accountingUniverseId`
+  - the live balance evidence exists for the same `sessionId`
+- current asset-ledger family reads must expose which live uncovered buckets
+  come from:
+  - no covered ledger carry at all
+  - partial carry only
+  - missing current ledger bucket
+  This diagnostic is a read-model aid; it does not invent basis.
 
 ---
 

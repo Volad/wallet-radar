@@ -217,6 +217,30 @@ class PriceResolutionServiceTest {
     }
 
     @Test
+    void aaveReceiptBuyStillResolvesViaExternalPricingPath() {
+        PriceResolutionService service = service();
+        NormalizedTransaction transaction = transaction(
+                NormalizedTransactionSource.ON_CHAIN,
+                NormalizedTransactionType.LENDING_DEPOSIT,
+                null,
+                flow(NormalizedLegRole.BUY, "0xe50fa9b3c56ffb159cb0fca61f5c9d750e8128c8", "aArbWETH", "0.000355982952963328")
+        );
+        when(externalSources.resolve(argThat(matchesSymbol("aArbWETH")))).thenReturn(Optional.of(new PriceQuote(
+                new BigDecimal("2450"),
+                PriceSource.BINANCE,
+                transaction.getBlockTimestamp(),
+                "USD",
+                "ETHUSDT"
+        )));
+
+        NormalizedTransaction priced = service.resolve(transaction, Instant.parse("2026-03-25T12:00:00Z"));
+
+        assertThat(priced.getFlows().get(0).getUnitPriceUsd()).isEqualByComparingTo("2450");
+        assertThat(priced.getFlows().get(0).getPriceSource()).isEqualTo(PriceSource.BINANCE);
+        verify(externalSources).resolve(argThat(matchesSymbol("aArbWETH")));
+    }
+
+    @Test
     void asyncDexOrderRequestDoesNotRequireSyntheticPrincipalPricing() {
         PriceResolutionService service = service();
         NormalizedTransaction transaction = transaction(

@@ -3,6 +3,7 @@ import { DashboardComponent } from './features/dashboard/dashboard.component';
 
 export const routes: Routes = [
   { path: '', component: DashboardComponent },
+  { path: 'settings', component: DashboardComponent, data: { mode: 'settings' } },
   { path: 'sessions/:sessionId/assets/:familyIdentity', component: DashboardComponent },
   { path: '**', redirectTo: '' },
 ];

@@ -49,6 +49,67 @@ export interface SessionResponse {
   readonly wallets: ReadonlyArray<SessionWalletResponse>;
 }
 
+export interface SessionIntegrationResponse {
+  readonly integrationId: string;
+  readonly provider: string | null;
+  readonly status: string | null;
+  readonly displayName: string | null;
+  readonly accountRef: string | null;
+  readonly maskedKey: string | null;
+  readonly readOnly: boolean;
+  readonly capabilities: ReadonlyArray<string>;
+  readonly lastValidatedAt: string | null;
+  readonly lastSyncAt: string | null;
+  readonly lastError: string | null;
+  readonly totalSegments: number;
+  readonly completedSegments: number;
+  readonly failedSegments: number;
+  readonly progressPct: number;
+}
+
+export interface SessionSettingsResponse {
+  readonly sessionId: string;
+  readonly wallets: ReadonlyArray<SessionWalletResponse>;
+  readonly integrations: ReadonlyArray<SessionIntegrationResponse>;
+  readonly hideSmallAssets: boolean | null;
+  readonly showReconciliationWarnings: boolean | null;
+}
+
+export interface SessionSettingsIntegrationUpdateRequest {
+  readonly provider: string;
+  readonly displayName: string;
+  readonly apiKey: string;
+  readonly apiSecret: string;
+}
+
+export interface PutSessionSettingsRequest {
+  readonly wallets: ReadonlyArray<AddSessionRequestItem>;
+  readonly integrations: ReadonlyArray<SessionSettingsIntegrationUpdateRequest>;
+  readonly hideSmallAssets: boolean;
+  readonly showReconciliationWarnings: boolean;
+}
+
+export interface UpsertBybitIntegrationRequest {
+  readonly displayName: string;
+  readonly apiKey: string;
+  readonly apiSecret: string;
+}
+
+export interface UpsertBybitIntegrationResponse {
+  readonly integrationId: string;
+  readonly provider: string;
+  readonly status: string;
+  readonly displayName: string;
+  readonly accountRef: string;
+  readonly maskedKey: string;
+  readonly message: string;
+}
+
+export interface DeleteIntegrationResponse {
+  readonly integrationId: string;
+  readonly message: string;
+}
+
 export interface SessionBackfillNetworkStatus {
   readonly networkId: EvmNetworkId;
   readonly status: string;

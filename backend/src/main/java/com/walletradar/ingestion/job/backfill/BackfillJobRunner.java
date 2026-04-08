@@ -9,6 +9,7 @@ import com.walletradar.ingestion.adapter.BlockHeightResolver;
 import com.walletradar.ingestion.adapter.BlockTimestampResolver;
 import com.walletradar.ingestion.adapter.NetworkAdapter;
 import com.walletradar.ingestion.config.BackfillProperties;
+import com.walletradar.domain.sync.BackfillSegment;
 import com.walletradar.ingestion.sync.progress.SyncProgressTracker;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -42,6 +43,7 @@ public class BackfillJobRunner {
     private final BlockingQueue<BackfillWorkItem> backfillQueue = new LinkedBlockingQueue<>();
     private final Set<String> inFlightItems = ConcurrentHashMap.newKeySet();
     private final AtomicBoolean workersStarted = new AtomicBoolean(false);
+    private final AtomicBoolean integrationSegmentsRunning = new AtomicBoolean(false);
 
     private final List<NetworkAdapter> networkAdapters;
     private final List<BlockHeightResolver> blockHeightResolvers;
@@ -51,6 +53,7 @@ public class BackfillJobRunner {
     private final SyncProgressTracker syncProgressTracker;
     private final SyncStatusRepository syncStatusRepository;
     private final BackfillSegmentRepository backfillSegmentRepository;
+    private final List<BackfillSegmentExecutor> backfillSegmentExecutors;
     @Qualifier("backfill-coordinator-executor")
     private final Executor backfillCoordinatorExecutor;
     @Qualifier("backfill-executor")
@@ -64,7 +67,8 @@ public class BackfillJobRunner {
     @EventListener(ApplicationReadyEvent.class)
     public void onApplicationReady(ApplicationReadyEvent event) {
         startWorkersIfNeeded();
-        List<SyncStatus> incomplete = syncStatusRepository.findByStatusIn(
+        List<SyncStatus> incomplete = syncStatusRepository.findOnChainByStatusIn(
+                SyncStatus.SourceKind.ONCHAIN,
                 Set.of(SyncStatusValue.PENDING, SyncStatusValue.RUNNING, SyncStatusValue.FAILED));
         if (incomplete.isEmpty()) return;
         int enqueued = 0;
@@ -151,6 +155,70 @@ public class BackfillJobRunner {
         return backfillQueue.isEmpty() && inFlightItems.isEmpty();
     }
 
+    @Scheduled(fixedDelayString = "${walletradar.integration.backfill.poll-interval-ms:15000}")
+    public void processPendingIntegrationSegments() {
+        if (!integrationSegmentsRunning.compareAndSet(false, true)) {
+            return;
+        }
+        long startedAt = System.currentTimeMillis();
+        try {
+            requeueStaleRunningIntegrationSegments();
+            List<BackfillSegment> candidates = backfillSegmentRepository.findBySourceKindAndStatusInOrderByUpdatedAtAsc(
+                    BackfillSegment.SourceKind.INTEGRATION,
+                    Set.of(BackfillSegment.SegmentStatus.PENDING, BackfillSegment.SegmentStatus.FAILED)
+            );
+            int processed = 0;
+            for (BackfillSegment segment : candidates) {
+                BackfillSegmentExecutor executor = backfillSegmentExecutors.stream()
+                        .filter(candidate -> candidate.supports(segment))
+                        .findFirst()
+                        .orElse(null);
+                if (executor == null) {
+                    log.warn(
+                            "No backfill segment executor registered: segmentId={}, sourceKind={}, provider={}, stream={}",
+                            segment.getId(),
+                            segment.getSourceKind(),
+                            segment.getProvider(),
+                            segment.getStream()
+                    );
+                    continue;
+                }
+                executor.execute(segment);
+                processed++;
+            }
+            log.debug(
+                    "IntegrationBackfillDispatch finished: candidates={}, processed={}, durationMs={}",
+                    candidates.size(),
+                    processed,
+                    System.currentTimeMillis() - startedAt
+            );
+        } finally {
+            integrationSegmentsRunning.set(false);
+        }
+    }
+
+    private void requeueStaleRunningIntegrationSegments() {
+        Instant staleBefore = Instant.now().minusMillis(backfillProperties.getRetrySchedulerIntervalMs());
+        List<BackfillSegment> runningSegments = backfillSegmentRepository.findBySourceKindAndStatusInOrderByUpdatedAtAsc(
+                BackfillSegment.SourceKind.INTEGRATION,
+                Set.of(BackfillSegment.SegmentStatus.RUNNING)
+        );
+        int requeued = 0;
+        for (BackfillSegment segment : runningSegments) {
+            if (segment.getUpdatedAt() == null || !segment.getUpdatedAt().isBefore(staleBefore)) {
+                continue;
+            }
+            segment.setStatus(BackfillSegment.SegmentStatus.PENDING);
+            segment.setStartedAt(null);
+            segment.setUpdatedAt(Instant.now());
+            backfillSegmentRepository.save(segment);
+            requeued++;
+        }
+        if (requeued > 0) {
+            log.info("Requeued stale integration RUNNING segments: {}", requeued);
+        }
+    }
+
     @Scheduled(fixedDelayString = "${walletradar.ingestion.backfill.retry-scheduler-interval-ms:120000}")
     public void retryFailedBackfills() {
         long startedAt = System.currentTimeMillis();
@@ -159,7 +227,10 @@ public class BackfillJobRunner {
             Instant now = Instant.now();
             int maxRetries = backfillProperties.getMaxRetries();
 
-            List<SyncStatus> failed = syncStatusRepository.findByStatusIn(Set.of(SyncStatusValue.FAILED, SyncStatusValue.RUNNING));
+            List<SyncStatus> failed = syncStatusRepository.findOnChainByStatusIn(
+                    SyncStatus.SourceKind.ONCHAIN,
+                    Set.of(SyncStatusValue.FAILED, SyncStatusValue.RUNNING)
+            );
             int enqueued = 0;
             for (SyncStatus s : failed) {
                 if (s.getWalletAddress() == null || s.getNetworkId() == null) continue;

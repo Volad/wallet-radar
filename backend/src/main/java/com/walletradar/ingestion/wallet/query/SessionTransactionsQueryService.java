@@ -71,7 +71,6 @@ public class SessionTransactionsQueryService {
         }
         return userSessionRepository.findById(sessionId.trim())
                 .map(session -> {
-                    accountingUniverseService.ensureBybitMembership(session.getId(), Instant.now());
                     long projectedTransactions = countVisibleTransactions(accountingUniverseService.resolveScope(session).memberRefs());
                     return new RebuildTransactionsView(
                             session.getId(),

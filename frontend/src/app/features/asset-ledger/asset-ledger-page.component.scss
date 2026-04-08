@@ -364,6 +364,18 @@ h2 {
       background: var(--chipColor);
     }
   }
+
+  &.mixed {
+    border-color: var(--chipColor);
+
+    &::after {
+      content: '';
+      width: 6px;
+      height: 2px;
+      border-radius: 999px;
+      background: var(--chipColor);
+    }
+  }
 }
 
 .filter-row.active .check-box,
@@ -398,6 +410,19 @@ h2 {
   &.active {
     color: var(--text);
   }
+}
+
+.family-row {
+  .filter-row-label {
+    font-size: 10px;
+  }
+}
+
+.family-count {
+  min-width: 1.5rem;
+  text-align: right;
+  font-size: 9px;
+  color: var(--muted);
 }
 
 .preset-radio {
@@ -506,9 +531,10 @@ h2 {
   right: calc(100% - var(--range-end));
   top: 0;
   bottom: 0;
-  background: transparent;
-  border: 0;
-  box-shadow: none;
+  background: rgba(34, 211, 238, 0.08);
+  border-top: 1px solid rgba(34, 211, 238, 0.18);
+  border-bottom: 1px solid rgba(34, 211, 238, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(34, 211, 238, 0.18);
   cursor: grab;
   pointer-events: auto;
   z-index: 4;
@@ -518,12 +544,52 @@ h2 {
   cursor: grabbing;
 }
 
+.range-handle {
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  width: 10px;
+  background: rgba(34, 211, 238, 0.2);
+  border: 1px solid rgba(34, 211, 238, 0.5);
+  border-radius: 3px;
+  box-shadow: 0 0 0 1px rgba(7, 9, 15, 0.45);
+  cursor: ew-resize;
+
+  &::before,
+  &::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    width: 1px;
+    height: 10px;
+    background: rgba(255, 255, 255, 0.75);
+    transform: translateY(-50%);
+  }
+
+  &::before {
+    left: 3px;
+  }
+
+  &::after {
+    right: 3px;
+  }
+}
+
+.range-handle-start {
+  left: -5px;
+}
+
+.range-handle-end {
+  right: -5px;
+}
+
 .range-input {
   position: absolute;
   inset: 0;
   margin: 0;
   width: 100%;
   background: transparent;
+  opacity: 0;
   pointer-events: none;
   appearance: none;
   z-index: 3;

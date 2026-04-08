@@ -103,7 +103,7 @@ public class ReceiptClarificationGateway {
         );
 
         if (includeTransferEvidence) {
-            return enrichment.hasFullReceiptEvidence()
+            return !tokenTransfers.isEmpty() || !internalTransfers.isEmpty()
                     ? Optional.of(enrichment)
                     : Optional.empty();
         }

@@ -13,6 +13,7 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -37,6 +38,15 @@ public class StatValidationService {
 
     public StatValidationOutcome processNextBatch(int batchSize, long retryDelaySeconds) {
         List<NormalizedTransaction> batch = pendingStatQueryService.loadNextBatch(batchSize, retryDelaySeconds);
+        return processBatch(batch);
+    }
+
+    public StatValidationOutcome processNextBatch(int batchSize, long retryDelaySeconds, Collection<String> walletAddresses) {
+        List<NormalizedTransaction> batch = pendingStatQueryService.loadNextBatch(batchSize, retryDelaySeconds, walletAddresses);
+        return processBatch(batch);
+    }
+
+    private StatValidationOutcome processBatch(List<NormalizedTransaction> batch) {
         int promoted = 0;
         int demoted = 0;
 

@@ -26,6 +26,7 @@ import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.LinkedHashMap;
@@ -59,24 +60,37 @@ public class OnChainBalanceRefreshService {
     private final BlockScoutExplorerProvider blockScoutExplorerProvider;
 
     public int refreshCurrentBalances(Instant capturedAt) {
-        ResolutionResult resolution = resolveCandidates(queryService.loadCandidates());
+        return refreshCurrentBalancesInternal(null, queryService.loadCandidates(), capturedAt);
+    }
+
+    public int refreshCurrentBalances(String sessionId, Collection<String> walletAddresses, Instant capturedAt) {
+        List<String> scopedWallets = walletAddresses == null ? List.of() : List.copyOf(walletAddresses);
+        return refreshCurrentBalancesInternal(sessionId, queryService.loadCandidates(scopedWallets), capturedAt);
+    }
+
+    private int refreshCurrentBalancesInternal(
+            String sessionId,
+            List<OnChainBalanceRefreshQueryService.BalanceRefreshCandidate> rawCandidates,
+            Instant capturedAt
+    ) {
+        ResolutionResult resolution = resolveCandidates(rawCandidates);
         if (resolution.candidates().isEmpty()) {
-            onChainBalanceRepository.deleteAll();
+            deleteBalances(sessionId);
             log.info("On-chain balance refresh complete: candidates=0, refreshed=0, skippedUnsupported={}",
                     resolution.skippedUnsupported());
             return 0;
         }
 
         List<ResolvedCandidate> candidates = resolution.candidates();
-        ProviderResolutionResult providerResult = loadProviderBalances(candidates, capturedAt);
+        ProviderResolutionResult providerResult = loadProviderBalances(candidates, capturedAt, sessionId);
         List<ResolvedCandidate> afterProvider = candidates.stream()
                 .filter(candidate -> !providerResult.handledKeys().contains(refreshKey(candidate)))
                 .toList();
-        ProviderResolutionResult etherscanResult = loadExplorerBalances(afterProvider, capturedAt);
+        ProviderResolutionResult etherscanResult = loadExplorerBalances(afterProvider, capturedAt, sessionId);
         List<ResolvedCandidate> afterEtherscan = afterProvider.stream()
                 .filter(candidate -> !etherscanResult.handledKeys().contains(refreshKey(candidate)))
                 .toList();
-        ProviderResolutionResult blockScoutResult = loadBlockScoutBalances(afterEtherscan, capturedAt);
+        ProviderResolutionResult blockScoutResult = loadBlockScoutBalances(afterEtherscan, capturedAt, sessionId);
         List<ResolvedCandidate> rpcCandidates = afterEtherscan.stream()
                 .filter(candidate -> !blockScoutResult.handledKeys().contains(refreshKey(candidate)))
                 .toList();
@@ -84,9 +98,9 @@ public class OnChainBalanceRefreshService {
         List<OnChainBalance> refreshedBalances = new ArrayList<>(providerResult.balances());
         refreshedBalances.addAll(etherscanResult.balances());
         refreshedBalances.addAll(blockScoutResult.balances());
-        refreshedBalances.addAll(loadRpcBalances(rpcCandidates, decimalsByNetwork, capturedAt));
+        refreshedBalances.addAll(loadRpcBalances(rpcCandidates, decimalsByNetwork, capturedAt, sessionId));
 
-        onChainBalanceRepository.deleteAll();
+        deleteBalances(sessionId);
         if (!refreshedBalances.isEmpty()) {
             onChainBalanceRepository.saveAll(refreshedBalances);
         }
@@ -98,6 +112,14 @@ public class OnChainBalanceRefreshService {
                 resolution.skippedUnsupported()
         );
         return refreshedBalances.size();
+    }
+
+    private void deleteBalances(String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) {
+            onChainBalanceRepository.deleteAll();
+            return;
+        }
+        onChainBalanceRepository.deleteAllBySessionId(sessionId);
     }
 
     private ResolutionResult resolveCandidates(List<OnChainBalanceRefreshQueryService.BalanceRefreshCandidate> rawCandidates) {
@@ -163,7 +185,11 @@ public class OnChainBalanceRefreshService {
         );
     }
 
-    private ProviderResolutionResult loadProviderBalances(List<ResolvedCandidate> candidates, Instant capturedAt) {
+    private ProviderResolutionResult loadProviderBalances(
+            List<ResolvedCandidate> candidates,
+            Instant capturedAt,
+            String sessionId
+    ) {
         Map<String, List<ResolvedCandidate>> byWallet = new LinkedHashMap<>();
         for (ResolvedCandidate candidate : candidates) {
             if (!ankrAccountBalanceProvider.supports(candidate.networkId())) {
@@ -189,7 +215,7 @@ public class OnChainBalanceRefreshService {
                 for (ResolvedCandidate candidate : walletCandidates) {
                     RefreshKey key = refreshKey(candidate);
                     BigDecimal quantity = quantities.getOrDefault(key, BigDecimal.ZERO);
-                    balances.add(balanceDocument(candidate, quantity, capturedAt));
+                    balances.add(balanceDocument(candidate, quantity, capturedAt, sessionId));
                     handledKeys.put(key, Boolean.TRUE);
                 }
             } catch (Exception providerFailure) {
@@ -204,7 +230,11 @@ public class OnChainBalanceRefreshService {
         return new ProviderResolutionResult(List.copyOf(balances), handledKeys.keySet());
     }
 
-    private ProviderResolutionResult loadExplorerBalances(List<ResolvedCandidate> candidates, Instant capturedAt) {
+    private ProviderResolutionResult loadExplorerBalances(
+            List<ResolvedCandidate> candidates,
+            Instant capturedAt,
+            String sessionId
+    ) {
         ArrayList<OnChainBalance> balances = new ArrayList<>();
         Map<RefreshKey, Boolean> handledKeys = new LinkedHashMap<>();
         for (ResolvedCandidate candidate : candidates) {
@@ -239,7 +269,7 @@ public class OnChainBalanceRefreshService {
                 BigDecimal quantity = Decimal128Support.normalize(
                         new BigDecimal(rawQuantity).movePointLeft(Math.max(0, decimals))
                 );
-                balances.add(balanceDocument(candidate, quantity, capturedAt));
+                balances.add(balanceDocument(candidate, quantity, capturedAt, sessionId));
                 handledKeys.put(refreshKey(candidate), Boolean.TRUE);
             } catch (Exception explorerFailure) {
                 log.warn(
@@ -254,7 +284,11 @@ public class OnChainBalanceRefreshService {
         return new ProviderResolutionResult(List.copyOf(balances), handledKeys.keySet());
     }
 
-    private ProviderResolutionResult loadBlockScoutBalances(List<ResolvedCandidate> candidates, Instant capturedAt) {
+    private ProviderResolutionResult loadBlockScoutBalances(
+            List<ResolvedCandidate> candidates,
+            Instant capturedAt,
+            String sessionId
+    ) {
         Map<WalletNetworkKey, List<ResolvedCandidate>> grouped = new LinkedHashMap<>();
         for (ResolvedCandidate candidate : candidates) {
             if (!blockScoutExplorerProvider.supports(candidate.networkId())) {
@@ -318,7 +352,7 @@ public class OnChainBalanceRefreshService {
                     BigDecimal quantity = Decimal128Support.normalize(
                             new BigDecimal(rawQuantity).movePointLeft(Math.max(0, decimals))
                     );
-                    balances.add(balanceDocument(candidate, quantity, capturedAt));
+                    balances.add(balanceDocument(candidate, quantity, capturedAt, sessionId));
                     handledKeys.put(refreshKey(candidate), Boolean.TRUE);
                 }
             } catch (Exception explorerFailure) {
@@ -410,7 +444,8 @@ public class OnChainBalanceRefreshService {
     private List<OnChainBalance> loadRpcBalances(
             List<ResolvedCandidate> candidates,
             Map<NetworkId, Map<String, Integer>> decimalsByNetwork,
-            Instant capturedAt
+            Instant capturedAt,
+            String sessionId
     ) {
         Map<WalletNetworkKey, List<ResolvedCandidate>> grouped = new LinkedHashMap<>();
         for (ResolvedCandidate candidate : candidates) {
@@ -481,15 +516,21 @@ public class OnChainBalanceRefreshService {
                 BigDecimal quantity = Decimal128Support.normalize(
                         new BigDecimal(rawQuantity).movePointLeft(Math.max(0, descriptor.decimals()))
                 );
-                balances.add(balanceDocument(descriptor.candidate(), quantity, capturedAt));
+                balances.add(balanceDocument(descriptor.candidate(), quantity, capturedAt, sessionId));
             }
         }
         return balances;
     }
 
-    private OnChainBalance balanceDocument(ResolvedCandidate candidate, BigDecimal quantity, Instant capturedAt) {
+    private OnChainBalance balanceDocument(
+            ResolvedCandidate candidate,
+            BigDecimal quantity,
+            Instant capturedAt,
+            String sessionId
+    ) {
         OnChainBalance balance = new OnChainBalance();
-        balance.setId(candidate.walletAddress() + ":" + candidate.networkId().name() + ":" + candidate.accountingIdentity());
+        balance.setId(balanceId(sessionId, candidate));
+        balance.setSessionId(sessionId);
         balance.setWalletAddress(candidate.walletAddress());
         balance.setNetworkId(candidate.networkId());
         balance.setAssetSymbol(candidate.assetSymbol());
@@ -497,6 +538,15 @@ public class OnChainBalanceRefreshService {
         balance.setQuantity(quantity);
         balance.setCapturedAt(capturedAt);
         return balance;
+    }
+
+    private String balanceId(String sessionId, ResolvedCandidate candidate) {
+        return balanceId(sessionId, candidate.walletAddress(), candidate.networkId(), candidate.accountingIdentity());
+    }
+
+    private String balanceId(String sessionId, String walletAddress, NetworkId networkId, String accountingIdentity) {
+        String prefix = sessionId == null || sessionId.isBlank() ? "GLOBAL" : sessionId;
+        return prefix + ":" + walletAddress + ":" + networkId.name() + ":" + accountingIdentity;
     }
 
     private RefreshKey refreshKey(ResolvedCandidate candidate) {

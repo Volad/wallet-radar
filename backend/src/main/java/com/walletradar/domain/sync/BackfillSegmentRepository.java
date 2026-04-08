@@ -27,5 +27,17 @@ public interface BackfillSegmentRepository extends MongoRepository<BackfillSegme
     long countBySyncStatusId(String syncStatusId);
 
     long countBySyncStatusIdAndStatus(String syncStatusId, BackfillSegment.SegmentStatus status);
-}
 
+    List<BackfillSegment> findBySourceKindAndStatusInOrderByUpdatedAtAsc(
+            BackfillSegment.SourceKind sourceKind,
+            Collection<BackfillSegment.SegmentStatus> statuses
+    );
+
+    List<BackfillSegment> findByIntegrationIdOrderByUpdatedAtAsc(String integrationId);
+
+    long countByIntegrationId(String integrationId);
+
+    long countByIntegrationIdAndStatus(String integrationId, BackfillSegment.SegmentStatus status);
+
+    void deleteByIntegrationId(String integrationId);
+}

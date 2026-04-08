@@ -9,8 +9,12 @@ import java.util.List;
  */
 public interface AssetLedgerPointRepository extends MongoRepository<AssetLedgerPoint, String> {
 
-    List<AssetLedgerPoint> findAllByWalletAddressInAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
-            List<String> walletAddresses,
+    List<AssetLedgerPoint> findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+            String accountingUniverseId,
             String accountingFamilyIdentity
     );
+
+    void deleteAllByAccountingUniverseId(String accountingUniverseId);
+
+    long countByAccountingUniverseId(String accountingUniverseId);
 }

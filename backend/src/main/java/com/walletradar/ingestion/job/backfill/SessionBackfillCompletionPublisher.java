@@ -4,6 +4,8 @@ import com.walletradar.domain.event.SessionBackfillCompletedEvent;
 import com.walletradar.domain.event.WalletNetworkBackfillCompletedEvent;
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.domain.session.UserSessionRepository;
+import com.walletradar.domain.sync.BackfillSegment;
+import com.walletradar.domain.sync.BackfillSegmentRepository;
 import com.walletradar.domain.sync.SyncStatus;
 import com.walletradar.domain.sync.SyncStatusRepository;
 import com.walletradar.session.application.SessionPipelineStateService;
@@ -27,6 +29,7 @@ public class SessionBackfillCompletionPublisher {
 
     private final UserSessionRepository userSessionRepository;
     private final SyncStatusRepository syncStatusRepository;
+    private final BackfillSegmentRepository backfillSegmentRepository;
     private final ApplicationEventPublisher applicationEventPublisher;
     private final SessionPipelineStateService sessionPipelineStateService;
 
@@ -42,16 +45,25 @@ public class SessionBackfillCompletionPublisher {
         }
     }
 
+    public void maybePublishSessionCompletionBySessionId(String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) {
+            return;
+        }
+        userSessionRepository.findById(sessionId.trim()).ifPresent(this::maybePublishSessionCompletion);
+    }
+
     private void maybePublishSessionCompletion(UserSession session) {
-        if (session == null || session.getId() == null || session.getWallets() == null || session.getWallets().isEmpty()) {
+        if (session == null || session.getId() == null || targetCount(session) == 0) {
             return;
         }
 
-        List<String> addresses = session.getWallets().stream()
+        List<UserSession.SessionWallet> wallets = session.getWallets() == null ? List.of() : session.getWallets();
+        List<String> addresses = wallets.stream()
                 .map(UserSession.SessionWallet::getAddress)
                 .distinct()
                 .toList();
         Map<String, SyncStatus> syncStatusByPair = syncStatusRepository.findByWalletAddressIn(addresses).stream()
+                .filter(status -> status.getSourceKind() == null || status.getSourceKind() == SyncStatus.SourceKind.ONCHAIN)
                 .filter(status -> status.getWalletAddress() != null && status.getNetworkId() != null)
                 .collect(Collectors.toMap(
                         status -> pairKey(status.getWalletAddress(), status.getNetworkId()),
@@ -59,10 +71,8 @@ public class SessionBackfillCompletionPublisher {
                         (left, right) -> right
                 ));
 
-        int targetCount = 0;
-        for (UserSession.SessionWallet wallet : session.getWallets()) {
+        for (UserSession.SessionWallet wallet : wallets) {
             for (var network : wallet.getNetworks()) {
-                targetCount++;
                 SyncStatus status = syncStatusByPair.get(pairKey(wallet.getAddress(), network.name()));
                 if (status == null || !status.isBackfillComplete()) {
                     return;
@@ -70,9 +80,17 @@ public class SessionBackfillCompletionPublisher {
             }
         }
 
+        for (UserSession.SessionIntegration integration : enabledIntegrations(session)) {
+            if (!isIntegrationBackfillComplete(integration)) {
+                return;
+            }
+        }
+
+        int targetCount = targetCount(session);
+
         applicationEventPublisher.publishEvent(new SessionBackfillCompletedEvent(
                 session.getId(),
-                session.getWallets().size(),
+                wallets.size(),
                 targetCount
         ));
         sessionPipelineStateService.markStageComplete(
@@ -81,11 +99,47 @@ public class SessionBackfillCompletionPublisher {
                 "Raw backfill complete"
         );
         log.info(
-                "Live session raw backfill complete: sessionId={}, wallets={}, targets={}",
+                "Live session raw backfill complete: sessionId={}, wallets={}, integrations={}, targets={}",
                 session.getId(),
-                session.getWallets().size(),
+                wallets.size(),
+                enabledIntegrations(session).size(),
                 targetCount
         );
+    }
+
+    private List<UserSession.SessionIntegration> enabledIntegrations(UserSession session) {
+        if (session.getIntegrations() == null || session.getIntegrations().isEmpty()) {
+            return List.of();
+        }
+        return session.getIntegrations().stream()
+                .filter(integration -> integration != null
+                        && integration.getStatus() != UserSession.IntegrationStatus.DISABLED
+                        && integration.getIntegrationId() != null
+                        && !integration.getIntegrationId().isBlank())
+                .toList();
+    }
+
+    private boolean isIntegrationBackfillComplete(UserSession.SessionIntegration integration) {
+        SyncStatus integrationStatus = syncStatusRepository.findLatestByIntegrationId(integration.getIntegrationId()).orElse(null);
+        if (integrationStatus != null) {
+            return integrationStatus.isBackfillComplete();
+        }
+        long totalSegments = backfillSegmentRepository.countByIntegrationId(integration.getIntegrationId());
+        if (totalSegments <= 0) {
+            return integration.getStatus() == UserSession.IntegrationStatus.READY;
+        }
+        long completedSegments = backfillSegmentRepository.countByIntegrationIdAndStatus(
+                integration.getIntegrationId(),
+                BackfillSegment.SegmentStatus.COMPLETE
+        );
+        return completedSegments >= totalSegments;
+    }
+
+    private int targetCount(UserSession session) {
+        int walletTargets = session.getWallets() == null ? 0 : session.getWallets().stream()
+                .mapToInt(wallet -> wallet.getNetworks() == null ? 0 : wallet.getNetworks().size())
+                .sum();
+        return walletTargets + enabledIntegrations(session).size();
     }
 
     private static String pairKey(String walletAddress, String networkId) {

@@ -95,7 +95,7 @@ public class PricingResultMapper {
             boolean hasUnresolvedPrice,
             Instant now
     ) {
-        boolean unresolvedPrice = hasUnresolvedPrice || hasReplayRelevantUnresolvedPrice(transaction);
+        boolean unresolvedPrice = hasUnresolvedPrice || PriceableFlowPolicy.hasReplayRelevantUnresolvedPrice(transaction);
         Set<String> reasons = new LinkedHashSet<>(transaction.getMissingDataReasons() == null
                 ? List.of()
                 : transaction.getMissingDataReasons());
@@ -130,20 +130,5 @@ public class PricingResultMapper {
 
     private int safeIncrement(Integer value) {
         return Math.max(0, value == null ? 0 : value) + 1;
-    }
-
-    private boolean hasReplayRelevantUnresolvedPrice(NormalizedTransaction transaction) {
-        if (transaction == null || transaction.getFlows() == null) {
-            return false;
-        }
-        for (NormalizedTransaction.Flow flow : transaction.getFlows()) {
-            if (!PriceableFlowPolicy.requiresMarketPrice(transaction, flow)) {
-                continue;
-            }
-            if (!PriceableFlowPolicy.hasResolvedPrice(flow)) {
-                return true;
-            }
-        }
-        return false;
     }
 }

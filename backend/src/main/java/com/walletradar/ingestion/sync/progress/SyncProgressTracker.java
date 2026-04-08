@@ -30,7 +30,11 @@ public class SyncProgressTracker {
     public void setRunning(String walletAddress, String networkId, Integer progressPct, Long lastBlockSynced, String syncBannerMessage) {
         SyncStatus status = syncStatusRepository.findByWalletAddressAndNetworkId(walletAddress, networkId)
                 .orElse(new SyncStatus());
+        if (status.getSourceKind() == null) {
+            status.setSourceKind(SyncStatus.SourceKind.ONCHAIN);
+        }
         if (status.getId() == null) {
+            status.setSourceKind(SyncStatus.SourceKind.ONCHAIN);
             status.setWalletAddress(walletAddress);
             status.setNetworkId(networkId);
         }
@@ -49,6 +53,9 @@ public class SyncProgressTracker {
     public void setRawFetchComplete(String walletAddress, String networkId, Long lastBlockSynced) {
         syncStatusRepository.findByWalletAddressAndNetworkId(walletAddress, networkId)
                 .ifPresent(s -> {
+                    if (s.getSourceKind() == null) {
+                        s.setSourceKind(SyncStatus.SourceKind.ONCHAIN);
+                    }
                     s.setRawFetchComplete(true);
                     s.setLastBlockSynced(lastBlockSynced);
                     s.setUpdatedAt(Instant.now());
@@ -62,6 +69,9 @@ public class SyncProgressTracker {
     public void setComplete(String walletAddress, String networkId) {
         syncStatusRepository.findByWalletAddressAndNetworkId(walletAddress, networkId)
                 .ifPresent(s -> {
+                    if (s.getSourceKind() == null) {
+                        s.setSourceKind(SyncStatus.SourceKind.ONCHAIN);
+                    }
                     s.setStatus(SyncStatus.SyncStatusValue.COMPLETE);
                     s.setProgressPct(100);
                     s.setSyncBannerMessage(null);
@@ -80,6 +90,9 @@ public class SyncProgressTracker {
     public void setFailed(String walletAddress, String networkId, String syncBannerMessage) {
         syncStatusRepository.findByWalletAddressAndNetworkId(walletAddress, networkId)
                 .ifPresent(s -> {
+                    if (s.getSourceKind() == null) {
+                        s.setSourceKind(SyncStatus.SourceKind.ONCHAIN);
+                    }
                     int newRetryCount = s.getRetryCount() + 1;
                     s.setStatus(SyncStatus.SyncStatusValue.FAILED);
                     s.setRetryCount(newRetryCount);

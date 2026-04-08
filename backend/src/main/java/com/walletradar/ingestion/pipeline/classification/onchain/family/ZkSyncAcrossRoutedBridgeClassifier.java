@@ -65,7 +65,11 @@ public class ZkSyncAcrossRoutedBridgeClassifier implements OnChainFamilyClassifi
                 ),
                 ClassificationSource.HEURISTIC,
                 ConfidenceLevel.MEDIUM,
-                OnChainClassificationSupport.toFlows(context.movementLegs(), NormalizedTransactionType.BRIDGE_OUT),
+                OnChainClassificationSupport.toFlows(
+                        context.view(),
+                        context.movementLegs(),
+                        NormalizedTransactionType.BRIDGE_OUT
+                ),
                 List.of(),
                 "Across",
                 null

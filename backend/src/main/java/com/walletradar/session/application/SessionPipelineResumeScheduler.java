@@ -7,8 +7,11 @@ import com.walletradar.domain.event.PricingCompletedEvent;
 import com.walletradar.domain.event.SessionBackfillCompletedEvent;
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.domain.session.UserSessionRepository;
+import com.walletradar.domain.sync.BackfillSegment;
+import com.walletradar.domain.sync.BackfillSegmentRepository;
 import com.walletradar.domain.sync.SyncStatus;
 import com.walletradar.domain.sync.SyncStatusRepository;
+import com.walletradar.domain.transaction.bybit.BybitExtractedEvent;
 import com.walletradar.domain.transaction.externalledger.ExternalLedgerRaw;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.raw.RawTransaction;
@@ -44,6 +47,8 @@ public class SessionPipelineResumeScheduler {
 
     private final UserSessionRepository userSessionRepository;
     private final SyncStatusRepository syncStatusRepository;
+    private final BackfillSegmentRepository backfillSegmentRepository;
+    private final AccountingUniverseService accountingUniverseService;
     private final MongoOperations mongoOperations;
     private final ApplicationEventPublisher applicationEventPublisher;
     private final SessionPipelineStateService sessionPipelineStateService;
@@ -66,7 +71,7 @@ public class SessionPipelineResumeScheduler {
     }
 
     private ResumeAction nextAction(UserSession session) {
-        if (session == null || session.getId() == null || session.getWallets() == null || session.getWallets().isEmpty()) {
+        if (session == null || session.getId() == null || targetCount(session) == 0) {
             return null;
         }
         if (hasFreshRunningState(session)) {
@@ -81,7 +86,8 @@ public class SessionPipelineResumeScheduler {
         if (!allBackfillTargetsComplete(session)) {
             return null;
         }
-        List<String> addresses = trackedAddresses(session);
+        AccountingUniverseService.AccountingUniverseScope scope = accountingUniverseService.resolveScope(session);
+        List<String> addresses = scope.memberRefs();
         boolean pendingRaw = hasPendingRaw(addresses);
         boolean hasNormalized = hasNormalizedRows(addresses);
         if (pendingRaw || !hasNormalized) {
@@ -117,7 +123,7 @@ public class SessionPipelineResumeScheduler {
             );
         }
         boolean pendingStat = hasPendingStat(addresses);
-        boolean replayBootstrapRequired = requiresReplayBootstrap(addresses);
+        boolean replayBootstrapRequired = requiresReplayBootstrap(scope);
         if (pendingStat || replayBootstrapRequired) {
             return new ResumeAction(
                     UserSession.PipelineStage.ACCOUNTING_REPLAY,
@@ -127,6 +133,7 @@ public class SessionPipelineResumeScheduler {
         }
         if (shouldHealReplayCompletion(
                 session,
+                scope,
                 pendingRaw,
                 hasNormalized,
                 pendingClarification,
@@ -145,8 +152,24 @@ public class SessionPipelineResumeScheduler {
     }
 
     private boolean allBackfillTargetsComplete(UserSession session) {
+        if (!allOnChainBackfillTargetsComplete(session)) {
+            return false;
+        }
+        for (UserSession.SessionIntegration integration : enabledIntegrations(session)) {
+            if (!isIntegrationBackfillComplete(integration)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean allOnChainBackfillTargetsComplete(UserSession session) {
+        if (session.getWallets() == null || session.getWallets().isEmpty()) {
+            return true;
+        }
         List<String> addresses = trackedAddresses(session);
         Map<String, SyncStatus> syncStatusByPair = syncStatusRepository.findByWalletAddressIn(addresses).stream()
+                .filter(status -> status.getSourceKind() == null || status.getSourceKind() == SyncStatus.SourceKind.ONCHAIN)
                 .filter(status -> status.getWalletAddress() != null && status.getNetworkId() != null)
                 .collect(Collectors.toMap(
                         status -> pairKey(status.getWalletAddress(), status.getNetworkId()),
@@ -166,6 +189,9 @@ public class SessionPipelineResumeScheduler {
     }
 
     private boolean hasPendingRaw(List<String> addresses) {
+        if (addresses.isEmpty()) {
+            return false;
+        }
         Query pendingRawQuery = new Query(new Criteria().andOperator(
                 Criteria.where("walletAddress").in(addresses),
                 Criteria.where("normalizationStatus").is("PENDING")
@@ -174,6 +200,24 @@ public class SessionPipelineResumeScheduler {
     }
 
     private boolean hasPendingBybitWork(UserSession session) {
+        Query rawExtractedQuery = new Query(new Criteria().andOperator(
+                Criteria.where("sessionId").is(session.getId()),
+                Criteria.where("status").is("RAW")
+        ));
+        if (mongoOperations.exists(rawExtractedQuery, BybitExtractedEvent.class)) {
+            return true;
+        }
+
+        Query extractedRematchQuery = new Query(new Criteria().andOperator(
+                Criteria.where("sessionId").is(session.getId()),
+                Criteria.where("status").is("CONFIRMED"),
+                Criteria.where("sourceFileType").is("withdraw_deposit"),
+                Criteria.where("onChainCorrelation.status").is("UNMATCHED")
+        ));
+        if (mongoOperations.exists(extractedRematchQuery, BybitExtractedEvent.class)) {
+            return true;
+        }
+
         Query rawBybitQuery = new Query(new Criteria().andOperator(
                 Criteria.where("sessionId").is(session.getId()),
                 Criteria.where("status").is("RAW")
@@ -192,6 +236,9 @@ public class SessionPipelineResumeScheduler {
     }
 
     private boolean hasPendingClarification(List<String> addresses) {
+        if (addresses.isEmpty()) {
+            return false;
+        }
         Query query = new Query(new Criteria().andOperator(
                 Criteria.where("walletAddress").in(addresses),
                 Criteria.where("status").is("PENDING_CLARIFICATION")
@@ -200,6 +247,9 @@ public class SessionPipelineResumeScheduler {
     }
 
     private boolean hasPendingPrice(List<String> addresses) {
+        if (addresses.isEmpty()) {
+            return false;
+        }
         Query query = new Query(new Criteria().andOperator(
                 Criteria.where("walletAddress").in(addresses),
                 Criteria.where("status").is("PENDING_PRICE"),
@@ -209,6 +259,9 @@ public class SessionPipelineResumeScheduler {
     }
 
     private boolean hasPendingStat(List<String> addresses) {
+        if (addresses.isEmpty()) {
+            return false;
+        }
         Query query = new Query(new Criteria().andOperator(
                 Criteria.where("walletAddress").in(addresses),
                 Criteria.where("status").is("PENDING_STAT"),
@@ -217,19 +270,10 @@ public class SessionPipelineResumeScheduler {
         return mongoOperations.exists(query, NormalizedTransaction.class);
     }
 
-    private boolean requiresReplayBootstrap(List<String> addresses) {
-        Query confirmedQuery = new Query(new Criteria().andOperator(
-                Criteria.where("walletAddress").in(addresses),
-                Criteria.where("status").is("CONFIRMED"),
-                ACTIVE_ACCOUNTING_CRITERIA
-        ));
-        if (!mongoOperations.exists(confirmedQuery, NormalizedTransaction.class)) {
+    private boolean hasNormalizedRows(List<String> addresses) {
+        if (addresses.isEmpty()) {
             return false;
         }
-        return !hasAssetLedgerRows(addresses);
-    }
-
-    private boolean hasNormalizedRows(List<String> addresses) {
         Query normalizedQuery = new Query(Criteria.where("walletAddress").in(addresses));
         return mongoOperations.exists(normalizedQuery, "normalized_transactions");
     }
@@ -248,6 +292,7 @@ public class SessionPipelineResumeScheduler {
 
     private boolean shouldHealReplayCompletion(
             UserSession session,
+            AccountingUniverseService.AccountingUniverseScope scope,
             boolean pendingRaw,
             boolean hasNormalized,
             boolean pendingClarification,
@@ -272,22 +317,59 @@ public class SessionPipelineResumeScheduler {
                 || replayBootstrapRequired) {
             return false;
         }
-        List<String> addresses = trackedAddresses(session);
-        return hasAssetLedgerRows(addresses)
-                && hasOnChainBalanceRows(addresses);
+        List<String> addresses = scope.memberRefs();
+        List<String> onChainWalletRefs = scope.onChainWalletRefs();
+        return hasAssetLedgerRows(scope.accountingUniverseId(), addresses)
+                && hasOnChainBalanceRows(session.getId(), onChainWalletRefs);
     }
 
     private boolean hasAssetLedgerRows(List<String> addresses) {
+        if (addresses.isEmpty()) {
+            return false;
+        }
         Query query = new Query(Criteria.where("walletAddress").in(addresses));
         return mongoOperations.exists(query, "asset_ledger_points");
     }
 
-    private boolean hasOnChainBalanceRows(List<String> addresses) {
-        Query query = new Query(Criteria.where("walletAddress").in(addresses));
+    private boolean hasAssetLedgerRows(String accountingUniverseId, List<String> addresses) {
+        if (accountingUniverseId != null && !accountingUniverseId.isBlank()) {
+            Query query = new Query(Criteria.where("accountingUniverseId").is(accountingUniverseId));
+            return mongoOperations.exists(query, "asset_ledger_points");
+        }
+        return hasAssetLedgerRows(addresses);
+    }
+
+    private boolean hasOnChainBalanceRows(String sessionId, List<String> addresses) {
+        if (addresses == null || addresses.isEmpty()) {
+            return true;
+        }
+        Query query = new Query(new Criteria().andOperator(
+                Criteria.where("sessionId").is(sessionId),
+                Criteria.where("walletAddress").in(addresses)
+        ));
         return mongoOperations.exists(query, "on_chain_balances");
     }
 
+    private boolean requiresReplayBootstrap(AccountingUniverseService.AccountingUniverseScope scope) {
+        List<String> addresses = scope.memberRefs();
+        if (addresses.isEmpty()) {
+            return false;
+        }
+        Query confirmedQuery = new Query(new Criteria().andOperator(
+                Criteria.where("walletAddress").in(addresses),
+                Criteria.where("status").is("CONFIRMED"),
+                ACTIVE_ACCOUNTING_CRITERIA
+        ));
+        if (!mongoOperations.exists(confirmedQuery, NormalizedTransaction.class)) {
+            return false;
+        }
+        return !hasAssetLedgerRows(scope.accountingUniverseId(), addresses);
+    }
+
     private List<String> trackedAddresses(UserSession session) {
+        if (session.getWallets() == null || session.getWallets().isEmpty()) {
+            return List.of();
+        }
         return session.getWallets().stream()
                 .map(UserSession.SessionWallet::getAddress)
                 .distinct()
@@ -295,9 +377,38 @@ public class SessionPipelineResumeScheduler {
     }
 
     private int targetCount(UserSession session) {
-        return session.getWallets().stream()
+        int walletTargets = session.getWallets() == null ? 0 : session.getWallets().stream()
                 .mapToInt(wallet -> wallet.getNetworks() == null ? 0 : wallet.getNetworks().size())
                 .sum();
+        return walletTargets + enabledIntegrations(session).size();
+    }
+
+    private List<UserSession.SessionIntegration> enabledIntegrations(UserSession session) {
+        if (session.getIntegrations() == null || session.getIntegrations().isEmpty()) {
+            return List.of();
+        }
+        return session.getIntegrations().stream()
+                .filter(integration -> integration != null
+                        && integration.getStatus() != UserSession.IntegrationStatus.DISABLED
+                        && integration.getIntegrationId() != null
+                        && !integration.getIntegrationId().isBlank())
+                .toList();
+    }
+
+    private boolean isIntegrationBackfillComplete(UserSession.SessionIntegration integration) {
+        SyncStatus integrationStatus = syncStatusRepository.findLatestByIntegrationId(integration.getIntegrationId()).orElse(null);
+        if (integrationStatus != null) {
+            return integrationStatus.isBackfillComplete();
+        }
+        long totalSegments = backfillSegmentRepository.countByIntegrationId(integration.getIntegrationId());
+        if (totalSegments <= 0) {
+            return integration.getStatus() == UserSession.IntegrationStatus.READY;
+        }
+        long completedSegments = backfillSegmentRepository.countByIntegrationIdAndStatus(
+                integration.getIntegrationId(),
+                BackfillSegment.SegmentStatus.COMPLETE
+        );
+        return completedSegments >= totalSegments;
     }
 
     private static String pairKey(String walletAddress, String networkId) {
