@@ -65,6 +65,9 @@ families.
 
 - destination-side bridge settlement with explicit settlement selector and
   inbound-only movement resolves as `BRIDGE_IN`
+- destination-side passive settlement with empty input / blank function name
+  may also resolve as `BRIDGE_IN` when current raw proves a registry-backed
+  bridge sender through persisted internal-transfer or token-transfer evidence
 - explicit source-side bridge start (`Mayan/Stargate/Squid`, LI.FI tagged route
   calls, `transferRemote`) resolves as `BRIDGE_OUT`
 - route-tagged `LI.FI / Jumper` bridge-start rows with positive native funding
@@ -76,6 +79,11 @@ families.
   `TRANSFER`
 - method-aware bridge-out (`Across depositV3`, bridge-entry overloads proven by
   registry) resolves as `BRIDGE_OUT`
+- routed `MetaMask Bridge -> LI.FI adapter -> Across settlement` corridors may
+  materialize as deterministic bridge pairs even when official LI.FI status is
+  absent, but only when clarification proves one unique same-wallet
+  cross-network destination from current canonical evidence plus verified
+  `Across` settlement sender proof
 - post-clarification same-wallet `Across` source/destination pairs may receive
   deterministic `correlationId` and `matchedCounterparty` when bridge
   continuity is uniquely provable from current canonical rows

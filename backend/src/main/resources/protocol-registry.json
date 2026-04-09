@@ -101,6 +101,32 @@
       ],
       "confidence": "HIGH"
     },
+    "0xef740bf23acae26f6492b10de645d6b98dc8eaf3": {
+      "name": "Uniswap Universal Router",
+      "protocol": "Uniswap",
+      "version": "V3",
+      "family": "DEX",
+      "role": "ROUTER",
+      "event_type": "SWAP",
+      "networks": [
+        "UNICHAIN"
+      ],
+      "confidence": "HIGH",
+      "notes": "Official Uniswap Universal Router on Unichain."
+    },
+    "0x851116d9223fabed8e56c0e6b8ad0c31d98b3507": {
+      "name": "Uniswap Universal Router",
+      "protocol": "Uniswap",
+      "version": "V3",
+      "family": "DEX",
+      "role": "ROUTER",
+      "event_type": "SWAP",
+      "networks": [
+        "OPTIMISM"
+      ],
+      "confidence": "HIGH",
+      "notes": "Official Uniswap Universal Router on Optimism."
+    },
     "0x1f98431c8ad98523631ae4a59f267346ea31f984": {
       "name": "Uniswap V3 Factory",
       "protocol": "Uniswap",
@@ -193,6 +219,36 @@
       ],
       "confidence": "HIGH",
       "notes": "Canonical SushiSwap V3 router on Katana. Same bytecode as Arbitrum/Base deployments via CREATE2. Verify on katanascan.com"
+    },
+    "── DEX: LFJ / Trader Joe ─────────────────────────────────────────────": {},
+    "lfj-aggregator-arbitrum-avalanche": {
+      "address": "0x45a62b090df48243f12a21897e7ed91863e2c86b",
+      "name": "LFJ Joe Aggregator",
+      "protocol": "LFJ",
+      "version": "Aggregator",
+      "family": "AGGREGATOR",
+      "role": "ROUTER",
+      "event_type": null,
+      "networks": [
+        "ARBITRUM",
+        "AVALANCHE"
+      ],
+      "confidence": "HIGH",
+      "notes": "Official LFJ Joe Aggregator router on Arbitrum and Avalanche per LFJ deployment docs."
+    },
+    "0x18556da13313f3532c54711497a8fedac273220e": {
+      "name": "LFJ LBRouter",
+      "protocol": "LFJ",
+      "version": "V2.2",
+      "family": "DEX",
+      "role": "ROUTER",
+      "event_type": null,
+      "networks": [
+        "ARBITRUM",
+        "AVALANCHE"
+      ],
+      "confidence": "HIGH",
+      "notes": "Official LFJ Liquidity Book router on Arbitrum and Avalanche per LFJ deployment docs."
     },
     "── DEX: Curve Finance ────────────────────────────────────────────────": {},
     "0x99a58482bd75cbab83b27ec03ca68ff489b5788f": {
@@ -575,7 +631,7 @@
     },
     "0x216b4b4ba9f3e719726886d34a177484278bfcae": {
       "name": "Paraswap AugustusSwapper V6",
-      "protocol": "Paraswap",
+      "protocol": "Velora/ParaSwap",
       "version": "V6",
       "family": "AGGREGATOR",
       "role": "ROUTER",
@@ -593,7 +649,7 @@
     },
     "0xdef171fe48cf0115b1d80b88dc8eab59176fee57": {
       "name": "Paraswap AugustusSwapper V5",
-      "protocol": "Paraswap",
+      "protocol": "Velora/ParaSwap",
       "version": "V5",
       "family": "AGGREGATOR",
       "role": "ROUTER",
@@ -608,15 +664,43 @@
       ],
       "confidence": "HIGH"
     },
+    "0x6a000f20005980200259b80c5102003040001068": {
+      "name": "Paraswap AugustusSwapper V6.2 (Velora)",
+      "protocol": "Velora/ParaSwap",
+      "version": "V6.2",
+      "family": "AGGREGATOR",
+      "role": "ROUTER",
+      "event_type": "SWAP",
+      "networks": [
+        "ARBITRUM",
+        "AVALANCHE"
+      ],
+      "confidence": "HIGH",
+      "notes": "Velora / ParaSwap Augustus V6.2 router observed in live swaps and documented by Velora public contract labels."
+    },
+    "0x23981fc34e69eedfe2bd9a0a9fcb0719fe09dbfc": {
+      "name": "MetaMask Bridge",
+      "protocol": "MetaMask Bridge",
+      "version": "V1",
+      "family": "BRIDGE",
+      "role": "ROUTER",
+      "event_type": "BRIDGE_OUT",
+      "networks": [
+        "ARBITRUM"
+      ],
+      "confidence": "HIGH",
+      "notes": "Audited MetaMask Bridge entrypoint. Routed corridors may still use LI.FI adapter evidence and downstream settlement proof without rewriting the source protocol label."
+    },
     "0x1231deb6f5749ef6ce6943a275a1d3e7486f4eae": {
       "name": "LI.FI Diamond",
-      "protocol": "LiFi",
+      "protocol": "LI.FI",
       "version": "V1",
       "family": "BRIDGE",
       "role": "BRIDGE_ENTRY",
       "event_type": null,
       "networks": [
         "ETHEREUM",
+        "ARBITRUM",
         "BASE",
         "BSC"
       ],
@@ -672,6 +756,19 @@
       ],
       "confidence": "HIGH",
       "notes": "Same proxy address deployed across multiple chains"
+    },
+    "0x5283beced7adf6d003225c13896e536f2d4264ff": {
+      "name": "Aave Wrapped Token Gateway V3",
+      "protocol": "Aave",
+      "version": "V3",
+      "family": "LENDING",
+      "role": "WRAPPER_CONTRACT",
+      "event_type": "LENDING_DEPOSIT",
+      "networks": [
+        "ARBITRUM"
+      ],
+      "confidence": "HIGH",
+      "notes": "Wrapped Token Gateway for native-asset supply/withdraw flows into Aave V3."
     },
     "0xa238dd80c259a72e81d7e4664a9801593f98d1c5": {
       "name": "Aave V3 Pool",
@@ -981,6 +1078,61 @@
       ],
       "confidence": "HIGH",
       "notes": "deposit/withdraw Curve LP tokens for boosted CRV rewards"
+    },
+    "── YIELD: Lagoon ─────────────────────────────────────────────────────": {},
+    "0xc094c224ce0406bc338e00837b96ad2e265f7287": {
+      "name": "Lagoon Vault Factory",
+      "protocol": "Lagoon",
+      "version": "V1",
+      "family": "YIELD",
+      "role": "FACTORY",
+      "event_type": null,
+      "networks": [
+        "AVALANCHE",
+        "KATANA",
+        "MANTLE"
+      ],
+      "confidence": "HIGH",
+      "notes": "Official Lagoon vault factory for Avalanche, Katana, and Mantle from Lagoon networks and addresses documentation."
+    },
+    "0x9de724b0efee0fba07fe21a16b9bf9bbb5204fb4": {
+      "name": "Lagoon Vault Factory",
+      "protocol": "Lagoon",
+      "version": "V1",
+      "family": "YIELD",
+      "role": "FACTORY",
+      "event_type": null,
+      "networks": [
+        "ARBITRUM"
+      ],
+      "confidence": "HIGH",
+      "notes": "Official Lagoon vault factory on Arbitrum."
+    },
+    "0x6fc0f2320483fa03fbfdf626ddbae2cc4b112b51": {
+      "name": "Lagoon Vault Factory",
+      "protocol": "Lagoon",
+      "version": "V1",
+      "family": "YIELD",
+      "role": "FACTORY",
+      "event_type": null,
+      "networks": [
+        "BASE"
+      ],
+      "confidence": "HIGH",
+      "notes": "Official Lagoon vault factory on Base."
+    },
+    "0x8d6f5479b14348186fae9bc7e636e947c260f9b1": {
+      "name": "Lagoon Vault Factory",
+      "protocol": "Lagoon",
+      "version": "V1",
+      "family": "YIELD",
+      "role": "FACTORY",
+      "event_type": null,
+      "networks": [
+        "ETHEREUM"
+      ],
+      "confidence": "HIGH",
+      "notes": "Official Lagoon vault factory on Ethereum."
     },
     "── YIELD: Yearn Finance ──────────────────────────────────────────────": {},
     "0x50c1a2ea0a861a967d9d0ffe2ae4012c2e053804": {
@@ -1717,7 +1869,7 @@
     },
     "0x94312a608246cecfce6811db84b3ef4b2619054e": {
       "name": "FLUID Rewards Distributor",
-      "protocol": "FLUID",
+      "protocol": "Fluid",
       "version": "V1",
       "family": "YIELD",
       "role": "REWARD_ROUTER",
@@ -1743,7 +1895,7 @@
     },
     "0x0045601c3c4c561012c108ea84a81e36eac24296": {
       "name": "Mantle Merkle Distributor",
-      "protocol": "Merkle",
+      "protocol": "Merkl",
       "version": "V1",
       "family": "YIELD",
       "role": "REWARD_ROUTER",
@@ -2139,7 +2291,8 @@
       "confidence": "HIGH",
       "notes": "Official from Merchant Moe docs"
     },
-    "0x45a62b090df48243f12a21897e7ed91863e2c86b": {
+    "merchant-moe-aggregator-mantle": {
+      "address": "0x45a62b090df48243f12a21897e7ed91863e2c86b",
       "name": "Merchant Moe LFJ Aggregator Router",
       "protocol": "Merchant Moe",
       "version": "V1",

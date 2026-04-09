@@ -3,6 +3,7 @@ package com.walletradar.ingestion.job.clarification;
 import com.walletradar.domain.event.OnChainClarificationCompletedEvent;
 import com.walletradar.domain.event.OnChainNormalizationCompletedEvent;
 import com.walletradar.ingestion.config.OnChainClarificationProperties;
+import com.walletradar.ingestion.pipeline.clarification.ProtocolNameEnrichmentService;
 import com.walletradar.session.application.SessionPipelineStateService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -30,9 +31,11 @@ class OnChainClarificationJobTest {
         OnChainClarificationService metadataService = mock(OnChainClarificationService.class);
         OnChainReceiptClarificationService receiptService = mock(OnChainReceiptClarificationService.class);
         ClarificationPostProcessingHandler clarificationPostProcessingHandler = mock(ClarificationPostProcessingHandler.class);
+        ProtocolNameEnrichmentService protocolNameEnrichmentService = mock(ProtocolNameEnrichmentService.class);
         when(metadataService.processNextBatch()).thenReturn(2, 0);
         when(receiptService.processNextBatch()).thenReturn(3, 0);
         when(clarificationPostProcessingHandler.reconcileBridgePairs(500)).thenReturn(1);
+        when(protocolNameEnrichmentService.processNextBatch(100)).thenReturn(4, 0);
         ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
         SessionPipelineStateService pipelineStateService = mock(SessionPipelineStateService.class);
 
@@ -42,16 +45,18 @@ class OnChainClarificationJobTest {
                 receiptService,
                 new ClarificationBatchDrainer(),
                 clarificationPostProcessingHandler,
+                protocolNameEnrichmentService,
                 publisher,
                 pipelineStateService
         );
 
         int processed = job.runClarification();
 
-        assertThat(processed).isEqualTo(6);
+        assertThat(processed).isEqualTo(10);
         verify(metadataService, times(2)).processNextBatch();
         verify(receiptService, times(2)).processNextBatch();
         verify(clarificationPostProcessingHandler).reconcileBridgePairs(500);
+        verify(protocolNameEnrichmentService, times(2)).processNextBatch(100);
     }
 
     @Test
@@ -64,8 +69,10 @@ class OnChainClarificationJobTest {
         OnChainClarificationService metadataService = mock(OnChainClarificationService.class);
         OnChainReceiptClarificationService receiptService = mock(OnChainReceiptClarificationService.class);
         ClarificationPostProcessingHandler clarificationPostProcessingHandler = mock(ClarificationPostProcessingHandler.class);
+        ProtocolNameEnrichmentService protocolNameEnrichmentService = mock(ProtocolNameEnrichmentService.class);
         when(metadataService.processNextBatch()).thenReturn(1, 0);
         when(clarificationPostProcessingHandler.reconcileBridgePairs(500)).thenReturn(0);
+        when(protocolNameEnrichmentService.processNextBatch(100)).thenReturn(0);
         ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
         SessionPipelineStateService pipelineStateService = mock(SessionPipelineStateService.class);
 
@@ -75,6 +82,7 @@ class OnChainClarificationJobTest {
                 receiptService,
                 new ClarificationBatchDrainer(),
                 clarificationPostProcessingHandler,
+                protocolNameEnrichmentService,
                 publisher,
                 pipelineStateService
         );
@@ -85,6 +93,7 @@ class OnChainClarificationJobTest {
         verify(metadataService, times(2)).processNextBatch();
         verify(receiptService, never()).processNextBatch();
         verify(clarificationPostProcessingHandler).reconcileBridgePairs(500);
+        verify(protocolNameEnrichmentService, times(1)).processNextBatch(100);
     }
 
     @Test
@@ -97,8 +106,10 @@ class OnChainClarificationJobTest {
         OnChainClarificationService metadataService = mock(OnChainClarificationService.class);
         OnChainReceiptClarificationService receiptService = mock(OnChainReceiptClarificationService.class);
         ClarificationPostProcessingHandler clarificationPostProcessingHandler = mock(ClarificationPostProcessingHandler.class);
+        ProtocolNameEnrichmentService protocolNameEnrichmentService = mock(ProtocolNameEnrichmentService.class);
         when(metadataService.processNextBatch()).thenReturn(4, 0);
         when(clarificationPostProcessingHandler.reconcileBridgePairs(500)).thenReturn(2);
+        when(protocolNameEnrichmentService.processNextBatch(100)).thenReturn(1, 0);
         ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
         SessionPipelineStateService pipelineStateService = mock(SessionPipelineStateService.class);
 
@@ -108,6 +119,7 @@ class OnChainClarificationJobTest {
                 receiptService,
                 new ClarificationBatchDrainer(),
                 clarificationPostProcessingHandler,
+                protocolNameEnrichmentService,
                 publisher,
                 pipelineStateService
         );
@@ -117,6 +129,7 @@ class OnChainClarificationJobTest {
         verify(metadataService, times(2)).processNextBatch();
         verify(receiptService, never()).processNextBatch();
         verify(clarificationPostProcessingHandler).reconcileBridgePairs(500);
+        verify(protocolNameEnrichmentService, times(2)).processNextBatch(100);
     }
 
     @Test
@@ -129,8 +142,10 @@ class OnChainClarificationJobTest {
         OnChainClarificationService metadataService = mock(OnChainClarificationService.class);
         OnChainReceiptClarificationService receiptService = mock(OnChainReceiptClarificationService.class);
         ClarificationPostProcessingHandler clarificationPostProcessingHandler = mock(ClarificationPostProcessingHandler.class);
+        ProtocolNameEnrichmentService protocolNameEnrichmentService = mock(ProtocolNameEnrichmentService.class);
         when(metadataService.processNextBatch()).thenReturn(0);
         when(clarificationPostProcessingHandler.reconcileBridgePairs(500)).thenReturn(0);
+        when(protocolNameEnrichmentService.processNextBatch(100)).thenReturn(0);
 
         List<Object> events = new ArrayList<>();
         ApplicationEventPublisher publisher = events::add;
@@ -142,6 +157,7 @@ class OnChainClarificationJobTest {
                 receiptService,
                 new ClarificationBatchDrainer(),
                 clarificationPostProcessingHandler,
+                protocolNameEnrichmentService,
                 publisher,
                 pipelineStateService
         );

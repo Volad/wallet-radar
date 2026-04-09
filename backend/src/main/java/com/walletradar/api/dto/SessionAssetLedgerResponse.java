@@ -49,6 +49,7 @@ public record SessionAssetLedgerResponse(
     public record TimelineEntry(
             Instant blockTimestamp,
             String txHash,
+            String eventGroupId,
             String normalizedTransactionId,
             String normalizedType,
             String protocolName,
@@ -63,11 +64,15 @@ public record SessionAssetLedgerResponse(
             BigDecimal coveredQuantityAfter,
             BigDecimal uncoveredQuantityAfter,
             BigDecimal totalCostBasisAfterUsd,
-            BigDecimal avcoAfterUsd
+            BigDecimal avcoAfterUsd,
+            String fromAddress,
+            String toAddress,
+            List<String> memberNormalizedTransactionIds
     ) {
     }
 
     public record EventOverlay(
+            String eventGroupId,
             String normalizedTransactionId,
             String txHash,
             Instant blockTimestamp,
@@ -76,7 +81,10 @@ public record SessionAssetLedgerResponse(
             String lifecycleKind,
             List<String> walletAddresses,
             List<String> networkIds,
-            List<EventFlow> flows
+            List<EventFlow> flows,
+            String fromAddress,
+            String toAddress,
+            List<String> memberNormalizedTransactionIds
     ) {
     }
 

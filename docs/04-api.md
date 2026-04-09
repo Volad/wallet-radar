@@ -707,6 +707,13 @@ Notes:
   `accountingUniverseId`, not only the currently visible wallet subset
 - `current.totalCostBasisUsd` and `current.avcoUsd` are provable basis values
   for `current.coveredQuantity`
+- `protocolName` / `protocolVersion`, when present on transaction-facing
+  surfaces, are canonical best-effort labels sourced from either direct
+  normalization-time registry hits or clarification-time protocol enrichment.
+  Clarification-time enrichment may use the raw interacted tx recipient even
+  when explorer transfer projections suppress `to` for economic classification.
+  They are safe for filtering and debugging, but they are not economic status
+  gates by themselves.
 - `events` is the lightweight overlay surface for the UI
 - `ledgerPoints` is the raw immutable replay trace for audit/debug
 - the request path is datastore-only; it performs no RPC or explorer calls

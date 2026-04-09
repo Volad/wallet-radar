@@ -76,6 +76,14 @@ import java.util.List;
         @CompoundIndex(
                 name = "normalized_source_type_counterparty_block_idx",
                 def = "{'source': 1, 'type': 1, 'matchedCounterparty': 1, 'blockTimestamp': 1, 'transactionIndex': 1}"
+        ),
+        @CompoundIndex(
+                name = "normalized_source_protocol_status_block_idx",
+                def = "{'source': 1, 'protocolName': 1, 'status': 1, 'blockTimestamp': 1, 'transactionIndex': 1}"
+        ),
+        @CompoundIndex(
+                name = "normalized_source_wallet_type_block_idx",
+                def = "{'source': 1, 'walletAddress': 1, 'type': 1, 'blockTimestamp': 1, 'transactionIndex': 1}"
         )
 })
 @NoArgsConstructor

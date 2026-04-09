@@ -370,6 +370,258 @@ class AssetLedgerQueryServiceTest {
         });
     }
 
+    @Test
+    void sessionFamilyLedgerCollapsesUniverseInternalTransferIntoSingleDisplayEvent() {
+        UserSession session = new UserSession();
+        session.setId("session-5");
+        UserSession.SessionWallet walletA = new UserSession.SessionWallet();
+        walletA.setAddress("wallet-a");
+        walletA.setNetworks(List.of(NetworkId.ETHEREUM));
+        UserSession.SessionWallet walletB = new UserSession.SessionWallet();
+        walletB.setAddress("wallet-b");
+        walletB.setNetworks(List.of(NetworkId.ETHEREUM));
+        session.setWallets(List.of(walletA, walletB));
+
+        AssetLedgerPoint transferOut = point(
+                "50",
+                "wallet-a",
+                NetworkId.ETHEREUM,
+                "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.CARRY_OUT,
+                AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "-0.0024",
+                "-6.59",
+                "0",
+                "0",
+                "0",
+                "0"
+        );
+        transferOut.setNormalizedType("EXTERNAL_TRANSFER_OUT");
+        transferOut.setTxHash("0xinternal");
+        transferOut.setMatchedCounterparty("wallet-b");
+
+        AssetLedgerPoint gasOnly = point(
+                "50",
+                "wallet-a",
+                NetworkId.ETHEREUM,
+                "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.GAS_ONLY,
+                AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "-0.000031",
+                "0",
+                "0",
+                "-0.07",
+                "0",
+                "0"
+        );
+        gasOnly.setNormalizedType("EXTERNAL_TRANSFER_OUT");
+        gasOnly.setTxHash("0xinternal");
+        gasOnly.setMatchedCounterparty("wallet-b");
+
+        AssetLedgerPoint transferIn = point(
+                "51",
+                "wallet-b",
+                NetworkId.ETHEREUM,
+                "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.CARRY_IN,
+                AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "0.0024",
+                "6.59",
+                "0",
+                "0",
+                "1",
+                "100"
+        );
+        transferIn.setNormalizedType("EXTERNAL_TRANSFER_IN");
+        transferIn.setTxHash("0xinternal");
+        transferIn.setMatchedCounterparty("wallet-a");
+
+        NormalizedTransaction outTx = new NormalizedTransaction();
+        outTx.setId("50");
+        outTx.setTxHash("0xinternal");
+        outTx.setNetworkId(NetworkId.ETHEREUM);
+        outTx.setWalletAddress("wallet-a");
+        outTx.setMatchedCounterparty("wallet-b");
+        outTx.setFlows(List.of(flow("TRANSFER", "ETH", "-0.0024", null)));
+
+        NormalizedTransaction inTx = new NormalizedTransaction();
+        inTx.setId("51");
+        inTx.setTxHash("0xinternal");
+        inTx.setNetworkId(NetworkId.ETHEREUM);
+        inTx.setWalletAddress("wallet-b");
+        inTx.setMatchedCounterparty("wallet-a");
+        inTx.setFlows(List.of(flow("TRANSFER", "ETH", "0.0024", null)));
+
+        when(userSessionRepository.findById("session-5")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "ACCOUNTING_UNIVERSE:session-5",
+                List.of("wallet-a", "wallet-b"),
+                List.of("wallet-a", "wallet-b")
+        ));
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-5",
+                "FAMILY:ETH"
+        )).thenReturn(List.of(transferOut, gasOnly, transferIn));
+        when(normalizedTransactionRepository.findAllById(List.of("50", "51")))
+                .thenReturn(List.of(outTx, inTx));
+        when(mongoOperations.find(any(), eq(OnChainBalance.class))).thenReturn(List.of(
+                balance("wallet-a", NetworkId.ETHEREUM, "ETH", "0"),
+                balance("wallet-b", NetworkId.ETHEREUM, "ETH", "1")
+        ));
+
+        AssetLedgerQueryService service = new AssetLedgerQueryService(
+                userSessionRepository,
+                assetLedgerPointRepository,
+                normalizedTransactionRepository,
+                accountingUniverseService,
+                mongoOperations
+        );
+        AssetLedgerQueryService.SessionAssetLedgerView view = service.findSessionFamilyLedger("session-5", "FAMILY:ETH")
+                .orElseThrow();
+
+        assertThat(view.timeline()).singleElement().satisfies(entry -> {
+            assertThat(entry.eventGroupId()).contains(":internal:");
+            assertThat(entry.normalizedType()).isEqualTo("INTERNAL_TRANSFER");
+            assertThat(entry.fromAddress()).isEqualTo("wallet-a");
+            assertThat(entry.toAddress()).isEqualTo("wallet-b");
+            assertThat(entry.memberNormalizedTransactionIds()).containsExactly("50", "51");
+            assertThat(entry.quantityDelta()).isEqualByComparingTo("-0.000031");
+            assertThat(entry.gasDeltaUsd()).isEqualByComparingTo("-0.07");
+        });
+        assertThat(view.events()).singleElement().satisfies(event -> {
+            assertThat(event.normalizedType()).isEqualTo("INTERNAL_TRANSFER");
+            assertThat(event.memberNormalizedTransactionIds()).containsExactly("50", "51");
+            assertThat(event.fromAddress()).isEqualTo("wallet-a");
+            assertThat(event.toAddress()).isEqualTo("wallet-b");
+        });
+        assertThat(view.ledgerPoints()).hasSize(3);
+    }
+
+    @Test
+    void sessionFamilyLedgerCollapsesIntegrationToWalletTransferIntoSingleDisplayEvent() {
+        UserSession session = new UserSession();
+        session.setId("session-6");
+        UserSession.SessionWallet wallet = new UserSession.SessionWallet();
+        wallet.setAddress("wallet-a");
+        wallet.setNetworks(List.of(NetworkId.ARBITRUM));
+        session.setWallets(List.of(wallet));
+
+        AssetLedgerPoint transferOut = point(
+                "60",
+                "BYBIT:33625378",
+                null,
+                "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.CARRY_OUT,
+                AssetLedgerPoint.LifecycleKind.TRANSFER,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "-0.0039528",
+                "-10.80",
+                "0",
+                "0",
+                "0.00154",
+                "4.20"
+        );
+        transferOut.setNormalizedType("EXTERNAL_TRANSFER_OUT");
+        transferOut.setTxHash("0xintegration");
+        transferOut.setMatchedCounterparty("wallet-a");
+
+        AssetLedgerPoint transferIn = point(
+                "61",
+                "wallet-a",
+                NetworkId.ARBITRUM,
+                "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.ACQUIRE,
+                AssetLedgerPoint.LifecycleKind.TRANSFER,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "0.0039528",
+                "10.75",
+                "0",
+                "0",
+                "0.0039528",
+                "10.75"
+        );
+        transferIn.setNormalizedType("EXTERNAL_TRANSFER_IN");
+        transferIn.setTxHash("0xintegration");
+        transferIn.setMatchedCounterparty(null);
+
+        AssetLedgerPoint unrelated = point(
+                "62",
+                "wallet-a",
+                NetworkId.ARBITRUM,
+                "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.GAS_ONLY,
+                AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "-0.00001",
+                "0",
+                "0",
+                "-0.02",
+                "0.00394",
+                "10.75"
+        );
+        unrelated.setNormalizedType("SWAP");
+        unrelated.setTxHash("0xother");
+        unrelated.setBlockTimestamp(Instant.parse("2026-04-05T10:01:00Z"));
+        transferOut.setBlockTimestamp(Instant.parse("2026-04-05T10:00:00Z"));
+        transferIn.setBlockTimestamp(Instant.parse("2026-04-05T10:02:00Z"));
+
+        NormalizedTransaction outTx = new NormalizedTransaction();
+        outTx.setId("60");
+        outTx.setTxHash("0xintegration");
+        outTx.setWalletAddress("BYBIT:33625378");
+        outTx.setMatchedCounterparty("wallet-a");
+        outTx.setFlows(List.of(flow("TRANSFER", "ETH", "-0.0039528", null)));
+
+        NormalizedTransaction inTx = new NormalizedTransaction();
+        inTx.setId("61");
+        inTx.setTxHash("0xintegration");
+        inTx.setNetworkId(NetworkId.ARBITRUM);
+        inTx.setWalletAddress("wallet-a");
+        inTx.setFlows(List.of(flow("BUY", "ETH", "0.0039528", null)));
+
+        when(userSessionRepository.findById("session-6")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "ACCOUNTING_UNIVERSE:session-6",
+                List.of("wallet-a", "BYBIT:33625378"),
+                List.of("wallet-a")
+        ));
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-6",
+                "FAMILY:ETH"
+        )).thenReturn(List.of(transferOut, unrelated, transferIn));
+        when(normalizedTransactionRepository.findAllById(List.of("60", "62", "61")))
+                .thenReturn(List.of(outTx, inTx, normalized("62", "1inch", "ETH", "SELL", "-0.00001", null)));
+        when(mongoOperations.find(any(), eq(OnChainBalance.class))).thenReturn(List.of(
+                balance("wallet-a", NetworkId.ARBITRUM, "ETH", "0.0039528")
+        ));
+
+        AssetLedgerQueryService service = new AssetLedgerQueryService(
+                userSessionRepository,
+                assetLedgerPointRepository,
+                normalizedTransactionRepository,
+                accountingUniverseService,
+                mongoOperations
+        );
+        AssetLedgerQueryService.SessionAssetLedgerView view = service.findSessionFamilyLedger("session-6", "FAMILY:ETH")
+                .orElseThrow();
+
+        assertThat(view.timeline()).hasSize(2);
+        assertThat(view.timeline()).anySatisfy(entry -> {
+            assertThat(entry.normalizedType()).isEqualTo("INTERNAL_TRANSFER");
+            assertThat(entry.fromAddress()).isEqualTo("BYBIT:33625378");
+            assertThat(entry.toAddress()).isEqualTo("wallet-a");
+            assertThat(entry.memberNormalizedTransactionIds()).containsExactly("60", "61");
+        });
+        assertThat(view.events()).anySatisfy(event -> {
+            assertThat(event.normalizedType()).isEqualTo("INTERNAL_TRANSFER");
+            assertThat(event.fromAddress()).isEqualTo("BYBIT:33625378");
+            assertThat(event.toAddress()).isEqualTo("wallet-a");
+        });
+    }
+
     private NormalizedTransaction normalized(
             String id,
             String protocolName,
@@ -388,6 +640,20 @@ class AssetLedgerQueryServiceTest {
         flow.setUnitPriceUsd(unitPriceUsd == null ? null : new BigDecimal(unitPriceUsd));
         transaction.setFlows(List.of(flow));
         return transaction;
+    }
+
+    private NormalizedTransaction.Flow flow(
+            String role,
+            String symbol,
+            String quantityDelta,
+            String unitPriceUsd
+    ) {
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(NormalizedLegRole.valueOf(role));
+        flow.setAssetSymbol(symbol);
+        flow.setQuantityDelta(new BigDecimal(quantityDelta));
+        flow.setUnitPriceUsd(unitPriceUsd == null ? null : new BigDecimal(unitPriceUsd));
+        return flow;
     }
 
     private AssetLedgerPoint point(

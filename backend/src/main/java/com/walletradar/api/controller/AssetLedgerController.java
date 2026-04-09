@@ -65,6 +65,7 @@ public class AssetLedgerController {
                         .map(entry -> new SessionAssetLedgerResponse.TimelineEntry(
                                 entry.blockTimestamp(),
                                 entry.txHash(),
+                                entry.eventGroupId(),
                                 entry.normalizedTransactionId(),
                                 entry.normalizedType(),
                                 entry.protocolName(),
@@ -79,11 +80,15 @@ public class AssetLedgerController {
                                 entry.coveredQuantityAfter(),
                                 entry.uncoveredQuantityAfter(),
                                 entry.totalCostBasisAfterUsd(),
-                                entry.avcoAfterUsd()
+                                entry.avcoAfterUsd(),
+                                entry.fromAddress(),
+                                entry.toAddress(),
+                                entry.memberNormalizedTransactionIds()
                         ))
                         .toList(),
                 view.events().stream()
                         .map(event -> new SessionAssetLedgerResponse.EventOverlay(
+                                event.eventGroupId(),
                                 event.normalizedTransactionId(),
                                 event.txHash(),
                                 event.blockTimestamp(),
@@ -103,7 +108,10 @@ public class AssetLedgerController {
                                                 flow.priceSource(),
                                                 flow.logIndex()
                                         ))
-                                        .toList()
+                                        .toList(),
+                                event.fromAddress(),
+                                event.toAddress(),
+                                event.memberNormalizedTransactionIds()
                         ))
                         .toList(),
                 view.ledgerPoints().stream()

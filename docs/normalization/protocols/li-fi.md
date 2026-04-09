@@ -27,6 +27,9 @@ destination bridge-pair evidence for the `LI.FI / Jumper` route family.
   - `relay`
   - `across`
   - `jumper.exchange`
+- adapter evidence such as `lifiAdapterV2` when the entry router is not the
+  canonical `LI.FI Diamond` but current raw still proves LI.FI-routed
+  execution
 - trusted bridge-router identity from
   `backend/src/main/resources/protocol-registry.json`
 - official LI.FI status response when clarification already proved the source
@@ -70,6 +73,16 @@ destination bridge-pair evidence for the `LI.FI / Jumper` route family.
   protocol-owned sweep after on-chain clarification; destination-side bridge
   promotion must not depend on the source row having passed through one
   particular clarification lane first
+- audited routed `MetaMask Bridge -> LI.FI adapter -> Across settlement`
+  sources may also be revisited by a bounded fallback when official LI.FI
+  status is absent, but current canonical evidence proves:
+  - LI.FI route-tagged source bridge start
+  - unique same-wallet cross-network destination candidate
+  - destination settlement sender is verified `Across` bridge infrastructure
+  - same principal asset family
+  - bounded audited time window and quantity drift
+- this fallback may promote an inbound-only destination
+  `EXTERNAL_TRANSFER_IN` into `BRIDGE_IN`
 - this promotion does not automatically imply plain move-basis continuity
 - audited bridge-family-equivalent stable wrappers such as `vbUSDC -> USDC`
   may still qualify for move-basis continuity when the route is proven and
@@ -99,6 +112,8 @@ destination bridge-pair evidence for the `LI.FI / Jumper` route family.
   for `BRIDGE_OUT`
 - do not promote destination-side `EXTERNAL_TRANSFER_IN` into `BRIDGE_IN` from
   timestamp proximity alone
+- do not treat empty-input inbound transfers as bridge settlement unless the
+  settlement sender is registry-backed bridge infrastructure
 - do not materialize destination-side `UNKNOWN` review rows from a targeted
   receiving-tx fetch when the tx does not actually touch the tracked wallet on
   chain
@@ -115,7 +130,13 @@ destination bridge-pair evidence for the `LI.FI / Jumper` route family.
 - `0x927cfa4d452608316410120af05d8b09c2f4d8d9cec5f9273457b7d8c3e47757`
 - `0x9f6983d00441ed13bf45e1b7ac34e94540fb61f58e4a9a2189826b1e761a2f7f`
   -> `0x7d8c79a327637fda080bcfa9204181359de791ccff95dd4b2f1b020b8af0b678`
+- `0x1a756dd5b8d6144d250f3f2a86d25a718e4ac0e3c2044042c1d749ecacda95f6`
+  -> `0x4a47ab3cad76be52416e660e044b983acc9837cd9f05b59eabad7560636aa0b2`
 
 All three audited rows call `LI.FI Diamond`
 `0x1231deb6f5749ef6ce6943a275a1d3e7486f4eae`, carry bridge-route calldata
 markers, and must remain `BRIDGE_OUT`.
+
+The MetaMask-routed audit pair keeps source `protocolName = MetaMask Bridge`,
+but clarification may still use saved LI.FI adapter evidence plus `Across`
+settlement proof to materialize the destination `BRIDGE_IN`.

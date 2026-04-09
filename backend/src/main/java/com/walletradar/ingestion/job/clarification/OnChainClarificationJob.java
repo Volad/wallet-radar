@@ -4,6 +4,7 @@ import com.walletradar.domain.event.OnChainClarificationCompletedEvent;
 import com.walletradar.domain.event.OnChainNormalizationCompletedEvent;
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.ingestion.config.OnChainClarificationProperties;
+import com.walletradar.ingestion.pipeline.clarification.ProtocolNameEnrichmentService;
 import com.walletradar.ingestion.job.support.StageExecutionLogSupport;
 import com.walletradar.session.application.SessionPipelineStateService;
 import lombok.RequiredArgsConstructor;
@@ -32,6 +33,7 @@ public class OnChainClarificationJob {
     private final OnChainReceiptClarificationService onChainReceiptClarificationService;
     private final ClarificationBatchDrainer clarificationBatchDrainer;
     private final ClarificationPostProcessingHandler clarificationPostProcessingHandler;
+    private final ProtocolNameEnrichmentService protocolNameEnrichmentService;
     private final ApplicationEventPublisher applicationEventPublisher;
     private final SessionPipelineStateService sessionPipelineStateService;
 
@@ -66,6 +68,9 @@ public class OnChainClarificationJob {
                 processed += clarificationBatchDrainer.drain(onChainReceiptClarificationService::processNextBatch);
             }
             processed += clarificationPostProcessingHandler.reconcileBridgePairs(Math.max(500, properties.getBatchSize()));
+            processed += clarificationBatchDrainer.drain(
+                    () -> protocolNameEnrichmentService.processNextBatch(properties.getBatchSize())
+            );
             sessionPipelineStateService.markStageComplete(
                     sessionId,
                     UserSession.PipelineStage.ON_CHAIN_CLARIFICATION,

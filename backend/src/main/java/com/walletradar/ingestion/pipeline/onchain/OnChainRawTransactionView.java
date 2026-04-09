@@ -71,6 +71,19 @@ public final class OnChainRawTransactionView {
         return normalizeAddress(stringify(readTxLevelField("to", true)));
     }
 
+    /**
+     * Returns the interacted transaction recipient without suppressing transfer-row fallback.
+     * This is useful for protocol identity enrichment where the router/vault entrypoint still matters
+     * even if explorer payloads also materialize token-transfer style top-level rows.
+     */
+    public String interactionToAddress() {
+        Object explorerValue = readExplorerTxField("to");
+        if (explorerValue != null) {
+            return normalizeAddress(stringify(explorerValue));
+        }
+        return normalizeAddress(stringify(readRawField("to")));
+    }
+
     public String methodId() {
         String topLevelMethodId = normalizeSelector(stringify(readRawField("methodId")));
         if (topLevelMethodId != null) {

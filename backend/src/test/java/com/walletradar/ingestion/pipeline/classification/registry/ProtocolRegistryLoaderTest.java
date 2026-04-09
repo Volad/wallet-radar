@@ -167,6 +167,63 @@ class ProtocolRegistryLoaderTest {
     }
 
     @Test
+    @DisplayName("supports explicit address override so the same address can map to different protocols on different networks")
+    void supportsExplicitAddressOverrideForCrossNetworkAddressReuse() {
+        String json = """
+                {
+                  "supported_networks": ["ARBITRUM", "AVALANCHE", "MANTLE"],
+                  "families": ["DEX", "AGGREGATOR"],
+                  "contracts": {
+                    "lfj-aggregator-arb-avax": {
+                      "address": "0x45a62b090df48243f12a21897e7ed91863e2c86b",
+                      "name": "LFJ Joe Aggregator",
+                      "protocol": "LFJ",
+                      "version": "Aggregator",
+                      "family": "AGGREGATOR",
+                      "role": "ROUTER",
+                      "networks": ["ARBITRUM", "AVALANCHE"],
+                      "confidence": "HIGH"
+                    },
+                    "merchant-moe-aggregator-mantle": {
+                      "address": "0x45a62b090df48243f12a21897e7ed91863e2c86b",
+                      "name": "Merchant Moe Aggregator",
+                      "protocol": "Merchant Moe",
+                      "version": "V1",
+                      "family": "AGGREGATOR",
+                      "role": "ROUTER",
+                      "networks": ["MANTLE"],
+                      "confidence": "HIGH"
+                    }
+                  },
+                  "method_ids": {}
+                }
+                """;
+
+        ProtocolRegistryLoader.LoadedProtocolRegistry loaded = loader.load(
+                new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8)),
+                "inline"
+        );
+
+        assertThat(loaded.entriesByKey())
+                .containsKey(new ProtocolRegistryLoader.RegistryKey(
+                        NetworkId.AVALANCHE,
+                        "0x45a62b090df48243f12a21897e7ed91863e2c86b"
+                ))
+                .containsKey(new ProtocolRegistryLoader.RegistryKey(
+                        NetworkId.MANTLE,
+                        "0x45a62b090df48243f12a21897e7ed91863e2c86b"
+                ));
+        assertThat(loaded.entriesByKey().get(new ProtocolRegistryLoader.RegistryKey(
+                NetworkId.AVALANCHE,
+                "0x45a62b090df48243f12a21897e7ed91863e2c86b"
+        )).protocolName()).isEqualTo("LFJ");
+        assertThat(loaded.entriesByKey().get(new ProtocolRegistryLoader.RegistryKey(
+                NetworkId.MANTLE,
+                "0x45a62b090df48243f12a21897e7ed91863e2c86b"
+        )).protocolName()).isEqualTo("Merchant Moe");
+    }
+
+    @Test
     @DisplayName("fails fast on unsupported family values")
     void failsFastOnUnsupportedFamilyValues() {
         String json = """

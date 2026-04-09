@@ -10,13 +10,24 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.domain.transaction.raw.RawTransactionRepository;
+import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryEntry;
+import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryFamily;
+import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryRole;
+import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryService;
 import com.walletradar.ingestion.pipeline.classification.support.LiFiRouteSupport;
 import com.walletradar.ingestion.pipeline.onchain.OnChainRawTransactionView;
 import lombok.RequiredArgsConstructor;
 import org.bson.Document;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.mongodb.core.MongoOperations;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
+import java.math.MathContext;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -33,12 +44,18 @@ import java.util.Set;
 @RequiredArgsConstructor
 public class LiFiBridgePairLinkService {
 
+    private static final Duration ROUTED_ACROSS_FALLBACK_MAX_TIME_DELTA = Duration.ofSeconds(60);
+    private static final BigDecimal ROUTED_ACROSS_FALLBACK_MAX_RELATIVE_QTY_DIFF = new BigDecimal("0.15");
+    private static final int ROUTED_ACROSS_FALLBACK_CANDIDATE_LIMIT = 12;
+
     private final LiFiStatusGateway liFiStatusGateway;
     private final PendingLiFiBridgeSourceQueryService pendingLiFiBridgeSourceQueryService;
     private final LiFiReceivingTransactionDiscoveryService liFiReceivingTransactionDiscoveryService;
     private final RawTransactionClarificationEnricher rawTransactionClarificationEnricher;
     private final RawTransactionRepository rawTransactionRepository;
     private final NormalizedTransactionRepository normalizedTransactionRepository;
+    private final MongoOperations mongoOperations;
+    private final ProtocolRegistryService protocolRegistryService;
 
     public int reconcileOutstandingSources(int batchSize) {
         int changed = 0;
@@ -106,7 +123,7 @@ public class LiFiBridgePairLinkService {
             statusOptional.ifPresent(status -> persistStatusEvidence(rawTransaction, status));
         }
         if (statusOptional.isEmpty()) {
-            return Optional.empty();
+            return resolveRoutedAcrossFallbackDestination(rawTransaction, source);
         }
 
         LiFiBridgeStatus status = statusOptional.get();
@@ -146,6 +163,15 @@ public class LiFiBridgePairLinkService {
     }
 
     private void materializePair(NormalizedTransaction source, NormalizedTransaction destination) {
+        RawTransaction destinationRaw = rawTransactionRepository.findById(destination.getId()).orElse(null);
+        materializePair(source, destination, destinationRaw);
+    }
+
+    private void materializePair(
+            NormalizedTransaction source,
+            NormalizedTransaction destination,
+            @Nullable RawTransaction destinationRaw
+    ) {
         Instant now = Instant.now();
         String correlationId = source.getCorrelationId() != null && !source.getCorrelationId().isBlank()
                 ? source.getCorrelationId()
@@ -176,6 +202,15 @@ public class LiFiBridgePairLinkService {
                 destination.setConfidence(ConfidenceLevel.MEDIUM);
             }
             destinationChanged = true;
+        }
+        if (!hasText(destination.getProtocolName()) && destinationRaw != null) {
+            Optional<ProtocolRegistryEntry> settlementEntry = resolveAcrossSettlementEntry(destinationRaw, destination);
+            if (settlementEntry.isPresent()) {
+                ProtocolRegistryEntry entry = settlementEntry.get();
+                destination.setProtocolName(entry.protocolName());
+                destination.setProtocolVersion(entry.protocolVersion());
+                destinationChanged = true;
+            }
         }
         if (!sameHash(destination.getMatchedCounterparty(), source.getTxHash())) {
             destination.setMatchedCounterparty(source.getTxHash());
@@ -210,6 +245,142 @@ public class LiFiBridgePairLinkService {
                 .filter(candidate -> candidate != null && candidate.getType() == NormalizedTransactionType.BRIDGE_OUT)
                 .filter(candidate -> !sameHash(candidate.getTxHash(), destination.getTxHash()))
                 .findFirst();
+    }
+
+    private Optional<NormalizedTransaction> resolveRoutedAcrossFallbackDestination(
+            RawTransaction sourceRaw,
+            NormalizedTransaction source
+    ) {
+        if (!isRoutedAcrossFallbackSource(sourceRaw, source)) {
+            return Optional.empty();
+        }
+        List<NormalizedTransaction> accepted = loadRoutedAcrossFallbackDestinationCandidates(source).stream()
+                .filter(Objects::nonNull)
+                .filter(candidate -> isStrongRoutedAcrossFallbackDestination(source, candidate))
+                .toList();
+        if (accepted.size() != 1) {
+            return Optional.empty();
+        }
+        return Optional.of(accepted.getFirst());
+    }
+
+    private List<NormalizedTransaction> loadRoutedAcrossFallbackDestinationCandidates(NormalizedTransaction source) {
+        Query query = new Query(new Criteria().andOperator(
+                Criteria.where("source").is(NormalizedTransactionSource.ON_CHAIN),
+                Criteria.where("walletAddress").is(source.getWalletAddress()),
+                new Criteria().orOperator(
+                        Criteria.where("type").is(NormalizedTransactionType.BRIDGE_IN),
+                        Criteria.where("type").is(NormalizedTransactionType.EXTERNAL_TRANSFER_IN)
+                ),
+                Criteria.where("blockTimestamp")
+                        .gte(source.getBlockTimestamp().minus(ROUTED_ACROSS_FALLBACK_MAX_TIME_DELTA))
+                        .lte(source.getBlockTimestamp().plus(ROUTED_ACROSS_FALLBACK_MAX_TIME_DELTA)),
+                Criteria.where("txHash").ne(source.getTxHash())
+        ));
+        query.with(Sort.by(
+                Sort.Order.asc("blockTimestamp"),
+                Sort.Order.asc("transactionIndex"),
+                Sort.Order.asc("_id")
+        ));
+        query.limit(ROUTED_ACROSS_FALLBACK_CANDIDATE_LIMIT);
+        return mongoOperations.find(query, NormalizedTransaction.class);
+    }
+
+    private boolean isRoutedAcrossFallbackSource(
+            RawTransaction rawTransaction,
+            NormalizedTransaction normalizedTransaction
+    ) {
+        if (!isLiFiSourceCandidate(rawTransaction, normalizedTransaction)) {
+            return false;
+        }
+        return normalizedTransaction.getWalletAddress() != null
+                && normalizedTransaction.getBlockTimestamp() != null
+                && principalFlows(normalizedTransaction, -1).size() == 1;
+    }
+
+    private boolean isStrongRoutedAcrossFallbackDestination(
+            NormalizedTransaction source,
+            NormalizedTransaction destination
+    ) {
+        if (!isMaterializableDestination(destination)) {
+            return false;
+        }
+        if (!sameWallet(source, destination)
+                || sameNetwork(source, destination)
+                || sameHash(source.getTxHash(), destination.getTxHash())) {
+            return false;
+        }
+        RawTransaction destinationRaw = rawTransactionRepository.findById(destination.getId()).orElse(null);
+        if (resolveAcrossSettlementEntry(destinationRaw, destination).isEmpty()) {
+            return false;
+        }
+        List<NormalizedTransaction.Flow> sourcePrincipal = principalFlows(source, -1);
+        List<NormalizedTransaction.Flow> destinationPrincipal = principalFlows(destination, 1);
+        if (sourcePrincipal.size() != 1 || destinationPrincipal.size() != 1) {
+            return false;
+        }
+        NormalizedTransaction.Flow sourceFlow = sourcePrincipal.getFirst();
+        NormalizedTransaction.Flow destinationFlow = destinationPrincipal.getFirst();
+        String sourceAsset = BridgeAssetFamilySupport.continuityIdentity(sourceFlow);
+        String destinationAsset = BridgeAssetFamilySupport.continuityIdentity(destinationFlow);
+        if (sourceAsset == null || !sourceAsset.equals(destinationAsset)) {
+            return false;
+        }
+        if (sourceFlow.getQuantityDelta() == null || destinationFlow.getQuantityDelta() == null) {
+            return false;
+        }
+        if (destinationFlow.getQuantityDelta().abs().compareTo(sourceFlow.getQuantityDelta().abs()) > 0) {
+            return false;
+        }
+        long deltaSeconds = Math.abs(Duration.between(source.getBlockTimestamp(), destination.getBlockTimestamp()).toSeconds());
+        if (deltaSeconds > ROUTED_ACROSS_FALLBACK_MAX_TIME_DELTA.toSeconds()) {
+            return false;
+        }
+        return relativeQuantityDiff(sourceFlow, destinationFlow)
+                .compareTo(ROUTED_ACROSS_FALLBACK_MAX_RELATIVE_QTY_DIFF) <= 0;
+    }
+
+    private Optional<ProtocolRegistryEntry> resolveAcrossSettlementEntry(
+            @Nullable RawTransaction rawTransaction,
+            NormalizedTransaction destination
+    ) {
+        if (hasText(destination.getProtocolName())
+                && destination.getProtocolName().toLowerCase(Locale.ROOT).contains("across")) {
+            return Optional.of(new ProtocolRegistryEntry(
+                    "",
+                    java.util.Set.of(destination.getNetworkId()),
+                    ProtocolRegistryFamily.BRIDGE,
+                    ProtocolRegistryRole.BRIDGE_ENTRY,
+                    null,
+                    ConfidenceLevel.MEDIUM,
+                    destination.getProtocolName(),
+                    destination.getProtocolVersion(),
+                    false,
+                    null
+            ));
+        }
+        if (rawTransaction == null) {
+            return Optional.empty();
+        }
+        OnChainRawTransactionView view = OnChainRawTransactionView.wrap(rawTransaction);
+        String walletAddress = destination.getWalletAddress();
+        for (Document transfer : view.explorerInternalTransfers()) {
+            if (view.internalTransferErrored(transfer)) {
+                continue;
+            }
+            String recipient = view.internalTransferTo(transfer);
+            if (walletAddress != null && recipient != null && !walletAddress.equalsIgnoreCase(recipient)) {
+                continue;
+            }
+            Optional<ProtocolRegistryEntry> entry = protocolRegistryService.lookup(
+                    destination.getNetworkId(),
+                    view.internalTransferFrom(transfer)
+            );
+            if (entry.filter(this::isAcrossBridgeEntry).isPresent()) {
+                return entry;
+            }
+        }
+        return Optional.empty();
     }
 
     private boolean supportsPlainMoveBasis(
@@ -300,6 +471,36 @@ public class LiFiBridgePairLinkService {
         return LiFiRouteSupport.hasRouteTag(view)
                 || hasText(normalizedTransaction.getProtocolName())
                 && normalizedTransaction.getProtocolName().toLowerCase(Locale.ROOT).contains("lifi");
+    }
+
+    private BigDecimal relativeQuantityDiff(NormalizedTransaction.Flow sourceFlow, NormalizedTransaction.Flow destinationFlow) {
+        BigDecimal left = sourceFlow.getQuantityDelta().abs();
+        BigDecimal right = destinationFlow.getQuantityDelta().abs();
+        BigDecimal denominator = left.max(right);
+        if (denominator.signum() == 0) {
+            return BigDecimal.ONE;
+        }
+        return left.subtract(right).abs().divide(denominator, MathContext.DECIMAL64);
+    }
+
+    private boolean sameWallet(NormalizedTransaction left, NormalizedTransaction right) {
+        return left != null
+                && right != null
+                && hasText(left.getWalletAddress())
+                && left.getWalletAddress().equalsIgnoreCase(right.getWalletAddress());
+    }
+
+    private boolean sameNetwork(NormalizedTransaction left, NormalizedTransaction right) {
+        return left != null && right != null && left.getNetworkId() == right.getNetworkId();
+    }
+
+    private boolean isAcrossBridgeEntry(ProtocolRegistryEntry entry) {
+        return entry != null
+                && entry.family() == ProtocolRegistryFamily.BRIDGE
+                && (entry.role() == ProtocolRegistryRole.BRIDGE_ENTRY
+                || entry.role() == ProtocolRegistryRole.ROUTER)
+                && hasText(entry.protocolName())
+                && entry.protocolName().toLowerCase(Locale.ROOT).contains("across");
     }
 
     private List<NormalizedTransaction> deduplicate(List<NormalizedTransaction> updates) {

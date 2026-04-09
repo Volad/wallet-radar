@@ -59,9 +59,10 @@ public class ProtocolRegistryLoader {
                     continue;
                 }
 
-                String normalizedAddress = OnChainRawTransactionView.normalizeAddress(field.getKey());
+                String entryAddress = optionalText(entryNode, "address").orElse(field.getKey());
+                String normalizedAddress = OnChainRawTransactionView.normalizeAddress(entryAddress);
                 if (normalizedAddress == null) {
-                    throw new IllegalStateException("Invalid contract address in protocol registry: " + field.getKey());
+                    throw new IllegalStateException("Invalid contract address in protocol registry: " + entryAddress);
                 }
 
                 ProtocolRegistryFamily family = parseEnum(ProtocolRegistryFamily.class, requiredText(entryNode, "family", normalizedAddress));

@@ -255,6 +255,21 @@ Basis continuity applies when the economic owner did not dispose of the asset:
     into `BRIDGE_IN`
   - replay continuity then uses the promoted destination plus
     `correlationId`, `matchedCounterparty`, and `continuityCandidate`
+- audited routed `MetaMask Bridge -> LI.FI adapter -> Across settlement`
+  corridors may follow the same source-led path even when:
+  - source `protocolName` remains `MetaMask Bridge`
+  - destination has empty input / blank function name
+  - settlement proof exists only in `explorer.internalTransfers[].from`
+  Accounting must use the promoted `BRIDGE_IN` row plus deterministic pair
+  metadata; it must not treat the destination as a market `BUY`.
+- the routed fallback is allowed only when clarification proves a unique
+  same-wallet cross-network destination under current canonical evidence:
+  - one principal source outflow
+  - one principal destination inflow
+  - same bridge asset family
+  - destination quantity not greater than source quantity
+  - bounded audited time window
+  - bounded audited quantity drift
 - asset-changing bridge routes
   A correlated bridge route may still be objective `BRIDGE_OUT -> BRIDGE_IN`
   semantics without qualifying for plain move-basis continuity. If the source
@@ -1018,6 +1033,17 @@ Current audited clarification candidate families for full receipt enrichment:
   either:
   - be a documented safe stop-condition with no basis impact, or
   - remain an explicit basis blocker that still prevents pricing/AVCO
+
+Current audited normalization blocker after `run/14`:
+
+- `Velora/ParaSwap` RFQ overload rows such as
+  `swapOnAugustusRFQTryBatchFill(...)` are not clarification-only debt when
+  current raw already proves one outbound wallet leg and one inbound maker leg.
+- Those rows must resolve in normalization as `SWAP` from current raw transfer
+  evidence and registry-backed router identity.
+- Leaving such rows as
+  `UNKNOWN / ROUTER_METHOD_OVERLOAD_UNSUPPORTED` is a classification-time
+  basis blocker because it prevents replay from materializing at all.
 
 ---
 

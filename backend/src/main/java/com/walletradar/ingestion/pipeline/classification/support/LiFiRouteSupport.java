@@ -18,7 +18,9 @@ public final class LiFiRouteSupport {
             "symbiosis",
             "gaszipbridge",
             "gaszip",
-            "jumper.exchange"
+            "jumper.exchange",
+            "lifiadapter",
+            "lifiadapterv2"
     );
 
     private LiFiRouteSupport() {

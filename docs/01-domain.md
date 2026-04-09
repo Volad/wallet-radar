@@ -455,6 +455,7 @@ AssetLedgerPoint {
   lifecycleStage: String
   basisEffect: String
   protocolName: String?
+  protocolVersion: String?
 
   quantityDelta: Decimal
   costBasisDeltaUsd: Decimal
@@ -488,6 +489,26 @@ Rules:
 - ordering is deterministic:
   - `blockTimestamp ASC`
   - `transactionIndex ASC`
+
+`protocolName` / `protocolVersion` on canonical normalized rows are best-effort
+protocol identity labels. They are not economic semantics by themselves and may
+be attached in either of two safe moments:
+
+- initial normalization when the current raw shape already has a direct
+  high-confidence registry hit
+- clarification-time protocol enrichment when persisted metadata / receipt
+  evidence makes protocol ownership obvious without changing `type`, `status`,
+  or canonical flows
+
+For protocol enrichment specifically, the interacted tx recipient may still be
+authoritative even when explorer payloads also materialize token-transfer style
+top-level rows. In those cases protocol detection must read the raw tx
+recipient as protocol identity evidence without changing move/cost semantics.
+
+Registry growth must therefore remain operationally safe: older canonical rows
+may be repaired to fill missing `protocolName` / `protocolVersion` without a
+full normalization rerun whenever the economic classification is already
+correct.
   - `normalizedTransactionId ASC`
   - `flowIndex ASC`
   - `replaySequence ASC`

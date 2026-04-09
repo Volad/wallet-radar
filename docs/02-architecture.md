@@ -75,10 +75,15 @@ Live-session orchestration is event-driven:
   1. raw backfill
   2. on-chain normalization
   3. on-chain clarification
+     - receipt enrichment
+     - metadata enrichment
+     - lifecycle linking
+     - protocol-name enrichment
+     - optional reclassification when clarification changes economic facts
   4. external-integration normalization
   5. exact custody / bridge rematch
   6. pricing
- 7. accounting replay
+  7. accounting replay
 
 Important accounting note:
 
@@ -273,6 +278,26 @@ If any of the above fails, replay falls back to the existing pooled AVCO path.
   only for `BORROW` / `REPAY` when the same tx also proves
   `variableDebt*` / `stableDebt*` continuity. That narrow fallback must not
   infer exact pool address or `protocolVersion`.
+- `protocolName` itself is clarification-adjacent canonical metadata, not an
+  economic stage gate. When initial normalization has no direct high-confidence
+  hit, clarification may fill `protocolName` / `protocolVersion` later from
+  persisted receipt / metadata evidence without changing canonical `type`,
+  `status`, or flows.
+- Protocol enrichment must prefer the actual interacted tx recipient when that
+  address is present in raw tx payloads, even if explorer data also emits
+  transfer-backed top-level projections that would otherwise suppress `to`
+  during economic classification. This keeps `protocolName` accurate without
+  contaminating type/flow inference.
+- Registry growth should therefore require only clarification-time repair for
+  historical canonical rows whose economics are already correct. Full
+  normalization reruns are reserved for cases where protocol evidence changes
+  type/flow semantics.
+- The protocol registry must support cross-network address reuse. When the same
+  contract address belongs to different branded protocols on different
+  networks, registry entries may use unique JSON keys plus an explicit
+  normalized `address` field so runtime lookup still keys by `network + address`
+  without silent JSON-key overwrite.
+  classification semantics, not just labels.
 - `REWARD_CLAIM` rows may contain self-canceling wrapper / marker pairs inside
   the same tx. Exact same-asset same-quantity in/out pairs must not persist as
   economic `BUY` / `SELL`; they are continuity-only no-op evidence.
@@ -333,6 +358,25 @@ If any of the above fails, replay falls back to the existing pooled AVCO path.
 - Route-proven LI.FI source bridge starts may also be revisited by a bounded
   post-clarification protocol-owned sweep so destination-side `BRIDGE_IN`
   materialization does not depend on accidental clarification order.
+- Destination-side passive bridge settlements with empty input / blank
+  function name may still resolve to `BRIDGE_IN` when current raw proves a
+  registry-backed bridge sender through persisted internal-transfer evidence.
+  This is a protocol-bounded settlement fact, not a generic inbound heuristic.
+- Routed bridge entries may keep the objective entry `protocolName`
+  (`MetaMask Bridge`, `LI.FI`, etc.) while clarification separately uses route
+  evidence plus protocol-owned settlement proof to materialize the destination
+  pair. Provider inference must not overwrite the source entry label just to
+  make pairing work.
+- For audited routed `MetaMask Bridge -> LI.FI adapter -> Across settlement`
+  corridors, clarification may materialize the pair without official LI.FI
+  status only when current canonical evidence proves:
+  - one source `BRIDGE_OUT`
+  - one same-wallet cross-network inbound destination
+  - same principal asset family
+  - bounded time window
+  - bounded quantity drift
+  - destination settlement sender resolved to verified `Across` bridge
+    infrastructure
 - Generic routed aggregator outbound-only rows, including 1inch-style router
   sends, must not be promoted to `BRIDGE_OUT` from time-window proximity or
   destination-wallet heuristics alone. Without production-available bridge
@@ -355,6 +399,13 @@ If any of the above fails, replay falls back to the existing pooled AVCO path.
   can win.
 - Explicit receiver-wallet `claim(...)` / `claimWithSig(...)` payout rows must
   resolve to `REWARD_CLAIM` before generic `EXTERNAL_TRANSFER_IN` fallback can win.
+- Method-aware swap routing must cover both `DEX` and `AGGREGATOR` router
+  families when current raw already proves one real outbound principal asset
+  and one real inbound principal asset. `Velora/ParaSwap` Augustus router
+  overloads such as `swapOnAugustusRFQTryBatchFill(...)` are objective swap
+  facts under that rule and must not remain
+  `UNKNOWN / ROUTER_METHOD_OVERLOAD_UNSUPPORTED` merely because the router
+  entry is stored as `family = AGGREGATOR`.
 - Request-initiation families such as
   `claimSharesAndRequestRedeem(uint256 sharesToRedeem)` are not finalized
   disposals and may not remain priceable `EXTERNAL_TRANSFER_OUT` rows until

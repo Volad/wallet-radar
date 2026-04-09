@@ -232,7 +232,9 @@ public class HeuristicClassifier implements OnChainFamilyClassifier {
     }
 
     private Optional<ProtocolRegistryEntry> findKnownBridgeSettlementEntry(OnChainRawTransactionView view) {
-        if (!BridgeSettlementSupport.isSettlementSelector(view)) {
+        boolean selectorProven = BridgeSettlementSupport.isSettlementSelector(view);
+        boolean passiveSettlementCandidate = isPassiveBridgeSettlementCandidate(view);
+        if (!selectorProven && !passiveSettlementCandidate) {
             return Optional.empty();
         }
         Map<String, ProtocolRegistryEntry> candidates = new LinkedHashMap<>();
@@ -241,7 +243,59 @@ public class HeuristicClassifier implements OnChainFamilyClassifier {
         for (Document transfer : view.explorerTokenTransfers()) {
             putBridgeCandidate(candidates, protocolRegistryService.lookup(view.networkId(), view.tokenTransferFrom(transfer)));
         }
+        String walletAddress = view.walletAddress();
+        for (Document transfer : view.explorerInternalTransfers()) {
+            if (view.internalTransferErrored(transfer)) {
+                continue;
+            }
+            String recipient = view.internalTransferTo(transfer);
+            if (walletAddress != null && recipient != null && !walletAddress.equalsIgnoreCase(recipient)) {
+                continue;
+            }
+            putBridgeCandidate(candidates, protocolRegistryService.lookup(view.networkId(), view.internalTransferFrom(transfer)));
+        }
         return candidates.values().stream().findFirst();
+    }
+
+    private boolean isPassiveBridgeSettlementCandidate(OnChainRawTransactionView view) {
+        if (view == null) {
+            return false;
+        }
+        String inputData = view.inputData();
+        if (inputData != null && !"0x".equals(inputData)) {
+            return false;
+        }
+        String functionName = view.functionName();
+        if (functionName != null && !functionName.isBlank()) {
+            return false;
+        }
+        String walletAddress = view.walletAddress();
+        for (Document transfer : view.explorerTokenTransfers()) {
+            String recipient = view.tokenTransferTo(transfer);
+            if (walletAddress != null && recipient != null && !walletAddress.equalsIgnoreCase(recipient)) {
+                continue;
+            }
+            if (protocolRegistryService.lookup(view.networkId(), view.tokenTransferFrom(transfer))
+                    .filter(this::isBridgeEntry)
+                    .isPresent()) {
+                return true;
+            }
+        }
+        for (Document transfer : view.explorerInternalTransfers()) {
+            if (view.internalTransferErrored(transfer)) {
+                continue;
+            }
+            String recipient = view.internalTransferTo(transfer);
+            if (walletAddress != null && recipient != null && !walletAddress.equalsIgnoreCase(recipient)) {
+                continue;
+            }
+            if (protocolRegistryService.lookup(view.networkId(), view.internalTransferFrom(transfer))
+                    .filter(this::isBridgeEntry)
+                    .isPresent()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private boolean isRewardEntry(ProtocolRegistryEntry entry) {
@@ -272,13 +326,17 @@ public class HeuristicClassifier implements OnChainFamilyClassifier {
             return;
         }
         ProtocolRegistryEntry value = entry.get();
-        if (value.family() != ProtocolRegistryFamily.BRIDGE) {
-            return;
-        }
-        if (value.role() != ProtocolRegistryRole.BRIDGE_ENTRY && value.role() != ProtocolRegistryRole.ROUTER) {
+        if (!isBridgeEntry(value)) {
             return;
         }
         candidates.putIfAbsent(value.contractAddress(), value);
+    }
+
+    private boolean isBridgeEntry(ProtocolRegistryEntry entry) {
+        return entry != null
+                && entry.family() == ProtocolRegistryFamily.BRIDGE
+                && (entry.role() == ProtocolRegistryRole.BRIDGE_ENTRY
+                || entry.role() == ProtocolRegistryRole.ROUTER);
     }
 
     private boolean hasReceiptLikeToken(List<RawLeg> movementLegs) {

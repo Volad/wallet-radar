@@ -219,6 +219,7 @@ export interface SessionAssetLedgerCurrentResponse {
 export interface SessionAssetLedgerTimelineEntryResponse {
   readonly blockTimestamp: string | null;
   readonly txHash: string | null;
+  readonly eventGroupId: string | null;
   readonly normalizedTransactionId: string | null;
   readonly normalizedType: string | null;
   readonly protocolName: string | null;
@@ -234,6 +235,9 @@ export interface SessionAssetLedgerTimelineEntryResponse {
   readonly uncoveredQuantityAfter: number | null;
   readonly totalCostBasisAfterUsd: number | null;
   readonly avcoAfterUsd: number | null;
+  readonly fromAddress: string | null;
+  readonly toAddress: string | null;
+  readonly memberNormalizedTransactionIds: ReadonlyArray<string>;
 }
 
 export interface SessionAssetLedgerEventFlowResponse {
@@ -248,6 +252,7 @@ export interface SessionAssetLedgerEventFlowResponse {
 }
 
 export interface SessionAssetLedgerEventOverlayResponse {
+  readonly eventGroupId: string | null;
   readonly normalizedTransactionId: string | null;
   readonly txHash: string | null;
   readonly blockTimestamp: string | null;
@@ -257,6 +262,9 @@ export interface SessionAssetLedgerEventOverlayResponse {
   readonly walletAddresses: ReadonlyArray<string>;
   readonly networkIds: ReadonlyArray<string>;
   readonly flows: ReadonlyArray<SessionAssetLedgerEventFlowResponse>;
+  readonly fromAddress: string | null;
+  readonly toAddress: string | null;
+  readonly memberNormalizedTransactionIds: ReadonlyArray<string>;
 }
 
 export interface SessionAssetLedgerPointResponse {

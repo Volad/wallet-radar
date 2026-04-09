@@ -131,13 +131,14 @@
               <section class="filter-group">
                 <h3 class="side-label">Event families</h3>
                 @for (family of families; track family.key) {
-                  <button
-                    type="button"
-                    class="filter-row family-row"
-                    [class.active]="isEventFamilySelected(family.key)"
-                    [class.mixed]="isEventFamilyMixed(family.key)"
-                    [style.--chipColor]="family.color"
-                    (click)="toggleEventFamily(family.key)">
+                <button
+                  type="button"
+                  class="filter-row family-row"
+                  [class.active]="isEventFamilySelected(family.key)"
+                  [class.mixed]="isEventFamilyMixed(family.key)"
+                  [style.--chipColor]="family.color"
+                  (click)="toggleEventFamily(family.key)">
+                  <canvas #familyCanvas class="family-icon-canvas" [attr.data-family]="family.key" aria-hidden="true"></canvas>
                     <span
                       class="check-box"
                       [class.checked]="isEventFamilySelected(family.key)"
@@ -397,10 +398,12 @@
                   <th>Protocol</th>
                   <th>Date</th>
                   <th class="r">Qty Δ</th>
+                  <th class="r">Amount</th>
+                  <th>From</th>
+                  <th>To</th>
                   <th class="r">Unit price</th>
                   <th class="r">AVCO before → after</th>
                   <th class="r">Realised PnL</th>
-                  <th>Price source</th>
                   <th>Flows</th>
                 </tr>
               </thead>
@@ -433,6 +436,19 @@
                           {{ formatSignedQuantity(marker.quantityDelta, 6) }}
                         </span>
                       </td>
+                      <td class="r mono-cell">{{ formatUsd(marker.amountUsd, 2) }}</td>
+                      <td>
+                        <span class="table-endpoint" [title]="marker.pathFromTitle ?? marker.pathFrom">
+                          <span class="endpoint-dot" [class.colored]="marker.pathFromColor !== null" [style.--endpointColor]="marker.pathFromColor ?? 'transparent'"></span>
+                          <span class="endpoint-label">{{ marker.pathFrom }}</span>
+                        </span>
+                      </td>
+                      <td>
+                        <span class="table-endpoint" [title]="marker.pathToTitle ?? marker.pathTo">
+                          <span class="endpoint-dot" [class.colored]="marker.pathToColor !== null" [style.--endpointColor]="marker.pathToColor ?? 'transparent'"></span>
+                          <span class="endpoint-label">{{ marker.pathTo }}</span>
+                        </span>
+                      </td>
                       <td class="r mono-cell">{{ formatUsd(marker.priceUsd, 2) }}</td>
                       <td class="r mono-cell">
                         <div>{{ formatUsd(marker.avcoBeforeUsd, 2) }} <span class="avco-arrow">→</span> {{ formatUsd(marker.avcoAfterUsd, 2) }}</div>
@@ -447,13 +463,6 @@
                             [class.neg]="(marker.realisedPnlDeltaUsd ?? 0) < 0">
                             {{ formatSignedUsd(marker.realisedPnlDeltaUsd, 2) }}
                           </span>
-                        } @else {
-                          <span class="muted-c">—</span>
-                        }
-                      </td>
-                      <td>
-                        @if (marker.priceSource; as priceSource) {
-                          <span class="source-pill">{{ priceSource }}</span>
                         } @else {
                           <span class="muted-c">—</span>
                         }
@@ -480,7 +489,7 @@
                   }
                 } @else {
                   <tr>
-                    <td colspan="9" class="empty-log">No events match current range and filters.</td>
+                    <td colspan="11" class="empty-log">No events match current range and filters.</td>
                   </tr>
                 }
               </tbody>
@@ -538,9 +547,53 @@
             <span class="k">tx hash</span>
             <span class="v tx-value" [title]="marker.txHash">{{ shortHash(marker.txHash) }}</span>
             <button type="button" class="copy-btn" (click)="copyTxHash(marker.txHash)">
-              {{ copiedTxHash() === marker.txHash ? 'Copied' : 'Copy' }}
+              {{ copiedValueKey() === 'tx:' + marker.txHash ? 'Copied' : 'Copy' }}
             </button>
           </div>
+          @if (marker.pathFrom) {
+            <div class="tr tx-row">
+              <span class="k">from</span>
+              <span class="v tx-value tx-endpoint" [title]="marker.pathFromTitle ?? marker.pathFrom">
+                <span class="endpoint-dot" [class.colored]="marker.pathFromColor !== null" [style.--endpointColor]="marker.pathFromColor ?? 'transparent'"></span>
+                <span class="endpoint-label">{{ marker.pathFrom }}</span>
+              </span>
+              @if (marker.fromAddress; as fromAddress) {
+                <button
+                  type="button"
+                  class="copy-icon-btn"
+                  title="Copy from address"
+                  aria-label="Copy from address"
+                  (click)="copyText(fromAddress, 'from:' + marker.id)">
+                  {{ copiedValueKey() === 'from:' + marker.id ? '✓' : '⧉' }}
+                </button>
+              }
+            </div>
+          }
+          @if (marker.pathTo) {
+            <div class="tr tx-row">
+              <span class="k">to</span>
+              <span class="v tx-value tx-endpoint" [title]="marker.pathToTitle ?? marker.pathTo">
+                <span class="endpoint-dot" [class.colored]="marker.pathToColor !== null" [style.--endpointColor]="marker.pathToColor ?? 'transparent'"></span>
+                <span class="endpoint-label">{{ marker.pathTo }}</span>
+              </span>
+              @if (marker.toAddress; as toAddress) {
+                <button
+                  type="button"
+                  class="copy-icon-btn"
+                  title="Copy destination address"
+                  aria-label="Copy destination address"
+                  (click)="copyText(toAddress, 'to:' + marker.id)">
+                  {{ copiedValueKey() === 'to:' + marker.id ? '✓' : '⧉' }}
+                </button>
+              }
+            </div>
+          }
+          @if (marker.memberNormalizedTransactionIds.length > 1) {
+            <div class="tr">
+              <span class="k">group</span>
+              <span class="v">{{ marker.memberNormalizedTransactionIds.length }} linked events</span>
+            </div>
+          }
           <div class="tdiv"></div>
           <div class="tr">
             <span class="k">AVCO before</span>
@@ -570,7 +623,10 @@
         </div>
 
         <div class="ti-path">
-          <span class="pn">{{ marker.pathFrom }}</span>
+          <span class="ti-path-node" [title]="marker.pathFromTitle ?? marker.pathFrom">
+            <span class="endpoint-dot" [class.colored]="marker.pathFromColor !== null" [style.--endpointColor]="marker.pathFromColor ?? 'transparent'"></span>
+            <span class="pn">{{ marker.pathFrom }}</span>
+          </span>
           <svg width="18" height="10" viewBox="0 0 18 10" aria-hidden="true" style="flex-shrink: 0">
             <path
               d="M0 5h14M10 1l4 4-4 4"
@@ -578,7 +634,10 @@
               stroke-width="1.2"
               fill="none" />
           </svg>
-          <span class="pn">{{ marker.pathTo }}</span>
+          <span class="ti-path-node" [title]="marker.pathToTitle ?? marker.pathTo">
+            <span class="endpoint-dot" [class.colored]="marker.pathToColor !== null" [style.--endpointColor]="marker.pathToColor ?? 'transparent'"></span>
+            <span class="pn">{{ marker.pathTo }}</span>
+          </span>
         </div>
 
         <div class="ti-flows">

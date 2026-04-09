@@ -336,7 +336,9 @@ h2 {
   min-width: 0;
 }
 
-.type-icon-canvas {
+.type-icon-canvas,
+.family-icon-canvas {
+  display: block;
   width: 18px;
   height: 18px;
   flex-shrink: 0;
@@ -409,12 +411,6 @@ h2 {
 
   &.active {
     color: var(--text);
-  }
-}
-
-.family-row {
-  .filter-row-label {
-    font-size: 10px;
   }
 }
 
@@ -732,6 +728,20 @@ canvas#chart {
   white-space: nowrap;
 }
 
+.tx-endpoint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.endpoint-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .copy-btn {
   appearance: none;
   border: 1px solid var(--b0);
@@ -743,6 +753,26 @@ canvas#chart {
   padding: 0 8px;
   font-family: var(--mono);
   font-size: 9px;
+  cursor: pointer;
+  flex-shrink: 0;
+
+  &:hover {
+    border-color: var(--b2);
+  }
+}
+
+.copy-icon-btn {
+  appearance: none;
+  border: 1px solid var(--b0);
+  background: var(--s2);
+  color: var(--text);
+  border-radius: 4px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1;
   cursor: pointer;
   flex-shrink: 0;
 
@@ -774,8 +804,30 @@ canvas#chart {
   background: var(--s2);
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   font-size: 10px;
+}
+
+.ti-path-node {
+  min-width: 0;
+  flex: 1 1 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.endpoint-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  border: 1px solid var(--b1);
+  background: transparent;
+
+  &.colored {
+    background: var(--endpointColor);
+    border-color: color-mix(in srgb, var(--endpointColor) 40%, transparent);
+  }
 }
 
 .pn {
@@ -785,6 +837,11 @@ canvas#chart {
   font-weight: 600;
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid var(--b0);
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ti-flows {
@@ -1147,6 +1204,16 @@ canvas#chart {
 .protocol-cell {
   color: var(--text);
   font-size: 10px;
+}
+
+.table-endpoint {
+  max-width: 11.5rem;
+  overflow: hidden;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  vertical-align: middle;
 }
 
 .mono-cell {

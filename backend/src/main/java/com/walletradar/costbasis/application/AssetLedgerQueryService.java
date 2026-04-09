@@ -71,14 +71,16 @@ public class AssetLedgerQueryService {
                 .toList();
 
         List<EventAccumulator> groupedEvents = groupPoints(points, normalizedById);
+        List<DisplayEventAccumulator> displayEvents = collapseDisplayEvents(groupedEvents);
         AggregatedState state = new AggregatedState();
         List<TimelineEntryView> timeline = new ArrayList<>();
         List<EventOverlayView> overlays = new ArrayList<>();
-        for (EventAccumulator accumulator : groupedEvents) {
+        for (DisplayEventAccumulator accumulator : displayEvents) {
             state.apply(accumulator);
             timeline.add(new TimelineEntryView(
                     accumulator.blockTimestamp,
                     accumulator.txHash,
+                    accumulator.eventGroupId,
                     accumulator.normalizedTransactionId,
                     accumulator.normalizedType,
                     accumulator.protocolName,
@@ -93,9 +95,13 @@ public class AssetLedgerQueryService {
                     state.coveredQuantity(),
                     state.uncoveredQuantity,
                     state.totalCostBasisUsd,
-                    state.avco()
+                    state.avco(),
+                    accumulator.fromAddress,
+                    accumulator.toAddress,
+                    List.copyOf(accumulator.memberNormalizedTransactionIds)
             ));
             overlays.add(new EventOverlayView(
+                    accumulator.eventGroupId,
                     accumulator.normalizedTransactionId,
                     accumulator.txHash,
                     accumulator.blockTimestamp,
@@ -104,7 +110,10 @@ public class AssetLedgerQueryService {
                     accumulator.lifecycleKind,
                     List.copyOf(accumulator.walletAddresses),
                     List.copyOf(accumulator.networkIds),
-                    List.copyOf(accumulator.flows)
+                    List.copyOf(accumulator.flows),
+                    accumulator.fromAddress,
+                    accumulator.toAddress,
+                    List.copyOf(accumulator.memberNormalizedTransactionIds)
             ));
         }
 
@@ -341,6 +350,95 @@ public class AssetLedgerQueryService {
         return List.copyOf(grouped.values());
     }
 
+    private List<DisplayEventAccumulator> collapseDisplayEvents(List<EventAccumulator> rawEvents) {
+        if (rawEvents.isEmpty()) {
+            return List.of();
+        }
+        List<DisplayEventAccumulator> collapsed = new ArrayList<>();
+        boolean[] consumed = new boolean[rawEvents.size()];
+        for (int index = 0; index < rawEvents.size(); index++) {
+            if (consumed[index]) {
+                continue;
+            }
+            EventAccumulator current = rawEvents.get(index);
+            int pairIndex = findInternalTransferPairIndex(index, rawEvents, consumed);
+            if (pairIndex >= 0) {
+                consumed[index] = true;
+                consumed[pairIndex] = true;
+                collapsed.add(DisplayEventAccumulator.internalTransfer(rawEvents.get(index), rawEvents.get(pairIndex)));
+                continue;
+            }
+            consumed[index] = true;
+            collapsed.add(DisplayEventAccumulator.single(current));
+        }
+        return List.copyOf(collapsed);
+    }
+
+    private int findInternalTransferPairIndex(int seedIndex, List<EventAccumulator> rawEvents, boolean[] consumed) {
+        EventAccumulator seed = rawEvents.get(seedIndex);
+        if (!isExternalTransferOut(seed)) {
+            return -1;
+        }
+        for (int candidateIndex = seedIndex + 1; candidateIndex < rawEvents.size(); candidateIndex++) {
+            if (consumed[candidateIndex]) {
+                continue;
+            }
+            EventAccumulator candidate = rawEvents.get(candidateIndex);
+            if (isInternalTransferPair(seed, candidate)) {
+                return candidateIndex;
+            }
+        }
+        return -1;
+    }
+
+    private boolean isInternalTransferPair(EventAccumulator outbound, EventAccumulator inbound) {
+        if (!isExternalTransferOut(outbound) || !isExternalTransferIn(inbound)) {
+            return false;
+        }
+        if (blank(outbound.txHash) || !Objects.equals(outbound.txHash, inbound.txHash)) {
+            return false;
+        }
+        if (blank(outbound.primaryWalletAddress) || blank(inbound.primaryWalletAddress)) {
+            return false;
+        }
+        if (!counterpartyCompatible(outbound, inbound)) {
+            return false;
+        }
+        return networkCompatible(outbound, inbound);
+    }
+
+    private static boolean counterpartyCompatible(EventAccumulator outbound, EventAccumulator inbound) {
+        boolean reciprocal = !blank(outbound.matchedCounterparty)
+                && !blank(inbound.matchedCounterparty)
+                && Objects.equals(normalizeAddress(outbound.primaryWalletAddress), normalizeAddress(inbound.matchedCounterparty))
+                && Objects.equals(normalizeAddress(inbound.primaryWalletAddress), normalizeAddress(outbound.matchedCounterparty));
+        if (reciprocal) {
+            return true;
+        }
+        return !blank(outbound.matchedCounterparty)
+                && Objects.equals(normalizeAddress(outbound.matchedCounterparty), normalizeAddress(inbound.primaryWalletAddress));
+    }
+
+    private static boolean networkCompatible(EventAccumulator left, EventAccumulator right) {
+        if (left.networkIds.isEmpty() || right.networkIds.isEmpty()) {
+            return true;
+        }
+        for (String networkId : left.networkIds) {
+            if (right.networkIds.contains(networkId)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isExternalTransferOut(EventAccumulator event) {
+        return "EXTERNAL_TRANSFER_OUT".equals(event.normalizedType);
+    }
+
+    private static boolean isExternalTransferIn(EventAccumulator event) {
+        return "EXTERNAL_TRANSFER_IN".equals(event.normalizedType);
+    }
+
     public record SessionAssetLedgerView(
             String sessionId,
             String familyIdentity,
@@ -385,6 +483,7 @@ public class AssetLedgerQueryService {
     public record TimelineEntryView(
             Instant blockTimestamp,
             String txHash,
+            String eventGroupId,
             String normalizedTransactionId,
             String normalizedType,
             String protocolName,
@@ -399,11 +498,15 @@ public class AssetLedgerQueryService {
             BigDecimal coveredQuantityAfter,
             BigDecimal uncoveredQuantityAfter,
             BigDecimal totalCostBasisAfterUsd,
-            BigDecimal avcoAfterUsd
+            BigDecimal avcoAfterUsd,
+            String fromAddress,
+            String toAddress,
+            List<String> memberNormalizedTransactionIds
     ) {
     }
 
     public record EventOverlayView(
+            String eventGroupId,
             String normalizedTransactionId,
             String txHash,
             Instant blockTimestamp,
@@ -412,7 +515,10 @@ public class AssetLedgerQueryService {
             String lifecycleKind,
             List<String> walletAddresses,
             List<String> networkIds,
-            List<EventFlowView> flows
+            List<EventFlowView> flows,
+            String fromAddress,
+            String toAddress,
+            List<String> memberNormalizedTransactionIds
     ) {
     }
 
@@ -509,7 +615,7 @@ public class AssetLedgerQueryService {
         private BigDecimal totalRealisedPnlUsd = BigDecimal.ZERO;
         private BigDecimal totalGasPaidUsd = BigDecimal.ZERO;
 
-        private void apply(EventAccumulator accumulator) {
+        private void apply(DisplayEventAccumulator accumulator) {
             quantity = quantity.add(accumulator.quantityDelta, MC);
             uncoveredQuantity = uncoveredQuantity.add(accumulator.uncoveredQuantityDelta, MC);
             totalCostBasisUsd = totalCostBasisUsd.add(accumulator.costBasisDeltaUsd, MC);
@@ -547,6 +653,8 @@ public class AssetLedgerQueryService {
         private final String protocolName;
         private final String lifecycleKind;
         private final String lifecycleStage;
+        private final String primaryWalletAddress;
+        private final String matchedCounterparty;
         private final LinkedHashSet<String> basisEffects = new LinkedHashSet<>();
         private final LinkedHashSet<String> walletAddresses = new LinkedHashSet<>();
         private final LinkedHashSet<String> networkIds = new LinkedHashSet<>();
@@ -565,6 +673,12 @@ public class AssetLedgerQueryService {
             this.protocolName = protocolName(seed, transaction);
             this.lifecycleKind = seed.getLifecycleKind() == null ? null : seed.getLifecycleKind().name();
             this.lifecycleStage = seed.getLifecycleStage() == null ? null : seed.getLifecycleStage().name();
+            this.primaryWalletAddress = blank(seed.getWalletAddress())
+                    ? transaction == null ? null : transaction.getWalletAddress()
+                    : seed.getWalletAddress();
+            this.matchedCounterparty = !blank(seed.getMatchedCounterparty())
+                    ? seed.getMatchedCounterparty()
+                    : transaction == null ? null : transaction.getMatchedCounterparty();
             this.flows = eventFlows(transaction);
         }
 
@@ -583,6 +697,134 @@ public class AssetLedgerQueryService {
             realisedPnlDeltaUsd = realisedPnlDeltaUsd.add(zeroIfNull(point.getRealisedPnlDeltaUsd()), MC);
             gasDeltaUsd = gasDeltaUsd.add(zeroIfNull(point.getGasDeltaUsd()), MC);
             uncoveredQuantityDelta = uncoveredQuantityDelta.add(zeroIfNull(point.getUncoveredQuantityDelta()), MC);
+        }
+    }
+
+    private static final class DisplayEventAccumulator {
+        private final String eventGroupId;
+        private final String normalizedTransactionId;
+        private final String txHash;
+        private final Instant blockTimestamp;
+        private final String normalizedType;
+        private final String protocolName;
+        private final String lifecycleKind;
+        private final String lifecycleStage;
+        private final LinkedHashSet<String> basisEffects = new LinkedHashSet<>();
+        private final LinkedHashSet<String> walletAddresses = new LinkedHashSet<>();
+        private final LinkedHashSet<String> networkIds = new LinkedHashSet<>();
+        private final List<EventFlowView> flows;
+        private final List<String> memberNormalizedTransactionIds;
+        private final String fromAddress;
+        private final String toAddress;
+        private final BigDecimal quantityDelta;
+        private final BigDecimal costBasisDeltaUsd;
+        private final BigDecimal realisedPnlDeltaUsd;
+        private final BigDecimal gasDeltaUsd;
+        private final BigDecimal uncoveredQuantityDelta;
+
+        private DisplayEventAccumulator(
+                String eventGroupId,
+                String normalizedTransactionId,
+                String txHash,
+                Instant blockTimestamp,
+                String normalizedType,
+                String protocolName,
+                String lifecycleKind,
+                String lifecycleStage,
+                Set<String> basisEffects,
+                Set<String> walletAddresses,
+                Set<String> networkIds,
+                List<EventFlowView> flows,
+                List<String> memberNormalizedTransactionIds,
+                String fromAddress,
+                String toAddress,
+                BigDecimal quantityDelta,
+                BigDecimal costBasisDeltaUsd,
+                BigDecimal realisedPnlDeltaUsd,
+                BigDecimal gasDeltaUsd,
+                BigDecimal uncoveredQuantityDelta
+        ) {
+            this.eventGroupId = eventGroupId;
+            this.normalizedTransactionId = normalizedTransactionId;
+            this.txHash = txHash;
+            this.blockTimestamp = blockTimestamp;
+            this.normalizedType = normalizedType;
+            this.protocolName = protocolName;
+            this.lifecycleKind = lifecycleKind;
+            this.lifecycleStage = lifecycleStage;
+            this.basisEffects.addAll(basisEffects);
+            this.walletAddresses.addAll(walletAddresses);
+            this.networkIds.addAll(networkIds);
+            this.flows = List.copyOf(flows);
+            this.memberNormalizedTransactionIds = List.copyOf(memberNormalizedTransactionIds);
+            this.fromAddress = fromAddress;
+            this.toAddress = toAddress;
+            this.quantityDelta = quantityDelta;
+            this.costBasisDeltaUsd = costBasisDeltaUsd;
+            this.realisedPnlDeltaUsd = realisedPnlDeltaUsd;
+            this.gasDeltaUsd = gasDeltaUsd;
+            this.uncoveredQuantityDelta = uncoveredQuantityDelta;
+        }
+
+        private static DisplayEventAccumulator single(EventAccumulator event) {
+            return new DisplayEventAccumulator(
+                    event.normalizedTransactionId,
+                    event.normalizedTransactionId,
+                    event.txHash,
+                    event.blockTimestamp,
+                    event.normalizedType,
+                    event.protocolName,
+                    event.lifecycleKind,
+                    event.lifecycleStage,
+                    event.basisEffects,
+                    event.walletAddresses,
+                    event.networkIds,
+                    event.flows,
+                    List.of(event.normalizedTransactionId),
+                    inferredFromAddress(event),
+                    inferredToAddress(event),
+                    event.quantityDelta,
+                    event.costBasisDeltaUsd,
+                    event.realisedPnlDeltaUsd,
+                    event.gasDeltaUsd,
+                    event.uncoveredQuantityDelta
+            );
+        }
+
+        private static DisplayEventAccumulator internalTransfer(EventAccumulator outbound, EventAccumulator inbound) {
+            LinkedHashSet<String> basisEffects = new LinkedHashSet<>();
+            basisEffects.addAll(outbound.basisEffects);
+            basisEffects.addAll(inbound.basisEffects);
+            LinkedHashSet<String> walletAddresses = new LinkedHashSet<>();
+            walletAddresses.addAll(outbound.walletAddresses);
+            walletAddresses.addAll(inbound.walletAddresses);
+            LinkedHashSet<String> networkIds = new LinkedHashSet<>();
+            networkIds.addAll(outbound.networkIds);
+            networkIds.addAll(inbound.networkIds);
+            List<EventFlowView> flows = new ArrayList<>(outbound.flows);
+            flows.addAll(inbound.flows);
+            return new DisplayEventAccumulator(
+                    internalTransferGroupId(outbound, inbound),
+                    outbound.normalizedTransactionId,
+                    outbound.txHash,
+                    outbound.blockTimestamp,
+                    "INTERNAL_TRANSFER",
+                    firstNonBlank(outbound.protocolName, inbound.protocolName),
+                    firstNonBlank(outbound.lifecycleKind, inbound.lifecycleKind),
+                    firstNonBlank(outbound.lifecycleStage, inbound.lifecycleStage),
+                    basisEffects,
+                    walletAddresses,
+                    networkIds,
+                    flows,
+                    List.of(outbound.normalizedTransactionId, inbound.normalizedTransactionId),
+                    outbound.primaryWalletAddress,
+                    inbound.primaryWalletAddress,
+                    outbound.quantityDelta.add(inbound.quantityDelta, MC),
+                    outbound.costBasisDeltaUsd.add(inbound.costBasisDeltaUsd, MC),
+                    outbound.realisedPnlDeltaUsd.add(inbound.realisedPnlDeltaUsd, MC),
+                    outbound.gasDeltaUsd.add(inbound.gasDeltaUsd, MC),
+                    outbound.uncoveredQuantityDelta.add(inbound.uncoveredQuantityDelta, MC)
+            );
         }
     }
 
@@ -613,6 +855,42 @@ public class AssetLedgerQueryService {
 
     private static BigDecimal zeroIfNull(BigDecimal value) {
         return value == null ? BigDecimal.ZERO : value;
+    }
+
+    private static String inferredFromAddress(EventAccumulator event) {
+        if (isExternalTransferOut(event)) {
+            return event.primaryWalletAddress;
+        }
+        if (isExternalTransferIn(event)) {
+            return event.matchedCounterparty;
+        }
+        return null;
+    }
+
+    private static String inferredToAddress(EventAccumulator event) {
+        if (isExternalTransferOut(event)) {
+            return event.matchedCounterparty;
+        }
+        if (isExternalTransferIn(event)) {
+            return event.primaryWalletAddress;
+        }
+        return null;
+    }
+
+    private static String internalTransferGroupId(EventAccumulator outbound, EventAccumulator inbound) {
+        String txHash = blank(outbound.txHash) ? outbound.normalizedTransactionId : outbound.txHash;
+        return txHash
+                + ":internal:"
+                + normalizeAddress(outbound.primaryWalletAddress)
+                + ":"
+                + normalizeAddress(inbound.primaryWalletAddress);
+    }
+
+    private static String firstNonBlank(String left, String right) {
+        if (!blank(left)) {
+            return left;
+        }
+        return blank(right) ? null : right;
     }
 
     private static String fallbackFamilyIdentity(NetworkId networkId, String assetSymbol, String assetContract) {

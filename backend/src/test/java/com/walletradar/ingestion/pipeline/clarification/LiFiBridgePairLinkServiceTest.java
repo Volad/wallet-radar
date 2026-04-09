@@ -11,6 +11,11 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.domain.transaction.raw.RawTransactionRepository;
+import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryEntry;
+import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryEventType;
+import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryFamily;
+import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryRole;
+import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryService;
 import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -19,11 +24,14 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.mongodb.core.MongoOperations;
+import org.springframework.data.mongodb.core.query.Query;
 
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -48,6 +56,10 @@ class LiFiBridgePairLinkServiceTest {
     private RawTransactionRepository rawTransactionRepository;
     @Mock
     private NormalizedTransactionRepository normalizedTransactionRepository;
+    @Mock
+    private MongoOperations mongoOperations;
+    @Mock
+    private ProtocolRegistryService protocolRegistryService;
 
     private LiFiBridgePairLinkService service;
 
@@ -59,11 +71,14 @@ class LiFiBridgePairLinkServiceTest {
                 liFiReceivingTransactionDiscoveryService,
                 new RawTransactionClarificationEnricher(),
                 rawTransactionRepository,
-                normalizedTransactionRepository
+                normalizedTransactionRepository,
+                mongoOperations,
+                protocolRegistryService
         );
         lenient().when(normalizedTransactionRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
         lenient().when(normalizedTransactionRepository.saveAll(any())).thenAnswer(invocation -> invocation.getArgument(0));
         lenient().when(rawTransactionRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        lenient().when(protocolRegistryService.lookup(any(), any())).thenReturn(Optional.empty());
     }
 
     @Test
@@ -381,6 +396,70 @@ class LiFiBridgePairLinkServiceTest {
         assertThat(source.getContinuityCandidate()).isNull();
     }
 
+    @Test
+    @DisplayName("official-status miss falls back to unique Across settlement evidence for LI.FI-routed source")
+    void officialStatusMissFallsBackToUniqueAcrossSettlementEvidence() {
+        RawTransaction sourceRaw = metaMaskLiFiSourceRawTransaction(
+                "0x1a756dd5b8d6144d250f3f2a86d25a718e4ac0e3c2044042c1d749ecacda95f6",
+                NetworkId.ARBITRUM
+        );
+        NormalizedTransaction source = bridgeOut(
+                "0x1a756dd5b8d6144d250f3f2a86d25a718e4ac0e3c2044042c1d749ecacda95f6",
+                NetworkId.ARBITRUM,
+                "ETH",
+                null,
+                "-0.003"
+        );
+        source.setProtocolName("MetaMask Bridge");
+        source.setBlockTimestamp(Instant.parse("2025-02-07T10:50:41Z"));
+
+        RawTransaction destinationRaw = settlementRawTransaction(
+                "0x4a47ab3cad76be52416e660e044b983acc9837cd9f05b59eabad7560636aa0b2",
+                NetworkId.ETHEREUM,
+                "0x5c7bcd6e7de5423a257d81b442095a1a6ced35c5",
+                "2746559320438498"
+        );
+        NormalizedTransaction destination = externalTransferIn(
+                "0x4a47ab3cad76be52416e660e044b983acc9837cd9f05b59eabad7560636aa0b2",
+                NetworkId.ETHEREUM,
+                "ETH",
+                null,
+                "0.002746559320438498"
+        );
+        destination.setBlockTimestamp(Instant.parse("2025-02-07T10:50:59Z"));
+
+        when(liFiStatusGateway.fetchBridgeStatus(source.getTxHash())).thenReturn(Optional.empty());
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class))).thenReturn(List.of(destination));
+        when(rawTransactionRepository.findById(destination.getId())).thenReturn(Optional.of(destinationRaw));
+        when(protocolRegistryService.lookup(NetworkId.ETHEREUM, "0x5c7bcd6e7de5423a257d81b442095a1a6ced35c5"))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        "0x5c7bcd6e7de5423a257d81b442095a1a6ced35c5",
+                        Set.of(NetworkId.ETHEREUM),
+                        ProtocolRegistryFamily.BRIDGE,
+                        ProtocolRegistryRole.BRIDGE_ENTRY,
+                        ProtocolRegistryEventType.BRIDGE_OUT,
+                        ConfidenceLevel.HIGH,
+                        "Across",
+                        "V2",
+                        false,
+                        null
+                )));
+
+        service.link(sourceRaw, source);
+
+        ArgumentCaptor<List<NormalizedTransaction>> updatesCaptor = ArgumentCaptor.forClass(List.class);
+        verify(normalizedTransactionRepository).saveAll(updatesCaptor.capture());
+        assertThat(updatesCaptor.getValue()).extracting(NormalizedTransaction::getTxHash)
+                .containsExactlyInAnyOrder(source.getTxHash(), destination.getTxHash());
+        assertThat(source.getMatchedCounterparty()).isEqualTo(destination.getTxHash());
+        assertThat(source.getCorrelationId()).isEqualTo("bridge:lifi:" + source.getTxHash());
+        assertThat(destination.getType()).isEqualTo(NormalizedTransactionType.BRIDGE_IN);
+        assertThat(destination.getProtocolName()).isEqualTo("Across");
+        assertThat(destination.getMatchedCounterparty()).isEqualTo(source.getTxHash());
+        assertThat(destination.getCorrelationId()).isEqualTo(source.getCorrelationId());
+        assertThat(destination.getContinuityCandidate()).isTrue();
+    }
+
     private RawTransaction sourceRawTransaction(String txHash, NetworkId networkId) {
         RawTransaction rawTransaction = new RawTransaction();
         rawTransaction.setId(txHash + ":" + networkId + ":" + WALLET);
@@ -389,6 +468,39 @@ class LiFiBridgePairLinkServiceTest {
         rawTransaction.setWalletAddress(WALLET);
         rawTransaction.setRawData(new Document("input",
                 "0xd7a08473" + "72656c61796465706f7369746f7279" + "6a756d7065722e65786368616e6765"));
+        return rawTransaction;
+    }
+
+    private RawTransaction metaMaskLiFiSourceRawTransaction(String txHash, NetworkId networkId) {
+        RawTransaction rawTransaction = new RawTransaction();
+        rawTransaction.setId(txHash + ":" + networkId + ":" + WALLET);
+        rawTransaction.setTxHash(txHash);
+        rawTransaction.setNetworkId(networkId.name());
+        rawTransaction.setWalletAddress(WALLET);
+        rawTransaction.setRawData(new Document("input",
+                "0x3ce33bff" + "6c696669416461707465725632"));
+        return rawTransaction;
+    }
+
+    private RawTransaction settlementRawTransaction(
+            String txHash,
+            NetworkId networkId,
+            String settlementSender,
+            String value
+    ) {
+        RawTransaction rawTransaction = new RawTransaction();
+        rawTransaction.setId(txHash + ":" + networkId + ":" + WALLET);
+        rawTransaction.setTxHash(txHash);
+        rawTransaction.setNetworkId(networkId.name());
+        rawTransaction.setWalletAddress(WALLET);
+        rawTransaction.setRawData(new Document("input", "")
+                .append("explorer", new Document("tokenTransfers", List.of())
+                        .append("internalTransfers", List.of(
+                                new Document("from", settlementSender)
+                                        .append("to", WALLET)
+                                        .append("value", value)
+                                        .append("isError", "0")
+                        ))));
         return rawTransaction;
     }
 

@@ -35,6 +35,7 @@ import java.util.Optional;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.groups.Tuple.tuple;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -1211,6 +1212,48 @@ class OnChainClassifierTest {
         assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.PROTOCOL_REGISTRY);
         assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
         assertThat(result.missingDataReasons()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("empty-input inbound from bridge internal sender resolves to BRIDGE_IN")
+    void emptyInputInboundFromBridgeInternalSenderResolvesToBridgeIn() {
+        String acrossSpokePool = "0x5c7bcd6e7de5423a257d81b442095a1a6ced35c5";
+        RawTransaction rawTransaction = baseRaw(NetworkId.ETHEREUM);
+        rawTransaction.getRawData().put("from", "");
+        rawTransaction.getRawData().put("to", "");
+        rawTransaction.getRawData().put("input", "");
+        rawTransaction.getRawData().remove("methodId");
+        rawTransaction.getRawData().remove("functionName");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of())
+                .append("internalTransfers", List.of(
+                        new Document("from", acrossSpokePool)
+                                .append("to", WALLET)
+                                .append("value", "2746559320438498")
+                                .append("isError", "0")
+                )));
+        when(protocolRegistryService.lookup(NetworkId.ETHEREUM, acrossSpokePool))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        acrossSpokePool,
+                        Set.of(NetworkId.ETHEREUM),
+                        ProtocolRegistryFamily.BRIDGE,
+                        ProtocolRegistryRole.BRIDGE_ENTRY,
+                        ProtocolRegistryEventType.BRIDGE_OUT,
+                        ConfidenceLevel.HIGH,
+                        "Across",
+                        "V2",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.BRIDGE_IN);
+        assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.PROTOCOL_REGISTRY);
+        assertThat(result.protocolName()).isEqualTo("Across");
+        assertThat(result.flows())
+                .filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
+                .extracting(NormalizedTransaction.Flow::getRole)
+                .containsExactly(NormalizedLegRole.TRANSFER);
     }
 
     @Test
@@ -4339,6 +4382,61 @@ class OnChainClassifierTest {
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.SWAP);
         assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+    }
+
+    @Test
+    @DisplayName("Velora RFQ batch fill overload on aggregator router resolves to SWAP")
+    void veloraRfqBatchFillOverloadOnAggregatorRouterResolvesToSwap() {
+        String veloraRouter = "0x6a000f20005980200259b80c5102003040001068";
+        RawTransaction rawTransaction = baseRaw(NetworkId.AVALANCHE);
+        rawTransaction.setTxHash("0x21815249921ac127f3c52fbf018924f80a55e8fa7fc80505ca2488f0b80f256f");
+        rawTransaction.getRawData().put("to", veloraRouter);
+        rawTransaction.getRawData().put("methodId", "0xda35bb0d");
+        rawTransaction.getRawData().put("functionName",
+                "swapOnAugustusRFQTryBatchFill((uint256 fromAmount, uint256 toAmount, uint8 wrapApproveDirection, bytes32 metadata, address beneficiary) data, ((uint256 nonceAndMeta, uint128 expiry, address makerAsset, address takerAsset, address maker, address taker, uint256 makerAmount, uint256 takerAmount) order, bytes signature, uint256 takerTokenFillAmount, bytes permitTakerAsset, bytes permitMakerAsset)[] orders, bytes permit) payable returns (uint256 spentAmount, uint256 receivedAmount)");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0x9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7")
+                        .append("tokenSymbol", "USDt")
+                        .append("tokenName", "TetherToken")
+                        .append("tokenDecimal", "6")
+                        .append("from", WALLET)
+                        .append("to", veloraRouter)
+                        .append("value", "5331168"),
+                new Document("contractAddress", TOKEN_A)
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenName", "USD Coin")
+                        .append("tokenDecimal", "6")
+                        .append("from", "0x2c6bea966e83dff8619e54fd819da727ed5102e1")
+                        .append("to", WALLET)
+                        .append("value", "5330533")
+        )).append("internalTransfers", List.of()));
+        when(protocolRegistryService.lookup(NetworkId.AVALANCHE, veloraRouter))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        veloraRouter,
+                        Set.of(NetworkId.ARBITRUM, NetworkId.AVALANCHE),
+                        ProtocolRegistryFamily.AGGREGATOR,
+                        ProtocolRegistryRole.ROUTER,
+                        ProtocolRegistryEventType.SWAP,
+                        ConfidenceLevel.HIGH,
+                        "Velora/ParaSwap",
+                        "V6.2",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.SWAP);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.PROTOCOL_REGISTRY);
+        assertThat(result.protocolName()).isEqualTo("Velora/ParaSwap");
+        assertThat(result.flows())
+                .extracting(NormalizedTransaction.Flow::getRole, NormalizedTransaction.Flow::getAssetSymbol)
+                .containsExactlyInAnyOrder(
+                        tuple(NormalizedLegRole.SELL, "USDt"),
+                        tuple(NormalizedLegRole.BUY, "USDC"),
+                        tuple(NormalizedLegRole.FEE, "AVAX")
+                );
     }
 
     @Test

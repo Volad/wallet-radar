@@ -18,6 +18,7 @@ import {
 import { toObservable, toSignal } from '@angular/core/rxjs-interop';
 import { combineLatest, map, of, startWith, switchMap, catchError } from 'rxjs';
 
+import { INTEGRATION_PRESENTATION_BY_PROVIDER } from '../../core/data/dashboard.constants';
 import {
   SessionAssetLedgerEventFlowResponse,
   SessionAssetLedgerEventOverlayResponse,
@@ -77,9 +78,20 @@ interface EventFamilyFilterView {
   readonly eventCount: number;
 }
 
+interface EventFamilyVisualMeta {
+  readonly label: string;
+  readonly color: string;
+  readonly icon: IconRenderer;
+}
+
 interface QuickPresetView {
   readonly key: QuickPresetKey;
   readonly label: string;
+}
+
+interface WalletVisualMeta {
+  readonly label: string;
+  readonly color: string;
 }
 
 interface MarkerView {
@@ -109,8 +121,15 @@ interface MarkerView {
   readonly priceUsd: number | null;
   readonly priceSource: string | null;
   readonly primaryFlowLabel: string | null;
+  readonly fromAddress: string | null;
+  readonly toAddress: string | null;
   readonly pathFrom: string;
   readonly pathTo: string;
+  readonly pathFromTitle: string | null;
+  readonly pathToTitle: string | null;
+  readonly pathFromColor: string | null;
+  readonly pathToColor: string | null;
+  readonly memberNormalizedTransactionIds: ReadonlyArray<string>;
   readonly flows: ReadonlyArray<FlowChipView>;
 }
 
@@ -690,13 +709,13 @@ const TYPE_DISPLAY_OVERRIDES: Readonly<Record<string, TypeDisplayOverride>> = {
   UNKNOWN: { label: 'Unknown', baseType: 'OTHER' },
 };
 
-const EVENT_FAMILY_META: Readonly<Record<EventFamilyKey, { label: string; color: string }>> = {
-  lp: { label: 'LP', color: '#818cf8' },
-  bridge: { label: 'Bridge', color: '#06b6d4' },
-  transfer: { label: 'Transfer', color: '#3b82f6' },
-  lending: { label: 'Lending', color: '#34d399' },
-  reward: { label: 'Reward', color: '#f472b6' },
-  staking: { label: 'Staking', color: '#fbbf24' },
+const EVENT_FAMILY_META: Readonly<Record<EventFamilyKey, EventFamilyVisualMeta>> = {
+  lp: { label: 'LP', color: '#818cf8', icon: TYPE_META['LP_ENTRY'].icon },
+  bridge: { label: 'Bridge', color: '#06b6d4', icon: TYPE_META['BRIDGE_OUT'].icon },
+  transfer: { label: 'Transfer', color: '#3b82f6', icon: TYPE_META['INTERNAL_TRANSFER'].icon },
+  lending: { label: 'Lending', color: '#34d399', icon: TYPE_META['LENDING_DEPOSIT'].icon },
+  reward: { label: 'Reward', color: '#f472b6', icon: TYPE_META['REWARD_CLAIM'].icon },
+  staking: { label: 'Staking', color: '#fbbf24', icon: TYPE_META['STAKING_DEPOSIT'].icon },
 };
 
 @Component({
@@ -724,7 +743,7 @@ export class AssetLedgerPageComponent {
   readonly disabledTypeKeys = signal<ReadonlySet<string>>(new Set(DEFAULT_DISABLED_TYPE_KEYS));
   readonly selectedBasisEffects = signal<ReadonlySet<string>>(new Set<string>());
   readonly selectedPreset = signal<QuickPresetKey>('economics');
-  readonly copiedTxHash = signal<string | null>(null);
+  readonly copiedValueKey = signal<string | null>(null);
   readonly collapsedSections = signal<ReadonlySet<string>>(new Set<string>());
   readonly eventLogSearch = signal('');
 
@@ -734,6 +753,7 @@ export class AssetLedgerPageComponent {
   @ViewChild('rangePreviewCanvas') private rangePreviewCanvasRef?: ElementRef<HTMLCanvasElement>;
   @ViewChild('rangeShell') private rangeShellRef?: ElementRef<HTMLDivElement>;
   @ViewChildren('legendCanvas') private legendCanvasRefs?: QueryList<ElementRef<HTMLCanvasElement>>;
+  @ViewChildren('familyCanvas') private familyCanvasRefs?: QueryList<ElementRef<HTMLCanvasElement>>;
 
   private resizeObserver?: ResizeObserver;
   private renderedMarkers: ReadonlyArray<RenderedMarkerView> = [];
@@ -1349,13 +1369,13 @@ export class AssetLedgerPageComponent {
     this.togglePinnedMarker(markerId, event.clientX, event.clientY);
   }
 
-  async copyTxHash(txHash: string): Promise<void> {
+  async copyText(value: string, copyKey = value): Promise<void> {
     try {
       if ('clipboard' in navigator && navigator.clipboard !== undefined) {
-        await navigator.clipboard.writeText(txHash);
+        await navigator.clipboard.writeText(value);
       } else {
         const textarea = document.createElement('textarea');
-        textarea.value = txHash;
+        textarea.value = value;
         textarea.setAttribute('readonly', 'true');
         textarea.style.position = 'fixed';
         textarea.style.opacity = '0';
@@ -1364,17 +1384,21 @@ export class AssetLedgerPageComponent {
         document.execCommand('copy');
         document.body.removeChild(textarea);
       }
-      this.copiedTxHash.set(txHash);
+      this.copiedValueKey.set(copyKey);
       if (this.copyResetTimerId !== null) {
         window.clearTimeout(this.copyResetTimerId);
       }
       this.copyResetTimerId = window.setTimeout(() => {
-        this.copiedTxHash.set(null);
+        this.copiedValueKey.set(null);
         this.copyResetTimerId = null;
       }, 1400);
     } catch {
-      this.copiedTxHash.set(null);
+      this.copiedValueKey.set(null);
     }
+  }
+
+  async copyTxHash(txHash: string): Promise<void> {
+    await this.copyText(txHash, `tx:${txHash}`);
   }
 
   @HostListener('document:click', ['$event'])
@@ -1457,7 +1481,7 @@ export class AssetLedgerPageComponent {
       this.collapsedSections.set(new Set<string>());
       this.hoveredMarkerId.set(null);
       this.pinnedMarkerId.set(null);
-      this.copiedTxHash.set(null);
+      this.copiedValueKey.set(null);
     });
     effect(() => {
       const maxIndex = this.maxMarkerIndex();
@@ -1478,6 +1502,7 @@ export class AssetLedgerPageComponent {
       }
       queueMicrotask(() => {
         this.renderLegendIcons();
+        this.renderFamilyIcons();
         this.renderChart();
         this.renderSupplementalCharts();
         this.renderRangePreview();
@@ -1512,15 +1537,21 @@ export class AssetLedgerPageComponent {
   }
 
   private toViewModel(session: SessionResponse, ledger: SessionAssetLedgerResponse): AssetLedgerViewModel {
-    const walletLabels = new Map(
-      session.wallets.map((wallet) => [wallet.address.trim().toLowerCase(), wallet.label] as const)
+    const walletMeta = new Map(
+      session.wallets.map(
+        (wallet) =>
+          [
+            wallet.address.trim().toLowerCase(),
+            { label: wallet.label, color: wallet.color } satisfies WalletVisualMeta,
+          ] as const
+      )
     );
     const displaySymbol =
       ledger.ledgerPoints.find((point) => point.familyDisplaySymbol !== null)?.familyDisplaySymbol ??
       this.familyDisplaySymbol(ledger.familyIdentity);
 
     const legendItems = this.buildLegendItems(ledger.events);
-    const markers = this.buildMarkers(ledger, walletLabels);
+    const markers = this.buildMarkers(ledger, walletMeta);
     const markerLookup = Object.fromEntries(markers.map((marker) => [marker.id, marker] as const));
     return {
       sessionId: ledger.sessionId,
@@ -1560,15 +1591,15 @@ export class AssetLedgerPageComponent {
 
   private buildMarkers(
     ledger: SessionAssetLedgerResponse,
-    walletLabels: ReadonlyMap<string, string>
+    walletMeta: ReadonlyMap<string, WalletVisualMeta>
   ): ReadonlyArray<MarkerView> {
     const eventById = new Map(
-      ledger.events.map((event) => [event.normalizedTransactionId ?? event.txHash ?? crypto.randomUUID(), event] as const)
+      ledger.events.map((event) => [event.eventGroupId ?? event.normalizedTransactionId ?? event.txHash ?? crypto.randomUUID(), event] as const)
     );
     const yProjection = this.buildYProjection(ledger.timeline, ledger.events, ledger.familyIdentity);
 
     return ledger.timeline.map((entry, index, entries) => {
-      const id = entry.normalizedTransactionId ?? entry.txHash ?? `${index}`;
+      const id = entry.eventGroupId ?? entry.normalizedTransactionId ?? entry.txHash ?? `${index}`;
       const event = eventById.get(id) ?? null;
       const previous = index > 0 ? entries[index - 1] : null;
       const typeKey = this.normalizeTypeKey(entry.normalizedType);
@@ -1576,7 +1607,7 @@ export class AssetLedgerPageComponent {
       const primaryFlow = this.primaryFlow(event, ledger.familyIdentity);
       const displayQuote = this.resolveDisplayQuote(event, ledger.familyIdentity, primaryFlow);
       const avcoAfter = entry.avcoAfterUsd;
-      const path = this.resolvePath(entry, event, walletLabels);
+      const path = this.resolvePath(entry, event, walletMeta);
       const displayVenue = this.resolveVenueLabel(entry, event);
 
       return {
@@ -1606,8 +1637,15 @@ export class AssetLedgerPageComponent {
         priceUsd: displayQuote.unitPriceUsd,
         priceSource: displayQuote.priceSource,
         primaryFlowLabel: primaryFlow === null ? null : `${primaryFlow.assetSymbol ?? 'UNKNOWN'} ${this.formatSignedQuantity(primaryFlow.quantityDelta ?? null, 4)}`,
+        fromAddress: entry.fromAddress ?? event?.fromAddress ?? null,
+        toAddress: entry.toAddress ?? event?.toAddress ?? null,
         pathFrom: path.fromLabel,
         pathTo: path.toLabel,
+        pathFromTitle: path.fromTitle,
+        pathToTitle: path.toTitle,
+        pathFromColor: path.fromColor,
+        pathToColor: path.toColor,
+        memberNormalizedTransactionIds: entry.memberNormalizedTransactionIds,
         flows: this.toFlowChips(event?.flows ?? []),
       };
     });
@@ -1641,9 +1679,30 @@ export class AssetLedgerPageComponent {
   private resolvePath(
     entry: SessionAssetLedgerTimelineEntryResponse,
     event: SessionAssetLedgerEventOverlayResponse | null,
-    walletLabels: ReadonlyMap<string, string>
-  ): { fromLabel: string; toLabel: string } {
-    const walletLabel = this.walletScopeLabel(event?.walletAddresses ?? [], walletLabels);
+    walletMeta: ReadonlyMap<string, WalletVisualMeta>
+  ): {
+    fromLabel: string;
+    toLabel: string;
+    fromTitle: string | null;
+    toTitle: string | null;
+    fromColor: string | null;
+    toColor: string | null;
+  } {
+    const explicitFrom = entry.fromAddress ?? event?.fromAddress ?? null;
+    const explicitTo = entry.toAddress ?? event?.toAddress ?? null;
+    if (explicitFrom !== null && explicitTo !== null) {
+      const fromNode = this.pathNode(explicitFrom, walletMeta);
+      const toNode = this.pathNode(explicitTo, walletMeta);
+      return {
+        fromLabel: fromNode.label,
+        toLabel: toNode.label,
+        fromTitle: fromNode.title,
+        toTitle: toNode.title,
+        fromColor: fromNode.color,
+        toColor: toNode.color,
+      };
+    }
+    const walletNode = this.walletScopeNode(event?.walletAddresses ?? [], walletMeta);
     const destination = event?.protocolName ?? entry.lifecycleKind ?? 'Ledger';
     const quantityDelta = entry.quantityDelta ?? 0;
     const basisEffects = new Set(entry.basisEffects);
@@ -1651,26 +1710,106 @@ export class AssetLedgerPageComponent {
     const inbound = quantityDelta > 0 || basisEffects.has('CARRY_IN') || basisEffects.has('ACQUIRE') || basisEffects.has('REALLOCATE_IN');
 
     if (outbound && !inbound) {
-      return { fromLabel: walletLabel, toLabel: destination };
+      return {
+        fromLabel: walletNode.label,
+        toLabel: destination,
+        fromTitle: walletNode.title,
+        toTitle: destination,
+        fromColor: walletNode.color,
+        toColor: null,
+      };
     }
     if (inbound && !outbound) {
-      return { fromLabel: destination, toLabel: walletLabel };
+      return {
+        fromLabel: destination,
+        toLabel: walletNode.label,
+        fromTitle: destination,
+        toTitle: walletNode.title,
+        fromColor: null,
+        toColor: walletNode.color,
+      };
     }
-    return { fromLabel: walletLabel, toLabel: destination };
+    return {
+      fromLabel: walletNode.label,
+      toLabel: destination,
+      fromTitle: walletNode.title,
+      toTitle: destination,
+      fromColor: walletNode.color,
+      toColor: null,
+    };
   }
 
-  private walletScopeLabel(
+  private pathNode(
+    address: string,
+    walletMeta: ReadonlyMap<string, WalletVisualMeta>
+  ): { label: string; title: string | null; color: string | null } {
+    const normalized = address.trim().toLowerCase();
+    const meta = walletMeta.get(normalized);
+    const label = this.shortDisplayRef(address);
+    const integrationMeta = this.integrationRefMeta(address);
+    if (integrationMeta !== null) {
+      return {
+        label,
+        title: `${integrationMeta.label} · ${address}`,
+        color: integrationMeta.color,
+      };
+    }
+    return {
+      label,
+      title: meta === undefined ? address : `${meta.label} · ${address}`,
+      color: meta?.color ?? null,
+    };
+  }
+
+  private integrationRefMeta(address: string): { label: string; color: string } | null {
+    const trimmed = address.trim();
+    const separatorIndex = trimmed.indexOf(':');
+    if (separatorIndex <= 0) {
+      return null;
+    }
+    const provider = trimmed.slice(0, separatorIndex).trim().toUpperCase();
+    const presentation = INTEGRATION_PRESENTATION_BY_PROVIDER.get(provider);
+    if (presentation === undefined) {
+      return null;
+    }
+    return {
+      label: presentation.label,
+      color: presentation.color,
+    };
+  }
+
+  private walletScopeNode(
     walletAddresses: ReadonlyArray<string>,
-    walletLabels: ReadonlyMap<string, string>
-  ): string {
+    walletMeta: ReadonlyMap<string, WalletVisualMeta>
+  ): { label: string; title: string | null; color: string | null } {
     if (walletAddresses.length === 0) {
-      return 'Session wallets';
+      return { label: 'Session wallet', title: 'Session wallet', color: null };
     }
-    if (walletAddresses.length === 1) {
-      const normalized = walletAddresses[0].trim().toLowerCase();
-      return walletLabels.get(normalized) ?? this.shortHash(walletAddresses[0]);
+    const walletNodes = walletAddresses
+      .map((address) => address.trim())
+      .filter((address) => address.length > 0)
+      .map((address) => this.pathNode(address, walletMeta))
+      .filter((node) => node.color !== null);
+
+    if (walletNodes.length > 0) {
+      const primary = walletNodes[0];
+      if (walletNodes.length === 1) {
+        return primary;
+      }
+      return {
+        label: primary.label,
+        title: `${primary.title ?? primary.label} · ${walletNodes.length} wallets in accounting universe`,
+        color: primary.color,
+      };
     }
-    return `${walletAddresses.length} wallets`;
+    return this.pathNode(walletAddresses[0], walletMeta);
+  }
+
+  private shortDisplayRef(value: string): string {
+    if (value.trim().toUpperCase().startsWith('BYBIT:')) {
+      return value.trim();
+    }
+    return this.shortHash(value);
   }
 
   private resolveVenueLabel(
@@ -1716,6 +1855,8 @@ export class AssetLedgerPageComponent {
       marker.timestamp,
       marker.pathFrom,
       marker.pathTo,
+      marker.fromAddress ?? '',
+      marker.toAddress ?? '',
       marker.basisSummary,
       marker.priceSource ?? '',
       marker.primaryFlowLabel ?? '',
@@ -1961,6 +2102,7 @@ export class AssetLedgerPageComponent {
       }
     });
     this.renderLegendIcons();
+    this.renderFamilyIcons();
     this.renderChart();
     this.renderSupplementalCharts();
     this.renderRangePreview();
@@ -1982,6 +2124,25 @@ export class AssetLedgerPageComponent {
       const canvas = canvasRef.nativeElement;
       const typeKey = canvas.dataset['type'] ?? 'OTHER';
       const meta = this.metaForType(typeKey);
+      this.paintIconCanvas(canvas, meta.color, meta.icon, 28);
+    });
+  }
+
+  private renderFamilyIcons(): void {
+    const canvases = this.familyCanvasRefs;
+    if (canvases === undefined) {
+      return;
+    }
+    canvases.forEach((canvasRef) => {
+      const canvas = canvasRef.nativeElement;
+      const familyKey = canvas.dataset['family'] as EventFamilyKey | undefined;
+      if (familyKey === undefined) {
+        return;
+      }
+      const meta = EVENT_FAMILY_META[familyKey];
+      if (meta === undefined) {
+        return;
+      }
       this.paintIconCanvas(canvas, meta.color, meta.icon, 28);
     });
   }

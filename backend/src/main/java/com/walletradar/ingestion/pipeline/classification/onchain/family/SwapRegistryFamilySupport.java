@@ -22,7 +22,8 @@ final class SwapRegistryFamilySupport {
             "0xac9650d8",
             "0xc16ae7a4",
             "0x3593564c",
-            "0xae0b91e5"
+            "0xae0b91e5",
+            "0xda35bb0d"
     );
 
     private SwapRegistryFamilySupport() {
@@ -34,7 +35,8 @@ final class SwapRegistryFamilySupport {
             List<RawLeg> movementLegs,
             NativeAssetSymbolResolver nativeAssetSymbolResolver
     ) {
-        if (entry.family() != ProtocolRegistryFamily.DEX) {
+        if (entry.family() != ProtocolRegistryFamily.DEX
+                && entry.family() != ProtocolRegistryFamily.AGGREGATOR) {
             return false;
         }
         boolean routeLikeRole = entry.role() == ProtocolRegistryRole.ROUTER
