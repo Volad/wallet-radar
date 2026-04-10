@@ -282,6 +282,7 @@ public final class OnChainClassificationSupport {
         if (type == NormalizedTransactionType.APPROVE
                 || type == NormalizedTransactionType.ADMIN_CONFIG
                 || type == NormalizedTransactionType.INTERNAL_TRANSFER
+                || type == NormalizedTransactionType.SPONSORED_GAS_IN
                 || type == NormalizedTransactionType.LP_POSITION_STAKE
                 || type == NormalizedTransactionType.LP_POSITION_UNSTAKE
                 || type == NormalizedTransactionType.WRAP
@@ -368,6 +369,7 @@ public final class OnChainClassificationSupport {
                     VAULT_WITHDRAW,
                     BRIDGE_OUT,
                     BRIDGE_IN,
+                    SPONSORED_GAS_IN,
                     PROTOCOL_CUSTODY_DEPOSIT,
                     PROTOCOL_CUSTODY_WITHDRAW,
                     INTERNAL_TRANSFER,

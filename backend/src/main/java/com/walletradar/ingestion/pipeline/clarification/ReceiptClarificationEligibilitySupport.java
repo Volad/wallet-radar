@@ -3,6 +3,7 @@ package com.walletradar.ingestion.pipeline.clarification;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.domain.transaction.raw.RawSyncMethod;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.ingestion.pipeline.classification.reason.ClassificationReasonCode;
 import com.walletradar.ingestion.pipeline.classification.support.ClarificationEligibilitySupport;
@@ -50,6 +51,10 @@ public final class ReceiptClarificationEligibilitySupport {
     private static final String GMX_DERIVATIVE_EXECUTION_EVIDENCE_REQUIRED = ClassificationReasonCode.GMX_DERIVATIVE_EXECUTION_EVIDENCE_REQUIRED.code();
     private static final String COW_ORDER_SETTLEMENT_CORRELATION_REQUIRED = ClassificationReasonCode.COW_ORDER_SETTLEMENT_CORRELATION_REQUIRED.code();
     private static final String EULER_BATCH_DECODER_REQUIRED = ClassificationReasonCode.EULER_BATCH_DECODER_REQUIRED.code();
+    private static final String NATIVE_SETTLEMENT_TRANSFER_EVIDENCE_REQUIRED =
+            ClassificationReasonCode.NATIVE_SETTLEMENT_TRANSFER_EVIDENCE_REQUIRED.code();
+    private static final String LP_POSITION_CORRELATION_REQUIRED =
+            ClassificationReasonCode.LP_POSITION_CORRELATION_REQUIRED.code();
     private static final String GPV2_SETTLEMENT_SELECTOR = "0x13d79a0b";
     private static final String ROUTED_AGGREGATOR_OUTBOUND_ONLY = ClassificationReasonCode.ROUTED_AGGREGATOR_OUTBOUND_ONLY.code();
 
@@ -75,6 +80,10 @@ public final class ReceiptClarificationEligibilitySupport {
         boolean gmxPendingClarificationCandidate = isGmxPendingClarificationCandidate(normalizedTransaction, reasons);
         boolean oneInchNativeSettlementCandidate = isOneInchNativeSettlementCandidate(normalizedTransaction, reasons);
         boolean eulerPendingClarificationCandidate = isEulerPendingClarificationCandidate(normalizedTransaction, reasons, view);
+        boolean nativeSettlementTransferRecoveryCandidate =
+                isNativeSettlementTransferRecoveryCandidate(normalizedTransaction, reasons, view);
+        boolean lpPositionCorrelationCandidate =
+                isLpPositionCorrelationCandidate(normalizedTransaction, reasons, view);
         if (normalizedTransaction.getStatus() != NormalizedTransactionStatus.NEEDS_REVIEW
                 && !bridgeEvidenceCandidate
                 && !gmxDerivativeExecutionCandidate
@@ -82,7 +91,9 @@ public final class ReceiptClarificationEligibilitySupport {
                 && !cowSettlementCandidate
                 && !gmxPendingClarificationCandidate
                 && !oneInchNativeSettlementCandidate
-                && !eulerPendingClarificationCandidate) {
+                && !eulerPendingClarificationCandidate
+                && !nativeSettlementTransferRecoveryCandidate
+                && !lpPositionCorrelationCandidate) {
             return false;
         }
         if (bridgeEvidenceCandidate
@@ -118,6 +129,12 @@ public final class ReceiptClarificationEligibilitySupport {
             return true;
         }
         if (eulerPendingClarificationCandidate) {
+            return true;
+        }
+        if (nativeSettlementTransferRecoveryCandidate) {
+            return true;
+        }
+        if (lpPositionCorrelationCandidate) {
             return true;
         }
         String txHash = String.valueOf(view.txHash()).toLowerCase();
@@ -223,6 +240,21 @@ public final class ReceiptClarificationEligibilitySupport {
                 && "0xc16ae7a4".equals(view.methodId());
     }
 
+    private static boolean isNativeSettlementTransferRecoveryCandidate(
+            NormalizedTransaction normalizedTransaction,
+            List<String> reasons,
+            OnChainRawTransactionView view
+    ) {
+        return normalizedTransaction != null
+                && view != null
+                && normalizedTransaction.getStatus() == NormalizedTransactionStatus.PENDING_CLARIFICATION
+                && (normalizedTransaction.getType() == NormalizedTransactionType.LP_EXIT
+                || normalizedTransaction.getType() == NormalizedTransactionType.LP_FEE_CLAIM)
+                && reasons.contains(NATIVE_SETTLEMENT_TRANSFER_EVIDENCE_REQUIRED)
+                && view.syncMethod() == RawSyncMethod.BLOCKSCOUT
+                && !view.hasFullReceiptClarificationEvidence();
+    }
+
     private static boolean requiresTransferEvidenceRecovery(
             NormalizedTransaction normalizedTransaction,
             List<String> reasons,
@@ -239,6 +271,22 @@ public final class ReceiptClarificationEligibilitySupport {
         }
         return reasons.contains(ClassificationReasonCode.CLASSIFICATION_FAILED.code())
                 || reasons.contains(EULER_BATCH_DECODER_REQUIRED);
+    }
+
+    private static boolean isLpPositionCorrelationCandidate(
+            NormalizedTransaction normalizedTransaction,
+            List<String> reasons,
+            OnChainRawTransactionView view
+    ) {
+        return normalizedTransaction != null
+                && view != null
+                && normalizedTransaction.getStatus() == NormalizedTransactionStatus.PENDING_CLARIFICATION
+                && reasons.contains(LP_POSITION_CORRELATION_REQUIRED)
+                && (normalizedTransaction.getType() == NormalizedTransactionType.LP_ENTRY
+                || normalizedTransaction.getType() == NormalizedTransactionType.LP_EXIT
+                || normalizedTransaction.getType() == NormalizedTransactionType.LP_EXIT_PARTIAL
+                || normalizedTransaction.getType() == NormalizedTransactionType.LP_EXIT_FINAL)
+                && !view.hasFullReceiptClarificationEvidence();
     }
 
     private static boolean isGmxDerivativeRequest(NormalizedTransaction normalizedTransaction) {

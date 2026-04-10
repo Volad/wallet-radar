@@ -44,6 +44,7 @@ public enum NormalizedTransactionType {
     REWARD_CLAIM,
     EXTERNAL_TRANSFER_OUT,
     EXTERNAL_TRANSFER_IN,
+    SPONSORED_GAS_IN,
     INTERNAL_TRANSFER,
     APPROVE,
     ADMIN_CONFIG,

@@ -166,6 +166,7 @@ class AssetLedgerQueryServiceTest {
         assertThat(view.current().totalCostBasisUsd()).isEqualByComparingTo("100");
         assertThat(view.current().avcoUsd()).isEqualByComparingTo("100");
         assertThat(view.current().uncoveredBuckets()).isEmpty();
+        assertThat(view.current().shortfallSources()).isEmpty();
         assertThat(view.events()).hasSize(3);
         assertThat(view.events().get(0).protocolName()).isEqualTo("Bybit");
         assertThat(view.ledgerPoints()).hasSize(4);
@@ -225,6 +226,7 @@ class AssetLedgerQueryServiceTest {
         assertThat(view.timeline()).hasSize(1);
         assertThat(view.current().quantity()).isEqualByComparingTo("1");
         assertThat(view.current().uncoveredBuckets()).isEmpty();
+        assertThat(view.current().shortfallSources()).isEmpty();
     }
 
     @Test
@@ -297,6 +299,7 @@ class AssetLedgerQueryServiceTest {
             assertThat(bucket.hasUnresolvedFlags()).isTrue();
             assertThat(bucket.unresolvedFlagCount()).isEqualTo(2);
         });
+        assertThat(view.current().shortfallSources()).isEmpty();
     }
 
     @Test
@@ -367,6 +370,101 @@ class AssetLedgerQueryServiceTest {
             assertThat(bucket.latestBasisEffect()).isEqualTo("REALLOCATE_IN");
             assertThat(bucket.hasIncompleteHistory()).isFalse();
             assertThat(bucket.hasUnresolvedFlags()).isFalse();
+        });
+        assertThat(view.current().shortfallSources()).isEmpty();
+    }
+
+    @Test
+    void sessionFamilyLedgerExposesFamilyShortfallSourcesForCurrentState() {
+        UserSession session = new UserSession();
+        session.setId("session-7");
+        UserSession.SessionWallet wallet = new UserSession.SessionWallet();
+        wallet.setAddress("wallet-a");
+        wallet.setNetworks(List.of(NetworkId.BASE));
+        session.setWallets(List.of(wallet));
+
+        AssetLedgerPoint shortfallSource = point(
+                "11",
+                "wallet-a",
+                NetworkId.BASE,
+                "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.REALLOCATE_OUT,
+                AssetLedgerPoint.LifecycleKind.LP,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "-0.0002",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+        );
+        shortfallSource.setNormalizedType("LP_ENTRY");
+        shortfallSource.setProtocolName("PancakeSwap");
+        shortfallSource.setTxHash("0xshortfall");
+        shortfallSource.setBlockTimestamp(Instant.parse("2026-04-05T09:55:00Z"));
+        shortfallSource.setQuantityShortfallAfter(new BigDecimal("0.125"));
+        shortfallSource.setUncoveredQuantityAfter(BigDecimal.ZERO);
+        shortfallSource.setQuantityShortfallDelta(new BigDecimal("0.125"));
+
+        AssetLedgerPoint currentHold = point(
+                "12",
+                "wallet-a",
+                NetworkId.BASE,
+                "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.CARRY_IN,
+                AssetLedgerPoint.LifecycleKind.TRANSFER,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "0.5",
+                "1000",
+                "0",
+                "0",
+                "0.5",
+                "1000"
+        );
+        currentHold.setNormalizedType("EXTERNAL_TRANSFER_IN");
+        currentHold.setTxHash("0xcurrent");
+        currentHold.setBlockTimestamp(Instant.parse("2026-04-05T10:00:00Z"));
+        currentHold.setBasisBackedQuantityAfter(new BigDecimal("0.25"));
+        currentHold.setUncoveredQuantityAfter(new BigDecimal("0.25"));
+        currentHold.setHasIncompleteHistoryAfter(true);
+        currentHold.setHasUnresolvedFlagsAfter(true);
+        currentHold.setUnresolvedFlagCountAfter(1);
+
+        when(userSessionRepository.findById("session-7")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "ACCOUNTING_UNIVERSE:session-7",
+                List.of("wallet-a"),
+                List.of("wallet-a")
+        ));
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-7",
+                "FAMILY:ETH"
+        )).thenReturn(List.of(shortfallSource, currentHold));
+        when(normalizedTransactionRepository.findAllById(List.of("11", "12"))).thenReturn(List.of());
+        when(mongoOperations.find(any(), eq(OnChainBalance.class))).thenReturn(List.of(
+                balance("wallet-a", NetworkId.BASE, "ETH", "0.5")
+        ));
+
+        AssetLedgerQueryService service = new AssetLedgerQueryService(
+                userSessionRepository,
+                assetLedgerPointRepository,
+                normalizedTransactionRepository,
+                accountingUniverseService,
+                mongoOperations
+        );
+        AssetLedgerQueryService.SessionAssetLedgerView view = service.findSessionFamilyLedger("session-7", "FAMILY:ETH")
+                .orElseThrow();
+
+        assertThat(view.current().uncoveredBuckets()).singleElement().satisfies(bucket -> {
+            assertThat(bucket.latestTxHash()).isEqualTo("0xcurrent");
+            assertThat(bucket.uncoveredQuantity()).isEqualByComparingTo("0.25");
+        });
+        assertThat(view.current().shortfallSources()).singleElement().satisfies(source -> {
+            assertThat(source.txHash()).isEqualTo("0xshortfall");
+            assertThat(source.networkId()).isEqualTo("BASE");
+            assertThat(source.normalizedType()).isEqualTo("LP_ENTRY");
+            assertThat(source.protocolName()).isEqualTo("PancakeSwap");
+            assertThat(source.quantityShortfall()).isEqualByComparingTo("0.125");
         });
     }
 

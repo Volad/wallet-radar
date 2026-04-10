@@ -386,6 +386,91 @@ class BybitNormalizationServiceTest {
     }
 
     @Test
+    void extractedTransactionLogCurrencyConvertBuildsAggregatedSwap() {
+        BybitExtractedEvent convertSell = extractedConvertRow(
+                "convert-sell",
+                "CMETH",
+                "-0.66931648",
+                "CURRENCY_SELL",
+                Instant.parse("2025-04-17T12:08:56Z")
+        );
+        BybitExtractedEvent convertBuy = extractedConvertRow(
+                "convert-buy",
+                "ETH",
+                "0.70215876",
+                "CURRENCY_BUY",
+                Instant.parse("2025-04-17T12:08:56Z")
+        );
+
+        when(pendingBybitExtractedRowQueryService.loadNextBatch(10)).thenReturn(List.of(convertSell));
+        when(bybitExtractedEventRepository.findById(convertSell.getId())).thenReturn(Optional.of(convertSell));
+        when(bybitExtractedTradePairer.loadConvertCluster(convertSell)).thenReturn(List.of(convertSell, convertBuy));
+
+        BybitNormalizationService service = service();
+        int processed = service.processNextBatch(10);
+
+        assertThat(processed).isEqualTo(1);
+        ArgumentCaptor<NormalizedTransaction> captor = ArgumentCaptor.forClass(NormalizedTransaction.class);
+        verify(normalizedTransactionStore).upsert(captor.capture());
+        NormalizedTransaction saved = captor.getValue();
+        assertThat(saved.getType()).isEqualTo(NormalizedTransactionType.SWAP);
+        assertThat(saved.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        assertThat(saved.getFlows())
+                .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getRole() + ":" + flow.getQuantityDelta())
+                .containsExactlyInAnyOrder(
+                        "ETH:BUY:0.70215876",
+                        "CMETH:SELL:-0.66931648"
+                );
+        verify(bybitExtractedEventRepository).save(convertSell);
+        verify(bybitExtractedEventRepository).save(convertBuy);
+        verify(bybitExtractedTradePairer, never()).findOppositeLeg(convertSell);
+    }
+
+    @Test
+    void extractedFundingHistoryConvertBuildsAggregatedSwap() {
+        BybitExtractedEvent convertSell = extractedConvertRow(
+                "convert-sell-funding",
+                "ZAMA",
+                "-11.585",
+                "Convert",
+                Instant.parse("2026-02-09T05:09:04Z")
+        );
+        convertSell.setSourceFileType("fund_asset_changes");
+        convertSell.setBybitDescription("Small Balance Conversion");
+        BybitExtractedEvent convertBuy = extractedConvertRow(
+                "convert-buy-funding",
+                "MNT",
+                "0.4940094251864499",
+                "Convert",
+                Instant.parse("2026-02-09T05:09:06Z")
+        );
+        convertBuy.setSourceFileType("fund_asset_changes");
+        convertBuy.setBybitDescription("Small Balance Conversion");
+
+        when(pendingBybitExtractedRowQueryService.loadNextBatch(10)).thenReturn(List.of(convertSell));
+        when(bybitExtractedEventRepository.findById(convertSell.getId())).thenReturn(Optional.of(convertSell));
+        when(bybitExtractedTradePairer.loadConvertCluster(convertSell)).thenReturn(List.of(convertSell, convertBuy));
+
+        BybitNormalizationService service = service();
+        int processed = service.processNextBatch(10);
+
+        assertThat(processed).isEqualTo(1);
+        ArgumentCaptor<NormalizedTransaction> captor = ArgumentCaptor.forClass(NormalizedTransaction.class);
+        verify(normalizedTransactionStore).upsert(captor.capture());
+        NormalizedTransaction saved = captor.getValue();
+        assertThat(saved.getType()).isEqualTo(NormalizedTransactionType.SWAP);
+        assertThat(saved.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        assertThat(saved.getFlows())
+                .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getRole() + ":" + flow.getQuantityDelta())
+                .containsExactlyInAnyOrder(
+                        "ZAMA:SELL:-11.585",
+                        "MNT:BUY:0.4940094251864499"
+                );
+        verify(bybitExtractedEventRepository).save(convertSell);
+        verify(bybitExtractedEventRepository).save(convertBuy);
+    }
+
+    @Test
     void extractedOnChainEarnSubscriptionPairBecomesConfirmedStakingDeposit() {
         BybitExtractedEvent ethLeg = extractedLiquidStakingRow(
                 "cmeth-eth-leg",
@@ -421,6 +506,49 @@ class BybitNormalizationServiceTest {
                 );
         verify(bybitExtractedEventRepository).save(ethLeg);
         verify(bybitExtractedEventRepository).save(cmethLeg);
+    }
+
+    @Test
+    void extractedEth20StakeMintPairBecomesConfirmedStakingDeposit() {
+        BybitExtractedEvent stakeLeg = extractedLiquidStakingRow(
+                "eth20-stake-leg",
+                "ETH",
+                "-0.709",
+                Instant.parse("2025-03-12T20:08:36Z")
+        );
+        stakeLeg.setBybitType("ETH 2.0");
+        stakeLeg.setBybitDescription("Stake");
+
+        BybitExtractedEvent mintLeg = extractedLiquidStakingRow(
+                "eth20-mint-leg",
+                "METH",
+                "0.66865026",
+                Instant.parse("2025-03-12T20:37:05Z")
+        );
+        mintLeg.setBybitType("ETH 2.0");
+        mintLeg.setBybitDescription("Mint");
+
+        when(pendingBybitExtractedRowQueryService.loadNextBatch(10)).thenReturn(List.of(stakeLeg));
+        when(bybitExtractedEventRepository.findById(stakeLeg.getId())).thenReturn(Optional.of(stakeLeg));
+        when(bybitExtractedTradePairer.findLiquidStakingCounterLeg(stakeLeg)).thenReturn(Optional.of(mintLeg));
+
+        BybitNormalizationService service = service();
+        int processed = service.processNextBatch(10);
+
+        assertThat(processed).isEqualTo(1);
+        ArgumentCaptor<NormalizedTransaction> captor = ArgumentCaptor.forClass(NormalizedTransaction.class);
+        verify(normalizedTransactionStore).upsert(captor.capture());
+        NormalizedTransaction saved = captor.getValue();
+        assertThat(saved.getType()).isEqualTo(NormalizedTransactionType.STAKING_DEPOSIT);
+        assertThat(saved.getStatus()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(saved.getFlows())
+                .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getRole() + ":" + flow.getQuantityDelta())
+                .containsExactlyInAnyOrder(
+                        "ETH:TRANSFER:-0.709",
+                        "METH:TRANSFER:0.66865026"
+                );
+        verify(bybitExtractedEventRepository).save(stakeLeg);
+        verify(bybitExtractedEventRepository).save(mintLeg);
     }
 
     @Test
@@ -634,6 +762,29 @@ class BybitNormalizationServiceTest {
         row.setBybitType("Convert");
         row.setCanonicalType("SWAP");
         row.setStatus(ExternalLedgerRawStatus.RAW);
+        row.setTimeUtc(timeUtc);
+        row.setAssetSymbol(assetSymbol);
+        row.setQuantityRaw(new BigDecimal(quantityRaw));
+        row.setBasisRelevant(true);
+        return row;
+    }
+
+    private BybitExtractedEvent extractedConvertRow(
+            String id,
+            String assetSymbol,
+            String quantityRaw,
+            String bybitType,
+            Instant timeUtc
+    ) {
+        BybitExtractedEvent row = new BybitExtractedEvent();
+        row.setId(id);
+        row.setUid("uid-1");
+        row.setWalletRef("BYBIT:uid-1");
+        row.setSourceFileType("uta_derivatives");
+        row.setBybitType(bybitType);
+        row.setBybitDescription("Currency convert");
+        row.setCanonicalType("SWAP");
+        row.setStatus(BybitExtractedEventStatus.RAW);
         row.setTimeUtc(timeUtc);
         row.setAssetSymbol(assetSymbol);
         row.setQuantityRaw(new BigDecimal(quantityRaw));

@@ -14,10 +14,11 @@ import org.springframework.stereotype.Component;
 
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 
 /**
- * Narrow audited override for zkSync Aave gateway selectors that currently escape into
+ * Narrow audited override for supported Aave gateway selectors that currently escape into
  * generic unwrap / LP fallback lanes.
  */
 @Component
@@ -30,6 +31,11 @@ public class ZkSyncAaveGatewayClassifier implements OnChainFamilyClassifier {
     private static final String NATIVE_ETH_SYMBOL = "ETH";
     private static final String WRAPPED_ETH_SYMBOL = "WETH";
     private static final String ZKSYNC_AAVE_RECEIPT_SYMBOL = "AZKSWETH";
+    private static final String BASE_AAVE_RECEIPT_SYMBOL = "AWETH";
+    private static final Map<NetworkId, String> DEPOSIT_ETH_RECEIPT_SYMBOLS = Map.of(
+            NetworkId.ZKSYNC, ZKSYNC_AAVE_RECEIPT_SYMBOL,
+            NetworkId.BASE, BASE_AAVE_RECEIPT_SYMBOL
+    );
 
     @Override
     public OnChainClassificationInsertionPoint insertionPoint() {
@@ -43,7 +49,7 @@ public class ZkSyncAaveGatewayClassifier implements OnChainFamilyClassifier {
 
     @Override
     public Optional<ClassificationDecision> classify(OnChainClassificationContext context) {
-        if (context == null || context.view() == null || context.view().networkId() != NetworkId.ZKSYNC) {
+        if (context == null || context.view() == null || context.view().networkId() == null) {
             return Optional.empty();
         }
         return switch (context.view().methodId()) {
@@ -55,6 +61,9 @@ public class ZkSyncAaveGatewayClassifier implements OnChainFamilyClassifier {
     }
 
     private Optional<ClassificationDecision> classifyWithdrawEth(OnChainClassificationContext context) {
+        if (context.view().networkId() != NetworkId.ZKSYNC) {
+            return Optional.empty();
+        }
         if (!hasOutbound(context.movementLegs(), ZKSYNC_AAVE_RECEIPT_SYMBOL)
                 || !hasInbound(context.movementLegs(), NATIVE_ETH_SYMBOL)) {
             return Optional.empty();
@@ -63,6 +72,9 @@ public class ZkSyncAaveGatewayClassifier implements OnChainFamilyClassifier {
     }
 
     private Optional<ClassificationDecision> classifySupplyWithPermit(OnChainClassificationContext context) {
+        if (context.view().networkId() != NetworkId.ZKSYNC) {
+            return Optional.empty();
+        }
         if (!hasOutbound(context.movementLegs(), WRAPPED_ETH_SYMBOL)
                 || !hasInbound(context.movementLegs(), ZKSYNC_AAVE_RECEIPT_SYMBOL)) {
             return Optional.empty();
@@ -71,8 +83,12 @@ public class ZkSyncAaveGatewayClassifier implements OnChainFamilyClassifier {
     }
 
     private Optional<ClassificationDecision> classifyDepositEth(OnChainClassificationContext context) {
+        String receiptSymbol = DEPOSIT_ETH_RECEIPT_SYMBOLS.get(context.view().networkId());
+        if (receiptSymbol == null) {
+            return Optional.empty();
+        }
         if (!hasOutbound(context.movementLegs(), NATIVE_ETH_SYMBOL)
-                || !hasInbound(context.movementLegs(), ZKSYNC_AAVE_RECEIPT_SYMBOL)) {
+                || !hasInbound(context.movementLegs(), receiptSymbol)) {
             return Optional.empty();
         }
         return Optional.of(build(context, NormalizedTransactionType.LENDING_DEPOSIT));

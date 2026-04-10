@@ -460,6 +460,74 @@ class LiFiBridgePairLinkServiceTest {
         assertThat(destination.getContinuityCandidate()).isTrue();
     }
 
+    @Test
+    @DisplayName("official-status miss falls back to unique Relay payout settlement for LI.FI source with canonical brand")
+    void officialStatusMissFallsBackToUniqueRelayPayoutSettlement() {
+        RawTransaction sourceRaw = new RawTransaction();
+        sourceRaw.setId("0x4bd7:BASE:" + WALLET);
+        sourceRaw.setTxHash("0x4bd7b04bc2864b0012f19300690ae5cacb2806fdcc0b1612664d98b5015b48f6");
+        sourceRaw.setNetworkId(NetworkId.BASE.name());
+        sourceRaw.setWalletAddress(WALLET);
+        sourceRaw.setRawData(new Document("input", "").append("to", "0x1231deb6f5749ef6ce6943a275a1d3e7486f4eae"));
+
+        NormalizedTransaction source = bridgeOut(
+                "0x4bd7b04bc2864b0012f19300690ae5cacb2806fdcc0b1612664d98b5015b48f6",
+                NetworkId.BASE,
+                "ETH",
+                null,
+                "-0.0116"
+        );
+        source.setProtocolName("LI.FI");
+        source.setProtocolVersion("V1");
+        source.setBlockTimestamp(Instant.parse("2025-09-20T16:53:55Z"));
+
+        RawTransaction destinationRaw = relayPayoutRawTransaction(
+                "0x2108883281ea4cd12eb27e4a540f9f008e149c1e8fe7a1348e80311c1f4d9ff8",
+                NetworkId.LINEA,
+                "0xf70da97812cb96acdf810712aa562db8dfa3dbef",
+                "11589601648149877"
+        );
+        NormalizedTransaction destination = externalTransferIn(
+                "0x2108883281ea4cd12eb27e4a540f9f008e149c1e8fe7a1348e80311c1f4d9ff8",
+                NetworkId.LINEA,
+                "ETH",
+                null,
+                "0.011589601648149877"
+        );
+        destination.setBlockTimestamp(Instant.parse("2025-09-20T16:56:18Z"));
+
+        when(liFiStatusGateway.fetchBridgeStatus(source.getTxHash())).thenReturn(Optional.empty());
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class))).thenReturn(List.of(destination));
+        when(rawTransactionRepository.findById(destination.getId())).thenReturn(Optional.of(destinationRaw));
+        when(protocolRegistryService.lookup(NetworkId.LINEA, "0xf70da97812cb96acdf810712aa562db8dfa3dbef"))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        "0xf70da97812cb96acdf810712aa562db8dfa3dbef",
+                        Set.of(NetworkId.BASE, NetworkId.LINEA),
+                        ProtocolRegistryFamily.AGGREGATOR,
+                        ProtocolRegistryRole.GAS_PAYER,
+                        null,
+                        ConfidenceLevel.HIGH,
+                        "Relay",
+                        "Solver",
+                        false,
+                        null
+                )));
+
+        service.link(sourceRaw, source);
+
+        ArgumentCaptor<List<NormalizedTransaction>> updatesCaptor = ArgumentCaptor.forClass(List.class);
+        verify(normalizedTransactionRepository).saveAll(updatesCaptor.capture());
+        assertThat(updatesCaptor.getValue()).extracting(NormalizedTransaction::getTxHash)
+                .containsExactlyInAnyOrder(source.getTxHash(), destination.getTxHash());
+        assertThat(source.getMatchedCounterparty()).isEqualTo(destination.getTxHash());
+        assertThat(source.getCorrelationId()).isEqualTo("bridge:lifi:" + source.getTxHash());
+        assertThat(destination.getType()).isEqualTo(NormalizedTransactionType.BRIDGE_IN);
+        assertThat(destination.getProtocolName()).isEqualTo("Relay");
+        assertThat(destination.getMatchedCounterparty()).isEqualTo(source.getTxHash());
+        assertThat(destination.getCorrelationId()).isEqualTo(source.getCorrelationId());
+        assertThat(destination.getContinuityCandidate()).isTrue();
+    }
+
     private RawTransaction sourceRawTransaction(String txHash, NetworkId networkId) {
         RawTransaction rawTransaction = new RawTransaction();
         rawTransaction.setId(txHash + ":" + networkId + ":" + WALLET);
@@ -501,6 +569,28 @@ class LiFiBridgePairLinkServiceTest {
                                         .append("value", value)
                                         .append("isError", "0")
                         ))));
+        return rawTransaction;
+    }
+
+    private RawTransaction relayPayoutRawTransaction(
+            String txHash,
+            NetworkId networkId,
+            String settlementSender,
+            String value
+    ) {
+        RawTransaction rawTransaction = new RawTransaction();
+        rawTransaction.setId(txHash + ":" + networkId + ":" + WALLET);
+        rawTransaction.setTxHash(txHash);
+        rawTransaction.setNetworkId(networkId.name());
+        rawTransaction.setWalletAddress(WALLET);
+        rawTransaction.setRawData(new Document("from", settlementSender)
+                .append("to", WALLET)
+                .append("input", "0xd8461cfc")
+                .append("methodId", "0xd8461cfc")
+                .append("functionName", "")
+                .append("value", value)
+                .append("explorer", new Document("tokenTransfers", List.of())
+                        .append("internalTransfers", List.of())));
         return rawTransaction;
     }
 

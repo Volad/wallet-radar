@@ -83,6 +83,7 @@ public class MovementLegExtractor {
         }
 
         legs = OneInchNativeSettlementSupport.enrichLegs(view, nativeAssetSymbolResolver, legs);
+        legs = ParaSwapNativeSettlementSupport.enrichLegs(view, nativeAssetSymbolResolver, legs);
 
         if (walletAddress.equals(view.fromAddress())) {
             BigInteger gasFeeValue = gasFeeValue(view);

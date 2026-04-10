@@ -363,7 +363,7 @@ public class SessionTransactionsQueryService {
             case SWAP -> "SWAP";
             case WRAP -> "WRAP";
             case UNWRAP -> "UNWRAP";
-            case EXTERNAL_TRANSFER_IN, BRIDGE_IN -> "EXTERNAL_INBOUND";
+            case EXTERNAL_TRANSFER_IN, SPONSORED_GAS_IN, BRIDGE_IN -> "EXTERNAL_INBOUND";
             case EXTERNAL_TRANSFER_OUT, BRIDGE_OUT, INTERNAL_TRANSFER -> "EXTERNAL_TRANSFER_OUT";
             case LP_ENTRY, LP_ENTRY_REQUEST, LP_ENTRY_SETTLEMENT -> "LP_ENTRY";
             case LP_EXIT, LP_EXIT_REQUEST, LP_EXIT_SETTLEMENT -> "LP_EXIT";

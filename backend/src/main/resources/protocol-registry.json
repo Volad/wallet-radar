@@ -1382,6 +1382,40 @@
       ],
       "confidence": "HIGH"
     },
+    "── AGGREGATORS: Relay Gas Top-Up ─────────────────────────────────────": {},
+    "0xf70da97812cb96acdf810712aa562db8dfa3dbef": {
+      "name": "Relay Solver Payout",
+      "protocol": "Relay",
+      "version": "Solver",
+      "family": "AGGREGATOR",
+      "role": "GAS_PAYER",
+      "networks": [
+        "BASE",
+        "LINEA"
+      ],
+      "confidence": "HIGH"
+    },
+    "0x91604f590d66ace8975eed6bd16cf55647d1c499": {
+      "name": "Relay Solver Payout",
+      "protocol": "Relay",
+      "version": "Solver",
+      "family": "AGGREGATOR",
+      "role": "GAS_PAYER",
+      "networks": [
+        "ETHEREUM",
+        "ARBITRUM",
+        "OPTIMISM",
+        "BASE",
+        "BSC",
+        "AVALANCHE",
+        "MANTLE",
+        "LINEA",
+        "UNICHAIN",
+        "KATANA",
+        "PLASMA"
+      ],
+      "confidence": "HIGH"
+    },
     "0x6f26bf09b1c792e3228e5467807a900a503c0281": {
       "name": "Across SpokePool",
       "protocol": "Across",

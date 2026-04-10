@@ -23,7 +23,8 @@ public record SessionAssetLedgerResponse(
             BigDecimal avcoUsd,
             BigDecimal realisedPnlUsd,
             BigDecimal gasPaidUsd,
-            List<UncoveredBucket> uncoveredBuckets
+            List<UncoveredBucket> uncoveredBuckets,
+            List<ShortfallSource> shortfallSources
     ) {
     }
 
@@ -43,6 +44,17 @@ public record SessionAssetLedgerResponse(
             Boolean hasIncompleteHistory,
             Boolean hasUnresolvedFlags,
             Integer unresolvedFlagCount
+    ) {
+    }
+
+    public record ShortfallSource(
+            String walletAddress,
+            String networkId,
+            String txHash,
+            Instant blockTimestamp,
+            String normalizedType,
+            String protocolName,
+            BigDecimal quantityShortfall
     ) {
     }
 

@@ -212,6 +212,39 @@ class BybitExtractionServiceTest {
     }
 
     @Test
+    void transactionLogCurrencyBuyBecomesSwapConvertLeg() {
+        IntegrationRawEvent rawEvent = rawEvent(
+                "integration-1",
+                BybitIntegrationStream.TRANSACTION_LOG,
+                "tx-log-convert-1",
+                """
+                        {
+                          "id":"10419130513445426949046272336253781",
+                          "currency":"ETH",
+                          "type":"CURRENCY_BUY",
+                          "side":"None",
+                          "qty":"0",
+                          "tradePrice":"0",
+                          "change":"0.70215876",
+                          "transactionTime":"1744891736725"
+                        }
+                        """
+        );
+
+        List<BybitExtractedEvent> events = service.extract(rawEvent);
+
+        assertThat(events).hasSize(1);
+        BybitExtractedEvent event = events.getFirst();
+        assertThat(event.getSourceFileType()).isEqualTo("uta_derivatives");
+        assertThat(event.getCanonicalType()).isEqualTo("SWAP");
+        assertThat(event.getBybitType()).isEqualTo("CURRENCY_BUY");
+        assertThat(event.getBybitDescription()).isEqualTo("Currency convert");
+        assertThat(event.getAssetSymbol()).isEqualTo("ETH");
+        assertThat(event.getQuantityRaw()).isEqualByComparingTo("0.70215876");
+        assertThat(event.getBasisRelevant()).isTrue();
+    }
+
+    @Test
     void fundingHistoryOnChainEarnSubscriptionInEthFamilyBecomesStakingDeposit() {
         IntegrationRawEvent rawEvent = rawEvent(
                 "integration-1",
@@ -239,6 +272,68 @@ class BybitExtractionServiceTest {
         assertThat(event.getBybitDescription()).isEqualTo("On-chain Earn subscription");
         assertThat(event.getCanonicalType()).isEqualTo("STAKING_DEPOSIT");
         assertThat(event.getQuantityRaw()).isEqualByComparingTo("0.10687862");
+        assertThat(event.getBasisRelevant()).isTrue();
+    }
+
+    @Test
+    void fundingHistoryEth20StakeBecomesStakingDeposit() {
+        IntegrationRawEvent rawEvent = rawEvent(
+                "integration-1",
+                BybitIntegrationStream.FUNDING_HISTORY,
+                "funding-eth20-stake-1",
+                """
+                        {
+                          "memberId":"33625378",
+                          "currency":"ETH",
+                          "ioDirection":"O",
+                          "txnAmt":"0.709",
+                          "afterAmt":"0",
+                          "createTime":"1741810116",
+                          "showBusiTypeEn":"ETH 2.0",
+                          "descriptionEn":"Stake"
+                        }
+                        """
+        );
+
+        List<BybitExtractedEvent> events = service.extract(rawEvent);
+
+        assertThat(events).hasSize(1);
+        BybitExtractedEvent event = events.get(0);
+        assertThat(event.getBybitType()).isEqualTo("ETH 2.0");
+        assertThat(event.getBybitDescription()).isEqualTo("Stake");
+        assertThat(event.getCanonicalType()).isEqualTo("STAKING_DEPOSIT");
+        assertThat(event.getQuantityRaw()).isEqualByComparingTo("-0.709");
+        assertThat(event.getBasisRelevant()).isTrue();
+    }
+
+    @Test
+    void fundingHistoryEth20MintBecomesStakingDeposit() {
+        IntegrationRawEvent rawEvent = rawEvent(
+                "integration-1",
+                BybitIntegrationStream.FUNDING_HISTORY,
+                "funding-eth20-mint-1",
+                """
+                        {
+                          "memberId":"33625378",
+                          "currency":"METH",
+                          "ioDirection":"I",
+                          "txnAmt":"0.66865026",
+                          "afterAmt":"0.66865026",
+                          "createTime":"1741811825",
+                          "showBusiTypeEn":"ETH 2.0",
+                          "descriptionEn":"Mint"
+                        }
+                        """
+        );
+
+        List<BybitExtractedEvent> events = service.extract(rawEvent);
+
+        assertThat(events).hasSize(1);
+        BybitExtractedEvent event = events.get(0);
+        assertThat(event.getBybitType()).isEqualTo("ETH 2.0");
+        assertThat(event.getBybitDescription()).isEqualTo("Mint");
+        assertThat(event.getCanonicalType()).isEqualTo("STAKING_DEPOSIT");
+        assertThat(event.getQuantityRaw()).isEqualByComparingTo("0.66865026");
         assertThat(event.getBasisRelevant()).isTrue();
     }
 

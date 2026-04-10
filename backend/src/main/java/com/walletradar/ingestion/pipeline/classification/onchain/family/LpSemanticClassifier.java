@@ -1,10 +1,14 @@
 package com.walletradar.ingestion.pipeline.classification.onchain.family;
 
 import com.walletradar.domain.transaction.normalized.ClassificationSource;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.ingestion.pipeline.classification.ClassificationDecision;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassificationContext;
 import com.walletradar.ingestion.pipeline.classification.onchain.protocol.ProtocolSemanticHint;
+import com.walletradar.ingestion.pipeline.classification.reason.ClassificationReasonCode;
+import com.walletradar.ingestion.pipeline.classification.support.BlockScoutNativeSettlementClarificationSupport;
+import com.walletradar.ingestion.pipeline.classification.support.NativeAssetSymbolResolver;
 import com.walletradar.ingestion.pipeline.classification.support.OnChainClassificationSupport;
 import org.springframework.core.Ordered;
 import org.springframework.stereotype.Component;
@@ -14,6 +18,12 @@ import java.util.Optional;
 
 @Component
 public class LpSemanticClassifier implements OnChainFamilyClassifier {
+
+    private final NativeAssetSymbolResolver nativeAssetSymbolResolver;
+
+    public LpSemanticClassifier(NativeAssetSymbolResolver nativeAssetSymbolResolver) {
+        this.nativeAssetSymbolResolver = nativeAssetSymbolResolver;
+    }
 
     @Override
     public OnChainClassificationInsertionPoint insertionPoint() {
@@ -34,6 +44,24 @@ public class LpSemanticClassifier implements OnChainFamilyClassifier {
             Optional<ProtocolSemanticHint> hint = context.protocolSemantics().firstBySuggestedType(type);
             if (hint.isPresent()) {
                 ProtocolSemanticHint value = hint.orElseThrow();
+                if (BlockScoutNativeSettlementClarificationSupport.requiresReceiptClarification(
+                        context.view(),
+                        context.movementLegs(),
+                        type,
+                        nativeAssetSymbolResolver
+                )) {
+                    return Optional.of(FamilyDecisionSupport.buildWithView(
+                            context.view(),
+                            type,
+                            NormalizedTransactionStatus.PENDING_CLARIFICATION,
+                            ClassificationSource.PROTOCOL_REGISTRY,
+                            value.confidence(),
+                            OnChainClassificationSupport.toFlows(context.movementLegs(), type),
+                            List.of(ClassificationReasonCode.NATIVE_SETTLEMENT_TRANSFER_EVIDENCE_REQUIRED.code()),
+                            value.protocolName(),
+                            value.protocolVersion()
+                    ));
+                }
                 return Optional.of(FamilyDecisionSupport.buildWithView(
                         context.view(),
                         type,

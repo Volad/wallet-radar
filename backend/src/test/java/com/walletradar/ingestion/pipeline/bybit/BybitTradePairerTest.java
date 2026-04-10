@@ -91,6 +91,52 @@ class BybitTradePairerTest {
         assertThat(queryText).contains("2025-03-13T04:42:40Z");
     }
 
+    @Test
+    void eth20StakeMintPairerAllowsAsymmetricDescriptionsWithinWindow() {
+        ExternalLedgerRaw stake = liquidStaking("stake-leg", "ETH", "-0.709", Instant.parse("2025-03-12T20:08:36Z"));
+        stake.setBybitType("ETH 2.0");
+        stake.setBybitDescription("Stake");
+
+        ExternalLedgerRaw mint = liquidStaking("mint-leg", "METH", "0.66865026", Instant.parse("2025-03-12T20:37:05Z"));
+        mint.setBybitType("ETH 2.0");
+        mint.setBybitDescription("Mint");
+
+        when(mongoOperations.find(any(Query.class), eq(ExternalLedgerRaw.class))).thenReturn(List.of(mint));
+
+        Optional<ExternalLedgerRaw> pair = new BybitTradePairer(mongoOperations).findLiquidStakingCounterLeg(stake);
+
+        assertThat(pair).isPresent();
+        assertThat(pair.orElseThrow().getId()).isEqualTo("mint-leg");
+
+        org.mockito.ArgumentCaptor<Query> captor = org.mockito.ArgumentCaptor.forClass(Query.class);
+        verify(mongoOperations).find(captor.capture(), eq(ExternalLedgerRaw.class));
+        String queryText = String.valueOf(captor.getValue().getQueryObject());
+        assertThat(queryText).contains("ETH 2.0");
+        assertThat(queryText).doesNotContain("bybitDescription");
+    }
+
+    @Test
+    void convertClusterQueryAcceptsCurrencyBuyCurrencySellAndConvertAcrossCase() {
+        ExternalLedgerRaw sell = new ExternalLedgerRaw();
+        sell.setId("convert-sell");
+        sell.setStatus(ExternalLedgerRawStatus.RAW);
+        sell.setSourceFileType("fund_asset_changes");
+        sell.setUid("33625378");
+        sell.setBybitType("Convert");
+        sell.setTimeUtc(Instant.parse("2025-04-17T12:08:56Z"));
+
+        when(mongoOperations.find(any(Query.class), eq(ExternalLedgerRaw.class))).thenReturn(List.of(sell));
+
+        new BybitTradePairer(mongoOperations).loadConvertCluster(sell);
+
+        org.mockito.ArgumentCaptor<Query> captor = org.mockito.ArgumentCaptor.forClass(Query.class);
+        verify(mongoOperations).find(captor.capture(), eq(ExternalLedgerRaw.class));
+        String queryText = String.valueOf(captor.getValue().getQueryObject()).toLowerCase();
+        assertThat(queryText).contains("currency_buy");
+        assertThat(queryText).contains("currency_sell");
+        assertThat(queryText).contains("convert");
+    }
+
     private ExternalLedgerRaw trade(String id, String direction, Instant timeUtc) {
         ExternalLedgerRaw row = new ExternalLedgerRaw();
         row.setId(id);

@@ -16,6 +16,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.regex.Pattern;
 
 /**
  * Greedy pairer for extracted Bybit trade-like staging rows.
@@ -27,6 +28,8 @@ public class BybitExtractedTradePairer {
     private static final long WINDOW_SECONDS = 5L;
     private static final long CONVERT_WINDOW_SECONDS = 2L;
     private static final long LIQUID_STAKING_WINDOW_SECONDS = 6L * 3600L;
+    private static final List<String> CONVERT_TYPES = List.of("convert", "currency_buy", "currency_sell");
+    private static final Pattern CONVERT_TYPE_PATTERN = Pattern.compile("^(convert|currency_buy|currency_sell)$", Pattern.CASE_INSENSITIVE);
 
     private final MongoOperations mongoOperations;
 
@@ -67,14 +70,14 @@ public class BybitExtractedTradePairer {
 
     public List<BybitExtractedEvent> loadConvertCluster(BybitExtractedEvent row) {
         Instant center = row.getTimeUtc();
-        if (center == null || row.getUid() == null) {
+        if (center == null || row.getUid() == null || !isConvertType(row.getBybitType())) {
             return List.of(row);
         }
         Query query = new Query(new Criteria().andOperator(
                 Criteria.where("status").is(BybitExtractedEventStatus.RAW),
                 Criteria.where("sourceFileType").is(row.getSourceFileType()),
                 Criteria.where("uid").is(row.getUid()),
-                Criteria.where("bybitType").is(row.getBybitType()),
+                Criteria.where("bybitType").regex(CONVERT_TYPE_PATTERN),
                 Criteria.where("timeUtc").gte(center.minusSeconds(CONVERT_WINDOW_SECONDS)).lte(center.plusSeconds(CONVERT_WINDOW_SECONDS))
         ));
         query.with(Sort.by(Sort.Order.asc("timeUtc"), Sort.Order.asc("_id")));
@@ -112,10 +115,16 @@ public class BybitExtractedTradePairer {
                 Criteria.where("timeUtc").gte(center.minusSeconds(LIQUID_STAKING_WINDOW_SECONDS))
                         .lte(center.plusSeconds(LIQUID_STAKING_WINDOW_SECONDS))
         ));
-        if (row.getBybitDescription() != null && !row.getBybitDescription().isBlank()) {
+        if (requiresExactLiquidStakingDescription(row)) {
             criteria.add(Criteria.where("bybitDescription").is(row.getBybitDescription()));
         }
         return new Criteria().andOperator(criteria.toArray(Criteria[]::new));
+    }
+
+    private boolean requiresExactLiquidStakingDescription(BybitExtractedEvent row) {
+        return row.getBybitDescription() != null
+                && !row.getBybitDescription().isBlank()
+                && !"eth 2.0".equals(normalize(row.getBybitType()));
     }
 
     private boolean sameLiquidStakingFamily(BybitExtractedEvent left, BybitExtractedEvent right) {
@@ -139,6 +148,10 @@ public class BybitExtractedTradePairer {
 
     private String normalize(String value) {
         return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private boolean isConvertType(String bybitType) {
+        return CONVERT_TYPES.contains(normalize(bybitType));
     }
 
     private double tradeScore(BybitExtractedEvent row, BybitExtractedEvent candidate) {

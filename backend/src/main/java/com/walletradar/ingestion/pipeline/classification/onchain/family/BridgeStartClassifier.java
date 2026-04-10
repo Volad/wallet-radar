@@ -124,8 +124,8 @@ public class BridgeStartClassifier implements OnChainFamilyClassifier {
 
     private Optional<ClassificationDecision> classifyLiFiRouteBridge(OnChainClassificationContext context) {
         boolean explicitLiFiRouteSelector = LI_FI_DIAMOND_ROUTE_SELECTORS.contains(context.view().methodId());
-        boolean knownLiFiDiamond = isKnownLiFiDiamond(context);
-        if (!explicitLiFiRouteSelector && !knownLiFiDiamond) {
+        Optional<ProtocolRegistryEntry> knownLiFiDiamondEntry = knownLiFiDiamondEntry(context);
+        if (!explicitLiFiRouteSelector && knownLiFiDiamondEntry.isEmpty()) {
             return Optional.empty();
         }
         if ("0x".equals(context.view().methodId())) {
@@ -137,13 +137,14 @@ public class BridgeStartClassifier implements OnChainFamilyClassifier {
         if (!LiFiRouteSupport.hasRouteTag(context.view())) {
             return Optional.empty();
         }
+        ProtocolRegistryEntry entry = knownLiFiDiamondEntry.orElse(null);
         return Optional.of(build(
                 context,
                 ClassificationSource.HEURISTIC,
-                ConfidenceLevel.MEDIUM,
+                entry != null ? entry.confidence() : ConfidenceLevel.MEDIUM,
                 List.of(),
-                null,
-                null
+                entry != null ? entry.protocolName() : null,
+                entry != null ? entry.protocolVersion() : null
         ));
     }
 
@@ -222,14 +223,20 @@ public class BridgeStartClassifier implements OnChainFamilyClassifier {
                 || (context.view().rawValue() != null && context.view().rawValue().signum() > 0);
     }
 
-    private boolean isKnownLiFiDiamond(OnChainClassificationContext context) {
+    private Optional<ProtocolRegistryEntry> knownLiFiDiamondEntry(OnChainClassificationContext context) {
         return protocolRegistryService.lookup(context.view().networkId(), context.view().toAddress())
                 .filter(entry -> entry.family() == ProtocolRegistryFamily.BRIDGE)
                 .filter(entry -> entry.role() == ProtocolRegistryRole.BRIDGE_ENTRY
                         || entry.role() == ProtocolRegistryRole.ROUTER)
-                .filter(entry -> entry.protocolName() != null
-                        && entry.protocolName().toLowerCase(Locale.ROOT).contains("lifi"))
-                .isPresent();
+                .filter(entry -> isLiFiProtocol(entry.protocolName()));
+    }
+
+    private boolean isLiFiProtocol(String protocolName) {
+        if (protocolName == null || protocolName.isBlank()) {
+            return false;
+        }
+        String normalized = protocolName.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]", "");
+        return normalized.contains("lifi");
     }
 
     private boolean hasNativeOutbound(OnChainClassificationContext context) {

@@ -2,15 +2,21 @@ package com.walletradar.ingestion.pipeline.classification.onchain.family;
 
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.ingestion.pipeline.classification.ClassificationDecision;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassificationContext;
 import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryEntry;
 import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryService;
+import com.walletradar.ingestion.pipeline.classification.reason.ClassificationReasonCode;
+import com.walletradar.ingestion.pipeline.classification.support.BlockScoutNativeSettlementClarificationSupport;
+import com.walletradar.ingestion.pipeline.classification.support.LpPositionCorrelationSupport;
 import com.walletradar.ingestion.pipeline.classification.support.LpPositionLifecycleSupport;
+import com.walletradar.ingestion.pipeline.classification.support.NativeAssetSymbolResolver;
 import com.walletradar.ingestion.pipeline.classification.support.RawLeg;
 import com.walletradar.ingestion.pipeline.classification.support.RegistryDecisionSupport;
 import com.walletradar.ingestion.pipeline.classification.support.RegistryMethodDispatchSupport;
+import com.walletradar.ingestion.pipeline.classification.support.ParityFlowSupport;
 import org.springframework.core.Ordered;
 import org.springframework.stereotype.Component;
 
@@ -25,9 +31,14 @@ public class LpRegistryClassifier implements OnChainFamilyClassifier {
     private static final String PENDLE_ZAP_OUT_SINGLE_TOKEN_SELECTOR = "0x8b284b0e";
 
     private final ProtocolRegistryService protocolRegistryService;
+    private final NativeAssetSymbolResolver nativeAssetSymbolResolver;
 
-    public LpRegistryClassifier(ProtocolRegistryService protocolRegistryService) {
+    public LpRegistryClassifier(
+            ProtocolRegistryService protocolRegistryService,
+            NativeAssetSymbolResolver nativeAssetSymbolResolver
+    ) {
         this.protocolRegistryService = protocolRegistryService;
+        this.nativeAssetSymbolResolver = nativeAssetSymbolResolver;
     }
 
     @Override
@@ -65,11 +76,29 @@ public class LpRegistryClassifier implements OnChainFamilyClassifier {
                     protocolRegistryService
             );
             if (type != null) {
+                List<String> pendingReasons = pendingClarificationReasons(context, entry.get(), type);
+                String correlationId = LpPositionCorrelationSupport.correlationId(
+                        context.view(),
+                        type,
+                        entry.get().protocolName()
+                );
+                if (!pendingReasons.isEmpty()) {
+                    return Optional.of(RegistryDecisionSupport.registryResult(
+                            context.view(),
+                            entry.get(),
+                            type,
+                            NormalizedTransactionStatus.PENDING_CLARIFICATION,
+                            ParityFlowSupport.flows(context.view(), context.movementLegs(), type),
+                            pendingReasons,
+                            correlationId
+                    ));
+                }
                 return Optional.of(RegistryDecisionSupport.registryResult(
                         context.view(),
                         entry.get(),
                         type,
-                        context.movementLegs()
+                        context.movementLegs(),
+                        correlationId
                 ));
             }
 
@@ -77,11 +106,29 @@ public class LpRegistryClassifier implements OnChainFamilyClassifier {
                 NormalizedTransactionType multicallType =
                         LpPositionLifecycleSupport.resolvePositionManagerMulticallType(context.view(), context.movementLegs());
                 if (multicallType != null) {
+                    List<String> pendingReasons = pendingClarificationReasons(context, entry.get(), multicallType);
+                    String correlationId = LpPositionCorrelationSupport.correlationId(
+                            context.view(),
+                            multicallType,
+                            entry.get().protocolName()
+                    );
+                    if (!pendingReasons.isEmpty()) {
+                        return Optional.of(RegistryDecisionSupport.registryResult(
+                                context.view(),
+                                entry.get(),
+                                multicallType,
+                                NormalizedTransactionStatus.PENDING_CLARIFICATION,
+                                ParityFlowSupport.flows(context.view(), context.movementLegs(), multicallType),
+                                pendingReasons,
+                                correlationId
+                        ));
+                    }
                     return Optional.of(RegistryDecisionSupport.registryResult(
                             context.view(),
                             entry.get(),
                             multicallType,
-                            context.movementLegs()
+                            context.movementLegs(),
+                            correlationId
                     ));
                 }
             }
@@ -91,11 +138,17 @@ public class LpRegistryClassifier implements OnChainFamilyClassifier {
             NormalizedTransactionType type =
                     LpPositionLifecycleSupport.resolveDexStakeContractType(context.view(), context.movementLegs());
             if (type != null) {
+                String correlationId = LpPositionCorrelationSupport.correlationId(
+                        context.view(),
+                        type,
+                        entry.get().protocolName()
+                );
                 return Optional.of(RegistryDecisionSupport.registryResult(
                         context.view(),
                         entry.get(),
                         type,
-                        context.movementLegs()
+                        context.movementLegs(),
+                        correlationId
                 ));
             }
 
@@ -103,11 +156,17 @@ public class LpRegistryClassifier implements OnChainFamilyClassifier {
                 NormalizedTransactionType multicallType =
                         LpPositionLifecycleSupport.resolveDexStakeContractMulticallType(context.view(), context.movementLegs());
                 if (multicallType != null) {
+                    String correlationId = LpPositionCorrelationSupport.correlationId(
+                            context.view(),
+                            multicallType,
+                            entry.get().protocolName()
+                    );
                     return Optional.of(RegistryDecisionSupport.registryResult(
                             context.view(),
                             entry.get(),
                             multicallType,
-                            context.movementLegs()
+                            context.movementLegs(),
+                            correlationId
                     ));
                 }
             }
@@ -151,5 +210,25 @@ public class LpRegistryClassifier implements OnChainFamilyClassifier {
                 flows,
                 List.of()
         ));
+    }
+
+    private List<String> pendingClarificationReasons(
+            OnChainClassificationContext context,
+            ProtocolRegistryEntry entry,
+            NormalizedTransactionType type
+    ) {
+        List<String> reasons = new ArrayList<>();
+        if (BlockScoutNativeSettlementClarificationSupport.requiresReceiptClarification(
+                context.view(),
+                context.movementLegs(),
+                type,
+                nativeAssetSymbolResolver
+        )) {
+            reasons.add(ClassificationReasonCode.NATIVE_SETTLEMENT_TRANSFER_EVIDENCE_REQUIRED.code());
+        }
+        if (LpPositionCorrelationSupport.requiresReceiptClarification(context.view(), type)) {
+            reasons.add(ClassificationReasonCode.LP_POSITION_CORRELATION_REQUIRED.code());
+        }
+        return List.copyOf(reasons);
     }
 }

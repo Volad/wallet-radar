@@ -59,6 +59,17 @@ public class AssetLedgerController {
                                         bucket.hasUnresolvedFlags(),
                                         bucket.unresolvedFlagCount()
                                 ))
+                                .toList(),
+                        view.current().shortfallSources().stream()
+                                .map(source -> new SessionAssetLedgerResponse.ShortfallSource(
+                                        source.walletAddress(),
+                                        source.networkId(),
+                                        source.txHash(),
+                                        source.blockTimestamp(),
+                                        source.normalizedType(),
+                                        source.protocolName(),
+                                        source.quantityShortfall()
+                                ))
                                 .toList()
                 ),
                 view.timeline().stream()

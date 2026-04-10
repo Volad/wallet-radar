@@ -27,6 +27,10 @@ import {
   SessionResponse,
 } from '../../core/models/wallet-api.models';
 import { WalletApiService } from '../../core/services/wallet-api.service';
+import {
+  formatCompactDateTimeWithSeconds,
+  formatDateTimeWithSeconds,
+} from '../../core/utils/date-time.util';
 
 type PageState =
   | { readonly status: 'loading' }
@@ -107,6 +111,8 @@ interface MarkerView {
   readonly lifecycleKind: string | null;
   readonly networkLabel: string;
   readonly quantityDelta: number;
+  readonly netQuantityDelta: number;
+  readonly displayQuantityDerived: boolean;
   readonly amountUsd: number | null;
   readonly quantityAfter: number;
   readonly coveredQuantityAfter: number;
@@ -138,6 +144,11 @@ interface FlowChipView {
   readonly assetSymbol: string;
   readonly quantityLabel: string;
   readonly className: string;
+}
+
+interface TransferEndpointView {
+  readonly fromAddress: string | null;
+  readonly toAddress: string | null;
 }
 
 interface RenderedMarkerView {
@@ -1192,19 +1203,7 @@ export class AssetLedgerPageComponent {
   }
 
   formatEventDateTime(value: string): string {
-    if (value.length === 0) {
-      return '—';
-    }
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) {
-      return value;
-    }
-    return new Intl.DateTimeFormat('en-US', {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    }).format(date);
+    return formatDateTimeWithSeconds(value);
   }
 
   isLogRowActive(markerId: string): boolean {
@@ -1596,6 +1595,7 @@ export class AssetLedgerPageComponent {
     const eventById = new Map(
       ledger.events.map((event) => [event.eventGroupId ?? event.normalizedTransactionId ?? event.txHash ?? crypto.randomUUID(), event] as const)
     );
+    const internalTransferEndpoints = this.buildInternalTransferEndpointLookup(ledger.timeline, eventById);
     const yProjection = this.buildYProjection(ledger.timeline, ledger.events, ledger.familyIdentity);
 
     return ledger.timeline.map((entry, index, entries) => {
@@ -1604,10 +1604,12 @@ export class AssetLedgerPageComponent {
       const previous = index > 0 ? entries[index - 1] : null;
       const typeKey = this.normalizeTypeKey(entry.normalizedType);
       const meta = this.metaForType(typeKey);
-      const primaryFlow = this.primaryFlow(event, ledger.familyIdentity);
+      const primaryFlow = this.primaryFlow(entry, event, ledger.familyIdentity);
       const displayQuote = this.resolveDisplayQuote(event, ledger.familyIdentity, primaryFlow);
+      const displayQuantity = this.resolveDisplayQuantity(entry, primaryFlow);
       const avcoAfter = entry.avcoAfterUsd;
-      const path = this.resolvePath(entry, event, walletMeta);
+      const transferEndpoints = this.resolveTransferEndpoints(entry, event, internalTransferEndpoints);
+      const path = this.resolvePath(entry, event, walletMeta, transferEndpoints);
       const displayVenue = this.resolveVenueLabel(entry, event);
 
       return {
@@ -1622,7 +1624,9 @@ export class AssetLedgerPageComponent {
         displayVenue,
         lifecycleKind: entry.lifecycleKind,
         networkLabel: this.resolveNetworkLabel(entry, event),
-        quantityDelta: entry.quantityDelta ?? 0,
+        quantityDelta: displayQuantity.value,
+        netQuantityDelta: entry.quantityDelta ?? 0,
+        displayQuantityDerived: displayQuantity.derived,
         amountUsd: displayQuote.amountUsd,
         quantityAfter: entry.quantityAfter ?? 0,
         coveredQuantityAfter: entry.coveredQuantityAfter ?? 0,
@@ -1637,8 +1641,8 @@ export class AssetLedgerPageComponent {
         priceUsd: displayQuote.unitPriceUsd,
         priceSource: displayQuote.priceSource,
         primaryFlowLabel: primaryFlow === null ? null : `${primaryFlow.assetSymbol ?? 'UNKNOWN'} ${this.formatSignedQuantity(primaryFlow.quantityDelta ?? null, 4)}`,
-        fromAddress: entry.fromAddress ?? event?.fromAddress ?? null,
-        toAddress: entry.toAddress ?? event?.toAddress ?? null,
+        fromAddress: transferEndpoints.fromAddress,
+        toAddress: transferEndpoints.toAddress,
         pathFrom: path.fromLabel,
         pathTo: path.toLabel,
         pathFromTitle: path.fromTitle,
@@ -1656,8 +1660,19 @@ export class AssetLedgerPageComponent {
     events: ReadonlyArray<SessionAssetLedgerEventOverlayResponse>,
     familyIdentity: string
   ): (value: number | null) => number {
-    const prices = events
-      .map((event) => this.resolveDisplayQuote(event, familyIdentity, this.primaryFlow(event, familyIdentity)).unitPriceUsd)
+    const eventById = new Map(
+      events.map((event) => [event.eventGroupId ?? event.normalizedTransactionId ?? event.txHash ?? crypto.randomUUID(), event] as const)
+    );
+    const prices = timeline
+      .map((entry) => {
+        const id = entry.eventGroupId ?? entry.normalizedTransactionId ?? entry.txHash ?? '';
+        const event = eventById.get(id) ?? null;
+        return this.resolveDisplayQuote(
+          event,
+          familyIdentity,
+          event === null ? null : this.primaryFlow(entry, event, familyIdentity)
+        ).unitPriceUsd;
+      })
       .filter((value): value is number => value !== null);
     const avcos = timeline
       .map((entry) => entry.avcoAfterUsd)
@@ -1679,7 +1694,8 @@ export class AssetLedgerPageComponent {
   private resolvePath(
     entry: SessionAssetLedgerTimelineEntryResponse,
     event: SessionAssetLedgerEventOverlayResponse | null,
-    walletMeta: ReadonlyMap<string, WalletVisualMeta>
+    walletMeta: ReadonlyMap<string, WalletVisualMeta>,
+    transferEndpoints: TransferEndpointView
   ): {
     fromLabel: string;
     toLabel: string;
@@ -1688,8 +1704,8 @@ export class AssetLedgerPageComponent {
     fromColor: string | null;
     toColor: string | null;
   } {
-    const explicitFrom = entry.fromAddress ?? event?.fromAddress ?? null;
-    const explicitTo = entry.toAddress ?? event?.toAddress ?? null;
+    const explicitFrom = transferEndpoints.fromAddress;
+    const explicitTo = transferEndpoints.toAddress;
     if (explicitFrom !== null && explicitTo !== null) {
       const fromNode = this.pathNode(explicitFrom, walletMeta);
       const toNode = this.pathNode(explicitTo, walletMeta);
@@ -1737,6 +1753,164 @@ export class AssetLedgerPageComponent {
       fromColor: walletNode.color,
       toColor: null,
     };
+  }
+
+  private resolveTransferEndpoints(
+    entry: SessionAssetLedgerTimelineEntryResponse,
+    event: SessionAssetLedgerEventOverlayResponse | null,
+    internalTransferEndpoints: ReadonlyMap<string, TransferEndpointView>
+  ): TransferEndpointView {
+    const explicitFrom = entry.fromAddress ?? event?.fromAddress ?? null;
+    const explicitTo = entry.toAddress ?? event?.toAddress ?? null;
+    if (explicitFrom !== null && explicitTo !== null) {
+      return {
+        fromAddress: explicitFrom,
+        toAddress: explicitTo,
+      };
+    }
+    if (this.normalizeTypeKey(entry.normalizedType) !== 'INTERNAL_TRANSFER') {
+      return {
+        fromAddress: explicitFrom,
+        toAddress: explicitTo,
+      };
+    }
+    const inferred = internalTransferEndpoints.get(this.transferTxKey(entry, event));
+    return {
+      fromAddress: explicitFrom ?? inferred?.fromAddress ?? null,
+      toAddress: explicitTo ?? inferred?.toAddress ?? null,
+    };
+  }
+
+  private buildInternalTransferEndpointLookup(
+    timeline: ReadonlyArray<SessionAssetLedgerTimelineEntryResponse>,
+    eventById: ReadonlyMap<string, SessionAssetLedgerEventOverlayResponse>
+  ): ReadonlyMap<string, TransferEndpointView> {
+    const endpointsByTx = new Map<string, { fromAddress: string | null; toAddress: string | null; senders: Set<string>; receivers: Set<string> }>();
+
+    timeline.forEach((entry, index) => {
+      if (this.normalizeTypeKey(entry.normalizedType) !== 'INTERNAL_TRANSFER') {
+        return;
+      }
+      const id = entry.eventGroupId ?? entry.normalizedTransactionId ?? entry.txHash ?? `${index}`;
+      const event = eventById.get(id) ?? null;
+      const key = this.transferTxKey(entry, event);
+      const current = endpointsByTx.get(key) ?? {
+        fromAddress: null,
+        toAddress: null,
+        senders: new Set<string>(),
+        receivers: new Set<string>(),
+      };
+
+      const explicitFrom = entry.fromAddress ?? event?.fromAddress ?? null;
+      const explicitTo = entry.toAddress ?? event?.toAddress ?? null;
+      current.fromAddress ??= explicitFrom;
+      current.toAddress ??= explicitTo;
+
+      const walletRef = this.walletRefForEntry(entry, event);
+      const direction = this.internalTransferDirection(entry, event);
+      if (walletRef !== null && direction === 'outbound') {
+        current.senders.add(walletRef);
+      }
+      if (walletRef !== null && direction === 'inbound') {
+        current.receivers.add(walletRef);
+      }
+
+      endpointsByTx.set(key, current);
+    });
+
+    return new Map(
+      [...endpointsByTx.entries()].map(([key, value]) => {
+        const fromAddress = value.fromAddress ?? this.uniqueAddress(value.senders);
+        const toAddress = value.toAddress ?? this.uniqueAddress(value.receivers);
+        return [
+          key,
+          {
+            fromAddress,
+            toAddress,
+          } satisfies TransferEndpointView,
+        ] as const;
+      })
+    );
+  }
+
+  private transferTxKey(
+    entry: SessionAssetLedgerTimelineEntryResponse,
+    event: SessionAssetLedgerEventOverlayResponse | null
+  ): string {
+    const txHash = entry.txHash ?? event?.txHash ?? '';
+    const networkKey = event?.networkIds.join('|') ?? this.networkRefForEntry(entry, event) ?? '';
+    return `${txHash}|${networkKey}`;
+  }
+
+  private walletRefForEntry(
+    entry: SessionAssetLedgerTimelineEntryResponse,
+    event: SessionAssetLedgerEventOverlayResponse | null
+  ): string | null {
+    const normalizedId = entry.normalizedTransactionId ?? event?.normalizedTransactionId ?? null;
+    if (normalizedId === null) {
+      return null;
+    }
+    const firstSeparator = normalizedId.indexOf(':');
+    const secondSeparator = normalizedId.indexOf(':', firstSeparator + 1);
+    if (firstSeparator < 0 || secondSeparator < 0 || secondSeparator + 1 >= normalizedId.length) {
+      return null;
+    }
+    return normalizedId.slice(secondSeparator + 1).trim() || null;
+  }
+
+  private networkRefForEntry(
+    entry: SessionAssetLedgerTimelineEntryResponse,
+    event: SessionAssetLedgerEventOverlayResponse | null
+  ): string | null {
+    if (event?.networkIds.length) {
+      return event.networkIds.join('|');
+    }
+    const normalizedId = entry.normalizedTransactionId ?? event?.normalizedTransactionId ?? null;
+    if (normalizedId === null) {
+      return null;
+    }
+    const firstSeparator = normalizedId.indexOf(':');
+    const secondSeparator = normalizedId.indexOf(':', firstSeparator + 1);
+    if (firstSeparator < 0 || secondSeparator < 0) {
+      return null;
+    }
+    return normalizedId.slice(firstSeparator + 1, secondSeparator).trim() || null;
+  }
+
+  private internalTransferDirection(
+    entry: SessionAssetLedgerTimelineEntryResponse,
+    event: SessionAssetLedgerEventOverlayResponse | null
+  ): 'inbound' | 'outbound' | null {
+    const primaryTransferFlow = this.largestMagnitudeFlow(
+      (event?.flows ?? []).filter((flow) => {
+        const role = flow.role?.trim().toUpperCase() ?? '';
+        return role !== 'FEE' && flow.quantityDelta !== null;
+      })
+    );
+    const flowQuantity = primaryTransferFlow?.quantityDelta ?? null;
+    if (flowQuantity !== null && Math.abs(flowQuantity) > 1e-12) {
+      return flowQuantity < 0 ? 'outbound' : 'inbound';
+    }
+
+    const quantityDelta = entry.quantityDelta ?? 0;
+    if (Math.abs(quantityDelta) > 1e-12) {
+      return quantityDelta < 0 ? 'outbound' : 'inbound';
+    }
+
+    const effects = new Set(entry.basisEffects);
+    const outbound = effects.has('CARRY_OUT') || effects.has('DISPOSE') || effects.has('REALLOCATE_OUT');
+    const inbound = effects.has('CARRY_IN') || effects.has('ACQUIRE') || effects.has('REALLOCATE_IN');
+    if (outbound && !inbound) {
+      return 'outbound';
+    }
+    if (inbound && !outbound) {
+      return 'inbound';
+    }
+    return null;
+  }
+
+  private uniqueAddress(values: ReadonlySet<string>): string | null {
+    return values.size === 1 ? [...values][0] ?? null : null;
   }
 
   private pathNode(
@@ -1861,6 +2035,7 @@ export class AssetLedgerPageComponent {
       marker.priceSource ?? '',
       marker.primaryFlowLabel ?? '',
       marker.quantityDelta.toString(),
+      marker.netQuantityDelta.toString(),
       marker.amountUsd?.toString() ?? '',
       marker.quantityAfter.toString(),
       marker.coveredQuantityAfter.toString(),
@@ -1912,17 +2087,98 @@ export class AssetLedgerPageComponent {
   }
 
   private primaryFlow(
+    entry: SessionAssetLedgerTimelineEntryResponse,
     event: SessionAssetLedgerEventOverlayResponse | null,
     familyIdentity: string
   ): SessionAssetLedgerEventFlowResponse | null {
     if (event === null || event.flows.length === 0) {
       return null;
     }
-    const familyFlow = event.flows.find((flow) => this.flowMatchesFamily(flow, familyIdentity));
-    if (familyFlow !== undefined) {
-      return familyFlow;
+    const familyFlows = event.flows.filter((flow) => this.flowMatchesFamily(flow, familyIdentity));
+    if (familyFlows.length > 0) {
+      return this.selectDisplayFamilyFlow(entry, familyFlows);
     }
     return event.flows.find((flow) => flow.unitPriceUsd !== null) ?? event.flows[0];
+  }
+
+  private selectDisplayFamilyFlow(
+    entry: SessionAssetLedgerTimelineEntryResponse,
+    familyFlows: ReadonlyArray<SessionAssetLedgerEventFlowResponse>
+  ): SessionAssetLedgerEventFlowResponse {
+    const largest = this.largestMagnitudeFlow(familyFlows) ?? familyFlows[0];
+    const outbound = this.largestMagnitudeFlow(familyFlows.filter((flow) => (flow.quantityDelta ?? 0) < 0));
+    const inbound = this.largestMagnitudeFlow(familyFlows.filter((flow) => (flow.quantityDelta ?? 0) > 0));
+    const typeKey = this.normalizeTypeKey(entry.normalizedType);
+
+    switch (typeKey) {
+      case 'LENDING_DEPOSIT':
+      case 'STAKING_DEPOSIT':
+      case 'VAULT_DEPOSIT':
+      case 'LP_ENTRY':
+      case 'WRAP':
+      case 'INTERNAL_TRANSFER':
+      case 'EXTERNAL_TRANSFER_OUT':
+      case 'BRIDGE_OUT':
+        return outbound ?? inbound ?? largest;
+      case 'LENDING_WITHDRAW':
+      case 'STAKING_WITHDRAW':
+      case 'VAULT_WITHDRAW':
+      case 'LP_EXIT':
+      case 'UNWRAP':
+      case 'EXTERNAL_TRANSFER_IN':
+      case 'BRIDGE_IN':
+      case 'REWARD_CLAIM':
+      case 'SPONSORED_GAS_IN':
+        return inbound ?? outbound ?? largest;
+      default:
+        break;
+    }
+
+    const netQuantityDelta = entry.quantityDelta ?? 0;
+    if (netQuantityDelta < 0) {
+      return outbound ?? inbound ?? largest;
+    }
+    if (netQuantityDelta > 0) {
+      return inbound ?? outbound ?? largest;
+    }
+    return outbound ?? inbound ?? largest;
+  }
+
+  private largestMagnitudeFlow(
+    flows: ReadonlyArray<SessionAssetLedgerEventFlowResponse>
+  ): SessionAssetLedgerEventFlowResponse | null {
+    if (flows.length === 0) {
+      return null;
+    }
+    return flows.reduce((best, candidate) =>
+      Math.abs(candidate.quantityDelta ?? 0) > Math.abs(best.quantityDelta ?? 0) ? candidate : best
+    );
+  }
+
+  private resolveDisplayQuantity(
+    entry: SessionAssetLedgerTimelineEntryResponse,
+    primaryFlow: SessionAssetLedgerEventFlowResponse | null
+  ): { value: number; derived: boolean } {
+    const netQuantityDelta = entry.quantityDelta ?? 0;
+    const primaryQuantityDelta = primaryFlow?.quantityDelta ?? null;
+    if (
+      primaryQuantityDelta !== null &&
+      Math.abs(netQuantityDelta) <= 1e-12 &&
+      Math.abs(primaryQuantityDelta) > 1e-12 &&
+      this.hasMixedContinuityEffects(entry.basisEffects)
+    ) {
+      return { value: primaryQuantityDelta, derived: true };
+    }
+    return { value: netQuantityDelta, derived: false };
+  }
+
+  private hasMixedContinuityEffects(basisEffects: ReadonlyArray<string>): boolean {
+    const effects = new Set(basisEffects);
+    const outbound =
+      effects.has('CARRY_OUT') || effects.has('DISPOSE') || effects.has('REALLOCATE_OUT');
+    const inbound =
+      effects.has('CARRY_IN') || effects.has('ACQUIRE') || effects.has('REALLOCATE_IN');
+    return outbound && inbound;
   }
 
   private flowMatchesFamily(flow: SessionAssetLedgerEventFlowResponse, familyIdentity: string): boolean {
@@ -2057,17 +2313,7 @@ export class AssetLedgerPageComponent {
   }
 
   private formatShortDate(value: string | null): string {
-    if (value === null || value.length === 0) {
-      return '—';
-    }
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) {
-      return value;
-    }
-    return new Intl.DateTimeFormat('en-US', {
-      month: 'short',
-      day: 'numeric',
-    }).format(date);
+    return formatDateTimeWithSeconds(value);
   }
 
   private toErrorMessage(error: HttpErrorResponse): string {
@@ -2864,16 +3110,7 @@ export class AssetLedgerPageComponent {
   }
 
   private formatTimelineDate(value: string): string {
-    if (value.length === 0) {
-      return '—';
-    }
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) {
-      return value.slice(5, 10);
-    }
-    const month = String(date.getUTCMonth() + 1).padStart(2, '0');
-    const day = String(date.getUTCDate()).padStart(2, '0');
-    return `${month}-${day}`;
+    return formatCompactDateTimeWithSeconds(value);
   }
 
   private formatBasisEffectLabel(value: string): string {

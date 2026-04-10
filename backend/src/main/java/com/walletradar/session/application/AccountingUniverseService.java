@@ -69,6 +69,16 @@ public class AccountingUniverseService {
         );
     }
 
+    public boolean shareUniverseMembers(String leftRef, String rightRef) {
+        String normalizedLeft = normalizeMemberRef(leftRef);
+        String normalizedRight = normalizeMemberRef(rightRef);
+        if (normalizedLeft.isBlank() || normalizedRight.isBlank() || normalizedLeft.equals(normalizedRight)) {
+            return false;
+        }
+        Query query = Query.query(Criteria.where("members.ref").all(List.of(normalizedLeft, normalizedRight)));
+        return mongoOperations.exists(query, AccountingUniverse.class);
+    }
+
     private LinkedHashSet<String> currentOnChainWalletRefs(UserSession session) {
         LinkedHashSet<String> onChainWalletRefs = new LinkedHashSet<>();
         if (session.getWallets() == null) {

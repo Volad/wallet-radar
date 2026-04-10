@@ -103,6 +103,7 @@ public class BybitExtractionService {
             case "BONUS_RECOLLECT" -> "FEE";
             case "INTEREST" -> "REWARD_CLAIM";
             case "--", "SETTLEMENT", "DELIVERY", "LIQUIDATION" -> "FUNDING_FEE";
+            case "CURRENCY_BUY", "CURRENCY_SELL" -> "SWAP";
             case "TRADE" -> "UNKNOWN_CEX";
             default -> "UNKNOWN_CEX";
         };
@@ -111,6 +112,9 @@ public class BybitExtractionService {
         event.setSourceFileType("uta_derivatives");
         event.setCanonicalType(canonicalType);
         event.setBybitType(bybitType);
+        if (isTransactionLogConvertType(bybitType)) {
+            event.setBybitDescription("Currency convert");
+        }
         event.setAssetSymbol(upper(text(payload, "currency", "coin")));
         event.setQuantityRaw(firstNonNull(decimal(payload, "change"), decimal(payload, "cashFlow")));
         event.setFilledPrice(decimal(payload, "tradePrice"));
@@ -123,6 +127,10 @@ public class BybitExtractionService {
         event.setUtaDirection(upper(text(payload, "side")));
         event.setBasisRelevant(isBasisRelevantCanonicalType(canonicalType));
         return List.of(event);
+    }
+
+    private boolean isTransactionLogConvertType(String bybitType) {
+        return "CURRENCY_BUY".equals(bybitType) || "CURRENCY_SELL".equals(bybitType);
     }
 
     private BybitExtractedEvent extractInternalTransfer(IntegrationRawEvent rawEvent, JsonNode payload) {
@@ -391,6 +399,9 @@ public class BybitExtractionService {
             return "Fiat";
         }
         if (normalizedDescription.contains("eth 2.0")) {
+            return "ETH 2.0";
+        }
+        if (normalizedBusiness.contains("eth 2.0")) {
             return "ETH 2.0";
         }
         return switch (normalizedBusiness) {

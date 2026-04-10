@@ -16,6 +16,7 @@ import com.walletradar.ingestion.pipeline.onchain.PendingRawTransactionQueryServ
 import com.walletradar.ingestion.pipeline.clarification.OnChainLifecycleLinkService;
 import com.walletradar.ingestion.pipeline.clarification.RelatedLifecycleDiscoveryService;
 import com.walletradar.ingestion.pipeline.onchain.repair.ExplorerRawOrderingRepairGateway;
+import com.walletradar.ingestion.pipeline.onchain.repair.InternalTransferRawPeerRepairService;
 import com.walletradar.ingestion.pipeline.onchain.support.RawOrderingMetadataResolver;
 import com.walletradar.ingestion.pipeline.onchain.support.ResolvedRawOrderingMetadata;
 import com.walletradar.ingestion.store.IdempotentNormalizedTransactionStore;
@@ -60,11 +61,16 @@ public class OnChainNormalizationService {
     private final ExplorerRawOrderingRepairGateway explorerRawOrderingRepairGateway;
     private final RelatedLifecycleDiscoveryService relatedLifecycleDiscoveryService;
     private final OnChainLifecycleLinkService onChainLifecycleLinkService;
+    private final InternalTransferRawPeerRepairService internalTransferRawPeerRepairService;
 
     public int processNextBatch() {
         List<RawTransaction> batch = new ArrayList<>(
                 pendingRawTransactionQueryService.loadNextBatch(properties.getBatchSize())
         );
+        int repairedPeers = internalTransferRawPeerRepairService.repairMissingPeers(batch);
+        if (repairedPeers > 0) {
+            log.info("On-chain internal transfer raw peer repair complete: repaired={}", repairedPeers);
+        }
         for (RawTransaction rawTransaction : batch) {
             prepareOrdering(rawTransaction);
         }

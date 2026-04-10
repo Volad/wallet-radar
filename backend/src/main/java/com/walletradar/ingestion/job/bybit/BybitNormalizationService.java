@@ -42,6 +42,7 @@ public class BybitNormalizationService {
 
     private static final String EXTERNAL_CUSTODY_EXCLUSION_REASON = "EXTERNAL_CUSTODY_UNTRACKED_VENUE";
     private static final String TRANSFER_SHADOW_EXCLUSION_REASON = "BYBIT_TRANSFER_SHADOW_ROW";
+    private static final List<String> CONVERT_TYPES = List.of("convert", "currency_buy", "currency_sell");
 
     private final PendingBybitExtractedRowQueryService pendingBybitExtractedRowQueryService;
     private final BybitExtractedEventRepository bybitExtractedEventRepository;
@@ -175,13 +176,14 @@ public class BybitNormalizationService {
 
     private boolean isTradeRow(ExternalLedgerRaw row) {
         return "uta_derivatives".equals(normalize(row.getSourceFileType()))
-                && "SWAP".equalsIgnoreCase(normalize(row.getCanonicalType()));
+                && "SWAP".equalsIgnoreCase(normalize(row.getCanonicalType()))
+                && !isConvertType(row.getBybitType())
+                && isDirectionalTrade(row);
     }
 
     private boolean isConvertRow(ExternalLedgerRaw row) {
-        return "fund_asset_changes".equals(normalize(row.getSourceFileType()))
-                && "swap".equals(normalize(row.getCanonicalType()))
-                && "convert".equals(normalize(row.getBybitType()));
+        return "swap".equals(normalize(row.getCanonicalType()))
+                && isConvertType(row.getBybitType());
     }
 
     private boolean isLiquidStakingRow(ExternalLedgerRaw row) {
@@ -535,6 +537,15 @@ public class BybitNormalizationService {
 
     private String normalize(String value) {
         return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private boolean isConvertType(String bybitType) {
+        return CONVERT_TYPES.contains(normalize(bybitType));
+    }
+
+    private boolean isDirectionalTrade(ExternalLedgerRaw row) {
+        String direction = normalize(row.getUtaDirection());
+        return "buy".equals(direction) || "sell".equals(direction);
     }
 
     private <T> List<T> safe(List<T> batch) {

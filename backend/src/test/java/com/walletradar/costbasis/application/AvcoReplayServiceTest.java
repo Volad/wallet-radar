@@ -91,6 +91,59 @@ class AvcoReplayServiceTest {
     }
 
     @Test
+    void internalTransferCarriesBasisWithoutSyntheticBuyOrSell() {
+        NormalizedTransaction sourceBuy = tx("1", "0xbuy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flow(NormalizedLegRole.BUY, "ETH", "1", "100", PriceSource.BINANCE));
+        sourceBuy.setWalletAddress("wallet-a");
+
+        NormalizedTransaction sourceTransfer = tx("2", "0xinternal", 1, NormalizedTransactionType.INTERNAL_TRANSFER,
+                flow(NormalizedLegRole.TRANSFER, "ETH", "-1", null, null));
+        sourceTransfer.setWalletAddress("wallet-a");
+        sourceTransfer.setContinuityCandidate(true);
+        sourceTransfer.setMatchedCounterparty("wallet-b");
+
+        NormalizedTransaction destinationTransfer = tx("3", "0xinternal", 1, NormalizedTransactionType.INTERNAL_TRANSFER,
+                flow(NormalizedLegRole.TRANSFER, "ETH", "1", null, null));
+        destinationTransfer.setWalletAddress("wallet-b");
+        destinationTransfer.setContinuityCandidate(true);
+        destinationTransfer.setMatchedCounterparty("wallet-a");
+
+        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                NormalizedTransactionStatus.CONFIRMED
+        )).thenReturn(List.of(sourceBuy, sourceTransfer, destinationTransfer));
+
+        service().replayConfirmed();
+
+        List<AssetLedgerPoint> points = capturedLedgerPoints();
+        AssetLedgerPoint source = latestPoint(points, "wallet-a", NetworkId.BASE, "ETH", null);
+        AssetLedgerPoint destination = latestPoint(points, "wallet-b", NetworkId.BASE, "ETH", null);
+        assertThat(source.getQuantityAfter()).isZero();
+        assertThat(destination.getQuantityAfter()).isEqualByComparingTo("1");
+        assertThat(destination.getUncoveredQuantityAfter()).isZero();
+        assertThat(destination.getAvcoAfterUsd()).isEqualByComparingTo("100");
+        assertThat(destination.getTotalCostBasisAfterUsd()).isEqualByComparingTo("100");
+    }
+
+    @Test
+    void sponsoredGasInAddsZeroCostCoveredQuantity() {
+        NormalizedTransaction topUp = tx("1", "0xgas-topup", 0, NormalizedTransactionType.SPONSORED_GAS_IN,
+                flow(NormalizedLegRole.TRANSFER, "ETH", "0.000004659018813092", null, null));
+        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                NormalizedTransactionStatus.CONFIRMED
+        )).thenReturn(List.of(topUp));
+
+        service().replayConfirmed();
+
+        AssetLedgerPoint point = latestPoint(capturedLedgerPoints(), "0xwallet", NetworkId.BASE, "ETH", null);
+        assertThat(point.getQuantityAfter()).isEqualByComparingTo("0.000004659018813092");
+        assertThat(point.getTotalCostBasisAfterUsd()).isZero();
+        assertThat(point.getUncoveredQuantityAfter()).isZero();
+        assertThat(point.getAvcoAfterUsd()).isZero();
+        assertThat(point.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.ACQUIRE);
+        assertThat(point.getHasIncompleteHistoryAfter()).isFalse();
+    }
+
+    @Test
     void bybitTransitCorridorKeepsPreExistingVenueInventoryOutOfTransitCarry() {
         NormalizedTransaction sourceBuy = tx("1", "0xbuy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
                 flow(NormalizedLegRole.BUY, "ETH", "1", "100", PriceSource.BINANCE));
@@ -420,6 +473,261 @@ class AvcoReplayServiceTest {
     }
 
     @Test
+    void correlatedLpExitCarriesCrossAssetPositionBasisIntoReturnedPrincipalOnly() {
+        NormalizedTransaction ethBuy = tx("1", "0xeth-buy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flow(NormalizedLegRole.BUY, "ETH", "1", "100", PriceSource.BINANCE));
+        ethBuy.setWalletAddress("wallet-a");
+        ethBuy.setNetworkId(NetworkId.ARBITRUM);
+
+        NormalizedTransaction usdcBuy = tx("2", "0xusdc-buy", 1, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flowWithContract(NormalizedLegRole.BUY, "USDC", "0xusdc", "200", "1", PriceSource.STABLECOIN));
+        usdcBuy.setWalletAddress("wallet-a");
+        usdcBuy.setNetworkId(NetworkId.ARBITRUM);
+
+        NormalizedTransaction lpEntry = tx("3", "0xlp-entry", 2, NormalizedTransactionType.LP_ENTRY,
+                flow(NormalizedLegRole.TRANSFER, "ETH", "-1", null, null),
+                flowWithContract(NormalizedLegRole.TRANSFER, "USDC", "0xusdc", "-200", null, null));
+        lpEntry.setWalletAddress("wallet-a");
+        lpEntry.setNetworkId(NetworkId.ARBITRUM);
+        lpEntry.setProtocolName("PancakeSwap");
+        lpEntry.setCorrelationId("lp-position:arbitrum:pancakeswap:123");
+
+        NormalizedTransaction lpExit = tx("4", "0xlp-exit", 3, NormalizedTransactionType.LP_EXIT,
+                flow(NormalizedLegRole.TRANSFER, "CAKE", "10", null, null),
+                flow(NormalizedLegRole.TRANSFER, "ETH", "1.5", null, null));
+        lpExit.setWalletAddress("wallet-a");
+        lpExit.setNetworkId(NetworkId.ARBITRUM);
+        lpExit.setProtocolName("PancakeSwap");
+        lpExit.setCorrelationId("lp-position:arbitrum:pancakeswap:123");
+
+        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                NormalizedTransactionStatus.CONFIRMED
+        )).thenReturn(List.of(ethBuy, usdcBuy, lpEntry, lpExit));
+
+        service().replayConfirmed();
+
+        List<AssetLedgerPoint> points = capturedLedgerPoints();
+        AssetLedgerPoint eth = latestPoint(points, "wallet-a", NetworkId.ARBITRUM, "ETH", null);
+        AssetLedgerPoint cake = latestPoint(points, "wallet-a", NetworkId.ARBITRUM, "CAKE", null);
+
+        assertThat(eth.getQuantityAfter()).isEqualByComparingTo("1.5");
+        assertThat(eth.getTotalCostBasisAfterUsd()).isEqualByComparingTo("300");
+        assertThat(eth.getUncoveredQuantityAfter()).isZero();
+        assertThat(eth.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.REALLOCATE_IN);
+
+        assertThat(cake.getQuantityAfter()).isEqualByComparingTo("10");
+        assertThat(cake.getTotalCostBasisAfterUsd()).isZero();
+        assertThat(cake.getUncoveredQuantityAfter()).isEqualByComparingTo("10");
+        assertThat(cake.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.UNKNOWN);
+    }
+
+    @Test
+    void correlatedLpExitCarriesCoveredCrossAssetBasisIntoResidualStablecoinReturn() {
+        NormalizedTransaction wethBuy = tx("1", "0xweth-buy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flowWithContract(NormalizedLegRole.BUY, "WETH", "0xweth", "1", "100", PriceSource.BINANCE));
+        wethBuy.setWalletAddress("wallet-a");
+        wethBuy.setNetworkId(NetworkId.BASE);
+
+        NormalizedTransaction uncoveredUsdc = tx("2", "0xusdc-uncovered", 1, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flowWithContract(NormalizedLegRole.BUY, "USDC", "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", "200", null, PriceSource.UNKNOWN));
+        uncoveredUsdc.setWalletAddress("wallet-a");
+        uncoveredUsdc.setNetworkId(NetworkId.BASE);
+
+        NormalizedTransaction lpEntry = tx("3", "0xlp-entry", 2, NormalizedTransactionType.LP_ENTRY,
+                flowWithContract(NormalizedLegRole.TRANSFER, "WETH", "0xweth", "-1", null, null),
+                flowWithContract(NormalizedLegRole.TRANSFER, "USDC", "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", "-200", null, null));
+        lpEntry.setWalletAddress("wallet-a");
+        lpEntry.setNetworkId(NetworkId.BASE);
+        lpEntry.setProtocolName("PancakeSwap");
+        lpEntry.setCorrelationId("lp-position:base:pancakeswap:synthetic-1");
+
+        NormalizedTransaction lpExit = tx("4", "0xlp-exit", 3, NormalizedTransactionType.LP_EXIT,
+                flowWithContract(NormalizedLegRole.TRANSFER, "USDC", "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", "250", null, null));
+        lpExit.setWalletAddress("wallet-a");
+        lpExit.setNetworkId(NetworkId.BASE);
+        lpExit.setProtocolName("PancakeSwap");
+        lpExit.setCorrelationId("lp-position:base:pancakeswap:synthetic-1");
+
+        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                NormalizedTransactionStatus.CONFIRMED
+        )).thenReturn(List.of(wethBuy, uncoveredUsdc, lpEntry, lpExit));
+
+        service().replayConfirmed();
+
+        AssetLedgerPoint usdc = latestPoint(capturedLedgerPoints(), "wallet-a", NetworkId.BASE, "USDC", "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913");
+        assertThat(usdc.getQuantityAfter()).isEqualByComparingTo("250");
+        assertThat(usdc.getTotalCostBasisAfterUsd()).isEqualByComparingTo("100");
+        assertThat(usdc.getBasisBackedQuantityAfter()).isEqualByComparingTo("50");
+        assertThat(usdc.getUncoveredQuantityAfter()).isEqualByComparingTo("200");
+        assertThat(usdc.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.REALLOCATE_IN);
+    }
+
+    @Test
+    void rewardOnlyLpExitSideflowDoesNotClearPositionBucketBeforeLaterPrincipalExit() {
+        NormalizedTransaction wethBuy = tx("1", "0xweth-buy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flowWithContract(NormalizedLegRole.BUY, "WETH", "0xweth", "1", "100", PriceSource.BINANCE));
+        wethBuy.setWalletAddress("wallet-a");
+        wethBuy.setNetworkId(NetworkId.BASE);
+
+        NormalizedTransaction uncoveredUsdc = tx("2", "0xusdc-uncovered", 1, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flowWithContract(NormalizedLegRole.BUY, "USDC", "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", "200", null, PriceSource.UNKNOWN));
+        uncoveredUsdc.setWalletAddress("wallet-a");
+        uncoveredUsdc.setNetworkId(NetworkId.BASE);
+
+        NormalizedTransaction lpEntry = tx("3", "0xlp-entry", 2, NormalizedTransactionType.LP_ENTRY,
+                flowWithContract(NormalizedLegRole.TRANSFER, "WETH", "0xweth", "-1", null, null),
+                flowWithContract(NormalizedLegRole.TRANSFER, "USDC", "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", "-200", null, null));
+        lpEntry.setWalletAddress("wallet-a");
+        lpEntry.setNetworkId(NetworkId.BASE);
+        lpEntry.setProtocolName("PancakeSwap");
+        lpEntry.setCorrelationId("lp-position:base:pancakeswap:synthetic-3");
+
+        NormalizedTransaction rewardExit = tx("4", "0xlp-reward-exit", 3, NormalizedTransactionType.LP_EXIT,
+                flowWithContract(NormalizedLegRole.TRANSFER, "CAKE", "0xcake", "10", null, null));
+        rewardExit.setWalletAddress("wallet-a");
+        rewardExit.setNetworkId(NetworkId.BASE);
+        rewardExit.setProtocolName("PancakeSwap");
+        rewardExit.setCorrelationId("lp-position:base:pancakeswap:synthetic-3");
+
+        NormalizedTransaction principalExit = tx("5", "0xlp-principal-exit", 4, NormalizedTransactionType.LP_EXIT,
+                flowWithContract(NormalizedLegRole.TRANSFER, "USDC", "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", "250", null, null));
+        principalExit.setWalletAddress("wallet-a");
+        principalExit.setNetworkId(NetworkId.BASE);
+        principalExit.setProtocolName("PancakeSwap");
+        principalExit.setCorrelationId("lp-position:base:pancakeswap:synthetic-3");
+
+        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                NormalizedTransactionStatus.CONFIRMED
+        )).thenReturn(List.of(wethBuy, uncoveredUsdc, lpEntry, rewardExit, principalExit));
+
+        service().replayConfirmed();
+
+        List<AssetLedgerPoint> points = capturedLedgerPoints();
+        AssetLedgerPoint cake = latestPoint(points, "wallet-a", NetworkId.BASE, "CAKE", "0xcake");
+        AssetLedgerPoint usdc = latestPoint(points, "wallet-a", NetworkId.BASE, "USDC", "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913");
+
+        assertThat(cake.getQuantityAfter()).isEqualByComparingTo("10");
+        assertThat(cake.getTotalCostBasisAfterUsd()).isZero();
+        assertThat(cake.getUncoveredQuantityAfter()).isEqualByComparingTo("10");
+        assertThat(cake.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.UNKNOWN);
+
+        assertThat(usdc.getQuantityAfter()).isEqualByComparingTo("250");
+        assertThat(usdc.getTotalCostBasisAfterUsd()).isEqualByComparingTo("100");
+        assertThat(usdc.getBasisBackedQuantityAfter()).isEqualByComparingTo("50");
+        assertThat(usdc.getUncoveredQuantityAfter()).isEqualByComparingTo("200");
+        assertThat(usdc.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.REALLOCATE_IN);
+    }
+
+    @Test
+    void correlatedLpExitAllocatesResidualStablecoinBasketByReplayKnownValue() {
+        NormalizedTransaction wethBuy = tx("1", "0xweth-buy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flowWithContract(NormalizedLegRole.BUY, "WETH", "0xweth", "1", "100", PriceSource.BINANCE));
+        wethBuy.setWalletAddress("wallet-a");
+        wethBuy.setNetworkId(NetworkId.ARBITRUM);
+
+        NormalizedTransaction uncoveredUsdc = tx("2", "0xusdc-uncovered", 1, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flowWithContract(NormalizedLegRole.BUY, "USDC", "0xaf88d065e77c8cc2239327c5edb3a432268e5831", "200", null, PriceSource.UNKNOWN));
+        uncoveredUsdc.setWalletAddress("wallet-a");
+        uncoveredUsdc.setNetworkId(NetworkId.ARBITRUM);
+
+        NormalizedTransaction lpEntry = tx("3", "0xlp-entry", 2, NormalizedTransactionType.LP_ENTRY,
+                flowWithContract(NormalizedLegRole.TRANSFER, "WETH", "0xweth", "-1", null, null),
+                flowWithContract(NormalizedLegRole.TRANSFER, "USDC", "0xaf88d065e77c8cc2239327c5edb3a432268e5831", "-200", null, null));
+        lpEntry.setWalletAddress("wallet-a");
+        lpEntry.setNetworkId(NetworkId.ARBITRUM);
+        lpEntry.setProtocolName("PancakeSwap");
+        lpEntry.setCorrelationId("lp-position:arbitrum:pancakeswap:synthetic-2");
+
+        NormalizedTransaction lpExit = tx("4", "0xlp-exit", 3, NormalizedTransactionType.LP_EXIT,
+                flowWithContract(NormalizedLegRole.TRANSFER, "USDC", "0xaf88d065e77c8cc2239327c5edb3a432268e5831", "200", null, null),
+                flowWithContract(NormalizedLegRole.TRANSFER, "USDT", "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9", "50", null, null),
+                flowWithContract(NormalizedLegRole.TRANSFER, "DAI", "0xda10009cbd5d07dd0cecc66161fc93d7c9000da1", "50", null, null));
+        lpExit.setWalletAddress("wallet-a");
+        lpExit.setNetworkId(NetworkId.ARBITRUM);
+        lpExit.setProtocolName("PancakeSwap");
+        lpExit.setCorrelationId("lp-position:arbitrum:pancakeswap:synthetic-2");
+
+        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                NormalizedTransactionStatus.CONFIRMED
+        )).thenReturn(List.of(wethBuy, uncoveredUsdc, lpEntry, lpExit));
+
+        service().replayConfirmed();
+
+        AssetLedgerPoint usdt = latestPoint(capturedLedgerPoints(), "wallet-a", NetworkId.ARBITRUM, "USDT", "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9");
+        AssetLedgerPoint dai = latestPoint(capturedLedgerPoints(), "wallet-a", NetworkId.ARBITRUM, "DAI", "0xda10009cbd5d07dd0cecc66161fc93d7c9000da1");
+
+        assertThat(usdt.getQuantityAfter()).isEqualByComparingTo("50");
+        assertThat(usdt.getTotalCostBasisAfterUsd()).isEqualByComparingTo("50");
+        assertThat(usdt.getBasisBackedQuantityAfter()).isEqualByComparingTo("50");
+        assertThat(usdt.getUncoveredQuantityAfter()).isZero();
+        assertThat(usdt.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.REALLOCATE_IN);
+
+        assertThat(dai.getQuantityAfter()).isEqualByComparingTo("50");
+        assertThat(dai.getTotalCostBasisAfterUsd()).isEqualByComparingTo("50");
+        assertThat(dai.getBasisBackedQuantityAfter()).isEqualByComparingTo("50");
+        assertThat(dai.getUncoveredQuantityAfter()).isZero();
+        assertThat(dai.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.REALLOCATE_IN);
+    }
+
+    @Test
+    void gmxLpEntrySettlementStillAllocatesPrincipalWhenExecutionFeeReserveIsUncovered() {
+        NormalizedTransaction usdcBuy = tx("1", "0xusdc-buy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flowWithContract(NormalizedLegRole.BUY, "USDC", "0xusdc", "149.713585", "1", PriceSource.STABLECOIN));
+        usdcBuy.setWalletAddress("wallet-a");
+        usdcBuy.setNetworkId(NetworkId.ARBITRUM);
+
+        NormalizedTransaction ethTopUp = tx("2", "0xeth-topup", 1, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flow(NormalizedLegRole.BUY, "ETH", "0.0001850891676072", null, PriceSource.UNKNOWN));
+        ethTopUp.setWalletAddress("wallet-a");
+        ethTopUp.setNetworkId(NetworkId.ARBITRUM);
+
+        NormalizedTransaction request = tx("3", "0xff684e", 2, NormalizedTransactionType.LP_ENTRY_REQUEST,
+                flowWithContract(NormalizedLegRole.TRANSFER, "USDC", "0xusdc", "-149.713585", null, null),
+                flow(NormalizedLegRole.TRANSFER, "ETH", "-0.0001653292167072", null, null),
+                flow(NormalizedLegRole.FEE, "ETH", "-0.0000197599509", "1907.2", PriceSource.BYBIT));
+        request.setWalletAddress("wallet-a");
+        request.setNetworkId(NetworkId.ARBITRUM);
+        request.setProtocolName("GMX");
+        request.setCorrelationId("gmx:lp-entry:1");
+
+        NormalizedTransaction settlement = tx("4", "0x1aa343", 3, NormalizedTransactionType.LP_ENTRY_SETTLEMENT,
+                flow(NormalizedLegRole.TRANSFER, "ETH", "0.0000528338469792", null, null),
+                flowWithContract(
+                        NormalizedLegRole.TRANSFER,
+                        "GM: ETH/USD [WETH-USDC]",
+                        "0xgm",
+                        "97.960355697851727936",
+                        null,
+                        null
+                ));
+        settlement.setWalletAddress("wallet-a");
+        settlement.setNetworkId(NetworkId.ARBITRUM);
+        settlement.setProtocolName("GMX");
+        settlement.setCorrelationId("gmx:lp-entry:1");
+
+        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                NormalizedTransactionStatus.CONFIRMED
+        )).thenReturn(List.of(usdcBuy, ethTopUp, request, settlement));
+
+        service().replayConfirmed();
+
+        List<AssetLedgerPoint> points = capturedLedgerPoints();
+        AssetLedgerPoint gm = latestPoint(points, "wallet-a", NetworkId.ARBITRUM, "GM: ETH/USD [WETH-USDC]", "0xgm");
+        AssetLedgerPoint eth = latestPoint(points, "wallet-a", NetworkId.ARBITRUM, "ETH", null);
+
+        assertThat(gm.getQuantityAfter()).isEqualByComparingTo("97.960355697851727936");
+        assertThat(gm.getTotalCostBasisAfterUsd()).isEqualByComparingTo("149.713585");
+        assertThat(gm.getBasisBackedQuantityAfter()).isEqualByComparingTo("97.960355697851727936");
+        assertThat(gm.getUncoveredQuantityAfter()).isZero();
+        assertThat(gm.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.REALLOCATE_IN);
+
+        assertThat(eth.getQuantityAfter()).isEqualByComparingTo("0.0000528338469792");
+        assertThat(eth.getTotalCostBasisAfterUsd()).isZero();
+        assertThat(eth.getUncoveredQuantityAfter()).isEqualByComparingTo("0.0000528338469792");
+        assertThat(eth.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.REALLOCATE_IN);
+    }
+
+    @Test
     void bridgeDestinationCarryInPreservesBasisAcrossNetworks() {
         NormalizedTransaction buy = tx("1", "0xbuy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
                 flow(NormalizedLegRole.BUY, "ETH", "1", "100", PriceSource.BINANCE));
@@ -615,6 +923,85 @@ class AvcoReplayServiceTest {
         assertThat(custody.getQuantityAfter()).isEqualByComparingTo("1");
         assertThat(custody.getTotalCostBasisAfterUsd()).isEqualByComparingTo("100");
         assertThat(custody.getAvcoAfterUsd()).isEqualByComparingTo("100");
+    }
+
+    @Test
+    void sameWalletBridgeOutAfterLocalAcquisitionUsesPooledPositionInsteadOfReservedInboundSlice() {
+        NormalizedTransaction sourceCoveredBuy = tx("1", "0xsource-covered", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flow(NormalizedLegRole.BUY, "ETH", "0.1", "100", PriceSource.BINANCE));
+        sourceCoveredBuy.setWalletAddress("wallet-a");
+        sourceCoveredBuy.setNetworkId(NetworkId.ARBITRUM);
+
+        NormalizedTransaction sourceUncoveredBuy = tx("2", "0xsource-uncovered", 1, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flow(NormalizedLegRole.BUY, "ETH", "0.6", null, null));
+        sourceUncoveredBuy.setWalletAddress("wallet-a");
+        sourceUncoveredBuy.setNetworkId(NetworkId.ARBITRUM);
+
+        NormalizedTransaction firstBridgeOut = tx("3", "0xbridge-one-out", 2, NormalizedTransactionType.BRIDGE_OUT,
+                flow(NormalizedLegRole.TRANSFER, "ETH", "-0.7", null, null));
+        firstBridgeOut.setWalletAddress("wallet-a");
+        firstBridgeOut.setNetworkId(NetworkId.ARBITRUM);
+        firstBridgeOut.setCorrelationId("bridge:one");
+        firstBridgeOut.setContinuityCandidate(true);
+        firstBridgeOut.setMatchedCounterparty("0xbridge-one-in");
+
+        NormalizedTransaction firstBridgeIn = tx("4", "0xbridge-one-in", 3, NormalizedTransactionType.BRIDGE_IN,
+                flow(NormalizedLegRole.TRANSFER, "ETH", "0.7", null, null));
+        firstBridgeIn.setWalletAddress("wallet-a");
+        firstBridgeIn.setNetworkId(NetworkId.UNICHAIN);
+        firstBridgeIn.setCorrelationId("bridge:one");
+        firstBridgeIn.setContinuityCandidate(true);
+        firstBridgeIn.setMatchedCounterparty("0xbridge-one-out");
+
+        NormalizedTransaction localCoveredAcquisition = tx("5", "0xlocal-covered", 4, NormalizedTransactionType.SWAP,
+                flow(NormalizedLegRole.BUY, "ETH", "0.3", "1000", PriceSource.BINANCE));
+        localCoveredAcquisition.setWalletAddress("wallet-a");
+        localCoveredAcquisition.setNetworkId(NetworkId.UNICHAIN);
+
+        NormalizedTransaction secondBridgeOut = tx("6", "0xbridge-two-out", 5, NormalizedTransactionType.BRIDGE_OUT,
+                flow(NormalizedLegRole.TRANSFER, "ETH", "-0.68", null, null));
+        secondBridgeOut.setWalletAddress("wallet-a");
+        secondBridgeOut.setNetworkId(NetworkId.UNICHAIN);
+        secondBridgeOut.setCorrelationId("bridge:two");
+        secondBridgeOut.setContinuityCandidate(true);
+        secondBridgeOut.setMatchedCounterparty("0xbridge-two-in");
+
+        NormalizedTransaction secondBridgeIn = tx("7", "0xbridge-two-in", 6, NormalizedTransactionType.BRIDGE_IN,
+                flow(NormalizedLegRole.TRANSFER, "ETH", "0.68", null, null));
+        secondBridgeIn.setWalletAddress("wallet-a");
+        secondBridgeIn.setNetworkId(NetworkId.ARBITRUM);
+        secondBridgeIn.setCorrelationId("bridge:two");
+        secondBridgeIn.setContinuityCandidate(true);
+        secondBridgeIn.setMatchedCounterparty("0xbridge-two-out");
+
+        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                NormalizedTransactionStatus.CONFIRMED
+        )).thenReturn(List.of(
+                sourceCoveredBuy,
+                sourceUncoveredBuy,
+                firstBridgeOut,
+                firstBridgeIn,
+                localCoveredAcquisition,
+                secondBridgeOut,
+                secondBridgeIn
+        ));
+
+        service().replayConfirmed();
+
+        List<AssetLedgerPoint> points = capturedLedgerPoints();
+        AssetLedgerPoint destination = latestPoint(points, "wallet-a", NetworkId.ARBITRUM, "ETH", null);
+        AssetLedgerPoint source = latestPoint(points, "wallet-a", NetworkId.UNICHAIN, "ETH", null);
+
+        assertThat(destination.getQuantityAfter()).isEqualByComparingTo("0.68");
+        assertThat(destination.getTotalCostBasisAfterUsd()).isEqualByComparingTo("310");
+        assertThat(destination.getBasisBackedQuantityAfter()).isEqualByComparingTo("0.40");
+        assertThat(destination.getUncoveredQuantityAfter()).isEqualByComparingTo("0.28");
+        assertThat(destination.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.CARRY_IN);
+
+        assertThat(source.getQuantityAfter()).isEqualByComparingTo("0.32");
+        assertThat(source.getTotalCostBasisAfterUsd()).isZero();
+        assertThat(source.getUncoveredQuantityAfter()).isEqualByComparingTo("0.32");
+        assertThat(source.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.CARRY_OUT);
     }
 
     @Test

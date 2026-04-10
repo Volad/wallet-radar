@@ -21,6 +21,7 @@ import {
   TransactionBridgeFilter,
   TransactionSpamFilter,
 } from '../../../../core/models/dashboard.models';
+import { formatDateTimeWithSeconds } from '../../../../core/utils/date-time.util';
 
 type SaveState = 'idle' | 'saving' | 'saved';
 type PillVariant = 'def' | 'cyan' | 'green' | 'red' | 'amber' | 'purple' | 'blue';
@@ -527,11 +528,7 @@ export class DashboardTransactionsPaneComponent {
   }
 
   formatTimestampLabel(value: string): string {
-    const parsed = new Date(value);
-    if (Number.isNaN(parsed.getTime())) {
-      return value;
-    }
-    return parsed.toISOString().slice(0, 10);
+    return formatDateTimeWithSeconds(value);
   }
 
   prettifyLabel(value: string): string {

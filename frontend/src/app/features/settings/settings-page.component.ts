@@ -1,4 +1,4 @@
-import { CommonModule, DatePipe } from '@angular/common';
+import { CommonModule } from '@angular/common';
 import {
   ChangeDetectionStrategy,
   Component,
@@ -18,6 +18,7 @@ import {
 } from '../../core/models/wallet-api.models';
 import { SessionStorageService } from '../../core/services/session-storage.service';
 import { WalletApiService } from '../../core/services/wallet-api.service';
+import { formatDateTimeWithSeconds } from '../../core/utils/date-time.util';
 
 type SettingsSectionId = 'wallets' | 'integrations' | 'general';
 type SettingsSaveScope = SettingsSectionId;
@@ -59,7 +60,7 @@ const EVM_ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/u;
 @Component({
   selector: 'wr-settings-page',
   standalone: true,
-  imports: [CommonModule, ReactiveFormsModule, DatePipe],
+  imports: [CommonModule, ReactiveFormsModule],
   templateUrl: './settings-page.component.html',
   styleUrl: './settings-page.component.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -102,6 +103,7 @@ export class SettingsPageComponent {
   readonly bybitIntegration = computed(
     () => this.settings()?.integrations.find((integration) => integration.provider === 'BYBIT') ?? null
   );
+  readonly formatDateTimeWithSeconds = formatDateTimeWithSeconds;
   readonly walletCount = computed(() => this.walletsDraft().length + this.pendingWallets().length);
   readonly hasWalletsDraft = computed(() => this.walletCount() > 0);
   readonly hasSavedWallets = computed(() => this.walletsDraft().length > 0);

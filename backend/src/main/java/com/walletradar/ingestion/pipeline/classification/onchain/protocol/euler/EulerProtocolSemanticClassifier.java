@@ -115,8 +115,9 @@ public class EulerProtocolSemanticClassifier implements ProtocolSemanticClassifi
                 || hasAnyInboundFungibleTransferToWallet(view);
         boolean principalOutbound = hasNonShareMovement(movementLegs, false)
                 || hasAnyOutboundFungibleTransferFromWallet(view);
+        boolean clarifiedNativeValueDeposit = hasClarifiedNativeValueDepositLifecycle(view, movementLegs);
 
-        if (shareInbound && principalOutbound) {
+        if (shareInbound && (principalOutbound || clarifiedNativeValueDeposit)) {
             return List.of(hint(SEMANTIC_LENDING_DEPOSIT));
         }
         if (shareOutbound && principalInbound) {
@@ -506,6 +507,43 @@ public class EulerProtocolSemanticClassifier implements ProtocolSemanticClassifi
             if (matchesWalletAccount(view, from) && !isZeroAddress(to)) {
                 return true;
             }
+        }
+        return false;
+    }
+
+    private boolean hasClarifiedNativeValueDepositLifecycle(
+            OnChainRawTransactionView view,
+            List<RawLeg> movementLegs
+    ) {
+        if (view.rawValue() == null || view.rawValue().signum() <= 0) {
+            return false;
+        }
+        if (!hasMintedFungibleTransferToWallet(view)) {
+            return false;
+        }
+        if (hasBurnedFungibleTransferFromWallet(view)) {
+            return false;
+        }
+        if (hasDebtLikeMovement(movementLegs, true) || hasDebtLikeMovement(movementLegs, false)) {
+            return false;
+        }
+        return hasProtocolLocalFungibleHop(view);
+    }
+
+    private boolean hasProtocolLocalFungibleHop(OnChainRawTransactionView view) {
+        for (Document log : view.persistedLogs()) {
+            if (!isErc20TransferLog(log)) {
+                continue;
+            }
+            String from = topicAddress(topicAt(log, 1));
+            String to = topicAddress(topicAt(log, 2));
+            if (isZeroAddress(from) || isZeroAddress(to)) {
+                continue;
+            }
+            if (matchesWalletAccount(view, from) || matchesWalletAccount(view, to)) {
+                continue;
+            }
+            return true;
         }
         return false;
     }

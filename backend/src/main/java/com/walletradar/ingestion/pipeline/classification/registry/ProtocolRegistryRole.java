@@ -10,6 +10,7 @@ public enum ProtocolRegistryRole {
     STAKE_CONTRACT,
     VAULT,
     REWARD_ROUTER,
+    GAS_PAYER,
     WRAPPER_TOKEN,
     WRAPPER_CONTRACT,
     ORDER_VAULT,

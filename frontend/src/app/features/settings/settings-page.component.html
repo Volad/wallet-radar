@@ -339,7 +339,7 @@
                 </div>
                 <div class="summary-row">
                   <span>Validated</span>
-                  <span>{{ integration.lastValidatedAt ? (integration.lastValidatedAt | date: 'medium') : '—' }}</span>
+                  <span>{{ formatDateTimeWithSeconds(integration.lastValidatedAt) }}</span>
                 </div>
                 <div class="summary-row">
                   <span>Progress</span>

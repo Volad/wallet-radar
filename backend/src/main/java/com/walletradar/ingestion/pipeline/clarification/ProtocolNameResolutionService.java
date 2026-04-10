@@ -156,6 +156,7 @@ public class ProtocolNameResolutionService {
         }
         if (source == MatchSource.FROM_ADDRESS) {
             return type == NormalizedTransactionType.BRIDGE_IN
+                    || type == NormalizedTransactionType.SPONSORED_GAS_IN
                     || type == NormalizedTransactionType.EXTERNAL_TRANSFER_IN
                     || type == NormalizedTransactionType.EXTERNAL_TRANSFER_OUT;
         }
@@ -216,6 +217,7 @@ public class ProtocolNameResolutionService {
                     || role == ProtocolRegistryRole.VAULT
                     || role == ProtocolRegistryRole.WRAPPER_CONTRACT
                     || role == ProtocolRegistryRole.REWARD_ROUTER;
+            case SPONSORED_GAS_IN -> role == ProtocolRegistryRole.GAS_PAYER;
             default -> false;
         };
     }
@@ -285,6 +287,7 @@ public class ProtocolNameResolutionService {
                 case REWARD_ROUTER -> 32;
                 default -> 0;
             };
+            case SPONSORED_GAS_IN -> role == ProtocolRegistryRole.GAS_PAYER ? 60 : 0;
             default -> 0;
         };
     }

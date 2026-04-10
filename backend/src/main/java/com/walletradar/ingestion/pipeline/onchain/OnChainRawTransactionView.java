@@ -1,6 +1,7 @@
 package com.walletradar.ingestion.pipeline.onchain;
 
 import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.transaction.raw.RawSyncMethod;
 import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.ingestion.pipeline.onchain.support.RawOrderingMetadataResolver;
 import com.walletradar.ingestion.pipeline.support.BsonCoercionSupport;
@@ -56,6 +57,10 @@ public final class OnChainRawTransactionView {
         } catch (IllegalArgumentException ex) {
             return null;
         }
+    }
+
+    public RawSyncMethod syncMethod() {
+        return rawTransaction.getSyncMethod();
     }
 
     public Instant blockTimestamp() {

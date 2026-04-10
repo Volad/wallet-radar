@@ -11,6 +11,7 @@ import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.pricing.domain.CanonicalAssetCatalog;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -80,8 +81,23 @@ public class AvcoReplayService {
                 updatedTransactions.add(replayed);
                 continue;
             }
+            if (isGmxLpEntryRequest(replayed)) {
+                applyGmxLpEntryRequest(replayed, positions, asyncLifecycleBuckets, ledgerPointCollector);
+                updatedTransactions.add(replayed);
+                continue;
+            }
+            if (isGmxLpEntrySettlement(replayed)) {
+                applyGmxLpEntrySettlement(replayed, positions, asyncLifecycleBuckets, ledgerPointCollector);
+                updatedTransactions.add(replayed);
+                continue;
+            }
             if (replayed.getType() == NormalizedTransactionType.LP_EXIT_SETTLEMENT) {
                 applyAsyncLpExitSettlement(replayed, positions, asyncLifecycleBuckets, ledgerPointCollector);
+                updatedTransactions.add(replayed);
+                continue;
+            }
+            if (isPositionScopedLpExit(replayed)) {
+                applyPositionScopedLpExit(replayed, positions, asyncLifecycleBuckets, ledgerPointCollector);
                 updatedTransactions.add(replayed);
                 continue;
             }
@@ -639,6 +655,23 @@ public class AvcoReplayService {
             );
             return;
         }
+        if (isPositionScopedLpEntryOutbound(transaction, flow)) {
+            AssetKey assetKey = assetKey(transaction, flow);
+            PositionState position = positions.computeIfAbsent(assetKey, ignored -> new PositionState(assetKey));
+            position.lastEventTimestamp = laterOf(position.lastEventTimestamp, transaction.getBlockTimestamp());
+            PositionSnapshot before = snapshot(position);
+            applyAsyncLifecycleRequest(transaction, flow, position, asyncLifecycleBuckets, continuityIdentity(transaction, flow));
+            ledgerPointCollector.record(
+                    transaction,
+                    flow,
+                    flowIndex,
+                    position.assetKey,
+                    before,
+                    position,
+                    AssetLedgerPoint.BasisEffect.REALLOCATE_OUT
+            );
+            return;
+        }
         if (shouldIgnoreLpReceiptMarker(transaction, flow)) {
             return;
         }
@@ -646,6 +679,19 @@ public class AvcoReplayService {
         PositionState position = positions.computeIfAbsent(assetKey, ignored -> new PositionState(assetKey));
         position.lastEventTimestamp = laterOf(position.lastEventTimestamp, transaction.getBlockTimestamp());
         PositionSnapshot before = snapshot(position);
+        if (isSponsoredGasIn(transaction, flow)) {
+            applySponsoredGasIn(flow, position);
+            ledgerPointCollector.record(
+                    transaction,
+                    flow,
+                    flowIndex,
+                    position.assetKey,
+                    before,
+                    position,
+                    AssetLedgerPoint.BasisEffect.ACQUIRE
+            );
+            return;
+        }
 
         if (shouldTreatAsContinuityTransfer(transaction, flow)) {
             AssetLedgerPoint.BasisEffect basisEffect = applyTransfer(
@@ -753,6 +799,376 @@ public class AvcoReplayService {
                 || transaction.getType() == NormalizedTransactionType.STAKING_WITHDRAW);
     }
 
+    private boolean isGmxLpEntryRequest(NormalizedTransaction transaction) {
+        return transaction != null
+                && transaction.getType() == NormalizedTransactionType.LP_ENTRY_REQUEST
+                && "GMX".equalsIgnoreCase(transaction.getProtocolName())
+                && transaction.getCorrelationId() != null
+                && !transaction.getCorrelationId().isBlank()
+                && supportsGmxLpEntryRequestPattern(transaction);
+    }
+
+    private boolean isGmxLpEntrySettlement(NormalizedTransaction transaction) {
+        return transaction != null
+                && transaction.getType() == NormalizedTransactionType.LP_ENTRY_SETTLEMENT
+                && "GMX".equalsIgnoreCase(transaction.getProtocolName())
+                && transaction.getCorrelationId() != null
+                && !transaction.getCorrelationId().isBlank()
+                && supportsGmxLpEntrySettlementPattern(transaction);
+    }
+
+    private boolean supportsGmxLpEntryRequestPattern(NormalizedTransaction transaction) {
+        if (transaction == null || transaction.getFlows() == null || transaction.getFlows().isEmpty()) {
+            return false;
+        }
+        boolean hasPrincipalOutbound = false;
+        boolean hasNativeExecutionReserve = false;
+        for (NormalizedTransaction.Flow flow : transaction.getFlows()) {
+            if (flow == null || flow.getQuantityDelta() == null || flow.getQuantityDelta().signum() == 0) {
+                continue;
+            }
+            if (flow.getRole() == NormalizedLegRole.FEE) {
+                continue;
+            }
+            if (flow.getRole() != NormalizedLegRole.TRANSFER || flow.getQuantityDelta().signum() >= 0) {
+                return false;
+            }
+            if (isGmxExecutionFeeReserveFlow(transaction, flow)) {
+                hasNativeExecutionReserve = true;
+            } else {
+                hasPrincipalOutbound = true;
+            }
+        }
+        return hasPrincipalOutbound && hasNativeExecutionReserve;
+    }
+
+    private boolean supportsGmxLpEntrySettlementPattern(NormalizedTransaction transaction) {
+        if (transaction == null || transaction.getFlows() == null || transaction.getFlows().isEmpty()) {
+            return false;
+        }
+        boolean hasShareInflows = false;
+        for (NormalizedTransaction.Flow flow : transaction.getFlows()) {
+            if (flow == null || flow.getQuantityDelta() == null || flow.getQuantityDelta().signum() == 0) {
+                continue;
+            }
+            if (flow.getRole() == NormalizedLegRole.FEE) {
+                continue;
+            }
+            if (flow.getRole() != NormalizedLegRole.TRANSFER || flow.getQuantityDelta().signum() <= 0) {
+                return false;
+            }
+            if (isGmxShareLikeSymbol(flow.getAssetSymbol())) {
+                hasShareInflows = true;
+            }
+        }
+        return hasShareInflows;
+    }
+
+    private void applyGmxLpEntryRequest(
+            NormalizedTransaction transaction,
+            Map<AssetKey, PositionState> positions,
+            Map<String, AsyncLifecycleBucket> asyncLifecycleBuckets,
+            LedgerPointCollector ledgerPointCollector
+    ) {
+        AsyncLifecycleBucket bucket = asyncLifecycleBuckets.computeIfAbsent(
+                transaction.getCorrelationId(),
+                ignored -> new AsyncLifecycleBucket()
+        );
+
+        for (IndexedFlow indexedFlow : indexedFlows(transaction)) {
+            NormalizedTransaction.Flow flow = indexedFlow.flow();
+            if (flow == null || flow.getQuantityDelta() == null || flow.getQuantityDelta().signum() == 0) {
+                continue;
+            }
+            AssetKey assetKey = assetKey(transaction, flow);
+            PositionState position = positions.computeIfAbsent(assetKey, ignored -> new PositionState(assetKey));
+            position.lastEventTimestamp = laterOf(position.lastEventTimestamp, transaction.getBlockTimestamp());
+            PositionSnapshot before = snapshot(position);
+
+            if (flow.getRole() == NormalizedLegRole.FEE) {
+                applyFee(flow, position);
+                ledgerPointCollector.record(
+                        transaction,
+                        flow,
+                        indexedFlow.index(),
+                        position.assetKey,
+                        before,
+                        position,
+                        AssetLedgerPoint.BasisEffect.GAS_ONLY
+                );
+                continue;
+            }
+
+            if (flow.getRole() != NormalizedLegRole.TRANSFER || flow.getQuantityDelta().signum() >= 0) {
+                applyUnknownTransfer(flow, position);
+                ledgerPointCollector.record(
+                        transaction,
+                        flow,
+                        indexedFlow.index(),
+                        position.assetKey,
+                        before,
+                        position,
+                        AssetLedgerPoint.BasisEffect.UNKNOWN
+                );
+                continue;
+            }
+
+            CarryTransfer carry = removeFromPosition(flow, position);
+            String assetIdentity = assetKey.assetIdentity();
+            if (isGmxExecutionFeeReserveFlow(transaction, flow)) {
+                bucket.addExecutionFeeReserve(assetIdentity, carry);
+            } else {
+                bucket.add(assetIdentity, carry);
+            }
+            ledgerPointCollector.record(
+                    transaction,
+                    flow,
+                    indexedFlow.index(),
+                    position.assetKey,
+                    before,
+                    position,
+                    AssetLedgerPoint.BasisEffect.REALLOCATE_OUT
+            );
+        }
+    }
+
+    private void applyGmxLpEntrySettlement(
+            NormalizedTransaction transaction,
+            Map<AssetKey, PositionState> positions,
+            Map<String, AsyncLifecycleBucket> asyncLifecycleBuckets,
+            LedgerPointCollector ledgerPointCollector
+    ) {
+        AsyncLifecycleBucket bucket = asyncLifecycleBuckets.computeIfAbsent(
+                transaction.getCorrelationId(),
+                ignored -> new AsyncLifecycleBucket()
+        );
+        List<IndexedFlow> shareInflows = new ArrayList<>();
+
+        for (IndexedFlow indexedFlow : indexedFlows(transaction)) {
+            NormalizedTransaction.Flow flow = indexedFlow.flow();
+            if (flow == null || flow.getQuantityDelta() == null || flow.getQuantityDelta().signum() == 0) {
+                continue;
+            }
+            AssetKey assetKey = assetKey(transaction, flow);
+            PositionState position = positions.computeIfAbsent(assetKey, ignored -> new PositionState(assetKey));
+            position.lastEventTimestamp = laterOf(position.lastEventTimestamp, transaction.getBlockTimestamp());
+            PositionSnapshot before = snapshot(position);
+
+            if (flow.getRole() == NormalizedLegRole.FEE) {
+                applyFee(flow, position);
+                ledgerPointCollector.record(
+                        transaction,
+                        flow,
+                        indexedFlow.index(),
+                        position.assetKey,
+                        before,
+                        position,
+                        AssetLedgerPoint.BasisEffect.GAS_ONLY
+                );
+                continue;
+            }
+
+            if (flow.getRole() != NormalizedLegRole.TRANSFER || flow.getQuantityDelta().signum() <= 0) {
+                applyUnknownTransfer(flow, position);
+                ledgerPointCollector.record(
+                        transaction,
+                        flow,
+                        indexedFlow.index(),
+                        position.assetKey,
+                        before,
+                        position,
+                        AssetLedgerPoint.BasisEffect.UNKNOWN
+                );
+                continue;
+            }
+
+            if (isGmxShareLikeSymbol(flow.getAssetSymbol())) {
+                shareInflows.add(indexedFlow);
+                continue;
+            }
+
+            CarryTransfer refundCarry = bucket.takeExecutionFeeReserve(
+                    assetKey.assetIdentity(),
+                    flow.getQuantityDelta().abs(),
+                    position.assetKey
+            );
+            if (refundCarry != null) {
+                restoreToPosition(
+                        refundCarry.quantity(),
+                        position,
+                        refundCarry.costBasisUsd(),
+                        refundCarry.uncoveredQuantity(),
+                        refundCarry.avco()
+                );
+                ledgerPointCollector.record(
+                        transaction,
+                        flow,
+                        indexedFlow.index(),
+                        position.assetKey,
+                        before,
+                        position,
+                        AssetLedgerPoint.BasisEffect.REALLOCATE_IN
+                );
+                BigDecimal residualQuantity = flow.getQuantityDelta().abs().subtract(refundCarry.quantity(), MC);
+                if (residualQuantity.signum() > 0) {
+                    PositionSnapshot residualBefore = snapshot(position);
+                    applyUnknownTransfer(copyFlowWithQuantity(flow, residualQuantity), position);
+                    ledgerPointCollector.record(
+                            transaction,
+                            copyFlowWithQuantity(flow, residualQuantity),
+                            indexedFlow.index(),
+                            position.assetKey,
+                            residualBefore,
+                            position,
+                            AssetLedgerPoint.BasisEffect.UNKNOWN
+                    );
+                }
+                continue;
+            }
+
+            CarryTransfer principalCarry = bucket.takeSameAssetCarry(
+                    assetKey.assetIdentity(),
+                    flow.getQuantityDelta().abs(),
+                    position.assetKey
+            );
+            if (principalCarry != null) {
+                restoreToPosition(
+                        principalCarry.quantity(),
+                        position,
+                        principalCarry.costBasisUsd(),
+                        principalCarry.uncoveredQuantity(),
+                        principalCarry.avco()
+                );
+                ledgerPointCollector.record(
+                        transaction,
+                        flow,
+                        indexedFlow.index(),
+                        position.assetKey,
+                        before,
+                        position,
+                        AssetLedgerPoint.BasisEffect.REALLOCATE_IN
+                );
+                BigDecimal residualQuantity = flow.getQuantityDelta().abs().subtract(principalCarry.quantity(), MC);
+                if (residualQuantity.signum() > 0) {
+                    PositionSnapshot residualBefore = snapshot(position);
+                    applyUnknownTransfer(copyFlowWithQuantity(flow, residualQuantity), position);
+                    ledgerPointCollector.record(
+                            transaction,
+                            copyFlowWithQuantity(flow, residualQuantity),
+                            indexedFlow.index(),
+                            position.assetKey,
+                            residualBefore,
+                            position,
+                            AssetLedgerPoint.BasisEffect.UNKNOWN
+                    );
+                }
+                continue;
+            }
+
+            applyUnknownTransfer(flow, position);
+            ledgerPointCollector.record(
+                    transaction,
+                    flow,
+                    indexedFlow.index(),
+                    position.assetKey,
+                    before,
+                    position,
+                    AssetLedgerPoint.BasisEffect.UNKNOWN
+            );
+        }
+
+        if (!shareInflows.isEmpty()) {
+            BigDecimal remainingPrincipalCostBasis = bucket.remainingCostBasisUsd();
+            BigDecimal remainingExecutionFeeCostBasis = bucket.remainingExecutionFeeReserveCostBasisUsd();
+            BigDecimal totalAllocatedCostBasis = remainingPrincipalCostBasis.add(remainingExecutionFeeCostBasis, MC);
+            if (remainingPrincipalCostBasis.signum() > 0 && bucket.remainingUncoveredQuantity().signum() <= 0) {
+                if (shareInflows.size() == 1) {
+                    restoreSettlementPosition(transaction, shareInflows.getFirst(), positions, totalAllocatedCostBasis, ledgerPointCollector);
+                } else if (allHaveKnownPrices(shareInflows.stream().map(IndexedFlow::flow).toList())) {
+                    allocateIndexedSettlementByKnownValue(
+                            transaction,
+                            shareInflows,
+                            positions,
+                            totalAllocatedCostBasis,
+                            ledgerPointCollector
+                    );
+                } else if (allSameAsset(shareInflows.stream().map(IndexedFlow::flow).toList(), transaction)) {
+                    allocateIndexedSettlementByQuantity(
+                            transaction,
+                            shareInflows,
+                            positions,
+                            totalAllocatedCostBasis,
+                            ledgerPointCollector
+                    );
+                } else {
+                    applyUnknownGmxShareInflows(transaction, shareInflows, positions, ledgerPointCollector);
+                }
+            } else {
+                applyUnknownGmxShareInflows(transaction, shareInflows, positions, ledgerPointCollector);
+            }
+        }
+
+        bucket.clearAll();
+        asyncLifecycleBuckets.remove(transaction.getCorrelationId());
+    }
+
+    private void applyUnknownGmxShareInflows(
+            NormalizedTransaction transaction,
+            List<IndexedFlow> shareInflows,
+            Map<AssetKey, PositionState> positions,
+            LedgerPointCollector ledgerPointCollector
+    ) {
+        for (IndexedFlow indexedFlow : shareInflows) {
+            NormalizedTransaction.Flow flow = indexedFlow.flow();
+            AssetKey assetKey = assetKey(transaction, flow);
+            PositionState position = positions.computeIfAbsent(assetKey, ignored -> new PositionState(assetKey));
+            position.lastEventTimestamp = laterOf(position.lastEventTimestamp, transaction.getBlockTimestamp());
+            PositionSnapshot before = snapshot(position);
+            applyUnknownTransfer(flow, position);
+            ledgerPointCollector.record(
+                    transaction,
+                    flow,
+                    indexedFlow.index(),
+                    position.assetKey,
+                    before,
+                    position,
+                    AssetLedgerPoint.BasisEffect.UNKNOWN
+            );
+        }
+    }
+
+    private boolean isGmxExecutionFeeReserveFlow(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow
+    ) {
+        if (transaction == null || flow == null || flow.getQuantityDelta() == null || flow.getQuantityDelta().signum() >= 0) {
+            return false;
+        }
+        if (flow.getRole() != NormalizedLegRole.TRANSFER) {
+            return false;
+        }
+        String assetIdentity = assetKey(transaction, flow).assetIdentity();
+        if (assetIdentity == null || !assetIdentity.startsWith("NATIVE:")) {
+            return false;
+        }
+        return transaction.getFlows().stream()
+                .filter(candidate -> candidate != null
+                        && candidate.getRole() == NormalizedLegRole.TRANSFER
+                        && candidate.getQuantityDelta() != null
+                        && candidate.getQuantityDelta().signum() < 0)
+                .map(candidate -> assetKey(transaction, candidate).assetIdentity())
+                .filter(Objects::nonNull)
+                .anyMatch(candidateIdentity -> !candidateIdentity.equals(assetIdentity));
+    }
+
+    private boolean isGmxShareLikeSymbol(String symbol) {
+        if (symbol == null || symbol.isBlank()) {
+            return false;
+        }
+        return symbol.regionMatches(true, 0, "GM:", 0, 3)
+                || symbol.regionMatches(true, 0, "GLV", 0, 3);
+    }
+
     private void applyAsyncLpExitSettlement(
             NormalizedTransaction transaction,
             Map<AssetKey, PositionState> positions,
@@ -771,8 +1187,9 @@ public class AvcoReplayService {
                 ignored -> new AsyncLifecycleBucket()
         );
 
-        List<NormalizedTransaction.Flow> principalInflows = new ArrayList<>();
-        for (NormalizedTransaction.Flow flow : transaction.getFlows()) {
+        List<IndexedFlow> principalInflows = new ArrayList<>();
+        for (IndexedFlow indexedFlow : indexedFlows(transaction)) {
+            NormalizedTransaction.Flow flow = indexedFlow.flow();
             if (flow == null || flow.getQuantityDelta() == null || flow.getQuantityDelta().signum() == 0) {
                 continue;
             }
@@ -795,26 +1212,37 @@ public class AvcoReplayService {
                 continue;
             }
             if (flow.getRole() == NormalizedLegRole.TRANSFER && flow.getQuantityDelta().signum() > 0) {
-                CarryTransfer sameAssetCarry = bucket.takeSameAssetCarry(assetKey.assetIdentity(), flow.getQuantityDelta().abs());
+                CarryTransfer sameAssetCarry = bucket.takeSameAssetCarry(
+                        assetKey.assetIdentity(),
+                        flow.getQuantityDelta().abs(),
+                        position.assetKey
+                );
                 if (sameAssetCarry != null) {
                     restoreToPosition(
                             sameAssetCarry.quantity(),
-                            position,
-                            sameAssetCarry.costBasisUsd(),
-                            sameAssetCarry.uncoveredQuantity(),
-                            sameAssetCarry.avco()
+                        position,
+                        sameAssetCarry.costBasisUsd(),
+                        sameAssetCarry.uncoveredQuantity(),
+                        sameAssetCarry.avco()
                     );
                     ledgerPointCollector.record(
                             transaction,
                             flow,
-                            flowIndex(transaction, flow),
+                            indexedFlow.index(),
                             position.assetKey,
                             before,
                             position,
                             AssetLedgerPoint.BasisEffect.REALLOCATE_IN
                     );
+                    BigDecimal residualQuantity = flow.getQuantityDelta().abs().subtract(sameAssetCarry.quantity(), MC);
+                    if (residualQuantity.signum() > 0) {
+                        principalInflows.add(new IndexedFlow(
+                                indexedFlow.index(),
+                                copyFlowWithQuantity(flow, residualQuantity)
+                        ));
+                    }
                 } else {
-                    principalInflows.add(flow);
+                    principalInflows.add(indexedFlow);
                 }
                 continue;
             }
@@ -822,7 +1250,7 @@ public class AvcoReplayService {
             ledgerPointCollector.record(
                     transaction,
                     flow,
-                    flowIndex(transaction, flow),
+                    indexedFlow.index(),
                     position.assetKey,
                     before,
                     position,
@@ -839,7 +1267,8 @@ public class AvcoReplayService {
 
         BigDecimal remainingCostBasis = bucket.remainingCostBasisUsd();
         if (remainingCostBasis.signum() <= 0) {
-            for (NormalizedTransaction.Flow flow : principalInflows) {
+            for (IndexedFlow indexedFlow : principalInflows) {
+                NormalizedTransaction.Flow flow = indexedFlow.flow();
                 AssetKey assetKey = assetKey(transaction, flow);
                 PositionState position = positions.computeIfAbsent(assetKey, ignored -> new PositionState(assetKey));
                 PositionSnapshot before = snapshot(position);
@@ -847,32 +1276,54 @@ public class AvcoReplayService {
                 ledgerPointCollector.record(
                         transaction,
                         flow,
-                        flowIndex(transaction, flow),
+                        indexedFlow.index(),
+                        position.assetKey,
+                        before,
+                        position,
+                        AssetLedgerPoint.BasisEffect.UNKNOWN
+                    );
+            }
+            asyncLifecycleBuckets.remove(transaction.getCorrelationId());
+            return;
+        }
+        if (bucket.remainingUncoveredQuantity().signum() > 0) {
+            for (IndexedFlow indexedFlow : principalInflows) {
+                NormalizedTransaction.Flow flow = indexedFlow.flow();
+                AssetKey assetKey = assetKey(transaction, flow);
+                PositionState position = positions.computeIfAbsent(assetKey, ignored -> new PositionState(assetKey));
+                PositionSnapshot before = snapshot(position);
+                applyUnknownTransfer(flow, position);
+                ledgerPointCollector.record(
+                        transaction,
+                        flow,
+                        indexedFlow.index(),
                         position.assetKey,
                         before,
                         position,
                         AssetLedgerPoint.BasisEffect.UNKNOWN
                 );
             }
-            asyncLifecycleBuckets.remove(transaction.getCorrelationId());
-            return;
-        }
-
-        if (allSameAsset(principalInflows, transaction)) {
-            allocateSettlementByQuantity(transaction, principalInflows, positions, remainingCostBasis, ledgerPointCollector);
             bucket.clearAll();
             asyncLifecycleBuckets.remove(transaction.getCorrelationId());
             return;
         }
 
-        if (allHaveKnownPrices(principalInflows)) {
-            allocateSettlementByKnownValue(transaction, principalInflows, positions, remainingCostBasis, ledgerPointCollector);
+        if (allSameAsset(principalInflows.stream().map(IndexedFlow::flow).toList(), transaction)) {
+            allocateIndexedSettlementByQuantity(transaction, principalInflows, positions, remainingCostBasis, ledgerPointCollector);
             bucket.clearAll();
             asyncLifecycleBuckets.remove(transaction.getCorrelationId());
             return;
         }
 
-        for (NormalizedTransaction.Flow flow : principalInflows) {
+        if (allHaveKnownPrices(principalInflows.stream().map(IndexedFlow::flow).toList())) {
+            allocateIndexedSettlementByKnownValue(transaction, principalInflows, positions, remainingCostBasis, ledgerPointCollector);
+            bucket.clearAll();
+            asyncLifecycleBuckets.remove(transaction.getCorrelationId());
+            return;
+        }
+
+        for (IndexedFlow indexedFlow : principalInflows) {
+            NormalizedTransaction.Flow flow = indexedFlow.flow();
             AssetKey assetKey = assetKey(transaction, flow);
             PositionState position = positions.computeIfAbsent(assetKey, ignored -> new PositionState(assetKey));
             PositionSnapshot before = snapshot(position);
@@ -880,7 +1331,7 @@ public class AvcoReplayService {
             ledgerPointCollector.record(
                     transaction,
                     flow,
-                    flowIndex(transaction, flow),
+                    indexedFlow.index(),
                     position.assetKey,
                     before,
                     position,
@@ -889,6 +1340,192 @@ public class AvcoReplayService {
         }
         bucket.clearAll();
         asyncLifecycleBuckets.remove(transaction.getCorrelationId());
+    }
+
+    private void applyPositionScopedLpExit(
+            NormalizedTransaction transaction,
+            Map<AssetKey, PositionState> positions,
+            Map<String, AsyncLifecycleBucket> asyncLifecycleBuckets,
+            LedgerPointCollector ledgerPointCollector
+    ) {
+        AsyncLifecycleBucket bucket = asyncLifecycleBuckets.computeIfAbsent(
+                transaction.getCorrelationId(),
+                ignored -> new AsyncLifecycleBucket()
+        );
+        List<IndexedFlow> residualPrincipalInflows = new ArrayList<>();
+        List<IndexedFlow> deferredCrossAssetInflows = new ArrayList<>();
+        Set<String> eligibleIdentities = bucket.knownAssetIdentities();
+        boolean touchedEligiblePrincipal = false;
+
+        for (IndexedFlow indexedFlow : indexedFlows(transaction)) {
+            NormalizedTransaction.Flow flow = indexedFlow.flow();
+            if (flow == null || flow.getQuantityDelta() == null || flow.getQuantityDelta().signum() == 0) {
+                continue;
+            }
+            if (shouldIgnoreLpReceiptMarker(transaction, flow)) {
+                continue;
+            }
+
+            AssetKey assetKey = assetKey(transaction, flow);
+            PositionState position = positions.computeIfAbsent(assetKey, ignored -> new PositionState(assetKey));
+            position.lastEventTimestamp = laterOf(position.lastEventTimestamp, transaction.getBlockTimestamp());
+            PositionSnapshot before = snapshot(position);
+
+            if (flow.getRole() == NormalizedLegRole.FEE) {
+                applyFee(flow, position);
+                ledgerPointCollector.record(
+                        transaction,
+                        flow,
+                        indexedFlow.index(),
+                        position.assetKey,
+                        before,
+                        position,
+                        AssetLedgerPoint.BasisEffect.GAS_ONLY
+                );
+                continue;
+            }
+            if (flow.getRole() != NormalizedLegRole.TRANSFER || flow.getQuantityDelta().signum() < 0) {
+                applyUnknownTransfer(flow, position);
+                ledgerPointCollector.record(
+                        transaction,
+                        flow,
+                        indexedFlow.index(),
+                        position.assetKey,
+                        before,
+                        position,
+                        AssetLedgerPoint.BasisEffect.UNKNOWN
+                );
+                continue;
+            }
+
+            String bucketIdentity = continuityIdentity(transaction, flow);
+            if (!eligibleIdentities.contains(bucketIdentity)) {
+                deferredCrossAssetInflows.add(indexedFlow);
+                continue;
+            }
+
+            touchedEligiblePrincipal = true;
+            CarryTransfer sameAssetCarry = bucket.takeSameAssetCarry(bucketIdentity, flow.getQuantityDelta().abs(), position.assetKey);
+            if (sameAssetCarry != null) {
+                restoreToPosition(
+                        sameAssetCarry.quantity(),
+                        position,
+                        sameAssetCarry.costBasisUsd(),
+                        sameAssetCarry.uncoveredQuantity(),
+                        sameAssetCarry.avco()
+                );
+                ledgerPointCollector.record(
+                        transaction,
+                        flow,
+                        indexedFlow.index(),
+                        position.assetKey,
+                        before,
+                        position,
+                        AssetLedgerPoint.BasisEffect.REALLOCATE_IN
+                );
+                BigDecimal residualQuantity = flow.getQuantityDelta().abs().subtract(sameAssetCarry.quantity(), MC);
+                if (residualQuantity.signum() > 0) {
+                    residualPrincipalInflows.add(new IndexedFlow(
+                            indexedFlow.index(),
+                            copyFlowWithQuantity(flow, residualQuantity)
+                    ));
+                }
+                continue;
+            }
+
+            residualPrincipalInflows.add(indexedFlow);
+        }
+
+        if (residualPrincipalInflows.isEmpty() && deferredCrossAssetInflows.isEmpty()) {
+            if (bucket.isEmpty()) {
+                asyncLifecycleBuckets.remove(transaction.getCorrelationId());
+            }
+            return;
+        }
+
+        if (!touchedEligiblePrincipal && !deferredCrossAssetInflows.isEmpty()) {
+            recordUnknownLpExitInflows(transaction, positions, ledgerPointCollector, deferredCrossAssetInflows);
+            if (bucket.isEmpty()) {
+                asyncLifecycleBuckets.remove(transaction.getCorrelationId());
+            }
+            return;
+        }
+
+        List<IndexedFlow> allocatableInflows = residualPrincipalInflows.isEmpty()
+                ? deferredCrossAssetInflows
+                : residualPrincipalInflows;
+        List<IndexedFlow> unknownOnlyInflows = residualPrincipalInflows.isEmpty()
+                ? List.of()
+                : deferredCrossAssetInflows;
+
+        BigDecimal remainingCostBasis = bucket.remainingCostBasisUsd();
+        if (remainingCostBasis.signum() <= 0) {
+            recordUnknownLpExitInflows(transaction, positions, ledgerPointCollector, allocatableInflows);
+            recordUnknownLpExitInflows(transaction, positions, ledgerPointCollector, unknownOnlyInflows);
+            bucket.clearAll();
+            asyncLifecycleBuckets.remove(transaction.getCorrelationId());
+            return;
+        }
+
+        List<NormalizedTransaction.Flow> residualFlows = allocatableInflows.stream()
+                .map(IndexedFlow::flow)
+                .toList();
+        if (allSameAsset(residualFlows, transaction)) {
+            allocateIndexedSettlementByQuantity(transaction, allocatableInflows, positions, remainingCostBasis, ledgerPointCollector);
+            recordUnknownLpExitInflows(transaction, positions, ledgerPointCollector, unknownOnlyInflows);
+            bucket.clearAll();
+            asyncLifecycleBuckets.remove(transaction.getCorrelationId());
+            return;
+        }
+        if (allHaveKnownReplayPrices(transaction, allocatableInflows)) {
+            allocateIndexedSettlementByReplayKnownValue(
+                    transaction,
+                    allocatableInflows,
+                    positions,
+                    remainingCostBasis,
+                    ledgerPointCollector
+            );
+            recordUnknownLpExitInflows(transaction, positions, ledgerPointCollector, unknownOnlyInflows);
+            bucket.clearAll();
+            asyncLifecycleBuckets.remove(transaction.getCorrelationId());
+            return;
+        }
+        if (bucket.remainingUncoveredQuantity().signum() > 0) {
+            recordUnknownLpExitInflows(transaction, positions, ledgerPointCollector, allocatableInflows);
+            recordUnknownLpExitInflows(transaction, positions, ledgerPointCollector, unknownOnlyInflows);
+            bucket.clearAll();
+            asyncLifecycleBuckets.remove(transaction.getCorrelationId());
+            return;
+        }
+
+        recordUnknownLpExitInflows(transaction, positions, ledgerPointCollector, allocatableInflows);
+        recordUnknownLpExitInflows(transaction, positions, ledgerPointCollector, unknownOnlyInflows);
+        bucket.clearAll();
+        asyncLifecycleBuckets.remove(transaction.getCorrelationId());
+    }
+
+    private void recordUnknownLpExitInflows(
+            NormalizedTransaction transaction,
+            Map<AssetKey, PositionState> positions,
+            LedgerPointCollector ledgerPointCollector,
+            List<IndexedFlow> flows
+    ) {
+        for (IndexedFlow indexedFlow : flows) {
+            NormalizedTransaction.Flow flow = indexedFlow.flow();
+            AssetKey assetKey = assetKey(transaction, flow);
+            PositionState position = positions.computeIfAbsent(assetKey, ignored -> new PositionState(assetKey));
+            PositionSnapshot before = snapshot(position);
+            applyUnknownTransfer(flow, position);
+            ledgerPointCollector.record(
+                    transaction,
+                    flow,
+                    indexedFlow.index(),
+                    position.assetKey,
+                    before,
+                    position,
+                    AssetLedgerPoint.BasisEffect.UNKNOWN
+            );
+        }
     }
 
     private boolean isAsyncSpotOrderRequestSell(
@@ -939,10 +1576,20 @@ public class AvcoReplayService {
             PositionState position,
             Map<String, AsyncLifecycleBucket> asyncLifecycleBuckets
     ) {
+        applyAsyncLifecycleRequest(transaction, flow, position, asyncLifecycleBuckets, assetKey(transaction, flow).assetIdentity());
+    }
+
+    private void applyAsyncLifecycleRequest(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow,
+            PositionState position,
+            Map<String, AsyncLifecycleBucket> asyncLifecycleBuckets,
+            String bucketIdentity
+    ) {
         CarryTransfer carry = removeFromPosition(flow, position);
         asyncLifecycleBuckets
                 .computeIfAbsent(transaction.getCorrelationId(), ignored -> new AsyncLifecycleBucket())
-                .add(assetKey(transaction, flow).assetIdentity(), carry);
+                .add(bucketIdentity, carry);
     }
 
     private void applyAsyncLifecycleSettlement(
@@ -956,7 +1603,8 @@ public class AvcoReplayService {
                 ignored -> new AsyncLifecycleBucket()
         );
         String assetIdentity = assetKey(transaction, flow).assetIdentity();
-        CarryTransfer sameAssetCarry = bucket.takeSameAssetCarry(assetIdentity, flow.getQuantityDelta().abs());
+        BigDecimal requestedQuantity = flow.getQuantityDelta().abs();
+        CarryTransfer sameAssetCarry = bucket.takeSameAssetCarry(assetIdentity, requestedQuantity, position.assetKey);
         if (sameAssetCarry != null) {
             restoreToPosition(
                     sameAssetCarry.quantity(),
@@ -965,21 +1613,28 @@ public class AvcoReplayService {
                     sameAssetCarry.uncoveredQuantity(),
                     sameAssetCarry.avco()
             );
-            if (bucket.isEmpty()) {
-                asyncLifecycleBuckets.remove(transaction.getCorrelationId());
+            BigDecimal residualQuantity = requestedQuantity.subtract(sameAssetCarry.quantity(), MC);
+            if (residualQuantity.signum() <= 0) {
+                if (bucket.isEmpty()) {
+                    asyncLifecycleBuckets.remove(transaction.getCorrelationId());
+                }
+                return;
             }
-            return;
+            requestedQuantity = residualQuantity;
         }
 
         BigDecimal remainingCost = bucket.remainingCostBasisUsd();
         if (remainingCost.signum() <= 0) {
-            applyUnknownTransfer(flow, position);
+            applyUnknownTransfer(copyFlowWithQuantity(flow, requestedQuantity), position);
             return;
         }
-        BigDecimal quantity = flow.getQuantityDelta().abs();
-        BigDecimal avco = safeDivide(remainingCost, quantity);
+        if (bucket.remainingUncoveredQuantity().signum() > 0) {
+            applyUnknownTransfer(copyFlowWithQuantity(flow, requestedQuantity), position);
+            return;
+        }
+        BigDecimal avco = safeDivide(remainingCost, requestedQuantity);
         bucket.clearAll();
-        restoreToPosition(flow, position, avco, remainingCost);
+        restoreToPosition(requestedQuantity, position, remainingCost, BigDecimal.ZERO, avco);
         asyncLifecycleBuckets.remove(transaction.getCorrelationId());
     }
 
@@ -1887,6 +2542,22 @@ public class AvcoReplayService {
         recomputePerWalletAvco(position);
     }
 
+    private boolean isSponsoredGasIn(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow
+    ) {
+        return transaction != null
+                && flow != null
+                && transaction.getType() == NormalizedTransactionType.SPONSORED_GAS_IN
+                && flow.getRole() == NormalizedLegRole.TRANSFER
+                && flow.getQuantityDelta() != null
+                && flow.getQuantityDelta().signum() > 0;
+    }
+
+    private void applySponsoredGasIn(NormalizedTransaction.Flow flow, PositionState position) {
+        restoreToPosition(flow.getQuantityDelta().abs(), position, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
+    }
+
     private void materializePendingInbound(NormalizedTransaction.Flow flow, PositionState position) {
         BigDecimal quantity = flow.getQuantityDelta().abs();
         position.quantity = position.quantity.add(quantity);
@@ -2129,6 +2800,39 @@ public class AvcoReplayService {
         return true;
     }
 
+    private boolean allHaveKnownReplayPrices(
+            NormalizedTransaction transaction,
+            List<IndexedFlow> flows
+    ) {
+        for (IndexedFlow indexedFlow : flows) {
+            if (replayUnitPriceUsd(transaction, indexedFlow.flow()) == null) {
+                return false;
+            }
+        }
+        return !flows.isEmpty();
+    }
+
+    private BigDecimal replayUnitPriceUsd(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow
+    ) {
+        if (flow == null) {
+            return null;
+        }
+        if (hasKnownPrice(flow)) {
+            return flow.getUnitPriceUsd();
+        }
+        if (transaction != null && CanonicalAssetCatalog.isUsdStablecoin(
+                transaction.getNetworkId(),
+                flow.getAssetContract(),
+                flow.getAssetSymbol(),
+                transaction.getSource()
+        )) {
+            return BigDecimal.ONE;
+        }
+        return null;
+    }
+
     private void allocateSettlementByQuantity(
             NormalizedTransaction transaction,
             List<NormalizedTransaction.Flow> flows,
@@ -2151,6 +2855,29 @@ public class AvcoReplayService {
             remainingCost = remainingCost.subtract(allocatedCost, MC);
             remainingQuantity = remainingQuantity.subtract(quantity, MC);
             restoreSettlementPosition(transaction, flow, positions, allocatedCost, ledgerPointCollector);
+        }
+    }
+
+    private void allocateIndexedSettlementByQuantity(
+            NormalizedTransaction transaction,
+            List<IndexedFlow> flows,
+            Map<AssetKey, PositionState> positions,
+            BigDecimal totalCostBasisUsd,
+            LedgerPointCollector ledgerPointCollector
+    ) {
+        BigDecimal totalQuantity = BigDecimal.ZERO;
+        for (IndexedFlow indexedFlow : flows) {
+            totalQuantity = totalQuantity.add(indexedFlow.flow().getQuantityDelta().abs(), MC);
+        }
+        BigDecimal remainingCost = totalCostBasisUsd;
+        for (int index = 0; index < flows.size(); index++) {
+            IndexedFlow indexedFlow = flows.get(index);
+            BigDecimal quantity = indexedFlow.flow().getQuantityDelta().abs();
+            BigDecimal allocatedCost = index == flows.size() - 1
+                    ? remainingCost
+                    : totalCostBasisUsd.multiply(safeDivide(quantity, totalQuantity), MC);
+            remainingCost = remainingCost.subtract(allocatedCost, MC);
+            restoreSettlementPosition(transaction, indexedFlow, positions, allocatedCost, ledgerPointCollector);
         }
     }
 
@@ -2179,6 +2906,65 @@ public class AvcoReplayService {
         }
     }
 
+    private void allocateIndexedSettlementByKnownValue(
+            NormalizedTransaction transaction,
+            List<IndexedFlow> flows,
+            Map<AssetKey, PositionState> positions,
+            BigDecimal totalCostBasisUsd,
+            LedgerPointCollector ledgerPointCollector
+    ) {
+        BigDecimal totalValueUsd = BigDecimal.ZERO;
+        for (IndexedFlow indexedFlow : flows) {
+            NormalizedTransaction.Flow flow = indexedFlow.flow();
+            totalValueUsd = totalValueUsd.add(flow.getQuantityDelta().abs().multiply(flow.getUnitPriceUsd(), MC), MC);
+        }
+        BigDecimal remainingCost = totalCostBasisUsd;
+        for (int index = 0; index < flows.size(); index++) {
+            IndexedFlow indexedFlow = flows.get(index);
+            NormalizedTransaction.Flow flow = indexedFlow.flow();
+            BigDecimal allocatedCost = index == flows.size() - 1
+                    ? remainingCost
+                    : totalCostBasisUsd.multiply(
+                    safeDivide(flow.getQuantityDelta().abs().multiply(flow.getUnitPriceUsd(), MC), totalValueUsd),
+                    MC
+            );
+            remainingCost = remainingCost.subtract(allocatedCost, MC);
+            restoreSettlementPosition(transaction, indexedFlow, positions, allocatedCost, ledgerPointCollector);
+        }
+    }
+
+    private void allocateIndexedSettlementByReplayKnownValue(
+            NormalizedTransaction transaction,
+            List<IndexedFlow> flows,
+            Map<AssetKey, PositionState> positions,
+            BigDecimal totalCostBasisUsd,
+            LedgerPointCollector ledgerPointCollector
+    ) {
+        BigDecimal totalValueUsd = BigDecimal.ZERO;
+        for (IndexedFlow indexedFlow : flows) {
+            BigDecimal replayUnitPrice = replayUnitPriceUsd(transaction, indexedFlow.flow());
+            if (replayUnitPrice == null) {
+                throw new IllegalArgumentException("Replay-known-value allocation requires deterministic unit prices");
+            }
+            totalValueUsd = totalValueUsd.add(
+                    indexedFlow.flow().getQuantityDelta().abs().multiply(replayUnitPrice, MC),
+                    MC
+            );
+        }
+        BigDecimal remainingCost = totalCostBasisUsd;
+        for (int index = 0; index < flows.size(); index++) {
+            IndexedFlow indexedFlow = flows.get(index);
+            NormalizedTransaction.Flow flow = indexedFlow.flow();
+            BigDecimal replayUnitPrice = replayUnitPriceUsd(transaction, flow);
+            BigDecimal flowValueUsd = flow.getQuantityDelta().abs().multiply(replayUnitPrice, MC);
+            BigDecimal allocatedCost = index == flows.size() - 1
+                    ? remainingCost
+                    : totalCostBasisUsd.multiply(safeDivide(flowValueUsd, totalValueUsd), MC);
+            remainingCost = remainingCost.subtract(allocatedCost, MC);
+            restoreSettlementPosition(transaction, indexedFlow, positions, allocatedCost, ledgerPointCollector);
+        }
+    }
+
     private void restoreSettlementPosition(
             NormalizedTransaction transaction,
             NormalizedTransaction.Flow flow,
@@ -2201,6 +2987,51 @@ public class AvcoReplayService {
                 position,
                 AssetLedgerPoint.BasisEffect.REALLOCATE_IN
         );
+    }
+
+    private void restoreSettlementPosition(
+            NormalizedTransaction transaction,
+            IndexedFlow indexedFlow,
+            Map<AssetKey, PositionState> positions,
+            BigDecimal allocatedCost,
+            LedgerPointCollector ledgerPointCollector
+    ) {
+        NormalizedTransaction.Flow flow = indexedFlow.flow();
+        AssetKey assetKey = assetKey(transaction, flow);
+        PositionState position = positions.computeIfAbsent(assetKey, ignored -> new PositionState(assetKey));
+        PositionSnapshot before = snapshot(position);
+        BigDecimal quantity = flow.getQuantityDelta().abs();
+        BigDecimal avco = safeDivide(allocatedCost, quantity);
+        restoreToPosition(flow, position, avco, allocatedCost);
+        ledgerPointCollector.record(
+                transaction,
+                flow,
+                indexedFlow.index(),
+                position.assetKey,
+                before,
+                position,
+                AssetLedgerPoint.BasisEffect.REALLOCATE_IN
+        );
+    }
+
+    private boolean isPositionScopedLpEntryOutbound(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow
+    ) {
+        return transaction != null
+                && flow != null
+                && flow.getRole() == NormalizedLegRole.TRANSFER
+                && flow.getQuantityDelta().signum() < 0
+                && transaction.getType() == NormalizedTransactionType.LP_ENTRY
+                && transaction.getCorrelationId() != null
+                && !transaction.getCorrelationId().isBlank();
+    }
+
+    private boolean isPositionScopedLpExit(NormalizedTransaction transaction) {
+        return transaction != null
+                && isLpExitType(transaction.getType())
+                && transaction.getCorrelationId() != null
+                && !transaction.getCorrelationId().isBlank();
     }
 
     private boolean isBucketOutbound(NormalizedTransaction transaction, NormalizedTransaction.Flow flow) {
@@ -2322,6 +3153,7 @@ public class AvcoReplayService {
         Map<String, PassThroughCorridor> byOutboundFlowRef = new LinkedHashMap<>();
 
         for (NormalizedTransaction transaction : ordered) {
+            Set<PassThroughScopeKey> touchedScopeKeys = touchedPassThroughScopeKeys(transaction);
             PassThroughCandidate outboundCandidate = selectPassThroughOutboundCandidate(transaction);
             if (outboundCandidate != null) {
                 PassThroughScopeKey scopeKey = outboundCandidate.scopeKey();
@@ -2346,6 +3178,15 @@ public class AvcoReplayService {
                 if (queue != null && queue.isEmpty()) {
                     openInboundCandidates.remove(scopeKey);
                 }
+            }
+
+            for (PassThroughScopeKey scopeKey : touchedScopeKeys) {
+                Deque<PassThroughCandidate> queue = openInboundCandidates.get(scopeKey);
+                if (queue == null || queue.isEmpty()) {
+                    continue;
+                }
+                queue.clear();
+                openInboundCandidates.remove(scopeKey);
             }
 
             PassThroughCandidate inboundCandidate = selectPassThroughInboundCandidate(transaction);
@@ -2431,6 +3272,31 @@ public class AvcoReplayService {
                     LP_ENTRY -> true;
             default -> false;
         };
+    }
+
+    private Set<PassThroughScopeKey> touchedPassThroughScopeKeys(NormalizedTransaction transaction) {
+        if (transaction == null) {
+            return Set.of();
+        }
+        String scope = passThroughScope(transaction);
+        if (scope == null || scope.isBlank()) {
+            return Set.of();
+        }
+        Set<PassThroughScopeKey> touched = new LinkedHashSet<>();
+        for (IndexedFlow indexedFlow : indexedFlows(transaction)) {
+            if (!isPrincipalFlow(indexedFlow.flow())) {
+                continue;
+            }
+            BigDecimal quantityDelta = indexedFlow.flow().getQuantityDelta();
+            if (quantityDelta == null || quantityDelta.signum() == 0) {
+                continue;
+            }
+            touched.add(new PassThroughScopeKey(
+                    scope,
+                    assetKey(transaction, indexedFlow.flow()).assetIdentity()
+            ));
+        }
+        return touched;
     }
 
     private String passThroughScope(NormalizedTransaction transaction) {
@@ -2619,59 +3485,111 @@ public class AvcoReplayService {
         return continuityIdentity(transaction, left).equals(continuityIdentity(transaction, right));
     }
 
-    private record AsyncLifecycleBucket(Map<String, Deque<CarryTransfer>> carriesByAsset) {
+    private static final class AsyncLifecycleBucket {
 
-        private AsyncLifecycleBucket() {
-            this(new LinkedHashMap<>());
-        }
+        private final Map<String, Deque<CarryTransfer>> carriesByAsset = new LinkedHashMap<>();
+        private final Map<String, Deque<CarryTransfer>> executionFeeReservesByAsset = new LinkedHashMap<>();
 
         private void add(String assetIdentity, CarryTransfer carry) {
             carriesByAsset.computeIfAbsent(assetIdentity, ignored -> new ArrayDeque<>()).addLast(carry);
         }
 
-        private CarryTransfer takeSameAssetCarry(String assetIdentity, BigDecimal requestedQuantity) {
-            Deque<CarryTransfer> queue = carriesByAsset.get(assetIdentity);
+        private void addExecutionFeeReserve(String assetIdentity, CarryTransfer carry) {
+            executionFeeReservesByAsset.computeIfAbsent(assetIdentity, ignored -> new ArrayDeque<>()).addLast(carry);
+        }
+
+        private Set<String> knownAssetIdentities() {
+            return Set.copyOf(carriesByAsset.keySet());
+        }
+
+        private CarryTransfer takeSameAssetCarry(
+                String assetIdentity,
+                BigDecimal requestedQuantity,
+                AssetKey restoreAssetKey
+        ) {
+            return takeCarry(carriesByAsset, assetIdentity, requestedQuantity, restoreAssetKey);
+        }
+
+        private CarryTransfer takeExecutionFeeReserve(
+                String assetIdentity,
+                BigDecimal requestedQuantity,
+                AssetKey restoreAssetKey
+        ) {
+            return takeCarry(executionFeeReservesByAsset, assetIdentity, requestedQuantity, restoreAssetKey);
+        }
+
+        private CarryTransfer takeCarry(
+                Map<String, Deque<CarryTransfer>> carries,
+                String assetIdentity,
+                BigDecimal requestedQuantity,
+                AssetKey restoreAssetKey
+        ) {
+            Deque<CarryTransfer> queue = carries.get(assetIdentity);
             if (queue == null || queue.isEmpty()) {
                 return null;
             }
-            CarryTransfer carry = queue.removeFirst();
-            BigDecimal carryQuantity = carry.quantity();
-            if (carryQuantity.compareTo(requestedQuantity) > 0) {
-                BigDecimal usedCoveredQuantity = requestedQuantity.min(carry.coveredQuantity());
-                BigDecimal usedUncoveredQuantity = nonNegative(requestedQuantity.subtract(usedCoveredQuantity, MC));
-                BigDecimal remainingCoveredQuantity = nonNegative(carry.coveredQuantity().subtract(usedCoveredQuantity, MC));
-                BigDecimal remainingUncoveredQuantity = nonNegative(carry.uncoveredQuantity().subtract(usedUncoveredQuantity, MC));
+            BigDecimal remainingRequested = requestedQuantity;
+            BigDecimal appliedQuantity = BigDecimal.ZERO;
+            BigDecimal appliedCoveredQuantity = BigDecimal.ZERO;
+            BigDecimal appliedUncoveredQuantity = BigDecimal.ZERO;
+            BigDecimal appliedCost = BigDecimal.ZERO;
+
+            while (remainingRequested.signum() > 0 && queue != null && !queue.isEmpty()) {
+                CarryTransfer carry = queue.removeFirst();
+                BigDecimal carryQuantity = carry.quantity();
+                BigDecimal usedQuantity = carryQuantity.min(remainingRequested);
+                BigDecimal usedCoveredQuantity = usedQuantity.min(carry.coveredQuantity());
+                BigDecimal usedUncoveredQuantity = nonNegative(usedQuantity.subtract(usedCoveredQuantity, MC));
                 BigDecimal usedCost = carry.avco() == null
                         ? BigDecimal.ZERO
                         : usedCoveredQuantity.multiply(carry.avco(), MC);
-                BigDecimal remainingQuantity = carryQuantity.subtract(requestedQuantity, MC);
-                BigDecimal remainingCost = carry.costBasisUsd().subtract(usedCost, MC);
-                queue.addFirst(new CarryTransfer(
-                        remainingQuantity,
-                        remainingCoveredQuantity,
-                        remainingUncoveredQuantity,
-                        remainingCost,
-                        carry.avco(),
-                        carry.pendingInbound(),
-                        carry.assetKey()
-                ));
-                if (queue.isEmpty()) {
-                    carriesByAsset.remove(assetIdentity);
+
+                appliedQuantity = appliedQuantity.add(usedQuantity, MC);
+                appliedCoveredQuantity = appliedCoveredQuantity.add(usedCoveredQuantity, MC);
+                appliedUncoveredQuantity = appliedUncoveredQuantity.add(usedUncoveredQuantity, MC);
+                appliedCost = appliedCost.add(usedCost, MC);
+
+                if (carryQuantity.compareTo(usedQuantity) > 0) {
+                    BigDecimal remainingQuantity = carryQuantity.subtract(usedQuantity, MC);
+                    BigDecimal remainingCoveredQuantity =
+                            nonNegative(carry.coveredQuantity().subtract(usedCoveredQuantity, MC));
+                    BigDecimal remainingUncoveredQuantity =
+                            nonNegative(carry.uncoveredQuantity().subtract(usedUncoveredQuantity, MC));
+                    BigDecimal remainingCost = nonNegative(carry.costBasisUsd().subtract(usedCost, MC));
+                    BigDecimal remainingAvco = remainingCoveredQuantity.signum() <= 0
+                            ? null
+                            : safeDivide(remainingCost, remainingCoveredQuantity);
+                    queue.addFirst(new CarryTransfer(
+                            remainingQuantity,
+                            remainingCoveredQuantity,
+                            remainingUncoveredQuantity,
+                            remainingCost,
+                            remainingAvco,
+                            carry.pendingInbound(),
+                            carry.assetKey()
+                    ));
                 }
-                return new CarryTransfer(
-                        requestedQuantity,
-                        usedCoveredQuantity,
-                        usedUncoveredQuantity,
-                        usedCost,
-                        carry.avco(),
-                        false,
-                        carry.assetKey()
-                );
+                remainingRequested = remainingRequested.subtract(usedQuantity, MC);
+                if (queue.isEmpty()) {
+                    carries.remove(assetIdentity);
+                }
+                queue = carries.get(assetIdentity);
             }
-            if (queue.isEmpty()) {
-                carriesByAsset.remove(assetIdentity);
+            if (appliedQuantity.signum() <= 0) {
+                return null;
             }
-            return carry;
+            BigDecimal appliedAvco = appliedCoveredQuantity.signum() <= 0
+                    ? null
+                    : safeDivide(appliedCost, appliedCoveredQuantity);
+            return new CarryTransfer(
+                    appliedQuantity,
+                    appliedCoveredQuantity,
+                    appliedUncoveredQuantity,
+                    appliedCost,
+                    appliedAvco,
+                    false,
+                    restoreAssetKey
+            );
         }
 
         private BigDecimal remainingCostBasisUsd() {
@@ -2684,12 +3602,33 @@ public class AvcoReplayService {
             return total;
         }
 
+        private BigDecimal remainingExecutionFeeReserveCostBasisUsd() {
+            BigDecimal total = BigDecimal.ZERO;
+            for (Deque<CarryTransfer> queue : executionFeeReservesByAsset.values()) {
+                for (CarryTransfer carry : queue) {
+                    total = total.add(carry.costBasisUsd());
+                }
+            }
+            return total;
+        }
+
+        private BigDecimal remainingUncoveredQuantity() {
+            BigDecimal total = BigDecimal.ZERO;
+            for (Deque<CarryTransfer> queue : carriesByAsset.values()) {
+                for (CarryTransfer carry : queue) {
+                    total = total.add(carry.uncoveredQuantity(), MC);
+                }
+            }
+            return total;
+        }
+
         private void clearAll() {
             carriesByAsset.clear();
+            executionFeeReservesByAsset.clear();
         }
 
         private boolean isEmpty() {
-            return carriesByAsset.isEmpty();
+            return carriesByAsset.isEmpty() && executionFeeReservesByAsset.isEmpty();
         }
     }
 

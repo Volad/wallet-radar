@@ -201,6 +201,7 @@ public class AssetLedgerQueryService {
                 ? null
                 : totalCostBasisUsd.divide(coveredQuantity, MC);
         uncoveredBuckets.sort((left, right) -> right.uncoveredQuantity().compareTo(left.uncoveredQuantity()));
+        List<ShortfallSourceView> shortfallSources = familyShortfallSources(universePoints);
         return new CurrentStateView(
                 quantity,
                 coveredQuantity,
@@ -209,8 +210,48 @@ public class AssetLedgerQueryService {
                 avcoUsd,
                 realisedPnlUsd,
                 gasPaidUsd,
-                List.copyOf(uncoveredBuckets)
+                List.copyOf(uncoveredBuckets),
+                shortfallSources
         );
+    }
+
+    private List<ShortfallSourceView> familyShortfallSources(List<AssetLedgerPoint> universePoints) {
+        Map<ShortfallSourceKey, ShortfallSourceAccumulator> grouped = new LinkedHashMap<>();
+        for (AssetLedgerPoint point : universePoints) {
+            BigDecimal quantityShortfallDelta = zeroIfNull(point.getQuantityShortfallDelta());
+            if (quantityShortfallDelta.signum() <= 0) {
+                continue;
+            }
+            ShortfallSourceKey key = new ShortfallSourceKey(
+                    point.getWalletAddress(),
+                    point.getNetworkId() == null ? null : point.getNetworkId().name(),
+                    point.getTxHash(),
+                    point.getNormalizedType(),
+                    point.getProtocolName()
+            );
+            grouped.computeIfAbsent(key, ignored -> new ShortfallSourceAccumulator(point))
+                    .add(quantityShortfallDelta);
+        }
+        return grouped.values().stream()
+                .sorted((left, right) -> {
+                    int byShortfall = right.quantityShortfall().compareTo(left.quantityShortfall());
+                    if (byShortfall != 0) {
+                        return byShortfall;
+                    }
+                    if (left.blockTimestamp() == null && right.blockTimestamp() == null) {
+                        return 0;
+                    }
+                    if (left.blockTimestamp() == null) {
+                        return 1;
+                    }
+                    if (right.blockTimestamp() == null) {
+                        return -1;
+                    }
+                    return left.blockTimestamp().compareTo(right.blockTimestamp());
+                })
+                .limit(20)
+                .map(ShortfallSourceAccumulator::toView)
+                .toList();
     }
 
     private LedgerPointView toRawPoint(AssetLedgerPoint point) {
@@ -457,7 +498,8 @@ public class AssetLedgerQueryService {
             BigDecimal avcoUsd,
             BigDecimal realisedPnlUsd,
             BigDecimal gasPaidUsd,
-            List<UncoveredBucketView> uncoveredBuckets
+            List<UncoveredBucketView> uncoveredBuckets,
+            List<ShortfallSourceView> shortfallSources
     ) {
     }
 
@@ -477,6 +519,17 @@ public class AssetLedgerQueryService {
             boolean hasIncompleteHistory,
             boolean hasUnresolvedFlags,
             Integer unresolvedFlagCount
+    ) {
+    }
+
+    public record ShortfallSourceView(
+            String walletAddress,
+            String networkId,
+            String txHash,
+            Instant blockTimestamp,
+            String normalizedType,
+            String protocolName,
+            BigDecimal quantityShortfall
     ) {
     }
 
@@ -579,6 +632,58 @@ public class AssetLedgerQueryService {
             NetworkId networkId,
             String accountingAssetIdentity
     ) {
+    }
+
+    private record ShortfallSourceKey(
+            String walletAddress,
+            String networkId,
+            String txHash,
+            String normalizedType,
+            String protocolName
+    ) {
+    }
+
+    private static final class ShortfallSourceAccumulator {
+        private final String walletAddress;
+        private final String networkId;
+        private final String txHash;
+        private final Instant blockTimestamp;
+        private final String normalizedType;
+        private final String protocolName;
+        private BigDecimal quantityShortfall = BigDecimal.ZERO;
+
+        private ShortfallSourceAccumulator(AssetLedgerPoint seed) {
+            this.walletAddress = seed.getWalletAddress();
+            this.networkId = seed.getNetworkId() == null ? null : seed.getNetworkId().name();
+            this.txHash = seed.getTxHash();
+            this.blockTimestamp = seed.getBlockTimestamp();
+            this.normalizedType = seed.getNormalizedType();
+            this.protocolName = seed.getProtocolName();
+        }
+
+        private void add(BigDecimal delta) {
+            quantityShortfall = quantityShortfall.add(zeroIfNull(delta), MC);
+        }
+
+        private BigDecimal quantityShortfall() {
+            return quantityShortfall;
+        }
+
+        private Instant blockTimestamp() {
+            return blockTimestamp;
+        }
+
+        private ShortfallSourceView toView() {
+            return new ShortfallSourceView(
+                    walletAddress,
+                    networkId,
+                    txHash,
+                    blockTimestamp,
+                    normalizedType,
+                    protocolName,
+                    quantityShortfall
+            );
+        }
     }
 
     private record AllowedScope(Map<String, Set<NetworkId>> networksByAddress) {

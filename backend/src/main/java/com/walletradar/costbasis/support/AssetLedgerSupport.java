@@ -44,7 +44,7 @@ public final class AssetLedgerSupport {
         }
         return switch (type) {
             case SWAP -> AssetLedgerPoint.LifecycleKind.SPOT;
-            case EXTERNAL_TRANSFER_IN, EXTERNAL_TRANSFER_OUT, INTERNAL_TRANSFER, APPROVE, ADMIN_CONFIG ->
+            case EXTERNAL_TRANSFER_IN, EXTERNAL_TRANSFER_OUT, SPONSORED_GAS_IN, INTERNAL_TRANSFER, APPROVE, ADMIN_CONFIG ->
                     AssetLedgerPoint.LifecycleKind.TRANSFER;
             case BRIDGE_IN, BRIDGE_OUT -> AssetLedgerPoint.LifecycleKind.BRIDGE;
             case PROTOCOL_CUSTODY_DEPOSIT, PROTOCOL_CUSTODY_WITHDRAW -> AssetLedgerPoint.LifecycleKind.CUSTODY;

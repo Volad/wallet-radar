@@ -15,6 +15,7 @@ import com.walletradar.ingestion.pipeline.onchain.OnChainNormalizedTransactionBu
 import com.walletradar.ingestion.pipeline.onchain.PendingRawTransactionQueryService;
 import com.walletradar.ingestion.pipeline.clarification.RelatedLifecycleDiscoveryService;
 import com.walletradar.ingestion.pipeline.onchain.repair.ExplorerRawOrderingRepairGateway;
+import com.walletradar.ingestion.pipeline.onchain.repair.InternalTransferRawPeerRepairService;
 import com.walletradar.ingestion.pipeline.onchain.support.ResolvedRawOrderingMetadata;
 import com.walletradar.ingestion.store.IdempotentNormalizedTransactionStore;
 import org.bson.Document;
@@ -52,6 +53,8 @@ class OnChainNormalizationServiceTest {
     private RelatedLifecycleDiscoveryService relatedLifecycleDiscoveryService;
     @Mock
     private OnChainLifecycleLinkService onChainLifecycleLinkService;
+    @Mock
+    private InternalTransferRawPeerRepairService internalTransferRawPeerRepairService;
 
     private OnChainNormalizationService service;
 
@@ -69,7 +72,8 @@ class OnChainNormalizationServiceTest {
                 rawTransactionRepository,
                 explorerRawOrderingRepairGateway,
                 relatedLifecycleDiscoveryService,
-                onChainLifecycleLinkService
+                onChainLifecycleLinkService,
+                internalTransferRawPeerRepairService
         );
     }
 
@@ -81,6 +85,7 @@ class OnChainNormalizationServiceTest {
         RawTransaction sameTimestampLowerIndex = raw("0xbbb", 1_700_000_001L, 2);
         when(pendingRawTransactionQueryService.loadNextBatch(10))
                 .thenReturn(List.of(laterIndex, sameTimestampLowerIndex, earliest));
+        when(internalTransferRawPeerRepairService.repairMissingPeers(any())).thenReturn(0);
 
         service.processNextBatch();
 
@@ -99,6 +104,7 @@ class OnChainNormalizationServiceTest {
         RawTransaction existingLater = raw("0xbbb", 1_700_000_001L, 7);
         when(pendingRawTransactionQueryService.loadNextBatch(10))
                 .thenReturn(List.of(existingLater, repairedEarlier));
+        when(internalTransferRawPeerRepairService.repairMissingPeers(any())).thenReturn(0);
         when(explorerRawOrderingRepairGateway.fetch("0xccc", NetworkId.ETHEREUM))
                 .thenReturn(java.util.Optional.of(new ResolvedRawOrderingMetadata(1_700_000_001L, 2)));
 
@@ -204,6 +210,18 @@ class OnChainNormalizationServiceTest {
         assertThat(rawTransaction.getRetryCount()).isZero();
         assertThat(rawTransaction.getLastError()).isNull();
         assertThat(rawTransaction.getNextRetryAt()).isNull();
+    }
+
+    @Test
+    @DisplayName("repairs missing raw peers before normalizing current batch")
+    void repairsMissingRawPeersBeforeNormalizingCurrentBatch() {
+        RawTransaction rawTransaction = raw("0xabc", 1_700_000_000L, 5);
+        when(pendingRawTransactionQueryService.loadNextBatch(10)).thenReturn(List.of(rawTransaction));
+        when(internalTransferRawPeerRepairService.repairMissingPeers(any())).thenReturn(1);
+
+        service.processNextBatch();
+
+        verify(internalTransferRawPeerRepairService).repairMissingPeers(any());
     }
 
     private static RawTransaction raw(String txHash, Long epochSeconds, int transactionIndex) {

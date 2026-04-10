@@ -108,6 +108,26 @@ public class PendingReceiptClarificationQueryService {
                 Criteria.where("protocolName").is("Euler"),
                 Criteria.where("missingDataReasons").in(ClassificationReasonCode.EULER_BATCH_DECODER_REQUIRED.code())
         );
+        Criteria nativeSettlementTransferRecoveryCriteria = new Criteria().andOperator(
+                Criteria.where("status").is(NormalizedTransactionStatus.PENDING_CLARIFICATION),
+                Criteria.where("type").in(
+                        NormalizedTransactionType.LP_EXIT,
+                        NormalizedTransactionType.LP_FEE_CLAIM
+                ),
+                Criteria.where("missingDataReasons")
+                        .in(ClassificationReasonCode.NATIVE_SETTLEMENT_TRANSFER_EVIDENCE_REQUIRED.code())
+        );
+        Criteria lpPositionCorrelationRecoveryCriteria = new Criteria().andOperator(
+                Criteria.where("status").is(NormalizedTransactionStatus.PENDING_CLARIFICATION),
+                Criteria.where("type").in(
+                        NormalizedTransactionType.LP_ENTRY,
+                        NormalizedTransactionType.LP_EXIT,
+                        NormalizedTransactionType.LP_EXIT_PARTIAL,
+                        NormalizedTransactionType.LP_EXIT_FINAL
+                ),
+                Criteria.where("missingDataReasons")
+                        .in(ClassificationReasonCode.LP_POSITION_CORRELATION_REQUIRED.code())
+        );
 
         Query query = new Query(new Criteria().andOperator(
                 Criteria.where("source").is(NormalizedTransactionSource.ON_CHAIN),
@@ -119,7 +139,9 @@ public class PendingReceiptClarificationQueryService {
                         cowPendingClarificationCriteria,
                         bridgeEvidenceCriteria,
                         oneInchNativeSettlementCriteria,
-                        eulerPendingClarificationCriteria
+                        eulerPendingClarificationCriteria,
+                        nativeSettlementTransferRecoveryCriteria,
+                        lpPositionCorrelationRecoveryCriteria
                 )
         ));
         query.with(Sort.by(

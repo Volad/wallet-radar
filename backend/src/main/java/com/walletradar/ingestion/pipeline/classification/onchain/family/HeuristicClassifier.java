@@ -16,6 +16,7 @@ import com.walletradar.ingestion.pipeline.classification.support.NativeAssetSymb
 import com.walletradar.ingestion.pipeline.classification.support.OnChainClassificationSupport;
 import com.walletradar.ingestion.pipeline.classification.support.RawLeg;
 import com.walletradar.ingestion.pipeline.classification.support.ParityFlowSupport;
+import com.walletradar.ingestion.pipeline.classification.support.SponsoredGasTopUpSupport;
 import com.walletradar.ingestion.wallet.query.TrackedWalletLookupService;
 import com.walletradar.ingestion.pipeline.onchain.OnChainRawTransactionView;
 import org.bson.Document;
@@ -143,6 +144,25 @@ public class HeuristicClassifier implements OnChainFamilyClassifier {
                         ClassificationSource.PROTOCOL_REGISTRY,
                         entry.confidence(),
                         OnChainClassificationSupport.toFlows(context.movementLegs(), NormalizedTransactionType.BRIDGE_IN),
+                        List.of(),
+                        entry.protocolName(),
+                        entry.protocolVersion()
+                ));
+            }
+            Optional<ProtocolRegistryEntry> sponsoredGasSender = SponsoredGasTopUpSupport.findVerifiedSender(
+                    context.view(),
+                    context.movementLegs(),
+                    protocolRegistryService
+            );
+            if (sponsoredGasSender.isPresent()) {
+                ProtocolRegistryEntry entry = sponsoredGasSender.get();
+                return Optional.of(FamilyDecisionSupport.buildWithView(
+                        context.view(),
+                        NormalizedTransactionType.SPONSORED_GAS_IN,
+                        OnChainClassificationSupport.initialStatus(context.view(), NormalizedTransactionType.SPONSORED_GAS_IN, entry.confidence()),
+                        ClassificationSource.PROTOCOL_REGISTRY,
+                        entry.confidence(),
+                        OnChainClassificationSupport.toFlows(context.movementLegs(), NormalizedTransactionType.SPONSORED_GAS_IN),
                         List.of(),
                         entry.protocolName(),
                         entry.protocolVersion()
