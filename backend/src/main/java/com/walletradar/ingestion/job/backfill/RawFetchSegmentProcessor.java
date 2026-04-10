@@ -14,7 +14,11 @@ import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.stream.Collectors;
 
 /**
  * Fetches raw transactions from chain sources and upserts them into raw_transactions.
@@ -95,24 +99,66 @@ public class RawFetchSegmentProcessor {
     }
 
     private void bulkUpsert(List<RawTransaction> txs) {
-        BulkOperations ops = mongoTemplate.bulkOps(BulkOperations.BulkMode.UNORDERED, RawTransaction.class);
+        Map<String, RawTransaction> existingById = existingTransactionsById(txs);
+        BulkOperations ops = null;
+        int operationCount = 0;
+        int skippedExisting = 0;
         for (RawTransaction tx : txs) {
             Query query = Query.query(Criteria.where("_id").is(tx.getId()));
-            Update update = new Update()
-                    .set("txHash", tx.getTxHash())
-                    .set("networkId", tx.getNetworkId())
-                    .set("syncMethod", tx.getSyncMethod())
-                    .set("walletAddress", tx.getWalletAddress())
-                    .set("blockNumber", tx.getBlockNumber())
-                    .set("slot", tx.getSlot())
-                    .set("normalizationStatus", tx.getNormalizationStatus())
-                    .set("retryCount", tx.getRetryCount())
-                    .set("lastError", tx.getLastError())
-                    .set("nextRetryAt", tx.getNextRetryAt())
-                    .set("createdAt", tx.getCreatedAt())
-                    .set("rawData", tx.getRawData());
-            ops.upsert(query, update);
+            RawTransaction existing = existingById.get(tx.getId());
+            if (existing == null) {
+                if (ops == null) {
+                    ops = mongoTemplate.bulkOps(BulkOperations.BulkMode.UNORDERED, RawTransaction.class);
+                }
+                ops.upsert(query, insertUpdate(tx));
+                operationCount++;
+                continue;
+            }
+            skippedExisting++;
         }
-        ops.execute();
+        if (ops != null && operationCount > 0) {
+            log.info(
+                    "Raw refresh upsert queued {} insert operations out of {} fetched rows; skippedExisting={}",
+                    operationCount,
+                    txs.size(),
+                    skippedExisting
+            );
+            ops.execute();
+        } else {
+            log.info("Raw refresh upsert skipped writes for {} fetched rows; skippedExisting={}", txs.size(), skippedExisting);
+        }
+    }
+
+    private Map<String, RawTransaction> existingTransactionsById(List<RawTransaction> txs) {
+        if (txs.isEmpty()) {
+            return Map.of();
+        }
+        List<String> ids = txs.stream()
+                .map(RawTransaction::getId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        return mongoTemplate.find(Query.query(Criteria.where("_id").in(ids)), RawTransaction.class)
+                .stream()
+                .collect(Collectors.toMap(RawTransaction::getId, existing -> existing, (left, right) -> left, LinkedHashMap::new));
+    }
+
+    private Update insertUpdate(RawTransaction tx) {
+        return new Update()
+                .setOnInsert("txHash", tx.getTxHash())
+                .setOnInsert("networkId", tx.getNetworkId())
+                .setOnInsert("syncMethod", tx.getSyncMethod())
+                .setOnInsert("walletAddress", tx.getWalletAddress())
+                .setOnInsert("blockNumber", tx.getBlockNumber())
+                .setOnInsert("slot", tx.getSlot())
+                .setOnInsert("rawData", tx.getRawData())
+                .setOnInsert("normalizationStatus", tx.getNormalizationStatus())
+                .setOnInsert("retryCount", tx.getRetryCount())
+                .setOnInsert("lastError", tx.getLastError())
+                .setOnInsert("nextRetryAt", tx.getNextRetryAt())
+                .setOnInsert("createdAt", tx.getCreatedAt());
     }
 }

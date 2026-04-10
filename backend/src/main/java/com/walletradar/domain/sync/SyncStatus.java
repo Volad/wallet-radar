@@ -35,6 +35,11 @@ public class SyncStatus {
     private SyncStatusValue status;
     private Integer progressPct;
     private Long lastBlockSynced;
+    private Instant lastSyncedAt;
+    private Long windowFromBlock;
+    private Long windowToBlock;
+    private Instant windowFromTime;
+    private Instant windowToTime;
     private String syncBannerMessage;
     private boolean backfillComplete;
     /** Raw fetch complete for this wallet×network. */

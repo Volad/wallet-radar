@@ -10,4 +10,6 @@ import java.util.List;
 public interface UserSessionRepository extends MongoRepository<UserSession, String> {
 
     List<UserSession> findAllByWalletsAddress(String address);
+
+    List<UserSession> findAllByIntegrationsIntegrationId(String integrationId);
 }

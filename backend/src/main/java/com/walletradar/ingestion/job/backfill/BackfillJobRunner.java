@@ -4,7 +4,6 @@ import com.walletradar.domain.sync.BackfillSegmentRepository;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.sync.SyncStatus;
 import com.walletradar.domain.sync.SyncStatusRepository;
-import com.walletradar.domain.event.WalletAddedEvent;
 import com.walletradar.ingestion.adapter.BlockHeightResolver;
 import com.walletradar.ingestion.adapter.BlockTimestampResolver;
 import com.walletradar.ingestion.adapter.NetworkAdapter;
@@ -31,7 +30,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import static com.walletradar.domain.sync.SyncStatus.SyncStatusValue;
 
 /**
- * Orchestrates wallet backfill queueing, worker loops, startup resume, and retry handling.
+ * Orchestrates source-level backfill queueing, worker loops, startup resume,
+ * and retry handling for already-planned segments.
  */
 @Component
 @Slf4j
@@ -59,29 +59,10 @@ public class BackfillJobRunner {
     @Qualifier("backfill-executor")
     private final Executor backfillExecutor;
 
-    @EventListener
-    public void onWalletAdded(WalletAddedEvent event) {
-        backfillCoordinatorExecutor.execute(() -> enqueueWork(event.walletAddress(), event.networks()));
-    }
-
     @EventListener(ApplicationReadyEvent.class)
     public void onApplicationReady(ApplicationReadyEvent event) {
         startWorkersIfNeeded();
-        List<SyncStatus> incomplete = syncStatusRepository.findOnChainByStatusIn(
-                SyncStatus.SourceKind.ONCHAIN,
-                Set.of(SyncStatusValue.PENDING, SyncStatusValue.RUNNING, SyncStatusValue.FAILED));
-        if (incomplete.isEmpty()) return;
-        int enqueued = 0;
-        for (SyncStatus s : incomplete) {
-            if (s.getWalletAddress() == null || s.getNetworkId() == null) continue;
-            try {
-                BackfillWorkItem item = new BackfillWorkItem(s.getWalletAddress(), NetworkId.valueOf(s.getNetworkId()));
-                if (enqueueItemIfSupported(item)) enqueued++;
-            } catch (IllegalArgumentException ignored) { /* unknown network */ }
-        }
-        if (enqueued > 0) {
-            log.info("Resuming backfill: {} work item(s) enqueued (PENDING/RUNNING/FAILED), workers will take next available", enqueued);
-        }
+        dispatchPendingOnChainBackfills();
     }
 
     void runBackfill(String walletAddress, List<NetworkId> networks) {
@@ -115,6 +96,38 @@ public class BackfillJobRunner {
 
     private static String itemKey(String walletAddress, NetworkId networkId) {
         return walletAddress + ":" + networkId.name();
+    }
+
+    @Scheduled(fixedDelayString = "${walletradar.ingestion.backfill.dispatch-interval-ms:5000}")
+    public void dispatchPendingOnChainBackfills() {
+        startWorkersIfNeeded();
+        List<SyncStatus> incomplete = syncStatusRepository.findOnChainByStatusIn(
+                SyncStatus.SourceKind.ONCHAIN,
+                Set.of(SyncStatusValue.PENDING, SyncStatusValue.RUNNING, SyncStatusValue.FAILED)
+        );
+        if (incomplete.isEmpty()) {
+            return;
+        }
+        int enqueued = 0;
+        for (SyncStatus status : incomplete) {
+            if (status.getWalletAddress() == null || status.getNetworkId() == null || status.getId() == null) {
+                continue;
+            }
+            if (!backfillSegmentRepository.existsBySyncStatusId(status.getId())) {
+                continue;
+            }
+            try {
+                BackfillWorkItem item = new BackfillWorkItem(status.getWalletAddress(), NetworkId.valueOf(status.getNetworkId()));
+                if (enqueueItemIfSupported(item)) {
+                    enqueued++;
+                }
+            } catch (IllegalArgumentException ignored) {
+                // Unknown networks remain skipped until config supports them.
+            }
+        }
+        if (enqueued > 0) {
+            log.info("On-chain backfill dispatch enqueued {} work item(s)", enqueued);
+        }
     }
 
     private void startWorkersIfNeeded() {

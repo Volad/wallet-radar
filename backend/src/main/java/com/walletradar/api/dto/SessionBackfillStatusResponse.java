@@ -8,6 +8,7 @@ import java.util.List;
 public record SessionBackfillStatusResponse(
         String sessionId,
         String status,
+        String acquisitionStatus,
         Integer overallProgressPct,
         Integer totalTargets,
         Integer completedTargets,

@@ -56,6 +56,7 @@ class SessionQueryServiceTest {
         assertThat(response).isPresent();
         SessionQueryService.SessionBackfillStatusView status = response.orElseThrow();
         assertThat(status.status()).isEqualTo("RUNNING");
+        assertThat(status.acquisitionStatus()).isEqualTo("RUNNING");
         assertThat(status.overallProgressPct()).isEqualTo(0);
         assertThat(status.totalTargets()).isEqualTo(2);
         assertThat(status.completedTargets()).isEqualTo(0);
@@ -99,6 +100,7 @@ class SessionQueryServiceTest {
         SessionQueryService.SessionBackfillStatusView status = sessionQueryService.findBackfillStatus("s-2").orElseThrow();
 
         assertThat(status.status()).isEqualTo("RUNNING");
+        assertThat(status.acquisitionStatus()).isEqualTo("RUNNING");
         assertThat(status.overallProgressPct()).isEqualTo(75);
         assertThat(status.totalTargets()).isEqualTo(2);
         assertThat(status.completedTargets()).isEqualTo(1);
@@ -133,6 +135,7 @@ class SessionQueryServiceTest {
 
         SessionQueryService.SessionBackfillStatusView status = sessionQueryService.findBackfillStatus("s-3").orElseThrow();
         assertThat(status.status()).isEqualTo("FAILED");
+        assertThat(status.acquisitionStatus()).isEqualTo("FAILED");
         assertThat(status.overallProgressPct()).isEqualTo(60);
         assertThat(status.completedTargets()).isEqualTo(1);
     }
@@ -192,6 +195,7 @@ class SessionQueryServiceTest {
         SessionQueryService.SessionBackfillStatusView status = sessionQueryService.findBackfillStatus("s-6").orElseThrow();
 
         assertThat(status.status()).isEqualTo("RUNNING");
+        assertThat(status.acquisitionStatus()).isEqualTo("RUNNING");
         assertThat(status.totalTargets()).isEqualTo(2);
         assertThat(status.completedTargets()).isEqualTo(1);
         assertThat(status.overallProgressPct()).isEqualTo(75);
@@ -217,11 +221,45 @@ class SessionQueryServiceTest {
         SessionQueryService.SessionBackfillStatusView status = sessionQueryService.findBackfillStatus("s-empty").orElseThrow();
 
         assertThat(status.status()).isEqualTo("COMPLETE");
+        assertThat(status.acquisitionStatus()).isEqualTo("COMPLETE");
         assertThat(status.overallProgressPct()).isEqualTo(100);
         assertThat(status.totalTargets()).isEqualTo(0);
         assertThat(status.completedTargets()).isEqualTo(0);
         assertThat(status.pipelineStage()).isEqualTo("BACKFILL");
         assertThat(status.pipelineStatus()).isEqualTo("COMPLETE");
+    }
+
+    @Test
+    @DisplayName("findBackfillStatus keeps acquisition complete while overall status follows downstream pipeline")
+    void findBackfillStatus_overallStatusFollowsPipelineAfterBackfill() {
+        UserSession session = session(
+                "s-7",
+                wallet("0xabc", "Wallet 1", "#22d3ee", List.of(NetworkId.ETHEREUM))
+        );
+        stubScope(session, List.of("0xabc"), List.of("0xabc"));
+
+        UserSession.PipelineState pipelineState = new UserSession.PipelineState();
+        pipelineState.setStage(UserSession.PipelineStage.PRICING);
+        pipelineState.setStatus(UserSession.PipelineStatus.RUNNING);
+        pipelineState.setMessage("Pricing running");
+        session.setPipelineState(pipelineState);
+
+        when(userSessionRepository.findById("s-7")).thenReturn(Optional.of(session));
+
+        SyncStatus completeEth = new SyncStatus();
+        completeEth.setWalletAddress("0xabc");
+        completeEth.setNetworkId(NetworkId.ETHEREUM.name());
+        completeEth.setStatus(SyncStatus.SyncStatusValue.COMPLETE);
+        completeEth.setProgressPct(100);
+        completeEth.setBackfillComplete(true);
+        when(syncStatusRepository.findByWalletAddressIn(List.of("0xabc"))).thenReturn(List.of(completeEth));
+
+        SessionQueryService.SessionBackfillStatusView status = sessionQueryService.findBackfillStatus("s-7").orElseThrow();
+
+        assertThat(status.status()).isEqualTo("RUNNING");
+        assertThat(status.acquisitionStatus()).isEqualTo("COMPLETE");
+        assertThat(status.pipelineStage()).isEqualTo("PRICING");
+        assertThat(status.pipelineStatus()).isEqualTo("RUNNING");
     }
 
     @Test

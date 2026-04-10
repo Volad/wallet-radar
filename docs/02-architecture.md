@@ -300,6 +300,24 @@ Important guardrails:
 - any bounded rematch to older canonical rows must be explicit and
   deterministic; refresh is not a blanket re-normalization of historical rows
 
+Control-plane ownership:
+
+- `AccountUniverseChangedEvent` is the topology trigger for session-owned
+  source reconciliation; it replaces the old wallet-only event path
+- `AccountUniverseChangedEventHandler` owns:
+  - universe diff reconciliation
+  - clearing derived session-scoped accounting outputs
+  - delegating sync-window planning to `SourceSyncPlanner`
+  - delegating segment creation to `BackfillJobPlanner`
+- `SourceSyncPlanner` owns only source windows and `sync_status` mutation:
+  - choose `from/to`
+  - write window metadata into `sync_status`
+  - preserve stable checkpoints such as `lastBlockSynced` / `lastSyncedAt`
+  - set `status=PENDING`
+- `BackfillJobPlanner` owns only segment creation from the prepared window
+- `BackfillJobRunner` and `BackfillNetworkExecutor` are execution-only; they
+  must not compute historical windows or invent missing segments at runtime
+
 ### 3.2 Normalization
 
 - Start only after raw backfill for the relevant source scope is complete.

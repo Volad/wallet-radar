@@ -22,10 +22,13 @@ public class IntegrationSyncStatusService {
         SyncStatus status = findOrCreate(integration);
         status.setStatus(totalSegments == 0 ? SyncStatus.SyncStatusValue.COMPLETE : SyncStatus.SyncStatusValue.PENDING);
         status.setProgressPct(totalSegments == 0 ? 100 : 0);
-        status.setLastBlockSynced(null);
         status.setSyncBannerMessage(totalSegments == 0 ? null : "Backfill queued");
         status.setBackfillComplete(totalSegments == 0);
         status.setRawFetchComplete(totalSegments == 0);
+        if (totalSegments == 0) {
+            status.setLastSyncedAt(status.getWindowToTime() == null ? Instant.now() : status.getWindowToTime());
+            clearWindow(status);
+        }
         status.setRetryCount(0);
         status.setNextRetryAfter(null);
         status.setUpdatedAt(Instant.now());
@@ -59,6 +62,10 @@ public class IntegrationSyncStatusService {
                 : "Integration backfill: " + completedSegments + "/" + totalSegments + " segments complete");
         status.setBackfillComplete(complete);
         status.setRawFetchComplete(complete);
+        if (complete) {
+            status.setLastSyncedAt(status.getWindowToTime() == null ? Instant.now() : status.getWindowToTime());
+            clearWindow(status);
+        }
         status.setUpdatedAt(Instant.now());
         if (failed) {
             status.setRetryCount(status.getRetryCount() + 1);
@@ -89,5 +96,12 @@ public class IntegrationSyncStatusService {
         status.setWalletAddress(integration.getAccountRef());
         status.setNetworkId(integration.getProvider() == null ? null : integration.getProvider().name());
         return status;
+    }
+
+    private void clearWindow(SyncStatus status) {
+        status.setWindowFromBlock(null);
+        status.setWindowToBlock(null);
+        status.setWindowFromTime(null);
+        status.setWindowToTime(null);
     }
 }

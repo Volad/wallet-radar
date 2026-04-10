@@ -69,6 +69,7 @@ describe('WalletApiService', () => {
     const mockResponse: SessionBackfillStatusResponse = {
       sessionId,
       status: 'RUNNING',
+      acquisitionStatus: 'RUNNING',
       overallProgressPct: 35,
       totalTargets: 8,
       completedTargets: 2,

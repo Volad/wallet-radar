@@ -16,6 +16,7 @@ export type EvmNetworkId =
 export type SessionBackfillAggregateStatus =
   | 'PENDING'
   | 'RUNNING'
+  | 'BLOCKED'
   | 'COMPLETE'
   | 'PARTIAL'
   | 'FAILED';
@@ -147,6 +148,7 @@ export interface SessionPhaseProgressResponse {
 export interface SessionBackfillStatusResponse {
   readonly sessionId: string;
   readonly status: SessionBackfillAggregateStatus;
+  readonly acquisitionStatus: SessionBackfillAggregateStatus;
   readonly overallProgressPct: number;
   readonly totalTargets: number;
   readonly completedTargets: number;

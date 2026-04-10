@@ -241,6 +241,7 @@ public class SessionController {
         return new SessionBackfillStatusResponse(
                 view.sessionId(),
                 view.status(),
+                view.acquisitionStatus(),
                 view.overallProgressPct(),
                 view.totalTargets(),
                 view.completedTargets(),

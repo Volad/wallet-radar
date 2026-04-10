@@ -52,6 +52,28 @@ public class IntegrationBackfillPlanningService {
         );
     }
 
+    public UserSession.IntegrationSyncState replanWindowBackfill(
+            String sessionId,
+            UserSession.SessionIntegration integration,
+            Instant from,
+            Instant to,
+            String syncStatusId
+    ) {
+        if (integration == null || integration.getProvider() == null) {
+            throw new IllegalArgumentException("Integration provider is required");
+        }
+        Instant plannedAt = Instant.now();
+        return replacePlan(
+                sessionId,
+                integration,
+                plannerFor(integration),
+                planner -> attachSyncStatusId(
+                        planner.planIncrementalBackfill(sessionId, integration, from, to, plannedAt),
+                        syncStatusId
+                )
+        );
+    }
+
     private UserSession.IntegrationSyncState replacePlan(
             String sessionId,
             UserSession.SessionIntegration integration,
@@ -85,5 +107,17 @@ public class IntegrationBackfillPlanningService {
                 .orElseThrow(() -> new IllegalStateException(
                         "No integration backfill planner registered for provider " + integration.getProvider()
                 ));
+    }
+
+    private List<BackfillSegment> attachSyncStatusId(List<BackfillSegment> segments, String syncStatusId) {
+        if (segments == null || segments.isEmpty() || syncStatusId == null || syncStatusId.isBlank()) {
+            return segments == null ? List.of() : segments;
+        }
+        for (BackfillSegment segment : segments) {
+            if (segment != null) {
+                segment.setSyncStatusId(syncStatusId);
+            }
+        }
+        return segments;
     }
 }

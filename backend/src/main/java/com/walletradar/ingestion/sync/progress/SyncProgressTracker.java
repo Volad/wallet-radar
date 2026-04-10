@@ -39,8 +39,12 @@ public class SyncProgressTracker {
             status.setNetworkId(networkId);
         }
         status.setStatus(SyncStatus.SyncStatusValue.RUNNING);
-        status.setProgressPct(progressPct);
-        status.setLastBlockSynced(lastBlockSynced);
+        if (progressPct != null) {
+            status.setProgressPct(progressPct);
+        }
+        if (lastBlockSynced != null) {
+            status.setLastBlockSynced(lastBlockSynced);
+        }
         status.setSyncBannerMessage(syncBannerMessage);
         status.setBackfillComplete(false);
         status.setUpdatedAt(Instant.now());
@@ -78,6 +82,8 @@ public class SyncProgressTracker {
                     s.setBackfillComplete(s.isRawFetchComplete());
                     s.setRetryCount(0);
                     s.setNextRetryAfter(null);
+                    s.setLastSyncedAt(s.getWindowToTime() == null ? Instant.now() : s.getWindowToTime());
+                    clearWindow(s);
                     s.setUpdatedAt(Instant.now());
                     syncStatusRepository.save(s);
                     publishBackfillCompletion(walletAddress, networkId, s.isBackfillComplete());
@@ -125,5 +131,12 @@ public class SyncProgressTracker {
         } catch (IllegalArgumentException ignored) {
             // Unknown network ids should not block backfill completion persistence.
         }
+    }
+
+    private void clearWindow(SyncStatus status) {
+        status.setWindowFromBlock(null);
+        status.setWindowToBlock(null);
+        status.setWindowFromTime(null);
+        status.setWindowToTime(null);
     }
 }

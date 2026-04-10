@@ -21,6 +21,11 @@ public interface SyncStatusRepository extends MongoRepository<SyncStatus, String
     /** Incomplete backfills (resume after restart). */
     List<SyncStatus> findByStatusIn(Set<SyncStatus.SyncStatusValue> statuses);
 
+    List<SyncStatus> findBySourceKindAndStatusIn(
+            SyncStatus.SourceKind sourceKind,
+            Set<SyncStatus.SyncStatusValue> statuses
+    );
+
     @Query("{'$or':[{'sourceKind': ?0},{'sourceKind': {$exists:false}},{'sourceKind': null}], 'walletAddress': {'$in': ?1}}")
     List<SyncStatus> findOnChainByWalletAddressIn(SyncStatus.SourceKind sourceKind, List<String> walletAddresses);
 

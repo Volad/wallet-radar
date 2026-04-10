@@ -298,7 +298,7 @@ export class DashboardComponent {
     if (sessionId === null || status === null) {
       return false;
     }
-    return status.status === 'COMPLETE'
+    return this.acquisitionStatus(status) === 'COMPLETE'
       && !this.isPipelineRunning(status)
       && !this.isSessionRefreshSubmitting();
   });
@@ -1002,7 +1002,7 @@ export class DashboardComponent {
       .subscribe((status) => {
         this.sessionBackfillStatus.set(status);
         const pipelineRunning = this.isPipelineRunning(status);
-        const terminal = this.isTerminalBackfillStatus(status.status);
+        const terminal = this.isTerminalBackfillStatus(this.acquisitionStatus(status));
         this.isBackfillVisible.set(!terminal || pipelineRunning);
         if (terminal && pipelineRunning) {
           this.refreshSessionTransactions(sessionId, 'intermediate');
@@ -1052,7 +1052,7 @@ export class DashboardComponent {
       .subscribe((status) => {
         this.sessionBackfillStatus.set(status);
         const pipelineRunning = this.isPipelineRunning(status);
-        const terminal = this.isTerminalBackfillStatus(status.status);
+        const terminal = this.isTerminalBackfillStatus(this.acquisitionStatus(status));
         if (terminal && pipelineRunning) {
           this.isBackfillVisible.set(true);
           this.refreshSessionTransactions(sessionId, 'intermediate', true);
@@ -1142,7 +1142,7 @@ export class DashboardComponent {
   private refreshCurrentSessionTransactions(force = false): void {
     const sessionId = this.currentSessionId();
     const status = this.sessionBackfillStatus();
-    if (sessionId === null || status === null || !this.isTerminalBackfillStatus(status.status)) {
+    if (sessionId === null || status === null || !this.isTerminalBackfillStatus(this.acquisitionStatus(status))) {
       return;
     }
     const phase: SessionTransactionsLoadPhase = this.isPipelineRunning(status) ? 'intermediate' : 'final';
@@ -1307,6 +1307,10 @@ export class DashboardComponent {
 
   private isPipelineRunning(status: SessionBackfillStatusResponse): boolean {
     return status.pipelineStatus === 'RUNNING';
+  }
+
+  private acquisitionStatus(status: SessionBackfillStatusResponse): SessionBackfillAggregateStatus {
+    return status.acquisitionStatus ?? status.status;
   }
 
   private phaseDisplayLabel(phase: string | null | undefined): string {

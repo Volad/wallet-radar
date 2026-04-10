@@ -22,6 +22,7 @@ import org.springframework.data.mongodb.core.query.Update;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.List;
 import java.util.ArrayList;
+import org.bson.Document;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -44,8 +45,10 @@ class RawFetchSegmentProcessorTest {
     void setUp() {
         when(scamFilter.shouldDrop(any())).thenReturn(false);
         processor = new RawFetchSegmentProcessor(mongoTemplate, scamFilter);
+        when(mongoTemplate.find(any(Query.class), org.mockito.ArgumentMatchers.eq(RawTransaction.class))).thenReturn(List.of());
         when(mongoTemplate.bulkOps(BulkOperations.BulkMode.UNORDERED, RawTransaction.class)).thenReturn(bulkOperations);
         when(bulkOperations.upsert(any(Query.class), any(Update.class))).thenReturn(bulkOperations);
+        when(bulkOperations.updateOne(any(Query.class), any(Update.class))).thenReturn(bulkOperations);
     }
 
     @Test
@@ -77,11 +80,11 @@ class RawFetchSegmentProcessorTest {
 
         ArgumentCaptor<Update> updateCaptor = ArgumentCaptor.forClass(Update.class);
         verify(bulkOperations, atLeastOnce()).upsert(any(Query.class), updateCaptor.capture());
-        org.bson.Document setDoc = updateCaptor.getValue().getUpdateObject().get("$set", org.bson.Document.class);
-        assertThat(setDoc.getString("txHash")).isEqualTo("0xabc");
-        assertThat(setDoc.getString("walletAddress")).isEqualTo("0xWALLET");
-        assertThat(setDoc.get("blockNumber")).isEqualTo(100L);
-        assertThat(setDoc.get("normalizationStatus")).isEqualTo(NormalizationStatus.PENDING);
+        org.bson.Document setOnInsertDoc = updateCaptor.getValue().getUpdateObject().get("$setOnInsert", org.bson.Document.class);
+        assertThat(setOnInsertDoc.getString("txHash")).isEqualTo("0xabc");
+        assertThat(setOnInsertDoc.getString("walletAddress")).isEqualTo("0xWALLET");
+        assertThat(setOnInsertDoc.get("blockNumber")).isEqualTo(100L);
+        assertThat(setOnInsertDoc.get("normalizationStatus")).isEqualTo(NormalizationStatus.PENDING);
         verify(bulkOperations, atLeastOnce()).execute();
     }
 
@@ -162,6 +165,84 @@ class RawFetchSegmentProcessorTest {
 
         assertThat(ranges).containsExactly("1-4", "5-8", "9-10");
         assertThat(checkpoints).containsExactly(4L, 8L, 10L);
+        verify(mongoTemplate, never()).bulkOps(any(), any(Class.class));
+    }
+
+    @Test
+    @DisplayName("processSegment keeps existing complete raw rows complete when fetched payload is unchanged")
+    void processSegment_unchangedExistingRow_keepsNormalizationStatus() {
+        RawTransaction existing = new RawTransaction();
+        existing.setId("0xabc:ETHEREUM:0xWALLET");
+        existing.setTxHash("0xabc");
+        existing.setNetworkId("ETHEREUM");
+        existing.setWalletAddress("0xWALLET");
+        existing.setBlockNumber(100L);
+        existing.setNormalizationStatus(NormalizationStatus.COMPLETE);
+        existing.setRawData(new Document("hash", "0xabc"));
+        when(mongoTemplate.find(any(Query.class), org.mockito.ArgumentMatchers.eq(RawTransaction.class)))
+                .thenReturn(List.of(existing));
+
+        NetworkAdapter adapter = new NetworkAdapter() {
+            @Override
+            public boolean supports(NetworkId networkId) { return true; }
+            @Override
+            public int getMaxBlockBatchSize() { return 50; }
+            @Override
+            public List<RawTransaction> fetchTransactions(String wallet, NetworkId network, long from, long to) {
+                RawTransaction tx = new RawTransaction();
+                tx.setId("0xabc:ETHEREUM:0xWALLET");
+                tx.setTxHash("0xabc");
+                tx.setNetworkId("ETHEREUM");
+                tx.setWalletAddress(wallet);
+                tx.setBlockNumber(100L);
+                tx.setNormalizationStatus(NormalizationStatus.PENDING);
+                tx.setRawData(new Document("hash", "0xabc"));
+                return List.of(tx);
+            }
+        };
+
+        processor.processSegment("0xWALLET", NetworkId.ETHEREUM, adapter, 1L, 10L, (pct, lastBlock) -> {});
+
+        verify(mongoTemplate, never()).bulkOps(any(), any(Class.class));
+    }
+
+    @Test
+    @DisplayName("processSegment keeps existing raw rows immutable even when fetched payload changed")
+    void processSegment_changedExistingRow_skipsMutation() {
+        RawTransaction existing = new RawTransaction();
+        existing.setId("0xabc:ETHEREUM:0xWALLET");
+        existing.setTxHash("0xabc");
+        existing.setNetworkId("ETHEREUM");
+        existing.setWalletAddress("0xWALLET");
+        existing.setBlockNumber(100L);
+        existing.setNormalizationStatus(NormalizationStatus.COMPLETE);
+        existing.setRawData(new Document("hash", "0xabc"));
+        existing.setClarificationEvidence(new Document("old", true));
+        when(mongoTemplate.find(any(Query.class), org.mockito.ArgumentMatchers.eq(RawTransaction.class)))
+                .thenReturn(List.of(existing));
+
+        NetworkAdapter adapter = new NetworkAdapter() {
+            @Override
+            public boolean supports(NetworkId networkId) { return true; }
+            @Override
+            public int getMaxBlockBatchSize() { return 50; }
+            @Override
+            public List<RawTransaction> fetchTransactions(String wallet, NetworkId network, long from, long to) {
+                RawTransaction tx = new RawTransaction();
+                tx.setId("0xabc:ETHEREUM:0xWALLET");
+                tx.setTxHash("0xabc");
+                tx.setNetworkId("ETHEREUM");
+                tx.setWalletAddress(wallet);
+                tx.setBlockNumber(101L);
+                tx.setNormalizationStatus(NormalizationStatus.PENDING);
+                tx.setRetryCount(0);
+                tx.setRawData(new Document("hash", "0xabc").append("newField", true));
+                return List.of(tx);
+            }
+        };
+
+        processor.processSegment("0xWALLET", NetworkId.ETHEREUM, adapter, 1L, 10L, (pct, lastBlock) -> {});
+
         verify(mongoTemplate, never()).bulkOps(any(), any(Class.class));
     }
 }

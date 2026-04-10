@@ -9,8 +9,6 @@ import com.walletradar.domain.session.UserSession;
 import com.walletradar.domain.session.UserSessionRepository;
 import com.walletradar.domain.sync.BackfillSegmentRepository;
 import com.walletradar.ingestion.wallet.command.TrackedWalletProjectionService;
-import com.walletradar.ingestion.wallet.command.WalletBackfillService;
-import com.walletradar.integration.IntegrationBackfillPlanningService;
 import com.walletradar.integration.bybit.BybitApiClient;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -39,23 +37,17 @@ class SessionSettingsCommandServiceTest {
     @Mock
     private UserSessionRepository userSessionRepository;
     @Mock
-    private WalletBackfillService walletBackfillService;
-    @Mock
     private TrackedWalletProjectionService trackedWalletProjectionService;
     @Mock
-    private SessionPipelineStateService sessionPipelineStateService;
+    private AccountUniverseSyncPlannerService accountUniverseSyncPlannerService;
     @Mock
     private SessionSecretCryptoService sessionSecretCryptoService;
     @Mock
     private BybitApiClient bybitApiClient;
     @Mock
-    private IntegrationBackfillPlanningService integrationBackfillPlanningService;
-    @Mock
     private BackfillSegmentRepository backfillSegmentRepository;
     @Mock
     private IntegrationSyncStatusService integrationSyncStatusService;
-    @Mock
-    private AccountingUniverseSyncService accountingUniverseSyncService;
 
     private SessionSettingsCommandService sessionSettingsCommandService;
 
@@ -63,15 +55,12 @@ class SessionSettingsCommandServiceTest {
     void setUp() {
         sessionSettingsCommandService = new SessionSettingsCommandService(
                 userSessionRepository,
-                walletBackfillService,
                 trackedWalletProjectionService,
-                sessionPipelineStateService,
+                accountUniverseSyncPlannerService,
                 sessionSecretCryptoService,
                 bybitApiClient,
-                integrationBackfillPlanningService,
                 backfillSegmentRepository,
                 integrationSyncStatusService,
-                accountingUniverseSyncService,
                 new ObjectMapper()
         );
     }
@@ -132,17 +121,9 @@ class SessionSettingsCommandServiceTest {
             assertThat(integration.getEncryptedCredentials()).isSameAs(secret);
         });
 
-        verify(walletBackfillService).addWallet(
-                "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f",
-                List.of(NetworkId.ARBITRUM)
-        );
         verify(trackedWalletProjectionService).replaceSessionWallets(any(), any(), any(Instant.class));
         verify(bybitApiClient, never()).validateCredentials(any(), any());
-        verify(sessionPipelineStateService).markStageRunning(
-                eq("session-1"),
-                eq(UserSession.PipelineStage.BACKFILL),
-                eq("Raw backfill started")
-        );
+        verify(accountUniverseSyncPlannerService).sync("session-1", saved.getUpdatedAt());
     }
 
     @Test
@@ -163,13 +144,6 @@ class SessionSettingsCommandServiceTest {
         UserSession.EncryptedSecret encryptedSecret = new UserSession.EncryptedSecret();
         encryptedSecret.setMaskedKey("api-...1234");
         when(sessionSecretCryptoService.encrypt(any(), eq("api-...1234"))).thenReturn(encryptedSecret);
-        UserSession.IntegrationSyncState syncState = new UserSession.IntegrationSyncState();
-        syncState.setTotalSegments(5);
-        syncState.setCompletedSegments(0);
-        syncState.setFailedSegments(0);
-        syncState.setProgressPct(0);
-        when(integrationBackfillPlanningService.replanInitialBackfill(eq("session-2"), any())).thenReturn(syncState);
-
         PutSessionSettingsRequest request = new PutSessionSettingsRequest(
                 List.of(),
                 List.of(new PutSessionSettingsRequest.IntegrationEntry(
@@ -194,13 +168,10 @@ class SessionSettingsCommandServiceTest {
             assertThat(integration.getAccountRef()).isEqualTo("BYBIT:33625378");
             assertThat(integration.getDisplayName()).isEqualTo("Bybit main");
             assertThat(integration.getEncryptedCredentials()).isSameAs(encryptedSecret);
-            assertThat(integration.getStatus()).isEqualTo(UserSession.IntegrationStatus.BACKFILLING);
+            assertThat(integration.getStatus()).isEqualTo(UserSession.IntegrationStatus.CONNECTED);
+            assertThat(integration.getSyncState()).isNotNull();
         });
-        verify(sessionPipelineStateService).markStageRunning(
-                eq("session-2"),
-                eq(UserSession.PipelineStage.BACKFILL),
-                eq("Raw backfill started")
-        );
+        verify(accountUniverseSyncPlannerService).sync("session-2", saved.getUpdatedAt());
     }
 
     @Test

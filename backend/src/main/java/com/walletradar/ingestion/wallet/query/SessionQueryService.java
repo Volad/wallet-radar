@@ -141,7 +141,7 @@ public class SessionQueryService {
         int overallProgress = emptyBackfillComplete
                 ? 100
                 : totalTargets == 0 ? 0 : (int) Math.round((double) progressSum / totalTargets);
-        String aggregateStatus = resolveAggregateStatus(
+        String acquisitionStatus = resolveAggregateStatus(
                 totalTargets,
                 completedTargets,
                 hasRunning,
@@ -149,10 +149,12 @@ public class SessionQueryService {
                 hasAnyStatus,
                 emptyBackfillComplete
         );
+        String overallStatus = resolveOverallStatus(session, acquisitionStatus);
 
         return new SessionBackfillStatusView(
                 session.getId(),
-                aggregateStatus,
+                overallStatus,
+                acquisitionStatus,
                 overallProgress,
                 (int) totalTargets,
                 (int) completedTargets,
@@ -269,6 +271,21 @@ public class SessionQueryService {
             return SyncStatus.SyncStatusValue.PARTIAL.name();
         }
         return SyncStatus.SyncStatusValue.PENDING.name();
+    }
+
+    private static String resolveOverallStatus(UserSession session, String acquisitionStatus) {
+        if (session == null || session.getPipelineState() == null || session.getPipelineState().getStatus() == null) {
+            return acquisitionStatus;
+        }
+        UserSession.PipelineState pipelineState = session.getPipelineState();
+        return switch (pipelineState.getStatus()) {
+            case RUNNING -> SyncStatus.SyncStatusValue.RUNNING.name();
+            case FAILED -> SyncStatus.SyncStatusValue.FAILED.name();
+            case BLOCKED -> "BLOCKED";
+            case COMPLETE -> pipelineState.getStage() == UserSession.PipelineStage.ACCOUNTING_REPLAY
+                    ? SyncStatus.SyncStatusValue.COMPLETE.name()
+                    : acquisitionStatus;
+        };
     }
 
     private static String pairKey(String walletAddress, String networkId) {
@@ -499,6 +516,7 @@ public class SessionQueryService {
     public record SessionBackfillStatusView(
             String sessionId,
             String status,
+            String acquisitionStatus,
             Integer overallProgressPct,
             Integer totalTargets,
             Integer completedTargets,

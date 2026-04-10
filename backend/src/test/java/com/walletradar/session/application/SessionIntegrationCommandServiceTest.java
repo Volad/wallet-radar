@@ -5,7 +5,6 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.domain.session.UserSessionRepository;
 import com.walletradar.domain.sync.BackfillSegmentRepository;
-import com.walletradar.integration.IntegrationBackfillPlanningService;
 import com.walletradar.integration.bybit.BybitApiClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -17,8 +16,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -34,13 +31,9 @@ class SessionIntegrationCommandServiceTest {
     @Mock
     private BybitApiClient bybitApiClient;
     @Mock
-    private IntegrationBackfillPlanningService integrationBackfillPlanningService;
-    @Mock
     private IntegrationSyncStatusService integrationSyncStatusService;
     @Mock
-    private AccountingUniverseSyncService accountingUniverseSyncService;
-    @Mock
-    private SessionPipelineStateService sessionPipelineStateService;
+    private AccountUniverseSyncPlannerService accountUniverseSyncPlannerService;
 
     private SessionIntegrationCommandService sessionIntegrationCommandService;
 
@@ -51,10 +44,8 @@ class SessionIntegrationCommandServiceTest {
                 backfillSegmentRepository,
                 sessionSecretCryptoService,
                 bybitApiClient,
-                integrationBackfillPlanningService,
                 integrationSyncStatusService,
-                accountingUniverseSyncService,
-                sessionPipelineStateService,
+                accountUniverseSyncPlannerService,
                 new ObjectMapper()
         );
     }
@@ -79,14 +70,6 @@ class SessionIntegrationCommandServiceTest {
         when(sessionSecretCryptoService.encrypt("{\"apiKey\":\"api-key-1234\",\"apiSecret\":\"super-secret\"}", "api-...1234"))
                 .thenReturn(encryptedSecret);
 
-        UserSession.IntegrationSyncState syncState = new UserSession.IntegrationSyncState();
-        syncState.setTotalSegments(7);
-        syncState.setCompletedSegments(0);
-        syncState.setFailedSegments(0);
-        syncState.setProgressPct(0);
-        when(integrationBackfillPlanningService.replanInitialBackfill(eq("session-1"), any(UserSession.SessionIntegration.class)))
-                .thenReturn(syncState);
-
         SessionIntegrationCommandService.IntegrationCommandResult result = sessionIntegrationCommandService
                 .upsertBybit("session-1", "Bybit main", "api-key-1234", "super-secret")
                 .orElseThrow();
@@ -94,27 +77,23 @@ class SessionIntegrationCommandServiceTest {
         assertThat(result.integrationId()).isEqualTo("BYBIT-33625378");
         assertThat(result.accountRef()).isEqualTo("BYBIT:33625378");
         assertThat(result.provider()).isEqualTo("BYBIT");
-        assertThat(result.status()).isEqualTo("BACKFILLING");
+        assertThat(result.status()).isEqualTo("CONNECTED");
 
         ArgumentCaptor<UserSession> sessionCaptor = ArgumentCaptor.forClass(UserSession.class);
         verify(userSessionRepository).save(sessionCaptor.capture());
-        verify(sessionPipelineStateService).markStageRunning(
-                "session-1",
-                UserSession.PipelineStage.BACKFILL,
-                "Raw backfill started"
-        );
         UserSession saved = sessionCaptor.getValue();
         assertThat(saved.getIntegrations()).singleElement().satisfies(integration -> {
             assertThat(integration.getIntegrationId()).isEqualTo("BYBIT-33625378");
             assertThat(integration.getProvider()).isEqualTo(UserSession.IntegrationProvider.BYBIT);
-            assertThat(integration.getStatus()).isEqualTo(UserSession.IntegrationStatus.BACKFILLING);
+            assertThat(integration.getStatus()).isEqualTo(UserSession.IntegrationStatus.CONNECTED);
             assertThat(integration.getDisplayName()).isEqualTo("Bybit main");
             assertThat(integration.getAccountRef()).isEqualTo("BYBIT:33625378");
             assertThat(integration.isReadOnly()).isTrue();
             assertThat(integration.getCapabilities()).containsExactly("ASSET");
             assertThat(integration.getEncryptedCredentials()).isSameAs(encryptedSecret);
-            assertThat(integration.getSyncState()).isSameAs(syncState);
+            assertThat(integration.getSyncState()).isNotNull();
         });
+        verify(accountUniverseSyncPlannerService).sync("session-1", saved.getUpdatedAt());
     }
 
     @Test
@@ -135,5 +114,6 @@ class SessionIntegrationCommandServiceTest {
         verify(integrationSyncStatusService).delete("BYBIT-33625378");
         verify(userSessionRepository).save(session);
         assertThat(session.getIntegrations()).isEmpty();
+        verify(accountUniverseSyncPlannerService).sync("session-1", session.getUpdatedAt());
     }
 }

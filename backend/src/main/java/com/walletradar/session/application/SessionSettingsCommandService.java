@@ -8,8 +8,6 @@ import com.walletradar.domain.session.UserSession;
 import com.walletradar.domain.session.UserSessionRepository;
 import com.walletradar.domain.sync.BackfillSegmentRepository;
 import com.walletradar.ingestion.wallet.command.TrackedWalletProjectionService;
-import com.walletradar.ingestion.wallet.command.WalletBackfillService;
-import com.walletradar.integration.IntegrationBackfillPlanningService;
 import com.walletradar.integration.bybit.BybitApiClient;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -22,6 +20,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -32,15 +31,12 @@ import java.util.stream.Collectors;
 public class SessionSettingsCommandService {
 
     private final UserSessionRepository userSessionRepository;
-    private final WalletBackfillService walletBackfillService;
     private final TrackedWalletProjectionService trackedWalletProjectionService;
-    private final SessionPipelineStateService sessionPipelineStateService;
+    private final AccountUniverseSyncPlannerService accountUniverseSyncPlannerService;
     private final SessionSecretCryptoService sessionSecretCryptoService;
     private final BybitApiClient bybitApiClient;
-    private final IntegrationBackfillPlanningService integrationBackfillPlanningService;
     private final BackfillSegmentRepository backfillSegmentRepository;
     private final IntegrationSyncStatusService integrationSyncStatusService;
-    private final AccountingUniverseSyncService accountingUniverseSyncService;
     private final ObjectMapper objectMapper;
 
     public Optional<UserSession> overwriteSessionSettings(String sessionId, PutSessionSettingsRequest request) {
@@ -56,13 +52,13 @@ public class SessionSettingsCommandService {
         List<UserSession.SessionWallet> previousWallets = session.getWallets() == null
                 ? List.of()
                 : new ArrayList<>(session.getWallets());
+        Set<String> previousUniverseKeys = sourceKeys(previousWallets, session.getIntegrations());
         List<UserSession.SessionWallet> normalizedWallets = normalizeWallets(request.wallets());
-        Map<String, List<NetworkId>> addedWalletNetworks = findAddedWalletNetworks(previousWallets, normalizedWallets);
 
         session.setWallets(new ArrayList<>(normalizedWallets));
         session.setSettings(applySettings(session.getSettings(), request));
 
-        boolean integrationBackfillStarted = syncIntegrations(
+        syncIntegrations(
                 session,
                 request.integrations() == null ? List.of() : request.integrations(),
                 now
@@ -70,18 +66,12 @@ public class SessionSettingsCommandService {
 
         session.setUpdatedAt(now);
         session.setLastSeenAt(now);
-        accountingUniverseSyncService.sync(session, now);
         userSessionRepository.save(session);
 
         trackedWalletProjectionService.replaceSessionWallets(previousWallets, normalizedWallets, now);
-        addedWalletNetworks.forEach(walletBackfillService::addWallet);
-
-        if (!addedWalletNetworks.isEmpty() || integrationBackfillStarted) {
-            sessionPipelineStateService.markStageRunning(
-                    session.getId(),
-                    UserSession.PipelineStage.BACKFILL,
-                    "Raw backfill started"
-            );
+        boolean universeChanged = !previousUniverseKeys.equals(sourceKeys(session.getWallets(), session.getIntegrations()));
+        if (universeChanged) {
+            accountUniverseSyncPlannerService.sync(session.getId(), now);
         }
 
         return session;
@@ -99,7 +89,7 @@ public class SessionSettingsCommandService {
         return settings;
     }
 
-    private boolean syncIntegrations(
+    private void syncIntegrations(
             UserSession session,
             List<PutSessionSettingsRequest.IntegrationEntry> requestedIntegrations,
             Instant now
@@ -125,19 +115,19 @@ public class SessionSettingsCommandService {
                 backfillSegmentRepository.deleteByIntegrationId(existingBybit.getIntegrationId());
                 integrationSyncStatusService.delete(existingBybit.getIntegrationId());
             }
-            return false;
+            return;
         }
 
         if (existingBybit == null) {
             session.getIntegrations().add(createBybitIntegration(session, requestedBybit, now));
-            return true;
+            return;
         }
 
         if (!hasCredentials(requestedBybit)) {
             existingBybit.setDisplayName(normalizeDisplayName(requestedBybit.displayName(), existingBybit.getDisplayName()));
             existingBybit.setUpdatedAt(now);
             existingBybit.setLastError(null);
-            return false;
+            return;
         }
 
         String previousIntegrationId = existingBybit.getIntegrationId();
@@ -147,7 +137,6 @@ public class SessionSettingsCommandService {
             backfillSegmentRepository.deleteByIntegrationId(previousIntegrationId);
             integrationSyncStatusService.delete(previousIntegrationId);
         }
-        return true;
     }
 
     private UserSession.SessionIntegration createBybitIntegration(
@@ -176,7 +165,7 @@ public class SessionSettingsCommandService {
         UserSession.SessionIntegration integration = new UserSession.SessionIntegration();
         integration.setIntegrationId(integrationId);
         integration.setProvider(UserSession.IntegrationProvider.BYBIT);
-        integration.setStatus(UserSession.IntegrationStatus.BACKFILLING);
+        integration.setStatus(UserSession.IntegrationStatus.CONNECTED);
         integration.setDisplayName(normalizeDisplayName(requestedIntegration.displayName(), "Bybit"));
         integration.setAccountRef(accountRef);
         integration.setReadOnly(credentialInfo.readOnly());
@@ -185,7 +174,7 @@ public class SessionSettingsCommandService {
                 maskedKey
         ));
         integration.setCapabilities(extractCapabilities(credentialInfo));
-        integration.setSyncState(integrationBackfillPlanningService.replanInitialBackfill(session.getId(), integration));
+        integration.setSyncState(new UserSession.IntegrationSyncState());
         integration.setCreatedAt(now);
         integration.setUpdatedAt(now);
         integration.setLastValidatedAt(now);
@@ -281,38 +270,6 @@ public class SessionSettingsCommandService {
         return List.copyOf(capabilities);
     }
 
-    private Map<String, List<NetworkId>> findAddedWalletNetworks(
-            List<UserSession.SessionWallet> previousWallets,
-            List<UserSession.SessionWallet> currentWallets
-    ) {
-        Map<String, LinkedHashSet<NetworkId>> previous = toWalletNetworks(previousWallets);
-        Map<String, LinkedHashSet<NetworkId>> current = toWalletNetworks(currentWallets);
-        Map<String, List<NetworkId>> added = new LinkedHashMap<>();
-        current.forEach((address, networks) -> {
-            LinkedHashSet<NetworkId> previousNetworks = previous.getOrDefault(address, new LinkedHashSet<>());
-            LinkedHashSet<NetworkId> delta = new LinkedHashSet<>(networks);
-            delta.removeAll(previousNetworks);
-            if (!delta.isEmpty()) {
-                added.put(address, List.copyOf(delta));
-            }
-        });
-        return added;
-    }
-
-    private Map<String, LinkedHashSet<NetworkId>> toWalletNetworks(List<UserSession.SessionWallet> wallets) {
-        Map<String, LinkedHashSet<NetworkId>> map = new LinkedHashMap<>();
-        for (UserSession.SessionWallet wallet : wallets) {
-            if (wallet == null || wallet.getAddress() == null || wallet.getAddress().isBlank()) {
-                continue;
-            }
-            map.put(
-                    wallet.getAddress().trim().toLowerCase(Locale.ROOT),
-                    new LinkedHashSet<>(wallet.getNetworks() == null ? List.of() : wallet.getNetworks())
-            );
-        }
-        return map;
-    }
-
     private List<UserSession.SessionWallet> normalizeWallets(List<PutSessionSettingsRequest.WalletEntry> walletEntries) {
         if (walletEntries == null || walletEntries.isEmpty()) {
             return List.of();
@@ -340,5 +297,36 @@ public class SessionSettingsCommandService {
             String apiKey,
             String apiSecret
     ) {
+    }
+
+    private Set<String> sourceKeys(
+            List<UserSession.SessionWallet> wallets,
+            List<UserSession.SessionIntegration> integrations
+    ) {
+        Set<String> keys = new LinkedHashSet<>();
+        if (wallets != null) {
+            for (UserSession.SessionWallet wallet : wallets) {
+                if (wallet == null || wallet.getAddress() == null || wallet.getAddress().isBlank()) {
+                    continue;
+                }
+                for (NetworkId network : wallet.getNetworks() == null ? List.<NetworkId>of() : wallet.getNetworks()) {
+                    if (network != null) {
+                        keys.add("WALLET|" + wallet.getAddress().trim().toLowerCase(Locale.ROOT) + "|" + network.name());
+                    }
+                }
+            }
+        }
+        if (integrations != null) {
+            for (UserSession.SessionIntegration integration : integrations) {
+                if (integration == null
+                        || integration.getStatus() == UserSession.IntegrationStatus.DISABLED
+                        || integration.getIntegrationId() == null
+                        || integration.getIntegrationId().isBlank()) {
+                    continue;
+                }
+                keys.add("INTEGRATION|" + integration.getIntegrationId().trim());
+            }
+        }
+        return keys;
     }
 }

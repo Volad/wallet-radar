@@ -34,6 +34,7 @@ describe('DashboardComponent (wallet submit flow)', () => {
   const runningBackfill: SessionBackfillStatusResponse = {
     sessionId,
     status: 'RUNNING',
+    acquisitionStatus: 'RUNNING',
     overallProgressPct: 20,
     totalTargets: 8,
     completedTargets: 1,
@@ -58,6 +59,7 @@ describe('DashboardComponent (wallet submit flow)', () => {
   const completeBackfill: SessionBackfillStatusResponse = {
     ...runningBackfill,
     status: 'COMPLETE',
+    acquisitionStatus: 'COMPLETE',
     overallProgressPct: 100,
     completedTargets: 8,
     totalTargets: 8,

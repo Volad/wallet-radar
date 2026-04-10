@@ -2,19 +2,21 @@ package com.walletradar.session.application;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.domain.session.UserSessionRepository;
 import com.walletradar.domain.sync.BackfillSegmentRepository;
-import com.walletradar.integration.IntegrationBackfillPlanningService;
 import com.walletradar.integration.bybit.BybitApiClient;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Creates, updates, and removes session-owned external integrations.
@@ -27,10 +29,8 @@ public class SessionIntegrationCommandService {
     private final BackfillSegmentRepository backfillSegmentRepository;
     private final SessionSecretCryptoService sessionSecretCryptoService;
     private final BybitApiClient bybitApiClient;
-    private final IntegrationBackfillPlanningService integrationBackfillPlanningService;
     private final IntegrationSyncStatusService integrationSyncStatusService;
-    private final AccountingUniverseSyncService accountingUniverseSyncService;
-    private final SessionPipelineStateService sessionPipelineStateService;
+    private final AccountUniverseSyncPlannerService accountUniverseSyncPlannerService;
     private final ObjectMapper objectMapper;
 
     public Optional<IntegrationCommandResult> upsertBybit(
@@ -45,6 +45,7 @@ public class SessionIntegrationCommandService {
 
     public Optional<IntegrationRemovalResult> removeIntegration(String sessionId, String integrationId) {
         return userSessionRepository.findById(sessionId.trim()).map(session -> {
+            Set<String> previousUniverseKeys = sourceKeys(session.getWallets(), session.getIntegrations());
             if (session.getIntegrations() == null) {
                 throw new IllegalArgumentException("Integration not found");
             }
@@ -53,11 +54,14 @@ public class SessionIntegrationCommandService {
                     .findFirst()
                     .orElseThrow(() -> new IllegalArgumentException("Integration not found"));
             session.getIntegrations().remove(existing);
-            session.setUpdatedAt(Instant.now());
-            accountingUniverseSyncService.sync(session, session.getUpdatedAt());
+            Instant now = Instant.now();
+            session.setUpdatedAt(now);
             userSessionRepository.save(session);
             backfillSegmentRepository.deleteByIntegrationId(integrationId);
             integrationSyncStatusService.delete(integrationId);
+            if (!previousUniverseKeys.equals(sourceKeys(session.getWallets(), session.getIntegrations()))) {
+                accountUniverseSyncPlannerService.sync(session.getId(), now);
+            }
             return new IntegrationRemovalResult(integrationId, "Integration removed");
         });
     }
@@ -69,6 +73,7 @@ public class SessionIntegrationCommandService {
             String apiSecret
     ) {
         Instant now = Instant.now();
+        Set<String> previousUniverseKeys = sourceKeys(session.getWallets(), session.getIntegrations());
         BybitApiClient.CredentialInfo credentialInfo;
         try {
             credentialInfo = bybitApiClient.validateCredentials(apiKey, apiSecret);
@@ -101,7 +106,7 @@ public class SessionIntegrationCommandService {
                 });
 
         integration.setProvider(UserSession.IntegrationProvider.BYBIT);
-        integration.setStatus(UserSession.IntegrationStatus.BACKFILLING);
+        integration.setStatus(UserSession.IntegrationStatus.CONNECTED);
         integration.setDisplayName(normalizedDisplayName);
         integration.setAccountRef(accountRef);
         integration.setReadOnly(credentialInfo.readOnly());
@@ -113,17 +118,14 @@ public class SessionIntegrationCommandService {
         integration.setLastValidatedAt(now);
         integration.setUpdatedAt(now);
         integration.setLastError(null);
-        integration.setSyncState(integrationBackfillPlanningService.replanInitialBackfill(session.getId(), integration));
+        integration.setSyncState(new UserSession.IntegrationSyncState());
 
         session.setUpdatedAt(now);
         session.setLastSeenAt(now);
-        accountingUniverseSyncService.sync(session, now);
         userSessionRepository.save(session);
-        sessionPipelineStateService.markStageRunning(
-                session.getId(),
-                UserSession.PipelineStage.BACKFILL,
-                "Raw backfill started"
-        );
+        if (!previousUniverseKeys.equals(sourceKeys(session.getWallets(), session.getIntegrations()))) {
+            accountUniverseSyncPlannerService.sync(session.getId(), now);
+        }
 
         return new IntegrationCommandResult(
                 integration.getIntegrationId(),
@@ -165,6 +167,37 @@ public class SessionIntegrationCommandService {
             return trimmed;
         }
         return trimmed.substring(0, 4) + "..." + trimmed.substring(trimmed.length() - 4);
+    }
+
+    private Set<String> sourceKeys(
+            List<UserSession.SessionWallet> wallets,
+            List<UserSession.SessionIntegration> integrations
+    ) {
+        Set<String> keys = new LinkedHashSet<>();
+        if (wallets != null) {
+            for (UserSession.SessionWallet wallet : wallets) {
+                if (wallet == null || wallet.getAddress() == null || wallet.getAddress().isBlank()) {
+                    continue;
+                }
+                for (NetworkId network : wallet.getNetworks() == null ? List.<NetworkId>of() : wallet.getNetworks()) {
+                    if (network != null) {
+                        keys.add("WALLET|" + wallet.getAddress().trim().toLowerCase(Locale.ROOT) + "|" + network.name());
+                    }
+                }
+            }
+        }
+        if (integrations != null) {
+            for (UserSession.SessionIntegration integration : integrations) {
+                if (integration == null
+                        || integration.getStatus() == UserSession.IntegrationStatus.DISABLED
+                        || integration.getIntegrationId() == null
+                        || integration.getIntegrationId().isBlank()) {
+                    continue;
+                }
+                keys.add("INTEGRATION|" + integration.getIntegrationId().trim());
+            }
+        }
+        return keys;
     }
 
     private record BybitCredentials(
