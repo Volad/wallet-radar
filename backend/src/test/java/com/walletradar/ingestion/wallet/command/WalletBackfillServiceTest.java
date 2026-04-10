@@ -3,6 +3,7 @@ package com.walletradar.ingestion.wallet.command;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.sync.SyncStatus;
 import com.walletradar.domain.sync.SyncStatusRepository;
+import com.walletradar.domain.sync.BackfillSegmentRepository;
 import com.walletradar.domain.event.WalletAddedEvent;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -30,6 +31,8 @@ class WalletBackfillServiceTest {
 
     @Mock
     private SyncStatusRepository syncStatusRepository;
+    @Mock
+    private BackfillSegmentRepository backfillSegmentRepository;
     @Mock
     private ApplicationEventPublisher applicationEventPublisher;
 
@@ -153,5 +156,41 @@ class WalletBackfillServiceTest {
                 .findFirst()
                 .orElseThrow();
         assertThat(walletAddedEvent.networks()).containsExactly(NetworkId.values());
+    }
+
+    @Test
+    @DisplayName("scheduleIncrementalBackfill keeps checkpoint and replaces orchestration segments")
+    void scheduleIncrementalBackfill_preservesCheckpoint() {
+        SyncStatus completeStatus = new SyncStatus();
+        completeStatus.setId("sync-1");
+        completeStatus.setWalletAddress("0xABC");
+        completeStatus.setNetworkId(NetworkId.BASE.name());
+        completeStatus.setStatus(SyncStatus.SyncStatusValue.COMPLETE);
+        completeStatus.setLastBlockSynced(12345L);
+        completeStatus.setBackfillComplete(true);
+        completeStatus.setRawFetchComplete(true);
+
+        when(syncStatusRepository.findByWalletAddressAndNetworkId("0xABC", NetworkId.BASE.name()))
+                .thenReturn(Optional.of(completeStatus));
+
+        walletBackfillService.scheduleIncrementalBackfill("0xABC", List.of(NetworkId.BASE));
+
+        verify(backfillSegmentRepository).deleteBySyncStatusId("sync-1");
+        ArgumentCaptor<SyncStatus> statusCaptor = ArgumentCaptor.forClass(SyncStatus.class);
+        verify(syncStatusRepository).save(statusCaptor.capture());
+        SyncStatus saved = statusCaptor.getValue();
+        assertThat(saved.getLastBlockSynced()).isEqualTo(12345L);
+        assertThat(saved.getStatus()).isEqualTo(SyncStatus.SyncStatusValue.PENDING);
+        assertThat(saved.isBackfillComplete()).isFalse();
+        assertThat(saved.isRawFetchComplete()).isFalse();
+        assertThat(saved.getSyncBannerMessage()).isEqualTo("Refresh queued");
+
+        ArgumentCaptor<Object> eventsCaptor = ArgumentCaptor.forClass(Object.class);
+        verify(applicationEventPublisher).publishEvent(eventsCaptor.capture());
+        WalletAddedEvent walletAddedEvent = (WalletAddedEvent) eventsCaptor.getAllValues().stream()
+                .filter(WalletAddedEvent.class::isInstance)
+                .findFirst()
+                .orElseThrow();
+        assertThat(walletAddedEvent.networks()).containsExactly(NetworkId.BASE);
     }
 }

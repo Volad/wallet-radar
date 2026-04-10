@@ -60,6 +60,11 @@ families.
   replay later restores destination acquisition cost from the source leg
 - such route-settlement repair does not change canonical bridge typing and does
   not turn the pair into `continuityCandidate = true` plain carry
+- same-wallet same-network replay reservation around `BRIDGE_IN` is allowed
+  only for the immediate deterministic custody / transit corridor
+- once a later principal-affecting row has already touched that bridge-received
+  bucket, a further `BRIDGE_OUT` or custody-source row must fall back to the
+  pooled source position rather than consuming a stale reserved inbound slice
 
 ## Current Runtime Scope
 
@@ -84,6 +89,10 @@ families.
   absent, but only when clarification proves one unique same-wallet
   cross-network destination from current canonical evidence plus verified
   `Across` settlement sender proof
+- routed `LI.FI / Jumper` same-asset corridors may also materialize as
+  deterministic bridge pairs when clarification proves one unique same-wallet
+  Relay payout destination from current canonical evidence plus verified
+  registry-backed `Relay` top-level payout sender proof
 - post-clarification same-wallet `Across` source/destination pairs may receive
   deterministic `correlationId` and `matchedCounterparty` when bridge
   continuity is uniquely provable from current canonical rows

@@ -7,7 +7,7 @@ import { EMPTY_DASHBOARD_DATA } from '../../core/data/dashboard.constants';
 import { DashboardDataService } from '../../core/services/dashboard-data.service';
 import { WalletApiService } from '../../core/services/wallet-api.service';
 import { SessionStorageService } from '../../core/services/session-storage.service';
-import { SessionBackfillStatusResponse, SessionTransactionsResponse } from '../../core/models/wallet-api.models';
+import { SessionBackfillStatusResponse, SessionRefreshResponse, SessionTransactionsResponse } from '../../core/models/wallet-api.models';
 import { DashboardComponent } from './dashboard.component';
 
 describe('DashboardComponent (wallet submit flow)', () => {
@@ -123,6 +123,7 @@ describe('DashboardComponent (wallet submit flow)', () => {
       'getSession',
       'getSessionSettings',
       'getSessionBackfillStatus',
+      'refreshSession',
       'rebuildSessionTransactions',
       'getSessionTransactions',
     ]);
@@ -148,6 +149,15 @@ describe('DashboardComponent (wallet submit flow)', () => {
       })
     );
     walletApiServiceSpy.getSessionBackfillStatus.and.returnValue(of(runningBackfill));
+    walletApiServiceSpy.refreshSession.and.returnValue(
+      of({
+        sessionId,
+        status: 'SCHEDULED',
+        scheduledTargets: 1,
+        skippedTargets: 0,
+        message: 'Incremental refresh queued',
+      } satisfies SessionRefreshResponse)
+    );
     walletApiServiceSpy.rebuildSessionTransactions.and.returnValue(
       of({
         sessionId,
@@ -325,6 +335,44 @@ describe('DashboardComponent (wallet submit flow)', () => {
     expect(component.transactionPaneTransactions()[0].flows[0].source).toBe('BYBIT');
   }));
 
+  it('maps sponsored gas transactions into GAS_ONLY display type', fakeAsync(() => {
+    walletApiServiceSpy.getSessionBackfillStatus.and.returnValue(of(completeBackfill));
+    walletApiServiceSpy.getSessionTransactions.and.returnValue(
+      of({
+        ...sessionTransactionsResponse,
+        items: [
+          {
+            ...sessionTransactionsResponse.items[0],
+            type: 'SPONSORED_GAS_IN',
+            flows: [
+              {
+                ...sessionTransactionsResponse.items[0].flows[0],
+                role: 'BUY',
+                assetSymbol: 'ETH',
+                quantityDelta: 0.00021,
+                unitPriceUsd: 2200,
+                valueUsd: 0.462,
+              },
+            ],
+          },
+        ],
+      })
+    );
+
+    const fixture = TestBed.createComponent(DashboardComponent);
+    const component = fixture.componentInstance;
+    fixture.detectChanges();
+
+    component.addWalletsForm.controls.wallets.controls[0].controls.address.setValue(
+      '0x1A87f12aC07E9746e9B053B8D7EF1d45270D693f'
+    );
+    component.submitWallets();
+    tick();
+    fixture.detectChanges();
+
+    expect(component.transactionPaneTransactions()[0].type).toBe('GAS_ONLY');
+  }));
+
   it('treats wallet and integration filters as checked by default', fakeAsync(() => {
     sessionStorageServiceSpy.getSessionId.and.returnValue(sessionId);
     walletApiServiceSpy.getSessionBackfillStatus.and.returnValue(of(completeBackfill));
@@ -371,5 +419,26 @@ describe('DashboardComponent (wallet submit flow)', () => {
     fixture.detectChanges();
 
     expect(component.isIntegrationSelected('BYBIT:33625378')).toBeFalse();
+  }));
+
+  it('schedules incremental refresh when the session is already complete', fakeAsync(() => {
+    sessionStorageServiceSpy.getSessionId.and.returnValue(sessionId);
+    walletApiServiceSpy.getSessionBackfillStatus.and.returnValue(of(completeBackfill));
+
+    const fixture = TestBed.createComponent(DashboardComponent);
+    const component = fixture.componentInstance;
+    fixture.detectChanges();
+    tick();
+    fixture.detectChanges();
+
+    expect(component.canRefreshSession()).toBeTrue();
+
+    component.onRefreshSession();
+    tick();
+    fixture.detectChanges();
+
+    expect(walletApiServiceSpy.refreshSession).toHaveBeenCalledWith(sessionId);
+    expect(component.isSessionRefreshSubmitting()).toBeFalse();
+    expect(component.sessionRefreshMessage()).toBe('Incremental refresh queued');
   }));
 });

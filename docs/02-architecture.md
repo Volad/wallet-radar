@@ -1,7 +1,7 @@
 # WalletRadar — Architecture
 
 > **Version:** SAD v3 target summary
-> **Last updated:** 2026-04-08
+> **Last updated:** 2026-04-09
 > **Style:** Modular monolith (Spring Boot)
 
 This document is the concise architecture summary for the v3 accounting rewrite.
@@ -78,6 +78,7 @@ Live-session orchestration is event-driven:
      - receipt enrichment
      - metadata enrichment
      - lifecycle linking
+     - reciprocal internal-transfer pair promotion
      - protocol-name enrichment
      - optional reclassification when clarification changes economic facts
   4. external-integration normalization
@@ -92,6 +93,14 @@ Important accounting note:
   basis, and reconciliation
 - live-session progress is persisted in `user_sessions.pipelineState`, while
   wallet×network raw ingestion progress remains in `sync_status`
+
+Async replay guardrail:
+
+- protocol-owned request / settlement families may use transaction-level replay
+  handlers when a generic per-flow async bucket is not expressive enough
+- current approved example: `GMX V2 LP_ENTRY_REQUEST / LP_ENTRY_SETTLEMENT`
+  keeps request principal carries separate from the native execution-fee reserve
+  so settlement refund and share-token mint can be allocated deterministically
 
 ### 3.4 Replay pass-through corridors
 
@@ -126,6 +135,11 @@ Determinism requirements:
 
 - one unique open inbound candidate in scope
 - exact replay bucket identity must match
+- the reservation survives only until the first later principal-affecting row
+  in the same scope and asset bucket
+- if that first later principal-affecting row is not the paired outbound /
+  custody-source leg, the open reservation must be discarded before replay
+  starts
 - no competing same-bucket negative principal flow may appear before the paired
   outbound
 - quantity drift must stay inside a bounded tolerance
@@ -137,6 +151,32 @@ Determinism requirements:
   - one unique compatible carry candidate
 
 If any of the above fails, replay falls back to the existing pooled AVCO path.
+
+### 3.5 Request-scoped async reserves
+
+Some async families need more than one replay reservation lane inside the same
+`correlationId`.
+
+Approved audited example:
+
+- `GMX V2 LP_ENTRY_REQUEST / LP_ENTRY_SETTLEMENT`
+
+Replay requirements:
+
+- non-native request outbounds are principal carries
+- native request outbound is an execution-fee reserve
+- settlement native refund releases that reserve
+- settlement `GM` / `GLV` share inflow receives the remaining principal basis
+- uncovered execution-fee reserve must not block covered principal allocation
+
+Important guardrail:
+
+- bridge continuity and pass-through reservation are separate mechanisms
+- `BRIDGE_OUT -> BRIDGE_IN` cross-network carry still uses the dedicated bridge
+  path
+- same-wallet same-network `BRIDGE_IN -> ... -> BRIDGE_OUT` must not keep a
+  stale reserved inbound slice once a local acquisition or other principal
+  touch has already mixed that bucket
 
 ### 3.3 Session scope
 
@@ -192,11 +232,73 @@ If any of the above fails, replay falls back to the existing pooled AVCO path.
   - immutable `integration_raw_events`
   - rebuildable `bybit_extracted_events`
   - canonical `normalized_transactions`
+- audited Bybit transaction-log currency converts must be resolved during this
+  deterministic normalization path, not deferred into clarification:
+  - `TRANSACTION_LOG / CURRENCY_BUY`
+  - `TRANSACTION_LOG / CURRENCY_SELL`
+  remain provider-native convert evidence even when the payload omits a
+  directional `side` and explicit `tradePrice`
+- the extracted stage must preserve provider business-family labels that later
+  deterministic pairers depend on; audited funding-history liquid-staking rows
+  such as `ETH 2.0 / Stake` and `ETH 2.0 / Mint` may not be flattened into
+  description-only semantics
 - session-level raw completion requires both:
   - wallet×network on-chain completion in `sync_status`
   - enabled integration segment completion in `backfill_segments`
 - if a provider event remains ambiguous after the full provider backfill pass,
   it must not enter a later provider-clarification loop
+
+### 3.1.2 Manual incremental refresh
+
+WalletRadar should support a user-triggered `Refresh` action after the initial
+2-year backfill is complete.
+
+Target policy:
+
+- `sync_status` remains one stable source-level row per:
+  - on-chain `walletAddress + networkId`
+  - integration source identity
+- the manual refresh creates a new bounded refresh cycle against that same
+  source row; it does not create a second active `sync_status` document
+- `backfill_segments` remains the single orchestration model; refresh creates
+  only the new segments needed for the delta window
+- segment count must scale with the requested delta range, not with the full
+  original 2-year history window
+- already persisted raw and canonical data outside the affected delta / linkage
+  window must remain untouched
+- existing canonical rows may be patched only for deterministic linkage fields
+  exposed by the new evidence, such as:
+  - `correlationId`
+  - `matchedCounterparty`
+  - other bounded continuity metadata
+
+Recommended v1 execution model:
+
+1. user clicks `Refresh`
+2. backend resolves the current upper bound for every in-scope source
+3. backend computes the incremental lower bound from the last completed source
+   checkpoint
+4. backend creates only the delta `backfill_segments`
+5. raw acquisition runs only for that delta
+6. normalization / clarification run only for new or directly impacted rows
+7. pricing and accounting replay rerun from the downstream pipeline entrypoint
+   after refresh scheduling
+
+Rationale:
+
+- this avoids a destructive full raw / normalization reset
+- preserves deterministic canonical history
+- keeps the current source-status read model intact
+- minimizes segment count and explorer/API calls for short refresh windows
+
+Important guardrails:
+
+- `Refresh` is rejected while the same session already has an active raw
+  backfill or downstream pipeline run
+- if every in-scope source is already up to date, the refresh call is a
+  no-op and must not create empty segment batches
+- any bounded rematch to older canonical rows must be explicit and
+  deterministic; refresh is not a blanket re-normalization of historical rows
 
 ### 3.2 Normalization
 
@@ -207,7 +309,19 @@ If any of the above fails, replay falls back to the existing pooled AVCO path.
   `external_ledger_raw` remains migration-only fallback for older sessions
   until the old import path is removed.
 - If tx-level ordering metadata is incomplete, run raw ordering repair before canonical normalization.
-- Internal-transfer heuristics use the installation-wide tracked wallet universe, never an individual session payload.
+- If current raw already proves a simple same-universe direct native transfer
+  but only one wallet-local raw row exists, run raw peer repair before
+  canonical normalization so the missing sender/recipient wallet-local row can
+  normalize through the ordinary pipeline.
+- Internal-transfer heuristics use the installation-wide tracked wallet universe,
+  never an individual session payload.
+- A tracked-wallet hint alone is not enough to persist `INTERNAL_TRANSFER`.
+  Clarification may promote a pair from `EXTERNAL_TRANSFER_IN/OUT` into
+  `INTERNAL_TRANSFER` only when both reciprocal canonical rows already exist for
+  the same `txHash + networkId` and prove a simple wallet-to-wallet continuity
+  move. Both wallets must share one `accounting_universe`. One-sided
+  tracked-counterparty rows remain conservative and stay external unless raw
+  peer repair has first materialized the missing wallet-local raw row.
 - audited rebasing `Aave` WETH receipt rows must split principal continuity from
   accrued balance growth during normalization itself:
   - matched principal quantity stays `TRANSFER`
@@ -236,6 +350,15 @@ If any of the above fails, replay falls back to the existing pooled AVCO path.
 - Known wrapper selectors and known bridge/router methods must be resolved before generic `deposit` / `withdraw` / `multicall` name fallbacks can capture them.
 - Plain positive inbound transfer legs default to `EXTERNAL_TRANSFER_IN` unless
   contract-aware reward or bridge evidence exists.
+- Protocol-funded native gas assistance must narrow before generic inbound
+  transfer fallback can win:
+  - wallet-boundary inbound native transfer
+  - empty input / `methodId == 0x`
+  - no token transfers
+  - no internal transfers
+  - sender resolves to registry-backed `GAS_PAYER`
+  - quantity fits audited per-network gas-topup envelope
+  - canonical type is `SPONSORED_GAS_IN`, not priced `EXTERNAL_TRANSFER_IN`
 - Promo/phishing inbound patterns must be removed from reward ambiguity handling before generic inbound defaults are applied.
 - Repeated self-promotional inbound families such as Base `multicall(bytes[] data)` token-drop rows, Plasma selector `0x1939c1ff`, and repeated selector `0xeec4378e` must narrow before generic `EXTERNAL_TRANSFER_IN` can win.
 - Economic meaning follows backfill-available raw legs and contract identity.
@@ -247,6 +370,11 @@ If any of the above fails, replay falls back to the existing pooled AVCO path.
 - Known LP position-manager router containers such as `multicall` and
   Uniswap-v4-style `modifyLiquidities` must be dispatched by contract-aware
   inner method rules, not by broad router keywords.
+- For direct or multicall-embedded Uniswap V4 `modifyLiquidities`, the
+  normalization layer must decode nested `unlockData` action params and recover
+  the existing-position `tokenId` before replay. Missing that token id is a
+  normalization defect because replay position buckets depend on
+  `lp-position:<network>:<protocol-slug>:<tokenId>`.
 - LP lifecycle type resolution and LP principal role assignment are separate
   concerns. `LP_ENTRY` / `LP_EXIT` stay canonical LP families, but underlying
   principal legs inside those rows must persist as continuity `TRANSFER`
@@ -269,6 +397,9 @@ If any of the above fails, replay falls back to the existing pooled AVCO path.
   - exact or nearest quantity match
   This remains deterministic normalization-time evidence, not operator
   clarification.
+- Audited funding-history `ETH 2.0` liquid-staking pairs are a provider-family
+  subtype of this rule. They may pair on shared `bybitType = ETH 2.0` even
+  when the human-readable descriptions differ between `Stake` and `Mint`.
 - Aave-style `BORROW` / `REPAY` families may contain debt-marker mint/burn legs
   and chain-specific execution-settlement refund legs in the same tx. Those
   marker / settlement legs must persist as continuity `TRANSFER`, while the
@@ -377,6 +508,14 @@ If any of the above fails, replay falls back to the existing pooled AVCO path.
   - bounded quantity drift
   - destination settlement sender resolved to verified `Across` bridge
     infrastructure
+- Routed `LI.FI / Jumper` bridge starts may also materialize a destination
+  `BRIDGE_IN` from a unique same-wallet Relay payout when:
+  - the source row is already route-proven on a known `LI.FI Diamond`
+  - the destination top-level payout sender is registry-backed `Relay`
+    infrastructure
+  - the destination inbound asset family matches the source bridge family
+  - bounded audited time and quantity drift still hold
+  - no competing destination candidate exists
 - Generic routed aggregator outbound-only rows, including 1inch-style router
   sends, must not be promoted to `BRIDGE_OUT` from time-window proximity or
   destination-wallet heuristics alone. Without production-available bridge
@@ -502,6 +641,14 @@ If any of the above fails, replay falls back to the existing pooled AVCO path.
   receipt-log encounter order. When a `GMX / GLV` settlement receipt contains
   both an intermediate deposit key and a higher-scope GLV key, runtime must
   persist the higher-scope GLV key.
+- Concentrated-liquidity positions are another high-scope lifecycle. Their
+  deterministic correlation must use the position token id, not wallet-level
+  asset-family continuity:
+  - `lp-position:<network>:<protocol-slug>:<tokenId>`
+  - direct increase / decrease / collect / burn selectors may decode token id
+    immediately
+  - mint-like rows without token id must wait for full receipt clarification so
+    the NFT mint log can recover the same deterministic key
 - CoW settlement detection may not depend solely on top-level explorer
   `to/from/functionName` fields. If persisted `fullReceipt.logs` already prove
   the GPv2 `Trade(...)` digest, the settlement row must resolve to
@@ -532,6 +679,13 @@ If any of the above fails, replay falls back to the existing pooled AVCO path.
   `LENDING_DEPOSIT` / `LENDING_WITHDRAW`. The audited Euler rows close only when
   clarification already proves the borrow / transfer / swap / supply path on
   current persisted evidence.
+- Audited Euler native EVK deposits may close as `LENDING_DEPOSIT` even when
+  the wallet-visible principal outbound leg is native tx `value` rather than a
+  token transfer, but only when clarification proves:
+  - positive native tx funding
+  - one share mint to the tracked wallet
+  - one protocol-local fungible hop inside the clarified receipt
+  - no share burn / debt-close shape that would imply withdraw or loop
 - Euler protocol ownership is split into two runtime lanes:
   - simple vault lane:
     `stable -> share` = `LENDING_DEPOSIT`,
@@ -588,6 +742,11 @@ If any of the above fails, replay falls back to the existing pooled AVCO path.
   - wallet / Bybit / wallet-to-wallet movement facts persist as
     `EXTERNAL_TRANSFER_OUT` / `EXTERNAL_TRANSFER_IN`
   - bridge facts persist as `BRIDGE_OUT` / `BRIDGE_IN`
+  - same-universe wallet-to-wallet direct pairs may later promote to
+    `INTERNAL_TRANSFER` only when both wallet-local canonical rows already
+    exist
+  - wallet-to-Bybit corridors stay external canonical transfer rows even after
+    exact rematch
   - ownership-aware continuity is carried by `correlationId`,
     `continuityCandidate`, and `matchedCounterparty`, then resolved during replay
 - Wallet-local `SWAP` requires both wallet-visible legs:
@@ -601,18 +760,26 @@ If any of the above fails, replay falls back to the existing pooled AVCO path.
 - Matched Bybit deposit/withdraw plus on-chain bridge/custody legs use
   continuity pricing rules and may not create duplicated principal pricing on
   both sides.
+- After an on-chain-only rerun, clarification post-processing must be able to
+  re-attach exact `wallet <-> BYBIT` continuity from the already normalized
+  Bybit leg, rather than waiting for a full Bybit renormalization pass.
 - Replay continuity is family-aware for audited custody-equivalent wrappers.
   The current audited family includes `ETH`, network `WETH`, `Aave WETH`
   receipt wrappers, `vbETH`, `yvvbETH`, `mETH`, and `cmETH`, so
   `Bybit ETH -> on-chain WETH -> aManWETH` and upstream `yvvbETH -> vbETH`
   wrapper restores move basis without synthetic disposal or reacquisition.
-- `zkSync` Aave gateway selectors are a narrow method-aware exception owned by
-  normalization, not by replay:
-  - `0x80500d20` `withdrawETH(...)` -> `LENDING_WITHDRAW`
-  - `0x02c205f0` `supplyWithPermit(...)` -> `LENDING_DEPOSIT`
-  - `0x474cf53d` `depositETH(...)` -> `LENDING_DEPOSIT`
-  The override must also prove the expected `ETH/WETH/aZksWETH`
-  wallet-boundary shape before generic unwrap / LP / heuristic lanes run.
+- Audited Aave wrapped-token gateway selectors are a narrow method-aware
+  exception owned by normalization, not by replay:
+  - `zkSync`
+    - `0x80500d20` `withdrawETH(...)` -> `LENDING_WITHDRAW`
+    - `0x02c205f0` `supplyWithPermit(...)` -> `LENDING_DEPOSIT`
+    - `0x474cf53d` `depositETH(...)` -> `LENDING_DEPOSIT`
+  - `Base`
+    - `0x474cf53d` `depositETH(...)` -> `LENDING_DEPOSIT`
+  The override must also prove the expected supported-network wallet-boundary
+  shape before generic unwrap / LP / heuristic lanes run:
+  - `zkSync`: `ETH/WETH/aZksWETH`
+  - `Base`: `ETH/AWETH`
 - Exchange-side `fund_asset_changes` withdrawal shadow rows that duplicate a
   matched chain-aware `withdraw_deposit` leg remain persisted for audit, but
   they are excluded from accounting and pricing lanes.
@@ -744,6 +911,13 @@ If any of the above fails, replay falls back to the existing pooled AVCO path.
   for an allowlisted native-bridge subset when those internal legs are needed
   to reconstruct bridge continuity and the producing source family exposes
   them.
+- The same rule applies to audited `BLOCKSCOUT` concentrated-liquidity exits:
+  when wallet-scoped explorer pages miss native settlement legs but tx-level
+  `/internal-transactions` already exposes them, classification must route the
+  row into receipt clarification instead of freezing an incomplete
+  `LP_EXIT` / `LP_FEE_CLAIM`.
+  These rows are full-receipt-only candidates and must bypass metadata-only
+  clarification so the tx-level `internalTransfers` are actually persisted.
 - full receipt payload must remain separate from synthetic `rawData.logs[]` and
   from the adapted canonical evidence fields.
 - Clarification may rerun classification only from canonical raw evidence plus
@@ -775,6 +949,10 @@ If any of the above fails, replay falls back to the existing pooled AVCO path.
   Euler `batch(...)`, ParaSwap `swapExactAmountOut(...)`, GMX
   `executeOrder(...)`, and Katana `routeSingle(...)` when persisted
   full-receipt evidence actually closes them.
+- ParaSwap exact-out native-settlement rows leave that clarification lane once
+  current calldata already proves destination native output and exact unwrap
+  quantity. Those rows must close in normalization and must not wait for
+  receipt enrichment just to recover a native leg that calldata already proves.
 - If clarification still leaves only weak protocol identity, zero logs, or
   wrapper-only bookkeeping evidence, the row stays in an explicit documented
   stop-condition set instead of being forced into synthetic economic
@@ -898,6 +1076,24 @@ If any of the above fails, replay falls back to the existing pooled AVCO path.
   - correlated Bybit <-> on-chain custody movements
 - LP receipt markers (`LP token`, `BPT`, position NFT) are continuity markers
   only and must not open independent basis lines during replay.
+- Concentrated-liquidity replay must not treat principal continuity as a plain
+  wallet-level same-asset bucket. Once deterministic LP position correlation is
+  available, replay must use a position-scoped multi-asset bucket keyed by that
+  `correlationId`.
+- Position-scoped `LP_EXIT*` replay keeps a two-lane residual model:
+  - same-family residual principal remains first-class allocation input
+  - cross-asset residual transfer legs remain deferred candidates and are
+    promoted only when they are the only remaining deterministic
+    principal-return path
+- A reward-only or out-of-bucket sideflow exit must not clear a live
+  position-scoped LP bucket by itself. If a given `LP_EXIT*` row touches no
+  eligible principal-return identity, replay records that sideflow as
+  `UNKNOWN` and preserves the remaining bucket for later matched exits in the
+  same position correlation.
+- Replay-known-value allocation may reuse deterministic USD-stable parity for
+  on-chain transfer legs even when canonical transfer flows did not persist an
+  explicit `unitPriceUsd`; this is a replay-local allocation aid, not a
+  normalization-time price mutation.
 - `asset_ledger_points` is the immutable replay truth:
   - replay writes it directly while applying accounting consequences
   - UI history reads use it directly
@@ -981,6 +1177,13 @@ If any of the above fails, replay falls back to the existing pooled AVCO path.
     `ACCOUNTING_REPLAY / RUNNING` into `COMPLETE`
 
 ### 5.1 Asset Ledger Timeline Contract
+
+Linking model reference:
+
+- canonical row identity, lifecycle linking, replay carry linkage, display
+  grouping, and `protocolName` enrichment are separate layers
+- use [05-linking-and-protocol-name.md](05-linking-and-protocol-name.md) as the
+  authoritative explanation of those layers and their boundaries
 
 `asset_ledger_points` must support two read modes without extra RPC:
 
@@ -1096,6 +1299,14 @@ This contract lets the UI:
   - partial carry only
   - missing current ledger bucket
   This diagnostic is a read-model aid; it does not invent basis.
+- the same read path should also expose top historical family shortfall sources
+  derived from positive `quantityShortfallDelta` rows so operators can see the
+  first transactions that introduced today's unresolved coverage debt
+- that `shortfallSources` surface is explanatory only:
+  - it must not mutate replay state
+  - it must not synthesize basis
+  - it is not a guaranteed exact lineage map from one current uncovered bucket
+    to one historical source tx
 
 ---
 

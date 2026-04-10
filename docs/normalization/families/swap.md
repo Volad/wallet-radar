@@ -30,6 +30,9 @@ Own direct asset conversion and wrapper continuity at the swap-family level.
 
 - `SWAP` requires deterministic sell-side and buy-side wallet-visible economic
   legs
+- exact-out source-token refunds reduce the source `SELL`; they must not
+  survive as independent `BUY` legs when the same tx already materializes the
+  real destination asset
 - `WRAP` and `UNWRAP` are continuity-preserving asset transforms, not generic
   swaps
 
@@ -53,5 +56,8 @@ Own direct asset conversion and wrapper continuity at the swap-family level.
 
 - extracted runtime rules:
   - `paraswap exactAmountOut` with outbound movement -> `SWAP`
+  - `paraswap exactAmountOut` with native destination, default/wallet
+    beneficiary, and one unique embedded unwrap amount -> net source refund
+    into `SELL` and recover native `BUY`
   - clarified `routeSingle` with distinct net inbound/outbound assets -> `SWAP`
   - clarified same-asset refund pattern on `paraswap exactAmountOut` -> `SWAP`

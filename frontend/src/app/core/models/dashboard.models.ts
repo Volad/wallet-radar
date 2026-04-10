@@ -5,6 +5,7 @@ export type TransactionType =
   | 'SWAP'
   | 'WRAP'
   | 'UNWRAP'
+  | 'GAS_ONLY'
   | 'EXTERNAL_INBOUND'
   | 'EXTERNAL_TRANSFER_OUT'
   | 'LP_ENTRY'

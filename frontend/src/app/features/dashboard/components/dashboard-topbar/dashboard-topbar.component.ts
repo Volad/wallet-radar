@@ -20,8 +20,13 @@ export class DashboardTopbarComponent {
   @Input({ required: true }) statusLabel = '';
   @Input({ required: true }) statusSubline = '';
   @Input({ required: true }) showProgress = true;
+  @Input() showRefresh = false;
+  @Input() canRefresh = false;
+  @Input() isRefreshing = false;
+  @Input() refreshMessage = '';
 
   @Output() addWallet = new EventEmitter<void>();
+  @Output() refresh = new EventEmitter<void>();
 
   shortAddress(address: string): string {
     if (address.length < 12) {
@@ -37,5 +42,12 @@ export class DashboardTopbarComponent {
       return trimmed.slice(colonIndex + 1);
     }
     return this.shortAddress(trimmed);
+  }
+
+  onRefresh(): void {
+    if (!this.canRefresh || this.isRefreshing) {
+      return;
+    }
+    this.refresh.emit();
   }
 }

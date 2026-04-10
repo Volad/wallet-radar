@@ -532,6 +532,9 @@ export class DashboardTransactionsPaneComponent {
   }
 
   prettifyLabel(value: string): string {
+    if (value === 'GAS_ONLY') {
+      return 'Gas';
+    }
     return value.replaceAll('_', ' ');
   }
 

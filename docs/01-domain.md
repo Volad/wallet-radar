@@ -1,7 +1,7 @@
 # WalletRadar — Domain Model
 
 > **Version:** MVP v3 target
-> **Last updated:** 2026-04-08
+> **Last updated:** 2026-04-09
 
 ---
 
@@ -17,6 +17,7 @@
 | **Session Integration** | Persisted external-system connection embedded in `user_sessions.integrations[]` and owned by one session. |
 | **Integration Raw Event** | Immutable provider API payload row stored in `integration_raw_events`. |
 | **Bybit Extracted Event** | Bybit-specific extracted staging row stored in `bybit_extracted_events` and rebuilt from immutable provider raw events during backfill. |
+| **Bybit convert cluster** | Deterministic Bybit staging cluster representing one provider-native asset conversion lifecycle. Current audited members are `CONVERT_HISTORY / Convert` and `TRANSACTION_LOG / CURRENCY_BUY/CURRENCY_SELL`, and membership is case-insensitive at the raw enum level. |
 | **Tracked Wallet Universe** | Installation-wide projection of all tracked wallet addresses used by canonical normalization heuristics. |
 | **Normalization Status** | Raw processing state: `PENDING` or `COMPLETE`. |
 | **Normalized Transaction** | Canonical operation document (`1 tx = 1 doc`) with `flows[]` used by pricing/stat/accounting pipeline. |
@@ -32,14 +33,19 @@
 | **Accounting Universe** | Stable additive owner scope persisted in `accounting_universes`; used by replay/history continuity and session-scoped reads. |
 | **Asset Ledger Point** | Immutable replay trace row in `asset_ledger_points` for one applied accounting transition on one wallet-network-asset bucket inside one accounting universe. |
 | **Pass-through corridor** | Deterministic replay-only reservation that preserves exact carried basis from one proven continuity inbound into one later proven outbound/custody source leg without letting that carry pool into unrelated inventory first. |
+| **Async execution-fee reserve** | Replay-only request-scoped native carry reserved for later async settlement refund or net lifecycle cost, separate from principal carry. Current approved use is `GMX V2 LP_ENTRY_REQUEST / LP_ENTRY_SETTLEMENT`. |
 | **Correlated carry ingress repair** | Replay-only unique-fit attachment that restores already-proven same-family carry across a correlated inbound when provider rounding truncated the destination quantity. |
 | **Linked bridge carry repair** | Replay-only bridge-specific carry path for already-linked same-family `BRIDGE_OUT -> BRIDGE_IN` pairs. It preserves full source cost basis on the destination leg even when bridge settlement quantity drifts, while leaving only the unmatched excess as uncovered. |
 | **Asset-changing bridge settlement carry** | Replay-only conservative settlement rule for already-linked `BRIDGE_OUT(source asset) -> BRIDGE_IN(destination asset)` route pairs where `continuityCandidate = false`. It reallocates source cost basis into the destination acquisition while preserving the source covered/uncovered ratio on the received asset. |
 | **Order-insensitive family custody replay** | Replay rule for simple audited family-equivalent custody transactions (`principal out + receipt in`) that applies carry atomically even when normalized flow order is `receipt in` first. This prevents false uncovered receipt inventory on Aave-style deposits. |
 | **Rebasing receipt accrual split** | Canonical normalization rule for audited rebasing receipt tokens where tx-local receipt balance delta exceeds principal moved in the same continuity family. Principal quantity remains `TRANSFER`, while the excess rebasing delta materializes as a separate `BUY` acquisition that must be priced and replayed explicitly. |
+| **Sponsored gas top-up** | Canonical inbound native-gas assistance funded by a verified protocol/solver sender and persisted as `SPONSORED_GAS_IN`. It increases quantity with zero default cost basis and must not be materialized as a market-priced `BUY`. |
+| **Internal transfer pair promotion** | Clarification-time promotion of a simple same-tx reciprocal on-chain transfer pair into `INTERNAL_TRANSFER` once both wallet-local canonical rows exist and prove the same owner continuity path. |
+| **Internal transfer raw peer repair** | Normalization-time repair that clones a missing wallet-local raw row for a simple same-universe native transfer when current raw already proves sender, recipient, value, and gas, but fetch coverage produced only one wallet-scoped raw document. |
 | **Reconciliation** | Comparison between latest exact-bucket replay state from `asset_ledger_points` and current on-chain quantity in `on_chain_balances`. |
 | **Current Holding View** | Read-time holding state derived from latest exact-bucket `asset_ledger_points` plus `on_chain_balances`; not a persisted collection. |
 | **Dashboard Issue Class** | Read-time diagnostic label for one current holding row. It is derived from current coverage and latest replay-state flags, not from a separate persisted collection. |
+| **Incremental refresh cycle** | User-triggered bounded acquisition cycle that fetches only the delta since the last completed source checkpoint and then resumes the downstream normalization/pricing/accounting pipeline without resetting the full 2-year history. |
 
 ---
 
@@ -261,6 +267,12 @@ Rules:
   must be rebuilt primarily from the `Funding Account Transaction History`
   stream, not from a stitched mix of narrower transfer / convert / earn
   endpoints
+- extracted staging must preserve authoritative provider business families that
+  drive later deterministic pairing, for example audited `ETH 2.0`
+  `Stake/Mint` liquid-staking rows
+- opposite sides of one audited Bybit lifecycle may legitimately keep different
+  human-readable descriptions in staging when the provider business family is
+  already authoritative, for example `ETH 2.0 / Stake` and `ETH 2.0 / Mint`
 - `external_ledger_raw` remains migration-only compatibility input for older
   sessions until the legacy path is deleted
 
@@ -290,6 +302,12 @@ diagnostic:
 - it means some historical quantity is missing or unresolved
 - it must not be treated as synthetic quantity or synthetic cost basis
 
+For deterministic position-scoped LP replay, out-of-bucket reward sideflows do
+not close the position bucket on their own. A reward-only `LP_EXIT*` may
+materialize as `UNKNOWN`, while the remaining multi-asset principal carry stays
+reserved for a later principal-return exit under the same position
+`correlationId`.
+
 ### Dashboard Issue Classes
 
 Dashboard current-holding reads may expose one diagnostic `issue` per
@@ -317,6 +335,16 @@ stored as separate mutable truth state.
 ### SyncState (`sync_status`, `backfill_segments`)
 
 `SyncStatus` tracks wallet×network lifecycle. `BackfillSegment` tracks persistent segment progress and retries.
+
+Important target rule for manual refresh:
+
+- `sync_status` remains the stable source-level status row for one wallet×network
+  or one integration source
+- a user-triggered refresh is a new bounded cycle on that same source identity,
+  not a second active `sync_status` document
+- already confirmed canonical history remains persisted; refresh appends new raw
+  evidence and may patch deterministic linkage metadata on existing canonical
+  rows when new evidence proves a connection
 
 ```text
 BackfillSegment {
@@ -576,6 +604,21 @@ CurrentHoldingView {
 }
 ```
 
+Session family asset-ledger reads may also expose historical shortfall sources
+for the currently selected family:
+
+```text
+FamilyShortfallSourceView {
+  walletAddress: String
+  networkId: String?
+  txHash: String?
+  blockTimestamp: DateTime?
+  normalizedType: String?
+  protocolName: String?
+  quantityShortfall: Decimal
+}
+```
+
 Rules:
 
 - current quantity always comes from `on_chain_balances`
@@ -587,6 +630,11 @@ Rules:
 - historical `quantityShortfall` remains visible for audit, but must not poison
   later covered acquisitions or current provability once the previously missing
   quantity is no longer held
+- `FamilyShortfallSourceView` is a read-model diagnostic aggregated from
+  positive family-level `quantityShortfallDelta` rows
+- it helps explain where today's uncovered quantity was first introduced, but
+  it is not a synthetic exact-parent proof for every current uncovered bucket
+- provider-native rows may legitimately have `txHash = null` or `networkId = null`
 - the view is derived at query time and is not persisted
 
 The runtime producer is bounded to:
@@ -667,6 +715,7 @@ Async AVCO replay status tracking after override/manual compensating updates.
 | `REWARD_CLAIM` |
 | `EXTERNAL_TRANSFER_OUT` |
 | `EXTERNAL_TRANSFER_IN` |
+| `SPONSORED_GAS_IN` |
 | `INTERNAL_TRANSFER` |
 | `APPROVE` |
 | `ADMIN_CONFIG` |
@@ -682,6 +731,9 @@ Staking families keep one canonical type name but support two lifecycle shapes:
   inside the same base-asset family; audited Bybit receipt-wrapper pairs such
   as `ETH -> METH` and `ETH -> CMETH` follow this shape; explicit reward
   side-flows may still stay economic `BUY`
+- audited Bybit funding-history `ETH 2.0 / Stake` plus `ETH 2.0 / Mint`
+  lifecycles also follow this liquid-staking continuity shape even when the two
+  staging rows do not share the same description string
 - classic stake-contract custody:
   principal moves as continuity `TRANSFER`, while any same-tx harvested reward
   remains economic `BUY`
@@ -712,6 +764,10 @@ review states:
 - Euler simple vault rows remain plain lending lifecycle, not loop lifecycle,
   but only when clarification proves the lifecycle:
   - `stable -> share` is `LENDING_DEPOSIT`
+  - native-value EVK `batch(...)` rows may also be `LENDING_DEPOSIT` when
+    clarification proves one positive native tx funding leg, one share mint to
+    the tracked wallet, and one protocol-local wrapper / vault hop inside the
+    clarified receipt
   - `share -> stable` is `LENDING_WITHDRAW`
   - unproven batch rows stay `UNKNOWN / PENDING_CLARIFICATION`
   - partial vs final vault withdraw is derived later from replay/UI state, not
@@ -796,9 +852,25 @@ Additional constraints:
 
 - Plain positive inbound `transfer(address,uint256)` / `transferFrom(...)` legs default to
   `EXTERNAL_TRANSFER_IN` unless contract-aware reward or bridge evidence exists.
+- Verified protocol/solver-funded native gas assistance does **not** stay in the
+  generic `EXTERNAL_TRANSFER_IN` lane when current raw evidence proves all of:
+  - wallet-boundary native inbound
+  - `methodId == 0x` and no recipient-side protocol call
+  - no token transfers and no internal transfers
+  - sender resolves to a registry-backed `GAS_PAYER`
+  - quantity fits the audited per-network gas-topup envelope
+  In that case canonical type must be `SPONSORED_GAS_IN`.
 - Outbound-only aggregator/router calls without a wallet-visible inbound counter-asset do not
   persist as `SWAP`; they demote to owner-agnostic `EXTERNAL_TRANSFER_OUT` unless a higher-priority
   bridge classifier proves `BRIDGE_OUT`.
+- ParaSwap exact-out native-settlement routes do not stay as source-token
+  spend plus source-token refund when current raw calldata already proves:
+  - `dstToken = native sentinel`
+  - wallet/default beneficiary semantics
+  - one unique embedded wrapped-native unwrap amount equal to the exact-out
+    amount
+  In that case normalization must net the same-asset refund into the source
+  `SELL` and materialize one positive native `BUY`.
 - Promo/phishing token metadata excludes the tx from both `REWARD_CLAIM` and ordinary
   `EXTERNAL_TRANSFER_IN`; the tx must be filtered upstream or surfaced as explicit review.
 - Explorer page summaries are audit aids only. Canonical production classification is derived
@@ -815,10 +887,16 @@ Additional constraints:
   movement legs; canonical movement must keep the explicit `FEE` leg only.
 - Narrow audited method-aware overrides are allowed when generic selector /
   function-name fallback would misstate an otherwise deterministic protocol
-  lifecycle. Current audited example: `zkSync` Aave gateway selectors
-  `withdrawETH(...)`, `supplyWithPermit(...)`, and `depositETH(...)` must
-  normalize as lending continuity, not as generic unwrap / LP / residual
-  transfer families.
+  lifecycle. Current audited example: supported Aave wrapped-token gateway
+  selectors must normalize as lending continuity, not as generic unwrap / LP /
+  residual transfer families:
+  - `zkSync`
+    - `withdrawETH(...)`
+    - `supplyWithPermit(...)`
+    - `depositETH(...)`
+  - `Base`
+    - `depositETH(...)` when current raw evidence proves the wallet-boundary
+      `ETH -> AWETH` mint shape
 - For audited rebasing `Aave` WETH receipts (`aEthWETH`, `aArbWETH`,
   `aLinWETH`, `aManWETH`, `aZksWETH`), canonical normalization must not emit the
   full rebasing receipt delta as one continuity transfer when tx-local receipt
@@ -844,9 +922,12 @@ Additional constraints:
 `normalized_transactions.type` must stay independent from the current accounting universe.
 
 - Plain inbound transfer facts persist as `EXTERNAL_TRANSFER_IN`.
+- Sponsored protocol gas assistance persists as `SPONSORED_GAS_IN`.
 - Plain outbound transfer facts persist as `EXTERNAL_TRANSFER_OUT`.
 - Bridge facts persist as `BRIDGE_OUT` / `BRIDGE_IN`.
-- `INTERNAL_TRANSFER` is a legacy normalized type and must not be emitted for new reruns.
+- Direct same-universe wallet-to-wallet on-chain pairs may still promote into
+  `INTERNAL_TRANSFER` once both wallet-local canonical rows exist and prove one
+  owner-continuity path.
 - Ownership-aware continuity is expressed separately via:
   - `correlationId`
   - `continuityCandidate`
@@ -859,8 +940,11 @@ Additional constraints:
 
 Implications:
 
-- Wallet-to-wallet and wallet-to-Bybit movements do not become persisted `INTERNAL_TRANSFER`
-  merely because the current installation can correlate both sides.
+- Wallet-to-Bybit movements do not become persisted `INTERNAL_TRANSFER` merely
+  because the current installation can correlate both sides.
+- Same-universe wallet-to-Bybit continuity is restored on external canonical
+  transfer rows through deterministic `BYBIT:<NETWORK>:<txHash>` correlation
+  plus matched counterpart evidence.
 - The same canonical transfer row may behave as carry-over continuity in one accounting universe
   and as external disposal/acquisition in another; that decision belongs to replay, not to raw normalization.
 
@@ -870,7 +954,36 @@ LP extensions for concentrated-liquidity (CL) protocols:
 - `LP_POSITION_EXIT` (internal classifier event) maps to canonical `type=LP_EXIT` for burn-style position close.
 - For v3/v4 position mint tx, canonical `LP_ENTRY` must include economic principal outflows (wallet token spends), not only NFT lifecycle markers.
 - Underlying principal legs inside `LP_ENTRY`, `LP_EXIT`, `LP_EXIT_PARTIAL`, and `LP_EXIT_FINAL` are continuity-only `TRANSFER` flows, not `BUY` / `SELL`.
+- Concentrated-liquidity principal continuity is position-scoped, not
+  wallet-asset-scoped. Deterministic correlation must use
+  `lp-position:<network>:<protocol-slug>:<tokenId>`.
+- Uniswap-v4-style direct `modifyLiquidities(bytes unlockData,uint256 deadline)`
+  is a normalization-safe source of that deterministic token id when the nested
+  `unlockData` action params operate on an existing position.
+- If a mint-style concentrated-liquidity row does not expose the position token
+  id in current raw calldata, it must stay `PENDING_CLARIFICATION` with
+  `LP_POSITION_CORRELATION_REQUIRED` until receipt clarification can recover
+  the NFT mint log.
+- On `BLOCKSCOUT`-backed networks, a concentrated-liquidity `LP_EXIT` /
+  `LP_FEE_CLAIM` is not final if wallet-scoped explorer evidence still lacks a
+  native settlement leg that can be recovered from transaction-level internal
+  transfers; those rows must enter receipt clarification before pricing / replay.
 - LP receipt markers (`LP token`, `BPT`, CL NFT) may still appear in canonical flows, but they remain continuity markers rather than independent basis assets.
+- Concentrated-liquidity exits may return a shifted principal asset mix. Basis
+  may therefore move across returned principal assets inside the same position
+  lifecycle, but not into unrelated reward assets.
+- During position-scoped `LP_EXIT*` replay, positive transfer legs whose asset
+  identity does not match any source-leg identity must not be demoted to
+  immediate `UNKNOWN` purely for that reason. They remain deferred residual
+  principal candidates until replay proves whether they are the only remaining
+  principal-return path or merely reward-side residuals.
+- Aggregate uncovered quantity across heterogeneous source carries is not a
+  valid hard blocker for position-scoped `LP_EXIT*` residual principal
+  allocation. Once same-asset carry has been peeled off, replay may still move
+  the remaining covered basis into deterministic residual principal returns:
+  - same-asset residual principal legs
+  - replay-known-value residual legs, including trusted USD-stable transfer
+    legs without an explicit persisted transfer-side `unitPriceUsd`
 - For v3/v4 custody transfer (`wallet <-> farm/strategy`) canonical types are `LP_POSITION_STAKE` / `LP_POSITION_UNSTAKE`.
 - `LP_EXIT_PARTIAL` / `LP_EXIT_FINAL` represent decrease-liquidity exits with and without final position close boundary.
 - `LP_ADJUST` is deprecated and kept as backward-compatible alias for legacy data only.
@@ -913,7 +1026,7 @@ LP extensions for concentrated-liquidity (CL) protocols:
 | INV-12 | Protocol-registry special-handler entries resolve through deterministic protocol semantics plus family-owned final mapping; unsupported methods become `UNKNOWN -> NEEDS_REVIEW`. |
 | INV-13 | Continuity replay is chronology-safe: an inbound same-universe transfer becomes immediately spendable when it appears in ordered replay, and a later matched source carry may attach basis only; it must never mint quantity a second time. |
 | INV-14 | `SWAP_DERIVED` may price a canonical asset only when that canonical symbol appears once among non-fee swap flows; multi-leg same-canonical swaps must fall back to safer pricing. |
-| INV-15 | Audited `zkSync` Aave gateway selectors `0x80500d20`, `0x02c205f0`, and `0x474cf53d` must resolve to `LENDING_WITHDRAW` / `LENDING_DEPOSIT` before generic LP / unwrap / heuristic fallback when the expected `ETH/WETH/aZksWETH` movement shape is present. |
+| INV-15 | Audited Aave wrapped-token gateway selectors must resolve to `LENDING_WITHDRAW` / `LENDING_DEPOSIT` before generic LP / unwrap / heuristic fallback when the expected supported-network movement shape is present: `zkSync` `ETH/WETH/aZksWETH` for selectors `0x80500d20`, `0x02c205f0`, `0x474cf53d`, and `Base` `ETH/AWETH` for `depositETH(...)` selector `0x474cf53d`. |
 | INV-16 | On native-alias networks, an audited native-alias transfer that exactly matches `gasUsed * gasPrice` to the audited system fee sink is fee evidence and must not survive as both a principal `TRANSFER` leg and a separate `FEE` leg. |
 | INV-17 | A routed outbound tx with deterministic wallet-boundary principal movement proven by raw transfer evidence may not remain a hash-specific `UNKNOWN` stop-condition; if stronger protocol identity is still absent, canonical normalization must preserve the proven outbound principal through a deterministic fallback type. |
 | INV-18 | Audited `zkSync` routed `Across` source tx `0x27ad57d5` must resolve to `BRIDGE_OUT` when raw route evidence proves the helper path plus same-wallet destination parameters; the tx must not remain `UNKNOWN / NEEDS_REVIEW`. |

@@ -12,6 +12,7 @@ specific family owns the lifecycle.
 - `REWARD_CLAIM`
 - `EXTERNAL_TRANSFER_OUT`
 - `EXTERNAL_TRANSFER_IN`
+- `SPONSORED_GAS_IN`
 - `INTERNAL_TRANSFER`
 
 ## Authoritative Evidence
@@ -20,12 +21,30 @@ specific family owns the lifecycle.
 - persisted token/internal/native transfers
 - tracked-wallet universe for internal-transfer continuity only where the
   approved contract still allows it
+- wallet-to-Bybit continuity stays canonical `EXTERNAL_TRANSFER_*`; exact
+  same-universe carry is restored later from Bybit correlation evidence, not by
+  promoting the row into `INTERNAL_TRANSFER`
 
 ## Clarification Rules
 
 - clarification may support reward-vs-transfer disambiguation when current
   production evidence can actually provide it
 - generic transfer fallback must remain conservative
+- clarification may promote a simple same-tx reciprocal on-chain pair from
+  `EXTERNAL_TRANSFER_IN/OUT` into `INTERNAL_TRANSFER` only when:
+  - both wallet-local canonical rows already exist
+  - `txHash + networkId` match
+  - matched counterparties are reciprocal
+  - both wallet refs share one `accounting_universe`
+  - one principal flow is inbound and one outbound
+  - principal family and quantity match within a tiny transfer tolerance
+  - neither row already belongs to another lifecycle (`correlationId`,
+    protocol-owned route)
+- one-sided tracked-counterparty rows stay external; do not invent
+  `INTERNAL_TRANSFER` from a hint alone
+- for simple direct native transfers with one-sided raw coverage, normalization
+  may repair the missing same-universe raw peer first; the canonical type still
+  upgrades only after clarification sees the reciprocal pair
 
 ## Correlation Rules
 
@@ -44,6 +63,14 @@ specific family owns the lifecycle.
   - merkle/native signature claim selectors with inbound-only movement -> `REWARD_CLAIM`
 - outbound-only aggregator router call on registry-backed aggregator route ->
   `EXTERNAL_TRANSFER_OUT` with reason `ROUTED_AGGREGATOR_OUTBOUND_ONLY`
+- verified solver / relay funded native gas assistance ->
+  `SPONSORED_GAS_IN`
+  - wallet-boundary native inbound only
+  - empty input / `methodId == 0x`
+  - no token transfers
+  - no internal transfers
+  - sender resolves to registry-backed `GAS_PAYER`
+  - quantity fits audited per-network gas-topup envelope
 - protocol-specific clarification may recover a routed aggregator row back into an
   economic family when current production evidence proves wallet-boundary
   settlement:
@@ -60,6 +87,8 @@ specific family owns the lifecycle.
 - do not let transfer fallback capture bridge, LP, staking, lending, or trading
   lifecycle rows
 - do not let claim-like spam rows resolve as `REWARD_CLAIM`
+- do not persist `INTERNAL_TRANSFER` from tracked-wallet lookup alone when the
+  reciprocal canonical peer row is missing
 
 ## Baseline Expectations
 

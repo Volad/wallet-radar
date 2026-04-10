@@ -19,4 +19,12 @@ public interface IntegrationBackfillPlanner {
             UserSession.SessionIntegration integration,
             Instant plannedAt
     );
+
+    List<BackfillSegment> planIncrementalBackfill(
+            String sessionId,
+            UserSession.SessionIntegration integration,
+            Instant from,
+            Instant to,
+            Instant plannedAt
+    );
 }

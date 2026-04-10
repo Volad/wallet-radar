@@ -83,6 +83,15 @@ destination bridge-pair evidence for the `LI.FI / Jumper` route family.
   - bounded audited time window and quantity drift
 - this fallback may promote an inbound-only destination
   `EXTERNAL_TRANSFER_IN` into `BRIDGE_IN`
+- audited route-tagged `LI.FI / Jumper` source bridge starts may also be paired
+  with a unique same-wallet Relay payout destination when current canonical
+  evidence proves:
+  - route-proven source on a known `LI.FI Diamond`
+  - destination top-level payout sender is registry-backed `Relay`
+    infrastructure
+  - same principal asset family
+  - bounded audited time window and quantity drift
+  - no competing destination candidate exists
 - this promotion does not automatically imply plain move-basis continuity
 - audited bridge-family-equivalent stable wrappers such as `vbUSDC -> USDC`
   may still qualify for move-basis continuity when the route is proven and
@@ -132,6 +141,8 @@ destination bridge-pair evidence for the `LI.FI / Jumper` route family.
   -> `0x7d8c79a327637fda080bcfa9204181359de791ccff95dd4b2f1b020b8af0b678`
 - `0x1a756dd5b8d6144d250f3f2a86d25a718e4ac0e3c2044042c1d749ecacda95f6`
   -> `0x4a47ab3cad76be52416e660e044b983acc9837cd9f05b59eabad7560636aa0b2`
+- `0x4bd7b04bc2864b0012f19300690ae5cacb2806fdcc0b1612664d98b5015b48f6`
+  -> `0x2108883281ea4cd12eb27e4a540f9f008e149c1e8fe7a1348e80311c1f4d9ff8`
 
 All three audited rows call `LI.FI Diamond`
 `0x1231deb6f5749ef6ce6943a275a1d3e7486f4eae`, carry bridge-route calldata

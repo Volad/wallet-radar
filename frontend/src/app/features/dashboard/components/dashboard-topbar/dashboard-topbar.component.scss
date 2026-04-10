@@ -147,6 +147,13 @@
   flex-shrink: 0;
 }
 
+.refresh-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-shrink: 0;
+}
+
 .integration-chip {
   border-color: color-mix(in srgb, var(--integrationColor) 28%, var(--wr-border));
   background: color-mix(in srgb, var(--integrationColor) 10%, var(--wr-elevated));
@@ -180,6 +187,23 @@
   background: transparent;
   color: var(--wr-text);
   border: 1px solid var(--wr-border);
+}
+
+.refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+}
+
+.refresh-message {
+  color: var(--wr-subtle);
+  font-size: 0.58rem;
+  white-space: nowrap;
 }
 
 .mono {

@@ -58,6 +58,12 @@ Current active semantic hints:
   supply/withdraw from loop open/rebalance/decrease/close
 - clarification is not complete for Euler `batch(...)` rows when only receipt
   logs were persisted and transfer evidence is still empty
+- audited native EVK deposits may still resolve to simple
+  `LENDING_DEPOSIT` when clarification proves:
+  - positive native tx `value`
+  - share mint to the tracked wallet
+  - one protocol-local fungible hop inside the clarified receipt
+  - no share-burn / debt-close shape
 - if production evidence still cannot prove the lifecycle, fallback must remain
   conservative and the row must stay `UNKNOWN / PENDING_CLARIFICATION`
 - raw explorer transfers alone are not enough to open Euler lifecycle into
@@ -94,6 +100,8 @@ Current active semantic hints:
 - do not classify simple vault `share -> stable` withdraw as
   `LENDING_LOOP_CLOSE`
 - do not classify simple vault `stable -> share` deposit as generic `SWAP`
+- do not classify proved native EVK `value -> share mint` deposits as generic
+  `SWAP` merely because the principal-out leg is native rather than ERC-20
 
 ## Baseline and Regression Anchors
 

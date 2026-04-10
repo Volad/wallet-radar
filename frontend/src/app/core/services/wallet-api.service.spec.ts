@@ -8,6 +8,7 @@ import {
   RebuildSessionTransactionsResponse,
   SessionBackfillStatusResponse,
   SessionDashboardResponse,
+  SessionRefreshResponse,
   SessionSettingsResponse,
   SessionTransactionsResponse,
   UpsertBybitIntegrationResponse,
@@ -127,6 +128,29 @@ describe('WalletApiService', () => {
       `${sessionsBaseUrl}/${encodeURIComponent(sessionId)}/dashboard`
     );
     expect(req.request.method).toBe('GET');
+    req.flush(response);
+  });
+
+  it('posts session refresh to /sessions/{id}/refresh', () => {
+    const sessionId = '549b0aba-a9af-4789-b125-ebb86314a3f1';
+    const response: SessionRefreshResponse = {
+      sessionId,
+      status: 'SCHEDULED',
+      scheduledTargets: 2,
+      skippedTargets: 0,
+      message: 'Incremental refresh queued',
+    };
+
+    service.refreshSession(sessionId).subscribe((result) => {
+      expect(result.status).toBe('SCHEDULED');
+      expect(result.scheduledTargets).toBe(2);
+    });
+
+    const req = httpMock.expectOne(
+      `${sessionsBaseUrl}/${encodeURIComponent(sessionId)}/refresh`
+    );
+    expect(req.request.method).toBe('POST');
+    expect(req.request.body).toEqual({});
     req.flush(response);
   });
 

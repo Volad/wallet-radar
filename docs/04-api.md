@@ -1,7 +1,7 @@
 # WalletRadar — API Contract
 
 > **Version:** v3 current backend surface
-> **Last updated:** 2026-04-07
+> **Last updated:** 2026-04-10
 > **Status:** Active contract for the currently implemented REST endpoints
 
 ---
@@ -18,6 +18,11 @@ In scope now:
 - wallet and session backfill-status reads
 - session-level transaction-history reads
 - session-level asset-ledger timeline reads
+
+Planned next slice, but not implemented yet:
+
+- session-triggered incremental refresh scheduling from the last completed
+  source checkpoint to the current time / head block
 
 Not in scope in this contract:
 
@@ -153,6 +158,49 @@ Response: `200 OK`
 Errors:
 
 - `404 SESSION_NOT_FOUND`
+
+### `POST /api/v1/sessions/{sessionId}/refresh`
+
+Schedules a bounded incremental refresh cycle for the existing session scope.
+
+Behavior:
+
+- reuses the existing session wallets and enabled integrations
+- keeps the existing `sync_status` rows as the stable source identity
+- replaces only the orchestration `backfill_segments` for sources that have a
+  real delta window
+- preserves historical raw and canonical rows
+- resumes the existing downstream pipeline after the incremental raw cycle
+  completes
+
+Response: `200 OK`
+
+```json
+{
+  "sessionId": "d290f1ee-6c54-4b01-90e6-d701748f0851",
+  "status": "SCHEDULED",
+  "scheduledTargets": 4,
+  "skippedTargets": 9,
+  "message": "Incremental refresh queued"
+}
+```
+
+No-op response:
+
+```json
+{
+  "sessionId": "d290f1ee-6c54-4b01-90e6-d701748f0851",
+  "status": "UP_TO_DATE",
+  "scheduledTargets": 0,
+  "skippedTargets": 13,
+  "message": "Session is already up to date"
+}
+```
+
+Errors:
+
+- `404 SESSION_NOT_FOUND`
+- `409 SESSION_REFRESH_CONFLICT`
 
 ### `GET /api/v1/sessions/{sessionId}/settings`
 
@@ -623,6 +671,17 @@ Response: `200 OK`
         "hasUnresolvedFlags": false,
         "unresolvedFlagCount": 0
       }
+    ],
+    "shortfallSources": [
+      {
+        "walletAddress": "0x1234...",
+        "networkId": "BASE",
+        "txHash": "0x5532...",
+        "blockTimestamp": "2025-12-20T10:23:49Z",
+        "normalizedType": "LP_ENTRY",
+        "protocolName": "PancakeSwap",
+        "quantityShortfall": "0.262015232385361717"
+      }
     ]
   },
   "timeline": [
@@ -682,6 +741,9 @@ Response: `200 OK`
 `current.uncoveredBuckets` is a diagnostic surface for the live current family
 state only.
 
+`current.shortfallSources` is a family-level diagnostic surface for historical
+coverage debt.
+
 Interpretation:
 
 - `yield_accrual`
@@ -701,10 +763,26 @@ Interpretation:
 This field does not invent basis. It explains why the current family quantity
 is still partially uncovered after replay.
 
+`current.shortfallSources` rules:
+
+- derived from positive `quantityShortfallDelta` rows inside the same family
+- sorted by descending accumulated shortfall quantity
+- may include historical sources that were already partially or fully spent
+  later; it is an audit hint, not a synthetic exact-parent proof
+- `txHash` and `networkId` may be `null` for provider-native rows such as CEX
+  inventory events
+
 Notes:
 
 - `timeline` is aggregated on read across the session's stable
   `accountingUniverseId`, not only the currently visible wallet subset
+- `timeline` and `events` are display-oriented surfaces; canonical accounting
+  truth still lives in underlying normalized rows and immutable ledger points
+- `eventGroupId` is the display grouping key for one chart / overlay event
+- `memberNormalizedTransactionIds` lists the child canonical rows that belong to
+  that grouped display event
+- frontend is allowed to apply additional chart-only grouping on top of
+  `events`, as long as canonical rows and table/debug surfaces remain separate
 - `current.totalCostBasisUsd` and `current.avcoUsd` are provable basis values
   for `current.coveredQuantity`
 - `protocolName` / `protocolVersion`, when present on transaction-facing
@@ -716,6 +794,9 @@ Notes:
   gates by themselves.
 - `events` is the lightweight overlay surface for the UI
 - `ledgerPoints` is the raw immutable replay trace for audit/debug
+- the conceptual difference between canonical rows, lifecycle linking,
+  display grouping, and `protocolName` enrichment is documented in
+  [05-linking-and-protocol-name.md](05-linking-and-protocol-name.md)
 - the request path is datastore-only; it performs no RPC or explorer calls
 
 Errors:

@@ -104,4 +104,45 @@ class BybitBackfillSegmentPlannerTest {
                 .allSatisfy(segment -> assertThat(java.time.Duration.between(segment.getFromTime(), segment.getToTime()))
                         .isLessThanOrEqualTo(java.time.Duration.ofDays(7)));
     }
+
+    @Test
+    void producesOnlyDeltaSegmentsForIncrementalRefresh() {
+        BybitIntegrationProperties bybitProperties = new BybitIntegrationProperties();
+        bybitProperties.setTransactionLogWindowDays(365);
+        bybitProperties.setExecutionWindowDays(365);
+        bybitProperties.setFundingHistoryWindowDays(30);
+        bybitProperties.setTransferWindowDays(365);
+        bybitProperties.setDepositWithdrawalWindowDays(365);
+        bybitProperties.setConvertWindowDays(365);
+        bybitProperties.setEarnWindowDays(30);
+
+        IntegrationBackfillProperties backfillProperties = new IntegrationBackfillProperties();
+        backfillProperties.setHistoryYears(1);
+
+        BybitBackfillSegmentPlanner service = new BybitBackfillSegmentPlanner(
+                bybitProperties,
+                backfillProperties
+        );
+
+        UserSession.SessionIntegration integration = new UserSession.SessionIntegration();
+        integration.setIntegrationId("BYBIT-33625378");
+        integration.setAccountRef("BYBIT:33625378");
+        integration.setProvider(UserSession.IntegrationProvider.BYBIT);
+
+        java.time.Instant from = java.time.Instant.parse("2026-04-10T11:00:00Z");
+        java.time.Instant to = java.time.Instant.parse("2026-04-10T12:00:00Z");
+        List<BackfillSegment> segments = service.planIncrementalBackfill(
+                "session-1",
+                integration,
+                from,
+                to,
+                java.time.Instant.parse("2026-04-10T12:00:00Z")
+        );
+
+        assertThat(segments).hasSize(8);
+        assertThat(segments).allSatisfy(segment -> {
+            assertThat(segment.getFromTime()).isEqualTo(from);
+            assertThat(segment.getToTime()).isEqualTo(to);
+        });
+    }
 }

@@ -19,7 +19,12 @@
       [backfillProgressPct]="backfillProgressPct()"
       [statusLabel]="pipelineStatusLabel()"
       [statusSubline]="pipelineStatusSubline()"
-      [showProgress]="showPipelineProgress()"></wr-dashboard-topbar>
+      [showProgress]="showPipelineProgress()"
+      [showRefresh]="currentSessionId() !== null"
+      [canRefresh]="canRefreshSession()"
+      [isRefreshing]="isSessionRefreshSubmitting()"
+      [refreshMessage]="sessionRefreshMessage() ?? ''"
+      (refresh)="onRefreshSession()"></wr-dashboard-topbar>
 
     <div class="workspace">
       <wr-dashboard-section-nav

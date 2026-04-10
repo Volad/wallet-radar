@@ -26,21 +26,45 @@ public class IntegrationBackfillPlanningService {
             String sessionId,
             UserSession.SessionIntegration integration
     ) {
+        return replacePlan(
+                sessionId,
+                integration,
+                plannerFor(integration),
+                planner -> planner.planInitialBackfill(sessionId, integration, Instant.now())
+        );
+    }
+
+    public UserSession.IntegrationSyncState replanIncrementalBackfill(
+            String sessionId,
+            UserSession.SessionIntegration integration,
+            Instant from,
+            Instant to
+    ) {
+        if (integration == null || integration.getProvider() == null) {
+            throw new IllegalArgumentException("Integration provider is required");
+        }
+        Instant plannedAt = Instant.now();
+        return replacePlan(
+                sessionId,
+                integration,
+                plannerFor(integration),
+                planner -> planner.planIncrementalBackfill(sessionId, integration, from, to, plannedAt)
+        );
+    }
+
+    private UserSession.IntegrationSyncState replacePlan(
+            String sessionId,
+            UserSession.SessionIntegration integration,
+            IntegrationBackfillPlanner planner,
+            java.util.function.Function<IntegrationBackfillPlanner, List<BackfillSegment>> planFactory
+    ) {
         if (integration == null || integration.getProvider() == null) {
             throw new IllegalArgumentException("Integration provider is required");
         }
 
-        IntegrationBackfillPlanner planner = planners.stream()
-                .filter(candidate -> candidate.supports(integration.getProvider()))
-                .findFirst()
-                .orElseThrow(() -> new IllegalStateException(
-                        "No integration backfill planner registered for provider " + integration.getProvider()
-                ));
-
         backfillSegmentRepository.deleteByIntegrationId(integration.getIntegrationId());
 
-        Instant plannedAt = Instant.now();
-        List<BackfillSegment> segments = planner.planInitialBackfill(sessionId, integration, plannedAt);
+        List<BackfillSegment> segments = planFactory.apply(planner);
         if (!segments.isEmpty()) {
             backfillSegmentRepository.saveAll(segments);
         }
@@ -52,5 +76,14 @@ public class IntegrationBackfillPlanningService {
         syncState.setProgressPct(0);
         integrationSyncStatusService.initialize(integration, segments.size());
         return syncState;
+    }
+
+    private IntegrationBackfillPlanner plannerFor(UserSession.SessionIntegration integration) {
+        return planners.stream()
+                .filter(candidate -> candidate.supports(integration.getProvider()))
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException(
+                        "No integration backfill planner registered for provider " + integration.getProvider()
+                ));
     }
 }

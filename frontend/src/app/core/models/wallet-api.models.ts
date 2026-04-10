@@ -37,6 +37,16 @@ export interface AddSessionResponse {
   readonly message?: string;
 }
 
+export type SessionRefreshStatus = 'SCHEDULED' | 'UP_TO_DATE';
+
+export interface SessionRefreshResponse {
+  readonly sessionId: string;
+  readonly status: SessionRefreshStatus;
+  readonly scheduledTargets: number;
+  readonly skippedTargets: number;
+  readonly message: string;
+}
+
 export interface SessionWalletResponse {
   readonly address: string;
   readonly label: string;

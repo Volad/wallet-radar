@@ -30,6 +30,24 @@
     </div>
   }
 
+  @if (showRefresh) {
+    <div class="refresh-wrap">
+      <button
+        type="button"
+        class="wallet-add-btn settings-link refresh-btn"
+        [disabled]="!canRefresh || isRefreshing"
+        (click)="onRefresh()">
+        @if (isRefreshing) {
+          <span class="spinner mini" aria-hidden="true"></span>
+        }
+        <span>{{ isRefreshing ? 'Refreshing…' : 'Refresh' }}</span>
+      </button>
+      @if (refreshMessage.length > 0) {
+        <span class="refresh-message" aria-live="polite">{{ refreshMessage }}</span>
+      }
+    </div>
+  }
+
   @for (wallet of wallets; track wallet.id) {
     <div class="wallet-chip">
       <span class="wallet-dot" [style.background]="wallet.color" aria-hidden="true"></span>

@@ -13,6 +13,7 @@ import {
   SessionAssetLedgerResponse,
   SessionBackfillStatusResponse,
   SessionDashboardResponse,
+  SessionRefreshResponse,
   SessionSettingsResponse,
   SessionResponse,
   SessionTransactionsResponse,
@@ -66,6 +67,13 @@ export class WalletApiService {
   getSessionBackfillStatus(sessionId: string): Observable<SessionBackfillStatusResponse> {
     return this.httpClient.get<SessionBackfillStatusResponse>(
       `${this.sessionsEndpoint}/${encodeURIComponent(sessionId)}/backfill-status`
+    );
+  }
+
+  refreshSession(sessionId: string): Observable<SessionRefreshResponse> {
+    return this.httpClient.post<SessionRefreshResponse>(
+      `${this.sessionsEndpoint}/${encodeURIComponent(sessionId)}/refresh`,
+      {}
     );
   }
 

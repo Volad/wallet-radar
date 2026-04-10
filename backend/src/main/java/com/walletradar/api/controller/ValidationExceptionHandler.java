@@ -28,6 +28,12 @@ public class ValidationExceptionHandler {
         return ErrorBody.of(ex.errorCode(), ex.getMessage());
     }
 
+    @ExceptionHandler(ApiConflictException.class)
+    @ResponseStatus(HttpStatus.CONFLICT)
+    public ErrorBody handleConflict(ApiConflictException ex) {
+        return ErrorBody.of(ex.errorCode(), ex.getMessage());
+    }
+
     @ExceptionHandler(WebExchangeBindException.class)
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     public ErrorBody handleValidation(WebExchangeBindException ex) {

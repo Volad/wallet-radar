@@ -39,12 +39,15 @@ Current active runtime usage:
   - `repay`
 - function-name markers remain parity-safe fallback inside the same resource
   contract
-- audited `zkSync` gateway selectors now also belong to the same `Aave`
-  semantic contract:
-  - `0x80500d20` `withdrawETH(address,uint256,address)`
-  - `0x02c205f0`
-    `supplyWithPermit(address,uint256,address,uint16,uint256,uint8,bytes32,bytes32)`
-  - `0x474cf53d` `depositETH(address,address,uint16)`
+- audited Aave wrapped-token gateway selectors now also belong to the same
+  `Aave` semantic contract:
+  - `zkSync`
+    - `0x80500d20` `withdrawETH(address,uint256,address)`
+    - `0x02c205f0`
+      `supplyWithPermit(address,uint256,address,uint16,uint256,uint8,bytes32,bytes32)`
+    - `0x474cf53d` `depositETH(address,address,uint16)`
+  - `Base`
+    - `0x474cf53d` `depositETH(address,address,uint16)`
 
 ## Authoritative Evidence
 
@@ -105,8 +108,11 @@ Current active runtime usage:
 - on `zkSync`, an audited native-alias transfer to the audited system fee sink
   that exactly matches `gasUsed * gasPrice` is fee evidence and must not be
   emitted again as both transfer and fee
-- gateway-native `ETH` and receipt-token `aZksWETH` remain custody continuity
-  within the audited `ETH` family; they are not unwrap / LP lifecycle events
+- audited gateway-native `ETH` and receipt-token pairs remain custody
+  continuity within the audited `ETH` family; they are not unwrap / LP
+  lifecycle events:
+  - `zkSync`: `ETH <-> aZksWETH`
+  - `Base`: `ETH <-> AWETH`
 
 ## Family Handoff
 
@@ -122,7 +128,7 @@ Current active runtime usage:
 - do not emit debt-marker `BUY` / `SELL`
 - do not let generic transfer fallback override proven Aave semantics
 - do not let generic `UNWRAP`, `LP_EXIT`, or residual heuristic fallback
-  override audited `zkSync` Aave gateway selectors
+  override audited Aave wrapped-token gateway selectors on supported networks
 - do not treat `variableDebt*` / `stableDebt*` marker legs alone as universal
   protocol proof
 - do not treat bare `borrow(...)` / `repay(...)` selector hits without

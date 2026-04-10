@@ -62,4 +62,45 @@ class IntegrationBackfillPlanningServiceTest {
         assertThat(syncState.getProgressPct()).isZero();
         verify(integrationSyncStatusService).initialize(integration, 1);
     }
+
+    @Test
+    void replansIncrementalSegmentsThroughSharedPlanningService() {
+        IntegrationBackfillPlanningService service = new IntegrationBackfillPlanningService(
+                backfillSegmentRepository,
+                List.of(planner),
+                integrationSyncStatusService
+        );
+
+        UserSession.SessionIntegration integration = new UserSession.SessionIntegration();
+        integration.setIntegrationId("BYBIT-33625378");
+        integration.setProvider(UserSession.IntegrationProvider.BYBIT);
+        integration.setAccountRef("BYBIT:33625378");
+
+        BackfillSegment segment = new BackfillSegment();
+        segment.setId("seg-2");
+        segment.setSessionId("session-1");
+        segment.setIntegrationId("BYBIT-33625378");
+        segment.setSourceKind(BackfillSegment.SourceKind.INTEGRATION);
+
+        when(planner.supports(UserSession.IntegrationProvider.BYBIT)).thenReturn(true);
+        when(planner.planIncrementalBackfill(
+                org.mockito.ArgumentMatchers.eq("session-1"),
+                org.mockito.ArgumentMatchers.same(integration),
+                org.mockito.ArgumentMatchers.eq(Instant.parse("2026-04-10T09:00:00Z")),
+                org.mockito.ArgumentMatchers.eq(Instant.parse("2026-04-10T10:00:00Z")),
+                org.mockito.ArgumentMatchers.any(Instant.class)
+        )).thenReturn(List.of(segment));
+
+        UserSession.IntegrationSyncState syncState = service.replanIncrementalBackfill(
+                "session-1",
+                integration,
+                Instant.parse("2026-04-10T09:00:00Z"),
+                Instant.parse("2026-04-10T10:00:00Z")
+        );
+
+        verify(backfillSegmentRepository).deleteByIntegrationId("BYBIT-33625378");
+        verify(backfillSegmentRepository).saveAll(List.of(segment));
+        assertThat(syncState.getTotalSegments()).isEqualTo(1);
+        verify(integrationSyncStatusService).initialize(integration, 1);
+    }
 }

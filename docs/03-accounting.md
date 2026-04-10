@@ -1,7 +1,7 @@
 # WalletRadar — Accounting Policy
 
 > **Version:** v3 target
-> **Last updated:** 2026-04-08
+> **Last updated:** 2026-04-09
 > **Accounting method:** AVCO
 
 ---
@@ -108,6 +108,49 @@ newAvco      = currentAvco
 - no new acquisition lot is created
 - no realised PnL is created
 
+### On Bybit provider convert
+
+- audited Bybit asset-changing convert rows must materialize as canonical
+  `SWAP`, not `UNKNOWN_CEX`
+- this includes transaction-log families where provider semantics already prove
+  convert even if `side = None`, `qty = 0`, or `tradePrice = 0`
+- replay must therefore transfer basis from the sold asset into the acquired
+  asset before any later same-universe custody withdrawal
+
+### On async LP entry request / settlement
+
+For audited protocol-owned async LP entry families, replay may reserve request
+state across a later settlement instead of treating the legs as unrelated
+transfers.
+
+Approved audited rule:
+
+- `GMX V2 LP_ENTRY_REQUEST / LP_ENTRY_SETTLEMENT`
+
+Policy:
+
+- request-side non-native principal outbounds reserve carry for the future share
+  token
+- request-side native execution-fee reserve is tracked separately from
+  principal
+- settlement native refund releases that reserve back into the native asset
+- settlement `GM` / `GLV` share inflow receives the remaining principal basis
+  plus any covered net execution-fee reserve cost consumed by the lifecycle
+- uncovered execution-fee reserve must not zero out covered principal
+  allocation into the share token
+
+### On `SPONSORED_GAS_IN`
+
+- quantity increases
+- `costBasisDeltaUsd = 0`
+- canonical flow role stays `TRANSFER`
+- the row does not go through market-price acquisition
+- replay treats the received native quantity as zero-cost sponsored inventory by
+  default
+
+This is intentionally different from generic `EXTERNAL_TRANSFER_IN -> BUY`.
+Current raw evidence proves receipt of gas, but not user-paid acquisition cost.
+
 ### On FEE
 
 - `FEE` is stored as a separate canonical flow
@@ -193,6 +236,19 @@ Interpretation:
 
 Basis continuity applies when the economic owner did not dispose of the asset:
 
+- `INTERNAL_TRANSFER`
+  Simple same-tx reciprocal on-chain moves between tracked wallets in the same
+  owner scope must normalize as `INTERNAL_TRANSFER` once clarification can see
+  both canonical wallet-local rows.
+  - both rows must share `txHash + networkId`
+  - one principal leg must be outbound and one inbound
+  - principal family and quantity must match within a tiny transfer tolerance
+  - one-sided tracked-counterparty hints are insufficient and remain external
+  - if a direct native transfer already proves a same-universe sender and
+    recipient but raw coverage is one-sided, normalization should repair the
+    missing raw peer first and let clarification upgrade the resulting pair
+  - replay must treat the promoted pair as continuity-only movement, not as
+    synthetic disposal plus acquisition
 - `BRIDGE_OUT -> BRIDGE_IN`
   Basis carries across networks only when the bridge pair is correlated and the
   bridged asset identity is preserved across the pair.
@@ -218,6 +274,13 @@ Basis continuity applies when the economic owner did not dispose of the asset:
   self-linked bridge continuity
 - `BRIDGE_OUT(depositV3) -> BRIDGE_IN(fillV3Relay/fillRelay/redeemWithFee/execute302/directFulfill)`
   Destination-side settlement remains bridge continuity, not repay or vault semantics.
+- routed `LI.FI / Jumper` same-asset corridors may also carry move basis when
+  clarification proves one unique same-wallet Relay payout destination:
+  - source row is already route-proven on `LI.FI Diamond`
+  - destination top-level sender is registry-backed `Relay` infrastructure
+  - same principal asset family
+  - bounded audited time and quantity drift
+  - no competing destination candidate exists
 - official `Mayan/CCTP` source confirmation may prove a fee-bearing settlement
   pair without relying on a short time-gap heuristic:
   - source raw proves `swapAndStartBridgeTokensViaMayan(...)`
@@ -233,6 +296,9 @@ Basis continuity applies when the economic owner did not dispose of the asset:
 - for already-linked same-family `BRIDGE_OUT -> BRIDGE_IN` pairs, replay must
   use a bridge-specific carry path rather than the generic correlated-transfer
   quantity matcher
+- protocol-owned async LP entry families may also reserve basis across
+  `REQUEST -> SETTLEMENT`, but only where audited replay rules explicitly split
+  principal carry from execution-fee reserve
   - destination lower than source:
     full source cost basis moves onto the smaller destination quantity
   - destination higher than source:
@@ -258,6 +324,15 @@ Basis continuity applies when the economic owner did not dispose of the asset:
 - audited routed `MetaMask Bridge -> LI.FI adapter -> Across settlement`
   corridors may follow the same source-led path even when:
   - source `protocolName` remains `MetaMask Bridge`
+
+Sponsored gas assistance is **not** a continuity lane:
+
+- `SPONSORED_GAS_IN` does not create `continuityCandidate`
+- it does not use `matchedCounterparty`
+- it does not participate in `EXTERNAL_TRANSFER_OUT -> EXTERNAL_TRANSFER_IN`
+  carry pairing
+- any later chart/UI grouping to a parent actionable tx is display logic, not
+  replay continuity
   - destination has empty input / blank function name
   - settlement proof exists only in `explorer.internalTransfers[].from`
   Accounting must use the promoted `BRIDGE_IN` row plus deterministic pair
@@ -338,6 +413,11 @@ Deterministic restrictions:
 - reservation uses only already-confirmed canonical rows
 - reservation never changes canonical transaction types
 - reservation is exact-bucket, not portfolio-wide
+- an open reservation survives only until the first later principal-affecting
+  row in the same scope and asset bucket
+- if that first later principal-affecting row is not the paired outbound /
+  custody-source leg, replay must discard the reservation and fall back to the
+  pooled AVCO position
 - if uniqueness is ambiguous, replay must not create a reservation
 - unmatched quantity remainder stays in the ordinary pooled position
 
@@ -348,6 +428,16 @@ Accounting effect:
 - only remaining quantity, if any, falls back to pooled AVCO consumption
 - downstream destination/custody leg therefore receives the carried cost more
   accurately than generic pooled replay would allow
+
+Bridge-specific guardrail:
+
+- bridge continuity itself is still handled only by the dedicated
+  `BRIDGE_OUT -> BRIDGE_IN` path
+- pass-through reservation may isolate a `BRIDGE_IN` only until the first later
+  same-scope principal touch
+- therefore a later same-wallet same-network `BRIDGE_OUT` must consume the
+  pooled source position once an intervening local `BUY`, `SWAP`, reward, LP
+  exit, or other principal-affecting row has already mixed that bucket
 
 ### 4.2 Correlated same-family carry ingress policy
 
@@ -430,6 +520,10 @@ Examples:
   - normalization may materialize this continuity late on rerun when an already
     imported Bybit `withdraw_deposit` row still sits in `UNMATCHED`, but the
     exact on-chain leg is now present in persisted Mongo evidence
+  - on-chain-only reruns must also support the reverse repair: if the Bybit leg
+    already carries deterministic continuity metadata but the rebuilt on-chain
+    leg lost it, clarification post-processing must restore the exact
+    `BYBIT:<NETWORK>:<txHash>` correlation on the wallet row
   - rows carrying `BRIDGE_ON_CHAIN_LEG_NOT_FOUND` are not move-basis-ready
     until the on-chain leg is actually matched
   - etalon parity alone is not enough here; replay readiness requires real
@@ -449,6 +543,12 @@ Examples:
   exchange-side `fund_asset_changes` withdrawal shadow row for the same move is
   audit-visible but excluded from accounting and must not remain an active
   realized `SELL`.
+- Matched `wallet -> Bybit` deposits and `Bybit -> wallet` withdrawals stay
+  canonical `EXTERNAL_TRANSFER_*`, not persisted `INTERNAL_TRANSFER`.
+  - replay carries basis only when both sides hold exact same-universe
+    continuity metadata
+  - protocol-neutral dust / spam transfers with no Bybit leg may not borrow
+    this corridor policy
 - Async request / execute lifecycles
   Basis may move only when the runtime can deterministically correlate the
   request-side principal with the later settlement-side execution. Request
@@ -512,6 +612,9 @@ Examples:
 - Euler simple vault rows stay on the plain lending policy only after
   clarification proves the lifecycle:
   - `stable -> share` is `LENDING_DEPOSIT`
+  - native-value EVK `batch(...)` rows are also `LENDING_DEPOSIT` when
+    clarification proves positive native funding, share mint to the wallet,
+    and one protocol-local wrapper / vault hop
   - `share -> stable` is `LENDING_WITHDRAW`
   - without reliable clarification they remain
     `UNKNOWN / PENDING_CLARIFICATION`
@@ -565,11 +668,15 @@ For matched Bybit withdraw/deposit:
 - the current audited `ETH` continuity family includes `ETH`, network `WETH`,
   `aEthWETH`, `aArbWETH`, `aLinWETH`, `aManWETH`, `aZksWETH`, `vbETH`,
   `yvvbETH`, `mETH`, and `cmETH`
-- gateway-style Aave custody methods on `zkSync` remain continuity, not
-  disposal / reacquisition:
-  - `withdrawETH(...)` is `LENDING_WITHDRAW`
-  - `supplyWithPermit(...)` is `LENDING_DEPOSIT`
-  - `depositETH(...)` is `LENDING_DEPOSIT`
+- gateway-style Aave custody methods on supported networks remain continuity,
+  not disposal / reacquisition:
+  - `zkSync`
+    - `withdrawETH(...)` is `LENDING_WITHDRAW`
+    - `supplyWithPermit(...)` is `LENDING_DEPOSIT`
+    - `depositETH(...)` is `LENDING_DEPOSIT`
+  - `Base`
+    - audited `depositETH(...)` with wallet-boundary `ETH -> AWETH` mint
+      shape is `LENDING_DEPOSIT`
 - generic Aave `BORROW` / `REPAY` rows may still carry `protocol = Aave`
   without an address-level registry hit when the tx proves canonical
   Aave debt-marker continuity (`variableDebt*` / `stableDebt*`) alongside the
@@ -699,6 +806,14 @@ Transaction-type pricing contract:
     `TRANSFER`, not `SELL`.
   - Receipt markers such as `LP token`, `BPT`, or CL position NFT stay
     continuity-only markers and do not become new basis lots.
+  - For concentrated-liquidity positions with deterministic
+    `lp-position:<network>:<protocol-slug>:<tokenId>` correlation, replay must
+    store principal carry in a position-scoped multi-asset bucket rather than a
+    wallet-level same-asset bucket.
+  - If normalization fails to recover a deterministic token id for direct or
+    multicall-embedded `modifyLiquidities`, replay cannot legally infer the
+    missing position bucket later. The correct remedy is canonical rebuild, not
+    post-hoc basis patching.
   - The pricing stage must not invent a synthetic sale of token0/token1 or a
     synthetic buy of an LP token just to assign USD.
   - Any explicit swap, fee, or reward side-flow inside the same canonical tx is
@@ -711,6 +826,27 @@ Transaction-type pricing contract:
     accounting on their own.
   - Explicit fee/reward delta above principal continuity is priced as
     `LP_FEE_CLAIM` or `REWARD_CLAIM`.
+  - For position-scoped concentrated-liquidity exits, replay restores
+    same-asset carry first and may then reallocate remaining principal basis
+    across returned principal assets that belong to the same position bucket.
+  - Positive return assets that do not match the original source-asset
+    identities are not auto-rewards. They stay as deferred residual principal
+    candidates until replay decides whether they are:
+    - the only remaining deterministic principal-return path
+    - or merely reward-side residuals that must stay `UNKNOWN`
+  - Aggregate uncovered quantity across heterogeneous source carries must not
+    by itself zero out deterministic residual principal allocation after
+    same-asset carry has already been restored.
+  - Replay-known-value allocation for residual principal may use:
+    - persisted explicit `unitPriceUsd`
+    - trusted USD-stable parity for transfer legs such as `USDC`, `USDT`,
+      `DAI`, `USDB`, `USDE`, `GHO`, `AUSD`
+  - Assets that were never part of the position principal bucket, such as
+    out-of-bucket rewards, must not inherit that principal basis automatically.
+  - A reward-only or out-of-bucket sideflow `LP_EXIT` must not clear the
+    remaining position bucket when no eligible principal-return leg was touched
+    in that tx. The sideflow stays `UNKNOWN`, and the bucket remains open for a
+    later principal-return exit in the same position correlation.
   - A bundle-aware LP exit may still carry explicit `BUY` reward side-flows in
     the same canonical row when current raw evidence can separate them
     deterministically. Those reward side-flows are priceable; the LP principal
@@ -743,6 +879,9 @@ Transaction-type pricing contract:
     principal and derivative legs as continuity `TRANSFER`.
   - Audited Bybit `Earn / On-chain Earn subscription` receipt wrappers such as
     `ETH -> CMETH` follow the same liquid-staking continuity policy.
+  - Audited Bybit funding-history `ETH 2.0 / Stake` plus `ETH 2.0 / Mint`
+    rows also follow this liquid-staking continuity policy even when the two
+    staging rows do not share the same description string.
   - Audited Bybit liquid-staking pairs may settle asynchronously inside one
     official earn lifecycle. Deterministic pairing therefore may use a bounded
     multi-hour window when all of the following hold:
@@ -751,6 +890,9 @@ Transaction-type pricing contract:
     - opposite signed quantities
     - same audited accounting family
     - exact or nearest absolute quantity match
+  - For the audited `ETH 2.0` slice, the shared provider business family is the
+    authoritative pairing key; exact description equality is not required
+    between `Stake` and `Mint`.
   - Replay carries cost basis from the principal asset into the liquid staking
     derivative and must not realize PnL on the conversion itself.
   - Classic stake-contract deposits such as Pancake SmartChef
@@ -769,6 +911,11 @@ Transaction-type pricing contract:
   - persisted canonical type stays `EXTERNAL_TRANSFER_OUT` / `EXTERNAL_TRANSFER_IN`
   - same-universe continuity is resolved only during replay
   - do not price the principal twice on both sides once continuity correlation is active
+- on-chain wallet-to-wallet moves are stricter than venue rematch
+  - clarification may persist `INTERNAL_TRANSFER` only after the reciprocal
+    canonical peer row exists
+  - until then the row stays conservative as external even if a tracked-wallet
+    hint is present
 - review telemetry
   - `blockingNeedsReview` means rows that still participate in active pricing /
     replay gating.
@@ -900,6 +1047,9 @@ Implications:
 - wrapped-native `deposit()` / `withdraw(uint256)` is not a clarification problem
 - bridge entry / settlement selectors are not a clarification problem
 - LP position-manager `multicall` / `modifyLiquidities` routing is not a clarification problem
+- concentrated-liquidity mint rows that still lack deterministic position token
+  id are a valid receipt-clarification problem and must surface
+  `LP_POSITION_CORRELATION_REQUIRED`
 - missing `transactionIndex` is a raw-repair problem before normalization, not a clarification retry
 - `MISSING_CONTRACT_ADDRESS` is not a generic clarification fallback; it is valid
   only for explicit contract-creation rows
@@ -1020,11 +1170,15 @@ Current audited clarification candidate families for full receipt enrichment:
   families
 - selected Euler-style batch rows where full receipt logs reveal real asset
   transfers
-- ParaSwap `swapExactAmountOut(...)`
 - GMX `executeOrder(...)`
 - Katana `routeSingle(...)`
 - allowlisted native bridge families whose same-source internal transfers are
   required for deterministic bridge continuity
+- `BLOCKSCOUT` concentrated-liquidity `LP_EXIT` / `LP_FEE_CLAIM` rows where
+  wallet-scoped explorer evidence is missing native settlement transfers that
+  tx-level clarification can still recover
+  - metadata-only clarification must not consume these rows before the
+    transfer-aware full-receipt pass runs
 - Pancake / Infinity CL exit containers that prove collect / withdrawal /
   unwrap continuity from same-source clarification evidence
 - Pancake / Infinity `modifyLiquidities(...)` rows that prove positive
@@ -1033,6 +1187,18 @@ Current audited clarification candidate families for full receipt enrichment:
   either:
   - be a documented safe stop-condition with no basis impact, or
   - remain an explicit basis blocker that still prevents pricing/AVCO
+
+Audited normalization-first exact-out rule:
+
+- ParaSwap `swapExactAmountOut(...)` native-settlement rows such as
+  `0x71edb81701d7c95d92d5ad4ec43574db388c7e5e21974385374883b021e0f5da`
+  are not clarification debt when calldata already proves:
+  - destination native asset
+  - default/wallet beneficiary semantics
+  - exact unwrap quantity
+- In that case source-token refund must net into the source `SELL`, and replay
+  must receive one positive native `BUY` leg instead of a synthetic same-asset
+  refund acquisition.
 
 Current audited normalization blocker after `run/14`:
 
@@ -1257,6 +1423,11 @@ Current holdings are derived on read:
   quantity, not silently basis-backed principal
 - live-positive rows with zero carried basis must remain explicit uncovered
   current quantity, not synthetic basis
+- session family asset-ledger reads may expose `shortfallSources` aggregated
+  from positive `quantityShortfallDelta` rows
+- this is an audit/debug surface for historical provenance debt, not a replay
+  input and not a claim that every listed source still maps one-to-one into the
+  current uncovered bucket
 
 User-facing holdings and portfolio totals must be computed from derived
 `asset_ledger_points + on_chain_balances`, not from a persisted compatibility

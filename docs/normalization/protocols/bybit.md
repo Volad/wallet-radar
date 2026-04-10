@@ -68,6 +68,54 @@ rows that are not custody continuity events.
   `VAULT_DEPOSIT` / `STAKING_DEPOSIT` blocker when the official paired earn
   lifecycle is provable.
 
+### Audited `ETH 2.0` funding-history lifecycle
+
+- Official funding-history rows with `showBusiTypeEn = ETH 2.0` are an audited
+  liquid-staking provider family.
+- Extraction must preserve:
+  - `bybitType = ETH 2.0`
+  - original description such as `Stake` or `Mint`
+  - `canonicalType = STAKING_DEPOSIT`
+- Deterministic normalization may pair opposite-signed audited `ETH 2.0` rows
+  even when the description strings differ between the two sides.
+- The authoritative pairing facts are:
+  - same user/account
+  - shared provider business family `ETH 2.0`
+  - opposite signed quantities
+  - same audited accounting family
+  - bounded time window
+  - exact or nearest quantity match
+- Audited example:
+  - `ETH -0.709 / Stake`
+  - `METH +0.66865026 / Mint`
+  must normalize as one confirmed `STAKING_DEPOSIT` continuity row.
+
+### Audited transaction-log currency convert lifecycle
+
+- Official Bybit transaction-log enum families:
+  - `CURRENCY_BUY`
+  - `CURRENCY_SELL`
+  are audited asset-changing convert rows.
+- Extraction must not leave them as `UNKNOWN_CEX`.
+- Extraction must preserve:
+  - original enum in `bybitType`
+  - `canonicalType = SWAP`
+- Deterministic normalization may cluster convert-family rows even when the
+  provider payload does not expose:
+  - directional `side`
+  - non-zero `qty`
+  - explicit `tradePrice`
+- The authoritative pairing facts are:
+  - same user/account
+  - same source file type
+  - opposite signed quantities
+  - tight bounded time window
+  - case-insensitive convert-family enum set membership, not exact single enum equality
+- Audited example:
+  - `CMETH -0.66931648 / CURRENCY_SELL`
+  - `ETH +0.70215876 / CURRENCY_BUY`
+  must normalize as one canonical `SWAP`.
+
 ### Matched continuity
 
 - A Bybit `withdraw_deposit` row may stay active accounting scope only when the
@@ -124,6 +172,8 @@ rows that are not custody continuity events.
   `correlationId` plus `matchedCounterparty`
 - do not hide `BRIDGE_ON_CHAIN_LEG_NOT_FOUND` by downgrading the row into an
   operator-invisible state
+- do not leave audited `CURRENCY_BUY` / `CURRENCY_SELL` rows in `UNKNOWN_CEX`
+  just because Bybit omitted `side` or `tradePrice`
 
 ## Current Policy Notes
 

@@ -7,6 +7,7 @@ import com.walletradar.api.dto.PutSessionSettingsRequest;
 import com.walletradar.api.dto.RebuildSessionTransactionsResponse;
 import com.walletradar.api.dto.SessionBackfillStatusResponse;
 import com.walletradar.api.dto.SessionDashboardResponse;
+import com.walletradar.api.dto.SessionRefreshResponse;
 import com.walletradar.api.dto.SessionSettingsResponse;
 import com.walletradar.api.dto.SessionTransactionsResponse;
 import com.walletradar.api.dto.SessionResponse;
@@ -18,6 +19,7 @@ import com.walletradar.ingestion.wallet.query.SessionDashboardQueryService;
 import com.walletradar.ingestion.wallet.query.SessionQueryService;
 import com.walletradar.ingestion.wallet.query.SessionTransactionsQueryService;
 import com.walletradar.session.application.SessionIntegrationCommandService;
+import com.walletradar.session.application.SessionRefreshCommandService;
 import com.walletradar.session.application.SessionSettingsCommandService;
 import com.walletradar.session.application.SessionSettingsQueryService;
 import jakarta.validation.Valid;
@@ -54,6 +56,7 @@ public class SessionController {
     private final SessionSettingsQueryService sessionSettingsQueryService;
     private final SessionSettingsCommandService sessionSettingsCommandService;
     private final SessionIntegrationCommandService sessionIntegrationCommandService;
+    private final SessionRefreshCommandService sessionRefreshCommandService;
 
     @PostMapping
     @ResponseStatus(HttpStatus.ACCEPTED)
@@ -81,6 +84,23 @@ public class SessionController {
         return sessionQueryService.findBackfillStatus(normalizedSessionIdOrThrow(sessionId))
                 .map(this::toBackfillStatusResponse)
                 .orElseThrow(() -> new ApiNotFoundException("SESSION_NOT_FOUND", "Session not found"));
+    }
+
+    @PostMapping("/{sessionId}/refresh")
+    public Mono<SessionRefreshResponse> refreshSession(@PathVariable String sessionId) {
+        String normalizedSessionId = normalizedSessionIdOrThrow(sessionId);
+        return Mono.fromCallable(() -> sessionRefreshCommandService.refresh(normalizedSessionId)
+                        .map(result -> new SessionRefreshResponse(
+                                result.sessionId(),
+                                result.status().name(),
+                                result.scheduledTargets(),
+                                result.skippedTargets(),
+                                result.message()
+                        ))
+                        .orElseThrow(() -> new ApiNotFoundException("SESSION_NOT_FOUND", "Session not found")))
+                .subscribeOn(Schedulers.boundedElastic())
+                .onErrorMap(SessionRefreshCommandService.RefreshConflictException.class,
+                        exception -> new ApiConflictException("SESSION_REFRESH_CONFLICT", exception.getMessage()));
     }
 
     @GetMapping("/{sessionId}/settings")

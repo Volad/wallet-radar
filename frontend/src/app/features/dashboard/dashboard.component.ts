@@ -41,6 +41,7 @@ import {
   SessionBackfillStatusResponse,
   SessionBridgeStatus,
   SessionIntegrationResponse,
+  SessionRefreshResponse,
   SessionTransactionsBridgeFilter,
   SessionTransactionFlowResponse,
   SessionTransactionItemResponse,
@@ -92,6 +93,7 @@ const TRANSACTION_TYPES_BY_ID = new Set<TransactionType>([
   'SWAP',
   'WRAP',
   'UNWRAP',
+  'GAS_ONLY',
   'EXTERNAL_INBOUND',
   'EXTERNAL_TRANSFER_OUT',
   'LP_ENTRY',
@@ -113,6 +115,10 @@ const TRANSACTION_TYPES_BY_ID = new Set<TransactionType>([
   'MANUAL_COMPENSATING',
   'LP_ADJUST',
 ]);
+
+const TRANSACTION_TYPE_DISPLAY_OVERRIDES: Readonly<Record<string, TransactionType>> = {
+  SPONSORED_GAS_IN: 'GAS_ONLY',
+};
 
 const FLOW_ROLES = new Set<FlowRole>(['BUY', 'SELL', 'FEE', 'TRANSFER']);
 const PRICE_SOURCES = new Set<PriceSource>([
@@ -169,6 +175,8 @@ export class DashboardComponent {
   readonly currentSessionId = signal<string | null>(null);
   readonly dashboardRefreshNonce = signal(0);
   readonly sessionBackfillStatus = signal<SessionBackfillStatusResponse | null>(null);
+  readonly isSessionRefreshSubmitting = signal(false);
+  readonly sessionRefreshMessage = signal<string | null>(null);
   readonly sessionTransactions = signal<ReadonlyArray<TransactionItem>>([]);
   readonly sessionTransactionsTotalCount = signal(0);
   readonly isSessionTransactionsLoading = signal(false);
@@ -282,6 +290,17 @@ export class DashboardComponent {
 
   readonly showPipelineProgress = computed(() => {
     return this.sessionBackfillStatus() !== null;
+  });
+
+  readonly canRefreshSession = computed(() => {
+    const sessionId = this.currentSessionId();
+    const status = this.sessionBackfillStatus();
+    if (sessionId === null || status === null) {
+      return false;
+    }
+    return status.status === 'COMPLETE'
+      && !this.isPipelineRunning(status)
+      && !this.isSessionRefreshSubmitting();
   });
 
   readonly activeSection = computed((): SectionMeta | null => {
@@ -755,6 +774,39 @@ export class DashboardComponent {
     this.isAddWalletDialogOpen.set(true);
   }
 
+  onRefreshSession(): void {
+    const sessionId = this.currentSessionId();
+    if (sessionId === null || !this.canRefreshSession()) {
+      return;
+    }
+    this.isSessionRefreshSubmitting.set(true);
+    this.sessionRefreshMessage.set(null);
+
+    this.walletApiService
+      .refreshSession(sessionId)
+      .pipe(
+        takeUntilDestroyed(this.destroyRef),
+        catchError((error: HttpErrorResponse) => {
+          this.isSessionRefreshSubmitting.set(false);
+          this.sessionRefreshMessage.set(this.toBackendErrorMessage(error, 'Session refresh failed. Please retry.'));
+          return EMPTY;
+        })
+      )
+      .subscribe((response: SessionRefreshResponse) => {
+        this.isSessionRefreshSubmitting.set(false);
+        this.sessionRefreshMessage.set(response.message);
+        if (response.status === 'SCHEDULED' && response.scheduledTargets > 0) {
+          this.isBackfillVisible.set(true);
+          this.sessionTransactionsError.set(null);
+          this.sessionTransactionsLoadPhase.set('idle');
+          this.loadSessionPreferences(sessionId);
+          this.startBackfillPolling(sessionId);
+          return;
+        }
+        this.loadSessionBackfillStatus(sessionId);
+      });
+  }
+
   closeAddWalletDialog(): void {
     if (this.isWalletSubmitBusy()) {
       return;
@@ -787,7 +839,7 @@ export class DashboardComponent {
         })),
         catchError((error: HttpErrorResponse) => {
           this.walletSubmitState.set('error');
-          this.walletSubmitMessage.set(this.toWalletSubmitError(error));
+          this.walletSubmitMessage.set(this.toBackendErrorMessage(error, 'Wallet submission failed. Please retry.'));
           return EMPTY;
         })
       )
@@ -798,6 +850,8 @@ export class DashboardComponent {
         this.walletSubmitMessage.set(message);
         this.isBackfillVisible.set(true);
         this.sessionBackfillStatus.set(null);
+        this.isSessionRefreshSubmitting.set(false);
+        this.sessionRefreshMessage.set(null);
         this.sessionTransactions.set([]);
         this.sessionTransactionsError.set(null);
         this.isSessionTransactionsLoading.set(false);
@@ -1170,8 +1224,14 @@ export class DashboardComponent {
   }
 
   private toTransactionType(type: string | null): TransactionType {
-    if (type !== null && TRANSACTION_TYPES_BY_ID.has(type as TransactionType)) {
-      return type as TransactionType;
+    if (type !== null) {
+      const override = TRANSACTION_TYPE_DISPLAY_OVERRIDES[type];
+      if (override !== undefined) {
+        return override;
+      }
+      if (TRANSACTION_TYPES_BY_ID.has(type as TransactionType)) {
+        return type as TransactionType;
+      }
     }
     return 'UNCLASSIFIED';
   }
@@ -1225,7 +1285,7 @@ export class DashboardComponent {
     return null;
   }
 
-  private toWalletSubmitError(error: HttpErrorResponse): string {
+  private toBackendErrorMessage(error: HttpErrorResponse, fallback: string): string {
     if (typeof error.error === 'string' && error.error.trim().length > 0) {
       return error.error;
     }
@@ -1242,7 +1302,7 @@ export class DashboardComponent {
       return backendMessage;
     }
 
-    return 'Wallet submission failed. Please retry.';
+    return fallback;
   }
 
   private isPipelineRunning(status: SessionBackfillStatusResponse): boolean {
@@ -1280,6 +1340,8 @@ export class DashboardComponent {
     this.stopBackfillPolling();
     this.currentSessionId.set(null);
     this.sessionBackfillStatus.set(null);
+    this.isSessionRefreshSubmitting.set(false);
+    this.sessionRefreshMessage.set(null);
     this.isBackfillVisible.set(false);
     this.sessionTransactions.set([]);
     this.sessionTransactionsTotalCount.set(0);

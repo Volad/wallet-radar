@@ -72,7 +72,7 @@ interface BasisFilterView {
   readonly color: string;
 }
 
-type EventFamilyKey = 'lp' | 'bridge' | 'transfer' | 'lending' | 'reward' | 'staking';
+type EventFamilyKey = 'lp' | 'bridge' | 'transfer' | 'lending' | 'reward' | 'staking' | 'gas';
 
 interface EventFamilyFilterView {
   readonly key: EventFamilyKey;
@@ -184,7 +184,7 @@ const USDC_FAMILY_SYMBOLS = new Set(['USDC', 'VBUSDC']);
 const STABLECOIN_SYMBOLS = new Set(['USDT', 'USDC', 'USDE', 'USDS', 'USDD', 'DAI', 'FDUSD', 'PYUSD', 'TUSD', 'USD1']);
 const DEFAULT_RANGE_DAYS = 21;
 const DEFAULT_RANGE_MIN_POINTS = 16;
-const DEFAULT_DISABLED_TYPE_KEYS = new Set(['WRAP', 'UNWRAP']);
+const DEFAULT_DISABLED_TYPE_KEYS = new Set(['WRAP', 'UNWRAP', 'GAS_ONLY']);
 const DEFAULT_HIDDEN_BASIS_EFFECTS = new Set(['GAS_ONLY']);
 const BASIS_MOVE_EFFECTS = new Set(['CARRY_IN', 'CARRY_OUT', 'REALLOCATE_IN', 'REALLOCATE_OUT']);
 const TRANSFER_TYPE_KEYS = new Set(['BRIDGE_IN', 'BRIDGE_OUT', 'INTERNAL_TRANSFER', 'EXTERNAL_TRANSFER_IN', 'EXTERNAL_TRANSFER_OUT']);
@@ -681,6 +681,19 @@ const TYPE_META: Readonly<Record<string, TypeVisualMeta>> = {
       ctx.fill();
     },
   },
+  GAS_ONLY: {
+    label: 'Gas',
+    glyph: '⛽',
+    color: '#fbbf24',
+    icon: (ctx, cx, cy, r) => {
+      const a = r * 0.5;
+      ctx.beginPath();
+      ctx.moveTo(cx - a * 0.1, cy - a);
+      ctx.bezierCurveTo(cx + a * 0.55, cy - a * 0.65, cx + a * 0.75, cy + a * 0.05, cx, cy + a);
+      ctx.bezierCurveTo(cx - a * 0.75, cy + a * 0.05, cx - a * 0.55, cy - a * 0.65, cx - a * 0.1, cy - a);
+      ctx.stroke();
+    },
+  },
   OTHER: {
     label: 'Other',
     glyph: '•',
@@ -727,6 +740,7 @@ const EVENT_FAMILY_META: Readonly<Record<EventFamilyKey, EventFamilyVisualMeta>>
   lending: { label: 'Lending', color: '#34d399', icon: TYPE_META['LENDING_DEPOSIT'].icon },
   reward: { label: 'Reward', color: '#f472b6', icon: TYPE_META['REWARD_CLAIM'].icon },
   staking: { label: 'Staking', color: '#fbbf24', icon: TYPE_META['STAKING_DEPOSIT'].icon },
+  gas: { label: 'Gas', color: '#fbbf24', icon: TYPE_META['GAS_ONLY'].icon },
 };
 
 @Component({
@@ -978,7 +992,7 @@ export class AssetLedgerPageComponent {
     this.visibleMarkers().filter((marker) => Math.abs(marker.realisedPnlDeltaUsd ?? 0) > 0.0000001)
   );
 
-  readonly eventLogBaseMarkers = computed(() => [...this.visibleMarkers()].reverse());
+  readonly eventLogBaseMarkers = computed(() => [...this.windowMarkers()].reverse());
 
   readonly eventLogMarkers = computed(() => {
     const query = this.normalizeSearchQuery(this.eventLogSearch());
@@ -2246,6 +2260,8 @@ export class AssetLedgerPageComponent {
         return 'STAKING_DEPOSIT';
       case 'STAKE_WITHDRAWAL':
         return 'STAKING_WITHDRAW';
+      case 'SPONSORED_GAS_IN':
+        return 'GAS_ONLY';
       default:
         return normalizedType ?? 'OTHER';
     }
@@ -2283,6 +2299,9 @@ export class AssetLedgerPageComponent {
     }
     if (typeKey.startsWith('STAKING_')) {
       return 'staking';
+    }
+    if (typeKey === 'GAS_ONLY') {
+      return 'gas';
     }
     return null;
   }
