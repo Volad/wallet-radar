@@ -337,6 +337,69 @@ describe('DashboardComponent (wallet submit flow)', () => {
     expect(component.transactionPaneTransactions()[0].flows[0].source).toBe('BYBIT');
   }));
 
+  it('renders explicit pipeline stage labels for classification, clarification, linking and cost basis', () => {
+    const fixture = TestBed.createComponent(DashboardComponent);
+    const component = fixture.componentInstance;
+    fixture.detectChanges();
+
+    component.sessionBackfillStatus.set({
+      ...runningBackfill,
+      overallProgressPct: 42,
+      pipelineStage: 'ON_CHAIN_NORMALIZATION',
+    });
+    expect(component.pipelineStatusLabel()).toBe('Classification: 42% done');
+
+    component.sessionBackfillStatus.set({
+      ...runningBackfill,
+      overallProgressPct: 58,
+      phaseProgress: {
+        phase: 'ON_CHAIN_CLARIFICATION',
+        progressPct: 58,
+        processedCount: 58,
+        leftCount: 42,
+        totalCount: 100,
+      },
+    });
+    expect(component.pipelineStatusLabel()).toBe('Clarification: 58% done');
+
+    component.sessionBackfillStatus.set({
+      ...runningBackfill,
+      overallProgressPct: 73,
+      pipelineStage: 'LINKING',
+      phaseProgress: null,
+    });
+    expect(component.pipelineStatusLabel()).toBe('Linking: 73% done');
+
+    component.sessionBackfillStatus.set({
+      ...runningBackfill,
+      overallProgressPct: 91,
+      pipelineStage: 'ACCOUNTING_REPLAY',
+      phaseProgress: null,
+    });
+    expect(component.pipelineStatusLabel()).toBe('Cost basis: 91% done');
+  });
+
+  it('renders pricing subline as priced transaction progress', () => {
+    const fixture = TestBed.createComponent(DashboardComponent);
+    const component = fixture.componentInstance;
+    fixture.detectChanges();
+
+    component.sessionBackfillStatus.set({
+      ...runningBackfill,
+      overallProgressPct: 64,
+      phaseProgress: {
+        phase: 'PRICING',
+        progressPct: 64,
+        processedCount: 2793,
+        leftCount: 2826,
+        totalCount: 5619,
+      },
+    });
+
+    expect(component.pipelineStatusLabel()).toBe('Pricing: 64% done');
+    expect(component.pipelineStatusSubline()).toBe('priced tx: 2793 · left: 2826');
+  });
+
   it('maps sponsored gas transactions into GAS_ONLY display type', fakeAsync(() => {
     walletApiServiceSpy.getSessionBackfillStatus.and.returnValue(of(completeBackfill));
     walletApiServiceSpy.getSessionTransactions.and.returnValue(

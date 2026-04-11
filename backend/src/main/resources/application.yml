@@ -315,7 +315,9 @@ walletradar:
 
   pricing:
     enabled: true
-    batch-size: 150
+    batch-size: 1000
+    parallel-lanes: 4
+    quote-resolve-parallel-lanes: 16
     schedule-interval-ms: 120000
     retry-delay-seconds: 120
     external:

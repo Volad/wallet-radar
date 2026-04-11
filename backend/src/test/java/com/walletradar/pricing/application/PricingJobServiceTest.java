@@ -21,6 +21,7 @@ import java.util.List;
 import java.util.concurrent.Executor;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -33,6 +34,8 @@ class PricingJobServiceTest {
     private NormalizedTransactionRepository normalizedTransactionRepository;
     @Mock
     private PriceResolutionService priceResolutionService;
+    @Mock
+    private BatchPriceQuoteResolver batchPriceQuoteResolver;
 
     @Test
     void processNextBatchSavesConfirmedPricedRows() {
@@ -53,12 +56,15 @@ class PricingJobServiceTest {
                 org.mockito.ArgumentMatchers.any()
         ))
                 .thenReturn(confirmed);
+        BatchPriceQuoteResolver.BatchQuotePlan batchQuotePlan = BatchPriceQuoteResolver.BatchQuotePlan.empty();
+        when(batchPriceQuoteResolver.prepare(anyList())).thenReturn(batchQuotePlan);
 
         PricingJobService service = new PricingJobService(
                 pendingPricingQueryService,
                 normalizedTransactionRepository,
                 priceResolutionService,
                 new PricingResultMapper(),
+                batchPriceQuoteResolver,
                 properties,
                 directExecutor()
         );
@@ -66,6 +72,7 @@ class PricingJobServiceTest {
         int processed = service.processNextBatch();
 
         assertThat(processed).isEqualTo(1);
+        verify(batchPriceQuoteResolver).persistFetchedQuotes(batchQuotePlan);
         verify(normalizedTransactionRepository).saveAll(List.of(confirmed));
     }
 
@@ -83,12 +90,15 @@ class PricingJobServiceTest {
                 org.mockito.ArgumentMatchers.any()
         ))
                 .thenThrow(new IllegalStateException("boom"));
+        BatchPriceQuoteResolver.BatchQuotePlan batchQuotePlan = BatchPriceQuoteResolver.BatchQuotePlan.empty();
+        when(batchPriceQuoteResolver.prepare(anyList())).thenReturn(batchQuotePlan);
 
         PricingJobService service = new PricingJobService(
                 pendingPricingQueryService,
                 normalizedTransactionRepository,
                 priceResolutionService,
                 new PricingResultMapper(),
+                batchPriceQuoteResolver,
                 properties,
                 directExecutor()
         );
@@ -128,12 +138,15 @@ class PricingJobServiceTest {
                 org.mockito.ArgumentMatchers.any()
         ))
                 .thenAnswer(invocation -> confirmedCopy(second));
+        BatchPriceQuoteResolver.BatchQuotePlan batchQuotePlan = BatchPriceQuoteResolver.BatchQuotePlan.empty();
+        when(batchPriceQuoteResolver.prepare(anyList())).thenReturn(batchQuotePlan);
 
         PricingJobService service = new PricingJobService(
                 pendingPricingQueryService,
                 normalizedTransactionRepository,
                 priceResolutionService,
                 new PricingResultMapper(),
+                batchPriceQuoteResolver,
                 properties,
                 directExecutor()
         );

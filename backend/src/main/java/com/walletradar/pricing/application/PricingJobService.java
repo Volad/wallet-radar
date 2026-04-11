@@ -3,7 +3,6 @@ package com.walletradar.pricing.application;
 import com.walletradar.config.AsyncConfig;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
@@ -13,8 +12,6 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.Executor;
 
 /**
@@ -28,6 +25,7 @@ public class PricingJobService {
     private final NormalizedTransactionRepository normalizedTransactionRepository;
     private final PriceResolutionService priceResolutionService;
     private final PricingResultMapper pricingResultMapper;
+    private final BatchPriceQuoteResolver batchPriceQuoteResolver;
     private final PricingProperties pricingProperties;
     private final Executor pricingExecutor;
 
@@ -36,6 +34,7 @@ public class PricingJobService {
             NormalizedTransactionRepository normalizedTransactionRepository,
             PriceResolutionService priceResolutionService,
             PricingResultMapper pricingResultMapper,
+            BatchPriceQuoteResolver batchPriceQuoteResolver,
             PricingProperties pricingProperties,
             @Qualifier(AsyncConfig.PRICING_EXECUTOR) Executor pricingExecutor
     ) {
@@ -43,6 +42,7 @@ public class PricingJobService {
         this.normalizedTransactionRepository = normalizedTransactionRepository;
         this.priceResolutionService = priceResolutionService;
         this.pricingResultMapper = pricingResultMapper;
+        this.batchPriceQuoteResolver = batchPriceQuoteResolver;
         this.pricingProperties = pricingProperties;
         this.pricingExecutor = pricingExecutor;
     }
@@ -61,12 +61,13 @@ public class PricingJobService {
             return 0;
         }
 
-        ConcurrentMap<BatchQuoteKey, PricingQuoteResult> batchQuoteCache = new ConcurrentHashMap<>();
-        List<PricingOutcome> outcomes = resolveBatch(batch, progressHeartbeat, batchQuoteCache);
+        BatchPriceQuoteResolver.BatchQuotePlan batchQuotePlan = batchPriceQuoteResolver.prepare(batch);
+        List<PricingOutcome> outcomes = resolveBatch(batch, progressHeartbeat, batchQuotePlan);
         List<NormalizedTransaction> persisted = outcomes.stream()
                 .sorted(Comparator.comparingInt(PricingOutcome::index))
                 .map(PricingOutcome::transaction)
                 .toList();
+        batchPriceQuoteResolver.persistFetchedQuotes(batchQuotePlan);
         normalizedTransactionRepository.saveAll(persisted);
         return (int) outcomes.stream().filter(PricingOutcome::successful).count();
     }
@@ -74,17 +75,17 @@ public class PricingJobService {
     private List<PricingOutcome> resolveBatch(
             List<NormalizedTransaction> batch,
             Runnable progressHeartbeat,
-            ConcurrentMap<BatchQuoteKey, PricingQuoteResult> batchQuoteCache
+            BatchPriceQuoteResolver.BatchQuotePlan batchQuotePlan
     ) {
         int lanes = Math.max(1, Math.min(pricingProperties.getParallelLanes(), batch.size()));
         if (lanes == 1 || batch.size() == 1) {
-            return resolvePartition(index(batch, 0), progressHeartbeat, batchQuoteCache);
+            return resolvePartition(index(batch, 0), progressHeartbeat, batchQuotePlan);
         }
 
         List<List<IndexedTransaction>> partitions = partition(index(batch, 0), lanes);
         List<CompletableFuture<List<PricingOutcome>>> futures = partitions.stream()
                 .map(partition -> CompletableFuture.supplyAsync(
-                        () -> resolvePartition(partition, progressHeartbeat, batchQuoteCache),
+                        () -> resolvePartition(partition, progressHeartbeat, batchQuotePlan),
                         pricingExecutor
                 ))
                 .toList();
@@ -97,11 +98,11 @@ public class PricingJobService {
     private List<PricingOutcome> resolvePartition(
             List<IndexedTransaction> partition,
             Runnable progressHeartbeat,
-            ConcurrentMap<BatchQuoteKey, PricingQuoteResult> batchQuoteCache
+            BatchPriceQuoteResolver.BatchQuotePlan batchQuotePlan
     ) {
         List<PricingOutcome> outcomes = new ArrayList<>(partition.size());
         for (IndexedTransaction indexedTransaction : partition) {
-            outcomes.add(resolveOne(indexedTransaction, batchQuoteCache));
+            outcomes.add(resolveOne(indexedTransaction, batchQuotePlan));
             progressHeartbeat.run();
         }
         return outcomes;
@@ -109,7 +110,7 @@ public class PricingJobService {
 
     private PricingOutcome resolveOne(
             IndexedTransaction indexedTransaction,
-            ConcurrentMap<BatchQuoteKey, PricingQuoteResult> batchQuoteCache
+            BatchPriceQuoteResolver.BatchQuotePlan batchQuotePlan
     ) {
         NormalizedTransaction transaction = indexedTransaction.transaction();
         Instant now = Instant.now();
@@ -117,7 +118,7 @@ public class PricingJobService {
             NormalizedTransaction priced = priceResolutionService.resolve(
                     transaction,
                     now,
-                    request -> resolveBatchScopedQuote(request, batchQuoteCache)
+                    request -> batchPriceQuoteResolver.resolve(request, batchQuotePlan)
             );
             return new PricingOutcome(indexedTransaction.index(), priced, true);
         } catch (RuntimeException error) {
@@ -131,18 +132,6 @@ public class PricingJobService {
             pricingResultMapper.markFailedAttempt(failed, now);
             return new PricingOutcome(indexedTransaction.index(), failed, false);
         }
-    }
-
-    private java.util.Optional<com.walletradar.pricing.domain.PriceQuote> resolveBatchScopedQuote(
-            com.walletradar.pricing.domain.PriceRequest request,
-            ConcurrentMap<BatchQuoteKey, PricingQuoteResult> batchQuoteCache
-    ) {
-        BatchQuoteKey cacheKey = BatchQuoteKey.from(request);
-        PricingQuoteResult cached = batchQuoteCache.computeIfAbsent(
-                cacheKey,
-                ignored -> new PricingQuoteResult(priceResolutionService.resolveExternalQuote(request))
-        );
-        return cached.quote();
     }
 
     private List<IndexedTransaction> index(List<NormalizedTransaction> batch, int startIndex) {
@@ -166,17 +155,5 @@ public class PricingJobService {
     }
 
     private record PricingOutcome(int index, NormalizedTransaction transaction, boolean successful) {
-    }
-
-    private record PricingQuoteResult(java.util.Optional<com.walletradar.pricing.domain.PriceQuote> quote) {
-    }
-
-    private record BatchQuoteKey(String assetKey, Instant bucketStart) {
-        private static BatchQuoteKey from(com.walletradar.pricing.domain.PriceRequest request) {
-            return new BatchQuoteKey(
-                    request.assetKey(),
-                    request.occurredAt().truncatedTo(java.time.temporal.ChronoUnit.MINUTES)
-            );
-        }
     }
 }

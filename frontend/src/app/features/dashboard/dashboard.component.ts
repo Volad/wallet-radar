@@ -280,6 +280,9 @@ export class DashboardComponent {
     }
     const phaseProgress = status.phaseProgress;
     if (phaseProgress !== null && phaseProgress !== undefined) {
+      if (phaseProgress.phase === 'PRICING') {
+        return `priced tx: ${phaseProgress.processedCount} · left: ${phaseProgress.leftCount}`;
+      }
       return `processed: ${phaseProgress.processedCount} · left: ${phaseProgress.leftCount}`;
     }
     if (status.pipelineMessage !== null && status.pipelineMessage !== undefined && status.pipelineMessage.length > 0) {
@@ -1316,13 +1319,17 @@ export class DashboardComponent {
   private phaseDisplayLabel(phase: string | null | undefined): string {
     switch (phase) {
       case 'ON_CHAIN_NORMALIZATION':
-      case 'ON_CHAIN_CLARIFICATION':
       case 'BYBIT_NORMALIZATION':
-        return 'Normalization';
+      case 'INTEGRATION_CLASSIFICATION':
+        return 'Classification';
+      case 'ON_CHAIN_CLARIFICATION':
+        return 'Clarification';
+      case 'LINKING':
+        return 'Linking';
       case 'PRICING':
         return 'Pricing';
       case 'ACCOUNTING_REPLAY':
-        return 'Basis';
+        return 'Cost basis';
       case 'BACKFILL':
       default:
         return 'Backfill';

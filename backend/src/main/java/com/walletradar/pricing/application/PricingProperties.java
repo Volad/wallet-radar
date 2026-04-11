@@ -16,9 +16,11 @@ public class PricingProperties {
 
     private boolean enabled = false;
 
-    private int batchSize = 250;
+    private int batchSize = 1000;
 
-    private int parallelLanes = 2;
+    private int parallelLanes = 4;
+
+    private int quoteResolveParallelLanes = 16;
 
     private long scheduleIntervalMs = 120_000L;
 

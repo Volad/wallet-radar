@@ -34,10 +34,7 @@ public class PriceExternalSourceOrchestrator {
     }
 
     public Optional<PriceQuote> resolve(PriceRequest request) {
-        List<ExternalPriceSource> prioritizedSources = externalSources.stream()
-                .filter(source -> source.supports(request))
-                .sorted(Comparator.comparingInt(source -> sourcePriority(request, source.source())))
-                .toList();
+        List<ExternalPriceSource> prioritizedSources = prioritizedExternalSources(request);
         for (ExternalPriceSource externalSource : prioritizedSources) {
             Optional<PriceQuote> cached = historicalPriceCacheService.findQuote(request, externalSource.source());
             if (cached.isPresent()) {
@@ -62,6 +59,41 @@ public class PriceExternalSourceOrchestrator {
             }
         }
         return Optional.empty();
+    }
+
+    public Optional<PriceQuote> resolveExternalOnly(PriceRequest request) {
+        for (ExternalPriceSource externalSource : prioritizedExternalSources(request)) {
+            try {
+                Optional<PriceQuote> quote = externalSource.resolve(request);
+                if (quote.isPresent()) {
+                    return quote;
+                }
+            } catch (RuntimeException error) {
+                log.error(
+                        "External price source failed: normalizedTxId={}, networkId={}, assetKey={}, assetSymbol={}, source={}",
+                        request.normalizedTransactionId(),
+                        request.networkId(),
+                        request.assetKey(),
+                        request.assetSymbol(),
+                        externalSource.source(),
+                        error
+                );
+            }
+        }
+        return Optional.empty();
+    }
+
+    public List<PriceSource> prioritizedSources(PriceRequest request) {
+        return prioritizedExternalSources(request).stream()
+                .map(ExternalPriceSource::source)
+                .toList();
+    }
+
+    private List<ExternalPriceSource> prioritizedExternalSources(PriceRequest request) {
+        return externalSources.stream()
+                .filter(source -> source.supports(request))
+                .sorted(Comparator.comparingInt(source -> sourcePriority(request, source.source())))
+                .toList();
     }
 
     private int sourcePriority(PriceRequest request, PriceSource source) {

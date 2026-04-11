@@ -54,9 +54,9 @@ public class AsyncConfig {
     @Bean(name = PRICING_EXECUTOR)
     public Executor pricingExecutor() {
         ThreadPoolTaskExecutor e = new ThreadPoolTaskExecutor();
-        e.setCorePoolSize(2);
-        e.setMaxPoolSize(2);
-        e.setQueueCapacity(4);
+        e.setCorePoolSize(16);
+        e.setMaxPoolSize(16);
+        e.setQueueCapacity(64);
         e.setThreadNamePrefix("pricing-");
         e.initialize();
         return e;

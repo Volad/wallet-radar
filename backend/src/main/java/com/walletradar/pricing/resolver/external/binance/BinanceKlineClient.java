@@ -12,6 +12,8 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Minimal Binance kline client for one-minute historical price buckets.
@@ -23,6 +25,7 @@ public class BinanceKlineClient {
 
     private final PricingProperties pricingProperties;
     private final WebClient webClient;
+    private final Set<String> unsupportedSymbols = ConcurrentHashMap.newKeySet();
 
     public BinanceKlineClient(WebClient.Builder webClientBuilder, PricingProperties pricingProperties) {
         this.pricingProperties = pricingProperties;
@@ -32,6 +35,9 @@ public class BinanceKlineClient {
     }
 
     public Optional<BinanceKline> fetchKline(String symbol, Instant occurredAt) {
+        if (unsupportedSymbols.contains(symbol)) {
+            return Optional.empty();
+        }
         Instant bucketStart = occurredAt.truncatedTo(ChronoUnit.MINUTES);
         long startTime = bucketStart.toEpochMilli();
         long endTime = bucketStart.plusSeconds(60).toEpochMilli();
@@ -60,6 +66,7 @@ public class BinanceKlineClient {
         } catch (WebClientResponseException error) {
             HttpStatusCode statusCode = error.getStatusCode();
             if (statusCode.value() == 400 || statusCode.value() == 404) {
+                unsupportedSymbols.add(symbol);
                 return Optional.empty();
             }
             throw error;
