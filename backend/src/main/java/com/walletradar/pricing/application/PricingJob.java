@@ -1,9 +1,12 @@
 package com.walletradar.pricing.application;
 
-import com.walletradar.domain.event.BybitNormalizationCompletedEvent;
+import com.walletradar.config.AsyncConfig;
+import com.walletradar.domain.event.LinkingCompletedEvent;
 import com.walletradar.domain.event.PricingCompletedEvent;
+import com.walletradar.domain.event.PricingRequestedEvent;
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.pricing.telemetry.PricingLogSupport;
+import com.walletradar.session.application.SessionPipelineActivityService;
 import com.walletradar.session.application.SessionPipelineStateService;
 import com.walletradar.telemetry.PipelineTelemetrySnapshot;
 import com.walletradar.telemetry.PipelineTelemetrySnapshotService;
@@ -11,8 +14,11 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -24,6 +30,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class PricingJob {
 
     private static final String STAGE_NAME = "pricing";
+    private static final Duration HEARTBEAT_INTERVAL = Duration.ofSeconds(30);
 
     private final AtomicBoolean running = new AtomicBoolean(false);
 
@@ -33,6 +40,7 @@ public class PricingJob {
     private final StalePriceUnresolvedRepairService stalePriceUnresolvedRepairService;
     private final PipelineTelemetrySnapshotService pipelineTelemetrySnapshotService;
     private final ApplicationEventPublisher applicationEventPublisher;
+    private final SessionPipelineActivityService sessionPipelineActivityService;
     private final SessionPipelineStateService sessionPipelineStateService;
 
     public int runPricing() {
@@ -40,11 +48,21 @@ public class PricingJob {
     }
 
     @EventListener
-    public void onBybitNormalizationCompleted(BybitNormalizationCompletedEvent event) {
+    @Async(AsyncConfig.PIPELINE_STAGE_EXECUTOR)
+    public void onLinkingCompleted(LinkingCompletedEvent event) {
         if (!pricingProperties.isEnabled() || event == null) {
             return;
         }
-        runPricing("bybit-normalization-completed", event.sessionId(), true);
+        runPricing("linking-completed", event.sessionId(), true);
+    }
+
+    @EventListener
+    @Async(AsyncConfig.PIPELINE_STAGE_EXECUTOR)
+    public void onPricingRequested(PricingRequestedEvent event) {
+        if (!pricingProperties.isEnabled() || event == null) {
+            return;
+        }
+        runPricing(event.trigger(), event.sessionId(), true);
     }
 
     private int runPricing(String trigger) {
@@ -58,16 +76,21 @@ public class PricingJob {
         }
 
         int processed = 0;
+        Instant[] lastHeartbeatAtHolder = {Instant.now()};
         long startedAtNanos = PricingLogSupport.logStart(log, STAGE_NAME, trigger);
         try {
+            sessionPipelineActivityService.markRunning(sessionId, UserSession.PipelineStage.PRICING);
             sessionPipelineStateService.markStageRunning(
                     sessionId,
                     UserSession.PipelineStage.PRICING,
                     "Pricing running"
             );
             while (true) {
-                int batchProcessed = pricingJobService.processNextBatch();
+                int batchProcessed = pricingJobService.processNextBatch(
+                        () -> lastHeartbeatAtHolder[0] = maybeHeartbeat(sessionId, lastHeartbeatAtHolder[0])
+                );
                 processed += batchProcessed;
+                lastHeartbeatAtHolder[0] = maybeHeartbeat(sessionId, lastHeartbeatAtHolder[0]);
                 if (batchProcessed == 0) {
                     int repaired = repairStalePriceReasons();
                     if (repaired > 0) {
@@ -102,6 +125,7 @@ public class PricingJob {
             throw error;
         } finally {
             PricingLogSupport.logFinish(log, STAGE_NAME, trigger, processed, startedAtNanos);
+            sessionPipelineActivityService.markFinished(sessionId, UserSession.PipelineStage.PRICING);
             running.set(false);
         }
     }
@@ -115,6 +139,21 @@ public class PricingJob {
                 return repaired;
             }
         }
+    }
+
+
+    private Instant maybeHeartbeat(String sessionId, Instant lastHeartbeatAt) {
+        Instant now = Instant.now();
+        if (Duration.between(lastHeartbeatAt, now).compareTo(HEARTBEAT_INTERVAL) < 0) {
+            return lastHeartbeatAt;
+        }
+        sessionPipelineActivityService.heartbeat(sessionId, UserSession.PipelineStage.PRICING);
+        sessionPipelineStateService.markStageRunning(
+                sessionId,
+                UserSession.PipelineStage.PRICING,
+                "Pricing running"
+        );
+        return now;
     }
 
     private void logPipelineSnapshot() {

@@ -7,6 +7,7 @@ import com.walletradar.pricing.application.PricingDataGateService;
 import com.walletradar.pricing.application.PricingDataGateSnapshot;
 import com.walletradar.domain.session.UserSessionRepository;
 import com.walletradar.session.application.AccountingUniverseService;
+import com.walletradar.session.application.SessionPipelineActivityService;
 import com.walletradar.session.application.SessionPipelineStateService;
 import com.walletradar.telemetry.PipelineTelemetrySnapshot;
 import com.walletradar.telemetry.PipelineTelemetrySnapshotService;
@@ -47,6 +48,8 @@ class CostBasisReplayJobTest {
     @Mock
     private PipelineTelemetrySnapshotService pipelineTelemetrySnapshotService;
     @Mock
+    private SessionPipelineActivityService pipelineActivityService;
+    @Mock
     private SessionPipelineStateService sessionPipelineStateService;
 
     @Test
@@ -62,7 +65,11 @@ class CostBasisReplayJobTest {
         );
         when(pricingDataGateService.snapshot(scope.memberRefs())).thenReturn(new PricingDataGateSnapshot(0L, 0L, 0L, 1L, 2L, true));
         when(pendingStatQueryService.countPending(scope.memberRefs())).thenReturn(0L);
-        when(avcoReplayService.replayConfirmed("ACCOUNTING_UNIVERSE:session-1", scope.memberRefs())).thenReturn(7);
+        when(avcoReplayService.replayConfirmed(
+                eq("ACCOUNTING_UNIVERSE:session-1"),
+                eq(scope.memberRefs()),
+                org.mockito.ArgumentMatchers.any(Runnable.class)
+        )).thenReturn(7);
         when(pipelineTelemetrySnapshotService.snapshot()).thenReturn(snapshot());
 
         CostBasisReplayJob job = new CostBasisReplayJob(
@@ -76,16 +83,30 @@ class CostBasisReplayJobTest {
                 onChainBalanceRefreshService,
                 assetLedgerPointRepository,
                 pipelineTelemetrySnapshotService,
+                pipelineActivityService,
                 sessionPipelineStateService
         );
 
         int replayed = job.runReplay();
 
         assertThat(replayed).isEqualTo(7);
-        verify(avcoReplayService).replayConfirmed("ACCOUNTING_UNIVERSE:session-1", scope.memberRefs());
+        verify(avcoReplayService).replayConfirmed(
+                eq("ACCOUNTING_UNIVERSE:session-1"),
+                eq(scope.memberRefs()),
+                org.mockito.ArgumentMatchers.any(Runnable.class)
+        );
         InOrder inOrder = org.mockito.Mockito.inOrder(avcoReplayService, onChainBalanceRefreshService);
-        inOrder.verify(avcoReplayService).replayConfirmed("ACCOUNTING_UNIVERSE:session-1", scope.memberRefs());
-        inOrder.verify(onChainBalanceRefreshService).refreshCurrentBalances(eq("session-1"), eq(scope.onChainWalletRefs()), org.mockito.ArgumentMatchers.any());
+        inOrder.verify(avcoReplayService).replayConfirmed(
+                eq("ACCOUNTING_UNIVERSE:session-1"),
+                eq(scope.memberRefs()),
+                org.mockito.ArgumentMatchers.any(Runnable.class)
+        );
+        inOrder.verify(onChainBalanceRefreshService).refreshCurrentBalances(
+                eq("session-1"),
+                eq(scope.onChainWalletRefs()),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(Runnable.class)
+        );
     }
 
     @Test
@@ -111,14 +132,24 @@ class CostBasisReplayJobTest {
                 onChainBalanceRefreshService,
                 assetLedgerPointRepository,
                 pipelineTelemetrySnapshotService,
+                pipelineActivityService,
                 sessionPipelineStateService
         );
 
         int replayed = job.runReplay();
 
         assertThat(replayed).isZero();
-        verify(avcoReplayService, never()).replayConfirmed(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyCollection());
-        verify(onChainBalanceRefreshService, never()).refreshCurrentBalances(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyCollection(), org.mockito.ArgumentMatchers.any());
+        verify(avcoReplayService, never()).replayConfirmed(
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyCollection(),
+                org.mockito.ArgumentMatchers.any(Runnable.class)
+        );
+        verify(onChainBalanceRefreshService, never()).refreshCurrentBalances(
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyCollection(),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(Runnable.class)
+        );
         verify(sessionPipelineStateService).markStageBlocked(
                 eq("session-1"),
                 eq(UserSession.PipelineStage.ACCOUNTING_REPLAY),
@@ -137,7 +168,11 @@ class CostBasisReplayJobTest {
         when(statValidationService.processNextBatch(25, 60, scope.memberRefs())).thenReturn(new StatValidationOutcome(0, 0, 0));
         when(pricingDataGateService.snapshot(scope.memberRefs())).thenReturn(new PricingDataGateSnapshot(0L, 0L, 0L, 0L, 2L, true));
         when(pendingStatQueryService.countPending(scope.memberRefs())).thenReturn(0L);
-        when(avcoReplayService.replayConfirmed("ACCOUNTING_UNIVERSE:session-1", scope.memberRefs())).thenReturn(3);
+        when(avcoReplayService.replayConfirmed(
+                eq("ACCOUNTING_UNIVERSE:session-1"),
+                eq(scope.memberRefs()),
+                org.mockito.ArgumentMatchers.any(Runnable.class)
+        )).thenReturn(3);
         when(pipelineTelemetrySnapshotService.snapshot()).thenReturn(snapshot());
 
         CostBasisReplayJob job = new CostBasisReplayJob(
@@ -151,13 +186,23 @@ class CostBasisReplayJobTest {
                 onChainBalanceRefreshService,
                 assetLedgerPointRepository,
                 pipelineTelemetrySnapshotService,
+                pipelineActivityService,
                 sessionPipelineStateService
         );
 
         job.runReplay();
 
-        verify(avcoReplayService).replayConfirmed("ACCOUNTING_UNIVERSE:session-1", scope.memberRefs());
-        verify(onChainBalanceRefreshService).refreshCurrentBalances(eq("session-1"), eq(scope.onChainWalletRefs()), org.mockito.ArgumentMatchers.any());
+        verify(avcoReplayService).replayConfirmed(
+                eq("ACCOUNTING_UNIVERSE:session-1"),
+                eq(scope.memberRefs()),
+                org.mockito.ArgumentMatchers.any(Runnable.class)
+        );
+        verify(onChainBalanceRefreshService).refreshCurrentBalances(
+                eq("session-1"),
+                eq(scope.onChainWalletRefs()),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(Runnable.class)
+        );
     }
 
     @Test
@@ -171,7 +216,11 @@ class CostBasisReplayJobTest {
         when(statValidationService.processNextBatch(25, 60, scope.memberRefs())).thenReturn(new StatValidationOutcome(0, 0, 0));
         when(pricingDataGateService.snapshot(scope.memberRefs())).thenReturn(new PricingDataGateSnapshot(0L, 0L, 0L, 0L, 0L, true));
         when(pendingStatQueryService.countPending(scope.memberRefs())).thenReturn(0L);
-        when(avcoReplayService.replayConfirmed("ACCOUNTING_UNIVERSE:session-1", scope.memberRefs())).thenReturn(4);
+        when(avcoReplayService.replayConfirmed(
+                eq("ACCOUNTING_UNIVERSE:session-1"),
+                eq(scope.memberRefs()),
+                org.mockito.ArgumentMatchers.any(Runnable.class)
+        )).thenReturn(4);
         when(pipelineTelemetrySnapshotService.snapshot()).thenReturn(snapshot());
 
         CostBasisReplayJob job = new CostBasisReplayJob(
@@ -185,13 +234,23 @@ class CostBasisReplayJobTest {
                 onChainBalanceRefreshService,
                 assetLedgerPointRepository,
                 pipelineTelemetrySnapshotService,
+                pipelineActivityService,
                 sessionPipelineStateService
         );
 
         job.onPricingCompleted(new PricingCompletedEvent("session-1", 0, "bybit-normalization-completed"));
 
-        verify(avcoReplayService).replayConfirmed("ACCOUNTING_UNIVERSE:session-1", scope.memberRefs());
-        verify(onChainBalanceRefreshService).refreshCurrentBalances(eq("session-1"), eq(scope.onChainWalletRefs()), org.mockito.ArgumentMatchers.any());
+        verify(avcoReplayService).replayConfirmed(
+                eq("ACCOUNTING_UNIVERSE:session-1"),
+                eq(scope.memberRefs()),
+                org.mockito.ArgumentMatchers.any(Runnable.class)
+        );
+        verify(onChainBalanceRefreshService).refreshCurrentBalances(
+                eq("session-1"),
+                eq(scope.onChainWalletRefs()),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(Runnable.class)
+        );
     }
 
     private UserSession session(String sessionId) {

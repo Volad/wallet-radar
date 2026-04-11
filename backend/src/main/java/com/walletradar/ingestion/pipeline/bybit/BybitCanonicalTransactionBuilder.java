@@ -145,6 +145,10 @@ public class BybitCanonicalTransactionBuilder {
         return transaction;
     }
 
+    public String canonicalId(ExternalLedgerRaw row) {
+        return normalizedId(row);
+    }
+
     public NormalizedTransaction buildConvertCluster(
             List<ExternalLedgerRaw> rows,
             Instant now

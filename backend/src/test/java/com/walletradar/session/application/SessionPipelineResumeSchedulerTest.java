@@ -1,10 +1,12 @@
 package com.walletradar.session.application;
 
 import com.walletradar.domain.common.NetworkId;
-import com.walletradar.domain.event.BybitNormalizationCompletedEvent;
+import com.walletradar.domain.event.BybitNormalizationRequestedEvent;
+import com.walletradar.domain.event.LinkingRequestedEvent;
 import com.walletradar.domain.event.OnChainClarificationCompletedEvent;
 import com.walletradar.domain.event.OnChainNormalizationCompletedEvent;
 import com.walletradar.domain.event.PricingCompletedEvent;
+import com.walletradar.domain.event.PricingRequestedEvent;
 import com.walletradar.domain.event.SessionBackfillCompletedEvent;
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.domain.sync.BackfillSegmentRepository;
@@ -47,11 +49,15 @@ class SessionPipelineResumeSchedulerTest {
     @Mock
     private AccountingUniverseService accountingUniverseService;
     @Mock
+    private com.walletradar.ingestion.job.linking.LinkingDataGateService linkingDataGateService;
+    @Mock
     private MongoOperations mongoOperations;
     @Mock
     private ApplicationEventPublisher applicationEventPublisher;
     @Mock
     private SessionPipelineStateService sessionPipelineStateService;
+    @Mock
+    private SessionPipelineActivityService sessionPipelineActivityService;
 
     @Test
     void publishesBackfillResumeEventWhenPendingRawExists() {
@@ -60,6 +66,7 @@ class SessionPipelineResumeSchedulerTest {
                 wallet("0xabc", List.of(NetworkId.ETHEREUM, NetworkId.BASE))
         );
         when(userSessionRepository.findAll()).thenReturn(List.of(session));
+        lenient().when(sessionPipelineActivityService.latestFreshActivity(eq("session-1"), any())).thenReturn(java.util.Optional.empty());
         when(syncStatusRepository.findByWalletAddressIn(List.of("0xabc"))).thenReturn(List.of(
                 syncStatus("0xabc", NetworkId.ETHEREUM, true),
                 syncStatus("0xabc", NetworkId.BASE, true)
@@ -86,6 +93,7 @@ class SessionPipelineResumeSchedulerTest {
         session.setIntegrations(List.of(integration));
 
         when(userSessionRepository.findAll()).thenReturn(List.of(session));
+        lenient().when(sessionPipelineActivityService.latestFreshActivity(eq("session-1"), any())).thenReturn(java.util.Optional.empty());
         when(backfillSegmentRepository.countByIntegrationId("BYBIT-33625378")).thenReturn(6L);
         when(backfillSegmentRepository.countByIntegrationIdAndStatus("BYBIT-33625378", com.walletradar.domain.sync.BackfillSegment.SegmentStatus.COMPLETE))
                 .thenReturn(6L);
@@ -105,6 +113,7 @@ class SessionPipelineResumeSchedulerTest {
     void resumesClarificationWhenPendingClarificationExists() {
         UserSession session = session("session-1", wallet("0xabc", List.of(NetworkId.ETHEREUM)));
         when(userSessionRepository.findAll()).thenReturn(List.of(session));
+        lenient().when(sessionPipelineActivityService.latestFreshActivity(eq("session-1"), any())).thenReturn(java.util.Optional.empty());
         when(syncStatusRepository.findByWalletAddressIn(List.of("0xabc"))).thenReturn(List.of(
                 syncStatus("0xabc", NetworkId.ETHEREUM, true)
         ));
@@ -125,6 +134,7 @@ class SessionPipelineResumeSchedulerTest {
     void resumesBybitWhenRawLedgerRowsExist() {
         UserSession session = session("session-1", wallet("0xabc", List.of(NetworkId.ETHEREUM)));
         when(userSessionRepository.findAll()).thenReturn(List.of(session));
+        lenient().when(sessionPipelineActivityService.latestFreshActivity(eq("session-1"), any())).thenReturn(java.util.Optional.empty());
         when(syncStatusRepository.findByWalletAddressIn(List.of("0xabc"))).thenReturn(List.of(
                 syncStatus("0xabc", NetworkId.ETHEREUM, true)
         ));
@@ -137,16 +147,21 @@ class SessionPipelineResumeSchedulerTest {
 
         scheduler().resumeReadySessions();
 
-        assertPublishedEvent(OnChainClarificationCompletedEvent.class, event -> {
+        assertPublishedEvent(BybitNormalizationRequestedEvent.class, event -> {
             assertThat(event.sessionId()).isEqualTo("session-1");
             assertThat(event.trigger()).isEqualTo("resume-watchdog");
         });
+        verify(mongoOperations).exists(
+                argThat(SessionPipelineResumeSchedulerTest::containsProcessableBybitRawCriteria),
+                eq(ExternalLedgerRaw.class)
+        );
     }
 
     @Test
     void resumesBybitWhenExtractedRowsExist() {
         UserSession session = session("session-1", wallet("0xabc", List.of(NetworkId.ETHEREUM)));
         when(userSessionRepository.findAll()).thenReturn(List.of(session));
+        lenient().when(sessionPipelineActivityService.latestFreshActivity(eq("session-1"), any())).thenReturn(java.util.Optional.empty());
         when(syncStatusRepository.findByWalletAddressIn(List.of("0xabc"))).thenReturn(List.of(
                 syncStatus("0xabc", NetworkId.ETHEREUM, true)
         ));
@@ -158,16 +173,72 @@ class SessionPipelineResumeSchedulerTest {
 
         scheduler().resumeReadySessions();
 
-        assertPublishedEvent(OnChainClarificationCompletedEvent.class, event -> {
+        assertPublishedEvent(BybitNormalizationRequestedEvent.class, event -> {
+            assertThat(event.sessionId()).isEqualTo("session-1");
+            assertThat(event.trigger()).isEqualTo("resume-watchdog");
+        });
+        verify(mongoOperations).exists(
+                argThat(SessionPipelineResumeSchedulerTest::containsProcessableBybitRawCriteria),
+                eq(BybitExtractedEvent.class)
+        );
+    }
+
+    @Test
+    void unmatchedBybitBridgeRowsResumeDedicatedLinkingInsteadOfBybitNormalization() {
+        UserSession session = session("session-1", wallet("0xabc", List.of(NetworkId.ETHEREUM)));
+        when(userSessionRepository.findAll()).thenReturn(List.of(session));
+        lenient().when(sessionPipelineActivityService.latestFreshActivity(eq("session-1"), any())).thenReturn(java.util.Optional.empty());
+        when(syncStatusRepository.findByWalletAddressIn(List.of("0xabc"))).thenReturn(List.of(
+                syncStatus("0xabc", NetworkId.ETHEREUM, true)
+        ));
+        when(mongoOperations.exists(any(Query.class), eq(RawTransaction.class))).thenReturn(false);
+        when(mongoOperations.exists(any(Query.class), eq("normalized_transactions"))).thenReturn(true);
+        when(mongoOperations.exists(any(Query.class), eq(BybitExtractedEvent.class))).thenReturn(false);
+        when(mongoOperations.exists(any(Query.class), eq(ExternalLedgerRaw.class))).thenReturn(false);
+        when(mongoOperations.exists(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(false, false, false);
+        when(linkingDataGateService.hasPendingLinking("session-1")).thenReturn(true);
+
+        scheduler().resumeReadySessions();
+
+        assertPublishedEvent(LinkingRequestedEvent.class, event -> {
             assertThat(event.sessionId()).isEqualTo("session-1");
             assertThat(event.trigger()).isEqualTo("resume-watchdog");
         });
     }
 
     @Test
+    void doesNotResumeLinkingAfterReplayAlreadyCompleted() {
+        UserSession session = session("session-1", wallet("0xabc", List.of(NetworkId.ETHEREUM)));
+        UserSession.PipelineState state = new UserSession.PipelineState();
+        state.setStage(UserSession.PipelineStage.ACCOUNTING_REPLAY);
+        state.setStatus(UserSession.PipelineStatus.COMPLETE);
+        state.setUpdatedAt(Instant.now());
+        session.setPipelineState(state);
+
+        when(userSessionRepository.findAll()).thenReturn(List.of(session));
+        lenient().when(sessionPipelineActivityService.latestFreshActivity(eq("session-1"), any())).thenReturn(java.util.Optional.empty());
+        when(syncStatusRepository.findByWalletAddressIn(List.of("0xabc"))).thenReturn(List.of(
+                syncStatus("0xabc", NetworkId.ETHEREUM, true)
+        ));
+        when(mongoOperations.exists(any(Query.class), eq(RawTransaction.class))).thenReturn(false);
+        when(mongoOperations.exists(any(Query.class), eq("normalized_transactions"))).thenReturn(true);
+        when(mongoOperations.exists(any(Query.class), eq(BybitExtractedEvent.class))).thenReturn(false, false);
+        when(mongoOperations.exists(any(Query.class), eq(ExternalLedgerRaw.class))).thenReturn(false, false);
+        when(mongoOperations.exists(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(false, false, false, false);
+        when(linkingDataGateService.hasPendingLinking("session-1")).thenReturn(true);
+
+        scheduler().resumeReadySessions();
+
+        verify(applicationEventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
     void resumesPricingWhenPendingPriceExists() {
         UserSession session = session("session-1", wallet("0xabc", List.of(NetworkId.ETHEREUM)));
         when(userSessionRepository.findAll()).thenReturn(List.of(session));
+        lenient().when(sessionPipelineActivityService.latestFreshActivity(eq("session-1"), any())).thenReturn(java.util.Optional.empty());
         when(syncStatusRepository.findByWalletAddressIn(List.of("0xabc"))).thenReturn(List.of(
                 syncStatus("0xabc", NetworkId.ETHEREUM, true)
         ));
@@ -177,10 +248,11 @@ class SessionPipelineResumeSchedulerTest {
         when(mongoOperations.exists(any(Query.class), eq(ExternalLedgerRaw.class))).thenReturn(false, false);
         when(mongoOperations.exists(any(Query.class), eq(NormalizedTransaction.class)))
                 .thenReturn(false, true, false, false);
+        when(linkingDataGateService.hasPendingLinking("session-1")).thenReturn(false);
 
         scheduler().resumeReadySessions();
 
-        assertPublishedEvent(BybitNormalizationCompletedEvent.class, event -> {
+        assertPublishedEvent(PricingRequestedEvent.class, event -> {
             assertThat(event.sessionId()).isEqualTo("session-1");
             assertThat(event.trigger()).isEqualTo("resume-watchdog");
         });
@@ -190,6 +262,7 @@ class SessionPipelineResumeSchedulerTest {
     void resumesReplayWhenPendingStatExists() {
         UserSession session = session("session-1", wallet("0xabc", List.of(NetworkId.ETHEREUM)));
         when(userSessionRepository.findAll()).thenReturn(List.of(session));
+        lenient().when(sessionPipelineActivityService.latestFreshActivity(eq("session-1"), any())).thenReturn(java.util.Optional.empty());
         when(syncStatusRepository.findByWalletAddressIn(List.of("0xabc"))).thenReturn(List.of(
                 syncStatus("0xabc", NetworkId.ETHEREUM, true)
         ));
@@ -218,6 +291,11 @@ class SessionPipelineResumeSchedulerTest {
         session.setPipelineState(state);
 
         when(userSessionRepository.findAll()).thenReturn(List.of(session));
+        when(sessionPipelineActivityService.latestFreshActivity(eq("session-1"), any()))
+                .thenReturn(java.util.Optional.of(new SessionPipelineActivityService.ActivitySnapshot(
+                        UserSession.PipelineStage.ON_CHAIN_NORMALIZATION,
+                        Instant.now()
+                )));
 
         scheduler().resumeReadySessions();
 
@@ -234,6 +312,7 @@ class SessionPipelineResumeSchedulerTest {
         session.setPipelineState(state);
 
         when(userSessionRepository.findAll()).thenReturn(List.of(session));
+        lenient().when(sessionPipelineActivityService.latestFreshActivity(eq("session-1"), any())).thenReturn(java.util.Optional.empty());
         when(syncStatusRepository.findByWalletAddressIn(List.of("0xabc"))).thenReturn(List.of(
                 syncStatus("0xabc", NetworkId.ETHEREUM, true)
         ));
@@ -257,6 +336,7 @@ class SessionPipelineResumeSchedulerTest {
         session.setPipelineState(state);
 
         when(userSessionRepository.findAll()).thenReturn(List.of(session));
+        lenient().when(sessionPipelineActivityService.latestFreshActivity(eq("session-1"), any())).thenReturn(java.util.Optional.empty());
         when(syncStatusRepository.findByWalletAddressIn(List.of("0xabc"))).thenReturn(List.of(
                 syncStatus("0xabc", NetworkId.ETHEREUM, true)
         ));
@@ -283,6 +363,7 @@ class SessionPipelineResumeSchedulerTest {
     void replayBootstrapRemainsRequiredWhenOnlyUnrelatedLedgerRowsExist() {
         UserSession session = session("session-1", wallet("0xabc", List.of(NetworkId.ETHEREUM)));
         when(userSessionRepository.findAll()).thenReturn(List.of(session));
+        lenient().when(sessionPipelineActivityService.latestFreshActivity(eq("session-1"), any())).thenReturn(java.util.Optional.empty());
         when(syncStatusRepository.findByWalletAddressIn(List.of("0xabc"))).thenReturn(List.of(
                 syncStatus("0xabc", NetworkId.ETHEREUM, true)
         ));
@@ -313,6 +394,7 @@ class SessionPipelineResumeSchedulerTest {
         session.setPipelineState(state);
 
         when(userSessionRepository.findAll()).thenReturn(List.of(session));
+        lenient().when(sessionPipelineActivityService.latestFreshActivity(eq("session-1"), any())).thenReturn(java.util.Optional.empty());
         when(syncStatusRepository.findByWalletAddressIn(List.of("0xabc"))).thenReturn(List.of(
                 syncStatus("0xabc", NetworkId.ETHEREUM, true)
         ));
@@ -359,9 +441,11 @@ class SessionPipelineResumeSchedulerTest {
                 syncStatusRepository,
                 backfillSegmentRepository,
                 accountingUniverseService,
+                linkingDataGateService,
                 mongoOperations,
                 applicationEventPublisher,
-                sessionPipelineStateService
+                sessionPipelineStateService,
+                sessionPipelineActivityService
         );
     }
 
@@ -398,6 +482,17 @@ class SessionPipelineResumeSchedulerTest {
             return false;
         }
         return query.getQueryObject().toJson().contains(walletAddress);
+    }
+
+    private static boolean containsProcessableBybitRawCriteria(Query query) {
+        if (query == null || query.getQueryObject() == null) {
+            return false;
+        }
+        String json = query.getQueryObject().toJson();
+        return json.contains("\"status\": \"RAW\"")
+                && json.contains("\"basisRelevant\": true")
+                && json.contains("\"outOfScope\"")
+                && json.contains("\"canonicalType\"");
     }
 
     private static boolean containsAccountingUniverseId(Query query, String accountingUniverseId) {

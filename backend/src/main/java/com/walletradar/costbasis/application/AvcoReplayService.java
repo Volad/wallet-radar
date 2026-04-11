@@ -38,6 +38,7 @@ import java.util.Set;
 public class AvcoReplayService {
 
     private static final MathContext MC = MathContext.DECIMAL128;
+    private static final int HEARTBEAT_EVERY_TRANSACTIONS = 50;
     private static final BigDecimal CORRELATED_TRANSFER_RELATIVE_TOLERANCE = new BigDecimal("0.000001");
     private static final BigDecimal CORRELATED_TRANSFER_ABSOLUTE_TOLERANCE = new BigDecimal("0.00000001");
     private static final BigDecimal CORRELATED_TRANSFER_MAX_TOLERANCE = new BigDecimal("0.0001");
@@ -51,10 +52,14 @@ public class AvcoReplayService {
     private final AssetLedgerPointRepository assetLedgerPointRepository;
 
     public int replayConfirmed() {
-        return replayConfirmed(null, null);
+        return replayConfirmed(null, null, null);
     }
 
     public int replayConfirmed(String accountingUniverseId, Collection<String> memberRefs) {
+        return replayConfirmed(accountingUniverseId, memberRefs, null);
+    }
+
+    public int replayConfirmed(String accountingUniverseId, Collection<String> memberRefs, Runnable heartbeat) {
         List<NormalizedTransaction> ordered = memberRefs == null || memberRefs.isEmpty()
                 ? confirmedReplayQueryService.loadOrderedConfirmed()
                 : confirmedReplayQueryService.loadOrderedConfirmed(memberRefs);
@@ -74,7 +79,11 @@ public class AvcoReplayService {
                 now
         );
 
-        for (NormalizedTransaction transaction : ordered) {
+        for (int transactionIndex = 0; transactionIndex < ordered.size(); transactionIndex++) {
+            if (heartbeat != null && transactionIndex % HEARTBEAT_EVERY_TRANSACTIONS == 0) {
+                heartbeat.run();
+            }
+            NormalizedTransaction transaction = ordered.get(transactionIndex);
             NormalizedTransaction replayed = copyTransaction(transaction);
             if (replayed.getType() == NormalizedTransactionType.LENDING_LOOP_REBALANCE) {
                 applyEulerLoopRebalance(replayed, positions, ledgerPointCollector);
@@ -161,6 +170,9 @@ public class AvcoReplayService {
             assetLedgerPointRepository.saveAll(ledgerPoints);
         }
         normalizedTransactionRepository.saveAll(updatedTransactions);
+        if (heartbeat != null) {
+            heartbeat.run();
+        }
         return updatedTransactions.size();
     }
 

@@ -1,5 +1,6 @@
 package com.walletradar.costbasis.application;
 
+import com.walletradar.config.AsyncConfig;
 import com.walletradar.domain.event.PricingCompletedEvent;
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.domain.session.UserSessionRepository;
@@ -8,14 +9,17 @@ import com.walletradar.ingestion.job.support.StageExecutionLogSupport;
 import com.walletradar.pricing.application.PricingDataGateService;
 import com.walletradar.pricing.application.PricingDataGateSnapshot;
 import com.walletradar.session.application.AccountingUniverseService;
+import com.walletradar.session.application.SessionPipelineActivityService;
 import com.walletradar.session.application.SessionPipelineStateService;
 import com.walletradar.telemetry.PipelineTelemetrySnapshot;
 import com.walletradar.telemetry.PipelineTelemetrySnapshotService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.event.EventListener;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -28,6 +32,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class CostBasisReplayJob {
 
     private static final String STAGE_NAME = "costbasis-replay";
+    private static final Duration HEARTBEAT_INTERVAL = Duration.ofSeconds(30);
 
     private final AtomicBoolean running = new AtomicBoolean(false);
 
@@ -41,6 +46,7 @@ public class CostBasisReplayJob {
     private final OnChainBalanceRefreshService onChainBalanceRefreshService;
     private final AssetLedgerPointRepository assetLedgerPointRepository;
     private final PipelineTelemetrySnapshotService pipelineTelemetrySnapshotService;
+    private final SessionPipelineActivityService sessionPipelineActivityService;
     private final SessionPipelineStateService sessionPipelineStateService;
 
     public int runReplay() {
@@ -48,6 +54,7 @@ public class CostBasisReplayJob {
     }
 
     @EventListener
+    @Async(AsyncConfig.PIPELINE_STAGE_EXECUTOR)
     public void onPricingCompleted(PricingCompletedEvent event) {
         if (!properties.isEnabled() || event == null) {
             return;
@@ -85,6 +92,7 @@ public class CostBasisReplayJob {
     private int runReplayForSession(String trigger, UserSession session, boolean forceReplay) {
         String sessionId = session.getId();
         AccountingUniverseService.AccountingUniverseScope scope = accountingUniverseService.resolveScope(session);
+        sessionPipelineActivityService.markRunning(sessionId, UserSession.PipelineStage.ACCOUNTING_REPLAY);
         sessionPipelineStateService.markStageRunning(
                 sessionId,
                 UserSession.PipelineStage.ACCOUNTING_REPLAY,
@@ -95,6 +103,8 @@ public class CostBasisReplayJob {
         int replayed = 0;
         int promoted = 0;
         int demoted = 0;
+        int replaySafeReviewPromoted = 0;
+        Instant lastHeartbeatAt = Instant.now();
         try {
             while (true) {
                 StatValidationOutcome outcome = statValidationService.processNextBatch(
@@ -105,11 +115,13 @@ public class CostBasisReplayJob {
                 statProcessed += outcome.processed();
                 promoted += outcome.promotedToConfirmed();
                 demoted += outcome.demotedToNeedsReview();
+                lastHeartbeatAt = maybeHeartbeat(sessionId, lastHeartbeatAt);
                 if (outcome.processed() == 0) {
                     break;
                 }
             }
 
+            replaySafeReviewPromoted = statValidationService.promoteReplaySafeNeedsReview(scope.memberRefs());
             PricingDataGateSnapshot gateSnapshot = pricingDataGateService.snapshot(scope.memberRefs());
             long pendingStatCount = pendingStatQueryService.countPending(scope.memberRefs());
             if (!gateSnapshot.avcoReady() || pendingStatCount > 0L) {
@@ -129,7 +141,7 @@ public class CostBasisReplayJob {
                         gateSnapshot.excludedNeedsReviewCount(),
                         gateSnapshot.unresolvedPriceCount()
                 );
-                logStatOutcome(promoted, demoted, statProcessed);
+                logStatOutcome(promoted, demoted, statProcessed, replaySafeReviewPromoted);
                 logSnapshot();
                 sessionPipelineStateService.markStageBlocked(
                         sessionId,
@@ -142,8 +154,13 @@ public class CostBasisReplayJob {
             boolean shouldReplay = forceReplay
                     || promoted > 0
                     || assetLedgerPointRepository.countByAccountingUniverseId(scope.accountingUniverseId()) == 0L;
+            StageHeartbeat stageHeartbeat = new StageHeartbeat(sessionId);
             if (shouldReplay) {
-                replayed = avcoReplayService.replayConfirmed(scope.accountingUniverseId(), scope.memberRefs());
+                replayed = avcoReplayService.replayConfirmed(
+                        scope.accountingUniverseId(),
+                        scope.memberRefs(),
+                        stageHeartbeat::pulse
+                );
             } else {
                 log.info(
                         "Costbasis replay skipped: sessionId={}, no pending stat rows and universe ledger already materialized",
@@ -154,7 +171,8 @@ public class CostBasisReplayJob {
             int refreshedBalances = onChainBalanceRefreshService.refreshCurrentBalances(
                     sessionId,
                     scope.onChainWalletRefs(),
-                    evidenceCapturedAt
+                    evidenceCapturedAt,
+                    stageHeartbeat::pulse
             );
             log.info(
                     "Costbasis on-chain balance refresh outcome: sessionId={}, refreshed={}",
@@ -162,7 +180,7 @@ public class CostBasisReplayJob {
                     refreshedBalances
             );
 
-            logStatOutcome(promoted, demoted, statProcessed);
+            logStatOutcome(promoted, demoted, statProcessed, replaySafeReviewPromoted);
             logSnapshot();
             sessionPipelineStateService.markStageComplete(
                     sessionId,
@@ -177,15 +195,32 @@ public class CostBasisReplayJob {
                     error.getMessage()
             );
             throw error;
+        } finally {
+            sessionPipelineActivityService.markFinished(sessionId, UserSession.PipelineStage.ACCOUNTING_REPLAY);
         }
     }
 
-    private void logStatOutcome(int promoted, int demoted, int processed) {
+    private Instant maybeHeartbeat(String sessionId, Instant lastHeartbeatAt) {
+        Instant now = Instant.now();
+        if (Duration.between(lastHeartbeatAt, now).compareTo(HEARTBEAT_INTERVAL) < 0) {
+            return lastHeartbeatAt;
+        }
+        sessionPipelineActivityService.heartbeat(sessionId, UserSession.PipelineStage.ACCOUNTING_REPLAY);
+        sessionPipelineStateService.markStageRunning(
+                sessionId,
+                UserSession.PipelineStage.ACCOUNTING_REPLAY,
+                "Accounting replay running"
+        );
+        return now;
+    }
+
+    private void logStatOutcome(int promoted, int demoted, int processed, int replaySafeReviewPromoted) {
         log.info(
-                "Costbasis stat validation outcome: processed={}, promotedToConfirmed={}, demotedToNeedsReview={}",
+                "Costbasis stat validation outcome: processed={}, promotedToConfirmed={}, demotedToNeedsReview={}, replaySafeNeedsReviewPromoted={}",
                 processed,
                 promoted,
-                demoted
+                demoted,
+                replaySafeReviewPromoted
         );
     }
 
@@ -203,5 +238,18 @@ public class CostBasisReplayJob {
                 snapshot.excludedNeedsReviewCount(),
                 assetLedgerPointRepository.count()
         );
+    }
+
+    private final class StageHeartbeat {
+        private final String sessionId;
+        private Instant lastHeartbeatAt = Instant.now();
+
+        private StageHeartbeat(String sessionId) {
+            this.sessionId = sessionId;
+        }
+
+        private void pulse() {
+            lastHeartbeatAt = maybeHeartbeat(sessionId, lastHeartbeatAt);
+        }
     }
 }

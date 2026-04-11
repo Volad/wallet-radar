@@ -10,10 +10,8 @@ import com.walletradar.domain.transaction.raw.RawTransactionRepository;
 import com.walletradar.ingestion.config.OnChainNormalizationProperties;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassificationResult;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassifier;
-import com.walletradar.ingestion.pipeline.clarification.OnChainLifecycleLinkService;
 import com.walletradar.ingestion.pipeline.onchain.OnChainNormalizedTransactionBuilder;
 import com.walletradar.ingestion.pipeline.onchain.PendingRawTransactionQueryService;
-import com.walletradar.ingestion.pipeline.clarification.RelatedLifecycleDiscoveryService;
 import com.walletradar.ingestion.pipeline.onchain.repair.ExplorerRawOrderingRepairGateway;
 import com.walletradar.ingestion.pipeline.onchain.repair.InternalTransferRawPeerRepairService;
 import com.walletradar.ingestion.pipeline.onchain.support.ResolvedRawOrderingMetadata;
@@ -50,10 +48,6 @@ class OnChainNormalizationServiceTest {
     @Mock
     private ExplorerRawOrderingRepairGateway explorerRawOrderingRepairGateway;
     @Mock
-    private RelatedLifecycleDiscoveryService relatedLifecycleDiscoveryService;
-    @Mock
-    private OnChainLifecycleLinkService onChainLifecycleLinkService;
-    @Mock
     private InternalTransferRawPeerRepairService internalTransferRawPeerRepairService;
 
     private OnChainNormalizationService service;
@@ -71,8 +65,6 @@ class OnChainNormalizationServiceTest {
                 normalizedTransactionStore,
                 rawTransactionRepository,
                 explorerRawOrderingRepairGateway,
-                relatedLifecycleDiscoveryService,
-                onChainLifecycleLinkService,
                 internalTransferRawPeerRepairService
         );
     }

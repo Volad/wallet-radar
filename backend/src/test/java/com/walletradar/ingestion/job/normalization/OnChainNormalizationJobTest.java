@@ -3,6 +3,7 @@ package com.walletradar.ingestion.job.normalization;
 import com.walletradar.domain.event.OnChainNormalizationCompletedEvent;
 import com.walletradar.domain.event.SessionBackfillCompletedEvent;
 import com.walletradar.ingestion.config.OnChainNormalizationProperties;
+import com.walletradar.session.application.SessionPipelineActivityService;
 import com.walletradar.session.application.SessionPipelineStateService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -30,9 +31,16 @@ class OnChainNormalizationJobTest {
 
         List<Object> events = new ArrayList<>();
         ApplicationEventPublisher publisher = events::add;
+        SessionPipelineActivityService pipelineActivityService = mock(SessionPipelineActivityService.class);
         SessionPipelineStateService pipelineStateService = mock(SessionPipelineStateService.class);
 
-        OnChainNormalizationJob job = new OnChainNormalizationJob(properties, normalizationService, publisher, pipelineStateService);
+        OnChainNormalizationJob job = new OnChainNormalizationJob(
+                properties,
+                normalizationService,
+                publisher,
+                pipelineActivityService,
+                pipelineStateService
+        );
 
         int processed = job.runNormalization();
 
@@ -53,9 +61,16 @@ class OnChainNormalizationJobTest {
         when(normalizationService.processNextBatch()).thenReturn(0);
 
         ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
+        SessionPipelineActivityService pipelineActivityService = mock(SessionPipelineActivityService.class);
         SessionPipelineStateService pipelineStateService = mock(SessionPipelineStateService.class);
 
-        OnChainNormalizationJob job = new OnChainNormalizationJob(properties, normalizationService, publisher, pipelineStateService);
+        OnChainNormalizationJob job = new OnChainNormalizationJob(
+                properties,
+                normalizationService,
+                publisher,
+                pipelineActivityService,
+                pipelineStateService
+        );
 
         int processed = job.runNormalization();
 
@@ -74,9 +89,16 @@ class OnChainNormalizationJobTest {
 
         List<Object> events = new ArrayList<>();
         ApplicationEventPublisher publisher = events::add;
+        SessionPipelineActivityService pipelineActivityService = mock(SessionPipelineActivityService.class);
         SessionPipelineStateService pipelineStateService = mock(SessionPipelineStateService.class);
 
-        OnChainNormalizationJob job = new OnChainNormalizationJob(properties, normalizationService, publisher, pipelineStateService);
+        OnChainNormalizationJob job = new OnChainNormalizationJob(
+                properties,
+                normalizationService,
+                publisher,
+                pipelineActivityService,
+                pipelineStateService
+        );
 
         job.onSessionBackfillCompleted(new SessionBackfillCompletedEvent("session-1", 2, 26));
 

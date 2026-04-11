@@ -13,8 +13,6 @@ import com.walletradar.ingestion.pipeline.classification.OnChainClassificationRe
 import com.walletradar.ingestion.pipeline.onchain.OnChainNormalizedTransactionBuilder;
 import com.walletradar.ingestion.pipeline.onchain.OnChainRawTransactionView;
 import com.walletradar.ingestion.pipeline.onchain.PendingRawTransactionQueryService;
-import com.walletradar.ingestion.pipeline.clarification.OnChainLifecycleLinkService;
-import com.walletradar.ingestion.pipeline.clarification.RelatedLifecycleDiscoveryService;
 import com.walletradar.ingestion.pipeline.onchain.repair.ExplorerRawOrderingRepairGateway;
 import com.walletradar.ingestion.pipeline.onchain.repair.InternalTransferRawPeerRepairService;
 import com.walletradar.ingestion.pipeline.onchain.support.RawOrderingMetadataResolver;
@@ -59,8 +57,6 @@ public class OnChainNormalizationService {
     private final IdempotentNormalizedTransactionStore normalizedTransactionStore;
     private final RawTransactionRepository rawTransactionRepository;
     private final ExplorerRawOrderingRepairGateway explorerRawOrderingRepairGateway;
-    private final RelatedLifecycleDiscoveryService relatedLifecycleDiscoveryService;
-    private final OnChainLifecycleLinkService onChainLifecycleLinkService;
     private final InternalTransferRawPeerRepairService internalTransferRawPeerRepairService;
 
     public int processNextBatch() {
@@ -105,10 +101,8 @@ public class OnChainNormalizationService {
 
         try {
             OnChainClassificationResult classificationResult = onChainClassifier.classify(rawTransaction);
-            var normalized = normalizedTransactionStore.upsert(builder.build(rawTransaction, classificationResult, now));
-            onChainLifecycleLinkService.link(rawTransaction, normalized);
+            normalizedTransactionStore.upsert(builder.build(rawTransaction, classificationResult, now));
             markComplete(rawTransaction);
-            relatedLifecycleDiscoveryService.discoverAndNormalize(rawTransaction, classificationResult);
             return true;
         } catch (RuntimeException ex) {
             log.warn("On-chain normalization shell failed for rawTxId={}: {}", rawTransaction.getId(), ex.getMessage());

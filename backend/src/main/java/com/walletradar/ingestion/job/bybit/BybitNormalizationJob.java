@@ -1,10 +1,13 @@
 package com.walletradar.ingestion.job.bybit;
 
+import com.walletradar.config.AsyncConfig;
 import com.walletradar.domain.event.BybitNormalizationCompletedEvent;
-import com.walletradar.domain.event.OnChainClarificationCompletedEvent;
+import com.walletradar.domain.event.BybitNormalizationRequestedEvent;
+import com.walletradar.domain.event.SessionBackfillCompletedEvent;
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.ingestion.config.BybitNormalizationProperties;
 import com.walletradar.ingestion.job.support.StageExecutionLogSupport;
+import com.walletradar.session.application.SessionPipelineActivityService;
 import com.walletradar.session.application.SessionPipelineStateService;
 import com.walletradar.telemetry.PipelineTelemetrySnapshot;
 import com.walletradar.telemetry.PipelineTelemetrySnapshotService;
@@ -12,8 +15,11 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -25,6 +31,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class BybitNormalizationJob {
 
     private static final String STAGE_NAME = "bybit-normalization";
+    private static final Duration HEARTBEAT_INTERVAL = Duration.ofSeconds(30);
 
     private final AtomicBoolean running = new AtomicBoolean(false);
 
@@ -32,6 +39,7 @@ public class BybitNormalizationJob {
     private final BybitNormalizationService bybitNormalizationService;
     private final PipelineTelemetrySnapshotService pipelineTelemetrySnapshotService;
     private final ApplicationEventPublisher applicationEventPublisher;
+    private final SessionPipelineActivityService sessionPipelineActivityService;
     private final SessionPipelineStateService sessionPipelineStateService;
 
     public int runNormalization() {
@@ -39,11 +47,21 @@ public class BybitNormalizationJob {
     }
 
     @EventListener
-    public void onOnChainClarificationCompleted(OnChainClarificationCompletedEvent event) {
+    @Async(AsyncConfig.PIPELINE_STAGE_EXECUTOR)
+    public void onSessionBackfillCompleted(SessionBackfillCompletedEvent event) {
         if (!properties.isEnabled() || event == null) {
             return;
         }
-        runNormalization("clarification-completed", event.sessionId(), true);
+        runNormalization("session-backfill-completed", event.sessionId(), true);
+    }
+
+    @EventListener
+    @Async(AsyncConfig.PIPELINE_STAGE_EXECUTOR)
+    public void onBybitNormalizationRequested(BybitNormalizationRequestedEvent event) {
+        if (!properties.isEnabled() || event == null) {
+            return;
+        }
+        runNormalization(event.trigger(), event.sessionId(), true);
     }
 
     private int runNormalization(String trigger) {
@@ -57,8 +75,10 @@ public class BybitNormalizationJob {
         }
 
         int processed = 0;
+        Instant lastHeartbeatAt = Instant.now();
         long startedAtNanos = StageExecutionLogSupport.logStart(log, STAGE_NAME, trigger);
         try {
+            sessionPipelineActivityService.markRunning(sessionId, UserSession.PipelineStage.BYBIT_NORMALIZATION);
             sessionPipelineStateService.markStageRunning(
                     sessionId,
                     UserSession.PipelineStage.BYBIT_NORMALIZATION,
@@ -67,6 +87,7 @@ public class BybitNormalizationJob {
             while (true) {
                 int batchProcessed = bybitNormalizationService.processNextBatch(properties.getBatchSize());
                 processed += batchProcessed;
+                lastHeartbeatAt = maybeHeartbeat(sessionId, UserSession.PipelineStage.BYBIT_NORMALIZATION, "Bybit normalization running", lastHeartbeatAt);
                 if (batchProcessed == 0) {
                     logPipelineSnapshot();
                     sessionPipelineStateService.markStageComplete(
@@ -87,8 +108,24 @@ public class BybitNormalizationJob {
             throw error;
         } finally {
             StageExecutionLogSupport.logFinish(log, STAGE_NAME, trigger, processed, startedAtNanos);
+            sessionPipelineActivityService.markFinished(sessionId, UserSession.PipelineStage.BYBIT_NORMALIZATION);
             running.set(false);
         }
+    }
+
+    private Instant maybeHeartbeat(
+            String sessionId,
+            UserSession.PipelineStage stage,
+            String message,
+            Instant lastHeartbeatAt
+    ) {
+        Instant now = Instant.now();
+        if (Duration.between(lastHeartbeatAt, now).compareTo(HEARTBEAT_INTERVAL) < 0) {
+            return lastHeartbeatAt;
+        }
+        sessionPipelineActivityService.heartbeat(sessionId, stage);
+        sessionPipelineStateService.markStageRunning(sessionId, stage, message);
+        return now;
     }
 
     private void logPipelineSnapshot() {

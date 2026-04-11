@@ -1,8 +1,9 @@
 package com.walletradar.ingestion.job.bybit;
 
 import com.walletradar.domain.event.BybitNormalizationCompletedEvent;
-import com.walletradar.domain.event.OnChainClarificationCompletedEvent;
+import com.walletradar.domain.event.SessionBackfillCompletedEvent;
 import com.walletradar.ingestion.config.BybitNormalizationProperties;
+import com.walletradar.session.application.SessionPipelineActivityService;
 import com.walletradar.session.application.SessionPipelineStateService;
 import com.walletradar.telemetry.PipelineTelemetrySnapshot;
 import com.walletradar.telemetry.PipelineTelemetrySnapshotService;
@@ -45,8 +46,16 @@ class BybitNormalizationJobTest {
         ));
 
         ApplicationEventPublisher publisher = org.mockito.Mockito.mock(ApplicationEventPublisher.class);
+        SessionPipelineActivityService pipelineActivityService = org.mockito.Mockito.mock(SessionPipelineActivityService.class);
         SessionPipelineStateService pipelineStateService = org.mockito.Mockito.mock(SessionPipelineStateService.class);
-        BybitNormalizationJob job = new BybitNormalizationJob(properties, bybitNormalizationService, pipelineTelemetrySnapshotService, publisher, pipelineStateService);
+        BybitNormalizationJob job = new BybitNormalizationJob(
+                properties,
+                bybitNormalizationService,
+                pipelineTelemetrySnapshotService,
+                publisher,
+                pipelineActivityService,
+                pipelineStateService
+        );
         int processed = job.runNormalization();
 
         assertThat(processed).isEqualTo(3);
@@ -54,7 +63,7 @@ class BybitNormalizationJobTest {
     }
 
     @Test
-    void clarificationCompletionPublishesBybitCompletionEvenForEmptyDrain() {
+    void sessionBackfillCompletionPublishesBybitCompletionEvenForEmptyDrain() {
         BybitNormalizationProperties properties = new BybitNormalizationProperties();
         properties.setEnabled(true);
         properties.setBatchSize(25);
@@ -72,15 +81,23 @@ class BybitNormalizationJobTest {
 
         List<Object> events = new ArrayList<>();
         ApplicationEventPublisher publisher = events::add;
+        SessionPipelineActivityService pipelineActivityService = org.mockito.Mockito.mock(SessionPipelineActivityService.class);
         SessionPipelineStateService pipelineStateService = org.mockito.Mockito.mock(SessionPipelineStateService.class);
-        BybitNormalizationJob job = new BybitNormalizationJob(properties, bybitNormalizationService, pipelineTelemetrySnapshotService, publisher, pipelineStateService);
+        BybitNormalizationJob job = new BybitNormalizationJob(
+                properties,
+                bybitNormalizationService,
+                pipelineTelemetrySnapshotService,
+                publisher,
+                pipelineActivityService,
+                pipelineStateService
+        );
 
-        job.onOnChainClarificationCompleted(new OnChainClarificationCompletedEvent("session-1", 0, "normalization-completed"));
+        job.onSessionBackfillCompleted(new SessionBackfillCompletedEvent("session-1", 1, 1));
 
         assertThat(events).singleElement().isInstanceOfSatisfying(BybitNormalizationCompletedEvent.class, event -> {
             assertThat(event.sessionId()).isEqualTo("session-1");
             assertThat(event.processed()).isZero();
-            assertThat(event.trigger()).isEqualTo("clarification-completed");
+            assertThat(event.trigger()).isEqualTo("session-backfill-completed");
         });
     }
 }

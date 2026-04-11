@@ -92,6 +92,42 @@ class BybitTransferContinuityRepairServiceTest {
     }
 
     @Test
+    @DisplayName("Bybit NEEDS_REVIEW custody row promotes to confirmed after successful pairing")
+    void bybitNeedsReviewCustodyRowPromotesToConfirmedAfterSuccessfulPairing() {
+        NormalizedTransaction onChain = onChainRow();
+        onChain.setStatus(NormalizedTransactionStatus.CONFIRMED);
+        NormalizedTransaction bybit = bybitRow();
+        bybit.setStatus(NormalizedTransactionStatus.NEEDS_REVIEW);
+        bybit.setCorrelationId(null);
+        bybit.setContinuityCandidate(false);
+        bybit.setMatchedCounterparty(null);
+        bybit.setMissingDataReasons(new java.util.ArrayList<>(List.of("EXTERNAL_CUSTODY_UNTRACKED_VENUE")));
+        bybit.setConfirmedAt(null);
+        bybit.setExcludedFromAccounting(true);
+        bybit.setAccountingExclusionReason("EXTERNAL_CUSTODY_UNTRACKED_VENUE");
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class))).thenReturn(List.of(onChain));
+        when(normalizedTransactionRepository.findAllByTxHashAndNetworkIdAndSource(
+                TX_HASH,
+                NetworkId.ARBITRUM,
+                NormalizedTransactionSource.BYBIT
+        )).thenReturn(List.of(bybit));
+
+        int changed = service.reconcileOutstandingPairs(50);
+
+        assertThat(changed).isEqualTo(1);
+        verify(normalizedTransactionRepository).saveAll(any());
+        assertThat(bybit.getStatus()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(bybit.getCorrelationId()).isEqualTo("BYBIT:ARBITRUM:" + TX_HASH);
+        assertThat(bybit.getContinuityCandidate()).isTrue();
+        assertThat(bybit.getMatchedCounterparty()).isEqualTo(WALLET);
+        assertThat(bybit.getMissingDataReasons()).doesNotContain("EXTERNAL_CUSTODY_UNTRACKED_VENUE");
+        assertThat(bybit.getConfirmedAt()).isNotNull();
+        assertThat(bybit.getExcludedFromAccounting()).isFalse();
+        assertThat(bybit.getAccountingExclusionReason()).isNull();
+    }
+
+    @Test
     @DisplayName("one-wei dust transfer without Bybit row is ignored")
     void oneWeiDustTransferWithoutBybitRowIsIgnored() {
         NormalizedTransaction onChain = onChainRow();
@@ -136,6 +172,29 @@ class BybitTransferContinuityRepairServiceTest {
         verify(normalizedTransactionRepository, never()).saveAll(any());
         assertThat(onChain.getCorrelationId()).isNull();
         assertThat(onChain.getMatchedCounterparty()).isNull();
+    }
+
+    @Test
+    @DisplayName("excluded Bybit custody row with unrelated reason is not revived by repair")
+    void excludedBybitCustodyRowWithUnrelatedReasonIsNotRevivedByRepair() {
+        NormalizedTransaction onChain = onChainRow();
+        NormalizedTransaction bybit = bybitRow();
+        bybit.setStatus(NormalizedTransactionStatus.NEEDS_REVIEW);
+        bybit.setExcludedFromAccounting(true);
+        bybit.setAccountingExclusionReason("BYBIT_TRANSFER_SHADOW_ROW");
+        bybit.setMissingDataReasons(new java.util.ArrayList<>(List.of("BYBIT_TRANSFER_SHADOW_ROW")));
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class))).thenReturn(List.of(onChain));
+        when(normalizedTransactionRepository.findAllByTxHashAndNetworkIdAndSource(
+                TX_HASH,
+                NetworkId.ARBITRUM,
+                NormalizedTransactionSource.BYBIT
+        )).thenReturn(List.of(bybit));
+
+        int changed = service.reconcileOutstandingPairs(50);
+
+        assertThat(changed).isZero();
+        verify(normalizedTransactionRepository, never()).saveAll(any());
     }
 
     private NormalizedTransaction onChainRow() {

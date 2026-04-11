@@ -36,6 +36,14 @@ public class PriceResolutionService {
     }
 
     public NormalizedTransaction resolve(NormalizedTransaction original, Instant now) {
+        return resolve(original, now, this::resolveExternalQuote);
+    }
+
+    public NormalizedTransaction resolve(
+            NormalizedTransaction original,
+            Instant now,
+            ExternalQuoteResolver externalQuoteResolver
+    ) {
         NormalizedTransaction priced = pricingResultMapper.copy(original);
         Map<Integer, PriceQuote> resolvedQuotes = preloadResolvedQuotes(priced);
         Set<Integer> priceRequired = requiredFlowIndices(priced);
@@ -61,7 +69,7 @@ public class PriceResolutionService {
                     resolvedQuotes
             ).toPriceRequest();
 
-            Optional<PriceQuote> externalQuote = externalSources.resolve(request);
+            Optional<PriceQuote> externalQuote = externalQuoteResolver.resolve(request);
             if (externalQuote.isPresent()) {
                 applyQuote(priced, flowIndex, externalQuote.orElseThrow(), resolvedQuotes);
                 resolveEventLocalUntilFixedPoint(priced, priceRequired, resolvedQuotes);
@@ -74,6 +82,10 @@ public class PriceResolutionService {
 
         pricingResultMapper.finalizePricing(priced, unresolvedRequired, now);
         return priced;
+    }
+
+    public Optional<PriceQuote> resolveExternalQuote(PriceRequest request) {
+        return externalSources.resolve(request);
     }
 
     private void resolveEventLocalUntilFixedPoint(
@@ -170,5 +182,10 @@ public class PriceResolutionService {
     ) {
         pricingResultMapper.applyResolvedQuote(priced.getFlows().get(flowIndex), quote);
         resolvedQuotes.put(flowIndex, quote);
+    }
+
+    @FunctionalInterface
+    public interface ExternalQuoteResolver {
+        Optional<PriceQuote> resolve(PriceRequest request);
     }
 }

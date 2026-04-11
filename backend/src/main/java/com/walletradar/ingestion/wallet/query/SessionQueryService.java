@@ -10,6 +10,7 @@ import com.walletradar.domain.sync.SyncStatusRepository;
 import com.walletradar.domain.transaction.bybit.BybitExtractedEvent;
 import com.walletradar.domain.transaction.externalledger.ExternalLedgerRaw;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.ingestion.job.linking.LinkingDataGateService;
 import com.walletradar.session.application.AccountingUniverseService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.mongodb.core.MongoOperations;
@@ -42,6 +43,7 @@ public class SessionQueryService {
     private final SyncStatusRepository syncStatusRepository;
     private final BackfillSegmentRepository backfillSegmentRepository;
     private final AccountingUniverseService accountingUniverseService;
+    private final LinkingDataGateService linkingDataGateService;
     private final MongoOperations mongoOperations;
 
     public Optional<SessionView> findSession(String sessionId) {
@@ -200,6 +202,11 @@ public class SessionQueryService {
                     stage,
                     countBybitStagingRows(session.getId()),
                     countBybitStagingRows(session.getId(), "CONFIRMED")
+            );
+            case "LINKING" -> progressFromCounts(
+                    stage,
+                    1,
+                    linkingDataGateService.hasPendingLinking(session.getId()) || hasPendingPriceRows(memberRefs) ? 0 : 1
             );
             case "PRICING" -> progressFromCounts(
                     stage,
@@ -442,6 +449,18 @@ public class SessionQueryService {
                 ACTIVE_ACCOUNTING_CRITERIA
         ));
         return mongoOperations.count(query, NormalizedTransaction.class);
+    }
+
+    private boolean hasPendingPriceRows(List<String> walletAddresses) {
+        if (walletAddresses.isEmpty()) {
+            return false;
+        }
+        Query query = Query.query(new Criteria().andOperator(
+                Criteria.where("walletAddress").in(walletAddresses),
+                Criteria.where("status").is("PENDING_PRICE"),
+                ACTIVE_ACCOUNTING_CRITERIA
+        ));
+        return mongoOperations.exists(query, NormalizedTransaction.class);
     }
 
     private long countPricingProcessed(List<String> walletAddresses) {

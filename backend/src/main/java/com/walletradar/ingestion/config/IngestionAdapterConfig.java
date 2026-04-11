@@ -33,7 +33,8 @@ import java.util.stream.Collectors;
         IngestionExplorerProperties.class,
         OnChainNormalizationProperties.class,
         OnChainClarificationProperties.class,
-        BybitNormalizationProperties.class
+        BybitNormalizationProperties.class,
+        LinkingProperties.class
 })
 public class IngestionAdapterConfig {
 

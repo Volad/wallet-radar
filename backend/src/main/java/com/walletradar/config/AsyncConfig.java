@@ -16,6 +16,8 @@ public class AsyncConfig {
 
     public static final String BACKFILL_COORDINATOR_EXECUTOR = "backfill-coordinator-executor";
     public static final String BACKFILL_EXECUTOR = "backfill-executor";
+    public static final String PIPELINE_STAGE_EXECUTOR = "pipeline-stage-executor";
+    public static final String PRICING_EXECUTOR = "pricing-executor";
 
     /** Single-thread executor for backfill coordinator so it does not consume a slot in the worker pool. */
     @Bean(name = BACKFILL_COORDINATOR_EXECUTOR)
@@ -34,6 +36,28 @@ public class AsyncConfig {
         e.setCorePoolSize(4);
         e.setMaxPoolSize(18);
         e.setThreadNamePrefix("backfill-");
+        e.initialize();
+        return e;
+    }
+
+    @Bean(name = PIPELINE_STAGE_EXECUTOR)
+    public Executor pipelineStageExecutor() {
+        ThreadPoolTaskExecutor e = new ThreadPoolTaskExecutor();
+        e.setCorePoolSize(4);
+        e.setMaxPoolSize(4);
+        e.setQueueCapacity(16);
+        e.setThreadNamePrefix("pipeline-stage-");
+        e.initialize();
+        return e;
+    }
+
+    @Bean(name = PRICING_EXECUTOR)
+    public Executor pricingExecutor() {
+        ThreadPoolTaskExecutor e = new ThreadPoolTaskExecutor();
+        e.setCorePoolSize(2);
+        e.setMaxPoolSize(2);
+        e.setQueueCapacity(4);
+        e.setThreadNamePrefix("pricing-");
         e.initialize();
         return e;
     }

@@ -60,19 +60,30 @@ public class OnChainBalanceRefreshService {
     private final BlockScoutExplorerProvider blockScoutExplorerProvider;
 
     public int refreshCurrentBalances(Instant capturedAt) {
-        return refreshCurrentBalancesInternal(null, queryService.loadCandidates(), capturedAt);
+        return refreshCurrentBalancesInternal(null, queryService.loadCandidates(), capturedAt, null);
     }
 
     public int refreshCurrentBalances(String sessionId, Collection<String> walletAddresses, Instant capturedAt) {
+        return refreshCurrentBalances(sessionId, walletAddresses, capturedAt, null);
+    }
+
+    public int refreshCurrentBalances(
+            String sessionId,
+            Collection<String> walletAddresses,
+            Instant capturedAt,
+            Runnable heartbeat
+    ) {
         List<String> scopedWallets = walletAddresses == null ? List.of() : List.copyOf(walletAddresses);
-        return refreshCurrentBalancesInternal(sessionId, queryService.loadCandidates(scopedWallets), capturedAt);
+        return refreshCurrentBalancesInternal(sessionId, queryService.loadCandidates(scopedWallets), capturedAt, heartbeat);
     }
 
     private int refreshCurrentBalancesInternal(
             String sessionId,
             List<OnChainBalanceRefreshQueryService.BalanceRefreshCandidate> rawCandidates,
-            Instant capturedAt
+            Instant capturedAt,
+            Runnable heartbeat
     ) {
+        heartbeat(heartbeat);
         ResolutionResult resolution = resolveCandidates(rawCandidates);
         if (resolution.candidates().isEmpty()) {
             deleteBalances(sessionId);
@@ -82,28 +93,29 @@ public class OnChainBalanceRefreshService {
         }
 
         List<ResolvedCandidate> candidates = resolution.candidates();
-        ProviderResolutionResult providerResult = loadProviderBalances(candidates, capturedAt, sessionId);
+        ProviderResolutionResult providerResult = loadProviderBalances(candidates, capturedAt, sessionId, heartbeat);
         List<ResolvedCandidate> afterProvider = candidates.stream()
                 .filter(candidate -> !providerResult.handledKeys().contains(refreshKey(candidate)))
                 .toList();
-        ProviderResolutionResult etherscanResult = loadExplorerBalances(afterProvider, capturedAt, sessionId);
+        ProviderResolutionResult etherscanResult = loadExplorerBalances(afterProvider, capturedAt, sessionId, heartbeat);
         List<ResolvedCandidate> afterEtherscan = afterProvider.stream()
                 .filter(candidate -> !etherscanResult.handledKeys().contains(refreshKey(candidate)))
                 .toList();
-        ProviderResolutionResult blockScoutResult = loadBlockScoutBalances(afterEtherscan, capturedAt, sessionId);
+        ProviderResolutionResult blockScoutResult = loadBlockScoutBalances(afterEtherscan, capturedAt, sessionId, heartbeat);
         List<ResolvedCandidate> rpcCandidates = afterEtherscan.stream()
                 .filter(candidate -> !blockScoutResult.handledKeys().contains(refreshKey(candidate)))
                 .toList();
-        Map<NetworkId, Map<String, Integer>> decimalsByNetwork = loadDecimals(rpcCandidates);
+        Map<NetworkId, Map<String, Integer>> decimalsByNetwork = loadDecimals(rpcCandidates, heartbeat);
         List<OnChainBalance> refreshedBalances = new ArrayList<>(providerResult.balances());
         refreshedBalances.addAll(etherscanResult.balances());
         refreshedBalances.addAll(blockScoutResult.balances());
-        refreshedBalances.addAll(loadRpcBalances(rpcCandidates, decimalsByNetwork, capturedAt, sessionId));
+        refreshedBalances.addAll(loadRpcBalances(rpcCandidates, decimalsByNetwork, capturedAt, sessionId, heartbeat));
 
         deleteBalances(sessionId);
         if (!refreshedBalances.isEmpty()) {
             onChainBalanceRepository.saveAll(refreshedBalances);
         }
+        heartbeat(heartbeat);
 
         log.info(
                 "On-chain balance refresh complete: candidates={}, refreshed={}, skippedUnsupported={}",
@@ -188,7 +200,8 @@ public class OnChainBalanceRefreshService {
     private ProviderResolutionResult loadProviderBalances(
             List<ResolvedCandidate> candidates,
             Instant capturedAt,
-            String sessionId
+            String sessionId,
+            Runnable heartbeat
     ) {
         Map<String, List<ResolvedCandidate>> byWallet = new LinkedHashMap<>();
         for (ResolvedCandidate candidate : candidates) {
@@ -201,6 +214,7 @@ public class OnChainBalanceRefreshService {
         ArrayList<OnChainBalance> balances = new ArrayList<>();
         Map<RefreshKey, Boolean> handledKeys = new LinkedHashMap<>();
         for (Map.Entry<String, List<ResolvedCandidate>> entry : byWallet.entrySet()) {
+            heartbeat(heartbeat);
             String walletAddress = entry.getKey();
             List<ResolvedCandidate> walletCandidates = entry.getValue().stream()
                     .sorted(Comparator
@@ -233,11 +247,13 @@ public class OnChainBalanceRefreshService {
     private ProviderResolutionResult loadExplorerBalances(
             List<ResolvedCandidate> candidates,
             Instant capturedAt,
-            String sessionId
+            String sessionId,
+            Runnable heartbeat
     ) {
         ArrayList<OnChainBalance> balances = new ArrayList<>();
         Map<RefreshKey, Boolean> handledKeys = new LinkedHashMap<>();
         for (ResolvedCandidate candidate : candidates) {
+            heartbeat(heartbeat);
             if (!etherscanExplorerProvider.supports(candidate.networkId())) {
                 continue;
             }
@@ -287,7 +303,8 @@ public class OnChainBalanceRefreshService {
     private ProviderResolutionResult loadBlockScoutBalances(
             List<ResolvedCandidate> candidates,
             Instant capturedAt,
-            String sessionId
+            String sessionId,
+            Runnable heartbeat
     ) {
         Map<WalletNetworkKey, List<ResolvedCandidate>> grouped = new LinkedHashMap<>();
         for (ResolvedCandidate candidate : candidates) {
@@ -303,6 +320,7 @@ public class OnChainBalanceRefreshService {
         ArrayList<OnChainBalance> balances = new ArrayList<>();
         Map<RefreshKey, Boolean> handledKeys = new LinkedHashMap<>();
         for (Map.Entry<WalletNetworkKey, List<ResolvedCandidate>> entry : grouped.entrySet()) {
+            heartbeat(heartbeat);
             WalletNetworkKey walletNetworkKey = entry.getKey();
             List<ResolvedCandidate> walletCandidates = entry.getValue().stream()
                     .sorted(Comparator.comparing(ResolvedCandidate::accountingIdentity))
@@ -394,7 +412,7 @@ public class OnChainBalanceRefreshService {
         return byKey;
     }
 
-    private Map<NetworkId, Map<String, Integer>> loadDecimals(List<ResolvedCandidate> candidates) {
+    private Map<NetworkId, Map<String, Integer>> loadDecimals(List<ResolvedCandidate> candidates, Runnable heartbeat) {
         Map<NetworkId, List<String>> contractsByNetwork = new EnumMap<>(NetworkId.class);
         for (ResolvedCandidate candidate : candidates) {
             if (candidate.queryKind() != QueryKind.ERC20 || candidate.assetContract() == null) {
@@ -409,6 +427,7 @@ public class OnChainBalanceRefreshService {
 
         Map<NetworkId, Map<String, Integer>> decimalsByNetwork = new EnumMap<>(NetworkId.class);
         for (Map.Entry<NetworkId, List<String>> entry : contractsByNetwork.entrySet()) {
+            heartbeat(heartbeat);
             NetworkId networkId = entry.getKey();
             List<String> contracts = entry.getValue();
             if (contracts.isEmpty()) {
@@ -445,7 +464,8 @@ public class OnChainBalanceRefreshService {
             List<ResolvedCandidate> candidates,
             Map<NetworkId, Map<String, Integer>> decimalsByNetwork,
             Instant capturedAt,
-            String sessionId
+            String sessionId,
+            Runnable heartbeat
     ) {
         Map<WalletNetworkKey, List<ResolvedCandidate>> grouped = new LinkedHashMap<>();
         for (ResolvedCandidate candidate : candidates) {
@@ -457,6 +477,7 @@ public class OnChainBalanceRefreshService {
 
         List<OnChainBalance> balances = new ArrayList<>();
         for (Map.Entry<WalletNetworkKey, List<ResolvedCandidate>> entry : grouped.entrySet()) {
+            heartbeat(heartbeat);
             WalletNetworkKey walletNetworkKey = entry.getKey();
             List<ResolvedCandidate> walletCandidates = entry.getValue().stream()
                     .sorted(Comparator.comparing(ResolvedCandidate::accountingIdentity))
@@ -520,6 +541,12 @@ public class OnChainBalanceRefreshService {
             }
         }
         return balances;
+    }
+
+    private void heartbeat(Runnable heartbeat) {
+        if (heartbeat != null) {
+            heartbeat.run();
+        }
     }
 
     private OnChainBalance balanceDocument(

@@ -39,6 +39,7 @@ public class BybitTransferContinuityRepairService {
     private static final Pattern HEX_ADDRESS = Pattern.compile("^0x[a-fA-F0-9]{40}$");
     private static final Pattern BYBIT_REF = Pattern.compile("^BYBIT:[^\\s]+$");
     private static final String BRIDGE_MISSING_REASON = "BRIDGE_ON_CHAIN_LEG_NOT_FOUND";
+    private static final String EXTERNAL_CUSTODY_UNTRACKED_VENUE = "EXTERNAL_CUSTODY_UNTRACKED_VENUE";
 
     private final MongoOperations mongoOperations;
     private final NormalizedTransactionRepository normalizedTransactionRepository;
@@ -159,13 +160,17 @@ public class BybitTransferContinuityRepairService {
     ) {
         if (bybit == null
                 || bybit.getSource() != NormalizedTransactionSource.BYBIT
-                || bybit.getStatus() != NormalizedTransactionStatus.CONFIRMED
+                || !isRepairableBybitStatus(bybit)
                 || !hasBybitRef(bybit.getWalletAddress())
                 || bybit.getNetworkId() != onChain.getNetworkId()
                 || !sameText(bybit.getTxHash(), onChain.getTxHash())
                 || !directionCompatible(onChain, bybit)
                 || !accountingUniverseService.shareUniverseMembers(onChain.getWalletAddress(), bybit.getWalletAddress())
                 || principalFlows(bybit).size() != 1) {
+            return false;
+        }
+        if (Boolean.TRUE.equals(bybit.getExcludedFromAccounting())
+                && !EXTERNAL_CUSTODY_UNTRACKED_VENUE.equals(bybit.getAccountingExclusionReason())) {
             return false;
         }
         if (!blank(bybit.getMatchedCounterparty())
@@ -209,7 +214,18 @@ public class BybitTransferContinuityRepairService {
             transaction.setStatus(NormalizedTransactionStatus.CONFIRMED);
             changed = true;
         }
+        if (Boolean.TRUE.equals(transaction.getExcludedFromAccounting())) {
+            transaction.setExcludedFromAccounting(false);
+            changed = true;
+        }
+        if (transaction.getAccountingExclusionReason() != null) {
+            transaction.setAccountingExclusionReason(null);
+            changed = true;
+        }
         if (removeMissingReason(transaction, BRIDGE_MISSING_REASON)) {
+            changed = true;
+        }
+        if (removeMissingReason(transaction, EXTERNAL_CUSTODY_UNTRACKED_VENUE)) {
             changed = true;
         }
         if (transaction.getConfirmedAt() == null) {
@@ -220,6 +236,11 @@ public class BybitTransferContinuityRepairService {
             transaction.setUpdatedAt(now);
         }
         return changed;
+    }
+
+    private boolean isRepairableBybitStatus(NormalizedTransaction transaction) {
+        return transaction.getStatus() == NormalizedTransactionStatus.CONFIRMED
+                || transaction.getStatus() == NormalizedTransactionStatus.NEEDS_REVIEW;
     }
 
     private boolean removeMissingReason(NormalizedTransaction transaction, String reason) {

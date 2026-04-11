@@ -106,8 +106,7 @@ class ReceiptClarificationWorkflowHandlerTest {
                 new ClarificationReclassificationHandler(
                         new OnChainNormalizedTransactionBuilder(),
                         normalizedTransactionRepository,
-                        relatedLifecycleDiscoveryService,
-                        new com.walletradar.ingestion.pipeline.clarification.OnChainLifecycleLinkService(normalizedTransactionRepository)
+                        relatedLifecycleDiscoveryService
                 ),
                 new ClarificationPreparationHandler(
                         clarificationGateway,
@@ -934,8 +933,8 @@ class ReceiptClarificationWorkflowHandlerTest {
     }
 
     @Test
-    @DisplayName("GMX terminal clarification links matched counterparties back to request rows")
-    void gmxTerminalClarificationLinksMatchedCounterpartiesBackToRequestRows() {
+    @DisplayName("GMX terminal clarification reclassifies row but leaves lifecycle linking to dedicated phase")
+    void gmxTerminalClarificationDefersLifecycleLinkingToDedicatedPhase() {
         String mainOrderKey = "0x8185a2694ec51cbc7ef47531e08ede8b4eacd55f7f866f6b00b5625f9c047de5";
         String siblingOrderKey = "0x3231f64e29aa6dbdbd9457215cfd7ef9b8c22e2fc71ea669d01df7f1fa4398b9";
         String txHash = "0x53bbb5b41325b3a043e9a9f16a6da4ab4624f0e7bbbf80fe8037446c4c2879e8";
@@ -1005,40 +1004,15 @@ class ReceiptClarificationWorkflowHandlerTest {
                         new Document("status", "0x1"),
                         RawSyncMethod.ETHERSCAN
                 )));
-        NormalizedTransaction mainRequest = pendingPriceTx(
-                "0xf8d8a2aaa743285f35f88c1477e8de37c4095b44c60964139799f033ada0ba51",
-                NetworkId.ARBITRUM,
-                NormalizedTransactionType.DERIVATIVE_ORDER_REQUEST
-        );
-        mainRequest.setCorrelationId(mainOrderKey);
-        mainRequest.setProtocolName("GMX");
-        NormalizedTransaction siblingRequest = pendingPriceTx(
-                "0x2c4627b7e358257d06b5da0c367ef76e19f9c348462ba21838b0789db18393b9",
-                NetworkId.ARBITRUM,
-                NormalizedTransactionType.DERIVATIVE_ORDER_REQUEST
-        );
-        siblingRequest.setCorrelationId(siblingOrderKey);
-        siblingRequest.setProtocolName("GMX");
-        when(normalizedTransactionRepository.findAllByCorrelationIdInAndSourceAndWalletAddressAndNetworkId(
-                anyCollection(),
-                any(),
-                any(),
-                any()
-        )).thenReturn(List.of(mainRequest, siblingRequest));
-
         boolean clarified = service.clarify(pending);
 
         assertThat(clarified).isTrue();
-        ArgumentCaptor<Iterable<NormalizedTransaction>> linkedCaptor = ArgumentCaptor.forClass(Iterable.class);
-        verify(normalizedTransactionRepository).saveAll(linkedCaptor.capture());
-        List<NormalizedTransaction> linked = new java.util.ArrayList<>();
-        linkedCaptor.getValue().forEach(linked::add);
-        assertThat(linked).filteredOn(tx -> "0xf8d8a2aaa743285f35f88c1477e8de37c4095b44c60964139799f033ada0ba51".equals(tx.getTxHash()))
-                .singleElement()
-                .satisfies(tx -> assertThat(tx.getMatchedCounterparty()).isEqualTo(txHash));
-        assertThat(linked).filteredOn(tx -> "0x2c4627b7e358257d06b5da0c367ef76e19f9c348462ba21838b0789db18393b9".equals(tx.getTxHash()))
-                .singleElement()
-                .satisfies(tx -> assertThat(tx.getMatchedCounterparty()).isEqualTo(txHash));
+        ArgumentCaptor<NormalizedTransaction> normalizedCaptor = ArgumentCaptor.forClass(NormalizedTransaction.class);
+        verify(normalizedTransactionRepository).save(normalizedCaptor.capture());
+        verify(normalizedTransactionRepository, never()).saveAll(anyCollection());
+        verify(relatedLifecycleDiscoveryService).discoverAndNormalize(any(), any());
+        assertThat(normalizedCaptor.getValue().getType()).isEqualTo(NormalizedTransactionType.DERIVATIVE_POSITION_DECREASE);
+        assertThat(normalizedCaptor.getValue().getMatchedCounterparty()).isNull();
     }
 
     @Test

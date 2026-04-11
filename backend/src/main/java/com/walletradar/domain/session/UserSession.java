@@ -113,6 +113,7 @@ public class UserSession {
         ON_CHAIN_NORMALIZATION,
         ON_CHAIN_CLARIFICATION,
         BYBIT_NORMALIZATION,
+        LINKING,
         PRICING,
         ACCOUNTING_REPLAY
     }

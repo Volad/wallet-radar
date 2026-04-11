@@ -8,10 +8,6 @@ import com.walletradar.domain.transaction.externalledger.ExternalLedgerRaw;
 import com.walletradar.domain.transaction.externalledger.ExternalLedgerRawRepository;
 import com.walletradar.domain.transaction.externalledger.ExternalLedgerRawStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
-import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
-import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
-import com.walletradar.domain.transaction.raw.RawTransaction;
-import com.walletradar.domain.transaction.raw.RawTransactionRepository;
 import com.walletradar.ingestion.pipeline.bybit.BybitCanonicalTransactionBuilder;
 import com.walletradar.ingestion.pipeline.bybit.BybitTradePairer;
 import com.walletradar.ingestion.pipeline.bybit.BybitTransferShadowPairer;
@@ -21,7 +17,6 @@ import com.walletradar.integration.bybit.BybitExtractedEventMapper;
 import com.walletradar.integration.bybit.BybitExtractedTradePairer;
 import com.walletradar.integration.bybit.BybitExtractedTransferShadowPairer;
 import com.walletradar.integration.bybit.PendingBybitExtractedRowQueryService;
-import com.walletradar.ingestion.wallet.query.TrackedWalletLookupService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -29,7 +24,6 @@ import org.springframework.stereotype.Service;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.Optional;
 
 /**
@@ -40,7 +34,6 @@ import java.util.Optional;
 @Slf4j
 public class BybitNormalizationService {
 
-    private static final String EXTERNAL_CUSTODY_EXCLUSION_REASON = "EXTERNAL_CUSTODY_UNTRACKED_VENUE";
     private static final String TRANSFER_SHADOW_EXCLUSION_REASON = "BYBIT_TRANSFER_SHADOW_ROW";
     private static final List<String> CONVERT_TYPES = List.of("convert", "currency_buy", "currency_sell");
 
@@ -55,15 +48,9 @@ public class BybitNormalizationService {
     private final BybitExtractedEventMapper bybitExtractedEventMapper;
     private final BybitCanonicalTransactionBuilder builder;
     private final IdempotentNormalizedTransactionStore normalizedTransactionStore;
-    private final NormalizedTransactionRepository normalizedTransactionRepository;
-    private final RawTransactionRepository rawTransactionRepository;
-    private final TrackedWalletLookupService trackedWalletLookupService;
 
     public int processNextBatch(int batchSize) {
         List<BybitExtractedEvent> extractedBatch = safe(pendingBybitExtractedRowQueryService.loadNextBatch(batchSize));
-        if (extractedBatch.isEmpty()) {
-            extractedBatch = safe(pendingBybitExtractedRowQueryService.loadNextBridgeRematchBatch(batchSize));
-        }
         int processed = 0;
         for (BybitExtractedEvent candidate : extractedBatch) {
             Optional<BybitExtractedEvent> current = bybitExtractedEventRepository.findById(candidate.getId());
@@ -79,9 +66,6 @@ public class BybitNormalizationService {
         }
 
         List<ExternalLedgerRaw> batch = safe(pendingExternalLedgerRowQueryService.loadNextBatch(batchSize));
-        if (batch.isEmpty()) {
-            batch = safe(pendingExternalLedgerRowQueryService.loadNextBridgeRematchBatch(batchSize));
-        }
         for (ExternalLedgerRaw candidate : batch) {
             Optional<ExternalLedgerRaw> current = externalLedgerRawRepository.findById(candidate.getId());
             if (current.isEmpty() || !isProcessable(current.orElseThrow())) {
@@ -95,23 +79,11 @@ public class BybitNormalizationService {
     }
 
     private boolean isProcessable(ExternalLedgerRaw row) {
-        if (row.getStatus() == ExternalLedgerRawStatus.RAW) {
-            return true;
-        }
-        return row.getStatus() == ExternalLedgerRawStatus.CONFIRMED
-                && "withdraw_deposit".equals(normalize(row.getSourceFileType()))
-                && row.getOnChainCorrelation() != null
-                && "unmatched".equals(normalize(row.getOnChainCorrelation().getStatus()));
+        return row.getStatus() == ExternalLedgerRawStatus.RAW;
     }
 
     private boolean isProcessable(BybitExtractedEvent row) {
-        if (row.getStatus() == BybitExtractedEventStatus.RAW) {
-            return true;
-        }
-        return row.getStatus() == BybitExtractedEventStatus.CONFIRMED
-                && "withdraw_deposit".equals(normalize(row.getSourceFileType()))
-                && row.getOnChainCorrelation() != null
-                && "unmatched".equals(normalize(row.getOnChainCorrelation().getStatus()));
+        return row.getStatus() == BybitExtractedEventStatus.RAW;
     }
 
     boolean normalize(ExternalLedgerRaw row, Instant now) {
@@ -136,9 +108,6 @@ public class BybitNormalizationService {
         }
 
         NormalizedTransaction normalized = builder.buildMappedRow(row, now);
-        if (isBridgeCandidate(row, normalized)) {
-            correlateBridge(row, normalized, now);
-        }
         normalizedTransactionStore.upsert(normalized);
         markConfirmed(row);
         return true;
@@ -166,9 +135,6 @@ public class BybitNormalizationService {
         }
 
         NormalizedTransaction normalized = builder.buildMappedRow(mappedRow, now);
-        if (isBridgeCandidate(mappedRow, normalized)) {
-            correlateBridge(row, normalized, now);
-        }
         normalizedTransactionStore.upsert(normalized);
         markConfirmed(row);
         return true;
@@ -357,128 +323,6 @@ public class BybitNormalizationService {
         return true;
     }
 
-    private void correlateBridge(
-            ExternalLedgerRaw row,
-            NormalizedTransaction bybitTransaction,
-            Instant now
-    ) {
-        String txHash = row.getTxHash();
-        if (txHash == null || txHash.isBlank() || row.getNetworkId() == null) {
-            return;
-        }
-
-        List<RawTransaction> rawMatches = rawTransactionRepository.findAllByTxHashAndNetworkId(
-                txHash,
-                row.getNetworkId().name()
-        );
-        List<NormalizedTransaction> normalizedMatches = normalizedTransactionRepository.findAllByTxHashAndNetworkIdAndSource(
-                txHash,
-                row.getNetworkId(),
-                NormalizedTransactionSource.ON_CHAIN
-        );
-        if (rawMatches.isEmpty() || normalizedMatches.isEmpty()) {
-            if (isExternalCustodyCandidate(row)) {
-                markExternalCustody(row, bybitTransaction, now);
-                return;
-            }
-            ensureCorrelation(row).setStatus("UNMATCHED");
-            bybitTransaction.getMissingDataReasons().add("BRIDGE_ON_CHAIN_LEG_NOT_FOUND");
-            return;
-        }
-
-        String correlationId = correlationId(row);
-        ExternalLedgerRaw.OnChainCorrelation correlation = ensureCorrelation(row);
-        correlation.setStatus("MATCHED");
-        correlation.setMatchedDocId(rawMatches.get(0).getId());
-        correlation.setCorrelationId(correlationId);
-
-        NormalizedTransaction onChain = normalizedMatches.get(0);
-        builder.markMatchedContinuityCandidate(
-                bybitTransaction,
-                correlationId,
-                onChain.getWalletAddress(),
-                now
-        );
-        builder.markMatchedContinuityCandidate(
-                onChain,
-                correlationId,
-                bybitTransaction.getWalletAddress(),
-                now
-        );
-        normalizedTransactionRepository.save(onChain);
-    }
-
-    private void correlateBridge(
-            BybitExtractedEvent row,
-            NormalizedTransaction bybitTransaction,
-            Instant now
-    ) {
-        String txHash = row.getTxHash();
-        if (txHash == null || txHash.isBlank() || row.getNetworkId() == null) {
-            return;
-        }
-
-        List<RawTransaction> rawMatches = rawTransactionRepository.findAllByTxHashAndNetworkId(
-                txHash,
-                row.getNetworkId().name()
-        );
-        List<NormalizedTransaction> normalizedMatches = normalizedTransactionRepository.findAllByTxHashAndNetworkIdAndSource(
-                txHash,
-                row.getNetworkId(),
-                NormalizedTransactionSource.ON_CHAIN
-        );
-        if (rawMatches.isEmpty() || normalizedMatches.isEmpty()) {
-            if (isExternalCustodyCandidate(row)) {
-                markExternalCustody(row, bybitTransaction, now);
-                return;
-            }
-            ensureCorrelation(row).setStatus("UNMATCHED");
-            bybitTransaction.getMissingDataReasons().add("BRIDGE_ON_CHAIN_LEG_NOT_FOUND");
-            return;
-        }
-
-        String correlationId = correlationId(row.getNetworkId(), row.getTxHash());
-        BybitExtractedEvent.OnChainCorrelation correlation = ensureCorrelation(row);
-        correlation.setStatus("MATCHED");
-        correlation.setMatchedDocId(rawMatches.get(0).getId());
-        correlation.setCorrelationId(correlationId);
-
-        NormalizedTransaction onChain = normalizedMatches.get(0);
-        builder.markMatchedContinuityCandidate(
-                bybitTransaction,
-                correlationId,
-                onChain.getWalletAddress(),
-                now
-        );
-        builder.markMatchedContinuityCandidate(
-                onChain,
-                correlationId,
-                bybitTransaction.getWalletAddress(),
-                now
-        );
-        normalizedTransactionRepository.save(onChain);
-    }
-
-    private boolean isBridgeCandidate(ExternalLedgerRaw row, NormalizedTransaction normalized) {
-        return "withdraw_deposit".equals(normalize(row.getSourceFileType()))
-                && (normalized.getType() == com.walletradar.domain.transaction.normalized.NormalizedTransactionType.EXTERNAL_TRANSFER_IN
-                || normalized.getType() == com.walletradar.domain.transaction.normalized.NormalizedTransactionType.EXTERNAL_TRANSFER_OUT);
-    }
-
-    private ExternalLedgerRaw.OnChainCorrelation ensureCorrelation(ExternalLedgerRaw row) {
-        if (row.getOnChainCorrelation() == null) {
-            row.setOnChainCorrelation(new ExternalLedgerRaw.OnChainCorrelation());
-        }
-        return row.getOnChainCorrelation();
-    }
-
-    private BybitExtractedEvent.OnChainCorrelation ensureCorrelation(BybitExtractedEvent row) {
-        if (row.getOnChainCorrelation() == null) {
-            row.setOnChainCorrelation(new BybitExtractedEvent.OnChainCorrelation());
-        }
-        return row.getOnChainCorrelation();
-    }
-
     private void markConfirmed(ExternalLedgerRaw row) {
         row.setStatus(ExternalLedgerRawStatus.CONFIRMED);
         externalLedgerRawRepository.save(row);
@@ -489,54 +333,8 @@ public class BybitNormalizationService {
         bybitExtractedEventRepository.save(row);
     }
 
-    private String correlationId(ExternalLedgerRaw row) {
-        return correlationId(row.getNetworkId(), row.getTxHash());
-    }
-
-    private String correlationId(NetworkId networkId, String txHash) {
-        return "BYBIT:" + networkId.name() + ":" + txHash.toLowerCase(Locale.ROOT);
-    }
-
-    private boolean isExternalCustodyCandidate(ExternalLedgerRaw row) {
-        if (row == null || row.getReceivedAddress() == null || row.getReceivedAddress().isBlank()) {
-            return false;
-        }
-        return !trackedWalletLookupService.contains(row.getReceivedAddress());
-    }
-
-    private boolean isExternalCustodyCandidate(BybitExtractedEvent row) {
-        if (row == null || row.getReceivedAddress() == null || row.getReceivedAddress().isBlank()) {
-            return false;
-        }
-        return !trackedWalletLookupService.contains(row.getReceivedAddress());
-    }
-
-    private void markExternalCustody(
-            ExternalLedgerRaw row,
-            NormalizedTransaction bybitTransaction,
-            Instant now
-    ) {
-        ExternalLedgerRaw.OnChainCorrelation correlation = ensureCorrelation(row);
-        correlation.setStatus("EXTERNAL_CUSTODY");
-        correlation.setCorrelationId(null);
-        correlation.setMatchedDocId(null);
-        builder.markExternalCustodyExcluded(bybitTransaction, now, EXTERNAL_CUSTODY_EXCLUSION_REASON);
-    }
-
-    private void markExternalCustody(
-            BybitExtractedEvent row,
-            NormalizedTransaction bybitTransaction,
-            Instant now
-    ) {
-        BybitExtractedEvent.OnChainCorrelation correlation = ensureCorrelation(row);
-        correlation.setStatus("EXTERNAL_CUSTODY");
-        correlation.setCorrelationId(null);
-        correlation.setMatchedDocId(null);
-        builder.markExternalCustodyExcluded(bybitTransaction, now, EXTERNAL_CUSTODY_EXCLUSION_REASON);
-    }
-
     private String normalize(String value) {
-        return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
+        return value == null ? "" : value.trim().toLowerCase(java.util.Locale.ROOT);
     }
 
     private boolean isConvertType(String bybitType) {

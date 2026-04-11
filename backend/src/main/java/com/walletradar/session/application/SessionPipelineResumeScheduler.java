@@ -1,9 +1,11 @@
 package com.walletradar.session.application;
 
-import com.walletradar.domain.event.BybitNormalizationCompletedEvent;
+import com.walletradar.domain.event.BybitNormalizationRequestedEvent;
+import com.walletradar.domain.event.LinkingRequestedEvent;
 import com.walletradar.domain.event.OnChainClarificationCompletedEvent;
 import com.walletradar.domain.event.OnChainNormalizationCompletedEvent;
 import com.walletradar.domain.event.PricingCompletedEvent;
+import com.walletradar.domain.event.PricingRequestedEvent;
 import com.walletradar.domain.event.SessionBackfillCompletedEvent;
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.domain.session.UserSessionRepository;
@@ -15,6 +17,7 @@ import com.walletradar.domain.transaction.bybit.BybitExtractedEvent;
 import com.walletradar.domain.transaction.externalledger.ExternalLedgerRaw;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.raw.RawTransaction;
+import com.walletradar.ingestion.job.linking.LinkingDataGateService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -44,14 +47,28 @@ public class SessionPipelineResumeScheduler {
             Criteria.where("excludedFromAccounting").exists(false),
             Criteria.where("excludedFromAccounting").is(Boolean.FALSE)
     );
+    private static final Criteria IN_SCOPE_BYBIT_RAW_CRITERIA = new Criteria().andOperator(
+            Criteria.where("status").is("RAW"),
+            Criteria.where("basisRelevant").is(Boolean.TRUE),
+            new Criteria().orOperator(
+                    Criteria.where("outOfScope").exists(false),
+                    Criteria.where("outOfScope").is(Boolean.FALSE)
+            ),
+            new Criteria().orOperator(
+                    Criteria.where("canonicalType").exists(false),
+                    Criteria.where("canonicalType").ne("UNKNOWN_CEX")
+            )
+    );
 
     private final UserSessionRepository userSessionRepository;
     private final SyncStatusRepository syncStatusRepository;
     private final BackfillSegmentRepository backfillSegmentRepository;
     private final AccountingUniverseService accountingUniverseService;
+    private final LinkingDataGateService linkingDataGateService;
     private final MongoOperations mongoOperations;
     private final ApplicationEventPublisher applicationEventPublisher;
     private final SessionPipelineStateService sessionPipelineStateService;
+    private final SessionPipelineActivityService sessionPipelineActivityService;
 
     @Scheduled(fixedDelayString = "${walletradar.pipeline.resume-interval-ms:60000}")
     public void resumeReadySessions() {
@@ -72,6 +89,17 @@ public class SessionPipelineResumeScheduler {
 
     private ResumeAction nextAction(UserSession session) {
         if (session == null || session.getId() == null || targetCount(session) == 0) {
+            return null;
+        }
+        var freshActivity = sessionPipelineActivityService.latestFreshActivity(session.getId(), RUNNING_STATE_STALE_AFTER);
+        if (freshActivity.isPresent()) {
+            SessionPipelineActivityService.ActivitySnapshot snapshot = freshActivity.get();
+            log.info(
+                    "Session pipeline resume deferred by in-memory activity: sessionId={}, stage={}, heartbeatAt={}",
+                    session.getId(),
+                    snapshot.stage(),
+                    snapshot.heartbeatAt()
+            );
             return null;
         }
         if (hasFreshRunningState(session)) {
@@ -111,15 +139,23 @@ public class SessionPipelineResumeScheduler {
             return new ResumeAction(
                     UserSession.PipelineStage.BYBIT_NORMALIZATION,
                     "raw-bybit-or-unmatched-rematch",
-                    new OnChainClarificationCompletedEvent(session.getId(), 0, "resume-watchdog")
+                    new BybitNormalizationRequestedEvent(session.getId(), "resume-watchdog")
             );
         }
+        boolean pendingLinking = linkingDataGateService.hasPendingLinking(session.getId());
         boolean pendingPrice = hasPendingPrice(addresses);
+        if (pendingLinking && !isReplayAlreadyComplete(session)) {
+            return new ResumeAction(
+                    UserSession.PipelineStage.LINKING,
+                    "pending-linking",
+                    new LinkingRequestedEvent(session.getId(), "resume-watchdog")
+            );
+        }
         if (pendingPrice) {
             return new ResumeAction(
                     UserSession.PipelineStage.PRICING,
                     "pending-price",
-                    new BybitNormalizationCompletedEvent(session.getId(), 0, "resume-watchdog")
+                    new PricingRequestedEvent(session.getId(), "resume-watchdog")
             );
         }
         boolean pendingStat = hasPendingStat(addresses);
@@ -138,6 +174,7 @@ public class SessionPipelineResumeScheduler {
                 hasNormalized,
                 pendingClarification,
                 pendingBybit,
+                pendingLinking,
                 pendingPrice,
                 pendingStat,
                 replayBootstrapRequired
@@ -202,37 +239,17 @@ public class SessionPipelineResumeScheduler {
     private boolean hasPendingBybitWork(UserSession session) {
         Query rawExtractedQuery = new Query(new Criteria().andOperator(
                 Criteria.where("sessionId").is(session.getId()),
-                Criteria.where("status").is("RAW")
+                IN_SCOPE_BYBIT_RAW_CRITERIA
         ));
         if (mongoOperations.exists(rawExtractedQuery, BybitExtractedEvent.class)) {
             return true;
         }
 
-        Query extractedRematchQuery = new Query(new Criteria().andOperator(
-                Criteria.where("sessionId").is(session.getId()),
-                Criteria.where("status").is("CONFIRMED"),
-                Criteria.where("sourceFileType").is("withdraw_deposit"),
-                Criteria.where("onChainCorrelation.status").is("UNMATCHED")
-        ));
-        if (mongoOperations.exists(extractedRematchQuery, BybitExtractedEvent.class)) {
-            return true;
-        }
-
         Query rawBybitQuery = new Query(new Criteria().andOperator(
                 Criteria.where("sessionId").is(session.getId()),
-                Criteria.where("status").is("RAW")
+                IN_SCOPE_BYBIT_RAW_CRITERIA
         ));
-        if (mongoOperations.exists(rawBybitQuery, ExternalLedgerRaw.class)) {
-            return true;
-        }
-
-        Query bybitRematchQuery = new Query(new Criteria().andOperator(
-                Criteria.where("sessionId").is(session.getId()),
-                Criteria.where("status").is("CONFIRMED"),
-                Criteria.where("sourceFileType").is("withdraw_deposit"),
-                Criteria.where("onChainCorrelation.status").is("UNMATCHED")
-        ));
-        return mongoOperations.exists(bybitRematchQuery, ExternalLedgerRaw.class);
+        return mongoOperations.exists(rawBybitQuery, ExternalLedgerRaw.class);
     }
 
     private boolean hasPendingClarification(List<String> addresses) {
@@ -290,6 +307,13 @@ public class SessionPipelineResumeScheduler {
         return updatedAt.isAfter(Instant.now().minus(RUNNING_STATE_STALE_AFTER));
     }
 
+    private boolean isReplayAlreadyComplete(UserSession session) {
+        UserSession.PipelineState pipelineState = session.getPipelineState();
+        return pipelineState != null
+                && pipelineState.getStage() == UserSession.PipelineStage.ACCOUNTING_REPLAY
+                && pipelineState.getStatus() == UserSession.PipelineStatus.COMPLETE;
+    }
+
     private boolean shouldHealReplayCompletion(
             UserSession session,
             AccountingUniverseService.AccountingUniverseScope scope,
@@ -297,6 +321,7 @@ public class SessionPipelineResumeScheduler {
             boolean hasNormalized,
             boolean pendingClarification,
             boolean pendingBybit,
+            boolean pendingLinking,
             boolean pendingPrice,
             boolean pendingStat,
             boolean replayBootstrapRequired
@@ -312,6 +337,7 @@ public class SessionPipelineResumeScheduler {
                 || !hasNormalized
                 || pendingClarification
                 || pendingBybit
+                || pendingLinking
                 || pendingPrice
                 || pendingStat
                 || replayBootstrapRequired) {

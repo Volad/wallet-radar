@@ -46,6 +46,34 @@ public class StatValidationService {
         return processBatch(batch);
     }
 
+    public int promoteReplaySafeNeedsReview(Collection<String> walletAddresses) {
+        if (walletAddresses == null || walletAddresses.isEmpty()) {
+            return 0;
+        }
+        List<NormalizedTransaction> batch = normalizedTransactionRepository
+                .findAllByWalletAddressInAndStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                        walletAddresses,
+                        NormalizedTransactionStatus.NEEDS_REVIEW
+                );
+        int promoted = 0;
+        Instant now = Instant.now();
+        for (NormalizedTransaction transaction : batch) {
+            if (Boolean.TRUE.equals(transaction.getExcludedFromAccounting())) {
+                continue;
+            }
+            if (!isReplaySafeNeedsReview(transaction)) {
+                continue;
+            }
+            NormalizedTransaction candidate = copy(transaction);
+            candidate.setStatus(NormalizedTransactionStatus.CONFIRMED);
+            candidate.setConfirmedAt(candidate.getConfirmedAt() != null ? candidate.getConfirmedAt() : now);
+            candidate.setUpdatedAt(now);
+            normalizedTransactionRepository.save(candidate);
+            promoted++;
+        }
+        return promoted;
+    }
+
     private StatValidationOutcome processBatch(List<NormalizedTransaction> batch) {
         int promoted = 0;
         int demoted = 0;
@@ -90,12 +118,22 @@ public class StatValidationService {
             return List.of(EMPTY_FLOWS_REASON);
         }
 
+        List<NormalizedTransaction.Flow> nonZeroFlows = transaction.getFlows().stream()
+                .filter(flow -> flow != null)
+                .filter(flow -> flow.getQuantityDelta() != null && flow.getQuantityDelta().compareTo(BigDecimal.ZERO) != 0)
+                .toList();
+        if (nonZeroFlows.isEmpty()) {
+            return List.of(EMPTY_FLOWS_REASON);
+        }
+
         List<NormalizedTransaction.Flow> nonFeeFlows = transaction.getFlows().stream()
                 .filter(flow -> flow != null && flow.getRole() != NormalizedLegRole.FEE)
                 .filter(flow -> flow.getQuantityDelta() != null && flow.getQuantityDelta().compareTo(BigDecimal.ZERO) != 0)
                 .toList();
         if (nonFeeFlows.isEmpty()) {
-            return List.of(NO_NON_FEE_FLOW_REASON);
+            return hasReplaySafeFeeOnlyFlows(nonZeroFlows)
+                    ? List.of()
+                    : List.of(NO_NON_FEE_FLOW_REASON);
         }
 
         Set<String> reasons = new LinkedHashSet<>();
@@ -132,6 +170,39 @@ public class StatValidationService {
         }
 
         return new ArrayList<>(reasons);
+    }
+
+    private boolean hasReplaySafeFeeOnlyFlows(List<NormalizedTransaction.Flow> nonZeroFlows) {
+        if (nonZeroFlows == null || nonZeroFlows.isEmpty()) {
+            return false;
+        }
+        for (NormalizedTransaction.Flow flow : nonZeroFlows) {
+            if (flow == null || flow.getRole() != NormalizedLegRole.FEE) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean isReplaySafeNeedsReview(NormalizedTransaction transaction) {
+        if (transaction == null) {
+            return false;
+        }
+        List<NormalizedTransaction.Flow> flows = transaction.getFlows();
+        if (flows == null || flows.isEmpty()) {
+            return true;
+        }
+        boolean sawNonZero = false;
+        for (NormalizedTransaction.Flow flow : flows) {
+            if (flow == null || flow.getQuantityDelta() == null || flow.getQuantityDelta().compareTo(BigDecimal.ZERO) == 0) {
+                continue;
+            }
+            sawNonZero = true;
+            if (flow.getRole() != NormalizedLegRole.FEE) {
+                return false;
+            }
+        }
+        return !sawNonZero || hasReplaySafeFeeOnlyFlows(flows);
     }
 
     private NormalizedTransaction copy(NormalizedTransaction transaction) {
