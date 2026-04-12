@@ -44,6 +44,7 @@ class BackfillJobRunnerTest {
     @Mock private SyncProgressTracker syncProgressTracker;
     @Mock private SyncStatusRepository syncStatusRepository;
     @Mock private BackfillSegmentRepository backfillSegmentRepository;
+    @Mock private BackfillJobPlanner backfillJobPlanner;
     @Mock private BackfillSegmentExecutor backfillSegmentExecutor;
 
     private BackfillJobRunner runner;
@@ -60,6 +61,7 @@ class BackfillJobRunnerTest {
                 syncProgressTracker,
                 syncStatusRepository,
                 backfillSegmentRepository,
+                backfillJobPlanner,
                 List.of(backfillSegmentExecutor),
                 direct,
                 direct
@@ -86,7 +88,11 @@ class BackfillJobRunnerTest {
                 Set.of(SyncStatus.SyncStatusValue.FAILED, SyncStatus.SyncStatusValue.RUNNING)
         ))
                 .thenReturn(List.of(failed));
-        when(backfillSegmentRepository.existsBySyncStatusId("sync-1")).thenReturn(true);
+        BackfillSegment completed = new BackfillSegment();
+        completed.setSyncStatusId("sync-1");
+        completed.setStatus(BackfillSegment.SegmentStatus.COMPLETE);
+        when(backfillSegmentRepository.findBySyncStatusIdOrderBySegmentIndexAsc("sync-1"))
+                .thenReturn(List.of(completed));
 
         runner.retryFailedBackfills();
 
@@ -109,7 +115,8 @@ class BackfillJobRunnerTest {
                 Set.of(SyncStatus.SyncStatusValue.FAILED, SyncStatus.SyncStatusValue.RUNNING)
         ))
                 .thenReturn(List.of(failed));
-        when(backfillSegmentRepository.existsBySyncStatusId("sync-2")).thenReturn(false);
+        when(backfillSegmentRepository.findBySyncStatusIdOrderBySegmentIndexAsc("sync-2"))
+                .thenReturn(List.of());
 
         runner.retryFailedBackfills();
 
@@ -163,5 +170,60 @@ class BackfillJobRunnerTest {
         verify(backfillSegmentRepository).save(captor.capture());
         assertThat(captor.getValue().getStatus()).isEqualTo(BackfillSegment.SegmentStatus.PENDING);
         assertThat(captor.getValue().getStartedAt()).isNull();
+    }
+
+    @Test
+    @DisplayName("dispatch replans pending on-chain sync when current-window segments are missing")
+    void dispatchReplansPendingOnChainSyncWhenCurrentWindowSegmentsAreMissing() {
+        Executor noop = command -> { };
+        BackfillJobRunner dispatchRunner = new BackfillJobRunner(
+                List.of(networkAdapter),
+                List.of(blockHeightResolver),
+                List.of(blockTimestampResolver),
+                backfillNetworkExecutor,
+                backfillProperties,
+                syncProgressTracker,
+                syncStatusRepository,
+                backfillSegmentRepository,
+                backfillJobPlanner,
+                List.of(backfillSegmentExecutor),
+                noop,
+                noop
+        );
+
+        SyncStatus pending = new SyncStatus();
+        pending.setId("sync-3");
+        pending.setWalletAddress("0xWALLET");
+        pending.setNetworkId("ETHEREUM");
+        pending.setStatus(SyncStatus.SyncStatusValue.PENDING);
+        pending.setWindowFromBlock(101L);
+        pending.setWindowToBlock(120L);
+
+        BackfillSegment staleSegment = new BackfillSegment();
+        staleSegment.setId("sync-3:0");
+        staleSegment.setSyncStatusId("sync-3");
+        staleSegment.setStatus(BackfillSegment.SegmentStatus.COMPLETE);
+        staleSegment.setFromBlock(1L);
+        staleSegment.setToBlock(100L);
+
+        BackfillSegment currentSegment = new BackfillSegment();
+        currentSegment.setId("sync-3:1");
+        currentSegment.setSyncStatusId("sync-3");
+        currentSegment.setStatus(BackfillSegment.SegmentStatus.PENDING);
+        currentSegment.setFromBlock(101L);
+        currentSegment.setToBlock(120L);
+
+        when(syncStatusRepository.findOnChainByStatusIn(
+                SyncStatus.SourceKind.ONCHAIN,
+                Set.of(SyncStatus.SyncStatusValue.PENDING, SyncStatus.SyncStatusValue.RUNNING, SyncStatus.SyncStatusValue.FAILED)
+        )).thenReturn(List.of(pending));
+        when(backfillSegmentRepository.findBySyncStatusIdOrderBySegmentIndexAsc("sync-3"))
+                .thenReturn(List.of(staleSegment), List.of(currentSegment), List.of(currentSegment));
+        when(backfillJobPlanner.planOnChainSyncStatus("sync-3")).thenReturn(1);
+
+        dispatchRunner.dispatchPendingOnChainBackfills();
+
+        verify(backfillJobPlanner).planOnChainSyncStatus("sync-3");
+        assertThat(dispatchRunner.isIdle()).isFalse();
     }
 }

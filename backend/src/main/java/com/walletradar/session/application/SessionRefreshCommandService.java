@@ -5,6 +5,7 @@ import com.walletradar.domain.session.UserSession;
 import com.walletradar.domain.session.UserSessionRepository;
 import com.walletradar.domain.sync.SyncStatus;
 import com.walletradar.domain.sync.SyncStatusRepository;
+import com.walletradar.ingestion.job.backfill.BackfillJobPlanner;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -27,6 +28,7 @@ public class SessionRefreshCommandService {
     private final UserSessionRepository userSessionRepository;
     private final SyncStatusRepository syncStatusRepository;
     private final SourceSyncPlanner sourceSyncPlanner;
+    private final BackfillJobPlanner backfillJobPlanner;
     private final SessionPipelineStateService sessionPipelineStateService;
 
     public Optional<SessionRefreshResult> refresh(String sessionId) {
@@ -53,6 +55,11 @@ public class SessionRefreshCommandService {
             );
         }
 
+        backfillJobPlanner.planScheduledSessionSources(
+                session,
+                planResult.scheduledOnChainSyncStatusIds(),
+                planResult.scheduledIntegrationSyncStatusIds()
+        );
         session.setUpdatedAt(now);
         userSessionRepository.save(session);
         sessionPipelineStateService.markStageRunning(

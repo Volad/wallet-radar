@@ -35,10 +35,6 @@ public final class PriceableFlowPolicy {
         if (NON_PRICEABLE_TYPES.contains(transaction.getType())) {
             return false;
         }
-        if (transaction.getType() == NormalizedTransactionType.DEX_ORDER_REQUEST
-                && flow.getRole() != NormalizedLegRole.FEE) {
-            return false;
-        }
         if (flow.getRole() == NormalizedLegRole.TRANSFER) {
             return false;
         }

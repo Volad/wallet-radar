@@ -42,6 +42,19 @@ public class EvmBlockHeightResolver implements BlockHeightResolver {
     public long getCurrentBlock(NetworkId networkId) {
         Long explorerBlock = resolveCurrentBlockViaExplorer(networkId);
         if (explorerBlock != null && explorerBlock > 0L) {
+            Long rpcBlock = resolveCurrentBlockViaRpcSafely(networkId);
+            if (rpcBlock != null && rpcBlock > 0L) {
+                if (!explorerBlock.equals(rpcBlock)) {
+                    log.info(
+                            "Head block mismatch on {}: explorerHead={}, rpcHead={}, usingMaxHead={}",
+                            networkId,
+                            explorerBlock,
+                            rpcBlock,
+                            Math.max(explorerBlock, rpcBlock)
+                    );
+                }
+                return Math.max(explorerBlock, rpcBlock);
+            }
             return explorerBlock;
         }
         return resolveCurrentBlockViaRpc(networkId);
@@ -97,6 +110,15 @@ public class EvmBlockHeightResolver implements BlockHeightResolver {
         } catch (Exception e) {
             if (e instanceof RpcException) throw (RpcException) e;
             throw new RpcException("Failed to parse eth_blockNumber", e);
+        }
+    }
+
+    private Long resolveCurrentBlockViaRpcSafely(NetworkId networkId) {
+        try {
+            return resolveCurrentBlockViaRpc(networkId);
+        } catch (Exception e) {
+            log.warn("RPC head block resolution failed on {}: {}", networkId, e.getMessage());
+            return null;
         }
     }
 }

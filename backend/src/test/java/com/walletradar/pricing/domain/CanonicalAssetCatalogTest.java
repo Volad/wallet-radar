@@ -14,4 +14,15 @@ class CanonicalAssetCatalogTest {
         assertThat(CanonicalAssetCatalog.canonicalMarketSymbol("aManWETH")).isEqualTo("ETH");
         assertThat(CanonicalAssetCatalog.canonicalMarketSymbol("aZksWETH")).isEqualTo("ETH");
     }
+
+    @Test
+    void auditedKatanaVaultReceiptsCollapseToEthForPricing() {
+        assertThat(CanonicalAssetCatalog.canonicalMarketSymbol("vbETH")).isEqualTo("ETH");
+        assertThat(CanonicalAssetCatalog.canonicalMarketSymbol("yvvbETH")).isEqualTo("ETH");
+    }
+
+    @Test
+    void wstEthUsesEthFamilyCoinGeckoFallback() {
+        assertThat(CanonicalAssetCatalog.coinGeckoId("wstETH")).contains("staked-ether");
+    }
 }

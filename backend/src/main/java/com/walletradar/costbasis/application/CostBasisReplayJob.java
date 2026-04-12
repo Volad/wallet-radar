@@ -14,7 +14,8 @@ import com.walletradar.session.application.SessionPipelineStateService;
 import com.walletradar.telemetry.PipelineTelemetrySnapshot;
 import com.walletradar.telemetry.PipelineTelemetrySnapshotService;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
@@ -28,9 +29,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 @Component
 @RequiredArgsConstructor
-@Slf4j
 public class CostBasisReplayJob {
 
+    private static final Logger log = LoggerFactory.getLogger(CostBasisReplayJob.class);
     private static final String STAGE_NAME = "costbasis-replay";
     private static final Duration HEARTBEAT_INTERVAL = Duration.ofSeconds(30);
 

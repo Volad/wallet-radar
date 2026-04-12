@@ -241,7 +241,7 @@ class PriceResolutionServiceTest {
     }
 
     @Test
-    void asyncDexOrderRequestDoesNotRequireSyntheticPrincipalPricing() {
+    void asyncDexOrderRequestPricesPrincipalAndReusesFeeQuote() {
         PriceResolutionService service = service();
         NormalizedTransaction transaction = transaction(
                 NormalizedTransactionSource.ON_CHAIN,
@@ -260,8 +260,11 @@ class PriceResolutionServiceTest {
 
         NormalizedTransaction priced = service.resolve(transaction, Instant.parse("2026-03-25T12:00:00Z"));
 
-        assertThat(priced.getFlows().get(0).getUnitPriceUsd()).isNull();
+        assertThat(priced.getFlows().get(0).getUnitPriceUsd()).isEqualByComparingTo("2500");
+        assertThat(priced.getFlows().get(0).getValueUsd()).isEqualByComparingTo("69.097028558373652500");
+        assertThat(priced.getFlows().get(0).getPriceSource()).isEqualTo(PriceSource.BINANCE);
         assertThat(priced.getFlows().get(1).getUnitPriceUsd()).isEqualByComparingTo("2500");
+        assertThat(priced.getFlows().get(1).getPriceSource()).isEqualTo(PriceSource.WRAPPER);
         verify(externalSources).resolve(argThat(matchesSymbol("ETH")));
     }
 
@@ -303,6 +306,23 @@ class PriceResolutionServiceTest {
         assertThat(priced.getFlows().get(1).getUnitPriceUsd()).isEqualByComparingTo("1");
         assertThat(priced.getFlows().get(1).getPriceSource()).isEqualTo(PriceSource.STABLECOIN);
         assertThat(priced.getFlows().get(2).getUnitPriceUsd()).isEqualByComparingTo("1");
+        verify(externalSources, never()).resolve(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void onChainUsdStablecoinUsesParityBeforeExternalLookup() {
+        PriceResolutionService service = service();
+        NormalizedTransaction transaction = transaction(
+                NormalizedTransactionSource.ON_CHAIN,
+                NormalizedTransactionType.EXTERNAL_TRANSFER_OUT,
+                null,
+                flow(NormalizedLegRole.SELL, null, "USDT", "-220")
+        );
+
+        NormalizedTransaction priced = service.resolve(transaction, Instant.parse("2026-03-25T12:00:00Z"));
+
+        assertThat(priced.getFlows().get(0).getUnitPriceUsd()).isEqualByComparingTo("1");
+        assertThat(priced.getFlows().get(0).getPriceSource()).isEqualTo(PriceSource.STABLECOIN);
         verify(externalSources, never()).resolve(org.mockito.ArgumentMatchers.any());
     }
 

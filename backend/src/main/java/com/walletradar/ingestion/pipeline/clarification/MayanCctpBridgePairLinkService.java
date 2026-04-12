@@ -18,6 +18,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -35,6 +36,15 @@ public class MayanCctpBridgePairLinkService {
     private static final String MAYAN_BRIDGE_SELECTOR = "0x30c48952";
     private static final String MAYAN_SETTLEMENT_SELECTOR = "0xe2de2a03";
     private static final String MAYAN_STATUS_KEY = "mayanStatus";
+    private static final Comparator<NormalizedTransaction> DESTINATION_SELECTION_ORDER = Comparator
+            .comparingInt(MayanCctpBridgePairLinkService::destinationSelectionRank)
+            .thenComparing(NormalizedTransaction::getBlockTimestamp, Comparator.nullsLast(Instant::compareTo))
+            .thenComparing(NormalizedTransaction::getTransactionIndex, Comparator.nullsLast(Integer::compareTo))
+            .thenComparing(NormalizedTransaction::getId, Comparator.nullsLast(String::compareTo));
+    private static final Comparator<NormalizedTransaction> SOURCE_SELECTION_ORDER = Comparator
+            .comparing(NormalizedTransaction::getBlockTimestamp, Comparator.nullsLast(Instant::compareTo))
+            .thenComparing(NormalizedTransaction::getTransactionIndex, Comparator.nullsLast(Integer::compareTo))
+            .thenComparing(NormalizedTransaction::getId, Comparator.nullsLast(String::compareTo));
 
     private final MayanStatusGateway mayanStatusGateway;
     private final PendingMayanBridgeSourceQueryService pendingMayanBridgeSourceQueryService;
@@ -122,21 +132,6 @@ public class MayanCctpBridgePairLinkService {
             return Optional.empty();
         }
 
-        boolean changed = false;
-        String correlationId = correlationId(source.getTxHash());
-        if (!sameHash(source.getMatchedCounterparty(), status.receivingTxHash())) {
-            source.setMatchedCounterparty(status.receivingTxHash());
-            changed = true;
-        }
-        if (!sameCorrelation(source.getCorrelationId(), correlationId)) {
-            source.setCorrelationId(correlationId);
-            changed = true;
-        }
-        if (changed) {
-            source.setUpdatedAt(Instant.now());
-            normalizedTransactionRepository.save(source);
-        }
-
         List<NormalizedTransaction> currentDestinations = normalizedTransactionRepository.findAllByTxHashAndNetworkIdAndSource(
                 status.receivingTxHash(),
                 status.receivingNetworkId(),
@@ -147,7 +142,7 @@ public class MayanCctpBridgePairLinkService {
                 .filter(this::isMaterializableDestination)
                 .filter(destination -> status.destinationWalletAddress() == null
                         || status.destinationWalletAddress().equalsIgnoreCase(destination.getWalletAddress()))
-                .sorted((left, right) -> Integer.compare(destinationRank(left), destinationRank(right)))
+                .sorted(DESTINATION_SELECTION_ORDER)
                 .findFirst();
         if (existingDestination.isPresent()) {
             return existingDestination;
@@ -219,6 +214,7 @@ public class MayanCctpBridgePairLinkService {
                 .filter(candidate -> hasText(candidate.getCorrelationId())
                         && candidate.getCorrelationId().toLowerCase(Locale.ROOT).startsWith("bridge:mayan:"))
                 .filter(candidate -> !sameHash(candidate.getTxHash(), destination.getTxHash()))
+                .sorted(SOURCE_SELECTION_ORDER)
                 .findFirst();
     }
 
@@ -375,6 +371,19 @@ public class MayanCctpBridgePairLinkService {
             return 0;
         }
         if (destination.getType() == NormalizedTransactionType.EXTERNAL_TRANSFER_IN && isInboundOnly(destination)) {
+            return 1;
+        }
+        return 2;
+    }
+
+    private static int destinationSelectionRank(NormalizedTransaction destination) {
+        if (destination == null) {
+            return 99;
+        }
+        if (destination.getType() == NormalizedTransactionType.BRIDGE_IN) {
+            return 0;
+        }
+        if (destination.getType() == NormalizedTransactionType.EXTERNAL_TRANSFER_IN) {
             return 1;
         }
         return 2;

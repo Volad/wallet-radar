@@ -2,6 +2,8 @@ package com.walletradar.session.application;
 
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.session.UserSession;
+import com.walletradar.domain.sync.BackfillSegment;
+import com.walletradar.domain.sync.BackfillSegmentRepository;
 import com.walletradar.domain.sync.SyncStatus;
 import com.walletradar.domain.sync.SyncStatusRepository;
 import com.walletradar.ingestion.adapter.BlockHeightResolver;
@@ -30,6 +32,7 @@ import java.util.Optional;
 public class SourceSyncPlanner {
 
     private final SyncStatusRepository syncStatusRepository;
+    private final BackfillSegmentRepository backfillSegmentRepository;
     private final List<BlockHeightResolver> blockHeightResolvers;
     private final BackfillProperties backfillProperties;
     private final IngestionNetworkProperties ingestionNetworkProperties;
@@ -42,30 +45,41 @@ public class SourceSyncPlanner {
         Instant anchor = normalizeAnchor(observedAt);
         int scheduledTargets = 0;
         int skippedTargets = 0;
+        List<String> scheduledOnChainSyncStatusIds = new ArrayList<>();
+        List<String> scheduledIntegrationSyncStatusIds = new ArrayList<>();
         for (UserSession.SessionWallet wallet : session.getWallets() == null ? List.<UserSession.SessionWallet>of() : session.getWallets()) {
             if (wallet == null || wallet.getAddress() == null || wallet.getAddress().isBlank()) {
                 continue;
             }
             for (NetworkId networkId : wallet.getNetworks() == null ? List.<NetworkId>of() : wallet.getNetworks()) {
-                if (ensureInitialOnChainWindow(normalizedAddress(wallet.getAddress()), networkId, anchor)) {
+                String syncStatusId = ensureInitialOnChainWindow(normalizedAddress(wallet.getAddress()), networkId, anchor);
+                if (syncStatusId != null) {
                     scheduledTargets++;
+                    scheduledOnChainSyncStatusIds.add(syncStatusId);
                 } else {
                     skippedTargets++;
                 }
             }
         }
         for (UserSession.SessionIntegration integration : enabledIntegrations(session)) {
-            if (ensureInitialIntegrationWindow(integration, anchor)) {
+            String syncStatusId = ensureInitialIntegrationWindow(integration, anchor);
+            if (syncStatusId != null) {
                 integration.setStatus(UserSession.IntegrationStatus.BACKFILLING);
                 integration.setUpdatedAt(anchor);
                 integration.setLastError(null);
                 integration.setSyncState(zeroSyncState());
                 scheduledTargets++;
+                scheduledIntegrationSyncStatusIds.add(syncStatusId);
             } else {
                 skippedTargets++;
             }
         }
-        return new PlanResult(scheduledTargets, skippedTargets);
+        return new PlanResult(
+                scheduledTargets,
+                skippedTargets,
+                scheduledOnChainSyncStatusIds,
+                scheduledIntegrationSyncStatusIds
+        );
     }
 
     public PlanResult planRefresh(UserSession session, Instant observedAt) {
@@ -75,37 +89,48 @@ public class SourceSyncPlanner {
         Instant anchor = normalizeAnchor(observedAt);
         int scheduledTargets = 0;
         int skippedTargets = 0;
+        List<String> scheduledOnChainSyncStatusIds = new ArrayList<>();
+        List<String> scheduledIntegrationSyncStatusIds = new ArrayList<>();
         for (UserSession.SessionWallet wallet : session.getWallets() == null ? List.<UserSession.SessionWallet>of() : session.getWallets()) {
             if (wallet == null || wallet.getAddress() == null || wallet.getAddress().isBlank()) {
                 continue;
             }
             for (NetworkId networkId : wallet.getNetworks() == null ? List.<NetworkId>of() : wallet.getNetworks()) {
-                if (scheduleOnChainRefresh(normalizedAddress(wallet.getAddress()), networkId, anchor)) {
+                String syncStatusId = scheduleOnChainRefresh(normalizedAddress(wallet.getAddress()), networkId, anchor);
+                if (syncStatusId != null) {
                     scheduledTargets++;
+                    scheduledOnChainSyncStatusIds.add(syncStatusId);
                 } else {
                     skippedTargets++;
                 }
             }
         }
         for (UserSession.SessionIntegration integration : enabledIntegrations(session)) {
-            if (scheduleIntegrationRefresh(integration, anchor)) {
+            String syncStatusId = scheduleIntegrationRefresh(integration, anchor);
+            if (syncStatusId != null) {
                 integration.setStatus(UserSession.IntegrationStatus.BACKFILLING);
                 integration.setUpdatedAt(anchor);
                 integration.setLastError(null);
                 integration.setSyncState(zeroSyncState());
                 scheduledTargets++;
+                scheduledIntegrationSyncStatusIds.add(syncStatusId);
             } else {
                 skippedTargets++;
             }
         }
-        return new PlanResult(scheduledTargets, skippedTargets);
+        return new PlanResult(
+                scheduledTargets,
+                skippedTargets,
+                scheduledOnChainSyncStatusIds,
+                scheduledIntegrationSyncStatusIds
+        );
     }
 
     public int planStandaloneInitialOnChain(String address, List<NetworkId> networks, Instant observedAt) {
         Instant anchor = normalizeAnchor(observedAt);
         int scheduledTargets = 0;
         for (NetworkId networkId : normalizeNetworks(networks)) {
-            if (ensureInitialOnChainWindow(normalizedAddress(address), networkId, anchor)) {
+            if (ensureInitialOnChainWindow(normalizedAddress(address), networkId, anchor) != null) {
                 scheduledTargets++;
             }
         }
@@ -116,14 +141,14 @@ public class SourceSyncPlanner {
         Instant anchor = normalizeAnchor(observedAt);
         int scheduledTargets = 0;
         for (NetworkId networkId : normalizeNetworks(networks)) {
-            if (scheduleOnChainRefresh(normalizedAddress(address), networkId, anchor)) {
+            if (scheduleOnChainRefresh(normalizedAddress(address), networkId, anchor) != null) {
                 scheduledTargets++;
             }
         }
         return scheduledTargets;
     }
 
-    private boolean ensureInitialOnChainWindow(String walletAddress, NetworkId networkId, Instant anchor) {
+    private String ensureInitialOnChainWindow(String walletAddress, NetworkId networkId, Instant anchor) {
         SyncStatus status = syncStatusRepository.findOnChainByWalletAddressAndNetworkId(
                         SyncStatus.SourceKind.ONCHAIN,
                         walletAddress,
@@ -131,16 +156,16 @@ public class SourceSyncPlanner {
                 )
                 .orElse(null);
         if (status != null && (status.isBackfillComplete() || hasActiveWindow(status))) {
-            return false;
+            return null;
         }
         long currentHead = resolveCurrentBlock(networkId);
         long windowBlocks = resolveWindowBlocksForNetwork(networkId.name());
         long fromBlock = Math.max(0L, currentHead - windowBlocks + 1);
-        armOnChainWindow(status, walletAddress, networkId.name(), fromBlock, currentHead, anchor, "Backfill queued");
-        return true;
+        SyncStatus target = armOnChainWindow(status, walletAddress, networkId.name(), fromBlock, currentHead, anchor, "Backfill queued");
+        return target == null ? null : target.getId();
     }
 
-    private boolean scheduleOnChainRefresh(String walletAddress, NetworkId networkId, Instant anchor) {
+    private String scheduleOnChainRefresh(String walletAddress, NetworkId networkId, Instant anchor) {
         SyncStatus status = syncStatusRepository.findOnChainByWalletAddressAndNetworkId(
                         SyncStatus.SourceKind.ONCHAIN,
                         walletAddress,
@@ -148,22 +173,22 @@ public class SourceSyncPlanner {
                 )
                 .orElse(null);
         if (status == null || !status.isBackfillComplete()) {
-            return false;
+            return null;
         }
         long currentHead = resolveCurrentBlock(networkId);
-        Long checkpoint = status.getLastBlockSynced();
+        Long checkpoint = resolveOnChainCheckpoint(status);
         if (checkpoint == null) {
-            return false;
+            return null;
         }
         long fromBlock = checkpoint + 1;
         if (fromBlock > currentHead) {
-            return false;
+            return null;
         }
-        armOnChainWindow(status, walletAddress, networkId.name(), fromBlock, currentHead, anchor, "Refresh queued");
-        return true;
+        SyncStatus target = armOnChainWindow(status, walletAddress, networkId.name(), fromBlock, currentHead, anchor, "Refresh queued");
+        return target == null ? null : target.getId();
     }
 
-    private void armOnChainWindow(
+    private SyncStatus armOnChainWindow(
             SyncStatus status,
             String walletAddress,
             String networkId,
@@ -173,7 +198,7 @@ public class SourceSyncPlanner {
             String bannerMessage
     ) {
         if (fromBlock > toBlock) {
-            return;
+            return null;
         }
         SyncStatus target = status == null ? new SyncStatus() : status;
         target.setSourceKind(SyncStatus.SourceKind.ONCHAIN);
@@ -191,37 +216,33 @@ public class SourceSyncPlanner {
         target.setRetryCount(0);
         target.setNextRetryAfter(null);
         target.setUpdatedAt(anchor);
-        syncStatusRepository.save(target);
+        return syncStatusRepository.save(target);
     }
 
-    private boolean ensureInitialIntegrationWindow(UserSession.SessionIntegration integration, Instant anchor) {
+    private String ensureInitialIntegrationWindow(UserSession.SessionIntegration integration, Instant anchor) {
         SyncStatus status = latestIntegrationStatus(integration).orElse(null);
         if (status != null && (status.isBackfillComplete() || hasActiveWindow(status))) {
-            return false;
+            return null;
         }
         Instant fromTime = anchor.minus(integrationBackfillProperties.getHistoryYears() * 365L, ChronoUnit.DAYS);
-        armIntegrationWindow(status, integration, fromTime, anchor, "Backfill queued");
-        return true;
+        SyncStatus target = armIntegrationWindow(status, integration, fromTime, anchor, "Backfill queued");
+        return target == null ? null : target.getId();
     }
 
-    private boolean scheduleIntegrationRefresh(UserSession.SessionIntegration integration, Instant anchor) {
+    private String scheduleIntegrationRefresh(UserSession.SessionIntegration integration, Instant anchor) {
         SyncStatus status = latestIntegrationStatus(integration).orElse(null);
         if (status == null || !status.isBackfillComplete()) {
-            return false;
+            return null;
         }
-        Instant checkpoint = status.getLastSyncedAt() != null
-                ? status.getLastSyncedAt().truncatedTo(ChronoUnit.SECONDS)
-                : integration.getLastSyncAt() == null
-                ? null
-                : integration.getLastSyncAt().truncatedTo(ChronoUnit.SECONDS);
+        Instant checkpoint = resolveIntegrationCheckpoint(integration, status);
         if (checkpoint == null || !checkpoint.isBefore(anchor)) {
-            return false;
+            return null;
         }
-        armIntegrationWindow(status, integration, checkpoint, anchor, "Refresh queued");
-        return true;
+        SyncStatus target = armIntegrationWindow(status, integration, checkpoint, anchor, "Refresh queued");
+        return target == null ? null : target.getId();
     }
 
-    private void armIntegrationWindow(
+    private SyncStatus armIntegrationWindow(
             SyncStatus status,
             UserSession.SessionIntegration integration,
             Instant fromTime,
@@ -234,7 +255,7 @@ public class SourceSyncPlanner {
                 || fromTime == null
                 || toTime == null
                 || !fromTime.isBefore(toTime)) {
-            return;
+            return null;
         }
         SyncStatus target = status == null ? new SyncStatus() : status;
         target.setSourceKind(SyncStatus.SourceKind.INTEGRATION);
@@ -255,7 +276,7 @@ public class SourceSyncPlanner {
         target.setRetryCount(0);
         target.setNextRetryAfter(null);
         target.setUpdatedAt(toTime.truncatedTo(ChronoUnit.SECONDS));
-        syncStatusRepository.save(target);
+        return syncStatusRepository.save(target);
     }
 
     private Optional<SyncStatus> latestIntegrationStatus(UserSession.SessionIntegration integration) {
@@ -320,6 +341,66 @@ public class SourceSyncPlanner {
         return blockWindow || timeWindow;
     }
 
+    private Long resolveOnChainCheckpoint(SyncStatus status) {
+        if (status == null) {
+            return null;
+        }
+        Long persistedCheckpoint = status.getLastBlockSynced();
+        Long segmentCheckpoint = completedOnChainSegmentCheckpoint(status);
+        if (persistedCheckpoint == null) {
+            return segmentCheckpoint;
+        }
+        if (segmentCheckpoint == null) {
+            return persistedCheckpoint;
+        }
+        return Math.max(persistedCheckpoint, segmentCheckpoint);
+    }
+
+    private Long completedOnChainSegmentCheckpoint(SyncStatus status) {
+        if (status == null || status.getId() == null || status.getId().isBlank()) {
+            return null;
+        }
+        return backfillSegmentRepository.findBySyncStatusIdOrderBySegmentIndexAsc(status.getId()).stream()
+                .filter(segment -> segment.getStatus() == BackfillSegment.SegmentStatus.COMPLETE)
+                .map(BackfillSegment::getToBlock)
+                .filter(Objects::nonNull)
+                .max(Long::compareTo)
+                .orElse(null);
+    }
+
+    private Instant resolveIntegrationCheckpoint(UserSession.SessionIntegration integration, SyncStatus status) {
+        Instant persistedCheckpoint = status != null && status.getLastSyncedAt() != null
+                ? status.getLastSyncedAt().truncatedTo(ChronoUnit.SECONDS)
+                : null;
+        Instant segmentCheckpoint = completedIntegrationSegmentCheckpoint(integration);
+        if (persistedCheckpoint != null && segmentCheckpoint != null) {
+            return persistedCheckpoint.isAfter(segmentCheckpoint) ? persistedCheckpoint : segmentCheckpoint;
+        }
+        if (persistedCheckpoint != null) {
+            return persistedCheckpoint;
+        }
+        if (segmentCheckpoint != null) {
+            return segmentCheckpoint;
+        }
+        if (integration == null || integration.getLastSyncAt() == null) {
+            return null;
+        }
+        return integration.getLastSyncAt().truncatedTo(ChronoUnit.SECONDS);
+    }
+
+    private Instant completedIntegrationSegmentCheckpoint(UserSession.SessionIntegration integration) {
+        if (integration == null || integration.getIntegrationId() == null || integration.getIntegrationId().isBlank()) {
+            return null;
+        }
+        return backfillSegmentRepository.findByIntegrationIdOrderByUpdatedAtAsc(integration.getIntegrationId()).stream()
+                .filter(segment -> segment.getStatus() == BackfillSegment.SegmentStatus.COMPLETE)
+                .map(BackfillSegment::getToTime)
+                .filter(Objects::nonNull)
+                .map(timestamp -> timestamp.truncatedTo(ChronoUnit.SECONDS))
+                .max(Instant::compareTo)
+                .orElse(null);
+    }
+
     private Instant normalizeAnchor(Instant observedAt) {
         return (observedAt == null ? Instant.now() : observedAt).truncatedTo(ChronoUnit.SECONDS);
     }
@@ -339,10 +420,25 @@ public class SourceSyncPlanner {
 
     public record PlanResult(
             int scheduledTargets,
-            int skippedTargets
+            int skippedTargets,
+            List<String> scheduledOnChainSyncStatusIds,
+            List<String> scheduledIntegrationSyncStatusIds
     ) {
+        public PlanResult(int scheduledTargets, int skippedTargets) {
+            this(scheduledTargets, skippedTargets, List.of(), List.of());
+        }
+
+        public PlanResult {
+            scheduledOnChainSyncStatusIds = scheduledOnChainSyncStatusIds == null
+                    ? List.of()
+                    : List.copyOf(scheduledOnChainSyncStatusIds);
+            scheduledIntegrationSyncStatusIds = scheduledIntegrationSyncStatusIds == null
+                    ? List.of()
+                    : List.copyOf(scheduledIntegrationSyncStatusIds);
+        }
+
         public static PlanResult empty() {
-            return new PlanResult(0, 0);
+            return new PlanResult(0, 0, List.of(), List.of());
         }
     }
 }

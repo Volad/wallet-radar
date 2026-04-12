@@ -17,9 +17,14 @@ import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
  * Creates or replaces persisted backfill segments from sync_status windows.
@@ -69,6 +74,38 @@ public class BackfillJobPlanner {
         return plannedSegments;
     }
 
+    public int planScheduledSessionSources(
+            UserSession session,
+            Collection<String> onChainSyncStatusIds,
+            Collection<String> integrationSyncStatusIds
+    ) {
+        if (session == null) {
+            return 0;
+        }
+        int plannedSegments = 0;
+        for (String syncStatusId : distinctIds(onChainSyncStatusIds)) {
+            SyncStatus status = syncStatusRepository.findById(syncStatusId).orElse(null);
+            plannedSegments += planOnChainSource(status);
+        }
+        if (integrationSyncStatusIds == null || integrationSyncStatusIds.isEmpty()) {
+            return plannedSegments;
+        }
+        Map<String, UserSession.SessionIntegration> integrationsById = enabledIntegrations(session).stream()
+                .collect(Collectors.toMap(
+                        UserSession.SessionIntegration::getIntegrationId,
+                        Function.identity(),
+                        (left, right) -> right
+                ));
+        for (String syncStatusId : distinctIds(integrationSyncStatusIds)) {
+            SyncStatus status = syncStatusRepository.findById(syncStatusId).orElse(null);
+            if (status == null || status.getIntegrationId() == null) {
+                continue;
+            }
+            plannedSegments += planIntegrationSource(session, integrationsById.get(status.getIntegrationId()), status);
+        }
+        return plannedSegments;
+    }
+
     public int planPendingOnChainSources(String walletAddress, List<NetworkId> networks) {
         if (walletAddress == null || walletAddress.isBlank()) {
             return 0;
@@ -87,6 +124,13 @@ public class BackfillJobPlanner {
             plannedSegments += planOnChainSource(status);
         }
         return plannedSegments;
+    }
+
+    public int planOnChainSyncStatus(String syncStatusId) {
+        if (syncStatusId == null || syncStatusId.isBlank()) {
+            return 0;
+        }
+        return planOnChainSource(syncStatusRepository.findById(syncStatusId.trim()).orElse(null));
     }
 
     private int planOnChainSource(SyncStatus status) {
@@ -119,6 +163,17 @@ public class BackfillJobPlanner {
                 status.getWindowToBlock()
         );
         return segments.size();
+    }
+
+    private List<UserSession.SessionIntegration> enabledIntegrations(UserSession session) {
+        if (session == null || session.getIntegrations() == null || session.getIntegrations().isEmpty()) {
+            return List.of();
+        }
+        return session.getIntegrations().stream()
+                .filter(Objects::nonNull)
+                .filter(integration -> integration.getStatus() != UserSession.IntegrationStatus.DISABLED)
+                .filter(integration -> integration.getIntegrationId() != null && !integration.getIntegrationId().isBlank())
+                .toList();
     }
 
     private int planIntegrationSource(UserSession session, UserSession.SessionIntegration integration, SyncStatus status) {
@@ -277,6 +332,20 @@ public class BackfillJobPlanner {
 
     private static int positiveOrDefault(Integer value, int fallback) {
         return value != null && value > 0 ? value : fallback;
+    }
+
+    private static List<String> distinctIds(Collection<String> syncStatusIds) {
+        if (syncStatusIds == null || syncStatusIds.isEmpty()) {
+            return List.of();
+        }
+        return syncStatusIds.stream()
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(value -> !value.isBlank())
+                .collect(Collectors.collectingAndThen(
+                        Collectors.toCollection(LinkedHashSet::new),
+                        List::copyOf
+                ));
     }
 
     private record SegmentPlanningProfile(long targetBlocksPerSegment) {

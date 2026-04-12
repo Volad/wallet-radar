@@ -19,7 +19,9 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
@@ -53,6 +55,7 @@ public class BackfillJobRunner {
     private final SyncProgressTracker syncProgressTracker;
     private final SyncStatusRepository syncStatusRepository;
     private final BackfillSegmentRepository backfillSegmentRepository;
+    private final BackfillJobPlanner backfillJobPlanner;
     private final List<BackfillSegmentExecutor> backfillSegmentExecutors;
     @Qualifier("backfill-coordinator-executor")
     private final Executor backfillCoordinatorExecutor;
@@ -113,8 +116,10 @@ public class BackfillJobRunner {
             if (status.getWalletAddress() == null || status.getNetworkId() == null || status.getId() == null) {
                 continue;
             }
-            if (!backfillSegmentRepository.existsBySyncStatusId(status.getId())) {
-                continue;
+            if (!hasSegmentsForCurrentWindow(status)) {
+                if (!repairMissingCurrentWindowSegments(status)) {
+                    continue;
+                }
             }
             try {
                 BackfillWorkItem item = new BackfillWorkItem(status.getWalletAddress(), NetworkId.valueOf(status.getNetworkId()));
@@ -247,7 +252,7 @@ public class BackfillJobRunner {
             int enqueued = 0;
             for (SyncStatus s : failed) {
                 if (s.getWalletAddress() == null || s.getNetworkId() == null) continue;
-                boolean segmentMode = s.getId() != null && backfillSegmentRepository.existsBySyncStatusId(s.getId());
+                boolean segmentMode = hasSegmentsForCurrentWindow(s);
 
                 if (s.getStatus() == SyncStatusValue.RUNNING) {
                     if (!segmentMode) {
@@ -307,5 +312,56 @@ public class BackfillJobRunner {
 
     private BlockTimestampResolver findBlockTimestampResolver(NetworkId networkId) {
         return blockTimestampResolvers.stream().filter(r -> r.supports(networkId)).findFirst().orElse(null);
+    }
+
+    private boolean repairMissingCurrentWindowSegments(SyncStatus status) {
+        if (status == null || status.getId() == null || status.getStatus() != SyncStatus.SyncStatusValue.PENDING) {
+            return false;
+        }
+        int plannedSegments = backfillJobPlanner.planOnChainSyncStatus(status.getId());
+        if (plannedSegments > 0 && hasSegmentsForCurrentWindow(status)) {
+            log.info(
+                    "Recovered missing current-window segments: wallet={}, network={}, syncStatusId={}, segments={}",
+                    status.getWalletAddress(),
+                    status.getNetworkId(),
+                    status.getId(),
+                    plannedSegments
+            );
+            return true;
+        }
+        log.warn(
+                "Skipping pending on-chain sync without current-window segments: wallet={}, network={}, syncStatusId={}, fromBlock={}, toBlock={}",
+                status.getWalletAddress(),
+                status.getNetworkId(),
+                status.getId(),
+                status.getWindowFromBlock(),
+                status.getWindowToBlock()
+        );
+        return false;
+    }
+
+    private boolean hasSegmentsForCurrentWindow(SyncStatus status) {
+        if (status == null || status.getId() == null) {
+            return false;
+        }
+        List<BackfillSegment> segments = backfillSegmentRepository.findBySyncStatusIdOrderBySegmentIndexAsc(status.getId());
+        if (segments.isEmpty()) {
+            return false;
+        }
+        if (status.getWindowFromBlock() == null || status.getWindowToBlock() == null) {
+            return true;
+        }
+        Long minFrom = segments.stream()
+                .map(BackfillSegment::getFromBlock)
+                .filter(Objects::nonNull)
+                .min(Comparator.naturalOrder())
+                .orElse(null);
+        Long maxTo = segments.stream()
+                .map(BackfillSegment::getToBlock)
+                .filter(Objects::nonNull)
+                .max(Comparator.naturalOrder())
+                .orElse(null);
+        return Objects.equals(minFrom, status.getWindowFromBlock())
+                && Objects.equals(maxTo, status.getWindowToBlock());
     }
 }

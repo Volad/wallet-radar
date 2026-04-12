@@ -462,8 +462,8 @@ walletradar:
       allowed-origins:
         - http://localhost:4200
         - http://127.0.0.1:4200
-        - http://localhost:4202
-        - http://127.0.0.1:4202
+        - http://localhost:4206
+        - http://127.0.0.1:4206
       allowed-methods:
         - GET
         - POST

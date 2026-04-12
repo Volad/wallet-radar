@@ -34,6 +34,7 @@ import java.util.Optional;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.groups.Tuple.tuple;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
@@ -191,6 +192,138 @@ class LiFiBridgePairLinkServiceTest {
     }
 
     @Test
+    @DisplayName("route-proven LI.FI source keeps only the dominant stable inbound leg as bridge transfer")
+    void routeProvenLiFiSourceKeepsOnlyDominantStableInboundLegAsBridgeTransfer() {
+        RawTransaction sourceRaw = sourceRawTransaction(
+                "0x8b471042fca30390a7d9b4a41463c01c2059b37df2d064cecc588a564e2ee032",
+                NetworkId.MANTLE
+        );
+        NormalizedTransaction source = bridgeOut(
+                "0x8b471042fca30390a7d9b4a41463c01c2059b37df2d064cecc588a564e2ee032",
+                NetworkId.MANTLE,
+                "USDe",
+                "0x5d3a1ff2b6bab83b63cd9ad0787074081a52ef34",
+                "-862.746015934355611461"
+        );
+        source.setBlockTimestamp(Instant.parse("2025-09-29T12:14:08Z"));
+
+        NormalizedTransaction destination = tx(
+                "0x826189720417ce31b983c2c7bb79f04ba4e330df80a0c016dab2bbee2fd61269",
+                NetworkId.ARBITRUM,
+                NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flow(NormalizedLegRole.BUY, "USD₮0", "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9", "862.833378"),
+                flow(NormalizedLegRole.BUY, "ETH", null, "0.013689")
+        );
+        destination.setBlockTimestamp(Instant.parse("2025-09-29T12:19:30Z"));
+        destination.setTransactionIndex(2);
+
+        when(liFiStatusGateway.fetchBridgeStatus(source.getTxHash()))
+                .thenReturn(Optional.of(new LiFiBridgeStatus(
+                        source.getTxHash(),
+                        destination.getTxHash(),
+                        NetworkId.ARBITRUM,
+                        "DONE",
+                        "COMPLETED"
+                )));
+        when(normalizedTransactionRepository.findAllByTxHashAndNetworkIdAndSource(
+                destination.getTxHash(),
+                NetworkId.ARBITRUM,
+                NormalizedTransactionSource.ON_CHAIN
+        )).thenReturn(List.of(destination));
+
+        service.link(sourceRaw, source);
+
+        assertThat(source.getContinuityCandidate()).isFalse();
+        assertThat(destination.getType()).isEqualTo(NormalizedTransactionType.BRIDGE_IN);
+        assertThat(destination.getContinuityCandidate()).isFalse();
+        assertThat(destination.getFlows())
+                .extracting(NormalizedTransaction.Flow::getRole, NormalizedTransaction.Flow::getAssetSymbol)
+                .containsExactly(
+                        tuple(NormalizedLegRole.TRANSFER, "USD₮0"),
+                        tuple(NormalizedLegRole.BUY, "ETH")
+                );
+    }
+
+    @Test
+    @DisplayName("later LI.FI source cannot overwrite an already materialized reciprocal destination pair")
+    void laterLiFiSourceCannotOverwriteAlreadyMaterializedReciprocalDestinationPair() {
+        RawTransaction principalSourceRaw = sourceRawTransaction(
+                "0x8b471042fca30390a7d9b4a41463c01c2059b37df2d064cecc588a564e2ee032",
+                NetworkId.MANTLE
+        );
+        NormalizedTransaction principalSource = bridgeOut(
+                "0x8b471042fca30390a7d9b4a41463c01c2059b37df2d064cecc588a564e2ee032",
+                NetworkId.MANTLE,
+                "USDe",
+                "0x5d3a1ff2b6bab83b63cd9ad0787074081a52ef34",
+                "-862.746015934355611461"
+        );
+        principalSource.setBlockTimestamp(Instant.parse("2025-09-29T12:14:08Z"));
+        principalSource.setTransactionIndex(1);
+
+        RawTransaction topUpSourceRaw = sourceRawTransaction(
+                "0x585aefbf6646c0b978a6ea4e1dc1dd411e28dd394fef7100932a61d24cf53a3b",
+                NetworkId.MANTLE
+        );
+        NormalizedTransaction topUpSource = bridgeOut(
+                "0x585aefbf6646c0b978a6ea4e1dc1dd411e28dd394fef7100932a61d24cf53a3b",
+                NetworkId.MANTLE,
+                "WETH",
+                "0xdeaddeaddeaddeaddeaddeaddeaddeaddead1111",
+                "-0.01371"
+        );
+        topUpSource.setBlockTimestamp(Instant.parse("2025-09-29T12:15:52Z"));
+        topUpSource.setTransactionIndex(2);
+
+        NormalizedTransaction destination = tx(
+                "0x826189720417ce31b983c2c7bb79f04ba4e330df80a0c016dab2bbee2fd61269",
+                NetworkId.ARBITRUM,
+                NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flow(NormalizedLegRole.BUY, "USD₮0", "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9", "862.833378"),
+                flow(NormalizedLegRole.BUY, "ETH", null, "0.013689")
+        );
+        destination.setBlockTimestamp(Instant.parse("2025-09-29T12:19:30Z"));
+        destination.setTransactionIndex(2);
+
+        when(liFiStatusGateway.fetchBridgeStatus(principalSource.getTxHash()))
+                .thenReturn(Optional.of(new LiFiBridgeStatus(
+                        principalSource.getTxHash(),
+                        destination.getTxHash(),
+                        NetworkId.ARBITRUM,
+                        "DONE",
+                        "COMPLETED"
+                )));
+        when(liFiStatusGateway.fetchBridgeStatus(topUpSource.getTxHash()))
+                .thenReturn(Optional.of(new LiFiBridgeStatus(
+                        topUpSource.getTxHash(),
+                        destination.getTxHash(),
+                        NetworkId.ARBITRUM,
+                        "DONE",
+                        "COMPLETED"
+                )));
+        when(normalizedTransactionRepository.findAllByTxHashAndNetworkIdAndSource(
+                destination.getTxHash(),
+                NetworkId.ARBITRUM,
+                NormalizedTransactionSource.ON_CHAIN
+        )).thenReturn(List.of(destination));
+
+        service.link(principalSourceRaw, principalSource);
+        service.link(topUpSourceRaw, topUpSource);
+
+        assertThat(destination.getMatchedCounterparty()).isEqualTo(principalSource.getTxHash());
+        assertThat(destination.getCorrelationId()).isEqualTo("bridge:lifi:" + principalSource.getTxHash());
+        assertThat(destination.getFlows())
+                .extracting(NormalizedTransaction.Flow::getRole, NormalizedTransaction.Flow::getAssetSymbol)
+                .containsExactly(
+                        tuple(NormalizedLegRole.TRANSFER, "USD₮0"),
+                        tuple(NormalizedLegRole.BUY, "ETH")
+                );
+        assertThat(principalSource.getMatchedCounterparty()).isEqualTo(destination.getTxHash());
+        assertThat(topUpSource.getMatchedCounterparty()).isNull();
+        assertThat(topUpSource.getCorrelationId()).isNull();
+    }
+
+    @Test
     @DisplayName("destination arrival links previously seeded LI.FI source and enables continuity only for plain same-asset carry")
     void destinationArrivalLinksPreviouslySeededLiFiSourceAndEnablesContinuityOnlyForPlainSameAssetCarry() {
         RawTransaction destinationRaw = new RawTransaction();
@@ -320,6 +453,74 @@ class LiFiBridgePairLinkServiceTest {
     }
 
     @Test
+    @DisplayName("official LI.FI status seeds source anchor and allows later destination materialization")
+    void officialStatusWithoutMaterializedDestinationSeedsSourceAnchorForLaterRetry() {
+        RawTransaction sourceRaw = sourceRawTransaction(
+                "0x6c5bd905efe5f9c4b35110c9269e333acddab0ac051dcc418ec68ed954e41784",
+                NetworkId.ARBITRUM
+        );
+        NormalizedTransaction source = bridgeOut(
+                "0x6c5bd905efe5f9c4b35110c9269e333acddab0ac051dcc418ec68ed954e41784",
+                NetworkId.ARBITRUM,
+                "USDC",
+                "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
+                "-10"
+        );
+
+        when(liFiStatusGateway.fetchBridgeStatus(source.getTxHash()))
+                .thenReturn(Optional.of(new LiFiBridgeStatus(
+                        source.getTxHash(),
+                        "0x75d595a7a2e59b2c4f7f70f5114c56d7b271dbd639c09fdc9e7d078fd9b162e4",
+                        NetworkId.OPTIMISM,
+                        "DONE",
+                        "COMPLETED"
+                )));
+        when(normalizedTransactionRepository.findAllByMatchedCounterpartyAndSource(
+                "0x6c5bd905efe5f9c4b35110c9269e333acddab0ac051dcc418ec68ed954e41784",
+                NormalizedTransactionSource.ON_CHAIN
+        )).thenReturn(List.of());
+        when(normalizedTransactionRepository.findAllByMatchedCounterpartyAndSource(
+                "0x75d595a7a2e59b2c4f7f70f5114c56d7b271dbd639c09fdc9e7d078fd9b162e4",
+                NormalizedTransactionSource.ON_CHAIN
+        )).thenReturn(List.of(source));
+        when(normalizedTransactionRepository.findAllByTxHashAndNetworkIdAndSource(
+                "0x75d595a7a2e59b2c4f7f70f5114c56d7b271dbd639c09fdc9e7d078fd9b162e4",
+                NetworkId.OPTIMISM,
+                NormalizedTransactionSource.ON_CHAIN
+        )).thenReturn(List.of());
+        when(liFiReceivingTransactionDiscoveryService.findOrDiscover(any())).thenReturn(Optional.empty());
+
+        service.link(sourceRaw, source);
+
+        verify(rawTransactionRepository).save(sourceRaw);
+        verify(normalizedTransactionRepository).save(source);
+        verify(normalizedTransactionRepository, never()).saveAll(any());
+        assertThat(source.getMatchedCounterparty()).isEqualTo("0x75d595a7a2e59b2c4f7f70f5114c56d7b271dbd639c09fdc9e7d078fd9b162e4");
+        assertThat(source.getCorrelationId()).isEqualTo("bridge:lifi:" + source.getTxHash());
+        assertThat(source.getContinuityCandidate()).isNull();
+
+        RawTransaction destinationRaw = sourceRawTransaction(
+                "0x75d595a7a2e59b2c4f7f70f5114c56d7b271dbd639c09fdc9e7d078fd9b162e4",
+                NetworkId.OPTIMISM
+        );
+        NormalizedTransaction destination = externalTransferInForWallet(
+                "0x75d595a7a2e59b2c4f7f70f5114c56d7b271dbd639c09fdc9e7d078fd9b162e4",
+                NetworkId.OPTIMISM,
+                WALLET,
+                "USDC",
+                "0x0b2c639c533813f4aa9d7837caf62653d097ff85",
+                "9.99"
+        );
+        when(rawTransactionRepository.findById(destination.getId())).thenReturn(Optional.of(destinationRaw));
+
+        service.link(destinationRaw, destination);
+
+        assertThat(destination.getType()).isEqualTo(NormalizedTransactionType.BRIDGE_IN);
+        assertThat(destination.getMatchedCounterparty()).isEqualTo(source.getTxHash());
+        assertThat(destination.getCorrelationId()).isEqualTo(source.getCorrelationId());
+    }
+
+    @Test
     @DisplayName("existing LI.FI UNKNOWN destination artifacts are ignored and not materialized into bridge pairs")
     void existingUnknownDestinationArtifactsAreIgnored() {
         RawTransaction sourceRaw = sourceRawTransaction(
@@ -358,9 +559,12 @@ class LiFiBridgePairLinkServiceTest {
 
         service.link(sourceRaw, source);
 
+        verify(rawTransactionRepository).save(sourceRaw);
         verify(liFiReceivingTransactionDiscoveryService).findOrDiscover(any());
+        verify(normalizedTransactionRepository).save(source);
         verify(normalizedTransactionRepository, never()).saveAll(any());
         assertThat(source.getMatchedCounterparty()).isEqualTo(unknownDestination.getTxHash());
+        assertThat(source.getCorrelationId()).isEqualTo("bridge:lifi:" + source.getTxHash());
         assertThat(source.getContinuityCandidate()).isNull();
     }
 
@@ -523,6 +727,110 @@ class LiFiBridgePairLinkServiceTest {
         assertThat(source.getCorrelationId()).isEqualTo("bridge:lifi:" + source.getTxHash());
         assertThat(destination.getType()).isEqualTo(NormalizedTransactionType.BRIDGE_IN);
         assertThat(destination.getProtocolName()).isEqualTo("Relay");
+        assertThat(destination.getMatchedCounterparty()).isEqualTo(source.getTxHash());
+        assertThat(destination.getCorrelationId()).isEqualTo(source.getCorrelationId());
+        assertThat(destination.getContinuityCandidate()).isTrue();
+    }
+
+    @Test
+    @DisplayName("official-status miss falls back to unique same-user bridge destination even without recognized settlement entry")
+    void officialStatusMissFallsBackToUniqueSameUserDestinationWithoutSettlementEntry() {
+        RawTransaction sourceRaw = sourceRawTransaction(
+                "0xb9ad84bba02b46c1b0bf2f01d1a05f98d4c886bae36c5487411f80892f3f894a",
+                NetworkId.BASE
+        );
+        NormalizedTransaction source = bridgeOut(
+                "0xb9ad84bba02b46c1b0bf2f01d1a05f98d4c886bae36c5487411f80892f3f894a",
+                NetworkId.BASE,
+                "ETH",
+                null,
+                "-0.009"
+        );
+        source.setBlockTimestamp(Instant.parse("2026-01-31T21:16:59Z"));
+
+        RawTransaction destinationRaw = new RawTransaction();
+        destinationRaw.setId("0x1e793f25878c9c50d407565938190b49bb74f2456526ca7ba80d8d74ea0a3b99:ARBITRUM:" + WALLET);
+        destinationRaw.setTxHash("0x1e793f25878c9c50d407565938190b49bb74f2456526ca7ba80d8d74ea0a3b99");
+        destinationRaw.setNetworkId(NetworkId.ARBITRUM.name());
+        destinationRaw.setWalletAddress(WALLET);
+        destinationRaw.setRawData(new Document("input", "").append("explorer", new Document("tokenTransfers", List.of())));
+
+        NormalizedTransaction destination = externalTransferIn(
+                "0x1e793f25878c9c50d407565938190b49bb74f2456526ca7ba80d8d74ea0a3b99",
+                NetworkId.ARBITRUM,
+                "ETH",
+                null,
+                "0.00899936668456007"
+        );
+        destination.setBlockTimestamp(Instant.parse("2026-01-31T21:17:00Z"));
+        destination.setTransactionIndex(3);
+
+        when(liFiStatusGateway.fetchBridgeStatus(source.getTxHash())).thenReturn(Optional.empty());
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class))).thenReturn(List.of(destination));
+        when(rawTransactionRepository.findById(destination.getId())).thenReturn(Optional.of(destinationRaw));
+
+        service.link(sourceRaw, source);
+
+        ArgumentCaptor<List<NormalizedTransaction>> updatesCaptor = ArgumentCaptor.forClass(List.class);
+        verify(normalizedTransactionRepository).saveAll(updatesCaptor.capture());
+        assertThat(updatesCaptor.getValue()).extracting(NormalizedTransaction::getTxHash)
+                .containsExactlyInAnyOrder(source.getTxHash(), destination.getTxHash());
+        assertThat(source.getMatchedCounterparty()).isEqualTo(destination.getTxHash());
+        assertThat(source.getCorrelationId()).isEqualTo("bridge:lifi:" + source.getTxHash());
+        assertThat(destination.getType()).isEqualTo(NormalizedTransactionType.BRIDGE_IN);
+        assertThat(destination.getMatchedCounterparty()).isEqualTo(source.getTxHash());
+        assertThat(destination.getCorrelationId()).isEqualTo(source.getCorrelationId());
+        assertThat(destination.getContinuityCandidate()).isTrue();
+    }
+
+    @Test
+    @DisplayName("official-status miss falls back to same-user family-equivalent destination within ninety seconds")
+    void officialStatusMissFallsBackToSameUserFamilyEquivalentDestinationWithinNinetySeconds() {
+        RawTransaction sourceRaw = sourceRawTransaction(
+                "0x257c2642e382832ff37bcfad14c1a2845a55bb52fbb1131b91337f1bd956929e",
+                NetworkId.OPTIMISM
+        );
+        NormalizedTransaction source = bridgeOut(
+                "0x257c2642e382832ff37bcfad14c1a2845a55bb52fbb1131b91337f1bd956929e",
+                NetworkId.OPTIMISM,
+                "USDT0",
+                "0x01bff41798a0bcf287b996046ca68b395dbc1071",
+                "-1.384096"
+        );
+        source.setBlockTimestamp(Instant.parse("2025-06-06T06:25:39Z"));
+        source.setTransactionIndex(19);
+
+        RawTransaction destinationRaw = new RawTransaction();
+        destinationRaw.setId("0x3d34d0f2ff9005294dd9fff30117fe47fa33c93f1e5820570c8c7ce9a66724ff:UNICHAIN:" + WALLET);
+        destinationRaw.setTxHash("0x3d34d0f2ff9005294dd9fff30117fe47fa33c93f1e5820570c8c7ce9a66724ff");
+        destinationRaw.setNetworkId(NetworkId.UNICHAIN.name());
+        destinationRaw.setWalletAddress(WALLET);
+        destinationRaw.setRawData(new Document("input", "deprecated")
+                .append("explorer", new Document("tokenTransfers", List.of())));
+
+        NormalizedTransaction destination = externalTransferIn(
+                "0x3d34d0f2ff9005294dd9fff30117fe47fa33c93f1e5820570c8c7ce9a66724ff",
+                NetworkId.UNICHAIN,
+                "USD₮0",
+                "0x9151434b16b9763660705744891fa906f660ecc5",
+                "1.383958"
+        );
+        destination.setBlockTimestamp(Instant.parse("2025-06-06T06:26:52Z"));
+        destination.setTransactionIndex(1);
+
+        when(liFiStatusGateway.fetchBridgeStatus(source.getTxHash())).thenReturn(Optional.empty());
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class))).thenReturn(List.of(destination));
+        when(rawTransactionRepository.findById(destination.getId())).thenReturn(Optional.of(destinationRaw));
+
+        service.link(sourceRaw, source);
+
+        ArgumentCaptor<List<NormalizedTransaction>> updatesCaptor = ArgumentCaptor.forClass(List.class);
+        verify(normalizedTransactionRepository).saveAll(updatesCaptor.capture());
+        assertThat(updatesCaptor.getValue()).extracting(NormalizedTransaction::getTxHash)
+                .containsExactlyInAnyOrder(source.getTxHash(), destination.getTxHash());
+        assertThat(source.getMatchedCounterparty()).isEqualTo(destination.getTxHash());
+        assertThat(source.getCorrelationId()).isEqualTo("bridge:lifi:" + source.getTxHash());
+        assertThat(destination.getType()).isEqualTo(NormalizedTransactionType.BRIDGE_IN);
         assertThat(destination.getMatchedCounterparty()).isEqualTo(source.getTxHash());
         assertThat(destination.getCorrelationId()).isEqualTo(source.getCorrelationId());
         assertThat(destination.getContinuityCandidate()).isTrue();

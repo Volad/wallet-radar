@@ -91,6 +91,73 @@ class BatchPriceQuoteResolverTest {
     }
 
     @Test
+    void prepareSkipsStablecoinParityRowsFromExternalPrefetch() {
+        HistoricalPriceCacheService cacheService = new HistoricalPriceCacheService(historicalPriceRepository, mongoTemplate);
+        BatchPriceQuoteResolver resolver = new BatchPriceQuoteResolver(
+                cacheService,
+                priceExternalSourceOrchestrator,
+                pricingProperties,
+                directExecutor()
+        );
+
+        BatchPriceQuoteResolver.BatchQuotePlan plan = resolver.prepare(List.of(bybitStablecoinTransfer("tx-usdt")));
+
+        assertThat(plan.quoteCache()).isEmpty();
+        assertThat(plan.stagedDocuments()).isEmpty();
+        verify(priceExternalSourceOrchestrator, never()).prioritizedSources(any());
+        verify(priceExternalSourceOrchestrator, never()).resolveExternalOnly(any());
+    }
+
+    @Test
+    void prepareSkipsOnChainStablecoinParityRowsFromExternalPrefetch() {
+        HistoricalPriceCacheService cacheService = new HistoricalPriceCacheService(historicalPriceRepository, mongoTemplate);
+        BatchPriceQuoteResolver resolver = new BatchPriceQuoteResolver(
+                cacheService,
+                priceExternalSourceOrchestrator,
+                pricingProperties,
+                directExecutor()
+        );
+
+        BatchPriceQuoteResolver.BatchQuotePlan plan = resolver.prepare(List.of(onChainStablecoinTransfer("tx-usdt")));
+
+        assertThat(plan.quoteCache()).isEmpty();
+        assertThat(plan.stagedDocuments()).isEmpty();
+        verify(priceExternalSourceOrchestrator, never()).prioritizedSources(any());
+        verify(priceExternalSourceOrchestrator, never()).resolveExternalOnly(any());
+    }
+
+    @Test
+    void preparePrefetchesAsyncDexOrderRequestPrincipalQuote() {
+        HistoricalPriceCacheService cacheService = new HistoricalPriceCacheService(historicalPriceRepository, mongoTemplate);
+        BatchPriceQuoteResolver resolver = new BatchPriceQuoteResolver(
+                cacheService,
+                priceExternalSourceOrchestrator,
+                pricingProperties,
+                directExecutor()
+        );
+        NormalizedTransaction transaction = pendingDexOrderRequest("tx-dex-request");
+        PriceRequest request = priceRequest(transaction);
+
+        when(priceExternalSourceOrchestrator.prioritizedSources(any())).thenReturn(List.of(PriceSource.BYBIT));
+        when(historicalPriceRepository.findAllById(anyCollection())).thenReturn(List.of());
+        when(priceExternalSourceOrchestrator.resolveExternalOnly(any())).thenReturn(Optional.of(new PriceQuote(
+                new BigDecimal("2500"),
+                PriceSource.BYBIT,
+                Instant.parse("2026-03-25T10:00:00Z"),
+                "USD",
+                "ETHUSDT"
+        )));
+
+        BatchPriceQuoteResolver.BatchQuotePlan plan = resolver.prepare(List.of(transaction));
+        Optional<PriceQuote> resolved = resolver.resolve(request, plan);
+
+        assertThat(resolved).isPresent();
+        assertThat(resolved.orElseThrow().unitPriceUsd()).isEqualByComparingTo("2500");
+        assertThat(plan.stagedDocuments()).hasSize(1);
+        verify(priceExternalSourceOrchestrator, times(1)).resolveExternalOnly(any());
+    }
+
+    @Test
     void resolveDeduplicatesMissingQuoteFetchAndPersistsNewQuotesInBulk() {
         HistoricalPriceCacheService cacheService = new HistoricalPriceCacheService(historicalPriceRepository, mongoTemplate);
         BatchPriceQuoteResolver resolver = new BatchPriceQuoteResolver(
@@ -160,12 +227,75 @@ class BatchPriceQuoteResolverTest {
         return transaction;
     }
 
+    private NormalizedTransaction bybitStablecoinTransfer(String id) {
+        NormalizedTransaction transaction = new NormalizedTransaction();
+        transaction.setId(id);
+        transaction.setTxHash("0xhash-" + id);
+        transaction.setNetworkId(NetworkId.ARBITRUM);
+        transaction.setWalletAddress("BYBIT:33625378");
+        transaction.setSource(NormalizedTransactionSource.BYBIT);
+        transaction.setType(NormalizedTransactionType.EXTERNAL_TRANSFER_OUT);
+        transaction.setStatus(NormalizedTransactionStatus.PENDING_PRICE);
+        transaction.setBlockTimestamp(Instant.parse("2026-02-02T06:15:03Z"));
+        transaction.setFlows(List.of(stablecoinFlow()));
+        return transaction;
+    }
+
+    private NormalizedTransaction onChainStablecoinTransfer(String id) {
+        NormalizedTransaction transaction = new NormalizedTransaction();
+        transaction.setId(id);
+        transaction.setTxHash("0xhash-" + id);
+        transaction.setNetworkId(NetworkId.ARBITRUM);
+        transaction.setWalletAddress("0xwallet");
+        transaction.setSource(NormalizedTransactionSource.ON_CHAIN);
+        transaction.setType(NormalizedTransactionType.EXTERNAL_TRANSFER_OUT);
+        transaction.setStatus(NormalizedTransactionStatus.PENDING_PRICE);
+        transaction.setBlockTimestamp(Instant.parse("2026-02-02T06:15:03Z"));
+        transaction.setFlows(List.of(stablecoinFlow()));
+        return transaction;
+    }
+
+    private NormalizedTransaction pendingDexOrderRequest(String id) {
+        NormalizedTransaction transaction = new NormalizedTransaction();
+        transaction.setId(id);
+        transaction.setTxHash("0xhash-" + id);
+        transaction.setNetworkId(NetworkId.ARBITRUM);
+        transaction.setWalletAddress("0xwallet");
+        transaction.setSource(NormalizedTransactionSource.ON_CHAIN);
+        transaction.setType(NormalizedTransactionType.DEX_ORDER_REQUEST);
+        transaction.setStatus(NormalizedTransactionStatus.PENDING_PRICE);
+        transaction.setBlockTimestamp(Instant.parse("2026-03-25T10:00:40Z"));
+        transaction.setCorrelationId("cow-order:1");
+        transaction.setFlows(List.of(
+                flow(),
+                feeFlow()
+        ));
+        return transaction;
+    }
+
     private NormalizedTransaction.Flow flow() {
         NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
         flow.setRole(NormalizedLegRole.SELL);
         flow.setAssetContract("0xasset");
         flow.setAssetSymbol("TOKEN");
         flow.setQuantityDelta(new BigDecimal("-1"));
+        return flow;
+    }
+
+    private NormalizedTransaction.Flow feeFlow() {
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(NormalizedLegRole.FEE);
+        flow.setAssetContract("0xasset");
+        flow.setAssetSymbol("TOKEN");
+        flow.setQuantityDelta(new BigDecimal("-0.01"));
+        return flow;
+    }
+
+    private NormalizedTransaction.Flow stablecoinFlow() {
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(NormalizedLegRole.SELL);
+        flow.setAssetSymbol("USDT");
+        flow.setQuantityDelta(new BigDecimal("-220"));
         return flow;
     }
 

@@ -36,6 +36,8 @@ data/
 raw_data/
 tmp/
 *.log
+handoff/
+auto-loop-handoff/
 
 # Local secrets / backups
 .secrets/

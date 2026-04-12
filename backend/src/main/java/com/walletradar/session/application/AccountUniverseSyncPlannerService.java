@@ -50,7 +50,11 @@ public class AccountUniverseSyncPlannerService {
             accountingUniverseSyncService.sync(session, observedAt);
             clearDerivedState(session);
             SourceSyncPlanner.PlanResult planResult = sourceSyncPlanner.planUniverseChange(session, observedAt);
-            backfillJobPlanner.planPendingSessionSources(session);
+            backfillJobPlanner.planScheduledSessionSources(
+                    session,
+                    planResult.scheduledOnChainSyncStatusIds(),
+                    planResult.scheduledIntegrationSyncStatusIds()
+            );
             session.setUpdatedAt(observedAt);
             userSessionRepository.save(session);
 

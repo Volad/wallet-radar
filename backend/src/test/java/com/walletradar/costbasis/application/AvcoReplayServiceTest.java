@@ -1168,6 +1168,53 @@ class AvcoReplayServiceTest {
     }
 
     @Test
+    void assetChangingBridgeSettlementIgnoresSecondaryBuyLegOnDestination() {
+        NormalizedTransaction principalBuy = tx("1", "0xusde-buy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flowWithContract(NormalizedLegRole.BUY, "USDe", "0xusde", "100", "1", PriceSource.STABLECOIN));
+        principalBuy.setWalletAddress("wallet-a");
+        principalBuy.setNetworkId(NetworkId.MANTLE);
+
+        NormalizedTransaction bridgeOut = tx("2", "0xbridge-out", 1, NormalizedTransactionType.BRIDGE_OUT,
+                flowWithContract(NormalizedLegRole.TRANSFER, "USDe", "0xusde", "-100", null, null));
+        bridgeOut.setWalletAddress("wallet-a");
+        bridgeOut.setNetworkId(NetworkId.MANTLE);
+        bridgeOut.setCorrelationId("bridge:lifi:route-settlement");
+        bridgeOut.setContinuityCandidate(false);
+        bridgeOut.setMatchedCounterparty("0xbridge-in");
+
+        NormalizedTransaction bridgeIn = tx("3", "0xbridge-in", 2, NormalizedTransactionType.BRIDGE_IN,
+                flowWithContract(NormalizedLegRole.TRANSFER, "USD₮0", "0xusdt0", "99.9", null, null),
+                flow(NormalizedLegRole.BUY, "ETH", "0.01", "30", PriceSource.BINANCE));
+        bridgeIn.setWalletAddress("wallet-a");
+        bridgeIn.setNetworkId(NetworkId.ARBITRUM);
+        bridgeIn.setCorrelationId("bridge:lifi:route-settlement");
+        bridgeIn.setContinuityCandidate(false);
+        bridgeIn.setMatchedCounterparty("0xbridge-out");
+
+        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                NormalizedTransactionStatus.CONFIRMED
+        )).thenReturn(List.of(principalBuy, bridgeOut, bridgeIn));
+
+        service().replayConfirmed();
+
+        List<AssetLedgerPoint> points = capturedLedgerPoints();
+        AssetLedgerPoint stableDestination = latestPoint(points, "wallet-a", NetworkId.ARBITRUM, "USD₮0", "0xusdt0");
+        AssetLedgerPoint bonusEth = latestPoint(points, "wallet-a", NetworkId.ARBITRUM, "ETH", null);
+        assertThat(stableDestination.getQuantityAfter()).isEqualByComparingTo("99.9");
+        assertThat(stableDestination.getBasisBackedQuantityAfter()).isEqualByComparingTo("99.9");
+        assertThat(stableDestination.getUncoveredQuantityAfter()).isZero();
+        assertThat(stableDestination.getTotalCostBasisAfterUsd()).isEqualByComparingTo("100");
+        assertThat(stableDestination.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.REALLOCATE_IN);
+
+        assertThat(bonusEth.getQuantityAfter()).isEqualByComparingTo("0.01");
+        assertThat(bonusEth.getBasisBackedQuantityAfter()).isEqualByComparingTo("0.01");
+        assertThat(bonusEth.getUncoveredQuantityAfter()).isZero();
+        assertThat(bonusEth.getTotalCostBasisAfterUsd()).isEqualByComparingTo("0.30");
+        assertThat(bonusEth.getAvcoAfterUsd()).isEqualByComparingTo("30");
+        assertThat(bonusEth.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.ACQUIRE);
+    }
+
+    @Test
     void simpleFamilyEquivalentDepositCarriesBasisWhenReceiptFlowPrecedesPrincipalOut() {
         NormalizedTransaction buy = tx("1", "0xbuy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
                 flow(NormalizedLegRole.BUY, "ETH", "0.798", "2454.911612404057700588861163058142", PriceSource.BINANCE));
@@ -1520,10 +1567,99 @@ class AvcoReplayServiceTest {
     }
 
     private AvcoReplayService service() {
+        com.walletradar.costbasis.application.replay.support.ReplayAssetSupport assetSupport =
+                new com.walletradar.costbasis.application.replay.support.ReplayAssetSupport();
+        com.walletradar.costbasis.application.replay.support.GenericFlowReplayEngine genericFlowReplayEngine =
+                new com.walletradar.costbasis.application.replay.support.GenericFlowReplayEngine();
+        com.walletradar.costbasis.application.replay.support.ReplayFlowSupport replayFlowSupport =
+                new com.walletradar.costbasis.application.replay.support.ReplayFlowSupport(genericFlowReplayEngine);
+        com.walletradar.costbasis.application.replay.support.ContinuityCarryService continuityCarryService =
+                new com.walletradar.costbasis.application.replay.support.ContinuityCarryService(
+                        genericFlowReplayEngine,
+                        replayFlowSupport
+                );
+        com.walletradar.costbasis.application.replay.support.ReplayPendingTransferKeyFactory keyFactory =
+                new com.walletradar.costbasis.application.replay.support.ReplayPendingTransferKeyFactory(assetSupport);
+        com.walletradar.costbasis.application.replay.support.ReplayTransferClassifier transferClassifier =
+                new com.walletradar.costbasis.application.replay.support.ReplayTransferClassifier(keyFactory);
+        com.walletradar.costbasis.application.replay.support.ReplayPendingTransferMatcher pendingTransferMatcher =
+                new com.walletradar.costbasis.application.replay.support.ReplayPendingTransferMatcher();
+        com.walletradar.costbasis.application.replay.support.ReplaySettlementAllocator settlementAllocator =
+                new com.walletradar.costbasis.application.replay.support.ReplaySettlementAllocator(
+                        assetSupport,
+                        replayFlowSupport
+                );
+        com.walletradar.costbasis.application.replay.handler.TransferReplayHandler transferReplayHandler =
+                new com.walletradar.costbasis.application.replay.handler.TransferReplayHandler(
+                        replayFlowSupport,
+                        continuityCarryService,
+                        keyFactory,
+                        transferClassifier,
+                        pendingTransferMatcher
+                );
+        com.walletradar.costbasis.application.replay.handler.LiquidStakingReplayHandler liquidStakingReplayHandler =
+                new com.walletradar.costbasis.application.replay.handler.LiquidStakingReplayHandler(
+                        assetSupport,
+                        replayFlowSupport,
+                        settlementAllocator
+                );
+        com.walletradar.costbasis.application.replay.handler.FamilyEquivalentCustodyReplayHandler familyReplayHandler =
+                new com.walletradar.costbasis.application.replay.handler.FamilyEquivalentCustodyReplayHandler(
+                        assetSupport,
+                        replayFlowSupport,
+                        continuityCarryService
+                );
+        com.walletradar.costbasis.application.replay.handler.GenericAsyncLifecycleReplayHandler genericAsyncLifecycleReplayHandler =
+                new com.walletradar.costbasis.application.replay.handler.GenericAsyncLifecycleReplayHandler(
+                        assetSupport,
+                        replayFlowSupport,
+                        settlementAllocator
+                );
+        com.walletradar.costbasis.application.replay.handler.GmxLpEntryReplayHandler gmxLpEntryReplayHandler =
+                new com.walletradar.costbasis.application.replay.handler.GmxLpEntryReplayHandler(
+                        assetSupport,
+                        replayFlowSupport,
+                        settlementAllocator
+                );
+        com.walletradar.costbasis.application.replay.handler.PositionScopedLpExitReplayHandler positionScopedLpExitReplayHandler =
+                new com.walletradar.costbasis.application.replay.handler.PositionScopedLpExitReplayHandler(
+                        assetSupport,
+                        replayFlowSupport,
+                        settlementAllocator
+                );
+        com.walletradar.costbasis.application.replay.handler.AsyncSpotOrderReplayHandler asyncSpotOrderReplayHandler =
+                new com.walletradar.costbasis.application.replay.handler.AsyncSpotOrderReplayHandler(
+                        assetSupport,
+                        replayFlowSupport
+                );
+        com.walletradar.costbasis.application.replay.handler.EulerLoopReplayHandler eulerLoopReplayHandler =
+                new com.walletradar.costbasis.application.replay.handler.EulerLoopReplayHandler(
+                        assetSupport,
+                        replayFlowSupport
+                );
+        com.walletradar.costbasis.application.replay.dispatch.ReplayDispatcher replayDispatcher =
+                new com.walletradar.costbasis.application.replay.dispatch.ReplayDispatcher(
+                        new com.walletradar.costbasis.application.replay.planning.ReplayTransactionRouter(),
+                        assetSupport,
+                        replayFlowSupport,
+                        transferClassifier,
+                        transferReplayHandler,
+                        liquidStakingReplayHandler,
+                        familyReplayHandler,
+                        genericAsyncLifecycleReplayHandler,
+                        gmxLpEntryReplayHandler,
+                        positionScopedLpExitReplayHandler,
+                        asyncSpotOrderReplayHandler,
+                        eulerLoopReplayHandler
+                );
         return new AvcoReplayService(
-                new ConfirmedReplayQueryService(normalizedTransactionRepository),
+                new com.walletradar.costbasis.application.replay.query.ConfirmedReplayQueryService(normalizedTransactionRepository),
                 normalizedTransactionRepository,
-                assetLedgerPointRepository
+                assetLedgerPointRepository,
+                new com.walletradar.costbasis.application.replay.planning.PassThroughCorridorPlanner(),
+                assetSupport,
+                replayFlowSupport,
+                replayDispatcher
         );
     }
 

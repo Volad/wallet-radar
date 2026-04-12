@@ -19,6 +19,7 @@ import org.springframework.stereotype.Component;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
@@ -53,7 +54,7 @@ public class BackfillNetworkExecutor {
                     .orElseThrow(() -> new IllegalStateException("sync_status not found for " + walletAddress + " " + networkIdStr));
             String syncStatusId = syncStatus.getId();
             List<BackfillSegment> allSegments = backfillSegmentRepository.findBySyncStatusIdOrderBySegmentIndexAsc(syncStatusId);
-            if (allSegments.isEmpty()) {
+            if (allSegments.isEmpty() || !segmentsMatchWindow(syncStatus, allSegments)) {
                 log.info("Backfill waiting for planner segments: wallet={}, network={}, syncStatusId={}",
                         walletAddress, networkIdStr, syncStatusId);
                 return;
@@ -294,6 +295,27 @@ public class BackfillNetworkExecutor {
                 .mapToInt(p -> p == null ? 0 : Math.max(0, Math.min(100, p)))
                 .sum();
         return Math.max(0, Math.min(100, total / segments.size()));
+    }
+
+    private boolean segmentsMatchWindow(SyncStatus syncStatus, List<BackfillSegment> segments) {
+        if (syncStatus == null || segments == null || segments.isEmpty()) {
+            return false;
+        }
+        if (syncStatus.getWindowFromBlock() == null || syncStatus.getWindowToBlock() == null) {
+            return true;
+        }
+        Long minFrom = segments.stream()
+                .map(BackfillSegment::getFromBlock)
+                .filter(Objects::nonNull)
+                .min(Comparator.naturalOrder())
+                .orElse(null);
+        Long maxTo = segments.stream()
+                .map(BackfillSegment::getToBlock)
+                .filter(Objects::nonNull)
+                .max(Comparator.naturalOrder())
+                .orElse(null);
+        return Objects.equals(minFrom, syncStatus.getWindowFromBlock())
+                && Objects.equals(maxTo, syncStatus.getWindowToBlock());
     }
 
     private long resolveEffectiveFromBlock(BackfillSegment segment) {

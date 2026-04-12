@@ -3,9 +3,9 @@ package com.walletradar.session.application;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.domain.session.UserSessionRepository;
-import com.walletradar.domain.sync.BackfillSegmentRepository;
 import com.walletradar.domain.sync.SyncStatus;
 import com.walletradar.domain.sync.SyncStatusRepository;
+import com.walletradar.ingestion.job.backfill.BackfillJobPlanner;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -35,6 +35,8 @@ class SessionRefreshCommandServiceTest {
     private SessionPipelineStateService sessionPipelineStateService;
     @Mock
     private SourceSyncPlanner sourceSyncPlanner;
+    @Mock
+    private BackfillJobPlanner backfillJobPlanner;
 
     private SessionRefreshCommandService sessionRefreshCommandService;
 
@@ -44,6 +46,7 @@ class SessionRefreshCommandServiceTest {
                 userSessionRepository,
                 syncStatusRepository,
                 sourceSyncPlanner,
+                backfillJobPlanner,
                 sessionPipelineStateService
         );
     }
@@ -77,7 +80,12 @@ class SessionRefreshCommandServiceTest {
         when(syncStatusRepository.findLatestByIntegrationId("BYBIT-33625378"))
                 .thenReturn(Optional.of(integrationStatus));
         when(sourceSyncPlanner.planRefresh(any(UserSession.class), any(Instant.class)))
-                .thenReturn(new SourceSyncPlanner.PlanResult(2, 0));
+                .thenReturn(new SourceSyncPlanner.PlanResult(
+                        2,
+                        0,
+                        List.of("sync-onchain-1"),
+                        List.of("sync-integration-1")
+                ));
 
         SessionRefreshCommandService.SessionRefreshResult result = sessionRefreshCommandService.refresh("session-1").orElseThrow();
 
@@ -85,6 +93,11 @@ class SessionRefreshCommandServiceTest {
         assertThat(result.scheduledTargets()).isEqualTo(2);
         assertThat(result.skippedTargets()).isZero();
         verify(sourceSyncPlanner).planRefresh(any(UserSession.class), any(Instant.class));
+        verify(backfillJobPlanner).planScheduledSessionSources(
+                session,
+                List.of("sync-onchain-1"),
+                List.of("sync-integration-1")
+        );
         verify(sessionPipelineStateService).markStageRunning("session-1", UserSession.PipelineStage.BACKFILL, "Incremental refresh queued");
         ArgumentCaptor<UserSession> sessionCaptor = ArgumentCaptor.forClass(UserSession.class);
         verify(userSessionRepository).save(sessionCaptor.capture());
@@ -117,6 +130,7 @@ class SessionRefreshCommandServiceTest {
         assertThat(result.scheduledTargets()).isZero();
         assertThat(result.skippedTargets()).isEqualTo(1);
         verify(sourceSyncPlanner).planRefresh(any(UserSession.class), any(Instant.class));
+        verify(backfillJobPlanner, never()).planScheduledSessionSources(any(UserSession.class), any(), any());
         verify(userSessionRepository, never()).save(any(UserSession.class));
         verify(sessionPipelineStateService, never()).markStageRunning(any(), any(), any());
     }

@@ -3,6 +3,7 @@ package com.walletradar.pricing.application;
 import com.walletradar.config.AsyncConfig;
 import com.walletradar.domain.common.PriceSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.pricing.domain.CanonicalAssetCatalog;
 import com.walletradar.pricing.domain.PriceQuote;
 import com.walletradar.pricing.domain.PriceRequest;
 import com.walletradar.pricing.domain.PriceResolutionContext;
@@ -207,6 +208,14 @@ public class BatchPriceQuoteResolver {
             for (int flowIndex = 0; flowIndex < transaction.getFlows().size(); flowIndex++) {
                 NormalizedTransaction.Flow flow = transaction.getFlows().get(flowIndex);
                 if (!PriceableFlowPolicy.requiresMarketPrice(transaction, flow)) {
+                    continue;
+                }
+                if (CanonicalAssetCatalog.isUsdStablecoin(
+                        transaction.getNetworkId(),
+                        flow.getAssetContract(),
+                        flow.getAssetSymbol(),
+                        transaction.getSource()
+                )) {
                     continue;
                 }
                 PriceRequest request = new PriceResolutionContext(

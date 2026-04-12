@@ -99,6 +99,8 @@ public final class CanonicalAssetCatalog {
             Map.entry("ALINWETH", "ETH"),
             Map.entry("AMANWETH", "ETH"),
             Map.entry("AZKSWETH", "ETH"),
+            Map.entry("VBETH", "ETH"),
+            Map.entry("YVVBETH", "ETH"),
             Map.entry("WBNB", "BNB"),
             Map.entry("WAVAX", "AVAX"),
             Map.entry("WMNT", "MNT"),
@@ -128,7 +130,7 @@ public final class CanonicalAssetCatalog {
             Map.entry("USDE", "ethena-usde"),
             Map.entry("EURC", "euro-coin"),
             Map.entry("CAKE", "pancakeswap-token"),
-            Map.entry("WSTETH", "wrapped-steth"),
+            Map.entry("WSTETH", "staked-ether"),
             Map.entry("STETH", "staked-ether"),
             Map.entry("CBETH", "coinbase-wrapped-staked-eth"),
             Map.entry("PENDLE", "pendle"),
@@ -142,6 +144,10 @@ public final class CanonicalAssetCatalog {
     private CanonicalAssetCatalog() {
     }
 
+    /**
+     * Returns true for contract-backed stablecoins and for symbol-only USD stablecoins
+     * that are already trusted by the accounting family contract.
+     */
     public static boolean isUsdStablecoin(
             NetworkId networkId,
             String assetContract,
@@ -152,8 +158,7 @@ public final class CanonicalAssetCatalog {
         if (normalizedContract != null) {
             return USD_STABLE_CONTRACTS.getOrDefault(networkId, Set.of()).contains(normalizedContract);
         }
-        return source == NormalizedTransactionSource.BYBIT
-                && assetSymbol != null
+        return assetSymbol != null
                 && USD_STABLE_SYMBOLS.contains(normalizeSymbol(assetSymbol));
     }
 

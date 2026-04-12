@@ -3,7 +3,7 @@ services:
     image: mongo:7
     container_name: walletradar-mongodb
     ports:
-      - "27017:27017"
+      - "27018:27017"
     volumes:
       - mongodb_data:/data/db
     environment:
@@ -33,7 +33,7 @@ services:
       mongodb:
         condition: service_healthy
     ports:
-      - "8082:8080"
+      - "8086:8080"
     restart: unless-stopped
 
   frontend:
@@ -47,11 +47,11 @@ services:
     volumes:
       - ./:/workspace
       - frontend_node_modules:/workspace/frontend/node_modules
-    command: ["sh", "-lc", "npm install && npm run start:local-compose -- --host 0.0.0.0 --port 4200 --public-host localhost:4202 --disable-host-check"]
+    command: ["sh", "-lc", "npm install && npm run start:local-compose -- --host 0.0.0.0 --port 4200 --public-host localhost:4206 --disable-host-check"]
     depends_on:
       - backend
     ports:
-      - "4202:4200"
+      - "4206:4200"
     restart: unless-stopped
 
 volumes:
