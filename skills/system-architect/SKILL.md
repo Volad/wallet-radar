@@ -57,6 +57,10 @@ Use [references/OUTPUT_TEMPLATE.md](references/OUTPUT_TEMPLATE.md). Always inclu
 ## Guardrails (Do Not Do)
 - Do not propose managed cloud databases or paid indexers for MVP.
 - Do not introduce microservices unless a clear scaling boundary is demonstrated.
+- Do not propose dataset-specific production logic keyed by real transaction hashes, wallet addresses, or hand-curated live buckets.
+- Use real transactions only as evidence or regression anchors for a generalized rule, never as the mechanism of correctness.
+- If current code appears to rely on such dataset-specific logic, require backend cleanup as part of the plan.
+- The only acceptable explicit unsupported carve-out is a requirement-defined unsupported network or asset family boundary, for example TON or SOL when out of scope, not a one-off transaction exception.
 - Do not write full implementation code; design only.
 
 ## References

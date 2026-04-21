@@ -87,6 +87,10 @@ All scheduled/background jobs must be:
 - No magic constants.
 - Explicit domain models and validation.
 - Deterministic business flow.
+- No dataset-specific production logic keyed by real transaction hashes, wallet addresses, or hand-curated live buckets for supported flows.
+- Use live transaction hashes only as evidence anchors in tests, comments, or artifacts, never as runtime decision keys.
+- When touching proof-critical logic, review adjacent code for existing transaction-specific exceptions and remove or replace them with generalized flow-based behavior.
+- Before sign-off on proof-critical changes, perform and record an explicit cleanup review for transaction-hash, wallet-specific, and dataset-derived exception logic on the affected path.
 - Safe retries and concurrency controls.
 - Structured logging.
 
@@ -96,6 +100,7 @@ Escalate instead of guessing when request crosses boundaries:
 - Business-rule change: hand off to `business-analyst`.
 - Accounting/classification rule change: involve `tx-classification-auditor`.
 - UI/UX/frontend request: out of scope for this skill.
+- Unsupported handling is acceptable only for explicit requirement-defined unsupported network or asset families, for example TON or SOL when out of scope, not for arbitrary live transactions.
 
 ## Required Output Format
 For each implementation response, include:
