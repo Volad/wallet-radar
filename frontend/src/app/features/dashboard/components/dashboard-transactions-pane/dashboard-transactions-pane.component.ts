@@ -12,6 +12,7 @@ import {
   NetworkInfo,
   PriceSource,
   PRICE_SOURCES,
+  TransactionFlow,
   TransactionItem,
   TransactionStatus,
   TransactionType,
@@ -333,7 +334,7 @@ export class DashboardTransactionsPaneComponent {
     if (matchedCounterparty === null) {
       return null;
     }
-    return tx.type === 'EXTERNAL_INBOUND' ? 'From' : 'To';
+    return this.isInboundTransaction(tx) ? 'From' : 'To';
   }
 
   isExternalLedgerAssociation(tx: TransactionItem): boolean {
@@ -486,6 +487,18 @@ export class DashboardTransactionsPaneComponent {
     return tx.flows.find((flow) => this.getSignedQuantity(flow) < 0) ?? null;
   }
 
+  getPreviewFlows(tx: TransactionItem): ReadonlyArray<TransactionFlow> {
+    const materialFlows = tx.flows.filter((flow) => flow.role !== 'FEE' && flow.quantity !== 0);
+    const outbound = materialFlows.filter((flow) => this.getSignedQuantity(flow) < 0);
+    const inbound = materialFlows.filter((flow) => this.getSignedQuantity(flow) > 0);
+    return (outbound.length > 0 ? outbound : inbound).slice(0, 1);
+  }
+
+  getHiddenPreviewFlowCount(tx: TransactionItem): number {
+    const materialFlowCount = tx.flows.filter((flow) => flow.role !== 'FEE' && flow.quantity !== 0).length;
+    return Math.max(0, materialFlowCount - this.getPreviewFlows(tx).length);
+  }
+
   getSignedQuantity(flow: { readonly role: FlowRole; readonly quantity: number; readonly signedQuantity?: number }): number {
     if (flow.signedQuantity !== undefined) {
       return flow.signedQuantity;
@@ -496,8 +509,23 @@ export class DashboardTransactionsPaneComponent {
     return Math.abs(flow.quantity);
   }
 
+  getAbsoluteSignedQuantity(flow: { readonly role: FlowRole; readonly quantity: number; readonly signedQuantity?: number }): number {
+    return Math.abs(this.getSignedQuantity(flow));
+  }
+
   getFlowPrefix(flow: { readonly role: FlowRole; readonly quantity: number; readonly signedQuantity?: number }): '+' | '-' {
     return this.getSignedQuantity(flow) < 0 ? '-' : '+';
+  }
+
+  shortReference(value: string | null | undefined): string {
+    const normalized = value?.trim() ?? '';
+    if (normalized.length <= 16) {
+      return normalized;
+    }
+    if (normalized.includes(':') && normalized.length > 28) {
+      return `${normalized.slice(0, 18)}…${normalized.slice(-8)}`;
+    }
+    return `${normalized.slice(0, 10)}…${normalized.slice(-6)}`;
   }
 
   formatUsd(value: number): string {
@@ -536,6 +564,10 @@ export class DashboardTransactionsPaneComponent {
       return 'Gas';
     }
     return value.replaceAll('_', ' ');
+  }
+
+  private isInboundTransaction(tx: TransactionItem): boolean {
+    return tx.type === 'EXTERNAL_INBOUND' || tx.type === 'EXTERNAL_TRANSFER_IN' || tx.type === 'BRIDGE_IN';
   }
 
   private updateDraft(transformer: (draft: EditableTransactionDraft) => EditableTransactionDraft): void {

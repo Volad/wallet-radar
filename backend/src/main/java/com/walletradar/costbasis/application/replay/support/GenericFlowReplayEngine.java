@@ -118,7 +118,7 @@ public class GenericFlowReplayEngine {
     public CarryTransfer removeFromPosition(NormalizedTransaction.Flow flow, PositionState position) {
         BigDecimal requestedQuantity = flow.getQuantityDelta().abs();
         BigDecimal avco = position.perWalletAvco();
-        QuantityConsumption consumption = consumeQuantity(position, requestedQuantity);
+        QuantityConsumption consumption = consumeQuantityCoveredFirst(position, requestedQuantity);
         BigDecimal cost = avco == null
                 ? BigDecimal.ZERO
                 : consumption.coveredQuantity().multiply(avco, MC);
@@ -181,6 +181,18 @@ public class GenericFlowReplayEngine {
     }
 
     public QuantityConsumption consumeQuantity(PositionState position, BigDecimal requestedQuantity) {
+        BigDecimal availableQuantity = position.quantity() == null ? BigDecimal.ZERO : position.quantity();
+        BigDecimal availableUncovered = position.uncoveredQuantity() == null ? BigDecimal.ZERO : position.uncoveredQuantity();
+        BigDecimal appliedQuantity = requestedQuantity.min(availableQuantity);
+        BigDecimal uncoveredQuantity = appliedQuantity.min(availableUncovered);
+        BigDecimal coveredQuantity = nonNegative(appliedQuantity.subtract(uncoveredQuantity, MC));
+        BigDecimal externalShortfallQuantity = nonNegative(requestedQuantity.subtract(appliedQuantity, MC));
+        position.setQuantity(nonNegative(availableQuantity.subtract(appliedQuantity, MC)));
+        position.setUncoveredQuantity(nonNegative(availableUncovered.subtract(uncoveredQuantity, MC)));
+        return new QuantityConsumption(appliedQuantity, coveredQuantity, uncoveredQuantity, externalShortfallQuantity);
+    }
+
+    private QuantityConsumption consumeQuantityCoveredFirst(PositionState position, BigDecimal requestedQuantity) {
         BigDecimal availableQuantity = position.quantity() == null ? BigDecimal.ZERO : position.quantity();
         BigDecimal availableUncovered = position.uncoveredQuantity() == null ? BigDecimal.ZERO : position.uncoveredQuantity();
         BigDecimal availableCovered = nonNegative(availableQuantity.subtract(availableUncovered, MC));

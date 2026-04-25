@@ -34,6 +34,18 @@ const phaseCoverage = {
   normalizedTransactions: db.getCollection('normalized_transactions').countDocuments({}),
   confirmed: db.getCollection('normalized_transactions').countDocuments({status: 'CONFIRMED'}),
   needsReview: db.getCollection('normalized_transactions').countDocuments({status: 'NEEDS_REVIEW'}),
+  blockingNeedsReview: db.getCollection('normalized_transactions').countDocuments({
+    status: 'NEEDS_REVIEW',
+    \$or: [{excludedFromAccounting: {\$exists: false}}, {excludedFromAccounting: false}]
+  }),
+  excludedNeedsReview: db.getCollection('normalized_transactions').countDocuments({
+    status: 'NEEDS_REVIEW',
+    excludedFromAccounting: true
+  }),
+  excludedConfirmed: db.getCollection('normalized_transactions').countDocuments({
+    status: 'CONFIRMED',
+    excludedFromAccounting: true
+  }),
   pendingClarification: db.getCollection('normalized_transactions').countDocuments({status: 'PENDING_CLARIFICATION'}),
   pendingPrice: db.getCollection('normalized_transactions').countDocuments({status: 'PENDING_PRICE'}),
   pendingStat: db.getCollection('normalized_transactions').countDocuments({status: 'PENDING_STAT'}),
@@ -50,6 +62,14 @@ const phaseCoverage = {
     \$or: [{matchedCounterparty: null}, {matchedCounterparty: ''}]
   })
 };
+
+const excludedNormalizedIds = db.getCollection('normalized_transactions')
+  .find({excludedFromAccounting: true}, {_id: 1})
+  .toArray()
+  .map(row => row._id);
+phaseCoverage.excludedLedgerPoints = excludedNormalizedIds.length === 0
+  ? 0
+  : db.getCollection('asset_ledger_points').countDocuments({normalizedTransactionId: {\$in: excludedNormalizedIds}});
 
 function toNum(value) {
   if (value === null || value === undefined) return 0;
@@ -112,12 +132,80 @@ db.getCollection('on_chain_balances')
 
 const exactCoverage = {};
 for (const symbol of mandatorySymbols) {
-  exactCoverage[symbol] = {current: 0, covered: 0, uncovered: 0, coverageRatio: 1, dirtyBuckets: 0};
+  exactCoverage[symbol] = {
+    current: 0,
+    covered: 0,
+    uncovered: 0,
+    blockingUncovered: 0,
+    nonBlockingUncovered: 0,
+    coverageRatio: 1,
+    blockingCoverageRatio: 1,
+    dirtyBuckets: 0,
+    nonBlockingBuckets: 0
+  };
 }
 
 const familyCoverage = {};
 for (const symbol of mandatorySymbols) {
-  familyCoverage['FAMILY:' + symbol] = {current: 0, covered: 0, uncovered: 0, coverageRatio: 1, dirtyBuckets: 0};
+  familyCoverage['FAMILY:' + symbol] = {
+    current: 0,
+    covered: 0,
+    uncovered: 0,
+    blockingUncovered: 0,
+    nonBlockingUncovered: 0,
+    coverageRatio: 1,
+    blockingCoverageRatio: 1,
+    dirtyBuckets: 0,
+    nonBlockingBuckets: 0
+  };
+}
+
+function isYieldAccrualCandidate(point) {
+  if (!point || point.basisEffect !== 'REALLOCATE_IN') return false;
+  return point.lifecycleKind === 'LENDING'
+    || point.lifecycleKind === 'STAKING'
+    || point.lifecycleKind === 'VAULT';
+}
+
+function isNativeGasResidualCandidate(point, balance, uncovered) {
+  if (!point || !balance || !(uncovered > 0)) return false;
+  const assetIdentity = normalizeAssetIdentity(point.networkId, point.accountingAssetIdentity);
+  if (!assetIdentity || !assetIdentity.startsWith('NATIVE:')) return false;
+  const symbol = canonicalSymbol(balance.assetSymbol);
+  return symbol === 'ETH'
+    && point.basisEffect === 'GAS_ONLY'
+    && uncovered <= 0.0015;
+}
+
+function uncoveredReason(point, balance, current, covered) {
+  const hasUncovered = covered < current;
+  if (!point) return 'missing_replay_point';
+  const incomplete = point.hasIncompleteHistoryAfter === true;
+  const unresolved = point.hasUnresolvedFlagsAfter === true;
+  if (!hasUncovered) return incomplete || unresolved ? 'history_flags' : null;
+  const uncovered = Math.max(current - covered, 0);
+  if (isNativeGasResidualCandidate(point, balance, uncovered)) {
+    return 'native_gas_residual';
+  }
+  if (!incomplete && !unresolved && isYieldAccrualCandidate(point)) {
+    return 'yield_accrual';
+  }
+  return 'coverage_gap';
+}
+
+function applyCoverage(row, current, covered, uncovered, reason) {
+  row.current += current;
+  row.covered += covered;
+  row.uncovered += uncovered;
+  if (uncovered > 1e-18 || reason === 'history_flags') {
+    row.dirtyBuckets += 1;
+  }
+  if (reason === 'yield_accrual' || reason === 'native_gas_residual') {
+    row.nonBlockingUncovered += uncovered;
+    row.nonBlockingBuckets += 1;
+  } else {
+    row.blockingUncovered += uncovered;
+  }
 }
 
 for (const [key, balance] of Object.entries(balanceByBucket)) {
@@ -127,32 +215,75 @@ for (const [key, balance] of Object.entries(balanceByBucket)) {
   const point = latestPointByBucket[key] || null;
   const covered = point ? Math.min(toNum(point.basisBackedQuantityAfter), current) : 0;
   const uncovered = Math.max(current - covered, 0);
+  const reason = uncoveredReason(point, balance, current, covered);
 
   if (exactCoverage[symbol]) {
-    exactCoverage[symbol].current += current;
-    exactCoverage[symbol].covered += covered;
-    exactCoverage[symbol].uncovered += uncovered;
-    if (uncovered > 1e-18 || (point && (point.hasIncompleteHistoryAfter || point.hasUnresolvedFlagsAfter))) {
-      exactCoverage[symbol].dirtyBuckets += 1;
+    applyCoverage(exactCoverage[symbol], current, covered, uncovered, reason);
+    if (reason === 'native_gas_residual') {
+      exactCoverage[symbol].nativeGasResidualPolicy = {
+        status: 'NON_BLOCKING_NATIVE_GAS_RESIDUAL',
+        threshold: 0.0015
+      };
     }
   }
 
   const familyId = point && point.accountingFamilyIdentity ? point.accountingFamilyIdentity : 'FAMILY:' + symbol;
   if (familyCoverage[familyId]) {
-    familyCoverage[familyId].current += current;
-    familyCoverage[familyId].covered += covered;
-    familyCoverage[familyId].uncovered += uncovered;
-    if (uncovered > 1e-18 || (point && (point.hasIncompleteHistoryAfter || point.hasUnresolvedFlagsAfter))) {
-      familyCoverage[familyId].dirtyBuckets += 1;
+    applyCoverage(familyCoverage[familyId], current, covered, uncovered, reason);
+    if (reason === 'native_gas_residual') {
+      familyCoverage[familyId].nativeGasResidualPolicy = {
+        status: 'NON_BLOCKING_NATIVE_GAS_RESIDUAL',
+        threshold: 0.0015
+      };
     }
   }
 }
 
+const familyBtcDustThreshold = 0.0000001;
+if (exactCoverage.BTC && familyCoverage['FAMILY:BTC']) {
+  const exactBtcClean = exactCoverage.BTC.blockingUncovered <= 1e-18;
+  const familyBtc = familyCoverage['FAMILY:BTC'];
+  if (exactBtcClean
+      && familyBtc.blockingUncovered > 0
+      && familyBtc.blockingUncovered <= familyBtcDustThreshold) {
+    familyBtc.nonBlockingUncovered += familyBtc.blockingUncovered;
+    familyBtc.blockingUncovered = 0;
+    familyBtc.nonBlockingBuckets += 1;
+    familyBtc.dustPolicy = {
+      status: 'NON_BLOCKING_FAMILY_ONLY_DUST',
+      threshold: familyBtcDustThreshold
+    };
+  }
+}
+
+const subUnitDustThreshold = 0.000000001;
+function applySubUnitDustPolicy(row) {
+  if (!row || !(row.blockingUncovered > 0) || row.blockingUncovered > subUnitDustThreshold) {
+    return;
+  }
+  row.nonBlockingUncovered += row.blockingUncovered;
+  row.blockingUncovered = 0;
+  row.nonBlockingBuckets += 1;
+  row.subUnitDustPolicy = {
+    status: 'NON_BLOCKING_SUB_UNIT_DUST',
+    threshold: subUnitDustThreshold
+  };
+}
+
+for (const row of Object.values(exactCoverage)) {
+  applySubUnitDustPolicy(row);
+}
+for (const row of Object.values(familyCoverage)) {
+  applySubUnitDustPolicy(row);
+}
+
 for (const row of Object.values(exactCoverage)) {
   row.coverageRatio = row.current > 0 ? row.covered / row.current : 1;
+  row.blockingCoverageRatio = row.current > 0 ? (row.current - row.blockingUncovered) / row.current : 1;
 }
 for (const row of Object.values(familyCoverage)) {
   row.coverageRatio = row.current > 0 ? row.covered / row.current : 1;
+  row.blockingCoverageRatio = row.current > 0 ? (row.current - row.blockingUncovered) / row.current : 1;
 }
 
 const protocolGapByType = db.getCollection('normalized_transactions').aggregate([

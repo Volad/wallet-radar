@@ -27,7 +27,7 @@ class ConfirmedReplayQueryServiceTest {
                 transaction("a", Instant.parse("2026-01-01T00:00:00Z"), 0),
                 transaction("b", Instant.parse("2026-01-01T00:00:01Z"), 1)
         );
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(ordered);
 
@@ -42,7 +42,7 @@ class ConfirmedReplayQueryServiceTest {
                 transaction("b", Instant.parse("2026-01-01T00:00:00Z"), 0),
                 transaction("a", Instant.parse("2026-01-01T00:00:00Z"), 0)
         );
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(unordered);
 

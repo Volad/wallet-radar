@@ -113,6 +113,61 @@ describe('DashboardTransactionsPaneComponent', () => {
     expect(text).not.toContain('PRICE?');
   });
 
+  it('shortens long hashes and keeps the full value in a hover hint', () => {
+    const longHash = '0xb7125978461a46854d9956eb73abb3109c91695e89a4d30e37fbe8aaddb74afc';
+    component.sourceTransactions = [
+      {
+        ...transactions[0],
+        hash: longHash,
+      },
+    ];
+    fixture.detectChanges();
+
+    const ref = fixture.nativeElement.querySelector('.tx-ref') as HTMLElement;
+    expect(ref.textContent?.trim()).toBe('0xb7125978…b74afc');
+    expect(ref.getAttribute('title')).toBe(longHash);
+  });
+
+  it('previews the material transaction body without signs or fee flows', () => {
+    component.sourceTransactions = [
+      {
+        ...transactions[0],
+        flows: [
+          {
+            role: 'TRANSFER',
+            symbol: 'AMANUSDC',
+            quantity: 1010.618,
+            signedQuantity: 1010.618,
+            priceUsd: 1,
+            source: 'STABLECOIN',
+          },
+          {
+            role: 'SELL',
+            symbol: 'USDC',
+            quantity: 1004.54,
+            signedQuantity: -1004.54,
+            priceUsd: 1,
+            source: 'STABLECOIN',
+          },
+          {
+            role: 'FEE',
+            symbol: 'ETH',
+            quantity: 0.001,
+            signedQuantity: -0.001,
+            priceUsd: 2500,
+            source: 'COINGECKO',
+          },
+        ],
+      },
+    ];
+    fixture.detectChanges();
+
+    const preview = fixture.nativeElement.querySelector('.tx-flow-preview') as HTMLElement;
+    expect(preview.textContent).toContain('1,004.54 USDC');
+    expect(preview.textContent).not.toContain('-1,004.54 USDC');
+    expect(preview.textContent).not.toContain('ETH');
+  });
+
   it('does not render UNKNOWN source pill for flows without price source', () => {
     component.sourceTransactions = [
       {

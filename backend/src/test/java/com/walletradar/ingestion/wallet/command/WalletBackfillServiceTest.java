@@ -1,7 +1,6 @@
 package com.walletradar.ingestion.wallet.command;
 
 import com.walletradar.domain.common.NetworkId;
-import com.walletradar.ingestion.job.backfill.BackfillJobPlanner;
 import com.walletradar.session.application.SourceSyncPlanner;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -23,7 +22,7 @@ class WalletBackfillServiceTest {
     @Mock
     private SourceSyncPlanner sourceSyncPlanner;
     @Mock
-    private BackfillJobPlanner backfillJobPlanner;
+    private WalletBackfillPlanner backfillJobPlanner;
 
     @InjectMocks
     private WalletBackfillService walletBackfillService;

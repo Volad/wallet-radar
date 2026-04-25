@@ -6,9 +6,11 @@ import com.walletradar.costbasis.domain.AssetLedgerPoint;
 import com.walletradar.costbasis.domain.OnChainBalance;
 import com.walletradar.costbasis.support.AssetLedgerSupport;
 import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.common.PriceSource;
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.domain.session.UserSessionRepository;
 import com.walletradar.pricing.domain.CanonicalAssetCatalog;
+import com.walletradar.pricing.persistence.CurrentPriceQuoteDocument;
 import com.walletradar.pricing.persistence.HistoricalPriceDocument;
 import com.walletradar.session.application.AccountingUniverseService;
 import lombok.RequiredArgsConstructor;
@@ -20,6 +22,8 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.MathContext;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -45,6 +49,10 @@ public class SessionDashboardQueryService {
     private static final String ISSUE_COVERAGE_GAP = "coverage_gap";
     private static final String ISSUE_HISTORY_FLAGS = "history_flags";
     private static final String ISSUE_MISSING_REPLAY_POINT = "missing_replay_point";
+    private static final String PRICE_ISSUE_MISSING = "missing_price";
+    private static final String PRICE_ISSUE_STALE = "stale_price";
+    private static final String PRICE_ISSUE_HISTORICAL_FALLBACK = "historical_price_fallback";
+    private static final long CURRENT_QUOTE_STALE_AFTER_SECONDS = 15 * 60;
 
     private final UserSessionRepository userSessionRepository;
     private final MongoOperations mongoOperations;
@@ -59,6 +67,7 @@ public class SessionDashboardQueryService {
     }
 
     private SessionDashboardView toView(UserSession session) {
+        Instant responseTime = Instant.now();
         AllowedScope allowedScope = AllowedScope.from(session.getWallets());
         AccountingUniverseService.AccountingUniverseScope universeScope = accountingUniverseService.resolveScope(session);
         List<String> walletAddresses = allowedScope.walletAddresses();
@@ -123,10 +132,12 @@ public class SessionDashboardQueryService {
             accumulator.addBalance(currentQuantity, latestPoint);
         }
 
-        Map<String, BigDecimal> latestPricesBySymbol = loadLatestPrices(rows.values().stream()
+        Map<String, DashboardPriceSnapshot> latestPricesBySymbol = loadLatestPrices(
+                rows.values().stream()
                 .flatMap(accumulator -> accumulator.priceLookupCandidates().stream())
-                .filter(symbol -> !"USDC".equals(symbol))
-                .collect(Collectors.toCollection(LinkedHashSet::new)));
+                .collect(Collectors.toCollection(LinkedHashSet::new)),
+                responseTime
+        );
 
         List<TokenPositionView> tokenPositions = rows.entrySet().stream()
                 .map(entry -> entry.getValue().toView(
@@ -208,19 +219,48 @@ public class SessionDashboardQueryService {
         return mongoOperations.find(query, AssetLedgerPoint.class);
     }
 
-    private Map<String, BigDecimal> loadLatestPrices(Collection<String> symbols) {
+    private Map<String, DashboardPriceSnapshot> loadLatestPrices(Collection<String> symbols, Instant responseTime) {
         if (symbols.isEmpty()) {
             return Map.of();
         }
-        Query query = Query.query(Criteria.where("symbol").in(symbols))
+        Map<String, DashboardPriceSnapshot> latestPrices = new LinkedHashMap<>();
+        for (String symbol : symbols) {
+            if (CanonicalAssetCatalog.isUsdStablecoin(null, null, symbol, null)) {
+                latestPrices.put(normalizeSymbol(symbol), DashboardPriceSnapshot.stablecoin(responseTime));
+            }
+        }
+
+        Query currentQuery = Query.query(Criteria.where("symbol").in(symbols))
+                .with(Sort.by(
+                        Sort.Order.desc("pricedAt"),
+                        Sort.Order.desc("fetchedAt")
+                ));
+        List<CurrentPriceQuoteDocument> currentQuotes = mongoOperations.find(currentQuery, CurrentPriceQuoteDocument.class);
+        if (currentQuotes != null) {
+            for (CurrentPriceQuoteDocument document : currentQuotes) {
+                String symbol = normalizeSymbol(document.getSymbol());
+                if (latestPrices.containsKey(symbol)) {
+                    continue;
+                }
+                DashboardPriceSnapshot snapshot = DashboardPriceSnapshot.current(document, responseTime);
+                if (snapshot.priceUsd() != null) {
+                    latestPrices.put(symbol, snapshot);
+                }
+            }
+        }
+
+        Query historicalQuery = Query.query(Criteria.where("symbol").in(symbols))
                 .with(Sort.by(
                         Sort.Order.desc("bucketStart"),
                         Sort.Order.desc("fetchedAt")
                 ));
-        Map<String, BigDecimal> latestPrices = new LinkedHashMap<>();
-        for (HistoricalPriceDocument document : mongoOperations.find(query, HistoricalPriceDocument.class)) {
+        List<HistoricalPriceDocument> historicalPrices = mongoOperations.find(historicalQuery, HistoricalPriceDocument.class);
+        if (historicalPrices == null) {
+            return latestPrices;
+        }
+        for (HistoricalPriceDocument document : historicalPrices) {
             String symbol = normalizeSymbol(document.getSymbol());
-            latestPrices.putIfAbsent(symbol, zeroIfNull(document.getPriceUsd()));
+            latestPrices.putIfAbsent(symbol, DashboardPriceSnapshot.historicalFallback(document, responseTime));
         }
         return latestPrices;
     }
@@ -299,18 +339,14 @@ public class SessionDashboardQueryService {
         };
     }
 
-    private static BigDecimal stableOrZeroPrice(String priceLookupSymbol) {
-        return "USDC".equals(priceLookupSymbol) ? BigDecimal.ONE : BigDecimal.ZERO;
-    }
-
-    private static BigDecimal resolvePrice(Map<String, BigDecimal> latestPricesBySymbol, String symbol) {
+    private static DashboardPriceSnapshot resolvePrice(Map<String, DashboardPriceSnapshot> latestPricesBySymbol, String symbol) {
         for (String candidate : priceLookupCandidates(symbol)) {
-            BigDecimal price = latestPricesBySymbol.get(candidate);
-            if (price != null) {
+            DashboardPriceSnapshot price = latestPricesBySymbol.get(candidate);
+            if (price != null && price.priceUsd() != null) {
                 return price;
             }
         }
-        return stableOrZeroPrice(symbol);
+        return DashboardPriceSnapshot.missing();
     }
 
     private static List<String> priceLookupCandidates(String symbol) {
@@ -396,6 +432,12 @@ public class SessionDashboardQueryService {
             BigDecimal quantity,
             BigDecimal coveredQuantity,
             BigDecimal priceUsd,
+            BigDecimal marketValueUsd,
+            String priceSource,
+            Instant pricedAt,
+            Long stalenessSeconds,
+            Boolean isLiveQuote,
+            String priceIssue,
             BigDecimal avcoUsd,
             BigDecimal unrealizedPnlPct,
             BigDecimal unrealizedPnlUsd,
@@ -405,7 +447,7 @@ public class SessionDashboardQueryService {
             String issue
     ) {
         public BigDecimal marketValueUsd() {
-            return quantity.multiply(priceUsd, MC);
+            return marketValueUsd == null ? BigDecimal.ZERO : marketValueUsd;
         }
 
         public BigDecimal provableBasisUsd() {
@@ -475,7 +517,9 @@ public class SessionDashboardQueryService {
             return SessionDashboardQueryService.priceLookupCandidates(priceLookupSymbol());
         }
 
-        private TokenPositionView toView(BigDecimal priceUsd, BigDecimal realizedPnlUsd) {
+        private TokenPositionView toView(DashboardPriceSnapshot priceSnapshot, BigDecimal realizedPnlUsd) {
+            BigDecimal priceUsd = priceSnapshot.priceUsd() == null ? BigDecimal.ZERO : priceSnapshot.priceUsd();
+            BigDecimal marketValueUsd = quantity.multiply(priceUsd, MC);
             BigDecimal avcoUsd = coveredQuantity.signum() <= 0
                     ? BigDecimal.ZERO
                     : totalCostBasisUsd.divide(coveredQuantity, MC);
@@ -490,6 +534,12 @@ public class SessionDashboardQueryService {
                     quantity,
                     coveredQuantity,
                     priceUsd,
+                    marketValueUsd,
+                    priceSnapshot.priceSource(),
+                    priceSnapshot.pricedAt(),
+                    priceSnapshot.stalenessSeconds(),
+                    priceSnapshot.isLiveQuote(),
+                    priceSnapshot.priceIssue(),
                     avcoUsd,
                     unrealizedPnlPct,
                     unrealizedPnlUsd,
@@ -551,6 +601,72 @@ public class SessionDashboardQueryService {
             case ISSUE_YIELD_ACCRUAL -> 1;
             default -> 0;
         };
+    }
+
+    private record DashboardPriceSnapshot(
+            BigDecimal priceUsd,
+            String priceSource,
+            Instant pricedAt,
+            Long stalenessSeconds,
+            Boolean isLiveQuote,
+            String priceIssue
+    ) {
+        private static DashboardPriceSnapshot stablecoin(Instant responseTime) {
+            return new DashboardPriceSnapshot(
+                    BigDecimal.ONE,
+                    PriceSource.STABLECOIN.name(),
+                    responseTime,
+                    0L,
+                    true,
+                    null
+            );
+        }
+
+        private static DashboardPriceSnapshot current(CurrentPriceQuoteDocument document, Instant responseTime) {
+            Instant pricedAt = document.getPricedAt() == null ? document.getFetchedAt() : document.getPricedAt();
+            Long stalenessSeconds = stalenessSeconds(pricedAt, responseTime);
+            String priceIssue = stalenessSeconds != null && stalenessSeconds > CURRENT_QUOTE_STALE_AFTER_SECONDS
+                    ? PRICE_ISSUE_STALE
+                    : null;
+            return new DashboardPriceSnapshot(
+                    document.getPriceUsd(),
+                    document.getSource() == null ? null : document.getSource().name(),
+                    pricedAt,
+                    stalenessSeconds,
+                    true,
+                    priceIssue
+            );
+        }
+
+        private static DashboardPriceSnapshot historicalFallback(HistoricalPriceDocument document, Instant responseTime) {
+            Instant pricedAt = document.getFetchedAt() == null ? document.getBucketStart() : document.getFetchedAt();
+            return new DashboardPriceSnapshot(
+                    document.getPriceUsd(),
+                    document.getSource() == null ? null : document.getSource().name(),
+                    pricedAt,
+                    stalenessSeconds(pricedAt, responseTime),
+                    false,
+                    PRICE_ISSUE_HISTORICAL_FALLBACK
+            );
+        }
+
+        private static DashboardPriceSnapshot missing() {
+            return new DashboardPriceSnapshot(
+                    BigDecimal.ZERO,
+                    null,
+                    null,
+                    null,
+                    false,
+                    PRICE_ISSUE_MISSING
+            );
+        }
+
+        private static Long stalenessSeconds(Instant pricedAt, Instant responseTime) {
+            if (pricedAt == null || responseTime == null) {
+                return null;
+            }
+            return Math.max(0L, Duration.between(pricedAt, responseTime).toSeconds());
+        }
     }
 
     private record AllowedScope(Map<String, Set<NetworkId>> networksByAddress) {

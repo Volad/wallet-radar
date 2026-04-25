@@ -41,7 +41,7 @@ class AvcoReplayServiceTest {
                 flow(NormalizedLegRole.SELL, "ETH", "-1", "20", PriceSource.BINANCE));
         NormalizedTransaction buy = tx("a", "0xbuy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
                 flow(NormalizedLegRole.BUY, "ETH", "1", "10", PriceSource.BINANCE));
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(List.of(sell, buy));
 
@@ -55,6 +55,27 @@ class AvcoReplayServiceTest {
                 .orElseThrow();
         assertThat(replayedSell.getFlows().getFirst().getAvcoAtTimeOfSale()).isEqualByComparingTo("10");
         assertThat(replayedSell.getFlows().getFirst().getRealisedPnlUsd()).isEqualByComparingTo("10");
+    }
+
+    @Test
+    void ignoresConfirmedExcludedTransactionsDuringReplay() {
+        NormalizedTransaction active = tx("active", "0xactive", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flow(NormalizedLegRole.BUY, "ETH", "1", "100", PriceSource.BINANCE));
+        NormalizedTransaction excluded = tx("excluded", "0xexcluded", 1, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flow(NormalizedLegRole.TRANSFER, "USDC", "1000", null, null));
+        excluded.setExcludedFromAccounting(Boolean.TRUE);
+        excluded.setAccountingExclusionReason("BYBIT_TRANSFER_SHADOW_ROW");
+
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                NormalizedTransactionStatus.CONFIRMED
+        )).thenReturn(List.of(active, excluded));
+
+        service().replayConfirmed();
+
+        List<AssetLedgerPoint> points = capturedLedgerPoints();
+        assertThat(points)
+                .extracting(AssetLedgerPoint::getNormalizedTransactionId)
+                .containsExactly("active");
     }
 
     @Test
@@ -75,7 +96,7 @@ class AvcoReplayServiceTest {
         destTransfer.setContinuityCandidate(true);
         destTransfer.setMatchedCounterparty("wallet-a");
 
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(List.of(sourceBuy, sourceTransfer, destTransfer));
 
@@ -108,7 +129,7 @@ class AvcoReplayServiceTest {
         destinationTransfer.setContinuityCandidate(true);
         destinationTransfer.setMatchedCounterparty("wallet-a");
 
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(List.of(sourceBuy, sourceTransfer, destinationTransfer));
 
@@ -128,7 +149,7 @@ class AvcoReplayServiceTest {
     void sponsoredGasInAddsZeroCostCoveredQuantity() {
         NormalizedTransaction topUp = tx("1", "0xgas-topup", 0, NormalizedTransactionType.SPONSORED_GAS_IN,
                 flow(NormalizedLegRole.TRANSFER, "ETH", "0.000004659018813092", null, null));
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(List.of(topUp));
 
@@ -190,7 +211,7 @@ class AvcoReplayServiceTest {
         destinationInbound.setContinuityCandidate(true);
         destinationInbound.setMatchedCounterparty("BYBIT:1");
 
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(List.of(sourceBuy, sourceTransfer, bybitInventory, bybitInbound, bybitOutbound, destinationInbound));
 
@@ -236,7 +257,7 @@ class AvcoReplayServiceTest {
         bybitInbound.setContinuityCandidate(true);
         bybitInbound.setMatchedCounterparty("wallet-a");
 
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(List.of(sourceBuy, sourceTransfer, bybitInbound));
 
@@ -277,7 +298,7 @@ class AvcoReplayServiceTest {
         bybitInbound.setContinuityCandidate(true);
         bybitInbound.setMatchedCounterparty("wallet-a");
 
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(List.of(sourceBuy, sourceTransfer, bybitInbound));
 
@@ -318,7 +339,7 @@ class AvcoReplayServiceTest {
         bybitInbound.setContinuityCandidate(true);
         bybitInbound.setMatchedCounterparty("wallet-a");
 
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(List.of(sourceBuy, sourceTransfer, bybitInbound));
 
@@ -357,7 +378,7 @@ class AvcoReplayServiceTest {
         destinationTransfer.setContinuityCandidate(true);
         destinationTransfer.setMatchedCounterparty("wallet-a");
 
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(List.of(sourceBuy, sourceTransfer, destinationTransfer));
 
@@ -386,7 +407,7 @@ class AvcoReplayServiceTest {
         NormalizedTransaction laterBuy = tx("3", "0xbuy-later", 2, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
                 flow(NormalizedLegRole.BUY, "ETH", "0.2", "200", PriceSource.BINANCE));
 
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(List.of(buy, oversizedFee, laterBuy));
 
@@ -402,6 +423,31 @@ class AvcoReplayServiceTest {
     }
 
     @Test
+    void laterDisposalConsumesUncoveredTailBeforeCurrentCoveredInventory() {
+        NormalizedTransaction coveredBuy = tx("1", "0xbuy-covered", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flow(NormalizedLegRole.BUY, "ETH", "1.25", "100", PriceSource.BINANCE));
+
+        NormalizedTransaction uncoveredInbound = tx("2", "0xinbound-uncovered", 1, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flow(NormalizedLegRole.BUY, "ETH", "0.75", null, PriceSource.UNKNOWN));
+
+        NormalizedTransaction sell = tx("3", "0xsell", 2, NormalizedTransactionType.SWAP,
+                flow(NormalizedLegRole.SELL, "ETH", "-1", "150", PriceSource.BINANCE));
+
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                NormalizedTransactionStatus.CONFIRMED
+        )).thenReturn(List.of(coveredBuy, uncoveredInbound, sell));
+
+        service().replayConfirmed();
+
+        AssetLedgerPoint point = latestPoint(capturedLedgerPoints(), "0xwallet", NetworkId.BASE, "ETH", null);
+        assertThat(point.getQuantityAfter()).isEqualByComparingTo("1");
+        assertThat(point.getBasisBackedQuantityAfter()).isEqualByComparingTo("1");
+        assertThat(point.getUncoveredQuantityAfter()).isZero();
+        assertThat(point.getTotalCostBasisAfterUsd()).isEqualByComparingTo("100");
+        assertThat(point.getAvcoAfterUsd()).isEqualByComparingTo("100");
+    }
+
+    @Test
     void replayPersistsAssetLedgerPointsWithFamilyAndBeforeAfterState() {
         NormalizedTransaction buy = tx("1", "0xbuy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
                 flow(NormalizedLegRole.BUY, "ETH", "1", "100", PriceSource.BINANCE));
@@ -411,7 +457,7 @@ class AvcoReplayServiceTest {
         bridgeOut.setContinuityCandidate(true);
         bridgeOut.setMatchedCounterparty("0xbridge-in");
 
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(List.of(buy, bridgeOut));
 
@@ -460,7 +506,7 @@ class AvcoReplayServiceTest {
                 flow(NormalizedLegRole.TRANSFER, "ETH", "-1", null, null));
         destinationSpend.setWalletAddress("wallet-b");
 
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(List.of(sourceBuy, inboundFirst, sourceLater, destinationSpend));
 
@@ -500,7 +546,7 @@ class AvcoReplayServiceTest {
         lpExit.setProtocolName("PancakeSwap");
         lpExit.setCorrelationId("lp-position:arbitrum:pancakeswap:123");
 
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(List.of(ethBuy, usdcBuy, lpEntry, lpExit));
 
@@ -548,7 +594,7 @@ class AvcoReplayServiceTest {
         lpExit.setProtocolName("PancakeSwap");
         lpExit.setCorrelationId("lp-position:base:pancakeswap:synthetic-1");
 
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(List.of(wethBuy, uncoveredUsdc, lpEntry, lpExit));
 
@@ -596,7 +642,7 @@ class AvcoReplayServiceTest {
         principalExit.setProtocolName("PancakeSwap");
         principalExit.setCorrelationId("lp-position:base:pancakeswap:synthetic-3");
 
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(List.of(wethBuy, uncoveredUsdc, lpEntry, rewardExit, principalExit));
 
@@ -647,7 +693,7 @@ class AvcoReplayServiceTest {
         finalExit.setProtocolName("PancakeSwap");
         finalExit.setCorrelationId("lp-position:bsc:pancakeswap:reward-sideflow");
 
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(List.of(xyzBuy, lpEntry, partialExit, finalExit));
 
@@ -704,7 +750,7 @@ class AvcoReplayServiceTest {
         lpExit.setProtocolName("PancakeSwap");
         lpExit.setCorrelationId("lp-position:arbitrum:pancakeswap:synthetic-2");
 
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(List.of(wethBuy, uncoveredUsdc, lpEntry, lpExit));
 
@@ -762,7 +808,7 @@ class AvcoReplayServiceTest {
         settlement.setProtocolName("GMX");
         settlement.setCorrelationId("gmx:lp-entry:1");
 
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(List.of(usdcBuy, ethTopUp, request, settlement));
 
@@ -807,7 +853,7 @@ class AvcoReplayServiceTest {
         bridgeIn.setContinuityCandidate(true);
         bridgeIn.setMatchedCounterparty("wallet-a");
 
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(List.of(buy, bridgeOut, bridgeIn));
 
@@ -843,7 +889,7 @@ class AvcoReplayServiceTest {
         bridgeIn.setContinuityCandidate(true);
         bridgeIn.setMatchedCounterparty("wallet-a");
 
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(List.of(buy, bridgeOut, bridgeIn));
 
@@ -880,7 +926,7 @@ class AvcoReplayServiceTest {
         bridgeIn.setContinuityCandidate(true);
         bridgeIn.setMatchedCounterparty("wallet-a");
 
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(List.of(buy, bridgeOut, bridgeIn));
 
@@ -917,7 +963,7 @@ class AvcoReplayServiceTest {
         bridgeOut.setContinuityCandidate(true);
         bridgeOut.setMatchedCounterparty("wallet-a");
 
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(List.of(buy, bridgeIn, bridgeOut));
 
@@ -965,7 +1011,7 @@ class AvcoReplayServiceTest {
         lendingDeposit.setWalletAddress("wallet-a");
         lendingDeposit.setNetworkId(NetworkId.ARBITRUM);
 
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(List.of(localSpot, sourceBuy, bridgeOut, bridgeIn, lendingDeposit));
 
@@ -1031,7 +1077,7 @@ class AvcoReplayServiceTest {
         secondBridgeIn.setContinuityCandidate(true);
         secondBridgeIn.setMatchedCounterparty("0xbridge-two-out");
 
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(List.of(
                 sourceCoveredBuy,
@@ -1084,7 +1130,7 @@ class AvcoReplayServiceTest {
         bridgeIn.setContinuityCandidate(false);
         bridgeIn.setMatchedCounterparty("0xbridge-out");
 
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(List.of(stableBuy, bridgeOut, bridgeIn));
 
@@ -1129,7 +1175,7 @@ class AvcoReplayServiceTest {
         bridgeIn.setContinuityCandidate(false);
         bridgeIn.setMatchedCounterparty("0xf8cbea");
 
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(List.of(sourceBuy, bridgeOut, bridgeIn));
 
@@ -1171,7 +1217,7 @@ class AvcoReplayServiceTest {
         bridgeIn.setContinuityCandidate(false);
         bridgeIn.setMatchedCounterparty("0xbridge-out");
 
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(List.of(coveredStableBuy, uncoveredStableBuy, bridgeOut, bridgeIn));
 
@@ -1209,7 +1255,7 @@ class AvcoReplayServiceTest {
         bridgeOut.setContinuityCandidate(false);
         bridgeOut.setMatchedCounterparty("0xbridge-in");
 
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(List.of(stableBuy, bridgeIn, bridgeOut));
 
@@ -1248,7 +1294,7 @@ class AvcoReplayServiceTest {
         bridgeIn.setContinuityCandidate(false);
         bridgeIn.setMatchedCounterparty("0xbridge-out");
 
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(List.of(principalBuy, bridgeOut, bridgeIn));
 
@@ -1285,7 +1331,7 @@ class AvcoReplayServiceTest {
         deposit.setNetworkId(NetworkId.ARBITRUM);
         deposit.setProtocolName("Aave");
 
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(List.of(buy, deposit));
 
@@ -1316,7 +1362,7 @@ class AvcoReplayServiceTest {
         withdraw.setNetworkId(NetworkId.ARBITRUM);
         withdraw.setProtocolName("Aave");
 
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(List.of(receiptBuy, withdraw));
 
@@ -1344,7 +1390,7 @@ class AvcoReplayServiceTest {
         wrap.setWalletAddress("wallet-a");
         wrap.setNetworkId(NetworkId.BASE);
 
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(List.of(buy, wrap));
 
@@ -1377,7 +1423,7 @@ class AvcoReplayServiceTest {
         unwrap.setWalletAddress("wallet-a");
         unwrap.setNetworkId(NetworkId.BASE);
 
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(List.of(buy, unwrap));
 
@@ -1426,7 +1472,7 @@ class AvcoReplayServiceTest {
         bybitInbound.setContinuityCandidate(true);
         bybitInbound.setMatchedCounterparty("wallet-a");
 
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(List.of(coveredBuy, uncoveredBuy, sourceTransfer, bybitInbound));
 
@@ -1470,7 +1516,7 @@ class AvcoReplayServiceTest {
         sourceTransfer.setContinuityCandidate(true);
         sourceTransfer.setMatchedCounterparty("BYBIT:1");
 
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(List.of(coveredBuy, uncoveredBuy, bybitInbound, sourceTransfer));
 
@@ -1502,7 +1548,7 @@ class AvcoReplayServiceTest {
         );
         stake.setWalletAddress("wallet-a");
 
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(List.of(buy, stake));
 
@@ -1535,6 +1581,44 @@ class AvcoReplayServiceTest {
     }
 
     @Test
+    void liquidStakingCarriesAvailableCoveredPrincipalWithoutRatioCuttingDerivative() {
+        NormalizedTransaction coveredBuy = tx("1", "0xavax-covered", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flow(NormalizedLegRole.BUY, "AVAX", "0.4", "10", PriceSource.BINANCE));
+        coveredBuy.setWalletAddress("wallet-a");
+        coveredBuy.setNetworkId(NetworkId.AVALANCHE);
+
+        NormalizedTransaction uncoveredBuy = tx("2", "0xavax-uncovered", 1, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flow(NormalizedLegRole.BUY, "AVAX", "0.1", null, PriceSource.UNKNOWN));
+        uncoveredBuy.setWalletAddress("wallet-a");
+        uncoveredBuy.setNetworkId(NetworkId.AVALANCHE);
+
+        NormalizedTransaction stake = tx(
+                "3",
+                "0xavax-stake",
+                2,
+                NormalizedTransactionType.STAKING_DEPOSIT,
+                flow(NormalizedLegRole.TRANSFER, "AVAX", "-0.5", null, null),
+                flow(NormalizedLegRole.TRANSFER, "sAVAX", "0.4", null, null)
+        );
+        stake.setWalletAddress("wallet-a");
+        stake.setNetworkId(NetworkId.AVALANCHE);
+
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                NormalizedTransactionStatus.CONFIRMED
+        )).thenReturn(List.of(coveredBuy, uncoveredBuy, stake));
+
+        service().replayConfirmed();
+
+        List<AssetLedgerPoint> points = capturedLedgerPoints();
+        AssetLedgerPoint derivative = latestPoint(points, "wallet-a", NetworkId.AVALANCHE, "sAVAX", null);
+        assertThat(derivative.getQuantityAfter()).isEqualByComparingTo("0.4");
+        assertThat(derivative.getBasisBackedQuantityAfter()).isEqualByComparingTo("0.4");
+        assertThat(derivative.getUncoveredQuantityAfter()).isZero();
+        assertThat(derivative.getTotalCostBasisAfterUsd()).isEqualByComparingTo("4");
+        assertThat(derivative.getAvcoAfterUsd()).isEqualByComparingTo("10");
+    }
+
+    @Test
     void familyEquivalentVaultWithdrawCarriesBasisFromYvvbethIntoVbeth() {
         NormalizedTransaction buy = tx("1", "0xbuy-yvvbeth", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
                 flow(NormalizedLegRole.BUY, "YVVBETH", "0.435428171459772105", "2809.177530660769159772942625393432", PriceSource.BINANCE));
@@ -1552,7 +1636,7 @@ class AvcoReplayServiceTest {
         unwrap.setWalletAddress("wallet-a");
         unwrap.setNetworkId(NetworkId.KATANA);
 
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(List.of(buy, unwrap));
 
@@ -1574,7 +1658,7 @@ class AvcoReplayServiceTest {
     void unknownPricePropagatesIncompleteHistory() {
         NormalizedTransaction unknownBuy = tx("1", "0xunknown", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
                 flow(NormalizedLegRole.BUY, "TOKEN", "10", null, PriceSource.UNKNOWN));
-        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
         )).thenReturn(List.of(unknownBuy));
 

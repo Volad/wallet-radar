@@ -73,6 +73,26 @@ class GenericFlowReplayEngineTest {
     }
 
     @Test
+    void sellConsumesUncoveredTailBeforeCoveredBasis() {
+        PositionState position = new PositionState(assetKey());
+        position.setQuantity(new BigDecimal("2"));
+        position.setUncoveredQuantity(new BigDecimal("0.75"));
+        position.setTotalCostBasisUsd(new BigDecimal("125"));
+        engine.recomputePerWalletAvco(position);
+
+        NormalizedTransaction.Flow sell = flow(NormalizedLegRole.SELL, "-1", "150", PriceSource.BINANCE);
+        engine.applySell(sell, position);
+
+        assertThat(position.quantity()).isEqualByComparingTo("1");
+        assertThat(position.uncoveredQuantity()).isZero();
+        assertThat(position.totalCostBasisUsd()).isEqualByComparingTo("100");
+        assertThat(position.perWalletAvco()).isEqualByComparingTo("100");
+        assertThat(sell.getAvcoAtTimeOfSale()).isNull();
+        assertThat(sell.getRealisedPnlUsd()).isNull();
+        assertThat(position.hasUnresolvedFlags()).isTrue();
+    }
+
+    @Test
     void sponsoredGasInAddsZeroCostCoveredInventory() {
         PositionState position = new PositionState(assetKey());
 

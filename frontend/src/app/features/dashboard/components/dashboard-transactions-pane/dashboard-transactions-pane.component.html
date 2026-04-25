@@ -50,8 +50,8 @@
       @for (tx of paginatedTransactions(); track tx.id) {
         @let network = getNetworkById(tx.networkId);
         @let wallet = getWalletById(tx.walletId);
-        @let positiveFlow = getPrimaryPositiveFlow(tx);
-        @let negativeFlow = getPrimaryNegativeFlow(tx);
+        @let previewFlows = getPreviewFlows(tx);
+        @let hiddenPreviewFlowCount = getHiddenPreviewFlowCount(tx);
         @let txMissingPrice = hasMissingPrice(tx);
         @let txNeedsReview = isPendingReview(tx);
         @let txExpanded = isTransactionExpanded(tx.id);
@@ -86,7 +86,7 @@
                   <span class="pill pill-purple">PENDING</span>
                 }
               </div>
-              <div class="mono muted tiny">{{ tx.hash }}</div>
+              <div class="mono muted tiny tx-ref" [attr.title]="tx.hash">{{ shortReference(tx.hash) }}</div>
               @if (txCounterpartyDirection(tx); as counterpartyDirection) {
                 <div class="mono muted tiny tx-counterparty-row">
                   <span>{{ counterpartyDirection }}</span>
@@ -94,31 +94,22 @@
                     class="mono muted tiny tx-counterparty"
                     [attr.data-tooltip]="counterpartyTooltip(tx)"
                     [attr.aria-label]="counterpartyTooltip(tx)">
-                    {{ txCounterpartyRef(tx) }}
+                    {{ shortReference(txCounterpartyRef(tx)) }}
                   </span>
                 </div>
               }
             </div>
 
             <div class="tx-flow-preview">
-              @if (positiveFlow !== null) {
-                <div class="mono pos small-flow">
-                  <span [attr.title]="formatQuantityFull(getSignedQuantity(positiveFlow))">
-                    +{{ formatQuantity(getSignedQuantity(positiveFlow)) }} {{ positiveFlow.symbol }}
+              @for (flow of previewFlows; track flow.role + flow.symbol + $index) {
+                <div class="mono small-flow">
+                  <span [attr.title]="formatQuantityFull(getAbsoluteSignedQuantity(flow))">
+                    {{ formatQuantity(getAbsoluteSignedQuantity(flow)) }} {{ flow.symbol }}
                   </span>
-                  @if (positiveFlow.priceUsd !== null) {
-                    <span class="muted">${{ positiveFlow.priceUsd }}</span>
-                  } @else {
-                    <span class="neg">?</span>
-                  }
                 </div>
               }
-              @if (negativeFlow !== null) {
-                <div class="mono neg small-flow">
-                  <span [attr.title]="formatQuantityFull(getSignedQuantity(negativeFlow))">
-                    -{{ formatQuantity(getSignedQuantity(negativeFlow)) }} {{ negativeFlow.symbol }}
-                  </span>
-                </div>
+              @if (hiddenPreviewFlowCount > 0) {
+                <div class="mono muted tiny">+{{ hiddenPreviewFlowCount }} flow</div>
               }
             </div>
 
@@ -149,7 +140,7 @@
               </div>
               @if (isExternalLedgerWallet(tx)) {
                 <div class="tx-meta-marker-row">
-                  <span class="mono muted tiny">{{ tx.walletId }}</span>
+                  <span class="mono muted tiny tx-ref" [attr.title]="tx.walletId">{{ shortReference(tx.walletId) }}</span>
                 </div>
               }
               <span [class]="getPillClass(getStatusVariant(tx.status))">{{ prettifyLabel(tx.status) }}</span>

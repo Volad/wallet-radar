@@ -1,7 +1,6 @@
 package com.walletradar.ingestion.wallet.command;
 
 import com.walletradar.domain.common.NetworkId;
-import com.walletradar.ingestion.job.backfill.BackfillJobPlanner;
 import com.walletradar.session.application.SourceSyncPlanner;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -19,7 +18,7 @@ import java.util.List;
 public class WalletBackfillService {
 
     private final SourceSyncPlanner sourceSyncPlanner;
-    private final BackfillJobPlanner backfillJobPlanner;
+    private final WalletBackfillPlanner backfillJobPlanner;
 
     public void addWallet(String address, List<NetworkId> networks) {
         List<NetworkId> targetNetworks = (networks == null || networks.isEmpty())

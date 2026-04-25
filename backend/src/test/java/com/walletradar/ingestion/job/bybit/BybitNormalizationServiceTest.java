@@ -142,7 +142,9 @@ class BybitNormalizationServiceTest {
         verify(normalizedTransactionStore).upsert(captor.capture());
         NormalizedTransaction saved = captor.getValue();
         assertThat(saved.getType()).isEqualTo(NormalizedTransactionType.EXTERNAL_TRANSFER_IN);
-        assertThat(saved.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        assertThat(saved.getStatus()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(saved.getFlows()).extracting(NormalizedTransaction.Flow::getRole)
+                .containsExactly(NormalizedLegRole.TRANSFER);
     }
 
     @Test
@@ -160,7 +162,7 @@ class BybitNormalizationServiceTest {
         verify(normalizedTransactionStore).upsert(bybitCaptor.capture());
         NormalizedTransaction bybitSaved = bybitCaptor.getValue();
         assertThat(bybitSaved.getType()).isEqualTo(NormalizedTransactionType.EXTERNAL_TRANSFER_OUT);
-        assertThat(bybitSaved.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        assertThat(bybitSaved.getStatus()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
         assertThat(bybitSaved.getCorrelationId()).isNull();
         assertThat(bybitSaved.getContinuityCandidate()).isNull();
         assertThat(bybitSaved.getMatchedCounterparty()).isNull();
@@ -191,7 +193,7 @@ class BybitNormalizationServiceTest {
         verify(normalizedTransactionStore).upsert(bybitCaptor.capture());
         NormalizedTransaction bybitSaved = bybitCaptor.getValue();
         assertThat(bybitSaved.getType()).isEqualTo(NormalizedTransactionType.EXTERNAL_TRANSFER_IN);
-        assertThat(bybitSaved.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        assertThat(bybitSaved.getStatus()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
         assertThat(bybitSaved.getCorrelationId()).isNull();
         assertThat(bybitSaved.getContinuityCandidate()).isNull();
         assertThat(bybitSaved.getMatchedCounterparty()).isNull();
@@ -241,7 +243,7 @@ class BybitNormalizationServiceTest {
         ArgumentCaptor<NormalizedTransaction> bybitCaptor = ArgumentCaptor.forClass(NormalizedTransaction.class);
         verify(normalizedTransactionStore).upsert(bybitCaptor.capture());
         assertThat(bybitCaptor.getValue().getType()).isEqualTo(NormalizedTransactionType.EXTERNAL_TRANSFER_IN);
-        assertThat(bybitCaptor.getValue().getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        assertThat(bybitCaptor.getValue().getStatus()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
         assertThat(bybitCaptor.getValue().getExcludedFromAccounting()).isFalse();
         assertThat(bybitCaptor.getValue().getAccountingExclusionReason()).isNull();
         assertThat(bybitCaptor.getValue().getMissingDataReasons()).doesNotContain("EXTERNAL_CUSTODY_UNTRACKED_VENUE");
@@ -264,6 +266,7 @@ class BybitNormalizationServiceTest {
         ArgumentCaptor<NormalizedTransaction> bybitCaptor = ArgumentCaptor.forClass(NormalizedTransaction.class);
         verify(normalizedTransactionStore).upsert(bybitCaptor.capture());
         assertThat(bybitCaptor.getValue().getType()).isEqualTo(NormalizedTransactionType.EXTERNAL_TRANSFER_OUT);
+        assertThat(bybitCaptor.getValue().getStatus()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
         assertThat(bybitCaptor.getValue().getMissingDataReasons()).doesNotContain("BRIDGE_ON_CHAIN_LEG_NOT_FOUND");
         assertThat(bybitCaptor.getValue().getCounterpartyAddress()).isEqualTo("0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f");
         assertThat(withdraw.getOnChainCorrelation().getStatus()).isNull();
@@ -608,7 +611,7 @@ class BybitNormalizationServiceTest {
         verify(normalizedTransactionStore).upsert(captor.capture());
         NormalizedTransaction saved = captor.getValue();
         assertThat(saved.getType()).isEqualTo(NormalizedTransactionType.EXTERNAL_TRANSFER_OUT);
-        assertThat(saved.getStatus()).isEqualTo(NormalizedTransactionStatus.NEEDS_REVIEW);
+        assertThat(saved.getStatus()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
         assertThat(saved.getExcludedFromAccounting()).isTrue();
         assertThat(saved.getAccountingExclusionReason()).isEqualTo("BYBIT_TRANSFER_SHADOW_ROW");
         assertThat(saved.getCorrelationId()).isNull();
@@ -648,7 +651,7 @@ class BybitNormalizationServiceTest {
         verify(normalizedTransactionStore).upsert(captor.capture());
         NormalizedTransaction saved = captor.getValue();
         assertThat(saved.getType()).isEqualTo(NormalizedTransactionType.EXTERNAL_TRANSFER_IN);
-        assertThat(saved.getStatus()).isEqualTo(NormalizedTransactionStatus.NEEDS_REVIEW);
+        assertThat(saved.getStatus()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
         assertThat(saved.getExcludedFromAccounting()).isTrue();
         assertThat(saved.getAccountingExclusionReason()).isEqualTo("BYBIT_TRANSFER_SHADOW_ROW");
         assertThat(saved.getFlows()).extracting(NormalizedTransaction.Flow::getRole)

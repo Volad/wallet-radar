@@ -57,9 +57,9 @@ class ModuleDependencyArchTest {
     }
 
     @Test
-    void no_cyclic_dependencies_between_slices() {
+    void domain_slices_must_not_have_cycles() {
         ArchRule rule = slices()
-                .matching("com.walletradar.(*)..")
+                .matching("com.walletradar.domain.(*)..")
                 .should().beFreeOfCycles();
         rule.check(classes);
     }

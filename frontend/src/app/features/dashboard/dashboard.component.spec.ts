@@ -365,10 +365,18 @@ describe('DashboardComponent (wallet submit flow)', () => {
     component.sessionBackfillStatus.set({
       ...runningBackfill,
       overallProgressPct: 73,
+      pipelineStage: 'ON_CHAIN_RECLASSIFICATION',
+      phaseProgress: null,
+    });
+    expect(component.pipelineStatusLabel()).toBe('Reclassification: 73% done');
+
+    component.sessionBackfillStatus.set({
+      ...runningBackfill,
+      overallProgressPct: 78,
       pipelineStage: 'LINKING',
       phaseProgress: null,
     });
-    expect(component.pipelineStatusLabel()).toBe('Linking: 73% done');
+    expect(component.pipelineStatusLabel()).toBe('Linking: 78% done');
 
     component.sessionBackfillStatus.set({
       ...runningBackfill,

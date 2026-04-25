@@ -51,7 +51,7 @@ public class StatValidationService {
             return 0;
         }
         List<NormalizedTransaction> batch = normalizedTransactionRepository
-                .findAllByWalletAddressInAndStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                .findAllActiveAccountingByWalletAddressInAndStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                         walletAddresses,
                         NormalizedTransactionStatus.NEEDS_REVIEW
                 );

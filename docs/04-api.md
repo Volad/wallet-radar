@@ -813,6 +813,10 @@ Errors:
   members such as `BYBIT:<uid>`
 - `tokenPositions` are current live quantities with conservative provable `avcoUsd` / PnL
 - `summary.totalUnrealizedPnlPct` is based on provable covered basis only
+- Dashboard valuation uses a current quote snapshot read model when available.
+  It must not silently present the latest event-time historical AVCO quote as a
+  live market price. When only historical fallback evidence exists, the row must
+  expose that through quote metadata and issue state.
 - `tokenPositions[].issue` is a read-time diagnostic class, not a persisted
   reconciliation collection state
 
@@ -831,6 +835,23 @@ Current dashboard token-position issue values:
   - live balance exists, but no latest replay point exists for the exact bucket
 - `missing_price`
   - reserved for price-availability diagnostics
+- `stale_price`
+  - current quote exists but is outside the dashboard freshness window
+- `historical_price_fallback`
+  - no current quote snapshot exists and valuation used a historical fallback
+    quote for decomposition only
+
+Current dashboard token-position quote fields:
+
+- `coveredQuantity`: current quantity backed by replay evidence
+- `marketValueUsd`: `quantity * priceUsd` when a price is present
+- `priceSource`: source used for dashboard valuation, if any
+- `pricedAt`: quote timestamp, if any
+- `stalenessSeconds`: age of the selected quote at response time
+- `isLiveQuote`: `true` only for current quote snapshot rows; `false` for
+  historical fallback or missing-price rows
+- `priceIssue`: price-specific issue state; separate from accounting coverage
+  diagnostics in `issue`
 
 Example token-position entry:
 
@@ -840,7 +861,14 @@ Example token-position entry:
   "symbol": "ETH",
   "name": "Ethereum",
   "quantity": "3.065880428473694856",
+  "coveredQuantity": "3.060000000000000000",
   "priceUsd": "1985.3",
+  "marketValueUsd": "6086.69",
+  "priceSource": "BINANCE",
+  "pricedAt": "2026-04-25T09:00:00Z",
+  "stalenessSeconds": 120,
+  "isLiveQuote": true,
+  "priceIssue": null,
   "avcoUsd": "2349.840198149151237779344109742893",
   "unrealizedPnlPct": "-15.51",
   "unrealizedPnlUsd": "-1115.49",

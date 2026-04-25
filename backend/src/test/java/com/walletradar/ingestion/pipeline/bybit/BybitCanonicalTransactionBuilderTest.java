@@ -127,9 +127,9 @@ class BybitCanonicalTransactionBuilderTest {
         var transaction = builder.buildMappedRow(row, Instant.parse("2026-03-25T12:01:00Z"));
 
         assertThat(transaction.getType()).isEqualTo(NormalizedTransactionType.EXTERNAL_TRANSFER_IN);
-        assertThat(transaction.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        assertThat(transaction.getStatus()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
         assertThat(transaction.getFlows()).hasSize(1);
-        assertThat(transaction.getFlows().get(0).getRole()).isEqualTo(NormalizedLegRole.BUY);
+        assertThat(transaction.getFlows().get(0).getRole()).isEqualTo(NormalizedLegRole.TRANSFER);
     }
 
     @Test

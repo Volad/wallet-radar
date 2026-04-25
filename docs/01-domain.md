@@ -633,6 +633,12 @@ Rules:
 - historical `quantityShortfall` remains visible for audit, but must not poison
   later covered acquisitions or current provability once the previously missing
   quantity is no longer held
+- mixed-bucket sell, fee, and unknown outbound events consume current uncovered
+  quantity before covered AVCO-backed quantity so the current uncovered field
+  tracks the remaining held tail, not a lifetime deficit
+- linked continuity carry keeps its covered-first transfer contract, moving
+  available basis into the destination bucket before any unresolved transfer
+  tail
 - `FamilyShortfallSourceView` is a read-model diagnostic aggregated from
   positive family-level `quantityShortfallDelta` rows
 - it helps explain where today's uncovered quantity was first introduced, but

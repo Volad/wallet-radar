@@ -16,6 +16,13 @@ class CanonicalAssetCatalogTest {
     }
 
     @Test
+    void auditedAaveAvaxReceiptAliasesCollapseToAvax() {
+        assertThat(CanonicalAssetCatalog.canonicalMarketSymbol("sAVAX")).isEqualTo("AVAX");
+        assertThat(CanonicalAssetCatalog.canonicalMarketSymbol("aAvaWAVAX")).isEqualTo("AVAX");
+        assertThat(CanonicalAssetCatalog.canonicalMarketSymbol("aAvaSAVAX")).isEqualTo("AVAX");
+    }
+
+    @Test
     void auditedKatanaVaultReceiptsCollapseToEthForPricing() {
         assertThat(CanonicalAssetCatalog.canonicalMarketSymbol("vbETH")).isEqualTo("ETH");
         assertThat(CanonicalAssetCatalog.canonicalMarketSymbol("yvvbETH")).isEqualTo("ETH");

@@ -133,7 +133,7 @@ class SessionTransactionsQueryServiceTest {
         assertThat(bridgeView.id()).isEqualTo("tx-bridge");
         assertThat(bridgeView.sourceType()).isEqualTo("CHAIN");
         assertThat(bridgeView.networkId()).isEqualTo("BASE");
-        assertThat(bridgeView.type()).isEqualTo("EXTERNAL_TRANSFER_OUT");
+        assertThat(bridgeView.type()).isEqualTo("BRIDGE_OUT");
         assertThat(bridgeView.status()).isEqualTo("CONFIRMED");
         assertThat(bridgeView.issue()).isNull();
         assertThat(bridgeView.bridgeStatus()).isEqualTo("MATCHED");
@@ -144,7 +144,7 @@ class SessionTransactionsQueryServiceTest {
         SessionTransactionsQueryService.ItemView bybitView = result.items().get(1);
         assertThat(bybitView.walletAddress()).isEqualTo("BYBIT:33625378");
         assertThat(bybitView.txHash()).isNull();
-        assertThat(bybitView.type()).isEqualTo("STAKE_DEPOSIT");
+        assertThat(bybitView.type()).isEqualTo("STAKING_DEPOSIT");
         assertThat(bybitView.status()).isEqualTo("PENDING_PRICE");
         assertThat(bybitView.issue()).isEqualTo("missing_price");
         assertThat(bybitView.bridgeStatus()).isNull();
@@ -304,7 +304,7 @@ class SessionTransactionsQueryServiceTest {
                 .orElseThrow();
 
         assertThat(result.items()).singleElement().satisfies(item -> {
-            assertThat(item.type()).isEqualTo("EXTERNAL_INBOUND");
+            assertThat(item.type()).isEqualTo("BRIDGE_IN");
             assertThat(item.issue()).isNull();
             assertThat(item.bridgeStatus()).isEqualTo("MATCHED");
         });
@@ -357,7 +357,7 @@ class SessionTransactionsQueryServiceTest {
                 .orElseThrow();
 
         assertThat(result.items()).singleElement().satisfies(item -> {
-            assertThat(item.type()).isEqualTo("EXTERNAL_INBOUND");
+            assertThat(item.type()).isEqualTo("EXTERNAL_TRANSFER_IN");
             assertThat(item.issue()).isNull();
             assertThat(item.matchedCounterparty()).isEqualTo("BYBIT:33625378");
         });

@@ -7,9 +7,14 @@ export type TransactionType =
   | 'UNWRAP'
   | 'GAS_ONLY'
   | 'EXTERNAL_INBOUND'
+  | 'EXTERNAL_TRANSFER_IN'
   | 'EXTERNAL_TRANSFER_OUT'
   | 'LP_ENTRY'
+  | 'LP_ENTRY_REQUEST'
+  | 'LP_ENTRY_SETTLEMENT'
   | 'LP_EXIT'
+  | 'LP_EXIT_REQUEST'
+  | 'LP_EXIT_SETTLEMENT'
   | 'LP_EXIT_PARTIAL'
   | 'LP_EXIT_FINAL'
   | 'LP_FEE_CLAIM'
@@ -17,12 +22,39 @@ export type TransactionType =
   | 'LP_POSITION_UNSTAKE'
   | 'LEND_DEPOSIT'
   | 'LEND_WITHDRAWAL'
+  | 'LENDING_DEPOSIT'
+  | 'LENDING_WITHDRAW'
+  | 'LENDING_LOOP_OPEN'
+  | 'LENDING_LOOP_REBALANCE'
+  | 'LENDING_LOOP_DECREASE'
+  | 'LENDING_LOOP_CLOSE'
   | 'BORROW'
   | 'REPAY'
+  | 'VAULT_DEPOSIT'
+  | 'VAULT_WITHDRAW'
+  | 'BRIDGE_OUT'
+  | 'BRIDGE_IN'
+  | 'DEX_ORDER_REQUEST'
+  | 'DEX_ORDER_SETTLEMENT'
+  | 'DERIVATIVE_ORDER_REQUEST'
+  | 'DERIVATIVE_ORDER_EXECUTION'
+  | 'DERIVATIVE_ORDER_CANCEL'
+  | 'DERIVATIVE_POSITION_INCREASE'
+  | 'DERIVATIVE_POSITION_DECREASE'
+  | 'PROTOCOL_CUSTODY_DEPOSIT'
+  | 'PROTOCOL_CUSTODY_WITHDRAW'
   | 'REWARD_CLAIM'
   | 'STAKE_DEPOSIT'
   | 'STAKE_WITHDRAWAL'
+  | 'STAKING_DEPOSIT'
+  | 'STAKING_WITHDRAW_REQUEST'
+  | 'STAKING_WITHDRAW'
   | 'APPROVAL'
+  | 'APPROVE'
+  | 'ADMIN_CONFIG'
+  | 'SPONSORED_GAS_IN'
+  | 'INTERNAL_TRANSFER'
+  | 'UNKNOWN'
   | 'UNCLASSIFIED'
   | 'MANUAL_COMPENSATING'
   | 'LP_ADJUST';
@@ -47,6 +79,8 @@ export type TransactionSpamFilter = 'HIDE_SPAM' | 'ALL' | 'SPAM_ONLY';
 export type IssueCode =
   | 'spam'
   | 'missing_price'
+  | 'stale_price'
+  | 'historical_price_fallback'
   | 'unconfirmed'
   | 'yield_accrual'
   | 'coverage_gap'
@@ -96,7 +130,14 @@ export interface TokenPosition {
   readonly symbol: string;
   readonly name: string;
   readonly quantity: number;
+  readonly coveredQuantity: number;
   readonly priceUsd: number;
+  readonly marketValueUsd: number;
+  readonly priceSource: PriceSource | null;
+  readonly pricedAt: string | null;
+  readonly stalenessSeconds: number | null;
+  readonly isLiveQuote: boolean;
+  readonly priceIssue: IssueCode;
   readonly avcoUsd: number;
   readonly unrealizedPnlPct: number;
   readonly unrealizedPnlUsd: number;
@@ -211,9 +252,14 @@ export const TRANSACTION_TYPES: ReadonlyArray<TransactionType> = [
   'WRAP',
   'UNWRAP',
   'EXTERNAL_INBOUND',
+  'EXTERNAL_TRANSFER_IN',
   'EXTERNAL_TRANSFER_OUT',
   'LP_ENTRY',
+  'LP_ENTRY_REQUEST',
+  'LP_ENTRY_SETTLEMENT',
   'LP_EXIT',
+  'LP_EXIT_REQUEST',
+  'LP_EXIT_SETTLEMENT',
   'LP_EXIT_PARTIAL',
   'LP_EXIT_FINAL',
   'LP_FEE_CLAIM',
@@ -221,12 +267,39 @@ export const TRANSACTION_TYPES: ReadonlyArray<TransactionType> = [
   'LP_POSITION_UNSTAKE',
   'LEND_DEPOSIT',
   'LEND_WITHDRAWAL',
+  'LENDING_DEPOSIT',
+  'LENDING_WITHDRAW',
+  'LENDING_LOOP_OPEN',
+  'LENDING_LOOP_REBALANCE',
+  'LENDING_LOOP_DECREASE',
+  'LENDING_LOOP_CLOSE',
   'BORROW',
   'REPAY',
+  'VAULT_DEPOSIT',
+  'VAULT_WITHDRAW',
+  'BRIDGE_OUT',
+  'BRIDGE_IN',
+  'DEX_ORDER_REQUEST',
+  'DEX_ORDER_SETTLEMENT',
+  'DERIVATIVE_ORDER_REQUEST',
+  'DERIVATIVE_ORDER_EXECUTION',
+  'DERIVATIVE_ORDER_CANCEL',
+  'DERIVATIVE_POSITION_INCREASE',
+  'DERIVATIVE_POSITION_DECREASE',
+  'PROTOCOL_CUSTODY_DEPOSIT',
+  'PROTOCOL_CUSTODY_WITHDRAW',
   'REWARD_CLAIM',
   'STAKE_DEPOSIT',
   'STAKE_WITHDRAWAL',
+  'STAKING_DEPOSIT',
+  'STAKING_WITHDRAW_REQUEST',
+  'STAKING_WITHDRAW',
   'APPROVAL',
+  'APPROVE',
+  'ADMIN_CONFIG',
+  'SPONSORED_GAS_IN',
+  'INTERNAL_TRANSFER',
+  'UNKNOWN',
   'UNCLASSIFIED',
   'MANUAL_COMPENSATING',
   'LP_ADJUST',

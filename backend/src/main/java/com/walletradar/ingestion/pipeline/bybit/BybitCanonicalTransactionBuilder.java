@@ -228,7 +228,7 @@ public class BybitCanonicalTransactionBuilder {
             Instant now,
             String exclusionReason
     ) {
-        markExcludedContinuityLikeRow(transaction, now, exclusionReason);
+        markConfirmedExcludedContinuityLikeRow(transaction, now, exclusionReason);
     }
 
     private void markExcludedContinuityLikeRow(
@@ -241,6 +241,33 @@ public class BybitCanonicalTransactionBuilder {
         transaction.setContinuityCandidate(false);
         transaction.setConfirmedAt(null);
         transaction.setStatus(NormalizedTransactionStatus.NEEDS_REVIEW);
+        transaction.setUpdatedAt(now);
+        transaction.getMissingDataReasons().remove("BRIDGE_ON_CHAIN_LEG_NOT_FOUND");
+        if (!transaction.getMissingDataReasons().contains(exclusionReason)) {
+            transaction.getMissingDataReasons().add(exclusionReason);
+        }
+        for (NormalizedTransaction.Flow flow : transaction.getFlows()) {
+            if (flow == null || flow.getRole() == NormalizedLegRole.FEE) {
+                continue;
+            }
+            flow.setRole(NormalizedLegRole.TRANSFER);
+            flow.setUnitPriceUsd(null);
+            flow.setValueUsd(null);
+            flow.setPriceSource(null);
+        }
+        markExcludedFromAccounting(transaction, exclusionReason);
+    }
+
+    private void markConfirmedExcludedContinuityLikeRow(
+            NormalizedTransaction transaction,
+            Instant now,
+            String exclusionReason
+    ) {
+        transaction.setCorrelationId(null);
+        transaction.setMatchedCounterparty(null);
+        transaction.setContinuityCandidate(false);
+        transaction.setConfirmedAt(transaction.getConfirmedAt() != null ? transaction.getConfirmedAt() : now);
+        transaction.setStatus(NormalizedTransactionStatus.CONFIRMED);
         transaction.setUpdatedAt(now);
         transaction.getMissingDataReasons().remove("BRIDGE_ON_CHAIN_LEG_NOT_FOUND");
         if (!transaction.getMissingDataReasons().contains(exclusionReason)) {
@@ -322,8 +349,8 @@ public class BybitCanonicalTransactionBuilder {
             ));
             case VAULT_DEPOSIT -> List.of(flow(NormalizedLegRole.TRANSFER, row.getAssetSymbol(), negate(quantity), null, null));
             case VAULT_WITHDRAW -> List.of(flow(NormalizedLegRole.TRANSFER, row.getAssetSymbol(), quantity, null, null));
-            case EXTERNAL_TRANSFER_IN -> List.of(flow(NormalizedLegRole.BUY, row.getAssetSymbol(), quantity, null, null));
-            case EXTERNAL_TRANSFER_OUT -> List.of(flow(NormalizedLegRole.SELL, row.getAssetSymbol(), negate(quantity), null, null));
+            case EXTERNAL_TRANSFER_IN -> List.of(flow(NormalizedLegRole.TRANSFER, row.getAssetSymbol(), quantity, null, null));
+            case EXTERNAL_TRANSFER_OUT -> List.of(flow(NormalizedLegRole.TRANSFER, row.getAssetSymbol(), negate(quantity), null, null));
             case BORROW -> List.of(flow(NormalizedLegRole.SELL, row.getAssetSymbol(), negate(quantity), null, null));
             case REPAY -> List.of(flow(NormalizedLegRole.BUY, row.getAssetSymbol(), quantity, null, null));
             case STAKING_DEPOSIT, STAKING_WITHDRAW -> List.of(flow(

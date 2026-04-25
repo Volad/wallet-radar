@@ -22,7 +22,7 @@ public class ConfirmedReplayQueryService {
     private final NormalizedTransactionRepository normalizedTransactionRepository;
 
     public List<NormalizedTransaction> loadOrderedConfirmed() {
-        return ensureReplayOrder(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+        return ensureReplayOrder(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
         ));
     }
@@ -31,7 +31,7 @@ public class ConfirmedReplayQueryService {
         if (walletAddresses == null || walletAddresses.isEmpty()) {
             return List.of();
         }
-        return ensureReplayOrder(normalizedTransactionRepository.findAllByWalletAddressInAndStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+        return ensureReplayOrder(normalizedTransactionRepository.findAllActiveAccountingByWalletAddressInAndStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 walletAddresses,
                 NormalizedTransactionStatus.CONFIRMED
         ));

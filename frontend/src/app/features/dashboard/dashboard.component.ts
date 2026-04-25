@@ -77,7 +77,13 @@ interface TokenFamilyRow {
   readonly symbol: string;
   readonly name: string;
   readonly quantity: number;
+  readonly coveredQuantity: number;
   readonly priceUsd: number;
+  readonly priceSource: PriceSource | null;
+  readonly pricedAt: string | null;
+  readonly stalenessSeconds: number | null;
+  readonly isLiveQuote: boolean;
+  readonly priceIssue: IssueCode;
   readonly avcoUsd: number;
   readonly unrealizedPnlPct: number;
   readonly unrealizedPnlUsd: number;
@@ -95,9 +101,14 @@ const TRANSACTION_TYPES_BY_ID = new Set<TransactionType>([
   'UNWRAP',
   'GAS_ONLY',
   'EXTERNAL_INBOUND',
+  'EXTERNAL_TRANSFER_IN',
   'EXTERNAL_TRANSFER_OUT',
   'LP_ENTRY',
+  'LP_ENTRY_REQUEST',
+  'LP_ENTRY_SETTLEMENT',
   'LP_EXIT',
+  'LP_EXIT_REQUEST',
+  'LP_EXIT_SETTLEMENT',
   'LP_EXIT_PARTIAL',
   'LP_EXIT_FINAL',
   'LP_FEE_CLAIM',
@@ -105,12 +116,39 @@ const TRANSACTION_TYPES_BY_ID = new Set<TransactionType>([
   'LP_POSITION_UNSTAKE',
   'LEND_DEPOSIT',
   'LEND_WITHDRAWAL',
+  'LENDING_DEPOSIT',
+  'LENDING_WITHDRAW',
+  'LENDING_LOOP_OPEN',
+  'LENDING_LOOP_REBALANCE',
+  'LENDING_LOOP_DECREASE',
+  'LENDING_LOOP_CLOSE',
   'BORROW',
   'REPAY',
+  'VAULT_DEPOSIT',
+  'VAULT_WITHDRAW',
+  'BRIDGE_OUT',
+  'BRIDGE_IN',
+  'DEX_ORDER_REQUEST',
+  'DEX_ORDER_SETTLEMENT',
+  'DERIVATIVE_ORDER_REQUEST',
+  'DERIVATIVE_ORDER_EXECUTION',
+  'DERIVATIVE_ORDER_CANCEL',
+  'DERIVATIVE_POSITION_INCREASE',
+  'DERIVATIVE_POSITION_DECREASE',
+  'PROTOCOL_CUSTODY_DEPOSIT',
+  'PROTOCOL_CUSTODY_WITHDRAW',
   'REWARD_CLAIM',
   'STAKE_DEPOSIT',
   'STAKE_WITHDRAWAL',
+  'STAKING_DEPOSIT',
+  'STAKING_WITHDRAW_REQUEST',
+  'STAKING_WITHDRAW',
   'APPROVAL',
+  'APPROVE',
+  'ADMIN_CONFIG',
+  'SPONSORED_GAS_IN',
+  'INTERNAL_TRANSFER',
+  'UNKNOWN',
   'UNCLASSIFIED',
   'MANUAL_COMPENSATING',
   'LP_ADJUST',
@@ -469,17 +507,23 @@ export class DashboardComponent {
       symbol: string;
       name: string;
       quantity: number;
+      coveredQuantity: number;
       currentValueUsd: number;
       totalCostBasisUsd: number;
       unrealizedPnlUsd: number;
       realizedPnlUsd: number;
+      priceSource: PriceSource | null;
+      pricedAt: string | null;
+      stalenessSeconds: number | null;
+      isLiveQuote: boolean;
+      priceIssue: IssueCode;
       networkIds: Set<NetworkId>;
       walletIds: Set<WalletId>;
       issue: IssueCode;
     }>();
 
     for (const position of this.filteredTokenPositions()) {
-      const currentValueUsd = position.quantity * position.priceUsd;
+      const currentValueUsd = position.marketValueUsd;
       const totalCostBasisUsd = position.quantity * position.avcoUsd;
       const existing = grouped.get(position.familyIdentity);
       if (existing === undefined) {
@@ -488,10 +532,16 @@ export class DashboardComponent {
           symbol: position.symbol,
           name: position.name,
           quantity: position.quantity,
+          coveredQuantity: position.coveredQuantity,
           currentValueUsd,
           totalCostBasisUsd,
           unrealizedPnlUsd: position.unrealizedPnlUsd,
           realizedPnlUsd: position.realizedPnlUsd,
+          priceSource: position.priceSource,
+          pricedAt: position.pricedAt,
+          stalenessSeconds: position.stalenessSeconds,
+          isLiveQuote: position.isLiveQuote,
+          priceIssue: position.priceIssue,
           networkIds: new Set([position.networkId]),
           walletIds: new Set([position.walletId]),
           issue: position.issue,
@@ -500,10 +550,16 @@ export class DashboardComponent {
       }
 
       existing.quantity += position.quantity;
+      existing.coveredQuantity += position.coveredQuantity;
       existing.currentValueUsd += currentValueUsd;
       existing.totalCostBasisUsd += totalCostBasisUsd;
       existing.unrealizedPnlUsd += position.unrealizedPnlUsd;
       existing.realizedPnlUsd += position.realizedPnlUsd;
+      existing.priceSource = this.pickPriceSource(existing, position);
+      existing.pricedAt = this.pickLatestPricedAt(existing.pricedAt, position.pricedAt);
+      existing.stalenessSeconds = this.pickSmallestStaleness(existing.stalenessSeconds, position.stalenessSeconds);
+      existing.isLiveQuote = existing.isLiveQuote || position.isLiveQuote;
+      existing.priceIssue = this.mergeIssueCode(existing.priceIssue, position.priceIssue);
       existing.networkIds.add(position.networkId);
       existing.walletIds.add(position.walletId);
       existing.issue = this.mergeIssueCode(existing.issue, position.issue);
@@ -520,7 +576,13 @@ export class DashboardComponent {
           symbol: group.symbol,
           name: group.name,
           quantity,
+          coveredQuantity: group.coveredQuantity,
           priceUsd,
+          priceSource: group.priceSource,
+          pricedAt: group.pricedAt,
+          stalenessSeconds: group.stalenessSeconds,
+          isLiveQuote: group.isLiveQuote,
+          priceIssue: group.priceIssue,
           avcoUsd,
           unrealizedPnlPct,
           unrealizedPnlUsd: group.unrealizedPnlUsd,
@@ -948,6 +1010,15 @@ export class DashboardComponent {
     });
   }
 
+  formatUsdFull(value: number): string {
+    return value.toLocaleString(undefined, {
+      style: 'currency',
+      currency: 'USD',
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 12,
+    });
+  }
+
   issueTitle(issue: IssueCode): string {
     switch (issue) {
       case 'spam':
@@ -961,12 +1032,40 @@ export class DashboardComponent {
       case 'missing_replay_point':
         return 'Missing replay point: live balance exists, but no replay state was materialized for this bucket.';
       case 'missing_price':
-        return 'Missing price';
+        return 'Missing price.';
+      case 'stale_price':
+        return 'Stale price: current quote is older than the dashboard freshness window.';
+      case 'historical_price_fallback':
+        return 'Historical fallback price: no current quote snapshot is available.';
       case 'unconfirmed':
         return 'Unconfirmed';
       default:
         return '';
     }
+  }
+
+  priceTooltip(asset: TokenFamilyRow): string {
+    const source = asset.priceSource ?? 'No source';
+    const pricedAt = asset.pricedAt === null ? 'not loaded' : new Date(asset.pricedAt).toLocaleString();
+    const freshness = asset.stalenessSeconds === null ? 'unknown age' : `${this.formatDuration(asset.stalenessSeconds)} old`;
+    const mode = asset.isLiveQuote ? 'current quote' : 'non-live valuation';
+    const issue = asset.priceIssue === null ? '' : ` ${this.issueTitle(asset.priceIssue)}`;
+    return `Exact price: ${this.formatUsdFull(asset.priceUsd)}. Loaded: ${pricedAt}. Source: ${source}. ${freshness}, ${mode}.${issue}`;
+  }
+
+  private formatDuration(seconds: number): string {
+    if (seconds < 60) {
+      return `${seconds}s`;
+    }
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) {
+      return `${minutes}m`;
+    }
+    const hours = Math.floor(minutes / 60);
+    if (hours < 48) {
+      return `${hours}h`;
+    }
+    return `${Math.floor(hours / 24)}d`;
   }
 
   shortAddress(address: string): string {
@@ -1324,6 +1423,8 @@ export class DashboardComponent {
         return 'Classification';
       case 'ON_CHAIN_CLARIFICATION':
         return 'Clarification';
+      case 'ON_CHAIN_RECLASSIFICATION':
+        return 'Reclassification';
       case 'LINKING':
         return 'Linking';
       case 'PRICING':
@@ -1434,12 +1535,59 @@ export class DashboardComponent {
         return 2;
       case 'yield_accrual':
         return 1;
-      case 'spam':
       case 'missing_price':
+        return 3;
+      case 'stale_price':
+        return 2;
+      case 'historical_price_fallback':
+        return 1;
+      case 'spam':
       case 'unconfirmed':
       case null:
       default:
         return 0;
     }
+  }
+
+  private pickPriceSource(
+    existing: {
+      readonly priceSource: PriceSource | null;
+      readonly pricedAt: string | null;
+      readonly isLiveQuote: boolean;
+    },
+    position: TokenPosition
+  ): PriceSource | null {
+    if (existing.priceSource === null) {
+      return position.priceSource;
+    }
+    if (position.priceSource === null) {
+      return existing.priceSource;
+    }
+    if (position.isLiveQuote && !existing.isLiveQuote) {
+      return position.priceSource;
+    }
+    const existingTime = existing.pricedAt === null ? 0 : Date.parse(existing.pricedAt);
+    const candidateTime = position.pricedAt === null ? 0 : Date.parse(position.pricedAt);
+    return candidateTime > existingTime ? position.priceSource : existing.priceSource;
+  }
+
+  private pickLatestPricedAt(left: string | null, right: string | null): string | null {
+    if (left === null) {
+      return right;
+    }
+    if (right === null) {
+      return left;
+    }
+    return Date.parse(right) > Date.parse(left) ? right : left;
+  }
+
+  private pickSmallestStaleness(left: number | null, right: number | null): number | null {
+    if (left === null) {
+      return right;
+    }
+    if (right === null) {
+      return left;
+    }
+    return Math.min(left, right);
   }
 }

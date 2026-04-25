@@ -71,6 +71,9 @@ public class ReplayDispatcher {
             NormalizedTransaction transaction,
             ReplayExecutionState replayState
     ) {
+        if (transaction == null || Boolean.TRUE.equals(transaction.getExcludedFromAccounting())) {
+            return;
+        }
         ReplayRoutingDecision routingDecision = replayTransactionRouter.route(
                 transaction,
                 gmxLpEntryReplayHandler::isGmxLpEntryRequest,

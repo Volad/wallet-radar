@@ -10,7 +10,6 @@ import com.walletradar.domain.sync.SyncStatusRepository;
 import com.walletradar.domain.transaction.bybit.BybitExtractedEvent;
 import com.walletradar.domain.transaction.externalledger.ExternalLedgerRaw;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
-import com.walletradar.ingestion.job.linking.LinkingDataGateService;
 import com.walletradar.session.application.AccountingUniverseService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.mongodb.core.MongoOperations;
@@ -43,7 +42,7 @@ public class SessionQueryService {
     private final SyncStatusRepository syncStatusRepository;
     private final BackfillSegmentRepository backfillSegmentRepository;
     private final AccountingUniverseService accountingUniverseService;
-    private final LinkingDataGateService linkingDataGateService;
+    private final LinkingPendingStatusQuery linkingPendingStatusQuery;
     private final MongoOperations mongoOperations;
 
     public Optional<SessionView> findSession(String sessionId) {
@@ -211,7 +210,7 @@ public class SessionQueryService {
             case "LINKING" -> progressFromCounts(
                     stage,
                     1,
-                    linkingDataGateService.hasPendingLinking(session.getId()) || hasPendingPriceRows(memberRefs) ? 0 : 1
+                    linkingPendingStatusQuery.hasPendingLinking(session.getId()) || hasPendingPriceRows(memberRefs) ? 0 : 1
             );
             case "PRICING" -> progressFromCounts(
                     stage,
@@ -517,7 +516,26 @@ public class SessionQueryService {
                 Criteria.where("accountingUniverseId").is(scope.accountingUniverseId()),
                 Criteria.where("normalizedTransactionId").ne(null)
         ));
-        return mongoOperations.findDistinct(query, "normalizedTransactionId", "asset_ledger_points", String.class).size();
+        long ledgerMaterializedTransactions = mongoOperations
+                .findDistinct(query, "normalizedTransactionId", "asset_ledger_points", String.class)
+                .size();
+        return ledgerMaterializedTransactions + countReplayZeroFlowConfirmed(scope.memberRefs());
+    }
+
+    private long countReplayZeroFlowConfirmed(List<String> walletAddresses) {
+        if (walletAddresses.isEmpty()) {
+            return 0;
+        }
+        Query query = Query.query(new Criteria().andOperator(
+                Criteria.where("walletAddress").in(walletAddresses),
+                Criteria.where("status").is("CONFIRMED"),
+                ACTIVE_ACCOUNTING_CRITERIA,
+                new Criteria().orOperator(
+                        Criteria.where("flows").exists(false),
+                        Criteria.where("flows").size(0)
+                )
+        ));
+        return mongoOperations.count(query, NormalizedTransaction.class);
     }
 
     private static SyncStatus pickLatest(SyncStatus a, SyncStatus b) {

@@ -359,32 +359,10 @@ public class SessionTransactionsQueryService {
         if (type == null) {
             return "UNCLASSIFIED";
         }
-        return switch (type) {
-            case SWAP -> "SWAP";
-            case WRAP -> "WRAP";
-            case UNWRAP -> "UNWRAP";
-            case EXTERNAL_TRANSFER_IN, SPONSORED_GAS_IN, BRIDGE_IN -> "EXTERNAL_INBOUND";
-            case EXTERNAL_TRANSFER_OUT, BRIDGE_OUT, INTERNAL_TRANSFER -> "EXTERNAL_TRANSFER_OUT";
-            case LP_ENTRY, LP_ENTRY_REQUEST, LP_ENTRY_SETTLEMENT -> "LP_ENTRY";
-            case LP_EXIT, LP_EXIT_REQUEST, LP_EXIT_SETTLEMENT -> "LP_EXIT";
-            case LP_EXIT_PARTIAL -> "LP_EXIT_PARTIAL";
-            case LP_EXIT_FINAL -> "LP_EXIT_FINAL";
-            case LP_FEE_CLAIM -> "LP_FEE_CLAIM";
-            case LP_POSITION_STAKE -> "LP_POSITION_STAKE";
-            case LP_POSITION_UNSTAKE -> "LP_POSITION_UNSTAKE";
-            case LENDING_DEPOSIT -> "LEND_DEPOSIT";
-            case LENDING_WITHDRAW -> "LEND_WITHDRAWAL";
-            case BORROW -> "BORROW";
-            case REPAY -> "REPAY";
-            case STAKING_DEPOSIT -> "STAKE_DEPOSIT";
-            case STAKING_WITHDRAW_REQUEST, STAKING_WITHDRAW -> "STAKE_WITHDRAWAL";
-            case REWARD_CLAIM -> "REWARD_CLAIM";
-            case APPROVE -> "APPROVAL";
-            case LP_ADJUST -> "LP_ADJUST";
-            case MANUAL_COMPENSATING -> "MANUAL_COMPENSATING";
-            case UNKNOWN -> "UNCLASSIFIED";
-            default -> "UNCLASSIFIED";
-        };
+        if (type == NormalizedTransactionType.UNKNOWN) {
+            return "UNCLASSIFIED";
+        }
+        return type.name();
     }
 
     private String bridgeStatus(NormalizedTransaction transaction) {

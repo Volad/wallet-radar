@@ -189,12 +189,15 @@ public class BybitNormalizationService {
     }
 
     private boolean isUnsafeLoanRow(ExternalLedgerRaw row) {
-        if (!"fund_asset_changes".equals(normalize(row.getSourceFileType()))
-                || !"loans".equals(normalize(row.getBybitType()))) {
+        String type = normalize(row.getCanonicalType());
+        if (!"borrow".equals(type) && !"repay".equals(type)) {
             return false;
         }
-        String type = normalize(row.getCanonicalType());
-        return "borrow".equals(type) || "repay".equals(type);
+        return "fund_asset_changes".equals(normalize(row.getSourceFileType()))
+                || "loans".equals(normalize(row.getBybitType()))
+                || "bybit".equals(normalize(row.getSourceFileType()))
+                || "bybit".equals(normalize(row.getChain()))
+                || (row.getWalletRef() != null && row.getWalletRef().startsWith("BYBIT:"));
     }
 
     private boolean isTransferShadowRow(ExternalLedgerRaw row) {

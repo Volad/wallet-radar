@@ -1,6 +1,7 @@
 package com.walletradar.api.dto;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 
 /**
@@ -33,7 +34,14 @@ public record SessionDashboardResponse(
             String symbol,
             String name,
             BigDecimal quantity,
+            BigDecimal coveredQuantity,
             BigDecimal priceUsd,
+            BigDecimal marketValueUsd,
+            String priceSource,
+            Instant pricedAt,
+            Long stalenessSeconds,
+            Boolean isLiveQuote,
+            String priceIssue,
             BigDecimal avcoUsd,
             BigDecimal unrealizedPnlPct,
             BigDecimal unrealizedPnlUsd,

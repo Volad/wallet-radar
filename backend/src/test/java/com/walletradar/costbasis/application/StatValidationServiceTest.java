@@ -142,7 +142,7 @@ class StatValidationServiceTest {
         principal.setStatus(NormalizedTransactionStatus.NEEDS_REVIEW);
         principal.setMissingDataReasons(List.of("CLASSIFICATION_FAILED"));
 
-        when(normalizedTransactionRepository.findAllByWalletAddressInAndStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+        when(normalizedTransactionRepository.findAllActiveAccountingByWalletAddressInAndStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 anyCollection(),
                 org.mockito.ArgumentMatchers.eq(NormalizedTransactionStatus.NEEDS_REVIEW)
         )).thenReturn(List.of(feeOnly, empty, principal));

@@ -95,9 +95,11 @@ class BybitBridgeLinkServiceTest {
 
         assertThat(changed).isTrue();
         assertThat(withdraw.getOnChainCorrelation().getStatus()).isEqualTo("UNMATCHED");
-        assertThat(bybitTx.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        assertThat(bybitTx.getStatus()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
         assertThat(bybitTx.getMissingDataReasons()).contains(BybitBridgeLinkService.BRIDGE_MISSING_REASON);
         assertThat(bybitTx.getExcludedFromAccounting()).isFalse();
+        assertThat(bybitTx.getFlows()).extracting(NormalizedTransaction.Flow::getRole)
+                .containsExactly(NormalizedLegRole.TRANSFER);
         verify(externalLedgerRawRepository).save(withdraw);
         verify(normalizedTransactionRepository).save(bybitTx);
     }

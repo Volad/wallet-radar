@@ -178,6 +178,21 @@
   font-weight: 600;
 }
 
+.tx-type-block,
+.tx-meta-block,
+.tx-flow-preview {
+  min-width: 0;
+}
+
+.tx-ref,
+.small-flow {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .tx-counterparty-row {
   margin-top: 0.08rem;
   display: inline-flex;
@@ -190,6 +205,9 @@
 .tx-counterparty {
   width: fit-content;
   max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tx-flow-preview {

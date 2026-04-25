@@ -154,8 +154,25 @@ rows that are not custody continuity events.
   - no synthetic `matchedCounterparty` is created
   - `BRIDGE_ON_CHAIN_LEG_NOT_FOUND` is not persisted
   - normalized rows must not remain active priceable `BUY` / `SELL` rows
-  - until a dedicated external-custody move-basis contract exists, these rows
-    stay explicit audit-only excluded rows outside the active accounting scope
+  - the row remains active accounting scope unless it is a deterministic
+    duplicate shadow of a chain-aware `withdraw_deposit` row
+
+### Transfer shadow rows
+
+- A `fund_asset_changes` transfer row is a `BYBIT_TRANSFER_SHADOW_ROW` only when
+  a chain-aware `withdraw_deposit` sibling is proven by deterministic evidence:
+  same uid, same asset, compatible direction and Bybit type, bounded timestamp
+  window, matching quantity tolerance, tx hash present, and network present.
+- The shadow row remains persisted as:
+  - `status = CONFIRMED`
+  - `excludedFromAccounting = true`
+  - `accountingExclusionReason = BYBIT_TRANSFER_SHADOW_ROW`
+- The active chain-aware sibling remains canonical
+  `EXTERNAL_TRANSFER_IN/OUT` and stays visible to pricing gates and AVCO replay.
+- Excluded shadow rows are audit-visible only. They must never enter AVCO replay
+  and must never produce `asset_ledger_points`.
+- An unpaired `fund_asset_changes` transfer is not a shadow row and must not be
+  excluded only because of its source stream.
 
 ## Clarification Rules
 
@@ -184,8 +201,8 @@ rows that are not custody continuity events.
     `EXTERNAL_TRANSFER_IN/OUT`, but no longer pretend to be missing bridge legs
     and no longer participate in active pricing / replay until a dedicated
     external-custody accounting lane exists
-- A separate excluded tail of `11` Bybit `NEEDS_REVIEW` rows remains acceptable
-  only because `excludedFromAccounting = true`.
+- Excluded Bybit `NEEDS_REVIEW` rows remain acceptable only when they have an
+  explicit terminal reason such as `BYBIT_LOAN_SEMANTICS_UNSUPPORTED`.
 - Operator dashboards must distinguish:
   - active blocking review rows
   - excluded audit-only review rows

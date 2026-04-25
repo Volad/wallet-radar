@@ -339,7 +339,14 @@ export interface SessionDashboardTokenPositionResponse {
   readonly symbol: string;
   readonly name: string;
   readonly quantity: number;
+  readonly coveredQuantity: number;
   readonly priceUsd: number;
+  readonly marketValueUsd: number;
+  readonly priceSource: string | null;
+  readonly pricedAt: string | null;
+  readonly stalenessSeconds: number | null;
+  readonly isLiveQuote: boolean;
+  readonly priceIssue: string | null;
   readonly avcoUsd: number;
   readonly unrealizedPnlPct: number;
   readonly unrealizedPnlUsd: number;

@@ -45,4 +45,18 @@ class BybitSymbolMapperTest {
                 "ETHUSDC"
         );
     }
+
+    @Test
+    void auditedAaveAvaxReceiptMapsToAvaxSpotCandidates() {
+        BybitSymbolMapper mapper = new BybitSymbolMapper(new ExternalPriceMappingService());
+
+        assertThat(mapper.candidateSymbols(new PriceRequest(
+                "tx-3",
+                NormalizedTransactionSource.ON_CHAIN,
+                null,
+                null,
+                "aAvaSAVAX",
+                Instant.parse("2025-11-27T16:24:20Z")
+        ))).containsExactly("AVAXUSDT", "AVAXUSDC");
+    }
 }

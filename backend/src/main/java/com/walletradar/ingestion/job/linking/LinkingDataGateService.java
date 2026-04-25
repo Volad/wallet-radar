@@ -5,6 +5,7 @@ import com.walletradar.domain.session.UserSessionRepository;
 import com.walletradar.domain.transaction.bybit.BybitExtractedEvent;
 import com.walletradar.domain.transaction.externalledger.ExternalLedgerRaw;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.ingestion.wallet.query.LinkingPendingStatusQuery;
 import com.walletradar.session.application.AccountingUniverseService;
 import com.walletradar.session.application.SessionPipelineActivityService;
 import lombok.RequiredArgsConstructor;
@@ -22,7 +23,7 @@ import java.util.List;
  */
 @Service
 @RequiredArgsConstructor
-public class LinkingDataGateService {
+public class LinkingDataGateService implements LinkingPendingStatusQuery {
 
     private static final Duration CLASSIFICATION_ACTIVITY_STALE_AFTER = Duration.ofMinutes(2);
     private static final String BRIDGE_MISSING_REASON = "BRIDGE_ON_CHAIN_LEG_NOT_FOUND";
@@ -63,6 +64,7 @@ public class LinkingDataGateService {
         return snapshot(sessionId).ready();
     }
 
+    @Override
     public boolean hasPendingLinking(String sessionId) {
         if (sessionId == null || sessionId.isBlank()) {
             return false;

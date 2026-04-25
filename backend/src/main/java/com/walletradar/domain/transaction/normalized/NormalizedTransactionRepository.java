@@ -2,6 +2,7 @@ package com.walletradar.domain.transaction.normalized;
 
 import com.walletradar.domain.common.NetworkId;
 import org.springframework.data.mongodb.repository.MongoRepository;
+import org.springframework.data.mongodb.repository.Query;
 
 import java.util.Collection;
 import java.util.List;
@@ -26,11 +27,19 @@ public interface NormalizedTransactionRepository extends MongoRepository<Normali
             NormalizedTransactionSource source
     );
 
-    List<NormalizedTransaction> findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+    @Query(
+            value = "{'status': ?0, '$or': [{'excludedFromAccounting': {'$exists': false}}, {'excludedFromAccounting': false}]}",
+            sort = "{'blockTimestamp': 1, 'transactionIndex': 1, '_id': 1}"
+    )
+    List<NormalizedTransaction> findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
             NormalizedTransactionStatus status
     );
 
-    List<NormalizedTransaction> findAllByWalletAddressInAndStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+    @Query(
+            value = "{'walletAddress': {'$in': ?0}, 'status': ?1, '$or': [{'excludedFromAccounting': {'$exists': false}}, {'excludedFromAccounting': false}]}",
+            sort = "{'blockTimestamp': 1, 'transactionIndex': 1, '_id': 1}"
+    )
+    List<NormalizedTransaction> findAllActiveAccountingByWalletAddressInAndStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
             Collection<String> walletAddresses,
             NormalizedTransactionStatus status
     );

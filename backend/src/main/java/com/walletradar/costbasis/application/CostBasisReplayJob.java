@@ -6,6 +6,7 @@ import com.walletradar.domain.session.UserSession;
 import com.walletradar.domain.session.UserSessionRepository;
 import com.walletradar.costbasis.domain.AssetLedgerPointRepository;
 import com.walletradar.ingestion.job.support.StageExecutionLogSupport;
+import com.walletradar.pricing.application.CurrentPriceQuoteRefreshService;
 import com.walletradar.pricing.application.PricingDataGateService;
 import com.walletradar.pricing.application.PricingDataGateSnapshot;
 import com.walletradar.session.application.AccountingUniverseService;
@@ -45,6 +46,7 @@ public class CostBasisReplayJob {
     private final StatValidationService statValidationService;
     private final AvcoReplayService avcoReplayService;
     private final OnChainBalanceRefreshService onChainBalanceRefreshService;
+    private final CurrentPriceQuoteRefreshService currentPriceQuoteRefreshService;
     private final AssetLedgerPointRepository assetLedgerPointRepository;
     private final PipelineTelemetrySnapshotService pipelineTelemetrySnapshotService;
     private final SessionPipelineActivityService sessionPipelineActivityService;
@@ -180,6 +182,12 @@ public class CostBasisReplayJob {
                     "Costbasis on-chain balance refresh outcome: sessionId={}, refreshed={}",
                     sessionId,
                     refreshedBalances
+            );
+            int refreshedQuotes = currentPriceQuoteRefreshService.refreshForSessionBalances(sessionId, evidenceCapturedAt);
+            log.info(
+                    "Costbasis current quote refresh outcome: sessionId={}, refreshed={}",
+                    sessionId,
+                    refreshedQuotes
             );
 
             logStatOutcome(promoted, demoted, statProcessed, replaySafeReviewPromoted);

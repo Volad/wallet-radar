@@ -28,6 +28,17 @@ Rows with `excludedFromAccounting = true` remain persisted for audit and operato
 visibility, but are outside the active accounting scope. They never enter pricing
 gates or AVCO replay.
 
+Confirmed replay queries must therefore use the active accounting predicate:
+
+```text
+status = CONFIRMED
+AND excludedFromAccounting != true
+```
+
+Replay dispatchers may keep a second defensive guard for excluded rows, but the
+primary contract is that excluded rows are not replay input and cannot produce
+`asset_ledger_points`.
+
 For session-facing history reads, the active scope is:
 
 - `user_sessions.wallets[].address`
@@ -734,6 +745,9 @@ Implications:
 - pricing failure does not remove quantity from replay
 - pricing gaps must be visible as warnings or blockers
 - euro-backed stablecoins such as `EURC` may price from official ECB EUR/USD FX
+- audited Aave Avalanche receipt aliases (`aAvaWAVAX`, `aAvaSAVAX`) and
+  `sAVAX` use the `AVAX` market symbol for historical reward/accrual pricing,
+  while replay still keeps exact receipt-token buckets separate
 - Bybit market data may be used before Binance
 - Binance is the primary external market-data source, not the primary overall
   pricing source
@@ -913,6 +927,14 @@ Transaction-type pricing contract:
     between `Stake` and `Mint`.
   - Replay carries cost basis from the principal asset into the liquid staking
     derivative and must not realize PnL on the conversion itself.
+  - Replay allocates available covered source principal to the destination
+    derivative by absolute carried principal, capped by destination quantity.
+    It must not multiply the destination quantity by the source covered ratio
+    when the derivative quantity is lower than the source principal.
+  - If the source principal is only partly covered, the uncovered source
+    remainder stays uncovered; coverage is not fabricated. If the destination
+    quantity exceeds proven principal, only the explicit excess remains
+    uncovered or priced as yield when protocol semantics prove it.
   - Classic stake-contract deposits such as Pancake SmartChef
     `deposit(uint256)` keep staked principal and proof-token markers as
     `TRANSFER`.
@@ -1453,10 +1475,25 @@ Current holdings are derived on read:
 - `quantityShortfall` is a lifetime audit counter for historical coverage gaps;
   it must not erase basis coverage for later acquisitions once the missing
   quantity is no longer held
+- when a later sell, fee, or unknown outbound consumes a mixed replay bucket,
+  replay consumes the uncovered current tail before covered AVCO-backed
+  quantity. This keeps `uncoveredQuantity` aligned with what is still held,
+  while preserving historical `quantityShortfall` as the audit trail.
+- continuity carry outflows keep the existing covered-first transfer contract
+  so linked destination buckets receive available basis before any unresolved
+  transfer tail.
 - current live accrual beyond replay-carried principal is uncovered current
   quantity, not silently basis-backed principal
 - live-positive rows with zero carried basis must remain explicit uncovered
   current quantity, not synthetic basis
+- small native ETH gas-reserve residuals may be scorecard-classified as
+  non-blocking only when replay has reached a native `GAS_ONLY` terminal point,
+  no later canonical economic flow explains the current balance, and the
+  residual is below the deterministic `0.0015 ETH` threshold. This is a
+  reporting/materiality policy; it does not synthesize cost basis.
+- any residual blocking quantity at or below `1e-9` units after explicit
+  scorecard policies is classified as non-blocking sub-unit dust. This is only
+  a reporting threshold and never creates carried basis.
 - session family asset-ledger reads may expose `shortfallSources` aggregated
   from positive `quantityShortfallDelta` rows
 - this is an audit/debug surface for historical provenance debt, not a replay

@@ -10,6 +10,7 @@ import com.walletradar.ingestion.config.BackfillSegmentConfiguration;
 import com.walletradar.ingestion.config.BackfillSegmentsConfiguration;
 import com.walletradar.ingestion.config.BackfillProperties;
 import com.walletradar.ingestion.config.IngestionNetworkProperties;
+import com.walletradar.ingestion.wallet.command.WalletBackfillPlanner;
 import com.walletradar.integration.IntegrationBackfillPlanningService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -32,7 +33,7 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 @Slf4j
-public class BackfillJobPlanner {
+public class BackfillJobPlanner implements WalletBackfillPlanner {
 
     private static final int MAX_SEGMENTS = 1000;
 
@@ -106,6 +107,7 @@ public class BackfillJobPlanner {
         return plannedSegments;
     }
 
+    @Override
     public int planPendingOnChainSources(String walletAddress, List<NetworkId> networks) {
         if (walletAddress == null || walletAddress.isBlank()) {
             return 0;

@@ -145,19 +145,9 @@ public class LiquidStakingReplayHandler {
             return;
         }
 
-        BigDecimal coveredRatio = safeDivide(carry.totalCoveredQuantity(), carry.totalSourceQuantity());
-        if (coveredRatio == null) {
-            coveredRatio = BigDecimal.ZERO;
-        }
-        if (coveredRatio.signum() < 0) {
-            coveredRatio = BigDecimal.ZERO;
-        }
-        if (coveredRatio.compareTo(BigDecimal.ONE) > 0) {
-            coveredRatio = BigDecimal.ONE;
-        }
-
-        BigDecimal totalInboundWeight = totalInboundWeight(inboundFlows);
         BigDecimal remainingCost = carry.totalCostBasisUsd();
+        BigDecimal remainingCoveredQuantity = carry.totalCoveredQuantity();
+        BigDecimal totalCoveredDestinationQuantity = totalInboundQuantity(inboundFlows).min(carry.totalCoveredQuantity());
         for (int index = 0; index < inboundFlows.size(); index++) {
             IndexedFlow indexedFlow = inboundFlows.get(index);
             NormalizedTransaction.Flow flow = indexedFlow.flow();
@@ -170,14 +160,16 @@ public class LiquidStakingReplayHandler {
             PositionSnapshot before = flowSupport.snapshot(position);
 
             BigDecimal quantity = flow.getQuantityDelta().abs();
-            BigDecimal allocatedCost = index == inboundFlows.size() - 1
+            BigDecimal coveredBefore = remainingCoveredQuantity;
+            BigDecimal coveredQuantity = quantity.min(remainingCoveredQuantity);
+            boolean consumesFinalCoveredPrincipal = nonNegative(coveredBefore.subtract(coveredQuantity, MC)).signum() == 0;
+            BigDecimal allocatedCost = coveredQuantity.signum() == 0
+                    ? BigDecimal.ZERO
+                    : consumesFinalCoveredPrincipal
                     ? remainingCost
-                    : carry.totalCostBasisUsd().multiply(
-                    inboundWeight(indexedFlow).divide(totalInboundWeight, MC),
-                    MC
-            );
+                    : allocatedCost(carry.totalCostBasisUsd(), coveredQuantity, totalCoveredDestinationQuantity);
             remainingCost = remainingCost.subtract(allocatedCost, MC);
-            BigDecimal coveredQuantity = quantity.multiply(coveredRatio, MC);
+            remainingCoveredQuantity = nonNegative(remainingCoveredQuantity.subtract(coveredQuantity, MC));
             BigDecimal uncoveredQuantity = nonNegative(quantity.subtract(coveredQuantity, MC));
             BigDecimal avco = coveredQuantity.signum() > 0
                     ? safeDivide(allocatedCost, coveredQuantity)
@@ -209,32 +201,27 @@ public class LiquidStakingReplayHandler {
                 || (flow.getRole() == NormalizedLegRole.BUY && flow.getQuantityDelta().signum() > 0);
     }
 
-    private BigDecimal totalInboundWeight(List<IndexedFlow> inboundFlows) {
-        if (assetSupport.allHaveKnownPrices(inboundFlows.stream().map(IndexedFlow::flow).toList())) {
-            BigDecimal total = BigDecimal.ZERO;
-            for (IndexedFlow inboundFlow : inboundFlows) {
-                total = total.add(inboundWeight(inboundFlow), MC);
-            }
-            if (total.signum() > 0) {
-                return total;
-            }
+    private BigDecimal allocatedCost(
+            BigDecimal totalCostBasisUsd,
+            BigDecimal coveredQuantity,
+            BigDecimal totalCoveredDestinationQuantity
+    ) {
+        if (totalCostBasisUsd == null
+                || coveredQuantity == null
+                || coveredQuantity.signum() <= 0
+                || totalCoveredDestinationQuantity == null
+                || totalCoveredDestinationQuantity.signum() <= 0) {
+            return BigDecimal.ZERO;
         }
+        return totalCostBasisUsd.multiply(coveredQuantity.divide(totalCoveredDestinationQuantity, MC), MC);
+    }
+
+    private BigDecimal totalInboundQuantity(List<IndexedFlow> inboundFlows) {
         BigDecimal totalQuantity = BigDecimal.ZERO;
         for (IndexedFlow inboundFlow : inboundFlows) {
             totalQuantity = totalQuantity.add(inboundFlow.flow().getQuantityDelta().abs(), MC);
         }
-        return totalQuantity.signum() > 0 ? totalQuantity : BigDecimal.ONE;
-    }
-
-    private BigDecimal inboundWeight(IndexedFlow inboundFlow) {
-        NormalizedTransaction.Flow flow = inboundFlow.flow();
-        if (assetSupport.hasKnownPrice(flow)) {
-            BigDecimal value = flow.getQuantityDelta().abs().multiply(flow.getUnitPriceUsd(), MC);
-            if (value.signum() > 0) {
-                return value;
-            }
-        }
-        return flow.getQuantityDelta().abs();
+        return totalQuantity.signum() > 0 ? totalQuantity : BigDecimal.ZERO;
     }
 
     private static BigDecimal safeDivide(BigDecimal numerator, BigDecimal denominator) {

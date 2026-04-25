@@ -7,6 +7,7 @@ import com.walletradar.domain.sync.BackfillSegment;
 import com.walletradar.domain.sync.BackfillSegmentRepository;
 import com.walletradar.domain.sync.SyncStatus;
 import com.walletradar.domain.sync.SyncStatusRepository;
+import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.session.application.AccountingUniverseService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -15,12 +16,15 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.mongodb.core.MongoOperations;
+import org.springframework.data.mongodb.core.query.Query;
 
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -34,6 +38,8 @@ class SessionQueryServiceTest {
     private BackfillSegmentRepository backfillSegmentRepository;
     @Mock
     private AccountingUniverseService accountingUniverseService;
+    @Mock
+    private LinkingPendingStatusQuery linkingPendingStatusQuery;
     @Mock
     private MongoOperations mongoOperations;
 
@@ -260,6 +266,47 @@ class SessionQueryServiceTest {
         assertThat(status.acquisitionStatus()).isEqualTo("COMPLETE");
         assertThat(status.pipelineStage()).isEqualTo("PRICING");
         assertThat(status.pipelineStatus()).isEqualTo("RUNNING");
+    }
+
+    @Test
+    @DisplayName("accounting replay progress treats confirmed zero-flow rows as processed")
+    void findBackfillStatus_accountingReplayCountsZeroFlowRowsAsProcessed() {
+        UserSession session = session(
+                "s-8",
+                wallet("0xabc", "Wallet 1", "#22d3ee", List.of(NetworkId.ETHEREUM))
+        );
+        stubScope(session, List.of("0xabc"), List.of("0xabc"));
+
+        UserSession.PipelineState pipelineState = new UserSession.PipelineState();
+        pipelineState.setStage(UserSession.PipelineStage.ACCOUNTING_REPLAY);
+        pipelineState.setStatus(UserSession.PipelineStatus.RUNNING);
+        pipelineState.setMessage("Accounting replay running");
+        session.setPipelineState(pipelineState);
+
+        when(userSessionRepository.findById("s-8")).thenReturn(Optional.of(session));
+
+        SyncStatus completeEth = new SyncStatus();
+        completeEth.setWalletAddress("0xabc");
+        completeEth.setNetworkId(NetworkId.ETHEREUM.name());
+        completeEth.setStatus(SyncStatus.SyncStatusValue.COMPLETE);
+        completeEth.setProgressPct(100);
+        completeEth.setBackfillComplete(true);
+        when(syncStatusRepository.findByWalletAddressIn(List.of("0xabc"))).thenReturn(List.of(completeEth));
+        when(mongoOperations.count(any(Query.class), eq(NormalizedTransaction.class))).thenReturn(4L, 1L);
+        when(mongoOperations.findDistinct(
+                any(Query.class),
+                eq("normalizedTransactionId"),
+                eq("asset_ledger_points"),
+                eq(String.class)
+        )).thenReturn(List.of("tx-1", "tx-2", "tx-3"));
+
+        SessionQueryService.SessionBackfillStatusView status = sessionQueryService.findBackfillStatus("s-8").orElseThrow();
+
+        assertThat(status.phaseProgress()).isNotNull();
+        assertThat(status.phaseProgress().phase()).isEqualTo("ACCOUNTING_REPLAY");
+        assertThat(status.phaseProgress().processedCount()).isEqualTo(4L);
+        assertThat(status.phaseProgress().leftCount()).isZero();
+        assertThat(status.phaseProgress().progressPct()).isEqualTo(100);
     }
 
     @Test

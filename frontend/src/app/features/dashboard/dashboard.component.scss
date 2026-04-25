@@ -997,7 +997,7 @@
 
 .tokens-grid {
   display: grid;
-  grid-template-columns: 2.15rem minmax(6.8rem, 1fr) 5rem 5.6rem 5.6rem 5.6rem 5.6rem;
+  grid-template-columns: 2.15rem minmax(6.8rem, 1fr) 5rem 5.6rem 5.6rem 5.6rem;
   gap: 0.35rem;
   align-items: center;
 }
@@ -1055,6 +1055,19 @@
   align-items: center;
   gap: 0.4rem;
   flex-wrap: wrap;
+}
+
+.price-cell {
+  min-width: 0;
+}
+
+.price-subline {
+  justify-content: flex-end;
+  white-space: nowrap;
+
+  &.warn {
+    color: var(--wr-amber);
+  }
 }
 
 .token-scope-stack {
@@ -1900,7 +1913,7 @@ select {
   }
 
   .tokens-grid {
-    grid-template-columns: 1.95rem minmax(5.6rem, 1fr) 4rem 4.6rem 4.4rem 4.4rem 4.4rem;
+    grid-template-columns: 1.95rem minmax(5.6rem, 1fr) 4rem 4.6rem 4.4rem 4.4rem;
     gap: 0.22rem;
   }
 

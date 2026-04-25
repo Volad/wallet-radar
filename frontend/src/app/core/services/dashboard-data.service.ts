@@ -8,7 +8,14 @@ import {
   EVM_NETWORK_PRESENTATION_BY_ID,
   SECTIONS,
 } from '../data/dashboard.constants';
-import { DashboardData, NetworkInfo, PortfolioMetric, WalletInfo } from '../models/dashboard.models';
+import {
+  DashboardData,
+  IssueCode,
+  NetworkInfo,
+  PortfolioMetric,
+  PriceSource,
+  WalletInfo,
+} from '../models/dashboard.models';
 import { EvmNetworkId, SessionDashboardResponse } from '../models/wallet-api.models';
 import { WalletApiService } from './wallet-api.service';
 
@@ -79,7 +86,14 @@ export class DashboardDataService {
         symbol: position.symbol,
         name: position.name,
         quantity: position.quantity,
+        coveredQuantity: position.coveredQuantity,
         priceUsd: position.priceUsd,
+        marketValueUsd: position.marketValueUsd,
+        priceSource: this.toPriceSource(position.priceSource),
+        pricedAt: position.pricedAt,
+        stalenessSeconds: position.stalenessSeconds,
+        isLiveQuote: position.isLiveQuote,
+        priceIssue: this.toIssueCode(position.priceIssue),
         avcoUsd: position.avcoUsd,
         unrealizedPnlPct: position.unrealizedPnlPct,
         unrealizedPnlUsd: position.unrealizedPnlUsd,
@@ -105,17 +119,35 @@ export class DashboardDataService {
     return `${prefix}${value.toFixed(1)}%`;
   }
 
-  private toIssueCode(
-    issue: string | null
-  ): 'yield_accrual' | 'coverage_gap' | 'history_flags' | 'missing_replay_point' | 'missing_price' | null {
+  private toIssueCode(issue: string | null): IssueCode {
     if (
       issue === 'yield_accrual' ||
       issue === 'coverage_gap' ||
       issue === 'history_flags' ||
       issue === 'missing_replay_point' ||
-      issue === 'missing_price'
+      issue === 'missing_price' ||
+      issue === 'stale_price' ||
+      issue === 'historical_price_fallback'
     ) {
       return issue;
+    }
+    return null;
+  }
+
+  private toPriceSource(priceSource: string | null): PriceSource | null {
+    if (
+      priceSource === 'STABLECOIN' ||
+      priceSource === 'SWAP_DERIVED' ||
+      priceSource === 'COINGECKO' ||
+      priceSource === 'MANUAL' ||
+      priceSource === 'UNKNOWN' ||
+      priceSource === 'BYBIT' ||
+      priceSource === 'BINANCE' ||
+      priceSource === 'ECB' ||
+      priceSource === 'EXECUTION' ||
+      priceSource === 'WRAPPER'
+    ) {
+      return priceSource;
     }
     return null;
   }
