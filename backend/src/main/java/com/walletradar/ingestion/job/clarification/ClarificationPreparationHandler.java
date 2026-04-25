@@ -107,7 +107,8 @@ final class ClarificationPreparationHandler {
     Optional<ClarificationReceiptEnrichment> fetchFullReceiptOrMarkFailure(
             NormalizedTransaction normalizedTransaction,
             RawTransaction rawTransaction,
-            Instant now
+            Instant now,
+            int maxAttempts
     ) {
         Optional<ClarificationReceiptEnrichment> enrichment = safeOptional(
                 clarificationGateway.fromPersistedEvidence(rawTransaction, true)
@@ -120,7 +121,8 @@ final class ClarificationPreparationHandler {
                     normalizedTransaction,
                     rawTransaction,
                     ClassificationReasonCode.CLARIFICATION_FULL_RECEIPT_UNAVAILABLE.code(),
-                    now
+                    now,
+                    maxAttempts
             );
         }
         return enrichment;

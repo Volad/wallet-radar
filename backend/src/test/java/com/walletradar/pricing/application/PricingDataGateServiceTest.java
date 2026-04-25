@@ -22,7 +22,7 @@ class PricingDataGateServiceTest {
         when(mongoOperations.count(
                 any(org.springframework.data.mongodb.core.query.Query.class),
                 org.mockito.ArgumentMatchers.eq(NormalizedTransaction.class)
-        )).thenReturn(0L, 0L, 0L, 3L, 12L);
+        )).thenReturn(0L, 0L, 0L, 0L, 3L, 12L);
 
         PricingDataGateSnapshot snapshot = new PricingDataGateService(mongoOperations).snapshot();
 
@@ -36,7 +36,7 @@ class PricingDataGateServiceTest {
         when(mongoOperations.count(
                 any(org.springframework.data.mongodb.core.query.Query.class),
                 org.mockito.ArgumentMatchers.eq(NormalizedTransaction.class)
-        )).thenReturn(5L, 0L, 0L, 0L, 0L);
+        )).thenReturn(5L, 0L, 0L, 0L, 0L, 0L);
 
         PricingDataGateSnapshot snapshot = new PricingDataGateService(mongoOperations).snapshot();
 

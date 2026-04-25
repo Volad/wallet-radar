@@ -45,6 +45,7 @@ public class BybitBackfillSegmentPlanner implements IntegrationBackfillPlanner {
         index = addTimeRangeSegments(sessionId, integration, BybitIntegrationStream.EXECUTION_SPOT, from, anchor, bybitIntegrationProperties.getExecutionWindowDays(), index, segments, plannedAt);
         index = addTimeRangeSegments(sessionId, integration, BybitIntegrationStream.EXECUTION_OPTION, from, anchor, bybitIntegrationProperties.getExecutionWindowDays(), index, segments, plannedAt);
         index = addTimeRangeSegments(sessionId, integration, BybitIntegrationStream.FUNDING_HISTORY, from, anchor, bybitIntegrationProperties.getFundingHistoryWindowDays(), index, segments, plannedAt);
+        index = addTimeRangeSegments(sessionId, integration, BybitIntegrationStream.EARN_FLEXIBLE_SAVING, from, anchor, bybitIntegrationProperties.getEarnWindowDays(), index, segments, plannedAt);
         index = addTimeRangeSegments(sessionId, integration, BybitIntegrationStream.DEPOSIT_ONCHAIN, from, anchor, bybitIntegrationProperties.getDepositWithdrawalWindowDays(), index, segments, plannedAt);
         index = addTimeRangeSegments(sessionId, integration, BybitIntegrationStream.WITHDRAWAL, from, anchor, bybitIntegrationProperties.getDepositWithdrawalWindowDays(), index, segments, plannedAt);
         return List.copyOf(segments);
@@ -71,6 +72,7 @@ public class BybitBackfillSegmentPlanner implements IntegrationBackfillPlanner {
         index = addTimeRangeSegments(sessionId, integration, BybitIntegrationStream.EXECUTION_SPOT, effectiveFrom, effectiveTo, bybitIntegrationProperties.getExecutionWindowDays(), index, segments, plannedAt);
         index = addTimeRangeSegments(sessionId, integration, BybitIntegrationStream.EXECUTION_OPTION, effectiveFrom, effectiveTo, bybitIntegrationProperties.getExecutionWindowDays(), index, segments, plannedAt);
         index = addTimeRangeSegments(sessionId, integration, BybitIntegrationStream.FUNDING_HISTORY, effectiveFrom, effectiveTo, bybitIntegrationProperties.getFundingHistoryWindowDays(), index, segments, plannedAt);
+        index = addTimeRangeSegments(sessionId, integration, BybitIntegrationStream.EARN_FLEXIBLE_SAVING, effectiveFrom, effectiveTo, bybitIntegrationProperties.getEarnWindowDays(), index, segments, plannedAt);
         index = addTimeRangeSegments(sessionId, integration, BybitIntegrationStream.DEPOSIT_ONCHAIN, effectiveFrom, effectiveTo, bybitIntegrationProperties.getDepositWithdrawalWindowDays(), index, segments, plannedAt);
         addTimeRangeSegments(sessionId, integration, BybitIntegrationStream.WITHDRAWAL, effectiveFrom, effectiveTo, bybitIntegrationProperties.getDepositWithdrawalWindowDays(), index, segments, plannedAt);
         return List.copyOf(segments);

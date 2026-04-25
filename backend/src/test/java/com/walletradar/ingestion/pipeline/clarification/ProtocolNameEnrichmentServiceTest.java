@@ -48,7 +48,8 @@ class ProtocolNameEnrichmentServiceTest {
         rawTransaction.setWalletAddress("0xwallet");
         rawTransaction.setRawData(new Document("timeStamp", "1700000000").append("transactionIndex", "1"));
 
-        when(queryService.loadNextBatch(50)).thenReturn(List.of(transaction));
+        when(queryService.loadBatchAfterId(null, 50)).thenReturn(List.of(transaction));
+        when(queryService.loadBatchAfterId("tx-1", 50)).thenReturn(List.of());
         when(rawTransactionRepository.findById("0xabc:ARBITRUM:0xwallet")).thenReturn(Optional.of(rawTransaction));
         when(resolutionService.resolve(transaction, rawTransaction))
                 .thenReturn(Optional.of(new ProtocolNameResolutionService.ResolvedProtocolName("Uniswap", "V3", null)));
@@ -98,7 +99,7 @@ class ProtocolNameEnrichmentServiceTest {
     }
 
     @Test
-    void processRepairSweepAdvancesPastUnresolvedRowsAndCanonicalizesLegacyNames() {
+    void processNextBatchScansPastUnresolvedRowsAndCanonicalizesLegacyNames() {
         NormalizedTransaction unresolved = new NormalizedTransaction();
         unresolved.setId("a");
         unresolved.setTxHash("0xaaa");
@@ -122,9 +123,9 @@ class ProtocolNameEnrichmentServiceTest {
         RawTransaction resolvableRaw = new RawTransaction();
         resolvableRaw.setId("0xccc:ARBITRUM:0xwallet3");
 
-        when(queryService.loadRepairBatchAfter(null, 50)).thenReturn(List.of(unresolved, legacy));
-        when(queryService.loadRepairBatchAfter("b", 50)).thenReturn(List.of(resolvable));
-        when(queryService.loadRepairBatchAfter("c", 50)).thenReturn(List.of());
+        when(queryService.loadBatchAfterId(null, 50)).thenReturn(List.of(unresolved, legacy));
+        when(queryService.loadBatchAfterId("b", 50)).thenReturn(List.of(resolvable));
+        when(queryService.loadBatchAfterId("c", 50)).thenReturn(List.of());
         when(rawTransactionRepository.findById("0xaaa:ARBITRUM:0xwallet1")).thenReturn(Optional.of(unresolvedRaw));
         when(rawTransactionRepository.findById("0xccc:ARBITRUM:0xwallet3")).thenReturn(Optional.of(resolvableRaw));
         when(resolutionService.resolve(unresolved, unresolvedRaw)).thenReturn(Optional.empty());
@@ -145,7 +146,7 @@ class ProtocolNameEnrichmentServiceTest {
                 normalizedTransactionRepository
         );
 
-        int updated = service.processRepairSweep(50);
+        int updated = service.processNextBatch(50);
 
         assertThat(updated).isEqualTo(2);
         verify(normalizedTransactionRepository, org.mockito.Mockito.times(2)).save(org.mockito.ArgumentMatchers.any());

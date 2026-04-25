@@ -101,6 +101,8 @@ final class ClarificationFailureHandler {
         );
         normalizedTransaction.setStatus(decision.status());
         normalizedTransaction.setMissingDataReasons(decision.missingDataReasons());
+        normalizedTransaction.setClarificationLeaseUntil(null);
+        normalizedTransaction.setClarificationWorkerId(null);
         normalizedTransactionRepository.save(normalizedTransaction);
     }
 
@@ -109,6 +111,16 @@ final class ClarificationFailureHandler {
             RawTransaction rawTransaction,
             String reason,
             Instant now
+    ) {
+        markReceiptFailure(normalizedTransaction, rawTransaction, reason, now, 1);
+    }
+
+    void markReceiptFailure(
+            NormalizedTransaction normalizedTransaction,
+            RawTransaction rawTransaction,
+            String reason,
+            Instant now,
+            int maxAttempts
     ) {
         int nextAttempts = safeAttempts(normalizedTransaction.getFullReceiptClarificationAttempts()) + 1;
         if (rawTransaction != null) {
@@ -121,9 +133,17 @@ final class ClarificationFailureHandler {
         }
         normalizedTransaction.setFullReceiptClarificationAttempts(nextAttempts);
         normalizedTransaction.setUpdatedAt(now);
-        ClarificationDecision decision = clarificationPolicyService.nextReceiptFailureDecision(normalizedTransaction, reason);
+        ClarificationDecision decision = clarificationPolicyService.nextReceiptFailureDecision(
+                normalizedTransaction,
+                rawTransaction,
+                reason,
+                nextAttempts,
+                maxAttempts
+        );
         normalizedTransaction.setStatus(decision.status());
         normalizedTransaction.setMissingDataReasons(decision.missingDataReasons());
+        normalizedTransaction.setClarificationLeaseUntil(null);
+        normalizedTransaction.setClarificationWorkerId(null);
         normalizedTransactionRepository.save(normalizedTransaction);
     }
 

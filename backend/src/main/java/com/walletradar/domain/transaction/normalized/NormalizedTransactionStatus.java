@@ -5,6 +5,7 @@ package com.walletradar.domain.transaction.normalized;
  */
 public enum NormalizedTransactionStatus {
     PENDING_CLARIFICATION,
+    PENDING_RECLASSIFICATION,
     PENDING_PRICE,
     PENDING_STAT,
     CONFIRMED,

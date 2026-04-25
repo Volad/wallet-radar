@@ -5,9 +5,9 @@
 Fresh full-role audit was rebuilt from the current live Mongo state, not from the archived cycle bundle. The authoritative dataset basis for this package is:
 
 - Mongo database: `walletradar`
-- Live capture time: `2026-04-21T17:12:17.100Z`
+- Live capture time: `2026-04-21T19:37:12.784Z`
 - Accounting universe / session id: `c584c760-b228-45fc-ae0f-84f7cd7bfd8f`
-- Pipeline state during capture: `ACCOUNTING_REPLAY / COMPLETE` at `2026-04-21T15:42:11.946Z`
+- Pipeline state during capture: `ACCOUNTING_REPLAY / COMPLETE` at `2026-04-21T19:36:09.805Z`
 - Wallets in scope: `Metamask:0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f`, `TWT:0xf03b52e8686b962e051a6075a06b96cb8a663021`, `Uni:0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f`, `Bybit onchain:0xa0dd42c626b002778f93e1ab42cbed5f31c117b2`
 - Integrations in scope: `BYBIT:BYBIT:33625378`
 
@@ -27,9 +27,9 @@ Critical evidence boundary:
 - `unknown confirmed normalized rows = 223`
 - `bybit_extracted_events(status=RAW) = 1286`
 - `bybit_extracted_events(status=CONFIRMED) = 3271`
-- `asset_ledger_points = 9249`
+- `asset_ledger_points = 9266`
 - `on_chain_balances = 213`
-- `unmatchedBridgeOut = 27`
+- `unmatchedBridgeOut = 28`
 - `unmatchedBridgeIn = 9`
 
 Current `NEEDS_REVIEW` inventory is concentrated in explicit Bybit unsupported or shadow lanes:
@@ -45,11 +45,11 @@ Current `NEEDS_REVIEW` inventory is concentrated in explicit Bybit unsupported o
 
 | Asset | Exact coverage | Exact uncovered | Family coverage | Family uncovered | Exact final-clean | Family final-clean |
 | --- | ---: | ---: | ---: | ---: | --- | --- |
-| ETH | 0.758585565758092328 | 0.005604525124182205 | 0.995424985292039377 | 0.014147670984662762 | no | no |
+| ETH | 0.758585565758092328 | 0.005604525124182205 | 0.995413775064410755 | 0.014182496956267075 | no | no |
 | BTC | 1 | 0 | 0.99998032365402878 | 8.999999999946551e-08 | yes | no |
 | MNT | 1 | 0 | 0.008451767781545872 | 1675.520059541154068938 | yes | no |
-| AVAX | 0.628797411316525223 | 0.093456895658393546 | 0.587152900232392749 | 1.102371884607963981 | no | no |
-| USDC | 0.732427143276433323 | 361.75995199999988472 | 0.732427143276433323 | 361.759951999999998407 | no | no |
+| AVAX | 0.628797411316525223 | 0.093456895658393546 | 0.58750224244027005 | 1.101439081571954581 | no | no |
+| USDC | 0.755283255824940825 | 330.858363999999937732 | 0.755283255824940825 | 330.858364000000051419 | no | no |
 | USDT | 0.000218599015255947 | 1.234868226418219139 | 0.000218599015255947 | 1.234868226418219139 | no | no |
 
 High-signal conclusions from the current live basis:
@@ -57,7 +57,7 @@ High-signal conclusions from the current live basis:
 - Exact reference assets clean now: `BTC`, `MNT`
 - Exact reference assets still failing now: `ETH`, `AVAX`, `USDC`, `USDT`
 - Family surfaces still failing final-clean now: all six mandatory families, with the largest remainder on `FAMILY:MNT`
-- The highest supported on-chain uncovered exact quantity is `USDC = 361.75995199999988472`
+- The highest supported on-chain uncovered exact quantity is `USDC = 330.858363999999937732`
 - The highest broader-goal family remainder is `FAMILY:MNT = 1675.520059541154068938`, but that lane is blocked by missing raw CEX source evidence in this live DB snapshot
 
 ## Material findings
@@ -66,7 +66,7 @@ High-signal conclusions from the current live basis:
 
 - Severity: `high`
 - Surfaces: `ETH exact`, `ETH family`
-- Current database truth: ETH exact coverage is 0.758585565758092328 with uncovered 0.005604525124182205 across 3 materially dirty exact buckets. ETH family coverage is 0.995424985292039377 but still has uncovered 0.014147670984662762 and 19 dirty buckets.
+- Current database truth: ETH exact coverage is 0.758585565758092328 with uncovered 0.005604525124182205 across 3 materially dirty exact buckets. ETH family coverage is 0.995413775064410755 but still has uncovered 0.014182496956267075 and 19 dirty buckets.
 - Auditor-derived financially correct state: Same-family bridge, wrapper, and lending receipt-token principal must carry basis end to end. Only explicit positive excess over the carried principal should become acquisition.
 - First failed stage: `normalization + move_basis`
 - Evidence diagnosis: EVIDENCE_PRESENT_UNLINKED for native bridge/native dust buckets; EVIDENCE_PRESENT_UNUSABLE for receipt-token rows that still hide yield inside one coarse continuity leg.
@@ -80,7 +80,7 @@ High-signal conclusions from the current live basis:
 
 - Severity: `high`
 - Surfaces: `AVAX exact`, `AVAX family`
-- Current database truth: AVAX exact coverage is 0.628797411316525223 with uncovered 0.093456895658393546. AVAX family coverage is 0.587152900232392749 with uncovered 1.102371884607963981, dominated by `sAVAX` plus native AVAX.
+- Current database truth: AVAX exact coverage is 0.628797411316525223 with uncovered 0.093456895658393546. AVAX family coverage is 0.58750224244027005 with uncovered 1.101439081571954581, dominated by `sAVAX` plus native AVAX.
 - Auditor-derived financially correct state: Aave-style receipt-token exits and native staking-wrapper transitions are continuity. Principal basis should move from `aAvaWAVAX` and native AVAX into the returned AVAX or `sAVAX` position; only net excess should be acquisition.
 - First failed stage: `move_basis`
 - Evidence diagnosis: EVIDENCE_PRESENT_UNLINKED
@@ -94,7 +94,7 @@ High-signal conclusions from the current live basis:
 
 - Severity: `high`
 - Surfaces: `USDC exact`, `USDC family`
-- Current database truth: USDC exact coverage is 0.732427143276433323 with uncovered 361.75995199999988472. Two Arbitrum buckets explain nearly all of it: 351.488204999999993561 on `0x0765...` and 10.271747000000004846 on `0x101c...`.
+- Current database truth: USDC exact coverage is 0.755283255824940825 with uncovered 330.858363999999937732. Two Arbitrum buckets explain nearly all of it: 320.586617000000046573 on `0x0765...` and 10.271747000000004846 on `0x101c...`.
 - Auditor-derived financially correct state: Bridge carry, vault receipt-token carry, and supported swap chronology are all present. Basis should flow from bridge source rows into Arbitrum USDC and from `eUSDC-6` back into underlying USDC, leaving only explicit vault yield or fee effects as acquisition/disposal.
 - First failed stage: `normalization + move_basis`
 - Evidence diagnosis: EVIDENCE_PRESENT_UNLINKED on supported bridge/vault/swap chronology and EVIDENCE_PRESENT_UNUSABLE where vault receipt-token exits remain too coarse.
@@ -122,7 +122,7 @@ High-signal conclusions from the current live basis:
 
 - Severity: `medium`
 - Surfaces: `Protocol detection`
-- Current database truth: WRAP=343, UNWRAP=336, SWAP=130, BRIDGE_IN=99, BRIDGE_OUT=98, VAULT_DEPOSIT=19, VAULT_WITHDRAW=18, REWARD_CLAIM=15, LP_ENTRY=12, LENDING_DEPOSIT=10, LP_EXIT=10, LP_FEE_CLAIM=6, LENDING_WITHDRAW=4, STAKING_DEPOSIT=2 currently lack `protocolName`. The biggest clusters are wrap/unwrap, swap, and bridge rows.
+- Current database truth: WRAP=343, UNWRAP=336, SWAP=130, BRIDGE_IN=98, BRIDGE_OUT=98, VAULT_DEPOSIT=19, VAULT_WITHDRAW=18, REWARD_CLAIM=15, LP_ENTRY=12, LP_EXIT=10, LENDING_DEPOSIT=10, LP_FEE_CLAIM=6, LENDING_WITHDRAW=4, STAKING_DEPOSIT=2 currently lack `protocolName`. The biggest clusters are wrap/unwrap, swap, and bridge rows.
 - Auditor-derived financially correct state: Protocol labels are best-effort metadata, but they should still be deterministically attached whenever the interacted contract, canonical selector, or audited lifecycle pairing already proves the protocol brand.
 - First failed stage: `protocol enrichment`
 - Evidence diagnosis: EVIDENCE_PRESENT_UNLINKED
@@ -136,7 +136,7 @@ High-signal conclusions from the current live basis:
 
 - Severity: `medium`
 - Surfaces: `Counterparty construction`
-- Current database truth: SWAP=268, EXTERNAL_TRANSFER_IN=186, BRIDGE_OUT=138, EXTERNAL_TRANSFER_OUT=127, BRIDGE_IN=117, LP_ENTRY=90, LENDING_DEPOSIT=87, LP_EXIT=62, LENDING_WITHDRAW=44, VAULT_WITHDRAW=26, VAULT_DEPOSIT=26, BORROW=21, REPAY=16, STAKING_DEPOSIT=6, STAKING_WITHDRAW=1 currently lack `counterpartyAddress`. Gaps are concentrated on swaps, external transfers, bridge rows, lending, and vault operations.
+- Current database truth: SWAP=268, EXTERNAL_TRANSFER_IN=187, BRIDGE_OUT=138, EXTERNAL_TRANSFER_OUT=127, BRIDGE_IN=116, LP_ENTRY=90, LENDING_DEPOSIT=87, LP_EXIT=62, LENDING_WITHDRAW=44, VAULT_DEPOSIT=26, VAULT_WITHDRAW=26, BORROW=21, REPAY=16, STAKING_DEPOSIT=6, STAKING_WITHDRAW=1 currently lack `counterpartyAddress`. Gaps are concentrated on swaps, external transfers, bridge rows, lending, and vault operations.
 - Auditor-derived financially correct state: For on-chain protocol rows, `counterpartyAddress` should point to the interacted contract or deterministic peer. Lifecycle pairing belongs in `correlationId` and `matchedCounterparty`, not inside `counterpartyAddress`.
 - First failed stage: `clarification + linking`
 - Evidence diagnosis: EVIDENCE_PRESENT_UNLINKED
@@ -164,8 +164,8 @@ High-signal conclusions from the current live basis:
 
 The fresh live snapshot shows that metadata quality is not a cosmetic issue. It directly affects auditability and rule authoring:
 
-- Missing `protocolName` is concentrated in deterministic families that already have reusable raw signatures: `WRAP=343`, `UNWRAP=336`, `SWAP=130`, `BRIDGE_IN=99`, `BRIDGE_OUT=98`, `VAULT_DEPOSIT=19`, `VAULT_WITHDRAW=18`, `REWARD_CLAIM=15`
-- Missing `counterpartyAddress` is concentrated in lifecycle-heavy families where row-local interacted contracts and lifecycle pairs must stay separate: `SWAP=268`, `EXTERNAL_TRANSFER_IN=186`, `BRIDGE_OUT=138`, `EXTERNAL_TRANSFER_OUT=127`, `BRIDGE_IN=117`, `LP_ENTRY=90`, `LENDING_DEPOSIT=87`, `LP_EXIT=62`
+- Missing `protocolName` is concentrated in deterministic families that already have reusable raw signatures: `WRAP=343`, `UNWRAP=336`, `SWAP=130`, `BRIDGE_IN=98`, `BRIDGE_OUT=98`, `VAULT_DEPOSIT=19`, `VAULT_WITHDRAW=18`, `REWARD_CLAIM=15`
+- Missing `counterpartyAddress` is concentrated in lifecycle-heavy families where row-local interacted contracts and lifecycle pairs must stay separate: `SWAP=268`, `EXTERNAL_TRANSFER_IN=187`, `BRIDGE_OUT=138`, `EXTERNAL_TRANSFER_OUT=127`, `BRIDGE_IN=116`, `LP_ENTRY=90`, `LENDING_DEPOSIT=87`, `LP_EXIT=62`
 - Several top protocol-gap targets already exist in `protocol-registry.json`, which proves the problem is not only missing registry entries but also missing enrichment materialization on current rows
 
 Top protocol-gap targets from the live snapshot:
@@ -182,24 +182,24 @@ Top protocol-gap targets from the live snapshot:
 | ARBITRUM | BRIDGE_OUT | 0x89c6340b1a1f4b25d36cd8b063d49045caf3f818 | 0xd7a08473 | 16 | no | Add registry or audited enrichment coverage for this target. |
 | AVALANCHE | SWAP | 0x45a62b090df48243f12a21897e7ed91863e2c86b | 0xf1910f70 | 15 | yes | Existing registry coverage is not reaching final row enrichment. |
 | ARBITRUM | SWAP | 0x0000000000001ff3684f28c67538d4d072c22734 | 0x2213bc0b | 9 | no | Add registry or audited enrichment coverage for this target. |
-| KATANA | SWAP | 0xac4c6e212a361c968f1725b4d055b47e63f80b75 | 0x5f3bd1c8 | 8 | no | Add registry or audited enrichment coverage for this target. |
 | AVALANCHE | UNWRAP | 0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7 | 0x2e1a7d4d | 8 | yes | Existing registry coverage is not reaching final row enrichment. |
+| KATANA | SWAP | 0xac4c6e212a361c968f1725b4d055b47e63f80b75 | 0x5f3bd1c8 | 8 | no | Add registry or audited enrichment coverage for this target. |
 
 Current counterparty-gap priorities:
 
 | Type | Missing `counterpartyAddress` rows | Construction rule needed |
 | --- | ---: | --- |
 | SWAP | 268 | Use interacted router/aggregator contract from raw tx as row-local counterparty. |
-| EXTERNAL_TRANSFER_IN | 186 | Use unique external sender from transfer evidence; do not synthesize same-wallet peers. |
+| EXTERNAL_TRANSFER_IN | 187 | Use unique external sender from transfer evidence; do not synthesize same-wallet peers. |
 | BRIDGE_OUT | 138 | Use source bridge contract as counterparty; pair lifecycle with `matchedCounterparty`. |
 | EXTERNAL_TRANSFER_OUT | 127 | Use unique external recipient from transfer evidence. |
-| BRIDGE_IN | 117 | Use destination settlement contract when unique; pair lifecycle with the source row. |
+| BRIDGE_IN | 116 | Use destination settlement contract when unique; pair lifecycle with the source row. |
 | LP_ENTRY | 90 | Use pool/position manager contract, not the LP token itself. |
 | LENDING_DEPOSIT | 87 | Use lending pool/vault contract proven by the interacted address or receipt token. |
 | LP_EXIT | 62 | Use pool/position manager contract, then allocate basis from the carried LP position. |
 | LENDING_WITHDRAW | 44 | Use lending pool/vault contract proven by the interacted address or receipt token. |
-| VAULT_WITHDRAW | 26 | Use vault contract proven by interacted address. |
 | VAULT_DEPOSIT | 26 | Use vault contract proven by interacted address. |
+| VAULT_WITHDRAW | 26 | Use vault contract proven by interacted address. |
 | BORROW | 21 | Use debt/pool contract when selector plus debt markers prove the protocol. |
 | REPAY | 16 | Use debt/pool contract when selector plus debt markers prove the protocol. |
 | STAKING_DEPOSIT | 6 | Use staking contract; keep continuity in family carry. |

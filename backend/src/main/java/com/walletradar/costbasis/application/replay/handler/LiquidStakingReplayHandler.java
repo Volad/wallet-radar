@@ -57,10 +57,7 @@ public class LiquidStakingReplayHandler {
         Map<String, List<IndexedFlow>> flowsByFamily = new LinkedHashMap<>();
         for (IndexedFlow indexedFlow : flowSupport.indexedFlows(transaction)) {
             NormalizedTransaction.Flow flow = indexedFlow.flow();
-            if (flow == null
-                    || flow.getRole() != NormalizedLegRole.TRANSFER
-                    || flow.getQuantityDelta() == null
-                    || flow.getQuantityDelta().signum() == 0) {
+            if (!isPrincipalCandidate(flow)) {
                 continue;
             }
             String continuityIdentity = AccountingAssetFamilySupport.continuityIdentity(flow);
@@ -196,6 +193,20 @@ public class LiquidStakingReplayHandler {
                     AssetLedgerPoint.BasisEffect.REALLOCATE_IN
             );
         }
+    }
+
+    private boolean isPrincipalCandidate(NormalizedTransaction.Flow flow) {
+        if (flow == null
+                || flow.getRole() == null
+                || flow.getQuantityDelta() == null
+                || flow.getQuantityDelta().signum() == 0) {
+            return false;
+        }
+        if (flow.getRole() == NormalizedLegRole.TRANSFER) {
+            return true;
+        }
+        return (flow.getRole() == NormalizedLegRole.SELL && flow.getQuantityDelta().signum() < 0)
+                || (flow.getRole() == NormalizedLegRole.BUY && flow.getQuantityDelta().signum() > 0);
     }
 
     private BigDecimal totalInboundWeight(List<IndexedFlow> inboundFlows) {

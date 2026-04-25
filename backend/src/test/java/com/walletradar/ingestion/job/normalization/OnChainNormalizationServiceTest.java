@@ -10,6 +10,8 @@ import com.walletradar.domain.transaction.raw.RawTransactionRepository;
 import com.walletradar.ingestion.config.OnChainNormalizationProperties;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassificationResult;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassifier;
+import com.walletradar.ingestion.pipeline.clarification.CounterpartyEnrichmentService;
+import com.walletradar.ingestion.pipeline.clarification.ProtocolNameEnrichmentService;
 import com.walletradar.ingestion.pipeline.onchain.OnChainNormalizedTransactionBuilder;
 import com.walletradar.ingestion.pipeline.onchain.PendingRawTransactionQueryService;
 import com.walletradar.ingestion.pipeline.onchain.repair.ExplorerRawOrderingRepairGateway;
@@ -49,6 +51,10 @@ class OnChainNormalizationServiceTest {
     private ExplorerRawOrderingRepairGateway explorerRawOrderingRepairGateway;
     @Mock
     private InternalTransferRawPeerRepairService internalTransferRawPeerRepairService;
+    @Mock
+    private ProtocolNameEnrichmentService protocolNameEnrichmentService;
+    @Mock
+    private CounterpartyEnrichmentService counterpartyEnrichmentService;
 
     private OnChainNormalizationService service;
 
@@ -65,7 +71,9 @@ class OnChainNormalizationServiceTest {
                 normalizedTransactionStore,
                 rawTransactionRepository,
                 explorerRawOrderingRepairGateway,
-                internalTransferRawPeerRepairService
+                internalTransferRawPeerRepairService,
+                protocolNameEnrichmentService,
+                counterpartyEnrichmentService
         );
     }
 
@@ -124,6 +132,32 @@ class OnChainNormalizationServiceTest {
         assertThat(rawTransaction.getRetryCount()).isZero();
         assertThat(rawTransaction.getLastError()).isNull();
         assertThat(rawTransaction.getNextRetryAt()).isNull();
+    }
+
+    @Test
+    @DisplayName("enriches canonical metadata before upsert for typed rows")
+    void enrichesCanonicalMetadataBeforeUpsertForTypedRows() {
+        RawTransaction rawTransaction = raw("0xabc", 1_700_000_000L, 5);
+        when(onChainClassifier.classify(rawTransaction)).thenReturn(classification());
+
+        boolean normalized = service.normalize(rawTransaction);
+
+        assertThat(normalized).isTrue();
+        verify(protocolNameEnrichmentService).enrichInPlace(any(), org.mockito.Mockito.same(rawTransaction), any());
+        verify(counterpartyEnrichmentService).enrichInPlace(any(), org.mockito.Mockito.same(rawTransaction), any());
+    }
+
+    @Test
+    @DisplayName("skips metadata enrichment for unknown review rows")
+    void skipsMetadataEnrichmentForUnknownReviewRows() {
+        RawTransaction rawTransaction = raw("0xabc", null, 5);
+        rawTransaction.setRawData(new Document("transactionIndex", "5"));
+
+        boolean normalized = service.normalize(rawTransaction);
+
+        assertThat(normalized).isTrue();
+        verify(protocolNameEnrichmentService, never()).enrichInPlace(any(), any(), any());
+        verify(counterpartyEnrichmentService, never()).enrichInPlace(any(), any(), any());
     }
 
     @Test

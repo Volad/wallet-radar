@@ -1,5 +1,6 @@
 package com.walletradar.ingestion.job.linking;
 
+import com.walletradar.accounting.support.AccountingAssetFamilySupport;
 import com.walletradar.domain.transaction.bybit.BybitExtractedEvent;
 import com.walletradar.domain.transaction.bybit.BybitExtractedEventRepository;
 import com.walletradar.domain.transaction.externalledger.ExternalLedgerRaw;
@@ -105,7 +106,7 @@ public class BybitBridgeLinkService {
         if (!rawMatches.isEmpty() && !normalizedMatches.isEmpty()) {
             changed = applyMatched(sourceRow, bybitTransaction, rawMatches.getFirst().getId(), now);
         } else if (isExternalCustodyCandidate(mappedRow)) {
-            changed = applyExternalCustody(sourceRow, bybitTransaction, now);
+            changed = applyExternalCustody(sourceRow, mappedRow, bybitTransaction, now);
         } else {
             changed = applyUnmatchedBridgeGap(sourceRow, bybitTransaction, now);
         }
@@ -151,7 +152,7 @@ public class BybitBridgeLinkService {
             String matchedDocId,
             Instant now
     ) {
-        boolean changed = applySourceCorrelation(sourceRow, "MATCHED", matchedDocId);
+        boolean changed = applySourceCorrelation(sourceRow, "MATCHED", matchedDocId, null);
         changed |= clearBridgeAnnotations(bybitTransaction, now);
         if (changed) {
             saveSource(sourceRow);
@@ -162,16 +163,14 @@ public class BybitBridgeLinkService {
 
     private boolean applyExternalCustody(
             Object sourceRow,
+            ExternalLedgerRaw mappedRow,
             NormalizedTransaction bybitTransaction,
             Instant now
     ) {
-        boolean changed = applySourceCorrelation(sourceRow, "EXTERNAL_CUSTODY", null);
+        String correlationId = externalCustodyCorrelationId(bybitTransaction, mappedRow);
+        boolean changed = applySourceCorrelation(sourceRow, "EXTERNAL_CUSTODY", null, correlationId);
         NormalizedTransaction before = snapshot(bybitTransaction);
-        bybitCanonicalTransactionBuilder.markExternalCustodyExcluded(
-                bybitTransaction,
-                now,
-                EXTERNAL_CUSTODY_EXCLUSION_REASON
-        );
+        applyExternalCustodyContinuity(bybitTransaction, mappedRow, correlationId, now);
         changed |= !sameBridgeState(before, bybitTransaction);
         if (changed) {
             saveSource(sourceRow);
@@ -185,7 +184,7 @@ public class BybitBridgeLinkService {
             NormalizedTransaction bybitTransaction,
             Instant now
     ) {
-        boolean changed = applySourceCorrelation(sourceRow, "UNMATCHED", null);
+        boolean changed = applySourceCorrelation(sourceRow, "UNMATCHED", null, null);
         changed |= markBridgeGap(bybitTransaction, now);
         if (changed) {
             saveSource(sourceRow);
@@ -194,7 +193,7 @@ public class BybitBridgeLinkService {
         return changed;
     }
 
-    private boolean applySourceCorrelation(Object sourceRow, String status, String matchedDocId) {
+    private boolean applySourceCorrelation(Object sourceRow, String status, String matchedDocId, String correlationId) {
         if (sourceRow instanceof BybitExtractedEvent row) {
             BybitExtractedEvent.OnChainCorrelation correlation = row.getOnChainCorrelation();
             if (correlation == null) {
@@ -210,8 +209,8 @@ public class BybitBridgeLinkService {
                 correlation.setMatchedDocId(matchedDocId);
                 changed = true;
             }
-            if (correlation.getCorrelationId() != null) {
-                correlation.setCorrelationId(null);
+            if (!sameText(correlation.getCorrelationId(), correlationId)) {
+                correlation.setCorrelationId(correlationId);
                 changed = true;
             }
             return changed;
@@ -231,13 +230,45 @@ public class BybitBridgeLinkService {
                 correlation.setMatchedDocId(matchedDocId);
                 changed = true;
             }
-            if (correlation.getCorrelationId() != null) {
-                correlation.setCorrelationId(null);
+            if (!sameText(correlation.getCorrelationId(), correlationId)) {
+                correlation.setCorrelationId(correlationId);
                 changed = true;
             }
             return changed;
         }
         return false;
+    }
+
+    private void applyExternalCustodyContinuity(
+            NormalizedTransaction transaction,
+            ExternalLedgerRaw row,
+            String correlationId,
+            Instant now
+    ) {
+        removeMissingReason(transaction, BRIDGE_MISSING_REASON);
+        removeMissingReason(transaction, EXTERNAL_CUSTODY_EXCLUSION_REASON);
+        transaction.setExcludedFromAccounting(false);
+        transaction.setAccountingExclusionReason(null);
+        transaction.setCorrelationId(correlationId);
+        transaction.setMatchedCounterparty(null);
+        transaction.setContinuityCandidate(true);
+        String counterpartyAddress = resolveExternalCustodyCounterparty(row, transaction.getType());
+        if (!blank(counterpartyAddress)) {
+            transaction.setCounterpartyAddress(counterpartyAddress);
+        }
+        if (transaction.getFlows() != null) {
+            for (NormalizedTransaction.Flow flow : transaction.getFlows()) {
+                if (flow == null || flow.getRole() == NormalizedLegRole.FEE) {
+                    continue;
+                }
+                flow.setRole(NormalizedLegRole.TRANSFER);
+                flow.setUnitPriceUsd(null);
+                flow.setValueUsd(null);
+                flow.setPriceSource(null);
+            }
+        }
+        restoreBaselineStatus(transaction, now);
+        transaction.setUpdatedAt(now);
     }
 
     private boolean clearBridgeAnnotations(NormalizedTransaction transaction, Instant now) {
@@ -357,6 +388,36 @@ public class BybitBridgeLinkService {
         return !blank(row.getReceivedAddress()) && !trackedWalletLookupService.contains(row.getReceivedAddress());
     }
 
+    private String resolveExternalCustodyCounterparty(
+            ExternalLedgerRaw row,
+            NormalizedTransactionType type
+    ) {
+        if (row == null || type == null) {
+            return null;
+        }
+        return switch (type) {
+            case EXTERNAL_TRANSFER_IN -> blank(row.getSenderAddress()) ? null : row.getSenderAddress();
+            case EXTERNAL_TRANSFER_OUT -> blank(row.getReceivedAddress()) ? null : row.getReceivedAddress();
+            default -> null;
+        };
+    }
+
+    private String externalCustodyCorrelationId(
+            NormalizedTransaction transaction,
+            ExternalLedgerRaw row
+    ) {
+        String walletRef = transaction == null ? null : transaction.getWalletAddress();
+        String network = row == null || row.getNetworkId() == null ? "BYBIT" : row.getNetworkId().name();
+        String continuityIdentity = AccountingAssetFamilySupport.continuityIdentity(
+                row == null ? null : row.getAssetSymbol(),
+                null
+        );
+        if (blank(continuityIdentity)) {
+            continuityIdentity = "SYMBOL:" + normalize(row == null ? null : row.getAssetSymbol()).toUpperCase(Locale.ROOT);
+        }
+        return "BYBIT_SHADOW_CUSTODY:" + walletRef + ":" + network + ":" + continuityIdentity;
+    }
+
     private void saveSource(Object sourceRow) {
         if (sourceRow instanceof BybitExtractedEvent row) {
             bybitExtractedEventRepository.save(row);
@@ -373,11 +434,31 @@ public class BybitBridgeLinkService {
         copy.setAccountingExclusionReason(transaction.getAccountingExclusionReason());
         copy.setCorrelationId(transaction.getCorrelationId());
         copy.setMatchedCounterparty(transaction.getMatchedCounterparty());
+        copy.setCounterpartyAddress(transaction.getCounterpartyAddress());
         copy.setContinuityCandidate(transaction.getContinuityCandidate());
         copy.setUpdatedAt(transaction.getUpdatedAt());
         copy.setMissingDataReasons(transaction.getMissingDataReasons() == null
                 ? new ArrayList<>()
                 : new ArrayList<>(transaction.getMissingDataReasons()));
+        if (transaction.getFlows() != null) {
+            List<NormalizedTransaction.Flow> copiedFlows = new ArrayList<>();
+            for (NormalizedTransaction.Flow flow : transaction.getFlows()) {
+                if (flow == null) {
+                    copiedFlows.add(null);
+                    continue;
+                }
+                NormalizedTransaction.Flow flowCopy = new NormalizedTransaction.Flow();
+                flowCopy.setRole(flow.getRole());
+                flowCopy.setAssetContract(flow.getAssetContract());
+                flowCopy.setAssetSymbol(flow.getAssetSymbol());
+                flowCopy.setQuantityDelta(flow.getQuantityDelta());
+                flowCopy.setUnitPriceUsd(flow.getUnitPriceUsd());
+                flowCopy.setValueUsd(flow.getValueUsd());
+                flowCopy.setPriceSource(flow.getPriceSource());
+                copiedFlows.add(flowCopy);
+            }
+            copy.setFlows(copiedFlows);
+        }
         return copy;
     }
 
@@ -386,9 +467,43 @@ public class BybitBridgeLinkService {
                 && sameText(left.getAccountingExclusionReason(), right.getAccountingExclusionReason())
                 && sameText(left.getCorrelationId(), right.getCorrelationId())
                 && sameText(left.getMatchedCounterparty(), right.getMatchedCounterparty())
+                && sameText(left.getCounterpartyAddress(), right.getCounterpartyAddress())
                 && java.util.Objects.equals(left.getContinuityCandidate(), right.getContinuityCandidate())
                 && java.util.Objects.equals(left.getExcludedFromAccounting(), right.getExcludedFromAccounting())
-                && java.util.Objects.equals(left.getMissingDataReasons(), right.getMissingDataReasons());
+                && java.util.Objects.equals(left.getMissingDataReasons(), right.getMissingDataReasons())
+                && sameFlowState(left.getFlows(), right.getFlows());
+    }
+
+    private boolean sameFlowState(
+            List<NormalizedTransaction.Flow> left,
+            List<NormalizedTransaction.Flow> right
+    ) {
+        if (left == right) {
+            return true;
+        }
+        if (left == null || right == null || left.size() != right.size()) {
+            return false;
+        }
+        for (int index = 0; index < left.size(); index++) {
+            NormalizedTransaction.Flow leftFlow = left.get(index);
+            NormalizedTransaction.Flow rightFlow = right.get(index);
+            if (leftFlow == rightFlow) {
+                continue;
+            }
+            if (leftFlow == null || rightFlow == null) {
+                return false;
+            }
+            if (leftFlow.getRole() != rightFlow.getRole()
+                    || !java.util.Objects.equals(leftFlow.getAssetContract(), rightFlow.getAssetContract())
+                    || !java.util.Objects.equals(leftFlow.getAssetSymbol(), rightFlow.getAssetSymbol())
+                    || !java.util.Objects.equals(leftFlow.getQuantityDelta(), rightFlow.getQuantityDelta())
+                    || !java.util.Objects.equals(leftFlow.getUnitPriceUsd(), rightFlow.getUnitPriceUsd())
+                    || !java.util.Objects.equals(leftFlow.getValueUsd(), rightFlow.getValueUsd())
+                    || leftFlow.getPriceSource() != rightFlow.getPriceSource()) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private boolean sameText(String left, String right) {

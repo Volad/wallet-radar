@@ -40,6 +40,7 @@ public class BybitExtractedEventMapper {
         row.setWalletBalance(extractedEvent.getWalletBalance());
         row.setTxHash(extractedEvent.getTxHash());
         row.setNetworkId(extractedEvent.getNetworkId());
+        row.setSenderAddress(extractedEvent.getSenderAddress());
         row.setReceivedAddress(extractedEvent.getReceivedAddress());
         row.setBybitStatus(extractedEvent.getBybitStatus());
         row.setWalletRef(extractedEvent.getWalletRef());

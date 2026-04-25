@@ -25,4 +25,10 @@ class CanonicalAssetCatalogTest {
     void wstEthUsesEthFamilyCoinGeckoFallback() {
         assertThat(CanonicalAssetCatalog.coinGeckoId("wstETH")).contains("staked-ether");
     }
+
+    @Test
+    void wstEthUsesStEthAndEthExchangeFallbacks() {
+        assertThat(CanonicalAssetCatalog.exchangeMarketSymbols("wstETH"))
+                .containsExactly("WSTETH", "STETH", "ETH");
+    }
 }

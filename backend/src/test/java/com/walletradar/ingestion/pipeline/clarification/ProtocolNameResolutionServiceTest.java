@@ -54,6 +54,33 @@ class ProtocolNameResolutionServiceTest {
     }
 
     @Test
+    void resolvesWrapFromCanonicalWrapperRegistryEntry() {
+        when(protocolRegistryService.lookup(NetworkId.UNICHAIN, "0x4200000000000000000000000000000000000006"))
+                .thenReturn(Optional.of(entry("Canonical", "V1", ProtocolRegistryFamily.WRAPPER, ProtocolRegistryRole.WRAPPER_TOKEN)));
+
+        ProtocolNameResolutionService service = new ProtocolNameResolutionService(protocolRegistryService);
+        Optional<ProtocolNameResolutionService.ResolvedProtocolName> resolved = service.resolve(
+                normalized("wrap-1", NormalizedTransactionType.WRAP),
+                raw(
+                        "0xwrap",
+                        "UNICHAIN",
+                        "0x1111111111111111111111111111111111111111",
+                        new Document()
+                                .append("from", "0x1111111111111111111111111111111111111111")
+                                .append("to", "0x4200000000000000000000000000000000000006")
+                                .append("input", "0xd0e30db0")
+                                .append("methodId", "0xd0e30db0")
+                                .append("timeStamp", "1700000000")
+                                .append("transactionIndex", "1")
+                )
+        );
+
+        assertThat(resolved).isPresent();
+        assertThat(resolved.get().protocolName()).isEqualTo("Canonical");
+        assertThat(resolved.get().protocolVersion()).isEqualTo("V1");
+    }
+
+    @Test
     void resolvesFromInteractionToAddressEvenWhenTransferBackedTopLevelSuppressesToAddress() {
         when(protocolRegistryService.lookup(NetworkId.AVALANCHE, "0x45a62b090df48243f12a21897e7ed91863e2c86b"))
                 .thenReturn(Optional.of(entry("LFJ", "Aggregator", ProtocolRegistryFamily.AGGREGATOR, ProtocolRegistryRole.ROUTER)));
@@ -157,6 +184,39 @@ class ProtocolNameResolutionServiceTest {
         );
 
         assertThat(resolved).isEmpty();
+    }
+
+    @Test
+    void resolvesBridgeFromProviderBackedProtocolStatusWhenRegistryHitIsMissing() {
+        when(protocolRegistryService.lookup(NetworkId.ETHEREUM, "0x89c6340b1a1f4b25d36cd8b063d49045caf3f818"))
+                .thenReturn(Optional.empty());
+
+        ProtocolNameResolutionService service = new ProtocolNameResolutionService(protocolRegistryService);
+        RawTransaction rawTransaction = raw(
+                "0xbridge",
+                "ETHEREUM",
+                "0x1111111111111111111111111111111111111111",
+                new Document()
+                        .append("from", "0x1111111111111111111111111111111111111111")
+                        .append("to", "0x89c6340b1a1f4b25d36cd8b063d49045caf3f818")
+                        .append("methodId", "0x0193b9fc")
+                        .append("timeStamp", "1700000000")
+                        .append("transactionIndex", "1")
+        );
+        rawTransaction.setClarificationEvidence(new Document()
+                .append("protocolStatus", new Document()
+                        .append("provider", "LIFI")
+                        .append("sendingTxHash", "0xbridge")
+                        .append("receivingTxHash", "0xsettlement")
+                        .append("receivingNetworkId", "ARBITRUM")));
+
+        Optional<ProtocolNameResolutionService.ResolvedProtocolName> resolved = service.resolve(
+                normalized("bridge-1", NormalizedTransactionType.BRIDGE_OUT),
+                rawTransaction
+        );
+
+        assertThat(resolved).isPresent();
+        assertThat(resolved.get().protocolName()).isEqualTo("LiFi");
     }
 
     private ProtocolRegistryEntry entry(

@@ -5,13 +5,11 @@ import com.walletradar.domain.event.OnChainClarificationCompletedEvent;
 import com.walletradar.domain.event.OnChainNormalizationCompletedEvent;
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.ingestion.config.OnChainClarificationProperties;
-import com.walletradar.ingestion.pipeline.clarification.ProtocolNameEnrichmentService;
 import com.walletradar.ingestion.job.support.StageExecutionLogSupport;
 import com.walletradar.session.application.SessionPipelineActivityService;
 import com.walletradar.session.application.SessionPipelineStateService;
 import lombok.RequiredArgsConstructor;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Async;
@@ -19,17 +17,24 @@ import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Event-driven driver for on-chain clarification with metadata and allowlisted full-receipt passes.
  */
 @Component
 @RequiredArgsConstructor
+@Slf4j
 public class OnChainClarificationJob {
 
     private static final String STAGE_NAME = "on-chain-clarification";
-    private static final Logger log = LoggerFactory.getLogger(OnChainClarificationJob.class);
     private static final Duration HEARTBEAT_INTERVAL = Duration.ofSeconds(30);
 
     private final AtomicBoolean running = new AtomicBoolean(false);
@@ -37,8 +42,8 @@ public class OnChainClarificationJob {
     private final OnChainClarificationProperties properties;
     private final OnChainClarificationService onChainClarificationService;
     private final OnChainReceiptClarificationService onChainReceiptClarificationService;
+    private final OnChainMetadataEnrichmentService onChainMetadataEnrichmentService;
     private final ClarificationBatchDrainer clarificationBatchDrainer;
-    private final ProtocolNameEnrichmentService protocolNameEnrichmentService;
     private final ApplicationEventPublisher applicationEventPublisher;
     private final SessionPipelineActivityService sessionPipelineActivityService;
     private final SessionPipelineStateService sessionPipelineStateService;
@@ -63,7 +68,7 @@ public class OnChainClarificationJob {
         }
 
         int processed = 0;
-        final Instant[] lastHeartbeatAt = {Instant.now()};
+        AtomicReference<Instant> lastHeartbeatAt = new AtomicReference<>(Instant.now());
         long startedAtNanos = StageExecutionLogSupport.logStart(log, STAGE_NAME, trigger);
         try {
             sessionPipelineActivityService.markRunning(sessionId, UserSession.PipelineStage.ON_CHAIN_CLARIFICATION);
@@ -72,19 +77,21 @@ public class OnChainClarificationJob {
                     UserSession.PipelineStage.ON_CHAIN_CLARIFICATION,
                     "On-chain clarification running"
             );
-            processed += clarificationBatchDrainer.drain(
+            processed += runParallelClarification(
                     onChainClarificationService::processNextBatch,
-                    batchProcessed -> lastHeartbeatAt[0] = maybeHeartbeat(sessionId, lastHeartbeatAt[0])
+                    lastHeartbeatAt,
+                    sessionId
             );
             if (properties.getFullReceipt().isEnabled()) {
-                processed += clarificationBatchDrainer.drain(
+                processed += runParallelClarification(
                         onChainReceiptClarificationService::processNextBatch,
-                        batchProcessed -> lastHeartbeatAt[0] = maybeHeartbeat(sessionId, lastHeartbeatAt[0])
+                        lastHeartbeatAt,
+                        sessionId
                 );
             }
             processed += clarificationBatchDrainer.drain(
-                    () -> protocolNameEnrichmentService.processNextBatch(properties.getBatchSize()),
-                    batchProcessed -> lastHeartbeatAt[0] = maybeHeartbeat(sessionId, lastHeartbeatAt[0])
+                    () -> onChainMetadataEnrichmentService.processNextBatch(properties.getBatchSize()),
+                    batchProcessed -> lastHeartbeatAt.updateAndGet(lastHeartbeat -> maybeHeartbeat(sessionId, lastHeartbeat))
             );
             sessionPipelineStateService.markStageComplete(
                     sessionId,
@@ -104,6 +111,42 @@ public class OnChainClarificationJob {
             StageExecutionLogSupport.logFinish(log, STAGE_NAME, trigger, processed, startedAtNanos);
             sessionPipelineActivityService.markFinished(sessionId, UserSession.PipelineStage.ON_CHAIN_CLARIFICATION);
             running.set(false);
+        }
+    }
+
+    private int runParallelClarification(
+            java.util.function.IntSupplier batchProcessor,
+            AtomicReference<Instant> lastHeartbeatAt,
+            String sessionId
+    ) {
+        int lanes = Math.max(1, properties.getThreads());
+        if (lanes == 1) {
+            return clarificationBatchDrainer.drain(
+                    batchProcessor,
+                    batchProcessed -> lastHeartbeatAt.updateAndGet(lastHeartbeat -> maybeHeartbeat(sessionId, lastHeartbeat))
+            );
+        }
+        ExecutorService executor = Executors.newFixedThreadPool(lanes);
+        try {
+            List<Callable<Integer>> tasks = new ArrayList<>(lanes);
+            for (int lane = 0; lane < lanes; lane++) {
+                tasks.add(() -> clarificationBatchDrainer.drain(
+                        batchProcessor,
+                        batchProcessed -> lastHeartbeatAt.updateAndGet(lastHeartbeat -> maybeHeartbeat(sessionId, lastHeartbeat))
+                ));
+            }
+            int processed = 0;
+            for (Future<Integer> future : executor.invokeAll(tasks)) {
+                processed += future.get();
+            }
+            return processed;
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Clarification worker interrupted", error);
+        } catch (java.util.concurrent.ExecutionException error) {
+            throw new IllegalStateException("Clarification worker failed", error.getCause());
+        } finally {
+            executor.shutdownNow();
         }
     }
 

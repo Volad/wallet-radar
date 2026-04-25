@@ -63,7 +63,7 @@ class CostBasisReplayJobTest {
                 new StatValidationOutcome(2, 2, 0),
                 new StatValidationOutcome(0, 0, 0)
         );
-        when(pricingDataGateService.snapshot(scope.memberRefs())).thenReturn(new PricingDataGateSnapshot(0L, 0L, 0L, 1L, 2L, true));
+        when(pricingDataGateService.snapshot(scope.memberRefs())).thenReturn(new PricingDataGateSnapshot(0L, 0L, 0L, 0L, 1L, 2L, true));
         when(pendingStatQueryService.countPending(scope.memberRefs())).thenReturn(0L);
         when(avcoReplayService.replayConfirmed(
                 eq("ACCOUNTING_UNIVERSE:session-1"),
@@ -117,7 +117,7 @@ class CostBasisReplayJobTest {
         when(userSessionRepository.findAll()).thenReturn(List.of(session));
         when(accountingUniverseService.resolveScope(session)).thenReturn(scope);
         when(statValidationService.processNextBatch(25, 60, scope.memberRefs())).thenReturn(new StatValidationOutcome(0, 0, 0));
-        when(pricingDataGateService.snapshot(scope.memberRefs())).thenReturn(new PricingDataGateSnapshot(0L, 0L, 0L, 0L, 2L, true));
+        when(pricingDataGateService.snapshot(scope.memberRefs())).thenReturn(new PricingDataGateSnapshot(0L, 0L, 0L, 0L, 0L, 2L, true));
         when(pendingStatQueryService.countPending(scope.memberRefs())).thenReturn(3L);
         when(pipelineTelemetrySnapshotService.snapshot()).thenReturn(snapshot());
 
@@ -166,7 +166,7 @@ class CostBasisReplayJobTest {
         when(userSessionRepository.findAll()).thenReturn(List.of(session));
         when(accountingUniverseService.resolveScope(session)).thenReturn(scope);
         when(statValidationService.processNextBatch(25, 60, scope.memberRefs())).thenReturn(new StatValidationOutcome(0, 0, 0));
-        when(pricingDataGateService.snapshot(scope.memberRefs())).thenReturn(new PricingDataGateSnapshot(0L, 0L, 0L, 0L, 2L, true));
+        when(pricingDataGateService.snapshot(scope.memberRefs())).thenReturn(new PricingDataGateSnapshot(0L, 0L, 0L, 0L, 0L, 2L, true));
         when(pendingStatQueryService.countPending(scope.memberRefs())).thenReturn(0L);
         when(avcoReplayService.replayConfirmed(
                 eq("ACCOUNTING_UNIVERSE:session-1"),
@@ -214,7 +214,7 @@ class CostBasisReplayJobTest {
         when(userSessionRepository.findById("session-1")).thenReturn(java.util.Optional.of(session));
         when(accountingUniverseService.resolveScope(session)).thenReturn(scope);
         when(statValidationService.processNextBatch(25, 60, scope.memberRefs())).thenReturn(new StatValidationOutcome(0, 0, 0));
-        when(pricingDataGateService.snapshot(scope.memberRefs())).thenReturn(new PricingDataGateSnapshot(0L, 0L, 0L, 0L, 0L, true));
+        when(pricingDataGateService.snapshot(scope.memberRefs())).thenReturn(new PricingDataGateSnapshot(0L, 0L, 0L, 0L, 0L, 0L, true));
         when(pendingStatQueryService.countPending(scope.memberRefs())).thenReturn(0L);
         when(avcoReplayService.replayConfirmed(
                 eq("ACCOUNTING_UNIVERSE:session-1"),

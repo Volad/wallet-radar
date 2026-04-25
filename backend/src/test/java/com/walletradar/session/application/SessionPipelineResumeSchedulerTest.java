@@ -3,8 +3,8 @@ package com.walletradar.session.application;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.event.BybitNormalizationRequestedEvent;
 import com.walletradar.domain.event.LinkingRequestedEvent;
-import com.walletradar.domain.event.OnChainClarificationCompletedEvent;
 import com.walletradar.domain.event.OnChainNormalizationCompletedEvent;
+import com.walletradar.domain.event.OnChainReclassificationRequestedEvent;
 import com.walletradar.domain.event.PricingCompletedEvent;
 import com.walletradar.domain.event.PricingRequestedEvent;
 import com.walletradar.domain.event.SessionBackfillCompletedEvent;
@@ -247,7 +247,7 @@ class SessionPipelineResumeSchedulerTest {
         when(mongoOperations.exists(any(Query.class), eq(BybitExtractedEvent.class))).thenReturn(false, false);
         when(mongoOperations.exists(any(Query.class), eq(ExternalLedgerRaw.class))).thenReturn(false, false);
         when(mongoOperations.exists(any(Query.class), eq(NormalizedTransaction.class)))
-                .thenReturn(false, true, false, false);
+                .thenReturn(false, false, true, false);
         when(linkingDataGateService.hasPendingLinking("session-1")).thenReturn(false);
 
         scheduler().resumeReadySessions();

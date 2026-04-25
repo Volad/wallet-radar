@@ -1,12 +1,8 @@
 package com.walletradar.ingestion.job.clarification;
 
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
-import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.ingestion.config.OnChainClarificationProperties;
-import com.walletradar.ingestion.pipeline.classification.OnChainClassificationResult;
-import com.walletradar.ingestion.pipeline.classification.OnChainClassifier;
-import com.walletradar.ingestion.pipeline.classification.reason.ClassificationReasonCode;
 import com.walletradar.ingestion.pipeline.clarification.ClarificationReceiptEnrichment;
 import com.walletradar.ingestion.pipeline.clarification.PendingClarificationQueryService;
 import com.walletradar.ingestion.pipeline.clarification.RawTransactionClarificationEnricher;
@@ -29,34 +25,33 @@ final class MetadataClarificationWorkflowHandler {
     private final PendingClarificationQueryService pendingClarificationQueryService;
     private final OnChainClarificationProperties properties;
     private final RawTransactionClarificationEnricher rawTransactionClarificationEnricher;
-    private final OnChainClassifier onChainClassifier;
     private final ClarificationFailureHandler clarificationFailureHandler;
-    private final ClarificationReclassificationHandler clarificationReclassificationHandler;
+    private final ClarificationReclassificationMarker clarificationReclassificationMarker;
     private final ClarificationPreparationHandler clarificationPreparationHandler;
 
     MetadataClarificationWorkflowHandler(
             PendingClarificationQueryService pendingClarificationQueryService,
             OnChainClarificationProperties properties,
             RawTransactionClarificationEnricher rawTransactionClarificationEnricher,
-            OnChainClassifier onChainClassifier,
             ClarificationFailureHandler clarificationFailureHandler,
-            ClarificationReclassificationHandler clarificationReclassificationHandler,
+            ClarificationReclassificationMarker clarificationReclassificationMarker,
             ClarificationPreparationHandler clarificationPreparationHandler
     ) {
         this.pendingClarificationQueryService = pendingClarificationQueryService;
         this.properties = properties;
         this.rawTransactionClarificationEnricher = rawTransactionClarificationEnricher;
-        this.onChainClassifier = onChainClassifier;
         this.clarificationFailureHandler = clarificationFailureHandler;
-        this.clarificationReclassificationHandler = clarificationReclassificationHandler;
+        this.clarificationReclassificationMarker = clarificationReclassificationMarker;
         this.clarificationPreparationHandler = clarificationPreparationHandler;
     }
 
     int processNextBatch() {
-        List<NormalizedTransaction> batch = pendingClarificationQueryService.loadNextBatch(
+        List<NormalizedTransaction> batch = pendingClarificationQueryService.claimNextBatch(
                 properties.getBatchSize(),
                 properties.getMaxAttempts(),
-                properties.getRetryDelaySeconds()
+                properties.getRetryDelaySeconds(),
+                "metadata-" + java.util.UUID.randomUUID(),
+                properties.getLeaseSeconds()
         );
 
         int completed = 0;
@@ -81,17 +76,6 @@ final class MetadataClarificationWorkflowHandler {
 
         RawTransaction rawTransaction = rawTransactionOptional.get();
         try {
-            OnChainClassificationResult currentClassification = onChainClassifier.classify(rawTransaction);
-            if (currentClassification.status() != NormalizedTransactionStatus.PENDING_CLARIFICATION) {
-                clarificationReclassificationHandler.persistReclassification(
-                        normalizedTransaction,
-                        rawTransaction,
-                        currentClassification,
-                        now
-                );
-                return true;
-            }
-
             Optional<ClarificationReceiptEnrichment> enrichment = clarificationPreparationHandler.fetchMetadataReceiptOrMarkFailure(
                     normalizedTransaction,
                     rawTransaction,
@@ -103,25 +87,10 @@ final class MetadataClarificationWorkflowHandler {
             }
 
             rawTransactionClarificationEnricher.merge(rawTransaction, enrichment.get());
-            int currentAttempts = clarificationFailureHandler.recordMetadataAttemptSuccess(normalizedTransaction, rawTransaction);
-
-            OnChainClassificationResult classificationResult = onChainClassifier.classify(rawTransaction);
-            if (classificationResult.status() == NormalizedTransactionStatus.PENDING_CLARIFICATION) {
-                clarificationFailureHandler.markMetadataFailure(
-                        normalizedTransaction,
-                        rawTransaction,
-                        ClassificationReasonCode.CLARIFICATION_INSUFFICIENT_EVIDENCE.code(),
-                        now,
-                        currentAttempts,
-                        false,
-                        properties.getMaxAttempts()
-                );
-                return false;
-            }
-            clarificationReclassificationHandler.persistMetadataClarification(
+            clarificationFailureHandler.recordMetadataAttemptSuccess(normalizedTransaction, rawTransaction);
+            clarificationReclassificationMarker.markPendingReclassification(
                     normalizedTransaction,
                     rawTransaction,
-                    classificationResult,
                     now
             );
             return true;

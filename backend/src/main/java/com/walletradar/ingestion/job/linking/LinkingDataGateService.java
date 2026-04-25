@@ -52,11 +52,11 @@ public class LinkingDataGateService {
 
     public LinkingGateSnapshot snapshot(String sessionId) {
         if (sessionId == null || sessionId.isBlank()) {
-            return new LinkingGateSnapshot(false, 0L, 0L, 0L, false);
+            return new LinkingGateSnapshot(false, 0L, 0L, 0L, 0L, false);
         }
         return userSessionRepository.findById(sessionId.trim())
                 .map(this::snapshot)
-                .orElseGet(() -> new LinkingGateSnapshot(false, 0L, 0L, 0L, false));
+                .orElseGet(() -> new LinkingGateSnapshot(false, 0L, 0L, 0L, 0L, false));
     }
 
     public boolean ready(String sessionId) {
@@ -76,16 +76,19 @@ public class LinkingDataGateService {
         AccountingUniverseService.AccountingUniverseScope scope = accountingUniverseService.resolveScope(session);
         long pendingOnChainClassification = countPendingOnChainClassification(scope.memberRefs());
         long pendingClarification = countPendingClarification(scope.memberRefs());
+        long pendingReclassification = countPendingReclassification(scope.memberRefs());
         long pendingBybitClassification = countPendingBybitClassification(session.getId());
         boolean classificationStillRunning = hasActiveClassificationActivity(session.getId())
                 || hasFreshClassificationRunningState(session);
         return new LinkingGateSnapshot(
                 pendingOnChainClassification == 0L
                         && pendingClarification == 0L
+                        && pendingReclassification == 0L
                         && pendingBybitClassification == 0L
                         && !classificationStillRunning,
                 pendingOnChainClassification,
                 pendingClarification,
+                pendingReclassification,
                 pendingBybitClassification,
                 classificationStillRunning
         );
@@ -150,12 +153,20 @@ public class LinkingDataGateService {
     }
 
     private long countPendingClarification(List<String> memberRefs) {
+        return countPendingStatus(memberRefs, "PENDING_CLARIFICATION");
+    }
+
+    private long countPendingReclassification(List<String> memberRefs) {
+        return countPendingStatus(memberRefs, "PENDING_RECLASSIFICATION");
+    }
+
+    private long countPendingStatus(List<String> memberRefs, String status) {
         if (memberRefs == null || memberRefs.isEmpty()) {
             return 0L;
         }
         Query query = new Query(new Criteria().andOperator(
                 Criteria.where("walletAddress").in(memberRefs),
-                Criteria.where("status").is("PENDING_CLARIFICATION")
+                Criteria.where("status").is(status)
         ));
         return mongoOperations.count(query, NormalizedTransaction.class);
     }
@@ -203,6 +214,10 @@ public class LinkingDataGateService {
                 CLASSIFICATION_ACTIVITY_STALE_AFTER
         ) || sessionPipelineActivityService.hasFreshActivity(
                 sessionId,
+                UserSession.PipelineStage.ON_CHAIN_RECLASSIFICATION,
+                CLASSIFICATION_ACTIVITY_STALE_AFTER
+        ) || sessionPipelineActivityService.hasFreshActivity(
+                sessionId,
                 UserSession.PipelineStage.BYBIT_NORMALIZATION,
                 CLASSIFICATION_ACTIVITY_STALE_AFTER
         );
@@ -221,7 +236,7 @@ public class LinkingDataGateService {
             return false;
         }
         return switch (pipelineState.getStage()) {
-            case ON_CHAIN_NORMALIZATION, ON_CHAIN_CLARIFICATION, BYBIT_NORMALIZATION -> true;
+            case ON_CHAIN_NORMALIZATION, ON_CHAIN_CLARIFICATION, ON_CHAIN_RECLASSIFICATION, BYBIT_NORMALIZATION -> true;
             default -> false;
         };
     }
@@ -230,6 +245,7 @@ public class LinkingDataGateService {
             boolean ready,
             long pendingOnChainClassificationCount,
             long pendingClarificationCount,
+            long pendingReclassificationCount,
             long pendingBybitClassificationCount,
             boolean classificationStillRunning
     ) {

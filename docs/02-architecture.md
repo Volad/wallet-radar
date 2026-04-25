@@ -76,15 +76,21 @@ Live-session orchestration is event-driven:
   2. on-chain normalization
   3. on-chain clarification
      - receipt enrichment
-     - metadata enrichment
+     - clarification-safe metadata enrichment
+     - deterministic protocol-name enrichment
+     - deterministic row-local counterparty enrichment
      - lifecycle linking
      - reciprocal internal-transfer pair promotion
-     - protocol-name enrichment
-     - optional reclassification when clarification changes economic facts
-  4. external-integration normalization
-  5. exact custody / bridge rematch
-  6. pricing
-  7. accounting replay
+     - evidence-only transition to `PENDING_RECLASSIFICATION`
+  4. on-chain reclassification
+     - same `OnChainClassifier` over canonical raw plus persisted
+       `clarificationEvidence`
+     - the only stage allowed to change economic type, flows, or pricing
+       semantics after clarification
+  5. external-integration normalization
+  6. exact custody / bridge rematch
+  7. pricing
+  8. accounting replay
 
 Important accounting note:
 
@@ -93,6 +99,24 @@ Important accounting note:
   basis, and reconciliation
 - live-session progress is persisted in `user_sessions.pipelineState`, while
   wallet×network raw ingestion progress remains in `sync_status`
+
+Cycle 79 closeout architecture:
+
+- protocol and counterparty enrichment are normal clarification responsibilities,
+  not restart repair jobs
+- enrichment may update metadata on already-normalized canonical rows during the
+  clarification stage, but it must not change economic type, flows, or pricing
+  semantics
+- clarification itself does not decide pricing or review after evidence fetch;
+  it moves rows to `PENDING_RECLASSIFICATION` and lets the same classifier make
+  the next canonical status decision
+- supported-flow financial correctness still belongs to the earliest wrong
+  stage:
+  - canonical principal/excess shape in classification/normalization
+  - deterministic lifecycle evidence in clarification/linking
+  - deterministic principal carry in replay move-basis
+- exact asset coverage, family coverage, and final-clean/proof-clean remain
+  separate acceptance surfaces
 
 Async replay guardrail:
 

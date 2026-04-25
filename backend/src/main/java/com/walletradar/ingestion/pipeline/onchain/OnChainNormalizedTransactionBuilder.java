@@ -74,6 +74,9 @@ public class OnChainNormalizedTransactionBuilder {
         if (normalized.getMatchedCounterparty() == null || normalized.getMatchedCounterparty().isBlank()) {
             normalized.setMatchedCounterparty(existing.getMatchedCounterparty());
         }
+        if (normalized.getCounterpartyAddress() == null || normalized.getCounterpartyAddress().isBlank()) {
+            normalized.setCounterpartyAddress(existing.getCounterpartyAddress());
+        }
         normalized.setClientId(existing.getClientId());
         if (normalized.getStatus() == NormalizedTransactionStatus.CONFIRMED) {
             normalized.setConfirmedAt(existing.getConfirmedAt() != null ? existing.getConfirmedAt() : now);
@@ -107,6 +110,9 @@ public class OnChainNormalizedTransactionBuilder {
         }
         if (normalized.getMatchedCounterparty() == null || normalized.getMatchedCounterparty().isBlank()) {
             normalized.setMatchedCounterparty(existing.getMatchedCounterparty());
+        }
+        if (normalized.getCounterpartyAddress() == null || normalized.getCounterpartyAddress().isBlank()) {
+            normalized.setCounterpartyAddress(existing.getCounterpartyAddress());
         }
         normalized.setClientId(existing.getClientId());
         if (normalized.getStatus() == NormalizedTransactionStatus.CONFIRMED) {

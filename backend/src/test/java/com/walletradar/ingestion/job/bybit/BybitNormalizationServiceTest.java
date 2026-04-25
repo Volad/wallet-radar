@@ -7,6 +7,8 @@ import com.walletradar.domain.transaction.bybit.BybitExtractedEventStatus;
 import com.walletradar.domain.transaction.externalledger.ExternalLedgerRaw;
 import com.walletradar.domain.transaction.externalledger.ExternalLedgerRawRepository;
 import com.walletradar.domain.transaction.externalledger.ExternalLedgerRawStatus;
+import com.walletradar.domain.transaction.integration.IntegrationRawEvent;
+import com.walletradar.domain.transaction.integration.IntegrationRawEventRepository;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
@@ -30,6 +32,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.bson.Document;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -48,6 +51,8 @@ class BybitNormalizationServiceTest {
     private PendingBybitExtractedRowQueryService pendingBybitExtractedRowQueryService;
     @Mock
     private BybitExtractedEventRepository bybitExtractedEventRepository;
+    @Mock
+    private IntegrationRawEventRepository integrationRawEventRepository;
     @Mock
     private BybitExtractedTradePairer bybitExtractedTradePairer;
     @Mock
@@ -223,6 +228,7 @@ class BybitNormalizationServiceTest {
     @Test
     void unmatchedExternalVenueRowDefersExternalCustodyDecisionToLinkingPhase() {
         ExternalLedgerRaw deposit = bridgeRow("external-custody-in", "EXTERNAL_INBOUND");
+        deposit.setSenderAddress("0x5c30940a4544ca845272fe97c4a27f2ed2cd7b64");
         deposit.setReceivedAddress("0x2ea8cb6f614a3c579d1d09474573387d3c16ac6d");
 
         when(pendingExternalLedgerRowQueryService.loadNextBatch(10)).thenReturn(List.of(deposit));
@@ -239,6 +245,7 @@ class BybitNormalizationServiceTest {
         assertThat(bybitCaptor.getValue().getExcludedFromAccounting()).isFalse();
         assertThat(bybitCaptor.getValue().getAccountingExclusionReason()).isNull();
         assertThat(bybitCaptor.getValue().getMissingDataReasons()).doesNotContain("EXTERNAL_CUSTODY_UNTRACKED_VENUE");
+        assertThat(bybitCaptor.getValue().getCounterpartyAddress()).isEqualTo("0x5c30940a4544ca845272fe97c4a27f2ed2cd7b64");
         assertThat(deposit.getOnChainCorrelation().getStatus()).isNull();
     }
 
@@ -258,6 +265,7 @@ class BybitNormalizationServiceTest {
         verify(normalizedTransactionStore).upsert(bybitCaptor.capture());
         assertThat(bybitCaptor.getValue().getType()).isEqualTo(NormalizedTransactionType.EXTERNAL_TRANSFER_OUT);
         assertThat(bybitCaptor.getValue().getMissingDataReasons()).doesNotContain("BRIDGE_ON_CHAIN_LEG_NOT_FOUND");
+        assertThat(bybitCaptor.getValue().getCounterpartyAddress()).isEqualTo("0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f");
         assertThat(withdraw.getOnChainCorrelation().getStatus()).isNull();
     }
 
@@ -415,6 +423,48 @@ class BybitNormalizationServiceTest {
                 );
         verify(bybitExtractedEventRepository).save(convertSell);
         verify(bybitExtractedEventRepository).save(convertBuy);
+    }
+
+    @Test
+    void extractedDepositHydratesSenderAddressFromIntegrationRawEvent() {
+        BybitExtractedEvent deposit = new BybitExtractedEvent();
+        deposit.setId("deposit-raw-fallback");
+        deposit.setIntegrationRawEventId("integration-raw-1");
+        deposit.setUid("uid-1");
+        deposit.setWalletRef("BYBIT:uid-1");
+        deposit.setSourceFileType("withdraw_deposit");
+        deposit.setCanonicalType("EXTERNAL_INBOUND");
+        deposit.setStatus(BybitExtractedEventStatus.RAW);
+        deposit.setTimeUtc(Instant.parse("2026-03-25T10:00:00Z"));
+        deposit.setAssetSymbol("MNT");
+        deposit.setQuantityRaw(new BigDecimal("834.076712"));
+        deposit.setBasisRelevant(true);
+        deposit.setTxHash("0xdeposit");
+        deposit.setNetworkId(NetworkId.MANTLE);
+        deposit.setReceivedAddress("0x2ea8cb6f614a3c579d1d09474573387d3c16ac6d");
+
+        IntegrationRawEvent rawEvent = new IntegrationRawEvent();
+        rawEvent.setId("integration-raw-1");
+        rawEvent.setPayload(new Document("fromAddress", "0x5c30940a4544ca845272fe97c4a27f2ed2cd7b64")
+                .append("toAddress", "0x2ea8cb6f614a3c579d1d09474573387d3c16ac6d")
+                .append("txID", "0xdeposit"));
+
+        when(pendingBybitExtractedRowQueryService.loadNextBatch(10)).thenReturn(List.of(deposit));
+        when(bybitExtractedEventRepository.findById(deposit.getId())).thenReturn(Optional.of(deposit));
+        when(integrationRawEventRepository.findById("integration-raw-1")).thenReturn(Optional.of(rawEvent));
+
+        BybitNormalizationService service = service();
+        int processed = service.processNextBatch(10);
+
+        assertThat(processed).isEqualTo(1);
+        ArgumentCaptor<NormalizedTransaction> captor = ArgumentCaptor.forClass(NormalizedTransaction.class);
+        verify(normalizedTransactionStore).upsert(captor.capture());
+        NormalizedTransaction saved = captor.getValue();
+        assertThat(saved.getType()).isEqualTo(NormalizedTransactionType.EXTERNAL_TRANSFER_IN);
+        assertThat(saved.getCounterpartyAddress()).isEqualTo("0x5c30940a4544ca845272fe97c4a27f2ed2cd7b64");
+        assertThat(saved.getExcludedFromAccounting()).isFalse();
+        assertThat(deposit.getSenderAddress()).isEqualTo("0x5c30940a4544ca845272fe97c4a27f2ed2cd7b64");
+        verify(bybitExtractedEventRepository).save(deposit);
     }
 
     @Test
@@ -609,6 +659,7 @@ class BybitNormalizationServiceTest {
         return new BybitNormalizationService(
                 pendingBybitExtractedRowQueryService,
                 bybitExtractedEventRepository,
+                integrationRawEventRepository,
                 bybitExtractedTradePairer,
                 bybitExtractedTransferShadowPairer,
                 pendingExternalLedgerRowQueryService,

@@ -280,7 +280,9 @@ walletradar:
       schedule-interval-ms: 90000
     clarification:
       enabled: true
-      batch-size: 100
+      batch-size: 30
+      threads: 2
+      lease-seconds: 300
       retry-delay-seconds: 120
       max-attempts: 3
       li-fi-status:

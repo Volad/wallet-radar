@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import shutil
 import textwrap
@@ -23,7 +24,8 @@ audit = load_json(AUDIT_PATH)
 pipeline = load_json(PIPELINE_PATH) if PIPELINE_PATH.exists() else {}
 registry_text = REGISTRY_PATH.read_text().lower() if REGISTRY_PATH.exists() else ""
 
-cycle = str(pipeline.get("currentCycle") or pipeline.get("cycle") or 67)
+cycle_override = os.environ.get("WR_AUDIT_CYCLE")
+cycle = str(cycle_override or pipeline.get("currentCycle") or pipeline.get("cycle") or 67)
 cycle_dir = ROOT / "auto-loop-handoff" / "artifacts" / "cycle" / cycle
 fa_dir = cycle_dir / "financial-analyst"
 handoff_dir = cycle_dir / "handoffs"
@@ -107,6 +109,48 @@ def top_dirty_family(asset: str, limit: int = 3) -> list[dict]:
     return dirty[:limit]
 
 
+def dirty_family_buckets(asset: str) -> list[dict]:
+    buckets = family_row(asset).get("buckets", [])
+    dirty = [bucket for bucket in buckets if float(bucket["uncoveredQuantity"]) > 0]
+    dirty.sort(key=lambda bucket: float(bucket["uncoveredQuantity"]), reverse=True)
+    return dirty
+
+
+def family_uncovered_by_wallet_prefix(asset: str, wallet_prefix: str) -> float:
+    total = 0.0
+    for bucket in dirty_family_buckets(asset):
+        wallet_address = bucket.get("walletAddress")
+        if isinstance(wallet_address, str) and wallet_address.startswith(wallet_prefix):
+            total += float(bucket["uncoveredQuantity"])
+    return total
+
+
+def short_hash(value: str | None) -> str:
+    if not value:
+        return "n/a"
+    return value if len(value) <= 12 else value[:6] + "..." + value[-4:]
+
+
+def bucket_summary(bucket: dict) -> str:
+    if not bucket:
+        return "n/a"
+    return (
+        f"{fmt(bucket['uncoveredQuantity'])} on "
+        f"`{bucket.get('networkId')}/{bucket.get('assetSymbol')}/{short_hash(bucket.get('latestTxHash') or bucket.get('txHash'))}`"
+    )
+
+
+def bucket_list_summary(buckets: list[dict]) -> str:
+    if not buckets:
+        return "n/a"
+    if len(buckets) == 1:
+        return bucket_summary(buckets[0])
+    if len(buckets) == 2:
+        return f"{bucket_summary(buckets[0])} and {bucket_summary(buckets[1])}"
+    head = ", ".join(bucket_summary(bucket) for bucket in buckets[:-1])
+    return f"{head}, and {bucket_summary(buckets[-1])}"
+
+
 def final_clean_exact(asset: str) -> bool:
     row = exact_row(asset)
     return abs(float(row["current"]) - float(row["covered"])) <= 1e-12
@@ -115,6 +159,12 @@ def final_clean_exact(asset: str) -> bool:
 def final_clean_family(asset: str) -> bool:
     row = family_row(asset)
     return abs(float(row["uncovered"])) <= 1e-12 and int(row["dirtyBuckets"]) == 0
+
+
+def code_list(values: list[str]) -> str:
+    if not values:
+        return "none"
+    return ", ".join(f"`{value}`" for value in values)
 
 
 def date_value(value) -> str:
@@ -168,13 +218,40 @@ def select_lineage(entries: list[dict], tail_count: int = 8) -> list[dict]:
     return result
 
 
+usdt_exact_uncovered = float(exact_row("USDT")["current"]) - float(exact_row("USDT")["covered"])
+usdt_family_uncovered = float(family_row("USDT")["uncovered"])
+usdt_family_bybit_uncovered = family_uncovered_by_wallet_prefix("USDT", "BYBIT:")
+usdt_family_supported_uncovered = max(0.0, usdt_family_uncovered - usdt_family_bybit_uncovered)
+usdt_exact_blocker_active = usdt_exact_uncovered > 1e-12
+usdt_family_blocker_active = usdt_family_uncovered > 1e-12
+usdt_family_bybit_boundary_active = usdt_family_bybit_uncovered > 1e-12
+lp_exit_usdt_blocker_active = usdt_exact_blocker_active or usdt_family_supported_uncovered > 1e-12
+mnt_exact_uncovered = float(exact_row("MNT")["current"]) - float(exact_row("MNT")["covered"])
+mnt_exact_blocker_active = mnt_exact_uncovered > 1e-12
+
+
 blocking_reasons = {
     "ETH": "Exact native ETH carry still leaks on Arbitrum and Base; family ratio is above 0.99 but `AMANWETH` and native ETH buckets are still not final-clean.",
     "BTC": "Exact BTC is clean; family remains not final-clean because `AARBWBTC` still carries a small uncovered receipt-token remainder.",
-    "MNT": "Exact MNT is clean; family is dominated by Bybit `MNT` reward inventory while `external_ledger_raw` is empty on this live DB snapshot.",
+    "MNT": (
+        "Exact MNT is clean; family is dominated by Bybit `MNT` reward inventory while "
+        "`external_ledger_raw` is empty on this live DB snapshot."
+        if final_clean_exact("MNT")
+        else f"Exact MNT still has uncovered {fmt(float(exact_row('MNT')['current']) - float(exact_row('MNT')['covered']))}, "
+        "and family is dominated by Bybit `MNT` reward inventory while `external_ledger_raw` is empty on this live DB snapshot."
+    ),
     "AVAX": "Native AVAX basis is not restored across `aAvaWAVAX` and `sAVAX` continuity, leaving both exact and family AVAX materially uncovered.",
-    "USDC": "Arbitrum `eUSDC-6 -> USDC` and the earlier ParaSwap/bridge chronology strand `361.759952` USDC with evidence present but continuity not carried.",
-    "USDT": "PancakeSwap Infinity `LP_EXIT` still lands as `basisEffect=UNKNOWN`, so returned USDT remains almost fully uncovered.",
+    "USDC": f"Bridge carry plus upstream `eUSDC-6 -> USDC` continuity still strand {fmt(float(exact_row('USDC')['current']) - float(exact_row('USDC')['covered']))} USDC, led by {bucket_summary(top_dirty_exact('USDC', 1)[0])}.",
+    "USDT": (
+        "PancakeSwap Infinity and Uniswap LP exits still surface with unsupported `basisEffect=UNKNOWN` carry on the current live basis."
+        if lp_exit_usdt_blocker_active
+        else (
+            "Exact USDT is clean, but family is currently dominated by Bybit venue inventory while "
+            "`external_ledger_raw` is empty on this live DB snapshot."
+            if usdt_family_bybit_boundary_active
+            else "Exact and family USDT are clean on the current live basis after the LP-exit replay fix."
+        )
+    ),
 }
 
 protocol_gap_summary = ", ".join(
@@ -182,6 +259,65 @@ protocol_gap_summary = ", ".join(
 )
 counterparty_gap_summary = ", ".join(
     f"{row['type']}={row['count']}" for row in counterparty_gap_by_type
+)
+exact_clean_assets = [asset for asset in MANDATORY_ASSETS if final_clean_exact(asset)]
+exact_failing_assets = [asset for asset in MANDATORY_ASSETS if not final_clean_exact(asset)]
+family_failing_assets = [asset for asset in MANDATORY_ASSETS if not final_clean_family(asset)]
+exact_clean_bullets = (
+    md_bullets([f"`{asset} exact = {fmt(exact_row(asset)['coverageRatio'])}`" for asset in exact_clean_assets])
+    if exact_clean_assets
+    else "- none"
+)
+if lp_exit_usdt_blocker_active:
+    usdt_coverage_rows = (
+        f"| USDT exact | {fmt(exact_row('USDT')['coverageRatio'])} | {fmt(exact_row('USDT')['coverageRatio'])} | "
+        f"{fmt(max(0, 0.99 - float(exact_row('USDT')['coverageRatio'])))} | {fmt(usdt_exact_uncovered)} | n/a | "
+        f"AUTHORITATIVE_RECONSTRUCTION_COMPLETE | {('Supported LP exit still emits `basisEffect=UNKNOWN`, so returned exact USDT remains uncovered.' if usdt_exact_blocker_active else 'Exact USDT is clean on the current live basis; preserve this while fixing the LP-exit family remainder.')} |\n"
+        f"| USDT family | {fmt(family_row('USDT')['coverageRatio'])} | {fmt(family_row('USDT')['coverageRatio'])} | "
+        f"{fmt(max(0, 0.99 - float(family_row('USDT')['coverageRatio'])))} | n/a | {fmt(usdt_family_uncovered)} | "
+        "AUTHORITATIVE_RECONSTRUCTION_COMPLETE | Supported on-chain LP-exit basis allocation still withholds family-level basis on the current live basis. |"
+    )
+    usdt_discrepancy_rows = (
+        (
+            f"| USDT exact | Leaves {fmt(usdt_exact_uncovered)} uncovered on one supported LP exit. | "
+            "LP-position basis should be reallocated onto the returned USDT and peer asset. | normalization | AUTHORITATIVE_RECONSTRUCTION_COMPLETE |\n"
+            if usdt_exact_blocker_active
+            else "| USDT exact | Exact USDT is clean on the current live basis. | Preserve this while fixing the LP-exit family remainder. | n/a | AUTHORITATIVE_RECONSTRUCTION_COMPLETE |\n"
+        )
+        + (
+            f"| USDT family | Leaves {fmt(usdt_family_uncovered)} uncovered because supported LP exits still withhold family-level basis allocation. | Family should become clean once LP-exit basis allocation is emitted deterministically. | normalization | AUTHORITATIVE_RECONSTRUCTION_COMPLETE |"
+        )
+    )
+elif usdt_family_bybit_boundary_active:
+    usdt_coverage_rows = (
+        f"| USDT exact | {fmt(exact_row('USDT')['coverageRatio'])} | {fmt(exact_row('USDT')['coverageRatio'])} | "
+        f"{fmt(max(0, 0.99 - float(exact_row('USDT')['coverageRatio'])))} | {fmt(usdt_exact_uncovered)} | n/a | "
+        "AUTHORITATIVE_RECONSTRUCTION_COMPLETE | Exact USDT is clean on the current live basis. |\n"
+        f"| USDT family | {fmt(family_row('USDT')['coverageRatio'])} | {fmt(family_row('USDT')['coverageRatio'])} | "
+        f"{fmt(max(0, 0.99 - float(family_row('USDT')['coverageRatio'])))} | n/a | {fmt(usdt_family_uncovered)} | "
+        "GENUINE_EVIDENCE_MISSING_PROVEN | Family remainder is dominated by Bybit venue inventory while raw CEX source collection is absent. |"
+    )
+    usdt_discrepancy_rows = (
+        "| USDT exact | Exact USDT is clean on the current live basis. | No current exact-surface discrepancy remains. | n/a | AUTHORITATIVE_RECONSTRUCTION_COMPLETE |\n"
+        f"| USDT family | Current family shows {fmt(usdt_family_uncovered)} uncovered in Bybit venue inventory. | Cannot be authoritatively reconstructed raw-first on this DB snapshot because `external_ledger_raw` is empty. | source availability | GENUINE_EVIDENCE_MISSING_PROVEN |"
+    )
+else:
+    usdt_coverage_rows = (
+        f"| USDT exact | {fmt(exact_row('USDT')['coverageRatio'])} | {fmt(exact_row('USDT')['coverageRatio'])} | "
+        f"{fmt(max(0, 0.99 - float(exact_row('USDT')['coverageRatio'])))} | {fmt(usdt_exact_uncovered)} | n/a | "
+        "AUTHORITATIVE_RECONSTRUCTION_COMPLETE | Exact USDT is clean on the current live basis after the LP-exit replay fix. |\n"
+        f"| USDT family | {fmt(family_row('USDT')['coverageRatio'])} | {fmt(family_row('USDT')['coverageRatio'])} | "
+        f"{fmt(max(0, 0.99 - float(family_row('USDT')['coverageRatio'])))} | n/a | {fmt(usdt_family_uncovered)} | "
+        "AUTHORITATIVE_RECONSTRUCTION_COMPLETE | USDT family is also clean on the current live basis. |"
+    )
+    usdt_discrepancy_rows = (
+        "| USDT exact | Exact USDT is clean on the current live basis. | No current exact-surface discrepancy remains. | n/a | AUTHORITATIVE_RECONSTRUCTION_COMPLETE |\n"
+        "| USDT family | USDT family is clean on the current live basis. | No current family-surface discrepancy remains. | n/a | AUTHORITATIVE_RECONSTRUCTION_COMPLETE |"
+    )
+supported_onchain_fix_scope = (
+    "Supported on-chain normalization and continuity fixes for ETH, AVAX, USDC, and LP-exit USDT"
+    if lp_exit_usdt_blocker_active
+    else "Supported on-chain normalization and continuity fixes for ETH, AVAX, and USDC"
 )
 
 blockers = [
@@ -242,32 +378,43 @@ blockers = [
         "currentDatabaseTruth": (
             f"USDC exact coverage is {fmt(exact_row('USDC')['coverageRatio'])} with uncovered "
             f"{fmt(float(exact_row('USDC')['current']) - float(exact_row('USDC')['covered']))}. "
-            f"Two Arbitrum buckets explain nearly all of it: {fmt(top_dirty_exact('USDC')[0]['uncoveredQuantity'])} "
-            f"on `0x0765...` and {fmt(top_dirty_exact('USDC')[1]['uncoveredQuantity'])} on `0x101c...`."
+            f"The current top exact buckets are {bucket_list_summary(top_dirty_exact('USDC', 2))}."
         ),
-        "auditorTruth": "Bridge carry, vault receipt-token carry, and supported swap chronology are all present. Basis should flow from bridge source rows into Arbitrum USDC and from `eUSDC-6` back into underlying USDC, leaving only explicit vault yield or fee effects as acquisition/disposal.",
+        "auditorTruth": "Bridge carry, vault receipt-token carry, and supported swap chronology are all present. Basis should flow from the upstream `eUSDC-6 -> USDC` withdraw into the bridge source, then into destination USDC, while ParaSwap chronology consumes only the covered carry and leaves only explicit yield or fee effects as acquisition/disposal.",
         "firstFailedStage": "normalization + move_basis",
         "evidenceState": "EVIDENCE_PRESENT_UNLINKED on supported bridge/vault/swap chronology and EVIDENCE_PRESENT_UNUSABLE where vault receipt-token exits remain too coarse.",
         "typeAdequacy": "Current canonical representation is too coarse for `eUSDC-6 -> USDC` principal-vs-yield decomposition and for preserving exact/family continuity after bridge corridors.",
         "remediationClass": "normalization, linking, move_basis, replay",
-        "pipelineCorrectionPoint": "Split vault withdraw principal from yield, persist protocol/counterparty metadata for the vault, then replay carry through bridge and swap chronology.",
+        "pipelineCorrectionPoint": "Split vault withdraw principal from yield, preserve carry through the bridge corridor into destination USDC, then replay the downstream swap chronology against the carried balance instead of a partially uncovered bucket.",
         "terminalState": "AUTHORITATIVE_RECONSTRUCTION_COMPLETE",
         "anchors": [
             "0x0765f4b17d9961c3cd7e63b4dc1e69c948954d51816807a4ba51a8ac4709f977",
-            "0x9f6983d00441ed13bf45e1b7ac34e94540fb61f58e4a9a2189826b1e761a2f7f",
-            "0x7d8c79a327637fda080bcfa9204181359de791ccff95dd4b2f1b020b8af0b678",
+            "0x9a90e937b8fa85bbf83844054b6d17ea17d9c2b64bde40799f211dd14d539ad4",
+            "0xb84a7612208c8195d48c3ff04e6b2a00f34d1b580a532cab4d5c78dd97a3a2a1",
             "0x101c297d1a67fc0a30fc96c1aa5cc8786d630bbb00d274c9dc7bbced4c6dccd7",
         ],
     },
     {
         "id": f"FA{cycle}-B4",
-        "title": "Supported LP exits still surface as `basisEffect=UNKNOWN`, breaking exact USDT and broader LP accounting",
+        "title": (
+            "Supported LP exits still surface as `basisEffect=UNKNOWN`, breaking exact USDT and broader LP accounting"
+            if usdt_exact_blocker_active
+            else "Supported LP exits still surface as `basisEffect=UNKNOWN`, breaking USDT family and broader LP accounting"
+        ),
         "severity": "high",
-        "surfaces": ["USDT exact", "USDT family"],
+        "surfaces": (
+            ["USDT exact", "USDT family"]
+            if usdt_exact_blocker_active and usdt_family_blocker_active
+            else ["USDT exact"]
+            if usdt_exact_blocker_active
+            else ["USDT family"]
+        ),
         "currentDatabaseTruth": (
-            f"USDT exact/family coverage is {fmt(exact_row('USDT')['coverageRatio'])} with uncovered "
-            f"{fmt(float(exact_row('USDT')['current']) - float(exact_row('USDT')['covered']))}, entirely anchored "
-            "at PancakeSwap Infinity LP exit `0x091e...`."
+            f"USDT exact coverage is {fmt(exact_row('USDT')['coverageRatio'])} with uncovered "
+            f"{fmt(usdt_exact_uncovered)}. "
+            f"USDT family coverage is {fmt(family_row('USDT')['coverageRatio'])} "
+            f"with uncovered {fmt(usdt_family_uncovered)}. "
+            "The blocker is anchored at PancakeSwap Infinity LP exit `0x091e...`."
         ),
         "auditorTruth": "A supported LP exit should close the carried LP-position basis, then reallocate that basis onto the returned assets proportionally. Returned assets must not remain fully uncovered only because the exit row is still tagged `UNKNOWN`.",
         "firstFailedStage": "normalization",
@@ -288,14 +435,14 @@ blockers = [
         "surfaces": ["Protocol detection"],
         "currentDatabaseTruth": (
             f"{protocol_gap_summary} currently lack `protocolName`. "
-            "The biggest clusters are wrap/unwrap, swap, and bridge rows."
+            f"The biggest clusters are {code_list([row['type'] for row in protocol_gap_by_type[:3]])}."
         ),
         "auditorTruth": "Protocol labels are best-effort metadata, but they should still be deterministically attached whenever the interacted contract, canonical selector, or audited lifecycle pairing already proves the protocol brand.",
         "firstFailedStage": "protocol enrichment",
         "evidenceState": "EVIDENCE_PRESENT_UNLINKED",
         "typeAdequacy": "The metadata model is adequate; the defect is missing registry coverage plus missing clarification-time enrichment on already-canonical rows.",
-        "remediationClass": "registry coverage, clarification, repair sweep",
-        "pipelineCorrectionPoint": "Expand registry/enrichment rules and backfill `protocolName` without changing already-correct economics.",
+        "remediationClass": "registry coverage, clarification, rerun",
+        "pipelineCorrectionPoint": "Expand registry/enrichment rules so rerun fills `protocolName` from deterministic persisted evidence without changing already-correct economics.",
         "terminalState": "AUTHORITATIVE_RECONSTRUCTION_COMPLETE",
         "anchors": [
             "0x0765f4b17d9961c3cd7e63b4dc1e69c948954d51816807a4ba51a8ac4709f977",
@@ -317,8 +464,8 @@ blockers = [
         "firstFailedStage": "clarification + linking",
         "evidenceState": "EVIDENCE_PRESENT_UNLINKED",
         "typeAdequacy": "The model is adequate if `counterpartyAddress`, `correlationId`, and `matchedCounterparty` are kept distinct. The current defect is incomplete population of those fields.",
-        "remediationClass": "clarification, linking, repair sweep",
-        "pipelineCorrectionPoint": "Populate `counterpartyAddress` from deterministic row-local evidence and persist reciprocal lifecycle links only through `correlationId` and `matchedCounterparty`.",
+        "remediationClass": "clarification, linking, rerun",
+        "pipelineCorrectionPoint": "Populate `counterpartyAddress` from deterministic row-local evidence during the normal clarification/linking flow and persist reciprocal lifecycle links only through `correlationId` and `matchedCounterparty`.",
         "terminalState": "AUTHORITATIVE_RECONSTRUCTION_COMPLETE",
         "anchors": [
             "0x101c297d1a67fc0a30fc96c1aa5cc8786d630bbb00d274c9dc7bbced4c6dccd7",
@@ -328,14 +475,26 @@ blockers = [
         ],
     },
     {
-        "id": f"FA{cycle}-B7",
+        "id": f"FA{cycle}-B8",
         "title": "Bybit family reconstruction remains broader-goal blocked because the live DB snapshot has no raw CEX source collection",
         "severity": "medium",
-        "surfaces": ["MNT family", "Bybit broader-goal coverage"],
+        "surfaces": (
+            ["MNT family", "USDT family", "Bybit broader-goal coverage"]
+            if usdt_family_bybit_boundary_active
+            else ["MNT family", "Bybit broader-goal coverage"]
+        ),
         "currentDatabaseTruth": (
-            f"MNT exact is clean, but MNT family coverage is only {fmt(family_row('MNT')['coverageRatio'])} "
+            f"MNT exact coverage is {fmt(exact_row('MNT')['coverageRatio'])} with uncovered "
+            f"{fmt(float(exact_row('MNT')['current']) - float(exact_row('MNT')['covered']))}. "
+            f"MNT family coverage is only {fmt(family_row('MNT')['coverageRatio'])} "
             f"with uncovered {fmt(family_row('MNT')['uncovered'])} dominated by Bybit reward inventory. "
-            f"At the same time `external_ledger_raw = {counts['externalLedgerRaw']}`."
+            + (
+                f"USDT family coverage is only {fmt(family_row('USDT')['coverageRatio'])} "
+                f"with uncovered {fmt(family_row('USDT')['uncovered'])} dominated by Bybit venue inventory. "
+                if usdt_family_bybit_boundary_active
+                else ""
+            )
+            + f"At the same time `external_ledger_raw = {counts['externalLedgerRaw']}`."
         ),
         "auditorTruth": "A full raw-first CEX family reconstruction requires raw venue rows. `bybit_extracted_events` is useful context, but it is not the source-of-truth collection specified for authoritative Bybit replay.",
         "firstFailedStage": "source availability",
@@ -344,9 +503,61 @@ blockers = [
         "remediationClass": "source ingestion, broader-goal replay",
         "pipelineCorrectionPoint": "Restore raw Bybit source availability or document the explicit broader-goal limitation; do not present the current family remainder as a normal supported on-chain normalization defect.",
         "terminalState": "GENUINE_EVIDENCE_MISSING_PROVEN",
-        "anchors": ["BYBIT:33625378", "SYMBOL:MNT", "FAMILY:MNT"],
+        "anchors": (
+            ["BYBIT:33625378", "SYMBOL:MNT", "FAMILY:MNT", "SYMBOL:USDT", "FAMILY:USDT"]
+            if usdt_family_bybit_boundary_active
+            else ["BYBIT:33625378", "SYMBOL:MNT", "FAMILY:MNT"]
+        ),
     },
 ]
+
+if not lp_exit_usdt_blocker_active:
+    blockers = [blocker for blocker in blockers if blocker["id"] != f"FA{cycle}-B4"]
+if mnt_exact_blocker_active:
+    blockers.insert(
+        6,
+        {
+            "id": f"FA{cycle}-B7",
+            "title": "MNT exact coverage has a raw-history completeness gap on Mantle",
+            "severity": "high",
+            "surfaces": ["MNT exact"],
+            "currentDatabaseTruth": (
+                f"MNT exact coverage is {fmt(exact_row('MNT')['coverageRatio'])} with uncovered "
+                f"{fmt(mnt_exact_uncovered)}, "
+                f"concentrated at {bucket_summary(top_dirty_exact('MNT', 1)[0])}. "
+                f"The live native balance is {fmt(exact_row('MNT')['current'])}, while the replay-backed quantity is only {fmt(exact_row('MNT')['covered'])}."
+            ),
+            "auditorTruth": "A supported native-asset balance must be explainable either by raw ingress chronology or by an explicit starting-balance policy. A gas-only row cannot create new native MNT inventory.",
+            "firstFailedStage": "source availability",
+            "evidenceState": "GENUINE_EVIDENCE_MISSING",
+            "typeAdequacy": "The canonical model is adequate. The gap is missing on-chain source chronology or an explicit initial-balance contract for this live balance bucket.",
+            "remediationClass": "source ingestion, backfill completeness, replay",
+            "pipelineCorrectionPoint": "Ensure refresh/backfill captures the missing native MNT ingress chronology for the Mantle wallet or formalize an explicit starting-balance policy before replay compares live balances to covered quantity.",
+            "terminalState": "GENUINE_EVIDENCE_MISSING_PROVEN",
+            "anchors": [
+                "0x9a9ae8e36ef698a08a586783b10884a506b0d1a11be27dc390ad09cee072ceeb",
+                "0xc0ca8c4022bbfbb8bfd0660155e4857dd80c0cf5c521b8ad5f61ab4738fc0cab",
+                "BALANCE:0xf03b52e8686b962e051a6075a06b96cb8a663021:MANTLE:MNT",
+            ],
+        },
+    )
+
+mnt_exact_coverage_row = (
+    f"| MNT exact | {fmt(exact_row('MNT')['coverageRatio'])} | {fmt(exact_row('MNT')['coverageRatio'])} | "
+    f"{fmt(max(0, 0.99 - float(exact_row('MNT')['coverageRatio'])))} | {fmt(mnt_exact_uncovered)} | n/a | "
+    "GENUINE_EVIDENCE_MISSING_PROVEN | Live native MNT balance exceeds the raw-backed chronology currently present in the DB. |"
+    if mnt_exact_blocker_active
+    else (
+        f"| MNT exact | {fmt(exact_row('MNT')['coverageRatio'])} | {fmt(exact_row('MNT')['coverageRatio'])} | "
+        f"{fmt(max(0, 0.99 - float(exact_row('MNT')['coverageRatio'])))} | {fmt(mnt_exact_uncovered)} | n/a | "
+        "AUTHORITATIVE_RECONSTRUCTION_COMPLETE | Exact MNT is clean on the current live basis; the remaining MNT problem is family-level Bybit source completeness. |"
+    )
+)
+mnt_exact_discrepancy_row = (
+    f"| MNT exact | Leaves {fmt(mnt_exact_uncovered)} uncovered on `TWT / MANTLE / NATIVE:MANTLE` even though the present raw chronology only proves a smaller replay-backed balance. | The native balance must be explained by raw ingress chronology or an explicit starting-balance contract. | source availability | GENUINE_EVIDENCE_MISSING_PROVEN |"
+    if mnt_exact_blocker_active
+    else "| MNT exact | Exact MNT is clean on the current live basis. | No current exact-surface discrepancy remains; preserve this while fixing the family-level Bybit evidence boundary. | n/a | AUTHORITATIVE_RECONSTRUCTION_COMPLETE |"
+)
 
 
 def scorecard_table() -> str:
@@ -364,7 +575,7 @@ def scorecard_table() -> str:
             f"{yes_no(final_clean_exact(asset))} | {fmt(family['current'])} | {fmt(family['covered'])} | "
             f"{fmt(family['uncovered'])} | {fmt(family['coverageRatio'])} | {yes_no(final_clean_family(asset))} | "
             f"{fmt(family['dirtyBuckets'])} | {blocking_reasons[asset]} | NOT COMPARABLE | "
-            "Fresh live replay truth captured at `2026-04-21T17:12:17.100Z` supersedes archived earlier-cycle snapshots. |"
+            f"Fresh live replay truth captured at `{audit['capturedAt']}` supersedes archived earlier-cycle snapshots. |"
         )
     return "\n".join(header + rows)
 
@@ -573,9 +784,9 @@ report = normalize_markdown(textwrap.dedent(
 
     High-signal conclusions from the current live basis:
 
-    - Exact reference assets clean now: `BTC`, `MNT`
-    - Exact reference assets still failing now: `ETH`, `AVAX`, `USDC`, `USDT`
-    - Family surfaces still failing final-clean now: all six mandatory families, with the largest remainder on `FAMILY:MNT`
+    - Exact reference assets clean now: {code_list(exact_clean_assets)}
+    - Exact reference assets still failing now: {code_list(exact_failing_assets)}
+    - Family surfaces still failing final-clean now: {code_list([f"FAMILY:{asset}" for asset in family_failing_assets])}
     - The highest supported on-chain uncovered exact quantity is `USDC = {fmt(float(exact_row("USDC")["current"]) - float(exact_row("USDC")["covered"]))}`
     - The highest broader-goal family remainder is `FAMILY:MNT = {fmt(family_row("MNT")["uncovered"])}`, but that lane is blocked by missing raw CEX source evidence in this live DB snapshot
 
@@ -603,7 +814,7 @@ report = normalize_markdown(textwrap.dedent(
 
     Cycle {cycle} fails the mandatory financial correctness surface on the current live basis. The change package prepared in this run is therefore split into:
 
-    1. Supported on-chain normalization and continuity fixes for ETH, AVAX, USDC, and LP-exit USDT
+    1. {supported_onchain_fix_scope}
     2. Protocol detection and counterparty-construction rules that can be backfilled without redefining already-correct economics
     3. A broader-goal CEX evidence boundary note explaining why `FAMILY:MNT` cannot be treated as a normal supported on-chain blocker on this DB snapshot
     """
@@ -679,18 +890,17 @@ coverage_comparison = normalize_markdown(textwrap.dedent(
     | ETH exact | {fmt(exact_row("ETH")["coverageRatio"])} | {fmt(exact_row("ETH")["coverageRatio"])} | {fmt(max(0, 0.99 - float(exact_row("ETH")["coverageRatio"])))} | {fmt(float(exact_row("ETH")["current"]) - float(exact_row("ETH")["covered"]))} | n/a | AUTHORITATIVE_RECONSTRUCTION_COMPLETE | Native ETH carry still leaks on Arbitrum and Base after supported bridge/swap chronology. |
     | ETH family | {fmt(family_row("ETH")["coverageRatio"])} | {fmt(family_row("ETH")["coverageRatio"])} | 0 | n/a | {fmt(family_row("ETH")["uncovered"])} | AUTHORITATIVE_RECONSTRUCTION_COMPLETE | Ratio passes, but `AMANWETH` plus native ETH tails are still not final-clean. |
     | BTC family | {fmt(family_row("BTC")["coverageRatio"])} | {fmt(family_row("BTC")["coverageRatio"])} | 0 | n/a | {fmt(family_row("BTC")["uncovered"])} | AUTHORITATIVE_RECONSTRUCTION_COMPLETE | Exact BTC is clean; family still holds a small `AARBWBTC` receipt-token remainder. |
+    {mnt_exact_coverage_row}
     | MNT family | {fmt(family_row("MNT")["coverageRatio"])} | {fmt(family_row("MNT")["coverageRatio"])} | {fmt(max(0, 0.99 - float(family_row("MNT")["coverageRatio"])))} | n/a | {fmt(family_row("MNT")["uncovered"])} | GENUINE_EVIDENCE_MISSING_PROVEN | Family remainder is dominated by Bybit reward inventory while raw CEX source collection is absent. |
     | AVAX exact | {fmt(exact_row("AVAX")["coverageRatio"])} | {fmt(exact_row("AVAX")["coverageRatio"])} | {fmt(max(0, 0.99 - float(exact_row("AVAX")["coverageRatio"])))} | {fmt(float(exact_row("AVAX")["current"]) - float(exact_row("AVAX")["covered"]))} | n/a | AUTHORITATIVE_RECONSTRUCTION_COMPLETE | Native AVAX basis is not restored after `aAvaWAVAX` and `sAVAX` continuity. |
     | AVAX family | {fmt(family_row("AVAX")["coverageRatio"])} | {fmt(family_row("AVAX")["coverageRatio"])} | {fmt(max(0, 0.99 - float(family_row("AVAX")["coverageRatio"])))} | n/a | {fmt(family_row("AVAX")["uncovered"])} | AUTHORITATIVE_RECONSTRUCTION_COMPLETE | `sAVAX` plus native AVAX remain materially uncovered inside one supported family. |
     | USDC exact | {fmt(exact_row("USDC")["coverageRatio"])} | {fmt(exact_row("USDC")["coverageRatio"])} | {fmt(max(0, 0.99 - float(exact_row("USDC")["coverageRatio"])))} | {fmt(float(exact_row("USDC")["current"]) - float(exact_row("USDC")["covered"]))} | n/a | AUTHORITATIVE_RECONSTRUCTION_COMPLETE | `eUSDC-6 -> USDC` and ParaSwap/bridge chronology leave supported USDC carry stranded. |
     | USDC family | {fmt(family_row("USDC")["coverageRatio"])} | {fmt(family_row("USDC")["coverageRatio"])} | {fmt(max(0, 0.99 - float(family_row("USDC")["coverageRatio"])))} | n/a | {fmt(family_row("USDC")["uncovered"])} | AUTHORITATIVE_RECONSTRUCTION_COMPLETE | Exact and family fail on the same Arbitrum USDC buckets. |
-    | USDT exact | {fmt(exact_row("USDT")["coverageRatio"])} | {fmt(exact_row("USDT")["coverageRatio"])} | {fmt(max(0, 0.99 - float(exact_row("USDT")["coverageRatio"])))} | {fmt(float(exact_row("USDT")["current"]) - float(exact_row("USDT")["covered"]))} | n/a | AUTHORITATIVE_RECONSTRUCTION_COMPLETE | Supported LP exit still emits `basisEffect=UNKNOWN`, so returned USDT is uncovered. |
-    | USDT family | {fmt(family_row("USDT")["coverageRatio"])} | {fmt(family_row("USDT")["coverageRatio"])} | {fmt(max(0, 0.99 - float(family_row("USDT")["coverageRatio"])))} | n/a | {fmt(family_row("USDT")["uncovered"])} | AUTHORITATIVE_RECONSTRUCTION_COMPLETE | Same unsupported `LP_EXIT` basis allocation defect affects the family view too. |
+    {usdt_coverage_rows}
 
     ## Exact/family surfaces that already pass exact cleanliness
 
-    - `BTC exact = 1`
-    - `MNT exact = 1`
+    {exact_clean_bullets}
 
     Those exact rows are clean on the current live basis and should not be regressed while fixing the remaining blockers.
 
@@ -713,13 +923,13 @@ discrepancies = normalize_markdown(textwrap.dedent(
     | ETH exact | Leaves {fmt(float(exact_row("ETH")["current"]) - float(exact_row("ETH")["covered"]))} uncovered across native ETH buckets. | Supported bridge/native/receipt continuity should carry full principal basis; only explicit excess yield should remain acquisition. | normalization + move_basis | AUTHORITATIVE_RECONSTRUCTION_COMPLETE |
     | ETH family | Coverage ratio passes at {fmt(family_row("ETH")["coverageRatio"])} but family is not final-clean because `AMANWETH` and native ETH buckets are still dirty. | Family should become final-clean after principal-vs-yield split and carry restoration. | normalization + move_basis | AUTHORITATIVE_RECONSTRUCTION_COMPLETE |
     | BTC family | Tiny uncovered `AARBWBTC` remainder still prevents final-clean family state. | Receipt-token continuity should absorb the residual dust instead of leaving a family remainder. | move_basis | AUTHORITATIVE_RECONSTRUCTION_COMPLETE |
+    {mnt_exact_discrepancy_row or ""}
     | MNT family | Current family shows {fmt(family_row("MNT")["uncovered"])} uncovered in Bybit reward inventory. | Cannot be authoritatively reconstructed from raw on this DB snapshot because `external_ledger_raw` is empty. | source availability | GENUINE_EVIDENCE_MISSING_PROVEN |
     | AVAX exact | Native AVAX leaves {fmt(float(exact_row("AVAX")["current"]) - float(exact_row("AVAX")["covered"]))} uncovered. | `aAvaWAVAX` and `sAVAX` continuity should carry basis inside the AVAX family. | move_basis | AUTHORITATIVE_RECONSTRUCTION_COMPLETE |
     | AVAX family | Family leaves {fmt(family_row("AVAX")["uncovered"])} uncovered, mostly in `sAVAX`. | Family continuity should reallocate basis between native AVAX and staking wrapper without disposal. | move_basis | AUTHORITATIVE_RECONSTRUCTION_COMPLETE |
-    | USDC exact | Leaves {fmt(float(exact_row("USDC")["current"]) - float(exact_row("USDC")["covered"]))} uncovered, mostly on two Arbitrum buckets. | Bridge and vault receipt-token continuity should leave only explicit yield uncovered. | normalization + move_basis | AUTHORITATIVE_RECONSTRUCTION_COMPLETE |
-    | USDC family | Fails on the same two Arbitrum USDC buckets as exact. | Family should inherit the same corrected continuity once exact canonical rows are fixed. | normalization + move_basis | AUTHORITATIVE_RECONSTRUCTION_COMPLETE |
-    | USDT exact | Leaves {fmt(float(exact_row("USDT")["current"]) - float(exact_row("USDT")["covered"]))} uncovered on one PancakeSwap Infinity LP exit. | LP-position basis should be reallocated onto the returned USDT and peer asset. | normalization | AUTHORITATIVE_RECONSTRUCTION_COMPLETE |
-    | USDT family | Same LP-exit defect leaves the family uncovered. | Family should also become clean once LP-exit basis allocation is emitted deterministically. | normalization | AUTHORITATIVE_RECONSTRUCTION_COMPLETE |
+    | USDC exact | Leaves {fmt(float(exact_row("USDC")["current"]) - float(exact_row("USDC")["covered"]))} uncovered, led by {bucket_list_summary(top_dirty_exact("USDC", 2))}. | Bridge and vault receipt-token continuity should leave only explicit yield uncovered. | normalization + move_basis | AUTHORITATIVE_RECONSTRUCTION_COMPLETE |
+    | USDC family | Fails on the same bridge-and-swap USDC chronology as exact. | Family should inherit the same corrected continuity once exact canonical rows are fixed. | normalization + move_basis | AUTHORITATIVE_RECONSTRUCTION_COMPLETE |
+    {usdt_discrepancy_rows}
 
     ## Protocol and counterparty mismatches
 
@@ -753,7 +963,7 @@ required_changes = normalize_markdown(textwrap.dedent(
 
     - When a row is already canonically typed, clarification-time enrichment should fill `protocolName` and `protocolVersion` from deterministic current evidence instead of leaving the row blank.
     - Clarification should also fill `counterpartyAddress` from row-local interacted-contract evidence for vault, lending, swap, wrap/unwrap, and bridge families.
-    - Add a repair sweep for historical rows where economics are already correct but metadata is still null.
+- Ensure the normal clarification flow fills deterministic metadata on rerun for rows where economics are already correct but metadata is still null; do not add repair jobs.
 
     ## Protocol detection
 
@@ -775,7 +985,7 @@ required_changes = normalize_markdown(textwrap.dedent(
       - bridge source: source bridge contract
       - bridge destination: deterministic settlement contract if unique
     - Use `correlationId` and reciprocal `matchedCounterparty` for lifecycle pairing across rows. Do not overload `counterpartyAddress` with lifecycle identity.
-    - Add a repair sweep that backfills `counterpartyAddress` when raw evidence is already persisted.
+- Ensure rerun backfills `counterpartyAddress` from persisted raw evidence through the normal clarification/linking flow; do not add repair jobs.
 
     ## Linking
 
@@ -815,6 +1025,11 @@ required_changes = normalize_markdown(textwrap.dedent(
 
     - Clear and rerun derived accounting surfaces after the canonical fixes above. Do not patch `asset_ledger_points` or `on_chain_balances` directly.
     - Recompute exact and family scorecard rows on the same live basis after rerun.
+
+    ## Source completeness
+
+    - Do not treat a live native balance as financially explained when the raw chronology in the DB only supports a smaller replay-backed quantity.
+    - For `TWT / MANTLE / NATIVE:MANTLE`, either recover the missing ingress chronology through the normal backfill path or define an explicit starting-balance contract that can be audited and replayed deterministically.
 
     ## Verification
 
@@ -1091,7 +1306,7 @@ handoff = normalize_markdown(textwrap.dedent(
 
     ## Summary
 
-    Fresh cycle {cycle} financial audit is complete on the current live Mongo basis. Supported on-chain blockers are now isolated to ETH, AVAX, USDC, and LP-exit USDT accounting semantics, plus metadata rule gaps for protocol detection and counterparty construction. Exact BTC and exact MNT are clean on the current basis. Family MNT remains broader-goal blocked because raw CEX source rows are absent from this DB snapshot.
+    Fresh cycle {cycle} financial audit is complete on the current live Mongo basis. Supported on-chain blockers are now isolated to {code_list(exact_failing_assets)} accounting semantics, plus metadata rule gaps for protocol detection and counterparty construction. Exact-clean reference assets on this basis are {code_list(exact_clean_assets)}. Family MNT remains broader-goal blocked because raw CEX source rows are absent from this DB snapshot.
 
     ## Next role requirements
 

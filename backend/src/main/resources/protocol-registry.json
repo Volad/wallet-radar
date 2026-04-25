@@ -1319,6 +1319,18 @@
       ],
       "confidence": "MEDIUM"
     },
+    "0x5828a3c0f07c6b841205d12660e0abb869bf98dc": {
+      "name": "Linea Rewards Distributor",
+      "protocol": "Linea Rewards",
+      "family": "YIELD",
+      "role": "REWARD_ROUTER",
+      "event_type": "REWARD_CLAIM",
+      "networks": [
+        "LINEA"
+      ],
+      "confidence": "MEDIUM",
+      "notes": "Reward distributor surfaced by release()/TokensReleased reward claims on current live rows."
+    },
     "0xa2ee6fce4acb62d95448729cdb781e3beb62504a": {
       "name": "Polygon POS Bridge (Ethereum)",
       "protocol": "Polygon",
@@ -2034,6 +2046,21 @@
       "confidence": "HIGH",
       "notes": "Successor to RouterV3; same Diamond proxy pattern. All RouterV3 semantics apply. Check tx.to to distinguish V3 vs V4 calls in history."
     },
+    "0x888888888889758f76e7103c6cbf23abbf58f946": {
+      "name": "Pendle RouterV4 (Mantle)",
+      "protocol": "Pendle",
+      "version": "V4",
+      "family": "YIELD",
+      "role": "ROUTER",
+      "event_type": null,
+      "networks": [
+        "MANTLE"
+      ],
+      "decomposeByLegs": true,
+      "specialHandler": "PENDLE_ROUTER",
+      "confidence": "HIGH",
+      "notes": "Official Pendle RouterV4 address on Mantle. Used by current live LP entry and routed market interactions."
+    },
     "0x1a6fcc85557bc4fb7b534ed835a03ef056552d52": {
       "name": "Pendle MarketFactoryV3",
       "protocol": "Pendle",
@@ -2101,6 +2128,18 @@
       "notes": "Deploys Camelot V3 (Algebra) pools. Pool contracts emit Mint/Burn/Swap/Collect events."
     },
     "── KATANA (chainId: 747474) ─────────────────────────────────────": {},
+    "0xac4c6e212a361c968f1725b4d055b47e63f80b75": {
+      "name": "Katana Swap Router",
+      "protocol": "Katana",
+      "family": "DEX",
+      "role": "ROUTER",
+      "event_type": "SWAP",
+      "networks": [
+        "KATANA"
+      ],
+      "confidence": "MEDIUM",
+      "notes": "Deterministic Katana routed swap surface used by current cycle 72 live swaps."
+    },
     "── PLASMA (chainId: 9745) ───────────────────────────────────────": {},
     "0x1b35fba9357fd9bda7ed0429c8bbabe1e8cc88fc": {
       "name": "Uniswap V3 Universal Router (Plasma)",
@@ -2245,6 +2284,18 @@
       ],
       "confidence": "HIGH",
       "notes": "Official from docs.fusionx.finance/developers/smart-contracts-mantle-mainnet/v3-smart-contracts"
+    },
+    "0xed884f0460a634c69dbb7def54858465808aacef": {
+      "name": "Lendle Rewards Station",
+      "protocol": "Lendle Rewards Station",
+      "family": "YIELD",
+      "role": "VAULT",
+      "event_type": null,
+      "networks": [
+        "MANTLE"
+      ],
+      "confidence": "MEDIUM",
+      "notes": "Mantle Rewards Station lockup and reward contract used for lockup deposits and withdrawals on current live rows."
     },
     "0x4bf659ca398a73aaf73818f0c64c838b9e229c08": {
       "name": "FusionX V3 Smart Router",

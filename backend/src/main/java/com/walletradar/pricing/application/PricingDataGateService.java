@@ -27,15 +27,18 @@ public class PricingDataGateService {
     public PricingDataGateSnapshot snapshot() {
         long pendingPriceCount = countByStatus(NormalizedTransactionStatus.PENDING_PRICE);
         long pendingClarificationCount = countByStatus(NormalizedTransactionStatus.PENDING_CLARIFICATION);
+        long pendingReclassificationCount = countByStatus(NormalizedTransactionStatus.PENDING_RECLASSIFICATION);
         long needsReviewCount = countBlockingNeedsReview();
         long excludedNeedsReviewCount = countExcludedNeedsReview();
         long unresolvedPriceCount = countUnresolvedPrice();
         boolean avcoReady = pendingPriceCount == 0L
                 && pendingClarificationCount == 0L
+                && pendingReclassificationCount == 0L
                 && needsReviewCount == 0L;
         return new PricingDataGateSnapshot(
                 pendingPriceCount,
                 pendingClarificationCount,
+                pendingReclassificationCount,
                 needsReviewCount,
                 unresolvedPriceCount,
                 excludedNeedsReviewCount,
@@ -45,19 +48,22 @@ public class PricingDataGateService {
 
     public PricingDataGateSnapshot snapshot(Collection<String> walletAddresses) {
         if (walletAddresses == null || walletAddresses.isEmpty()) {
-            return new PricingDataGateSnapshot(0L, 0L, 0L, 0L, 0L, true);
+            return new PricingDataGateSnapshot(0L, 0L, 0L, 0L, 0L, 0L, true);
         }
         long pendingPriceCount = countByStatus(walletAddresses, NormalizedTransactionStatus.PENDING_PRICE);
         long pendingClarificationCount = countByStatus(walletAddresses, NormalizedTransactionStatus.PENDING_CLARIFICATION);
+        long pendingReclassificationCount = countByStatus(walletAddresses, NormalizedTransactionStatus.PENDING_RECLASSIFICATION);
         long needsReviewCount = countBlockingNeedsReview(walletAddresses);
         long excludedNeedsReviewCount = countExcludedNeedsReview(walletAddresses);
         long unresolvedPriceCount = countUnresolvedPrice(walletAddresses);
         boolean avcoReady = pendingPriceCount == 0L
                 && pendingClarificationCount == 0L
+                && pendingReclassificationCount == 0L
                 && needsReviewCount == 0L;
         return new PricingDataGateSnapshot(
                 pendingPriceCount,
                 pendingClarificationCount,
+                pendingReclassificationCount,
                 needsReviewCount,
                 unresolvedPriceCount,
                 excludedNeedsReviewCount,

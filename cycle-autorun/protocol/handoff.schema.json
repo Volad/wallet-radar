@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "cycle-autorun/handoff.schema.json",
+  "type": "object",
+  "required": [
+    "path",
+    "status",
+    "headers",
+    "sections"
+  ],
+  "properties": {
+    "path": { "type": "string" },
+    "status": { "type": "string" },
+    "headers": { "type": "object" },
+    "sections": {
+      "type": "object",
+      "required": [
+        "Summary",
+        "Next role requirements",
+        "Artifact references"
+      ]
+    }
+  }
+}

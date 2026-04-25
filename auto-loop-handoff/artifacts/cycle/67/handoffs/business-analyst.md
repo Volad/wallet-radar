@@ -4,7 +4,7 @@ Status: active
 Task: `FA-001 fresh live financial audit and change package`
 Transition: `financial-analyst -> business-analyst`
 Cycle: `67`
-Input basis: `fresh live Mongo capture 2026-04-21T17:12:17.100Z from walletradar; external_ledger_raw=0; authoritative scorecard rewritten on this basis`
+Input basis: `fresh live Mongo capture 2026-04-21T19:37:12.784Z from walletradar; external_ledger_raw=0; authoritative scorecard rewritten on this basis`
 Previous owner: `financial-analyst`
 Next owner: `business-analyst`
 

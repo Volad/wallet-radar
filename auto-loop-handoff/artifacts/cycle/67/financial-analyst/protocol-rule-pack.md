@@ -116,8 +116,8 @@ This rule pack documents reusable protocol-detection rules that are justified by
 | ARBITRUM | BRIDGE_OUT | 0x89c6340b1a1f4b25d36cd8b063d49045caf3f818 | 0xd7a08473 | 16 | no | Add registry or audited enrichment coverage for this target. |
 | AVALANCHE | SWAP | 0x45a62b090df48243f12a21897e7ed91863e2c86b | 0xf1910f70 | 15 | yes | Existing registry coverage is not reaching final row enrichment. |
 | ARBITRUM | SWAP | 0x0000000000001ff3684f28c67538d4d072c22734 | 0x2213bc0b | 9 | no | Add registry or audited enrichment coverage for this target. |
-| KATANA | SWAP | 0xac4c6e212a361c968f1725b4d055b47e63f80b75 | 0x5f3bd1c8 | 8 | no | Add registry or audited enrichment coverage for this target. |
 | AVALANCHE | UNWRAP | 0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7 | 0x2e1a7d4d | 8 | yes | Existing registry coverage is not reaching final row enrichment. |
+| KATANA | SWAP | 0xac4c6e212a361c968f1725b4d055b47e63f80b75 | 0x5f3bd1c8 | 8 | no | Add registry or audited enrichment coverage for this target. |
 | UNICHAIN | BRIDGE_IN | n/a | 0xdeff4b24 | 8 | no | Add registry or audited enrichment coverage for this target. |
 | LINEA | REWARD_CLAIM | 0x5828a3c0f07c6b841205d12660e0abb869bf98dc | 0x86d1a69f | 7 | no | Add registry or audited enrichment coverage for this target. |
 | OPTIMISM | BRIDGE_OUT | 0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f | 0x | 7 | no | Add registry or audited enrichment coverage for this target. |

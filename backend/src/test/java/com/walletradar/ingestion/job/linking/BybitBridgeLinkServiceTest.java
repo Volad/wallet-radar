@@ -129,8 +129,9 @@ class BybitBridgeLinkServiceTest {
     }
 
     @Test
-    void unmatchedExternalCustodyRowIsExcludedDuringLinking() {
+    void unmatchedExternalCustodyRowBecomesShadowContinuityDuringLinking() {
         ExternalLedgerRaw deposit = bridgeRow("external-custody-in", "EXTERNAL_INBOUND");
+        deposit.setSenderAddress("0x5c30940a4544ca845272fe97c4a27f2ed2cd7b64");
         deposit.setReceivedAddress("0x2ea8cb6f614a3c579d1d09474573387d3c16ac6d");
         BybitCanonicalTransactionBuilder builder = new BybitCanonicalTransactionBuilder();
         NormalizedTransaction bybitTx = builder.buildMappedRow(deposit, Instant.parse("2026-04-10T10:00:00Z"));
@@ -149,11 +150,17 @@ class BybitBridgeLinkServiceTest {
 
         assertThat(changed).isTrue();
         assertThat(deposit.getOnChainCorrelation().getStatus()).isEqualTo("EXTERNAL_CUSTODY");
-        assertThat(bybitTx.getStatus()).isEqualTo(NormalizedTransactionStatus.NEEDS_REVIEW);
-        assertThat(bybitTx.getExcludedFromAccounting()).isTrue();
-        assertThat(bybitTx.getAccountingExclusionReason()).isEqualTo(BybitBridgeLinkService.EXTERNAL_CUSTODY_EXCLUSION_REASON);
-        assertThat(bybitTx.getMissingDataReasons()).contains(BybitBridgeLinkService.EXTERNAL_CUSTODY_EXCLUSION_REASON);
+        assertThat(deposit.getOnChainCorrelation().getCorrelationId())
+                .isEqualTo("BYBIT_SHADOW_CUSTODY:BYBIT:uid-1:ARBITRUM:FAMILY:USDC");
+        assertThat(bybitTx.getStatus()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(bybitTx.getExcludedFromAccounting()).isFalse();
+        assertThat(bybitTx.getAccountingExclusionReason()).isNull();
+        assertThat(bybitTx.getMissingDataReasons()).doesNotContain(BybitBridgeLinkService.EXTERNAL_CUSTODY_EXCLUSION_REASON);
         assertThat(bybitTx.getMissingDataReasons()).doesNotContain(BybitBridgeLinkService.BRIDGE_MISSING_REASON);
+        assertThat(bybitTx.getContinuityCandidate()).isTrue();
+        assertThat(bybitTx.getCorrelationId()).isEqualTo("BYBIT_SHADOW_CUSTODY:BYBIT:uid-1:ARBITRUM:FAMILY:USDC");
+        assertThat(bybitTx.getMatchedCounterparty()).isNull();
+        assertThat(bybitTx.getCounterpartyAddress()).isEqualTo("0x5c30940a4544ca845272fe97c4a27f2ed2cd7b64");
         assertThat(bybitTx.getFlows()).extracting(NormalizedTransaction.Flow::getRole)
                 .containsExactly(NormalizedLegRole.TRANSFER);
         verify(externalLedgerRawRepository).save(deposit);

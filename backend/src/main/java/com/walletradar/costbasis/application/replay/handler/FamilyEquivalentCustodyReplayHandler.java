@@ -52,10 +52,7 @@ public class FamilyEquivalentCustodyReplayHandler {
         Map<String, List<IndexedFlow>> flowsByFamily = new LinkedHashMap<>();
         for (IndexedFlow indexedFlow : flowSupport.indexedFlows(transaction)) {
             NormalizedTransaction.Flow flow = indexedFlow.flow();
-            if (flow == null
-                    || flow.getRole() != NormalizedLegRole.TRANSFER
-                    || flow.getQuantityDelta() == null
-                    || flow.getQuantityDelta().signum() == 0) {
+            if (!isPrincipalCandidate(flow)) {
                 continue;
             }
             String continuityIdentity = AccountingAssetFamilySupport.continuityIdentity(flow);
@@ -68,19 +65,20 @@ public class FamilyEquivalentCustodyReplayHandler {
         List<SimpleFamilyCustodyPair> pairs = new ArrayList<>();
         Map<Integer, IndexedFlow> selectedByIndex = new LinkedHashMap<>();
         for (List<IndexedFlow> familyFlows : flowsByFamily.values()) {
-            if (familyFlows.size() != 2) {
+            List<IndexedFlow> outboundFlows = familyFlows.stream()
+                    .filter(flow -> flow.flow().getQuantityDelta().signum() < 0)
+                    .toList();
+            List<IndexedFlow> inboundFlows = familyFlows.stream()
+                    .filter(flow -> flow.flow().getQuantityDelta().signum() > 0)
+                    .toList();
+            if (outboundFlows.size() != 1 || inboundFlows.isEmpty()) {
                 continue;
             }
-            IndexedFlow first = familyFlows.get(0);
-            IndexedFlow second = familyFlows.get(1);
-            if (first.flow().getQuantityDelta().signum() == second.flow().getQuantityDelta().signum()) {
+            IndexedFlow outbound = outboundFlows.getFirst();
+            IndexedFlow inbound = selectPrincipalInbound(transaction, outbound, inboundFlows);
+            if (inbound == null) {
                 continue;
             }
-            if (Objects.equals(assetSupport.assetIdentity(transaction, first.flow()), assetSupport.assetIdentity(transaction, second.flow()))) {
-                continue;
-            }
-            IndexedFlow outbound = first.flow().getQuantityDelta().signum() < 0 ? first : second;
-            IndexedFlow inbound = outbound == first ? second : first;
             pairs.add(new SimpleFamilyCustodyPair(outbound, inbound));
             selectedByIndex.put(outbound.index(), outbound);
             selectedByIndex.put(inbound.index(), inbound);
@@ -149,6 +147,42 @@ public class FamilyEquivalentCustodyReplayHandler {
                     AssetLedgerPoint.BasisEffect.REALLOCATE_IN
             );
         }
+    }
+
+    private IndexedFlow selectPrincipalInbound(
+            NormalizedTransaction transaction,
+            IndexedFlow outbound,
+            List<IndexedFlow> inboundFlows
+    ) {
+        List<IndexedFlow> distinctAssetInbound = inboundFlows.stream()
+                .filter(inbound -> !Objects.equals(
+                        assetSupport.assetIdentity(transaction, outbound.flow()),
+                        assetSupport.assetIdentity(transaction, inbound.flow())
+                ))
+                .toList();
+        if (distinctAssetInbound.isEmpty()) {
+            return null;
+        }
+        return distinctAssetInbound.stream()
+                .filter(inbound -> inbound.flow().getRole() == NormalizedLegRole.TRANSFER)
+                .findFirst()
+                .orElseGet(() -> distinctAssetInbound.stream()
+                        .max(java.util.Comparator.comparing(inbound -> inbound.flow().getQuantityDelta().abs()))
+                        .orElse(null));
+    }
+
+    private boolean isPrincipalCandidate(NormalizedTransaction.Flow flow) {
+        if (flow == null
+                || flow.getRole() == null
+                || flow.getQuantityDelta() == null
+                || flow.getQuantityDelta().signum() == 0) {
+            return false;
+        }
+        if (flow.getRole() == NormalizedLegRole.TRANSFER) {
+            return true;
+        }
+        return (flow.getRole() == NormalizedLegRole.SELL && flow.getQuantityDelta().signum() < 0)
+                || (flow.getRole() == NormalizedLegRole.BUY && flow.getQuantityDelta().signum() > 0);
     }
 
     private boolean isSimpleFamilyEquivalentCustodyType(NormalizedTransactionType type) {

@@ -7,6 +7,7 @@ import com.walletradar.domain.transaction.bybit.BybitExtractedEventStatus;
 import com.walletradar.domain.transaction.externalledger.ExternalLedgerRaw;
 import com.walletradar.domain.transaction.externalledger.ExternalLedgerRawRepository;
 import com.walletradar.domain.transaction.externalledger.ExternalLedgerRawStatus;
+import com.walletradar.domain.transaction.integration.IntegrationRawEventRepository;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.ingestion.pipeline.bybit.BybitCanonicalTransactionBuilder;
 import com.walletradar.ingestion.pipeline.bybit.BybitTradePairer;
@@ -19,6 +20,7 @@ import com.walletradar.integration.bybit.BybitExtractedTransferShadowPairer;
 import com.walletradar.integration.bybit.PendingBybitExtractedRowQueryService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.bson.Document;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -39,6 +41,7 @@ public class BybitNormalizationService {
 
     private final PendingBybitExtractedRowQueryService pendingBybitExtractedRowQueryService;
     private final BybitExtractedEventRepository bybitExtractedEventRepository;
+    private final IntegrationRawEventRepository integrationRawEventRepository;
     private final BybitExtractedTradePairer bybitExtractedTradePairer;
     private final BybitExtractedTransferShadowPairer bybitExtractedTransferShadowPairer;
     private final PendingExternalLedgerRowQueryService pendingExternalLedgerRowQueryService;
@@ -114,6 +117,7 @@ public class BybitNormalizationService {
     }
 
     boolean normalize(BybitExtractedEvent row, Instant now) {
+        hydrateMissingTransferFields(row);
         ExternalLedgerRaw mappedRow = bybitExtractedEventMapper.toLegacyRaw(row);
         if (isTradeRow(mappedRow)) {
             return normalizeTradeRow(row, mappedRow, now);
@@ -138,6 +142,30 @@ public class BybitNormalizationService {
         normalizedTransactionStore.upsert(normalized);
         markConfirmed(row);
         return true;
+    }
+
+    private void hydrateMissingTransferFields(BybitExtractedEvent row) {
+        if (row == null || blank(row.getIntegrationRawEventId())) {
+            return;
+        }
+        if (!blank(row.getSenderAddress()) && !blank(row.getReceivedAddress()) && !blank(row.getTxHash())) {
+            return;
+        }
+        integrationRawEventRepository.findById(row.getIntegrationRawEventId()).ifPresent(rawEvent -> {
+            Document payload = rawEvent.getPayload();
+            if (payload == null) {
+                return;
+            }
+            if (blank(row.getSenderAddress())) {
+                row.setSenderAddress(text(payload, "fromAddress"));
+            }
+            if (blank(row.getReceivedAddress())) {
+                row.setReceivedAddress(text(payload, "toAddress", "address"));
+            }
+            if (blank(row.getTxHash())) {
+                row.setTxHash(text(payload, "txID", "txId"));
+            }
+        });
     }
 
     private boolean isTradeRow(ExternalLedgerRaw row) {
@@ -348,5 +376,26 @@ public class BybitNormalizationService {
 
     private <T> List<T> safe(List<T> batch) {
         return batch == null ? List.of() : batch;
+    }
+
+    private String text(Document payload, String... keys) {
+        if (payload == null || keys == null) {
+            return null;
+        }
+        for (String key : keys) {
+            Object value = payload.get(key);
+            if (value == null) {
+                continue;
+            }
+            String text = value.toString().trim();
+            if (!text.isEmpty()) {
+                return text;
+            }
+        }
+        return null;
+    }
+
+    private boolean blank(String value) {
+        return value == null || value.isBlank();
     }
 }

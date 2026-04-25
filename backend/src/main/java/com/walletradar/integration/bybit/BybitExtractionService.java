@@ -178,6 +178,7 @@ public class BybitExtractionService {
         event.setChain(chain);
         event.setNetworkId(networkId);
         event.setTxHash(text(payload, "txID", "txId"));
+        event.setSenderAddress(text(payload, "fromAddress"));
         event.setReceivedAddress(text(payload, "toAddress", "address"));
         event.setBybitStatus(text(payload, "status"));
         event.setBasisRelevant(true);
@@ -193,6 +194,7 @@ public class BybitExtractionService {
         event.setAssetSymbol(upper(text(payload, "coin", "currency")));
         event.setQuantityRaw(abs(decimal(payload, "amount")));
         event.setChain("BYBIT");
+        event.setSenderAddress(text(payload, "fromAddress"));
         event.setReceivedAddress(text(payload, "toAddress", "address"));
         event.setBybitStatus(text(payload, "status"));
         event.setBasisRelevant(true);
@@ -212,6 +214,7 @@ public class BybitExtractionService {
         event.setChain(chain);
         event.setNetworkId(networkId);
         event.setTxHash(text(payload, "txID", "txId"));
+        event.setSenderAddress(text(payload, "fromAddress"));
         event.setReceivedAddress(text(payload, "toAddress", "address"));
         event.setFeePaid(negative(decimal(payload, "withdrawFee", "fee")));
         event.setBybitStatus(text(payload, "status"));

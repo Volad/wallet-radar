@@ -23,7 +23,7 @@
 | **Normalized Transaction** | Canonical operation document (`1 tx = 1 doc`) with `flows[]` used by pricing/stat/accounting pipeline. |
 | **Flow** | Canonical movement row inside normalized transaction (`quantityDelta`, role, asset, price fields). |
 | **Self-canceling pair** | Same-asset same-quantity inbound and outbound legs inside one tx that net to zero and therefore represent wrapper / marker continuity rather than economic acquisition or disposal. |
-| **Normalized Status Pipeline** | Receipt-clarifiable rows may pass through `PENDING_CLARIFICATION -> PENDING_PRICE -> PENDING_STAT -> CONFIRMED`; low-confidence rows without receipt gaps may go directly to `PENDING_PRICE` or `NEEDS_REVIEW`. |
+| **Normalized Status Pipeline** | Receipt-clarifiable rows may pass through `PENDING_CLARIFICATION -> PENDING_RECLASSIFICATION -> PENDING_PRICE -> PENDING_STAT -> CONFIRMED`; low-confidence rows without receipt gaps may go directly to `PENDING_PRICE` or `NEEDS_REVIEW`. |
 | **User Session** | Persisted workspace record keyed by client-generated `sessionId` in `user_sessions`; stores wallets, integrations, settings, and pipeline state. |
 | **AVCO** | Weighted average acquisition cost used for cost basis and realised PnL. |
 | **perWalletAvco** | AVCO computed from one wallet only. |
@@ -159,6 +159,9 @@ Status intent:
 - `PENDING_CLARIFICATION` is reserved for rows that are missing receipt-safe metadata
   (`txreceipt_status`, gas fields, created contract address) and can still benefit
   from bounded clarification.
+- `PENDING_RECLASSIFICATION` means clarification has completed or exhausted a
+  bounded evidence attempt and the same canonical classifier must run again over
+  `RawTransaction` plus persisted `clarificationEvidence`.
 - Low confidence alone does not justify clarification.
 - If classification is economically coherent but not receipt-clarifiable, the row
   proceeds to `PENDING_PRICE`.
@@ -1032,7 +1035,7 @@ LP extensions for concentrated-liquidity (CL) protocols:
 | INV-18 | Audited `zkSync` routed `Across` source tx `0x27ad57d5` must resolve to `BRIDGE_OUT` when raw route evidence proves the helper path plus same-wallet destination parameters; the tx must not remain `UNKNOWN / NEEDS_REVIEW`. |
 | INV-19 | When `ACCOUNTING_REPLAY` stops before replay/materialization because active blockers still exist, session pipeline state must persist as `BLOCKED`, not `COMPLETE`. |
 | INV-20 | Provider-native balances that arrive with `contractAddress = 0x0000000000000000000000000000000000000000` must still normalize to native accounting identity `NATIVE:<NETWORK>`, not to an ERC-20 contract identity. |
-| INV-21 | A stale `ACCOUNTING_REPLAY / RUNNING` session may be healed to `COMPLETE` only when the session has no pending raw/clarification/pricing/stat work and derived replay outputs are already materialized. |
+| INV-21 | A stale `ACCOUNTING_REPLAY / RUNNING` session may be healed to `COMPLETE` only when the session has no pending raw/clarification/reclassification/pricing/stat work and derived replay outputs are already materialized. |
 | INV-22 | Generic selector fallback may attach `protocolName = Aave` for `BORROW` / `REPAY` only when the same tx also proves Aave debt-marker continuity through `variableDebt*` or `stableDebt*` movement; selector hit alone is insufficient. |
 | INV-23 | Audited rebasing Aave WETH receipt drift must normalize as `principal TRANSFER + accrual BUY`, not as one oversized receipt continuity transfer. |
 | INV-24 | A route-funded asset-changing `BRIDGE_OUT` source tx with one token principal leg plus one native tx-value funding leg must normalize the token leg as `TRANSFER` and the native funding leg as `FEE`; the native route funding must not survive as a second principal transfer leg. |

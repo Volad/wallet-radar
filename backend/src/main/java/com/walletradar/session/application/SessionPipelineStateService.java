@@ -22,6 +22,7 @@ public class SessionPipelineStateService {
     private static final Set<UserSession.PipelineStage> PARALLEL_CLASSIFICATION_STAGES = EnumSet.of(
             UserSession.PipelineStage.ON_CHAIN_NORMALIZATION,
             UserSession.PipelineStage.ON_CHAIN_CLARIFICATION,
+            UserSession.PipelineStage.ON_CHAIN_RECLASSIFICATION,
             UserSession.PipelineStage.BYBIT_NORMALIZATION
     );
 
@@ -96,6 +97,7 @@ public class SessionPipelineStateService {
             return Integer.MIN_VALUE;
         }
         return switch (stage) {
+            case ON_CHAIN_RECLASSIFICATION -> 4;
             case ON_CHAIN_CLARIFICATION -> 3;
             case ON_CHAIN_NORMALIZATION -> 2;
             case BYBIT_NORMALIZATION -> 1;

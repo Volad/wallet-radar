@@ -198,6 +198,11 @@ public class SessionQueryService {
                     countOnChainClarificationTotal(onChainWalletRefs),
                     countOnChainClarificationProcessed(onChainWalletRefs)
             );
+            case "ON_CHAIN_RECLASSIFICATION" -> progressFromCounts(
+                    stage,
+                    countOnChainClarificationTotal(onChainWalletRefs),
+                    countOnChainReclassificationProcessed(onChainWalletRefs)
+            );
             case "BYBIT_NORMALIZATION" -> progressFromCounts(
                     stage,
                     countBybitStagingRows(session.getId()),
@@ -409,6 +414,18 @@ public class SessionQueryService {
                 Criteria.where("walletAddress").in(walletAddresses),
                 Criteria.where("source").is("ON_CHAIN"),
                 Criteria.where("status").ne("PENDING_CLARIFICATION")
+        ));
+        return mongoOperations.count(query, NormalizedTransaction.class);
+    }
+
+    private long countOnChainReclassificationProcessed(List<String> walletAddresses) {
+        if (walletAddresses.isEmpty()) {
+            return 0;
+        }
+        Query query = Query.query(new Criteria().andOperator(
+                Criteria.where("walletAddress").in(walletAddresses),
+                Criteria.where("source").is("ON_CHAIN"),
+                Criteria.where("status").nin("PENDING_CLARIFICATION", "PENDING_RECLASSIFICATION")
         ));
         return mongoOperations.count(query, NormalizedTransaction.class);
     }

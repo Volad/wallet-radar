@@ -63,7 +63,10 @@ public class IntegrationSyncStatusService {
         status.setBackfillComplete(complete);
         status.setRawFetchComplete(complete);
         if (complete) {
-            status.setLastSyncedAt(status.getWindowToTime() == null ? Instant.now() : status.getWindowToTime());
+            Instant completionCheckpoint = completionCheckpoint(status, integration);
+            if (completionCheckpoint != null) {
+                status.setLastSyncedAt(completionCheckpoint);
+            }
             clearWindow(status);
         }
         status.setUpdatedAt(Instant.now());
@@ -74,6 +77,19 @@ public class IntegrationSyncStatusService {
             status.setNextRetryAfter(null);
         }
         syncStatusRepository.save(status);
+    }
+
+    private Instant completionCheckpoint(SyncStatus status, UserSession.SessionIntegration integration) {
+        if (status.getWindowToTime() != null) {
+            return status.getWindowToTime();
+        }
+        if (status.getLastSyncedAt() != null) {
+            return status.getLastSyncedAt();
+        }
+        if (integration == null) {
+            return null;
+        }
+        return integration.getLastSyncAt();
     }
 
     public void delete(String integrationId) {

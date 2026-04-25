@@ -10,16 +10,18 @@ import com.walletradar.ingestion.pipeline.onchain.OnChainRawTransactionView;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.math.MathContext;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 
 public final class OnChainClassificationSupport {
+
+    private static final MathContext MC = MathContext.DECIMAL128;
 
     private static final String ZKSYNC_NATIVE_TOKEN_CONTRACT = "0x000000000000000000000000000000000000800a";
     private static final Set<String> BRIDGE_ROUTE_START_SELECTORS = Set.of(
@@ -32,14 +34,6 @@ public final class OnChainClassificationSupport {
             "swapandstartbridgetokensviastargate",
             "swapandstartbridgetokensviasquid"
     );
-    private static final Set<String> AUDITED_AAVE_ETH_RECEIPT_SYMBOLS = Set.of(
-            "AETHWETH",
-            "AARBWETH",
-            "ALINWETH",
-            "AMANWETH",
-            "AZKSWETH"
-    );
-
     private OnChainClassificationSupport() {
     }
 
@@ -48,9 +42,9 @@ public final class OnChainClassificationSupport {
             List<RawLeg> movementLegs,
             NormalizedTransactionType type
     ) {
-        List<NormalizedTransaction.Flow> auditedAaveRebasingFlows = auditedAaveRebasingFlows(movementLegs, type);
-        if (auditedAaveRebasingFlows != null) {
-            return auditedAaveRebasingFlows;
+        List<NormalizedTransaction.Flow> familyEquivalentExcessFlows = familyEquivalentExcessFlows(movementLegs, type);
+        if (familyEquivalentExcessFlows != null) {
+            return familyEquivalentExcessFlows;
         }
         List<NormalizedTransaction.Flow> routeFundedBridgeSourceFlows =
                 routeFundedBridgeSourceFlows(view, movementLegs, type);
@@ -84,100 +78,87 @@ public final class OnChainClassificationSupport {
         return toFlows(null, movementLegs, type);
     }
 
-    private static List<NormalizedTransaction.Flow> auditedAaveRebasingFlows(
+    private static List<NormalizedTransaction.Flow> familyEquivalentExcessFlows(
             List<RawLeg> movementLegs,
             NormalizedTransactionType type
     ) {
         if (movementLegs == null
                 || movementLegs.isEmpty()
-                || (type != NormalizedTransactionType.LENDING_DEPOSIT
-                && type != NormalizedTransactionType.LENDING_WITHDRAW)) {
+                || !supportsFamilyEquivalentExcessSplit(type)) {
             return null;
         }
         List<RawLeg> effectiveLegs = movementLegs.stream()
                 .filter(leg -> leg != null && !leg.fee() && leg.quantityDelta() != null && leg.quantityDelta().signum() != 0)
                 .toList();
-        if (effectiveLegs.size() != 2) {
+        if (effectiveLegs.size() < 2) {
             return null;
         }
 
-        RawLeg outbound = effectiveLegs.stream()
-                .filter(leg -> leg.quantityDelta().signum() < 0)
+        Map<String, AggregatedLeg> netByAsset = new LinkedHashMap<>();
+        Set<String> familyIdentities = new LinkedHashSet<>();
+        for (RawLeg leg : effectiveLegs) {
+            String familyIdentity = AccountingAssetFamilySupport.continuityIdentity(leg.assetSymbol(), leg.assetContract());
+            if (familyIdentity == null || !familyIdentity.startsWith("FAMILY:")) {
+                return null;
+            }
+            familyIdentities.add(familyIdentity);
+            if (familyIdentities.size() > 1) {
+                return null;
+            }
+            String assetIdentity = assetIdentityKey(leg);
+            netByAsset.computeIfAbsent(
+                            assetIdentity,
+                            ignored -> new AggregatedLeg(leg.assetContract(), leg.assetSymbol()))
+                    .add(leg.quantityDelta());
+        }
+
+        List<AggregatedLeg> netLegs = netByAsset.values().stream()
+                .filter(leg -> leg.netQuantity().signum() != 0)
+                .toList();
+        if (netLegs.size() != 2) {
+            return null;
+        }
+
+        AggregatedLeg outbound = netLegs.stream()
+                .filter(leg -> leg.netQuantity().signum() < 0)
                 .findFirst()
                 .orElse(null);
-        RawLeg inbound = effectiveLegs.stream()
-                .filter(leg -> leg.quantityDelta().signum() > 0)
+        AggregatedLeg inbound = netLegs.stream()
+                .filter(leg -> leg.netQuantity().signum() > 0)
                 .findFirst()
                 .orElse(null);
         if (outbound == null || inbound == null) {
             return null;
         }
 
-        if (type == NormalizedTransactionType.LENDING_DEPOSIT) {
-            if (!isAuditedAaveReceipt(outbound) && isAuditedAaveReceipt(inbound)
-                    && sameAuditedAaveEthFamily(outbound, inbound)) {
-                BigDecimal principalQuantity = outbound.quantityDelta().abs();
-                BigDecimal receiptQuantity = inbound.quantityDelta().abs();
-                BigDecimal excessQuantity = receiptQuantity.subtract(principalQuantity);
-                if (excessQuantity.signum() <= 0) {
-                    return null;
-                }
-                List<NormalizedTransaction.Flow> flows = new ArrayList<>();
-                flows.add(buildFlow(
-                        NormalizedLegRole.TRANSFER,
-                        outbound.assetContract(),
-                        outbound.assetSymbol(),
-                        outbound.quantityDelta()
-                ));
-                flows.add(buildFlow(
-                        NormalizedLegRole.TRANSFER,
-                        inbound.assetContract(),
-                        inbound.assetSymbol(),
-                        principalQuantity
-                ));
-                flows.add(buildFlow(
-                        NormalizedLegRole.BUY,
-                        inbound.assetContract(),
-                        inbound.assetSymbol(),
-                        excessQuantity
-                ));
-                appendFeeFlows(flows, movementLegs);
-                return flows;
-            }
+        BigDecimal sourceQuantity = outbound.netQuantity().abs();
+        BigDecimal destinationQuantity = inbound.netQuantity().abs();
+        BigDecimal excessQuantity = destinationQuantity.subtract(sourceQuantity, MC);
+        if (excessQuantity.signum() <= 0) {
             return null;
         }
 
-        if (isAuditedAaveReceipt(outbound) && !isAuditedAaveReceipt(inbound)
-                && sameAuditedAaveEthFamily(outbound, inbound)) {
-            BigDecimal receiptQuantity = outbound.quantityDelta().abs();
-            BigDecimal principalQuantity = inbound.quantityDelta().abs();
-            BigDecimal excessQuantity = principalQuantity.subtract(receiptQuantity);
-            if (excessQuantity.signum() <= 0) {
-                return null;
-            }
-            List<NormalizedTransaction.Flow> flows = new ArrayList<>();
-            flows.add(buildFlow(
-                    NormalizedLegRole.TRANSFER,
-                    outbound.assetContract(),
-                    outbound.assetSymbol(),
-                    outbound.quantityDelta()
-            ));
-            flows.add(buildFlow(
-                    NormalizedLegRole.TRANSFER,
-                    inbound.assetContract(),
-                    inbound.assetSymbol(),
-                    receiptQuantity
-            ));
-            flows.add(buildFlow(
-                    NormalizedLegRole.BUY,
-                    inbound.assetContract(),
-                    inbound.assetSymbol(),
-                    excessQuantity
-            ));
-            appendFeeFlows(flows, movementLegs);
-            return flows;
-        }
-        return null;
+        List<NormalizedTransaction.Flow> flows = new ArrayList<>();
+        flows.add(buildFlow(
+                NormalizedLegRole.TRANSFER,
+                outbound.assetContract(),
+                outbound.assetSymbol(),
+                outbound.netQuantity()
+        ));
+        flows.add(buildFlow(
+                NormalizedLegRole.TRANSFER,
+                inbound.assetContract(),
+                inbound.assetSymbol(),
+                sourceQuantity
+        ));
+        flows.add(buildFlow(
+                NormalizedLegRole.BUY,
+                inbound.assetContract(),
+                inbound.assetSymbol(),
+                excessQuantity
+        ));
+        appendFeeFlows(flows, movementLegs);
+        return flows;
     }
 
     private static List<NormalizedTransaction.Flow> routeFundedBridgeSourceFlows(
@@ -410,17 +391,22 @@ public final class OnChainClassificationSupport {
                 && ZKSYNC_NATIVE_TOKEN_CONTRACT.equalsIgnoreCase(leg.assetContract());
     }
 
-    private static boolean isAuditedAaveReceipt(RawLeg leg) {
-        if (leg == null || leg.assetSymbol() == null) {
-            return false;
-        }
-        return AUDITED_AAVE_ETH_RECEIPT_SYMBOLS.contains(leg.assetSymbol().trim().toUpperCase(Locale.ROOT));
+    private static boolean supportsFamilyEquivalentExcessSplit(NormalizedTransactionType type) {
+        return type == NormalizedTransactionType.LENDING_DEPOSIT
+                || type == NormalizedTransactionType.LENDING_WITHDRAW
+                || type == NormalizedTransactionType.VAULT_DEPOSIT
+                || type == NormalizedTransactionType.VAULT_WITHDRAW
+                || type == NormalizedTransactionType.WRAP
+                || type == NormalizedTransactionType.UNWRAP;
     }
 
-    private static boolean sameAuditedAaveEthFamily(RawLeg left, RawLeg right) {
-        String leftIdentity = AccountingAssetFamilySupport.continuityIdentity(left.assetSymbol(), left.assetContract());
-        String rightIdentity = AccountingAssetFamilySupport.continuityIdentity(right.assetSymbol(), right.assetContract());
-        return Objects.equals("FAMILY:ETH", leftIdentity) && Objects.equals(leftIdentity, rightIdentity);
+    private static String assetIdentityKey(RawLeg leg) {
+        String contract = leg.assetContract();
+        if (contract != null && !contract.isBlank()) {
+            return "CONTRACT:" + contract.trim().toLowerCase(Locale.ROOT);
+        }
+        String symbol = leg.assetSymbol() == null ? "" : leg.assetSymbol().trim().toUpperCase(Locale.ROOT);
+        return "SYMBOL:" + symbol;
     }
 
     private static void appendFeeFlows(
@@ -512,5 +498,32 @@ public final class OnChainClassificationSupport {
             RawLeg principalLeg,
             RawLeg routeFundingLeg
     ) {
+    }
+
+    private static final class AggregatedLeg {
+        private final String assetContract;
+        private final String assetSymbol;
+        private BigDecimal netQuantity = BigDecimal.ZERO;
+
+        private AggregatedLeg(String assetContract, String assetSymbol) {
+            this.assetContract = assetContract;
+            this.assetSymbol = assetSymbol;
+        }
+
+        private void add(BigDecimal quantityDelta) {
+            netQuantity = netQuantity.add(quantityDelta, MC);
+        }
+
+        private String assetContract() {
+            return assetContract;
+        }
+
+        private String assetSymbol() {
+            return assetSymbol;
+        }
+
+        private BigDecimal netQuantity() {
+            return netQuantity;
+        }
     }
 }

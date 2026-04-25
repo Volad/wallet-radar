@@ -619,6 +619,63 @@ class AvcoReplayServiceTest {
     }
 
     @Test
+    void pricedLpExitSideflowDoesNotConsumeOpenPrincipalBucket() {
+        NormalizedTransaction xyzBuy = tx("1", "0xxyz-buy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flowWithContract(NormalizedLegRole.BUY, "XYZ", "0xxyz", "100", "1", PriceSource.BINANCE));
+        xyzBuy.setWalletAddress("wallet-a");
+        xyzBuy.setNetworkId(NetworkId.BSC);
+
+        NormalizedTransaction lpEntry = tx("2", "0xlp-entry", 1, NormalizedTransactionType.LP_ENTRY,
+                flowWithContract(NormalizedLegRole.TRANSFER, "XYZ", "0xxyz", "-100", null, null));
+        lpEntry.setWalletAddress("wallet-a");
+        lpEntry.setNetworkId(NetworkId.BSC);
+        lpEntry.setProtocolName("PancakeSwap");
+        lpEntry.setCorrelationId("lp-position:bsc:pancakeswap:reward-sideflow");
+
+        NormalizedTransaction partialExit = tx("3", "0xlp-exit-partial", 2, NormalizedTransactionType.LP_EXIT,
+                flowWithContract(NormalizedLegRole.TRANSFER, "USDT", "0x55d398326f99059ff775485246999027b3197955", "5", null, null),
+                flowWithContract(NormalizedLegRole.TRANSFER, "XYZ", "0xxyz", "40", null, null));
+        partialExit.setWalletAddress("wallet-a");
+        partialExit.setNetworkId(NetworkId.BSC);
+        partialExit.setProtocolName("PancakeSwap");
+        partialExit.setCorrelationId("lp-position:bsc:pancakeswap:reward-sideflow");
+
+        NormalizedTransaction finalExit = tx("4", "0xlp-exit-final", 3, NormalizedTransactionType.LP_EXIT,
+                flowWithContract(NormalizedLegRole.TRANSFER, "XYZ", "0xxyz", "60", null, null));
+        finalExit.setWalletAddress("wallet-a");
+        finalExit.setNetworkId(NetworkId.BSC);
+        finalExit.setProtocolName("PancakeSwap");
+        finalExit.setCorrelationId("lp-position:bsc:pancakeswap:reward-sideflow");
+
+        when(normalizedTransactionRepository.findAllByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                NormalizedTransactionStatus.CONFIRMED
+        )).thenReturn(List.of(xyzBuy, lpEntry, partialExit, finalExit));
+
+        service().replayConfirmed();
+
+        List<AssetLedgerPoint> points = capturedLedgerPoints();
+        AssetLedgerPoint usdt = latestPoint(points, "wallet-a", NetworkId.BSC, "USDT", "0x55d398326f99059ff775485246999027b3197955");
+        AssetLedgerPoint xyz = latestPoint(points, "wallet-a", NetworkId.BSC, "XYZ", "0xxyz");
+
+        assertThat(usdt.getQuantityAfter()).isEqualByComparingTo("5");
+        assertThat(usdt.getTotalCostBasisAfterUsd()).isEqualByComparingTo("5");
+        assertThat(usdt.getBasisBackedQuantityAfter()).isEqualByComparingTo("5");
+        assertThat(usdt.getUncoveredQuantityAfter()).isZero();
+        assertThat(usdt.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.ACQUIRE);
+
+        assertThat(xyz.getQuantityAfter()).isEqualByComparingTo("100");
+        assertThat(xyz.getTotalCostBasisAfterUsd()).isEqualByComparingTo("100");
+        assertThat(xyz.getBasisBackedQuantityAfter()).isEqualByComparingTo("100");
+        assertThat(xyz.getUncoveredQuantityAfter()).isZero();
+        assertThat(xyz.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.REALLOCATE_IN);
+
+        assertThat(points.stream()
+                .filter(point -> "0xlp-exit-partial".equals(point.getTxHash()) || "0xlp-exit-final".equals(point.getTxHash()))
+                .map(AssetLedgerPoint::getBasisEffect))
+                .doesNotContain(AssetLedgerPoint.BasisEffect.UNKNOWN);
+    }
+
+    @Test
     void correlatedLpExitAllocatesResidualStablecoinBasketByReplayKnownValue() {
         NormalizedTransaction wethBuy = tx("1", "0xweth-buy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
                 flowWithContract(NormalizedLegRole.BUY, "WETH", "0xweth", "1", "100", PriceSource.BINANCE));

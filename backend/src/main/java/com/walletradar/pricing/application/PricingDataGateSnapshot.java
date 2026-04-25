@@ -6,6 +6,7 @@ package com.walletradar.pricing.application;
 public record PricingDataGateSnapshot(
         long pendingPriceCount,
         long pendingClarificationCount,
+        long pendingReclassificationCount,
         long needsReviewCount,
         long unresolvedPriceCount,
         long excludedNeedsReviewCount,

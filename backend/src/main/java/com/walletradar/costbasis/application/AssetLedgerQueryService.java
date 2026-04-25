@@ -760,6 +760,7 @@ public class AssetLedgerQueryService {
         private final String lifecycleStage;
         private final String primaryWalletAddress;
         private final String matchedCounterparty;
+        private final String counterpartyAddress;
         private final LinkedHashSet<String> basisEffects = new LinkedHashSet<>();
         private final LinkedHashSet<String> walletAddresses = new LinkedHashSet<>();
         private final LinkedHashSet<String> networkIds = new LinkedHashSet<>();
@@ -781,9 +782,11 @@ public class AssetLedgerQueryService {
             this.primaryWalletAddress = blank(seed.getWalletAddress())
                     ? transaction == null ? null : transaction.getWalletAddress()
                     : seed.getWalletAddress();
-            this.matchedCounterparty = !blank(seed.getMatchedCounterparty())
-                    ? seed.getMatchedCounterparty()
-                    : transaction == null ? null : transaction.getMatchedCounterparty();
+            this.matchedCounterparty = firstNonBlank(
+                    seed.getMatchedCounterparty(),
+                    transaction == null ? null : transaction.getMatchedCounterparty()
+            );
+            this.counterpartyAddress = transaction == null ? null : transaction.getCounterpartyAddress();
             this.flows = eventFlows(transaction);
         }
 
@@ -967,19 +970,70 @@ public class AssetLedgerQueryService {
             return event.primaryWalletAddress;
         }
         if (isExternalTransferIn(event)) {
-            return event.matchedCounterparty;
+            return firstNonBlank(event.matchedCounterparty, event.counterpartyAddress);
+        }
+        String counterparty = firstNonBlank(event.counterpartyAddress, event.matchedCounterparty);
+        if (blank(counterparty) || blank(event.primaryWalletAddress)) {
+            return null;
+        }
+        EventDirection direction = inferEventDirection(event);
+        if (direction == EventDirection.INBOUND) {
+            return counterparty;
+        }
+        if (direction == EventDirection.OUTBOUND || direction == EventDirection.MIXED) {
+            return event.primaryWalletAddress;
         }
         return null;
     }
 
     private static String inferredToAddress(EventAccumulator event) {
         if (isExternalTransferOut(event)) {
-            return event.matchedCounterparty;
+            return firstNonBlank(event.matchedCounterparty, event.counterpartyAddress);
         }
         if (isExternalTransferIn(event)) {
             return event.primaryWalletAddress;
         }
+        String counterparty = firstNonBlank(event.counterpartyAddress, event.matchedCounterparty);
+        if (blank(counterparty) || blank(event.primaryWalletAddress)) {
+            return null;
+        }
+        EventDirection direction = inferEventDirection(event);
+        if (direction == EventDirection.INBOUND) {
+            return event.primaryWalletAddress;
+        }
+        if (direction == EventDirection.OUTBOUND || direction == EventDirection.MIXED) {
+            return counterparty;
+        }
         return null;
+    }
+
+    private enum EventDirection {
+        OUTBOUND,
+        INBOUND,
+        MIXED,
+        UNKNOWN
+    }
+
+    private static EventDirection inferEventDirection(EventAccumulator event) {
+        boolean outbound = event.quantityDelta.signum() < 0
+                || event.basisEffects.contains("CARRY_OUT")
+                || event.basisEffects.contains("DISPOSE")
+                || event.basisEffects.contains("REALLOCATE_OUT")
+                || event.basisEffects.contains("GAS_ONLY");
+        boolean inbound = event.quantityDelta.signum() > 0
+                || event.basisEffects.contains("CARRY_IN")
+                || event.basisEffects.contains("ACQUIRE")
+                || event.basisEffects.contains("REALLOCATE_IN");
+        if (outbound && inbound) {
+            return EventDirection.MIXED;
+        }
+        if (outbound) {
+            return EventDirection.OUTBOUND;
+        }
+        if (inbound) {
+            return EventDirection.INBOUND;
+        }
+        return EventDirection.UNKNOWN;
     }
 
     private static String internalTransferGroupId(EventAccumulator outbound, EventAccumulator inbound) {

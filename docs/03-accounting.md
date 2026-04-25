@@ -236,6 +236,24 @@ Interpretation:
 
 Basis continuity applies when the economic owner did not dispose of the asset:
 
+Cycle 79 audit rule:
+
+- supported receipt-token and wrapper exits must preserve principal basis before
+  AVCO consumes the stream
+- if a lending, vault, wrapper, or liquid-staking row contains same-family
+  principal out and principal in, the principal portion is continuity even when
+  provider/export shape would otherwise look like disposal plus acquisition
+- only explicit positive excess over carried principal opens a new acquisition
+  lot
+- this rule applies to the audited mandatory corridors:
+  - `AMANWETH -> ETH`
+  - `eUSDC-* -> USDC`
+  - Aave receipt/native gateway exits
+  - Euler EVK / ERC-4626 redeems
+  - `aAvaWAVAX -> AVAX -> sAVAX`
+- replay may harden legacy row handling for those supported row types, but the
+  primary correctness path remains raw-first normalization plus rerun
+
 - `INTERNAL_TRANSFER`
   Simple same-tx reciprocal on-chain moves between tracked wallets in the same
   owner scope must normalize as `INTERNAL_TRANSFER` once clarification can see
@@ -1029,6 +1047,16 @@ External market-data source policy:
 - gas fields
 - created contract address
 
+Clarification-adjacent metadata enrichment may additionally fill deterministic
+canonical fields on already confirmed on-chain rows when persisted raw evidence
+is sufficient:
+
+- `protocolName` / `protocolVersion`
+- row-local `counterpartyAddress`
+
+These enrichment passes are part of the normal rerun path. They must not depend
+on startup repair sweeps or tx-hash-specific exceptions.
+
 Clarification is allowed only when those receipt-safe fields are actually missing.
 Low confidence alone does not move a row into clarification.
 
@@ -1375,8 +1403,14 @@ Family/lifecycle policy:
     - underlying excess `BUY`
   - this excess is passive accrued yield materialized at the touched tx, not a
     fresh uncovered principal lot
-- the same rule applies to canonical `WRAP / UNWRAP` rows for audited
-  wrapped-native pairs
+- the same principal/excess split policy also applies to audited
+  family-equivalent `LENDING_*`, `VAULT_*`, and `WRAP / UNWRAP` rows when one
+  same-family principal leg is preserved and the destination quantity is larger
+  than the moved principal
+- canonical replay for those rows must therefore keep:
+  - source-side principal `TRANSFER`
+  - destination-side principal-sized `TRANSFER`
+  - destination excess `BUY`
 - for those rows replay keeps full source cost basis on the destination leg and
   leaves only destination excess quantity uncovered
 

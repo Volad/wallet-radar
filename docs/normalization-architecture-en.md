@@ -236,7 +236,7 @@ protocolName          string | null
 protocolVersion       string | null
 correlationId         string | null
 
-status            PENDING_PRICE | PENDING_CLARIFICATION | PENDING_STAT | CONFIRMED | NEEDS_REVIEW
+status            PENDING_CLARIFICATION | PENDING_RECLASSIFICATION | PENDING_PRICE | PENDING_STAT | CONFIRMED | NEEDS_REVIEW
 createdAt         Instant
 updatedAt         Instant
 ```
@@ -1129,8 +1129,11 @@ SCAM-03  If a promo/phishing tx survives raw persistence, normalization must sti
 | initial | PENDING_PRICE | evidence is sufficient for pricing, including non-FEE movement evidence for economic types, even if confidence remains LOW |
 | initial | CONFIRMED | type = APPROVE or ADMIN_CONFIG or INTERNAL_TRANSFER or WRAP/UNWRAP |
 | initial | NEEDS_REVIEW | type unknown OR ordering metadata cannot be repaired OR handler/method support is missing |
-| PENDING_CLARIFICATION | PENDING_PRICE | enrichment raised confidence |
-| PENDING_CLARIFICATION | NEEDS_REVIEW | max attempts (3) reached |
+| PENDING_CLARIFICATION | PENDING_RECLASSIFICATION | clarification evidence was persisted or a bounded evidence attempt was exhausted with raw evidence present |
+| PENDING_RECLASSIFICATION | PENDING_PRICE | classifier now has enough persisted evidence for pricing |
+| PENDING_RECLASSIFICATION | CONFIRMED | classifier now resolves a non-priceable terminal row |
+| PENDING_RECLASSIFICATION | NEEDS_REVIEW | classifier still cannot resolve the row from current raw plus persisted clarification evidence |
+| PENDING_RECLASSIFICATION | PENDING_CLARIFICATION | classifier emits a new bounded clarification requirement with remaining attempt budget |
 | PENDING_PRICE | PENDING_STAT | all non-FEE flows have `unitPriceUsd` OR `priceSource = UNKNOWN` |
 | PENDING_PRICE | NEEDS_REVIEW | pricing input is structurally invalid after clarification or still lacks persisted non-FEE movement evidence for an economic type |
 | PENDING_STAT | CONFIRMED | validation passed |
@@ -1164,8 +1167,10 @@ review set, but this is not a widening of the base clarification queue:
   persisted back onto the raw row in a deterministic shape
 - it must keep that new evidence in a dedicated clarification-evidence area,
   never as synthetic `rawData.logs[]`
-- it may re-run classification only from canonical raw evidence plus persisted
-  real receipt logs
+- it must not re-run classification inline; completed clarification moves the
+  normalized row to `PENDING_RECLASSIFICATION`, and the reclassification stage
+  runs the normal classifier from canonical raw evidence plus persisted real
+  receipt logs
 - rows already closable from current raw must stay classifier work, not
   clarification work
 - resolved economic rows that still have only fee flow must not advance to

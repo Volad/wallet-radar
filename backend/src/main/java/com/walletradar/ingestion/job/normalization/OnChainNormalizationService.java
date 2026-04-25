@@ -10,6 +10,8 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.ingestion.config.OnChainNormalizationProperties;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassifier;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassificationResult;
+import com.walletradar.ingestion.pipeline.clarification.CounterpartyEnrichmentService;
+import com.walletradar.ingestion.pipeline.clarification.ProtocolNameEnrichmentService;
 import com.walletradar.ingestion.pipeline.onchain.OnChainNormalizedTransactionBuilder;
 import com.walletradar.ingestion.pipeline.onchain.OnChainRawTransactionView;
 import com.walletradar.ingestion.pipeline.onchain.PendingRawTransactionQueryService;
@@ -58,6 +60,8 @@ public class OnChainNormalizationService {
     private final RawTransactionRepository rawTransactionRepository;
     private final ExplorerRawOrderingRepairGateway explorerRawOrderingRepairGateway;
     private final InternalTransferRawPeerRepairService internalTransferRawPeerRepairService;
+    private final ProtocolNameEnrichmentService protocolNameEnrichmentService;
+    private final CounterpartyEnrichmentService counterpartyEnrichmentService;
 
     public int processNextBatch() {
         List<RawTransaction> batch = new ArrayList<>(
@@ -101,7 +105,10 @@ public class OnChainNormalizationService {
 
         try {
             OnChainClassificationResult classificationResult = onChainClassifier.classify(rawTransaction);
-            normalizedTransactionStore.upsert(builder.build(rawTransaction, classificationResult, now));
+            com.walletradar.domain.transaction.normalized.NormalizedTransaction normalized =
+                    builder.build(rawTransaction, classificationResult, now);
+            enrichCanonicalMetadata(normalized, rawTransaction, now);
+            normalizedTransactionStore.upsert(normalized);
             markComplete(rawTransaction);
             return true;
         } catch (RuntimeException ex) {
@@ -109,6 +116,20 @@ public class OnChainNormalizationService {
             markRetry(rawTransaction, ex.getMessage(), now);
             return false;
         }
+    }
+
+    private void enrichCanonicalMetadata(
+            com.walletradar.domain.transaction.normalized.NormalizedTransaction normalizedTransaction,
+            RawTransaction rawTransaction,
+            Instant now
+    ) {
+        if (normalizedTransaction == null
+                || normalizedTransaction.getStatus() == NormalizedTransactionStatus.PENDING_CLARIFICATION
+                || normalizedTransaction.getType() == NormalizedTransactionType.UNKNOWN) {
+            return;
+        }
+        protocolNameEnrichmentService.enrichInPlace(normalizedTransaction, rawTransaction, now);
+        counterpartyEnrichmentService.enrichInPlace(normalizedTransaction, rawTransaction, now);
     }
 
     private void prepareOrdering(RawTransaction rawTransaction) {

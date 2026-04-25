@@ -4027,7 +4027,8 @@ class OnChainClassifierTest {
                 .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getQuantityDelta().stripTrailingZeros().toPlainString())
                 .containsExactlyInAnyOrder(
                         "eUSDC-6:-1479.515661",
-                        "USDC:1501"
+                        "USDC:1479.515661",
+                        "USDC:21.484339"
                 );
     }
 
@@ -4102,7 +4103,8 @@ class OnChainClassifierTest {
                 .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getQuantityDelta().stripTrailingZeros().toPlainString())
                 .containsExactlyInAnyOrder(
                         "eUSDC-6:-732.899692",
-                        "USDC:746.016993"
+                        "USDC:732.899692",
+                        "USDC:13.117301"
                 );
     }
 

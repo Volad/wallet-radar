@@ -13,6 +13,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -37,10 +38,31 @@ public class PendingReceiptClarificationQueryService {
     private final ReceiptClarificationGateway receiptClarificationGateway;
 
     public List<NormalizedTransaction> loadNextBatch(int batchSize, int maxAttempts, long retryDelaySeconds) {
+        return loadNextBatch(batchSize, maxAttempts, retryDelaySeconds, null, 0L);
+    }
+
+    public List<NormalizedTransaction> claimNextBatch(
+            int batchSize,
+            int maxAttempts,
+            long retryDelaySeconds,
+            String workerId,
+            long leaseSeconds
+    ) {
+        return loadNextBatch(batchSize, maxAttempts, retryDelaySeconds, workerId, leaseSeconds);
+    }
+
+    private List<NormalizedTransaction> loadNextBatch(
+            int batchSize,
+            int maxAttempts,
+            long retryDelaySeconds,
+            String workerId,
+            long leaseSeconds
+    ) {
         int boundedBatchSize = Math.max(1, batchSize);
         int boundedMaxAttempts = Math.max(1, maxAttempts);
         int selectionLimit = Math.max(boundedBatchSize, boundedBatchSize * 4);
-        Instant retryCutoff = Instant.now().minusSeconds(Math.max(0L, retryDelaySeconds));
+        Instant now = Instant.now();
+        Instant retryCutoff = now.minusSeconds(Math.max(0L, retryDelaySeconds));
 
         Criteria attemptsCriteria = new Criteria().orOperator(
                 Criteria.where("fullReceiptClarificationAttempts").exists(false),
@@ -50,6 +72,11 @@ public class PendingReceiptClarificationQueryService {
                 Criteria.where("fullReceiptClarificationAttempts").exists(false),
                 Criteria.where("fullReceiptClarificationAttempts").lte(0),
                 Criteria.where("updatedAt").lte(retryCutoff)
+        );
+        Criteria leaseCriteria = new Criteria().orOperator(
+                Criteria.where("clarificationLeaseUntil").exists(false),
+                Criteria.where("clarificationLeaseUntil").is(null),
+                Criteria.where("clarificationLeaseUntil").lte(now)
         );
         Criteria reviewReasonsCriteria = Criteria.where("missingDataReasons").in(
                 ClassificationReasonCode.ROUTER_METHOD_OVERLOAD_UNSUPPORTED.code(),
@@ -133,6 +160,7 @@ public class PendingReceiptClarificationQueryService {
                 Criteria.where("source").is(NormalizedTransactionSource.ON_CHAIN),
                 attemptsCriteria,
                 dueCriteria,
+                leaseCriteria,
                 new Criteria().orOperator(
                         reviewTailCriteria,
                         gmxPendingClarificationCriteria,
@@ -154,7 +182,7 @@ public class PendingReceiptClarificationQueryService {
                 mongoOperations.find(query, NormalizedTransaction.class)
         );
         if (selected.size() >= boundedBatchSize) {
-            return List.copyOf(selected.subList(0, boundedBatchSize));
+            return claimIfRequested(List.copyOf(selected.subList(0, boundedBatchSize)), workerId, leaseSeconds, now);
         }
 
         Map<String, NormalizedTransaction> deduplicated = new LinkedHashMap<>();
@@ -203,9 +231,52 @@ public class PendingReceiptClarificationQueryService {
             }
         }
         List<NormalizedTransaction> filtered = excludeRowsWithPersistedReceiptEvidence(deduplicated.values());
-        return filtered.size() <= boundedBatchSize
+        List<NormalizedTransaction> limited = filtered.size() <= boundedBatchSize
                 ? List.copyOf(filtered)
                 : List.copyOf(filtered.subList(0, boundedBatchSize));
+        return claimIfRequested(limited, workerId, leaseSeconds, now);
+    }
+
+    private List<NormalizedTransaction> claimIfRequested(
+            List<NormalizedTransaction> selected,
+            String workerId,
+            long leaseSeconds,
+            Instant now
+    ) {
+        if (workerId == null || workerId.isBlank() || selected.isEmpty()) {
+            return selected;
+        }
+        List<String> ids = new ArrayList<>(selected.size());
+        for (NormalizedTransaction transaction : selected) {
+            ids.add(transaction.getId());
+        }
+        Instant leaseUntil = now.plusSeconds(Math.max(1L, leaseSeconds));
+        Criteria leaseCriteria = new Criteria().orOperator(
+                Criteria.where("clarificationLeaseUntil").exists(false),
+                Criteria.where("clarificationLeaseUntil").is(null),
+                Criteria.where("clarificationLeaseUntil").lte(now)
+        );
+        Query claimQuery = new Query(new Criteria().andOperator(
+                Criteria.where("_id").in(ids),
+                leaseCriteria
+        ));
+        Update claim = new Update()
+                .set("clarificationWorkerId", workerId)
+                .set("clarificationLeaseUntil", leaseUntil)
+                .set("updatedAt", now);
+        mongoOperations.updateMulti(claimQuery, claim, NormalizedTransaction.class);
+
+        Query claimedQuery = new Query(new Criteria().andOperator(
+                Criteria.where("_id").in(ids),
+                Criteria.where("clarificationWorkerId").is(workerId),
+                Criteria.where("clarificationLeaseUntil").is(leaseUntil)
+        ));
+        claimedQuery.with(Sort.by(
+                Sort.Order.asc("blockTimestamp"),
+                Sort.Order.asc("transactionIndex"),
+                Sort.Order.asc("_id")
+        ));
+        return mongoOperations.find(claimedQuery, NormalizedTransaction.class);
     }
 
     private List<NormalizedTransaction> loadGmxDerivativeExecutionCandidates(

@@ -23,15 +23,7 @@ public class ProtocolNameEnrichmentQueryService {
     private final MongoOperations mongoOperations;
     private final ProtocolNameCanonicalizer protocolNameCanonicalizer;
 
-    public List<NormalizedTransaction> loadNextBatch(int batchSize) {
-        return loadBatch(null, batchSize, false);
-    }
-
-    public List<NormalizedTransaction> loadRepairBatchAfter(@Nullable String afterId, int batchSize) {
-        return loadBatch(afterId, batchSize, true);
-    }
-
-    private List<NormalizedTransaction> loadBatch(@Nullable String afterId, int batchSize, boolean repairSweep) {
+    public List<NormalizedTransaction> loadBatchAfterId(@Nullable String afterId, int batchSize) {
         int boundedBatchSize = Math.max(1, batchSize);
 
         Criteria protocolTarget = new Criteria().orOperator(
@@ -43,10 +35,41 @@ public class ProtocolNameEnrichmentQueryService {
 
         Criteria baseCriteria = new Criteria().andOperator(
                 Criteria.where("source").is(NormalizedTransactionSource.ON_CHAIN),
-                Criteria.where("status").ne(NormalizedTransactionStatus.PENDING_CLARIFICATION),
+                Criteria.where("status").nin(
+                        NormalizedTransactionStatus.PENDING_CLARIFICATION,
+                        NormalizedTransactionStatus.PENDING_RECLASSIFICATION
+                ),
+                Criteria.where("type").in(
+                        "SWAP",
+                        "WRAP",
+                        "UNWRAP",
+                        "BRIDGE_OUT",
+                        "BRIDGE_IN",
+                        "LENDING_DEPOSIT",
+                        "LENDING_WITHDRAW",
+                        "BORROW",
+                        "REPAY",
+                        "VAULT_DEPOSIT",
+                        "VAULT_WITHDRAW",
+                        "LP_ENTRY",
+                        "LP_EXIT",
+                        "LP_ENTRY_REQUEST",
+                        "LP_EXIT_REQUEST",
+                        "LP_ENTRY_SETTLEMENT",
+                        "LP_EXIT_SETTLEMENT",
+                        "LP_EXIT_PARTIAL",
+                        "LP_EXIT_FINAL",
+                        "LP_FEE_CLAIM",
+                        "REWARD_CLAIM",
+                        "STAKING_DEPOSIT",
+                        "STAKING_WITHDRAW",
+                        "STAKING_WITHDRAW_REQUEST",
+                        "PROTOCOL_CUSTODY_DEPOSIT",
+                        "PROTOCOL_CUSTODY_WITHDRAW"
+                ),
                 protocolTarget
         );
-        if (repairSweep && afterId != null && !afterId.isBlank()) {
+        if (afterId != null && !afterId.isBlank()) {
             baseCriteria = new Criteria().andOperator(
                     baseCriteria,
                     Criteria.where("_id").gt(afterId)
@@ -54,13 +77,7 @@ public class ProtocolNameEnrichmentQueryService {
         }
 
         Query query = new Query(baseCriteria);
-        query.with(repairSweep
-                ? Sort.by(Sort.Order.asc("_id"))
-                : Sort.by(
-                        Sort.Order.asc("blockTimestamp"),
-                        Sort.Order.asc("transactionIndex"),
-                        Sort.Order.asc("_id")
-                ));
+        query.with(Sort.by(Sort.Order.asc("_id")));
         query.limit(boundedBatchSize);
         return mongoOperations.find(query, NormalizedTransaction.class);
     }

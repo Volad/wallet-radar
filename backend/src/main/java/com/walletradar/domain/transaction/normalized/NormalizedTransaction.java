@@ -46,6 +46,10 @@ import java.util.List;
                 def = "{'source': 1, 'status': 1, 'fullReceiptClarificationAttempts': 1, 'updatedAt': 1, 'blockTimestamp': 1, 'transactionIndex': 1}"
         ),
         @CompoundIndex(
+                name = "normalized_source_status_reclassification_idx",
+                def = "{'source': 1, 'status': 1, 'updatedAt': 1, 'blockTimestamp': 1, 'transactionIndex': 1}"
+        ),
+        @CompoundIndex(
                 name = "normalized_source_status_pricing_idx",
                 def = "{'source': 1, 'status': 1, 'pricingAttempts': 1, 'updatedAt': 1, 'blockTimestamp': 1, 'transactionIndex': 1}"
         ),
@@ -112,12 +116,15 @@ public class NormalizedTransaction {
     private String correlationId;
     private Boolean continuityCandidate;
     private String matchedCounterparty;
+    private String counterpartyAddress;
     private Boolean excludedFromAccounting;
     private String accountingExclusionReason;
     private String protocolName;
     private String protocolVersion;
     private Integer clarificationAttempts;
     private Integer fullReceiptClarificationAttempts;
+    private Instant clarificationLeaseUntil;
+    private String clarificationWorkerId;
     private Integer pricingAttempts;
     private Integer statAttempts;
     private Instant createdAt;

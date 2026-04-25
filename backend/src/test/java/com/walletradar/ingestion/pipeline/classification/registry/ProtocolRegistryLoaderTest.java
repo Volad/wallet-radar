@@ -118,11 +118,31 @@ class ProtocolRegistryLoaderTest {
                 .containsKey(new ProtocolRegistryLoader.RegistryKey(
                         NetworkId.BSC,
                         "0x212102fc6d0ed9ee784b25404db02b22b1e6dc42"
+                ))
+                .containsKey(new ProtocolRegistryLoader.RegistryKey(
+                        NetworkId.MANTLE,
+                        "0x888888888889758f76e7103c6cbf23abbf58f946"
+                ))
+                .containsKey(new ProtocolRegistryLoader.RegistryKey(
+                        NetworkId.LINEA,
+                        "0x5828a3c0f07c6b841205d12660e0abb869bf98dc"
+                ))
+                .containsKey(new ProtocolRegistryLoader.RegistryKey(
+                        NetworkId.MANTLE,
+                        "0xed884f0460a634c69dbb7def54858465808aacef"
+                ))
+                .containsKey(new ProtocolRegistryLoader.RegistryKey(
+                        NetworkId.KATANA,
+                        "0xac4c6e212a361c968f1725b4d055b47e63f80b75"
                 ));
         assertThat(loaded.entriesByKey().get(new ProtocolRegistryLoader.RegistryKey(
                 NetworkId.ARBITRUM,
                 "0x1fa4431bc113d308bee1d46b0e98cb805fb48c13"
         )).specialHandler()).isEqualTo(ProtocolRegistrySpecialHandlerType.MORPHO_BUNDLER);
+        assertThat(loaded.entriesByKey().get(new ProtocolRegistryLoader.RegistryKey(
+                NetworkId.MANTLE,
+                "0x888888888889758f76e7103c6cbf23abbf58f946"
+        )).protocolName()).isEqualTo("Pendle");
         assertThat(loaded.methodDescriptions()).containsKey("0x0ad58d2f");
     }
 

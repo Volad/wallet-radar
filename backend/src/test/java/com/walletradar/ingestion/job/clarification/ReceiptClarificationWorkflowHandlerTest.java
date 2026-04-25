@@ -12,23 +12,15 @@ import com.walletradar.domain.transaction.raw.RawSyncMethod;
 import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.domain.transaction.raw.RawTransactionRepository;
 import com.walletradar.ingestion.config.OnChainClarificationProperties;
-import com.walletradar.ingestion.pipeline.classification.OnChainClassifier;
 import com.walletradar.ingestion.pipeline.classification.reason.ClassificationReasonCode;
 import com.walletradar.ingestion.pipeline.classification.reason.ClarificationPolicyService;
-import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryEntry;
-import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryFamily;
-import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryRole;
-import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryService;
 import com.walletradar.ingestion.pipeline.classification.support.ClarificationEligibilitySupport;
 import com.walletradar.ingestion.pipeline.classification.support.CowSwapSupport;
-import com.walletradar.ingestion.pipeline.classification.support.NativeAssetSymbolResolver;
 import com.walletradar.ingestion.pipeline.clarification.ClarificationReceiptEnrichment;
 import com.walletradar.ingestion.pipeline.clarification.PendingReceiptClarificationQueryService;
 import com.walletradar.ingestion.pipeline.clarification.RelatedLifecycleDiscoveryService;
 import com.walletradar.ingestion.pipeline.clarification.RawTransactionClarificationEnricher;
 import com.walletradar.ingestion.pipeline.clarification.ReceiptClarificationGateway;
-import com.walletradar.ingestion.pipeline.onchain.OnChainNormalizedTransactionBuilder;
-import com.walletradar.ingestion.wallet.query.TrackedWalletLookupService;
 import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -68,13 +60,6 @@ class ReceiptClarificationWorkflowHandlerTest {
     private RawTransactionRepository rawTransactionRepository;
     @Mock
     private NormalizedTransactionRepository normalizedTransactionRepository;
-    @Mock
-    private ProtocolRegistryService protocolRegistryService;
-    @Mock
-    private TrackedWalletLookupService trackedWalletLookupService;
-    @Mock
-    private RelatedLifecycleDiscoveryService relatedLifecycleDiscoveryService;
-
     private ReceiptClarificationWorkflowHandler service;
 
     @BeforeEach
@@ -84,11 +69,6 @@ class ReceiptClarificationWorkflowHandlerTest {
         properties.getFullReceipt().setMaxAttempts(1);
         properties.getFullReceipt().setRetryDelaySeconds(120);
 
-        OnChainClassifier classifier = new OnChainClassifier(
-                protocolRegistryService,
-                trackedWalletLookupService,
-                new NativeAssetSymbolResolver()
-        );
         RawTransactionClarificationEnricher enricher = new RawTransactionClarificationEnricher();
         ClarificationPolicyService clarificationPolicyService = new ClarificationPolicyService();
 
@@ -96,18 +76,13 @@ class ReceiptClarificationWorkflowHandlerTest {
                 pendingReceiptClarificationQueryService,
                 properties,
                 enricher,
-                classifier,
                 new ClarificationFailureHandler(
                         enricher,
                         rawTransactionRepository,
                         normalizedTransactionRepository,
                         clarificationPolicyService
                 ),
-                new ClarificationReclassificationHandler(
-                        new OnChainNormalizedTransactionBuilder(),
-                        normalizedTransactionRepository,
-                        relatedLifecycleDiscoveryService
-                ),
+                new ClarificationReclassificationMarker(normalizedTransactionRepository),
                 new ClarificationPreparationHandler(
                         clarificationGateway,
                         rawTransactionRepository,
@@ -124,7 +99,6 @@ class ReceiptClarificationWorkflowHandlerTest {
         lenient().when(normalizedTransactionRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
         lenient().when(normalizedTransactionRepository.saveAll(anyCollection())).thenAnswer(invocation -> invocation.getArgument(0));
         lenient().when(rawTransactionRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
-        lenient().when(protocolRegistryService.lookup(any(), any())).thenReturn(Optional.empty());
     }
 
     @Test
@@ -166,19 +140,6 @@ class ReceiptClarificationWorkflowHandlerTest {
         NormalizedTransaction pending = reviewTx("0x0a757aeeb58667c545017cd8e5cd60dc994a8945ed810c60ea2aed18688f4f7a", NetworkId.BASE, "ROUTER_METHOD_OVERLOAD_UNSUPPORTED");
         RawTransaction rawTransaction = baseLpExitRaw();
         when(rawTransactionRepository.findById(pending.getId())).thenReturn(Optional.of(rawTransaction));
-        when(protocolRegistryService.lookup(NetworkId.BASE, POSITION_MANAGER))
-                .thenReturn(Optional.of(new ProtocolRegistryEntry(
-                        POSITION_MANAGER,
-                        Set.of(NetworkId.BASE),
-                        ProtocolRegistryFamily.DEX,
-                        ProtocolRegistryRole.POSITION_MANAGER,
-                        null,
-                        ConfidenceLevel.HIGH,
-                        "Pancake",
-                        "Infinity",
-                        false,
-                        null
-                )));
         when(clarificationGateway.fetchReceiptWithTransferEvidence(rawTransaction))
                 .thenReturn(Optional.of(new ClarificationReceiptEnrichment(
                         "1",
@@ -219,8 +180,7 @@ class ReceiptClarificationWorkflowHandlerTest {
 
         ArgumentCaptor<NormalizedTransaction> normalizedCaptor = ArgumentCaptor.forClass(NormalizedTransaction.class);
         verify(normalizedTransactionRepository).save(normalizedCaptor.capture());
-        assertThat(normalizedCaptor.getValue().getType()).isEqualTo(NormalizedTransactionType.LP_EXIT);
-        assertThat(normalizedCaptor.getValue().getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        assertThat(normalizedCaptor.getValue().getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_RECLASSIFICATION);
         assertThat(normalizedCaptor.getValue().getFullReceiptClarificationAttempts()).isEqualTo(1);
     }
 
@@ -297,8 +257,7 @@ class ReceiptClarificationWorkflowHandlerTest {
         assertThat(clarified).isTrue();
         ArgumentCaptor<NormalizedTransaction> normalizedCaptor = ArgumentCaptor.forClass(NormalizedTransaction.class);
         verify(normalizedTransactionRepository).save(normalizedCaptor.capture());
-        assertThat(normalizedCaptor.getValue().getStatus()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
-        assertThat(normalizedCaptor.getValue().getMissingDataReasons()).containsExactly("STOP_CONDITION_WRAPPER_ONLY");
+        assertThat(normalizedCaptor.getValue().getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_RECLASSIFICATION);
         assertThat(normalizedCaptor.getValue().getFullReceiptClarificationAttempts()).isEqualTo(1);
         verify(rawTransactionRepository).save(any(RawTransaction.class));
     }
@@ -326,11 +285,12 @@ class ReceiptClarificationWorkflowHandlerTest {
 
         ArgumentCaptor<NormalizedTransaction> normalizedCaptor = ArgumentCaptor.forClass(NormalizedTransaction.class);
         verify(normalizedTransactionRepository).save(normalizedCaptor.capture());
-        assertThat(normalizedCaptor.getValue().getStatus()).isEqualTo(NormalizedTransactionStatus.NEEDS_REVIEW);
+        assertThat(normalizedCaptor.getValue().getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_RECLASSIFICATION);
         assertThat(normalizedCaptor.getValue().getFullReceiptClarificationAttempts()).isEqualTo(1);
         assertThat(normalizedCaptor.getValue().getMissingDataReasons()).containsExactly(
                 "ROUTER_METHOD_OVERLOAD_UNSUPPORTED",
-                "CLARIFICATION_FULL_RECEIPT_UNAVAILABLE"
+                "CLARIFICATION_FULL_RECEIPT_UNAVAILABLE",
+                "CLARIFICATION_ATTEMPTS_EXHAUSTED"
         );
     }
 
@@ -392,9 +352,7 @@ class ReceiptClarificationWorkflowHandlerTest {
         ArgumentCaptor<NormalizedTransaction> normalizedCaptor = ArgumentCaptor.forClass(NormalizedTransaction.class);
         verify(normalizedTransactionRepository).save(normalizedCaptor.capture());
         assertThat(normalizedCaptor.getValue().getType()).isEqualTo(NormalizedTransactionType.BRIDGE_OUT);
-        assertThat(normalizedCaptor.getValue().getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
-        assertThat(normalizedCaptor.getValue().getMissingDataReasons())
-                .doesNotContain(ClarificationEligibilitySupport.BRIDGE_PAIR_EVIDENCE_REQUIRED);
+        assertThat(normalizedCaptor.getValue().getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_RECLASSIFICATION);
         assertThat(normalizedCaptor.getValue().getFullReceiptClarificationAttempts()).isEqualTo(1);
         verify(rawTransactionRepository).save(any(RawTransaction.class));
     }
@@ -478,22 +436,7 @@ class ReceiptClarificationWorkflowHandlerTest {
         assertThat(clarified).isTrue();
         ArgumentCaptor<NormalizedTransaction> normalizedCaptor = ArgumentCaptor.forClass(NormalizedTransaction.class);
         verify(normalizedTransactionRepository).save(normalizedCaptor.capture());
-        assertThat(normalizedCaptor.getValue().getType()).isEqualTo(NormalizedTransactionType.SWAP);
-        assertThat(normalizedCaptor.getValue().getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
-        assertThat(normalizedCaptor.getValue().getFlows())
-                .filteredOn(flow -> flow.getRole() == com.walletradar.domain.transaction.normalized.NormalizedLegRole.SELL)
-                .singleElement()
-                .satisfies(flow -> {
-                    assertThat(flow.getAssetSymbol()).isEqualTo("USDC");
-                    assertThat(flow.getQuantityDelta()).isEqualByComparingTo("-1.000000");
-                });
-        assertThat(normalizedCaptor.getValue().getFlows())
-                .filteredOn(flow -> flow.getRole() == com.walletradar.domain.transaction.normalized.NormalizedLegRole.BUY)
-                .singleElement()
-                .satisfies(flow -> {
-                    assertThat(flow.getAssetSymbol()).isEqualTo("ETH");
-                    assertThat(flow.getQuantityDelta()).isEqualByComparingTo("0.004684323603346941");
-                });
+        assertThat(normalizedCaptor.getValue().getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_RECLASSIFICATION);
         verify(rawTransactionRepository).save(any(RawTransaction.class));
     }
 
@@ -580,23 +523,7 @@ class ReceiptClarificationWorkflowHandlerTest {
         assertThat(clarified).isTrue();
         ArgumentCaptor<NormalizedTransaction> normalizedCaptor = ArgumentCaptor.forClass(NormalizedTransaction.class);
         verify(normalizedTransactionRepository).save(normalizedCaptor.capture());
-        assertThat(normalizedCaptor.getValue().getType()).isEqualTo(NormalizedTransactionType.SWAP);
-        assertThat(normalizedCaptor.getValue().getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
-        assertThat(normalizedCaptor.getValue().getMissingDataReasons()).isEmpty();
-        assertThat(normalizedCaptor.getValue().getFlows())
-                .filteredOn(flow -> flow.getRole() == com.walletradar.domain.transaction.normalized.NormalizedLegRole.SELL)
-                .singleElement()
-                .satisfies(flow -> {
-                    assertThat(flow.getAssetSymbol()).isEqualTo("IN");
-                    assertThat(flow.getQuantityDelta()).isEqualByComparingTo("-12.000000000000000000");
-                });
-        assertThat(normalizedCaptor.getValue().getFlows())
-                .filteredOn(flow -> flow.getRole() == com.walletradar.domain.transaction.normalized.NormalizedLegRole.BUY)
-                .singleElement()
-                .satisfies(flow -> {
-                    assertThat(flow.getAssetSymbol()).isEqualTo("BNB");
-                    assertThat(flow.getQuantityDelta()).isEqualByComparingTo("0.001265420489474075");
-                });
+        assertThat(normalizedCaptor.getValue().getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_RECLASSIFICATION);
         verify(rawTransactionRepository).save(any(RawTransaction.class));
     }
 
@@ -663,7 +590,7 @@ class ReceiptClarificationWorkflowHandlerTest {
         ArgumentCaptor<NormalizedTransaction> normalizedCaptor = ArgumentCaptor.forClass(NormalizedTransaction.class);
         verify(normalizedTransactionRepository).save(normalizedCaptor.capture());
         assertThat(normalizedCaptor.getValue().getType()).isEqualTo(NormalizedTransactionType.LP_ENTRY_REQUEST);
-        assertThat(normalizedCaptor.getValue().getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_CLARIFICATION);
+        assertThat(normalizedCaptor.getValue().getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_RECLASSIFICATION);
         assertThat(normalizedCaptor.getValue().getMissingDataReasons()).contains("GMX_DEPOSIT_REQUEST_CORRELATION_REQUIRED");
         assertThat(normalizedCaptor.getValue().getFullReceiptClarificationAttempts()).isEqualTo(1);
         verify(rawTransactionRepository).save(any(RawTransaction.class));
@@ -749,9 +676,7 @@ class ReceiptClarificationWorkflowHandlerTest {
         assertThat(clarified).isTrue();
         ArgumentCaptor<NormalizedTransaction> normalizedCaptor = ArgumentCaptor.forClass(NormalizedTransaction.class);
         verify(normalizedTransactionRepository).save(normalizedCaptor.capture());
-        assertThat(normalizedCaptor.getValue().getType()).isEqualTo(NormalizedTransactionType.DEX_ORDER_SETTLEMENT);
-        assertThat(normalizedCaptor.getValue().getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
-        assertThat(normalizedCaptor.getValue().getCorrelationId()).isEqualTo(expectedCorrelation);
+        assertThat(normalizedCaptor.getValue().getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_RECLASSIFICATION);
         assertThat(normalizedCaptor.getValue().getProtocolName()).isEqualTo("CoW Swap");
         assertThat(normalizedCaptor.getValue().getFullReceiptClarificationAttempts()).isEqualTo(1);
         verify(rawTransactionRepository).save(any(RawTransaction.class));
@@ -834,12 +759,7 @@ class ReceiptClarificationWorkflowHandlerTest {
         assertThat(clarified).isTrue();
         ArgumentCaptor<NormalizedTransaction> normalizedCaptor = ArgumentCaptor.forClass(NormalizedTransaction.class);
         verify(normalizedTransactionRepository).save(normalizedCaptor.capture());
-        assertThat(normalizedCaptor.getValue().getType()).isEqualTo(NormalizedTransactionType.DEX_ORDER_SETTLEMENT);
-        assertThat(normalizedCaptor.getValue().getStatus()).isIn(
-                NormalizedTransactionStatus.PENDING_PRICE,
-                NormalizedTransactionStatus.PENDING_CLARIFICATION
-        );
-        assertThat(normalizedCaptor.getValue().getCorrelationId()).isEqualTo(expectedCorrelation);
+        assertThat(normalizedCaptor.getValue().getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_RECLASSIFICATION);
     }
 
     @Test
@@ -927,9 +847,7 @@ class ReceiptClarificationWorkflowHandlerTest {
         assertThat(clarified).isTrue();
         ArgumentCaptor<NormalizedTransaction> normalizedCaptor = ArgumentCaptor.forClass(NormalizedTransaction.class);
         verify(normalizedTransactionRepository).save(normalizedCaptor.capture());
-        assertThat(normalizedCaptor.getValue().getType()).isEqualTo(NormalizedTransactionType.LP_EXIT_SETTLEMENT);
-        assertThat(normalizedCaptor.getValue().getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
-        assertThat(normalizedCaptor.getValue().getCorrelationId()).isEqualTo(requestKey);
+        assertThat(normalizedCaptor.getValue().getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_RECLASSIFICATION);
     }
 
     @Test
@@ -1010,9 +928,7 @@ class ReceiptClarificationWorkflowHandlerTest {
         ArgumentCaptor<NormalizedTransaction> normalizedCaptor = ArgumentCaptor.forClass(NormalizedTransaction.class);
         verify(normalizedTransactionRepository).save(normalizedCaptor.capture());
         verify(normalizedTransactionRepository, never()).saveAll(anyCollection());
-        verify(relatedLifecycleDiscoveryService).discoverAndNormalize(any(), any());
-        assertThat(normalizedCaptor.getValue().getType()).isEqualTo(NormalizedTransactionType.DERIVATIVE_POSITION_DECREASE);
-        assertThat(normalizedCaptor.getValue().getMatchedCounterparty()).isNull();
+        assertThat(normalizedCaptor.getValue().getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_RECLASSIFICATION);
     }
 
     @Test

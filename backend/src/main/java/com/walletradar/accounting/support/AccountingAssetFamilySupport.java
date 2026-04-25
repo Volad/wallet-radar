@@ -58,10 +58,17 @@ public final class AccountingAssetFamilySupport {
             Map.entry("USDC", FAMILY_USDC),
             Map.entry("VBUSDC", FAMILY_USDC),
             Map.entry("USDBC", FAMILY_USDC),
+            Map.entry("EUSDC", FAMILY_USDC),
+            Map.entry("EEUSDC", FAMILY_USDC),
             Map.entry("USDT", FAMILY_USDT),
             Map.entry("USDT0", FAMILY_USDT),
             Map.entry("USD₮0", FAMILY_USDT),
+            Map.entry("EUSDT", FAMILY_USDT),
+            Map.entry("EUSDT0", FAMILY_USDT),
             Map.entry("DEUSD", FAMILY_DEUSD),
+            Map.entry("EDEUSD", FAMILY_DEUSD),
+            Map.entry("EWEETH", FAMILY_ETH),
+            Map.entry("EWSTUSR", FAMILY_WSTUSR),
             Map.entry("WSTUSR", FAMILY_WSTUSR)
     );
 

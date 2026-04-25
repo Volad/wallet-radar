@@ -64,6 +64,7 @@ class BybitBackfillSegmentPlannerTest {
                         BybitIntegrationStream.EXECUTION_SPOT.name(),
                         BybitIntegrationStream.EXECUTION_OPTION.name(),
                         BybitIntegrationStream.FUNDING_HISTORY.name(),
+                        BybitIntegrationStream.EARN_FLEXIBLE_SAVING.name(),
                         BybitIntegrationStream.DEPOSIT_ONCHAIN.name(),
                         BybitIntegrationStream.WITHDRAWAL.name()
                 ));
@@ -103,6 +104,10 @@ class BybitBackfillSegmentPlannerTest {
                 .isNotEmpty()
                 .allSatisfy(segment -> assertThat(java.time.Duration.between(segment.getFromTime(), segment.getToTime()))
                         .isLessThanOrEqualTo(java.time.Duration.ofDays(7)));
+        assertThat(segments).filteredOn(segment -> BybitIntegrationStream.EARN_FLEXIBLE_SAVING.name().equals(segment.getStream()))
+                .isNotEmpty()
+                .allSatisfy(segment -> assertThat(java.time.Duration.between(segment.getFromTime(), segment.getToTime()))
+                        .isLessThanOrEqualTo(java.time.Duration.ofDays(7)));
     }
 
     @Test
@@ -139,7 +144,7 @@ class BybitBackfillSegmentPlannerTest {
                 java.time.Instant.parse("2026-04-10T12:00:00Z")
         );
 
-        assertThat(segments).hasSize(8);
+        assertThat(segments).hasSize(9);
         assertThat(segments).allSatisfy(segment -> {
             assertThat(segment.getFromTime()).isEqualTo(from);
             assertThat(segment.getToTime()).isEqualTo(to);

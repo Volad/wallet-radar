@@ -23,13 +23,19 @@ public class BybitSymbolMapper {
     }
 
     public List<String> candidateSymbols(PriceRequest request) {
-        String baseSymbol = mappingService.canonicalMarketSymbol(request);
-        if (baseSymbol.isBlank() || NON_BYBIT_SYMBOLS.contains(baseSymbol) || QUOTE_ASSETS.contains(baseSymbol)) {
+        List<String> baseSymbols = mappingService.exchangeMarketSymbols(request);
+        if (baseSymbols.isEmpty()) {
             return List.of();
         }
-        return List.of(
-                baseSymbol + "USDT",
-                baseSymbol + "USDC"
-        );
+        return baseSymbols.stream()
+                .filter(baseSymbol -> !baseSymbol.isBlank())
+                .filter(baseSymbol -> !NON_BYBIT_SYMBOLS.contains(baseSymbol))
+                .filter(baseSymbol -> !QUOTE_ASSETS.contains(baseSymbol))
+                .flatMap(baseSymbol -> List.of(
+                        baseSymbol + "USDT",
+                        baseSymbol + "USDC"
+                ).stream())
+                .distinct()
+                .toList();
     }
 }

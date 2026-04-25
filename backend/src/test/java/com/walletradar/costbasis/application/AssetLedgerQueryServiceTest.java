@@ -720,6 +720,100 @@ class AssetLedgerQueryServiceTest {
         });
     }
 
+    @Test
+    void sessionFamilyLedgerUsesRowLocalCounterpartyForProtocolEventEndpoints() {
+        UserSession session = new UserSession();
+        session.setId("session-8");
+        UserSession.SessionWallet wallet = new UserSession.SessionWallet();
+        wallet.setAddress("wallet-a");
+        wallet.setNetworks(List.of(NetworkId.BASE));
+        session.setWallets(List.of(wallet));
+
+        AssetLedgerPoint bridgeOut = point(
+                "70",
+                "wallet-a",
+                NetworkId.BASE,
+                "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.CARRY_OUT,
+                AssetLedgerPoint.LifecycleKind.BRIDGE,
+                AssetLedgerPoint.LifecycleStage.SOURCE,
+                "-1",
+                "-100",
+                "0",
+                "0",
+                "0",
+                "0"
+        );
+        bridgeOut.setNormalizedType("BRIDGE_OUT");
+        bridgeOut.setTxHash("0xbridgeout");
+
+        AssetLedgerPoint bridgeIn = point(
+                "71",
+                "wallet-a",
+                NetworkId.BASE,
+                "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.CARRY_IN,
+                AssetLedgerPoint.LifecycleKind.BRIDGE,
+                AssetLedgerPoint.LifecycleStage.DESTINATION,
+                "0.99",
+                "100",
+                "0",
+                "0",
+                "0.99",
+                "100"
+        );
+        bridgeIn.setNormalizedType("BRIDGE_IN");
+        bridgeIn.setTxHash("0xbridgein");
+        bridgeIn.setBlockTimestamp(Instant.parse("2026-04-05T10:01:00Z"));
+
+        NormalizedTransaction bridgeOutTx = normalized("70", "Across", "ETH", "TRANSFER", "-1", null);
+        bridgeOutTx.setWalletAddress("wallet-a");
+        bridgeOutTx.setCounterpartyAddress("0x1111111111111111111111111111111111111111");
+        NormalizedTransaction bridgeInTx = normalized("71", "Across", "ETH", "TRANSFER", "0.99", null);
+        bridgeInTx.setWalletAddress("wallet-a");
+        bridgeInTx.setCounterpartyAddress("0x2222222222222222222222222222222222222222");
+
+        when(userSessionRepository.findById("session-8")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "ACCOUNTING_UNIVERSE:session-8",
+                List.of("wallet-a"),
+                List.of("wallet-a")
+        ));
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-8",
+                "FAMILY:ETH"
+        )).thenReturn(List.of(bridgeOut, bridgeIn));
+        when(normalizedTransactionRepository.findAllById(List.of("70", "71")))
+                .thenReturn(List.of(bridgeOutTx, bridgeInTx));
+        when(mongoOperations.find(any(), eq(OnChainBalance.class))).thenReturn(List.of(
+                balance("wallet-a", NetworkId.BASE, "ETH", "0.99")
+        ));
+
+        AssetLedgerQueryService service = new AssetLedgerQueryService(
+                userSessionRepository,
+                assetLedgerPointRepository,
+                normalizedTransactionRepository,
+                accountingUniverseService,
+                mongoOperations
+        );
+        AssetLedgerQueryService.SessionAssetLedgerView view = service.findSessionFamilyLedger("session-8", "FAMILY:ETH")
+                .orElseThrow();
+
+        assertThat(view.timeline()).hasSize(2);
+        assertThat(view.timeline().get(0)).satisfies(entry -> {
+            assertThat(entry.normalizedType()).isEqualTo("BRIDGE_OUT");
+            assertThat(entry.fromAddress()).isEqualTo("wallet-a");
+            assertThat(entry.toAddress()).isEqualTo("0x1111111111111111111111111111111111111111");
+        });
+        assertThat(view.timeline().get(1)).satisfies(entry -> {
+            assertThat(entry.normalizedType()).isEqualTo("BRIDGE_IN");
+            assertThat(entry.fromAddress()).isEqualTo("0x2222222222222222222222222222222222222222");
+            assertThat(entry.toAddress()).isEqualTo("wallet-a");
+        });
+        assertThat(view.events().get(0).toAddress()).isEqualTo("0x1111111111111111111111111111111111111111");
+        assertThat(view.events().get(1).fromAddress()).isEqualTo("0x2222222222222222222222222222222222222222");
+    }
+
     private NormalizedTransaction normalized(
             String id,
             String protocolName,

@@ -284,6 +284,7 @@ public class BybitCanonicalTransactionBuilder {
         transaction.setUpdatedAt(now);
         transaction.setMissingDataReasons(new ArrayList<>());
         transaction.setExcludedFromAccounting(false);
+        transaction.setCounterpartyAddress(initialCounterpartyAddress(row, type));
         return transaction;
     }
 
@@ -372,6 +373,20 @@ public class BybitCanonicalTransactionBuilder {
         return switch (normalized) {
             case "EXTERNAL_INBOUND" -> NormalizedTransactionType.EXTERNAL_TRANSFER_IN.name();
             default -> normalized;
+        };
+    }
+
+    private String initialCounterpartyAddress(
+            ExternalLedgerRaw row,
+            NormalizedTransactionType type
+    ) {
+        if (row == null || type == null) {
+            return null;
+        }
+        return switch (type) {
+            case EXTERNAL_TRANSFER_IN -> blankToNull(row.getSenderAddress());
+            case EXTERNAL_TRANSFER_OUT -> blankToNull(row.getReceivedAddress());
+            default -> null;
         };
     }
 
@@ -636,6 +651,10 @@ public class BybitCanonicalTransactionBuilder {
 
     private String normalize(String value) {
         return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value;
     }
 
     private record FlowKey(NormalizedLegRole role, String assetSymbol) {

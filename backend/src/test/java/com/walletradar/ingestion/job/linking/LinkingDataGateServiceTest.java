@@ -55,7 +55,6 @@ class LinkingDataGateServiceTest {
                 .thenReturn(false);
         when(sessionPipelineActivityService.hasFreshActivity(eq("session-1"), eq(UserSession.PipelineStage.ON_CHAIN_CLARIFICATION), any()))
                 .thenReturn(true);
-
         LinkingDataGateService.LinkingGateSnapshot snapshot = service().snapshot("session-1");
 
         assertThat(snapshot.ready()).isFalse();
@@ -80,6 +79,8 @@ class LinkingDataGateServiceTest {
         when(sessionPipelineActivityService.hasFreshActivity(eq("session-1"), eq(UserSession.PipelineStage.ON_CHAIN_NORMALIZATION), any()))
                 .thenReturn(false);
         when(sessionPipelineActivityService.hasFreshActivity(eq("session-1"), eq(UserSession.PipelineStage.ON_CHAIN_CLARIFICATION), any()))
+                .thenReturn(false);
+        when(sessionPipelineActivityService.hasFreshActivity(eq("session-1"), eq(UserSession.PipelineStage.ON_CHAIN_RECLASSIFICATION), any()))
                 .thenReturn(false);
         when(sessionPipelineActivityService.hasFreshActivity(eq("session-1"), eq(UserSession.PipelineStage.BYBIT_NORMALIZATION), any()))
                 .thenReturn(false);
@@ -117,6 +118,8 @@ class LinkingDataGateServiceTest {
                 .thenReturn(false);
         when(sessionPipelineActivityService.hasFreshActivity(eq("session-1"), eq(UserSession.PipelineStage.ON_CHAIN_CLARIFICATION), any()))
                 .thenReturn(false);
+        when(sessionPipelineActivityService.hasFreshActivity(eq("session-1"), eq(UserSession.PipelineStage.ON_CHAIN_RECLASSIFICATION), any()))
+                .thenReturn(false);
         when(sessionPipelineActivityService.hasFreshActivity(eq("session-1"), eq(UserSession.PipelineStage.BYBIT_NORMALIZATION), any()))
                 .thenReturn(false);
 
@@ -147,6 +150,8 @@ class LinkingDataGateServiceTest {
         when(sessionPipelineActivityService.hasFreshActivity(eq("session-1"), eq(UserSession.PipelineStage.ON_CHAIN_NORMALIZATION), any()))
                 .thenReturn(false);
         when(sessionPipelineActivityService.hasFreshActivity(eq("session-1"), eq(UserSession.PipelineStage.ON_CHAIN_CLARIFICATION), any()))
+                .thenReturn(false);
+        when(sessionPipelineActivityService.hasFreshActivity(eq("session-1"), eq(UserSession.PipelineStage.ON_CHAIN_RECLASSIFICATION), any()))
                 .thenReturn(false);
         when(sessionPipelineActivityService.hasFreshActivity(eq("session-1"), eq(UserSession.PipelineStage.BYBIT_NORMALIZATION), any()))
                 .thenReturn(false);

@@ -54,4 +54,63 @@ class IntegrationSyncStatusServiceTest {
         assertThat(saved.getStatus()).isEqualTo(SyncStatus.SyncStatusValue.PENDING);
         assertThat(saved.getProgressPct()).isZero();
     }
+
+    @Test
+    void updatePreservesLastSyncedAtWhenRepairingCompletedIntegrationWithoutActiveWindow() {
+        IntegrationSyncStatusService service = new IntegrationSyncStatusService(syncStatusRepository);
+
+        UserSession.SessionIntegration integration = new UserSession.SessionIntegration();
+        integration.setIntegrationId("BYBIT-33625378");
+        integration.setProvider(UserSession.IntegrationProvider.BYBIT);
+        integration.setAccountRef("BYBIT:33625378");
+        integration.setStatus(UserSession.IntegrationStatus.READY);
+        integration.setLastSyncAt(Instant.parse("2026-04-18T22:47:01Z"));
+
+        SyncStatus latest = new SyncStatus();
+        latest.setId("latest");
+        latest.setLastSyncedAt(Instant.parse("2026-04-18T22:47:01Z"));
+        latest.setWindowFromTime(null);
+        latest.setWindowToTime(null);
+
+        when(syncStatusRepository.findAllByIntegrationIdOrderByUpdatedAtDescIdDesc("BYBIT-33625378"))
+                .thenReturn(List.of(latest));
+
+        service.update(integration, 8, 8, 0, null);
+
+        ArgumentCaptor<SyncStatus> captor = ArgumentCaptor.forClass(SyncStatus.class);
+        verify(syncStatusRepository).save(captor.capture());
+        SyncStatus saved = captor.getValue();
+        assertThat(saved.getLastSyncedAt()).isEqualTo(Instant.parse("2026-04-18T22:47:01Z"));
+        assertThat(saved.getStatus()).isEqualTo(SyncStatus.SyncStatusValue.COMPLETE);
+        assertThat(saved.isBackfillComplete()).isTrue();
+        assertThat(saved.isRawFetchComplete()).isTrue();
+    }
+
+    @Test
+    void updateFallsBackToIntegrationLastSyncAtForLegacyCompletedIntegrationWithoutCheckpoint() {
+        IntegrationSyncStatusService service = new IntegrationSyncStatusService(syncStatusRepository);
+
+        UserSession.SessionIntegration integration = new UserSession.SessionIntegration();
+        integration.setIntegrationId("BYBIT-33625378");
+        integration.setProvider(UserSession.IntegrationProvider.BYBIT);
+        integration.setAccountRef("BYBIT:33625378");
+        integration.setStatus(UserSession.IntegrationStatus.READY);
+        integration.setLastSyncAt(Instant.parse("2026-04-18T22:47:01Z"));
+
+        SyncStatus latest = new SyncStatus();
+        latest.setId("latest");
+        latest.setWindowFromTime(null);
+        latest.setWindowToTime(null);
+
+        when(syncStatusRepository.findAllByIntegrationIdOrderByUpdatedAtDescIdDesc("BYBIT-33625378"))
+                .thenReturn(List.of(latest));
+
+        service.update(integration, 8, 8, 0, null);
+
+        ArgumentCaptor<SyncStatus> captor = ArgumentCaptor.forClass(SyncStatus.class);
+        verify(syncStatusRepository).save(captor.capture());
+        SyncStatus saved = captor.getValue();
+        assertThat(saved.getLastSyncedAt()).isEqualTo(Instant.parse("2026-04-18T22:47:01Z"));
+        assertThat(saved.getStatus()).isEqualTo(SyncStatus.SyncStatusValue.COMPLETE);
+    }
 }

@@ -4,6 +4,7 @@ import com.walletradar.pricing.domain.CanonicalAssetCatalog;
 import com.walletradar.pricing.domain.PriceRequest;
 import org.springframework.stereotype.Component;
 
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -14,6 +15,10 @@ public class ExternalPriceMappingService {
 
     public String canonicalMarketSymbol(PriceRequest request) {
         return CanonicalAssetCatalog.canonicalMarketSymbol(request.assetSymbol());
+    }
+
+    public List<String> exchangeMarketSymbols(PriceRequest request) {
+        return CanonicalAssetCatalog.exchangeMarketSymbols(request.assetSymbol());
     }
 
     public Optional<String> coinGeckoId(PriceRequest request) {

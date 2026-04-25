@@ -1,0 +1,189 @@
+{
+  "name": "cycle-autorun",
+  "version": 1,
+  "description": "Independent cycle-based multi-role autorun pipeline.",
+  "runtime": {
+    "name": "cycle-autorun-runtime-core",
+    "stateDir": "runtime-core/state",
+    "commandsDir": "runtime-core/commands",
+    "dispatchRequestsDir": "runtime-core/state/dispatch-requests",
+    "decisionLogPath": "runtime-core/state/decision-log.jsonl",
+    "wakeAfterMs": 300000,
+    "resetAfterMs": 900000,
+    "stopOnGoalReached": true
+  },
+  "documents": {
+    "goal": "GOAL.md",
+    "pipelineConfig": "pipeline.config.json",
+    "handoffPolicy": "policies/handoff-policy.md",
+    "questionPolicy": "policies/question-policy.md",
+    "goalPolicy": "policies/goal-policy.md"
+  },
+  "paths": {
+    "cycleRootPattern": "cycle-data/cycle/{cycle}",
+    "goalStatusPattern": "cycle-data/cycle/{cycle}/goal-status.json",
+    "handoffPattern": "cycle-data/cycle/{cycle}/handoffs/{role}.md",
+    "questionLogPattern": "cycle-data/cycle/{cycle}/questions/questions.jsonl",
+    "roleOutputPattern": "cycle-data/cycle/{cycle}/{role}",
+    "roleSummaryPattern": "cycle-data/cycle/{cycle}/{role}/summary.json"
+  },
+  "promptTemplates": {
+    "dispatchRole": "prompts/dispatch-role.md",
+    "answerQuestion": "prompts/answer-question.md",
+    "answerUserQuestion": "prompts/answer-user-question.md",
+    "fixHandoff": "prompts/fix-handoff.md"
+  },
+  "handoff": {
+    "allowedStatuses": [
+      "active",
+      "blocked",
+      "completed",
+      "completed_handoff"
+    ],
+    "requiredHeaders": [
+      "Status",
+      "Task",
+      "Transition",
+      "Cycle",
+      "Input basis",
+      "Previous owner",
+      "Next owner"
+    ],
+    "requiredSections": [
+      "Summary",
+      "Next role requirements",
+      "Artifact references"
+    ],
+    "incomingForwardStatus": "active",
+    "blockedStatus": "blocked",
+    "completedStatus": "completed",
+    "completedHandoffStatus": "completed_handoff"
+  },
+  "questions": {
+    "allowedStatuses": [
+      "open",
+      "answered",
+      "resolved",
+      "cancelled",
+      "obsolete"
+    ],
+    "blockingStatuses": [
+      "open"
+    ],
+    "allowUserTarget": true,
+    "userTarget": "user"
+  },
+  "goal": {
+    "defaultStatus": "active",
+    "terminalStatuses": [
+      "reached",
+      "completed",
+      "satisfied",
+      "stopped"
+    ]
+  },
+  "workflow": {
+    "forwardEdges": [
+      {
+        "from": "financial-analyst",
+        "to": "business-analyst",
+        "taskId": "BA-001"
+      },
+      {
+        "from": "business-analyst",
+        "to": "architect",
+        "taskId": "SA-001"
+      },
+      {
+        "from": "architect",
+        "to": "backend-dev",
+        "taskId": "BE-001"
+      },
+      {
+        "from": "backend-dev",
+        "to": "financial-analyst",
+        "taskId": "FA-001"
+      },
+      {
+        "from": "frontend-dev",
+        "to": "financial-analyst",
+        "taskId": "FA-001"
+      }
+    ]
+  },
+  "roles": {
+    "financial-analyst": {
+      "taskId": "FA-001",
+      "roleDoc": "roles/financial-analyst.md",
+      "description": "Reconstruct the authoritative financial truth for the current cycle and publish the audit pack.",
+      "canAsk": [
+        "business-analyst",
+        "architect",
+        "backend-dev",
+        "frontend-dev",
+        "dispatcher",
+        "user"
+      ]
+    },
+    "business-analyst": {
+      "taskId": "BA-001",
+      "roleDoc": "roles/business-analyst.md",
+      "description": "Convert the authoritative audit pack into a prioritized remediation backlog for the cycle.",
+      "canAsk": [
+        "financial-analyst",
+        "architect",
+        "backend-dev",
+        "frontend-dev",
+        "dispatcher",
+        "user"
+      ]
+    },
+    "architect": {
+      "taskId": "SA-001",
+      "roleDoc": "roles/architect.md",
+      "description": "Turn the remediation backlog into a technically precise implementation package for the cycle.",
+      "canAsk": [
+        "financial-analyst",
+        "business-analyst",
+        "backend-dev",
+        "frontend-dev",
+        "dispatcher",
+        "user"
+      ]
+    },
+    "backend-dev": {
+      "taskId": "BE-001",
+      "roleDoc": "roles/backend-dev.md",
+      "description": "Implement the approved technical backlog, run the needed backend verification, and prepare the transfer-ready package.",
+      "canAsk": [
+        "financial-analyst",
+        "business-analyst",
+        "architect",
+        "frontend-dev",
+        "dispatcher",
+        "user"
+      ]
+    },
+    "frontend-dev": {
+      "taskId": "FE-001",
+      "roleDoc": "roles/frontend-dev.md",
+      "description": "Implement any approved frontend scope for the cycle and publish a transfer-ready package.",
+      "canAsk": [
+        "financial-analyst",
+        "business-analyst",
+        "architect",
+        "backend-dev",
+        "dispatcher",
+        "user"
+      ]
+    },
+    "dispatcher": {
+      "taskId": "DISPATCH-001",
+      "roleDoc": "roles/dispatcher.md",
+      "description": "Protocol-only reconciler that routes by explicit state, question log, handoff validity, and goal status.",
+      "canAsk": [
+        "user"
+      ]
+    }
+  }
+}

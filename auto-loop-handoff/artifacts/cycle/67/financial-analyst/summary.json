@@ -2,7 +2,7 @@
   "cycle": 67,
   "task": "FA-001",
   "role": "financial-analyst",
-  "capturedAt": "2026-04-21T17:12:17.100Z",
+  "capturedAt": "2026-04-21T19:37:12.784Z",
   "dataset": {
     "database": "walletradar",
     "accountingUniverseId": "c584c760-b228-45fc-ae0f-84f7cd7bfd8f",
@@ -11,7 +11,7 @@
       "status": "COMPLETE",
       "message": "Accounting replay complete",
       "updatedAt": {
-        "$date": "2026-04-21T15:42:11.946Z"
+        "$date": "2026-04-21T19:36:09.805Z"
       }
     },
     "wallets": [
@@ -116,10 +116,10 @@
     "bybitExtractedEvents": 4557,
     "bybitExtractedRaw": 1286,
     "bybitExtractedConfirmed": 3271,
-    "assetLedgerPoints": 9249,
+    "assetLedgerPoints": 9266,
     "onChainBalances": 213,
     "externalLedgerRaw": 0,
-    "unmatchedBridgeOut": 27,
+    "unmatchedBridgeOut": 28,
     "unmatchedBridgeIn": 9
   },
   "mandatoryCoverage": {
@@ -405,9 +405,9 @@
         "coverageRatio": 0.7585855657580923
       },
       "family": {
-        "current": 3.0923771589292457,
+        "current": 3.09241198490085,
         "covered": 3.078229487944583,
-        "uncovered": 0.014147670984662762,
+        "uncovered": 0.014182496956267075,
         "dirtyBuckets": 19,
         "buckets": [
           {
@@ -416,9 +416,9 @@
             "accountingAssetIdentity": "0xeac30ed8609f564ae65c809c4bf42db2ff426d2c",
             "accountingFamilyIdentity": "FAMILY:ETH",
             "assetSymbol": "AMANWETH",
-            "currentQuantity": 3.0685431458604806,
+            "currentQuantity": 3.068577971832085,
             "coveredQuantity": 3.06,
-            "uncoveredQuantity": 0.00854314586048055,
+            "uncoveredQuantity": 0.008577971832084863,
             "normalizedType": "LENDING_DEPOSIT",
             "protocolName": null,
             "txHash": "0x3b8592a7465ce33bd64b266e11d1f665954cc3735be6e1590dffd226ac8664bd",
@@ -595,7 +595,7 @@
             "basisEffect": "ACQUIRE",
             "hasIncompleteHistoryAfter": true,
             "hasUnresolvedFlagsAfter": true,
-            "unresolvedFlagCountAfter": 2
+            "unresolvedFlagCountAfter": 1
           },
           {
             "walletAddress": "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f",
@@ -751,7 +751,7 @@
             "unresolvedFlagCountAfter": 14
           }
         ],
-        "coverageRatio": 0.9954249852920394
+        "coverageRatio": 0.9954137750644108
       }
     },
     "BTC": {
@@ -797,7 +797,7 @@
             "normalizedType": "LENDING_DEPOSIT",
             "protocolName": "Aave",
             "txHash": "0xed89c9ba89f13a906b68e57c1b5a58c598fac0ef64ff17747a34740faf691d3c",
-            "basisEffect": "REALLOCATE_IN",
+            "basisEffect": "ACQUIRE",
             "hasIncompleteHistoryAfter": true,
             "hasUnresolvedFlagsAfter": true,
             "unresolvedFlagCountAfter": 5
@@ -1034,8 +1034,8 @@
       },
       "family": {
         "current": 2.6701698648930603,
-        "covered": 1.5677979802850968,
-        "uncovered": 1.102371884607964,
+        "covered": 1.568730783321106,
+        "uncovered": 1.1014390815719546,
         "dirtyBuckets": 2,
         "buckets": [
           {
@@ -1045,8 +1045,8 @@
             "accountingFamilyIdentity": "FAMILY:AVAX",
             "assetSymbol": "SAVAX",
             "currentQuantity": 2.4184019664259395,
-            "coveredQuantity": 1.4094869774763692,
-            "uncoveredQuantity": 1.0089149889495703,
+            "coveredQuantity": 1.4104197805123784,
+            "uncoveredQuantity": 1.0079821859135611,
             "normalizedType": "STAKING_DEPOSIT",
             "protocolName": null,
             "txHash": "0x682992de7690b96b0710f5817481994d0288f8ac4a4677e116372b38640a4cb4",
@@ -1107,13 +1107,13 @@
             "unresolvedFlagCountAfter": 0
           }
         ],
-        "coverageRatio": 0.5871529002323927
+        "coverageRatio": 0.58750224244027
       }
     },
     "USDC": {
       "exact": {
         "current": 1352.005418,
-        "covered": 990.2454660000001,
+        "covered": 1021.147054,
         "buckets": [
           {
             "walletAddress": "0xf03b52e8686b962e051a6075a06b96cb8a663021",
@@ -1121,15 +1121,15 @@
             "assetSymbol": "USDC",
             "assetContract": "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
             "currentQuantity": 1006.08101,
-            "coveredQuantity": 654.592805,
-            "uncoveredQuantity": 351.488205,
+            "coveredQuantity": 685.494393,
+            "uncoveredQuantity": 320.58661700000005,
             "latestType": "VAULT_WITHDRAW",
             "latestProtocol": null,
             "latestTxHash": "0x0765f4b17d9961c3cd7e63b4dc1e69c948954d51816807a4ba51a8ac4709f977",
-            "basisEffect": "REALLOCATE_IN",
+            "basisEffect": "ACQUIRE",
             "hasIncompleteHistoryAfter": true,
             "hasUnresolvedFlagsAfter": true,
-            "unresolvedFlagCountAfter": 7
+            "unresolvedFlagCountAfter": 6
           },
           {
             "walletAddress": "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f",
@@ -1145,7 +1145,7 @@
             "basisEffect": "DISPOSE",
             "hasIncompleteHistoryAfter": true,
             "hasUnresolvedFlagsAfter": true,
-            "unresolvedFlagCountAfter": 23
+            "unresolvedFlagCountAfter": 21
           },
           {
             "walletAddress": "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f",
@@ -1196,13 +1196,13 @@
             "unresolvedFlagCountAfter": 7
           }
         ],
-        "uncovered": 361.7599519999999,
-        "coverageRatio": 0.7324271432764333
+        "uncovered": 330.85836399999994,
+        "coverageRatio": 0.7552832558249408
       },
       "family": {
         "current": 1352.005418,
-        "covered": 990.2454660000001,
-        "uncovered": 361.759952,
+        "covered": 1021.147054,
+        "uncovered": 330.85836400000005,
         "dirtyBuckets": 4,
         "buckets": [
           {
@@ -1212,15 +1212,15 @@
             "accountingFamilyIdentity": "FAMILY:USDC",
             "assetSymbol": "USDC",
             "currentQuantity": 1006.08101,
-            "coveredQuantity": 654.592805,
-            "uncoveredQuantity": 351.488205,
+            "coveredQuantity": 685.494393,
+            "uncoveredQuantity": 320.58661700000005,
             "normalizedType": "VAULT_WITHDRAW",
             "protocolName": null,
             "txHash": "0x0765f4b17d9961c3cd7e63b4dc1e69c948954d51816807a4ba51a8ac4709f977",
-            "basisEffect": "REALLOCATE_IN",
+            "basisEffect": "ACQUIRE",
             "hasIncompleteHistoryAfter": true,
             "hasUnresolvedFlagsAfter": true,
-            "unresolvedFlagCountAfter": 7
+            "unresolvedFlagCountAfter": 6
           },
           {
             "walletAddress": "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f",
@@ -1237,7 +1237,7 @@
             "basisEffect": "DISPOSE",
             "hasIncompleteHistoryAfter": true,
             "hasUnresolvedFlagsAfter": true,
-            "unresolvedFlagCountAfter": 23
+            "unresolvedFlagCountAfter": 21
           },
           {
             "walletAddress": "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f",
@@ -1291,7 +1291,7 @@
             "unresolvedFlagCountAfter": 7
           }
         ],
-        "coverageRatio": 0.7324271432764333
+        "coverageRatio": 0.7552832558249408
       }
     },
     "USDT": {

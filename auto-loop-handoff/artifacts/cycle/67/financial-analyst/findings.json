@@ -11,7 +11,7 @@
         "ETH exact",
         "ETH family"
       ],
-      "currentDatabaseTruth": "ETH exact coverage is 0.758585565758092328 with uncovered 0.005604525124182205 across 3 materially dirty exact buckets. ETH family coverage is 0.995424985292039377 but still has uncovered 0.014147670984662762 and 19 dirty buckets.",
+      "currentDatabaseTruth": "ETH exact coverage is 0.758585565758092328 with uncovered 0.005604525124182205 across 3 materially dirty exact buckets. ETH family coverage is 0.995413775064410755 but still has uncovered 0.014182496956267075 and 19 dirty buckets.",
       "auditorTruth": "Same-family bridge, wrapper, and lending receipt-token principal must carry basis end to end. Only explicit positive excess over the carried principal should become acquisition.",
       "firstFailedStage": "normalization + move_basis",
       "evidenceDiagnosis": "EVIDENCE_PRESENT_UNLINKED for native bridge/native dust buckets; EVIDENCE_PRESENT_UNUSABLE for receipt-token rows that still hide yield inside one coarse continuity leg.",
@@ -33,7 +33,7 @@
         "AVAX exact",
         "AVAX family"
       ],
-      "currentDatabaseTruth": "AVAX exact coverage is 0.628797411316525223 with uncovered 0.093456895658393546. AVAX family coverage is 0.587152900232392749 with uncovered 1.102371884607963981, dominated by `sAVAX` plus native AVAX.",
+      "currentDatabaseTruth": "AVAX exact coverage is 0.628797411316525223 with uncovered 0.093456895658393546. AVAX family coverage is 0.58750224244027005 with uncovered 1.101439081571954581, dominated by `sAVAX` plus native AVAX.",
       "auditorTruth": "Aave-style receipt-token exits and native staking-wrapper transitions are continuity. Principal basis should move from `aAvaWAVAX` and native AVAX into the returned AVAX or `sAVAX` position; only net excess should be acquisition.",
       "firstFailedStage": "move_basis",
       "evidenceDiagnosis": "EVIDENCE_PRESENT_UNLINKED",
@@ -55,7 +55,7 @@
         "USDC exact",
         "USDC family"
       ],
-      "currentDatabaseTruth": "USDC exact coverage is 0.732427143276433323 with uncovered 361.75995199999988472. Two Arbitrum buckets explain nearly all of it: 351.488204999999993561 on `0x0765...` and 10.271747000000004846 on `0x101c...`.",
+      "currentDatabaseTruth": "USDC exact coverage is 0.755283255824940825 with uncovered 330.858363999999937732. Two Arbitrum buckets explain nearly all of it: 320.586617000000046573 on `0x0765...` and 10.271747000000004846 on `0x101c...`.",
       "auditorTruth": "Bridge carry, vault receipt-token carry, and supported swap chronology are all present. Basis should flow from bridge source rows into Arbitrum USDC and from `eUSDC-6` back into underlying USDC, leaving only explicit vault yield or fee effects as acquisition/disposal.",
       "firstFailedStage": "normalization + move_basis",
       "evidenceDiagnosis": "EVIDENCE_PRESENT_UNLINKED on supported bridge/vault/swap chronology and EVIDENCE_PRESENT_UNUSABLE where vault receipt-token exits remain too coarse.",
@@ -98,7 +98,7 @@
       "surfaces": [
         "Protocol detection"
       ],
-      "currentDatabaseTruth": "WRAP=343, UNWRAP=336, SWAP=130, BRIDGE_IN=99, BRIDGE_OUT=98, VAULT_DEPOSIT=19, VAULT_WITHDRAW=18, REWARD_CLAIM=15, LP_ENTRY=12, LENDING_DEPOSIT=10, LP_EXIT=10, LP_FEE_CLAIM=6, LENDING_WITHDRAW=4, STAKING_DEPOSIT=2 currently lack `protocolName`. The biggest clusters are wrap/unwrap, swap, and bridge rows.",
+      "currentDatabaseTruth": "WRAP=343, UNWRAP=336, SWAP=130, BRIDGE_IN=98, BRIDGE_OUT=98, VAULT_DEPOSIT=19, VAULT_WITHDRAW=18, REWARD_CLAIM=15, LP_ENTRY=12, LP_EXIT=10, LENDING_DEPOSIT=10, LP_FEE_CLAIM=6, LENDING_WITHDRAW=4, STAKING_DEPOSIT=2 currently lack `protocolName`. The biggest clusters are wrap/unwrap, swap, and bridge rows.",
       "auditorTruth": "Protocol labels are best-effort metadata, but they should still be deterministically attached whenever the interacted contract, canonical selector, or audited lifecycle pairing already proves the protocol brand.",
       "firstFailedStage": "protocol enrichment",
       "evidenceDiagnosis": "EVIDENCE_PRESENT_UNLINKED",
@@ -120,7 +120,7 @@
       "surfaces": [
         "Counterparty construction"
       ],
-      "currentDatabaseTruth": "SWAP=268, EXTERNAL_TRANSFER_IN=186, BRIDGE_OUT=138, EXTERNAL_TRANSFER_OUT=127, BRIDGE_IN=117, LP_ENTRY=90, LENDING_DEPOSIT=87, LP_EXIT=62, LENDING_WITHDRAW=44, VAULT_WITHDRAW=26, VAULT_DEPOSIT=26, BORROW=21, REPAY=16, STAKING_DEPOSIT=6, STAKING_WITHDRAW=1 currently lack `counterpartyAddress`. Gaps are concentrated on swaps, external transfers, bridge rows, lending, and vault operations.",
+      "currentDatabaseTruth": "SWAP=268, EXTERNAL_TRANSFER_IN=187, BRIDGE_OUT=138, EXTERNAL_TRANSFER_OUT=127, BRIDGE_IN=116, LP_ENTRY=90, LENDING_DEPOSIT=87, LP_EXIT=62, LENDING_WITHDRAW=44, VAULT_DEPOSIT=26, VAULT_WITHDRAW=26, BORROW=21, REPAY=16, STAKING_DEPOSIT=6, STAKING_WITHDRAW=1 currently lack `counterpartyAddress`. Gaps are concentrated on swaps, external transfers, bridge rows, lending, and vault operations.",
       "auditorTruth": "For on-chain protocol rows, `counterpartyAddress` should point to the interacted contract or deterministic peer. Lifecycle pairing belongs in `correlationId` and `matchedCounterparty`, not inside `counterpartyAddress`.",
       "firstFailedStage": "clarification + linking",
       "evidenceDiagnosis": "EVIDENCE_PRESENT_UNLINKED",

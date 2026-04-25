@@ -302,7 +302,10 @@ public class BybitBackfillSegmentExecutor implements BackfillSegmentExecutor {
         syncState.setFailedSegments(failed);
         syncState.setProgressPct(progressPct);
         integration.setLastError(lastError);
-        integration.setLastSyncAt(Instant.now());
+        Instant checkpoint = latestCompletedCheckpoint(integration.getIntegrationId());
+        if (checkpoint != null) {
+            integration.setLastSyncAt(checkpoint);
+        }
         integration.setUpdatedAt(Instant.now());
         if (failed > 0 && completed < total) {
             integration.setStatus(UserSession.IntegrationStatus.ERROR);
@@ -314,6 +317,18 @@ public class BybitBackfillSegmentExecutor implements BackfillSegmentExecutor {
         session.setUpdatedAt(Instant.now());
         userSessionRepository.save(session);
         integrationSyncStatusService.update(integration, total, completed, failed, lastError);
+    }
+
+    private Instant latestCompletedCheckpoint(String integrationId) {
+        if (integrationId == null || integrationId.isBlank()) {
+            return null;
+        }
+        return backfillSegmentRepository.findByIntegrationIdOrderByUpdatedAtAsc(integrationId).stream()
+                .filter(segment -> segment.getStatus() == BackfillSegment.SegmentStatus.COMPLETE)
+                .map(BackfillSegment::getToTime)
+                .filter(Objects::nonNull)
+                .max(Instant::compareTo)
+                .orElse(null);
     }
 
     private Instant extractOccurredAt(JsonNode row) {

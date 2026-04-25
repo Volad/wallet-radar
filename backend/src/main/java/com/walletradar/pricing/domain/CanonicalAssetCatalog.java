@@ -4,6 +4,8 @@ import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 
 import java.util.Locale;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -141,6 +143,11 @@ public final class CanonicalAssetCatalog {
             Map.entry("ZK", "zksync")
     );
 
+    private static final Map<String, List<String>> EXCHANGE_MARKET_FALLBACKS = Map.ofEntries(
+            Map.entry("WSTETH", List.of("STETH", "ETH")),
+            Map.entry("STETH", List.of("ETH"))
+    );
+
     private CanonicalAssetCatalog() {
     }
 
@@ -169,6 +176,17 @@ public final class CanonicalAssetCatalog {
 
     public static Optional<String> coinGeckoId(String assetSymbol) {
         return Optional.ofNullable(COINGECKO_IDS.get(canonicalMarketSymbol(assetSymbol)));
+    }
+
+    public static List<String> exchangeMarketSymbols(String assetSymbol) {
+        String canonical = canonicalMarketSymbol(assetSymbol);
+        if (canonical.isBlank()) {
+            return List.of();
+        }
+        LinkedHashSet<String> candidates = new LinkedHashSet<>();
+        candidates.add(canonical);
+        candidates.addAll(EXCHANGE_MARKET_FALLBACKS.getOrDefault(canonical, List.of()));
+        return List.copyOf(candidates);
     }
 
     public static boolean isEuroStablecoin(String assetSymbol) {

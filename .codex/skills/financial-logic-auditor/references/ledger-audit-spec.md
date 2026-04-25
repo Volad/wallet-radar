@@ -24,7 +24,7 @@ Work directly with MongoDB and the filesystem. Write scripts when needed. Do not
 
 1. Always start from raw sources:
    - `raw_transactions` for on-chain data
-   - `external_ledger_raw` for Bybit CEX data
+   - `bybit_extracted_events` for Bybit CEX data
 2. `normalized_transactions` with `status=CONFIRMED` may be used as input only if the current pipeline is trustworthy. When in doubt, recompute from raw.
 3. `asset_positions` is for reconciliation only. Never use it as a reconstruction starting point.
 4. Current on-chain balances may only be used for final reconciliation, never as a starting point.
@@ -86,20 +86,22 @@ AVCO input rule:
 - Use `status=CONFIRMED` only.
 - Inspect `status=NEEDS_REVIEW` for classification problems before basis computation.
 
-#### `external_ledger_raw`
+#### `bybit_extracted_events`
 
-Bybit CEX source of truth. One document per CSV row.
+Bybit CEX source of truth. One document per extracted event row.
 
 Relevant fields:
 
 - `_id`
-- `sourceFileType`
+- `status`
+- `eventType`
+- `assetSymbol`, `quantityRaw`, `timeUtc`
 - `canonicalType`
 - `basisRelevant`
 - `outOfScope`
-- `assetSymbol`, `quantityRaw`, `timeUtc`
-- `utaContract`, `utaDirection`, `filledPrice`, `cashFlow`
-- `txHash`, `networkId`, `onChainCorrelation.status`
+- `txHash`, `networkId`
+- `onChainCorrelation.status`
+- venue-side identifiers or grouping fields used by the current extractor when present
 
 Process only rows where:
 
@@ -332,7 +334,7 @@ When starting an audit session:
    - `db.raw_transactions.countDocuments({ normalizationStatus: "PENDING" })`
    - `db.normalized_transactions.countDocuments({ status: "CONFIRMED" })`
    - `db.normalized_transactions.countDocuments({ status: "NEEDS_REVIEW" })`
-   - `db.external_ledger_raw.countDocuments({ basisRelevant: true, outOfScope: false })`
+   - `db.bybit_extracted_events.countDocuments({ basisRelevant: true, outOfScope: false })`
 2. Identify coverage gaps:
    - wallets and networks with data
    - covered time range

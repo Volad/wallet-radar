@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -30,39 +31,48 @@ public class ProtocolNameEnrichmentService {
     private final NormalizedTransactionRepository normalizedTransactionRepository;
 
     public int processNextBatch(int batchSize) {
-        List<NormalizedTransaction> batch = queryService.loadNextBatch(batchSize);
-        int updated = 0;
-        Instant now = Instant.now();
-        for (NormalizedTransaction transaction : batch) {
-            Optional<RawTransaction> rawTransaction = loadRaw(transaction);
-            if (enrich(transaction, rawTransaction.orElse(null), now)) {
-                updated++;
-            }
-        }
-        return updated;
-    }
-
-    public int processRepairSweep(int batchSize) {
         int boundedBatchSize = Math.max(1, batchSize);
         int updated = 0;
         String afterId = null;
-        while (true) {
-            List<NormalizedTransaction> batch = queryService.loadRepairBatchAfter(afterId, boundedBatchSize);
+        Instant now = Instant.now();
+        while (updated < boundedBatchSize) {
+            List<NormalizedTransaction> batch = queryService.loadBatchAfterId(afterId, boundedBatchSize);
             if (batch.isEmpty()) {
                 return updated;
             }
-            Instant now = Instant.now();
             for (NormalizedTransaction transaction : batch) {
                 afterId = transaction.getId();
                 Optional<RawTransaction> rawTransaction = loadRaw(transaction);
                 if (enrich(transaction, rawTransaction.orElse(null), now)) {
                     updated++;
+                    if (updated >= boundedBatchSize) {
+                        return updated;
+                    }
                 }
             }
         }
+        return updated;
     }
 
     public boolean enrich(NormalizedTransaction normalizedTransaction, @Nullable RawTransaction rawTransaction, Instant now) {
+        if (!enrichInPlace(normalizedTransaction, rawTransaction, now)) {
+            return false;
+        }
+        normalizedTransactionRepository.save(normalizedTransaction);
+        log.debug(
+                "Protocol name enriched normalizedTxId={} protocolName={} protocolVersion={}",
+                normalizedTransaction.getId(),
+                normalizedTransaction.getProtocolName(),
+                normalizedTransaction.getProtocolVersion()
+        );
+        return true;
+    }
+
+    public boolean enrichInPlace(
+            NormalizedTransaction normalizedTransaction,
+            @Nullable RawTransaction rawTransaction,
+            Instant now
+    ) {
         if (normalizedTransaction == null) {
             return false;
         }
@@ -97,13 +107,6 @@ public class ProtocolNameEnrichmentService {
         normalizedTransaction.setProtocolName(targetName);
         normalizedTransaction.setProtocolVersion(targetVersion);
         normalizedTransaction.setUpdatedAt(now == null ? Instant.now() : now);
-        normalizedTransactionRepository.save(normalizedTransaction);
-        log.debug(
-                "Protocol name enriched normalizedTxId={} protocolName={} protocolVersion={}",
-                normalizedTransaction.getId(),
-                normalizedTransaction.getProtocolName(),
-                normalizedTransaction.getProtocolVersion()
-        );
         return true;
     }
 
@@ -114,11 +117,25 @@ public class ProtocolNameEnrichmentService {
                 || normalizedTransaction.getWalletAddress() == null) {
             return Optional.empty();
         }
-        String rawId = normalizedTransaction.getTxHash().toLowerCase()
-                + ":"
-                + normalizedTransaction.getNetworkId().name()
-                + ":"
-                + normalizedTransaction.getWalletAddress().toLowerCase();
-        return rawTransactionRepository.findById(rawId);
+        String txHash = normalizedTransaction.getTxHash().trim().toLowerCase(Locale.ROOT);
+        String networkId = normalizedTransaction.getNetworkId().name();
+        String walletAddress = normalizedTransaction.getWalletAddress().trim().toLowerCase(Locale.ROOT);
+        String rawId = txHash + ":" + networkId + ":" + walletAddress;
+
+        Optional<RawTransaction> exact = rawTransactionRepository.findByTxHashAndNetworkIdAndWalletAddress(
+                txHash,
+                networkId,
+                walletAddress
+        );
+        if (exact != null && exact.isPresent()) {
+            return exact;
+        }
+
+        Optional<RawTransaction> byId = rawTransactionRepository.findById(rawId);
+        if (byId != null && byId.isPresent()) {
+            return byId;
+        }
+
+        return Optional.empty();
     }
 }

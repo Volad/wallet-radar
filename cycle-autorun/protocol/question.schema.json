@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "cycle-autorun/question.schema.json",
+  "type": "object",
+  "required": [
+    "id",
+    "cycle",
+    "from",
+    "to",
+    "status",
+    "blocking",
+    "kind",
+    "question",
+    "createdAt",
+    "updatedAt"
+  ],
+  "properties": {
+    "id": { "type": "string" },
+    "cycle": { "type": "integer", "minimum": 1 },
+    "from": { "type": "string" },
+    "to": { "type": "string" },
+    "status": { "type": "string" },
+    "blocking": { "type": "boolean" },
+    "kind": { "type": "string" },
+    "question": { "type": "string" },
+    "context": { "type": "string" },
+    "answer": { "type": "string" },
+    "artifacts": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "createdAt": { "type": "string" },
+    "updatedAt": { "type": "string" },
+    "answeredAt": { "type": "string" },
+    "resolvedAt": { "type": "string" },
+    "cancelledAt": { "type": "string" }
+  }
+}

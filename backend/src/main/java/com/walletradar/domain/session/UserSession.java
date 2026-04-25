@@ -112,6 +112,7 @@ public class UserSession {
         BACKFILL,
         ON_CHAIN_NORMALIZATION,
         ON_CHAIN_CLARIFICATION,
+        ON_CHAIN_RECLASSIFICATION,
         BYBIT_NORMALIZATION,
         LINKING,
         PRICING,

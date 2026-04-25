@@ -8,6 +8,7 @@ import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegist
 import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryRole;
 import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryService;
 import com.walletradar.ingestion.pipeline.onchain.OnChainRawTransactionView;
+import com.walletradar.ingestion.pipeline.support.BsonCoercionSupport;
 import lombok.RequiredArgsConstructor;
 import org.bson.Document;
 import org.springframework.stereotype.Service;
@@ -58,6 +59,11 @@ public class ProtocolNameResolutionService {
                 && isSourcePreferredForType(normalizedTransaction.getType(), MatchSource.FROM_ADDRESS)
                 && isRoleRelevant(normalizedTransaction.getType(), fromAddress.get().role())) {
             return fromAddress;
+        }
+
+        Optional<ResolvedProtocolName> providerBackedStatus = resolveProviderBackedStatus(normalizedTransaction, rawTransaction);
+        if (providerBackedStatus.isPresent()) {
+            return providerBackedStatus;
         }
 
         List<ResolvedCandidate> candidates = collectCandidates(view, normalizedTransaction.getType());
@@ -183,6 +189,8 @@ public class ProtocolNameResolutionService {
             case BRIDGE_IN -> role == ProtocolRegistryRole.BRIDGE_EXIT
                     || role == ProtocolRegistryRole.BRIDGE_ENTRY
                     || role == ProtocolRegistryRole.ROUTER;
+            case WRAP, UNWRAP -> role == ProtocolRegistryRole.WRAPPER_TOKEN
+                    || role == ProtocolRegistryRole.WRAPPER_CONTRACT;
             case LENDING_DEPOSIT, LENDING_WITHDRAW, BORROW, REPAY -> role == ProtocolRegistryRole.POOL
                     || role == ProtocolRegistryRole.VAULT
                     || role == ProtocolRegistryRole.WRAPPER_CONTRACT
@@ -238,6 +246,10 @@ public class ProtocolNameResolutionService {
             case BRIDGE_OUT, BRIDGE_IN -> switch (role) {
                 case BRIDGE_ENTRY, BRIDGE_EXIT -> 60;
                 case ROUTER, EXCHANGE_ROUTER -> 48;
+                default -> 0;
+            };
+            case WRAP, UNWRAP -> switch (role) {
+                case WRAPPER_TOKEN, WRAPPER_CONTRACT -> 60;
                 default -> 0;
             };
             case LENDING_DEPOSIT, LENDING_WITHDRAW, BORROW, REPAY -> switch (role) {
@@ -297,6 +309,39 @@ public class ProtocolNameResolutionService {
             case CONTRACT_ADDRESS -> 92;
             case LOG_ADDRESS -> 72;
             case FROM_ADDRESS -> 20;
+        };
+    }
+
+    private Optional<ResolvedProtocolName> resolveProviderBackedStatus(
+            NormalizedTransaction normalizedTransaction,
+            RawTransaction rawTransaction
+    ) {
+        if (normalizedTransaction.getType() != NormalizedTransactionType.BRIDGE_OUT
+                && normalizedTransaction.getType() != NormalizedTransactionType.BRIDGE_IN) {
+            return Optional.empty();
+        }
+
+        Document clarificationEvidence = rawTransaction.getClarificationEvidence();
+        if (clarificationEvidence == null || clarificationEvidence.isEmpty()) {
+            clarificationEvidence = BsonCoercionSupport.asDocument(rawTransaction.getRawData() == null
+                    ? null
+                    : rawTransaction.getRawData().get("clarificationEvidence"));
+        }
+        Document protocolStatus = BsonCoercionSupport.asDocument(clarificationEvidence == null
+                ? null
+                : clarificationEvidence.get("protocolStatus"));
+        if (protocolStatus == null || protocolStatus.isEmpty()) {
+            return Optional.empty();
+        }
+
+        String provider = protocolStatus.getString("provider");
+        if (!present(provider)) {
+            return Optional.empty();
+        }
+        return switch (provider.trim().toUpperCase(Locale.ROOT)) {
+            case "LIFI" -> Optional.of(new ResolvedProtocolName("LiFi", null, ProtocolRegistryRole.ROUTER));
+            case "MAYAN" -> Optional.of(new ResolvedProtocolName("Mayan", null, ProtocolRegistryRole.BRIDGE_ENTRY));
+            default -> Optional.empty();
         };
     }
 

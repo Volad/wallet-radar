@@ -231,7 +231,18 @@ public class SourceSyncPlanner {
 
     private String scheduleIntegrationRefresh(UserSession.SessionIntegration integration, Instant anchor) {
         SyncStatus status = latestIntegrationStatus(integration).orElse(null);
-        if (status == null || !status.isBackfillComplete()) {
+        if (status == null) {
+            if (integration == null || integration.getStatus() != UserSession.IntegrationStatus.READY) {
+                return null;
+            }
+            Instant checkpoint = resolveIntegrationCheckpoint(integration, null);
+            if (checkpoint == null || !checkpoint.isBefore(anchor)) {
+                return null;
+            }
+            SyncStatus target = armIntegrationWindow(null, integration, checkpoint, anchor, "Refresh queued");
+            return target == null ? null : target.getId();
+        }
+        if (!status.isBackfillComplete()) {
             return null;
         }
         Instant checkpoint = resolveIntegrationCheckpoint(integration, status);

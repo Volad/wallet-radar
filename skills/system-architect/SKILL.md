@@ -54,12 +54,27 @@ Use [references/OUTPUT_TEMPLATE.md](references/OUTPUT_TEMPLATE.md). Always inclu
 - Use the OUTPUT_TEMPLATE to structure the response.
 - Keep each section focused and decision‑oriented.
 
+## Audit-Driven Planning Rules
+- When the input includes a financial audit or approved business backlog, treat accepted findings as stage-level defect input, not just row-level cleanup input.
+- If the accepted audit shows `EVIDENCE_PRESENT_UNLINKED`, `EVIDENCE_PRESENT_UNUSABLE`, a semantic type-model gap, or a specific failed-stage hypothesis, preserve that diagnosis in the architecture plan.
+- Decide which technical contract, module boundary, normalization rule, linking rule, or lifecycle abstraction must change.
+- Do not restate a stale upstream premise such as "evidence may be missing" when the accepted audit already proves that evidence exists.
+- Do not translate an upstream canonical-classification defect into a replay-only cleanup plan when the first wrong step is earlier in the pipeline.
+- Prefer designs that fix the earliest wrong stage and rely on rerun to rebuild downstream state, rather than designs centered on post-factum repair or sweep jobs over already normalized canonical rows.
+- Do not center the design on recovery processes such as `CounterpartyRepairJob` or similar startup repair sweeps over historical canonical rows.
+
+## Acceptance Basis Rules
+- Treat the accepted scorecard or equivalent metric contract as the technical success surface for the work.
+- Do not claim a design resolves a failing row by switching to a substitute metric basis.
+- Keep exact-asset, family, and final-clean/proof-clean metrics separate when mapping implementation to outcomes.
+
 ## Guardrails (Do Not Do)
 - Do not propose managed cloud databases or paid indexers for MVP.
 - Do not introduce microservices unless a clear scaling boundary is demonstrated.
 - Do not propose dataset-specific production logic keyed by real transaction hashes, wallet addresses, or hand-curated live buckets.
 - Use real transactions only as evidence or regression anchors for a generalized rule, never as the mechanism of correctness.
 - If current code appears to rely on such dataset-specific logic, require backend cleanup as part of the plan.
+- Do not propose repair, backfill, startup-sweep, or historical-row patching of normalized canonical rows as the primary solution for supported-flow correctness when the defect belongs to an earlier pipeline stage.
 - The only acceptable explicit unsupported carve-out is a requirement-defined unsupported network or asset family boundary, for example TON or SOL when out of scope, not a one-off transaction exception.
 - Do not write full implementation code; design only.
 
@@ -67,4 +82,3 @@ Use [references/OUTPUT_TEMPLATE.md](references/OUTPUT_TEMPLATE.md). Always inclu
 - Criteria summary: [system-architect-criteria.md](references/system-architect-criteria.md)
 - Project docs: `docs/` (context, domain, architecture, accounting, API)
 - ADRs: `docs/adr/`
-

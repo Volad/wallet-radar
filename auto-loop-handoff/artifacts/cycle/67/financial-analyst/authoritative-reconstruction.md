@@ -26,11 +26,11 @@ The auditor-derived financially correct model for this live dataset is:
 
 | Asset | Exact coverage | Exact uncovered | Family coverage | Family uncovered | Exact final-clean | Family final-clean |
 | --- | ---: | ---: | ---: | ---: | --- | --- |
-| ETH | 0.758585565758092328 | 0.005604525124182205 | 0.995424985292039377 | 0.014147670984662762 | no | no |
+| ETH | 0.758585565758092328 | 0.005604525124182205 | 0.995413775064410755 | 0.014182496956267075 | no | no |
 | BTC | 1 | 0 | 0.99998032365402878 | 8.999999999946551e-08 | yes | no |
 | MNT | 1 | 0 | 0.008451767781545872 | 1675.520059541154068938 | yes | no |
-| AVAX | 0.628797411316525223 | 0.093456895658393546 | 0.587152900232392749 | 1.102371884607963981 | no | no |
-| USDC | 0.732427143276433323 | 361.75995199999988472 | 0.732427143276433323 | 361.759951999999998407 | no | no |
+| AVAX | 0.628797411316525223 | 0.093456895658393546 | 0.58750224244027005 | 1.101439081571954581 | no | no |
+| USDC | 0.755283255824940825 | 330.858363999999937732 | 0.755283255824940825 | 330.858364000000051419 | no | no |
 | USDT | 0.000218599015255947 | 1.234868226418219139 | 0.000218599015255947 | 1.234868226418219139 | no | no |
 
 ## Live lineage excerpts
@@ -51,7 +51,7 @@ The auditor-derived financially correct model for this live dataset is:
 "quantityShortfallAfter": "0",
 "hasIncompleteHistoryAfter": true,
 "hasUnresolvedFlagsAfter": true,
-"unresolvedFlagCountAfter": 20
+"unresolvedFlagCountAfter": 18
   },
   {
 "blockTimestamp": "2026-02-19T10:38:37Z",
@@ -65,7 +65,7 @@ The auditor-derived financially correct model for this live dataset is:
 "quantityShortfallAfter": "0",
 "hasIncompleteHistoryAfter": true,
 "hasUnresolvedFlagsAfter": true,
-"unresolvedFlagCountAfter": 20
+"unresolvedFlagCountAfter": 18
   },
   {
 "blockTimestamp": "2026-02-23T18:39:33Z",
@@ -79,7 +79,7 @@ The auditor-derived financially correct model for this live dataset is:
 "quantityShortfallAfter": "0",
 "hasIncompleteHistoryAfter": true,
 "hasUnresolvedFlagsAfter": true,
-"unresolvedFlagCountAfter": 21
+"unresolvedFlagCountAfter": 19
   },
   {
 "blockTimestamp": "2026-02-23T18:41:40Z",
@@ -93,7 +93,7 @@ The auditor-derived financially correct model for this live dataset is:
 "quantityShortfallAfter": "0",
 "hasIncompleteHistoryAfter": true,
 "hasUnresolvedFlagsAfter": true,
-"unresolvedFlagCountAfter": 22
+"unresolvedFlagCountAfter": 20
   },
   {
 "blockTimestamp": "2026-03-10T12:47:02Z",
@@ -107,7 +107,7 @@ The auditor-derived financially correct model for this live dataset is:
 "quantityShortfallAfter": "0",
 "hasIncompleteHistoryAfter": true,
 "hasUnresolvedFlagsAfter": true,
-"unresolvedFlagCountAfter": 22
+"unresolvedFlagCountAfter": 20
   },
   {
 "blockTimestamp": "2026-03-24T11:05:44Z",
@@ -121,7 +121,7 @@ The auditor-derived financially correct model for this live dataset is:
 "quantityShortfallAfter": "0",
 "hasIncompleteHistoryAfter": true,
 "hasUnresolvedFlagsAfter": true,
-"unresolvedFlagCountAfter": 23
+"unresolvedFlagCountAfter": 21
   },
   {
 "blockTimestamp": "2026-03-27T22:03:26Z",
@@ -135,7 +135,7 @@ The auditor-derived financially correct model for this live dataset is:
 "quantityShortfallAfter": "0",
 "hasIncompleteHistoryAfter": true,
 "hasUnresolvedFlagsAfter": true,
-"unresolvedFlagCountAfter": 23
+"unresolvedFlagCountAfter": 21
   },
   {
 "blockTimestamp": "2026-03-27T22:04:17Z",
@@ -149,7 +149,7 @@ The auditor-derived financially correct model for this live dataset is:
 "quantityShortfallAfter": "0",
 "hasIncompleteHistoryAfter": true,
 "hasUnresolvedFlagsAfter": true,
-"unresolvedFlagCountAfter": 23
+"unresolvedFlagCountAfter": 21
   }
 ]
 ```

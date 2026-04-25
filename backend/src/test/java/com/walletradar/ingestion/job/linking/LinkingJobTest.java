@@ -3,7 +3,7 @@ package com.walletradar.ingestion.job.linking;
 import com.walletradar.domain.event.BybitNormalizationCompletedEvent;
 import com.walletradar.domain.event.LinkingCompletedEvent;
 import com.walletradar.domain.event.LinkingRequestedEvent;
-import com.walletradar.domain.event.OnChainClarificationCompletedEvent;
+import com.walletradar.domain.event.OnChainReclassificationCompletedEvent;
 import com.walletradar.ingestion.config.LinkingProperties;
 import com.walletradar.session.application.SessionPipelineActivityService;
 import com.walletradar.session.application.SessionPipelineStateService;
@@ -36,12 +36,12 @@ class LinkingJobTest {
     private SessionPipelineStateService sessionPipelineStateService;
 
     @Test
-    void clarificationCompletionRunsLinkingWhenGateIsReady() {
+    void reclassificationCompletionRunsLinkingWhenGateIsReady() {
         LinkingProperties properties = new LinkingProperties();
         properties.setEnabled(true);
         properties.setBatchSize(25);
         when(linkingDataGateService.snapshot("session-1"))
-                .thenReturn(new LinkingDataGateService.LinkingGateSnapshot(true, 0L, 0L, 0L, false));
+                .thenReturn(new LinkingDataGateService.LinkingGateSnapshot(true, 0L, 0L, 0L, 0L, false));
         when(linkingBatchProcessor.processNextBatch(org.mockito.ArgumentMatchers.eq(25), any(Runnable.class)))
                 .thenReturn(2, 1, 0);
 
@@ -56,7 +56,7 @@ class LinkingJobTest {
                 sessionPipelineStateService
         );
 
-        job.onOnChainClarificationCompleted(new OnChainClarificationCompletedEvent("session-1", 3, "clarification"));
+        job.onOnChainReclassificationCompleted(new OnChainReclassificationCompletedEvent("session-1", 3, "reclassification"));
 
         verify(linkingBatchProcessor, times(3)).processNextBatch(org.mockito.ArgumentMatchers.eq(25), any(Runnable.class));
         verify(sessionPipelineStateService).markStageRunning(
@@ -72,7 +72,7 @@ class LinkingJobTest {
         assertThat(events).singleElement().isInstanceOfSatisfying(LinkingCompletedEvent.class, event -> {
             assertThat(event.sessionId()).isEqualTo("session-1");
             assertThat(event.processed()).isEqualTo(3);
-            assertThat(event.trigger()).isEqualTo("on-chain-clarification-completed");
+            assertThat(event.trigger()).isEqualTo("on-chain-reclassification-completed");
         });
     }
 
@@ -81,7 +81,7 @@ class LinkingJobTest {
         LinkingProperties properties = new LinkingProperties();
         properties.setEnabled(true);
         when(linkingDataGateService.snapshot("session-1"))
-                .thenReturn(new LinkingDataGateService.LinkingGateSnapshot(false, 0L, 1L, 0L, true));
+                .thenReturn(new LinkingDataGateService.LinkingGateSnapshot(false, 0L, 1L, 0L, 0L, true));
 
         List<Object> events = new ArrayList<>();
         ApplicationEventPublisher publisher = events::add;
@@ -111,7 +111,7 @@ class LinkingJobTest {
         properties.setEnabled(true);
         properties.setBatchSize(25);
         when(linkingDataGateService.snapshot("session-1"))
-                .thenReturn(new LinkingDataGateService.LinkingGateSnapshot(true, 0L, 0L, 0L, false));
+                .thenReturn(new LinkingDataGateService.LinkingGateSnapshot(true, 0L, 0L, 0L, 0L, false));
         when(linkingBatchProcessor.processNextBatch(org.mockito.ArgumentMatchers.eq(25), any(Runnable.class)))
                 .thenReturn(0);
 

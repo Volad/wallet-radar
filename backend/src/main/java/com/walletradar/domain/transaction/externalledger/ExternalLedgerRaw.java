@@ -79,6 +79,7 @@ public class ExternalLedgerRaw {
     private BigDecimal walletBalance;
     private String txHash;
     private NetworkId networkId;
+    private String senderAddress;
     private String receivedAddress;
     private String bybitStatus;
     private String walletRef;

@@ -43,6 +43,7 @@ class PricingJobTest {
                 0L,
                 3L,
                 2L,
+                 0L,
                 true
         ));
         when(pipelineTelemetrySnapshotService.snapshot()).thenReturn(new PipelineTelemetrySnapshot(
@@ -87,6 +88,7 @@ class PricingJobTest {
                 0L,
                 0L,
                 0L,
+                 0L,
                 true
         ));
         when(pipelineTelemetrySnapshotService.snapshot()).thenReturn(new PipelineTelemetrySnapshot(
@@ -133,6 +135,7 @@ class PricingJobTest {
                 0L,
                 0L,
                 0L,
+                 0L,
                 true
         ));
         when(pipelineTelemetrySnapshotService.snapshot()).thenReturn(new PipelineTelemetrySnapshot(
@@ -182,6 +185,7 @@ class PricingJobTest {
                 0L,
                 0L,
                 0L,
+                 0L,
                 true
         ));
         when(pipelineTelemetrySnapshotService.snapshot()).thenReturn(new PipelineTelemetrySnapshot(

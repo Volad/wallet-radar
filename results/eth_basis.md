@@ -9,9 +9,9 @@
 "networkId": "ARBITRUM",
 "assetSymbol": "ETH",
 "assetContract": "NATIVE:ARBITRUM",
-"currentQuantity": 0.01801773931333864,
+"currentQuantity": 0.017999233483578642,
 "coveredQuantity": 0.01358434690397287,
-"uncoveredQuantity": 0.004433392409365772,
+"uncoveredQuantity": 0.004414886579605773,
 "latestType": "SWAP",
 "latestProtocol": "Velora/ParaSwap",
 "latestTxHash": "0x101c297d1a67fc0a30fc96c1aa5cc8786d630bbb00d274c9dc7bbced4c6dccd7",
@@ -34,7 +34,7 @@
 "basisEffect": "GAS_ONLY",
 "hasIncompleteHistoryAfter": true,
 "hasUnresolvedFlagsAfter": true,
-"unresolvedFlagCountAfter": 562
+"unresolvedFlagCountAfter": 573
   },
   {
 "walletAddress": "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f",
@@ -65,9 +65,9 @@
 "accountingAssetIdentity": "0xeac30ed8609f564ae65c809c4bf42db2ff426d2c",
 "accountingFamilyIdentity": "FAMILY:ETH",
 "assetSymbol": "AMANWETH",
-"currentQuantity": 3.0685431458604806,
+"currentQuantity": 3.068981347069372,
 "coveredQuantity": 3.06,
-"uncoveredQuantity": 0.00854314586048055,
+"uncoveredQuantity": 0.008981347069371814,
 "normalizedType": "LENDING_DEPOSIT",
 "protocolName": null,
 "txHash": "0x3b8592a7465ce33bd64b266e11d1f665954cc3735be6e1590dffd226ac8664bd",
@@ -82,9 +82,9 @@
 "accountingAssetIdentity": "NATIVE:ARBITRUM",
 "accountingFamilyIdentity": "FAMILY:ETH",
 "assetSymbol": "ETH",
-"currentQuantity": 0.01801773931333864,
+"currentQuantity": 0.017999233483578642,
 "coveredQuantity": 0.01358434690397287,
-"uncoveredQuantity": 0.004433392409365772,
+"uncoveredQuantity": 0.004414886579605773,
 "normalizedType": "SWAP",
 "protocolName": "Velora/ParaSwap",
 "txHash": "0x101c297d1a67fc0a30fc96c1aa5cc8786d630bbb00d274c9dc7bbced4c6dccd7",
@@ -108,7 +108,7 @@
 "basisEffect": "GAS_ONLY",
 "hasIncompleteHistoryAfter": true,
 "hasUnresolvedFlagsAfter": true,
-"unresolvedFlagCountAfter": 562
+"unresolvedFlagCountAfter": 573
   }
 ]
 ```

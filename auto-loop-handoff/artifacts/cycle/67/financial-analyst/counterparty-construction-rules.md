@@ -48,16 +48,16 @@ These fields are complementary. They are not substitutes for one another.
 | Type | Missing `counterpartyAddress` rows | Construction rule needed |
 | --- | ---: | --- |
 | SWAP | 268 | Use interacted router/aggregator contract from raw tx as row-local counterparty. |
-| EXTERNAL_TRANSFER_IN | 186 | Use unique external sender from transfer evidence; do not synthesize same-wallet peers. |
+| EXTERNAL_TRANSFER_IN | 187 | Use unique external sender from transfer evidence; do not synthesize same-wallet peers. |
 | BRIDGE_OUT | 138 | Use source bridge contract as counterparty; pair lifecycle with `matchedCounterparty`. |
 | EXTERNAL_TRANSFER_OUT | 127 | Use unique external recipient from transfer evidence. |
-| BRIDGE_IN | 117 | Use destination settlement contract when unique; pair lifecycle with the source row. |
+| BRIDGE_IN | 116 | Use destination settlement contract when unique; pair lifecycle with the source row. |
 | LP_ENTRY | 90 | Use pool/position manager contract, not the LP token itself. |
 | LENDING_DEPOSIT | 87 | Use lending pool/vault contract proven by the interacted address or receipt token. |
 | LP_EXIT | 62 | Use pool/position manager contract, then allocate basis from the carried LP position. |
 | LENDING_WITHDRAW | 44 | Use lending pool/vault contract proven by the interacted address or receipt token. |
-| VAULT_WITHDRAW | 26 | Use vault contract proven by interacted address. |
 | VAULT_DEPOSIT | 26 | Use vault contract proven by interacted address. |
+| VAULT_WITHDRAW | 26 | Use vault contract proven by interacted address. |
 | BORROW | 21 | Use debt/pool contract when selector plus debt markers prove the protocol. |
 | REPAY | 16 | Use debt/pool contract when selector plus debt markers prove the protocol. |
 | STAKING_DEPOSIT | 6 | Use staking contract; keep continuity in family carry. |
@@ -98,9 +98,19 @@ These fields are complementary. They are not substitutes for one another.
     "role": "TRANSFER",
     "assetSymbol": "USDC",
     "quantityDelta": {
-      "$numberDecimal": "1006.08101"
+      "$numberDecimal": "975.179422"
     },
     "unitPriceUsd": null
+  },
+  {
+    "role": "BUY",
+    "assetSymbol": "USDC",
+    "quantityDelta": {
+      "$numberDecimal": "30.901588"
+    },
+    "unitPriceUsd": {
+      "$numberDecimal": "1"
+    }
   },
   {
     "role": "FEE",

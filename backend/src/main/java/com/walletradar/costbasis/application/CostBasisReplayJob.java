@@ -132,12 +132,13 @@ public class CostBasisReplayJob {
                         gateSnapshot.needsReviewCount()
                 );
                 log.info(
-                        "Costbasis replay gate blocked: sessionId={}, avcoReady={}, pendingStat={}, pendingPrice={}, pendingClarification={}, blockingNeedsReview={}, excludedNeedsReview={}, unresolvedPrice={}",
+                        "Costbasis replay gate blocked: sessionId={}, avcoReady={}, pendingStat={}, pendingPrice={}, pendingClarification={}, pendingReclassification={}, blockingNeedsReview={}, excludedNeedsReview={}, unresolvedPrice={}",
                         sessionId,
                         gateSnapshot.avcoReady(),
                         pendingStatCount,
                         gateSnapshot.pendingPriceCount(),
                         gateSnapshot.pendingClarificationCount(),
+                        gateSnapshot.pendingReclassificationCount(),
                         gateSnapshot.needsReviewCount(),
                         gateSnapshot.excludedNeedsReviewCount(),
                         gateSnapshot.unresolvedPriceCount()

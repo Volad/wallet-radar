@@ -185,6 +185,7 @@ public class ReplayFlowSupport {
         copy.setProtocolVersion(transaction.getProtocolVersion());
         copy.setCorrelationId(transaction.getCorrelationId());
         copy.setMatchedCounterparty(transaction.getMatchedCounterparty());
+        copy.setCounterpartyAddress(transaction.getCounterpartyAddress());
         copy.setContinuityCandidate(transaction.getContinuityCandidate());
         copy.setExcludedFromAccounting(transaction.getExcludedFromAccounting());
         copy.setAccountingExclusionReason(transaction.getAccountingExclusionReason());

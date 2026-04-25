@@ -31,7 +31,7 @@ class ClarificationPolicyServiceTest {
     }
 
     @Test
-    void failureDecisionBecomesNeedsReviewWhenAttemptsExhausted() {
+    void failureDecisionBecomesReclassificationWhenAttemptsExhausted() {
         ClarificationPolicyService service = new ClarificationPolicyService();
         NormalizedTransaction normalizedTransaction = new NormalizedTransaction()
                 .setType(NormalizedTransactionType.SWAP)
@@ -57,7 +57,7 @@ class ClarificationPolicyServiceTest {
                 3,
                 3
         );
-        assertThat(exhausted.status()).isEqualTo(NormalizedTransactionStatus.NEEDS_REVIEW);
+        assertThat(exhausted.status()).isEqualTo(NormalizedTransactionStatus.PENDING_RECLASSIFICATION);
         assertThat(exhausted.missingDataReasons()).contains(
                 ClassificationReasonCode.CLARIFICATION_INSUFFICIENT_EVIDENCE.code(),
                 ClassificationReasonCode.CLARIFICATION_ATTEMPTS_EXHAUSTED.code()
@@ -65,7 +65,7 @@ class ClarificationPolicyServiceTest {
     }
 
     @Test
-    void receiptFailureDecisionPreservesStatusAndAppendsReason() {
+    void receiptFailureDecisionReclassifiesAfterAttemptsExhausted() {
         ClarificationPolicyService service = new ClarificationPolicyService();
         NormalizedTransaction normalizedTransaction = new NormalizedTransaction()
                 .setType(NormalizedTransactionType.UNKNOWN)
@@ -74,13 +74,17 @@ class ClarificationPolicyServiceTest {
 
         ClarificationDecision decision = service.nextReceiptFailureDecision(
                 normalizedTransaction,
-                ClassificationReasonCode.CLARIFICATION_FULL_RECEIPT_UNAVAILABLE.code()
+                rawWithoutReceiptEvidence(),
+                ClassificationReasonCode.CLARIFICATION_FULL_RECEIPT_UNAVAILABLE.code(),
+                1,
+                1
         );
 
-        assertThat(decision.status()).isEqualTo(NormalizedTransactionStatus.NEEDS_REVIEW);
+        assertThat(decision.status()).isEqualTo(NormalizedTransactionStatus.PENDING_RECLASSIFICATION);
         assertThat(decision.missingDataReasons()).containsExactly(
                 ClassificationReasonCode.CLASSIFICATION_FAILED.code(),
-                ClassificationReasonCode.CLARIFICATION_FULL_RECEIPT_UNAVAILABLE.code()
+                ClassificationReasonCode.CLARIFICATION_FULL_RECEIPT_UNAVAILABLE.code(),
+                ClassificationReasonCode.CLARIFICATION_ATTEMPTS_EXHAUSTED.code()
         );
     }
 

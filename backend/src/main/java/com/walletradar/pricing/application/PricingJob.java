@@ -98,10 +98,11 @@ public class PricingJob {
                     }
                     PricingDataGateSnapshot snapshot = pricingDataGateService.snapshot();
                     log.info(
-                            "Pricing data gate snapshot: avcoReady={}, pendingPrice={}, pendingClarification={}, blockingNeedsReview={}, excludedNeedsReview={}, unresolvedPrice={}",
+                            "Pricing data gate snapshot: avcoReady={}, pendingPrice={}, pendingClarification={}, pendingReclassification={}, blockingNeedsReview={}, excludedNeedsReview={}, unresolvedPrice={}",
                             snapshot.avcoReady(),
                             snapshot.pendingPriceCount(),
                             snapshot.pendingClarificationCount(),
+                            snapshot.pendingReclassificationCount(),
                             snapshot.needsReviewCount(),
                             snapshot.excludedNeedsReviewCount(),
                             snapshot.unresolvedPriceCount()

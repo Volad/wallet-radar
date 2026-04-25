@@ -4,6 +4,7 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
 import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassificationResult;
+import com.walletradar.ingestion.pipeline.clarification.CounterpartyEnrichmentService;
 import com.walletradar.ingestion.pipeline.clarification.ProtocolNameEnrichmentService;
 import com.walletradar.ingestion.pipeline.clarification.RelatedLifecycleDiscoveryService;
 import com.walletradar.ingestion.pipeline.onchain.OnChainNormalizedTransactionBuilder;
@@ -25,25 +26,29 @@ final class ClarificationReclassificationHandler {
     private final RelatedLifecycleDiscoveryService relatedLifecycleDiscoveryService;
     @Nullable
     private final ProtocolNameEnrichmentService protocolNameEnrichmentService;
+    @Nullable
+    private final CounterpartyEnrichmentService counterpartyEnrichmentService;
 
     @Autowired
     ClarificationReclassificationHandler(
             OnChainNormalizedTransactionBuilder builder,
             NormalizedTransactionRepository normalizedTransactionRepository,
             @Nullable RelatedLifecycleDiscoveryService relatedLifecycleDiscoveryService,
-            @Nullable ProtocolNameEnrichmentService protocolNameEnrichmentService
+            @Nullable ProtocolNameEnrichmentService protocolNameEnrichmentService,
+            @Nullable CounterpartyEnrichmentService counterpartyEnrichmentService
     ) {
         this.builder = builder;
         this.normalizedTransactionRepository = normalizedTransactionRepository;
         this.relatedLifecycleDiscoveryService = relatedLifecycleDiscoveryService;
         this.protocolNameEnrichmentService = protocolNameEnrichmentService;
+        this.counterpartyEnrichmentService = counterpartyEnrichmentService;
     }
 
     ClarificationReclassificationHandler(
             OnChainNormalizedTransactionBuilder builder,
             NormalizedTransactionRepository normalizedTransactionRepository
     ) {
-        this(builder, normalizedTransactionRepository, null, null);
+        this(builder, normalizedTransactionRepository, null, null, null);
     }
 
     ClarificationReclassificationHandler(
@@ -51,7 +56,7 @@ final class ClarificationReclassificationHandler {
             NormalizedTransactionRepository normalizedTransactionRepository,
             @Nullable RelatedLifecycleDiscoveryService relatedLifecycleDiscoveryService
     ) {
-        this(builder, normalizedTransactionRepository, relatedLifecycleDiscoveryService, null);
+        this(builder, normalizedTransactionRepository, relatedLifecycleDiscoveryService, null, null);
     }
 
     NormalizedTransaction persistReclassification(
@@ -66,6 +71,8 @@ final class ClarificationReclassificationHandler {
                 classificationResult,
                 now
         );
+        enrichProtocolName(reclassified, rawTransaction, now);
+        enrichCounterparty(reclassified, rawTransaction, now);
         return normalizedTransactionRepository.save(reclassified);
     }
 
@@ -81,9 +88,9 @@ final class ClarificationReclassificationHandler {
                 classificationResult,
                 now
         );
-        NormalizedTransaction saved = normalizedTransactionRepository.save(clarified);
-        enrichProtocolName(saved, rawTransaction, now);
-        return saved;
+        enrichProtocolName(clarified, rawTransaction, now);
+        enrichCounterparty(clarified, rawTransaction, now);
+        return normalizedTransactionRepository.save(clarified);
     }
 
     NormalizedTransaction persistReceiptClarification(
@@ -92,17 +99,19 @@ final class ClarificationReclassificationHandler {
             OnChainClassificationResult classificationResult,
             Instant now
     ) {
-        NormalizedTransaction reclassified = persistReclassification(
+        NormalizedTransaction reclassified = builder.rebuildAfterReclassification(
                 normalizedTransaction,
                 rawTransaction,
                 classificationResult,
                 now
         );
         enrichProtocolName(reclassified, rawTransaction, now);
+        enrichCounterparty(reclassified, rawTransaction, now);
+        NormalizedTransaction saved = normalizedTransactionRepository.save(reclassified);
         if (relatedLifecycleDiscoveryService != null) {
             relatedLifecycleDiscoveryService.discoverAndNormalize(rawTransaction, classificationResult);
         }
-        return reclassified;
+        return saved;
     }
 
     private void enrichProtocolName(
@@ -113,6 +122,17 @@ final class ClarificationReclassificationHandler {
         if (protocolNameEnrichmentService == null) {
             return;
         }
-        protocolNameEnrichmentService.enrich(normalizedTransaction, rawTransaction, now);
+        protocolNameEnrichmentService.enrichInPlace(normalizedTransaction, rawTransaction, now);
+    }
+
+    private void enrichCounterparty(
+            NormalizedTransaction normalizedTransaction,
+            RawTransaction rawTransaction,
+            Instant now
+    ) {
+        if (counterpartyEnrichmentService == null) {
+            return;
+        }
+        counterpartyEnrichmentService.enrichInPlace(normalizedTransaction, rawTransaction, now);
     }
 }

@@ -58,7 +58,10 @@ Manual compensating transactions may be **positive or negative** (reducing quant
 - **Public/free data sources only** — no dependency on paid indexers (Alchemy Growth, The Graph paid, Moralis paid)
 - **Pricing sources** — event-local tx pricing first, Binance market data as the primary external source for listed assets, CoinGecko as bounded historical fallback only
 - **Transaction workflow** — status-driven `normalized_transactions` pipeline where only receipt-clarifiable rows enter `PENDING_CLARIFICATION`; low-confidence rows without receipt gaps proceed directly to pricing or review
-- **Bybit source** — `external_ledger_raw` is already loaded in MongoDB and is sufficient for the current milestone; new interactive import UX is not required now
+- **Bybit source** — current v3 runtime primarily uses immutable `integration_raw_events`
+  plus rebuildable `bybit_extracted_events`; `external_ledger_raw` may be absent
+  in fresh environments and must not be assumed as loaded unless the source
+  contract explicitly restores it. New interactive import UX is not required now.
 - **2-year backfill window** — transactions before this window require manual entry
 - **EVM ingestion source (MVP v2)** — explorer-first (Etherscan V2-compatible API per network) with `page/offset` fetch and selective `getReceipt` enrichment for ambiguous transactions.
 - **Explorer paging default** — use `offset=5000` by default (configurable), with provider-aware fallback and retry/backoff on rate-limit/timeout.
@@ -97,7 +100,9 @@ Manual compensating transactions may be **positive or negative** (reducing quant
 | Solana | SVM | `SOLANA` | Out of scope for MVP v2 |
 
 Bybit scope:
-- `external_ledger_raw` is an in-scope source of truth for accounting reconstruction
+- `integration_raw_events` and `bybit_extracted_events` are the active v3 Bybit
+  acquisition/rebuild source; `external_ledger_raw` remains a legacy/audit source
+  only when present
 - only Bybit is in scope for CEX data in v3
 
 ---

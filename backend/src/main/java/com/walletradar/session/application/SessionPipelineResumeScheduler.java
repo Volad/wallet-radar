@@ -2,8 +2,8 @@ package com.walletradar.session.application;
 
 import com.walletradar.domain.event.BybitNormalizationRequestedEvent;
 import com.walletradar.domain.event.LinkingRequestedEvent;
-import com.walletradar.domain.event.OnChainClarificationCompletedEvent;
 import com.walletradar.domain.event.OnChainNormalizationCompletedEvent;
+import com.walletradar.domain.event.OnChainReclassificationRequestedEvent;
 import com.walletradar.domain.event.PricingCompletedEvent;
 import com.walletradar.domain.event.PricingRequestedEvent;
 import com.walletradar.domain.event.SessionBackfillCompletedEvent;
@@ -134,6 +134,14 @@ public class SessionPipelineResumeScheduler {
                     new OnChainNormalizationCompletedEvent(session.getId(), 0, "resume-watchdog")
             );
         }
+        boolean pendingReclassification = hasPendingReclassification(addresses);
+        if (pendingReclassification) {
+            return new ResumeAction(
+                    UserSession.PipelineStage.ON_CHAIN_RECLASSIFICATION,
+                    "pending-reclassification",
+                    new OnChainReclassificationRequestedEvent(session.getId(), "resume-watchdog")
+            );
+        }
         boolean pendingBybit = hasPendingBybitWork(session);
         if (pendingBybit) {
             return new ResumeAction(
@@ -173,6 +181,7 @@ public class SessionPipelineResumeScheduler {
                 pendingRaw,
                 hasNormalized,
                 pendingClarification,
+                pendingReclassification,
                 pendingBybit,
                 pendingLinking,
                 pendingPrice,
@@ -253,12 +262,20 @@ public class SessionPipelineResumeScheduler {
     }
 
     private boolean hasPendingClarification(List<String> addresses) {
+        return hasPendingStatus(addresses, "PENDING_CLARIFICATION");
+    }
+
+    private boolean hasPendingReclassification(List<String> addresses) {
+        return hasPendingStatus(addresses, "PENDING_RECLASSIFICATION");
+    }
+
+    private boolean hasPendingStatus(List<String> addresses, String status) {
         if (addresses.isEmpty()) {
             return false;
         }
         Query query = new Query(new Criteria().andOperator(
                 Criteria.where("walletAddress").in(addresses),
-                Criteria.where("status").is("PENDING_CLARIFICATION")
+                Criteria.where("status").is(status)
         ));
         return mongoOperations.exists(query, NormalizedTransaction.class);
     }
@@ -320,6 +337,7 @@ public class SessionPipelineResumeScheduler {
             boolean pendingRaw,
             boolean hasNormalized,
             boolean pendingClarification,
+            boolean pendingReclassification,
             boolean pendingBybit,
             boolean pendingLinking,
             boolean pendingPrice,
@@ -336,6 +354,7 @@ public class SessionPipelineResumeScheduler {
         if (pendingRaw
                 || !hasNormalized
                 || pendingClarification
+                || pendingReclassification
                 || pendingBybit
                 || pendingLinking
                 || pendingPrice

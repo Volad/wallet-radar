@@ -63,7 +63,13 @@ class SourceSyncPlannerTest {
         );
 
         when(syncStatusRepository.save(any(SyncStatus.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
+                .thenAnswer(invocation -> {
+                    SyncStatus saved = invocation.getArgument(0);
+                    if (saved.getId() == null) {
+                        saved.setId("generated-sync-status-id");
+                    }
+                    return saved;
+                });
     }
 
     @Test
@@ -156,6 +162,36 @@ class SourceSyncPlannerTest {
         assertThat(integration.getStatus()).isEqualTo(UserSession.IntegrationStatus.BACKFILLING);
         assertThat(integration.getSyncState()).isNotNull();
         assertThat(integration.getSyncState().getTotalSegments()).isZero();
+
+        ArgumentCaptor<SyncStatus> captor = ArgumentCaptor.forClass(SyncStatus.class);
+        verify(syncStatusRepository).save(captor.capture());
+        SyncStatus saved = captor.getValue();
+        assertThat(saved.getWindowFromTime()).isEqualTo(Instant.parse("2026-04-10T09:00:00Z"));
+        assertThat(saved.getWindowToTime()).isEqualTo(Instant.parse("2026-04-12T10:30:45Z"));
+        assertThat(saved.getSyncBannerMessage()).isEqualTo("Refresh queued");
+    }
+
+    @Test
+    @DisplayName("refresh creates integration sync window from integration checkpoint when sync_status is absent")
+    void planRefresh_createsIntegrationWindowWithoutLegacySyncStatusRow() {
+        UserSession session = sessionWithIntegration();
+        UserSession.SessionIntegration integration = session.getIntegrations().get(0);
+        integration.setLastSyncAt(Instant.parse("2026-04-10T09:00:00Z"));
+
+        when(syncStatusRepository.findLatestByIntegrationId(integration.getIntegrationId()))
+                .thenReturn(Optional.empty());
+        when(backfillSegmentRepository.findByIntegrationIdOrderByUpdatedAtAsc(integration.getIntegrationId()))
+                .thenReturn(List.of());
+
+        SourceSyncPlanner.PlanResult result = sourceSyncPlanner.planRefresh(
+                session,
+                Instant.parse("2026-04-12T10:30:45Z")
+        );
+
+        assertThat(result.scheduledTargets()).isEqualTo(1);
+        assertThat(result.skippedTargets()).isZero();
+        assertThat(result.scheduledIntegrationSyncStatusIds()).hasSize(1);
+        assertThat(integration.getStatus()).isEqualTo(UserSession.IntegrationStatus.BACKFILLING);
 
         ArgumentCaptor<SyncStatus> captor = ArgumentCaptor.forClass(SyncStatus.class);
         verify(syncStatusRepository).save(captor.capture());

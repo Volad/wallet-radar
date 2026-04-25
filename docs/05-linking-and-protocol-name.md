@@ -81,6 +81,29 @@ This layer is expressed through:
 - `matchedCounterparty`
 - `continuityCandidate`
 
+Cycle 79 row-local counterparty rule:
+
+- `counterpartyAddress` is not a lifecycle-pair field
+- for swaps it is the row-local router/pool/aggregator contract
+- for bridge starts it is the origin bridge endpoint or routed bridge helper
+- for bridge settlements it is the destination bridge endpoint or settlement
+  contract when recoverable
+- for lending, vault, staking, and LP rows it is the row-local market, vault,
+  staking, pool, or position-manager contract
+- for true external transfers it is the unique direct sender/recipient when
+  recoverable
+- `matchedCounterparty` remains the remote lifecycle peer
+- `correlationId` remains the lifecycle grouping key
+
+Cycle 79 protocol-name rule:
+
+- `protocolName` is required metadata whenever raw transaction evidence,
+  registry evidence, selector evidence, or lifecycle evidence proves protocol
+  identity
+- `protocolName` must not become a hidden accounting rule
+- missing protocol identity on deterministic rows is an enrichment defect, not
+  an AVCO computation defect
+
 Wallet `<-> Bybit` rule:
 
 - keep canonical `type` external: `EXTERNAL_TRANSFER_OUT` / `EXTERNAL_TRANSFER_IN`
