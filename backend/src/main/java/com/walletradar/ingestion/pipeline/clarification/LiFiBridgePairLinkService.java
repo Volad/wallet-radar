@@ -39,6 +39,11 @@ import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 /**
  * Materializes LI.FI / Jumper destination-side bridge pairs once official receiving-tx evidence is available.
@@ -51,7 +56,9 @@ public class LiFiBridgePairLinkService {
     private static final BigDecimal ROUTED_BRIDGE_FALLBACK_MAX_RELATIVE_QTY_DIFF = new BigDecimal("0.15");
     private static final Duration ROUTED_BRIDGE_GENERIC_MAX_TIME_DELTA = Duration.ofSeconds(90);
     private static final BigDecimal ROUTED_BRIDGE_GENERIC_MAX_RELATIVE_QTY_DIFF = new BigDecimal("0.02");
+    private static final Duration STATUS_MISS_RETRY_DELAY = Duration.ofHours(6);
     private static final int ROUTED_BRIDGE_FALLBACK_CANDIDATE_LIMIT = 12;
+    private static final int STATUS_LOOKUP_LANES = 4;
     private static final Set<String> USD_STABLE_SYMBOLS = Set.of(
             "USDC",
             "USDT",
@@ -85,6 +92,7 @@ public class LiFiBridgePairLinkService {
 
     public int reconcileOutstandingSources(int batchSize) {
         int changed = 0;
+        List<SourceContext> statusLookupCandidates = new ArrayList<>();
         for (NormalizedTransaction candidate : pendingLiFiBridgeSourceQueryService.loadNextBatch(batchSize)) {
             if (candidate == null || candidate.getId() == null) {
                 continue;
@@ -93,7 +101,15 @@ public class LiFiBridgePairLinkService {
             if (rawOptional.isEmpty()) {
                 continue;
             }
-            if (linkInternal(rawOptional.get(), candidate)) {
+            RawTransaction rawTransaction = rawOptional.get();
+            if (linkInternal(rawTransaction, candidate, false)) {
+                changed++;
+            } else if (needsStatusLookup(rawTransaction, candidate)) {
+                statusLookupCandidates.add(new SourceContext(rawTransaction, candidate));
+            }
+        }
+        for (SourceContext context : fetchStatuses(statusLookupCandidates)) {
+            if (linkInternal(context.rawTransaction(), context.normalizedTransaction(), false)) {
                 changed++;
             }
         }
@@ -101,10 +117,14 @@ public class LiFiBridgePairLinkService {
     }
 
     public void link(@Nullable RawTransaction rawTransaction, @Nullable NormalizedTransaction normalizedTransaction) {
-        linkInternal(rawTransaction, normalizedTransaction);
+        linkInternal(rawTransaction, normalizedTransaction, true);
     }
 
-    private boolean linkInternal(@Nullable RawTransaction rawTransaction, @Nullable NormalizedTransaction normalizedTransaction) {
+    private boolean linkInternal(
+            @Nullable RawTransaction rawTransaction,
+            @Nullable NormalizedTransaction normalizedTransaction,
+            boolean allowStatusLookup
+    ) {
         if (rawTransaction == null || normalizedTransaction == null) {
             return false;
         }
@@ -114,7 +134,7 @@ public class LiFiBridgePairLinkService {
 
         Optional<NormalizedTransaction> pairedDestination = Optional.empty();
         if (isLiFiSourceCandidate(rawTransaction, normalizedTransaction)) {
-            pairedDestination = seedSourceCounterparty(rawTransaction, normalizedTransaction);
+            pairedDestination = seedSourceCounterparty(rawTransaction, normalizedTransaction, allowStatusLookup);
         }
 
         String anchorBefore = pairingState(normalizedTransaction);
@@ -141,15 +161,25 @@ public class LiFiBridgePairLinkService {
 
     private Optional<NormalizedTransaction> seedSourceCounterparty(
             RawTransaction rawTransaction,
-            NormalizedTransaction source
+            NormalizedTransaction source,
+            boolean allowStatusLookup
     ) {
         Optional<LiFiBridgeStatus> statusOptional = readExistingStatus(rawTransaction);
         if (statusOptional.isEmpty()) {
+            Optional<NormalizedTransaction> localDestination = resolveRoutedBridgeFallbackDestination(rawTransaction, source);
+            if (localDestination.isPresent()) {
+                return localDestination;
+            }
+        }
+        if (statusOptional.isEmpty() && allowStatusLookup && !isStatusMissRetryDeferred(rawTransaction, Instant.now())) {
             statusOptional = liFiStatusGateway.fetchBridgeStatus(source.getTxHash());
             statusOptional.ifPresent(status -> persistStatusEvidence(rawTransaction, status));
+            if (statusOptional.isEmpty()) {
+                persistStatusMiss(rawTransaction, Instant.now());
+            }
         }
         if (statusOptional.isEmpty()) {
-            return resolveRoutedBridgeFallbackDestination(rawTransaction, source);
+            return Optional.empty();
         }
 
         LiFiBridgeStatus status = statusOptional.get();
@@ -170,12 +200,59 @@ public class LiFiBridgePairLinkService {
         if (existingDestination.isPresent()) {
             return existingDestination;
         }
+        if (!allowStatusLookup) {
+            seedSourceAnchorFromStatus(source, status);
+            return Optional.empty();
+        }
         Optional<NormalizedTransaction> discoveredDestination = liFiReceivingTransactionDiscoveryService.findOrDiscover(status);
         if (discoveredDestination.isPresent()) {
             return discoveredDestination;
         }
         seedSourceAnchorFromStatus(source, status);
         return Optional.empty();
+    }
+
+    private boolean needsStatusLookup(RawTransaction rawTransaction, NormalizedTransaction normalizedTransaction) {
+        return isLiFiSourceCandidate(rawTransaction, normalizedTransaction)
+                && readExistingStatus(rawTransaction).isEmpty()
+                && !isStatusMissRetryDeferred(rawTransaction, Instant.now());
+    }
+
+    private List<SourceContext> fetchStatuses(List<SourceContext> contexts) {
+        if (contexts == null || contexts.isEmpty()) {
+            return List.of();
+        }
+        List<Callable<StatusLookupResult>> tasks = contexts.stream()
+                .map(context -> (Callable<StatusLookupResult>) () -> new StatusLookupResult(
+                        context,
+                        liFiStatusGateway.fetchBridgeStatus(context.normalizedTransaction().getTxHash())
+                ))
+                .toList();
+        int lanes = Math.max(1, Math.min(STATUS_LOOKUP_LANES, tasks.size()));
+        ExecutorService executor = Executors.newFixedThreadPool(lanes);
+        ArrayList<SourceContext> withStatus = new ArrayList<>();
+        try {
+            List<Future<StatusLookupResult>> futures = executor.invokeAll(tasks);
+            for (Future<StatusLookupResult> future : futures) {
+                try {
+                    StatusLookupResult result = future.get();
+                    if (result.status().isPresent()) {
+                        persistStatusEvidence(result.context().rawTransaction(), result.status().orElseThrow());
+                        withStatus.add(result.context());
+                    } else {
+                        persistStatusMiss(result.context().rawTransaction(), Instant.now());
+                    }
+                } catch (ExecutionException ignored) {
+                    // Local matching already ran; leave the row unresolved for a later retry.
+                }
+            }
+            return List.copyOf(withStatus);
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            return List.of();
+        } finally {
+            executor.shutdownNow();
+        }
     }
 
     private void materializePair(NormalizedTransaction source, NormalizedTransaction destination) {
@@ -696,9 +773,53 @@ public class LiFiBridgePairLinkService {
         return LiFiBridgeStatus.fromDocument(rawTransaction.getClarificationEvidence().get("protocolStatus", Document.class));
     }
 
+    private boolean isStatusMissRetryDeferred(RawTransaction rawTransaction, Instant now) {
+        Document status = rawTransaction == null || rawTransaction.getClarificationEvidence() == null
+                ? null
+                : rawTransaction.getClarificationEvidence().get("protocolStatus", Document.class);
+        if (status == null || !"LIFI".equalsIgnoreCase(status.getString("provider"))) {
+            return false;
+        }
+        String apiStatus = status.getString("apiStatus");
+        if (!"UNAVAILABLE".equalsIgnoreCase(apiStatus)) {
+            return false;
+        }
+        Instant nextRetryAt = parseInstant(status.get("nextRetryAt"));
+        return nextRetryAt != null && nextRetryAt.isAfter(now);
+    }
+
     private void persistStatusEvidence(RawTransaction rawTransaction, LiFiBridgeStatus status) {
         rawTransactionClarificationEnricher.mergeProtocolStatus(rawTransaction, status.toDocument());
         rawTransactionRepository.save(rawTransaction);
+    }
+
+    private void persistStatusMiss(RawTransaction rawTransaction, Instant now) {
+        if (rawTransaction == null) {
+            return;
+        }
+        Document status = new Document("provider", "LIFI")
+                .append("apiStatus", "UNAVAILABLE")
+                .append("checkedAt", now.toString())
+                .append("nextRetryAt", now.plus(STATUS_MISS_RETRY_DELAY).toString());
+        rawTransactionClarificationEnricher.mergeProtocolStatus(rawTransaction, status);
+        rawTransactionRepository.save(rawTransaction);
+    }
+
+    private Instant parseInstant(Object value) {
+        if (value instanceof Instant instant) {
+            return instant;
+        }
+        if (value instanceof java.util.Date date) {
+            return date.toInstant();
+        }
+        if (value instanceof String text && !text.isBlank()) {
+            try {
+                return Instant.parse(text.trim());
+            } catch (RuntimeException ignored) {
+                return null;
+            }
+        }
+        return null;
     }
 
     private void seedSourceAnchorFromStatus(
@@ -889,5 +1010,17 @@ public class LiFiBridgePairLinkService {
             }
         }
         return state.toString();
+    }
+
+    private record SourceContext(
+            RawTransaction rawTransaction,
+            NormalizedTransaction normalizedTransaction
+    ) {
+    }
+
+    private record StatusLookupResult(
+            SourceContext context,
+            Optional<LiFiBridgeStatus> status
+    ) {
     }
 }

@@ -93,6 +93,9 @@ interface TokenFamilyRow {
   readonly walletIds: ReadonlyArray<WalletId>;
   readonly currentValueUsd: number;
   readonly totalCostBasisUsd: number;
+  readonly valuationModel: string | null;
+  readonly valuationUnderlyingSymbol: string | null;
+  readonly unsupportedValuationReason: string | null;
 }
 
 const TRANSACTION_TYPES_BY_ID = new Set<TransactionType>([
@@ -170,6 +173,8 @@ const PRICE_SOURCES = new Set<PriceSource>([
   'ECB',
   'EXECUTION',
   'WRAPPER',
+  'AAVE_INDEX_ACCRUING',
+  'PROTOCOL_SNAPSHOT',
 ]);
 const BRIDGE_STATUSES = new Set<SessionBridgeStatus>(['BRIDGE_OUT', 'BRIDGE_IN', 'MATCHED', 'REVIEW']);
 
@@ -520,6 +525,9 @@ export class DashboardComponent {
       networkIds: Set<NetworkId>;
       walletIds: Set<WalletId>;
       issue: IssueCode;
+      valuationModel: string | null;
+      valuationUnderlyingSymbol: string | null;
+      unsupportedValuationReason: string | null;
     }>();
 
     for (const position of this.filteredTokenPositions()) {
@@ -545,6 +553,9 @@ export class DashboardComponent {
           networkIds: new Set([position.networkId]),
           walletIds: new Set([position.walletId]),
           issue: position.issue,
+          valuationModel: position.valuationModel,
+          valuationUnderlyingSymbol: position.valuationUnderlyingSymbol,
+          unsupportedValuationReason: position.unsupportedValuationReason,
         });
         continue;
       }
@@ -563,6 +574,9 @@ export class DashboardComponent {
       existing.networkIds.add(position.networkId);
       existing.walletIds.add(position.walletId);
       existing.issue = this.mergeIssueCode(existing.issue, position.issue);
+      existing.valuationModel = existing.valuationModel ?? position.valuationModel;
+      existing.valuationUnderlyingSymbol = existing.valuationUnderlyingSymbol ?? position.valuationUnderlyingSymbol;
+      existing.unsupportedValuationReason = existing.unsupportedValuationReason ?? position.unsupportedValuationReason;
     }
 
     return [...grouped.values()]
@@ -592,6 +606,9 @@ export class DashboardComponent {
           walletIds: [...group.walletIds],
           currentValueUsd: group.currentValueUsd,
           totalCostBasisUsd: group.totalCostBasisUsd,
+          valuationModel: group.valuationModel,
+          valuationUnderlyingSymbol: group.valuationUnderlyingSymbol,
+          unsupportedValuationReason: group.unsupportedValuationReason,
         };
       })
       .sort((left, right) => right.currentValueUsd - left.currentValueUsd);
@@ -1031,6 +1048,8 @@ export class DashboardComponent {
         return 'History flags: current balance is covered, but the bucket still carries incomplete or unresolved history flags.';
       case 'missing_replay_point':
         return 'Missing replay point: live balance exists, but no replay state was materialized for this bucket.';
+      case 'unsupported_protocol_valuation':
+        return 'Unsupported protocol valuation: backend has no current protocol snapshot for this position.';
       case 'missing_price':
         return 'Missing price.';
       case 'stale_price':
@@ -1050,7 +1069,10 @@ export class DashboardComponent {
     const freshness = asset.stalenessSeconds === null ? 'unknown age' : `${this.formatDuration(asset.stalenessSeconds)} old`;
     const mode = asset.isLiveQuote ? 'current quote' : 'non-live valuation';
     const issue = asset.priceIssue === null ? '' : ` ${this.issueTitle(asset.priceIssue)}`;
-    return `Exact price: ${this.formatUsdFull(asset.priceUsd)}. Loaded: ${pricedAt}. Source: ${source}. ${freshness}, ${mode}.${issue}`;
+    const model = asset.valuationModel === null ? '' : ` Valuation: ${asset.valuationModel}.`;
+    const underlying = asset.valuationUnderlyingSymbol === null ? '' : ` Underlying: ${asset.valuationUnderlyingSymbol}.`;
+    const unsupported = asset.unsupportedValuationReason === null ? '' : ` ${asset.unsupportedValuationReason}.`;
+    return `Exact price: ${this.formatUsdFull(asset.priceUsd)}. Loaded: ${pricedAt}. Source: ${source}. ${freshness}, ${mode}.${issue}${model}${underlying}${unsupported}`;
   }
 
   private formatDuration(seconds: number): string {
@@ -1380,7 +1402,10 @@ export class DashboardComponent {
       issue === 'yield_accrual' ||
       issue === 'coverage_gap' ||
       issue === 'history_flags' ||
-      issue === 'missing_replay_point'
+      issue === 'missing_replay_point' ||
+      issue === 'stale_price' ||
+      issue === 'historical_price_fallback' ||
+      issue === 'unsupported_protocol_valuation'
     ) {
       return issue;
     }
@@ -1431,6 +1456,8 @@ export class DashboardComponent {
         return 'Pricing';
       case 'ACCOUNTING_REPLAY':
         return 'Cost basis';
+      case 'PORTFOLIO_SNAPSHOT_REFRESH':
+        return 'Portfolio snapshot';
       case 'BACKFILL':
       default:
         return 'Backfill';
@@ -1536,6 +1563,7 @@ export class DashboardComponent {
       case 'yield_accrual':
         return 1;
       case 'missing_price':
+      case 'unsupported_protocol_valuation':
         return 3;
       case 'stale_price':
         return 2;

@@ -14,7 +14,6 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -22,18 +21,15 @@ import static org.mockito.Mockito.when;
 class OnChainClarificationJobTest {
 
     @Test
-    @DisplayName("clarification job drains metadata and full receipt passes when both are enabled")
-    void clarificationJobDrainsMetadataAndFullReceiptPassesWhenBothAreEnabled() {
+    @DisplayName("clarification job drains unified full-receipt clarification once")
+    void clarificationJobDrainsUnifiedFullReceiptClarificationOnce() {
         OnChainClarificationProperties properties = new OnChainClarificationProperties();
         properties.setEnabled(true);
         properties.setThreads(1);
         properties.getFullReceipt().setEnabled(true);
 
         OnChainClarificationService metadataService = mock(OnChainClarificationService.class);
-        OnChainReceiptClarificationService receiptService = mock(OnChainReceiptClarificationService.class);
-        OnChainMetadataEnrichmentService enrichmentService = mock(OnChainMetadataEnrichmentService.class);
         when(metadataService.processNextBatch()).thenReturn(2, 0);
-        when(receiptService.processNextBatch()).thenReturn(3, 0);
         ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
         SessionPipelineActivityService pipelineActivityService = mock(SessionPipelineActivityService.class);
         SessionPipelineStateService pipelineStateService = mock(SessionPipelineStateService.class);
@@ -41,8 +37,6 @@ class OnChainClarificationJobTest {
         OnChainClarificationJob job = new OnChainClarificationJob(
                 properties,
                 metadataService,
-                receiptService,
-                enrichmentService,
                 new ClarificationBatchDrainer(),
                 publisher,
                 pipelineActivityService,
@@ -51,46 +45,8 @@ class OnChainClarificationJobTest {
 
         int processed = job.runClarification();
 
-        assertThat(processed).isEqualTo(5);
+        assertThat(processed).isEqualTo(2);
         verify(metadataService, times(2)).processNextBatch();
-        verify(receiptService, times(2)).processNextBatch();
-        verify(enrichmentService).processNextBatch(properties.getBatchSize());
-    }
-
-    @Test
-    @DisplayName("clarification job drains protocol and counterparty enrichment after metadata passes")
-    void clarificationJobDrainsProtocolAndCounterpartyEnrichmentAfterMetadataPasses() {
-        OnChainClarificationProperties properties = new OnChainClarificationProperties();
-        properties.setEnabled(true);
-        properties.setThreads(1);
-        properties.getFullReceipt().setEnabled(false);
-
-        OnChainClarificationService metadataService = mock(OnChainClarificationService.class);
-        OnChainReceiptClarificationService receiptService = mock(OnChainReceiptClarificationService.class);
-        OnChainMetadataEnrichmentService enrichmentService = mock(OnChainMetadataEnrichmentService.class);
-        when(metadataService.processNextBatch()).thenReturn(1, 0);
-        when(enrichmentService.processNextBatch(properties.getBatchSize())).thenReturn(5, 0);
-        ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
-        SessionPipelineActivityService pipelineActivityService = mock(SessionPipelineActivityService.class);
-        SessionPipelineStateService pipelineStateService = mock(SessionPipelineStateService.class);
-
-        OnChainClarificationJob job = new OnChainClarificationJob(
-                properties,
-                metadataService,
-                receiptService,
-                enrichmentService,
-                new ClarificationBatchDrainer(),
-                publisher,
-                pipelineActivityService,
-                pipelineStateService
-        );
-
-        int processed = job.runClarification();
-
-        assertThat(processed).isEqualTo(6);
-        verify(metadataService, times(2)).processNextBatch();
-        verify(receiptService, never()).processNextBatch();
-        verify(enrichmentService, times(2)).processNextBatch(properties.getBatchSize());
     }
 
     @Test
@@ -102,8 +58,6 @@ class OnChainClarificationJobTest {
         properties.getFullReceipt().setEnabled(false);
 
         OnChainClarificationService metadataService = mock(OnChainClarificationService.class);
-        OnChainReceiptClarificationService receiptService = mock(OnChainReceiptClarificationService.class);
-        OnChainMetadataEnrichmentService enrichmentService = mock(OnChainMetadataEnrichmentService.class);
         when(metadataService.processNextBatch()).thenReturn(4, 0);
         ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
         SessionPipelineActivityService pipelineActivityService = mock(SessionPipelineActivityService.class);
@@ -112,8 +66,6 @@ class OnChainClarificationJobTest {
         OnChainClarificationJob job = new OnChainClarificationJob(
                 properties,
                 metadataService,
-                receiptService,
-                enrichmentService,
                 new ClarificationBatchDrainer(),
                 publisher,
                 pipelineActivityService,
@@ -123,8 +75,6 @@ class OnChainClarificationJobTest {
         job.onOnChainNormalizationCompleted(new OnChainNormalizationCompletedEvent("session-1", 5, "manual"));
 
         verify(metadataService, times(2)).processNextBatch();
-        verify(receiptService, never()).processNextBatch();
-        verify(enrichmentService).processNextBatch(properties.getBatchSize());
     }
 
     @Test
@@ -136,8 +86,6 @@ class OnChainClarificationJobTest {
         properties.getFullReceipt().setEnabled(false);
 
         OnChainClarificationService metadataService = mock(OnChainClarificationService.class);
-        OnChainReceiptClarificationService receiptService = mock(OnChainReceiptClarificationService.class);
-        OnChainMetadataEnrichmentService enrichmentService = mock(OnChainMetadataEnrichmentService.class);
         when(metadataService.processNextBatch()).thenReturn(0);
 
         List<Object> events = new ArrayList<>();
@@ -148,8 +96,6 @@ class OnChainClarificationJobTest {
         OnChainClarificationJob job = new OnChainClarificationJob(
                 properties,
                 metadataService,
-                receiptService,
-                enrichmentService,
                 new ClarificationBatchDrainer(),
                 publisher,
                 pipelineActivityService,

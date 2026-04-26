@@ -101,6 +101,9 @@ export class DashboardDataService {
         networkId: position.networkId,
         walletId: position.walletAddress.toLowerCase(),
         issue: this.toIssueCode(position.issue),
+        valuationModel: position.valuationModel,
+        valuationUnderlyingSymbol: position.valuationUnderlyingSymbol,
+        unsupportedValuationReason: position.unsupportedValuationReason,
       })),
       lpPositions: [],
       lendingPositions: [],
@@ -127,7 +130,8 @@ export class DashboardDataService {
       issue === 'missing_replay_point' ||
       issue === 'missing_price' ||
       issue === 'stale_price' ||
-      issue === 'historical_price_fallback'
+      issue === 'historical_price_fallback' ||
+      issue === 'unsupported_protocol_valuation'
     ) {
       return issue;
     }
@@ -145,7 +149,9 @@ export class DashboardDataService {
       priceSource === 'BINANCE' ||
       priceSource === 'ECB' ||
       priceSource === 'EXECUTION' ||
-      priceSource === 'WRAPPER'
+      priceSource === 'WRAPPER' ||
+      priceSource === 'AAVE_INDEX_ACCRUING' ||
+      priceSource === 'PROTOCOL_SNAPSHOT'
     ) {
       return priceSource;
     }

@@ -3,6 +3,7 @@ package com.walletradar.ingestion.wallet.query;
 import com.walletradar.costbasis.domain.AssetLedgerPoint;
 import com.walletradar.costbasis.domain.OnChainBalance;
 import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.common.PriceSource;
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.domain.session.UserSessionRepository;
 import com.walletradar.pricing.persistence.CurrentPriceQuoteDocument;
@@ -333,5 +334,122 @@ class SessionDashboardQueryServiceTest {
         assertThat(result.tokenPositions())
                 .extracting(SessionDashboardQueryService.TokenPositionView::issue)
                 .containsExactlyInAnyOrder("yield_accrual", "coverage_gap", "history_flags", "missing_replay_point");
+    }
+
+    @Test
+    void valuesAaveReceiptAndVariableDebtPositionsFromUnderlyingCurrentBalanceQuantity() {
+        UserSession session = new UserSession();
+        session.setId("session-aave");
+        UserSession.SessionWallet wallet = new UserSession.SessionWallet();
+        wallet.setAddress("0x1A87f12aC07E9746e9B053B8D7EF1d45270D693f");
+        wallet.setLabel("Main");
+        wallet.setColor("#22d3ee");
+        wallet.setNetworks(List.of(NetworkId.MANTLE));
+        session.setWallets(List.of(wallet));
+
+        OnChainBalance receiptBalance = new OnChainBalance();
+        receiptBalance.setWalletAddress(wallet.getAddress());
+        receiptBalance.setNetworkId(NetworkId.MANTLE);
+        receiptBalance.setAssetSymbol("AMANUSDC");
+        receiptBalance.setAssetContract("0xreceipt");
+        receiptBalance.setQuantity(new BigDecimal("10"));
+        receiptBalance.setCapturedAt(Instant.parse("2026-04-06T10:00:00Z"));
+
+        OnChainBalance debtBalance = new OnChainBalance();
+        debtBalance.setWalletAddress(wallet.getAddress());
+        debtBalance.setNetworkId(NetworkId.MANTLE);
+        debtBalance.setAssetSymbol("VARIABLEDEBTMANUSDE");
+        debtBalance.setAssetContract("0xdebt");
+        debtBalance.setQuantity(new BigDecimal("4"));
+        debtBalance.setCapturedAt(Instant.parse("2026-04-06T10:00:00Z"));
+
+        when(userSessionRepository.findById("session-aave")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "session-aave",
+                List.of(wallet.getAddress()),
+                List.of(wallet.getAddress())
+        ));
+        when(mongoOperations.find(any(Query.class), eq(AssetLedgerPoint.class))).thenReturn(List.of());
+        when(mongoOperations.find(any(Query.class), eq(OnChainBalance.class))).thenReturn(List.of(receiptBalance, debtBalance));
+        when(mongoOperations.find(any(Query.class), eq(HistoricalPriceDocument.class))).thenReturn(List.of());
+
+        SessionDashboardQueryService.SessionDashboardView result = sessionDashboardQueryService
+                .findSessionDashboard("session-aave")
+                .orElseThrow();
+
+        assertThat(result.tokenPositions()).hasSize(2);
+        assertThat(result.tokenPositions())
+                .filteredOn(position -> position.symbol().equals("AMANUSDC"))
+                .singleElement()
+                .satisfies(position -> {
+                    assertThat(position.priceUsd()).isEqualByComparingTo("1");
+                    assertThat(position.marketValueUsd()).isEqualByComparingTo("10");
+                    assertThat(position.valuationModel()).isEqualTo("AAVE_INDEX_ACCRUING");
+                    assertThat(position.valuationUnderlyingSymbol()).isEqualTo("USDC");
+                });
+        assertThat(result.tokenPositions())
+                .filteredOn(position -> position.symbol().equals("VARIABLEDEBTMANUSDE"))
+                .singleElement()
+                .satisfies(position -> {
+                    assertThat(position.priceUsd()).isEqualByComparingTo("1");
+                    assertThat(position.marketValueUsd()).isEqualByComparingTo("-4");
+                    assertThat(position.valuationModel()).isEqualTo("AAVE_INDEX_ACCRUING");
+                    assertThat(position.valuationUnderlyingSymbol()).isEqualTo("USDE");
+                });
+        assertThat(result.summary().portfolioValueUsd()).isEqualByComparingTo("6");
+    }
+
+    @Test
+    void valuesGmxMarketTokenFromProtocolSnapshotQuote() {
+        UserSession session = new UserSession();
+        session.setId("session-gmx");
+        UserSession.SessionWallet wallet = new UserSession.SessionWallet();
+        wallet.setAddress("0x1A87f12aC07E9746e9B053B8D7EF1d45270D693f");
+        wallet.setLabel("Main");
+        wallet.setColor("#22d3ee");
+        wallet.setNetworks(List.of(NetworkId.ARBITRUM));
+        session.setWallets(List.of(wallet));
+
+        OnChainBalance balance = new OnChainBalance();
+        balance.setWalletAddress(wallet.getAddress());
+        balance.setNetworkId(NetworkId.ARBITRUM);
+        balance.setAssetSymbol("GM: ETH/USD [WETH-USDC]");
+        balance.setAssetContract("0x70d95587d40a2caf56bd97485ab3eec10bee6336");
+        balance.setQuantity(new BigDecimal("10"));
+        balance.setCapturedAt(Instant.parse("2026-04-26T10:00:00Z"));
+
+        CurrentPriceQuoteDocument quote = new CurrentPriceQuoteDocument();
+        quote.setId("GM: ETH/USD [WETH-USDC]:PROTOCOL_SNAPSHOT");
+        quote.setSymbol("GM: ETH/USD [WETH-USDC]");
+        quote.setSource(PriceSource.PROTOCOL_SNAPSHOT);
+        quote.setPriceUsd(new BigDecimal("1.82"));
+        quote.setQuoteSymbol("USD");
+        quote.setPricedAt(Instant.now());
+        quote.setFetchedAt(Instant.now());
+
+        when(userSessionRepository.findById("session-gmx")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "session-gmx",
+                List.of(wallet.getAddress()),
+                List.of(wallet.getAddress())
+        ));
+        when(mongoOperations.find(any(Query.class), eq(AssetLedgerPoint.class))).thenReturn(List.of());
+        when(mongoOperations.find(any(Query.class), eq(OnChainBalance.class))).thenReturn(List.of(balance));
+        when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of(quote));
+        when(mongoOperations.find(any(Query.class), eq(HistoricalPriceDocument.class))).thenReturn(List.of());
+
+        SessionDashboardQueryService.SessionDashboardView result = sessionDashboardQueryService
+                .findSessionDashboard("session-gmx")
+                .orElseThrow();
+
+        assertThat(result.tokenPositions()).singleElement().satisfies(position -> {
+            assertThat(position.priceUsd()).isEqualByComparingTo("1.82");
+            assertThat(position.marketValueUsd()).isEqualByComparingTo("18.2");
+            assertThat(position.priceSource()).isEqualTo("PROTOCOL_SNAPSHOT");
+            assertThat(position.valuationModel()).isEqualTo("GMX_MARKET_TOKEN_SNAPSHOT");
+            assertThat(position.unsupportedValuationReason()).isNull();
+            assertThat(position.priceIssue()).isNull();
+        });
+        assertThat(result.summary().portfolioValueUsd()).isEqualByComparingTo("18.2");
     }
 }

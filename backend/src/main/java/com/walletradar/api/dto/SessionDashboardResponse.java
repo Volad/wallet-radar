@@ -48,7 +48,10 @@ public record SessionDashboardResponse(
             BigDecimal realizedPnlUsd,
             String networkId,
             String walletAddress,
-            String issue
+            String issue,
+            String valuationModel,
+            String valuationUnderlyingSymbol,
+            String unsupportedValuationReason
     ) {
     }
 }

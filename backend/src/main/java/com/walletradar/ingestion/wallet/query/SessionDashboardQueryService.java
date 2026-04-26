@@ -52,6 +52,10 @@ public class SessionDashboardQueryService {
     private static final String PRICE_ISSUE_MISSING = "missing_price";
     private static final String PRICE_ISSUE_STALE = "stale_price";
     private static final String PRICE_ISSUE_HISTORICAL_FALLBACK = "historical_price_fallback";
+    private static final String PRICE_ISSUE_UNSUPPORTED_PROTOCOL_VALUATION = "unsupported_protocol_valuation";
+    private static final String VALUATION_AAVE_INDEX_ACCRUING = "AAVE_INDEX_ACCRUING";
+    private static final String VALUATION_GMX_MARKET_TOKEN_SNAPSHOT = "GMX_MARKET_TOKEN_SNAPSHOT";
+    private static final String PRICE_SOURCE_PROTOCOL_SNAPSHOT = "PROTOCOL_SNAPSHOT";
     private static final long CURRENT_QUOTE_STALE_AFTER_SECONDS = 15 * 60;
 
     private final UserSessionRepository userSessionRepository;
@@ -141,7 +145,7 @@ public class SessionDashboardQueryService {
 
         List<TokenPositionView> tokenPositions = rows.entrySet().stream()
                 .map(entry -> entry.getValue().toView(
-                        resolvePrice(latestPricesBySymbol, entry.getValue().priceLookupSymbol()),
+                        resolvePrice(latestPricesBySymbol, entry.getValue().priceLookupCandidates()),
                         zeroIfNull(realisedPnlByFamily.get(entry.getKey()))
                 ))
                 .filter(position -> position.quantity().signum() > 0)
@@ -340,7 +344,14 @@ public class SessionDashboardQueryService {
     }
 
     private static DashboardPriceSnapshot resolvePrice(Map<String, DashboardPriceSnapshot> latestPricesBySymbol, String symbol) {
-        for (String candidate : priceLookupCandidates(symbol)) {
+        return resolvePrice(latestPricesBySymbol, priceLookupCandidates(symbol));
+    }
+
+    private static DashboardPriceSnapshot resolvePrice(
+            Map<String, DashboardPriceSnapshot> latestPricesBySymbol,
+            Collection<String> candidates
+    ) {
+        for (String candidate : candidates) {
             DashboardPriceSnapshot price = latestPricesBySymbol.get(candidate);
             if (price != null && price.priceUsd() != null) {
                 return price;
@@ -444,7 +455,10 @@ public class SessionDashboardQueryService {
             BigDecimal realizedPnlUsd,
             String networkId,
             String walletAddress,
-            String issue
+            String issue,
+            String valuationModel,
+            String valuationUnderlyingSymbol,
+            String unsupportedValuationReason
     ) {
         public BigDecimal marketValueUsd() {
             return marketValueUsd == null ? BigDecimal.ZERO : marketValueUsd;
@@ -479,6 +493,7 @@ public class SessionDashboardQueryService {
         private BigDecimal coveredQuantity = BigDecimal.ZERO;
         private BigDecimal totalCostBasisUsd = BigDecimal.ZERO;
         private String issue;
+        private ProtocolValuationMetadata valuationMetadata;
 
         private TokenPositionAccumulator(
                 String familyIdentity,
@@ -507,6 +522,7 @@ public class SessionDashboardQueryService {
                 );
             }
             issue = mergeIssueCodes(issue, classifyIssue(latestPoint, currentQuantity, exactCoveredQuantity));
+            valuationMetadata = mergeValuationMetadata(valuationMetadata, protocolValuationMetadata(symbol));
         }
 
         private String priceLookupSymbol() {
@@ -514,12 +530,21 @@ public class SessionDashboardQueryService {
         }
 
         private List<String> priceLookupCandidates() {
-            return SessionDashboardQueryService.priceLookupCandidates(priceLookupSymbol());
+            LinkedHashSet<String> candidates = new LinkedHashSet<>();
+            candidates.addAll(SessionDashboardQueryService.priceLookupCandidates(priceLookupSymbol()));
+            if (valuationMetadata != null && !blank(valuationMetadata.underlyingSymbol())) {
+                candidates.addAll(SessionDashboardQueryService.priceLookupCandidates(valuationMetadata.underlyingSymbol()));
+            }
+            return List.copyOf(candidates);
         }
 
         private TokenPositionView toView(DashboardPriceSnapshot priceSnapshot, BigDecimal realizedPnlUsd) {
             BigDecimal priceUsd = priceSnapshot.priceUsd() == null ? BigDecimal.ZERO : priceSnapshot.priceUsd();
-            BigDecimal marketValueUsd = quantity.multiply(priceUsd, MC);
+            DashboardPriceSnapshot effectivePriceSnapshot = applyProtocolValuation(priceSnapshot, valuationMetadata);
+            priceUsd = effectivePriceSnapshot.priceUsd() == null ? BigDecimal.ZERO : effectivePriceSnapshot.priceUsd();
+            BigDecimal marketValueUsd = quantity
+                    .multiply(priceUsd, MC)
+                    .multiply(BigDecimal.valueOf(valuationMetadata == null ? 1 : valuationMetadata.quantitySign()), MC);
             BigDecimal avcoUsd = coveredQuantity.signum() <= 0
                     ? BigDecimal.ZERO
                     : totalCostBasisUsd.divide(coveredQuantity, MC);
@@ -535,20 +560,104 @@ public class SessionDashboardQueryService {
                     coveredQuantity,
                     priceUsd,
                     marketValueUsd,
-                    priceSnapshot.priceSource(),
-                    priceSnapshot.pricedAt(),
-                    priceSnapshot.stalenessSeconds(),
-                    priceSnapshot.isLiveQuote(),
-                    priceSnapshot.priceIssue(),
+                    effectivePriceSnapshot.priceSource(),
+                    effectivePriceSnapshot.pricedAt(),
+                    effectivePriceSnapshot.stalenessSeconds(),
+                    effectivePriceSnapshot.isLiveQuote(),
+                    effectivePriceSnapshot.priceIssue(),
                     avcoUsd,
                     unrealizedPnlPct,
                     unrealizedPnlUsd,
                     realizedPnlUsd,
                     networkId == null ? null : networkId.name(),
                     walletAddress,
-                    issue
+                    issue,
+                    valuationMetadata == null ? null : valuationMetadata.model(),
+                    valuationMetadata == null ? null : valuationMetadata.underlyingSymbol(),
+                    effectivePriceSnapshot.unsupportedValuationReason()
             );
         }
+    }
+
+    private static ProtocolValuationMetadata mergeValuationMetadata(
+            ProtocolValuationMetadata current,
+            ProtocolValuationMetadata candidate
+    ) {
+        return current == null ? candidate : current;
+    }
+
+    private static ProtocolValuationMetadata protocolValuationMetadata(String symbol) {
+        String normalized = normalizeSymbol(symbol);
+        String aaveUnderlying = aaveUnderlyingSymbol(normalized);
+        if (aaveUnderlying != null) {
+            return new ProtocolValuationMetadata(
+                    VALUATION_AAVE_INDEX_ACCRUING,
+                    aaveUnderlying,
+                    normalized.startsWith("VARIABLEDEBT") ? -1 : 1
+            );
+        }
+        if (normalized.startsWith("GM:") || normalized.startsWith("GLV")) {
+            return new ProtocolValuationMetadata(VALUATION_GMX_MARKET_TOKEN_SNAPSHOT, null, 1);
+        }
+        return null;
+    }
+
+    private static String aaveUnderlyingSymbol(String symbol) {
+        if (blank(symbol)) {
+            return null;
+        }
+        if (symbol.startsWith("VARIABLEDEBT")) {
+            return stripAaveNetworkPrefix(symbol.substring("VARIABLEDEBT".length()));
+        }
+        for (String prefix : List.of("AMAN", "AARB", "AAVA", "AETH", "ALIN", "AZKS")) {
+            if (symbol.startsWith(prefix) && symbol.length() > prefix.length()) {
+                return stripAaveWrappedPrefix(symbol.substring(prefix.length()));
+            }
+        }
+        return null;
+    }
+
+    private static String stripAaveNetworkPrefix(String symbol) {
+        for (String prefix : List.of("MAN", "ARB", "AVA", "ETH", "LIN", "ZKS")) {
+            if (symbol.startsWith(prefix) && symbol.length() > prefix.length()) {
+                return stripAaveWrappedPrefix(symbol.substring(prefix.length()));
+            }
+        }
+        return stripAaveWrappedPrefix(symbol);
+    }
+
+    private static String stripAaveWrappedPrefix(String symbol) {
+        return switch (symbol) {
+            case "WETH" -> "ETH";
+            case "WBTC" -> "BTC";
+            case "WMNT" -> "MNT";
+            case "WAVAX" -> "AVAX";
+            default -> symbol;
+        };
+    }
+
+    private static DashboardPriceSnapshot applyProtocolValuation(
+            DashboardPriceSnapshot priceSnapshot,
+            ProtocolValuationMetadata metadata
+    ) {
+        if (metadata == null) {
+            return priceSnapshot;
+        }
+        if (VALUATION_GMX_MARKET_TOKEN_SNAPSHOT.equals(metadata.model())
+                && (priceSnapshot == null || priceSnapshot.priceUsd() == null || priceSnapshot.priceUsd().signum() <= 0)) {
+            return DashboardPriceSnapshot.unsupportedProtocolValuation("GMX market token snapshot is unavailable");
+        }
+        if (VALUATION_AAVE_INDEX_ACCRUING.equals(metadata.model())) {
+            return priceSnapshot == null
+                    ? DashboardPriceSnapshot.missing()
+                    : priceSnapshot.withSource(VALUATION_AAVE_INDEX_ACCRUING);
+        }
+        if (VALUATION_GMX_MARKET_TOKEN_SNAPSHOT.equals(metadata.model())) {
+            return priceSnapshot == null
+                    ? DashboardPriceSnapshot.unsupportedProtocolValuation("GMX market token snapshot is unavailable")
+                    : priceSnapshot.withSource(PRICE_SOURCE_PROTOCOL_SNAPSHOT);
+        }
+        return priceSnapshot == null ? DashboardPriceSnapshot.missing() : priceSnapshot;
     }
 
     private static String classifyIssue(
@@ -609,7 +718,8 @@ public class SessionDashboardQueryService {
             Instant pricedAt,
             Long stalenessSeconds,
             Boolean isLiveQuote,
-            String priceIssue
+            String priceIssue,
+            String unsupportedValuationReason
     ) {
         private static DashboardPriceSnapshot stablecoin(Instant responseTime) {
             return new DashboardPriceSnapshot(
@@ -618,6 +728,7 @@ public class SessionDashboardQueryService {
                     responseTime,
                     0L,
                     true,
+                    null,
                     null
             );
         }
@@ -634,7 +745,8 @@ public class SessionDashboardQueryService {
                     pricedAt,
                     stalenessSeconds,
                     true,
-                    priceIssue
+                    priceIssue,
+                    null
             );
         }
 
@@ -646,7 +758,8 @@ public class SessionDashboardQueryService {
                     pricedAt,
                     stalenessSeconds(pricedAt, responseTime),
                     false,
-                    PRICE_ISSUE_HISTORICAL_FALLBACK
+                    PRICE_ISSUE_HISTORICAL_FALLBACK,
+                    null
             );
         }
 
@@ -657,7 +770,32 @@ public class SessionDashboardQueryService {
                     null,
                     null,
                     false,
-                    PRICE_ISSUE_MISSING
+                    PRICE_ISSUE_MISSING,
+                    null
+            );
+        }
+
+        private static DashboardPriceSnapshot unsupportedProtocolValuation(String reason) {
+            return new DashboardPriceSnapshot(
+                    BigDecimal.ZERO,
+                    "PROTOCOL_SNAPSHOT",
+                    null,
+                    null,
+                    false,
+                    PRICE_ISSUE_UNSUPPORTED_PROTOCOL_VALUATION,
+                    reason
+            );
+        }
+
+        private DashboardPriceSnapshot withSource(String source) {
+            return new DashboardPriceSnapshot(
+                    priceUsd,
+                    source,
+                    pricedAt,
+                    stalenessSeconds,
+                    isLiveQuote,
+                    priceIssue,
+                    unsupportedValuationReason
             );
         }
 
@@ -667,6 +805,13 @@ public class SessionDashboardQueryService {
             }
             return Math.max(0L, Duration.between(pricedAt, responseTime).toSeconds());
         }
+    }
+
+    private record ProtocolValuationMetadata(
+            String model,
+            String underlyingSymbol,
+            int quantitySign
+    ) {
     }
 
     private record AllowedScope(Map<String, Set<NetworkId>> networksByAddress) {

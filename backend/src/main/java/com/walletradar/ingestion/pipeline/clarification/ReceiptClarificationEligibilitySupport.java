@@ -65,6 +65,9 @@ public final class ReceiptClarificationEligibilitySupport {
         if (normalizedTransaction == null || view == null) {
             return false;
         }
+        if (Boolean.TRUE.equals(normalizedTransaction.getExcludedFromAccounting())) {
+            return false;
+        }
         List<String> reasons = normalizedTransaction.getMissingDataReasons() == null
                 ? List.of()
                 : normalizedTransaction.getMissingDataReasons();
@@ -135,6 +138,9 @@ public final class ReceiptClarificationEligibilitySupport {
             return true;
         }
         if (lpPositionCorrelationCandidate) {
+            return true;
+        }
+        if (normalizedTransaction.getStatus() == NormalizedTransactionStatus.NEEDS_REVIEW) {
             return true;
         }
         String txHash = String.valueOf(view.txHash()).toLowerCase();

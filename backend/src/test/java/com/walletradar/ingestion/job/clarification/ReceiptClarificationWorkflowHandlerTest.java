@@ -932,8 +932,8 @@ class ReceiptClarificationWorkflowHandlerTest {
     }
 
     @Test
-    @DisplayName("non allowlisted review row does not enter full receipt clarification")
-    void nonAllowlistedReviewRowDoesNotEnterFullReceiptClarification() {
+    @DisplayName("active review row enters full receipt clarification without hash allowlist")
+    void activeReviewRowEntersFullReceiptClarificationWithoutHashAllowlist() {
         NormalizedTransaction pending = reviewTx("0xabc", NetworkId.ETHEREUM, "HANDLER_UNSUPPORTED_METHOD");
         RawTransaction rawTransaction = new RawTransaction();
         rawTransaction.setId(pending.getId());
@@ -948,12 +948,33 @@ class ReceiptClarificationWorkflowHandlerTest {
                 .append("methodId", "0x12345678")
                 .append("input", "0x12345678000000000000000000000000"));
         when(rawTransactionRepository.findById(pending.getId())).thenReturn(Optional.of(rawTransaction));
+        when(clarificationGateway.fetchReceiptWithTransferEvidence(rawTransaction)).thenReturn(Optional.of(
+                new ClarificationReceiptEnrichment(
+                        "1",
+                        "21000",
+                        "1000000000",
+                        null,
+                        "1",
+                        List.of(new Document("address", "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")),
+                        List.of(new Document("contractAddress", "0x0000000000000000000000000000000000000001")
+                                .append("tokenSymbol", "TOK")
+                                .append("tokenDecimal", "18")
+                                .append("from", "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                                .append("to", WALLET)
+                                .append("value", "1")),
+                        List.of(),
+                        new Document("status", "0x1"),
+                        RawSyncMethod.ETHERSCAN
+                )
+        ));
 
         boolean clarified = service.clarify(pending);
 
-        assertThat(clarified).isFalse();
-        verify(clarificationGateway, never()).fetchReceiptWithTransferEvidence(any());
-        verify(normalizedTransactionRepository, never()).save(any());
+        assertThat(clarified).isTrue();
+        verify(clarificationGateway).fetchReceiptWithTransferEvidence(rawTransaction);
+        ArgumentCaptor<NormalizedTransaction> normalizedCaptor = ArgumentCaptor.forClass(NormalizedTransaction.class);
+        verify(normalizedTransactionRepository).save(normalizedCaptor.capture());
+        assertThat(normalizedCaptor.getValue().getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_RECLASSIFICATION);
     }
 
     private static NormalizedTransaction reviewTx(String txHash, NetworkId networkId, String reason) {

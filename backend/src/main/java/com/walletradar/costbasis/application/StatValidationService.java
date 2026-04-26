@@ -221,10 +221,16 @@ public class StatValidationService {
         copy.setCorrelationId(transaction.getCorrelationId());
         copy.setContinuityCandidate(transaction.getContinuityCandidate());
         copy.setMatchedCounterparty(transaction.getMatchedCounterparty());
+        copy.setCounterpartyAddress(transaction.getCounterpartyAddress());
+        copy.setCounterpartyType(transaction.getCounterpartyType());
+        copy.setCounterpartyResolutionState(transaction.getCounterpartyResolutionState());
+        copy.setCounterpartyResolutionEvidence(transaction.getCounterpartyResolutionEvidence());
         copy.setExcludedFromAccounting(transaction.getExcludedFromAccounting());
         copy.setAccountingExclusionReason(transaction.getAccountingExclusionReason());
         copy.setProtocolName(transaction.getProtocolName());
         copy.setProtocolVersion(transaction.getProtocolVersion());
+        copy.setProtocolResolutionState(transaction.getProtocolResolutionState());
+        copy.setProtocolResolutionEvidence(transaction.getProtocolResolutionEvidence());
         copy.setClarificationAttempts(transaction.getClarificationAttempts());
         copy.setFullReceiptClarificationAttempts(transaction.getFullReceiptClarificationAttempts());
         copy.setPricingAttempts(transaction.getPricingAttempts());

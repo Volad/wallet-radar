@@ -341,6 +341,127 @@ const counterpartyGapByType = db.getCollection('normalized_transactions').aggreg
   {\$sort: {count: -1}}
 ]).toArray().map(row => ({type: row._id, count: row.count}));
 
+const terminalResolutionStates = [
+  'TERMINAL_METADATA_ONLY',
+  'IRREDUCIBLE_EVIDENCE_MISSING',
+  'UNSUPPORTED_SCOPE'
+];
+const supportedProtocolTypes = [
+  'SWAP',
+  'BRIDGE_OUT',
+  'BRIDGE_IN',
+  'LENDING_DEPOSIT',
+  'LENDING_WITHDRAW',
+  'BORROW',
+  'REPAY',
+  'VAULT_DEPOSIT',
+  'VAULT_WITHDRAW',
+  'LP_ENTRY',
+  'LP_EXIT',
+  'LP_ENTRY_REQUEST',
+  'LP_EXIT_REQUEST',
+  'LP_ENTRY_SETTLEMENT',
+  'LP_EXIT_SETTLEMENT',
+  'LP_EXIT_PARTIAL',
+  'LP_EXIT_FINAL',
+  'LP_FEE_CLAIM',
+  'REWARD_CLAIM',
+  'STAKING_DEPOSIT',
+  'STAKING_WITHDRAW',
+  'STAKING_WITHDRAW_REQUEST',
+  'PROTOCOL_CUSTODY_DEPOSIT',
+  'PROTOCOL_CUSTODY_WITHDRAW'
+];
+const supportedCounterpartyTypes = supportedProtocolTypes.concat([
+  'EXTERNAL_TRANSFER_IN',
+  'EXTERNAL_TRANSFER_OUT',
+  'INTERNAL_TRANSFER'
+]);
+
+const protocolResolutionCoverage = db.getCollection('normalized_transactions').aggregate([
+  {
+    \$match: {
+      status: 'CONFIRMED',
+      source: 'ON_CHAIN',
+      type: {\$in: supportedProtocolTypes}
+    }
+  },
+  {
+    \$project: {
+      type: 1,
+      recoverableGap: {
+        \$and: [
+          {\$in: [{\$ifNull: ['\$protocolName', null]}, [null, '']]},
+          {\$not: [{\$in: ['\$protocolResolutionState', terminalResolutionStates]}]}
+        ]
+      },
+      terminalGap: {\$in: ['\$protocolResolutionState', terminalResolutionStates]},
+      resolved: {
+        \$or: [
+          {\$not: [{\$in: [{\$ifNull: ['\$protocolName', null]}, [null, '']]}]},
+          {\$in: ['\$protocolResolutionState', ['RESOLVED_EXACT', 'RESOLVED_FAMILY']]}
+        ]
+      }
+    }
+  },
+  {
+    \$group: {
+      _id: null,
+      recoverableProtocolGaps: {\$sum: {\$cond: ['\$recoverableGap', 1, 0]}},
+      terminalProtocolGaps: {\$sum: {\$cond: ['\$terminalGap', 1, 0]}},
+      resolvedProtocolRows: {\$sum: {\$cond: ['\$resolved', 1, 0]}},
+      supportedProtocolRows: {\$sum: 1}
+    }
+  }
+]).toArray()[0] || {
+  recoverableProtocolGaps: 0,
+  terminalProtocolGaps: 0,
+  resolvedProtocolRows: 0,
+  supportedProtocolRows: 0
+};
+
+const counterpartyResolutionCoverage = db.getCollection('normalized_transactions').aggregate([
+  {
+    \$match: {
+      status: 'CONFIRMED',
+      source: 'ON_CHAIN',
+      type: {\$in: supportedCounterpartyTypes}
+    }
+  },
+  {
+    \$project: {
+      type: 1,
+      recoverableGap: {
+        \$and: [
+          {\$in: [{\$ifNull: ['\$counterpartyAddress', null]}, [null, '']]},
+          {\$not: [{\$in: ['\$counterpartyResolutionState', terminalResolutionStates]}]}
+        ]
+      },
+      terminalGap: {\$in: ['\$counterpartyResolutionState', terminalResolutionStates]},
+      resolved: {
+        \$or: [
+          {\$not: [{\$in: [{\$ifNull: ['\$counterpartyAddress', null]}, [null, '']]}]},
+          {\$in: ['\$counterpartyResolutionState', ['RESOLVED_EXACT', 'RESOLVED_FAMILY']]}
+        ]
+      }
+    }
+  },
+  {
+    \$group: {
+      _id: null,
+      recoverableCounterpartyGaps: {\$sum: {\$cond: ['\$recoverableGap', 1, 0]}},
+      terminalCounterpartyGaps: {\$sum: {\$cond: ['\$terminalGap', 1, 0]}},
+      resolvedCounterpartyRows: {\$sum: {\$cond: ['\$resolved', 1, 0]}},
+      supportedCounterpartyRows: {\$sum: 1}
+    }
+  }
+]).toArray()[0] || {
+  recoverableCounterpartyGaps: 0,
+  terminalCounterpartyGaps: 0,
+  resolvedCounterpartyRows: 0,
+  supportedCounterpartyRows: 0
+};
+
 const needsReviewBySourceType = db.getCollection('normalized_transactions').aggregate([
   {\$match: {status: 'NEEDS_REVIEW'}},
   {\$group: {_id: {source: '\$source', type: '\$type', networkId: '\$networkId'}, count: {\$sum: 1}}},
@@ -364,6 +485,8 @@ print(EJSON.stringify({
   familyCoverage,
   protocolGapByType,
   counterpartyGapByType,
+  protocolResolutionCoverage,
+  counterpartyResolutionCoverage,
   needsReviewBySourceType,
   pipelineState
 }, null, 2));

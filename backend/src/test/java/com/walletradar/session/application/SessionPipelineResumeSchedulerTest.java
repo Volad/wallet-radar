@@ -1,6 +1,7 @@
 package com.walletradar.session.application;
 
 import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.event.AccountingReplayCompletedEvent;
 import com.walletradar.domain.event.BybitNormalizationRequestedEvent;
 import com.walletradar.domain.event.LinkingRequestedEvent;
 import com.walletradar.domain.event.OnChainNormalizationCompletedEvent;
@@ -347,8 +348,6 @@ class SessionPipelineResumeSchedulerTest {
         when(mongoOperations.exists(any(Query.class), eq(BybitExtractedEvent.class))).thenReturn(false, false);
         when(mongoOperations.exists(any(Query.class), eq(ExternalLedgerRaw.class))).thenReturn(false, false);
         when(mongoOperations.exists(any(Query.class), eq("asset_ledger_points"))).thenReturn(true);
-        when(mongoOperations.exists(any(Query.class), eq("on_chain_balances"))).thenReturn(true);
-
         scheduler().resumeReadySessions();
 
         verify(applicationEventPublisher, never()).publishEvent(any());
@@ -357,6 +356,36 @@ class SessionPipelineResumeSchedulerTest {
                 UserSession.PipelineStage.ACCOUNTING_REPLAY,
                 "Accounting replay complete"
         );
+    }
+
+    @Test
+    void resumesPortfolioSnapshotWhenReplayOutputsExistButSnapshotIsNotComplete() {
+        UserSession session = session("session-1", wallet("0xabc", List.of(NetworkId.ETHEREUM)));
+        UserSession.PipelineState state = new UserSession.PipelineState();
+        state.setStage(UserSession.PipelineStage.ACCOUNTING_REPLAY);
+        state.setStatus(UserSession.PipelineStatus.COMPLETE);
+        state.setUpdatedAt(Instant.now().minusSeconds(60));
+        session.setPipelineState(state);
+
+        when(userSessionRepository.findAll()).thenReturn(List.of(session));
+        lenient().when(sessionPipelineActivityService.latestFreshActivity(eq("session-1"), any())).thenReturn(java.util.Optional.empty());
+        when(syncStatusRepository.findByWalletAddressIn(List.of("0xabc"))).thenReturn(List.of(
+                syncStatus("0xabc", NetworkId.ETHEREUM, true)
+        ));
+        when(mongoOperations.exists(any(Query.class), eq(RawTransaction.class))).thenReturn(false);
+        when(mongoOperations.exists(any(Query.class), eq("normalized_transactions"))).thenReturn(true);
+        when(mongoOperations.exists(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(false, false, false, false, false);
+        when(mongoOperations.exists(any(Query.class), eq(BybitExtractedEvent.class))).thenReturn(false, false);
+        when(mongoOperations.exists(any(Query.class), eq(ExternalLedgerRaw.class))).thenReturn(false, false);
+        when(mongoOperations.exists(any(Query.class), eq("asset_ledger_points"))).thenReturn(true);
+
+        scheduler().resumeReadySessions();
+
+        assertPublishedEvent(AccountingReplayCompletedEvent.class, event -> {
+            assertThat(event.sessionId()).isEqualTo("session-1");
+            assertThat(event.trigger()).isEqualTo("resume-watchdog");
+        });
     }
 
     @Test

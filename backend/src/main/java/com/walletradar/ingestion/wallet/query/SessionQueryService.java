@@ -222,6 +222,12 @@ public class SessionQueryService {
                     countReplayTotal(memberRefs),
                     countReplayProcessed(scope)
             );
+            case "PORTFOLIO_SNAPSHOT_REFRESH" -> progressFromCounts(
+                    stage,
+                    1,
+                    session.getPipelineState() != null
+                            && session.getPipelineState().getStatus() == UserSession.PipelineStatus.COMPLETE ? 1 : 0
+            );
             case "BACKFILL" -> progressFromCounts(stage, totalTargets, completedTargets, overallProgress);
             default -> progressFromCounts(stage, totalTargets, completedTargets, overallProgress);
         };
@@ -293,7 +299,7 @@ public class SessionQueryService {
             case RUNNING -> SyncStatus.SyncStatusValue.RUNNING.name();
             case FAILED -> SyncStatus.SyncStatusValue.FAILED.name();
             case BLOCKED -> "BLOCKED";
-            case COMPLETE -> pipelineState.getStage() == UserSession.PipelineStage.ACCOUNTING_REPLAY
+            case COMPLETE -> pipelineState.getStage() == UserSession.PipelineStage.PORTFOLIO_SNAPSHOT_REFRESH
                     ? SyncStatus.SyncStatusValue.COMPLETE.name()
                     : acquisitionStatus;
         };

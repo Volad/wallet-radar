@@ -385,6 +385,14 @@ describe('DashboardComponent (wallet submit flow)', () => {
       phaseProgress: null,
     });
     expect(component.pipelineStatusLabel()).toBe('Cost basis: 91% done');
+
+    component.sessionBackfillStatus.set({
+      ...runningBackfill,
+      overallProgressPct: 96,
+      pipelineStage: 'PORTFOLIO_SNAPSHOT_REFRESH',
+      phaseProgress: null,
+    });
+    expect(component.pipelineStatusLabel()).toBe('Portfolio snapshot: 96% done');
   });
 
   it('renders pricing subline as priced transaction progress', () => {

@@ -28,7 +28,13 @@ public class CounterpartyEnrichmentQueryService {
         Criteria counterpartyTarget = new Criteria().orOperator(
                 Criteria.where("counterpartyAddress").exists(false),
                 Criteria.where("counterpartyAddress").is(null),
-                Criteria.where("counterpartyAddress").is("")
+                Criteria.where("counterpartyAddress").is(""),
+                Criteria.where("counterpartyType").exists(false),
+                Criteria.where("counterpartyType").is(null),
+                Criteria.where("counterpartyType").is(""),
+                Criteria.where("counterpartyResolutionState").exists(false),
+                Criteria.where("counterpartyResolutionState").is(null),
+                Criteria.where("counterpartyResolutionState").is("")
         );
 
         Criteria baseCriteria = new Criteria().andOperator(

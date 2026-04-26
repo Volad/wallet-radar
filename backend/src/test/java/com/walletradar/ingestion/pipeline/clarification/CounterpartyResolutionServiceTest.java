@@ -160,6 +160,62 @@ class CounterpartyResolutionServiceTest {
         assertThat(result.value()).isEqualTo(VAULT);
     }
 
+    @Test
+    void assignsRowLocalCounterpartyTypeFromRegistryRole() {
+        ProtocolRegistryService registryService = mock(ProtocolRegistryService.class);
+        when(registryService.lookup(com.walletradar.domain.common.NetworkId.ARBITRUM, SWAP_ROUTER))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        SWAP_ROUTER,
+                        Set.of(com.walletradar.domain.common.NetworkId.ARBITRUM),
+                        null,
+                        ProtocolRegistryRole.ROUTER,
+                        null,
+                        null,
+                        "Uniswap",
+                        null,
+                        false,
+                        null
+                )));
+        CounterpartyResolutionService registryBackedService = new CounterpartyResolutionService(registryService);
+
+        CounterpartyResolutionService.ResolvedCounterparty result = registryBackedService.resolveMetadata(
+                normalized(NormalizedTransactionType.SWAP),
+                raw(
+                        "0xswap",
+                        "ARBITRUM",
+                        WALLET,
+                        new Document()
+                                .append("from", WALLET)
+                                .append("to", SWAP_ROUTER)
+                                .append("timeStamp", "1700000000")
+                                .append("transactionIndex", "1")
+                )
+        );
+
+        assertThat(result.address()).isEqualTo(SWAP_ROUTER);
+        assertThat(result.counterpartyType()).isEqualTo(CounterpartyType.PROTOCOL);
+        assertThat(result.resolutionState()).isEqualTo(MetadataResolutionState.RESOLVED_EXACT);
+    }
+
+    @Test
+    void terminalizesMissingRowLocalCounterpartyEvidence() {
+        CounterpartyResolutionService.ResolvedCounterparty result = service.resolveMetadata(
+                normalized(NormalizedTransactionType.EXTERNAL_TRANSFER_IN),
+                raw(
+                        "0xexternalin",
+                        "ARBITRUM",
+                        WALLET,
+                        new Document()
+                                .append("timeStamp", "1700000000")
+                                .append("transactionIndex", "1")
+                )
+        );
+
+        assertThat(result.address()).isNull();
+        assertThat(result.counterpartyType()).isEqualTo(CounterpartyType.GENUINE_MISSING_SOURCE);
+        assertThat(result.resolutionState()).isEqualTo(MetadataResolutionState.IRREDUCIBLE_EVIDENCE_MISSING);
+    }
+
     private OptionalResult resolve(NormalizedTransaction transaction, RawTransaction rawTransaction) {
         return new OptionalResult(service.resolve(transaction, rawTransaction).orElse(null));
     }

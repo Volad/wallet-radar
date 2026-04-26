@@ -15,7 +15,6 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -76,7 +75,7 @@ class ProtocolNameEnrichmentServiceTest {
     }
 
     @Test
-    void enrichSkipsRowsThatAlreadyHaveProtocolName() {
+    void enrichPersistsResolutionStateForRowsThatAlreadyHaveProtocolName() {
         NormalizedTransaction transaction = new NormalizedTransaction();
         transaction.setProtocolName("Aave");
         when(protocolNameCanonicalizer.canonicalize(org.mockito.ArgumentMatchers.any())).thenAnswer(invocation -> invocation.getArgument(0));
@@ -94,8 +93,10 @@ class ProtocolNameEnrichmentServiceTest {
 
         boolean updated = service.enrich(transaction, null, Instant.parse("2026-04-08T12:00:00Z"));
 
-        assertThat(updated).isFalse();
-        verify(normalizedTransactionRepository, never()).save(org.mockito.ArgumentMatchers.any());
+        assertThat(updated).isTrue();
+        verify(normalizedTransactionRepository).save(transaction);
+        assertThat(transaction.getProtocolResolutionState()).isEqualTo(MetadataResolutionState.RESOLVED_FAMILY);
+        assertThat(transaction.getProtocolResolutionEvidence()).isEqualTo("EXISTING_PROTOCOL_NAME_CANONICALIZED");
     }
 
     @Test
@@ -148,7 +149,10 @@ class ProtocolNameEnrichmentServiceTest {
 
         int updated = service.processNextBatch(50);
 
-        assertThat(updated).isEqualTo(2);
-        verify(normalizedTransactionRepository, org.mockito.Mockito.times(2)).save(org.mockito.ArgumentMatchers.any());
+        assertThat(updated).isEqualTo(3);
+        verify(normalizedTransactionRepository, org.mockito.Mockito.times(3)).save(org.mockito.ArgumentMatchers.any());
+        assertThat(unresolved.getProtocolResolutionState()).isEqualTo(MetadataResolutionState.TERMINAL_METADATA_ONLY);
+        assertThat(legacy.getProtocolResolutionState()).isEqualTo(MetadataResolutionState.RESOLVED_FAMILY);
+        assertThat(resolvable.getProtocolResolutionState()).isEqualTo(MetadataResolutionState.RESOLVED_FAMILY);
     }
 }

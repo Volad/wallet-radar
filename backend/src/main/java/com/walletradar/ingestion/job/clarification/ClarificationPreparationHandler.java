@@ -104,6 +104,48 @@ final class ClarificationPreparationHandler {
         return enrichment;
     }
 
+    Optional<ClarificationReceiptEnrichment> fetchFullReceiptForClarificationOrMarkFailure(
+            NormalizedTransaction normalizedTransaction,
+            RawTransaction rawTransaction,
+            Instant now,
+            int maxAttempts
+    ) {
+        Optional<ClarificationReceiptEnrichment> enrichment = safeOptional(
+                clarificationGateway.fetchFullReceipt(rawTransaction)
+        );
+        if (enrichment.isEmpty()) {
+            clarificationFailureHandler.markMetadataFailure(
+                    normalizedTransaction,
+                    rawTransaction,
+                    ClassificationReasonCode.CLARIFICATION_FULL_RECEIPT_UNAVAILABLE.code(),
+                    now,
+                    1
+            );
+        }
+        return enrichment;
+    }
+
+    Optional<ClarificationReceiptEnrichment> fetchFullReceiptForReviewOrMarkFailure(
+            NormalizedTransaction normalizedTransaction,
+            RawTransaction rawTransaction,
+            Instant now,
+            int maxAttempts
+    ) {
+        Optional<ClarificationReceiptEnrichment> enrichment = safeOptional(
+                clarificationGateway.fetchFullReceipt(rawTransaction)
+        );
+        if (enrichment.isEmpty()) {
+            clarificationFailureHandler.markReceiptFailure(
+                    normalizedTransaction,
+                    rawTransaction,
+                    ClassificationReasonCode.CLARIFICATION_FULL_RECEIPT_UNAVAILABLE.code(),
+                    now,
+                    1
+            );
+        }
+        return enrichment;
+    }
+
     Optional<ClarificationReceiptEnrichment> fetchFullReceiptOrMarkFailure(
             NormalizedTransaction normalizedTransaction,
             RawTransaction rawTransaction,

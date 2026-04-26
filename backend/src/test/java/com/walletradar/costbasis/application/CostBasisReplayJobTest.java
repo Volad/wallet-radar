@@ -1,11 +1,11 @@
 package com.walletradar.costbasis.application;
 
 import com.walletradar.costbasis.domain.AssetLedgerPointRepository;
+import com.walletradar.domain.event.AccountingReplayCompletedEvent;
 import com.walletradar.domain.event.PricingCompletedEvent;
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.pricing.application.PricingDataGateService;
 import com.walletradar.pricing.application.PricingDataGateSnapshot;
-import com.walletradar.pricing.application.CurrentPriceQuoteRefreshService;
 import com.walletradar.domain.session.UserSessionRepository;
 import com.walletradar.session.application.AccountingUniverseService;
 import com.walletradar.session.application.SessionPipelineActivityService;
@@ -17,6 +17,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.util.List;
 
@@ -43,13 +44,11 @@ class CostBasisReplayJobTest {
     @Mock
     private AvcoReplayService avcoReplayService;
     @Mock
-    private OnChainBalanceRefreshService onChainBalanceRefreshService;
-    @Mock
-    private CurrentPriceQuoteRefreshService currentPriceQuoteRefreshService;
-    @Mock
     private AssetLedgerPointRepository assetLedgerPointRepository;
     @Mock
     private PipelineTelemetrySnapshotService pipelineTelemetrySnapshotService;
+    @Mock
+    private ApplicationEventPublisher applicationEventPublisher;
     @Mock
     private SessionPipelineActivityService pipelineActivityService;
     @Mock
@@ -83,10 +82,9 @@ class CostBasisReplayJobTest {
                 pendingStatQueryService,
                 statValidationService,
                 avcoReplayService,
-                onChainBalanceRefreshService,
-                currentPriceQuoteRefreshService,
                 assetLedgerPointRepository,
                 pipelineTelemetrySnapshotService,
+                applicationEventPublisher,
                 pipelineActivityService,
                 sessionPipelineStateService
         );
@@ -99,25 +97,14 @@ class CostBasisReplayJobTest {
                 eq(scope.memberRefs()),
                 org.mockito.ArgumentMatchers.any(Runnable.class)
         );
-        InOrder inOrder = org.mockito.Mockito.inOrder(
-                avcoReplayService,
-                onChainBalanceRefreshService,
-                currentPriceQuoteRefreshService
-        );
+        InOrder inOrder = org.mockito.Mockito.inOrder(avcoReplayService, applicationEventPublisher);
         inOrder.verify(avcoReplayService).replayConfirmed(
                 eq("ACCOUNTING_UNIVERSE:session-1"),
                 eq(scope.memberRefs()),
                 org.mockito.ArgumentMatchers.any(Runnable.class)
         );
-        inOrder.verify(onChainBalanceRefreshService).refreshCurrentBalances(
-                eq("session-1"),
-                eq(scope.onChainWalletRefs()),
-                org.mockito.ArgumentMatchers.any(),
-                org.mockito.ArgumentMatchers.any(Runnable.class)
-        );
-        inOrder.verify(currentPriceQuoteRefreshService).refreshForSessionBalances(
-                eq("session-1"),
-                org.mockito.ArgumentMatchers.any()
+        inOrder.verify(applicationEventPublisher).publishEvent(
+                eq(new AccountingReplayCompletedEvent("session-1", 7, "manual"))
         );
     }
 
@@ -141,10 +128,9 @@ class CostBasisReplayJobTest {
                 pendingStatQueryService,
                 statValidationService,
                 avcoReplayService,
-                onChainBalanceRefreshService,
-                currentPriceQuoteRefreshService,
                 assetLedgerPointRepository,
                 pipelineTelemetrySnapshotService,
+                applicationEventPublisher,
                 pipelineActivityService,
                 sessionPipelineStateService
         );
@@ -157,12 +143,7 @@ class CostBasisReplayJobTest {
                 org.mockito.ArgumentMatchers.anyCollection(),
                 org.mockito.ArgumentMatchers.any(Runnable.class)
         );
-        verify(onChainBalanceRefreshService, never()).refreshCurrentBalances(
-                org.mockito.ArgumentMatchers.anyString(),
-                org.mockito.ArgumentMatchers.anyCollection(),
-                org.mockito.ArgumentMatchers.any(),
-                org.mockito.ArgumentMatchers.any(Runnable.class)
-        );
+        verify(applicationEventPublisher, never()).publishEvent(org.mockito.ArgumentMatchers.any());
         verify(sessionPipelineStateService).markStageBlocked(
                 eq("session-1"),
                 eq(UserSession.PipelineStage.ACCOUNTING_REPLAY),
@@ -196,10 +177,9 @@ class CostBasisReplayJobTest {
                 pendingStatQueryService,
                 statValidationService,
                 avcoReplayService,
-                onChainBalanceRefreshService,
-                currentPriceQuoteRefreshService,
                 assetLedgerPointRepository,
                 pipelineTelemetrySnapshotService,
+                applicationEventPublisher,
                 pipelineActivityService,
                 sessionPipelineStateService
         );
@@ -211,11 +191,8 @@ class CostBasisReplayJobTest {
                 eq(scope.memberRefs()),
                 org.mockito.ArgumentMatchers.any(Runnable.class)
         );
-        verify(onChainBalanceRefreshService).refreshCurrentBalances(
-                eq("session-1"),
-                eq(scope.onChainWalletRefs()),
-                org.mockito.ArgumentMatchers.any(),
-                org.mockito.ArgumentMatchers.any(Runnable.class)
+        verify(applicationEventPublisher).publishEvent(
+                eq(new AccountingReplayCompletedEvent("session-1", 3, "manual"))
         );
     }
 
@@ -245,10 +222,9 @@ class CostBasisReplayJobTest {
                 pendingStatQueryService,
                 statValidationService,
                 avcoReplayService,
-                onChainBalanceRefreshService,
-                currentPriceQuoteRefreshService,
                 assetLedgerPointRepository,
                 pipelineTelemetrySnapshotService,
+                applicationEventPublisher,
                 pipelineActivityService,
                 sessionPipelineStateService
         );
@@ -260,11 +236,8 @@ class CostBasisReplayJobTest {
                 eq(scope.memberRefs()),
                 org.mockito.ArgumentMatchers.any(Runnable.class)
         );
-        verify(onChainBalanceRefreshService).refreshCurrentBalances(
-                eq("session-1"),
-                eq(scope.onChainWalletRefs()),
-                org.mockito.ArgumentMatchers.any(),
-                org.mockito.ArgumentMatchers.any(Runnable.class)
+        verify(applicationEventPublisher).publishEvent(
+                eq(new AccountingReplayCompletedEvent("session-1", 4, "pricing-completed"))
         );
     }
 

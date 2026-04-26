@@ -32,6 +32,9 @@ public final class PriceableFlowPolicy {
         if (transaction == null || flow == null || hasNoEconomicQuantity(flow)) {
             return false;
         }
+        if (flow.getAssetSymbol() == null || flow.getAssetSymbol().isBlank()) {
+            return false;
+        }
         if (NON_PRICEABLE_TYPES.contains(transaction.getType())) {
             return false;
         }

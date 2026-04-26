@@ -86,6 +86,10 @@ import java.util.List;
                 def = "{'source': 1, 'protocolName': 1, 'status': 1, 'blockTimestamp': 1, 'transactionIndex': 1}"
         ),
         @CompoundIndex(
+                name = "normalized_source_status_type_resolution_idx",
+                def = "{'source': 1, 'status': 1, 'type': 1, 'protocolResolutionState': 1, 'counterpartyResolutionState': 1}"
+        ),
+        @CompoundIndex(
                 name = "normalized_source_wallet_type_block_idx",
                 def = "{'source': 1, 'walletAddress': 1, 'type': 1, 'blockTimestamp': 1, 'transactionIndex': 1}"
         )
@@ -117,10 +121,15 @@ public class NormalizedTransaction {
     private Boolean continuityCandidate;
     private String matchedCounterparty;
     private String counterpartyAddress;
+    private String counterpartyType;
+    private String counterpartyResolutionState;
+    private String counterpartyResolutionEvidence;
     private Boolean excludedFromAccounting;
     private String accountingExclusionReason;
     private String protocolName;
     private String protocolVersion;
+    private String protocolResolutionState;
+    private String protocolResolutionEvidence;
     private Integer clarificationAttempts;
     private Integer fullReceiptClarificationAttempts;
     private Instant clarificationLeaseUntil;

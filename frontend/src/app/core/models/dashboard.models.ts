@@ -71,7 +71,9 @@ export type PriceSource =
   | 'BINANCE'
   | 'ECB'
   | 'EXECUTION'
-  | 'WRAPPER';
+  | 'WRAPPER'
+  | 'AAVE_INDEX_ACCRUING'
+  | 'PROTOCOL_SNAPSHOT';
 export type BridgeStatus = 'BRIDGE_OUT' | 'BRIDGE_IN' | 'MATCHED' | 'REVIEW';
 export type TransactionBridgeFilter = 'ALL' | BridgeStatus;
 export type TransactionSpamFilter = 'HIDE_SPAM' | 'ALL' | 'SPAM_ONLY';
@@ -86,6 +88,7 @@ export type IssueCode =
   | 'coverage_gap'
   | 'history_flags'
   | 'missing_replay_point'
+  | 'unsupported_protocol_valuation'
   | null;
 
 export type DashboardSection = 'tokens' | 'lp' | 'lending' | 'staking';
@@ -145,6 +148,9 @@ export interface TokenPosition {
   readonly networkId: NetworkId;
   readonly walletId: WalletId;
   readonly issue: IssueCode;
+  readonly valuationModel: string | null;
+  readonly valuationUnderlyingSymbol: string | null;
+  readonly unsupportedValuationReason: string | null;
 }
 
 export interface LpPosition {
@@ -315,5 +321,7 @@ export const PRICE_SOURCES: ReadonlyArray<PriceSource> = [
   'ECB',
   'EXECUTION',
   'WRAPPER',
+  'AAVE_INDEX_ACCRUING',
+  'PROTOCOL_SNAPSHOT',
   'UNKNOWN',
 ];

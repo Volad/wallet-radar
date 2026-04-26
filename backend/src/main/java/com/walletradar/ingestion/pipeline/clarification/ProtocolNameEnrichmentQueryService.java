@@ -30,7 +30,10 @@ public class ProtocolNameEnrichmentQueryService {
                 Criteria.where("protocolName").exists(false),
                 Criteria.where("protocolName").is(null),
                 Criteria.where("protocolName").is(""),
-                Criteria.where("protocolName").in(protocolNameCanonicalizer.legacyExactNames())
+                Criteria.where("protocolName").in(protocolNameCanonicalizer.legacyExactNames()),
+                Criteria.where("protocolResolutionState").exists(false),
+                Criteria.where("protocolResolutionState").is(null),
+                Criteria.where("protocolResolutionState").is("")
         );
 
         Criteria baseCriteria = new Criteria().andOperator(

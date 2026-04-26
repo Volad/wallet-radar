@@ -3,6 +3,7 @@ package com.walletradar.ingestion.job.normalization;
 import com.walletradar.domain.common.ConfidenceLevel;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.transaction.normalized.ClassificationSource;
+import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
@@ -10,13 +11,13 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.domain.transaction.raw.RawTransactionRepository;
+import com.walletradar.ingestion.config.OnChainClarificationProperties;
 import com.walletradar.ingestion.config.OnChainNormalizationProperties;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassificationResult;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassifier;
 import com.walletradar.ingestion.pipeline.classification.reason.ClassificationReasonCode;
 import com.walletradar.ingestion.pipeline.clarification.CounterpartyEnrichmentService;
 import com.walletradar.ingestion.pipeline.clarification.ProtocolNameEnrichmentService;
-import com.walletradar.ingestion.pipeline.clarification.RelatedLifecycleDiscoveryService;
 import com.walletradar.ingestion.pipeline.onchain.OnChainNormalizedTransactionBuilder;
 import com.walletradar.ingestion.pipeline.onchain.PendingReclassificationQueryService;
 import org.bson.Document;
@@ -28,6 +29,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -53,26 +55,27 @@ class OnChainReclassificationServiceTest {
     private ProtocolNameEnrichmentService protocolNameEnrichmentService;
     @Mock
     private CounterpartyEnrichmentService counterpartyEnrichmentService;
-    @Mock
-    private RelatedLifecycleDiscoveryService relatedLifecycleDiscoveryService;
 
     private OnChainNormalizationProperties properties;
+    private OnChainClarificationProperties clarificationProperties;
     private OnChainReclassificationService service;
 
     @BeforeEach
     void setUp() {
         properties = new OnChainNormalizationProperties();
         properties.setBatchSize(2);
+        clarificationProperties = new OnChainClarificationProperties();
+        clarificationProperties.setMaxAttempts(3);
         service = new OnChainReclassificationService(
                 pendingReclassificationQueryService,
                 rawTransactionRepository,
                 normalizedTransactionRepository,
                 properties,
+                clarificationProperties,
                 onChainClassifier,
                 new OnChainNormalizedTransactionBuilder(),
                 protocolNameEnrichmentService,
-                counterpartyEnrichmentService,
-                relatedLifecycleDiscoveryService
+                counterpartyEnrichmentService
         );
     }
 
@@ -104,7 +107,6 @@ class OnChainReclassificationServiceTest {
         assertThat(saved.getClientId()).isEqualTo("client-1");
         verify(protocolNameEnrichmentService).enrichInPlace(saved, rawTransaction, saved.getUpdatedAt());
         verify(counterpartyEnrichmentService).enrichInPlace(saved, rawTransaction, saved.getUpdatedAt());
-        verify(relatedLifecycleDiscoveryService).discoverAndNormalize(rawTransaction, classification);
     }
 
     @Test
@@ -128,7 +130,99 @@ class OnChainReclassificationServiceTest {
         assertThat(normalizedCaptor.getValue().getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_CLARIFICATION);
         verify(protocolNameEnrichmentService, never()).enrichInPlace(any(), any(), any());
         verify(counterpartyEnrichmentService, never()).enrichInPlace(any(), any(), any());
-        verify(relatedLifecycleDiscoveryService, never()).discoverAndNormalize(any(), any());
+    }
+
+    @Test
+    @DisplayName("exhausted pending clarification result is terminalized to review")
+    void exhaustedPendingClarificationResultIsTerminalizedToReview() {
+        NormalizedTransaction existing = pendingReclassification("0xabc:ETHEREUM:0xwallet");
+        RawTransaction rawTransaction = raw("0xabc");
+        rawTransaction.setClarificationEvidence(new Document("clarificationAttempts", 3));
+        OnChainClassificationResult classification = classification(
+                NormalizedTransactionType.UNKNOWN,
+                NormalizedTransactionStatus.PENDING_CLARIFICATION
+        );
+        when(rawTransactionRepository.findById(existing.getId())).thenReturn(Optional.of(rawTransaction));
+        when(onChainClassifier.classify(rawTransaction)).thenReturn(classification);
+        when(normalizedTransactionRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        boolean reclassified = service.reclassify(existing);
+
+        assertThat(reclassified).isTrue();
+        ArgumentCaptor<NormalizedTransaction> normalizedCaptor = ArgumentCaptor.forClass(NormalizedTransaction.class);
+        verify(normalizedTransactionRepository).save(normalizedCaptor.capture());
+        NormalizedTransaction saved = normalizedCaptor.getValue();
+        assertThat(saved.getStatus()).isEqualTo(NormalizedTransactionStatus.NEEDS_REVIEW);
+        assertThat(saved.getMissingDataReasons())
+                .contains("MISSING_RECEIPT", ClassificationReasonCode.CLARIFICATION_ATTEMPTS_EXHAUSTED.code());
+        verify(protocolNameEnrichmentService).enrichInPlace(saved, rawTransaction, saved.getUpdatedAt());
+        verify(counterpartyEnrichmentService).enrichInPlace(saved, rawTransaction, saved.getUpdatedAt());
+    }
+
+    @Test
+    @DisplayName("receipt-only clarification residual with replayable flows continues to pricing")
+    void receiptOnlyClarificationResidualWithReplayableFlowsContinuesToPricing() {
+        NormalizedTransaction existing = pendingReclassification("0xabc:ETHEREUM:0xwallet");
+        RawTransaction rawTransaction = raw("0xabc");
+        rawTransaction.setClarificationEvidence(new Document("clarificationAttempts", 1));
+        OnChainClassificationResult classification = classification(
+                NormalizedTransactionType.LP_ENTRY,
+                NormalizedTransactionStatus.PENDING_CLARIFICATION,
+                List.of(flow(NormalizedLegRole.SELL, "USDC", "-100")),
+                List.of(ClassificationReasonCode.LP_POSITION_CORRELATION_REQUIRED.code())
+        );
+        when(rawTransactionRepository.findById(existing.getId())).thenReturn(Optional.of(rawTransaction));
+        when(onChainClassifier.classify(rawTransaction)).thenReturn(classification);
+        when(normalizedTransactionRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        boolean reclassified = service.reclassify(existing);
+
+        assertThat(reclassified).isTrue();
+        ArgumentCaptor<NormalizedTransaction> normalizedCaptor = ArgumentCaptor.forClass(NormalizedTransaction.class);
+        verify(normalizedTransactionRepository).save(normalizedCaptor.capture());
+        NormalizedTransaction saved = normalizedCaptor.getValue();
+        assertThat(saved.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        assertThat(saved.getType()).isEqualTo(NormalizedTransactionType.LP_ENTRY);
+        assertThat(saved.getMissingDataReasons())
+                .contains(
+                        ClassificationReasonCode.LP_POSITION_CORRELATION_REQUIRED.code(),
+                        ClassificationReasonCode.CLARIFICATION_ATTEMPTS_EXHAUSTED.code()
+                );
+        verify(protocolNameEnrichmentService).enrichInPlace(saved, rawTransaction, saved.getUpdatedAt());
+        verify(counterpartyEnrichmentService).enrichInPlace(saved, rawTransaction, saved.getUpdatedAt());
+    }
+
+    @Test
+    @DisplayName("Euler decoder residual with replayable flows continues to pricing after receipt clarification")
+    void eulerDecoderResidualWithReplayableFlowsContinuesToPricingAfterReceiptClarification() {
+        NormalizedTransaction existing = pendingReclassification("0xabc:ETHEREUM:0xwallet");
+        RawTransaction rawTransaction = raw("0xabc");
+        rawTransaction.setClarificationEvidence(new Document("clarificationAttempts", 1));
+        OnChainClassificationResult classification = classification(
+                NormalizedTransactionType.UNKNOWN,
+                NormalizedTransactionStatus.PENDING_CLARIFICATION,
+                List.of(
+                        flow(NormalizedLegRole.TRANSFER, "eUSDC-29", "-2094.631504"),
+                        flow(NormalizedLegRole.TRANSFER, "USDC", "2106.730523")
+                ),
+                List.of(ClassificationReasonCode.EULER_BATCH_DECODER_REQUIRED.code())
+        );
+        when(rawTransactionRepository.findById(existing.getId())).thenReturn(Optional.of(rawTransaction));
+        when(onChainClassifier.classify(rawTransaction)).thenReturn(classification);
+        when(normalizedTransactionRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        boolean reclassified = service.reclassify(existing);
+
+        assertThat(reclassified).isTrue();
+        ArgumentCaptor<NormalizedTransaction> normalizedCaptor = ArgumentCaptor.forClass(NormalizedTransaction.class);
+        verify(normalizedTransactionRepository).save(normalizedCaptor.capture());
+        NormalizedTransaction saved = normalizedCaptor.getValue();
+        assertThat(saved.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        assertThat(saved.getMissingDataReasons())
+                .contains(
+                        ClassificationReasonCode.EULER_BATCH_DECODER_REQUIRED.code(),
+                        ClassificationReasonCode.CLARIFICATION_ATTEMPTS_EXHAUSTED.code()
+                );
     }
 
     @Test
@@ -182,15 +276,29 @@ class OnChainReclassificationServiceTest {
             NormalizedTransactionType type,
             NormalizedTransactionStatus status
     ) {
+        return classification(
+                type,
+                status,
+                List.of(),
+                status == NormalizedTransactionStatus.PENDING_CLARIFICATION
+                        ? List.of("MISSING_RECEIPT")
+                        : List.of()
+        );
+    }
+
+    private static OnChainClassificationResult classification(
+            NormalizedTransactionType type,
+            NormalizedTransactionStatus status,
+            List<NormalizedTransaction.Flow> flows,
+            List<String> missingDataReasons
+    ) {
         return new OnChainClassificationResult(
                 type,
                 status,
                 ClassificationSource.METHOD_ID,
                 ConfidenceLevel.MEDIUM,
-                List.of(),
-                status == NormalizedTransactionStatus.PENDING_CLARIFICATION
-                        ? List.of("MISSING_RECEIPT")
-                        : List.of(),
+                flows,
+                missingDataReasons,
                 null,
                 false,
                 null,
@@ -199,5 +307,13 @@ class OnChainReclassificationServiceTest {
                 status == NormalizedTransactionStatus.PENDING_CLARIFICATION ? null : "Uniswap",
                 null
         );
+    }
+
+    private static NormalizedTransaction.Flow flow(NormalizedLegRole role, String assetSymbol, String quantityDelta) {
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(role);
+        flow.setAssetSymbol(assetSymbol);
+        flow.setQuantityDelta(new BigDecimal(quantityDelta));
+        return flow;
     }
 }

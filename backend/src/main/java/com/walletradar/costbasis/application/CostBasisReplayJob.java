@@ -1,12 +1,12 @@
 package com.walletradar.costbasis.application;
 
 import com.walletradar.config.AsyncConfig;
+import com.walletradar.domain.event.AccountingReplayCompletedEvent;
 import com.walletradar.domain.event.PricingCompletedEvent;
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.domain.session.UserSessionRepository;
 import com.walletradar.costbasis.domain.AssetLedgerPointRepository;
 import com.walletradar.ingestion.job.support.StageExecutionLogSupport;
-import com.walletradar.pricing.application.CurrentPriceQuoteRefreshService;
 import com.walletradar.pricing.application.PricingDataGateService;
 import com.walletradar.pricing.application.PricingDataGateSnapshot;
 import com.walletradar.session.application.AccountingUniverseService;
@@ -17,6 +17,7 @@ import com.walletradar.telemetry.PipelineTelemetrySnapshotService;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
@@ -45,10 +46,9 @@ public class CostBasisReplayJob {
     private final PendingStatQueryService pendingStatQueryService;
     private final StatValidationService statValidationService;
     private final AvcoReplayService avcoReplayService;
-    private final OnChainBalanceRefreshService onChainBalanceRefreshService;
-    private final CurrentPriceQuoteRefreshService currentPriceQuoteRefreshService;
     private final AssetLedgerPointRepository assetLedgerPointRepository;
     private final PipelineTelemetrySnapshotService pipelineTelemetrySnapshotService;
+    private final ApplicationEventPublisher applicationEventPublisher;
     private final SessionPipelineActivityService sessionPipelineActivityService;
     private final SessionPipelineStateService sessionPipelineStateService;
 
@@ -171,25 +171,6 @@ public class CostBasisReplayJob {
                         sessionId
                 );
             }
-            Instant evidenceCapturedAt = Instant.now();
-            int refreshedBalances = onChainBalanceRefreshService.refreshCurrentBalances(
-                    sessionId,
-                    scope.onChainWalletRefs(),
-                    evidenceCapturedAt,
-                    stageHeartbeat::pulse
-            );
-            log.info(
-                    "Costbasis on-chain balance refresh outcome: sessionId={}, refreshed={}",
-                    sessionId,
-                    refreshedBalances
-            );
-            int refreshedQuotes = currentPriceQuoteRefreshService.refreshForSessionBalances(sessionId, evidenceCapturedAt);
-            log.info(
-                    "Costbasis current quote refresh outcome: sessionId={}, refreshed={}",
-                    sessionId,
-                    refreshedQuotes
-            );
-
             logStatOutcome(promoted, demoted, statProcessed, replaySafeReviewPromoted);
             logSnapshot();
             sessionPipelineStateService.markStageComplete(
@@ -197,6 +178,7 @@ public class CostBasisReplayJob {
                     UserSession.PipelineStage.ACCOUNTING_REPLAY,
                     "Accounting replay complete"
             );
+            applicationEventPublisher.publishEvent(new AccountingReplayCompletedEvent(sessionId, replayed, trigger));
             return replayed;
         } catch (RuntimeException error) {
             sessionPipelineStateService.markStageFailed(

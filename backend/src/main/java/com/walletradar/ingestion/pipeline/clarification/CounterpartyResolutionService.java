@@ -13,6 +13,7 @@ import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 
 import java.util.LinkedHashSet;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 
@@ -34,18 +35,23 @@ public class CounterpartyResolutionService {
     }
 
     public Optional<String> resolve(NormalizedTransaction normalizedTransaction, RawTransaction rawTransaction) {
+        ResolvedCounterparty resolved = resolveMetadata(normalizedTransaction, rawTransaction);
+        return resolved == null || !present(resolved.address()) ? Optional.empty() : Optional.of(resolved.address());
+    }
+
+    public ResolvedCounterparty resolveMetadata(NormalizedTransaction normalizedTransaction, RawTransaction rawTransaction) {
         if (normalizedTransaction == null || rawTransaction == null) {
-            return Optional.empty();
+            return ResolvedCounterparty.missingRaw();
         }
 
         OnChainRawTransactionView view = OnChainRawTransactionView.wrap(rawTransaction);
         String walletAddress = view.walletAddress();
         NormalizedTransactionType type = normalizedTransaction.getType();
         if (type == null) {
-            return Optional.empty();
+            return terminalMissing("TRANSACTION_TYPE_MISSING");
         }
 
-        return switch (type) {
+        Optional<String> resolvedAddress = switch (type) {
             case SWAP,
                     WRAP,
                     UNWRAP,
@@ -82,6 +88,60 @@ public class CounterpartyResolutionService {
                     .or(() -> resolveRegistryBackedContract(view, type, walletAddress));
             default -> Optional.empty();
         };
+        if (resolvedAddress.isEmpty()) {
+            return terminalMissing("NO_UNIQUE_ROW_LOCAL_COUNTERPARTY");
+        }
+        String address = resolvedAddress.orElseThrow();
+        return new ResolvedCounterparty(
+                address,
+                classifyCounterpartyType(normalizedTransaction, view, address),
+                MetadataResolutionState.RESOLVED_EXACT,
+                "ROW_LOCAL_RAW_OR_REGISTRY_EVIDENCE"
+        );
+    }
+
+    private String classifyCounterpartyType(
+            NormalizedTransaction normalizedTransaction,
+            OnChainRawTransactionView view,
+            String address
+    ) {
+        String matchedCounterparty = normalizedTransaction.getMatchedCounterparty();
+        if (present(matchedCounterparty) && matchedCounterparty.trim().toUpperCase(Locale.ROOT).startsWith("BYBIT:")) {
+            return CounterpartyType.CEX;
+        }
+        NormalizedTransactionType type = normalizedTransaction.getType();
+        if (type == NormalizedTransactionType.BRIDGE_IN || type == NormalizedTransactionType.BRIDGE_OUT) {
+            return CounterpartyType.BRIDGE;
+        }
+        ProtocolRegistryEntry entry = protocolRegistryEntry(view, address).orElse(null);
+        if (entry != null) {
+            return isBridgeRole(entry.role()) ? CounterpartyType.BRIDGE : CounterpartyType.PROTOCOL;
+        }
+        if (type == NormalizedTransactionType.EXTERNAL_TRANSFER_IN
+                || type == NormalizedTransactionType.EXTERNAL_TRANSFER_OUT) {
+            return CounterpartyType.UNKNOWN_EOA;
+        }
+        return CounterpartyType.PROTOCOL;
+    }
+
+    private Optional<ProtocolRegistryEntry> protocolRegistryEntry(OnChainRawTransactionView view, String address) {
+        if (protocolRegistryService == null || view == null || view.networkId() == null || !present(address)) {
+            return Optional.empty();
+        }
+        return protocolRegistryService.lookup(view.networkId(), address);
+    }
+
+    private boolean isBridgeRole(ProtocolRegistryRole role) {
+        return role == ProtocolRegistryRole.BRIDGE_ENTRY || role == ProtocolRegistryRole.BRIDGE_EXIT;
+    }
+
+    private ResolvedCounterparty terminalMissing(String evidence) {
+        return new ResolvedCounterparty(
+                null,
+                CounterpartyType.GENUINE_MISSING_SOURCE,
+                MetadataResolutionState.IRREDUCIBLE_EVIDENCE_MISSING,
+                evidence
+        );
     }
 
     private Optional<String> resolveInteractedContract(OnChainRawTransactionView view, String walletAddress) {
@@ -233,5 +293,21 @@ public class CounterpartyResolutionService {
 
     private boolean present(String value) {
         return value != null && !value.isBlank();
+    }
+
+    public record ResolvedCounterparty(
+            String address,
+            String counterpartyType,
+            String resolutionState,
+            String evidence
+    ) {
+        static ResolvedCounterparty missingRaw() {
+            return new ResolvedCounterparty(
+                    null,
+                    CounterpartyType.GENUINE_MISSING_SOURCE,
+                    MetadataResolutionState.IRREDUCIBLE_EVIDENCE_MISSING,
+                    "RAW_TRANSACTION_MISSING"
+            );
+        }
     }
 }

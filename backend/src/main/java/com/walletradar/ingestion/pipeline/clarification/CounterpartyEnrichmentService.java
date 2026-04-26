@@ -70,19 +70,43 @@ public class CounterpartyEnrichmentService {
             @Nullable RawTransaction rawTransaction,
             Instant now
     ) {
-        if (normalizedTransaction == null || rawTransaction == null) {
+        if (normalizedTransaction == null) {
             return false;
         }
 
-        String targetCounterparty = resolutionService.resolve(normalizedTransaction, rawTransaction).orElse(null);
-        if (targetCounterparty == null || targetCounterparty.isBlank()) {
-            return false;
-        }
-        if (Objects.equals(normalizedTransaction.getCounterpartyAddress(), targetCounterparty)) {
+        CounterpartyResolutionService.ResolvedCounterparty resolved = rawTransaction == null
+                ? CounterpartyResolutionService.ResolvedCounterparty.missingRaw()
+                : resolutionService.resolveMetadata(normalizedTransaction, rawTransaction);
+        if (resolved == null) {
             return false;
         }
 
-        normalizedTransaction.setCounterpartyAddress(targetCounterparty);
+        boolean changed = false;
+        if (resolved.address() != null
+                && !resolved.address().isBlank()
+                && !Objects.equals(normalizedTransaction.getCounterpartyAddress(), resolved.address())) {
+            normalizedTransaction.setCounterpartyAddress(resolved.address());
+            changed = true;
+        }
+        if (resolved.counterpartyType() != null
+                && !Objects.equals(normalizedTransaction.getCounterpartyType(), resolved.counterpartyType())) {
+            normalizedTransaction.setCounterpartyType(resolved.counterpartyType());
+            changed = true;
+        }
+        if (resolved.resolutionState() != null
+                && !Objects.equals(normalizedTransaction.getCounterpartyResolutionState(), resolved.resolutionState())) {
+            normalizedTransaction.setCounterpartyResolutionState(resolved.resolutionState());
+            changed = true;
+        }
+        if (resolved.evidence() != null
+                && !Objects.equals(normalizedTransaction.getCounterpartyResolutionEvidence(), resolved.evidence())) {
+            normalizedTransaction.setCounterpartyResolutionEvidence(resolved.evidence());
+            changed = true;
+        }
+        if (!changed) {
+            return false;
+        }
+
         normalizedTransaction.setUpdatedAt(now == null ? Instant.now() : now);
         return true;
     }

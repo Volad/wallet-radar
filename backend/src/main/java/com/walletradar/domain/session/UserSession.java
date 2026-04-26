@@ -116,7 +116,8 @@ public class UserSession {
         BYBIT_NORMALIZATION,
         LINKING,
         PRICING,
-        ACCOUNTING_REPLAY
+        ACCOUNTING_REPLAY,
+        PORTFOLIO_SNAPSHOT_REFRESH
     }
 
     public enum PipelineStatus {

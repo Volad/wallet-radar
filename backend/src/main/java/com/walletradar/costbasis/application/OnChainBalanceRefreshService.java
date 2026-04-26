@@ -34,6 +34,12 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 /**
  * Refreshes latest live on-chain balance evidence for the bounded accounting asset universe.
@@ -46,6 +52,7 @@ public class OnChainBalanceRefreshService {
     private static final String ERC20_BALANCE_OF_SELECTOR = "0x70a08231";
     private static final String ERC20_DECIMALS_SELECTOR = "0x313ce567";
     private static final int EVM_NATIVE_DECIMALS = 18;
+    private static final int EXPLORER_REFRESH_LANES = 4;
 
     private final OnChainBalanceRefreshQueryService queryService;
     private final OnChainBalanceRepository onChainBalanceRepository;
@@ -93,22 +100,39 @@ public class OnChainBalanceRefreshService {
         }
 
         List<ResolvedCandidate> candidates = resolution.candidates();
+        Map<NetworkId, Map<String, Integer>> knownDecimalsByNetwork = loadKnownDecimals(candidates, sessionId);
         ProviderResolutionResult providerResult = loadProviderBalances(candidates, capturedAt, sessionId, heartbeat);
         List<ResolvedCandidate> afterProvider = candidates.stream()
                 .filter(candidate -> !providerResult.handledKeys().contains(refreshKey(candidate)))
                 .toList();
-        ProviderResolutionResult etherscanResult = loadExplorerBalances(afterProvider, capturedAt, sessionId, heartbeat);
-        List<ResolvedCandidate> afterEtherscan = afterProvider.stream()
-                .filter(candidate -> !etherscanResult.handledKeys().contains(refreshKey(candidate)))
-                .toList();
-        ProviderResolutionResult blockScoutResult = loadBlockScoutBalances(afterEtherscan, capturedAt, sessionId, heartbeat);
-        List<ResolvedCandidate> rpcCandidates = afterEtherscan.stream()
+        ProviderResolutionResult blockScoutResult = loadBlockScoutBalances(
+                afterProvider,
+                knownDecimalsByNetwork,
+                capturedAt,
+                sessionId,
+                heartbeat
+        );
+        List<ResolvedCandidate> afterBlockScout = afterProvider.stream()
                 .filter(candidate -> !blockScoutResult.handledKeys().contains(refreshKey(candidate)))
                 .toList();
-        Map<NetworkId, Map<String, Integer>> decimalsByNetwork = loadDecimals(rpcCandidates, heartbeat);
+        ProviderResolutionResult etherscanResult = loadExplorerBalances(
+                afterBlockScout,
+                knownDecimalsByNetwork,
+                capturedAt,
+                sessionId,
+                heartbeat
+        );
+        List<ResolvedCandidate> rpcCandidates = afterBlockScout.stream()
+                .filter(candidate -> !etherscanResult.handledKeys().contains(refreshKey(candidate)))
+                .toList();
+        Map<NetworkId, Map<String, Integer>> decimalsByNetwork = loadDecimals(
+                rpcCandidates,
+                knownDecimalsByNetwork,
+                heartbeat
+        );
         List<OnChainBalance> refreshedBalances = new ArrayList<>(providerResult.balances());
-        refreshedBalances.addAll(etherscanResult.balances());
         refreshedBalances.addAll(blockScoutResult.balances());
+        refreshedBalances.addAll(etherscanResult.balances());
         refreshedBalances.addAll(loadRpcBalances(rpcCandidates, decimalsByNetwork, capturedAt, sessionId, heartbeat));
 
         deleteBalances(sessionId);
@@ -244,64 +268,119 @@ public class OnChainBalanceRefreshService {
         return new ProviderResolutionResult(List.copyOf(balances), handledKeys.keySet());
     }
 
+    private Map<NetworkId, Map<String, Integer>> loadKnownDecimals(
+            List<ResolvedCandidate> candidates,
+            String sessionId
+    ) {
+        List<OnChainBalanceRefreshQueryService.TokenContractRef> refs = candidates.stream()
+                .filter(candidate -> candidate.queryKind() == QueryKind.ERC20)
+                .map(candidate -> new OnChainBalanceRefreshQueryService.TokenContractRef(
+                        candidate.networkId(),
+                        candidate.assetContract()
+                ))
+                .toList();
+        Map<OnChainBalanceRefreshQueryService.TokenContractRef, Integer> known =
+                queryService.loadKnownTokenDecimals(refs, sessionId);
+        Map<NetworkId, Map<String, Integer>> byNetwork = new EnumMap<>(NetworkId.class);
+        if (known == null || known.isEmpty()) {
+            return byNetwork;
+        }
+        for (Map.Entry<OnChainBalanceRefreshQueryService.TokenContractRef, Integer> entry : known.entrySet()) {
+            if (entry.getKey().networkId() == null
+                    || entry.getKey().assetContract() == null
+                    || entry.getValue() == null
+                    || entry.getValue() < 0) {
+                continue;
+            }
+            byNetwork.computeIfAbsent(entry.getKey().networkId(), ignored -> new LinkedHashMap<>())
+                    .put(entry.getKey().assetContract().toLowerCase(Locale.ROOT), entry.getValue());
+        }
+        return byNetwork;
+    }
+
     private ProviderResolutionResult loadExplorerBalances(
             List<ResolvedCandidate> candidates,
+            Map<NetworkId, Map<String, Integer>> knownDecimalsByNetwork,
             Instant capturedAt,
             String sessionId,
             Runnable heartbeat
     ) {
         ArrayList<OnChainBalance> balances = new ArrayList<>();
         Map<RefreshKey, Boolean> handledKeys = new LinkedHashMap<>();
-        for (ResolvedCandidate candidate : candidates) {
-            heartbeat(heartbeat);
-            if (!etherscanExplorerProvider.supports(candidate.networkId())) {
-                continue;
-            }
-            try {
-                BigInteger rawQuantity = candidate.queryKind() == QueryKind.NATIVE
-                        ? etherscanExplorerProvider.getNativeBalance(candidate.walletAddress(), candidate.networkId())
-                        : etherscanExplorerProvider.getTokenBalance(
-                                candidate.walletAddress(),
-                                candidate.assetContract(),
-                                candidate.networkId()
-                        );
-                if (rawQuantity == null) {
-                    continue;
-                }
-                Integer explorerDecimals;
-                if (candidate.queryKind() == QueryKind.NATIVE) {
-                    explorerDecimals = Integer.valueOf(EVM_NATIVE_DECIMALS);
-                } else {
-                    explorerDecimals = etherscanExplorerProvider.getTokenDecimals(
-                            candidate.walletAddress(),
-                            candidate.assetContract(),
-                            candidate.networkId()
-                    );
-                }
-                int decimals = explorerDecimals == null ? -1 : explorerDecimals;
-                if (decimals < 0) {
-                    continue;
-                }
-                BigDecimal quantity = Decimal128Support.normalize(
-                        new BigDecimal(rawQuantity).movePointLeft(Math.max(0, decimals))
-                );
-                balances.add(balanceDocument(candidate, quantity, capturedAt, sessionId));
-                handledKeys.put(refreshKey(candidate), Boolean.TRUE);
-            } catch (Exception explorerFailure) {
-                log.warn(
-                        "On-chain balance refresh explorer path failed: walletAddress={}, networkId={}, accountingIdentity={}, fallback=RPC",
-                        candidate.walletAddress(),
-                        candidate.networkId(),
-                        candidate.accountingIdentity(),
-                        explorerFailure
-                );
-            }
+        List<ResolvedCandidate> supportedCandidates = candidates.stream()
+                .filter(candidate -> etherscanExplorerProvider.supports(candidate.networkId()))
+                .toList();
+        for (ResolvedBalance resolvedBalance : runBounded(
+                "etherscan-balance-refresh",
+                supportedCandidates.stream()
+                        .map(candidate -> (Callable<Optional<ResolvedBalance>>) () -> loadExplorerBalance(
+                                candidate,
+                                knownDecimalsByNetwork,
+                                capturedAt,
+                                sessionId
+                        ))
+                        .toList(),
+                heartbeat
+        )) {
+            balances.add(resolvedBalance.balance());
+            handledKeys.put(refreshKey(resolvedBalance.candidate()), Boolean.TRUE);
         }
         return new ProviderResolutionResult(List.copyOf(balances), handledKeys.keySet());
     }
 
+    private Optional<ResolvedBalance> loadExplorerBalance(
+            ResolvedCandidate candidate,
+            Map<NetworkId, Map<String, Integer>> knownDecimalsByNetwork,
+            Instant capturedAt,
+            String sessionId
+    ) {
+        try {
+            BigInteger rawQuantity = candidate.queryKind() == QueryKind.NATIVE
+                    ? etherscanExplorerProvider.getNativeBalance(candidate.walletAddress(), candidate.networkId())
+                    : etherscanExplorerProvider.getTokenBalance(
+                            candidate.walletAddress(),
+                            candidate.assetContract(),
+                            candidate.networkId()
+                    );
+            if (rawQuantity == null) {
+                return Optional.empty();
+            }
+            Integer explorerDecimals = candidate.queryKind() == QueryKind.NATIVE
+                    ? Integer.valueOf(EVM_NATIVE_DECIMALS)
+                    : knownDecimals(candidate, knownDecimalsByNetwork);
+            if (explorerDecimals == null && candidate.queryKind() == QueryKind.ERC20) {
+                explorerDecimals = etherscanExplorerProvider.getTokenDecimals(
+                        candidate.walletAddress(),
+                        candidate.assetContract(),
+                        candidate.networkId()
+                );
+            }
+            int decimals = explorerDecimals == null ? -1 : explorerDecimals;
+            if (decimals < 0) {
+                return Optional.empty();
+            }
+            BigDecimal quantity = Decimal128Support.normalize(
+                    new BigDecimal(rawQuantity).movePointLeft(Math.max(0, decimals))
+            );
+            return Optional.of(new ResolvedBalance(
+                    candidate,
+                    balanceDocument(candidate, quantity, decimals, capturedAt, sessionId)
+            ));
+        } catch (Exception explorerFailure) {
+            log.warn(
+                    "On-chain balance refresh explorer path failed: walletAddress={}, networkId={}, accountingIdentity={}, fallback=RPC",
+                    candidate.walletAddress(),
+                    candidate.networkId(),
+                    candidate.accountingIdentity(),
+                    explorerFailure
+            );
+            return Optional.empty();
+        }
+    }
+
     private ProviderResolutionResult loadBlockScoutBalances(
             List<ResolvedCandidate> candidates,
+            Map<NetworkId, Map<String, Integer>> knownDecimalsByNetwork,
             Instant capturedAt,
             String sessionId,
             Runnable heartbeat
@@ -319,70 +398,102 @@ public class OnChainBalanceRefreshService {
 
         ArrayList<OnChainBalance> balances = new ArrayList<>();
         Map<RefreshKey, Boolean> handledKeys = new LinkedHashMap<>();
-        for (Map.Entry<WalletNetworkKey, List<ResolvedCandidate>> entry : grouped.entrySet()) {
-            heartbeat(heartbeat);
-            WalletNetworkKey walletNetworkKey = entry.getKey();
-            List<ResolvedCandidate> walletCandidates = entry.getValue().stream()
-                    .sorted(Comparator.comparing(ResolvedCandidate::accountingIdentity))
-                    .toList();
-            Map<String, Integer> tokenDecimalsCache = new LinkedHashMap<>();
-            try {
-                BigInteger nativeBalance = blockScoutExplorerProvider.getNativeBalance(
-                        walletNetworkKey.walletAddress(),
-                        walletNetworkKey.networkId()
-                );
-                Map<String, BlockScoutExplorerProvider.TokenBalanceSnapshot> tokenBalances =
-                        blockScoutExplorerProvider.getTokenBalances(
-                                walletNetworkKey.walletAddress(),
-                                walletNetworkKey.networkId()
-                        );
-
-                for (ResolvedCandidate candidate : walletCandidates) {
-                    BigInteger rawQuantity;
-                    int decimals;
-                    if (candidate.queryKind() == QueryKind.NATIVE) {
-                        rawQuantity = nativeBalance;
-                        decimals = EVM_NATIVE_DECIMALS;
-                    } else {
-                        BlockScoutExplorerProvider.TokenBalanceSnapshot snapshot =
-                                tokenBalances.get(candidate.assetContract().toLowerCase(Locale.ROOT));
-                        if (snapshot == null) {
-                            Integer tokenDecimals = tokenDecimalsCache.computeIfAbsent(
-                                    candidate.assetContract().toLowerCase(Locale.ROOT),
-                                    ignored -> blockScoutExplorerProvider.getTokenDecimals(
-                                            candidate.assetContract(),
-                                            candidate.networkId()
-                                    )
-                            );
-                            if (tokenDecimals == null) {
-                                continue;
-                            }
-                            rawQuantity = BigInteger.ZERO;
-                            decimals = tokenDecimals;
-                        } else {
-                            rawQuantity = snapshot.rawQuantity();
-                            decimals = snapshot.decimals();
-                        }
-                    }
-                    if (rawQuantity == null || decimals < 0) {
-                        continue;
-                    }
-                    BigDecimal quantity = Decimal128Support.normalize(
-                            new BigDecimal(rawQuantity).movePointLeft(Math.max(0, decimals))
-                    );
-                    balances.add(balanceDocument(candidate, quantity, capturedAt, sessionId));
-                    handledKeys.put(refreshKey(candidate), Boolean.TRUE);
-                }
-            } catch (Exception explorerFailure) {
-                log.warn(
-                        "On-chain balance refresh Blockscout path failed: walletAddress={}, networkId={}, fallback=RPC",
-                        walletNetworkKey.walletAddress(),
-                        walletNetworkKey.networkId(),
-                        explorerFailure
-                );
+        for (List<ResolvedBalance> groupBalances : runBounded(
+                "blockscout-balance-refresh",
+                grouped.entrySet().stream()
+                        .map(entry -> (Callable<Optional<List<ResolvedBalance>>>) () -> loadBlockScoutBalanceGroup(
+                                entry,
+                                knownDecimalsByNetwork,
+                                capturedAt,
+                                sessionId
+                        ))
+                        .toList(),
+                heartbeat
+        )) {
+            for (ResolvedBalance resolvedBalance : groupBalances) {
+                balances.add(resolvedBalance.balance());
+                handledKeys.put(refreshKey(resolvedBalance.candidate()), Boolean.TRUE);
             }
         }
         return new ProviderResolutionResult(List.copyOf(balances), handledKeys.keySet());
+    }
+
+    private Optional<List<ResolvedBalance>> loadBlockScoutBalanceGroup(
+            Map.Entry<WalletNetworkKey, List<ResolvedCandidate>> entry,
+            Map<NetworkId, Map<String, Integer>> knownDecimalsByNetwork,
+            Instant capturedAt,
+            String sessionId
+    ) {
+        WalletNetworkKey walletNetworkKey = entry.getKey();
+        List<ResolvedCandidate> walletCandidates = entry.getValue().stream()
+                .sorted(Comparator.comparing(ResolvedCandidate::accountingIdentity))
+                .toList();
+        Map<String, Integer> tokenDecimalsCache = new LinkedHashMap<>();
+        ArrayList<ResolvedBalance> balances = new ArrayList<>();
+        try {
+            BigInteger nativeBalance = blockScoutExplorerProvider.getNativeBalance(
+                    walletNetworkKey.walletAddress(),
+                    walletNetworkKey.networkId()
+            );
+            Map<String, BlockScoutExplorerProvider.TokenBalanceSnapshot> tokenBalances =
+                    blockScoutExplorerProvider.getTokenBalances(
+                            walletNetworkKey.walletAddress(),
+                            walletNetworkKey.networkId()
+                    );
+
+            for (ResolvedCandidate candidate : walletCandidates) {
+                BigInteger rawQuantity;
+                int decimals;
+                if (candidate.queryKind() == QueryKind.NATIVE) {
+                    rawQuantity = nativeBalance;
+                    decimals = EVM_NATIVE_DECIMALS;
+                } else {
+                    BlockScoutExplorerProvider.TokenBalanceSnapshot snapshot =
+                            tokenBalances.get(candidate.assetContract().toLowerCase(Locale.ROOT));
+                    if (snapshot == null) {
+                        Integer tokenDecimals = tokenDecimalsCache.computeIfAbsent(
+                                candidate.assetContract().toLowerCase(Locale.ROOT),
+                                ignored -> {
+                                    Integer knownDecimals = knownDecimals(candidate, knownDecimalsByNetwork);
+                                    return knownDecimals == null
+                                            ? blockScoutExplorerProvider.getTokenDecimals(
+                                                    candidate.assetContract(),
+                                                    candidate.networkId()
+                                            )
+                                            : knownDecimals;
+                                }
+                        );
+                        if (tokenDecimals == null) {
+                            continue;
+                        }
+                        rawQuantity = BigInteger.ZERO;
+                        decimals = tokenDecimals;
+                    } else {
+                        rawQuantity = snapshot.rawQuantity();
+                        decimals = snapshot.decimals();
+                    }
+                }
+                if (rawQuantity == null || decimals < 0) {
+                    continue;
+                }
+                BigDecimal quantity = Decimal128Support.normalize(
+                        new BigDecimal(rawQuantity).movePointLeft(Math.max(0, decimals))
+                );
+                balances.add(new ResolvedBalance(
+                        candidate,
+                        balanceDocument(candidate, quantity, decimals, capturedAt, sessionId)
+                ));
+            }
+            return Optional.of(List.copyOf(balances));
+        } catch (Exception explorerFailure) {
+            log.warn(
+                    "On-chain balance refresh Blockscout path failed: walletAddress={}, networkId={}, fallback=RPC",
+                    walletNetworkKey.walletAddress(),
+                    walletNetworkKey.networkId(),
+                    explorerFailure
+            );
+            return Optional.empty();
+        }
     }
 
     private Map<RefreshKey, BigDecimal> providerQuantities(
@@ -412,10 +523,18 @@ public class OnChainBalanceRefreshService {
         return byKey;
     }
 
-    private Map<NetworkId, Map<String, Integer>> loadDecimals(List<ResolvedCandidate> candidates, Runnable heartbeat) {
+    private Map<NetworkId, Map<String, Integer>> loadDecimals(
+            List<ResolvedCandidate> candidates,
+            Map<NetworkId, Map<String, Integer>> knownDecimalsByNetwork,
+            Runnable heartbeat
+    ) {
         Map<NetworkId, List<String>> contractsByNetwork = new EnumMap<>(NetworkId.class);
+        Map<NetworkId, Map<String, Integer>> decimalsByNetwork = copyDecimals(knownDecimalsByNetwork);
         for (ResolvedCandidate candidate : candidates) {
             if (candidate.queryKind() != QueryKind.ERC20 || candidate.assetContract() == null) {
+                continue;
+            }
+            if (knownDecimals(candidate, decimalsByNetwork) != null) {
                 continue;
             }
             contractsByNetwork.computeIfAbsent(candidate.networkId(), ignored -> new ArrayList<>());
@@ -425,7 +544,6 @@ public class OnChainBalanceRefreshService {
             }
         }
 
-        Map<NetworkId, Map<String, Integer>> decimalsByNetwork = new EnumMap<>(NetworkId.class);
         for (Map.Entry<NetworkId, List<String>> entry : contractsByNetwork.entrySet()) {
             heartbeat(heartbeat);
             NetworkId networkId = entry.getKey();
@@ -455,7 +573,7 @@ public class OnChainBalanceRefreshService {
                     );
                 }
             }
-            decimalsByNetwork.put(networkId, decimalsByContract);
+            decimalsByNetwork.computeIfAbsent(networkId, ignored -> new LinkedHashMap<>()).putAll(decimalsByContract);
         }
         return decimalsByNetwork;
     }
@@ -537,10 +655,46 @@ public class OnChainBalanceRefreshService {
                 BigDecimal quantity = Decimal128Support.normalize(
                         new BigDecimal(rawQuantity).movePointLeft(Math.max(0, descriptor.decimals()))
                 );
-                balances.add(balanceDocument(descriptor.candidate(), quantity, capturedAt, sessionId));
+                balances.add(balanceDocument(
+                        descriptor.candidate(),
+                        quantity,
+                        descriptor.decimals(),
+                        capturedAt,
+                        sessionId
+                ));
             }
         }
         return balances;
+    }
+
+    private <T> List<T> runBounded(
+            String operation,
+            List<Callable<Optional<T>>> tasks,
+            Runnable heartbeat
+    ) {
+        if (tasks == null || tasks.isEmpty()) {
+            return List.of();
+        }
+        int lanes = Math.max(1, Math.min(EXPLORER_REFRESH_LANES, tasks.size()));
+        ExecutorService executor = Executors.newFixedThreadPool(lanes);
+        try {
+            List<Future<Optional<T>>> futures = executor.invokeAll(tasks);
+            ArrayList<T> results = new ArrayList<>();
+            for (Future<Optional<T>> future : futures) {
+                heartbeat(heartbeat);
+                try {
+                    future.get().ifPresent(results::add);
+                } catch (ExecutionException error) {
+                    log.warn("On-chain balance refresh {} task failed: fallback=RPC", operation, error);
+                }
+            }
+            return List.copyOf(results);
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            throw new RpcException("On-chain balance refresh " + operation + " interrupted", error);
+        } finally {
+            executor.shutdownNow();
+        }
     }
 
     private void heartbeat(Runnable heartbeat) {
@@ -552,6 +706,7 @@ public class OnChainBalanceRefreshService {
     private OnChainBalance balanceDocument(
             ResolvedCandidate candidate,
             BigDecimal quantity,
+            Integer tokenDecimals,
             Instant capturedAt,
             String sessionId
     ) {
@@ -562,9 +717,43 @@ public class OnChainBalanceRefreshService {
         balance.setNetworkId(candidate.networkId());
         balance.setAssetSymbol(candidate.assetSymbol());
         balance.setAssetContract(candidate.assetContract());
+        balance.setTokenDecimals(tokenDecimals);
         balance.setQuantity(quantity);
         balance.setCapturedAt(capturedAt);
         return balance;
+    }
+
+    private OnChainBalance balanceDocument(
+            ResolvedCandidate candidate,
+            BigDecimal quantity,
+            Instant capturedAt,
+            String sessionId
+    ) {
+        Integer tokenDecimals = candidate.queryKind() == QueryKind.NATIVE ? EVM_NATIVE_DECIMALS : null;
+        return balanceDocument(candidate, quantity, tokenDecimals, capturedAt, sessionId);
+    }
+
+    private Integer knownDecimals(
+            ResolvedCandidate candidate,
+            Map<NetworkId, Map<String, Integer>> knownDecimalsByNetwork
+    ) {
+        if (candidate == null || candidate.assetContract() == null || knownDecimalsByNetwork == null) {
+            return null;
+        }
+        return knownDecimalsByNetwork
+                .getOrDefault(candidate.networkId(), Map.of())
+                .get(candidate.assetContract().toLowerCase(Locale.ROOT));
+    }
+
+    private Map<NetworkId, Map<String, Integer>> copyDecimals(Map<NetworkId, Map<String, Integer>> source) {
+        Map<NetworkId, Map<String, Integer>> copy = new EnumMap<>(NetworkId.class);
+        if (source == null) {
+            return copy;
+        }
+        for (Map.Entry<NetworkId, Map<String, Integer>> entry : source.entrySet()) {
+            copy.put(entry.getKey(), new LinkedHashMap<>(entry.getValue()));
+        }
+        return copy;
     }
 
     private String balanceId(String sessionId, ResolvedCandidate candidate) {
@@ -749,6 +938,12 @@ public class OnChainBalanceRefreshService {
     private record ProviderResolutionResult(
             List<OnChainBalance> balances,
             java.util.Set<RefreshKey> handledKeys
+    ) {
+    }
+
+    private record ResolvedBalance(
+            ResolvedCandidate candidate,
+            OnChainBalance balance
     ) {
     }
 

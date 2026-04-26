@@ -11,6 +11,7 @@ import com.walletradar.ingestion.pipeline.classification.reason.ClassificationRe
 import org.bson.Document;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.mongodb.core.MongoOperations;
@@ -24,6 +25,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -38,6 +40,50 @@ class PendingReceiptClarificationQueryServiceTest {
     private com.walletradar.domain.transaction.raw.RawTransactionRepository rawTransactionRepository;
     @Mock
     private ReceiptClarificationGateway receiptClarificationGateway;
+
+    @Test
+    void loadsBlockingNeedsReviewRowsWithArbitraryReasonForReceiptRecovery() {
+        PendingReceiptClarificationQueryService service = new PendingReceiptClarificationQueryService(
+                mongoOperations,
+                rawTransactionRepository,
+                receiptClarificationGateway
+        );
+
+        NormalizedTransaction candidate = reviewCandidate();
+        candidate.setMissingDataReasons(List.of("UNSUPPORTED_REVIEW_REASON"));
+        RawTransaction rawTransaction = raw(candidate.getId(), candidate.getTxHash());
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(candidate));
+        when(rawTransactionRepository.findAllById(List.of(candidate.getId()))).thenReturn(List.of(rawTransaction));
+        when(receiptClarificationGateway.fromPersistedEvidence(rawTransaction, true)).thenReturn(Optional.empty());
+
+        List<NormalizedTransaction> batch = service.loadNextBatch(1, 2, 120);
+
+        assertThat(batch).singleElement().satisfies(row -> {
+            assertThat(row.getId()).isEqualTo(candidate.getId());
+            assertThat(row.getStatus()).isEqualTo(NormalizedTransactionStatus.NEEDS_REVIEW);
+            assertThat(row.getMissingDataReasons()).containsExactly("UNSUPPORTED_REVIEW_REASON");
+        });
+    }
+
+    @Test
+    void needsReviewRecoveryQueryExcludesAccountingExcludedRows() {
+        PendingReceiptClarificationQueryService service = new PendingReceiptClarificationQueryService(
+                mongoOperations,
+                rawTransactionRepository,
+                receiptClarificationGateway
+        );
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class))).thenReturn(List.of());
+
+        service.loadNextBatch(1, 2, 120);
+
+        ArgumentCaptor<Query> queryCaptor = ArgumentCaptor.forClass(Query.class);
+        verify(mongoOperations, atLeastOnce()).find(queryCaptor.capture(), eq(NormalizedTransaction.class));
+        String queryText = String.valueOf(queryCaptor.getAllValues().get(0).getQueryObject());
+        assertThat(queryText).contains("NEEDS_REVIEW");
+        assertThat(queryText).contains("excludedFromAccounting");
+        assertThat(queryText).contains("$ne", "true");
+    }
 
     @Test
     void skipsRowsThatAlreadyCarryPersistedReceiptEvidence() {

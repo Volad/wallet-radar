@@ -146,8 +146,8 @@ class LiFiBridgePairLinkServiceTest {
     }
 
     @Test
-    @DisplayName("LI.FI source sweep seeds official receiving-tx evidence without requiring prior receipt clarification")
-    void liFiSourceSweepSeedsOfficialReceivingTxEvidenceWithoutPriorReceiptClarification() {
+    @DisplayName("explicit LI.FI source link seeds official receiving-tx evidence without requiring prior receipt clarification")
+    void explicitLiFiSourceLinkSeedsOfficialReceivingTxEvidenceWithoutPriorReceiptClarification() {
         RawTransaction sourceRaw = sourceRawTransaction(
                 "0x9f6983d00441ed13bf45e1b7ac34e94540fb61f58e4a9a2189826b1e761a2f7f",
                 NetworkId.KATANA
@@ -167,8 +167,6 @@ class LiFiBridgePairLinkServiceTest {
                 "28.920966"
         );
 
-        when(pendingLiFiBridgeSourceQueryService.loadNextBatch(500)).thenReturn(List.of(source));
-        when(rawTransactionRepository.findById(source.getId())).thenReturn(Optional.of(sourceRaw));
         when(liFiStatusGateway.fetchBridgeStatus(source.getTxHash()))
                 .thenReturn(Optional.of(new LiFiBridgeStatus(
                         source.getTxHash(),
@@ -183,12 +181,43 @@ class LiFiBridgePairLinkServiceTest {
                 NormalizedTransactionSource.ON_CHAIN
         )).thenReturn(List.of(destination));
 
-        int changed = service.reconcileOutstandingSources(500);
+        service.link(sourceRaw, source);
 
-        assertThat(changed).isEqualTo(1);
         verify(rawTransactionRepository).save(sourceRaw);
         assertThat(source.getMatchedCounterparty()).isEqualTo(destination.getTxHash());
         assertThat(destination.getType()).isEqualTo(NormalizedTransactionType.BRIDGE_IN);
+    }
+
+    @Test
+    @DisplayName("LI.FI source sweep records bounded status miss when local matching cannot resolve")
+    void liFiSourceSweepRecordsBoundedStatusMissWhenLocalMatchingCannotResolve() {
+        RawTransaction sourceRaw = sourceRawTransaction(
+                "0x9f6983d00441ed13bf45e1b7ac34e94540fb61f58e4a9a2189826b1e761a2f7f",
+                NetworkId.KATANA
+        );
+        NormalizedTransaction source = bridgeOut(
+                "0x9f6983d00441ed13bf45e1b7ac34e94540fb61f58e4a9a2189826b1e761a2f7f",
+                NetworkId.KATANA,
+                "vbUSDC",
+                "0x203a662b0bd271a6ed5a60edfbd04bfce608fd36",
+                "-28.997378"
+        );
+
+        when(pendingLiFiBridgeSourceQueryService.loadNextBatch(500)).thenReturn(List.of(source));
+        when(rawTransactionRepository.findById(source.getId())).thenReturn(Optional.of(sourceRaw));
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class))).thenReturn(List.of());
+        when(liFiStatusGateway.fetchBridgeStatus(source.getTxHash())).thenReturn(Optional.empty());
+
+        int changed = service.reconcileOutstandingSources(500);
+
+        assertThat(changed).isZero();
+        verify(liFiStatusGateway).fetchBridgeStatus(source.getTxHash());
+        verify(rawTransactionRepository).save(sourceRaw);
+        assertThat(sourceRaw.getClarificationEvidence().get("protocolStatus", Document.class))
+                .containsEntry("provider", "LIFI")
+                .containsEntry("apiStatus", "UNAVAILABLE");
+        verify(normalizedTransactionRepository, never()).save(any());
+        verify(normalizedTransactionRepository, never()).saveAll(any());
     }
 
     @Test
@@ -632,7 +661,7 @@ class LiFiBridgePairLinkServiceTest {
         );
         destination.setBlockTimestamp(Instant.parse("2025-02-07T10:50:59Z"));
 
-        when(liFiStatusGateway.fetchBridgeStatus(source.getTxHash())).thenReturn(Optional.empty());
+        lenient().when(liFiStatusGateway.fetchBridgeStatus(source.getTxHash())).thenReturn(Optional.empty());
         when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class))).thenReturn(List.of(destination));
         when(rawTransactionRepository.findById(destination.getId())).thenReturn(Optional.of(destinationRaw));
         when(protocolRegistryService.lookup(NetworkId.ETHEREUM, "0x5c7bcd6e7de5423a257d81b442095a1a6ced35c5"))
@@ -651,6 +680,7 @@ class LiFiBridgePairLinkServiceTest {
 
         service.link(sourceRaw, source);
 
+        verify(liFiStatusGateway, never()).fetchBridgeStatus(source.getTxHash());
         ArgumentCaptor<List<NormalizedTransaction>> updatesCaptor = ArgumentCaptor.forClass(List.class);
         verify(normalizedTransactionRepository).saveAll(updatesCaptor.capture());
         assertThat(updatesCaptor.getValue()).extracting(NormalizedTransaction::getTxHash)
@@ -700,7 +730,7 @@ class LiFiBridgePairLinkServiceTest {
         );
         destination.setBlockTimestamp(Instant.parse("2025-09-20T16:56:18Z"));
 
-        when(liFiStatusGateway.fetchBridgeStatus(source.getTxHash())).thenReturn(Optional.empty());
+        lenient().when(liFiStatusGateway.fetchBridgeStatus(source.getTxHash())).thenReturn(Optional.empty());
         when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class))).thenReturn(List.of(destination));
         when(rawTransactionRepository.findById(destination.getId())).thenReturn(Optional.of(destinationRaw));
         when(protocolRegistryService.lookup(NetworkId.LINEA, "0xf70da97812cb96acdf810712aa562db8dfa3dbef"))
@@ -765,7 +795,7 @@ class LiFiBridgePairLinkServiceTest {
         destination.setBlockTimestamp(Instant.parse("2026-01-31T21:17:00Z"));
         destination.setTransactionIndex(3);
 
-        when(liFiStatusGateway.fetchBridgeStatus(source.getTxHash())).thenReturn(Optional.empty());
+        lenient().when(liFiStatusGateway.fetchBridgeStatus(source.getTxHash())).thenReturn(Optional.empty());
         when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class))).thenReturn(List.of(destination));
         when(rawTransactionRepository.findById(destination.getId())).thenReturn(Optional.of(destinationRaw));
 
@@ -818,7 +848,7 @@ class LiFiBridgePairLinkServiceTest {
         destination.setBlockTimestamp(Instant.parse("2025-06-06T06:26:52Z"));
         destination.setTransactionIndex(1);
 
-        when(liFiStatusGateway.fetchBridgeStatus(source.getTxHash())).thenReturn(Optional.empty());
+        lenient().when(liFiStatusGateway.fetchBridgeStatus(source.getTxHash())).thenReturn(Optional.empty());
         when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class))).thenReturn(List.of(destination));
         when(rawTransactionRepository.findById(destination.getId())).thenReturn(Optional.of(destinationRaw));
 

@@ -127,6 +127,26 @@ class BatchPriceQuoteResolverTest {
     }
 
     @Test
+    void prepareSkipsFlowsWithoutAssetSymbol() {
+        HistoricalPriceCacheService cacheService = new HistoricalPriceCacheService(historicalPriceRepository, mongoTemplate);
+        BatchPriceQuoteResolver resolver = new BatchPriceQuoteResolver(
+                cacheService,
+                priceExternalSourceOrchestrator,
+                pricingProperties,
+                directExecutor()
+        );
+        NormalizedTransaction transaction = pendingTransaction("tx-no-symbol");
+        transaction.getFlows().getFirst().setAssetSymbol(null);
+
+        BatchPriceQuoteResolver.BatchQuotePlan plan = resolver.prepare(List.of(transaction));
+
+        assertThat(plan.quoteCache()).isEmpty();
+        assertThat(plan.stagedDocuments()).isEmpty();
+        verify(priceExternalSourceOrchestrator, never()).prioritizedSources(any());
+        verify(priceExternalSourceOrchestrator, never()).resolveExternalOnly(any());
+    }
+
+    @Test
     void preparePrefetchesAsyncDexOrderRequestPrincipalQuote() {
         HistoricalPriceCacheService cacheService = new HistoricalPriceCacheService(historicalPriceRepository, mongoTemplate);
         BatchPriceQuoteResolver resolver = new BatchPriceQuoteResolver(

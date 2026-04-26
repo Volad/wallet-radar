@@ -87,7 +87,7 @@ public class ProtocolNameEnrichmentService {
                 : resolutionService.resolve(normalizedTransaction, rawTransaction).orElse(null);
 
         String targetName = resolved == null
-                ? (needsCanonicalization ? canonicalCurrentName : null)
+                ? (needsCanonicalization ? canonicalCurrentName : currentName)
                 : protocolNameCanonicalizer.canonicalize(resolved.protocolName());
         String targetVersion = currentVersion;
         if ((targetVersion == null || targetVersion.isBlank())
@@ -97,17 +97,72 @@ public class ProtocolNameEnrichmentService {
             targetVersion = resolved.protocolVersion();
         }
 
-        if (targetName == null || targetName.isBlank()) {
-            return false;
-        }
-        if (Objects.equals(currentName, targetName) && Objects.equals(currentVersion, targetVersion)) {
+        String targetState = targetProtocolState(normalizedTransaction, rawTransaction, resolved, targetName);
+        String targetEvidence = targetProtocolEvidence(rawTransaction, resolved, targetName);
+
+        if ((targetName == null || targetName.isBlank()) && targetState == null) {
             return false;
         }
 
-        normalizedTransaction.setProtocolName(targetName);
-        normalizedTransaction.setProtocolVersion(targetVersion);
+        boolean changed = false;
+        if (targetName != null && !targetName.isBlank() && !Objects.equals(currentName, targetName)) {
+            normalizedTransaction.setProtocolName(targetName);
+            changed = true;
+        }
+        if (!Objects.equals(currentVersion, targetVersion)) {
+            normalizedTransaction.setProtocolVersion(targetVersion);
+            changed = true;
+        }
+        if (targetState != null && !Objects.equals(normalizedTransaction.getProtocolResolutionState(), targetState)) {
+            normalizedTransaction.setProtocolResolutionState(targetState);
+            changed = true;
+        }
+        if (targetEvidence != null && !Objects.equals(normalizedTransaction.getProtocolResolutionEvidence(), targetEvidence)) {
+            normalizedTransaction.setProtocolResolutionEvidence(targetEvidence);
+            changed = true;
+        }
+        if (!changed) {
+            return false;
+        }
         normalizedTransaction.setUpdatedAt(now == null ? Instant.now() : now);
         return true;
+    }
+
+    private String targetProtocolState(
+            NormalizedTransaction normalizedTransaction,
+            @Nullable RawTransaction rawTransaction,
+            @Nullable ProtocolNameResolutionService.ResolvedProtocolName resolved,
+            @Nullable String targetName
+    ) {
+        if (resolved != null) {
+            return resolved.role() == null
+                    ? MetadataResolutionState.RESOLVED_FAMILY
+                    : MetadataResolutionState.RESOLVED_EXACT;
+        }
+        if (targetName != null && !targetName.isBlank()) {
+            return MetadataResolutionState.RESOLVED_FAMILY;
+        }
+        if (rawTransaction == null) {
+            return MetadataResolutionState.IRREDUCIBLE_EVIDENCE_MISSING;
+        }
+        return MetadataResolutionState.TERMINAL_METADATA_ONLY;
+    }
+
+    private String targetProtocolEvidence(
+            @Nullable RawTransaction rawTransaction,
+            @Nullable ProtocolNameResolutionService.ResolvedProtocolName resolved,
+            @Nullable String targetName
+    ) {
+        if (resolved != null) {
+            return "REGISTRY_OR_RECEIPT_PROTOCOL";
+        }
+        if (targetName != null && !targetName.isBlank()) {
+            return "EXISTING_PROTOCOL_NAME_CANONICALIZED";
+        }
+        if (rawTransaction == null) {
+            return "RAW_TRANSACTION_MISSING";
+        }
+        return "EVIDENCE_CHECKS_EXHAUSTED_METADATA_ONLY";
     }
 
     private Optional<RawTransaction> loadRaw(NormalizedTransaction normalizedTransaction) {

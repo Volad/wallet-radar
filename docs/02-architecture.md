@@ -1158,14 +1158,22 @@ Control-plane ownership:
 - provider-native current balances must normalize zero-address contract payloads
   (`0x0000000000000000000000000000000000000000`) into native accounting
   identity rather than persisting them as synthetic token contracts.
-- The replay pipeline order is:
+- The replay and portfolio snapshot pipeline order is:
   - canonical replay
   - `asset_ledger_points` persistence
-  - `on_chain_balances` refresh
+  - `PORTFOLIO_SNAPSHOT_REFRESH`
+    - bounded `on_chain_balances` refresh for the current session wallet subset
+    - current quote refresh for positive live-balance symbols
+  `ACCOUNTING_REPLAY` must complete before live portfolio evidence is fetched.
+  Live balances and current quotes are dashboard snapshot inputs, not AVCO
+  replay inputs.
 - user-facing asset detail history APIs must read from `asset_ledger_points`
   filtered to the requested session `accountingUniverseId` and asset family.
 - user-facing current holdings must be derived on read from
   `asset_ledger_points` plus `on_chain_balances`.
+- `PORTFOLIO_SNAPSHOT_REFRESH` must remain a background stage. Dashboard GET
+  endpoints read persisted `on_chain_balances` and `current_price_quotes` only;
+  they must not call RPC, explorers, Ankr, Bybit, Binance, or CoinGecko.
 - canonical classification may still use installation-wide tracked-wallet
   discovery, but replay-time carry eligibility must remain bounded by the
   session's accounting universe. Cross-owner transfers must therefore degrade
@@ -1215,8 +1223,8 @@ Control-plane ownership:
 - replay bootstrap and stale-heal checks must be session-scoped:
   - unrelated `asset_ledger_points` rows must not satisfy replay bootstrap for
     the current session
-  - unrelated `on_chain_balances` rows must not heal a stale
-    `ACCOUNTING_REPLAY / RUNNING` into `COMPLETE`
+  - unrelated `on_chain_balances` rows must not satisfy
+    `PORTFOLIO_SNAPSHOT_REFRESH` completion for the current session
 
 ### 5.1 Asset Ledger Timeline Contract
 
@@ -1332,9 +1340,11 @@ This contract lets the UI:
 - stale `ACCOUNTING_REPLAY / RUNNING` state may be healed only by the resume
   watchdog and only when:
   - the session has no pending upstream work
-  - `asset_ledger_points` and `on_chain_balances` already exist
+  - `asset_ledger_points` already exist
   - the replay trace exists for the same `accountingUniverseId`
-  - the live balance evidence exists for the same `sessionId`
+- stale `PORTFOLIO_SNAPSHOT_REFRESH / RUNNING` state may be retried by the
+  resume watchdog only after `ACCOUNTING_REPLAY` replay outputs exist for the
+  same accounting universe.
 - current asset-ledger family reads must expose which live uncovered buckets
   come from:
   - no covered ledger carry at all

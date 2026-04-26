@@ -23,10 +23,13 @@ import lombok.RequiredArgsConstructor;
 import org.bson.Document;
 import org.springframework.stereotype.Service;
 
+import java.math.BigInteger;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.time.Instant;
 import java.util.Set;
@@ -38,6 +41,7 @@ import java.util.Set;
 @RequiredArgsConstructor
 public class ReceiptClarificationGateway {
 
+    private static final String ERC20_TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
     private static final int MAX_EXPLORER_TRANSFER_PAGES = 3;
 
     private final EtherscanV2ExplorerProvider etherscanProvider;
@@ -48,11 +52,15 @@ public class ReceiptClarificationGateway {
     private final ObjectMapper objectMapper;
 
     public Optional<ClarificationReceiptEnrichment> fetchReceipt(RawTransaction rawTransaction) {
-        return fetch(rawTransaction, false);
+        return fetch(rawTransaction, false, false);
     }
 
     public Optional<ClarificationReceiptEnrichment> fetchReceiptWithTransferEvidence(RawTransaction rawTransaction) {
-        return fetch(rawTransaction, true);
+        return fetch(rawTransaction, true, false);
+    }
+
+    public Optional<ClarificationReceiptEnrichment> fetchFullReceipt(RawTransaction rawTransaction) {
+        return fetch(rawTransaction, false, true);
     }
 
     public Optional<ClarificationReceiptEnrichment> fromPersistedEvidence(
@@ -324,7 +332,11 @@ public class ReceiptClarificationGateway {
         return Optional.of(rawTransaction);
     }
 
-    private Optional<ClarificationReceiptEnrichment> fetch(RawTransaction rawTransaction, boolean includeTransferEvidence) {
+    private Optional<ClarificationReceiptEnrichment> fetch(
+            RawTransaction rawTransaction,
+            boolean includeTransferEvidence,
+            boolean deriveTokenTransfersFromReceipt
+    ) {
         if (rawTransaction == null) {
             return Optional.empty();
         }
@@ -348,9 +360,29 @@ public class ReceiptClarificationGateway {
         }
 
         return switch (sourceFamily) {
-            case ETHERSCAN -> fetchFromExplorer(etherscanProvider, rawTransaction, view, includeTransferEvidence, sourceFamily);
-            case BLOCKSCOUT -> fetchFromExplorer(blockScoutProvider, rawTransaction, view, includeTransferEvidence, sourceFamily);
-            case RPC -> fetchFromRpc(rawTransaction, view, includeTransferEvidence, sourceFamily);
+            case ETHERSCAN -> fetchFromExplorer(
+                    etherscanProvider,
+                    rawTransaction,
+                    view,
+                    includeTransferEvidence,
+                    deriveTokenTransfersFromReceipt,
+                    sourceFamily
+            );
+            case BLOCKSCOUT -> fetchFromExplorer(
+                    blockScoutProvider,
+                    rawTransaction,
+                    view,
+                    includeTransferEvidence,
+                    deriveTokenTransfersFromReceipt,
+                    sourceFamily
+            );
+            case RPC -> fetchFromRpc(
+                    rawTransaction,
+                    view,
+                    includeTransferEvidence,
+                    deriveTokenTransfersFromReceipt,
+                    sourceFamily
+            );
         };
     }
 
@@ -435,6 +467,7 @@ public class ReceiptClarificationGateway {
             RawTransaction rawTransaction,
             OnChainRawTransactionView view,
             boolean includeTransferEvidence,
+            boolean deriveTokenTransfersFromReceipt,
             RawSyncMethod sourceFamily
     ) {
         ExplorerReceipt receipt = provider.getReceipt(view.txHash(), view.networkId());
@@ -445,6 +478,8 @@ public class ReceiptClarificationGateway {
         List<Document> receiptLogs = readDocumentList(receipt.asDocument(), "logs");
         List<Document> tokenTransfers = includeTransferEvidence
                 ? loadExplorerTokenTransfers(provider, rawTransaction, view, blockNumber, receiptLogs)
+                : deriveTokenTransfersFromReceipt
+                ? deriveTokenTransfersFromReceiptLogs(rawTransaction, receiptLogs)
                 : List.of();
         List<Document> internalTransfers = includeTransferEvidence
                 ? loadExplorerInternalTransfers(provider, rawTransaction, view, blockNumber)
@@ -461,6 +496,7 @@ public class ReceiptClarificationGateway {
             RawTransaction rawTransaction,
             OnChainRawTransactionView view,
             boolean includeTransferEvidence,
+            boolean deriveTokenTransfersFromReceipt,
             RawSyncMethod sourceFamily
     ) {
         String endpoint = primaryRpcEndpoint(view.networkId());
@@ -485,6 +521,8 @@ public class ReceiptClarificationGateway {
                             rawTransaction.getNetworkId(),
                             receiptLogs
                     )
+                    : deriveTokenTransfersFromReceipt
+                    ? deriveTokenTransfersFromReceiptLogs(rawTransaction, receiptLogs)
                     : List.of();
             return ClarificationReceiptEnrichment.fromReceiptDocument(
                     receipt,
@@ -647,6 +685,127 @@ public class ReceiptClarificationGateway {
             }
         }
         return List.copyOf(filtered);
+    }
+
+    private List<Document> deriveTokenTransfersFromReceiptLogs(
+            RawTransaction rawTransaction,
+            List<Document> receiptLogs
+    ) {
+        if (receiptLogs == null || receiptLogs.isEmpty()) {
+            return List.of();
+        }
+        Map<String, Document> metadataByContract = existingTokenMetadataByContract(rawTransaction);
+        List<Document> transfers = new ArrayList<>();
+        for (Document log : receiptLogs) {
+            List<String> topics = topicList(log);
+            if (topics.size() != 3 || !ERC20_TRANSFER_TOPIC.equalsIgnoreCase(topics.get(0))) {
+                continue;
+            }
+            String contractAddress = OnChainRawTransactionView.normalizeAddress(stringify(log.get("address")));
+            String from = topicAddress(topics.get(1));
+            String to = topicAddress(topics.get(2));
+            BigInteger value = parseHexQuantity(stringify(log.get("data")));
+            if (contractAddress == null || from == null || to == null || value == null) {
+                continue;
+            }
+
+            Document transfer = new Document()
+                    .append("contractAddress", contractAddress)
+                    .append("from", from)
+                    .append("to", to)
+                    .append("value", value.toString());
+            copyIfPresent(transfer, "logIndex", log, "logIndex");
+            copyIfPresent(transfer, "transactionHash", log, "transactionHash");
+            Document metadata = metadataByContract.get(contractAddress);
+            if (metadata != null) {
+                copyIfPresent(transfer, "tokenSymbol", metadata, "tokenSymbol");
+                copyIfPresent(transfer, "tokenName", metadata, "tokenName");
+                copyIfPresent(transfer, "tokenDecimal", metadata, "tokenDecimal");
+            }
+            transfers.add(transfer);
+        }
+        return List.copyOf(transfers);
+    }
+
+    private Map<String, Document> existingTokenMetadataByContract(RawTransaction rawTransaction) {
+        Map<String, Document> byContract = new LinkedHashMap<>();
+        if (rawTransaction == null || rawTransaction.getRawData() == null) {
+            return byContract;
+        }
+        appendTokenMetadata(byContract, readDocumentList(rawTransaction.getRawData(), "tokenTransfers"));
+        appendTokenMetadata(byContract, readDocumentList(readExplorerSection(rawTransaction), "tokenTransfers"));
+        Document clarificationEvidence = BsonCoercionSupport.asDocument(rawTransaction.getClarificationEvidence());
+        Document transfers = clarificationEvidence == null
+                ? null
+                : BsonCoercionSupport.asDocument(clarificationEvidence.get("transfers"));
+        appendTokenMetadata(byContract, readDocumentList(transfers, "tokenTransfers"));
+        return byContract;
+    }
+
+    private void appendTokenMetadata(Map<String, Document> byContract, List<Document> transfers) {
+        for (Document transfer : transfers) {
+            if (transfer == null) {
+                continue;
+            }
+            String contract = OnChainRawTransactionView.normalizeAddress(firstNonBlank(
+                    stringify(transfer.get("contractAddress")),
+                    stringify(transfer.get("tokenAddress"))
+            ));
+            if (contract == null) {
+                continue;
+            }
+            byContract.putIfAbsent(contract, transfer);
+        }
+    }
+
+    private Document readExplorerSection(RawTransaction rawTransaction) {
+        return rawTransaction == null || rawTransaction.getRawData() == null
+                ? null
+                : BsonCoercionSupport.asDocument(rawTransaction.getRawData().get("explorer"));
+    }
+
+    private List<String> topicList(Document log) {
+        Object topicsRaw = log == null ? null : log.get("topics");
+        if (!(topicsRaw instanceof List<?> topics)) {
+            return List.of();
+        }
+        List<String> out = new ArrayList<>(topics.size());
+        for (Object topic : topics) {
+            String value = stringify(topic);
+            if (value != null) {
+                out.add(value);
+            }
+        }
+        return List.copyOf(out);
+    }
+
+    private String topicAddress(String topic) {
+        if (topic == null || topic.isBlank()) {
+            return null;
+        }
+        String normalized = topic.trim().toLowerCase(Locale.ROOT);
+        if (!normalized.startsWith("0x") || normalized.length() < 42) {
+            return null;
+        }
+        return OnChainRawTransactionView.normalizeAddress("0x" + normalized.substring(normalized.length() - 40));
+    }
+
+    private BigInteger parseHexQuantity(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        String normalized = value.trim();
+        if (normalized.startsWith("0x") || normalized.startsWith("0X")) {
+            normalized = normalized.substring(2);
+        }
+        if (normalized.isBlank()) {
+            return BigInteger.ZERO;
+        }
+        try {
+            return new BigInteger(normalized, 16);
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
     }
 
     private List<Document> loadExplorerInternalTransfers(

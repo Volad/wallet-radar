@@ -809,6 +809,9 @@ Errors:
 - Returns current session-scoped dashboard snapshot backed by `on_chain_balances` and latest `asset_ledger_points`
 - current live quantities still come from the session wallet subset and
   `on_chain_balances WHERE sessionId = {sessionId}`
+- `on_chain_balances` and `current_price_quotes` are refreshed by the background
+  `PORTFOLIO_SNAPSHOT_REFRESH` pipeline stage after `ACCOUNTING_REPLAY`
+  completes; the dashboard endpoint never performs live refresh work itself
 - replay history used for timeline/debug may include broader accounting-universe
   members such as `BYBIT:<uid>`
 - `tokenPositions` are current live quantities with conservative provable `avcoUsd` / PnL

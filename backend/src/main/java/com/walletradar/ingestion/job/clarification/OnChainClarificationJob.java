@@ -17,17 +17,11 @@ import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * Event-driven driver for on-chain clarification with metadata and allowlisted full-receipt passes.
+ * Event-driven driver for the unified on-chain full-receipt clarification pass.
  */
 @Component
 @RequiredArgsConstructor
@@ -41,8 +35,6 @@ public class OnChainClarificationJob {
 
     private final OnChainClarificationProperties properties;
     private final OnChainClarificationService onChainClarificationService;
-    private final OnChainReceiptClarificationService onChainReceiptClarificationService;
-    private final OnChainMetadataEnrichmentService onChainMetadataEnrichmentService;
     private final ClarificationBatchDrainer clarificationBatchDrainer;
     private final ApplicationEventPublisher applicationEventPublisher;
     private final SessionPipelineActivityService sessionPipelineActivityService;
@@ -77,20 +69,8 @@ public class OnChainClarificationJob {
                     UserSession.PipelineStage.ON_CHAIN_CLARIFICATION,
                     "On-chain clarification running"
             );
-            processed += runParallelClarification(
-                    onChainClarificationService::processNextBatch,
-                    lastHeartbeatAt,
-                    sessionId
-            );
-            if (properties.getFullReceipt().isEnabled()) {
-                processed += runParallelClarification(
-                        onChainReceiptClarificationService::processNextBatch,
-                        lastHeartbeatAt,
-                        sessionId
-                );
-            }
             processed += clarificationBatchDrainer.drain(
-                    () -> onChainMetadataEnrichmentService.processNextBatch(properties.getBatchSize()),
+                    onChainClarificationService::processNextBatch,
                     batchProcessed -> lastHeartbeatAt.updateAndGet(lastHeartbeat -> maybeHeartbeat(sessionId, lastHeartbeat))
             );
             sessionPipelineStateService.markStageComplete(
@@ -111,42 +91,6 @@ public class OnChainClarificationJob {
             StageExecutionLogSupport.logFinish(log, STAGE_NAME, trigger, processed, startedAtNanos);
             sessionPipelineActivityService.markFinished(sessionId, UserSession.PipelineStage.ON_CHAIN_CLARIFICATION);
             running.set(false);
-        }
-    }
-
-    private int runParallelClarification(
-            java.util.function.IntSupplier batchProcessor,
-            AtomicReference<Instant> lastHeartbeatAt,
-            String sessionId
-    ) {
-        int lanes = Math.max(1, properties.getThreads());
-        if (lanes == 1) {
-            return clarificationBatchDrainer.drain(
-                    batchProcessor,
-                    batchProcessed -> lastHeartbeatAt.updateAndGet(lastHeartbeat -> maybeHeartbeat(sessionId, lastHeartbeat))
-            );
-        }
-        ExecutorService executor = Executors.newFixedThreadPool(lanes);
-        try {
-            List<Callable<Integer>> tasks = new ArrayList<>(lanes);
-            for (int lane = 0; lane < lanes; lane++) {
-                tasks.add(() -> clarificationBatchDrainer.drain(
-                        batchProcessor,
-                        batchProcessed -> lastHeartbeatAt.updateAndGet(lastHeartbeat -> maybeHeartbeat(sessionId, lastHeartbeat))
-                ));
-            }
-            int processed = 0;
-            for (Future<Integer> future : executor.invokeAll(tasks)) {
-                processed += future.get();
-            }
-            return processed;
-        } catch (InterruptedException error) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("Clarification worker interrupted", error);
-        } catch (java.util.concurrent.ExecutionException error) {
-            throw new IllegalStateException("Clarification worker failed", error.getCause());
-        } finally {
-            executor.shutdownNow();
         }
     }
 

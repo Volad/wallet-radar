@@ -1,5 +1,6 @@
 package com.walletradar.session.application;
 
+import com.walletradar.domain.event.AccountingReplayCompletedEvent;
 import com.walletradar.domain.event.BybitNormalizationRequestedEvent;
 import com.walletradar.domain.event.LinkingRequestedEvent;
 import com.walletradar.domain.event.OnChainNormalizationCompletedEvent;
@@ -152,7 +153,7 @@ public class SessionPipelineResumeScheduler {
         }
         boolean pendingLinking = linkingDataGateService.hasPendingLinking(session.getId());
         boolean pendingPrice = hasPendingPrice(addresses);
-        if (pendingLinking && !isReplayAlreadyComplete(session)) {
+        if (pendingLinking && !isPipelineAlreadyComplete(session)) {
             return new ResumeAction(
                     UserSession.PipelineStage.LINKING,
                     "pending-linking",
@@ -192,6 +193,15 @@ public class SessionPipelineResumeScheduler {
                     session.getId(),
                     UserSession.PipelineStage.ACCOUNTING_REPLAY,
                     "Accounting replay complete"
+            );
+            return null;
+        }
+        boolean portfolioSnapshotRequired = requiresPortfolioSnapshotRefresh(session, scope);
+        if (portfolioSnapshotRequired) {
+            return new ResumeAction(
+                    UserSession.PipelineStage.PORTFOLIO_SNAPSHOT_REFRESH,
+                    "portfolio-snapshot-refresh",
+                    new AccountingReplayCompletedEvent(session.getId(), 0, "resume-watchdog")
             );
         }
         return null;
@@ -324,10 +334,18 @@ public class SessionPipelineResumeScheduler {
         return updatedAt.isAfter(Instant.now().minus(RUNNING_STATE_STALE_AFTER));
     }
 
-    private boolean isReplayAlreadyComplete(UserSession session) {
+    private boolean isPipelineAlreadyComplete(UserSession session) {
         UserSession.PipelineState pipelineState = session.getPipelineState();
         return pipelineState != null
-                && pipelineState.getStage() == UserSession.PipelineStage.ACCOUNTING_REPLAY
+                && (pipelineState.getStage() == UserSession.PipelineStage.ACCOUNTING_REPLAY
+                || pipelineState.getStage() == UserSession.PipelineStage.PORTFOLIO_SNAPSHOT_REFRESH)
+                && pipelineState.getStatus() == UserSession.PipelineStatus.COMPLETE;
+    }
+
+    private boolean isPortfolioSnapshotComplete(UserSession session) {
+        UserSession.PipelineState pipelineState = session.getPipelineState();
+        return pipelineState != null
+                && pipelineState.getStage() == UserSession.PipelineStage.PORTFOLIO_SNAPSHOT_REFRESH
                 && pipelineState.getStatus() == UserSession.PipelineStatus.COMPLETE;
     }
 
@@ -363,9 +381,7 @@ public class SessionPipelineResumeScheduler {
             return false;
         }
         List<String> addresses = scope.memberRefs();
-        List<String> onChainWalletRefs = scope.onChainWalletRefs();
-        return hasAssetLedgerRows(scope.accountingUniverseId(), addresses)
-                && hasOnChainBalanceRows(session.getId(), onChainWalletRefs);
+        return hasAssetLedgerRows(scope.accountingUniverseId(), addresses);
     }
 
     private boolean hasAssetLedgerRows(List<String> addresses) {
@@ -393,6 +409,19 @@ public class SessionPipelineResumeScheduler {
                 Criteria.where("walletAddress").in(addresses)
         ));
         return mongoOperations.exists(query, "on_chain_balances");
+    }
+
+    private boolean requiresPortfolioSnapshotRefresh(
+            UserSession session,
+            AccountingUniverseService.AccountingUniverseScope scope
+    ) {
+        if (isPortfolioSnapshotComplete(session)) {
+            return false;
+        }
+        if (!hasAssetLedgerRows(scope.accountingUniverseId(), scope.memberRefs())) {
+            return false;
+        }
+        return true;
     }
 
     private boolean requiresReplayBootstrap(AccountingUniverseService.AccountingUniverseScope scope) {

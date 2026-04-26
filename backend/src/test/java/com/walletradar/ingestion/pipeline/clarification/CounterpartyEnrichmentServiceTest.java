@@ -55,9 +55,20 @@ class CounterpartyEnrichmentServiceTest {
         when(queryService.loadBatchAfterId("b", 50)).thenReturn(List.of());
         when(rawTransactionRepository.findById("0xaaa:ARBITRUM:0xwallet1")).thenReturn(Optional.of(unresolvedRaw));
         when(rawTransactionRepository.findById("0xbbb:ARBITRUM:0xwallet2")).thenReturn(Optional.of(resolvableRaw));
-        when(resolutionService.resolve(unresolved, unresolvedRaw)).thenReturn(Optional.empty());
-        when(resolutionService.resolve(resolvable, resolvableRaw))
-                .thenReturn(Optional.of("0x2222222222222222222222222222222222222222"));
+        when(resolutionService.resolveMetadata(unresolved, unresolvedRaw))
+                .thenReturn(new CounterpartyResolutionService.ResolvedCounterparty(
+                        null,
+                        CounterpartyType.GENUINE_MISSING_SOURCE,
+                        MetadataResolutionState.IRREDUCIBLE_EVIDENCE_MISSING,
+                        "NO_UNIQUE_ROW_LOCAL_COUNTERPARTY"
+                ));
+        when(resolutionService.resolveMetadata(resolvable, resolvableRaw))
+                .thenReturn(new CounterpartyResolutionService.ResolvedCounterparty(
+                        "0x2222222222222222222222222222222222222222",
+                        CounterpartyType.PROTOCOL,
+                        MetadataResolutionState.RESOLVED_EXACT,
+                        "ROW_LOCAL_RAW_OR_REGISTRY_EVIDENCE"
+                ));
 
         CounterpartyEnrichmentService service = new CounterpartyEnrichmentService(
                 queryService,
@@ -68,8 +79,32 @@ class CounterpartyEnrichmentServiceTest {
 
         int updated = service.processNextBatch(50);
 
-        assertThat(updated).isEqualTo(1);
+        assertThat(updated).isEqualTo(2);
+        verify(normalizedTransactionRepository).save(unresolved);
         verify(normalizedTransactionRepository).save(resolvable);
+        assertThat(unresolved.getCounterpartyResolutionState()).isEqualTo(MetadataResolutionState.IRREDUCIBLE_EVIDENCE_MISSING);
         assertThat(resolvable.getCounterpartyAddress()).isEqualTo("0x2222222222222222222222222222222222222222");
+        assertThat(resolvable.getCounterpartyType()).isEqualTo(CounterpartyType.PROTOCOL);
+        assertThat(resolvable.getCounterpartyResolutionState()).isEqualTo(MetadataResolutionState.RESOLVED_EXACT);
+    }
+
+    @Test
+    void enrichTerminalizesRowsWhenRawEvidenceIsMissing() {
+        NormalizedTransaction transaction = new NormalizedTransaction();
+
+        CounterpartyEnrichmentService service = new CounterpartyEnrichmentService(
+                queryService,
+                resolutionService,
+                rawTransactionRepository,
+                normalizedTransactionRepository
+        );
+
+        boolean updated = service.enrich(transaction, null, java.time.Instant.parse("2026-04-08T12:00:00Z"));
+
+        assertThat(updated).isTrue();
+        verify(normalizedTransactionRepository).save(transaction);
+        assertThat(transaction.getCounterpartyType()).isEqualTo(CounterpartyType.GENUINE_MISSING_SOURCE);
+        assertThat(transaction.getCounterpartyResolutionState()).isEqualTo(MetadataResolutionState.IRREDUCIBLE_EVIDENCE_MISSING);
+        assertThat(transaction.getCounterpartyResolutionEvidence()).isEqualTo("RAW_TRANSACTION_MISSING");
     }
 }

@@ -354,6 +354,9 @@ export interface SessionDashboardTokenPositionResponse {
   readonly networkId: EvmNetworkId;
   readonly walletAddress: string;
   readonly issue: string | null;
+  readonly valuationModel: string | null;
+  readonly valuationUnderlyingSymbol: string | null;
+  readonly unsupportedValuationReason: string | null;
 }
 
 export interface SessionDashboardResponse {

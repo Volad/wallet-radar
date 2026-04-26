@@ -50,13 +50,16 @@ const topProblemPositions = [];
 for (const position of positions) {
   const quantity = num(position.quantity);
   const priceUsd = num(position.priceUsd);
-  const marketValueUsd = quantity * priceUsd;
-  if (!Number.isFinite(marketValueUsd) || marketValueUsd <= 0) {
+  const backendMarketValueUsd = num(position.marketValueUsd);
+  const marketValueUsd = Number.isFinite(backendMarketValueUsd)
+    ? backendMarketValueUsd
+    : quantity * priceUsd;
+  const issue = position.priceIssue ?? position.issue ?? 'none';
+  if (!Number.isFinite(marketValueUsd) || (marketValueUsd === 0 && issue !== 'unsupported_protocol_valuation')) {
     continue;
   }
 
   totalMarketValueUsd += marketValueUsd;
-  const issue = position.issue ?? 'none';
   issueBreakdown.set(issue, (issueBreakdown.get(issue) ?? 0) + marketValueUsd);
 
   if (issue === 'none' || issue === 'yield_accrual') {
@@ -70,7 +73,10 @@ for (const position of positions) {
       marketValueUsd,
       quantity,
       priceUsd,
-      avcoUsd: num(position.avcoUsd)
+      avcoUsd: num(position.avcoUsd),
+      valuationModel: position.valuationModel ?? null,
+      valuationUnderlyingSymbol: position.valuationUnderlyingSymbol ?? null,
+      unsupportedValuationReason: position.unsupportedValuationReason ?? null
     });
   }
 }

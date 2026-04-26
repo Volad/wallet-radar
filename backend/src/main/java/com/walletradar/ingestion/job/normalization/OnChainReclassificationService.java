@@ -5,18 +5,17 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionReposi
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.domain.transaction.raw.RawTransactionRepository;
+import com.walletradar.ingestion.config.OnChainClarificationProperties;
 import com.walletradar.ingestion.config.OnChainNormalizationProperties;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassificationResult;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassifier;
 import com.walletradar.ingestion.pipeline.classification.reason.ClassificationReasonCode;
 import com.walletradar.ingestion.pipeline.clarification.CounterpartyEnrichmentService;
 import com.walletradar.ingestion.pipeline.clarification.ProtocolNameEnrichmentService;
-import com.walletradar.ingestion.pipeline.clarification.RelatedLifecycleDiscoveryService;
 import com.walletradar.ingestion.pipeline.onchain.OnChainNormalizedTransactionBuilder;
 import com.walletradar.ingestion.pipeline.onchain.PendingReclassificationQueryService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -35,12 +34,11 @@ public class OnChainReclassificationService {
     private final RawTransactionRepository rawTransactionRepository;
     private final NormalizedTransactionRepository normalizedTransactionRepository;
     private final OnChainNormalizationProperties properties;
+    private final OnChainClarificationProperties clarificationProperties;
     private final OnChainClassifier onChainClassifier;
     private final OnChainNormalizedTransactionBuilder builder;
     private final ProtocolNameEnrichmentService protocolNameEnrichmentService;
     private final CounterpartyEnrichmentService counterpartyEnrichmentService;
-    @Nullable
-    private final RelatedLifecycleDiscoveryService relatedLifecycleDiscoveryService;
 
     public int processNextBatch() {
         List<NormalizedTransaction> batch = pendingReclassificationQueryService.loadNextBatch(properties.getBatchSize());
@@ -76,12 +74,9 @@ public class OnChainReclassificationService {
                     classificationResult,
                     now
             );
+            terminalizeExhaustedClarification(reclassified);
             enrichCanonicalMetadata(reclassified, rawTransaction, now);
             NormalizedTransaction saved = normalizedTransactionRepository.save(reclassified);
-            if (relatedLifecycleDiscoveryService != null
-                    && saved.getStatus() != NormalizedTransactionStatus.PENDING_CLARIFICATION) {
-                relatedLifecycleDiscoveryService.discoverAndNormalize(rawTransaction, classificationResult);
-            }
             log.debug(
                     "On-chain reclassification complete: normalizedTxId={}, status={}, type={}",
                     saved.getId(),
@@ -108,6 +103,57 @@ public class OnChainReclassificationService {
         counterpartyEnrichmentService.enrichInPlace(normalizedTransaction, rawTransaction, now);
     }
 
+    private void terminalizeExhaustedClarification(NormalizedTransaction normalizedTransaction) {
+        if (normalizedTransaction == null
+                || normalizedTransaction.getStatus() != NormalizedTransactionStatus.PENDING_CLARIFICATION) {
+            return;
+        }
+        int maxAttempts = Math.max(1, clarificationProperties.getMaxAttempts());
+        if (safeCounter(normalizedTransaction.getClarificationAttempts()) < maxAttempts
+                && !shouldTerminalizeAfterReceiptOnlyClarification(normalizedTransaction)) {
+            return;
+        }
+        List<String> reasons = normalizedTransaction.getMissingDataReasons() == null
+                ? new ArrayList<>()
+                : new ArrayList<>(normalizedTransaction.getMissingDataReasons());
+        if (!reasons.contains(ClassificationReasonCode.CLARIFICATION_ATTEMPTS_EXHAUSTED.code())) {
+            reasons.add(ClassificationReasonCode.CLARIFICATION_ATTEMPTS_EXHAUSTED.code());
+        }
+        normalizedTransaction.setStatus(hasReplayableFlows(normalizedTransaction)
+                ? NormalizedTransactionStatus.PENDING_PRICE
+                : NormalizedTransactionStatus.NEEDS_REVIEW);
+        normalizedTransaction.setMissingDataReasons(List.copyOf(reasons));
+        normalizedTransaction.setClarificationLeaseUntil(null);
+        normalizedTransaction.setClarificationWorkerId(null);
+    }
+
+    private boolean shouldTerminalizeAfterReceiptOnlyClarification(NormalizedTransaction normalizedTransaction) {
+        if (safeCounter(normalizedTransaction.getClarificationAttempts()) <= 0) {
+            return false;
+        }
+        List<String> reasons = normalizedTransaction.getMissingDataReasons();
+        if (reasons == null || reasons.isEmpty()) {
+            return false;
+        }
+        return reasons.contains(ClassificationReasonCode.NATIVE_SETTLEMENT_TRANSFER_EVIDENCE_REQUIRED.code())
+                || reasons.contains(ClassificationReasonCode.LP_POSITION_CORRELATION_REQUIRED.code())
+                || reasons.contains(ClassificationReasonCode.EULER_BATCH_DECODER_REQUIRED.code());
+    }
+
+    private boolean hasReplayableFlows(NormalizedTransaction normalizedTransaction) {
+        if (normalizedTransaction == null
+                || normalizedTransaction.getFlows() == null
+                || normalizedTransaction.getFlows().isEmpty()) {
+            return false;
+        }
+        for (NormalizedTransaction.Flow flow : normalizedTransaction.getFlows()) {
+            if (flow != null && flow.getRole() != null && flow.getQuantityDelta() != null) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private boolean markMissingRaw(NormalizedTransaction normalizedTransaction, Instant now) {
         List<String> reasons = normalizedTransaction.getMissingDataReasons() == null
                 ? new ArrayList<>()
@@ -120,5 +166,9 @@ public class OnChainReclassificationService {
         normalizedTransaction.setUpdatedAt(now);
         normalizedTransactionRepository.save(normalizedTransaction);
         return true;
+    }
+
+    private int safeCounter(Integer attempts) {
+        return attempts == null ? 0 : Math.max(0, attempts);
     }
 }

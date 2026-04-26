@@ -51,6 +51,59 @@ public class PendingReceiptClarificationQueryService {
         return loadNextBatch(batchSize, maxAttempts, retryDelaySeconds, workerId, leaseSeconds);
     }
 
+    public List<NormalizedTransaction> claimActiveNeedsReviewBatch(
+            int batchSize,
+            int maxAttempts,
+            long retryDelaySeconds,
+            String workerId,
+            long leaseSeconds
+    ) {
+        int boundedBatchSize = Math.max(1, batchSize);
+        int boundedMaxAttempts = Math.max(1, maxAttempts);
+        Instant now = Instant.now();
+        Instant retryCutoff = now.minusSeconds(Math.max(0L, retryDelaySeconds));
+
+        Criteria attemptsCriteria = new Criteria().orOperator(
+                Criteria.where("fullReceiptClarificationAttempts").exists(false),
+                Criteria.where("fullReceiptClarificationAttempts").lt(boundedMaxAttempts)
+        );
+        Criteria dueCriteria = new Criteria().orOperator(
+                Criteria.where("fullReceiptClarificationAttempts").exists(false),
+                Criteria.where("fullReceiptClarificationAttempts").lte(0),
+                Criteria.where("updatedAt").lte(retryCutoff)
+        );
+        Criteria leaseCriteria = new Criteria().orOperator(
+                Criteria.where("clarificationLeaseUntil").exists(false),
+                Criteria.where("clarificationLeaseUntil").is(null),
+                Criteria.where("clarificationLeaseUntil").lte(now)
+        );
+        Criteria activeAccountingCriteria = new Criteria().orOperator(
+                Criteria.where("excludedFromAccounting").exists(false),
+                Criteria.where("excludedFromAccounting").ne(true)
+        );
+
+        Query query = new Query(new Criteria().andOperator(
+                Criteria.where("source").is(NormalizedTransactionSource.ON_CHAIN),
+                Criteria.where("status").is(NormalizedTransactionStatus.NEEDS_REVIEW),
+                activeAccountingCriteria,
+                attemptsCriteria,
+                dueCriteria,
+                leaseCriteria
+        ));
+        query.with(Sort.by(
+                Sort.Order.asc("blockTimestamp"),
+                Sort.Order.asc("transactionIndex"),
+                Sort.Order.asc("_id")
+        ));
+        query.limit(boundedBatchSize);
+        return claimIfRequested(
+                mongoOperations.find(query, NormalizedTransaction.class),
+                workerId,
+                leaseSeconds,
+                now
+        );
+    }
+
     private List<NormalizedTransaction> loadNextBatch(
             int batchSize,
             int maxAttempts,
@@ -78,17 +131,13 @@ public class PendingReceiptClarificationQueryService {
                 Criteria.where("clarificationLeaseUntil").is(null),
                 Criteria.where("clarificationLeaseUntil").lte(now)
         );
-        Criteria reviewReasonsCriteria = Criteria.where("missingDataReasons").in(
-                ClassificationReasonCode.ROUTER_METHOD_OVERLOAD_UNSUPPORTED.code(),
-                ClassificationReasonCode.CLASSIFICATION_FAILED.code(),
-                ClassificationReasonCode.INSUFFICIENT_MOVEMENT_EVIDENCE.code(),
-                ClassificationReasonCode.GMX_DEPOSIT_REQUEST_CORRELATION_REQUIRED.code(),
-                ClassificationReasonCode.GMX_DEPOSIT_SETTLEMENT_CORRELATION_REQUIRED.code(),
-                ClassificationReasonCode.EULER_BATCH_DECODER_REQUIRED.code()
+        Criteria activeAccountingCriteria = new Criteria().orOperator(
+                Criteria.where("excludedFromAccounting").exists(false),
+                Criteria.where("excludedFromAccounting").ne(true)
         );
         Criteria reviewTailCriteria = new Criteria().andOperator(
                 Criteria.where("status").is(NormalizedTransactionStatus.NEEDS_REVIEW),
-                reviewReasonsCriteria
+                activeAccountingCriteria
         );
         Criteria gmxPendingClarificationCriteria = new Criteria().andOperator(
                 Criteria.where("status").is(NormalizedTransactionStatus.PENDING_CLARIFICATION),

@@ -312,7 +312,10 @@ public class SessionController {
                                 position.realizedPnlUsd(),
                                 position.networkId(),
                                 position.walletAddress(),
-                                position.issue()
+                                position.issue(),
+                                position.valuationModel(),
+                                position.valuationUnderlyingSymbol(),
+                                position.unsupportedValuationReason()
                 ))
                         .toList()
         );

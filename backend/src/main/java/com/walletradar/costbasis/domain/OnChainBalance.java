@@ -42,6 +42,7 @@ public class OnChainBalance {
     private NetworkId networkId;
     private String assetSymbol;
     private String assetContract;
+    private Integer tokenDecimals;
     private BigDecimal quantity;
     private Instant capturedAt;
 }

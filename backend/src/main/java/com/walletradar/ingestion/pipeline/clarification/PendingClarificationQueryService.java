@@ -3,7 +3,6 @@ package com.walletradar.ingestion.pipeline.clarification;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
-import com.walletradar.ingestion.pipeline.classification.reason.ClassificationReasonCode;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoOperations;
@@ -70,10 +69,6 @@ public class PendingClarificationQueryService {
                 Criteria.where("source").is(NormalizedTransactionSource.ON_CHAIN),
                 Criteria.where("status").is(NormalizedTransactionStatus.PENDING_CLARIFICATION),
                 leaseCriteria,
-                Criteria.where("missingDataReasons").nin(
-                        ClassificationReasonCode.NATIVE_SETTLEMENT_TRANSFER_EVIDENCE_REQUIRED.code(),
-                        ClassificationReasonCode.LP_POSITION_CORRELATION_REQUIRED.code()
-                ),
                 attemptsCriteria,
                 dueCriteria
         ));

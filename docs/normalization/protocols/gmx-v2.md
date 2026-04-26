@@ -95,6 +95,19 @@ Current active semantic hints:
 - protocol semantic classifier now reads `gmx-v2.json` for selector/topic/asset
   markers before fallbacking to compatibility constants
 
+## Current Dashboard Valuation
+
+- GM and GLV market-token dashboard valuation is a portfolio snapshot concern,
+  not an AVCO replay concern.
+- Snapshot refresh may build a cached protocol quote from public GMX market
+  information, oracle token prices, pool token amounts, and market-token total
+  supply.
+- The persisted dashboard quote uses `current_price_quotes.source =
+  PROTOCOL_SNAPSHOT` and is read by dashboard GET without live protocol calls.
+- If the snapshot cannot be built, dashboard rows must remain visible with
+  `unsupported_protocol_valuation`; silent zero value is not accepted for a
+  material GMX position.
+
 ## Disallowed Fallbacks
 
 - no hash hardcodes

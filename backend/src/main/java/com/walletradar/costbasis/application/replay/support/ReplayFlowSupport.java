@@ -183,9 +183,14 @@ public class ReplayFlowSupport {
         copy.setConfidence(transaction.getConfidence());
         copy.setProtocolName(transaction.getProtocolName());
         copy.setProtocolVersion(transaction.getProtocolVersion());
+        copy.setProtocolResolutionState(transaction.getProtocolResolutionState());
+        copy.setProtocolResolutionEvidence(transaction.getProtocolResolutionEvidence());
         copy.setCorrelationId(transaction.getCorrelationId());
         copy.setMatchedCounterparty(transaction.getMatchedCounterparty());
         copy.setCounterpartyAddress(transaction.getCounterpartyAddress());
+        copy.setCounterpartyType(transaction.getCounterpartyType());
+        copy.setCounterpartyResolutionState(transaction.getCounterpartyResolutionState());
+        copy.setCounterpartyResolutionEvidence(transaction.getCounterpartyResolutionEvidence());
         copy.setContinuityCandidate(transaction.getContinuityCandidate());
         copy.setExcludedFromAccounting(transaction.getExcludedFromAccounting());
         copy.setAccountingExclusionReason(transaction.getAccountingExclusionReason());

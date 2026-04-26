@@ -12,6 +12,7 @@ public enum PriceSource {
     BYBIT,
     BINANCE,
     COINGECKO,
+    PROTOCOL_SNAPSHOT,
     MANUAL,
     UNKNOWN
 }

@@ -1448,9 +1448,17 @@ External integration rule:
   `UNKNOWN / NEEDS_REVIEW`; they do not enter a later provider clarification
   lane
 
-After replay completes, WalletRadar must refresh `on_chain_balances` from the
-current session wallet subset only and then reconcile replay output by
-accounting identity.
+After replay completes, WalletRadar must mark `ACCOUNTING_REPLAY` complete
+before refreshing live portfolio evidence. Live evidence refresh runs in the
+separate `PORTFOLIO_SNAPSHOT_REFRESH` pipeline stage and refreshes
+`on_chain_balances` from the current session wallet subset only, then refreshes
+current market quotes for positive live-balance symbols.
+
+This stage is a dashboard/read-model snapshot stage. It must not change
+canonical transactions, pricing history, AVCO state, or `asset_ledger_points`.
+If it is slow or temporarily fails, the accounting replay result remains the
+authoritative replay output; dashboard reads may continue using the latest
+persisted snapshot and expose staleness/issue metadata.
 
 Provider-native balances are still native evidence even when the upstream
 provider returns `contractAddress = 0x0000000000000000000000000000000000000000`.
