@@ -10,6 +10,7 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.bson.Document;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -37,6 +38,12 @@ class StatValidationServiceTest {
                 NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
                 flow(NormalizedLegRole.BUY, "ETH", "1", "2500", PriceSource.BINANCE)
         );
+        Document metadata = new Document("evidenceCompleteness", "FULL_LOGS_PRESENT")
+                .append("vaultAddress", "0xvault");
+        Document clarificationEvidence = new Document("source", "full-receipt")
+                .append("fluidLogOperate", new Document("borrow", "1"));
+        transaction.setMetadata(metadata);
+        transaction.setClarificationEvidence(clarificationEvidence);
         when(pendingStatQueryService.loadNextBatch(25, 60)).thenReturn(List.of(transaction));
 
         StatValidationService service = new StatValidationService(pendingStatQueryService, normalizedTransactionRepository);
@@ -50,6 +57,10 @@ class StatValidationServiceTest {
         verify(normalizedTransactionRepository).save(captor.capture());
         assertThat(captor.getValue().getStatus()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
         assertThat(captor.getValue().getStatAttempts()).isEqualTo(1);
+        assertThat(captor.getValue().getMetadata()).isEqualTo(metadata);
+        assertThat(captor.getValue().getMetadata()).isNotSameAs(metadata);
+        assertThat(captor.getValue().getClarificationEvidence()).isEqualTo(clarificationEvidence);
+        assertThat(captor.getValue().getClarificationEvidence()).isNotSameAs(clarificationEvidence);
     }
 
     @Test

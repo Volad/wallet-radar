@@ -15,7 +15,7 @@
       "bundlerMulticall": ["multicall", "bundle"]
     },
     "assetMarkers": {
-      "shareSymbolMarkers": ["gt", "syrup"],
+      "shareSymbolMarkers": ["gt", "mc", "syrup"],
       "shareNameMarkers": ["vault", "syrup"]
     }
   }

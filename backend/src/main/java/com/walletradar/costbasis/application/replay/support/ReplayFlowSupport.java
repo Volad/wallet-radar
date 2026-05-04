@@ -185,6 +185,8 @@ public class ReplayFlowSupport {
         copy.setProtocolVersion(transaction.getProtocolVersion());
         copy.setProtocolResolutionState(transaction.getProtocolResolutionState());
         copy.setProtocolResolutionEvidence(transaction.getProtocolResolutionEvidence());
+        copy.setMetadata(copyDocument(transaction.getMetadata()));
+        copy.setClarificationEvidence(copyDocument(transaction.getClarificationEvidence()));
         copy.setCorrelationId(transaction.getCorrelationId());
         copy.setMatchedCounterparty(transaction.getMatchedCounterparty());
         copy.setCounterpartyAddress(transaction.getCounterpartyAddress());
@@ -226,6 +228,10 @@ public class ReplayFlowSupport {
             }
         }
         return copy;
+    }
+
+    private org.bson.Document copyDocument(org.bson.Document document) {
+        return document == null ? null : new org.bson.Document(document);
     }
 
     public AssetLedgerPoint.BasisEffect defaultBasisEffect(NormalizedTransaction.Flow flow) {

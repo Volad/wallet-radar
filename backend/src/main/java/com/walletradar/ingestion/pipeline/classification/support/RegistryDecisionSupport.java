@@ -39,6 +39,28 @@ public final class RegistryDecisionSupport {
         );
     }
 
+    public static ClassificationDecision registryResultWithMatchedCounterparty(
+            OnChainRawTransactionView view,
+            ProtocolRegistryEntry entry,
+            NormalizedTransactionType type,
+            List<RawLeg> movementLegs,
+            String matchedCounterparty
+    ) {
+        return FamilyDecisionSupport.buildWithView(
+                view,
+                type,
+                OnChainClassificationSupport.initialStatus(view, type, entry.confidence()),
+                ClassificationSource.PROTOCOL_REGISTRY,
+                entry.confidence(),
+                ParityFlowSupport.flows(view, movementLegs, type),
+                List.of(),
+                false,
+                matchedCounterparty,
+                entry.protocolName(),
+                entry.protocolVersion()
+        );
+    }
+
     public static ClassificationDecision registryResult(
             OnChainRawTransactionView view,
             ProtocolRegistryEntry entry,

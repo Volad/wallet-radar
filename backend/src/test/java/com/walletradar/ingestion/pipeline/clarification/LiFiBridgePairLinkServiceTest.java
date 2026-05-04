@@ -189,6 +189,51 @@ class LiFiBridgePairLinkServiceTest {
     }
 
     @Test
+    @DisplayName("persisted LI.FI receivingTxHash materializes destination even without route tag")
+    void exactReceivingTxHashMaterializesDestinationBridgeIn() {
+        RawTransaction sourceRaw = new RawTransaction();
+        sourceRaw.setId("0xsource:ETHEREUM:" + WALLET);
+        sourceRaw.setTxHash("0xsource");
+        sourceRaw.setNetworkId(NetworkId.ETHEREUM.name());
+        sourceRaw.setWalletAddress(WALLET);
+        sourceRaw.setRawData(new Document("input", "0x"));
+        sourceRaw.setClarificationEvidence(new Document("protocolStatus", new Document("provider", "LIFI")
+                .append("sendingTxHash", "0xsource")
+                .append("receivingTxHash", "0xdestination")
+                .append("receivingNetworkId", NetworkId.AVALANCHE.name())
+                .append("status", "DONE")
+                .append("substatus", "COMPLETED")));
+        NormalizedTransaction source = bridgeOut(
+                "0xsource",
+                NetworkId.ETHEREUM,
+                "USDC",
+                "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+                "-100"
+        );
+        NormalizedTransaction destination = externalTransferIn(
+                "0xdestination",
+                NetworkId.AVALANCHE,
+                "USDC",
+                "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e",
+                "99.9"
+        );
+
+        when(normalizedTransactionRepository.findAllByTxHashAndNetworkIdAndSource(
+                destination.getTxHash(),
+                NetworkId.AVALANCHE,
+                NormalizedTransactionSource.ON_CHAIN
+        )).thenReturn(List.of(destination));
+
+        service.link(sourceRaw, source);
+
+        verify(liFiStatusGateway, never()).fetchBridgeStatus(any());
+        assertThat(destination.getType()).isEqualTo(NormalizedTransactionType.BRIDGE_IN);
+        assertThat(destination.getMatchedCounterparty()).isEqualTo(source.getTxHash());
+        assertThat(destination.getCorrelationId()).isEqualTo("bridge:lifi:" + source.getTxHash());
+        assertThat(source.getMatchedCounterparty()).isEqualTo(destination.getTxHash());
+    }
+
+    @Test
     @DisplayName("LI.FI source sweep records bounded status miss when local matching cannot resolve")
     void liFiSourceSweepRecordsBoundedStatusMissWhenLocalMatchingCannotResolve() {
         RawTransaction sourceRaw = sourceRawTransaction(

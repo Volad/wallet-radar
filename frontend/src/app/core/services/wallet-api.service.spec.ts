@@ -8,6 +8,7 @@ import {
   RebuildSessionTransactionsResponse,
   SessionBackfillStatusResponse,
   SessionDashboardResponse,
+  SessionLendingResponse,
   SessionRefreshResponse,
   SessionSettingsResponse,
   SessionTransactionsResponse,
@@ -127,6 +128,52 @@ describe('WalletApiService', () => {
 
     const req = httpMock.expectOne(
       `${sessionsBaseUrl}/${encodeURIComponent(sessionId)}/dashboard`
+    );
+    expect(req.request.method).toBe('GET');
+    req.flush(response);
+  });
+
+  it('gets session lending from /sessions/{id}/lending', () => {
+    const sessionId = '549b0aba-a9af-4789-b125-ebb86314a3f1';
+    const response: SessionLendingResponse = {
+      sessionId,
+      summary: {
+        totalSuppliedUsd: 1000,
+        totalBorrowedUsd: 250,
+        netExposureUsd: 750,
+        openGroups: 1,
+        closedGroups: 0,
+        protocols: 1,
+      },
+      groups: [
+        {
+          id: 'aave:mantle:0x1234',
+          protocol: 'Aave',
+          networkId: 'MANTLE',
+          walletAddress: '0x1234',
+          status: 'OPEN',
+          healthFactor: 3.12,
+          healthLabel: 'Safe',
+          healthProgress: 100,
+          healthStatus: 'ESTIMATED',
+          healthSource: 'ACCOUNTING_ESTIMATE',
+          supplyUsd: 1000,
+          borrowUsd: 250,
+          netExposureUsd: 750,
+          positions: [],
+          cycles: [],
+          history: [],
+        },
+      ],
+    };
+
+    service.getSessionLending(sessionId).subscribe((result) => {
+      expect(result.summary.netExposureUsd).toBe(750);
+      expect(result.groups[0].protocol).toBe('Aave');
+    });
+
+    const req = httpMock.expectOne(
+      `${sessionsBaseUrl}/${encodeURIComponent(sessionId)}/lending`
     );
     expect(req.request.method).toBe('GET');
     req.flush(response);

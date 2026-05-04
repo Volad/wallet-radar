@@ -87,10 +87,114 @@ Live-session orchestration is event-driven:
        `clarificationEvidence`
      - the only stage allowed to change economic type, flows, or pricing
        semantics after clarification
+     - if this pass promotes supported Fluid vault/wrapper rows to canonical
+       Fluid lifecycle rows without durable full-log evidence, including rows
+       still waiting for pricing/stat validation, it runs a bounded
+       post-reclassification Fluid receipt recovery before publishing final
+       reclassification completion; recovered rows return through
+       `PENDING_RECLASSIFICATION` once more
   5. external-integration normalization
   6. exact custody / bridge rematch
   7. pricing
   8. accounting replay
+
+Lending read-model invariant:
+
+- historical lending events construct lifecycle cycle history
+- clean lending cycles open only on the first supply/deposit event in context;
+  borrow, repay, withdraw, and reward rows cannot start a clean cycle by
+  themselves
+- current open supply/debt positions require current-state evidence from
+  balance snapshots, debt-token balances, or protocol-state snapshots
+- vault/NFT/account-based debt protocols such as Fluid and Compound must not
+  derive current open debt from historical `BORROW - REPAY` rows alone
+- lifecycle close requires full position exit: zero supply/collateral, zero
+  debt, no active vault/account position, and zero receipt/debt tokens or
+  resolver-proven absence
+- lifecycle close is evaluated on canonical lending assets, so wrapper aliases
+  and protocol receipt/debt symbols map back to the same lifecycle asset before
+  state is tested
+- accrued interest may produce over-withdraw or over-repay deltas; the read
+  model treats a lifecycle as closed when no positive supply/debt remainder is
+  left, not when every asset accumulator is exactly zero
+- Fluid vault/NFT accounts, Euler EVK/EVC loops, and Compound Comet accounts
+  are grouped by parent account/vault/market lifecycle; asset symbols are
+  child legs, not standalone cycle keys
+- Compound V3 Bulker rows are classified before generic swap heuristics. A
+  supported `invoke(bytes32[],bytes[])` bundle remains one canonical row, while
+  the lending read model may expose child display legs such as
+  `SUPPLY_COLLATERAL`, `BORROW`, `REPAY`, and `WITHDRAW_COLLATERAL`.
+- Fluid vault/wrapper rows are classified from decoded intent before visible
+  transfer direction. Until full logs/internal transfers prove exact economic
+  quantities, decoded debt/collateral intent is metadata for grouping and
+  status, not speculative accounting flow materialization.
+- Fluid full-receipt recovery is allowed for supported vault/wrapper lifecycle
+  rows that are already known to normalization but lack durable log evidence.
+  The recovery persists receipt/log references and structured Fluid metadata on
+  normalized rows, then reruns reclassification; it is not a read-time RPC path.
+- Fluid normalized row metadata uses the existing structured `metadata` and
+  `clarificationEvidence` fields. Required evidence includes vault address,
+  NFT id when known, wrapper kind, evidence completeness, deterministic
+  position/lifecycle key, decoded collateral/debt intent, `LogOperate` log
+  references, NFT `Transfer` log references, and ERC-20 transfer log references.
+- Same-transaction Fluid wallet-visible repay and decoded
+  `FLUID_LOG_OPERATE_REPAY` evidence represent one economic repayment when
+  market, asset, and quantity match. The read model may keep both evidence rows
+  visible, but aggregate debt and PnL maps count only one authoritative repay.
+- Plasma Fluid transaction evidence preserves `USDT0` in event/display rows.
+  Aggregate accounting maps may use canonical `USDT` only at intentional alias
+  boundaries.
+- Aave cycles keep `protocol + network + wallet` as the parent context but may
+  expose multiple concurrent account-pool strategy cycles when independent
+  supply-only collateral and borrow/repay loops overlap; Fluid/Morpho cycles
+  use `protocol + network + wallet + vault/account/market`; Euler/Compound
+  cycles use `protocol + network + wallet + market/account`
+- repeated `Borrow -> Supply/Deposit` events within 24 hours in the same
+  cycle/context are rendered as one collapsed loop group in the read model
+- reward claims attach to an active matching lending lifecycle; they must not
+  create position lifecycles by themselves
+- close-side events without a matching open supply/debt leg stay as unresolved
+  lifecycle fragments instead of being attached to unrelated clean cycles
+- cycle asset deltas are normalized to lifecycle assets before display and PnL;
+  protocol receipt/debt tokens such as Aave variable debt symbols are not
+  exposed as separate economic assets in cycle totals
+- cycle PnL has two separate read-model contracts: `pnlAssetBreakdown` for
+  derived income in actual assets, and `pnlBreakdown` for USD valuation.
+  `pnlAssetBreakdown.gasByAsset` stores native gas quantity by asset, while
+  `pnlBreakdown.gasUsd` stores the USD valuation
+- When PnL is unavailable, wallet-visible deltas are exposed as observed
+  evidence outside authoritative PnL maps. They must not be labeled as
+  `supplyIncomeByAsset` or included in `netIncomeByAsset` unless required
+  valuation/conversion evidence is complete.
+- unresolved closed lifecycles may be shown only with an explicit stable reason
+  code, for example `closed/current-state-zero` plus
+  `unresolved_principal_exit` or `pnl_unavailable_missing_full_receipt_logs`
+- cycle PnL is lending yield only:
+  `interest earned on supply - interest paid on borrow - gas`; when yield cannot
+  be separated from price movement or the lifecycle is unresolved, PnL remains
+  unavailable with a reason
+- `wstUSR` lending-yield PnL requires historical wrapper/share-rate conversion
+  to `stUSR/USR` underlying and underlying USD pricing. A direct generic token
+  price is not sufficient unless it is proven to encode wrapper exchange rate at
+  the event block.
+- Historical `wstUSR` total USD valuation may use cached external market prices
+  through CoinGecko id `resolv-wstusr`. This is a total valuation input only and
+  must not be treated as lending-yield attribution without wrapper conversion
+  and underlying price evidence.
+- lending valuation is a read-model sub-phase after lifecycle reconstruction:
+  it computes cycle-attached total USD valuation for proven lending economic
+  legs while keeping yield-only PnL separately gated. This phase must not mutate
+  canonical pricing, AVCO, move basis, replay, or normalized accounting truth.
+- total lending valuation may price `principalIn`, `principalOut`, `borrowed`,
+  `repaid`, `rewards`, `fees`, gas, and current open positions from cached
+  historical/current sources. `EURC` uses cached ECB EUR/USD policy rather than
+  USD stablecoin parity; `deUSD` is stable-like unless transaction-local
+  evidence proves a material parity break; wrapper assets such as `wstETH` and
+  `wstUSR` may have total valuation without unlocking yield-only PnL.
+- lending read models may read cached historical prices for timestamped
+  transfer valuation, but they must not perform live price-provider calls
+- session lending GET endpoints remain snapshot-first and must not perform live
+  RPC or explorer calls
 
 Important accounting note:
 
@@ -480,7 +584,14 @@ Control-plane ownership:
   `BUY` / `SELL`, the principal output must remain continuity, and only the
   true reward leg may stay economic.
 - Method-aware protocol bundles such as Morpho Bundler3 must be classified by
-  contract-scoped dispatch before generic `multicall` / `bundle` fallback.
+  contract-scoped dispatch before generic `multicall` / `bundle` fallback. If a
+  Bundler3 call has wallet collateral outbound plus Morpho-side loan asset
+  inbound, or wallet route/collateral outbound plus vault-share mint evidence,
+  the row is lending/vault lifecycle evidence and must not be classified as a
+  generic `SWAP`. The normalized row may remain a single parent transaction,
+  but it must persist child-leg metadata for the lending read model to
+  reconstruct collateral, borrow, route, and receipt-share lanes without a
+  post-factum repair job.
 - Zero-amount token transfers without economic counterflow must never create `BUY` / `SELL` legs. Known setup/admin calls may resolve to `ADMIN_CONFIG`; unknown cases remain explicit review items.
 - Protocol-registry runtime data is loaded from `backend/src/main/resources/protocol-registry.json` only.
 - `event_topics` remain reference-only metadata and are ignored by the runtime classifier.

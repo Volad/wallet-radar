@@ -366,6 +366,196 @@ export interface SessionDashboardResponse {
   readonly tokenPositions: ReadonlyArray<SessionDashboardTokenPositionResponse>;
 }
 
+export interface SessionLendingSummaryResponse {
+  readonly totalSuppliedUsd: number | null;
+  readonly totalBorrowedUsd: number | null;
+  readonly netExposureUsd: number | null;
+  readonly openGroups: number | null;
+  readonly closedGroups: number | null;
+  readonly protocols: number | null;
+}
+
+export interface SessionLendingPositionResponse {
+  readonly id: string;
+  readonly marketKey: string | null;
+  readonly side: 'SUPPLY' | 'BORROW';
+  readonly assetSymbol: string;
+  readonly underlyingSymbol: string;
+  readonly assetContract: string | null;
+  readonly quantity: number | null;
+  readonly coveredQuantity: number | null;
+  readonly valueUsd: number | null;
+  readonly earnedUsd: number | null;
+  readonly apyPct: number | null;
+  readonly metricStatus: string | null;
+  readonly metricSource: string | null;
+}
+
+export interface SessionLendingHistoryEntryResponse {
+  readonly id: string;
+  readonly txHash: string | null;
+  readonly marketKey: string | null;
+  readonly cycleId: string | null;
+  readonly networkId: EvmNetworkId | null;
+  readonly walletAddress: string | null;
+  readonly blockTimestamp: string | null;
+  readonly type: string;
+  readonly eventSubtype: string | null;
+  readonly displayType: string;
+  readonly assetSymbol: string;
+  readonly quantity: number | null;
+  readonly valueUsd: number | null;
+  readonly feeUsd: number | null;
+  readonly loopId: string | null;
+}
+
+export interface SessionLendingAssetDeltasResponse {
+  readonly principalInByAsset: Readonly<Record<string, number | null>>;
+  readonly principalOutByAsset: Readonly<Record<string, number | null>>;
+  readonly principalOutCashByAsset: Readonly<Record<string, number | null>> | null;
+  readonly internalReceiptMovementByAsset: Readonly<Record<string, number | null>> | null;
+  readonly borrowedByAsset: Readonly<Record<string, number | null>>;
+  readonly repaidByAsset: Readonly<Record<string, number | null>>;
+  readonly withdrawnByAsset: Readonly<Record<string, number | null>>;
+  readonly rewardByAsset: Readonly<Record<string, number | null>>;
+  readonly feesByAsset: Readonly<Record<string, number | null>>;
+  readonly netCashDeltaByAsset: Readonly<Record<string, number | null>>;
+}
+
+export interface SessionLendingPnlResponse {
+  readonly valueUsd: number | null;
+  readonly precision: string | null;
+  readonly method: string | null;
+}
+
+export interface SessionLendingPnlBreakdownResponse {
+  readonly interestEarnedUsd: number | null;
+  readonly interestPaidUsd: number | null;
+  readonly gasUsd: number | null;
+  readonly netPnlUsd: number | null;
+  readonly precision: string | null;
+  readonly method: string | null;
+  readonly reason: string | null;
+}
+
+export interface SessionLendingPnlAssetBreakdownResponse {
+  readonly supplyIncomeByAsset: Readonly<Record<string, number | null>>;
+  readonly borrowCostByAsset: Readonly<Record<string, number | null>>;
+  readonly rewardsByAsset: Readonly<Record<string, number | null>>;
+  readonly gasByAsset: Readonly<Record<string, number | null>>;
+  readonly netIncomeByAsset: Readonly<Record<string, number | null>>;
+  readonly precisionByAsset: Readonly<Record<string, string | null>>;
+  readonly reasonByAsset: Readonly<Record<string, string | null>>;
+}
+
+export interface SessionLendingTotalValuationResponse {
+  readonly principalInUsd: number | null;
+  readonly principalOutUsd: number | null;
+  readonly borrowedUsd: number | null;
+  readonly repaidUsd: number | null;
+  readonly rewardsUsd: number | null;
+  readonly feesUsd: number | null;
+  readonly gasUsd: number | null;
+  readonly totalUsdPnl: number | null;
+  readonly currentUsdValue: number | null;
+  readonly unrealizedTotalUsdPnl: number | null;
+  readonly totalUsdPnlPrecision: string | null;
+  readonly yieldOnlyPnl: number | null;
+  readonly yieldOnlyPnlPrecision: string | null;
+  readonly valuationMethod: string | null;
+  readonly unavailableReason: string | null;
+}
+
+export interface SessionLendingObservedFlowResponse {
+  readonly assetSymbol: string;
+  readonly assetContract: string | null;
+  readonly quantity: number | null;
+  readonly sourceTxHash: string | null;
+  readonly sourceKind: string | null;
+  readonly isAuthoritativeForPnl: boolean | null;
+  readonly unavailableReason: string | null;
+}
+
+export interface SessionLendingTxItemResponse {
+  readonly id: string;
+  readonly type: string;
+  readonly label: string;
+  readonly assetSymbol: string;
+  readonly quantity: number | null;
+  readonly valueUsd: number | null;
+  readonly txHash: string | null;
+  readonly blockTimestamp: string | null;
+}
+
+export interface SessionLendingTxGroupResponse {
+  readonly id: string;
+  readonly type: 'open' | 'borrow' | 'loop' | 'mid' | 'close' | 'reward' | string;
+  readonly timestamp: string | null;
+  readonly dateLabel: string | null;
+  readonly loopSteps: number | null;
+  readonly loopAssetIn: string | null;
+  readonly loopAssetOut: string | null;
+  readonly items: ReadonlyArray<SessionLendingTxItemResponse>;
+}
+
+export interface SessionLendingCycleResponse {
+  readonly id: string;
+  readonly marketKey: string;
+  readonly marketLabel: string;
+  readonly status: 'OPEN' | 'CLOSED' | 'AMBIGUOUS_NEEDS_REVIEW';
+  readonly startTimestamp: string | null;
+  readonly closeTimestamp: string | null;
+  readonly startTxHash: string | null;
+  readonly closeTxHash: string | null;
+  readonly statusDetail: string | null;
+  readonly warningReason: string | null;
+  readonly assetDenominatedPnlByAsset: Readonly<Record<string, number | null>> | null;
+  readonly assetDenominatedPrecisionByAsset: Readonly<Record<string, string | null>> | null;
+  readonly assetDenominatedReasonByAsset: Readonly<Record<string, string | null>> | null;
+  readonly primaryAssetPnlSummary: string | null;
+  readonly largePnlReason: string | null;
+  readonly largePnlReasons: ReadonlyArray<string> | null;
+  readonly primaryLargePnlReason: string | null;
+  readonly assetDeltas: SessionLendingAssetDeltasResponse;
+  readonly realizedPnl: SessionLendingPnlResponse;
+  readonly unrealizedPnl: SessionLendingPnlResponse;
+  readonly pnlBreakdown: SessionLendingPnlBreakdownResponse;
+  readonly pnlAssetBreakdown: SessionLendingPnlAssetBreakdownResponse;
+  readonly totalValuation: SessionLendingTotalValuationResponse | null;
+  readonly observedFlowsByAsset: Readonly<Record<string, ReadonlyArray<SessionLendingObservedFlowResponse>>> | null;
+  readonly peakSupplyUsd: number | null;
+  readonly peakBorrowUsd: number | null;
+  readonly durationDays: number | null;
+  readonly positions: ReadonlyArray<SessionLendingPositionResponse>;
+  readonly events: ReadonlyArray<SessionLendingHistoryEntryResponse>;
+  readonly txGroups: ReadonlyArray<SessionLendingTxGroupResponse>;
+}
+
+export interface SessionLendingGroupResponse {
+  readonly id: string;
+  readonly protocol: string;
+  readonly networkId: EvmNetworkId | null;
+  readonly walletAddress: string;
+  readonly status: 'OPEN' | 'CLOSED';
+  readonly healthFactor: number | null;
+  readonly healthLabel: string | null;
+  readonly healthProgress: number | null;
+  readonly healthStatus: string | null;
+  readonly healthSource: string | null;
+  readonly supplyUsd: number | null;
+  readonly borrowUsd: number | null;
+  readonly netExposureUsd: number | null;
+  readonly positions: ReadonlyArray<SessionLendingPositionResponse>;
+  readonly cycles: ReadonlyArray<SessionLendingCycleResponse>;
+  readonly history: ReadonlyArray<SessionLendingHistoryEntryResponse>;
+}
+
+export interface SessionLendingResponse {
+  readonly sessionId: string;
+  readonly summary: SessionLendingSummaryResponse;
+  readonly groups: ReadonlyArray<SessionLendingGroupResponse>;
+}
+
 // Backward-compatible alias used across current component code.
 export type WalletAddRequestItem = AddSessionRequestItem;
 

@@ -231,6 +231,8 @@ public class StatValidationService {
         copy.setProtocolVersion(transaction.getProtocolVersion());
         copy.setProtocolResolutionState(transaction.getProtocolResolutionState());
         copy.setProtocolResolutionEvidence(transaction.getProtocolResolutionEvidence());
+        copy.setMetadata(copyDocument(transaction.getMetadata()));
+        copy.setClarificationEvidence(copyDocument(transaction.getClarificationEvidence()));
         copy.setClarificationAttempts(transaction.getClarificationAttempts());
         copy.setFullReceiptClarificationAttempts(transaction.getFullReceiptClarificationAttempts());
         copy.setPricingAttempts(transaction.getPricingAttempts());
@@ -263,6 +265,10 @@ public class StatValidationService {
         }
         copy.setFlows(flows);
         return copy;
+    }
+
+    private org.bson.Document copyDocument(org.bson.Document document) {
+        return document == null ? null : new org.bson.Document(document);
     }
 
     private int safeIncrement(Integer attempts) {

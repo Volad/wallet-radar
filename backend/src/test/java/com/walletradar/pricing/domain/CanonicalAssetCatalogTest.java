@@ -38,4 +38,10 @@ class CanonicalAssetCatalogTest {
         assertThat(CanonicalAssetCatalog.exchangeMarketSymbols("wstETH"))
                 .containsExactly("WSTETH", "STETH", "ETH");
     }
+
+    @Test
+    void wstUsrUsesResolvCoinGeckoMarketForHistoricalTotalValuation() {
+        assertThat(CanonicalAssetCatalog.coinGeckoId("wstUSR")).contains("resolv-wstusr");
+        assertThat(CanonicalAssetCatalog.coinGeckoId("USR")).contains("resolv-usr");
+    }
 }

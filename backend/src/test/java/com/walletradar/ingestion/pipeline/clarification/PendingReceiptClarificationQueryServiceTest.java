@@ -172,6 +172,27 @@ class PendingReceiptClarificationQueryServiceTest {
     }
 
     @Test
+    void confirmedFluidRecoveryOnlyLoadsRowsMissingFullLogEvidence() {
+        PendingReceiptClarificationQueryService service = new PendingReceiptClarificationQueryService(
+                mongoOperations,
+                rawTransactionRepository,
+                receiptClarificationGateway
+        );
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class))).thenReturn(List.of());
+
+        service.claimConfirmedFluidReceiptBatch(10, 2, 300, "worker-1", 300);
+
+        ArgumentCaptor<Query> queryCaptor = ArgumentCaptor.forClass(Query.class);
+        verify(mongoOperations).find(queryCaptor.capture(), eq(NormalizedTransaction.class));
+        String queryText = String.valueOf(queryCaptor.getValue().getQueryObject());
+        assertThat(queryText).contains("CONFIRMED");
+        assertThat(queryText).contains("PENDING_PRICE");
+        assertThat(queryText).contains("Fluid");
+        assertThat(queryText).contains("metadata.evidenceCompleteness");
+        assertThat(queryText).contains("FULL_LOGS_PRESENT");
+    }
+
+    @Test
     void keepsEulerReviewRowsWhenOnlyReceiptLogsWerePersisted() {
         PendingReceiptClarificationQueryService service = new PendingReceiptClarificationQueryService(
                 mongoOperations,

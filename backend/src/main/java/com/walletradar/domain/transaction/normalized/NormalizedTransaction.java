@@ -111,6 +111,7 @@ public class NormalizedTransaction {
     private Instant blockTimestamp;
     private Integer transactionIndex;
     private NormalizedTransactionType type;
+    private String eventSubtype;
     private NormalizedTransactionStatus status;
     private ClassificationSource classifiedBy;
     private List<Flow> flows = new ArrayList<>();
@@ -130,6 +131,8 @@ public class NormalizedTransaction {
     private String protocolVersion;
     private String protocolResolutionState;
     private String protocolResolutionEvidence;
+    private org.bson.Document metadata;
+    private org.bson.Document clarificationEvidence;
     private Integer clarificationAttempts;
     private Integer fullReceiptClarificationAttempts;
     private Instant clarificationLeaseUntil;

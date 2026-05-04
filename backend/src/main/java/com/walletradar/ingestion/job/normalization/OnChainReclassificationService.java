@@ -101,6 +101,7 @@ public class OnChainReclassificationService {
         }
         protocolNameEnrichmentService.enrichInPlace(normalizedTransaction, rawTransaction, now);
         counterpartyEnrichmentService.enrichInPlace(normalizedTransaction, rawTransaction, now);
+        builder.enrichFluidEvidence(normalizedTransaction, rawTransaction);
     }
 
     private void terminalizeExhaustedClarification(NormalizedTransaction normalizedTransaction) {

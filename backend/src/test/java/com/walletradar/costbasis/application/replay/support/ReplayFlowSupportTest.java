@@ -6,6 +6,7 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import org.bson.Document;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
@@ -32,12 +33,22 @@ class ReplayFlowSupportTest {
         transaction.setCorrelationId("corr-1");
         transaction.setMatchedCounterparty("wallet-b");
         transaction.setCounterpartyAddress("0x1111111111111111111111111111111111111111");
+        Document metadata = new Document("evidenceCompleteness", "FULL_LOGS_PRESENT")
+                .append("vaultAddress", "0x2222222222222222222222222222222222222222");
+        Document clarificationEvidence = new Document("source", "full-receipt")
+                .append("fluidLogOperate", new Document("supply", "1"));
+        transaction.setMetadata(metadata);
+        transaction.setClarificationEvidence(clarificationEvidence);
         transaction.setFlows(List.of(flow()));
 
         NormalizedTransaction copy = support.copyTransaction(transaction);
 
         assertThat(copy.getCounterpartyAddress()).isEqualTo("0x1111111111111111111111111111111111111111");
         assertThat(copy.getMatchedCounterparty()).isEqualTo("wallet-b");
+        assertThat(copy.getMetadata()).isEqualTo(metadata);
+        assertThat(copy.getMetadata()).isNotSameAs(metadata);
+        assertThat(copy.getClarificationEvidence()).isEqualTo(clarificationEvidence);
+        assertThat(copy.getClarificationEvidence()).isNotSameAs(clarificationEvidence);
         assertThat(copy.getFlows()).hasSize(1);
         assertThat(copy.getFlows().getFirst()).isNotSameAs(transaction.getFlows().getFirst());
     }

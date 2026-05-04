@@ -854,7 +854,10 @@ public class LiFiBridgePairLinkService {
             return false;
         }
         OnChainRawTransactionView view = OnChainRawTransactionView.wrap(rawTransaction);
-        return LiFiRouteSupport.hasRouteTag(view)
+        return readExistingStatus(rawTransaction)
+                .filter(status -> hasText(status.receivingTxHash()))
+                .isPresent()
+                || LiFiRouteSupport.hasRouteTag(view)
                 || hasText(normalizedTransaction.getProtocolName())
                 && isLiFiProtocol(normalizedTransaction.getProtocolName());
     }

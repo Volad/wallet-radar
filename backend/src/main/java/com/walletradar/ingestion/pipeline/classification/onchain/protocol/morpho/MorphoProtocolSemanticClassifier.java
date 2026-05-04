@@ -25,6 +25,7 @@ public class MorphoProtocolSemanticClassifier implements ProtocolSemanticClassif
     private static final String RESOURCE_VERSION = "bundler3";
     private static final String PROTOCOL_KEY = "morpho";
     private static final String SEMANTIC_SWAP = "swap";
+    private static final String SEMANTIC_COLLATERAL_BORROW = "collateral_borrow";
     private static final String SEMANTIC_VAULT_DEPOSIT = "vault_deposit";
     private static final String SEMANTIC_VAULT_WITHDRAW = "vault_withdraw";
     private static final String SEMANTIC_LENDING_WITHDRAW = "lending_withdraw";
@@ -60,6 +61,9 @@ public class MorphoProtocolSemanticClassifier implements ProtocolSemanticClassif
         }
         if (hasMintedShareInbound(context.view()) && hasOutbound) {
             return List.of(hint(value, SEMANTIC_VAULT_DEPOSIT, NormalizedTransactionType.VAULT_DEPOSIT));
+        }
+        if (hasCollateralBorrowShape(context)) {
+            return List.of(hint(value, SEMANTIC_COLLATERAL_BORROW, NormalizedTransactionType.LENDING_LOOP_OPEN));
         }
         if (hasShareOutbound(context.view()) && hasInbound) {
             return List.of(hint(value, SEMANTIC_VAULT_WITHDRAW, NormalizedTransactionType.VAULT_WITHDRAW));
@@ -122,6 +126,34 @@ public class MorphoProtocolSemanticClassifier implements ProtocolSemanticClassif
         return false;
     }
 
+    private boolean hasCollateralBorrowShape(ProtocolSemanticContext context) {
+        String walletAddress = context.view().walletAddress();
+        if (walletAddress == null) {
+            return false;
+        }
+        boolean collateralOutbound = false;
+        boolean loanInbound = false;
+        for (Document transfer : context.view().explorerTokenTransfers()) {
+            if (context.view().tokenTransferQuantity(transfer) == null
+                    || context.view().tokenTransferQuantity(transfer).signum() <= 0) {
+                continue;
+            }
+            String symbol = context.view().tokenTransferSymbol(transfer);
+            if (walletAddress.equals(context.view().tokenTransferFrom(transfer))
+                    && !isShareLikeToken(context.view(), transfer)
+                    && !isStableLike(symbol)) {
+                collateralOutbound = true;
+            }
+            if (walletAddress.equals(context.view().tokenTransferTo(transfer))
+                    && !ZERO_ADDRESS.equals(context.view().tokenTransferFrom(transfer))
+                    && !isShareLikeToken(context.view(), transfer)
+                    && isStableLike(symbol)) {
+                loanInbound = true;
+            }
+        }
+        return collateralOutbound && loanInbound;
+    }
+
     private boolean isShareLikeToken(OnChainRawTransactionView view, Document transfer) {
         if (resource == null) {
             return false;
@@ -150,5 +182,13 @@ public class MorphoProtocolSemanticClassifier implements ProtocolSemanticClassif
 
     private String normalize(String value) {
         return value == null ? null : value.trim().toLowerCase();
+    }
+
+    private boolean isStableLike(String symbol) {
+        String normalized = normalize(symbol);
+        return normalized != null && switch (normalized) {
+            case "usdc", "usdt", "usdt0", "usd₮0", "dai", "gho", "usde", "deusd", "eurc" -> true;
+            default -> false;
+        };
     }
 }

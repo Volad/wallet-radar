@@ -29,13 +29,18 @@
     <div class="workspace">
       <wr-dashboard-section-nav
         [sections]="data().sections"
-        [activeSection]="isAssetLedgerMode() ? 'tokens' : section()"
+        [activeSection]="isAssetLedgerMode() ? 'tokens' : isLendingMode() ? 'lending' : section()"
         [isSettingsActive]="isSettingsMode()"
         (sectionChange)="toggleSection($event)"
         (settingsSelect)="openSettings()"></wr-dashboard-section-nav>
 
       @if (isSettingsMode()) {
         <wr-settings-page class="settings-workspace"></wr-settings-page>
+      } @else if (isLendingMode()) {
+        <wr-lending-page
+          class="lending-workspace"
+          [sessionId]="currentSessionId()"
+          [refreshNonce]="dashboardRefreshNonce()"></wr-lending-page>
       } @else if (isAssetLedgerMode() && assetLedgerSessionId() !== null && assetLedgerFamilyIdentity() !== null) {
         <wr-asset-ledger-page
           class="asset-ledger-workspace"

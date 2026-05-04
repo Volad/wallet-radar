@@ -104,6 +104,73 @@ public class PendingReceiptClarificationQueryService {
         );
     }
 
+    public List<NormalizedTransaction> claimConfirmedFluidReceiptBatch(
+            int batchSize,
+            int maxAttempts,
+            long retryDelaySeconds,
+            String workerId,
+            long leaseSeconds
+    ) {
+        int boundedBatchSize = Math.max(1, batchSize);
+        int boundedMaxAttempts = Math.max(1, maxAttempts);
+        Instant now = Instant.now();
+        Instant retryCutoff = now.minusSeconds(Math.max(0L, retryDelaySeconds));
+
+        Criteria attemptsCriteria = new Criteria().orOperator(
+                Criteria.where("fullReceiptClarificationAttempts").exists(false),
+                Criteria.where("fullReceiptClarificationAttempts").lt(boundedMaxAttempts)
+        );
+        Criteria dueCriteria = new Criteria().orOperator(
+                Criteria.where("fullReceiptClarificationAttempts").exists(false),
+                Criteria.where("fullReceiptClarificationAttempts").lte(0),
+                Criteria.where("updatedAt").lte(retryCutoff)
+        );
+        Criteria leaseCriteria = new Criteria().orOperator(
+                Criteria.where("clarificationLeaseUntil").exists(false),
+                Criteria.where("clarificationLeaseUntil").is(null),
+                Criteria.where("clarificationLeaseUntil").lte(now)
+        );
+        Criteria activeAccountingCriteria = new Criteria().orOperator(
+                Criteria.where("excludedFromAccounting").exists(false),
+                Criteria.where("excludedFromAccounting").ne(true)
+        );
+        Criteria missingFluidFullLogEvidenceCriteria = new Criteria().orOperator(
+                Criteria.where("metadata.evidenceCompleteness").exists(false),
+                Criteria.where("metadata.evidenceCompleteness").ne("FULL_LOGS_PRESENT")
+        );
+
+        Query query = new Query(new Criteria().andOperator(
+                Criteria.where("source").is(NormalizedTransactionSource.ON_CHAIN),
+                Criteria.where("status").in(
+                        NormalizedTransactionStatus.CONFIRMED,
+                        NormalizedTransactionStatus.PENDING_PRICE,
+                        NormalizedTransactionStatus.PENDING_STAT
+                ),
+                Criteria.where("protocolName").is("Fluid"),
+                Criteria.where("type").in(
+                        NormalizedTransactionType.LENDING_LOOP_OPEN,
+                        NormalizedTransactionType.LENDING_LOOP_DECREASE,
+                        NormalizedTransactionType.LENDING_LOOP_CLOSE,
+                        NormalizedTransactionType.LENDING_WITHDRAW,
+                        NormalizedTransactionType.REPAY,
+                        NormalizedTransactionType.BORROW
+                ),
+                missingFluidFullLogEvidenceCriteria,
+                activeAccountingCriteria,
+                attemptsCriteria,
+                dueCriteria,
+                leaseCriteria
+        ));
+        query.with(Sort.by(
+                Sort.Order.asc("blockTimestamp"),
+                Sort.Order.asc("transactionIndex"),
+                Sort.Order.asc("_id")
+        ));
+        query.limit(boundedBatchSize);
+        List<NormalizedTransaction> selected = mongoOperations.find(query, NormalizedTransaction.class);
+        return claimIfRequested(selected, workerId, leaseSeconds, now);
+    }
+
     private List<NormalizedTransaction> loadNextBatch(
             int batchSize,
             int maxAttempts,

@@ -131,8 +131,10 @@ final class ClarificationReclassificationHandler {
             Instant now
     ) {
         if (counterpartyEnrichmentService == null) {
+            builder.enrichFluidEvidence(normalizedTransaction, rawTransaction);
             return;
         }
         counterpartyEnrichmentService.enrichInPlace(normalizedTransaction, rawTransaction, now);
+        builder.enrichFluidEvidence(normalizedTransaction, rawTransaction);
     }
 }

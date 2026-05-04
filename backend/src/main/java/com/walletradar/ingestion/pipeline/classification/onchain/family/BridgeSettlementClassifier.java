@@ -74,6 +74,9 @@ public class BridgeSettlementClassifier implements OnChainFamilyClassifier {
                     entry.protocolVersion()
             ));
         }
+        if (selectorProven && BridgeSettlementSupport.requiresVerifiedBridgeEvidence(context.view())) {
+            return Optional.empty();
+        }
 
         return Optional.of(new ClassificationDecision(
                 NormalizedTransactionType.BRIDGE_IN,

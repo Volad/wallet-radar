@@ -9,6 +9,7 @@ import com.walletradar.ingestion.pipeline.classification.OnChainClassificationCo
 import com.walletradar.ingestion.pipeline.classification.support.OnChainClassificationSupport;
 import com.walletradar.ingestion.pipeline.classification.support.ParityFlowSupport;
 import com.walletradar.ingestion.pipeline.classification.support.RawLeg;
+import org.bson.Document;
 import org.springframework.core.Ordered;
 import org.springframework.stereotype.Component;
 
@@ -52,12 +53,40 @@ public class ZkSyncAaveGatewayClassifier implements OnChainFamilyClassifier {
         if (context == null || context.view() == null || context.view().networkId() == null) {
             return Optional.empty();
         }
+        Optional<ClassificationDecision> baseBorrowEth = classifyBorrowEth(context);
+        if (baseBorrowEth.isPresent()) {
+            return baseBorrowEth;
+        }
+        Optional<ClassificationDecision> repayWithATokens = classifyRepayWithATokens(context);
+        if (repayWithATokens.isPresent()) {
+            return repayWithATokens;
+        }
         return switch (context.view().methodId()) {
             case WITHDRAW_ETH_SELECTOR -> classifyWithdrawEth(context);
             case SUPPLY_WITH_PERMIT_SELECTOR -> classifySupplyWithPermit(context);
             case DEPOSIT_ETH_SELECTOR -> classifyDepositEth(context);
             default -> Optional.empty();
         };
+    }
+
+    private Optional<ClassificationDecision> classifyBorrowEth(OnChainClassificationContext context) {
+        if (!functionStartsWith(context, "borroweth(")) {
+            return Optional.empty();
+        }
+        if (!hasDebtMarker(context.movementLegs(), 1)) {
+            return Optional.empty();
+        }
+        return Optional.of(build(context, NormalizedTransactionType.BORROW));
+    }
+
+    private Optional<ClassificationDecision> classifyRepayWithATokens(OnChainClassificationContext context) {
+        if (!functionStartsWith(context, "repaywithatokens(")) {
+            return Optional.empty();
+        }
+        if (!hasDebtMarker(context.movementLegs(), -1) || !hasOutboundAaveReceipt(context.movementLegs())) {
+            return Optional.empty();
+        }
+        return Optional.of(build(context, NormalizedTransactionType.REPAY));
     }
 
     private Optional<ClassificationDecision> classifyWithdrawEth(OnChainClassificationContext context) {
@@ -129,5 +158,44 @@ public class ZkSyncAaveGatewayClassifier implements OnChainFamilyClassifier {
         }
         String normalizedLegSymbol = leg.assetSymbol() == null ? "" : leg.assetSymbol().trim().toUpperCase(Locale.ROOT);
         return symbol.equals(normalizedLegSymbol);
+    }
+
+    private boolean functionStartsWith(OnChainClassificationContext context, String functionPrefix) {
+        String functionName = context.view().functionName();
+        if (functionName != null && functionName.startsWith(functionPrefix)) {
+            return true;
+        }
+        for (Document transfer : context.view().explorerTokenTransfers()) {
+            Object transferFunction = transfer == null ? null : transfer.get("functionName");
+            if (transferFunction != null
+                    && transferFunction.toString().trim().toLowerCase(Locale.ROOT).startsWith(functionPrefix)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean hasDebtMarker(List<RawLeg> movementLegs, int signum) {
+        return movementLegs.stream()
+                .filter(leg -> leg != null && !leg.fee() && leg.quantityDelta() != null)
+                .filter(leg -> leg.quantityDelta().signum() == signum)
+                .anyMatch(this::isAaveDebtMarker);
+    }
+
+    private boolean hasOutboundAaveReceipt(List<RawLeg> movementLegs) {
+        return movementLegs.stream()
+                .filter(leg -> leg != null && !leg.fee() && leg.quantityDelta() != null)
+                .filter(leg -> leg.quantityDelta().signum() < 0)
+                .anyMatch(this::isAaveReceipt);
+    }
+
+    private boolean isAaveDebtMarker(RawLeg leg) {
+        String symbol = leg.assetSymbol() == null ? "" : leg.assetSymbol().trim().toUpperCase(Locale.ROOT);
+        return symbol.startsWith("VARIABLEDEBT") || symbol.startsWith("STABLEDEBT");
+    }
+
+    private boolean isAaveReceipt(RawLeg leg) {
+        String symbol = leg.assetSymbol() == null ? "" : leg.assetSymbol().trim().toUpperCase(Locale.ROOT);
+        return symbol.startsWith("A") && !isAaveDebtMarker(leg);
     }
 }

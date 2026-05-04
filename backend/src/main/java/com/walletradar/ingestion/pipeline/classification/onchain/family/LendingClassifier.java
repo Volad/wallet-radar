@@ -27,6 +27,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Lending family classifier for clarified batch and Euler loop semantics that still resolve
@@ -35,7 +36,14 @@ import java.util.Optional;
 @Component
 public class LendingClassifier implements OnChainFamilyClassifier {
 
-    private static final String EULER_BATCH_ROUTER = "0xddcbe30a761edd2e19bba930a977475265f36fa1";
+    private static final Set<String> EULER_BATCH_ROUTERS = Set.of(
+            "0xddcbe30a761edd2e19bba930a977475265f36fa1",
+            "0x7bdbd0a7114aa42ca957f292145f6a931a345583"
+    );
+    private static final Set<String> EULER_KNOWN_VAULT_CONTRACTS = Set.of(
+            "0x4718484ac9dc07fbbc078561e8f8ef29e2a369cd",
+            "0xac40d41ab11b0eb991a7d34d55dbdbb7849e92ef"
+    );
     private static final String EULER_CALL_WITH_CONTEXT_TOPIC =
             "0x6e9738e5aa38fe1517adbb480351ec386ece82947737b18badbcad1e911133ec";
     private static final String EULER_BORROW_EVENT_TOPIC =
@@ -51,12 +59,12 @@ public class LendingClassifier implements OnChainFamilyClassifier {
 
     @Override
     public OnChainClassificationInsertionPoint insertionPoint() {
-        return OnChainClassificationInsertionPoint.FINAL_FALLBACK;
+        return OnChainClassificationInsertionPoint.PRE_ECONOMIC_REVIEW;
     }
 
     @Override
     public int getOrder() {
-        return Ordered.HIGHEST_PRECEDENCE + 250;
+        return Ordered.HIGHEST_PRECEDENCE + 90;
     }
 
     @Override
@@ -70,6 +78,11 @@ public class LendingClassifier implements OnChainFamilyClassifier {
             return Optional.empty();
         }
 
+        Optional<ClassificationDecision> eulerLoopDecision = classifyEulerLoopPath(context.view(), context.movementLegs());
+        if (eulerLoopDecision.isPresent()) {
+            return eulerLoopDecision;
+        }
+
         if (isEulerBatchClarificationRequired(context.view(), context.movementLegs())) {
             return Optional.of(pendingReceiptClarification(
                     context.view(),
@@ -78,10 +91,6 @@ public class LendingClassifier implements OnChainFamilyClassifier {
             ));
         }
 
-        Optional<ClassificationDecision> eulerLoopDecision = classifyEulerLoopPath(context.view(), context.movementLegs());
-        if (eulerLoopDecision.isPresent()) {
-            return eulerLoopDecision;
-        }
         if (!context.view().hasFullReceiptClarificationEvidence()) {
             return Optional.empty();
         }
@@ -147,7 +156,7 @@ public class LendingClassifier implements OnChainFamilyClassifier {
             OnChainRawTransactionView view,
             List<RawLeg> movementLegs
     ) {
-        if (EULER_BATCH_ROUTER.equals(view.toAddress())) {
+        if (isEulerBatchRouter(view.toAddress())) {
             return true;
         }
         if (movementLegs != null && movementLegs.stream().anyMatch(this::isEulerLikeMovement)) {
@@ -193,7 +202,10 @@ public class LendingClassifier implements OnChainFamilyClassifier {
         Optional<ProtocolSemanticHint> loopOpen = context.protocolSemantics()
                 .firstBySuggestedType(NormalizedTransactionType.LENDING_LOOP_OPEN);
         if (loopOpen.isPresent()) {
-            List<NormalizedTransaction.Flow> flows = buildEulerLoopOpenFlows(context.view(), context.movementLegs());
+            ProtocolSemanticHint value = loopOpen.orElseThrow();
+            List<NormalizedTransaction.Flow> flows = "Morpho".equalsIgnoreCase(value.protocolName())
+                    ? transferFlows(context.movementLegs())
+                    : buildEulerLoopOpenFlows(context.view(), context.movementLegs());
             if (!flows.isEmpty()) {
                 return Optional.of(FamilyDecisionSupport.buildWithView(
                         context.view(),
@@ -207,8 +219,8 @@ public class LendingClassifier implements OnChainFamilyClassifier {
                         ConfidenceLevel.LOW,
                         flows,
                         List.of(),
-                        loopOpen.orElseThrow().protocolName(),
-                        loopOpen.orElseThrow().protocolVersion()
+                        value.protocolName(),
+                        value.protocolVersion()
                 ));
             }
         }
@@ -350,12 +362,117 @@ public class LendingClassifier implements OnChainFamilyClassifier {
         ));
     }
 
+    private Optional<ClassificationDecision> classifyEulerReceiptOnlyLoopOpen(
+            OnChainRawTransactionView view,
+            List<RawLeg> movementLegs
+    ) {
+        if (movementLegs == null || movementLegs.isEmpty()) {
+            return Optional.empty();
+        }
+        boolean stableReceiptInbound = false;
+        boolean collateralReceiptInbound = false;
+        for (RawLeg leg : movementLegs) {
+            if (leg == null
+                    || leg.fee()
+                    || leg.quantityDelta() == null
+                    || leg.quantityDelta().signum() <= 0
+                    || !isShareLikeSymbol(leg.assetSymbol())
+                    || isDebtLikeSymbol(leg.assetSymbol())) {
+                continue;
+            }
+            if (isEulerStableLikeShareSymbol(leg.assetSymbol())) {
+                stableReceiptInbound = true;
+            } else {
+                collateralReceiptInbound = true;
+            }
+        }
+        if (!stableReceiptInbound || !collateralReceiptInbound) {
+            return Optional.empty();
+        }
+        return Optional.of(FamilyDecisionSupport.buildWithView(
+                view,
+                NormalizedTransactionType.LENDING_LOOP_OPEN,
+                OnChainClassificationSupport.initialStatus(
+                        view,
+                        NormalizedTransactionType.LENDING_LOOP_OPEN,
+                        ConfidenceLevel.LOW
+                ),
+                ClassificationSource.HEURISTIC,
+                ConfidenceLevel.LOW,
+                transferFlows(movementLegs),
+                List.of(),
+                "Euler",
+                null
+        ));
+    }
+
+    private Optional<ClassificationDecision> classifyEulerBatchDeposit(
+            OnChainRawTransactionView view,
+            List<RawLeg> movementLegs
+    ) {
+        if (movementLegs == null || movementLegs.isEmpty()) {
+            return Optional.empty();
+        }
+        boolean outboundPrincipalToEulerShareContract = false;
+        for (Document transfer : view.explorerTokenTransfers()) {
+            BigDecimal quantity = view.tokenTransferQuantity(transfer);
+            if (quantity == null || quantity.signum() <= 0) {
+                continue;
+            }
+            String symbol = view.tokenTransferSymbol(transfer);
+            if (isShareLikeSymbol(symbol) || isDebtLikeSymbol(symbol)) {
+                continue;
+            }
+            if (matchesPrimaryWallet(view, view.tokenTransferFrom(transfer))
+                    && isEulerLikeAddress(view.tokenTransferTo(transfer))) {
+                outboundPrincipalToEulerShareContract = true;
+                break;
+            }
+        }
+        if (!outboundPrincipalToEulerShareContract) {
+            return Optional.empty();
+        }
+        boolean hasOutboundPrincipal = movementLegs.stream()
+                .anyMatch(leg -> leg != null
+                        && !leg.fee()
+                        && leg.quantityDelta() != null
+                        && leg.quantityDelta().signum() < 0
+                        && !isShareLikeSymbol(leg.assetSymbol())
+                        && !isDebtLikeSymbol(leg.assetSymbol()));
+        if (!hasOutboundPrincipal) {
+            return Optional.empty();
+        }
+        return Optional.of(FamilyDecisionSupport.buildWithView(
+                view,
+                NormalizedTransactionType.LENDING_DEPOSIT,
+                OnChainClassificationSupport.initialStatus(
+                        view,
+                        NormalizedTransactionType.LENDING_DEPOSIT,
+                        ConfidenceLevel.LOW
+                ),
+                ClassificationSource.HEURISTIC,
+                ConfidenceLevel.LOW,
+                transferFlows(movementLegs),
+                List.of(),
+                "Euler",
+                null
+        ));
+    }
+
     private Optional<ClassificationDecision> classifyEulerLoopPath(
             OnChainRawTransactionView view,
             List<RawLeg> movementLegs
     ) {
-        if (!EULER_BATCH_ROUTER.equals(view.toAddress())) {
+        if (!isEulerBatchRouter(view.toAddress())) {
             return Optional.empty();
+        }
+        Optional<ClassificationDecision> receiptOnlyOpen = classifyEulerReceiptOnlyLoopOpen(view, movementLegs);
+        if (receiptOnlyOpen.isPresent()) {
+            return receiptOnlyOpen;
+        }
+        Optional<ClassificationDecision> batchDeposit = classifyEulerBatchDeposit(view, movementLegs);
+        if (batchDeposit.isPresent()) {
+            return batchDeposit;
         }
         if (isEulerBorrowBackedCollateralOpen(view, movementLegs)) {
             if (!view.hasFullReceiptClarificationEvidence() || !hasEulerClarifiedCollateralOpenLifecycle(view)) {
@@ -449,6 +566,22 @@ public class LendingClassifier implements OnChainFamilyClassifier {
                 "Euler",
                 null
         ));
+    }
+
+    private List<NormalizedTransaction.Flow> transferFlows(List<RawLeg> movementLegs) {
+        List<NormalizedTransaction.Flow> flows = new ArrayList<>();
+        for (RawLeg leg : movementLegs) {
+            if (leg == null || leg.quantityDelta() == null || leg.quantityDelta().signum() == 0) {
+                continue;
+            }
+            flows.add(leg.fee() ? buildFlow(
+                    NormalizedLegRole.FEE,
+                    leg.assetContract(),
+                    leg.assetSymbol(),
+                    leg.quantityDelta()
+            ) : buildTransferFlow(leg));
+        }
+        return flows;
     }
 
     private ClassificationDecision blockingReview(
@@ -691,6 +824,22 @@ public class LendingClassifier implements OnChainFamilyClassifier {
                 || "DEUSD".equals(normalized);
     }
 
+    private boolean isEulerStableLikeShareSymbol(String assetSymbol) {
+        if (assetSymbol == null || assetSymbol.isBlank()) {
+            return false;
+        }
+        String normalized = assetSymbol.trim().toUpperCase(Locale.ROOT);
+        return normalized.contains("USDC")
+                || normalized.contains("USDT")
+                || normalized.contains("USD₮0")
+                || normalized.contains("DEUSD");
+    }
+
+    private boolean isEulerLikeAddress(String address) {
+        String normalized = normalizeContract(address);
+        return normalized != null && EULER_KNOWN_VAULT_CONTRACTS.contains(normalized);
+    }
+
     private Optional<EulerLoopRebalancePattern> detectEulerLoopRebalancePattern(List<RawLeg> movementLegs) {
         if (movementLegs == null || movementLegs.isEmpty()) {
             return Optional.empty();
@@ -895,12 +1044,14 @@ public class LendingClassifier implements OnChainFamilyClassifier {
             return false;
         }
         String normalized = assetSymbol.trim().toLowerCase(Locale.ROOT);
+        if (normalized.startsWith("syrup")) {
+            return false;
+        }
         return normalized.startsWith("a")
                 || normalized.startsWith("c")
                 || normalized.startsWith("s")
                 || normalized.startsWith("e")
-                || normalized.startsWith("gt")
-                || normalized.startsWith("syrup");
+                || normalized.startsWith("gt");
     }
 
     private boolean isDebtLikeSymbol(String assetSymbol) {
@@ -1053,7 +1204,7 @@ public class LendingClassifier implements OnChainFamilyClassifier {
         if (!"0xc16ae7a4".equals(view.methodId())) {
             return false;
         }
-        if (!EULER_BATCH_ROUTER.equals(view.toAddress())) {
+        if (!isEulerBatchRouter(view.toAddress())) {
             return false;
         }
         return wallet.length() == 42
@@ -1061,11 +1212,15 @@ public class LendingClassifier implements OnChainFamilyClassifier {
                 && wallet.substring(0, 40).equals(candidate.substring(0, 40));
     }
 
+    private boolean isEulerBatchRouter(String address) {
+        return address != null && EULER_BATCH_ROUTERS.contains(address.trim().toLowerCase(Locale.ROOT));
+    }
+
     private boolean isEulerBorrowBackedCollateralOpen(
             OnChainRawTransactionView view,
             List<RawLeg> movementLegs
     ) {
-        if (!EULER_BATCH_ROUTER.equals(view.toAddress())) {
+        if (!isEulerBatchRouter(view.toAddress())) {
             return false;
         }
         if (!hasEulerBorrowCallContext(view) || !hasEulerBorrowEvent(view)) {

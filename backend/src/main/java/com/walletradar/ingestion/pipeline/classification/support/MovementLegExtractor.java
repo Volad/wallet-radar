@@ -9,6 +9,7 @@ import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Builds the authoritative movement legs from the raw transaction view before family/protocol rules are applied.
@@ -16,7 +17,10 @@ import java.util.List;
 @Component
 public class MovementLegExtractor {
 
-    private static final String EULER_BATCH_ROUTER = "0xddcbe30a761edd2e19bba930a977475265f36fa1";
+    private static final Set<String> EULER_BATCH_ROUTERS = Set.of(
+            "0xddcbe30a761edd2e19bba930a977475265f36fa1",
+            "0x7bdbd0a7114aa42ca957f292145f6a931a345583"
+    );
     private static final String ZKSYNC_SYSTEM_FEE_SINK = "0x0000000000000000000000000000000000008001";
 
     private final NativeAssetSymbolResolver nativeAssetSymbolResolver;
@@ -193,7 +197,7 @@ public class MovementLegExtractor {
         if (!"0xc16ae7a4".equals(view.methodId())) {
             return false;
         }
-        if (!EULER_BATCH_ROUTER.equals(view.toAddress())) {
+        if (!EULER_BATCH_ROUTERS.contains(view.toAddress())) {
             return false;
         }
         return wallet.length() == 42

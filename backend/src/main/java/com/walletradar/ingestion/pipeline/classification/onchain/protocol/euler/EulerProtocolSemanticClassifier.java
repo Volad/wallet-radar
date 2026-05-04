@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Euler protocol-owned clarified batch lifecycle semantics.
@@ -40,7 +41,10 @@ public class EulerProtocolSemanticClassifier implements ProtocolSemanticClassifi
     public static final String SEMANTIC_LENDING_LOOP_DECREASE = "lending_loop_decrease";
     public static final String SEMANTIC_LENDING_LOOP_CLOSE = "lending_loop_close";
 
-    private static final String EULER_BATCH_ROUTER = "0xddcbe30a761edd2e19bba930a977475265f36fa1";
+    private static final Set<String> EULER_BATCH_ROUTERS = Set.of(
+            "0xddcbe30a761edd2e19bba930a977475265f36fa1",
+            "0x7bdbd0a7114aa42ca957f292145f6a931a345583"
+    );
     private static final String EULER_CALL_WITH_CONTEXT_TOPIC =
             "0x6e9738e5aa38fe1517adbb480351ec386ece82947737b18badbcad1e911133ec";
     private static final String EULER_BORROW_EVENT_TOPIC =
@@ -157,14 +161,14 @@ public class EulerProtocolSemanticClassifier implements ProtocolSemanticClassifi
     }
 
     private boolean isAuditedLoopRouter(OnChainRawTransactionView view) {
-        return EULER_BATCH_ROUTER.equals(view.toAddress());
+        return EULER_BATCH_ROUTERS.contains(view.toAddress());
     }
 
     private boolean isEulerBorrowBackedCollateralOpen(
             OnChainRawTransactionView view,
             List<RawLeg> movementLegs
     ) {
-        if (!EULER_BATCH_ROUTER.equals(view.toAddress())) {
+        if (!EULER_BATCH_ROUTERS.contains(view.toAddress())) {
             return false;
         }
         if (!hasEulerBorrowCallContext(view) || !hasEulerBorrowEvent(view)) {
@@ -432,7 +436,10 @@ public class EulerProtocolSemanticClassifier implements ProtocolSemanticClassifi
             return false;
         }
         String normalized = assetSymbol.trim().toLowerCase(Locale.ROOT);
-        return matchesPrefixAssetMarker(normalized, "shareSymbolPrefixes", "a", "c", "s", "e", "gt", "syrup");
+        if (normalized.startsWith("syrup")) {
+            return false;
+        }
+        return matchesPrefixAssetMarker(normalized, "shareSymbolPrefixes", "a", "c", "s", "e", "gt");
     }
 
     private boolean isDebtLikeSymbol(String assetSymbol) {
@@ -632,7 +639,7 @@ public class EulerProtocolSemanticClassifier implements ProtocolSemanticClassifi
         if (!"0xc16ae7a4".equals(view.methodId())) {
             return false;
         }
-        if (!EULER_BATCH_ROUTER.equals(view.toAddress())) {
+        if (!EULER_BATCH_ROUTERS.contains(view.toAddress())) {
             return false;
         }
         return wallet.length() == 42

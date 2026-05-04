@@ -172,6 +172,10 @@ Current raw evidence proves receipt of gas, but not user-paid acquisition cost.
   `BONUS_RECOLLECT` or funding-account `Repay Interest`, remain canonical
   `FEE` outflows but do not belong to the active basis-opening normalization
   lane
+- lending read models expose fees twice for different purposes: native fee
+  quantity in `pnlAssetBreakdown.gasByAsset`, and USD fee valuation in
+  `pnlBreakdown.gasUsd`. The native quantity map must not be populated with a
+  synthetic `USD` asset.
 
 ### On PRICE_UNKNOWN
 

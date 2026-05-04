@@ -23,6 +23,10 @@ public class OnChainClarificationService {
         return workflowHandler.processNextBatch();
     }
 
+    public int processConfirmedFluidReceiptBatch() {
+        return workflowHandler.processConfirmedFluidReceiptBatch();
+    }
+
     public boolean clarify(NormalizedTransaction normalizedTransaction) {
         return workflowHandler.clarify(normalizedTransaction);
     }

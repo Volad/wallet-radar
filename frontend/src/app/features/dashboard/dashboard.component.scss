@@ -571,6 +571,15 @@
   overflow: hidden;
 }
 
+.lending-workspace {
+  flex: 1;
+  display: flex;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .icon-nav {
   width: 2.75rem;
   border-right: 1px solid var(--wr-border);

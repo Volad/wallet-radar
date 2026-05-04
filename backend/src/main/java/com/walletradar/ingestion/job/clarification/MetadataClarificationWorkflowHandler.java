@@ -72,8 +72,26 @@ final class MetadataClarificationWorkflowHandler {
                     "receipt-" + java.util.UUID.randomUUID(),
                     properties.getLeaseSeconds()
             ));
+            batch.addAll(pendingReceiptClarificationQueryService.claimConfirmedFluidReceiptBatch(
+                    properties.getFullReceipt().getBatchSize(),
+                    properties.getFullReceipt().getMaxAttempts(),
+                    properties.getFullReceipt().getRetryDelaySeconds(),
+                    "receipt-" + java.util.UUID.randomUUID(),
+                    properties.getLeaseSeconds()
+            ));
         }
 
+        return clarifyBatch(batch);
+    }
+
+    int processConfirmedFluidReceiptBatch() {
+        List<NormalizedTransaction> batch = pendingReceiptClarificationQueryService.claimConfirmedFluidReceiptBatch(
+                properties.getFullReceipt().getBatchSize(),
+                properties.getFullReceipt().getMaxAttempts(),
+                properties.getFullReceipt().getRetryDelaySeconds(),
+                "receipt-" + java.util.UUID.randomUUID(),
+                properties.getLeaseSeconds()
+        );
         return clarifyBatch(batch);
     }
 

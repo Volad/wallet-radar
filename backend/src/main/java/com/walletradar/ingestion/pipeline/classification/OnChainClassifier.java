@@ -3,11 +3,14 @@ package com.walletradar.ingestion.pipeline.classification;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.ingestion.pipeline.classification.onchain.family.AdminConfigClassifier;
+import com.walletradar.ingestion.pipeline.classification.onchain.family.AaveReceiptShapeClassifier;
 import com.walletradar.ingestion.pipeline.classification.onchain.family.BridgeStartClassifier;
 import com.walletradar.ingestion.pipeline.classification.onchain.family.BridgeMethodAwareClassifier;
 import com.walletradar.ingestion.pipeline.classification.onchain.family.BridgeSettlementClassifier;
+import com.walletradar.ingestion.pipeline.classification.onchain.family.CompoundCometClassifier;
 import com.walletradar.ingestion.pipeline.classification.onchain.family.DefaultClassifier;
 import com.walletradar.ingestion.pipeline.classification.onchain.family.FailedExecutionClassifier;
+import com.walletradar.ingestion.pipeline.classification.onchain.family.FluidVaultClassifier;
 import com.walletradar.ingestion.pipeline.classification.onchain.family.FunctionNameClassifier;
 import com.walletradar.ingestion.pipeline.classification.onchain.family.GmxLpClassifier;
 import com.walletradar.ingestion.pipeline.classification.onchain.family.HeuristicClassifier;
@@ -142,11 +145,14 @@ public class OnChainClassifier {
                 new SpamClassifier(protocolRegistryService),
                 new NonEconomicClassifier(),
                 new ZkSyncAcrossRoutedBridgeClassifier(),
+                new AaveReceiptShapeClassifier(protocolRegistryService),
                 new ZkSyncAaveGatewayClassifier(),
                 new SwapSemanticClassifier(),
                 new LpSemanticClassifier(nativeAssetSymbolResolver),
                 new LendingSemanticClassifier(),
                 new VaultSemanticClassifier(),
+                new CompoundCometClassifier(protocolRegistryService),
+                new FluidVaultClassifier(protocolRegistryService),
                 new SwapRegistryClassifier(protocolRegistryService, nativeAssetSymbolResolver),
                 new LpRegistryClassifier(protocolRegistryService, nativeAssetSymbolResolver),
                 new LendingRegistryClassifier(protocolRegistryService, protocolResourceLoader),

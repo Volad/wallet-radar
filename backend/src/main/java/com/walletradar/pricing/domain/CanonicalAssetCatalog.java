@@ -134,6 +134,8 @@ public final class CanonicalAssetCatalog {
             Map.entry("GHO", "gho-token"),
             Map.entry("USDE", "ethena-usde"),
             Map.entry("EURC", "euro-coin"),
+            Map.entry("USR", "resolv-usr"),
+            Map.entry("WSTUSR", "resolv-wstusr"),
             Map.entry("CAKE", "pancakeswap-token"),
             Map.entry("WSTETH", "staked-ether"),
             Map.entry("STETH", "staked-ether"),

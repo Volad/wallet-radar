@@ -6,8 +6,8 @@ import java.util.Map;
 
 /**
  * Shared direct selector-to-type mapping used by the selector fallback stage.
- * Keep this map behavior-identical to the historical METHOD_ID_TYPES contract until a future
- * rule-doc-driven breakdown replaces it with narrower family-owned maps.
+ * Selectors that collide across protocol families belong to verified family classifiers,
+ * not this global fallback.
  */
 public final class DirectMethodIdSupport {
 
@@ -20,7 +20,6 @@ public final class DirectMethodIdSupport {
             Map.entry("0xdb3e2198", NormalizedTransactionType.SWAP),
             Map.entry("0x617ba037", NormalizedTransactionType.LENDING_DEPOSIT),
             Map.entry("0xe8eda9df", NormalizedTransactionType.LENDING_DEPOSIT),
-            Map.entry("0x69328dec", NormalizedTransactionType.LENDING_WITHDRAW),
             Map.entry("0xa415bcad", NormalizedTransactionType.BORROW),
             Map.entry("0x573ade81", NormalizedTransactionType.REPAY),
             Map.entry("0x852a12e3", NormalizedTransactionType.LENDING_DEPOSIT),

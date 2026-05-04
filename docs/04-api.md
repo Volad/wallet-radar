@@ -763,6 +763,312 @@ Interpretation:
 This field does not invent basis. It explains why the current family quantity
 is still partially uncovered after replay.
 
+## 8. Session Lending Endpoint
+
+### `GET /api/v1/sessions/{sessionId}/lending`
+
+Returns the dedicated lending workspace read model for one session.
+
+Purpose:
+
+- show open and closed lending positions
+- show supply, borrow, and loop history
+- expose health factor and APY metrics without making them accounting inputs
+- keep the read path snapshot-only
+
+Response: `200 OK`
+
+```json
+{
+  "sessionId": "d290f1ee-6c54-4b01-90e6-d701748f0851",
+  "summary": {
+    "totalSuppliedUsd": "10500.00",
+    "totalBorrowedUsd": "2500.00",
+    "netExposureUsd": "8000.00",
+    "openGroups": 2,
+    "closedGroups": 1,
+    "protocols": 2
+  },
+  "groups": [
+    {
+      "id": "aave:mantle:0x1234",
+      "protocol": "Aave",
+      "networkId": "MANTLE",
+      "walletAddress": "0x1234...",
+      "status": "OPEN",
+      "healthFactor": "2.34",
+      "healthStatus": "ESTIMATED",
+      "healthSource": "ACCOUNTING_ESTIMATE",
+      "supplyUsd": "8000.00",
+      "borrowUsd": "2500.00",
+      "netExposureUsd": "5500.00",
+      "positions": [
+        {
+          "id": "aave:mantle:0x1234:supply:USDC",
+          "side": "SUPPLY",
+          "assetSymbol": "aManUSDC",
+          "underlyingSymbol": "USDC",
+          "quantity": "2903.638038",
+          "coveredQuantity": "2893.019792",
+          "valueUsd": "2903.64",
+          "earnedUsd": "10.62",
+          "apyPct": "4.10",
+          "metricStatus": "ESTIMATED",
+          "metricSource": "ACCOUNTING_ESTIMATE"
+        }
+      ],
+      "history": [
+        {
+          "id": "0xabc:MANTLE:0x1234",
+          "txHash": "0xabc...",
+          "blockTimestamp": "2026-04-22T08:33:08Z",
+          "type": "LENDING_DEPOSIT",
+          "displayType": "Deposit",
+          "assetSymbol": "USDC",
+          "quantity": "1004.54",
+          "valueUsd": "1004.54",
+          "loopId": null
+        }
+      ]
+    }
+  ]
+}
+```
+
+Rules:
+
+- `status = OPEN` when a group has a positive current lending receipt or debt
+  balance.
+- `status = CLOSED` when lending history exists but no positive current
+  receipt/debt balance remains in that group.
+- History may include canonical `VAULT_DEPOSIT` / `VAULT_WITHDRAW` rows when
+  the transferred receipt token is a lending-market token, for example Fluid
+  `fUSDC` / `fUSDT`, and `REWARD_CLAIM` rows for known lending protocols such
+  as Fluid or Compound. This is a read-model grouping rule only; it does not
+  mutate canonical normalized transaction types.
+- Receipt-like symbols are not protocol proof. For example, `syrupUSDC` may be
+  bought or sold through a plain swap; it must not enter the lending workspace
+  unless a protocol target, decoded nested calldata, full receipt logs, or
+  existing canonical lending history proves a lending interaction.
+- Fluid vault `operate` / `operatePerfect` activity should normally arrive as
+  canonical lending lifecycle history (`BORROW`, `REPAY`, `LENDING_DEPOSIT`,
+  `LENDING_WITHDRAW`, or `LENDING_LOOP_*`) after normalization. The read API
+  should not compensate for those rows as generic swap or external-transfer
+  history.
+- Fluid operations may be wrapped by Instadapp/DSA entrypoints such as
+  `cast(tuple[] actions_)` or ERC-721 `safeTransferFrom(..., bytes data)`.
+  Normalization is responsible for decoding enough nested calldata or receipt
+  evidence to classify these as Fluid lifecycle rows when the embedded vault is
+  registry-owned.
+- Plasma Euler EVK batch activity should arrive as Euler lending lifecycle
+  history. The Plasma batch router can emit receipt-only loop opens, so the API
+  expects normalization to classify those as `LENDING_LOOP_OPEN` when stable and
+  collateral EVK receipts are minted or transferred into the tracked account.
+- Compound V3 Comet history depends on registry coverage for each market. The
+  Unichain `cUSDCv3` market is treated as Compound lending; non-base collateral
+  withdrawals are not displayed as borrow rows.
+- Compound V3 Bulker `invoke(bytes32[],bytes[])` bundles are classified before
+  generic swap heuristics. The API exposes one canonical lifecycle row with
+  child timeline/display legs rather than multiple independent top-level
+  normalized rows.
+- Fluid vault rows use decoded debt/collateral intent before visible token
+  direction. When full receipt logs/internal transfers are missing, the API may
+  show confirmed wallet-visible flows plus lifecycle metadata, but PnL remains
+  unavailable with `pnl_unavailable_missing_full_receipt_logs` where exact
+  economic legs are not proven.
+- Fluid full-receipt enrichment persists durable Fluid evidence before the
+  Lending API reads it. The API must not fetch RPC receipts. Structured
+  evidence includes vault address, NFT id when known, wrapper kind, market key,
+  position/lifecycle key, evidence completeness, decoded debt/collateral
+  intent, and receipt/log references.
+- Historical lending rows may build closed/open lifecycle cycle history, but
+  current open supply or debt positions require current-state evidence. For
+  vault/NFT/account-based debt protocols such as Fluid and Compound, confirmed
+  `BORROW - REPAY` history alone is not enough to create a current open borrow
+  position. If resolver/protocol state is unavailable and no current debt
+  balance exists, the API must not synthesize an open position; historical
+  cycles remain visible.
+- For tokenized debt protocols such as Aave variable debt tokens, open debt may
+  be shown only when the current debt-token balance is visible in snapshots.
+- A lending cycle closes only when supply/collateral, debt, vault/account
+  position, and receipt/debt-token state are all zero or resolver-proven absent.
+  A `REPAY` event closes debt only and must not close a cycle while collateral
+  remains supplied.
+- Fluid vault/NFT accounts, Euler EVK/EVC loops, and Compound Comet accounts
+  are parent lifecycles keyed by protocol, network, wallet, and account/vault or
+  market identity. Their token movements are sub-events inside the parent
+  lifecycle, not independent asset-symbol cycles.
+- Reward claims attach to an active matching cycle. When there is no matching
+  active cycle, they remain standalone protocol reward history and must not
+  start a position lifecycle.
+- A closed cycle with current-state-zero proof but missing principal exit
+  evidence may be returned only with an explicit warning/reason such as
+  `unresolved_principal_exit`; clients must display that reason. A closed
+  current-state-zero cycle with incomplete Fluid receipt evidence uses
+  `pnl_unavailable_missing_full_receipt_logs`.
+- `healthFactor`, `healthStatus`, and `healthSource` describe lending analytics
+  only. They do not mutate canonical transactions, pricing, AVCO, or ledger
+  state.
+- `metricStatus` and `metricSource` on positions distinguish protocol-derived
+  metrics from accounting-based estimates.
+- Lifecycle-aware clients should prefer `groups[].cycles[]` over the legacy
+  flat `groups[].history[]` list.
+- `marketKey` is the deterministic protocol market lane. For Morpho vault-like
+  rows it is based on receipt/share/vault identity, so `gtUSDCc` and
+  `syrupUSDC` are separate market lanes under protocol `Morpho`.
+- `cycleId` is deterministic within `protocol + network + wallet + marketKey`
+  and changes when a closed position is later reopened.
+- Cycle close uses exact zero first, then deterministic dust tolerance:
+  `10^-min(decimals,12)` or `1e-12` when decimals are unknown, with a `$0.01`
+  cap when price is available.
+- `assetDeltas` expose exact asset-level principal, borrow, repay, withdrawal,
+  reward, fee, and net cash quantities. USD PnL fields must carry
+  `EXACT`, `ESTIMATED`, or `UNAVAILABLE` precision.
+- `assetDeltas` are reported by lifecycle asset, not protocol receipt/debt
+  token label. For example `variableDebtAvaGHO` is exposed as `GHO`, and
+  `WETH/ETH` aliases are exposed as `ETH` for cycle continuity and PnL.
+- `pnlAssetBreakdown` is the derived asset-level earnings contract. It exposes
+  `supplyIncomeByAsset`, `borrowCostByAsset`, `rewardsByAsset`, `gasByAsset`,
+  `netIncomeByAsset`, `precisionByAsset`, and `reasonByAsset`.
+- `observedFlowsByAsset` is the cycle-level evidence contract for visible
+  flows that explain cash movement but are not authoritative PnL. It is used
+  when `pnlBreakdown.precision=UNAVAILABLE` or a per-asset precision is
+  unavailable. Each item carries asset symbol, optional contract, quantity,
+  source transaction hash, source kind, `isAuthoritativeForPnl`, and optional
+  unavailable reason.
+- Clients must not treat `observedFlowsByAsset` as earned PnL unless
+  `isAuthoritativeForPnl=true`. When PnL is unavailable, the backend must not
+  duplicate the same incomplete observed delta into `supplyIncomeByAsset` or
+  `netIncomeByAsset`.
+- `pnlAssetBreakdown.gasByAsset` is native gas quantity by asset, not USD.
+  For example an Arbitrum gas fee is reported under `ETH`. USD gas remains
+  `pnlBreakdown.gasUsd`.
+- Asset-level income formulas are:
+  `supplyIncomeByAsset = principalOutByAsset - principalInByAsset`,
+  `borrowCostByAsset = repaidByAsset - borrowedByAsset`, and
+  `netIncomeByAsset = supplyIncomeByAsset + rewardsByAsset -
+  borrowCostByAsset - gasByAsset`.
+- For open cycles, `supplyIncomeByAsset` is estimated from current position
+  quantity minus covered principal quantity. It is not computed as
+  `withdrawn - supplied`, because the principal is still inside the protocol.
+- Share/vault USD PnL must remain `UNAVAILABLE` until both historical price and
+  share-rate evidence are available. Exact asset deltas are still returned.
+- Plasma `USDT0` is preserved in transaction/event/display evidence. Aggregate
+  accounting/PnL maps may use canonical `USDT` only where the backend
+  intentionally aliases Plasma `USDT0` into the USDT family.
+- `wstUSR` lending-yield USD PnL must remain unavailable until historical
+  `wstUSR -> stUSR/USR` conversion/share-rate and underlying price policy are
+  present. Swap-derived acquisition value may support acquisition cost but is
+  not sufficient to split Fluid lending yield from wrapper/share-rate or
+  underlying price movement.
+- `REPAY_WITH_ATOKENS` is represented as canonical `type=REPAY` plus
+  `eventSubtype=REPAY_WITH_ATOKENS`; it is not a new canonical transaction type.
+
+Cycle workspace additions:
+
+- Cycles are the primary product surface. The API also returns legacy raw
+  `events` and `assetDeltas` for diagnostics, but the Lending page should render
+  `txGroups` by default.
+- A clean cycle opens only on the first `Supply` / `Deposit` event in context.
+  Borrow, repay, withdraw, and reward rows do not start a clean cycle by
+  themselves.
+- A close-side event for an asset that is not currently open in the target
+  cycle remains `AMBIGUOUS_NEEDS_REVIEW`; clients must not treat it as proof
+  that an unrelated supply cycle closed.
+- Cycle close checks use canonical lifecycle assets. Equivalent wrappers and
+  protocol receipt/debt symbols are normalized before the read model decides
+  whether supply or debt remains open.
+- Interest accrual can make close deltas slightly larger than open deltas. A
+  lifecycle is considered flat when no positive supply/debt remainder remains;
+  negative over-withdraw/over-repay deltas do not keep a cycle open.
+- Aave parent context is `protocol + network + wallet`, but `cycles[]` may
+  contain multiple concurrent account-pool strategy cycles when independent
+  supply-only collateral and borrow/repay loops overlap. Debt events attach to
+  the matching active debt strategy; collateral events attach to the matching
+  active collateral strategy.
+- Fluid and Morpho context is `protocol + network + wallet + vault/account/market`.
+- Euler and Compound context is `protocol + network + wallet + market/account`.
+- Fluid `marketKey` should use the resolved vault/account counterparty when it
+  exists; generic `VAULT-ACCOUNT` is only fallback for incomplete evidence.
+- Vault/account-based protocols such as Fluid, Euler, Morpho, and Compound
+  return `warningReason = unresolved principal exit` when a cycle is closed by
+  current-state-zero proof but the historical principal exit row is not present.
+- Borrow followed by supply/deposit within 24 hours in the same cycle/context is
+  grouped as one collapsed `loop` transaction group.
+- `txGroups[].type` is one of `open`, `borrow`, `loop`, `mid`, `close`, or
+  `reward`.
+- `txGroups[].items[]` contains UI-ready transaction items with type, label,
+  asset, quantity, USD value, hash, and timestamp.
+- Loop groups include `loopSteps`, `loopAssetIn`, and `loopAssetOut`. Asset
+  labels may contain comma-separated unique lifecycle assets when one collapsed
+  loop group contains multiple borrow/supply pairs.
+- `loopSteps` is a step count, not a leverage multiplier. Clients must render it
+  as loop step/group copy. A leverage multiplier may be displayed only from a
+  dedicated backend field such as `leverageRatio`.
+- `observedFlowsByAsset[*].sourceKind` is evidence metadata. User-facing
+  clients must map `WALLET_VISIBLE_TRANSFER` to "Observed wallet movement",
+  `DECODED_PROTOCOL_EVENT` to "Decoded protocol event", and `RECEIPT_LOG` to
+  "Receipt log"; these strings are not economic event types.
+- Internal status and reason codes such as `closed/current-state-zero` and
+  `pnl_unavailable_missing_wrapper_conversion_or_underlying_price_policy` are
+  API reason codes. Primary UI must render human labels while preserving the raw
+  codes only for diagnostics.
+- `pnlBreakdown` exposes `interestEarnedUsd`, `interestPaidUsd`, `gasUsd`,
+  `netPnlUsd`, `precision`, `method`, and `reason`.
+- `totalValuation` exposes broader cycle valuation fields:
+  `principalInUsd`, `principalOutUsd`, `borrowedUsd`, `repaidUsd`,
+  `rewardsUsd`, `feesUsd`, `gasUsd`, `totalUsdPnl`, `currentUsdValue`,
+  `unrealizedTotalUsdPnl`, `totalUsdPnlPrecision`, `yieldOnlyPnl`,
+  `yieldOnlyPnlPrecision`, `valuationMethod`, and `unavailableReason`.
+- `totalValuation.totalUsdPnl` is the cycle economic cashflow result:
+  `principalOutUsd + borrowedUsd + rewardsUsd - principalInUsd - repaidUsd -
+  feesUsd`. For open cycles, `currentUsdValue` is reported separately and
+  `unrealizedTotalUsdPnl` adds the current open-position value to realized
+  cycle cashflows.
+- `totalValuation.yieldOnlyPnl` mirrors the stricter yield-only contract from
+  `pnlBreakdown.netPnlUsd`. It remains unavailable when wrapper/share-rate,
+  underlying conversion, or unresolved lifecycle evidence prevents
+  deterministic lending-yield attribution.
+- `EURC` total valuation uses cached ECB EUR/USD policy quotes and must not
+  silently use USD stablecoin parity. `deUSD` is stable-like unless
+  transaction-local execution evidence proves material parity break. Wrapper
+  assets such as `wstETH` and `wstUSR` may have total valuation without
+  unlocking yield-only PnL.
+- `pnlAssetBreakdown` exposes asset-level realized or running income. If a
+  component is not financially safe to derive, the relevant asset is marked in
+  `precisionByAsset=UNAVAILABLE` and `reasonByAsset` explains why.
+- Cycle PnL is lending yield, not collateral price movement:
+  `netPnlUsd = interestEarnedUsd - interestPaidUsd - gasUsd`.
+- When lending transfer rows do not already carry `valueUsd`, the read model
+  may use cached `historical_prices` for the event timestamp. The lending GET
+  endpoint must not perform live price-provider calls.
+- For wrapper assets such as `wstETH` and `wstUSR`, total valuation may use the
+  nearest cached wrapper quote inside the bounded wrapper lookup window when a
+  normal event-time quote is unavailable. Such totals are `ESTIMATED`; this
+  does not unlock wrapper/share-rate `yieldOnlyPnl`.
+- `assetDeltas.principalOutCashByAsset` is the clean wallet-cash principal-out
+  surface for realized total PnL. `assetDeltas.internalReceiptMovementByAsset`
+  contains protocol-internal receipt/share/account movements and is evidence
+  only.
+- Cycles expose `assetDenominatedPnlByAsset`,
+  `assetDenominatedPrecisionByAsset`, `assetDenominatedReasonByAsset`, and
+  `primaryAssetPnlSummary` as the stable frontend contract for non-stable and
+  staked-stable PnL display.
+- Large negative closed-cycle total PnL exposes `largePnlReasons[]` and
+  `primaryLargePnlReason`. `largePnlReason` is a backwards-compatible alias for
+  `primaryLargePnlReason`.
+- Euler EVK/EVC account cycles may use `SHARE_RATE_EFFECT` when wallet-cash
+  total PnL is available but the dominant loss is protocol share/account
+  conversion. `SHARE_RATE_UNAVAILABLE` remains reserved for unavailable strict
+  yield-attribution surfaces.
+- `peakSupplyUsd`, `peakBorrowUsd`, and `durationDays` are read-model
+  convenience fields for compact cycle cards.
+- If supply interest cannot be separated from collateral price movement, PnL
+  must be `UNAVAILABLE` with a concrete reason rather than a synthetic profit
+  figure.
+- PnL is also `UNAVAILABLE` for unresolved/orphan lifecycle fragments and for
+  cycles with unresolved principal exits.
+
 `current.shortfallSources` rules:
 
 - derived from positive `quantityShortfallDelta` rows inside the same family

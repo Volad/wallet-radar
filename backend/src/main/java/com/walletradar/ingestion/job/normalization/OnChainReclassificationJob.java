@@ -7,6 +7,7 @@ import com.walletradar.domain.event.OnChainReclassificationRequestedEvent;
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.ingestion.config.OnChainNormalizationProperties;
 import com.walletradar.ingestion.job.clarification.ClarificationBatchDrainer;
+import com.walletradar.ingestion.job.clarification.OnChainClarificationService;
 import com.walletradar.ingestion.job.support.StageExecutionLogSupport;
 import com.walletradar.session.application.SessionPipelineActivityService;
 import com.walletradar.session.application.SessionPipelineStateService;
@@ -36,6 +37,7 @@ public class OnChainReclassificationJob {
 
     private final OnChainNormalizationProperties properties;
     private final OnChainReclassificationService onChainReclassificationService;
+    private final OnChainClarificationService onChainClarificationService;
     private final ClarificationBatchDrainer batchDrainer;
     private final ApplicationEventPublisher applicationEventPublisher;
     private final SessionPipelineActivityService sessionPipelineActivityService;
@@ -51,7 +53,10 @@ public class OnChainReclassificationJob {
         if (!properties.isEnabled() || event == null) {
             return;
         }
-        runReclassification("on-chain-clarification-completed", event.sessionId(), true);
+        String trigger = "post-reclassification-fluid-recovery".equals(event.trigger())
+                ? event.trigger()
+                : "on-chain-clarification-completed";
+        runReclassification(trigger, event.sessionId(), true);
     }
 
     @EventListener
@@ -88,6 +93,15 @@ public class OnChainReclassificationJob {
                     UserSession.PipelineStage.ON_CHAIN_RECLASSIFICATION,
                     "On-chain reclassification complete"
             );
+            int postReclassificationClarification = runPostReclassificationClarification(processed, trigger);
+            if (postReclassificationClarification > 0) {
+                applicationEventPublisher.publishEvent(new OnChainClarificationCompletedEvent(
+                        sessionId,
+                        postReclassificationClarification,
+                        "post-reclassification-fluid-recovery"
+                ));
+                return processed;
+            }
             publishCompletionEvent(sessionId, processed, trigger, publishWhenEmpty);
             return processed;
         } catch (RuntimeException error) {
@@ -102,6 +116,15 @@ public class OnChainReclassificationJob {
             sessionPipelineActivityService.markFinished(sessionId, UserSession.PipelineStage.ON_CHAIN_RECLASSIFICATION);
             running.set(false);
         }
+    }
+
+    private int runPostReclassificationClarification(int processed, String trigger) {
+        if (processed <= 0 || "post-reclassification-fluid-recovery".equals(trigger)) {
+            return 0;
+        }
+        int clarified = onChainClarificationService.processConfirmedFluidReceiptBatch();
+        log.info("Post-reclassification Fluid receipt recovery: processed={}", clarified);
+        return clarified;
     }
 
     private Instant maybeHeartbeat(String sessionId, Instant lastHeartbeatAt) {

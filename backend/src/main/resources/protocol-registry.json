@@ -707,6 +707,19 @@
       "confidence": "HIGH",
       "notes": "Method-aware bridge entry router. swapAndStartBridgeTokensViaMayan(...) is BRIDGE_OUT when canonical raw shows bridge-entry semantics."
     },
+    "0xc86eb7b85807020b4548ee05b54bfc956eebbfcd": {
+      "name": "Axelar Express Token Settlement",
+      "protocol": "Axelar",
+      "version": "Express",
+      "family": "BRIDGE",
+      "role": "BRIDGE_ENTRY",
+      "event_type": "BRIDGE_OUT",
+      "networks": [
+        "ARBITRUM"
+      ],
+      "confidence": "HIGH",
+      "notes": "Cycle 87 verified destination-side expressExecuteWithToken settlement contract. Inbound-only wallet movements are BRIDGE_IN settlement evidence."
+    },
     "0x6131b5fae19ea4f9d964eac0408e4408b66337b5": {
       "name": "KyberSwap MetaAggregationRouterV2",
       "protocol": "KyberSwap",
@@ -983,6 +996,32 @@
       ],
       "confidence": "HIGH"
     },
+    "0x2c7118c4c88b9841fcf839074c26ae8f035f2921": {
+      "name": "Compound V3 cUSDCv3 (Comet)",
+      "protocol": "Compound",
+      "version": "V3",
+      "family": "LENDING",
+      "role": "POOL",
+      "event_type": "LENDING_DEPOSIT",
+      "networks": [
+        "UNICHAIN"
+      ],
+      "confidence": "HIGH",
+      "notes": "Compound V3 USDC market on Unichain. supply(address,uint256) is base supply or repay; withdraw(address,uint256) is borrow only when the withdrawn asset is the market base asset."
+    },
+    "0x58ebb8db8b4fdf2dcbbb16e04c2f5b952963b514": {
+      "name": "Compound V3 Bulker",
+      "protocol": "Compound",
+      "version": "V3",
+      "family": "LENDING",
+      "role": "ROUTER",
+      "event_type": null,
+      "networks": [
+        "UNICHAIN"
+      ],
+      "confidence": "HIGH",
+      "notes": "Compound Bulker invoke(bytes32[],bytes[]) router on Unichain. Decode action bundles before generic swap heuristics."
+    },
     "── LENDING: Compound V2 ──────────────────────────────────────────────": {},
     "0x4ddc2d193948926d02f9b1fe9e1daa0718270ed5": {
       "name": "Compound V2 cETH",
@@ -1258,6 +1297,19 @@
       "notes": "Many Beefy vault addresses. Detect via ERC4626 + Beefy factory"
     },
     "── PROTOCOL CUSTODY: Hyperliquid ─────────────────────────────────────": {},
+    "0xe3cbe3a636ab6a754e9e41b12b09d09ce9e53db3": {
+      "name": "Paradex L1 Core",
+      "protocol": "Paradex",
+      "version": "L1",
+      "family": "CUSTODY",
+      "role": "BRIDGE_ENTRY",
+      "event_type": "PROTOCOL_CUSTODY_WITHDRAW",
+      "networks": [
+        "ETHEREUM"
+      ],
+      "confidence": "HIGH",
+      "notes": "Paradex L1 withdrawal core. withdraw(address,uint256,address) selector collides with Aave withdraw and must not be classified as lending."
+    },
     "0x2df1c51e09aecf9cacb7bc98cb1742757f163df7": {
       "name": "Hyperliquid Bridge2",
       "protocol": "Hyperliquid",
@@ -2349,6 +2401,94 @@
       ],
       "confidence": "HIGH",
       "notes": "Core Fluid liquidity layer — supply/borrow routing. Official from Plasma docs."
+    },
+    "0x7bdbd0a7114aa42ca957f292145f6a931a345583": {
+      "name": "Euler Batch Router (Plasma)",
+      "protocol": "Euler",
+      "version": "EVK",
+      "family": "LENDING",
+      "role": "ROUTER",
+      "event_type": "LENDING_DEPOSIT",
+      "networks": [
+        "PLASMA"
+      ],
+      "confidence": "HIGH",
+      "notes": "Euler EVK batch router observed on Plasma. batch(tuple[] items) can encode collateral deposits, receipt-only loop opens, rebalances, and unwinds."
+    },
+    "0xd8cecee9a04ea3d941a959f68fb4486f23271d09": {
+      "name": "Euler Batch Router (Linea)",
+      "protocol": "Euler",
+      "version": "EVK",
+      "family": "LENDING",
+      "role": "ROUTER",
+      "event_type": "LENDING_DEPOSIT",
+      "networks": [
+        "LINEA"
+      ],
+      "confidence": "HIGH",
+      "notes": "Euler-like Linea batch target observed with eWETH/eUSDT receipt evidence. Keep Canonical only as route metadata when applicable."
+    },
+    "0x4718484ac9dc07fbbc078561e8f8ef29e2a369cd": {
+      "name": "Euler EVK Vault eUSDT0-9 (Plasma)",
+      "protocol": "Euler",
+      "version": "EVK",
+      "family": "LENDING",
+      "role": "VAULT",
+      "event_type": "LENDING_DEPOSIT",
+      "networks": [
+        "PLASMA"
+      ],
+      "confidence": "HIGH",
+      "notes": "Euler Plasma receipt/debt-like vault token used in wstUSR/USDT0 loop history."
+    },
+    "0xac40d41ab11b0eb991a7d34d55dbdbb7849e92ef": {
+      "name": "Euler EVK Vault ewstUSR-1 (Plasma)",
+      "protocol": "Euler",
+      "version": "EVK",
+      "family": "LENDING",
+      "role": "VAULT",
+      "event_type": "LENDING_DEPOSIT",
+      "networks": [
+        "PLASMA"
+      ],
+      "confidence": "HIGH",
+      "notes": "Euler Plasma collateral vault token used in wstUSR/USDT0 loop history."
+    },
+    "0xf2c8f54447cbd591c396b0dd7ac15faf552d0fa4": {
+      "name": "Fluid Vault (Plasma)",
+      "protocol": "Fluid",
+      "version": "V1",
+      "family": "LENDING",
+      "role": "VAULT",
+      "networks": [
+        "PLASMA"
+      ],
+      "confidence": "HIGH",
+      "notes": "Fluid vault operate/operatePerfect path. Classify by observed stable debt and collateral legs, not as swap or external transfer."
+    },
+    "0xb4f3bf2d96139563777c0231899ce06ee95cc946": {
+      "name": "Fluid Vault (Plasma)",
+      "protocol": "Fluid",
+      "version": "V1",
+      "family": "LENDING",
+      "role": "VAULT",
+      "networks": [
+        "PLASMA"
+      ],
+      "confidence": "HIGH",
+      "notes": "Fluid vault operate/operatePerfect path. Same classifier rule as other Fluid vault contracts."
+    },
+    "0x3e11b9aeb9c7dbbda4dd41477223cc2f3f24b9d7": {
+      "name": "Fluid VaultT3 ETH",
+      "protocol": "Fluid",
+      "version": "V1",
+      "family": "LENDING",
+      "role": "VAULT",
+      "networks": [
+        "ARBITRUM"
+      ],
+      "confidence": "HIGH",
+      "notes": "Fluid vault operate path observed in wstUSR/USDC loop strategy. Classify collateral/debt movements as lending lifecycle, not swap."
     },
     "0xff5cb29241f002ffed2eaa224e3e996d24a6e8d1": {
       "name": "Curve Router (Plasma)",

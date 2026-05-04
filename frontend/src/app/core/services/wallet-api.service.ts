@@ -13,6 +13,7 @@ import {
   SessionAssetLedgerResponse,
   SessionBackfillStatusResponse,
   SessionDashboardResponse,
+  SessionLendingResponse,
   SessionRefreshResponse,
   SessionSettingsResponse,
   SessionResponse,
@@ -80,6 +81,12 @@ export class WalletApiService {
   getSessionDashboard(sessionId: string): Observable<SessionDashboardResponse> {
     return this.httpClient.get<SessionDashboardResponse>(
       `${this.sessionsEndpoint}/${encodeURIComponent(sessionId)}/dashboard`
+    );
+  }
+
+  getSessionLending(sessionId: string): Observable<SessionLendingResponse> {
+    return this.httpClient.get<SessionLendingResponse>(
+      `${this.sessionsEndpoint}/${encodeURIComponent(sessionId)}/lending`
     );
   }
 
