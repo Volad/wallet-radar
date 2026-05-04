@@ -21,7 +21,7 @@ public class LendingMarketMetricEstimator {
                 healthLabel(healthFactor),
                 healthProgress(healthFactor),
                 apy,
-                "ESTIMATED",
+                LendingMarketRateStatus.FALLBACK_ESTIMATE,
                 "ACCOUNTING_ESTIMATE"
         );
     }

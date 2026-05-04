@@ -259,6 +259,131 @@ Angular lending workspace
 
 ### Risk Notes
 
+## Cycle 95 Lending APY Backlog
+
+The cycle 95 audit source is `auto-loop-handoff/artifacts/cycle/95`. It
+identifies a lending analytics/read-model failure, not an AVCO, move-basis, or
+canonical accounting failure.
+
+### Business Acceptance Criteria
+
+- The lending page separates current protocol market APY from actual user APY.
+- `protocolApy` is sourced from persisted protocol/API market snapshots.
+- `factualApy` is computed from the user's lifecycle cashflows, current state,
+  timestamps, and time-weighted exposure. It must never be synthesized from
+  protocol APY.
+- `netStrategyApy` is optional and available only when lifecycle boundaries,
+  USD valuation, and the time-weighted user-equity denominator are clean.
+- Fallback estimates remain allowed only as `FALLBACK_ESTIMATE` and must not be
+  presented as authoritative protocol APY.
+- Rewards APR is a separate field. P0 may expose it as `UNAVAILABLE` with
+  `REWARDS_COLLECTOR_NOT_IMPLEMENTED`.
+- Compound III collateral assets must not show false supply APY.
+
+### Architecture Decisions
+
+```text
+lending lifecycle reconstruction
+        |
+        v
+active lending market discovery
+        |
+        v
+lending APY snapshot refresh job
+        |
+        v
+lending_market_rate_snapshots
+        |
+        v
+lending read model joins latest fresh snapshots
+        |
+        v
+GET /api/v1/sessions/{sessionId}/lending
+```
+
+- GET `/lending` remains snapshot-first. It must perform no live RPC, explorer,
+  or external protocol API calls.
+- APY snapshot collection is a background/read-model concern. It must not write
+  to `normalized_transactions`, `asset_ledger_points`, AVCO, move basis, or cost
+  basis state.
+- Aave V3 address resolution uses versioned backend config/address-book, not
+  hard-coded report text.
+- For Aave V3, ray annual rates are converted as:
+
+```text
+apr = rayRate / 1e27
+apy = (1 + apr / 31536000) ^ 31536000 - 1
+apyConvention = PER_SECOND_COMPOUNDING
+```
+
+### Backend Tasks
+
+1. Add `lending_market_rate_snapshots` Mongo document/repository with indexes:
+   `sessionId + protocol + networkId + marketKey + underlyingSymbol + side +
+   capturedAt desc`, and `protocol + networkId + marketKey + underlyingSymbol +
+   capturedAt desc`.
+2. Add versioned lending protocol address config for Aave V3 active networks:
+   Arbitrum, Avalanche, and Mantle.
+3. Add active lending market discovery for current open supply/debt positions.
+4. Add a daily APY snapshot refresh job and startup/rebuild refresh trigger.
+5. Implement Aave V3 collector first. It reads current reserve liquidity and
+   variable borrow rates by underlying reserve and persists `PROTOCOL_SNAPSHOT`
+   rows.
+6. Keep `LendingMarketMetricEstimator` as fallback only:
+   `rateStatus=FALLBACK_ESTIMATE`.
+7. Extend the Lending API position model with protocol APY fields and rewards
+   APR status fields.
+8. Add cycle factual APY fields with `EXACT`, `ESTIMATED`, or `UNAVAILABLE`
+   precision and explicit unavailable reasons.
+9. Add focused tests for snapshot persistence, Aave rate parsing, snapshot
+   selection over fallback, fallback status, factual APY availability, and
+   Compound collateral no-interest policy.
+
+### Frontend Tasks
+
+1. Extend strict REST DTOs and view models for protocol APY, rewards APR, and
+   factual APY.
+2. Label position APY as `Current APY`, not generic APY.
+3. Show `FALLBACK_ESTIMATE`, `STALE`, or `UNAVAILABLE` distinctly from
+   `PROTOCOL_SNAPSHOT`.
+4. Add cycle-level `Actual APY` / `Net strategy APY` display only when available;
+   otherwise show a compact unavailable hint.
+5. Keep rewards APR visible as a separate surface even when P0 returns
+   `UNAVAILABLE`.
+
+### Edge Cases
+
+- In scope: active Aave Arbitrum ARB/WBTC, Aave Avalanche USDC, and Aave Mantle
+  WETH current supply positions.
+- In scope: missing protocol snapshot falls back explicitly to
+  `FALLBACK_ESTIMATE` or `UNAVAILABLE`.
+- In scope: open factual APY is `ESTIMATED` only when current state and
+  denominator are clean.
+- In scope: loop net strategy APY uses time-weighted user equity:
+  `max(totalSupplyUsd - totalDebtUsd, 0)`.
+- Out of scope for P0: rewards collector implementation.
+- Out of scope: live protocol calls from GET `/lending`.
+
+### Cycle 95 Acceptance Metrics
+
+After implementation and rebuild:
+
+| Metric | Target |
+|---|---:|
+| Fresh Aave protocol APY snapshots for active markets | `>= 4` unless market is no longer active |
+| Active Aave positions using `ACCOUNTING_ESTIMATE` when fresh snapshot exists | `0` |
+| GET `/lending` live APY RPC/API calls | `0` |
+| Protocol APY and factual APY collapsed into one field | `0` |
+| Rewards APR silently omitted | `0` |
+
+Verification commands:
+
+```bash
+./gradlew :backend:test
+cd frontend && npm test -- --watch=false --browsers=ChromeHeadless
+scripts/prod-reset-rebuild-backend.sh
+```
+
 - If historical prices are missing for a non-stable leg, total valuation must be
   explicitly unavailable rather than zero-valued.
 - API clients must distinguish total valuation from yield-only PnL; mixing them

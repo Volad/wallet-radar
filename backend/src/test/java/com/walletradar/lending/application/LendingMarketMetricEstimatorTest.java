@@ -22,7 +22,7 @@ class LendingMarketMetricEstimatorTest {
 
         assertThat(metric.healthFactor()).isEqualByComparingTo("3.12");
         assertThat(metric.healthLabel()).isEqualTo("Safe");
-        assertThat(metric.status()).isEqualTo("ESTIMATED");
+        assertThat(metric.status()).isEqualTo(LendingMarketRateStatus.FALLBACK_ESTIMATE);
         assertThat(metric.source()).isEqualTo("ACCOUNTING_ESTIMATE");
     }
 

@@ -47,21 +47,7 @@ public class LendingController {
                                         group.borrowUsd(),
                                         group.netExposureUsd(),
                                         group.positions().stream()
-                                                .map(position -> new SessionLendingResponse.Position(
-                                                        position.id(),
-                                                        position.marketKey(),
-                                                        position.side(),
-                                                        position.assetSymbol(),
-                                                        position.underlyingSymbol(),
-                                                        position.assetContract(),
-                                                        position.quantity(),
-                                                        position.coveredQuantity(),
-                                                        position.valueUsd(),
-                                                        position.earnedUsd(),
-                                                        position.apyPct(),
-                                                        position.metricStatus(),
-                                                        position.metricSource()
-                                                ))
+                                                .map(this::toPosition)
                                                 .toList(),
                                         group.cycles().stream()
                                                 .map(cycle -> new SessionLendingResponse.Cycle(
@@ -122,6 +108,18 @@ public class LendingController {
                                                                 cycle.pnlAssetBreakdown().precisionByAsset(),
                                                                 cycle.pnlAssetBreakdown().reasonByAsset()
                                                         ),
+                                                        new SessionLendingResponse.FactualApy(
+                                                                cycle.factualApy().factualSupplyAprByAsset(),
+                                                                cycle.factualApy().factualSupplyApyByAsset(),
+                                                                cycle.factualApy().factualBorrowAprByAsset(),
+                                                                cycle.factualApy().factualBorrowApyByAsset(),
+                                                                cycle.factualApy().netStrategyAprPct(),
+                                                                cycle.factualApy().netStrategyApyPct(),
+                                                                cycle.factualApy().apyPrecision(),
+                                                                cycle.factualApy().apyMethod(),
+                                                                cycle.factualApy().apyUnavailableReason(),
+                                                                cycle.factualApy().apyConvention()
+                                                        ),
                                                         new SessionLendingResponse.TotalValuation(
                                                                 cycle.totalValuation().principalInUsd(),
                                                                 cycle.totalValuation().principalOutUsd(),
@@ -160,21 +158,7 @@ public class LendingController {
                                                         cycle.peakBorrowUsd(),
                                                         cycle.durationDays(),
                                                         cycle.positions().stream()
-                                                                .map(position -> new SessionLendingResponse.Position(
-                                                                        position.id(),
-                                                                        position.marketKey(),
-                                                                        position.side(),
-                                                                        position.assetSymbol(),
-                                                                        position.underlyingSymbol(),
-                                                                        position.assetContract(),
-                                                                        position.quantity(),
-                                                                        position.coveredQuantity(),
-                                                                        position.valueUsd(),
-                                                                        position.earnedUsd(),
-                                                                        position.apyPct(),
-                                                                        position.metricStatus(),
-                                                                        position.metricSource()
-                                                                ))
+                                                                .map(this::toPosition)
                                                                 .toList(),
                                                         cycle.events().stream()
                                                                 .map(this::toHistoryEntry)
@@ -218,6 +202,35 @@ public class LendingController {
             throw new ApiBadRequestException("INVALID_SESSION_ID", "sessionId is required");
         }
         return sessionId.trim();
+    }
+
+    private SessionLendingResponse.Position toPosition(SessionLendingQueryService.LendingPositionView position) {
+        return new SessionLendingResponse.Position(
+                position.id(),
+                position.marketKey(),
+                position.side(),
+                position.assetSymbol(),
+                position.underlyingSymbol(),
+                position.assetContract(),
+                position.quantity(),
+                position.coveredQuantity(),
+                position.valueUsd(),
+                position.earnedUsd(),
+                position.apyPct(),
+                position.metricStatus(),
+                position.metricSource(),
+                position.protocolSupplyApyPct(),
+                position.protocolBorrowApyPct(),
+                position.rewardAprPct(),
+                position.netProtocolApyPct(),
+                position.protocolApyStatus(),
+                position.protocolApySource(),
+                position.protocolApyCapturedAt(),
+                position.protocolApyStale(),
+                position.rewardAprStatus(),
+                position.rewardAprUnavailableReason(),
+                position.apyConvention()
+        );
     }
 
     private SessionLendingResponse.HistoryEntry toHistoryEntry(

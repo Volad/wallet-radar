@@ -10,6 +10,29 @@ spring:
 
 # Per-network ingestion config for raw backfill adapters.
 walletradar:
+  lending:
+    market-rates:
+      startup-refresh-enabled: true
+      refresh-interval-ms: 86400000
+      aave-v3:
+        ARBITRUM:
+          enabled: true
+          pool-address: "0x794a61358d6845594f94dc1db02a252b5b4814ad"
+          pool-addresses-provider: "0xa97684ead0e402dc232d5a977953df7ecbab3cdb"
+          source: "protocol-registry+aave-pool-addresses-provider"
+          version: "v3"
+        AVALANCHE:
+          enabled: true
+          pool-address: "0x794a61358d6845594f94dc1db02a252b5b4814ad"
+          pool-addresses-provider: "0xa97684ead0e402dc232d5a977953df7ecbab3cdb"
+          source: "protocol-registry+aave-pool-addresses-provider"
+          version: "v3"
+        MANTLE:
+          enabled: true
+          pool-address: "0x458f293454fe0d67ec0655f3672301301dd51422"
+          pool-addresses-provider: "0xba50cd2a20f6da35d788639e581bca8d0b5d4d5f"
+          source: "protocol-registry+aave-pool-addresses-provider"
+          version: "v3"
   ingestion:
     # Backfill window counted back from the current head.
     # Defaults are calibrated from live chain data with a small safety margin.

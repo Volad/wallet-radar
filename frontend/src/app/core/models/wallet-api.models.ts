@@ -389,6 +389,17 @@ export interface SessionLendingPositionResponse {
   readonly apyPct: number | null;
   readonly metricStatus: string | null;
   readonly metricSource: string | null;
+  readonly protocolSupplyApyPct: number | null;
+  readonly protocolBorrowApyPct: number | null;
+  readonly rewardAprPct: number | null;
+  readonly netProtocolApyPct: number | null;
+  readonly protocolApyStatus: string | null;
+  readonly protocolApySource: string | null;
+  readonly protocolApyCapturedAt: string | null;
+  readonly protocolApyStale: boolean | null;
+  readonly rewardAprStatus: string | null;
+  readonly rewardAprUnavailableReason: string | null;
+  readonly apyConvention: string | null;
 }
 
 export interface SessionLendingHistoryEntryResponse {
@@ -466,6 +477,19 @@ export interface SessionLendingTotalValuationResponse {
   readonly unavailableReason: string | null;
 }
 
+export interface SessionLendingFactualApyResponse {
+  readonly factualSupplyAprByAsset: Readonly<Record<string, number | null>>;
+  readonly factualSupplyApyByAsset: Readonly<Record<string, number | null>>;
+  readonly factualBorrowAprByAsset: Readonly<Record<string, number | null>>;
+  readonly factualBorrowApyByAsset: Readonly<Record<string, number | null>>;
+  readonly netStrategyAprPct: number | null;
+  readonly netStrategyApyPct: number | null;
+  readonly apyPrecision: string | null;
+  readonly apyMethod: string | null;
+  readonly apyUnavailableReason: string | null;
+  readonly apyConvention: string | null;
+}
+
 export interface SessionLendingObservedFlowResponse {
   readonly assetSymbol: string;
   readonly assetContract: string | null;
@@ -521,6 +545,7 @@ export interface SessionLendingCycleResponse {
   readonly unrealizedPnl: SessionLendingPnlResponse;
   readonly pnlBreakdown: SessionLendingPnlBreakdownResponse;
   readonly pnlAssetBreakdown: SessionLendingPnlAssetBreakdownResponse;
+  readonly factualApy: SessionLendingFactualApyResponse | null;
   readonly totalValuation: SessionLendingTotalValuationResponse | null;
   readonly observedFlowsByAsset: Readonly<Record<string, ReadonlyArray<SessionLendingObservedFlowResponse>>> | null;
   readonly peakSupplyUsd: number | null;

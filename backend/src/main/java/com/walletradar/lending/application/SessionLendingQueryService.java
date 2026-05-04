@@ -14,6 +14,7 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.pricing.domain.CanonicalAssetCatalog;
 import com.walletradar.pricing.persistence.CurrentPriceQuoteDocument;
 import com.walletradar.pricing.persistence.HistoricalPriceDocument;
+import com.walletradar.lending.persistence.LendingMarketRateSnapshot;
 import com.walletradar.session.application.AccountingUniverseService;
 import lombok.RequiredArgsConstructor;
 import org.bson.Document;
@@ -82,6 +83,16 @@ public class SessionLendingQueryService {
     private final AccountingUniverseService accountingUniverseService;
     private final MongoOperations mongoOperations;
     private final LendingMarketMetricEstimator metricEstimator;
+    private final LendingMarketRateSnapshotService marketRateSnapshotService;
+
+    SessionLendingQueryService(
+            UserSessionRepository userSessionRepository,
+            AccountingUniverseService accountingUniverseService,
+            MongoOperations mongoOperations,
+            LendingMarketMetricEstimator metricEstimator
+    ) {
+        this(userSessionRepository, accountingUniverseService, mongoOperations, metricEstimator, null);
+    }
 
     public Optional<SessionLendingView> findSessionLending(String sessionId) {
         if (sessionId == null || sessionId.isBlank()) {
@@ -104,7 +115,7 @@ public class SessionLendingQueryService {
         Map<GroupKey, GroupAccumulator> groups = new LinkedHashMap<>();
         for (NormalizedTransaction transaction : history) {
             GroupKey key = groupKey(transaction);
-            groups.computeIfAbsent(key, GroupAccumulator::new)
+            groups.computeIfAbsent(key, groupKey -> new GroupAccumulator(session.getId(), groupKey))
                     .addHistory(transaction, prices, historicalPrices, marketKey(transaction));
         }
         groups.values().forEach(group -> group.addLinkedCashExitSwaps(cashExitSwaps));
@@ -138,7 +149,7 @@ public class SessionLendingQueryService {
                     balance.getNetworkId(),
                     normalizeAddress(balance.getWalletAddress())
             );
-            groups.computeIfAbsent(key, GroupAccumulator::new).addPosition(
+            groups.computeIfAbsent(key, groupKey -> new GroupAccumulator(session.getId(), groupKey)).addPosition(
                     balance,
                     latestPoint,
                     prices,
@@ -673,7 +684,18 @@ public class SessionLendingQueryService {
             BigDecimal earnedUsd,
             BigDecimal apyPct,
             String metricStatus,
-            String metricSource
+            String metricSource,
+            BigDecimal protocolSupplyApyPct,
+            BigDecimal protocolBorrowApyPct,
+            BigDecimal rewardAprPct,
+            BigDecimal netProtocolApyPct,
+            String protocolApyStatus,
+            String protocolApySource,
+            Instant protocolApyCapturedAt,
+            Boolean protocolApyStale,
+            String rewardAprStatus,
+            String rewardAprUnavailableReason,
+            String apyConvention
     ) {
     }
 
@@ -720,6 +742,7 @@ public class SessionLendingQueryService {
             LendingPnlView unrealizedPnl,
             LendingPnlBreakdownView pnlBreakdown,
             LendingPnlAssetBreakdownView pnlAssetBreakdown,
+            LendingFactualApyView factualApy,
             LendingTotalValuationView totalValuation,
             Map<String, List<LendingObservedFlowView>> observedFlowsByAsset,
             BigDecimal peakSupplyUsd,
@@ -769,6 +792,20 @@ public class SessionLendingQueryService {
             String yieldOnlyPnlPrecision,
             String valuationMethod,
             String unavailableReason
+    ) {
+    }
+
+    public record LendingFactualApyView(
+            Map<String, BigDecimal> factualSupplyAprByAsset,
+            Map<String, BigDecimal> factualSupplyApyByAsset,
+            Map<String, BigDecimal> factualBorrowAprByAsset,
+            Map<String, BigDecimal> factualBorrowApyByAsset,
+            BigDecimal netStrategyAprPct,
+            BigDecimal netStrategyApyPct,
+            String apyPrecision,
+            String apyMethod,
+            String apyUnavailableReason,
+            String apyConvention
     ) {
     }
 
@@ -837,7 +874,26 @@ public class SessionLendingQueryService {
     private record BucketKey(String walletAddress, NetworkId networkId, String accountingAssetIdentity) {
     }
 
+    private record PositionRateMetric(
+            BigDecimal aliasApyPct,
+            String metricStatus,
+            String metricSource,
+            BigDecimal protocolSupplyApyPct,
+            BigDecimal protocolBorrowApyPct,
+            BigDecimal rewardAprPct,
+            BigDecimal netProtocolApyPct,
+            String protocolApyStatus,
+            String protocolApySource,
+            Instant protocolApyCapturedAt,
+            Boolean protocolApyStale,
+            String rewardAprStatus,
+            String rewardAprUnavailableReason,
+            String apyConvention
+    ) {
+    }
+
     private final class GroupAccumulator {
+        private final String sessionId;
         private final GroupKey key;
         private final List<LendingPositionView> positions = new ArrayList<>();
         private final List<LendingHistoryEntryView> history = new ArrayList<>();
@@ -845,7 +901,8 @@ public class SessionLendingQueryService {
         private BigDecimal borrowUsd = BigDecimal.ZERO;
         private BigDecimal closedEarnedUsd = BigDecimal.ZERO;
 
-        private GroupAccumulator(GroupKey key) {
+        private GroupAccumulator(String sessionId, GroupKey key) {
+            this.sessionId = sessionId;
             this.key = key;
         }
 
@@ -881,21 +938,108 @@ public class SessionLendingQueryService {
                     supplyUsd,
                     borrowUsd
             );
+            String underlyingSymbol = LendingAssetSymbolSupport.underlyingSymbol(balance.getAssetSymbol());
+            PositionRateMetric rateMetric = positionRateMetric(
+                    key.protocol(),
+                    key.networkId(),
+                    marketKey,
+                    side,
+                    underlyingSymbol,
+                    metric
+            );
             positions.add(new LendingPositionView(
                     key.id() + ":" + side.toLowerCase(Locale.ROOT) + ":" + balance.getAssetContract(),
                     marketKey,
                     side,
                     LendingAssetSymbolSupport.displaySymbol(balance.getAssetSymbol()),
-                    LendingAssetSymbolSupport.underlyingSymbol(balance.getAssetSymbol()),
+                    underlyingSymbol,
                     balance.getAssetContract(),
                     quantity,
                     covered,
                     valueUsd,
                     earnedUsd,
-                    metric.apyPct(),
-                    metric.status(),
-                    metric.source()
+                    rateMetric.aliasApyPct(),
+                    rateMetric.metricStatus(),
+                    rateMetric.metricSource(),
+                    rateMetric.protocolSupplyApyPct(),
+                    rateMetric.protocolBorrowApyPct(),
+                    rateMetric.rewardAprPct(),
+                    rateMetric.netProtocolApyPct(),
+                    rateMetric.protocolApyStatus(),
+                    rateMetric.protocolApySource(),
+                    rateMetric.protocolApyCapturedAt(),
+                    rateMetric.protocolApyStale(),
+                    rateMetric.rewardAprStatus(),
+                    rateMetric.rewardAprUnavailableReason(),
+                    rateMetric.apyConvention()
             ));
+        }
+
+        private PositionRateMetric positionRateMetric(
+                String protocol,
+                NetworkId networkId,
+                String marketKey,
+                String side,
+                String underlyingSymbol,
+                LendingMarketMetricEstimator.MetricSnapshot fallback
+        ) {
+            if (marketRateSnapshotService == null) {
+                return fallbackRateMetric(side, fallback);
+            }
+            String network = networkId == null ? null : networkId.name();
+            Optional<LendingMarketRateSnapshot> snapshot = marketRateSnapshotService.latestFresh(
+                    sessionId,
+                    protocol,
+                    network,
+                    marketKey,
+                    underlyingSymbol,
+                    side
+            );
+            if (snapshot.isPresent() && LendingMarketRateStatus.PROTOCOL_SNAPSHOT.equals(snapshot.get().getRateStatus())) {
+                LendingMarketRateSnapshot value = snapshot.get();
+                BigDecimal protocolSideApy = "BORROW".equals(side) ? value.getBorrowApyPct() : value.getSupplyApyPct();
+                BigDecimal netProtocolApy = "BORROW".equals(side) ? value.getNetBorrowApyPct() : value.getNetSupplyApyPct();
+                return new PositionRateMetric(
+                        protocolSideApy,
+                        value.getRateStatus(),
+                        value.getRateSource(),
+                        value.getSupplyApyPct(),
+                        value.getBorrowApyPct(),
+                        value.getRewardAprPct(),
+                        netProtocolApy,
+                        value.getRateStatus(),
+                        value.getRateSource(),
+                        value.getCapturedAt(),
+                        false,
+                        value.getRewardAprStatus(),
+                        value.getRewardAprUnavailableReason(),
+                        value.getApyConvention()
+                );
+            }
+            return fallbackRateMetric(side, fallback);
+        }
+
+        private PositionRateMetric fallbackRateMetric(
+                String side,
+                LendingMarketMetricEstimator.MetricSnapshot fallback
+        ) {
+            BigDecimal fallbackApy = fallback.apyPct();
+            return new PositionRateMetric(
+                    fallbackApy,
+                    fallback.status(),
+                    fallback.source(),
+                    "SUPPLY".equals(side) ? fallbackApy : null,
+                    "BORROW".equals(side) ? fallbackApy : null,
+                    null,
+                    null,
+                    fallback.status(),
+                    fallback.source(),
+                    null,
+                    false,
+                    LendingMarketRateStatus.UNAVAILABLE,
+                    LendingMarketRateStatus.REWARDS_COLLECTOR_NOT_IMPLEMENTED,
+                    null
+            );
         }
 
         private void addHistory(
@@ -1574,6 +1718,7 @@ public class SessionLendingQueryService {
             LendingPnlBreakdownView pnlBreakdown = pnlBreakdown(status, cyclePositions, deltas);
             LendingPnlAssetBreakdownView pnlAssetBreakdown = pnlAssetBreakdown(status, cyclePositions, deltas);
             LendingTotalValuationView totalValuation = totalValuation(status, unrealizedUsd, pnlBreakdown, deltas);
+            LendingFactualApyView factualApy = factualApy(status, start, close, totalValuation, pnlAssetBreakdown, deltas);
             List<String> largePnlReasons = largePnlReasons(status, pnlBreakdown, totalValuation, pnlAssetBreakdown, deltas);
             String primaryLargePnlReason = largePnlReasons.isEmpty() ? null : largePnlReasons.get(0);
             CyclePeakView peaks = cyclePeaks(events);
@@ -1604,6 +1749,7 @@ public class SessionLendingQueryService {
                     ),
                     pnlBreakdown,
                     pnlAssetBreakdown,
+                    factualApy,
                     totalValuation,
                     observedFlowsByAsset(status, deltas),
                     peaks.peakSupplyUsd(),
@@ -1613,6 +1759,37 @@ public class SessionLendingQueryService {
                     cycleEvents,
                     txGroups(cycleId, events)
             );
+        }
+
+        private LendingFactualApyView factualApy(
+                String status,
+                LendingHistoryEntryView start,
+                LendingHistoryEntryView close,
+                LendingTotalValuationView totalValuation,
+                LendingPnlAssetBreakdownView pnlAssetBreakdown,
+                DeltaAccumulator deltas
+        ) {
+            Instant startTimestamp = start == null ? null : start.blockTimestamp();
+            Instant endTimestamp = "OPEN".equals(status)
+                    ? Instant.now()
+                    : close == null ? null : close.blockTimestamp();
+            BigDecimal netCapitalUsd = deltas.principalInUsd()
+                    .subtract(deltas.borrowedUsd(), MC)
+                    .max(BigDecimal.ZERO);
+            BigDecimal netIncomeUsd = "OPEN".equals(status)
+                    ? totalValuation.unrealizedTotalUsdPnl()
+                    : totalValuation.totalUsdPnl();
+            return LendingFactualApyCalculator.calculate(new LendingFactualApyCalculator.Input(
+                    status,
+                    startTimestamp,
+                    endTimestamp,
+                    deltas.principalInByAsset(),
+                    pnlAssetBreakdown.supplyIncomeByAsset(),
+                    deltas.borrowedByAsset(),
+                    pnlAssetBreakdown.borrowCostByAsset(),
+                    netIncomeUsd,
+                    netCapitalUsd
+            ));
         }
 
         private LendingTotalValuationView totalValuation(

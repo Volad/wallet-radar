@@ -29,6 +29,17 @@ export interface LendingPosition {
   readonly apyPct: number;
   readonly metricStatus: string;
   readonly metricSource: string;
+  readonly protocolSupplyApyPct: number | null;
+  readonly protocolBorrowApyPct: number | null;
+  readonly rewardAprPct: number | null;
+  readonly netProtocolApyPct: number | null;
+  readonly protocolApyStatus: string;
+  readonly protocolApySource: string;
+  readonly protocolApyCapturedAt: string | null;
+  readonly protocolApyStale: boolean;
+  readonly rewardAprStatus: string;
+  readonly rewardAprUnavailableReason: string | null;
+  readonly apyConvention: string | null;
 }
 
 export interface LendingHistoryEntry {
@@ -106,6 +117,19 @@ export interface LendingTotalValuation {
   readonly unavailableReason: string | null;
 }
 
+export interface LendingFactualApy {
+  readonly factualSupplyAprByAsset: Readonly<Record<string, number>>;
+  readonly factualSupplyApyByAsset: Readonly<Record<string, number>>;
+  readonly factualBorrowAprByAsset: Readonly<Record<string, number>>;
+  readonly factualBorrowApyByAsset: Readonly<Record<string, number>>;
+  readonly netStrategyAprPct: number | null;
+  readonly netStrategyApyPct: number | null;
+  readonly apyPrecision: LendingPrecision;
+  readonly apyMethod: string;
+  readonly apyUnavailableReason: string | null;
+  readonly apyConvention: string | null;
+}
+
 export interface LendingObservedFlow {
   readonly assetSymbol: string;
   readonly assetContract: string | null;
@@ -161,6 +185,7 @@ export interface LendingCycle {
   readonly unrealizedPnl: LendingPnl;
   readonly pnlBreakdown: LendingPnlBreakdown;
   readonly pnlAssetBreakdown: LendingPnlAssetBreakdown;
+  readonly factualApy: LendingFactualApy;
   readonly totalValuation: LendingTotalValuation;
   readonly observedFlowsByAsset: Readonly<Record<string, ReadonlyArray<LendingObservedFlow>>>;
   readonly peakSupplyUsd: number;

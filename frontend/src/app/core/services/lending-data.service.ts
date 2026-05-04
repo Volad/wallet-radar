@@ -87,6 +87,18 @@ export class LendingDataService {
             reason: cycle.pnlBreakdown?.reason ?? null,
           },
           pnlAssetBreakdown: this.toPnlAssetBreakdown(cycle.pnlAssetBreakdown),
+          factualApy: {
+            factualSupplyAprByAsset: this.toNumberRecord(cycle.factualApy?.factualSupplyAprByAsset ?? {}),
+            factualSupplyApyByAsset: this.toNumberRecord(cycle.factualApy?.factualSupplyApyByAsset ?? {}),
+            factualBorrowAprByAsset: this.toNumberRecord(cycle.factualApy?.factualBorrowAprByAsset ?? {}),
+            factualBorrowApyByAsset: this.toNumberRecord(cycle.factualApy?.factualBorrowApyByAsset ?? {}),
+            netStrategyAprPct: cycle.factualApy?.netStrategyAprPct ?? null,
+            netStrategyApyPct: cycle.factualApy?.netStrategyApyPct ?? null,
+            apyPrecision: cycle.factualApy?.apyPrecision ?? 'UNAVAILABLE',
+            apyMethod: cycle.factualApy?.apyMethod ?? 'unknown',
+            apyUnavailableReason: cycle.factualApy?.apyUnavailableReason ?? null,
+            apyConvention: cycle.factualApy?.apyConvention ?? null,
+          },
           totalValuation: {
             principalInUsd: cycle.totalValuation?.principalInUsd ?? 0,
             principalOutUsd: cycle.totalValuation?.principalOutUsd ?? 0,
@@ -150,6 +162,17 @@ export class LendingDataService {
       apyPct: position.apyPct ?? 0,
       metricStatus: position.metricStatus ?? 'UNKNOWN',
       metricSource: position.metricSource ?? 'UNKNOWN',
+      protocolSupplyApyPct: position.protocolSupplyApyPct ?? null,
+      protocolBorrowApyPct: position.protocolBorrowApyPct ?? null,
+      rewardAprPct: position.rewardAprPct ?? null,
+      netProtocolApyPct: position.netProtocolApyPct ?? null,
+      protocolApyStatus: position.protocolApyStatus ?? position.metricStatus ?? 'UNKNOWN',
+      protocolApySource: position.protocolApySource ?? position.metricSource ?? 'UNKNOWN',
+      protocolApyCapturedAt: position.protocolApyCapturedAt ?? null,
+      protocolApyStale: position.protocolApyStale ?? false,
+      rewardAprStatus: position.rewardAprStatus ?? 'UNAVAILABLE',
+      rewardAprUnavailableReason: position.rewardAprUnavailableReason ?? null,
+      apyConvention: position.apyConvention ?? null,
     };
   }
 

@@ -204,8 +204,8 @@
                                   <b class="mono pos">{{ formatUsd(position.earnedUsd) }}</b>
                                 </span>
                                 <span class="align-right" [title]="positionMetricTitle(position)">
-                                  <small>APY</small>
-                                  <b class="mono pos">{{ formatApy(position) }}</b>
+                                  <small>Current APY</small>
+                                  <b class="mono" [ngClass]="apyClass(position)">{{ formatApy(position) }}</b>
                                 </span>
                               </div>
                             }
@@ -233,8 +233,8 @@
                                   <b class="mono borrow">{{ formatUsd(position.valueUsd) }}</b>
                                 </span>
                                 <span class="align-right" [title]="positionMetricTitle(position)">
-                                  <small>APY</small>
-                                  <b class="mono borrow">{{ formatApy(position) }}</b>
+                                  <small>Current APY</small>
+                                  <b class="mono" [ngClass]="apyClass(position)">{{ formatApy(position) }}</b>
                                 </span>
                               </div>
                             }
@@ -348,6 +348,10 @@
                                 <span>
                                   <small>Duration</small>
                                   <b class="mono muted">{{ formatDuration(cycle.durationDays) }}</b>
+                                </span>
+                                <span [title]="factualApyTitle(cycle)">
+                                  <small>Actual APY</small>
+                                  <b class="mono" [ngClass]="precisionClass(cycle.factualApy.apyPrecision)">{{ factualApyDisplay(cycle) }}</b>
                                 </span>
                               </div>
 

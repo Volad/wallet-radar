@@ -56,7 +56,18 @@ public record SessionLendingResponse(
             BigDecimal earnedUsd,
             BigDecimal apyPct,
             String metricStatus,
-            String metricSource
+            String metricSource,
+            BigDecimal protocolSupplyApyPct,
+            BigDecimal protocolBorrowApyPct,
+            BigDecimal rewardAprPct,
+            BigDecimal netProtocolApyPct,
+            String protocolApyStatus,
+            String protocolApySource,
+            Instant protocolApyCapturedAt,
+            Boolean protocolApyStale,
+            String rewardAprStatus,
+            String rewardAprUnavailableReason,
+            String apyConvention
     ) {
     }
 
@@ -102,6 +113,7 @@ public record SessionLendingResponse(
             Pnl unrealizedPnl,
             PnlBreakdown pnlBreakdown,
             PnlAssetBreakdown pnlAssetBreakdown,
+            FactualApy factualApy,
             TotalValuation totalValuation,
             Map<String, List<ObservedFlow>> observedFlowsByAsset,
             BigDecimal peakSupplyUsd,
@@ -172,6 +184,20 @@ public record SessionLendingResponse(
             String yieldOnlyPnlPrecision,
             String valuationMethod,
             String unavailableReason
+    ) {
+    }
+
+    public record FactualApy(
+            Map<String, BigDecimal> factualSupplyAprByAsset,
+            Map<String, BigDecimal> factualSupplyApyByAsset,
+            Map<String, BigDecimal> factualBorrowAprByAsset,
+            Map<String, BigDecimal> factualBorrowApyByAsset,
+            BigDecimal netStrategyAprPct,
+            BigDecimal netStrategyApyPct,
+            String apyPrecision,
+            String apyMethod,
+            String apyUnavailableReason,
+            String apyConvention
     ) {
     }
 

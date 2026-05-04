@@ -582,11 +582,54 @@ export class LendingPageComponent implements OnChanges {
   }
 
   formatApy(position: LendingPosition): string {
-    return `${position.apyPct.toFixed(2)}%`;
+    const value = this.currentProtocolApy(position);
+    if (value === null) {
+      return '--';
+    }
+    const prefix = position.protocolApyStatus === 'FALLBACK_ESTIMATE' ? 'Est. ' : '';
+    return `${prefix}${value.toFixed(2)}%`;
   }
 
   positionMetricTitle(position: LendingPosition): string {
-    return `${this.humanReason(position.metricStatus)} · ${this.humanReason(position.metricSource)}`;
+    const capturedAt = position.protocolApyCapturedAt === null
+      ? ''
+      : ` · ${new Date(position.protocolApyCapturedAt).toLocaleString()}`;
+    const rewards = position.rewardAprStatus === 'UNAVAILABLE'
+      ? ` · Rewards: ${this.humanReason(position.rewardAprUnavailableReason ?? position.rewardAprStatus)}`
+      : ` · Rewards: ${position.rewardAprPct?.toFixed(2) ?? '--'}%`;
+    return `${this.humanReason(position.protocolApyStatus)} · ${this.humanReason(position.protocolApySource)}${capturedAt}${rewards}`;
+  }
+
+  apyClass(position: LendingPosition): string {
+    if (position.protocolApyStatus === 'PROTOCOL_SNAPSHOT' || position.protocolApyStatus === 'API_SNAPSHOT') {
+      return position.side === 'BORROW' ? 'borrow' : 'pos';
+    }
+    return 'muted-value';
+  }
+
+  factualApyDisplay(cycle: LendingCycle): string {
+    const value = cycle.factualApy.netStrategyApyPct
+      ?? Object.values(cycle.factualApy.factualSupplyApyByAsset)[0]
+      ?? Object.values(cycle.factualApy.factualBorrowApyByAsset)[0]
+      ?? null;
+    if (value === null || cycle.factualApy.apyPrecision === 'UNAVAILABLE') {
+      return '--';
+    }
+    return `${value.toFixed(2)}%`;
+  }
+
+  factualApyTitle(cycle: LendingCycle): string {
+    if (cycle.factualApy.apyUnavailableReason !== null) {
+      return this.humanReason(cycle.factualApy.apyUnavailableReason);
+    }
+    return `${this.humanReason(cycle.factualApy.apyPrecision)} · ${this.humanReason(cycle.factualApy.apyMethod)}`;
+  }
+
+  private currentProtocolApy(position: LendingPosition): number | null {
+    if (position.side === 'BORROW') {
+      return position.protocolBorrowApyPct ?? position.apyPct;
+    }
+    return position.protocolSupplyApyPct ?? position.apyPct;
   }
 
   humanReason(value: string): string {
@@ -614,6 +657,30 @@ export class LendingPageComponent implements OnChanges {
         return 'Estimated';
       case 'UNKNOWN':
         return 'Unknown';
+      case 'PROTOCOL_SNAPSHOT':
+        return 'Protocol snapshot';
+      case 'API_SNAPSHOT':
+        return 'API snapshot';
+      case 'FALLBACK_ESTIMATE':
+        return 'Fallback estimate';
+      case 'STALE':
+        return 'Stale';
+      case 'UNAVAILABLE':
+        return 'Unavailable';
+      case 'REWARDS_COLLECTOR_NOT_IMPLEMENTED':
+        return 'Rewards collector not implemented';
+      case 'PER_SECOND_COMPOUNDING':
+        return 'Per-second compounding';
+      case 'time-weighted-lifecycle-cashflow':
+        return 'Time-weighted lifecycle cashflow';
+      case 'MISSING_CYCLE_TIMESTAMP':
+        return 'Missing cycle timestamp';
+      case 'NON_POSITIVE_EXPOSURE_DURATION':
+        return 'Non-positive exposure duration';
+      case 'MISSING_TIME_WEIGHTED_DENOMINATOR':
+        return 'Missing time-weighted denominator';
+      case 'UNRESOLVED_LIFECYCLE':
+        return 'Unresolved lifecycle';
       case 'SHARE_RATE_EFFECT':
         return 'Share-rate effect';
       case 'GAS_COST':

@@ -813,8 +813,19 @@ Response: `200 OK`
           "valueUsd": "2903.64",
           "earnedUsd": "10.62",
           "apyPct": "4.10",
-          "metricStatus": "ESTIMATED",
-          "metricSource": "ACCOUNTING_ESTIMATE"
+          "metricStatus": "PROTOCOL_SNAPSHOT",
+          "metricSource": "AAVE_V3_POOL",
+          "protocolSupplyApyPct": "4.21",
+          "protocolBorrowApyPct": "6.03",
+          "rewardAprPct": null,
+          "netProtocolApyPct": "4.21",
+          "protocolApyStatus": "PROTOCOL_SNAPSHOT",
+          "protocolApySource": "AAVE_V3_POOL",
+          "protocolApyCapturedAt": "2026-05-04T10:00:00Z",
+          "protocolApyStale": false,
+          "rewardAprStatus": "UNAVAILABLE",
+          "rewardAprUnavailableReason": "REWARDS_COLLECTOR_NOT_IMPLEMENTED",
+          "apyConvention": "PER_SECOND_COMPOUNDING"
         }
       ],
       "history": [
@@ -911,6 +922,23 @@ Rules:
   state.
 - `metricStatus` and `metricSource` on positions distinguish protocol-derived
   metrics from accounting-based estimates.
+- `apyPct` is a backward-compatible display alias only. Clients should prefer
+  the explicit protocol APY fields.
+- `protocolSupplyApyPct`, `protocolBorrowApyPct`, `netProtocolApyPct`,
+  `protocolApyStatus`, `protocolApySource`, `protocolApyCapturedAt`, and
+  `apyConvention` describe current protocol market-rate snapshots. They are
+  read-model analytics only and never mutate accounting state.
+- `protocolApyStatus=PROTOCOL_SNAPSHOT` means a fresh persisted protocol
+  snapshot exists. `FALLBACK_ESTIMATE` means the old estimator was used and must
+  not be presented as authoritative protocol APY. `UNAVAILABLE` must carry a
+  reason.
+- `rewardAprPct` is separate from native lending APY. During the Aave P0 slice
+  rewards may be returned as `rewardAprStatus=UNAVAILABLE` and
+  `rewardAprUnavailableReason=REWARDS_COLLECTOR_NOT_IMPLEMENTED`.
+- Cycle `factualApy` describes the user's actual annualized lifecycle return or
+  debt cost from time-weighted cashflows. It must not be synthesized from
+  protocol APY. Open cycles can expose it only as `ESTIMATED`; unresolved cycles
+  expose `UNAVAILABLE` with `apyUnavailableReason`.
 - Lifecycle-aware clients should prefer `groups[].cycles[]` over the legacy
   flat `groups[].history[]` list.
 - `marketKey` is the deterministic protocol market lane. For Morpho vault-like
