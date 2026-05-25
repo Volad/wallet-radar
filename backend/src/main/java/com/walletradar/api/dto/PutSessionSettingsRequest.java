@@ -21,6 +21,9 @@ public record PutSessionSettingsRequest(
         @Valid
         List<IntegrationEntry> integrations,
 
+        @Valid
+        List<ExternalVenueEntry> externalVenues,
+
         Boolean hideSmallAssets,
         Boolean showReconciliationWarnings
 ) {
@@ -48,6 +51,18 @@ public record PutSessionSettingsRequest(
             String displayName,
             String apiKey,
             String apiSecret
+    ) {
+    }
+
+    /**
+     * Cycle/9 S2: counterparty address on a user-owned third-party venue.
+     */
+    public record ExternalVenueEntry(
+            @NotBlank(message = "INVALID_VENUE_ADDRESS")
+            String address,
+            String provider,
+            String label,
+            List<NetworkId> networks
     ) {
     }
 }

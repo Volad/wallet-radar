@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "last_updated": "2026-04-06",
+  "last_updated": "2026-05-07",
   "description": "WalletRadar Protocol Registry — contract address to DeFi protocol classification mapping",
   "supported_networks": [
     "ETHEREUM",
@@ -26,7 +26,8 @@
     "AGGREGATOR",
     "YIELD",
     "WRAPPER",
-    "PERP"
+    "PERP",
+    "LP"
   ],
   "event_types": [
     "SWAP",
@@ -707,6 +708,32 @@
       "confidence": "HIGH",
       "notes": "Method-aware bridge entry router. swapAndStartBridgeTokensViaMayan(...) is BRIDGE_OUT when canonical raw shows bridge-entry semantics."
     },
+    "0xba4b26277c49304486215ca8e2f86e74f53cf92c": {
+      "name": "Hyperlane HypERC20Collateral USDC (Aave-backed warp route)",
+      "protocol": "Hyperlane",
+      "version": "WarpRoute",
+      "family": "BRIDGE",
+      "role": "BRIDGE_EXIT",
+      "event_type": "BRIDGE_IN",
+      "networks": [
+        "ETHEREUM"
+      ],
+      "confidence": "HIGH",
+      "notes": "FA-001 D3: Ethereum destination delivery for USDC; registry-backed BRIDGE_IN promotion when misclassified as vault withdraw."
+    },
+    "0xbdff0c1c8b0b779581c4ac3ba1f29667c366c56e": {
+      "name": "LI.FI Mantle user entry proxy",
+      "protocol": "LI.FI",
+      "version": "V1",
+      "family": "BRIDGE",
+      "role": "BRIDGE_ENTRY",
+      "event_type": "BRIDGE_OUT",
+      "networks": [
+        "MANTLE"
+      ],
+      "confidence": "HIGH",
+      "notes": "FA-001 D3: Mantle-side LI.FI proxy (callDiamondWithPermit2 family) for bridge-out aggregation."
+    },
     "0xc86eb7b85807020b4548ee05b54bfc956eebbfcd": {
       "name": "Axelar Express Token Settlement",
       "protocol": "Axelar",
@@ -844,6 +871,46 @@
       ],
       "confidence": "HIGH",
       "notes": "zkSync Era Aave V3 pool. Supply=LENDING_DEPOSIT, Withdraw=LENDING_WITHDRAW, Borrow=BORROW, Repay=REPAY"
+    },
+    "── LP: Aave stable pools ─────────────────────────────────────────────": {},
+    "0xfcec3c8d86329defb548202fe1b86ff2188603a8": {
+      "name": "Aave GHO/USDT/USDC stable pool",
+      "protocol": "Aave",
+      "version": "V3",
+      "family": "LP",
+      "role": "POOL",
+      "event_type": "LP_MINT",
+      "networks": [
+        "AVALANCHE"
+      ],
+      "confidence": "HIGH",
+      "notes": "Cycle/9 S3: multi-asset stable LP pool. Deposits classified as LP_ENTRY with composite-bucket basis carry."
+    },
+    "0x8e8c3d4313fd5c5051a02b9e580415691a0f7951": {
+      "name": "Aave GHO/USDT/USDC-gauge",
+      "protocol": "Curve",
+      "version": "Gauge",
+      "family": "LP",
+      "role": "STAKE_CONTRACT",
+      "event_type": "LENDING_DEPOSIT",
+      "networks": [
+        "AVALANCHE"
+      ],
+      "confidence": "HIGH",
+      "notes": "Cycle/15 R3: Curve gauge for Aave GHO/USDT/USDC LP on Avalanche. Wrapper basis carry via wrapper: composite bucket."
+    },
+    "0x7037358a6f2c1d9e5cc9b4a29e7415a7060dadcc": {
+      "name": "auraAave GHO/USDT/USDC-vault",
+      "protocol": "Aura",
+      "version": "Vault",
+      "family": "LP",
+      "role": "VAULT",
+      "event_type": "VAULT_DEPOSIT",
+      "networks": [
+        "AVALANCHE"
+      ],
+      "confidence": "HIGH",
+      "notes": "Cycle/15 R3: Aura boosted vault for Aave GHO/USDT/USDC LP on Avalanche."
     },
     "── LENDING: Aave V2 ──────────────────────────────────────────────────": {},
     "0x7d2768de32b0b80b7a3454c06bdac94a69ddc7a9": {
@@ -1545,10 +1612,33 @@
       "family": "AGGREGATOR",
       "role": "GAS_PAYER",
       "networks": [
+        "ETHEREUM",
+        "ARBITRUM",
+        "OPTIMISM",
         "BASE",
-        "LINEA"
+        "BSC",
+        "AVALANCHE",
+        "MANTLE",
+        "LINEA",
+        "UNICHAIN",
+        "KATANA",
+        "PLASMA"
       ],
-      "confidence": "HIGH"
+      "confidence": "HIGH",
+      "notes": "Cross-chain relay solver payout; inbound receipts classify as BRIDGE_IN"
+    },
+    "0xc59fe32c9549e3e8b5dccdabc45bd287bd5ba2bc": {
+      "name": "Relay Depository (Katana)",
+      "protocol": "Relay",
+      "version": "Depository",
+      "family": "BRIDGE",
+      "role": "BRIDGE_ENTRY",
+      "event_type": "BRIDGE_OUT",
+      "networks": [
+        "KATANA"
+      ],
+      "confidence": "HIGH",
+      "notes": "startBridgeTokensViaRelayDepository (0x092e8fa4) source-side bridge"
     },
     "0x91604f590d66ace8975eed6bd16cf55647d1c499": {
       "name": "Relay Solver Payout",

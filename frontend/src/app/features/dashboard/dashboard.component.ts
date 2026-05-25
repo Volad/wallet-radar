@@ -99,6 +99,14 @@ interface TokenFamilyRow {
   readonly unsupportedValuationReason: string | null;
 }
 
+interface AllocationRow {
+  readonly id: string;
+  readonly label: string;
+  readonly icon: string | null;
+  readonly valueUsd: number;
+  readonly sharePct: number;
+}
+
 const TRANSACTION_TYPES_BY_ID = new Set<TransactionType>([
   'SWAP',
   'WRAP',
@@ -332,6 +340,16 @@ export class DashboardComponent {
       if (phaseProgress.phase === 'PRICING') {
         return `priced tx: ${phaseProgress.processedCount} · left: ${phaseProgress.leftCount}`;
       }
+      if (
+        phaseProgress.phase === 'BACKFILL' &&
+        phaseProgress.totalCount !== null &&
+        phaseProgress.totalCount !== undefined &&
+        status.totalTargets !== null &&
+        status.totalTargets !== undefined &&
+        phaseProgress.totalCount > status.totalTargets
+      ) {
+        return `segments: ${phaseProgress.processedCount}/${phaseProgress.totalCount} complete · ${phaseProgress.leftCount} pending`;
+      }
       return `processed: ${phaseProgress.processedCount} · left: ${phaseProgress.leftCount}`;
     }
     if (status.pipelineMessage !== null && status.pipelineMessage !== undefined && status.pipelineMessage.length > 0) {
@@ -399,12 +417,16 @@ export class DashboardComponent {
     if (status === null) {
       return [];
     }
-    return status.wallets.map((wallet) => ({
-      id: wallet.address.toLowerCase(),
-      label: wallet.label,
-      address: wallet.address.toLowerCase(),
-      color: wallet.color,
-    }));
+    return status.wallets.map((wallet) => {
+      const address = wallet.address.trim();
+      const scopeId = address.startsWith('0x') ? address.toLowerCase() : address;
+      return {
+        id: scopeId,
+        label: wallet.label,
+        address,
+        color: wallet.color,
+      };
+    });
   });
 
   readonly transactionPaneIntegrations = computed<ReadonlyArray<WalletInfo>>(() =>
@@ -462,8 +484,34 @@ export class DashboardComponent {
   });
 
   readonly filterNetworks = computed<ReadonlyArray<NetworkInfo>>(() => {
-    const sessionNetworks = this.sessionNetworks();
-    return sessionNetworks.length > 0 ? sessionNetworks : this.data().networks;
+    const fromSession = this.sessionNetworks();
+    const fromData = this.data().networks;
+    const byId = new Map<NetworkId, NetworkInfo>();
+    for (const network of fromSession) {
+      byId.set(network.id, network);
+    }
+    for (const network of fromData) {
+      if (!byId.has(network.id)) {
+        byId.set(network.id, network);
+      }
+    }
+    let merged = [...byId.values()];
+    if (
+      this.sessionIntegrations().length > 0 &&
+      !merged.some((network) => network.id === 'BYBIT')
+    ) {
+      const presentation = INTEGRATION_PRESENTATION_BY_PROVIDER.get('BYBIT');
+      merged = [
+        ...merged,
+        {
+          id: 'BYBIT',
+          icon: presentation?.icon ?? '◈',
+          label: presentation?.label ?? 'Bybit',
+          color: presentation?.color ?? COLORS.textSubtle,
+        },
+      ];
+    }
+    return merged;
   });
 
   readonly transactionPaneTransactions = computed(() => {
@@ -491,13 +539,11 @@ export class DashboardComponent {
   readonly filteredTokenPositions = computed(() => {
     const selectedWallets = this.selectedWalletFilter();
     const hasCustomIntegrationFilter = this.integrationFilterMode() === 'custom';
+    const selectedIntegrations = this.selectedIntegrationFilter();
     const selectedNetworks = this.selectedNetworkFilter();
     const hideDust = this.hideDustAssets();
 
     return this.data().tokenPositions.filter((asset) => {
-      if (hasCustomIntegrationFilter) {
-        return false;
-      }
       if (hideDust && asset.quantity * asset.priceUsd < 0.5) {
         return false;
       }
@@ -506,6 +552,16 @@ export class DashboardComponent {
       }
       if (selectedNetworks.size > 0 && !selectedNetworks.has(asset.networkId)) {
         return false;
+      }
+      if (hasCustomIntegrationFilter) {
+        const walletId = asset.walletId.toLowerCase();
+        const matches = [...selectedIntegrations].some((ref) => {
+          const normalizedRef = ref.trim().toLowerCase();
+          return normalizedRef.length > 0 && (walletId === normalizedRef || walletId.startsWith(`${normalizedRef}:`));
+        });
+        if (!matches) {
+          return false;
+        }
       }
 
       return true;
@@ -668,6 +724,64 @@ export class DashboardComponent {
     return this.filteredTokenFamilies().reduce((total, token) => total + token.currentValueUsd, 0);
   });
 
+  readonly tokenUsdByNetwork = computed<ReadonlyArray<AllocationRow>>(() => {
+    const positions = this.filteredTokenPositions();
+    const totals = new Map<NetworkId, number>();
+    let totalUsd = 0;
+    for (const position of positions) {
+      const valueUsd = position.marketValueUsd ?? 0;
+      if (!Number.isFinite(valueUsd) || valueUsd <= 0) {
+        continue;
+      }
+      totalUsd += valueUsd;
+      totals.set(position.networkId, (totals.get(position.networkId) ?? 0) + valueUsd);
+    }
+    if (totalUsd <= 0) {
+      return [];
+    }
+    return [...totals.entries()]
+      .map(([networkId, valueUsd]): AllocationRow => {
+        const network = this.getNetworkById(networkId);
+        return {
+          id: networkId,
+          label: network?.label ?? networkId,
+          icon: network?.icon ?? null,
+          valueUsd,
+          sharePct: (valueUsd / totalUsd) * 100,
+        };
+      })
+      .sort((left, right) => right.valueUsd - left.valueUsd);
+  });
+
+  readonly tokenUsdByWallet = computed<ReadonlyArray<AllocationRow>>(() => {
+    const positions = this.filteredTokenPositions();
+    const totals = new Map<WalletId, number>();
+    let totalUsd = 0;
+    for (const position of positions) {
+      const valueUsd = position.marketValueUsd ?? 0;
+      if (!Number.isFinite(valueUsd) || valueUsd <= 0) {
+        continue;
+      }
+      totalUsd += valueUsd;
+      totals.set(position.walletId, (totals.get(position.walletId) ?? 0) + valueUsd);
+    }
+    if (totalUsd <= 0) {
+      return [];
+    }
+    return [...totals.entries()]
+      .map(([walletId, valueUsd]): AllocationRow => {
+        const wallet = this.getWalletById(walletId);
+        return {
+          id: walletId,
+          label: this.walletLabel(walletId),
+          icon: wallet === null ? null : '●',
+          valueUsd,
+          sharePct: (valueUsd / totalUsd) * 100,
+        };
+      })
+      .sort((left, right) => right.valueUsd - left.valueUsd);
+  });
+
   readonly totalOpenLpFeesUsd = computed(() => {
     return this.data()
       .lpPositions.filter((position) => position.status === 'open')
@@ -707,6 +821,20 @@ export class DashboardComponent {
       this.stopBackfillPolling();
     });
     this.restoreSessionBackfillIfNeeded();
+    effect(() => {
+      if (this.isSettingsMode()) {
+        return;
+      }
+      if (this.currentSessionId() !== null) {
+        return;
+      }
+      const storedSessionId = this.sessionStorageService.getSessionId();
+      if (storedSessionId && storedSessionId.trim().length > 0) {
+        this.currentSessionId.set(storedSessionId.trim());
+        return;
+      }
+      void this.router.navigate(['/settings']);
+    });
     effect(() => {
       const routeSessionId = this.routeAssetLedgerSelection().sessionId;
       if (routeSessionId === null || routeSessionId.length === 0 || routeSessionId === this.currentSessionId()) {
@@ -936,7 +1064,7 @@ export class DashboardComponent {
         takeUntilDestroyed(this.destroyRef),
         map((response) => ({
           sessionId: response.sessionId ?? requestPayload.sessionId,
-          message: response.message ?? 'Session saved, backfill started',
+          message: response.message ?? 'Session saved, universe sync scheduled',
         })),
         catchError((error: HttpErrorResponse) => {
           this.walletSubmitState.set('error');
@@ -1488,7 +1616,19 @@ export class DashboardComponent {
   }
 
   walletLabel(walletId: WalletId): string {
-    return this.getWalletById(walletId)?.label ?? this.getIntegrationByRef(walletId)?.label ?? walletId;
+    const wallet = this.getWalletById(walletId);
+    if (wallet !== null) {
+      const normalizedId = walletId.toLowerCase();
+      if (normalizedId.startsWith('bybit:')) {
+        const parts = normalizedId.split(':');
+        const suffix = parts.length >= 3 ? parts[2].toUpperCase() : null;
+        if (suffix === 'UTA' || suffix === 'FUND' || suffix === 'EARN') {
+          return `${wallet.label} · ${suffix}`;
+        }
+      }
+      return wallet.label;
+    }
+    return this.getIntegrationByRef(walletId)?.label ?? walletId;
   }
 
   private clearSessionTracking(clearStorage: boolean): void {

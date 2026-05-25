@@ -16,6 +16,7 @@ public class ReplayTransactionRouter {
             NormalizedTransaction transaction,
             Predicate<NormalizedTransaction> gmxLpEntryRequestMatcher,
             Predicate<NormalizedTransaction> gmxLpEntrySettlementMatcher,
+            Predicate<NormalizedTransaction> lpReceiptEntryMatcher,
             Predicate<NormalizedTransaction> positionScopedLpExitMatcher,
             Function<NormalizedTransaction, LiquidStakingFlowSelection> liquidStakingSelector,
             Function<NormalizedTransaction, SimpleFamilyCustodySelection> familyCustodySelector
@@ -31,6 +32,9 @@ public class ReplayTransactionRouter {
         }
         if (gmxLpEntrySettlementMatcher.test(transaction)) {
             return ReplayRoutingDecision.of(ReplayRoute.GMX_LP_ENTRY_SETTLEMENT);
+        }
+        if (lpReceiptEntryMatcher.test(transaction)) {
+            return ReplayRoutingDecision.of(ReplayRoute.LP_RECEIPT_ENTRY);
         }
         if (transaction.getType() == NormalizedTransactionType.LP_EXIT_SETTLEMENT) {
             return ReplayRoutingDecision.of(ReplayRoute.ASYNC_LP_EXIT_SETTLEMENT);

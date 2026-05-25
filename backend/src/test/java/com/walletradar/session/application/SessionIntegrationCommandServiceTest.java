@@ -2,6 +2,7 @@ package com.walletradar.session.application;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.walletradar.session.application.AccountUniverseSyncPlanScheduler;
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.domain.session.UserSessionRepository;
 import com.walletradar.domain.sync.BackfillSegmentRepository;
@@ -33,7 +34,7 @@ class SessionIntegrationCommandServiceTest {
     @Mock
     private IntegrationSyncStatusService integrationSyncStatusService;
     @Mock
-    private AccountUniverseSyncPlannerService accountUniverseSyncPlannerService;
+    private AccountUniverseSyncPlanScheduler accountUniverseSyncPlanScheduler;
 
     private SessionIntegrationCommandService sessionIntegrationCommandService;
 
@@ -45,7 +46,7 @@ class SessionIntegrationCommandServiceTest {
                 sessionSecretCryptoService,
                 bybitApiClient,
                 integrationSyncStatusService,
-                accountUniverseSyncPlannerService,
+                accountUniverseSyncPlanScheduler,
                 new ObjectMapper()
         );
     }
@@ -93,7 +94,7 @@ class SessionIntegrationCommandServiceTest {
             assertThat(integration.getEncryptedCredentials()).isSameAs(encryptedSecret);
             assertThat(integration.getSyncState()).isNotNull();
         });
-        verify(accountUniverseSyncPlannerService).sync("session-1", saved.getUpdatedAt());
+        verify(accountUniverseSyncPlanScheduler).schedule("session-1", saved.getUpdatedAt());
     }
 
     @Test
@@ -114,6 +115,6 @@ class SessionIntegrationCommandServiceTest {
         verify(integrationSyncStatusService).delete("BYBIT-33625378");
         verify(userSessionRepository).save(session);
         assertThat(session.getIntegrations()).isEmpty();
-        verify(accountUniverseSyncPlannerService).sync("session-1", session.getUpdatedAt());
+        verify(accountUniverseSyncPlanScheduler).schedule("session-1", session.getUpdatedAt());
     }
 }

@@ -8,6 +8,7 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.session.application.AccountingUniverseService;
+import com.walletradar.session.application.SessionWalletAdjacencyService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoOperations;
@@ -41,6 +42,7 @@ public class InternalTransferPairLinkService {
     private final MongoOperations mongoOperations;
     private final NormalizedTransactionRepository normalizedTransactionRepository;
     private final AccountingUniverseService accountingUniverseService;
+    private final SessionWalletAdjacencyService sessionWalletAdjacencyService;
 
     public int reconcileOutstandingPairs(int batchSize) {
         int changed = 0;
@@ -130,8 +132,15 @@ public class InternalTransferPairLinkService {
         if (!sameHashFree(left.getTxHash(), right.getTxHash())
                 || left.getNetworkId() != right.getNetworkId()
                 || !sameHashFree(left.getMatchedCounterparty(), right.getWalletAddress())
-                || !sameHashFree(right.getMatchedCounterparty(), left.getWalletAddress())
-                || !accountingUniverseService.shareUniverseMembers(left.getWalletAddress(), right.getWalletAddress())) {
+                || !sameHashFree(right.getMatchedCounterparty(), left.getWalletAddress())) {
+            return false;
+        }
+        boolean sameOwnerScope = accountingUniverseService.shareUniverseMembers(left.getWalletAddress(), right.getWalletAddress())
+                || sessionWalletAdjacencyService.anySessionListsBothAddresses(
+                        left.getWalletAddress(),
+                        right.getWalletAddress()
+                );
+        if (!sameOwnerScope) {
             return false;
         }
 

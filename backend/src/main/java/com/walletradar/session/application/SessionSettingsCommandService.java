@@ -3,8 +3,10 @@ package com.walletradar.session.application;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.walletradar.api.dto.PutSessionSettingsRequest;
+import com.walletradar.domain.common.NetworkAddressFormat;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.session.UserSession;
+import com.walletradar.session.support.TonAddressCanonicalizer;
 import com.walletradar.domain.session.UserSessionRepository;
 import com.walletradar.domain.sync.BackfillSegmentRepository;
 import com.walletradar.ingestion.wallet.command.TrackedWalletProjectionService;
@@ -32,7 +34,7 @@ public class SessionSettingsCommandService {
 
     private final UserSessionRepository userSessionRepository;
     private final TrackedWalletProjectionService trackedWalletProjectionService;
-    private final AccountUniverseSyncPlannerService accountUniverseSyncPlannerService;
+    private final AccountUniverseSyncPlanScheduler accountUniverseSyncPlanScheduler;
     private final SessionSecretCryptoService sessionSecretCryptoService;
     private final BybitApiClient bybitApiClient;
     private final BackfillSegmentRepository backfillSegmentRepository;
@@ -52,7 +54,11 @@ public class SessionSettingsCommandService {
         List<UserSession.SessionWallet> previousWallets = session.getWallets() == null
                 ? List.of()
                 : new ArrayList<>(session.getWallets());
-        Set<String> previousUniverseKeys = sourceKeys(previousWallets, session.getIntegrations());
+        Set<String> previousUniverseKeys = sourceKeys(
+                previousWallets,
+                session.getIntegrations(),
+                session.getSettings() == null ? List.of() : session.getSettings().getExternalVenues()
+        );
         List<UserSession.SessionWallet> normalizedWallets = normalizeWallets(request.wallets());
 
         session.setWallets(new ArrayList<>(normalizedWallets));
@@ -69,9 +75,14 @@ public class SessionSettingsCommandService {
         userSessionRepository.save(session);
 
         trackedWalletProjectionService.replaceSessionWallets(previousWallets, normalizedWallets, now);
-        boolean universeChanged = !previousUniverseKeys.equals(sourceKeys(session.getWallets(), session.getIntegrations()));
+        Set<String> newUniverseKeys = sourceKeys(
+                session.getWallets(),
+                session.getIntegrations(),
+                session.getSettings() == null ? List.of() : session.getSettings().getExternalVenues()
+        );
+        boolean universeChanged = !previousUniverseKeys.equals(newUniverseKeys);
         if (universeChanged) {
-            accountUniverseSyncPlannerService.sync(session.getId(), now);
+            accountUniverseSyncPlanScheduler.schedule(session.getId(), now);
         }
 
         return session;
@@ -86,7 +97,49 @@ public class SessionSettingsCommandService {
         settings.setShowReconciliationWarnings(
                 request.showReconciliationWarnings() == null ? Boolean.TRUE : request.showReconciliationWarnings()
         );
+        settings.setExternalVenues(normalizeExternalVenues(request.externalVenues()));
         return settings;
+    }
+
+    private List<UserSession.ExternalVenue> normalizeExternalVenues(
+            List<PutSessionSettingsRequest.ExternalVenueEntry> entries
+    ) {
+        if (entries == null || entries.isEmpty()) {
+            return new ArrayList<>();
+        }
+        Map<String, UserSession.ExternalVenue> merged = new LinkedHashMap<>();
+        for (PutSessionSettingsRequest.ExternalVenueEntry entry : entries) {
+            if (entry == null || entry.address() == null || entry.address().isBlank()) {
+                continue;
+            }
+            NetworkId fallbackNetwork = (entry.networks() != null && !entry.networks().isEmpty())
+                    ? entry.networks().get(0)
+                    : NetworkId.ETHEREUM;
+            String canonical = NetworkAddressFormat.canonicalAddress(fallbackNetwork, entry.address());
+            if (canonical == null || canonical.isBlank()) {
+                continue;
+            }
+            UserSession.ExternalVenue venue = merged.computeIfAbsent(canonical, ignored -> {
+                UserSession.ExternalVenue created = new UserSession.ExternalVenue();
+                created.setAddress(canonical);
+                created.setNetworks(new ArrayList<>());
+                return created;
+            });
+            if (entry.label() != null && !entry.label().isBlank()) {
+                venue.setLabel(entry.label().trim());
+            }
+            if (entry.provider() != null && !entry.provider().isBlank()) {
+                venue.setProvider(entry.provider().trim().toUpperCase(Locale.ROOT));
+            }
+            LinkedHashSet<NetworkId> combinedNetworks = new LinkedHashSet<>(
+                    venue.getNetworks() == null ? List.of() : venue.getNetworks()
+            );
+            if (entry.networks() != null) {
+                combinedNetworks.addAll(entry.networks());
+            }
+            venue.setNetworks(new ArrayList<>(combinedNetworks));
+        }
+        return new ArrayList<>(merged.values());
     }
 
     private void syncIntegrations(
@@ -270,13 +323,42 @@ public class SessionSettingsCommandService {
         return List.copyOf(capabilities);
     }
 
+    private static NetworkId resolvePrimaryWalletNetwork(PutSessionSettingsRequest.WalletEntry entry) {
+        List<NetworkId> networks = entry.networks();
+        if (networks != null) {
+            if (networks.contains(NetworkId.SOLANA)) {
+                return NetworkId.SOLANA;
+            }
+            if (networks.contains(NetworkId.TON)) {
+                return NetworkId.TON;
+            }
+        }
+        String raw = entry.address() == null ? "" : entry.address().trim();
+        if (TonAddressCanonicalizer.looksLikeTon(raw)) {
+            return NetworkId.TON;
+        }
+        if (!raw.startsWith("0x") && !raw.startsWith("0X") && raw.length() >= 32) {
+            return NetworkId.SOLANA;
+        }
+        return NetworkId.ETHEREUM;
+    }
+
+    private static String canonicalWalletAddress(String address, NetworkId network) {
+        String canonical = NetworkAddressFormat.canonicalAddress(network, address);
+        return canonical == null ? "" : canonical;
+    }
+
     private List<UserSession.SessionWallet> normalizeWallets(List<PutSessionSettingsRequest.WalletEntry> walletEntries) {
         if (walletEntries == null || walletEntries.isEmpty()) {
             return List.of();
         }
         Map<String, UserSession.SessionWallet> merged = new LinkedHashMap<>();
         for (PutSessionSettingsRequest.WalletEntry entry : walletEntries) {
-            String canonicalAddress = entry.address().trim().toLowerCase(Locale.ROOT);
+            NetworkId primaryNetwork = resolvePrimaryWalletNetwork(entry);
+            String canonicalAddress = canonicalWalletAddress(entry.address(), primaryNetwork);
+            if (canonicalAddress.isBlank()) {
+                continue;
+            }
             UserSession.SessionWallet wallet = merged.computeIfAbsent(canonicalAddress, ignored -> {
                 UserSession.SessionWallet created = new UserSession.SessionWallet();
                 created.setAddress(canonicalAddress);
@@ -301,7 +383,8 @@ public class SessionSettingsCommandService {
 
     private Set<String> sourceKeys(
             List<UserSession.SessionWallet> wallets,
-            List<UserSession.SessionIntegration> integrations
+            List<UserSession.SessionIntegration> integrations,
+            List<UserSession.ExternalVenue> externalVenues
     ) {
         Set<String> keys = new LinkedHashSet<>();
         if (wallets != null) {
@@ -311,7 +394,7 @@ public class SessionSettingsCommandService {
                 }
                 for (NetworkId network : wallet.getNetworks() == null ? List.<NetworkId>of() : wallet.getNetworks()) {
                     if (network != null) {
-                        keys.add("WALLET|" + wallet.getAddress().trim().toLowerCase(Locale.ROOT) + "|" + network.name());
+                        keys.add("WALLET|" + wallet.getAddress().trim() + "|" + network.name());
                     }
                 }
             }
@@ -325,6 +408,14 @@ public class SessionSettingsCommandService {
                     continue;
                 }
                 keys.add("INTEGRATION|" + integration.getIntegrationId().trim());
+            }
+        }
+        if (externalVenues != null) {
+            for (UserSession.ExternalVenue venue : externalVenues) {
+                if (venue == null || venue.getAddress() == null || venue.getAddress().isBlank()) {
+                    continue;
+                }
+                keys.add("VENUE|" + venue.getAddress().trim());
             }
         }
         return keys;

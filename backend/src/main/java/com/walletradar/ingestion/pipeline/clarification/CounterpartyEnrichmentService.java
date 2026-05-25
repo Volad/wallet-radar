@@ -2,7 +2,9 @@ package com.walletradar.ingestion.pipeline.clarification;
 
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.domain.transaction.raw.RawTransaction;
+import com.walletradar.ingestion.pipeline.onchain.OnChainRawTransactionView;
 import com.walletradar.domain.transaction.raw.RawTransactionRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -103,11 +105,60 @@ public class CounterpartyEnrichmentService {
             normalizedTransaction.setCounterpartyResolutionEvidence(resolved.evidence());
             changed = true;
         }
+        if (promoteExternalTransferToInternal(normalizedTransaction)) {
+            changed = true;
+        }
+        if (enrichFlowCounterparty(normalizedTransaction, rawTransaction)) {
+            changed = true;
+        }
+        FlowCounterpartySupport.applyTransactionCounterparty(normalizedTransaction);
         if (!changed) {
             return false;
         }
 
         normalizedTransaction.setUpdatedAt(now == null ? Instant.now() : now);
+        return true;
+    }
+
+    private boolean promoteExternalTransferToInternal(NormalizedTransaction transaction) {
+        if (transaction == null || transaction.getType() == null || transaction.getCounterpartyType() == null) {
+            return false;
+        }
+        boolean ownCounterparty = CounterpartyType.PERSONAL_WALLET.equals(transaction.getCounterpartyType())
+                || CounterpartyType.CEX.equals(transaction.getCounterpartyType());
+        if (!ownCounterparty) {
+            return false;
+        }
+        NormalizedTransactionType type = transaction.getType();
+        if (type != NormalizedTransactionType.EXTERNAL_TRANSFER_IN
+                && type != NormalizedTransactionType.EXTERNAL_TRANSFER_OUT) {
+            return false;
+        }
+        transaction.setType(NormalizedTransactionType.INTERNAL_TRANSFER);
+        if (Boolean.TRUE.equals(transaction.getExcludedFromAccounting())) {
+            transaction.setExcludedFromAccounting(false);
+            transaction.setAccountingExclusionReason(null);
+        }
+        return true;
+    }
+
+    private boolean enrichFlowCounterparty(
+            NormalizedTransaction transaction,
+            @Nullable RawTransaction rawTransaction
+    ) {
+        if (transaction == null) {
+            return false;
+        }
+        if (rawTransaction == null) {
+            FlowCounterpartySupport.syncFlowsFromTransaction(transaction);
+            return true;
+        }
+        OnChainRawTransactionView view = OnChainRawTransactionView.wrap(rawTransaction);
+        FlowCounterpartySupport.enrichOnChainFlows(
+                transaction,
+                view,
+                (address, networkId) -> resolutionService.classifyCounterpartyType(transaction, address)
+        );
         return true;
     }
 

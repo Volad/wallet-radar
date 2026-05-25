@@ -39,6 +39,14 @@ public class ReplayFlowSupport {
         genericFlowReplayEngine.applyBuy(flow, position);
     }
 
+    public void applyBuyWithAcquisitionCost(
+            NormalizedTransaction.Flow flow,
+            PositionState position,
+            BigDecimal acquisitionCostUsd
+    ) {
+        genericFlowReplayEngine.applyBuyWithAcquisitionCost(flow, position, acquisitionCostUsd);
+    }
+
     public void applySell(NormalizedTransaction.Flow flow, PositionState position) {
         genericFlowReplayEngine.applySell(flow, position);
     }
@@ -74,16 +82,48 @@ public class ReplayFlowSupport {
         genericFlowReplayEngine.applyUnknownTransfer(flow, position);
     }
 
+    public void applyInboundShortfallSpotFallback(
+            NormalizedTransaction.Flow flow,
+            PositionState position,
+            PositionSnapshot before
+    ) {
+        genericFlowReplayEngine.applyInboundShortfallSpotFallback(flow, position, before);
+    }
+
+    public void applyAuthoritativeLateInboundCarryBasis(
+            PositionState destination,
+            BigDecimal provisionalBasisUsd,
+            BigDecimal carryBasisUsd
+    ) {
+        genericFlowReplayEngine.applyAuthoritativeLateInboundCarryBasis(
+                destination,
+                provisionalBasisUsd,
+                carryBasisUsd
+        );
+    }
+
+    public BigDecimal materializePendingInbound(NormalizedTransaction.Flow flow, PositionState position) {
+        return genericFlowReplayEngine.materializePendingInbound(flow, position);
+    }
+
+    public void applyPeggedNativeSpotFallback(
+            NormalizedTransaction.Flow flow,
+            PositionState position,
+            PositionSnapshot before
+    ) {
+        genericFlowReplayEngine.applyPeggedNativeSpotFallback(flow, position, before);
+    }
+
     public void applySponsoredGasIn(NormalizedTransaction.Flow flow, PositionState position) {
         genericFlowReplayEngine.applySponsoredGasIn(flow, position);
     }
 
-    public void materializePendingInbound(NormalizedTransaction.Flow flow, PositionState position) {
-        genericFlowReplayEngine.materializePendingInbound(flow, position);
-    }
-
     public void recomputePerWalletAvco(PositionState position) {
         genericFlowReplayEngine.recomputePerWalletAvco(position);
+    }
+
+    public void purgeOrphanBasisWhenEmpty(PositionState position) {
+        genericFlowReplayEngine.purgeOrphanBasisWhenEmpty(position);
     }
 
     public void resolveTemporaryUnresolved(PositionState position) {
@@ -224,6 +264,9 @@ public class ReplayFlowSupport {
                 flowCopy.setAvcoAtTimeOfSale(flow.getAvcoAtTimeOfSale());
                 flowCopy.setRealisedPnlUsd(flow.getRealisedPnlUsd());
                 flowCopy.setLogIndex(flow.getLogIndex());
+                flowCopy.setCounterpartyAddress(flow.getCounterpartyAddress());
+                flowCopy.setCounterpartyType(flow.getCounterpartyType());
+                flowCopy.setAccountRef(flow.getAccountRef());
                 copy.getFlows().add(flowCopy);
             }
         }

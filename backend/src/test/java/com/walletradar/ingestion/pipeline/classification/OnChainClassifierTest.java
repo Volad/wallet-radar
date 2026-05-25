@@ -69,7 +69,7 @@ class OnChainClassifierTest {
     }
 
     @Test
-    @DisplayName("protocol registry takes precedence over method id")
+    @DisplayName("registry BRIDGE_OUT yields to SWAP when same-tx inbound principal is present")
     void protocolRegistryTakesPrecedenceOverMethodId() {
         RawTransaction rawTransaction = tokenSwapRaw(NetworkId.ETHEREUM);
         when(protocolRegistryService.lookup(NetworkId.ETHEREUM, ROUTER))
@@ -88,9 +88,42 @@ class OnChainClassifierTest {
 
         OnChainClassificationResult result = classifier.classify(rawTransaction);
 
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.SWAP);
+        assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.METHOD_ID);
+    }
+
+    @Test
+    @DisplayName("protocol registry BRIDGE_OUT applies for outbound-only same-tx shape")
+    void protocolRegistryBridgeOutAppliesForOutboundOnlyShape() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.ETHEREUM);
+        rawTransaction.getRawData().put("to", ROUTER);
+        rawTransaction.getRawData().put("methodId", "0x38ed1739");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", TOKEN_A)
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenDecimal", "6")
+                        .append("from", WALLET)
+                        .append("to", ROUTER)
+                        .append("value", "1000000")
+        )).append("internalTransfers", List.of()));
+        when(protocolRegistryService.lookup(NetworkId.ETHEREUM, ROUTER))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        ROUTER,
+                        Set.of(NetworkId.ETHEREUM),
+                        ProtocolRegistryFamily.BRIDGE,
+                        ProtocolRegistryRole.ROUTER,
+                        ProtocolRegistryEventType.BRIDGE_OUT,
+                        ConfidenceLevel.HIGH,
+                        "Test Bridge",
+                        "v1",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.BRIDGE_OUT);
         assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.PROTOCOL_REGISTRY);
-        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
         assertThat(result.protocolName()).isEqualTo("Test Bridge");
     }
 
@@ -1587,6 +1620,91 @@ class OnChainClassifierTest {
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.BRIDGE_OUT);
         assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.PROTOCOL_REGISTRY);
         assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+    }
+
+    @Test
+    @DisplayName("zkSync LiFi execute with same-tx inbound leg is not BRIDGE_OUT")
+    void zkSyncLifiExecuteWithSameTxInboundIsNotBridgeOut() {
+        String lifiDiamond = "0x341e94069f53234fe6dabef707ad424830525715";
+        RawTransaction rawTransaction = baseRaw(NetworkId.ZKSYNC);
+        rawTransaction.getRawData().put("to", lifiDiamond);
+        rawTransaction.getRawData().put("methodId", "0xae0b91e5");
+        rawTransaction.getRawData().put("functionName", "execute(bytes,bytes[],uint256)");
+        rawTransaction.getRawData().put("value", "0");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", TOKEN_A)
+                        .append("tokenSymbol", "ARB")
+                        .append("tokenDecimal", "18")
+                        .append("from", WALLET)
+                        .append("to", lifiDiamond)
+                        .append("value", "1000000000000000000"),
+                new Document("contractAddress", TOKEN_B)
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenDecimal", "6")
+                        .append("from", lifiDiamond)
+                        .append("to", WALLET)
+                        .append("value", "2000000")
+        )).append("internalTransfers", List.of()));
+        when(protocolRegistryService.lookup(NetworkId.ZKSYNC, lifiDiamond))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        lifiDiamond,
+                        Set.of(NetworkId.ZKSYNC),
+                        ProtocolRegistryFamily.BRIDGE,
+                        ProtocolRegistryRole.BRIDGE_ENTRY,
+                        ProtocolRegistryEventType.BRIDGE_OUT,
+                        ConfidenceLevel.HIGH,
+                        "LiFi",
+                        "Diamond",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type())
+                .as("method-aware BRIDGE_OUT must not apply when inbound principal is in the same tx")
+                .isNotEqualTo(NormalizedTransactionType.BRIDGE_OUT);
+    }
+
+    @Test
+    @DisplayName("registry-direct BRIDGE_OUT entry with same-tx inbound declines bridge and becomes SWAP")
+    void registryDirectBridgeOutWithSameTxInboundDeclinesBridgeOut() {
+        String mantleProxy = "0xbdff0c1c8b0b779581c4ac3ba1f29667c366c56e";
+        RawTransaction rawTransaction = baseRaw(NetworkId.MANTLE);
+        rawTransaction.getRawData().put("to", mantleProxy);
+        rawTransaction.getRawData().put("methodId", "0x12345678");
+        rawTransaction.getRawData().put("functionName", "swap");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", TOKEN_A)
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenDecimal", "6")
+                        .append("from", WALLET)
+                        .append("to", mantleProxy)
+                        .append("value", "2505000000"),
+                new Document("contractAddress", TOKEN_B)
+                        .append("tokenSymbol", "USDe")
+                        .append("tokenDecimal", "18")
+                        .append("from", mantleProxy)
+                        .append("to", WALLET)
+                        .append("value", "2506556385456299072582")
+        )).append("internalTransfers", List.of()));
+        when(protocolRegistryService.lookup(NetworkId.MANTLE, mantleProxy))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        mantleProxy,
+                        Set.of(NetworkId.MANTLE),
+                        ProtocolRegistryFamily.BRIDGE,
+                        ProtocolRegistryRole.BRIDGE_ENTRY,
+                        ProtocolRegistryEventType.BRIDGE_OUT,
+                        ConfidenceLevel.HIGH,
+                        "LI.FI",
+                        "V1",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.SWAP);
     }
 
     @Test
@@ -5428,6 +5546,38 @@ class OnChainClassifierTest {
     }
 
     @Test
+    @DisplayName("route-tagged LI.FI diamond with same-tx inbound leg becomes SWAP not BRIDGE_OUT")
+    void liFiRouteWithSameTxInboundLegBecomesSwapNotBridgeOut() {
+        String usde = "0x5d3a1ff2b6bab83b63cd9ad0787074081a52ef34";
+        String usdc = "0x09bc4e0d864854c6afb6eb9a9cdf58ac190d0df9";
+        String mantleProxy = "0xbdff0c1c8b0b779581c4ac3ba1f29667c366c56e";
+        RawTransaction rawTransaction = baseRaw(NetworkId.MANTLE);
+        rawTransaction.getRawData().put("to", mantleProxy);
+        rawTransaction.getRawData().put("methodId", "0xd7a08473");
+        rawTransaction.getRawData().put("functionName",
+                "callDiamondWithEIP2612Signature(address tokenAddress,uint256 amount,uint256 deadline,uint8 v,bytes32 r,bytes32 s,bytes diamondCalldata)");
+        rawTransaction.getRawData().put("input", "0xd7a08473" + asciiHex("jumper.exchange|lifiadapter"));
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", usde)
+                        .append("tokenSymbol", "USDe")
+                        .append("tokenDecimal", "18")
+                        .append("from", WALLET)
+                        .append("to", mantleProxy)
+                        .append("value", "2500000000000000000000"),
+                new Document("contractAddress", usdc)
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenDecimal", "6")
+                        .append("from", mantleProxy)
+                        .append("to", WALLET)
+                        .append("value", "2498349904")
+        )).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.SWAP);
+    }
+
+    @Test
     @DisplayName("blank-method LI.FI route selector recovered from calldata becomes BRIDGE_OUT")
     void blankMethodLifiRouteSelectorRecoveredFromCalldataBecomesBridgeOut() {
         String bridgeEntry = "0x1231deb6f5749ef6ce6943a275a1d3e7486f4eae";
@@ -7737,6 +7887,79 @@ class OnChainClassifierTest {
                                 .append("value", "2000000000000000000")
                 )).append("internalTransfers", List.of()));
         return rawTransaction;
+    }
+
+    @Test
+    @DisplayName("Relay depository startBridgeTokensViaRelayDepository on Katana classifies as BRIDGE_OUT")
+    void relayDepositoryKatanaBridgeOut() {
+        String depository = "0xc59fe32c9549e3e8b5dccdabc45bd287bd5ba2bc";
+        RawTransaction rawTransaction = baseRaw(NetworkId.KATANA);
+        rawTransaction.setTxHash("0x18075f1e8dd52bd84b3b3f30ad7386368824085ca02a7d55fbd4146bcd5fbf47");
+        rawTransaction.getRawData().put("to", depository);
+        rawTransaction.getRawData().put("methodId", "0x092e8fa4");
+        rawTransaction.getRawData().put("value", "2256412857954226");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of())
+                .append("internalTransfers", List.of(
+                        new Document("from", WALLET)
+                                .append("to", depository)
+                                .append("value", "2256412857954226")
+                                .append("isError", "0")
+                )));
+        when(protocolRegistryService.lookup(NetworkId.KATANA, depository))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        depository,
+                        Set.of(NetworkId.KATANA),
+                        ProtocolRegistryFamily.BRIDGE,
+                        ProtocolRegistryRole.BRIDGE_ENTRY,
+                        ProtocolRegistryEventType.BRIDGE_OUT,
+                        ConfidenceLevel.HIGH,
+                        "Relay",
+                        "Depository",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.BRIDGE_OUT);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        assertThat(result.protocolName()).isEqualTo("Relay");
+    }
+
+    @Test
+    @DisplayName("Relay solver payout inbound on Arbitrum classifies as BRIDGE_IN")
+    void relaySolverPayoutArbitrumBridgeIn() {
+        String relaySolver = "0xf70da97812cb96acdf810712aa562db8dfa3dbef";
+        RawTransaction rawTransaction = baseRaw(NetworkId.ARBITRUM);
+        rawTransaction.setTxHash("0x6b659e2f8c26abb85612b64e61f7b40b27439da9e8852a875be9d2f7517f62f7");
+        rawTransaction.getRawData().put("from", relaySolver);
+        rawTransaction.getRawData().put("to", WALLET);
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of())
+                .append("internalTransfers", List.of(
+                        new Document("from", relaySolver)
+                                .append("to", WALLET)
+                                .append("value", "2243255327040116")
+                                .append("isError", "0")
+                )));
+        when(protocolRegistryService.lookup(NetworkId.ARBITRUM, relaySolver))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        relaySolver,
+                        Set.of(NetworkId.ARBITRUM),
+                        ProtocolRegistryFamily.AGGREGATOR,
+                        ProtocolRegistryRole.GAS_PAYER,
+                        null,
+                        ConfidenceLevel.HIGH,
+                        "Relay",
+                        "Solver",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.BRIDGE_IN);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        assertThat(result.protocolName()).isEqualTo("Relay");
     }
 
     private static RawTransaction baseRaw(NetworkId networkId) {

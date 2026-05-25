@@ -10,6 +10,7 @@ import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegist
 import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryService;
 import com.walletradar.ingestion.pipeline.classification.support.DirectMethodIdSupport;
 import com.walletradar.ingestion.pipeline.classification.support.RegistryDecisionSupport;
+import com.walletradar.ingestion.pipeline.classification.support.SameWalletSwapShapeSupport;
 import org.springframework.core.Ordered;
 import org.springframework.stereotype.Component;
 
@@ -57,6 +58,10 @@ public class RegistryDirectTypeClassifier implements OnChainFamilyClassifier {
 
         NormalizedTransactionType type = entry.normalizedType();
         if (type == null) {
+            return Optional.empty();
+        }
+        if (type == NormalizedTransactionType.BRIDGE_OUT
+                && SameWalletSwapShapeSupport.hasSameWalletInboundTransfer(context.movementLegs())) {
             return Optional.empty();
         }
 

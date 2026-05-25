@@ -27,6 +27,10 @@ class ExecutorConfigTest {
     Executor backfillExecutor;
 
     @Autowired
+    @Qualifier(AsyncConfig.UNIVERSE_SYNC_PLAN_EXECUTOR)
+    Executor universeSyncPlanExecutor;
+
+    @Autowired
     @Qualifier(SchedulerConfig.SCHEDULER_POOL)
     ThreadPoolTaskScheduler schedulerPool;
 
@@ -35,6 +39,7 @@ class ExecutorConfigTest {
     void executorsCreated() {
         assertThat(backfillCoordinatorExecutor).isNotNull();
         assertThat(backfillExecutor).isNotNull();
+        assertThat(universeSyncPlanExecutor).isNotNull();
 
         if (backfillCoordinatorExecutor instanceof ThreadPoolTaskExecutor coordinator) {
             assertThat(coordinator.getCorePoolSize()).isEqualTo(1);
@@ -44,6 +49,11 @@ class ExecutorConfigTest {
         if (backfillExecutor instanceof ThreadPoolTaskExecutor worker) {
             assertThat(worker.getCorePoolSize()).isEqualTo(4);
             assertThat(worker.getMaxPoolSize()).isEqualTo(18);
+        }
+
+        if (universeSyncPlanExecutor instanceof ThreadPoolTaskExecutor universe) {
+            assertThat(universe.getCorePoolSize()).isEqualTo(2);
+            assertThat(universe.getMaxPoolSize()).isEqualTo(4);
         }
     }
 

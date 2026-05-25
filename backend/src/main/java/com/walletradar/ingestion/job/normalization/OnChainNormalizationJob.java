@@ -73,7 +73,7 @@ public class OnChainNormalizationJob {
                     "On-chain normalization running"
             );
             while (true) {
-                int batchProcessed = onChainNormalizationService.processNextBatch();
+                int batchProcessed = onChainNormalizationService.processNextBatch(sessionId);
                 processed += batchProcessed;
                 lastHeartbeatAt = maybeHeartbeat(sessionId, UserSession.PipelineStage.ON_CHAIN_NORMALIZATION, "On-chain normalization running", lastHeartbeatAt);
                 if (batchProcessed == 0) {

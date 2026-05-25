@@ -32,6 +32,28 @@ class OnChainClassificationSupportTest {
     }
 
     @Test
+    void bridgeOutPrincipalFlowUsesTransferRole() {
+        List<NormalizedTransaction.Flow> flows = OnChainClassificationSupport.toFlows(
+                List.of(RawLeg.nativeAsset("ETH", new BigDecimal("-0.5"))),
+                NormalizedTransactionType.BRIDGE_OUT
+        );
+
+        assertThat(flows).hasSize(1);
+        assertThat(flows.getFirst().getRole()).isEqualTo(NormalizedLegRole.TRANSFER);
+    }
+
+    @Test
+    void bridgeInPrincipalFlowUsesTransferRole() {
+        List<NormalizedTransaction.Flow> flows = OnChainClassificationSupport.toFlows(
+                List.of(RawLeg.nativeAsset("ETH", new BigDecimal("0.5"))),
+                NormalizedTransactionType.BRIDGE_IN
+        );
+
+        assertThat(flows).hasSize(1);
+        assertThat(flows.getFirst().getRole()).isEqualTo(NormalizedLegRole.TRANSFER);
+    }
+
+    @Test
     void lendingWithdrawNetsReceiptLegsBeforeMaterializingExcess() {
         List<NormalizedTransaction.Flow> flows = OnChainClassificationSupport.toFlows(
                 List.of(

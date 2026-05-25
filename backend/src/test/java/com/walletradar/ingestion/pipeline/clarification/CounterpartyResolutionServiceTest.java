@@ -139,7 +139,7 @@ class CounterpartyResolutionServiceTest {
                         false,
                         null
                 )));
-        CounterpartyResolutionService registryBackedService = new CounterpartyResolutionService(registryService);
+        CounterpartyResolutionService registryBackedService = new CounterpartyResolutionService(registryService, null);
 
         OptionalResult result = new OptionalResult(registryBackedService.resolve(
                 normalized(NormalizedTransactionType.VAULT_WITHDRAW),
@@ -176,7 +176,7 @@ class CounterpartyResolutionServiceTest {
                         false,
                         null
                 )));
-        CounterpartyResolutionService registryBackedService = new CounterpartyResolutionService(registryService);
+        CounterpartyResolutionService registryBackedService = new CounterpartyResolutionService(registryService, null);
 
         CounterpartyResolutionService.ResolvedCounterparty result = registryBackedService.resolveMetadata(
                 normalized(NormalizedTransactionType.SWAP),

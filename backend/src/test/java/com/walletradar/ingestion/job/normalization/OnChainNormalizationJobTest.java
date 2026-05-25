@@ -27,7 +27,7 @@ class OnChainNormalizationJobTest {
         properties.setEnabled(true);
 
         OnChainNormalizationService normalizationService = mock(OnChainNormalizationService.class);
-        when(normalizationService.processNextBatch()).thenReturn(2, 3, 0);
+        when(normalizationService.processNextBatch(null)).thenReturn(2, 3, 0);
 
         List<Object> events = new ArrayList<>();
         ApplicationEventPublisher publisher = events::add;
@@ -58,7 +58,7 @@ class OnChainNormalizationJobTest {
         properties.setEnabled(true);
 
         OnChainNormalizationService normalizationService = mock(OnChainNormalizationService.class);
-        when(normalizationService.processNextBatch()).thenReturn(0);
+        when(normalizationService.processNextBatch(null)).thenReturn(0);
 
         ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
         SessionPipelineActivityService pipelineActivityService = mock(SessionPipelineActivityService.class);
@@ -85,7 +85,7 @@ class OnChainNormalizationJobTest {
         properties.setEnabled(true);
 
         OnChainNormalizationService normalizationService = mock(OnChainNormalizationService.class);
-        when(normalizationService.processNextBatch()).thenReturn(0);
+        when(normalizationService.processNextBatch("session-1")).thenReturn(0);
 
         List<Object> events = new ArrayList<>();
         ApplicationEventPublisher publisher = events::add;

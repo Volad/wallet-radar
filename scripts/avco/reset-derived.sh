@@ -21,7 +21,13 @@ done
 
 mongo_uri=$(resolve_mongo_uri)
 
+# Bybit: this script only resets bybit_extracted_events.status to RAW and clears bridge correlation fields.
+# It does NOT re-run BybitExtractionService — fields such as basisRelevant stay as stored. After extraction-rule
+# changes, either run the backend pipeline (normalization refreshes basisRelevant from integration_raw_events)
+# or use admin full-rebuild for that integration (deletes raw+extracted and re-backfills from the API).
+
 printf 'Resetting downstream pipeline state against %s\n' "$mongo_uri"
+printf 'Note: bybit_extracted_events basisRelevant is not reset here; see comment in %s\n' "$0" >&2
 
 run_mongosh "$mongo_uri" <<EOF
 const clearPricingCache = ${clear_pricing_cache};
@@ -84,6 +90,8 @@ db.getCollection("bybit_extracted_events").updateMany(
 
 db.getCollection("normalized_transactions").deleteMany({});
 db.getCollection("asset_ledger_points").deleteMany({});
+db.getCollection("counterparty_basis_pools").deleteMany({});
+db.getCollection("borrow_liabilities").deleteMany({});
 db.getCollection("on_chain_balances").deleteMany({});
 db.getCollection("user_sessions").updateMany({}, {\$unset: {pipelineState: ""}});
 
@@ -107,6 +115,10 @@ const after = {
 printjson({
   resetCompletedAt: new Date().toISOString(),
   clearPricingCache,
+  pipelineNotes: [
+    "bybit_extracted_events: only status RAW + onChainCorrelation unset; basisRelevant unchanged (extraction not re-run).",
+    "After Bybit rule changes: rely on backend normalization refresh from integration_raw_events, or admin full-rebuild (API re-backfill)."
+  ],
   before,
   after
 });

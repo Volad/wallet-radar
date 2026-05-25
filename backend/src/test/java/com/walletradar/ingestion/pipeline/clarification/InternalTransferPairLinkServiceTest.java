@@ -8,6 +8,7 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.session.application.AccountingUniverseService;
+import com.walletradar.session.application.SessionWalletAdjacencyService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -43,15 +44,23 @@ class InternalTransferPairLinkServiceTest {
     private NormalizedTransactionRepository normalizedTransactionRepository;
     @Mock
     private AccountingUniverseService accountingUniverseService;
+    @Mock
+    private SessionWalletAdjacencyService sessionWalletAdjacencyService;
 
     private InternalTransferPairLinkService service;
 
     @BeforeEach
     void setUp() {
-        service = new InternalTransferPairLinkService(mongoOperations, normalizedTransactionRepository, accountingUniverseService);
+        service = new InternalTransferPairLinkService(
+                mongoOperations,
+                normalizedTransactionRepository,
+                accountingUniverseService,
+                sessionWalletAdjacencyService
+        );
         lenient().when(normalizedTransactionRepository.saveAll(any())).thenAnswer(invocation -> invocation.getArgument(0));
         lenient().when(accountingUniverseService.shareUniverseMembers(WALLET_A, WALLET_B)).thenReturn(true);
         lenient().when(accountingUniverseService.shareUniverseMembers(WALLET_B, WALLET_A)).thenReturn(true);
+        lenient().when(sessionWalletAdjacencyService.anySessionListsBothAddresses(any(), any())).thenReturn(false);
     }
 
     @Test

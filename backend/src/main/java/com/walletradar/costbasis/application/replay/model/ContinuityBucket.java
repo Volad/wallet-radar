@@ -34,7 +34,7 @@ public final class ContinuityBucket {
         totalCostBasisUsd = nonNegative(totalCostBasisUsd.subtract(cost, MC));
         uncoveredQuantity = nonNegative(availableUncovered.subtract(nonNegative(appliedQuantity.subtract(coveredQuantity, MC)), MC));
         return new CarryTransfer(
-                requestedQuantity,
+                appliedQuantity,
                 coveredQuantity,
                 uncoveredQuantityToApply,
                 cost,

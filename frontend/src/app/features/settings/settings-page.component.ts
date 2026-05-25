@@ -3,31 +3,49 @@ import {
   ChangeDetectionStrategy,
   Component,
   computed,
+  DestroyRef,
   inject,
   signal,
 } from '@angular/core';
+import { ViewEncapsulation } from '@angular/core';
 import { FormBuilder, ReactiveFormsModule } from '@angular/forms';
-import { finalize } from 'rxjs';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { finalize, switchMap, tap } from 'rxjs';
 
 import { COLORS, EVM_NETWORKS_PRESENTATION } from '../../core/data/dashboard.constants';
 import {
   EvmNetworkId,
+  OnChainWalletNetworkId,
   PutSessionSettingsRequest,
+  SessionExternalVenueEntry,
   SessionIntegrationResponse,
   SessionSettingsResponse,
 } from '../../core/models/wallet-api.models';
 import { SessionStorageService } from '../../core/services/session-storage.service';
 import { WalletApiService } from '../../core/services/wallet-api.service';
 import { formatDateTimeWithSeconds } from '../../core/utils/date-time.util';
+import { SettingsWizardComponent } from './wizard/settings-wizard.component';
+import { AccountingSettingsSectionComponent } from './sections/accounting-settings-section.component';
+import { GeneralSettingsSectionComponent } from './sections/general-settings-section.component';
+import { IntegrationsSettingsSectionComponent } from './sections/integrations-settings-section.component';
+import { WalletsSettingsSectionComponent } from './sections/wallets-settings-section.component';
 
-type SettingsSectionId = 'wallets' | 'integrations' | 'general';
+type SettingsSectionId = 'wallets' | 'integrations' | 'accounting' | 'general';
 type SettingsSaveScope = SettingsSectionId;
 type StatusTone = 'ready' | 'busy' | 'error' | 'idle';
 
+interface DataSourcesChangeItem {
+  readonly label: string;
+  readonly tag?: string;
+  readonly tagTone?: 'green' | 'amber' | 'red' | 'cyan';
+}
+
+type SettingsSidebarNavIcon = 'monitor' | 'gear';
+
 interface SettingsSectionMeta {
   readonly id: SettingsSectionId;
-  readonly icon: string;
   readonly label: string;
+  readonly navIcon: SettingsSidebarNavIcon;
 }
 
 interface SettingsWalletDraft {
@@ -40,9 +58,8 @@ interface SettingsWalletDraft {
 }
 
 const SETTINGS_SECTIONS: ReadonlyArray<SettingsSectionMeta> = [
-  { id: 'wallets', icon: '◍', label: 'Wallets & Networks' },
-  { id: 'integrations', icon: '⇄', label: 'Integrations' },
-  { id: 'general', icon: '◈', label: 'General' },
+  { id: 'wallets', label: 'Data sources', navIcon: 'monitor' },
+  { id: 'general', label: 'General', navIcon: 'gear' },
 ];
 
 const WALLET_COLOR_PALETTE: ReadonlyArray<string> = [
@@ -60,16 +77,26 @@ const EVM_ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/u;
 @Component({
   selector: 'wr-settings-page',
   standalone: true,
-  imports: [CommonModule, ReactiveFormsModule],
+  imports: [
+    CommonModule,
+    ReactiveFormsModule,
+    SettingsWizardComponent,
+    AccountingSettingsSectionComponent,
+    GeneralSettingsSectionComponent,
+    IntegrationsSettingsSectionComponent,
+    WalletsSettingsSectionComponent,
+  ],
   templateUrl: './settings-page.component.html',
   styleUrl: './settings-page.component.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  encapsulation: ViewEncapsulation.None,
 })
 export class SettingsPageComponent {
   readonly maxWallets = 10;
   private readonly walletApiService = inject(WalletApiService);
   private readonly sessionStorageService = inject(SessionStorageService);
   private readonly formBuilder = inject(FormBuilder);
+  private readonly destroyRef = inject(DestroyRef);
 
   readonly sections = SETTINGS_SECTIONS;
   readonly networksPresentation = EVM_NETWORKS_PRESENTATION;
@@ -79,11 +106,19 @@ export class SettingsPageComponent {
   readonly settings = signal<SessionSettingsResponse | null>(null);
   readonly walletsDraft = signal<ReadonlyArray<SettingsWalletDraft>>([]);
   readonly pendingWallets = signal<ReadonlyArray<SettingsWalletDraft>>([]);
+  /**
+   * Cycle/9 S2: external venues (Paradex/MEX/etc.) round-tripped on save so editing other
+   * settings doesn't wipe the registry. Dedicated UI block lands in a follow-up; for now
+   * venues can be managed via direct PUT /sessions/{id}/settings.
+   */
+  readonly externalVenues = signal<ReadonlyArray<SessionExternalVenueEntry>>([]);
   readonly activeSection = signal<SettingsSectionId>('wallets');
   readonly loading = signal(false);
   readonly savingScope = signal<SettingsSaveScope | null>(null);
   readonly error = signal<string | null>(null);
   readonly saveMessage = signal<string | null>(null);
+  readonly dataSourcesReviewOpen = signal(false);
+  readonly dataSourcesSaving = signal(false);
   readonly showBybitSecret = signal(false);
   readonly signingIn = signal(false);
   readonly walletListDirty = signal(false);
@@ -98,6 +133,14 @@ export class SettingsPageComponent {
     apiKey: [''],
     apiSecret: [''],
   });
+
+  private readonly bybitDraft = signal<{ displayName: string; apiKey: string; apiSecret: string }>({
+    displayName: 'Bybit',
+    apiKey: '',
+    apiSecret: '',
+  });
+
+  private readonly bybitInitialSnapshot = signal<{ apiKey: string }>({ apiKey: '' });
 
   readonly hasSession = computed(() => this.sessionId() !== null);
   readonly bybitIntegration = computed(
@@ -119,12 +162,72 @@ export class SettingsPageComponent {
       ) &&
       this.pendingWallets().every((wallet) => this.walletAddressError(wallet.id) === null)
   );
-  readonly sectionBadge = computed(() => ({
-    wallets: this.walletCount(),
-    integrations: this.settings()?.integrations.length ?? 0,
-  }));
+  readonly dataSourcesChanges = computed<ReadonlyArray<DataSourcesChangeItem>>(() => {
+    const settings = this.settings();
+    if (!settings) {
+      return [];
+    }
+
+    const changes: DataSourcesChangeItem[] = [];
+
+    const draftWallets = this.pendingWallets().length;
+    const validDraftWallets = this.validPendingWalletCount();
+    if (draftWallets > 0) {
+      const hasInvalid = this.hasInvalidPendingWallets();
+      changes.push({
+        label: hasInvalid
+          ? `Add ${draftWallets} new wallet${draftWallets > 1 ? 's' : ''} (fix errors)`
+          : `Add ${draftWallets} new wallet${draftWallets > 1 ? 's' : ''}`,
+        tag: hasInvalid ? `${validDraftWallets}/${draftWallets}` : `+${draftWallets}`,
+        tagTone: hasInvalid ? 'amber' : 'green',
+      });
+    }
+
+    if (this.isBybitCredentialsChanged()) {
+      const integration = this.bybitIntegration();
+      changes.push({
+        label: integration === null ? 'Connect Bybit integration' : 'Update Bybit API credentials',
+        tag: 'Bybit',
+        tagTone: 'amber',
+      });
+    }
+
+    const previousWallets = settings.wallets ?? [];
+    const currentWallets = this.walletsDraft();
+    if (previousWallets.length !== currentWallets.length) {
+      const delta = previousWallets.length - currentWallets.length;
+      if (delta > 0) {
+        changes.push({
+          label: `Remove ${delta} wallet${delta > 1 ? 's' : ''}`,
+          tag: `-${delta}`,
+          tagTone: 'red',
+        });
+      }
+    }
+
+    return changes;
+  });
+
+  readonly dataSourcesChangesCount = computed(() => this.dataSourcesChanges().length);
+  readonly dataSourcesWalletsCount = computed(() => this.walletsDraft().length + this.validPendingWalletCount());
+  readonly dataSourcesEstimatedMinMinutes = computed(() => Math.max(5, this.dataSourcesWalletsCount() * 4));
+  readonly dataSourcesEstimatedMaxMinutes = computed(() => Math.max(15, this.dataSourcesWalletsCount() * 12));
 
   constructor() {
+    this.loadSettings();
+
+    this.bybitForm.valueChanges.pipe(takeUntilDestroyed(this.destroyRef)).subscribe((value) => {
+      this.bybitDraft.set({
+        displayName: value.displayName ?? 'Bybit',
+        apiKey: value.apiKey ?? '',
+        apiSecret: value.apiSecret ?? '',
+      });
+    });
+  }
+
+  onWizardCompleted(): void {
+    const sessionId = this.sessionStorageService.getSessionId();
+    this.sessionId.set(sessionId);
     this.loadSettings();
   }
 
@@ -275,35 +378,55 @@ export class SettingsPageComponent {
       this.error.set('Fix invalid or duplicate wallet addresses before saving.');
       return;
     }
-    this.persistSettings(this.buildSettingsPayload(this.bybitIntegration() !== null), 'wallets');
+    const payload = this.tryBuildPayload(this.shouldIncludeBybitInSettingsPayload());
+    if (payload === null) {
+      return;
+    }
+    this.persistSettings(payload, 'wallets');
   }
 
   saveGeneral(): void {
-    this.persistSettings(this.buildSettingsPayload(this.bybitIntegration() !== null), 'general');
+    const payload = this.tryBuildPayload(this.shouldIncludeBybitInSettingsPayload());
+    if (payload === null) {
+      return;
+    }
+    this.persistSettings(payload, 'general');
   }
 
   saveBybit(): void {
-    if (!this.hasBybitPayload()) {
-      this.error.set('Enter both API key and API secret to connect Bybit.');
+    const payload = this.tryBuildPayload(true);
+    if (payload === null) {
       return;
     }
-    this.persistSettings(this.buildSettingsPayload(true), 'integrations');
+    this.persistSettings(payload, 'integrations');
   }
 
   disconnectBybit(): void {
     this.persistSettings(this.buildSettingsPayload(false), 'integrations');
   }
 
+  private tryBuildPayload(includeBybit: boolean): PutSessionSettingsRequest | null {
+    try {
+      return this.buildSettingsPayload(includeBybit);
+    } catch (validation) {
+      this.error.set(validation instanceof Error ? validation.message : 'Invalid Bybit credentials.');
+      return null;
+    }
+  }
+
   resetBybitDraft(): void {
     const bybit = this.bybitIntegration();
+    const initialApiKey = this.bybitInitialSnapshot().apiKey;
+    const displayName = bybit?.displayName ?? 'Bybit';
     this.bybitForm.reset(
       {
-        displayName: bybit?.displayName ?? 'Bybit',
-        apiKey: '',
+        displayName,
+        apiKey: initialApiKey,
         apiSecret: '',
       },
       { emitEvent: false }
     );
+    this.bybitDraft.set({ displayName, apiKey: initialApiKey, apiSecret: '' });
     this.showBybitSecret.set(false);
     this.error.set(null);
   }
@@ -326,6 +449,61 @@ export class SettingsPageComponent {
 
   hasInvalidPendingWallets(): boolean {
     return this.pendingWallets().some((wallet) => this.walletAddressError(wallet.id) !== null);
+  }
+
+  openDataSourcesReview(): void {
+    if (this.dataSourcesChangesCount() === 0) {
+      return;
+    }
+    this.dataSourcesReviewOpen.set(true);
+    this.error.set(null);
+    this.saveMessage.set(null);
+  }
+
+  closeDataSourcesReview(): void {
+    this.dataSourcesReviewOpen.set(false);
+  }
+
+  confirmDataSourcesSave(): void {
+    const sessionId = this.sessionId();
+    if (!sessionId || this.dataSourcesSaving() || this.isSaving()) {
+      return;
+    }
+
+    if (this.hasInvalidPendingWallets()) {
+      this.error.set('Fix invalid or duplicate wallet addresses before saving.');
+      return;
+    }
+
+    let payload: PutSessionSettingsRequest;
+    try {
+      payload = this.buildSettingsPayload(this.shouldIncludeBybitInSettingsPayload());
+    } catch (validation) {
+      this.error.set(validation instanceof Error ? validation.message : 'Invalid Bybit credentials.');
+      return;
+    }
+
+    this.dataSourcesSaving.set(true);
+    this.error.set(null);
+    this.saveMessage.set(null);
+
+    this.walletApiService
+      .putSessionSettings(sessionId, payload)
+      .pipe(
+        switchMap(() => this.walletApiService.refreshSession(sessionId)),
+        switchMap(() => this.walletApiService.getSessionSettings(sessionId)),
+        tap((settings) => this.applySettings(settings)),
+        finalize(() => this.dataSourcesSaving.set(false))
+      )
+      .subscribe({
+        next: () => {
+          this.dataSourcesReviewOpen.set(false);
+          this.saveMessage.set('Changes saved. Pipeline restart triggered.');
+        },
+        error: (errorResponse) => {
+          this.error.set(errorResponse?.error?.message ?? 'Unable to save changes.');
+        },
+      });
   }
 
   statusTone(integration: SessionIntegrationResponse | null): StatusTone {
@@ -354,31 +532,67 @@ export class SettingsPageComponent {
     );
   }
 
+  /** Keep existing integration on any save; include new credentials when both key and secret are filled. */
+  private shouldIncludeBybitInSettingsPayload(): boolean {
+    return this.bybitIntegration() !== null || this.hasBybitPayload();
+  }
+
+  private isBybitCredentialsChanged(): boolean {
+    const draft = this.bybitDraft();
+    const snapshot = this.bybitInitialSnapshot();
+    const apiKey = draft.apiKey.trim();
+    const apiSecret = draft.apiSecret.trim();
+    if (apiSecret.length > 0) {
+      return true;
+    }
+    return apiKey !== snapshot.apiKey.trim() && apiKey.length > 0;
+  }
+
   private buildSettingsPayload(includeBybit: boolean): PutSessionSettingsRequest {
     const walletPayload = [...this.walletsDraft(), ...this.pendingWallets()];
+    const bybitEntry = includeBybit ? this.buildBybitIntegrationEntry() : null;
     return {
       wallets: walletPayload.map((wallet, index) => ({
         address: wallet.address.trim().toLowerCase(),
         label: wallet.label.trim() || this.defaultWalletLabel(index),
         color: wallet.color,
-        networks: [...this.allNetworkIds],
+        networks: [...this.allNetworkIds] as ReadonlyArray<OnChainWalletNetworkId>,
       })),
-      integrations: includeBybit
-        ? [
-            {
-              provider: 'BYBIT',
-              displayName:
-                this.bybitForm.controls.displayName.value.trim() ||
-                this.bybitIntegration()?.displayName ||
-                'Bybit',
-              apiKey: this.bybitForm.controls.apiKey.value.trim(),
-              apiSecret: this.bybitForm.controls.apiSecret.value.trim(),
-            },
-          ]
-        : [],
+      integrations: bybitEntry === null ? [] : [bybitEntry],
+      externalVenues: this.externalVenues(),
       hideSmallAssets: this.generalForm.controls.hideSmallAssets.value,
       showReconciliationWarnings: this.generalForm.controls.showReconciliationWarnings.value,
     };
+  }
+
+  private buildBybitIntegrationEntry(): PutSessionSettingsRequest['integrations'][number] | null {
+    const integration = this.bybitIntegration();
+    const draft = this.bybitDraft();
+    const snapshot = this.bybitInitialSnapshot();
+    const apiKey = draft.apiKey.trim();
+    const apiSecret = draft.apiSecret.trim();
+    const displayName =
+      this.bybitForm.controls.displayName.value.trim() || integration?.displayName || 'Bybit';
+
+    if (integration === null) {
+      if (apiKey.length === 0 && apiSecret.length === 0) {
+        return null;
+      }
+      if (apiKey.length === 0 || apiSecret.length === 0) {
+        throw new Error('Enter both API key and API secret to connect Bybit.');
+      }
+      return { provider: 'BYBIT', displayName, apiKey, apiSecret };
+    }
+
+    if (!this.isBybitCredentialsChanged()) {
+      return { provider: 'BYBIT', displayName, apiKey: '', apiSecret: '' };
+    }
+
+    const snapshotKey = snapshot.apiKey.trim();
+    if (apiKey.length === 0 || apiSecret.length === 0 || apiKey === snapshotKey) {
+      throw new Error('To update Bybit credentials, enter both new API key and secret.');
+    }
+    return { provider: 'BYBIT', displayName, apiKey, apiSecret };
   }
 
   private persistSettings(payload: PutSessionSettingsRequest, scope: SettingsSaveScope): void {
@@ -396,8 +610,6 @@ export class SettingsPageComponent {
       .subscribe({
         next: (response) => {
           this.applySettings(response);
-          this.bybitForm.controls.apiKey.reset('');
-          this.bybitForm.controls.apiSecret.reset('');
           this.saveMessage.set(this.successMessage(scope, response));
         },
         error: (errorResponse) => {
@@ -433,6 +645,7 @@ export class SettingsPageComponent {
     );
     this.pendingWallets.set([]);
     this.walletListDirty.set(false);
+    this.externalVenues.set(response.externalVenues ?? []);
     this.generalForm.reset(
       {
         hideSmallAssets: response.hideSmallAssets ?? true,
@@ -442,14 +655,19 @@ export class SettingsPageComponent {
     );
 
     const bybit = response.integrations.find((integration) => integration.provider === 'BYBIT') ?? null;
+    const initialApiKey = bybit?.maskedKey ?? '';
+    const displayName = bybit?.displayName ?? 'Bybit';
     this.bybitForm.reset(
       {
-        displayName: bybit?.displayName ?? 'Bybit',
-        apiKey: '',
+        displayName,
+        apiKey: initialApiKey,
         apiSecret: '',
       },
       { emitEvent: false }
     );
+    this.bybitDraft.set({ displayName, apiKey: initialApiKey, apiSecret: '' });
+    this.bybitInitialSnapshot.set({ apiKey: initialApiKey });
+    this.showBybitSecret.set(false);
   }
 
   private createWalletDraft(index: number, networksOpen = false): SettingsWalletDraft {

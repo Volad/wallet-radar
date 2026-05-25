@@ -6,6 +6,7 @@ import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.common.PriceSource;
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.domain.session.UserSessionRepository;
+import com.walletradar.integration.bybit.BybitLiveBalanceService;
 import com.walletradar.pricing.persistence.CurrentPriceQuoteDocument;
 import com.walletradar.pricing.persistence.HistoricalPriceDocument;
 import com.walletradar.session.application.AccountingUniverseService;
@@ -38,6 +39,10 @@ class SessionDashboardQueryServiceTest {
     private MongoOperations mongoOperations;
     @Mock
     private AccountingUniverseService accountingUniverseService;
+    @Mock
+    private BybitLiveBalanceService bybitLiveBalanceService;
+    @Mock
+    private PortfolioConservationGate portfolioConservationGate;
 
     private SessionDashboardQueryService sessionDashboardQueryService;
 
@@ -46,9 +51,25 @@ class SessionDashboardQueryServiceTest {
         sessionDashboardQueryService = new SessionDashboardQueryService(
                 userSessionRepository,
                 mongoOperations,
-                accountingUniverseService
+                accountingUniverseService,
+                bybitLiveBalanceService,
+                portfolioConservationGate
+        );
+        lenient().when(portfolioConservationGate.evaluate(any())).thenReturn(
+                new PortfolioConservationGate.ConservationResult(
+                        BigDecimal.ZERO,
+                        BigDecimal.ZERO,
+                        BigDecimal.ZERO,
+                        BigDecimal.ZERO,
+                        BigDecimal.ZERO,
+                        BigDecimal.ZERO,
+                        new BigDecimal("50"),
+                        false
+                )
         );
         lenient().when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
+        lenient().when(bybitLiveBalanceService.getUmbrellaBalances(org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn(java.util.Map.of());
     }
 
     @Test
@@ -379,7 +400,8 @@ class SessionDashboardQueryServiceTest {
 
         assertThat(result.tokenPositions()).hasSize(2);
         assertThat(result.tokenPositions())
-                .filteredOn(position -> position.symbol().equals("AMANUSDC"))
+                .filteredOn(position -> "USDC".equals(position.symbol())
+                        && "AAVE_INDEX_ACCRUING".equals(position.valuationModel()))
                 .singleElement()
                 .satisfies(position -> {
                     assertThat(position.priceUsd()).isEqualByComparingTo("1");
@@ -451,5 +473,173 @@ class SessionDashboardQueryServiceTest {
             assertThat(position.priceIssue()).isNull();
         });
         assertThat(result.summary().portfolioValueUsd()).isEqualByComparingTo("18.2");
+    }
+
+    @Test
+    void inflatesBybitQuantityToLiveWhenLedgerIsBelowLive() {
+        UserSession session = new UserSession();
+        session.setId("session-bybit-inflate");
+        UserSession.SessionWallet wallet = new UserSession.SessionWallet();
+        wallet.setAddress("0x1A87f12aC07E9746e9B053B8D7EF1d45270D693f");
+        wallet.setLabel("Main");
+        wallet.setColor("#22d3ee");
+        wallet.setNetworks(List.of(NetworkId.BASE));
+        session.setWallets(List.of(wallet));
+
+        UserSession.SessionIntegration integration = new UserSession.SessionIntegration();
+        integration.setIntegrationId("BYBIT-33625378");
+        integration.setAccountRef("BYBIT:33625378");
+        integration.setDisplayName("Bybit");
+        integration.setStatus(UserSession.IntegrationStatus.READY);
+        session.setIntegrations(List.of(integration));
+
+        AssetLedgerPoint dogePoint = new AssetLedgerPoint();
+        dogePoint.setAccountingUniverseId("session-bybit-inflate");
+        dogePoint.setWalletAddress("BYBIT:33625378:UTA");
+        dogePoint.setNetworkId(null);
+        dogePoint.setAccountingAssetIdentity("BYBIT:DOGE");
+        dogePoint.setAccountingFamilyIdentity("SYMBOL:DOGE");
+        dogePoint.setFamilyDisplaySymbol("DOGE");
+        dogePoint.setAssetSymbol("DOGE");
+        dogePoint.setAssetContract("BYBIT:DOGE");
+        dogePoint.setQuantityAfter(new BigDecimal("249.82"));
+        dogePoint.setQuantityShortfallAfter(BigDecimal.ZERO);
+        dogePoint.setBasisBackedQuantityAfter(new BigDecimal("200"));
+        dogePoint.setAvcoAfterUsd(new BigDecimal("0.18"));
+        dogePoint.setRealisedPnlDeltaUsd(BigDecimal.ZERO);
+        dogePoint.setHasIncompleteHistoryAfter(false);
+        dogePoint.setHasUnresolvedFlagsAfter(false);
+        dogePoint.setReplaySequence(1L);
+
+        when(userSessionRepository.findById("session-bybit-inflate")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "session-bybit-inflate",
+                List.of(wallet.getAddress(), "BYBIT:33625378:UTA", "BYBIT:33625378:FUND", "BYBIT:33625378:EARN"),
+                List.of(wallet.getAddress())
+        ));
+        when(mongoOperations.find(any(Query.class), eq(AssetLedgerPoint.class))).thenReturn(List.of(dogePoint));
+        when(mongoOperations.find(any(Query.class), eq(OnChainBalance.class))).thenReturn(List.of());
+        when(mongoOperations.find(any(Query.class), eq(HistoricalPriceDocument.class))).thenReturn(List.of());
+        when(bybitLiveBalanceService.getUmbrellaBalances("BYBIT-33625378"))
+                .thenReturn(java.util.Map.of("DOGE", new BigDecimal("661.17")));
+
+        SessionDashboardQueryService.SessionDashboardView result = sessionDashboardQueryService
+                .findSessionDashboard("session-bybit-inflate")
+                .orElseThrow();
+
+        assertThat(result.tokenPositions()).singleElement().satisfies(token -> {
+            assertThat(token.quantity()).isEqualByComparingTo("661.17");
+            assertThat(token.coveredQuantity()).isEqualByComparingTo("200");
+            assertThat(token.avcoUsd()).isEqualByComparingTo("0.18");
+            assertThat(token.issue()).isEqualTo("coverage_gap");
+        });
+    }
+
+    @Test
+    void createsLiveOnlyRowForBybitAssetMissingFromLedger() {
+        UserSession session = new UserSession();
+        session.setId("session-bybit-live-only");
+        UserSession.SessionWallet wallet = new UserSession.SessionWallet();
+        wallet.setAddress("0x1A87f12aC07E9746e9B053B8D7EF1d45270D693f");
+        wallet.setLabel("Main");
+        wallet.setColor("#22d3ee");
+        wallet.setNetworks(List.of(NetworkId.BASE));
+        session.setWallets(List.of(wallet));
+
+        UserSession.SessionIntegration integration = new UserSession.SessionIntegration();
+        integration.setIntegrationId("BYBIT-33625378");
+        integration.setAccountRef("BYBIT:33625378");
+        integration.setDisplayName("Bybit");
+        integration.setStatus(UserSession.IntegrationStatus.READY);
+        session.setIntegrations(List.of(integration));
+
+        when(userSessionRepository.findById("session-bybit-live-only")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "session-bybit-live-only",
+                List.of(wallet.getAddress(), "BYBIT:33625378:UTA"),
+                List.of(wallet.getAddress())
+        ));
+        when(mongoOperations.find(any(Query.class), eq(AssetLedgerPoint.class))).thenReturn(List.of());
+        when(mongoOperations.find(any(Query.class), eq(OnChainBalance.class))).thenReturn(List.of());
+        when(mongoOperations.find(any(Query.class), eq(HistoricalPriceDocument.class))).thenReturn(List.of());
+        when(bybitLiveBalanceService.getUmbrellaBalances("BYBIT-33625378"))
+                .thenReturn(java.util.Map.of("XRP", new BigDecimal("4.0533")));
+
+        SessionDashboardQueryService.SessionDashboardView result = sessionDashboardQueryService
+                .findSessionDashboard("session-bybit-live-only")
+                .orElseThrow();
+
+        assertThat(result.tokenPositions()).singleElement().satisfies(token -> {
+            assertThat(token.symbol()).isEqualTo("XRP");
+            assertThat(token.quantity()).isEqualByComparingTo("4.0533");
+            assertThat(token.coveredQuantity()).isEqualByComparingTo("0");
+            assertThat(token.avcoUsd()).isEqualByComparingTo("0");
+            assertThat(token.issue()).isEqualTo("missing_replay_point");
+        });
+    }
+
+    @Test
+    void exposesBybitCustodyPositionsWithBybitNetworkLabelWhenLedgerNetworkIsNull() {
+        UserSession session = new UserSession();
+        session.setId("session-bybit-dash");
+        UserSession.SessionWallet wallet = new UserSession.SessionWallet();
+        wallet.setAddress("0x1A87f12aC07E9746e9B053B8D7EF1d45270D693f");
+        wallet.setLabel("Main");
+        wallet.setColor("#22d3ee");
+        wallet.setNetworks(List.of(NetworkId.BASE));
+        session.setWallets(List.of(wallet));
+
+        UserSession.SessionIntegration integration = new UserSession.SessionIntegration();
+        integration.setIntegrationId("BYBIT-33625378");
+        integration.setAccountRef("BYBIT:33625378");
+        integration.setDisplayName("Bybit");
+        integration.setStatus(UserSession.IntegrationStatus.READY);
+        session.setIntegrations(List.of(integration));
+
+        AssetLedgerPoint bybitPoint = new AssetLedgerPoint();
+        bybitPoint.setAccountingUniverseId("session-bybit-dash");
+        bybitPoint.setWalletAddress("BYBIT:33625378:UTA");
+        bybitPoint.setNetworkId(null);
+        bybitPoint.setAccountingAssetIdentity("BYBIT:USDT");
+        bybitPoint.setAccountingFamilyIdentity("SYMBOL:USDT");
+        bybitPoint.setFamilyDisplaySymbol("USDT");
+        bybitPoint.setAssetSymbol("USDT");
+        bybitPoint.setAssetContract("BYBIT:USDT");
+        bybitPoint.setQuantityAfter(new BigDecimal("1000"));
+        bybitPoint.setQuantityShortfallAfter(BigDecimal.ZERO);
+        bybitPoint.setBasisBackedQuantityAfter(new BigDecimal("1000"));
+        bybitPoint.setAvcoAfterUsd(BigDecimal.ONE);
+        bybitPoint.setRealisedPnlDeltaUsd(new BigDecimal("12.5"));
+        bybitPoint.setHasIncompleteHistoryAfter(false);
+        bybitPoint.setHasUnresolvedFlagsAfter(false);
+        bybitPoint.setReplaySequence(1L);
+
+        HistoricalPriceDocument usdtPrice = new HistoricalPriceDocument();
+        usdtPrice.setSymbol("USDT");
+        usdtPrice.setPriceUsd(BigDecimal.ONE);
+        usdtPrice.setBucketStart(Instant.parse("2026-04-06T10:00:00Z"));
+
+        when(userSessionRepository.findById("session-bybit-dash")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "session-bybit-dash",
+                List.of(wallet.getAddress(), "BYBIT:33625378:UTA", "BYBIT:33625378:FUND", "BYBIT:33625378:EARN"),
+                List.of(wallet.getAddress())
+        ));
+        when(mongoOperations.find(any(Query.class), eq(AssetLedgerPoint.class))).thenReturn(List.of(bybitPoint));
+        when(mongoOperations.find(any(Query.class), eq(OnChainBalance.class))).thenReturn(List.of());
+        when(mongoOperations.find(any(Query.class), eq(HistoricalPriceDocument.class))).thenReturn(List.of(usdtPrice));
+
+        SessionDashboardQueryService.SessionDashboardView result = sessionDashboardQueryService
+                .findSessionDashboard("session-bybit-dash")
+                .orElseThrow();
+
+        assertThat(result.wallets().stream().map(SessionDashboardQueryService.WalletView::address))
+                .contains("bybit:33625378");
+        assertThat(result.tokenPositions()).singleElement().satisfies(token -> {
+            assertThat(token.networkId()).isEqualTo("BYBIT");
+            assertThat(token.walletAddress()).isEqualTo("bybit:33625378");
+            assertThat(token.quantity()).isEqualByComparingTo("1000");
+            assertThat(token.realizedPnlUsd()).isEqualByComparingTo("12.5");
+        });
     }
 }

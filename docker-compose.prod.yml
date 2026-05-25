@@ -31,6 +31,7 @@ services:
       MONGODB_URI: mongodb://mongodb-prod:27017/walletradar
       SPRING_DATA_MONGODB_URI: mongodb://mongodb-prod:27017/walletradar
       WALLETRADAR_SESSION_SECRETS_KEY_FILE: /run/secrets/walletradar/session-crypto.key
+      # Admin rebuild token: set in .env (env_file above); do not override with empty compose interpolation.
     volumes:
       - ./.secrets:/run/secrets/walletradar:ro
     depends_on:

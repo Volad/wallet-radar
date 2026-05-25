@@ -8,6 +8,7 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionReposi
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.ingestion.pipeline.clarification.CounterpartyType;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.bson.Document;
@@ -188,6 +189,8 @@ class StatValidationServiceTest {
         transaction.setBlockTimestamp(Instant.parse("2026-03-25T10:00:00Z"));
         transaction.setMissingDataReasons(List.of());
         transaction.setFlows(List.of(flows));
+        transaction.setCounterpartyType(CounterpartyType.UNKNOWN_EOA);
+        transaction.setCounterpartyAddress("0xcounterparty");
         return transaction;
     }
 
@@ -204,6 +207,10 @@ class StatValidationServiceTest {
         flow.setQuantityDelta(new BigDecimal(quantity));
         flow.setUnitPriceUsd(unitPriceUsd == null ? null : new BigDecimal(unitPriceUsd));
         flow.setPriceSource(priceSource);
+        if (role != NormalizedLegRole.FEE) {
+            flow.setCounterpartyAddress("0xcounterparty");
+            flow.setCounterpartyType(CounterpartyType.UNKNOWN_EOA);
+        }
         return flow;
     }
 }

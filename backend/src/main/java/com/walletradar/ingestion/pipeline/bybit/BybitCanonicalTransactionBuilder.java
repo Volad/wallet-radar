@@ -2,7 +2,10 @@ package com.walletradar.ingestion.pipeline.bybit;
 
 import com.walletradar.accounting.support.AccountingAssetFamilySupport;
 import com.walletradar.domain.common.Decimal128Support;
+import com.walletradar.domain.common.NetworkAddressFormat;
+import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.common.PriceSource;
+import com.walletradar.domain.session.AccountingUniverse;
 import com.walletradar.domain.transaction.externalledger.ExternalLedgerRaw;
 import com.walletradar.domain.transaction.normalized.ClassificationSource;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
@@ -10,6 +13,14 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.ingestion.pipeline.clarification.CounterpartyType;
+import com.walletradar.ingestion.pipeline.clarification.FlowCounterpartySupport;
+import com.walletradar.pricing.domain.CanonicalAssetCatalog;
+import com.walletradar.session.application.AccountingUniverseService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -18,10 +29,15 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -29,6 +45,8 @@ import java.util.stream.Collectors;
  */
 @Component
 public class BybitCanonicalTransactionBuilder {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(BybitCanonicalTransactionBuilder.class);
 
     private static final Set<String> STABLECOIN_SYMBOLS = Set.of(
             "USDT",
@@ -42,6 +60,35 @@ public class BybitCanonicalTransactionBuilder {
             "TUSD",
             "USD1"
     );
+
+    private static final Pattern SELF_TRANSFER_PATTERN =
+            Pattern.compile("selfTransfer_([0-9a-fA-F-]{36})");
+    private static final Pattern UNI_TRANS_PATTERN =
+            Pattern.compile("uni_trans_([0-9a-fA-F-]{36})");
+    private static final String BYBIT_PREFIX = "BYBIT:";
+    private static final String FIAT_P2P_COUNTERPARTY = "FIAT:P2P";
+    private static final String TX_HASH_MISSING_BYBIT_CORRIDOR = "TX_HASH_MISSING_BYBIT_CORRIDOR";
+    /**
+     * FA-001 P0: synthetic counterparty stamped on Bybit EXTERNAL_TRANSFER rows when the chain-side
+     * address is genuinely missing from the API payload. The address is namespaced by network so
+     * the row still routes through {@link FlowCounterpartySupport#applyTransactionCounterparty} and
+     * stat validation accepts a non-blank counterparty. Cross-system linking
+     * ({@link com.walletradar.ingestion.pipeline.clarification.BybitTransferContinuityRepairService})
+     * remains driven by {@code txHash}, so this synthetic address never participates in FA-001
+     * pairing — its sole purpose is to keep the conservation gate honest about untracked custody.
+     */
+    private static final String BYBIT_HOT_WALLET_PREFIX = "BYBIT:HOT_WALLET:";
+
+    private final AccountingUniverseService accountingUniverseService;
+
+    public BybitCanonicalTransactionBuilder() {
+        this(null);
+    }
+
+    @Autowired
+    public BybitCanonicalTransactionBuilder(@Nullable AccountingUniverseService accountingUniverseService) {
+        this.accountingUniverseService = accountingUniverseService;
+    }
 
     public NormalizedTransaction buildTradePair(
             ExternalLedgerRaw left,
@@ -65,6 +112,8 @@ public class BybitCanonicalTransactionBuilder {
         BigDecimal executionPrice = firstNonNull(buyRow.getFilledPrice(), sellRow.getFilledPrice());
 
         List<NormalizedTransaction.Flow> flows = new ArrayList<>();
+        BigDecimal buyNet = netExecutionLegQuantity(buyRow);
+        BigDecimal sellNet = netExecutionLegQuantity(sellRow);
         FlowPricing buyPricing = tradeFlowPricing(
                 buyRow.getAssetSymbol(),
                 NormalizedLegRole.BUY,
@@ -75,7 +124,7 @@ public class BybitCanonicalTransactionBuilder {
         flows.add(flow(
                 NormalizedLegRole.BUY,
                 buyRow.getAssetSymbol(),
-                abs(buyRow.getQuantityRaw()),
+                buyNet,
                 buyPricing.unitPriceUsd(),
                 buyPricing.priceSource()
         ));
@@ -89,12 +138,12 @@ public class BybitCanonicalTransactionBuilder {
         flows.add(flow(
                 NormalizedLegRole.SELL,
                 sellRow.getAssetSymbol(),
-                negate(abs(sellRow.getQuantityRaw())),
+                sellNet,
                 sellPricing.unitPriceUsd(),
                 sellPricing.priceSource()
         ));
-        appendFeeFlow(flows, firstFeeRow(left, right), buyRow, sellRow, executionPrice);
         transaction.setFlows(flows);
+        finalizeBybitFlows(transaction, left);
         initializeStatus(transaction, now);
         return transaction;
     }
@@ -116,14 +165,19 @@ public class BybitCanonicalTransactionBuilder {
 
         NormalizedTransaction transaction = baseTransaction(row.getId(), row, type, now);
         FlowPricing pricing = orphanTradePricing(row);
+        BigDecimal netLeg = netExecutionLegQuantity(row);
+        if (netLeg == null) {
+            return buildMalformedTrade(row, now, "UTA_TRADE_QTY_MISSING");
+        }
         List<NormalizedTransaction.Flow> flows = List.of(flow(
                 role,
                 row.getAssetSymbol(),
-                role == NormalizedLegRole.BUY ? abs(row.getQuantityRaw()) : negate(abs(row.getQuantityRaw())),
+                netLeg,
                 pricing.unitPriceUsd(),
                 pricing.priceSource()
         ));
         transaction.setFlows(new ArrayList<>(flows));
+        finalizeBybitFlows(transaction, row);
         transaction.setMissingDataReasons(List.of("UTA_TRADE_PAIR_NOT_FOUND"));
         transaction.setStatus(NormalizedTransactionStatus.NEEDS_REVIEW);
         markExcludedFromAccounting(transaction, "UTA_TRADE_PAIR_NOT_FOUND");
@@ -141,7 +195,55 @@ public class BybitCanonicalTransactionBuilder {
         NormalizedTransactionType type = mappedType.orElse(NormalizedTransactionType.UNKNOWN);
         NormalizedTransaction transaction = baseTransaction(normalizedId(row), row, type, now);
         transaction.setFlows(new ArrayList<>(mappedFlows(row, type)));
+
+        if (type == NormalizedTransactionType.INTERNAL_TRANSFER) {
+            // Cycle/6 A1: always use the deterministic economy correlation id (uid|asset|abs(qty)|minute)
+            // for INTERNAL_TRANSFER rows. The Bybit `selfTransfer_<uuid>` identifier is leg-local —
+            // both sides of a real transfer carry DIFFERENT UUIDs, so the previous "sub-transfer"
+            // correlation key produced 228 singleton legs that never paired in replay. The economy
+            // correlation id is symmetric: both legs derive the same key from the shared signature.
+            // The remaining cross-minute drift (~10% of pairs) is repaired by
+            // {@code BybitInternalTransferPairer} after normalization.
+            String correlationId = bybitInternalTransferEconomyCorrelationId(row);
+            if (correlationId != null) {
+                transaction.setCorrelationId(correlationId);
+                transaction.setContinuityCandidate(true);
+                String walletRef = row.getWalletRef();
+                String masterUid = extractUid(walletRef);
+                if (masterUid.isBlank()) {
+                    masterUid = normalize(row.getUid());
+                }
+                String matched = resolveInternalTransferCounterparty(row, walletRef, masterUid);
+                if (matched == null || matched.isBlank() || matched.equalsIgnoreCase(walletRef)) {
+                    matched = fallbackInternalTransferCounterparty(walletRef, masterUid);
+                }
+                transaction.setMatchedCounterparty(matched);
+            }
+        }
+
+        if (type == NormalizedTransactionType.BORROW || type == NormalizedTransactionType.REPAY) {
+            String orderId = loanOrderKey(row);
+            if (orderId != null && !orderId.isBlank()) {
+                transaction.setCorrelationId(orderId);
+            }
+        }
+
+        // Cycle/5 N1/N5: extraction marks non-authoritative mirror rows (FH/Deposit, TX_LOG/TRANSFER_IN, …)
+        // with basisRelevant=false. They must not hit AVCO replay or they re-inflate inventory (phantom qty).
+        if (Boolean.FALSE.equals(row.getBasisRelevant())) {
+            markExcludedFromAccounting(transaction, "BYBIT_BASIS_IRRELEVANT");
+        }
+
+        recordMissingTxHashForBybitCorridor(transaction, row);
+        finalizeBybitFlows(transaction, row);
+        applyStableUsdPegForExternalTransfers(transaction);
         initializeStatus(transaction, now);
+        if (transaction.getType() == NormalizedTransactionType.EXTERNAL_TRANSFER_IN) {
+            confirmWhenAllBuySellFlowsPriced(transaction, now);
+        }
+        if (isFiatP2pRow(row)) {
+            confirmFiatP2pTransaction(transaction, row, now);
+        }
         return transaction;
     }
 
@@ -158,6 +260,7 @@ public class BybitCanonicalTransactionBuilder {
                 .orElseThrow();
         NormalizedTransaction transaction = baseTransaction(clusterId("convert", rows), anchor, NormalizedTransactionType.SWAP, now);
         transaction.setFlows(aggregateClusterFlows(rows));
+        finalizeBybitFlows(transaction, anchor);
         initializeStatus(transaction, now);
         return transaction;
     }
@@ -170,6 +273,7 @@ public class BybitCanonicalTransactionBuilder {
         ExternalLedgerRaw anchor = left.getId().compareTo(right.getId()) <= 0 ? left : right;
         NormalizedTransaction transaction = baseTransaction(pairId(left, right), anchor, NormalizedTransactionType.STAKING_DEPOSIT, now);
         transaction.setFlows(stakingPairFlows(left, right));
+        finalizeBybitFlows(transaction, anchor);
         initializeStatus(transaction, now);
         return transaction;
     }
@@ -208,7 +312,8 @@ public class BybitCanonicalTransactionBuilder {
         transaction.setContinuityCandidate(true);
         transaction.setMatchedCounterparty(matchedCounterparty);
         if (transaction.getStatus() != NormalizedTransactionStatus.NEEDS_REVIEW
-                && transaction.getStatus() != NormalizedTransactionStatus.PENDING_CLARIFICATION) {
+                && transaction.getStatus() != NormalizedTransactionStatus.PENDING_CLARIFICATION
+                && transaction.getStatus() != NormalizedTransactionStatus.PENDING_PRICE) {
             transaction.setStatus(NormalizedTransactionStatus.CONFIRMED);
             transaction.setConfirmedAt(transaction.getConfirmedAt() != null ? transaction.getConfirmedAt() : now);
         }
@@ -293,7 +398,8 @@ public class BybitCanonicalTransactionBuilder {
     ) {
         NormalizedTransaction transaction = new NormalizedTransaction();
         transaction.setId(id);
-        transaction.setTxHash(row.getTxHash());
+        // FA-001 P1: canonicalise per network so SOL/TON corridors compare correctly with on-chain rows.
+        transaction.setTxHash(NetworkAddressFormat.canonicalTxHash(row.getNetworkId(), row.getTxHash()));
         transaction.setNetworkId(row.getNetworkId());
         transaction.setWalletAddress(row.getWalletRef() != null && !row.getWalletRef().isBlank()
                 ? row.getWalletRef()
@@ -326,12 +432,36 @@ public class BybitCanonicalTransactionBuilder {
     private void initializeStatus(NormalizedTransaction transaction, Instant now) {
         boolean hasBuyOrSell = transaction.getFlows().stream()
                 .anyMatch(flow -> flow.getRole() == NormalizedLegRole.BUY || flow.getRole() == NormalizedLegRole.SELL);
-        if (hasBuyOrSell) {
+        // Cycle/15 R5 F3: Bybit pegged-native INTERNAL_TRANSFER (CMETH/METH/WEETH/BBSOL) needs a
+        // pricing pass before stat/replay so applyPeggedNativeSpotFallback can promote residual uncov.
+        boolean hasPeggedNativeTransfer = transaction.getFlows() != null
+                && transaction.getFlows().stream().anyMatch(flow -> flow != null
+                && flow.getRole() == NormalizedLegRole.TRANSFER
+                && flow.getAssetSymbol() != null
+                && CanonicalAssetCatalog.isPeggedNative(flow.getAssetSymbol())
+                && flow.getQuantityDelta() != null
+                && flow.getQuantityDelta().signum() > 0
+                && (transaction.getType() == NormalizedTransactionType.INTERNAL_TRANSFER
+                || transaction.getType() == NormalizedTransactionType.EXTERNAL_TRANSFER_IN));
+        if (hasBuyOrSell || hasPeggedNativeTransfer) {
             transaction.setStatus(NormalizedTransactionStatus.PENDING_PRICE);
             return;
         }
         transaction.setStatus(NormalizedTransactionStatus.CONFIRMED);
         transaction.setConfirmedAt(now);
+    }
+
+    private void confirmWhenAllBuySellFlowsPriced(NormalizedTransaction transaction, Instant now) {
+        if (transaction == null || transaction.getFlows() == null || transaction.getFlows().isEmpty()) {
+            return;
+        }
+        boolean allBuySellPriced = transaction.getFlows().stream()
+                .filter(flow -> flow.getRole() == NormalizedLegRole.BUY || flow.getRole() == NormalizedLegRole.SELL)
+                .allMatch(flow -> flow.getValueUsd() != null && flow.getValueUsd().signum() != 0);
+        if (allBuySellPriced) {
+            transaction.setStatus(NormalizedTransactionStatus.CONFIRMED);
+            transaction.setConfirmedAt(now);
+        }
     }
 
     private List<NormalizedTransaction.Flow> mappedFlows(
@@ -349,14 +479,35 @@ public class BybitCanonicalTransactionBuilder {
             ));
             case VAULT_DEPOSIT -> List.of(flow(NormalizedLegRole.TRANSFER, row.getAssetSymbol(), negate(quantity), null, null));
             case VAULT_WITHDRAW -> List.of(flow(NormalizedLegRole.TRANSFER, row.getAssetSymbol(), quantity, null, null));
-            case EXTERNAL_TRANSFER_IN -> List.of(flow(NormalizedLegRole.TRANSFER, row.getAssetSymbol(), quantity, null, null));
-            case EXTERNAL_TRANSFER_OUT -> List.of(flow(NormalizedLegRole.TRANSFER, row.getAssetSymbol(), negate(quantity), null, null));
-            case BORROW -> List.of(flow(NormalizedLegRole.SELL, row.getAssetSymbol(), negate(quantity), null, null));
-            case REPAY -> List.of(flow(NormalizedLegRole.BUY, row.getAssetSymbol(), quantity, null, null));
+            // Cycle/5 N16: external transfers are economic events (cash arrives/leaves the venue at
+            // market value), aligned with on-chain classifier convention (OnChainClassificationSupport)
+            // and indispensable for AVCO basis acquisition / disposal. Using TRANSFER role here pushed
+            // these events into transfer-matching, which has no counterpart in the Bybit ledger and
+            // silently leaked basis (quantityShortfallAfter accumulated, realized PnL never crystallised).
+            // BUY/SELL roles route to applyBuy/applySell → ACQUIRE at market price (basis = qty × price)
+            // and DISPOSE at market price (basis released, realized PnL = sell_price − avco).
+            case EXTERNAL_TRANSFER_IN -> List.of(flow(NormalizedLegRole.BUY, row.getAssetSymbol(), quantity, null, null));
+            case EXTERNAL_TRANSFER_OUT -> List.of(flow(NormalizedLegRole.SELL, row.getAssetSymbol(), negate(quantity), null, null));
+            case BORROW -> List.of(flow(NormalizedLegRole.BUY, row.getAssetSymbol(), abs(signedQuantity(row)), null, null));
+            case REPAY -> List.of(flow(NormalizedLegRole.SELL, row.getAssetSymbol(), negate(abs(signedQuantity(row))), null, null));
             case STAKING_DEPOSIT, STAKING_WITHDRAW -> List.of(flow(
                     NormalizedLegRole.TRANSFER,
                     row.getAssetSymbol(),
                     signedQuantity(row),
+                    null,
+                    null
+            ));
+            case INTERNAL_TRANSFER -> List.of(flow(
+                    NormalizedLegRole.TRANSFER,
+                    row.getAssetSymbol(),
+                    signedQuantity(row),
+                    null,
+                    null
+            ));
+            case FEE -> List.of(flow(
+                    NormalizedLegRole.FEE,
+                    row.getAssetSymbol(),
+                    negate(abs(signedQuantity(row))),
                     null,
                     null
             ));
@@ -399,6 +550,8 @@ public class BybitCanonicalTransactionBuilder {
         String normalized = canonicalType.trim().toUpperCase(Locale.ROOT);
         return switch (normalized) {
             case "EXTERNAL_INBOUND" -> NormalizedTransactionType.EXTERNAL_TRANSFER_IN.name();
+            case "EXTERNAL_IN_FIAT_P2P" -> NormalizedTransactionType.EXTERNAL_TRANSFER_IN.name();
+            case "EXTERNAL_OUT_FIAT_P2P" -> NormalizedTransactionType.EXTERNAL_TRANSFER_OUT.name();
             default -> normalized;
         };
     }
@@ -415,36 +568,6 @@ public class BybitCanonicalTransactionBuilder {
             case EXTERNAL_TRANSFER_OUT -> blankToNull(row.getReceivedAddress());
             default -> null;
         };
-    }
-
-    private void appendFeeFlow(
-            List<NormalizedTransaction.Flow> flows,
-            ExternalLedgerRaw feeRow,
-            ExternalLedgerRaw buyRow,
-            ExternalLedgerRaw sellRow,
-            BigDecimal executionPrice
-    ) {
-        if (feeRow == null || feeRow.getFeePaid() == null || feeRow.getFeePaid().signum() == 0) {
-            return;
-        }
-        FlowPricing feePricing = feeFlowPricing(feeRow, buyRow, sellRow, executionPrice);
-        flows.add(flow(
-                NormalizedLegRole.FEE,
-                feeRow.getAssetSymbol(),
-                negate(abs(feeRow.getFeePaid())),
-                feePricing.unitPriceUsd(),
-                feePricing.priceSource()
-        ));
-    }
-
-    private ExternalLedgerRaw firstFeeRow(ExternalLedgerRaw left, ExternalLedgerRaw right) {
-        if (left.getFeePaid() != null && left.getFeePaid().signum() != 0) {
-            return left;
-        }
-        if (right.getFeePaid() != null && right.getFeePaid().signum() != 0) {
-            return right;
-        }
-        return null;
     }
 
     private String pairId(ExternalLedgerRaw left, ExternalLedgerRaw right) {
@@ -469,12 +592,15 @@ public class BybitCanonicalTransactionBuilder {
                 && canonicalIdLiteral != null
                 && row.getAssetSymbol() != null
                 && row.getQuantityRaw() != null) {
+            // FA-001 P1: preserve Solana base58 case in the deterministic id so two FH/Withdraw rows
+            // pointing at distinct on-chain signatures never collapse into a single normalized id.
+            String canonicalTxHash = NetworkAddressFormat.canonicalTxHash(row.getNetworkId(), row.getTxHash());
             return String.join(":",
                     "BYBIT",
                     normalize(row.getUid()),
                     "withdraw_deposit",
                     row.getNetworkId().name(),
-                    row.getTxHash().toLowerCase(Locale.ROOT),
+                    canonicalTxHash,
                     canonicalIdLiteral,
                     row.getAssetSymbol(),
                     abs(row.getQuantityRaw()).stripTrailingZeros().toPlainString()
@@ -552,6 +678,364 @@ public class BybitCanonicalTransactionBuilder {
         return flow;
     }
 
+    private void finalizeBybitFlows(NormalizedTransaction transaction, ExternalLedgerRaw row) {
+        if (transaction == null || row == null) {
+            return;
+        }
+        applyBybitFlowCounterparty(transaction, row);
+        FlowCounterpartySupport.applyTransactionCounterparty(transaction);
+    }
+
+    private void applyBybitFlowCounterparty(NormalizedTransaction transaction, ExternalLedgerRaw row) {
+        String uid = normalize(row.getUid());
+        String walletRef = resolveWalletRef(row);
+        String masterUid = extractUid(walletRef);
+        if (masterUid.isBlank()) {
+            masterUid = uid;
+        }
+        String accountRef = walletRef;
+        NormalizedTransactionType type = transaction.getType();
+
+        if (isFiatP2pRow(row)) {
+            String fundRef = BYBIT_PREFIX + masterUid + ":FUND";
+            String fiatCounterparty = resolveFiatP2pCounterparty(row);
+            for (NormalizedTransaction.Flow flow : transaction.getFlows()) {
+                if (flow == null) {
+                    continue;
+                }
+                flow.setAccountRef(fundRef);
+                flow.setCounterpartyAddress(fiatCounterparty);
+                flow.setCounterpartyType(CounterpartyType.CEX);
+                applyStableUsdPegIfEligible(flow);
+            }
+            transaction.setCounterpartyAddress(fiatCounterparty);
+            transaction.setCounterpartyType(CounterpartyType.CEX);
+            return;
+        }
+
+        if (type == NormalizedTransactionType.SWAP) {
+            String matchedBook = BYBIT_PREFIX + masterUid + ":MATCHED_BOOK";
+            String convertKey = resolveConvertCounterpartyKey(row, masterUid);
+            for (NormalizedTransaction.Flow flow : transaction.getFlows()) {
+                if (flow == null) {
+                    continue;
+                }
+                flow.setAccountRef(accountRef);
+                flow.setCounterpartyAddress(convertKey != null ? convertKey : matchedBook);
+                flow.setCounterpartyType(CounterpartyType.CEX);
+            }
+            return;
+        }
+
+        if (type == NormalizedTransactionType.BORROW || type == NormalizedTransactionType.REPAY) {
+            String loanCounterparty = BYBIT_PREFIX + "LOAN:" + loanOrderKey(row);
+            for (NormalizedTransaction.Flow flow : transaction.getFlows()) {
+                if (flow == null) {
+                    continue;
+                }
+                flow.setAccountRef(ledgerAccountRef(masterUid, walletRef, "UTA"));
+                flow.setCounterpartyAddress(loanCounterparty);
+                flow.setCounterpartyType(CounterpartyType.PROTOCOL);
+            }
+            return;
+        }
+
+        if (type == NormalizedTransactionType.REWARD_CLAIM) {
+            String rewardCounterparty = BYBIT_PREFIX + "REWARD:" + normalizeRewardBusiType(row);
+            String earnRef = ledgerAccountRef(masterUid, walletRef, "EARN");
+            for (NormalizedTransaction.Flow flow : transaction.getFlows()) {
+                if (flow == null) {
+                    continue;
+                }
+                flow.setAccountRef(earnRef);
+                flow.setCounterpartyAddress(rewardCounterparty);
+                flow.setCounterpartyType(CounterpartyType.PROTOCOL);
+            }
+            return;
+        }
+
+        if (type == NormalizedTransactionType.INTERNAL_TRANSFER) {
+            String counterparty = resolveInternalTransferCounterparty(row, walletRef, masterUid);
+            if (counterparty == null || counterparty.isBlank() || counterparty.equalsIgnoreCase(walletRef)) {
+                LOGGER.warn(
+                        "BYBIT_NORM_BAD_CP rowId={} walletRef={} bybitType={} bybitDescription={} sourceFile={} resolvedCp={}",
+                        row == null ? null : row.getId(),
+                        walletRef,
+                        row == null ? null : row.getBybitType(),
+                        row == null ? null : row.getBybitDescription(),
+                        row == null ? null : row.getSourceFile(),
+                        counterparty
+                );
+                counterparty = fallbackInternalTransferCounterparty(walletRef, masterUid);
+            }
+            transaction.setCounterpartyAddress(counterparty);
+            transaction.setCounterpartyType(CounterpartyType.CEX);
+            for (NormalizedTransaction.Flow flow : transaction.getFlows()) {
+                if (flow == null) {
+                    continue;
+                }
+                flow.setAccountRef(accountRef);
+                flow.setCounterpartyAddress(counterparty);
+                flow.setCounterpartyType(CounterpartyType.CEX);
+            }
+            return;
+        }
+
+        if (type == NormalizedTransactionType.EXTERNAL_TRANSFER_IN) {
+            applyBybitExternalTransferCounterparty(transaction, row, masterUid, walletRef, /*inbound=*/true);
+            return;
+        }
+
+        if (type == NormalizedTransactionType.EXTERNAL_TRANSFER_OUT) {
+            applyBybitExternalTransferCounterparty(transaction, row, masterUid, walletRef, /*inbound=*/false);
+            return;
+        }
+
+        for (NormalizedTransaction.Flow flow : transaction.getFlows()) {
+            if (flow == null) {
+                continue;
+            }
+            flow.setAccountRef(accountRef);
+            String topLevel = transaction.getCounterpartyAddress();
+            if (topLevel != null && !topLevel.isBlank()) {
+                flow.setCounterpartyAddress(topLevel);
+            }
+            if (transaction.getCounterpartyType() != null) {
+                flow.setCounterpartyType(transaction.getCounterpartyType());
+            }
+        }
+    }
+
+    /**
+     * FA-001 P0: stamp a non-blank {@code counterpartyAddress} and {@code counterpartyType} on
+     * Bybit external-transfer rows (Deposit / Withdraw) so the stat validation gate does not park
+     * them as NEEDS_REVIEW with {@code STAT_COUNTERPARTY_TYPE_MISSING} / {@code FLOW_COUNTERPARTY_MISSING}.
+     *
+     * <p>The chain-side address comes from the {@code DEPOSIT_ONCHAIN} / {@code WITHDRAWAL} sibling
+     * (Bybit's deposit-records / withdrawal-records APIs):
+     * <ul>
+     *   <li><b>EXTERNAL_TRANSFER_IN</b> (Bybit Deposit): {@code senderAddress} is the on-chain
+     *       source — typically the user's external wallet ({@code PERSONAL_WALLET} when present in
+     *       the accounting universe), otherwise an arbitrary EOA ({@code UNKNOWN_EOA}).</li>
+     *   <li><b>EXTERNAL_TRANSFER_OUT</b> (Bybit Withdraw): {@code receivedAddress} is the on-chain
+     *       destination — same classification rules.</li>
+     * </ul>
+     *
+     * <p>Address namespace is preserved per-network via {@link NetworkAddressFormat}: EVM hex is
+     * lower-cased, Solana base58 stays case-sensitive, TON addresses canonicalised. If the chain
+     * address is genuinely absent (legacy CSV imports, FH-only rows that never linked to a chain
+     * sibling) we stamp a synthetic {@code BYBIT:HOT_WALLET:<network>} key with type
+     * {@code UNKNOWN_EOA}; the row still passes stat validation and the conservation gate flags
+     * the missing custody track via {@code TX_HASH_MISSING_BYBIT_CORRIDOR}.</p>
+     */
+    private void applyBybitExternalTransferCounterparty(
+            NormalizedTransaction transaction,
+            ExternalLedgerRaw row,
+            String masterUid,
+            String walletRef,
+            boolean inbound
+    ) {
+        NetworkId networkId = row.getNetworkId();
+        String rawAddress = inbound ? row.getSenderAddress() : row.getReceivedAddress();
+        String chainAddress = NetworkAddressFormat.canonicalAddress(networkId, rawAddress);
+        boolean addressMissing = chainAddress == null || chainAddress.isBlank();
+        if (addressMissing) {
+            chainAddress = BYBIT_HOT_WALLET_PREFIX + (networkId == null ? "UNKNOWN" : networkId.name());
+        }
+        String counterpartyType = classifyExternalTransferCounterpartyType(
+                addressMissing ? null : chainAddress,
+                networkId
+        );
+        String fundRef = ledgerAccountRef(masterUid, walletRef, "FUND");
+        for (NormalizedTransaction.Flow flow : transaction.getFlows()) {
+            if (flow == null) {
+                continue;
+            }
+            flow.setAccountRef(fundRef);
+            flow.setCounterpartyAddress(chainAddress);
+            flow.setCounterpartyType(counterpartyType);
+        }
+        transaction.setCounterpartyAddress(chainAddress);
+        transaction.setCounterpartyType(counterpartyType);
+    }
+
+    /**
+     * Counterparty classification reuses the accounting-universe binding when present:
+     * <ul>
+     *   <li>address in universe → {@link CounterpartyType#PERSONAL_WALLET} when ON_CHAIN_WALLET,
+     *       {@link CounterpartyType#CEX} when EXCHANGE_ACCOUNT;</li>
+     *   <li>address absent from universe (or universe not bound) → {@link CounterpartyType#UNKNOWN_EOA}.</li>
+     * </ul>
+     * Missing address (synthetic {@code BYBIT_HOT_WALLET}) is also {@code UNKNOWN_EOA}.
+     */
+    private String classifyExternalTransferCounterpartyType(String address, NetworkId networkId) {
+        if (address != null && accountingUniverseService != null) {
+            try {
+                AccountingUniverseService.OwnMembership membership = accountingUniverseService.classify(address, networkId);
+                if (membership.isMember()) {
+                    AccountingUniverse.MemberType memberType = membership.memberType();
+                    if (memberType == AccountingUniverse.MemberType.ON_CHAIN_WALLET) {
+                        return CounterpartyType.PERSONAL_WALLET;
+                    }
+                    if (memberType == AccountingUniverse.MemberType.EXCHANGE_ACCOUNT) {
+                        return CounterpartyType.CEX;
+                    }
+                }
+            } catch (IllegalStateException ignored) {
+                // Universe not bound on this thread; fall through to UNKNOWN_EOA.
+            }
+        }
+        return CounterpartyType.UNKNOWN_EOA;
+    }
+
+    private boolean isFiatP2pRow(ExternalLedgerRaw row) {
+        if (row == null) {
+            return false;
+        }
+        String canonical = normalizeCanonicalLiteral(row.getCanonicalType());
+        if ("EXTERNAL_IN_FIAT_P2P".equals(canonical) || "EXTERNAL_OUT_FIAT_P2P".equals(canonical)) {
+            return true;
+        }
+        String bybitType = normalize(row.getBybitType());
+        String description = normalize(row.getBybitDescription());
+        return "fiat".equals(bybitType)
+                || (description != null && description.contains("p2p purchase"));
+    }
+
+    private String resolveFiatP2pCounterparty(ExternalLedgerRaw row) {
+        return FIAT_P2P_COUNTERPARTY;
+    }
+
+    private void confirmFiatP2pTransaction(NormalizedTransaction transaction, ExternalLedgerRaw row, Instant now) {
+        for (NormalizedTransaction.Flow flow : transaction.getFlows()) {
+            applyStableUsdPegIfEligible(flow);
+        }
+        transaction.setStatus(NormalizedTransactionStatus.CONFIRMED);
+        transaction.setConfirmedAt(now);
+    }
+
+    private void applyStableUsdPegForExternalTransfers(NormalizedTransaction transaction) {
+        if (transaction == null || transaction.getFlows() == null) {
+            return;
+        }
+        if (transaction.getType() != NormalizedTransactionType.EXTERNAL_TRANSFER_IN) {
+            return;
+        }
+        for (NormalizedTransaction.Flow flow : transaction.getFlows()) {
+            applyStableUsdPegIfEligible(flow);
+        }
+    }
+
+    private void applyStableUsdPegIfEligible(NormalizedTransaction.Flow flow) {
+        if (flow == null || !isStablecoin(flow.getAssetSymbol())) {
+            return;
+        }
+        BigDecimal quantity = flow.getQuantityDelta();
+        if (quantity == null) {
+            return;
+        }
+        flow.setUnitPriceUsd(BigDecimal.ONE);
+        flow.setPriceSource(PriceSource.STABLECOIN);
+        flow.setValueUsd(Decimal128Support.normalize(quantity.abs()));
+    }
+
+    private void recordMissingTxHashForBybitCorridor(NormalizedTransaction transaction, ExternalLedgerRaw row) {
+        if (transaction == null || row == null) {
+            return;
+        }
+        String bybitType = row.getBybitType();
+        if (bybitType == null) {
+            return;
+        }
+        String normalizedType = normalize(bybitType);
+        if (!"deposit".equals(normalizedType) && !"withdraw".equals(normalizedType)) {
+            return;
+        }
+        if (row.getTxHash() != null && !row.getTxHash().isBlank()) {
+            return;
+        }
+        if (!transaction.getMissingDataReasons().contains(TX_HASH_MISSING_BYBIT_CORRIDOR)) {
+            transaction.getMissingDataReasons().add(TX_HASH_MISSING_BYBIT_CORRIDOR);
+        }
+    }
+
+    private String resolveConvertCounterpartyKey(ExternalLedgerRaw row, String masterUid) {
+        if (row == null || !isConvertType(row.getBybitType())) {
+            return null;
+        }
+        String orderKey = firstNonBlank(row.getTradeOrderId(), extractConvertOrderKey(row.getId()));
+        if (orderKey == null || orderKey.isBlank()) {
+            return null;
+        }
+        return BYBIT_PREFIX + masterUid + ":CONVERT:" + orderKey;
+    }
+
+    private boolean isConvertType(String bybitType) {
+        if (bybitType == null) {
+            return false;
+        }
+        String normalized = normalize(bybitType);
+        return "convert".equals(normalized) || "currency_buy".equals(normalized) || "currency_sell".equals(normalized);
+    }
+
+    private String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private String extractConvertOrderKey(String rowId) {
+        if (rowId == null || rowId.isBlank()) {
+            return null;
+        }
+        int lastColon = rowId.lastIndexOf(':');
+        return lastColon >= 0 ? rowId.substring(lastColon + 1) : rowId;
+    }
+
+    private String loanOrderKey(ExternalLedgerRaw row) {
+        if (row.getTradeOrderId() != null && !row.getTradeOrderId().isBlank()) {
+            return row.getTradeOrderId().trim();
+        }
+        if (row.getId() != null && !row.getId().isBlank()) {
+            return row.getId();
+        }
+        return normalize(row.getBybitDescription());
+    }
+
+    private String normalizeRewardBusiType(ExternalLedgerRaw row) {
+        String busi = row.getBybitType();
+        if (busi == null || busi.isBlank()) {
+            busi = row.getBybitDescription();
+        }
+        return busi == null || busi.isBlank() ? "UNKNOWN" : busi.trim();
+    }
+
+    private String resolveWalletRef(ExternalLedgerRaw row) {
+        if (row.getWalletRef() != null && !row.getWalletRef().isBlank()) {
+            return row.getWalletRef().trim();
+        }
+        return BYBIT_PREFIX + normalize(row.getUid());
+    }
+
+    private String extractUid(String walletRef) {
+        if (walletRef == null || !walletRef.regionMatches(true, 0, BYBIT_PREFIX, 0, BYBIT_PREFIX.length())) {
+            return "";
+        }
+        String remainder = walletRef.substring(BYBIT_PREFIX.length()).trim();
+        int colon = remainder.indexOf(':');
+        return colon >= 0 ? remainder.substring(0, colon).trim() : remainder.trim();
+    }
+
+    private String ledgerAccountRef(String masterUid, String walletRef, String defaultLedger) {
+        if (walletRef != null && walletRef.contains(":")) {
+            return walletRef;
+        }
+        return BYBIT_PREFIX + masterUid + ":" + defaultLedger;
+    }
+
     private BigDecimal abs(BigDecimal value) {
         return value == null ? null : value.abs();
     }
@@ -579,36 +1063,6 @@ public class BybitCanonicalTransactionBuilder {
         return row.getFilledPrice() == null
                 ? FlowPricing.none()
                 : new FlowPricing(row.getFilledPrice(), PriceSource.EXECUTION);
-    }
-
-    private FlowPricing feeFlowPricing(
-            ExternalLedgerRaw feeRow,
-            ExternalLedgerRaw buyRow,
-            ExternalLedgerRaw sellRow,
-            BigDecimal executionPrice
-    ) {
-        if (isStablecoin(feeRow.getAssetSymbol())) {
-            return new FlowPricing(BigDecimal.ONE, PriceSource.STABLECOIN);
-        }
-        if (symbolEquals(feeRow.getAssetSymbol(), buyRow.getAssetSymbol())) {
-            return tradeFlowPricing(
-                    feeRow.getAssetSymbol(),
-                    NormalizedLegRole.BUY,
-                    buyRow.getAssetSymbol(),
-                    sellRow.getAssetSymbol(),
-                    executionPrice
-            );
-        }
-        if (symbolEquals(feeRow.getAssetSymbol(), sellRow.getAssetSymbol())) {
-            return tradeFlowPricing(
-                    feeRow.getAssetSymbol(),
-                    NormalizedLegRole.SELL,
-                    buyRow.getAssetSymbol(),
-                    sellRow.getAssetSymbol(),
-                    executionPrice
-            );
-        }
-        return FlowPricing.none();
     }
 
     private FlowPricing tradeFlowPricing(
@@ -674,6 +1128,296 @@ public class BybitCanonicalTransactionBuilder {
         return Boolean.TRUE.equals(row.getBasisRelevant())
                 && row.getCanonicalType() != null
                 && !row.getCanonicalType().isBlank();
+    }
+
+    private BigDecimal netExecutionLegQuantity(ExternalLedgerRaw leg) {
+        if (leg == null || leg.getQuantityRaw() == null) {
+            return null;
+        }
+        BigDecimal fee = leg.getFeePaid() != null ? leg.getFeePaid() : BigDecimal.ZERO;
+        return leg.getQuantityRaw().add(fee);
+    }
+
+    private String bybitSubAccountTransferCorrelationId(ExternalLedgerRaw row) {
+        if (row == null) {
+            return null;
+        }
+        String id = row.getId();
+        if (id == null || id.isBlank()) {
+            return null;
+        }
+        Matcher matcher = SELF_TRANSFER_PATTERN.matcher(id);
+        if (matcher.find()) {
+            return "bybit-sub-transfer:" + normalize(row.getUid()) + ":" + matcher.group(1);
+        }
+        matcher = UNI_TRANS_PATTERN.matcher(id);
+        if (matcher.find()) {
+            return "bybit-uni-transfer:" + normalize(row.getUid()) + ":" + matcher.group(1);
+        }
+        return null;
+    }
+
+    private static String otherSubAccount(String walletRef) {
+        if (walletRef.endsWith(":UTA")) {
+            return walletRef.substring(0, walletRef.length() - 3) + "FUND";
+        }
+        if (walletRef.endsWith(":FUND")) {
+            return walletRef.substring(0, walletRef.length() - 4) + "UTA";
+        }
+        if (walletRef.endsWith(":EARN")) {
+            return walletRef.substring(0, walletRef.length() - 4) + "FUND";
+        }
+        return null;
+    }
+
+    /**
+     * Picks the counterparty Bybit sub-account for an INTERNAL_TRANSFER row from the raw
+     * extracted metadata. The rules below mirror Bybit's documented bookkeeping:
+     * <ul>
+     *   <li><b>FUNDING_HISTORY</b> rows always sit on {@code BYBIT:&lt;uid&gt;:FUND}. The
+     *       description disambiguates the other side:
+     *       <ul>
+     *         <li>"Transfer to/from Unified Trading Account" → counterparty=UTA;</li>
+     *         <li>"Flexible Savings Subscription/Redemption/Distribution" → counterparty=EARN;</li>
+     *         <li>Otherwise default to UTA (most common Bybit transfer).</li>
+     *       </ul></li>
+     *   <li><b>EARN_FLEXIBLE_SAVING</b> rows always sit on {@code BYBIT:&lt;uid&gt;:EARN} with
+     *       FUND as counterparty.</li>
+     *   <li><b>INTERNAL_TRANSFER</b> (self-transfer) rows: counterparty = the sibling account of
+     *       walletRef (UTA↔FUND).</li>
+     *   <li><b>TRANSACTION_LOG</b> rows sit on {@code BYBIT:&lt;uid&gt;:UTA}:
+     *       <ul>
+     *         <li>{@code FLEXIBLE_STAKING_SUBSCRIPTION/REDEMPTION/PROFIT} → counterparty=EARN;</li>
+     *         <li>{@code TRANSFER_IN/TRANSFER_OUT} → counterparty=FUND.</li>
+     *       </ul></li>
+     * </ul>
+     * In all cases the result is guaranteed to differ from {@code walletRef}.
+     */
+    private String resolveInternalTransferCounterparty(ExternalLedgerRaw row, String walletRef, String masterUid) {
+        if (row == null) {
+            return null;
+        }
+        String subCorrelation = bybitSubAccountTransferCorrelationId(row);
+        if (subCorrelation != null) {
+            String sibling = otherSubAccount(walletRef);
+            if (sibling != null && !sibling.equalsIgnoreCase(walletRef)) {
+                return sibling;
+            }
+        }
+        String sourceFile = normalize(row.getSourceFile());
+        String description = normalize(row.getBybitDescription());
+        String bybitType = normalize(row.getBybitType());
+        if (sourceFile.contains("earn_flexible_saving")) {
+            return BYBIT_PREFIX + masterUid + ":FUND";
+        }
+        if (sourceFile.contains("funding_history")) {
+            if (description.contains("flexible savings") || description.contains("savings") || "earn".equalsIgnoreCase(row.getBybitType())) {
+                return BYBIT_PREFIX + masterUid + ":EARN";
+            }
+            return BYBIT_PREFIX + masterUid + ":UTA";
+        }
+        if (sourceFile.contains("transaction_log")) {
+            if (bybitType.contains("flexible_staking") || bybitType.contains("staking")) {
+                return BYBIT_PREFIX + masterUid + ":EARN";
+            }
+            if (bybitType.contains("transfer")) {
+                return BYBIT_PREFIX + masterUid + ":FUND";
+            }
+        }
+        // Cycle/6 A1+: INTERNAL_TRANSFER (master ledger) rows describe the other side via
+        // `bybitDescription` ("Transfer from <SRC> to <DST>"). Map the role names (FUND/UNIFIED
+        // /UTA/EARN/FUNDING) onto sibling accounts. The own side is identified by walletRef so the
+        // counterparty is whichever side of the description does NOT match the walletRef suffix.
+        if (sourceFile.contains("internal_transfer")) {
+            String walletAccount = walletAccountSuffix(walletRef);
+            String descriptionOther = parseInternalTransferDescriptionOther(description, walletAccount);
+            if (descriptionOther != null) {
+                return BYBIT_PREFIX + masterUid + ":" + descriptionOther;
+            }
+            if (bybitType.contains("transfer in") && walletAccount != null) {
+                String sibling = otherSubAccount(walletRef);
+                if (sibling != null && !sibling.equalsIgnoreCase(walletRef)) {
+                    return sibling;
+                }
+            }
+            if (bybitType.contains("transfer out") && walletAccount != null) {
+                String sibling = otherSubAccount(walletRef);
+                if (sibling != null && !sibling.equalsIgnoreCase(walletRef)) {
+                    return sibling;
+                }
+            }
+        }
+        return null;
+    }
+
+    private static String walletAccountSuffix(String walletRef) {
+        if (walletRef == null) {
+            return null;
+        }
+        int colon = walletRef.lastIndexOf(':');
+        if (colon < 0 || colon == walletRef.length() - 1) {
+            return null;
+        }
+        return walletRef.substring(colon + 1).toUpperCase(Locale.ROOT);
+    }
+
+    private static String parseInternalTransferDescriptionOther(String description, String walletAccount) {
+        if (description == null || description.isBlank()) {
+            return null;
+        }
+        Matcher matcher = Pattern.compile("transfer\\s+from\\s+(\\w+)\\s+to\\s+(\\w+)").matcher(description);
+        if (!matcher.find()) {
+            return null;
+        }
+        String src = normalizeAccountToken(matcher.group(1));
+        String dst = normalizeAccountToken(matcher.group(2));
+        if (src == null || dst == null) {
+            return null;
+        }
+        if (walletAccount != null && walletAccount.equals(src)) {
+            return dst;
+        }
+        if (walletAccount != null && walletAccount.equals(dst)) {
+            return src;
+        }
+        return null;
+    }
+
+    private static String normalizeAccountToken(String token) {
+        if (token == null) {
+            return null;
+        }
+        String upper = token.trim().toUpperCase(Locale.ROOT);
+        return switch (upper) {
+            case "FUND", "FUNDING" -> "FUND";
+            case "UNIFIED", "UTA" -> "UTA";
+            case "EARN", "SAVINGS" -> "EARN";
+            default -> null;
+        };
+    }
+
+    /**
+     * Last-resort counterparty for an INTERNAL_TRANSFER row when domain signals fail to resolve.
+     * Guarantees the result differs from {@code walletRef}. Default sibling is UTA↔FUND, falling
+     * back to FUND when walletRef does not carry a sub-account suffix.
+     */
+    private String fallbackInternalTransferCounterparty(String walletRef, String masterUid) {
+        String sibling = walletRef == null ? null : otherSubAccount(walletRef);
+        if (sibling != null && !sibling.equalsIgnoreCase(walletRef)) {
+            return sibling;
+        }
+        if (walletRef != null && walletRef.toUpperCase(Locale.ROOT).endsWith(":FUND")) {
+            return BYBIT_PREFIX + masterUid + ":UTA";
+        }
+        return BYBIT_PREFIX + masterUid + ":FUND";
+    }
+
+    /**
+     * Cycle/5 N3 / D-1: deterministic key so TX_LOG sender, FH sender, and INTERNAL_TRANSFER receiver
+     * legs of the same (uid, asset, |qty|, minute) pair into the same pending-transfer queue.
+     */
+    private static boolean shouldAttachBybitEconomyCorrelationId(ExternalLedgerRaw row) {
+        if (row == null) {
+            return false;
+        }
+        String sf = row.getSourceFile();
+        if (sf == null || sf.isBlank()) {
+            return false;
+        }
+        String u = sf.toUpperCase(Locale.ROOT);
+        return u.contains("TRANSACTION_LOG")
+                || u.contains("INTERNAL_TRANSFER")
+                || u.contains("FUNDING_HISTORY")
+                || u.contains("EARN_FLEXIBLE_SAVING");
+    }
+
+    private String bybitInternalTransferEconomyCorrelationId(ExternalLedgerRaw row) {
+        if (row == null || row.getUid() == null || row.getAssetSymbol() == null || row.getQuantityRaw() == null) {
+            return null;
+        }
+        Instant anchor = row.getTimeUtc() != null ? row.getTimeUtc() : row.getImportedAt();
+        if (anchor == null) {
+            return null;
+        }
+        long minuteBucket = anchor.getEpochSecond() / 60;
+        String qtyPlain = row.getQuantityRaw().abs().stripTrailingZeros().toPlainString();
+        String payload = normalize(row.getUid())
+                + "|"
+                + row.getAssetSymbol().trim().toUpperCase(Locale.ROOT)
+                + "|"
+                + qtyPlain
+                + "|"
+                + minuteBucket;
+        return "bybit-econ-v1:" + sha256Hex(payload);
+    }
+
+    /**
+     * Cycle/9 S4: deterministic family-aware correlation id for cross-sub-account liquid-staking
+     * pairs (e.g., FUND METH ↔ EARN CMETH).
+     *
+     * <p>Symmetric across both legs: derives uid, family identity, absolute quantity (both legs
+     * share magnitude for staking conversion), and a minute-bucket centered on the earlier
+     * leg. The family identity collapses METH and CMETH onto {@code FAMILY:ETH}, allowing
+     * {@code FamilyEquivalentCustodyReplayHandler} to pair the legs and carry basis across
+     * sub-accounts.</p>
+     */
+    public String crossSubAccountStakingCorrelationId(ExternalLedgerRaw left, ExternalLedgerRaw right) {
+        if (left == null || right == null) {
+            return null;
+        }
+        String uid = normalize(left.getUid());
+        if (uid.isBlank()) {
+            uid = normalize(right.getUid());
+        }
+        if (uid.isBlank()) {
+            return null;
+        }
+        String leftFamily = AccountingAssetFamilySupport.continuityIdentity(left.getAssetSymbol(), null);
+        String rightFamily = AccountingAssetFamilySupport.continuityIdentity(right.getAssetSymbol(), null);
+        String family = leftFamily != null ? leftFamily : rightFamily;
+        if (family == null || family.isBlank()) {
+            return null;
+        }
+        java.math.BigDecimal leftQty = left.getQuantityRaw() == null ? null : left.getQuantityRaw().abs().stripTrailingZeros();
+        java.math.BigDecimal rightQty = right.getQuantityRaw() == null ? null : right.getQuantityRaw().abs().stripTrailingZeros();
+        java.math.BigDecimal qty = leftQty != null && (rightQty == null || leftQty.compareTo(rightQty) >= 0) ? leftQty : rightQty;
+        if (qty == null) {
+            return null;
+        }
+        Instant leftTime = left.getTimeUtc() != null ? left.getTimeUtc() : left.getImportedAt();
+        Instant rightTime = right.getTimeUtc() != null ? right.getTimeUtc() : right.getImportedAt();
+        Instant anchor;
+        if (leftTime != null && rightTime != null) {
+            anchor = leftTime.isBefore(rightTime) ? leftTime : rightTime;
+        } else {
+            anchor = leftTime != null ? leftTime : rightTime;
+        }
+        if (anchor == null) {
+            return null;
+        }
+        long minuteBucket = anchor.getEpochSecond() / 60;
+        String payload = uid
+                + "|"
+                + family
+                + "|"
+                + qty.toPlainString()
+                + "|"
+                + minuteBucket;
+        return "bybit-stake-pair-v1:" + sha256Hex(payload);
+    }
+
+    private static String sha256Hex(String payload) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(payload.getBytes(StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder(hash.length * 2);
+            for (byte b : hash) {
+                hex.append(String.format(Locale.ROOT, "%02x", b));
+            }
+            return hex.toString();
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     private String normalize(String value) {

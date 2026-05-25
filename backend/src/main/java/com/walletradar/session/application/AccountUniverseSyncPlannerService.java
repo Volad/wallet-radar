@@ -12,9 +12,10 @@ import org.springframework.stereotype.Service;
 import java.time.Instant;
 
 /**
- * Direct control-plane planner for session universe changes. It reconciles the
- * accounting universe, clears derived session outputs, plans sync windows, and
- * persists backfill segments. Execution is left to the regular schedulers.
+ * Control-plane planner for session universe changes: reconciles the accounting universe,
+ * clears derived session outputs, plans sync windows, and persists backfill segments.
+ * Call from {@link AccountUniverseSyncPlanScheduler} (or jobs), not from HTTP request threads —
+ * planning performs RPC / explorer head resolution and can be slow.
  */
 @Service
 @RequiredArgsConstructor
@@ -56,6 +57,7 @@ public class AccountUniverseSyncPlannerService {
                     planResult.scheduledIntegrationSyncStatusIds()
             );
             session.setUpdatedAt(observedAt);
+            SessionWriteMergeSupport.refreshIntegrationsFromDatabase(userSessionRepository, session.getId(), session);
             userSessionRepository.save(session);
 
             if (planResult.scheduledTargets() > 0) {

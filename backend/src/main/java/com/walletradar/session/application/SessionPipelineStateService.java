@@ -64,6 +64,7 @@ public class SessionPipelineStateService {
                 state.setMessage(message);
                 state.setUpdatedAt(Instant.now());
                 session.setUpdatedAt(Instant.now());
+                SessionWriteMergeSupport.refreshIntegrationsFromDatabase(userSessionRepository, sessionId, session);
                 userSessionRepository.save(session);
             });
         }

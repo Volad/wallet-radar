@@ -26,6 +26,7 @@ class ReplayTransactionRouterTest {
                 ignored -> false,
                 ignored -> false,
                 ignored -> false,
+                ignored -> false,
                 ignored -> new LiquidStakingFlowSelection(List.of(indexedFlow(0)), List.of(indexedFlow(1))),
                 ignored -> new SimpleFamilyCustodySelection(List.of(new SimpleFamilyCustodyPair(indexedFlow(2), indexedFlow(3))), java.util.Map.of())
         );
@@ -39,6 +40,7 @@ class ReplayTransactionRouterTest {
     void routesFamilyEquivalentCustodyWhenNoHigherPriorityHandlerMatches() {
         ReplayRoutingDecision decision = router.route(
                 transaction(NormalizedTransactionType.LENDING_DEPOSIT),
+                ignored -> false,
                 ignored -> false,
                 ignored -> false,
                 ignored -> false,
@@ -57,6 +59,7 @@ class ReplayTransactionRouterTest {
                 ignored -> true,
                 ignored -> false,
                 ignored -> false,
+                ignored -> false,
                 ignored -> new LiquidStakingFlowSelection(List.of(indexedFlow(0)), List.of(indexedFlow(1))),
                 ignored -> new SimpleFamilyCustodySelection(List.of(new SimpleFamilyCustodyPair(indexedFlow(2), indexedFlow(3))), java.util.Map.of())
         );
@@ -70,6 +73,7 @@ class ReplayTransactionRouterTest {
     void fallsBackToGenericWhenNoSpecializedRouteMatches() {
         ReplayRoutingDecision decision = router.route(
                 transaction(NormalizedTransactionType.SWAP),
+                ignored -> false,
                 ignored -> false,
                 ignored -> false,
                 ignored -> false,

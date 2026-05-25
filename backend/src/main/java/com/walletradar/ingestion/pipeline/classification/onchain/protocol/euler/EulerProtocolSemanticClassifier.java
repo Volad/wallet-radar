@@ -54,6 +54,13 @@ public class EulerProtocolSemanticClassifier implements ProtocolSemanticClassifi
     private static final String ERC20_TRANSFER_TOPIC =
             "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 
+    /**
+     * {@link Set#of} rejects {@code contains(null)} with NPE; explorer-only rows often omit top-level {@code to}.
+     */
+    private static boolean isEulerBatchRouter(String toAddress) {
+        return toAddress != null && EULER_BATCH_ROUTERS.contains(toAddress);
+    }
+
     private final ProtocolResourceDefinition resource;
 
     public EulerProtocolSemanticClassifier(ProtocolResourceCatalog protocolResourceCatalog) {
@@ -161,14 +168,14 @@ public class EulerProtocolSemanticClassifier implements ProtocolSemanticClassifi
     }
 
     private boolean isAuditedLoopRouter(OnChainRawTransactionView view) {
-        return EULER_BATCH_ROUTERS.contains(view.toAddress());
+        return isEulerBatchRouter(view.toAddress());
     }
 
     private boolean isEulerBorrowBackedCollateralOpen(
             OnChainRawTransactionView view,
             List<RawLeg> movementLegs
     ) {
-        if (!EULER_BATCH_ROUTERS.contains(view.toAddress())) {
+        if (!isEulerBatchRouter(view.toAddress())) {
             return false;
         }
         if (!hasEulerBorrowCallContext(view) || !hasEulerBorrowEvent(view)) {
@@ -639,7 +646,7 @@ public class EulerProtocolSemanticClassifier implements ProtocolSemanticClassifi
         if (!"0xc16ae7a4".equals(view.methodId())) {
             return false;
         }
-        if (!EULER_BATCH_ROUTERS.contains(view.toAddress())) {
+        if (!isEulerBatchRouter(view.toAddress())) {
             return false;
         }
         return wallet.length() == 42

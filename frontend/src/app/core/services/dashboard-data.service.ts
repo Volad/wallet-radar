@@ -70,6 +70,11 @@ export class DashboardDataService {
         value: this.formatUsd(response.summary.totalRealizedPnlUsd ?? 0),
         color: (response.summary.totalRealizedPnlUsd ?? 0) >= 0 ? COLORS.green : COLORS.red,
       },
+      {
+        label: 'Net Inflow',
+        value: this.formatUsd(response.summary.lifetimeExternalInflowUsd ?? 0),
+        color: COLORS.text,
+      },
     ];
 
     return {

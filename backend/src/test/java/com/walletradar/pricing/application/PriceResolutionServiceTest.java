@@ -147,6 +147,8 @@ class PriceResolutionServiceTest {
 
     @Test
     void continuityTypeStillPricesExplicitRewardSideFlow() {
+        // Cycle/16 R6: LP_EXIT inbound TRANSFER legs (including pegged-native cmETH) receive
+        // market quotes for inbound shortfall spot fallback; BUY/FEE siblings still resolve normally.
         PriceResolutionService service = service();
         NormalizedTransaction transaction = transaction(
                 NormalizedTransactionSource.ON_CHAIN,
@@ -156,6 +158,13 @@ class PriceResolutionServiceTest {
                 flow(NormalizedLegRole.BUY, "0xd27b18915e7acc8fd6ac75db6766a80f8d2f5729", "PENDLE", "0.012731662739929251"),
                 flow(NormalizedLegRole.FEE, null, "MNT", "-0.0743242821")
         );
+        when(externalSources.resolve(argThat(matchesSymbol("cmETH")))).thenReturn(Optional.of(new PriceQuote(
+                new BigDecimal("2175.66"),
+                PriceSource.BINANCE,
+                transaction.getBlockTimestamp(),
+                "USD",
+                "ETHUSDT"
+        )));
         when(externalSources.resolve(argThat(matchesSymbol("PENDLE")))).thenReturn(Optional.of(new PriceQuote(
                 new BigDecimal("5"),
                 PriceSource.BINANCE,
@@ -173,7 +182,8 @@ class PriceResolutionServiceTest {
 
         NormalizedTransaction priced = service.resolve(transaction, Instant.parse("2026-03-25T12:00:00Z"));
 
-        assertThat(priced.getFlows().get(0).getUnitPriceUsd()).isNull();
+        assertThat(priced.getFlows().get(0).getUnitPriceUsd()).isEqualByComparingTo("2175.66");
+        assertThat(priced.getFlows().get(0).getPriceSource()).isEqualTo(PriceSource.BINANCE);
         assertThat(priced.getFlows().get(1).getUnitPriceUsd()).isEqualByComparingTo("5");
         assertThat(priced.getFlows().get(1).getPriceSource()).isEqualTo(PriceSource.BINANCE);
         assertThat(priced.getFlows().get(2).getUnitPriceUsd()).isEqualByComparingTo("0.8");

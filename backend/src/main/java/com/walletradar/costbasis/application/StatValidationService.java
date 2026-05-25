@@ -1,6 +1,7 @@
 package com.walletradar.costbasis.application;
 
 import com.walletradar.domain.common.PriceSource;
+import com.walletradar.ingestion.pipeline.clarification.FlowCounterpartySupport;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
@@ -32,6 +33,8 @@ public class StatValidationService {
     static final String FLOW_PRICE_MISSING_REASON = "STAT_FLOW_PRICE_MISSING";
     static final String SWAP_MISSING_BUY_LEG_REASON = "STAT_SWAP_MISSING_BUY_LEG";
     static final String SWAP_MISSING_SELL_LEG_REASON = "STAT_SWAP_MISSING_SELL_LEG";
+    static final String COUNTERPARTY_TYPE_MISSING_REASON = "STAT_COUNTERPARTY_TYPE_MISSING";
+    static final String FLOW_COUNTERPARTY_MISSING_REASON = "FLOW_COUNTERPARTY_MISSING";
 
     private final PendingStatQueryService pendingStatQueryService;
     private final NormalizedTransactionRepository normalizedTransactionRepository;
@@ -93,6 +96,8 @@ public class StatValidationService {
             reasons.remove(FLOW_PRICE_MISSING_REASON);
             reasons.remove(SWAP_MISSING_BUY_LEG_REASON);
             reasons.remove(SWAP_MISSING_SELL_LEG_REASON);
+            reasons.remove(COUNTERPARTY_TYPE_MISSING_REASON);
+            reasons.remove(FLOW_COUNTERPARTY_MISSING_REASON);
             reasons.addAll(validationReasons);
             candidate.setMissingDataReasons(new ArrayList<>(reasons));
             candidate.setUpdatedAt(now);
@@ -167,6 +172,13 @@ public class StatValidationService {
             if (!hasSell) {
                 reasons.add(SWAP_MISSING_SELL_LEG_REASON);
             }
+        }
+
+        if (transaction.getCounterpartyType() == null || transaction.getCounterpartyType().isBlank()) {
+            reasons.add(COUNTERPARTY_TYPE_MISSING_REASON);
+        }
+        if (FlowCounterpartySupport.flowsMissingCounterparty(transaction)) {
+            reasons.add(FLOW_COUNTERPARTY_MISSING_REASON);
         }
 
         return new ArrayList<>(reasons);
@@ -261,6 +273,9 @@ public class StatValidationService {
             flowCopy.setAvcoAtTimeOfSale(flow.getAvcoAtTimeOfSale());
             flowCopy.setRealisedPnlUsd(flow.getRealisedPnlUsd());
             flowCopy.setLogIndex(flow.getLogIndex());
+            flowCopy.setCounterpartyAddress(flow.getCounterpartyAddress());
+            flowCopy.setCounterpartyType(flow.getCounterpartyType());
+            flowCopy.setAccountRef(flow.getAccountRef());
             flows.add(flowCopy);
         }
         copy.setFlows(flows);

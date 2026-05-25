@@ -4,7 +4,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
-final class LendingAssetSymbolSupport {
+public final class LendingAssetSymbolSupport {
 
     private static final List<String> RECEIPT_PREFIXES = List.of(
             "VARIABLEDEBT",
@@ -58,6 +58,24 @@ final class LendingAssetSymbolSupport {
     );
 
     private LendingAssetSymbolSupport() {
+    }
+
+    /**
+     * Underlying asset symbol for a lending receipt token (aToken-style), excluding debt markers.
+     * Used by accounting continuity to map heterogeneous chain receipts into one {@code FAMILY:*} bucket.
+     */
+    public static String lendingReceiptLifecycleUnderlying(String symbol) {
+        if (symbol == null || symbol.isBlank()) {
+            return null;
+        }
+        String normalized = normalizeSymbol(symbol);
+        if (isBorrowSymbol(normalized)) {
+            return null;
+        }
+        if (!isLendingPositionSymbol(normalized)) {
+            return null;
+        }
+        return lifecycleAsset(normalized);
     }
 
     static String normalizeSymbol(String symbol) {

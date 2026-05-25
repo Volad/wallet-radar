@@ -30,6 +30,14 @@ Not in scope in this contract:
 - portfolio snapshots
 - override or manual compensating transaction APIs
 
+**Operations (not REST):** to force a **full 2-year cold replay** for all on-chain
+wallets and all Bybit integrations in a Mongo database (delete raw/integration
+artifacts, reset `sync_status`, then reset derived pipeline state), use
+`scripts/mongo-prep-full-2yr-backfill.sh` from the repo root (see script header for
+scope and safety). Planned admin `POST .../full-rebuild` for a single integration
+is specified in cycle/3 `required-changes.md` / `qa-clarifications.md` §7.1 and is
+**not** part of this API document until implemented and secured.
+
 ---
 
 ## 2. Conventions
@@ -231,9 +239,26 @@ Response: `200 OK`
       "accountRef": "BYBIT:33625378",
       "maskedKey": "zQ1n...A9K2",
       "readOnly": true,
+      "capabilities": ["ASSET"],
       "lastValidatedAt": "2026-04-07T10:00:00Z",
       "lastSyncAt": null,
-      "lastError": null
+      "lastError": null,
+      "totalSegments": 120,
+      "completedSegments": 118,
+      "failedSegments": 0,
+      "progressPct": 98,
+      "streamSync": [
+        {
+          "stream": "TRANSACTION_LOG",
+          "lastSegmentCompletedAt": "2026-04-07T09:55:00Z",
+          "newestStoredEventAt": "2026-04-07T09:50:12Z"
+        },
+        {
+          "stream": "INTERNAL_TRANSFER",
+          "lastSegmentCompletedAt": null,
+          "newestStoredEventAt": null
+        }
+      ]
     }
   ]
 }

@@ -43,12 +43,23 @@ public class AccountingUniverse {
         private MemberType type;
         private String provider;
         private List<NetworkId> networks = new ArrayList<>();
+        /** Bybit master member only: user-owned sub-account UIDs (additive merge on sync). */
+        private List<String> subAccountUids = new ArrayList<>();
+        /** When false, member is OWN but on-chain backfill is not planned. Null ⇒ default true (EVM) on read. */
+        private Boolean backfillEnabled;
         private Instant firstSeenAt;
         private Instant lastSeenAt;
     }
 
     public enum MemberType {
         ON_CHAIN_WALLET,
-        EXCHANGE_ACCOUNT
+        EXCHANGE_ACCOUNT,
+        /**
+         * Cycle/9 S2: counterparty addresses (deposit/withdrawal hot wallets) on third-party
+         * venues the user owns accounts at (Paradex, MEX, BitGet, etc.). Treated as universe
+         * members for Net Inflow/Outflow exclusion and {@code CounterpartyBasisPool} carry,
+         * but their on-chain activity is not backfilled.
+         */
+        EXTERNAL_VENUE
     }
 }

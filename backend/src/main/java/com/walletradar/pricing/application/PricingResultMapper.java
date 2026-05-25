@@ -76,6 +76,9 @@ public class PricingResultMapper {
             flowCopy.setAvcoAtTimeOfSale(flow.getAvcoAtTimeOfSale());
             flowCopy.setRealisedPnlUsd(flow.getRealisedPnlUsd());
             flowCopy.setLogIndex(flow.getLogIndex());
+            flowCopy.setCounterpartyAddress(flow.getCounterpartyAddress());
+            flowCopy.setCounterpartyType(flow.getCounterpartyType());
+            flowCopy.setAccountRef(flow.getAccountRef());
             flows.add(flowCopy);
         }
         copy.setFlows(flows);

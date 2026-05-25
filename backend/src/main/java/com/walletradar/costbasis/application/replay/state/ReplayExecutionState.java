@@ -8,8 +8,10 @@ import com.walletradar.costbasis.application.replay.model.AssetKey;
 import com.walletradar.costbasis.application.replay.model.PositionState;
 import com.walletradar.costbasis.application.replay.persistence.LedgerPointCollector;
 
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 
 public final class ReplayExecutionState {
 
@@ -21,13 +23,54 @@ public final class ReplayExecutionState {
     private final AsyncLifecycleBucketStore asyncLifecycleBuckets = new AsyncLifecycleBucketStore();
     private final AsyncSpotOrderBucketStore asyncSpotOrderBuckets = new AsyncSpotOrderBucketStore();
     private final LedgerPointCollector ledgerPointCollector;
+    private final CounterpartyBasisPoolReplayContext counterpartyBasisPoolContext;
+    private final BorrowLiabilityReplayContext borrowLiabilityContext;
+    private final LpReceiptBasisPoolReplayContext lpReceiptBasisPoolContext;
+    /**
+     * Cycle/7 S5: continuity-path replay duplicate guard.
+     * Holds {@code (correlationId|walletAddress|assetFamily|sign(qty))} fingerprints for flows
+     * that have already passed through the continuity-transfer dispatch path during this replay
+     * pass. If a duplicate appears (e.g., a stream mirror that survived the upstream collapser),
+     * the dispatcher logs {@code REPLAY_DEDUP_MIRROR_SKIPPED} and skips the flow.
+     */
+    private final Set<String> seenContinuityFlows = new HashSet<>();
 
     public ReplayExecutionState(
             PassThroughCorridorPlan passThroughCorridorPlan,
             LedgerPointCollector ledgerPointCollector
     ) {
+        this(passThroughCorridorPlan, ledgerPointCollector, null, null, null);
+    }
+
+    public ReplayExecutionState(
+            PassThroughCorridorPlan passThroughCorridorPlan,
+            LedgerPointCollector ledgerPointCollector,
+            CounterpartyBasisPoolReplayContext counterpartyBasisPoolContext
+    ) {
+        this(passThroughCorridorPlan, ledgerPointCollector, counterpartyBasisPoolContext, null, null);
+    }
+
+    public ReplayExecutionState(
+            PassThroughCorridorPlan passThroughCorridorPlan,
+            LedgerPointCollector ledgerPointCollector,
+            CounterpartyBasisPoolReplayContext counterpartyBasisPoolContext,
+            BorrowLiabilityReplayContext borrowLiabilityContext
+    ) {
+        this(passThroughCorridorPlan, ledgerPointCollector, counterpartyBasisPoolContext, borrowLiabilityContext, null);
+    }
+
+    public ReplayExecutionState(
+            PassThroughCorridorPlan passThroughCorridorPlan,
+            LedgerPointCollector ledgerPointCollector,
+            CounterpartyBasisPoolReplayContext counterpartyBasisPoolContext,
+            BorrowLiabilityReplayContext borrowLiabilityContext,
+            LpReceiptBasisPoolReplayContext lpReceiptBasisPoolContext
+    ) {
         this.passThroughCorridorPlan = passThroughCorridorPlan;
         this.ledgerPointCollector = ledgerPointCollector;
+        this.counterpartyBasisPoolContext = counterpartyBasisPoolContext;
+        this.borrowLiabilityContext = borrowLiabilityContext;
+        this.lpReceiptBasisPoolContext = lpReceiptBasisPoolContext;
     }
 
     public PositionStore positions() {
@@ -91,5 +134,25 @@ public final class ReplayExecutionState {
 
     public LedgerPointCollector ledgerPointCollector() {
         return ledgerPointCollector;
+    }
+
+    public CounterpartyBasisPoolReplayContext counterpartyBasisPoolContext() {
+        return counterpartyBasisPoolContext;
+    }
+
+    public BorrowLiabilityReplayContext borrowLiabilityContext() {
+        return borrowLiabilityContext;
+    }
+
+    public LpReceiptBasisPoolReplayContext lpReceiptBasisPoolContext() {
+        return lpReceiptBasisPoolContext;
+    }
+
+    /** Returns true if the fingerprint was newly added; false if it was already seen. */
+    public boolean markContinuityFlowSeen(String fingerprint) {
+        if (fingerprint == null || fingerprint.isEmpty()) {
+            return true;
+        }
+        return seenContinuityFlows.add(fingerprint);
     }
 }

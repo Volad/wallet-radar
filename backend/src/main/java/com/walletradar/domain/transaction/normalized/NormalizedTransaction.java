@@ -92,6 +92,16 @@ import java.util.List;
         @CompoundIndex(
                 name = "normalized_source_wallet_type_block_idx",
                 def = "{'source': 1, 'walletAddress': 1, 'type': 1, 'blockTimestamp': 1, 'transactionIndex': 1}"
+        ),
+        @CompoundIndex(
+                name = "normalized_flow_counterparty_idx",
+                def = "{'flows.counterpartyAddress': 1, 'flows.assetSymbol': 1, 'blockTimestamp': 1}",
+                sparse = true
+        ),
+        @CompoundIndex(
+                name = "normalized_fund_corridor_idx",
+                def = "{'type': 1, 'walletAddress': 1}",
+                sparse = true
         )
 })
 @NoArgsConstructor
@@ -161,5 +171,8 @@ public class NormalizedTransaction {
         private BigDecimal avcoAtTimeOfSale;
         private BigDecimal realisedPnlUsd;
         private Integer logIndex;
+        private String counterpartyAddress;
+        private String counterpartyType;
+        private String accountRef;
     }
 }

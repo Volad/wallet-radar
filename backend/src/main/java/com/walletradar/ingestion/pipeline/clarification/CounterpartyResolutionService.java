@@ -1,5 +1,6 @@
 package com.walletradar.ingestion.pipeline.clarification;
 
+import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.domain.transaction.raw.RawTransaction;
@@ -7,6 +8,8 @@ import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegist
 import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryRole;
 import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryService;
 import com.walletradar.ingestion.pipeline.onchain.OnChainRawTransactionView;
+import com.walletradar.domain.session.AccountingUniverse;
+import com.walletradar.session.application.AccountingUniverseService;
 import org.bson.Document;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.lang.Nullable;
@@ -24,14 +27,19 @@ import java.util.Set;
 public class CounterpartyResolutionService {
 
     private final ProtocolRegistryService protocolRegistryService;
+    private final AccountingUniverseService accountingUniverseService;
 
     public CounterpartyResolutionService() {
-        this(null);
+        this(null, null);
     }
 
     @Autowired
-    public CounterpartyResolutionService(@Nullable ProtocolRegistryService protocolRegistryService) {
+    public CounterpartyResolutionService(
+            @Nullable ProtocolRegistryService protocolRegistryService,
+            @Nullable AccountingUniverseService accountingUniverseService
+    ) {
         this.protocolRegistryService = protocolRegistryService;
+        this.accountingUniverseService = accountingUniverseService;
     }
 
     public Optional<String> resolve(NormalizedTransaction normalizedTransaction, RawTransaction rawTransaction) {
@@ -100,11 +108,32 @@ public class CounterpartyResolutionService {
         );
     }
 
+    public String classifyCounterpartyType(NormalizedTransaction normalizedTransaction, String address) {
+        return classifyCounterpartyType(normalizedTransaction, null, address);
+    }
+
     private String classifyCounterpartyType(
             NormalizedTransaction normalizedTransaction,
             OnChainRawTransactionView view,
             String address
     ) {
+        if (present(address) && accountingUniverseService != null && normalizedTransaction != null) {
+            NetworkId networkId = normalizedTransaction.getNetworkId();
+            try {
+                AccountingUniverseService.OwnMembership own = accountingUniverseService.classify(address, networkId);
+                if (own.isMember()) {
+                    AccountingUniverse.MemberType memberType = own.memberType();
+                    if (memberType == AccountingUniverse.MemberType.ON_CHAIN_WALLET) {
+                        return CounterpartyType.PERSONAL_WALLET;
+                    }
+                    if (memberType == AccountingUniverse.MemberType.EXCHANGE_ACCOUNT) {
+                        return CounterpartyType.CEX;
+                    }
+                }
+            } catch (IllegalStateException ignored) {
+                // Universe not bound on this thread; fall through to registry/shape chain.
+            }
+        }
         String matchedCounterparty = normalizedTransaction.getMatchedCounterparty();
         if (present(matchedCounterparty) && matchedCounterparty.trim().toUpperCase(Locale.ROOT).startsWith("BYBIT:")) {
             return CounterpartyType.CEX;

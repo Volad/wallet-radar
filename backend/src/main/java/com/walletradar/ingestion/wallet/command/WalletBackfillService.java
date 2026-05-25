@@ -11,7 +11,8 @@ import java.util.List;
 
 /**
  * Standalone wallet-entry helper for the legacy wallet API. Session-owned
- * flows use AccountUniverseSyncPlannerService instead of talking to this service.
+ * flows use {@link com.walletradar.session.application.AccountUniverseSyncPlanScheduler} /
+ * {@link com.walletradar.session.application.AccountUniverseSyncPlannerService} instead of this service.
  */
 @Service
 @RequiredArgsConstructor

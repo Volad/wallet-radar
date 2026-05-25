@@ -12,8 +12,10 @@ import com.walletradar.ingestion.pipeline.classification.OnChainClassifier;
 import com.walletradar.ingestion.pipeline.classification.reason.ClassificationReasonCode;
 import com.walletradar.ingestion.pipeline.clarification.CounterpartyEnrichmentService;
 import com.walletradar.ingestion.pipeline.clarification.ProtocolNameEnrichmentService;
+import com.walletradar.ingestion.pipeline.clarification.RegistryBridgeInboundTypeCorrectionService;
 import com.walletradar.ingestion.pipeline.onchain.OnChainNormalizedTransactionBuilder;
 import com.walletradar.ingestion.pipeline.onchain.PendingReclassificationQueryService;
+import com.walletradar.session.application.AccountingUniverseService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -38,17 +40,34 @@ public class OnChainReclassificationService {
     private final OnChainClassifier onChainClassifier;
     private final OnChainNormalizedTransactionBuilder builder;
     private final ProtocolNameEnrichmentService protocolNameEnrichmentService;
+    private final RegistryBridgeInboundTypeCorrectionService registryBridgeInboundTypeCorrectionService;
     private final CounterpartyEnrichmentService counterpartyEnrichmentService;
+    private final AccountingUniverseService accountingUniverseService;
 
     public int processNextBatch() {
-        List<NormalizedTransaction> batch = pendingReclassificationQueryService.loadNextBatch(properties.getBatchSize());
-        int completed = 0;
-        for (NormalizedTransaction normalizedTransaction : batch) {
-            if (reclassify(normalizedTransaction)) {
-                completed++;
+        return processNextBatch(null);
+    }
+
+    public int processNextBatch(String sessionId) {
+        bindUniverseIfPresent(sessionId);
+        try {
+            List<NormalizedTransaction> batch = pendingReclassificationQueryService.loadNextBatch(properties.getBatchSize());
+            int completed = 0;
+            for (NormalizedTransaction normalizedTransaction : batch) {
+                if (reclassify(normalizedTransaction)) {
+                    completed++;
+                }
             }
+            return completed;
+        } finally {
+            accountingUniverseService.clearUniverseBinding();
         }
-        return completed;
+    }
+
+    private void bindUniverseIfPresent(String sessionId) {
+        if (sessionId != null && !sessionId.isBlank()) {
+            accountingUniverseService.bindUniverse(sessionId.trim());
+        }
     }
 
     public boolean reclassify(NormalizedTransaction normalizedTransaction) {
@@ -85,7 +104,12 @@ public class OnChainReclassificationService {
             );
             return true;
         } catch (RuntimeException error) {
-            log.warn("On-chain reclassification failed for normalizedTxId={}: {}", existing.getId(), error.getMessage());
+            log.warn(
+                    "On-chain reclassification failed for normalizedTxId={}: {}",
+                    existing.getId(),
+                    error.getMessage(),
+                    error
+            );
             return false;
         }
     }
@@ -100,6 +124,7 @@ public class OnChainReclassificationService {
             return;
         }
         protocolNameEnrichmentService.enrichInPlace(normalizedTransaction, rawTransaction, now);
+        registryBridgeInboundTypeCorrectionService.correctIfApplicable(normalizedTransaction, rawTransaction, now);
         counterpartyEnrichmentService.enrichInPlace(normalizedTransaction, rawTransaction, now);
         builder.enrichFluidEvidence(normalizedTransaction, rawTransaction);
     }
@@ -138,7 +163,11 @@ public class OnChainReclassificationService {
         }
         return reasons.contains(ClassificationReasonCode.NATIVE_SETTLEMENT_TRANSFER_EVIDENCE_REQUIRED.code())
                 || reasons.contains(ClassificationReasonCode.LP_POSITION_CORRELATION_REQUIRED.code())
-                || reasons.contains(ClassificationReasonCode.EULER_BATCH_DECODER_REQUIRED.code());
+                || reasons.contains(ClassificationReasonCode.EULER_BATCH_DECODER_REQUIRED.code())
+                || reasons.contains(ClassificationReasonCode.GMX_DEPOSIT_SETTLEMENT_CORRELATION_REQUIRED.code())
+                || reasons.contains(ClassificationReasonCode.GMX_WITHDRAWAL_SETTLEMENT_CORRELATION_REQUIRED.code())
+                || reasons.contains(ClassificationReasonCode.GMX_DEPOSIT_REQUEST_CORRELATION_REQUIRED.code())
+                || reasons.contains(ClassificationReasonCode.GMX_WITHDRAWAL_REQUEST_CORRELATION_REQUIRED.code());
     }
 
     private boolean hasReplayableFlows(NormalizedTransaction normalizedTransaction) {

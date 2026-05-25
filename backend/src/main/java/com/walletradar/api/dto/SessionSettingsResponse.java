@@ -10,6 +10,7 @@ public record SessionSettingsResponse(
         String sessionId,
         List<WalletEntry> wallets,
         List<IntegrationEntry> integrations,
+        List<ExternalVenueEntry> externalVenues,
         Boolean hideSmallAssets,
         Boolean showReconciliationWarnings
 ) {
@@ -17,6 +18,17 @@ public record SessionSettingsResponse(
             String address,
             String label,
             String color,
+            List<String> networks
+    ) {
+    }
+
+    /**
+     * Cycle/9 S2: owned external-venue counterparty address (Paradex/MEX/etc.).
+     */
+    public record ExternalVenueEntry(
+            String address,
+            String provider,
+            String label,
             List<String> networks
     ) {
     }
@@ -36,7 +48,18 @@ public record SessionSettingsResponse(
             int totalSegments,
             int completedSegments,
             int failedSegments,
-            int progressPct
+            int progressPct,
+            List<StreamSyncEntry> streamSync
+    ) {
+    }
+
+    /**
+     * Bybit-only: last successful segment completion and newest stored extracted row per API stream.
+     */
+    public record StreamSyncEntry(
+            String stream,
+            Instant lastSegmentCompletedAt,
+            Instant newestStoredEventAt
     ) {
     }
 }

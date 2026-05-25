@@ -1,6 +1,7 @@
 package com.walletradar.costbasis.application;
 
 import com.walletradar.costbasis.application.replay.model.AssetKey;
+import com.walletradar.costbasis.application.replay.model.CarryTransfer;
 import com.walletradar.costbasis.application.replay.model.PositionState;
 import com.walletradar.costbasis.application.replay.support.GenericFlowReplayEngine;
 import com.walletradar.domain.common.NetworkId;
@@ -93,6 +94,20 @@ class GenericFlowReplayEngineTest {
     }
 
     @Test
+    void applyBuyWithExplicitAcquisitionCostSetsWeightedAvco() {
+        PositionState position = new PositionState(assetKey());
+        position.setQuantity(new BigDecimal("100"));
+        position.setTotalCostBasisUsd(new BigDecimal("105"));
+        engine.recomputePerWalletAvco(position);
+
+        NormalizedTransaction.Flow buy = flow(NormalizedLegRole.BUY, "100", "1.05", PriceSource.BINANCE);
+        engine.applyBuyWithAcquisitionCost(buy, position, new BigDecimal("100"));
+
+        assertThat(position.quantity()).isEqualByComparingTo("200");
+        assertThat(position.perWalletAvco()).isEqualByComparingTo("1.025");
+    }
+
+    @Test
     void sponsoredGasInAddsZeroCostCoveredInventory() {
         PositionState position = new PositionState(assetKey());
 
@@ -103,6 +118,24 @@ class GenericFlowReplayEngineTest {
         assertThat(position.totalCostBasisUsd()).isZero();
         assertThat(position.perWalletAvco()).isEqualByComparingTo("0");
         assertThat(position.hasUnresolvedFlags()).isFalse();
+    }
+
+    @Test
+    void removeFromPositionUsesDerivedAvcoWhenStoredAvcoIsZeroButBasisExists() {
+        PositionState position = new PositionState(assetKey());
+        position.setQuantity(new BigDecimal("0.5459"));
+        position.setTotalCostBasisUsd(new BigDecimal("1748.29"));
+        position.setPerWalletAvco(BigDecimal.ZERO);
+
+        CarryTransfer carry = engine.removeFromPosition(
+                flow(NormalizedLegRole.TRANSFER, "-0.5459", null, null),
+                position
+        );
+
+        assertThat(carry.costBasisUsd()).isEqualByComparingTo("1748.29");
+        assertThat(position.quantity()).isZero();
+        assertThat(position.totalCostBasisUsd()).isZero();
+        assertThat(position.perWalletAvco()).isNull();
     }
 
     private AssetKey assetKey() {

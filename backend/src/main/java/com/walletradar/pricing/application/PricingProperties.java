@@ -26,7 +26,24 @@ public class PricingProperties {
 
     private long retryDelaySeconds = 120L;
 
+    /**
+     * Cycle/11 S1: settings for {@code BRIDGE_OUT} upstream-basis fallback repricing.
+     */
+    private BridgeOut bridgeOut = new BridgeOut();
+
     private External external = new External();
+
+    @NoArgsConstructor
+    @Getter
+    @Setter
+    public static class BridgeOut {
+
+        /**
+         * How far before a {@code BRIDGE_OUT} timestamp to search for a priced positive inflow
+         * on the same wallet/network/asset family.
+         */
+        private int upstreamLookbackHours = 24;
+    }
 
     @NoArgsConstructor
     @Getter

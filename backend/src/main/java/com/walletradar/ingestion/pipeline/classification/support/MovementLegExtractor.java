@@ -197,7 +197,8 @@ public class MovementLegExtractor {
         if (!"0xc16ae7a4".equals(view.methodId())) {
             return false;
         }
-        if (!EULER_BATCH_ROUTERS.contains(view.toAddress())) {
+        String interacted = view.toAddress();
+        if (interacted == null || !EULER_BATCH_ROUTERS.contains(interacted)) {
             return false;
         }
         return wallet.length() == 42

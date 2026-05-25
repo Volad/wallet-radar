@@ -85,15 +85,6 @@ public class SessionLendingQueryService {
     private final LendingMarketMetricEstimator metricEstimator;
     private final LendingMarketRateSnapshotService marketRateSnapshotService;
 
-    SessionLendingQueryService(
-            UserSessionRepository userSessionRepository,
-            AccountingUniverseService accountingUniverseService,
-            MongoOperations mongoOperations,
-            LendingMarketMetricEstimator metricEstimator
-    ) {
-        this(userSessionRepository, accountingUniverseService, mongoOperations, metricEstimator, null);
-    }
-
     public Optional<SessionLendingView> findSessionLending(String sessionId) {
         if (sessionId == null || sessionId.isBlank()) {
             return Optional.empty();
@@ -1028,11 +1019,11 @@ public class SessionLendingQueryService {
                     fallbackApy,
                     fallback.status(),
                     fallback.source(),
-                    "SUPPLY".equals(side) ? fallbackApy : null,
-                    "BORROW".equals(side) ? fallbackApy : null,
                     null,
                     null,
-                    fallback.status(),
+                    null,
+                    null,
+                    LendingMarketRateStatus.FALLBACK_ESTIMATE,
                     fallback.source(),
                     null,
                     false,

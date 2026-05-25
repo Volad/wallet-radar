@@ -12,10 +12,12 @@ import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegist
 import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryService;
 import com.walletradar.ingestion.pipeline.classification.support.BridgeSettlementSupport;
 import com.walletradar.ingestion.pipeline.classification.support.InboundSignalSupport;
+import com.walletradar.ingestion.pipeline.classification.support.KnownBridgeRouterRegistry;
 import com.walletradar.ingestion.pipeline.classification.support.NativeAssetSymbolResolver;
 import com.walletradar.ingestion.pipeline.classification.support.OnChainClassificationSupport;
 import com.walletradar.ingestion.pipeline.classification.support.RawLeg;
 import com.walletradar.ingestion.pipeline.classification.support.ParityFlowSupport;
+import com.walletradar.ingestion.pipeline.classification.support.RelayBridgeClassificationSupport;
 import com.walletradar.ingestion.pipeline.classification.support.SponsoredGasTopUpSupport;
 import com.walletradar.ingestion.wallet.query.TrackedWalletLookupService;
 import com.walletradar.ingestion.pipeline.onchain.OnChainRawTransactionView;
@@ -23,6 +25,7 @@ import org.bson.Document;
 import org.springframework.core.Ordered;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -97,6 +100,41 @@ public class HeuristicClassifier implements OnChainFamilyClassifier {
         }
         if (summary.tokenOutboundCount() == 1 && summary.tokenInboundCount() >= 2) {
             return Optional.of(knownLowConfidence(context, NormalizedTransactionType.LP_EXIT));
+        }
+
+        List<String> flowCounterparties = flowCounterpartyAddresses(context);
+        if (KnownBridgeRouterRegistry.touchesKnownRewardDistributor(flowCounterparties)) {
+            return Optional.of(knownLowConfidence(context, NormalizedTransactionType.REWARD_CLAIM));
+        }
+        if (summary.onlyInbound() && touchesKnownBridgeRouter(context)) {
+            return Optional.of(FamilyDecisionSupport.buildWithView(
+                    context.view(),
+                    NormalizedTransactionType.BRIDGE_IN,
+                    OnChainClassificationSupport.initialStatus(
+                            context.view(),
+                            NormalizedTransactionType.BRIDGE_IN,
+                            ConfidenceLevel.LOW
+                    ),
+                    ClassificationSource.HEURISTIC,
+                    ConfidenceLevel.LOW,
+                    OnChainClassificationSupport.toFlows(context.movementLegs(), NormalizedTransactionType.BRIDGE_IN),
+                    List.of("BRIDGE_ON_CHAIN_LEG_NOT_FOUND")
+            ));
+        }
+        if (summary.onlyOutbound() && touchesKnownBridgeRouter(context)) {
+            return Optional.of(FamilyDecisionSupport.buildWithView(
+                    context.view(),
+                    NormalizedTransactionType.BRIDGE_OUT,
+                    OnChainClassificationSupport.initialStatus(
+                            context.view(),
+                            NormalizedTransactionType.BRIDGE_OUT,
+                            ConfidenceLevel.LOW
+                    ),
+                    ClassificationSource.HEURISTIC,
+                    ConfidenceLevel.LOW,
+                    OnChainClassificationSupport.toFlows(context.movementLegs(), NormalizedTransactionType.BRIDGE_OUT),
+                    List.of("BRIDGE_ON_CHAIN_LEG_NOT_FOUND")
+            ));
         }
 
         if (isTrackedCounterparty(counterpartyTo, context.view().walletAddress())
@@ -174,6 +212,39 @@ public class HeuristicClassifier implements OnChainFamilyClassifier {
             if (InboundSignalSupport.hasExplicitClaimSelector(context.view())) {
                 return Optional.of(knownLowConfidence(context, NormalizedTransactionType.REWARD_CLAIM));
             }
+            Optional<ProtocolRegistryEntry> relayPayoutEntry = RelayBridgeClassificationSupport.resolveRelayPayoutInboundEntry(
+                    protocolRegistryService,
+                    context.view()
+            );
+            if (relayPayoutEntry.isPresent()) {
+                ProtocolRegistryEntry entry = relayPayoutEntry.get();
+                return Optional.of(FamilyDecisionSupport.buildWithView(
+                        context.view(),
+                        NormalizedTransactionType.BRIDGE_IN,
+                        OnChainClassificationSupport.initialStatus(context.view(), NormalizedTransactionType.BRIDGE_IN, entry.confidence()),
+                        ClassificationSource.PROTOCOL_REGISTRY,
+                        entry.confidence(),
+                        OnChainClassificationSupport.toFlows(context.movementLegs(), NormalizedTransactionType.BRIDGE_IN),
+                        List.of(),
+                        entry.protocolName(),
+                        entry.protocolVersion()
+                ));
+            }
+            if (touchesKnownBridgeRouter(context)) {
+                return Optional.of(FamilyDecisionSupport.buildWithView(
+                        context.view(),
+                        NormalizedTransactionType.BRIDGE_IN,
+                        OnChainClassificationSupport.initialStatus(
+                                context.view(),
+                                NormalizedTransactionType.BRIDGE_IN,
+                                ConfidenceLevel.LOW
+                        ),
+                        ClassificationSource.HEURISTIC,
+                        ConfidenceLevel.LOW,
+                        OnChainClassificationSupport.toFlows(context.movementLegs(), NormalizedTransactionType.BRIDGE_IN),
+                        List.of("BRIDGE_ON_CHAIN_LEG_NOT_FOUND")
+                ));
+            }
             List<String> reasons = InboundSignalSupport.hasRewardLikeSignal(context.view())
                     ? List.of("AMBIGUOUS_INBOUND_VS_REWARD")
                     : List.of();
@@ -189,6 +260,39 @@ public class HeuristicClassifier implements OnChainFamilyClassifier {
         }
 
         if (summary.onlyOutbound()) {
+            Optional<ProtocolRegistryEntry> relayDepositoryEntry = RelayBridgeClassificationSupport.resolveRelayDepositoryBridgeEntry(
+                    protocolRegistryService,
+                    context.view()
+            );
+            if (relayDepositoryEntry.isPresent()) {
+                ProtocolRegistryEntry entry = relayDepositoryEntry.get();
+                return Optional.of(FamilyDecisionSupport.buildWithView(
+                        context.view(),
+                        NormalizedTransactionType.BRIDGE_OUT,
+                        OnChainClassificationSupport.initialStatus(context.view(), NormalizedTransactionType.BRIDGE_OUT, entry.confidence()),
+                        ClassificationSource.PROTOCOL_REGISTRY,
+                        entry.confidence(),
+                        OnChainClassificationSupport.toFlows(context.movementLegs(), NormalizedTransactionType.BRIDGE_OUT),
+                        List.of(),
+                        entry.protocolName(),
+                        entry.protocolVersion()
+                ));
+            }
+            if (touchesKnownBridgeRouter(context)) {
+                return Optional.of(FamilyDecisionSupport.buildWithView(
+                        context.view(),
+                        NormalizedTransactionType.BRIDGE_OUT,
+                        OnChainClassificationSupport.initialStatus(
+                                context.view(),
+                                NormalizedTransactionType.BRIDGE_OUT,
+                                ConfidenceLevel.LOW
+                        ),
+                        ClassificationSource.HEURISTIC,
+                        ConfidenceLevel.LOW,
+                        OnChainClassificationSupport.toFlows(context.movementLegs(), NormalizedTransactionType.BRIDGE_OUT),
+                        List.of("BRIDGE_ON_CHAIN_LEG_NOT_FOUND")
+                ));
+            }
             return Optional.of(knownLowConfidence(context, NormalizedTransactionType.EXTERNAL_TRANSFER_OUT));
         }
 
@@ -220,6 +324,47 @@ public class HeuristicClassifier implements OnChainFamilyClassifier {
                 ParityFlowSupport.flows(context.view(), context.movementLegs(), type),
                 List.of()
         );
+    }
+
+    private static boolean touchesKnownBridgeRouter(OnChainClassificationContext context) {
+        return KnownBridgeRouterRegistry.touchesKnownBridgeRouter(flowCounterpartyAddresses(context));
+    }
+
+    private static List<String> flowCounterpartyAddresses(OnChainClassificationContext context) {
+        List<String> addresses = new ArrayList<>();
+        if (context == null || context.view() == null) {
+            return addresses;
+        }
+        OnChainRawTransactionView view = context.view();
+        String to = view.toAddress();
+        String from = view.fromAddress();
+        if (to != null && !to.isBlank()) {
+            addresses.add(to);
+        }
+        if (from != null && !from.isBlank()) {
+            addresses.add(from);
+        }
+        for (Document transfer : view.explorerTokenTransfers()) {
+            String tokenFrom = view.tokenTransferFrom(transfer);
+            String tokenTo = view.tokenTransferTo(transfer);
+            if (tokenFrom != null && !tokenFrom.isBlank()) {
+                addresses.add(tokenFrom);
+            }
+            if (tokenTo != null && !tokenTo.isBlank()) {
+                addresses.add(tokenTo);
+            }
+        }
+        for (Document transfer : view.explorerInternalTransfers()) {
+            String internalFrom = view.internalTransferFrom(transfer);
+            String internalTo = view.internalTransferTo(transfer);
+            if (internalFrom != null && !internalFrom.isBlank()) {
+                addresses.add(internalFrom);
+            }
+            if (internalTo != null && !internalTo.isBlank()) {
+                addresses.add(internalTo);
+            }
+        }
+        return addresses;
     }
 
     private boolean isTrackedCounterparty(String address, String currentWallet) {

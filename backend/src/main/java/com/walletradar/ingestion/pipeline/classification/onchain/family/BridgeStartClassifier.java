@@ -13,7 +13,9 @@ import com.walletradar.ingestion.pipeline.classification.support.ClarificationEl
 import com.walletradar.ingestion.pipeline.classification.support.LiFiRouteSupport;
 import com.walletradar.ingestion.pipeline.classification.support.OnChainClassificationSupport;
 import com.walletradar.ingestion.pipeline.classification.support.RawLeg;
+import com.walletradar.ingestion.pipeline.classification.support.RelayBridgeClassificationSupport;
 import com.walletradar.ingestion.pipeline.classification.support.NativeAssetSymbolResolver;
+import com.walletradar.ingestion.pipeline.classification.support.SameWalletSwapShapeSupport;
 import org.springframework.core.Ordered;
 import org.springframework.stereotype.Component;
 
@@ -79,7 +81,35 @@ public class BridgeStartClassifier implements OnChainFamilyClassifier {
             return liFiRouteBridge;
         }
 
+        Optional<ClassificationDecision> relayDepositoryBridge = classifyRelayDepositoryBridge(context);
+        if (relayDepositoryBridge.isPresent()) {
+            return relayDepositoryBridge;
+        }
+
         return classifyTransferRemoteBridge(context);
+    }
+
+    private Optional<ClassificationDecision> classifyRelayDepositoryBridge(OnChainClassificationContext context) {
+        if (!RelayBridgeClassificationSupport.isRelayDepositoryBridgeOut(context.view())
+                || !RelayBridgeClassificationSupport.onlyOutbound(context.movementLegs())) {
+            return Optional.empty();
+        }
+        Optional<ProtocolRegistryEntry> entry = RelayBridgeClassificationSupport.resolveRelayDepositoryBridgeEntry(
+                protocolRegistryService,
+                context.view()
+        );
+        if (entry.isEmpty()) {
+            return Optional.empty();
+        }
+        ProtocolRegistryEntry bridgeEntry = entry.orElseThrow();
+        return Optional.of(build(
+                context,
+                bridgeEntry.confidence() != null ? ClassificationSource.PROTOCOL_REGISTRY : ClassificationSource.METHOD_ID,
+                bridgeEntry.confidence() != null ? bridgeEntry.confidence() : ConfidenceLevel.MEDIUM,
+                List.of(),
+                bridgeEntry.protocolName(),
+                bridgeEntry.protocolVersion()
+        ));
     }
 
     private Optional<ClassificationDecision> classifyExplicitBridgeStart(OnChainClassificationContext context) {
@@ -137,6 +167,9 @@ public class BridgeStartClassifier implements OnChainFamilyClassifier {
         if (!LiFiRouteSupport.hasRouteTag(context.view())) {
             return Optional.empty();
         }
+        if (SameWalletSwapShapeSupport.hasSameWalletInboundTransfer(context.movementLegs())) {
+            return Optional.empty();
+        }
         ProtocolRegistryEntry entry = knownLiFiDiamondEntry.orElse(null);
         return Optional.of(build(
                 context,
@@ -154,6 +187,9 @@ public class BridgeStartClassifier implements OnChainFamilyClassifier {
             return Optional.empty();
         }
         if (!hasOutbound(context.movementLegs())) {
+            return Optional.empty();
+        }
+        if (SameWalletSwapShapeSupport.hasSameWalletInboundTransfer(context.movementLegs())) {
             return Optional.empty();
         }
         if (!hasNativeOutbound(context) || tokenOutboundCount(context) < 1) {

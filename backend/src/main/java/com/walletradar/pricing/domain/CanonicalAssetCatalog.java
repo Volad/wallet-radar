@@ -116,11 +116,27 @@ public final class CanonicalAssetCatalog {
             Map.entry("USD₮0", "USDT"),
             Map.entry("USDT0", "USDT"),
             Map.entry("USDT", "USDT"),
-            Map.entry("POL", "MATIC")
+            Map.entry("POL", "MATIC"),
+            Map.entry("CMETH", "ETH"),
+            Map.entry("METH", "ETH"),
+            Map.entry("WEETH", "ETH"),
+            Map.entry("BBSOL", "SOL"),
+            Map.entry("AAVAUSDC", "USDC"),
+            Map.entry("AMANUSDC", "USDC"),
+            Map.entry("AARBUSDC", "USDC"),
+            // Cycle/8 S1: Aave aToken family aliases — receipt tokens trade 1:1 with the underlying.
+            Map.entry("AMANWMNT", "MNT"),
+            Map.entry("AARBARB", "ARB"),
+            Map.entry("AZKSZK", "ZK"),
+            Map.entry("AETHGHO", "GHO"),
+            Map.entry("AETHUSDT", "USDT"),
+            Map.entry("AETHUSDC", "USDC"),
+            Map.entry("VBUSDC", "USDC")
     );
 
     private static final Map<String, String> COINGECKO_IDS = Map.ofEntries(
             Map.entry("ETH", "ethereum"),
+            Map.entry("SOL", "solana"),
             Map.entry("BTC", "bitcoin"),
             Map.entry("BNB", "binancecoin"),
             Map.entry("AVAX", "avalanche-2"),
@@ -145,12 +161,63 @@ public final class CanonicalAssetCatalog {
             Map.entry("UNI", "uniswap"),
             Map.entry("COMP", "compound-governance-token"),
             Map.entry("MORPHO", "morpho"),
-            Map.entry("ZK", "zksync")
+            Map.entry("ZK", "zksync"),
+            // Cycle/8 S1: Add CoinGecko ids for previously unmapped Bybit-traded and on-chain
+            // assets so REWARD_CLAIM and reclassified EXTERNAL_TRANSFER_IN BUY flows can resolve a
+            // historical USD price (otherwise basis defaults to $0 and AVCO coverage drifts).
+            Map.entry("DOGE", "dogecoin"),
+            Map.entry("LTC", "litecoin"),
+            Map.entry("LINK", "chainlink"),
+            Map.entry("LDO", "lido-dao"),
+            Map.entry("ONDO", "ondo-finance"),
+            Map.entry("ZORA", "zora"),
+            Map.entry("XPL", "plasma"),
+            Map.entry("LRT2", "ether-fi-staked-eth"),
+            Map.entry("AAVE", "aave"),
+            Map.entry("CRV", "curve-dao-token"),
+            Map.entry("MKR", "maker"),
+            Map.entry("SNX", "havven")
     );
 
     private static final Map<String, List<String>> EXCHANGE_MARKET_FALLBACKS = Map.ofEntries(
             Map.entry("WSTETH", List.of("STETH", "ETH")),
             Map.entry("STETH", List.of("ETH"))
+    );
+
+    /**
+     * Cycle/9 S5: Low-cap / delisted symbols that have neither a CoinGecko id nor a working
+     * exchange spot pair on Bybit/Binance. Pricing should not block on them, and they are
+     * excluded from the conservation coverage gate denominator.
+     *
+     * <p>This list reflects the audit at the close of Cycle 8 / Cycle 9 reset. Symbols can be
+     * removed once a price source becomes available.</p>
+     */
+    private static final Set<String> PRICING_SKIPPED_SYMBOLS = Set.of(
+            "PAWS",
+            "AURA",
+            "EUL",
+            "AGLD",
+            "WLKN",
+            "CUDIS",
+            "TON"
+    );
+
+    /**
+     * Cycle/15 R5 F3: 1:1 pegged liquid-staking / restaking receipts that have a deterministic
+     * canonical underlying. These deserve market-spot fallback even when arriving on a TRANSFER
+     * leg whose continuity carry failed (e.g. Bybit corridor with empty source sub-account).
+     *
+     * <p>Whitelist is intentionally narrow: only symbols whose alias to a marketable canonical
+     * is unambiguous and where the protocol guarantees ~1:1 economic equivalence (custodial
+     * Bybit-issued CMETH, Mantle native staked ETH METH, EtherFi weETH, Bybit liquid SOL BBSOL).
+     * Aave / Morpho aTokens are NOT included because their basis carry is handled by the
+     * family-equivalent custody path.</p>
+     */
+    private static final Set<String> PEGGED_NATIVE_SYMBOLS = Set.of(
+            "CMETH",
+            "METH",
+            "WEETH",
+            "BBSOL"
     );
 
     private CanonicalAssetCatalog() {
@@ -196,6 +263,28 @@ public final class CanonicalAssetCatalog {
 
     public static boolean isEuroStablecoin(String assetSymbol) {
         return EUR_STABLE_SYMBOLS.contains(canonicalMarketSymbol(assetSymbol));
+    }
+
+    /**
+     * Cycle/9 S5: returns {@code true} for symbols that have no resolvable historical USD
+     * price source. Callers use this to short-circuit pricing pipelines and to exclude the
+     * symbol from coverage gates so that the absence of a price does not destroy AVCO
+     * accuracy for the rest of the portfolio.
+     */
+    public static boolean isPricingSkipped(String assetSymbol) {
+        return PRICING_SKIPPED_SYMBOLS.contains(canonicalMarketSymbol(assetSymbol));
+    }
+
+    /**
+     * Cycle/15 R5 F3: returns {@code true} for 1:1 pegged liquid-staking / restaking
+     * receipts whose basis can safely be reconstructed from the canonical underlying's spot
+     * when continuity carry fails.
+     */
+    public static boolean isPeggedNative(String assetSymbol) {
+        if (assetSymbol == null) {
+            return false;
+        }
+        return PEGGED_NATIVE_SYMBOLS.contains(normalizeSymbol(assetSymbol));
     }
 
     public static String normalizeContract(String contract) {

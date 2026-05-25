@@ -59,4 +59,25 @@ describe('DashboardAddWalletDialogComponent', () => {
     expect(component.addWalletsForm.controls.wallets.controls[1].controls.address.value).toBe(second);
     expect(component.canSubmitWallets()).toBeTrue();
   });
+
+  it('accepts Solana base58 address and assigns SOLANA network only', () => {
+    const solAddress = '9Grpx4HKXTe51Ug9nAYuND9qf2bw326WvxFyEULt1DhG';
+    component.addWalletsForm.controls.wallets.controls[0].controls.address.setValue(solAddress);
+    fixture.detectChanges();
+
+    expect(component.canSubmitWallets()).toBeTrue();
+
+    let submitted: ReadonlyArray<{ address: string; networks: ReadonlyArray<string> }> = [];
+    component.submitWallets.subscribe((items) => {
+      submitted = items;
+    });
+    component.onSubmit();
+
+    expect(submitted).toEqual([
+      jasmine.objectContaining({
+        address: solAddress,
+        networks: ['SOLANA'],
+      }),
+    ]);
+  });
 });

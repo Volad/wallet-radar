@@ -95,11 +95,14 @@ class BybitBridgeLinkServiceTest {
 
         assertThat(changed).isTrue();
         assertThat(withdraw.getOnChainCorrelation().getStatus()).isEqualTo("UNMATCHED");
-        assertThat(bybitTx.getStatus()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        // Cycle/5 N16: EXTERNAL_TRANSFER_OUT uses SELL role (economic disposal at market price);
+        // status is PENDING_PRICE until pricing resolves the flow (no continuity counterpart yet).
+        // The previous CONFIRMED+TRANSFER state silently leaked basis for unmatched bridge legs.
+        assertThat(bybitTx.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
         assertThat(bybitTx.getMissingDataReasons()).contains(BybitBridgeLinkService.BRIDGE_MISSING_REASON);
         assertThat(bybitTx.getExcludedFromAccounting()).isFalse();
         assertThat(bybitTx.getFlows()).extracting(NormalizedTransaction.Flow::getRole)
-                .containsExactly(NormalizedLegRole.TRANSFER);
+                .containsExactly(NormalizedLegRole.SELL);
         verify(externalLedgerRawRepository).save(withdraw);
         verify(normalizedTransactionRepository).save(bybitTx);
     }

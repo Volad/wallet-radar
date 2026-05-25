@@ -9,25 +9,32 @@ import com.walletradar.domain.session.UserSessionRepository;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
+import com.walletradar.integration.bybit.BybitLiveBalanceService;
 import com.walletradar.session.application.AccountingUniverseService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
 import org.springframework.data.mongodb.core.MongoOperations;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
 class AssetLedgerQueryServiceTest {
 
     @Mock
@@ -40,6 +47,19 @@ class AssetLedgerQueryServiceTest {
     private AccountingUniverseService accountingUniverseService;
     @Mock
     private MongoOperations mongoOperations;
+    @Mock
+    private BybitLiveBalanceService bybitLiveBalanceService;
+
+    private AssetLedgerQueryService service() {
+        return new AssetLedgerQueryService(
+                userSessionRepository,
+                assetLedgerPointRepository,
+                normalizedTransactionRepository,
+                accountingUniverseService,
+                mongoOperations,
+                bybitLiveBalanceService
+        );
+    }
 
     @Test
     void sessionFamilyLedgerAggregatesWalletLevelPointsIntoOneTimeline() {
@@ -141,13 +161,7 @@ class AssetLedgerQueryServiceTest {
                 balance("wallet-b", NetworkId.ARBITRUM, "ETH", "1")
         ));
 
-        AssetLedgerQueryService service = new AssetLedgerQueryService(
-                userSessionRepository,
-                assetLedgerPointRepository,
-                normalizedTransactionRepository,
-                accountingUniverseService,
-                mongoOperations
-        );
+        AssetLedgerQueryService service = service();
         AssetLedgerQueryService.SessionAssetLedgerView view = service.findSessionFamilyLedger("session-1", "FAMILY:ETH")
                 .orElseThrow();
 
@@ -213,13 +227,7 @@ class AssetLedgerQueryServiceTest {
                 balance("wallet-a", NetworkId.BASE, "ETH", "1")
         ));
 
-        AssetLedgerQueryService service = new AssetLedgerQueryService(
-                userSessionRepository,
-                assetLedgerPointRepository,
-                normalizedTransactionRepository,
-                accountingUniverseService,
-                mongoOperations
-        );
+        AssetLedgerQueryService service = service();
         AssetLedgerQueryService.SessionAssetLedgerView view = service.findSessionFamilyLedger("session-2", "FAMILY:ETH")
                 .orElseThrow();
 
@@ -277,13 +285,7 @@ class AssetLedgerQueryServiceTest {
         wethBalance.setAssetContract("0x4200000000000000000000000000000000000006");
         when(mongoOperations.find(any(), eq(OnChainBalance.class))).thenReturn(List.of(wethBalance));
 
-        AssetLedgerQueryService service = new AssetLedgerQueryService(
-                userSessionRepository,
-                assetLedgerPointRepository,
-                normalizedTransactionRepository,
-                accountingUniverseService,
-                mongoOperations
-        );
+        AssetLedgerQueryService service = service();
         AssetLedgerQueryService.SessionAssetLedgerView view = service.findSessionFamilyLedger("session-3", "FAMILY:ETH")
                 .orElseThrow();
 
@@ -352,13 +354,7 @@ class AssetLedgerQueryServiceTest {
         balance.setAssetContract("0xea00000000000000000000000000000000000000");
         when(mongoOperations.find(any(), eq(OnChainBalance.class))).thenReturn(List.of(balance));
 
-        AssetLedgerQueryService service = new AssetLedgerQueryService(
-                userSessionRepository,
-                assetLedgerPointRepository,
-                normalizedTransactionRepository,
-                accountingUniverseService,
-                mongoOperations
-        );
+        AssetLedgerQueryService service = service();
         AssetLedgerQueryService.SessionAssetLedgerView view = service.findSessionFamilyLedger("session-4", "FAMILY:ETH")
                 .orElseThrow();
 
@@ -445,13 +441,7 @@ class AssetLedgerQueryServiceTest {
                 balance("wallet-a", NetworkId.BASE, "ETH", "0.5")
         ));
 
-        AssetLedgerQueryService service = new AssetLedgerQueryService(
-                userSessionRepository,
-                assetLedgerPointRepository,
-                normalizedTransactionRepository,
-                accountingUniverseService,
-                mongoOperations
-        );
+        AssetLedgerQueryService service = service();
         AssetLedgerQueryService.SessionAssetLedgerView view = service.findSessionFamilyLedger("session-7", "FAMILY:ETH")
                 .orElseThrow();
 
@@ -570,13 +560,7 @@ class AssetLedgerQueryServiceTest {
                 balance("wallet-b", NetworkId.ETHEREUM, "ETH", "1")
         ));
 
-        AssetLedgerQueryService service = new AssetLedgerQueryService(
-                userSessionRepository,
-                assetLedgerPointRepository,
-                normalizedTransactionRepository,
-                accountingUniverseService,
-                mongoOperations
-        );
+        AssetLedgerQueryService service = service();
         AssetLedgerQueryService.SessionAssetLedgerView view = service.findSessionFamilyLedger("session-5", "FAMILY:ETH")
                 .orElseThrow();
 
@@ -696,13 +680,7 @@ class AssetLedgerQueryServiceTest {
                 balance("wallet-a", NetworkId.ARBITRUM, "ETH", "0.0039528")
         ));
 
-        AssetLedgerQueryService service = new AssetLedgerQueryService(
-                userSessionRepository,
-                assetLedgerPointRepository,
-                normalizedTransactionRepository,
-                accountingUniverseService,
-                mongoOperations
-        );
+        AssetLedgerQueryService service = service();
         AssetLedgerQueryService.SessionAssetLedgerView view = service.findSessionFamilyLedger("session-6", "FAMILY:ETH")
                 .orElseThrow();
 
@@ -789,13 +767,7 @@ class AssetLedgerQueryServiceTest {
                 balance("wallet-a", NetworkId.BASE, "ETH", "0.99")
         ));
 
-        AssetLedgerQueryService service = new AssetLedgerQueryService(
-                userSessionRepository,
-                assetLedgerPointRepository,
-                normalizedTransactionRepository,
-                accountingUniverseService,
-                mongoOperations
-        );
+        AssetLedgerQueryService service = service();
         AssetLedgerQueryService.SessionAssetLedgerView view = service.findSessionFamilyLedger("session-8", "FAMILY:ETH")
                 .orElseThrow();
 
@@ -812,6 +784,239 @@ class AssetLedgerQueryServiceTest {
         });
         assertThat(view.events().get(0).toAddress()).isEqualTo("0x1111111111111111111111111111111111111111");
         assertThat(view.events().get(1).fromAddress()).isEqualTo("0x2222222222222222222222222222222222222222");
+    }
+
+    @Test
+    void currentStateAggregatesBybitUmbrellaForBybitOnlyFamily() {
+        UserSession session = bybitSession("session-bybit-ldo", "33625378");
+        AssetLedgerPoint uta = bybitVenuePoint("10", "BYBIT:33625378:UTA", "SYMBOL:LDO", "LDO", "100", "60", "2");
+        AssetLedgerPoint fund = bybitVenuePoint("11", "BYBIT:33625378:FUND", "SYMBOL:LDO", "LDO", "200", "100", "2");
+        AssetLedgerPoint earn = bybitVenuePoint("12", "BYBIT:33625378:EARN", "SYMBOL:LDO", "LDO", "37.732748", "23.560728", "2");
+
+        when(userSessionRepository.findById("session-bybit-ldo")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "ACCOUNTING_UNIVERSE:session-bybit-ldo",
+                List.of("BYBIT:33625378", "BYBIT:33625378:UTA", "BYBIT:33625378:FUND", "BYBIT:33625378:EARN"),
+                List.of()
+        ));
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-bybit-ldo",
+                "SYMBOL:LDO"
+        )).thenReturn(List.of(uta, fund, earn));
+        when(normalizedTransactionRepository.findAllById(any())).thenReturn(List.of());
+        when(mongoOperations.find(any(), eq(OnChainBalance.class))).thenReturn(List.of());
+        when(bybitLiveBalanceService.getUmbrellaBalances("bybit-int-33625378"))
+                .thenReturn(Map.of("LDO", new BigDecimal("500")));
+
+        AssetLedgerQueryService.SessionAssetLedgerView view = service()
+                .findSessionFamilyLedger("session-bybit-ldo", "SYMBOL:LDO")
+                .orElseThrow();
+
+        assertThat(view.current().quantity()).isEqualByComparingTo("337.732748");
+        assertThat(view.current().coveredQuantity()).isEqualByComparingTo("183.560728");
+        assertThat(view.current().uncoveredQuantity()).isEqualByComparingTo("154.17202");
+        assertThat(view.current().uncoveredBuckets()).hasSize(3);
+        assertThat(view.current().uncoveredBuckets())
+                .extracting(AssetLedgerQueryService.UncoveredBucketView::walletAddress)
+                .containsExactlyInAnyOrder("BYBIT:33625378:UTA", "BYBIT:33625378:FUND", "BYBIT:33625378:EARN");
+    }
+
+    @Test
+    void currentStateClampsBybitUmbrellaToLive() {
+        UserSession session = bybitSession("session-bybit-clamp", "33625378");
+        AssetLedgerPoint uta = bybitVenuePoint("20", "BYBIT:33625378:UTA", "SYMBOL:LDO", "LDO", "100", "80", "2");
+
+        when(userSessionRepository.findById("session-bybit-clamp")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "ACCOUNTING_UNIVERSE:session-bybit-clamp",
+                List.of("BYBIT:33625378:UTA"),
+                List.of()
+        ));
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-bybit-clamp",
+                "SYMBOL:LDO"
+        )).thenReturn(List.of(uta));
+        when(normalizedTransactionRepository.findAllById(any())).thenReturn(List.of());
+        when(mongoOperations.find(any(), eq(OnChainBalance.class))).thenReturn(List.of());
+        when(bybitLiveBalanceService.getUmbrellaBalances("bybit-int-33625378"))
+                .thenReturn(Map.of("LDO", new BigDecimal("40")));
+
+        AssetLedgerQueryService.SessionAssetLedgerView view = service()
+                .findSessionFamilyLedger("session-bybit-clamp", "SYMBOL:LDO")
+                .orElseThrow();
+
+        assertThat(view.current().quantity()).isEqualByComparingTo("40");
+        assertThat(view.current().coveredQuantity()).isEqualByComparingTo("32");
+        assertThat(view.current().uncoveredQuantity()).isEqualByComparingTo("8");
+    }
+
+    @Test
+    void currentStateDropsBybitUmbrellaWhenLiveZero() {
+        UserSession session = bybitSession("session-bybit-zero", "33625378");
+        AssetLedgerPoint uta = bybitVenuePoint("30", "BYBIT:33625378:UTA", "SYMBOL:LDO", "LDO", "100", "80", "2");
+
+        when(userSessionRepository.findById("session-bybit-zero")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "ACCOUNTING_UNIVERSE:session-bybit-zero",
+                List.of("BYBIT:33625378:UTA"),
+                List.of()
+        ));
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-bybit-zero",
+                "SYMBOL:LDO"
+        )).thenReturn(List.of(uta));
+        when(normalizedTransactionRepository.findAllById(any())).thenReturn(List.of());
+        when(mongoOperations.find(any(), eq(OnChainBalance.class))).thenReturn(List.of());
+        lenient().when(bybitLiveBalanceService.getUmbrellaBalances("bybit-int-33625378"))
+                .thenReturn(Map.of("LDO", BigDecimal.ZERO));
+
+        AssetLedgerQueryService.SessionAssetLedgerView view = service()
+                .findSessionFamilyLedger("session-bybit-zero", "SYMBOL:LDO")
+                .orElseThrow();
+
+        assertThat(view.current().quantity()).isZero();
+        assertThat(view.current().coveredQuantity()).isZero();
+        assertThat(view.current().uncoveredBuckets()).isEmpty();
+    }
+
+    @Test
+    void currentStateMergesOnChainAndBybitForFamily() {
+        UserSession session = bybitSession("session-bybit-mnt", "33625378");
+        UserSession.SessionWallet wallet = new UserSession.SessionWallet();
+        wallet.setAddress("wallet-a");
+        wallet.setNetworks(List.of(NetworkId.MANTLE));
+        session.setWallets(List.of(wallet));
+
+        AssetLedgerPoint onChainPoint = point(
+                "40",
+                "wallet-a",
+                NetworkId.MANTLE,
+                "FAMILY:MNT",
+                AssetLedgerPoint.BasisEffect.ACQUIRE,
+                AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "10",
+                "5",
+                "0",
+                "0",
+                "10",
+                "5"
+        );
+        onChainPoint.setAssetSymbol("MNT");
+        onChainPoint.setFamilyDisplaySymbol("MNT");
+        onChainPoint.setAccountingAssetIdentity("NATIVE:MANTLE");
+        onChainPoint.setBasisBackedQuantityAfter(new BigDecimal("8"));
+
+        AssetLedgerPoint bybitUta = bybitVenuePoint("41", "BYBIT:33625378:UTA", "FAMILY:MNT", "MNT", "100", "90", "0.05");
+
+        when(userSessionRepository.findById("session-bybit-mnt")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "ACCOUNTING_UNIVERSE:session-bybit-mnt",
+                List.of("wallet-a", "BYBIT:33625378:UTA"),
+                List.of("wallet-a")
+        ));
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-bybit-mnt",
+                "FAMILY:MNT"
+        )).thenReturn(List.of(onChainPoint, bybitUta));
+        when(normalizedTransactionRepository.findAllById(any())).thenReturn(List.of());
+        when(mongoOperations.find(any(), eq(OnChainBalance.class))).thenReturn(List.of(
+                balance("wallet-a", NetworkId.MANTLE, "MNT", "10")
+        ));
+        when(bybitLiveBalanceService.getUmbrellaBalances("bybit-int-33625378"))
+                .thenReturn(Map.of("MNT", new BigDecimal("200")));
+
+        AssetLedgerQueryService.SessionAssetLedgerView view = service()
+                .findSessionFamilyLedger("session-bybit-mnt", "FAMILY:MNT")
+                .orElseThrow();
+
+        assertThat(view.current().quantity()).isEqualByComparingTo("110");
+        assertThat(view.current().coveredQuantity()).isEqualByComparingTo("98");
+    }
+
+    @Test
+    void currentStateIgnoresBybitVenuesForOtherFamilies() {
+        UserSession session = bybitSession("session-bybit-isolate", "33625378");
+        AssetLedgerPoint ldoPoint = bybitVenuePoint("50", "BYBIT:33625378:UTA", "SYMBOL:LDO", "LDO", "100", "80", "2");
+
+        when(userSessionRepository.findById("session-bybit-isolate")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "ACCOUNTING_UNIVERSE:session-bybit-isolate",
+                List.of("BYBIT:33625378:UTA"),
+                List.of()
+        ));
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-bybit-isolate",
+                "FAMILY:USDT"
+        )).thenReturn(List.of());
+        when(normalizedTransactionRepository.findAllById(any())).thenReturn(List.of());
+        when(mongoOperations.find(any(), eq(OnChainBalance.class))).thenReturn(List.of());
+        lenient().when(bybitLiveBalanceService.getUmbrellaBalances("bybit-int-33625378"))
+                .thenReturn(Map.of("LDO", new BigDecimal("500")));
+
+        AssetLedgerQueryService.SessionAssetLedgerView view = service()
+                .findSessionFamilyLedger("session-bybit-isolate", "FAMILY:USDT")
+                .orElseThrow();
+
+        assertThat(view.current().quantity()).isZero();
+        assertThat(view.current().coveredQuantity()).isZero();
+        assertThat(view.current().uncoveredBuckets()).isEmpty();
+    }
+
+    private UserSession bybitSession(String sessionId, String uid) {
+        UserSession session = new UserSession();
+        session.setId(sessionId);
+        session.setWallets(List.of());
+        UserSession.SessionIntegration integration = new UserSession.SessionIntegration();
+        integration.setStatus(UserSession.IntegrationStatus.READY);
+        integration.setAccountRef("BYBIT:" + uid);
+        integration.setIntegrationId("bybit-int-" + uid);
+        session.setIntegrations(List.of(integration));
+        return session;
+    }
+
+    private AssetLedgerPoint bybitVenuePoint(
+            String normalizedTransactionId,
+            String venueWallet,
+            String familyIdentity,
+            String symbol,
+            String quantityAfter,
+            String basisBackedAfter,
+            String avcoUsd
+    ) {
+        AssetLedgerPoint point = new AssetLedgerPoint();
+        point.setId(normalizedTransactionId + ":" + venueWallet);
+        point.setWalletAddress(venueWallet);
+        point.setNetworkId(null);
+        point.setAccountingAssetIdentity("SYMBOL:" + symbol);
+        point.setAccountingFamilyIdentity(familyIdentity);
+        point.setFamilyDisplaySymbol(symbol);
+        point.setAssetSymbol(symbol);
+        point.setAssetContract(null);
+        point.setNormalizedTransactionId(normalizedTransactionId);
+        point.setTxHash("0x" + normalizedTransactionId);
+        point.setBlockTimestamp(Instant.parse("2026-04-05T10:00:00Z"));
+        point.setReplaySequence(Long.parseLong(normalizedTransactionId));
+        point.setTransactionIndex(0);
+        point.setNormalizedType("INTERNAL_TRANSFER");
+        point.setLifecycleKind(AssetLedgerPoint.LifecycleKind.SPOT);
+        point.setLifecycleStage(AssetLedgerPoint.LifecycleStage.SINGLE);
+        point.setBasisEffect(AssetLedgerPoint.BasisEffect.CARRY_IN);
+        point.setProtocolName("Bybit");
+        point.setQuantityDelta(new BigDecimal(quantityAfter));
+        point.setQuantityAfter(new BigDecimal(quantityAfter));
+        point.setBasisBackedQuantityAfter(new BigDecimal(basisBackedAfter));
+        point.setTotalCostBasisAfterUsd(new BigDecimal(basisBackedAfter).multiply(new BigDecimal(avcoUsd)));
+        point.setAvcoAfterUsd(new BigDecimal(avcoUsd));
+        point.setCostBasisDeltaUsd(BigDecimal.ZERO);
+        point.setRealisedPnlDeltaUsd(BigDecimal.ZERO);
+        point.setGasDeltaUsd(BigDecimal.ZERO);
+        point.setUncoveredQuantityDelta(BigDecimal.ZERO);
+        point.setQuantityShortfallAfter(BigDecimal.ZERO);
+        point.setUncoveredQuantityAfter(
+                new BigDecimal(quantityAfter).subtract(new BigDecimal(basisBackedAfter)).max(BigDecimal.ZERO)
+        );
+        return point;
     }
 
     private NormalizedTransaction normalized(

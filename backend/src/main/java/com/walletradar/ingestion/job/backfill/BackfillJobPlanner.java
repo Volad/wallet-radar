@@ -12,12 +12,15 @@ import com.walletradar.ingestion.config.BackfillProperties;
 import com.walletradar.ingestion.config.IngestionNetworkProperties;
 import com.walletradar.ingestion.wallet.command.WalletBackfillPlanner;
 import com.walletradar.integration.IntegrationBackfillPlanningService;
+import com.walletradar.session.application.AccountingUniverseService;
+import com.walletradar.session.application.SourceSyncPlanner;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Locale;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
@@ -42,11 +45,14 @@ public class BackfillJobPlanner implements WalletBackfillPlanner {
     private final BackfillProperties backfillProperties;
     private final IngestionNetworkProperties ingestionNetworkProperties;
     private final IntegrationBackfillPlanningService integrationBackfillPlanningService;
+    private final SourceSyncPlanner sourceSyncPlanner;
+    private final AccountingUniverseService accountingUniverseService;
 
     public int planPendingSessionSources(UserSession session) {
         if (session == null) {
             return 0;
         }
+        String accountingUniverseId = resolveAccountingUniverseId(session);
         int plannedSegments = 0;
         for (UserSession.SessionWallet wallet : session.getWallets() == null ? List.<UserSession.SessionWallet>of() : session.getWallets()) {
             if (wallet == null || wallet.getAddress() == null || wallet.getAddress().isBlank()) {
@@ -59,7 +65,7 @@ public class BackfillJobPlanner implements WalletBackfillPlanner {
                                 networkId.name()
                         )
                         .orElse(null);
-                plannedSegments += planOnChainSource(status);
+                plannedSegments += planOnChainSource(status, accountingUniverseId, wallet.getAddress(), networkId);
             }
         }
         for (UserSession.SessionIntegration integration : session.getIntegrations() == null ? List.<UserSession.SessionIntegration>of() : session.getIntegrations()) {
@@ -83,10 +89,17 @@ public class BackfillJobPlanner implements WalletBackfillPlanner {
         if (session == null) {
             return 0;
         }
+        String accountingUniverseId = resolveAccountingUniverseId(session);
         int plannedSegments = 0;
         for (String syncStatusId : distinctIds(onChainSyncStatusIds)) {
             SyncStatus status = syncStatusRepository.findById(syncStatusId).orElse(null);
-            plannedSegments += planOnChainSource(status);
+            NetworkId networkId = parseNetworkId(status);
+            plannedSegments += planOnChainSource(
+                    status,
+                    accountingUniverseId,
+                    status == null ? null : status.getWalletAddress(),
+                    networkId
+            );
         }
         if (integrationSyncStatusIds == null || integrationSyncStatusIds.isEmpty()) {
             return plannedSegments;
@@ -109,6 +122,10 @@ public class BackfillJobPlanner implements WalletBackfillPlanner {
 
     @Override
     public int planPendingOnChainSources(String walletAddress, List<NetworkId> networks) {
+        return planPendingOnChainSources(null, walletAddress, networks);
+    }
+
+    public int planPendingOnChainSources(String accountingUniverseId, String walletAddress, List<NetworkId> networks) {
         if (walletAddress == null || walletAddress.isBlank()) {
             return 0;
         }
@@ -123,7 +140,7 @@ public class BackfillJobPlanner implements WalletBackfillPlanner {
                             networkId.name()
                     )
                     .orElse(null);
-            plannedSegments += planOnChainSource(status);
+            plannedSegments += planOnChainSource(status, accountingUniverseId, walletAddress, networkId);
         }
         return plannedSegments;
     }
@@ -132,18 +149,37 @@ public class BackfillJobPlanner implements WalletBackfillPlanner {
         if (syncStatusId == null || syncStatusId.isBlank()) {
             return 0;
         }
-        return planOnChainSource(syncStatusRepository.findById(syncStatusId.trim()).orElse(null));
+        SyncStatus status = syncStatusRepository.findById(syncStatusId.trim()).orElse(null);
+        return planOnChainSource(status, null, status == null ? null : status.getWalletAddress(), parseNetworkId(status));
     }
 
-    private int planOnChainSource(SyncStatus status) {
+    private int planOnChainSource(
+            SyncStatus status,
+            String accountingUniverseId,
+            String walletRef,
+            NetworkId networkId
+    ) {
         if (status == null
                 || status.getStatus() != SyncStatus.SyncStatusValue.PENDING
-                || status.getId() == null
-                || status.getWindowFromBlock() == null
-                || status.getWindowToBlock() == null
-                || status.getWindowFromBlock() > status.getWindowToBlock()) {
+                || status.getId() == null) {
             return 0;
         }
+        if (!accountingUniverseService.isBackfillEnabled(accountingUniverseId, walletRef, networkId)) {
+            log.info(
+                    "SKIPPED_BACKFILL_DISABLED: wallet={}, network={}, syncStatusId={}",
+                    status.getWalletAddress(),
+                    status.getNetworkId(),
+                    status.getId()
+            );
+            return 0;
+        }
+        SyncStatus materialized = sourceSyncPlanner.repairOnChainBlockWindowIfMissing(status, Instant.now());
+        if (materialized.getWindowFromBlock() == null
+                || materialized.getWindowToBlock() == null
+                || materialized.getWindowFromBlock() > materialized.getWindowToBlock()) {
+            return 0;
+        }
+        status = materialized;
         List<BackfillSegment> existing = backfillSegmentRepository.findBySyncStatusIdOrderBySegmentIndexAsc(status.getId());
         if (matchesOnChainWindow(existing, status)) {
             return 0;
@@ -348,6 +384,24 @@ public class BackfillJobPlanner implements WalletBackfillPlanner {
                         Collectors.toCollection(LinkedHashSet::new),
                         List::copyOf
                 ));
+    }
+
+    private static NetworkId parseNetworkId(SyncStatus status) {
+        if (status == null || status.getNetworkId() == null || status.getNetworkId().isBlank()) {
+            return null;
+        }
+        try {
+            return NetworkId.valueOf(status.getNetworkId().trim().toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException ex) {
+            return null;
+        }
+    }
+
+    private static String resolveAccountingUniverseId(UserSession session) {
+        if (session.getAccountingUniverseId() != null && !session.getAccountingUniverseId().isBlank()) {
+            return session.getAccountingUniverseId().trim();
+        }
+        return session.getId().trim();
     }
 
     private record SegmentPlanningProfile(long targetBlocksPerSegment) {

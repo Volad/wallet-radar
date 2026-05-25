@@ -5,6 +5,7 @@ import com.walletradar.domain.session.UserSession;
 import com.walletradar.domain.session.UserSessionRepository;
 import com.walletradar.domain.sync.BackfillSegment;
 import com.walletradar.domain.sync.BackfillSegmentRepository;
+import com.walletradar.integration.bybit.BybitIntegrationStreamSyncQueryService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -16,6 +17,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -25,6 +27,8 @@ class SessionSettingsQueryServiceTest {
     private UserSessionRepository userSessionRepository;
     @Mock
     private BackfillSegmentRepository backfillSegmentRepository;
+    @Mock
+    private BybitIntegrationStreamSyncQueryService bybitIntegrationStreamSyncQueryService;
 
     @InjectMocks
     private SessionSettingsQueryService sessionSettingsQueryService;
@@ -68,6 +72,7 @@ class SessionSettingsQueryServiceTest {
                 .thenReturn(4L);
         when(backfillSegmentRepository.countByIntegrationIdAndStatus("BYBIT-33625378", BackfillSegment.SegmentStatus.FAILED))
                 .thenReturn(1L);
+        when(bybitIntegrationStreamSyncQueryService.summarize(anyString())).thenReturn(List.of());
 
         SessionSettingsQueryService.SessionSettingsView view = sessionSettingsQueryService
                 .findSessionSettings("session-1")
@@ -87,6 +92,7 @@ class SessionSettingsQueryServiceTest {
             assertThat(resultIntegration.completedSegments()).isEqualTo(4);
             assertThat(resultIntegration.failedSegments()).isEqualTo(1);
             assertThat(resultIntegration.progressPct()).isEqualTo(40);
+            assertThat(resultIntegration.streamSync()).isEmpty();
         });
     }
 

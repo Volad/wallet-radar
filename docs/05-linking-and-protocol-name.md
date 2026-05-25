@@ -64,6 +64,12 @@ Rule:
 
 ## 3. Lifecycle and continuity linking
 
+**FA-001 (2026-05):** Same-session cross-wallet transfers and the on-chain ↔ Bybit
+corridor must be recognized using **session wallet membership** (`user_sessions.wallets[]`)
+and existing repair/promotion services (`InternalTransferPairLinkService`,
+`BybitTransferContinuityRepairService`); the target reversible store is
+`transfer_links` per audit contract — see [ADR-003](adr/ADR-003-transfer-links-fa001.md).
+
 The second layer links multiple canonical rows that belong to one economic
 lifecycle.
 

@@ -9,6 +9,7 @@ import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.common.PriceSource;
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.domain.session.UserSessionRepository;
+import com.walletradar.integration.bybit.BybitLiveBalanceService;
 import com.walletradar.pricing.domain.CanonicalAssetCatalog;
 import com.walletradar.pricing.persistence.CurrentPriceQuoteDocument;
 import com.walletradar.pricing.persistence.HistoricalPriceDocument;
@@ -61,6 +62,8 @@ public class SessionDashboardQueryService {
     private final UserSessionRepository userSessionRepository;
     private final MongoOperations mongoOperations;
     private final AccountingUniverseService accountingUniverseService;
+    private final BybitLiveBalanceService bybitLiveBalanceService;
+    private final PortfolioConservationGate portfolioConservationGate;
 
     public Optional<SessionDashboardView> findSessionDashboard(String sessionId) {
         if (sessionId == null || sessionId.isBlank()) {
@@ -81,8 +84,10 @@ public class SessionDashboardQueryService {
                 .filter(balance -> allowedScope.includes(balance.getWalletAddress(), balance.getNetworkId()))
                 .toList();
 
+        LinkedHashSet<String> enabledBybitVenueRefs = new LinkedHashSet<>(BybitUmbrellaSupport.enabledBybitAccountRefs(session));
+
         Map<BucketKey, AssetLedgerPoint> latestPointByBucket = latestLedgerPointByBucket(scopedLedgerPoints);
-        Map<FamilyRowKey, BigDecimal> realisedPnlByFamily = realisedPnlByFamily(scopedLedgerPoints);
+        Map<FamilyRowKey, BigDecimal> realisedPnlByFamily = realisedPnlByFamily(scopedLedgerPoints, enabledBybitVenueRefs);
         BigDecimal totalRealisedPnlUsd = scopedLedgerPoints.stream()
                 .map(AssetLedgerPoint::getRealisedPnlDeltaUsd)
                 .filter(Objects::nonNull)
@@ -133,8 +138,63 @@ public class SessionDashboardQueryService {
                             normalizeAddress(balance.getWalletAddress())
                     )
             );
-            accumulator.addBalance(currentQuantity, latestPoint);
+            accumulator.addBalance(currentQuantity, latestPoint, balance.getAssetSymbol());
         }
+
+        if (!enabledBybitVenueRefs.isEmpty()) {
+            for (Map.Entry<BucketKey, AssetLedgerPoint> ledgerEntry : latestPointByBucket.entrySet()) {
+                BucketKey bucketKey = ledgerEntry.getKey();
+                if (!BybitUmbrellaSupport.bybitLedgerMatchesEnabledVenue(bucketKey.walletAddress(), enabledBybitVenueRefs)) {
+                    continue;
+                }
+                AssetLedgerPoint latestPoint = ledgerEntry.getValue();
+                // Cycle/5 N15: Bybit umbrella uses raw `quantityAfter` (no shortfall subtraction). Cycle/2 E1's
+                // shortfall clamp accidentally hides genuine UTA / FUND inventory behind historical AVCO
+                // coverage gaps unrelated to current holdings; the umbrella is reconciled against live Bybit
+                // balances downstream via `BybitLiveBalanceService` clamping in `clampBybitUmbrellaToLive`.
+                BigDecimal currentQuantity = BybitUmbrellaSupport.bybitRawQuantityAfter(latestPoint);
+                if (currentQuantity.signum() <= 0) {
+                    continue;
+                }
+                String familyIdentity = resolvedFamilyIdentity(
+                        latestPoint,
+                        bucketKey.networkId(),
+                        latestPoint.getAssetSymbol(),
+                        latestPoint.getAssetContract()
+                );
+                String familyDisplaySymbol = latestPoint == null || blank(latestPoint.getFamilyDisplaySymbol())
+                        ? AssetLedgerSupport.familyDisplaySymbol(familyIdentity, latestPoint.getAssetSymbol())
+                        : latestPoint.getFamilyDisplaySymbol();
+                String rowSymbol = blank(familyDisplaySymbol)
+                        ? normalizeSymbol(latestPoint.getAssetSymbol())
+                        : familyDisplaySymbol;
+                String aggregatedWallet = BybitUmbrellaSupport.ledgerWalletKeyForAggregation(bucketKey.walletAddress(), enabledBybitVenueRefs);
+                FamilyRowKey rowKey = new FamilyRowKey(
+                        aggregatedWallet,
+                        bucketKey.networkId(),
+                        familyIdentity
+                );
+                TokenPositionAccumulator accumulator = rows.computeIfAbsent(
+                        rowKey,
+                        ignored -> new TokenPositionAccumulator(
+                                familyIdentity,
+                                rowSymbol,
+                                displayName(rowSymbol),
+                                bucketKey.networkId(),
+                                aggregatedWallet
+                        )
+                );
+                accumulator.addBalance(currentQuantity, latestPoint, latestPoint.getAssetSymbol());
+            }
+        }
+
+        // Cycle/5 N15 + Cycle/18: reconcile each Bybit umbrella accumulator's quantity against the
+        // authoritative live {@code /v5/...} balance for the integration. Phantom positions
+        // (ledger > live) are clamped down; ledger shortfalls (ledger < live) are inflated up so
+        // the dashboard always displays the real Bybit holding. AVCO metrics are scaled
+        // proportionally on clamp-down and left unchanged on inflate (the gap is uncovered).
+        clampBybitUmbrellaToLive(rows, session, enabledBybitVenueRefs);
+        addMissingLiveBybitRows(rows, session, enabledBybitVenueRefs);
 
         Map<String, DashboardPriceSnapshot> latestPricesBySymbol = loadLatestPrices(
                 rows.values().stream()
@@ -168,14 +228,53 @@ public class SessionDashboardQueryService {
                 ? BigDecimal.ZERO
                 : totalUnrealizedPnlUsd.multiply(BigDecimal.valueOf(100), MC).divide(totalProvableBasisUsd, MC);
 
-        List<WalletView> wallets = session.getWallets().stream()
-                .map(wallet -> new WalletView(
-                        wallet.getAddress(),
-                        wallet.getLabel(),
-                        wallet.getColor(),
-                        wallet.getNetworks().stream().map(Enum::name).toList()
-                ))
-                .toList();
+        LinkedHashSet<String> sessionNetworkNames = new LinkedHashSet<>();
+        List<WalletView> wallets = new ArrayList<>();
+        for (UserSession.SessionWallet wallet : session.getWallets()) {
+            if (wallet == null) {
+                continue;
+            }
+            if (wallet.getNetworks() != null) {
+                wallet.getNetworks().forEach(network -> sessionNetworkNames.add(network.name()));
+            }
+            wallets.add(new WalletView(
+                    wallet.getAddress(),
+                    wallet.getLabel(),
+                    wallet.getColor(),
+                    wallet.getNetworks() == null ? List.of() : wallet.getNetworks().stream().map(Enum::name).toList()
+            ));
+        }
+        List<String> bybitNetworksForFilter = sessionNetworkNames.isEmpty()
+                ? List.of()
+                : List.copyOf(sessionNetworkNames);
+        if (session.getIntegrations() != null) {
+            for (UserSession.SessionIntegration integration : session.getIntegrations()) {
+                if (integration == null || integration.getStatus() == UserSession.IntegrationStatus.DISABLED) {
+                    continue;
+                }
+                String accountRef = integration.getAccountRef();
+                if (accountRef == null || accountRef.isBlank()) {
+                    continue;
+                }
+                if (!accountRef.toUpperCase(Locale.ROOT).startsWith("BYBIT:")) {
+                    continue;
+                }
+                String label = blank(integration.getDisplayName()) ? "Bybit" : integration.getDisplayName();
+                for (String bybitWalletRef : BybitUmbrellaSupport.bybitDashboardWalletRefs(accountRef)) {
+                    wallets.add(new WalletView(normalizeAddress(bybitWalletRef), label, null, bybitNetworksForFilter));
+                }
+            }
+        }
+
+        PortfolioConservationGate.ConservationResult conservation = portfolioConservationGate.evaluate(
+                new PortfolioConservationGate.ConservationInputs(
+                        universeScope.accountingUniverseId(),
+                        portfolioValueUsd,
+                        totalRealisedPnlUsd,
+                        totalUnrealizedPnlUsd,
+                        tokenPositions
+                )
+        );
 
         return new SessionDashboardView(
                 session.getId(),
@@ -183,11 +282,164 @@ public class SessionDashboardQueryService {
                         portfolioValueUsd,
                         totalUnrealizedPnlUsd,
                         totalUnrealizedPnlPct,
-                        totalRealisedPnlUsd
+                        totalRealisedPnlUsd,
+                        conservation.netExternalCapitalUsd(),
+                        conservation.lifetimeExternalInflowUsd(),
+                        conservation.markToMarketUsd(),
+                        conservation.expectedPnlUsd(),
+                        conservation.reportedPnlUsd(),
+                        conservation.conservationDeltaUsd(),
+                        conservation.conservationThresholdUsd(),
+                        conservation.conservationBreached()
                 ),
                 wallets,
                 tokenPositions
         );
+    }
+
+    private static BigDecimal physicalQuantityAfter(AssetLedgerPoint latestPoint) {
+        if (latestPoint == null) {
+            return BigDecimal.ZERO;
+        }
+        BigDecimal quantityAfter = zeroIfNull(latestPoint.getQuantityAfter());
+        BigDecimal shortfallAfter = zeroIfNull(latestPoint.getQuantityShortfallAfter());
+        return quantityAfter.subtract(shortfallAfter, MC);
+    }
+
+    /**
+     * Cycle/5 N15: returns the raw post-replay quantity for a Bybit ledger point, without subtracting
+     * historical AVCO shortfall. The umbrella is reconciled against live Bybit balances downstream
+     * by {@link #clampBybitUmbrellaToLive}, which is the authoritative defence against phantom
+     * inventory — shortfall accretion should not pre-emptively clip genuine current holdings.
+     */
+    /**
+     * Cycle/5 N15: for each Bybit umbrella accumulator (walletAddress = {@code bybit:<UID>}) compares
+     * the ledger-computed quantity against the live {@code /v5/account/wallet-balance} +
+     * {@code /v5/asset/transfer/query-account-coins-balance} + {@code /v5/earn/position} sum for that
+     * integration. If the ledger quantity exceeds the live quantity, clamps to live; if the live
+     * quantity is zero, removes the row entirely. Ledger quantities below live are left untouched —
+     * the dashboard never claims more inventory than ledger captures, but never claims phantoms
+     * either.
+     */
+    private void clampBybitUmbrellaToLive(
+            Map<FamilyRowKey, TokenPositionAccumulator> rows,
+            UserSession session,
+            Set<String> enabledBybitVenueRefs
+    ) {
+        if (enabledBybitVenueRefs.isEmpty() || session.getIntegrations() == null) {
+            return;
+        }
+        Map<String, Map<String, BigDecimal>> liveByAccountRef = new LinkedHashMap<>();
+        for (UserSession.SessionIntegration integration : session.getIntegrations()) {
+            if (integration == null
+                    || integration.getStatus() == UserSession.IntegrationStatus.DISABLED
+                    || integration.getAccountRef() == null
+                    || integration.getIntegrationId() == null
+                    || !integration.getAccountRef().toUpperCase(Locale.ROOT).startsWith("BYBIT:")) {
+                continue;
+            }
+            Map<String, BigDecimal> live = bybitLiveBalanceService.getUmbrellaBalances(integration.getIntegrationId());
+            if (live == null || live.isEmpty()) {
+                continue;
+            }
+            liveByAccountRef.put(normalizeAddress(integration.getAccountRef()), live);
+        }
+        if (liveByAccountRef.isEmpty()) {
+            return;
+        }
+        java.util.Iterator<Map.Entry<FamilyRowKey, TokenPositionAccumulator>> iterator = rows.entrySet().iterator();
+        while (iterator.hasNext()) {
+            Map.Entry<FamilyRowKey, TokenPositionAccumulator> entry = iterator.next();
+            FamilyRowKey key = entry.getKey();
+            TokenPositionAccumulator accumulator = entry.getValue();
+            if (key.walletAddress() == null || !key.walletAddress().startsWith("bybit:")) {
+                continue;
+            }
+            Map<String, BigDecimal> live = liveByAccountRef.get(key.walletAddress());
+            if (live == null) {
+                continue;
+            }
+            BigDecimal liveQty = BybitUmbrellaSupport.liveQuantityForCandidates(
+                    live,
+                    accumulator.priceLookupCandidates(),
+                    accumulator.priceLookupSymbol()
+            );
+            BigDecimal ledgerQty = accumulator.getQuantity();
+            if (ledgerQty == null || ledgerQty.signum() <= 0) {
+                continue;
+            }
+            if (liveQty == null || liveQty.signum() <= 0) {
+                iterator.remove();
+                continue;
+            }
+            if (ledgerQty.compareTo(liveQty) > 0) {
+                accumulator.clampQuantity(liveQty);
+            } else if (ledgerQty.compareTo(liveQty) < 0) {
+                accumulator.inflateToLive(liveQty);
+            }
+        }
+    }
+
+    /**
+     * Cycle/18: creates dashboard rows for Bybit assets that appear in the live balance but have
+     * no ledger entries at all (e.g. newly purchased assets before a pipeline run, or assets
+     * whose entire ledger history was excluded by normalization). These rows have zero AVCO
+     * coverage and are flagged as {@link #ISSUE_MISSING_REPLAY_POINT}.
+     */
+    private void addMissingLiveBybitRows(
+            Map<FamilyRowKey, TokenPositionAccumulator> rows,
+            UserSession session,
+            Set<String> enabledBybitVenueRefs
+    ) {
+        if (enabledBybitVenueRefs.isEmpty() || session.getIntegrations() == null) {
+            return;
+        }
+        for (UserSession.SessionIntegration integration : session.getIntegrations()) {
+            if (integration == null
+                    || integration.getStatus() == UserSession.IntegrationStatus.DISABLED
+                    || integration.getAccountRef() == null
+                    || integration.getIntegrationId() == null
+                    || !integration.getAccountRef().toUpperCase(Locale.ROOT).startsWith("BYBIT:")) {
+                continue;
+            }
+            String umbrellaWallet = normalizeAddress(integration.getAccountRef());
+            Map<String, BigDecimal> live = bybitLiveBalanceService.getUmbrellaBalances(integration.getIntegrationId());
+            if (live == null || live.isEmpty()) {
+                continue;
+            }
+            for (Map.Entry<String, BigDecimal> liveEntry : live.entrySet()) {
+                String symbol = liveEntry.getKey();
+                BigDecimal liveQty = liveEntry.getValue();
+                if (liveQty == null || liveQty.signum() <= 0) {
+                    continue;
+                }
+                String normalizedSymbol = normalizeSymbol(symbol);
+                if (normalizedSymbol.isBlank()) {
+                    continue;
+                }
+                String familyIdentity = "SYMBOL:" + normalizedSymbol;
+                FamilyRowKey rowKey = new FamilyRowKey(umbrellaWallet, null, familyIdentity);
+                if (rows.containsKey(rowKey)) {
+                    continue;
+                }
+                boolean alreadyCovered = rows.entrySet().stream()
+                        .anyMatch(e -> umbrellaWallet.equals(e.getKey().walletAddress())
+                                && e.getValue().priceLookupCandidates().contains(normalizedSymbol));
+                if (alreadyCovered) {
+                    continue;
+                }
+                TokenPositionAccumulator accumulator = new TokenPositionAccumulator(
+                        familyIdentity,
+                        normalizedSymbol,
+                        displayName(normalizedSymbol),
+                        null,
+                        umbrellaWallet
+                );
+                accumulator.inflateToLive(liveQty);
+                accumulator.setIssueDirect(ISSUE_MISSING_REPLAY_POINT);
+                rows.put(rowKey, accumulator);
+            }
+        }
     }
 
     private List<OnChainBalance> loadOnChainBalances(String sessionId, Collection<String> walletAddresses) {
@@ -300,16 +552,31 @@ public class SessionDashboardQueryService {
         return latest;
     }
 
-    private Map<FamilyRowKey, BigDecimal> realisedPnlByFamily(List<AssetLedgerPoint> points) {
+    private Map<FamilyRowKey, BigDecimal> realisedPnlByFamily(
+            List<AssetLedgerPoint> points,
+            LinkedHashSet<String> enabledBybitVenueRefs
+    ) {
         Map<FamilyRowKey, BigDecimal> totals = new LinkedHashMap<>();
         for (AssetLedgerPoint point : points) {
-            if (point.getNetworkId() == null || blank(point.getAccountingFamilyIdentity())) {
+            if (blank(point.getAccountingFamilyIdentity())) {
                 continue;
             }
-            FamilyRowKey key = new FamilyRowKey(
-                    normalizeAddress(point.getWalletAddress()),
+            if (point.getNetworkId() == null) {
+                String wallet = normalizeAddress(point.getWalletAddress());
+                if (!wallet.startsWith("bybit:")) {
+                    continue;
+                }
+            }
+            String familyIdentity = resolvedFamilyIdentity(
+                    point,
                     point.getNetworkId(),
-                    point.getAccountingFamilyIdentity()
+                    point.getAssetSymbol(),
+                    point.getAssetContract()
+            );
+            FamilyRowKey key = new FamilyRowKey(
+                    BybitUmbrellaSupport.ledgerWalletKeyForAggregation(point.getWalletAddress(), enabledBybitVenueRefs),
+                    point.getNetworkId(),
+                    familyIdentity
             );
             totals.merge(key, zeroIfNull(point.getRealisedPnlDeltaUsd()), (left, right) -> left.add(right, MC));
         }
@@ -344,7 +611,7 @@ public class SessionDashboardQueryService {
     }
 
     private static DashboardPriceSnapshot resolvePrice(Map<String, DashboardPriceSnapshot> latestPricesBySymbol, String symbol) {
-        return resolvePrice(latestPricesBySymbol, priceLookupCandidates(symbol));
+        return resolvePrice(latestPricesBySymbol, BybitUmbrellaSupport.priceLookupCandidates(symbol));
     }
 
     private static DashboardPriceSnapshot resolvePrice(
@@ -358,23 +625,6 @@ public class SessionDashboardQueryService {
             }
         }
         return DashboardPriceSnapshot.missing();
-    }
-
-    private static List<String> priceLookupCandidates(String symbol) {
-        String normalized = normalizeSymbol(symbol);
-        if (normalized.isBlank()) {
-            return List.of();
-        }
-        String canonical = CanonicalAssetCatalog.canonicalMarketSymbol(normalized);
-        return switch (canonical) {
-            case "BTC" -> List.of("BTC", "WBTC");
-            case "ETH" -> List.of("ETH", "WETH");
-            case "AVAX" -> List.of("AVAX", "WAVAX");
-            case "MNT" -> List.of("MNT", "WMNT");
-            default -> canonical.equals(normalized)
-                    ? List.of(canonical)
-                    : List.of(canonical, normalized);
-        };
     }
 
     private static BigDecimal zeroIfNull(BigDecimal value) {
@@ -424,7 +674,15 @@ public class SessionDashboardQueryService {
             BigDecimal portfolioValueUsd,
             BigDecimal totalUnrealizedPnlUsd,
             BigDecimal totalUnrealizedPnlPct,
-            BigDecimal totalRealizedPnlUsd
+            BigDecimal totalRealizedPnlUsd,
+            BigDecimal netExternalCapitalUsd,
+            BigDecimal lifetimeExternalInflowUsd,
+            BigDecimal markToMarketUsd,
+            BigDecimal expectedPnlUsd,
+            BigDecimal reportedPnlUsd,
+            BigDecimal conservationDeltaUsd,
+            BigDecimal conservationThresholdUsd,
+            boolean conservationBreached
     ) {
     }
 
@@ -509,7 +767,7 @@ public class SessionDashboardQueryService {
             this.walletAddress = walletAddress;
         }
 
-        private void addBalance(BigDecimal currentQuantity, AssetLedgerPoint latestPoint) {
+        private void addBalance(BigDecimal currentQuantity, AssetLedgerPoint latestPoint, String protocolLookupSymbol) {
             quantity = quantity.add(currentQuantity, MC);
             BigDecimal exactCoveredQuantity = latestPoint == null
                     ? BigDecimal.ZERO
@@ -522,7 +780,52 @@ public class SessionDashboardQueryService {
                 );
             }
             issue = mergeIssueCodes(issue, classifyIssue(latestPoint, currentQuantity, exactCoveredQuantity));
-            valuationMetadata = mergeValuationMetadata(valuationMetadata, protocolValuationMetadata(symbol));
+            String valuationLookup = blank(protocolLookupSymbol) ? symbol : protocolLookupSymbol;
+            valuationMetadata = mergeValuationMetadata(valuationMetadata, protocolValuationMetadata(valuationLookup));
+        }
+
+        private BigDecimal getQuantity() {
+            return quantity;
+        }
+
+        /**
+         * Cycle/5 N15: scales the accumulator's running totals proportionally so that {@code quantity}
+         * does not exceed the supplied authoritative live value. AVCO-relevant totals
+         * ({@code coveredQuantity}, {@code totalCostBasisUsd}) are kept proportional so the displayed
+         * cost basis remains a true scalar of the clamped position; unrealized PnL and AVCO are then
+         * derived correctly in {@link #toView}.
+         */
+        private void clampQuantity(BigDecimal liveLimit) {
+            if (liveLimit == null || liveLimit.signum() < 0 || quantity == null || quantity.signum() <= 0) {
+                return;
+            }
+            if (quantity.compareTo(liveLimit) <= 0) {
+                return;
+            }
+            BigDecimal scale = liveLimit.divide(quantity, MC);
+            quantity = liveLimit;
+            coveredQuantity = coveredQuantity.multiply(scale, MC);
+            totalCostBasisUsd = totalCostBasisUsd.multiply(scale, MC);
+        }
+
+        /**
+         * Inflates the displayed quantity to the authoritative live value when the ledger tracks
+         * fewer units than the Bybit API reports. AVCO metrics ({@code coveredQuantity},
+         * {@code totalCostBasisUsd}) are left unchanged — the delta between the live quantity and
+         * the ledger quantity is genuinely uncovered inventory with no provable cost basis.
+         */
+        private void inflateToLive(BigDecimal liveQty) {
+            if (liveQty == null || liveQty.signum() <= 0 || quantity == null) {
+                return;
+            }
+            if (quantity.compareTo(liveQty) >= 0) {
+                return;
+            }
+            quantity = liveQty;
+        }
+
+        private void setIssueDirect(String issueCode) {
+            this.issue = issueCode;
         }
 
         private String priceLookupSymbol() {
@@ -531,9 +834,9 @@ public class SessionDashboardQueryService {
 
         private List<String> priceLookupCandidates() {
             LinkedHashSet<String> candidates = new LinkedHashSet<>();
-            candidates.addAll(SessionDashboardQueryService.priceLookupCandidates(priceLookupSymbol()));
+            candidates.addAll(BybitUmbrellaSupport.priceLookupCandidates(priceLookupSymbol()));
             if (valuationMetadata != null && !blank(valuationMetadata.underlyingSymbol())) {
-                candidates.addAll(SessionDashboardQueryService.priceLookupCandidates(valuationMetadata.underlyingSymbol()));
+                candidates.addAll(BybitUmbrellaSupport.priceLookupCandidates(valuationMetadata.underlyingSymbol()));
             }
             return List.copyOf(candidates);
         }
@@ -569,7 +872,7 @@ public class SessionDashboardQueryService {
                     unrealizedPnlPct,
                     unrealizedPnlUsd,
                     realizedPnlUsd,
-                    networkId == null ? null : networkId.name(),
+                    dashboardNetworkLabel(networkId, walletAddress),
                     walletAddress,
                     issue,
                     valuationMetadata == null ? null : valuationMetadata.model(),
@@ -577,6 +880,21 @@ public class SessionDashboardQueryService {
                     effectivePriceSnapshot.unsupportedValuationReason()
             );
         }
+    }
+
+    /**
+     * Custody venues (Bybit UTA/FUND/EARN) replay with {@code networkId == null}; the dashboard still needs a
+     * stable bucket for filters and allocation (frontend only lists explicit network ids in "all" mode).
+     */
+    private static String dashboardNetworkLabel(NetworkId networkId, String walletAddress) {
+        if (networkId != null) {
+            return networkId.name();
+        }
+        String wallet = normalizeAddress(walletAddress);
+        if (wallet.startsWith("bybit:")) {
+            return "BYBIT";
+        }
+        return null;
     }
 
     private static ProtocolValuationMetadata mergeValuationMetadata(

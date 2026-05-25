@@ -11,7 +11,12 @@ export type EvmNetworkId =
   | 'UNICHAIN'
   | 'ZKSYNC'
   | 'KATANA'
-  | 'PLASMA';
+  | 'PLASMA'
+  /** Exchange custody bucket (dashboard / allocation); not an EVM chain. */
+  | 'BYBIT';
+
+/** On-chain wallet networks selectable in session settings (EVM chains + non-EVM tracking-only). */
+export type OnChainWalletNetworkId = Exclude<EvmNetworkId, 'BYBIT'> | 'SOLANA' | 'TON';
 
 export type SessionBackfillAggregateStatus =
   | 'PENDING'
@@ -25,7 +30,7 @@ export interface AddSessionRequestItem {
   readonly address: string;
   readonly label: string;
   readonly color: string;
-  readonly networks: ReadonlyArray<EvmNetworkId>;
+  readonly networks: ReadonlyArray<OnChainWalletNetworkId>;
 }
 
 export interface AddSessionRequest {
@@ -52,12 +57,18 @@ export interface SessionWalletResponse {
   readonly address: string;
   readonly label: string;
   readonly color: string;
-  readonly networks: ReadonlyArray<EvmNetworkId>;
+  readonly networks: ReadonlyArray<OnChainWalletNetworkId>;
 }
 
 export interface SessionResponse {
   readonly sessionId: string;
   readonly wallets: ReadonlyArray<SessionWalletResponse>;
+}
+
+export interface IntegrationStreamSyncEntry {
+  readonly stream: string;
+  readonly lastSegmentCompletedAt: string | null;
+  readonly newestStoredEventAt: string | null;
 }
 
 export interface SessionIntegrationResponse {
@@ -76,12 +87,26 @@ export interface SessionIntegrationResponse {
   readonly completedSegments: number;
   readonly failedSegments: number;
   readonly progressPct: number;
+  /** Bybit: per-API-stream ingestion timestamps (empty for other providers). */
+  readonly streamSync?: ReadonlyArray<IntegrationStreamSyncEntry>;
+}
+
+/**
+ * Cycle/9 S2: owned external-venue counterparty address (Paradex/MEX/etc.).
+ * Mirrored into accounting universe so it is excluded from Net Inflow while still carrying AVCO.
+ */
+export interface SessionExternalVenueEntry {
+  readonly address: string;
+  readonly provider: string | null;
+  readonly label: string | null;
+  readonly networks: ReadonlyArray<OnChainWalletNetworkId>;
 }
 
 export interface SessionSettingsResponse {
   readonly sessionId: string;
   readonly wallets: ReadonlyArray<SessionWalletResponse>;
   readonly integrations: ReadonlyArray<SessionIntegrationResponse>;
+  readonly externalVenues: ReadonlyArray<SessionExternalVenueEntry>;
   readonly hideSmallAssets: boolean | null;
   readonly showReconciliationWarnings: boolean | null;
 }
@@ -96,6 +121,7 @@ export interface SessionSettingsIntegrationUpdateRequest {
 export interface PutSessionSettingsRequest {
   readonly wallets: ReadonlyArray<AddSessionRequestItem>;
   readonly integrations: ReadonlyArray<SessionSettingsIntegrationUpdateRequest>;
+  readonly externalVenues: ReadonlyArray<SessionExternalVenueEntry>;
   readonly hideSmallAssets: boolean;
   readonly showReconciliationWarnings: boolean;
 }
@@ -332,6 +358,14 @@ export interface SessionDashboardSummaryResponse {
   readonly totalUnrealizedPnlUsd: number | null;
   readonly totalUnrealizedPnlPct: number | null;
   readonly totalRealizedPnlUsd: number | null;
+  readonly netExternalCapitalUsd: number | null;
+  readonly lifetimeExternalInflowUsd: number | null;
+  readonly markToMarketUsd: number | null;
+  readonly expectedPnlUsd: number | null;
+  readonly reportedPnlUsd: number | null;
+  readonly conservationDeltaUsd: number | null;
+  readonly conservationThresholdUsd: number | null;
+  readonly conservationBreached: boolean | null;
 }
 
 export interface SessionDashboardTokenPositionResponse {

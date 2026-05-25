@@ -12,7 +12,7 @@ import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 
 import { COLORS } from '../../../../core/data/dashboard.constants';
 import { WalletInfo } from '../../../../core/models/dashboard.models';
-import { AddSessionRequestItem, EvmNetworkId } from '../../../../core/models/wallet-api.models';
+import { AddSessionRequestItem, EvmNetworkId, OnChainWalletNetworkId } from '../../../../core/models/wallet-api.models';
 
 export type WalletSubmitState = 'idle' | 'submitting' | 'success' | 'error';
 
@@ -24,6 +24,7 @@ export interface EvmNetworkPresentation {
 }
 
 type WalletAddressState = 'empty' | 'ok' | 'warn' | 'error';
+type WalletKind = 'evm' | 'solana' | 'ton';
 type WalletFormGroup = FormGroup<{
   address: FormControl<string>;
   label: FormControl<string>;
@@ -33,9 +34,12 @@ type WalletFormGroup = FormGroup<{
 interface WalletAddressEvaluation {
   readonly state: WalletAddressState;
   readonly message: string | null;
+  readonly kind: WalletKind | null;
 }
 
 const EVM_ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/iu;
+const SOLANA_ADDRESS_PATTERN = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/u;
+const TON_FRIENDLY_ADDRESS_PATTERN = /^(?:UQ|EQ)[A-Za-z0-9_-]{46}$/u;
 const WALLET_COLOR_PALETTE: ReadonlyArray<string> = [
   COLORS.cyan,
   COLORS.purple,
@@ -119,7 +123,7 @@ export class DashboardAddWalletDialogComponent implements OnChanges {
 
   canSubmitWallets(): boolean {
     const summary = this.walletValidationSummary();
-    return summary.ready > 0 && this.supportedEvmNetworks.length > 0 && !this.isSubmitBusy;
+    return summary.ready > 0 && !this.isSubmitBusy;
   }
 
   addWalletField(): void {
@@ -198,9 +202,7 @@ export class DashboardAddWalletDialogComponent implements OnChanges {
 
   private createWalletFormGroup(index: number): WalletFormGroup {
     return this.formBuilder.group({
-      address: this.formBuilder.control('', {
-        validators: [Validators.pattern(EVM_ADDRESS_PATTERN)],
-      }),
+      address: this.formBuilder.control(''),
       label: this.formBuilder.control(`Wallet ${index + 1}`),
       color: this.formBuilder.control(WALLET_COLOR_PALETTE[index % WALLET_COLOR_PALETTE.length]),
     });
@@ -209,47 +211,66 @@ export class DashboardAddWalletDialogComponent implements OnChanges {
   private evaluateWalletAddress(control: FormControl<string>, index: number): WalletAddressEvaluation {
     const address = control.value.trim();
     if (address.length === 0) {
-      return { state: 'empty', message: null };
+      return { state: 'empty', message: null, kind: null };
     }
 
-    if (!EVM_ADDRESS_PATTERN.test(address)) {
-      return { state: 'error', message: 'Invalid EVM address' };
+    const kind = detectWalletKind(address);
+    if (kind === null) {
+      return { state: 'error', message: 'Invalid EVM, Solana, or TON address', kind: null };
     }
 
-    const lowerCaseAddress = address.toLowerCase();
+    const scopeId = walletScopeId(address, kind);
     const isDuplicateInInput = this.walletFormArray.controls.some((walletGroup, currentIndex) => {
       if (currentIndex === index) {
         return false;
       }
-      return walletGroup.controls.address.value.trim().toLowerCase() === lowerCaseAddress;
+      const other = walletGroup.controls.address.value.trim();
+      if (other.length === 0) {
+        return false;
+      }
+      const otherKind = detectWalletKind(other);
+      return otherKind !== null && walletScopeId(other, otherKind) === scopeId;
     });
     if (isDuplicateInInput) {
-      return { state: 'error', message: 'Duplicate address in current list' };
+      return { state: 'error', message: 'Duplicate address in current list', kind };
     }
 
-    const isExistingWallet = this.existingWallets.some(
-      (wallet) => wallet.address.trim().toLowerCase() === lowerCaseAddress
-    );
+    const isExistingWallet = this.existingWallets.some((wallet) => {
+      const existingKind = detectWalletKind(wallet.address.trim());
+      return existingKind !== null && walletScopeId(wallet.address.trim(), existingKind) === scopeId;
+    });
     if (isExistingWallet) {
       return {
         state: 'warn',
-        message: 'Already tracked — new networks will be added',
+        message: kind === 'evm'
+            ? 'Already tracked — new networks will be added'
+            : 'Already tracked — used for transfer linking (no backfill)',
+        kind,
       };
     }
 
-    return { state: 'ok', message: null };
+    if (kind === 'solana' || kind === 'ton') {
+      return {
+        state: 'ok',
+        message: 'Tracked for transfer linking only (no on-chain backfill)',
+        kind,
+      };
+    }
+
+    return { state: 'ok', message: null, kind };
   }
 
   private buildWalletItems(): ReadonlyArray<AddSessionRequestItem> {
     return this.walletFormArray.controls
       .map((walletForm, index) => {
         const evaluation = this.evaluateWalletAddress(walletForm.controls.address, index);
+        const networks = networksForWalletKind(evaluation.kind, this.supportedEvmNetworks);
         return {
           state: evaluation.state,
           address: walletForm.controls.address.value.trim(),
           label: walletForm.controls.label.value.trim() || `Wallet ${index + 1}`,
           color: walletForm.controls.color.value,
-          networks: [...this.supportedEvmNetworks] as ReadonlyArray<EvmNetworkId>,
+          networks,
         };
       })
       .filter((wallet) => wallet.state === 'ok' || wallet.state === 'warn')
@@ -295,4 +316,35 @@ export class DashboardAddWalletDialogComponent implements OnChanges {
     firstWalletForm.controls.color.markAsPristine();
     firstWalletForm.controls.color.markAsUntouched();
   }
+}
+
+function detectWalletKind(address: string): WalletKind | null {
+  if (EVM_ADDRESS_PATTERN.test(address)) {
+    return 'evm';
+  }
+  if (SOLANA_ADDRESS_PATTERN.test(address)) {
+    return 'solana';
+  }
+  if (TON_FRIENDLY_ADDRESS_PATTERN.test(address)) {
+    return 'ton';
+  }
+  return null;
+}
+
+function walletScopeId(address: string, kind: WalletKind): string {
+  const trimmed = address.trim();
+  return kind === 'evm' ? trimmed.toLowerCase() : trimmed;
+}
+
+function networksForWalletKind(
+  kind: WalletKind | null,
+  evmNetworks: ReadonlyArray<EvmNetworkId>
+): ReadonlyArray<OnChainWalletNetworkId> {
+  if (kind === 'solana') {
+    return ['SOLANA'];
+  }
+  if (kind === 'ton') {
+    return ['TON'];
+  }
+  return evmNetworks.filter((network) => network !== 'BYBIT') as ReadonlyArray<OnChainWalletNetworkId>;
 }

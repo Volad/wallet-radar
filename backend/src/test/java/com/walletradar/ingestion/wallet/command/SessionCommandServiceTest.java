@@ -3,7 +3,7 @@ package com.walletradar.ingestion.wallet.command;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.domain.session.UserSessionRepository;
-import com.walletradar.session.application.AccountUniverseSyncPlannerService;
+import com.walletradar.session.application.AccountUniverseSyncPlanScheduler;
 import com.walletradar.session.application.SessionPipelineStateService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -13,6 +13,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -33,7 +34,7 @@ class SessionCommandServiceTest {
     @Mock
     private SessionPipelineStateService sessionPipelineStateService;
     @Mock
-    private AccountUniverseSyncPlannerService accountUniverseSyncPlannerService;
+    private AccountUniverseSyncPlanScheduler accountUniverseSyncPlanScheduler;
 
     @InjectMocks
     private SessionCommandService sessionCommandService;
@@ -65,7 +66,7 @@ class SessionCommandServiceTest {
         SessionCommandService.SessionCommandResult response = sessionCommandService.addSession(existing.getId(), payload);
 
         assertThat(response.sessionId()).isEqualTo(existing.getId());
-        assertThat(response.message()).isEqualTo("Session saved, backfill started");
+        assertThat(response.message()).isEqualTo("Session saved, universe sync scheduled");
 
         ArgumentCaptor<UserSession> savedCaptor = ArgumentCaptor.forClass(UserSession.class);
         verify(userSessionRepository).save(savedCaptor.capture());
@@ -85,7 +86,7 @@ class SessionCommandServiceTest {
                         && "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f".equals(wallets.get(0).getAddress())),
                 any(Instant.class)
         );
-        verify(accountUniverseSyncPlannerService).sync(existing.getId(), saved.getUpdatedAt());
+        verify(accountUniverseSyncPlanScheduler).schedule(existing.getId(), saved.getUpdatedAt());
     }
 
     @Test
@@ -123,7 +124,7 @@ class SessionCommandServiceTest {
         assertThat(wallet.getNetworks()).containsExactly(NetworkId.ETHEREUM, NetworkId.ARBITRUM);
 
         verify(trackedWalletProjectionService).replaceSessionWallets(any(), any(), any(Instant.class));
-        verify(accountUniverseSyncPlannerService).sync("session-1", saved.getUpdatedAt());
+        verify(accountUniverseSyncPlanScheduler).schedule("session-1", saved.getUpdatedAt());
     }
 
     @Test
@@ -144,11 +145,49 @@ class SessionCommandServiceTest {
         assertThat(saved.getSettings()).isNotNull();
 
         verify(trackedWalletProjectionService).replaceSessionWallets(any(), any(), any(Instant.class));
-        verify(accountUniverseSyncPlannerService, never()).sync(any(), any());
+        verify(accountUniverseSyncPlanScheduler, never()).schedule(any(), any());
         verify(sessionPipelineStateService).markStageComplete(
                 "session-empty",
                 UserSession.PipelineStage.BACKFILL,
                 "Empty session created"
         );
+    }
+
+    @Test
+    @DisplayName("addSession re-reads integrations from DB before save to avoid clobbering concurrent settings writes")
+    void addSession_refreshesIntegrationsFromDatabaseBeforeSave() {
+        String sessionId = "5d15d897-2180-4468-af58-cc3e619c80d7";
+
+        UserSession stale = new UserSession();
+        stale.setId(sessionId);
+        stale.setCreatedAt(Instant.parse("2026-05-10T10:00:00Z"));
+        stale.setIntegrations(new ArrayList<>());
+
+        UserSession.SessionIntegration bybit = new UserSession.SessionIntegration();
+        bybit.setIntegrationId("BYBIT-33625378");
+        bybit.setAccountRef("BYBIT:33625378");
+        UserSession freshFromDb = new UserSession();
+        freshFromDb.setId(sessionId);
+        freshFromDb.setIntegrations(new ArrayList<>(List.of(bybit)));
+
+        when(userSessionRepository.findById(sessionId))
+                .thenReturn(Optional.of(stale))
+                .thenReturn(Optional.of(freshFromDb));
+
+        List<SessionCommandService.SessionWalletPayload> payload = List.of(
+                new SessionCommandService.SessionWalletPayload(
+                        "0xf03b52e8686b962e051a6075a06b96cb8a663021",
+                        "TWT",
+                        "#8b5cf6",
+                        List.of(NetworkId.ARBITRUM)
+                )
+        );
+
+        sessionCommandService.addSession(sessionId, payload);
+
+        ArgumentCaptor<UserSession> savedCaptor = ArgumentCaptor.forClass(UserSession.class);
+        verify(userSessionRepository).save(savedCaptor.capture());
+        assertThat(savedCaptor.getValue().getIntegrations()).hasSize(1);
+        assertThat(savedCaptor.getValue().getIntegrations().get(0).getIntegrationId()).isEqualTo("BYBIT-33625378");
     }
 }

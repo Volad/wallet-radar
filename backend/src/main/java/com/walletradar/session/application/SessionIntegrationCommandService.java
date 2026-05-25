@@ -30,7 +30,7 @@ public class SessionIntegrationCommandService {
     private final SessionSecretCryptoService sessionSecretCryptoService;
     private final BybitApiClient bybitApiClient;
     private final IntegrationSyncStatusService integrationSyncStatusService;
-    private final AccountUniverseSyncPlannerService accountUniverseSyncPlannerService;
+    private final AccountUniverseSyncPlanScheduler accountUniverseSyncPlanScheduler;
     private final ObjectMapper objectMapper;
 
     public Optional<IntegrationCommandResult> upsertBybit(
@@ -60,7 +60,7 @@ public class SessionIntegrationCommandService {
             backfillSegmentRepository.deleteByIntegrationId(integrationId);
             integrationSyncStatusService.delete(integrationId);
             if (!previousUniverseKeys.equals(sourceKeys(session.getWallets(), session.getIntegrations()))) {
-                accountUniverseSyncPlannerService.sync(session.getId(), now);
+                accountUniverseSyncPlanScheduler.schedule(session.getId(), now);
             }
             return new IntegrationRemovalResult(integrationId, "Integration removed");
         });
@@ -124,7 +124,7 @@ public class SessionIntegrationCommandService {
         session.setLastSeenAt(now);
         userSessionRepository.save(session);
         if (!previousUniverseKeys.equals(sourceKeys(session.getWallets(), session.getIntegrations()))) {
-            accountUniverseSyncPlannerService.sync(session.getId(), now);
+            accountUniverseSyncPlanScheduler.schedule(session.getId(), now);
         }
 
         return new IntegrationCommandResult(
@@ -134,7 +134,7 @@ public class SessionIntegrationCommandService {
                 integration.getDisplayName(),
                 integration.getAccountRef(),
                 maskedKey,
-                "Bybit integration saved, backfill planned"
+                "Bybit integration saved, universe sync scheduled"
         );
     }
 

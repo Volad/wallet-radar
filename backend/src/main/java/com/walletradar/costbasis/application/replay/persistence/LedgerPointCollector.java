@@ -39,6 +39,9 @@ public final class LedgerPointCollector {
         if (transaction == null || flow == null || assetKey == null || before == null || after == null || before.sameAs(after)) {
             return;
         }
+        if (transaction.getBlockTimestamp() == null) {
+            throw new IllegalStateException("Ledger point requires blockTimestamp (txId=" + transaction.getId() + ")");
+        }
         long sequence = replaySequence++;
         AssetLedgerPoint point = new AssetLedgerPoint();
         point.setId(accountingUniverseId + ":" + transaction.getId() + ":" + flowIndex + ":" + sequence);
@@ -81,8 +84,14 @@ public final class LedgerPointCollector {
         point.setAvcoBeforeUsd(before.perWalletAvco());
         point.setAvcoAfterUsd(after.perWalletAvco());
         point.setQuantityShortfallAfter(after.quantityShortfall());
-        point.setUncoveredQuantityAfter(after.uncoveredQuantity());
-        point.setBasisBackedQuantityAfter(nonNegative(after.quantity().subtract(after.uncoveredQuantity(), MC)));
+        BigDecimal qtyAfter = after.quantity() == null ? BigDecimal.ZERO : after.quantity();
+        BigDecimal uncovAfter = after.uncoveredQuantity() == null ? BigDecimal.ZERO : after.uncoveredQuantity();
+        // Cycle/15 R5 F2: defensive report invariant — uncov must not exceed qty on snapshots.
+        if (uncovAfter.compareTo(qtyAfter) > 0) {
+            uncovAfter = qtyAfter;
+        }
+        point.setUncoveredQuantityAfter(uncovAfter);
+        point.setBasisBackedQuantityAfter(nonNegative(qtyAfter.subtract(uncovAfter, MC)));
         point.setHasIncompleteHistoryAfter(after.hasIncompleteHistory());
         point.setHasUnresolvedFlagsAfter(after.hasUnresolvedFlags());
         point.setUnresolvedFlagCountAfter(after.unresolvedFlagCount());

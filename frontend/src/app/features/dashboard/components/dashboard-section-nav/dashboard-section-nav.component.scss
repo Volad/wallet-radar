@@ -4,14 +4,15 @@
 }
 
 .icon-nav {
-  width: 2.75rem;
+  width: 44px;
   border-right: 1px solid var(--wr-border);
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 0.2rem;
-  padding: 0.35rem 0;
+  gap: 2px;
+  padding: 6px 0;
   flex-shrink: 0;
+  height: 100%;
 }
 
 .icon-nav-spacer {
@@ -19,10 +20,10 @@
 }
 
 .icon-nav-btn {
-  width: 2.2rem;
-  height: 2.2rem;
+  width: 36px;
+  height: 36px;
   border: 1px solid transparent;
-  border-radius: 0.45rem;
+  border-radius: 7px;
   background: transparent;
   color: var(--wr-subtle);
   position: relative;
@@ -32,8 +33,8 @@
   transition: all 0.15s ease;
 
   &.active {
-    background: color-mix(in srgb, var(--sectionColor) 20%, transparent);
-    border-color: color-mix(in srgb, var(--sectionColor) 44%, transparent);
+    background: color-mix(in srgb, var(--sectionColor) 12%, transparent);
+    border-color: color-mix(in srgb, var(--sectionColor) 27%, transparent);
     color: var(--sectionColor);
 
     &::before {
@@ -56,10 +57,14 @@
 
 .settings-btn {
   margin-bottom: 0.25rem;
+  --sectionColor: var(--wr-cyan);
 }
 
 .section-glyph {
-  font-size: 0.86rem;
+  font-size: 18px;
+  line-height: 1;
+  display: grid;
+  place-items: center;
 }
 
 .soon-dot {

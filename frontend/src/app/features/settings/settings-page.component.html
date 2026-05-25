@@ -1,14 +1,6 @@
 <section class="settings-layout">
   @if (!hasSession()) {
-    <section class="settings-state-card">
-      <h2>No active session</h2>
-      <p>Open the dashboard first and create or restore a session.</p>
-      <div class="state-card-actions">
-        <button type="button" class="primary-btn" [disabled]="signingIn()" (click)="createEmptySession()">
-          {{ signingIn() ? 'Signing in…' : 'Sign in' }}
-        </button>
-      </div>
-    </section>
+    <wr-settings-wizard (completed)="onWizardCompleted()"></wr-settings-wizard>
   } @else if (loading()) {
     <section class="settings-state-card">
       <h2>Loading settings</h2>
@@ -17,8 +9,22 @@
   } @else {
     <aside class="settings-sidebar">
       <div class="settings-sidebar-head">
-        <span class="settings-sidebar-head-icon">⚙</span>
-        <span>Settings</span>
+        <svg
+          class="settings-sidebar-head-gear"
+          width="13"
+          height="13"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.65"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true">
+          <circle cx="12" cy="12" r="3" />
+          <path
+            d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+        </svg>
+        <span class="settings-sidebar-head-title">Settings</span>
       </div>
 
       <div class="settings-sidebar-scroll">
@@ -28,19 +34,43 @@
             class="settings-sidebar-item"
             [class.active]="activeSection() === section.id"
             (click)="setActiveSection(section.id)">
-            <span class="settings-sidebar-item-icon">{{ section.icon }}</span>
+            <span class="settings-sidebar-item-leading" aria-hidden="true">
+              @switch (section.navIcon) {
+                @case ('monitor') {
+                  <svg
+                    class="settings-sidebar-item-svg"
+                    width="12"
+                    height="12"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.65"
+                    stroke-linecap="round"
+                    stroke-linejoin="round">
+                    <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+                    <path d="M8 21h8" />
+                    <path d="M12 17v4" />
+                  </svg>
+                }
+                @case ('gear') {
+                  <svg
+                    class="settings-sidebar-item-svg"
+                    width="12"
+                    height="12"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.65"
+                    stroke-linecap="round"
+                    stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="3" />
+                    <path
+                      d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                  </svg>
+                }
+              }
+            </span>
             <span class="settings-sidebar-item-label">{{ section.label }}</span>
-            @if (section.id === 'wallets') {
-              <span class="settings-sidebar-item-badge">{{ sectionBadge().wallets }}</span>
-            }
-          </button>
-        }
-
-        <div class="settings-sidebar-divider"></div>
-
-        @for (ghostSection of ['Appearance', 'Notifications', 'About']; track ghostSection) {
-          <button type="button" class="settings-sidebar-item ghost" disabled>
-            <span class="settings-sidebar-item-label">{{ ghostSection }}</span>
           </button>
         }
       </div>
@@ -56,401 +86,167 @@
       }
 
       @if (activeSection() === 'wallets') {
-        <section class="settings-section wallets-section">
-          <div class="section-head wallets-head wallets-head-v2">
+        <div class="data-sources-page">
+          <div class="data-sources-head">
             <div>
-              <div class="section-title wallets-page-title">Wallets &amp; Networks</div>
-              <div class="section-subline wallets-page-subline">
-                Read-only · no signing required · up to {{ maxWallets }} wallets
-              </div>
+              <div class="data-sources-title">Data sources</div>
+              <div class="data-sources-sub">Wallets, integrations and accounting method</div>
             </div>
+
+            @if (dataSourcesChangesCount() > 0 && !dataSourcesReviewOpen()) {
+              <button type="button" class="ds-review-btn" (click)="openDataSourcesReview()">
+                <span class="ds-review-icon">⚠</span>
+                Review changes ({{ dataSourcesChangesCount() }})
+              </button>
+            }
           </div>
 
-          @if (!hasSavedWallets() && !isWalletEditing()) {
-            <section class="wallet-empty-state-card">
-              <div class="wallet-empty-state-illustration">👛</div>
-              <div class="wallet-empty-state-title">No wallets yet</div>
-              <div class="wallet-empty-state-copy">
-                Add your EVM addresses to start tracking cost basis, P&amp;L and transaction history across all
-                supported networks.
-              </div>
-              <button type="button" class="primary-btn large wallet-empty-state-action" (click)="startAddWallet()">
-                Add On-Chain Wallet
-              </button>
-              <div class="wallet-empty-state-footnote">
-                All supported networks are included automatically. You can queue up to {{ maxWallets }} wallets.
-              </div>
-              <div class="wallet-empty-state-hint">You can paste multiple addresses one by one and save the full list below.</div>
-            </section>
-          }
+          <wr-wallets-settings-section
+            [embeddedInDataSources]="true"
+            [maxWallets]="maxWallets"
+            [walletsDraft]="walletsDraft()"
+            [pendingWallets]="pendingWallets()"
+            [networksPresentation]="networksPresentation"
+            [hasSavedWallets]="hasSavedWallets()"
+            [isWalletEditing]="isWalletEditing()"
+            [walletListDirty]="walletListDirty()"
+            [canAddMoreWallets]="canAddMoreWallets()"
+            [canSaveWallets]="canSaveWallets()"
+            [saving]="savingScope() === 'wallets'"
+            [validPendingWalletCount]="validPendingWalletCount()"
+            [hasInvalidPendingWallets]="hasInvalidPendingWallets()"
+            [walletAddressError]="walletAddressError.bind(this)"
+            (addWallet)="startAddWallet()"
+            (toggleSavedNetworks)="toggleSavedWalletNetworks($event)"
+            (togglePendingNetworks)="togglePendingWalletNetworks($event)"
+            (removeWallet)="removeWallet($event)"
+            (updatePendingWalletField)="updatePendingWalletField($event.walletId, $event.field, $event.value)"
+            (discardPending)="discardPendingWallets()"
+            (saveWallets)="saveWallets()"></wr-wallets-settings-section>
 
-          @if (hasSavedWallets()) {
-            <div class="wallet-saved-list">
-              <div class="wallet-saved-head">
-                <div></div>
-                <div></div>
-                <div>Label</div>
-                <div>EVM Address</div>
-                <div>Networks</div>
-                <div></div>
+          <div class="data-sources-divider"></div>
+
+          <wr-integrations-settings-section
+            [compact]="true"
+            [bybitIntegration]="bybitIntegration()"
+            [bybitForm]="bybitForm"
+            [showSecret]="showBybitSecret()"
+            [saving]="savingScope() === 'integrations'"
+            [statusTone]="statusTone"
+            [formatDateTime]="formatDateTimeWithSeconds"
+            (toggleSecret)="toggleBybitSecretVisibility()"
+            (reset)="resetBybitDraft()"
+            (save)="saveBybit()"
+            (disconnect)="disconnectBybit()"></wr-integrations-settings-section>
+
+          <div class="data-sources-divider"></div>
+
+          <wr-accounting-settings-section></wr-accounting-settings-section>
+
+          @if (dataSourcesReviewOpen()) {
+            <div class="ds-review-scrim" (click)="closeDataSourcesReview()"></div>
+            <section class="ds-review-drawer" aria-label="Re-normalization required">
+              <div class="ds-review-warn">
+                <div class="ds-review-warn-icon">⟳</div>
+                <div class="ds-review-warn-copy">
+                  <div class="ds-review-title">Re-normalization required</div>
+                  <div class="ds-review-sub">
+                    These changes trigger a full re-processing of all transactions across
+                    <span class="mono ds-review-mono"> {{ dataSourcesWalletsCount() }}</span>
+                    wallet{{ dataSourcesWalletsCount() > 1 ? 's' : '' }}. All AVCO calculations, P&amp;L and cost basis
+                    data will be recalculated. Estimated time:
+                    <span class="mono ds-review-estimate">
+                      {{ dataSourcesEstimatedMinMinutes() }}–{{ dataSourcesEstimatedMaxMinutes() }} min
+                    </span>.
+                    The app remains usable with the previous data while re-normalization runs.
+                  </div>
+                </div>
+                <button type="button" class="ds-review-close" [disabled]="dataSourcesSaving()" (click)="closeDataSourcesReview()">
+                  ×
+                </button>
               </div>
 
-              <div class="wallet-saved-stack">
-                @for (wallet of walletsDraft(); track wallet.id; let index = $index) {
-                  <article class="wallet-saved-card" [style.--walletAccent]="wallet.color">
-                    <div class="wallet-saved-row">
-                      <div class="wallet-saved-stripe"></div>
-                      <div class="wallet-saved-index">{{ index + 1 < 10 ? '0' + (index + 1) : index + 1 }}</div>
-                      <div class="wallet-saved-label">{{ wallet.label || '—' }}</div>
-                      <div class="wallet-saved-address mono">{{ wallet.address }}</div>
-                      <button type="button" class="wallet-saved-networks-toggle" (click)="toggleSavedWalletNetworks(wallet.id)">
-                        <span class="wallet-saved-networks-copy">All networks</span>
-                        <span class="wallet-draft-chevron" [class.open]="wallet.networksOpen">⌄</span>
-                      </button>
-                      <button type="button" class="wallet-saved-remove" (click)="removeWallet(wallet.id)" aria-label="Remove wallet">
-                        🗑
-                      </button>
-                    </div>
-
-                    @if (wallet.networksOpen) {
-                      <div class="wallet-draft-network-panel">
-                        <div class="wallet-draft-network-grid">
-                          @for (network of networksPresentation; track network.id) {
-                            <div class="wallet-draft-network-chip" [style.--networkColor]="network.color">
-                              <span class="network-chip-icon">{{ network.icon }}</span>
-                              <span>{{ network.label }}</span>
-                            </div>
-                          }
-                        </div>
+              <div class="ds-review-body">
+                <div class="ds-review-changes">
+                  <div class="ds-review-changes-title">Changes queued</div>
+                  <div class="ds-review-changes-list">
+                    @for (change of dataSourcesChanges(); track $index) {
+                      <div class="ds-review-change">
+                        <span class="ds-review-dot"></span>
+                        <span class="ds-review-change-label">{{ change.label }}</span>
+                        @if (change.tag) {
+                          <span
+                            class="tag"
+                            [class.success]="change.tagTone === 'green'"
+                            [class.cyan]="change.tagTone === 'cyan'"
+                            [class.amber]="change.tagTone === 'amber'"
+                            [class.danger]="change.tagTone === 'red'">
+                            {{ change.tag }}
+                          </span>
+                        }
                       </div>
                     }
-                  </article>
-                }
-              </div>
-            </div>
-          }
-
-          @if (hasWalletsDraft()) {
-            <div class="wallet-draft-zone">
-              @if (isWalletEditing() && hasSavedWallets()) {
-                <div class="wallet-draft-divider">
-                  <span></span>
-                  <span>New wallets</span>
-                  <span></span>
+                  </div>
                 </div>
-              } @else if (isWalletEditing()) {
-                <div class="wallet-saved-head wallet-draft-head">
-                  <div></div>
-                  <div></div>
-                  <div>Label</div>
-                  <div>EVM Address</div>
-                  <div>Networks</div>
-                  <div></div>
-                </div>
-              }
 
-              @if (isWalletEditing()) {
-                <div class="wallet-draft-stack">
-                  @for (wallet of pendingWallets(); track wallet.id; let index = $index) {
-                    <article class="wallet-draft-row" [style.--walletAccent]="wallet.color">
-                      <div class="wallet-draft-main">
-                        <div class="wallet-draft-stripe"></div>
-                        <div class="wallet-draft-index">
-                          {{ walletsDraft().length + index + 1 < 10 ? '0' + (walletsDraft().length + index + 1) : walletsDraft().length + index + 1 }}
-                        </div>
-                        <input
-                          class="wallet-draft-inline-input wallet-draft-inline-label"
-                          type="text"
-                          [value]="wallet.label"
-                          (input)="updatePendingWalletField(wallet.id, 'label', $any($event.target).value)"
-                          placeholder="Label"
-                          maxlength="40"
-                          autocomplete="off"
-                          spellcheck="false" />
-                        <div class="wallet-draft-inline-address-wrap">
-                          <input
-                            class="wallet-draft-inline-input wallet-draft-inline-address"
-                            [class.ok]="wallet.address.trim().length > 0 && walletAddressError(wallet.id) === null"
-                            [class.err]="wallet.address.trim().length > 0 && walletAddressError(wallet.id) !== null"
-                            type="text"
-                            [value]="wallet.address"
-                            (input)="updatePendingWalletField(wallet.id, 'address', $any($event.target).value)"
-                            placeholder="0x… EVM address"
-                            autocomplete="off"
-                            spellcheck="false" />
-                          @if (wallet.address.trim().length > 0) {
-                            <span class="wallet-draft-inline-indicator" [class.ok]="walletAddressError(wallet.id) === null" [class.err]="walletAddressError(wallet.id) !== null">
-                              {{ walletAddressError(wallet.id) === null ? '✓' : '✕' }}
-                            </span>
-                          }
-                        </div>
-                        <button type="button" class="wallet-draft-networks-toggle" (click)="togglePendingWalletNetworks(wallet.id)">
-                          <span>All networks</span>
-                          <span class="wallet-draft-chevron" [class.open]="wallet.networksOpen">⌄</span>
-                        </button>
-                        <button type="button" class="wallet-draft-remove" (click)="removeWallet(wallet.id)" aria-label="Remove wallet">🗑</button>
-                      </div>
-
-                      @if (wallet.networksOpen) {
-                        <div class="wallet-draft-network-panel">
-                          <div class="wallet-draft-network-grid">
-                            @for (network of networksPresentation; track network.id) {
-                              <div class="wallet-draft-network-chip" [style.--networkColor]="network.color">
-                                <span class="network-chip-icon">{{ network.icon }}</span>
-                                <span>{{ network.label }}</span>
-                              </div>
-                            }
-                          </div>
-                        </div>
-                      }
-
-                      @if (walletAddressError(wallet.id); as walletError) {
-                        <div class="wallet-draft-error">
-                          {{ walletError }}
-                        </div>
-                      }
-                    </article>
-                  }
-                </div>
-              }
-
-              @if (canAddMoreWallets()) {
-                <button type="button" class="wallet-draft-add-another" (click)="startAddWallet()">
-                  + Add another wallet
-                  <span>(or paste multiple addresses)</span>
-                </button>
-              }
-
-              <div class="wallet-draft-info">
-                Backfill scans ~2 years per wallet. <span class="mono">3–8 min</span> per network. Partial results
-                appear as indexing runs.
-              </div>
-
-              @if (isWalletEditing() && pendingWallets().length > 1) {
-                <div class="wallet-draft-summary">
-                  <span class="wallet-draft-summary-ok">{{ validPendingWalletCount() }}</span>
-                  /{{ pendingWallets().length }} wallets valid
-                  @if (hasInvalidPendingWallets()) {
-                    <span class="wallet-draft-summary-warn">· fix errors to continue</span>
-                  }
-                </div>
-              }
-
-              @if (isWalletEditing() || walletListDirty()) {
-                <div class="wallet-draft-actions">
-                  @if (isWalletEditing()) {
-                    <button type="button" class="secondary-btn" (click)="discardPendingWallets()">Discard</button>
-                  }
+                <div class="ds-review-actions">
                   <button
                     type="button"
-                    class="primary-btn wallet-save-btn"
-                    [disabled]="!canSaveWallets() || savingScope() === 'wallets'"
-                    (click)="saveWallets()">
-                    {{ savingScope() === 'wallets' ? 'Saving…' : 'Save wallet settings' }}
+                    class="amber-btn ds-review-confirm"
+                    [class.ds-review-confirm-saving]="dataSourcesSaving()"
+                    [disabled]="dataSourcesSaving() || hasInvalidPendingWallets()"
+                    (click)="confirmDataSourcesSave()">
+                    @if (dataSourcesSaving()) {
+                      <svg
+                        class="ds-review-spinner"
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        aria-hidden="true">
+                        <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-opacity="0.22" stroke-width="3" />
+                        <path
+                          d="M12 2a10 10 0 0 1 10 10"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="3"
+                          stroke-linecap="round" />
+                      </svg>
+                      <span>Restarting pipeline…</span>
+                    } @else {
+                      <svg
+                        class="ds-review-confirm-idle-icon"
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        aria-hidden="true">
+                        <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                        <path d="M3 3v5h5" />
+                        <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+                        <path d="M16 16h5v5" />
+                      </svg>
+                      <span>Confirm &amp; restart pipeline</span>
+                    }
+                  </button>
+                  <button type="button" class="secondary-btn" [disabled]="dataSourcesSaving()" (click)="closeDataSourcesReview()">
+                    Cancel
                   </button>
                 </div>
-              }
-            </div>
+              </div>
+            </section>
           }
-        </section>
-      }
-
-      @if (activeSection() === 'integrations') {
-        <section class="settings-section">
-          <div class="section-head static">
-            <div>
-              <div class="section-title">Integrations</div>
-              <div class="section-subline">
-                Connect exchange accounts to import trading history alongside on-chain data.
-              </div>
-            </div>
-          </div>
-
-          <article class="integration-card">
-            <div class="integration-card-head">
-              <div class="integration-mark">B</div>
-
-              <div class="integration-copy">
-                <div class="integration-title-row">
-                  <span class="integration-title">Bybit</span>
-                  <span class="tag">CEX</span>
-                  @if (bybitIntegration() !== null) {
-                    <span class="tag success">Connected</span>
-                  }
-                </div>
-
-                <div class="integration-subline">
-                  @if (bybitIntegration(); as integration) {
-                    "{{ integration.displayName }}" · {{ integration.accountRef }}
-                  } @else {
-                    Import trading history and balances from Bybit.
-                  }
-                </div>
-              </div>
-
-              @if (bybitIntegration(); as integration) {
-                <span
-                  class="status-pill"
-                  [class.ready]="statusTone(integration) === 'ready'"
-                  [class.busy]="statusTone(integration) === 'busy'"
-                  [class.error]="statusTone(integration) === 'error'">
-                  {{ integration.status ?? 'UNKNOWN' }}
-                </span>
-              } @else {
-                <span class="status-pill">NOT CONNECTED</span>
-              }
-            </div>
-
-            <div class="instruction-card">
-              <div class="instruction-head">How to get API credentials</div>
-
-              <div class="instruction-steps">
-                @for (step of [
-                  'Log in to Bybit and open Account → API Management.',
-                  'Create a new API key with read-only permissions.',
-                  'Copy API key and secret. The secret is shown only once.',
-                  'Paste both values below and save. No withdrawal permission is required.'
-                ]; track step; let index = $index) {
-                  <div class="instruction-step">
-                    <span class="instruction-step-index">{{ index + 1 }}</span>
-                    <span class="instruction-step-copy">{{ step }}</span>
-                  </div>
-                }
-              </div>
-
-              <a
-                class="instruction-link"
-                href="https://www.bybit.com/app/user/api-management"
-                target="_blank"
-                rel="noreferrer">
-                Open Bybit API Management
-              </a>
-            </div>
-
-            @if (bybitIntegration(); as integration) {
-              <div class="integration-summary">
-                <div class="summary-row">
-                  <span>Account</span>
-                  <span class="mono">{{ integration.accountRef }}</span>
-                </div>
-                <div class="summary-row">
-                  <span>Masked key</span>
-                  <span class="mono">{{ integration.maskedKey }}</span>
-                </div>
-                <div class="summary-row">
-                  <span>Validated</span>
-                  <span>{{ formatDateTimeWithSeconds(integration.lastValidatedAt) }}</span>
-                </div>
-                <div class="summary-row">
-                  <span>Progress</span>
-                  <span>{{ integration.completedSegments }} / {{ integration.totalSegments }}</span>
-                </div>
-                <div class="progress-track">
-                  <div class="progress-fill" [style.width.%]="integration.progressPct"></div>
-                </div>
-              </div>
-            }
-
-            <form class="integration-form" [formGroup]="bybitForm">
-              <label class="editor-field-block">
-                <span class="field-label">Integration name</span>
-                <input class="ifield" type="text" formControlName="displayName" maxlength="80" />
-              </label>
-
-              <label class="editor-field-block">
-                <span class="field-label">API key</span>
-                <input class="ifield" type="password" formControlName="apiKey" autocomplete="off" />
-              </label>
-
-              <label class="editor-field-block">
-                <span class="field-label">API secret</span>
-                <div class="field-input-wrap">
-                  <input
-                    class="ifield"
-                    [type]="showBybitSecret() ? 'text' : 'password'"
-                    formControlName="apiSecret"
-                    autocomplete="off" />
-                  <button type="button" class="field-toggle-btn" (click)="toggleBybitSecretVisibility()">
-                    {{ showBybitSecret() ? 'Hide' : 'Show' }}
-                  </button>
-                </div>
-              </label>
-            </form>
-
-            <div class="integration-warning-card">
-              Use <strong>read-only</strong> API keys only. Never enable trading or withdrawal permissions.
-            </div>
-
-            <div class="editor-actions">
-              @if (bybitIntegration() !== null) {
-                <button
-                  type="button"
-                  class="danger-btn"
-                  [disabled]="savingScope() === 'integrations'"
-                  (click)="disconnectBybit()">
-                  Disconnect
-                </button>
-              }
-
-              <div class="editor-actions-spacer"></div>
-
-              <button
-                type="button"
-                class="secondary-btn"
-                [disabled]="savingScope() === 'integrations'"
-                (click)="resetBybitDraft()">
-                Cancel
-              </button>
-
-              <button
-                type="button"
-                class="primary-btn"
-                [disabled]="savingScope() === 'integrations'"
-                (click)="saveBybit()">
-                {{ savingScope() === 'integrations' ? 'Saving…' : (bybitIntegration() === null ? 'Connect' : 'Update') }}
-              </button>
-            </div>
-          </article>
-        </section>
+        </div>
       }
 
       @if (activeSection() === 'general') {
-        <section class="settings-section">
-          <div class="section-head static">
-            <div>
-              <div class="section-title">General</div>
-              <div class="section-subline">App-wide preferences</div>
-            </div>
-          </div>
-
-          <form class="general-list" [formGroup]="generalForm">
-            <label class="general-row">
-              <span class="general-label">Hide assets below $0.50</span>
-              <span class="toggle">
-                <input type="checkbox" formControlName="hideSmallAssets" />
-                <span class="tsl"></span>
-              </span>
-            </label>
-
-            <label class="general-row">
-              <span class="general-label">Show reconciliation warnings</span>
-              <span class="toggle">
-                <input type="checkbox" formControlName="showReconciliationWarnings" />
-                <span class="tsl"></span>
-              </span>
-            </label>
-          </form>
-
-          <div class="section-footer-actions">
-            <button
-              type="button"
-              class="primary-btn"
-              [disabled]="savingScope() === 'general'"
-              (click)="saveGeneral()">
-              {{ savingScope() === 'general' ? 'Saving…' : 'Save general settings' }}
-            </button>
-          </div>
-        </section>
+        <wr-general-settings-section
+          [form]="generalForm"
+          [saving]="savingScope() === 'general'"
+          (save)="saveGeneral()"></wr-general-settings-section>
       }
     </main>
   }

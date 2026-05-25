@@ -79,7 +79,9 @@ public class GenericAsyncLifecycleReplayHandler {
                 && flow.getQuantityDelta().signum() < 0
                 && transaction.getType() == NormalizedTransactionType.LP_ENTRY
                 && transaction.getCorrelationId() != null
-                && !transaction.getCorrelationId().isBlank();
+                && !transaction.getCorrelationId().isBlank()
+                // Multi-asset same-tx LP mint (Curve/Balancer) uses composite lp: bucket, not async lifecycle.
+                && LpReceiptEntryReplayHandler.hasOnlyOutboundPrincipalFlows(transaction);
     }
 
     public void applyAsyncLifecycleRequest(

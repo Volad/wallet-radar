@@ -3,7 +3,7 @@
     <button
       type="button"
       class="icon-nav-btn"
-      [class.active]="activeSection === sectionMeta.id"
+      [class.active]="activeSection === sectionMeta.id && !isSettingsActive"
       [class.soon]="sectionMeta.soon"
       [style.--sectionColor]="sectionMeta.color"
       [attr.aria-label]="sectionMeta.label"

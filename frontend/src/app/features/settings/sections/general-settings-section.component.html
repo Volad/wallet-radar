@@ -1,0 +1,33 @@
+<section class="settings-section">
+  <div class="section-head static">
+    <div>
+      <div class="section-title">General</div>
+      <div class="section-subline">App-wide preferences</div>
+    </div>
+  </div>
+
+  <form class="general-list" [formGroup]="form">
+    <label class="general-row">
+      <span class="general-label">Hide assets below $0.50</span>
+      <span class="toggle">
+        <input type="checkbox" formControlName="hideSmallAssets" />
+        <span class="tsl"></span>
+      </span>
+    </label>
+
+    <label class="general-row">
+      <span class="general-label">Show reconciliation warnings</span>
+      <span class="toggle">
+        <input type="checkbox" formControlName="showReconciliationWarnings" />
+        <span class="tsl"></span>
+      </span>
+    </label>
+  </form>
+
+  <div class="section-footer-actions">
+    <button type="button" class="primary-btn" [disabled]="saving" (click)="save.emit()">
+      {{ saving ? 'Saving…' : 'Save general settings' }}
+    </button>
+  </div>
+</section>
+

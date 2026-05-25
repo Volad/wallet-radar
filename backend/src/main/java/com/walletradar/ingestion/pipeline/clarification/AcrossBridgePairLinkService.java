@@ -177,15 +177,14 @@ public class AcrossBridgePairLinkService {
             return false;
         }
 
-        List<NormalizedTransaction.Flow> sourcePrincipal = principalFlows(source, -1);
-        List<NormalizedTransaction.Flow> destinationPrincipal = principalFlows(destination, 1);
-        if (sourcePrincipal.size() != 1 || destinationPrincipal.size() != 1) {
+        Optional<NormalizedTransaction.Flow> sourcePrincipal = BridgePairLinkSupport.selectPrimaryPrincipalFlow(source, -1);
+        Optional<NormalizedTransaction.Flow> destinationPrincipal = BridgePairLinkSupport.selectPrimaryPrincipalFlow(destination, 1);
+        if (sourcePrincipal.isEmpty() || destinationPrincipal.isEmpty()) {
             return false;
         }
-
-        String sourceFamily = BridgeAssetFamilySupport.continuityIdentity(sourcePrincipal.getFirst());
-        String destinationFamily = BridgeAssetFamilySupport.continuityIdentity(destinationPrincipal.getFirst());
-        if (sourceFamily == null || !sourceFamily.equals(destinationFamily)) {
+        NormalizedTransaction.Flow sourceFlow = sourcePrincipal.orElseThrow();
+        NormalizedTransaction.Flow destinationFlow = destinationPrincipal.orElseThrow();
+        if (!BridgePairLinkSupport.supportsBridgeContinuity(sourceFlow, destinationFlow)) {
             return false;
         }
 
@@ -194,13 +193,13 @@ public class AcrossBridgePairLinkService {
             return false;
         }
 
-        return relativeQuantityDiff(sourcePrincipal.getFirst(), destinationPrincipal.getFirst())
+        return relativeQuantityDiff(sourceFlow, destinationFlow)
                 .compareTo(MAX_RELATIVE_QTY_DIFF) <= 0;
     }
 
     private boolean materializePair(NormalizedTransaction source, NormalizedTransaction destination) {
         String correlationId = hasText(source.getCorrelationId()) ? source.getCorrelationId() : correlationId(source.getTxHash());
-        boolean continuityCandidate = supportsPlainMoveBasis(source, destination);
+        boolean continuityCandidate = BridgePairLinkSupport.supportsPlainMoveBasis(source, destination);
         Instant now = Instant.now();
 
         List<NormalizedTransaction> updates = new ArrayList<>();
@@ -244,6 +243,16 @@ public class AcrossBridgePairLinkService {
             destination.setContinuityCandidate(continuityCandidate);
             destinationChanged = true;
         }
+        if (continuityCandidate) {
+            if (BridgePairLinkSupport.retagPrincipalFlowsForBridgeContinuity(source, now)) {
+                if (!updates.contains(source)) {
+                    updates.add(source);
+                }
+            }
+            if (BridgePairLinkSupport.retagPrincipalFlowsForBridgeContinuity(destination, now)) {
+                destinationChanged = true;
+            }
+        }
         if (destinationChanged) {
             destination.setMatchedCounterparty(source.getTxHash());
             destination.setUpdatedAt(now);
@@ -255,31 +264,6 @@ public class AcrossBridgePairLinkService {
         }
         normalizedTransactionRepository.saveAll(deduplicateById(updates));
         return true;
-    }
-
-    private boolean supportsPlainMoveBasis(NormalizedTransaction source, NormalizedTransaction destination) {
-        List<NormalizedTransaction.Flow> sourcePrincipal = principalFlows(source, -1);
-        List<NormalizedTransaction.Flow> destinationPrincipal = principalFlows(destination, 1);
-        if (sourcePrincipal.size() != 1 || destinationPrincipal.size() != 1) {
-            return false;
-        }
-        String sourceAsset = BridgeAssetFamilySupport.continuityIdentity(sourcePrincipal.getFirst());
-        String destinationAsset = BridgeAssetFamilySupport.continuityIdentity(destinationPrincipal.getFirst());
-        return sourceAsset != null
-                && sourceAsset.equals(destinationAsset)
-                && sourcePrincipal.getFirst().getQuantityDelta() != null
-                && destinationPrincipal.getFirst().getQuantityDelta() != null;
-    }
-
-    private List<NormalizedTransaction.Flow> principalFlows(NormalizedTransaction transaction, int direction) {
-        if (transaction == null || transaction.getFlows() == null) {
-            return List.of();
-        }
-        return transaction.getFlows().stream()
-                .filter(Objects::nonNull)
-                .filter(flow -> flow.getRole() != NormalizedLegRole.FEE)
-                .filter(flow -> flow.getQuantityDelta() != null && Integer.signum(flow.getQuantityDelta().signum()) == direction)
-                .toList();
     }
 
     private BigDecimal relativeQuantityDiff(NormalizedTransaction.Flow sourceFlow, NormalizedTransaction.Flow destinationFlow) {

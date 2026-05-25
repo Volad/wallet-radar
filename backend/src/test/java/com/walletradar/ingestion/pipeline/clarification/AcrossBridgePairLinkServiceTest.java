@@ -79,6 +79,40 @@ class AcrossBridgePairLinkServiceTest {
         assertThat(destination.getCorrelationId()).isEqualTo(source.getCorrelationId());
         assertThat(destination.getMatchedCounterparty()).isEqualTo(source.getTxHash());
         assertThat(destination.getContinuityCandidate()).isTrue();
+        assertThat(source.getFlows()).filteredOn(f -> f.getRole() != NormalizedLegRole.FEE)
+                .allSatisfy(flow -> {
+                    assertThat(flow.getRole()).isEqualTo(NormalizedLegRole.TRANSFER);
+                    assertThat(flow.getUnitPriceUsd()).isNull();
+                });
+    }
+
+    @Test
+    @DisplayName("retags priced SELL outbound leg to TRANSFER when continuity is established")
+    void retagsPricedSellOutboundToTransferWhenContinuityEstablished() {
+        NormalizedTransaction source = bridgeOut(
+                "0x8fc7da0a6aba524098b75fb9c1bfa651b4b50a90850832393c1313a745ac1e13",
+                NetworkId.ARBITRUM,
+                "USDC",
+                "-641.214425"
+        );
+        source.getFlows().getFirst().setRole(NormalizedLegRole.SELL);
+        source.getFlows().getFirst().setUnitPriceUsd(new BigDecimal("1.0"));
+
+        NormalizedTransaction destination = bridgeIn(
+                "0x27978f7bf88cd7a4825b991ac6e461fa96be75b280add44236beb2e060c61ba3",
+                NetworkId.UNICHAIN,
+                "USDC",
+                "641.146308",
+                source.getBlockTimestamp().plusSeconds(4)
+        );
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(destination));
+
+        assertThat(service.link(source)).isTrue();
+        assertThat(source.getFlows().getFirst().getRole()).isEqualTo(NormalizedLegRole.TRANSFER);
+        assertThat(source.getFlows().getFirst().getUnitPriceUsd()).isNull();
+        assertThat(source.getContinuityCandidate()).isTrue();
     }
 
     @Test

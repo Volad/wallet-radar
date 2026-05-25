@@ -12,6 +12,7 @@ import com.walletradar.ingestion.pipeline.classification.OnChainClassifier;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassificationResult;
 import com.walletradar.ingestion.pipeline.clarification.CounterpartyEnrichmentService;
 import com.walletradar.ingestion.pipeline.clarification.ProtocolNameEnrichmentService;
+import com.walletradar.ingestion.pipeline.clarification.RegistryBridgeInboundTypeCorrectionService;
 import com.walletradar.ingestion.pipeline.onchain.OnChainNormalizedTransactionBuilder;
 import com.walletradar.ingestion.pipeline.onchain.OnChainRawTransactionView;
 import com.walletradar.ingestion.pipeline.onchain.PendingRawTransactionQueryService;
@@ -20,6 +21,7 @@ import com.walletradar.ingestion.pipeline.onchain.repair.InternalTransferRawPeer
 import com.walletradar.ingestion.pipeline.onchain.support.RawOrderingMetadataResolver;
 import com.walletradar.ingestion.pipeline.onchain.support.ResolvedRawOrderingMetadata;
 import com.walletradar.ingestion.store.IdempotentNormalizedTransactionStore;
+import com.walletradar.session.application.AccountingUniverseService;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -61,9 +63,17 @@ public class OnChainNormalizationService {
     private final ExplorerRawOrderingRepairGateway explorerRawOrderingRepairGateway;
     private final InternalTransferRawPeerRepairService internalTransferRawPeerRepairService;
     private final ProtocolNameEnrichmentService protocolNameEnrichmentService;
+    private final RegistryBridgeInboundTypeCorrectionService registryBridgeInboundTypeCorrectionService;
     private final CounterpartyEnrichmentService counterpartyEnrichmentService;
+    private final AccountingUniverseService accountingUniverseService;
 
     public int processNextBatch() {
+        return processNextBatch(null);
+    }
+
+    public int processNextBatch(String sessionId) {
+        bindUniverseIfPresent(sessionId);
+        try {
         List<RawTransaction> batch = new ArrayList<>(
                 pendingRawTransactionQueryService.loadNextBatch(properties.getBatchSize())
         );
@@ -83,6 +93,15 @@ public class OnChainNormalizationService {
             }
         }
         return completed;
+        } finally {
+            accountingUniverseService.clearUniverseBinding();
+        }
+    }
+
+    private void bindUniverseIfPresent(String sessionId) {
+        if (sessionId != null && !sessionId.isBlank()) {
+            accountingUniverseService.bindUniverse(sessionId.trim());
+        }
     }
 
     public boolean normalize(RawTransaction rawTransaction) {
@@ -129,6 +148,7 @@ public class OnChainNormalizationService {
             return;
         }
         protocolNameEnrichmentService.enrichInPlace(normalizedTransaction, rawTransaction, now);
+        registryBridgeInboundTypeCorrectionService.correctIfApplicable(normalizedTransaction, rawTransaction, now);
         counterpartyEnrichmentService.enrichInPlace(normalizedTransaction, rawTransaction, now);
     }
 

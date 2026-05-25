@@ -1,6 +1,7 @@
 import { fakeAsync, TestBed, tick } from '@angular/core/testing';
 import { HttpErrorResponse } from '@angular/common/http';
 import { provideRouter } from '@angular/router';
+import { Component } from '@angular/core';
 import { of, throwError } from 'rxjs';
 
 import { EMPTY_DASHBOARD_DATA } from '../../core/data/dashboard.constants';
@@ -9,6 +10,9 @@ import { WalletApiService } from '../../core/services/wallet-api.service';
 import { SessionStorageService } from '../../core/services/session-storage.service';
 import { SessionBackfillStatusResponse, SessionRefreshResponse, SessionTransactionsResponse } from '../../core/models/wallet-api.models';
 import { DashboardComponent } from './dashboard.component';
+
+@Component({ standalone: true, template: '' })
+class DummySettingsComponent {}
 
 describe('DashboardComponent (wallet submit flow)', () => {
   const sessionId = '549b0aba-a9af-4789-b125-ebb86314a3f1';
@@ -138,7 +142,7 @@ describe('DashboardComponent (wallet submit flow)', () => {
     walletApiServiceSpy.addSession.and.returnValue(
       of({
         sessionId,
-        message: 'Session saved, backfill started',
+        message: 'Session saved, universe sync scheduled',
       })
     );
     walletApiServiceSpy.getSessionSettings.and.returnValue(
@@ -172,7 +176,7 @@ describe('DashboardComponent (wallet submit flow)', () => {
     await TestBed.configureTestingModule({
       imports: [DashboardComponent],
       providers: [
-        provideRouter([]),
+        provideRouter([{ path: 'settings', component: DummySettingsComponent }]),
         {
           provide: DashboardDataService,
           useValue: {
@@ -478,6 +482,7 @@ describe('DashboardComponent (wallet submit flow)', () => {
             completedSegments: 10,
             failedSegments: 0,
             progressPct: 100,
+            streamSync: [],
           },
         ],
         hideSmallAssets: true,

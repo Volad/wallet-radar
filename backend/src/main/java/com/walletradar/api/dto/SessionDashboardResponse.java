@@ -17,7 +17,15 @@ public record SessionDashboardResponse(
             BigDecimal portfolioValueUsd,
             BigDecimal totalUnrealizedPnlUsd,
             BigDecimal totalUnrealizedPnlPct,
-            BigDecimal totalRealizedPnlUsd
+            BigDecimal totalRealizedPnlUsd,
+            BigDecimal netExternalCapitalUsd,
+            BigDecimal lifetimeExternalInflowUsd,
+            BigDecimal markToMarketUsd,
+            BigDecimal expectedPnlUsd,
+            BigDecimal reportedPnlUsd,
+            BigDecimal conservationDeltaUsd,
+            BigDecimal conservationThresholdUsd,
+            boolean conservationBreached
     ) {
     }
 

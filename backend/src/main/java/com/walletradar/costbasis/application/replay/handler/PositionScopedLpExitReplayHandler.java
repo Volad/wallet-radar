@@ -1,6 +1,10 @@
 package com.walletradar.costbasis.application.replay.handler;
 
+import com.walletradar.costbasis.application.LpReceiptBasisPoolService;
 import com.walletradar.costbasis.application.replay.model.AsyncLifecycleBucket;
+import com.walletradar.costbasis.application.replay.state.LpReceiptBasisPoolReplayContext;
+import com.walletradar.costbasis.domain.LpReceiptBasisPool;
+import com.walletradar.costbasis.domain.LpReceiptBasisPoolKey;
 import com.walletradar.costbasis.application.replay.model.AssetKey;
 import com.walletradar.costbasis.application.replay.model.CarryTransfer;
 import com.walletradar.costbasis.application.replay.model.IndexedFlow;
@@ -9,6 +13,7 @@ import com.walletradar.costbasis.application.replay.model.PositionState;
 import com.walletradar.costbasis.application.replay.state.ReplayExecutionState;
 import com.walletradar.costbasis.application.replay.support.ReplayAssetSupport;
 import com.walletradar.costbasis.application.replay.support.ReplayFlowSupport;
+import com.walletradar.costbasis.application.replay.support.ReplayPendingTransferKeyFactory;
 import com.walletradar.costbasis.application.replay.support.ReplaySettlementAllocator;
 import com.walletradar.costbasis.domain.AssetLedgerPoint;
 import com.walletradar.domain.common.PriceSource;
@@ -32,15 +37,21 @@ public class PositionScopedLpExitReplayHandler {
     private final ReplayAssetSupport assetSupport;
     private final ReplayFlowSupport flowSupport;
     private final ReplaySettlementAllocator settlementAllocator;
+    private final LpReceiptBasisPoolService lpReceiptBasisPoolService;
+    private final ReplayPendingTransferKeyFactory pendingTransferKeyFactory;
 
     public PositionScopedLpExitReplayHandler(
             ReplayAssetSupport assetSupport,
             ReplayFlowSupport flowSupport,
-            ReplaySettlementAllocator settlementAllocator
+            ReplaySettlementAllocator settlementAllocator,
+            LpReceiptBasisPoolService lpReceiptBasisPoolService,
+            ReplayPendingTransferKeyFactory pendingTransferKeyFactory
     ) {
         this.assetSupport = assetSupport;
         this.flowSupport = flowSupport;
         this.settlementAllocator = settlementAllocator;
+        this.lpReceiptBasisPoolService = lpReceiptBasisPoolService;
+        this.pendingTransferKeyFactory = pendingTransferKeyFactory;
     }
 
     public boolean isPositionScopedLpExit(NormalizedTransaction transaction) {
@@ -55,9 +66,22 @@ public class PositionScopedLpExitReplayHandler {
             return false;
         }
         if (transaction.getType() == NormalizedTransactionType.LP_ENTRY) {
-            return flow.getQuantityDelta().signum() > 0;
+            // Outbound-only LP_ENTRY (Pancake/Aerodrome receipt-pool path): ignore synthetic inbound markers.
+            // Curve/Balancer same-tx receipt legs must flow through composite lp: bucket restore.
+            return LpReceiptEntryReplayHandler.hasOnlyOutboundPrincipalFlows(transaction)
+                    && flow.getQuantityDelta().signum() > 0;
         }
-        return isLpExitType(transaction.getType()) && flow.getQuantityDelta().signum() < 0;
+        if (!isLpExitType(transaction.getType()) || flow.getQuantityDelta().signum() >= 0) {
+            return false;
+        }
+        // Only skip the burned LP receipt leg on true exits. Mint-shaped LP_EXIT rows carry
+        // negative underlying deposits that must reach the composite lp: bucket first.
+        String receiptIdentity = pendingTransferKeyFactory.lpCompositeReceiptIdentity(transaction);
+        if (receiptIdentity == null) {
+            return false;
+        }
+        String flowIdentity = assetSupport.continuityIdentity(transaction, flow);
+        return receiptIdentity.equals(flowIdentity);
     }
 
     public void apply(NormalizedTransaction transaction, ReplayExecutionState replayState) {
@@ -67,6 +91,7 @@ public class PositionScopedLpExitReplayHandler {
         Set<String> eligibleIdentities = bucket.knownAssetIdentities();
         Set<String> touchedEligibleIdentities = new LinkedHashSet<>();
         boolean touchedEligiblePrincipal = false;
+        boolean touchedLpReceiptPrincipal = false;
 
         for (IndexedFlow indexedFlow : flowSupport.indexedFlows(transaction)) {
             NormalizedTransaction.Flow flow = indexedFlow.flow();
@@ -95,7 +120,33 @@ public class PositionScopedLpExitReplayHandler {
                 );
                 continue;
             }
-            if (flow.getRole() != NormalizedLegRole.TRANSFER || flow.getQuantityDelta().signum() < 0) {
+            if (flow.getRole() != NormalizedLegRole.TRANSFER) {
+                flowSupport.applyUnknownTransfer(flow, position);
+                replayState.ledgerPointCollector().record(
+                        transaction,
+                        flow,
+                        indexedFlow.index(),
+                        position.assetKey(),
+                        before,
+                        position,
+                        AssetLedgerPoint.BasisEffect.UNKNOWN
+                );
+                continue;
+            }
+            if (flow.getQuantityDelta().signum() > 0) {
+                if (restoreInboundFromLpReceiptPool(
+                        transaction,
+                        indexedFlow,
+                        position,
+                        before,
+                        replayState,
+                        residualPrincipalInflows
+                )) {
+                    touchedLpReceiptPrincipal = true;
+                    continue;
+                }
+            }
+            if (flow.getQuantityDelta().signum() < 0) {
                 flowSupport.applyUnknownTransfer(flow, position);
                 replayState.ledgerPointCollector().record(
                         transaction,
@@ -155,7 +206,11 @@ public class PositionScopedLpExitReplayHandler {
             return;
         }
 
-        if (shouldIsolateNonPrincipalInflows(bucket, touchedEligiblePrincipal, touchedEligibleIdentities)) {
+        if (shouldIsolateNonPrincipalInflows(
+                bucket,
+                touchedEligiblePrincipal || touchedLpReceiptPrincipal,
+                touchedEligibleIdentities
+        )) {
             recordSideflowLpExitInflows(transaction, replayState, residualPrincipalInflows);
             recordSideflowLpExitInflows(transaction, replayState, deferredCrossAssetInflows);
             if (bucket.isEmpty()) {
@@ -172,6 +227,7 @@ public class PositionScopedLpExitReplayHandler {
                 : deferredCrossAssetInflows;
 
         if (!touchedEligiblePrincipal
+                && !touchedLpReceiptPrincipal
                 && residualPrincipalInflows.isEmpty()
                 && deferredCrossAssetInflows.size() == 1) {
             recordUnknownLpExitInflows(transaction, replayState, deferredCrossAssetInflows);
@@ -274,6 +330,7 @@ public class PositionScopedLpExitReplayHandler {
             }
 
             flowSupport.applyUnknownTransfer(flow, position);
+            flowSupport.applyInboundShortfallSpotFallback(flow, position, before);
             replayState.ledgerPointCollector().record(
                     transaction,
                     flow,
@@ -297,6 +354,7 @@ public class PositionScopedLpExitReplayHandler {
             PositionState position = replayState.position(assetKey);
             PositionSnapshot before = flowSupport.snapshot(position);
             flowSupport.applyUnknownTransfer(flow, position);
+            flowSupport.applyInboundShortfallSpotFallback(flow, position, before);
             replayState.ledgerPointCollector().record(
                     transaction,
                     flow,
@@ -307,6 +365,125 @@ public class PositionScopedLpExitReplayHandler {
                     AssetLedgerPoint.BasisEffect.UNKNOWN
             );
         }
+    }
+
+    /**
+     * Cycle/15 round 2: cross-asset LP receipt basis carry.
+     *
+     * <p>For multi-asset LP entries (e.g. BASE PancakeSwap V3 with WETH+USDC outbound), the
+     * exit typically returns a single asset (e.g. USDC). Same-asset basis is withdrawn first,
+     * then cross-asset pools sharing the same {@code lpCorrelationId} are drained
+     * proportionally so their basis carries into the exit asset position. If no same-asset
+     * pool matches (e.g. CAKE reward sideflow), routing falls back to the async-bucket /
+     * sideflow logic.</p>
+     */
+    private boolean restoreInboundFromLpReceiptPool(
+            NormalizedTransaction transaction,
+            IndexedFlow indexedFlow,
+            PositionState position,
+            PositionSnapshot before,
+            ReplayExecutionState replayState,
+            List<IndexedFlow> residualPrincipalInflows
+    ) {
+        LpReceiptBasisPoolReplayContext poolContext = replayState.lpReceiptBasisPoolContext();
+        if (poolContext == null || transaction.getCorrelationId() == null) {
+            return false;
+        }
+        NormalizedTransaction.Flow flow = indexedFlow.flow();
+        String assetIdentity = assetSupport.continuityIdentity(transaction, flow);
+        String corrId = transaction.getCorrelationId();
+
+        LpReceiptBasisPoolKey sameKey = new LpReceiptBasisPoolKey(
+                poolContext.universeId(),
+                corrId,
+                assetIdentity
+        );
+        LpReceiptBasisPool samePool = poolContext.pools().get(sameKey);
+        if (samePool == null || samePool.getQtyHeld() == null || samePool.getQtyHeld().signum() <= 0) {
+            return false;
+        }
+
+        BigDecimal sameHeldBefore = samePool.getQtyHeld();
+        BigDecimal requestedQty = flow.getQuantityDelta().abs();
+        var sameWithdraw = lpReceiptBasisPoolService.withdraw(samePool, requestedQty);
+        poolContext.dirtyKeys().add(sameKey);
+        if (sameWithdraw.withdrawnQty().signum() <= 0) {
+            return false;
+        }
+
+        BigDecimal totalQty = sameWithdraw.withdrawnQty();
+        BigDecimal totalBasis = sameWithdraw.withdrawnBasisUsd();
+        BigDecimal totalUncovered = sameWithdraw.withdrawnUncoveredQty();
+
+        // Drain cross-asset pools proportional to how much of the same-asset pool was
+        // withdrawn. Withdraw on the pool service decrements qty/basis/uncovered atomically,
+        // so the WETH pool's qty shrinks in lockstep with the USDC pool when each partial
+        // exit is processed.
+        BigDecimal proportion = sameHeldBefore.signum() > 0
+                ? sameWithdraw.withdrawnQty().divide(sameHeldBefore, MC)
+                : java.math.BigDecimal.ZERO;
+        boolean crossAssetBasisCarried = false;
+        if (proportion.signum() > 0) {
+            for (var entry : poolContext.pools().entrySet()) {
+                LpReceiptBasisPoolKey key = entry.getKey();
+                if (!corrId.equals(key.lpCorrelationId()) || sameKey.equals(key)) {
+                    continue;
+                }
+                LpReceiptBasisPool crossPool = entry.getValue();
+                if (crossPool == null || crossPool.getQtyHeld() == null
+                        || crossPool.getQtyHeld().signum() <= 0) {
+                    continue;
+                }
+                BigDecimal crossWithdrawQty = crossPool.getQtyHeld().multiply(proportion, MC);
+                if (crossWithdrawQty.signum() <= 0) {
+                    continue;
+                }
+                var crossWithdraw = lpReceiptBasisPoolService.withdraw(crossPool, crossWithdrawQty);
+                poolContext.dirtyKeys().add(key);
+                if (crossWithdraw.withdrawnBasisUsd().signum() > 0
+                        || crossWithdraw.withdrawnUncoveredQty().signum() > 0) {
+                    crossAssetBasisCarried = true;
+                }
+                totalBasis = totalBasis.add(crossWithdraw.withdrawnBasisUsd(), MC);
+                totalUncovered = totalUncovered.add(crossWithdraw.withdrawnUncoveredQty(), MC);
+            }
+        }
+
+        // When cross-asset basis was carried, the LP exit conceptually returns the entire
+        // requested qty backed by the combined basis (same-asset pool basis + cross-asset
+        // pool basis represent the unified LP position). Crediting only the same-asset
+        // withdrawn qty and pushing the residual back into the principal inflow queue would
+        // strand the cross-asset basis on a single same-asset chunk while the residual gets
+        // sideflow ACQUIRE/UNKNOWN. Instead, absorb the residual into this REALLOCATE_IN so
+        // the cross-asset basis covers the full LP return.
+        BigDecimal residualSameAssetQty = sameWithdraw.residualQty() == null
+                ? BigDecimal.ZERO
+                : sameWithdraw.residualQty();
+        if (crossAssetBasisCarried && residualSameAssetQty.signum() > 0) {
+            totalQty = totalQty.add(residualSameAssetQty, MC);
+            residualSameAssetQty = BigDecimal.ZERO;
+        }
+
+        BigDecimal avco = totalBasis.signum() > 0 && totalQty.signum() > 0
+                ? totalBasis.divide(totalQty, MC)
+                : null;
+        flowSupport.restoreToPosition(totalQty, position, totalBasis, totalUncovered, avco);
+        replayState.ledgerPointCollector().record(
+                transaction,
+                flow,
+                indexedFlow.index(),
+                position.assetKey(),
+                before,
+                position,
+                AssetLedgerPoint.BasisEffect.REALLOCATE_IN
+        );
+        if (residualSameAssetQty.signum() > 0) {
+            residualPrincipalInflows.add(new IndexedFlow(
+                    indexedFlow.index(),
+                    flowSupport.copyFlowWithQuantity(flow, residualSameAssetQty)
+            ));
+        }
+        return true;
     }
 
     private boolean isLpExitType(NormalizedTransactionType type) {

@@ -2,7 +2,12 @@ import { fakeAsync, TestBed, tick } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { of } from 'rxjs';
 
-import { AddSessionRequest, PutSessionSettingsRequest, SessionSettingsResponse } from '../../core/models/wallet-api.models';
+import {
+  AddSessionRequest,
+  PutSessionSettingsRequest,
+  SessionRefreshResponse,
+  SessionSettingsResponse,
+} from '../../core/models/wallet-api.models';
 import { SessionStorageService } from '../../core/services/session-storage.service';
 import { WalletApiService } from '../../core/services/wallet-api.service';
 import { SettingsPageComponent } from './settings-page.component';
@@ -36,8 +41,10 @@ describe('SettingsPageComponent', () => {
         completedSegments: 7,
         failedSegments: 0,
         progressPct: 100,
+        streamSync: [],
       },
     ],
+    externalVenues: [],
     hideSmallAssets: true,
     showReconciliationWarnings: true,
   };
@@ -50,6 +57,7 @@ describe('SettingsPageComponent', () => {
       'addSession',
       'getSessionSettings',
       'putSessionSettings',
+      'refreshSession',
     ]);
     sessionStorageServiceSpy = jasmine.createSpyObj<SessionStorageService>('SessionStorageService', [
       'getSessionId',
@@ -63,6 +71,15 @@ describe('SettingsPageComponent', () => {
       })
     );
     walletApiServiceSpy.getSessionSettings.and.returnValue(of(settingsResponse));
+    walletApiServiceSpy.refreshSession.and.returnValue(
+      of({
+        sessionId,
+        status: 'UP_TO_DATE',
+        scheduledTargets: 0,
+        skippedTargets: 0,
+        message: 'ok',
+      } satisfies SessionRefreshResponse)
+    );
     walletApiServiceSpy.putSessionSettings.and.callFake((_, payload: PutSessionSettingsRequest) =>
       of({
         ...settingsResponse,
@@ -169,7 +186,7 @@ describe('SettingsPageComponent', () => {
         }),
       ],
     }));
-    expect(component.bybitForm.controls.apiKey.value).toBe('');
+    expect(component.bybitForm.controls.apiKey.value).toBe('abcd...1234');
     expect(component.bybitForm.controls.apiSecret.value).toBe('');
   }));
 
@@ -223,6 +240,75 @@ describe('SettingsPageComponent', () => {
         jasmine.objectContaining({ label: 'Uni', address: '0x68bc3b81c853338eaaa21552f57437dfd7bf5b7f' }),
       ],
     }));
+  }));
+
+  it('includes new Bybit credentials in confirm data sources save payload', fakeAsync(() => {
+    const noBybitSettings: SessionSettingsResponse = {
+      ...settingsResponse,
+      integrations: [],
+    };
+    walletApiServiceSpy.getSessionSettings.and.returnValue(of(noBybitSettings));
+
+    const fixture = TestBed.createComponent(SettingsPageComponent);
+    const component = fixture.componentInstance;
+
+    fixture.detectChanges();
+    tick();
+    fixture.detectChanges();
+
+    expect(component.bybitIntegration()).toBeNull();
+
+    component.bybitForm.controls.apiKey.setValue('new-key');
+    component.bybitForm.controls.apiSecret.setValue('new-secret');
+    expect(component.dataSourcesChangesCount()).toBeGreaterThan(0);
+    component.openDataSourcesReview();
+    component.confirmDataSourcesSave();
+    tick();
+
+    expect(walletApiServiceSpy.putSessionSettings).toHaveBeenCalledWith(
+      sessionId,
+      jasmine.objectContaining({
+        integrations: [
+          jasmine.objectContaining({
+            provider: 'BYBIT',
+            apiKey: 'new-key',
+            apiSecret: 'new-secret',
+          }),
+        ],
+      })
+    );
+  }));
+
+  it('save wallets includes Bybit when key and secret are filled before first connect', fakeAsync(() => {
+    const noBybitSettings: SessionSettingsResponse = {
+      ...settingsResponse,
+      integrations: [],
+    };
+    walletApiServiceSpy.getSessionSettings.and.returnValue(of(noBybitSettings));
+
+    const fixture = TestBed.createComponent(SettingsPageComponent);
+    const component = fixture.componentInstance;
+    fixture.detectChanges();
+    tick();
+    fixture.detectChanges();
+
+    component.startAddWallet();
+    const w = component.pendingWallets()[0]!;
+    component.updatePendingWalletField(w.id, 'address', '0xf03b52e8686b962e051a6075a06b96cb8a663021');
+    component.updatePendingWalletField(w.id, 'label', 'Second');
+    component.bybitForm.controls.apiKey.setValue('k');
+    component.bybitForm.controls.apiSecret.setValue('s');
+    component.saveWallets();
+    tick();
+
+    expect(walletApiServiceSpy.putSessionSettings).toHaveBeenCalledWith(
+      sessionId,
+      jasmine.objectContaining({
+        integrations: [
+          jasmine.objectContaining({ provider: 'BYBIT', apiKey: 'k', apiSecret: 's' }),
+        ],
+      })
+    );
   }));
 
   it('creates an empty session from sign in button when no session is active', fakeAsync(() => {

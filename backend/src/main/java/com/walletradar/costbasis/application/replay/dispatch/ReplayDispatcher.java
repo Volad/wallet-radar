@@ -1,12 +1,15 @@
 package com.walletradar.costbasis.application.replay.dispatch;
 
 import com.walletradar.costbasis.application.replay.handler.AsyncSpotOrderReplayHandler;
+import com.walletradar.costbasis.application.replay.handler.BorrowReplayHandler;
 import com.walletradar.costbasis.application.replay.handler.EulerLoopReplayHandler;
 import com.walletradar.costbasis.application.replay.handler.FamilyEquivalentCustodyReplayHandler;
 import com.walletradar.costbasis.application.replay.handler.GenericAsyncLifecycleReplayHandler;
 import com.walletradar.costbasis.application.replay.handler.GmxLpEntryReplayHandler;
 import com.walletradar.costbasis.application.replay.handler.LiquidStakingReplayHandler;
+import com.walletradar.costbasis.application.replay.handler.LpReceiptEntryReplayHandler;
 import com.walletradar.costbasis.application.replay.handler.PositionScopedLpExitReplayHandler;
+import com.walletradar.costbasis.application.replay.handler.RepayReplayHandler;
 import com.walletradar.costbasis.application.replay.handler.TransferReplayHandler;
 import com.walletradar.costbasis.application.replay.model.AssetKey;
 import com.walletradar.costbasis.application.replay.model.PositionSnapshot;
@@ -14,57 +17,81 @@ import com.walletradar.costbasis.application.replay.model.PositionState;
 import com.walletradar.costbasis.application.replay.planning.ReplayRoutingDecision;
 import com.walletradar.costbasis.application.replay.planning.ReplayTransactionRouter;
 import com.walletradar.costbasis.application.replay.state.ReplayExecutionState;
+import com.walletradar.costbasis.application.replay.support.CounterpartyBasisPoolReplayHook;
 import com.walletradar.costbasis.application.replay.support.ReplayAssetSupport;
 import com.walletradar.costbasis.application.replay.support.ReplayFlowSupport;
+import com.walletradar.costbasis.application.replay.support.ReplayPendingTransferKeyFactory;
 import com.walletradar.costbasis.application.replay.support.ReplayTransferClassifier;
 import com.walletradar.costbasis.domain.AssetLedgerPoint;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import java.math.BigDecimal;
+import java.math.MathContext;
+
 @Component
+@Slf4j
 public class ReplayDispatcher {
+
+    private static final MathContext MC = MathContext.DECIMAL128;
 
     private final ReplayTransactionRouter replayTransactionRouter;
     private final ReplayAssetSupport assetSupport;
     private final ReplayFlowSupport flowSupport;
     private final ReplayTransferClassifier transferClassifier;
+    private final ReplayPendingTransferKeyFactory pendingTransferKeyFactory;
     private final TransferReplayHandler transferReplayHandler;
     private final LiquidStakingReplayHandler liquidStakingReplayHandler;
     private final FamilyEquivalentCustodyReplayHandler familyEquivalentCustodyReplayHandler;
     private final GenericAsyncLifecycleReplayHandler genericAsyncLifecycleReplayHandler;
     private final GmxLpEntryReplayHandler gmxLpEntryReplayHandler;
+    private final LpReceiptEntryReplayHandler lpReceiptEntryReplayHandler;
     private final PositionScopedLpExitReplayHandler positionScopedLpExitReplayHandler;
     private final AsyncSpotOrderReplayHandler asyncSpotOrderReplayHandler;
     private final EulerLoopReplayHandler eulerLoopReplayHandler;
+    private final CounterpartyBasisPoolReplayHook counterpartyBasisPoolReplayHook;
+    private final BorrowReplayHandler borrowReplayHandler;
+    private final RepayReplayHandler repayReplayHandler;
 
     public ReplayDispatcher(
             ReplayTransactionRouter replayTransactionRouter,
             ReplayAssetSupport assetSupport,
             ReplayFlowSupport flowSupport,
             ReplayTransferClassifier transferClassifier,
+            ReplayPendingTransferKeyFactory pendingTransferKeyFactory,
             TransferReplayHandler transferReplayHandler,
             LiquidStakingReplayHandler liquidStakingReplayHandler,
             FamilyEquivalentCustodyReplayHandler familyEquivalentCustodyReplayHandler,
             GenericAsyncLifecycleReplayHandler genericAsyncLifecycleReplayHandler,
             GmxLpEntryReplayHandler gmxLpEntryReplayHandler,
+            LpReceiptEntryReplayHandler lpReceiptEntryReplayHandler,
             PositionScopedLpExitReplayHandler positionScopedLpExitReplayHandler,
             AsyncSpotOrderReplayHandler asyncSpotOrderReplayHandler,
-            EulerLoopReplayHandler eulerLoopReplayHandler
+            EulerLoopReplayHandler eulerLoopReplayHandler,
+            CounterpartyBasisPoolReplayHook counterpartyBasisPoolReplayHook,
+            BorrowReplayHandler borrowReplayHandler,
+            RepayReplayHandler repayReplayHandler
     ) {
         this.replayTransactionRouter = replayTransactionRouter;
         this.assetSupport = assetSupport;
         this.flowSupport = flowSupport;
         this.transferClassifier = transferClassifier;
+        this.pendingTransferKeyFactory = pendingTransferKeyFactory;
         this.transferReplayHandler = transferReplayHandler;
         this.liquidStakingReplayHandler = liquidStakingReplayHandler;
         this.familyEquivalentCustodyReplayHandler = familyEquivalentCustodyReplayHandler;
         this.genericAsyncLifecycleReplayHandler = genericAsyncLifecycleReplayHandler;
         this.gmxLpEntryReplayHandler = gmxLpEntryReplayHandler;
+        this.lpReceiptEntryReplayHandler = lpReceiptEntryReplayHandler;
         this.positionScopedLpExitReplayHandler = positionScopedLpExitReplayHandler;
         this.asyncSpotOrderReplayHandler = asyncSpotOrderReplayHandler;
         this.eulerLoopReplayHandler = eulerLoopReplayHandler;
+        this.counterpartyBasisPoolReplayHook = counterpartyBasisPoolReplayHook;
+        this.borrowReplayHandler = borrowReplayHandler;
+        this.repayReplayHandler = repayReplayHandler;
     }
 
     public void dispatch(
@@ -78,6 +105,7 @@ public class ReplayDispatcher {
                 transaction,
                 gmxLpEntryReplayHandler::isGmxLpEntryRequest,
                 gmxLpEntryReplayHandler::isGmxLpEntrySettlement,
+                lpReceiptEntryReplayHandler::isLpReceiptEntry,
                 positionScopedLpExitReplayHandler::isPositionScopedLpExit,
                 liquidStakingReplayHandler::selectPrincipalFlows,
                 familyEquivalentCustodyReplayHandler::selectFlows
@@ -86,6 +114,7 @@ public class ReplayDispatcher {
             case EULER_LOOP -> eulerLoopReplayHandler.apply(transaction, replayState);
             case GMX_LP_ENTRY_REQUEST -> gmxLpEntryReplayHandler.applyRequest(transaction, replayState);
             case GMX_LP_ENTRY_SETTLEMENT -> gmxLpEntryReplayHandler.applySettlement(transaction, replayState);
+            case LP_RECEIPT_ENTRY -> lpReceiptEntryReplayHandler.apply(transaction, replayState);
             case ASYNC_LP_EXIT_SETTLEMENT -> genericAsyncLifecycleReplayHandler.applyAsyncLpExitSettlement(transaction, replayState);
             case POSITION_SCOPED_LP_EXIT -> positionScopedLpExitReplayHandler.apply(transaction, replayState);
             case LIQUID_STAKING -> {
@@ -124,13 +153,48 @@ public class ReplayDispatcher {
             ReplayExecutionState replayState,
             java.util.Set<Integer> skippedIndexes
     ) {
-        for (int flowIndex = 0; flowIndex < transaction.getFlows().size(); flowIndex++) {
-            if (skippedIndexes.contains(flowIndex)) {
-                continue;
-            }
+        for (int flowIndex : compositeAwareFlowOrder(transaction, skippedIndexes)) {
             NormalizedTransaction.Flow flow = transaction.getFlows().get(flowIndex);
             applyFlow(transaction, flow, flowIndex, replayState);
         }
+    }
+
+    /**
+     * Composite {@code lp:}/{@code wrapper:} buckets must receive outbound deposits before inbound
+     * restores in the same transaction. Production Curve mint txs list the LP receipt leg first.
+     */
+    private java.util.List<Integer> compositeAwareFlowOrder(
+            NormalizedTransaction transaction,
+            java.util.Set<Integer> skippedIndexes
+    ) {
+        int flowCount = transaction.getFlows() == null ? 0 : transaction.getFlows().size();
+        java.util.List<Integer> naturalOrder = new java.util.ArrayList<>();
+        for (int flowIndex = 0; flowIndex < flowCount; flowIndex++) {
+            if (!skippedIndexes.contains(flowIndex)) {
+                naturalOrder.add(flowIndex);
+            }
+        }
+        if (!pendingTransferKeyFactory.usesCompositeContinuityBucket(transaction)) {
+            return naturalOrder;
+        }
+        java.util.List<Integer> outbound = new java.util.ArrayList<>();
+        java.util.List<Integer> inbound = new java.util.ArrayList<>();
+        java.util.List<Integer> other = new java.util.ArrayList<>();
+        for (int flowIndex : naturalOrder) {
+            NormalizedTransaction.Flow flow = transaction.getFlows().get(flowIndex);
+            if (transferClassifier.isBucketOutbound(transaction, flow)) {
+                outbound.add(flowIndex);
+            } else if (transferClassifier.isBucketInbound(transaction, flow)) {
+                inbound.add(flowIndex);
+            } else {
+                other.add(flowIndex);
+            }
+        }
+        java.util.List<Integer> ordered = new java.util.ArrayList<>(outbound.size() + inbound.size() + other.size());
+        ordered.addAll(outbound);
+        ordered.addAll(inbound);
+        ordered.addAll(other);
+        return ordered;
     }
 
     private void applyFlow(
@@ -206,6 +270,14 @@ public class ReplayDispatcher {
         if (positionScopedLpExitReplayHandler.shouldIgnoreLpReceiptMarker(transaction, flow)) {
             return;
         }
+        if (transaction.getType() == NormalizedTransactionType.BORROW) {
+            borrowReplayHandler.apply(transaction, flow, flowIndex, replayState);
+            return;
+        }
+        if (transaction.getType() == NormalizedTransactionType.REPAY) {
+            repayReplayHandler.apply(transaction, flow, flowIndex, replayState);
+            return;
+        }
 
         AssetKey assetKey = assetSupport.assetKey(transaction, flow);
         PositionState position = replayState.position(assetKey);
@@ -227,6 +299,21 @@ public class ReplayDispatcher {
         }
 
         if (transferClassifier.shouldTreatAsContinuityTransfer(transaction, flow)) {
+            // Cycle/7 S5: dedup safety net. Upstream Bybit stream-authority collapser is the
+            // primary mechanism for suppressing mirror documents, but if a mirror slips through
+            // (e.g., new stream not yet covered by the policy), this guard prevents the same
+            // economic flow from disposing/acquiring twice via the continuity-transfer path.
+            String continuityDedupKey = continuityDedupKey(transaction, flow);
+            if (continuityDedupKey != null && !replayState.markContinuityFlowSeen(continuityDedupKey)) {
+                log.warn("REPLAY_DEDUP_MIRROR_SKIPPED txId={} corrId={} wallet={} family={} sign={} qty={}",
+                        transaction.getId(),
+                        transaction.getCorrelationId(),
+                        transaction.getWalletAddress(),
+                        assetSupport.continuityIdentity(transaction, flow),
+                        flow.getQuantityDelta().signum(),
+                        flow.getQuantityDelta());
+                return;
+            }
             AssetLedgerPoint.BasisEffect basisEffect = transferReplayHandler.applyTransfer(
                     transaction,
                     flowSupport.asTransferFlow(flow),
@@ -234,6 +321,12 @@ public class ReplayDispatcher {
                     position,
                     replayState
             );
+            // Cycle/15 R5 F3: pegged-native spot-basis fallback for unbacked inbound transfers
+            // (CMETH / METH / WEETH / BBSOL). Runs after the standard continuity carry so the
+            // pairing path remains authoritative whenever it does supply basis.
+            PositionSnapshot afterTransfer = flowSupport.snapshot(position);
+            flowSupport.applyInboundShortfallSpotFallback(flow, position, before);
+            accumulateInboundSpotFallbackProvisional(transaction, flow, position, afterTransfer, replayState);
             replayState.ledgerPointCollector().record(
                     transaction,
                     flow,
@@ -246,9 +339,10 @@ public class ReplayDispatcher {
             return;
         }
 
+        boolean continuityTransferPath = transferClassifier.shouldTreatAsContinuityTransfer(transaction, flow);
         switch (flow.getRole()) {
-            case BUY -> flowSupport.applyBuy(flow, position);
-            case SELL -> flowSupport.applySell(flow, position);
+            case BUY -> applyBuyWithOptionalPool(transaction, flow, position, replayState, continuityTransferPath);
+            case SELL -> applySellWithOptionalPool(transaction, flow, position, replayState, continuityTransferPath);
             case FEE -> flowSupport.applyFee(flow, position);
             case TRANSFER -> {
                 AssetLedgerPoint.BasisEffect basisEffect = transferReplayHandler.applyTransfer(
@@ -258,14 +352,21 @@ public class ReplayDispatcher {
                         position,
                         replayState
                 );
+                // Cycle/15 R5 F3: pegged-native spot-basis fallback also covers the
+                // non-continuity TRANSFER path (e.g., wrapper-shape LP→gauge stake when the
+                // gauge token is itself a pegged-native receipt — currently none, but the
+                // hook is symmetric for safety).
+                PositionSnapshot afterTransfer = flowSupport.snapshot(position);
+                flowSupport.applyInboundShortfallSpotFallback(flow, position, before);
+                accumulateInboundSpotFallbackProvisional(transaction, flow, position, afterTransfer, replayState);
                 replayState.ledgerPointCollector().record(
-                        transaction,
-                        flow,
-                        flowIndex,
-                        position.assetKey(),
-                        before,
-                        position,
-                        basisEffect
+                    transaction,
+                    flow,
+                    flowIndex,
+                    position.assetKey(),
+                    before,
+                    position,
+                    basisEffect
                 );
                 return;
             }
@@ -279,6 +380,47 @@ public class ReplayDispatcher {
                 position,
                 flowSupport.defaultBasisEffect(flow)
         );
+    }
+
+    private void applyBuyWithOptionalPool(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow,
+            PositionState position,
+            ReplayExecutionState replayState,
+            boolean continuityTransferPath
+    ) {
+        java.math.BigDecimal poolAcquisitionCost = counterpartyBasisPoolReplayHook.acquisitionCostUsdForBuy(
+                transaction,
+                flow,
+                replayState.counterpartyBasisPoolContext(),
+                continuityTransferPath
+        );
+        if (poolAcquisitionCost != null) {
+            flowSupport.applyBuyWithAcquisitionCost(flow, position, poolAcquisitionCost);
+            return;
+        }
+        flowSupport.applyBuy(flow, position);
+    }
+
+    private void applySellWithOptionalPool(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow,
+            PositionState position,
+            ReplayExecutionState replayState,
+            boolean continuityTransferPath
+    ) {
+        PositionSnapshot before = flowSupport.snapshot(position);
+        flowSupport.applySell(flow, position);
+        if (counterpartyBasisPoolReplayHook.shouldApplyPool(transaction, flow, continuityTransferPath)) {
+            counterpartyBasisPoolReplayHook.undoSellRealisedPnl(flow, position, before);
+            counterpartyBasisPoolReplayHook.afterSell(
+                    transaction,
+                    flow,
+                    before,
+                    replayState.counterpartyBasisPoolContext(),
+                    continuityTransferPath
+            );
+        }
     }
 
     private void applyFlowWithEffect(
@@ -315,5 +457,64 @@ public class ReplayDispatcher {
                 && flow.getRole() == NormalizedLegRole.TRANSFER
                 && flow.getQuantityDelta() != null
                 && flow.getQuantityDelta().signum() > 0;
+    }
+
+    /**
+     * Cycle/7 S5: continuity-path duplicate fingerprint.
+     *
+     * <p>Returns {@code null} when the flow has no usable correlation id or no asset identity —
+     * those cases do not participate in cross-document continuity matching so dedup is moot.</p>
+     */
+    private String continuityDedupKey(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow
+    ) {
+        if (transaction == null || flow == null || flow.getQuantityDelta() == null) {
+            return null;
+        }
+        String corrId = transaction.getCorrelationId();
+        if (corrId == null || corrId.isBlank()) {
+            return null;
+        }
+        String family = assetSupport.continuityIdentity(transaction, flow);
+        if (family == null) {
+            return null;
+        }
+        String wallet = transaction.getWalletAddress() == null ? "" : transaction.getWalletAddress();
+        int sign = flow.getQuantityDelta().signum();
+        if (sign == 0) {
+            return null;
+        }
+        return corrId + "|" + wallet + "|" + family + "|" + sign;
+    }
+
+    private void accumulateInboundSpotFallbackProvisional(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow,
+            PositionState position,
+            PositionSnapshot afterTransfer,
+            ReplayExecutionState replayState
+    ) {
+        if (flow == null
+                || flow.getQuantityDelta() == null
+                || flow.getQuantityDelta().signum() <= 0
+                || position == null
+                || afterTransfer == null) {
+            return;
+        }
+        BigDecimal basisAfterTransfer = afterTransfer.totalCostBasisUsd() == null
+                ? BigDecimal.ZERO
+                : afterTransfer.totalCostBasisUsd();
+        BigDecimal basisAfterSpot = position.totalCostBasisUsd() == null ? BigDecimal.ZERO : position.totalCostBasisUsd();
+        BigDecimal spotAdded = basisAfterSpot.subtract(basisAfterTransfer, MC);
+        if (spotAdded.signum() <= 0) {
+            return;
+        }
+        transferReplayHandler.accumulateInboundSpotFallbackProvisional(
+                transaction,
+                flow,
+                spotAdded,
+                replayState
+        );
     }
 }

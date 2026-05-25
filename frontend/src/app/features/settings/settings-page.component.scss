@@ -1,30 +1,30 @@
 :host {
-  --bg: #07090f;
-  --s1: #0b0d18;
-  --s2: #0f1220;
-  --s3: #131728;
-  --hov: #121628;
-  --border: #181d30;
-  --border-hi: #222840;
-  --cyan: #22d3ee;
-  --cyan-dim: rgba(34, 211, 238, 0.08);
-  --cyan-mid: rgba(34, 211, 238, 0.22);
-  --green: #34d399;
-  --green-dim: rgba(52, 211, 153, 0.08);
-  --green-mid: rgba(52, 211, 153, 0.22);
-  --red: #f87171;
-  --red-dim: rgba(248, 113, 113, 0.08);
-  --amber: #fbbf24;
-  --amber-dim: rgba(251, 191, 36, 0.08);
-  --amber-mid: rgba(251, 191, 36, 0.22);
-  --text: #dde3f0;
-  --sub: #4a5878;
-  --muted: #232a3e;
+  --bg: var(--wr-bg);
+  --s1: var(--wr-surface);
+  --s2: var(--wr-elevated);
+  --s3: var(--wr-surface-3);
+  --hov: var(--wr-hover);
+  --border: var(--wr-border);
+  --border-hi: var(--wr-border-strong);
+  --cyan: var(--wr-cyan);
+  --cyan-dim: var(--wr-cyan-soft);
+  --cyan-mid: var(--wr-cyan-mid);
+  --green: var(--wr-green);
+  --green-dim: var(--wr-green-soft);
+  --green-mid: var(--wr-green-mid);
+  --red: var(--wr-red);
+  --red-dim: var(--wr-red-soft);
+  --amber: var(--wr-amber);
+  --amber-dim: var(--wr-amber-soft);
+  --amber-mid: var(--wr-amber-mid);
+  --text: var(--wr-text);
+  --sub: var(--wr-subtle);
+  --muted: var(--wr-muted);
   display: block;
   flex: 1;
   min-width: 0;
   min-height: 0;
-  color: var(--text);
+  color: var(--wr-text);
 }
 
 button,
@@ -42,7 +42,7 @@ input {
   min-height: 0;
   display: flex;
   overflow: hidden;
-  background: var(--s1);
+  background: var(--wr-surface);
 }
 
 .settings-state-card {
@@ -50,8 +50,8 @@ input {
   margin: auto;
   padding: 1.15rem 1.25rem;
   border-radius: 0.5rem;
-  border: 1px solid var(--border-hi);
-  background: var(--s2);
+  border: 1px solid var(--wr-border-strong);
+  background: var(--wr-elevated);
 
   h2 {
     margin: 0 0 0.28rem;
@@ -63,7 +63,7 @@ input {
     margin: 0;
     font-size: 0.72rem;
     line-height: 1.6;
-    color: var(--sub);
+    color: var(--wr-subtle);
   }
 }
 
@@ -73,7 +73,7 @@ input {
 }
 
 .settings-sidebar {
-  width: 12.5rem;
+  width: 196px;
   flex-shrink: 0;
   border-right: 1px solid var(--border);
   display: flex;
@@ -82,66 +82,83 @@ input {
 }
 
 .settings-sidebar-head {
+  padding: 12px 14px 10px;
+  border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
-  gap: 0.45rem;
-  padding: 0.8rem 0.9rem 0.65rem;
-  border-bottom: 1px solid var(--border);
-  font-size: 0.82rem;
-  font-weight: 700;
+  gap: 7px;
 }
 
-.settings-sidebar-head-icon {
-  color: var(--sub);
+.settings-sidebar-head-gear {
+  flex-shrink: 0;
+  color: var(--wr-subtle);
+  opacity: 0.92;
+}
+
+.settings-sidebar-head-title {
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.25;
+  color: var(--wr-text);
 }
 
 .settings-sidebar-scroll {
   flex: 1;
   overflow-y: auto;
-  padding: 0.5rem 0;
+  padding: 6px 0;
 }
 
-.settings-sidebar-item {
+/* Explicit :root tokens so inactive rows never inherit dashboard-shell --wr-text (buttons). */
+.settings-layout .settings-sidebar button.settings-sidebar-item {
   width: 100%;
   border: 0;
   background: transparent;
-  color: var(--sub);
   display: flex;
   align-items: center;
-  gap: 0.55rem;
-  padding: 0.5rem 0.9rem;
+  gap: 8px;
+  padding: 8px 14px;
   text-align: left;
-  font-size: 0.75rem;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.25;
   transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
   border-left: 2px solid transparent;
   cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+  color: var(--wr-subtle);
 
-  &:hover:not(:disabled) {
+  &:hover {
     background: var(--hov);
-    color: var(--text);
+    color: var(--wr-text);
   }
 
   &.active {
-    background: var(--cyan-dim);
-    border-left-color: var(--cyan);
-    color: var(--cyan);
+    background: var(--wr-cyan-soft);
+    border-left-color: var(--wr-cyan);
+    color: var(--wr-cyan);
     font-weight: 600;
   }
 
-  &.ghost {
-    color: var(--muted);
-    cursor: default;
+  &.active:hover {
+    color: var(--wr-cyan);
   }
 }
 
-.settings-sidebar-item-icon {
-  width: 0.85rem;
+.settings-sidebar-item-leading {
   flex-shrink: 0;
-  text-align: center;
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.settings-sidebar-item-svg {
+  display: block;
 }
 
 .settings-sidebar-item-label {
-  flex: 1;
   min-width: 0;
 }
 
@@ -174,17 +191,290 @@ input {
   color: var(--green);
 }
 
-.settings-sidebar-divider {
-  border-top: 1px solid var(--border);
-  margin: 0.55rem 0;
-}
-
 .settings-main {
   flex: 1;
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
   padding: 1.25rem 1.5rem;
+}
+
+.data-sources-page {
+  flex: 1;
+  overflow: auto;
+  position: relative;
+  padding: 22px 28px 100px;
+}
+
+.data-sources-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 22px;
+}
+
+.ds-review-btn {
+  border: 1px solid var(--wr-amber-mid);
+  background: var(--wr-amber-soft);
+  color: var(--wr-amber);
+  padding: 7px 16px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease, transform 0.12s ease;
+
+  &:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--wr-amber-soft) 70%, var(--wr-amber-mid));
+  }
+
+  &:active:not(:disabled) {
+    transform: translateY(1px);
+  }
+
+  &:disabled {
+    opacity: 0.55;
+    cursor: default;
+  }
+}
+
+.ds-review-icon {
+  width: 0.9rem;
+  display: inline-flex;
+  justify-content: center;
+}
+
+.ds-review-scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 90;
+}
+
+.ds-review-drawer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 100;
+  border-top: 1px solid var(--wr-border-strong);
+  background: var(--wr-surface);
+  box-shadow: 0 -24px 64px rgba(0, 0, 0, 0.75);
+}
+
+.ds-review-warn {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 12px 24px;
+  background: color-mix(in srgb, var(--wr-amber-soft) 88%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--wr-amber-mid) 55%, var(--wr-border));
+}
+
+.ds-review-warn-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  flex-shrink: 0;
+  background: color-mix(in srgb, var(--wr-amber-soft) 82%, transparent);
+  border: 1px solid var(--wr-amber-mid);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--wr-amber);
+  font-size: 18px;
+}
+
+.ds-review-warn-copy {
+  min-width: 0;
+}
+
+.ds-review-close {
+  margin-left: auto;
+  color: var(--wr-subtle);
+  padding: 4px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid transparent;
+  background: transparent;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+
+  &:hover:not(:disabled) {
+    background: var(--wr-hover);
+    border-color: var(--wr-border);
+  }
+}
+
+.ds-review-title {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--wr-amber);
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.ds-review-sub {
+  margin-top: 3px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--wr-subtle);
+  max-width: 560px;
+}
+
+.ds-review-mono {
+  color: var(--wr-text);
+}
+
+.ds-review-estimate {
+  color: var(--wr-amber);
+}
+
+.ds-review-body {
+  padding: 14px 24px;
+  display: flex;
+  gap: 24px;
+  align-items: flex-start;
+}
+
+.ds-review-changes {
+  flex: 1;
+  min-width: 0;
+}
+
+.ds-review-changes-title {
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--wr-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  margin-bottom: 8px;
+}
+
+.ds-review-changes-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.ds-review-change {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  padding: 6px 9px;
+  background: var(--wr-elevated);
+  border: 1px solid var(--wr-border);
+  border-radius: 5px;
+}
+
+.ds-review-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--wr-amber);
+  flex-shrink: 0;
+}
+
+.ds-review-change-label {
+  color: var(--wr-text);
+}
+
+.ds-review-actions {
+  min-width: 220px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-end;
+
+  .primary-btn,
+  .amber-btn,
+  .secondary-btn {
+    width: 100%;
+  }
+
+  .ds-review-confirm {
+    gap: 8px;
+    padding: 10px 22px;
+    min-height: 42px;
+    font-size: 13px;
+    font-weight: 700;
+    background: var(--wr-amber);
+    color: #000;
+    border: none;
+    box-shadow: 0 1px 0 color-mix(in srgb, #000 18%, transparent);
+  }
+
+  .secondary-btn {
+    background: transparent;
+  }
+}
+
+.ds-review-confirm-idle-icon,
+.ds-review-spinner {
+  flex-shrink: 0;
+  display: block;
+}
+
+.ds-review-spinner {
+  animation: ds-review-spin 0.7s linear infinite;
+}
+
+@keyframes ds-review-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Keep full-strength amber while saving; global .amber-btn:disabled dims opacity. */
+.amber-btn.ds-review-confirm.ds-review-confirm-saving:disabled {
+  opacity: 1;
+  cursor: wait;
+}
+
+.tag.cyan {
+  background: var(--cyan-dim);
+  border-color: var(--cyan-mid);
+  color: var(--cyan);
+}
+
+.tag.amber {
+  background: var(--amber-dim);
+  border-color: var(--amber-mid);
+  color: var(--amber);
+}
+
+.tag.danger {
+  background: var(--red-dim);
+  border-color: var(--wr-red-mid);
+  color: var(--red);
+}
+
+.data-sources-title {
+  font-weight: 800;
+  font-size: 15px;
+  margin-bottom: 2px;
+}
+
+.data-sources-sub {
+  font-size: 11px;
+  color: var(--sub);
+}
+
+.data-sources-divider {
+  border-top: 1px solid var(--border);
+  margin: 20px 0;
 }
 
 .settings-banner {
@@ -238,6 +528,7 @@ input {
 .primary-btn,
 .secondary-btn,
 .danger-btn,
+.amber-btn,
 .mini-btn,
 .field-toggle-btn {
   border: 0;
@@ -294,11 +585,11 @@ input {
 .field-label,
 .instruction-head,
 .expanded-label {
-  font-size: 0.58rem;
+  font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: var(--muted);
+  color: var(--sub);
 }
 
 .field-label-muted {
@@ -337,10 +628,10 @@ input {
   width: 100%;
   background: var(--s2);
   border: 1px solid var(--border);
-  border-radius: 0.38rem;
+  border-radius: 6px;
   color: var(--text);
-  padding: 0.5rem 0.68rem;
-  font-size: 0.73rem;
+  padding: 8px 11px;
+  font-size: 12px;
   font-family: var(--wr-font-mono);
   transition: border-color 0.12s ease, box-shadow 0.12s ease;
 
@@ -526,15 +817,15 @@ input {
 
 .primary-btn,
 .secondary-btn,
-.danger-btn {
+.danger-btn,
+.amber-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 0.35rem;
-  min-height: 1.95rem;
-  padding: 0.35rem 0.8rem;
-  border-radius: 0.35rem;
-  font-size: 0.68rem;
+  padding: 7px 20px;
+  border-radius: 6px;
+  font-size: 12px;
   font-weight: 700;
 }
 
@@ -550,9 +841,15 @@ input {
 }
 
 .secondary-btn {
+  padding: 7px 16px;
   background: var(--s2);
   border: 1px solid var(--border);
   color: var(--sub);
+}
+
+.amber-btn {
+  background: var(--amber);
+  color: #000;
 }
 
 .danger-btn {
@@ -579,6 +876,7 @@ input {
 .primary-btn:disabled,
 .secondary-btn:disabled,
 .danger-btn:disabled,
+.amber-btn:disabled,
 .section-action-btn:disabled,
 .mini-btn:disabled {
   opacity: 0.45;
@@ -1058,10 +1356,10 @@ input {
 .wallet-draft-divider {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
-  margin-bottom: 0.55rem;
-  color: var(--cyan);
-  font-size: 0.56rem;
+  gap: 6px;
+  margin-bottom: 7px;
+  color: var(--wr-cyan);
+  font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -1070,8 +1368,8 @@ input {
 .wallet-draft-divider > span:first-child,
 .wallet-draft-divider > span:last-child {
   height: 1px;
-  background: var(--cyan-mid);
   flex: 1;
+  background: color-mix(in srgb, var(--wr-cyan-mid) 50%, transparent);
 }
 
 .wallet-draft-head {
@@ -1245,41 +1543,47 @@ input {
 
 .wallet-draft-add-another {
   width: 100%;
-  min-height: 2.2rem;
   display: inline-flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 0.35rem;
+  gap: 2px;
+  margin-top: 6px;
   margin-bottom: 0.85rem;
-  border: 1px dashed var(--border);
-  border-radius: 0.5rem;
+  padding: 7px 10px;
+  border: 1px dashed var(--wr-border-strong);
+  border-radius: 6px;
   background: transparent;
-  color: var(--sub);
-  font-size: 0.7rem;
-  font-weight: 500;
+  color: var(--wr-subtle);
+  font: inherit;
   cursor: pointer;
-  transition: border-color 0.12s ease, color 0.12s ease;
+  transition:
+    border-color 0.12s ease,
+    color 0.12s ease,
+    background 0.12s ease;
 
-  span {
-    color: var(--muted);
-    font-size: 0.6rem;
+  .wallet-draft-add-main {
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.3;
+  }
+
+  .wallet-draft-add-hint {
+    font-size: 9px;
+    font-weight: 500;
+    color: var(--wr-muted);
+    line-height: 1.35;
   }
 
   &:hover {
-    border-color: var(--cyan-mid);
-    color: var(--cyan);
+    border-color: var(--wr-cyan-mid);
+    color: var(--wr-cyan);
+    background: var(--wr-cyan-soft);
   }
-}
 
-.wallet-draft-info {
-  margin-bottom: 0.75rem;
-  padding: 0.55rem 0.7rem;
-  border-radius: 0.45rem;
-  border: 1px solid var(--cyan-mid);
-  background: var(--cyan-dim);
-  color: var(--sub);
-  font-size: 0.63rem;
-  line-height: 1.55;
+  &:hover .wallet-draft-add-hint {
+    color: color-mix(in srgb, var(--wr-cyan) 55%, var(--wr-muted));
+  }
 }
 
 .wallet-draft-summary {
@@ -1302,10 +1606,6 @@ input {
   display: flex;
   justify-content: flex-end;
   gap: 0.5rem;
-}
-
-.wallet-draft-zone .wallet-draft-info {
-  margin-top: 0;
 }
 
 .wallet-card {
@@ -1411,7 +1711,7 @@ input {
 }
 
 .integration-card {
-  border-color: rgba(247, 166, 0, 0.28);
+  border-color: var(--border-hi);
   background: var(--s1);
 }
 
@@ -1699,15 +1999,10 @@ input {
     padding: 0.55rem;
   }
 
-  .settings-sidebar-item {
+  .settings-layout .settings-sidebar button.settings-sidebar-item {
     width: auto;
     border-left-width: 1px;
     border-radius: 0.4rem;
-  }
-
-  .settings-sidebar-divider,
-  .settings-sidebar-item.ghost {
-    display: none;
   }
 
   .settings-main {

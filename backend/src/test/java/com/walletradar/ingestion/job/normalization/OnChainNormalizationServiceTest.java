@@ -12,12 +12,14 @@ import com.walletradar.ingestion.pipeline.classification.OnChainClassificationRe
 import com.walletradar.ingestion.pipeline.classification.OnChainClassifier;
 import com.walletradar.ingestion.pipeline.clarification.CounterpartyEnrichmentService;
 import com.walletradar.ingestion.pipeline.clarification.ProtocolNameEnrichmentService;
+import com.walletradar.ingestion.pipeline.clarification.RegistryBridgeInboundTypeCorrectionService;
 import com.walletradar.ingestion.pipeline.onchain.OnChainNormalizedTransactionBuilder;
 import com.walletradar.ingestion.pipeline.onchain.PendingRawTransactionQueryService;
 import com.walletradar.ingestion.pipeline.onchain.repair.ExplorerRawOrderingRepairGateway;
 import com.walletradar.ingestion.pipeline.onchain.repair.InternalTransferRawPeerRepairService;
 import com.walletradar.ingestion.pipeline.onchain.support.ResolvedRawOrderingMetadata;
 import com.walletradar.ingestion.store.IdempotentNormalizedTransactionStore;
+import com.walletradar.session.application.AccountingUniverseService;
 import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -55,6 +57,10 @@ class OnChainNormalizationServiceTest {
     private ProtocolNameEnrichmentService protocolNameEnrichmentService;
     @Mock
     private CounterpartyEnrichmentService counterpartyEnrichmentService;
+    @Mock
+    private RegistryBridgeInboundTypeCorrectionService registryBridgeInboundTypeCorrectionService;
+    @Mock
+    private AccountingUniverseService accountingUniverseService;
 
     private OnChainNormalizationService service;
 
@@ -73,7 +79,9 @@ class OnChainNormalizationServiceTest {
                 explorerRawOrderingRepairGateway,
                 internalTransferRawPeerRepairService,
                 protocolNameEnrichmentService,
-                counterpartyEnrichmentService
+                registryBridgeInboundTypeCorrectionService,
+                counterpartyEnrichmentService,
+                accountingUniverseService
         );
     }
 

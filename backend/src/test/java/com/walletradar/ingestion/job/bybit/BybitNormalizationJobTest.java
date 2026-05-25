@@ -33,7 +33,7 @@ class BybitNormalizationJobTest {
         BybitNormalizationProperties properties = new BybitNormalizationProperties();
         properties.setEnabled(true);
         properties.setBatchSize(25);
-        when(bybitNormalizationService.processNextBatch(25)).thenReturn(2, 1, 0);
+        when(bybitNormalizationService.processNextBatch(25, null)).thenReturn(2, 1, 0);
         when(pipelineTelemetrySnapshotService.snapshot()).thenReturn(new PipelineTelemetrySnapshot(
                 10L,
                 3L,
@@ -67,7 +67,7 @@ class BybitNormalizationJobTest {
         BybitNormalizationProperties properties = new BybitNormalizationProperties();
         properties.setEnabled(true);
         properties.setBatchSize(25);
-        when(bybitNormalizationService.processNextBatch(25)).thenReturn(0);
+        when(bybitNormalizationService.processNextBatch(25, "session-1")).thenReturn(0);
         when(pipelineTelemetrySnapshotService.snapshot()).thenReturn(new PipelineTelemetrySnapshot(
                 10L,
                 3L,

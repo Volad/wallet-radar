@@ -3,8 +3,10 @@ package com.walletradar.ingestion.wallet.command;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.domain.session.UserSessionRepository;
-import com.walletradar.session.application.AccountUniverseSyncPlannerService;
+import com.walletradar.session.application.AccountUniverseSyncPlanScheduler;
 import com.walletradar.session.application.SessionPipelineStateService;
+import com.walletradar.session.application.SessionWriteMergeSupport;
+import com.walletradar.session.support.TonAddressCanonicalizer;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -18,7 +20,7 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Persists session wallet settings and triggers wallet backfill.
+ * Persists session wallet settings and schedules deferred universe sync planning (backfill windows + segments).
  * Repeated add for the same sessionId replaces the full wallet set.
  */
 @Service
@@ -28,7 +30,7 @@ public class SessionCommandService {
     private final UserSessionRepository userSessionRepository;
     private final TrackedWalletProjectionService trackedWalletProjectionService;
     private final SessionPipelineStateService sessionPipelineStateService;
-    private final AccountUniverseSyncPlannerService accountUniverseSyncPlannerService;
+    private final AccountUniverseSyncPlanScheduler accountUniverseSyncPlanScheduler;
 
     public SessionCommandResult addSession(String sessionId, List<SessionWalletPayload> walletEntries) {
         String normalizedSessionId = sessionId.trim();
@@ -58,6 +60,7 @@ public class SessionCommandService {
         }
         session.setUpdatedAt(now);
         session.setLastSeenAt(now);
+        SessionWriteMergeSupport.refreshIntegrationsFromDatabase(userSessionRepository, normalizedSessionId, session);
         userSessionRepository.save(session);
         trackedWalletProjectionService.replaceSessionWallets(previousWallets, normalizedWallets, now);
         boolean universeChanged = !previousUniverseKeys.equals(sourceKeys(session.getWallets(), session.getIntegrations()));
@@ -72,15 +75,18 @@ public class SessionCommandService {
         }
 
         if (universeChanged) {
-            accountUniverseSyncPlannerService.sync(normalizedSessionId, now);
+            accountUniverseSyncPlanScheduler.schedule(normalizedSessionId, now);
         }
-        return new SessionCommandResult(normalizedSessionId, "Session saved, backfill started");
+        return new SessionCommandResult(normalizedSessionId, "Session saved, universe sync scheduled");
     }
 
     private List<UserSession.SessionWallet> normalizeWallets(List<SessionWalletPayload> walletEntries) {
         Map<String, UserSession.SessionWallet> merged = new LinkedHashMap<>();
         for (SessionWalletPayload entry : walletEntries) {
-            String canonicalAddress = entry.address().trim().toLowerCase(Locale.ROOT);
+            String canonicalAddress = canonicalizeWalletAddress(entry.address());
+            if (canonicalAddress.isBlank()) {
+                continue;
+            }
             UserSession.SessionWallet wallet = merged.computeIfAbsent(canonicalAddress, ignored -> {
                 UserSession.SessionWallet created = new UserSession.SessionWallet();
                 created.setAddress(canonicalAddress);
@@ -95,6 +101,36 @@ public class SessionCommandService {
             wallet.setNetworks(new ArrayList<>(combinedNetworks));
         }
         return new ArrayList<>(merged.values());
+    }
+
+    /**
+     * Cycle/6 D1/D2: Canonicalise wallet address per network family before persisting.
+     * <ul>
+     *     <li>EVM addresses (starts with {@code 0x}) → lower-case hex.</li>
+     *     <li>TON addresses (UQ/EQ friendly form, raw {@code workchain:hex}) → canonical UQ form
+     *         via {@link TonAddressCanonicalizer#preferredMemberRef(String)}.</li>
+     *     <li>Solana base58 addresses → case-sensitive (do not lower-case).</li>
+     * </ul>
+     * Lower-casing case-sensitive base58 / base64 addresses produced lookup misses in
+     * {@link com.walletradar.session.application.AccountingUniverseService#classify(String, NetworkId)}
+     * and silently broke universe membership for SOL/TON wallets.
+     */
+    private static String canonicalizeWalletAddress(String rawAddress) {
+        if (rawAddress == null) {
+            return "";
+        }
+        String trimmed = rawAddress.trim();
+        if (trimmed.isEmpty()) {
+            return "";
+        }
+        if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
+            return trimmed.toLowerCase(Locale.ROOT);
+        }
+        if (TonAddressCanonicalizer.looksLikeTon(trimmed)) {
+            return TonAddressCanonicalizer.preferredMemberRef(trimmed);
+        }
+        // Solana base58 and other formats — preserve original case.
+        return trimmed;
     }
 
     private UserSession.SessionSettings defaultSettings() {
@@ -137,9 +173,10 @@ public class SessionCommandService {
                 if (wallet == null || wallet.getAddress() == null || wallet.getAddress().isBlank()) {
                     continue;
                 }
+                String canonical = canonicalizeWalletAddress(wallet.getAddress());
                 for (NetworkId network : wallet.getNetworks() == null ? List.<NetworkId>of() : wallet.getNetworks()) {
                     if (network != null) {
-                        keys.add("WALLET|" + wallet.getAddress().trim().toLowerCase(Locale.ROOT) + "|" + network.name());
+                        keys.add("WALLET|" + canonical + "|" + network.name());
                     }
                 }
             }

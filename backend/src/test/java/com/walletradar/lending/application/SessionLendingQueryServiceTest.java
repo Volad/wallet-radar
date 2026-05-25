@@ -64,7 +64,8 @@ class SessionLendingQueryServiceTest {
                 userSessionRepository,
                 accountingUniverseService,
                 mongoOperations,
-                new LendingMarketMetricEstimator()
+                new LendingMarketMetricEstimator(),
+                null
         );
 
         Optional<SessionLendingQueryService.SessionLendingView> result = service.findSessionLending(SESSION_ID);
@@ -106,7 +107,8 @@ class SessionLendingQueryServiceTest {
                 userSessionRepository,
                 accountingUniverseService,
                 mongoOperations,
-                new LendingMarketMetricEstimator()
+                new LendingMarketMetricEstimator(),
+                null
         );
 
         SessionLendingQueryService.LendingGroupView group = service.findSessionLending(SESSION_ID)
@@ -169,7 +171,8 @@ class SessionLendingQueryServiceTest {
                 userSessionRepository,
                 accountingUniverseService,
                 mongoOperations,
-                new LendingMarketMetricEstimator()
+                new LendingMarketMetricEstimator(),
+                null
         );
 
         SessionLendingQueryService.LendingGroupView group = service.findSessionLending(SESSION_ID)
@@ -213,7 +216,8 @@ class SessionLendingQueryServiceTest {
                 userSessionRepository,
                 accountingUniverseService,
                 mongoOperations,
-                new LendingMarketMetricEstimator()
+                new LendingMarketMetricEstimator(),
+                null
         );
 
         SessionLendingQueryService.LendingCycleView cycle = service.findSessionLending(SESSION_ID)
@@ -259,7 +263,8 @@ class SessionLendingQueryServiceTest {
                 userSessionRepository,
                 accountingUniverseService,
                 mongoOperations,
-                new LendingMarketMetricEstimator()
+                new LendingMarketMetricEstimator(),
+                null
         );
 
         List<SessionLendingQueryService.LendingCycleView> cycles = service.findSessionLending(SESSION_ID)
@@ -341,7 +346,8 @@ class SessionLendingQueryServiceTest {
                 userSessionRepository,
                 accountingUniverseService,
                 mongoOperations,
-                new LendingMarketMetricEstimator()
+                new LendingMarketMetricEstimator(),
+                null
         );
 
         SessionLendingQueryService.LendingCycleView cycle = service.findSessionLending(SESSION_ID)
@@ -409,7 +415,8 @@ class SessionLendingQueryServiceTest {
                 userSessionRepository,
                 accountingUniverseService,
                 mongoOperations,
-                new LendingMarketMetricEstimator()
+                new LendingMarketMetricEstimator(),
+                null
         );
 
         SessionLendingQueryService.LendingCycleView cycle = service.findSessionLending(SESSION_ID)
@@ -473,7 +480,8 @@ class SessionLendingQueryServiceTest {
                 userSessionRepository,
                 accountingUniverseService,
                 mongoOperations,
-                new LendingMarketMetricEstimator()
+                new LendingMarketMetricEstimator(),
+                null
         );
 
         SessionLendingQueryService.LendingCycleView cycle = service.findSessionLending(SESSION_ID)
@@ -534,7 +542,8 @@ class SessionLendingQueryServiceTest {
                 userSessionRepository,
                 accountingUniverseService,
                 mongoOperations,
-                new LendingMarketMetricEstimator()
+                new LendingMarketMetricEstimator(),
+                null
         );
 
         SessionLendingQueryService.LendingCycleView cycle = service.findSessionLending(SESSION_ID)
@@ -585,7 +594,8 @@ class SessionLendingQueryServiceTest {
                 userSessionRepository,
                 accountingUniverseService,
                 mongoOperations,
-                new LendingMarketMetricEstimator()
+                new LendingMarketMetricEstimator(),
+                null
         );
 
         SessionLendingQueryService.LendingCycleView cycle = service.findSessionLending(SESSION_ID)
@@ -636,7 +646,8 @@ class SessionLendingQueryServiceTest {
                 userSessionRepository,
                 accountingUniverseService,
                 mongoOperations,
-                new LendingMarketMetricEstimator()
+                new LendingMarketMetricEstimator(),
+                null
         );
 
         SessionLendingQueryService.LendingCycleView cycle = service.findSessionLending(SESSION_ID)
@@ -693,7 +704,8 @@ class SessionLendingQueryServiceTest {
                 userSessionRepository,
                 accountingUniverseService,
                 mongoOperations,
-                new LendingMarketMetricEstimator()
+                new LendingMarketMetricEstimator(),
+                null
         );
 
         SessionLendingQueryService.LendingCycleView cycle = service.findSessionLending(SESSION_ID)
@@ -748,7 +760,8 @@ class SessionLendingQueryServiceTest {
                 userSessionRepository,
                 accountingUniverseService,
                 mongoOperations,
-                new LendingMarketMetricEstimator()
+                new LendingMarketMetricEstimator(),
+                null
         );
 
         SessionLendingQueryService.LendingCycleView cycle = service.findSessionLending(SESSION_ID)
@@ -795,7 +808,8 @@ class SessionLendingQueryServiceTest {
                 userSessionRepository,
                 accountingUniverseService,
                 mongoOperations,
-                new LendingMarketMetricEstimator()
+                new LendingMarketMetricEstimator(),
+                null
         );
 
         SessionLendingQueryService.LendingCycleView cycle = service.findSessionLending(SESSION_ID)
@@ -849,7 +863,8 @@ class SessionLendingQueryServiceTest {
                 userSessionRepository,
                 accountingUniverseService,
                 mongoOperations,
-                new LendingMarketMetricEstimator()
+                new LendingMarketMetricEstimator(),
+                null
         );
 
         SessionLendingQueryService.LendingCycleView cycle = service.findSessionLending(SESSION_ID)
@@ -912,7 +927,8 @@ class SessionLendingQueryServiceTest {
                 userSessionRepository,
                 accountingUniverseService,
                 mongoOperations,
-                new LendingMarketMetricEstimator()
+                new LendingMarketMetricEstimator(),
+                null
         );
 
         SessionLendingQueryService.LendingGroupView group = service.findSessionLending(SESSION_ID)

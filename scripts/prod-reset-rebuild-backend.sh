@@ -71,8 +71,8 @@ else
   compose rm -f -s backend-prod >/dev/null 2>&1 || true
 fi
 
-printf 'Rebuilding backend-prod image...\n'
-compose build backend-prod
+printf 'Rebuilding backend-prod image (no cache)...\n'
+compose build --no-cache backend-prod
 
 if [ "$rebuild_frontend" = "true" ]; then
   printf 'Rebuilding frontend-prod image...\n'

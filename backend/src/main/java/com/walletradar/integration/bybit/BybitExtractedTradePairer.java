@@ -4,6 +4,7 @@ import com.walletradar.accounting.support.AccountingAssetFamilySupport;
 import com.walletradar.domain.transaction.bybit.BybitExtractedEvent;
 import com.walletradar.domain.transaction.bybit.BybitExtractedEventStatus;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.query.Criteria;
@@ -23,6 +24,7 @@ import java.util.regex.Pattern;
  */
 @Component
 @RequiredArgsConstructor
+@Slf4j
 public class BybitExtractedTradePairer {
 
     private static final long WINDOW_SECONDS = 5L;
@@ -73,15 +75,45 @@ public class BybitExtractedTradePairer {
         if (center == null || row.getUid() == null || !isConvertType(row.getBybitType())) {
             return List.of(row);
         }
-        Query query = new Query(new Criteria().andOperator(
+        List<Criteria> criteria = new java.util.ArrayList<>(List.of(
                 Criteria.where("status").is(BybitExtractedEventStatus.RAW),
                 Criteria.where("sourceFileType").is(row.getSourceFileType()),
                 Criteria.where("uid").is(row.getUid()),
-                Criteria.where("bybitType").regex(CONVERT_TYPE_PATTERN),
-                Criteria.where("timeUtc").gte(center.minusSeconds(CONVERT_WINDOW_SECONDS)).lte(center.plusSeconds(CONVERT_WINDOW_SECONDS))
+                Criteria.where("bybitType").regex(CONVERT_TYPE_PATTERN)
         ));
+        if (row.getTradeOrderId() != null && !row.getTradeOrderId().isBlank()) {
+            criteria.add(Criteria.where("tradeOrderId").is(row.getTradeOrderId()));
+        } else {
+            criteria.add(Criteria.where("timeUtc")
+                    .gte(center.minusSeconds(CONVERT_WINDOW_SECONDS))
+                    .lte(center.plusSeconds(CONVERT_WINDOW_SECONDS)));
+        }
+        Query query = new Query(new Criteria().andOperator(criteria.toArray(Criteria[]::new)));
         query.with(Sort.by(Sort.Order.asc("timeUtc"), Sort.Order.asc("_id")));
-        return mongoOperations.find(query, BybitExtractedEvent.class);
+        List<BybitExtractedEvent> cluster = mongoOperations.find(query, BybitExtractedEvent.class);
+        if (cluster.isEmpty()) {
+            return List.of(row);
+        }
+        if (cluster.size() != 2) {
+            log.warn(
+                    "Bybit convert cluster expected 2 legs (uid={}, tradeOrderId={}, found={})",
+                    row.getUid(),
+                    row.getTradeOrderId(),
+                    cluster.size()
+            );
+            return List.of(row);
+        }
+        boolean hasBuy = cluster.stream().anyMatch(leg -> leg.getQuantityRaw() != null && leg.getQuantityRaw().signum() > 0);
+        boolean hasSell = cluster.stream().anyMatch(leg -> leg.getQuantityRaw() != null && leg.getQuantityRaw().signum() < 0);
+        if (!hasBuy || !hasSell) {
+            log.warn(
+                    "Bybit convert cluster missing buy/sell leg (uid={}, tradeOrderId={})",
+                    row.getUid(),
+                    row.getTradeOrderId()
+            );
+            return List.of(row);
+        }
+        return cluster;
     }
 
     public Optional<BybitExtractedEvent> findLiquidStakingCounterLeg(BybitExtractedEvent row) {

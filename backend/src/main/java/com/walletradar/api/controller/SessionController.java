@@ -282,7 +282,15 @@ public class SessionController {
                         view.summary().portfolioValueUsd(),
                         view.summary().totalUnrealizedPnlUsd(),
                         view.summary().totalUnrealizedPnlPct(),
-                        view.summary().totalRealizedPnlUsd()
+                        view.summary().totalRealizedPnlUsd(),
+                        view.summary().netExternalCapitalUsd(),
+                        view.summary().lifetimeExternalInflowUsd(),
+                        view.summary().markToMarketUsd(),
+                        view.summary().expectedPnlUsd(),
+                        view.summary().reportedPnlUsd(),
+                        view.summary().conservationDeltaUsd(),
+                        view.summary().conservationThresholdUsd(),
+                        view.summary().conservationBreached()
                 ),
                 view.wallets().stream()
                         .map(wallet -> new SessionDashboardResponse.WalletEntry(
@@ -348,9 +356,28 @@ public class SessionController {
                                 integration.totalSegments(),
                                 integration.completedSegments(),
                                 integration.failedSegments(),
-                                integration.progressPct()
+                                integration.progressPct(),
+                                integration.streamSync() == null
+                                        ? List.of()
+                                        : integration.streamSync().stream()
+                                        .map(row -> new SessionSettingsResponse.StreamSyncEntry(
+                                                row.stream(),
+                                                row.lastSegmentCompletedAt(),
+                                                row.newestStoredEventAt()
+                                        ))
+                                        .toList()
                         ))
                         .toList(),
+                view.externalVenues() == null
+                        ? List.of()
+                        : view.externalVenues().stream()
+                                .map(venue -> new SessionSettingsResponse.ExternalVenueEntry(
+                                        venue.address(),
+                                        venue.provider(),
+                                        venue.label(),
+                                        venue.networks()
+                                ))
+                                .toList(),
                 view.hideSmallAssets(),
                 view.showReconciliationWarnings()
         );

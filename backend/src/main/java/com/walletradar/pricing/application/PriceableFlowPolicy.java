@@ -1,8 +1,12 @@
 package com.walletradar.pricing.application;
 
+import com.walletradar.domain.common.PriceSource;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.pricing.domain.CanonicalAssetCatalog;
 
 import java.math.BigDecimal;
 import java.util.EnumSet;
@@ -38,8 +42,23 @@ public final class PriceableFlowPolicy {
         if (NON_PRICEABLE_TYPES.contains(transaction.getType())) {
             return false;
         }
-        if (flow.getRole() == NormalizedLegRole.TRANSFER) {
+        // Cycle/9 S5: explicitly skip pricing for delisted / no-listing symbols.
+        if (flow.getPriceSource() == PriceSource.PRICING_SKIPPED
+                || CanonicalAssetCatalog.isPricingSkipped(flow.getAssetSymbol())) {
             return false;
+        }
+        // Cycle/15 R5 F3: pegged-native TRANSFER pricing is venue-specific — evaluate BEFORE
+        // isContinuityPrincipal, which would otherwise skip FA-001-linked Bybit corridor deposits.
+        if (flow.getRole() == NormalizedLegRole.TRANSFER
+                && flow.getQuantityDelta() != null
+                && flow.getQuantityDelta().signum() > 0
+                && CanonicalAssetCatalog.isPeggedNative(flow.getAssetSymbol())
+                && (isPeggedNativeExternalTransferPricingType(transaction.getType())
+                || isBybitPeggedNativeInternalTransfer(transaction))) {
+            return true;
+        }
+        if (requiresInboundShortfallSpotPricing(transaction, flow)) {
+            return true;
         }
         if (isContinuityPrincipal(transaction, flow)) {
             return false;
@@ -61,6 +80,9 @@ public final class PriceableFlowPolicy {
                 && (transaction.getTxHash() == null || transaction.getTxHash().isBlank()))
         ) {
             return false;
+        }
+        if (isBybitOnChainCorridorPrincipal(transaction)) {
+            return true;
         }
         return transaction.getType() == NormalizedTransactionType.EXTERNAL_TRANSFER_IN
                 || transaction.getType() == NormalizedTransactionType.EXTERNAL_TRANSFER_OUT
@@ -94,5 +116,108 @@ public final class PriceableFlowPolicy {
         return flow == null
                 || flow.getQuantityDelta() == null
                 || flow.getQuantityDelta().compareTo(BigDecimal.ZERO) == 0;
+    }
+
+    private static boolean isPeggedNativeExternalTransferPricingType(NormalizedTransactionType type) {
+        if (type == null) {
+            return false;
+        }
+        return switch (type) {
+            case EXTERNAL_TRANSFER_IN, EXTERNAL_TRANSFER_OUT -> true;
+            default -> false;
+        };
+    }
+
+    private static boolean isBybitPeggedNativeInternalTransfer(NormalizedTransaction transaction) {
+        return transaction.getSource() == NormalizedTransactionSource.BYBIT
+                && transaction.getType() == NormalizedTransactionType.INTERNAL_TRANSFER;
+    }
+
+    /**
+     * Cycle/18 R9b: FA-001 wallet↔Bybit corridor rows are promoted to {@code INTERNAL_TRANSFER}
+     * after linking. They must skip market pricing so replay carries basis from the on-chain leg.
+     */
+    private static boolean isBybitOnChainCorridorPrincipal(NormalizedTransaction transaction) {
+        if (transaction == null
+                || transaction.getType() != NormalizedTransactionType.INTERNAL_TRANSFER) {
+            return false;
+        }
+        String correlationId = transaction.getCorrelationId();
+        if (correlationId != null
+                && correlationId.startsWith("BYBIT-CORRIDOR:")
+                && transaction.getSource() == NormalizedTransactionSource.BYBIT) {
+            return true;
+        }
+        if (transaction.getSource() != NormalizedTransactionSource.BYBIT) {
+            return false;
+        }
+        String matchedCounterparty = transaction.getMatchedCounterparty();
+        return matchedCounterparty != null
+                && matchedCounterparty.startsWith("0x")
+                && matchedCounterparty.length() == 42;
+    }
+
+    /**
+     * Cycle/16 R6: inbound TRANSFER legs that may receive market spot during normalization so
+     * replay can promote residual uncov when continuity carry finds an empty sender pool.
+     */
+    private static boolean requiresInboundShortfallSpotPricing(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow
+    ) {
+        if (!isInboundTransferFlow(flow)) {
+            return false;
+        }
+        NormalizedTransactionType type = transaction.getType();
+        if (type == NormalizedTransactionType.LP_EXIT
+                || type == NormalizedTransactionType.LP_EXIT_PARTIAL
+                || type == NormalizedTransactionType.LP_EXIT_FINAL
+                || type == NormalizedTransactionType.LENDING_WITHDRAW
+                || type == NormalizedTransactionType.BRIDGE_IN) {
+            return true;
+        }
+        if (type == NormalizedTransactionType.EXTERNAL_TRANSFER_IN
+                && Boolean.TRUE.equals(transaction.getContinuityCandidate())) {
+            return true;
+        }
+        if (type == NormalizedTransactionType.INTERNAL_TRANSFER) {
+            if (isBybitOnChainCorridorPrincipal(transaction)) {
+                return false;
+            }
+            if (isBybitPeggedNativeInternalTransfer(transaction)) {
+                return true;
+            }
+            if (transaction.getSource() == NormalizedTransactionSource.BYBIT
+                    && Boolean.TRUE.equals(transaction.getContinuityCandidate())) {
+                return true;
+            }
+            if (transaction.getSource() == NormalizedTransactionSource.ON_CHAIN
+                    && CanonicalAssetCatalog.isPeggedNative(flow.getAssetSymbol())) {
+                return false;
+            }
+            return Boolean.TRUE.equals(transaction.getContinuityCandidate());
+        }
+        return false;
+    }
+
+    private static boolean isInboundTransferFlow(NormalizedTransaction.Flow flow) {
+        return flow.getRole() == NormalizedLegRole.TRANSFER
+                && flow.getQuantityDelta() != null
+                && flow.getQuantityDelta().signum() > 0;
+    }
+
+    /**
+     * After continuity retagging cleared flow prices, route to pricing when any principal leg
+     * still needs a market quote for inbound shortfall fallback.
+     */
+    public static NormalizedTransactionStatus statusAfterContinuityRetag(NormalizedTransaction transaction) {
+        if (transaction == null || transaction.getFlows() == null) {
+            return NormalizedTransactionStatus.PENDING_STAT;
+        }
+        boolean needsPricing = transaction.getFlows().stream()
+                .anyMatch(flow -> requiresMarketPrice(transaction, flow));
+        return needsPricing
+                ? NormalizedTransactionStatus.PENDING_PRICE
+                : NormalizedTransactionStatus.PENDING_STAT;
     }
 }

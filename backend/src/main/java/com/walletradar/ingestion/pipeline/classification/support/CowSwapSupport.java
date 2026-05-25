@@ -21,7 +21,9 @@ public final class CowSwapSupport {
     private static final String ETH_FLOW_CREATE_ORDER_SELECTOR = "0x322bba21";
     private static final String GPV2_SETTLEMENT_SELECTOR = "0x13d79a0b";
     private static final String ARBITRUM_ETH_FLOW_CONTRACT = "0xba3cb449bd2b4adddbc894d8697f5170800eadec";
-    private static final String ARBITRUM_GPV2_SETTLEMENT_CONTRACT = "0x9008d19f58aabd9ed0d60971565aa8510560ab41";
+    /** GPv2 settlement contract on Arbitrum (shared with Ethereum mainnet deployment). */
+    public static final String GPV2_SETTLEMENT = "0x9008d19f58aabd9ed0d60971565aa8510560ab41";
+    private static final String ARBITRUM_GPV2_SETTLEMENT_CONTRACT = GPV2_SETTLEMENT;
     private static final String ARBITRUM_WRAPPED_NATIVE = "0x82af49447d8a07e3bd95bd0d56f35241523fbab1";
     private static final long ARBITRUM_CHAIN_ID = 42161L;
 

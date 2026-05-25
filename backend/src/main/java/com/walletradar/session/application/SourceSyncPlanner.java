@@ -155,7 +155,7 @@ public class SourceSyncPlanner {
                         networkId.name()
                 )
                 .orElse(null);
-        if (status != null && (status.isBackfillComplete() || hasActiveWindow(status))) {
+        if (status != null && (status.isBackfillComplete() || hasOnChainBlockWindow(status))) {
             return null;
         }
         long currentHead = resolveCurrentBlock(networkId);
@@ -350,6 +350,73 @@ public class SourceSyncPlanner {
                 && status.getWindowToTime() != null
                 && status.getWindowFromTime().isBefore(status.getWindowToTime());
         return blockWindow || timeWindow;
+    }
+
+    /**
+     * On-chain sync uses block windows only; a stale time-only window must not block re-arming after DB resets.
+     */
+    private boolean hasOnChainBlockWindow(SyncStatus status) {
+        if (status == null) {
+            return false;
+        }
+        return status.getWindowFromBlock() != null
+                && status.getWindowToBlock() != null
+                && status.getWindowFromBlock() <= status.getWindowToBlock();
+    }
+
+    /**
+     * Repairs {@link SyncStatus} block range from current head and configured depth (~2y per network).
+     * Used after cold Mongo resets or legacy rows missing {@code windowFromBlock}/{@code windowToBlock}.
+     */
+    public SyncStatus repairOnChainBlockWindowIfMissing(SyncStatus status, Instant observedAt) {
+        if (status == null || status.getSourceKind() != SyncStatus.SourceKind.ONCHAIN) {
+            return status;
+        }
+        if (hasOnChainBlockWindow(status)) {
+            return status;
+        }
+        if (status.getWalletAddress() == null || status.getWalletAddress().isBlank()
+                || status.getNetworkId() == null || status.getNetworkId().isBlank()) {
+            log.warn("Cannot repair on-chain block window: missing wallet or network on syncStatus id={}", status.getId());
+            return status;
+        }
+        try {
+            NetworkId networkId = NetworkId.valueOf(status.getNetworkId().trim().toUpperCase(Locale.ROOT));
+            Instant anchor = normalizeAnchor(observedAt);
+            long currentHead = resolveCurrentBlock(networkId);
+            long windowBlocks = resolveWindowBlocksForNetwork(status.getNetworkId());
+            long fromBlock = Math.max(0L, currentHead - windowBlocks + 1);
+            return armOnChainWindow(
+                    status,
+                    normalizedAddress(status.getWalletAddress()),
+                    status.getNetworkId(),
+                    fromBlock,
+                    currentHead,
+                    anchor,
+                    "Backfill replay window"
+            );
+        } catch (Exception e) {
+            log.error("Failed to repair on-chain block window for syncStatus id={}", status.getId(), e);
+            return status;
+        }
+    }
+
+    /**
+     * Resets integration sync_status to a fresh {@code historyYears} time window ending at {@code anchor}.
+     */
+    public SyncStatus resetIntegrationBackfillWindow(UserSession.SessionIntegration integration, Instant observedAt) {
+        if (integration == null || integration.getProvider() == null) {
+            return null;
+        }
+        Instant anchor = normalizeAnchor(observedAt);
+        Instant fromTime = anchor.minus(integrationBackfillProperties.getHistoryYears() * 365L, ChronoUnit.DAYS);
+        return armIntegrationWindow(
+                latestIntegrationStatus(integration).orElse(null),
+                integration,
+                fromTime,
+                anchor,
+                "Admin full rebuild"
+        );
     }
 
     private Long resolveOnChainCheckpoint(SyncStatus status) {

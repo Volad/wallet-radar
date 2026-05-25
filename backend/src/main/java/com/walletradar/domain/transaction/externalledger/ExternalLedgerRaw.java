@@ -78,6 +78,8 @@ public class ExternalLedgerRaw {
     private BigDecimal funding;
     private BigDecimal walletBalance;
     private String txHash;
+    /** Spot / convert order key shared across FH and EXECUTION_SPOT duplicate rows. */
+    private String tradeOrderId;
     private NetworkId networkId;
     private String senderAddress;
     private String receivedAddress;

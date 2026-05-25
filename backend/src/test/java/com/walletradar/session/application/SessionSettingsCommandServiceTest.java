@@ -3,6 +3,7 @@ package com.walletradar.session.application;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.walletradar.session.application.AccountUniverseSyncPlanScheduler;
 import com.walletradar.api.dto.PutSessionSettingsRequest;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.session.UserSession;
@@ -39,7 +40,7 @@ class SessionSettingsCommandServiceTest {
     @Mock
     private TrackedWalletProjectionService trackedWalletProjectionService;
     @Mock
-    private AccountUniverseSyncPlannerService accountUniverseSyncPlannerService;
+    private AccountUniverseSyncPlanScheduler accountUniverseSyncPlanScheduler;
     @Mock
     private SessionSecretCryptoService sessionSecretCryptoService;
     @Mock
@@ -56,13 +57,43 @@ class SessionSettingsCommandServiceTest {
         sessionSettingsCommandService = new SessionSettingsCommandService(
                 userSessionRepository,
                 trackedWalletProjectionService,
-                accountUniverseSyncPlannerService,
+                accountUniverseSyncPlanScheduler,
                 sessionSecretCryptoService,
                 bybitApiClient,
                 backfillSegmentRepository,
                 integrationSyncStatusService,
                 new ObjectMapper()
         );
+    }
+
+    @Test
+    @DisplayName("overwriteSessionSettings preserves Solana address case for linking-only wallets")
+    void overwriteSessionSettings_preservesSolanaAddressCase() {
+        UserSession session = new UserSession();
+        session.setId("session-sol");
+        session.setWallets(new ArrayList<>());
+        when(userSessionRepository.findById("session-sol")).thenReturn(Optional.of(session));
+
+        String solAddress = "9Grpx4HKXTe51Ug9nAYuND9qf2bw326WvxFyEULt1DhG";
+        PutSessionSettingsRequest request = new PutSessionSettingsRequest(
+                List.of(new PutSessionSettingsRequest.WalletEntry(
+                        solAddress,
+                        "SOL",
+                        "#22d3ee",
+                        List.of(NetworkId.SOLANA)
+                )),
+                List.of(),
+                List.of(),
+                true,
+                true
+        );
+
+        sessionSettingsCommandService.overwriteSessionSettings("session-sol", request);
+
+        ArgumentCaptor<UserSession> captor = ArgumentCaptor.forClass(UserSession.class);
+        verify(userSessionRepository).save(captor.capture());
+        assertThat(captor.getValue().getWallets()).hasSize(1);
+        assertThat(captor.getValue().getWallets().get(0).getAddress()).isEqualTo(solAddress);
     }
 
     @Test
@@ -105,6 +136,7 @@ class SessionSettingsCommandServiceTest {
                         null,
                         null
                 )),
+                List.of(),
                 Boolean.FALSE,
                 Boolean.FALSE
         );
@@ -123,7 +155,7 @@ class SessionSettingsCommandServiceTest {
 
         verify(trackedWalletProjectionService).replaceSessionWallets(any(), any(), any(Instant.class));
         verify(bybitApiClient, never()).validateCredentials(any(), any());
-        verify(accountUniverseSyncPlannerService).sync("session-1", saved.getUpdatedAt());
+        verify(accountUniverseSyncPlanScheduler).schedule("session-1", saved.getUpdatedAt());
     }
 
     @Test
@@ -152,6 +184,7 @@ class SessionSettingsCommandServiceTest {
                         "api-key-1234",
                         "super-secret"
                 )),
+                List.of(),
                 null,
                 null
         );
@@ -171,7 +204,7 @@ class SessionSettingsCommandServiceTest {
             assertThat(integration.getStatus()).isEqualTo(UserSession.IntegrationStatus.CONNECTED);
             assertThat(integration.getSyncState()).isNotNull();
         });
-        verify(accountUniverseSyncPlannerService).sync("session-2", saved.getUpdatedAt());
+        verify(accountUniverseSyncPlanScheduler).schedule("session-2", saved.getUpdatedAt());
     }
 
     @Test
@@ -194,6 +227,7 @@ class SessionSettingsCommandServiceTest {
                         "bad-key",
                         "bad-secret"
                 )),
+                List.of(),
                 null,
                 null
         );
@@ -201,6 +235,42 @@ class SessionSettingsCommandServiceTest {
         assertThatThrownBy(() -> sessionSettingsCommandService.overwriteSessionSettings("session-3", request))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Bybit credential validation failed");
+    }
+
+    @Test
+    @DisplayName("overwriteSessionSettings persists external venues and schedules universe re-sync")
+    void overwriteSessionSettings_persistsExternalVenues() {
+        UserSession session = new UserSession();
+        session.setId("session-venue");
+        session.setWallets(new ArrayList<>());
+        session.setIntegrations(new ArrayList<>());
+        when(userSessionRepository.findById("session-venue")).thenReturn(Optional.of(session));
+
+        PutSessionSettingsRequest request = new PutSessionSettingsRequest(
+                List.of(),
+                List.of(),
+                List.of(new PutSessionSettingsRequest.ExternalVenueEntry(
+                        "0xParadexDepositAddress",
+                        "paradex",
+                        "Paradex deposit",
+                        List.of(NetworkId.ETHEREUM)
+                )),
+                Boolean.TRUE,
+                Boolean.TRUE
+        );
+
+        sessionSettingsCommandService.overwriteSessionSettings("session-venue", request).orElseThrow();
+
+        ArgumentCaptor<UserSession> savedCaptor = ArgumentCaptor.forClass(UserSession.class);
+        verify(userSessionRepository).save(savedCaptor.capture());
+        UserSession saved = savedCaptor.getValue();
+        assertThat(saved.getSettings().getExternalVenues()).hasSize(1);
+        UserSession.ExternalVenue venue = saved.getSettings().getExternalVenues().getFirst();
+        assertThat(venue.getAddress()).isEqualTo("0xparadexdepositaddress");
+        assertThat(venue.getProvider()).isEqualTo("PARADEX");
+        assertThat(venue.getLabel()).isEqualTo("Paradex deposit");
+        assertThat(venue.getNetworks()).containsExactly(NetworkId.ETHEREUM);
+        verify(accountUniverseSyncPlanScheduler).schedule(eq("session-venue"), any(Instant.class));
     }
 
     private UserSession.SessionWallet wallet(

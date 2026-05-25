@@ -61,6 +61,7 @@ public class SessionRefreshCommandService {
                 planResult.scheduledIntegrationSyncStatusIds()
         );
         session.setUpdatedAt(now);
+        SessionWriteMergeSupport.refreshIntegrationsFromDatabase(userSessionRepository, session.getId(), session);
         userSessionRepository.save(session);
         sessionPipelineStateService.markStageRunning(
                 session.getId(),

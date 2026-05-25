@@ -153,11 +153,20 @@ public class SessionPipelineResumeScheduler {
         }
         boolean pendingLinking = linkingDataGateService.hasPendingLinking(session.getId());
         boolean pendingPrice = hasPendingPrice(addresses);
+        // Cycle/14: linking (incl. legacy bridge repair) must run before snapshot refresh when
+        // balances were wiped by replay-only reset — otherwise repair never executes.
         if (pendingLinking && !isPipelineAlreadyComplete(session)) {
             return new ResumeAction(
                     UserSession.PipelineStage.LINKING,
                     "pending-linking",
                     new LinkingRequestedEvent(session.getId(), "resume-watchdog")
+            );
+        }
+        if (requiresBalanceSnapshotRefresh(session)) {
+            return new ResumeAction(
+                    UserSession.PipelineStage.PORTFOLIO_SNAPSHOT_REFRESH,
+                    "portfolio-snapshot-refresh-missing-balances",
+                    new AccountingReplayCompletedEvent(session.getId(), 0, "resume-watchdog")
             );
         }
         if (pendingPrice) {
@@ -196,8 +205,7 @@ public class SessionPipelineResumeScheduler {
             );
             return null;
         }
-        boolean portfolioSnapshotRequired = requiresPortfolioSnapshotRefresh(session, scope);
-        if (portfolioSnapshotRequired) {
+        if (requiresPortfolioSnapshotRefresh(session, scope)) {
             return new ResumeAction(
                     UserSession.PipelineStage.PORTFOLIO_SNAPSHOT_REFRESH,
                     "portfolio-snapshot-refresh",
@@ -409,6 +417,14 @@ public class SessionPipelineResumeScheduler {
                 Criteria.where("walletAddress").in(addresses)
         ));
         return mongoOperations.exists(query, "on_chain_balances");
+    }
+
+    private boolean requiresBalanceSnapshotRefresh(UserSession session) {
+        if (isPortfolioSnapshotComplete(session)) {
+            return false;
+        }
+        List<String> addresses = trackedAddresses(session);
+        return !addresses.isEmpty() && !hasOnChainBalanceRows(session.getId(), addresses);
     }
 
     private boolean requiresPortfolioSnapshotRefresh(

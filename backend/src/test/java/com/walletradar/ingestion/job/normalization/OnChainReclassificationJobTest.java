@@ -28,7 +28,7 @@ class OnChainReclassificationJobTest {
         OnChainNormalizationProperties properties = new OnChainNormalizationProperties();
         properties.setEnabled(true);
         OnChainReclassificationService service = mock(OnChainReclassificationService.class);
-        when(service.processNextBatch()).thenReturn(2, 1, 0);
+        when(service.processNextBatch(org.mockito.ArgumentMatchers.nullable(String.class))).thenReturn(2, 1, 0);
         OnChainClarificationService clarificationService = mock(OnChainClarificationService.class);
         when(clarificationService.processConfirmedFluidReceiptBatch()).thenReturn(0);
         List<Object> events = new ArrayList<>();
@@ -50,7 +50,7 @@ class OnChainReclassificationJobTest {
         OnChainNormalizationProperties properties = new OnChainNormalizationProperties();
         properties.setEnabled(true);
         OnChainReclassificationService service = mock(OnChainReclassificationService.class);
-        when(service.processNextBatch()).thenReturn(0);
+        when(service.processNextBatch(org.mockito.ArgumentMatchers.nullable(String.class))).thenReturn(0);
         OnChainClarificationService clarificationService = mock(OnChainClarificationService.class);
         ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
 
@@ -68,7 +68,7 @@ class OnChainReclassificationJobTest {
         OnChainNormalizationProperties properties = new OnChainNormalizationProperties();
         properties.setEnabled(true);
         OnChainReclassificationService service = mock(OnChainReclassificationService.class);
-        when(service.processNextBatch()).thenReturn(0);
+        when(service.processNextBatch(org.mockito.ArgumentMatchers.nullable(String.class))).thenReturn(0);
         OnChainClarificationService clarificationService = mock(OnChainClarificationService.class);
         List<Object> events = new ArrayList<>();
 
@@ -89,7 +89,7 @@ class OnChainReclassificationJobTest {
         OnChainNormalizationProperties properties = new OnChainNormalizationProperties();
         properties.setEnabled(true);
         OnChainReclassificationService service = mock(OnChainReclassificationService.class);
-        when(service.processNextBatch()).thenReturn(5, 0);
+        when(service.processNextBatch(org.mockito.ArgumentMatchers.nullable(String.class))).thenReturn(5, 0);
         OnChainClarificationService clarificationService = mock(OnChainClarificationService.class);
         when(clarificationService.processConfirmedFluidReceiptBatch()).thenReturn(2);
         List<Object> events = new ArrayList<>();
@@ -111,7 +111,7 @@ class OnChainReclassificationJobTest {
         OnChainNormalizationProperties properties = new OnChainNormalizationProperties();
         properties.setEnabled(true);
         OnChainReclassificationService service = mock(OnChainReclassificationService.class);
-        when(service.processNextBatch()).thenReturn(2, 0);
+        when(service.processNextBatch(org.mockito.ArgumentMatchers.nullable(String.class))).thenReturn(2, 0);
         OnChainClarificationService clarificationService = mock(OnChainClarificationService.class);
         List<Object> events = new ArrayList<>();
 

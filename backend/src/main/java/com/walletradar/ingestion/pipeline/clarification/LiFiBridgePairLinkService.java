@@ -323,6 +323,16 @@ public class LiFiBridgePairLinkService {
             destination.setContinuityCandidate(continuityCandidate);
             destinationChanged = true;
         }
+        if (continuityCandidate) {
+            if (BridgePairLinkSupport.retagPrincipalFlowsForBridgeContinuity(source, now)) {
+                if (!updates.contains(source)) {
+                    updates.add(source);
+                }
+            }
+            if (BridgePairLinkSupport.retagPrincipalFlowsForBridgeContinuity(destination, now)) {
+                destinationChanged = true;
+            }
+        }
         if (destinationChanged) {
             destination.setUpdatedAt(now);
             updates.add(destination);

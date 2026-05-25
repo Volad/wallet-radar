@@ -47,9 +47,12 @@ public enum NormalizedTransactionType {
     SPONSORED_GAS_IN,
     INTERNAL_TRANSFER,
     APPROVE,
+    /** Standalone fee or interest charge (e.g. Bybit loan interest, bonus recollect). */
+    FEE,
     ADMIN_CONFIG,
     WRAP,
     UNWRAP,
+    NFT_MINT,
     UNKNOWN,
     MANUAL_COMPENSATING;
 }

@@ -85,7 +85,7 @@ public class OnChainReclassificationJob {
                     "On-chain reclassification running"
             );
             processed += batchDrainer.drain(
-                    onChainReclassificationService::processNextBatch,
+                    () -> onChainReclassificationService.processNextBatch(sessionId),
                     batchProcessed -> lastHeartbeatAt[0] = maybeHeartbeat(sessionId, lastHeartbeatAt[0])
             );
             sessionPipelineStateService.markStageComplete(

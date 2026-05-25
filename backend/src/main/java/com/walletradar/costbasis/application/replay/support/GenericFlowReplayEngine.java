@@ -1,16 +1,21 @@
 package com.walletradar.costbasis.application.replay.support;
 
 import com.walletradar.costbasis.application.replay.model.CarryTransfer;
+import com.walletradar.costbasis.application.replay.model.PositionSnapshot;
 import com.walletradar.costbasis.application.replay.model.PositionState;
 import com.walletradar.costbasis.application.replay.model.QuantityConsumption;
 import com.walletradar.domain.common.PriceSource;
+import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.pricing.domain.CanonicalAssetCatalog;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.math.MathContext;
 
 @Component
+@Slf4j
 public class GenericFlowReplayEngine {
 
     private static final MathContext MC = MathContext.DECIMAL128;
@@ -18,15 +23,24 @@ public class GenericFlowReplayEngine {
     public void applyBuy(NormalizedTransaction.Flow flow, PositionState position) {
         BigDecimal quantity = flow.getQuantityDelta().abs();
         if (hasKnownPrice(flow)) {
-            BigDecimal acquisitionCost = quantity.multiply(flow.getUnitPriceUsd(), MC);
-            position.setTotalCostBasisUsd(position.totalCostBasisUsd().add(acquisitionCost));
-            position.setQuantity(position.quantity().add(quantity));
-            recomputePerWalletAvco(position);
+            applyBuyWithAcquisitionCost(flow, position, quantity.multiply(flow.getUnitPriceUsd(), MC));
             return;
         }
         position.setQuantity(position.quantity().add(quantity));
         position.setUncoveredQuantity(position.uncoveredQuantity().add(quantity));
         markUnresolved(position);
+        recomputePerWalletAvco(position);
+    }
+
+    public void applyBuyWithAcquisitionCost(
+            NormalizedTransaction.Flow flow,
+            PositionState position,
+            BigDecimal acquisitionCostUsd
+    ) {
+        BigDecimal quantity = flow.getQuantityDelta().abs();
+        BigDecimal cost = acquisitionCostUsd == null ? BigDecimal.ZERO : acquisitionCostUsd;
+        position.setTotalCostBasisUsd(position.totalCostBasisUsd().add(cost));
+        position.setQuantity(position.quantity().add(quantity));
         recomputePerWalletAvco(position);
     }
 
@@ -107,38 +121,92 @@ public class GenericFlowReplayEngine {
         restoreToPosition(flow.getQuantityDelta().abs(), position, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
     }
 
-    public void materializePendingInbound(NormalizedTransaction.Flow flow, PositionState position) {
+  /**
+     * Materialises a pending inbound transfer and returns the USD basis added to the position.
+     */
+    public BigDecimal materializePendingInbound(NormalizedTransaction.Flow flow, PositionState position) {
+        BigDecimal basisBefore = position.totalCostBasisUsd() == null ? BigDecimal.ZERO : position.totalCostBasisUsd();
         BigDecimal quantity = flow.getQuantityDelta().abs();
+        // Cycle/8 S3: safety net for unmatched bridge / transfer inbounds. When the carry queue
+        // is empty (the OUT partner never reached our session — e.g., non-backfilled network or
+        // external counterparty), the inbound used to materialise as an uncovered pending entry
+        // with $0 basis, permanently destroying coverage. If the pricing pipeline has resolved
+        // a historical USD quote on the inbound flow, treat the inflow as a market-priced
+        // ACQUIRE instead. This keeps replay deterministic: an inbound with a real basis source
+        // (carry) still flows through the carry path; only orphan inbounds with priced flows
+        // benefit from the fallback.
+        if (hasKnownPrice(flow)) {
+            applyBuyWithAcquisitionCost(flow, position, quantity.multiply(flow.getUnitPriceUsd(), MC));
+            return nonNegative(position.totalCostBasisUsd().subtract(basisBefore, MC));
+        }
         position.setQuantity(position.quantity().add(quantity));
         position.setUncoveredQuantity(position.uncoveredQuantity().add(quantity));
         markUnresolved(position);
         recomputePerWalletAvco(position);
+        return BigDecimal.ZERO;
     }
 
     public CarryTransfer removeFromPosition(NormalizedTransaction.Flow flow, PositionState position) {
         BigDecimal requestedQuantity = flow.getQuantityDelta().abs();
-        BigDecimal avco = position.perWalletAvco();
+        BigDecimal effectiveAvco = effectiveRemovalAvco(position);
         QuantityConsumption consumption = consumeQuantityCoveredFirst(position, requestedQuantity);
-        BigDecimal cost = avco == null
+        BigDecimal cost = effectiveAvco == null
                 ? BigDecimal.ZERO
-                : consumption.coveredQuantity().multiply(avco, MC);
+                : consumption.coveredQuantity().multiply(effectiveAvco, MC);
+        // Cycle/17 R7: a full-position removal must drain all remaining basis into the carry.
+        // AVCO-derived cost can under-shoot stored basis on wrapper REALLOCATE_OUT (zkSync WETH
+        // seq≈7581: basisDelta=0 while qty→0, orphan basis inflated AMANWETH AVCO).
+        if (position.quantity().signum() == 0 && position.totalCostBasisUsd().signum() > 0) {
+            cost = position.totalCostBasisUsd();
+        }
         position.setTotalCostBasisUsd(nonNegative(position.totalCostBasisUsd().subtract(cost, MC)));
+        purgeOrphanBasisWhenEmpty(position);
         recomputePerWalletAvco(position);
         if (consumption.externalShortfallQuantity().signum() > 0) {
             recordQuantityShortfall(position, consumption.externalShortfallQuantity());
         }
-        if (avco == null && consumption.coveredQuantity().signum() > 0) {
+        if (effectiveAvco == null && consumption.coveredQuantity().signum() > 0) {
             markUnresolved(position);
+        }
+        BigDecimal carryAvco = effectiveAvco;
+        if (carryAvco == null && consumption.coveredQuantity().signum() > 0 && cost.signum() > 0) {
+            carryAvco = cost.divide(consumption.coveredQuantity(), MC);
         }
         return new CarryTransfer(
                 requestedQuantity,
                 consumption.coveredQuantity(),
                 requestedQuantity.subtract(consumption.coveredQuantity(), MC),
                 cost,
-                avco,
+                carryAvco,
                 false,
                 position.assetKey()
         );
+    }
+
+    /**
+     * When {@link PositionState#perWalletAvco()} is null because the position still carries
+     * uncovered quantity, derive AVCO from stored basis so composite LP / wrapper bucket deposits
+     * do not drop cost on REALLOCATE_OUT.
+     *
+     * <p>Cycle/17 R7: never trust a stored {@code perWalletAvco} of zero when covered quantity and
+     * basis are both positive — sponsored-gas or partial restores can leave a stale {@code 0} AVCO
+     * while {@code totalCostBasisUsd} is non-zero, which previously caused REALLOCATE_OUT to move
+     * qty into wrapper buckets without moving basis (zkSync WETH → aZksWETH zombie basis).</p>
+     */
+    private static BigDecimal effectiveRemovalAvco(PositionState position) {
+        if (position == null) {
+            return null;
+        }
+        BigDecimal coveredQuantity = nonNegative(position.quantity().subtract(position.uncoveredQuantity(), MC));
+        BigDecimal derivedAvco = null;
+        if (coveredQuantity.signum() > 0 && position.totalCostBasisUsd().signum() > 0) {
+            derivedAvco = position.totalCostBasisUsd().divide(coveredQuantity, MC);
+        }
+        BigDecimal storedAvco = position.perWalletAvco();
+        if (storedAvco != null && storedAvco.signum() > 0) {
+            return storedAvco;
+        }
+        return derivedAvco;
     }
 
     public void restoreToPosition(
@@ -157,13 +225,119 @@ public class GenericFlowReplayEngine {
             BigDecimal uncoveredQuantity,
             BigDecimal avco
     ) {
+        // Cycle/15 R5 F2: math invariant — the uncovered quantity applied to a position
+        // on inbound restore cannot exceed the inbound quantity itself. Diagnosed via
+        // 0xf03b/ARBITRUM/ETH where a Pancakeswap LP_EXIT bucket restoration injected
+        // 8.65 uncov on a 0.622 inbound, producing uncov > qty (8.0 ghost ETH that the
+        // dashboard filters but reports retain). Clamp at source: surplus uncov is
+        // dropped, which is the only sane choice when the bucket over-counts.
+        BigDecimal clampedUncov = uncoveredQuantity == null ? BigDecimal.ZERO : uncoveredQuantity;
+        if (clampedUncov.signum() < 0) {
+            clampedUncov = BigDecimal.ZERO;
+        }
+        if (clampedUncov.compareTo(quantity) > 0) {
+            clampedUncov = quantity;
+        }
         position.setQuantity(position.quantity().add(quantity));
-        position.setUncoveredQuantity(position.uncoveredQuantity().add(uncoveredQuantity));
+        position.setUncoveredQuantity(position.uncoveredQuantity().add(clampedUncov));
         position.setTotalCostBasisUsd(position.totalCostBasisUsd().add(cost));
         recomputePerWalletAvco(position);
-        if (uncoveredQuantity.signum() > 0 || avco == null) {
+        if (clampedUncov.signum() > 0 || avco == null) {
             markUnresolved(position);
         }
+    }
+
+    /**
+     * Cycle/16 R6: Generic spot-basis fallback for unbacked inbound TRANSFER legs.
+     *
+     * <p>When continuity carry (or LP composite restore) leaves {@code uncovDelta > 0} on an
+     * inbound leg that carries a resolved spot quote from normalization, promote the unbacked
+     * portion to basis = qty × spot. Idempotent — acts only on uncov added by this flow.</p>
+     */
+    /**
+     * Cycle/18 R9: When authoritative carry arrives for a pending inbound, replace the exact
+     * provisional basis captured at materialisation (and any later spot-fallback promotion)
+     * instead of stacking carry on top or using whole-position AVCO heuristics.
+     */
+    public void applyAuthoritativeLateInboundCarryBasis(
+            PositionState destination,
+            BigDecimal provisionalBasisUsd,
+            BigDecimal carryBasisUsd
+    ) {
+        if (destination == null || carryBasisUsd == null || carryBasisUsd.signum() <= 0) {
+            return;
+        }
+        BigDecimal provisional = provisionalBasisUsd == null ? BigDecimal.ZERO : provisionalBasisUsd;
+        if (provisional.signum() > 0) {
+            destination.setTotalCostBasisUsd(
+                    destination.totalCostBasisUsd().subtract(provisional, MC).add(carryBasisUsd, MC)
+            );
+            return;
+        }
+        destination.setTotalCostBasisUsd(destination.totalCostBasisUsd().add(carryBasisUsd, MC));
+    }
+
+    public void applyInboundShortfallSpotFallback(
+            NormalizedTransaction.Flow flow,
+            PositionState position,
+            PositionSnapshot before
+    ) {
+        if (flow == null
+                || position == null
+                || before == null
+                || flow.getRole() != NormalizedLegRole.TRANSFER
+                || flow.getQuantityDelta() == null
+                || flow.getQuantityDelta().signum() <= 0
+                || flow.getUnitPriceUsd() == null
+                || flow.getUnitPriceUsd().signum() <= 0
+                || flow.getPriceSource() == null
+                || flow.getPriceSource() == PriceSource.UNKNOWN
+                || flow.getAssetSymbol() == null) {
+            return;
+        }
+        BigDecimal beforeUncov = before.uncoveredQuantity() == null ? BigDecimal.ZERO : before.uncoveredQuantity();
+        BigDecimal afterUncov = position.uncoveredQuantity() == null ? BigDecimal.ZERO : position.uncoveredQuantity();
+        BigDecimal uncovDelta = afterUncov.subtract(beforeUncov, MC);
+        if (uncovDelta.signum() <= 0) {
+            return;
+        }
+        BigDecimal flowQuantity = flow.getQuantityDelta().abs();
+        BigDecimal coveredPromotion = uncovDelta.min(flowQuantity);
+        if (coveredPromotion.signum() <= 0) {
+            return;
+        }
+        BigDecimal addedBasis = coveredPromotion.multiply(flow.getUnitPriceUsd(), MC);
+        position.setUncoveredQuantity(nonNegative(afterUncov.subtract(coveredPromotion, MC)));
+        position.setTotalCostBasisUsd(position.totalCostBasisUsd().add(addedBasis, MC));
+        recomputePerWalletAvco(position);
+        if (position.uncoveredQuantity().signum() == 0) {
+            resolveTemporaryUnresolved(position);
+        }
+        log.info(
+                "REPLAY_INBOUND_SPOT_FALLBACK wallet={} asset={} qty={} price={} usdAdded={}",
+                position.assetKey().walletAddress(),
+                flow.getAssetSymbol(),
+                coveredPromotion,
+                flow.getUnitPriceUsd(),
+                addedBasis
+        );
+    }
+
+    /**
+     * Cycle/15 R5 F3: Pegged-native spot-basis fallback — delegates to
+     * {@link #applyInboundShortfallSpotFallback} after pegged-native guard.
+     */
+    public void applyPeggedNativeSpotFallback(
+            NormalizedTransaction.Flow flow,
+            PositionState position,
+            PositionSnapshot before
+    ) {
+        if (flow == null
+                || flow.getAssetSymbol() == null
+                || !CanonicalAssetCatalog.isPeggedNative(flow.getAssetSymbol())) {
+            return;
+        }
+        applyInboundShortfallSpotFallback(flow, position, before);
     }
 
     public void markUnresolved(PositionState position) {
@@ -187,9 +361,36 @@ public class GenericFlowReplayEngine {
         BigDecimal uncoveredQuantity = appliedQuantity.min(availableUncovered);
         BigDecimal coveredQuantity = nonNegative(appliedQuantity.subtract(uncoveredQuantity, MC));
         BigDecimal externalShortfallQuantity = nonNegative(requestedQuantity.subtract(appliedQuantity, MC));
-        position.setQuantity(nonNegative(availableQuantity.subtract(appliedQuantity, MC)));
-        position.setUncoveredQuantity(nonNegative(availableUncovered.subtract(uncoveredQuantity, MC)));
+        BigDecimal newQuantity = nonNegative(availableQuantity.subtract(appliedQuantity, MC));
+        BigDecimal newUncovered = nonNegative(availableUncovered.subtract(uncoveredQuantity, MC));
+        // Cycle/15 R5 F2: zombie-uncov clamp. A position whose physical balance dropped to
+        // zero cannot retain uncovered residue from a prior invariant breach. Drop any
+        // surplus uncovered quantity so reports stay sane after rebuild.
+        if (newQuantity.signum() == 0 && newUncovered.signum() > 0) {
+            newUncovered = BigDecimal.ZERO;
+        }
+        position.setQuantity(newQuantity);
+        position.setUncoveredQuantity(newUncovered);
+        if (newQuantity.signum() == 0 && position.totalCostBasisUsd().signum() > 0) {
+            position.setTotalCostBasisUsd(BigDecimal.ZERO);
+            position.setPerWalletAvco(null);
+        }
         return new QuantityConsumption(appliedQuantity, coveredQuantity, uncoveredQuantity, externalShortfallQuantity);
+    }
+
+    /**
+     * Cycle/17 R7: qty=0 positions must not retain orphan basis (observed after wrapper REALLOCATE_OUT
+     * when effectiveRemovalAvco returned zero).
+     */
+    public void purgeOrphanBasisWhenEmpty(PositionState position) {
+        if (position == null) {
+            return;
+        }
+        if (position.quantity() == null || position.quantity().signum() != 0) {
+            return;
+        }
+        position.setTotalCostBasisUsd(BigDecimal.ZERO);
+        position.setPerWalletAvco(null);
     }
 
     private QuantityConsumption consumeQuantityCoveredFirst(PositionState position, BigDecimal requestedQuantity) {
@@ -200,8 +401,18 @@ public class GenericFlowReplayEngine {
         BigDecimal coveredQuantity = appliedQuantity.min(availableCovered);
         BigDecimal uncoveredQuantity = nonNegative(appliedQuantity.subtract(coveredQuantity, MC));
         BigDecimal externalShortfallQuantity = nonNegative(requestedQuantity.subtract(appliedQuantity, MC));
-        position.setQuantity(nonNegative(availableQuantity.subtract(appliedQuantity, MC)));
-        position.setUncoveredQuantity(nonNegative(availableUncovered.subtract(uncoveredQuantity, MC)));
+        BigDecimal newQuantity = nonNegative(availableQuantity.subtract(appliedQuantity, MC));
+        BigDecimal newUncovered = nonNegative(availableUncovered.subtract(uncoveredQuantity, MC));
+        // Cycle/15 R5 F2: zombie-uncov clamp (covered-first variant). Same invariant.
+        if (newQuantity.signum() == 0 && newUncovered.signum() > 0) {
+            newUncovered = BigDecimal.ZERO;
+        }
+        position.setQuantity(newQuantity);
+        position.setUncoveredQuantity(newUncovered);
+        if (newQuantity.signum() == 0 && position.totalCostBasisUsd().signum() > 0) {
+            position.setTotalCostBasisUsd(BigDecimal.ZERO);
+            position.setPerWalletAvco(null);
+        }
         return new QuantityConsumption(appliedQuantity, coveredQuantity, uncoveredQuantity, externalShortfallQuantity);
     }
 

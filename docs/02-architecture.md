@@ -58,11 +58,14 @@ Spring Boot
          normalized_transactions
          asset_ledger_points
          on_chain_balances
+         transfer_links   (planned — FA-001 / ADR-003; not required for continuity replay once metadata+repair paths align)
 ```
 
 ---
 
 ## 3. Core Pipeline
+
+**Bybit integration:** cycle/4 epic and rebuild contract — [`docs/tasks/157-cycle4-bybit-ledger-audit-closeout.md`](tasks/157-cycle4-bybit-ledger-audit-closeout.md), [`docs/adr/ADR-005-cycle4-bybit-pipeline.md`](adr/ADR-005-cycle4-bybit-pipeline.md). **Cycle/5** (stream authority N1/N5, transfer basis carry N2/N3, EARN sub-account N4, on-chain N6/N7): [`docs/tasks/158-cycle5-portfolio-phantom-closeout.md`](tasks/158-cycle5-portfolio-phantom-closeout.md), [`docs/adr/ADR-006-cycle5-bybit-stream-authority-and-earn-subaccount.md`](adr/ADR-006-cycle5-bybit-stream-authority-and-earn-subaccount.md); audit artifacts under `cycle-autorun/cycle-data/cycle/5/results/`.
 
 Live-session orchestration is event-driven:
 
@@ -347,15 +350,21 @@ Important guardrail:
 - on-chain segments remain `BLOCK_RANGE`
 - external segments are typically `TIME_RANGE`, and may use `CURSOR_PAGE` only
   when the provider stream truly requires persisted cursor checkpoints
-- Bybit acquisition is multi-stream:
+- Bybit acquisition is multi-stream (each stream is planned as its own
+  `backfill_segments` lane; see `BybitIntegrationStream`):
   - `TRANSACTION_LOG`
-  - `EXECUTION_HISTORY` by category (`linear`, `inverse`, `spot`, `option`)
+  - `EXECUTION_*` by category (`linear`, `inverse`, `spot`, `option`)
   - `FUNDING_HISTORY`
-  - `DEPOSIT`
-  - `WITHDRAWAL`
-  - future enrichment-only lanes such as dedicated convert / earn / loan
-    endpoints may still exist, but `fund_asset_changes` parity is owned by the
-    funding-account ledger
+  - `EARN_FLEXIBLE_SAVING`
+  - `INTERNAL_TRANSFER`, `UNIVERSAL_TRANSFER`, `DEPOSIT_INTERNAL`, `CONVERT_HISTORY`
+  - `DEPOSIT_ONCHAIN`, `WITHDRAWAL`
+- Session settings (`GET /sessions/{id}/settings`) exposes per-stream freshness for
+  Bybit (`streamSync`: last completed segment time and newest stored extracted event
+  per stream); see ADR-005.
+- **Cycle/3 Bybit audit (financial proof):** normative clarifications and acceptance
+  live under `cycle-autorun/cycle-data/cycle/3/results/` (`qa-clarifications.md`,
+  `required-changes.md`, `reconciliation.md`). Implementation backlog:
+  `docs/tasks/156-cycle3-bybit-audit-backend-closeout.md`.
 - provider enrichment for Bybit is split into:
   - immutable `integration_raw_events`
   - rebuildable `bybit_extracted_events`

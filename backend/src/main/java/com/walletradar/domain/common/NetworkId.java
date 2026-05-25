@@ -17,5 +17,6 @@ public enum NetworkId {
     KATANA,
     PLASMA,
     ZKSYNC,
-    SOLANA
+    SOLANA,
+    TON
 }

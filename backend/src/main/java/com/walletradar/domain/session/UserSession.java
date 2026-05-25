@@ -96,6 +96,23 @@ public class UserSession {
     public static class SessionSettings {
         private Boolean hideSmallAssets;
         private Boolean showReconciliationWarnings;
+        /**
+         * Cycle/9 S2: counterparty addresses on third-party venues the user owns
+         * (Paradex/MEX/BitGet/etc). Mirrored into {@code AccountingUniverse.members} with
+         * {@code type=EXTERNAL_VENUE, backfillEnabled=false} so they are excluded from
+         * Net Inflow/Outflow while {@code CounterpartyBasisPool} still carries AVCO.
+         */
+        private List<ExternalVenue> externalVenues = new ArrayList<>();
+    }
+
+    @NoArgsConstructor
+    @Getter
+    @Setter
+    public static class ExternalVenue {
+        private String address;
+        private String provider;
+        private String label;
+        private List<NetworkId> networks = new ArrayList<>();
     }
 
     @NoArgsConstructor

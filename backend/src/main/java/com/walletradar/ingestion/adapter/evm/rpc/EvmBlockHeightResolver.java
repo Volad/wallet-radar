@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.ingestion.adapter.BlockHeightResolver;
+import com.walletradar.ingestion.adapter.ReactorBlocking;
 import com.walletradar.ingestion.adapter.RpcEndpointRotator;
 import com.walletradar.ingestion.adapter.RpcException;
 import com.walletradar.ingestion.adapter.evm.explorer.ExplorerProvider;
@@ -13,6 +14,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.util.Collections;
 import java.util.Map;
 
@@ -92,7 +94,10 @@ public class EvmBlockHeightResolver implements BlockHeightResolver {
         String networkIdStr = networkId.name();
         RpcEndpointRotator rotator = rotatorsByNetwork.getOrDefault(networkIdStr, defaultRotator);
         String endpoint = rotator.getNextEndpoint();
-        String json = rpcClient.call(endpoint, "eth_blockNumber", Collections.emptyList()).block();
+        String json = ReactorBlocking.block(
+                rpcClient.call(endpoint, "eth_blockNumber", Collections.emptyList()),
+                Duration.ofSeconds(60)
+        );
         if (json == null) {
             throw new RpcException("eth_blockNumber returned null");
         }

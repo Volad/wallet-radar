@@ -133,11 +133,20 @@ public class BybitBackfillSegmentExecutor implements BackfillSegmentExecutor {
     }
 
     private boolean requiresSevenDayRepartition(BybitIntegrationStream stream, BackfillSegment segment) {
-        return (stream == BybitIntegrationStream.EARN_FLEXIBLE_SAVING
-                || stream == BybitIntegrationStream.FUNDING_HISTORY)
-                && segment.getFromTime() != null
-                && segment.getToTime() != null
-                && Duration.between(segment.getFromTime(), segment.getToTime()).compareTo(Duration.ofDays(7)) > 0;
+        if (segment.getFromTime() == null
+                || segment.getToTime() == null
+                || Duration.between(segment.getFromTime(), segment.getToTime()).compareTo(Duration.ofDays(7)) <= 0) {
+            return false;
+        }
+        return stream == BybitIntegrationStream.EARN_FLEXIBLE_SAVING
+                || stream == BybitIntegrationStream.FUNDING_HISTORY
+                || stream == BybitIntegrationStream.TRANSACTION_LOG
+                || stream == BybitIntegrationStream.EXECUTION_LINEAR
+                || stream == BybitIntegrationStream.EXECUTION_INVERSE
+                || stream == BybitIntegrationStream.EXECUTION_SPOT
+                || stream == BybitIntegrationStream.EXECUTION_OPTION
+                || stream == BybitIntegrationStream.INTERNAL_TRANSFER
+                || stream == BybitIntegrationStream.UNIVERSAL_TRANSFER;
     }
 
     private void repartitionOversizedSegment(
@@ -332,6 +341,8 @@ public class BybitBackfillSegmentExecutor implements BackfillSegmentExecutor {
     }
 
     private Instant extractOccurredAt(JsonNode row) {
+        // Cycle/5 N9: include stream-specific timestamp fields so `occurredAt` is never silently null
+        // for INTERNAL_TRANSFER / UNIVERSAL_TRANSFER / EARN_FLEXIBLE_SAVING rows (which use `timestamp` / `createdAt` / `updatedAt`).
         for (String field : List.of(
                 "transactionTime",
                 "execTime",
@@ -339,7 +350,13 @@ public class BybitBackfillSegmentExecutor implements BackfillSegmentExecutor {
                 "updatedTime",
                 "successAt",
                 "completeTime",
-                "time"
+                "time",
+                "timestamp",
+                "createdAt",
+                "updatedAt",
+                "transferDate",
+                "transactionDate",
+                "blockTime"
         )) {
             JsonNode candidate = row.path(field);
             if (candidate.isMissingNode() || candidate.isNull()) {
@@ -363,11 +380,13 @@ public class BybitBackfillSegmentExecutor implements BackfillSegmentExecutor {
 
     private String providerEventKey(JsonNode row, String fallback) {
         for (String field : List.of(
+                "transLogId",
                 "execId",
                 "orderId",
+                "orderLinkId",
+                "tradeId",
                 "transferId",
                 "transferID",
-                "transferId",
                 "txID",
                 "withdrawID",
                 "id"
@@ -376,6 +395,14 @@ public class BybitBackfillSegmentExecutor implements BackfillSegmentExecutor {
             if (value != null && !value.isBlank()) {
                 return value;
             }
+        }
+        // Transaction-log TRADE rows may omit stable ids; anchor on time + economic fingerprint.
+        String txTime = row.path("transactionTime").asText(null);
+        String symbol = row.path("symbol").asText(null);
+        String type = row.path("type").asText(null);
+        String change = row.path("change").asText(null);
+        if (txTime != null && !txTime.isBlank() && symbol != null && type != null) {
+            return "txlog:" + txTime + ":" + symbol + ":" + type + ":" + (change == null ? "" : change);
         }
         return fallback;
     }

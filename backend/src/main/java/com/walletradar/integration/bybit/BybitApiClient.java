@@ -2,6 +2,9 @@ package com.walletradar.integration.bybit;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+import com.walletradar.ingestion.adapter.ReactorBlocking;
 import com.walletradar.integration.config.BybitIntegrationProperties;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
@@ -12,11 +15,16 @@ import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Minimal signed Bybit V5 REST client used for integration validation and
@@ -26,9 +34,53 @@ import java.util.TreeMap;
 @RequiredArgsConstructor
 public class BybitApiClient {
 
+    private static final String USER_OWNED_SUB = "USER_OWNED_SUB";
+
     private final WebClient.Builder webClientBuilder;
     private final BybitIntegrationProperties properties;
     private final ObjectMapper objectMapper;
+    private final Cache<String, List<BybitSubMember>> subMembersCache = Caffeine.newBuilder()
+            .maximumSize(16)
+            .expireAfterWrite(24, TimeUnit.HOURS)
+            .build();
+
+    /**
+     * Discovers user-owned sub-accounts for a Bybit master UID. Results are cached per master UID for 24h.
+     */
+    public List<BybitSubMember> fetchSubMembers(String masterUid, String apiKey, String apiSecret) {
+        String cacheKey = masterUid == null ? "" : masterUid.trim();
+        if (cacheKey.isBlank()) {
+            return List.of();
+        }
+        return subMembersCache.get(cacheKey, ignored -> loadSubMembers(apiKey, apiSecret));
+    }
+
+    public void invalidateSubMembersCache(String masterUid) {
+        if (masterUid != null && !masterUid.isBlank()) {
+            subMembersCache.invalidate(masterUid.trim());
+        }
+    }
+
+    private List<BybitSubMember> loadSubMembers(String apiKey, String apiSecret) {
+        List<BybitSubMember> discovered = new ArrayList<>();
+        String cursor = null;
+        do {
+            Map<String, Object> params = new LinkedHashMap<>();
+            params.put("pageLimit", 20);
+            if (cursor != null && !cursor.isBlank()) {
+                params.put("cursor", cursor);
+            }
+            JsonNode body = signedGet("/v5/user/query-sub-members", apiKey, apiSecret, params);
+            JsonNode result = requireResult(body);
+            JsonNode rows = result.path("subMembers");
+            if (!rows.isArray()) {
+                rows = result.path("list");
+            }
+            discovered.addAll(parseSubMembersResult(result));
+            cursor = nextCursor(result);
+        } while (cursor != null && !cursor.isBlank());
+        return List.copyOf(discovered);
+    }
 
     public CredentialInfo validateCredentials(String apiKey, String apiSecret) {
         JsonNode body = signedGet("/v5/user/query-api", apiKey, apiSecret, Map.of());
@@ -85,6 +137,107 @@ public class BybitApiClient {
         return new BybitPage(rows, nextCursor(result));
     }
 
+    /**
+     * Cycle/5 N15: fetches the authoritative live balance per sub-account directly from Bybit. Used by the
+     * dashboard to clamp ledger inventories so phantom positions left by API-gap defects (e.g. Earn-product
+     * withdrawals that none of the FUNDING_HISTORY / WITHDRAWAL / TX_LOG / EARN_FLEXIBLE_SAVING streams expose)
+     * cannot inflate the umbrella view above the real Bybit holding.
+     */
+    public LiveBybitBalances fetchLiveBalances(String apiKey, String apiSecret) {
+        Map<String, BigDecimal> uta = fetchUnifiedBalances(apiKey, apiSecret);
+        Map<String, BigDecimal> fund = fetchFundBalances(apiKey, apiSecret);
+        Map<String, BigDecimal> earn = fetchEarnBalances(apiKey, apiSecret);
+        Map<String, BigDecimal> umbrella = new LinkedHashMap<>();
+        accumulate(umbrella, uta);
+        accumulate(umbrella, fund);
+        accumulate(umbrella, earn);
+        return new LiveBybitBalances(uta, fund, earn, umbrella, Instant.now());
+    }
+
+    private Map<String, BigDecimal> fetchUnifiedBalances(String apiKey, String apiSecret) {
+        Map<String, BigDecimal> out = new LinkedHashMap<>();
+        Map<String, Object> params = new LinkedHashMap<>();
+        params.put("accountType", "UNIFIED");
+        JsonNode body = signedGet("/v5/account/wallet-balance", apiKey, apiSecret, params);
+        JsonNode result = requireResult(body);
+        for (JsonNode account : result.path("list")) {
+            for (JsonNode coin : account.path("coin")) {
+                String symbol = upper(text(coin, "coin"));
+                BigDecimal qty = decimal(coin, "walletBalance");
+                if (symbol != null && !symbol.isBlank() && qty != null && qty.signum() > 0) {
+                    out.merge(symbol, qty, BigDecimal::add);
+                }
+            }
+        }
+        return out;
+    }
+
+    private Map<String, BigDecimal> fetchFundBalances(String apiKey, String apiSecret) {
+        Map<String, BigDecimal> out = new LinkedHashMap<>();
+        Map<String, Object> params = new LinkedHashMap<>();
+        params.put("accountType", "FUND");
+        JsonNode body = signedGet("/v5/asset/transfer/query-account-coins-balance", apiKey, apiSecret, params);
+        JsonNode result = requireResult(body);
+        for (JsonNode coin : result.path("balance")) {
+            String symbol = upper(text(coin, "coin"));
+            BigDecimal qty = decimal(coin, "walletBalance");
+            if (symbol != null && !symbol.isBlank() && qty != null && qty.signum() > 0) {
+                out.merge(symbol, qty, BigDecimal::add);
+            }
+        }
+        return out;
+    }
+
+    private Map<String, BigDecimal> fetchEarnBalances(String apiKey, String apiSecret) {
+        Map<String, BigDecimal> out = new LinkedHashMap<>();
+        for (String category : new String[]{"FlexibleSaving", "OnChain"}) {
+            Map<String, Object> params = new LinkedHashMap<>();
+            params.put("category", category);
+            JsonNode body;
+            try {
+                body = signedGet("/v5/earn/position", apiKey, apiSecret, params);
+            } catch (RuntimeException ex) {
+                // Earn position endpoint may return error for accounts without products in a category.
+                continue;
+            }
+            JsonNode result = body.path("result");
+            for (JsonNode pos : result.path("list")) {
+                String symbol = upper(text(pos, "coin"));
+                BigDecimal qty = decimal(pos, "amount");
+                if (symbol != null && !symbol.isBlank() && qty != null && qty.signum() > 0) {
+                    out.merge(symbol, qty, BigDecimal::add);
+                }
+            }
+        }
+        return out;
+    }
+
+    private static void accumulate(Map<String, BigDecimal> dest, Map<String, BigDecimal> src) {
+        for (Map.Entry<String, BigDecimal> entry : src.entrySet()) {
+            dest.merge(entry.getKey(), entry.getValue(), BigDecimal::add);
+        }
+    }
+
+    private static String upper(String value) {
+        return value == null ? null : value.trim().toUpperCase(Locale.ROOT);
+    }
+
+    private static BigDecimal decimal(JsonNode node, String fieldName) {
+        JsonNode field = node.path(fieldName);
+        if (field.isMissingNode() || field.isNull()) {
+            return null;
+        }
+        String raw = field.asText();
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        try {
+            return new BigDecimal(raw);
+        } catch (NumberFormatException ex) {
+            return null;
+        }
+    }
+
     private JsonNode signedGet(String path, String apiKey, String apiSecret, Map<String, Object> params) {
         String queryString = canonicalQueryString(params);
         String timestamp = String.valueOf(Instant.now().toEpochMilli());
@@ -92,7 +245,7 @@ public class BybitApiClient {
         String signature = sign(timestamp + apiKey + recvWindow + queryString, apiSecret);
         URI uri = buildRequestUri(properties.getBaseUrl(), path, queryString);
         WebClient client = webClientBuilder.baseUrl(properties.getBaseUrl()).build();
-        return client.get()
+        Mono<JsonNode> request = client.get()
                 .uri(uri)
                 .header("X-BAPI-API-KEY", apiKey)
                 .header("X-BAPI-TIMESTAMP", timestamp)
@@ -101,8 +254,42 @@ public class BybitApiClient {
                 .retrieve()
                 .bodyToMono(JsonNode.class)
                 .timeout(Duration.ofMillis(properties.getRequestTimeoutMs()))
-                .onErrorResume(error -> Mono.error(new IllegalStateException("Bybit request failed: " + error.getMessage(), error)))
-                .block();
+                .onErrorResume(error -> Mono.error(new IllegalStateException("Bybit request failed: " + error.getMessage(), error)));
+        return ReactorBlocking.block(
+                request,
+                Duration.ofMillis(properties.getRequestTimeoutMs())
+        );
+    }
+
+    static List<BybitSubMember> parseSubMembersResult(JsonNode result) {
+        if (result == null || result.isMissingNode()) {
+            return List.of();
+        }
+        JsonNode rows = result.path("subMembers");
+        if (!rows.isArray()) {
+            rows = result.path("list");
+        }
+        if (!rows.isArray()) {
+            return List.of();
+        }
+        List<BybitSubMember> discovered = new ArrayList<>();
+        for (JsonNode row : rows) {
+            String memberType = textStatic(row, "memberType");
+            if (!USER_OWNED_SUB.equalsIgnoreCase(memberType)) {
+                continue;
+            }
+            String uid = textStatic(row, "uid");
+            if (uid == null || uid.isBlank()) {
+                continue;
+            }
+            discovered.add(new BybitSubMember(uid.trim(), textStatic(row, "username"), memberType));
+        }
+        return List.copyOf(discovered);
+    }
+
+    private static String textStatic(JsonNode node, String fieldName) {
+        JsonNode field = node.path(fieldName);
+        return field.isMissingNode() || field.isNull() ? null : field.asText();
     }
 
     static String canonicalQueryString(Map<String, Object> params) {
@@ -189,6 +376,24 @@ public class BybitApiClient {
     public record BybitPage(
             JsonNode rows,
             String nextCursor
+    ) {
+    }
+
+    /**
+     * Cycle/5 N15: snapshot of authoritative live Bybit balances per sub-account, plus the umbrella sum.
+     *
+     * @param uta      symbol → quantity from {@code /v5/account/wallet-balance accountType=UNIFIED}
+     * @param fund     symbol → quantity from {@code /v5/asset/transfer/query-account-coins-balance accountType=FUND}
+     * @param earn     symbol → quantity from {@code /v5/earn/position} across all categories
+     * @param umbrella symbol → sum of UTA + FUND + EARN (no sub-account split; used by dashboard clamp)
+     * @param fetchedAt timestamp of the snapshot fetch
+     */
+    public record LiveBybitBalances(
+            Map<String, BigDecimal> uta,
+            Map<String, BigDecimal> fund,
+            Map<String, BigDecimal> earn,
+            Map<String, BigDecimal> umbrella,
+            Instant fetchedAt
     ) {
     }
 }

@@ -1,0 +1,191 @@
+<section class="settings-section">
+  @if (compact) {
+    <div class="integrations-section-head">
+      <svg
+        class="integrations-section-icon"
+        width="13"
+        height="13"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.65"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        aria-hidden="true">
+        <path d="M10 13a5 5 0 0 1 0-7l1-1a5 5 0 0 1 7 7l-1 1" />
+        <path d="M14 11a5 5 0 0 1 0 7l-1 1a5 5 0 0 1-7-7l1-1" />
+      </svg>
+      <span class="integrations-section-title">Integrations</span>
+    </div>
+  } @else {
+    <div class="section-head static">
+      <div>
+        <div class="section-title">Integrations</div>
+        <div class="section-subline">Connect exchange accounts to import trading history alongside on-chain data.</div>
+      </div>
+    </div>
+  }
+
+  <article class="integration-card" [class.connected]="bybitIntegration !== null">
+    <div class="integration-card-head">
+      <div class="integration-mark">B</div>
+
+      <div class="integration-copy">
+        <div class="integration-title-row">
+          <span class="integration-title">Bybit</span>
+          <span class="tag">CEX</span>
+          @if (bybitIntegration !== null) {
+            <span class="tag success">Connected</span>
+          }
+        </div>
+
+        <div class="integration-subline">
+          @if (bybitIntegration; as integration) {
+            "{{ integration.displayName }}" · {{ integration.accountRef }}
+          } @else {
+            Import trading history and P&amp;L
+          }
+        </div>
+      </div>
+
+      @if (bybitIntegration; as integration) {
+        <span
+          class="status-pill"
+          [class.ready]="statusTone(integration) === 'ready'"
+          [class.busy]="statusTone(integration) === 'busy'"
+          [class.error]="statusTone(integration) === 'error'">
+          {{ integration.status ?? 'UNKNOWN' }}
+        </span>
+      } @else {
+        <span class="status-pill">NOT CONNECTED</span>
+      }
+    </div>
+
+    @if (!compact) {
+      <div class="instruction-card">
+        <div class="instruction-head">How to get API credentials</div>
+
+        <div class="instruction-steps">
+          @for (step of [
+            'Log in to Bybit and open Account → API Management.',
+            'Create a new API key with read-only permissions.',
+            'Copy API key and secret. The secret is shown only once.',
+            'Paste both values below and save. No withdrawal permission is required.'
+          ]; track step; let index = $index) {
+            <div class="instruction-step">
+              <span class="instruction-step-index">{{ index + 1 }}</span>
+              <span class="instruction-step-copy">{{ step }}</span>
+            </div>
+          }
+        </div>
+
+        <a
+          class="instruction-link"
+          href="https://www.bybit.com/app/user/api-management"
+          target="_blank"
+          rel="noreferrer">
+          Open Bybit API Management
+        </a>
+      </div>
+    }
+
+    @if (!compact && bybitIntegration; as integration) {
+      <div class="integration-summary">
+        <div class="summary-row">
+          <span>Account</span>
+          <span class="mono">{{ integration.accountRef }}</span>
+        </div>
+        <div class="summary-row">
+          <span>Masked key</span>
+          <span class="mono">{{ integration.maskedKey }}</span>
+        </div>
+        <div class="summary-row">
+          <span>Validated</span>
+          <span>{{ formatDateTime(integration.lastValidatedAt) }}</span>
+        </div>
+        <div class="summary-row">
+          <span>Progress</span>
+          <span>{{ integration.completedSegments }} / {{ integration.totalSegments }}</span>
+        </div>
+        <div class="progress-track">
+          <div class="progress-fill" [style.width.%]="integration.progressPct"></div>
+        </div>
+
+        @if ((integration.streamSync?.length ?? 0) > 0) {
+          <div class="stream-sync-wrap">
+            <div class="stream-sync-title">Bybit data streams (last sync)</div>
+            <div class="stream-sync-table" role="table" aria-label="Bybit stream sync timestamps">
+              <div class="stream-sync-row stream-sync-header" role="row">
+                <span role="columnheader">Stream</span>
+                <span role="columnheader">Last segment completed</span>
+                <span role="columnheader">Newest stored event</span>
+              </div>
+              @for (row of integration.streamSync ?? []; track row.stream) {
+                <div class="stream-sync-row" role="row">
+                  <span class="mono stream-name" role="cell">{{ row.stream }}</span>
+                  <span role="cell">{{ formatDateTime(row.lastSegmentCompletedAt) }}</span>
+                  <span role="cell">{{ formatDateTime(row.newestStoredEventAt) }}</span>
+                </div>
+              }
+            </div>
+          </div>
+        }
+      </div>
+    }
+
+    <form class="integration-form" [formGroup]="bybitForm">
+      <label class="editor-field-block">
+        <span class="field-label">Integration name</span>
+        <input class="ifield" type="text" formControlName="displayName" maxlength="80" />
+      </label>
+
+      <label class="editor-field-block">
+        <span class="field-label">API key <span class="field-label-required" aria-hidden="true">*</span></span>
+        <input
+          class="ifield"
+          type="text"
+          formControlName="apiKey"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="Enter your Bybit API key" />
+      </label>
+
+      <label class="editor-field-block">
+        <span class="field-label">API secret <span class="field-label-required" aria-hidden="true">*</span></span>
+        <div class="field-input-wrap">
+          <input
+            class="ifield"
+            [type]="showSecret ? 'text' : 'password'"
+            formControlName="apiSecret"
+            autocomplete="new-password"
+            spellcheck="false"
+            [placeholder]="bybitIntegration !== null ? 'Saved · enter new to update' : 'Enter your Bybit API secret'" />
+          <button type="button" class="field-toggle-btn" (click)="toggleSecret.emit()">
+            {{ showSecret ? 'Hide' : 'Show' }}
+          </button>
+        </div>
+      </label>
+    </form>
+
+    <div class="integration-warning-card">
+      <span class="integration-warning-icon" aria-hidden="true">⚠</span>
+      <div>
+        Use <strong>Read-Only</strong> keys only. Never enable trading or withdrawal permissions.
+      </div>
+    </div>
+
+    <div class="editor-actions" [class.editor-actions-compact]="compact">
+      @if (bybitIntegration !== null) {
+        <button type="button" class="danger-btn" [disabled]="saving" (click)="disconnect.emit()">Disconnect</button>
+      }
+
+      <div class="editor-actions-spacer"></div>
+
+      <button type="button" class="secondary-btn" [disabled]="saving" (click)="reset.emit()">Cancel</button>
+      <button type="button" class="primary-btn" [disabled]="saving" (click)="save.emit()">
+        {{ saving ? 'Saving…' : (bybitIntegration === null ? 'Connect' : 'Update') }}
+      </button>
+    </div>
+  </article>
+</section>
+

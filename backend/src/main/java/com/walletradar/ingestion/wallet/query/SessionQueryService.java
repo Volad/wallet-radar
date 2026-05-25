@@ -168,13 +168,14 @@ public class SessionQueryService {
                 session.getPipelineState() == null
                         ? null
                         : session.getPipelineState().getMessage(),
-                phaseProgress(session, totalTargets, completedTargets, overallProgress),
+                phaseProgress(session, syncStatusByPair, totalTargets, completedTargets, overallProgress),
                 walletStatuses
         );
     }
 
     private PhaseProgressView phaseProgress(
             UserSession session,
+            Map<String, SyncStatus> syncStatusByPair,
             long totalTargets,
             long completedTargets,
             int overallProgress
@@ -228,9 +229,61 @@ public class SessionQueryService {
                     session.getPipelineState() != null
                             && session.getPipelineState().getStatus() == UserSession.PipelineStatus.COMPLETE ? 1 : 0
             );
-            case "BACKFILL" -> progressFromCounts(stage, totalTargets, completedTargets, overallProgress);
+            case "BACKFILL" -> {
+                BackfillSegmentTally segments = countPlannedBackfillSegments(session, syncStatusByPair);
+                if (segments.total() > 0) {
+                    yield progressFromCounts(stage, segments.total(), segments.completed());
+                }
+                yield progressFromCounts(stage, totalTargets, completedTargets, overallProgress);
+            }
             default -> progressFromCounts(stage, totalTargets, completedTargets, overallProgress);
         };
+    }
+
+    /**
+     * Sums {@link BackfillSegment} rows for on-chain sync_status ids and integration ids on this session.
+     */
+    private BackfillSegmentTally countPlannedBackfillSegments(
+            UserSession session,
+            Map<String, SyncStatus> syncStatusByPair
+    ) {
+        long total = 0;
+        long completed = 0;
+        if (session.getWallets() != null) {
+            for (UserSession.SessionWallet wallet : session.getWallets()) {
+                if (wallet == null || wallet.getNetworks() == null) {
+                    continue;
+                }
+                for (NetworkId networkId : wallet.getNetworks()) {
+                    String key = pairKey(wallet.getAddress(), networkId.name());
+                    SyncStatus sync = syncStatusByPair.get(key);
+                    if (sync == null || sync.getId() == null || sync.getId().isBlank()) {
+                        continue;
+                    }
+                    String sid = sync.getId();
+                    total += backfillSegmentRepository.countBySyncStatusId(sid);
+                    completed += backfillSegmentRepository.countBySyncStatusIdAndStatus(
+                            sid,
+                            BackfillSegment.SegmentStatus.COMPLETE
+                    );
+                }
+            }
+        }
+        for (UserSession.SessionIntegration integration : enabledIntegrations(session)) {
+            if (integration.getIntegrationId() == null || integration.getIntegrationId().isBlank()) {
+                continue;
+            }
+            String iid = integration.getIntegrationId();
+            total += backfillSegmentRepository.countByIntegrationId(iid);
+            completed += backfillSegmentRepository.countByIntegrationIdAndStatus(
+                    iid,
+                    BackfillSegment.SegmentStatus.COMPLETE
+            );
+        }
+        return new BackfillSegmentTally(total, completed);
+    }
+
+    private record BackfillSegmentTally(long total, long completed) {
     }
 
     private Map<String, SyncStatus> indexSyncStatuses(List<String> addresses) {

@@ -3,6 +3,8 @@ package com.walletradar.integration.bybit;
 import com.walletradar.domain.transaction.bybit.BybitExtractedEvent;
 import com.walletradar.domain.transaction.externalledger.ExternalLedgerRaw;
 import com.walletradar.domain.transaction.externalledger.ExternalLedgerRawStatus;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 /**
@@ -12,6 +14,8 @@ import org.springframework.stereotype.Component;
 @Component
 public class BybitExtractedEventMapper {
 
+    private static final Logger LOGGER = LoggerFactory.getLogger(BybitExtractedEventMapper.class);
+
     public ExternalLedgerRaw toLegacyRaw(BybitExtractedEvent extractedEvent) {
         ExternalLedgerRaw row = new ExternalLedgerRaw();
         row.setId(extractedEvent.getId());
@@ -20,7 +24,12 @@ public class BybitExtractedEventMapper {
         row.setSourceFileType(extractedEvent.getSourceFileType());
         row.setUid(extractedEvent.getUid());
         row.setSessionId(extractedEvent.getSessionId());
-        row.setTimeUtc(extractedEvent.getTimeUtc());
+        if (extractedEvent.getTimeUtc() == null && extractedEvent.getImportedAt() != null) {
+            LOGGER.warn("BYBIT_EVENT_TIME_UTC_MISSING_USING_IMPORTED_AT id={}", extractedEvent.getId());
+            row.setTimeUtc(extractedEvent.getImportedAt());
+        } else {
+            row.setTimeUtc(extractedEvent.getTimeUtc());
+        }
         row.setAssetSymbol(extractedEvent.getAssetSymbol());
         row.setQuantityRaw(extractedEvent.getQuantityRaw());
         row.setAccountBalance(extractedEvent.getAccountBalance());
@@ -39,6 +48,7 @@ public class BybitExtractedEventMapper {
         row.setFunding(extractedEvent.getFunding());
         row.setWalletBalance(extractedEvent.getWalletBalance());
         row.setTxHash(extractedEvent.getTxHash());
+        row.setTradeOrderId(extractedEvent.getTradeOrderId());
         row.setNetworkId(extractedEvent.getNetworkId());
         row.setSenderAddress(extractedEvent.getSenderAddress());
         row.setReceivedAddress(extractedEvent.getReceivedAddress());

@@ -117,7 +117,7 @@ public class ContinuityCarryService {
         consumeReservedCarry(position, reservedPortion);
         BigDecimal remainingQuantity = nonNegative(flow.getQuantityDelta().abs().subtract(reservedPortion.quantity(), MC));
         if (remainingQuantity.signum() == 0) {
-            return reservedPortion;
+            return absorbOrphanBasisIfPositionEmpty(position, reservedPortion);
         }
         CarryTransfer pooledRemainder = genericFlowReplayEngine.removeFromPosition(
                 flowSupport.copyFlowWithQuantity(
@@ -127,6 +127,40 @@ public class ContinuityCarryService {
                 position
         );
         return mergeCarryTransfers(position.assetKey(), reservedPortion, pooledRemainder);
+    }
+
+    /**
+     * Cycle/17 R7: when a pass-through corridor reserves a carry, the basis is captured at
+     * reserve time (BRIDGE_IN restore). The R6 inbound shortfall spot fallback can promote
+     * basis on the position AFTER the reserve, leaving the reserved slice with stale {@code 0}
+     * basis. When the outbound flow later consumes the carry it drains qty but not basis,
+     * leaving an orphan basis on the (now empty) position. This helper drains that residual
+     * into the outgoing carry so the wrapper/LP bucket receives the full basis.
+     */
+    private CarryTransfer absorbOrphanBasisIfPositionEmpty(PositionState position, CarryTransfer reservedPortion) {
+        if (position == null
+                || position.quantity() == null
+                || position.quantity().signum() != 0
+                || position.totalCostBasisUsd() == null
+                || position.totalCostBasisUsd().signum() <= 0) {
+            return reservedPortion;
+        }
+        BigDecimal orphanBasis = position.totalCostBasisUsd();
+        position.setTotalCostBasisUsd(BigDecimal.ZERO);
+        position.setPerWalletAvco(null);
+        BigDecimal covered = reservedPortion.coveredQuantity() == null ? BigDecimal.ZERO : reservedPortion.coveredQuantity();
+        BigDecimal updatedBasis = (reservedPortion.costBasisUsd() == null ? BigDecimal.ZERO : reservedPortion.costBasisUsd())
+                .add(orphanBasis, MC);
+        BigDecimal updatedAvco = covered.signum() > 0 ? updatedBasis.divide(covered, MC) : reservedPortion.avco();
+        return new CarryTransfer(
+                reservedPortion.quantity(),
+                reservedPortion.coveredQuantity(),
+                reservedPortion.uncoveredQuantity(),
+                updatedBasis,
+                updatedAvco,
+                reservedPortion.pendingInbound(),
+                reservedPortion.assetKey()
+        );
     }
 
     public void reservePassThroughCarryIfPlanned(
@@ -162,6 +196,24 @@ public class ContinuityCarryService {
         if (carry == null || requestedQuantity == null || requestedQuantity.signum() <= 0) {
             return emptyCarry(assetKey);
         }
+        // Cycle/18 R9: orphan basis (qty drained to zero, basis remains) must flow through the
+        // slicer as fully covered carry — otherwise ARB→BYBIT corridors lose ~$1k+ per leg.
+        if (carry.quantity() != null
+                && carry.quantity().signum() == 0
+                && carry.costBasisUsd() != null
+                && carry.costBasisUsd().signum() > 0) {
+            BigDecimal orphanBasis = carry.costBasisUsd();
+            BigDecimal avco = safeDivide(orphanBasis, requestedQuantity);
+            return new CarryTransfer(
+                    requestedQuantity,
+                    requestedQuantity,
+                    BigDecimal.ZERO,
+                    orphanBasis,
+                    avco,
+                    false,
+                    assetKey
+            );
+        }
         BigDecimal effectiveQuantity = requestedQuantity.min(carry.quantity());
         BigDecimal effectiveCoveredQuantity = effectiveQuantity.min(carry.coveredQuantity());
         BigDecimal effectiveUncoveredQuantity = nonNegative(effectiveQuantity.subtract(effectiveCoveredQuantity, MC));
@@ -187,6 +239,22 @@ public class ContinuityCarryService {
     ) {
         if (sourceCarry == null || destinationQuantity == null || destinationQuantity.signum() <= 0) {
             return emptyCarry(assetKey);
+        }
+        if (sourceCarry.quantity() != null
+                && sourceCarry.quantity().signum() == 0
+                && sourceCarry.costBasisUsd() != null
+                && sourceCarry.costBasisUsd().signum() > 0) {
+            BigDecimal orphanBasis = sourceCarry.costBasisUsd();
+            BigDecimal avco = safeDivide(orphanBasis, destinationQuantity);
+            return new CarryTransfer(
+                    destinationQuantity,
+                    destinationQuantity,
+                    BigDecimal.ZERO,
+                    orphanBasis,
+                    avco,
+                    false,
+                    assetKey
+            );
         }
         BigDecimal coveredQuantity = destinationQuantity.min(sourceCarry.coveredQuantity());
         BigDecimal uncoveredQuantity = nonNegative(destinationQuantity.subtract(coveredQuantity, MC));
@@ -215,6 +283,19 @@ public class ContinuityCarryService {
         }
         BigDecimal sourceQuantity = sourceCarry.quantity();
         if (sourceQuantity == null || sourceQuantity.signum() <= 0) {
+            if (sourceCarry.costBasisUsd() != null && sourceCarry.costBasisUsd().signum() > 0) {
+                BigDecimal orphanBasis = sourceCarry.costBasisUsd();
+                BigDecimal avco = safeDivide(orphanBasis, destinationQuantity);
+                return new CarryTransfer(
+                        destinationQuantity,
+                        destinationQuantity,
+                        BigDecimal.ZERO,
+                        orphanBasis,
+                        avco,
+                        false,
+                        assetKey
+                );
+            }
             return new CarryTransfer(
                     destinationQuantity,
                     BigDecimal.ZERO,

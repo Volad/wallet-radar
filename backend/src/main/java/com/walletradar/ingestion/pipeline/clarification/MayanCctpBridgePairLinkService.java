@@ -155,7 +155,7 @@ public class MayanCctpBridgePairLinkService {
         String correlationId = hasText(source.getCorrelationId())
                 ? source.getCorrelationId()
                 : correlationId(source.getTxHash());
-        boolean continuityCandidate = supportsPlainMoveBasis(source, destination);
+        boolean continuityCandidate = BridgePairLinkSupport.supportsPlainMoveBasis(source, destination);
         List<NormalizedTransaction> updates = new ArrayList<>();
 
         if (!sameHash(source.getMatchedCounterparty(), destination.getTxHash())
@@ -192,6 +192,16 @@ public class MayanCctpBridgePairLinkService {
             destination.setContinuityCandidate(continuityCandidate);
             destinationChanged = true;
         }
+        if (continuityCandidate) {
+            if (BridgePairLinkSupport.retagPrincipalFlowsForBridgeContinuity(source, now)) {
+                if (!updates.contains(source)) {
+                    updates.add(source);
+                }
+            }
+            if (BridgePairLinkSupport.retagPrincipalFlowsForBridgeContinuity(destination, now)) {
+                destinationChanged = true;
+            }
+        }
         if (destinationChanged) {
             destination.setUpdatedAt(now);
             updates.add(destination);
@@ -216,32 +226,6 @@ public class MayanCctpBridgePairLinkService {
                 .filter(candidate -> !sameHash(candidate.getTxHash(), destination.getTxHash()))
                 .sorted(SOURCE_SELECTION_ORDER)
                 .findFirst();
-    }
-
-    private boolean supportsPlainMoveBasis(NormalizedTransaction source, NormalizedTransaction destination) {
-        List<NormalizedTransaction.Flow> sourcePrincipal = principalFlows(source, -1);
-        List<NormalizedTransaction.Flow> destinationPrincipal = principalFlows(destination, 1);
-        if (sourcePrincipal.size() != 1 || destinationPrincipal.size() != 1) {
-            return false;
-        }
-        String sourceAsset = BridgeAssetFamilySupport.continuityIdentity(sourcePrincipal.getFirst());
-        String destinationAsset = BridgeAssetFamilySupport.continuityIdentity(destinationPrincipal.getFirst());
-        if (sourceAsset == null || !sourceAsset.equals(destinationAsset)) {
-            return false;
-        }
-        return sourcePrincipal.getFirst().getQuantityDelta() != null
-                && destinationPrincipal.getFirst().getQuantityDelta() != null;
-    }
-
-    private List<NormalizedTransaction.Flow> principalFlows(NormalizedTransaction transaction, int direction) {
-        if (transaction == null || transaction.getFlows() == null) {
-            return List.of();
-        }
-        return transaction.getFlows().stream()
-                .filter(Objects::nonNull)
-                .filter(flow -> flow.getRole() != NormalizedLegRole.FEE)
-                .filter(flow -> flow.getQuantityDelta() != null && Integer.signum(flow.getQuantityDelta().signum()) == direction)
-                .toList();
     }
 
     private boolean isInboundOnly(NormalizedTransaction transaction) {

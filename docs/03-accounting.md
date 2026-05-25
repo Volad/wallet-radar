@@ -1,8 +1,13 @@
 # WalletRadar — Accounting Policy
 
 > **Version:** v3 target
-> **Last updated:** 2026-04-09
+> **Last updated:** 2026-05-07
 > **Accounting method:** AVCO
+
+**FA-001 (increment 1):** Same-session wallet↔wallet and on-chain↔Bybit paired legs replay as **continuity**
+(no phantom realised PnL on those legs). Registry-backed **Hyperlane / LI.FI** endpoints may promote
+misclassified inbound bridge receipts to `BRIDGE_IN`. Reversible **`transfer_links`** (full audit contract) —
+[ADR-003](adr/ADR-003-transfer-links-fa001.md).
 
 ---
 

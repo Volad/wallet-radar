@@ -183,6 +183,62 @@
           <div class="panes">
             <section class="left-pane">
               @if (section() === 'tokens') {
+                <section class="breakdown-panel" aria-label="Allocation">
+                  <header class="breakdown-head">
+                    <div>
+                      <h3>Allocation</h3>
+                      <p class="muted">Market value breakdown by network and wallet (including CEX).</p>
+                    </div>
+                    <div class="breakdown-total mono">
+                      {{ formatUsd(filteredTokenTotalUsd()) }}
+                    </div>
+                  </header>
+
+                  <div class="breakdown-grid">
+                    <div class="breakdown-card">
+                      <div class="breakdown-card-title">Networks</div>
+                      <div class="breakdown-list" role="list">
+                        @for (row of tokenUsdByNetwork().slice(0, 8); track row.id) {
+                          <div class="breakdown-row" role="listitem">
+                            <div class="breakdown-row-meta">
+                              <span class="breakdown-icon" aria-hidden="true">{{ row.icon ?? '•' }}</span>
+                              <span class="breakdown-label">{{ row.label }}</span>
+                            </div>
+                            <div class="breakdown-row-right mono">
+                              <span class="breakdown-value">{{ formatUsd(row.valueUsd) }}</span>
+                              <span class="breakdown-pct muted">{{ row.sharePct.toFixed(1) }}%</span>
+                            </div>
+                          </div>
+                        }
+                        @if (tokenUsdByNetwork().length === 0) {
+                          <div class="breakdown-empty muted">No priced positions in current scope.</div>
+                        }
+                      </div>
+                    </div>
+
+                    <div class="breakdown-card">
+                      <div class="breakdown-card-title">Wallets</div>
+                      <div class="breakdown-list" role="list">
+                        @for (row of tokenUsdByWallet().slice(0, 8); track row.id) {
+                          <div class="breakdown-row" role="listitem">
+                            <div class="breakdown-row-meta">
+                              <span class="breakdown-wallet-dot" aria-hidden="true"></span>
+                              <span class="breakdown-label">{{ row.label }}</span>
+                            </div>
+                            <div class="breakdown-row-right mono">
+                              <span class="breakdown-value">{{ formatUsd(row.valueUsd) }}</span>
+                              <span class="breakdown-pct muted">{{ row.sharePct.toFixed(1) }}%</span>
+                            </div>
+                          </div>
+                        }
+                        @if (tokenUsdByWallet().length === 0) {
+                          <div class="breakdown-empty muted">No priced positions in current scope.</div>
+                        }
+                      </div>
+                    </div>
+                  </div>
+                </section>
+
                 <div class="table-head tokens-grid">
                   <span></span>
                   <span>Asset</span>

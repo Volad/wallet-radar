@@ -85,7 +85,7 @@ public class BybitNormalizationJob {
                     "Bybit normalization running"
             );
             while (true) {
-                int batchProcessed = bybitNormalizationService.processNextBatch(properties.getBatchSize());
+                int batchProcessed = bybitNormalizationService.processNextBatch(properties.getBatchSize(), sessionId);
                 processed += batchProcessed;
                 lastHeartbeatAt = maybeHeartbeat(sessionId, UserSession.PipelineStage.BYBIT_NORMALIZATION, "Bybit normalization running", lastHeartbeatAt);
                 if (batchProcessed == 0) {

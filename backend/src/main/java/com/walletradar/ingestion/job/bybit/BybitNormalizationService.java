@@ -10,10 +10,16 @@ import com.walletradar.domain.transaction.externalledger.ExternalLedgerRawStatus
 import com.walletradar.domain.transaction.integration.IntegrationRawEventRepository;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.ingestion.pipeline.bybit.BybitCanonicalTransactionBuilder;
+import com.walletradar.ingestion.pipeline.bybit.BybitInternalTransferExternalCpReclassifier;
+import com.walletradar.ingestion.pipeline.bybit.BybitInternalTransferPairer;
+import com.walletradar.ingestion.pipeline.bybit.BybitStakingConversionPairer;
+import com.walletradar.ingestion.pipeline.bybit.BybitStreamAuthorityCollapser;
 import com.walletradar.ingestion.pipeline.bybit.BybitTradePairer;
 import com.walletradar.ingestion.pipeline.bybit.BybitTransferShadowPairer;
 import com.walletradar.ingestion.pipeline.bybit.PendingExternalLedgerRowQueryService;
 import com.walletradar.ingestion.store.IdempotentNormalizedTransactionStore;
+import com.walletradar.session.application.AccountingUniverseService;
+import com.walletradar.integration.bybit.BybitExtractionService;
 import com.walletradar.integration.bybit.BybitExtractedEventMapper;
 import com.walletradar.integration.bybit.BybitExtractedTradePairer;
 import com.walletradar.integration.bybit.BybitExtractedTransferShadowPairer;
@@ -38,6 +44,7 @@ public class BybitNormalizationService {
 
     private static final String TRANSFER_SHADOW_EXCLUSION_REASON = "BYBIT_TRANSFER_SHADOW_ROW";
     private static final List<String> CONVERT_TYPES = List.of("convert", "currency_buy", "currency_sell");
+    private static final String BYBIT_PREFIX = "BYBIT:";
 
     private final PendingBybitExtractedRowQueryService pendingBybitExtractedRowQueryService;
     private final BybitExtractedEventRepository bybitExtractedEventRepository;
@@ -49,10 +56,57 @@ public class BybitNormalizationService {
     private final BybitTradePairer bybitTradePairer;
     private final BybitTransferShadowPairer bybitTransferShadowPairer;
     private final BybitExtractedEventMapper bybitExtractedEventMapper;
+    private final BybitExtractionService bybitExtractionService;
     private final BybitCanonicalTransactionBuilder builder;
     private final IdempotentNormalizedTransactionStore normalizedTransactionStore;
+    private final AccountingUniverseService accountingUniverseService;
+    private final BybitInternalTransferPairer bybitInternalTransferPairer;
+    private final BybitInternalTransferExternalCpReclassifier bybitInternalTransferExternalCpReclassifier;
+    private final BybitStreamAuthorityCollapser bybitStreamAuthorityCollapser;
+    private final BybitStakingConversionPairer bybitStakingConversionPairer;
 
     public int processNextBatch(int batchSize) {
+        return processNextBatch(batchSize, null);
+    }
+
+    public int processNextBatch(int batchSize, String sessionId) {
+        bindUniverseIfPresent(sessionId);
+        try {
+            int processed = processNextBatchInternal(batchSize);
+            if (processed > 0) {
+                int rewrites = bybitInternalTransferPairer.repairAll();
+                if (rewrites > 0) {
+                    log.info("BYBIT_INTERNAL_TRANSFER_PAIRER batchProcessed={} rewrites={}", processed, rewrites);
+                }
+                int collapsed = bybitStreamAuthorityCollapser.collapseMirrors();
+                if (collapsed > 0) {
+                    log.info("BYBIT_STREAM_AUTHORITY_COLLAPSER batchProcessed={} dirty={}", processed, collapsed);
+                }
+                int stakingPaired = bybitStakingConversionPairer.pairConversions();
+                if (stakingPaired > 0) {
+                    log.info("BYBIT_STAKING_CONVERSION_PAIRER batchProcessed={} pairs={}", processed, stakingPaired);
+                }
+                if (sessionId != null && !sessionId.isBlank()) {
+                    int reclassified = bybitInternalTransferExternalCpReclassifier.reclassify(sessionId.trim());
+                    if (reclassified > 0) {
+                        log.info("BYBIT_INTERNAL_TRANSFER_EXT_CP_RECLASSIFIER batchProcessed={} reclassified={}",
+                                processed, reclassified);
+                    }
+                }
+                int sameUidReclassified = bybitInternalTransferExternalCpReclassifier
+                        .reclassifySameUidExternalToInternal(Instant.now());
+                if (sameUidReclassified > 0) {
+                    log.info("BYBIT_SAME_UID_EXT_TO_INTERNAL batchProcessed={} reclassified={}",
+                            processed, sameUidReclassified);
+                }
+            }
+            return processed;
+        } finally {
+            accountingUniverseService.clearUniverseBinding();
+        }
+    }
+
+    private int processNextBatchInternal(int batchSize) {
         List<BybitExtractedEvent> extractedBatch = safe(pendingBybitExtractedRowQueryService.loadNextBatch(batchSize));
         int processed = 0;
         for (BybitExtractedEvent candidate : extractedBatch) {
@@ -90,6 +144,9 @@ public class BybitNormalizationService {
     }
 
     boolean normalize(ExternalLedgerRaw row, Instant now) {
+        if (isFundingHistoryExecutionSpotDuplicate(row)) {
+            return normalizeFundingHistorySpotDuplicate(row, now);
+        }
         if (isTradeRow(row)) {
             return normalizeTradeRow(row, now);
         }
@@ -117,8 +174,17 @@ public class BybitNormalizationService {
     }
 
     boolean normalize(BybitExtractedEvent row, Instant now) {
+        boolean basisRefreshed = bybitExtractionService.refreshBasisRelevantFromRaw(row);
         hydrateMissingTransferFields(row);
+        boolean fundingHistoryHydrated = bybitExtractionService.hydrateFundingHistoryFromOnChainSibling(row);
+        boolean walletRefUpdated = dimensionWalletRefIfMissing(row);
+        if (walletRefUpdated || basisRefreshed || fundingHistoryHydrated) {
+            bybitExtractedEventRepository.save(row);
+        }
         ExternalLedgerRaw mappedRow = bybitExtractedEventMapper.toLegacyRaw(row);
+        if (isFundingHistoryExecutionSpotDuplicate(mappedRow)) {
+            return normalizeFundingHistorySpotDuplicate(row, mappedRow, now);
+        }
         if (isTradeRow(mappedRow)) {
             return normalizeTradeRow(row, mappedRow, now);
         }
@@ -142,6 +208,49 @@ public class BybitNormalizationService {
         normalizedTransactionStore.upsert(normalized);
         markConfirmed(row);
         return true;
+    }
+
+    private boolean dimensionWalletRefIfMissing(BybitExtractedEvent row) {
+        if (row == null) {
+            return false;
+        }
+        String walletRef = row.getWalletRef();
+        if (walletRef == null || walletRef.isBlank()) {
+            return false;
+        }
+        String normalized = walletRef.trim();
+        if (!normalized.toUpperCase().startsWith(BYBIT_PREFIX)) {
+            return false;
+        }
+        // Already dimensioned: BYBIT:<uid>:UTA|FUND|EARN
+        if (normalized.split(":").length >= 3) {
+            return false;
+        }
+        String stream = normalize(row.getSourceStream());
+        String bybitType = normalize(row.getBybitType());
+        String suffix = inferSubAccountSuffix(stream, bybitType);
+        row.setWalletRef(normalized + ":" + suffix);
+        return true;
+    }
+
+    private String inferSubAccountSuffix(String sourceStream, String bybitType) {
+        // Cycle/2 E2: split inventory by sub-account to avoid collapsing Earn.
+        if ("EARN_FLEXIBLE_SAVING".equalsIgnoreCase(sourceStream)) {
+            return "EARN";
+        }
+        if ("FUNDING_HISTORY".equalsIgnoreCase(sourceStream) && "earn".equals(bybitType)) {
+            return "EARN";
+        }
+        if ("TRANSACTION_LOG".equalsIgnoreCase(sourceStream)) {
+            return "UTA";
+        }
+        if (sourceStream != null && sourceStream.toUpperCase().startsWith("EXECUTION_")) {
+            return "UTA";
+        }
+        if ("INTERNAL_TRANSFER".equalsIgnoreCase(sourceStream) || "UNIVERSAL_TRANSFER".equalsIgnoreCase(sourceStream)) {
+            return "FUND";
+        }
+        return "FUND";
     }
 
     private void hydrateMissingTransferFields(BybitExtractedEvent row) {
@@ -169,10 +278,75 @@ public class BybitNormalizationService {
     }
 
     private boolean isTradeRow(ExternalLedgerRaw row) {
+        // TRANSACTION_LOG TRADE duplicates EXECUTION_SPOT; never pair as execution legs (cycle/3 G13).
+        if ("transaction_log".equals(normalize(row.getSourceFile()))) {
+            return false;
+        }
+        if ("funding_history".equals(normalize(row.getSourceFile()))
+                && row.getTradeOrderId() != null
+                && !row.getTradeOrderId().isBlank()
+                && fundingHistoryDuplicatesExecutionSpot(row)) {
+            return false;
+        }
         return "uta_derivatives".equals(normalize(row.getSourceFileType()))
                 && "SWAP".equalsIgnoreCase(normalize(row.getCanonicalType()))
                 && !isConvertType(row.getBybitType())
                 && isDirectionalTrade(row);
+    }
+
+    private boolean isFundingHistoryExecutionSpotDuplicate(ExternalLedgerRaw row) {
+        return "funding_history".equals(normalize(row.getSourceFile()))
+                && fundingHistoryDuplicatesExecutionSpot(row);
+    }
+
+    private boolean normalizeFundingHistorySpotDuplicate(ExternalLedgerRaw row, Instant now) {
+        row.setBasisRelevant(false);
+        externalLedgerRawRepository.save(row);
+        NormalizedTransaction excluded = builder.buildExcludedReviewRow(
+                row,
+                now,
+                "BYBIT_FUNDING_HISTORY_EXECUTION_SPOT_DUPLICATE"
+        );
+        normalizedTransactionStore.upsert(excluded);
+        markConfirmed(row);
+        return true;
+    }
+
+    private boolean normalizeFundingHistorySpotDuplicate(
+            BybitExtractedEvent row,
+            ExternalLedgerRaw mappedRow,
+            Instant now
+    ) {
+        row.setBasisRelevant(false);
+        bybitExtractedEventRepository.save(row);
+        mappedRow.setBasisRelevant(false);
+        NormalizedTransaction excluded = builder.buildExcludedReviewRow(
+                mappedRow,
+                now,
+                "BYBIT_FUNDING_HISTORY_EXECUTION_SPOT_DUPLICATE"
+        );
+        normalizedTransactionStore.upsert(excluded);
+        markConfirmed(row);
+        return true;
+    }
+
+    private boolean fundingHistoryDuplicatesExecutionSpot(ExternalLedgerRaw row) {
+        if (row == null || row.getTradeOrderId() == null || row.getTradeOrderId().isBlank()) {
+            return false;
+        }
+        BybitExtractedEvent probe = new BybitExtractedEvent();
+        probe.setIntegrationId(integrationIdFromRow(row));
+        probe.setSourceStream("FUNDING_HISTORY");
+        probe.setTradeOrderId(row.getTradeOrderId());
+        return bybitExtractionService.fundingHistoryDuplicatesExecutionSpot(probe);
+    }
+
+    private String integrationIdFromRow(ExternalLedgerRaw row) {
+        if (row == null || row.getId() == null) {
+            return null;
+        }
+        int colon = row.getId().indexOf(':');
+        return colon > 0 ? row.getId().substring(0, colon) : null;
     }
 
     private boolean isConvertRow(ExternalLedgerRaw row) {
@@ -181,8 +355,18 @@ public class BybitNormalizationService {
     }
 
     private boolean isLiquidStakingRow(ExternalLedgerRaw row) {
+        String canon = normalize(row.getCanonicalType());
+        if ("internal_transfer".equals(canon) && "eth 2.0".equals(normalize(row.getBybitType()))) {
+            String desc = normalize(row.getBybitDescription());
+            return desc.contains("mint") || desc.contains("stake");
+        }
+        if ("internal_transfer".equals(canon)
+                && "earn".equals(normalize(row.getBybitType()))
+                && "on-chain earn subscription".equals(normalize(row.getBybitDescription()))) {
+            return true;
+        }
         return "fund_asset_changes".equals(normalize(row.getSourceFileType()))
-                && "staking_deposit".equals(normalize(row.getCanonicalType()))
+                && "staking_deposit".equals(canon)
                 && ("eth 2.0".equals(normalize(row.getBybitType()))
                 || ("earn".equals(normalize(row.getBybitType()))
                 && "on-chain earn subscription".equals(normalize(row.getBybitDescription()))));
@@ -193,26 +377,41 @@ public class BybitNormalizationService {
         if (!"borrow".equals(type) && !"repay".equals(type)) {
             return false;
         }
-        return "fund_asset_changes".equals(normalize(row.getSourceFileType()))
-                || "loans".equals(normalize(row.getBybitType()))
-                || "bybit".equals(normalize(row.getSourceFileType()))
-                || "bybit".equals(normalize(row.getChain()))
-                || (row.getWalletRef() != null && row.getWalletRef().startsWith("BYBIT:"));
-    }
-
-    private boolean isTransferShadowRow(ExternalLedgerRaw row) {
-        if (!"fund_asset_changes".equals(normalize(row.getSourceFileType()))
-                || !"bybit".equals(normalize(row.getChain()))
-                || row.getTxHash() != null
-                || row.getNetworkId() != null) {
+        // API-sourced funding / transaction log loan semantics are classified in extraction (task 156).
+        String sourceFile = normalize(row.getSourceFile());
+        if ("funding_history".equals(sourceFile) || "transaction_log".equals(sourceFile)) {
             return false;
         }
-        String canonicalType = normalize(row.getCanonicalType());
-        if ("external_transfer_out".equals(canonicalType) && "withdraw".equals(normalize(row.getBybitType()))) {
-            return true;
-        }
-        return ("external_transfer_in".equals(canonicalType) || "external_inbound".equals(canonicalType))
-                && "deposit".equals(normalize(row.getBybitType()));
+        // Legacy CSV / ambiguous fund_asset_changes loan rows stay excluded until reviewed.
+        return "fund_asset_changes".equals(normalize(row.getSourceFileType()))
+                || "bybit".equals(normalize(row.getSourceFileType()))
+                || "bybit".equals(normalize(row.getChain()));
+    }
+
+    /**
+     * Cycle/5 N17: {@code FUNDING_HISTORY/Deposit} and {@code FUNDING_HISTORY/Withdraw} are the
+     * canonical FUND-accounting anchors for external on-chain inflows/outflows. The chain-aware
+     * {@code DEPOSIT_ONCHAIN} and {@code WITHDRAWAL} streams are emitted with
+     * {@code basisRelevant=false} at extraction (see {@code extractChainDeposit} / {@code extractWithdrawal})
+     * so the builder marks them excluded via the {@code BYBIT_BASIS_IRRELEVANT} rule and no double
+     * counting occurs.
+     *
+     * <p>The previous behaviour treated FH/Deposit + FH/Withdraw as <i>shadows</i> of the chain-aware
+     * rows and excluded them whenever a chain-aware sibling was found — leaving <b>no</b> row to
+     * acquire basis for the on-chain crypto deposit/withdrawal. That silently leaked basis (all
+     * 13 USDT crypto deposits = 13,307 USDT vanished; downstream disposals accumulated
+     * {@code quantityShortfallAfter} = 14,106 on FUND / 6,453 on UTA instead of crystallising
+     * realized PnL).</p>
+     *
+     * <p>This method now returns {@code false} unconditionally, retiring the shadow-pairing path.
+     * The companion exclusion of the chain-aware row continues to come from the
+     * {@code basisRelevant=false} flag set in extraction, applied uniformly by
+     * {@code BybitCanonicalTransactionBuilder#buildMappedRow} (N1/N5). EXTERNAL_TRANSFER_IN /
+     * EXTERNAL_TRANSFER_OUT flow roles are BUY/SELL (N16 part 2), so the FH anchor ACQUIREs at
+     * market price and DISPOSEs against AVCO.</p>
+     */
+    private boolean isTransferShadowRow(ExternalLedgerRaw row) {
+        return false;
     }
 
     private boolean normalizeTradeRow(ExternalLedgerRaw row, Instant now) {
@@ -228,6 +427,30 @@ public class BybitNormalizationService {
 
         NormalizedTransaction orphan = builder.buildOrphanTrade(row, now);
         normalizedTransactionStore.upsert(orphan);
+        markConfirmed(row);
+        return true;
+    }
+
+    private boolean normalizeOrphanConvertRow(ExternalLedgerRaw row, Instant now, String reason) {
+        log.warn("Bybit convert orphan (legacy path): id={}, reason={}", row.getId(), reason);
+        row.setBasisRelevant(false);
+        NormalizedTransaction excluded = builder.buildExcludedReviewRow(row, now, reason);
+        normalizedTransactionStore.upsert(excluded);
+        markConfirmed(row);
+        return true;
+    }
+
+    private boolean normalizeOrphanConvertExtractedRow(
+            BybitExtractedEvent row,
+            ExternalLedgerRaw mappedRow,
+            Instant now,
+            String reason
+    ) {
+        log.warn("Bybit convert orphan: id={}, tradeOrderId={}, reason={}", row.getId(), row.getTradeOrderId(), reason);
+        row.setBasisRelevant(false);
+        mappedRow.setBasisRelevant(false);
+        NormalizedTransaction excluded = builder.buildExcludedReviewRow(mappedRow, now, reason);
+        normalizedTransactionStore.upsert(excluded);
         markConfirmed(row);
         return true;
     }
@@ -260,11 +483,8 @@ public class BybitNormalizationService {
         }
         boolean hasBuy = cluster.stream().anyMatch(candidate -> candidate.getQuantityRaw() != null && candidate.getQuantityRaw().signum() > 0);
         boolean hasSell = cluster.stream().anyMatch(candidate -> candidate.getQuantityRaw() != null && candidate.getQuantityRaw().signum() < 0);
-        if (!hasBuy || !hasSell) {
-            NormalizedTransaction review = builder.buildNeedsReviewRow(row, now, "BYBIT_CONVERT_CLUSTER_INCOMPLETE");
-            normalizedTransactionStore.upsert(review);
-            markConfirmed(row);
-            return true;
+        if (cluster.size() != 2 || !hasBuy || !hasSell) {
+            return normalizeOrphanConvertRow(row, now, "BYBIT_CONVERT_CLUSTER_INCOMPLETE");
         }
 
         NormalizedTransaction normalized = builder.buildConvertCluster(cluster, now);
@@ -280,11 +500,8 @@ public class BybitNormalizationService {
         }
         boolean hasBuy = cluster.stream().anyMatch(candidate -> candidate.getQuantityRaw() != null && candidate.getQuantityRaw().signum() > 0);
         boolean hasSell = cluster.stream().anyMatch(candidate -> candidate.getQuantityRaw() != null && candidate.getQuantityRaw().signum() < 0);
-        if (!hasBuy || !hasSell) {
-            NormalizedTransaction review = builder.buildNeedsReviewRow(mappedRow, now, "BYBIT_CONVERT_CLUSTER_INCOMPLETE");
-            normalizedTransactionStore.upsert(review);
-            markConfirmed(row);
-            return true;
+        if (cluster.size() != 2 || !hasBuy || !hasSell) {
+            return normalizeOrphanConvertExtractedRow(row, mappedRow, now, "BYBIT_CONVERT_CLUSTER_INCOMPLETE");
         }
 
         NormalizedTransaction normalized = builder.buildConvertCluster(
@@ -300,6 +517,20 @@ public class BybitNormalizationService {
         Optional<ExternalLedgerRaw> paired = bybitTradePairer.findLiquidStakingCounterLeg(row);
         if (paired.isPresent()) {
             ExternalLedgerRaw pair = paired.orElseThrow();
+            if (!sameBybitSubAccount(row, pair)) {
+                // Cycle/9 S4: cross-sub-account liquid-staking pairs (e.g., FUND METH ↔ EARN
+                // CMETH) cannot collapse into a single STAKING_DEPOSIT because NormalizedTransaction
+                // carries a single walletAddress. Emit each leg as INTERNAL_TRANSFER and stamp a
+                // SHARED family-aware correlationId so FamilyEquivalentCustodyReplayHandler pairs
+                // them and basis carries across sub-accounts.
+                String pairCorrelationId = builder.crossSubAccountStakingCorrelationId(row, pair);
+                String counterpartyRef = blankToNull(pair.getWalletRef());
+                NormalizedTransaction normalized = builder.buildMappedRow(row, now);
+                applyCrossSubAccountStakingLinkage(normalized, pairCorrelationId, counterpartyRef);
+                normalizedTransactionStore.upsert(normalized);
+                markConfirmed(row);
+                return true;
+            }
             NormalizedTransaction normalized = builder.buildStakingPair(row, pair, now);
             normalizedTransactionStore.upsert(normalized);
             markConfirmed(row);
@@ -317,6 +548,19 @@ public class BybitNormalizationService {
         Optional<BybitExtractedEvent> paired = bybitExtractedTradePairer.findLiquidStakingCounterLeg(row);
         if (paired.isPresent()) {
             BybitExtractedEvent pair = paired.orElseThrow();
+            if (!sameBybitSubAccount(row, pair)) {
+                // Cycle/9 S4: see legacy-path comment above. Shared family-aware correlationId is
+                // computed against the legacy-raw projections so both legs converge regardless of
+                // which row arrives at normalization first.
+                ExternalLedgerRaw pairLegacy = bybitExtractedEventMapper.toLegacyRaw(pair);
+                String pairCorrelationId = builder.crossSubAccountStakingCorrelationId(mappedRow, pairLegacy);
+                String counterpartyRef = blankToNull(pairLegacy.getWalletRef());
+                NormalizedTransaction normalized = builder.buildMappedRow(mappedRow, now);
+                applyCrossSubAccountStakingLinkage(normalized, pairCorrelationId, counterpartyRef);
+                normalizedTransactionStore.upsert(normalized);
+                markConfirmed(row);
+                return true;
+            }
             NormalizedTransaction normalized = builder.buildStakingPair(
                     mappedRow,
                     bybitExtractedEventMapper.toLegacyRaw(pair),
@@ -332,6 +576,76 @@ public class BybitNormalizationService {
         normalizedTransactionStore.upsert(review);
         markConfirmed(row);
         return true;
+    }
+
+    private void applyCrossSubAccountStakingLinkage(
+            NormalizedTransaction normalized,
+            String pairCorrelationId,
+            String counterpartyRef
+    ) {
+        if (normalized == null || pairCorrelationId == null || pairCorrelationId.isBlank()) {
+            return;
+        }
+        normalized.setCorrelationId(pairCorrelationId);
+        normalized.setContinuityCandidate(true);
+        if (counterpartyRef != null && !counterpartyRef.isBlank()) {
+            normalized.setMatchedCounterparty(counterpartyRef);
+        }
+    }
+
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value;
+    }
+
+    /**
+     * Cycle/5 N13: two Bybit liquid-staking legs are eligible for STAKING_DEPOSIT pairing only when
+     * they target the same sub-account (FUND / UTA / EARN). Cross-sub-account pairs leak the debit leg
+     * because {@code NormalizedTransaction} carries a single {@code walletAddress}.
+     */
+    private boolean sameBybitSubAccount(BybitExtractedEvent left, BybitExtractedEvent right) {
+        String leftSub = resolveSubAccountSuffix(left);
+        String rightSub = resolveSubAccountSuffix(right);
+        return leftSub != null && leftSub.equalsIgnoreCase(rightSub);
+    }
+
+    private boolean sameBybitSubAccount(ExternalLedgerRaw left, ExternalLedgerRaw right) {
+        String leftSub = resolveSubAccountSuffix(left);
+        String rightSub = resolveSubAccountSuffix(right);
+        return leftSub != null && leftSub.equalsIgnoreCase(rightSub);
+    }
+
+    private String resolveSubAccountSuffix(BybitExtractedEvent row) {
+        if (row == null) {
+            return null;
+        }
+        String suffix = subAccountSuffixFromWalletRef(row.getWalletRef());
+        if (suffix != null) {
+            return suffix;
+        }
+        return inferSubAccountSuffix(normalize(row.getSourceStream()), normalize(row.getBybitType()));
+    }
+
+    private String resolveSubAccountSuffix(ExternalLedgerRaw row) {
+        if (row == null) {
+            return null;
+        }
+        String suffix = subAccountSuffixFromWalletRef(row.getWalletRef());
+        if (suffix != null) {
+            return suffix;
+        }
+        // Legacy CSV-derived rows are FUND-anchored (no dimensioning pass was run on import).
+        return "FUND";
+    }
+
+    private String subAccountSuffixFromWalletRef(String walletRef) {
+        if (walletRef == null || walletRef.isBlank()) {
+            return null;
+        }
+        String[] parts = walletRef.trim().split(":");
+        if (parts.length < 3 || parts[2] == null || parts[2].isBlank()) {
+            return null;
+        }
+        return parts[2];
     }
 
     private boolean normalizeTransferShadowRow(ExternalLedgerRaw row, Instant now) {
@@ -379,6 +693,12 @@ public class BybitNormalizationService {
 
     private <T> List<T> safe(List<T> batch) {
         return batch == null ? List.of() : batch;
+    }
+
+    private void bindUniverseIfPresent(String sessionId) {
+        if (sessionId != null && !sessionId.isBlank()) {
+            accountingUniverseService.bindUniverse(sessionId.trim());
+        }
     }
 
     private String text(Document payload, String... keys) {

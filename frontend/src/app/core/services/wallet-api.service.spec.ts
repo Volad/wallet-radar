@@ -59,10 +59,10 @@ describe('WalletApiService', () => {
     expect(req.request.body).toEqual(payload);
     req.flush({
       sessionId: payload.sessionId,
-      message: 'Session saved, backfill started',
+      message: 'Session saved, universe sync scheduled',
     });
 
-    expect(responseMessage).toBe('Session saved, backfill started');
+    expect(responseMessage).toBe('Session saved, universe sync scheduled');
   });
 
   it('gets session backfill status from /sessions/{id}/backfill-status', () => {
@@ -303,8 +303,10 @@ describe('WalletApiService', () => {
           completedSegments: 7,
           failedSegments: 0,
           progressPct: 100,
+          streamSync: [],
         },
       ],
+      externalVenues: [],
       hideSmallAssets: true,
       showReconciliationWarnings: true,
     };
@@ -341,6 +343,7 @@ describe('WalletApiService', () => {
           apiSecret: '',
         },
       ],
+      externalVenues: [],
       hideSmallAssets: true,
       showReconciliationWarnings: false,
     };
@@ -348,6 +351,7 @@ describe('WalletApiService', () => {
       sessionId,
       wallets: payload.wallets,
       integrations: [],
+      externalVenues: [],
       hideSmallAssets: true,
       showReconciliationWarnings: false,
     };
@@ -379,7 +383,7 @@ describe('WalletApiService', () => {
       displayName: 'Bybit main',
       accountRef: 'BYBIT:33625378',
       maskedKey: 'api-...key',
-      message: 'Bybit integration saved, backfill planned',
+      message: 'Bybit integration saved, universe sync scheduled',
     };
 
     service.upsertBybitIntegration(sessionId, payload).subscribe((result) => {

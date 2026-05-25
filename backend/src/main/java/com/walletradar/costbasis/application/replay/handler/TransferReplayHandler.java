@@ -76,6 +76,7 @@ public class TransferReplayHandler {
                         ),
                         bucket
                 );
+                flowSupport.purgeOrphanBasisWhenEmpty(position);
                 return flowSupport.continuityBasisEffect(transaction, flow);
             }
             restoreFromContinuityBucket(flow, position, bucket);
@@ -93,6 +94,7 @@ public class TransferReplayHandler {
                     ),
                     replayState.continuity().bucket(keyFactory.continuityKey(transaction, flow))
             );
+            flowSupport.purgeOrphanBasisWhenEmpty(position);
             return flowSupport.continuityBasisEffect(transaction, flow);
         }
         if (classifier.isBucketInbound(transaction, flow)) {
@@ -102,6 +104,9 @@ public class TransferReplayHandler {
                     replayState.continuity().bucket(keyFactory.continuityKey(transaction, flow))
             );
             return flowSupport.continuityBasisEffect(transaction, flow);
+        }
+        if (classifier.isBybitMultiLegBundleTransfer(transaction)) {
+            return applyBybitMultiLegBundleTransfer(transaction, flow, flowIndex, position, replayState);
         }
 
         TransferPendingKey transferKey = keyFactory.transferKey(transaction, flow);
@@ -166,10 +171,56 @@ public class TransferReplayHandler {
             return flowSupport.continuityBasisEffect(transaction, flow);
         }
 
-        flowSupport.materializePendingInbound(flow, position);
-        replayState.pendingTransfers().queue(transferKey)
-                .addLast(CarryTransfer.pendingInbound(flow.getQuantityDelta().abs(), position.assetKey()));
+        enqueuePendingInbound(flow, position, replayState, transferKey);
         return flowSupport.continuityBasisEffect(transaction, flow);
+    }
+
+    /**
+     * Cycle/18 R9: after inbound shortfall spot fallback promotes provisional basis on a queued
+     * pending inbound, record the exact USD added so late carry can replace it.
+     */
+    public void accumulateInboundSpotFallbackProvisional(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow,
+            BigDecimal spotFallbackBasisUsd,
+            ReplayExecutionState replayState
+    ) {
+        if (transaction == null
+                || flow == null
+                || flow.getQuantityDelta() == null
+                || flow.getQuantityDelta().signum() <= 0
+                || spotFallbackBasisUsd == null
+                || spotFallbackBasisUsd.signum() <= 0) {
+            return;
+        }
+        NormalizedTransaction.Flow transferFlow = flowSupport.asTransferFlow(flow);
+        BridgePendingKey bridgeKey = keyFactory.bridgeTransferKey(transaction, transferFlow);
+        if (bridgeKey != null) {
+            replayState.pendingTransfers().addProvisionalBasisToPendingInbounds(bridgeKey, spotFallbackBasisUsd);
+        }
+        BridgeSettlementPendingKey settlementKey = keyFactory.bridgeSettlementKey(transaction, transferFlow);
+        if (settlementKey != null) {
+            replayState.pendingTransfers().addProvisionalBasisToPendingInbounds(settlementKey, spotFallbackBasisUsd);
+        }
+        TransferPendingKey transferKey = keyFactory.transferKey(transaction, transferFlow);
+        if (transferKey != null) {
+            replayState.pendingTransfers().addProvisionalBasisToPendingInbounds(transferKey, spotFallbackBasisUsd);
+        }
+    }
+
+    private void enqueuePendingInbound(
+            NormalizedTransaction.Flow flow,
+            PositionState position,
+            ReplayExecutionState replayState,
+            com.walletradar.costbasis.application.replay.model.PendingTransferKey key
+    ) {
+        BigDecimal provisionalBasis = flowSupport.materializePendingInbound(flow, position);
+        replayState.pendingTransfers().queue(key)
+                .addLast(CarryTransfer.pendingInbound(
+                        flow.getQuantityDelta().abs(),
+                        position.assetKey(),
+                        provisionalBasis
+                ));
     }
 
     private AssetLedgerPoint.BasisEffect applyLinkedBridgeTransfer(
@@ -241,9 +292,7 @@ public class TransferReplayHandler {
             return flowSupport.continuityBasisEffect(transaction, flow);
         }
 
-        flowSupport.materializePendingInbound(flow, position);
-        replayState.pendingTransfers().queue(bridgeTransferKey)
-                .addLast(CarryTransfer.pendingInbound(flow.getQuantityDelta().abs(), position.assetKey()));
+        enqueuePendingInbound(flow, position, replayState, bridgeTransferKey);
         return flowSupport.continuityBasisEffect(transaction, flow);
     }
 
@@ -313,10 +362,119 @@ public class TransferReplayHandler {
             return flowSupport.routeSettlementBasisEffect(flow);
         }
 
-        flowSupport.materializePendingInbound(flow, position);
-        replayState.pendingTransfers().queue(settlementKey)
-                .addLast(CarryTransfer.pendingInbound(flow.getQuantityDelta().abs(), position.assetKey()));
+        enqueuePendingInbound(flow, position, replayState, settlementKey);
         return flowSupport.routeSettlementBasisEffect(flow);
+    }
+
+    /**
+     * Cycle/12: N-way Bybit bundle ({@code bybit-it-bundle-v1:*}) uses the shared {@code corr-family}
+     * pending queue. Inbound legs drain every parked outbound carry (qty-agnostic bridge match) so
+     * UTA+FUND outflows jointly restore basis on the EARN inbound even when timestamps are skewed.
+     */
+    private AssetLedgerPoint.BasisEffect applyBybitMultiLegBundleTransfer(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow,
+            int flowIndex,
+            PositionState position,
+            ReplayExecutionState replayState
+    ) {
+        TransferPendingKey transferKey = keyFactory.transferKey(transaction, flow);
+        if (transferKey == null) {
+            flowSupport.applyUnknownTransfer(flow, position);
+            return AssetLedgerPoint.BasisEffect.UNKNOWN;
+        }
+
+        if (flow.getQuantityDelta().signum() < 0) {
+            CarryTransfer carry = continuityCarryService.removeTransferCarry(
+                    transaction,
+                    flow,
+                    flowIndex,
+                    position,
+                    replayState.passThroughCorridorPlan(),
+                    replayState.reservedPassThroughCarries()
+            );
+            Deque<CarryTransfer> queue = replayState.pendingTransfers().queue(transferKey);
+            int pendingInboundIndex = matcher.findUniqueBridgeQueueIndex(queue, true);
+            if (pendingInboundIndex >= 0) {
+                CarryTransfer pendingInbound = matcher.removeQueueElement(queue, pendingInboundIndex);
+                attachLateCarryToPendingInbound(
+                        transaction,
+                        flow,
+                        flowIndex,
+                        replayState.positions(),
+                        pendingInbound,
+                        carry,
+                        replayState.ledgerPointCollector()
+                );
+                if (queue.isEmpty()) {
+                    replayState.pendingTransfers().remove(transferKey);
+                }
+                return flowSupport.continuityBasisEffect(transaction, flow);
+            }
+            queue.addLast(carry);
+            return flowSupport.continuityBasisEffect(transaction, flow);
+        }
+
+        Deque<CarryTransfer> queue = replayState.pendingTransfers().find(transferKey);
+        BigDecimal remaining = flow.getQuantityDelta().abs();
+        boolean restoredAny = false;
+        while (remaining.signum() > 0) {
+            int carryIndex = matcher.findUniqueBridgeQueueIndex(queue, false);
+            if (carryIndex < 0) {
+                break;
+            }
+            CarryTransfer carry = matcher.removeQueueElement(queue, carryIndex);
+            BigDecimal takeQty = remaining.min(carry.quantity());
+            CarryTransfer effectiveCarry = continuityCarryService.sliceCarryTransfer(
+                    carry,
+                    takeQty,
+                    position.assetKey()
+            );
+            flowSupport.restoreToPosition(
+                    takeQty,
+                    position,
+                    effectiveCarry.costBasisUsd(),
+                    effectiveCarry.uncoveredQuantity(),
+                    effectiveCarry.avco()
+            );
+            continuityCarryService.reservePassThroughCarryIfPlanned(
+                    transaction,
+                    flowIndex,
+                    effectiveCarry,
+                    replayState.passThroughCorridorPlan(),
+                    replayState.reservedPassThroughCarries()
+            );
+            remaining = remaining.subtract(takeQty, MC);
+            restoredAny = true;
+        }
+        if (queue != null && queue.isEmpty()) {
+            replayState.pendingTransfers().remove(transferKey);
+        }
+        if (remaining.signum() > 0) {
+            NormalizedTransaction.Flow remainderFlow = flow;
+            if (restoredAny) {
+                remainderFlow = flowWithQuantity(flow, remaining);
+            }
+            BigDecimal provisionalBasis = flowSupport.materializePendingInbound(remainderFlow, position);
+            replayState.pendingTransfers().queue(transferKey)
+                    .addLast(CarryTransfer.pendingInbound(remaining, position.assetKey(), provisionalBasis));
+        }
+        return flowSupport.continuityBasisEffect(transaction, flow);
+    }
+
+    private static NormalizedTransaction.Flow flowWithQuantity(
+            NormalizedTransaction.Flow source,
+            BigDecimal quantity
+    ) {
+        NormalizedTransaction.Flow copy = new NormalizedTransaction.Flow();
+        copy.setRole(source.getRole());
+        copy.setAssetSymbol(source.getAssetSymbol());
+        copy.setAssetContract(source.getAssetContract());
+        copy.setQuantityDelta(quantity);
+        copy.setCounterpartyAddress(source.getCounterpartyAddress());
+        copy.setCounterpartyType(source.getCounterpartyType());
+        copy.setAccountRef(source.getAccountRef());
+        return copy;
     }
 
     private void restoreFromContinuityBucket(
@@ -382,7 +540,11 @@ public class TransferReplayHandler {
         CarryTransfer effectiveCarry = continuityCarryService.bridgeInboundCarry(carry, pendingInbound.quantity(), pendingInbound.assetKey());
         BigDecimal coveredResolvedQuantity = effectiveCarry.coveredQuantity();
         destination.setUncoveredQuantity(nonNegative(destination.uncoveredQuantity().subtract(coveredResolvedQuantity, MC)));
-        destination.setTotalCostBasisUsd(destination.totalCostBasisUsd().add(effectiveCarry.costBasisUsd()));
+        flowSupport.applyAuthoritativeLateInboundCarryBasis(
+                destination,
+                pendingInbound.provisionalBasisUsd(),
+                effectiveCarry.costBasisUsd()
+        );
         flowSupport.recomputePerWalletAvco(destination);
         if (effectiveCarry.avco() != null && destination.uncoveredQuantity().signum() == 0) {
             flowSupport.resolveTemporaryUnresolved(destination);
@@ -416,7 +578,11 @@ public class TransferReplayHandler {
         );
         BigDecimal coveredResolvedQuantity = effectiveCarry.coveredQuantity();
         destination.setUncoveredQuantity(nonNegative(destination.uncoveredQuantity().subtract(coveredResolvedQuantity, MC)));
-        destination.setTotalCostBasisUsd(destination.totalCostBasisUsd().add(effectiveCarry.costBasisUsd()));
+        flowSupport.applyAuthoritativeLateInboundCarryBasis(
+                destination,
+                pendingInbound.provisionalBasisUsd(),
+                effectiveCarry.costBasisUsd()
+        );
         flowSupport.recomputePerWalletAvco(destination);
         if (effectiveCarry.avco() != null && destination.uncoveredQuantity().signum() == 0) {
             flowSupport.resolveTemporaryUnresolved(destination);

@@ -18,8 +18,10 @@ import com.walletradar.ingestion.pipeline.classification.OnChainClassifier;
 import com.walletradar.ingestion.pipeline.classification.reason.ClassificationReasonCode;
 import com.walletradar.ingestion.pipeline.clarification.CounterpartyEnrichmentService;
 import com.walletradar.ingestion.pipeline.clarification.ProtocolNameEnrichmentService;
+import com.walletradar.ingestion.pipeline.clarification.RegistryBridgeInboundTypeCorrectionService;
 import com.walletradar.ingestion.pipeline.onchain.OnChainNormalizedTransactionBuilder;
 import com.walletradar.ingestion.pipeline.onchain.PendingReclassificationQueryService;
+import com.walletradar.session.application.AccountingUniverseService;
 import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -55,6 +57,10 @@ class OnChainReclassificationServiceTest {
     private ProtocolNameEnrichmentService protocolNameEnrichmentService;
     @Mock
     private CounterpartyEnrichmentService counterpartyEnrichmentService;
+    @Mock
+    private RegistryBridgeInboundTypeCorrectionService registryBridgeInboundTypeCorrectionService;
+    @Mock
+    private AccountingUniverseService accountingUniverseService;
 
     private OnChainNormalizationProperties properties;
     private OnChainClarificationProperties clarificationProperties;
@@ -75,7 +81,9 @@ class OnChainReclassificationServiceTest {
                 onChainClassifier,
                 new OnChainNormalizedTransactionBuilder(),
                 protocolNameEnrichmentService,
-                counterpartyEnrichmentService
+                registryBridgeInboundTypeCorrectionService,
+                counterpartyEnrichmentService,
+                accountingUniverseService
         );
     }
 

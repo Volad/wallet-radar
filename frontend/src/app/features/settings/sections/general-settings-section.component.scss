@@ -1,0 +1,120 @@
+:host {
+  display: block;
+}
+
+.settings-section {
+  min-width: 0;
+}
+
+.section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.section-title {
+  font-size: 0.875rem;
+  font-weight: 700;
+  margin-bottom: 0.12rem;
+}
+
+.section-subline {
+  font-size: 0.69rem;
+  color: var(--wr-subtle);
+}
+
+.general-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.general-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.65rem 0.8rem;
+  border-radius: 0.45rem;
+  background: var(--wr-elevated);
+  border: 1px solid var(--wr-border);
+  cursor: pointer;
+}
+
+.general-label {
+  font-size: 0.76rem;
+}
+
+.toggle {
+  position: relative;
+  display: inline-flex;
+  width: 1.9rem;
+  height: 1.05rem;
+  flex-shrink: 0;
+
+  input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+    position: absolute;
+  }
+}
+
+.tsl {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: var(--wr-border);
+  transition: background 0.2s ease;
+  cursor: pointer;
+
+  &::before {
+    content: '';
+    position: absolute;
+    width: 0.7rem;
+    height: 0.7rem;
+    left: 0.18rem;
+    top: 0.18rem;
+    border-radius: 50%;
+    background: var(--wr-subtle);
+    transition: transform 0.2s ease, background 0.2s ease;
+  }
+}
+
+.toggle input:checked + .tsl {
+  background: var(--wr-cyan-mid);
+}
+
+.toggle input:checked + .tsl::before {
+  transform: translateX(0.82rem);
+  background: var(--wr-cyan);
+}
+
+.section-footer-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 0.8rem;
+}
+
+.primary-btn {
+  border: 0;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  min-height: 1.95rem;
+  padding: 0.35rem 0.8rem;
+  border-radius: 0.35rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  background: var(--wr-cyan);
+  color: #000;
+}
+
+.primary-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+

@@ -2,6 +2,7 @@ package com.walletradar.ingestion.pipeline.clarification;
 
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.domain.transaction.raw.RawTransaction;
 import org.bson.Document;
 import org.junit.jupiter.api.Test;
@@ -86,6 +87,39 @@ class CounterpartyEnrichmentServiceTest {
         assertThat(resolvable.getCounterpartyAddress()).isEqualTo("0x2222222222222222222222222222222222222222");
         assertThat(resolvable.getCounterpartyType()).isEqualTo(CounterpartyType.PROTOCOL);
         assertThat(resolvable.getCounterpartyResolutionState()).isEqualTo(MetadataResolutionState.RESOLVED_EXACT);
+    }
+
+    @Test
+    void enrichPromotesExternalTransferToInternalForUniverseMember() {
+        NormalizedTransaction transaction = new NormalizedTransaction();
+        transaction.setType(NormalizedTransactionType.EXTERNAL_TRANSFER_OUT);
+        transaction.setExcludedFromAccounting(true);
+        transaction.setAccountingExclusionReason("TEST");
+
+        RawTransaction rawTransaction = new RawTransaction();
+        rawTransaction.setRawData(new Document());
+        when(resolutionService.resolveMetadata(transaction, rawTransaction))
+                .thenReturn(new CounterpartyResolutionService.ResolvedCounterparty(
+                        "9Grpx4HKXTe51Ug9nAYuND9qf2bw326WvxFyEULt1DhG",
+                        CounterpartyType.PERSONAL_WALLET,
+                        MetadataResolutionState.RESOLVED_EXACT,
+                        "ACCOUNTING_UNIVERSE"
+                ));
+
+        CounterpartyEnrichmentService service = new CounterpartyEnrichmentService(
+                queryService,
+                resolutionService,
+                rawTransactionRepository,
+                normalizedTransactionRepository
+        );
+
+        boolean updated = service.enrichInPlace(transaction, rawTransaction, java.time.Instant.parse("2026-04-08T12:00:00Z"));
+
+        assertThat(updated).isTrue();
+        assertThat(transaction.getType()).isEqualTo(NormalizedTransactionType.INTERNAL_TRANSFER);
+        assertThat(transaction.getExcludedFromAccounting()).isFalse();
+        assertThat(transaction.getAccountingExclusionReason()).isNull();
+        assertThat(transaction.getCounterpartyType()).isEqualTo(CounterpartyType.PERSONAL_WALLET);
     }
 
     @Test

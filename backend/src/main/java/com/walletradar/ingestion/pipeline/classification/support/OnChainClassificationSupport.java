@@ -63,7 +63,7 @@ public final class OnChainClassificationSupport {
             }
             NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
             flow.setAssetContract(leg.assetContract());
-            flow.setAssetSymbol(leg.assetSymbol());
+            flow.setAssetSymbol(TokenSymbolFallbackSupport.resolve(leg.assetContract(), leg.assetSymbol()));
             flow.setQuantityDelta(leg.quantityDelta());
             flow.setRole(resolveRole(type, leg, liquidStakingFamilies));
             flows.add(flow);
@@ -435,7 +435,7 @@ public final class OnChainClassificationSupport {
         NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
         flow.setRole(role);
         flow.setAssetContract(assetContract);
-        flow.setAssetSymbol(assetSymbol);
+        flow.setAssetSymbol(TokenSymbolFallbackSupport.resolve(assetContract, assetSymbol));
         flow.setQuantityDelta(quantityDelta);
         return flow;
     }

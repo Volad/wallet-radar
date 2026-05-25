@@ -60,6 +60,7 @@ public class ReplayTransferClassifier {
     ) {
         if (transaction == null
                 || flow == null
+                || keyFactory.usesCompositeContinuityBucket(transaction)
                 || flow.getRole() != NormalizedLegRole.TRANSFER
                 || flow.getQuantityDelta() == null
                 || flow.getQuantityDelta().signum() == 0) {
@@ -87,11 +88,31 @@ public class ReplayTransferClassifier {
                 && flow.getQuantityDelta() != null
                 && flow.getQuantityDelta().signum() < 0
                 && switch (transaction.getType()) {
+            // Cycle/8 S5: LP_EXIT* is added so the burned LP receipt token carries its basis
+            // INTO the composite bucket, where the inbound underlying restorations can pick it
+            // up. Without this the LP token disposal would dispose against AVCO and lose
+            // covered quantity instead of returning basis to the exiting assets.
+            //
+            // Cycle/15 R5 F1: full deposit/withdraw symmetry. Wrapper composite buckets
+            // (`wrapper:<receipt>`) are populated only when both directions of a 2-leg
+            // receipt-style transaction route through this classifier. Previously
+            // {@code LENDING_WITHDRAW} / {@code STAKING_WITHDRAW} / {@code PROTOCOL_CUSTODY_WITHDRAW}
+            // were absent here, so gauge → LP unstake outbound (gauge negative leg) fell
+            // through to the generic pending-transfer path which fails for wrapper shape.
             case PROTOCOL_CUSTODY_DEPOSIT,
+                    PROTOCOL_CUSTODY_WITHDRAW,
                     LENDING_DEPOSIT,
+                    LENDING_WITHDRAW,
                     STAKING_DEPOSIT,
+                    STAKING_WITHDRAW,
                     VAULT_DEPOSIT,
-                    LP_ENTRY -> true;
+                    VAULT_WITHDRAW,
+                    LP_ENTRY,
+                    LP_EXIT,
+                    LP_EXIT_PARTIAL,
+                    LP_EXIT_FINAL,
+                    LP_POSITION_STAKE,
+                    LP_POSITION_UNSTAKE -> true;
             default -> false;
         };
     }
@@ -101,14 +122,40 @@ public class ReplayTransferClassifier {
                 && flow.getQuantityDelta() != null
                 && flow.getQuantityDelta().signum() > 0
                 && switch (transaction.getType()) {
+            // Cycle/8 S5: LP_ENTRY inbound (the minted LP receipt) restores from the composite
+            // bucket populated by the source legs above. Was missing, leaving LP tokens with
+            // $0 basis throughout their holding period.
+            //
+            // Cycle/15 R5 F1: full deposit/withdraw symmetry — without {@code LENDING_DEPOSIT}
+            // (and the staking / protocol-custody siblings) on this list, the receipt-side
+            // inbound leg of a wrapper-shape stake transaction (LP → gauge, vault share mint,
+            // etc.) cannot read from the {@code wrapper:<receipt>} bucket that the burned
+            // outbound leg deposited into. Diagnosed via the AVAX Curve `Aave GHO/USDT/USDC`
+            // → gauge stake on 2025-07-31 where the gauge inherited zero basis from a fully
+            // basis-backed LP token.
             case PROTOCOL_CUSTODY_WITHDRAW,
+                    PROTOCOL_CUSTODY_DEPOSIT,
                     LENDING_WITHDRAW,
+                    LENDING_DEPOSIT,
                     STAKING_WITHDRAW,
+                    STAKING_DEPOSIT,
                     VAULT_WITHDRAW,
+                    VAULT_DEPOSIT,
+                    LP_ENTRY,
                     LP_EXIT,
                     LP_EXIT_PARTIAL,
-                    LP_EXIT_FINAL -> true;
+                    LP_EXIT_FINAL,
+                    LP_POSITION_STAKE,
+                    LP_POSITION_UNSTAKE -> true;
             default -> false;
         };
+    }
+
+    public boolean isBybitMultiLegBundleTransfer(NormalizedTransaction transaction) {
+        if (transaction == null || transaction.getType() != NormalizedTransactionType.INTERNAL_TRANSFER) {
+            return false;
+        }
+        String correlationId = transaction.getCorrelationId();
+        return correlationId != null && correlationId.startsWith("bybit-it-bundle-v1:");
     }
 }

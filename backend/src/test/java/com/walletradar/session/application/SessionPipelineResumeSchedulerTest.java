@@ -198,6 +198,7 @@ class SessionPipelineResumeSchedulerTest {
         when(mongoOperations.exists(any(Query.class), eq(ExternalLedgerRaw.class))).thenReturn(false);
         when(mongoOperations.exists(any(Query.class), eq(NormalizedTransaction.class)))
                 .thenReturn(false, false, false);
+        lenient().when(mongoOperations.exists(any(Query.class), eq("on_chain_balances"))).thenReturn(true);
         when(linkingDataGateService.hasPendingLinking("session-1")).thenReturn(true);
 
         scheduler().resumeReadySessions();
@@ -249,6 +250,7 @@ class SessionPipelineResumeSchedulerTest {
         when(mongoOperations.exists(any(Query.class), eq(ExternalLedgerRaw.class))).thenReturn(false, false);
         when(mongoOperations.exists(any(Query.class), eq(NormalizedTransaction.class)))
                 .thenReturn(false, false, true, false);
+        when(mongoOperations.exists(any(Query.class), eq("on_chain_balances"))).thenReturn(true);
         when(linkingDataGateService.hasPendingLinking("session-1")).thenReturn(false);
 
         scheduler().resumeReadySessions();
@@ -273,6 +275,7 @@ class SessionPipelineResumeSchedulerTest {
         when(mongoOperations.exists(any(Query.class), eq(ExternalLedgerRaw.class))).thenReturn(false, false);
         when(mongoOperations.exists(any(Query.class), eq(NormalizedTransaction.class)))
                 .thenReturn(false, false, false, true);
+        when(mongoOperations.exists(any(Query.class), eq("on_chain_balances"))).thenReturn(true);
 
         scheduler().resumeReadySessions();
 
@@ -348,6 +351,7 @@ class SessionPipelineResumeSchedulerTest {
         when(mongoOperations.exists(any(Query.class), eq(BybitExtractedEvent.class))).thenReturn(false, false);
         when(mongoOperations.exists(any(Query.class), eq(ExternalLedgerRaw.class))).thenReturn(false, false);
         when(mongoOperations.exists(any(Query.class), eq("asset_ledger_points"))).thenReturn(true);
+        when(mongoOperations.exists(any(Query.class), eq("on_chain_balances"))).thenReturn(true);
         scheduler().resumeReadySessions();
 
         verify(applicationEventPublisher, never()).publishEvent(any());
@@ -379,6 +383,7 @@ class SessionPipelineResumeSchedulerTest {
         when(mongoOperations.exists(any(Query.class), eq(BybitExtractedEvent.class))).thenReturn(false, false);
         when(mongoOperations.exists(any(Query.class), eq(ExternalLedgerRaw.class))).thenReturn(false, false);
         when(mongoOperations.exists(any(Query.class), eq("asset_ledger_points"))).thenReturn(true);
+        when(mongoOperations.exists(any(Query.class), eq("on_chain_balances"))).thenReturn(true);
 
         scheduler().resumeReadySessions();
 
@@ -404,6 +409,7 @@ class SessionPipelineResumeSchedulerTest {
                 .thenReturn(false, false, false, true);
         when(mongoOperations.exists(argThat(query -> containsAccountingUniverseId(query, "session-1")), eq("asset_ledger_points")))
                 .thenReturn(false);
+        when(mongoOperations.exists(any(Query.class), eq("on_chain_balances"))).thenReturn(true);
 
         scheduler().resumeReadySessions();
 
@@ -435,6 +441,7 @@ class SessionPipelineResumeSchedulerTest {
         when(mongoOperations.exists(any(Query.class), eq(ExternalLedgerRaw.class))).thenReturn(false, false);
         when(mongoOperations.exists(argThat(query -> containsAccountingUniverseId(query, "session-1")), eq("asset_ledger_points")))
                 .thenReturn(false);
+        when(mongoOperations.exists(any(Query.class), eq("on_chain_balances"))).thenReturn(true);
 
         scheduler().resumeReadySessions();
 

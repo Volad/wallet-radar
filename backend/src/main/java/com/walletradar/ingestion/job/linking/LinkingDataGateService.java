@@ -107,10 +107,35 @@ public class LinkingDataGateService implements LinkingPendingStatusQuery {
                 ACTIVE_ACCOUNTING_CRITERIA,
                 new Criteria().orOperator(
                         onChainLinkingCandidateCriteria(),
-                        bybitLinkingCandidateCriteria()
+                        bybitLinkingCandidateCriteria(),
+                        legacySealedBridgeRepairCriteria(),
+                        onChainInternalTransferRepairCriteria()
                 )
         ));
         return mongoOperations.exists(query, NormalizedTransaction.class);
+    }
+
+    /** Cycle/14: sealed bridge pairs that need continuity re-evaluation. */
+    private Criteria legacySealedBridgeRepairCriteria() {
+        return new Criteria().andOperator(
+                Criteria.where("type").is("BRIDGE_OUT"),
+                Criteria.where("continuityCandidate").is(false),
+                Criteria.where("correlationId").regex("^bridge:")
+        );
+    }
+
+    /** Cycle/14: same-tx reciprocal INTERNAL_TRANSFER rows missing continuity metadata. */
+    private Criteria onChainInternalTransferRepairCriteria() {
+        return new Criteria().andOperator(
+                Criteria.where("source").is("ON_CHAIN"),
+                Criteria.where("type").is("INTERNAL_TRANSFER"),
+                Criteria.where("continuityCandidate").is(false),
+                new Criteria().orOperator(
+                        Criteria.where("correlationId").exists(false),
+                        Criteria.where("correlationId").is(null),
+                        Criteria.where("correlationId").is("")
+                )
+        );
     }
 
     private Criteria onChainLinkingCandidateCriteria() {

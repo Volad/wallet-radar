@@ -11,6 +11,8 @@ import com.walletradar.domain.session.UserSession;
 import com.walletradar.domain.session.UserSessionRepository;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
+import com.walletradar.integration.bybit.BybitLiveBalanceService;
+import com.walletradar.ingestion.wallet.query.BybitUmbrellaSupport;
 import com.walletradar.session.application.AccountingUniverseService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Sort;
@@ -46,6 +48,7 @@ public class AssetLedgerQueryService {
     private final NormalizedTransactionRepository normalizedTransactionRepository;
     private final AccountingUniverseService accountingUniverseService;
     private final MongoOperations mongoOperations;
+    private final BybitLiveBalanceService bybitLiveBalanceService;
 
     public Optional<SessionAssetLedgerView> findSessionFamilyLedger(String sessionId, String familyIdentity) {
         if (sessionId == null || sessionId.isBlank() || familyIdentity == null || familyIdentity.isBlank()) {
@@ -192,10 +195,98 @@ public class AssetLedgerQueryService {
                         latestPoint == null ? null : latestPoint.getProtocolName(),
                         latestPoint != null && Boolean.TRUE.equals(latestPoint.getHasIncompleteHistoryAfter()),
                         latestPoint != null && Boolean.TRUE.equals(latestPoint.getHasUnresolvedFlagsAfter()),
-                        latestPoint == null ? 0 : latestPoint.getUnresolvedFlagCountAfter()
+                        unresolvedFlagCountAfter(latestPoint)
                 ));
             }
         }
+
+        LinkedHashSet<String> enabledBybitVenueRefs = new LinkedHashSet<>(BybitUmbrellaSupport.enabledBybitAccountRefs(session));
+        if (!enabledBybitVenueRefs.isEmpty()) {
+            Map<String, BybitFamilyUmbrellaAccumulator> umbrellas = new LinkedHashMap<>();
+            for (Map.Entry<BucketKey, AssetLedgerPoint> ledgerEntry : latestPointByBucket.entrySet()) {
+                BucketKey bucketKey = ledgerEntry.getKey();
+                AssetLedgerPoint latestPoint = ledgerEntry.getValue();
+                if (!BybitUmbrellaSupport.bybitLedgerMatchesEnabledVenue(bucketKey.walletAddress(), enabledBybitVenueRefs)) {
+                    continue;
+                }
+                String pointFamilyIdentity = resolvedFamilyIdentity(
+                        latestPoint,
+                        bucketKey.networkId(),
+                        latestPoint.getAssetSymbol(),
+                        latestPoint.getAssetContract()
+                );
+                if (!Objects.equals(pointFamilyIdentity, familyIdentity)) {
+                    continue;
+                }
+                BigDecimal currentQuantity = BybitUmbrellaSupport.bybitRawQuantityAfter(latestPoint);
+                if (currentQuantity.signum() <= 0) {
+                    continue;
+                }
+                String aggregatedWallet = BybitUmbrellaSupport.ledgerWalletKeyForAggregation(
+                        bucketKey.walletAddress(),
+                        enabledBybitVenueRefs
+                );
+                umbrellas.computeIfAbsent(aggregatedWallet, ignored -> new BybitFamilyUmbrellaAccumulator())
+                        .addVenue(latestPoint.getWalletAddress(), currentQuantity, latestPoint);
+            }
+
+            Map<String, Map<String, BigDecimal>> liveByAccountRef = loadLiveBybitBalances(session);
+            for (Map.Entry<String, BybitFamilyUmbrellaAccumulator> umbrellaEntry : umbrellas.entrySet()) {
+                String umbrellaWallet = umbrellaEntry.getKey();
+                BybitFamilyUmbrellaAccumulator umbrella = umbrellaEntry.getValue();
+                Map<String, BigDecimal> live = liveByAccountRef.get(umbrellaWallet);
+                BigDecimal liveQty = live == null
+                        ? BigDecimal.ZERO
+                        : BybitUmbrellaSupport.liveQuantityForCandidates(
+                        live,
+                        umbrella.priceLookupCandidates(),
+                        umbrella.fallbackSymbol()
+                );
+                BybitUmbrellaSupport.ScaledUmbrellaTotals scaled = BybitUmbrellaSupport.scaleUmbrellaToLive(
+                        umbrella.quantity(),
+                        umbrella.coveredQuantity(),
+                        umbrella.totalCostBasisUsd(),
+                        liveQty
+                );
+                if (scaled.dropped() || scaled.quantity().signum() <= 0) {
+                    continue;
+                }
+                BigDecimal scale = umbrella.quantity().signum() <= 0
+                        ? BigDecimal.ONE
+                        : scaled.quantity().divide(umbrella.quantity(), MC);
+                quantity = quantity.add(scaled.quantity(), MC);
+                coveredQuantity = coveredQuantity.add(scaled.coveredQuantity(), MC);
+                totalCostBasisUsd = totalCostBasisUsd.add(scaled.totalCostBasisUsd(), MC);
+                for (VenuePositionSlice venue : umbrella.venueSlices()) {
+                    BigDecimal venueQty = venue.quantity().multiply(scale, MC);
+                    BigDecimal venueCovered = venue.coveredQuantity().multiply(scale, MC);
+                    BigDecimal venueUncovered = venueQty.subtract(venueCovered, MC).max(BigDecimal.ZERO);
+                    if (venueUncovered.signum() <= 0) {
+                        continue;
+                    }
+                    uncoveredBuckets.add(new UncoveredBucketView(
+                            venue.walletAddress(),
+                            null,
+                            venue.assetSymbol(),
+                            venue.assetContract(),
+                            venueQty,
+                            venueCovered,
+                            venueUncovered,
+                            uncoveredReason(venue.latestPoint(), venueQty, venueCovered),
+                            venue.latestPoint() == null ? null : venue.latestPoint().getTxHash(),
+                            venue.latestPoint() == null ? null : venue.latestPoint().getNormalizedType(),
+                            venue.latestPoint() == null || venue.latestPoint().getBasisEffect() == null
+                                    ? null
+                                    : venue.latestPoint().getBasisEffect().name(),
+                            venue.latestPoint() == null ? null : venue.latestPoint().getProtocolName(),
+                            venue.latestPoint() != null && Boolean.TRUE.equals(venue.latestPoint().getHasIncompleteHistoryAfter()),
+                            venue.latestPoint() != null && Boolean.TRUE.equals(venue.latestPoint().getHasUnresolvedFlagsAfter()),
+                            unresolvedFlagCountAfter(venue.latestPoint())
+                    ));
+                }
+            }
+        }
+
         BigDecimal uncoveredQuantity = quantity.subtract(coveredQuantity, MC).max(BigDecimal.ZERO);
         BigDecimal avcoUsd = coveredQuantity.signum() <= 0
                 ? null
@@ -326,6 +417,28 @@ public class AssetLedgerQueryService {
                         Sort.Order.asc("capturedAt")
                 ));
         return mongoOperations.find(query, OnChainBalance.class);
+    }
+
+    private Map<String, Map<String, BigDecimal>> loadLiveBybitBalances(UserSession session) {
+        Map<String, Map<String, BigDecimal>> liveByAccountRef = new LinkedHashMap<>();
+        if (session.getIntegrations() == null) {
+            return liveByAccountRef;
+        }
+        for (UserSession.SessionIntegration integration : session.getIntegrations()) {
+            if (integration == null
+                    || integration.getStatus() == UserSession.IntegrationStatus.DISABLED
+                    || integration.getAccountRef() == null
+                    || integration.getIntegrationId() == null
+                    || !integration.getAccountRef().toUpperCase(Locale.ROOT).startsWith("BYBIT:")) {
+                continue;
+            }
+            Map<String, BigDecimal> live = bybitLiveBalanceService.getUmbrellaBalances(integration.getIntegrationId());
+            if (live == null || live.isEmpty()) {
+                continue;
+            }
+            liveByAccountRef.put(BybitUmbrellaSupport.normalizeAddress(integration.getAccountRef()), live);
+        }
+        return liveByAccountRef;
     }
 
     private Map<BucketKey, OnChainBalance> latestBalanceByBucket(List<OnChainBalance> balances) {
@@ -713,6 +826,77 @@ public class AssetLedgerQueryService {
         }
     }
 
+    private static final class BybitFamilyUmbrellaAccumulator {
+        private BigDecimal quantity = BigDecimal.ZERO;
+        private BigDecimal coveredQuantity = BigDecimal.ZERO;
+        private BigDecimal totalCostBasisUsd = BigDecimal.ZERO;
+        private final LinkedHashSet<String> priceLookupCandidates = new LinkedHashSet<>();
+        private String fallbackSymbol;
+        private final List<VenuePositionSlice> venueSlices = new ArrayList<>();
+
+        private void addVenue(String walletAddress, BigDecimal currentQuantity, AssetLedgerPoint latestPoint) {
+            BigDecimal exactCoveredQuantity = latestPoint == null
+                    ? BigDecimal.ZERO
+                    : zeroIfNull(latestPoint.getBasisBackedQuantityAfter()).min(currentQuantity);
+            quantity = quantity.add(currentQuantity, MC);
+            coveredQuantity = coveredQuantity.add(exactCoveredQuantity, MC);
+            if (latestPoint != null && latestPoint.getAvcoAfterUsd() != null && exactCoveredQuantity.signum() > 0) {
+                totalCostBasisUsd = totalCostBasisUsd.add(
+                        latestPoint.getAvcoAfterUsd().multiply(exactCoveredQuantity, MC),
+                        MC
+                );
+            }
+            if (latestPoint != null && latestPoint.getAssetSymbol() != null) {
+                priceLookupCandidates.addAll(BybitUmbrellaSupport.priceLookupCandidates(latestPoint.getAssetSymbol()));
+                if (fallbackSymbol == null) {
+                    fallbackSymbol = latestPoint.getAssetSymbol();
+                }
+            }
+            venueSlices.add(new VenuePositionSlice(
+                    walletAddress,
+                    latestPoint == null ? null : latestPoint.getAssetSymbol(),
+                    latestPoint == null ? null : latestPoint.getAssetContract(),
+                    currentQuantity,
+                    exactCoveredQuantity,
+                    latestPoint
+            ));
+        }
+
+        private BigDecimal quantity() {
+            return quantity;
+        }
+
+        private BigDecimal coveredQuantity() {
+            return coveredQuantity;
+        }
+
+        private BigDecimal totalCostBasisUsd() {
+            return totalCostBasisUsd;
+        }
+
+        private List<String> priceLookupCandidates() {
+            return List.copyOf(priceLookupCandidates);
+        }
+
+        private String fallbackSymbol() {
+            return fallbackSymbol;
+        }
+
+        private List<VenuePositionSlice> venueSlices() {
+            return venueSlices;
+        }
+    }
+
+    private record VenuePositionSlice(
+            String walletAddress,
+            String assetSymbol,
+            String assetContract,
+            BigDecimal quantity,
+            BigDecimal coveredQuantity,
+            AssetLedgerPoint latestPoint
+    ) {
+    }
+
     private static final class AggregatedState {
         private BigDecimal quantity = BigDecimal.ZERO;
         private BigDecimal uncoveredQuantity = BigDecimal.ZERO;
@@ -1090,6 +1274,13 @@ public class AssetLedgerQueryService {
 
     private static String normalizeSymbol(String symbol) {
         return symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
+    }
+
+    private static int unresolvedFlagCountAfter(AssetLedgerPoint latestPoint) {
+        if (latestPoint == null || latestPoint.getUnresolvedFlagCountAfter() == null) {
+            return 0;
+        }
+        return latestPoint.getUnresolvedFlagCountAfter();
     }
 
     private static String uncoveredReason(

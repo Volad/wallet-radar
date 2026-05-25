@@ -7,6 +7,7 @@ import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegist
 import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryRole;
 import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryService;
 import com.walletradar.ingestion.pipeline.classification.support.OnChainClassificationSupport;
+import com.walletradar.ingestion.pipeline.classification.support.SameWalletSwapShapeSupport;
 import org.bson.Document;
 import org.springframework.core.Ordered;
 import org.springframework.stereotype.Component;
@@ -46,6 +47,9 @@ public class BridgeMethodAwareClassifier implements OnChainFamilyClassifier {
     public Optional<ClassificationDecision> classify(OnChainClassificationContext context) {
         Optional<ProtocolRegistryEntry> transferBackedBridgeEntry = findKnownBridgeEntryFromOutboundTransfer(context);
         if (transferBackedBridgeEntry.isPresent() && isAcrossDepositV3(transferBackedBridgeEntry.get(), context)) {
+            if (SameWalletSwapShapeSupport.hasSameWalletInboundTransfer(context.movementLegs())) {
+                return Optional.empty();
+            }
             ProtocolRegistryEntry entry = transferBackedBridgeEntry.get();
             return Optional.of(build(context, entry));
         }
@@ -56,6 +60,9 @@ public class BridgeMethodAwareClassifier implements OnChainFamilyClassifier {
         }
         ProtocolRegistryEntry bridgeEntry = entry.get();
         if (isAcrossDepositV3(bridgeEntry, context) || isMethodAwareBridgeOut(bridgeEntry, context)) {
+            if (SameWalletSwapShapeSupport.hasSameWalletInboundTransfer(context.movementLegs())) {
+                return Optional.empty();
+            }
             return Optional.of(build(context, bridgeEntry));
         }
         return Optional.empty();

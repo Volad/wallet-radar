@@ -10,6 +10,9 @@ spring:
 
 # Per-network ingestion config for raw backfill adapters.
 walletradar:
+  admin:
+    # Set WR_ADMIN_INTEGRATION_REBUILD_TOKEN in prod; POST /api/v1/admin/integrations/{id}/full-rebuild requires X-WalletRadar-Admin-Token.
+    integration-rebuild-token: ${WR_ADMIN_INTEGRATION_REBUILD_TOKEN:}
   lending:
     market-rates:
       startup-refresh-enabled: true
@@ -68,6 +71,13 @@ walletradar:
       base-delay-ms: 1000
       jitter-factor: 0.2
       request-timeout-ms: 15000
+    bybit:
+      internal-transfer:
+        bundle-window-seconds: 60
+        bundle-residual-pct: 0.01
+        bundle-min-members: 3
+        roundtrip-window-days: 14
+        roundtrip-tolerance-pct: 0.001
     network:
       # If backfill fails with "RPC failed after 5 attempts", public RPCs may be rate-limiting. Try: reduce batch-block-size (e.g. 500), or add a paid RPC URL (Alchemy/Infura) first in urls.
       # avg-block-time-seconds: fallback for EstimatingBlockTimestampResolver when calibration
@@ -281,8 +291,13 @@ walletradar:
         avg-block-time-seconds: 1.0
       SOLANA:
         syncMethod: RPC
+        fullIndex: false
         urls:
           - https://api.mainnet-beta.solana.com
+      TON:
+        syncMethod: RPC
+        fullIndex: false
+        urls: []
     solana:
       # Max signatures per getSignaturesForAddress call (1-1000). Rate/batch limit.
       signatures-limit: 1000
@@ -340,6 +355,8 @@ walletradar:
 
   pricing:
     enabled: true
+    bridge-out:
+      upstream-lookback-hours: 24
     batch-size: 1000
     parallel-lanes: 4
     quote-resolve-parallel-lanes: 16
@@ -489,6 +506,7 @@ walletradar:
         - http://127.0.0.1:4200
         - http://localhost:4206
         - http://127.0.0.1:4206
+        - http://192.168.1.165:4300
       allowed-methods:
         - GET
         - POST

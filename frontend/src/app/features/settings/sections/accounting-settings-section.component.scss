@@ -1,0 +1,124 @@
+:host {
+  display: block;
+}
+
+.settings-section {
+  min-width: 0;
+}
+
+.accounting-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.accounting-section-icon {
+  flex-shrink: 0;
+  color: var(--wr-subtle);
+  display: block;
+}
+
+.accounting-section-title {
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--wr-text);
+}
+
+.accounting-section-sub {
+  margin: 0 0 12px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--wr-subtle);
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 0.14rem 0.45rem;
+  min-height: 1.05rem;
+  font-size: 0.58rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  border: 1px solid var(--wr-border);
+  background: var(--wr-elevated);
+  color: var(--wr-subtle);
+  font-family: var(--wr-font-mono);
+  text-transform: uppercase;
+}
+
+.tag.cyan {
+  background: var(--wr-cyan-soft);
+  border-color: var(--wr-cyan-mid);
+  color: var(--wr-cyan);
+}
+
+.accounting-card {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.9rem 0.9rem;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--wr-cyan) 28%, var(--wr-border));
+  background: color-mix(in srgb, var(--wr-cyan) 8%, var(--wr-elevated));
+}
+
+.accounting-radio {
+  width: 1rem;
+  height: 1rem;
+  margin-top: 0.2rem;
+  border-radius: 999px;
+  border: 2px solid var(--wr-border-strong);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.accounting-radio.on {
+  border-color: color-mix(in srgb, var(--wr-cyan) 70%, transparent);
+  background: color-mix(in srgb, var(--wr-cyan) 10%, transparent);
+}
+
+.radio-dot {
+  width: 0.42rem;
+  height: 0.42rem;
+  border-radius: 999px;
+  background: var(--wr-cyan);
+}
+
+.accounting-copy {
+  min-width: 0;
+}
+
+.accounting-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  margin-bottom: 0.3rem;
+}
+
+.accounting-title {
+  font-size: 0.82rem;
+  font-weight: 900;
+  color: var(--wr-text);
+}
+
+.accounting-desc {
+  font-size: 0.72rem;
+  color: var(--wr-subtle);
+  line-height: 1.55;
+}
+
+.accounting-note {
+  margin-top: 0.45rem;
+  padding: 0.5rem 0.6rem;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--wr-cyan) 8%, var(--wr-surface));
+  border: 1px solid color-mix(in srgb, var(--wr-cyan) 18%, transparent);
+  color: color-mix(in srgb, var(--wr-cyan) 85%, var(--wr-text));
+  font-size: 0.66rem;
+  line-height: 1.55;
+}
+
