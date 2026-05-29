@@ -1,5 +1,7 @@
 package com.walletradar.costbasis.application.replay.handler;
 
+import com.walletradar.accounting.support.AccountingAssetFamilySupport;
+import com.walletradar.accounting.support.LpReceiptSymbolSupport;
 import com.walletradar.costbasis.application.LpReceiptBasisPoolService;
 import com.walletradar.costbasis.application.replay.model.AsyncLifecycleBucket;
 import com.walletradar.costbasis.application.replay.state.LpReceiptBasisPoolReplayContext;
@@ -85,6 +87,16 @@ public class PositionScopedLpExitReplayHandler {
     }
 
     public void apply(NormalizedTransaction transaction, ReplayExecutionState replayState) {
+        SettlementOutcome outcome = applySettlement(transaction, replayState);
+        if (shouldDrainMaterializedReceiptMarker(transaction, replayState, outcome)) {
+            drainMaterializedReceiptMarker(transaction, replayState);
+        }
+    }
+
+    private record SettlementOutcome(boolean touchedLpReceiptPrincipal) {
+    }
+
+    private SettlementOutcome applySettlement(NormalizedTransaction transaction, ReplayExecutionState replayState) {
         var bucket = replayState.asyncLifecycleBucket(transaction.getCorrelationId());
         List<IndexedFlow> residualPrincipalInflows = new ArrayList<>();
         List<IndexedFlow> deferredCrossAssetInflows = new ArrayList<>();
@@ -203,7 +215,7 @@ public class PositionScopedLpExitReplayHandler {
             if (bucket.isEmpty()) {
                 replayState.removeAsyncLifecycleBucket(transaction.getCorrelationId());
             }
-            return;
+            return new SettlementOutcome(touchedLpReceiptPrincipal);
         }
 
         if (shouldIsolateNonPrincipalInflows(
@@ -216,7 +228,7 @@ public class PositionScopedLpExitReplayHandler {
             if (bucket.isEmpty()) {
                 replayState.removeAsyncLifecycleBucket(transaction.getCorrelationId());
             }
-            return;
+            return new SettlementOutcome(touchedLpReceiptPrincipal);
         }
 
         List<IndexedFlow> allocatableInflows = residualPrincipalInflows.isEmpty()
@@ -231,7 +243,7 @@ public class PositionScopedLpExitReplayHandler {
                 && residualPrincipalInflows.isEmpty()
                 && deferredCrossAssetInflows.size() == 1) {
             recordUnknownLpExitInflows(transaction, replayState, deferredCrossAssetInflows);
-            return;
+            return new SettlementOutcome(touchedLpReceiptPrincipal);
         }
 
         BigDecimal remainingCostBasis = bucket.remainingCostBasisUsd();
@@ -240,7 +252,7 @@ public class PositionScopedLpExitReplayHandler {
             recordUnknownLpExitInflows(transaction, replayState, unknownOnlyInflows);
             bucket.clearAll();
             replayState.removeAsyncLifecycleBucket(transaction.getCorrelationId());
-            return;
+            return new SettlementOutcome(touchedLpReceiptPrincipal);
         }
 
         List<NormalizedTransaction.Flow> residualFlows = allocatableInflows.stream()
@@ -257,7 +269,7 @@ public class PositionScopedLpExitReplayHandler {
             recordUnknownLpExitInflows(transaction, replayState, unknownOnlyInflows);
             bucket.clearAll();
             replayState.removeAsyncLifecycleBucket(transaction.getCorrelationId());
-            return;
+            return new SettlementOutcome(touchedLpReceiptPrincipal);
         }
         if (assetSupport.allHaveKnownReplayPrices(transaction, allocatableInflows)) {
             settlementAllocator.allocateIndexedSettlementByReplayKnownValue(
@@ -270,20 +282,131 @@ public class PositionScopedLpExitReplayHandler {
             recordUnknownLpExitInflows(transaction, replayState, unknownOnlyInflows);
             bucket.clearAll();
             replayState.removeAsyncLifecycleBucket(transaction.getCorrelationId());
-            return;
+            return new SettlementOutcome(touchedLpReceiptPrincipal);
         }
         if (bucket.remainingUncoveredQuantity().signum() > 0) {
             recordUnknownLpExitInflows(transaction, replayState, allocatableInflows);
             recordUnknownLpExitInflows(transaction, replayState, unknownOnlyInflows);
             bucket.clearAll();
             replayState.removeAsyncLifecycleBucket(transaction.getCorrelationId());
-            return;
+            return new SettlementOutcome(touchedLpReceiptPrincipal);
         }
 
         recordUnknownLpExitInflows(transaction, replayState, allocatableInflows);
         recordUnknownLpExitInflows(transaction, replayState, unknownOnlyInflows);
         bucket.clearAll();
         replayState.removeAsyncLifecycleBucket(transaction.getCorrelationId());
+        return new SettlementOutcome(touchedLpReceiptPrincipal);
+    }
+
+    private boolean shouldDrainMaterializedReceiptMarker(
+            NormalizedTransaction transaction,
+            ReplayExecutionState replayState,
+            SettlementOutcome outcome
+    ) {
+        if (transaction == null || transaction.getCorrelationId() == null) {
+            return false;
+        }
+        if (hasPrincipalCloseEvidence(transaction)) {
+            return true;
+        }
+        if (outcome != null
+                && outcome.touchedLpReceiptPrincipal()
+                && allLpReceiptPoolsEmpty(transaction.getCorrelationId(), replayState)) {
+            return true;
+        }
+        return replayState.lpReceiptLifecycleClosed(transaction.getCorrelationId());
+    }
+
+    private boolean allLpReceiptPoolsEmpty(String correlationId, ReplayExecutionState replayState) {
+        LpReceiptBasisPoolReplayContext poolContext = replayState.lpReceiptBasisPoolContext();
+        if (poolContext == null || correlationId == null) {
+            return false;
+        }
+        boolean sawPool = false;
+        for (var entry : poolContext.pools().entrySet()) {
+            if (!correlationId.equals(entry.getKey().lpCorrelationId())) {
+                continue;
+            }
+            sawPool = true;
+            LpReceiptBasisPool pool = entry.getValue();
+            if (pool != null && pool.getQtyHeld() != null && pool.getQtyHeld().signum() > 0) {
+                return false;
+            }
+        }
+        return sawPool;
+    }
+
+    private void drainMaterializedReceiptMarker(
+            NormalizedTransaction transaction,
+            ReplayExecutionState replayState
+    ) {
+        if (transaction == null || transaction.getCorrelationId() == null) {
+            return;
+        }
+        replayState.recordLpReceiptPrincipalExitEvent(transaction.getCorrelationId());
+        AssetKey receiptKey = assetSupport.lpReceiptPositionKey(transaction, transaction.getCorrelationId());
+        if (receiptKey == null) {
+            return;
+        }
+        PositionState receiptPosition = replayState.position(receiptKey);
+        if (receiptPosition.quantity().signum() <= 0) {
+            drainAllLpReceiptPoolsForCorrelation(transaction.getCorrelationId(), replayState);
+            return;
+        }
+        PositionSnapshot before = flowSupport.snapshot(receiptPosition);
+        receiptPosition.setQuantity(BigDecimal.ZERO);
+        receiptPosition.setTotalCostBasisUsd(BigDecimal.ZERO);
+        receiptPosition.setUncoveredQuantity(BigDecimal.ZERO);
+        receiptPosition.setPerWalletAvco(null);
+        IndexedFlow markerFlow = null;
+        for (IndexedFlow indexedFlow : flowSupport.indexedFlows(transaction)) {
+            NormalizedTransaction.Flow flow = indexedFlow.flow();
+            if (flow == null
+                    || flow.getRole() != NormalizedLegRole.TRANSFER
+                    || flow.getQuantityDelta() == null
+                    || flow.getQuantityDelta().signum() >= 0
+                    || !receiptKey.assetSymbol().equalsIgnoreCase(flow.getAssetSymbol())) {
+                continue;
+            }
+            markerFlow = indexedFlow;
+            break;
+        }
+        if (markerFlow != null) {
+            replayState.ledgerPointCollector().record(
+                    transaction,
+                    markerFlow.flow(),
+                    markerFlow.index(),
+                    receiptPosition.assetKey(),
+                    before,
+                    receiptPosition,
+                    AssetLedgerPoint.BasisEffect.REALLOCATE_OUT
+            );
+        }
+        drainAllLpReceiptPoolsForCorrelation(transaction.getCorrelationId(), replayState);
+    }
+
+    private void drainAllLpReceiptPoolsForCorrelation(
+            String correlationId,
+            ReplayExecutionState replayState
+    ) {
+        LpReceiptBasisPoolReplayContext poolContext = replayState.lpReceiptBasisPoolContext();
+        if (poolContext == null || correlationId == null) {
+            return;
+        }
+        for (var entry : poolContext.pools().entrySet()) {
+            if (!correlationId.equals(entry.getKey().lpCorrelationId())) {
+                continue;
+            }
+            LpReceiptBasisPool pool = entry.getValue();
+            if (pool == null) {
+                continue;
+            }
+            pool.setQtyHeld(BigDecimal.ZERO);
+            pool.setBasisHeldUsd(BigDecimal.ZERO);
+            pool.setUncoveredQtyHeld(BigDecimal.ZERO);
+            poolContext.dirtyKeys().add(entry.getKey());
+        }
     }
 
     private boolean shouldIsolateNonPrincipalInflows(
@@ -385,6 +508,9 @@ public class PositionScopedLpExitReplayHandler {
             ReplayExecutionState replayState,
             List<IndexedFlow> residualPrincipalInflows
     ) {
+        if (transaction != null && transaction.getType() == NormalizedTransactionType.LP_FEE_CLAIM) {
+            return false;
+        }
         LpReceiptBasisPoolReplayContext poolContext = replayState.lpReceiptBasisPoolContext();
         if (poolContext == null || transaction.getCorrelationId() == null) {
             return false;
@@ -490,5 +616,29 @@ public class PositionScopedLpExitReplayHandler {
         return type == NormalizedTransactionType.LP_EXIT
                 || type == NormalizedTransactionType.LP_EXIT_PARTIAL
                 || type == NormalizedTransactionType.LP_EXIT_FINAL;
+    }
+
+    /**
+     * Harvest-only / downgraded rows must not drain {@code lp_receipt_basis_pools}. Principal
+     * close requires outbound receipt evidence (negative LP-RECEIPT or composite receipt leg).
+     */
+    boolean hasPrincipalCloseEvidence(NormalizedTransaction transaction) {
+        if (transaction == null || transaction.getFlows() == null) {
+            return false;
+        }
+        String compositeReceiptIdentity = pendingTransferKeyFactory.lpCompositeReceiptIdentity(transaction);
+        for (NormalizedTransaction.Flow flow : transaction.getFlows()) {
+            if (flow == null || flow.getQuantityDelta() == null || flow.getQuantityDelta().signum() >= 0) {
+                continue;
+            }
+            if (AccountingAssetFamilySupport.isLpReceiptSymbol(flow.getAssetSymbol())) {
+                return true;
+            }
+            if (compositeReceiptIdentity != null
+                    && compositeReceiptIdentity.equals(assetSupport.continuityIdentity(transaction, flow))) {
+                return true;
+            }
+        }
+        return false;
     }
 }

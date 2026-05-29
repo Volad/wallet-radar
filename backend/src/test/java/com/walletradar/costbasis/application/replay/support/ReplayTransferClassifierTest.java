@@ -2,6 +2,7 @@ package com.walletradar.costbasis.application.replay.support;
 
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import org.junit.jupiter.api.Test;
 
@@ -88,6 +89,42 @@ class ReplayTransferClassifierTest {
     }
 
     @Test
+    void bybitEarnProductTransfersSkipCompositeBuckets() {
+        NormalizedTransaction withdraw = bybitEarnProduct(
+                NormalizedTransactionType.LENDING_WITHDRAW,
+                "BYBIT:33625378:FUND",
+                "ETH",
+                "0.15114744"
+        );
+        NormalizedTransaction deposit = bybitEarnProduct(
+                NormalizedTransactionType.LENDING_DEPOSIT,
+                "BYBIT:33625378:EARN",
+                "ETH",
+                "-0.15114744"
+        );
+
+        assertThat(classifier.isBucketInbound(withdraw, withdraw.getFlows().get(0))).isFalse();
+        assertThat(classifier.isBucketOutbound(withdraw, withdraw.getFlows().get(0))).isFalse();
+        assertThat(classifier.isBucketInbound(deposit, deposit.getFlows().get(0))).isFalse();
+        assertThat(classifier.isBucketOutbound(deposit, deposit.getFlows().get(0))).isFalse();
+        assertThat(classifier.shouldTreatAsContinuityTransfer(withdraw, withdraw.getFlows().get(0))).isTrue();
+    }
+
+    @Test
+    void earnPrincipalCorrelationBypassesFamilyEquivalentCustodyFastPath() {
+        NormalizedTransaction earnOut = bybitEarnProduct(
+                NormalizedTransactionType.LENDING_WITHDRAW,
+                "BYBIT:33625378:EARN",
+                "ETH",
+                "-0.151"
+        );
+        earnOut.setContinuityCandidate(true);
+        earnOut.setCorrelationId("bybit-earn-principal-v1:ae372912");
+
+        assertThat(classifier.isFamilyEquivalentCustodyTransfer(earnOut, earnOut.getFlows().get(0))).isFalse();
+    }
+
+    @Test
     void protocolCustodyDepositWrapperBucketsBothLegs() {
         NormalizedTransaction tx = wrapperTx(NormalizedTransactionType.PROTOCOL_CUSTODY_DEPOSIT,
                 "CRV", "0xd533a949740bb3306d119cc777fa900ba034cd52", "-25",
@@ -120,6 +157,24 @@ class ReplayTransferClassifierTest {
         inbound.setAssetContract(inContract);
         inbound.setQuantityDelta(new BigDecimal(inQty));
         tx.setFlows(List.of(outbound, inbound));
+        return tx;
+    }
+
+    private static NormalizedTransaction bybitEarnProduct(
+            NormalizedTransactionType type,
+            String wallet,
+            String asset,
+            String qty
+    ) {
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setSource(NormalizedTransactionSource.BYBIT);
+        tx.setType(type);
+        tx.setWalletAddress(wallet);
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(NormalizedLegRole.TRANSFER);
+        flow.setAssetSymbol(asset);
+        flow.setQuantityDelta(new BigDecimal(qty));
+        tx.setFlows(List.of(flow));
         return tx;
     }
 

@@ -193,6 +193,7 @@ public class BybitCanonicalTransactionBuilder {
             return buildNeedsReviewRow(row, now, "BYBIT_CANONICAL_TYPE_UNMAPPED");
         }
         NormalizedTransactionType type = mappedType.orElse(NormalizedTransactionType.UNKNOWN);
+        type = resolveEarnLifecycleCanonicalType(row).orElse(type);
         NormalizedTransaction transaction = baseTransaction(normalizedId(row), row, type, now);
         transaction.setFlows(new ArrayList<>(mappedFlows(row, type)));
 
@@ -236,6 +237,9 @@ public class BybitCanonicalTransactionBuilder {
 
         recordMissingTxHashForBybitCorridor(transaction, row);
         finalizeBybitFlows(transaction, row);
+        if (isBotTransfer(row)) {
+            reclassifyBotTransfer(transaction, row, now);
+        }
         applyStableUsdPegForExternalTransfers(transaction);
         initializeStatus(transaction, now);
         if (transaction.getType() == NormalizedTransactionType.EXTERNAL_TRANSFER_IN) {
@@ -497,6 +501,13 @@ public class BybitCanonicalTransactionBuilder {
                     null,
                     null
             ));
+            case LENDING_DEPOSIT, LENDING_WITHDRAW -> List.of(flow(
+                    NormalizedLegRole.TRANSFER,
+                    row.getAssetSymbol(),
+                    signedQuantity(row),
+                    null,
+                    null
+            ));
             case INTERNAL_TRANSFER -> List.of(flow(
                     NormalizedLegRole.TRANSFER,
                     row.getAssetSymbol(),
@@ -523,6 +534,40 @@ public class BybitCanonicalTransactionBuilder {
                 flow(NormalizedLegRole.TRANSFER, left.getAssetSymbol(), signedQuantity(left), null, null),
                 flow(NormalizedLegRole.TRANSFER, right.getAssetSymbol(), signedQuantity(right), null, null)
         );
+    }
+
+    /**
+     * Bybit Earn / Launchpool / Easy-Earn lifecycle rows are extracted as {@code INTERNAL_TRANSFER}
+     * but are economically protocol custody (subscribe / redeem), not sub-account transfer pairs.
+     */
+    private Optional<NormalizedTransactionType> resolveEarnLifecycleCanonicalType(ExternalLedgerRaw row) {
+        if (row == null || !"Earn".equalsIgnoreCase(normalize(row.getBybitType()))) {
+            return Optional.empty();
+        }
+        String description = normalize(row.getBybitDescription());
+        if (description == null) {
+            return Optional.empty();
+        }
+        String lower = description.toLowerCase(Locale.ROOT);
+        if (lower.contains("launchpool") && lower.contains("subscription")) {
+            return Optional.of(NormalizedTransactionType.LENDING_DEPOSIT);
+        }
+        if (lower.contains("launchpool")
+                && (lower.contains("auto-withdrawal")
+                || lower.contains("auto withdrawal")
+                || lower.contains("manual withdrawal")
+                || lower.contains("manual-withdrawal")
+                || lower.contains("withdrawal")
+                || lower.contains("withdraw"))) {
+            return Optional.of(NormalizedTransactionType.LENDING_WITHDRAW);
+        }
+        if (lower.contains("fixed") && (lower.contains("redemption") || lower.contains("principal redemption"))) {
+            return Optional.of(NormalizedTransactionType.LENDING_WITHDRAW);
+        }
+        if (lower.contains("flexible") && (lower.contains("redemption") || lower.contains("principal redemption"))) {
+            return Optional.of(NormalizedTransactionType.LENDING_WITHDRAW);
+        }
+        return Optional.empty();
     }
 
     private Optional<NormalizedTransactionType> mapCanonicalType(String canonicalType) {
@@ -886,6 +931,62 @@ public class BybitCanonicalTransactionBuilder {
             }
         }
         return CounterpartyType.UNKNOWN_EOA;
+    }
+
+    private static final String BOT_TRANSFER_MARKER = "BOT_TRANSFER";
+    private static final String BOT_TRANSFER_PENDING_COST = "BOT_TRANSFER_PENDING_COST";
+
+    private boolean isBotTransfer(ExternalLedgerRaw row) {
+        return row != null && "Bot".equalsIgnoreCase(row.getBybitType() == null ? null : row.getBybitType().trim());
+    }
+
+    /**
+     * Reclassifies Bot FUNDING_HISTORY events from INTERNAL_TRANSFER to EXTERNAL_TRANSFER_IN/OUT.
+     * Bot sub-accounts are untracked black boxes; transfers to/from them are economic entries/exits.
+     * <ul>
+     *   <li>Positive qty (return from bot): EXTERNAL_TRANSFER_IN, BUY role</li>
+     *   <li>Negative qty (deposit to bot): EXTERNAL_TRANSFER_OUT, SELL role</li>
+     *   <li>Stablecoins pegged at $1 and confirmed immediately</li>
+     *   <li>Non-stablecoins marked PENDING_PRICE with BOT_TRANSFER_PENDING_COST for the
+     *       {@code BybitBotTransferCostBasisService} to resolve</li>
+     * </ul>
+     */
+    private void reclassifyBotTransfer(NormalizedTransaction transaction, ExternalLedgerRaw row, Instant now) {
+        transaction.setCorrelationId(null);
+        transaction.setContinuityCandidate(false);
+        transaction.setMatchedCounterparty(null);
+
+        BigDecimal qty = row.getQuantityRaw();
+        int sign = qty == null ? 0 : qty.signum();
+
+        if (sign > 0) {
+            transaction.setType(NormalizedTransactionType.EXTERNAL_TRANSFER_IN);
+            for (NormalizedTransaction.Flow flow : transaction.getFlows()) {
+                if (flow != null && flow.getRole() == NormalizedLegRole.TRANSFER) {
+                    flow.setRole(NormalizedLegRole.BUY);
+                }
+            }
+        } else if (sign < 0) {
+            transaction.setType(NormalizedTransactionType.EXTERNAL_TRANSFER_OUT);
+            for (NormalizedTransaction.Flow flow : transaction.getFlows()) {
+                if (flow != null && flow.getRole() == NormalizedLegRole.TRANSFER) {
+                    flow.setRole(NormalizedLegRole.SELL);
+                }
+            }
+        }
+
+        if (!transaction.getMissingDataReasons().contains(BOT_TRANSFER_MARKER)) {
+            transaction.getMissingDataReasons().add(BOT_TRANSFER_MARKER);
+        }
+
+        boolean nonStablecoinReturn = sign > 0
+                && row.getAssetSymbol() != null
+                && !isStablecoin(row.getAssetSymbol());
+        if (nonStablecoinReturn) {
+            if (!transaction.getMissingDataReasons().contains(BOT_TRANSFER_PENDING_COST)) {
+                transaction.getMissingDataReasons().add(BOT_TRANSFER_PENDING_COST);
+            }
+        }
     }
 
     private boolean isFiatP2pRow(ExternalLedgerRaw row) {

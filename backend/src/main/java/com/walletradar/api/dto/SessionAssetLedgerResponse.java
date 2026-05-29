@@ -11,10 +11,23 @@ public record SessionAssetLedgerResponse(
         String sessionId,
         String familyIdentity,
         CurrentState current,
+        FullSessionCurrent fullSessionCurrent,
         List<TimelineEntry> timeline,
         List<EventOverlay> events,
         List<LedgerPoint> ledgerPoints
 ) {
+    /**
+     * Ledger-based full-session current state: sums all latest replay points for the family
+     * (on-chain + Bybit venues) without requiring live balance oracles. Satisfies A2.
+     */
+    public record FullSessionCurrent(
+            BigDecimal quantity,
+            BigDecimal coveredQuantity,
+            BigDecimal uncoveredQuantity,
+            BigDecimal totalCostBasisUsd,
+            BigDecimal avcoUsd
+    ) {
+    }
     public record CurrentState(
             BigDecimal quantity,
             BigDecimal coveredQuantity,
@@ -77,6 +90,7 @@ public record SessionAssetLedgerResponse(
             BigDecimal uncoveredQuantityAfter,
             BigDecimal totalCostBasisAfterUsd,
             BigDecimal avcoAfterUsd,
+            String avcoKind,
             String fromAddress,
             String toAddress,
             List<String> memberNormalizedTransactionIds

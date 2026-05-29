@@ -21,6 +21,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
+import java.math.MathContext;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -31,6 +32,8 @@ import java.util.Objects;
 @Component
 @Slf4j
 public class FamilyEquivalentCustodyReplayHandler {
+
+    private static final MathContext MC = MathContext.DECIMAL128;
 
     private final ReplayAssetSupport assetSupport;
     private final ReplayFlowSupport flowSupport;
@@ -61,7 +64,7 @@ public class FamilyEquivalentCustodyReplayHandler {
         Map<String, List<IndexedFlow>> flowsByFamily = new LinkedHashMap<>();
         for (IndexedFlow indexedFlow : flowSupport.indexedFlows(transaction)) {
             NormalizedTransaction.Flow flow = indexedFlow.flow();
-            if (!isPrincipalCandidate(flow)) {
+            if (!isPrincipalCandidate(transaction, flow)) {
                 continue;
             }
             String continuityIdentity = AccountingAssetFamilySupport.continuityIdentity(flow);
@@ -161,6 +164,11 @@ public class FamilyEquivalentCustodyReplayHandler {
             AssetKey outboundAssetKey = assetSupport.assetKey(transaction, outbound.flow());
             PositionState outboundPosition = replayState.position(outboundAssetKey);
             outboundPosition.setLastEventTimestamp(flowSupport.laterOf(outboundPosition.lastEventTimestamp(), transaction.getBlockTimestamp()));
+            // P0-D: Capture stored AVCO before drain so WRAP/UNWRAP can preserve it even when
+            // totalCostBasisUsd is zero (e.g., pending bridge inbound not yet settled).
+            BigDecimal preDrainStoredAvco = isWrapOrUnwrap(transaction)
+                    ? outboundPosition.perWalletAvco()
+                    : null;
             PositionSnapshot outboundBefore = flowSupport.snapshot(outboundPosition);
             CarryTransfer carry = continuityCarryService.removeTransferCarry(
                     transaction,
@@ -168,8 +176,33 @@ public class FamilyEquivalentCustodyReplayHandler {
                     outbound.index(),
                     outboundPosition,
                     replayState.passThroughCorridorPlan(),
-                    replayState.reservedPassThroughCarries()
+                    replayState.reservedPassThroughCarries(),
+                    true
             );
+            BigDecimal basisRemoved = nonNegative(
+                    outboundBefore.totalCostBasisUsd().subtract(
+                            outboundPosition.totalCostBasisUsd() == null
+                                    ? BigDecimal.ZERO
+                                    : outboundPosition.totalCostBasisUsd(),
+                            MC
+                    )
+            );
+            carry = continuityCarryService.alignCarryToRemovedBasis(
+                    carry,
+                    basisRemoved,
+                    outboundPosition.assetKey()
+            );
+            // P0-D: WRAP/UNWRAP must preserve source AVCO from source to destination bucket.
+            // If the carry has no AVCO (basis=0) but the position had a stored AVCO before the
+            // drain, rebuild the carry using the pre-drain stored AVCO so WETH inherits ETH AVCO.
+            if (preDrainStoredAvco != null && preDrainStoredAvco.signum() > 0
+                    && (carry.avco() == null || carry.avco().signum() == 0)) {
+                BigDecimal movedQty = outbound.flow().getQuantityDelta().abs();
+                BigDecimal wrapBasis = movedQty.multiply(preDrainStoredAvco, MC);
+                carry = continuityCarryService.buildExplicitCarryTransfer(
+                        movedQty, wrapBasis, outboundPosition.assetKey()
+                );
+            }
             replayState.ledgerPointCollector().record(
                     transaction,
                     outbound.flow(),
@@ -282,7 +315,7 @@ public class FamilyEquivalentCustodyReplayHandler {
                 .orElse(null);
     }
 
-    private boolean isPrincipalCandidate(NormalizedTransaction.Flow flow) {
+    private boolean isPrincipalCandidate(NormalizedTransaction transaction, NormalizedTransaction.Flow flow) {
         if (flow == null
                 || flow.getRole() == null
                 || flow.getQuantityDelta() == null
@@ -292,8 +325,59 @@ public class FamilyEquivalentCustodyReplayHandler {
         if (flow.getRole() == NormalizedLegRole.TRANSFER) {
             return true;
         }
+        if (flow.getRole() == NormalizedLegRole.BUY
+                && flow.getQuantityDelta().signum() > 0
+                && transaction != null
+                && transaction.getType() == NormalizedTransactionType.LENDING_DEPOSIT
+                && hasLargerTransferInboundOnSameAsset(transaction, flow)) {
+            return false;
+        }
         return (flow.getRole() == NormalizedLegRole.SELL && flow.getQuantityDelta().signum() < 0)
                 || (flow.getRole() == NormalizedLegRole.BUY && flow.getQuantityDelta().signum() > 0);
+    }
+
+    /**
+     * Aave index accrual mints a tiny BUY leg in the same tx as the principal supply TRANSFER.
+     * Leave accrual for generic replay; pair only the principal inbound.
+     */
+    private boolean hasLargerTransferInboundOnSameAsset(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow accrualFlow
+    ) {
+        if (transaction.getFlows() == null) {
+            return false;
+        }
+        String accrualAsset = assetSupport.assetIdentity(transaction, accrualFlow);
+        BigDecimal accrualAbs = accrualFlow.getQuantityDelta().abs();
+        for (NormalizedTransaction.Flow candidate : transaction.getFlows()) {
+            if (candidate == null
+                    || candidate.getRole() != NormalizedLegRole.TRANSFER
+                    || candidate.getQuantityDelta() == null
+                    || candidate.getQuantityDelta().signum() <= 0) {
+                continue;
+            }
+            if (!Objects.equals(accrualAsset, assetSupport.assetIdentity(transaction, candidate))) {
+                continue;
+            }
+            if (candidate.getQuantityDelta().abs().compareTo(accrualAbs) > 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static BigDecimal nonNegative(BigDecimal value) {
+        return value == null || value.signum() < 0 ? BigDecimal.ZERO : value;
+    }
+
+    /**
+     * P0-D: Returns true for WRAP/UNWRAP transactions that require strict AVCO preservation
+     * from source to destination bucket (ETH→WETH or WETH→ETH).
+     */
+    private static boolean isWrapOrUnwrap(NormalizedTransaction transaction) {
+        return transaction != null
+                && (transaction.getType() == NormalizedTransactionType.WRAP
+                        || transaction.getType() == NormalizedTransactionType.UNWRAP);
     }
 
     private boolean isSimpleFamilyEquivalentCustodyType(NormalizedTransactionType type) {

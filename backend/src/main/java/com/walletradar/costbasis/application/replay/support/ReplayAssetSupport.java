@@ -3,6 +3,7 @@ package com.walletradar.costbasis.application.replay.support;
 import com.walletradar.accounting.support.AccountingAssetFamilySupport;
 import com.walletradar.accounting.support.AccountingAssetIdentitySupport;
 import com.walletradar.accounting.support.BridgeAssetFamilySupport;
+import com.walletradar.accounting.support.LpReceiptSymbolSupport;
 import com.walletradar.costbasis.application.replay.model.AssetKey;
 import com.walletradar.costbasis.application.replay.model.IndexedFlow;
 import com.walletradar.domain.common.PriceSource;
@@ -108,11 +109,32 @@ public class ReplayAssetSupport {
         String assetSymbol = normalizeSymbol(flow == null ? null : flow.getAssetSymbol());
         String assetIdentity = assetContract != null ? assetContract : "SYMBOL:" + assetSymbol;
         return new AssetKey(
-                transaction == null ? null : transaction.getWalletAddress(),
+                AccountingAssetIdentitySupport.replayPositionWalletAddress(transaction, flow),
                 AccountingAssetIdentitySupport.positionNetwork(transaction),
                 assetContract != null ? assetContract : assetIdentity,
                 assetSymbol,
                 assetIdentity
+        );
+    }
+
+    /**
+     * Position-scoped NFT LP receipt marker keyed by {@code lp-position:} correlation id.
+     * Uses the same {@code SYMBOL:LP-RECEIPT:...} identity as materialized receipt flows.
+     */
+    public AssetKey lpReceiptPositionKey(NormalizedTransaction transaction, String correlationId) {
+        if (transaction == null || correlationId == null || correlationId.isBlank()) {
+            return null;
+        }
+        String receiptSymbol = LpReceiptSymbolSupport.fromLpPositionCorrelation(correlationId);
+        if (receiptSymbol == null) {
+            return null;
+        }
+        return new AssetKey(
+                AccountingAssetIdentitySupport.positionWalletAddress(transaction),
+                AccountingAssetIdentitySupport.positionNetwork(transaction),
+                null,
+                receiptSymbol,
+                "SYMBOL:" + receiptSymbol
         );
     }
 
@@ -171,6 +193,12 @@ public class ReplayAssetSupport {
     }
 
     public String normalizeSymbol(String symbol) {
-        return symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
+        if (symbol == null || symbol.isBlank()) {
+            return "";
+        }
+        if (LpReceiptSymbolSupport.isLpReceiptSymbol(symbol)) {
+            return LpReceiptSymbolSupport.canonicalize(symbol);
+        }
+        return symbol.trim().toUpperCase(Locale.ROOT);
     }
 }

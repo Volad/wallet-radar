@@ -194,6 +194,20 @@ class PriceableFlowPolicyTest {
     }
 
     @Test
+    void bybitLendingWithdrawEthRequiresMarketPrice() {
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setSource(NormalizedTransactionSource.BYBIT);
+        tx.setType(NormalizedTransactionType.LENDING_WITHDRAW);
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(NormalizedLegRole.TRANSFER);
+        flow.setAssetSymbol("ETH");
+        flow.setQuantityDelta(new BigDecimal("-0.151"));
+        tx.setFlows(new java.util.ArrayList<>(java.util.List.of(flow)));
+
+        assertThat(PriceableFlowPolicy.requiresMarketPrice(tx, flow)).isTrue();
+    }
+
+    @Test
     void bridgeOutEthOutboundDoesNotRequireMarketPrice() {
         NormalizedTransaction tx = new NormalizedTransaction();
         tx.setType(NormalizedTransactionType.BRIDGE_OUT);
@@ -203,6 +217,52 @@ class PriceableFlowPolicyTest {
         flow.setRole(NormalizedLegRole.TRANSFER);
         flow.setAssetSymbol("ETH");
         flow.setQuantityDelta(new BigDecimal("-0.5"));
+        tx.setFlows(new java.util.ArrayList<>(java.util.List.of(flow)));
+
+        assertThat(PriceableFlowPolicy.requiresMarketPrice(tx, flow)).isFalse();
+    }
+
+    @Test
+    void lendingLoopDecreaseTransferInboundRequiresMarketPrice() {
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setSource(NormalizedTransactionSource.ON_CHAIN);
+        tx.setType(NormalizedTransactionType.LENDING_LOOP_DECREASE);
+        tx.setContinuityCandidate(false);
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(NormalizedLegRole.TRANSFER);
+        flow.setAssetSymbol("ETH");
+        flow.setQuantityDelta(new BigDecimal("0.5"));
+        tx.setFlows(new java.util.ArrayList<>(java.util.List.of(flow)));
+
+        assertThat(PriceableFlowPolicy.requiresMarketPrice(tx, flow)).isTrue();
+    }
+
+    @Test
+    void lendingLoopCloseTransferInboundRequiresMarketPrice() {
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setSource(NormalizedTransactionSource.ON_CHAIN);
+        tx.setType(NormalizedTransactionType.LENDING_LOOP_CLOSE);
+        tx.setContinuityCandidate(false);
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(NormalizedLegRole.TRANSFER);
+        flow.setAssetSymbol("ETH");
+        flow.setQuantityDelta(new BigDecimal("0.42"));
+        tx.setFlows(new java.util.ArrayList<>(java.util.List.of(flow)));
+
+        assertThat(PriceableFlowPolicy.requiresMarketPrice(tx, flow)).isTrue();
+    }
+
+    @Test
+    void lendingLoopDecreaseTransferOutboundDoesNotRequireMarketPrice() {
+        // Outbound USDC repayment leg — not a principal inflow, should NOT be market priced.
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setSource(NormalizedTransactionSource.ON_CHAIN);
+        tx.setType(NormalizedTransactionType.LENDING_LOOP_DECREASE);
+        tx.setContinuityCandidate(false);
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(NormalizedLegRole.TRANSFER);
+        flow.setAssetSymbol("USDC");
+        flow.setQuantityDelta(new BigDecimal("-1209.37"));
         tx.setFlows(new java.util.ArrayList<>(java.util.List.of(flow)));
 
         assertThat(PriceableFlowPolicy.requiresMarketPrice(tx, flow)).isFalse();

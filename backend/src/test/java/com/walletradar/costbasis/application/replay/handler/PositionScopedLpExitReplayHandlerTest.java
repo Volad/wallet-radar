@@ -213,6 +213,206 @@ class PositionScopedLpExitReplayHandlerTest {
         assertThat(usdcPool.getQtyHeld()).isEqualByComparingTo("0");
     }
 
+    @Test
+    void feeOnlyLpExitDoesNotDrainReceiptPool() {
+        ReplayAssetSupport assetSupport = new ReplayAssetSupport();
+        ReplayFlowSupport flowSupport = new ReplayFlowSupport(new GenericFlowReplayEngine());
+        ReplaySettlementAllocator settlementAllocator =
+                new ReplaySettlementAllocator(assetSupport, flowSupport);
+        LpReceiptBasisPoolRepository repo = mock(LpReceiptBasisPoolRepository.class);
+        when(repo.findByUniverseId(anyString())).thenReturn(List.of());
+        LpReceiptBasisPoolService poolService = new LpReceiptBasisPoolService(repo);
+        ReplayPendingTransferKeyFactory keyFactory = new ReplayPendingTransferKeyFactory(assetSupport);
+        PositionScopedLpExitReplayHandler handler = new PositionScopedLpExitReplayHandler(
+                assetSupport,
+                flowSupport,
+                settlementAllocator,
+                poolService,
+                keyFactory
+        );
+
+        LinkedHashMap<LpReceiptBasisPoolKey, LpReceiptBasisPool> pools = new LinkedHashMap<>();
+        HashSet<LpReceiptBasisPoolKey> dirty = new HashSet<>();
+        LpReceiptBasisPool pool = poolService.lookupOrCreate(
+                UNIVERSE,
+                CORR,
+                "wallet-a",
+                NetworkId.BSC,
+                "0xxyz",
+                "XYZ",
+                "0xxyz",
+                pools,
+                dirty,
+                Instant.parse("2026-03-25T10:00:00Z")
+        );
+        poolService.deposit(pool, new BigDecimal("100"), new BigDecimal("100"), BigDecimal.ZERO);
+
+        List<AssetLedgerPoint> points = new ArrayList<>();
+        ReplayExecutionState state = new ReplayExecutionState(
+                null,
+                new LedgerPointCollector(UNIVERSE, points, Instant.now()),
+                null,
+                null,
+                new LpReceiptBasisPoolReplayContext(UNIVERSE, pools, dirty)
+        );
+
+        NormalizedTransaction feeOnly = tx(
+                "fee-only",
+                NormalizedTransactionType.LP_FEE_CLAIM,
+                flow(NormalizedLegRole.TRANSFER, "CAKE", "0xcake", "3")
+        );
+        assertThat(handler.hasPrincipalCloseEvidence(feeOnly)).isFalse();
+
+        handler.apply(feeOnly, state);
+
+        assertThat(pool.getQtyHeld()).isEqualByComparingTo("100");
+        assertThat(points).isNotEmpty();
+        assertThat(points.stream().noneMatch(p -> p.getBasisEffect() == AssetLedgerPoint.BasisEffect.REALLOCATE_IN)).isTrue();
+    }
+
+    @Test
+    void principalExitWithoutReceiptBurnDrainsSyntheticMarkerWhenPoolsEmpty() {
+        String corr = "lp-position:base:pancakeswap:938761";
+        ReplayAssetSupport assetSupport = new ReplayAssetSupport();
+        ReplayFlowSupport flowSupport = new ReplayFlowSupport(new GenericFlowReplayEngine());
+        ReplaySettlementAllocator settlementAllocator =
+                new ReplaySettlementAllocator(assetSupport, flowSupport);
+        LpReceiptBasisPoolRepository repo = mock(LpReceiptBasisPoolRepository.class);
+        when(repo.findByUniverseId(anyString())).thenReturn(List.of());
+        LpReceiptBasisPoolService poolService = new LpReceiptBasisPoolService(repo);
+        ReplayPendingTransferKeyFactory keyFactory = new ReplayPendingTransferKeyFactory(assetSupport);
+        LpReceiptEntryReplayHandler entryHandler = new LpReceiptEntryReplayHandler(
+                assetSupport,
+                flowSupport,
+                poolService
+        );
+        PositionScopedLpExitReplayHandler exitHandler = new PositionScopedLpExitReplayHandler(
+                assetSupport,
+                flowSupport,
+                settlementAllocator,
+                poolService,
+                keyFactory
+        );
+
+        LinkedHashMap<LpReceiptBasisPoolKey, LpReceiptBasisPool> pools = new LinkedHashMap<>();
+        HashSet<LpReceiptBasisPoolKey> dirty = new HashSet<>();
+        List<AssetLedgerPoint> points = new ArrayList<>();
+        ReplayExecutionState state = new ReplayExecutionState(
+                null,
+                new LedgerPointCollector(UNIVERSE, points, Instant.now()),
+                null,
+                null,
+                new LpReceiptBasisPoolReplayContext(UNIVERSE, pools, dirty)
+        );
+
+        AssetKey usdcKey = new AssetKey(
+                "wallet-a",
+                NetworkId.BASE,
+                "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                "USDC",
+                "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+        );
+        PositionState usdcPosition = state.position(usdcKey);
+        usdcPosition.setQuantity(new BigDecimal("500"));
+        usdcPosition.setTotalCostBasisUsd(new BigDecimal("500"));
+        usdcPosition.setUncoveredQuantity(BigDecimal.ZERO);
+
+        NormalizedTransaction lastEntry = null;
+        for (int i = 0; i < 3; i++) {
+            NormalizedTransaction entry = lpEntry(corr, "-100", null);
+            lastEntry = entry;
+            entry.setId("entry-" + i);
+            entry.setNetworkId(NetworkId.BASE);
+            entry.getFlows().getFirst().setAssetSymbol("USDC");
+            entry.getFlows().getFirst().setAssetContract("0x833589fcd6edb6e08f4c7c32d4f71b54bda02913");
+            entryHandler.apply(entry, state);
+        }
+
+        AssetKey receiptKey = assetSupport.lpReceiptPositionKey(lastEntry, corr);
+        assertThat(state.position(receiptKey).quantity()).isEqualByComparingTo("1");
+
+        for (int i = 0; i < 2; i++) {
+            NormalizedTransaction exit = tx(
+                    "exit-" + i,
+                    NormalizedTransactionType.LP_EXIT,
+                    flow(NormalizedLegRole.TRANSFER, "USDC", "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", "150")
+            );
+            exit.setCorrelationId(corr);
+            exit.setNetworkId(NetworkId.BASE);
+            exitHandler.apply(exit, state);
+        }
+
+        assertThat(state.position(receiptKey).quantity()).isEqualByComparingTo("0");
+    }
+
+    @Test
+    void principalCloseZerosSyntheticReceiptMarkerAndPools() {
+        ReplayAssetSupport assetSupport = new ReplayAssetSupport();
+        String corr = "lp-position:unichain:uniswap:42775";
+        ReplayFlowSupport flowSupport = new ReplayFlowSupport(new GenericFlowReplayEngine());
+        ReplaySettlementAllocator settlementAllocator =
+                new ReplaySettlementAllocator(assetSupport, flowSupport);
+        LpReceiptBasisPoolRepository repo = mock(LpReceiptBasisPoolRepository.class);
+        when(repo.findByUniverseId(anyString())).thenReturn(List.of());
+        LpReceiptBasisPoolService poolService = new LpReceiptBasisPoolService(repo);
+        ReplayPendingTransferKeyFactory keyFactory = new ReplayPendingTransferKeyFactory(assetSupport);
+        PositionScopedLpExitReplayHandler handler = new PositionScopedLpExitReplayHandler(
+                assetSupport,
+                flowSupport,
+                settlementAllocator,
+                poolService,
+                keyFactory
+        );
+
+        LinkedHashMap<LpReceiptBasisPoolKey, LpReceiptBasisPool> pools = new LinkedHashMap<>();
+        HashSet<LpReceiptBasisPoolKey> dirty = new HashSet<>();
+        LpReceiptBasisPool pool = poolService.lookupOrCreate(
+                UNIVERSE,
+                corr,
+                "wallet-a",
+                NetworkId.UNICHAIN,
+                "FAMILY:USDC",
+                "USDC",
+                null,
+                pools,
+                dirty,
+                Instant.parse("2026-03-25T10:00:00Z")
+        );
+        poolService.deposit(pool, new BigDecimal("100"), new BigDecimal("100"), BigDecimal.ZERO);
+
+        List<AssetLedgerPoint> points = new ArrayList<>();
+        ReplayExecutionState state = new ReplayExecutionState(
+                null,
+                new LedgerPointCollector(UNIVERSE, points, Instant.now()),
+                null,
+                null,
+                new LpReceiptBasisPoolReplayContext(UNIVERSE, pools, dirty)
+        );
+
+        NormalizedTransaction entry = lpEntry(corr, "-100", null);
+        entry.setNetworkId(NetworkId.UNICHAIN);
+        NormalizedTransaction.Flow entryFlow = entry.getFlows().getFirst();
+        entryFlow.setAssetSymbol("USDC");
+        entryFlow.setAssetContract("0xusdc");
+        new LpReceiptEntryReplayHandler(assetSupport, flowSupport, poolService).apply(entry, state);
+
+        AssetKey receiptKey = assetSupport.lpReceiptPositionKey(entry, corr);
+        assertThat(state.position(receiptKey).quantity()).isEqualByComparingTo("1");
+
+        NormalizedTransaction exit = tx(
+                "principal-close",
+                NormalizedTransactionType.LP_EXIT,
+                flow(NormalizedLegRole.TRANSFER, "USDC", "0xusdc", "100"),
+                flow(NormalizedLegRole.TRANSFER, "LP-RECEIPT:UNICHAIN:UNISWAP:42775", null, "-1")
+        );
+        exit.setCorrelationId(corr);
+        exit.setNetworkId(NetworkId.UNICHAIN);
+        handler.apply(exit, state);
+
+        assertThat(state.position(receiptKey).quantity()).isEqualByComparingTo("0");
+        assertThat(pool.getQtyHeld()).isEqualByComparingTo("0");
+    }
+
     private static PositionScopedLpExitReplayHandler handler() {
         ReplayAssetSupport assetSupport = new ReplayAssetSupport();
         ReplayFlowSupport flowSupport = new ReplayFlowSupport(new GenericFlowReplayEngine());

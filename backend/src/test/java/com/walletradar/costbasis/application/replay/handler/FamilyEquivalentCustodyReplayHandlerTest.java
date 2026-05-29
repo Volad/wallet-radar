@@ -101,6 +101,31 @@ class FamilyEquivalentCustodyReplayHandlerTest {
     }
 
     @Test
+    void aaveUsdcDepositWithIndexAccrualPairsPrincipalTransferAndSkipsBuyMint() {
+        NormalizedTransaction.Flow usdcOut = flow(NormalizedLegRole.TRANSFER, "USDC", "-1266.468");
+        NormalizedTransaction.Flow aTokenIn = flow(NormalizedLegRole.TRANSFER, "aAvaUSDC", "1266.468");
+        NormalizedTransaction.Flow accrualIn = flow(NormalizedLegRole.BUY, "aAvaUSDC", "0.042");
+        NormalizedTransaction transaction = transaction(
+                NormalizedTransactionType.LENDING_DEPOSIT,
+                usdcOut,
+                aTokenIn,
+                accrualIn
+        );
+
+        when(assetSupport.assetIdentity(transaction, usdcOut)).thenReturn("AVALANCHE:0xusdc");
+        when(assetSupport.assetIdentity(transaction, aTokenIn)).thenReturn("AVALANCHE:0xaave");
+        when(assetSupport.assetIdentity(transaction, accrualIn)).thenReturn("AVALANCHE:0xaave");
+
+        SimpleFamilyCustodySelection selection = handler.selectFlows(transaction);
+
+        assertThat(selection.pairs()).hasSize(1);
+        assertThat(selection.pairs().getFirst().outbound().flow()).isSameAs(usdcOut);
+        assertThat(selection.pairs().getFirst().inbound().flow()).isSameAs(aTokenIn);
+        assertThat(selection.selectedByIndex()).containsOnlyKeys(0, 1);
+        assertThat(selection.selectedByIndex()).doesNotContainKey(2);
+    }
+
+    @Test
     void multiOutboundWithoutNetNegativeAssetReturnsEmpty() {
         // Edge case: every outbound is perfectly cancelled by same-asset inbound (e.g. simple
         // pass-through). No net principal exists → handler must defer to generic replay

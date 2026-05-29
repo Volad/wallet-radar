@@ -17,7 +17,10 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.domain.transaction.raw.RawTransactionRepository;
+import com.walletradar.ingestion.pipeline.bybit.BybitBotTransferCostBasisService;
 import com.walletradar.ingestion.pipeline.bybit.BybitCanonicalTransactionBuilder;
+import com.walletradar.ingestion.pipeline.bybit.BybitEarnPrincipalTransferPairer;
+import com.walletradar.ingestion.pipeline.bybit.BybitPrincipalEventExclusivityService;
 import com.walletradar.ingestion.pipeline.bybit.BybitInternalTransferExternalCpReclassifier;
 import com.walletradar.ingestion.pipeline.bybit.BybitStakingConversionPairer;
 import com.walletradar.ingestion.pipeline.bybit.BybitStreamAuthorityCollapser;
@@ -86,11 +89,17 @@ class BybitNormalizationServiceTest {
     @Mock
     private BybitInternalTransferPairer bybitInternalTransferPairer;
     @Mock
+    private BybitEarnPrincipalTransferPairer bybitEarnPrincipalTransferPairer;
+    @Mock
+    private BybitPrincipalEventExclusivityService bybitPrincipalEventExclusivityService;
+    @Mock
     private BybitInternalTransferExternalCpReclassifier bybitInternalTransferExternalCpReclassifier;
     @Mock
     private BybitStreamAuthorityCollapser bybitStreamAuthorityCollapser;
     @Mock
     private BybitStakingConversionPairer bybitStakingConversionPairer;
+    @Mock
+    private BybitBotTransferCostBasisService bybitBotTransferCostBasisService;
 
     @Test
     void extractedTradeLaneIsProcessedBeforeLegacyRawRows() {
@@ -739,9 +748,12 @@ class BybitNormalizationServiceTest {
                 normalizedTransactionStore,
                 accountingUniverseService,
                 bybitInternalTransferPairer,
+                bybitEarnPrincipalTransferPairer,
+                bybitPrincipalEventExclusivityService,
                 bybitInternalTransferExternalCpReclassifier,
                 bybitStreamAuthorityCollapser,
-                bybitStakingConversionPairer
+                bybitStakingConversionPairer,
+                bybitBotTransferCostBasisService
         );
     }
 

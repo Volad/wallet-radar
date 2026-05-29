@@ -164,6 +164,68 @@ class AvcoReplayServiceTest {
         assertThat(point.getHasIncompleteHistoryAfter()).isFalse();
     }
 
+    /**
+     * ADR-020 — P0: When BRIDGE_IN arrives before its paired BRIDGE_OUT in replay order, the
+     * authoritative carry must still be reserved for the downstream LENDING_DEPOSIT.
+     * Before the fix, the LENDING_DEPOSIT captured $0 basis (depleted family pool).
+     */
+    @Test
+    void bridgeInBeforeBridgeOutPreservesCarryForDownstreamLendingDeposit() {
+        // Step 1: ETH acquired on UNICHAIN at $3000 — this is the bridge source network.
+        NormalizedTransaction buy = tx("1", "0xbuy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flow(NormalizedLegRole.BUY, "ETH", "1", "3000", PriceSource.BINANCE));
+        buy.setWalletAddress("wallet-a");
+        buy.setNetworkId(NetworkId.UNICHAIN);
+
+        // Step 2: LiFi bridge — BRIDGE_IN arrives first in replay (ETH arriving ON ZKSync).
+        // Real bridge flows use NormalizedLegRole.TRANSFER (required by isLinkedBridgeContinuityTransfer).
+        // matchedCounterparty = txHash of the paired BRIDGE_OUT (cross-reference pattern for LiFi).
+        NormalizedTransaction bridgeIn = tx("2", "0xbridge-in", 1, NormalizedTransactionType.BRIDGE_IN,
+                flow(NormalizedLegRole.TRANSFER, "ETH", "1", null, null));
+        bridgeIn.setWalletAddress("wallet-a");
+        bridgeIn.setNetworkId(NetworkId.ZKSYNC);
+        bridgeIn.setContinuityCandidate(true);
+        bridgeIn.setCorrelationId("bridge:lifi:0xbridge-out");
+        bridgeIn.setMatchedCounterparty("0xbridge-out");
+
+        // Step 3: BRIDGE_OUT arrives second (ETH leaving UNICHAIN — same LiFi bridge operation).
+        NormalizedTransaction bridgeOut = tx("3", "0xbridge-out", 2, NormalizedTransactionType.BRIDGE_OUT,
+                flow(NormalizedLegRole.TRANSFER, "ETH", "-1", null, null));
+        bridgeOut.setWalletAddress("wallet-a");
+        bridgeOut.setNetworkId(NetworkId.UNICHAIN);
+        bridgeOut.setContinuityCandidate(true);
+        bridgeOut.setCorrelationId("bridge:lifi:0xbridge-out");
+        bridgeOut.setMatchedCounterparty("0xbridge-in");
+
+        // Step 4: LENDING_DEPOSIT on ZKSync 35 seconds later — must receive the corridor-reserved carry
+        NormalizedTransaction lendingDeposit = tx("4", "0xlending", 3, NormalizedTransactionType.LENDING_DEPOSIT,
+                flow(NormalizedLegRole.SELL, "ETH", "-1", null, null),
+                flow(NormalizedLegRole.BUY, "WETH", "1", null, null));
+        lendingDeposit.setWalletAddress("wallet-a");
+        lendingDeposit.setNetworkId(NetworkId.ZKSYNC);
+
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                NormalizedTransactionStatus.CONFIRMED
+        )).thenReturn(List.of(buy, bridgeIn, bridgeOut, lendingDeposit));
+
+        service().replayConfirmed();
+
+        List<AssetLedgerPoint> points = capturedLedgerPoints();
+
+        // The WETH REALLOCATE_IN must carry the full $3000 basis, not $0
+        AssetLedgerPoint wethIn = points.stream()
+                .filter(p -> "WETH".equals(p.getAssetSymbol()))
+                .filter(p -> AssetLedgerPoint.BasisEffect.REALLOCATE_IN.equals(p.getBasisEffect()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("No WETH REALLOCATE_IN ledger point found"));
+        assertThat(wethIn.getCostBasisDeltaUsd())
+                .as("WETH basis must equal the carried ETH cost basis (~$3000)")
+                .isGreaterThanOrEqualTo(new BigDecimal("2900"));
+        assertThat(wethIn.getAvcoAfterUsd())
+                .as("WETH AVCO must equal the carried ETH AVCO (~$3000)")
+                .isGreaterThanOrEqualTo(new BigDecimal("2900"));
+    }
+
     @Test
     void bybitTransitCorridorKeepsPreExistingVenueInventoryOutOfTransitCarry() {
         NormalizedTransaction sourceBuy = tx("1", "0xbuy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
@@ -732,9 +794,11 @@ class AvcoReplayServiceTest {
 
         AssetLedgerPoint usdc = latestPoint(capturedLedgerPoints(), "wallet-a", NetworkId.BASE, "USDC", "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913");
         assertThat(usdc.getQuantityAfter()).isEqualByComparingTo("250");
-        assertThat(usdc.getTotalCostBasisAfterUsd()).isEqualByComparingTo("100");
-        assertThat(usdc.getBasisBackedQuantityAfter()).isEqualByComparingTo("50");
-        assertThat(usdc.getUncoveredQuantityAfter()).isEqualByComparingTo("200");
+        // Cycle/19: the stablecoin $1 fallback now covers the 200 USDC that were previously
+        // uncovered, so the full LP bucket (WETH $100 + USDC $200) flows through.
+        assertThat(usdc.getTotalCostBasisAfterUsd()).isEqualByComparingTo("300");
+        assertThat(usdc.getBasisBackedQuantityAfter()).isEqualByComparingTo("250");
+        assertThat(usdc.getUncoveredQuantityAfter()).isEqualByComparingTo("0");
         assertThat(usdc.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.REALLOCATE_IN);
     }
 
@@ -788,9 +852,10 @@ class AvcoReplayServiceTest {
         assertThat(cake.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.UNKNOWN);
 
         assertThat(usdc.getQuantityAfter()).isEqualByComparingTo("250");
-        assertThat(usdc.getTotalCostBasisAfterUsd()).isEqualByComparingTo("100");
-        assertThat(usdc.getBasisBackedQuantityAfter()).isEqualByComparingTo("50");
-        assertThat(usdc.getUncoveredQuantityAfter()).isEqualByComparingTo("200");
+        // Cycle/19: stablecoin $1 fallback covers the 200 USDC → full LP bucket basis flows through.
+        assertThat(usdc.getTotalCostBasisAfterUsd()).isEqualByComparingTo("300");
+        assertThat(usdc.getBasisBackedQuantityAfter()).isEqualByComparingTo("250");
+        assertThat(usdc.getUncoveredQuantityAfter()).isEqualByComparingTo("0");
         assertThat(usdc.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.REALLOCATE_IN);
     }
 
@@ -1360,9 +1425,11 @@ class AvcoReplayServiceTest {
 
         AssetLedgerPoint destination = latestPoint(capturedLedgerPoints(), "wallet-a", NetworkId.KATANA, "ETH", null);
         assertThat(destination.getQuantityAfter()).isEqualByComparingTo("1");
-        assertThat(destination.getBasisBackedQuantityAfter()).isEqualByComparingTo("0.5");
-        assertThat(destination.getUncoveredQuantityAfter()).isEqualByComparingTo("0.5");
-        assertThat(destination.getTotalCostBasisAfterUsd()).isEqualByComparingTo("100");
+        // Cycle/19: stablecoin $1 fallback covers the 100 "uncovered" USDC, so the full 200 USDC
+        // basis ($200) flows through the bridge settlement into the ETH destination.
+        assertThat(destination.getBasisBackedQuantityAfter()).isEqualByComparingTo("1");
+        assertThat(destination.getUncoveredQuantityAfter()).isEqualByComparingTo("0");
+        assertThat(destination.getTotalCostBasisAfterUsd()).isEqualByComparingTo("200");
         assertThat(destination.getAvcoAfterUsd()).isEqualByComparingTo("200");
         assertThat(destination.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.REALLOCATE_IN);
     }
@@ -1713,10 +1780,147 @@ class AvcoReplayServiceTest {
         service().replayConfirmed();
 
         List<AssetLedgerPoint> points = capturedLedgerPoints();
-        AssetLedgerPoint destination = latestPoint(points, "BYBIT:1:FUND", null, "ETH", null);
+        AssetLedgerPoint destination = latestPoint(points, "BYBIT:1", null, "ETH", null);
         // Without dedup, the mirror would push quantity to 2.0. With dedup, it stays at 1.0.
         assertThat(destination.getQuantityAfter()).isEqualByComparingTo("1.0");
         assertThat(destination.getTotalCostBasisAfterUsd()).isEqualByComparingTo("100");
+    }
+
+    @Test
+    void bybitEarnPrincipalRedeemRestoresCoveredBasisOnFundInbound() {
+        NormalizedTransaction buy = tx("1", "0xbuy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flow(NormalizedLegRole.BUY, "AGLD", "500", "5", PriceSource.BINANCE));
+        buy.setSource(NormalizedTransactionSource.BYBIT);
+        buy.setWalletAddress("BYBIT:33625378");
+        buy.getFlows().getFirst().setAccountRef("BYBIT:33625378");
+
+        NormalizedTransaction earnOut = tx("2", "0xearn-out", 1, NormalizedTransactionType.LENDING_WITHDRAW,
+                flow(NormalizedLegRole.TRANSFER, "AGLD", "-50.22", null, null));
+        earnOut.setSource(NormalizedTransactionSource.BYBIT);
+        earnOut.setWalletAddress("BYBIT:33625378:EARN");
+        earnOut.getFlows().getFirst().setAccountRef("BYBIT:33625378:EARN");
+        earnOut.setContinuityCandidate(true);
+        earnOut.setCorrelationId("bybit-earn-principal-v1:88b50f43");
+        earnOut.setMatchedCounterparty("BYBIT:33625378:FUND");
+
+        NormalizedTransaction fundIn = tx("3", "0xearn-in", 1, NormalizedTransactionType.LENDING_WITHDRAW,
+                flow(NormalizedLegRole.TRANSFER, "AGLD", "50.22", null, null));
+        fundIn.setSource(NormalizedTransactionSource.BYBIT);
+        fundIn.setWalletAddress("BYBIT:33625378:FUND");
+        fundIn.getFlows().getFirst().setAccountRef("BYBIT:33625378:FUND");
+        fundIn.setContinuityCandidate(true);
+        fundIn.setCorrelationId("bybit-earn-principal-v1:88b50f43");
+        fundIn.setMatchedCounterparty("BYBIT:33625378:EARN");
+
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                NormalizedTransactionStatus.CONFIRMED
+        )).thenReturn(List.of(buy, earnOut, fundIn));
+
+        service().replayConfirmed();
+
+        AssetLedgerPoint fund = capturedLedgerPoints().stream()
+                .filter(point -> "BYBIT:33625378:FUND".equals(point.getWalletAddress()))
+                .filter(point -> "AGLD".equalsIgnoreCase(point.getAssetSymbol()))
+                .filter(point -> point.getQuantityDelta() != null && point.getQuantityDelta().signum() > 0)
+                .max(Comparator.comparing(AssetLedgerPoint::getReplaySequence))
+                .orElseThrow();
+        assertThat(fund.getBasisEffect()).isIn(
+                AssetLedgerPoint.BasisEffect.CARRY_IN,
+                AssetLedgerPoint.BasisEffect.REALLOCATE_IN,
+                AssetLedgerPoint.BasisEffect.ACQUIRE
+        );
+        assertThat(fund.getTotalCostBasisAfterUsd()).isGreaterThan(new BigDecimal("200"));
+        assertThat(fund.getUncoveredQuantityAfter()).isZero();
+        assertThat(fund.getAvcoAfterUsd()).isNotNull();
+    }
+
+    @Test
+    void bybitEarnPrincipalRedeemRestoresUmbrellaBasisOnFundInbound() {
+        NormalizedTransaction buy = tx("1", "0xbuy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flow(NormalizedLegRole.BUY, "ETH", "1.0", "3000", PriceSource.BINANCE));
+        buy.setSource(NormalizedTransactionSource.BYBIT);
+        buy.setWalletAddress("BYBIT:33625378");
+
+        NormalizedTransaction earnOut = tx("2", "0xearn-out", 1, NormalizedTransactionType.LENDING_WITHDRAW,
+                flow(NormalizedLegRole.TRANSFER, "ETH", "-0.151", null, null));
+        earnOut.setSource(NormalizedTransactionSource.BYBIT);
+        earnOut.setWalletAddress("BYBIT:33625378:EARN");
+        earnOut.setContinuityCandidate(true);
+        earnOut.setCorrelationId("bybit-earn-principal-v1:ae372912");
+        earnOut.setMatchedCounterparty("BYBIT:33625378");
+
+        NormalizedTransaction fundIn = tx("3", "0xearn-in", 1, NormalizedTransactionType.LENDING_WITHDRAW,
+                flow(NormalizedLegRole.TRANSFER, "ETH", "0.151", null, null));
+        fundIn.setSource(NormalizedTransactionSource.BYBIT);
+        fundIn.setWalletAddress("BYBIT:33625378");
+        fundIn.setContinuityCandidate(true);
+        fundIn.setCorrelationId("bybit-earn-principal-v1:ae372912");
+        fundIn.setMatchedCounterparty("BYBIT:33625378:EARN");
+
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                NormalizedTransactionStatus.CONFIRMED
+        )).thenReturn(List.of(buy, earnOut, fundIn));
+
+        service().replayConfirmed();
+
+        AssetLedgerPoint fund = capturedLedgerPoints().stream()
+                .filter(point -> "BYBIT:33625378".equals(point.getWalletAddress()))
+                .filter(point -> "ETH".equalsIgnoreCase(point.getAssetSymbol()))
+                .filter(point -> point.getQuantityDelta() != null && point.getQuantityDelta().signum() > 0)
+                .max(Comparator.comparing(AssetLedgerPoint::getReplaySequence))
+                .orElseThrow();
+        assertThat(fund.getBasisEffect()).isIn(
+                AssetLedgerPoint.BasisEffect.CARRY_IN,
+                AssetLedgerPoint.BasisEffect.REALLOCATE_IN,
+                AssetLedgerPoint.BasisEffect.ACQUIRE
+        );
+        assertThat(fund.getTotalCostBasisAfterUsd()).isGreaterThan(new BigDecimal("400"));
+        assertThat(fund.getUncoveredQuantityAfter()).isLessThan(new BigDecimal("0.02"));
+        assertThat(fund.getAvcoAfterUsd()).isNotNull();
+    }
+
+    @Test
+    void canonicalLpReceiptSymbolPreventsDuplicateReceiptPoolsOnEntryAndExit() {
+        NormalizedTransaction wethBuy = tx("1", "0xweth-buy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flowWithContract(NormalizedLegRole.BUY, "WETH", "0xweth", "1", "1000", PriceSource.BINANCE));
+        wethBuy.setWalletAddress("wallet-a");
+        wethBuy.setNetworkId(NetworkId.BASE);
+
+        NormalizedTransaction lpEntry = tx("2", "0xlp-entry", 1, NormalizedTransactionType.LP_ENTRY,
+                flowWithContract(NormalizedLegRole.TRANSFER, "WETH", "0xweth", "-1", null, null));
+        lpEntry.setWalletAddress("wallet-a");
+        lpEntry.setNetworkId(NetworkId.BASE);
+        lpEntry.setProtocolName("PancakeSwap");
+        lpEntry.setCorrelationId("lp-position:base:pancakeswap:477096");
+        java.util.List<NormalizedTransaction.Flow> entryFlows = new java.util.ArrayList<>(lpEntry.getFlows());
+        entryFlows.add(flow(NormalizedLegRole.TRANSFER, "LP-RECEIPT:base:pancakeswap:477096", "1", null, null));
+        lpEntry.setFlows(entryFlows);
+
+        NormalizedTransaction lpExit = tx("3", "0xlp-exit", 2, NormalizedTransactionType.LP_EXIT,
+                flowWithContract(NormalizedLegRole.TRANSFER, "WETH", "0xweth", "1", null, null));
+        lpExit.setWalletAddress("wallet-a");
+        lpExit.setNetworkId(NetworkId.BASE);
+        lpExit.setProtocolName("PancakeSwap");
+        lpExit.setCorrelationId("lp-position:base:pancakeswap:477096");
+        java.util.List<NormalizedTransaction.Flow> exitFlows = new java.util.ArrayList<>(lpExit.getFlows());
+        exitFlows.add(flow(NormalizedLegRole.TRANSFER, "LP-RECEIPT:base:pancakeswap:477096", "-1", null, null));
+        lpExit.setFlows(exitFlows);
+
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                NormalizedTransactionStatus.CONFIRMED
+        )).thenReturn(List.of(wethBuy, lpEntry, lpExit));
+
+        service().replayConfirmed();
+
+        String canonical = "LP-RECEIPT:BASE:PANCAKESWAP:477096";
+        List<AssetLedgerPoint> receiptPoints = capturedLedgerPoints().stream()
+                .filter(point -> canonical.equalsIgnoreCase(point.getAssetSymbol()))
+                .toList();
+        assertThat(receiptPoints).isNotEmpty();
+        AssetLedgerPoint lastReceipt = receiptPoints.stream()
+                .max(java.util.Comparator.comparing(AssetLedgerPoint::getReplaySequence))
+                .orElseThrow();
+        assertThat(lastReceipt.getQuantityAfter()).isEqualByComparingTo("0");
     }
 
     @Test
@@ -1917,13 +2121,41 @@ class AvcoReplayServiceTest {
                         assetSupport,
                         replayFlowSupport
                 );
+        com.walletradar.pricing.persistence.HistoricalPriceCacheService historicalPriceCacheService =
+                org.mockito.Mockito.mock(com.walletradar.pricing.persistence.HistoricalPriceCacheService.class);
+        com.walletradar.pricing.resolver.external.PriceExternalSourceOrchestrator priceExternalSourceOrchestrator =
+                org.mockito.Mockito.mock(com.walletradar.pricing.resolver.external.PriceExternalSourceOrchestrator.class);
+        org.mockito.Mockito.lenient().when(priceExternalSourceOrchestrator.prioritizedSources(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(java.util.List.of(PriceSource.BINANCE));
+        org.mockito.Mockito.lenient().when(historicalPriceCacheService.findQuote(
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.eq(PriceSource.BINANCE)))
+                .thenAnswer(invocation -> {
+                    com.walletradar.pricing.domain.PriceRequest request = invocation.getArgument(0);
+                    if (request != null && "ETH".equalsIgnoreCase(request.assetSymbol())) {
+                        return java.util.Optional.of(new com.walletradar.pricing.domain.PriceQuote(
+                                new BigDecimal("3000"),
+                                PriceSource.BINANCE,
+                                Instant.parse("2026-03-25T10:00:00Z"),
+                                "ETH",
+                                "test"
+                        ));
+                    }
+                    return java.util.Optional.empty();
+                });
+        com.walletradar.costbasis.application.replay.support.ReplayMarketAuthority replayMarketAuthority =
+                new com.walletradar.costbasis.application.replay.support.ReplayMarketAuthority(
+                        historicalPriceCacheService,
+                        priceExternalSourceOrchestrator
+                );
         com.walletradar.costbasis.application.replay.handler.TransferReplayHandler transferReplayHandler =
                 new com.walletradar.costbasis.application.replay.handler.TransferReplayHandler(
                         replayFlowSupport,
                         continuityCarryService,
                         keyFactory,
                         transferClassifier,
-                        pendingTransferMatcher
+                        pendingTransferMatcher,
+                        replayMarketAuthority
                 );
         com.walletradar.costbasis.application.replay.handler.LiquidStakingReplayHandler liquidStakingReplayHandler =
                 new com.walletradar.costbasis.application.replay.handler.LiquidStakingReplayHandler(
@@ -2014,6 +2246,11 @@ class AvcoReplayServiceTest {
                         replayFlowSupport,
                         lpReceiptBasisPoolService
                 );
+        com.walletradar.costbasis.application.replay.handler.BybitVenueInternalReplayHandler bybitVenueInternalReplayHandler =
+                new com.walletradar.costbasis.application.replay.handler.BybitVenueInternalReplayHandler(
+                        transferClassifier,
+                        transferReplayHandler
+                );
         com.walletradar.costbasis.application.replay.dispatch.ReplayDispatcher replayDispatcher =
                 new com.walletradar.costbasis.application.replay.dispatch.ReplayDispatcher(
                         new com.walletradar.costbasis.application.replay.planning.ReplayTransactionRouter(),
@@ -2022,6 +2259,7 @@ class AvcoReplayServiceTest {
                         transferClassifier,
                         keyFactory,
                         transferReplayHandler,
+                        bybitVenueInternalReplayHandler,
                         liquidStakingReplayHandler,
                         familyReplayHandler,
                         genericAsyncLifecycleReplayHandler,

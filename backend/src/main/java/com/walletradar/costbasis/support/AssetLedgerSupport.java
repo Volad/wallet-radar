@@ -18,6 +18,13 @@ public final class AssetLedgerSupport {
         return AccountingAssetIdentitySupport.positionAssetIdentity(transaction, flow);
     }
 
+    public static String accountingWalletAddress(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow
+    ) {
+        return AccountingAssetIdentitySupport.replayPositionWalletAddress(transaction, flow);
+    }
+
     public static String accountingFamilyIdentity(NormalizedTransaction transaction, NormalizedTransaction.Flow flow) {
         String familyIdentity = AccountingAssetFamilySupport.continuityIdentity(flow);
         if (familyIdentity != null && !familyIdentity.isBlank()) {

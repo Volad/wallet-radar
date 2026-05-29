@@ -58,6 +58,9 @@ public class SessionDashboardQueryService {
     private static final String VALUATION_GMX_MARKET_TOKEN_SNAPSHOT = "GMX_MARKET_TOKEN_SNAPSHOT";
     private static final String PRICE_SOURCE_PROTOCOL_SNAPSHOT = "PROTOCOL_SNAPSHOT";
     private static final long CURRENT_QUOTE_STALE_AFTER_SECONDS = 15 * 60;
+    private static final BigDecimal AVCO_CAP_COVERAGE_THRESHOLD = new BigDecimal("0.05");
+    private static final BigDecimal MINIMUM_POSITION_VALUE_USD = new BigDecimal("0.01");
+    private static final BigDecimal AVCO_CAP_PRICE_MULTIPLIER = BigDecimal.TEN;
 
     private final UserSessionRepository userSessionRepository;
     private final MongoOperations mongoOperations;
@@ -123,6 +126,9 @@ public class SessionDashboardQueryService {
                     : latestPoint.getFamilyDisplaySymbol();
             String rowSymbol = blank(familyDisplaySymbol) ? normalizeSymbol(balance.getAssetSymbol()) : familyDisplaySymbol;
 
+            if (AccountingAssetFamilySupport.isLpReceiptSymbol(balance.getAssetSymbol())) {
+                continue;
+            }
             FamilyRowKey rowKey = new FamilyRowKey(
                     normalizeAddress(balance.getWalletAddress()),
                     balance.getNetworkId(),
@@ -154,6 +160,23 @@ public class SessionDashboardQueryService {
                 // balances downstream via `BybitLiveBalanceService` clamping in `clampBybitUmbrellaToLive`.
                 BigDecimal currentQuantity = BybitUmbrellaSupport.bybitRawQuantityAfter(latestPoint);
                 if (currentQuantity.signum() <= 0) {
+                    continue;
+                }
+                if (AccountingAssetFamilySupport.isLpReceiptSymbol(latestPoint.getAssetSymbol())) {
+                    continue;
+                }
+                if (isBareBybitUmbrellaWallet(bucketKey.walletAddress())
+                        && hasBybitVenueSubLedgerForFamily(
+                        latestPointByBucket,
+                        bucketKey.walletAddress(),
+                        resolvedFamilyIdentity(
+                                latestPoint,
+                                bucketKey.networkId(),
+                                latestPoint.getAssetSymbol(),
+                                latestPoint.getAssetContract()
+                        ),
+                        enabledBybitVenueRefs
+                )) {
                     continue;
                 }
                 String familyIdentity = resolvedFamilyIdentity(
@@ -209,6 +232,9 @@ public class SessionDashboardQueryService {
                         zeroIfNull(realisedPnlByFamily.get(entry.getKey()))
                 ))
                 .filter(position -> position.quantity().signum() > 0)
+                .filter(position -> position.priceIssue() != null            // unpriced — never filter
+                        || position.marketValueUsd().signum() < 0          // debt / short — always shown
+                        || position.marketValueUsd().compareTo(MINIMUM_POSITION_VALUE_USD) >= 0)
                 .sorted(Comparator.comparing(
                         TokenPositionView::marketValueUsd,
                         Comparator.nullsLast(BigDecimal::compareTo)
@@ -339,7 +365,7 @@ public class SessionDashboardQueryService {
                 continue;
             }
             Map<String, BigDecimal> live = bybitLiveBalanceService.getUmbrellaBalances(integration.getIntegrationId());
-            if (live == null || live.isEmpty()) {
+            if (live == null) {
                 continue;
             }
             liveByAccountRef.put(normalizeAddress(integration.getAccountRef()), live);
@@ -356,7 +382,8 @@ public class SessionDashboardQueryService {
                 continue;
             }
             Map<String, BigDecimal> live = liveByAccountRef.get(key.walletAddress());
-            if (live == null) {
+            if (live == null || live.isEmpty()) {
+                // No live balance data for this wallet — skip clamping so ledger rows are preserved.
                 continue;
             }
             BigDecimal liveQty = BybitUmbrellaSupport.liveQuantityForCandidates(
@@ -368,7 +395,12 @@ public class SessionDashboardQueryService {
             if (ledgerQty == null || ledgerQty.signum() <= 0) {
                 continue;
             }
-            if (liveQty == null || liveQty.signum() <= 0) {
+            if (liveQty == null) {
+                // Symbol absent from live balance map → live data unavailable for this asset;
+                // keep the ledger row rather than dropping it as a phantom position.
+                continue;
+            }
+            if (liveQty.signum() <= 0) {
                 iterator.remove();
                 continue;
             }
@@ -845,12 +877,28 @@ public class SessionDashboardQueryService {
             BigDecimal priceUsd = priceSnapshot.priceUsd() == null ? BigDecimal.ZERO : priceSnapshot.priceUsd();
             DashboardPriceSnapshot effectivePriceSnapshot = applyProtocolValuation(priceSnapshot, valuationMetadata);
             priceUsd = effectivePriceSnapshot.priceUsd() == null ? BigDecimal.ZERO : effectivePriceSnapshot.priceUsd();
-            BigDecimal marketValueUsd = quantity
-                    .multiply(priceUsd, MC)
-                    .multiply(BigDecimal.valueOf(valuationMetadata == null ? 1 : valuationMetadata.quantitySign()), MC);
-            BigDecimal avcoUsd = coveredQuantity.signum() <= 0
+            // marketValueUsd is null when price is unavailable (priceUsd=0 from missing snapshot) so
+            // that the minimum-position-value filter does not silently drop unpriced positions.
+            BigDecimal marketValueUsd = priceUsd.signum() <= 0
+                    ? null
+                    : quantity
+                            .multiply(priceUsd, MC)
+                            .multiply(BigDecimal.valueOf(valuationMetadata == null ? 1 : valuationMetadata.quantitySign()), MC);
+            BigDecimal rawAvcoUsd = coveredQuantity.signum() <= 0
                     ? BigDecimal.ZERO
                     : totalCostBasisUsd.divide(coveredQuantity, MC);
+            // Cycle/19: when coverage is extremely low (< 5%), the AVCO denominator is tiny and
+            // produces absurd values (e.g. LTC $3.76B). Cap at 10× market price when coverage is
+            // below 5% so the dashboard shows a directional hint rather than a misleading number.
+            BigDecimal coverageRatio = quantity.signum() > 0
+                    ? coveredQuantity.divide(quantity, MC)
+                    : BigDecimal.ONE;
+            BigDecimal avcoUsd = rawAvcoUsd;
+            if (coverageRatio.compareTo(AVCO_CAP_COVERAGE_THRESHOLD) < 0
+                    && priceUsd.signum() > 0
+                    && rawAvcoUsd.compareTo(priceUsd.multiply(AVCO_CAP_PRICE_MULTIPLIER, MC)) > 0) {
+                avcoUsd = priceUsd;
+            }
             BigDecimal unrealizedPnlUsd = coveredQuantity.multiply(priceUsd, MC).subtract(totalCostBasisUsd, MC);
             BigDecimal unrealizedPnlPct = totalCostBasisUsd.signum() <= 0
                     ? BigDecimal.ZERO
@@ -996,9 +1044,66 @@ public class SessionDashboardQueryService {
             return ISSUE_COVERAGE_GAP;
         }
         if (incompleteHistory || unresolvedFlags) {
+            if (uncoveredQuantity) {
+                return ISSUE_COVERAGE_GAP;
+            }
             return ISSUE_HISTORY_FLAGS;
         }
         return null;
+    }
+
+    private static boolean isBareBybitUmbrellaWallet(String walletAddress) {
+        if (walletAddress == null || !walletAddress.startsWith("bybit:")) {
+            return false;
+        }
+        return walletAddress.split(":", -1).length == 2;
+    }
+
+    private static boolean hasBybitVenueSubLedgerForFamily(
+            Map<BucketKey, AssetLedgerPoint> latestPointByBucket,
+            String umbrellaWallet,
+            String familyIdentity,
+            Set<String> enabledBybitVenueRefs
+    ) {
+        if (latestPointByBucket == null || umbrellaWallet == null || familyIdentity == null) {
+            return false;
+        }
+        String base = normalizeAddress(umbrellaWallet);
+        for (Map.Entry<BucketKey, AssetLedgerPoint> entry : latestPointByBucket.entrySet()) {
+            BucketKey bucketKey = entry.getKey();
+            String wallet = bucketKey.walletAddress();
+            if (wallet == null || wallet.equals(base)) {
+                continue;
+            }
+            if (!wallet.startsWith(base + ":")) {
+                continue;
+            }
+            String[] parts = wallet.split(":", -1);
+            if (parts.length < 3) {
+                continue;
+            }
+            String sub = parts[2];
+            if (!"fund".equals(sub) && !"uta".equals(sub) && !"earn".equals(sub)) {
+                continue;
+            }
+            if (!BybitUmbrellaSupport.bybitLedgerMatchesEnabledVenue(wallet, enabledBybitVenueRefs)) {
+                continue;
+            }
+            AssetLedgerPoint point = entry.getValue();
+            if (point == null) {
+                continue;
+            }
+            String pointFamily = resolvedFamilyIdentity(
+                    point,
+                    bucketKey.networkId(),
+                    point.getAssetSymbol(),
+                    point.getAssetContract()
+            );
+            if (familyIdentity.equals(pointFamily) && BybitUmbrellaSupport.bybitRawQuantityAfter(point).signum() > 0) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static boolean isYieldAccrualCandidate(AssetLedgerPoint latestPoint) {

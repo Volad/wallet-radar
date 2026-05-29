@@ -5,6 +5,8 @@ import com.walletradar.costbasis.application.replay.model.BridgePendingKey;
 import com.walletradar.costbasis.application.replay.model.BridgeSettlementPendingKey;
 import com.walletradar.costbasis.application.replay.model.CarryTransfer;
 import com.walletradar.costbasis.application.replay.model.ContinuityBucket;
+import com.walletradar.costbasis.application.replay.model.FlowRef;
+import com.walletradar.costbasis.application.replay.model.PassThroughCorridorPlan;
 import com.walletradar.costbasis.application.replay.model.PositionSnapshot;
 import com.walletradar.costbasis.application.replay.model.PositionState;
 import com.walletradar.costbasis.application.replay.model.TransferPendingKey;
@@ -13,40 +15,57 @@ import com.walletradar.costbasis.application.replay.state.PositionStore;
 import com.walletradar.costbasis.application.replay.state.ReplayExecutionState;
 import com.walletradar.costbasis.application.replay.support.ContinuityCarryService;
 import com.walletradar.costbasis.application.replay.support.ReplayFlowSupport;
+import com.walletradar.costbasis.application.replay.support.ReplayMarketAuthority;
 import com.walletradar.costbasis.application.replay.support.ReplayPendingTransferKeyFactory;
 import com.walletradar.costbasis.application.replay.support.ReplayPendingTransferMatcher;
 import com.walletradar.costbasis.application.replay.support.ReplayTransferClassifier;
 import com.walletradar.costbasis.domain.AssetLedgerPoint;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.ingestion.pipeline.bybit.BybitEarnPrincipalTransferPairer;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.math.MathContext;
 import java.util.Deque;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Optional;
 
 @Component
 public class TransferReplayHandler {
 
     private static final MathContext MC = MathContext.DECIMAL128;
 
+    /**
+     * P0-A: Earn-principal carry is considered "dust" when the total cost basis is below this
+     * threshold. Dust indicates that the EARN position was populated with an incorrect synthetic
+     * AVCO from mis-priced normalization (e.g., CMETH at $4 instead of ~$2280). Market authority
+     * is used to replace the dust carry with the authoritative lot basis.
+     */
+    private static final java.math.BigDecimal EARN_PRINCIPAL_DUST_BASIS_THRESHOLD = new java.math.BigDecimal("100");
+
     private final ReplayFlowSupport flowSupport;
     private final ContinuityCarryService continuityCarryService;
     private final ReplayPendingTransferKeyFactory keyFactory;
     private final ReplayTransferClassifier classifier;
     private final ReplayPendingTransferMatcher matcher;
+    private final ReplayMarketAuthority replayMarketAuthority;
 
     public TransferReplayHandler(
             ReplayFlowSupport flowSupport,
             ContinuityCarryService continuityCarryService,
             ReplayPendingTransferKeyFactory keyFactory,
             ReplayTransferClassifier classifier,
-            ReplayPendingTransferMatcher matcher
+            ReplayPendingTransferMatcher matcher,
+            ReplayMarketAuthority replayMarketAuthority
     ) {
         this.flowSupport = flowSupport;
         this.continuityCarryService = continuityCarryService;
         this.keyFactory = keyFactory;
         this.classifier = classifier;
         this.matcher = matcher;
+        this.replayMarketAuthority = replayMarketAuthority;
     }
 
     public AssetLedgerPoint.BasisEffect applyTransfer(
@@ -90,7 +109,8 @@ public class TransferReplayHandler {
                             flowIndex,
                             position,
                             replayState.passThroughCorridorPlan(),
-                            replayState.reservedPassThroughCarries()
+                            replayState.reservedPassThroughCarries(),
+                            preserveBucketOutboundCoverage(transaction)
                     ),
                     replayState.continuity().bucket(keyFactory.continuityKey(transaction, flow))
             );
@@ -115,17 +135,46 @@ public class TransferReplayHandler {
             return AssetLedgerPoint.BasisEffect.UNKNOWN;
         }
 
+        boolean corridorTransfer = classifier.isCorridorTransfer(transaction);
+
         if (flow.getQuantityDelta().signum() < 0) {
+            boolean venueInternal = classifier.usesBybitVenueInternalCarryQueue(transaction);
+            // P0-C: Capture outbound slice AVCO before drain so corridor CARRY_IN uses the
+            // pre-move per-unit rate (ADR-019: outbound-AVCO preservation rule).
+            BigDecimal corridorOutboundSliceAvco = corridorTransfer ? position.perWalletAvco() : null;
+            PositionState carrySource = earnPrincipalCarrySourcePosition(transaction, position, replayState);
+            BigDecimal preDrainAvco = derivePositionAvco(carrySource);
             CarryTransfer carry = continuityCarryService.removeTransferCarry(
                     transaction,
                     flow,
                     flowIndex,
-                    position,
+                    carrySource,
                     replayState.passThroughCorridorPlan(),
-                    replayState.reservedPassThroughCarries()
+                    replayState.reservedPassThroughCarries(),
+                    venueInternal || isBybitEarnPrincipalPaired(transaction)
             );
+            carry = normalizeBybitEarnProductCarry(
+                    transaction,
+                    flow,
+                    carry,
+                    replayState,
+                    carrySource,
+                    carrySource.assetKey(),
+                    preDrainAvco
+            );
+            // P0-A: For earn-principal outbound, override dust carry with authoritative lot basis.
+            carry = applyEarnPrincipalLotCarryOverride(transaction, flow, carry, carrySource, replayState);
+            // P0-C: For corridor outbound, force carry basis = movedQty × outboundSliceAvco (ADR-019).
+            if (corridorOutboundSliceAvco != null && corridorOutboundSliceAvco.signum() > 0) {
+                BigDecimal movedQty = flow.getQuantityDelta().abs();
+                carry = continuityCarryService.buildExplicitCarryTransfer(
+                        movedQty, movedQty.multiply(corridorOutboundSliceAvco, MC), carrySource.assetKey()
+                );
+            }
             Deque<CarryTransfer> queue = replayState.pendingTransfers().queue(transferKey);
-            int pendingInboundIndex = matcher.findUniqueCompatibleQueueIndex(queue, true, carry.quantity());
+            int pendingInboundIndex = corridorTransfer
+                    ? matcher.findUniqueBridgeQueueIndex(queue, true)
+                    : matcher.findUniqueCompatibleQueueIndex(queue, true, carry.quantity());
             if (pendingInboundIndex >= 0) {
                 CarryTransfer pendingInbound = matcher.removeQueueElement(queue, pendingInboundIndex);
                 attachLateCarryToPendingInbound(
@@ -147,10 +196,34 @@ public class TransferReplayHandler {
         }
 
         Deque<CarryTransfer> queue = replayState.pendingTransfers().find(transferKey);
-        int carryIndex = matcher.findUniqueCompatibleQueueIndex(queue, false, flow.getQuantityDelta().abs());
+        int carryIndex = corridorTransfer
+                ? matcher.findUniqueBridgeQueueIndex(queue, false)
+                : matcher.findUniqueCompatibleQueueIndex(queue, false, flow.getQuantityDelta().abs());
         if (carryIndex >= 0) {
             CarryTransfer carry = matcher.removeQueueElement(queue, carryIndex);
-            CarryTransfer effectiveCarry = continuityCarryService.sliceCarryTransfer(carry, flow.getQuantityDelta().abs(), position.assetKey());
+            carry = normalizeBybitEarnProductCarry(
+                    transaction,
+                    flow,
+                    carry,
+                    replayState,
+                    position,
+                    position.assetKey(),
+                    derivePositionAvco(position)
+            );
+            BigDecimal inboundQuantity = flow.getQuantityDelta().abs();
+            boolean venueStyleInbound = classifier.usesBybitVenueInternalCarryQueue(transaction)
+                    || isBybitEarnPrincipalPaired(transaction);
+            CarryTransfer effectiveCarry = venueStyleInbound
+                    ? continuityCarryService.internalAccountInboundCarry(carry, inboundQuantity, position.assetKey())
+                    : continuityCarryService.sliceCarryTransfer(carry, inboundQuantity, position.assetKey());
+            effectiveCarry = backfillEarnPrincipalInboundCarry(
+                    transaction,
+                    flow,
+                    inboundQuantity,
+                    position,
+                    effectiveCarry,
+                    replayState
+            );
             flowSupport.restoreToPosition(
                     flow.getQuantityDelta().abs(),
                     position,
@@ -171,7 +244,7 @@ public class TransferReplayHandler {
             return flowSupport.continuityBasisEffect(transaction, flow);
         }
 
-        enqueuePendingInbound(flow, position, replayState, transferKey);
+        enqueuePendingInbound(transaction, flow, flowIndex, position, replayState, transferKey);
         return flowSupport.continuityBasisEffect(transaction, flow);
     }
 
@@ -209,17 +282,40 @@ public class TransferReplayHandler {
     }
 
     private void enqueuePendingInbound(
+            NormalizedTransaction transaction,
             NormalizedTransaction.Flow flow,
+            int flowIndex,
             PositionState position,
             ReplayExecutionState replayState,
             com.walletradar.costbasis.application.replay.model.PendingTransferKey key
     ) {
-        BigDecimal provisionalBasis = flowSupport.materializePendingInbound(flow, position);
+        FlowRef sourceFlowRef = flowSupport.flowRef(transaction, flowIndex);
+        boolean permitUncovered = !classifier.usesBybitVenueInternalCarryQueue(transaction)
+                && !isBybitEarnPrincipalPaired(transaction);
+        Optional<BigDecimal> provisionalBasis = flowSupport.materializePendingInbound(
+                transaction,
+                flow,
+                position,
+                permitUncovered
+        );
+        if (provisionalBasis.isEmpty()) {
+            if (isBybitEarnPrincipalPaired(transaction)) {
+                replayState.pendingTransfers().queue(key)
+                        .addLast(CarryTransfer.pendingInbound(
+                                flow.getQuantityDelta().abs(),
+                                position.assetKey(),
+                                BigDecimal.ZERO,
+                                sourceFlowRef
+                        ));
+            }
+            return;
+        }
         replayState.pendingTransfers().queue(key)
                 .addLast(CarryTransfer.pendingInbound(
                         flow.getQuantityDelta().abs(),
                         position.assetKey(),
-                        provisionalBasis
+                        provisionalBasis.orElse(BigDecimal.ZERO),
+                        sourceFlowRef
                 ));
     }
 
@@ -256,7 +352,9 @@ public class TransferReplayHandler {
                         replayState.positions(),
                         pendingInbound,
                         carry,
-                        replayState.ledgerPointCollector()
+                        replayState.ledgerPointCollector(),
+                        replayState.passThroughCorridorPlan(),
+                        replayState.reservedPassThroughCarries()
                 );
                 if (queue.isEmpty()) {
                     replayState.pendingTransfers().remove(bridgeTransferKey);
@@ -292,7 +390,7 @@ public class TransferReplayHandler {
             return flowSupport.continuityBasisEffect(transaction, flow);
         }
 
-        enqueuePendingInbound(flow, position, replayState, bridgeTransferKey);
+        enqueuePendingInbound(transaction, flow, flowIndex, position, replayState, bridgeTransferKey);
         return flowSupport.continuityBasisEffect(transaction, flow);
     }
 
@@ -362,7 +460,7 @@ public class TransferReplayHandler {
             return flowSupport.routeSettlementBasisEffect(flow);
         }
 
-        enqueuePendingInbound(flow, position, replayState, settlementKey);
+        enqueuePendingInbound(transaction, flow, flowIndex, position, replayState, settlementKey);
         return flowSupport.routeSettlementBasisEffect(flow);
     }
 
@@ -385,13 +483,16 @@ public class TransferReplayHandler {
         }
 
         if (flow.getQuantityDelta().signum() < 0) {
+            // Cycle/19: Bybit bundle transfers use proportional basis to prevent the
+            // shortfall spiral that erodes coverage on each UTA↔FUND↔EARN round-trip.
             CarryTransfer carry = continuityCarryService.removeTransferCarry(
                     transaction,
                     flow,
                     flowIndex,
                     position,
                     replayState.passThroughCorridorPlan(),
-                    replayState.reservedPassThroughCarries()
+                    replayState.reservedPassThroughCarries(),
+                    true
             );
             Deque<CarryTransfer> queue = replayState.pendingTransfers().queue(transferKey);
             int pendingInboundIndex = matcher.findUniqueBridgeQueueIndex(queue, true);
@@ -507,12 +608,29 @@ public class TransferReplayHandler {
     ) {
         PositionState destination = positions.position(pendingInbound.assetKey());
         PositionSnapshot before = flowSupport.snapshot(destination);
-        CarryTransfer effectiveCarry = continuityCarryService.sliceCarryTransfer(carry, pendingInbound.quantity(), pendingInbound.assetKey());
-        BigDecimal coveredResolvedQuantity = effectiveCarry.coveredQuantity();
-        destination.setUncoveredQuantity(nonNegative(destination.uncoveredQuantity().subtract(coveredResolvedQuantity, MC)));
-        destination.setTotalCostBasisUsd(destination.totalCostBasisUsd().add(effectiveCarry.costBasisUsd()));
+        CarryTransfer effectiveCarry = classifier.usesBybitVenueInternalCarryQueue(transaction)
+                || isBybitEarnPrincipalPaired(transaction)
+                ? continuityCarryService.internalAccountInboundCarry(carry, pendingInbound.quantity(), pendingInbound.assetKey())
+                : continuityCarryService.sliceCarryTransfer(carry, pendingInbound.quantity(), pendingInbound.assetKey());
+        // Cycle/19: resolve the full carry quantity against the pending inbound's uncovered
+        // portion — the carry represents the actual transfer and its covered portion provides
+        // real basis. The uncovered portion from the carry stays uncovered at the destination.
+        BigDecimal resolvedQuantity = effectiveCarry.quantity().min(
+                destination.uncoveredQuantity() == null ? BigDecimal.ZERO : destination.uncoveredQuantity()
+        );
+        destination.setUncoveredQuantity(nonNegative(
+                destination.uncoveredQuantity().subtract(resolvedQuantity, MC)
+                        .add(effectiveCarry.uncoveredQuantity(), MC)
+        ));
+        // Cycle/19: when the pending inbound was materialised with a provisional spot-basis,
+        // replace it with the authoritative carry basis instead of stacking on top.
+        flowSupport.applyAuthoritativeLateInboundCarryBasis(
+                destination,
+                pendingInbound.provisionalBasisUsd(),
+                effectiveCarry.costBasisUsd()
+        );
         flowSupport.recomputePerWalletAvco(destination);
-        if (effectiveCarry.avco() != null && effectiveCarry.uncoveredQuantity().signum() == 0) {
+        if (effectiveCarry.avco() != null && destination.uncoveredQuantity().signum() == 0) {
             flowSupport.resolveTemporaryUnresolved(destination);
         }
         ledgerPointCollector.record(
@@ -526,6 +644,13 @@ public class TransferReplayHandler {
         );
     }
 
+    /**
+     * ADR-020: When BRIDGE_IN fires before its paired BRIDGE_OUT (late-carry ordering), the
+     * authoritative carry is applied here. If the BRIDGE_IN was part of a pre-built pass-through
+     * corridor (e.g. BRIDGE_IN → LENDING_DEPOSIT on the same network), this method must activate
+     * the reservation so the downstream consumer can use {@code takeReservedCarry} instead of
+     * draining the depleted family pool.
+     */
     private void attachLateBridgeCarryToPendingInbound(
             NormalizedTransaction transaction,
             NormalizedTransaction.Flow flow,
@@ -533,7 +658,9 @@ public class TransferReplayHandler {
             PositionStore positions,
             CarryTransfer pendingInbound,
             CarryTransfer carry,
-            LedgerPointCollector ledgerPointCollector
+            LedgerPointCollector ledgerPointCollector,
+            PassThroughCorridorPlan passThroughCorridorPlan,
+            Map<FlowRef, CarryTransfer> reservedPassThroughCarries
     ) {
         PositionState destination = positions.position(pendingInbound.assetKey());
         PositionSnapshot before = flowSupport.snapshot(destination);
@@ -548,6 +675,14 @@ public class TransferReplayHandler {
         flowSupport.recomputePerWalletAvco(destination);
         if (effectiveCarry.avco() != null && destination.uncoveredQuantity().signum() == 0) {
             flowSupport.resolveTemporaryUnresolved(destination);
+        }
+        if (pendingInbound.sourceFlowRef() != null) {
+            continuityCarryService.reservePassThroughCarry(
+                    passThroughCorridorPlan,
+                    pendingInbound.sourceFlowRef(),
+                    effectiveCarry,
+                    reservedPassThroughCarries
+            );
         }
         ledgerPointCollector.record(
                 transaction,
@@ -596,6 +731,304 @@ public class TransferReplayHandler {
                 destination,
                 AssetLedgerPoint.BasisEffect.REALLOCATE_IN
         );
+    }
+
+  private CarryTransfer backfillEarnPrincipalInboundCarry(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow,
+            BigDecimal inboundQuantity,
+            PositionState position,
+            CarryTransfer effectiveCarry,
+            ReplayExecutionState replayState
+    ) {
+        if (!isBybitEarnPrincipalPaired(transaction)
+                || effectiveCarry == null
+                || inboundQuantity == null
+                || inboundQuantity.signum() <= 0) {
+            return effectiveCarry;
+        }
+        BigDecimal cost = effectiveCarry.costBasisUsd() == null ? BigDecimal.ZERO : effectiveCarry.costBasisUsd();
+        if (cost.signum() > 0) {
+            return effectiveCarry;
+        }
+        BigDecimal avco = resolveEarnPrincipalFallbackAvco(transaction, flow, position, replayState);
+        return continuityCarryService.syntheticBybitEarnProductCarry(
+                flow,
+                inboundQuantity,
+                position.assetKey(),
+                avco
+        );
+    }
+
+    /**
+     * P0-A: For earn-principal outbound transfers, override a dust carry with the authoritative
+     * lot basis = movedQty × marketAvco. This corrects cases where the EARN position was
+     * populated with a stale synthetic AVCO (e.g., CMETH at $4 vs. ~$2280) from incorrect
+     * spot pricing at subscription time. Only overrides when carry cost is below the dust
+     * threshold ({@link #EARN_PRINCIPAL_DUST_BASIS_THRESHOLD}).
+     */
+    private CarryTransfer applyEarnPrincipalLotCarryOverride(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow,
+            CarryTransfer carry,
+            PositionState carrySource,
+            ReplayExecutionState replayState
+    ) {
+        if (!isBybitEarnPrincipalPaired(transaction) || flow.getQuantityDelta().signum() >= 0) {
+            return carry;
+        }
+        BigDecimal currentCost = carry == null || carry.costBasisUsd() == null
+                ? BigDecimal.ZERO
+                : carry.costBasisUsd();
+        if (currentCost.compareTo(EARN_PRINCIPAL_DUST_BASIS_THRESHOLD) >= 0) {
+            return carry;
+        }
+        BigDecimal movedQty = flow.getQuantityDelta().abs();
+        if (movedQty == null || movedQty.signum() <= 0) {
+            return carry;
+        }
+        // Use historical cache (not flow-embedded price) since the flow's unitPriceUsd may be
+        // the mis-assigned spot price from earn subscription normalization.
+        BigDecimal marketAvco = replayMarketAuthority.resolveFromCacheOrCatalog(transaction, flow)
+                .map(ReplayMarketAuthority.ResolvedMarketPrice::unitPriceUsd)
+                .orElse(null);
+        if (marketAvco == null || marketAvco.signum() <= 0) {
+            return carry;
+        }
+        BigDecimal lotBasis = movedQty.multiply(marketAvco, MC);
+        if (lotBasis.compareTo(currentCost) <= 0) {
+            return carry;
+        }
+        return continuityCarryService.buildExplicitCarryTransfer(movedQty, lotBasis, carrySource.assetKey());
+    }
+
+    private static boolean isBybitEarnPrincipalPaired(NormalizedTransaction transaction) {
+        if (transaction == null) {
+            return false;
+        }
+        String correlationId = transaction.getCorrelationId();
+        if (correlationId == null
+                || !correlationId.startsWith(BybitEarnPrincipalTransferPairer.EARN_PRINCIPAL_CORRELATION_PREFIX)) {
+            return false;
+        }
+        return Boolean.TRUE.equals(transaction.getContinuityCandidate())
+                || (transaction.getWalletAddress() != null
+                && transaction.getWalletAddress().toUpperCase(Locale.ROOT).endsWith(":EARN"))
+                || (transaction.getWalletAddress() != null
+                && !transaction.getWalletAddress().toUpperCase(Locale.ROOT).endsWith(":EARN"));
+    }
+
+    /**
+     * Earn redemption outbound rows are booked on {@code :EARN}. When the deposit path landed
+     * covered basis on the {@code :EARN} slice, drain that position first. Otherwise fall back
+     * to the umbrella {@code BYBIT:<uid>} spot inventory where buys typically settle.
+     */
+    private static PositionState earnPrincipalCarrySourcePosition(
+            NormalizedTransaction transaction,
+            PositionState flowPosition,
+            ReplayExecutionState replayState
+    ) {
+        if (transaction == null || flowPosition == null || replayState == null) {
+            return flowPosition;
+        }
+        String correlationId = transaction.getCorrelationId();
+        String wallet = transaction.getWalletAddress();
+        if (correlationId == null
+                || !correlationId.startsWith(BybitEarnPrincipalTransferPairer.EARN_PRINCIPAL_CORRELATION_PREFIX)
+                || wallet == null
+                || !wallet.toUpperCase(Locale.ROOT).endsWith(":EARN")) {
+            return flowPosition;
+        }
+        if (hasEarnPrincipalCarryBasis(flowPosition)) {
+            return flowPosition;
+        }
+        String umbrellaWallet = wallet.substring(0, wallet.length() - ":EARN".length());
+        AssetKey flowKey = flowPosition.assetKey();
+        AssetKey umbrellaKey = new AssetKey(
+                umbrellaWallet,
+                flowKey.networkId(),
+                flowKey.assetContract(),
+                flowKey.assetSymbol(),
+                flowKey.assetIdentity()
+        );
+        return replayState.position(umbrellaKey);
+    }
+
+    private static boolean hasEarnPrincipalCarryBasis(PositionState position) {
+        if (position == null) {
+            return false;
+        }
+        BigDecimal quantity = position.quantity();
+        if (quantity == null || quantity.signum() <= 0) {
+            return false;
+        }
+        BigDecimal basis = position.totalCostBasisUsd();
+        if (basis != null && basis.signum() > 0) {
+            return true;
+        }
+        BigDecimal uncovered = position.uncoveredQuantity() == null ? BigDecimal.ZERO : position.uncoveredQuantity();
+        BigDecimal covered = quantity.subtract(uncovered, MC);
+        if (covered.signum() <= 0) {
+            return false;
+        }
+        BigDecimal avco = position.perWalletAvco();
+        return avco != null && avco.signum() > 0;
+    }
+
+    private CarryTransfer normalizeBybitEarnProductCarry(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow,
+            CarryTransfer carry,
+            ReplayExecutionState replayState,
+            PositionState carrySourcePosition,
+            AssetKey assetKey,
+            BigDecimal preResolvedAvco
+    ) {
+        if (!classifier.usesBybitVenueInternalCarryQueue(transaction)
+                && !isBybitEarnPrincipalPaired(transaction)) {
+            return carry;
+        }
+        BigDecimal requested = flow.getQuantityDelta().abs();
+        if (carry != null && carry.quantity() != null && carry.quantity().signum() > 0) {
+            BigDecimal carryCost = carry.costBasisUsd() == null ? BigDecimal.ZERO : carry.costBasisUsd();
+            if (carry.coveredQuantity() != null
+                    && carry.coveredQuantity().signum() > 0
+                    && carryCost.signum() > 0) {
+                return carry;
+            }
+            requested = carry.quantity();
+        }
+        if (requested.signum() <= 0) {
+            return carry;
+        }
+        BigDecimal fallbackAvco = preResolvedAvco;
+        if (fallbackAvco == null || fallbackAvco.signum() <= 0) {
+            fallbackAvco = resolveEarnPrincipalFallbackAvco(
+                    transaction,
+                    flow,
+                    carrySourcePosition,
+                    replayState
+            );
+        }
+        return continuityCarryService.syntheticBybitEarnProductCarry(
+                flow,
+                requested,
+                assetKey,
+                fallbackAvco
+        );
+    }
+
+    private BigDecimal resolveEarnPrincipalFallbackAvco(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow,
+            PositionState primaryPosition,
+            ReplayExecutionState replayState
+    ) {
+        BigDecimal avco = derivePositionAvco(primaryPosition);
+        if (avco != null && avco.signum() > 0) {
+            return avco;
+        }
+        if (isBybitEarnPrincipalPaired(transaction) && replayState != null && transaction != null) {
+            AssetKey flowKey = primaryPosition == null ? null : primaryPosition.assetKey();
+            if (flowKey != null) {
+                String wallet = transaction.getWalletAddress();
+                if (wallet != null) {
+                    String uid = extractBybitUid(wallet);
+                    if (uid != null) {
+                        AssetKey umbrellaKey = new AssetKey(
+                                "BYBIT:" + uid,
+                                flowKey.networkId(),
+                                flowKey.assetContract(),
+                                flowKey.assetSymbol(),
+                                flowKey.assetIdentity()
+                        );
+                        avco = firstPositiveAvco(replayState.position(umbrellaKey));
+                        if (avco != null) {
+                            return avco;
+                        }
+                        AssetKey earnKey = new AssetKey(
+                                "BYBIT:" + uid + ":EARN",
+                                flowKey.networkId(),
+                                flowKey.assetContract(),
+                                flowKey.assetSymbol(),
+                                flowKey.assetIdentity()
+                        );
+                        avco = firstPositiveAvco(replayState.position(earnKey));
+                        if (avco != null) {
+                            return avco;
+                        }
+                        AssetKey fundKey = new AssetKey(
+                                "BYBIT:" + uid + ":FUND",
+                                flowKey.networkId(),
+                                flowKey.assetContract(),
+                                flowKey.assetSymbol(),
+                                flowKey.assetIdentity()
+                        );
+                        avco = firstPositiveAvco(replayState.position(fundKey));
+                        if (avco != null) {
+                            return avco;
+                        }
+                    }
+                }
+            }
+        }
+        return replayMarketAuthority.resolve(transaction, flow)
+                .map(ReplayMarketAuthority.ResolvedMarketPrice::unitPriceUsd)
+                .orElse(null);
+    }
+
+    private static BigDecimal firstPositiveAvco(PositionState position) {
+        BigDecimal avco = derivePositionAvco(position);
+        if (avco != null && avco.signum() > 0) {
+            return avco;
+        }
+        return null;
+    }
+
+    private static String extractBybitUid(String walletAddress) {
+        if (walletAddress == null || !walletAddress.toUpperCase(Locale.ROOT).startsWith("BYBIT:")) {
+            return null;
+        }
+        String without = walletAddress.substring("BYBIT:".length());
+        int colon = without.indexOf(':');
+        return colon > 0 ? without.substring(0, colon) : without;
+    }
+
+    private static BigDecimal derivePositionAvco(PositionState position) {
+        if (position == null) {
+            return null;
+        }
+        BigDecimal avco = position.perWalletAvco();
+        if (avco != null && avco.signum() > 0) {
+            return avco;
+        }
+        BigDecimal quantity = position.quantity();
+        BigDecimal basis = position.totalCostBasisUsd();
+        if (quantity == null || basis == null || quantity.signum() <= 0 || basis.signum() <= 0) {
+            return avco;
+        }
+        BigDecimal uncovered = position.uncoveredQuantity() == null ? BigDecimal.ZERO : position.uncoveredQuantity();
+        BigDecimal covered = quantity.subtract(uncovered, MC);
+        if (covered.signum() <= 0) {
+            return basis.divide(quantity, MC);
+        }
+        return basis.divide(covered, MC);
+    }
+
+    private static boolean preserveBucketOutboundCoverage(NormalizedTransaction transaction) {
+        if (transaction == null || transaction.getType() == null) {
+            return false;
+        }
+        return switch (transaction.getType()) {
+            case VAULT_WITHDRAW,
+                    LENDING_WITHDRAW,
+                    PROTOCOL_CUSTODY_WITHDRAW,
+                    STAKING_WITHDRAW,
+                    LP_EXIT,
+                    LP_EXIT_PARTIAL,
+                    LP_EXIT_FINAL -> true;
+            default -> false;
+        };
     }
 
     private static BigDecimal nonNegative(BigDecimal value) {

@@ -361,8 +361,8 @@ class BybitStreamAuthorityCollapserTest {
     }
 
     @Test
-    void preservesOrphanOutsideTenMinuteDriftWindow() {
-        Instant orphanTs = Instant.parse("2026-02-19T20:30:00Z");
+    void preservesOrphanOutsideFortyEightHourDriftWindow() {
+        Instant orphanTs = Instant.parse("2026-02-17T20:30:00Z");
         Instant collapsedTs = Instant.parse("2026-02-19T20:46:14Z");
 
         NormalizedTransaction collapsedLeg = mirrorDoc(

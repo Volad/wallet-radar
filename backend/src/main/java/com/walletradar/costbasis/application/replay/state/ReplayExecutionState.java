@@ -34,6 +34,8 @@ public final class ReplayExecutionState {
      * the dispatcher logs {@code REPLAY_DEDUP_MIRROR_SKIPPED} and skips the flow.
      */
     private final Set<String> seenContinuityFlows = new HashSet<>();
+    /** Per {@code lp-position:} correlation — [entryEvents, principalExitEvents]. */
+    private final Map<String, int[]> lpPositionReceiptLifecycle = new LinkedHashMap<>();
 
     public ReplayExecutionState(
             PassThroughCorridorPlan passThroughCorridorPlan,
@@ -154,5 +156,29 @@ public final class ReplayExecutionState {
             return true;
         }
         return seenContinuityFlows.add(fingerprint);
+    }
+
+    public void recordLpReceiptEntryEvent(String correlationId) {
+        if (correlationId == null || correlationId.isBlank()) {
+            return;
+        }
+        int[] counts = lpPositionReceiptLifecycle.computeIfAbsent(correlationId, ignored -> new int[2]);
+        counts[0]++;
+    }
+
+    public void recordLpReceiptPrincipalExitEvent(String correlationId) {
+        if (correlationId == null || correlationId.isBlank()) {
+            return;
+        }
+        int[] counts = lpPositionReceiptLifecycle.computeIfAbsent(correlationId, ignored -> new int[2]);
+        counts[1]++;
+    }
+
+    public boolean lpReceiptLifecycleClosed(String correlationId) {
+        int[] counts = lpPositionReceiptLifecycle.get(correlationId);
+        if (counts == null) {
+            return false;
+        }
+        return counts[1] > 0 && counts[1] >= counts[0];
     }
 }

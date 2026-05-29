@@ -8,6 +8,7 @@ import com.walletradar.ingestion.pipeline.classification.ClassificationDecision;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassificationContext;
 import com.walletradar.ingestion.pipeline.classification.onchain.protocol.ProtocolSemanticHint;
 import com.walletradar.ingestion.pipeline.classification.reason.ClassificationReasonCode;
+import com.walletradar.ingestion.pipeline.classification.lp.GmxMarketCorrelationSupport;
 import com.walletradar.ingestion.pipeline.classification.support.OnChainClassificationSupport;
 import com.walletradar.ingestion.pipeline.classification.support.RawLeg;
 import org.springframework.core.Ordered;
@@ -87,10 +88,11 @@ public class GmxLpClassifier implements OnChainFamilyClassifier {
             ProtocolSemanticHint hint,
             NormalizedTransactionType type
     ) {
-        NormalizedTransactionStatus status = hint.correlationId() == null
+        String correlationId = resolveSettlementCorrelationId(context, hint, type);
+        NormalizedTransactionStatus status = correlationId == null
                 ? NormalizedTransactionStatus.PENDING_CLARIFICATION
                 : OnChainClassificationSupport.initialStatus(context.view(), type, ConfidenceLevel.MEDIUM);
-        List<String> reasons = hint.correlationId() == null
+        List<String> reasons = correlationId == null
                 ? List.of(missingReason(type))
                 : List.of();
         return new ClassificationDecision(
@@ -100,7 +102,7 @@ public class GmxLpClassifier implements OnChainFamilyClassifier {
                 ConfidenceLevel.MEDIUM,
                 OnChainClassificationSupport.toFlows(orderAsyncLpSettlementLegs(context.movementLegs()), type),
                 reasons,
-                hint.correlationId(),
+                correlationId,
                 null,
                 null,
                 false,
@@ -145,5 +147,20 @@ public class GmxLpClassifier implements OnChainFamilyClassifier {
         }
         return symbol.regionMatches(true, 0, "GM:", 0, 3)
                 || symbol.regionMatches(true, 0, "GLV", 0, 3);
+    }
+
+    private String resolveSettlementCorrelationId(
+            OnChainClassificationContext context,
+            ProtocolSemanticHint hint,
+            NormalizedTransactionType type
+    ) {
+        if (hint.correlationId() != null && !hint.correlationId().isBlank()) {
+            return hint.correlationId();
+        }
+        if (type != NormalizedTransactionType.LP_ENTRY_SETTLEMENT
+                && type != NormalizedTransactionType.LP_EXIT_SETTLEMENT) {
+            return null;
+        }
+        return GmxMarketCorrelationSupport.correlationIdFromMovementLegs(context.view(), context.movementLegs());
     }
 }

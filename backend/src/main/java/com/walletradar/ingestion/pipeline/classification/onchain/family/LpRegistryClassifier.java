@@ -9,14 +9,17 @@ import com.walletradar.ingestion.pipeline.classification.OnChainClassificationCo
 import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryEntry;
 import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryService;
 import com.walletradar.ingestion.pipeline.classification.reason.ClassificationReasonCode;
+import com.walletradar.ingestion.pipeline.classification.lp.LpClassificationFlowSupport;
+import com.walletradar.ingestion.pipeline.classification.lp.PendleLpCorrelationSupport;
 import com.walletradar.ingestion.pipeline.classification.support.BlockScoutNativeSettlementClarificationSupport;
 import com.walletradar.ingestion.pipeline.classification.support.LpPositionCorrelationSupport;
 import com.walletradar.ingestion.pipeline.classification.support.LpPositionLifecycleSupport;
+import com.walletradar.ingestion.pipeline.classification.support.LpPrincipalCloseEvidence;
 import com.walletradar.ingestion.pipeline.classification.support.NativeAssetSymbolResolver;
+import com.walletradar.ingestion.pipeline.classification.support.OnChainClassificationSupport;
 import com.walletradar.ingestion.pipeline.classification.support.RawLeg;
 import com.walletradar.ingestion.pipeline.classification.support.RegistryDecisionSupport;
 import com.walletradar.ingestion.pipeline.classification.support.RegistryMethodDispatchSupport;
-import com.walletradar.ingestion.pipeline.classification.support.ParityFlowSupport;
 import org.springframework.core.Ordered;
 import org.springframework.stereotype.Component;
 
@@ -76,60 +79,26 @@ public class LpRegistryClassifier implements OnChainFamilyClassifier {
                     protocolRegistryService
             );
             if (type != null) {
-                List<String> pendingReasons = pendingClarificationReasons(context, entry.get(), type);
-                String correlationId = LpPositionCorrelationSupport.correlationId(
-                        context.view(),
-                        type,
-                        entry.get().protocolName()
-                );
-                if (!pendingReasons.isEmpty()) {
-                    return Optional.of(RegistryDecisionSupport.registryResult(
-                            context.view(),
-                            entry.get(),
-                            type,
-                            NormalizedTransactionStatus.PENDING_CLARIFICATION,
-                            ParityFlowSupport.flows(context.view(), context.movementLegs(), type),
-                            pendingReasons,
-                            correlationId
-                    ));
-                }
-                return Optional.of(RegistryDecisionSupport.registryResult(
-                        context.view(),
-                        entry.get(),
-                        type,
-                        context.movementLegs(),
-                        correlationId
-                ));
+                return Optional.of(buildPositionManagerDecision(context, entry.get(), type));
             }
 
             if (RegistryMethodDispatchSupport.requiresMethodAwareDispatch(entry.get(), context.view())) {
                 NormalizedTransactionType multicallType =
                         LpPositionLifecycleSupport.resolvePositionManagerMulticallType(context.view(), context.movementLegs());
                 if (multicallType != null) {
-                    List<String> pendingReasons = pendingClarificationReasons(context, entry.get(), multicallType);
-                    String correlationId = LpPositionCorrelationSupport.correlationId(
-                            context.view(),
-                            multicallType,
-                            entry.get().protocolName()
-                    );
-                    if (!pendingReasons.isEmpty()) {
-                        return Optional.of(RegistryDecisionSupport.registryResult(
-                                context.view(),
-                                entry.get(),
-                                multicallType,
-                                NormalizedTransactionStatus.PENDING_CLARIFICATION,
-                                ParityFlowSupport.flows(context.view(), context.movementLegs(), multicallType),
-                                pendingReasons,
-                                correlationId
-                        ));
-                    }
-                    return Optional.of(RegistryDecisionSupport.registryResult(
-                            context.view(),
-                            entry.get(),
-                            multicallType,
-                            context.movementLegs(),
-                            correlationId
-                    ));
+                    return Optional.of(buildPositionManagerDecision(context, entry.get(), multicallType));
+                }
+            }
+
+            // Fallback for vault-style POSITION_MANAGER contracts with non-standard method selectors
+            // (e.g. Angle vbETH-vbUSDC vault on Katana) that have no NFT tokenId and don't use
+            // the known Uniswap V3 selectors. Only applies when the contract does NOT require
+            // method-aware dispatch (multicall/overloaded contracts must stay NEEDS_REVIEW on
+            // unknown inner calls to avoid mis-classification).
+            if (!RegistryMethodDispatchSupport.requiresMethodAwareDispatch(entry.get(), context.view())) {
+                NormalizedTransactionType vaultType = LpRegistryFamilySupport.resolveByMovementLegsOnly(context.movementLegs());
+                if (vaultType != null) {
+                    return Optional.of(buildPositionManagerDecision(context, entry.get(), vaultType));
                 }
             }
         }
@@ -138,36 +107,14 @@ public class LpRegistryClassifier implements OnChainFamilyClassifier {
             NormalizedTransactionType type =
                     LpPositionLifecycleSupport.resolveDexStakeContractType(context.view(), context.movementLegs());
             if (type != null) {
-                String correlationId = LpPositionCorrelationSupport.correlationId(
-                        context.view(),
-                        type,
-                        entry.get().protocolName()
-                );
-                return Optional.of(RegistryDecisionSupport.registryResult(
-                        context.view(),
-                        entry.get(),
-                        type,
-                        context.movementLegs(),
-                        correlationId
-                ));
+                return Optional.of(buildStakeContractDecision(context, entry.get(), type));
             }
 
             if (RegistryMethodDispatchSupport.requiresMethodAwareDispatch(entry.get(), context.view())) {
                 NormalizedTransactionType multicallType =
                         LpPositionLifecycleSupport.resolveDexStakeContractMulticallType(context.view(), context.movementLegs());
                 if (multicallType != null) {
-                    String correlationId = LpPositionCorrelationSupport.correlationId(
-                            context.view(),
-                            multicallType,
-                            entry.get().protocolName()
-                    );
-                    return Optional.of(RegistryDecisionSupport.registryResult(
-                            context.view(),
-                            entry.get(),
-                            multicallType,
-                            context.movementLegs(),
-                            correlationId
-                    ));
+                    return Optional.of(buildStakeContractDecision(context, entry.get(), multicallType));
                 }
             }
         }
@@ -207,9 +154,105 @@ public class LpRegistryClassifier implements OnChainFamilyClassifier {
                 context.view(),
                 entry,
                 NormalizedTransactionType.LP_EXIT,
+                OnChainClassificationSupport.initialStatus(
+                        context.view(),
+                        NormalizedTransactionType.LP_EXIT,
+                        entry.confidence()
+                ),
                 flows,
-                List.of()
+                List.of(),
+                PendleLpCorrelationSupport.correlationIdFromMovementLegs(context.view(), effectiveLegs)
         ));
+    }
+
+    private ClassificationDecision buildPositionManagerDecision(
+            OnChainClassificationContext context,
+            ProtocolRegistryEntry entry,
+            NormalizedTransactionType type
+    ) {
+        return buildRegistryLpDecision(context, entry, type);
+    }
+
+    private ClassificationDecision buildStakeContractDecision(
+            OnChainClassificationContext context,
+            ProtocolRegistryEntry entry,
+            NormalizedTransactionType type
+    ) {
+        return buildRegistryLpDecision(context, entry, type);
+    }
+
+    private ClassificationDecision buildRegistryLpDecision(
+            OnChainClassificationContext context,
+            ProtocolRegistryEntry entry,
+            NormalizedTransactionType rawType
+    ) {
+        NormalizedTransactionType type = LpPrincipalCloseEvidence.refineLifecycleType(
+                context.view(),
+                context.movementLegs(),
+                rawType
+        );
+        List<String> pendingReasons = pendingClarificationReasons(context, entry, type);
+        String correlationId = resolveCorrelationId(context, entry, type);
+        List<NormalizedTransaction.Flow> flows = LpClassificationFlowSupport.flows(
+                context.view(),
+                context.movementLegs(),
+                type,
+                entry.protocolName()
+        );
+        if (!pendingReasons.isEmpty()) {
+            return RegistryDecisionSupport.registryResult(
+                    context.view(),
+                    entry,
+                    type,
+                    NormalizedTransactionStatus.PENDING_CLARIFICATION,
+                    flows,
+                    pendingReasons,
+                    correlationId
+            );
+        }
+        return RegistryDecisionSupport.registryResult(
+                context.view(),
+                entry,
+                type,
+                OnChainClassificationSupport.initialStatus(context.view(), type, entry.confidence()),
+                flows,
+                List.of(),
+                correlationId
+        );
+    }
+
+    private String resolveCorrelationId(
+            OnChainClassificationContext context,
+            ProtocolRegistryEntry entry,
+            NormalizedTransactionType type
+    ) {
+        String corrId = LpPositionCorrelationSupport.lifecycleCorrelationId(
+                context.view(),
+                type,
+                entry.protocolName()
+        );
+        if (corrId != null) {
+            return corrId;
+        }
+        // Fallback for vault-style LP contracts that have no NFT tokenId (e.g. Angle vaults on Katana).
+        // Only apply when the tx does NOT look like an NFT-minting LP entry that needs clarification —
+        // i.e., skip the fallback when requiresReceiptClarification is true (those should stay PENDING_CLARIFICATION
+        // with null correlationId so the NFT tokenId can be resolved via the clarification pipeline).
+        if (entry.role() == com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryRole.POSITION_MANAGER
+                && LpPositionCorrelationSupport.supportsLpPositionCorrelation(type)
+                && !LpPositionCorrelationSupport.requiresReceiptClarification(context.view(), type)
+                && entry.contractAddress() != null && !entry.contractAddress().isBlank()) {
+            String networkId = context.view().networkId() == null
+                    ? "unknown"
+                    : context.view().networkId().name().toLowerCase(java.util.Locale.ROOT);
+            String protocolSlug = entry.protocolName() == null
+                    ? "unknown"
+                    : entry.protocolName().trim().toLowerCase(java.util.Locale.ROOT).replace(" ", "-");
+            String contractSuffix = entry.contractAddress().toLowerCase(java.util.Locale.ROOT)
+                    .replaceFirst("^0x", "").substring(0, Math.min(16, entry.contractAddress().length()));
+            return "lp-position:" + networkId + ":" + protocolSlug + ":" + contractSuffix;
+        }
+        return null;
     }
 
     private List<String> pendingClarificationReasons(

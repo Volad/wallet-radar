@@ -912,6 +912,51 @@ class BybitCanonicalTransactionBuilderTest {
     }
 
     @Test
+    void launchpoolSubscriptionReclassifiesToLendingDepositWithoutInternalCorrelation() {
+        BybitCanonicalTransactionBuilder builder = new BybitCanonicalTransactionBuilder();
+        ExternalLedgerRaw row = new ExternalLedgerRaw();
+        row.setId("bybit-mnt-launchpool-sub-1");
+        row.setUid("33625378");
+        row.setWalletRef("BYBIT:33625378:FUND");
+        row.setTimeUtc(Instant.parse("2026-03-25T12:00:00Z"));
+        row.setCanonicalType("INTERNAL_TRANSFER");
+        row.setBybitType("Earn");
+        row.setBybitDescription("Launchpool Subscription");
+        row.setBasisRelevant(true);
+        row.setAssetSymbol("MNT");
+        row.setQuantityRaw(new BigDecimal("-153"));
+
+        NormalizedTransaction transaction = builder.buildMappedRow(row, Instant.parse("2026-03-25T12:01:00Z"));
+
+        assertThat(transaction.getType()).isEqualTo(NormalizedTransactionType.LENDING_DEPOSIT);
+        assertThat(transaction.getContinuityCandidate()).isNull();
+        assertThat(transaction.getCorrelationId()).isNull();
+        assertThat(transaction.getFlows()).hasSize(1);
+        assertThat(transaction.getFlows().get(0).getQuantityDelta()).isEqualByComparingTo("-153");
+    }
+
+    @Test
+    void launchpoolAutoWithdrawalReclassifiesToLendingWithdraw() {
+        BybitCanonicalTransactionBuilder builder = new BybitCanonicalTransactionBuilder();
+        ExternalLedgerRaw row = new ExternalLedgerRaw();
+        row.setId("bybit-mnt-launchpool-withdraw-1");
+        row.setUid("33625378");
+        row.setWalletRef("BYBIT:33625378:EARN");
+        row.setTimeUtc(Instant.parse("2026-03-25T12:00:00Z"));
+        row.setCanonicalType("INTERNAL_TRANSFER");
+        row.setBybitType("Earn");
+        row.setBybitDescription("Launchpool Auto-Withdrawal");
+        row.setBasisRelevant(true);
+        row.setAssetSymbol("MNT");
+        row.setQuantityRaw(new BigDecimal("153"));
+
+        NormalizedTransaction transaction = builder.buildMappedRow(row, Instant.parse("2026-03-25T12:01:00Z"));
+
+        assertThat(transaction.getType()).isEqualTo(NormalizedTransactionType.LENDING_WITHDRAW);
+        assertThat(transaction.getCorrelationId()).isNull();
+    }
+
+    @Test
     void externalTransferPreservesSolanaBase58CaseInAddressAndTxHash() {
         BybitCanonicalTransactionBuilder builder = new BybitCanonicalTransactionBuilder();
         ExternalLedgerRaw row = new ExternalLedgerRaw();

@@ -5,6 +5,7 @@ import com.walletradar.lending.application.LendingAssetSymbolSupport;
 
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Shared accounting-family identity contract for continuity-preserving replay.
@@ -22,6 +23,20 @@ public final class AccountingAssetFamilySupport {
     private static final String FAMILY_WSTUSR = "FAMILY:WSTUSR";
     private static final String FAMILY_ARB = "FAMILY:ARB";
     private static final String FAMILY_SOL = "FAMILY:SOL";
+    private static final String FAMILY_LP_RECEIPT = "FAMILY:LP_RECEIPT";
+    private static final String FAMILY_ETH_IDENTITY = "FAMILY:ETH";
+
+    /**
+     * Symbols mapped to {@link #FAMILY_ETH_IDENTITY} but excluded from spot ETH move-basis
+     * timeline rollup because their quantity semantics are incompatible with native ETH.
+     * <p>
+     * P0-B (ADR-017 amendment): CMETH, METH, WEETH, STETH, RSETH are liquid-staking / restaking
+     * variants of ETH with 1:≈1 redemption ratio and must be included in the family timeline.
+     * Only BBSOL remains excluded — it tracks SOL staking yield via the FAMILY:SOL path.
+     */
+    private static final Set<String> SPOT_ETH_TIMELINE_EXCLUDED_SYMBOLS = Set.of(
+            "BBSOL"
+    );
 
     private static final Map<String, String> SYMBOL_FAMILIES = Map.ofEntries(
             // BTC family
@@ -127,6 +142,9 @@ public final class AccountingAssetFamilySupport {
 
     public static String continuityIdentity(String assetSymbol, String assetContract) {
         String symbol = normalizeSymbol(assetSymbol);
+        if (isLpReceiptSymbol(symbol)) {
+            return FAMILY_LP_RECEIPT;
+        }
         String familyIdentity = SYMBOL_FAMILIES.get(symbol);
         if (familyIdentity != null) {
             return familyIdentity;
@@ -151,6 +169,34 @@ public final class AccountingAssetFamilySupport {
 
     private static String normalizeSymbol(String symbol) {
         return symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
+    }
+
+    public static boolean isLpReceiptSymbol(String assetSymbol) {
+        String symbol = normalizeSymbol(assetSymbol);
+        if (symbol.isBlank()) {
+            return false;
+        }
+        return symbol.startsWith("LP-RECEIPT:")
+                || symbol.contains("-LP-")
+                || symbol.endsWith("-LP");
+    }
+
+    public static boolean isExcludedFromSpotEthTimelineRollup(String assetSymbol) {
+        return SPOT_ETH_TIMELINE_EXCLUDED_SYMBOLS.contains(normalizeSymbol(assetSymbol));
+    }
+
+    /**
+     * Whether a ledger point may participate in family move-basis timeline quantity/AVCO
+     * aggregation for the requested family page.
+     */
+    public static boolean includeInSpotFamilyTimelineAggregation(String familyIdentity, String assetSymbol) {
+        if (isLpReceiptSymbol(assetSymbol)) {
+            return false;
+        }
+        if (FAMILY_ETH_IDENTITY.equals(familyIdentity) && isExcludedFromSpotEthTimelineRollup(assetSymbol)) {
+            return false;
+        }
+        return true;
     }
 
     private static String inferredFamilyIdentity(String symbol) {

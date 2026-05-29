@@ -23,6 +23,10 @@ Architecture Decision Records for WalletRadar. Each ADR captures a single decisi
 | [ADR-014](ADR-014-portfolio-conservation-gate.md) | Portfolio conservation gate at dashboard publication | Proposed | 2026-05-16 | N19 — invariants |
 | [ADR-015](ADR-015-per-counterparty-basis-pool.md) | Per-counterparty AVCO basis pool | Proposed | 2026-05-16 | N19 — basis engine |
 | [ADR-016](ADR-016-bybit-internal-transfer-bundling.md) | Bybit multi-stream internal-transfer bundling and round-trip pairing | Accepted | 2026-05-20 | Cycle 12 — Bybit coverage |
+| [ADR-017](ADR-017-timeline-avco-authority.md) | Timeline AVCO authority (move-basis read model) | Accepted (amended) | 2026-05-27 | Cluster E — timeline AVCO |
+| [ADR-018](ADR-018-lp-protocol-family-materialization.md) | LP Protocol-Family Flow Materialization | Accepted (amended) | 2026-05-27 | LP families + ETH-C10 |
+| [ADR-019](ADR-019-corridor-carry-policy.md) | Corridor carry policy: outbound-AVCO preservation | Accepted | 2026-05-29 | ETH-C1 — corridor AVCO |
+| [ADR-020](ADR-020-bridge-late-carry-passthrough-reservation.md) | Bridge late-carry pass-through reservation invariant | Accepted | 2026-05-29 | ETH-V2-C1 — bridge ordering |
 
 ## Cycle/5 N19 cluster — implementation plan mapping
 

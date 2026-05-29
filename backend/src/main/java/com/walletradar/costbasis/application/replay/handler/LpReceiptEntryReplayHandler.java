@@ -132,10 +132,16 @@ public class LpReceiptEntryReplayHandler {
         }
 
         for (IndexedFlow indexedFlow : inboundReceipt) {
+            if (isLpReceiptMarker(indexedFlow.flow())) {
+                continue;
+            }
             applyInboundReceipt(transaction, indexedFlow, corrId, poolContext, touchedAt, replayState);
         }
 
-        if (inboundReceipt.isEmpty() && !outboundPrincipal.isEmpty()) {
+        // P2: Skip receipt synthesis if the LP lifecycle has already been fully closed
+        // (exits ≥ entries AND exits > 0). A re-add after close is an orphan — do not
+        // mint a new synthetic receipt for it (ETH-C7 guard, ADR-018 §3.1).
+        if (!outboundPrincipal.isEmpty() && !replayState.lpReceiptLifecycleClosed(corrId)) {
             synthesizeReceiptFromOutbound(transaction, outboundPrincipal, corrId, poolContext, touchedAt, replayState);
         }
     }
@@ -259,19 +265,19 @@ public class LpReceiptEntryReplayHandler {
         if (totalQty.signum() <= 0 || outboundPrincipal.isEmpty()) {
             return;
         }
-        String receiptSymbol = "LP-RECEIPT:" + corrId.substring(LP_CORR_PREFIX.length());
-        AssetKey receiptKey = new AssetKey(
-                transaction.getWalletAddress(),
-                transaction.getNetworkId(),
-                null,
-                receiptSymbol,
-                "LP-RECEIPT:AGGREGATE"
-        );
+        AssetKey receiptKey = assetSupport.lpReceiptPositionKey(transaction, corrId);
+        if (receiptKey == null) {
+            return;
+        }
         PositionState receiptPosition = replayState.position(receiptKey);
         PositionSnapshot before = flowSupport.snapshot(receiptPosition);
-        BigDecimal avco = totalBasis.signum() > 0 ? totalBasis.divide(totalQty, MC) : null;
-        flowSupport.restoreToPosition(totalQty, receiptPosition, totalBasis, totalUncovered, avco);
+        BigDecimal avco = totalBasis.signum() > 0 ? totalBasis.divide(BigDecimal.ONE, MC) : null;
+        receiptPosition.setQuantity(BigDecimal.ONE);
+        receiptPosition.setTotalCostBasisUsd(totalBasis);
+        receiptPosition.setUncoveredQuantity(totalUncovered);
+        receiptPosition.setPerWalletAvco(avco);
         IndexedFlow marker = outboundPrincipal.getFirst();
+        replayState.recordLpReceiptEntryEvent(corrId);
         replayState.ledgerPointCollector().record(
                 transaction,
                 marker.flow(),

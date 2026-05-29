@@ -32,6 +32,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Cycle/6 A2 + Cycle/12: Post-normalization pairer for Bybit {@code INTERNAL_TRANSFER} legs.
@@ -54,6 +56,7 @@ public class BybitInternalTransferPairer {
     public static final String ROUNDTRIP_CORRELATION_PREFIX = "bybit-it-roundtrip-v1:";
     public static final String PAIR_CORRELATION_PREFIX = "bybit-it-pair-v1:";
     public static final String REKEYED_CORRELATION_PREFIX = "bybit-rekeyed-v1:";
+    public static final String CROSS_UID_CORRELATION_PREFIX = "bybit-cross-uid-v1:";
     public static final String SAME_SIGN_MIRROR_REASON = "BYBIT_STREAM_MIRROR_SAME_SIGN";
 
     private static final MathContext MC = MathContext.DECIMAL64;
@@ -68,16 +71,134 @@ public class BybitInternalTransferPairer {
     private final NormalizedTransactionRepository normalizedTransactionRepository;
     private final BybitInternalTransferProperties properties;
 
+    private static final Pattern UNI_TRANS_UUID_PATTERN =
+            Pattern.compile("uni_trans_([0-9a-fA-F-]{36})");
+
     /**
      * Runs all pairing passes after a normalization batch. Each pass reloads candidates from Mongo.
      */
     public int repairAll() {
-        int total = pairBroadEconomicFingerprint();
+        int total = pairCrossUidUniversalTransfers();
+        total += pairBroadEconomicFingerprint();
         total += dedupSameSignMirrors();
         total += repairSingletonPairs();
         total += pairBundles();
         total += pairSameWalletRoundTrips();
         return total;
+    }
+
+    /**
+     * Pairs UNIVERSAL_TRANSFER legs across different Bybit UIDs (main ↔ sub-account)
+     * using the deterministic {@code transferId} UUID embedded in each document's {@code _id}.
+     * Both sides of a cross-UID transfer share the same {@code uni_trans_<UUID>} key from
+     * the Bybit API — no time-window heuristics needed.
+     */
+    public int pairCrossUidUniversalTransfers() {
+        Query query = Query.query(new Criteria().andOperator(
+                Criteria.where("source").is(NormalizedTransactionSource.BYBIT),
+                Criteria.where("excludedFromAccounting").ne(true),
+                Criteria.where("_id").regex("uni_trans_"),
+                new Criteria().orOperator(
+                        Criteria.where("type").is(NormalizedTransactionType.INTERNAL_TRANSFER),
+                        Criteria.where("type").is(NormalizedTransactionType.EXTERNAL_TRANSFER_IN),
+                        Criteria.where("type").is(NormalizedTransactionType.EXTERNAL_TRANSFER_OUT)
+                )
+        ));
+        List<NormalizedTransaction> candidates = mongoOperations.find(query, NormalizedTransaction.class);
+        if (candidates.size() < 2) {
+            return 0;
+        }
+
+        Map<String, Integer> corrIdCount = new HashMap<>();
+        for (NormalizedTransaction tx : candidates) {
+            String corr = tx.getCorrelationId();
+            if (corr != null && !corr.isBlank()) {
+                corrIdCount.merge(corr, 1, Integer::sum);
+            }
+        }
+
+        Map<String, List<NormalizedTransaction>> groupedByTransferId = new LinkedHashMap<>();
+        for (NormalizedTransaction tx : candidates) {
+            String corr = tx.getCorrelationId();
+            boolean alreadyPaired = corr != null && !corr.isBlank()
+                    && corrIdCount.getOrDefault(corr, 0) >= 2;
+            if (alreadyPaired) {
+                continue;
+            }
+            String uuid = extractTransferUuid(tx.getId());
+            if (uuid != null) {
+                groupedByTransferId.computeIfAbsent(uuid, ignored -> new ArrayList<>()).add(tx);
+            }
+        }
+
+        int rewrites = 0;
+        Instant now = Instant.now();
+        List<NormalizedTransaction> dirty = new ArrayList<>();
+
+        for (List<NormalizedTransaction> group : groupedByTransferId.values()) {
+            if (group.size() != 2) {
+                continue;
+            }
+            NormalizedTransaction a = group.get(0);
+            NormalizedTransaction b = group.get(1);
+            String uidA = extractBybitUid(a.getWalletAddress());
+            String uidB = extractBybitUid(b.getWalletAddress());
+            if (uidA == null || uidB == null || uidA.equals(uidB)) {
+                continue;
+            }
+            int signA = principalQuantitySign(a);
+            int signB = principalQuantitySign(b);
+            if (signA == 0 || signB == 0 || signA == signB) {
+                continue;
+            }
+            applyCrossUidPairCorrelation(a, b, now);
+            dirty.add(a);
+            dirty.add(b);
+            rewrites += 2;
+        }
+
+        if (!dirty.isEmpty()) {
+            normalizedTransactionRepository.saveAll(dirty);
+            log.info(
+                    "BYBIT_CROSS_UID_UNIVERSAL_TRANSFER_PAIRER candidates={} paired={}",
+                    candidates.size(),
+                    rewrites
+            );
+        }
+        return rewrites;
+    }
+
+    private static String extractTransferUuid(String id) {
+        if (id == null) {
+            return null;
+        }
+        Matcher matcher = UNI_TRANS_UUID_PATTERN.matcher(id);
+        return matcher.find() ? matcher.group(1) : null;
+    }
+
+    private static void applyCrossUidPairCorrelation(
+            NormalizedTransaction left,
+            NormalizedTransaction right,
+            Instant now
+    ) {
+        String transferUuid = extractTransferUuid(left.getId());
+        if (transferUuid == null) {
+            transferUuid = extractTransferUuid(right.getId());
+        }
+        String corrId = CROSS_UID_CORRELATION_PREFIX + (transferUuid != null ? transferUuid : "unknown");
+
+        left.setCorrelationId(corrId);
+        right.setCorrelationId(corrId);
+        left.setType(NormalizedTransactionType.INTERNAL_TRANSFER);
+        right.setType(NormalizedTransactionType.INTERNAL_TRANSFER);
+        left.setContinuityCandidate(true);
+        right.setContinuityCandidate(true);
+        left.setMatchedCounterparty(right.getWalletAddress());
+        right.setMatchedCounterparty(left.getWalletAddress());
+        demoteBuySellToTransfer(left);
+        demoteBuySellToTransfer(right);
+        left.setUpdatedAt(now);
+        right.setUpdatedAt(now);
     }
 
     /**
@@ -798,11 +919,14 @@ public class BybitInternalTransferPairer {
         if (broad == null || tx.getWalletAddress() == null) {
             return null;
         }
-        int sign = principalQuantitySign(tx);
-        if (sign == 0) {
+        BigDecimal qty = principalQuantity(tx);
+        if (qty == null || qty.signum() == 0) {
             return null;
         }
-        return broad + "|" + tx.getWalletAddress() + "|" + sign;
+        int sign = qty.signum();
+        BigDecimal absQty = qty.abs().setScale(BROAD_QTY_SCALE, RoundingMode.HALF_UP)
+                .stripTrailingZeros();
+        return broad + "|" + tx.getWalletAddress() + "|" + sign + "|" + absQty.toPlainString();
     }
 
     private static String familySignature(NormalizedTransaction tx) {
@@ -833,6 +957,30 @@ public class BybitInternalTransferPairer {
             return null;
         }
         return family + "|" + tx.getWalletAddress();
+    }
+
+    private static boolean hasDifferentCorrelationId(NormalizedTransaction a, NormalizedTransaction b) {
+        String corrA = a == null ? null : a.getCorrelationId();
+        String corrB = b == null ? null : b.getCorrelationId();
+        if (corrA == null || corrA.isBlank() || corrB == null || corrB.isBlank()) {
+            return true;
+        }
+        return !corrA.equals(corrB);
+    }
+
+    private static boolean involvesEarnSubAccount(NormalizedTransaction tx) {
+        if (tx == null) {
+            return false;
+        }
+        String wallet = tx.getWalletAddress();
+        if (wallet != null && wallet.endsWith(":EARN")) {
+            return true;
+        }
+        String cp = tx.getMatchedCounterparty();
+        if (cp == null || cp.isBlank()) {
+            cp = tx.getCounterpartyAddress();
+        }
+        return cp != null && cp.endsWith(":EARN");
     }
 
     private static String extractBybitUid(String walletAddress) {

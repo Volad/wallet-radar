@@ -4,6 +4,7 @@ import com.walletradar.costbasis.application.replay.model.AssetKey;
 import com.walletradar.costbasis.application.replay.model.PositionSnapshot;
 import com.walletradar.costbasis.application.replay.model.PositionState;
 import com.walletradar.costbasis.domain.AssetLedgerPoint;
+import com.walletradar.accounting.support.AccountingAssetFamilySupport;
 import com.walletradar.costbasis.support.AssetLedgerSupport;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 
@@ -49,7 +50,15 @@ public final class LedgerPointCollector {
         point.setWalletAddress(assetKey.walletAddress());
         point.setNetworkId(assetKey.networkId());
         point.setAccountingAssetIdentity(assetKey.assetIdentity());
-        String familyIdentity = AssetLedgerSupport.accountingFamilyIdentity(transaction, flow);
+        // Prefer family identity derived from the position assetKey (symbol+contract) so that
+        // synthesized ledger points (e.g. LP-RECEIPT written via an ETH marker flow) get the
+        // correct FAMILY:LP_RECEIPT rather than the marker flow's FAMILY:ETH. Fall back to the
+        // flow-based identity only when the assetKey does not resolve to a family.
+        String familyIdentity = AccountingAssetFamilySupport.continuityIdentity(
+                assetKey.assetSymbol(), assetKey.assetContract());
+        if (familyIdentity == null || familyIdentity.isBlank()) {
+            familyIdentity = AssetLedgerSupport.accountingFamilyIdentity(transaction, flow);
+        }
         point.setAccountingFamilyIdentity(familyIdentity);
         point.setFamilyDisplaySymbol(AssetLedgerSupport.familyDisplaySymbol(familyIdentity, assetKey.assetSymbol()));
         point.setAssetSymbol(assetKey.assetSymbol());

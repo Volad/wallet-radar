@@ -1,8 +1,10 @@
 package com.walletradar.costbasis.application.replay.support;
 
 import com.walletradar.accounting.support.AccountingAssetFamilySupport;
+import com.walletradar.ingestion.pipeline.bybit.BybitEarnPrincipalTransferPairer;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import org.springframework.stereotype.Component;
 
@@ -19,17 +21,29 @@ public class ReplayTransferClassifier {
             NormalizedTransaction transaction,
             NormalizedTransaction.Flow flow
     ) {
-        return transaction != null
-                && flow != null
-                && flow.getRole() != NormalizedLegRole.FEE
-                && Boolean.TRUE.equals(transaction.getContinuityCandidate())
+        if (transaction == null || flow == null || flow.getRole() == NormalizedLegRole.FEE) {
+            return false;
+        }
+        if (Boolean.TRUE.equals(transaction.getContinuityCandidate())
                 && ((transaction.getCorrelationId() != null && !transaction.getCorrelationId().isBlank())
                 || (transaction.getTxHash() != null && !transaction.getTxHash().isBlank()))
                 && (transaction.getType() == NormalizedTransactionType.EXTERNAL_TRANSFER_IN
                 || transaction.getType() == NormalizedTransactionType.EXTERNAL_TRANSFER_OUT
                 || transaction.getType() == NormalizedTransactionType.BRIDGE_IN
                 || transaction.getType() == NormalizedTransactionType.BRIDGE_OUT
-                || transaction.getType() == NormalizedTransactionType.INTERNAL_TRANSFER);
+                || transaction.getType() == NormalizedTransactionType.INTERNAL_TRANSFER
+                || transaction.getType() == NormalizedTransactionType.LENDING_DEPOSIT
+                || transaction.getType() == NormalizedTransactionType.LENDING_WITHDRAW)) {
+            return true;
+        }
+        return transaction.getSource() == NormalizedTransactionSource.BYBIT
+                && (transaction.getType() == NormalizedTransactionType.INTERNAL_TRANSFER
+                || transaction.getType() == NormalizedTransactionType.LENDING_DEPOSIT
+                || transaction.getType() == NormalizedTransactionType.LENDING_WITHDRAW);
+    }
+
+    private static boolean isBybitSource(NormalizedTransaction transaction) {
+        return transaction != null && transaction.getSource() == NormalizedTransactionSource.BYBIT;
     }
 
     public boolean isLinkedBridgeContinuityTransfer(
@@ -66,6 +80,11 @@ public class ReplayTransferClassifier {
                 || flow.getQuantityDelta().signum() == 0) {
             return false;
         }
+        String correlationId = transaction.getCorrelationId();
+        if (correlationId != null
+                && correlationId.startsWith(BybitEarnPrincipalTransferPairer.EARN_PRINCIPAL_CORRELATION_PREFIX)) {
+            return false;
+        }
         String continuityIdentity = AccountingAssetFamilySupport.continuityIdentity(flow);
         if (continuityIdentity == null || !continuityIdentity.startsWith("FAMILY:")) {
             return false;
@@ -84,6 +103,9 @@ public class ReplayTransferClassifier {
     }
 
     public boolean isBucketOutbound(NormalizedTransaction transaction, NormalizedTransaction.Flow flow) {
+        if (isBybitSource(transaction)) {
+            return false;
+        }
         return flow != null
                 && flow.getQuantityDelta() != null
                 && flow.getQuantityDelta().signum() < 0
@@ -118,6 +140,9 @@ public class ReplayTransferClassifier {
     }
 
     public boolean isBucketInbound(NormalizedTransaction transaction, NormalizedTransaction.Flow flow) {
+        if (isBybitSource(transaction)) {
+            return false;
+        }
         return flow != null
                 && flow.getQuantityDelta() != null
                 && flow.getQuantityDelta().signum() > 0
@@ -149,6 +174,22 @@ public class ReplayTransferClassifier {
                     LP_POSITION_UNSTAKE -> true;
             default -> false;
         };
+    }
+
+    /**
+     * Bybit corridor transfer (Bybit ↔ on-chain). The correlation ID uniquely identifies
+     * the pair, so quantity-based matching is unnecessary and breaks due to withdrawal fees.
+     */
+    public boolean isCorridorTransfer(NormalizedTransaction transaction) {
+        if (transaction == null) {
+            return false;
+        }
+        String corrId = transaction.getCorrelationId();
+        return corrId != null && corrId.startsWith("BYBIT-CORRIDOR:");
+    }
+
+    public boolean usesBybitVenueInternalCarryQueue(NormalizedTransaction transaction) {
+        return keyFactory.usesBybitVenueInternalCarryQueue(transaction);
     }
 
     public boolean isBybitMultiLegBundleTransfer(NormalizedTransaction transaction) {

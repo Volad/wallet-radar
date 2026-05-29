@@ -59,7 +59,7 @@ public class PassThroughCorridorPlanner {
                             assetKey.assetIdentity()
                     );
                     pendingInboundByScope.computeIfAbsent(scopeKey, ignored -> new ArrayList<>())
-                            .add(new PassThroughCandidate(flowRef, scopeKey, quantity));
+                            .add(new PassThroughCandidate(flowRef, scopeKey, quantity, networkId(transaction)));
                     continue;
                 }
 
@@ -78,6 +78,7 @@ public class PassThroughCorridorPlanner {
                     inbound = selectWalletScopedInboundCandidate(
                             pendingInboundByScope,
                             transaction.getWalletAddress(),
+                            networkId(transaction),
                             assetKey.assetIdentity(),
                             quantity
                     );
@@ -123,9 +124,15 @@ public class PassThroughCorridorPlanner {
         return null;
     }
 
+    /**
+     * Searches for a wallet-scoped inbound candidate whose network matches the outbound transaction.
+     * Only candidates registered on {@code outboundNetworkId} are eligible, preventing accidental
+     * cross-network corridor pairings (ADR-020, P0-b defensive guard).
+     */
     private PassThroughCandidate selectWalletScopedInboundCandidate(
             Map<PassThroughScopeKey, List<PassThroughCandidate>> pendingInboundByScope,
             String walletAddress,
+            String outboundNetworkId,
             String assetIdentity,
             BigDecimal quantity
     ) {
@@ -151,6 +158,14 @@ public class PassThroughCorridorPlanner {
             for (int index = 0; index < candidates.size(); index++) {
                 PassThroughCandidate candidate = candidates.get(index);
                 if (candidate.quantity().compareTo(quantity) != 0) {
+                    continue;
+                }
+                // Reject cross-network pairings: a LENDING_DEPOSIT on ZKSYNC must only pair with
+                // a BRIDGE_IN that also arrived on ZKSYNC (ADR-020, P0-b).
+                // Skip the check if either side has an unknown/null networkId.
+                if (outboundNetworkId != null
+                        && candidate.networkId() != null
+                        && !outboundNetworkId.equals(candidate.networkId())) {
                     continue;
                 }
                 if (matchedCandidate != null) {
@@ -188,5 +203,9 @@ public class PassThroughCorridorPlanner {
 
     private boolean isNotTransferLike(NormalizedTransaction.Flow flow) {
         return flow.getRole() == null || flow.getRole() == NormalizedLegRole.FEE;
+    }
+
+    private String networkId(NormalizedTransaction transaction) {
+        return transaction.getNetworkId() != null ? transaction.getNetworkId().name() : null;
     }
 }

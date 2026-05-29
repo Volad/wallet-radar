@@ -221,6 +221,22 @@
       "confidence": "HIGH",
       "notes": "Canonical SushiSwap V3 router on Katana. Same bytecode as Arbitrum/Base deployments via CREATE2. Verify on katanascan.com"
     },
+    "── LP: Angle/SushiSwap vaults (Katana) ───────────────────────────────": {},
+    "0x3067bdba0e6628497d527bef511c22da8b32ca3f": {
+      "name": "Angle vbETH-vbUSDC LP vault (Katana / SushiSwap)",
+      "protocol": "SushiSwap",
+      "version": "V3",
+      "family": "LP",
+      "role": "POSITION_MANAGER",
+      "event_type": "LP_MINT",
+      "networks": [
+        "KATANA"
+      ],
+      "decomposeByLegs": true,
+      "correlationIdPattern": "lp-position:katana:sushiswap:{poolId}",
+      "confidence": "HIGH",
+      "notes": "Angle vbETH-vbUSDC vault accessed via SushiSwap V3 on Katana (chainId 747474). LP_ENTRY tx 0x67f4e9e1767850c427920a1238903ed6fc56e6cadd4d3defcacc7a99e1329499 sends 0.45 ETH here (2025-09-12). Companion pool contract 0xdc0f215c6e6cbb900aa00afdec299d88c15ff743 handles vbETH/vbUSDC flows. ETH-C10 fix."
+    },
     "── DEX: LFJ / Trader Joe ─────────────────────────────────────────────": {},
     "lfj-aggregator-arbitrum-avalanche": {
       "address": "0x45a62b090df48243f12a21897e7ed91863e2c86b",
@@ -2413,6 +2429,7 @@
       "confidence": "MEDIUM",
       "notes": "Deterministic Katana routed swap surface used by current cycle 72 live swaps."
     },
+    "── ETH-C10 TODO: Katana SushiSwap LP vault contract address needed ─────": {},
     "── PLASMA (chainId: 9745) ───────────────────────────────────────": {},
     "0x1b35fba9357fd9bda7ed0429c8bbabe1e8cc88fc": {
       "name": "Uniswap V3 Universal Router (Plasma)",

@@ -172,6 +172,146 @@ class ReplayPendingTransferKeyFactoryTest {
     }
 
     @Test
+    @DisplayName("Correlated same-UID Bybit bundle with continuityCandidate=true uses corr-family key")
+    void bybitCorrelatedBundleUsesCorrFamilyKey() {
+        NormalizedTransaction outbound = bybitInternalTransfer(
+                "BYBIT:33625378:UTA", "BYBIT:33625378:EARN",
+                "bybit-it-bundle-v1:BYBIT-33625378:EARN_FLEXIBLE_SAVINGS:LDO",
+                "LDO", "-68.665"
+        );
+
+        var outKey = factory.transferKey(outbound, outbound.getFlows().get(0));
+
+        assertThat(outKey).isNotNull();
+        assertThat(outKey.value()).startsWith("corr-family:");
+        assertThat(outKey.value()).doesNotContain("bybit-earn-carry");
+    }
+
+    @Test
+    @DisplayName("Uncorrelated same-UID Bybit INTERNAL_TRANSFER uses bybit-earn-carry key")
+    void bybitUncorrelatedSameUidUsesEarnCarryKey() {
+        NormalizedTransaction outbound = bybitInternalTransfer(
+                "BYBIT:33625378:FUND", "BYBIT:33625378:EARN", null, "LDO", "-68.665"
+        );
+        NormalizedTransaction inbound = bybitInternalTransfer(
+                "BYBIT:33625378:EARN", "BYBIT:33625378:FUND", null, "LDO", "68.665"
+        );
+
+        var outKey = factory.transferKey(outbound, outbound.getFlows().get(0));
+        var inKey = factory.transferKey(inbound, inbound.getFlows().get(0));
+
+        assertThat(outKey).isNotNull();
+        assertThat(outKey.value()).startsWith("bybit-earn-carry:33625378:");
+        assertThat(inKey).isNotNull();
+        assertThat(outKey).isEqualTo(inKey);
+    }
+
+    @Test
+    @DisplayName("Same-UID Bybit INTERNAL_TRANSFER with null counterparty still uses earn-carry key")
+    void bybitNullCounterpartySameUidFallback() {
+        NormalizedTransaction tx = bybitInternalTransfer(
+                "BYBIT:33625378:FUND", null, null, "DOGE", "150"
+        );
+
+        var key = factory.transferKey(tx, tx.getFlows().get(0));
+
+        assertThat(key).isNotNull();
+        assertThat(key.value()).startsWith("bybit-earn-carry:33625378:");
+    }
+
+    @Test
+    @DisplayName("Corridor Bybit transfer uses corr-family key, not earn-carry")
+    void bybitCorridorTransferUsesCorrelationKey() {
+        NormalizedTransaction tx = bybitInternalTransfer(
+                "BYBIT:33625378:FUND", "wallet-a",
+                "BYBIT-CORRIDOR:ARBITRUM:0xabc",
+                "ETH", "1.0"
+        );
+        tx.setType(NormalizedTransactionType.EXTERNAL_TRANSFER_IN);
+        tx.setContinuityCandidate(true);
+
+        var key = factory.transferKey(tx, tx.getFlows().get(0));
+
+        assertThat(key).isNotNull();
+        assertThat(key.value()).startsWith("corr-family:");
+    }
+
+    @Test
+    @DisplayName("Paired Bybit earn principal uses corr-family key, not earn-carry FIFO")
+    void bybitEarnPrincipalPairUsesCorrFamilyKey() {
+        NormalizedTransaction earnOut = bybitInternalTransfer(
+                "BYBIT:33625378:EARN", null, null, "ETH", "-0.15114744"
+        );
+        earnOut.setType(NormalizedTransactionType.LENDING_WITHDRAW);
+        earnOut.setContinuityCandidate(true);
+        earnOut.setCorrelationId("bybit-earn-principal-v1:abc123");
+
+        var key = factory.transferKey(earnOut, earnOut.getFlows().get(0));
+
+        assertThat(key).isNotNull();
+        assertThat(key.value()).startsWith("corr-family:bybit-earn-principal-v1:");
+        assertThat(factory.usesBybitVenueInternalCarryQueue(earnOut)).isFalse();
+    }
+
+    @Test
+    @DisplayName("Bybit LENDING_WITHDRAW/LENDING_DEPOSIT share earn-carry FIFO key")
+    void bybitEarnProductTransferUsesEarnCarryKey() {
+        NormalizedTransaction earnOut = bybitInternalTransfer(
+                "BYBIT:33625378:EARN", null, null, "ETH", "-0.15114744"
+        );
+        earnOut.setType(NormalizedTransactionType.LENDING_WITHDRAW);
+        NormalizedTransaction fundIn = bybitInternalTransfer(
+                "BYBIT:33625378:FUND", null, null, "ETH", "0.15114744"
+        );
+        fundIn.setType(NormalizedTransactionType.LENDING_WITHDRAW);
+
+        var earnKey = factory.transferKey(earnOut, earnOut.getFlows().get(0));
+        var fundKey = factory.transferKey(fundIn, fundIn.getFlows().get(0));
+
+        assertThat(earnKey).isNotNull();
+        assertThat(fundKey).isNotNull();
+        assertThat(earnKey.value()).startsWith("bybit-earn-carry:33625378:");
+        assertThat(earnKey).isEqualTo(fundKey);
+        assertThat(factory.usesBybitVenueInternalCarryQueue(earnOut)).isTrue();
+    }
+
+    @Test
+    @DisplayName("Cross-UID Bybit INTERNAL_TRANSFER uses correlation-based key, not earn-carry")
+    void bybitCrossUidTransferUsesCorrelationKey() {
+        NormalizedTransaction tx = bybitInternalTransfer(
+                "BYBIT:33625378:FUND", "BYBIT:409666:FUND",
+                "bybit-it-pair-v1:xyz",
+                "USDT", "-100"
+        );
+        tx.setContinuityCandidate(true);
+
+        var key = factory.transferKey(tx, tx.getFlows().get(0));
+
+        assertThat(key).isNotNull();
+        assertThat(key.value()).startsWith("corr-family:");
+        assertThat(key.value()).doesNotContain("bybit-earn-carry");
+    }
+
+    private NormalizedTransaction bybitInternalTransfer(
+            String wallet, String counterparty, String correlationId,
+            String asset, String qty
+    ) {
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setSource(NormalizedTransactionSource.BYBIT);
+        tx.setType(NormalizedTransactionType.INTERNAL_TRANSFER);
+        tx.setWalletAddress(wallet);
+        tx.setMatchedCounterparty(counterparty);
+        tx.setCorrelationId(correlationId);
+        tx.setContinuityCandidate(correlationId != null);
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(NormalizedLegRole.TRANSFER);
+        flow.setAssetSymbol(asset);
+        flow.setQuantityDelta(new BigDecimal(qty));
+        tx.setFlows(List.of(flow));
+        return tx;
+    }
+
+    @Test
     @DisplayName("Non-LP transactions are NOT collapsed into the lp:<id> composite bucket")
     void nonLpTransactionsPreserveExistingBucketing() {
         NormalizedTransaction lendingDeposit = lendingDepositTransaction();

@@ -17,6 +17,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -57,6 +58,9 @@ public class BybitInternalTransferOrphanFallbackService {
         int outboundDemoted = 0;
         for (NormalizedTransaction tx : candidates) {
             if (isFa001OnChainCorridorAnchor(tx)) {
+                continue;
+            }
+            if (isProtectedFundEarnPairerCorrelation(tx, corrIdCount)) {
                 continue;
             }
             String corr = tx.getCorrelationId();
@@ -186,6 +190,73 @@ public class BybitInternalTransferOrphanFallbackService {
             }
         }
         return 0;
+    }
+
+    /**
+     * Only pairer-confirmed FUND↔EARN bundles stay {@code INTERNAL_TRANSFER}. Singleton
+     * {@code bybit-econ-v1:*} Earn/Launchpool legs are demoted so pricing can establish basis.
+     */
+    private static boolean isProtectedFundEarnPairerCorrelation(
+            NormalizedTransaction tx,
+            Map<String, Integer> corrIdCount
+    ) {
+        if (!isSameUidFundEarnCounterparty(tx)) {
+            return false;
+        }
+        String corr = tx.getCorrelationId();
+        if (corr == null || corr.isBlank() || corrIdCount == null) {
+            return false;
+        }
+        if (!(corr.startsWith("bybit-it-bundle-v1:")
+                || corr.startsWith("bybit-it-roundtrip-v1:")
+                || corr.startsWith("bybit-collapsed-v1:"))) {
+            return false;
+        }
+        return corrIdCount.getOrDefault(corr, 0) > 1;
+    }
+
+    private static boolean isSameUidFundEarnCounterparty(NormalizedTransaction tx) {
+        if (tx == null) {
+            return false;
+        }
+        String wallet = tx.getWalletAddress();
+        String counterparty = tx.getMatchedCounterparty();
+        if (wallet == null || counterparty == null) {
+            return false;
+        }
+        String walletSuffix = subAccountSuffix(wallet);
+        String counterpartySuffix = subAccountSuffix(counterparty);
+        if (walletSuffix == null || counterpartySuffix == null) {
+            return false;
+        }
+        boolean fundEarnPair = ("FUND".equals(walletSuffix) && "EARN".equals(counterpartySuffix))
+                || ("EARN".equals(walletSuffix) && "FUND".equals(counterpartySuffix));
+        if (!fundEarnPair) {
+            return false;
+        }
+        String walletUid = extractBybitUid(wallet);
+        String counterpartyUid = extractBybitUid(counterparty);
+        return walletUid != null && walletUid.equals(counterpartyUid);
+    }
+
+    private static String subAccountSuffix(String address) {
+        if (address == null) {
+            return null;
+        }
+        int colon = address.lastIndexOf(':');
+        if (colon < 0 || colon == address.length() - 1) {
+            return null;
+        }
+        return address.substring(colon + 1).toUpperCase(Locale.ROOT);
+    }
+
+    private static String extractBybitUid(String address) {
+        if (address == null || !address.toUpperCase(Locale.ROOT).startsWith("BYBIT:")) {
+            return null;
+        }
+        String remainder = address.substring("BYBIT:".length());
+        int colon = remainder.indexOf(':');
+        return colon >= 0 ? remainder.substring(0, colon) : remainder;
     }
 
     /**

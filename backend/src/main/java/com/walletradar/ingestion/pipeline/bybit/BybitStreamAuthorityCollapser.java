@@ -93,7 +93,8 @@ public class BybitStreamAuthorityCollapser {
      * round-trip territory (round-trip pairs are tagged {@code bybit-it-roundtrip-v1:}, not
      * {@code bybit-collapsed-v1:}, so the orphan-vs-collapsed neighbor lookup ignores them).
      */
-    private static final Duration ORPHAN_DRIFT_WINDOW = Duration.ofMinutes(10);
+    /** Covers FH/TX_LOG mirrors lagging canonical IT pairs by up to ~2 days on prod. */
+    private static final Duration ORPHAN_DRIFT_WINDOW = Duration.ofHours(48);
     private static final long BUCKET_SECONDS = 60L;
 
     private final MongoOperations mongoOperations;
@@ -135,6 +136,7 @@ public class BybitStreamAuthorityCollapser {
                 if (Boolean.TRUE.equals(tx.getExcludedFromAccounting())) {
                     continue;
                 }
+                propagateCorrelationMetadata(tx, canonical, now, dirty);
                 String reason = EXCLUSION_REASON_PREFIX + sourceFileTag(tx);
                 tx.setExcludedFromAccounting(true);
                 tx.setAccountingExclusionReason(reason);
@@ -224,6 +226,9 @@ public class BybitStreamAuthorityCollapser {
             }
             for (NormalizedTransaction orphan : bucket) {
                 if (!isDriftOrphanCandidate(orphan) || collapsedIds.contains(orphan.getId())) {
+                    continue;
+                }
+                if ("EARN".equals(extractSubAccount(orphan.getWalletAddress()))) {
                     continue;
                 }
                 Instant orphanTs = orphan.getBlockTimestamp();
@@ -469,6 +474,31 @@ public class BybitStreamAuthorityCollapser {
             }
         }
         return residual;
+    }
+
+    /**
+     * When an excluded mirror doc carries correlation metadata that the canonical survivor lacks,
+     * propagate it to the survivor so the replay engine can still route the carry correctly.
+     */
+    private static void propagateCorrelationMetadata(
+            NormalizedTransaction excluded,
+            NormalizedTransaction canonical,
+            Instant now,
+            List<NormalizedTransaction> dirtyAccumulator
+    ) {
+        if (excluded.getCorrelationId() == null || excluded.getCorrelationId().isBlank()) {
+            return;
+        }
+        if (canonical.getCorrelationId() != null && !canonical.getCorrelationId().isBlank()) {
+            return;
+        }
+        canonical.setCorrelationId(excluded.getCorrelationId());
+        canonical.setMatchedCounterparty(excluded.getMatchedCounterparty());
+        canonical.setContinuityCandidate(excluded.getContinuityCandidate());
+        canonical.setUpdatedAt(now);
+        if (!dirtyAccumulator.contains(canonical)) {
+            dirtyAccumulator.add(canonical);
+        }
     }
 
     // -------------------------------------------------------------------------

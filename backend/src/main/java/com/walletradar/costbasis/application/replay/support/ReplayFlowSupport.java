@@ -106,6 +106,20 @@ public class ReplayFlowSupport {
         return genericFlowReplayEngine.materializePendingInbound(flow, position);
     }
 
+    public java.util.Optional<BigDecimal> materializePendingInbound(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow,
+            PositionState position,
+            boolean permitUncoveredFallback
+    ) {
+        return genericFlowReplayEngine.materializePendingInbound(
+                transaction,
+                flow,
+                position,
+                permitUncoveredFallback
+        );
+    }
+
     public void applyPeggedNativeSpotFallback(
             NormalizedTransaction.Flow flow,
             PositionState position,

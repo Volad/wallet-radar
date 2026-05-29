@@ -1,7 +1,7 @@
 # WalletRadar — Accounting Policy
 
 > **Version:** v3 target
-> **Last updated:** 2026-05-07
+> **Last updated:** 2026-05-29 (staked ETH inclusion, WRAP/UNWRAP AVCO carry, corridor rate rule)
 > **Accounting method:** AVCO
 
 **FA-001 (increment 1):** Same-session wallet↔wallet and on-chain↔Bybit paired legs replay as **continuity**
@@ -237,6 +237,10 @@ Interpretation:
 
 - current balance may still be economically usable
 - but historical provenance remains audit-sensitive
+- **does not change displayed AVCO** when `coverage_gap` is absent; header AVCO
+  and move-basis timeline use covered-quantity-weighted basis, not flag state
+- flags clear only after authoritative replay repair (paired carry, priced
+  authority), not via epsilon uncovered thresholds alone
 
 ### `missing_replay_point`
 
@@ -476,6 +480,31 @@ Bridge-specific guardrail:
 - therefore a later same-wallet same-network `BRIDGE_OUT` must consume the
   pooled source position once an intervening local `BUY`, `SWAP`, reward, LP
   exit, or other principal-affecting row has already mixed that bucket
+
+### 4.1b Bridge late-carry ordering invariant (ADR-020, 2026-05-29)
+
+When a `BRIDGE_IN` arrives in replay **before** its paired `BRIDGE_OUT` (late-carry ordering), the authoritative carry applied by `attachLateBridgeCarryToPendingInbound` must also activate any pre-built pass-through corridor reservation:
+
+- The pending-inbound `CarryTransfer` stores the original `BRIDGE_IN` `FlowRef` (`sourceFlowRef`).
+- After applying `bridgeInboundCarry`, replay calls `reservePassThroughCarry(passThroughCorridorPlan, sourceFlowRef, effectiveCarry, ...)`.
+- The downstream consumer (`LENDING_DEPOSIT`, `LP_ENTRY`, etc.) **must** call `takeReservedCarry` — never drain the depleted family pool.
+
+**Violation example**: Two LiFi ZKSync BRIDGE_INs (08:27 and 08:40, +0.4997 ETH each) arrived before UNICHAIN BRIDGE_OUTs. Without activation, ZKSync LENDING_DEPOSITs 35 seconds later captured $3.49 and $7.62 instead of $1,598 and $1,343. ETH AVCO dropped to $1,953 from the correct $2,692–$2,828.
+
+**Defensive guard (P0-b)**: `selectWalletScopedInboundCandidate` in `PassThroughCorridorPlanner` rejects candidates whose `networkId` differs from the outbound transaction's `networkId`. This prevents hypothetical cross-network corridor pairings via the wallet-scoped fallback path. Counterparty-matched corridors (e.g. Bybit transit ARBITRUM→MANTLE) are unaffected.
+
+### 4.1a Corridor carry rate rule (ADR-019, 2026-05-29)
+
+For Bybit→on-chain corridor transfers (`BYBIT-CORRIDOR:*` correlationId, `CARRY_OUT`/`CARRY_IN` pair):
+
+- The inbound on-chain bucket's `avcoAfterUsd` **must equal** the outbound venue-slice `avcoBeforeUsd`
+  at the moment of the `CARRY_OUT` leg, divided by the moved quantity.
+  - Formula: `inboundAvco = carryBasis / movedQty` where `carryBasis = movedQty × outboundSliceAvco`.
+- The **residual source-bucket AVCO** after `CARRY_OUT` may legitimately differ (it reflects the
+  remaining lot composition) and must not influence the inbound rate.
+- Violation example: `0xa5e755…` moved 3.06 ETH at `$5,016` total basis (`$1,639/ETH`) while outbound
+  slice `avco = $1,714/ETH`. The correct inbound rate is `$1,714`, not `$1,639`.
+- See ADR-019 for the full acceptance check.
 
 ### 4.2 Correlated same-family carry ingress policy
 
@@ -826,6 +855,12 @@ Transaction-type pricing contract:
   - Principal is continuity, not a new buy/sell.
   - Use the underlying native asset price for valuation and fee accounting
     only.
+  - **AVCO carry rule (2026-05-29):** Replay must preserve the source bucket's
+    `avcoBeforeUsd` on the destination bucket after WRAP/UNWRAP.
+    - `WRAP` (ETH→WETH): WETH bucket `avcoAfterUsd` = source ETH `avcoBeforeUsd` (±0.1%).
+    - `UNWRAP` (WETH→ETH): ETH bucket `avcoAfterUsd` = source WETH `avcoBeforeUsd` (±0.1%).
+    - If source AVCO is 0 (uncovered), destination inherits 0 — this is correct;
+      no synthetic pricing is applied.
   - Replay must treat canonical wrapped/native pairs such as `ETH <-> WETH`
     with the same atomic family-equivalent carry rule already used for simple
     audited custody rows:
@@ -1351,6 +1386,29 @@ Each point must include:
   - `hasIncompleteHistoryAfter`
   - `hasUnresolvedFlagsAfter`
   - `unresolvedFlagCountAfter`
+
+### 9.2 Three AVCO surfaces (do not mix at acceptance)
+
+WalletRadar exposes **three independent AVCO metrics**. Comparing them without
+context produces false regressions (Cluster E).
+
+| Surface | Source | Typical use |
+|---|---|---|
+| **Dashboard header** | Live `on_chain_balances` quantity + latest per-bucket ledger basis (venue slices; no bare umbrella when sub-ledgers exist) | Current portfolio AVCO |
+| **Family move-basis timeline** | `TimelineAvcoAuthority` on grouped events (`avcoKind=PRIMARY_FLOW` or `UNAVAILABLE`; no `FAMILY_ROLLUP` on the main line) | Historical spot AVCO chart (~$2k–$4k ETH band) |
+| **Per-point ledger** | Raw `AssetLedgerPoint.avcoAfterUsd` / `avcoBeforeUsd` per exact bucket | Audit, replay debugging, per-wallet truth |
+
+Timeline rules (ADR-017):
+
+- Spot-family aggregation excludes `LP-RECEIPT:*` (own `FAMILY:LP_RECEIPT` at write).
+- On `FAMILY:ETH` pages, **staked/liquid-staking ETH is included** in quantity rollup
+  and AVCO authority: `ETH`, `WETH`, `AMANWETH`, `CMETH`, `METH`, `WEETH`, `WSTETH`,
+  `STETH`, `RSETH`. Only `BBSOL` is excluded from `FAMILY:ETH`.
+  (Amended 2026-05-29 per ADR-017; prior version incorrectly excluded staked ETH symbols.)
+- LP receipt basis remains in `lp_receipt_basis_pools` and `FAMILY:LP_RECEIPT`
+  ledger rows; it is not summed into ETH share-count denominators.
+- Chart `avcoBefore` should follow the previous timeline row of the same
+  `accountingAssetIdentity` spot series.
 
 `basisEffect` intent:
 

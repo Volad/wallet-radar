@@ -118,3 +118,29 @@ spot-style liquidity protocols and pool products.
   lifecycle resolves outside legacy
 - audited `Velodrome Slipstream` zero-movement approve calls to the trusted
   position manager remain `APPROVE`, not `LP_ENTRY`
+
+## Protocol-Family Matrix (A–E)
+
+| Family | Protocols | Correlation | Flow materialization |
+|---|---|---|---|
+| **A — NFT CL** | PancakeSwap, Uniswap, Velodrome Slipstream, Aerodrome | `lp-position:{network}:{protocol-slug}:{tokenId}` | `LpNftClFlowMaterializer`: inbound/outbound `LP-RECEIPT:*` from ERC721 logs + ERC20 principal legs |
+| **B — GMX async** | GMX V2 GM/GLV markets | `gmx-lp:{network}:{market-slug}` from settlement share symbol (e.g. `GM: ETH/USD [WETH-USDC]`) | GM/GLV share legs only; async request/settlement lifecycle |
+| **C — Pendle** | Pendle PT/LPT markets | `pendle-lp:{network}:{market-id}` | Actual `PENDLE-LPT` / PT legs; no NFT receipt pool |
+| **D — Fungible LP** | Curve, Balancer, LFJ | composite `lp:` bucket via receipt token identity | Outbound fungible LP/BPT burn + principal return; no synthetic NFT receipt |
+| **E — Gauge / farm** | Pancake MasterChef, Velodrome stake, Aura gauge | optional ERC721 link (phase 2) | `LP_POSITION_STAKE` / `LP_POSITION_UNSTAKE` **do not** close NFT CL positions |
+
+### Principal vs fee claim
+
+| Outcome | Evidence |
+|---|---|
+| `LP_FEE_CLAIM` | Collect-only or inbound reward tokens without position-reduction evidence |
+| `LP_EXIT` (principal) | Decrease/burn/negative ModifyLiquidity/ERC721 from wallet **and** principal or receipt legs |
+
+Pancake-specific: cake-only or dust-USDC-only former `LP_EXIT` rows downgrade to
+`LP_FEE_CLAIM` with `lp-position` correlation when `tokenId` is decodable.
+
+Harvest rows (`LP_FEE_CLAIM`) must carry `lp-position:*` correlation when calldata exposes
+`tokenId`; they must not drain `lp_receipt_basis_pools` on replay.
+
+Gauge stake/unstake moves custody of an NFT or farm share but does **not** by itself mark
+the underlying concentrated-liquidity position closed.

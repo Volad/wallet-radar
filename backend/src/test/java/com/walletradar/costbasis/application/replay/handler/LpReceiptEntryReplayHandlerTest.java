@@ -1,6 +1,7 @@
 package com.walletradar.costbasis.application.replay.handler;
 
 import com.walletradar.costbasis.application.LpReceiptBasisPoolService;
+import com.walletradar.costbasis.application.replay.model.AssetKey;
 import com.walletradar.costbasis.application.replay.model.PassThroughCorridorPlan;
 import com.walletradar.costbasis.application.replay.model.PositionState;
 import com.walletradar.costbasis.application.replay.persistence.LedgerPointCollector;
@@ -84,6 +85,26 @@ class LpReceiptEntryReplayHandlerTest {
         var pool = replayState.lpReceiptBasisPoolContext().pools().values().iterator().next();
         assertThat(pool.getQtyHeld()).isEqualByComparingTo("0.5");
         assertThat(pool.getBasisHeldUsd()).isEqualByComparingTo("1000");
+    }
+
+    @Test
+    void synthesizesSingleNftReceiptMarkerWithPoolBasis() {
+        ReplayAssetSupport assetSupport = new ReplayAssetSupport();
+        NormalizedTransaction tx = lpEntry("0x1", "-0.5");
+        var flow = tx.getFlows().getFirst();
+        var assetKey = assetSupport.assetKey(tx, flow);
+        PositionState before = replayState.position(assetKey);
+        before.setQuantity(new BigDecimal("1"));
+        before.setTotalCostBasisUsd(new BigDecimal("2000"));
+        before.setUncoveredQuantity(BigDecimal.ZERO);
+        before.setPerWalletAvco(new BigDecimal("2000"));
+
+        handler.apply(tx, replayState);
+
+        AssetKey receiptKey = assetSupport.lpReceiptPositionKey(tx, tx.getCorrelationId());
+        PositionState receipt = replayState.position(receiptKey);
+        assertThat(receipt.quantity()).isEqualByComparingTo("1");
+        assertThat(receipt.totalCostBasisUsd()).isEqualByComparingTo("1000");
     }
 
     @Test

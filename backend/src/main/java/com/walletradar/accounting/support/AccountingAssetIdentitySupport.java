@@ -13,6 +13,7 @@ import java.util.Set;
  */
 public final class AccountingAssetIdentitySupport {
 
+    private static final String EARN_PRINCIPAL_CORRELATION_PREFIX = "bybit-earn-principal-v1:";
     private static final String ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 
     private static final Map<NetworkId, String> NATIVE_SYMBOLS = Map.ofEntries(
@@ -37,6 +38,55 @@ public final class AccountingAssetIdentitySupport {
     );
 
     private AccountingAssetIdentitySupport() {
+    }
+
+    /**
+     * Normalizes wallet address for position keying. UTA and FUND are purely
+     * administrative sub-accounts within one Bybit account, so they share a
+     * single position (UID-level). EARN stays separate (lending semantics).
+     */
+    public static String positionWalletAddress(NormalizedTransaction transaction) {
+        if (transaction == null) {
+            return null;
+        }
+        return positionWalletAddress(transaction.getWalletAddress());
+    }
+
+    public static String positionWalletAddress(String walletAddress) {
+        if (walletAddress == null || !walletAddress.startsWith("BYBIT:")) {
+            return walletAddress;
+        }
+        if (walletAddress.endsWith(":UTA") || walletAddress.endsWith(":FUND")) {
+            return walletAddress.substring(0, walletAddress.lastIndexOf(':'));
+        }
+        return walletAddress;
+    }
+
+    /**
+     * Replay position wallet for ledger and carry attachment. Earn-principal paired rows keep
+     * their venue sub-account ({@code :FUND}, {@code :EARN}, {@code :UTA}) so inbound restore
+     * lands on the same wallet as normalized evidence and pending carry keys can match.
+     */
+    public static String replayPositionWalletAddress(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow
+    ) {
+        if (isEarnPrincipalPaired(transaction)) {
+            if (flow != null && flow.getAccountRef() != null && !flow.getAccountRef().isBlank()) {
+                return flow.getAccountRef().trim();
+            }
+            String wallet = transaction == null ? null : transaction.getWalletAddress();
+            return wallet == null || wallet.isBlank() ? null : wallet.trim();
+        }
+        return positionWalletAddress(transaction);
+    }
+
+    private static boolean isEarnPrincipalPaired(NormalizedTransaction transaction) {
+        if (transaction == null || !Boolean.TRUE.equals(transaction.getContinuityCandidate())) {
+            return false;
+        }
+        String correlationId = transaction.getCorrelationId();
+        return correlationId != null && correlationId.startsWith(EARN_PRINCIPAL_CORRELATION_PREFIX);
     }
 
     public static NetworkId positionNetwork(NormalizedTransaction transaction) {

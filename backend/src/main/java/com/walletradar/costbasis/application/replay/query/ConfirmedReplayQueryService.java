@@ -1,8 +1,11 @@
 package com.walletradar.costbasis.application.replay.query;
 
+import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -14,10 +17,71 @@ import java.util.List;
 @RequiredArgsConstructor
 public class ConfirmedReplayQueryService {
 
+    /**
+     * For INTERNAL_TRANSFER transactions only: outflows (negative qty, i.e. CARRY_OUT) must
+     * process before inflows (positive qty, i.e. CARRY_IN) at the same timestamp so that the
+     * pending-transfer queue is populated before it is consumed. Without this tiebreaker, Bybit
+     * EARN deposits where both legs share the same {@code blockTimestamp} read stale queue entries.
+     * Scoped to Bybit continuity rows (INTERNAL_TRANSFER and Earn product LENDING_*) to avoid
+     * reordering unrelated buys/sells at the same timestamp.
+     */
     private static final Comparator<NormalizedTransaction> REPLAY_ORDER = Comparator
             .comparing(NormalizedTransaction::getBlockTimestamp, Comparator.nullsLast(Comparator.naturalOrder()))
             .thenComparing(NormalizedTransaction::getTransactionIndex, Comparator.nullsLast(Comparator.naturalOrder()))
+            .thenComparingInt(ConfirmedReplayQueryService::bybitSameDayTransactionClassOrder)
+            .thenComparingInt(ConfirmedReplayQueryService::bybitContinuityFlowSign)
             .thenComparing(NormalizedTransaction::getId, Comparator.nullsLast(Comparator.naturalOrder()));
+
+    /**
+     * Same-day Bybit earn redeem must run after spot disposals that shrink umbrella inventory,
+     * otherwise earn outbound drains an empty {@code :EARN} slice while umbrella basis remains.
+     */
+    private static int bybitSameDayTransactionClassOrder(NormalizedTransaction tx) {
+        if (tx == null || tx.getSource() != NormalizedTransactionSource.BYBIT) {
+            return 0;
+        }
+        if (isBybitSpotDisposition(tx)) {
+            return -2;
+        }
+        return switch (tx.getType()) {
+            case LENDING_WITHDRAW -> -1;
+            default -> 0;
+        };
+    }
+
+    private static boolean isBybitSpotDisposition(NormalizedTransaction tx) {
+        if (tx.getId() != null && tx.getId().contains(":EXECUTION_SPOT:")) {
+            return true;
+        }
+        return tx.getType() == NormalizedTransactionType.EXTERNAL_TRANSFER_OUT
+                || tx.getType() == NormalizedTransactionType.DEX_ORDER_SETTLEMENT;
+    }
+
+    private static int bybitContinuityFlowSign(NormalizedTransaction tx) {
+        if (tx == null || tx.getFlows() == null
+                || tx.getSource() != NormalizedTransactionSource.BYBIT) {
+            return 0;
+        }
+        return switch (tx.getType()) {
+            case INTERNAL_TRANSFER, LENDING_DEPOSIT, LENDING_WITHDRAW -> bybitPrincipalFlowSign(tx);
+            default -> 0;
+        };
+    }
+
+    private static int bybitPrincipalFlowSign(NormalizedTransaction tx) {
+        if (tx == null || tx.getFlows() == null) {
+            return 0;
+        }
+        for (NormalizedTransaction.Flow flow : tx.getFlows()) {
+            if (flow != null
+                    && flow.getQuantityDelta() != null
+                    && flow.getQuantityDelta().signum() != 0
+                    && flow.getRole() != NormalizedLegRole.FEE) {
+                return flow.getQuantityDelta().signum();
+            }
+        }
+        return 0;
+    }
 
     private final NormalizedTransactionRepository normalizedTransactionRepository;
 

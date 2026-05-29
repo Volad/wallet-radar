@@ -1,0 +1,81 @@
+---
+description: Audit/fix workflow for AVCO, move basis, cost basis, linking, pricing, and replay correctness
+alwaysApply: false
+---
+
+# Financial Correctness Audit & Fix
+
+Activate when investigating or fixing broken **AVCO**, **move basis**, **cost basis**, **linking**, **pricing**, or **replay** output.
+
+## Hard gates
+
+- Do **not** change application code before an **approved implementation plan** and **documentation updates** (`docs/03-accounting.md`, `docs/adr/`, normalization family docs as needed).
+- Do **not** skip post-implementation verification.
+
+## Phase 1 — Classify (`financial-logic-auditor`)
+
+Delegate to **`financial-logic-auditor`** (`readonly: true`):
+
+- Reconstruct authoritative truth from raw sources; compare to pipeline output.
+- Cluster blockers by earliest **failed stage**: `classification` → `clarification` → `linking` → `pricing` → `move_basis` → `cost_basis` → `avco` → `replay` → `verification`.
+- Per cluster: evidence state, remediation class, reusable rule package (see `.codex/skills/financial-logic-auditor/SKILL.md`).
+- Write audit artifacts under `results/` (`blockers.md`, `accounting-failure-analysis.md`, `required-changes.md`, etc.).
+
+Parent synthesizes a ranked cluster list. **No application code** in this phase.
+
+## Phase 2 — Implementation plan (parent, mandatory)
+
+Always write `docs/tasks/{slug}-implementation-plan.md` with:
+
+- **Scope** — wallets, networks, assets, blocker IDs
+- **Root cause** — stage + cluster summary from audit
+- **Changes** — ordered tasks, upstream pipeline stages first
+- **Docs** — required ADR / accounting / family doc updates
+- **Acceptance** — rerun checks, metrics, auditor sign-off criteria
+- **Risks** — unsupported scope, migrations, ordering dependencies
+
+## Phase 3 — Plan review (parallel)
+
+Run until explicit approval or revision:
+
+| Role | `subagent_type` | Focus |
+|------|-----------------|-------|
+| Financial auditor | `financial-logic-auditor` | Financial truth, stage diagnosis, rule packages |
+| Business analyst | `business-analyst` | DoD, edge cases, supported/unsupported scope |
+| System architect | `system-architect` | Module boundaries, ADRs, determinism, cost |
+
+Revise the plan until all three approve or the user approves explicitly.
+
+## Phase 4 — Documentation (before code)
+
+Apply agreed doc changes. New ADRs or accounting policy changes need explicit user approval (see `ORCHESTRATION.md`).
+
+## Phase 5 — Implement (`backend-dev`)
+
+Delegate to **`backend-dev`** only with approved plan + updated docs.
+
+Typical scope: `backend/**/costbasis/**`, `accounting/**`, `pricing/**`, `ingestion/**` (normalization, clarification, pipeline).
+
+## Phase 6 — Verify (parent, after implementation)
+
+Do not mark done in the same turn as code merge:
+
+1. Prod rebuild per [prod-rebuild-workflow.mdc](prod-rebuild-workflow.mdc) (`--skip-frontend`; add `--clear-pricing-cache` if pricing policy changed).
+2. Wait for normalization and cost-basis replay to complete.
+3. Re-delegate **`financial-logic-auditor`** to reconcile DB output against authoritative reconstruction and plan acceptance checks.
+4. On failure → return to Phase 2 with failed acceptance surfaces documented.
+
+## Subagent map
+
+```
+Classify     → financial-logic-auditor (readonly)
+Plan review  → financial-logic-auditor + business-analyst + system-architect
+Implement    → backend-dev
+Verify       → prod rebuild (parent) + financial-logic-auditor
+```
+
+## References
+
+- `.codex/skills/financial-logic-auditor/SKILL.md`
+- `ORCHESTRATION.md`
+- `docs/03-accounting.md`

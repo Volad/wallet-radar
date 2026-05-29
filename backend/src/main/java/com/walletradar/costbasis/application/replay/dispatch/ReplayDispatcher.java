@@ -1,5 +1,6 @@
 package com.walletradar.costbasis.application.replay.dispatch;
 
+import com.walletradar.accounting.support.AccountingAssetIdentitySupport;
 import com.walletradar.costbasis.application.replay.handler.AsyncSpotOrderReplayHandler;
 import com.walletradar.costbasis.application.replay.handler.BorrowReplayHandler;
 import com.walletradar.costbasis.application.replay.handler.EulerLoopReplayHandler;
@@ -10,6 +11,7 @@ import com.walletradar.costbasis.application.replay.handler.LiquidStakingReplayH
 import com.walletradar.costbasis.application.replay.handler.LpReceiptEntryReplayHandler;
 import com.walletradar.costbasis.application.replay.handler.PositionScopedLpExitReplayHandler;
 import com.walletradar.costbasis.application.replay.handler.RepayReplayHandler;
+import com.walletradar.costbasis.application.replay.handler.BybitVenueInternalReplayHandler;
 import com.walletradar.costbasis.application.replay.handler.TransferReplayHandler;
 import com.walletradar.costbasis.application.replay.model.AssetKey;
 import com.walletradar.costbasis.application.replay.model.PositionSnapshot;
@@ -25,6 +27,7 @@ import com.walletradar.costbasis.application.replay.support.ReplayTransferClassi
 import com.walletradar.costbasis.domain.AssetLedgerPoint;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -44,6 +47,7 @@ public class ReplayDispatcher {
     private final ReplayTransferClassifier transferClassifier;
     private final ReplayPendingTransferKeyFactory pendingTransferKeyFactory;
     private final TransferReplayHandler transferReplayHandler;
+    private final BybitVenueInternalReplayHandler bybitVenueInternalReplayHandler;
     private final LiquidStakingReplayHandler liquidStakingReplayHandler;
     private final FamilyEquivalentCustodyReplayHandler familyEquivalentCustodyReplayHandler;
     private final GenericAsyncLifecycleReplayHandler genericAsyncLifecycleReplayHandler;
@@ -63,6 +67,7 @@ public class ReplayDispatcher {
             ReplayTransferClassifier transferClassifier,
             ReplayPendingTransferKeyFactory pendingTransferKeyFactory,
             TransferReplayHandler transferReplayHandler,
+            BybitVenueInternalReplayHandler bybitVenueInternalReplayHandler,
             LiquidStakingReplayHandler liquidStakingReplayHandler,
             FamilyEquivalentCustodyReplayHandler familyEquivalentCustodyReplayHandler,
             GenericAsyncLifecycleReplayHandler genericAsyncLifecycleReplayHandler,
@@ -81,6 +86,7 @@ public class ReplayDispatcher {
         this.transferClassifier = transferClassifier;
         this.pendingTransferKeyFactory = pendingTransferKeyFactory;
         this.transferReplayHandler = transferReplayHandler;
+        this.bybitVenueInternalReplayHandler = bybitVenueInternalReplayHandler;
         this.liquidStakingReplayHandler = liquidStakingReplayHandler;
         this.familyEquivalentCustodyReplayHandler = familyEquivalentCustodyReplayHandler;
         this.genericAsyncLifecycleReplayHandler = genericAsyncLifecycleReplayHandler;
@@ -99,6 +105,10 @@ public class ReplayDispatcher {
             ReplayExecutionState replayState
     ) {
         if (transaction == null || Boolean.TRUE.equals(transaction.getExcludedFromAccounting())) {
+            return;
+        }
+        if (isBybitSelfTransfer(transaction)) {
+            log.debug("REPLAY_SKIP_SELF_TRANSFER txId={} wallet={}", transaction.getId(), transaction.getWalletAddress());
             return;
         }
         ReplayRoutingDecision routingDecision = replayTransactionRouter.route(
@@ -298,6 +308,29 @@ public class ReplayDispatcher {
             return;
         }
 
+        if (bybitVenueInternalReplayHandler.applies(transaction, flow)) {
+            AssetLedgerPoint.BasisEffect basisEffect = bybitVenueInternalReplayHandler.apply(
+                    transaction,
+                    flow,
+                    flowIndex,
+                    position,
+                    replayState
+            );
+            PositionSnapshot afterTransfer = flowSupport.snapshot(position);
+            flowSupport.applyInboundShortfallSpotFallback(flow, position, before);
+            accumulateInboundSpotFallbackProvisional(transaction, flow, position, afterTransfer, replayState);
+            replayState.ledgerPointCollector().record(
+                    transaction,
+                    flow,
+                    flowIndex,
+                    position.assetKey(),
+                    before,
+                    position,
+                    basisEffect
+            );
+            return;
+        }
+
         if (transferClassifier.shouldTreatAsContinuityTransfer(transaction, flow)) {
             // Cycle/7 S5: dedup safety net. Upstream Bybit stream-authority collapser is the
             // primary mechanism for suppressing mirror documents, but if a mirror slips through
@@ -486,6 +519,28 @@ public class ReplayDispatcher {
             return null;
         }
         return corrId + "|" + wallet + "|" + family + "|" + sign;
+    }
+
+    /**
+     * Detects UTA &lt;-&gt; FUND self-transfers that map to the same unified position
+     * after wallet address normalization. These are no-ops for cost basis.
+     */
+    private boolean isBybitSelfTransfer(NormalizedTransaction transaction) {
+        if (transaction == null
+                || transaction.getSource() != NormalizedTransactionSource.BYBIT
+                || transaction.getType() != NormalizedTransactionType.INTERNAL_TRANSFER) {
+            return false;
+        }
+        String normalizedWallet = AccountingAssetIdentitySupport.positionWalletAddress(transaction);
+        String counterparty = transaction.getMatchedCounterparty();
+        if (counterparty == null || counterparty.isBlank()) {
+            counterparty = transaction.getCounterpartyAddress();
+        }
+        if (counterparty == null || counterparty.isBlank()) {
+            return false;
+        }
+        String normalizedCounterparty = AccountingAssetIdentitySupport.positionWalletAddress(counterparty);
+        return normalizedWallet != null && normalizedWallet.equals(normalizedCounterparty);
     }
 
     private void accumulateInboundSpotFallbackProvisional(

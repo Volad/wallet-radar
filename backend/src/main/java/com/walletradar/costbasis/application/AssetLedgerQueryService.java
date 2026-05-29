@@ -2,6 +2,7 @@ package com.walletradar.costbasis.application;
 
 import com.walletradar.accounting.support.AccountingAssetFamilySupport;
 import com.walletradar.accounting.support.AccountingAssetIdentitySupport;
+import com.walletradar.costbasis.application.read.TimelineAvcoAuthority;
 import com.walletradar.costbasis.domain.AssetLedgerPoint;
 import com.walletradar.costbasis.domain.AssetLedgerPointRepository;
 import com.walletradar.costbasis.domain.OnChainBalance;
@@ -73,13 +74,27 @@ public class AssetLedgerQueryService {
                 .map(this::toRawPoint)
                 .toList();
 
-        List<EventAccumulator> groupedEvents = groupPoints(points, normalizedById);
+        List<AssetLedgerPoint> timelinePoints = points.stream()
+                .filter(point -> AccountingAssetFamilySupport.includeInSpotFamilyTimelineAggregation(
+                        familyIdentity,
+                        point.getAssetSymbol()
+                ))
+                .toList();
+        List<EventAccumulator> groupedEvents = groupPoints(timelinePoints, normalizedById);
         List<DisplayEventAccumulator> displayEvents = collapseDisplayEvents(groupedEvents);
         AggregatedState state = new AggregatedState();
+        BigDecimal medianSpotAvco = TimelineAvcoAuthority.medianSpotAvco(familyIdentity, timelinePoints);
+        Map<String, BigDecimal> lastAvcoByAssetIdentity = TimelineAvcoAuthority.newSeriesTracker();
         List<TimelineEntryView> timeline = new ArrayList<>();
         List<EventOverlayView> overlays = new ArrayList<>();
         for (DisplayEventAccumulator accumulator : displayEvents) {
             state.apply(accumulator);
+            TimelineAvcoAuthority.Resolution avcoResolution = TimelineAvcoAuthority.resolve(
+                    familyIdentity,
+                    accumulator.memberPoints(),
+                    medianSpotAvco
+            );
+            TimelineAvcoAuthority.updateSeries(lastAvcoByAssetIdentity, avcoResolution);
             timeline.add(new TimelineEntryView(
                     accumulator.blockTimestamp,
                     accumulator.txHash,
@@ -98,7 +113,8 @@ public class AssetLedgerQueryService {
                     state.coveredQuantity(),
                     state.uncoveredQuantity,
                     state.totalCostBasisUsd,
-                    state.avco(),
+                    avcoResolution.avcoAfterUsd(),
+                    avcoResolution.avcoKind(),
                     accumulator.fromAddress,
                     accumulator.toAddress,
                     List.copyOf(accumulator.memberNormalizedTransactionIds)
@@ -128,14 +144,66 @@ public class AssetLedgerQueryService {
                 state.totalGasPaidUsd
         );
 
+        FullSessionCurrentView fullSessionCurrent = fullSessionCurrentView(
+                latestLedgerPointByBucket(points),
+                familyIdentity
+        );
+
         return new SessionAssetLedgerView(
                 session.getId(),
                 familyIdentity,
                 currentState,
+                fullSessionCurrent,
                 timeline,
                 overlays,
                 rawPoints
         );
+    }
+
+    /**
+     * Ledger-based full-session current state: iterates the latest replay point per bucket
+     * (on-chain + Bybit venues) and sums qty / covered qty / total cost basis for the requested
+     * family. Unlike {@link #currentStateView} this does not require live on-chain balance
+     * snapshots or a live Bybit balance call — it relies entirely on the stored replay state.
+     * <p>
+     * Use this to verify the honest full-session AVCO (A2 acceptance criterion) that includes
+     * on-chain wallets and all Bybit venue sub-wallets.
+     */
+    private FullSessionCurrentView fullSessionCurrentView(
+            Map<BucketKey, AssetLedgerPoint> latestPointByBucket,
+            String familyIdentity
+    ) {
+        BigDecimal quantity = BigDecimal.ZERO;
+        BigDecimal coveredQuantity = BigDecimal.ZERO;
+        BigDecimal totalCostBasisUsd = BigDecimal.ZERO;
+        for (AssetLedgerPoint point : latestPointByBucket.values()) {
+            String pointFamily = resolvedFamilyIdentity(
+                    point,
+                    point.getNetworkId(),
+                    point.getAssetSymbol(),
+                    point.getAssetContract()
+            );
+            if (!Objects.equals(pointFamily, familyIdentity)) {
+                continue;
+            }
+            BigDecimal qty = zeroIfNull(point.getQuantityAfter());
+            if (qty.signum() <= 0) {
+                continue;
+            }
+            BigDecimal covered = zeroIfNull(point.getBasisBackedQuantityAfter()).min(qty);
+            quantity = quantity.add(qty, MC);
+            coveredQuantity = coveredQuantity.add(covered, MC);
+            if (point.getAvcoAfterUsd() != null && covered.signum() > 0) {
+                totalCostBasisUsd = totalCostBasisUsd.add(
+                        point.getAvcoAfterUsd().multiply(covered, MC), MC
+                );
+            }
+        }
+        BigDecimal uncoveredQuantity = quantity.subtract(coveredQuantity, MC).max(BigDecimal.ZERO);
+        BigDecimal avcoUsd = coveredQuantity.signum() <= 0
+                ? null
+                : totalCostBasisUsd.divide(coveredQuantity, MC);
+        return new FullSessionCurrentView(quantity, coveredQuantity, uncoveredQuantity, totalCostBasisUsd, avcoUsd);
     }
 
     private CurrentStateView currentStateView(
@@ -597,9 +665,24 @@ public class AssetLedgerQueryService {
             String sessionId,
             String familyIdentity,
             CurrentStateView current,
+            FullSessionCurrentView fullSessionCurrent,
             List<TimelineEntryView> timeline,
             List<EventOverlayView> events,
             List<LedgerPointView> ledgerPoints
+    ) {
+    }
+
+    /**
+     * Ledger-based full-session current state: sum of all latest replay points per bucket
+     * (on-chain + Bybit venues) for the requested family, without relying on live balance oracles.
+     * Satisfies acceptance criterion A2.
+     */
+    public record FullSessionCurrentView(
+            BigDecimal quantity,
+            BigDecimal coveredQuantity,
+            BigDecimal uncoveredQuantity,
+            BigDecimal totalCostBasisUsd,
+            BigDecimal avcoUsd
     ) {
     }
 
@@ -665,6 +748,7 @@ public class AssetLedgerQueryService {
             BigDecimal uncoveredQuantityAfter,
             BigDecimal totalCostBasisAfterUsd,
             BigDecimal avcoAfterUsd,
+            String avcoKind,
             String fromAddress,
             String toAddress,
             List<String> memberNormalizedTransactionIds
@@ -954,6 +1038,7 @@ public class AssetLedgerQueryService {
         private BigDecimal realisedPnlDeltaUsd = BigDecimal.ZERO;
         private BigDecimal gasDeltaUsd = BigDecimal.ZERO;
         private BigDecimal uncoveredQuantityDelta = BigDecimal.ZERO;
+        private final List<AssetLedgerPoint> memberPoints = new ArrayList<>();
 
         private EventAccumulator(AssetLedgerPoint seed, NormalizedTransaction transaction) {
             this.normalizedTransactionId = seed.getNormalizedTransactionId();
@@ -989,6 +1074,11 @@ public class AssetLedgerQueryService {
             realisedPnlDeltaUsd = realisedPnlDeltaUsd.add(zeroIfNull(point.getRealisedPnlDeltaUsd()), MC);
             gasDeltaUsd = gasDeltaUsd.add(zeroIfNull(point.getGasDeltaUsd()), MC);
             uncoveredQuantityDelta = uncoveredQuantityDelta.add(zeroIfNull(point.getUncoveredQuantityDelta()), MC);
+            memberPoints.add(point);
+        }
+
+        private List<AssetLedgerPoint> memberPoints() {
+            return List.copyOf(memberPoints);
         }
     }
 
@@ -1013,6 +1103,7 @@ public class AssetLedgerQueryService {
         private final BigDecimal realisedPnlDeltaUsd;
         private final BigDecimal gasDeltaUsd;
         private final BigDecimal uncoveredQuantityDelta;
+        private final List<AssetLedgerPoint> memberPoints;
 
         private DisplayEventAccumulator(
                 String eventGroupId,
@@ -1034,7 +1125,8 @@ public class AssetLedgerQueryService {
                 BigDecimal costBasisDeltaUsd,
                 BigDecimal realisedPnlDeltaUsd,
                 BigDecimal gasDeltaUsd,
-                BigDecimal uncoveredQuantityDelta
+                BigDecimal uncoveredQuantityDelta,
+                List<AssetLedgerPoint> memberPoints
         ) {
             this.eventGroupId = eventGroupId;
             this.normalizedTransactionId = normalizedTransactionId;
@@ -1056,6 +1148,11 @@ public class AssetLedgerQueryService {
             this.realisedPnlDeltaUsd = realisedPnlDeltaUsd;
             this.gasDeltaUsd = gasDeltaUsd;
             this.uncoveredQuantityDelta = uncoveredQuantityDelta;
+            this.memberPoints = List.copyOf(memberPoints);
+        }
+
+        private List<AssetLedgerPoint> memberPoints() {
+            return memberPoints;
         }
 
         private static DisplayEventAccumulator single(EventAccumulator event) {
@@ -1079,7 +1176,8 @@ public class AssetLedgerQueryService {
                     event.costBasisDeltaUsd,
                     event.realisedPnlDeltaUsd,
                     event.gasDeltaUsd,
-                    event.uncoveredQuantityDelta
+                    event.uncoveredQuantityDelta,
+                    event.memberPoints()
             );
         }
 
@@ -1095,6 +1193,8 @@ public class AssetLedgerQueryService {
             networkIds.addAll(inbound.networkIds);
             List<EventFlowView> flows = new ArrayList<>(outbound.flows);
             flows.addAll(inbound.flows);
+            List<AssetLedgerPoint> memberPoints = new ArrayList<>(outbound.memberPoints());
+            memberPoints.addAll(inbound.memberPoints());
             return new DisplayEventAccumulator(
                     internalTransferGroupId(outbound, inbound),
                     outbound.normalizedTransactionId,
@@ -1115,7 +1215,8 @@ public class AssetLedgerQueryService {
                     outbound.costBasisDeltaUsd.add(inbound.costBasisDeltaUsd, MC),
                     outbound.realisedPnlDeltaUsd.add(inbound.realisedPnlDeltaUsd, MC),
                     outbound.gasDeltaUsd.add(inbound.gasDeltaUsd, MC),
-                    outbound.uncoveredQuantityDelta.add(inbound.uncoveredQuantityDelta, MC)
+                    outbound.uncoveredQuantityDelta.add(inbound.uncoveredQuantityDelta, MC),
+                    memberPoints
             );
         }
     }

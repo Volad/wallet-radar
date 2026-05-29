@@ -142,6 +142,11 @@ public class SessionSettingsCommandService {
         return new ArrayList<>(merged.values());
     }
 
+    /**
+     * Syncs Bybit integrations from the settings request. Only touches the primary (first)
+     * Bybit integration — sub-account integrations added via the dedicated
+     * {@code PUT /integrations/bybit} endpoint are preserved.
+     */
     private void syncIntegrations(
             UserSession session,
             List<PutSessionSettingsRequest.IntegrationEntry> requestedIntegrations,
@@ -152,7 +157,7 @@ public class SessionSettingsCommandService {
         }
         validateRequestedIntegrations(requestedIntegrations);
 
-        UserSession.SessionIntegration existingBybit = session.getIntegrations().stream()
+        UserSession.SessionIntegration primaryBybit = session.getIntegrations().stream()
                 .filter(integration -> integration.getProvider() == UserSession.IntegrationProvider.BYBIT)
                 .findFirst()
                 .orElse(null);
@@ -163,30 +168,30 @@ public class SessionSettingsCommandService {
                 .orElse(null);
 
         if (requestedBybit == null) {
-            if (existingBybit != null) {
-                session.getIntegrations().remove(existingBybit);
-                backfillSegmentRepository.deleteByIntegrationId(existingBybit.getIntegrationId());
-                integrationSyncStatusService.delete(existingBybit.getIntegrationId());
+            if (primaryBybit != null) {
+                session.getIntegrations().remove(primaryBybit);
+                backfillSegmentRepository.deleteByIntegrationId(primaryBybit.getIntegrationId());
+                integrationSyncStatusService.delete(primaryBybit.getIntegrationId());
             }
             return;
         }
 
-        if (existingBybit == null) {
+        if (primaryBybit == null) {
             session.getIntegrations().add(createBybitIntegration(session, requestedBybit, now));
             return;
         }
 
         if (!hasCredentials(requestedBybit)) {
-            existingBybit.setDisplayName(normalizeDisplayName(requestedBybit.displayName(), existingBybit.getDisplayName()));
-            existingBybit.setUpdatedAt(now);
-            existingBybit.setLastError(null);
+            primaryBybit.setDisplayName(normalizeDisplayName(requestedBybit.displayName(), primaryBybit.getDisplayName()));
+            primaryBybit.setUpdatedAt(now);
+            primaryBybit.setLastError(null);
             return;
         }
 
-        String previousIntegrationId = existingBybit.getIntegrationId();
+        String previousIntegrationId = primaryBybit.getIntegrationId();
         UserSession.SessionIntegration refreshed = createBybitIntegration(session, requestedBybit, now);
-        copyIntegration(existingBybit, refreshed);
-        if (previousIntegrationId != null && !previousIntegrationId.equals(existingBybit.getIntegrationId())) {
+        copyIntegration(primaryBybit, refreshed);
+        if (previousIntegrationId != null && !previousIntegrationId.equals(primaryBybit.getIntegrationId())) {
             backfillSegmentRepository.deleteByIntegrationId(previousIntegrationId);
             integrationSyncStatusService.delete(previousIntegrationId);
         }
@@ -253,20 +258,12 @@ public class SessionSettingsCommandService {
     }
 
     private void validateRequestedIntegrations(List<PutSessionSettingsRequest.IntegrationEntry> requestedIntegrations) {
-        Map<String, Long> byProvider = requestedIntegrations.stream()
-                .collect(Collectors.groupingBy(
-                        entry -> entry.provider().trim().toUpperCase(Locale.ROOT),
-                        LinkedHashMap::new,
-                        Collectors.counting()
-                ));
-        byProvider.forEach((provider, count) -> {
-            if (count > 1) {
-                throw new IllegalArgumentException("Duplicate integration provider: " + provider);
-            }
+        for (PutSessionSettingsRequest.IntegrationEntry entry : requestedIntegrations) {
+            String provider = entry.provider().trim().toUpperCase(Locale.ROOT);
             if (!"BYBIT".equals(provider)) {
                 throw new IllegalArgumentException("Unsupported integration provider: " + provider);
             }
-        });
+        }
     }
 
     private void requireCredentials(PutSessionSettingsRequest.IntegrationEntry requestedIntegration) {

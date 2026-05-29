@@ -9,10 +9,12 @@ import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.pricing.domain.CanonicalAssetCatalog;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.math.MathContext;
+import java.util.Optional;
 
 @Component
 @Slf4j
@@ -20,10 +22,25 @@ public class GenericFlowReplayEngine {
 
     private static final MathContext MC = MathContext.DECIMAL128;
 
+    private final ReplayMarketAuthority replayMarketAuthority;
+
+    public GenericFlowReplayEngine() {
+        this(null);
+    }
+
+    public GenericFlowReplayEngine(@Autowired(required = false) ReplayMarketAuthority replayMarketAuthority) {
+        this.replayMarketAuthority = replayMarketAuthority;
+    }
+
     public void applyBuy(NormalizedTransaction.Flow flow, PositionState position) {
         BigDecimal quantity = flow.getQuantityDelta().abs();
         if (hasKnownPrice(flow)) {
             applyBuyWithAcquisitionCost(flow, position, quantity.multiply(flow.getUnitPriceUsd(), MC));
+            return;
+        }
+        // Cycle/19: USD stablecoin $1 fallback for unpriced BUY legs.
+        if (CanonicalAssetCatalog.isUsdStablecoinBySymbol(flow.getAssetSymbol())) {
+            applyBuyWithAcquisitionCost(flow, position, quantity);
             return;
         }
         position.setQuantity(position.quantity().add(quantity));
@@ -125,25 +142,58 @@ public class GenericFlowReplayEngine {
      * Materialises a pending inbound transfer and returns the USD basis added to the position.
      */
     public BigDecimal materializePendingInbound(NormalizedTransaction.Flow flow, PositionState position) {
+        return materializePendingInbound(null, flow, position, true).orElse(BigDecimal.ZERO);
+    }
+
+    /**
+     * @param permitUncoveredFallback when false, returns empty instead of creating uncovered qty
+     *                                without authoritative market price (Bybit venue-internal).
+     */
+    public Optional<BigDecimal> materializePendingInbound(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow,
+            PositionState position,
+            boolean permitUncoveredFallback
+    ) {
         BigDecimal basisBefore = position.totalCostBasisUsd() == null ? BigDecimal.ZERO : position.totalCostBasisUsd();
         BigDecimal quantity = flow.getQuantityDelta().abs();
-        // Cycle/8 S3: safety net for unmatched bridge / transfer inbounds. When the carry queue
-        // is empty (the OUT partner never reached our session — e.g., non-backfilled network or
-        // external counterparty), the inbound used to materialise as an uncovered pending entry
-        // with $0 basis, permanently destroying coverage. If the pricing pipeline has resolved
-        // a historical USD quote on the inbound flow, treat the inflow as a market-priced
-        // ACQUIRE instead. This keeps replay deterministic: an inbound with a real basis source
-        // (carry) still flows through the carry path; only orphan inbounds with priced flows
-        // benefit from the fallback.
+        if (replayMarketAuthority != null && transaction != null) {
+            Optional<ReplayMarketAuthority.ResolvedMarketPrice> authority =
+                    replayMarketAuthority.resolve(transaction, flow);
+            if (authority.isPresent()) {
+                BigDecimal unitPrice = authority.get().unitPriceUsd();
+                applyBuyWithAcquisitionCost(flow, position, quantity.multiply(unitPrice, MC));
+                clearResolvedPositionFlags(position);
+                return Optional.of(nonNegative(position.totalCostBasisUsd().subtract(basisBefore, MC)));
+            }
+            if (!permitUncoveredFallback) {
+                log.warn(
+                        "REPLAY_MATERIALIZE_DEFERRED wallet={} asset={} qty={} reason=no_market_authority",
+                        position.assetKey().walletAddress(),
+                        flow.getAssetSymbol(),
+                        quantity
+                );
+                return Optional.empty();
+            }
+        }
         if (hasKnownPrice(flow)) {
             applyBuyWithAcquisitionCost(flow, position, quantity.multiply(flow.getUnitPriceUsd(), MC));
-            return nonNegative(position.totalCostBasisUsd().subtract(basisBefore, MC));
+            clearResolvedPositionFlags(position);
+            return Optional.of(nonNegative(position.totalCostBasisUsd().subtract(basisBefore, MC)));
+        }
+        if (CanonicalAssetCatalog.isUsdStablecoinBySymbol(flow.getAssetSymbol())) {
+            applyBuyWithAcquisitionCost(flow, position, quantity);
+            clearResolvedPositionFlags(position);
+            return Optional.of(nonNegative(position.totalCostBasisUsd().subtract(basisBefore, MC)));
+        }
+        if (!permitUncoveredFallback) {
+            return Optional.empty();
         }
         position.setQuantity(position.quantity().add(quantity));
         position.setUncoveredQuantity(position.uncoveredQuantity().add(quantity));
         markUnresolved(position);
         recomputePerWalletAvco(position);
-        return BigDecimal.ZERO;
+        return Optional.of(BigDecimal.ZERO);
     }
 
     public CarryTransfer removeFromPosition(NormalizedTransaction.Flow flow, PositionState position) {
@@ -177,6 +227,64 @@ public class GenericFlowReplayEngine {
                 consumption.coveredQuantity(),
                 requestedQuantity.subtract(consumption.coveredQuantity(), MC),
                 cost,
+                carryAvco,
+                false,
+                position.assetKey()
+        );
+    }
+
+    /**
+     * Cycle/19: same-umbrella variant of {@link #removeFromPosition} that spreads basis
+     * proportionally across the full requested quantity instead of only the covered portion.
+     *
+     * <p>For Bybit internal transfers (UTA↔FUND↔EARN), "uncovered" is an artifact of replay
+     * ordering, not a genuine unknown. Using proportional basis prevents the compounding
+     * coverage gap where each round-trip through sub-accounts erodes covered quantity.</p>
+     */
+    public CarryTransfer removeFromPositionPreservingCoverage(
+            NormalizedTransaction.Flow flow,
+            PositionState position
+    ) {
+        BigDecimal requestedQuantity = flow.getQuantityDelta().abs();
+        BigDecimal availableQty = position.quantity() == null ? BigDecimal.ZERO : position.quantity();
+        BigDecimal availableUncov = position.uncoveredQuantity() == null ? BigDecimal.ZERO : position.uncoveredQuantity();
+        BigDecimal totalCost = position.totalCostBasisUsd() == null ? BigDecimal.ZERO : position.totalCostBasisUsd();
+
+        if (availableQty.signum() <= 0 || totalCost.signum() <= 0) {
+            return removeFromPosition(flow, position);
+        }
+
+        BigDecimal appliedQty = requestedQuantity.min(availableQty);
+        BigDecimal shortfall = nonNegative(requestedQuantity.subtract(appliedQty, MC));
+        BigDecimal proportion = appliedQty.divide(availableQty, MC).min(BigDecimal.ONE);
+        BigDecimal proportionalCost = totalCost.multiply(proportion, MC);
+        BigDecimal proportionalUncov = availableUncov.multiply(proportion, MC);
+
+        BigDecimal newQty = nonNegative(availableQty.subtract(appliedQty, MC));
+        BigDecimal newUncov = nonNegative(availableUncov.subtract(proportionalUncov, MC));
+        if (newQty.signum() == 0) {
+            newUncov = BigDecimal.ZERO;
+        }
+
+        position.setQuantity(newQty);
+        position.setUncoveredQuantity(newUncov);
+        position.setTotalCostBasisUsd(nonNegative(totalCost.subtract(proportionalCost, MC)));
+        purgeOrphanBasisWhenEmpty(position);
+        recomputePerWalletAvco(position);
+
+        if (shortfall.signum() > 0) {
+            recordQuantityShortfall(position, shortfall);
+        }
+
+        BigDecimal carryAvco = appliedQty.signum() > 0
+                ? proportionalCost.divide(appliedQty, MC)
+                : null;
+
+        return new CarryTransfer(
+                requestedQuantity,
+                appliedQty,
+                BigDecimal.ZERO,
+                proportionalCost,
                 carryAvco,
                 false,
                 position.assetKey()
@@ -244,6 +352,8 @@ public class GenericFlowReplayEngine {
         recomputePerWalletAvco(position);
         if (clampedUncov.signum() > 0 || avco == null) {
             markUnresolved(position);
+        } else if (cost.signum() > 0) {
+            clearResolvedPositionFlags(position);
         }
     }
 
@@ -312,6 +422,7 @@ public class GenericFlowReplayEngine {
         recomputePerWalletAvco(position);
         if (position.uncoveredQuantity().signum() == 0) {
             resolveTemporaryUnresolved(position);
+            clearResolvedPositionFlags(position);
         }
         log.info(
                 "REPLAY_INBOUND_SPOT_FALLBACK wallet={} asset={} qty={} price={} usdAdded={}",
@@ -421,6 +532,24 @@ public class GenericFlowReplayEngine {
         position.setPerWalletAvco(coveredQuantity.signum() == 0
                 ? null
                 : safeDivide(position.totalCostBasisUsd(), coveredQuantity));
+    }
+
+    /**
+     * Cycle/15 Cluster A: stale {@code hasUnresolvedFlags} from earlier orphan materialisations
+     * must not permanently mark a fully covered position as non-authoritative for dashboard AVCO.
+     */
+    void clearResolvedPositionFlags(PositionState position) {
+        if (position == null) {
+            return;
+        }
+        BigDecimal quantity = position.quantity() == null ? BigDecimal.ZERO : position.quantity();
+        BigDecimal uncovered = position.uncoveredQuantity() == null ? BigDecimal.ZERO : position.uncoveredQuantity();
+        if (quantity.signum() <= 0 || uncovered.signum() > 0) {
+            return;
+        }
+        position.setHasIncompleteHistory(false);
+        position.setHasUnresolvedFlags(false);
+        position.setUnresolvedFlagCount(0);
     }
 
     public void resolveTemporaryUnresolved(PositionState position) {

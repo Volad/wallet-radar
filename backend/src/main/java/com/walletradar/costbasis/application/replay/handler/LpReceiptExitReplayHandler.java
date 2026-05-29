@@ -1,5 +1,6 @@
 package com.walletradar.costbasis.application.replay.handler;
 
+import com.walletradar.accounting.support.LpReceiptSymbolSupport;
 import com.walletradar.costbasis.application.LpReceiptBasisPoolService;
 import com.walletradar.costbasis.application.replay.model.AssetKey;
 import com.walletradar.costbasis.application.replay.model.IndexedFlow;
@@ -117,6 +118,7 @@ public class LpReceiptExitReplayHandler {
         } else {
             positionScopedLpExitReplayHandler.apply(transaction, replayState);
         }
+        drainMaterializedReceiptMarker(transaction, corrId, replayState);
     }
 
     private boolean restoreInboundFromPool(
@@ -179,20 +181,59 @@ public class LpReceiptExitReplayHandler {
             String corrId,
             ReplayExecutionState replayState
     ) {
-        String receiptSymbol = "LP-RECEIPT:" + corrId.substring(LP_CORR_PREFIX.length());
-        AssetKey receiptKey = new AssetKey(
-                transaction.getWalletAddress(),
-                transaction.getNetworkId(),
-                null,
-                receiptSymbol,
-                "LP-RECEIPT:AGGREGATE"
-        );
+        AssetKey receiptKey = assetSupport.lpReceiptPositionKey(transaction, corrId);
+        if (receiptKey == null) {
+            return;
+        }
         PositionState receiptPosition = replayState.position(receiptKey);
         if (receiptPosition.quantity().signum() > 0) {
             receiptPosition.setQuantity(BigDecimal.ZERO);
             receiptPosition.setTotalCostBasisUsd(BigDecimal.ZERO);
             receiptPosition.setUncoveredQuantity(BigDecimal.ZERO);
             receiptPosition.setPerWalletAvco(null);
+        }
+    }
+
+    private void drainMaterializedReceiptMarker(
+            NormalizedTransaction transaction,
+            String corrId,
+            ReplayExecutionState replayState
+    ) {
+        if (transaction == null || transaction.getFlows() == null || corrId == null) {
+            return;
+        }
+        String receiptSymbol = LpReceiptSymbolSupport.fromLpPositionCorrelation(corrId);
+        if (receiptSymbol == null) {
+            return;
+        }
+        AssetKey receiptKey = assetSupport.lpReceiptPositionKey(transaction, corrId);
+        if (receiptKey == null) {
+            return;
+        }
+        for (IndexedFlow indexedFlow : flowSupport.indexedFlows(transaction)) {
+            NormalizedTransaction.Flow flow = indexedFlow.flow();
+            if (flow == null
+                    || flow.getRole() != NormalizedLegRole.TRANSFER
+                    || flow.getQuantityDelta() == null
+                    || flow.getQuantityDelta().signum() >= 0
+                    || !receiptSymbol.equalsIgnoreCase(flow.getAssetSymbol())) {
+                continue;
+            }
+            PositionState receiptPosition = replayState.position(receiptKey);
+            if (receiptPosition.quantity().signum() <= 0) {
+                continue;
+            }
+            PositionSnapshot before = flowSupport.snapshot(receiptPosition);
+            flowSupport.removeFromPosition(flow, receiptPosition);
+            replayState.ledgerPointCollector().record(
+                    transaction,
+                    flow,
+                    indexedFlow.index(),
+                    receiptPosition.assetKey(),
+                    before,
+                    receiptPosition,
+                    AssetLedgerPoint.BasisEffect.REALLOCATE_OUT
+            );
         }
     }
 

@@ -2,6 +2,9 @@ package com.walletradar.costbasis.application.replay.support;
 
 import com.walletradar.costbasis.application.replay.model.AssetKey;
 import com.walletradar.costbasis.application.replay.model.CarryTransfer;
+import com.walletradar.domain.common.PriceSource;
+import com.walletradar.pricing.domain.CanonicalAssetCatalog;
+import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.costbasis.application.replay.model.ContinuityBucket;
 import com.walletradar.costbasis.application.replay.model.ContinuityKey;
 import com.walletradar.costbasis.application.replay.model.FlowRef;
@@ -13,6 +16,7 @@ import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.math.MathContext;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 @Component
@@ -104,6 +108,88 @@ public class ContinuityCarryService {
             PassThroughCorridorPlan passThroughCorridorPlan,
             Map<FlowRef, CarryTransfer> reservedPassThroughCarries
     ) {
+        return removeTransferCarry(
+                transaction, flow, flowIndex, position,
+                passThroughCorridorPlan, reservedPassThroughCarries, false
+        );
+    }
+
+    /**
+     * Family-custody and same-tx receipt pairing are authoritative for basis movement.
+     * Pass-through corridor slices from an earlier bridge must not override them.
+     */
+    /**
+     * When a stale pass-through reserve drained quantity but not the basis that was promoted
+     * on the position after the reserve was captured, realign the carry to the basis that
+     * actually left the wallet on this outbound leg.
+     */
+    public CarryTransfer alignCarryToRemovedBasis(
+            CarryTransfer carry,
+            BigDecimal basisRemovedFromPosition,
+            AssetKey assetKey
+    ) {
+        if (carry == null
+                || basisRemovedFromPosition == null
+                || basisRemovedFromPosition.signum() <= 0) {
+            return carry;
+        }
+        BigDecimal carryCost = carry.costBasisUsd() == null ? BigDecimal.ZERO : carry.costBasisUsd();
+        if (carryCost.compareTo(basisRemovedFromPosition) >= 0) {
+            return carry;
+        }
+        BigDecimal quantity = carry.quantity() == null ? BigDecimal.ZERO : carry.quantity();
+        BigDecimal coveredQuantity = carry.coveredQuantity() == null ? BigDecimal.ZERO : carry.coveredQuantity();
+        BigDecimal uncoveredQuantity = carry.uncoveredQuantity() == null ? BigDecimal.ZERO : carry.uncoveredQuantity();
+        if (coveredQuantity.signum() <= 0 && quantity.signum() > 0) {
+            coveredQuantity = quantity;
+            uncoveredQuantity = BigDecimal.ZERO;
+        }
+        BigDecimal avco = coveredQuantity.signum() > 0
+                ? safeDivide(basisRemovedFromPosition, coveredQuantity)
+                : carry.avco();
+        return new CarryTransfer(
+                quantity,
+                coveredQuantity,
+                uncoveredQuantity,
+                basisRemovedFromPosition,
+                avco,
+                false,
+                assetKey
+        );
+    }
+
+    public CarryTransfer removeFamilyCustodyOutboundCarry(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow,
+            int flowIndex,
+            PositionState position
+    ) {
+        return removeTransferCarry(
+                transaction,
+                flow,
+                flowIndex,
+                position,
+                PassThroughCorridorPlan.empty(),
+                new LinkedHashMap<>(),
+                true
+        );
+    }
+
+    /**
+     * @param preserveCoverage when {@code true}, spreads basis proportionally across the full
+     *                         quantity instead of only the covered portion. Used for Bybit
+     *                         internal sub-account transfers (UTA↔FUND↔EARN) where "uncovered"
+     *                         is a replay-ordering artifact, not a genuine unknown.
+     */
+    public CarryTransfer removeTransferCarry(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow,
+            int flowIndex,
+            PositionState position,
+            PassThroughCorridorPlan passThroughCorridorPlan,
+            Map<FlowRef, CarryTransfer> reservedPassThroughCarries,
+            boolean preserveCoverage
+    ) {
         FlowRef flowRef = flowSupport.flowRef(transaction, flowIndex);
         CarryTransfer reservedPortion = takeReservedCarry(
                 reservedPassThroughCarries,
@@ -112,21 +198,26 @@ public class ContinuityCarryService {
                 position.assetKey()
         );
         if (reservedPortion == null) {
-            return genericFlowReplayEngine.removeFromPosition(flow, position);
+            return preserveCoverage
+                    ? genericFlowReplayEngine.removeFromPositionPreservingCoverage(flow, position)
+                    : genericFlowReplayEngine.removeFromPosition(flow, position);
         }
         consumeReservedCarry(position, reservedPortion);
         BigDecimal remainingQuantity = nonNegative(flow.getQuantityDelta().abs().subtract(reservedPortion.quantity(), MC));
         if (remainingQuantity.signum() == 0) {
             return absorbOrphanBasisIfPositionEmpty(position, reservedPortion);
         }
-        CarryTransfer pooledRemainder = genericFlowReplayEngine.removeFromPosition(
-                flowSupport.copyFlowWithQuantity(
-                        flow,
-                        flow.getQuantityDelta().signum() < 0 ? remainingQuantity.negate() : remainingQuantity
-                ),
-                position
+        NormalizedTransaction.Flow remainderFlow = flowSupport.copyFlowWithQuantity(
+                flow,
+                flow.getQuantityDelta().signum() < 0 ? remainingQuantity.negate() : remainingQuantity
         );
-        return mergeCarryTransfers(position.assetKey(), reservedPortion, pooledRemainder);
+        CarryTransfer pooledRemainder = preserveCoverage
+                ? genericFlowReplayEngine.removeFromPositionPreservingCoverage(remainderFlow, position)
+                : genericFlowReplayEngine.removeFromPosition(remainderFlow, position);
+        return absorbOrphanBasisIfPositionEmpty(
+                position,
+                mergeCarryTransfers(position.assetKey(), reservedPortion, pooledRemainder)
+        );
     }
 
     /**
@@ -148,14 +239,20 @@ public class ContinuityCarryService {
         BigDecimal orphanBasis = position.totalCostBasisUsd();
         position.setTotalCostBasisUsd(BigDecimal.ZERO);
         position.setPerWalletAvco(null);
+        BigDecimal quantity = reservedPortion.quantity() == null ? BigDecimal.ZERO : reservedPortion.quantity();
         BigDecimal covered = reservedPortion.coveredQuantity() == null ? BigDecimal.ZERO : reservedPortion.coveredQuantity();
+        BigDecimal uncovered = reservedPortion.uncoveredQuantity() == null ? BigDecimal.ZERO : reservedPortion.uncoveredQuantity();
         BigDecimal updatedBasis = (reservedPortion.costBasisUsd() == null ? BigDecimal.ZERO : reservedPortion.costBasisUsd())
                 .add(orphanBasis, MC);
+        if (covered.signum() <= 0 && quantity.signum() > 0 && updatedBasis.signum() > 0) {
+            covered = quantity;
+            uncovered = BigDecimal.ZERO;
+        }
         BigDecimal updatedAvco = covered.signum() > 0 ? updatedBasis.divide(covered, MC) : reservedPortion.avco();
         return new CarryTransfer(
-                reservedPortion.quantity(),
-                reservedPortion.coveredQuantity(),
-                reservedPortion.uncoveredQuantity(),
+                quantity,
+                covered,
+                uncovered,
                 updatedBasis,
                 updatedAvco,
                 reservedPortion.pendingInbound(),
@@ -232,6 +329,77 @@ public class ContinuityCarryService {
         );
     }
 
+    /**
+     * Bybit venue-internal inbound (FUND/UTA/EARN): preserve transferred basis as fully covered
+     * at the destination so a high uncovered ratio on the source slice cannot explode per-wallet AVCO.
+     */
+    /**
+     * Earn Flexible Savings redemption can arrive as {@code LENDING_WITHDRAW} on an empty
+     * {@code :EARN} position (qty=0, shortfall-only removal). Queue an authoritative carry slice
+     * so the matching FUND inbound does not materialise as uncovered REALLOCATE_IN.
+     */
+    public CarryTransfer syntheticBybitEarnProductCarry(
+            NormalizedTransaction.Flow flow,
+            BigDecimal requestedQuantity,
+            AssetKey assetKey,
+            BigDecimal fallbackAvcoUsd
+    ) {
+        if (requestedQuantity == null || requestedQuantity.signum() <= 0) {
+            return emptyCarry(assetKey);
+        }
+        BigDecimal avco = null;
+        if (flow != null
+                && flow.getUnitPriceUsd() != null
+                && flow.getUnitPriceUsd().signum() > 0
+                && flow.getPriceSource() != null
+                && flow.getPriceSource() != PriceSource.UNKNOWN) {
+            avco = flow.getUnitPriceUsd();
+        } else if (fallbackAvcoUsd != null && fallbackAvcoUsd.signum() > 0) {
+            avco = fallbackAvcoUsd;
+        } else if (flow != null && CanonicalAssetCatalog.isUsdStablecoinBySymbol(flow.getAssetSymbol())) {
+            avco = BigDecimal.ONE;
+        }
+        BigDecimal basis = avco == null ? BigDecimal.ZERO : requestedQuantity.multiply(avco, MC);
+        BigDecimal covered = basis.signum() > 0 ? requestedQuantity : BigDecimal.ZERO;
+        BigDecimal uncovered = requestedQuantity.subtract(covered, MC);
+        return new CarryTransfer(
+                requestedQuantity,
+                covered,
+                uncovered,
+                basis,
+                avco,
+                false,
+                assetKey
+        );
+    }
+
+    public CarryTransfer internalAccountInboundCarry(
+            CarryTransfer sourceCarry,
+            BigDecimal destinationQuantity,
+            AssetKey assetKey
+    ) {
+        if (sourceCarry == null || destinationQuantity == null || destinationQuantity.signum() <= 0) {
+            return emptyCarry(assetKey);
+        }
+        BigDecimal sourceQuantity = sourceCarry.quantity();
+        if (sourceQuantity == null || sourceQuantity.signum() <= 0) {
+            return bridgeInboundCarry(sourceCarry, destinationQuantity, assetKey);
+        }
+        BigDecimal sliceQuantity = destinationQuantity.min(sourceQuantity);
+        BigDecimal sourceBasis = sourceCarry.costBasisUsd() == null ? BigDecimal.ZERO : sourceCarry.costBasisUsd();
+        BigDecimal allocatedBasis = sourceBasis.multiply(sliceQuantity.divide(sourceQuantity, MC), MC);
+        BigDecimal avco = sliceQuantity.signum() <= 0 ? null : safeDivide(allocatedBasis, sliceQuantity);
+        return new CarryTransfer(
+                sliceQuantity,
+                sliceQuantity,
+                BigDecimal.ZERO,
+                allocatedBasis,
+                avco,
+                false,
+                assetKey
+        );
+    }
+
     public CarryTransfer bridgeInboundCarry(
             CarryTransfer sourceCarry,
             BigDecimal destinationQuantity,
@@ -256,9 +424,20 @@ public class ContinuityCarryService {
                     assetKey
             );
         }
-        BigDecimal coveredQuantity = destinationQuantity.min(sourceCarry.coveredQuantity());
+        BigDecimal sourceQuantity = sourceCarry.quantity();
+        BigDecimal sourceCovered = sourceCarry.coveredQuantity() == null
+                ? BigDecimal.ZERO
+                : sourceCarry.coveredQuantity();
+        if (sourceCovered.signum() <= 0
+                && sourceCarry.costBasisUsd() != null
+                && sourceCarry.costBasisUsd().signum() > 0
+                && sourceQuantity != null
+                && sourceQuantity.signum() > 0) {
+            sourceCovered = sourceQuantity;
+        }
+        BigDecimal coveredQuantity = destinationQuantity.min(sourceCovered);
         BigDecimal uncoveredQuantity = nonNegative(destinationQuantity.subtract(coveredQuantity, MC));
-        BigDecimal costBasisUsd = sourceCarry.costBasisUsd();
+        BigDecimal costBasisUsd = sourceCarry.costBasisUsd() == null ? BigDecimal.ZERO : sourceCarry.costBasisUsd();
         BigDecimal avco = coveredQuantity.signum() <= 0
                 ? null
                 : safeDivide(costBasisUsd, coveredQuantity);
@@ -338,6 +517,19 @@ public class ContinuityCarryService {
         BigDecimal costBasisUsd = safeAdd(left == null ? null : left.costBasisUsd(), right == null ? null : right.costBasisUsd());
         BigDecimal avco = coveredQuantity.signum() <= 0 ? null : safeDivide(costBasisUsd, coveredQuantity);
         return new CarryTransfer(quantity, coveredQuantity, uncoveredQuantity, costBasisUsd, avco, false, assetKey);
+    }
+
+    /**
+     * Builds a fully-covered carry with an explicit basis, bypassing position-state AVCO.
+     * Used for earn-principal lot carry (P0-A) and corridor outbound slice carry (P0-C)
+     * where position-derived basis can be stale or incorrectly priced.
+     */
+    public CarryTransfer buildExplicitCarryTransfer(BigDecimal qty, BigDecimal basis, AssetKey assetKey) {
+        if (qty == null || qty.signum() <= 0 || basis == null || basis.signum() <= 0) {
+            return emptyCarry(assetKey);
+        }
+        BigDecimal avco = safeDivide(basis, qty);
+        return new CarryTransfer(qty, qty, BigDecimal.ZERO, basis, avco, false, assetKey);
     }
 
     private CarryTransfer emptyCarry(AssetKey assetKey) {

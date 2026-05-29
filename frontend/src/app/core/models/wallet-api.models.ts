@@ -273,6 +273,8 @@ export interface SessionAssetLedgerTimelineEntryResponse {
   readonly uncoveredQuantityAfter: number | null;
   readonly totalCostBasisAfterUsd: number | null;
   readonly avcoAfterUsd: number | null;
+  /** PRIMARY_FLOW = venue spot AVCO; FAMILY_ROLLUP = family aggregate (may include LP shares). */
+  readonly avcoKind: string | null;
   readonly fromAddress: string | null;
   readonly toAddress: string | null;
   readonly memberNormalizedTransactionIds: ReadonlyArray<string>;

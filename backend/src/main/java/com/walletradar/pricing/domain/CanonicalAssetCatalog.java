@@ -276,6 +276,17 @@ public final class CanonicalAssetCatalog {
     }
 
     /**
+     * Returns {@code true} when the symbol (or its canonical alias) is a USD-pegged stablecoin.
+     * Used by the replay engine as a $1 pricing fallback when no market quote is available.
+     */
+    public static boolean isUsdStablecoinBySymbol(String assetSymbol) {
+        if (assetSymbol == null) {
+            return false;
+        }
+        return USD_STABLE_SYMBOLS.contains(canonicalMarketSymbol(assetSymbol));
+    }
+
+    /**
      * Cycle/15 R5 F3: returns {@code true} for 1:1 pegged liquid-staking / restaking
      * receipts whose basis can safely be reconstructed from the canonical underlying's spot
      * when continuity carry fails.

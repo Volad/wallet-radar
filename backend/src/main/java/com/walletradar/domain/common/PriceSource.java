@@ -32,5 +32,10 @@ public enum PriceSource {
      * stamped here to make the spot-basis fallback in the replay engine deterministic.
      */
     PEGGED_NATIVE,
+    /**
+     * Cost basis derived from bot-ledger investment analysis: net stablecoin consumed
+     * divided by total non-stablecoin received within a single-asset bot session.
+     */
+    BOT_LEDGER,
     UNKNOWN
 }

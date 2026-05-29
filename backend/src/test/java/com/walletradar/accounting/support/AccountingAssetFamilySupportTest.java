@@ -65,4 +65,31 @@ class AccountingAssetFamilySupportTest {
     void mapsExtendedMantleFamilyAlias() {
         assertThat(AccountingAssetFamilySupport.continuityIdentity("aManWMNT", null)).isEqualTo("FAMILY:MNT");
     }
+
+    @Test
+    void mapsLpReceiptSymbolsToDedicatedFamily() {
+        assertThat(AccountingAssetFamilySupport.continuityIdentity(
+                "LP-RECEIPT:arbitrum:pancakeswap:196975",
+                null
+        )).isEqualTo("FAMILY:LP_RECEIPT");
+        assertThat(AccountingAssetFamilySupport.isLpReceiptSymbol("LP-RECEIPT:base:pancakeswap:477096")).isTrue();
+        assertThat(AccountingAssetFamilySupport.isLpReceiptSymbol("ETH")).isFalse();
+    }
+
+    @Test
+    void includesStakedEthVariantsInSpotEthTimelineRollup() {
+        // P0-B: Full FAMILY:ETH included set: ETH, WETH, AMANWETH, CMETH, METH, WEETH, WSTETH, STETH, RSETH
+        assertThat(AccountingAssetFamilySupport.includeInSpotFamilyTimelineAggregation("FAMILY:ETH", "ETH")).isTrue();
+        assertThat(AccountingAssetFamilySupport.includeInSpotFamilyTimelineAggregation("FAMILY:ETH", "WETH")).isTrue();
+        assertThat(AccountingAssetFamilySupport.includeInSpotFamilyTimelineAggregation("FAMILY:ETH", "CMETH")).isTrue();
+        assertThat(AccountingAssetFamilySupport.includeInSpotFamilyTimelineAggregation("FAMILY:ETH", "METH")).isTrue();
+        assertThat(AccountingAssetFamilySupport.includeInSpotFamilyTimelineAggregation("FAMILY:ETH", "WEETH")).isTrue();
+        assertThat(AccountingAssetFamilySupport.includeInSpotFamilyTimelineAggregation("FAMILY:ETH", "STETH")).isTrue();
+        assertThat(AccountingAssetFamilySupport.includeInSpotFamilyTimelineAggregation("FAMILY:ETH", "RSETH")).isTrue();
+        assertThat(AccountingAssetFamilySupport.includeInSpotFamilyTimelineAggregation("FAMILY:ETH", "WSTETH")).isTrue();
+        assertThat(AccountingAssetFamilySupport.includeInSpotFamilyTimelineAggregation("FAMILY:ETH", "AMANWETH")).isTrue();
+        // BBSOL stays excluded from FAMILY:ETH (it maps to FAMILY:SOL)
+        assertThat(AccountingAssetFamilySupport.includeInSpotFamilyTimelineAggregation("FAMILY:ETH", "BBSOL")).isFalse();
+        assertThat(AccountingAssetFamilySupport.includeInSpotFamilyTimelineAggregation("FAMILY:BTC", "WBTC")).isTrue();
+    }
 }

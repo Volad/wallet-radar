@@ -72,6 +72,13 @@ public class AssetLedgerController {
                                 ))
                                 .toList()
                 ),
+                new SessionAssetLedgerResponse.FullSessionCurrent(
+                        view.fullSessionCurrent().quantity(),
+                        view.fullSessionCurrent().coveredQuantity(),
+                        view.fullSessionCurrent().uncoveredQuantity(),
+                        view.fullSessionCurrent().totalCostBasisUsd(),
+                        view.fullSessionCurrent().avcoUsd()
+                ),
                 view.timeline().stream()
                         .map(entry -> new SessionAssetLedgerResponse.TimelineEntry(
                                 entry.blockTimestamp(),
@@ -92,6 +99,7 @@ public class AssetLedgerController {
                                 entry.uncoveredQuantityAfter(),
                                 entry.totalCostBasisAfterUsd(),
                                 entry.avcoAfterUsd(),
+                                entry.avcoKind(),
                                 entry.fromAddress(),
                                 entry.toAddress(),
                                 entry.memberNormalizedTransactionIds()

@@ -75,6 +75,45 @@ class BybitInternalTransferOrphanFallbackServiceTest {
     }
 
     @Test
+    void fundEarnSingletonByEconCorrelationIsDemoted() {
+        NormalizedTransaction orphan = internalTransfer(
+                "orphan-fund-earn",
+                "bybit-econ-v1:solo-mnt",
+                "BYBIT:33625378:FUND",
+                "-153"
+        );
+        orphan.setMatchedCounterparty("BYBIT:33625378:EARN");
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class))).thenReturn(List.of(orphan));
+
+        BybitInternalTransferOrphanFallbackService service = new BybitInternalTransferOrphanFallbackService(
+                mongoOperations,
+                normalizedTransactionRepository
+        );
+        int demoted = service.reconcileOrphanInternals();
+
+        assertThat(demoted).isEqualTo(1);
+    }
+
+    @Test
+    void fundEarnBundlePairIsNotDemoted() {
+        String bundleCorr = BybitInternalTransferPairer.BUNDLE_CORRELATION_PREFIX + "fund|earn";
+        NormalizedTransaction fund = internalTransfer("fund", bundleCorr, "BYBIT:33625378:FUND", "-153");
+        fund.setMatchedCounterparty("BYBIT:33625378:EARN");
+        NormalizedTransaction earn = internalTransfer("earn", bundleCorr, "BYBIT:33625378:EARN", "153");
+        earn.setMatchedCounterparty("BYBIT:33625378:FUND");
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(fund, earn));
+
+        BybitInternalTransferOrphanFallbackService service = new BybitInternalTransferOrphanFallbackService(
+                mongoOperations,
+                normalizedTransactionRepository
+        );
+
+        assertThat(service.reconcileOrphanInternals()).isZero();
+        verifyNoInteractions(normalizedTransactionRepository);
+    }
+
+    @Test
     void pairedAfterBundleIsNotDemoted() {
         String bundleCorr = BybitInternalTransferPairer.BUNDLE_CORRELATION_PREFIX + "a|b";
         NormalizedTransaction left = internalTransfer("a", bundleCorr, "BYBIT:1:UTA", "-5");

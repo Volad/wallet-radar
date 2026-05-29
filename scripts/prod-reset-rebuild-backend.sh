@@ -6,6 +6,7 @@ REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 
 clear_pricing_cache=false
 rebuild_frontend=true
+frontend_only=false
 
 for arg in "$@"; do
   case "$arg" in
@@ -18,9 +19,13 @@ for arg in "$@"; do
     --skip-frontend)
       rebuild_frontend=false
       ;;
+    --frontend-only)
+      frontend_only=true
+      rebuild_frontend=true
+      ;;
     *)
       printf 'Unknown argument: %s\n' "$arg" >&2
-      printf 'Usage: %s [--clear-pricing-cache] [--start-frontend] [--skip-frontend]\n' "$0" >&2
+      printf 'Usage: %s [--clear-pricing-cache] [--start-frontend] [--skip-frontend] [--frontend-only]\n' "$0" >&2
       exit 1
       ;;
   esac
@@ -29,6 +34,16 @@ done
 compose() {
   docker compose -f "$REPO_ROOT/docker-compose.yml" -f "$REPO_ROOT/docker-compose.prod.yml" --profile prod "$@"
 }
+
+if [ "$frontend_only" = "true" ]; then
+  printf 'Rebuilding frontend-prod only (Mongo and backend unchanged)...\n'
+  compose stop frontend-prod
+  compose rm -f -s frontend-prod >/dev/null 2>&1 || true
+  compose build frontend-prod
+  compose up -d frontend-prod
+  printf 'Done.\n'
+  exit 0
+fi
 
 wait_for_mongo_ready() {
   container_name=walletradar-mongodb-prod
@@ -51,7 +66,11 @@ wait_for_mongo_ready() {
 }
 
 printf 'Stopping prod services...\n'
-compose stop frontend-prod backend-prod mongodb-prod
+if [ "$rebuild_frontend" = "true" ]; then
+  compose stop frontend-prod backend-prod mongodb-prod
+else
+  compose stop backend-prod mongodb-prod
+fi
 
 printf 'Starting prod Mongo only...\n'
 compose up -d mongodb-prod

@@ -4,8 +4,10 @@ import com.walletradar.costbasis.application.replay.model.BridgePendingKey;
 import com.walletradar.costbasis.application.replay.model.BridgeSettlementPendingKey;
 import com.walletradar.costbasis.application.replay.model.ContinuityKey;
 import com.walletradar.costbasis.application.replay.model.TransferPendingKey;
+import com.walletradar.ingestion.pipeline.bybit.BybitEarnPrincipalTransferPairer;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import org.springframework.stereotype.Component;
 
@@ -18,6 +20,61 @@ public class ReplayPendingTransferKeyFactory {
         this.assetSupport = assetSupport;
     }
 
+    public boolean usesBybitVenueInternalCarryQueue(NormalizedTransaction transaction) {
+        if (isBybitEarnPrincipalPairedTransfer(transaction)) {
+            return false;
+        }
+        return isBybitEarnInternalTransfer(transaction)
+                || isBybitSameUidInternalTransfer(transaction)
+                || isBybitEarnProductTransfer(transaction)
+                || isBybitUniversalTransfer(transaction);
+    }
+
+    private static boolean isBybitEarnPrincipalPairedTransfer(NormalizedTransaction transaction) {
+        if (transaction == null || !Boolean.TRUE.equals(transaction.getContinuityCandidate())) {
+            return false;
+        }
+        String correlationId = transaction.getCorrelationId();
+        return correlationId != null
+                && correlationId.startsWith(BybitEarnPrincipalTransferPairer.EARN_PRINCIPAL_CORRELATION_PREFIX);
+    }
+
+    /**
+     * Flexible Savings / Earn product subscription and redemption rows (classified as
+     * {@code LENDING_DEPOSIT} / {@code LENDING_WITHDRAW}) move principal between FUND/UTA and
+     * {@code :EARN}. They must share the venue FIFO queue — composite wrapper buckets are empty
+     * for these single-leg Bybit rows and previously materialised as uncovered REALLOCATE_IN.
+     */
+    private boolean isBybitEarnProductTransfer(NormalizedTransaction transaction) {
+        if (transaction == null
+                || transaction.getSource() != NormalizedTransactionSource.BYBIT) {
+            return false;
+        }
+        return transaction.getType() == NormalizedTransactionType.LENDING_DEPOSIT
+                || transaction.getType() == NormalizedTransactionType.LENDING_WITHDRAW;
+    }
+
+    /**
+     * Cross-subaccount {@code UNIVERSAL_TRANSFER} on the same UID must use the venue FIFO queue
+     * (not blind umbrella {@code CARRY_IN}) so basis follows the outbound leg.
+     */
+    private boolean isBybitUniversalTransfer(NormalizedTransaction transaction) {
+        if (transaction == null
+                || transaction.getSource() != NormalizedTransactionSource.BYBIT
+                || transaction.getType() != NormalizedTransactionType.INTERNAL_TRANSFER) {
+            return false;
+        }
+        String id = transaction.getId();
+        if (id == null || !id.contains(":UNIVERSAL_TRANSFER:")) {
+            return false;
+        }
+        String corrId = transaction.getCorrelationId();
+        if (corrId != null && corrId.startsWith("BYBIT-CORRIDOR:")) {
+            return false;
+        }
+        return sharesBybitUidWithCounterparty(transaction);
+    }
+
     public TransferPendingKey transferKey(
             NormalizedTransaction transaction,
             NormalizedTransaction.Flow flow
@@ -25,11 +82,20 @@ public class ReplayPendingTransferKeyFactory {
         if (transaction == null || flow == null || flow.getQuantityDelta() == null) {
             return null;
         }
-        if (transaction.getCorrelationId() != null && !transaction.getCorrelationId().isBlank()) {
+        if (transaction.getCorrelationId() != null && !transaction.getCorrelationId().isBlank()
+                && Boolean.TRUE.equals(transaction.getContinuityCandidate())) {
             String assetKey = assetSupport.correlatedTransferIdentity(transaction, flow);
-            if (Boolean.TRUE.equals(transaction.getContinuityCandidate())) {
-                return new TransferPendingKey("corr-family:" + transaction.getCorrelationId() + ":" + assetKey);
-            }
+            return new TransferPendingKey("corr-family:" + transaction.getCorrelationId() + ":" + assetKey);
+        }
+        if (isBybitEarnInternalTransfer(transaction) || isBybitEarnProductTransfer(transaction)) {
+            String uid = extractBybitUid(transaction.getWalletAddress());
+            String earnAssetKey = assetSupport.correlatedTransferIdentity(transaction, flow);
+            return new TransferPendingKey("bybit-earn-carry:" + uid + ":" + earnAssetKey);
+        }
+        if (isBybitSameUidInternalTransfer(transaction)) {
+            String uid = extractBybitUid(transaction.getWalletAddress());
+            String earnAssetKey = assetSupport.correlatedTransferIdentity(transaction, flow);
+            return new TransferPendingKey("bybit-earn-carry:" + uid + ":" + earnAssetKey);
         }
 
         String quantityKey = flow.getQuantityDelta().abs().stripTrailingZeros().toPlainString();
@@ -43,6 +109,91 @@ public class ReplayPendingTransferKeyFactory {
             return new TransferPendingKey("tx:" + transaction.getTxHash() + ":" + assetKey + ":" + quantityKey);
         }
         return null;
+    }
+
+    /**
+     * EARN-specific same-UID Bybit internal transfer. EARN round-trip legs use different
+     * Bybit stream sources, producing mismatched correlation prefixes (e.g.
+     * {@code bybit-econ-v1:*} vs {@code bybit-collapsed-v1:*}). Correlation-based keys
+     * cannot match cross-prefix pairs, so ALL EARN-involved transfers use the shared
+     * FIFO queue.
+     * <p>
+     * Exception: {@code bybit-it-bundle-v1:*} transfers involve multi-leg bundles and
+     * require correlation-based keys for correct grouping.
+     */
+    private boolean isBybitEarnInternalTransfer(NormalizedTransaction transaction) {
+        if (transaction == null
+                || transaction.getSource() != NormalizedTransactionSource.BYBIT
+                || transaction.getType() != NormalizedTransactionType.INTERNAL_TRANSFER) {
+            return false;
+        }
+        String corrId = transaction.getCorrelationId();
+        if (corrId != null && (corrId.startsWith("BYBIT-CORRIDOR:")
+                || corrId.startsWith("bybit-it-bundle-v1:"))) {
+            return false;
+        }
+        String wallet = transaction.getWalletAddress();
+        String counterparty = transaction.getMatchedCounterparty();
+        if (counterparty == null || counterparty.isBlank()) {
+            counterparty = transaction.getCounterpartyAddress();
+        }
+        boolean walletIsEarn = wallet != null && wallet.endsWith(":EARN");
+        boolean cpIsEarn = counterparty != null && counterparty.endsWith(":EARN");
+        if (!walletIsEarn && !cpIsEarn) {
+            return false;
+        }
+        String walletUid = extractBybitUid(wallet);
+        if (counterparty == null || counterparty.isBlank()) {
+            return true;
+        }
+        if (!counterparty.toUpperCase(java.util.Locale.ROOT).startsWith("BYBIT:")) {
+            return false;
+        }
+        return walletUid.equals(extractBybitUid(counterparty));
+    }
+
+    /**
+     * Bybit INTERNAL_TRANSFER within the same master UID (EARN round-trips: UTA/FUND ↔ EARN).
+     * These use a shared {@code bybit-earn-carry:uid:asset} FIFO queue so that CARRY_OUT and
+     * CARRY_IN legs match regardless of differing correlation IDs.
+     * <p>
+     * Cross-UID transfers (main ↔ sub-account) and corridor transfers (Bybit ↔ on-chain) are
+     * excluded so they use correlation-based keys for proper IT-linker pairing.
+     */
+    private boolean isBybitSameUidInternalTransfer(NormalizedTransaction transaction) {
+        if (transaction.getSource() != NormalizedTransactionSource.BYBIT
+                || transaction.getType() != NormalizedTransactionType.INTERNAL_TRANSFER) {
+            return false;
+        }
+        String corrId = transaction.getCorrelationId();
+        if (corrId != null && corrId.startsWith("BYBIT-CORRIDOR:")) {
+            return false;
+        }
+        return sharesBybitUidWithCounterparty(transaction);
+    }
+
+    private static boolean sharesBybitUidWithCounterparty(NormalizedTransaction transaction) {
+        String walletUid = extractBybitUid(transaction.getWalletAddress());
+        String counterparty = transaction.getMatchedCounterparty();
+        if (counterparty == null || counterparty.isBlank()) {
+            counterparty = transaction.getCounterpartyAddress();
+        }
+        if (counterparty == null || counterparty.isBlank()) {
+            return true;
+        }
+        if (!counterparty.toUpperCase(java.util.Locale.ROOT).startsWith("BYBIT:")) {
+            return false;
+        }
+        return walletUid.equals(extractBybitUid(counterparty));
+    }
+
+    private static String extractBybitUid(String walletAddress) {
+        if (walletAddress == null || !walletAddress.startsWith("BYBIT:")) {
+            return "unknown";
+        }
+        String withoutPrefix = walletAddress.substring("BYBIT:".length());
+        int colonPos = withoutPrefix.indexOf(':');
+        return colonPos > 0 ? withoutPrefix.substring(0, colonPos) : withoutPrefix;
     }
 
     public BridgePendingKey bridgeTransferKey(

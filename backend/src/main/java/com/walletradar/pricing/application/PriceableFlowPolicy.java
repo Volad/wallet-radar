@@ -51,10 +51,16 @@ public final class PriceableFlowPolicy {
         // isContinuityPrincipal, which would otherwise skip FA-001-linked Bybit corridor deposits.
         if (flow.getRole() == NormalizedLegRole.TRANSFER
                 && flow.getQuantityDelta() != null
-                && flow.getQuantityDelta().signum() > 0
+                && flow.getQuantityDelta().signum() != 0
                 && CanonicalAssetCatalog.isPeggedNative(flow.getAssetSymbol())
                 && (isPeggedNativeExternalTransferPricingType(transaction.getType())
-                || isBybitPeggedNativeInternalTransfer(transaction))) {
+                || isBybitPeggedNativeInternalTransfer(transaction)
+                || isBybitEarnProductMarketPricing(transaction, flow))) {
+            return true;
+        }
+        // Cycle/15 Cluster A: Bybit Flexible Savings / Earn product moves (LENDING_*) need market
+        // quotes on both legs so earn shortfall-only outbound can enqueue priced synthetic carry.
+        if (isBybitEarnProductMarketPricing(transaction, flow)) {
             return true;
         }
         if (requiresInboundShortfallSpotPricing(transaction, flow)) {
@@ -62,6 +68,18 @@ public final class PriceableFlowPolicy {
         }
         if (isContinuityPrincipal(transaction, flow)) {
             return false;
+        }
+        // Lending-loop close/decrease operations use TRANSFER-role principal inflows when the
+        // protocol directly returns assets (e.g. ETH on UNICHAIN from Compound loop decrease).
+        // Without explicit pricing, these inflows materialise with $0 basis in the replay, which
+        // then propagates via bridge carries to downstream positions (AZKSWETH, AMANWETH, etc.)
+        // and depresses the ETH-family AVCO. Forcing market-price lookup stores the canonical
+        // rate in the historical price cache so replay can correctly provision the cost basis.
+        if (flow.getRole() == NormalizedLegRole.TRANSFER
+                && flow.getQuantityDelta() != null
+                && flow.getQuantityDelta().signum() > 0
+                && isLendingLoopPrincipalInflowType(transaction.getType())) {
+            return true;
         }
         return flow.getRole() == NormalizedLegRole.FEE
                 || flow.getRole() == NormalizedLegRole.BUY
@@ -118,6 +136,16 @@ public final class PriceableFlowPolicy {
                 || flow.getQuantityDelta().compareTo(BigDecimal.ZERO) == 0;
     }
 
+    private static boolean isLendingLoopPrincipalInflowType(NormalizedTransactionType type) {
+        if (type == null) {
+            return false;
+        }
+        return switch (type) {
+            case LENDING_LOOP_DECREASE, LENDING_LOOP_CLOSE -> true;
+            default -> false;
+        };
+    }
+
     private static boolean isPeggedNativeExternalTransferPricingType(NormalizedTransactionType type) {
         if (type == null) {
             return false;
@@ -131,6 +159,27 @@ public final class PriceableFlowPolicy {
     private static boolean isBybitPeggedNativeInternalTransfer(NormalizedTransaction transaction) {
         return transaction.getSource() == NormalizedTransactionSource.BYBIT
                 && transaction.getType() == NormalizedTransactionType.INTERNAL_TRANSFER;
+    }
+
+    private static boolean isBybitEarnProductMarketPricing(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow
+    ) {
+        if (transaction.getSource() != NormalizedTransactionSource.BYBIT
+                || flow.getRole() != NormalizedLegRole.TRANSFER
+                || flow.getQuantityDelta() == null
+                || flow.getQuantityDelta().signum() == 0) {
+            return false;
+        }
+        NormalizedTransactionType type = transaction.getType();
+        if (type != NormalizedTransactionType.LENDING_DEPOSIT
+                && type != NormalizedTransactionType.LENDING_WITHDRAW) {
+            return false;
+        }
+        if (CanonicalAssetCatalog.isPricingSkipped(flow.getAssetSymbol())) {
+            return false;
+        }
+        return true;
     }
 
     /**

@@ -120,6 +120,8 @@ interface MarkerView {
   readonly totalCostBasisAfterUsd: number | null;
   readonly avcoBeforeUsd: number | null;
   readonly avcoAfterUsd: number | null;
+  readonly avcoKind: string | null;
+  readonly avcoKindLabel: string | null;
   readonly realisedPnlDeltaUsd: number | null;
   readonly gasDeltaUsd: number | null;
   readonly basisEffects: ReadonlyArray<string>;
@@ -1172,6 +1174,16 @@ export class AssetLedgerPageComponent {
     this.isRangeDragging.set(true);
   }
 
+  private avcoKindLabel(kind: string | null): string | null {
+    if (kind === 'PRIMARY_FLOW') {
+      return 'Venue spot AVCO';
+    }
+    if (kind === 'FAMILY_ROLLUP') {
+      return 'Family aggregate';
+    }
+    return null;
+  }
+
   formatUsd(value: number | null, digits = 2): string {
     if (value === null || Number.isNaN(value)) {
       return '—';
@@ -1648,6 +1660,8 @@ export class AssetLedgerPageComponent {
         totalCostBasisAfterUsd: entry.totalCostBasisAfterUsd,
         avcoBeforeUsd: previous?.avcoAfterUsd ?? null,
         avcoAfterUsd: entry.avcoAfterUsd,
+        avcoKind: entry.avcoKind ?? null,
+        avcoKindLabel: this.avcoKindLabel(entry.avcoKind ?? null),
         realisedPnlDeltaUsd: entry.realisedPnlDeltaUsd,
         gasDeltaUsd: entry.gasDeltaUsd,
         basisEffects: entry.basisEffects,
@@ -1689,6 +1703,7 @@ export class AssetLedgerPageComponent {
       })
       .filter((value): value is number => value !== null);
     const avcos = timeline
+      .filter((entry) => entry.avcoKind !== 'FAMILY_ROLLUP')
       .map((entry) => entry.avcoAfterUsd)
       .filter((value): value is number => value !== null);
     const values = [...prices, ...avcos];

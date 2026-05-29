@@ -9,9 +9,12 @@ import com.walletradar.domain.transaction.externalledger.ExternalLedgerRawReposi
 import com.walletradar.domain.transaction.externalledger.ExternalLedgerRawStatus;
 import com.walletradar.domain.transaction.integration.IntegrationRawEventRepository;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.ingestion.pipeline.bybit.BybitBotTransferCostBasisService;
 import com.walletradar.ingestion.pipeline.bybit.BybitCanonicalTransactionBuilder;
+import com.walletradar.ingestion.pipeline.bybit.BybitEarnPrincipalTransferPairer;
 import com.walletradar.ingestion.pipeline.bybit.BybitInternalTransferExternalCpReclassifier;
 import com.walletradar.ingestion.pipeline.bybit.BybitInternalTransferPairer;
+import com.walletradar.ingestion.pipeline.bybit.BybitPrincipalEventExclusivityService;
 import com.walletradar.ingestion.pipeline.bybit.BybitStakingConversionPairer;
 import com.walletradar.ingestion.pipeline.bybit.BybitStreamAuthorityCollapser;
 import com.walletradar.ingestion.pipeline.bybit.BybitTradePairer;
@@ -61,9 +64,12 @@ public class BybitNormalizationService {
     private final IdempotentNormalizedTransactionStore normalizedTransactionStore;
     private final AccountingUniverseService accountingUniverseService;
     private final BybitInternalTransferPairer bybitInternalTransferPairer;
+    private final BybitEarnPrincipalTransferPairer bybitEarnPrincipalTransferPairer;
+    private final BybitPrincipalEventExclusivityService bybitPrincipalEventExclusivityService;
     private final BybitInternalTransferExternalCpReclassifier bybitInternalTransferExternalCpReclassifier;
     private final BybitStreamAuthorityCollapser bybitStreamAuthorityCollapser;
     private final BybitStakingConversionPairer bybitStakingConversionPairer;
+    private final BybitBotTransferCostBasisService bybitBotTransferCostBasisService;
 
     public int processNextBatch(int batchSize) {
         return processNextBatch(batchSize, null);
@@ -82,9 +88,21 @@ public class BybitNormalizationService {
                 if (collapsed > 0) {
                     log.info("BYBIT_STREAM_AUTHORITY_COLLAPSER batchProcessed={} dirty={}", processed, collapsed);
                 }
+                int earnPaired = bybitEarnPrincipalTransferPairer.pairEarnPrincipalTransfers();
+                if (earnPaired > 0) {
+                    log.info("BYBIT_EARN_PRINCIPAL_PAIRER batchProcessed={} rewrites={}", processed, earnPaired);
+                }
+                int principalDeduped = bybitPrincipalEventExclusivityService.demoteDuplicatePrincipalEvents();
+                if (principalDeduped > 0) {
+                    log.info("BYBIT_PRINCIPAL_EXCLUSIVITY batchProcessed={} demoted={}", processed, principalDeduped);
+                }
                 int stakingPaired = bybitStakingConversionPairer.pairConversions();
                 if (stakingPaired > 0) {
                     log.info("BYBIT_STAKING_CONVERSION_PAIRER batchProcessed={} pairs={}", processed, stakingPaired);
+                }
+                int botCostResolved = bybitBotTransferCostBasisService.computeBotCostBasis();
+                if (botCostResolved > 0) {
+                    log.info("BYBIT_BOT_COST_BASIS batchProcessed={} resolved={}", processed, botCostResolved);
                 }
                 if (sessionId != null && !sessionId.isBlank()) {
                     int reclassified = bybitInternalTransferExternalCpReclassifier.reclassify(sessionId.trim());

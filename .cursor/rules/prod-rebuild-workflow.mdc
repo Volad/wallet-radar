@@ -1,0 +1,50 @@
+---
+description: Prod Docker rebuild after AVCO/normalization or frontend changes
+alwaysApply: true
+---
+
+# Prod rebuild workflow
+
+After implementing changes, run the matching command from the **repo root**. Use [scripts/prod-reset-rebuild-backend.sh](scripts/prod-reset-rebuild-backend.sh).
+
+## Cost basis / AVCO / normalization (backend)
+
+Run after any change that affects cost basis, move basis, AVCO replay, classification, clarification, linking, pricing, ingestion normalization, or accounting replay.
+
+Typical paths: `backend/**/costbasis/**`, `backend/**/accounting/**`, `backend/**/pricing/**`, `backend/**/ingestion/**` (normalization, clarification, pipeline).
+
+```bash
+./scripts/prod-reset-rebuild-backend.sh --skip-frontend
+```
+
+When pricing cache must be cleared (pricing policy or provider changes):
+
+```bash
+./scripts/prod-reset-rebuild-backend.sh --clear-pricing-cache --skip-frontend
+```
+
+`--skip-frontend` leaves the running `frontend-prod` container untouched.
+
+## Frontend (Angular)
+
+Run after changes under `frontend/**`:
+
+```bash
+./scripts/prod-reset-rebuild-backend.sh --frontend-only
+```
+
+Rebuilds only `frontend-prod`; does **not** reset Mongo or rebuild backend.
+
+## Full stack (backend + frontend + renormalization)
+
+Use only when both pipeline logic and UI must be verified together (no flags, or explicit `--start-frontend`):
+
+```bash
+./scripts/prod-reset-rebuild-backend.sh
+```
+
+## Agent checklist
+
+- [ ] Backend pipeline / accounting change → `--skip-frontend` (add `--clear-pricing-cache` if pricing cache invalid)
+- [ ] Frontend-only change → `--frontend-only`
+- [ ] Run from repo root; wait for script to finish before reporting verification done

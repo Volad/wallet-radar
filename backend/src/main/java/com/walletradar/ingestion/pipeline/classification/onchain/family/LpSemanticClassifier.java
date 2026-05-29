@@ -5,6 +5,7 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.ingestion.pipeline.classification.ClassificationDecision;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassificationContext;
+import com.walletradar.ingestion.pipeline.classification.lp.PendleLpCorrelationSupport;
 import com.walletradar.ingestion.pipeline.classification.onchain.protocol.ProtocolSemanticHint;
 import com.walletradar.ingestion.pipeline.classification.reason.ClassificationReasonCode;
 import com.walletradar.ingestion.pipeline.classification.support.BlockScoutNativeSettlementClarificationSupport;
@@ -44,37 +45,59 @@ public class LpSemanticClassifier implements OnChainFamilyClassifier {
             Optional<ProtocolSemanticHint> hint = context.protocolSemantics().firstBySuggestedType(type);
             if (hint.isPresent()) {
                 ProtocolSemanticHint value = hint.orElseThrow();
+                // P2 (ADR-018 ETH-C10): Pendle LP txs routed via semantic hints must carry a
+                // Pendle correlation ID derived from the LPT asset in the movement legs, so that
+                // entries, exits, and fee claims share the same `pendle-lp:{net}:{marketId}` key.
+                String correlationId = isPendleProtocol(value)
+                        ? PendleLpCorrelationSupport.correlationIdFromMovementLegs(
+                                context.view(), context.movementLegs())
+                        : null;
+
                 if (BlockScoutNativeSettlementClarificationSupport.requiresReceiptClarification(
                         context.view(),
                         context.movementLegs(),
                         type,
                         nativeAssetSymbolResolver
                 )) {
-                    return Optional.of(FamilyDecisionSupport.buildWithView(
-                            context.view(),
+                    return Optional.of(new ClassificationDecision(
                             type,
                             NormalizedTransactionStatus.PENDING_CLARIFICATION,
                             ClassificationSource.PROTOCOL_REGISTRY,
                             value.confidence(),
                             OnChainClassificationSupport.toFlows(context.movementLegs(), type),
                             List.of(ClassificationReasonCode.NATIVE_SETTLEMENT_TRANSFER_EVIDENCE_REQUIRED.code()),
+                            correlationId,
+                            null,
+                            null,
+                            null,
+                            null,
                             value.protocolName(),
                             value.protocolVersion()
                     ));
                 }
-                return Optional.of(FamilyDecisionSupport.buildWithView(
-                        context.view(),
+                return Optional.of(new ClassificationDecision(
                         type,
                         OnChainClassificationSupport.initialStatus(context.view(), type, value.confidence()),
                         ClassificationSource.PROTOCOL_REGISTRY,
                         value.confidence(),
                         OnChainClassificationSupport.toFlows(context.movementLegs(), type),
                         List.of(),
+                        correlationId,
+                        null,
+                        null,
+                        null,
+                        null,
                         value.protocolName(),
                         value.protocolVersion()
                 ));
             }
         }
         return Optional.empty();
+    }
+
+    private static boolean isPendleProtocol(ProtocolSemanticHint hint) {
+        return hint != null
+                && hint.protocolName() != null
+                && "Pendle".equalsIgnoreCase(hint.protocolName().trim());
     }
 }

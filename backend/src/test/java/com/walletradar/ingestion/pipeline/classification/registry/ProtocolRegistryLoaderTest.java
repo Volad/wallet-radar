@@ -134,6 +134,10 @@ class ProtocolRegistryLoaderTest {
                 .containsKey(new ProtocolRegistryLoader.RegistryKey(
                         NetworkId.KATANA,
                         "0xac4c6e212a361c968f1725b4d055b47e63f80b75"
+                ))
+                .containsKey(new ProtocolRegistryLoader.RegistryKey(
+                        NetworkId.KATANA,
+                        "0x3067bdba0e6628497d527bef511c22da8b32ca3f"
                 ));
         assertThat(loaded.entriesByKey().get(new ProtocolRegistryLoader.RegistryKey(
                 NetworkId.ARBITRUM,
@@ -143,6 +147,14 @@ class ProtocolRegistryLoaderTest {
                 NetworkId.MANTLE,
                 "0x888888888889758f76e7103c6cbf23abbf58f946"
         )).protocolName()).isEqualTo("Pendle");
+        assertThat(loaded.entriesByKey().get(new ProtocolRegistryLoader.RegistryKey(
+                NetworkId.KATANA,
+                "0x3067bdba0e6628497d527bef511c22da8b32ca3f"
+        )).protocolName()).isEqualTo("SushiSwap");
+        assertThat(loaded.entriesByKey().get(new ProtocolRegistryLoader.RegistryKey(
+                NetworkId.KATANA,
+                "0x3067bdba0e6628497d527bef511c22da8b32ca3f"
+        )).role()).isEqualTo(com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryRole.POSITION_MANAGER);
         assertThat(loaded.methodDescriptions()).containsKey("0x0ad58d2f");
     }
 

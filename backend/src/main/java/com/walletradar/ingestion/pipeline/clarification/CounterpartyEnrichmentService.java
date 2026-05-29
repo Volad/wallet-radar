@@ -124,9 +124,10 @@ public class CounterpartyEnrichmentService {
         if (transaction == null || transaction.getType() == null || transaction.getCounterpartyType() == null) {
             return false;
         }
-        boolean ownCounterparty = CounterpartyType.PERSONAL_WALLET.equals(transaction.getCounterpartyType())
-                || CounterpartyType.CEX.equals(transaction.getCounterpartyType());
-        if (!ownCounterparty) {
+        if (CounterpartyType.CEX.equals(transaction.getCounterpartyType())) {
+            return false;
+        }
+        if (!CounterpartyType.PERSONAL_WALLET.equals(transaction.getCounterpartyType())) {
             return false;
         }
         NormalizedTransactionType type = transaction.getType();

@@ -38,7 +38,15 @@ public final class LpPositionCorrelationSupport {
             NormalizedTransactionType type,
             String protocolName
     ) {
-        if (view == null || type == null || !isPositionScopedLpType(type)) {
+        return lifecycleCorrelationId(view, type, protocolName);
+    }
+
+    public static String lifecycleCorrelationId(
+            OnChainRawTransactionView view,
+            NormalizedTransactionType type,
+            String protocolName
+    ) {
+        if (view == null || type == null || !supportsLpPositionCorrelation(type)) {
             return null;
         }
         BigInteger tokenId = resolvePositionTokenId(view);
@@ -48,6 +56,48 @@ public final class LpPositionCorrelationSupport {
         String networkId = view.networkId() == null ? "unknown" : view.networkId().name().toLowerCase(Locale.ROOT);
         String protocolSlug = normalizeProtocolName(protocolName);
         return "lp-position:" + networkId + ":" + protocolSlug + ":" + tokenId.toString();
+    }
+
+    public static boolean supportsLpPositionCorrelation(NormalizedTransactionType type) {
+        return isPositionScopedLpType(type) || type == NormalizedTransactionType.LP_FEE_CLAIM;
+    }
+
+    public static boolean hasDecreaseOrBurnActionInCalldata(OnChainRawTransactionView view) {
+        if (view == null) {
+            return false;
+        }
+        String methodId = normalizeSelector(view.methodId());
+        String inputData = view.inputData();
+        if (DECREASE_LIQUIDITY_SELECTOR.equals(methodId) || BURN_SELECTOR.equals(methodId)) {
+            return true;
+        }
+        if (inputData == null || inputData.isBlank()) {
+            return false;
+        }
+        if (CalldataDecodingSupport.containsEmbeddedSelector(inputData, DECREASE_LIQUIDITY_SELECTOR)
+                || CalldataDecodingSupport.containsEmbeddedSelector(inputData, BURN_SELECTOR)) {
+            return true;
+        }
+        if (!MODIFY_LIQUIDITIES_SELECTOR.equals(methodId)
+                && !CalldataDecodingSupport.containsEmbeddedSelector(inputData, MODIFY_LIQUIDITIES_SELECTOR)) {
+            return false;
+        }
+        String unlockData = CalldataDecodingSupport.decodeDynamicBytesArgument(inputData, 0);
+        if (unlockData == null || unlockData.isBlank()) {
+            return false;
+        }
+        String actions = CalldataDecodingSupport.decodeTupleDynamicBytesArgument(unlockData, 0);
+        if (actions == null || actions.length() <= 2) {
+            return false;
+        }
+        String actionBytes = actions.startsWith("0x") ? actions.substring(2) : actions;
+        for (int index = 0; index + 2 <= actionBytes.length(); index += 2) {
+            int action = Integer.parseInt(actionBytes.substring(index, index + 2), 16);
+            if (action == ACTION_DECREASE_LIQUIDITY || action == ACTION_BURN_POSITION) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public static boolean requiresReceiptClarification(

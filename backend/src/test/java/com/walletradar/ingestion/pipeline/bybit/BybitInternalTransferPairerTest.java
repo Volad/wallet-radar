@@ -452,7 +452,7 @@ class BybitInternalTransferPairerTest {
         when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
                 .thenAnswer(invocation -> {
                     int n = call.incrementAndGet();
-                    if (n == 1) {
+                    if (n == 2) {
                         return List.of(
                                 singletonInternalTransfer("out", "c1", "BYBIT:1:UTA", "USDT", "-1", Instant.now()),
                                 singletonInternalTransfer("in", "c2", "BYBIT:1:FUND", "USDT", "1", Instant.now())
@@ -490,6 +490,35 @@ class BybitInternalTransferPairerTest {
         flow.setQuantityDelta(new BigDecimal(qty));
         tx.setFlows(new ArrayList<>(List.of(flow)));
         return tx;
+    }
+
+    @Test
+    void pairsCrossUidUniversalTransferLegsByEmbeddedTransferUuid() {
+        NormalizedTransaction mainOut = singletonInternalTransfer(
+                "BYBIT-33625378:UNIVERSAL_TRANSFER:uni_trans_aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee:out",
+                "bybit-econ-v1:main-out",
+                "BYBIT:33625378:FUND",
+                "MNT",
+                "-100",
+                Instant.parse("2026-03-25T12:00:00Z")
+        );
+        NormalizedTransaction subIn = singletonInternalTransfer(
+                "BYBIT-99999999:UNIVERSAL_TRANSFER:uni_trans_aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee:in",
+                "bybit-econ-v1:sub-in",
+                "BYBIT:99999999:FUND",
+                "MNT",
+                "100",
+                Instant.parse("2026-03-25T12:00:01Z")
+        );
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(mainOut, subIn));
+
+        int rewrites = pairer.pairCrossUidUniversalTransfers();
+
+        assertThat(rewrites).isEqualTo(2);
+        assertThat(mainOut.getCorrelationId()).startsWith(BybitInternalTransferPairer.CROSS_UID_CORRELATION_PREFIX);
+        assertThat(subIn.getCorrelationId()).isEqualTo(mainOut.getCorrelationId());
     }
 
     private NormalizedTransaction singletonInternalTransfer(

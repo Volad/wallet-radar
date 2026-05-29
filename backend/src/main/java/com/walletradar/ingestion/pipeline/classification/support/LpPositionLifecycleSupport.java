@@ -100,7 +100,7 @@ public final class LpPositionLifecycleSupport {
             return NormalizedTransactionType.LP_EXIT;
         }
         if (collect && hasInboundNonFeeLeg(movementLegs) && !hasOutboundNonFeeLeg(movementLegs)) {
-            return hasAnyErc721TransferToWallet(view)
+            return LpPrincipalCloseEvidence.hasPositionReductionEvidence(view)
                     ? NormalizedTransactionType.LP_EXIT
                     : NormalizedTransactionType.LP_FEE_CLAIM;
         }

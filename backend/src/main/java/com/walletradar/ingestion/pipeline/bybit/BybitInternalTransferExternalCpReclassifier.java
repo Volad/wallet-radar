@@ -114,6 +114,10 @@ public class BybitInternalTransferExternalCpReclassifier {
             if (!isSameUidSubAccountCounterparty(tx)) {
                 continue;
             }
+            if (tx.getMissingDataReasons() != null
+                    && tx.getMissingDataReasons().contains("BOT_TRANSFER")) {
+                continue;
+            }
             if (demoteExternalToInternalTransfer(tx, timestamp)) {
                 dirty.add(tx);
             }

@@ -181,6 +181,13 @@ public class InternalTransferPairLinkService {
             transaction.setContinuityCandidate(true);
             changed = true;
         }
+        if (blank(transaction.getCorrelationId())
+                && transaction.getNetworkId() != null
+                && !blank(transaction.getTxHash())) {
+            transaction.setCorrelationId(
+                    "internal-tx:" + transaction.getNetworkId() + ":" + transaction.getTxHash());
+            changed = true;
+        }
         if (!sameHashFree(transaction.getMatchedCounterparty(), reciprocalWallet)) {
             transaction.setMatchedCounterparty(reciprocalWallet);
             changed = true;

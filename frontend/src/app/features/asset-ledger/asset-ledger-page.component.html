@@ -452,6 +452,9 @@
                       <td class="r mono-cell">{{ formatUsd(marker.priceUsd, 2) }}</td>
                       <td class="r mono-cell">
                         <div>{{ formatUsd(marker.avcoBeforeUsd, 2) }} <span class="avco-arrow">→</span> {{ formatUsd(marker.avcoAfterUsd, 2) }}</div>
+                        @if (marker.avcoKindLabel) {
+                          <div class="avco-kind muted-c">{{ marker.avcoKindLabel }}</div>
+                        }
                         @if (marker.basisSummary !== 'No basis effect') {
                           <div class="avco-change">{{ marker.basisSummary }}</div>
                         }

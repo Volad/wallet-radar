@@ -1,5 +1,6 @@
 package com.walletradar.costbasis.application;
 
+import com.walletradar.costbasis.application.read.TimelineAvcoAuthority;
 import com.walletradar.costbasis.domain.AssetLedgerPoint;
 import com.walletradar.costbasis.domain.AssetLedgerPointRepository;
 import com.walletradar.costbasis.domain.OnChainBalance;
@@ -787,6 +788,233 @@ class AssetLedgerQueryServiceTest {
     }
 
     @Test
+    void sessionFamilyLedgerTimelineExcludesLpReceiptSharesFromEthAvcoAggregation() {
+        UserSession session = new UserSession();
+        session.setId("session-lp-exclude");
+        UserSession.SessionWallet wallet = new UserSession.SessionWallet();
+        wallet.setAddress("wallet-a");
+        wallet.setNetworks(List.of(NetworkId.ARBITRUM));
+        session.setWallets(List.of(wallet));
+
+        AssetLedgerPoint ethBuy = point(
+                "10",
+                "wallet-a",
+                NetworkId.ARBITRUM,
+                "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.ACQUIRE,
+                AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "1",
+                "2000",
+                "0",
+                "0",
+                "1",
+                "2000"
+        );
+        ethBuy.setNormalizedType("BUY");
+        ethBuy.setAvcoAfterUsd(new BigDecimal("2000"));
+
+        AssetLedgerPoint lpReceiptIn = point(
+                "11",
+                "wallet-a",
+                NetworkId.ARBITRUM,
+                "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.REALLOCATE_IN,
+                AssetLedgerPoint.LifecycleKind.LP,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "513.47",
+                "1182",
+                "0",
+                "0",
+                "513.47",
+                "1182"
+        );
+        lpReceiptIn.setAssetSymbol("LP-RECEIPT:arbitrum:pancakeswap:196975");
+        lpReceiptIn.setNormalizedTransactionId("11");
+        lpReceiptIn.setNormalizedType("LP_ENTRY");
+        lpReceiptIn.setAvcoAfterUsd(new BigDecimal("2.30"));
+        lpReceiptIn.setBlockTimestamp(Instant.parse("2026-04-05T10:01:00Z"));
+
+        when(userSessionRepository.findById("session-lp-exclude")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "ACCOUNTING_UNIVERSE:session-lp-exclude",
+                List.of("wallet-a"),
+                List.of("wallet-a")
+        ));
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-lp-exclude",
+                "FAMILY:ETH"
+        )).thenReturn(List.of(ethBuy, lpReceiptIn));
+        when(normalizedTransactionRepository.findAllById(List.of("10", "11")))
+                .thenReturn(List.of(
+                        normalized("10", "Coinbase", "ETH", "BUY", "1", "2000"),
+                        normalized("11", "PancakeSwap", "LP-RECEIPT:arbitrum:pancakeswap:196975", "TRANSFER", "513.47", null)
+                ));
+        when(mongoOperations.find(any(), eq(OnChainBalance.class))).thenReturn(List.of(
+                balance("wallet-a", NetworkId.ARBITRUM, "ETH", "1")
+        ));
+
+        AssetLedgerQueryService.SessionAssetLedgerView view = service()
+                .findSessionFamilyLedger("session-lp-exclude", "FAMILY:ETH")
+                .orElseThrow();
+
+        assertThat(view.timeline()).hasSize(1);
+        assertThat(view.timeline().getFirst().avcoAfterUsd()).isEqualByComparingTo("2000");
+        assertThat(view.timeline().getFirst().avcoKind()).isEqualTo(TimelineAvcoAuthority.KIND_PRIMARY_FLOW);
+        assertThat(view.ledgerPoints()).hasSize(2);
+    }
+
+    @Test
+    void sessionFamilyLedgerTimelineKeepsWethAvcoOnLpExitTransaction() {
+        UserSession session = new UserSession();
+        session.setId("session-lp-weth");
+        UserSession.SessionWallet wallet = new UserSession.SessionWallet();
+        wallet.setAddress("wallet-a");
+        wallet.setNetworks(List.of(NetworkId.ARBITRUM));
+        session.setWallets(List.of(wallet));
+
+        AssetLedgerPoint wethOut = point(
+                "20",
+                "wallet-a",
+                NetworkId.ARBITRUM,
+                "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.REALLOCATE_OUT,
+                AssetLedgerPoint.LifecycleKind.LP,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "-0.5",
+                "-1361",
+                "0",
+                "0",
+                "0.5",
+                "1361"
+        );
+        wethOut.setAssetSymbol("WETH");
+        wethOut.setAccountingAssetIdentity("WETH:0x82af4942262814fb3571b8c24217807");
+        wethOut.setNormalizedType("LP_EXIT");
+        wethOut.setAvcoAfterUsd(new BigDecimal("2722"));
+        wethOut.setNormalizedTransactionId("20");
+
+        AssetLedgerPoint lpReceiptIn = point(
+                "20",
+                "wallet-a",
+                NetworkId.ARBITRUM,
+                "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.REALLOCATE_IN,
+                AssetLedgerPoint.LifecycleKind.LP,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "513.47",
+                "1182",
+                "0",
+                "0",
+                "513.47",
+                "1182"
+        );
+        lpReceiptIn.setAssetSymbol("LP-RECEIPT:arbitrum:pancakeswap:196975");
+        lpReceiptIn.setNormalizedTransactionId("20");
+        lpReceiptIn.setNormalizedType("LP_EXIT");
+        lpReceiptIn.setAvcoAfterUsd(new BigDecimal("2.30"));
+
+        when(userSessionRepository.findById("session-lp-weth")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "ACCOUNTING_UNIVERSE:session-lp-weth",
+                List.of("wallet-a"),
+                List.of("wallet-a")
+        ));
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-lp-weth",
+                "FAMILY:ETH"
+        )).thenReturn(List.of(wethOut, lpReceiptIn));
+        when(normalizedTransactionRepository.findAllById(List.of("20")))
+                .thenReturn(List.of(normalized("20", "PancakeSwap", "WETH", "TRANSFER", "-0.5", null)));
+        when(mongoOperations.find(any(), eq(OnChainBalance.class))).thenReturn(List.of(
+                balance("wallet-a", NetworkId.ARBITRUM, "WETH", "0.5")
+        ));
+
+        AssetLedgerQueryService.SessionAssetLedgerView view = service()
+                .findSessionFamilyLedger("session-lp-weth", "FAMILY:ETH")
+                .orElseThrow();
+
+        assertThat(view.timeline()).hasSize(1);
+        assertThat(view.timeline().getFirst().avcoAfterUsd()).isEqualByComparingTo("2722");
+        assertThat(view.timeline().getFirst().avcoKind()).isEqualTo(TimelineAvcoAuthority.KIND_PRIMARY_FLOW);
+    }
+
+    @Test
+    void sessionFamilyLedgerTimelineDoesNotCollapseToFamilyRollupAfterLargeLpHistory() {
+        UserSession session = new UserSession();
+        session.setId("session-lp-tail");
+        UserSession.SessionWallet wallet = new UserSession.SessionWallet();
+        wallet.setAddress("wallet-a");
+        wallet.setNetworks(List.of(NetworkId.BASE));
+        session.setWallets(List.of(wallet));
+
+        AssetLedgerPoint legacyLpReceipt = point(
+                "1",
+                "wallet-a",
+                NetworkId.BASE,
+                "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.REALLOCATE_IN,
+                AssetLedgerPoint.LifecycleKind.LP,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "58674",
+                "103000",
+                "0",
+                "0",
+                "58674",
+                "103000"
+        );
+        legacyLpReceipt.setAssetSymbol("LP-RECEIPT:base:pancakeswap:477096");
+        legacyLpReceipt.setAvcoAfterUsd(new BigDecimal("1.75"));
+        legacyLpReceipt.setBlockTimestamp(Instant.parse("2026-04-01T10:00:00Z"));
+
+        AssetLedgerPoint ethAcquire = point(
+                "2",
+                "wallet-a",
+                NetworkId.BASE,
+                "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.ACQUIRE,
+                AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "1",
+                "2062",
+                "0",
+                "0",
+                "1",
+                "2062"
+        );
+        ethAcquire.setNormalizedType("BUY");
+        ethAcquire.setAvcoAfterUsd(new BigDecimal("2062"));
+        ethAcquire.setBlockTimestamp(Instant.parse("2026-04-05T10:00:00Z"));
+
+        when(userSessionRepository.findById("session-lp-tail")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "ACCOUNTING_UNIVERSE:session-lp-tail",
+                List.of("wallet-a"),
+                List.of("wallet-a")
+        ));
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-lp-tail",
+                "FAMILY:ETH"
+        )).thenReturn(List.of(legacyLpReceipt, ethAcquire));
+        when(normalizedTransactionRepository.findAllById(List.of("1", "2")))
+                .thenReturn(List.of(
+                        normalized("1", "PancakeSwap", "LP-RECEIPT:base:pancakeswap:477096", "TRANSFER", "58674", null),
+                        normalized("2", "Coinbase", "ETH", "BUY", "1", "2062")
+                ));
+        when(mongoOperations.find(any(), eq(OnChainBalance.class))).thenReturn(List.of(
+                balance("wallet-a", NetworkId.BASE, "ETH", "1")
+        ));
+
+        AssetLedgerQueryService.SessionAssetLedgerView view = service()
+                .findSessionFamilyLedger("session-lp-tail", "FAMILY:ETH")
+                .orElseThrow();
+
+        assertThat(view.timeline()).hasSize(1);
+        assertThat(view.timeline().getFirst().avcoAfterUsd()).isEqualByComparingTo("2062");
+        assertThat(view.timeline().getFirst().avcoKind()).isEqualTo(TimelineAvcoAuthority.KIND_PRIMARY_FLOW);
+    }
+
+    @Test
     void currentStateAggregatesBybitUmbrellaForBybitOnlyFamily() {
         UserSession session = bybitSession("session-bybit-ldo", "33625378");
         AssetLedgerPoint uta = bybitVenuePoint("10", "BYBIT:33625378:UTA", "SYMBOL:LDO", "LDO", "100", "60", "2");
@@ -812,9 +1040,9 @@ class AssetLedgerQueryServiceTest {
                 .findSessionFamilyLedger("session-bybit-ldo", "SYMBOL:LDO")
                 .orElseThrow();
 
-        assertThat(view.current().quantity()).isEqualByComparingTo("337.732748");
+        assertThat(view.current().quantity()).isEqualByComparingTo("500");
         assertThat(view.current().coveredQuantity()).isEqualByComparingTo("183.560728");
-        assertThat(view.current().uncoveredQuantity()).isEqualByComparingTo("154.17202");
+        assertThat(view.current().uncoveredQuantity()).isEqualByComparingTo("316.439272");
         assertThat(view.current().uncoveredBuckets()).hasSize(3);
         assertThat(view.current().uncoveredBuckets())
                 .extracting(AssetLedgerQueryService.UncoveredBucketView::walletAddress)
@@ -930,7 +1158,7 @@ class AssetLedgerQueryServiceTest {
                 .findSessionFamilyLedger("session-bybit-mnt", "FAMILY:MNT")
                 .orElseThrow();
 
-        assertThat(view.current().quantity()).isEqualByComparingTo("110");
+        assertThat(view.current().quantity()).isEqualByComparingTo("210");
         assertThat(view.current().coveredQuantity()).isEqualByComparingTo("98");
     }
 
@@ -962,6 +1190,103 @@ class AssetLedgerQueryServiceTest {
         assertThat(view.current().coveredQuantity()).isZero();
         assertThat(view.current().uncoveredBuckets()).isEmpty();
     }
+
+    @Test
+    void fullSessionCurrentIncludesBybitLedgerPointsEvenWithoutLiveIntegration() {
+        // Session has NO Bybit integration — current() will only show on-chain balance.
+        // fullSessionCurrent() must still include the Bybit replay points.
+        UserSession session = new UserSession();
+        session.setId("session-fsc");
+        UserSession.SessionWallet wallet = new UserSession.SessionWallet();
+        wallet.setAddress("wallet-a");
+        wallet.setNetworks(List.of(NetworkId.ARBITRUM));
+        session.setWallets(List.of(wallet));
+        // no integrations
+
+        AssetLedgerPoint onChainEth = point(
+                "100",
+                "wallet-a",
+                NetworkId.ARBITRUM,
+                "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.ACQUIRE,
+                AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "3.06",
+                "5244.66",
+                "0",
+                "0",
+                "3.06",
+                "5244.66"
+        );
+        onChainEth.setAssetSymbol("AMANWETH");
+        onChainEth.setAccountingAssetIdentity("0xamanweth");
+        onChainEth.setAccountingFamilyIdentity("FAMILY:ETH");
+        onChainEth.setBasisBackedQuantityAfter(new BigDecimal("3.06"));
+        onChainEth.setAvcoAfterUsd(new BigDecimal("1714"));
+
+        // Bybit venue ledger point (no live balance integration in this session)
+        AssetLedgerPoint bybitEth = new AssetLedgerPoint();
+        bybitEth.setId("101:BYBIT:33625378:UTA");
+        bybitEth.setWalletAddress("BYBIT:33625378:UTA");
+        bybitEth.setNetworkId(null);
+        bybitEth.setAccountingAssetIdentity("SYMBOL:ETH");
+        bybitEth.setAccountingFamilyIdentity("FAMILY:ETH");
+        bybitEth.setFamilyDisplaySymbol("ETH");
+        bybitEth.setAssetSymbol("ETH");
+        bybitEth.setNormalizedTransactionId("101");
+        bybitEth.setTxHash("0x101");
+        bybitEth.setBlockTimestamp(java.time.Instant.parse("2026-04-05T10:05:00Z"));
+        bybitEth.setReplaySequence(101L);
+        bybitEth.setTransactionIndex(0);
+        bybitEth.setNormalizedType("INTERNAL_TRANSFER");
+        bybitEth.setLifecycleKind(AssetLedgerPoint.LifecycleKind.SPOT);
+        bybitEth.setLifecycleStage(AssetLedgerPoint.LifecycleStage.SINGLE);
+        bybitEth.setBasisEffect(AssetLedgerPoint.BasisEffect.CARRY_IN);
+        bybitEth.setQuantityAfter(new BigDecimal("0.42"));
+        bybitEth.setBasisBackedQuantityAfter(new BigDecimal("0.42"));
+        bybitEth.setAvcoAfterUsd(new BigDecimal("2274"));
+        bybitEth.setTotalCostBasisAfterUsd(new BigDecimal("955.08"));
+        bybitEth.setQuantityDelta(new BigDecimal("0.42"));
+        bybitEth.setCostBasisDeltaUsd(BigDecimal.ZERO);
+        bybitEth.setRealisedPnlDeltaUsd(BigDecimal.ZERO);
+        bybitEth.setGasDeltaUsd(BigDecimal.ZERO);
+        bybitEth.setUncoveredQuantityDelta(BigDecimal.ZERO);
+        bybitEth.setQuantityShortfallAfter(BigDecimal.ZERO);
+        bybitEth.setUncoveredQuantityAfter(BigDecimal.ZERO);
+
+        when(userSessionRepository.findById("session-fsc")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "ACCOUNTING_UNIVERSE:session-fsc",
+                List.of("wallet-a", "BYBIT:33625378:UTA"),
+                List.of("wallet-a")
+        ));
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-fsc",
+                "FAMILY:ETH"
+        )).thenReturn(List.of(onChainEth, bybitEth));
+        when(normalizedTransactionRepository.findAllById(any())).thenReturn(List.of());
+        OnChainBalance amanwethBalance = balance("wallet-a", NetworkId.ARBITRUM, "AMANWETH", "3.06");
+        amanwethBalance.setAssetContract("0xamanweth");
+        when(mongoOperations.find(any(), eq(OnChainBalance.class))).thenReturn(List.of(amanwethBalance));
+
+        AssetLedgerQueryService service = service();
+        AssetLedgerQueryService.SessionAssetLedgerView view = service.findSessionFamilyLedger("session-fsc", "FAMILY:ETH")
+                .orElseThrow();
+
+        // current() = on-chain only (no Bybit integration → Bybit section skipped)
+        assertThat(view.current().quantity()).isEqualByComparingTo("3.06");
+
+        // fullSessionCurrent() = on-chain + Bybit ledger state
+        assertThat(view.fullSessionCurrent().quantity()).isGreaterThan(view.current().quantity());
+        assertThat(view.fullSessionCurrent().quantity()).isEqualByComparingTo("3.48");
+        assertThat(view.fullSessionCurrent().coveredQuantity()).isEqualByComparingTo("3.48");
+
+        // AVCO blended: (3.06 * 1714 + 0.42 * 2274) / 3.48 ≈ 1781–1783
+        assertThat(view.fullSessionCurrent().avcoUsd())
+                .isGreaterThan(new BigDecimal("1780"))
+                .isLessThan(new BigDecimal("1790"));
+    }
+
 
     private UserSession bybitSession(String sessionId, String uid) {
         UserSession session = new UserSession();
