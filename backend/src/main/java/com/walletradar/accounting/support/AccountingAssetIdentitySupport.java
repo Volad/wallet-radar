@@ -14,6 +14,7 @@ import java.util.Set;
 public final class AccountingAssetIdentitySupport {
 
     private static final String EARN_PRINCIPAL_CORRELATION_PREFIX = "bybit-earn-principal-v1:";
+    private static final String BYBIT_CORRIDOR_CORRELATION_PREFIX = "BYBIT-CORRIDOR:";
     private static final String ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 
     private static final Map<NetworkId, String> NATIVE_SYMBOLS = Map.ofEntries(
@@ -66,6 +67,11 @@ public final class AccountingAssetIdentitySupport {
      * Replay position wallet for ledger and carry attachment. Earn-principal paired rows keep
      * their venue sub-account ({@code :FUND}, {@code :EARN}, {@code :UTA}) so inbound restore
      * lands on the same wallet as normalized evidence and pending carry keys can match.
+     *
+     * <p>BYBIT-CORRIDOR transactions from the {@code :FUND} sub-account also keep the full
+     * wallet address because the earn-principal transfer that placed assets into {@code :FUND}
+     * stored them under {@code BYBIT:UID:FUND}. Stripping the suffix would cause the carry-out
+     * to drain an empty root position instead of the actual funded position.
      */
     public static String replayPositionWalletAddress(
             NormalizedTransaction transaction,
@@ -78,6 +84,12 @@ public final class AccountingAssetIdentitySupport {
             String wallet = transaction == null ? null : transaction.getWalletAddress();
             return wallet == null || wallet.isBlank() ? null : wallet.trim();
         }
+        if (isBybitCorridorFromFund(transaction)) {
+            String wallet = transaction.getWalletAddress();
+            if (wallet != null && !wallet.isBlank()) {
+                return wallet.trim();
+            }
+        }
         return positionWalletAddress(transaction);
     }
 
@@ -87,6 +99,23 @@ public final class AccountingAssetIdentitySupport {
         }
         String correlationId = transaction.getCorrelationId();
         return correlationId != null && correlationId.startsWith(EARN_PRINCIPAL_CORRELATION_PREFIX);
+    }
+
+    /**
+     * Returns true for BYBIT-CORRIDOR transactions whose Bybit-side wallet is the {@code :FUND}
+     * sub-account. These transactions carry out assets that earn-principal transfers deposited
+     * directly into {@code :FUND}, so the full sub-account address must be preserved.
+     */
+    private static boolean isBybitCorridorFromFund(NormalizedTransaction transaction) {
+        if (transaction == null) {
+            return false;
+        }
+        String corrId = transaction.getCorrelationId();
+        if (corrId == null || !corrId.startsWith(BYBIT_CORRIDOR_CORRELATION_PREFIX)) {
+            return false;
+        }
+        String wallet = transaction.getWalletAddress();
+        return wallet != null && wallet.toUpperCase(Locale.ROOT).endsWith(":FUND");
     }
 
     public static NetworkId positionNetwork(NormalizedTransaction transaction) {

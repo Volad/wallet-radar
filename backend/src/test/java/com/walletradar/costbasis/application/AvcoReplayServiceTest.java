@@ -1780,7 +1780,8 @@ class AvcoReplayServiceTest {
         service().replayConfirmed();
 
         List<AssetLedgerPoint> points = capturedLedgerPoints();
-        AssetLedgerPoint destination = latestPoint(points, "BYBIT:1", null, "ETH", null);
+        // BYBIT-CORRIDOR inbound to :FUND now keeps the full sub-account address (P-B fix).
+        AssetLedgerPoint destination = latestPoint(points, "BYBIT:1:FUND", null, "ETH", null);
         // Without dedup, the mirror would push quantity to 2.0. With dedup, it stays at 1.0.
         assertThat(destination.getQuantityAfter()).isEqualByComparingTo("1.0");
         assertThat(destination.getTotalCostBasisAfterUsd()).isEqualByComparingTo("100");
