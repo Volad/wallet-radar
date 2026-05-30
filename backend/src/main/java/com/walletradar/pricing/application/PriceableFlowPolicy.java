@@ -221,6 +221,7 @@ public final class PriceableFlowPolicy {
         if (type == NormalizedTransactionType.LP_EXIT
                 || type == NormalizedTransactionType.LP_EXIT_PARTIAL
                 || type == NormalizedTransactionType.LP_EXIT_FINAL
+                || type == NormalizedTransactionType.LP_EXIT_SETTLEMENT
                 || type == NormalizedTransactionType.LENDING_WITHDRAW
                 || type == NormalizedTransactionType.BRIDGE_IN) {
             return true;

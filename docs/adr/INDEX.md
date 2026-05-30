@@ -27,6 +27,7 @@ Architecture Decision Records for WalletRadar. Each ADR captures a single decisi
 | [ADR-018](ADR-018-lp-protocol-family-materialization.md) | LP Protocol-Family Flow Materialization | Accepted (amended) | 2026-05-27 | LP families + ETH-C10 |
 | [ADR-019](ADR-019-corridor-carry-policy.md) | Corridor carry policy: outbound-AVCO preservation | Accepted | 2026-05-29 | ETH-C1 — corridor AVCO |
 | [ADR-020](ADR-020-bridge-late-carry-passthrough-reservation.md) | Bridge late-carry pass-through reservation invariant | Accepted | 2026-05-29 | ETH-V2-C1 — bridge ordering |
+| [ADR-021](ADR-021-swap-multi-sell-price-derivation-and-lp-harvest-gate.md) | SWAP multi-sell price derivation and concentrated-liquidity harvest-only gate | Accepted (amended) | 2026-05-29 | ETH AVCO — SWAP pricing, LP harvest |
 
 ## Cycle/5 N19 cluster — implementation plan mapping
 

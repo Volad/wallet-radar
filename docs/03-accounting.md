@@ -795,6 +795,11 @@ Implications:
 - if the same canonical asset appears multiple times in one `SWAP`, tx-local
   ratio pricing must be skipped and the flow must fall back to safer pricing
   sources instead of persisting an impossible synthetic price
+- **Multi-sell SWAP price rule (ADR-021, 2026-05-29)**: When a `SWAP` contains multiple SELL
+  flows of the same asset (e.g., two USDBC SELL legs routed through an aggregator), the derived
+  price for the BUY leg must be computed from the **sum of all SELL flow values**, not just the
+  first SELL flow. Using only the first SELL flow causes severe undervaluation of the BUY leg
+  (e.g., $9.52/WETH instead of $3,806/WETH when the second SELL carries 99% of the cost).
 
 Transaction-type pricing contract:
 
@@ -902,6 +907,26 @@ Transaction-type pricing contract:
     accounting on their own.
   - Explicit fee/reward delta above principal continuity is priced as
     `LP_FEE_CLAIM` or `REWARD_CLAIM`.
+  - **Concentrated-liquidity harvest-only gate (ADR-021, amended 2026-05-29)**: Two distinct
+    call patterns must be classified as `LP_FEE_CLAIM` rather than `LP_EXIT` when all non-fee
+    inflows are fee-reward tokens only (CAKE, VELO, AERO, or dust stablecoins ≤ $100):
+
+    1. **Multicall `decreaseLiquidity(liquidity=0)` + `collect`** — a no-op principal call
+       plus fee collection on the Uniswap V3 NPM. The `decreaseLiquidity` call with `liquidity=0`
+       touches no principal; it is used only to trigger the fee accounting path. Detected by:
+       `decreaseLiquidity` selector in calldata + `liquidity` parameter = 0 (64 zero hex digits).
+
+    2. **PancakeSwap V3 MasterChef `withdraw(uint256 tokenId, address to)`** — direct call
+       (selector `0x00f714ce`) on the MasterChef farm contract. Unstakes the NFT from the farm
+       and distributes accumulated CAKE rewards; LP liquidity stays in the Uniswap pool.
+       Discriminated from NPM `burn(tokenId)` (which shares the same selector) by the ERC721
+       Transfer event direction: MasterChef `withdraw` emits Transfer(MasterChef→wallet) — the
+       NFT is returned; NPM `burn` emits Transfer(wallet→0x0) — the NFT is destroyed.
+       `LpPositionLifecycleSupport.hasAnyErc721TransferToWallet` is `true` only for the former.
+
+    In both patterns, classifying the transaction as `LP_EXIT` materialises a phantom
+    `LP-RECEIPT:-1` burn, drains the position's composite basis bucket, and causes all subsequent
+    real principal exits to receive `basisEffect=UNKNOWN`.
   - For position-scoped concentrated-liquidity exits, replay restores
     same-asset carry first and may then reallocate remaining principal basis
     across returned principal assets that belong to the same position bucket.

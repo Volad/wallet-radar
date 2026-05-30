@@ -25,6 +25,12 @@ public final class LpPrincipalCloseEvidence {
     private static final String MODIFY_LIQUIDITY_TOPIC =
             "0xf208f4912782fd25c7f114ca3723a2d5dd6f3bcc3ac8db5af63baa85f711d5ec";
     private static final Set<String> STABLE_HARVEST_SYMBOLS = Set.of("USDC", "USDT", "USDT0", "USD₮0");
+    // PancakeSwap V3 MasterChef contracts (farm for staked CL positions).
+    // withdraw(tokenId, to) on these addresses = farm-unstake + CAKE harvest, never a principal exit.
+    private static final Set<String> MASTERCHEF_V3_ADDRESSES = Set.of(
+            "0x5e09acf80c0296740ec5d6f643005a4ef8daa694", // Arbitrum
+            "0xc6a2db661d5a5690172d8eb0a7dea2d3008665a3"  // BASE
+    );
     private static final BigDecimal DUST_STABLECOIN_THRESHOLD = new BigDecimal("100");
 
     private LpPrincipalCloseEvidence() {
@@ -41,7 +47,65 @@ public final class LpPrincipalCloseEvidence {
         if (!hasPositionReductionEvidence(view)) {
             return NormalizedTransactionType.LP_FEE_CLAIM;
         }
+        // Only downgrade to LP_FEE_CLAIM when liquidity=0 in the embedded decreaseLiquidity
+        // AND all inflows are fee-only. Prevents false-positives on genuine CAKE-only exits
+        // from out-of-range concentrated-liquidity pools.
+        if (isHarvestOnlyRewardPattern(movementLegs) && hasZeroLiquidityDecrease(view)) {
+            return NormalizedTransactionType.LP_FEE_CLAIM;
+        }
+        // MasterChef withdraw(tokenId, to) — direct 0x00f714ce call on farm contract.
+        // Unstakes NFT from farm and distributes CAKE rewards; LP principal stays in pool.
+        // Discriminated from NPM burn() (same selector) by ERC721 Transfer direction:
+        // MasterChef returns NFT to wallet (Transfer(MasterChef→wallet)) whereas NPM burn
+        // destroys it (Transfer(wallet→0x0)); hasAnyErc721TransferToWallet is true only for harvest.
+        if (isHarvestOnlyRewardPattern(movementLegs) && isMasterChefWithdrawDirectCall(view)) {
+            return NormalizedTransactionType.LP_FEE_CLAIM;
+        }
         return type;
+    }
+
+    private static boolean isMasterChefWithdrawDirectCall(OnChainRawTransactionView view) {
+        if (view == null) return false;
+        String methodId = normalizeSelector(view.methodId());
+        if (!BURN_SELECTOR.equals(methodId)) return false;
+        // NPM burn(tokenId) and MasterChef withdraw(tokenId, to) share selector 0x00f714ce.
+        // Primary discriminant: the `to` address of the transaction.
+        //   - MasterChef withdraw: tx.to = MasterChef contract (known set)
+        //   - NPM burn: tx.to = Position Manager (not in MASTERCHEF_V3_ADDRESSES)
+        // Fallback for cases where toAddress is unavailable: check ERC721 Transfer direction.
+        //   - MasterChef withdraw: emits Transfer(MasterChef→wallet) → hasAnyErc721TransferToWallet=true
+        //   - NPM burn: emits Transfer(wallet→0x0) → hasAnyErc721TransferToWallet=false
+        // If neither check is conclusive, fall through to LP_EXIT (safe).
+        String toAddr = view.toAddress();
+        boolean knownMasterChef = toAddr != null && MASTERCHEF_V3_ADDRESSES.contains(toAddr.toLowerCase(java.util.Locale.ROOT));
+        if (!knownMasterChef && !LpPositionLifecycleSupport.hasAnyErc721TransferToWallet(view)) {
+            return false;
+        }
+        // Guard: if calldata also embeds decreaseLiquidity, this is a real principal exit
+        String inputData = view.inputData();
+        return inputData == null
+                || !CalldataDecodingSupport.containsEmbeddedSelector(inputData, DECREASE_LIQUIDITY_SELECTOR);
+    }
+
+    static boolean hasZeroLiquidityDecrease(OnChainRawTransactionView view) {
+        if (view == null) return false;
+        String inputData = view.inputData();
+        if (inputData == null || inputData.isBlank()) return false;
+        String data = inputData.startsWith("0x") ? inputData.substring(2) : inputData;
+        String selectorHex = DECREASE_LIQUIDITY_SELECTOR.startsWith("0x")
+                ? DECREASE_LIQUIDITY_SELECTOR.substring(2) : DECREASE_LIQUIDITY_SELECTOR;
+        // Only match at byte-aligned positions (even char index) to avoid false positives when
+        // the selector bytes coincidentally appear as a suffix of another word (e.g. 40c49ccbe).
+        int idx = data.indexOf(selectorHex);
+        while (idx >= 0 && idx % 2 != 0) {
+            idx = data.indexOf(selectorHex, idx + 1);
+        }
+        if (idx < 0) return false;
+        // After 4-byte selector (8 hex chars): skip tokenId (64 hex), then read liquidity (64 hex)
+        int liquidityStart = idx + 8 + 64;
+        int liquidityEnd   = liquidityStart + 64;
+        if (data.length() < liquidityEnd) return false;
+        return data.substring(liquidityStart, liquidityEnd).matches("0{64}");
     }
 
     public static boolean hasPositionReductionEvidence(OnChainRawTransactionView view) {

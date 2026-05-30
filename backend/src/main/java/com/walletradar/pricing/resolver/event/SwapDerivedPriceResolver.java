@@ -35,6 +35,10 @@ public class SwapDerivedPriceResolver implements EventLocalPriceResolver {
             return Optional.empty();
         }
 
+        BigDecimal totalCounterpartValue = BigDecimal.ZERO;
+        PriceQuote firstQuote = null;
+        int contributingCount = 0;
+
         for (int siblingIndex = 0; siblingIndex < context.flows().size(); siblingIndex++) {
             if (siblingIndex == context.flowIndex()) {
                 continue;
@@ -46,21 +50,44 @@ public class SwapDerivedPriceResolver implements EventLocalPriceResolver {
                     || sibling.getQuantityDelta().signum() == 0) {
                 continue;
             }
+            if (!isCounterpartRole(context.flow(), sibling)) {
+                continue;
+            }
             Optional<PriceQuote> siblingQuote = context.resolvedQuote(siblingIndex);
             if (siblingQuote.isEmpty()) {
                 continue;
             }
-            BigDecimal siblingValue = sibling.getQuantityDelta().abs().multiply(siblingQuote.orElseThrow().unitPriceUsd());
-            BigDecimal derivedPrice = siblingValue.divide(context.flow().getQuantityDelta().abs(), DIVISION_CONTEXT);
-            return Optional.of(new PriceQuote(
-                    derivedPrice,
-                    PriceSource.SWAP_DERIVED,
-                    context.transaction().getBlockTimestamp(),
-                    siblingQuote.orElseThrow().quoteSymbol(),
-                    "swap-derived:" + siblingIndex
-            ));
+            BigDecimal siblingValue = sibling.getQuantityDelta().abs()
+                    .multiply(siblingQuote.orElseThrow().unitPriceUsd());
+            totalCounterpartValue = totalCounterpartValue.add(siblingValue);
+            if (firstQuote == null) {
+                firstQuote = siblingQuote.orElseThrow();
+            }
+            contributingCount++;
         }
-        return Optional.empty();
+
+        if (firstQuote == null || totalCounterpartValue.signum() == 0) {
+            return Optional.empty();
+        }
+        BigDecimal derivedPrice = totalCounterpartValue
+                .divide(context.flow().getQuantityDelta().abs(), DIVISION_CONTEXT);
+        return Optional.of(new PriceQuote(
+                derivedPrice,
+                PriceSource.SWAP_DERIVED,
+                context.transaction().getBlockTimestamp(),
+                firstQuote.quoteSymbol(),
+                "swap-derived-multi:" + contributingCount
+        ));
+    }
+
+    private static boolean isCounterpartRole(NormalizedTransaction.Flow current, NormalizedTransaction.Flow sibling) {
+        NormalizedLegRole currentRole = current.getRole();
+        NormalizedLegRole siblingRole = sibling.getRole();
+        if (currentRole == NormalizedLegRole.BUY)  return siblingRole == NormalizedLegRole.SELL;
+        if (currentRole == NormalizedLegRole.SELL) return siblingRole == NormalizedLegRole.BUY;
+        // TRANSFER/other: accumulate only flows moving in the opposite direction
+        if (siblingRole == NormalizedLegRole.FEE) return false;
+        return sibling.getQuantityDelta().signum() != current.getQuantityDelta().signum();
     }
 
     private boolean hasMultipleSameCanonicalFlows(PriceResolutionContext context) {

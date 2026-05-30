@@ -268,6 +268,50 @@ class PriceableFlowPolicyTest {
         assertThat(PriceableFlowPolicy.requiresMarketPrice(tx, flow)).isFalse();
     }
 
+    @Test
+    void lpExitSettlementWethInboundRequiresMarketPrice() {
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setType(NormalizedTransactionType.LP_EXIT_SETTLEMENT);
+        tx.setCorrelationId("gmx-lp:arbitrum:weth-usdc");
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(NormalizedLegRole.TRANSFER);
+        flow.setAssetSymbol("WETH");
+        flow.setQuantityDelta(new BigDecimal("0.0800"));
+        tx.setFlows(new java.util.ArrayList<>(java.util.List.of(flow)));
+
+        assertThat(PriceableFlowPolicy.requiresMarketPrice(tx, flow)).isTrue();
+    }
+
+    @Test
+    void lpExitSettlementOutboundDoesNotRequireMarketPrice() {
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setType(NormalizedTransactionType.LP_EXIT_SETTLEMENT);
+        tx.setCorrelationId("gmx-lp:arbitrum:weth-usdc");
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(NormalizedLegRole.TRANSFER);
+        flow.setAssetSymbol("ETH");
+        flow.setQuantityDelta(new BigDecimal("-0.0001"));
+        tx.setFlows(new java.util.ArrayList<>(java.util.List.of(flow)));
+
+        assertThat(PriceableFlowPolicy.requiresMarketPrice(tx, flow)).isFalse();
+    }
+
+    @Test
+    void lpEntrySettlementEthInboundDoesNotRequireMarketPrice() {
+        // B3 deliberately deferred: LP_ENTRY_SETTLEMENT carries GM/GLV LP tokens with no market
+        // data alongside ETH refunds — adding it to the gate would price unpriceable LP tokens.
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setType(NormalizedTransactionType.LP_ENTRY_SETTLEMENT);
+        tx.setCorrelationId("gmx-lp:arbitrum:weth-usdc");
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(NormalizedLegRole.TRANSFER);
+        flow.setAssetSymbol("ETH");
+        flow.setQuantityDelta(new BigDecimal("0.01"));
+        tx.setFlows(new java.util.ArrayList<>(java.util.List.of(flow)));
+
+        assertThat(PriceableFlowPolicy.requiresMarketPrice(tx, flow)).isFalse();
+    }
+
     private NormalizedTransaction transferIn(String symbol) {
         NormalizedTransaction tx = new NormalizedTransaction();
         tx.setType(NormalizedTransactionType.EXTERNAL_TRANSFER_IN);
