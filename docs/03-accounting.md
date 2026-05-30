@@ -792,9 +792,11 @@ Implications:
 - CoinGecko is a limited fallback, not the primary pricing mechanism
 - `SWAP_DERIVED` is valid only when the priced canonical asset appears once
   among non-fee swap flows in the same canonical row
-- if the same canonical asset appears multiple times in one `SWAP`, tx-local
-  ratio pricing must be skipped and the flow must fall back to safer pricing
-  sources instead of persisting an impossible synthetic price
+- SWAP leg pricing bails only when a counterpart-role sibling shares the same canonical symbol
+  (circular derivation risk, e.g. ETH BUY priced against ETH SELL). When multiple same-direction
+  legs share the same exact symbol (e.g. two BUY legs of `aArbWBTC` from an aggregator split
+  route), their quantities are summed as the price denominator and each leg receives the same
+  derived unit price (`totalSELL_value / totalBUY_qty`).
 - **Multi-sell SWAP price rule (ADR-021, 2026-05-29)**: When a `SWAP` contains multiple SELL
   flows of the same asset (e.g., two USDBC SELL legs routed through an aggregator), the derived
   price for the BUY leg must be computed from the **sum of all SELL flow values**, not just the
@@ -952,6 +954,13 @@ Transaction-type pricing contract:
     the same canonical row when current raw evidence can separate them
     deterministically. Those reward side-flows are priceable; the LP principal
     remains `TRANSFER`.
+  - **LP_EXIT per-asset basis attribution (ADR-022, 2026-05-30)**: At LP_EXIT, each returned
+    asset's cost basis is drawn exclusively from its own per-asset LP receipt pool. Cross-pool
+    basis carry (transferring unused cost from pools of assets NOT directly returned) applies
+    only for one-sided exits (price out of range: all liquidity converts to one token). When
+    multiple assets are returned simultaneously in the same transaction, cross-pool carry is
+    suppressed for each asset that has a direct return flow — preventing impermanent-loss cost
+    from inflating the returned asset's AVCO.
 - `BORROW`
   - Reserve asset received by the wallet is a `BUY`.
   - Debt-marker mint legs and execution-settlement refund legs are `TRANSFER`.

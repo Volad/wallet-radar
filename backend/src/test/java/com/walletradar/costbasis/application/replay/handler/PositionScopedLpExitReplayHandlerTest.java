@@ -413,6 +413,278 @@ class PositionScopedLpExitReplayHandlerTest {
         assertThat(pool.getQtyHeld()).isEqualByComparingTo("0");
     }
 
+    // ──────────────────────────────────────────────────────────────
+    // S-1: LP_EXIT cross-pool attribution guard tests
+    // ──────────────────────────────────────────────────────────────
+
+    /**
+     * T1: Two-asset LP_EXIT — WETH and USDC both returned in the same transaction.
+     * WETH must receive only its own WETH pool basis; USDC must receive only its own USDC pool
+     * basis. Cross-pool carry must be suppressed for both assets because each has a direct
+     * inbound TRANSFER flow.
+     */
+    @Test
+    void twoAssetLpExit_wethAndUsdcBothReturned_noCrossDrain() {
+        String corr = "lp-position:arb:uniswap:445831";
+        String universe = "TEST-CL";
+
+        ReplayAssetSupport assetSupport = new ReplayAssetSupport();
+        ReplayFlowSupport flowSupport = new ReplayFlowSupport(new GenericFlowReplayEngine());
+        ReplaySettlementAllocator settlementAllocator = new ReplaySettlementAllocator(assetSupport, flowSupport);
+        LpReceiptBasisPoolRepository repo = mock(LpReceiptBasisPoolRepository.class);
+        when(repo.findByUniverseId(anyString())).thenReturn(List.of());
+        LpReceiptBasisPoolService poolService = new LpReceiptBasisPoolService(repo);
+        ReplayPendingTransferKeyFactory keyFactory = new ReplayPendingTransferKeyFactory(assetSupport);
+        PositionScopedLpExitReplayHandler handler = new PositionScopedLpExitReplayHandler(
+                assetSupport, flowSupport, settlementAllocator, poolService, keyFactory);
+
+        LinkedHashMap<LpReceiptBasisPoolKey, LpReceiptBasisPool> pools = new LinkedHashMap<>();
+        HashSet<LpReceiptBasisPoolKey> dirty = new HashSet<>();
+        Instant entryTs = Instant.parse("2026-01-01T00:00:00Z");
+
+        // WETH pool: 0.042975 WETH held, $72.58 basis
+        LpReceiptBasisPool wethPool = poolService.lookupOrCreate(
+                universe, corr, "wallet-x", NetworkId.BSC,
+                "FAMILY:ETH", "WETH", "0xweth", pools, dirty, entryTs);
+        poolService.deposit(wethPool, new BigDecimal("0.042975"), new BigDecimal("72.58"), BigDecimal.ZERO);
+
+        // USDC pool: 636.16 USDC held, $869.34 basis
+        LpReceiptBasisPool usdcPool = poolService.lookupOrCreate(
+                universe, corr, "wallet-x", NetworkId.BSC,
+                "FAMILY:USDC", "USDC", "0xusdc", pools, dirty, entryTs);
+        poolService.deposit(usdcPool, new BigDecimal("636.16"), new BigDecimal("869.34"), BigDecimal.ZERO);
+
+        List<AssetLedgerPoint> points = new ArrayList<>();
+        ReplayExecutionState state = new ReplayExecutionState(
+                null,
+                new LedgerPointCollector(universe, points, Instant.now()),
+                null, null,
+                new LpReceiptBasisPoolReplayContext(universe, pools, dirty));
+
+        // Exit transaction: both WETH and USDC returned simultaneously
+        NormalizedTransaction exit = new NormalizedTransaction();
+        exit.setId("exit-445831");
+        exit.setTxHash("0x457b9d30");
+        exit.setWalletAddress("wallet-x");
+        exit.setNetworkId(NetworkId.BSC);
+        exit.setSource(NormalizedTransactionSource.ON_CHAIN);
+        exit.setType(NormalizedTransactionType.LP_EXIT);
+        exit.setStatus(NormalizedTransactionStatus.CONFIRMED);
+        exit.setBlockTimestamp(Instant.parse("2026-03-01T00:00:00Z"));
+        exit.setCorrelationId(corr);
+
+        NormalizedTransaction.Flow wethIn = new NormalizedTransaction.Flow();
+        wethIn.setRole(NormalizedLegRole.TRANSFER);
+        wethIn.setAssetSymbol("WETH");
+        wethIn.setAssetContract("0xweth");
+        wethIn.setQuantityDelta(new BigDecimal("0.021934"));
+        wethIn.setPriceSource(PriceSource.UNKNOWN);
+
+        NormalizedTransaction.Flow usdcIn = new NormalizedTransaction.Flow();
+        usdcIn.setRole(NormalizedLegRole.TRANSFER);
+        usdcIn.setAssetSymbol("USDC");
+        usdcIn.setAssetContract("0xusdc");
+        usdcIn.setQuantityDelta(new BigDecimal("324.77"));
+        usdcIn.setPriceSource(PriceSource.UNKNOWN);
+
+        exit.setFlows(List.of(wethIn, usdcIn));
+        handler.apply(exit, state);
+
+        // WETH REALLOCATE_IN must reflect WETH pool basis only (no USDC cross-drain)
+        AssetLedgerPoint wethPoint = points.stream()
+                .filter(p -> "WETH".equals(p.getAssetSymbol()))
+                .filter(p -> p.getBasisEffect() == AssetLedgerPoint.BasisEffect.REALLOCATE_IN)
+                .reduce((a, b) -> b)
+                .orElseThrow(() -> new AssertionError("Expected WETH REALLOCATE_IN ledger point"));
+        // Only WETH pool basis should be attributed — proportional share of $72.58
+        assertThat(wethPoint.getCostBasisDeltaUsd())
+                .as("WETH cost basis delta should come only from WETH pool, not USDC cross-drain")
+                .isLessThan(new BigDecimal("100"));
+
+        // USDC REALLOCATE_IN must reflect USDC pool basis only (no WETH cross-drain)
+        AssetLedgerPoint usdcPoint = points.stream()
+                .filter(p -> "USDC".equals(p.getAssetSymbol()))
+                .filter(p -> p.getBasisEffect() == AssetLedgerPoint.BasisEffect.REALLOCATE_IN)
+                .reduce((a, b) -> b)
+                .orElseThrow(() -> new AssertionError("Expected USDC REALLOCATE_IN ledger point"));
+        assertThat(usdcPoint.getCostBasisDeltaUsd())
+                .as("USDC cost basis delta should come only from USDC pool, not WETH cross-drain")
+                .isLessThan(new BigDecimal("900"));
+
+        // Pools must each be partially (proportionally) drained but not over-drained
+        assertThat(wethPool.getQtyHeld())
+                .as("WETH pool partially drained")
+                .isGreaterThanOrEqualTo(BigDecimal.ZERO);
+        assertThat(usdcPool.getQtyHeld())
+                .as("USDC pool partially drained independently")
+                .isGreaterThanOrEqualTo(BigDecimal.ZERO);
+    }
+
+    /**
+     * T2: Single-asset LP_EXIT — WETH only returned, USDC remained in the pool (out of range).
+     * WETH must receive WETH pool basis plus cross-drain from the USDC pool (existing behavior
+     * preserved — impermanent loss basis carry must still work).
+     */
+    @Test
+    void singleAssetLpExit_wethOnly_crossDrainFromUsdcPoolPreserved() {
+        String corr = "lp-position:arb:uniswap:single-weth";
+        String universe = "TEST-SINGLE-WETH";
+
+        ReplayAssetSupport assetSupport = new ReplayAssetSupport();
+        ReplayFlowSupport flowSupport = new ReplayFlowSupport(new GenericFlowReplayEngine());
+        ReplaySettlementAllocator settlementAllocator = new ReplaySettlementAllocator(assetSupport, flowSupport);
+        LpReceiptBasisPoolRepository repo = mock(LpReceiptBasisPoolRepository.class);
+        when(repo.findByUniverseId(anyString())).thenReturn(List.of());
+        LpReceiptBasisPoolService poolService = new LpReceiptBasisPoolService(repo);
+        ReplayPendingTransferKeyFactory keyFactory = new ReplayPendingTransferKeyFactory(assetSupport);
+        PositionScopedLpExitReplayHandler handler = new PositionScopedLpExitReplayHandler(
+                assetSupport, flowSupport, settlementAllocator, poolService, keyFactory);
+
+        LinkedHashMap<LpReceiptBasisPoolKey, LpReceiptBasisPool> pools = new LinkedHashMap<>();
+        HashSet<LpReceiptBasisPoolKey> dirty = new HashSet<>();
+        Instant entryTs = Instant.parse("2026-01-01T00:00:00Z");
+
+        // WETH pool: 0.05 WETH held, $150 basis
+        LpReceiptBasisPool wethPool = poolService.lookupOrCreate(
+                universe, corr, "wallet-x", NetworkId.BASE,
+                "FAMILY:ETH", "WETH", "0x4200000000000000000000000000000000000006",
+                pools, dirty, entryTs);
+        poolService.deposit(wethPool, new BigDecimal("0.05"), new BigDecimal("150"), BigDecimal.ZERO);
+
+        // USDC pool: 500 USDC held, $500 basis (retained in pool — out of range)
+        LpReceiptBasisPool usdcPool = poolService.lookupOrCreate(
+                universe, corr, "wallet-x", NetworkId.BASE,
+                "FAMILY:USDC", "USDC", "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                pools, dirty, entryTs);
+        poolService.deposit(usdcPool, new BigDecimal("500"), new BigDecimal("500"), BigDecimal.ZERO);
+
+        List<AssetLedgerPoint> points = new ArrayList<>();
+        ReplayExecutionState state = new ReplayExecutionState(
+                null,
+                new LedgerPointCollector(universe, points, Instant.now()),
+                null, null,
+                new LpReceiptBasisPoolReplayContext(universe, pools, dirty));
+
+        // Exit transaction: WETH only returned (USDC not returned — no USDC inbound flow)
+        NormalizedTransaction exit = new NormalizedTransaction();
+        exit.setId("exit-weth-only");
+        exit.setTxHash("0xweth-only");
+        exit.setWalletAddress("wallet-x");
+        exit.setNetworkId(NetworkId.BASE);
+        exit.setSource(NormalizedTransactionSource.ON_CHAIN);
+        exit.setType(NormalizedTransactionType.LP_EXIT);
+        exit.setStatus(NormalizedTransactionStatus.CONFIRMED);
+        exit.setBlockTimestamp(Instant.parse("2026-03-01T00:00:00Z"));
+        exit.setCorrelationId(corr);
+
+        NormalizedTransaction.Flow wethIn = new NormalizedTransaction.Flow();
+        wethIn.setRole(NormalizedLegRole.TRANSFER);
+        wethIn.setAssetSymbol("WETH");
+        wethIn.setAssetContract("0x4200000000000000000000000000000000000006");
+        wethIn.setQuantityDelta(new BigDecimal("0.05"));
+        wethIn.setPriceSource(PriceSource.UNKNOWN);
+
+        exit.setFlows(List.of(wethIn));  // only WETH, no USDC
+        handler.apply(exit, state);
+
+        AssetLedgerPoint wethPoint = points.stream()
+                .filter(p -> "WETH".equals(p.getAssetSymbol()))
+                .filter(p -> p.getBasisEffect() == AssetLedgerPoint.BasisEffect.REALLOCATE_IN)
+                .reduce((a, b) -> b)
+                .orElseThrow(() -> new AssertionError("Expected WETH REALLOCATE_IN ledger point"));
+
+        // WETH must carry the full WETH pool ($150) plus the full USDC cross-drain ($500)
+        assertThat(wethPoint.getTotalCostBasisAfterUsd())
+                .as("WETH gets WETH pool + USDC cross-drain when USDC is not directly returned")
+                .isEqualByComparingTo("650");
+
+        // USDC pool must be fully drained via cross-carry
+        assertThat(usdcPool.getQtyHeld()).isEqualByComparingTo("0");
+        assertThat(usdcPool.getBasisHeldUsd()).isEqualByComparingTo("0");
+    }
+
+    /**
+     * T3: Single-asset LP_EXIT — USDC only returned, WETH retained in the pool.
+     * USDC must receive USDC pool basis plus cross-drain from the WETH pool.
+     */
+    @Test
+    void singleAssetLpExit_usdcOnly_crossDrainFromWethPoolPreserved() {
+        String corr = "lp-position:base:pancakeswap:single-usdc";
+        String universe = "TEST-SINGLE-USDC";
+
+        ReplayAssetSupport assetSupport = new ReplayAssetSupport();
+        ReplayFlowSupport flowSupport = new ReplayFlowSupport(new GenericFlowReplayEngine());
+        ReplaySettlementAllocator settlementAllocator = new ReplaySettlementAllocator(assetSupport, flowSupport);
+        LpReceiptBasisPoolRepository repo = mock(LpReceiptBasisPoolRepository.class);
+        when(repo.findByUniverseId(anyString())).thenReturn(List.of());
+        LpReceiptBasisPoolService poolService = new LpReceiptBasisPoolService(repo);
+        ReplayPendingTransferKeyFactory keyFactory = new ReplayPendingTransferKeyFactory(assetSupport);
+        PositionScopedLpExitReplayHandler handler = new PositionScopedLpExitReplayHandler(
+                assetSupport, flowSupport, settlementAllocator, poolService, keyFactory);
+
+        LinkedHashMap<LpReceiptBasisPoolKey, LpReceiptBasisPool> pools = new LinkedHashMap<>();
+        HashSet<LpReceiptBasisPoolKey> dirty = new HashSet<>();
+        Instant entryTs = Instant.parse("2026-01-01T00:00:00Z");
+
+        // USDC pool: 731 USDC held, $731 basis
+        LpReceiptBasisPool usdcPool = poolService.lookupOrCreate(
+                universe, corr, "wallet-x", NetworkId.BASE,
+                "FAMILY:USDC", "USDC", "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                pools, dirty, entryTs);
+        poolService.deposit(usdcPool, new BigDecimal("731"), new BigDecimal("731"), BigDecimal.ZERO);
+
+        // WETH pool: 0.05 WETH held, $200 basis (retained in pool — out of range)
+        LpReceiptBasisPool wethPool = poolService.lookupOrCreate(
+                universe, corr, "wallet-x", NetworkId.BASE,
+                "FAMILY:ETH", "WETH", "0x4200000000000000000000000000000000000006",
+                pools, dirty, entryTs);
+        poolService.deposit(wethPool, new BigDecimal("0.05"), new BigDecimal("200"), BigDecimal.ZERO);
+
+        List<AssetLedgerPoint> points = new ArrayList<>();
+        ReplayExecutionState state = new ReplayExecutionState(
+                null,
+                new LedgerPointCollector(universe, points, Instant.now()),
+                null, null,
+                new LpReceiptBasisPoolReplayContext(universe, pools, dirty));
+
+        // Exit transaction: USDC only returned (no WETH inbound flow)
+        NormalizedTransaction exit = new NormalizedTransaction();
+        exit.setId("exit-usdc-only");
+        exit.setTxHash("0xusdc-only");
+        exit.setWalletAddress("wallet-x");
+        exit.setNetworkId(NetworkId.BASE);
+        exit.setSource(NormalizedTransactionSource.ON_CHAIN);
+        exit.setType(NormalizedTransactionType.LP_EXIT);
+        exit.setStatus(NormalizedTransactionStatus.CONFIRMED);
+        exit.setBlockTimestamp(Instant.parse("2026-03-01T00:00:00Z"));
+        exit.setCorrelationId(corr);
+
+        NormalizedTransaction.Flow usdcIn = new NormalizedTransaction.Flow();
+        usdcIn.setRole(NormalizedLegRole.TRANSFER);
+        usdcIn.setAssetSymbol("USDC");
+        usdcIn.setAssetContract("0x833589fcd6edb6e08f4c7c32d4f71b54bda02913");
+        usdcIn.setQuantityDelta(new BigDecimal("897"));
+        usdcIn.setPriceSource(PriceSource.UNKNOWN);
+
+        exit.setFlows(List.of(usdcIn));  // only USDC, no WETH
+        handler.apply(exit, state);
+
+        AssetLedgerPoint usdcPoint = points.stream()
+                .filter(p -> "USDC".equals(p.getAssetSymbol()))
+                .filter(p -> p.getBasisEffect() == AssetLedgerPoint.BasisEffect.REALLOCATE_IN)
+                .reduce((a, b) -> b)
+                .orElseThrow(() -> new AssertionError("Expected USDC REALLOCATE_IN ledger point"));
+
+        // USDC must carry full USDC pool ($731) plus WETH cross-drain ($200)
+        assertThat(usdcPoint.getTotalCostBasisAfterUsd())
+                .as("USDC gets USDC pool + WETH cross-drain when WETH is not directly returned")
+                .isEqualByComparingTo("931");
+
+        // WETH pool must be fully drained via cross-carry
+        assertThat(wethPool.getQtyHeld()).isEqualByComparingTo("0");
+        assertThat(wethPool.getBasisHeldUsd()).isEqualByComparingTo("0");
+    }
+
     private static PositionScopedLpExitReplayHandler handler() {
         ReplayAssetSupport assetSupport = new ReplayAssetSupport();
         ReplayFlowSupport flowSupport = new ReplayFlowSupport(new GenericFlowReplayEngine());

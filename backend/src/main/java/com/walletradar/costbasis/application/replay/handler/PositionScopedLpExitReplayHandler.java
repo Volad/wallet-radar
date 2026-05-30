@@ -548,11 +548,34 @@ public class PositionScopedLpExitReplayHandler {
         BigDecimal proportion = sameHeldBefore.signum() > 0
                 ? sameWithdraw.withdrawnQty().divide(sameHeldBefore, MC)
                 : java.math.BigDecimal.ZERO;
+
+        // Collect asset identities of other inbound TRANSFER flows in this transaction.
+        // When a multi-asset CL exit returns both WETH and USDC simultaneously, each asset's
+        // pool is drained by its own flow. Cross-pool carry must not touch pools whose asset
+        // is directly returned — doing so would double-count their basis (once via cross-drain
+        // here, once via the direct flow's own restoreInboundFromLpReceiptPool call).
+        java.util.Set<String> directlyReturnedIdentities = new java.util.HashSet<>();
+        for (NormalizedTransaction.Flow f : transaction.getFlows()) {
+            if (f == null || f == flow || f.getRole() != NormalizedLegRole.TRANSFER
+                    || f.getQuantityDelta() == null || f.getQuantityDelta().signum() <= 0) {
+                continue;
+            }
+            String id = assetSupport.continuityIdentity(transaction, f);
+            if (id != null) {
+                directlyReturnedIdentities.add(id);
+            }
+        }
+
         boolean crossAssetBasisCarried = false;
         if (proportion.signum() > 0) {
             for (var entry : poolContext.pools().entrySet()) {
                 LpReceiptBasisPoolKey key = entry.getKey();
                 if (!corrId.equals(key.lpCorrelationId()) || sameKey.equals(key)) {
+                    continue;
+                }
+                // Skip cross-pools whose asset is directly returned in this transaction —
+                // those pools will be (or already were) drained by their own direct flow.
+                if (directlyReturnedIdentities.contains(key.assetIdentity())) {
                     continue;
                 }
                 LpReceiptBasisPool crossPool = entry.getValue();

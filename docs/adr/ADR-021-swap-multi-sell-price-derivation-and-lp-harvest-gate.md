@@ -208,3 +208,9 @@ if (isHarvestOnlyRewardPattern(movementLegs) && isMasterChefWithdrawDirectCall(v
 - `SwapDerivedPriceResolver` — `backend/src/main/java/com/walletradar/pricing/resolver/event/`
 - `LpPrincipalCloseEvidence` — `backend/src/main/java/com/walletradar/ingestion/pipeline/classification/support/`
 - `PriceableFlowPolicy` — `backend/src/main/java/com/walletradar/pricing/application/`
+
+---
+
+## Amendment — B-NEW-1 guard replacement (2026-05-30)
+
+**Amendment (2026-05-30)**: The `hasMultipleSameCanonicalFlows` guard referenced in the original B-NEW-1 context has been replaced. See ADR-022 for the surgical replacement: `hasCounterpartSameCanonicalFlow` (preserves the circular-derivation guard) + `computeTotalSameDirectionQty` (enables multi-same-direction-leg pricing).

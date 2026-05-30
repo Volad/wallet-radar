@@ -90,8 +90,8 @@ class SwapDerivedPriceResolverTest {
     @Test
     void wethSellPlusEthSellPlusEthBuy_guardFires_returnsEmpty() {
         // WETH SELL + ETH BUY + ETH SELL — ETH/WETH are canonical equivalents.
-        // hasMultipleSameCanonicalFlows detects ETH appears on both BUY and SELL sides when
-        // resolving the ETH BUY flow → guard fires → no derivation (prevents circular price).
+        // hasCounterpartSameCanonicalFlow detects a counterpart-role SELL sibling (WETH) that
+        // shares the same canonical as the current ETH BUY flow → guard fires → no derivation.
         NormalizedTransaction tx = swapTx(List.of(
                 flow("WETH", "-0.05",  NormalizedLegRole.SELL),
                 flow("ETH",  "0.10",   NormalizedLegRole.BUY),
@@ -107,6 +107,58 @@ class SwapDerivedPriceResolverTest {
         Optional<PriceQuote> result = RESOLVER.resolve(ctx);
 
         assertThat(result).isEmpty();
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // B-NEW-1: dual same-direction BUY leg aggregation tests
+    // ──────────────────────────────────────────────────────────────
+
+    @Test
+    void twoAarbWbtcBuyLegsOneUsdcSell_eachBuyLegGetsDerivedPrice() {
+        // KyberSwap Arbitrum 0xdef59c37: USDC -15 @ $1 → aArbWBTC +5.3e-7 + aArbWBTC +0.00020196
+        // Derived price = $15 / (5.3e-7 + 0.00020196) ≈ $74,077 for each BUY leg.
+        NormalizedTransaction tx = swapTx(List.of(
+                flow("USDC",      "-15.00",        NormalizedLegRole.SELL),
+                flow("aArbWBTC",  "0.000000530",   NormalizedLegRole.BUY),
+                flow("aArbWBTC",  "0.000201960",   NormalizedLegRole.BUY)
+        ));
+        Map<Integer, PriceQuote> resolved = Map.of(
+                0, quote(new BigDecimal("1.00"))
+        );
+
+        BigDecimal totalBuyQty = new BigDecimal("0.000000530").add(new BigDecimal("0.000201960"));
+        BigDecimal expectedPrice = new BigDecimal("15.00").divide(totalBuyQty, java.math.MathContext.DECIMAL128);
+
+        // Resolve for the first BUY leg (index 1)
+        PriceResolutionContext ctx1 = context(tx, 1, resolved);
+        Optional<PriceQuote> result1 = RESOLVER.resolve(ctx1);
+        assertThat(result1).isPresent();
+        assertThat(result1.get().unitPriceUsd()).isEqualByComparingTo(expectedPrice);
+        assertThat(result1.get().sourceReference()).isEqualTo("swap-derived-multi:1");
+
+        // Resolve for the second BUY leg (index 2) — must yield the same unit price
+        PriceResolutionContext ctx2 = context(tx, 2, resolved);
+        Optional<PriceQuote> result2 = RESOLVER.resolve(ctx2);
+        assertThat(result2).isPresent();
+        assertThat(result2.get().unitPriceUsd()).isEqualByComparingTo(expectedPrice);
+        assertThat(result2.get().sourceReference()).isEqualTo("swap-derived-multi:1");
+    }
+
+    @Test
+    void twoAarbWbtcBuyLegsOneUsdcSellUnpriced_returnsEmpty() {
+        // Same structure as above but USDC price not available → no derivation possible.
+        NormalizedTransaction tx = swapTx(List.of(
+                flow("USDC",      "-15.00",        NormalizedLegRole.SELL),
+                flow("aArbWBTC",  "0.000000530",   NormalizedLegRole.BUY),
+                flow("aArbWBTC",  "0.000201960",   NormalizedLegRole.BUY)
+        ));
+        Map<Integer, PriceQuote> resolved = Map.of();  // USDC not priced
+
+        Optional<PriceQuote> result1 = RESOLVER.resolve(context(tx, 1, resolved));
+        assertThat(result1).isEmpty();
+
+        Optional<PriceQuote> result2 = RESOLVER.resolve(context(tx, 2, resolved));
+        assertThat(result2).isEmpty();
     }
 
     // ──────────────────────────────────────────────
