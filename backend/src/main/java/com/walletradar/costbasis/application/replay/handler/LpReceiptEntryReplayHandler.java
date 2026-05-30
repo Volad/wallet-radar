@@ -32,6 +32,7 @@ public class LpReceiptEntryReplayHandler {
 
     private static final MathContext MC = MathContext.DECIMAL128;
     private static final String LP_CORR_PREFIX = "lp-position:";
+    private static final String PENDLE_LP_CORR_PREFIX = "pendle-lp:";
 
     private final ReplayAssetSupport assetSupport;
     private final ReplayFlowSupport flowSupport;
@@ -51,7 +52,8 @@ public class LpReceiptEntryReplayHandler {
         return transaction != null
                 && transaction.getType() == NormalizedTransactionType.LP_ENTRY
                 && transaction.getCorrelationId() != null
-                && transaction.getCorrelationId().startsWith(LP_CORR_PREFIX)
+                && (transaction.getCorrelationId().startsWith(LP_CORR_PREFIX)
+                        || transaction.getCorrelationId().startsWith(PENDLE_LP_CORR_PREFIX))
                 && hasOnlyOutboundPrincipalFlows(transaction);
     }
 
@@ -314,7 +316,11 @@ public class LpReceiptEntryReplayHandler {
             return false;
         }
         String sym = flow.getAssetSymbol().trim().toUpperCase();
-        return sym.startsWith("LP-RECEIPT:") || sym.contains("-LP-") || sym.endsWith("-LP");
+        if (sym.startsWith("LP-RECEIPT:") || sym.contains("-LP-") || sym.endsWith("-LP")) {
+            return true;
+        }
+        // Pendle-family LP receipt tokens (PENDLE-LPT, eqbPENDLE-LPT) are position tokens, not principal assets.
+        return sym.endsWith("-LPT") && (sym.contains("PENDLE") || sym.startsWith("EQB"));
     }
 
     private static BigDecimal zeroIfNull(BigDecimal value) {

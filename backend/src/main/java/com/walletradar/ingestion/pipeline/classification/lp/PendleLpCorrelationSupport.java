@@ -36,6 +36,10 @@ public final class PendleLpCorrelationSupport {
             return null;
         }
         String normalized = assetSymbol.trim().toUpperCase(Locale.ROOT);
+        // Strip Equilibria staking wrapper prefix: eqbPENDLE-LPT → PENDLE-LPT
+        if (normalized.startsWith("EQB") && (normalized.contains("PENDLE") || normalized.contains("-LPT"))) {
+            normalized = normalized.substring(3);
+        }
         if (!normalized.contains("PENDLE") && !normalized.contains("-LPT")) {
             return null;
         }

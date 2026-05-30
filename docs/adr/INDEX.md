@@ -29,6 +29,7 @@ Architecture Decision Records for WalletRadar. Each ADR captures a single decisi
 | [ADR-020](ADR-020-bridge-late-carry-passthrough-reservation.md) | Bridge late-carry pass-through reservation invariant | Accepted | 2026-05-29 | ETH-V2-C1 — bridge ordering |
 | [ADR-021](ADR-021-swap-multi-sell-price-derivation-and-lp-harvest-gate.md) | SWAP multi-sell price derivation and concentrated-liquidity harvest-only gate | Accepted (amended) | 2026-05-29 | ETH AVCO — SWAP pricing, LP harvest |
 | [ADR-022](ADR-022-lp-exit-per-asset-attribution-and-swap-multi-leg-pricing.md) | LP_EXIT per-asset cost attribution, SWAP multi-same-direction-leg pricing, LP_ENTRY net-by-asset shape detection | Accepted (amended 2026-05-30) | 2026-05-30 | ETH AVCO — LP exit attribution, SWAP split-leg pricing, router-refund LP_ENTRY |
+| [ADR-023](ADR-023-pendle-lpt-receipt-and-bybit-corridor-basis.md) | Pendle LP token receipt detection and Bybit corridor spot-price basis | Accepted | 2026-05-30 | S-4 (Mantle cmETH Pendle LP) + P-B (Bybit corridor basis) |
 
 ## Cycle/5 N19 cluster — implementation plan mapping
 

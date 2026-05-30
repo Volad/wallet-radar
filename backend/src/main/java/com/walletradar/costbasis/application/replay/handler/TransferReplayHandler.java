@@ -244,6 +244,23 @@ public class TransferReplayHandler {
             return flowSupport.continuityBasisEffect(transaction, flow);
         }
 
+        // BYBIT-CORRIDOR inbound with no matching carry: Bybit is a CEX so no on-chain CARRY_OUT
+        // will ever arrive to resolve the pending inbound. Apply spot-price acquisition immediately
+        // instead of leaving this as an unresolvable pending entry with zero cost basis.
+        if (classifier.isBybitCexCorridor(transaction)) {
+            BigDecimal qty = flow.getQuantityDelta();
+            BigDecimal acquisitionCost = replayMarketAuthority.resolve(transaction, flow)
+                    .map(ReplayMarketAuthority.ResolvedMarketPrice::unitPriceUsd)
+                    .map(price -> qty.multiply(price, MC))
+                    .orElse(null);
+            if (acquisitionCost != null && acquisitionCost.signum() > 0) {
+                flowSupport.applyBuyWithAcquisitionCost(flow, position, acquisitionCost);
+            } else {
+                flowSupport.applyUnknownTransfer(flow, position);
+            }
+            return AssetLedgerPoint.BasisEffect.ACQUIRE;
+        }
+
         enqueuePendingInbound(transaction, flow, flowIndex, position, replayState, transferKey);
         return flowSupport.continuityBasisEffect(transaction, flow);
     }

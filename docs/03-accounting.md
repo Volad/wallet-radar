@@ -1659,3 +1659,37 @@ For authoritative AVCO answers:
   `currentCostBasisProvable = true`
 - rows with `currentUncoveredQuantity > 0` remain live-valid holdings, but
   their full current quantity is not yet fully covered by replay-carried basis
+
+---
+
+### Pendle LP token receipt markers and correlationId routing (2026-05-30)
+
+Pendle LP_ENTRY transactions use `pendle-lp:NETWORK:MARKET` correlationIds (produced by
+`PendleLpCorrelationSupport`). These transactions are routed to the receipt-pool path
+(`LpReceiptEntryReplayHandler`) rather than the generic path. The routing gate
+(`isLpReceiptEntry()`) accepts both `lp-position:` and `pendle-lp:` prefixes.
+
+`PENDLE-LPT` and Equilibria-wrapped variants (`eqbPENDLE-LPT`) are LP receipt markers, not
+principal assets, in the context of a Pendle LP_ENTRY. `hasOnlyOutboundPrincipalFlows()` excludes
+these tokens from the net-by-asset computation, enabling receipt-pool routing for Pendle
+LP_ENTRYs on all networks.
+
+`PendleLpCorrelationSupport.marketIdFromSymbol()` strips the `EQB` staking prefix before
+producing the market slug, ensuring LP_ENTRY and LP_EXIT (via Equilibria) share the same
+`pendle-lp:NETWORK:pendle-lpt` correlationId.
+
+For LP_EXIT classification, if the protocol registry does not identify the protocol as Pendle
+(e.g., Equilibria wrappers are not registered), `LpSemanticClassifier` falls back to
+`PendleLpCorrelationSupport.correlationIdFromMovementLegs()` to derive the corrId from flow symbols.
+
+### Bybit corridor CARRY_IN fallback (2026-05-30)
+
+`INTERNAL_TRANSFER` transactions with `BYBIT-CORRIDOR:NETWORK:txHash` correlationIds represent
+on-chain withdrawals from Bybit CEX to user wallets. Since Bybit is an external custodian, no
+on-chain CARRY_OUT is recorded at the source. When the pending-transfer carry queue is empty for
+a BYBIT-CORRIDOR inbound flow, the replay immediately applies spot-price acquisition
+(`basisEffect = ACQUIRE`) — the same policy as `SPONSORED_GAS_IN` and `REWARD_CLAIM`.
+
+This is distinct from bridge corridors (where a late CARRY_OUT eventually resolves the pending)
+and from Bybit earn-product transfers (`bybit-earn-principal-v1:*`, handled by
+`BybitVenueInternalReplayHandler`).

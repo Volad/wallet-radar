@@ -188,6 +188,15 @@ public class ReplayTransferClassifier {
         return corrId != null && corrId.startsWith("BYBIT-CORRIDOR:");
     }
 
+    /**
+     * True for BYBIT-CORRIDOR:NETWORK:txHash transfers from Bybit CEX to a user wallet.
+     * These have no on-chain CARRY_OUT (Bybit is a CEX), so the pending transfer mechanism
+     * would never resolve. Requires immediate spot-price acquisition treatment.
+     */
+    public boolean isBybitCexCorridor(NormalizedTransaction transaction) {
+        return isCorridorTransfer(transaction);
+    }
+
     public boolean usesBybitVenueInternalCarryQueue(NormalizedTransaction transaction) {
         return keyFactory.usesBybitVenueInternalCarryQueue(transaction);
     }

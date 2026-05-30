@@ -53,6 +53,13 @@ public class LpSemanticClassifier implements OnChainFamilyClassifier {
                                 context.view(), context.movementLegs())
                         : null;
 
+                // Fallback: derive Pendle correlationId from movement legs when the protocol hint did not
+                // identify this as Pendle (covers Equilibria and other Pendle LP wrappers not in the registry).
+                if (correlationId == null) {
+                    correlationId = PendleLpCorrelationSupport.correlationIdFromMovementLegs(
+                            context.view(), context.movementLegs());
+                }
+
                 if (BlockScoutNativeSettlementClarificationSupport.requiresReceiptClarification(
                         context.view(),
                         context.movementLegs(),

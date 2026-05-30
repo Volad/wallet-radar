@@ -200,6 +200,54 @@ class LpReceiptEntryReplayHandlerTest {
         assertThat(LpReceiptEntryReplayHandler.hasOnlyOutboundPrincipalFlows(tx)).isFalse();
     }
 
+    @Test
+    void t6_pendleLptInboundTreatedAsReceiptNotPrincipal() {
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setType(NormalizedTransactionType.LP_ENTRY);
+        tx.setCorrelationId("lp-position:base:pancakeswap:99");
+        tx.setWalletAddress("0x1");
+        tx.setNetworkId(NetworkId.BASE);
+        tx.setBlockTimestamp(Instant.now());
+        NormalizedTransaction.Flow outCmEth = new NormalizedTransaction.Flow();
+        outCmEth.setRole(NormalizedLegRole.TRANSFER);
+        outCmEth.setAssetSymbol("cmETH");
+        outCmEth.setQuantityDelta(new BigDecimal("-0.861423922419174928"));
+        NormalizedTransaction.Flow inLpt = new NormalizedTransaction.Flow();
+        inLpt.setRole(NormalizedLegRole.TRANSFER);
+        inLpt.setAssetSymbol("PENDLE-LPT");
+        inLpt.setQuantityDelta(new BigDecimal("0.445041029858104302"));
+        NormalizedTransaction.Flow fee = new NormalizedTransaction.Flow();
+        fee.setRole(NormalizedLegRole.FEE);
+        fee.setAssetSymbol("MNT");
+        fee.setQuantityDelta(new BigDecimal("-0.042"));
+        tx.setFlows(new ArrayList<>(List.of(outCmEth, inLpt, fee)));
+        assertThat(LpReceiptEntryReplayHandler.hasOnlyOutboundPrincipalFlows(tx)).isTrue();
+    }
+
+    @Test
+    void t7_eqbPendleLptInboundTreatedAsReceiptNotPrincipal() {
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setType(NormalizedTransactionType.LP_ENTRY);
+        tx.setCorrelationId("lp-position:base:pancakeswap:99");
+        tx.setWalletAddress("0x1");
+        tx.setNetworkId(NetworkId.BASE);
+        tx.setBlockTimestamp(Instant.now());
+        NormalizedTransaction.Flow outCmEth = new NormalizedTransaction.Flow();
+        outCmEth.setRole(NormalizedLegRole.TRANSFER);
+        outCmEth.setAssetSymbol("cmETH");
+        outCmEth.setQuantityDelta(new BigDecimal("-0.861"));
+        NormalizedTransaction.Flow inEqbLpt = new NormalizedTransaction.Flow();
+        inEqbLpt.setRole(NormalizedLegRole.TRANSFER);
+        inEqbLpt.setAssetSymbol("eqbPENDLE-LPT");
+        inEqbLpt.setQuantityDelta(new BigDecimal("0.445"));
+        NormalizedTransaction.Flow fee = new NormalizedTransaction.Flow();
+        fee.setRole(NormalizedLegRole.FEE);
+        fee.setAssetSymbol("MNT");
+        fee.setQuantityDelta(new BigDecimal("-0.042"));
+        tx.setFlows(new ArrayList<>(List.of(outCmEth, inEqbLpt, fee)));
+        assertThat(LpReceiptEntryReplayHandler.hasOnlyOutboundPrincipalFlows(tx)).isTrue();
+    }
+
     private static NormalizedTransaction lpEntryWithRefund(
             String wallet,
             String ethOut,
