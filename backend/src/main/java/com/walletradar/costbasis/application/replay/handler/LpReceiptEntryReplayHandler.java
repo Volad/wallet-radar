@@ -59,18 +59,27 @@ public class LpReceiptEntryReplayHandler {
      * Multi-asset LP entries with a same-tx inbound receipt/principal leg (Curve/Balancer pools
      * that mint LP tokens visible as a flow) stay on the async-lifecycle bucket path so the
      * existing async exit logic still sees the receipt token. Receipt-pool routing targets
-     * outbound-only LP_ENTRY shapes (Pancake V3, Aerodrome, Uniswap V3 NFTs — the LP receipt is
+     * outbound-only LP_ENTRY shapes (Pancake V3, Aerodrome, Uniswap V3/V4 NFTs — the LP receipt is
      * an NFT/marker that does not appear as a same-tx inbound flow) where basis would otherwise
      * be reallocated incorrectly. Multi-family outbound is supported in round 2: one
      * {@link LpReceiptBasisPool} per outbound asset family, all sharing the same
      * {@code lpCorrelationId}.
+     *
+     * <p>Net-by-asset aggregation: Uniswap V3/V4 routers may refund excess deposited tokens
+     * in the same transaction. A small positive inbound of a deposited asset does not make
+     * this a Curve/Balancer-style mixed receipt — as long as the NET flow for every principal
+     * asset remains negative (net outbound), this LP_ENTRY is routed to the receipt-pool path.
+     * The refund is handled inside {@link #apply} via {@code applyInboundReceipt}.
      */
     static boolean hasOnlyOutboundPrincipalFlows(NormalizedTransaction transaction) {
         if (transaction == null || transaction.getFlows() == null) {
             return false;
         }
-        boolean hasOutbound = false;
-        boolean hasInboundPrincipal = false;
+        // Aggregate net quantity per asset symbol (FEE and LP-receipt markers excluded).
+        // A Uniswap router may return excess tokens (refund) in the same tx; the net per
+        // asset is still negative. Curve/Balancer shapes where the pool returns a different
+        // asset produce net positive flows for that asset and are correctly rejected.
+        java.util.Map<String, java.math.BigDecimal> netByAsset = new java.util.LinkedHashMap<>();
         for (NormalizedTransaction.Flow flow : transaction.getFlows()) {
             if (flow == null || flow.getQuantityDelta() == null || flow.getQuantityDelta().signum() == 0) {
                 continue;
@@ -81,13 +90,24 @@ public class LpReceiptEntryReplayHandler {
             if (flow.getRole() != NormalizedLegRole.TRANSFER) {
                 continue;
             }
-            if (flow.getQuantityDelta().signum() < 0) {
-                hasOutbound = true;
-            } else {
-                hasInboundPrincipal = true;
+            String key = flow.getAssetSymbol() == null
+                    ? ""
+                    : flow.getAssetSymbol().trim().toLowerCase(java.util.Locale.ROOT);
+            netByAsset.merge(key, flow.getQuantityDelta(), java.math.BigDecimal::add);
+        }
+        if (netByAsset.isEmpty()) {
+            return false;
+        }
+        boolean hasNetOutbound = false;
+        for (java.math.BigDecimal net : netByAsset.values()) {
+            if (net.signum() > 0) {
+                return false;  // net inbound for some asset → Curve/Balancer or unexpected shape
+            }
+            if (net.signum() < 0) {
+                hasNetOutbound = true;
             }
         }
-        return hasOutbound && !hasInboundPrincipal;
+        return hasNetOutbound;
     }
 
     public void apply(NormalizedTransaction transaction, ReplayExecutionState replayState) {

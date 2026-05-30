@@ -100,10 +100,51 @@ distinct wrapped tokens that happen to share a family (e.g., `aArbWBTC` vs `WBTC
 
 ---
 
+---
+
+## Amendment: P-C — LP_ENTRY Net-by-Asset Shape Detection (2026-05-30)
+
+**Status**: Accepted (amended)
+
+### Problem
+
+`LpReceiptEntryReplayHandler.hasOnlyOutboundPrincipalFlows()` evaluated each TRANSFER flow independently.
+Uniswap V3/V4 routers frequently return excess deposited tokens (a "refund") in the same transaction.
+A small positive inbound flow of a deposited asset caused the method to set `hasInboundPrincipal = true`
+and return `false`, routing the LP_ENTRY through the async lifecycle bucket instead of the receipt-pool path.
+
+Result: `lp_receipt_basis_pools` was never created for these positions → LP_EXIT found no pool →
+`basisEffect = UNKNOWN` → $0 cost basis returned (total missed basis: **$6,214.69** across 14 positions
+on ETHEREUM, ARBITRUM, and UNICHAIN).
+
+### Decision
+
+Change `hasOnlyOutboundPrincipalFlows()` to aggregate **net flow per asset symbol** instead of checking
+each flow individually. A Uniswap router refund reduces the outbound amount but keeps the net negative.
+Curve/Balancer shapes (which return a DIFFERENT asset entirely) produce net positive flows for that asset
+and are still correctly rejected.
+
+### Consequences
+
+- 13/14 LP_EXIT UNKNOWN events resolved to `REALLOCATE_IN` with correct basis
+- The remaining 1 (`lp-position:unichain:uniswap:44472`, $163 ETH) is a data-quality issue:
+  the original LP_ENTRY for this position is missing from the database (only a small add-liquidity
+  was captured), which is not addressable by code change
+- The refund flow is correctly handled inside `apply()` via `applyInboundReceipt()`,
+  which withdraws the refunded amount from the pool after the outbound is deposited
+
+### Affected files
+
+- `LpReceiptEntryReplayHandler.java` — `hasOnlyOutboundPrincipalFlows()` (net-by-asset logic)
+- `LpReceiptEntryReplayHandlerTest.java` — T1–T5 tests (refund, dust refund, standard, Curve/Balancer, refund-exceeds-deposit)
+
+---
+
 ## Affected files
 
 - `PositionScopedLpExitReplayHandler.java` — `restoreInboundFromLpReceiptPool()` direct-return suppression
 - `SwapDerivedPriceResolver.java` — `hasCounterpartSameCanonicalFlow` + `computeTotalSameDirectionQty`
+- `LpReceiptEntryReplayHandler.java` — `hasOnlyOutboundPrincipalFlows()` (net-by-asset, P-C fix)
 
 ---
 

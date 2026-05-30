@@ -1,0 +1,1237 @@
+import { useState, useEffect, useRef } from "react";
+
+/* ═══ DESIGN TOKENS ════════════════════════════════════════ */
+const C = {
+  bg:"#07090f", s1:"#0b0d18", s2:"#0f1220", s3:"#131728", hov:"#121628",
+  border:"#181d30", borderHi:"#222840",
+  cyan:"#22d3ee", cyanDim:"#22d3ee12", cyanMid:"#22d3ee32",
+  green:"#34d399", greenDim:"#34d39910", greenMid:"#34d39930",
+  red:"#f87171",  redDim:"#f8717110",
+  amber:"#fbbf24", amberDim:"#fbbf2410", amberMid:"#fbbf2432",
+  purple:"#a78bfa", purpleDim:"#a78bfa10", purpleMid:"#a78bfa32",
+  blue:"#60a5fa",
+  text:"#dde3f0", sub:"#4a5878", muted:"#1e2538",
+};
+const COLORS = [C.cyan, C.purple, C.green, C.amber, C.blue, "#f472b6", "#fb923c"];
+
+const G = `
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=DM+Sans:wght@400;500;600;700&display=swap');
+*{box-sizing:border-box;margin:0;padding:0}
+html,body,#root{height:100%;overflow:hidden}
+body{background:${C.bg};color:${C.text};font-family:'DM Sans',sans-serif;font-size:13px}
+.mono{font-family:'IBM Plex Mono',monospace}
+::-webkit-scrollbar{width:3px;height:3px}::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:${C.borderHi};border-radius:2px}
+button,input,select,textarea{font-family:'DM Sans',sans-serif;border:none;background:none;color:${C.text};outline:none}
+button{cursor:pointer}
+select option{background:${C.s2};color:${C.text}}
+
+@keyframes fadeIn  {from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+@keyframes fadeOut {from{opacity:1;transform:translateY(0)}to{opacity:0;transform:translateY(-6px)}}
+@keyframes slideUp {from{opacity:0;transform:translateY(24px)}to{opacity:1;transform:translateY(0)}}
+@keyframes slideIn {from{opacity:0;transform:translateX(-10px)}to{opacity:1;transform:translateX(0)}}
+@keyframes spin    {to{transform:rotate(360deg)}}
+@keyframes pulse   {0%,100%{opacity:1}50%{opacity:.35}}
+@keyframes shimmer {0%{background-position:-200% 0}100%{background-position:200% 0}}
+.aIn   {animation:fadeIn  .22s ease both}
+.aSlide{animation:slideUp .25s cubic-bezier(.16,1,.3,1) both}
+.aSideIn{animation:slideIn .2s ease both}
+
+.ifield{width:100%;background:${C.s2};border:1px solid ${C.border};border-radius:6px;
+  color:${C.text};padding:8px 11px;font-size:12px;font-family:'IBM Plex Mono',monospace;
+  transition:border-color .12s,box-shadow .12s}
+.ifield:focus{border-color:${C.cyanMid};box-shadow:0 0 0 3px ${C.cyanDim}}
+.ifield.ok{border-color:${C.green}50}.ifield.err{border-color:${C.red}50}
+
+.toggle{position:relative;display:inline-block;width:30px;height:17px;flex-shrink:0}
+.toggle input{opacity:0;width:0;height:0}
+.tsl{position:absolute;inset:0;background:${C.border};border-radius:9px;transition:.2s;cursor:pointer}
+.tsl:before{content:'';position:absolute;width:11px;height:11px;left:3px;top:3px;background:${C.sub};border-radius:50%;transition:.2s}
+input:checked+.tsl{background:${C.cyanMid}}
+input:checked+.tsl:before{transform:translateX(13px);background:${C.cyan}}
+
+.row-hover:hover{background:${C.hov}!important}
+`;
+
+/* ═══ PRIMITIVES ════════════════════════════════════════════ */
+const Icon = ({n,s=13,c="currentColor"}) => {
+  const paths = {
+    wallet:   <><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 3l-4 4-4-4"/></>,
+    link:     <><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></>,
+    gear:     <><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></>,
+    plus:     <><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></>,
+    trash:    <><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></>,
+    check:    <polyline points="20 6 9 17 4 12"/>,
+    x:        <><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></>,
+    warn:     <><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></>,
+    eye:      <><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></>,
+    eyeOff:   <><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></>,
+    chev_r:   <polyline points="9 18 15 12 9 6"/>,
+    chev_d:   <polyline points="6 9 12 15 18 9"/>,
+    key:      <><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></>,
+    globe:    <><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></>,
+    refresh:  <><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></>,
+    info:     <><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></>,
+    tokens:   <><circle cx="12" cy="12" r="9"/><path d="M9 12h6M12 9v6"/></>,
+    lp:       <><path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z"/><path d="M13 13l6 6"/></>,
+    lending:  <><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></>,
+    staking:  <><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></>,
+    zap:      <><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></>,
+    gas:      <><path d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm-10 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4z"/></>,
+    dollar:   <><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></>,
+    activity: <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>,
+    clock:    <><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></>,
+    test:     <><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></>,
+  };
+  return (
+    <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={c}
+      strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round" style={{flexShrink:0}}>
+      {paths[n]}
+    </svg>
+  );
+};
+
+const Spin = ({s=14,c=C.cyan}) => (
+  <svg width={s} height={s} viewBox="0 0 24 24" style={{animation:"spin .7s linear infinite",flexShrink:0}}>
+    <circle cx="12" cy="12" r="10" fill="none" stroke={c+"30"} strokeWidth="3"/>
+    <path d="M12 2a10 10 0 0 1 10 10" fill="none" stroke={c} strokeWidth="3" strokeLinecap="round"/>
+  </svg>
+);
+
+const Divider = ({my=10}) => <div style={{borderTop:`1px solid ${C.border}`,margin:`${my}px 0`}}/>;
+
+const SL = ({children,action,mb=5}) => (
+  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:mb}}>
+    <span style={{fontSize:9,fontWeight:700,color:C.muted,textTransform:"uppercase",letterSpacing:".12em"}}>{children}</span>
+    {action}
+  </div>
+);
+
+const Tag = ({children,v="def"}) => {
+  const m={def:{bg:C.s2,c:C.sub,b:C.border},cyan:{bg:C.cyanDim,c:C.cyan,b:C.cyanMid},
+    green:{bg:C.greenDim,c:C.green,b:C.greenMid},amber:{bg:C.amberDim,c:C.amber,b:C.amberMid},
+    red:{bg:C.redDim,c:C.red,b:C.red+"44"},purple:{bg:C.purpleDim,c:C.purple,b:C.purpleMid}};
+  const s=m[v]||m.def;
+  return <span style={{display:"inline-flex",alignItems:"center",gap:3,padding:"1px 7px",borderRadius:3,
+    fontSize:9,fontWeight:700,fontFamily:"'IBM Plex Mono',monospace",letterSpacing:".04em",
+    background:s.bg,color:s.c,border:`1px solid ${s.b}`}}>{children}</span>;
+};
+
+/* ═══ DATA ══════════════════════════════════════════════════ */
+const isEVM  = a => /^0x[0-9a-fA-F]{40}$/.test(a.trim());
+const shortA = a => `${a.slice(0,6)}…${a.slice(-4)}`;
+const NETS = [
+  {id:"ETH", icon:"⟠",label:"Ethereum", color:"#627EEA"},
+  {id:"ARB", icon:"△",label:"Arbitrum", color:"#28A0F0"},
+  {id:"BASE",icon:"◆",label:"Base",     color:"#0052FF"},
+  {id:"OP",  icon:"○",label:"Optimism", color:"#FF0420"},
+  {id:"POL", icon:"⬡",label:"Polygon",  color:"#7B3FE4"},
+  {id:"BSC", icon:"◈",label:"BNB",      color:"#F0B90B"},
+  {id:"AVAX",icon:"▲",label:"Avalanche",color:"#E84142"},
+  {id:"MNT", icon:"◉",label:"Mantle",   color:"#60a5fa"},
+  {id:"LINEA",icon:"⬤",label:"Linea",  color:"#61dfff"},
+];
+const ALL_NETS = NETS.map(n=>n.id);
+const mkW = () => ({_id:Date.now()+Math.random(),addr:"",label:"",nets:ALL_NETS});
+
+const ACCOUNTING_OPTIONS = [
+  {id:"AVCO", label:"AVCO",
+   desc:"Weighted average cost — all holdings merge into a running average.",
+   note:"Best for DeFi: tokens pool in LP, bridge across chains, stake/unstake. No lot tracking needed.",
+   recommended:true, color:C.cyan},
+  {id:"FIFO", label:"FIFO",
+   desc:"First In First Out — oldest lots are sold first.",
+   note:"Required in some jurisdictions (UK, Australia). Higher tax complexity in DeFi.",
+   recommended:false, color:C.purple},
+  {id:"LIFO", label:"LIFO",
+   desc:"Last In First Out — newest lots are sold first.",
+   note:"Rarely required. Not recommended for DeFi due to lot identity issues.",
+   recommended:false, color:C.sub},
+];
+
+/* ═══ NET PICKER ════════════════════════════════════════════ */
+const NetPicker = ({selected,onChange}) => (
+  <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:4}}>
+    {NETS.map(n=>{
+      const on=selected.includes(n.id);
+      return (
+        <button key={n.id} onClick={()=>onChange(on?selected.filter(x=>x!==n.id):[...selected,n.id])}
+          style={{display:"flex",alignItems:"center",gap:5,padding:"5px 7px",borderRadius:5,
+            background:on?n.color+"15":C.s3,border:`1px solid ${on?n.color+"50":C.border}`,
+            color:on?n.color:C.sub,fontSize:10,fontWeight:600,transition:"all .1s"}}>
+          <span style={{fontSize:12}}>{n.icon}</span>{n.label}
+        </button>
+      );
+    })}
+  </div>
+);
+
+/* ═══ WALLET ROW ════════════════════════════════════════════ */
+const WalletRow = ({entry,index,colorIdx,onChange,onRemove,onPaste}) => {
+  const [netsOpen,setNetsOpen] = useState(false);
+  const ref = useRef();
+  useEffect(()=>{ if(!entry.addr) ref.current?.focus(); },[]);
+  const t=entry.addr.trim();
+  const st=!t?"empty":isEVM(t)?"ok":"err";
+  const col=COLORS[colorIdx%COLORS.length];
+  return (
+    <div className="aIn" style={{border:`1px solid ${st==="ok"?col+"30":C.borderHi}`,borderRadius:7,overflow:"hidden",transition:"border-color .15s",animationDelay:`${index*30}ms`}}>
+      <div style={{display:"flex",alignItems:"stretch",background:C.s2}}>
+        <div style={{width:3,background:col,flexShrink:0}}/>
+        <div style={{width:30,display:"flex",alignItems:"center",justifyContent:"center",
+          fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:C.muted,flexShrink:0}}>
+          {String(index+1).padStart(2,"0")}
+        </div>
+        <input value={entry.label} onChange={e=>onChange({...entry,label:e.target.value})}
+          placeholder="Label" maxLength={20}
+          style={{width:108,flexShrink:0,padding:"10px 8px",fontSize:12,background:"transparent",
+            borderRight:`1px solid ${C.border}`}}/>
+        <div style={{flex:1,position:"relative",display:"flex",alignItems:"center"}}>
+          <input ref={ref} value={entry.addr} onChange={e=>onChange({...entry,addr:e.target.value})}
+            onPaste={e=>onPaste(e,index)} placeholder="0x… EVM address"
+            spellCheck={false} autoComplete="off"
+            style={{width:"100%",padding:"10px 32px 10px 12px",fontSize:12,
+              fontFamily:"'IBM Plex Mono',monospace",background:"transparent"}}/>
+          {st!=="empty"&&(
+            <div style={{position:"absolute",right:9,pointerEvents:"none"}}>
+              {st==="ok"?<Icon n="check" s={13} c={C.green}/>:<Icon n="x" s={13} c={C.red}/>}
+            </div>
+          )}
+        </div>
+        <button onClick={()=>setNetsOpen(o=>!o)} style={{
+          flexShrink:0,display:"flex",alignItems:"center",gap:5,padding:"0 11px",
+          borderLeft:`1px solid ${C.border}`,background:netsOpen?C.cyanDim:"transparent",
+          color:netsOpen?C.cyan:C.sub,fontSize:10,fontWeight:600,transition:"all .12s",whiteSpace:"nowrap"}}>
+          {entry.nets.length===NETS.length
+            ?<span style={{fontSize:10,color:C.sub}}>All nets</span>
+            :<div style={{display:"flex",gap:3}}>
+               {entry.nets.slice(0,3).map(nid=>{const n=NETS.find(x=>x.id===nid);return n?<span key={nid} style={{fontSize:12,color:n.color}}>{n.icon}</span>:null;})}
+               {entry.nets.length>3&&<span style={{fontSize:9,color:C.muted}}>+{entry.nets.length-3}</span>}
+               {entry.nets.length===0&&<span style={{color:C.red,fontSize:10}}>none</span>}
+             </div>
+          }
+          <div style={{transform:netsOpen?"rotate(180deg)":"none",transition:"transform .15s"}}>
+            <Icon n="chev_d" s={10} c={netsOpen?C.cyan:C.sub}/>
+          </div>
+        </button>
+        <button onClick={onRemove}
+          style={{flexShrink:0,padding:"0 11px",borderLeft:`1px solid ${C.border}`,
+            color:C.sub,display:"flex",alignItems:"center",transition:"color .1s,background .1s"}}
+          onMouseOver={e=>{e.currentTarget.style.color=C.red;e.currentTarget.style.background=C.redDim}}
+          onMouseOut={e=>{e.currentTarget.style.color=C.sub;e.currentTarget.style.background="transparent"}}>
+          <Icon n="trash" s={12}/>
+        </button>
+      </div>
+      {netsOpen&&(
+        <div style={{padding:"10px 12px 11px",borderTop:`1px solid ${C.border}`,background:C.s1}}>
+          <SL mb={7} action={
+            <button onClick={()=>onChange({...entry,nets:entry.nets.length===NETS.length?[]:ALL_NETS})}
+              style={{fontSize:9,color:C.sub,padding:"1px 6px",border:`1px solid ${C.border}`,borderRadius:3,background:C.s3}}>
+              {entry.nets.length===NETS.length?"none":"all"}
+            </button>}>Networks</SL>
+          <NetPicker selected={entry.nets} onChange={nets=>onChange({...entry,nets})}/>
+        </div>
+      )}
+      {st==="err"&&<div style={{display:"flex",alignItems:"center",gap:5,padding:"5px 12px",
+        borderTop:`1px solid ${C.red}20`,background:C.redDim,fontSize:10,color:C.red}}>
+        <Icon n="warn" s={10} c={C.red}/>Not a valid EVM address (0x + 40 hex chars)</div>}
+    </div>
+  );
+};
+
+/* ═══ ACCOUNTING PICKER ═════════════════════════════════════ */
+const AccountingPicker = ({value,onChange,showImpact=false}) => (
+  <div style={{display:"flex",flexDirection:"column",gap:6}}>
+    {ACCOUNTING_OPTIONS.map(o=>{
+      const on=value===o.id;
+      return (
+        <button key={o.id} onClick={()=>onChange(o.id)} style={{
+          display:"flex",alignItems:"flex-start",gap:12,padding:"11px 13px",borderRadius:7,
+          border:`1px solid ${on?o.color+"44":C.border}`,
+          background:on?o.color+"0d":C.s2,transition:"all .12s",textAlign:"left"}}>
+          <div style={{width:16,height:16,borderRadius:"50%",flexShrink:0,marginTop:2,
+            border:`2px solid ${on?o.color:C.border}`,background:on?o.color+"20":"transparent",
+            display:"flex",alignItems:"center",justifyContent:"center",transition:"all .12s"}}>
+            {on&&<div style={{width:7,height:7,borderRadius:"50%",background:o.color}}/>}
+          </div>
+          <div style={{flex:1}}>
+            <div style={{fontSize:12,fontWeight:700,color:on?o.color:C.text,marginBottom:3,
+              display:"flex",alignItems:"center",gap:7}}>
+              {o.label}
+              {o.recommended&&<Tag v="cyan">Recommended</Tag>}
+            </div>
+            <div style={{fontSize:11,color:C.sub,marginBottom:on?6:0,lineHeight:1.5}}>{o.desc}</div>
+            {on&&<div style={{fontSize:10,color:o.color+"cc",background:o.color+"0d",
+              border:`1px solid ${o.color}25`,borderRadius:4,padding:"4px 8px",lineHeight:1.5}}>{o.note}</div>}
+          </div>
+        </button>
+      );
+    })}
+    {showImpact&&(
+      <div style={{display:"flex",gap:7,padding:"8px 10px",background:C.amberDim,
+        border:`1px solid ${C.amberMid}`,borderRadius:5,marginTop:2}}>
+        <Icon n="warn" s={11} c={C.amber}/>
+        <div style={{fontSize:10,color:C.amber,lineHeight:1.5}}>
+          Changing accounting method will restart re-normalization for <strong>all wallets</strong>.
+          Estimated time: <span className="mono">5–30 min</span>.
+        </div>
+      </div>
+    )}
+  </div>
+);
+
+/* ═══ BYBIT FORM ════════════════════════════════════════════ */
+const BybitForm = ({value,onChange,compact=false}) => {
+  const [showSec,setShowSec] = useState(false);
+  const [testing,setTesting] = useState(false);
+  const [testResult,setTestResult] = useState(null); // null | 'ok' | 'err'
+  const connected = !!(value?.api_key&&value?.api_secret);
+
+  const handleTest = () => {
+    if(!connected)return;
+    setTesting(true);setTestResult(null);
+    setTimeout(()=>{setTesting(false);setTestResult('ok');},1400);
+  };
+
+  return (
+    <div style={{background:C.s1,border:`1px solid ${connected?C.green+"35":C.border}`,
+      borderRadius:8,overflow:"hidden"}}>
+      {/* Header */}
+      <div style={{display:"flex",alignItems:"center",gap:11,padding:"10px 13px",
+        borderBottom:`1px solid ${C.border}`}}>
+        <div style={{width:32,height:32,borderRadius:7,flexShrink:0,background:"#F7A60018",
+          border:"1px solid #F7A60035",display:"flex",alignItems:"center",justifyContent:"center",
+          fontSize:14,fontWeight:800,color:"#F7A600",fontFamily:"'IBM Plex Mono',monospace"}}>B</div>
+        <div style={{flex:1}}>
+          <div style={{fontWeight:700,fontSize:12,display:"flex",alignItems:"center",gap:7,marginBottom:1}}>
+            Bybit
+            <Tag v="def">CEX</Tag>
+            {connected&&<Tag v="green">Connected</Tag>}
+          </div>
+          <div style={{fontSize:10,color:C.sub}}>
+            {connected?`${value.name||"Bybit"} · ${value.api_key?.slice(0,10)}…`:"Import trading history and P&L"}
+          </div>
+        </div>
+        {connected&&(
+          <button onClick={handleTest} disabled={testing} style={{
+            display:"flex",alignItems:"center",gap:5,padding:"4px 10px",
+            border:`1px solid ${testResult==='ok'?C.green+"44":C.border}`,borderRadius:5,
+            background:testResult==='ok'?C.greenDim:C.s2,
+            color:testResult==='ok'?C.green:C.sub,fontSize:10,fontWeight:600,transition:"all .12s"}}>
+            {testing?<><Spin s={11} c={C.sub}/>Testing…</>
+              :testResult==='ok'?<><Icon n="check" s={11} c={C.green}/>Connection OK</>
+              :<><Icon n="test" s={11}/>Test</>}
+          </button>
+        )}
+      </div>
+
+      {/* Instructions (collapsible in compact mode) */}
+      {!compact&&(
+        <div style={{padding:"10px 13px",background:C.s2,borderBottom:`1px solid ${C.border}`}}>
+          <div style={{fontSize:9,fontWeight:700,color:C.sub,textTransform:"uppercase",
+            letterSpacing:".1em",marginBottom:8,display:"flex",alignItems:"center",gap:5}}>
+            <Icon n="key" s={10} c={C.sub}/>How to get Read-Only API keys
+          </div>
+          {[
+            "Log in to Bybit → Account → API Management.",
+            "Create New Key → Type: System-generated → set Read-Only (no trading, no withdrawal).",
+            "Copy API Key and API Secret. Secret shown once only — save it immediately.",
+          ].map((step,i)=>(
+            <div key={i} style={{display:"flex",gap:7,marginBottom:i<2?5:0}}>
+              <div style={{width:16,height:16,borderRadius:4,flexShrink:0,background:"#F7A60018",
+                border:"1px solid #F7A60030",display:"flex",alignItems:"center",justifyContent:"center",
+                fontSize:8,fontWeight:800,color:"#F7A600",marginTop:1}}>{i+1}</div>
+              <div style={{fontSize:11,color:C.sub,lineHeight:1.55}}>{step}</div>
+            </div>
+          ))}
+          <a href="https://www.bybit.com/app/user/api-management" target="_blank" rel="noreferrer"
+            style={{display:"inline-flex",alignItems:"center",gap:4,marginTop:7,
+              fontSize:10,color:"#F7A600",textDecoration:"none"}}>
+            <Icon n="link" s={10} c="#F7A600"/>Open Bybit API Management →
+          </a>
+        </div>
+      )}
+
+      {/* Fields */}
+      <div style={{padding:"10px 13px",display:"flex",flexDirection:"column",gap:8}}>
+        <div>
+          <SL mb={4}>Integration name <span style={{fontSize:8,color:C.muted,fontWeight:400,textTransform:"none"}}>(optional)</span></SL>
+          <input className="ifield" value={value?.name||""} onChange={e=>onChange({...value,name:e.target.value})}
+            placeholder="Bybit" style={{fontSize:12,fontFamily:"'DM Sans',sans-serif"}}/>
+        </div>
+        <div>
+          <SL mb={4}>API Key <span style={{color:C.red,marginLeft:1}}>*</span></SL>
+          <input className={`ifield${value?.api_key?" ok":""}`} value={value?.api_key||""}
+            onChange={e=>onChange({...value,api_key:e.target.value,_testResult:null})}
+            placeholder="Enter your Bybit API key" style={{fontSize:11}}/>
+        </div>
+        <div>
+          <SL mb={4}>API Secret <span style={{color:C.red,marginLeft:1}}>*</span></SL>
+          <div style={{position:"relative"}}>
+            <input className={`ifield${value?.api_secret?" ok":""}`}
+              type={showSec?"text":"password"} value={value?.api_secret||""}
+              onChange={e=>onChange({...value,api_secret:e.target.value})}
+              placeholder="Enter your Bybit API secret"
+              style={{fontSize:11,paddingRight:34}}/>
+            <button onClick={()=>setShowSec(s=>!s)}
+              style={{position:"absolute",right:9,top:"50%",transform:"translateY(-50%)",
+                color:C.sub,display:"flex",padding:2}}>
+              <Icon n={showSec?"eyeOff":"eye"} s={13} c={C.sub}/>
+            </button>
+          </div>
+        </div>
+        <div style={{display:"flex",gap:6,padding:"7px 9px",background:C.amberDim,
+          border:`1px solid ${C.amberMid}`,borderRadius:5}}>
+          <Icon n="warn" s={11} c={C.amber}/>
+          <div style={{fontSize:10,color:C.amber,lineHeight:1.5}}>
+            Use <strong>Read-Only</strong> keys only. Never enable trading or withdrawal permissions.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/* ═══ WIZARD ════════════════════════════════════════════════ */
+const WIZARD_STEPS = [
+  {id:"wallets",     icon:"wallet",label:"Wallets",      desc:"Add EVM addresses to track"},
+  {id:"integrations",icon:"link",  label:"Integrations", desc:"Optional exchange connections"},
+  {id:"accounting",  icon:"gear",  label:"Accounting",   desc:"Cost basis method"},
+  {id:"review",      icon:"check", label:"Review",       desc:"Confirm & start indexing"},
+];
+
+const Wizard = ({onFinish}) => {
+  const [step,    setStep]   = useState(0);
+  const [dir,     setDir]    = useState(1); // 1=forward, -1=backward (for future anim)
+  const [wallets, setWallets]= useState([mkW()]);
+  const [bybit,   setBybit]  = useState({});
+  const [family,  setFamily] = useState("AVCO");
+  const [saving,  setSaving] = useState(false);
+
+  const validW = wallets.filter(w=>isEVM(w.addr.trim())&&w.nets.length>0);
+  const hasErr = wallets.some(w=>w.addr.trim()&&(!isEVM(w.addr.trim())||w.nets.length===0));
+
+  const handlePaste = (e,idx) => {
+    const text=e.clipboardData.getData("text");
+    const lines=text.split(/[\n,\s]+/).map(l=>l.trim()).filter(l=>l.length>10);
+    if(lines.length<=1)return;
+    e.preventDefault();
+    const rows=lines.map(addr=>({...mkW(),addr}));
+    setWallets(w=>{const c=[...w];c.splice(idx,1,...rows);return c.slice(0,10);});
+  };
+
+  const canNext=[validW.length>0&&!hasErr, true, true, true][step];
+
+  const go = (n) => { setDir(n>step?1:-1); setStep(n); };
+
+  const save = () => {
+    setSaving(true);
+    setTimeout(()=>onFinish({wallets:validW,bybit,family}),1300);
+  };
+
+  const stepContent = {
+    /* ── Wallets ── */
+    wallets: (
+      <div className="aIn" key="w">
+        <div style={{display:"grid",gridTemplateColumns:"3px 30px 108px 1fr auto 32px",
+          padding:"0 0 5px",marginBottom:4}}>
+          {["","","Label","EVM Address","Networks",""].map((h,i)=>(
+            <div key={i} style={{fontSize:8,fontWeight:700,color:C.muted,textTransform:"uppercase",
+              letterSpacing:".12em",padding:`0 ${i===2||i===3?"8px":"10px"}`}}>{h}</div>
+          ))}
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:5}}>
+          {wallets.map((w,i)=>(
+            <WalletRow key={w._id} entry={w} index={i} colorIdx={i}
+              onChange={u=>setWallets(ws=>ws.map(x=>x._id===w._id?u:x))}
+              onRemove={()=>wallets.length>1&&setWallets(ws=>ws.filter(x=>x._id!==w._id))}
+              onPaste={handlePaste}/>
+          ))}
+        </div>
+        {wallets.length<10&&(
+          <button onClick={()=>setWallets(w=>[...w,mkW()])} style={{
+            width:"100%",marginTop:7,padding:"8px",border:`1px dashed ${C.border}`,borderRadius:7,
+            color:C.sub,fontSize:11,background:"transparent",display:"flex",
+            alignItems:"center",justifyContent:"center",gap:6,transition:"all .12s"}}
+            onMouseOver={e=>{e.currentTarget.style.borderColor=C.cyanMid;e.currentTarget.style.color=C.cyan}}
+            onMouseOut={e=>{e.currentTarget.style.borderColor=C.border;e.currentTarget.style.color=C.sub}}>
+            <Icon n="plus" s={11}/>Add another wallet
+            <span style={{fontSize:9,color:C.muted,marginLeft:3}}>(paste multiple addresses)</span>
+          </button>
+        )}
+        <div style={{marginTop:10,display:"flex",gap:7,padding:"8px 10px",
+          background:C.cyanDim,border:`1px solid ${C.cyanMid}`,borderRadius:5}}>
+          <Icon n="globe" s={11} c={C.cyan}/>
+          <div style={{fontSize:10,color:C.sub,lineHeight:1.5}}>
+            Backfill scans ~2 years per wallet.{" "}
+            <span style={{color:C.cyan,fontFamily:"'IBM Plex Mono',monospace"}}>3–8 min</span>{" "}
+            per network. Partial results appear as indexing runs. Read-only — no private keys needed.
+          </div>
+        </div>
+      </div>
+    ),
+
+    /* ── Integrations ── */
+    integrations: (
+      <div className="aIn" key="i">
+        <BybitForm value={bybit} onChange={setBybit}/>
+        {/* Coming soon row */}
+        <div style={{marginTop:8,display:"flex",flexDirection:"column",gap:4}}>
+          {[{name:"Binance",icon:"B̈",color:"#F0B90B"},{name:"OKX",icon:"O",color:"#00E5FF"},{name:"Coinbase",icon:"C",color:"#0052FF"}].map(ex=>(
+            <div key={ex.name} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",
+              background:C.s2,border:`1px solid ${C.border}`,borderRadius:7,opacity:.5}}>
+              <div style={{width:28,height:28,borderRadius:6,background:ex.color+"15",
+                border:`1px solid ${ex.color}30`,display:"flex",alignItems:"center",justifyContent:"center",
+                fontSize:13,fontWeight:800,color:ex.color,fontFamily:"'IBM Plex Mono',monospace"}}>{ex.icon}</div>
+              <span style={{fontSize:12,fontWeight:600}}>{ex.name}</span>
+              <Tag v="def">Coming soon</Tag>
+            </div>
+          ))}
+        </div>
+      </div>
+    ),
+
+    /* ── Accounting ── */
+    accounting: (
+      <div className="aIn" key="a" style={{maxWidth:500}}>
+        <AccountingPicker value={family} onChange={setFamily}/>
+        <div style={{marginTop:10,padding:"8px 10px",background:C.s2,border:`1px solid ${C.border}`,
+          borderRadius:5,display:"flex",gap:7}}>
+          <Icon n="info" s={11} c={C.sub}/>
+          <div style={{fontSize:10,color:C.sub,lineHeight:1.5}}>
+            You can change this later in Settings → Data sources.
+            Changing after initial setup will restart re-normalization (~5–30 min).
+          </div>
+        </div>
+      </div>
+    ),
+
+    /* ── Review ── */
+    review: (
+      <div className="aIn" key="r" style={{display:"flex",flexDirection:"column",gap:10,maxWidth:540}}>
+        {/* Wallets */}
+        <div style={{background:C.s2,border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden"}}>
+          <div style={{padding:"9px 13px",borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",gap:8}}>
+            <Icon n="wallet" s={12} c={C.cyan}/>
+            <span style={{fontWeight:700,fontSize:12}}>Wallets</span>
+            <Tag v="cyan">{validW.length}</Tag>
+            <span style={{marginLeft:"auto",fontSize:10,color:C.sub}}>
+              ~{validW.reduce((s,w)=>s+w.nets.length,0)} network connections
+            </span>
+          </div>
+          {validW.map((w,i)=>(
+            <div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 13px",
+              borderBottom:i<validW.length-1?`1px solid ${C.border}`:"none"}}>
+              <div style={{width:7,height:7,borderRadius:"50%",background:COLORS[i%COLORS.length],flexShrink:0}}/>
+              <div style={{flex:1}}>
+                <div style={{fontSize:12,fontWeight:600}}>{w.label||`Wallet ${i+1}`}</div>
+                <div className="mono" style={{fontSize:9,color:C.sub,marginTop:1}}>{w.addr.trim()}</div>
+              </div>
+              <div style={{display:"flex",gap:3}}>
+                {w.nets.length===NETS.length
+                  ?<span style={{fontSize:9,color:C.sub}}>All {NETS.length} networks</span>
+                  :w.nets.slice(0,5).map(nid=>{const n=NETS.find(x=>x.id===nid);return n?<span key={nid} style={{fontSize:13,color:n.color}} title={n.label}>{n.icon}</span>:null;})
+                }
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Integration */}
+        {bybit?.api_key&&(
+          <div style={{background:C.s2,border:`1px solid ${C.greenMid}`,borderRadius:8,
+            padding:"9px 13px",display:"flex",alignItems:"center",gap:10}}>
+            <div style={{width:7,height:7,borderRadius:2,background:"#F7A600",flexShrink:0}}/>
+            <span style={{fontWeight:700,fontSize:12}}>Bybit</span>
+            <Tag v="green">Connected</Tag>
+            <span className="mono" style={{fontSize:9,color:C.sub,marginLeft:4}}>
+              {bybit.api_key?.slice(0,12)}…
+            </span>
+          </div>
+        )}
+
+        {/* Accounting */}
+        <div style={{background:C.s2,border:`1px solid ${C.border}`,borderRadius:8,
+          padding:"9px 13px",display:"flex",alignItems:"center",gap:10}}>
+          <Icon n="gear" s={12} c={C.sub}/>
+          <span style={{fontWeight:700,fontSize:12}}>Accounting</span>
+          <Tag v="cyan">{family}</Tag>
+          <span style={{fontSize:10,color:C.sub}}>
+            {ACCOUNTING_OPTIONS.find(o=>o.id===family)?.desc?.split("—")[0]}
+          </span>
+        </div>
+
+        {/* Time estimate */}
+        <div style={{padding:"11px 13px",background:C.greenDim,border:`1px solid ${C.greenMid}`,
+          borderRadius:8,display:"flex",gap:10,alignItems:"flex-start"}}>
+          <Icon n="clock" s={14} c={C.green}/>
+          <div>
+            <div style={{fontWeight:600,fontSize:12,color:C.green,marginBottom:3}}>
+              Ready to start
+            </div>
+            <div style={{fontSize:11,color:C.sub,lineHeight:1.55}}>
+              Indexing{" "}
+              <span className="mono" style={{color:C.text}}>{validW.length}</span> wallet{validW.length>1?"s":""} ×{" "}
+              <span className="mono" style={{color:C.text}}>
+                ~{Math.round(validW.reduce((s,w)=>s+w.nets.length,0)/validW.length)} nets avg
+              </span>
+              {" "}— estimated{" "}
+              <span className="mono" style={{color:C.green}}>
+                {validW.length*4}–{validW.length*12} min
+              </span>.
+              Dashboard shows partial results as data comes in.
+            </div>
+          </div>
+        </div>
+      </div>
+    ),
+  };
+
+  return (
+    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+      {/* Progress bar */}
+      <div style={{flexShrink:0,padding:"18px 32px 0"}}>
+        <div style={{display:"flex",alignItems:"center"}}>
+          {WIZARD_STEPS.map((s,i)=>{
+            const done=i<step,active=i===step;
+            return (
+              <div key={s.id} style={{display:"flex",alignItems:"center",flex:i<WIZARD_STEPS.length-1?1:"none"}}>
+                <div style={{display:"flex",alignItems:"center",gap:7,cursor:i<step?"pointer":"default"}}
+                  onClick={()=>i<step&&go(i)}>
+                  <div style={{
+                    width:30,height:30,borderRadius:8,transition:"all .2s",
+                    background:done?C.greenDim:active?C.cyanDim:C.s2,
+                    border:`1px solid ${done?C.greenMid:active?C.cyanMid:C.border}`,
+                    display:"flex",alignItems:"center",justifyContent:"center",
+                  }}>
+                    {done?<Icon n="check" s={13} c={C.green}/>:<Icon n={s.icon} s={13} c={active?C.cyan:C.sub}/>}
+                  </div>
+                  <div style={{display:"flex",flexDirection:"column",gap:1}}>
+                    <div style={{fontSize:11,fontWeight:700,color:done?C.green:active?C.cyan:C.sub,lineHeight:1}}>{s.label}</div>
+                    <div style={{fontSize:9,color:C.muted,lineHeight:1}}>{s.desc}</div>
+                  </div>
+                </div>
+                {i<WIZARD_STEPS.length-1&&(
+                  <div style={{flex:1,height:1,background:i<step?C.greenMid:C.border,margin:"0 16px",transition:"background .3s"}}/>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Content */}
+      <div style={{flex:1,overflow:"auto",padding:"20px 32px"}}>
+        {stepContent[WIZARD_STEPS[step].id]}
+      </div>
+
+      {/* Footer */}
+      <div style={{flexShrink:0,padding:"12px 32px",borderTop:`1px solid ${C.border}`,
+        display:"flex",alignItems:"center",justifyContent:"space-between",background:C.s1}}>
+        <div style={{fontSize:10,color:C.sub}}>
+          {step===0&&validW.length>0&&(
+            <span><span className="mono" style={{color:C.green}}>{validW.length}</span> wallet{validW.length>1?"s":""} valid</span>
+          )}
+        </div>
+        <div style={{display:"flex",gap:8,alignItems:"center"}}>
+          {step>0&&(
+            <button onClick={()=>go(step-1)} style={{padding:"7px 16px",border:`1px solid ${C.border}`,
+              borderRadius:6,color:C.sub,fontSize:12,background:C.s2}}>← Back</button>
+          )}
+          {step<WIZARD_STEPS.length-1&&(
+            <button onClick={()=>canNext&&go(step+1)} disabled={!canNext} style={{
+              display:"flex",alignItems:"center",gap:6,padding:"7px 22px",
+              background:canNext?C.cyan:"#141828",color:canNext?"#000":C.muted,
+              border:"none",borderRadius:6,fontWeight:700,fontSize:12,transition:"all .12s"}}>
+              {step===1&&!bybit.api_key?"Skip integrations →":"Continue →"}
+            </button>
+          )}
+          {step===WIZARD_STEPS.length-1&&(
+            <button onClick={save} disabled={saving} style={{
+              display:"flex",alignItems:"center",gap:7,padding:"7px 24px",
+              background:C.cyan,color:"#000",border:"none",borderRadius:6,
+              fontWeight:700,fontSize:12,minWidth:170,justifyContent:"center"}}>
+              {saving?<><Spin s={14} c="#000"/>Starting…</>:<><Icon n="zap" s={14} c="#000"/>Start WalletRadar</>}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/* ═══ CONFIRMATION DRAWER ═══════════════════════════════════ */
+const ConfirmDrawer = ({changes,walletsCount,onCancel,onConfirm,saving}) => {
+  const estimatedMin = Math.max(5, walletsCount * 4);
+  const estimatedMax = Math.max(15, walletsCount * 12);
+  return (
+    <>
+      {/* Backdrop */}
+      <div className="aIn" onClick={()=>!saving&&onCancel()}
+        style={{position:"absolute",inset:0,background:"rgba(0,0,0,.45)",zIndex:90}}/>
+      {/* Drawer */}
+      <div className="aSlide" style={{
+        position:"absolute",bottom:0,left:0,right:0,zIndex:100,
+        background:C.s1,borderTop:`1px solid ${C.borderHi}`,
+        boxShadow:"0 -24px 64px rgba(0,0,0,.75)",
+      }}>
+        {/* Re-normalization warning */}
+        <div style={{display:"flex",gap:10,alignItems:"flex-start",padding:"12px 24px",
+          background:C.amberDim,borderBottom:`1px solid ${C.amberMid}`}}>
+          <div style={{width:36,height:36,borderRadius:8,flexShrink:0,background:C.amberDim,
+            border:`1px solid ${C.amberMid}`,display:"flex",alignItems:"center",justifyContent:"center"}}>
+            <Icon n="refresh" s={18} c={C.amber}/>
+          </div>
+          <div>
+            <div style={{fontWeight:700,fontSize:13,color:C.amber,marginBottom:3}}>
+              Re-normalization required
+            </div>
+            <div style={{fontSize:11,color:C.sub,lineHeight:1.6,maxWidth:560}}>
+              These changes trigger a full re-processing of all transactions across{" "}
+              <span className="mono" style={{color:C.text}}>{walletsCount}</span> wallet{walletsCount>1?"s":""}.
+              All AVCO calculations, P&L and cost basis data will be recalculated.
+              Estimated time:{" "}
+              <span className="mono" style={{color:C.amber}}>{estimatedMin}–{estimatedMax} min</span>.
+              The app remains usable with the previous data while re-normalization runs.
+            </div>
+          </div>
+          <button onClick={()=>!saving&&onCancel()}
+            style={{marginLeft:"auto",color:C.sub,padding:4,borderRadius:4,flexShrink:0,
+              display:"flex",alignItems:"center"}}>
+            <Icon n="x" s={14} c={C.sub}/>
+          </button>
+        </div>
+
+        {/* Changes + actions */}
+        <div style={{padding:"14px 24px",display:"flex",gap:24,alignItems:"flex-start"}}>
+          <div style={{flex:1}}>
+            <SL mb={8}>Changes queued</SL>
+            <div style={{display:"flex",flexDirection:"column",gap:5}}>
+              {changes.map((c,i)=>(
+                <div key={i} style={{display:"flex",alignItems:"center",gap:7,fontSize:11,
+                  padding:"6px 9px",background:C.s2,border:`1px solid ${C.border}`,borderRadius:5}}>
+                  <div style={{width:5,height:5,borderRadius:"50%",background:C.amber,flexShrink:0}}/>
+                  <span style={{color:C.text}}>{c.label}</span>
+                  {c.tag&&<Tag v={c.tagV||"amber"}>{c.tag}</Tag>}
+                </div>
+              ))}
+            </div>
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:8,flexShrink:0,minWidth:220,alignItems:"flex-end"}}>
+            <button onClick={onConfirm} disabled={saving} style={{
+              width:"100%",display:"flex",alignItems:"center",justifyContent:"center",gap:8,
+              padding:"9px 20px",background:C.amber,color:"#000",border:"none",
+              borderRadius:6,fontWeight:700,fontSize:12}}>
+              {saving
+                ?<><Spin s={14} c="#000"/>Restarting pipeline…</>
+                :<><Icon n="refresh" s={14} c="#000"/>Confirm & restart pipeline</>
+              }
+            </button>
+            <button onClick={onCancel} disabled={saving} style={{
+              width:"100%",padding:"7px",border:`1px solid ${C.border}`,borderRadius:6,
+              color:C.sub,fontSize:12,background:"transparent"}}>Cancel</button>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+};
+
+/* ═══ EDIT: DATA SOURCES ════════════════════════════════════ */
+const DataSources = ({session,onSaved}) => {
+  const [wallets,   setWallets]  = useState(session.wallets);
+  const [draft,     setDraft]    = useState([]);
+  const [bybit,     setBybit]    = useState(session.bybit||{});
+  const [family,    setFamily]   = useState(session.family);
+  const [confirm,   setConfirm]  = useState(false);
+  const [saving,    setSaving]   = useState(false);
+  const [savedFlash,setSavedFlash]=useState(false);
+
+  const handlePaste = (e,idx) => {
+    const text=e.clipboardData.getData("text");
+    const lines=text.split(/[\n,\s]+/).map(l=>l.trim()).filter(l=>l.length>10);
+    if(lines.length<=1)return;
+    e.preventDefault();
+    const rows=lines.map(addr=>({...mkW(),addr}));
+    setDraft(d=>{const c=[...d];c.splice(idx,1,...rows);return c.slice(0,10-wallets.length);});
+  };
+
+  // Detect changes
+  const newValid  = draft.filter(w=>isEVM(w.addr.trim())&&w.nets.length>0);
+  const famChanged = family!==session.family;
+  const bybitChanged = JSON.stringify({k:bybit.api_key,s:bybit.api_secret})!==JSON.stringify({k:session.bybit?.api_key,s:session.bybit?.api_secret});
+
+  const changes = [
+    famChanged&&{label:`Accounting: ${session.family} → ${family}`,tag:family,tagV:"cyan"},
+    newValid.length>0&&{label:`Add ${newValid.length} new wallet${newValid.length>1?"s":""}`,tag:"+"+newValid.length,tagV:"green"},
+    bybitChanged&&bybit.api_key&&{label:"Update Bybit API credentials",tag:"Bybit",tagV:"amber"},
+  ].filter(Boolean);
+
+  const isDirty = changes.length>0;
+
+  const handleConfirm = () => {
+    setSaving(true);
+    setTimeout(()=>{
+      setSaving(false);setConfirm(false);setSavedFlash(true);
+      setTimeout(()=>setSavedFlash(false),3000);
+      onSaved({wallets:[...wallets,...newValid.map((w,i)=>({...w,id:Date.now()+i,status:"syncing"}))],bybit,family});
+      setDraft([]);
+    },1400);
+  };
+
+  return (
+    <div style={{flex:1,overflow:"auto",padding:"22px 28px 100px",position:"relative"}}>
+      {/* Header */}
+      <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:22}}>
+        <div>
+          <div style={{fontWeight:800,fontSize:15,marginBottom:2}}>Data sources</div>
+          <div style={{fontSize:11,color:C.sub}}>Wallets, integrations and accounting method</div>
+        </div>
+        <div style={{display:"flex",gap:8,alignItems:"center"}}>
+          {savedFlash&&(
+            <div className="aIn" style={{display:"flex",alignItems:"center",gap:6,padding:"6px 11px",
+              background:C.greenDim,border:`1px solid ${C.greenMid}`,borderRadius:6}}>
+              <Icon n="refresh" s={11} c={C.green}/>
+              <span style={{fontSize:11,color:C.green,fontWeight:600}}>Pipeline restarted</span>
+            </div>
+          )}
+          {isDirty&&!confirm&&(
+            <button onClick={()=>setConfirm(true)} style={{
+              display:"flex",alignItems:"center",gap:7,padding:"7px 16px",
+              background:C.amberDim,border:`1px solid ${C.amberMid}`,borderRadius:6,
+              color:C.amber,fontSize:11,fontWeight:700}}>
+              <Icon n="warn" s={12} c={C.amber}/>Review changes ({changes.length})
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Wallets */}
+      <section style={{marginBottom:22}}>
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+          <Icon n="wallet" s={13} c={C.sub}/>
+          <span style={{fontWeight:700,fontSize:13}}>Web3 wallets</span>
+          <Tag v="def">{wallets.length}</Tag>
+          <div style={{flex:1}}/>
+          {!draft.length&&wallets.length<10&&(
+            <button onClick={()=>setDraft([mkW()])} style={{
+              display:"flex",alignItems:"center",gap:5,padding:"5px 12px",
+              background:C.cyanDim,border:`1px solid ${C.cyanMid}`,borderRadius:5,
+              color:C.cyan,fontSize:11,fontWeight:600}}>
+              <Icon n="plus" s={10} c={C.cyan}/>Add wallet
+            </button>
+          )}
+        </div>
+
+        {/* Saved wallets — read-only rows */}
+        <div style={{display:"flex",flexDirection:"column",gap:3}}>
+          {wallets.map((w,i)=>(
+            <div key={w.id} style={{display:"flex",alignItems:"stretch",background:C.s2,
+              border:`1px solid ${C.borderHi}`,borderRadius:7,overflow:"hidden"}}>
+              <div style={{width:3,background:COLORS[i%COLORS.length],flexShrink:0}}/>
+              <div style={{width:30,display:"flex",alignItems:"center",justifyContent:"center",
+                fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:C.muted,flexShrink:0}}>
+                {String(i+1).padStart(2,"0")}
+              </div>
+              <div style={{width:110,flexShrink:0,padding:"9px 8px",fontSize:12,fontWeight:600,
+                borderRight:`1px solid ${C.border}`,display:"flex",alignItems:"center"}}>
+                {w.label||<span style={{color:C.muted,fontWeight:400}}>—</span>}
+              </div>
+              <div style={{flex:1,padding:"9px 12px",fontFamily:"'IBM Plex Mono',monospace",
+                fontSize:10,color:C.sub,display:"flex",alignItems:"center"}}>{w.addr}</div>
+              <div style={{flexShrink:0,display:"flex",gap:3,alignItems:"center",padding:"0 11px",
+                borderLeft:`1px solid ${C.border}`}}>
+                {w.nets.length===NETS.length
+                  ?<span style={{fontSize:9,color:C.sub}}>All nets</span>
+                  :w.nets.map(nid=>{const n=NETS.find(x=>x.id===nid);return n?<span key={nid} style={{fontSize:13,color:n.color}} title={n.label}>{n.icon}</span>:null;})
+                }
+              </div>
+              <div style={{flexShrink:0,display:"flex",alignItems:"center",gap:5,padding:"0 10px",
+                borderLeft:`1px solid ${C.border}`}}>
+                <div style={{width:6,height:6,borderRadius:"50%",
+                  background:w.status==="synced"?C.green:C.amber,
+                  animation:w.status==="syncing"?"pulse 1.5s ease infinite":undefined}}/>
+                <span className="mono" style={{fontSize:9,color:w.status==="synced"?C.green:C.amber}}>
+                  {w.status}
+                </span>
+              </div>
+              <button onClick={()=>setWallets(ws=>ws.filter(x=>x.id!==w.id))}
+                style={{flexShrink:0,padding:"0 11px",borderLeft:`1px solid ${C.border}`,
+                  color:C.sub,display:"flex",alignItems:"center",transition:"color .1s,background .1s"}}
+                onMouseOver={e=>{e.currentTarget.style.color=C.red;e.currentTarget.style.background=C.redDim}}
+                onMouseOut={e=>{e.currentTarget.style.color=C.sub;e.currentTarget.style.background="transparent"}}>
+                <Icon n="trash" s={12}/>
+              </button>
+            </div>
+          ))}
+        </div>
+
+        {/* Draft new wallets */}
+        {draft.length>0&&(
+          <div className="aIn" style={{marginTop:10}}>
+            <div style={{fontSize:9,fontWeight:700,color:C.cyan,textTransform:"uppercase",
+              letterSpacing:".12em",marginBottom:7,display:"flex",alignItems:"center",gap:6}}>
+              <div style={{flex:1,height:1,background:C.cyanMid+"50"}}/>
+              New wallets — pending save
+              <div style={{flex:1,height:1,background:C.cyanMid+"50"}}/>
+            </div>
+            <div style={{display:"flex",flexDirection:"column",gap:5}}>
+              {draft.map((w,i)=>(
+                <WalletRow key={w._id} entry={w} index={wallets.length+i} colorIdx={wallets.length+i}
+                  onChange={u=>setDraft(d=>d.map(x=>x._id===w._id?u:x))}
+                  onRemove={()=>setDraft(d=>d.filter(x=>x._id!==w._id))}
+                  onPaste={handlePaste}/>
+              ))}
+            </div>
+            {draft.length<(10-wallets.length)&&(
+              <button onClick={()=>setDraft(d=>[...d,mkW()])} style={{
+                width:"100%",marginTop:6,padding:"7px",border:`1px dashed ${C.border}`,borderRadius:6,
+                color:C.sub,fontSize:11,background:"transparent",display:"flex",
+                alignItems:"center",justifyContent:"center",gap:5,transition:"all .12s"}}
+                onMouseOver={e=>{e.currentTarget.style.borderColor=C.cyanMid;e.currentTarget.style.color=C.cyan}}
+                onMouseOut={e=>{e.currentTarget.style.borderColor=C.border;e.currentTarget.style.color=C.sub}}>
+                <Icon n="plus" s={10}/>Add another
+              </button>
+            )}
+          </div>
+        )}
+      </section>
+
+      <Divider my={0}/>
+
+      {/* Integrations */}
+      <section style={{marginTop:20,marginBottom:22}}>
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+          <Icon n="link" s={13} c={C.sub}/>
+          <span style={{fontWeight:700,fontSize:13}}>Integrations</span>
+        </div>
+        <BybitForm value={bybit} onChange={setBybit} compact/>
+      </section>
+
+      <Divider my={0}/>
+
+      {/* Accounting */}
+      <section style={{marginTop:20}}>
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+          <Icon n="gear" s={13} c={C.sub}/>
+          <span style={{fontWeight:700,fontSize:13}}>Accounting method</span>
+          {famChanged&&<Tag v="amber">Changed</Tag>}
+        </div>
+        <div style={{fontSize:11,color:C.sub,marginBottom:12}}>
+          Changing this restarts re-normalization for all wallets (~5–30 min).
+        </div>
+        <div style={{maxWidth:500}}>
+          <AccountingPicker value={family} onChange={setFamily} showImpact={famChanged}/>
+        </div>
+      </section>
+
+      {/* Confirmation */}
+      {confirm&&(
+        <ConfirmDrawer changes={changes} walletsCount={wallets.length+newValid.length}
+          onCancel={()=>setConfirm(false)} onConfirm={handleConfirm} saving={saving}/>
+      )}
+    </div>
+  );
+};
+
+/* ═══ GENERAL SETTINGS ══════════════════════════════════════ */
+const GeneralSettings = () => {
+  const [prefs,setPrefs] = useState({
+    hideSmall:true, reconWarn:true, gasInBasis:true, crossWalletAvco:false,
+    hideUnknownPrice:false, autoRefreshBalance:true, defaultRange:"1Y",
+    clusterPx:28, toleranceE8:true,
+  });
+  const set = (k,v) => setPrefs(p=>({...p,[k]:v}));
+
+  const TogRow = ({k,label,desc,disabled}) => (
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",
+      padding:"10px 13px",background:C.s2,border:`1px solid ${C.border}`,borderRadius:7,
+      opacity:disabled?.5:1}}>
+      <div style={{flex:1,paddingRight:12}}>
+        <div style={{fontSize:12,fontWeight:600,marginBottom:desc?2:0}}>{label}</div>
+        {desc&&<div style={{fontSize:10,color:C.sub,lineHeight:1.5}}>{desc}</div>}
+      </div>
+      <label className="toggle" style={{flexShrink:0,marginTop:1}}>
+        <input type="checkbox" checked={prefs[k]} onChange={e=>set(k,e.target.checked)} disabled={disabled}/>
+        <span className="tsl"/>
+      </label>
+    </div>
+  );
+
+  const SelectRow = ({label,desc,k,options}) => (
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",
+      padding:"10px 13px",background:C.s2,border:`1px solid ${C.border}`,borderRadius:7}}>
+      <div style={{flex:1,paddingRight:12}}>
+        <div style={{fontSize:12,fontWeight:600,marginBottom:desc?2:0}}>{label}</div>
+        {desc&&<div style={{fontSize:10,color:C.sub,lineHeight:1.5}}>{desc}</div>}
+      </div>
+      <div style={{position:"relative",flexShrink:0}}>
+        <select value={prefs[k]} onChange={e=>set(k,e.target.value)}
+          style={{appearance:"none",background:C.s3,border:`1px solid ${C.border}`,borderRadius:5,
+            color:C.text,padding:"5px 24px 5px 9px",fontSize:11,cursor:"pointer"}}>
+          {options.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+        <div style={{position:"absolute",right:7,top:"50%",transform:"translateY(-50%)",pointerEvents:"none"}}>
+          <Icon n="chev_d" s={10} c={C.sub}/>
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{flex:1,overflow:"auto",padding:"22px 28px 40px"}}>
+      <div style={{fontWeight:800,fontSize:15,marginBottom:2}}>General</div>
+      <div style={{fontSize:11,color:C.sub,marginBottom:20}}>Display and calculation preferences</div>
+
+      <div style={{maxWidth:540,display:"flex",flexDirection:"column",gap:20}}>
+
+        {/* Display */}
+        <div>
+          <SL mb={8}>Display</SL>
+          <div style={{display:"flex",flexDirection:"column",gap:4}}>
+            <TogRow k="hideSmall"   label="Hide assets below $0.50"        desc="Filters dust from the token list. Realisable P&L still tracked."/>
+            <TogRow k="hideUnknownPrice" label="Hide events with unknown price" desc="Hides transactions where price source is UNKNOWN from event log."/>
+            <SelectRow k="defaultRange" label="Default chart range"
+              desc="Initial time window shown on Move Basis and portfolio charts."
+              options={[{value:"1M",label:"1 Month"},{value:"3M",label:"3 Months"},{value:"6M",label:"6 Months"},{value:"1Y",label:"1 Year"},{value:"ALL",label:"All time"}]}/>
+          </div>
+        </div>
+
+        {/* Accounting */}
+        <div>
+          <SL mb={8}>Accounting</SL>
+          <div style={{display:"flex",flexDirection:"column",gap:4}}>
+            <TogRow k="gasInBasis" label="Include gas in cost basis"
+              desc="Gas fees on BUY events are added to the average cost. Recommended for accurate P&L."/>
+            <TogRow k="crossWalletAvco" label="Cross-wallet AVCO by default"
+              desc="Show combined AVCO across all session wallets instead of per-wallet. Always computed on-request, never stored."/>
+            <TogRow k="toleranceE8" label="Use ε=1e-8 reconciliation tolerance"
+              desc="Amounts differing by less than 0.00000001 are treated as MATCH. Prevents dust mismatches."/>
+          </div>
+        </div>
+
+        {/* Balance & Sync */}
+        <div>
+          <SL mb={8}>Balance & Sync</SL>
+          <div style={{display:"flex",flexDirection:"column",gap:4}}>
+            <TogRow k="autoRefreshBalance" label="Auto-refresh on-chain balance"
+              desc="Poll current wallet balances every 10 minutes for reconciliation. Disable to reduce RPC calls."/>
+            <TogRow k="reconWarn" label="Show reconciliation warnings"
+              desc="Display ⚠ when on-chain balance doesn't match derived quantity. Prompts manual compensating transaction."/>
+          </div>
+        </div>
+
+        {/* Chart */}
+        <div>
+          <SL mb={8}>Chart</SL>
+          <div style={{display:"flex",flexDirection:"column",gap:4}}>
+            <div style={{padding:"10px 13px",background:C.s2,border:`1px solid ${C.border}`,borderRadius:7}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                <div>
+                  <div style={{fontSize:12,fontWeight:600,marginBottom:2}}>Event cluster radius</div>
+                  <div style={{fontSize:10,color:C.sub}}>Pixel proximity threshold for grouping nearby events on Move Basis chart.</div>
+                </div>
+                <span className="mono" style={{fontSize:13,fontWeight:700,color:C.cyan}}>{prefs.clusterPx}px</span>
+              </div>
+              <input type="range" min={10} max={60} value={prefs.clusterPx}
+                onChange={e=>set("clusterPx",parseInt(e.target.value))}
+                style={{width:"100%",accentColor:C.cyan}}/>
+              <div style={{display:"flex",justifyContent:"space-between",marginTop:3}}>
+                <span style={{fontSize:9,color:C.muted}}>10 — dense</span>
+                <span style={{fontSize:9,color:C.muted}}>60 — aggressive</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* About / version */}
+        <div style={{padding:"12px 13px",background:C.s2,border:`1px solid ${C.border}`,borderRadius:7}}>
+          <SL mb={8}>About</SL>
+          {[
+            {l:"Version",v:"0.9.1-beta"},
+            {l:"Accounting engine",v:"AVCO replay v2.1"},
+            {l:"Supported networks",v:"9 EVM"},
+            {l:"Data sources",v:"Explorer-first + CoinGecko"},
+          ].map(row=>(
+            <div key={row.l} style={{display:"flex",justifyContent:"space-between",padding:"3px 0",
+              borderBottom:`1px solid ${C.border}`,fontSize:11}}>
+              <span style={{color:C.sub}}>{row.l}</span>
+              <span className="mono" style={{fontSize:10,color:C.text}}>{row.v}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/* ═══ APP SHELL ═════════════════════════════════════════════ */
+const NAV_ITEMS = [
+  {id:"tokens",icon:"tokens",label:"Tokens",color:"#22d3ee"},
+  {id:"lp",    icon:"lp",   label:"LP",    color:"#60a5fa"},
+  {id:"lending",icon:"lending",label:"Lending",color:"#34d399"},
+  {id:"staking",icon:"staking",label:"Staking",color:"#fbbf24",soon:true},
+];
+const SETTINGS_NAV = [
+  {id:"sources",icon:"wallet",label:"Data sources"},
+  {id:"general",icon:"gear",  label:"General"},
+];
+
+export default function App() {
+  const [page,    setPage]    = useState("settings");
+  const [stTab,   setStTab]   = useState("sources");
+  const [session, setSession] = useState(null);  // null = empty
+  const isSettings = page==="settings";
+
+  const handleWizardDone = (data) => {
+    setSession({
+      wallets: data.wallets.map((w,i)=>({...w,id:Date.now()+i,status:"syncing"})),
+      bybit: data.bybit,
+      family: data.family,
+    });
+  };
+
+  return (
+    <div style={{height:"100vh",display:"flex",flexDirection:"column",background:C.bg,overflow:"hidden"}}>
+      <style>{G}</style>
+
+      {/* TOP BAR */}
+      <div style={{flexShrink:0,height:46,borderBottom:`1px solid ${C.border}`,
+        background:C.s1,display:"flex",alignItems:"center",gap:12,padding:"0 14px"}}>
+        <div style={{display:"flex",alignItems:"center",gap:7}}>
+          <div style={{width:24,height:24,background:C.cyan,borderRadius:5,
+            display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,flexShrink:0}}>⚡</div>
+          <span style={{fontWeight:800,fontSize:13,letterSpacing:"-.02em"}}>WalletRadar</span>
+        </div>
+        <div style={{width:1,height:16,background:C.border,flexShrink:0}}/>
+        {session
+          ? [{l:"Portfolio",v:"$47.2k",c:C.text},{l:"Unrealised",v:"+7.4%",c:C.green},{l:"Realised",v:"+$1.9k",c:C.green}]
+              .map(m=>(
+                <div key={m.l} style={{display:"flex",gap:5,alignItems:"baseline"}}>
+                  <span style={{fontSize:9,color:C.sub}}>{m.l}</span>
+                  <span className="mono" style={{fontSize:13,fontWeight:700,color:m.c}}>{m.v}</span>
+                </div>
+              ))
+          : <span style={{fontSize:11,color:C.sub,fontStyle:"italic"}}>Configure your wallets to get started</span>
+        }
+        <div style={{flex:1}}/>
+        {/* Wallet chips — no Add Wallet button */}
+        {session&&(
+          <div style={{display:"flex",gap:5,alignItems:"center",flexShrink:0}}>
+            <span style={{fontSize:9,color:C.muted,marginRight:2}}>Connected</span>
+            {session.wallets.slice(0,4).map((w,i)=>(
+              <div key={i} style={{display:"flex",alignItems:"center",gap:4,padding:"3px 8px",
+                background:C.s2,border:`1px solid ${C.border}`,borderRadius:5}}>
+                <div style={{width:6,height:6,borderRadius:"50%",background:COLORS[i%COLORS.length],
+                  animation:w.status==="syncing"?"pulse 1.5s ease infinite":undefined}}/>
+                <span className="mono" style={{fontSize:9,color:C.sub}}>{shortA(w.addr)}</span>
+                <span style={{fontSize:9,color:C.sub}}>· {w.label||`W${i+1}`}</span>
+              </div>
+            ))}
+            {session.wallets.length>4&&<span style={{fontSize:10,color:C.sub}}>+{session.wallets.length-4} more</span>}
+            {session.bybit?.api_key&&(
+              <div style={{display:"flex",alignItems:"center",gap:4,padding:"3px 8px",
+                background:"#F7A60010",border:"1px solid #F7A60030",borderRadius:5}}>
+                <div style={{width:6,height:6,borderRadius:2,background:"#F7A600"}}/>
+                <span style={{fontSize:9,color:"#F7A600",fontFamily:"'IBM Plex Mono',monospace"}}>Bybit</span>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* BODY */}
+      <div style={{flex:1,display:"flex",overflow:"hidden"}}>
+
+        {/* ICON NAV */}
+        <div style={{width:44,flexShrink:0,borderRight:`1px solid ${C.border}`,
+          display:"flex",flexDirection:"column",alignItems:"center",padding:"6px 0",gap:2}}>
+          {NAV_ITEMS.map(s=>(
+            <button key={s.id} onClick={()=>!s.soon&&session&&setPage(s.id)}
+              title={s.label+(s.soon?" (soon)":"")}
+              style={{
+                width:36,height:36,borderRadius:7,display:"flex",alignItems:"center",justifyContent:"center",
+                background:page===s.id&&!isSettings?s.color+"20":"transparent",
+                border:`1px solid ${page===s.id&&!isSettings?s.color+"44":"transparent"}`,
+                color:page===s.id&&!isSettings?s.color:(!session||s.soon)?C.muted:C.sub,
+                opacity:(!session||s.soon)?.35:1,cursor:(!session||s.soon)?"not-allowed":"pointer",
+                transition:"all .12s",position:"relative",
+              }}>
+              <Icon n={s.icon} s={15} c={page===s.id&&!isSettings?s.color:(!session||s.soon)?C.muted:C.sub}/>
+              {page===s.id&&!isSettings&&<div style={{position:"absolute",left:0,top:"20%",
+                width:2,height:"60%",background:s.color,borderRadius:"0 2px 2px 0"}}/>}
+            </button>
+          ))}
+          <div style={{flex:1}}/>
+          <div style={{paddingBottom:4}}>
+            <button onClick={()=>setPage("settings")} title="Settings" style={{
+              width:36,height:36,borderRadius:7,display:"flex",alignItems:"center",justifyContent:"center",
+              background:isSettings?C.cyanDim:"transparent",
+              border:`1px solid ${isSettings?C.cyanMid:"transparent"}`,
+              color:isSettings?C.cyan:C.sub,transition:"all .12s",position:"relative"}}>
+              <Icon n="gear" s={15} c={isSettings?C.cyan:C.sub}/>
+              {isSettings&&<div style={{position:"absolute",left:0,top:"20%",
+                width:2,height:"60%",background:C.cyan,borderRadius:"0 2px 2px 0"}}/>}
+            </button>
+          </div>
+        </div>
+
+        {/* SETTINGS */}
+        {isSettings&&(
+          <div style={{flex:1,display:"flex",overflow:"hidden",background:C.s1,position:"relative"}}>
+            {!session
+              ? <Wizard onFinish={handleWizardDone}/>
+              : <>
+                  {/* Settings sidebar nav */}
+                  <div style={{width:196,flexShrink:0,borderRight:`1px solid ${C.border}`,
+                    display:"flex",flexDirection:"column"}}>
+                    <div style={{padding:"12px 14px 10px",borderBottom:`1px solid ${C.border}`,
+                      display:"flex",alignItems:"center",gap:7}}>
+                      <Icon n="gear" s={13} c={C.sub}/>
+                      <span style={{fontWeight:700,fontSize:13}}>Settings</span>
+                    </div>
+                    <div style={{flex:1,overflowY:"auto",padding:"6px 0"}}>
+                      {SETTINGS_NAV.map(s=>(
+                        <button key={s.id} onClick={()=>setStTab(s.id)} style={{
+                          width:"100%",display:"flex",alignItems:"center",gap:8,padding:"8px 14px",
+                          background:stTab===s.id?C.cyanDim:"transparent",
+                          borderLeft:`2px solid ${stTab===s.id?C.cyan:"transparent"}`,
+                          color:stTab===s.id?C.cyan:C.sub,fontSize:12,
+                          fontWeight:stTab===s.id?600:400,transition:"all .12s",textAlign:"left"}}>
+                          <Icon n={s.icon} s={12} c={stTab===s.id?C.cyan:C.sub}/>
+                          {s.label}
+                        </button>
+                      ))}
+                      <Divider my={6}/>
+                      {["Appearance","Notifications","About"].map(l=>(
+                        <button key={l} style={{width:"100%",padding:"7px 14px",
+                          textAlign:"left",color:C.muted,fontSize:11}}>{l}</button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {stTab==="sources"&&(
+                    <DataSources session={session}
+                      onSaved={updated=>setSession(s=>({...s,...updated}))}/>
+                  )}
+                  {stTab==="general"&&<GeneralSettings/>}
+                </>
+            }
+          </div>
+        )}
+
+        {/* OTHER PAGES */}
+        {!isSettings&&(
+          <div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",
+            color:C.sub,fontSize:12,flexDirection:"column",gap:8}}>
+            <div>{NAV_ITEMS.find(s=>s.id===page)?.label} view</div>
+            <button onClick={()=>setPage("settings")} style={{fontSize:11,color:C.cyan,
+              padding:"5px 12px",border:`1px solid ${C.cyanMid}`,borderRadius:5,background:C.cyanDim}}>
+              ← Settings ⚙
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,29 @@
+{
+  "roles": {
+    "financial-analyst": {
+      "sessionKey": null,
+      "updatedAt": null
+    },
+    "business-analyst": {
+      "sessionKey": null,
+      "updatedAt": null
+    },
+    "architect": {
+      "sessionKey": null,
+      "updatedAt": null
+    },
+    "backend-dev": {
+      "sessionKey": null,
+      "updatedAt": null
+    },
+    "frontend-dev": {
+      "sessionKey": null,
+      "updatedAt": null
+    },
+    "dispatcher": {
+      "sessionKey": null,
+      "updatedAt": null
+    }
+  }
+}
+

@@ -146,6 +146,165 @@ class LpReceiptEntryReplayHandlerTest {
         assertThat(pools.values()).allMatch(p -> "lp-position:base:pancakeswap:99".equals(p.getLpCorrelationId()));
     }
 
+    // --- hasOnlyOutboundPrincipalFlows tests (T1–T5) ---
+
+    @Test
+    void t1_lpEntryWithRouterRefundIsRecognisedAsReceiptPoolEntry() {
+        // Uniswap router refunds 0.0158 ETH of an 0.6158 ETH deposit → net -0.6 ETH outbound
+        NormalizedTransaction tx = lpEntryWithRefund("0x1", "-0.615779357568571248", "+0.015779357623930477", "-801.45");
+        assertThat(LpReceiptEntryReplayHandler.hasOnlyOutboundPrincipalFlows(tx)).isTrue();
+        assertThat(handler.isLpReceiptEntry(tx)).isTrue();
+    }
+
+    @Test
+    void t2_lpEntryWithDustRefundIsRecognisedAsReceiptPoolEntry() {
+        // Dust rounding refund: +6.85E-16 ETH on top of -0.130613 ETH deposit
+        NormalizedTransaction tx = lpEntryWithDustRefund("0x1", "-0.13061309055749152", "6.85E-16", "-400.088613");
+        assertThat(LpReceiptEntryReplayHandler.hasOnlyOutboundPrincipalFlows(tx)).isTrue();
+        assertThat(handler.isLpReceiptEntry(tx)).isTrue();
+    }
+
+    @Test
+    void t3_standardLpEntryWithNoRefundRemainsTrue() {
+        // Standard LP_ENTRY: only outbound flows — behaviour unchanged
+        NormalizedTransaction tx = lpEntry("0x1", "-0.5");
+        assertThat(LpReceiptEntryReplayHandler.hasOnlyOutboundPrincipalFlows(tx)).isTrue();
+    }
+
+    @Test
+    void t4_curveBalancerShapeWithNetInboundAssetReturnsFalse() {
+        // Curve/Balancer: user deposits 100 USDC, receives 0.05 ETH back (net ETH > 0)
+        NormalizedTransaction tx = curveStyleLpEntry("0x1");
+        assertThat(LpReceiptEntryReplayHandler.hasOnlyOutboundPrincipalFlows(tx)).isFalse();
+        assertThat(handler.isLpReceiptEntry(tx)).isFalse();
+    }
+
+    @Test
+    void t5_refundExceedsDepositForAssetReturnsFalse() {
+        // Refund larger than deposit for same asset → net outbound becomes net inbound → must reject
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setType(NormalizedTransactionType.LP_ENTRY);
+        tx.setCorrelationId("lp-position:base:pancakeswap:99");
+        tx.setWalletAddress("0x1");
+        tx.setNetworkId(NetworkId.BASE);
+        tx.setBlockTimestamp(Instant.now());
+        NormalizedTransaction.Flow outEth = new NormalizedTransaction.Flow();
+        outEth.setRole(NormalizedLegRole.TRANSFER);
+        outEth.setAssetSymbol("ETH");
+        outEth.setQuantityDelta(new BigDecimal("-0.1"));
+        NormalizedTransaction.Flow refundEth = new NormalizedTransaction.Flow();
+        refundEth.setRole(NormalizedLegRole.TRANSFER);
+        refundEth.setAssetSymbol("ETH");
+        refundEth.setQuantityDelta(new BigDecimal("0.5")); // refund > deposit
+        tx.setFlows(List.of(outEth, refundEth));
+        assertThat(LpReceiptEntryReplayHandler.hasOnlyOutboundPrincipalFlows(tx)).isFalse();
+    }
+
+    private static NormalizedTransaction lpEntryWithRefund(
+            String wallet,
+            String ethOut,
+            String ethRefund,
+            String usdtOut
+    ) {
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setId("tx-lp-refund");
+        tx.setWalletAddress(wallet);
+        tx.setNetworkId(NetworkId.BASE);
+        tx.setType(NormalizedTransactionType.LP_ENTRY);
+        tx.setCorrelationId("lp-position:base:pancakeswap:99");
+        tx.setBlockTimestamp(Instant.parse("2026-01-01T12:00:00Z"));
+
+        NormalizedTransaction.Flow outEth = new NormalizedTransaction.Flow();
+        outEth.setRole(NormalizedLegRole.TRANSFER);
+        outEth.setAssetSymbol("ETH");
+        outEth.setQuantityDelta(new BigDecimal(ethOut));
+
+        NormalizedTransaction.Flow refundEth = new NormalizedTransaction.Flow();
+        refundEth.setRole(NormalizedLegRole.TRANSFER);
+        refundEth.setAssetSymbol("ETH");
+        refundEth.setQuantityDelta(new BigDecimal(ethRefund));
+
+        NormalizedTransaction.Flow outUsdt = new NormalizedTransaction.Flow();
+        outUsdt.setRole(NormalizedLegRole.TRANSFER);
+        outUsdt.setAssetSymbol("USDT");
+        outUsdt.setQuantityDelta(new BigDecimal(usdtOut));
+
+        NormalizedTransaction.Flow fee = new NormalizedTransaction.Flow();
+        fee.setRole(NormalizedLegRole.FEE);
+        fee.setAssetSymbol("ETH");
+        fee.setQuantityDelta(new BigDecimal("-0.0001"));
+
+        NormalizedTransaction.Flow receipt = new NormalizedTransaction.Flow();
+        receipt.setRole(NormalizedLegRole.TRANSFER);
+        receipt.setAssetSymbol("LP-RECEIPT:BASE:PANCAKESWAP:99");
+        receipt.setQuantityDelta(BigDecimal.ONE);
+
+        tx.setFlows(List.of(outEth, refundEth, outUsdt, fee, receipt));
+        return tx;
+    }
+
+    private static NormalizedTransaction lpEntryWithDustRefund(
+            String wallet,
+            String ethOut,
+            String ethDustRefund,
+            String usdcOut
+    ) {
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setId("tx-lp-dust");
+        tx.setWalletAddress(wallet);
+        tx.setNetworkId(NetworkId.BASE);
+        tx.setType(NormalizedTransactionType.LP_ENTRY);
+        tx.setCorrelationId("lp-position:base:pancakeswap:99");
+        tx.setBlockTimestamp(Instant.parse("2026-01-01T12:00:00Z"));
+
+        NormalizedTransaction.Flow outEth = new NormalizedTransaction.Flow();
+        outEth.setRole(NormalizedLegRole.TRANSFER);
+        outEth.setAssetSymbol("ETH");
+        outEth.setQuantityDelta(new BigDecimal(ethOut));
+
+        NormalizedTransaction.Flow dustRefund = new NormalizedTransaction.Flow();
+        dustRefund.setRole(NormalizedLegRole.TRANSFER);
+        dustRefund.setAssetSymbol("ETH");
+        dustRefund.setQuantityDelta(new BigDecimal(ethDustRefund));
+
+        NormalizedTransaction.Flow outUsdc = new NormalizedTransaction.Flow();
+        outUsdc.setRole(NormalizedLegRole.TRANSFER);
+        outUsdc.setAssetSymbol("USDC");
+        outUsdc.setQuantityDelta(new BigDecimal(usdcOut));
+
+        NormalizedTransaction.Flow receipt = new NormalizedTransaction.Flow();
+        receipt.setRole(NormalizedLegRole.TRANSFER);
+        receipt.setAssetSymbol("LP-RECEIPT:BASE:PANCAKESWAP:99");
+        receipt.setQuantityDelta(BigDecimal.ONE);
+
+        tx.setFlows(List.of(outEth, dustRefund, outUsdc, receipt));
+        return tx;
+    }
+
+    private static NormalizedTransaction curveStyleLpEntry(String wallet) {
+        // User deposits USDC and receives ETH back (different asset returned → Curve/Balancer shape)
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setId("tx-curve");
+        tx.setWalletAddress(wallet);
+        tx.setNetworkId(NetworkId.BASE);
+        tx.setType(NormalizedTransactionType.LP_ENTRY);
+        tx.setCorrelationId("lp-position:base:pancakeswap:99");
+        tx.setBlockTimestamp(Instant.parse("2026-01-01T12:00:00Z"));
+
+        NormalizedTransaction.Flow outUsdc = new NormalizedTransaction.Flow();
+        outUsdc.setRole(NormalizedLegRole.TRANSFER);
+        outUsdc.setAssetSymbol("USDC");
+        outUsdc.setQuantityDelta(new BigDecimal("-100"));
+
+        NormalizedTransaction.Flow inEth = new NormalizedTransaction.Flow();
+        inEth.setRole(NormalizedLegRole.TRANSFER);
+        inEth.setAssetSymbol("ETH");
+        inEth.setQuantityDelta(new BigDecimal("0.05")); // net ETH is positive → reject
+
+        tx.setFlows(List.of(outUsdc, inEth));
+        return tx;
+    }
+
     private static NormalizedTransaction lpEntry(String wallet, String wethQty) {
         NormalizedTransaction tx = new NormalizedTransaction();
         tx.setId("tx-lp-1");

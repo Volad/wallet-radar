@@ -1,0 +1,25 @@
+{
+  "cycle": 1,
+  "status": "idle",
+  "owner": {
+    "role": "financial-analyst",
+    "taskId": "FA-001"
+  },
+  "goal": {
+    "status": "active",
+    "summary": "Initial cycle goal is active."
+  },
+  "decision": {
+    "kind": "wait",
+    "reason": "runtime initialized"
+  },
+  "openQuestions": {
+    "total": 0,
+    "counts": {},
+    "openBlocking": 0,
+    "waitingUser": 0,
+    "updatedAt": null
+  },
+  "updatedAt": null
+}
+

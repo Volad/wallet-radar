@@ -929,6 +929,16 @@ Transaction-type pricing contract:
     In both patterns, classifying the transaction as `LP_EXIT` materialises a phantom
     `LP-RECEIPT:-1` burn, drains the position's composite basis bucket, and causes all subsequent
     real principal exits to receive `basisEffect=UNKNOWN`.
+  - **LP_ENTRY receipt-pool routing — net-by-asset shape detection (2026-05-30)**:
+    `LpReceiptEntryReplayHandler.hasOnlyOutboundPrincipalFlows()` uses net-by-asset
+    flow aggregation to decide whether an LP_ENTRY uses the LP receipt pool path.
+    A Uniswap V3/V4 router may refund excess deposited tokens (partial or dust refund)
+    in the same transaction; the net flow for every principal asset remains negative
+    (net outbound). Such LP_ENTRYs are routed to the receipt-pool path. Curve/Balancer
+    shapes where the pool returns a different asset (net positive for that asset) are
+    correctly rejected and use the async lifecycle bucket path instead.
+    The refund inbound flow is processed by `applyInboundReceipt` inside the same
+    replay step, reducing the pool deposit by the refunded amount.
   - For position-scoped concentrated-liquidity exits, replay restores
     same-asset carry first and may then reallocate remaining principal basis
     across returned principal assets that belong to the same position bucket.

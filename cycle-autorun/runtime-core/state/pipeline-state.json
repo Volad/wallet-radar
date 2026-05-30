@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "runtime": "cycle-autorun-runtime-core",
+  "currentCycle": 1,
+  "status": "idle",
+  "owner": {
+    "role": "financial-analyst",
+    "taskId": "FA-001",
+    "sessionKey": null,
+    "since": null
+  },
+  "control": {
+    "status": "idle",
+    "nextAction": "none",
+    "targetRole": null,
+    "taskId": null,
+    "prompt": null,
+    "transitionType": null,
+    "questionId": null,
+    "reason": null,
+    "sourcePath": null,
+    "issuedAt": null
+  },
+  "decision": {
+    "kind": "wait",
+    "reason": "runtime initialized"
+  },
+  "goal": {
+    "status": "active",
+    "summary": "Initial cycle goal is active.",
+    "path": "cycle-data/cycle/1/goal-status.json",
+    "reachedAt": null
+  },
+  "observed": {
+    "lastMeaningfulSessionActivityAt": null,
+    "lastArtifactAt": null,
+    "lastHandoffAt": null,
+    "lastAssistantVisibleText": null,
+    "lastAssistantVisibleAt": null,
+    "wakeDue": false,
+    "resetDue": false
+  },
+  "notes": [
+    "runtime initialized"
+  ],
+  "updatedAt": null
+}
+
