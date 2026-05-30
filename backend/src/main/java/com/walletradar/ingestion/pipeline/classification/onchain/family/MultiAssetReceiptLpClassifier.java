@@ -6,6 +6,7 @@ import com.walletradar.domain.transaction.normalized.ClassificationSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.ingestion.pipeline.classification.ClassificationDecision;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassificationContext;
+import com.walletradar.ingestion.pipeline.classification.lp.PendleLpCorrelationSupport;
 import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryEntry;
 import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryFamily;
 import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryRole;
@@ -67,6 +68,11 @@ public class MultiAssetReceiptLpClassifier implements OnChainFamilyClassifier {
         }
         if (LpPositionLifecycleSupport.hasAnyErc721TransferToWallet(context.view())) {
             // NFT-backed LP positions are handled by LpClassifier — no overlap.
+            return Optional.empty();
+        }
+        if (hasPendleLpToken(context.movementLegs())) {
+            // Pendle LP tokens (PENDLE-LPT, eqbPENDLE-LPT) need a pendle-lp: correlationId that
+            // only LpSemanticClassifier can assign. Defer so it runs next (order +151).
             return Optional.empty();
         }
 
@@ -184,6 +190,18 @@ public class MultiAssetReceiptLpClassifier implements OnChainFamilyClassifier {
         return entry != null
                 && entry.family() == ProtocolRegistryFamily.LP
                 && entry.role() == ProtocolRegistryRole.POOL;
+    }
+
+    private static boolean hasPendleLpToken(List<RawLeg> legs) {
+        if (legs == null) {
+            return false;
+        }
+        for (RawLeg leg : legs) {
+            if (leg != null && !leg.fee() && PendleLpCorrelationSupport.marketIdFromSymbol(leg.assetSymbol()) != null) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private enum Direction {
