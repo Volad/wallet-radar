@@ -1,9 +1,11 @@
 package com.walletradar.ingestion.pipeline.classification.lp;
 
 import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.ingestion.pipeline.classification.support.RawLeg;
 import com.walletradar.ingestion.pipeline.onchain.OnChainRawTransactionView;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Locale;
 
@@ -13,6 +15,61 @@ import java.util.Locale;
 public final class PendleLpCorrelationSupport {
 
     private PendleLpCorrelationSupport() {
+    }
+
+    /**
+     * Detects LP_ENTRY or LP_EXIT from movement legs that contain Pendle LP tokens.
+     *
+     * Logic:
+     * - If any Pendle LP leg is outbound (negative qty) → LP_EXIT.
+     *   This covers both direct LP_EXIT (PENDLE-LPT burned) and Zap-out (eqbPENDLE-LPT
+     *   briefly received then returned to the distributor — the outbound leg confirms exit).
+     * - Else if net Pendle LP quantity is positive → LP_ENTRY.
+     * - Else → null (e.g. no Pendle token in legs).
+     */
+    public static NormalizedTransactionType lpTypeFromMovementLegs(List<RawLeg> movementLegs) {
+        if (movementLegs == null) {
+            return null;
+        }
+        boolean hasOutbound = false;
+        boolean hasInbound = false;
+        for (RawLeg leg : movementLegs) {
+            if (leg == null || leg.fee()) {
+                continue;
+            }
+            String marketId = marketIdFromSymbol(leg.assetSymbol());
+            if (marketId != null && leg.quantityDelta() != null) {
+                if (leg.quantityDelta().signum() < 0) {
+                    hasOutbound = true;
+                } else if (leg.quantityDelta().signum() > 0) {
+                    hasInbound = true;
+                }
+            }
+        }
+        if (hasOutbound && !hasInbound) {
+            return NormalizedTransactionType.LP_EXIT;
+        }
+        if (hasInbound && !hasOutbound) {
+            return NormalizedTransactionType.LP_ENTRY;
+        }
+        return null;
+    }
+
+    /**
+     * Returns true if the function name or method ID unambiguously indicates a Pendle-family
+     * LP exit (Zap-out pattern), even when the Pendle LP token circulates (in+out, net=0).
+     * Used as a fallback classification hint when the token-flow direction is ambiguous.
+     */
+    public static boolean isZapOutFunctionSignature(OnChainRawTransactionView view) {
+        if (view == null) {
+            return false;
+        }
+        String fn = view.functionName();
+        if (fn != null && fn.toLowerCase(Locale.ROOT).contains("zapout")) {
+            return true;
+        }
+        String methodId = view.methodId();
+        return "0x8b284b0e".equalsIgnoreCase(methodId); // zapOutV3SingleToken (Equilibria)
     }
 
     public static String correlationIdFromMovementLegs(OnChainRawTransactionView view, List<RawLeg> movementLegs) {
@@ -40,7 +97,9 @@ public final class PendleLpCorrelationSupport {
         if (normalized.startsWith("EQB") && (normalized.contains("PENDLE") || normalized.contains("-LPT"))) {
             normalized = normalized.substring(3);
         }
-        if (!normalized.contains("PENDLE") && !normalized.contains("-LPT")) {
+        // Must be an LP position receipt token (ending in -LPT), not the plain Pendle governance token.
+        // "PENDLE" alone is the reward/governance token and must return null.
+        if (!normalized.endsWith("-LPT")) {
             return null;
         }
         return slugify(normalized);

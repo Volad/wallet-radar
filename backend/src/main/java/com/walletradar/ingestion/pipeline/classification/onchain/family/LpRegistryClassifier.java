@@ -150,6 +150,10 @@ public class LpRegistryClassifier implements OnChainFamilyClassifier {
             flows.add(flow);
         }
 
+        // Use the ORIGINAL (pre-cancellation) movement legs for corrId derivation so that
+        // the eqbPENDLE-LPT token is still visible and produces the correct "pendle-lpt" market ID.
+        // Using effectiveLegs would only have the plain PENDLE reward token, giving a wrong corrId.
+        String corrId = PendleLpCorrelationSupport.correlationIdFromMovementLegs(context.view(), context.movementLegs());
         return Optional.of(RegistryDecisionSupport.registryResult(
                 context.view(),
                 entry,
@@ -161,7 +165,7 @@ public class LpRegistryClassifier implements OnChainFamilyClassifier {
                 ),
                 flows,
                 List.of(),
-                PendleLpCorrelationSupport.correlationIdFromMovementLegs(context.view(), effectiveLegs)
+                corrId
         ));
     }
 

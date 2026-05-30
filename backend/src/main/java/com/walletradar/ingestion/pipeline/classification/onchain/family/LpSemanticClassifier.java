@@ -1,5 +1,6 @@
 package com.walletradar.ingestion.pipeline.classification.onchain.family;
 
+import com.walletradar.domain.common.ConfidenceLevel;
 import com.walletradar.domain.transaction.normalized.ClassificationSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
@@ -97,6 +98,35 @@ public class LpSemanticClassifier implements OnChainFamilyClassifier {
                         value.protocolName(),
                         value.protocolVersion()
                 ));
+            }
+        }
+        // No protocol hint found for LP_ENTRY/LP_EXIT — check if movement legs contain Pendle LP tokens.
+        // Only applies when there are NO protocol hints at all (i.e. the contract is not in the registry).
+        // Covers Equilibria and other Pendle wrappers whose contracts are not registered.
+        // Must run before HeuristicClassifier so the correct correlationId is injected.
+        if (context.protocolSemantics().hints().isEmpty()) {
+            String pendleCorrelationId = PendleLpCorrelationSupport.correlationIdFromMovementLegs(
+                    context.view(), context.movementLegs());
+            if (pendleCorrelationId != null) {
+                NormalizedTransactionType pendleType = PendleLpCorrelationSupport.lpTypeFromMovementLegs(
+                        context.movementLegs());
+                if (pendleType != null) {
+                    return Optional.of(new ClassificationDecision(
+                            pendleType,
+                            OnChainClassificationSupport.initialStatus(context.view(), pendleType, ConfidenceLevel.MEDIUM),
+                            ClassificationSource.HEURISTIC,
+                            ConfidenceLevel.MEDIUM,
+                            OnChainClassificationSupport.toFlows(context.movementLegs(), pendleType),
+                            List.of(),
+                            pendleCorrelationId,
+                            null,
+                            null,
+                            null,
+                            null,
+                            "Pendle",
+                            null
+                    ));
+                }
             }
         }
         return Optional.empty();
