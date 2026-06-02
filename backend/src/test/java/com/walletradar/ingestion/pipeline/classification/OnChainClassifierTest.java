@@ -6584,9 +6584,9 @@ class OnChainClassifierTest {
         OnChainClassificationResult result = classifier.classify(rawTransaction);
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.LP_ENTRY_SETTLEMENT);
-        assertThat(result.correlationId()).isEqualTo("gmx-lp:arbitrum:weth-usdc");
-        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
-        assertThat(result.missingDataReasons()).doesNotContain("GMX_DEPOSIT_SETTLEMENT_CORRELATION_REQUIRED");
+        assertThat(result.correlationId()).isNull();
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_CLARIFICATION);
+        assertThat(result.missingDataReasons()).contains("GMX_DEPOSIT_SETTLEMENT_CORRELATION_REQUIRED");
     }
 
     @Test

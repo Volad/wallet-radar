@@ -2592,6 +2592,221 @@ class AvcoReplayServiceTest {
 
     // ── end B-ONDO-CARRY-1 tests ───────────────────────────────────────────────────────────────
 
+    // ── B-EARN-BUNDLE tests ────────────────────────────────────────────────────────────────────
+
+    /**
+     * AC-12: EARN inbound arrives before FUND/UTA outbounds. FUND is the partial leg.
+     * Verifies that both CARRY_IN events are emitted and total EARN cbD reflects both carries.
+     */
+    @Test
+    void earnBundleFundLegPartialAttachesAndUtaLegConsumes() {
+        // FUND buys 0.016 ONDO at $1 → FUND position: qty=0.016, basis=$0.016
+        NormalizedTransaction fundBuy = bybitBundleBuyTx("buy-fund", "0xfund-buy", 0,
+                "BYBIT:33625378:FUND", "ONDO", "0.016", "1");
+
+        // UTA buys 8.325 ONDO at $1 → UTA position: qty=8.325, basis=$8.325
+        NormalizedTransaction utaBuy = bybitBundleBuyTx("buy-uta", "0xuta-buy", 1,
+                "BYBIT:33625378:UTA", "ONDO", "8.325", "1");
+
+        // EARN inbound (arrives first, provisional basis via unit price $1)
+        NormalizedTransaction earnIn = bybitBundleTx("earn-in", "0xbundle", 2,
+                "BYBIT:33625378:EARN", "ONDO", "8.341", "1",
+                "bybit-it-bundle-v1:EARN-FAN-IN-1");
+
+        // FUND outbound (small, partial leg)
+        NormalizedTransaction fundOut = bybitBundleOutTx("fund-out", "0xbundle", 3,
+                "BYBIT:33625378:FUND", "BYBIT:33625378:EARN", "ONDO", "-0.016",
+                "bybit-it-bundle-v1:EARN-FAN-IN-1");
+
+        // UTA outbound (large, final consumer)
+        NormalizedTransaction utaOut = bybitBundleOutTx("uta-out", "0xbundle", 4,
+                "BYBIT:33625378:UTA", "BYBIT:33625378:EARN", "ONDO", "-8.325",
+                "bybit-it-bundle-v1:EARN-FAN-IN-1");
+
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                NormalizedTransactionStatus.CONFIRMED
+        )).thenReturn(List.of(fundBuy, utaBuy, earnIn, fundOut, utaOut));
+
+        service().replayConfirmed();
+
+        List<AssetLedgerPoint> allPoints = capturedLedgerPoints();
+        List<AssetLedgerPoint> earnCarryIns = allPoints.stream()
+                .filter(p -> "BYBIT:33625378:EARN".equals(p.getWalletAddress()))
+                .filter(p -> "ONDO".equalsIgnoreCase(p.getAssetSymbol()))
+                .filter(p -> p.getBasisEffect() == AssetLedgerPoint.BasisEffect.CARRY_IN)
+                .toList();
+
+        // Three CARRY_IN events total:
+        // #1 – EARN inbound materialisation (provisional), #2 – FUND partial attach, #3 – UTA final attach.
+        // In the broken state (before fix) only 2 events exist (UTA carry is orphaned).
+        assertThat(earnCarryIns).as("three CARRY_IN ledger points on EARN (inbound + FUND + UTA legs)").hasSize(3);
+
+        // Total EARN cbD after full replay = FUND carry + UTA carry = $0.016 + $8.325 = $8.341
+        AssetLedgerPoint finalEarnPoint = earnCarryIns.stream()
+                .max(Comparator.comparing(AssetLedgerPoint::getReplaySequence))
+                .orElseThrow();
+        assertThat(finalEarnPoint.getTotalCostBasisAfterUsd())
+                .as("EARN total cost basis covers both FUND and UTA carries")
+                .isGreaterThan(new BigDecimal("8"));
+        assertThat(finalEarnPoint.getTotalCostBasisAfterUsd())
+                .as("EARN total cost basis not double-counted")
+                .isLessThan(new BigDecimal("9"));
+
+    }
+
+    /**
+     * AC-12 (reverse order): UTA outbound arrives before FUND outbound.
+     * UTA is now the partial leg; FUND is the final consumer. Both CARRY_IN must still be emitted.
+     */
+    @Test
+    void earnBundleUtaFirstFundSecondBothAttach() {
+        NormalizedTransaction fundBuy = bybitBundleBuyTx("buy-fund", "0xfund-buy", 0,
+                "BYBIT:33625378:FUND", "ONDO", "0.016", "1");
+        NormalizedTransaction utaBuy = bybitBundleBuyTx("buy-uta", "0xuta-buy", 1,
+                "BYBIT:33625378:UTA", "ONDO", "8.325", "1");
+
+        NormalizedTransaction earnIn = bybitBundleTx("earn-in", "0xbundle", 2,
+                "BYBIT:33625378:EARN", "ONDO", "8.341", "1",
+                "bybit-it-bundle-v1:EARN-FAN-IN-2");
+
+        // UTA arrives before FUND (reversed order vs test 1)
+        NormalizedTransaction utaOut = bybitBundleOutTx("uta-out", "0xbundle", 3,
+                "BYBIT:33625378:UTA", "BYBIT:33625378:EARN", "ONDO", "-8.325",
+                "bybit-it-bundle-v1:EARN-FAN-IN-2");
+
+        NormalizedTransaction fundOut = bybitBundleOutTx("fund-out", "0xbundle", 4,
+                "BYBIT:33625378:FUND", "BYBIT:33625378:EARN", "ONDO", "-0.016",
+                "bybit-it-bundle-v1:EARN-FAN-IN-2");
+
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                NormalizedTransactionStatus.CONFIRMED
+        )).thenReturn(List.of(fundBuy, utaBuy, earnIn, utaOut, fundOut));
+
+        service().replayConfirmed();
+
+        List<AssetLedgerPoint> allPoints = capturedLedgerPoints();
+        List<AssetLedgerPoint> earnCarryIns = allPoints.stream()
+                .filter(p -> "BYBIT:33625378:EARN".equals(p.getWalletAddress()))
+                .filter(p -> "ONDO".equalsIgnoreCase(p.getAssetSymbol()))
+                .filter(p -> p.getBasisEffect() == AssetLedgerPoint.BasisEffect.CARRY_IN)
+                .toList();
+
+        // Three CARRY_IN events: EARN inbound + UTA partial attach + FUND final attach.
+        assertThat(earnCarryIns).as("three CARRY_IN ledger points on EARN (reversed leg order)").hasSize(3);
+
+        AssetLedgerPoint finalEarnPoint = earnCarryIns.stream()
+                .max(Comparator.comparing(AssetLedgerPoint::getReplaySequence))
+                .orElseThrow();
+        assertThat(finalEarnPoint.getTotalCostBasisAfterUsd())
+                .as("EARN total cost basis reflects both carries regardless of leg order")
+                .isGreaterThan(new BigDecimal("8"));
+        assertThat(finalEarnPoint.getTotalCostBasisAfterUsd())
+                .as("EARN total cost basis not double-counted")
+                .isLessThan(new BigDecimal("9"));
+    }
+
+    /**
+     * AC-6 regression guard: {@code bybit-cross-uid-v1:} transfers must NOT be routed to
+     * {@code applyBybitMultiLegBundleTransfer} and must NOT be affected by the partial-leg logic.
+     * Cross-UID transfers use the {@code corr-family:} pending key but go through the standard
+     * outbound→carry→inbound path, not the bundle fan-in path.
+     */
+    @Test
+    void earnBundleNoPriorCrossUidCarryRegression() {
+        var assetSupport = new com.walletradar.costbasis.application.replay.support.ReplayAssetSupport();
+        var keyFactory = new com.walletradar.costbasis.application.replay.support.ReplayPendingTransferKeyFactory(assetSupport);
+
+        // Cross-UID transfer: different UIDs → not a bybit-it-bundle-v1: → isBybitMultiLegBundleTransfer = false
+        NormalizedTransaction crossUidOut = new NormalizedTransaction();
+        crossUidOut.setSource(NormalizedTransactionSource.BYBIT);
+        crossUidOut.setType(NormalizedTransactionType.INTERNAL_TRANSFER);
+        crossUidOut.setWalletAddress("BYBIT:33625378:FUND");
+        crossUidOut.setMatchedCounterparty("BYBIT:409666:FUND");
+        crossUidOut.setCorrelationId("bybit-cross-uid-v1:CROSS-REGRESSION-TEST");
+        crossUidOut.setContinuityCandidate(true);
+        NormalizedTransaction.Flow crossFlow = new NormalizedTransaction.Flow();
+        crossFlow.setRole(NormalizedLegRole.TRANSFER);
+        crossFlow.setAssetSymbol("ONDO");
+        crossFlow.setQuantityDelta(new BigDecimal("-5.0"));
+        crossUidOut.setFlows(List.of(crossFlow));
+
+        // Verify: cross-uid uses corr-family: key, confirming it is NOT routed to bundle handler
+        var key = keyFactory.transferKey(crossUidOut, crossFlow);
+        assertThat(key).isNotNull();
+        assertThat(key.value()).startsWith("corr-family:bybit-cross-uid-v1:");
+        assertThat(key.value()).doesNotContain("bybit-earn-carry");
+
+        // Verify: isBybitMultiLegBundleTransfer = false for cross-uid prefix
+        var classifier = new com.walletradar.costbasis.application.replay.support.ReplayTransferClassifier(keyFactory);
+        assertThat(classifier.isBybitMultiLegBundleTransfer(crossUidOut)).isFalse();
+    }
+
+    // Helper: create a Bybit INTERNAL_TRANSFER for a bundle leg (no matchedCounterparty — EARN inbound)
+    private NormalizedTransaction bybitBundleTx(
+            String id, String txHash, int txIndex,
+            String walletAddress, String assetSymbol, String qty, String unitPrice,
+            String correlationId
+    ) {
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setId(id);
+        tx.setTxHash(txHash);
+        tx.setSource(NormalizedTransactionSource.BYBIT);
+        tx.setType(NormalizedTransactionType.INTERNAL_TRANSFER);
+        tx.setStatus(NormalizedTransactionStatus.CONFIRMED);
+        tx.setWalletAddress(walletAddress);
+        tx.setCorrelationId(correlationId);
+        tx.setContinuityCandidate(true);
+        tx.setBlockTimestamp(Instant.parse("2026-03-25T10:00:00Z").plusSeconds(txIndex));
+        tx.setTransactionIndex(txIndex);
+        NormalizedTransaction.Flow f = new NormalizedTransaction.Flow();
+        f.setRole(NormalizedLegRole.TRANSFER);
+        f.setAssetSymbol(assetSymbol);
+        f.setQuantityDelta(new BigDecimal(qty));
+        if (unitPrice != null) {
+            f.setUnitPriceUsd(new BigDecimal(unitPrice));
+        }
+        tx.setFlows(List.of(f));
+        return tx;
+    }
+
+    // Helper: create a Bybit INTERNAL_TRANSFER for a bundle outbound leg (with matchedCounterparty)
+    private NormalizedTransaction bybitBundleOutTx(
+            String id, String txHash, int txIndex,
+            String walletAddress, String matchedCounterparty,
+            String assetSymbol, String qty, String correlationId
+    ) {
+        NormalizedTransaction tx = bybitBundleTx(id, txHash, txIndex,
+                walletAddress, assetSymbol, qty, null, correlationId);
+        tx.setMatchedCounterparty(matchedCounterparty);
+        return tx;
+    }
+
+    // Helper: create a simple Bybit BUY transaction to populate a wallet position
+    private NormalizedTransaction bybitBundleBuyTx(
+            String id, String txHash, int txIndex,
+            String walletAddress, String assetSymbol, String qty, String unitPrice
+    ) {
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setId(id);
+        tx.setTxHash(txHash);
+        tx.setSource(NormalizedTransactionSource.BYBIT);
+        tx.setType(NormalizedTransactionType.EXTERNAL_TRANSFER_IN);
+        tx.setStatus(NormalizedTransactionStatus.CONFIRMED);
+        tx.setWalletAddress(walletAddress);
+        tx.setBlockTimestamp(Instant.parse("2026-03-25T10:00:00Z").plusSeconds(txIndex));
+        tx.setTransactionIndex(txIndex);
+        NormalizedTransaction.Flow f = new NormalizedTransaction.Flow();
+        f.setRole(NormalizedLegRole.BUY);
+        f.setAssetSymbol(assetSymbol);
+        f.setQuantityDelta(new BigDecimal(qty));
+        f.setUnitPriceUsd(new BigDecimal(unitPrice));
+        f.setPriceSource(PriceSource.BINANCE);
+        tx.setFlows(List.of(f));
+        return tx;
+    }
+
+    // ── end B-EARN-BUNDLE tests ────────────────────────────────────────────────────────────────
+
     private List<AssetLedgerPoint> capturedLedgerPoints() {
         ArgumentCaptor<List<AssetLedgerPoint>> captor = ArgumentCaptor.forClass(List.class);
         verify(assetLedgerPointRepository).saveAll(captor.capture());

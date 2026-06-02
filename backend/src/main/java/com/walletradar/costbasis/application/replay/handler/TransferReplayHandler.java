@@ -45,6 +45,13 @@ public class TransferReplayHandler {
      */
     private static final java.math.BigDecimal EARN_PRINCIPAL_DUST_BASIS_THRESHOLD = new java.math.BigDecimal("100");
 
+    /**
+     * B-EARN-BUNDLE: Minimum carry quantity for a partial-leg detection in
+     * {@link #applyBybitMultiLegBundleTransfer}. Carries below this threshold are
+     * treated as dust and fall through to the full-consume path.
+     */
+    private static final BigDecimal EARN_BUNDLE_PARTIAL_LEG_THRESHOLD = new BigDecimal("0.001");
+
     private final ReplayFlowSupport flowSupport;
     private final ContinuityCarryService continuityCarryService;
     private final ReplayPendingTransferKeyFactory keyFactory;
@@ -505,9 +512,27 @@ public class TransferReplayHandler {
     }
 
     /**
-     * Cycle/12: N-way Bybit bundle ({@code bybit-it-bundle-v1:*}) uses the shared {@code corr-family}
-     * pending queue. Inbound legs drain every parked outbound carry (qty-agnostic bridge match) so
-     * UTA+FUND outflows jointly restore basis on the EARN inbound even when timestamps are skewed.
+     * Cycle/12 / B-EARN-BUNDLE: Handles {@code bybit-it-bundle-v1:*} multi-leg Bybit bundle
+     * transfers. Only {@code bybit-it-bundle-v1:} correlationId prefixes enter this path;
+     * {@code bybit-collapsed-v1:} and {@code bybit-cross-uid-v1:} bundles do NOT.
+     *
+     * <p><b>Fan-in (N outbound → 1 inbound):</b> A Bybit Earn subscription produces three legs in
+     * time order: EARN inbound, FUND outbound (tiny housekeeping qty), UTA outbound (principal qty).
+     * All three share the same {@code corr-family} queue key. When the EARN inbound arrives first it
+     * materialises provisionally and parks a {@code pendingInbound} entry. Each outbound leg checks
+     * whether its carry qty is less than the parked pending-inbound qty (partial-leg detection):
+     * <ul>
+     *   <li>If yes (partial leg): the outbound's carry is applied for its own qty slice via a
+     *       proportionally-scaled provisional so that {@code applyAuthoritativeLateInboundCarryBasis}
+     *       does not double-subtract the full provisional. The remaining pending inbound is
+     *       re-enqueued at the front of the queue for the next outbound leg to consume.</li>
+     *   <li>If no (epsilon guard): carry quantities below {@value #EARN_BUNDLE_PARTIAL_LEG_THRESHOLD}
+     *       fall through to the full-consume path (treated as dust, not partial legs).</li>
+     * </ul>
+     * CARRY_IN ledger points are emitted once per outbound leg (one from FUND, one from UTA).
+     *
+     * <p><b>Inbound path:</b> drains all parked outbound carries (qty-agnostic bridge match) so
+     * UTA + FUND outflows jointly restore basis on the EARN inbound even when timestamps are skewed.
      */
     private AssetLedgerPoint.BasisEffect applyBybitMultiLegBundleTransfer(
             NormalizedTransaction transaction,
@@ -538,15 +563,55 @@ public class TransferReplayHandler {
             int pendingInboundIndex = matcher.findUniqueBridgeQueueIndex(queue, true);
             if (pendingInboundIndex >= 0) {
                 CarryTransfer pendingInbound = matcher.removeQueueElement(queue, pendingInboundIndex);
-                attachLateCarryToPendingInbound(
-                        transaction,
-                        flow,
-                        flowIndex,
-                        replayState.positions(),
-                        pendingInbound,
-                        carry,
-                        replayState.ledgerPointCollector()
-                );
+                boolean isPartialLeg = carry.quantity() != null
+                        && pendingInbound.quantity() != null
+                        && carry.quantity().compareTo(pendingInbound.quantity()) < 0
+                        && carry.quantity().compareTo(EARN_BUNDLE_PARTIAL_LEG_THRESHOLD) > 0;
+                if (isPartialLeg) {
+                    // Partial outbound leg (e.g. FUND in a UTA+FUND+EARN bundle): attach this leg's
+                    // carry for its own qty slice and re-enqueue the remaining pending inbound so the
+                    // next (larger) outbound leg can also attach. Implements N-outbound-to-1-inbound
+                    // fan-in without losing UTA's basis to premature pending-inbound consumption.
+                    //
+                    // provisionalBasisUsd is partitioned proportionally so that
+                    // applyAuthoritativeLateInboundCarryBasis does not double-subtract the full
+                    // provisional when called for each leg separately.
+                    BigDecimal fullProvisional = pendingInbound.provisionalBasisUsd() != null
+                            ? pendingInbound.provisionalBasisUsd() : BigDecimal.ZERO;
+                    BigDecimal scaledProvisional = pendingInbound.quantity().signum() > 0
+                            ? fullProvisional.multiply(
+                                    carry.quantity().divide(pendingInbound.quantity(), MC), MC)
+                            : BigDecimal.ZERO;
+                    BigDecimal remainingProvisional = fullProvisional.subtract(scaledProvisional, MC);
+                    CarryTransfer slicedForAttach = new CarryTransfer(
+                            carry.quantity(), BigDecimal.ZERO, carry.quantity(),
+                            BigDecimal.ZERO, null, true,
+                            pendingInbound.assetKey(), scaledProvisional,
+                            pendingInbound.sourceFlowRef()
+                    );
+                    attachLateCarryToPendingInbound(
+                            transaction,
+                            flow,
+                            flowIndex,
+                            replayState.positions(),
+                            slicedForAttach,
+                            carry,
+                            replayState.ledgerPointCollector()
+                    );
+                    BigDecimal remainingQty = pendingInbound.quantity().subtract(carry.quantity(), MC);
+                    queue.addFirst(
+                            pendingInbound.withReducedQuantityAndProvisional(remainingQty, remainingProvisional));
+                } else {
+                    attachLateCarryToPendingInbound(
+                            transaction,
+                            flow,
+                            flowIndex,
+                            replayState.positions(),
+                            pendingInbound,
+                            carry,
+                            replayState.ledgerPointCollector()
+                    );
+                }
                 if (queue.isEmpty()) {
                     replayState.pendingTransfers().remove(transferKey);
                 }

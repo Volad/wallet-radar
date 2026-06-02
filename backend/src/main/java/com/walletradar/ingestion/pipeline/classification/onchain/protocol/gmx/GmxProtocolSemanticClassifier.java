@@ -439,7 +439,11 @@ public class GmxProtocolSemanticClassifier implements ProtocolSemanticClassifier
                 return depositCorrelationId;
             }
         }
-        return GmxMarketCorrelationSupport.correlationIdFromMovementLegs(view, movementLegs);
+        // Return null when deposit key is unavailable: the classifier sets PENDING_CLARIFICATION so
+        // the receipt-clarification pipeline can fetch the DepositExecuted event and extract the
+        // per-deposit key that matches the paired LP_ENTRY_REQUEST. A market-slug fallback would
+        // produce a shared bucket key across all deposits to the same market and break AVCO replay.
+        return null;
     }
 
     private String resolveGmxWithdrawalRequestCorrelationId(OnChainRawTransactionView view) {
@@ -488,7 +492,11 @@ public class GmxProtocolSemanticClassifier implements ProtocolSemanticClassifier
                 return withdrawalCorrelationId;
             }
         }
-        return GmxMarketCorrelationSupport.correlationIdFromMovementLegs(view, movementLegs);
+        // Return null when withdrawal key is unavailable: the classifier sets PENDING_CLARIFICATION
+        // so the receipt-clarification pipeline can fetch the WithdrawalExecuted event and extract
+        // the per-withdrawal key. A market-slug fallback produces a shared bucket key across all
+        // withdrawals to the same market and would break AVCO replay.
+        return null;
     }
 
     private String firstGmxEventCorrelationId(

@@ -58,6 +58,29 @@ public record CarryTransfer(
         return pendingInbound(quantity, assetKey, BigDecimal.ZERO);
     }
 
+    /**
+     * Creates a new pending-inbound carry with reduced quantity and proportionally scaled
+     * provisional basis. Used when a partial outbound leg attaches carry to an N-leg bundle
+     * pending inbound: the remaining pending inbound is re-enqueued with the leftover qty and
+     * the proportional share of the original provisional that has not yet been replaced.
+     *
+     * @param newQty         the remaining uncovered quantity after the partial leg
+     * @param newProvisional the remaining provisional basis (original − portion already replaced)
+     */
+    public CarryTransfer withReducedQuantityAndProvisional(BigDecimal newQty, BigDecimal newProvisional) {
+        return new CarryTransfer(
+                newQty,
+                BigDecimal.ZERO,
+                newQty,
+                costBasisUsd,
+                avco,
+                pendingInbound,
+                assetKey,
+                newProvisional,
+                sourceFlowRef
+        );
+    }
+
     public CarryTransfer withAdditionalProvisionalBasis(BigDecimal additionalProvisionalBasisUsd) {
         if (additionalProvisionalBasisUsd == null || additionalProvisionalBasisUsd.signum() == 0) {
             return this;
