@@ -20,6 +20,7 @@ import com.walletradar.ingestion.pipeline.clarification.KnownBridgeRouterExterna
 import com.walletradar.ingestion.pipeline.clarification.NftMintRetagger;
 import com.walletradar.ingestion.pipeline.clarification.ProtocolAttributionClassifier;
 import com.walletradar.ingestion.pipeline.clarification.ScamDisperseClonePhishingTagger;
+import com.walletradar.ingestion.pipeline.clarification.TurtleVaultBurnRepairService;
 import com.walletradar.ingestion.pipeline.clarification.UnmatchedBridgeInboundPricingFallbackService;
 import com.walletradar.ingestion.pipeline.clarification.UnmatchedExternalTransferInPricingFallbackService;
 import lombok.RequiredArgsConstructor;
@@ -52,6 +53,7 @@ class LinkingBatchProcessor {
 
     private final KnownBridgeRouterExternalTypeCorrectionService knownBridgeRouterExternalTypeCorrectionService;
     private final CrossNetworkBridgePairFallbackService crossNetworkBridgePairFallbackService;
+    private final TurtleVaultBurnRepairService turtleVaultBurnRepairService;
 
     private final ProtocolAttributionClassifier protocolAttributionClassifier;
     private final AddressPoisoningDetector addressPoisoningDetector;
@@ -166,6 +168,11 @@ class LinkingBatchProcessor {
 
         // Cycle/14: same-tx on-chain INTERNAL_TRANSFER orphans across session wallets.
         processed += onChainInternalTransferPairRepairService.reconcileOrphanSameTxPairs(batchSize);
+        progressHeartbeat.run();
+
+        // B-VAULT-WITHDRAW: synthesize missing vault-token burn leg on Turtle Finance USDC Vault
+        // VAULT_WITHDRAW transactions where ERC4626 redeem() does not emit an ERC20 burn event.
+        processed += turtleVaultBurnRepairService.repairMissingVaultTokenBurn(batchSize);
         progressHeartbeat.run();
 
         return processed;

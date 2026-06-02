@@ -1172,6 +1172,20 @@
       "confidence": "HIGH",
       "notes": "deposit(uint256,address) and withdraw(uint256,address,address) vault evidence from cycle 83."
     },
+    "── YIELD: Turtle Finance ────────────────────────────────────────────": {},
+    "0x3048925b3ea5a8c12eecccb8810f5f7544db54af": {
+      "name": "Turtle Finance USDC Vault",
+      "protocol": "Turtle Finance",
+      "version": "V1",
+      "family": "YIELD",
+      "role": "VAULT",
+      "event_type": "VAULT_WITHDRAW",
+      "networks": [
+        "AVALANCHE"
+      ],
+      "confidence": "HIGH",
+      "notes": "ERC4626 async vault. redeem() does not emit ERC20 burn event in Etherscan. Missing vault token burn is synthesized from input calldata by TurtleVaultBurnRepairService."
+    },
     "── LENDING: Radiant (Arbitrum) ───────────────────────────────────────": {},
     "0xf4b1486dd74d07706052a33d31d7c0aafd0659e1": {
       "name": "Radiant V2 LendingPool",
