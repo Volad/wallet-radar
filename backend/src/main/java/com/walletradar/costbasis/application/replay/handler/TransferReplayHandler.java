@@ -118,11 +118,12 @@ public class TransferReplayHandler {
             return flowSupport.continuityBasisEffect(transaction, flow);
         }
         if (classifier.isBucketInbound(transaction, flow)) {
-            restoreFromContinuityBucket(
-                    flow,
-                    position,
-                    replayState.continuity().bucket(keyFactory.continuityKey(transaction, flow))
-            );
+            ContinuityBucket bucket = replayState.continuity().bucket(keyFactory.continuityKey(transaction, flow));
+            if (keyFactory.usesWrapperCompositeBucket(transaction)) {
+                restoreFullBucket(flow, position, bucket);
+            } else {
+                restoreFromContinuityBucket(flow, position, bucket);
+            }
             return flowSupport.continuityBasisEffect(transaction, flow);
         }
         if (classifier.isBybitMultiLegBundleTransfer(transaction)) {
@@ -139,10 +140,17 @@ public class TransferReplayHandler {
 
         if (flow.getQuantityDelta().signum() < 0) {
             boolean venueInternal = classifier.usesBybitVenueInternalCarryQueue(transaction);
-            // P0-C: Capture outbound slice AVCO before drain so corridor CARRY_IN uses the
-            // pre-move per-unit rate (ADR-019: outbound-AVCO preservation rule).
-            BigDecimal corridorOutboundSliceAvco = corridorTransfer ? position.perWalletAvco() : null;
-            PositionState carrySource = earnPrincipalCarrySourcePosition(transaction, position, replayState);
+            // P0-C: Resolve carry source before drain. For :FUND corridor outbounds with zero
+            // inventory, falls back to umbrella BYBIT:UID so the proportional-carry override fires
+            // correctly (ADR-019 Rule 1, B-BYBIT-CORRIDOR-2 sub-pattern A fix).
+            PositionState carrySource = resolveCarrySourcePosition(
+                    transaction, position, replayState, corridorTransfer);
+            BigDecimal corridorOutboundSliceAvco = corridorTransfer
+                    ? derivePositionAvco(carrySource)
+                    : null;
+            // B-3: capture pre-drain totals for proportional carry basis (ADR-019 Rule 1)
+            BigDecimal preDrainTotalBasis = carrySource.totalCostBasisUsd();
+            BigDecimal preDrainTotalQty   = carrySource.quantity();
             BigDecimal preDrainAvco = derivePositionAvco(carrySource);
             CarryTransfer carry = continuityCarryService.removeTransferCarry(
                     transaction,
@@ -164,11 +172,26 @@ public class TransferReplayHandler {
             );
             // P0-A: For earn-principal outbound, override dust carry with authoritative lot basis.
             carry = applyEarnPrincipalLotCarryOverride(transaction, flow, carry, carrySource, replayState);
-            // P0-C: For corridor outbound, force carry basis = movedQty × outboundSliceAvco (ADR-019).
+            // P0-C: For corridor outbound, compute carry basis as proportional slice of total
+            // position cost (ADR-019 Rule 1 amended). Do NOT use perWalletAvco × movedQty — that
+            // divides by covered-qty only and inflates basis when uncoveredQuantity > 0.
             if (corridorOutboundSliceAvco != null && corridorOutboundSliceAvco.signum() > 0) {
                 BigDecimal movedQty = flow.getQuantityDelta().abs();
+                BigDecimal corridorCarryBasis;
+                if (preDrainTotalQty != null && preDrainTotalQty.signum() > 0
+                        && preDrainTotalBasis != null && preDrainTotalBasis.signum() > 0) {
+                    corridorCarryBasis = preDrainTotalBasis
+                            .multiply(movedQty, MC)
+                            .divide(preDrainTotalQty, MC);
+                } else {
+                    corridorCarryBasis = movedQty.multiply(corridorOutboundSliceAvco, MC);
+                }
+                // Cap: guard against movedQty > preDrainTotalQty edge case (shortfall scenario)
+                if (preDrainTotalBasis != null && preDrainTotalBasis.signum() > 0) {
+                    corridorCarryBasis = corridorCarryBasis.min(preDrainTotalBasis);
+                }
                 carry = continuityCarryService.buildExplicitCarryTransfer(
-                        movedQty, movedQty.multiply(corridorOutboundSliceAvco, MC), carrySource.assetKey()
+                        movedQty, corridorCarryBasis, carrySource.assetKey()
                 );
             }
             Deque<CarryTransfer> queue = replayState.pendingTransfers().queue(transferKey);
@@ -595,6 +618,31 @@ public class TransferReplayHandler {
         return copy;
     }
 
+    /**
+     * For wrapper-composite buckets (VAULT_WITHDRAW, STAKING_WITHDRAW returning a
+     * different-denomination receipt), drain the ENTIRE bucket carry instead of a
+     * proportional slice. The receipt token (e.g., mevUSDC shares) and the returned asset
+     * (USDC) have incompatible quantity scales — proportional slicing yields ~$0 basis.
+     */
+    private void restoreFullBucket(
+            NormalizedTransaction.Flow flow,
+            PositionState position,
+            ContinuityBucket bucket
+    ) {
+        CarryTransfer carry = continuityCarryService.drainFullBucket(bucket, position.assetKey());
+        if (carry == null) {
+            flowSupport.applyUnknownTransfer(flow, position);
+            return;
+        }
+        flowSupport.restoreToPosition(
+                flow.getQuantityDelta().abs(),
+                position,
+                carry.costBasisUsd(),
+                carry.uncoveredQuantity(),
+                carry.avco()
+        );
+    }
+
     private void restoreFromContinuityBucket(
             NormalizedTransaction.Flow flow,
             PositionState position,
@@ -836,39 +884,82 @@ public class TransferReplayHandler {
     }
 
     /**
-     * Earn redemption outbound rows are booked on {@code :EARN}. When the deposit path landed
-     * covered basis on the {@code :EARN} slice, drain that position first. Otherwise fall back
-     * to the umbrella {@code BYBIT:<uid>} spot inventory where buys typically settle.
+     * Resolves the position from which carry basis should be drained for an outbound transfer.
+     *
+     * <p>Two fallback paths are supported:
+     * <ul>
+     *   <li><b>:EARN path</b> — earn-principal outbound rows are booked on {@code :EARN}; when
+     *       the deposit path landed no covered basis on the slice, drain from the umbrella instead.
+     *   <li><b>:FUND corridor path (B-BYBIT-CORRIDOR-2 sub-pattern A)</b> — Bybit's API does not
+     *       expose the internal UTA→FUND transfer that precedes every on-chain withdrawal. When
+     *       the FUND position has zero inventory at outbound time, fall back to the umbrella
+     *       {@code BYBIT:UID} position so the proportional-carry override fires correctly.
+     * </ul>
      */
-    private static PositionState earnPrincipalCarrySourcePosition(
+    private static PositionState resolveCarrySourcePosition(
             NormalizedTransaction transaction,
             PositionState flowPosition,
-            ReplayExecutionState replayState
+            ReplayExecutionState replayState,
+            boolean isCorridorTransfer
     ) {
         if (transaction == null || flowPosition == null || replayState == null) {
             return flowPosition;
         }
-        String correlationId = transaction.getCorrelationId();
         String wallet = transaction.getWalletAddress();
-        if (correlationId == null
-                || !correlationId.startsWith(BybitEarnPrincipalTransferPairer.EARN_PRINCIPAL_CORRELATION_PREFIX)
-                || wallet == null
-                || !wallet.toUpperCase(Locale.ROOT).endsWith(":EARN")) {
+        if (wallet == null) {
             return flowPosition;
         }
-        if (hasEarnPrincipalCarryBasis(flowPosition)) {
-            return flowPosition;
+        String walletUpper = wallet.toUpperCase(Locale.ROOT);
+
+        // :EARN path — unchanged behaviour
+        String correlationId = transaction.getCorrelationId();
+        if (correlationId != null
+                && correlationId.startsWith(BybitEarnPrincipalTransferPairer.EARN_PRINCIPAL_CORRELATION_PREFIX)
+                && walletUpper.endsWith(":EARN")) {
+            if (hasEarnPrincipalCarryBasis(flowPosition)) {
+                return flowPosition;
+            }
+            String umbrellaWallet = wallet.substring(0, wallet.length() - ":EARN".length());
+            return replayState.position(umbrellaKeyFor(flowPosition.assetKey(), umbrellaWallet));
         }
-        String umbrellaWallet = wallet.substring(0, wallet.length() - ":EARN".length());
-        AssetKey flowKey = flowPosition.assetKey();
-        AssetKey umbrellaKey = new AssetKey(
+
+        // :FUND corridor path — sub-pattern A: FUND has zero inventory because the UTA→FUND
+        // internal step is not exposed by Bybit's API. Fall back to the umbrella BYBIT:UID
+        // position so the corridor proportional-carry override (ADR-019 Rule 1) fires.
+        // Sub-pattern B (FUND qty>0 but AVCO=0) is intentionally NOT covered here — it requires
+        // a separate fix to the UNIVERSAL_TRANSFER inbound carry path.
+        if (isCorridorTransfer
+                && walletUpper.endsWith(":FUND")
+                && !hasFundCarryInventory(flowPosition)) {
+            String umbrellaWallet = wallet.substring(0, wallet.length() - ":FUND".length());
+            return replayState.position(umbrellaKeyFor(flowPosition.assetKey(), umbrellaWallet));
+        }
+
+        return flowPosition;
+    }
+
+    /**
+     * Returns {@code true} when the FUND position holds non-zero quantity, meaning it has
+     * real inventory that should be drained instead of falling back to the umbrella.
+     * Deliberately checks quantity only (not basis), so sub-pattern B (qty>0, AVCO=0) is
+     * excluded and remains out of scope.
+     */
+    private static boolean hasFundCarryInventory(PositionState position) {
+        if (position == null) {
+            return false;
+        }
+        BigDecimal qty = position.quantity();
+        return qty != null && qty.signum() > 0;
+    }
+
+    private static AssetKey umbrellaKeyFor(AssetKey flowKey, String umbrellaWallet) {
+        return new AssetKey(
                 umbrellaWallet,
                 flowKey.networkId(),
                 flowKey.assetContract(),
                 flowKey.assetSymbol(),
                 flowKey.assetIdentity()
         );
-        return replayState.position(umbrellaKey);
     }
 
     private static boolean hasEarnPrincipalCarryBasis(PositionState position) {

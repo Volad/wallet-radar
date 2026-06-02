@@ -30,9 +30,35 @@ import java.util.Objects;
 public class BridgePairContinuityRepairService {
 
     private static final String BRIDGE_CORRELATION_PREFIX = "^bridge:";
+    private static final String COUNTERPARTY_TYPE_MISSING_REASON = "STAT_COUNTERPARTY_TYPE_MISSING";
+    private static final String FLOW_COUNTERPARTY_MISSING_REASON = "FLOW_COUNTERPARTY_MISSING";
 
     private final MongoOperations mongoOperations;
     private final NormalizedTransactionRepository normalizedTransactionRepository;
+
+    public int reconcilePairedInboundCounterparty(int batchSize) {
+        List<NormalizedTransaction> batch = loadInboundsMissingCounterparty(batchSize);
+        if (batch.isEmpty()) {
+            return 0;
+        }
+        Instant now = Instant.now();
+        List<NormalizedTransaction> dirty = new ArrayList<>();
+        int repaired = 0;
+        for (NormalizedTransaction inbound : batch) {
+            NormalizedTransaction outbound = findPairedOutbound(inbound);
+            if (outbound == null) {
+                continue;
+            }
+            if (repairInboundCounterparty(outbound, inbound, now, dirty)) {
+                repaired++;
+            }
+        }
+        if (!dirty.isEmpty()) {
+            normalizedTransactionRepository.saveAll(deduplicateById(dirty));
+            log.info("BRIDGE_PAIR_COUNTERPARTY_REPAIR batch={} repaired={} saved={}", batch.size(), repaired, dirty.size());
+        }
+        return repaired;
+    }
 
     public int reconcileLegacySealedPairs(int batchSize) {
         List<NormalizedTransaction> batch = loadLegacySealedOutbounds(batchSize);
@@ -52,6 +78,42 @@ public class BridgePairContinuityRepairService {
             log.info("BRIDGE_PAIR_CONTINUITY_REPAIR batch={} repaired={} saved={}", batch.size(), repaired, dirty.size());
         }
         return repaired;
+    }
+
+    private boolean repairInboundCounterparty(
+            NormalizedTransaction outbound,
+            NormalizedTransaction inbound,
+            Instant now,
+            List<NormalizedTransaction> dirty
+    ) {
+        boolean changed = BridgePairLinkSupport.applyLinkedBridgeCounterparty(outbound, inbound, now);
+        if (BridgePairLinkSupport.supportsPlainMoveBasis(outbound, inbound)
+                && !Boolean.TRUE.equals(inbound.getContinuityCandidate())) {
+            inbound.setContinuityCandidate(true);
+            changed = true;
+        }
+        if (BridgePairLinkSupport.retagPrincipalFlowsForBridgeContinuity(inbound, now)) {
+            changed = true;
+        }
+        if (inbound.getMissingDataReasons() != null) {
+            List<String> reasons = new ArrayList<>(inbound.getMissingDataReasons());
+            if (reasons.remove(COUNTERPARTY_TYPE_MISSING_REASON)
+                    | reasons.remove(FLOW_COUNTERPARTY_MISSING_REASON)) {
+                inbound.setMissingDataReasons(reasons);
+                changed = true;
+            }
+        }
+        NormalizedTransactionStatus targetStatus = PriceableFlowPolicy.statusAfterContinuityRetag(inbound);
+        if (inbound.getStatus() != targetStatus) {
+            inbound.setStatus(targetStatus);
+            changed = true;
+        }
+        if (!changed) {
+            return false;
+        }
+        inbound.setUpdatedAt(now);
+        dirty.add(inbound);
+        return true;
     }
 
     private boolean repairPair(NormalizedTransaction outbound, Instant now, List<NormalizedTransaction> dirty) {
@@ -93,6 +155,9 @@ public class BridgePairContinuityRepairService {
         if (BridgePairLinkSupport.retagPrincipalFlowsForBridgeContinuity(inbound, now)) {
             changed = true;
         }
+        if (BridgePairLinkSupport.applyLinkedBridgeCounterparty(outbound, inbound, now)) {
+            changed = true;
+        }
         if (changed) {
             NormalizedTransactionStatus targetStatus = PriceableFlowPolicy.statusAfterContinuityRetag(outbound);
             if (outbound.getStatus() != targetStatus) {
@@ -108,6 +173,72 @@ public class BridgePairContinuityRepairService {
             inbound.setUpdatedAt(now);
         }
         return changed;
+    }
+
+    private List<NormalizedTransaction> loadInboundsMissingCounterparty(int batchSize) {
+        Query query = Query.query(new Criteria().andOperator(
+                Criteria.where("type").is(NormalizedTransactionType.BRIDGE_IN),
+                Criteria.where("correlationId").regex(BRIDGE_CORRELATION_PREFIX),
+                Criteria.where("matchedCounterparty").exists(true).ne(null).ne(""),
+                Criteria.where("status").in(
+                        NormalizedTransactionStatus.NEEDS_REVIEW,
+                        NormalizedTransactionStatus.PENDING_STAT,
+                        NormalizedTransactionStatus.PENDING_PRICE
+                )
+        ));
+        query.with(Sort.by(
+                Sort.Order.asc("blockTimestamp"),
+                Sort.Order.asc("transactionIndex"),
+                Sort.Order.asc("_id")
+        ));
+        query.limit(Math.max(1, batchSize) * 4);
+        return mongoOperations.find(query, NormalizedTransaction.class).stream()
+                .filter(this::needsInboundCounterpartyRepair)
+                .limit(Math.max(1, batchSize))
+                .toList();
+    }
+
+    private boolean needsInboundCounterpartyRepair(NormalizedTransaction inbound) {
+        if (inbound == null) {
+            return false;
+        }
+        if (FlowCounterpartySupport.flowsMissingCounterparty(inbound)) {
+            return true;
+        }
+        if (inbound.getStatus() != NormalizedTransactionStatus.PENDING_PRICE) {
+            return false;
+        }
+        if (!Boolean.TRUE.equals(inbound.getContinuityCandidate())) {
+            return false;
+        }
+        List<String> reasons = inbound.getMissingDataReasons();
+        return reasons != null && (reasons.contains(COUNTERPARTY_TYPE_MISSING_REASON)
+                || reasons.contains(FLOW_COUNTERPARTY_MISSING_REASON));
+    }
+
+    private NormalizedTransaction findPairedOutbound(NormalizedTransaction inbound) {
+        if (inbound == null || blank(inbound.getCorrelationId())) {
+            return null;
+        }
+        Query query = Query.query(new Criteria().andOperator(
+                Criteria.where("correlationId").is(inbound.getCorrelationId()),
+                Criteria.where("type").is(NormalizedTransactionType.BRIDGE_OUT),
+                Criteria.where("_id").ne(inbound.getId())
+        ));
+        List<NormalizedTransaction> matches = mongoOperations.find(query, NormalizedTransaction.class);
+        if (matches.isEmpty()) {
+            return null;
+        }
+        if (matches.size() == 1) {
+            return matches.getFirst();
+        }
+        if (!blank(inbound.getMatchedCounterparty())) {
+            return matches.stream()
+                    .filter(candidate -> Objects.equals(candidate.getTxHash(), inbound.getMatchedCounterparty()))
+                    .findFirst()
+                    .orElse(matches.getFirst());
+        }
+        return matches.getFirst();
     }
 
     private NormalizedTransaction findPairedInbound(NormalizedTransaction outbound) {

@@ -6,6 +6,7 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionReposi
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.ingestion.pipeline.bybit.BybitInternalTransferPairer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.mongodb.core.MongoOperations;
@@ -65,6 +66,12 @@ public class BybitInternalTransferOrphanFallbackService {
             }
             String corr = tx.getCorrelationId();
             if (corr == null || corr.isBlank() || corrIdCount.getOrDefault(corr, 0) != 1) {
+                continue;
+            }
+            // Cross-UID universal transfers have their outbound partner excluded from accounting
+            // to prevent double-counting. The inbound leg correctly appears as a singleton here —
+            // do not demote it as an orphan.
+            if (corr.startsWith(BybitInternalTransferPairer.CROSS_UID_CORRELATION_PREFIX)) {
                 continue;
             }
             int sign = principalQuantitySign(tx);

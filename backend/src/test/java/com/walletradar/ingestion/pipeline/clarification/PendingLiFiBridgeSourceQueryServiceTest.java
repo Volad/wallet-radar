@@ -39,4 +39,21 @@ class PendingLiFiBridgeSourceQueryServiceTest {
         assertThat(queryString).contains("correlationId");
         assertThat(queryString).contains("matchedCounterparty");
     }
+
+    @Test
+    void loadAnchoredWithoutInboundBatchRestrictsToBridgeLiFiAnchors() {
+        when(mongoOperations.find(org.mockito.ArgumentMatchers.any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of());
+
+        PendingLiFiBridgeSourceQueryService service = new PendingLiFiBridgeSourceQueryService(mongoOperations);
+
+        service.loadAnchoredWithoutInboundBatch(25);
+
+        ArgumentCaptor<Query> queryCaptor = ArgumentCaptor.forClass(Query.class);
+        verify(mongoOperations).find(queryCaptor.capture(), eq(NormalizedTransaction.class));
+        String queryString = queryCaptor.getValue().getQueryObject().toString();
+        assertThat(queryString).contains("type=BRIDGE_OUT");
+        assertThat(queryString).contains("bridge:lifi:");
+        assertThat(queryString).contains("matchedCounterparty");
+    }
 }

@@ -168,7 +168,7 @@ class PriceableFlowPolicyTest {
     void bridgeInEthInboundRequiresMarketPrice() {
         NormalizedTransaction tx = new NormalizedTransaction();
         tx.setType(NormalizedTransactionType.BRIDGE_IN);
-        tx.setContinuityCandidate(true);
+        tx.setContinuityCandidate(false);
         tx.setCorrelationId("bridge:lifi:0xabc");
         NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
         flow.setRole(NormalizedLegRole.TRANSFER);
@@ -177,6 +177,21 @@ class PriceableFlowPolicyTest {
         tx.setFlows(new java.util.ArrayList<>(java.util.List.of(flow)));
 
         assertThat(PriceableFlowPolicy.requiresMarketPrice(tx, flow)).isTrue();
+    }
+
+    @Test
+    void bridgeInContinuityCandidateSkipsMarketPrice() {
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setType(NormalizedTransactionType.BRIDGE_IN);
+        tx.setContinuityCandidate(true);
+        tx.setCorrelationId("bridge:lifi:0xabc");
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(NormalizedLegRole.TRANSFER);
+        flow.setAssetSymbol("ETH");
+        flow.setQuantityDelta(new BigDecimal("0.5"));
+        tx.setFlows(new java.util.ArrayList<>(java.util.List.of(flow)));
+
+        assertThat(PriceableFlowPolicy.requiresMarketPrice(tx, flow)).isFalse();
     }
 
     @Test

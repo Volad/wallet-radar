@@ -54,12 +54,13 @@ public class BorrowReplayHandler {
         PositionSnapshot before = flowSupport.snapshot(position);
 
         BigDecimal qty = flow.getQuantityDelta().abs();
-        BigDecimal portfolioAvco = position.perWalletAvco() == null ? BigDecimal.ZERO : position.perWalletAvco();
-        if (portfolioAvco.signum() == 0
-                && flow.getUnitPriceUsd() != null
-                && flow.getUnitPriceUsd().signum() > 0) {
-            portfolioAvco = flow.getUnitPriceUsd();
-        }
+        // Borrowed assets are fresh acquisitions: always price at market, not at position AVCO.
+        // Using position AVCO inflates basis when the existing AVCO diverges from the borrow
+        // asset's market price (e.g., a USDC position with $1,532 AVCO from LP rebalancing
+        // would price a $800 USDC borrow at $1,225,570).
+        BigDecimal portfolioAvco = flow.getUnitPriceUsd() != null && flow.getUnitPriceUsd().signum() > 0
+                ? flow.getUnitPriceUsd()
+                : BigDecimal.ZERO;
         PriceSource avcoSource = flow.getPriceSource() == null ? PriceSource.UNKNOWN : flow.getPriceSource();
 
         BorrowLiabilityReplayContext liabilityContext = replayState.borrowLiabilityContext();

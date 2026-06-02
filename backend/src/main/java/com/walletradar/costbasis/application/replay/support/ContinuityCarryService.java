@@ -60,6 +60,19 @@ public class ContinuityCarryService {
         return bucket.take(requestedQuantity, assetKey);
     }
 
+    /**
+     * Drains the complete carry from the bucket regardless of quantity — used when the
+     * outbound receipt token has a different denomination from the inbound return asset
+     * (e.g., mevUSDC shares vs. USDC units). The full bucket basis is restored to the
+     * position even when the returned quantity is much smaller than the receipt quantity.
+     */
+    public CarryTransfer drainFullBucket(ContinuityBucket bucket, AssetKey assetKey) {
+        if (bucket == null || bucket.totalQuantity().signum() == 0) {
+            return null;
+        }
+        return bucket.drainAll(assetKey);
+    }
+
     public CarryTransfer takeReservedCarry(
             Map<FlowRef, CarryTransfer> reservedPassThroughCarries,
             FlowRef flowRef,

@@ -113,6 +113,18 @@ public class LiFiBridgePairLinkService {
                 changed++;
             }
         }
+        for (NormalizedTransaction candidate : pendingLiFiBridgeSourceQueryService.loadAnchoredWithoutInboundBatch(batchSize)) {
+            if (candidate == null || candidate.getId() == null) {
+                continue;
+            }
+            Optional<RawTransaction> rawOptional = rawTransactionRepository.findById(candidate.getId());
+            if (rawOptional.isEmpty()) {
+                continue;
+            }
+            if (linkInternal(rawOptional.get(), candidate, false)) {
+                changed++;
+            }
+        }
         return changed;
     }
 
@@ -199,10 +211,6 @@ public class LiFiBridgePairLinkService {
                 .findFirst();
         if (existingDestination.isPresent()) {
             return existingDestination;
-        }
-        if (!allowStatusLookup) {
-            seedSourceAnchorFromStatus(source, status);
-            return Optional.empty();
         }
         Optional<NormalizedTransaction> discoveredDestination = liFiReceivingTransactionDiscoveryService.findOrDiscover(status);
         if (discoveredDestination.isPresent()) {
@@ -330,6 +338,9 @@ public class LiFiBridgePairLinkService {
                 }
             }
             if (BridgePairLinkSupport.retagPrincipalFlowsForBridgeContinuity(destination, now)) {
+                destinationChanged = true;
+            }
+            if (BridgePairLinkSupport.applyLinkedBridgeCounterparty(source, destination, now)) {
                 destinationChanged = true;
             }
         }

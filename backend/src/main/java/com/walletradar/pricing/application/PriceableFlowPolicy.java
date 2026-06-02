@@ -222,9 +222,11 @@ public final class PriceableFlowPolicy {
                 || type == NormalizedTransactionType.LP_EXIT_PARTIAL
                 || type == NormalizedTransactionType.LP_EXIT_FINAL
                 || type == NormalizedTransactionType.LP_EXIT_SETTLEMENT
-                || type == NormalizedTransactionType.LENDING_WITHDRAW
-                || type == NormalizedTransactionType.BRIDGE_IN) {
+                || type == NormalizedTransactionType.LENDING_WITHDRAW) {
             return true;
+        }
+        if (type == NormalizedTransactionType.BRIDGE_IN) {
+            return !Boolean.TRUE.equals(transaction.getContinuityCandidate());
         }
         if (type == NormalizedTransactionType.EXTERNAL_TRANSFER_IN
                 && Boolean.TRUE.equals(transaction.getContinuityCandidate())) {

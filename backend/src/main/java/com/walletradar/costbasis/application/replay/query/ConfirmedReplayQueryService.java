@@ -29,7 +29,7 @@ public class ConfirmedReplayQueryService {
             .comparing(NormalizedTransaction::getBlockTimestamp, Comparator.nullsLast(Comparator.naturalOrder()))
             .thenComparing(NormalizedTransaction::getTransactionIndex, Comparator.nullsLast(Comparator.naturalOrder()))
             .thenComparingInt(ConfirmedReplayQueryService::bybitSameDayTransactionClassOrder)
-            .thenComparingInt(ConfirmedReplayQueryService::bybitContinuityFlowSign)
+            .thenComparingInt(ConfirmedReplayQueryService::corridorContinuityFlowSign)
             .thenComparing(NormalizedTransaction::getId, Comparator.nullsLast(Comparator.naturalOrder()));
 
     /**
@@ -57,9 +57,18 @@ public class ConfirmedReplayQueryService {
                 || tx.getType() == NormalizedTransactionType.DEX_ORDER_SETTLEMENT;
     }
 
-    private static int bybitContinuityFlowSign(NormalizedTransaction tx) {
-        if (tx == null || tx.getFlows() == null
-                || tx.getSource() != NormalizedTransactionSource.BYBIT) {
+    // B-2: also orders on-chain BYBIT-CORRIDOR: INTERNAL_TRANSFER corridors outbound-first
+    // to prevent transient double-count when destination CARRY_IN lands before source CARRY_OUT.
+    private static int corridorContinuityFlowSign(NormalizedTransaction tx) {
+        if (tx == null || tx.getFlows() == null) {
+            return 0;
+        }
+        boolean isBybit = tx.getSource() == NormalizedTransactionSource.BYBIT;
+        boolean isOnChainCorridor = !isBybit
+                && tx.getType() == NormalizedTransactionType.INTERNAL_TRANSFER
+                && tx.getCorrelationId() != null
+                && tx.getCorrelationId().startsWith("BYBIT-CORRIDOR:");
+        if (!isBybit && !isOnChainCorridor) {
             return 0;
         }
         return switch (tx.getType()) {

@@ -1,6 +1,7 @@
 package com.walletradar.costbasis.application.replay.dispatch;
 
 import com.walletradar.accounting.support.AccountingAssetIdentitySupport;
+import com.walletradar.ingestion.pipeline.bybit.BybitInternalTransferPairer;
 import com.walletradar.costbasis.application.replay.handler.AsyncSpotOrderReplayHandler;
 import com.walletradar.costbasis.application.replay.handler.BorrowReplayHandler;
 import com.walletradar.costbasis.application.replay.handler.EulerLoopReplayHandler;
@@ -289,12 +290,17 @@ public class ReplayDispatcher {
             return;
         }
 
-        AssetKey assetKey = assetSupport.assetKey(transaction, flow);
+        AssetKey assetKey = flow.getRole() == NormalizedLegRole.SELL
+                ? assetSupport.resolveSellAssetKey(transaction, flow, replayState.positions().asMap())
+                : assetSupport.assetKey(transaction, flow);
         PositionState position = replayState.position(assetKey);
         position.setLastEventTimestamp(flowSupport.laterOf(position.lastEventTimestamp(), transaction.getBlockTimestamp()));
         PositionSnapshot before = flowSupport.snapshot(position);
 
         if (isSponsoredGasIn(transaction, flow)) {
+            // ERC-4337 Paymaster gas rebates are pure dust (no material economic substance).
+            // Restore the tiny qty with zero cost so position qty is consistent, but emit
+            // GAS_ONLY — not ACQUIRE — so no cost-basis delta enters AVCO computation.
             flowSupport.applySponsoredGasIn(flow, position);
             replayState.ledgerPointCollector().record(
                     transaction,
@@ -303,7 +309,7 @@ public class ReplayDispatcher {
                     position.assetKey(),
                     before,
                     position,
-                    AssetLedgerPoint.BasisEffect.ACQUIRE
+                    AssetLedgerPoint.BasisEffect.GAS_ONLY
             );
             return;
         }
@@ -529,6 +535,12 @@ public class ReplayDispatcher {
         if (transaction == null
                 || transaction.getSource() != NormalizedTransactionSource.BYBIT
                 || transaction.getType() != NormalizedTransactionType.INTERNAL_TRANSFER) {
+            return false;
+        }
+        // Cross-UID transfers must never be treated as self-transfers — they move basis
+        // between different Bybit UIDs and require carry propagation.
+        String corrId = transaction.getCorrelationId();
+        if (corrId != null && corrId.startsWith(BybitInternalTransferPairer.CROSS_UID_CORRELATION_PREFIX)) {
             return false;
         }
         String normalizedWallet = AccountingAssetIdentitySupport.positionWalletAddress(transaction);

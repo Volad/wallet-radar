@@ -23,6 +23,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.HexFormat;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -34,6 +35,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  * Cycle/6 A2 + Cycle/12: Post-normalization pairer for Bybit {@code INTERNAL_TRANSFER} legs.
@@ -66,6 +68,7 @@ public class BybitInternalTransferPairer {
     private static final Duration MAX_PAIR_DRIFT = Duration.ofHours(2);
     private static final Duration BROAD_PAIR_DRIFT = Duration.ofMinutes(10);
     private static final Duration SAME_SIGN_MIRROR_WINDOW = Duration.ofMinutes(10);
+    private static final Pattern EVM_HEX_ADDRESS = Pattern.compile("^0x[a-fA-F0-9]{40}$");
 
     private final MongoOperations mongoOperations;
     private final NormalizedTransactionRepository normalizedTransactionRepository;
@@ -105,7 +108,7 @@ public class BybitInternalTransferPairer {
                 )
         ));
         List<NormalizedTransaction> candidates = mongoOperations.find(query, NormalizedTransaction.class);
-        if (candidates.size() < 2) {
+        if (candidates.isEmpty()) {
             return 0;
         }
 
@@ -157,6 +160,93 @@ public class BybitInternalTransferPairer {
             rewrites += 2;
         }
 
+        // Second pass: orphaned inbound where the outbound partner is excluded from accounting.
+        // The outbound was excluded to avoid double-counting with FUNDING_HISTORY records, but the
+        // inbound still needs continuityCandidate=true and the FUNDING_HISTORY outbound on the
+        // source UID needs to be linked so carry propagates correctly.
+        //
+        // Note: pairCrossUidUniversalTransfers() is called both during per-wallet normalization
+        // and at the end of linking. On the first call the FUNDING_HISTORY records for the source
+        // UID may not yet be in the DB. The loner gets its corrId, but the FUNDING_HISTORY outbound
+        // is missed. On subsequent calls the loner already has a bybit-cross-uid-v1: corrId. We
+        // therefore must NOT skip those loners — instead reuse the existing corrId to link any
+        // still-unlinked FUNDING_HISTORY outbound on the source UID.
+        //
+        // Pass 2a: collect all (loner, excludedPartner) pairs so we know source UIDs up front.
+        record SecondPassEntry(String uuid, NormalizedTransaction loner, NormalizedTransaction excludedPartner, boolean lonerAlreadyLinked) {}
+        List<SecondPassEntry> secondPassEntries = new ArrayList<>();
+        for (Map.Entry<String, List<NormalizedTransaction>> entry : groupedByTransferId.entrySet()) {
+            List<NormalizedTransaction> group = entry.getValue();
+            if (group.size() != 1) {
+                continue;
+            }
+            NormalizedTransaction loner = group.getFirst();
+            if (principalQuantitySign(loner) <= 0) {
+                continue; // only process inbound (positive qty) orphans
+            }
+            String existingCorrId = loner.getCorrelationId();
+            boolean lonerAlreadyLinked = existingCorrId != null && !existingCorrId.isBlank();
+            if (lonerAlreadyLinked && !existingCorrId.startsWith(CROSS_UID_CORRELATION_PREFIX)) {
+                // Paired by a different mechanism (first pass or another service) — skip entirely.
+                continue;
+            }
+            NormalizedTransaction excludedPartner = findExcludedCrossUidPartner(entry.getKey(), loner);
+            if (excludedPartner == null) {
+                continue;
+            }
+            secondPassEntries.add(new SecondPassEntry(entry.getKey(), loner, excludedPartner, lonerAlreadyLinked));
+        }
+
+        // Pass 2b: bulk pre-load unpaired FUNDING_HISTORY records for all source UIDs.
+        Set<String> sourceUids = secondPassEntries.stream()
+                .map(e -> extractBybitUid(e.excludedPartner().getWalletAddress()))
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        Map<String, List<NormalizedTransaction>> fundingByUid = loadFundingHistoryCandidates(sourceUids);
+
+        // Pass 2c: link each inbound and, if found, the corresponding FUNDING_HISTORY outbound.
+        for (SecondPassEntry e : secondPassEntries) {
+            NormalizedTransaction loner = e.loner();
+            NormalizedTransaction excludedPartner = e.excludedPartner();
+            // Reuse an existing cross-UID corrId so the loner and FUNDING_HISTORY share the same key.
+            String corrId = e.lonerAlreadyLinked()
+                    ? loner.getCorrelationId()
+                    : CROSS_UID_CORRELATION_PREFIX + e.uuid();
+
+            if (!e.lonerAlreadyLinked()) {
+                loner.setCorrelationId(corrId);
+                loner.setContinuityCandidate(true);
+                loner.setMatchedCounterparty(excludedPartner.getWalletAddress());
+                loner.setType(NormalizedTransactionType.INTERNAL_TRANSFER);
+                demoteBuySellToTransfer(loner);
+                loner.setUpdatedAt(now);
+                dirty.add(loner);
+                rewrites++;
+            }
+
+            NormalizedTransaction fundingOutbound =
+                    findFundingHistoryOutbound(loner, excludedPartner, fundingByUid);
+            if (fundingOutbound != null
+                    && (fundingOutbound.getCorrelationId() == null
+                        || fundingOutbound.getCorrelationId().isBlank())) {
+                // continuityCandidate=true is required on the outbound so that
+                // ReplayPendingTransferKeyFactory routes it to the "corr-family:" pending-transfer
+                // queue, which is the same queue the inbound CARRY_IN reads from. Without it the
+                // outbound would use the "corr:" key and the inbound would find an empty pool.
+                // excludedFromAccounting is left untouched (it only gates balance queries, not
+                // replay). The isBybitSelfTransfer guard in ReplayDispatcher already returns false
+                // for bybit-cross-uid-v1: corrIds so the CARRY_OUT is emitted correctly.
+                fundingOutbound.setCorrelationId(corrId);
+                fundingOutbound.setContinuityCandidate(true);
+                fundingOutbound.setMatchedCounterparty(loner.getWalletAddress());
+                fundingOutbound.setType(NormalizedTransactionType.INTERNAL_TRANSFER);
+                demoteBuySellToTransfer(fundingOutbound);
+                fundingOutbound.setUpdatedAt(now);
+                dirty.add(fundingOutbound);
+                rewrites++;
+            }
+        }
+
         if (!dirty.isEmpty()) {
             normalizedTransactionRepository.saveAll(dirty);
             log.info(
@@ -166,6 +256,112 @@ public class BybitInternalTransferPairer {
             );
         }
         return rewrites;
+    }
+
+    /**
+     * Bulk-loads unpaired non-{@code uni_trans_} records for the given Bybit UIDs so that
+     * {@link #findFundingHistoryOutbound} can match without a per-orphan Mongo query.
+     */
+    private Map<String, List<NormalizedTransaction>> loadFundingHistoryCandidates(Set<String> uids) {
+        if (uids.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        Criteria[] uidCriteria = uids.stream()
+                .map(uid -> Criteria.where("walletAddress").regex("^BYBIT:" + Pattern.quote(uid)))
+                .toArray(Criteria[]::new);
+        Criteria walletCriteria = uidCriteria.length == 1
+                ? uidCriteria[0]
+                : new Criteria().orOperator(uidCriteria);
+        Query query = Query.query(new Criteria().andOperator(
+                Criteria.where("source").is(NormalizedTransactionSource.BYBIT),
+                walletCriteria,
+                Criteria.where("_id").not().regex("uni_trans_"),
+                new Criteria().orOperator(
+                        Criteria.where("correlationId").exists(false),
+                        Criteria.where("correlationId").is(null),
+                        Criteria.where("correlationId").is("")
+                )
+        ));
+        return mongoOperations.find(query, NormalizedTransaction.class).stream()
+                .collect(Collectors.groupingBy(tx -> {
+                    String uid = extractBybitUid(tx.getWalletAddress());
+                    return uid != null ? uid : "";
+                }));
+    }
+
+    /**
+     * Finds the FUNDING_HISTORY outbound on the source UID that corresponds to the given inbound.
+     * Matches on: same source UID as {@code excludedPartner}, same principal asset symbol,
+     * quantity within 5%, and timestamp within ±60 s.
+     */
+    private NormalizedTransaction findFundingHistoryOutbound(
+            NormalizedTransaction inbound,
+            NormalizedTransaction excludedPartner,
+            Map<String, List<NormalizedTransaction>> fundingByUid
+    ) {
+        String sourceUid = extractBybitUid(excludedPartner.getWalletAddress());
+        if (sourceUid == null) {
+            return null;
+        }
+        Instant ts = inbound.getBlockTimestamp();
+        BigDecimal inboundQty = principalQuantity(inbound);
+        String assetSymbol = principalAssetSymbol(inbound);
+        if (ts == null || inboundQty == null || inboundQty.signum() <= 0 || assetSymbol == null) {
+            return null;
+        }
+        List<NormalizedTransaction> candidates =
+                fundingByUid.getOrDefault(sourceUid, Collections.emptyList());
+        return candidates.stream()
+                .filter(tx -> principalQuantitySign(tx) < 0)
+                .filter(tx -> assetSymbol.equals(principalAssetSymbol(tx)))
+                .filter(tx -> {
+                    BigDecimal qty = principalQuantity(tx);
+                    return qty != null && inboundQty.subtract(qty.abs()).abs()
+                            .compareTo(inboundQty.multiply(new BigDecimal("0.05"))) <= 0;
+                })
+                .filter(tx -> {
+                    Instant txTs = tx.getBlockTimestamp();
+                    return txTs != null
+                            && !txTs.isBefore(ts.minusSeconds(60))
+                            && !txTs.isAfter(ts.plusSeconds(60));
+                })
+                .findFirst()
+                .orElse(null);
+    }
+
+    private static String principalAssetSymbol(NormalizedTransaction tx) {
+        if (tx == null || tx.getFlows() == null) {
+            return null;
+        }
+        return tx.getFlows().stream()
+                .filter(f -> f.getQuantityDelta() != null && f.getQuantityDelta().signum() != 0)
+                .max(Comparator.comparing(f -> f.getQuantityDelta().abs()))
+                .map(NormalizedTransaction.Flow::getAssetSymbol)
+                .orElse(null);
+    }
+
+    private NormalizedTransaction findExcludedCrossUidPartner(String uuid, NormalizedTransaction loner) {
+        if (uuid == null || loner == null) {
+            return null;
+        }
+        String lonerUid = extractBybitUid(loner.getWalletAddress());
+        if (lonerUid == null) {
+            return null;
+        }
+        Query query = Query.query(new Criteria().andOperator(
+                Criteria.where("source").is(NormalizedTransactionSource.BYBIT),
+                Criteria.where("excludedFromAccounting").is(true),
+                Criteria.where("_id").regex("uni_trans_" + Pattern.quote(uuid))
+        ));
+        List<NormalizedTransaction> candidates = mongoOperations.find(query, NormalizedTransaction.class);
+        return candidates.stream()
+                .filter(tx -> {
+                    String uid = extractBybitUid(tx.getWalletAddress());
+                    return uid != null && !uid.equals(lonerUid);
+                })
+                .filter(tx -> principalQuantitySign(tx) < 0)
+                .findFirst()
+                .orElse(null);
     }
 
     private static String extractTransferUuid(String id) {
@@ -427,6 +623,9 @@ public class BybitInternalTransferPairer {
             NormalizedTransaction keeper = docs.get(0);
             for (int i = 1; i < docs.size(); i++) {
                 NormalizedTransaction mirror = docs.get(i);
+                if (isFa001OnChainWithdrawAnchor(mirror)) {
+                    continue;
+                }
                 if (keeper.getBlockTimestamp() == null || mirror.getBlockTimestamp() == null) {
                     continue;
                 }
@@ -914,7 +1113,48 @@ public class BybitInternalTransferPairer {
         return isOppositeQty(leftQty, rightQty, BROAD_QTY_TOLERANCE_PCT);
     }
 
+    /**
+     * FA-001 Bybit FUNDING_HISTORY withdraw anchors that share an on-chain txHash are corridor
+     * legs, not stream mirrors — never demote via {@link #dedupSameSignMirrors()}.
+     */
+    static boolean isFa001OnChainWithdrawAnchor(NormalizedTransaction tx) {
+        if (tx == null || tx.getTxHash() == null || tx.getTxHash().isBlank() || tx.getNetworkId() == null) {
+            return false;
+        }
+        if (tx.getType() != NormalizedTransactionType.INTERNAL_TRANSFER) {
+            return false;
+        }
+        if (principalQuantitySign(tx) >= 0) {
+            return false;
+        }
+        if (hasEvmMatchedCounterparty(tx.getMatchedCounterparty())) {
+            return true;
+        }
+        if (tx.getFlows() == null) {
+            return false;
+        }
+        for (NormalizedTransaction.Flow flow : tx.getFlows()) {
+            if (flow == null || flow.getRole() == NormalizedLegRole.FEE) {
+                continue;
+            }
+            String counterparty = flow.getCounterpartyAddress();
+            if (counterparty != null
+                    && EVM_HEX_ADDRESS.matcher(counterparty.trim()).matches()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean hasEvmMatchedCounterparty(String matchedCounterparty) {
+        return matchedCounterparty != null
+                && EVM_HEX_ADDRESS.matcher(matchedCounterparty.trim()).matches();
+    }
+
     private static String sameSignMirrorSignature(NormalizedTransaction tx) {
+        if (isFa001OnChainWithdrawAnchor(tx)) {
+            return null;
+        }
         String broad = broadQtySignature(tx);
         if (broad == null || tx.getWalletAddress() == null) {
             return null;

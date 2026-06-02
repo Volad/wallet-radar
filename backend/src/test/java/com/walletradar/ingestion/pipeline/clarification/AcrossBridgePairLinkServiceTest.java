@@ -185,6 +185,131 @@ class AcrossBridgePairLinkServiceTest {
         });
     }
 
+    @Test
+    @DisplayName("pair with 18-second time delta is now accepted after MAX_TIME_DELTA widened to 60s")
+    void pairWithTimeDelta18sIsAcceptedAfterThresholdWidened() {
+        NormalizedTransaction source = bridgeOut(
+                "0xf39e4ftest",
+                NetworkId.ARBITRUM,
+                "ETH",
+                "-0.001"
+        );
+        NormalizedTransaction destination = bridgeIn(
+                "0xa7058btest",
+                NetworkId.BASE,
+                "ETH",
+                "0.00099960",
+                source.getBlockTimestamp().plusSeconds(18)
+        );
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(destination));
+
+        boolean changed = service.link(source);
+
+        assertThat(changed).isTrue();
+        assertThat(source.getContinuityCandidate()).isTrue();
+        assertThat(destination.getContinuityCandidate()).isTrue();
+    }
+
+    @Test
+    @DisplayName("pair with 21% qty diff is now accepted after MAX_RELATIVE_QTY_DIFF widened to 0.25")
+    void pairWithQtyDiff21PercentIsAcceptedAfterThresholdWidened() {
+        NormalizedTransaction source = bridgeOut(
+                "0xee474ftest",
+                NetworkId.ARBITRUM,
+                "ETH",
+                "-0.0005"
+        );
+        NormalizedTransaction destination = bridgeIn(
+                "0xa20e3ftest",
+                NetworkId.BASE,
+                "ETH",
+                "0.000395",
+                source.getBlockTimestamp().plusSeconds(2)
+        );
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(destination));
+
+        boolean changed = service.link(source);
+
+        assertThat(changed).isTrue();
+        assertThat(source.getContinuityCandidate()).isTrue();
+    }
+
+    @Test
+    @DisplayName("pair with 90-second time delta is still rejected — guard remains")
+    void pairWithTimeDelta90sIsStillRejected() {
+        NormalizedTransaction source = bridgeOut(
+                "0xrejecttime",
+                NetworkId.ARBITRUM,
+                "ETH",
+                "-0.001"
+        );
+        NormalizedTransaction destination = bridgeIn(
+                "0xrejecttimedest",
+                NetworkId.BASE,
+                "ETH",
+                "0.001",
+                source.getBlockTimestamp().plusSeconds(90)
+        );
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(destination));
+
+        boolean changed = service.link(source);
+
+        assertThat(changed).isFalse();
+    }
+
+    @Test
+    @DisplayName("pair with 30% qty diff is still rejected — guard remains")
+    void pairWithQtyDiff30PercentIsStillRejected() {
+        NormalizedTransaction source = bridgeOut(
+                "0xrejectqty",
+                NetworkId.ARBITRUM,
+                "ETH",
+                "-0.001"
+        );
+        NormalizedTransaction destination = bridgeIn(
+                "0xrejectqtydest",
+                NetworkId.BASE,
+                "ETH",
+                "0.0007",
+                source.getBlockTimestamp().plusSeconds(2)
+        );
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(destination));
+
+        boolean changed = service.link(source);
+
+        assertThat(changed).isFalse();
+    }
+
+    @Test
+    @DisplayName("orphan Across source without destination receives correlationId during reconciliation sweep")
+    void orphanAcrossSourceWithoutDestinationReceivesCorrelationIdDuringReconciliationSweep() {
+        NormalizedTransaction source = bridgeOut(
+                "0x258ed5c30165032d02467ca36c3f94e716bc16765d0f20ef92c71b32c353569a",
+                NetworkId.ARBITRUM,
+                "ETH",
+                "-0.0003"
+        );
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(source))
+                .thenReturn(List.of());
+
+        int changed = service.reconcileOutstandingSources(500);
+
+        assertThat(changed).isEqualTo(1);
+        verify(normalizedTransactionRepository).save(source);
+        assertThat(source.getCorrelationId()).isEqualTo("bridge:across:" + source.getTxHash());
+        assertThat(source.getMatchedCounterparty()).isNull();
+    }
+
     private NormalizedTransaction bridgeOut(String txHash, NetworkId networkId, String symbol, String qty) {
         NormalizedTransaction transaction = base(txHash, networkId, NormalizedTransactionType.BRIDGE_OUT, Instant.parse("2026-03-31T10:15:00Z"));
         transaction.setProtocolName("Across");

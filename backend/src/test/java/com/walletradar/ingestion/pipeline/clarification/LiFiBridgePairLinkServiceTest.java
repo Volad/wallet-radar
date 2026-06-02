@@ -234,6 +234,57 @@ class LiFiBridgePairLinkServiceTest {
     }
 
     @Test
+    @DisplayName("anchored LI.FI source sweep retries receiving-tx discovery without refetching status")
+    void anchoredLiFiSourceSweepRetriesReceivingTxDiscoveryWithoutRefetchingStatus() {
+        RawTransaction sourceRaw = new RawTransaction();
+        sourceRaw.setId("0xsource:ARBITRUM:" + WALLET);
+        sourceRaw.setTxHash("0xsource");
+        sourceRaw.setNetworkId(NetworkId.ARBITRUM.name());
+        sourceRaw.setWalletAddress(WALLET);
+        sourceRaw.setRawData(new Document("input", "0x"));
+        sourceRaw.setClarificationEvidence(new Document("protocolStatus", new Document("provider", "LIFI")
+                .append("sendingTxHash", "0xsource")
+                .append("receivingTxHash", "0xdestination")
+                .append("receivingNetworkId", NetworkId.OPTIMISM.name())
+                .append("status", "DONE")
+                .append("substatus", "COMPLETED")));
+        NormalizedTransaction source = bridgeOut(
+                "0xsource",
+                NetworkId.ARBITRUM,
+                "ETH",
+                "0x0000000000000000000000000000000000000000",
+                "-0.000221"
+        );
+        source.setCorrelationId("bridge:lifi:0xsource");
+        source.setMatchedCounterparty("0xdestination");
+        NormalizedTransaction destination = externalTransferIn(
+                "0xdestination",
+                NetworkId.OPTIMISM,
+                "ETH",
+                "0x0000000000000000000000000000000000000000",
+                "0.000220"
+        );
+
+        when(pendingLiFiBridgeSourceQueryService.loadNextBatch(25)).thenReturn(List.of());
+        when(pendingLiFiBridgeSourceQueryService.loadAnchoredWithoutInboundBatch(25)).thenReturn(List.of(source));
+        when(rawTransactionRepository.findById(source.getId())).thenReturn(Optional.of(sourceRaw));
+        when(normalizedTransactionRepository.findAllByTxHashAndNetworkIdAndSource(
+                "0xdestination",
+                NetworkId.OPTIMISM,
+                NormalizedTransactionSource.ON_CHAIN
+        )).thenReturn(List.of());
+        when(liFiReceivingTransactionDiscoveryService.findOrDiscover(any())).thenReturn(Optional.of(destination));
+
+        int changed = service.reconcileOutstandingSources(25);
+
+        assertThat(changed).isEqualTo(1);
+        verify(liFiStatusGateway, never()).fetchBridgeStatus(any());
+        verify(liFiReceivingTransactionDiscoveryService).findOrDiscover(any());
+        assertThat(destination.getType()).isEqualTo(NormalizedTransactionType.BRIDGE_IN);
+        assertThat(destination.getMatchedCounterparty()).isEqualTo(source.getTxHash());
+    }
+
+    @Test
     @DisplayName("LI.FI source sweep records bounded status miss when local matching cannot resolve")
     void liFiSourceSweepRecordsBoundedStatusMissWhenLocalMatchingCannotResolve() {
         RawTransaction sourceRaw = sourceRawTransaction(
@@ -1032,6 +1083,55 @@ class LiFiBridgePairLinkServiceTest {
         transaction.setFlows(List.of(flows));
         transaction.setMissingDataReasons(List.of());
         return transaction;
+    }
+
+    @Test
+    @DisplayName("multi-flow LI.FI BRIDGE_OUT does not retag secondary positive-qty flow as CARRY_IN on paired OUT leg")
+    void multiFlowLiFiBridgeOutDoesNotProduceCarryInOnSecondaryPositiveFlow() {
+        RawTransaction sourceRaw = sourceRawTransaction(
+                "0x6c5bd905efe5f9c4b35110c9269e333acddab0ac051dcc418ec68ed954e41784",
+                NetworkId.ARBITRUM
+        );
+        NormalizedTransaction source = tx(
+                "0x6c5bd905efe5f9c4b35110c9269e333acddab0ac051dcc418ec68ed954e41784",
+                NetworkId.ARBITRUM,
+                NormalizedTransactionType.BRIDGE_OUT,
+                flow(NormalizedLegRole.TRANSFER, "USDC", "0xaf88d065e77c8cc2239327c5edb3a432268e5831", "-10"),
+                flow(NormalizedLegRole.BUY, "ETH", null, "0.000025")
+        );
+        NormalizedTransaction destination = externalTransferInForWallet(
+                "0x75d595a7a2e59b2c4f7f70f5114c56d7b271dbd639c09fdc9e7d078fd9b162e4",
+                NetworkId.OPTIMISM,
+                WALLET,
+                "USDC",
+                "0x0b2c639c533813f4aa9d7837caf62653d097ff85",
+                "9.99"
+        );
+
+        when(liFiStatusGateway.fetchBridgeStatus(source.getTxHash()))
+                .thenReturn(Optional.of(new LiFiBridgeStatus(
+                        source.getTxHash(),
+                        destination.getTxHash(),
+                        NetworkId.OPTIMISM,
+                        "DONE",
+                        "COMPLETED"
+                )));
+        when(normalizedTransactionRepository.findAllByTxHashAndNetworkIdAndSource(
+                destination.getTxHash(),
+                NetworkId.OPTIMISM,
+                NormalizedTransactionSource.ON_CHAIN
+        )).thenReturn(List.of(destination));
+
+        service.link(sourceRaw, source);
+
+        assertThat(source.getContinuityCandidate()).isTrue();
+        assertThat(source.getMatchedCounterparty()).isEqualTo(destination.getTxHash());
+        assertThat(source.getFlows())
+                .extracting(NormalizedTransaction.Flow::getRole, NormalizedTransaction.Flow::getAssetSymbol)
+                .containsExactly(
+                        tuple(NormalizedLegRole.TRANSFER, "USDC"),
+                        tuple(NormalizedLegRole.BUY, "ETH")
+                );
     }
 
     private NormalizedTransaction.Flow flow(

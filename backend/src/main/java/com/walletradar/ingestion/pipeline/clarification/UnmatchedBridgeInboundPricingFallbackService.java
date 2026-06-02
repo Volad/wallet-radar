@@ -123,13 +123,23 @@ public class UnmatchedBridgeInboundPricingFallbackService {
         int upstreamPricedSkipped = 0;
         int unpricedPrincipalSkipped = 0;
         int pairedMoveBasisSkipped = 0;
+        int shortfallInboundRepriced = 0;
         for (NormalizedTransaction outbound : outbounds) {
             NormalizedTransaction.Flow principal = selectPrincipalOutbound(outbound);
             if (principal == null || PriceableFlowPolicy.hasResolvedPrice(principal)) {
                 unpricedPrincipalSkipped++;
                 continue;
             }
-            if (hasPairedMoveBasisInbound(outbound)) {
+            NormalizedTransaction pairedInbound = loadPairedMoveBasisInbound(outbound);
+            if (pairedInbound != null) {
+                if (!hasPricedUpstreamInflow(outbound, principal, lookback)) {
+                    if (clearContinuityAndRepriceInbound(pairedInbound, now)) {
+                        dirty.add(pairedInbound);
+                        shortfallInboundRepriced++;
+                        log.info("BRIDGE_SHORTFALL_INBOUND_REPRICE outbound={} inbound={}",
+                                outbound.getId(), pairedInbound.getId());
+                    }
+                }
                 pairedMoveBasisSkipped++;
                 continue;
             }
@@ -146,11 +156,13 @@ public class UnmatchedBridgeInboundPricingFallbackService {
         }
         log.info(
                 "UNMATCHED_BRIDGE_OUTBOUND_REPRICE candidates={} upstream_priced_skipped={} "
-                        + "unpriced_principal_skipped={} paired_move_basis_skipped={} repriced={}",
+                        + "unpriced_principal_skipped={} paired_move_basis_skipped={} "
+                        + "shortfall_inbound_repriced={} repriced={}",
                 outbounds.size(),
                 upstreamPricedSkipped,
                 unpricedPrincipalSkipped,
                 pairedMoveBasisSkipped,
+                shortfallInboundRepriced,
                 dirty.size()
         );
         return dirty.size();
@@ -160,8 +172,17 @@ public class UnmatchedBridgeInboundPricingFallbackService {
      * Cycle/14: do not demote paired bridge OUT legs that should carry basis to a linked IN leg.
      */
     private boolean hasPairedMoveBasisInbound(NormalizedTransaction outbound) {
+        return loadPairedMoveBasisInbound(outbound) != null;
+    }
+
+    /**
+     * Returns the paired BRIDGE_IN (or EXTERNAL_TRANSFER_IN) for the given BRIDGE_OUT using the
+     * same selection priority as {@link #hasPairedMoveBasisInbound}, or {@code null} if none exists
+     * or the pair does not support plain move-basis carry.
+     */
+    private NormalizedTransaction loadPairedMoveBasisInbound(NormalizedTransaction outbound) {
         if (outbound == null || outbound.getCorrelationId() == null || outbound.getCorrelationId().isBlank()) {
-            return false;
+            return null;
         }
         Query query = Query.query(new Criteria().andOperator(
                 Criteria.where("correlationId").is(outbound.getCorrelationId()),
@@ -173,7 +194,7 @@ public class UnmatchedBridgeInboundPricingFallbackService {
         ));
         List<NormalizedTransaction> inbounds = mongoOperations.find(query, NormalizedTransaction.class);
         if (inbounds.isEmpty()) {
-            return false;
+            return null;
         }
         NormalizedTransaction inbound = inbounds.size() == 1
                 ? inbounds.getFirst()
@@ -182,7 +203,7 @@ public class UnmatchedBridgeInboundPricingFallbackService {
                                 && outbound.getMatchedCounterparty().equalsIgnoreCase(candidate.getTxHash()))
                         .findFirst()
                         .orElse(inbounds.getFirst());
-        return BridgePairLinkSupport.supportsPlainMoveBasis(outbound, inbound);
+        return BridgePairLinkSupport.supportsPlainMoveBasis(outbound, inbound) ? inbound : null;
     }
 
     private int resolveUpstreamLookbackHours() {

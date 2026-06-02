@@ -1287,6 +1287,66 @@ class AssetLedgerQueryServiceTest {
                 .isLessThan(new BigDecimal("1790"));
     }
 
+    @Test
+    void sessionFamilyLedgerTimelineCarriesForwardAvcoOnEarnWithdraw() {
+        UserSession session = bybitSession("session-earn-carry", "33625378");
+
+        AssetLedgerPoint priorBuy = bybitVenuePoint("10", "BYBIT:33625378", "FAMILY:ETH", "ETH", "1.0", "1.0", "2873");
+        priorBuy.setBasisEffect(AssetLedgerPoint.BasisEffect.ACQUIRE);
+        priorBuy.setNormalizedType("BUY");
+        priorBuy.setCostBasisDeltaUsd(new BigDecimal("2873"));
+        priorBuy.setQuantityDelta(new BigDecimal("1.0"));
+        priorBuy.setTotalCostBasisAfterUsd(new BigDecimal("2873"));
+
+        AssetLedgerPoint earnOut = bybitVenuePoint("11", "BYBIT:33625378:EARN", "FAMILY:ETH", "ETH", "0", "0", "2873");
+        earnOut.setNormalizedTransactionId("11");
+        earnOut.setBasisEffect(AssetLedgerPoint.BasisEffect.REALLOCATE_OUT);
+        earnOut.setNormalizedType("LENDING_WITHDRAW");
+        earnOut.setQuantityDelta(new BigDecimal("-0.151"));
+        earnOut.setQuantityAfter(BigDecimal.ZERO);
+        earnOut.setBasisBackedQuantityAfter(BigDecimal.ZERO);
+        earnOut.setTotalCostBasisAfterUsd(BigDecimal.ZERO);
+        earnOut.setAvcoAfterUsd(null);
+        earnOut.setCostBasisDeltaUsd(new BigDecimal("-434"));
+        earnOut.setBlockTimestamp(Instant.parse("2026-04-05T10:01:00Z"));
+
+        AssetLedgerPoint fundIn = bybitVenuePoint("11", "BYBIT:33625378:FUND", "FAMILY:ETH", "ETH", "0.151", "0.151", "2873");
+        fundIn.setNormalizedTransactionId("11");
+        fundIn.setBasisEffect(AssetLedgerPoint.BasisEffect.REALLOCATE_IN);
+        fundIn.setNormalizedType("LENDING_WITHDRAW");
+        fundIn.setQuantityDelta(new BigDecimal("0.151"));
+        fundIn.setTotalCostBasisAfterUsd(new BigDecimal("434"));
+        fundIn.setAvcoAfterUsd(null);
+        fundIn.setCostBasisDeltaUsd(new BigDecimal("434"));
+        fundIn.setBlockTimestamp(Instant.parse("2026-04-05T10:01:00Z"));
+
+        when(userSessionRepository.findById("session-earn-carry")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "ACCOUNTING_UNIVERSE:session-earn-carry",
+                List.of("BYBIT:33625378", "BYBIT:33625378:FUND", "BYBIT:33625378:EARN"),
+                List.of("BYBIT:33625378", "BYBIT:33625378:FUND", "BYBIT:33625378:EARN")
+        ));
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-earn-carry",
+                "FAMILY:ETH"
+        )).thenReturn(List.of(priorBuy, earnOut, fundIn));
+        when(normalizedTransactionRepository.findAllById(List.of("10", "11")))
+                .thenReturn(List.of(
+                        normalized("10", "Bybit", "ETH", "BUY", "1.0", "2873"),
+                        normalized("11", "Bybit", "ETH", "TRANSFER", "-0.151", null)
+                ));
+        lenient().when(bybitLiveBalanceService.getUmbrellaBalances("bybit-int-33625378"))
+                .thenReturn(Map.of("ETH", new BigDecimal("1.0")));
+
+        AssetLedgerQueryService.SessionAssetLedgerView view = service()
+                .findSessionFamilyLedger("session-earn-carry", "FAMILY:ETH")
+                .orElseThrow();
+
+        assertThat(view.timeline()).hasSize(2);
+        assertThat(view.timeline().get(1).avcoKind()).isEqualTo(TimelineAvcoAuthority.KIND_CARRIED_FORWARD);
+        assertThat(view.timeline().get(1).avcoAfterUsd()).isEqualByComparingTo("2873");
+    }
+
 
     private UserSession bybitSession(String sessionId, String uid) {
         UserSession session = new UserSession();

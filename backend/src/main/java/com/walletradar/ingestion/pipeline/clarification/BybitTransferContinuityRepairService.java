@@ -9,6 +9,7 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionReposi
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.ingestion.pipeline.bybit.BybitInternalTransferPairer;
 import com.walletradar.pricing.application.PriceableFlowPolicy;
 import com.walletradar.session.application.AccountingUniverseService;
 import lombok.RequiredArgsConstructor;
@@ -372,6 +373,23 @@ public class BybitTransferContinuityRepairService {
                 && principalFlows(transaction).size() == 1;
     }
 
+    private boolean isRepairableExcludedBybitLeg(NormalizedTransaction bybit) {
+        if (bybit == null || !Boolean.TRUE.equals(bybit.getExcludedFromAccounting())) {
+            return true;
+        }
+        String reason = bybit.getAccountingExclusionReason();
+        if (EXTERNAL_CUSTODY_UNTRACKED_VENUE.equals(reason)) {
+            return true;
+        }
+        if (hasBybitCorridorCorrelation(bybit.getCorrelationId())) {
+            return true;
+        }
+        // B-ZERO-3: same-sign mirror demotion runs after FA-001 pairing in linking; allow re-pair
+        // when the Bybit FH withdraw anchor shares the on-chain txHash.
+        return BybitInternalTransferPairer.SAME_SIGN_MIRROR_REASON.equals(reason)
+                && !blank(bybit.getTxHash());
+    }
+
     private boolean isPairable(
             NormalizedTransaction onChain,
             NormalizedTransaction bybit
@@ -388,7 +406,7 @@ public class BybitTransferContinuityRepairService {
             return false;
         }
         if (Boolean.TRUE.equals(bybit.getExcludedFromAccounting())
-                && !EXTERNAL_CUSTODY_UNTRACKED_VENUE.equals(bybit.getAccountingExclusionReason())) {
+                && !isRepairableExcludedBybitLeg(bybit)) {
             return false;
         }
         if (!blank(bybit.getMatchedCounterparty())

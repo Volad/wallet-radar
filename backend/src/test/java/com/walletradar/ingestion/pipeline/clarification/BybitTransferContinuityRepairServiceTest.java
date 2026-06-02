@@ -137,6 +137,36 @@ class BybitTransferContinuityRepairServiceTest {
     }
 
     @Test
+    @DisplayName("same-sign mirror excluded Bybit corridor leg re-pairs after internal pairer demotion")
+    void sameSignMirrorExcludedCorridorLegRePairsAfterInternalPairerDemotion() {
+        NormalizedTransaction onChain = onChainRow();
+        onChain.setStatus(NormalizedTransactionStatus.CONFIRMED);
+        NormalizedTransaction bybit = bybitRow();
+        bybit.setStatus(NormalizedTransactionStatus.CONFIRMED);
+        bybit.setCorrelationId("BYBIT-CORRIDOR:ARBITRUM:" + TX_HASH);
+        bybit.setContinuityCandidate(false);
+        bybit.setMatchedCounterparty(WALLET);
+        bybit.setExcludedFromAccounting(true);
+        bybit.setAccountingExclusionReason(
+                com.walletradar.ingestion.pipeline.bybit.BybitInternalTransferPairer.SAME_SIGN_MIRROR_REASON
+        );
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class))).thenReturn(List.of(onChain));
+        when(normalizedTransactionRepository.findAllByTxHashAndNetworkIdAndSource(
+                TX_HASH,
+                NetworkId.ARBITRUM,
+                NormalizedTransactionSource.BYBIT
+        )).thenReturn(List.of(bybit));
+
+        int changed = service.reconcileOutstandingPairs(50);
+
+        assertThat(changed).isEqualTo(1);
+        assertThat(bybit.getExcludedFromAccounting()).isFalse();
+        assertThat(bybit.getAccountingExclusionReason()).isNull();
+        assertThat(bybit.getContinuityCandidate()).isTrue();
+    }
+
+    @Test
     @DisplayName("one-wei dust transfer without Bybit row is ignored")
     void oneWeiDustTransferWithoutBybitRowIsIgnored() {
         NormalizedTransaction onChain = onChainRow();
@@ -192,6 +222,9 @@ class BybitTransferContinuityRepairServiceTest {
         bybit.setExcludedFromAccounting(true);
         bybit.setAccountingExclusionReason("BYBIT_TRANSFER_SHADOW_ROW");
         bybit.setMissingDataReasons(new java.util.ArrayList<>(List.of("BYBIT_TRANSFER_SHADOW_ROW")));
+        // Clear the BYBIT-CORRIDOR correlationId so hasBybitCorridorCorrelation returns false
+        // and isRepairableExcludedBybitLeg correctly returns false for this unrelated reason.
+        bybit.setCorrelationId(null);
 
         when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class))).thenReturn(List.of(onChain));
         when(normalizedTransactionRepository.findAllByTxHashAndNetworkIdAndSource(

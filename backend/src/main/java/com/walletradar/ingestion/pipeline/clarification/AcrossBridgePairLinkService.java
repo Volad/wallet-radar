@@ -36,8 +36,8 @@ import java.util.Optional;
 @RequiredArgsConstructor
 public class AcrossBridgePairLinkService {
 
-    private static final Duration MAX_TIME_DELTA = Duration.ofSeconds(15);
-    private static final BigDecimal MAX_RELATIVE_QTY_DIFF = new BigDecimal("0.005");
+    private static final Duration MAX_TIME_DELTA = Duration.ofSeconds(60);
+    private static final BigDecimal MAX_RELATIVE_QTY_DIFF = new BigDecimal("0.25");
     private static final int CANDIDATE_LIMIT = 12;
 
     private final MongoOperations mongoOperations;
@@ -47,6 +47,8 @@ public class AcrossBridgePairLinkService {
         int changed = 0;
         for (NormalizedTransaction source : loadOutstandingSources(batchSize)) {
             if (link(source)) {
+                changed++;
+            } else if (seedOrphanSourceCorrelation(source)) {
                 changed++;
             }
         }
@@ -197,6 +199,16 @@ public class AcrossBridgePairLinkService {
                 .compareTo(MAX_RELATIVE_QTY_DIFF) <= 0;
     }
 
+    private boolean seedOrphanSourceCorrelation(NormalizedTransaction source) {
+        if (!isAcrossSourceCandidate(source) || hasText(source.getCorrelationId())) {
+            return false;
+        }
+        source.setCorrelationId(correlationId(source.getTxHash()));
+        source.setUpdatedAt(Instant.now());
+        normalizedTransactionRepository.save(source);
+        return true;
+    }
+
     private boolean materializePair(NormalizedTransaction source, NormalizedTransaction destination) {
         String correlationId = hasText(source.getCorrelationId()) ? source.getCorrelationId() : correlationId(source.getTxHash());
         boolean continuityCandidate = BridgePairLinkSupport.supportsPlainMoveBasis(source, destination);
@@ -250,6 +262,9 @@ public class AcrossBridgePairLinkService {
                 }
             }
             if (BridgePairLinkSupport.retagPrincipalFlowsForBridgeContinuity(destination, now)) {
+                destinationChanged = true;
+            }
+            if (BridgePairLinkSupport.applyLinkedBridgeCounterparty(source, destination, now)) {
                 destinationChanged = true;
             }
         }

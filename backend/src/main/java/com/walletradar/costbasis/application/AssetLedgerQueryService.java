@@ -88,11 +88,16 @@ public class AssetLedgerQueryService {
         List<TimelineEntryView> timeline = new ArrayList<>();
         List<EventOverlayView> overlays = new ArrayList<>();
         for (DisplayEventAccumulator accumulator : displayEvents) {
+            BigDecimal coveredQuantityBefore = state.coveredQuantity();
             state.apply(accumulator);
             TimelineAvcoAuthority.Resolution avcoResolution = TimelineAvcoAuthority.resolve(
                     familyIdentity,
                     accumulator.memberPoints(),
-                    medianSpotAvco
+                    medianSpotAvco,
+                    coveredQuantityBefore,
+                    state.coveredQuantity(),
+                    state.totalCostBasisUsd,
+                    lastAvcoByAssetIdentity
             );
             TimelineAvcoAuthority.updateSeries(lastAvcoByAssetIdentity, avcoResolution);
             timeline.add(new TimelineEntryView(

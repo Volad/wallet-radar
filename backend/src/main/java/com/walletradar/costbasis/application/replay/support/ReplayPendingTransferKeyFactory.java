@@ -244,6 +244,18 @@ public class ReplayPendingTransferKeyFactory {
                 || wrapperCompositeBucketIdentity(transaction) != null;
     }
 
+    /**
+     * True when this transaction uses a wrapper composite bucket — a 2-leg receipt-style
+     * transaction (VAULT_DEPOSIT/WITHDRAW, STAKING_DEPOSIT/WITHDRAW, etc.) where the receipt
+     * token has a different denomination from the deposited/returned asset. On VAULT_WITHDRAW,
+     * the inbound restored quantity (e.g., 1628 USDC) is incompatible with the bucket quantity
+     * in receipt-token units (e.g., 1,598,068,583 mevUSDC shares) — proportional slicing
+     * yields near-zero basis. Full drain is required instead.
+     */
+    public boolean usesWrapperCompositeBucket(NormalizedTransaction transaction) {
+        return wrapperCompositeBucketIdentity(transaction) != null;
+    }
+
     /** Receipt token continuity identity for composite {@code lp:} bucket routing, if any. */
     public String lpCompositeReceiptIdentity(NormalizedTransaction transaction) {
         return lpCompositeBucketIdentity(transaction);

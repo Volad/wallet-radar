@@ -23,9 +23,11 @@ import java.util.Objects;
 public final class TimelineAvcoAuthority {
 
     public static final String KIND_PRIMARY_FLOW = "PRIMARY_FLOW";
+    public static final String KIND_CARRIED_FORWARD = "CARRIED_FORWARD";
     public static final String KIND_UNAVAILABLE = "UNAVAILABLE";
 
     private static final MathContext MC = MathContext.DECIMAL128;
+    private static final BigDecimal COVERED_QTY_TOLERANCE = new BigDecimal("0.00000001");
     private static final BigDecimal OUTLIER_MULTIPLIER = new BigDecimal("10");
     private static final BigDecimal LOW_COVERAGE_RATIO = new BigDecimal("0.01");
     private static final BigDecimal HIGH_UNCOVERED_RATIO = new BigDecimal("0.50");
@@ -69,17 +71,64 @@ public final class TimelineAvcoAuthority {
             List<AssetLedgerPoint> memberPoints,
             BigDecimal medianSpotAvcoUsd
     ) {
+        return resolve(
+                familyIdentity,
+                memberPoints,
+                medianSpotAvcoUsd,
+                null,
+                null,
+                null,
+                null
+        );
+    }
+
+    public static Resolution resolve(
+            String familyIdentity,
+            List<AssetLedgerPoint> memberPoints,
+            BigDecimal medianSpotAvcoUsd,
+            BigDecimal aggregatedCoveredQuantityBefore,
+            BigDecimal aggregatedCoveredQuantityAfter,
+            BigDecimal aggregatedTotalCostBasisUsdAfter,
+            Map<String, BigDecimal> lastAvcoByAssetIdentity
+    ) {
         AssetLedgerPoint authoritative = selectAuthoritativePoint(familyIdentity, memberPoints, medianSpotAvcoUsd);
-        if (authoritative == null || authoritative.getAvcoAfterUsd() == null) {
-            return new Resolution(null, KIND_UNAVAILABLE, authoritative == null ? null : authoritative.getAccountingAssetIdentity());
+        if (authoritative != null
+                && authoritative.getAvcoAfterUsd() != null
+                && authoritative.getAvcoAfterUsd().signum() > 0
+                && !isAvcoOutlier(authoritative, medianSpotAvcoUsd)) {
+            return new Resolution(
+                    authoritative.getAvcoAfterUsd(),
+                    KIND_PRIMARY_FLOW,
+                    authoritative.getAccountingAssetIdentity()
+            );
         }
-        if (isAvcoOutlier(authoritative, medianSpotAvcoUsd)) {
-            return new Resolution(null, KIND_UNAVAILABLE, authoritative.getAccountingAssetIdentity());
+        if (canCarryForward(
+                aggregatedCoveredQuantityBefore,
+                aggregatedCoveredQuantityAfter,
+                aggregatedTotalCostBasisUsdAfter
+        )) {
+            String accountingAssetIdentity = selectCarryForwardIdentity(
+                    familyIdentity,
+                    memberPoints,
+                    authoritative,
+                    lastAvcoByAssetIdentity
+            );
+            BigDecimal carriedAvco = resolveCarriedForwardAvco(
+                    familyIdentity,
+                    memberPoints,
+                    accountingAssetIdentity,
+                    lastAvcoByAssetIdentity,
+                    aggregatedCoveredQuantityAfter,
+                    aggregatedTotalCostBasisUsdAfter
+            );
+            if (carriedAvco != null && carriedAvco.signum() > 0) {
+                return new Resolution(carriedAvco, KIND_CARRIED_FORWARD, accountingAssetIdentity);
+            }
         }
         return new Resolution(
-                authoritative.getAvcoAfterUsd(),
-                KIND_PRIMARY_FLOW,
-                authoritative.getAccountingAssetIdentity()
+                null,
+                KIND_UNAVAILABLE,
+                authoritative == null ? null : authoritative.getAccountingAssetIdentity()
         );
     }
 
@@ -141,7 +190,7 @@ public final class TimelineAvcoAuthority {
             return Integer.MIN_VALUE;
         }
         if (point.getAvcoAfterUsd() == null || point.getAvcoAfterUsd().signum() <= 0) {
-            return Integer.MIN_VALUE + 1;
+            return Integer.MIN_VALUE + 1 + bybitSubWalletPreference(point.getWalletAddress());
         }
         int score = 1_000;
         if (isSpotNativeSymbol(familyIdentity, point.getAssetSymbol())) {
@@ -162,6 +211,123 @@ public final class TimelineAvcoAuthority {
             score += 50;
         }
         return score;
+    }
+
+    private static int bybitSubWalletPreference(String walletAddress) {
+        if (walletAddress == null || walletAddress.isBlank()) {
+            return 0;
+        }
+        String normalized = walletAddress.trim().toUpperCase(Locale.ROOT);
+        if (!normalized.startsWith("BYBIT:")) {
+            return 0;
+        }
+        if (normalized.endsWith(":EARN")) {
+            return 0;
+        }
+        if (normalized.endsWith(":FUND") || normalized.endsWith(":UTA")) {
+            return 20;
+        }
+        if (normalized.split(":").length == 2) {
+            return 15;
+        }
+        return 0;
+    }
+
+    private static boolean canCarryForward(
+            BigDecimal coveredBefore,
+            BigDecimal coveredAfter,
+            BigDecimal totalCostBasisAfter
+    ) {
+        if (coveredAfter == null || coveredAfter.signum() <= 0 || totalCostBasisAfter == null) {
+            return false;
+        }
+        if (coveredBefore == null) {
+            return true;
+        }
+        return coveredAfter.subtract(coveredBefore, MC).abs().compareTo(COVERED_QTY_TOLERANCE) <= 0;
+    }
+
+    private static String selectCarryForwardIdentity(
+            String familyIdentity,
+            List<AssetLedgerPoint> memberPoints,
+            AssetLedgerPoint authoritative,
+            Map<String, BigDecimal> lastAvcoByAssetIdentity
+    ) {
+        if (authoritative != null && authoritative.getAccountingAssetIdentity() != null) {
+            return authoritative.getAccountingAssetIdentity();
+        }
+        if (memberPoints == null || memberPoints.isEmpty()) {
+            return null;
+        }
+        return memberPoints.stream()
+                .filter(point -> AccountingAssetFamilySupport.includeInSpotFamilyTimelineAggregation(
+                        familyIdentity,
+                        point.getAssetSymbol()
+                ))
+                .filter(point -> point.getAccountingAssetIdentity() != null && !point.getAccountingAssetIdentity().isBlank())
+                .max(Comparator
+                        .comparingInt((AssetLedgerPoint point) -> lastAvcoSeriesScore(lastAvcoByAssetIdentity, point))
+                        .thenComparingInt(point -> bybitSubWalletPreference(point.getWalletAddress()))
+                        .thenComparing(
+                                AssetLedgerPoint::getReplaySequence,
+                                Comparator.nullsLast(Comparator.naturalOrder())
+                        ))
+                .map(AssetLedgerPoint::getAccountingAssetIdentity)
+                .orElse(null);
+    }
+
+    private static int lastAvcoSeriesScore(
+            Map<String, BigDecimal> lastAvcoByAssetIdentity,
+            AssetLedgerPoint point
+    ) {
+        if (lastAvcoByAssetIdentity == null || point == null || point.getAccountingAssetIdentity() == null) {
+            return 0;
+        }
+        BigDecimal lastAvco = lastAvcoByAssetIdentity.get(point.getAccountingAssetIdentity());
+        return lastAvco != null && lastAvco.signum() > 0 ? 1 : 0;
+    }
+
+    private static BigDecimal resolveCarriedForwardAvco(
+            String familyIdentity,
+            List<AssetLedgerPoint> memberPoints,
+            String accountingAssetIdentity,
+            Map<String, BigDecimal> lastAvcoByAssetIdentity,
+            BigDecimal aggregatedCoveredQuantityAfter,
+            BigDecimal aggregatedTotalCostBasisUsdAfter
+    ) {
+        if (accountingAssetIdentity != null
+                && lastAvcoByAssetIdentity != null
+                && !accountingAssetIdentity.isBlank()) {
+            BigDecimal seriesAvco = lastAvcoByAssetIdentity.get(accountingAssetIdentity);
+            if (seriesAvco != null && seriesAvco.signum() > 0) {
+                return seriesAvco;
+            }
+        }
+        if (memberPoints != null && lastAvcoByAssetIdentity != null) {
+            for (AssetLedgerPoint point : memberPoints) {
+                if (!AccountingAssetFamilySupport.includeInSpotFamilyTimelineAggregation(
+                        familyIdentity,
+                        point.getAssetSymbol()
+                )) {
+                    continue;
+                }
+                String identity = point.getAccountingAssetIdentity();
+                if (identity == null || identity.isBlank()) {
+                    continue;
+                }
+                BigDecimal seriesAvco = lastAvcoByAssetIdentity.get(identity);
+                if (seriesAvco != null && seriesAvco.signum() > 0) {
+                    return seriesAvco;
+                }
+            }
+        }
+        if (aggregatedCoveredQuantityAfter != null
+                && aggregatedCoveredQuantityAfter.signum() > 0
+                && aggregatedTotalCostBasisUsdAfter != null
+                && aggregatedTotalCostBasisUsdAfter.signum() > 0) {
+            return aggregatedTotalCostBasisUsdAfter.divide(aggregatedCoveredQuantityAfter, MC);
+        }
+        return null;
     }
 
     private static boolean isSpotNativeSymbol(String familyIdentity, String assetSymbol) {

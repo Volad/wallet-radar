@@ -213,6 +213,70 @@ class UnmatchedBridgeInboundPricingFallbackServiceTest {
     }
 
     @Test
+    @DisplayName("shortfall: paired bridge IN is repriced when source wallet had no upstream priced inflow")
+    void shortfallPairedBridgeInRepricedWhenSourceHasNoBasis() {
+        NormalizedTransaction outbound = bridgeOut(
+                "bridge:lifi:0xshortfall",
+                "USDC",
+                "-100",
+                Instant.parse("2026-04-27T05:48:47Z")
+        );
+        NormalizedTransaction pairedInbound = bridgeIn("bridge:lifi:0xshortfall", "USDC", "100");
+        stubbedOutbounds = List.of(outbound);
+        stubbedInbounds = List.of(pairedInbound);
+        stubbedUpstream = List.of();
+
+        int processed = service.reconcileUnsupportedOutbounds();
+
+        assertThat(processed).isEqualTo(1);
+        assertThat(pairedInbound.getContinuityCandidate()).isFalse();
+        assertThat(pairedInbound.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        assertThat(pairedInbound.getConfirmedAt()).isNull();
+        assertThat(pairedInbound.getFlows()).anySatisfy(flow ->
+                assertThat(flow.getRole()).isEqualTo(NormalizedLegRole.BUY));
+
+        assertThat(outbound.getStatus()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(outbound.getContinuityCandidate()).isTrue();
+        assertThat(outbound.getFlows()).allSatisfy(flow ->
+                assertThat(flow.getRole()).isNotEqualTo(NormalizedLegRole.SELL));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<NormalizedTransaction>> savedCaptor = ArgumentCaptor.forClass(List.class);
+        verify(normalizedTransactionRepository).saveAll(savedCaptor.capture());
+        assertThat(savedCaptor.getValue()).containsExactly(pairedInbound);
+    }
+
+    @Test
+    @DisplayName("shortfall: paired bridge IN is not repriced when source wallet has a priced upstream inflow")
+    void shortfallPairedBridgeInNotRepricedWhenSourceHasBasis() {
+        NormalizedTransaction outbound = bridgeOut(
+                "bridge:lifi:0xshortfall2",
+                "USDC",
+                "-100",
+                Instant.parse("2026-04-27T05:48:47Z")
+        );
+        NormalizedTransaction pairedInbound = bridgeIn("bridge:lifi:0xshortfall2", "USDC", "100");
+        NormalizedTransaction upstream = vaultWithdrawInflow(
+                "USDC",
+                "200",
+                new BigDecimal("1.00"),
+                Instant.parse("2026-04-27T03:00:00Z")
+        );
+        stubbedOutbounds = List.of(outbound);
+        stubbedInbounds = List.of(pairedInbound);
+        stubbedUpstream = List.of(upstream);
+
+        int processed = service.reconcileUnsupportedOutbounds();
+
+        assertThat(processed).isZero();
+        assertThat(pairedInbound.getContinuityCandidate()).isTrue();
+        assertThat(pairedInbound.getStatus()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(pairedInbound.getFlows()).allSatisfy(flow ->
+                assertThat(flow.getRole()).isEqualTo(NormalizedLegRole.TRANSFER));
+        verify(normalizedTransactionRepository, never()).saveAll(any());
+    }
+
+    @Test
     @DisplayName("reprice preserves correlationId and fee leg on bridge out")
     void repricePreservesCorrelationIdAndFee() {
         NormalizedTransaction outbound = bridgeOut(

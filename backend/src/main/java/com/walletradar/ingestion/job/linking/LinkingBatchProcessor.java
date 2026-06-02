@@ -160,6 +160,10 @@ class LinkingBatchProcessor {
         processed += bridgePairContinuityRepairService.reconcileLegacySealedPairs(batchSize);
         progressHeartbeat.run();
 
+        // B-ZERO-5: discovered LI.FI/Across IN legs can miss flow counterparty metadata.
+        processed += bridgePairContinuityRepairService.reconcilePairedInboundCounterparty(batchSize);
+        progressHeartbeat.run();
+
         // Cycle/14: same-tx on-chain INTERNAL_TRANSFER orphans across session wallets.
         processed += onChainInternalTransferPairRepairService.reconcileOrphanSameTxPairs(batchSize);
         progressHeartbeat.run();

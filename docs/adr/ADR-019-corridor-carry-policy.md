@@ -19,20 +19,29 @@ Evidence:
 
 ## Decision
 
-### Rule: Corridor `CARRY_IN` must use the outbound-slice per-unit AVCO
+### Rule 1 — Corridor `CARRY_IN` must use the proportional outbound cost basis
 
-For any corridor transfer (`CARRY_OUT` / `CARRY_IN` pair with a Bybit venue source):
+For any corridor transfer (`CARRY_OUT` / `CARRY_IN` pair with a `BYBIT-CORRIDOR:` correlation):
 
-1. **Compute inbound AVCO as:** `carryBasis / movedQty`, where `carryBasis = movedQty × outboundSliceAvco`.
-2. **Outbound slice AVCO** is the `avcoBeforeUsd` of the source venue bucket at the moment of the `CARRY_OUT` leg — **not** a post-move residual or pool average.
-3. The residual source-bucket AVCO after `CARRY_OUT` is allowed to differ (it reflects remaining lot composition), but must not influence the inbound rate.
-4. Inbound `avcoAfterUsd` = `outboundSliceAvco` ± rounding (within 0.1%).
+1. **Compute corridor carry basis as:** `preDrainTotalBasis × (movedQty / preDrainTotalQty)`, capped at `preDrainTotalBasis`.
+2. **Do NOT use** `movedQty × perWalletAvco` — `perWalletAvco` divides by covered-quantity only and is inflated when the position has `uncoveredQuantity > 0` (e.g., after an LP_EXIT with pool shortfall). This would inject phantom basis into the corridor destination.
+3. **Outbound slice AVCO** (for the `avcoAfterUsd` of the inbound ledger point) is `carryBasis / movedQty` — the per-unit rate implied by the proportional formula.
+4. The residual source-bucket AVCO after `CARRY_OUT` may differ and must not influence the inbound rate.
 
-### Implementation target
+**Amendment note** (2026-05-30, B-3 fix): Original Rule 1 stated `carryBasis = movedQty × outboundSliceAvco` where `outboundSliceAvco = position.perWalletAvco()`. This was incorrect when `uncoveredQuantity > 0`; the formula above replaces it.
 
-- `ContinuityCarryService` — add `outboundSliceAvco` parameter; use it for inbound rate when set.
-- `ReplayTransferClassifier` / `BybitVenueInternalReplayHandler` — populate `outboundSliceAvco` from the `CARRY_OUT` leg's `avcoBeforeUsd` before dispatching `CARRY_IN`.
-- `PassThroughCorridorPlan` — wire the rate through the plan if used.
+### Rule 2 — On-chain corridor ordering: CARRY_OUT before CARRY_IN
+
+For on-chain `BYBIT-CORRIDOR:` `INTERNAL_TRANSFER` corridors involving two wallets on the same network (source wallet → destination wallet sharing the same `txHash`):
+
+- The replay must sequence the source-wallet `CARRY_OUT` before the destination-wallet `CARRY_IN`.
+- This is enforced by the `corridorContinuityFlowSign` tiebreaker in `ConfirmedReplayQueryService`, which applies to both Bybit-source and on-chain-source corridor transactions.
+- Rationale: if the inbound is processed first, the family AVCO temporarily double-counts the moved quantity at zero basis, creating spurious chart spikes.
+
+### Implementation targets
+
+- `TransferReplayHandler` — replace P0-C block with proportional `preDrainTotalBasis × (movedQty / preDrainTotalQty)` formula; capture `preDrainTotalBasis` and `preDrainTotalQty` after `carrySource` is assigned, before `removeTransferCarry()`.
+- `ConfirmedReplayQueryService` — rename `bybitContinuityFlowSign` → `corridorContinuityFlowSign`; extend to on-chain `BYBIT-CORRIDOR:` INTERNAL_TRANSFER.
 
 ### Dedup guard
 
@@ -48,7 +57,7 @@ After corridor carry, the 3.06 ETH is on-chain as WETH/AMANWETH. A `PortfolioAvc
 ## Acceptance
 
 ```javascript
-// After rebuild:
+// Original ETH-C1 check:
 db.asset_ledger_points.findOne({
   accountingUniverseId: "df5e69cc-a0c0-4910-8b7d-74488fa266e2",
   "txHash": /a5e755a68349/i,
@@ -56,6 +65,17 @@ db.asset_ledger_points.findOne({
   basisEffect: "CARRY_IN"
 });
 // expect: avcoAfterUsd >= 1714, basisDeltaUsd ~= 5240+
+
+// B-3 fix check (Sep 10 Mantle→Bybit cmETH):
+db.asset_ledger_points.findOne({
+  normalizedTransactionId: /BYBIT-33625378:FUNDING_HISTORY:f9cfb4eb/,
+  basisEffect: "CARRY_IN"
+});
+// expect: costBasisDeltaUsd ~= 1898.79 (was 2517.25)
+
+// B-3 fix check (Across bridge ETH):
+db.asset_ledger_points.findOne({replaySequence: 619, basisEffect: "CARRY_IN"});
+// expect: costBasisDeltaUsd ~= 7.68 (was 11.06)
 ```
 
 ## Related

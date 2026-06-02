@@ -6,8 +6,11 @@ import com.walletradar.accounting.support.BridgeAssetFamilySupport;
 import com.walletradar.accounting.support.LpReceiptSymbolSupport;
 import com.walletradar.costbasis.application.replay.model.AssetKey;
 import com.walletradar.costbasis.application.replay.model.IndexedFlow;
+import com.walletradar.costbasis.application.replay.model.PositionState;
 import com.walletradar.domain.common.PriceSource;
+import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.pricing.domain.CanonicalAssetCatalog;
 import org.springframework.stereotype.Component;
@@ -115,6 +118,115 @@ public class ReplayAssetSupport {
                 assetSymbol,
                 assetIdentity
         );
+    }
+
+    /**
+     * Bybit EXECUTION_SPOT / SWAP SELL rows often normalize on {@code :UTA} while inventory
+     * remains on {@code :FUND} or {@code :EARN} from earn-principal / corridor paths.
+     * Route disposals to the sub-wallet position that actually holds quantity.
+     */
+    public AssetKey resolveSellAssetKey(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow,
+            Map<AssetKey, PositionState> positions
+    ) {
+        AssetKey defaultKey = assetKey(transaction, flow);
+        if (!isBybitSpotSell(transaction, flow) || positions == null || positions.isEmpty()) {
+            return defaultKey;
+        }
+        BigDecimal requestedQuantity = flow.getQuantityDelta().abs();
+        PositionState defaultPosition = positions.get(defaultKey);
+        if (defaultPosition != null && coversSell(defaultPosition, requestedQuantity)) {
+            return defaultKey;
+        }
+        String umbrellaRoot = bybitUmbrellaRoot(transaction.getWalletAddress(), flow.getAccountRef());
+        AssetKey bestKey = defaultKey;
+        BigDecimal bestQuantity = defaultPosition == null ? BigDecimal.ZERO : zeroIfNull(defaultPosition.quantity());
+        for (Map.Entry<AssetKey, PositionState> entry : positions.entrySet()) {
+            AssetKey candidateKey = entry.getKey();
+            if (!Objects.equals(candidateKey.assetIdentity(), defaultKey.assetIdentity())) {
+                continue;
+            }
+            if (!sameBybitUmbrella(candidateKey.walletAddress(), umbrellaRoot)) {
+                continue;
+            }
+            BigDecimal candidateQuantity = zeroIfNull(entry.getValue().quantity());
+            if (candidateQuantity.compareTo(bestQuantity) > 0) {
+                bestQuantity = candidateQuantity;
+                bestKey = candidateKey;
+            }
+        }
+        if (bestQuantity.signum() > 0 && coversSell(positions.get(bestKey), requestedQuantity)) {
+            return bestKey;
+        }
+        if (bestQuantity.signum() > 0 && (defaultPosition == null || defaultPosition.quantity().signum() == 0)) {
+            return bestKey;
+        }
+        return defaultKey;
+    }
+
+    private static boolean isBybitSpotSell(NormalizedTransaction transaction, NormalizedTransaction.Flow flow) {
+        if (transaction == null
+                || flow == null
+                || transaction.getSource() != NormalizedTransactionSource.BYBIT
+                || flow.getRole() != NormalizedLegRole.SELL
+                || flow.getQuantityDelta() == null
+                || flow.getQuantityDelta().signum() >= 0) {
+            return false;
+        }
+        if (transaction.getType() == NormalizedTransactionType.SWAP) {
+            return true;
+        }
+        String txId = transaction.getId();
+        return txId != null && txId.contains(":EXECUTION_SPOT:");
+    }
+
+    private static boolean coversSell(PositionState position, BigDecimal requestedQuantity) {
+        return position != null
+                && position.quantity() != null
+                && position.quantity().compareTo(requestedQuantity) >= 0;
+    }
+
+    private static String bybitUmbrellaRoot(String walletAddress, String accountRef) {
+        if (walletAddress != null && !walletAddress.isBlank()) {
+            String root = extractBybitUmbrellaRoot(walletAddress);
+            if (root != null) {
+                return root;
+            }
+        }
+        if (accountRef != null && !accountRef.isBlank()) {
+            return extractBybitUmbrellaRoot(accountRef);
+        }
+        return null;
+    }
+
+    private static String extractBybitUmbrellaRoot(String walletAddress) {
+        if (walletAddress == null || walletAddress.isBlank()) {
+            return null;
+        }
+        String normalized = walletAddress.trim();
+        if (!normalized.toUpperCase(Locale.ROOT).startsWith("BYBIT:")) {
+            return null;
+        }
+        String[] parts = normalized.split(":", -1);
+        if (parts.length < 2) {
+            return null;
+        }
+        return parts[0] + ":" + parts[1];
+    }
+
+    private static boolean sameBybitUmbrella(String walletAddress, String umbrellaRoot) {
+        if (walletAddress == null || umbrellaRoot == null) {
+            return false;
+        }
+        if (walletAddress.equalsIgnoreCase(umbrellaRoot)) {
+            return true;
+        }
+        return walletAddress.toUpperCase(Locale.ROOT).startsWith(umbrellaRoot.toUpperCase(Locale.ROOT) + ":");
+    }
+
+    private static BigDecimal zeroIfNull(BigDecimal value) {
+        return value == null ? BigDecimal.ZERO : value;
     }
 
     /**

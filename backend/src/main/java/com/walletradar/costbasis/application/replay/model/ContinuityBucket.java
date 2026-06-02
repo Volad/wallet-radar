@@ -48,6 +48,24 @@ public final class ContinuityBucket {
         return quantity;
     }
 
+    public BigDecimal totalQuantity() {
+        return quantity;
+    }
+
+    /**
+     * Drains the entire bucket as a single carry. Delegates to {@code take(totalQty, assetKey)}
+     * so that cost basis and avco are computed via the standard weighted-average logic.
+     * Used for wrapper-composite buckets (VAULT_WITHDRAW, STAKING_WITHDRAW) where the receipt
+     * token and the returned asset have incompatible quantity scales.
+     */
+    public CarryTransfer drainAll(AssetKey assetKey) {
+        BigDecimal total = totalQuantity();
+        if (total == null || total.signum() <= 0) {
+            return null;
+        }
+        return take(total, assetKey);
+    }
+
     private static BigDecimal safeDivide(BigDecimal numerator, BigDecimal denominator) {
         if (numerator == null || denominator == null || denominator.signum() == 0) {
             return null;

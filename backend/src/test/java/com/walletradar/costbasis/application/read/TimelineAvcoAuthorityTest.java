@@ -74,6 +74,55 @@ class TimelineAvcoAuthorityTest {
     }
 
     @Test
+    void carriesForwardAvcoWhenFamilyCoveredQuantityUnchanged() {
+        Map<String, BigDecimal> series = TimelineAvcoAuthority.newSeriesTracker();
+        TimelineAvcoAuthority.updateSeries(
+                series,
+                new TimelineAvcoAuthority.Resolution(new BigDecimal("2873"), TimelineAvcoAuthority.KIND_PRIMARY_FLOW, "SYMBOL:ETH")
+        );
+        AssetLedgerPoint earnDrain = spotPoint(
+                "earn-drain",
+                "ETH",
+                AssetLedgerPoint.BasisEffect.REALLOCATE_OUT,
+                "-0.151",
+                "0",
+                null
+        );
+        earnDrain.setWalletAddress("BYBIT:33625378:EARN");
+        earnDrain.setAccountingAssetIdentity("SYMBOL:ETH");
+        earnDrain.setBasisBackedQuantityAfter(BigDecimal.ZERO);
+        earnDrain.setUncoveredQuantityAfter(BigDecimal.ZERO);
+        earnDrain.setQuantityAfter(BigDecimal.ZERO);
+
+        AssetLedgerPoint fundRestore = spotPoint(
+                "fund-restore",
+                "ETH",
+                AssetLedgerPoint.BasisEffect.REALLOCATE_IN,
+                "0.151",
+                "434",
+                null
+        );
+        fundRestore.setWalletAddress("BYBIT:33625378:FUND");
+        fundRestore.setAccountingAssetIdentity("SYMBOL:ETH");
+        fundRestore.setBasisBackedQuantityAfter(new BigDecimal("0.151"));
+        fundRestore.setUncoveredQuantityAfter(BigDecimal.ZERO);
+        fundRestore.setQuantityAfter(new BigDecimal("0.151"));
+
+        TimelineAvcoAuthority.Resolution resolution = TimelineAvcoAuthority.resolve(
+                "FAMILY:ETH",
+                List.of(earnDrain, fundRestore),
+                new BigDecimal("2873"),
+                new BigDecimal("1.0"),
+                new BigDecimal("1.0"),
+                new BigDecimal("2873"),
+                series
+        );
+
+        assertThat(resolution.avcoKind()).isEqualTo(TimelineAvcoAuthority.KIND_CARRIED_FORWARD);
+        assertThat(resolution.avcoAfterUsd()).isEqualByComparingTo("2873");
+    }
+
+    @Test
     void tracksAvcoBeforePerAccountingAssetIdentity() {
         Map<String, BigDecimal> series = TimelineAvcoAuthority.newSeriesTracker();
         TimelineAvcoAuthority.updateSeries(
@@ -112,7 +161,7 @@ class TimelineAvcoAuthorityTest {
         point.setQuantityDelta(new BigDecimal(quantityDelta));
         point.setQuantityAfter(new BigDecimal(quantityDelta).abs());
         point.setTotalCostBasisAfterUsd(new BigDecimal(totalCostBasisAfterUsd));
-        point.setAvcoAfterUsd(new BigDecimal(avcoAfterUsd));
+        point.setAvcoAfterUsd(avcoAfterUsd == null ? null : new BigDecimal(avcoAfterUsd));
         point.setBasisBackedQuantityAfter(new BigDecimal(quantityDelta).abs());
         point.setUncoveredQuantityAfter(BigDecimal.ZERO);
         return point;

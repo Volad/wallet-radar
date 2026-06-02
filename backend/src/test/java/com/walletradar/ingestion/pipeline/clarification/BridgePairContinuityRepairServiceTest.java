@@ -68,7 +68,34 @@ class BridgePairContinuityRepairServiceTest {
         assertThat(outbound.getFlows().getFirst().getRole()).isEqualTo(NormalizedLegRole.TRANSFER);
         assertThat(outbound.getFlows().getFirst().getUnitPriceUsd()).isNull();
         assertThat(outbound.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_STAT);
-        assertThat(inbound.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        assertThat(inbound.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_STAT);
+    }
+
+    @Test
+    void repairsPairedInboundMissingCounterparty() {
+        NormalizedTransaction outbound = bridgeOut("0xout", "ETH", "-0.000221");
+        outbound.setCorrelationId("bridge:lifi:0xout");
+        outbound.setMatchedCounterparty("0xin");
+        outbound.getFlows().getFirst().setCounterpartyAddress("0x23981fc34e69eedfe2bd9a0a9fcb0719fe09dbfc");
+        outbound.getFlows().getFirst().setCounterpartyType(CounterpartyType.BRIDGE);
+
+        NormalizedTransaction inbound = bridgeIn("0xin", NetworkId.OPTIMISM, "ETH", "0.000197");
+        inbound.setCorrelationId("bridge:lifi:0xout");
+        inbound.setMatchedCounterparty("0xout");
+        inbound.setStatus(NormalizedTransactionStatus.NEEDS_REVIEW);
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(inbound))
+                .thenReturn(List.of(outbound));
+
+        int repaired = service.reconcilePairedInboundCounterparty(10);
+
+        assertThat(repaired).isEqualTo(1);
+        assertThat(inbound.getFlows().getFirst().getCounterpartyAddress())
+                .isEqualTo("0x23981fc34e69eedfe2bd9a0a9fcb0719fe09dbfc");
+        assertThat(inbound.getFlows().getFirst().getCounterpartyType()).isEqualTo(CounterpartyType.BRIDGE);
+        assertThat(inbound.getCounterpartyType()).isEqualTo(CounterpartyType.BRIDGE);
+        assertThat(inbound.getStatus()).isNotEqualTo(NormalizedTransactionStatus.NEEDS_REVIEW);
     }
 
     @Test
@@ -99,6 +126,10 @@ class BridgePairContinuityRepairServiceTest {
         NormalizedTransaction inbound = bridgeIn("0xin", NetworkId.ARBITRUM, "ETH", "1");
         inbound.setContinuityCandidate(true);
         inbound.setStatus(NormalizedTransactionStatus.PENDING_STAT);
+        inbound.getFlows().getFirst().setCounterpartyAddress("0xbridge");
+        inbound.getFlows().getFirst().setCounterpartyType(CounterpartyType.BRIDGE);
+        inbound.setCounterpartyAddress("0xbridge");
+        inbound.setCounterpartyType(CounterpartyType.BRIDGE);
 
         boolean changed = BridgePairContinuityRepairService.applyContinuityRepair(
                 outbound,
