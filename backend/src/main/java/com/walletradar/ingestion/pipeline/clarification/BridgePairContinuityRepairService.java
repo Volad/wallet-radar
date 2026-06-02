@@ -60,6 +60,31 @@ public class BridgePairContinuityRepairService {
         return repaired;
     }
 
+    /**
+     * Cycle/N: repairs BRIDGE_IN rows that were linked (correlationId + matchedCounterparty set)
+     * but left with continuityCandidate=false — causing ACQUIRE instead of CARRY_IN in replay.
+     * Uses the inbound-only repair pattern to avoid demoting the already-correct BRIDGE_OUT status.
+     */
+    public int reconcileLegacySealedInbounds(int batchSize) {
+        List<NormalizedTransaction> batch = loadLegacySealedInbounds(batchSize);
+        if (batch.isEmpty()) {
+            return 0;
+        }
+        Instant now = Instant.now();
+        List<NormalizedTransaction> dirty = new ArrayList<>();
+        int repaired = 0;
+        for (NormalizedTransaction inbound : batch) {
+            if (repairInboundFromSealedPair(inbound, now, dirty)) {
+                repaired++;
+            }
+        }
+        if (!dirty.isEmpty()) {
+            normalizedTransactionRepository.saveAll(deduplicateById(dirty));
+            log.info("BRIDGE_IN_SEALED_REPAIR batch={} repaired={} saved={}", batch.size(), repaired, dirty.size());
+        }
+        return repaired;
+    }
+
     public int reconcileLegacySealedPairs(int batchSize) {
         List<NormalizedTransaction> batch = loadLegacySealedOutbounds(batchSize);
         if (batch.isEmpty()) {
@@ -264,6 +289,45 @@ public class BridgePairContinuityRepairService {
                     .orElse(matches.getFirst());
         }
         return matches.getFirst();
+    }
+
+    private List<NormalizedTransaction> loadLegacySealedInbounds(int batchSize) {
+        Query query = Query.query(new Criteria().andOperator(
+                Criteria.where("type").is(NormalizedTransactionType.BRIDGE_IN),
+                Criteria.where("correlationId").regex(BRIDGE_CORRELATION_PREFIX),
+                Criteria.where("continuityCandidate").ne(true),
+                Criteria.where("matchedCounterparty").exists(true).ne(null).ne("")
+        ));
+        query.with(Sort.by(
+                Sort.Order.asc("blockTimestamp"),
+                Sort.Order.asc("transactionIndex"),
+                Sort.Order.asc("_id")
+        ));
+        query.limit(Math.max(1, batchSize));
+        return mongoOperations.find(query, NormalizedTransaction.class);
+    }
+
+    /**
+     * Inbound-only repair: does NOT call applyContinuityRepair (which would demote the
+     * already-correct BRIDGE_OUT from CONFIRMED to PENDING_STAT). Delegates to the existing
+     * repairInboundCounterparty pattern that only modifies and saves the inbound.
+     */
+    private boolean repairInboundFromSealedPair(
+            NormalizedTransaction inbound,
+            Instant now,
+            List<NormalizedTransaction> dirty
+    ) {
+        if (inbound == null || Boolean.TRUE.equals(inbound.getContinuityCandidate())) {
+            return false;
+        }
+        NormalizedTransaction outbound = findPairedOutbound(inbound);
+        if (outbound == null) {
+            return false;
+        }
+        if (!BridgePairLinkSupport.supportsPlainMoveBasis(outbound, inbound)) {
+            return false;
+        }
+        return repairInboundCounterparty(outbound, inbound, now, dirty);
     }
 
     private List<NormalizedTransaction> loadLegacySealedOutbounds(int batchSize) {

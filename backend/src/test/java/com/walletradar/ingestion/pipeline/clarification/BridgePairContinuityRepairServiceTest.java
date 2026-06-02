@@ -117,6 +117,130 @@ class BridgePairContinuityRepairServiceTest {
         verify(normalizedTransactionRepository, never()).saveAll(any());
     }
 
+    // ── reconcileLegacySealedInbounds ──────────────────────────────────────────
+
+    @Test
+    void reconcileLegacySealedInbounds_happyPath_repairsInboundOnly() {
+        NormalizedTransaction outbound = bridgeOut("0xout", "ETH", "-1");
+        outbound.setContinuityCandidate(true);
+        outbound.setCorrelationId("bridge:lifi:0xout");
+        outbound.setMatchedCounterparty("0xin");
+        outbound.setStatus(NormalizedTransactionStatus.CONFIRMED);
+        outbound.getFlows().getFirst().setCounterpartyAddress("0xbridge");
+        outbound.getFlows().getFirst().setCounterpartyType(CounterpartyType.BRIDGE);
+
+        NormalizedTransaction inbound = bridgeIn("0xin", NetworkId.ARBITRUM, "ETH", "1");
+        inbound.setContinuityCandidate(false);
+        inbound.setCorrelationId("bridge:lifi:0xout");
+        inbound.setMatchedCounterparty("0xout");
+        inbound.getFlows().getFirst().setRole(NormalizedLegRole.BUY);
+        inbound.getFlows().getFirst().setUnitPriceUsd(BigDecimal.valueOf(3000));
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(inbound))
+                .thenReturn(List.of(outbound));
+
+        int repaired = service.reconcileLegacySealedInbounds(10);
+
+        assertThat(repaired).isEqualTo(1);
+        verify(normalizedTransactionRepository).saveAll(any());
+
+        assertThat(inbound.getContinuityCandidate()).isTrue();
+        assertThat(inbound.getFlows().getFirst().getRole()).isEqualTo(NormalizedLegRole.TRANSFER);
+        assertThat(inbound.getFlows().getFirst().getUnitPriceUsd()).isNull();
+        assertThat(inbound.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_STAT);
+
+        // BRIDGE_OUT status must NOT be changed
+        assertThat(outbound.getStatus()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+    }
+
+    @Test
+    void reconcileLegacySealedInbounds_skipsAlreadyRepaired() {
+        NormalizedTransaction outbound = bridgeOut("0xout", "ETH", "-1");
+        outbound.setContinuityCandidate(true);
+        outbound.setCorrelationId("bridge:lifi:0xout");
+
+        NormalizedTransaction inbound = bridgeIn("0xin", NetworkId.ARBITRUM, "ETH", "1");
+        inbound.setContinuityCandidate(true);  // already repaired
+        inbound.setCorrelationId("bridge:lifi:0xout");
+        inbound.setMatchedCounterparty("0xout");
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(inbound));
+
+        int repaired = service.reconcileLegacySealedInbounds(10);
+
+        assertThat(repaired).isZero();
+        verify(normalizedTransactionRepository, never()).saveAll(any());
+    }
+
+    @Test
+    void reconcileLegacySealedInbounds_skipsWhenNoPairedOutbound() {
+        NormalizedTransaction inbound = bridgeIn("0xin", NetworkId.ARBITRUM, "ETH", "1");
+        inbound.setContinuityCandidate(false);
+        inbound.setCorrelationId("bridge:lifi:0xout");
+        inbound.setMatchedCounterparty("0xout");
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(inbound))
+                .thenReturn(List.of());  // no BRIDGE_OUT found
+
+        int repaired = service.reconcileLegacySealedInbounds(10);
+
+        assertThat(repaired).isZero();
+        verify(normalizedTransactionRepository, never()).saveAll(any());
+    }
+
+    @Test
+    void reconcileLegacySealedInbounds_skipsMismatchedAssets() {
+        NormalizedTransaction outbound = bridgeOut("0xout", "ETH", "-1");
+        outbound.setContinuityCandidate(true);
+        outbound.setCorrelationId("bridge:lifi:0xout");
+
+        NormalizedTransaction inbound = bridgeIn("0xin", NetworkId.ARBITRUM, "USDC", "2500");
+        inbound.setContinuityCandidate(false);
+        inbound.setCorrelationId("bridge:lifi:0xout");
+        inbound.setMatchedCounterparty("0xout");
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(inbound))
+                .thenReturn(List.of(outbound));
+
+        int repaired = service.reconcileLegacySealedInbounds(10);
+
+        assertThat(repaired).isZero();
+        verify(normalizedTransactionRepository, never()).saveAll(any());
+    }
+
+    @Test
+    void reconcileLegacySealedInbounds_idempotent() {
+        NormalizedTransaction outbound = bridgeOut("0xout", "ETH", "-1");
+        outbound.setContinuityCandidate(true);
+        outbound.setCorrelationId("bridge:lifi:0xout");
+        outbound.setMatchedCounterparty("0xin");
+        outbound.getFlows().getFirst().setCounterpartyAddress("0xbridge");
+        outbound.getFlows().getFirst().setCounterpartyType(CounterpartyType.BRIDGE);
+
+        NormalizedTransaction inbound = bridgeIn("0xin", NetworkId.ARBITRUM, "ETH", "1");
+        inbound.setContinuityCandidate(false);
+        inbound.setCorrelationId("bridge:lifi:0xout");
+        inbound.setMatchedCounterparty("0xout");
+        inbound.getFlows().getFirst().setRole(NormalizedLegRole.BUY);
+
+        // First call repairs the inbound
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(inbound))
+                .thenReturn(List.of(outbound))
+                // Second call: query returns empty because continuityCandidate is now true
+                .thenReturn(List.of());
+
+        int firstCall = service.reconcileLegacySealedInbounds(10);
+        int secondCall = service.reconcileLegacySealedInbounds(10);
+
+        assertThat(firstCall).isEqualTo(1);
+        assertThat(secondCall).isZero();
+    }
+
     @Test
     void applyContinuityRepairIsIdempotentWhenAlreadyContinuity() {
         NormalizedTransaction outbound = bridgeOut("0xout", "ETH", "-1");

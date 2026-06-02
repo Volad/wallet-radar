@@ -213,8 +213,8 @@ class UnmatchedBridgeInboundPricingFallbackServiceTest {
     }
 
     @Test
-    @DisplayName("shortfall: paired bridge IN is repriced when source wallet had no upstream priced inflow")
-    void shortfallPairedBridgeInRepricedWhenSourceHasNoBasis() {
+    @DisplayName("shortfall: paired bridge IN is NOT repriced even without upstream priced inflow — relay carry basis instead")
+    void shortfallPairedBridgeInNotRepricedEvenWithoutUpstream() {
         NormalizedTransaction outbound = bridgeOut(
                 "bridge:lifi:0xshortfall",
                 "USDC",
@@ -228,22 +228,14 @@ class UnmatchedBridgeInboundPricingFallbackServiceTest {
 
         int processed = service.reconcileUnsupportedOutbounds();
 
-        assertThat(processed).isEqualTo(1);
-        assertThat(pairedInbound.getContinuityCandidate()).isFalse();
-        assertThat(pairedInbound.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
-        assertThat(pairedInbound.getConfirmedAt()).isNull();
-        assertThat(pairedInbound.getFlows()).anySatisfy(flow ->
-                assertThat(flow.getRole()).isEqualTo(NormalizedLegRole.BUY));
-
-        assertThat(outbound.getStatus()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        // Properly linked move-basis pair: inbound is always skipped, replay carries basis.
+        // Repricing was removed to prevent oscillation with BRIDGE_IN_SEALED_REPAIR.
+        assertThat(processed).isZero();
+        assertThat(pairedInbound.getContinuityCandidate()).isTrue();
+        // Status unchanged — only BRIDGE_IN_SEALED_REPAIR sets PENDING_STAT; this service no longer touches it.
+        assertThat(pairedInbound.getStatus()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
         assertThat(outbound.getContinuityCandidate()).isTrue();
-        assertThat(outbound.getFlows()).allSatisfy(flow ->
-                assertThat(flow.getRole()).isNotEqualTo(NormalizedLegRole.SELL));
-
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<List<NormalizedTransaction>> savedCaptor = ArgumentCaptor.forClass(List.class);
-        verify(normalizedTransactionRepository).saveAll(savedCaptor.capture());
-        assertThat(savedCaptor.getValue()).containsExactly(pairedInbound);
+        verify(normalizedTransactionRepository, never()).saveAll(any());
     }
 
     @Test

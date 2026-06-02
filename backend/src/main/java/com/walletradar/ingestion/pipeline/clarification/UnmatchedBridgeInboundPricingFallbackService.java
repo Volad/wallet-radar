@@ -123,7 +123,6 @@ public class UnmatchedBridgeInboundPricingFallbackService {
         int upstreamPricedSkipped = 0;
         int unpricedPrincipalSkipped = 0;
         int pairedMoveBasisSkipped = 0;
-        int shortfallInboundRepriced = 0;
         for (NormalizedTransaction outbound : outbounds) {
             NormalizedTransaction.Flow principal = selectPrincipalOutbound(outbound);
             if (principal == null || PriceableFlowPolicy.hasResolvedPrice(principal)) {
@@ -132,14 +131,10 @@ public class UnmatchedBridgeInboundPricingFallbackService {
             }
             NormalizedTransaction pairedInbound = loadPairedMoveBasisInbound(outbound);
             if (pairedInbound != null) {
-                if (!hasPricedUpstreamInflow(outbound, principal, lookback)) {
-                    if (clearContinuityAndRepriceInbound(pairedInbound, now)) {
-                        dirty.add(pairedInbound);
-                        shortfallInboundRepriced++;
-                        log.info("BRIDGE_SHORTFALL_INBOUND_REPRICE outbound={} inbound={}",
-                                outbound.getId(), pairedInbound.getId());
-                    }
-                }
+                // Properly linked move-basis pair: let replay carry basis from the outbound position.
+                // Do NOT reprice the inbound at market price — that would cause AVCO spikes when the
+                // outbound had accumulated non-zero basis via carry chains outside the lookback window.
+                // (Shortfall repricing was removed here to prevent oscillation with BRIDGE_IN_SEALED_REPAIR.)
                 pairedMoveBasisSkipped++;
                 continue;
             }
@@ -156,13 +151,11 @@ public class UnmatchedBridgeInboundPricingFallbackService {
         }
         log.info(
                 "UNMATCHED_BRIDGE_OUTBOUND_REPRICE candidates={} upstream_priced_skipped={} "
-                        + "unpriced_principal_skipped={} paired_move_basis_skipped={} "
-                        + "shortfall_inbound_repriced={} repriced={}",
+                        + "unpriced_principal_skipped={} paired_move_basis_skipped={} repriced={}",
                 outbounds.size(),
                 upstreamPricedSkipped,
                 unpricedPrincipalSkipped,
                 pairedMoveBasisSkipped,
-                shortfallInboundRepriced,
                 dirty.size()
         );
         return dirty.size();

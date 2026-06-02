@@ -166,6 +166,11 @@ class LinkingBatchProcessor {
         processed += bridgePairContinuityRepairService.reconcilePairedInboundCounterparty(batchSize);
         progressHeartbeat.run();
 
+        // B-BRIDGE-IN-ACQUIRE: BRIDGE_IN rows linked (correlationId + matchedCounterparty set) but
+        // left with continuityCandidate=false — causing ACQUIRE instead of CARRY_IN in replay.
+        processed += bridgePairContinuityRepairService.reconcileLegacySealedInbounds(batchSize);
+        progressHeartbeat.run();
+
         // Cycle/14: same-tx on-chain INTERNAL_TRANSFER orphans across session wallets.
         processed += onChainInternalTransferPairRepairService.reconcileOrphanSameTxPairs(batchSize);
         progressHeartbeat.run();
