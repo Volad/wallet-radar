@@ -82,15 +82,16 @@ public class ReplayPendingTransferKeyFactory {
         if (transaction == null || flow == null || flow.getQuantityDelta() == null) {
             return null;
         }
+        if (!isBybitEarnPrincipalPairedTransfer(transaction)
+                && (isBybitEarnInternalTransfer(transaction) || isBybitEarnProductTransfer(transaction))) {
+            String uid = extractBybitUid(transaction.getWalletAddress());
+            String earnAssetKey = assetSupport.correlatedTransferIdentity(transaction, flow);
+            return new TransferPendingKey("bybit-earn-carry:" + uid + ":" + earnAssetKey);
+        }
         if (transaction.getCorrelationId() != null && !transaction.getCorrelationId().isBlank()
                 && Boolean.TRUE.equals(transaction.getContinuityCandidate())) {
             String assetKey = assetSupport.correlatedTransferIdentity(transaction, flow);
             return new TransferPendingKey("corr-family:" + transaction.getCorrelationId() + ":" + assetKey);
-        }
-        if (isBybitEarnInternalTransfer(transaction) || isBybitEarnProductTransfer(transaction)) {
-            String uid = extractBybitUid(transaction.getWalletAddress());
-            String earnAssetKey = assetSupport.correlatedTransferIdentity(transaction, flow);
-            return new TransferPendingKey("bybit-earn-carry:" + uid + ":" + earnAssetKey);
         }
         if (isBybitSameUidInternalTransfer(transaction)) {
             String uid = extractBybitUid(transaction.getWalletAddress());
@@ -194,6 +195,18 @@ public class ReplayPendingTransferKeyFactory {
         String withoutPrefix = walletAddress.substring("BYBIT:".length());
         int colonPos = withoutPrefix.indexOf(':');
         return colonPos > 0 ? withoutPrefix.substring(0, colonPos) : withoutPrefix;
+    }
+
+    /**
+     * Returns the {@code bybit-earn-carry} FIFO key for a bundle inbound flow,
+     * used as a secondary fallback in {@code applyBybitMultiLegBundleTransfer}
+     * when the primary {@code corr-family} queue is exhausted.
+     */
+    public TransferPendingKey earnCarryFifoKey(NormalizedTransaction transaction, NormalizedTransaction.Flow flow) {
+        String uid = extractBybitUid(transaction.getWalletAddress());
+        if (uid == null) return null;
+        String earnAssetKey = assetSupport.correlatedTransferIdentity(transaction, flow);
+        return new TransferPendingKey("bybit-earn-carry:" + uid + ":" + earnAssetKey);
     }
 
     public BridgePendingKey bridgeTransferKey(

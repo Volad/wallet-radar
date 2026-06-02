@@ -592,6 +592,38 @@ public class TransferReplayHandler {
             replayState.pendingTransfers().remove(transferKey);
         }
         if (remaining.signum() > 0) {
+            TransferPendingKey fifoKey = keyFactory.earnCarryFifoKey(transaction, flow);
+            Deque<CarryTransfer> fifoQueue = fifoKey != null
+                    ? replayState.pendingTransfers().find(fifoKey) : null;
+            while (fifoQueue != null && remaining.signum() > 0) {
+                int carryIndex = matcher.findUniqueBridgeQueueIndex(fifoQueue, false);
+                if (carryIndex < 0) break;
+                CarryTransfer carry = matcher.removeQueueElement(fifoQueue, carryIndex);
+                BigDecimal takeQty = remaining.min(carry.quantity());
+                CarryTransfer effectiveCarry = continuityCarryService.sliceCarryTransfer(
+                        carry, takeQty, position.assetKey());
+                flowSupport.restoreToPosition(
+                        takeQty,
+                        position,
+                        effectiveCarry.costBasisUsd(),
+                        effectiveCarry.uncoveredQuantity(),
+                        effectiveCarry.avco()
+                );
+                continuityCarryService.reservePassThroughCarryIfPlanned(
+                        transaction,
+                        flowIndex,
+                        effectiveCarry,
+                        replayState.passThroughCorridorPlan(),
+                        replayState.reservedPassThroughCarries()
+                );
+                remaining = remaining.subtract(takeQty, MC);
+                restoredAny = true;
+            }
+            if (fifoKey != null && fifoQueue != null && fifoQueue.isEmpty()) {
+                replayState.pendingTransfers().remove(fifoKey);
+            }
+        }
+        if (remaining.signum() > 0) {
             NormalizedTransaction.Flow remainderFlow = flow;
             if (restoredAny) {
                 remainderFlow = flowWithQuantity(flow, remaining);

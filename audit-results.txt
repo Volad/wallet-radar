@@ -18619,3 +18619,39 @@
 === QUERY 7: Accounting shortfall audits ===
 
 (empty result - no accounting_shortfall_audits records)
+
+================================================================================
+AVCO SPIKES AUDIT — 2026-05-30
+================================================================================
+Universe: df5e69cc-a0c0-4910-8b7d-74488fa266e2
+Method: Full family-level AVCO reconstruction from 3,777 ETH-family ledger points
+
+BLOCKERS CONFIRMED:
+
+B-1 [HIGH +30%]: BRIDGE_IN LiFi BASE→ARB (0x38d445c4...) — BASE ETH shortfall
+  Date: 2026-02-06 | CARRY_IN injects $1515 at $1896/ETH vs family AVCO $1455
+  Root: BASE wallet 0x1a87 had no ETH history (shortfall 0.799 ETH)
+  Stage: move_basis | Fix: backfill BASE ETH acquisition history
+
+B-2 [HIGH ±25-35% transient]: INTERNAL_TRANSFER Mantle cmETH (0xd7c7736b...)
+  Date: 2025-04-18 | Destination CARRY_IN arrives before source CARRY_OUT in replay
+  Root: Multi-wallet corridor replay ordering defect — transient double-count window
+  Stage: replay | Fix: enforce CARRY_OUT-before-CARRY_IN within same tx
+
+B-3 [HIGH +26% recurring]: Mantle→Bybit CMETH corridor basis mismatch
+  Date: 2025-09-10 (and multiple recurring) | CARRY_OUT basis $1898 ≠ CARRY_IN basis $2517
+  Root: Bybit FUND CARRY_IN uses different basis source than on-chain CARRY_OUT
+  Stage: move_basis | Fix: corridor basis pool must use exact carry-out basis on CARRY_IN
+
+B-4 [MEDIUM ±19-23% transient]: BASE WRAP shortfall (0xbdf26819...)
+  Date: 2025-11-17 | WETH arrives with $0 basis due to BASE ETH shortfall
+  Stage: move_basis | Fix: same as B-1 (backfill BASE ETH)
+
+B-5 [INFORMATIONAL]: Bybit FUND high-basis ETH corridor cycles
+  10-20% AVCO swings when high-basis Bybit ETH (~$3374) transits corridors
+  NOT A BUG — mathematically correct weighted AVCO behavior
+
+EARN_FLEXIBLE_SAVING (a67c..., 734bf6f1..., b0ee607b...): NOT spike sources
+  These generate tiny interest-only REALLOCATE_OUT points (< $2 each)
+
+Full audit: docs/tasks/avco-spikes-2026-05-30-audit.md

@@ -312,6 +312,23 @@ class ReplayPendingTransferKeyFactoryTest {
     }
 
     @Test
+    @DisplayName("earnCarryFifoKey returns bybit-earn-carry scoped by UID and asset for bundle inbound")
+    void earnCarryFifoKeyReturnsEarnCarryScopedByUidAndAsset() {
+        NormalizedTransaction bundleIn = bybitInternalTransfer(
+                "BYBIT:33625378:EARN", null,
+                "bybit-it-bundle-v1:ONDO-BUNDLE-1",
+                "ONDO", "100"
+        );
+        bundleIn.setContinuityCandidate(true);
+        NormalizedTransaction.Flow flow = bundleIn.getFlows().get(0);
+
+        var key = factory.earnCarryFifoKey(bundleIn, flow);
+
+        assertThat(key).isNotNull();
+        assertThat(key.value()).startsWith("bybit-earn-carry:33625378:");
+    }
+
+    @Test
     @DisplayName("Non-LP transactions are NOT collapsed into the lp:<id> composite bucket")
     void nonLpTransactionsPreserveExistingBucketing() {
         NormalizedTransaction lendingDeposit = lendingDepositTransaction();

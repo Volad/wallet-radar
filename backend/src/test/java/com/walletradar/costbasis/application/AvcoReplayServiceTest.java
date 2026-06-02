@@ -2500,6 +2500,98 @@ class AvcoReplayServiceTest {
 
     // ── end B-BYBIT-CORRIDOR-2 tests ──────────────────────────────────────────────────────────
 
+    // ── B-ONDO-CARRY-1 tests ───────────────────────────────────────────────────────────────────
+
+    @Test
+    void ondoEarnFundSideUsesEarnFifoQueueNotCorrFamily() {
+        var assetSupport = new com.walletradar.costbasis.application.replay.support.ReplayAssetSupport();
+        var keyFactory = new com.walletradar.costbasis.application.replay.support.ReplayPendingTransferKeyFactory(assetSupport);
+
+        NormalizedTransaction fundTx = new NormalizedTransaction();
+        fundTx.setSource(NormalizedTransactionSource.BYBIT);
+        fundTx.setType(NormalizedTransactionType.INTERNAL_TRANSFER);
+        fundTx.setWalletAddress("BYBIT:33625378:FUND");
+        fundTx.setMatchedCounterparty("BYBIT:33625378:EARN");
+        fundTx.setCorrelationId("bybit-collapsed-v1:ONDO-TEST-1");
+        fundTx.setContinuityCandidate(true);
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(NormalizedLegRole.TRANSFER);
+        flow.setAssetSymbol("ONDO");
+        flow.setQuantityDelta(new BigDecimal("-100"));
+        fundTx.setFlows(List.of(flow));
+
+        var key = keyFactory.transferKey(fundTx, flow);
+
+        assertThat(key).isNotNull();
+        assertThat(key.value()).startsWith("bybit-earn-carry:");
+        assertThat(key.value()).doesNotContain("corr-family");
+    }
+
+    @Test
+    void ondoEarnBundleFallsBackToFifoWhenPrimaryQueueEmpty() {
+        NormalizedTransaction buy = tx("1", "0xbuy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flow(NormalizedLegRole.BUY, "ONDO", "100", "1.30", PriceSource.BINANCE));
+        buy.setSource(NormalizedTransactionSource.BYBIT);
+        buy.setWalletAddress("BYBIT:33625378:FUND");
+
+        NormalizedTransaction fundOut = tx("2", "0xfund-earn-out", 1, NormalizedTransactionType.INTERNAL_TRANSFER,
+                flow(NormalizedLegRole.TRANSFER, "ONDO", "-100", null, null));
+        fundOut.setSource(NormalizedTransactionSource.BYBIT);
+        fundOut.setWalletAddress("BYBIT:33625378:FUND");
+        fundOut.setMatchedCounterparty("BYBIT:33625378:EARN");
+        fundOut.setCorrelationId("bybit-collapsed-v1:ONDO-TEST-2");
+        fundOut.setContinuityCandidate(true);
+
+        NormalizedTransaction bundleIn = tx("3", "0xbundle-in", 2, NormalizedTransactionType.INTERNAL_TRANSFER,
+                flow(NormalizedLegRole.TRANSFER, "ONDO", "100", null, null));
+        bundleIn.setSource(NormalizedTransactionSource.BYBIT);
+        bundleIn.setWalletAddress("BYBIT:33625378:EARN");
+        bundleIn.setCorrelationId("bybit-it-bundle-v1:ONDO-BUNDLE-TEST-2");
+        bundleIn.setContinuityCandidate(true);
+
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                NormalizedTransactionStatus.CONFIRMED
+        )).thenReturn(List.of(buy, fundOut, bundleIn));
+
+        service().replayConfirmed();
+
+        AssetLedgerPoint earnPoint = capturedLedgerPoints().stream()
+                .filter(point -> "BYBIT:33625378:EARN".equals(point.getWalletAddress()))
+                .filter(point -> "ONDO".equalsIgnoreCase(point.getAssetSymbol()))
+                .filter(point -> point.getQuantityDelta() != null && point.getQuantityDelta().signum() > 0)
+                .max(Comparator.comparing(AssetLedgerPoint::getReplaySequence))
+                .orElseThrow();
+        assertThat(earnPoint.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.CARRY_IN);
+        assertThat(earnPoint.getCostBasisDeltaUsd()).isGreaterThan(BigDecimal.ZERO);
+    }
+
+    @Test
+    void crossUidCorrFamilyKeyUnaffectedByEarnReorder() {
+        var assetSupport = new com.walletradar.costbasis.application.replay.support.ReplayAssetSupport();
+        var keyFactory = new com.walletradar.costbasis.application.replay.support.ReplayPendingTransferKeyFactory(assetSupport);
+
+        NormalizedTransaction crossUidTx = new NormalizedTransaction();
+        crossUidTx.setSource(NormalizedTransactionSource.BYBIT);
+        crossUidTx.setType(NormalizedTransactionType.INTERNAL_TRANSFER);
+        crossUidTx.setWalletAddress("BYBIT:33625378:FUND");
+        crossUidTx.setMatchedCounterparty("BYBIT:409666:FUND");
+        crossUidTx.setCorrelationId("bybit-cross-uid-v1:CROSSTEST");
+        crossUidTx.setContinuityCandidate(true);
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(NormalizedLegRole.TRANSFER);
+        flow.setAssetSymbol("ETH");
+        flow.setQuantityDelta(new BigDecimal("-1.0"));
+        crossUidTx.setFlows(List.of(flow));
+
+        var key = keyFactory.transferKey(crossUidTx, flow);
+
+        assertThat(key).isNotNull();
+        assertThat(key.value()).startsWith("corr-family:");
+        assertThat(key.value()).doesNotContain("bybit-earn-carry");
+    }
+
+    // ── end B-ONDO-CARRY-1 tests ───────────────────────────────────────────────────────────────
+
     private List<AssetLedgerPoint> capturedLedgerPoints() {
         ArgumentCaptor<List<AssetLedgerPoint>> captor = ArgumentCaptor.forClass(List.class);
         verify(assetLedgerPointRepository).saveAll(captor.capture());

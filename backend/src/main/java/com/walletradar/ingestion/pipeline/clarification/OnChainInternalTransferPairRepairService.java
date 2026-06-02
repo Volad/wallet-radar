@@ -201,7 +201,6 @@ public class OnChainInternalTransferPairRepairService {
         Query query = Query.query(new Criteria().andOperator(
                 Criteria.where("source").is(NormalizedTransactionSource.ON_CHAIN),
                 Criteria.where("type").is(NormalizedTransactionType.INTERNAL_TRANSFER),
-                Criteria.where("continuityCandidate").is(false),
                 Criteria.where("walletAddress").regex("^0x[a-fA-F0-9]{40}$"),
                 new Criteria().orOperator(
                         Criteria.where("correlationId").exists(false),
@@ -222,7 +221,6 @@ public class OnChainInternalTransferPairRepairService {
         return candidate != null
                 && candidate.getSource() == NormalizedTransactionSource.ON_CHAIN
                 && candidate.getType() == NormalizedTransactionType.INTERNAL_TRANSFER
-                && Boolean.FALSE.equals(candidate.getContinuityCandidate())
                 && hasHexAddress(candidate.getWalletAddress())
                 && !blank(candidate.getTxHash())
                 && candidate.getNetworkId() != null
