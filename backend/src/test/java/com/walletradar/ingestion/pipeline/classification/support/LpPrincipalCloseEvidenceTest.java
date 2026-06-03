@@ -224,6 +224,60 @@ class LpPrincipalCloseEvidenceTest {
     }
 
     // ──────────────────────────────────────────────────────────────────────────
+    // ERC-20 vs ERC-721 discrimination (B-PCAKE-V3-PARTIAL-EXIT)
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /**
+     * B-PCAKE-V3-PARTIAL-EXIT root-cause regression:
+     * Multicall with collect + ERC-20 USDC transfer TO wallet (3 topics, not 4).
+     * hasPositionReductionEvidence must return false — ERC-20 transfers must not
+     * be confused with ERC-721 NFT transfers to the wallet.
+     */
+    @Test
+    void hasPositionReductionEvidence_multicallCollect_erc20TransferToWallet_returnsFalse() {
+        // 0x3dc35066-like input: multicall outer, collect embedded, no decreaseLiquidity or burn
+        String inputData = "0xac9650d8" + "fc6f7865" + TOKEN_ID_HEX;
+        OnChainRawTransactionView view = viewWithMethodIdInputDataAndLogs(
+                "0xac9650d8", inputData, List.of(erc20TransferToWalletLog()));
+
+        assertThat(LpPrincipalCloseEvidence.hasPositionReductionEvidence(view)).isFalse();
+    }
+
+    /**
+     * Multicall with collect + genuine ERC-721 NFT transfer TO wallet (4 topics including tokenId).
+     * hasPositionReductionEvidence must return true — real NFT transfer signals position closure.
+     */
+    @Test
+    void hasPositionReductionEvidence_multicallCollect_erc721TransferToWallet_returnsTrue() {
+        String inputData = "0xac9650d8" + "fc6f7865" + TOKEN_ID_HEX;
+        OnChainRawTransactionView view = viewWithMethodIdInputDataAndLogs(
+                "0xac9650d8", inputData, List.of(erc721TransferToWalletLog()));
+
+        assertThat(LpPrincipalCloseEvidence.hasPositionReductionEvidence(view)).isTrue();
+    }
+
+    /**
+     * B-PCAKE-V3-PARTIAL-EXIT full-path:
+     * collect-only multicall to MasterChef with USDC inflow (ERC-20, 3 topics) →
+     * hasPositionReductionEvidence=false → refineLifecycleType downgrades LP_EXIT to LP_FEE_CLAIM.
+     */
+    @Test
+    void masterChefCollectOnly_usdcErc20Inflow_refinesToFeeClm() {
+        String inputData = "0xac9650d8" + "fc6f7865" + TOKEN_ID_HEX;
+        OnChainRawTransactionView view = viewWithMethodIdInputDataAndLogs(
+                "0xac9650d8", inputData, List.of(erc20TransferToWalletLog()));
+
+        List<RawLeg> legs = List.of(
+                RawLeg.asset("0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", "USDC", new BigDecimal("11.162"))
+        );
+
+        NormalizedTransactionType result = LpPrincipalCloseEvidence.refineLifecycleType(
+                view, legs, NormalizedTransactionType.LP_EXIT);
+
+        assertThat(result).isEqualTo(NormalizedTransactionType.LP_FEE_CLAIM);
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
     // Helpers
     // ──────────────────────────────────────────────────────────────────────────
 
@@ -256,15 +310,29 @@ class LpPrincipalCloseEvidenceTest {
     }
 
     /**
-     * ERC721 Transfer log with Transfer(MasterChef→wallet).
-     * topics[2] = wallet address (0x1111...1111) padded to 32 bytes.
+     * Genuine ERC-721 Transfer log: Transfer(MasterChef→wallet, tokenId).
+     * 4 topics: topic0 (Transfer), from, to, tokenId — distinguishes NFT from ERC-20.
      */
     private static Document erc721TransferToWalletLog() {
         return new Document("topics", List.of(
                 "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
                 "0x000000000000000000000000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                "0x0000000000000000000000001111111111111111111111111111111111111111"
+                "0x0000000000000000000000001111111111111111111111111111111111111111",
+                "0x000000000000000000000000000000000000000000000000000000000006cd77"  // tokenId
         ));
+    }
+
+    /**
+     * ERC-20 Transfer log (e.g. USDC sent to wallet): Transfer(from, wallet, amount).
+     * Only 3 topics — amount is in the data field, not indexed.
+     * Must NOT be detected as an ERC-721 NFT transfer.
+     */
+    private static Document erc20TransferToWalletLog() {
+        return new Document("topics", List.of(
+                "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+                "0x000000000000000000000000c6a2db661d5a5690172d8eb0a7dea2d3008665a3",  // from wrapper
+                "0x0000000000000000000000001111111111111111111111111111111111111111"   // to wallet (3 topics only)
+        )).append("data", "0x0000000000000000000000000000000000000000000000000000000000a9cf42"); // USDC amount
     }
 
     private static RawTransaction baseRaw() {

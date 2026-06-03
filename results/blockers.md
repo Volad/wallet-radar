@@ -1,22 +1,421 @@
-# Confirmed Blockers — AVCO Audit 2026-06-02 (full audit cycle, refresh 5)
+# Confirmed Blockers — AVCO Audit 2026-06-03 (full audit cycle, refresh 9)
 
 Universe: `df5e69cc-a0c0-4910-8b7d-74488fa266e2`
-Pipeline state: CONFIRMED=7338 | PENDING=0 | PENDING_PRICE=0 | PENDING_CLARIFICATION=0 | ledger=9702
+Pipeline state: CONFIRMED=7344 | PENDING=0 | PENDING_PRICE=0 | PENDING_CLARIFICATION=0 | ledger=9721
 
 ---
 
-## RANKED ACTIVE BLOCKER LIST (refresh 5)
+## USER COMPLAINT DIAGNOSIS (refresh 9)
 
-**Audit verdict: NO ACTIVE AVCO SPIKES. All code-fixable blockers resolved except one normalization defect (0xc8b94615).**
+**"ETH AVCO still spiking. Specifically calls out 0xa5e755a68349c9956b51ced38575733278b40467971ca4b9f9f40937fd5d2920."**
+
+**Root cause: NONE — `0xa5e755a6` is CORRECT after the B-LP-EXIT-BASE-PANCAKE-UNKNOWN fix.**
+
+| Observation | Actual finding | Verdict |
+|---|---|---|
+| `0xa5e755a6` CARRY_IN AMANWETH | INTERNAL_TRANSFER MANTLE: BYBIT:33625378:FUND → 0x1a87f12a WETH. CARRY_OUT −3.06 ETH cbD=−$9,011.24 from FUND at avco=$2,944.85. CARRY_IN +3.06 WETH cbD=+$9,011.24 to MANTLE. | ✅ CORRECT — full basis carried |
+| "Spike" at `0xa5e755a6` | AMANWETH is a fresh position (1 ledger point). avcoBeforeUsd=null → avcoAfterUsd=$2,944.85. Looks like a "spike from zero" in the chart but is correct: it's a brand-new Aave position being created via LENDING_DEPOSIT. | ✅ EXPECTED behaviour |
+| AMANWETH AVCO $1,533 (prev) | Fully explained by B-LP-EXIT-BASE-PANCAKE-UNKNOWN (now RESOLVED). AMANWETH AVCO now **$2,944.85** (basis $9,011.24). | ✅ FIXED |
+| B-PCAKE-V3-PARTIAL-EXIT | 0x3dc35066 (2026-01-31) and 0x29dad570 (2026-02-02) confirmed as `LP_FEE_CLAIM` on BASE. | ✅ RESOLVED |
+| B-ETH-ARBI-LOW-BASIS (R8) | Historical dust: ETH:ARBITRUM had 0.0004 ETH at AVCO ~$218-$583 in seq 5021-5072 (Sep 2025). Current ETH:ARBITRUM terminal: qty=0.0814, basis=$168, avco=$2,069. | ✅ NOT ACTIVE |
+| B-EARN-DEPOSIT-MISSING (R8) | ETH 0.692975 (cbD=−$1,103.77, corrId='') and METH 0.668650 (cbD=−$447.66, corrId='') drained from BYBIT:33625378 main account to EARN with empty corrId. No matching EARN CARRY_IN found. | ❌ **ACTIVE P2** |
+| B-EARN-MISTYPE (R8) | 79 BYBIT:33625378:EARN LENDING_WITHDRAWs — these are EARN_FLEXIBLE_SAVING redemptions mis-classified as LENDING_WITHDRAW. No `EARN_FLEXIBLE_SAVING` type exists in DB. Financial handling appears correct (REALLOCATE_OUT with cbD>0). | ❌ **ACTIVE P3 (type-model)** |
+| B-DOUBLE-LEDGER-POINT (R8) | seq=5031+5032 for tx `0x04b1a5790c6f9a` (ARBITRUM INTERNAL_TRANSFER 0xf03b52e8→0x1a87f12a). Double CARRY_IN: Phase-1 has inflated cbD=$0.162 (should be $0.085), Phase-2 correction cbD=−$0.077. Net correct, intermediate AVCO spike $218→$583→$399 visible in history. | ❌ **ACTIVE P3 (cosmetic)** |
+
+**P0 active regression: RESOLVED — AMANWETH now $2,944.85 AVCO (was $1,533). New active items: B-EARN-DEPOSIT-MISSING (~$1,551 cbD missing at EARN). No active AVCO spikes on material current positions.**
+
+---
+
+## RECENTLY RESOLVED (refresh 8–9)
+
+| ID | Resolution |
+|---|---|
+| B-LP-EXIT-BASE-PANCAKE-UNKNOWN | **RESOLVED** — AMANWETH AVCO recovered from $1,533 → $2,944.85. Full LP basis ($9,011.24) now carried via chain: LP_EXIT→BRIDGE→aWETH→LENDING_WITHDRAW→UNWRAP→BYBIT_CORRIDOR→MANTLE. Verified 2026-06-03. |
+| B-PCAKE-V3-PARTIAL-EXIT | **RESOLVED** — 0x3dc35066 and 0x29dad570 confirmed as `LP_FEE_CLAIM` on BASE (2026-01-31 and 2026-02-02). |
+| B-ETH-ARBI-LOW-BASIS (R8) | **NOT ACTIVE** — Historical dust artifacts in ETH:ARBITRUM ledger (seq 5021-5072). Current terminal AVCO $2,069 is correct. |
+
+---
+
+## RANKED ACTIVE BLOCKER LIST (refresh 9)
+
+**Audit verdict (2026-06-03 refresh 9): B-LP-EXIT-BASE-PANCAKE-UNKNOWN resolved. `0xa5e755a6` correctly carries $9,011.24 basis at $2,944.85 AVCO to AMANWETH — NOT a blocker. Main new finding: B-EARN-DEPOSIT-MISSING (~$1,551 cbD lost at EARN account for ETH+METH subscriptions with empty corrId).**
 
 | Rank | ID | Severity | Description | Est. cbD shortfall | Active AVCO broken? | Fixable? |
 |---|---|---|---|---|---|---|
-| 1 | B-VAULT-WITHDRAW `0xc8b94615` | P2 FIXABLE | Turtle Finance USDC vault AVALANCHE: vault token burn missing from flows — normalization defect | ~$2,815 | No (USDC disposed) | ✅ Normalization fix needed |
-| 2 | B-BYBIT-CORRIDOR-2 (USDe) | DATA GAP | 2115 USDe MANTLE: FUND had $10 at withdrawal; SPOT acq $2,115 exists but FUNDING_HISTORY transfer missing from raw export | ~$2,105 | Yes (USDe avco≈$0.005) | ❌ Genuine evidence missing |
-| 3 | B-VAULT-WITHDRAW `0x971c8464` + `0xb47d87fa` | DATA GAP | MCUSDC upstream shortfall + wrapper-less vault no prior deposit in DB | ~$4,608 (hist.) | No (USDC disposed/masked) | ❌ Irreducible upstream gaps |
-| 4 | B-BYBIT-CORRIDOR-2 (cmETH) | DATA GAP | cmETH MANTLE GENUINE_EVIDENCE_MISSING | ~$212 | Yes (cmETH position) | ❌ Evidence missing |
-| 5 | B-BRIDGE-ORPHAN-2 | DATA GAP | 5 BRIDGE_OUTs to 0xf5f93d26; 1 failed/refunded ($0.81 fee), 4 correct exits to untracked chain | ~$0.81 net | No (USDC AVCO unaffected) | ❌ Trivial / correct exits |
+| 0 | B-EARN-DEPOSIT-MISSING | ✅ **RESOLVED** | `BybitOnChainEarnOrphanRepairService` synthesises EARN counterpart for FUND-only On-chain Earn subscriptions. ETH CARRY_IN +$1,103.77 and METH CARRY_IN +$447.66 now materialise at EARN. Verified 2026-06-03. | **$0** (recovered) | No | ✅ RESOLVED |
+| 1 | B-VAULT-WITHDRAW `0xc8b94615` | ✅ RESOLVED | `TurtleVaultBurnRepairService` synthesises turtleAvalancheUSDC burn; REALLOCATE_OUT -2787.57 → REALLOCATE_IN USDC +2831.20, cbAfter=$2,815. Confirmed 2026-06-03. | **$0** (recovered) | No | ✅ RESOLVED |
+| 2 | B-BYBIT-CORRIDOR-2 (USDe) | DATA GAP | 2115 USDe MANTLE: SPOT→FUND FH missing; ~$2,105 shortfall | ~$2,105 | No (USDe position disposed May 2026) | ❌ Evidence missing |
+| 3 | B-VAULT-WITHDRAW `0x971c8464` + `0xb47d87fa` | DATA GAP | MCUSDC upstream shortfall + wrapper-less vault no prior deposit | ~$4,608 (hist.) | No | ❌ Irreducible |
+| 4 | B-EARN-BUNDLE | P2 ACTIVE | Multi-leg bundle fan-in defect — UTA carries orphaned at EARN. All positions now null but historical P&L distorted. | ~$1,632 hist. | No (all redeemed) | ✅ Move-basis defect |
+| 5 | B-BYBIT-CORRIDOR-2 (cmETH) | DATA GAP | cmETH MANTLE GENUINE_EVIDENCE_MISSING; cmETH position now qty=0 (fully exited). | ~$212 | No (qty=0 after rebuild) | ❌ Evidence missing |
+| 6 | B-EARN-MISTYPE | P3 TYPE-MODEL | 79 BYBIT:EARN LENDING_WITHDRAWs should be EARN_FLEXIBLE_SAVING. Financially handled correctly (cbD>0), but wrong type. | $0 (accounting OK) | No | ✅ Classification fix |
+| 7 | B-DOUBLE-LEDGER-POINT | P3 COSMETIC | Double CARRY_IN at seq 5031-5032 for tx 0x04b1a579. Net numerically correct. Intermediate AVCO spike $218→$583→$399 in historical chart. | ~$0 (net correct) | No | ✅ Replay dedup |
+| 8 | B-BRIDGE-ORPHAN-2 | DATA GAP | 5 BRIDGE_OUTs to 0xf5f93d26; 1 failed/refunded, 4 exits to untracked chain | ~$0.81 net | No | ❌ Trivial |
+| 9 | B-BRIDGE-ORPHAN-1 | DATA GAP | 4 orphan BRIDGE_OUTs (LiFi USDC + Across ETH) | ~$7 | No | ❌ Cross-chain gap |
+
+---
+
+## 0xa5e755a6 DETAILED ANALYSIS (refresh 9)
+
+### Transaction identity
+| Field | Value |
+|---|---|
+| txHash | `0xa5e755a68349c9956b51ced38575733278b40467971ca4b9f9f40937fd5d2920` |
+| type | INTERNAL_TRANSFER |
+| status | CONFIRMED |
+| networkId | MANTLE |
+| blockTimestamp | 2026-02-19T08:15:22Z |
+| walletAddress | `0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f` |
+| flow | TRANSFER WETH +3.06 from counterparty BYBIT:33625378:FUND |
+
+### Ledger points (both sides)
+| Side | wallet | symbol | basisEffect | qtyDelta | cbDelta | avco |
+|---|---|---|---|---|---|---|
+| Source | BYBIT:33625378:FUND | ETH | CARRY_OUT | −3.06 | −$9,011.24 | $2,944.85 (before) |
+| Destination | 0x1a87f12a (MANTLE) | WETH | CARRY_IN | +3.06 | +$9,011.24 | $2,944.85 (after) |
+
+### Carry chain context
+```
+0xbc3fe1a5 (ARBITRUM INTERNAL_TRANSFER, BYBIT-CORRIDOR seq 8920)
+  CARRY_OUT: 0x1a87f12a ETH:ARBITRUM −3.06 ETH, cbD=−$9,011.24 at avco=$2,944.85
+  CARRY_IN:  BYBIT:33625378:FUND ETH +3.06, cbD=+$9,011.24, avcoAfter=$2,944.85
+
+0xa5e755a6 (MANTLE INTERNAL_TRANSFER seq 8930)
+  CARRY_OUT: BYBIT:33625378:FUND −3.06 ETH, cbD=−$9,011.24, qtyAfter=0
+  CARRY_IN:  0x1a87f12a WETH:MANTLE +3.06, cbD=+$9,011.24, avcoAfter=$2,944.85
+
+0x3b8592a7 (MANTLE LENDING_DEPOSIT seq 8933)
+  REALLOCATE_IN: AMANWETH +3.06, cbD=+$9,011.24, avcoAfter=$2,944.85 ← CURRENT STATE
+```
+
+### Verdict
+`0xa5e755a6` **correctly carries $9,011.24 in basis** at $2,944.85 AVCO from BYBIT FUND to MANTLE WETH. The visible "AVCO spike" in the UI is AMANWETH being a fresh position (avcoBeforeUsd=null → $2,944.85 after). This is expected and correct behavior for a new Aave lending deposit.
+
+**Root cause of the $9,011 basis (not $4,691 as in Refresh 7):** The B-LP-EXIT-BASE-PANCAKE-UNKNOWN fix enabled the LP cost basis (~$2,026 from the LP receipt position) to flow correctly through: LP_EXIT `0x0a757aee` → BRIDGE_OUT `0x4ca0b79e` → BRIDGE_IN `0x38d445c4` → LENDING_DEPOSIT → LENDING_WITHDRAW `0xe564fec1` (REALLOCATE_IN: 3.046 WETH, cbD=$8,987.72, avco=$2,950) → UNWRAP `0x6f7aec13` → BYBIT CORRIDOR → MANTLE.
+
+---
+
+## B-EARN-DEPOSIT-MISSING — ✅ RESOLVED (2026-06-03)
+
+### Problem
+Two Bybit Earn subscription flows drained basis from the main account (BYBIT:33625378) but no matching CARRY_IN exists at EARN:
+
+| Asset | qty | cbD drained from main | corrId | EARN CARRY_IN | Shortfall |
+|---|---|---|---|---|---|
+| ETH | 0.692975 | −$1,103.77 | `` (empty) | None found | **~$1,104** |
+| METH | 0.668650 | −$447.66 | `` (empty) | None found | **~$448** |
+| BBSOL | 1.742976 | $0 (zero) | bybit-collapsed-v1:... | Found | $0 |
+| **Total** | | | | | **~$1,551** |
+
+### Current EARN state
+- BYBIT:33625378:EARN ETH: only 6 tiny ACQUIRE points (yield accruals, max 0.000014 ETH). No CARRY_IN for 0.693 ETH ever recorded.
+- BYBIT:33625378:EARN METH: **zero ledger points** — the METH subscription never materialized at EARN.
+
+### Root cause
+Empty `correlationId` on the outbound CARRY_OUT events means the replay engine could not match the departure from the main account to an arrival at EARN. The `bybit-it-bundle-v1` / `bybit-collapsed-v1` matching paths require a non-empty corrId for pairing.
+
+### Downstream impact
+If ETH and METH were redeemed from EARN later (via LENDING_WITHDRAW), the redemption CARRY_OUT at EARN would have drained a near-zero basis (EARN had $0 for these assets). This would propagate zero-basis back to the main account at redemption time, causing a P&L distortion on any subsequent disposal.
+
+### Failed stage hypothesis
+`linking` / `move_basis` — BYBIT EARN subscription events without corrId are not paired to EARN account arrival. The CARRY_OUT fires correctly (draining main account), but the corresponding CARRY_IN at EARN is either not emitted or emitted with zero cbD.
+
+### Evidence state
+`EVIDENCE_PRESENT_UNUSABLE` — main account CARRY_OUTs exist with correct cbD but no corrId. EARN account shows no matching entry.
+
+### Remediation
+1. In the Bybit EARN subscription normalizer: ensure corrId is assigned to both the source (BYBIT:33625378) CARRY_OUT and the destination (BYBIT:33625378:EARN) CARRY_IN for ETH and METH subscription events.
+2. Identify the specific source records (TRANSACTION_LOG or FUNDING_HISTORY) for these two subscriptions and retroactively assign matching corrIds.
+3. Replay to materialize EARN CARRY_INs with correct cbD ($1,104 ETH + $448 METH).
+
+---
+
+## B-EARN-MISTYPE — P3 TYPE-MODEL (refresh 9)
+
+### Problem
+79 transactions at BYBIT:33625378:EARN have `type: LENDING_WITHDRAW`. These represent Bybit Flexible Savings (EARN_FLEXIBLE_SAVING) redemption events, not actual lending protocol withdrawals. The type `EARN_FLEXIBLE_SAVING` does not exist in the current DB type vocabulary.
+
+### Assets affected
+USDC, USDT, AGLD, ETH, CMETH, TON, BBSOL, MNT, ONDO, LDO, LINK (from 79 events)
+
+### Financial impact
+The financial handling at EARN LENDING_WITHDRAW time emits REALLOCATE_OUT with cbD proportional to EARN position basis. This is numerically correct for the cases verified (e.g., ONDO cbD=−$29.44 on REALLOCATE_OUT 400 ONDO). No active AVCO break detected from the mis-classification alone.
+
+### Impact vector
+If `EARN_FLEXIBLE_SAVING` type is introduced in the future with different replay logic, these 79 historical events would need to be reclassified. Until then, the LENDING_WITHDRAW path provides an acceptable proxy.
+
+### Failed stage hypothesis
+`classification` — Bybit EARN redemptions are mapped to LENDING_WITHDRAW because the EARN account is treated as a lending position. A distinct EARN_FLEXIBLE_SAVING type would better model the Bybit product semantics.
+
+### Evidence state
+`EVIDENCE_PRESENT_UNUSABLE` — transactions exist and are classified; type is semantically wrong but financially handled.
+
+### Remediation
+Add `EARN_FLEXIBLE_SAVING` as a normalized type with its own replay handler, or annotate existing LENDING_WITHDRAWs on BYBIT:EARN accounts with a subType flag to distinguish EARN from genuine Aave/lending protocol withdrawals.
+
+---
+
+## B-DOUBLE-LEDGER-POINT — P3 COSMETIC (refresh 9)
+
+### Problem
+ETH:ARBITRUM position for `0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f` has a double ledger point for a single CARRY_IN from transaction `0x04b1a5790c6f9aa72f19353f2226dab48d0e4630e679d7a18ad7b8ef9022c600` (ARBITRUM INTERNAL_TRANSFER `0xf03b52e8` → `0x1a87f12a`, 2025-09-05T18:25:12Z):
+
+| seq | basisEffect | qtyDelta | cbDelta | qtyAfter | basisAfter | avcoAfter |
+|---|---|---|---|---|---|---|
+| 5031 | CARRY_IN | +0.00003782 | **+$0.162329** | 0.00042269 | **$0.246230** | **$582.53** |
+| 5032 | CARRY_IN | 0 | **−$0.077615** | 0.00042269 | **$0.168614** | **$398.91** |
+
+**Expected single point**: +0.00003782 ETH, cbD=+$0.084714, avcoAfter≈$399.
+
+The intermediate state at seq=5031 (avco=$583) appears as an AVCO spike in the chart before being corrected at seq=5032. Net result after both points is numerically correct.
+
+### Root cause hypothesis
+The CARRY_IN was emitted as two journal entries by the two-phase carry mechanism. The Phase-1 entry received a cbD value that included the Phase-2 component (cbD was double-counted), and Phase-2 corrected it with a negative delta. The CARRY_OUT source (0xf03b52e8) shows a single CARRY_OUT at seq=5033 with cbD=−$0.08471 (correct). The two-phase split at the destination is a replay defect.
+
+### Financial impact
+Net correct. The dust position (~0.0004 ETH, basis ~$0.17) has no material accounting impact. The chart spike (avco $218 → $583 → $399) is a cosmetic artifact.
+
+### Failed stage hypothesis
+`replay` — two-phase carry-in handler emits Phase-1 with inflated cbD instead of the final carry amount.
+
+### Audit terminal state
+`AUTHORITATIVE_RECONSTRUCTION_COMPLETE` — net numerically correct. Cosmetic defect only.
+
+---
+
+## BROAD BASIS-LOSS SCAN RESULTS (refresh 9)
+
+### Scan 1: totalCostBasisAfterUsd < $5, quantityAfter > 0.001
+**50 entries found.** All are BYBIT stablecoin micro-positions (USDC, USDT), small token remnants (FLOCK, ALCH), or dust Bybit yield accruals. None involve ETH, WETH, BTC, WBTC, or other high-value assets at material quantities. **No new blockers.**
+
+### Scan 2: basisEffect = UNKNOWN
+**50 entries found.** All are LP_EXIT events. Distribution:
+- LP receipt token burns (qty→0, basis=$0, avco=null): expected, always UNKNOWN for burned receipts
+- LP_EXIT returning USD₮0 on UNICHAIN: `0x89ce8e60c21aec` (qty=772.85, $772.85, avco=$1.00) — correct carry
+- LP_EXIT returning ETH on UNICHAIN: `0x89ce8e60c21aec` (ETH qty=0.11278, cbD=$163.10, avco=$1,569.12) — basis correctly computed, UNKNOWN instead of REALLOCATE_IN (W-12 class, P3)
+- PancakeSwap BASE LP_EXITs returning CAKE: `0x42f3766b12a6b5` (CAKE 17.97 at $2.45, $44.04 basis) — acceptable; CAKE avco is market-plausible
+- PancakeSwap BSC LP_EXIT returning XYZ: `0x8cd84503347886` (78K XYZ tokens, cbD=$0) — zero basis for unknown token, not material
+
+All UNKNOWN entries are LP_EXIT artifacts. **No new material blockers from this scan.**
+
+### Scan 3: ETH/WETH/BTC avcoAfterUsd between $0 and $500 (all historical ledger points)
+**3 asset+wallet+network combinations** with historical low-AVCO points:
+| wallet | symbol | network | historical low avco | current terminal avco | status |
+|---|---|---|---|---|---|
+| 0x1a87f12a | ETH | ARBITRUM | ~$218-$475 (seq 5021-5072, dust 0.0004 ETH) | $2,069 (qty=0.081 ETH) | BENIGN — dust period, resolved |
+| 0x1a87f12a | WETH | BASE | $215 (seq 5006-5007, 0.0107 WETH) | qty=0 (fully disposed) | BENIGN — historical |
+| 0x1a87f12a | WETH | ARBITRUM | $215 (seq 5021 undefined-order, 0.0107 WETH) | qty=0 (fully disposed) | BENIGN — historical |
+
+Root cause of $215 AVCO on WETH:BASE and WETH:ARBITRUM: The BASE aWETH position was repeatedly cycled through LP_ENTRY/LP_EXIT events, depleting the tracked basis. By Sep 2025 (seq 5006), only 0.0107 WETH remained in AWETH:BASE with $2.31 basis (AVCO=$215). This was bridged to ARBITRUM, receiving $2.31 cbD on the BRIDGE_IN. Both $215 AVCO occurrences trace to the same aWETH basis-depletion event.
+
+**No new blockers — all are historical artifacts with no current active AVCO impact.**
+
+---
+
+## ETH FAMILY STATE (refresh 9)
+
+| Wallet | Symbol | Qty | Basis | AVCO | Status |
+|---|---|---|---|---|---|
+| 0x1a87f12a | AMANWETH | 3.060 | **$9,011.24** | **$2,944.85** | ✅ FIXED (was $1,533 in R7) |
+| BYBIT:33625378 | ETH | 1.149 | $4,387.88 | $3,817.60 | ✅ |
+| 0x1a87f12a | ETH | 0.081 | $168.48 | $2,068.98 | ✅ |
+| BYBIT:33625378:FUND | ETH | 0.000 | $0 | — | ✅ (emptied via 0xa5e755a6) |
+| 0xf03b52e8 | ETH | 0.011 | $42.65 | $3,822 | ✅ |
+| Various other wallets | ETH/WETH | ~0.05 | ~$89 | ~$2,700 | ✅ |
+| **FAMILY total** | | **~4.35 ETH** | **~$13,689** | **~$3,145** | |
+
+Note: Combined FAMILY:ETH AVCO=$3,145 is higher than the user-expected ~$2,602. This reflects: (a) BYBIT ETH at $3,817 pulling the average up, (b) the Aave MANTLE ETH at $2,944, (c) fullSession AVCO calculation (which includes disposed positions) may differ from active-only. No active breaks detected.
+
+---
+
+## USER COMPLAINT DIAGNOSIS (refresh 7)
+
+**"ETH AVCO ~$1,600 looks like a classification error. All data should be there."**
+
+The user is **correct**. Root cause confirmed: **B-LP-EXIT-BASE-PANCAKE-UNKNOWN** (see below).
+
+| Observation | Actual cause | Verdict |
+|---|---|---|
+| aManWETH AVCO $1,533 | UNKNOWN tx `0x0a757aee` (PancakeSwap V3 LP_EXIT on BASE) returned 0.799 ETH with no flows → zero basis carried through bridge | ❌ **CLASSIFICATION ERROR** |
+| BRIDGE_IN `0x38d445c4` cbD=$0 | Source BASE position only had 0.000002364 ETH tracked; 0.799 ETH came from LP_EXIT not captured in flows | ❌ **UPSTREAM BUG** |
+| B-LP-UNSTAKE-ETH-MISS "CLOSED" | **WRONG RESOLUTION** — previously attributed to SPONSORED_GAS_IN, but BASE SPONSORED_GAS_IN totals only 0.000446 ETH. Real source was LP_EXIT UNKNOWN. | ❌ **PRIOR AUDIT ERROR** |
+| April 2025 SWAP ACQUIRE at $1,554 | Legitimate Bybit SPOT purchases on 2025-04-11; ETH genuinely ~$1,554 at that date. On BYBIT:33625378, not aManWETH path. | ✅ CORRECT |
+| SPONSORED_GAS_IN AVCO dilution | 18 events on BASE totaling 0.000446 ETH ($0 cbD); tiny. 266 events total (all wallets) — GAS_ONLY with minimal quantities; not material | ✅ NOT MATERIAL |
+| LENDING_WITHDRAW REALLOCATE_IN pulling AVCO $1,952→$1,531 | Correct restoration of aWETH position AVCO. But aWETH position is wrong because LP_EXIT cbD was not captured upstream | ❌ DOWNSTREAM SYMPTOM |
+| CARRY_IN `0xa5e755` aManWETH avco: 2790→1533 | Cascade from zero-basis BRIDGE_IN: correct carry of upstream wrong value | ❌ DOWNSTREAM SYMPTOM |
+
+**P0 active regression: aManWETH AVCO $1,533 instead of ~$2,219. Estimated cbD shortfall ~$2,100.**
+
+---
+
+## RECENTLY RESOLVED (refresh 6–7)
+
+| ID | Resolution |
+|---|---|
+| B-BRIDGE-IN-ACQUIRE | **RESOLVED** — 129 CARRY_INs, $45,957 cbD, 0 oscillations. Verified 2026-06-03. |
+| ~~B-LP-UNSTAKE-ETH-MISS~~ | **REOPENED as B-LP-EXIT-BASE-PANCAKE-UNKNOWN** — Prior "CLOSED" verdict was incorrect. 0.799 ETH came from LP_EXIT, not SPONSORED_GAS_IN. |
+| B-SHORTFALL-1 oscillation | **RESOLVED** — Oscillation fix correct. No genuine BRIDGE_IN with non-zero source is losing basis. |
+
+---
+
+## RANKED ACTIVE BLOCKER LIST (refresh 7)
+
+**Audit verdict (2026-06-03 refresh 7): P0 classification error found. aManWETH AVCO=$1,533 traces to UNKNOWN PancakeSwap V3 LP_EXIT on BASE (`0x0a757aee`) with empty flows. B-LP-UNSTAKE-ETH-MISS was wrongly closed — reopened as B-LP-EXIT-BASE-PANCAKE-UNKNOWN. cbD shortfall ~$2,100 actively broken.**
+
+| Rank | ID | Severity | Description | Est. cbD shortfall | Active AVCO broken? | Fixable? |
+|---|---|---|---|---|---|---|
+| 0 | **B-LP-EXIT-BASE-PANCAKE-UNKNOWN** | **P0 ACTIVE** | PancakeSwap V3 LP_EXIT `0x0a757aee` on BASE: `ROUTER_METHOD_OVERLOAD_UNSUPPORTED` → empty flows → 0.799 ETH return not tracked → BRIDGE_IN carries $0 → aManWETH AVCO $1,533 | **~$2,100** | **YES** (aManWETH 3.06 ETH basis $4,691, should be ~$6,791) | ✅ Normalization fix needed |
+| 1 | B-VAULT-WITHDRAW `0xc8b94615` | P2 FIXABLE | Turtle Finance USDC vault AVALANCHE: vault token burn missing from flows | ~$2,815 | No (USDC disposed) | ✅ Normalization fix needed |
+| 2 | B-BYBIT-CORRIDOR-2 (USDe) | DATA GAP | 2115 USDe MANTLE: SPOT→FUND FH missing; ~$2,105 shortfall | ~$2,105 | No (USDe position disposed May 2026) | ❌ Evidence missing |
+| 3 | B-VAULT-WITHDRAW `0x971c8464` + `0xb47d87fa` | DATA GAP | MCUSDC upstream shortfall + wrapper-less vault no prior deposit | ~$4,608 (hist.) | No | ❌ Irreducible |
+| 4 | B-BYBIT-CORRIDOR-2 (cmETH) | DATA GAP | cmETH MANTLE GENUINE_EVIDENCE_MISSING | ~$212 | Yes (cmETH qty=0.1053 no basis) | ❌ Evidence missing |
+| 5 | B-BRIDGE-ORPHAN-2 | DATA GAP | 5 BRIDGE_OUTs to 0xf5f93d26; 1 failed/refunded, 4 exits to untracked chain | ~$0.81 net | No | ❌ Trivial |
 | 6 | B-BRIDGE-ORPHAN-1 | DATA GAP | 4 orphan BRIDGE_OUTs (LiFi USDC + Across ETH) | ~$7 | No | ❌ Cross-chain gap |
+
+---
+
+## B-LP-EXIT-BASE-PANCAKE-UNKNOWN — P0 ACTIVE (refresh 7)
+
+### Problem class
+LP_EXIT (PancakeSwap V3 concentrated liquidity, ETH/USDC pool, BASE network)
+
+### Protocol and scope
+- Protocol: PancakeSwap V3 (MasterChef V3 / NonfungiblePositionManager)
+- Network: BASE
+- Contract interaction: router method not supported by WalletRadar classifier
+- LP position ID: `lp-position:base:pancakeswap:9`, position token NFT `938761`
+- Affected wallet: `0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f`
+
+### The failing transaction
+| Field | Value |
+|---|---|
+| txHash | `0x0a757aeeb58667c545017cd8e5cd60dc994a8945ed810c60ea2aed18688f4f7a` |
+| network | BASE |
+| timestamp | 2026-02-06T07:15:37Z |
+| pipeline classification | `UNKNOWN` |
+| classifiedBy | `PROTOCOL_REGISTRY` (protocol recognized; method unsupported) |
+| flows | **EMPTY** |
+| missingDataReasons | `["ROUTER_METHOD_OVERLOAD_UNSUPPORTED"]` |
+| protocolName | PancakeSwap, V3 |
+
+### Authoritative raw-source reconstruction
+
+Chronological event sequence on BASE, 2026-02-06:
+
+| Time | txHash (short) | Type | Effect |
+|---|---|---|---|
+| 07:14:19 | `0x87169b31` | REWARD_CLAIM | Harvests CAKE fees; ETH gas -$0.011 |
+| 07:14:45 | `0xe66f9242` | LP_POSITION_UNSTAKE | Unstakes LP NFT from MasterChef V3 |
+| 07:15:13 | `0xed7c0f4d` | LP_FEE_CLAIM | Claims $5.48 USDC fee income from position |
+| 07:15:37 | **`0x0a757aee`** | **UNKNOWN (LP_EXIT)** | **Burns LP NFT 938761; returns ~0.799 ETH to wallet — flows EMPTY** |
+| 07:17:13 | `0xd644d3f8` | SPONSORED_GAS_IN | Relay protocol pays 0.000002364 ETH gas rebate |
+| 07:17:15 | `0x4ca0b79e` | BRIDGE_OUT (LI.FI) | Sends 0.799 ETH to ARBITRUM |
+
+**Physical flow**: 0.799 ETH was returned by the LP exit at 07:15:37 and immediately bridged at 07:17:15 (98-second gap). The BRIDGE_OUT flow `"assetSymbol":"ETH","quantityDelta":"-0.799"` is confirmed. The BASE ETH tracked position at 07:17 held only 0.000002364 ETH (a Relay gas rebate), not the 0.799 ETH.
+
+**LP position cost basis**:
+
+| Entry | Date | ETH deposited | USDC deposited | ETH price (est.) | ETH cost |
+|---|---|---|---|---|---|
+| `0x5532ff4b` LP_ENTRY | 2025-12-20T10:23 | 0.262291541 | $1,148.84 | ~$3,700 | ~$970 |
+| `0x9d6199bb` LP_ENTRY | 2025-12-20T10:25 | 0.009404129 | $41.10 | ~$3,700 | ~$35 |
+| `0xc9c5686c` LP_ENTRY | 2026-02-02T11:17 | 0.016310631 | $13.00 | ~$2,000 | ~$33 |
+| `0xbdf8cee9` LP_ENTRY | 2026-02-02T11:33 | 0.001299999 | $1.07 | ~$2,000 | ~$3 |
+| **Total deposited** | | **0.289306 ETH** | **~$1,204 USDC** | | **~$1,041 ETH cost** |
+| Partial exits (Jan 31, Feb 2) | | — | −$13.82 USDC returned | | |
+| **Net LP cost basis** | | | | | **~$2,231** |
+
+At exit time (Feb 6, ETH ~$1,897): 0.799 ETH × $1,897 = $1,516. LP returned mainly ETH (concentrated liquidity shifted to ETH as price fell from $3,700 → $1,897, i.e., impermanent loss accumulated ETH). Minimal USDC returned (LP_FEE_CLAIM returned only $5.48 USDC as fees).
+
+**Estimated missing cbD on returned ETH**: $2,231 × ($1,516 / $1,521) ≈ **~$2,214** (attributing nearly all LP cost basis to ETH given the heavy IL toward ETH).
+
+A conservative lower bound: $1,000 (only the ETH-portion cost at deposit); upper bound: $2,231 (full LP cost).
+
+### Cascade chain (how the $1,533 aManWETH AVCO was produced)
+
+```
+0x0a757aee BASE LP_EXIT (UNKNOWN, empty flows)
+  → 0.799 ETH returned to wallet with $0 tracked basis
+  → 0x4ca0b79e BASE BRIDGE_OUT LI.FI
+      CARRY_OUT: 0.000002364 ETH cbD=$0 (only the Relay gas rebate tracked)
+      [gap: 0.798997636 ETH not in tracked position → cbD=$0 on bridge]
+  → 0x38d445c4 ARBITRUM BRIDGE_IN LI.FI
+      CARRY_IN: 0.799 ETH cbD=$0 ← MISSING ~$2,214 here
+  → 0x3099ace0 ARBITRUM LENDING_DEPOSIT REALLOCATE_IN
+      aWETH position: 0.799 ETH cbD=$0.92 added to 2.087 ETH position at $4,663
+      AVCO: (4,663 + 0.92) / 2.886 → $1,616 (from $2,234)
+  → additional LENDING_DEPOSITs
+      aWETH grows to 3.046 ETH at basis $4,664, AVCO $1,531
+  → 0xe564fec1 ARBITRUM LENDING_WITHDRAW REALLOCATE_IN
+      Restores NATIVE:ARBITRUM ETH 3.046 ETH cbD=$4,664 AVCO $1,531
+  → 0x6f7aec13 UNWRAP REALLOCATE_IN
+      Combined with 0.017 native ETH → 3.065 ETH AVCO $1,533
+  → 0xbc3fe1a5 ARBITRUM INTERNAL_TRANSFER CARRY_OUT → BYBIT:33625378:FUND
+  → BYBIT:33625378:FUND CARRY_IN 3.06 ETH cbD=$4,691 AVCO $1,533
+  → 0xa5e755a6 MANTLE INTERNAL_TRANSFER CARRY_IN
+      0x1a87f12a NATIVE:MANTLE 3.06 ETH cbD=$4,691 AVCO $1,533
+  → 0x3b8592a7 MANTLE LENDING_DEPOSIT REALLOCATE_IN
+      aManWETH position: 3.06 ETH cbD=$4,691 AVCO $1,533 ← FINAL BROKEN STATE
+```
+
+### Authoritative reconstruction vs current pipeline output
+
+| Surface | Current pipeline output | Auditor-derived correct value |
+|---|---|---|
+| `0x0a757aee` type | UNKNOWN, flows=[] | Should be LP_EXIT with ETH TRANSFER +0.799 flows |
+| `0x38d445c4` BRIDGE_IN cbD | $0 | ~$2,214 |
+| NATIVE:ARBITRUM aWETH AVCO after deposit | $1,616 | ~$2,156 |
+| LENDING_WITHDRAW NATIVE:ARBITRUM cbD | $4,664 | ~$6,878 |
+| NATIVE:MANTLE CARRY_IN cbD | $4,691 | ~$6,905 |
+| aManWETH basis (current) | **$4,691** | **~$6,905** |
+| aManWETH AVCO (current) | **$1,533** | **~$2,257** |
+
+### Failed stage hypothesis
+`normalization` — PancakeSwap V3 router method is recognized (PROTOCOL_REGISTRY match) but `ROUTER_METHOD_OVERLOAD_UNSUPPORTED` prevents flow extraction. The classifier produces zero flows. The LP_EXIT handler then has nothing to work with.
+
+### Evidence state
+`EVIDENCE_PRESENT_UNUSABLE` — All raw evidence exists in `raw_transactions`. The protocol is identified as PancakeSwap V3 with HIGH confidence. The blocking issue is the router method overload not being parsed, not missing data.
+
+### Prior audit error
+The previous resolution in B-LP-UNSTAKE-ETH-MISS concluded "0.799 ETH on BASE was SPONSORED_GAS_IN receipts — zero basis correct." This is demonstrably wrong:
+- SPONSORED_GAS_IN on BASE for wallet `0x1a87f12ac0` = 18 events totaling **0.000446 ETH** (not 0.799 ETH)
+- The RELAY gas rebate `0xd644d3f8` added only **0.000002364 ETH** — the BRIDGE_OUT `0x4ca0b79e` CARRY_OUT correctly used this tiny amount as the tracked position
+- The 0.799 ETH discrepancy is entirely explained by the LP_EXIT `0x0a757aee` returning ETH to the wallet 98 seconds before the bridge, with no flows recorded
+
+### SPONSORED_GAS_IN AVCO dilution (separate analysis)
+
+SPONSORED_GAS_IN events create `GAS_ONLY` ledger entries with positive `quantityDelta` and `costBasisDeltaUsd=0`. This represents gas fee rebates from protocols like Relay.
+
+Impact on NATIVE:ARBITRUM position around 2026-02-19:
+- Three events add tiny ETH (0.0000017–0.0000081 ETH each) to the native position (which held ~0.016 ETH)
+- AVCO shifts: $1,953.64 → $1,953.42 → $1,952.38 → $1,952.11 (total dilution: ~$1.5)
+- **Not material.** The AVCO drop from $1,952 → $1,531 was from the LENDING_WITHDRAW restoring the aWETH position (which correctly reflects the upstream LP_EXIT bug, not the SPONSORED_GAS_IN events).
+
+### Remediation
+
+**Pipeline stage**: `normalization` — add support for the PancakeSwap V3 router method overload that is currently blocking flow extraction.
+
+**Required work**:
+1. Identify the specific PancakeSwap V3 router selector in transaction `0x0a757aeeb58667c545` on BASE
+2. Add that method/overload to the PancakeSwap V3 normalization handler
+3. Emit LP_EXIT flows: `TRANSFER ETH +0.799` (from pool back to wallet) + `TRANSFER LP-RECEIPT -1` (burn)
+4. The LP_EXIT basis-carry mechanism should then propagate LP position cost basis to the returned ETH
+5. The BRIDGE_OUT `0x4ca0b79e` will then carry ~$2,214 cbD instead of $0 to the ARBITRUM BRIDGE_IN
+6. Rebuild pipeline → aManWETH AVCO should recover from $1,533 to ~$2,257
+
+**Acceptance criteria**:
+- `0x0a757aee` normalized as LP_EXIT with non-empty ETH flow ≥ 0.799
+- BRIDGE_IN `0x38d445c4` CARRY_IN cbD > $1,000
+- aManWETH `avcoAfterUsd` > $2,000
+
+### Estimated cbD shortfall
+**~$2,100** (median; range $1,000–$2,214 depending on LP cost attribution method)
+
+### Active AVCO impact
+**YES** — aManWETH (0x1a87f12a, MANTLE) currently shows qty=3.06, basis=$4,691, AVCO=$1,533. Correct AVCO should be ~$2,257.
+
+### Audit terminal state
+`AUTHORITATIVE_RECONSTRUCTION_COMPLETE` — Pipeline correction required at normalization stage.
 
 ---
 
@@ -959,6 +1358,213 @@ Verify: when this GMX position is eventually exited (`LP_EXIT_SETTLEMENT`), does
 
 ---
 
+## AVCO SPIKE INVESTIGATION — Refresh 5 Supplement (2026-06-02)
+
+Investigation of 6 reported AVCO spike clusters (A–F). Full Mongo reconstruction performed from `asset_ledger_points`, `normalized_transactions`, raw flows.
+
+### Key systemic finding: ALL 122 BRIDGE_INs with corrId are classified as ACQUIRE — none as CARRY_IN
+
+```
+Total BRIDGE_INs with correlationId  : 122
+BRIDGE_INs with ACQUIRE LP points    : 107
+BRIDGE_INs with CARRY_IN LP points   :   0
+```
+
+This is the root cause of Clusters A, C, and D spikes. The pipeline links BRIDGE_INs to their BRIDGE_OUTs via `correlationId` but classifies every receipt as an ACQUIRE at market price rather than a CARRY_IN that preserves source-chain basis. Stage: `classification` / `cost_basis` replay.
+
+---
+
+### B-BRIDGE-IN-ACQUIRE (NEW — CRITICAL, P1)
+
+**Systemic.** 107 out of 122 BRIDGE_INs that carry a matching `correlationId` to a BRIDGE_OUT are emitting `ACQUIRE` ledger points (market-priced) instead of `CARRY_IN` (basis-preserving).
+
+| Surface | Wrong now | Correct |
+|---|---|---|
+| BRIDGE_IN basisEffect | `ACQUIRE` | `CARRY_IN` |
+| BRIDGE_IN cbD | market price × qty | proportional carry from BRIDGE_OUT cbD |
+| AVCO at destination | reflates to current market | continuous with source-chain AVCO |
+
+**Cluster A evidence (0x3fd2c7 → 0x74b417):**
+- BRIDGE_OUT (wallet `0x1a87f12a`): ETH CARRY_OUT cbD=-$2.647, avco=$2,112.93
+- BRIDGE_IN (wallet `0xf03b52e8`, 10 min later, same corrId `bridge:lifi:0x3fd2c709...`): ETH **ACQUIRE** cbD=+$2.333, avco=**$2,335.78**
+- Correct CARRY_IN cbD = 0.000999 × $2,112.93 = **$2.111** (-$0.222 overstatement)
+- AVCO discontinuity: source=$2,112.93 → destination=$2,335.78 (+**$222/ETH**)
+
+**Cluster D evidence (0x4ca0b7 → 0x38d445c4fc):**
+- BRIDGE_OUT (wallet `0x1a87f12a` on Base): ETH CARRY_OUT cbD=0 (zero-basis sponsored gas), corrId `bridge:lifi:0x4ca0b79...`
+- BRIDGE_IN (same wallet, 1 sec later, same corrId): 0.799 ETH **ACQUIRE** cbD=+**$1,515.67**, avco=**$1,896.61**
+- ETH AVCO before BRIDGE_IN: **$1,453.85** (diluted by SPONSORED_GAS_IN)
+- AVCO spike: $1,453 → $1,896 = **+$443/ETH (+30%)**
+
+**Failed stage hypothesis:** `classification` — BRIDGE_IN classifier does not promote matched (corrId-linked) BRIDGE_INs to CARRY_IN status.
+
+**Evidence state:** `EVIDENCE_PRESENT_UNLINKED` — corrId is present and correctly assigned on both BRIDGE_OUT and BRIDGE_IN. Pipeline does not use it to carry basis.
+
+**Remediation:** When a BRIDGE_IN has a `correlationId` matching an existing BRIDGE_OUT with CARRY_OUT effect: emit CARRY_IN (not ACQUIRE) with cbD = (received_qty / sent_qty) × |source_CARRY_OUT_cbD|. Fee lost to bridge = remaining portion, treated as GAS_ONLY/bridge-fee expense. Zero-cbD BRIDGE_OUTs propagate zero cbD to BRIDGE_IN (no AVCO inflation at destination).
+
+**cbD shortfall (Cluster A):** +$0.22 overstatement. **Cluster D:** up to $1,515 overstatement. **Total across 107 cases:** unquantified but systemic.
+
+**Active AVCO broken:** YES — visible in Clusters A and D. Cluster C's "basis проваливается" is the downstream dilution of the same D2 BRIDGE_IN spike.
+
+---
+
+### B-LP-UNSTAKE-ETH-MISS (NEW — HIGH, P2)
+
+**Cluster D root cause layer 2.** On 2026-02-06 07:14–07:17 (wallet `0x1a87f12a`, Base):
+
+1. `LP_POSITION_UNSTAKE` (0xe66f924216, 07:14:45): flow = ETH -8.8e-7 FEE only. LP_POINT: GAS_ONLY cbD=0, avco=null.
+2. `LP_FEE_CLAIM` (0xed7c0f4d81, 07:15:13, corrId `lp-position:base:pancakeswap:938761`): receives USDC 5.485. No ETH REALLOCATE_IN.
+3. `SPONSORED_GAS_IN` (07:17:13): ETH +0.000002364 at zero basis.
+4. `BRIDGE_OUT D2` (0x4ca0b7, 07:17:15): raw flow shows ETH -0.799 TRANSFER. LP tracking: CARRY_OUT cbD=0 for only 0.000002 ETH.
+
+On-chain raw flow shows 0.799 ETH leaving the wallet. Accounting only tracks 0.000002 ETH in the position. The **0.799 ETH gap** (worth ~$1,516 at the time) represents ETH that was atomically withdrawn from a Base protocol position (lending/LP) within the same bridge transaction but was NOT captured as a REALLOCATE_IN on the ETH LP.
+
+Consequence: D2 BRIDGE_OUT emits cbD=0 for 0.799 ETH. The subsequent BRIDGE_IN (covered by B-BRIDGE-IN-ACQUIRE) then assigns $1,515 at market instead of the correct protocol cost basis.
+
+**Failed stage hypothesis:** `classification` / `normalization` — LP_POSITION_UNSTAKE handler on Base does not detect or carry basis from the LP position to the released ETH. Likely an atomic-multicall path where the LENDING_WITHDRAW or LP_EXIT sub-call is not normalized as a standalone event.
+
+**Evidence state:** `EVIDENCE_PRESENT_UNUSABLE` — raw flows confirm 0.799 ETH left wallet; LP accounting sees only 0.000002 ETH.
+
+**Remediation:** LP_POSITION_UNSTAKE (and composite bridge txs that include a protocol withdrawal) must emit a REALLOCATE_OUT on the LP/lending receipt token and REALLOCATE_IN on the released ETH before the BRIDGE_OUT CARRY_OUT, so the full cost basis threads through to the destination BRIDGE_IN.
+
+**cbD shortfall:** Estimated ~$1,516 in cbD for the 0.799 ETH (actual basis unknown; overstatement at market may partially offset if historical cost was close to current price). AVCO spike +$443/ETH visible.
+
+**Active AVCO broken:** YES — Cluster D. Also manifests as Cluster C "basis проваливается" (same BRIDGE_IN).
+
+---
+
+### B-LP-EXIT-UNLINKED (NEW — MEDIUM, P3)
+
+**Cluster E root cause.** On 2026-01-29 19:20 (wallet `0x1a87f12a`, Arbitrum):
+
+- `LP_EXIT_REQUEST` (0x806ccd26c2, 19:20:09): corrId=`0x46badf589e3b2764c8f5a8ffb37c83c8906bab72ae34f1827a5e1e6e4ab9d32e`. ETH REALLOCATE_OUT -$3.24 (avco=$2,807.99).
+- **No matching `LP_EXIT_SETTLEMENT`** exists with that corrId in the database.
+- `EXTERNAL_TRANSFER_IN` (0xf3581fb987, 19:20:13, **4 seconds later**, corrId=none): 3 ACQUIRE flows, ETH +0.020863 at market price → avco drops $2,807.99 → **$2,780.15** (-$28/ETH).
+- `LENDING_DEPOSIT` E1 (0xf3eb1aef, 19:21:04): ETH REALLOCATE_OUT → aArbWETH REALLOCATE_IN. AVCO unchanged.
+
+The EXTERNAL_TRANSFER_IN is the GMX LP exit settlement arriving 4 seconds after the request. It is misclassified as an unlinked external inflow (ACQUIRE at market) instead of `LP_EXIT_SETTLEMENT` with CARRY_IN preserving the LP's allocated ETH basis.
+
+**AVCO impact:** ETH drops $28/ETH at the moment of settlement. Because E1 immediately deposits the ETH to Aave, the incorrect AVCO ($2,780 vs $2,808) propagates into aArbWETH.
+
+**cbD shortfall:** 0.020863 ETH × ($2,808 - $2,780) = **~$0.58** understatement.
+
+**Failed stage hypothesis:** `linking` — the GMX LP_EXIT_REQUEST settlement is not matched to the LP_EXIT_REQUEST via corrId; the settlement tx arrives with no corrId and falls through to EXTERNAL_TRANSFER_IN classification.
+
+**Evidence state:** `EVIDENCE_PRESENT_UNLINKED` — settlement TX exists (0xf3581fb987); LP_EXIT_REQUEST corrId exists; pipeline does not assign it to the settlement.
+
+**Remediation:** GMX LP settlement matching must assign the same corrId from LP_EXIT_REQUEST to the arriving settlement TX (based on timing and on-chain GMX execution logic). The settlement should be classified as LP_EXIT_SETTLEMENT with CARRY_IN effect (not ACQUIRE).
+
+**Active AVCO broken:** YES — Cluster E. Manifests as $28/ETH drop visible in chart at 19:20 on 2026-01-29.
+
+---
+
+### B-BRIDGE-ORPHAN-3 (NEW — MEDIUM, P4)
+
+BRIDGE_OUT `0x4a2eb3ee44ab87cbdfe4a6dc59e9733e5541b4bc41ef796e78693d746ba9fb6a` (wallet `0xf03b52e8`, 2026-01-13 13:13).
+
+| Field | Value |
+|---|---|
+| Asset out | USDC -1,050.0 + ETH -0.000063765 |
+| CARRY_OUT cbD | USDC -$1,050.58 + ETH -$0.190 |
+| corrId | none |
+| Matching BRIDGE_IN found | Partial: `0xfded5a55` (+499.86 USDC on `0x1a87f12a`) + `0xc894c2d939` (+648.22 USDC on `0x1a87f12a`) |
+| Matching corrId link | Missing — BRIDGE_OUT has no corrId, BRIDGE_IN has `bridge:lifi:0x95f47c80...` |
+
+Combined inflow ($499.86 + $648.22 = $1,148.08) exceeds outflow $1,050. The two inflows may represent split delivery or unrelated inflows. Without corrId linking, the USDC CARRY_OUT ($1,050.58) remains orphaned.
+
+**cbD shortfall:** ~$0 for USDC (stablecoin, AVCO=$1). ETH CARRY_OUT -$0.190 is small. No active AVCO broken.
+
+**Active AVCO broken:** No (USDC stablecoin).
+
+**Failed stage:** `classification` — corrId not assigned to the BRIDGE_OUT on 0xf5f93d26 path.
+
+---
+
+### B-BRIDGE-ORPHAN-4 (NEW — MEDIUM, P4)
+
+BRIDGE_OUT `0x5ca14340e17ce74a5bcdbef9fd1b72756f90ec41ee6394abb3dd8d6aff73d1fa` (wallet `0xf03b52e8`, 2026-01-15 09:35).
+
+| Field | Value |
+|---|---|
+| Asset out | USDC -50.0 + ETH -0.000063765 |
+| CARRY_OUT cbD | USDC -$50.01 + ETH -$0.190 |
+| corrId | none |
+| Matching BRIDGE_IN found | None on Jan 15–16 |
+
+No matching BRIDGE_IN or EXTERNAL_TRANSFER_IN found within 24 hours of the BRIDGE_OUT. Confirmed orphan.
+
+**cbD shortfall:** ~$0 (USDC stablecoin). No active AVCO broken.
+
+**Failed stage:** `classification` — corrId missing, BRIDGE_IN not normalized (possible failed bridge or untracked destination wallet).
+
+---
+
+### CLUSTER C — NOT A NEW BLOCKER (diagnosis only)
+
+Cluster C pair (0x1aa343 LP_ENTRY_SETTLEMENT + 0x9c6c4c LP_ENTRY_REQUEST, 2026-02-06):
+
+- ETH AVCO is **stable at $1,749.71** throughout both transactions.
+- The "basis проваливается" visible in the chart is the AVCO dropping from $1,896 → $1,749 between 07:17 and 07:32.
+- Root cause: the BRIDGE_IN (0x38d445c4fc) at 07:17:16 was classified as ACQUIRE at $1,896 (covered by B-BRIDGE-IN-ACQUIRE + B-LP-UNSTAKE-ETH-MISS).
+- SPONSORED_GAS_IN events (07:27–07:32) then dilute ETH AVCO from $1,896 to $1,749 by adding zero-basis ETH.
+- C1 and C2 are correctly accounted. The spike is upstream.
+
+**Action:** Fix B-BRIDGE-IN-ACQUIRE. No additional fix needed for the GMX LP operations themselves.
+
+---
+
+### CLUSTER B — NOT A NEW BLOCKER (display artifact)
+
+B1 (0xa5e755a6 BYBIT-CORRIDOR INTERNAL_TRANSFER WETH CARRY_IN, 2026-02-19):
+
+Full reconstruction confirmed:
+1. LENDING_WITHDRAW (0xe564fe): 3.0458 WETH from Aave → REALLOCATE_IN +$8,199 to WETH.
+2. UNWRAP (0x6f7aec): WETH → ETH +$8,204 basis.
+3. INTERNAL_TRANSFER (0xbc3fe1a56b): ETH CARRY_OUT $8,223 → Bybit Mantle; ETH CARRY_IN returns $8,223 (round-trip accounting for corridor).
+4. B1 (0xa5e755): ETH CARRY_OUT -$8,223 (on-chain wallet) + WETH CARRY_IN +$8,223 (from Bybit).
+5. LENDING_DEPOSIT (0x3b8592): WETH REALLOCATE_OUT -$8,223 → **aManWETH REALLOCATE_IN +$8,223** (avco=$2,687.35).
+
+**Basis is preserved end-to-end.** aManWETH on Mantle holds the full $8,223 basis. No cbD shortfall. No accounting error.
+
+The "basis теряется" observation is a **display artifact**: on-chain ETH position collapses from 3.064 ETH (avco=$2,687) to ~0.005 ETH as the corridor executes, then the basis reappears in aManWETH on Mantle. If the portfolio chart does not aggregate ETH-family assets across networks, this looks like basis loss.
+
+**cbD shortfall:** $0.
+
+**Active AVCO broken:** No.
+
+---
+
+### Cluster F — status update
+
+| Hash | Known ID | Direction | cbD out | Matching BRIDGE_IN | Net AVCO impact |
+|---|---|---|---|---|---|
+| `0xd8b6e516` | B-BRIDGE-ORPHAN-1 | ETH to Linea | -$0.827 | None found (AVAX CARRY_IN unrelated) | ETH -$0.827 basis lost |
+| `0xb1e9f65d` | B-BRIDGE-ORPHAN-2 | USDC $2,829 + ETH $0.190 | -$2,829.31 | `0xd410b4e7` (ACQUIRE, $2,831 USDC, wallet `0xf03b52e8`) — unlinked | ~$0 (USDC stablecoin) |
+| `0x4a2eb3ee` | **B-BRIDGE-ORPHAN-3** (new) | USDC $1,050 + ETH $0.190 | -$1,050.77 | Partial (split delivery, unlinked) | ~$0 (USDC stablecoin) |
+| `0x5ca14340` | **B-BRIDGE-ORPHAN-4** (new) | USDC $50 + ETH $0.190 | -$50.20 | None found | ~$0 (USDC stablecoin) |
+
+F2 (B-BRIDGE-ORPHAN-2) previously confirmed at $0.81 net impact. Correct exits to untracked destination chain confirmed for F2-F4 — USDC AVCO unaffected (stablecoin). ETH GAS CARRY_OUTs ($0.190 per tx) represent bridge gas costs, not recoverable.
+
+---
+
+### Updated Active Blocker Table (post-spike investigation)
+
+| Rank | ID | Sev | Description | Est. cbD shortfall | Active AVCO broken? | Fixable? |
+|---|---|---|---|---|---|---|
+| 1 | **B-BRIDGE-IN-ACQUIRE** | P1 CRITICAL | ALL 107 linked BRIDGE_INs emit ACQUIRE instead of CARRY_IN — systemic | Systemic (varies per bridge) | **YES** (ETH spikes visible) | ✅ Classification fix |
+| 2 | **B-LP-UNSTAKE-ETH-MISS** | P2 HIGH | LP_POSITION_UNSTAKE on Base: 0.799 ETH atomic withdrawal not captured in ETH position before bridge | ~$1,516 (Cluster D, market-basis) | **YES** (+$443/ETH spike) | ✅ Normalization fix |
+| 3 | **B-LP-EXIT-UNLINKED** | P3 MEDIUM | LP_EXIT_SETTLEMENT arrives as EXTERNAL_TRANSFER_IN ACQUIRE; settlement not linked to request | ~$0.58 | YES (-$28/ETH, Cluster E) | ✅ Linking fix |
+| 4 | B-VAULT-WITHDRAW `0xc8b94615` | P2 FIXABLE | Turtle Finance USDC vault AVAX: vault token burn missing from flows | ~$2,815 | No | ✅ Normalization fix |
+| 5 | B-BYBIT-CORRIDOR-2 (USDe) | DATA GAP | 2115 USDe MANTLE: FUND $10 at withdrawal; $2,105 SPOT acq exists | ~$2,105 | Yes (USDe avco≈$0.005) | ❌ Evidence missing |
+| 6 | B-VAULT-WITHDRAW `0x971c8464`+`0xb47d87fa` | DATA GAP | MCUSDC upstream shortfall + wrapper-less vault | ~$4,608 | No | ❌ Irreducible |
+| 7 | B-BYBIT-CORRIDOR-2 (cmETH) | DATA GAP | cmETH MANTLE GENUINE_EVIDENCE_MISSING | ~$212 | Yes (cmETH) | ❌ Evidence missing |
+| 8 | **B-BRIDGE-ORPHAN-3** | P4 LOW | USDC $1,050 BRIDGE_OUT (0x4a2eb3) unlinked, partial inflow match | ~$0 (stable) | No | ❌ corrId gap |
+| 9 | **B-BRIDGE-ORPHAN-4** | P4 LOW | USDC $50 BRIDGE_OUT (0x5ca143) orphan, no BRIDGE_IN found | ~$0 (stable) | No | ❌ corrId gap / failed bridge |
+| 10 | B-BRIDGE-ORPHAN-2 | DATA GAP | USDC BRIDGE_OUTs to 0xf5f93d26 ($0.81 net fee) | ~$0.81 | No | ❌ Trivial |
+| 11 | B-BRIDGE-ORPHAN-1 | DATA GAP | ETH $0.827 to Linea (no BRIDGE_IN) | ~$0.827 | No | ❌ Cross-chain gap |
+
+---
+
 ## Previously Resolved
 
 | ID | Fix | Status |
@@ -974,3 +1580,212 @@ Verify: when this GMX position is eventually exited (`LP_EXIT_SETTLEMENT`), does
 | B-VAULT-WITHDRAW Bug A | mevUSDC wrapper bucket mechanism implemented; $19,118 cbD recovered | **PARTIALLY RESOLVED** |
 | B-CROSS-UID (Defect 2) | isBybitSelfTransfer correlationId guard working for UTA-sourced carries | **PARTIALLY RESOLVED** |
 | B-CROSS-UID (Defect 1 BTC) | FUNDING_HISTORY corrId now assigned; both BTC CARRY_OUTs emit cbD>0; SPOT DISPOSE uses correct avBef=$96,406 | **RESOLVED** |
+
+---
+
+## REFRESH 8 — 2026-06-03 (AVCO spikes investigation)
+
+**Scope:** 17 on-chain txs + 4 Bybit events provided for triage.
+**Method:** `normalized_transactions` + `asset_ledger_points` + `bybit_extracted_events` cross-checked chronologically.
+**Pipeline state at inspection:** same session `df5e69cc`.
+
+---
+
+### 0. B-LP-EXIT-BASE-PANCAKE-UNKNOWN — VERIFICATION ✅ CONFIRMED RESOLVED (structural)
+
+`0x0a757aeeb58667c545017cd8e5cd60dc994a8945ed810c60ea2aed18688f4f7a`
+
+- **Status:** The normalization fix was applied. `type=LP_EXIT`, flows correctly contain ETH +0.796271 and LP-RECEIPT:BASE:PANCAKESWAP:938761 -1.
+- **Ledger:** ETH `REALLOCATE_IN` +0.796271, LP-RECEIPT `REALLOCATE_OUT` -1. Structural accounting is clean.
+- **ETH basis after:** $1.07 total / AVCO $1.35 per ETH. This is NOT a new bug here — it is the downstream effect of **B-PCAKE-V3-PARTIAL-EXIT** (see below), which destroyed the LP-RECEIPT basis upstream. The LP_EXIT correctly carries back whatever the LP-RECEIPT held at time of exit.
+- **Verdict:** B-LP-EXIT-BASE-PANCAKE-UNKNOWN is resolved as filed. A new P0 emerges upstream.
+
+---
+
+### NEW BLOCKERS FOUND IN THIS CYCLE
+
+---
+
+#### B-PCAKE-V3-PARTIAL-EXIT — P0 ACTIVE
+
+**Root cause:** Two PancakeSwap V3 position management transactions were misclassified as full `LP_EXIT`, destroying the LP-RECEIPT basis on each cycle. The actual operations were partial liquidity removes via a position-manager wrapper contract (`0xc6a2db661d5a5690172d8eb0a7dea2d3008665a3`) that temporarily takes and returns the NFT, but the pipeline only saw the NFT outflow and classified it as a complete exit.
+
+**Evidence trace — LP-RECEIPT:BASE:PANCAKESWAP:938761 lifecycle:**
+
+| Timestamp | Tx | Type | Effect on LP-RECEIPT | LP-RECEIPT basis |
+|---|---|---|---|---|
+| 2025-12-20 10:23 | `0x5532ff4b` | LP_ENTRY | REALLOCATE_IN +1 (USDC $1,148.84 + ETH $795.27) | **$1,944.10** |
+| 2025-12-20 10:25 | `0x9d6199bb` | LP_ENTRY | REALLOCATE_IN qty=0 (USDC $41.10 + ETH $28.02 added) | **$2,013.23** |
+| 2026-01-31 19:54 | `0x3dc35066` | **LP_EXIT** ❌ | REALLOCATE_OUT -1 → basis $0. USDC +$11.16 credited. | **$0** (from $2,013) |
+| 2026-02-02 11:17 | `0xc9c5686c` | LP_ENTRY | REALLOCATE_IN +1 (USDC $12.996 entered) | **$12.996** |
+| 2026-02-02 11:32 | `0x29dad570` | **LP_EXIT** ❌ | REALLOCATE_OUT -1 → basis $0. USDC +$2.66 credited. | **$0** (from $12.996) |
+| 2026-02-02 11:33 | `0xbdf8cee9` | LP_ENTRY | REALLOCATE_IN +1 (USDC $1.07 + ETH $2.97 entered) | **$1.072** |
+| 2026-02-06 07:15 | `0x0a757aee` | LP_EXIT ✅ | REALLOCATE_OUT -1. ETH +0.796271 REALLOCATE_IN $1.07 | — |
+
+**Financially correct reconstruction:**
+- 0x3dc35066 was a **partial USDC liquidity removal** from the position (all or part of the in-range USDC portion removed). The ETH half of the concentrated liquidity position (which held most of the value since ETH price had dropped below range) remained in the LP. The Pancake V3 NFT was not burned — it was handled by the wrapper and returned in a subsequent transaction. Pipeline saw NFT outflow only and treated it as full burn.
+- 0x29dad570: same pattern — partial USDC removal with NFT roundtrip, not a full burn.
+- The final LP_EXIT (0x0a757aee, fixed) correctly returned 0.796271 ETH worth ~$1,507 at market — confirming the position was still alive and held ETH value from the original $2,013+ deposit.
+
+**cbD shortfall:** ~$2,012 (LP-RECEIPT basis destroyed and not redistributed to the ETH portion that remained in the LP)
+
+**Current wrong state:** ETH receives $1.07 basis on LP_EXIT for 0.796271 ETH (AVCO $1.35/ETH) → correct AVCO should inherit from LP-RECEIPT basis ~$2,013 / 0.796271 ETH = **~$2,527/ETH** (blended with any prior ETH balance).
+
+**Earliest failed stage:** `classification` — partial V3 liquidity removal should not generate LP-RECEIPT REALLOCATE_OUT.
+
+**Evidence state:** `EVIDENCE_PRESENT_UNLINKED` — the NFT was not burned; the pipeline missed the NFT return flow.
+
+**Remediation:** Add detection for Pancake V3 position manager wrapper pattern. When NFT leaves and re-enters in the same or closely-adjacent transaction via a known wrapper, classify as LP_PARTIAL_REMOVE (or LP_FEE_CLAIM if only fees harvested), not LP_EXIT. LP-RECEIPT basis must not be zeroed on partial removals.
+
+---
+
+#### B-ETH-ARBI-LOW-BASIS — P1 ACTIVE
+
+**Root cause:** The Arbitrum ETH balance for wallet `0x1a87f12` accumulated to near-zero cost basis (~$0.004 total) through a chain of CARRY_IN/CARRY_OUT cycles between Feb 2025 and Feb 2026 that gradually depleted the basis without proportional basis inflow. Additionally, a ghost ledger point at Sep 5 2025 (see B-DOUBLE-LEDGER-POINT) lowered AVCO from $582 → $399 on a zero-qty phantom event.
+
+**Consequence for GMX transactions:**
+- Before GMX LP_EXIT_REQUEST (0xa83cc44b, Feb 6): ETH AVCO = **$2.43**, total basis $0.004.
+- LP_ENTRY_REQUEST (0xff684e80): ETH REALLOCATE_OUT -0.000165 ETH consumed at $2.43 AVCO.
+- LP_ENTRY_SETTLEMENT (0x1aa3438d): ETH REALLOCATE_IN +0.0000528 refund → AVCO **$15.79** (impossible for ETH in Feb 2026 at ~$1,900 market).
+- Second settlement (0x52924cd8): same AVCO inherited.
+
+**Affected txs:** `0xa83cc44b`, `0xff684e80`, `0x1aa3438d`, `0x9c6c4c68`, `0x52924cd8`
+
+**cbD shortfall:** Small in absolute terms (execution fee refunds are 0.00005–0.00007 ETH), but AVCO distortion is extreme ($15.79 vs ~$1,900). If ETH position on Arbitrum is later consolidated, the AVCO error propagates.
+
+**Earliest failed stage:** `replay` (ghost ledger point corrupts AVCO) + `carry` (upstream carry chains lost basis).
+
+**Remediation:** Fix B-DOUBLE-LEDGER-POINT (see below). Then audit all CARRY_IN chains for Arbitrum ETH on 0x1a87f12 to identify the point where basis was incorrectly zeroed.
+
+---
+
+#### B-EARN-MISTYPE — P1 ACTIVE
+
+**Root cause:** Bybit `EARN_FLEXIBLE_SAVING` principal redemption events have `canonicalType=INTERNAL_TRANSFER` in `bybit_extracted_events` (correctly identified by the extraction layer), but `normalized_transactions` carries them as `type=LENDING_WITHDRAW`. The correct type is `INTERNAL_TRANSFER` (EARN → FUND account transfer).
+
+**Affected events:**
+
+| Event ID | Asset | Qty (flow) | Ledger qty (REALLOCATE_OUT) | Discrepancy |
+|---|---|---|---|---|
+| `EARN_FLEXIBLE_SAVING:e475b70e` | CMETH | -0.13981517 | -0.00026422 | 530× under |
+| `EARN_FLEXIBLE_SAVING:734bf6f1` | CMETH | -0.14379048 | -0.00052442 | 274× under |
+| `EARN_FLEXIBLE_SAVING:a67c0479` | ETH | -0.15114916 | -0.00001379 | 10,959× under |
+
+The ledger qtys are tiny because the EARN account has nearly no balance tracked — the EARN deposit counterpart was never properly credited (see B-EARN-DEPOSIT-MISSING). As a result:
+1. EARN `LENDING_WITHDRAW` REALLOCATE_OUT carries almost no basis.
+2. FUND never receives a matching CARRY_IN → the redeemed CMETH and ETH appear from nowhere in FUND without basis.
+3. No FUND counterpart found in `normalized_transactions` within ±24h of any redemption.
+
+**Earliest failed stage:** `classification` (LENDING_WITHDRAW vs INTERNAL_TRANSFER).
+
+**Evidence state:** `EVIDENCE_PRESENT_UNUSABLE` — raw event has correct `canonicalType=INTERNAL_TRANSFER` and `bybitDescription="Flexible Savings Principal Redemption"`, but normalization overrode it.
+
+**Remediation:** Reclassify `EARN_FLEXIBLE_SAVING` principal redemptions as `INTERNAL_TRANSFER` with CARRY_OUT from EARN and CARRY_IN to FUND. Requires FUND counterpart to be generated.
+
+---
+
+#### B-EARN-DEPOSIT-MISSING — P1 ACTIVE
+
+**Root cause:** When METH is subscribed to Bybit Earn (`FUNDING_HISTORY:a854608d`, description "On-chain Earn subscription"), the FUND account correctly emits CARRY_OUT. But the EARN account never receives a matching CARRY_IN. The METH balance on `BYBIT:33625378:EARN` therefore stays at 0, and all subsequent EARN-side events work on a phantom empty balance.
+
+| FUNDING_HISTORY event | Asset | FUND CARRY_OUT | EARN CARRY_IN | Status |
+|---|---|---|---|---|
+| `a854608d` (METH, 2025-03-12) | METH | -0.66865026 → totalBasis=$0 | NOT FOUND | ❌ Missing |
+
+The same pairing defect likely exists for the CMETH and ETH earn subscriptions (not all subscription events were in scope, but the near-zero EARN balance confirms they were not credited).
+
+**Earliest failed stage:** `linking` (CARRY_OUT/CARRY_IN pairing for FUND→EARN transfers).
+
+**Remediation:** For every FUNDING_HISTORY event with description matching earn subscription pattern, ensure an EARN-side CARRY_IN counterpart is generated during normalization/clarification.
+
+---
+
+#### B-DOUBLE-LEDGER-POINT — P2 ACTIVE
+
+**Root cause:** The internal transfer `0x04b1a5790c6f9aa72f19353f2226dab48d0e4630e679d7a18ad7b8ef9022c600` on ARBITRUM (0xf03b52 → 0x1a87f12) generated two ledger points attributed to wallet `0x1a87f12` in the Arbitrum ETH ledger:
+
+- Entry `:5031` (`normalizedTransactionId` = `...ARBITRUM:0x1a87f12...`): correct CARRY_IN +0.0000378 ETH, AVCO $582.53.
+- Entry `:5032` (`normalizedTransactionId` = `...ARBITRUM:0xf03b52e8...`): ghost CARRY_IN qty=0, totalCostBasis drops $0.246→$0.168, AVCO $582→$399.
+
+The second entry bears the 0xf03b52 wallet's tx ID but is written into 0x1a87f12's ledger space (walletAddress=0x1a87f12), reducing ETH AVCO by ~$183 on a zero-qty event. This is a replay-stage cross-wallet contamination.
+
+**Earliest failed stage:** `replay` — ledger point written to wrong wallet.
+
+**Remediation:** In the replay stage, validate that `walletAddress` in each ledger point matches the wallet in the `normalizedTransactionId`. Purge `:5032` from 0x1a87f12's ledger; it belongs to 0xf03b52 (or is a bug in the INTERNAL_TRANSFER dual-perspective handling).
+
+---
+
+#### B-GM-SECOND-SETTLEMENT-UNKNOWN — P3 MINOR
+
+`0x52924cd84b0dcab31a9be5d6157af7a5c594ebe5cd8d73965746191d21912a6f`
+
+- `GM: ETH/USD [WETH-USDC]` receives `basisEffect=UNKNOWN` instead of `REALLOCATE_IN`.
+- The first LP_ENTRY_SETTLEMENT (`0x1aa3438d`) correctly shows `REALLOCATE_IN` for GM tokens.
+- No material AVCO impact since GM qty is small (4.634 tokens) and the UNKNOWN leaves basis at $0.
+- **Earliest failed stage:** `cost_basis` / `move_basis`.
+
+---
+
+#### B-PENDLE-REWARD-UNKNOWN — P3 MINOR
+
+`0xf7f8908b455261dc67a7f905ca99f1041987de690a7574d440e31739c3132430`
+
+- `PENDLE` reward on LP_EXIT has `basisEffect=UNKNOWN`, total basis $0. Should be `ACQUIRE` (reward income, fresh acquisition at market price $4.833/PENDLE).
+- Amount: 0.0127 PENDLE = ~$0.062. Negligible absolute impact.
+- **Earliest failed stage:** `cost_basis`.
+
+---
+
+### TRANSACTION INVENTORY — Refresh 8
+
+| Tx / Event | Type | Status | AVCO impact | Blocker? |
+|---|---|---|---|---|
+| `0xa5e755a6` | INTERNAL_TRANSFER MANTLE (Bybit corridor) | CONFIRMED | CARRY_IN 3.06 WETH at $2,227 AVCO — clean | None |
+| `0xff684e80` | LP_ENTRY_REQUEST GMX ARBITRUM | CONFIRMED | Classification correct; ETH AVCO distorted by upstream | Downstream of B-ETH-ARBI-LOW-BASIS |
+| `0x1aa3438d` | LP_ENTRY_SETTLEMENT GMX ARBITRUM | CONFIRMED | ETH REALLOCATE_IN at $15.79 AVCO ❌ | Downstream of B-ETH-ARBI-LOW-BASIS |
+| `0x9c6c4c68` | LP_ENTRY_REQUEST GMX ARBITRUM | CONFIRMED | Clean classification | Downstream of B-ETH-ARBI-LOW-BASIS |
+| `0x52924cd8` | LP_ENTRY_SETTLEMENT GMX ARBITRUM | CONFIRMED | GM UNKNOWN basis | B-GM-SECOND-SETTLEMENT-UNKNOWN (P3) |
+| `0xa83cc44b` | LP_EXIT_REQUEST GMX ARBITRUM | CONFIRMED | Classification correct | None |
+| `0x0a757aee` | LP_EXIT BASE PancakeSwap | CONFIRMED ✅ FIXED | Structural fix verified; $1.07 ETH basis = upstream effect | B-LP-EXIT-BASE-PANCAKE-UNKNOWN RESOLVED |
+| `0xb9ad84bba` | BRIDGE_OUT BASE → ARBITRUM LiFi | CONFIRMED | CARRY_OUT zeroes BASE ETH; BRIDGE_IN credited $7.75 at $2,875 on Arbitrum | None |
+| `0xf7f8908b` | LP_EXIT MANTLE Pendle | CONFIRMED | cmETH REALLOCATE_IN $2,368 AVCO (correct); PENDLE UNKNOWN | B-PENDLE-REWARD-UNKNOWN (P3) |
+| `0xe2f90520` | INTERNAL_TRANSFER MANTLE BYBIT corridor (CMETH) | CONFIRMED | Clean | None |
+| `0x04b1a579` | INTERNAL_TRANSFER ARBITRUM (0xf03b52→0x1a87f12) | CONFIRMED | Ghost ledger point corrupts Arbitrum ETH AVCO | B-DOUBLE-LEDGER-POINT (P2) |
+| `0x9633536` | LENDING_WITHDRAW BASE (Aave AWETH→WETH) | CONFIRMED | AWETH REALLOCATE_OUT, WETH REALLOCATE_IN; small interest ACQUIRE | None |
+| `0xf4c41d79` | INTERNAL_TRANSFER OPTIMISM (0x68bc→0x1a87f) | CONFIRMED | Clean CARRY pairing | None |
+| `0xfaf8160c` | LP_ENTRY MANTLE Pendle | CONFIRMED | cmETH REALLOCATE_OUT → Pendle pool — clean | None |
+| `0xfaf8160c` LP_EXIT variant | LP_EXIT MANTLE Pendle (via correlationId) | CONFIRMED | LP_EXIT correctly returns cmETH via REALLOCATE_IN | None |
+| `0xbc698f78` | SWAP MANTLE USDC→cmETH | CONFIRMED | SWAP_DERIVED pricing correct | None |
+| `0x8c03a4ef` | BRIDGE_OUT OPTIMISM WETH→UNICHAIN LiFi | CONFIRMED | Bridge matched; BRIDGE_IN on UNICHAIN clean | None |
+| `0xed509348` | INTERNAL_TRANSFER BASE (0x1a87f→0x68bc) | CONFIRMED | Clean CARRY | None |
+| `EARN_FLEXIBLE_SAVING:e475b70e` | LENDING_WITHDRAW EARN (CMETH) | CONFIRMED ❌ | Flow qty vs ledger qty: 0.13981 vs 0.00026 | B-EARN-MISTYPE (P1) |
+| `EARN_FLEXIBLE_SAVING:734bf6f1` | LENDING_WITHDRAW EARN (CMETH) | CONFIRMED ❌ | 0.14379 vs 0.00052 | B-EARN-MISTYPE (P1) |
+| `EARN_FLEXIBLE_SAVING:a67c0479` | LENDING_WITHDRAW EARN (ETH) | CONFIRMED ❌ | 0.15114 vs 0.00001 | B-EARN-MISTYPE (P1) |
+| `FUNDING_HISTORY:a854608d` | INTERNAL_TRANSFER FUND→EARN (METH) | CONFIRMED ❌ | CARRY_OUT FUND → no matching EARN CARRY_IN | B-EARN-DEPOSIT-MISSING (P1) |
+
+---
+
+### RANKED BLOCKER LIST — Refresh 8
+
+| Rank | ID | Severity | Stage | Assets | Root cause | cbD shortfall | Remediation class |
+|---|---|---|---|---|---|---|---|
+| 0 | **B-PCAKE-V3-PARTIAL-EXIT** | **P0 ACTIVE** | classification | ETH, LP-RECEIPT | Pancake V3 partial liquidity removal (0x3dc35066, 0x29dad570) misclassified as full LP_EXIT; LP-RECEIPT basis $2,013→$0 on each cycle; final LP_EXIT carries only $1.07 to ETH | **~$2,012** | Normalization fix: detect NFT roundtrip via wrapper; classify as LP_PARTIAL_REMOVE, preserve LP-RECEIPT basis |
+| 1 | **B-ETH-ARBI-LOW-BASIS** | P1 ACTIVE | replay + carry | ETH (ARBITRUM) | Arbitrum ETH for 0x1a87f12 has ~$0.004 total basis from carry chain depletion; ghost ledger point (B-DOUBLE-LEDGER-POINT) contributes; GMX fee refund REALLOCATE_IN results in $15.79/ETH AVCO | Small absolute (tiny fee qtys); AVCO distorted | Replay fix (ghost point) + carry chain audit for Arbitrum ETH |
+| 2 | **B-EARN-MISTYPE** | P1 ACTIVE | classification | CMETH, ETH (BYBIT:EARN) | EARN_FLEXIBLE_SAVING principal redemptions classified as LENDING_WITHDRAW; raw canonicalType=INTERNAL_TRANSFER ignored; no FUND counterpart created; EARN ledger near-empty | ~$400–600 est. (near-empty EARN balance × market price) | Re-classify as INTERNAL_TRANSFER; generate FUND CARRY_IN counterpart |
+| 3 | **B-EARN-DEPOSIT-MISSING** | P1 ACTIVE | linking | METH, CMETH, ETH (BYBIT:EARN) | FUND→EARN CARRY_OUT emitted but no EARN CARRY_IN created; EARN account has near-zero balance on all assets | Compounds B-EARN-MISTYPE | Linking fix: pair FUNDING_HISTORY earn subscription events with EARN CARRY_IN |
+| 4 | **B-DOUBLE-LEDGER-POINT** | P2 ACTIVE | replay | ETH (ARBITRUM) | Ghost ledger point for 0x04b1a579 written to 0x1a87f12 ledger with 0xf03b52 tx ID; reduces AVCO $582→$399 on zero-qty phantom event | Small (ETH AVCO $183 drop, corrects partially by subsequent events) | Replay fix: validate walletAddress matches normalizedTransactionId wallet |
+| 5 | **B-GM-SECOND-SETTLEMENT-UNKNOWN** | P3 MINOR | cost_basis | GM: ETH/USD (ARBITRUM) | Second LP_ENTRY_SETTLEMENT (0x52924cd8) emits UNKNOWN instead of REALLOCATE_IN for GM tokens | Negligible (4.634 GM, $0 basis) | Cost-basis fix: GM REALLOCATE_IN on settlement |
+| 6 | **B-PENDLE-REWARD-UNKNOWN** | P3 MINOR | cost_basis | PENDLE (MANTLE) | LP_EXIT reward PENDLE basisEffect=UNKNOWN; should be ACQUIRE | ~$0.062 | Cost-basis fix: reward income = ACQUIRE at market price |
+
+---
+
+### CARRY-OVER ACTIVE BLOCKERS (unchanged status from refresh 7)
+
+| ID | Severity | Status |
+|---|---|---|
+| B-VAULT-WITHDRAW `0xc8b94615` | P2 | Active — Turtle Finance USDC vault AVALANCHE, ~$2,815 |
+| B-BYBIT-CORRIDOR-2 (USDe) | DATA GAP | Active — ~$2,105, evidence missing |
+| B-VAULT-WITHDRAW `0x971c8464`+`0xb47d87fa` | DATA GAP | Active — ~$4,608, irreducible |
+| B-BYBIT-CORRIDOR-2 (cmETH) | DATA GAP | Active — ~$212, evidence missing |
+| B-BRIDGE-ORPHAN-* | P4 | Active — trivial net shortfall |
+

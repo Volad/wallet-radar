@@ -99,7 +99,10 @@ public final class LpPositionLifecycleSupport {
         if ((decreaseLiquidity || burn) && hasInboundNonFeeLeg(movementLegs)) {
             return NormalizedTransactionType.LP_EXIT;
         }
-        if (collect && hasInboundNonFeeLeg(movementLegs) && !hasOutboundNonFeeLeg(movementLegs)) {
+        // collect-only multicall (no decreaseLiquidity/burn in calldata): route through
+        // hasPositionReductionEvidence regardless of outbound dust legs (tiny WETH-to-ETH sweep
+        // or other contract-mandated outflows must not suppress LP_FEE_CLAIM classification).
+        if (collect && hasInboundNonFeeLeg(movementLegs)) {
             return LpPrincipalCloseEvidence.hasPositionReductionEvidence(view)
                     ? NormalizedTransactionType.LP_EXIT
                     : NormalizedTransactionType.LP_FEE_CLAIM;
@@ -266,7 +269,10 @@ public final class LpPositionLifecycleSupport {
                 continue;
             }
             List<String> topics = normalizedTopics(log);
-            if (topics.size() < 3) {
+            // ERC-721 Transfer has tokenId as 4th indexed topic (4 total); ERC-20 Transfer only has 3.
+            // Requiring 4 topics prevents ERC-20 transfers (e.g. USDC sent to wallet) from being
+            // misidentified as NFT transfers, which would incorrectly trigger LP_EXIT classification.
+            if (topics.size() < 4) {
                 continue;
             }
             if (wallet.equals(topicAddress(topics.get(2)))) {

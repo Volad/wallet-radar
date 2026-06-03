@@ -11,6 +11,7 @@ import com.walletradar.ingestion.pipeline.clarification.LiFiBridgePairLinkServic
 import com.walletradar.ingestion.pipeline.clarification.MayanCctpBridgePairLinkService;
 import com.walletradar.ingestion.pipeline.clarification.OnChainLifecycleLinkService;
 import com.walletradar.ingestion.pipeline.clarification.BybitInternalTransferOrphanFallbackService;
+import com.walletradar.ingestion.pipeline.clarification.BybitOnChainEarnOrphanRepairService;
 import com.walletradar.ingestion.pipeline.bybit.BybitInternalTransferExternalCpReclassifier;
 import com.walletradar.ingestion.pipeline.bybit.BybitInternalTransferPairer;
 import com.walletradar.ingestion.pipeline.clarification.AddressPoisoningDetector;
@@ -45,6 +46,7 @@ class LinkingBatchProcessor {
     private final BybitTransferContinuityRepairService bybitTransferContinuityRepairService;
     private final UnmatchedBridgeInboundPricingFallbackService unmatchedBridgeInboundPricingFallbackService;
     private final BybitInternalTransferOrphanFallbackService bybitInternalTransferOrphanFallbackService;
+    private final BybitOnChainEarnOrphanRepairService bybitOnChainEarnOrphanRepairService;
     private final BybitInternalTransferPairer bybitInternalTransferPairer;
     private final UnmatchedExternalTransferInPricingFallbackService unmatchedExternalTransferInPricingFallbackService;
     private final BridgePairContinuityRepairService bridgePairContinuityRepairService;
@@ -143,6 +145,11 @@ class LinkingBatchProcessor {
         // Cycle/18 R9b: internal pairer treats BYBIT-CORRIDOR as a Bybit-only singleton and can
         // overwrite FA-001 deposit anchors. Re-run corridor repair so prices stay stripped.
         processed += bybitTransferContinuityRepairService.reconcileOutstandingPairs(batchSize);
+        progressHeartbeat.run();
+
+        // B-EARN-DEPOSIT-MISSING: synthesise missing EARN counterpart for On-chain Earn subscription
+        // FUND outflows where Bybit API did not emit the matching EARN inflow event.
+        processed += bybitOnChainEarnOrphanRepairService.repairOrphans();
         progressHeartbeat.run();
 
         // Cycle/12: demote Bybit INTERNAL_TRANSFER singletons that survived bundle/round-trip pairing.

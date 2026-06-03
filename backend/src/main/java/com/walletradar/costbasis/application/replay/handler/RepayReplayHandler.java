@@ -77,6 +77,14 @@ public class RepayReplayHandler {
             flow.setUnitPriceUsd(match.liabilityAvcoUsd());
             flow.setPriceSource(PriceSource.LIABILITY_MATCH);
             flowSupport.applySell(flow, position);
+            // Full liability match: zero realised PnL per ADR-012 §D3.
+            // applySell uses position AVCO (blended across all borrows) which may differ from
+            // the individual liability AVCO, producing a spurious non-zero PnL. Correct it here.
+            BigDecimal priorRealised = flow.getRealisedPnlUsd() == null ? BigDecimal.ZERO : flow.getRealisedPnlUsd();
+            if (priorRealised.signum() != 0) {
+                position.setTotalRealisedPnlUsd(position.totalRealisedPnlUsd().subtract(priorRealised, MC));
+                flow.setRealisedPnlUsd(BigDecimal.ZERO);
+            }
         } else {
             flowSupport.applySell(flow, position);
             if (match.matchedQty().signum() > 0 && match.liabilityFound()) {

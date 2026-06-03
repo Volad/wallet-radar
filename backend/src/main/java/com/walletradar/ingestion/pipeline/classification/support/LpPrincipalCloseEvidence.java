@@ -211,7 +211,10 @@ public final class LpPrincipalCloseEvidence {
                 continue;
             }
             List<String> topics = normalizedTopics(log);
-            if (topics.size() < 3) {
+            // ERC-721 Transfer has tokenId as 4th indexed topic (4 total); ERC-20 Transfer only has 3.
+            // Requiring 4 topics prevents ERC-20 outbound transfers (e.g. token sold/sent) from being
+            // misidentified as NFT exits, which would incorrectly signal principal close evidence.
+            if (topics.size() < 4) {
                 continue;
             }
             if (wallet.equals(topicAddress(topics.get(1)))) {

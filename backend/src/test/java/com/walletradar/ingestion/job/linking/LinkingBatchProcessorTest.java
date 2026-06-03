@@ -11,6 +11,7 @@ import com.walletradar.ingestion.pipeline.clarification.LiFiBridgePairLinkServic
 import com.walletradar.ingestion.pipeline.clarification.MayanCctpBridgePairLinkService;
 import com.walletradar.ingestion.pipeline.clarification.OnChainLifecycleLinkService;
 import com.walletradar.ingestion.pipeline.clarification.BybitInternalTransferOrphanFallbackService;
+import com.walletradar.ingestion.pipeline.clarification.BybitOnChainEarnOrphanRepairService;
 import com.walletradar.ingestion.pipeline.bybit.BybitInternalTransferExternalCpReclassifier;
 import com.walletradar.ingestion.pipeline.bybit.BybitInternalTransferPairer;
 import com.walletradar.ingestion.pipeline.clarification.AddressPoisoningDetector;
@@ -48,6 +49,8 @@ class LinkingBatchProcessorTest {
                 mock(UnmatchedBridgeInboundPricingFallbackService.class);
         BybitInternalTransferOrphanFallbackService bybitInternalTransferOrphanFallbackService =
                 mock(BybitInternalTransferOrphanFallbackService.class);
+        BybitOnChainEarnOrphanRepairService bybitOnChainEarnOrphanRepairService =
+                mock(BybitOnChainEarnOrphanRepairService.class);
         UnmatchedExternalTransferInPricingFallbackService unmatchedExternalTransferInPricingFallbackService =
                 mock(UnmatchedExternalTransferInPricingFallbackService.class);
         BridgePairContinuityRepairService bridgePairContinuityRepairService = mock(BridgePairContinuityRepairService.class);
@@ -89,6 +92,7 @@ class LinkingBatchProcessorTest {
         when(unmatchedBridgeInboundPricingFallbackService.reconcileUnsupportedOutbounds()).thenReturn(19);
         when(unmatchedBridgeInboundPricingFallbackService.reconcileOrphanInbounds()).thenReturn(21);
         when(bybitInternalTransferOrphanFallbackService.reconcileOrphanInternals()).thenReturn(22);
+        when(bybitOnChainEarnOrphanRepairService.repairOrphans()).thenReturn(34);
         when(unmatchedExternalTransferInPricingFallbackService.reconcileOrphanInbounds()).thenReturn(23);
         when(bridgePairContinuityRepairService.reconcileLegacySealedPairs(25)).thenReturn(29);
         when(onChainInternalTransferPairRepairService.reconcileOrphanSameTxPairs(25)).thenReturn(31);
@@ -105,6 +109,7 @@ class LinkingBatchProcessorTest {
                 bybitTransferContinuityRepairService,
                 unmatchedBridgeInboundPricingFallbackService,
                 bybitInternalTransferOrphanFallbackService,
+                bybitOnChainEarnOrphanRepairService,
                 bybitInternalTransferPairer,
                 unmatchedExternalTransferInPricingFallbackService,
                 bridgePairContinuityRepairService,
@@ -124,7 +129,7 @@ class LinkingBatchProcessorTest {
         AtomicInteger heartbeatCount = new AtomicInteger();
         int processed = processor.processNextBatch(25, heartbeatCount::incrementAndGet);
 
-        assertThat(processed).isEqualTo(495);
-        assertThat(heartbeatCount).hasValue(27);
+        assertThat(processed).isEqualTo(529);
+        assertThat(heartbeatCount).hasValue(29);
     }
 }
