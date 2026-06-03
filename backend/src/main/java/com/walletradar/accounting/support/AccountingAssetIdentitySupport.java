@@ -14,6 +14,7 @@ import java.util.Set;
 public final class AccountingAssetIdentitySupport {
 
     private static final String EARN_PRINCIPAL_CORRELATION_PREFIX = "bybit-earn-principal-v1:";
+    private static final String EARN_ONCHAIN_CORRELATION_PREFIX = "bybit-earn-onchain-v1:";
     private static final String BYBIT_CORRIDOR_CORRELATION_PREFIX = "BYBIT-CORRIDOR:";
     private static final String ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 
@@ -98,7 +99,15 @@ public final class AccountingAssetIdentitySupport {
             return false;
         }
         String correlationId = transaction.getCorrelationId();
-        return correlationId != null && correlationId.startsWith(EARN_PRINCIPAL_CORRELATION_PREFIX);
+        if (correlationId == null) {
+            return false;
+        }
+        // bybit-earn-principal-v1: — BybitEarnPrincipalTransferPairer (Flexible Savings LENDING pairs)
+        // bybit-earn-onchain-v1:   — BybitOnChainEarnOrphanRepairService (On-chain Earn synthetic pairs)
+        // Both require the full :FUND/:EARN sub-account wallet in the replay position key so that
+        // the CARRY_OUT drains the correct funded sub-account position rather than the empty parent.
+        return correlationId.startsWith(EARN_PRINCIPAL_CORRELATION_PREFIX)
+                || correlationId.startsWith(EARN_ONCHAIN_CORRELATION_PREFIX);
     }
 
     /**

@@ -49,8 +49,8 @@ import java.util.Locale;
 @RequiredArgsConstructor
 public class BybitOnChainEarnOrphanRepairService {
 
-    static final String EARN_ONCHAIN_CORR_PREFIX = "bybit-earn-onchain-v1:";
-    static final String SYNTHETIC_ID_PREFIX = "bybit-earn-onchain-synthetic-v1:";
+    public static final String EARN_ONCHAIN_CORR_PREFIX = "bybit-earn-onchain-v1:";
+    public static final String SYNTHETIC_ID_PREFIX = "bybit-earn-onchain-synthetic-v1:";
     private static final int QTY_SCALE = 8;
     private static final Duration EARN_COUNTERPART_WINDOW = Duration.ofHours(6);
     private static final BigDecimal QTY_TOLERANCE = new BigDecimal("0.00000001");

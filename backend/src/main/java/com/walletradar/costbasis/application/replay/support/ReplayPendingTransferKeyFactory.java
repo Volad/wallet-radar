@@ -5,6 +5,7 @@ import com.walletradar.costbasis.application.replay.model.BridgeSettlementPendin
 import com.walletradar.costbasis.application.replay.model.ContinuityKey;
 import com.walletradar.costbasis.application.replay.model.TransferPendingKey;
 import com.walletradar.ingestion.pipeline.bybit.BybitEarnPrincipalTransferPairer;
+import com.walletradar.ingestion.pipeline.clarification.BybitOnChainEarnOrphanRepairService;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
@@ -35,8 +36,15 @@ public class ReplayPendingTransferKeyFactory {
             return false;
         }
         String correlationId = transaction.getCorrelationId();
-        return correlationId != null
-                && correlationId.startsWith(BybitEarnPrincipalTransferPairer.EARN_PRINCIPAL_CORRELATION_PREFIX);
+        if (correlationId == null) {
+            return false;
+        }
+        // bybit-earn-principal-v1: — BybitEarnPrincipalTransferPairer (Flexible Savings LENDING pairs)
+        // bybit-earn-onchain-v1:   — BybitOnChainEarnOrphanRepairService (On-chain Earn synthetic pairs)
+        // Both use corr-family: keyed matching so FUND CARRY_OUT and EARN CARRY_IN are matched
+        // by their shared deterministic corrId rather than the shared UID+asset FIFO queue.
+        return correlationId.startsWith(BybitEarnPrincipalTransferPairer.EARN_PRINCIPAL_CORRELATION_PREFIX)
+                || correlationId.startsWith(BybitOnChainEarnOrphanRepairService.EARN_ONCHAIN_CORR_PREFIX);
     }
 
     /**
