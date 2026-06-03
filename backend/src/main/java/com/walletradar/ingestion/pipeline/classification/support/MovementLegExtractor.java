@@ -97,7 +97,9 @@ public class MovementLegExtractor {
             }
         }
 
-        return WrappedNativeSupport.enrichLegs(view, nativeAssetSymbolResolver, legs);
+        legs = WrappedNativeSupport.enrichLegs(view, nativeAssetSymbolResolver, legs);
+        legs = LpNativeExitLegEnricher.enrichLegs(view, nativeAssetSymbolResolver, legs);
+        return legs;
     }
 
     private boolean isDirectValueCoveredByInternalTransfer(OnChainRawTransactionView view) {
