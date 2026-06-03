@@ -347,7 +347,7 @@ public class ContinuityCarryService {
      * at the destination so a high uncovered ratio on the source slice cannot explode per-wallet AVCO.
      */
     /**
-     * Earn Flexible Savings redemption can arrive as {@code LENDING_WITHDRAW} on an empty
+     * Earn Flexible Savings redemption arrives as {@code EARN_FLEXIBLE_SAVING} on an empty
      * {@code :EARN} position (qty=0, shortfall-only removal). Queue an authoritative carry slice
      * so the matching FUND inbound does not materialise as uncovered REALLOCATE_IN.
      */

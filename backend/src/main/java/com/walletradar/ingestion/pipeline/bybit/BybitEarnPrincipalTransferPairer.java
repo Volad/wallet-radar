@@ -33,8 +33,9 @@ import java.util.HashSet;
 
 /**
  * Pairs Bybit Flexible Savings / Earn principal moves ({@code LENDING_DEPOSIT} /
- * {@code LENDING_WITHDRAW}) across {@code :EARN} and {@code :FUND}/{@code :UTA} with a shared
- * continuity correlation so replay uses correlation keys instead of fragile FIFO-only matching.
+ * {@code LENDING_WITHDRAW} / {@code EARN_FLEXIBLE_SAVING}) across {@code :EARN} and
+ * {@code :FUND}/{@code :UTA} with a shared continuity correlation so replay uses correlation
+ * keys instead of fragile FIFO-only matching.
  */
 @Service
 @Slf4j
@@ -55,7 +56,8 @@ public class BybitEarnPrincipalTransferPairer {
                 Criteria.where("source").is(NormalizedTransactionSource.BYBIT),
                 Criteria.where("type").in(
                         NormalizedTransactionType.LENDING_DEPOSIT,
-                        NormalizedTransactionType.LENDING_WITHDRAW
+                        NormalizedTransactionType.LENDING_WITHDRAW,
+                        NormalizedTransactionType.EARN_FLEXIBLE_SAVING
                 ),
                 Criteria.where("excludedFromAccounting").ne(true)
         ));

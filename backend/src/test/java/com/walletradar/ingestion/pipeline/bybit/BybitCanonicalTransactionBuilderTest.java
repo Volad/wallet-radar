@@ -936,6 +936,29 @@ class BybitCanonicalTransactionBuilderTest {
     }
 
     @Test
+    void flexibleSavingsRedemptionReclassifiesToEarnFlexibleSaving() {
+        BybitCanonicalTransactionBuilder builder = new BybitCanonicalTransactionBuilder();
+        ExternalLedgerRaw row = new ExternalLedgerRaw();
+        row.setId("bybit-usdt-flexible-redeem-1");
+        row.setUid("33625378");
+        row.setWalletRef("BYBIT:33625378:EARN");
+        row.setSourceFile("EARN_FLEXIBLE_SAVING");
+        row.setTimeUtc(Instant.parse("2026-03-25T12:00:00Z"));
+        row.setCanonicalType("INTERNAL_TRANSFER");
+        row.setBybitType("Earn");
+        row.setBybitDescription("Flexible Savings Principal Redemption");
+        row.setBasisRelevant(true);
+        row.setAssetSymbol("USDT");
+        row.setQuantityRaw(new BigDecimal("500"));
+
+        NormalizedTransaction transaction = builder.buildMappedRow(row, Instant.parse("2026-03-25T12:01:00Z"));
+
+        assertThat(transaction.getType()).isEqualTo(NormalizedTransactionType.EARN_FLEXIBLE_SAVING);
+        assertThat(transaction.getFlows()).hasSize(1);
+        assertThat(transaction.getFlows().get(0).getQuantityDelta()).isEqualByComparingTo("500");
+    }
+
+    @Test
     void launchpoolAutoWithdrawalReclassifiesToLendingWithdraw() {
         BybitCanonicalTransactionBuilder builder = new BybitCanonicalTransactionBuilder();
         ExternalLedgerRaw row = new ExternalLedgerRaw();

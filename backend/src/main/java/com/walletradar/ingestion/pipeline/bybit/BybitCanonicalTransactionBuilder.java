@@ -501,7 +501,7 @@ public class BybitCanonicalTransactionBuilder {
                     null,
                     null
             ));
-            case LENDING_DEPOSIT, LENDING_WITHDRAW -> List.of(flow(
+            case LENDING_DEPOSIT, LENDING_WITHDRAW, EARN_FLEXIBLE_SAVING -> List.of(flow(
                     NormalizedLegRole.TRANSFER,
                     row.getAssetSymbol(),
                     signedQuantity(row),
@@ -565,7 +565,7 @@ public class BybitCanonicalTransactionBuilder {
             return Optional.of(NormalizedTransactionType.LENDING_WITHDRAW);
         }
         if (lower.contains("flexible") && (lower.contains("redemption") || lower.contains("principal redemption"))) {
-            return Optional.of(NormalizedTransactionType.LENDING_WITHDRAW);
+            return Optional.of(NormalizedTransactionType.EARN_FLEXIBLE_SAVING);
         }
         return Optional.empty();
     }

@@ -88,7 +88,7 @@ class TransferReplayHandlerEarnPrincipalTest {
         NormalizedTransaction earnOut = new NormalizedTransaction();
         earnOut.setId("earn-out");
         earnOut.setSource(NormalizedTransactionSource.BYBIT);
-        earnOut.setType(NormalizedTransactionType.LENDING_WITHDRAW);
+        earnOut.setType(NormalizedTransactionType.EARN_FLEXIBLE_SAVING);
         earnOut.setWalletAddress("BYBIT:33625378:EARN");
         earnOut.setContinuityCandidate(true);
         earnOut.setCorrelationId("bybit-earn-principal-v1:ae372912");
@@ -130,7 +130,7 @@ class TransferReplayHandlerEarnPrincipalTest {
         NormalizedTransaction earnOut = new NormalizedTransaction();
         earnOut.setId("earn-out");
         earnOut.setSource(com.walletradar.domain.transaction.normalized.NormalizedTransactionSource.BYBIT);
-        earnOut.setType(NormalizedTransactionType.LENDING_WITHDRAW);
+        earnOut.setType(NormalizedTransactionType.EARN_FLEXIBLE_SAVING);
         earnOut.setWalletAddress("BYBIT:33625378:EARN");
         earnOut.setContinuityCandidate(true);
         earnOut.setCorrelationId("bybit-earn-principal-v1:88b50f43");
@@ -157,7 +157,7 @@ class TransferReplayHandlerEarnPrincipalTest {
         NormalizedTransaction earnOut = new NormalizedTransaction();
         earnOut.setId("earn-out");
         earnOut.setSource(NormalizedTransactionSource.BYBIT);
-        earnOut.setType(NormalizedTransactionType.LENDING_WITHDRAW);
+        earnOut.setType(NormalizedTransactionType.EARN_FLEXIBLE_SAVING);
         earnOut.setWalletAddress("BYBIT:33625378:EARN");
         earnOut.setContinuityCandidate(true);
         earnOut.setCorrelationId("bybit-earn-principal-v1:88b50f43");
@@ -182,7 +182,7 @@ class TransferReplayHandlerEarnPrincipalTest {
         NormalizedTransaction fundIn = new NormalizedTransaction();
         fundIn.setId("fund-in");
         fundIn.setSource(NormalizedTransactionSource.BYBIT);
-        fundIn.setType(NormalizedTransactionType.LENDING_WITHDRAW);
+        fundIn.setType(NormalizedTransactionType.EARN_FLEXIBLE_SAVING);
         fundIn.setWalletAddress("BYBIT:33625378:FUND");
         fundIn.setContinuityCandidate(true);
         fundIn.setCorrelationId("bybit-earn-principal-v1:88b50f43");
@@ -209,7 +209,7 @@ class TransferReplayHandlerEarnPrincipalTest {
         NormalizedTransaction earnOut = new NormalizedTransaction();
         earnOut.setId("earn-out");
         earnOut.setSource(com.walletradar.domain.transaction.normalized.NormalizedTransactionSource.BYBIT);
-        earnOut.setType(NormalizedTransactionType.LENDING_WITHDRAW);
+        earnOut.setType(NormalizedTransactionType.EARN_FLEXIBLE_SAVING);
         earnOut.setWalletAddress("BYBIT:33625378:EARN");
         earnOut.setContinuityCandidate(true);
         earnOut.setCorrelationId("bybit-earn-principal-v1:88b50f43");
@@ -231,7 +231,7 @@ class TransferReplayHandlerEarnPrincipalTest {
         NormalizedTransaction umbrellaIn = new NormalizedTransaction();
         umbrellaIn.setId("earn-in");
         umbrellaIn.setSource(com.walletradar.domain.transaction.normalized.NormalizedTransactionSource.BYBIT);
-        umbrellaIn.setType(NormalizedTransactionType.LENDING_WITHDRAW);
+        umbrellaIn.setType(NormalizedTransactionType.EARN_FLEXIBLE_SAVING);
         umbrellaIn.setWalletAddress("BYBIT:33625378");
         umbrellaIn.setContinuityCandidate(true);
         umbrellaIn.setCorrelationId("bybit-earn-principal-v1:88b50f43");

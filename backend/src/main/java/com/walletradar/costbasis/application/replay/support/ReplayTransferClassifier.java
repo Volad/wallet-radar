@@ -33,13 +33,15 @@ public class ReplayTransferClassifier {
                 || transaction.getType() == NormalizedTransactionType.BRIDGE_OUT
                 || transaction.getType() == NormalizedTransactionType.INTERNAL_TRANSFER
                 || transaction.getType() == NormalizedTransactionType.LENDING_DEPOSIT
-                || transaction.getType() == NormalizedTransactionType.LENDING_WITHDRAW)) {
+                || transaction.getType() == NormalizedTransactionType.LENDING_WITHDRAW
+                || transaction.getType() == NormalizedTransactionType.EARN_FLEXIBLE_SAVING)) {
             return true;
         }
         return transaction.getSource() == NormalizedTransactionSource.BYBIT
                 && (transaction.getType() == NormalizedTransactionType.INTERNAL_TRANSFER
                 || transaction.getType() == NormalizedTransactionType.LENDING_DEPOSIT
-                || transaction.getType() == NormalizedTransactionType.LENDING_WITHDRAW);
+                || transaction.getType() == NormalizedTransactionType.LENDING_WITHDRAW
+                || transaction.getType() == NormalizedTransactionType.EARN_FLEXIBLE_SAVING);
     }
 
     private static boolean isBybitSource(NormalizedTransaction transaction) {
@@ -94,6 +96,7 @@ public class ReplayTransferClassifier {
                     PROTOCOL_CUSTODY_WITHDRAW,
                     LENDING_DEPOSIT,
                     LENDING_WITHDRAW,
+                    EARN_FLEXIBLE_SAVING,
                     STAKING_DEPOSIT,
                     STAKING_WITHDRAW,
                     VAULT_DEPOSIT,
@@ -125,6 +128,7 @@ public class ReplayTransferClassifier {
                     PROTOCOL_CUSTODY_WITHDRAW,
                     LENDING_DEPOSIT,
                     LENDING_WITHDRAW,
+                    EARN_FLEXIBLE_SAVING,
                     STAKING_DEPOSIT,
                     STAKING_WITHDRAW,
                     VAULT_DEPOSIT,
@@ -161,6 +165,7 @@ public class ReplayTransferClassifier {
             case PROTOCOL_CUSTODY_WITHDRAW,
                     PROTOCOL_CUSTODY_DEPOSIT,
                     LENDING_WITHDRAW,
+                    EARN_FLEXIBLE_SAVING,
                     LENDING_DEPOSIT,
                     STAKING_WITHDRAW,
                     STAKING_DEPOSIT,

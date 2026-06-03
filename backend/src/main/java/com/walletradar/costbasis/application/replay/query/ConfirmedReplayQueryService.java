@@ -44,7 +44,7 @@ public class ConfirmedReplayQueryService {
             return -2;
         }
         return switch (tx.getType()) {
-            case LENDING_WITHDRAW -> -1;
+            case LENDING_WITHDRAW, EARN_FLEXIBLE_SAVING -> -1;
             default -> 0;
         };
     }
@@ -72,7 +72,7 @@ public class ConfirmedReplayQueryService {
             return 0;
         }
         return switch (tx.getType()) {
-            case INTERNAL_TRANSFER, LENDING_DEPOSIT, LENDING_WITHDRAW -> bybitPrincipalFlowSign(tx);
+            case INTERNAL_TRANSFER, LENDING_DEPOSIT, LENDING_WITHDRAW, EARN_FLEXIBLE_SAVING -> bybitPrincipalFlowSign(tx);
             default -> 0;
         };
     }

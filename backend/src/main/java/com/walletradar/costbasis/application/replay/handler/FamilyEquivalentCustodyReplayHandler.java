@@ -389,6 +389,7 @@ public class FamilyEquivalentCustodyReplayHandler {
                     PROTOCOL_CUSTODY_WITHDRAW,
                     LENDING_DEPOSIT,
                     LENDING_WITHDRAW,
+                    EARN_FLEXIBLE_SAVING,
                     WRAP,
                     UNWRAP,
                     VAULT_DEPOSIT,

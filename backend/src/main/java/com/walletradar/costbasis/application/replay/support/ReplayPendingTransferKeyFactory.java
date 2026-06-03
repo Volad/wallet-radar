@@ -54,7 +54,8 @@ public class ReplayPendingTransferKeyFactory {
 
     /**
      * Flexible Savings / Earn product subscription and redemption rows (classified as
-     * {@code LENDING_DEPOSIT} / {@code LENDING_WITHDRAW}) move principal between FUND/UTA and
+     * {@code LENDING_DEPOSIT} / {@code LENDING_WITHDRAW} / {@code EARN_FLEXIBLE_SAVING}) move
+     * principal between FUND/UTA and
      * {@code :EARN}. They must share the venue FIFO queue — composite wrapper buckets are empty
      * for these single-leg Bybit rows and previously materialised as uncovered REALLOCATE_IN.
      */
@@ -64,7 +65,8 @@ public class ReplayPendingTransferKeyFactory {
             return false;
         }
         return transaction.getType() == NormalizedTransactionType.LENDING_DEPOSIT
-                || transaction.getType() == NormalizedTransactionType.LENDING_WITHDRAW;
+                || transaction.getType() == NormalizedTransactionType.LENDING_WITHDRAW
+                || transaction.getType() == NormalizedTransactionType.EARN_FLEXIBLE_SAVING;
     }
 
     /**
@@ -375,6 +377,7 @@ public class ReplayPendingTransferKeyFactory {
                 || type == NormalizedTransactionType.STAKING_DEPOSIT
                 || type == NormalizedTransactionType.VAULT_DEPOSIT;
         boolean isImplicitExit = type == NormalizedTransactionType.LENDING_WITHDRAW
+                || type == NormalizedTransactionType.EARN_FLEXIBLE_SAVING
                 || type == NormalizedTransactionType.PROTOCOL_CUSTODY_WITHDRAW
                 || type == NormalizedTransactionType.STAKING_WITHDRAW
                 || type == NormalizedTransactionType.VAULT_WITHDRAW;
@@ -490,6 +493,7 @@ public class ReplayPendingTransferKeyFactory {
             case LP_POSITION_UNSTAKE,
                     VAULT_WITHDRAW,
                     LENDING_WITHDRAW,
+                    EARN_FLEXIBLE_SAVING,
                     STAKING_WITHDRAW,
                     PROTOCOL_CUSTODY_WITHDRAW,
                     LP_EXIT,

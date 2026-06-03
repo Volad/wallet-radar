@@ -314,6 +314,7 @@ public class ReplayFlowSupport {
                     PROTOCOL_CUSTODY_WITHDRAW,
                     LENDING_DEPOSIT,
                     LENDING_WITHDRAW,
+                    EARN_FLEXIBLE_SAVING,
                     STAKING_DEPOSIT,
                     STAKING_WITHDRAW,
                     VAULT_DEPOSIT,

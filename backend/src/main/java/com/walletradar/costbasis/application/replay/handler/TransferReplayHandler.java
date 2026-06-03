@@ -1227,6 +1227,7 @@ public class TransferReplayHandler {
         return switch (transaction.getType()) {
             case VAULT_WITHDRAW,
                     LENDING_WITHDRAW,
+                    EARN_FLEXIBLE_SAVING,
                     PROTOCOL_CUSTODY_WITHDRAW,
                     STAKING_WITHDRAW,
                     LP_EXIT,

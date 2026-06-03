@@ -173,7 +173,8 @@ public final class PriceableFlowPolicy {
         }
         NormalizedTransactionType type = transaction.getType();
         if (type != NormalizedTransactionType.LENDING_DEPOSIT
-                && type != NormalizedTransactionType.LENDING_WITHDRAW) {
+                && type != NormalizedTransactionType.LENDING_WITHDRAW
+                && type != NormalizedTransactionType.EARN_FLEXIBLE_SAVING) {
             return false;
         }
         if (CanonicalAssetCatalog.isPricingSkipped(flow.getAssetSymbol())) {
@@ -222,7 +223,8 @@ public final class PriceableFlowPolicy {
                 || type == NormalizedTransactionType.LP_EXIT_PARTIAL
                 || type == NormalizedTransactionType.LP_EXIT_FINAL
                 || type == NormalizedTransactionType.LP_EXIT_SETTLEMENT
-                || type == NormalizedTransactionType.LENDING_WITHDRAW) {
+                || type == NormalizedTransactionType.LENDING_WITHDRAW
+                || type == NormalizedTransactionType.EARN_FLEXIBLE_SAVING) {
             return true;
         }
         if (type == NormalizedTransactionType.BRIDGE_IN) {
