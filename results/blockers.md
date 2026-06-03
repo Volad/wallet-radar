@@ -1,7 +1,114 @@
-# Confirmed Blockers — AVCO Audit 2026-06-03 (full audit cycle, refresh 9)
+# Confirmed Blockers — AVCO Audit 2026-06-03 (full audit cycle, refresh 12)
 
 Universe: `df5e69cc-a0c0-4910-8b7d-74488fa266e2`
-Pipeline state: CONFIRMED=7344 | PENDING=0 | PENDING_PRICE=0 | PENDING_CLARIFICATION=0 | ledger=9721
+Pipeline state: CONFIRMED=7352 | PENDING=0 | PENDING_PRICE=0 | PENDING_CLARIFICATION=0 | ledger=9708
+
+---
+
+## RANKED ACTIVE BLOCKER LIST (refresh 12)
+
+**Audit verdict (2026-06-03 refresh 12): B-EARN-METH-SYNTHETIC + B-EARN-SYNTHETIC-USDT + B-DOUBLE-LEDGER-POINT all confirmed RESOLVED. No new blockers found. ETH AVCO scan clean (all wallets $1,592–$3,817). Zero-delta phantom count=0. ARB EARN regression holds ($7.03 basis). No new ghost positions.**
+
+| Rank | ID | Severity | Description | Est. cbD shortfall | Active AVCO broken? | Fixable? |
+|---|---|---|---|---|---|---|
+| 0 | B-EARN-METH-SYNTHETIC | ✅ **RESOLVED** | `BybitOnChainEarnOrphanRepairService` uses `bybit-earn-onchain-v1:` prefix for spot-funded FUND events → correct stripped `BYBIT:uid` position key. METH EARN: CARRY_IN seq=837, qty=0.66865026, basis=$447.66, avco=$669.49. Main wallet drained (qty=0 at seq=836 CARRY_OUT). Verified 2026-06-03. | **$0** (recovered) | No | ✅ RESOLVED |
+| 1 | B-EARN-SYNTHETIC-USDT | ✅ **RESOLVED** | Same fix. BYBIT:421325298:EARN USDT seq=426 qty=20, basis=$20.00, avco=$1. BYBIT:516601508:EARN USDT seq=6420 qty=150, basis≈$150.00, avco≈$1.00. Verified 2026-06-03. | **$0** (recovered) | No | ✅ RESOLVED |
+| 2 | B-DOUBLE-LEDGER-POINT | ✅ **RESOLVED** | `LedgerPointCollector` suppresses phantom entries where quantityDelta=0 AND costBasisDelta=0. Zero-delta CARRY_IN/CARRY_OUT/ACQUIRE count=0. OPTIMISM ETH seq=4618 now GAS_ONLY avco=$4,170.40 (was $49,446 spike). ARBITRUM zero-delta phantom count=0. Verified 2026-06-03. | **$0** | No | ✅ RESOLVED |
+| 3 | B-BYBIT-CORRIDOR-2 (USDe) | DATA GAP | 2115 USDe MANTLE: SPOT→FUND FH missing; ~$2,105 shortfall | ~$2,105 | No (USDe position disposed May 2026) | ❌ Evidence missing |
+| 4 | B-VAULT-WITHDRAW `0x971c8464` + `0xb47d87fa` | DATA GAP | MCUSDC upstream shortfall + wrapper-less vault no prior deposit | ~$4,608 (hist.) | No | ❌ Irreducible |
+| 5 | B-EARN-BUNDLE | NOT ACTIVE | Multi-leg bundle fan-in defect — all UTA/EARN positions redeemed; historical P&L distorted but no live AVCO broken. | ~$1,632 hist. | No (all redeemed) | ✅ Move-basis defect (hist. only) |
+| 6 | B-BYBIT-CORRIDOR-2 (cmETH) | NOT ACTIVE | cmETH MANTLE position now qty=0 (fully exited). | ~$212 | No (qty=0) | ❌ Evidence missing |
+| 7 | B-EARN-MISTYPE | P3 TYPE-MODEL | 79 BYBIT:EARN LENDING_WITHDRAWs should be EARN_FLEXIBLE_SAVING. Financially handled correctly (cbD>0), but wrong type. | $0 (accounting OK) | No | ✅ Classification fix |
+| 8 | B-BRIDGE-ORPHAN-2 | DATA GAP | 5 BRIDGE_OUTs to 0xf5f93d26; 1 failed/refunded, 4 exits to untracked chain | ~$0.81 net | No | ❌ Trivial |
+| 9 | B-BRIDGE-ORPHAN-1 | DATA GAP | 4 orphan BRIDGE_OUTs (LiFi USDC + Across ETH) | ~$7 | No | ❌ Cross-chain gap |
+
+---
+
+## REFRESH 12 VERIFICATION DETAILS (2026-06-03)
+
+### Fix 1 — B-EARN-METH-SYNTHETIC (P2)
+
+| Field | Value |
+|---|---|
+| Wallet | BYBIT:33625378:EARN |
+| Asset | METH |
+| replaySequence | 837 |
+| basisEffect | CARRY_IN |
+| quantityAfter | 0.66865026 |
+| totalCostBasisAfterUsd | $447.66 |
+| avcoAfterUsd | $669.49 |
+
+Main wallet BYBIT:33625378 METH:
+- seq 834: REALLOCATE_IN qty=0.66865026, basis=$447.66 (arrived from FUND-corridor)
+- seq 836: CARRY_OUT qty=0, basis=$0 (drained to EARN)
+
+**Verdict: ✅ PASS.** Ghost 0.669 METH at main wallet eliminated. EARN correctly carries $447.66 basis.
+
+---
+
+### Fix 2 — B-EARN-SYNTHETIC-USDT (P3)
+
+| Wallet | replaySequence | qty | totalCostBasisAfterUsd | avcoAfterUsd | basisEffect |
+|---|---|---|---|---|---|
+| BYBIT:421325298:EARN | 426 | 20 | $20.00 | $1.00 | CARRY_IN |
+| BYBIT:421325298:EARN | 439 | 14.15 | $14.15 | $1.00 | DISPOSE (subsequent) |
+| BYBIT:516601508:EARN | 6420 | 150 | $150.00 | ≈$1.00 | CARRY_IN |
+
+**Verdict: ✅ PASS.** Both EARN wallets now have correct USDT basis. Previously showed $0.
+
+---
+
+### Fix 3 — B-DOUBLE-LEDGER-POINT (P3)
+
+OPTIMISM ETH at replaySequence 4618 (was phantom $49,446 spike):
+
+| seq | basisEffect | quantityDelta | costBasisDelta | avcoAfterUsd |
+|---|---|---|---|---|
+| 4611 | GAS_ONLY | 2.99e-8 | $0 | $0 |
+| 4612 | CARRY_IN | +0.000142 | +$0.495 | $3,482.42 |
+| 4613 | CARRY_OUT | −0.000126 | $0 | — |
+| 4618 | GAS_ONLY | −5.25e-8 | −$0.000219 | **$4,170.40** |
+
+AVCO at seq 4618 = **$4,170.40** (was $49,446). Phantom eliminated.
+
+Global zero-delta phantom CARRY_IN/CARRY_OUT/ACQUIRE count: **0**
+
+**Verdict: ✅ PASS.** All phantoms suppressed.
+
+---
+
+### Regression checks
+
+| Check | Result |
+|---|---|
+| Zero-basis EARN positions (qty>0, basis≤0 via CARRY_IN scan) | **0 found** ✅ |
+| ARB EARN (BYBIT:33625378:EARN ARB) | qty=36.55, basis=$7.026, avco=$0.3175 ✅ |
+| ETH AVCO scan (all wallets with qty>0) | Range $1,592–$3,817 ✅ (no spikes) |
+| ETH AVCO > $10,000 entries | **0 found** ✅ |
+| Global avcoAfterUsd > $100,000 | 10 entries: all LP-RECEIPT UNICHAIN/UNISWAP (expected for V4 LP position value ~$133k–$136k, qty=1) and BTC at BYBIT:516601508 (~$100k–$108k, correct BTC purchase prices) ✅ |
+
+---
+
+### New positions flagged (pre-existing, not new blockers)
+
+The following positions have `quantityAfter > 0`, `totalCostBasisAfterUsd = 0`, and `hasIncompleteHistoryAfter = true`. All are **pre-existing** incomplete-history issues unaffected by Refresh 12 changes:
+
+| Wallet | Asset | qty | Note |
+|---|---|---|---|
+| 0x1a87f12a | AAVE GHO/USDT/USDC | 2144.9 | Balancer/Aura LP token — no initial deposit tracked |
+| 0x1a87f12a | AURAAAVE GHO/USDT/USDC-VAULT | 42.9 | Aura vault receipt — upstream LP basis not propagated |
+| 0x1a87f12a | VARIABLEDEBTMANUSDE | 2500 | Mantle Aave debt token — liability, not asset; $0 cost basis is expected |
+| BYBIT:33625378 | AGLD | 50.23 | Pre-backfill position (seq=18); evidence missing |
+| BYBIT:33625378:FUND | AGLD | 0.007 | Dust (DISPOSE remaining) |
+| 0x68bc3b81 | EUL | 0.046 | Euler dust |
+| 0x1a87f12a | PENDLE | 0.013 | UNKNOWN basisEffect entry |
+| 0x1a87f12a | XPL / VELO / CAKE / REUL | small | Minor tokens, pre-existing |
+| BYBIT:33625378:EARN | TON / CUDIS | small | Incomplete history from Bybit |
+| BYBIT:409666492:EARN | TON | 0.064 | Incomplete history |
+
+None of these are new. No new blockers introduced by Refresh 12.
+
+---
 
 ---
 
@@ -26,32 +133,16 @@ Pipeline state: CONFIRMED=7344 | PENDING=0 | PENDING_PRICE=0 | PENDING_CLARIFICA
 
 ---
 
-## RECENTLY RESOLVED (refresh 8–9)
+## RECENTLY RESOLVED (refresh 8–12)
 
 | ID | Resolution |
 |---|---|
 | B-LP-EXIT-BASE-PANCAKE-UNKNOWN | **RESOLVED** — AMANWETH AVCO recovered from $1,533 → $2,944.85. Full LP basis ($9,011.24) now carried via chain: LP_EXIT→BRIDGE→aWETH→LENDING_WITHDRAW→UNWRAP→BYBIT_CORRIDOR→MANTLE. Verified 2026-06-03. |
 | B-PCAKE-V3-PARTIAL-EXIT | **RESOLVED** — 0x3dc35066 and 0x29dad570 confirmed as `LP_FEE_CLAIM` on BASE (2026-01-31 and 2026-02-02). |
 | B-ETH-ARBI-LOW-BASIS (R8) | **NOT ACTIVE** — Historical dust artifacts in ETH:ARBITRUM ledger (seq 5021-5072). Current terminal AVCO $2,069 is correct. |
-
----
-
-## RANKED ACTIVE BLOCKER LIST (refresh 9)
-
-**Audit verdict (2026-06-03 refresh 9): B-LP-EXIT-BASE-PANCAKE-UNKNOWN resolved. `0xa5e755a6` correctly carries $9,011.24 basis at $2,944.85 AVCO to AMANWETH — NOT a blocker. Main new finding: B-EARN-DEPOSIT-MISSING (~$1,551 cbD lost at EARN account for ETH+METH subscriptions with empty corrId).**
-
-| Rank | ID | Severity | Description | Est. cbD shortfall | Active AVCO broken? | Fixable? |
-|---|---|---|---|---|---|---|
-| 0 | B-EARN-DEPOSIT-MISSING | ✅ **RESOLVED** | `BybitOnChainEarnOrphanRepairService` synthesises EARN counterpart for FUND-only On-chain Earn subscriptions. ETH CARRY_IN +$1,103.77 and METH CARRY_IN +$447.66 now materialise at EARN. Verified 2026-06-03. | **$0** (recovered) | No | ✅ RESOLVED |
-| 1 | B-VAULT-WITHDRAW `0xc8b94615` | ✅ RESOLVED | `TurtleVaultBurnRepairService` synthesises turtleAvalancheUSDC burn; REALLOCATE_OUT -2787.57 → REALLOCATE_IN USDC +2831.20, cbAfter=$2,815. Confirmed 2026-06-03. | **$0** (recovered) | No | ✅ RESOLVED |
-| 2 | B-BYBIT-CORRIDOR-2 (USDe) | DATA GAP | 2115 USDe MANTLE: SPOT→FUND FH missing; ~$2,105 shortfall | ~$2,105 | No (USDe position disposed May 2026) | ❌ Evidence missing |
-| 3 | B-VAULT-WITHDRAW `0x971c8464` + `0xb47d87fa` | DATA GAP | MCUSDC upstream shortfall + wrapper-less vault no prior deposit | ~$4,608 (hist.) | No | ❌ Irreducible |
-| 4 | B-EARN-BUNDLE | P2 ACTIVE | Multi-leg bundle fan-in defect — UTA carries orphaned at EARN. All positions now null but historical P&L distorted. | ~$1,632 hist. | No (all redeemed) | ✅ Move-basis defect |
-| 5 | B-BYBIT-CORRIDOR-2 (cmETH) | DATA GAP | cmETH MANTLE GENUINE_EVIDENCE_MISSING; cmETH position now qty=0 (fully exited). | ~$212 | No (qty=0 after rebuild) | ❌ Evidence missing |
-| 6 | B-EARN-MISTYPE | P3 TYPE-MODEL | 79 BYBIT:EARN LENDING_WITHDRAWs should be EARN_FLEXIBLE_SAVING. Financially handled correctly (cbD>0), but wrong type. | $0 (accounting OK) | No | ✅ Classification fix |
-| 7 | B-DOUBLE-LEDGER-POINT | P3 COSMETIC | Double CARRY_IN at seq 5031-5032 for tx 0x04b1a579. Net numerically correct. Intermediate AVCO spike $218→$583→$399 in historical chart. | ~$0 (net correct) | No | ✅ Replay dedup |
-| 8 | B-BRIDGE-ORPHAN-2 | DATA GAP | 5 BRIDGE_OUTs to 0xf5f93d26; 1 failed/refunded, 4 exits to untracked chain | ~$0.81 net | No | ❌ Trivial |
-| 9 | B-BRIDGE-ORPHAN-1 | DATA GAP | 4 orphan BRIDGE_OUTs (LiFi USDC + Across ETH) | ~$7 | No | ❌ Cross-chain gap |
+| B-EARN-METH-SYNTHETIC | **RESOLVED** — METH EARN: CARRY_IN seq=837, qty=0.669, basis=$447.66, avco=$669.49. Main wallet drained (qty=0 at seq=836). Verified refresh 12. |
+| B-EARN-SYNTHETIC-USDT | **RESOLVED** — BYBIT:421325298:EARN $20, BYBIT:516601508:EARN $150 USDT basis. Verified refresh 12. |
+| B-DOUBLE-LEDGER-POINT | **RESOLVED** — Zero-delta phantom count=0. OPTIMISM ETH seq=4618 avco=$4,170 (was $49,446). Verified refresh 12. |
 
 ---
 

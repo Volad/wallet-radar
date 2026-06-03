@@ -39,12 +39,17 @@ public class ReplayPendingTransferKeyFactory {
         if (correlationId == null) {
             return false;
         }
-        // bybit-earn-principal-v1: — BybitEarnPrincipalTransferPairer (Flexible Savings LENDING pairs)
-        // bybit-earn-onchain-v1:   — BybitOnChainEarnOrphanRepairService (On-chain Earn synthetic pairs)
+        // bybit-earn-principal-v1:    — BybitEarnPrincipalTransferPairer (Flexible Savings LENDING pairs)
+        // bybit-earn-onchain-fund-v1: — BybitOnChainEarnOrphanRepairService, corridor-funded repairs
         // Both use corr-family: keyed matching so FUND CARRY_OUT and EARN CARRY_IN are matched
         // by their shared deterministic corrId rather than the shared UID+asset FIFO queue.
+        //
+        // NOTE: bybit-earn-onchain-v1: (spot-funded repairs) is intentionally excluded here so
+        // those FUND→EARN legs fall through to the isBybitEarnInternalTransfer FIFO path. Their
+        // position key is the stripped BYBIT:uid wallet, and the FIFO queue correctly pairs FUND
+        // CARRY_OUT with EARN CARRY_IN using the shared uid+asset key.
         return correlationId.startsWith(BybitEarnPrincipalTransferPairer.EARN_PRINCIPAL_CORRELATION_PREFIX)
-                || correlationId.startsWith(BybitOnChainEarnOrphanRepairService.EARN_ONCHAIN_CORR_PREFIX);
+                || correlationId.startsWith(BybitOnChainEarnOrphanRepairService.EARN_ONCHAIN_FUND_CORR_PREFIX);
     }
 
     /**

@@ -40,6 +40,15 @@ public final class LedgerPointCollector {
         if (transaction == null || flow == null || assetKey == null || before == null || after == null || before.sameAs(after)) {
             return;
         }
+        // B-DOUBLE-LEDGER-POINT: suppress phantom carry/acquire points that carry zero financial
+        // content. These arise when attachLateCarryToPendingInbound fires for a pending inbound
+        // that was already materialised with zero provisional basis (no spot price available),
+        // resulting in a second ledger point with qty delta=0 and basis delta=0. The point's
+        // only visible effect is a spurious AVCO spike caused by a changed uncoveredQuantity —
+        // a cosmetic artifact with no financial substance.
+        if (isPhantomCarryPoint(before, after, basisEffect)) {
+            return;
+        }
         if (transaction.getBlockTimestamp() == null) {
             throw new IllegalStateException("Ledger point requires blockTimestamp (txId=" + transaction.getId() + ")");
         }
@@ -116,5 +125,28 @@ public final class LedgerPointCollector {
 
     private static BigDecimal nonNegative(BigDecimal value) {
         return value.signum() < 0 ? BigDecimal.ZERO : value;
+    }
+
+    /**
+     * Returns {@code true} for phantom carry/acquire points that have zero quantity delta AND
+     * zero cost-basis delta. Such points arise when {@code attachLateCarryToPendingInbound}
+     * resolves a pending inbound that already has zero provisional basis (no spot price
+     * available), mutating only {@code uncoveredQuantity}. The resulting AVCO spike (basis /
+     * newly-covered-qty) is a cosmetic artifact with no financial substance and should not be
+     * persisted as a ledger point.
+     */
+    private static boolean isPhantomCarryPoint(
+            PositionSnapshot before,
+            PositionState after,
+            AssetLedgerPoint.BasisEffect basisEffect
+    ) {
+        if (basisEffect != AssetLedgerPoint.BasisEffect.CARRY_IN
+                && basisEffect != AssetLedgerPoint.BasisEffect.CARRY_OUT
+                && basisEffect != AssetLedgerPoint.BasisEffect.ACQUIRE) {
+            return false;
+        }
+        BigDecimal qtyDelta = delta(after.quantity(), before.quantity());
+        BigDecimal basisDelta = delta(after.totalCostBasisUsd(), before.totalCostBasisUsd());
+        return qtyDelta.signum() == 0 && basisDelta.signum() == 0;
     }
 }

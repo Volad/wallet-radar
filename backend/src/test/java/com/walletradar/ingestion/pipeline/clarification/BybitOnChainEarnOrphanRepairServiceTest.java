@@ -203,6 +203,165 @@ class BybitOnChainEarnOrphanRepairServiceTest {
     }
 
     // ------------------------------------------------------------------
+    // Corridor-funded FUND subscription: uses EARN_ONCHAIN_FUND_CORR_PREFIX
+    // ------------------------------------------------------------------
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void repairOrphans_corridorFundedSubscription_usesFundCorrIdPrefix() {
+        Instant ts = Instant.parse("2025-05-10T12:00:00Z");
+        NormalizedTransaction fund = fundTransfer("BYBIT-421325298:FH:arb-sub", "BYBIT:421325298:FUND", "ARB", "-100.0", ts);
+
+        // Simulate: corridor deposit at BYBIT:421325298:FUND, same qty, within 6h
+        NormalizedTransaction corridorDeposit = fundTransfer("corridor-arb-deposit",
+                "BYBIT:421325298:FUND", "ARB", "100.0", ts.minusSeconds(300));
+        corridorDeposit.setCorrelationId("BYBIT-CORRIDOR:arbitrum:some-hash");
+
+        // find() calls: (1) loadFundOrphans, (2) loadEarnInternalTransfers, (3) hasRecentCorridorDeposit
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(fund))
+                .thenReturn(List.of())
+                .thenReturn(List.of(corridorDeposit));
+        when(mongoOperations.exists(any(Query.class), eq(NormalizedTransaction.class))).thenReturn(false);
+
+        int repaired = service().repairOrphans();
+
+        assertThat(repaired).isEqualTo(1);
+
+        ArgumentCaptor<Iterable<NormalizedTransaction>> captor = ArgumentCaptor.forClass(Iterable.class);
+        verify(normalizedTransactionRepository).saveAll(captor.capture());
+        List<NormalizedTransaction> saved = (List<NormalizedTransaction>) captor.getValue();
+        assertThat(saved).hasSize(2);
+
+        NormalizedTransaction savedFund = saved.stream()
+                .filter(t -> "BYBIT:421325298:FUND".equals(t.getWalletAddress()))
+                .findFirst().orElseThrow();
+        // Corridor-funded: must use the FUND prefix so :FUND wallet is preserved in replay
+        assertThat(savedFund.getCorrelationId())
+                .startsWith(BybitOnChainEarnOrphanRepairService.EARN_ONCHAIN_FUND_CORR_PREFIX);
+        assertThat(savedFund.getCorrelationId())
+                .doesNotStartWith(BybitOnChainEarnOrphanRepairService.EARN_ONCHAIN_CORR_PREFIX);
+
+        NormalizedTransaction synthetic = saved.stream()
+                .filter(t -> "BYBIT:421325298:EARN".equals(t.getWalletAddress()))
+                .findFirst().orElseThrow();
+        assertThat(synthetic.getCorrelationId()).isEqualTo(savedFund.getCorrelationId());
+    }
+
+    // ------------------------------------------------------------------
+    // Non-corridor FUND subscription: uses EARN_ONCHAIN_CORR_PREFIX (spot-funded, e.g. METH)
+    // ------------------------------------------------------------------
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void repairOrphans_spotFundedSubscription_usesDefaultCorrIdPrefix() {
+        Instant ts = Instant.parse("2025-06-01T10:00:00Z");
+        NormalizedTransaction fund = fundTransfer("BYBIT-516601508:FH:meth-sub", "BYBIT:516601508:FUND", "METH", "-0.669", ts);
+
+        // No corridor deposit found (empty list)
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(fund))
+                .thenReturn(List.of())
+                .thenReturn(List.of());  // no corridor deposit
+        when(mongoOperations.exists(any(Query.class), eq(NormalizedTransaction.class))).thenReturn(false);
+
+        int repaired = service().repairOrphans();
+
+        assertThat(repaired).isEqualTo(1);
+
+        ArgumentCaptor<Iterable<NormalizedTransaction>> captor = ArgumentCaptor.forClass(Iterable.class);
+        verify(normalizedTransactionRepository).saveAll(captor.capture());
+        List<NormalizedTransaction> saved = (List<NormalizedTransaction>) captor.getValue();
+        NormalizedTransaction savedFund = saved.stream()
+                .filter(t -> "BYBIT:516601508:FUND".equals(t.getWalletAddress()))
+                .findFirst().orElseThrow();
+        // Spot-funded: must use the generic (non-fund) prefix — :FUND position will be stripped
+        assertThat(savedFund.getCorrelationId())
+                .startsWith(BybitOnChainEarnOrphanRepairService.EARN_ONCHAIN_CORR_PREFIX);
+        assertThat(savedFund.getCorrelationId())
+                .doesNotStartWith(BybitOnChainEarnOrphanRepairService.EARN_ONCHAIN_FUND_CORR_PREFIX);
+    }
+
+    // ------------------------------------------------------------------
+    // hasRecentCorridorDeposit: qty within 1% tolerance accepted
+    // ------------------------------------------------------------------
+
+    @Test
+    void hasRecentCorridorDeposit_qtWithinOnePctTolerance_returnsTrue() {
+        Instant ts = Instant.parse("2025-05-10T12:00:00Z");
+
+        // Corridor deposit qty is 99.5 (0.5% less than 100 — within 1% tolerance).
+        // ARB → continuityIdentity = "FAMILY:ARB", which is what repairOrphans() would pass.
+        NormalizedTransaction corridorDeposit = fundTransfer("corridor-arb",
+                "BYBIT:777:FUND", "ARB", "99.5", ts.minusSeconds(60));
+        corridorDeposit.setCorrelationId("BYBIT-CORRIDOR:arb:hash");
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(corridorDeposit));
+
+        boolean result = service().hasRecentCorridorDeposit("777", "FAMILY:ARB", new BigDecimal("100"), ts);
+
+        assertThat(result).isTrue();
+    }
+
+    // ------------------------------------------------------------------
+    // hasRecentCorridorDeposit: qty outside 1% tolerance rejected
+    // ------------------------------------------------------------------
+
+    @Test
+    void hasRecentCorridorDeposit_qtOutsideTolerance_returnsFalse() {
+        Instant ts = Instant.parse("2025-05-10T12:00:00Z");
+
+        // Corridor deposit qty is 90 (10% less — outside 1% tolerance)
+        NormalizedTransaction corridorDeposit = fundTransfer("corridor-arb",
+                "BYBIT:777:FUND", "ARB", "90.0", ts.minusSeconds(60));
+        corridorDeposit.setCorrelationId("BYBIT-CORRIDOR:arb:hash");
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(corridorDeposit));
+
+        boolean result = service().hasRecentCorridorDeposit("777", "FAMILY:ARB", new BigDecimal("100"), ts);
+
+        assertThat(result).isFalse();
+    }
+
+    // ------------------------------------------------------------------
+    // hasRecentCorridorDeposit: different asset family rejected
+    // ------------------------------------------------------------------
+
+    @Test
+    void hasRecentCorridorDeposit_differentAssetFamily_returnsFalse() {
+        Instant ts = Instant.parse("2025-05-10T12:00:00Z");
+
+        // Corridor deposit is ETH (FAMILY:ETH), but we're looking for ARB (FAMILY:ARB)
+        NormalizedTransaction corridorDeposit = fundTransfer("corridor-eth",
+                "BYBIT:777:FUND", "ETH", "100.0", ts.minusSeconds(60));
+        corridorDeposit.setCorrelationId("BYBIT-CORRIDOR:arb:hash");
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(corridorDeposit));
+
+        boolean result = service().hasRecentCorridorDeposit("777", "FAMILY:ARB", new BigDecimal("100"), ts);
+
+        assertThat(result).isFalse();
+    }
+
+    // ------------------------------------------------------------------
+    // hasRecentCorridorDeposit: empty DB returns false
+    // ------------------------------------------------------------------
+
+    @Test
+    void hasRecentCorridorDeposit_noDeposits_returnsFalse() {
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of());
+
+        boolean result = service().hasRecentCorridorDeposit("999", "FAMILY:ETH", new BigDecimal("1.0"),
+                Instant.parse("2025-05-10T12:00:00Z"));
+
+        assertThat(result).isFalse();
+    }
+
+    // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
 

@@ -15,6 +15,7 @@ import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.math.MathContext;
 import java.math.RoundingMode;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -22,6 +23,7 @@ import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
@@ -49,11 +51,28 @@ import java.util.Locale;
 @RequiredArgsConstructor
 public class BybitOnChainEarnOrphanRepairService {
 
+    /**
+     * Used for FUND events that arrived via spot trading (not a corridor deposit). The position
+     * key for these is the stripped {@code BYBIT:uid} wallet — {@code isEarnPrincipalPaired}
+     * in {@link com.walletradar.accounting.support.AccountingAssetIdentitySupport} does NOT
+     * activate for this prefix so the FUND sub-account suffix is stripped as normal.
+     */
     public static final String EARN_ONCHAIN_CORR_PREFIX = "bybit-earn-onchain-v1:";
+
+    /**
+     * Used for FUND events that arrived via a BYBIT-CORRIDOR deposit directly into the
+     * {@code :FUND} sub-account. The position key must preserve the full {@code :FUND} wallet
+     * so the CARRY_OUT drains the funded sub-account position rather than the empty root.
+     * {@code isEarnPrincipalPaired} activates only for this prefix.
+     */
+    public static final String EARN_ONCHAIN_FUND_CORR_PREFIX = "bybit-earn-onchain-fund-v1:";
+
     public static final String SYNTHETIC_ID_PREFIX = "bybit-earn-onchain-synthetic-v1:";
     private static final int QTY_SCALE = 8;
     private static final Duration EARN_COUNTERPART_WINDOW = Duration.ofHours(6);
     private static final BigDecimal QTY_TOLERANCE = new BigDecimal("0.00000001");
+    private static final BigDecimal CORRIDOR_QTY_TOLERANCE_PCT = new BigDecimal("0.01");
+    private static final MathContext MC = MathContext.DECIMAL128;
 
     private final MongoOperations mongoOperations;
     private final NormalizedTransactionRepository normalizedTransactionRepository;
@@ -98,7 +117,14 @@ public class BybitOnChainEarnOrphanRepairService {
                 continue;
             }
 
-            String corrId = corrId(fund.getId(), assetFamily, absQty);
+            // Choose the corrId prefix based on whether this FUND event was funded via a
+            // BYBIT-CORRIDOR deposit into :FUND. Corridor-funded events need the full :FUND
+            // wallet preserved in the replay position key; spot-funded events use the stripped
+            // BYBIT:uid position.
+            String corrIdPrefix = hasRecentCorridorDeposit(uid, assetFamily, absQty, fund.getBlockTimestamp())
+                    ? EARN_ONCHAIN_FUND_CORR_PREFIX
+                    : EARN_ONCHAIN_CORR_PREFIX;
+            String corrId = corrId(corrIdPrefix, fund.getId(), assetFamily, absQty);
 
             NormalizedTransaction synthetic = buildSyntheticEarnTransaction(
                     syntheticId, uid, assetSymbol, assetContract, absQty,
@@ -125,6 +151,47 @@ public class BybitOnChainEarnOrphanRepairService {
     // -------------------------------------------------------------------------
     // Queries
     // -------------------------------------------------------------------------
+
+    /**
+     * Returns {@code true} when there is a BYBIT-CORRIDOR deposit into {@code BYBIT:uid:FUND}
+     * for the same asset family and approximately the same quantity within ±6 hours. A 1%
+     * quantity tolerance accommodates small corridor fees that may reduce the deposited amount.
+     */
+    boolean hasRecentCorridorDeposit(String uid, String assetFamily, BigDecimal absQty, Instant timestamp) {
+        if (uid == null || assetFamily == null || absQty == null || timestamp == null) {
+            return false;
+        }
+        String fundWallet = "BYBIT:" + uid + ":FUND";
+        Instant windowStart = timestamp.minus(EARN_COUNTERPART_WINDOW);
+        Instant windowEnd = timestamp.plus(EARN_COUNTERPART_WINDOW);
+
+        Query query = Query.query(new Criteria().andOperator(
+                Criteria.where("source").is(NormalizedTransactionSource.BYBIT),
+                Criteria.where("type").is(NormalizedTransactionType.INTERNAL_TRANSFER),
+                Criteria.where("walletAddress").is(fundWallet),
+                Criteria.where("correlationId").regex("^BYBIT-CORRIDOR:"),
+                Criteria.where("blockTimestamp").gte(Date.from(windowStart)).lte(Date.from(windowEnd))
+        ));
+
+        List<NormalizedTransaction> candidates = mongoOperations.find(query, NormalizedTransaction.class);
+        BigDecimal tolerance = absQty.multiply(CORRIDOR_QTY_TOLERANCE_PCT, MC);
+
+        for (NormalizedTransaction candidate : candidates) {
+            NormalizedTransaction.Flow flow = principalFlow(candidate);
+            if (flow == null || flow.getQuantityDelta() == null || flow.getQuantityDelta().signum() <= 0) {
+                continue;
+            }
+            if (!assetFamily.equals(assetFamily(flow))) {
+                continue;
+            }
+            BigDecimal candidateQty = flow.getQuantityDelta();
+            BigDecimal diff = candidateQty.subtract(absQty, MC).abs();
+            if (diff.compareTo(tolerance) <= 0) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     private List<NormalizedTransaction> loadFundOrphans() {
         Query query = Query.query(new Criteria().andOperator(
@@ -243,11 +310,11 @@ public class BybitOnChainEarnOrphanRepairService {
         return SYNTHETIC_ID_PREFIX + sha256Hex(fundId == null ? "" : fundId);
     }
 
-    private static String corrId(String fundId, String assetFamily, BigDecimal absQty) {
+    private static String corrId(String prefix, String fundId, String assetFamily, BigDecimal absQty) {
         String qtyPlain = absQty.setScale(QTY_SCALE, RoundingMode.HALF_UP)
                 .stripTrailingZeros().toPlainString();
         String payload = (fundId == null ? "" : fundId) + "|" + assetFamily + "|" + qtyPlain;
-        return EARN_ONCHAIN_CORR_PREFIX + sha256Hex(payload);
+        return prefix + sha256Hex(payload);
     }
 
     // -------------------------------------------------------------------------

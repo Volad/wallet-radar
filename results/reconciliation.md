@@ -1,6 +1,227 @@
-# Reconciliation — AVCO Audit 2026-06-02 (full audit cycle, refresh 2)
+# Reconciliation — AVCO Audit 2026-06-03 (full audit cycle, refresh 6)
 
-Pipeline: CONFIRMED=7338 (+22) | PENDING_PRICE=0 | NEEDS_REVIEW=0 | ledger=9694 (+8)
+Pipeline: CONFIRMED=7344 | PENDING_PRICE=0 | NEEDS_REVIEW=0 | ledger=9720
+
+---
+
+## Refresh 6 — 2026-06-03 (post B-BRIDGE-IN-ACQUIRE, B-VAULT-WITHDRAW Turtle Finance)
+
+### User complaint: "AVCO опять сломался"
+
+**Root cause: B-BRIDGE-IN-ACQUIRE fix correctly reducing previously-inflated basis.**
+
+The ETH family AVCO dropped from ~$2,539 (pre-fix) to ~$2,151 (fullSessionCurrent).
+This is **not a regression** — it is the fix working correctly. 107 BRIDGE_INs previously inflated
+basis by repricing ETH acquisitions at market; they now carry source-chain AVCO, which is lower.
+
+### Pipeline state (2026-06-03)
+
+| Metric | Value |
+|---|---|
+| CONFIRMED | 7344 (+6 new live transactions since rebuild) |
+| PENDING_PRICE | 0 ✅ |
+| NEEDS_REVIEW | 0 ✅ |
+| PENDING_STAT | 0 ✅ |
+| Ledger points | 9720 |
+| Last transaction | 2026-06-03T05:50:08Z (ETH SWAP on ARBITRUM) |
+
+### B-BRIDGE-IN-ACQUIRE Verification (2026-06-03)
+
+| Metric | Value | Target |
+|---|---|---|
+| BRIDGE_IN CARRY_IN count | **129** | was 0 pre-fix ✅ |
+| BRIDGE_IN ACQUIRE count | **1** (ETH execution-fee refund in USDe bridge — correct) | was 107 ✅ |
+| BRIDGE_IN REALLOCATE_IN (stablecoins) | **16** | expected ✅ |
+| BRIDGE_IN CARRY_IN total cbD | **$45,956.80** | ~$45,955 expected ✅ |
+| BRIDGE_IN with corrId AND continuityCandidate≠true | **0** | 0 ✅ |
+
+The 1 remaining ACQUIRE (`0x826189720` on ARBITRUM, ETH 0.013689, cbD=$56.31) is correct:
+- Bridge is USDe→USD₮0 (Mantle→Arbitrum)
+- ETH is the bridge execution-fee refund, not the primary bridged asset
+- `supportsPlainMoveBasis=false` for mismatched asset pair → ACQUIRE is correct treatment
+- Creates a visible AVCO spike $473→$4,090 in history (small position absorbing market-price ETH)
+
+### B-SHORTFALL-1 Regression Check (Specific AC-g)
+
+**B-SHORTFALL-1 scenario (0x38d445c4 ETH ARBITRUM) — NOT a regression.**
+
+| Field | Pre-B-BRIDGE-IN-ACQUIRE | Post-B-BRIDGE-IN-ACQUIRE | Assessment |
+|---|---|---|---|
+| `continuityCandidate` | `false` | `true` | ✅ Fixed by repair service |
+| flow role | `BUY` | `TRANSFER` | ✅ Correctly retagged |
+| `costBasisDeltaUsd` | `$1,515.67` (B-SHORTFALL-1 artificial reprice) | `$0` | ✅ **Correct** |
+| basisEffect | `ACQUIRE` | `CARRY_IN` | ✅ Correct |
+| Source BRIDGE_OUT cbD | $0 (0x4ca0b79e BASE, NATIVE:BASE) | $0 (unchanged) | Source was SPONSORED_GAS_IN |
+
+The source BRIDGE_OUT `0x4ca0b79e` on BASE sent 0.799 ETH but only had 0.000002364 ETH tracked
+in the position (rest came from SPONSORED_GAS_IN with zero cost). The CARRY_IN correctly carries $0.
+
+The B-SHORTFALL-1 service (`UnmatchedBridgeInboundPricingFallbackService`) no longer reprices
+this BRIDGE_IN because `continuityCandidate=true` (repaired by `reconcileLegacySealedInbounds`).
+The $1,515 was an artificial band-aid; $0 is the financially correct value.
+
+**The oscillation fix (removing shortfall reprice for paired BRIDGE_INs) did NOT break B-SHORTFALL-1.**
+The two distinct cases are:
+- **B-SHORTFALL-1**: orphaned BRIDGE_INs with no partner (continuityCandidate=false after all linking) → repriced at market
+- **0x38d445c4**: now has continuityCandidate=true (linked to zero-basis BRIDGE_OUT) → CARRY_IN $0 (correct)
+
+### ETH AVCO Dashboard (refresh 6 vs refresh 3)
+
+| Asset | Refresh 3 (pre-fix) | Refresh 6 (post-fix) | Assessment |
+|---|---|---|---|
+| SYMBOL:ETH BYBIT:33625378 | $3,822 basis=$4,340 | $3,817.60 basis=$4,387.88 | ✅ stable (new purchases) |
+| NATIVE:ARBITRUM 0x1a87f12a | $2,079 basis=$125 | $1,997.83 basis=$160.58 | ✅ evolving (new buys at ~$2k) |
+| aManWETH 0x1a87f12a MANTLE | **$2,561 basis=$7,835** | **$1,533.15 basis=$4,691.44** | ✅ CORRECT post-fix |
+| FAMILY:ETH fullSessionCurrent AVCO | ~$2,539 | **$2,151.84** | ✅ CORRECT (was inflated) |
+| FAMILY:ETH current (active only) | N/A | $1,546.11 | ✅ (excludes lending) |
+
+**aManWETH basis drop explanation**: The 3.06 ETH deposited to Mantle Aave came via BYBIT-CORRIDOR
+from NATIVE:ARBITRUM, which had AVCO=$1,533 at the time of corridor payout. Previously, BRIDGE_INs on
+Arbitrum were inflating the AVCO with market-price acquisitions. Now correctly reflecting source basis.
+
+**Cascade chain:**
+1. BRIDGE_INs to NATIVE:ARBITRUM: previously ACQUIRE at $2,500–$4,000; now CARRY_IN at source AVCO
+2. NATIVE:ARBITRUM AVCO correctly reduced to ~$1,533 at Feb 2026 corridor time
+3. BYBIT-CORRIDOR to Mantle carries $1,533/ETH basis to FUND then to aManWETH
+4. aManWETH correctly shows $1,533 AVCO (down from inflated $2,561)
+
+### AVCO Spike Analysis (FAMILY:ETH, refresh 6)
+
+| Spike count >30% | 51 |
+|---|---|
+| Actionable (new) | 0 |
+| Actionable (pre-existing) | See below |
+
+**Active spike: seq=4614, NATIVE:OPTIMISM, Aug 3 2025 — $3,482 → $49,868 (+1,332%)**
+- CARRY_IN with cbD=$0 to near-empty NATIVE:OPTIMISM position
+- Position is fully DISPOSED (qty=0, basis=$0 at last LP)
+- Historical artifact only; no active AVCO impact
+
+**Active spike: seq=5987, NATIVE:ARBITRUM, Sep 29 2025 — $473 → $4,090 (+762%)**
+- BRIDGE_IN ACQUIRE for ETH execution-fee refund (remaining ACQUIRE, correct behavior)
+- $56.31 cbD, 0.013689 ETH added at $4,113/ETH to near-empty position
+- Historical artifact, position closed by corridor
+
+**Post-Feb-2026 AVCO dip on NATIVE:ARBITRUM (seq=8690–8810)**
+- After 0x38d445c4 BRIDGE_IN adds 0.799 ETH at $0, then LENDING_DEPOSIT moves ETH to Aave
+- Remaining ~0.001 ETH + SPONSORED_GAS_IN receipts show AVCO of $33–$312 briefly
+- This is CORRECT — tiny position with near-zero basis after bulk moved to lending
+- Position recovers to $1,997 via subsequent SWAP ACQUIREs ✅
+
+### USDC Family Status (refresh 6)
+
+| Position | Qty | Basis | AVCO | Status |
+|---|---|---|---|---|
+| SYMBOL:USDC BYBIT:33625378 | 1,669.56 | $1,669.56 | $1.000 | ✅ |
+| `0xcb8164` (aUSDC Aave, 0xf03b52e8) | 2,498.35 | $2,498.35 | $1.000 | ✅ |
+| `0xaf88d065` USDC ARBITRUM (0x1a87f12a) | 75.90 | $74.10 | $0.976 | ⚠️ minor (pre-existing) |
+| `0x625e7708` aUSDC Aave (0xf03b52e8) | 1,667.94 | $359.97 | ~$0.22 position / $0.897 family | ⚠️ pre-existing vault gap |
+| Euler `0x39de0f00` (7.3B tokens) | 7.36B | $3,259 | $1.86 | ⚠️ W-9 artifact |
+
+**USDC AVCO spike seq=7394: $1.001 → $1,531.96** (vault REALLOCATE_OUT draining tiny position
+residual from Euler LENDING_LOOP, then spike to $1,532 for briefly remaining sub-cent residual).
+**Followed by seq=7494 SWAP ACQUIRE** that returns USDC AVCO to $1.00. Pre-existing W-9/vault artifact.
+
+### New Live Transactions (Jun 3, 2026 — 6 new since last rebuild)
+
+| txHash (short) | Type | Asset | Effect | AVCO impact |
+|---|---|---|---|---|
+| `0xeb9438b6` | SWAP | ETH ARBITRUM | ACQUIRE $20 (0.0107 ETH ~$1,869) | AVCO $2,018 → $1,997 ✅ |
+| `0xe35fbfbf` | SWAP | ETH ARBITRUM | ACQUIRE $20 | AVCO incremental ✅ |
+| `0xca3030c6` | SWAP | ETH ARBITRUM | ACQUIRE $20 | AVCO incremental ✅ |
+| `0x250147bb` | SWAP | ETH ARBITRUM | ACQUIRE $20 | AVCO incremental ✅ |
+| USDC DISPOSEs | SWAP×4 | USDC ARBITRUM | DISPOSE ~$20 each | AVCO $0.976 ✅ |
+
+Regular on-chain activity. No anomalies.
+
+### Ranked Remaining Issues (refresh 6)
+
+| Rank | ID | Severity | Description | Est. cbD shortfall | Active AVCO broken? |
+|---|---|---|---|---|---|
+| 1 | B-VAULT-WITHDRAW `0xc8b94615` | P2 FIXABLE | Turtle Finance vault: turtleAvalancheUSDC burn missing from flows | ~$2,815 | No (USDC disposed) |
+| 2 | B-BYBIT-CORRIDOR-2 (USDe) | DATA GAP | 2115 USDe MANTLE: SPOT→FUND FH missing from raw export | ~$2,105 | No (position disposed May 2026) |
+| 3 | B-VAULT-WITHDRAW `0x971c8464`+`0xb47d87fa` | DATA GAP | Upstream shortfall irreducible | ~$4,608 (hist.) | No |
+| 4 | B-BYBIT-CORRIDOR-2 (cmETH) | DATA GAP | cmETH MANTLE GENUINE_EVIDENCE_MISSING | ~$212 | Yes (cmETH position qty=0.1053 no basis) |
+| 5 | B-BRIDGE-ORPHAN-2/3/4 | DATA GAP | USDC BRIDGE_OUTs to 0xf5f93d26 | ~$0.81 net | No |
+| 6 | B-BRIDGE-ORPHAN-1 | DATA GAP | ETH $0.83 to Linea orphan | ~$0.83 | No |
+
+**Total estimated cbD shortfall remaining: ~$9,740** (down from ~$8,377 pre-cycle)
+- The apparent increase vs refresh 3 is due to counting historic data-gap shortfalls more precisely
+- Active AVCO-affecting: ~$212 (cmETH)
+- Historical P&L: ~$2,815 (Turtle vault) + ~$2,105 (USDe) + ~$4,608 (vault upstream gaps)
+
+**B-LP-UNSTAKE-ETH-MISS (deferred P2):** RESOLVED as data characteristic. The 0.799 ETH on Base
+truly had zero basis (SPONSORED_GAS_IN receipts). Not an LP unstake miss. CLOSED.
+
+**B-LP-EXIT-UNLINKED (deferred P3):** Still active. GMX LP_EXIT_REQUEST settlement misclassified
+as EXTERNAL_TRANSFER_IN. ~$0.58 impact. No regression.
+
+**B-BRIDGE-ORPHAN-3/4 (deferred P4):** Still active. USDC stablecoin, $0 AVCO impact.
+
+---
+
+# Reconciliation — AVCO Audit 2026-06-02 (full audit cycle, refresh 3)
+
+Pipeline: CONFIRMED=7338 | PENDING_PRICE=0 | NEEDS_REVIEW=0 | ledger=9688
+
+---
+
+## Refresh 3 — 2026-06-02 (post B-MNT-CARRY-1, B-ONDO-CARRY-1, B-CROSS-UID Defect 1)
+
+### Fixes verified this cycle
+
+| Fix | Status | cbD recovered |
+|---|---|---|
+| B-MNT-CARRY-1 (`OnChainInternalTransferPairRepairService` continuityCandidate filter removed) | ✅ RESOLVED | ~$68.94 (5 MNT MANTLE txs) |
+| B-ONDO-CARRY-1 (FIFO fallback in `applyBybitMultiLegBundleTransfer`) | ✅ RESOLVED | EARN ONDO cbD=$344.01; 4 orphaned bybit-collapsed-v1 carries now recovered |
+| B-CROSS-UID Defect 1 (FUND outbound corrId assignment) | ✅ RESOLVED | BTC $111.75 + TON $147.61 = ~$259.36 |
+
+### Resolved blockers this cycle (3)
+
+| ID | Description | cbD impact |
+|---|---|---|
+| B-MNT-CARRY-1 | 5 MNT MANTLE INTERNAL_TRANSFERs → two-phase CARRY_IN with correct basis | +$68.94 |
+| B-ONDO-CARRY-1 | ONDO bybit-collapsed-v1 FIFO recovery → EARN basis now $344 | +$344 EARN |
+| B-CROSS-UID Defect 1 | BTC + TON cross-UID FUND-sourced CARRY_INs now have basis | +$259.36 |
+
+### New findings this cycle
+
+| ID | Description | Impact |
+|---|---|---|
+| B-EARN-BUNDLE root cause refined | Multi-leg bundle timing: FUND steals EARN pending inbound; UTA's larger carry is orphaned. Direction corrected: EARN subscriptions (main→EARN), not redemptions. | Historical EARN basis deficit |
+| ONDO REALLOCATE_OUT spike | EARN AVCO drop 0.203→0.005 at earn-principal-v1:0a0566f8 is B-EARN-BUNDLE downstream symptom; P0-A override fires correctly. NOT new blocker. | Explained |
+| B-CROSS-UID Defect 1 duplicate records | BYBIT:516601508:FUND BTC INTERNAL_TRANSFERs with corrId appear twice in normalized_transactions. Replay handles correctly (no doubled basis). Normalization artifact to monitor. | Low risk |
+
+### Current AVCO Dashboard (refresh 3)
+
+| Asset family | Current AVCO | Basis | Qty | Status |
+|---|---|---|---|---|
+| ETH (BYBIT:33625378) | $3,822 | $4,340 | 1.149 ETH | ✅ market-plausible |
+| ETH (NATIVE:ARBITRUM) | $2,079 | $125 | 0.060 ETH | ✅ |
+| USDC (all current positions) | $1.00 | — | — | ✅ |
+| USDT (BYBIT:33625378) | $1.00 | $500 | 500 | ✅ |
+| MNT (BYBIT:33625378) | $1.28 | $95 | 74.8 | ✅ |
+| BTC (BYBIT:33625378) | disposed (qty=0) | $0 | 0 | ✅ (was ❌ avco=0) |
+| cmETH 0x5067b0e1 (MANTLE) | $0 | $0 | 0.1053 | ❌ GENUINE_EVIDENCE_MISSING |
+| ONDO EARN | null (redeemed) | — | — | ✅ (all positions closed) |
+
+### Ranked remaining issues (refresh 3)
+
+| Rank | ID | Severity | Est. shortfall | Active AVCO broken? |
+|---|---|---|---|---|
+| 1 | B-VAULT-WITHDRAW (3 residuals) | P1 | ~$5,658 historical | No |
+| 2 | B-BYBIT-CORRIDOR-2 (USDe residual) | P1 | ~$2,105 | Yes (USDe position) |
+| 3 | B-BYBIT-CORRIDOR-2 (cmETH) | P1 | ~$212 | Yes (cmETH position) |
+| 4 | B-EARN-BUNDLE | P2 | ~$395 (EARN positions, historical) | No (positions null) |
+| 5 | B-BRIDGE-ORPHAN-1 | P3 | ~$7 | No |
+| — | W-10 (ETH BYBIT conservation phantom) | P3 | $500 phantom | No |
+| — | W-11 (UNICHAIN coverage gap) | P3 | −$163 | No |
+
+**Total estimated cbD shortfall remaining:** ~$8,377 (down from ~$14,634 pre-cycle)
+- Active/current AVCO-affecting: ~$2,317 (cmETH $212 + USDe $2,105)
+- Historical P&L: ~$5,658 (vault withdrawals residuals) + ~$395 (EARN basis) + ~$7 (bridge orphans)
+
+---
 
 ---
 

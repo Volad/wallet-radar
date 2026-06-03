@@ -1,4 +1,51 @@
-# Warnings — AVCO Audit 2026-06-02 (full audit cycle, refresh 2)
+# Warnings — AVCO Audit 2026-06-03 (full audit cycle, refresh 9)
+
+## W-13 — AMANWETH AVCO "spike" at 0xa5e755a6 is EXPECTED BEHAVIOUR (refresh 9)
+
+**Issue reported**: User sees AVCO spike at `0xa5e755a6` (MANTLE INTERNAL_TRANSFER).
+
+**Finding**: The AMANWETH position has only 1 ledger point (REALLOCATE_IN at seq 8933). `avcoBeforeUsd=null` → `avcoAfterUsd=$2,944.85`. This appears as a "spike from zero" in the chart UI, but is correct — AMANWETH is a brand-new Aave lending position created by the LENDING_DEPOSIT. The carry chain is correct: B-LP-EXIT-BASE-PANCAKE-UNKNOWN was fixed; $9,011 basis is correctly delivered.
+
+**Action**: No fix needed. UI may benefit from annotating first LENDING_DEPOSIT events to distinguish "position created" from "AVCO spike".
+
+## W-14 — BYBIT:EARN ETH/METH subscription basis lost (B-EARN-DEPOSIT-MISSING) (refresh 9)
+
+**Issue**: BYBIT:33625378 main account shows CARRY_OUTs to EARN counterparty for ETH (0.693 ETH, −$1,104) and METH (0.669 METH, −$448) with empty corrId. EARN account never received matching CARRY_INs.
+
+**Impact**: Historical P&L distortion on any ETH/METH redeemed from EARN. Total ~$1,551 missing from EARN accounting scope.
+
+**See**: B-EARN-DEPOSIT-MISSING in blockers.md (P2).
+
+## W-15 — WETH:ARBITRUM and WETH:BASE historical $215 AVCO (refresh 9)
+
+**Issue**: Historical ledger points for WETH on BASE and ARBITRUM (wallet 0x1a87f12a, Sep 2025) show AVCO of $215/ETH.
+
+**Finding**: In Sep 2025, the BASE aWETH position held only 0.0107 WETH with $2.31 basis after repeated LP_ENTRY/EXIT cycles depleted the tracked basis. The aWETH LENDING_WITHDRAW returned this dust with $2.31 cbD ($215 AVCO). This was correctly bridged to ARBITRUM. Both positions are now ZERO (fully disposed). No current financial impact.
+
+**Action**: No fix needed. Historical chart artifact.
+
+---
+
+## ~~W-0~~ — RESOLVED (B-LP-UNSTAKE-ETH-MISS reopened and then fixed as B-LP-EXIT-BASE-PANCAKE-UNKNOWN)
+
+## W-0 — PRIOR AUDIT ERROR: B-LP-UNSTAKE-ETH-MISS wrongly closed (refresh 7) — SUPERSEDED
+
+**Issue**: Prior resolution in B-LP-UNSTAKE-ETH-MISS stated: "0.799 ETH on Base was SPONSORED_GAS_IN (zero basis). No LP miss." This conclusion was wrong.
+
+**Correct finding**: 
+- SPONSORED_GAS_IN events on BASE for `0x1a87f12ac0` total **0.000446 ETH** across 18 events
+- The 0.799 ETH came from PancakeSwap V3 LP_EXIT `0x0a757aeeb5` (2026-02-06T07:15) classified as UNKNOWN with empty flows
+- Was an active P0 bug producing aManWETH AVCO=$1,533 instead of ~$2,257
+- **RESOLVED in refresh 9** — AMANWETH AVCO now $2,944.85
+
+**Reopened as B-LP-EXIT-BASE-PANCAKE-UNKNOWN (P0)** in blockers.md.
+
+**Impact on previous "CORRECT BEHAVIOR" assessment of aManWETH basis drop**:
+- B-BRIDGE-IN-ACQUIRE fix was correct and its effect on AVCO reduction is legitimate
+- But the additional drop from the B-LP-EXIT bug compounds on top of that fix, creating an artificially low $1,533 AVCO
+- The LP_EXIT bug must be fixed separately from B-BRIDGE-IN-ACQUIRE
+
+---
 
 ## ~~W-1~~ — RESOLVED (B-SHORTFALL-1 fix explains and reverses the drop)
 
@@ -143,6 +190,32 @@ USDC CARRY_IN via BYBIT-CORRIDOR (`0x8186161871…`, 326 USDC, 2026-03-10) cause
 | Root cause | W-9 zero-basis eUSDC cascade |
 | Current state | Position now at $0.97 blending toward $1 as more USDC acquired. No fix needed, self-corrects. |
 
+## W-19 — ETH AVCO reduction from B-BRIDGE-IN-ACQUIRE (INFO)
+
+ETH family AVCO dropped from ~$2,539 → ~$2,151 after B-BRIDGE-IN-ACQUIRE fix. This is a correct
+reduction: previously 107 BRIDGE_INs inflated basis by acquiring ETH at market price instead of
+carrying source-chain AVCO. The most visible effect is aManWETH basis $7,835 → $4,691.
+
+| Field | Value |
+|---|---|
+| FAMILY:ETH AVCO pre-fix | ~$2,539 |
+| FAMILY:ETH AVCO post-fix | ~$2,151 |
+| Affected position | aManWETH 0x1a87f12a MANTLE (basis $7,835 → $4,691) |
+| Root cause | 107 BRIDGE_INs ACQUIRE→CARRY_IN; source AVCO was lower than market at bridge time |
+| Verdict | CORRECT BEHAVIOR — not a regression |
+| Status | INFO — explain to user |
+
+## W-20 — B-LP-UNSTAKE-ETH-MISS: CLOSED (data characteristic, not a bug)
+
+The 0.799 ETH BRIDGE_IN on Base (`0x38d445c4` → `0x4ca0b79e` chain) originated from SPONSORED_GAS_IN
+events with zero cost basis. This is not an LP_UNSTAKE miss; the ETH was genuinely free (zero-cost
+network sponsorship). The CARRY_IN with cbD=$0 is financially correct.
+
+| Field | Value |
+|---|---|
+| Blocker | B-LP-UNSTAKE-ETH-MISS (was P2) |
+| Verdict | CLOSED — zero basis is correct for SPONSORED_GAS_IN sourced ETH |
+
 ## Summary Table
 
 | ID | Description | Severity | Status |
@@ -164,3 +237,5 @@ USDC CARRY_IN via BYBIT-CORRIDOR (`0x8186161871…`, 326 USDC, 2026-03-10) cause
 | W-16 | bybit-it-pair-v1 SOL zero cbD | P3 | Open (negligible) |
 | W-17 | WBTC LENDING_DEPOSIT sawtooth (visual) | INFO | Open (no fix needed, tracking only) |
 | W-18 | USDC AVCO cascade jump ($0.10→$0.97) | P3 | Open (self-correcting, W-9 root) |
+| W-19 | ETH AVCO reduction post-B-BRIDGE-IN-ACQUIRE | INFO | **RESOLVED as correct behavior** |
+| ~~W-20~~ | B-LP-UNSTAKE-ETH-MISS | — | **CLOSED** — data characteristic |
