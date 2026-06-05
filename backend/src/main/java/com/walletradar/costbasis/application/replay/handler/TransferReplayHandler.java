@@ -21,6 +21,7 @@ import com.walletradar.costbasis.application.replay.support.ReplayPendingTransfe
 import com.walletradar.costbasis.application.replay.support.ReplayTransferClassifier;
 import com.walletradar.costbasis.domain.AssetLedgerPoint;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.ingestion.pipeline.bybit.BybitEarnPrincipalTransferPairer;
 import org.springframework.stereotype.Component;
 
@@ -128,6 +129,14 @@ public class TransferReplayHandler {
             ContinuityBucket bucket = replayState.continuity().bucket(keyFactory.continuityKey(transaction, flow));
             if (keyFactory.usesWrapperCompositeBucket(transaction)) {
                 restoreFullBucket(flow, position, bucket);
+            } else if (transaction.getType() == NormalizedTransactionType.PROTOCOL_CUSTODY_WITHDRAW
+                    && bucket.quantity().signum() == 0) {
+                // PROTOCOL_CUSTODY_WITHDRAW with no matching deposit (empty bucket): the deposit
+                // predates the backfill window or was never issued as an on-chain receipt token
+                // (e.g., Paradex L1 Core). Carrying $0 basis via REALLOCATE_IN permanently
+                // destroys cost basis — treat the principal return as a fresh ACQUIRE so
+                // stablecoin $1/unit logic (or market price) fills the gap.
+                flowSupport.applyBuy(flow, position);
             } else {
                 restoreFromContinuityBucket(flow, position, bucket);
             }
