@@ -106,6 +106,16 @@ public class TransferReplayHandler {
                 flowSupport.purgeOrphanBasisWhenEmpty(position);
                 return flowSupport.continuityBasisEffect(transaction, flow);
             }
+            // PROTOCOL_CUSTODY_WITHDRAW with no matching deposit (empty bucket): the deposit
+            // predates the backfill window or the custody contract does not issue on-chain
+            // receipt tokens (e.g., Paradex L1 Core). Carrying $0 basis via REALLOCATE_IN
+            // permanently destroys cost basis. Treat the principal return as a fresh ACQUIRE
+            // so stablecoin $1/unit logic (or market price) fills the gap.
+            if (transaction.getType() == NormalizedTransactionType.PROTOCOL_CUSTODY_WITHDRAW
+                    && bucket.quantity().signum() == 0) {
+                flowSupport.applyBuy(flow, position);
+                return flowSupport.continuityBasisEffect(transaction, flow);
+            }
             restoreFromContinuityBucket(flow, position, bucket);
             return flowSupport.continuityBasisEffect(transaction, flow);
         }
