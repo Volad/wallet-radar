@@ -1,134 +1,179 @@
-WALLETRADAR FINANCIAL AUDIT — REFRESH 12
-Generated: 2026-06-03
+WalletRadar Financial Audit — Refresh 15
+Date: 2026-06-04
 Universe: df5e69cc-a0c0-4910-8b7d-74488fa266e2
-Pipeline: CONFIRMED=7352 | PENDING=0 | PENDING_PRICE=0 | PENDING_CLARIFICATION=0 | ledger=9708
+Pipeline state: CONFIRMED=7373 | PENDING=0 | NEEDS_REVIEW=0 | ledger=9732
 
-══════════════════════════════════════════════════════════
-FIX VERIFICATION RESULTS
-══════════════════════════════════════════════════════════
+============================================================
+SECTION 0: REFRESH 15 EXECUTIVE SUMMARY
+============================================================
 
-──────────────────────────────────────────────────────────
-FIX 1: B-EARN-METH-SYNTHETIC (P2)
-BybitOnChainEarnOrphanRepairService — spot-funded corrId prefix
-──────────────────────────────────────────────────────────
-STATUS: ✅ CONFIRMED RESOLVED
+CONFIRMED FIXES (3):
+  ✅ B-VELORA-SWAP — Both Paraswap SWAPs have correct type + ledger points
+  ✅ B-LP-ENTRY-NO-LEDGER — ALL 92 LP_ENTRY txs now have ledger points (field corrected)
+  ✅ B-UNI-V3-LP-ENTRY-ACCOUNTING — 0x3d41db62 has type=LP_ENTRY, correlationId set, 3 pts
+  ⬇️  B-ETH-BASIS-COLLAPSE — DOWNGRADED P1→P2 Warning (material AVCO recovered to $1,828)
 
-BYBIT:33625378:EARN METH (last entry):
-  replaySequence : 837
-  basisEffect    : CARRY_IN
-  quantityAfter  : 0.66865026
-  costBasisAfter : $447.66
-  avcoAfter      : $669.49
+NEW ACTIVE BLOCKERS (3):
+  🔴 [P1] B-USDC-BYBIT-CORRIDOR-BASIS-CONTAMINATION
+         USDC AVCO = $0.22 (should be ~$1.00) — Bybit corridor carried wrong basis July 2025
+         Financial impact: ~$700-800 cost basis understatement on USDC disposals
+  🟡 [P2] B-BORROW-GAS-ETH-ACQUIRE (retained from R14)
+         BORROW gas-fee ETH incorrectly classified as ACQUIRE not GAS_ONLY
+  🟢 [P3] B-LP-NULL-BASIS-EFFECTS
+         148 LP_ENTRY/EXIT txs have null basisEffects field (ledger points OK)
 
-BYBIT:33625378 METH main wallet (all 2 entries):
-  seq 834  REALLOCATE_IN  qty=0.66865026  basis=$447.66  [received from FUND corridor]
-  seq 836  CARRY_OUT      qty=0           basis=$0       [drained to EARN — FINAL STATE]
+AVCO HEALTH:
+  ETH:  ✅ Material AVCO = $1,828.95 (dust spikes are false positives)
+  WETH: ✅ Material AVCO = $2,324.68 (last position at 3.06 WETH)
+  USDC: ❌ Material AVCO = $0.22 (should be ~$1.00) — B-USDC-BYBIT-CORRIDOR-BASIS-CONTAMINATION
+  All other assets: No material anomalies detected
 
-Result: Ghost 0.669 METH eliminated from main wallet. EARN correctly holds $447.66 basis.
-Expected was ~$447.66 — PASS ✅
+============================================================
 
-──────────────────────────────────────────────────────────
-FIX 2: B-EARN-SYNTHETIC-USDT (P3)
-BYBIT:421325298:EARN and BYBIT:516601508:EARN USDT basis
-──────────────────────────────────────────────────────────
-STATUS: ✅ CONFIRMED RESOLVED
+============================================================
+SECTION 1: PREVIOUSLY FIXED BLOCKERS VERIFICATION (REFRESH 15)
+============================================================
 
-BYBIT:421325298:EARN USDT:
-  seq=426  CARRY_IN  qty=20  costBasisAfter=$20.00  avco=$1.00
-  seq=439  DISPOSE   qty=14.15099  costBasisAfter=$14.15  avco=$1.00  [subsequent activity]
+B-VELORA-SWAP: ✅ CONFIRMED FIXED
+  - 0x10dab47f → SWAP | CONFIRMED | 3 ledger pts
+    * USDC DISPOSE -1000 @ avco=$0.22
+    * ETH ACQUIRE +0.5471 @ avco=$1,827.82
+    * ETH GAS_ONLY
+  - 0x19500b71 → SWAP | CONFIRMED | 3 ledger pts
+    * USDC DISPOSE -200 @ avco=$0.53
+    * ETH ACQUIRE +0.1094 @ avco=$1,828.95
+    * ETH GAS_ONLY
+  Note: USDC AVCO at disposal ($0.22, $0.53) is itself wrong — see B-USDC-BYBIT-CORRIDOR-BASIS-CONTAMINATION.
 
-BYBIT:516601508:EARN USDT:
-  seq=6420  CARRY_IN  qty=150  costBasisAfter≈$150.00  avco≈$1.00
+B-LP-ENTRY-NO-LEDGER + B-UNI-V3-LP-ENTRY-ACCOUNTING: ✅ CONFIRMED FIXED
+  - 0x3d41db62 → type=LP_ENTRY | CONFIRMED | correlationId=lp-position:base:uniswap:5248110
+    * seq 9729: USDC REALLOCATE_OUT -927.23 cbDelta=-$492.92
+    * seq 9730: ETH  REALLOCATE_OUT -0.1094 cbDelta=-$200.00
+    * seq 9731: LP-RECEIPT:BASE:UNISWAP:5248110 REALLOCATE_IN +1.0 avco=$1,385.85
+  - ALL 92 LP_ENTRY transactions confirmed with ledger points (field=normalizedTransactionId)
+  - USDC symbol correctly resolved to "USDC" ✅
 
-Both EARN wallets have non-zero basis. Previously showed $0 basis.
-PASS ✅
+B-ETH-BASIS-COLLAPSE: ⬇️ DOWNGRADED P1→P2 WARNING
+  - Min ETH AVCO = $144 at seq 8698 (dust: 0.0015 ETH, $0.22 cb, GAS_ONLY)
+  - Last material ETH AVCO = $1,828.95 (seq 9728, after large SWAP acquisitions)
+  - The contaminated ETH basis was diluted by subsequent acquisitions
+  - PancakeSwap 938761 basis pool: qty=0, basis=$0 (fully drained) — mechanism confirmed
+  - Status: Monitoring, no immediate action required
 
-──────────────────────────────────────────────────────────
-FIX 3: B-DOUBLE-LEDGER-POINT (P3)
-LedgerPointCollector phantom zero-delta suppression
-──────────────────────────────────────────────────────────
-STATUS: ✅ CONFIRMED RESOLVED
+============================================================
+SECTION 2: NEW BLOCKERS FOUND — RANKED (REFRESH 15)
+============================================================
 
-Global zero-delta phantom count (quantityDelta=0 AND costBasisDelta=0, basisEffect in CARRY_IN/CARRY_OUT/ACQUIRE):
-  COUNT = 0
+[P1] B-USDC-BYBIT-CORRIDOR-BASIS-CONTAMINATION
+  Problem: USDC AVCO = $0.22 (should be ~$1.00) for wallet 0x1a87f12a
+  Origin:  seq 4351 (2025-07-19) — BYBIT-CORRIDOR CARRY_IN
+           900.51 USDC transferred with only $51.74 cost basis
+           corr=BYBIT-CORRIDOR:BASE:0xccd8b33ca19b...
+           Bybit USDC AVCO was $0.0574 at that time
+  Current Bybit USDC AVCO: $1.00 (healthy — historical issue only)
+  Propagation: Bridge-in, LP cycles, carry-in chains — all contaminated
+  Impact on recent txs:
+    - 0x10dab47f: 1000 USDC disposed @ $0.22 → cost understated by ~$780
+    - 0x19500b71: 200  USDC disposed @ $0.53 → cost understated by ~$94
+    - BORROW at seq 9724 (+450 USDC @ $1.00) partially diluted AVCO to $0.53
+  Total impact: ~$700-800 cost basis understatement
+  Fix: Trace Bybit USDC ledger to July 2025 origin of $0.0574 AVCO;
+       correct Bybit basis; replay corridor + on-chain chain forward
 
-OPTIMISM ETH at replaySequence 4618 (was $49,446 AVCO spike):
-  seq=4618  basisEffect=GAS_ONLY  quantityDelta=-5.25e-8  costBasisDelta=-$0.000219  avcoAfter=$4,170.40
+[P1] B-ETH-BASIS-COLLAPSE
+  Wallet: 0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f
+  First bad point: replaySequence 8666 (LP_EXIT PancakeSwap BASE)
+  ETH AVCO: $151.22 (impossible — ETH never at $151 in 2025-2026)
+  59 ledger points affected with ETH AVCO < $500
+  Causation chain:
+    PancakeSwap LP-RECEIPT:BASE:PANCAKESWAP:938761 had cb=$120 for 0.796 ETH
+    → LP exit returned ETH at AVCO $151
+    → Subsequent BRIDGE_IN carried $152 AVCO to other ops
+    → LENDING_DEPOSIT consumed ETH at $152, AWETH inherited basis
+    → LENDING_WITHDRAW gave back WETH at AVCO $215 (similar contamination)
+    → Forward contamination of all ETH ops for this wallet
+  Impact: ~12x understatement of ETH cost basis for extended period
+  Root cause: PancakeSwap LP was entered with anomalously low AVCO ETH
+              (traced to seq ~5000 where bridge CARRY_IN brought $214 ETH)
+  Earliest failed stage: move_basis / cost_basis carry-through
+  Evidence state: EVIDENCE_PRESENT_UNLINKED
 
-The $49,447 spike is eliminated. avco at seq 4618 = $4,170.40 (plausible).
+[P2] B-BORROW-GAS-ETH-ACQUIRE  
+  BORROW txs create ETH ACQUIRE ledger points for gas fees:
+    - 0x9a2e580: ETH basisEffect=ACQUIRE, qty=8.4e-7, AVCO=$4467
+    - 0x5dab718: ETH basisEffect=ACQUIRE, qty=9.2e-8, AVCO=$4432
+    - 0xe392b7c: ETH basisEffect=ACQUIRE, qty=1.1e-5, AVCO=$156
+    - 0x9e6825a: ETH basisEffect=ACQUIRE, qty=1.1e-5, AVCO=$164
+  Root cause: FEE role in BORROW transactions being assigned
+              basisEffect=ACQUIRE instead of GAS_ONLY
+  Impact: Small but contributes to AVCO noise when ETH pool is tiny
+  Fix: BORROW FEE flows should use GAS_ONLY not ACQUIRE
 
-ARBITRUM ETH zero-delta phantom count:
-  COUNT = 0
+============================================================
+SECTION 3: AVCO SCAN RESULTS (REFRESH 15)
+============================================================
 
-PASS ✅
+Total ledger points: 9,732 (on-chain non-Bybit: 5,916 | Bybit: 3,816)
+AVCO spike analysis: using min/max per (wallet, assetSymbol) with ratio >3× and count >2
 
-══════════════════════════════════════════════════════════
-REGRESSION CHECKS
-══════════════════════════════════════════════════════════
+Asset         Wallet           Min AVCO    Max AVCO    Ratio  Verdict
+ETH           0x1a87f12a       $144        $5,301      36.8×  DUST ARTIFACT (GAS_ONLY entries <0.002 ETH)
+WETH          0x1a87f12a       $215        $4,733      22.0×  DUST ARTIFACT (similar pattern)
+CMETH         0xa0dd42         $414        $2,116       5.1×  Minor price variance (4 pts)
+ETH           0xf03b52         $1,041      $3,822       3.7×  Normal purchase variance
+CMETH         0x1a87f12a       $1,167      $3,667       3.1×  Minor price variance
+ETH           0x68bc3b         $1,384      $4,170       3.0×  Normal purchase variance
 
-Zero-basis EARN positions (qty>0, basis≤0, last CARRY_IN scan):
-  COUNT = 0  ✅  No new zero-basis EARN positions introduced.
+Material AVCO (current last non-zero meaningful positions):
+  ETH  0x1a87f12a: $1,828.95 ✅
+  WETH 0x1a87f12a: $2,324.68 ✅ (last at seq 8917, qty=3.06)
+  USDC 0x1a87f12a: $0.22 ❌ (should be ~$1.00 — B-USDC-BYBIT-CORRIDOR-BASIS-CONTAMINATION)
 
-ARB EARN regression (BYBIT:33625378:EARN ARB):
-  seq=9678  qty=36.55028564843072  costBasisAfter=$7.0259  avco=$0.3175
-  PASS ✅  Still ~$7 basis (fix from refresh 10 holds)
+No previously-identified B-ETH-BASIS-COLLAPSE in active material positions.
+ETH basis collapse at seq 8690 (avco=$147, qty=0.0015) is residual dust only.
 
-ETH AVCO scan (all wallets, latest qty>0 entries):
-  BYBIT:33625378            avco=$3,817.60  qty=1.14938194   ✅
-  BYBIT:409666492           avco=$3,244.89  qty=0.000002722  ✅
-  BYBIT:516601508           avco=$2,985.63  qty=0.00663336   ✅
-  BYBIT:33625378:FUND       avco=$2,877.77  qty=3.06         ✅
-  0xf03b52e8                avco=$2,712.22  qty=0.000823354  ✅
-  0x1a87f12a                avco=$2,065.29  qty=0.081429867  ✅
-  BYBIT:33625378:EARN       avco=$1,592.82  qty=0.69298193   ✅
-  All values in plausible range [$1,592–$3,818]. No spikes.  ✅
+============================================================
+SECTION 4: LENDING / AVCO RELATIONSHIP (REFRESH 15)
+============================================================
 
-ETH avcoAfterUsd > $10,000 count:
-  COUNT = 0  ✅
+13 lending transactions on BASE for wallet 0x1a87f12a. All CONFIRMED.
+All lending types correctly classified (LENDING_DEPOSIT, LENDING_WITHDRAW, BORROW, REPAY).
 
-Global avcoAfterUsd > $100,000 entries (10 total):
-  - LP-RECEIPT:UNICHAIN:UNISWAP:4529a01c7a041016  avco≈$133k–$136k  qty=1
-    → Uniswap V4 LP receipt NFT; AVCO = underlying position value. EXPECTED, not a spike.
-  - BTC at BYBIT:516601508  avco≈$100k–$108k
-    → BTC purchases at $100k–$108k price levels. CORRECT.
-  All 10 entries legitimate.  ✅
+Most recent BASE Aave cycle (Jun 2026):
+  - LENDING_DEPOSIT: ETH -0.5491 → AWETH +0.5491 ✅
+  - BORROW: variableDebtBasUSDC +450 → USDC +450 @ $1.00/USDC ✅
+  
+The USDC borrow at $1.00/USDC correctly priced (adding $450 cb to existing pool),
+partially diluting contaminated USDC AVCO from $0.22 to $0.53.
 
-══════════════════════════════════════════════════════════
-NEW BLOCKERS FOUND
-══════════════════════════════════════════════════════════
+The user-reported "wrong Aave cycle grouping" in Jun 2026 is a FRONTEND DISPLAY issue,
+not an AVCO calculation bug. Backend has correct CONFIRMED transactions.
 
-NONE.
+============================================================
+SECTION 5: SUMMARY (REFRESH 15)
+============================================================
 
-No new AVCO spikes, ghost positions, or basis-loss events introduced by Refresh 12 changes.
+Confirmed fixes (R14→R15):
+  ✅ B-VELORA-SWAP — CONFIRMED (both SWAPs with correct ledger points)
+  ✅ B-LP-ENTRY-NO-LEDGER — CONFIRMED FIXED (ALL 92 LP_ENTRYs have ledger points)
+  ✅ B-UNI-V3-LP-ENTRY-ACCOUNTING — CONFIRMED (0x3d41db62 fully operational)
+  ⬇️  B-ETH-BASIS-COLLAPSE — DOWNGRADED P1→P2 Warning (material AVCO = $1,828)
 
-══════════════════════════════════════════════════════════
-PRE-EXISTING POSITIONS WITH INCOMPLETE HISTORY (not new)
-══════════════════════════════════════════════════════════
+Active blockers:
+  🔴 [P1] B-USDC-BYBIT-CORRIDOR-BASIS-CONTAMINATION (NEW)
+          USDC AVCO $0.22 vs correct ~$1.00. ~$700-800 cost basis impact.
+  🟡 [P2] B-BORROW-GAS-ETH-ACQUIRE (retained)
+          BORROW gas ETH classified as ACQUIRE not GAS_ONLY
+  🟢 [P3] B-LP-NULL-BASIS-EFFECTS (NEW)
+          148 LP transactions with null basisEffects field
 
-The following wallets have qty>0, basis=$0, hasIncompleteHistoryAfter=true.
-These are pre-existing tracked issues, NOT introduced by Refresh 12:
+Clean states: CONFIRMED=7373 | PENDING=0 | NEEDS_REVIEW=0
 
-  0x1a87f12a | AAVE GHO/USDT/USDC         qty=2144.9  — Balancer/Aura LP token, no initial deposit tracked
-  0x1a87f12a | AURAAAVE GHO/USDT/USDC-VAULT qty=42.9  — Aura vault receipt, basis not propagated
-  0x1a87f12a | VARIABLEDEBTMANUSDE         qty=2500    — Mantle Aave variable debt token (liability; $0 cost expected)
-  BYBIT:33625378 | AGLD                   qty=50.23   — Pre-backfill position (seq=18)
-  0x68bc3b81 | EUL                        qty=0.046   — Euler dust
-  0x1a87f12a | PENDLE                     qty=0.013   — UNKNOWN basisEffect
-  Various small tokens (XPL, VELO, CAKE, REUL, TON, CUDIS) — minor, pre-existing
+NEXT ACTIONS (priority order):
+1. Trace Bybit USDC ledger to July 2025 to find origin of $0.0574 AVCO
+   (likely a Bybit funding, conversion, or misclassified trade event)
+   → Correct Bybit USDC basis → replay corridor + on-chain USDC chain
+2. Fix BORROW FEE basisEffect: change ACQUIRE → GAS_ONLY for gas flows in BORROW txs
+3. Verify whether basisEffects field is consumed by any downstream component
+4. Investigate frontend Aave lending cycle grouping display issue separately
 
-══════════════════════════════════════════════════════════
-AUDIT VERDICT — REFRESH 12
-══════════════════════════════════════════════════════════
-
-All three targeted fixes confirmed RESOLVED.
-No regressions introduced.
-No new blockers found.
-Pipeline is clean: PENDING=0, PENDING_PRICE=0, PENDING_CLARIFICATION=0.
-
-Remaining open blockers are data-gap or cosmetic issues (see blockers.md ranked list):
-  - B-BYBIT-CORRIDOR-2 (USDe)   ~$2,105 shortfall  DATA GAP (irreducible)
-  - B-VAULT-WITHDRAW 0x971c8464  ~$4,608 shortfall  IRREDUCIBLE
-  - B-EARN-MISTYPE               $0 impact          TYPE-MODEL (cosmetic)
-  - B-BRIDGE-ORPHAN-1/2          ~$8 net             TRIVIAL
-
-AUDIT TERMINAL STATE: PASS — Refresh 12 objectives met.

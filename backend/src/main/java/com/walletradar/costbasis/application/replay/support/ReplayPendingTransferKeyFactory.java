@@ -48,6 +48,11 @@ public class ReplayPendingTransferKeyFactory {
         // those FUND→EARN legs fall through to the isBybitEarnInternalTransfer FIFO path. Their
         // position key is the stripped BYBIT:uid wallet, and the FIFO queue correctly pairs FUND
         // CARRY_OUT with EARN CARRY_IN using the shared uid+asset key.
+        //
+        // NOTE: bybit-collapsed-v1: is intentionally excluded here. UTA↔FUND collapsed pairs
+        // have continuityCandidate=true and are routed to corr-family: via the generic
+        // continuityCandidate path in transferKey(). FUND↔EARN collapsed pairs must fall through
+        // to isBybitEarnInternalTransfer so they use the earn-carry FIFO queue.
         return correlationId.startsWith(BybitEarnPrincipalTransferPairer.EARN_PRINCIPAL_CORRELATION_PREFIX)
                 || correlationId.startsWith(BybitOnChainEarnOrphanRepairService.EARN_ONCHAIN_FUND_CORR_PREFIX);
     }

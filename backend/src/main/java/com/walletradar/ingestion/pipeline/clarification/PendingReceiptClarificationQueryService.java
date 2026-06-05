@@ -104,6 +104,74 @@ public class PendingReceiptClarificationQueryService {
         );
     }
 
+    /**
+     * Claims EXTERNAL_TRANSFER_OUT transactions that used the multicall (0xac9650d8) method and are classified with
+     * counterpartyAddress=MULTI, targeting cases where BlockScout failed to index ERC-20 token transfers due to
+     * indexer lag. The RPC receipt fallback in the clarification gateway recovers the missing token transfers.
+     *
+     * <p>Uses {@code clarificationAttempts} as the gate because this path goes through the metadata clarification
+     * workflow (non-NEEDS_REVIEW branch), which increments {@code clarificationAttempts} on both success and failure.
+     */
+    public List<NormalizedTransaction> claimMulticallMissingTransferBatch(
+            int batchSize,
+            int maxAttempts,
+            long retryDelaySeconds,
+            String workerId,
+            long leaseSeconds
+    ) {
+        int boundedBatchSize = Math.max(1, batchSize);
+        int boundedMaxAttempts = Math.max(1, maxAttempts);
+        Instant now = Instant.now();
+        Instant retryCutoff = now.minusSeconds(Math.max(0L, retryDelaySeconds));
+
+        // Gate on clarificationAttempts: the metadata clarification path increments this field on both success and
+        // failure, preventing re-selection of already-processed rows within the same pipeline run.
+        Criteria attemptsCriteria = new Criteria().orOperator(
+                Criteria.where("clarificationAttempts").exists(false),
+                Criteria.where("clarificationAttempts").lt(boundedMaxAttempts)
+        );
+        Criteria dueCriteria = new Criteria().orOperator(
+                Criteria.where("clarificationAttempts").exists(false),
+                Criteria.where("clarificationAttempts").lte(0),
+                Criteria.where("updatedAt").lte(retryCutoff)
+        );
+        Criteria leaseCriteria = new Criteria().orOperator(
+                Criteria.where("clarificationLeaseUntil").exists(false),
+                Criteria.where("clarificationLeaseUntil").is(null),
+                Criteria.where("clarificationLeaseUntil").lte(now)
+        );
+        Criteria activeAccountingCriteria = new Criteria().orOperator(
+                Criteria.where("excludedFromAccounting").exists(false),
+                Criteria.where("excludedFromAccounting").ne(true)
+        );
+
+        Query query = new Query(new Criteria().andOperator(
+                Criteria.where("source").is(NormalizedTransactionSource.ON_CHAIN),
+                Criteria.where("status").in(
+                        NormalizedTransactionStatus.CONFIRMED,
+                        NormalizedTransactionStatus.PENDING_PRICE
+                ),
+                Criteria.where("type").is(NormalizedTransactionType.EXTERNAL_TRANSFER_OUT),
+                Criteria.where("counterpartyAddress").is(FlowCounterpartySupport.MULTI_COUNTERPARTY),
+                activeAccountingCriteria,
+                attemptsCriteria,
+                dueCriteria,
+                leaseCriteria
+        ));
+        query.with(Sort.by(
+                Sort.Order.asc("blockTimestamp"),
+                Sort.Order.asc("transactionIndex"),
+                Sort.Order.asc("_id")
+        ));
+        query.limit(boundedBatchSize);
+        return claimIfRequested(
+                mongoOperations.find(query, NormalizedTransaction.class),
+                workerId,
+                leaseSeconds,
+                now
+        );
+    }
+
     public List<NormalizedTransaction> claimConfirmedFluidReceiptBatch(
             int batchSize,
             int maxAttempts,
@@ -271,6 +339,18 @@ public class PendingReceiptClarificationQueryService {
                 Criteria.where("missingDataReasons")
                         .in(ClassificationReasonCode.LP_POSITION_CORRELATION_REQUIRED.code())
         );
+        // Multicall (0xac9650d8) + ETH-value transactions classified as EXTERNAL_TRANSFER_OUT
+        // when BlockScout hasn't indexed the sub-call token transfers yet.
+        // The eligibility gate filters by methodId and rawValue via the raw_transaction view,
+        // so the MongoDB pre-filter uses the broader counterpartyAddress=MULTI signal.
+        Criteria multicallMissingTransferCriteria = new Criteria().andOperator(
+                Criteria.where("status").in(
+                        NormalizedTransactionStatus.CONFIRMED,
+                        NormalizedTransactionStatus.PENDING_PRICE
+                ),
+                Criteria.where("type").is(NormalizedTransactionType.EXTERNAL_TRANSFER_OUT),
+                Criteria.where("counterpartyAddress").is("MULTI")
+        );
 
         Query query = new Query(new Criteria().andOperator(
                 Criteria.where("source").is(NormalizedTransactionSource.ON_CHAIN),
@@ -285,7 +365,8 @@ public class PendingReceiptClarificationQueryService {
                         oneInchNativeSettlementCriteria,
                         eulerPendingClarificationCriteria,
                         nativeSettlementTransferRecoveryCriteria,
-                        lpPositionCorrelationRecoveryCriteria
+                        lpPositionCorrelationRecoveryCriteria,
+                        multicallMissingTransferCriteria
                 )
         ));
         query.with(Sort.by(

@@ -79,6 +79,13 @@ final class MetadataClarificationWorkflowHandler {
                     "receipt-" + java.util.UUID.randomUUID(),
                     properties.getLeaseSeconds()
             ));
+            batch.addAll(pendingReceiptClarificationQueryService.claimMulticallMissingTransferBatch(
+                    properties.getFullReceipt().getBatchSize(),
+                    properties.getFullReceipt().getMaxAttempts(),
+                    properties.getFullReceipt().getRetryDelaySeconds(),
+                    "receipt-" + java.util.UUID.randomUUID(),
+                    properties.getLeaseSeconds()
+            ));
         }
 
         return clarifyBatch(batch);

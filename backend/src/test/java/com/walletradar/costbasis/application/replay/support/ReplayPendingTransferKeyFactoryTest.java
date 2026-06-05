@@ -254,6 +254,54 @@ class ReplayPendingTransferKeyFactoryTest {
     }
 
     @Test
+    @DisplayName("bybit-collapsed-v1: UTA/FUND pair uses corr-family key (via continuityCandidate path)")
+    void bybitCollapsedUtaFundPairUsesCorrFamilyKey() {
+        // UTA→FUND collapsed pairs have continuityCandidate=true; the generic second block in
+        // transferKey() routes them to corr-family: before isBybitSameUidInternalTransfer is reached.
+        NormalizedTransaction utaOut = bybitInternalTransfer(
+                "BYBIT:33625378:UTA", "BYBIT:33625378:FUND",
+                "bybit-collapsed-v1:cafe0011cafe0022",
+                "USDC", "-901.50"
+        );
+        utaOut.setContinuityCandidate(true);
+        NormalizedTransaction fundIn = bybitInternalTransfer(
+                "BYBIT:33625378:FUND", "BYBIT:33625378:UTA",
+                "bybit-collapsed-v1:cafe0011cafe0022",
+                "USDC", "901.50"
+        );
+        fundIn.setContinuityCandidate(true);
+
+        var utaKey = factory.transferKey(utaOut, utaOut.getFlows().get(0));
+        var fundKey = factory.transferKey(fundIn, fundIn.getFlows().get(0));
+
+        assertThat(utaKey).isNotNull();
+        assertThat(fundKey).isNotNull();
+        assertThat(utaKey.value()).startsWith("corr-family:bybit-collapsed-v1:");
+        assertThat(fundKey.value()).startsWith("corr-family:bybit-collapsed-v1:");
+        assertThat(utaKey).isEqualTo(fundKey);
+    }
+
+    @Test
+    @DisplayName("bybit-collapsed-v1: FUND/EARN pair uses earn-carry FIFO key (EARN path must stay on FIFO)")
+    void bybitCollapsedFundEarnPairUsesEarnCarryFifoKey() {
+        // FUND→EARN collapsed pairs must fall through to isBybitEarnInternalTransfer (EARN wallet)
+        // so they use the earn-carry FIFO queue, not corr-family:
+        NormalizedTransaction fundOut = bybitInternalTransfer(
+                "BYBIT:33625378:FUND", "BYBIT:33625378:EARN",
+                "bybit-collapsed-v1:ondo-test-collapsed",
+                "ONDO", "-100"
+        );
+        fundOut.setContinuityCandidate(true);
+
+        var key = factory.transferKey(fundOut, fundOut.getFlows().get(0));
+
+        assertThat(key).isNotNull();
+        assertThat(key.value()).startsWith("bybit-earn-carry:");
+        assertThat(key.value()).doesNotContain("corr-family");
+        assertThat(factory.usesBybitVenueInternalCarryQueue(fundOut)).isTrue();
+    }
+
+    @Test
     @DisplayName("Bybit LENDING_WITHDRAW/LENDING_DEPOSIT share earn-carry FIFO key")
     void bybitEarnProductTransferUsesEarnCarryKey() {
         NormalizedTransaction earnOut = bybitInternalTransfer(

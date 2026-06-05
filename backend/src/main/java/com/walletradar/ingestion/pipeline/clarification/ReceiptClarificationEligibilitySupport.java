@@ -41,6 +41,7 @@ public final class ReceiptClarificationEligibilitySupport {
             "0x4673757b36119b4632f798ad4e0d72fbd170ee0b7be4e4901bd1155ab3881775"
     );
 
+    private static final String MULTICALL_SELECTOR = "0xac9650d8";
     private static final String GMX_HELPER_SEND_WNT_SELECTOR = "7d39aaf1";
     private static final String GMX_HELPER_SEND_TOKENS_SELECTOR = "e6d66ac8";
     private static final String GMX_DEPOSIT_REQUEST_CORRELATION_REQUIRED = ClassificationReasonCode.GMX_DEPOSIT_REQUEST_CORRELATION_REQUIRED.code();
@@ -87,6 +88,8 @@ public final class ReceiptClarificationEligibilitySupport {
                 isNativeSettlementTransferRecoveryCandidate(normalizedTransaction, reasons, view);
         boolean lpPositionCorrelationCandidate =
                 isLpPositionCorrelationCandidate(normalizedTransaction, reasons, view);
+        boolean multicallMissingTransferCandidate =
+                isMulticallWithMissingNativeValueTransferEvidence(normalizedTransaction, view);
         if (normalizedTransaction.getStatus() != NormalizedTransactionStatus.NEEDS_REVIEW
                 && !bridgeEvidenceCandidate
                 && !gmxDerivativeExecutionCandidate
@@ -96,7 +99,8 @@ public final class ReceiptClarificationEligibilitySupport {
                 && !oneInchNativeSettlementCandidate
                 && !eulerPendingClarificationCandidate
                 && !nativeSettlementTransferRecoveryCandidate
-                && !lpPositionCorrelationCandidate) {
+                && !lpPositionCorrelationCandidate
+                && !multicallMissingTransferCandidate) {
             return false;
         }
         if (bridgeEvidenceCandidate
@@ -138,6 +142,9 @@ public final class ReceiptClarificationEligibilitySupport {
             return true;
         }
         if (lpPositionCorrelationCandidate) {
+            return true;
+        }
+        if (multicallMissingTransferCandidate) {
             return true;
         }
         if (normalizedTransaction.getStatus() == NormalizedTransactionStatus.NEEDS_REVIEW) {
@@ -364,6 +371,40 @@ public final class ReceiptClarificationEligibilitySupport {
             return false;
         }
         return !view.explorerTokenTransfers().isEmpty() || !view.explorerInternalTransfers().isEmpty();
+    }
+
+    /**
+     * Detects multicall transactions (0xac9650d8) that send native ETH but have no token or
+     * internal transfer evidence — a symptom of BlockScout indexer lag where the block has
+     * been processed in the main tx list but the sub-call logs have not been indexed yet.
+     *
+     * <p>When this fires, the receipt clarification will fall back to RPC
+     * ({@code eth_getTransactionReceipt}) to recover ERC-20 Transfer events from the receipt
+     * logs, which are always present even when the explorer has not indexed them.
+     */
+    private static boolean isMulticallWithMissingNativeValueTransferEvidence(
+            NormalizedTransaction normalizedTransaction,
+            OnChainRawTransactionView view
+    ) {
+        if (normalizedTransaction == null || view == null) {
+            return false;
+        }
+        if (normalizedTransaction.getType() != NormalizedTransactionType.EXTERNAL_TRANSFER_OUT) {
+            return false;
+        }
+        if (view.syncMethod() != RawSyncMethod.BLOCKSCOUT) {
+            return false;
+        }
+        if (view.hasFullReceiptClarificationEvidence()) {
+            return false;
+        }
+        if (!MULTICALL_SELECTOR.equals(view.methodId())) {
+            return false;
+        }
+        if (view.rawValue() == null || view.rawValue().signum() <= 0) {
+            return false;
+        }
+        return view.explorerTokenTransfers().isEmpty() && view.explorerInternalTransfers().isEmpty();
     }
 
     private static boolean isCowSettlementCandidate(

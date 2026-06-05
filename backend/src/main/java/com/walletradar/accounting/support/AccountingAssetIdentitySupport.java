@@ -16,6 +16,7 @@ public final class AccountingAssetIdentitySupport {
     private static final String EARN_PRINCIPAL_CORRELATION_PREFIX = "bybit-earn-principal-v1:";
     private static final String EARN_ONCHAIN_FUND_CORRELATION_PREFIX = "bybit-earn-onchain-fund-v1:";
     private static final String BYBIT_CORRIDOR_CORRELATION_PREFIX = "BYBIT-CORRIDOR:";
+    private static final String BYBIT_COLLAPSED_CORRELATION_PREFIX = "bybit-collapsed-v1:";
     private static final String ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 
     private static final Map<NetworkId, String> NATIVE_SYMBOLS = Map.ofEntries(
@@ -91,6 +92,12 @@ public final class AccountingAssetIdentitySupport {
                 return wallet.trim();
             }
         }
+        if (isBybitCollapsedFundSide(transaction)) {
+            String wallet = transaction.getWalletAddress();
+            if (wallet != null && !wallet.isBlank()) {
+                return wallet.trim();
+            }
+        }
         return positionWalletAddress(transaction);
     }
 
@@ -113,6 +120,35 @@ public final class AccountingAssetIdentitySupport {
         // CARRY_OUT to an empty BYBIT:uid:FUND position instead of the actual root position.
         return correlationId.startsWith(EARN_PRINCIPAL_CORRELATION_PREFIX)
                 || correlationId.startsWith(EARN_ONCHAIN_FUND_CORRELATION_PREFIX);
+    }
+
+    /**
+     * Returns true for the FUND CARRY_IN leg of a {@code bybit-collapsed-v1:} UTA↔FUND pair.
+     * These legs must use the full {@code :FUND} wallet address so that the CARRY_IN credits
+     * the FUND sub-account rather than the collapsed main wallet.
+     *
+     * <p>FUND↔EARN collapsed pairs are excluded: for those, the acquisition was recorded on the
+     * stripped root position ({@code BYBIT:uid}) and the FUND drain must address the same root
+     * position. Only UTA↔FUND pairs (counterparty is {@code :UTA}) need the full sub-account
+     * address preserved.</p>
+     */
+    private static boolean isBybitCollapsedFundSide(NormalizedTransaction transaction) {
+        if (transaction == null) return false;
+        String corrId = transaction.getCorrelationId();
+        if (corrId == null || !corrId.startsWith(BYBIT_COLLAPSED_CORRELATION_PREFIX)) return false;
+        String wallet = transaction.getWalletAddress();
+        if (wallet == null || !wallet.toUpperCase(Locale.ROOT).endsWith(":FUND")) return false;
+        // Only UTA↔FUND pairs should preserve :FUND in the replay position wallet.
+        // For FUND↔EARN pairs the counterparty is :EARN; those must continue to use the
+        // stripped root position (BYBIT:uid) where the original acquisition was recorded.
+        String cp = transaction.getMatchedCounterparty();
+        if (cp == null || cp.isBlank()) {
+            cp = transaction.getCounterpartyAddress();
+        }
+        if (cp != null && cp.toUpperCase(Locale.ROOT).endsWith(":EARN")) {
+            return false;
+        }
+        return true;
     }
 
     /**

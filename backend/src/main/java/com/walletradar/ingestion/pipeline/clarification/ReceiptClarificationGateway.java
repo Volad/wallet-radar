@@ -17,6 +17,7 @@ import com.walletradar.ingestion.adapter.evm.explorer.model.ExplorerTransactionD
 import com.walletradar.ingestion.adapter.evm.rpc.EvmRpcClient;
 import com.walletradar.ingestion.adapter.evm.rpc.support.RpcTokenTransferResolver;
 import com.walletradar.ingestion.config.IngestionNetworkProperties;
+import com.walletradar.ingestion.pipeline.classification.support.TokenSymbolFallbackSupport;
 import com.walletradar.ingestion.pipeline.onchain.OnChainRawTransactionView;
 import com.walletradar.ingestion.pipeline.support.BsonCoercionSupport;
 import lombok.RequiredArgsConstructor;
@@ -476,11 +477,21 @@ public class ReceiptClarificationGateway {
         }
         long blockNumber = parseFlexibleLong(receipt.blockNumber());
         List<Document> receiptLogs = readDocumentList(receipt.asDocument(), "logs");
-        List<Document> tokenTransfers = includeTransferEvidence
-                ? loadExplorerTokenTransfers(provider, rawTransaction, view, blockNumber, receiptLogs)
-                : deriveTokenTransfersFromReceipt
-                ? deriveTokenTransfersFromReceiptLogs(rawTransaction, receiptLogs)
-                : List.of();
+        List<Document> tokenTransfers;
+        if (includeTransferEvidence) {
+            tokenTransfers = loadExplorerTokenTransfers(provider, rawTransaction, view, blockNumber, receiptLogs);
+        } else if (deriveTokenTransfersFromReceipt) {
+            if (receiptLogs.isEmpty()) {
+                // BlockScout receipt has no logs — indexer lag on this block.
+                // Fall back to the full explorer+RPC transfer fetch to recover ERC-20 Transfer
+                // events from the raw receipt which the RPC node always provides.
+                tokenTransfers = loadExplorerTokenTransfers(provider, rawTransaction, view, blockNumber, receiptLogs);
+            } else {
+                tokenTransfers = deriveTokenTransfersFromReceiptLogs(rawTransaction, receiptLogs);
+            }
+        } else {
+            tokenTransfers = List.of();
+        }
         List<Document> internalTransfers = includeTransferEvidence
                 ? loadExplorerInternalTransfers(provider, rawTransaction, view, blockNumber)
                 : List.of();
@@ -577,13 +588,19 @@ public class ReceiptClarificationGateway {
         }
 
         String endpoint = primaryRpcEndpoint(view.networkId());
-        if (endpoint == null || receiptLogs == null || receiptLogs.isEmpty()) {
+        if (endpoint == null) {
+            return List.of();
+        }
+        List<Document> logsToUse = (receiptLogs != null && !receiptLogs.isEmpty())
+                ? receiptLogs
+                : fetchRpcReceiptLogs(endpoint, view.txHash());
+        if (logsToUse.isEmpty()) {
             return List.of();
         }
         List<Document> derived = rpcTokenTransferResolver.buildTokenTransfersFromDocuments(
                 endpoint,
                 rawTransaction.getNetworkId(),
-                receiptLogs
+                logsToUse
         );
         if (derived.isEmpty()) {
             return List.of();
@@ -638,13 +655,19 @@ public class ReceiptClarificationGateway {
             }
         }
         String endpoint = primaryRpcEndpoint(networkId);
-        if (endpoint == null || receiptLogs == null || receiptLogs.isEmpty()) {
+        if (endpoint == null) {
+            return List.of();
+        }
+        List<Document> logsToUse = (receiptLogs != null && !receiptLogs.isEmpty())
+                ? receiptLogs
+                : fetchRpcReceiptLogs(endpoint, txHash);
+        if (logsToUse.isEmpty()) {
             return List.of();
         }
         return List.copyOf(rpcTokenTransferResolver.buildTokenTransfersFromDocuments(
                 endpoint,
                 networkId.name(),
-                receiptLogs
+                logsToUse
         ));
     }
 
@@ -721,6 +744,15 @@ public class ReceiptClarificationGateway {
                 copyIfPresent(transfer, "tokenSymbol", metadata, "tokenSymbol");
                 copyIfPresent(transfer, "tokenName", metadata, "tokenName");
                 copyIfPresent(transfer, "tokenDecimal", metadata, "tokenDecimal");
+            } else {
+                String knownSymbol = TokenSymbolFallbackSupport.resolveSymbolByContract(contractAddress);
+                Integer knownDecimals = TokenSymbolFallbackSupport.resolveDecimalsByContract(contractAddress);
+                if (knownSymbol != null) {
+                    transfer.put("tokenSymbol", knownSymbol);
+                }
+                if (knownDecimals != null) {
+                    transfer.put("tokenDecimal", Integer.toString(knownDecimals));
+                }
             }
             transfers.add(transfer);
         }
@@ -906,6 +938,27 @@ public class ReceiptClarificationGateway {
 
     private static boolean sameHash(String left, String right) {
         return left != null && right != null && left.equalsIgnoreCase(right);
+    }
+
+    private List<Document> fetchRpcReceiptLogs(String endpoint, String txHash) {
+        if (endpoint == null || txHash == null || txHash.isBlank()) {
+            return List.of();
+        }
+        try {
+            String json = rpcClient.call(endpoint, "eth_getTransactionReceipt", List.of(txHash)).block();
+            if (json == null || json.isBlank()) {
+                return List.of();
+            }
+            JsonNode root = objectMapper.readTree(json);
+            JsonNode result = root.path("result");
+            if (result.isMissingNode() || result.isNull() || !result.isObject()) {
+                return List.of();
+            }
+            Document receipt = Document.parse(objectMapper.writeValueAsString(result));
+            return List.copyOf(readDocumentList(receipt, "logs"));
+        } catch (Exception ex) {
+            return List.of();
+        }
     }
 
     private JsonNode rpcResult(String endpoint, String method, Object params) {

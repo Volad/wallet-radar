@@ -1,3 +1,41 @@
+# Reconciliation — AVCO Audit 2026-06-03 (refresh 13)
+
+## Refresh 13 AVCO Snapshot (2026-06-03, pipeline state 9726)
+
+### Pipeline state
+| Metric | Value |
+|---|---|
+| CONFIRMED | 7373 |
+| PENDING | 0 |
+| PENDING_PRICE | 0 |
+| NEEDS_REVIEW | 0 |
+| Ledger points | 9726 |
+
+### ETH AVCO — all wallets with ETH balance > 0
+
+| Wallet | AVCO (USD/ETH) | ETH Qty | Status |
+|---|---|---|---|
+| BYBIT:33625378 | $3,818 | 1.14938 | ✅ Normal |
+| BYBIT:409666492 | $3,245 | 0.0000027 | ✅ Normal |
+| BYBIT:516601508 | $2,986 | 0.006633 | ✅ Normal |
+| BYBIT:33625378:FUND | $2,946 | 3.06 | ✅ Normal (0xa5e755a6 verified) |
+| 0xf03b52e8 | $2,735 | 0.000823 | ✅ Normal |
+| 0xa0dd42c6 | $2,116 | 0.649664 | ✅ Normal |
+| 0x1a87f12a | $1,821 | 0.0000018 | ⚠️ ETH understated (Velora swap miss) |
+| BYBIT:33625378:EARN | $1,593 | 0.692982 | ✅ Normal |
+
+### New blockers found this refresh
+
+| ID | Type | Impact |
+|---|---|---|
+| B-VELORA-SWAP | 2 Paraswap swaps (BASE) missing ETH BUY — internalTransfers empty | ~$1,200 ETH cost basis missing |
+| B-UNI-V3-LP-MULTICALL | 1 Uniswap V3 multicall LP entry (BASE) missing USDC + LP NFT | ~$448 LP cost basis missing + $248 USDC overstatement |
+
+### AVCO verdict
+No new AVCO spikes in any wallet or asset family. BTC/WBTC AVCOs ($70K–$96K) match historical market prices. ETH AVCOs $1,593–$3,818, all within expected range. 0xa5e755a6 WETH CARRY_IN at $2,946 confirmed correct.
+
+---
+
 # Reconciliation — AVCO Audit 2026-06-03 (full audit cycle, refresh 6)
 
 Pipeline: CONFIRMED=7344 | PENDING_PRICE=0 | NEEDS_REVIEW=0 | ledger=9720

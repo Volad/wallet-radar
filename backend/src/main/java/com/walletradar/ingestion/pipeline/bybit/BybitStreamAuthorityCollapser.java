@@ -75,7 +75,7 @@ import java.util.Set;
 @RequiredArgsConstructor
 public class BybitStreamAuthorityCollapser {
 
-    private static final String COLLAPSED_CORR_PREFIX = "bybit-collapsed-v1:";
+    public static final String COLLAPSED_CORR_PREFIX = "bybit-collapsed-v1:";
     private static final String ECON_CORR_PREFIX = "bybit-econ-v1:";
     private static final String EXCLUSION_REASON_PREFIX = "BYBIT_STREAM_MIRROR_";
     /** Cycle/15 round 2: orphan cont=false leg with a collapsed-pair neighbor outside the bucket. */

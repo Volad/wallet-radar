@@ -2,6 +2,7 @@ package com.walletradar.costbasis.application.replay.dispatch;
 
 import com.walletradar.accounting.support.AccountingAssetIdentitySupport;
 import com.walletradar.ingestion.pipeline.bybit.BybitInternalTransferPairer;
+import com.walletradar.ingestion.pipeline.bybit.BybitStreamAuthorityCollapser;
 import com.walletradar.costbasis.application.replay.handler.AsyncSpotOrderReplayHandler;
 import com.walletradar.costbasis.application.replay.handler.BorrowReplayHandler;
 import com.walletradar.costbasis.application.replay.handler.EulerLoopReplayHandler;
@@ -550,6 +551,18 @@ public class ReplayDispatcher {
         }
         if (counterparty == null || counterparty.isBlank()) {
             return false;
+        }
+        // bybit-collapsed-v1: pairs a UTA CARRY_OUT with a FUND CARRY_IN.
+        // The FUND sub-account is a real economic entity that corridors basis to on-chain wallets.
+        // Only the UTA side is a no-op; FUND must receive the basis.
+        // Exclude from self-transfer detection whenever one wallet endpoint is :FUND.
+        if (corrId != null && corrId.startsWith(BybitStreamAuthorityCollapser.COLLAPSED_CORR_PREFIX)) {
+            String wallet = transaction.getWalletAddress();
+            boolean fundInvolved = (wallet != null && wallet.toUpperCase(java.util.Locale.ROOT).endsWith(":FUND"))
+                    || counterparty.toUpperCase(java.util.Locale.ROOT).endsWith(":FUND");
+            if (fundInvolved) {
+                return false;
+            }
         }
         String normalizedCounterparty = AccountingAssetIdentitySupport.positionWalletAddress(counterparty);
         return normalizedWallet != null && normalizedWallet.equals(normalizedCounterparty);

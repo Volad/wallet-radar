@@ -9,18 +9,36 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * Recover exact-out ParaSwap native settlement legs when explorer transfers only persist
- * source-token spend plus source-token refund, but calldata proves native output and unwrap.
+ * Recover ParaSwap native settlement legs when explorer transfers only persist
+ * source-token spend, but calldata proves native output and unwrap.
+ *
+ * <p>Handles two Paraswap V6 selectors:
+ * <ul>
+ *   <li>{@code swapExactAmountOut} (0x7f457675) — exact out, source surplus may be refunded</li>
+ *   <li>{@code swapExactAmountIn} (0xe3ead59e) — exact in, destAmount is the guaranteed ETH output</li>
+ * </ul>
+ *
+ * <p>This synthesizer fires only when there is no existing inbound native leg (i.e. the explorer
+ * internal transfers are missing due to indexer lag). When internal transfers are properly indexed
+ * the guard {@code hasInboundNative} prevents double-counting.
  */
 public final class ParaSwapNativeSettlementSupport {
 
     private static final String PARASWAP_SWAP_EXACT_AMOUNT_OUT_SELECTOR = "0x7f457675";
+    private static final String PARASWAP_SWAP_EXACT_AMOUNT_IN_SELECTOR = "0xe3ead59e";
     private static final String NATIVE_SENTINEL = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
     private static final String ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
     private static final String WRAPPED_NATIVE_WITHDRAW_SELECTOR = "0x2e1a7d4d";
-    private static final int DST_TOKEN_ARGUMENT_INDEX = 2;
+
+    // swapExactAmountOut argument indices (flat ABI layout after selector)
+    private static final int EXACT_OUT_DST_TOKEN_ARGUMENT_INDEX = 2;
     private static final int EXACT_OUT_AMOUNT_ARGUMENT_INDEX = 4;
     private static final int BENEFICIARY_ARGUMENT_INDEX = 7;
+
+    // swapExactAmountIn argument indices — struct fields inlined directly after executor address:
+    //   [0] executor, [1] srcToken, [2] destToken, [3] srcAmount, [4] destAmount, ...
+    private static final int SWAP_IN_DST_TOKEN_ARGUMENT_INDEX = 2;
+    private static final int SWAP_IN_DEST_AMOUNT_ARGUMENT_INDEX = 4;
 
     private ParaSwapNativeSettlementSupport() {
     }
@@ -33,10 +51,23 @@ public final class ParaSwapNativeSettlementSupport {
         if (view == null || nativeAssetSymbolResolver == null || extractedLegs == null || extractedLegs.isEmpty()) {
             return extractedLegs;
         }
-        if (!isWalletNativeSettlementSwap(view)) {
-            return extractedLegs;
+
+        if (isWalletNativeSettlementSwap(view)) {
+            return enrichSwapExactAmountOut(view, nativeAssetSymbolResolver, extractedLegs);
         }
 
+        if (isSwapExactAmountInWithNativeOutput(view)) {
+            return enrichSwapExactAmountIn(view, nativeAssetSymbolResolver, extractedLegs);
+        }
+
+        return extractedLegs;
+    }
+
+    private static List<RawLeg> enrichSwapExactAmountOut(
+            OnChainRawTransactionView view,
+            NativeAssetSymbolResolver nativeAssetSymbolResolver,
+            List<RawLeg> extractedLegs
+    ) {
         String nativeSymbol = nativeAssetSymbolResolver.nativeSymbol(view.networkId());
         if (nativeSymbol == null || hasInboundNative(extractedLegs, nativeSymbol)) {
             return extractedLegs;
@@ -55,17 +86,60 @@ public final class ParaSwapNativeSettlementSupport {
         return enriched;
     }
 
+    private static List<RawLeg> enrichSwapExactAmountIn(
+            OnChainRawTransactionView view,
+            NativeAssetSymbolResolver nativeAssetSymbolResolver,
+            List<RawLeg> extractedLegs
+    ) {
+        String nativeSymbol = nativeAssetSymbolResolver.nativeSymbol(view.networkId());
+        if (nativeSymbol == null || hasInboundNative(extractedLegs, nativeSymbol)) {
+            return extractedLegs;
+        }
+
+        BigDecimal destAmount = recoverSwapInNativeDestAmount(view);
+        if (destAmount == null || destAmount.signum() <= 0) {
+            return extractedLegs;
+        }
+
+        List<RawLeg> enriched = new ArrayList<>(extractedLegs);
+        enriched.add(RawLeg.nativeAsset(nativeSymbol, destAmount));
+        return enriched;
+    }
+
     private static boolean isWalletNativeSettlementSwap(OnChainRawTransactionView view) {
         if (!PARASWAP_SWAP_EXACT_AMOUNT_OUT_SELECTOR.equals(view.methodId())) {
             return false;
         }
         String inputData = view.inputData();
         String walletAddress = OnChainRawTransactionView.normalizeAddress(view.walletAddress());
-        String dstToken = CalldataDecodingSupport.decodeAddressArgument(inputData, DST_TOKEN_ARGUMENT_INDEX);
+        String dstToken = CalldataDecodingSupport.decodeAddressArgument(inputData, EXACT_OUT_DST_TOKEN_ARGUMENT_INDEX);
         String beneficiary = CalldataDecodingSupport.decodeAddressArgument(inputData, BENEFICIARY_ARGUMENT_INDEX);
         return NATIVE_SENTINEL.equals(dstToken)
                 && walletAddress != null
                 && (walletAddress.equals(beneficiary) || ZERO_ADDRESS.equals(beneficiary));
+    }
+
+    private static boolean isSwapExactAmountInWithNativeOutput(OnChainRawTransactionView view) {
+        if (!PARASWAP_SWAP_EXACT_AMOUNT_IN_SELECTOR.equals(view.methodId())) {
+            return false;
+        }
+        String inputData = view.inputData();
+        String dstToken = CalldataDecodingSupport.decodeAddressArgument(inputData, SWAP_IN_DST_TOKEN_ARGUMENT_INDEX);
+        if (!NATIVE_SENTINEL.equals(dstToken)) {
+            return false;
+        }
+        return CalldataDecodingSupport.containsEmbeddedSelector(inputData, WRAPPED_NATIVE_WITHDRAW_SELECTOR);
+    }
+
+    private static BigDecimal recoverSwapInNativeDestAmount(OnChainRawTransactionView view) {
+        BigInteger destAmountRaw = CalldataDecodingSupport.decodeUint256Argument(
+                view.inputData(),
+                SWAP_IN_DEST_AMOUNT_ARGUMENT_INDEX
+        );
+        if (destAmountRaw == null || destAmountRaw.signum() <= 0) {
+            return null;
+        }
+        return new BigDecimal(destAmountRaw).movePointLeft(18);
     }
 
     private static BigDecimal recoverExactOutNativeSettlementQuantity(OnChainRawTransactionView view) {

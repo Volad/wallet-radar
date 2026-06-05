@@ -282,6 +282,45 @@ public final class LpPositionLifecycleSupport {
         return false;
     }
 
+    /**
+     * Extracts the ERC-721 tokenId from the first Transfer log whose recipient is the wallet.
+     *
+     * <p>ERC-721 Transfer events have 4 indexed topics: [event_sig, from, to, tokenId].
+     * This method requires exactly 4 topics to avoid confusing ERC-20 Transfer logs (3 topics)
+     * with NFT Transfer logs.
+     *
+     * @return decimal string tokenId, or {@code null} if no matching log is found
+     */
+    public static String extractErc721TokenIdForWallet(OnChainRawTransactionView view) {
+        String wallet = OnChainRawTransactionView.normalizeAddress(view.walletAddress());
+        if (wallet == null) {
+            return null;
+        }
+        for (Document log : view.persistedLogs()) {
+            if (!ERC721_TRANSFER_TOPIC.equals(firstTopic(log))) {
+                continue;
+            }
+            List<String> topics = normalizedTopics(log);
+            if (topics.size() < 4) {
+                continue;
+            }
+            if (!wallet.equals(topicAddress(topics.get(2)))) {
+                continue;
+            }
+            String tokenIdHex = topics.get(3);
+            String normalized = tokenIdHex.startsWith("0x") ? tokenIdHex.substring(2) : tokenIdHex;
+            if (normalized.isBlank()) {
+                continue;
+            }
+            try {
+                return new BigInteger(normalized, 16).toString(10);
+            } catch (NumberFormatException ignored) {
+                // malformed topic; try next log
+            }
+        }
+        return null;
+    }
+
     private static String firstTopic(Document log) {
         List<String> topics = normalizedTopics(log);
         return topics.isEmpty() ? null : topics.getFirst();
