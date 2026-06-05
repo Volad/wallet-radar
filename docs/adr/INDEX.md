@@ -10,8 +10,7 @@ Architecture Decision Records for WalletRadar. Each ADR captures a single decisi
 | [ADR-002](ADR-002-clarification-reclassification-stage-contract.md) | Clarification / reclassification stage contract | Accepted | 2025 | Pipeline contracts |
 | [ADR-003](ADR-003-transfer-links-fa001.md) | Transfer links (FA001) | Accepted | 2025 | Transfer linking |
 | [ADR-004](ADR-004-physical-quantity-vs-basis-backed.md) | Physical quantity vs basis-backed | Accepted | 2025 | Cost basis model |
-| [ADR-005-pipeline](ADR-005-cycle4-bybit-pipeline.md) | Cycle 4 Bybit pipeline | Accepted | 2026-cycle/4 | Bybit ingestion |
-| [ADR-005-stream](ADR-005-bybit-per-stream-sync-metadata.md) | Bybit per-stream sync metadata | Accepted | 2026-cycle/4 | Bybit ingestion |
+| [ADR-005](ADR-005-cycle4-bybit-pipeline.md) | Cycle 4 Bybit pipeline | Accepted | 2026-cycle/4 | Bybit ingestion |
 | [ADR-006](ADR-006-cycle5-bybit-stream-authority-and-earn-subaccount.md) | Cycle 5 Bybit stream authority matrix and EARN as sub-account | Accepted | 2026-05-11 | Bybit ingestion |
 | [ADR-007](ADR-007-mandatory-accounting-universe-membership.md) | Mandatory Accounting Universe membership for OWN classification | Proposed | 2026-05-16 | N19 — universe |
 | [ADR-008](ADR-008-bybit-subaccount-discovery.md) | Bybit sub-account discovery on backfill bootstrap | Proposed | 2026-05-16 | N19 — universe |
@@ -30,6 +29,7 @@ Architecture Decision Records for WalletRadar. Each ADR captures a single decisi
 | [ADR-021](ADR-021-swap-multi-sell-price-derivation-and-lp-harvest-gate.md) | SWAP multi-sell price derivation and concentrated-liquidity harvest-only gate | Accepted (amended) | 2026-05-29 | ETH AVCO — SWAP pricing, LP harvest |
 | [ADR-022](ADR-022-lp-exit-per-asset-attribution-and-swap-multi-leg-pricing.md) | LP_EXIT per-asset cost attribution, SWAP multi-same-direction-leg pricing, LP_ENTRY net-by-asset shape detection | Accepted (amended 2026-05-30) | 2026-05-30 | ETH AVCO — LP exit attribution, SWAP split-leg pricing, router-refund LP_ENTRY |
 | [ADR-023](ADR-023-pendle-lpt-receipt-and-bybit-corridor-basis.md) | Pendle LP token receipt detection and Bybit corridor spot-price basis | Accepted | 2026-05-30 | S-4 (Mantle cmETH Pendle LP) + P-B (Bybit corridor basis) |
+| [ADR-024](ADR-024-bybit-per-stream-sync-metadata.md) | Bybit per-stream sync metadata (renumbered from ADR-005) | Accepted | 2026-cycle/4 | Bybit ingestion |
 
 ## Cycle/5 N19 cluster — implementation plan mapping
 

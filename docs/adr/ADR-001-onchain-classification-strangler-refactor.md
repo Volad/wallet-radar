@@ -374,22 +374,22 @@ Required documentation set:
 
 Recommended layout:
 
-- `docs/normalization/families/spam.md`
-- `docs/normalization/families/non-economic.md`
-- `docs/normalization/families/swap.md`
-- `docs/normalization/families/bridge.md`
-- `docs/normalization/families/lp.md`
-- `docs/normalization/families/lending.md`
-- `docs/normalization/families/vault.md`
-- `docs/normalization/families/staking.md`
-- `docs/normalization/families/trading.md`
-- `docs/normalization/families/transfer.md`
-- `docs/normalization/families/default.md`
-- `docs/normalization/protocols/gmx-v2.md`
-- `docs/normalization/protocols/cow-swap.md`
-- `docs/normalization/protocols/euler.md`
-- `docs/normalization/protocols/aave.md`
-- `docs/normalization/protocols/uniswap.md`
+- `docs/pipeline/normalization/rules/families/spam.md`
+- `docs/pipeline/normalization/rules/families/non-economic.md`
+- `docs/pipeline/normalization/rules/families/swap.md`
+- `docs/pipeline/normalization/rules/families/bridge.md`
+- `docs/pipeline/normalization/rules/families/lp.md`
+- `docs/pipeline/normalization/rules/families/lending.md`
+- `docs/pipeline/normalization/rules/families/vault.md`
+- `docs/pipeline/normalization/rules/families/staking.md`
+- `docs/pipeline/normalization/rules/families/trading.md`
+- `docs/pipeline/normalization/rules/families/transfer.md`
+- `docs/pipeline/normalization/rules/families/default.md`
+- `docs/pipeline/normalization/rules/protocols/gmx-v2.md`
+- `docs/pipeline/normalization/rules/protocols/cow-swap.md`
+- `docs/pipeline/normalization/rules/protocols/euler.md`
+- `docs/pipeline/normalization/rules/protocols/aave.md`
+- `docs/pipeline/normalization/rules/protocols/uniswap.md`
 
 Each rule document should define:
 
@@ -579,6 +579,7 @@ If this ADR is accepted in the future, the next step should be a separate execut
 - phase-by-phase extraction tasks
 - parity checkpoints after every family extraction
 
-Current implementation-plan companion:
+Realized output of this strangler migration is documented in the wiki:
 
-- [docs/tasks/55-adr001-classification-clarification-strangler-migration-plan.md](../tasks/55-adr001-classification-clarification-strangler-migration-plan.md)
+- [Normalization rules](../pipeline/normalization/rules/README.md) — families, protocols, three-layer contract
+- [Classification spec](../pipeline/normalization/classification-spec.md) — full classification + leg-extraction reference

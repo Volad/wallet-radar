@@ -28,7 +28,7 @@ realisedPnlPerRoundtrip ≈ qtyBorrowed * priceAtRepay
 
 For MNT alone (1050 MNT × ≈ $0.65 ≈ $683 + 199 MNT × ≈ $0.70 ≈ $139) ≈ **$800 of phantom Realised PnL**. Catalog estimate across MNT + DOGS + TON: **$1,000-1,500**.
 
-Beyond the audit window, [ADR-006 §N18 "Known follow-ups"](docs/adr/ADR-006-cycle5-bybit-stream-authority-and-earn-subaccount.md) explicitly flagged this:
+Beyond the audit window, [ADR-006 §N18 "Known follow-ups"](ADR-006-cycle5-bybit-stream-authority-and-earn-subaccount.md) explicitly flagged this:
 
 > BORROW → ACQUIRE without liability tracking. Borrows from Aave / Bybit margin still appear as BUY events crediting the asset pool without an offsetting liability row, so a *un-repaid* loan inflates equity by the borrowed notional.
 
@@ -180,7 +180,7 @@ The same model applies to Aave / Compound / Solana Jupiter borrowing (out of cyc
 - [cycle-autorun/cycle-data/cycle/5/results/n19-defect-catalog.md](cycle-autorun/cycle-data/cycle/5/results/n19-defect-catalog.md) — D-LOAN-ROUNDTRIP.
 - [cycle-autorun/cycle-data/cycle/5/results/n19-implementation-plan.md](cycle-autorun/cycle-data/cycle/5/results/n19-implementation-plan.md) §F.
 - [cycle-autorun/cycle-data/cycle/5/results/n19-raw/bybit-funding-history.jsonl](cycle-autorun/cycle-data/cycle/5/results/n19-raw/bybit-funding-history.jsonl) — BORROW / REPAY evidence.
-- [docs/adr/ADR-006-cycle5-bybit-stream-authority-and-earn-subaccount.md](docs/adr/ADR-006-cycle5-bybit-stream-authority-and-earn-subaccount.md) §N18 — original follow-up requirement.
+- [docs/adr/ADR-006-cycle5-bybit-stream-authority-and-earn-subaccount.md](ADR-006-cycle5-bybit-stream-authority-and-earn-subaccount.md) §N18 — original follow-up requirement.
 - [ADR-009](ADR-009-ownership-classification-via-universe.md) — counterparty taxonomy. BORROW/REPAY rows classify the loan venue as `CounterpartyType.PROTOCOL` (existing seven-value enum); the LOAN-specific lifecycle is encoded by `NormalizedTransactionType.BORROW` / `REPAY` and the `BorrowLiability` document of this ADR, not by a counterparty-type variant.
 - [ADR-010](ADR-010-flow-level-counterparty.md) — `accountRef` per flow.
 - [ADR-014](ADR-014-portfolio-conservation-gate.md) — open liabilities treated separately from MtM.

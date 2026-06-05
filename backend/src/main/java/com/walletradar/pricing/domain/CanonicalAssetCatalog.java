@@ -96,13 +96,29 @@ public final class CanonicalAssetCatalog {
 
     private static final Map<String, String> SYMBOL_ALIASES = Map.ofEntries(
             Map.entry("WETH", "ETH"),
-            Map.entry("AETHWETH", "ETH"),
-            Map.entry("AARBWETH", "ETH"),
-            Map.entry("ALINWETH", "ETH"),
-            Map.entry("AMANWETH", "ETH"),
-            Map.entry("AZKSWETH", "ETH"),
+            // Aave aToken ETH family — all deployed networks. Receipt tokens trade 1:1 with WETH/ETH.
+            // Naming convention: a{NetworkAbbrev}WETH on Aave V3, or aWETH on V2 / networks without prefix.
+            Map.entry("AWETH", "ETH"),       // Base (aWETH), Ethereum V2 (aWETH)
+            Map.entry("AETHWETH", "ETH"),    // Ethereum V3
+            Map.entry("AARBWETH", "ETH"),    // Arbitrum
+            Map.entry("AOPTWETH", "ETH"),    // Optimism
+            Map.entry("APOLWETH", "ETH"),    // Polygon
+            Map.entry("ABASWETH", "ETH"),    // Base V3 (if deployed with network prefix)
+            Map.entry("ALINWETH", "ETH"),    // Linea
+            Map.entry("AMANWETH", "ETH"),    // Mantle
+            Map.entry("AZKSWETH", "ETH"),    // zkSync
+            Map.entry("ASCRWETH", "ETH"),    // Scroll
             Map.entry("VBETH", "ETH"),
             Map.entry("YVVBETH", "ETH"),
+            // Aave aToken BTC family — WBTC receipt tokens trade 1:1 with WBTC (= BTC for pricing).
+            Map.entry("AWBTC", "BTC"),       // Ethereum V2 (aWBTC)
+            Map.entry("AETHWBTC", "BTC"),    // Ethereum V3
+            Map.entry("AARBWBTC", "BTC"),    // Arbitrum (verified in DB: aArbWBTC)
+            Map.entry("AOPTWBTC", "BTC"),    // Optimism
+            Map.entry("APOLWBTC", "BTC"),    // Polygon
+            Map.entry("AAVAWBTC", "BTC"),    // Avalanche
+            Map.entry("ABASWBTC", "BTC"),    // Base
+            Map.entry("WBTC", "BTC"),
             Map.entry("WBNB", "BNB"),
             Map.entry("WAVAX", "AVAX"),
             Map.entry("SAVAX", "AVAX"),
@@ -111,27 +127,40 @@ public final class CanonicalAssetCatalog {
             Map.entry("WMNT", "MNT"),
             Map.entry("WXPL", "XPL"),
             Map.entry("WXPL9", "XPL"),
-            Map.entry("WBTC", "BTC"),
             Map.entry("USDBC", "USDC"),
             Map.entry("USD₮0", "USDT"),
             Map.entry("USDT0", "USDT"),
-            Map.entry("USDT", "USDT"),
             Map.entry("POL", "MATIC"),
             Map.entry("CMETH", "ETH"),
             Map.entry("METH", "ETH"),
             Map.entry("WEETH", "ETH"),
             Map.entry("BBSOL", "SOL"),
+            // Aave aToken USD-stable family
             Map.entry("AAVAUSDC", "USDC"),
             Map.entry("AMANUSDC", "USDC"),
             Map.entry("AARBUSDC", "USDC"),
-            // Cycle/8 S1: Aave aToken family aliases — receipt tokens trade 1:1 with the underlying.
+            Map.entry("AETHUSDC", "USDC"),
+            Map.entry("AOPTUSDC", "USDC"),   // Optimism
+            Map.entry("APOLUSDC", "USDC"),   // Polygon
+            Map.entry("ABASUSDC", "USDC"),   // Base
+            Map.entry("ALINUSDC", "USDC"),   // Linea
+            Map.entry("AETHUSDT", "USDT"),
+            Map.entry("AARBUSDT", "USDT"),   // Arbitrum
+            Map.entry("AOPTUSDT", "USDT"),   // Optimism
+            Map.entry("APOLUSDT", "USDT"),   // Polygon
+            Map.entry("AAVAUSDT", "USDT"),   // Avalanche (verified in DB: aAvaUSDT-like)
+            // Aave aToken other assets
             Map.entry("AMANWMNT", "MNT"),
             Map.entry("AARBARB", "ARB"),
             Map.entry("AZKSZK", "ZK"),
             Map.entry("AETHGHO", "GHO"),
-            Map.entry("AETHUSDT", "USDT"),
-            Map.entry("AETHUSDC", "USDC"),
-            Map.entry("VBUSDC", "USDC")
+            Map.entry("AAVAGHO", "GHO"),     // Avalanche (verified in DB: aAvaGHO)
+            Map.entry("AAAVEURC", "EURC"),   // Avalanche (aAvaEURC)
+            Map.entry("VBUSDC", "USDC"),
+            // Sonne Finance (Compound fork) receipt tokens — trade 1:1 with underlying
+            Map.entry("SOUSDC", "USDC"),
+            Map.entry("SOETH", "ETH"),
+            Map.entry("SOWBTC", "BTC")
     );
 
     private static final Map<String, String> COINGECKO_IDS = Map.ofEntries(

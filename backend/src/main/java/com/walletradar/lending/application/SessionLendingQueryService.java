@@ -3282,7 +3282,16 @@ public class SessionLendingQueryService {
                 case "LENDING_WITHDRAW", "VAULT_WITHDRAW", "LENDING_LOOP_DECREASE", "LENDING_LOOP_CLOSE" ->
                         subtract(supplyByAsset, asset, quantity);
                 case "BORROW" -> add(debtByAsset, asset, quantity);
-                case "REPAY" -> subtract(debtByAsset, asset, quantity);
+                case "REPAY" -> {
+                    subtract(debtByAsset, asset, quantity);
+                    // REPAY_WITH_ATOKENS: collateral aTokens are burned to settle the debt.
+                    // The on-chain receipt burn reduces the actual supply, so we must also
+                    // subtract from supplyByAsset so that isFlat() detects a fully-closed
+                    // cycle (e.g. ETH leverage loop repaid via aWETH collateral burn).
+                    if ("REPAY_WITH_ATOKENS".equals(event.eventSubtype())) {
+                        subtract(supplyByAsset, asset, quantity);
+                    }
+                }
                 default -> {
                     // Rewards and display-only rows do not change lifecycle open/close state.
                 }

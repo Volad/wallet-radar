@@ -145,4 +145,4 @@ Per-counterparty pool ([ADR-015](ADR-015-per-counterparty-basis-pool.md)) closes
 - [backend/src/main/java/com/walletradar/integration/bybit/BybitExtractionService.java](backend/src/main/java/com/walletradar/integration/bybit/BybitExtractionService.java) `extractUniversalTransfer`.
 - [backend/src/main/java/com/walletradar/ingestion/pipeline/bybit/BybitCanonicalTransactionBuilder.java](backend/src/main/java/com/walletradar/ingestion/pipeline/bybit/BybitCanonicalTransactionBuilder.java).
 - [backend/src/main/java/com/walletradar/session/application/AccountingUniverseService.java](backend/src/main/java/com/walletradar/session/application/AccountingUniverseService.java) `shareUniverseMembers` / suffix tolerance.
-- [docs/adr/ADR-006-cycle5-bybit-stream-authority-and-earn-subaccount.md](docs/adr/ADR-006-cycle5-bybit-stream-authority-and-earn-subaccount.md) §N18 — the `bybitRefCandidates` suffix-tolerance design this ADR reuses.
+- [docs/adr/ADR-006-cycle5-bybit-stream-authority-and-earn-subaccount.md](ADR-006-cycle5-bybit-stream-authority-and-earn-subaccount.md) §N18 — the `bybitRefCandidates` suffix-tolerance design this ADR reuses.
