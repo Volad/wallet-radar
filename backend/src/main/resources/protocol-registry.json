@@ -156,11 +156,23 @@
         "ETHEREUM",
         "ARBITRUM",
         "OPTIMISM",
-        "POLYGON",
-        "BASE"
+        "POLYGON"
       ],
       "confidence": "HIGH",
       "notes": "Mint/Burn/Collect on this contract = LP position management"
+    },
+    "0x03a520b32c04bf3beef7beb72e919cf822ed34f1": {
+      "name": "Uniswap V3 NonfungiblePositionManager (Base)",
+      "protocol": "Uniswap",
+      "version": "V3",
+      "family": "DEX",
+      "role": "POSITION_MANAGER",
+      "event_type": "LP_MINT",
+      "networks": [
+        "BASE"
+      ],
+      "confidence": "HIGH",
+      "notes": "BASE-specific deployment of the Uniswap V3 NonfungiblePositionManager. multicall(0xac9650d8) encodes mint/increaseLiquidity/decreaseLiquidity/collect calls. Address differs from Ethereum mainnet 0xc36442b4."
     },
     "0x5c69bee701ef814a2b6a3edd4b1652cb9cc5aa6f": {
       "name": "Uniswap V2 Factory",

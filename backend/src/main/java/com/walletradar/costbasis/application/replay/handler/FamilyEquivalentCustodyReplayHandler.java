@@ -217,6 +217,28 @@ public class FamilyEquivalentCustodyReplayHandler {
             PositionState inboundPosition = replayState.position(inboundAssetKey);
             inboundPosition.setLastEventTimestamp(flowSupport.laterOf(inboundPosition.lastEventTimestamp(), transaction.getBlockTimestamp()));
             PositionSnapshot inboundBefore = flowSupport.snapshot(inboundPosition);
+
+            // PROTOCOL_CUSTODY_WITHDRAW with an empty carry means the corresponding deposit either
+            // predates the backfill window or was never tracked. Carrying $0 basis forward via
+            // REALLOCATE_IN would permanently destroy the cost basis. Instead, treat the returned
+            // principal as a fresh ACQUIRE so stablecoin $1/unit logic (or market price for
+            // non-stables) can fill the gap. This is scoped exclusively to PROTOCOL_CUSTODY_WITHDRAW
+            // to avoid widening the semantics of other custody types (VAULT_WITHDRAW, etc.).
+            if (transaction.getType() == NormalizedTransactionType.PROTOCOL_CUSTODY_WITHDRAW
+                    && basisRemoved.signum() == 0) {
+                flowSupport.applyBuy(inbound.flow(), inboundPosition);
+                replayState.ledgerPointCollector().record(
+                        transaction,
+                        inbound.flow(),
+                        inbound.index(),
+                        inboundPosition.assetKey(),
+                        inboundBefore,
+                        inboundPosition,
+                        AssetLedgerPoint.BasisEffect.ACQUIRE
+                );
+                continue;
+            }
+
             CarryTransfer effectiveCarry = continuityCarryService.bridgeInboundCarry(
                     carry,
                     inbound.flow().getQuantityDelta().abs(),

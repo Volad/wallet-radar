@@ -2702,3 +2702,274 @@ The seq 9716 BRIDGE_IN (Li.Fi, Jun 3 2026) brought 1677.23 USDC at avco=$0.22 �
 
 **Priority: P1.** Evidence fully present. Pipeline defect is in the replay stage. Fix is deterministic and does not require additional data. Estimated basis correction: ~$318–$849 on BASE USDC alone, plus downstream LP/swap/bridge positions that inherited the contaminated AVCO.
 
+
+---
+
+## B-VAULT-WITHDRAW-ZERO-BASIS Deep Dive (2026-06-05)
+
+**Investigation scope:** Trace why `VAULT_WITHDRAW` on April 27, 2026 returns 1266 USDC with $0 cost basis, and map the full contamination cascade to BASE wallet `0x1a87f12a` USDC AVCO $0.22.
+
+---
+
+### 1. Root Transaction: VAULT_WITHDRAW ETHEREUM `0xc7aa483f`
+
+| Field | Value |
+|---|---|
+| txHash | `0xc7aa483f0805a3548ff61a250209059ae8a91e28d172fcf0e8daf8f55d8a68ee` |
+| Network | ETHEREUM |
+| Wallet | `0xf03b52e8686b962e051a6075a06b96cb8a663021` |
+| Timestamp | 2026-04-27 03:15:59 UTC |
+| Normalized type | `VAULT_WITHDRAW` |
+| Confidence | **LOW** |
+| Protocol resolution | **TERMINAL_METADATA_ONLY** |
+| Flow | USDC +1266.468083 from `0xe3cbe3a636ab6a754e9e41b12b09d09ce9e53db3` |
+| Ledger point seq | 9890 |
+| basisEffect | REALLOCATE_IN |
+| costBasisDeltaUsd | **$0** |
+| uncoveredQuantityAfter | 1266.468083 |
+| hasIncompleteHistoryAfter | true |
+
+**Raw function call:** `withdraw(address token, uint256 amount, address destination)` — methodId `0x69328dec`
+
+**Single token transfer visible in explorer:** 1266 USDC from vault → wallet. **No vault receipt/share token burn.**
+
+---
+
+### 2. Protocol Identification: Paradex L1 Core
+
+**The vault contract `0xe3cbe3a636ab6a754e9e41b12b09d09ce9e53db3` is the Paradex L1 Core bridge.** It is correctly catalogued in `protocol-registry.json`:
+
+```json
+"0xe3cbe3a636ab6a754e9e41b12b09d09ce9e53db3": {
+  "name": "Paradex L1 Core",
+  "protocol": "Paradex",
+  "version": "L1",
+  "family": "CUSTODY",
+  "role": "BRIDGE_ENTRY",
+  "event_type": "PROTOCOL_CUSTODY_WITHDRAW",
+  "networks": ["ETHEREUM"],
+  "notes": "Paradex L1 withdrawal core. withdraw(address,uint256,address) selector collides with Aave withdraw and must not be classified as lending."
+}
+```
+
+**Paradex architecture:** Paradex is a StarkEx-based L2 perpetuals DEX. Users deposit ERC-20 assets (e.g. USDC) into the Paradex L1 Core contract on Ethereum. The L1 contract holds assets in custody; all trading and accounting happens on L2. Withdrawals call `withdraw(address token, uint256 amount, address destination)` directly on the L1 Core, and only the outgoing USDC transfer is visible on-chain. **No ERC-4626 receipt token is ever minted or burned.** The vault position is tracked purely via L2 off-chain state.
+
+This means: the pipeline's `VAULT_WITHDRAW` classification (which expects a receipt-token lifecycle) is semantically wrong for Paradex. The correct classification is `PROTOCOL_CUSTODY_WITHDRAW` (or equivalent custody-exit event).
+
+---
+
+### 3. Why Classification Failed
+
+Despite the registry entry, the pipeline produced `confidence: LOW` and `protocolResolutionState: TERMINAL_METADATA_ONLY`. This means the protocol resolver:
+1. **Did not apply the registry entry** to reclassify the transaction from generic `VAULT_WITHDRAW` to `PROTOCOL_CUSTODY_WITHDRAW`.
+2. Fell through to a function-name-based heuristic (`classifiedBy: FUNCTION_NAME`) that matched `withdraw(address,uint256,address)` and emitted `VAULT_WITHDRAW`.
+
+**Failed stage:** `classification` — the protocol resolution logic does not propagate `event_type: PROTOCOL_CUSTODY_WITHDRAW` from the registry into the final normalized type.
+
+---
+
+### 4. Why Basis Is Zero
+
+The `VAULT_WITHDRAW` type triggers `REALLOCATE_IN` accounting semantics. `REALLOCATE_IN` carries cost basis **from a corresponding vault position (receipt/share token) held in the wallet**. 
+
+For this wallet (`0xf03b52e8`) on ETHEREUM:
+- The VAULT_WITHDRAW at seq 9890 is **the first and only USDC event ever on ETHEREUM** for this wallet.
+- There are only 3 ETHEREUM transactions total: the `VAULT_WITHDRAW`, a small BRIDGE_IN of 0.001 ETH (gas), and a BRIDGE_OUT of the same USDC.
+- No `VAULT_DEPOSIT`, no `LENDING_DEPOSIT`, no receipt/share token of any kind was ever ingested for ETHEREUM.
+- No vault share/receipt token exists in the asset ledger (`asset_ledger_points`) for ETHEREUM — only USDC and ETH identities.
+
+**Root cause:** `REALLOCATE_IN` with no prior vault position → the cost basis pool is empty → `costBasisDeltaUsd = $0`.
+
+The Paradex deposit (when USDC was sent into Paradex) either:
+- Came from a **different wallet not in the audit universe**
+- Or was executed before the audit backfill window
+
+No VAULT_DEPOSIT transaction was ingested because Paradex doesn't issue receipt tokens and the deposit counterpart is not tracked.
+
+**Evidence state:** `EVIDENCE_PRESENT_UNUSABLE` — the protocol is identified in the registry, but the classification stage does not use the registry's `event_type` to override the function-name heuristic.
+
+---
+
+### 5. Correct Accounting Treatment
+
+For a `PROTOCOL_CUSTODY_WITHDRAW` from Paradex where no deposit is tracked in the same universe:
+
+| Option | Basis effect | Cost basis | Rationale |
+|---|---|---|---|
+| **Correct (stablecoin ACQUIRE)** | ACQUIRE | $1266.47 ($1.00/USDC) | USDC is a USD stablecoin; unlinked custody withdrawal is financially equivalent to an external inbound at market price |
+| **Current (REALLOCATE_IN at $0)** | REALLOCATE_IN | $0 | Wrong — searches for a nonexistent vault position |
+
+The correct treatment: if the corresponding CUSTODY_DEPOSIT is found in the universe → CARRY_IN semantics preserving basis. If not found → ACQUIRE at stablecoin price $1.00/USDC.
+
+---
+
+### 6. Full Contamination Cascade
+
+#### Stage 1 — April 26, AVALANCHE: Aave position seeded (partially contaminated)
+
+| Seq | Tx | Type | Asset | Qty | AVCO | CB Total | Note |
+|---|---|---|---|---|---|---|---|
+| 9871 | `0x619b8da4` AVALANCHE | BRIDGE_IN CARRY_IN | USDC | +401.429 | $0.8966 | $359.92 | LiFi bridge from MANTLE/ARBITRUM |
+| 9873 | `0xa8d46036` | LENDING_DEPOSIT REALLOCATE_OUT | USDC | −401.429 | — | $0 | Into Aave AVAX |
+| 9874 | — | LENDING_DEPOSIT REALLOCATE_IN | AAVAUSDC | +401.429 | $0.8966 | $359.92 | Aave receipt |
+| 9876 | `0x6411f4f7` | LENDING_WITHDRAW REALLOCATE_OUT | AAVAUSDC | −401.429 | — | $0 | Withdrew |
+| 9877-9878 | — | LENDING_WITHDRAW REALLOCATE_IN + ACQUIRE | USDC | +401.43 | **$0.8966** | $359.92 | Interest +$0.000068 |
+| 9880 | `0xd7a831ba` | LENDING_DEPOSIT REALLOCATE_OUT | USDC | −401.429 | — | $0 | Re-deposited |
+| 9881 | — | LENDING_DEPOSIT REALLOCATE_IN | AAVAUSDC | +401.429 | **$0.8966** | **$359.92** | Position re-established |
+
+**AAVAUSDC pool after April 26:** qty=401.429068, cb=$359.924, AVCO=$0.8966.
+
+The $0.8966 AVCO source: bridged from MANTLE wallet `0x1a87f12a` (seq 9844, `0x10de7e19` MANTLE). That MANTLE USDC was a Bybit corridor CARRY_IN of 2903.74 USDC that arrived with only ~$2600 basis (not $2903), yielding AVCO=$0.8956. **This is a downstream manifestation of B-USDC-BYBIT-CORRIDOR-BASIS-CONTAMINATION** — by April 2026 the Bybit USDC AVCO had partially recovered from $0.0574 (July 2025) to ~$0.8955 through subsequent $1.00 USDC acquisitions, but it was never corrected to $1.00.
+
+#### Stage 2 — April 27, AVALANCHE: Zero-basis USDC arrives and poisons the Aave pool
+
+| Seq | Tx | Type | Asset | Qty | AVCO | CB Total | Note |
+|---|---|---|---|---|---|---|---|
+| 9890 | `0xc7aa483f` ETHEREUM | VAULT_WITHDRAW REALLOCATE_IN | USDC | +1266.468 | **$0** | $0 | Paradex L1 Core — **zero basis** |
+| 9894 | `0x6abeed57` ETHEREUM | BRIDGE_OUT CARRY_OUT | USDC | −1266.468 | $0 | $0 | Bridges out zero-basis USDC |
+| 9896 | `0x3518dca1` AVALANCHE | BRIDGE_IN CARRY_IN | USDC | +1266.468 | **$0** | $0 | Arrives at AVAX |
+| 9897 | `0x319bde5a` | LENDING_DEPOSIT REALLOCATE_OUT | USDC | −1266.468 | — | $0 | Into Aave — carries $0 basis |
+| 9898 | — | LENDING_DEPOSIT REALLOCATE_IN | AAVAUSDC | +1266.468 | — | — | Mixes with existing pool |
+| 9899 | — | LENDING_DEPOSIT ACQUIRE | AAVAUSDC | +0.041948 | $0.9996 | +$0.042 | Interest accrual |
+
+**AAVAUSDC pool after mixing (seq 9899):**
+- qty = 401.429 + 1266.468 + 0.042 = **1667.939**
+- cb = $359.924 + $0 + $0.042 = **$359.966**
+- **AVCO = $359.966 / 1667.939 = $0.2158** ← contaminated
+
+#### Stage 3 — June 3, AVALANCHE: LENDING_WITHDRAW returns contaminated USDC
+
+| Seq | Tx | Type | Asset | Qty | AVCO | CB Total | Note |
+|---|---|---|---|---|---|---|---|
+| 10130 | `0xce12e927` | LENDING_WITHDRAW REALLOCATE_OUT | AAVAUSDC | −1667.939 | — | $0 | Pool drained |
+| 10131 | — | LENDING_WITHDRAW REALLOCATE_IN | USDC | +1667.939 | **$0.2158** | $359.97 | Carries contaminated AVCO |
+| 10132 | — | LENDING_WITHDRAW ACQUIRE | USDC | +9.655 | $1.00 | +$9.66 | Interest income |
+| 10134 | `0xad3777d6` | BRIDGE_OUT CARRY_OUT | USDC | −1677.595 | **$0.2203** | $369.62 | Bridges out to BASE |
+
+**After June 3 BRIDGE_OUT:** 1677.6 USDC leaves AVALANCHE with only $369.62 cost basis ($0.2203 AVCO). Correct basis should be ~$1667–$1686 ($0.994–$1.005 AVCO).
+
+**Basis shortfall at BRIDGE_OUT: $369.62 vs ~$1660 correct → shortfall ≈ $1290.**
+
+#### Stage 4 — June 3, BASE: Contaminated USDC arrives, disposals recorded at wrong AVCO
+
+| Seq | Tx | Type | Asset | Qty | AVCO | CB Total | Note |
+|---|---|---|---|---|---|---|---|
+| 10139 | `0x4357b92d` BASE | BRIDGE_IN CARRY_IN | USDC | +1677.231 | **$0.2203** | $369.62 | Contaminated arrives at BASE |
+| 10140 | `0x10dab47f` | SWAP DISPOSE | USDC | −1000 | $0.2203 | −$220.37 | **Wrong: correct ≈ $975** |
+| 10147 | `0x281cfb18` | BORROW ACQUIRE | USDC | +450 | $1.00 | +$450 | Partial dilution |
+| 10149 | `0x19500b71` | SWAP DISPOSE | USDC | −200 | $0.5316 | −$106.32 | **Wrong: correct ≈ $194** |
+| 10152 | `0x3d41db62` | LP_ENTRY REALLOCATE_OUT | USDC | −248.32 | $0.5316 | −$132.01 | **Wrong: correct ≈ $241** |
+
+**Current BASE USDC AVCO:** $0.2203 (seq 10139) → $0.5316 (seq 10147, after $450 BORROW at $1.00 dilutes up).
+
+---
+
+### 7. AVCO Impact Quantification
+
+| Item | Current (contaminated) | Correct | Shortfall |
+|---|---|---|---|
+| AAVAUSDC pool AVCO after mixing | $0.2158 | ~$0.994 | −$0.778/unit × 1667.9 = **−$1297** |
+| USDC AVCO at BASE BRIDGE_IN | $0.2203 | ~$0.994 | **−$1290** |
+| SWAP 1: 1000 USDC disposed | $220.37 cb | ~$975 cb | **−$755** |
+| SWAP 2: 200 USDC disposed | $106.32 cb | ~$195 cb | **−$89** |
+| LP_ENTRY 248 USDC | $132 cb | ~$241 cb | **−$109** |
+| **Total disposal basis shortfall** | | | **≈ −$953** |
+
+Remaining position (after disposals): ~1016 USDC sitting at $0.5316 AVCO, correct AVCO ~$0.994. Residual basis shortfall: ~$480.
+
+---
+
+### 8. Root Cause Classification for Each Anomaly
+
+#### 8a. B-VAULT-WITHDRAW-ZERO-BASIS (primary)
+
+| Dimension | Finding |
+|---|---|
+| **Wrong accounting surface** | USDC on ETHEREUM (seq 9890): 1266.47 USDC with $0 cost basis; cascades to AVALANCHE Aave pool and BASE disposals |
+| **Financially correct surface** | USDC should be ACQUIRE at $1.00/USDC = $1266.47 cost basis (stablecoin, no tracked deposit found) |
+| **Earliest failed stage** | `classification` — protocol resolution does not apply registry `event_type: PROTOCOL_CUSTODY_WITHDRAW`; function-name heuristic fires `VAULT_WITHDRAW` with LOW confidence instead |
+| **Evidence state** | `EVIDENCE_PRESENT_UNUSABLE` — protocol is in registry, but classification code does not use it to override the heuristic result |
+| **Type adequacy** | Current type `VAULT_WITHDRAW` is semantically inadequate for Paradex (no receipt token). Registry defines correct `event_type: PROTOCOL_CUSTODY_WITHDRAW`. A separate type or a flow-model variation is needed that maps to ACQUIRE semantics when no deposit is found |
+| **Remediation class** | Classification defect + accounting defect. Fix requires: (1) protocol resolver to apply registry `event_type` to override function-name heuristic; (2) accounting engine to treat unmatched CUSTODY_WITHDRAW as ACQUIRE at stablecoin price |
+| **Pipeline correction point** | `classification` stage: when protocolResolutionEvidence = `EVIDENCE_CHECKS_EXHAUSTED_METADATA_ONLY` and registry has explicit `event_type`, use registry `event_type` rather than falling through to function-name heuristic |
+
+#### 8b. $0.897 AVCO USDC on AVALANCHE (secondary contamination — separate source)
+
+The 401 USDC that seeded the Aave pool on April 26 at $0.8966 AVCO traces to:
+- MANTLE wallet `0x1a87f12a`, tx `0x10de7e19`, INTERNAL_TRANSFER CARRY_IN with ~$2600 basis for 2903.74 USDC → AVCO $0.8955
+- This is a **downstream effect of B-USDC-BYBIT-CORRIDOR-BASIS-CONTAMINATION** (the July 2025 contamination at $0.0574 was partially diluted to $0.8955 by April 2026 through subsequent $1.00 USDC acquisitions on Bybit)
+- It is **not a separate root cause** — fixing B-USDC-BYBIT-CORRIDOR-BASIS-CONTAMINATION at the origin will correct this downstream AVCO as well
+
+---
+
+### 9. B-BORROW-GAS-ETH-ACQUIRE Status
+
+Confirmed still present. Three instances of BORROW creating ETH ACQUIRE ledger points instead of GAS_ONLY:
+
+| Seq | Tx | Date | Qty ETH | AVCO | CB Delta | Status |
+|---|---|---|---|---|---|---|
+| 5299 | `0x9a2e5801` BASE | 2025-09-01 | 8.4e-7 | $4,467 | $0.00376 | P2 ACTIVE |
+| 5305 | `0x5dab7181` BASE | 2025-09-01 | 9.2e-8 | $4,432 | $0.00041 | P2 ACTIVE |
+| 10148 | `0x281cfb18` BASE | 2026-06-03 | 3.65e-6 | $1,821 | $0.00665 | P2 ACTIVE |
+
+Total wrong basis: <$0.01. Financial impact is immaterial but the $4,467 AVCO at seq 5299 could introduce noise in ETH AVCO display. Fix: BORROW gas fee flows should produce GAS_ONLY ledger points, not ACQUIRE.
+
+---
+
+### 10. Recommended Pipeline Fixes
+
+**Fix 1 (P1 — classification):** When the protocol resolver exhausts all on-chain checks and falls back to `TERMINAL_METADATA_ONLY`, check the registry `event_type` field before allowing the function-name heuristic to set the final type. Specifically: if registry entry has `event_type: PROTOCOL_CUSTODY_WITHDRAW`, emit that type rather than `VAULT_WITHDRAW`.
+
+**Fix 2 (P1 — accounting):** For `PROTOCOL_CUSTODY_WITHDRAW` (Paradex withdrawal) where no corresponding vault deposit is found in the ledger:
+- Apply `ACQUIRE` basis effect at stablecoin price ($1.00/USDC).
+- Do NOT use `REALLOCATE_IN` (which requires a vault position pool that does not exist here).
+- Flag `hasIncompleteHistoryAfter=true` as already done, but ensure basis is $1.00/USDC not $0.
+
+**Fix 3 (P2 — accounting):** BORROW transactions that include a gas fee ETH flow should emit GAS_ONLY for the gas flow, not ACQUIRE.
+
+**Re-run impact:** After fixes 1+2, replay from seq 9890 forward:
+- AAVAUSDC AVCO after mixing: ~$0.994 (vs current $0.2158)
+- BASE USDC AVCO at BRIDGE_IN: ~$0.994 (vs current $0.2203)
+- SWAP 1 (1000 USDC): cb ~$975 (vs $220)
+- SWAP 2 (200 USDC): cb ~$195 (vs $106)
+- LP_ENTRY 248 USDC: cb ~$241 (vs $132)
+- Total basis correction: ~**$1290** restored to disposal events
+
+---
+
+### 11. Audit Terminal States
+
+| Blocker | Terminal State |
+|---|---|
+| B-VAULT-WITHDRAW-ZERO-BASIS — Paradex L1 Core `0xc7aa483f` | **AUTHORITATIVE_RECONSTRUCTION_COMPLETE** |
+| $0.897 AVCO USDC in AVALANCHE Aave — downstream Bybit contamination | **AUTHORITATIVE_RECONSTRUCTION_COMPLETE** (same root as B-USDC-BYBIT-CORRIDOR-BASIS-CONTAMINATION) |
+| BASE USDC AVCO contamination cascade $0.22 → $0.53 | **AUTHORITATIVE_RECONSTRUCTION_COMPLETE** — will self-correct after Fixes 1+2 above |
+| B-BORROW-GAS-ETH-ACQUIRE — 3 instances on BASE | **AUTHORITATIVE_RECONSTRUCTION_COMPLETE** — immaterial, Fix 3 cleanup |
+
+---
+
+### 12. Protocol Rule Pack — Paradex L1 Core Withdrawal
+
+1. **Problem class:** L2-custodial withdrawal without receipt token (StarkEx/Paradex custody exit)
+2. **Protocol & scope:** Paradex, ETHEREUM mainnet, contract `0xe3cbe3a636ab6a754e9e41b12b09d09ce9e53db3`; Arbitrum vault `0x6a2abff960b663462cbc46a2cfcf85063fe8ae14` is a Merkle-distributor (claim pattern, separate rule)
+3. **Documentation basis:** Paradex L1 Core architecture (StarkEx model — L1 custody, L2 trading); protocol-registry.json entry (HIGH confidence)
+4. **Observable pattern:** Single outbound ERC-20 transfer from the Paradex L1 Core contract to the user wallet. No burn of receipt/share token. Function: `withdraw(address,uint256,address)` on `0xe3cbe3a6...`
+5. **Detection rule:** `to == 0xe3cbe3a636ab6a754e9e41b12b09d09ce9e53db3` AND `functionName matches /withdraw\(address,uint256,address\)/` AND network=ETHEREUM AND single outbound ERC-20 transfer (no receipt burn). Must NOT match: Aave V2/V3 withdraw (different contract addresses); other withdraw-signature contracts on ETHEREUM.
+6. **Classification rule:** Classify as `PROTOCOL_CUSTODY_WITHDRAW` (not `VAULT_WITHDRAW`, not `LENDING_WITHDRAW`).
+7. **Linking rule:** If a corresponding `PROTOCOL_CUSTODY_DEPOSIT` on the same wallet (to Paradex L1 Core) is present in the universe → REALLOCATE semantics preserving basis. If not found → ACQUIRE at market price (stablecoin at $1.00).
+8. **Accounting treatment:** When deposit unmatched: ACQUIRE at stablecoin price; `costBasisDelta = qty × $1.00`. When matched: CARRY semantics (basis from deposited USDC position). Never use REALLOCATE_IN with empty pool.
+9. **Unsupported boundaries:** Intra-L2 Paradex positions (P&L from perp trading on L2 is not accessible from L1 events; only the net withdrawal is visible on L1). Arbitrum vault `0x6a2abff9` uses Merkle-distributor pattern — separate detection rule required.
+10. **Acceptance checks:** After fix, `0xc7aa483f` ledger point seq 9890: `basisEffect=ACQUIRE`, `costBasisDeltaUsd=$1266.47`, `avcoAfterUsd=$1.00`. AAVAUSDC AVCO after April 27 mixing: ~$0.994. BASE USDC AVCO at seq 10139: ~$0.994.
+11. **Accounting failure:** USDC on ETHEREUM seq 9890: $0 cost basis for 1266.47 USDC; cascades to $0.2158 AAVAUSDC AVCO and $0.2203 BASE USDC AVCO.
+12. **Failed stage hypothesis:** `classification` — registry entry not applied, function-name heuristic misfires.
+13. **Evidence state:** `EVIDENCE_PRESENT_UNUSABLE`
+14. **Type adequacy:** `VAULT_WITHDRAW` is semantically inadequate; `PROTOCOL_CUSTODY_WITHDRAW` is the correct type per registry.
+15. **Remediation class:** Classification defect + accounting defect (unmatched custody withdraw treated as ACQUIRE, not REALLOCATE_IN with empty pool).
+16. **Raw-source reconstruction:** On-chain: wallet calls `withdraw(USDC, 1266468083, wallet)` on Paradex L1 Core. L1 Core sends 1266 USDC to wallet. No receipt token burn. No prior deposit in ETHEREUM ledger for this wallet. Authoritative treatment: ACQUIRE $1266.47.
+17. **Canonical classification outcome:** `PROTOCOL_CUSTODY_WITHDRAW` → ACQUIRE at $1.00/USDC = $1266.47 total cost basis.
+18. **Pipeline correction point:** Protocol resolver: apply registry `event_type` over function-name heuristic when `protocolResolutionState` falls back to TERMINAL_METADATA_ONLY.
+19. **Auditor truth vs database truth:** Auditor: $1266.47 basis for 1266.47 USDC. Database: $0 basis. Mismatch: $1266.47 per occurrence.
+20. **Priority rationale:** P1. Evidence is fully present in registry. The fix is a registry-lookup path correction — no new data required. Contamination has already propagated to BASE disposals totalling ~$953 in basis shortfall on executed swaps/LP.
+21. **Counterparty attribution outcome:** Counterparty = `Paradex L1 Core`. Type = protocol/bridge. Confidence = HIGH (registry match).
+22. **Counterparty attribution rule:** `to == 0xe3cbe3a636ab6a754e9e41b12b09d09ce9e53db3` on ETHEREUM → attribute as Paradex custody. Negative cases: do not match Aave addresses with the same function signature.
+

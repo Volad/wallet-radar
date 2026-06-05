@@ -1,18 +1,28 @@
 package com.walletradar.costbasis.application.replay.handler;
 
+import com.walletradar.costbasis.application.replay.model.AssetKey;
+import com.walletradar.costbasis.application.replay.model.IndexedFlow;
+import com.walletradar.costbasis.application.replay.model.SimpleFamilyCustodyPair;
 import com.walletradar.costbasis.application.replay.model.SimpleFamilyCustodySelection;
+import com.walletradar.costbasis.application.replay.persistence.LedgerPointCollector;
+import com.walletradar.costbasis.application.replay.state.ReplayExecutionState;
 import com.walletradar.costbasis.application.replay.support.ContinuityCarryService;
 import com.walletradar.costbasis.application.replay.support.GenericFlowReplayEngine;
 import com.walletradar.costbasis.application.replay.support.ReplayAssetSupport;
 import com.walletradar.costbasis.application.replay.support.ReplayFlowSupport;
 import com.walletradar.costbasis.application.replay.support.ReplayPendingTransferKeyFactory;
+import com.walletradar.costbasis.domain.AssetLedgerPoint;
+import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
@@ -150,6 +160,111 @@ class FamilyEquivalentCustodyReplayHandlerTest {
         SimpleFamilyCustodySelection selection = handler.selectFlows(transaction);
 
         assertThat(selection.pairs()).isEmpty();
+    }
+
+    @Test
+    void protocolCustodyWithdrawWithEmptyPoolProducesAcquireNotReallocationForStablecoin() {
+        // Paradex L1 Core withdraw: 1,266 USDC returned to wallet.
+        // The corresponding deposit either predates the backfill window or was never tracked,
+        // so the outbound receipt position has $0 basis (empty pool).
+        // Fix: handler must emit ACQUIRE (at $1/USDC) instead of REALLOCATE_IN with $0.
+        NormalizedTransaction.Flow receiptOut = flow(NormalizedLegRole.TRANSFER, "pxUSDC", "-1266");
+        NormalizedTransaction.Flow usdcIn = flow(NormalizedLegRole.TRANSFER, "USDC", "1266");
+        usdcIn.setUnitPriceUsd(new BigDecimal("1.0"));
+
+        NormalizedTransaction transaction = transaction(NormalizedTransactionType.PROTOCOL_CUSTODY_WITHDRAW, receiptOut, usdcIn);
+        transaction.setBlockTimestamp(Instant.ofEpochSecond(1700000000));
+
+        String wallet = "0xf03b52e8686b962e051a6075a06b96cb8a663021";
+        AssetKey receiptKey = new AssetKey(wallet, NetworkId.ETHEREUM, "pxusdc", "pxUSDC", "ETHEREUM:pxUSDC");
+        AssetKey usdcKey = new AssetKey(wallet, NetworkId.ETHEREUM, "usdc", "USDC", "ETHEREUM:USDC");
+
+        when(assetSupport.assetKey(transaction, receiptOut)).thenReturn(receiptKey);
+        when(assetSupport.assetKey(transaction, usdcIn)).thenReturn(usdcKey);
+
+        // Both asset identities needed by selectFlows()
+        when(assetSupport.assetIdentity(transaction, receiptOut)).thenReturn("ETHEREUM:pxUSDC");
+        when(assetSupport.assetIdentity(transaction, usdcIn)).thenReturn("ETHEREUM:USDC");
+
+        // Build a pre-selected pair directly (outbound receipt, inbound USDC).
+        // outbound and inbound must be in the same "FAMILY:USDC" family per isPrincipalCandidate.
+        // We bypass selectFlows() here because the test validates applySelected() behaviour only.
+        IndexedFlow outboundIndexed = new IndexedFlow(0, receiptOut);
+        IndexedFlow inboundIndexed = new IndexedFlow(1, usdcIn);
+        SimpleFamilyCustodySelection selection = new SimpleFamilyCustodySelection(
+                List.of(new SimpleFamilyCustodyPair(outboundIndexed, inboundIndexed)),
+                Map.of(0, outboundIndexed, 1, inboundIndexed)
+        );
+
+        List<AssetLedgerPoint> collected = new ArrayList<>();
+        LedgerPointCollector collector = new LedgerPointCollector("test-universe", collected, Instant.now());
+        ReplayExecutionState replayState = new ReplayExecutionState(
+                com.walletradar.costbasis.application.replay.model.PassThroughCorridorPlan.empty(),
+                collector
+        );
+
+        handler.applySelected(transaction, selection, replayState);
+
+        // The outbound position was empty ($0 basis / $0 cost) but the missing quantity is
+        // tracked as a shortfall → REALLOCATE_OUT is still emitted (position changed).
+        // The inbound MUST produce exactly one ACQUIRE ledger point for USDC with positive basis.
+        // There must be NO REALLOCATE_IN point — that was the old broken path.
+        assertThat(collected).isNotEmpty();
+        assertThat(collected).noneMatch(p -> p.getBasisEffect() == AssetLedgerPoint.BasisEffect.REALLOCATE_IN);
+
+        List<AssetLedgerPoint> acquirePoints = collected.stream()
+                .filter(p -> p.getBasisEffect() == AssetLedgerPoint.BasisEffect.ACQUIRE)
+                .toList();
+        assertThat(acquirePoints).hasSize(1);
+
+        AssetLedgerPoint usdcAcquirePoint = acquirePoints.getFirst();
+        assertThat(usdcAcquirePoint.getAccountingAssetIdentity()).contains("USDC");
+        // USDC $1/unit × 1266 = $1266 cost basis delta
+        assertThat(usdcAcquirePoint.getCostBasisDeltaUsd())
+                .isNotNull()
+                .isGreaterThan(BigDecimal.ZERO);
+    }
+
+    @Test
+    void vaultWithdrawWithEmptyPoolStillProducesReallocationNotAcquire() {
+        // Confirm the ACQUIRE fallback does NOT fire for VAULT_WITHDRAW — only for
+        // PROTOCOL_CUSTODY_WITHDRAW. Scoping guard must remain strict.
+        NormalizedTransaction.Flow sharesOut = flow(NormalizedLegRole.TRANSFER, "vUSDC", "-1000");
+        NormalizedTransaction.Flow usdcIn = flow(NormalizedLegRole.TRANSFER, "USDC", "1000");
+        usdcIn.setUnitPriceUsd(new BigDecimal("1.0"));
+
+        NormalizedTransaction transaction = transaction(NormalizedTransactionType.VAULT_WITHDRAW, sharesOut, usdcIn);
+        transaction.setBlockTimestamp(Instant.ofEpochSecond(1700000001));
+
+        String wallet = "0xf03b52e8686b962e051a6075a06b96cb8a663021";
+        AssetKey sharesKey = new AssetKey(wallet, NetworkId.ETHEREUM, "vusdc", "vUSDC", "ETHEREUM:vUSDC");
+        AssetKey usdcKey = new AssetKey(wallet, NetworkId.ETHEREUM, "usdc", "USDC", "ETHEREUM:USDC");
+
+        when(assetSupport.assetKey(transaction, sharesOut)).thenReturn(sharesKey);
+        when(assetSupport.assetKey(transaction, usdcIn)).thenReturn(usdcKey);
+        when(assetSupport.assetIdentity(transaction, sharesOut)).thenReturn("ETHEREUM:vUSDC");
+        when(assetSupport.assetIdentity(transaction, usdcIn)).thenReturn("ETHEREUM:USDC");
+
+        IndexedFlow outboundIndexed = new IndexedFlow(0, sharesOut);
+        IndexedFlow inboundIndexed = new IndexedFlow(1, usdcIn);
+        SimpleFamilyCustodySelection selection = new SimpleFamilyCustodySelection(
+                List.of(new SimpleFamilyCustodyPair(outboundIndexed, inboundIndexed)),
+                Map.of(0, outboundIndexed, 1, inboundIndexed)
+        );
+
+        List<AssetLedgerPoint> collected = new ArrayList<>();
+        LedgerPointCollector collector = new LedgerPointCollector("test-universe", collected, Instant.now());
+        ReplayExecutionState replayState = new ReplayExecutionState(
+                com.walletradar.costbasis.application.replay.model.PassThroughCorridorPlan.empty(),
+                collector
+        );
+
+        handler.applySelected(transaction, selection, replayState);
+
+        // For VAULT_WITHDRAW with empty pool: REALLOCATE_OUT produces no point (position was 0).
+        // REALLOCATE_IN also produces no point because carry is $0 and before==after for inbound.
+        // No ACQUIRE point must appear.
+        assertThat(collected).noneMatch(p -> p.getBasisEffect() == AssetLedgerPoint.BasisEffect.ACQUIRE);
     }
 
     private NormalizedTransaction transaction(NormalizedTransactionType type, NormalizedTransaction.Flow... flows) {
