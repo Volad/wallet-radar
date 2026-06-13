@@ -43,6 +43,7 @@ public class LendingController {
                                         group.healthProgress(),
                                         group.healthStatus(),
                                         group.healthSource(),
+                                        group.healthStale(),
                                         group.supplyUsd(),
                                         group.borrowUsd(),
                                         group.netExposureUsd(),

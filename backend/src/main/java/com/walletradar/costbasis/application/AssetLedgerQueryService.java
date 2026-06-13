@@ -505,11 +505,19 @@ public class AssetLedgerQueryService {
                     || !integration.getAccountRef().toUpperCase(Locale.ROOT).startsWith("BYBIT:")) {
                 continue;
             }
-            Map<String, BigDecimal> live = bybitLiveBalanceService.getUmbrellaBalances(integration.getIntegrationId());
-            if (live == null || live.isEmpty()) {
+            Optional<BybitLiveBalanceService.LiveSnapshotView> snapshotView =
+                    bybitLiveBalanceService.getSnapshotView(integration.getIntegrationId());
+            if (snapshotView.isEmpty()) {
                 continue;
             }
-            liveByAccountRef.put(BybitUmbrellaSupport.normalizeAddress(integration.getAccountRef()), live);
+            BybitLiveBalanceService.LiveSnapshotView view = snapshotView.get();
+            if (view.availability() == BybitLiveBalanceService.LiveSnapshotAvailability.UNKNOWN) {
+                continue;
+            }
+            liveByAccountRef.put(
+                    BybitUmbrellaSupport.normalizeAddress(integration.getAccountRef()),
+                    view.umbrella()
+            );
         }
         return liveByAccountRef;
     }

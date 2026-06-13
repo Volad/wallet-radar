@@ -187,9 +187,9 @@ Read [protocol-coverage-universe.md](references/protocol-coverage-universe.md) w
 Also use repository sources directly when needed:
 
 - `protocol-registry.json`
-- `docs/02-architecture.md`
-- `docs/03-accounting.md`
-- `normalization-architecture-en.md` for legacy/background context when older reports or specs still reference it
+- `docs/overview/03-architecture.md`, `docs/overview/05-pipeline-orchestration.md`
+- `docs/pipeline/cost-basis/`, `docs/pipeline/replay/`, `docs/reference/ledger-points-and-basis-effects.md`
+- `docs/pipeline/normalization/classification-spec.md` for the full classification-rule and leg-extraction reference
 
 ## Deliverables
 

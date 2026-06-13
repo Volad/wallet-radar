@@ -263,13 +263,13 @@ public final class OnChainClassificationSupport {
         if (type == NormalizedTransactionType.APPROVE
                 || type == NormalizedTransactionType.ADMIN_CONFIG
                 || type == NormalizedTransactionType.INTERNAL_TRANSFER
-                || type == NormalizedTransactionType.SPONSORED_GAS_IN
-                || type == NormalizedTransactionType.LP_POSITION_STAKE
-                || type == NormalizedTransactionType.LP_POSITION_UNSTAKE
-                || type == NormalizedTransactionType.WRAP
-                || type == NormalizedTransactionType.UNWRAP) {
+                || type == NormalizedTransactionType.SPONSORED_GAS_IN) {
             return NormalizedTransactionStatus.CONFIRMED;
         }
+        // WRAP/UNWRAP/LP_POSITION_STAKE/LP_POSITION_UNSTAKE must go through PENDING_PRICE so that
+        // their ETH FEE flows are priced. Without a price the replay engine removes ETH quantity
+        // but leaves the cost basis unchanged, which inflates AVCO on every gas payment.
+        // (TRANSFER flows on these types are not priced — only FEE flows match requiresMarketPrice.)
         if (type == NormalizedTransactionType.DERIVATIVE_ORDER_REQUEST
                 || type == NormalizedTransactionType.DERIVATIVE_ORDER_EXECUTION
                 || type == NormalizedTransactionType.DERIVATIVE_ORDER_CANCEL

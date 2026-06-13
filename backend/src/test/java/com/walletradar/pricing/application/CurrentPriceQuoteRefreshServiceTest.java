@@ -36,6 +36,8 @@ class CurrentPriceQuoteRefreshServiceTest {
     private PriceExternalSourceOrchestrator priceExternalSourceOrchestrator;
     @Mock
     private GmxProtocolSnapshotValuationService gmxProtocolSnapshotValuationService;
+    @Mock
+    private com.walletradar.domain.session.UserSessionRepository userSessionRepository;
 
     @Test
     void refreshesProtocolPositionSymbolsWithGmxSnapshotNotMarketProviders() {
@@ -62,7 +64,8 @@ class CurrentPriceQuoteRefreshServiceTest {
         CurrentPriceQuoteRefreshService service = new CurrentPriceQuoteRefreshService(
                 mongoOperations,
                 priceExternalSourceOrchestrator,
-                gmxProtocolSnapshotValuationService
+                gmxProtocolSnapshotValuationService,
+                userSessionRepository
         );
 
         int refreshed = service.refreshForSessionBalances("session-1", requestedAt);
@@ -86,7 +89,8 @@ class CurrentPriceQuoteRefreshServiceTest {
         CurrentPriceQuoteRefreshService service = new CurrentPriceQuoteRefreshService(
                 mongoOperations,
                 priceExternalSourceOrchestrator,
-                gmxProtocolSnapshotValuationService
+                gmxProtocolSnapshotValuationService,
+                userSessionRepository
         );
 
         int refreshed = service.refreshForSessionBalances("session-1", Instant.parse("2026-04-26T00:00:00Z"));

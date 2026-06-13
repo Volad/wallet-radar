@@ -180,6 +180,55 @@ class PriceableFlowPolicyTest {
     }
 
     @Test
+    void stablecoinContinuityBridgeInInboundRequiresMarketPriceForOneDollarFallback() {
+        // F-1: a USDC continuity bridge inbound whose carry may fail must still get a $1 quote so
+        // the replay shortfall fallback can cover it, instead of admitting a $0-basis stablecoin lot.
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setType(NormalizedTransactionType.BRIDGE_IN);
+        tx.setContinuityCandidate(true);
+        tx.setCorrelationId("bridge:lifi:0xabc");
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(NormalizedLegRole.TRANSFER);
+        flow.setAssetSymbol("USDC");
+        flow.setQuantityDelta(new BigDecimal("1041"));
+        tx.setFlows(new java.util.ArrayList<>(java.util.List.of(flow)));
+
+        assertThat(PriceableFlowPolicy.requiresMarketPrice(tx, flow)).isTrue();
+    }
+
+    @Test
+    void stablecoinATokenInboundTransferRequiresMarketPrice() {
+        // F-1: aMantUSDC (curated stablecoin aToken alias) inbound gets $1 fallback eligibility.
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setSource(NormalizedTransactionSource.ON_CHAIN);
+        tx.setType(NormalizedTransactionType.INTERNAL_TRANSFER);
+        tx.setContinuityCandidate(true);
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(NormalizedLegRole.TRANSFER);
+        flow.setAssetSymbol("AMANUSDC");
+        flow.setQuantityDelta(new BigDecimal("500"));
+        tx.setFlows(new java.util.ArrayList<>(java.util.List.of(flow)));
+
+        assertThat(PriceableFlowPolicy.requiresMarketPrice(tx, flow)).isTrue();
+    }
+
+    @Test
+    void stablecoinOutboundTransferDoesNotRequireMarketPrice() {
+        // Outbound stablecoin repay leg must remain non-priced (carry from position basis).
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setSource(NormalizedTransactionSource.ON_CHAIN);
+        tx.setType(NormalizedTransactionType.INTERNAL_TRANSFER);
+        tx.setContinuityCandidate(true);
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(NormalizedLegRole.TRANSFER);
+        flow.setAssetSymbol("USDC");
+        flow.setQuantityDelta(new BigDecimal("-1041"));
+        tx.setFlows(new java.util.ArrayList<>(java.util.List.of(flow)));
+
+        assertThat(PriceableFlowPolicy.requiresMarketPrice(tx, flow)).isFalse();
+    }
+
+    @Test
     void bridgeInContinuityCandidateSkipsMarketPrice() {
         NormalizedTransaction tx = new NormalizedTransaction();
         tx.setType(NormalizedTransactionType.BRIDGE_IN);

@@ -107,84 +107,129 @@ public class BybitStreamAuthorityCollapser {
                 Criteria.where("excludedFromAccounting").ne(true)
         ));
         List<NormalizedTransaction> docs = mongoOperations.find(query, NormalizedTransaction.class);
-        if (docs.size() < 2) {
-            return 0;
-        }
-
-        Map<String, List<NormalizedTransaction>> mirrorGroups = new LinkedHashMap<>();
-        for (NormalizedTransaction tx : docs) {
-            String signature = mirrorSignature(tx);
-            if (signature == null) {
-                continue;
-            }
-            mirrorGroups.computeIfAbsent(signature, ignored -> new ArrayList<>()).add(tx);
-        }
 
         Instant now = Instant.now();
         List<NormalizedTransaction> dirty = new ArrayList<>();
-        Set<String> collapsedIds = new HashSet<>();
         int mirrorRows = 0;
-        for (List<NormalizedTransaction> group : mirrorGroups.values()) {
-            if (group.size() < 2) {
-                continue;
-            }
-            NormalizedTransaction canonical = pickCanonical(group);
-            for (NormalizedTransaction tx : group) {
-                if (tx == canonical) {
+        int corrRewrites = 0;
+        int residualMirrors = 0;
+        int eventCountMirrors = 0;
+        int driftMirrors = 0;
+
+        if (docs.size() >= 2) {
+            Map<String, List<NormalizedTransaction>> mirrorGroups = new LinkedHashMap<>();
+            for (NormalizedTransaction tx : docs) {
+                String signature = mirrorSignature(tx);
+                if (signature == null) {
                     continue;
                 }
-                if (Boolean.TRUE.equals(tx.getExcludedFromAccounting())) {
+                mirrorGroups.computeIfAbsent(signature, ignored -> new ArrayList<>()).add(tx);
+            }
+
+            Set<String> collapsedIds = new HashSet<>();
+            for (List<NormalizedTransaction> group : mirrorGroups.values()) {
+                if (group.size() < 2) {
                     continue;
                 }
-                propagateCorrelationMetadata(tx, canonical, now, dirty);
-                String reason = EXCLUSION_REASON_PREFIX + sourceFileTag(tx);
-                tx.setExcludedFromAccounting(true);
-                tx.setAccountingExclusionReason(reason);
-                tx.setUpdatedAt(now);
-                dirty.add(tx);
-                collapsedIds.add(tx.getId());
-                mirrorRows++;
+                NormalizedTransaction canonical = pickCanonical(group);
+                for (NormalizedTransaction tx : group) {
+                    if (tx == canonical) {
+                        continue;
+                    }
+                    if (Boolean.TRUE.equals(tx.getExcludedFromAccounting())) {
+                        continue;
+                    }
+                    propagateCorrelationMetadata(tx, canonical, now, dirty);
+                    String reason = EXCLUSION_REASON_PREFIX + sourceFileTag(tx);
+                    tx.setExcludedFromAccounting(true);
+                    tx.setAccountingExclusionReason(reason);
+                    tx.setUpdatedAt(now);
+                    dirty.add(tx);
+                    collapsedIds.add(tx.getId());
+                    mirrorRows++;
+                }
             }
+
+            corrRewrites = unifyOpposingCorrelations(docs, collapsedIds, now, dirty);
+            residualMirrors = demoteResidualMirrors(docs, collapsedIds, now, dirty);
+            eventCountMirrors = demoteEventCountMirrors(docs, collapsedIds, now, dirty);
+            driftMirrors = collapseOrphanMirrorsAdjacentToCollapsedPairs(docs, collapsedIds, now, dirty);
         }
 
-        // After mirror demotion, unify correlation id across complementary directions (sender/
-        // receiver) within a broader drift window so both surviving legs share the same
-        // `corr-family:<corrId>:<assetIdentity>` bucket during replay.
-        int corrRewrites = unifyOpposingCorrelations(docs, collapsedIds, now, dirty);
-
-        // After the opposing-pair unifier picks the canonical sender/receiver legs, any
-        // remaining same-|qty| document within the same uid+family broad group and within the
-        // drift window is a stream mirror of one of the matched legs (typical pattern: FH
-        // `Transfer out` posted ~2 minutes after the canonical TX_LOG/INTERNAL_TRANSFER pair).
-        // Demote them so replay does not dispatch the same economic flow twice.
-        int residualMirrors = demoteResidualMirrors(docs, collapsedIds, now, dirty);
-
-        // Cycle/8 S2: event-count-based mirror demotion. Real FH `Transfer in/out` mirrors can
-        // lag the canonical TX_LOG / INTERNAL_TRANSFER pair by 18 hours and even 2 days (Bybit
-        // reconciliation), far beyond {@link #BUCKET_DRIFT_WINDOW}. Time-window based pairing
-        // misses these mirrors and they enter AVCO replay as phantom CARRY_IN with $0 basis,
-        // destroying coverage. Instead, group docs by full (uid, family, |qty|, walletAddress,
-        // sign) identity (no time bucket) and rely on per-source-file counts: if a lower-
-        // authority source has at most as many active docs as the canonical source, every doc
-        // in the lower-authority source is a logging mirror — demote them all regardless of
-        // wall-clock distance.
-        int eventCountMirrors = demoteEventCountMirrors(docs, collapsedIds, now, dirty);
-
-        // Cycle/15 round 2: drift-window orphan dedup. After all primary passes some
-        // `bybit-econ-v1` legs remain `continuityCandidate=false` because their canonical pair
-        // sits more than 60s away (typical 1-5 min). If a `bybit-collapsed-v1` neighbor with the
-        // same (uid, family, |qty|, walletAddress, sign) exists within ±10 min, the orphan is a
-        // late stream-mirror and must be excluded from accounting; otherwise it leaks basis.
-        int driftMirrors = collapseOrphanMirrorsAdjacentToCollapsedPairs(docs, collapsedIds, now, dirty);
+        int symmetryRestores = enforceCollapsedUtFundPairSymmetry(now, dirty);
 
         if (!dirty.isEmpty()) {
             normalizedTransactionRepository.saveAll(dirty);
             log.info(
-                    "BYBIT_STREAM_AUTHORITY_COLLAPSER candidates={} mirrors_demoted={} residual_mirrors={} event_count_mirrors={} drift_mirrors={} corr_rewrites={}",
-                    docs.size(), mirrorRows, residualMirrors, eventCountMirrors, driftMirrors, corrRewrites
+                    "BYBIT_STREAM_AUTHORITY_COLLAPSER candidates={} mirrors_demoted={} residual_mirrors={} event_count_mirrors={} drift_mirrors={} corr_rewrites={} symmetry_restores={}",
+                    docs.size(), mirrorRows, residualMirrors, eventCountMirrors, driftMirrors, corrRewrites, symmetryRestores
             );
         }
         return dirty.size();
+    }
+
+    /**
+     * ADR-006 replay symmetry: a {@code bybit-collapsed-v1:} UTA↔FUND pair is one economic transfer.
+     * Mirror demotion must not leave a one-sided {@code INTERNAL_TRANSFER} credit on UTA while the
+     * complementary {@code FUNDING_HISTORY} debit on FUND stays excluded — that inflates umbrella qty.
+     */
+    private int enforceCollapsedUtFundPairSymmetry(
+            Instant now,
+            List<NormalizedTransaction> dirtyAccumulator
+    ) {
+        Query query = Query.query(new Criteria().andOperator(
+                Criteria.where("source").is(NormalizedTransactionSource.BYBIT),
+                Criteria.where("correlationId").regex("^" + java.util.regex.Pattern.quote(COLLAPSED_CORR_PREFIX))
+        ));
+        List<NormalizedTransaction> allDocs = mongoOperations.find(query, NormalizedTransaction.class);
+        Map<String, List<NormalizedTransaction>> byCorr = new LinkedHashMap<>();
+        for (NormalizedTransaction tx : allDocs) {
+            String corrId = tx.getCorrelationId();
+            if (corrId == null || !corrId.startsWith(COLLAPSED_CORR_PREFIX)) {
+                continue;
+            }
+            byCorr.computeIfAbsent(corrId, ignored -> new ArrayList<>()).add(tx);
+        }
+        int restored = 0;
+        for (List<NormalizedTransaction> group : byCorr.values()) {
+            NormalizedTransaction utaInbound = null;
+            NormalizedTransaction fundOutbound = null;
+            for (NormalizedTransaction tx : group) {
+                String wallet = tx.getWalletAddress();
+                if (wallet == null) {
+                    continue;
+                }
+                String upper = wallet.toUpperCase(Locale.ROOT);
+                int sign = principalQuantitySign(tx);
+                if (upper.endsWith(":UTA") && sign > 0 && !Boolean.TRUE.equals(tx.getExcludedFromAccounting())) {
+                    utaInbound = tx;
+                }
+                if (upper.endsWith(":FUND") && sign < 0 && Boolean.TRUE.equals(tx.getExcludedFromAccounting())) {
+                    fundOutbound = tx;
+                }
+            }
+            if (utaInbound == null || fundOutbound == null) {
+                continue;
+            }
+            fundOutbound.setExcludedFromAccounting(false);
+            fundOutbound.setAccountingExclusionReason(null);
+            fundOutbound.setContinuityCandidate(true);
+            if (fundOutbound.getMatchedCounterparty() == null || fundOutbound.getMatchedCounterparty().isBlank()) {
+                fundOutbound.setMatchedCounterparty(utaInbound.getWalletAddress());
+            }
+            fundOutbound.setUpdatedAt(now);
+            dirtyAccumulator.add(fundOutbound);
+            restored++;
+        }
+        return restored;
+    }
+
+    private static int principalQuantitySign(NormalizedTransaction tx) {
+        if (tx == null || tx.getFlows() == null || tx.getFlows().isEmpty()) {
+            return 0;
+        }
+        BigDecimal qty = tx.getFlows().getFirst().getQuantityDelta();
+        return qty == null ? 0 : qty.signum();
     }
 
     /**

@@ -44,4 +44,7 @@ public class BybitLiveBalance {
     public static String key(String integrationId, String assetSymbol) {
         return integrationId + ":" + assetSymbol;
     }
+
+    /** Tombstone row written when a successful live fetch returns zero balances across UTA+FUND+EARN. */
+    public static final String EMPTY_UMBRELLA_SYMBOL = "__EMPTY_UMBRELLA__";
 }

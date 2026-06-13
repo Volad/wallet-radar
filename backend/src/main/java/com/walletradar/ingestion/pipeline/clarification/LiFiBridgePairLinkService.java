@@ -212,7 +212,7 @@ public class LiFiBridgePairLinkService {
         if (existingDestination.isPresent()) {
             return existingDestination;
         }
-        Optional<NormalizedTransaction> discoveredDestination = liFiReceivingTransactionDiscoveryService.findOrDiscover(status);
+        Optional<NormalizedTransaction> discoveredDestination = liFiReceivingTransactionDiscoveryService.findOrDiscover(status, source);
         if (discoveredDestination.isPresent()) {
             return discoveredDestination;
         }
@@ -274,6 +274,7 @@ public class LiFiBridgePairLinkService {
             @Nullable RawTransaction destinationRaw
     ) {
         if (shouldPreserveExistingDestinationPairing(source, destination)) {
+            materializeSupplementalSourceAnchor(source, destination);
             return;
         }
         Instant now = Instant.now();
@@ -363,6 +364,87 @@ public class LiFiBridgePairLinkService {
                 && hasText(destination.getMatchedCounterparty())
                 && hasText(destination.getCorrelationId())
                 && !sameHash(destination.getMatchedCounterparty(), source.getTxHash());
+    }
+
+    /**
+     * Anchors a supplemental LI.FI source to an already-paired destination without overwriting
+     * the principal reciprocal pair on the destination header.
+     */
+    private void materializeSupplementalSourceAnchor(
+            NormalizedTransaction source,
+            NormalizedTransaction destination
+    ) {
+        RawTransaction sourceRaw = rawTransactionRepository.findById(source.getId()).orElse(null);
+        Optional<LiFiBridgeStatus> statusOptional = readExistingStatus(sourceRaw);
+        if (statusOptional.isEmpty()) {
+            return;
+        }
+        LiFiBridgeStatus status = statusOptional.get();
+        if (status.apiStatus() == null
+                || !"DONE".equalsIgnoreCase(status.apiStatus())
+                || !sameHash(status.receivingTxHash(), destination.getTxHash())) {
+            return;
+        }
+
+        List<NormalizedTransaction.Flow> inboundFlows = destination.getFlows() == null
+                ? List.of()
+                : destination.getFlows().stream()
+                        .filter(Objects::nonNull)
+                        .filter(flow -> flow.getRole() != NormalizedLegRole.FEE)
+                        .filter(flow -> flow.getQuantityDelta() != null && flow.getQuantityDelta().signum() > 0)
+                        .toList();
+        Optional<SupplementalBridgeLegMatch> supplementalMatch = selectSupplementalBridgeLegMatch(
+                source,
+                destination,
+                inboundFlows
+        );
+        if (supplementalMatch.isEmpty()) {
+            return;
+        }
+        NormalizedTransaction.Flow matchedInbound = supplementalMatch.orElseThrow().inbound();
+        NormalizedTransaction.Flow matchedOutbound = supplementalMatch.orElseThrow().outbound();
+
+        Instant now = Instant.now();
+        String correlationId = correlationId(source.getTxHash());
+        boolean continuityCandidate = BridgePairLinkSupport.supportsSupplementalMoveBasis(
+                matchedOutbound,
+                matchedInbound
+        );
+        List<NormalizedTransaction> updates = new ArrayList<>();
+        boolean sourceChanged = false;
+
+        if (!sameHash(source.getMatchedCounterparty(), destination.getTxHash())) {
+            source.setMatchedCounterparty(destination.getTxHash());
+            sourceChanged = true;
+        }
+        if (!sameCorrelation(source.getCorrelationId(), correlationId)) {
+            source.setCorrelationId(correlationId);
+            sourceChanged = true;
+        }
+        if (!Objects.equals(source.getContinuityCandidate(), continuityCandidate)) {
+            source.setContinuityCandidate(continuityCandidate);
+            sourceChanged = true;
+        }
+        if (continuityCandidate) {
+            if (BridgePairLinkSupport.retagSupplementalOutboundFlow(source, matchedOutbound, now)) {
+                sourceChanged = true;
+            }
+            if (BridgePairLinkSupport.retagSupplementalInboundFlow(
+                    destination,
+                    matchedInbound,
+                    source.getTxHash(),
+                    now
+            )) {
+                updates.add(destination);
+            }
+        }
+        if (sourceChanged) {
+            source.setUpdatedAt(now);
+            updates.add(source);
+        }
+        if (!updates.isEmpty()) {
+            normalizedTransactionRepository.saveAll(deduplicate(updates));
+        }
     }
 
     private Optional<NormalizedTransaction> findSourceByReceivingTx(NormalizedTransaction destination) {
@@ -700,8 +782,66 @@ public class LiFiBridgePairLinkService {
         if (sourcePrincipal.size() != 1 || inboundFlows == null || inboundFlows.isEmpty()) {
             return Optional.empty();
         }
+        return selectPrimaryInboundBridgeFlowForSourcePrincipal(
+                source,
+                sourcePrincipal.getFirst(),
+                destination,
+                inboundFlows
+        );
+    }
 
-        NormalizedTransaction.Flow sourceFlow = sourcePrincipal.getFirst();
+    private Optional<SupplementalBridgeLegMatch> selectSupplementalBridgeLegMatch(
+            NormalizedTransaction source,
+            NormalizedTransaction destination,
+            List<NormalizedTransaction.Flow> inboundFlows
+    ) {
+        if (source == null || destination == null || inboundFlows == null || inboundFlows.isEmpty()) {
+            return Optional.empty();
+        }
+        SupplementalBridgeLegMatch bestMatch = null;
+        BigDecimal bestRelativeDiff = null;
+        int bestStableRank = Integer.MIN_VALUE;
+        int matchCount = 0;
+        for (NormalizedTransaction.Flow sourceFlow : principalFlows(source, -1)) {
+            Optional<NormalizedTransaction.Flow> inboundOptional = selectPrimaryInboundBridgeFlowForSourcePrincipal(
+                    source,
+                    sourceFlow,
+                    destination,
+                    inboundFlows
+            );
+            if (inboundOptional.isEmpty()) {
+                continue;
+            }
+            matchCount++;
+            NormalizedTransaction.Flow inbound = inboundOptional.orElseThrow();
+            BigDecimal relativeDiff = sourceFlow.getQuantityDelta() == null || inbound.getQuantityDelta() == null
+                    ? BigDecimal.ONE
+                    : relativeQuantityDiff(sourceFlow, inbound);
+            int stableRank = stableSettlementRank(source, sourceFlow, destination, inbound);
+            if (bestMatch == null
+                    || stableRank > bestStableRank
+                    || stableRank == bestStableRank && relativeDiff.compareTo(bestRelativeDiff) < 0) {
+                bestMatch = new SupplementalBridgeLegMatch(sourceFlow, inbound);
+                bestRelativeDiff = relativeDiff;
+                bestStableRank = stableRank;
+            }
+        }
+        if (bestMatch == null || matchCount != 1) {
+            return Optional.empty();
+        }
+        return Optional.of(bestMatch);
+    }
+
+    private Optional<NormalizedTransaction.Flow> selectPrimaryInboundBridgeFlowForSourcePrincipal(
+            NormalizedTransaction source,
+            NormalizedTransaction.Flow sourceFlow,
+            NormalizedTransaction destination,
+            List<NormalizedTransaction.Flow> inboundFlows
+    ) {
+        if (sourceFlow == null || inboundFlows == null || inboundFlows.isEmpty()) {
+            return Optional.empty();
+        }
+
         NormalizedTransaction.Flow best = null;
         BigDecimal bestRelativeDiff = null;
         int bestStableRank = Integer.MIN_VALUE;
@@ -734,6 +874,12 @@ public class LiFiBridgePairLinkService {
             return Optional.empty();
         }
         return Optional.of(best);
+    }
+
+    private record SupplementalBridgeLegMatch(
+            NormalizedTransaction.Flow outbound,
+            NormalizedTransaction.Flow inbound
+    ) {
     }
 
     private boolean supportsSettlementPrincipalCompatibility(

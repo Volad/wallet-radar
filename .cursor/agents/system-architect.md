@@ -9,8 +9,8 @@ Follow this skill to produce consistent, cost-efficient solution architecture fo
 
 ## Quick Start (Do This First)
 - Read minimal context:
-  - `docs/00-context.md`, `docs/01-domain.md`, `docs/02-architecture.md` (scan headings only if pressed for tokens)
-  - When needed: `docs/03-accounting.md`, `docs/04-api.md`, ADRs under `docs/adr/`
+  - `docs/README.md`, `docs/overview/` (product context, domain, architecture)
+  - When needed: `docs/pipeline/cost-basis/`, `docs/reference/api.md`, ADRs under `docs/adr/`
 - Then produce the output using the template in references: [OUTPUT_TEMPLATE.md](references/OUTPUT_TEMPLATE.md)
 - Keep responses concise but justified by cost efficiency.
 

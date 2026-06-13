@@ -65,6 +65,7 @@ class SessionLendingQueryServiceTest {
                 accountingUniverseService,
                 mongoOperations,
                 new LendingMarketMetricEstimator(),
+                null,
                 null
         );
 
@@ -108,6 +109,7 @@ class SessionLendingQueryServiceTest {
                 accountingUniverseService,
                 mongoOperations,
                 new LendingMarketMetricEstimator(),
+                null,
                 null
         );
 
@@ -172,6 +174,7 @@ class SessionLendingQueryServiceTest {
                 accountingUniverseService,
                 mongoOperations,
                 new LendingMarketMetricEstimator(),
+                null,
                 null
         );
 
@@ -217,6 +220,7 @@ class SessionLendingQueryServiceTest {
                 accountingUniverseService,
                 mongoOperations,
                 new LendingMarketMetricEstimator(),
+                null,
                 null
         );
 
@@ -264,6 +268,7 @@ class SessionLendingQueryServiceTest {
                 accountingUniverseService,
                 mongoOperations,
                 new LendingMarketMetricEstimator(),
+                null,
                 null
         );
 
@@ -347,6 +352,7 @@ class SessionLendingQueryServiceTest {
                 accountingUniverseService,
                 mongoOperations,
                 new LendingMarketMetricEstimator(),
+                null,
                 null
         );
 
@@ -416,6 +422,7 @@ class SessionLendingQueryServiceTest {
                 accountingUniverseService,
                 mongoOperations,
                 new LendingMarketMetricEstimator(),
+                null,
                 null
         );
 
@@ -481,6 +488,7 @@ class SessionLendingQueryServiceTest {
                 accountingUniverseService,
                 mongoOperations,
                 new LendingMarketMetricEstimator(),
+                null,
                 null
         );
 
@@ -543,6 +551,7 @@ class SessionLendingQueryServiceTest {
                 accountingUniverseService,
                 mongoOperations,
                 new LendingMarketMetricEstimator(),
+                null,
                 null
         );
 
@@ -563,9 +572,8 @@ class SessionLendingQueryServiceTest {
         assertThat(cycle.assetDeltas().principalOutCashByAsset()).containsEntry("USDC", new BigDecimal("2032.887132"));
         assertThat(cycle.assetDeltas().principalOutCashByAsset().get("WSTUSR")).isEqualByComparingTo("1959.424764648563000000");
         assertThat(cycle.assetDeltas().principalOutCashByAsset()).containsEntry("WSTETH", new BigDecimal("0.058333940222974617"));
-        assertThat(cycle.pnlAssetBreakdown().netIncomeByAsset().get("USDC")).isEqualByComparingTo("-1884.599192");
-        assertThat(cycle.pnlAssetBreakdown().netIncomeByAsset().get("WSTUSR")).isEqualByComparingTo("1959.424764648563000000");
-        assertThat(cycle.pnlAssetBreakdown().netIncomeByAsset().get("WSTETH")).isEqualByComparingTo("0.058333940222974617");
+        assertThat(cycle.pnlAssetBreakdown().supplyIncomeByAsset()).doesNotContainKey("USDC");
+        assertThat(cycle.pnlAssetBreakdown().reasonByAsset()).containsEntry("USDC", LendingFactualApyCalculator.NO_YIELD_FLOW_EVIDENCE);
         assertThat(cycle.totalValuation().totalUsdPnl()).isEqualByComparingTo("506.654049155086847240641321901866");
     }
 
@@ -595,6 +603,7 @@ class SessionLendingQueryServiceTest {
                 accountingUniverseService,
                 mongoOperations,
                 new LendingMarketMetricEstimator(),
+                null,
                 null
         );
 
@@ -647,6 +656,7 @@ class SessionLendingQueryServiceTest {
                 accountingUniverseService,
                 mongoOperations,
                 new LendingMarketMetricEstimator(),
+                null,
                 null
         );
 
@@ -689,8 +699,7 @@ class SessionLendingQueryServiceTest {
                 lendingEvent("0xrepay", NetworkId.AVALANCHE, NormalizedTransactionType.REPAY, "Aave",
                         "variableDebtAvaGHO", "0x38d693ce1df5aadf7bc62595a37d667ad57922e5", "-100.5", Instant.parse("2026-01-02T00:00:00Z")),
                 withFee(
-                        lendingEvent("0xwithdraw", NetworkId.AVALANCHE, NormalizedTransactionType.LENDING_WITHDRAW, "Aave",
-                                "GHO", "0xfc421ad3c883bf9e7c4f42de845c4e4405799e73", "100.1", Instant.parse("2026-01-02T00:01:00Z")),
+                        aaveWithdrawWithYield("0xwithdraw", "100", "0.1", Instant.parse("2026-01-02T00:01:00Z")),
                         "ETH",
                         "0.01",
                         "20"
@@ -705,6 +714,7 @@ class SessionLendingQueryServiceTest {
                 accountingUniverseService,
                 mongoOperations,
                 new LendingMarketMetricEstimator(),
+                null,
                 null
         );
 
@@ -723,7 +733,7 @@ class SessionLendingQueryServiceTest {
 
         assertThat(cycle.status()).isEqualTo("CLOSED");
         assertThat(cycle.assetDeltas().repaidByAsset()).containsEntry("GHO", new BigDecimal("100.5"));
-        assertThat(cycle.assetDeltas().withdrawnByAsset()).containsEntry("GHO", new BigDecimal("100.1"));
+        assertThat(cycle.assetDeltas().withdrawnByAsset()).containsEntry("GHO", new BigDecimal("100"));
         assertThat(cycle.pnlAssetBreakdown().supplyIncomeByAsset()).containsEntry("GHO", new BigDecimal("0.1"));
         assertThat(cycle.pnlAssetBreakdown().borrowCostByAsset()).containsEntry("GHO", new BigDecimal("0.5"));
         assertThat(cycle.pnlAssetBreakdown().gasByAsset()).containsEntry("ETH", new BigDecimal("0.01"));
@@ -731,7 +741,7 @@ class SessionLendingQueryServiceTest {
         assertThat(cycle.pnlAssetBreakdown().netIncomeByAsset()).containsEntry("ETH", new BigDecimal("-0.01"));
         assertThat(cycle.pnlAssetBreakdown().precisionByAsset()).containsEntry("GHO", "EXACT");
         assertThat(cycle.pnlBreakdown().method()).isEqualTo("interest-earned-minus-paid-minus-gas");
-        assertThat(cycle.totalValuation().totalUsdPnl()).isEqualByComparingTo("-20.4");
+        assertThat(cycle.totalValuation().totalUsdPnl()).isEqualByComparingTo("-20.5");
         assertThat(cycle.totalValuation().totalUsdPnlPrecision()).isEqualTo("EXACT");
         assertThat(cycle.totalValuation().yieldOnlyPnl()).isEqualByComparingTo("-20.4");
     }
@@ -761,6 +771,7 @@ class SessionLendingQueryServiceTest {
                 accountingUniverseService,
                 mongoOperations,
                 new LendingMarketMetricEstimator(),
+                null,
                 null
         );
 
@@ -809,6 +820,7 @@ class SessionLendingQueryServiceTest {
                 accountingUniverseService,
                 mongoOperations,
                 new LendingMarketMetricEstimator(),
+                null,
                 null
         );
 
@@ -846,7 +858,7 @@ class SessionLendingQueryServiceTest {
                         "USDC", "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e", "-2595.231191", start),
                 withFee(
                         withFlowValue(lendingEvent("0xeuler-close", NetworkId.AVALANCHE, NormalizedTransactionType.LENDING_LOOP_DECREASE, "Euler",
-                                "EUSDC-2", "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "2793.036068", close),
+                                "EUSDC-2", "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e", "2793.036068", close),
                                 "2152.278542"),
                         "AVAX",
                         "0.00384177793",
@@ -864,6 +876,7 @@ class SessionLendingQueryServiceTest {
                 accountingUniverseService,
                 mongoOperations,
                 new LendingMarketMetricEstimator(),
+                null,
                 null
         );
 
@@ -884,6 +897,8 @@ class SessionLendingQueryServiceTest {
         assertThat(cycle.assetDeltas().principalOutCashByAsset()).containsEntry("USDC", new BigDecimal("2152.278542"));
         assertThat(cycle.assetDeltas().internalReceiptMovementByAsset()).containsEntry("USDC", new BigDecimal("2793.036068"));
         assertThat(cycle.totalValuation().totalUsdPnl()).isEqualByComparingTo("-443.04215517794584");
+        assertThat(cycle.factualApy().factualSupplyAprByAsset()).containsKey("USDC");
+        assertThat(cycle.factualApy().factualSupplyAprByAsset().get("USDC")).isNegative();
         assertThat(cycle.largePnlReasons()).containsExactly("SHARE_RATE_EFFECT", "GAS_COST");
         assertThat(cycle.primaryLargePnlReason()).isEqualTo("SHARE_RATE_EFFECT");
     }
@@ -928,6 +943,7 @@ class SessionLendingQueryServiceTest {
                 accountingUniverseService,
                 mongoOperations,
                 new LendingMarketMetricEstimator(),
+                null,
                 null
         );
 
@@ -1009,6 +1025,40 @@ class SessionLendingQueryServiceTest {
                 flow(NormalizedLegRole.TRANSFER, "aAvaUSDC", "0x625e7708f30ca75bfd92586e17077590c60eb4cd", new BigDecimal(receiptQuantity).negate()),
                 flow(NormalizedLegRole.TRANSFER, "USDC", "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e", new BigDecimal(usdcQuantity))
         ));
+        return transaction;
+    }
+
+    private static NormalizedTransaction aaveWithdrawWithYield(
+            String txHash,
+            String principalQuantity,
+            String yieldQuantity,
+            Instant timestamp
+    ) {
+        NormalizedTransaction transaction = baseAaveTransaction(txHash, NormalizedTransactionType.LENDING_WITHDRAW, timestamp);
+        transaction.setFlows(List.of(
+                flow(NormalizedLegRole.TRANSFER, "aGhoV3", "0xfc421ad3c883bf9e7c4f42de845c4e4405799e73", new BigDecimal(principalQuantity).negate()),
+                flow(NormalizedLegRole.TRANSFER, "GHO", "0xfc421ad3c883bf9e7c4f42de845c4e4405799e73", new BigDecimal(principalQuantity)),
+                flow(NormalizedLegRole.BUY, "GHO", "0xfc421ad3c883bf9e7c4f42de845c4e4405799e73", new BigDecimal(yieldQuantity))
+        ));
+        return transaction;
+    }
+
+    private static NormalizedTransaction baseCompoundTransaction(
+            String txHash,
+            NormalizedTransactionType type,
+            Instant timestamp
+    ) {
+        NormalizedTransaction transaction = new NormalizedTransaction();
+        transaction.setId(txHash + ":BASE:" + WALLET);
+        transaction.setTxHash(txHash);
+        transaction.setNetworkId(NetworkId.BASE);
+        transaction.setWalletAddress(WALLET);
+        transaction.setSource(NormalizedTransactionSource.ON_CHAIN);
+        transaction.setStatus(NormalizedTransactionStatus.CONFIRMED);
+        transaction.setType(type);
+        transaction.setProtocolName("Compound");
+        transaction.setBlockTimestamp(timestamp);
+        transaction.setTransactionIndex(1);
         return transaction;
     }
 
@@ -1325,5 +1375,154 @@ class SessionLendingQueryServiceTest {
         balance.setAssetContract(aManWeth);
         balance.setQuantity(new BigDecimal("3.069749245591617024"));
         return balance;
+    }
+
+    @Test
+    void fluidOrphanCyclesDeduplicateByMarketKeyAndStartTxHash() {
+        UserSession session = session();
+        Instant timestamp = Instant.parse("2025-10-22T07:41:01Z");
+        String vault = "0xb4f3bf2d00000000000000000000000000000000";
+        when(userSessionRepository.findById(SESSION_ID)).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "universe-1",
+                List.of(WALLET),
+                List.of(WALLET)
+        ));
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class))).thenReturn(List.of(
+                withCounterparty(
+                        lendingEvent("0xduplicate", NetworkId.PLASMA, NormalizedTransactionType.LENDING_WITHDRAW, "Fluid",
+                                "USDC", "0xaf88d065e77c8cc2239327c5edb3a432268e5831", "100", timestamp),
+                        vault
+                ),
+                withCounterparty(
+                        lendingEvent("0xduplicate", NetworkId.PLASMA, NormalizedTransactionType.LENDING_WITHDRAW, "Fluid",
+                                "USDC", "0xaf88d065e77c8cc2239327c5edb3a432268e5831", "100", timestamp),
+                        vault
+                )
+        ));
+        when(mongoOperations.find(any(Query.class), eq(AssetLedgerPoint.class))).thenReturn(List.of());
+        when(mongoOperations.find(any(Query.class), eq(OnChainBalance.class))).thenReturn(List.of());
+        when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
+
+        SessionLendingQueryService service = new SessionLendingQueryService(
+                userSessionRepository,
+                accountingUniverseService,
+                mongoOperations,
+                new LendingMarketMetricEstimator(),
+                null,
+                null
+        );
+
+        List<SessionLendingQueryService.LendingCycleView> orphans = service.findSessionLending(SESSION_ID)
+                .orElseThrow()
+                .groups()
+                .stream()
+                .filter(candidate -> "Fluid".equals(candidate.protocol()) && "PLASMA".equals(candidate.networkId()))
+                .findFirst()
+                .orElseThrow()
+                .cycles()
+                .stream()
+                .filter(cycle -> "AMBIGUOUS_NEEDS_REVIEW".equals(cycle.status()))
+                .toList();
+
+        assertThat(orphans).hasSize(1);
+        assertThat(orphans.get(0).marketKey()).isEqualTo("Fluid:PLASMA:VAULT-B4F3BF2D");
+        assertThat(orphans.get(0).startTxHash()).isEqualTo("0xduplicate");
+    }
+
+    @Test
+    void eulerTransactionsUsePerVaultMarketKey() {
+        UserSession session = session();
+        String vault = "0x1234567890abcdef1234567890abcdef12345678";
+        when(userSessionRepository.findById(SESSION_ID)).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "universe-1",
+                List.of(WALLET),
+                List.of(WALLET)
+        ));
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class))).thenReturn(List.of(
+                withCounterparty(
+                        lendingEvent("0xeuler-deposit", NetworkId.AVALANCHE, NormalizedTransactionType.LENDING_DEPOSIT, "Euler",
+                                "USDC", "0xusdc", "-100", Instant.parse("2026-01-01T00:00:00Z")),
+                        vault
+                )
+        ));
+        when(mongoOperations.find(any(Query.class), eq(AssetLedgerPoint.class))).thenReturn(List.of());
+        when(mongoOperations.find(any(Query.class), eq(OnChainBalance.class))).thenReturn(List.of());
+        when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
+
+        SessionLendingQueryService service = new SessionLendingQueryService(
+                userSessionRepository,
+                accountingUniverseService,
+                mongoOperations,
+                new LendingMarketMetricEstimator(),
+                null,
+                null
+        );
+
+        SessionLendingQueryService.LendingGroupView group = service.findSessionLending(SESSION_ID)
+                .orElseThrow()
+                .groups()
+                .stream()
+                .filter(candidate -> "Euler".equals(candidate.protocol()) && "AVALANCHE".equals(candidate.networkId()))
+                .findFirst()
+                .orElseThrow();
+
+        assertThat(group.history()).singleElement()
+                .extracting(SessionLendingQueryService.LendingHistoryEntryView::marketKey)
+                .isEqualTo("Euler:AVALANCHE:EVK-VAULT-12345678");
+    }
+
+    @Test
+    void compoundClosedCycleWithoutBuyFlowsKeepsSupplyIncomeUnavailable() {
+        UserSession session = session();
+        when(userSessionRepository.findById(SESSION_ID)).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "universe-1",
+                List.of(WALLET),
+                List.of(WALLET)
+        ));
+        NormalizedTransaction compoundWithdraw = baseCompoundTransaction(
+                "0xcompound-withdraw",
+                NormalizedTransactionType.LENDING_WITHDRAW,
+                Instant.parse("2026-01-02T00:00:00Z")
+        );
+        compoundWithdraw.setFlows(List.of(
+                flow(NormalizedLegRole.TRANSFER, "USDC", "0x078d782b760474a361dda0af3839290b0ef57ad6", new BigDecimal("100"))
+        ));
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class))).thenReturn(List.of(
+                lendingEvent("0xcompound-deposit", NetworkId.BASE, NormalizedTransactionType.LENDING_DEPOSIT, "Compound",
+                        "USDC", "0x078d782b760474a361dda0af3839290b0ef57ad6", "-100", Instant.parse("2026-01-01T00:00:00Z")),
+                compoundWithdraw
+        ));
+        when(mongoOperations.find(any(Query.class), eq(AssetLedgerPoint.class))).thenReturn(List.of());
+        when(mongoOperations.find(any(Query.class), eq(OnChainBalance.class))).thenReturn(List.of());
+        when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
+
+        SessionLendingQueryService service = new SessionLendingQueryService(
+                userSessionRepository,
+                accountingUniverseService,
+                mongoOperations,
+                new LendingMarketMetricEstimator(),
+                null,
+                null
+        );
+
+        SessionLendingQueryService.LendingCycleView cycle = service.findSessionLending(SESSION_ID)
+                .orElseThrow()
+                .groups()
+                .stream()
+                .filter(candidate -> "Compound".equals(candidate.protocol()))
+                .findFirst()
+                .orElseThrow()
+                .cycles()
+                .stream()
+                .filter(candidate -> "CLOSED".equals(candidate.status()))
+                .findFirst()
+                .orElseThrow();
+
+        assertThat(cycle.pnlAssetBreakdown().supplyIncomeByAsset()).doesNotContainKey("USDC");
+        assertThat(cycle.pnlAssetBreakdown().reasonByAsset()).containsEntry("USDC", LendingFactualApyCalculator.NO_YIELD_FLOW_EVIDENCE);
+        assertThat(cycle.factualApy().apyUnavailableReason()).isEqualTo(LendingFactualApyCalculator.NO_YIELD_FLOW_EVIDENCE);
     }
 }

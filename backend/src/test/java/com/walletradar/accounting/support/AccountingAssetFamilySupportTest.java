@@ -77,6 +77,21 @@ class AccountingAssetFamilySupportTest {
     }
 
     @Test
+    void confusableLookalikeSymbolsNeverCollapseIntoCanonicalFamily() {
+        // F-6: Cyrillic "UЅDС" must not share family identity with canonical USDC.
+        String cyrillicUsdc = "U\u0405D\u0421";
+        assertThat(AccountingAssetFamilySupport.continuityIdentity(cyrillicUsdc, null))
+                .isNotEqualTo("FAMILY:USDC");
+        assertThat(AccountingAssetFamilySupport.continuityIdentity(cyrillicUsdc, null))
+                .isEqualTo("SYMBOL:" + cyrillicUsdc.toUpperCase());
+        // With a contract, the scam asset is keyed by its own contract — still not FAMILY:USDC.
+        assertThat(AccountingAssetFamilySupport.continuityIdentity(cyrillicUsdc, "0xDEADBEEF"))
+                .isEqualTo("0xdeadbeef");
+        // Legit USD₮0 still collapses to FAMILY:USDT.
+        assertThat(AccountingAssetFamilySupport.continuityIdentity("USD₮0", null)).isEqualTo("FAMILY:USDT");
+    }
+
+    @Test
     void includesStakedEthVariantsInSpotEthTimelineRollup() {
         // P0-B: Full FAMILY:ETH included set: ETH, WETH, AMANWETH, CMETH, METH, WEETH, WSTETH, STETH, RSETH
         assertThat(AccountingAssetFamilySupport.includeInSpotFamilyTimelineAggregation("FAMILY:ETH", "ETH")).isTrue();

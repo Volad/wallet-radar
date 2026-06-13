@@ -398,6 +398,47 @@ class BybitStreamAuthorityCollapserTest {
     }
 
     @Test
+    void restoresExcludedFundOutboundWhenUtaInboundActiveInCollapsedPair() {
+        String corrId = "bybit-collapsed-v1:symmetry-test-corr";
+        NormalizedTransaction utaInbound = mirrorDoc(
+                "BYBIT-409666492:INTERNAL_TRANSFER:selfTransfer-test",
+                corrId,
+                "BYBIT:409666492:UTA",
+                "USDT",
+                "249.8845",
+                Instant.parse("2025-01-11T22:30:56Z")
+        );
+        utaInbound.setContinuityCandidate(true);
+        utaInbound.setMatchedCounterparty("BYBIT:409666492:FUND");
+
+        NormalizedTransaction fundOutbound = mirrorDoc(
+                "BYBIT-409666492:FUNDING_HISTORY:fh-out-test",
+                corrId,
+                "BYBIT:409666492:FUND",
+                "USDT",
+                "-249.8845",
+                Instant.parse("2025-01-11T22:30:56Z")
+        );
+        fundOutbound.setContinuityCandidate(true);
+        fundOutbound.setExcludedFromAccounting(true);
+        fundOutbound.setAccountingExclusionReason("BYBIT_STREAM_MIRROR_FUNDING_HISTORY");
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(utaInbound))
+                .thenReturn(List.of(utaInbound, fundOutbound));
+
+        BybitStreamAuthorityCollapser collapser = new BybitStreamAuthorityCollapser(
+                mongoOperations,
+                normalizedTransactionRepository
+        );
+        int dirty = collapser.collapseMirrors();
+
+        assertThat(dirty).isGreaterThan(0);
+        assertThat(fundOutbound.getExcludedFromAccounting()).isFalse();
+        assertThat(fundOutbound.getAccountingExclusionReason()).isNull();
+    }
+
+    @Test
     void noActionWhenOnlyOneCandidate() {
         NormalizedTransaction solo = mirrorDoc(
                 "BYBIT-1:INTERNAL_TRANSFER:solo",

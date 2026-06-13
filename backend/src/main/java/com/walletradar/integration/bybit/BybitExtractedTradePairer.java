@@ -94,23 +94,17 @@ public class BybitExtractedTradePairer {
         if (cluster.isEmpty()) {
             return List.of(row);
         }
-        if (cluster.size() != 2) {
-            log.warn(
-                    "Bybit convert cluster expected 2 legs (uid={}, tradeOrderId={}, found={})",
-                    row.getUid(),
-                    row.getTradeOrderId(),
-                    cluster.size()
-            );
-            return List.of(row);
-        }
         boolean hasBuy = cluster.stream().anyMatch(leg -> leg.getQuantityRaw() != null && leg.getQuantityRaw().signum() > 0);
         boolean hasSell = cluster.stream().anyMatch(leg -> leg.getQuantityRaw() != null && leg.getQuantityRaw().signum() < 0);
-        if (!hasBuy || !hasSell) {
-            log.warn(
-                    "Bybit convert cluster missing buy/sell leg (uid={}, tradeOrderId={})",
-                    row.getUid(),
-                    row.getTradeOrderId()
-            );
+        if (cluster.size() < 2 || !hasBuy || !hasSell) {
+            if (cluster.size() > 2) {
+                log.warn(
+                        "Bybit convert cluster incomplete (uid={}, tradeOrderId={}, found={})",
+                        row.getUid(),
+                        row.getTradeOrderId(),
+                        cluster.size()
+                );
+            }
             return List.of(row);
         }
         return cluster;

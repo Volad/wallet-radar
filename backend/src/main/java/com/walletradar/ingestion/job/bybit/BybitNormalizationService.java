@@ -501,7 +501,7 @@ public class BybitNormalizationService {
         }
         boolean hasBuy = cluster.stream().anyMatch(candidate -> candidate.getQuantityRaw() != null && candidate.getQuantityRaw().signum() > 0);
         boolean hasSell = cluster.stream().anyMatch(candidate -> candidate.getQuantityRaw() != null && candidate.getQuantityRaw().signum() < 0);
-        if (cluster.size() != 2 || !hasBuy || !hasSell) {
+        if (cluster.size() < 2 || !hasBuy || !hasSell) {
             return normalizeOrphanConvertRow(row, now, "BYBIT_CONVERT_CLUSTER_INCOMPLETE");
         }
 
@@ -518,7 +518,7 @@ public class BybitNormalizationService {
         }
         boolean hasBuy = cluster.stream().anyMatch(candidate -> candidate.getQuantityRaw() != null && candidate.getQuantityRaw().signum() > 0);
         boolean hasSell = cluster.stream().anyMatch(candidate -> candidate.getQuantityRaw() != null && candidate.getQuantityRaw().signum() < 0);
-        if (cluster.size() != 2 || !hasBuy || !hasSell) {
+        if (cluster.size() < 2 || !hasBuy || !hasSell) {
             return normalizeOrphanConvertExtractedRow(row, mappedRow, now, "BYBIT_CONVERT_CLUSTER_INCOMPLETE");
         }
 

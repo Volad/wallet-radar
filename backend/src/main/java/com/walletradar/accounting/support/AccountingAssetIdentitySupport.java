@@ -40,7 +40,24 @@ public final class AccountingAssetIdentitySupport {
             Set.of("0x000000000000000000000000000000000000800a")
     );
 
+    private static final String VARIABLE_DEBT_PREFIX = "VARIABLEDEBT";
+    private static final String STABLE_DEBT_PREFIX = "STABLEDEBT";
+
     private AccountingAssetIdentitySupport() {
+    }
+
+    /**
+     * Aave-style debt receipt identity (ADR-012 §D8, F-4).
+     *
+     * <p>{@code variableDebt*} / {@code stableDebt*} tokens are liability markers, never held
+     * assets. They must be excluded from portfolio positions (the borrow is tracked as a
+     * {@code BorrowLiability} instead), so the same token is never both subtracted from
+     * {@code portfolioValue} and registered as a liability (the double-subtract guard). The
+     * test is symbol-shape based and chain-agnostic so it covers every network's debt receipt.</p>
+     */
+    public static boolean isDebtIdentity(String assetSymbol) {
+        String symbol = normalizeSymbol(assetSymbol);
+        return symbol.startsWith(VARIABLE_DEBT_PREFIX) || symbol.startsWith(STABLE_DEBT_PREFIX);
     }
 
     /**
@@ -92,7 +109,7 @@ public final class AccountingAssetIdentitySupport {
                 return wallet.trim();
             }
         }
-        if (isBybitCollapsedFundSide(transaction)) {
+        if (isBybitCollapsedFundSide(transaction, flow)) {
             String wallet = transaction.getWalletAddress();
             if (wallet != null && !wallet.isBlank()) {
                 return wallet.trim();
@@ -132,8 +149,18 @@ public final class AccountingAssetIdentitySupport {
      * position. Only UTA↔FUND pairs (counterparty is {@code :UTA}) need the full sub-account
      * address preserved.</p>
      */
-    private static boolean isBybitCollapsedFundSide(NormalizedTransaction transaction) {
-        if (transaction == null) return false;
+    private static boolean isBybitCollapsedFundSide(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow
+    ) {
+        if (transaction == null) {
+            return false;
+        }
+        // Outbound FUND legs of UTA↔FUND collapsed pairs drain the UID umbrella position where
+        // cross-UID credits land (BYBIT:uid). Inbound FUND credits stay on :FUND sub-wallet.
+        if (flow != null && flow.getQuantityDelta() != null && flow.getQuantityDelta().signum() < 0) {
+            return false;
+        }
         String corrId = transaction.getCorrelationId();
         if (corrId == null || !corrId.startsWith(BYBIT_COLLAPSED_CORRELATION_PREFIX)) return false;
         String wallet = transaction.getWalletAddress();

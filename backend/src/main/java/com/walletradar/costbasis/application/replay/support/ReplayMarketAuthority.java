@@ -14,6 +14,7 @@ import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -65,6 +66,10 @@ public class ReplayMarketAuthority {
                     ));
                 }
             }
+            Optional<ResolvedMarketPrice> crossNetwork = resolveCanonicalCrossNetwork(transaction, flow, occurredAt);
+            if (crossNetwork.isPresent()) {
+                return crossNetwork;
+            }
         }
         if (CanonicalAssetCatalog.isUsdStablecoinBySymbol(flow.getAssetSymbol())) {
             return Optional.of(new ResolvedMarketPrice(
@@ -104,6 +109,10 @@ public class ReplayMarketAuthority {
                     ));
                 }
             }
+            Optional<ResolvedMarketPrice> crossNetwork = resolveCanonicalCrossNetwork(transaction, flow, occurredAt);
+            if (crossNetwork.isPresent()) {
+                return crossNetwork;
+            }
         }
         if (CanonicalAssetCatalog.isUsdStablecoinBySymbol(flow.getAssetSymbol())) {
             return Optional.of(new ResolvedMarketPrice(
@@ -111,6 +120,46 @@ public class ReplayMarketAuthority {
                     PriceSource.STABLECOIN,
                     ResolvedMarketPrice.Authority.STABLECOIN_PAR
             ));
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * F-5(a): cross-network market-at-timestamp fallback for fungible canonical assets. When the
+     * network/contract-scoped cache misses (e.g. a zkSync ETH {@code BRIDGE_IN}, a Mantle MNT
+     * borrow, or a Bybit collapsed-asset carry-in whose own chain/contract was never priced at that
+     * minute), reuse a same-minute quote for the same canonical asset priced on any other network.
+     * ETH/MNT/BTC and Bybit-traded majors carry one global USD price, so this conserves the true
+     * market-at-time basis instead of diluting the pool with $0. Confusable lookalikes and unknown
+     * low-cap symbols are excluded by {@link CanonicalAssetCatalog#isCrossNetworkPriceResolvable}.
+     */
+    private Optional<ResolvedMarketPrice> resolveCanonicalCrossNetwork(
+            NormalizedTransaction transaction,
+            Flow flow,
+            Instant occurredAt
+    ) {
+        if (!CanonicalAssetCatalog.isCrossNetworkPriceResolvable(flow.getAssetSymbol())) {
+            return Optional.empty();
+        }
+        List<String> candidateSymbols = CanonicalAssetCatalog.marketEquivalentSymbols(flow.getAssetSymbol());
+        if (candidateSymbols.isEmpty()) {
+            return Optional.empty();
+        }
+        PriceRequest request = toPriceRequest(transaction, flow, occurredAt);
+        for (PriceSource source : priceExternalSourceOrchestrator.prioritizedSources(request)) {
+            Optional<PriceQuote> cached = historicalPriceCacheService.findCanonicalQuote(
+                    candidateSymbols,
+                    occurredAt,
+                    source
+            );
+            if (cached.isPresent() && cached.get().unitPriceUsd() != null
+                    && cached.get().unitPriceUsd().signum() > 0) {
+                return Optional.of(new ResolvedMarketPrice(
+                        cached.get().unitPriceUsd(),
+                        cached.get().source(),
+                        ResolvedMarketPrice.Authority.HISTORICAL_CACHE
+                ));
+            }
         }
         return Optional.empty();
     }

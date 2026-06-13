@@ -504,9 +504,13 @@ h2 {
 }
 
 .range-preview-canvas {
+  position: absolute;
+  inset: 0;
   display: block;
   width: 100%;
   height: 32px;
+  pointer-events: none;
+  z-index: 2;
 }
 
 .range-track,
@@ -519,7 +523,9 @@ h2 {
 
 .range-track {
   background: transparent;
-  pointer-events: none;
+  pointer-events: auto;
+  cursor: default;
+  z-index: 1;
 }
 
 .range-selection {
@@ -531,20 +537,22 @@ h2 {
   border-top: 1px solid rgba(34, 211, 238, 0.18);
   border-bottom: 1px solid rgba(34, 211, 238, 0.18);
   box-shadow: inset 0 0 0 1px rgba(34, 211, 238, 0.18);
-  cursor: grab;
   pointer-events: auto;
+  cursor: grab;
   z-index: 4;
-}
 
-.range-shell.dragging .range-selection {
-  cursor: grabbing;
+  .range-shell.dragging & {
+    cursor: grabbing;
+  }
 }
 
 .range-handle {
   position: absolute;
   top: -1px;
   bottom: -1px;
-  width: 10px;
+  width: 18px;
+  z-index: 6;
+  pointer-events: auto;
   background: rgba(34, 211, 238, 0.2);
   border: 1px solid rgba(34, 211, 238, 0.5);
   border-radius: 3px;
@@ -572,11 +580,11 @@ h2 {
 }
 
 .range-handle-start {
-  left: -5px;
+  left: -9px;
 }
 
 .range-handle-end {
-  right: -5px;
+  right: -9px;
 }
 
 .range-input {
@@ -844,7 +852,8 @@ canvas#chart {
   white-space: nowrap;
 }
 
-.ti-flows {
+.ti-flows,
+.ti-avco {
   padding: 8px 12px 10px;
   background: var(--s3);
   border-top: 1px solid var(--b0);
@@ -1518,6 +1527,139 @@ canvas#chart {
     flex-direction: column;
     align-items: flex-start;
   }
+}
+
+.collapsed-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 8px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--cyan);
+  background: var(--cdim);
+  vertical-align: middle;
+}
+
+.tx-table tr.expanded td {
+  border-bottom-color: transparent;
+}
+
+.log-expand-row td {
+  padding: 0 0 8px;
+  background: rgba(34, 211, 238, 0.03);
+  border-bottom: 1px solid var(--b0);
+}
+
+.log-expand-panel {
+  margin: 0 10px 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--b0);
+  border-radius: 6px;
+  background: var(--s2);
+  font-size: 10px;
+}
+
+.log-expand-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--sub);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.log-expand-tag {
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(34, 211, 238, 0.12);
+  color: var(--cyan);
+  font-size: 8px;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.log-expand-warning {
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  border: 1px solid rgba(251, 191, 36, 0.35);
+  background: rgba(251, 191, 36, 0.08);
+  color: #fbbf24;
+  font-size: 9px;
+  line-height: 1.35;
+}
+
+.log-expand-table-wrap {
+  overflow-x: auto;
+}
+
+.log-expand-table {
+  width: 100%;
+  min-width: 980px;
+  border-collapse: collapse;
+  font-size: 9px;
+}
+
+.log-expand-table th,
+.log-expand-table td {
+  padding: 5px 7px;
+  border-bottom: 1px solid var(--b0);
+  vertical-align: top;
+  text-align: left;
+}
+
+.log-expand-table th {
+  color: var(--sub);
+  font-size: 8px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.log-expand-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.log-expand-meta {
+  margin-top: 2px;
+  font-size: 8px;
+  color: var(--sub);
+}
+
+.expand-type {
+  margin-right: 4px;
+}
+
+.log-expand-flows {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.flows-cell {
+  min-width: 120px;
+  max-width: 220px;
+}
+
+.tx-expand-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.tx-expand-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 
 @media (max-width: 640px) {

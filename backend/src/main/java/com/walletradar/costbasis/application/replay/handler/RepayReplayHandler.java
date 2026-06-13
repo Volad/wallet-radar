@@ -1,5 +1,6 @@
 package com.walletradar.costbasis.application.replay.handler;
 
+import com.walletradar.accounting.support.AccountingAssetIdentitySupport;
 import com.walletradar.costbasis.application.BorrowLiabilityTracker;
 import com.walletradar.costbasis.application.BorrowLiabilityTracker.RepayMatch;
 import com.walletradar.costbasis.application.replay.model.AssetKey;
@@ -49,6 +50,12 @@ public class RepayReplayHandler {
         if (flow == null || flow.getQuantityDelta() == null || flow.getQuantityDelta().signum() == 0) {
             return;
         }
+        // F-4: the variableDebt*/stableDebt* burn leg is a liability marker, not a disposed asset.
+        // The liability is closed against the repaid underlying (SELL) leg below; disposing the debt
+        // token here would realise phantom PnL on a non-tradable receipt.
+        if (AccountingAssetIdentitySupport.isDebtIdentity(flow.getAssetSymbol())) {
+            return;
+        }
         AssetKey assetKey = assetSupport.assetKey(transaction, flow);
         PositionState position = replayState.position(assetKey);
         position.setLastEventTimestamp(flowSupport.laterOf(position.lastEventTimestamp(), transaction.getBlockTimestamp()));
@@ -58,7 +65,7 @@ public class RepayReplayHandler {
         RepayMatch match = RepayMatch.zero();
         BorrowLiabilityReplayContext liabilityContext = replayState.borrowLiabilityContext();
         if (liabilityContext != null) {
-            String orderId = BorrowReplayHandler.resolveOrderId(transaction);
+            String orderId = BorrowReplayHandler.resolveLoanOrderId(transaction, flow);
             if (orderId != null) {
                 match = borrowLiabilityTracker.recordRepay(
                         liabilityContext.universeId(),

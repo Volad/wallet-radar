@@ -36,12 +36,137 @@ public final class BridgePairLinkSupport {
         if (sourcePrincipal.isEmpty() || destinationPrincipal.isEmpty()) {
             return false;
         }
-        Flow sourceFlow = sourcePrincipal.orElseThrow();
-        Flow destinationFlow = destinationPrincipal.orElseThrow();
-        if (!supportsBridgeContinuity(sourceFlow, destinationFlow)) {
+        return supportsSupplementalMoveBasis(sourcePrincipal.orElseThrow(), destinationPrincipal.orElseThrow());
+    }
+
+    /**
+     * Whether a supplemental LI.FI source leg should carry basis into one matched inbound flow
+     * on an already-paired multi-flow destination (for example WETH OUT → ETH IN).
+     */
+    public static boolean supportsSupplementalMoveBasis(
+            Flow matchedOutbound,
+            Flow matchedInbound
+    ) {
+        if (matchedOutbound == null || matchedInbound == null) {
             return false;
         }
-        return sourceFlow.getQuantityDelta() != null && destinationFlow.getQuantityDelta() != null;
+        if (!supportsBridgeContinuity(matchedOutbound, matchedInbound)) {
+            return false;
+        }
+        return matchedOutbound.getQuantityDelta() != null && matchedInbound.getQuantityDelta() != null;
+    }
+
+    /**
+     * Inbound flow on a multi-source destination linked to a supplemental bridge OUT via
+     * {@code LINKED:<sourceTxHash>} counterparty metadata.
+     */
+    public static Optional<Flow> findSupplementalLinkedInboundFlow(
+            NormalizedTransaction supplementalOutbound,
+            NormalizedTransaction destination
+    ) {
+        if (supplementalOutbound == null || destination == null || !hasText(supplementalOutbound.getTxHash())) {
+            return Optional.empty();
+        }
+        if (destination.getFlows() == null) {
+            return Optional.empty();
+        }
+        String linkedCounterparty = supplementalLinkedCounterparty(supplementalOutbound.getTxHash());
+        return destination.getFlows().stream()
+                .filter(Objects::nonNull)
+                .filter(flow -> linkedCounterparty.equals(flow.getCounterpartyAddress()))
+                .findFirst();
+    }
+
+    /**
+     * Whether a supplemental bridge OUT is already linked for move-basis carry on a shared
+     * destination (for example LI.FI WETH top-up → ETH IN on an already-paired bundle).
+     */
+    public static boolean hasSupplementalMoveBasisLinkage(
+            NormalizedTransaction supplementalOutbound,
+            NormalizedTransaction destination
+    ) {
+        Optional<Flow> linkedInbound = findSupplementalLinkedInboundFlow(supplementalOutbound, destination);
+        if (linkedInbound.isEmpty() || supplementalOutbound.getFlows() == null) {
+            return false;
+        }
+        Flow inbound = linkedInbound.orElseThrow();
+        for (Flow outboundFlow : supplementalOutbound.getFlows()) {
+            if (outboundFlow == null
+                    || outboundFlow.getRole() == NormalizedLegRole.FEE
+                    || outboundFlow.getQuantityDelta() == null
+                    || outboundFlow.getQuantityDelta().signum() >= 0) {
+                continue;
+            }
+            if (supportsSupplementalMoveBasis(outboundFlow, inbound)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public static String supplementalLinkedCounterparty(String supplementalSourceTxHash) {
+        return "LINKED:" + supplementalSourceTxHash.trim().toLowerCase(Locale.ROOT);
+    }
+
+    /**
+     * Retags one matched supplemental inbound flow for bridge continuity without disturbing
+     * the principal destination pair metadata on the transaction header.
+     */
+    public static boolean retagSupplementalInboundFlow(
+            NormalizedTransaction destination,
+            Flow matchedInbound,
+            String supplementalSourceTxHash,
+            Instant now
+    ) {
+        if (destination == null || matchedInbound == null || !hasText(supplementalSourceTxHash)) {
+            return false;
+        }
+        String linkedCounterparty = "LINKED:" + supplementalSourceTxHash.trim().toLowerCase(Locale.ROOT);
+        boolean changed = false;
+        for (Flow flow : destination.getFlows()) {
+            if (flow != matchedInbound) {
+                continue;
+            }
+            if (flow.getRole() != NormalizedLegRole.TRANSFER) {
+                flow.setRole(NormalizedLegRole.TRANSFER);
+                changed = true;
+            }
+            if (flow.getUnitPriceUsd() != null) {
+                flow.setUnitPriceUsd(null);
+                changed = true;
+            }
+            if (flow.getValueUsd() != null) {
+                flow.setValueUsd(null);
+                changed = true;
+            }
+            if (flow.getPriceSource() != null) {
+                flow.setPriceSource(null);
+                changed = true;
+            }
+            if (flow.getAvcoAtTimeOfSale() != null) {
+                flow.setAvcoAtTimeOfSale(null);
+                changed = true;
+            }
+            if (flow.getRealisedPnlUsd() != null) {
+                flow.setRealisedPnlUsd(null);
+                changed = true;
+            }
+            if (!linkedCounterparty.equals(flow.getCounterpartyAddress())) {
+                flow.setCounterpartyAddress(linkedCounterparty);
+                changed = true;
+            }
+            if (!CounterpartyType.BRIDGE.equals(flow.getCounterpartyType())) {
+                flow.setCounterpartyType(CounterpartyType.BRIDGE);
+                changed = true;
+            }
+        }
+        if (changed) {
+            FlowCounterpartySupport.applyTransactionCounterparty(destination);
+            if (now != null) {
+                destination.setUpdatedAt(now);
+            }
+        }
+        return changed;
     }
 
     /**
@@ -145,6 +270,54 @@ public final class BridgePairLinkSupport {
         }
         if (changed && now != null) {
             transaction.setUpdatedAt(now);
+        }
+        return changed;
+    }
+
+    /**
+     * Retags one matched supplemental outbound flow for bridge continuity without retagging
+     * co-located native gas legs on the same bridge-start transaction.
+     */
+    public static boolean retagSupplementalOutboundFlow(
+            NormalizedTransaction source,
+            Flow matchedOutbound,
+            Instant now
+    ) {
+        if (source == null || matchedOutbound == null) {
+            return false;
+        }
+        boolean changed = false;
+        for (Flow flow : source.getFlows()) {
+            if (flow != matchedOutbound) {
+                continue;
+            }
+            if (flow.getRole() != NormalizedLegRole.TRANSFER) {
+                flow.setRole(NormalizedLegRole.TRANSFER);
+                changed = true;
+            }
+            if (flow.getUnitPriceUsd() != null) {
+                flow.setUnitPriceUsd(null);
+                changed = true;
+            }
+            if (flow.getValueUsd() != null) {
+                flow.setValueUsd(null);
+                changed = true;
+            }
+            if (flow.getPriceSource() != null) {
+                flow.setPriceSource(null);
+                changed = true;
+            }
+            if (flow.getAvcoAtTimeOfSale() != null) {
+                flow.setAvcoAtTimeOfSale(null);
+                changed = true;
+            }
+            if (flow.getRealisedPnlUsd() != null) {
+                flow.setRealisedPnlUsd(null);
+                changed = true;
+            }
+        }
+        if (changed && now != null) {
+            source.setUpdatedAt(now);
         }
         return changed;
     }

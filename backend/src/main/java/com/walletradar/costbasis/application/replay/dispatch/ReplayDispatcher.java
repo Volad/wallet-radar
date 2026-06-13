@@ -22,6 +22,7 @@ import com.walletradar.costbasis.application.replay.planning.ReplayRoutingDecisi
 import com.walletradar.costbasis.application.replay.planning.ReplayTransactionRouter;
 import com.walletradar.costbasis.application.replay.state.ReplayExecutionState;
 import com.walletradar.costbasis.application.replay.support.CounterpartyBasisPoolReplayHook;
+import com.walletradar.costbasis.application.replay.support.LeverageBorrowReplayHook;
 import com.walletradar.costbasis.application.replay.support.ReplayAssetSupport;
 import com.walletradar.costbasis.application.replay.support.ReplayFlowSupport;
 import com.walletradar.costbasis.application.replay.support.ReplayPendingTransferKeyFactory;
@@ -59,6 +60,7 @@ public class ReplayDispatcher {
     private final AsyncSpotOrderReplayHandler asyncSpotOrderReplayHandler;
     private final EulerLoopReplayHandler eulerLoopReplayHandler;
     private final CounterpartyBasisPoolReplayHook counterpartyBasisPoolReplayHook;
+    private final LeverageBorrowReplayHook leverageBorrowReplayHook;
     private final BorrowReplayHandler borrowReplayHandler;
     private final RepayReplayHandler repayReplayHandler;
 
@@ -79,6 +81,7 @@ public class ReplayDispatcher {
             AsyncSpotOrderReplayHandler asyncSpotOrderReplayHandler,
             EulerLoopReplayHandler eulerLoopReplayHandler,
             CounterpartyBasisPoolReplayHook counterpartyBasisPoolReplayHook,
+            LeverageBorrowReplayHook leverageBorrowReplayHook,
             BorrowReplayHandler borrowReplayHandler,
             RepayReplayHandler repayReplayHandler
     ) {
@@ -98,6 +101,7 @@ public class ReplayDispatcher {
         this.asyncSpotOrderReplayHandler = asyncSpotOrderReplayHandler;
         this.eulerLoopReplayHandler = eulerLoopReplayHandler;
         this.counterpartyBasisPoolReplayHook = counterpartyBasisPoolReplayHook;
+        this.leverageBorrowReplayHook = leverageBorrowReplayHook;
         this.borrowReplayHandler = borrowReplayHandler;
         this.repayReplayHandler = repayReplayHandler;
     }
@@ -149,8 +153,22 @@ public class ReplayDispatcher {
                         routingDecision.familyCustodySelection().selectedByIndex().keySet()
                 );
             }
-            case GENERIC -> replayGenericFlows(transaction, replayState);
+            case GENERIC -> {
+                replayGenericFlows(transaction, replayState);
+                // ADR-028: after the collateral BUY leg has been applied at market spot, register the
+                // synthetic borrow for the value gap exactly once (no asset lot, liability only).
+                leverageBorrowReplayHook.applyIfLeverage(transaction, replayState);
+            }
         }
+    }
+
+    /**
+     * ADR-028 end-of-replay settlement: closes inferred-leverage synthetic borrows whose collateral
+     * has fully drained from the leverage wallet. Must run once after the replay loop completes, when
+     * all positions are final. Fails safe to OPEN for still-held collateral.
+     */
+    public void closeDrainedLeverageLiabilities(ReplayExecutionState replayState) {
+        leverageBorrowReplayHook.closeDrainedLeverageLiabilities(replayState);
     }
 
     private void replayGenericFlows(
@@ -324,7 +342,7 @@ public class ReplayDispatcher {
                     replayState
             );
             PositionSnapshot afterTransfer = flowSupport.snapshot(position);
-            flowSupport.applyInboundShortfallSpotFallback(flow, position, before);
+            flowSupport.applyInboundShortfallSpotFallback(transaction, flow, position, before);
             accumulateInboundSpotFallbackProvisional(transaction, flow, position, afterTransfer, replayState);
             replayState.ledgerPointCollector().record(
                     transaction,
@@ -365,7 +383,7 @@ public class ReplayDispatcher {
             // (CMETH / METH / WEETH / BBSOL). Runs after the standard continuity carry so the
             // pairing path remains authoritative whenever it does supply basis.
             PositionSnapshot afterTransfer = flowSupport.snapshot(position);
-            flowSupport.applyInboundShortfallSpotFallback(flow, position, before);
+            flowSupport.applyInboundShortfallSpotFallback(transaction, flow, position, before);
             accumulateInboundSpotFallbackProvisional(transaction, flow, position, afterTransfer, replayState);
             replayState.ledgerPointCollector().record(
                     transaction,
@@ -397,7 +415,7 @@ public class ReplayDispatcher {
                 // gauge token is itself a pegged-native receipt — currently none, but the
                 // hook is symmetric for safety).
                 PositionSnapshot afterTransfer = flowSupport.snapshot(position);
-                flowSupport.applyInboundShortfallSpotFallback(flow, position, before);
+                flowSupport.applyInboundShortfallSpotFallback(transaction, flow, position, before);
                 accumulateInboundSpotFallbackProvisional(transaction, flow, position, afterTransfer, replayState);
                 replayState.ledgerPointCollector().record(
                     transaction,
@@ -521,11 +539,12 @@ public class ReplayDispatcher {
             return null;
         }
         String wallet = transaction.getWalletAddress() == null ? "" : transaction.getWalletAddress();
+        String network = transaction.getNetworkId() == null ? "" : transaction.getNetworkId().name();
         int sign = flow.getQuantityDelta().signum();
         if (sign == 0) {
             return null;
         }
-        return corrId + "|" + wallet + "|" + family + "|" + sign;
+        return corrId + "|" + wallet + "|" + network + "|" + family + "|" + sign;
     }
 
     /**

@@ -161,6 +161,41 @@ class SwapDerivedPriceResolverTest {
         assertThat(result2).isEmpty();
     }
 
+    @Test
+    void leverageCollateralBuyLeg_skipsSwapDerived_soMarketSpotApplies() {
+        // ADR-028: a leveraged buy's collateral leg must NOT inherit the depressed swap-implied price
+        // ($1,005 / 0.86155 = ~$1,167); skipping here lets the external market source price it.
+        NormalizedTransaction tx = swapTx(List.of(
+                flow("USDC",  "-1005.30", NormalizedLegRole.SELL),
+                flow("cmETH", "0.86155",  NormalizedLegRole.BUY)
+        ));
+        com.walletradar.domain.transaction.normalized.LeverageBorrowAnnotation.write(
+                tx, true, "LEVERAGE_ROUTER_SELECTOR",
+                "evm-lev:MANTLE:0xcmeth:0xwallet", "0xcmeth", "cmETH");
+        Map<Integer, PriceQuote> resolved = Map.of(0, quote(new BigDecimal("1.00")));
+
+        Optional<PriceQuote> result = RESOLVER.resolve(context(tx, 1, resolved));
+
+        assertThat(result).isEmpty();
+    }
+
+    @Test
+    void leverageConsiderationSellLeg_stillSwapDerivable() {
+        // Only the received collateral leg is skipped; the paid leg is unaffected.
+        NormalizedTransaction tx = swapTx(List.of(
+                flow("USDC",  "-1005.30", NormalizedLegRole.SELL),
+                flow("cmETH", "0.86155",  NormalizedLegRole.BUY)
+        ));
+        com.walletradar.domain.transaction.normalized.LeverageBorrowAnnotation.write(
+                tx, true, "LEVERAGE_ROUTER_SELECTOR",
+                "evm-lev:MANTLE:0xcmeth:0xwallet", "0xcmeth", "cmETH");
+        Map<Integer, PriceQuote> resolved = Map.of(1, quote(new BigDecimal("3300.00")));
+
+        Optional<PriceQuote> result = RESOLVER.resolve(context(tx, 0, resolved));
+
+        assertThat(result).isPresent();
+    }
+
     // ──────────────────────────────────────────────
     // Helpers
     // ──────────────────────────────────────────────

@@ -214,6 +214,83 @@ class PositionScopedLpExitReplayHandlerTest {
     }
 
     @Test
+    void singleAssetUsdVaultExitCapsContaminatedStablecoinBasisToPeg() {
+        // U-3: a single-asset USD-stablecoin vault receipt pool carrying contaminated share-rate
+        // basis ($1,790 on 895 USDC = $2/unit) is capped to the $1 peg on a same-asset exit (no
+        // cross-asset basis carried), so the withdrawn USDC disposes at ≈$0 realised.
+        String corr = "lp-position:base:fluid:fusdc";
+        String universe = "U3";
+        ReplayAssetSupport assetSupport = new ReplayAssetSupport();
+        ReplayFlowSupport flowSupport = new ReplayFlowSupport(new GenericFlowReplayEngine());
+        ReplaySettlementAllocator settlementAllocator =
+                new ReplaySettlementAllocator(assetSupport, flowSupport);
+        LpReceiptBasisPoolRepository repo = mock(LpReceiptBasisPoolRepository.class);
+        when(repo.findByUniverseId(anyString())).thenReturn(List.of());
+        LpReceiptBasisPoolService poolService = new LpReceiptBasisPoolService(repo);
+        ReplayPendingTransferKeyFactory keyFactory = new ReplayPendingTransferKeyFactory(assetSupport);
+        PositionScopedLpExitReplayHandler handler = new PositionScopedLpExitReplayHandler(
+                assetSupport,
+                flowSupport,
+                settlementAllocator,
+                poolService,
+                keyFactory
+        );
+
+        LinkedHashMap<LpReceiptBasisPoolKey, LpReceiptBasisPool> pools = new LinkedHashMap<>();
+        HashSet<LpReceiptBasisPoolKey> dirty = new HashSet<>();
+        LpReceiptBasisPool usdcPool = poolService.lookupOrCreate(
+                universe,
+                corr,
+                "wallet-u3",
+                NetworkId.BASE,
+                "FAMILY:USDC",
+                "USDC",
+                "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                pools,
+                dirty,
+                Instant.parse("2026-03-25T09:00:00Z")
+        );
+        poolService.deposit(usdcPool, new BigDecimal("895"), new BigDecimal("1790"), BigDecimal.ZERO);
+
+        List<AssetLedgerPoint> points = new ArrayList<>();
+        ReplayExecutionState state = new ReplayExecutionState(
+                null,
+                new LedgerPointCollector(universe, points, Instant.now()),
+                null,
+                null,
+                new LpReceiptBasisPoolReplayContext(universe, pools, dirty)
+        );
+
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setId("u3-exit");
+        tx.setTxHash("0xu3");
+        tx.setWalletAddress("wallet-u3");
+        tx.setNetworkId(NetworkId.BASE);
+        tx.setSource(NormalizedTransactionSource.ON_CHAIN);
+        tx.setType(NormalizedTransactionType.LP_EXIT);
+        tx.setStatus(NormalizedTransactionStatus.CONFIRMED);
+        tx.setBlockTimestamp(Instant.parse("2026-03-25T11:00:00Z"));
+        tx.setCorrelationId(corr);
+        NormalizedTransaction.Flow usdcIn = new NormalizedTransaction.Flow();
+        usdcIn.setRole(NormalizedLegRole.TRANSFER);
+        usdcIn.setAssetSymbol("USDC");
+        usdcIn.setAssetContract("0x833589fcd6edb6e08f4c7c32d4f71b54bda02913");
+        usdcIn.setQuantityDelta(new BigDecimal("895"));
+        usdcIn.setPriceSource(PriceSource.UNKNOWN);
+        tx.setFlows(List.of(usdcIn));
+
+        handler.apply(tx, state);
+
+        AssetLedgerPoint usdcReallocate = points.stream()
+                .filter(p -> "USDC".equals(p.getAssetSymbol()))
+                .filter(p -> p.getBasisEffect() == AssetLedgerPoint.BasisEffect.REALLOCATE_IN)
+                .reduce((a, b) -> b)
+                .orElseThrow();
+        // $1,790 contaminated basis capped to 895 × $1 = $895.
+        assertThat(usdcReallocate.getTotalCostBasisAfterUsd()).isEqualByComparingTo("895");
+    }
+
+    @Test
     void feeOnlyLpExitDoesNotDrainReceiptPool() {
         ReplayAssetSupport assetSupport = new ReplayAssetSupport();
         ReplayFlowSupport flowSupport = new ReplayFlowSupport(new GenericFlowReplayEngine());

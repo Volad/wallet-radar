@@ -84,6 +84,7 @@ public class SessionLendingQueryService {
     private final MongoOperations mongoOperations;
     private final LendingMarketMetricEstimator metricEstimator;
     private final LendingMarketRateSnapshotService marketRateSnapshotService;
+    private final LendingHealthFactorSnapshotService healthFactorSnapshotService;
 
     public Optional<SessionLendingView> findSessionLending(String sessionId) {
         if (sessionId == null || sessionId.isBlank()) {
@@ -145,7 +146,7 @@ public class SessionLendingQueryService {
                     latestPoint,
                     prices,
                     metricEstimator,
-                    marketKey(key.protocol(), balance.getNetworkId(), positionMarketAsset(key.protocol(), balance.getAssetSymbol()))
+                    marketKey(key.protocol(), balance.getNetworkId(), positionMarketAsset(key.protocol(), balance, latestPoint))
             );
         }
         List<LendingGroupView> groupViews = groups.values().stream()
@@ -511,6 +512,10 @@ public class SessionLendingQueryService {
                     .orElse("vault-account");
         }
         if (normalizedProtocol.startsWith("EULER")) {
+            String vaultAddress = eulerVaultAddressFromTransaction(transaction);
+            if (isEulerVaultAddress(vaultAddress)) {
+                return "evk-vault-" + vaultAddress.substring(2, 10);
+            }
             return "evk-account";
         }
         if (normalizedProtocol.startsWith("MORPHO")) {
@@ -532,7 +537,7 @@ public class SessionLendingQueryService {
                         .orElse("account-pool"));
     }
 
-    private String positionMarketAsset(String protocol, String assetSymbol) {
+    private String positionMarketAsset(String protocol, OnChainBalance balance, AssetLedgerPoint latestPoint) {
         String normalizedProtocol = protocol == null ? "" : protocol.trim().toUpperCase(Locale.ROOT);
         if (normalizedProtocol.startsWith("AAVE")) {
             return "account-pool";
@@ -544,9 +549,49 @@ public class SessionLendingQueryService {
             return "vault-account";
         }
         if (normalizedProtocol.startsWith("EULER")) {
+            String vaultAddress = eulerVaultAddress(balance, latestPoint);
+            if (isEulerVaultAddress(vaultAddress)) {
+                return "evk-vault-" + vaultAddress.substring(2, 10);
+            }
             return "evk-account";
         }
-        return assetSymbol;
+        return balance == null ? null : balance.getAssetSymbol();
+    }
+
+    private String eulerVaultAddress(OnChainBalance balance, AssetLedgerPoint latestPoint) {
+        if (latestPoint != null && latestPoint.getMatchedCounterparty() != null) {
+            return normalizeAddress(latestPoint.getMatchedCounterparty());
+        }
+        if (balance != null && balance.getAssetContract() != null) {
+            return normalizeAddress(balance.getAssetContract());
+        }
+        return "";
+    }
+
+    private String eulerVaultAddressFromTransaction(NormalizedTransaction transaction) {
+        if (transaction == null) {
+            return "";
+        }
+        String matchedCounterparty = normalizeAddress(transaction.getMatchedCounterparty());
+        if (isEulerVaultAddress(matchedCounterparty)) {
+            return matchedCounterparty;
+        }
+        for (NormalizedTransaction.Flow flow : safeFlows(transaction)) {
+            String assetContract = normalizeAddress(flow.getAssetContract());
+            if (isEulerVaultAddress(assetContract)) {
+                return assetContract;
+            }
+        }
+        String counterpartyAddress = normalizeAddress(transaction.getCounterpartyAddress());
+        return isEulerVaultAddress(counterpartyAddress) ? counterpartyAddress : "";
+    }
+
+    private static boolean isEulerVaultAddress(String address) {
+        return address != null
+                && !address.isBlank()
+                && address.matches("^0x[a-f0-9]{40}$")
+                && !address.matches("^0x[e]{40}$")
+                && !address.matches("^0x0{40}$");
     }
 
     private Optional<String> preferredMarketAsset(
@@ -581,6 +626,11 @@ public class SessionLendingQueryService {
 
     private boolean isLendingHistoryRow(NormalizedTransaction transaction) {
         if (transaction == null || transaction.getType() == null) {
+            return false;
+        }
+        if (LENDING_TYPES.contains(transaction.getType())
+                && !com.walletradar.ingestion.pipeline.classification.support.PricingReadinessSupport.hasNonFeeMovement(
+                safeFlows(transaction))) {
             return false;
         }
         if (LENDING_TYPES.contains(transaction.getType())) {
@@ -653,6 +703,7 @@ public class SessionLendingQueryService {
             BigDecimal healthProgress,
             String healthStatus,
             String healthSource,
+            Boolean healthStale,
             BigDecimal supplyUsd,
             BigDecimal borrowUsd,
             BigDecimal netExposureUsd,
@@ -706,7 +757,8 @@ public class SessionLendingQueryService {
             BigDecimal valueUsd,
             BigDecimal feeUsd,
             Map<String, BigDecimal> feeQuantityByAsset,
-            String loopId
+            String loopId,
+            Map<String, BigDecimal> withdrawYieldByAsset
     ) {
     }
 
@@ -863,6 +915,16 @@ public class SessionLendingQueryService {
     }
 
     private record BucketKey(String walletAddress, NetworkId networkId, String accountingAssetIdentity) {
+    }
+
+    private record HealthMetricSnapshot(
+            BigDecimal healthFactor,
+            String healthLabel,
+            BigDecimal healthProgress,
+            String status,
+            String source,
+            Boolean stale
+    ) {
     }
 
     private record PositionRateMetric(
@@ -1058,7 +1120,8 @@ public class SessionLendingQueryService {
                         amount.valueUsd(),
                         index == 0 ? amount.feeUsd() : BigDecimal.ZERO,
                         index == 0 ? amount.feeQuantityByAsset() : Map.of(),
-                        loopId(transaction)
+                        loopId(transaction),
+                        amount.withdrawYieldByAsset()
                 ));
                 if (index != 0) {
                     continue;
@@ -1119,7 +1182,8 @@ public class SessionLendingQueryService {
                         flow.getValueUsd() == null ? quantity : flow.getValueUsd().abs(),
                         BigDecimal.ZERO,
                         Map.of(),
-                        exit.loopId()
+                        exit.loopId(),
+                        Map.of()
                 ));
             }
             history.addAll(additions);
@@ -1188,13 +1252,7 @@ public class SessionLendingQueryService {
 
         private LendingGroupView toView(LendingMarketMetricEstimator estimator) {
             boolean open = positions.stream().anyMatch(position -> position.quantity().signum() > 0);
-            LendingMarketMetricEstimator.MetricSnapshot metric = estimator.estimate(
-                    key.protocol(),
-                    "GROUP",
-                    "",
-                    supplyUsd,
-                    borrowUsd
-            );
+            HealthMetricSnapshot healthMetric = resolveHealthMetric(estimator);
             List<LendingPositionView> sortedPositions = positions.stream()
                     .sorted(Comparator.comparing(LendingPositionView::side).reversed()
                             .thenComparing(LendingPositionView::underlyingSymbol))
@@ -1211,11 +1269,12 @@ public class SessionLendingQueryService {
                     key.networkId() == null ? null : key.networkId().name(),
                     key.walletAddress(),
                     open ? "OPEN" : "CLOSED",
-                    metric.healthFactor(),
-                    metric.healthLabel(),
-                    metric.healthProgress(),
-                    metric.status(),
-                    metric.source(),
+                    healthMetric.healthFactor(),
+                    healthMetric.healthLabel(),
+                    healthMetric.healthProgress(),
+                    healthMetric.status(),
+                    healthMetric.source(),
+                    healthMetric.stale(),
                     supplyUsd.add(closedEarnedUsd, MC),
                     borrowUsd,
                     supplyUsd.subtract(borrowUsd, MC).add(closedEarnedUsd, MC),
@@ -1298,7 +1357,8 @@ public class SessionLendingQueryService {
                     event.valueUsd(),
                     event.feeUsd(),
                     event.feeQuantityByAsset(),
-                    event.loopId()
+                    event.loopId(),
+                    event.withdrawYieldByAsset()
             );
         }
 
@@ -1364,18 +1424,14 @@ public class SessionLendingQueryService {
                     if ("REWARD_CLAIM".equals(event.type())) {
                         continue;
                     }
-                    DeltaAccumulator orphanDeltas = new DeltaAccumulator();
-                    orphanDeltas.add(event);
-                    String cycleId = marketKey.toLowerCase(Locale.ROOT) + ":orphan-" + cycleIndex++;
-                    result.add(toCycle(cycleId, marketKey, "AMBIGUOUS_NEEDS_REVIEW", List.of(event), List.of(), orphanDeltas));
-                    continue;
+                    if (addOrphanCycle(result, marketKey, event, cycleIndex++)) {
+                        continue;
+                    }
                 }
                 if (!currentEvents.isEmpty() && isUnmatchedClosingEvent(cycleState, event)) {
-                    DeltaAccumulator orphanDeltas = new DeltaAccumulator();
-                    orphanDeltas.add(event);
-                    String cycleId = marketKey.toLowerCase(Locale.ROOT) + ":orphan-" + cycleIndex++;
-                    result.add(toCycle(cycleId, marketKey, "AMBIGUOUS_NEEDS_REVIEW", List.of(event), List.of(), orphanDeltas));
-                    continue;
+                    if (addOrphanCycle(result, marketKey, event, cycleIndex++)) {
+                        continue;
+                    }
                 }
                 if (currentEvents.isEmpty()) {
                     deltas = new DeltaAccumulator();
@@ -1399,6 +1455,33 @@ public class SessionLendingQueryService {
                 result.add(toCycle(cycleId, marketKey, status, currentEvents, marketPositions, deltas));
             }
             return result;
+        }
+
+        private boolean addOrphanCycle(
+                List<LendingCycleView> result,
+                String marketKey,
+                LendingHistoryEntryView event,
+                int orphanIndex
+        ) {
+            if (orphanAlreadyExists(result, marketKey, event.txHash())) {
+                return true;
+            }
+            DeltaAccumulator orphanDeltas = new DeltaAccumulator();
+            orphanDeltas.add(event);
+            String cycleId = marketKey.toLowerCase(Locale.ROOT) + ":orphan-" + orphanIndex;
+            result.add(toCycle(cycleId, marketKey, "AMBIGUOUS_NEEDS_REVIEW", List.of(event), List.of(), orphanDeltas));
+            return true;
+        }
+
+        private boolean orphanAlreadyExists(
+                List<LendingCycleView> result,
+                String marketKey,
+                String startTxHash
+        ) {
+            return result.stream().anyMatch(cycle ->
+                    "AMBIGUOUS_NEEDS_REVIEW".equals(cycle.status())
+                            && Objects.equals(cycle.marketKey(), marketKey)
+                            && Objects.equals(cycle.startTxHash(), startTxHash));
         }
 
         private boolean attachPostCloseEventToPreviousCycle(
@@ -1445,6 +1528,79 @@ public class SessionLendingQueryService {
             return true;
         }
 
+        private HealthMetricSnapshot resolveHealthMetric(LendingMarketMetricEstimator estimator) {
+            LendingMarketMetricEstimator.MetricSnapshot fallback = estimator.estimate(
+                    key.protocol(),
+                    "GROUP",
+                    "",
+                    supplyUsd,
+                    borrowUsd
+            );
+            if (healthFactorSnapshotService == null
+                    || borrowUsd == null
+                    || borrowUsd.signum() <= 0
+                    || key.protocol() == null
+                    || !key.protocol().trim().toUpperCase(Locale.ROOT).startsWith("AAVE")) {
+                return new HealthMetricSnapshot(
+                        fallback.healthFactor(),
+                        fallback.healthLabel(),
+                        fallback.healthProgress(),
+                        fallback.status(),
+                        fallback.source(),
+                        false
+                );
+            }
+            String networkId = key.networkId() == null ? null : key.networkId().name();
+            return healthFactorSnapshotService.latestFresh(
+                    sessionId,
+                    key.protocol(),
+                    networkId,
+                    key.walletAddress()
+            ).map(snapshot -> new HealthMetricSnapshot(
+                    snapshot.getHealthFactor(),
+                    healthLabel(snapshot.getHealthFactor()),
+                    healthProgress(snapshot.getHealthFactor()),
+                    fallback.status(),
+                    LendingHealthFactorSnapshotService.LIVE_PROTOCOL,
+                    false
+            )).orElseGet(() -> new HealthMetricSnapshot(
+                    fallback.healthFactor(),
+                    fallback.healthLabel(),
+                    fallback.healthProgress(),
+                    fallback.status(),
+                    "ACCOUNTING_ESTIMATE",
+                    borrowUsd.signum() > 0
+            ));
+        }
+
+        private String healthLabel(BigDecimal healthFactor) {
+            if (healthFactor == null) {
+                return "Unavailable";
+            }
+            if (healthFactor.compareTo(BigDecimal.valueOf(10)) >= 0) {
+                return "No debt";
+            }
+            if (healthFactor.compareTo(BigDecimal.valueOf(2)) >= 0) {
+                return "Safe";
+            }
+            if (healthFactor.compareTo(BigDecimal.valueOf(1.5)) >= 0) {
+                return "Moderate";
+            }
+            if (healthFactor.compareTo(BigDecimal.valueOf(1.1)) >= 0) {
+                return "At risk";
+            }
+            return "Liquidation risk";
+        }
+
+        private BigDecimal healthProgress(BigDecimal healthFactor) {
+            if (healthFactor == null || healthFactor.signum() <= 0) {
+                return BigDecimal.ZERO;
+            }
+            BigDecimal capped = healthFactor.min(BigDecimal.valueOf(3));
+            return capped.divide(BigDecimal.valueOf(3), MC).multiply(BigDecimal.valueOf(100), MC)
+                    .setScale(2, java.math.RoundingMode.HALF_UP);
+        }
+
         private LendingHistoryEntryView effectiveSequentialEvent(CycleState cycleState, LendingHistoryEntryView event) {
             if (!isCompoundProtocol()
                     || event == null
@@ -1470,7 +1626,8 @@ public class SessionLendingQueryService {
                     event.valueUsd(),
                     event.feeUsd(),
                     event.feeQuantityByAsset(),
-                    event.loopId()
+                    event.loopId(),
+                    event.withdrawYieldByAsset()
             );
         }
 
@@ -1503,10 +1660,9 @@ public class SessionLendingQueryService {
                         target = new MutableCycle(marketKey.toLowerCase(Locale.ROOT) + ":cycle-" + cycleIndex++);
                         openCycles.add(target);
                     } else {
-                        DeltaAccumulator orphanDeltas = new DeltaAccumulator();
-                        orphanDeltas.add(event);
-                        String cycleId = marketKey.toLowerCase(Locale.ROOT) + ":orphan-" + orphanIndex++;
-                        result.add(toCycle(cycleId, marketKey, "AMBIGUOUS_NEEDS_REVIEW", List.of(event), List.of(), orphanDeltas));
+                        if (addOrphanCycle(result, marketKey, event, orphanIndex++)) {
+                            continue;
+                        }
                         continue;
                     }
                 }
@@ -1709,7 +1865,7 @@ public class SessionLendingQueryService {
             LendingPnlBreakdownView pnlBreakdown = pnlBreakdown(status, cyclePositions, deltas);
             LendingPnlAssetBreakdownView pnlAssetBreakdown = pnlAssetBreakdown(status, cyclePositions, deltas);
             LendingTotalValuationView totalValuation = totalValuation(status, unrealizedUsd, pnlBreakdown, deltas);
-            LendingFactualApyView factualApy = factualApy(status, start, close, totalValuation, pnlAssetBreakdown, deltas);
+            LendingFactualApyView factualApy = factualApy(status, start, close, totalValuation, cyclePositions, deltas);
             List<String> largePnlReasons = largePnlReasons(status, pnlBreakdown, totalValuation, pnlAssetBreakdown, deltas);
             String primaryLargePnlReason = largePnlReasons.isEmpty() ? null : largePnlReasons.get(0);
             CyclePeakView peaks = cyclePeaks(events);
@@ -1757,7 +1913,7 @@ public class SessionLendingQueryService {
                 LendingHistoryEntryView start,
                 LendingHistoryEntryView close,
                 LendingTotalValuationView totalValuation,
-                LendingPnlAssetBreakdownView pnlAssetBreakdown,
+                List<LendingPositionView> cyclePositions,
                 DeltaAccumulator deltas
         ) {
             Instant startTimestamp = start == null ? null : start.blockTimestamp();
@@ -1770,14 +1926,25 @@ public class SessionLendingQueryService {
             BigDecimal netIncomeUsd = "OPEN".equals(status)
                     ? totalValuation.unrealizedTotalUsdPnl()
                     : totalValuation.totalUsdPnl();
+            Map<String, BigDecimal> currentDebtByAsset = cyclePositions.stream()
+                    .filter(position -> "BORROW".equals(position.side()))
+                    .collect(Collectors.toMap(
+                            position -> cycleStateAsset(position.underlyingSymbol()),
+                            LendingPositionView::quantity,
+                            (left, right) -> left.add(right, MC),
+                            LinkedHashMap::new
+                    ));
             return LendingFactualApyCalculator.calculate(new LendingFactualApyCalculator.Input(
                     status,
                     startTimestamp,
                     endTimestamp,
-                    deltas.principalInByAsset(),
-                    pnlAssetBreakdown.supplyIncomeByAsset(),
+                    deltas.openingDepositByAsset(),
+                    resolvedSupplyYieldByAsset(deltas),
+                    deltas.principalOutCashByAsset(),
+                    deltas.internalReceiptMovementByAsset(),
                     deltas.borrowedByAsset(),
-                    pnlAssetBreakdown.borrowCostByAsset(),
+                    deltas.repaidByAsset(),
+                    currentDebtByAsset,
                     netIncomeUsd,
                     netCapitalUsd
             ));
@@ -1919,12 +2086,61 @@ public class SessionLendingQueryService {
                 return "unavailable:unresolved_principal_exit";
             }
             if (containsShareOrVaultAsset(deltas)) {
-                return "unavailable:missing share-rate or historical price evidence";
+                if (resolvedSupplyYieldByAsset(deltas).isEmpty()) {
+                    return "unavailable:missing share-rate or historical price evidence";
+                }
             }
             if (deltas.hasNonStablePrincipalExposure()) {
                 return "unavailable:missing yield-only valuation evidence";
             }
+            if ("CLOSED".equals(status) && resolvedSupplyYieldByAsset(deltas).isEmpty()) {
+                return "unavailable:missing yield-only valuation evidence";
+            }
             return "asset-delta-only";
+        }
+
+        private Map<String, BigDecimal> resolvedSupplyYieldByAsset(DeltaAccumulator deltas) {
+            Map<String, BigDecimal> merged = new LinkedHashMap<>(deltas.withdrawYieldByAsset());
+            for (Map.Entry<String, BigDecimal> entry : inferPlausibleShareYieldByAsset(deltas).entrySet()) {
+                merged.putIfAbsent(entry.getKey(), entry.getValue());
+            }
+            return Map.copyOf(merged);
+        }
+
+        private Map<String, BigDecimal> inferPlausibleShareYieldByAsset(DeltaAccumulator deltas) {
+            Map<String, BigDecimal> result = new LinkedHashMap<>();
+            BigDecimal maxYieldRatio = new BigDecimal("0.10");
+            for (Map.Entry<String, BigDecimal> entry : deltas.principalInByAsset().entrySet()) {
+                String asset = entry.getKey();
+                BigDecimal existingYield = deltas.withdrawYieldByAsset().get(asset);
+                if (existingYield != null && existingYield.signum() > 0) {
+                    continue;
+                }
+                BigDecimal principalIn = zeroIfNull(entry.getValue());
+                BigDecimal outCash = zeroIfNull(deltas.principalOutCashByAsset().get(asset));
+                BigDecimal diff = outCash.subtract(principalIn, MC);
+                if (principalIn.signum() <= 0 || diff.signum() <= 0) {
+                    continue;
+                }
+                if (diff.divide(principalIn, MC).compareTo(maxYieldRatio) <= 0) {
+                    result.put(asset, diff);
+                }
+            }
+            return result;
+        }
+
+        private BigDecimal closedSupplyIncomeUsd(DeltaAccumulator deltas) {
+            BigDecimal total = BigDecimal.ZERO;
+            for (Map.Entry<String, BigDecimal> entry : resolvedSupplyYieldByAsset(deltas).entrySet()) {
+                BigDecimal quantity = entry.getValue();
+                if (quantity == null || quantity.signum() <= 0) {
+                    continue;
+                }
+                if (LendingAssetSymbolSupport.isStable(entry.getKey())) {
+                    total = total.add(quantity, MC);
+                }
+            }
+            return total;
         }
 
         private LendingPnlBreakdownView pnlBreakdown(
@@ -1938,10 +2154,11 @@ public class SessionLendingQueryService {
                     .filter(Objects::nonNull)
                     .reduce(BigDecimal.ZERO, (left, right) -> left.add(right, MC))
                     : BigDecimal.ZERO;
-            BigDecimal closedEarnedUsd = deltas.principalOutUsd()
-                    .subtract(deltas.principalInUsd(), MC)
-                    .max(BigDecimal.ZERO)
-                    .add(deltas.rewardUsd(), MC);
+            BigDecimal closedEarnedUsd = "OPEN".equals(status)
+                    ? BigDecimal.ZERO
+                    : resolvedSupplyYieldByAsset(deltas).isEmpty()
+                    ? BigDecimal.ZERO
+                    : closedSupplyIncomeUsd(deltas).add(deltas.rewardUsd(), MC);
             BigDecimal interestEarnedUsd = openEarnedUsd.add(closedEarnedUsd, MC);
             BigDecimal interestPaidUsd = deltas.repaidUsd()
                     .subtract(deltas.borrowedUsd(), MC)
@@ -1980,7 +2197,7 @@ public class SessionLendingQueryService {
                     ? openSupplyIncomeByAsset(cyclePositions)
                     : assetPnlUnavailable
                     ? Map.of()
-                    : subtractMaps(deltas.principalOutByAsset(), deltas.principalInByAsset());
+                    : positiveEntries(resolvedSupplyYieldByAsset(deltas));
             Map<String, BigDecimal> borrowCostByAsset = positiveEntries(subtractMaps(
                     deltas.repaidByAsset(),
                     deltas.borrowedByAsset()
@@ -2094,6 +2311,7 @@ public class SessionLendingQueryService {
         ) {
             LinkedHashSet<String> assets = new LinkedHashSet<>(derivedAssets);
             assets.addAll(deltas.incompletePrincipalExitAssets());
+            assets.addAll(deltas.openingDepositByAsset().keySet());
             Map<String, String> precision = new LinkedHashMap<>();
             for (String asset : assets) {
                 precision.put(asset, assetPnlUnavailableReason(status, deltas, asset) == null
@@ -2132,6 +2350,11 @@ public class SessionLendingQueryService {
             }
             if ("CLOSED".equals(status) && deltas.incompletePrincipalExitAssets().contains(asset)) {
                 return "unresolved_principal_exit";
+            }
+            if ("CLOSED".equals(status)
+                    && deltas.openingDepositByAsset().containsKey(asset)
+                    && !resolvedSupplyYieldByAsset(deltas).containsKey(asset)) {
+                return LendingFactualApyCalculator.NO_YIELD_FLOW_EVIDENCE;
             }
             return null;
         }
@@ -2326,7 +2549,8 @@ public class SessionLendingQueryService {
                     event.valueUsd(),
                     event.feeUsd(),
                     event.feeQuantityByAsset(),
-                    event.loopId()
+                    event.loopId(),
+                    event.withdrawYieldByAsset()
             );
         }
 
@@ -2433,6 +2657,7 @@ public class SessionLendingQueryService {
                         BigDecimal.ZERO,
                         BigDecimal.ZERO,
                         BigDecimal.ZERO,
+                        Map.of(),
                         Map.of()
                 ));
             }
@@ -2452,8 +2677,27 @@ public class SessionLendingQueryService {
                     flowQuantity(flow),
                     flowValueUsd(flow, prices, historicalPrices, transaction.getBlockTimestamp()),
                     feeUsd,
-                    feeQuantityByAsset
+                    feeQuantityByAsset,
+                    withdrawYieldByAsset(transaction)
             ));
+        }
+
+        private Map<String, BigDecimal> withdrawYieldByAsset(NormalizedTransaction transaction) {
+            if (transaction == null || transaction.getType() != NormalizedTransactionType.LENDING_WITHDRAW) {
+                return Map.of();
+            }
+            Map<String, BigDecimal> result = new LinkedHashMap<>();
+            for (NormalizedTransaction.Flow flow : safeFlows(transaction)) {
+                if (flow.getRole() != NormalizedLegRole.BUY
+                        || flow.getQuantityDelta() == null
+                        || flow.getQuantityDelta().signum() <= 0
+                        || LendingAssetSymbolSupport.isLendingPositionSymbol(flow.getAssetSymbol())) {
+                    continue;
+                }
+                String asset = cycleStateAsset(LendingAssetSymbolSupport.displaySymbol(flow.getAssetSymbol()));
+                result.merge(asset, flow.getQuantityDelta().abs(), (left, right) -> left.add(right, MC));
+            }
+            return Map.copyOf(result);
         }
 
         private List<HistoryAmount> protocolChildLegAmounts(
@@ -2501,7 +2745,8 @@ public class SessionLendingQueryService {
                         quantity.abs(),
                         valueUsd,
                         index == 0 ? feeUsd : BigDecimal.ZERO,
-                        index == 0 ? fees : Map.of()
+                        index == 0 ? fees : Map.of(),
+                        "LENDING_WITHDRAW".equals(type) ? withdrawYieldByAsset(transaction) : Map.of()
                 ));
                 index++;
             }
@@ -2626,7 +2871,8 @@ public class SessionLendingQueryService {
                     flowQuantity(flow),
                     flowValueUsd(flow, prices, historicalPrices, timestamp),
                     feeUsd,
-                    feeQuantityByAsset
+                    feeQuantityByAsset,
+                    Map.of()
             );
         }
 
@@ -2819,7 +3065,8 @@ public class SessionLendingQueryService {
             BigDecimal quantity,
             BigDecimal valueUsd,
             BigDecimal feeUsd,
-            Map<String, BigDecimal> feeQuantityByAsset
+            Map<String, BigDecimal> feeQuantityByAsset,
+            Map<String, BigDecimal> withdrawYieldByAsset
     ) {
     }
 
@@ -2875,6 +3122,8 @@ public class SessionLendingQueryService {
 
     private static final class DeltaAccumulator {
         private final Map<String, BigDecimal> principalInByAsset = new LinkedHashMap<>();
+        private final Map<String, BigDecimal> openingDepositByAsset = new LinkedHashMap<>();
+        private final Map<String, BigDecimal> withdrawYieldByAsset = new LinkedHashMap<>();
         private final Map<String, BigDecimal> principalOutByAsset = new LinkedHashMap<>();
         private final Map<String, BigDecimal> principalOutCashByAsset = new LinkedHashMap<>();
         private final Map<String, BigDecimal> internalReceiptMovementByAsset = new LinkedHashMap<>();
@@ -2938,6 +3187,7 @@ public class SessionLendingQueryService {
             switch (event.type()) {
                 case "LENDING_DEPOSIT", "VAULT_DEPOSIT", "LENDING_LOOP_OPEN" -> {
                     add(principalInByAsset, asset, quantity);
+                    openingDepositByAsset.putIfAbsent(asset, quantity);
                     add(netCashDeltaByAsset, asset, quantity.negate());
                     addObservedFlow(event, asset, quantity.negate());
                     principalInUsd = principalInUsd.add(valueUsd, MC);
@@ -2957,6 +3207,13 @@ public class SessionLendingQueryService {
                     }
                 }
                 case "LENDING_WITHDRAW", "VAULT_WITHDRAW", "LENDING_LOOP_CLOSE", "LENDING_LOOP_DECREASE" -> {
+                    if ("LENDING_WITHDRAW".equals(event.type())) {
+                        for (Map.Entry<String, BigDecimal> yieldEntry : event.withdrawYieldByAsset().entrySet()) {
+                            if (yieldEntry.getValue() != null && yieldEntry.getValue().signum() > 0) {
+                                add(withdrawYieldByAsset, yieldEntry.getKey(), yieldEntry.getValue());
+                            }
+                        }
+                    }
                     add(withdrawnByAsset, asset, quantity);
                     add(principalOutByAsset, asset, quantity);
                     add(netCashDeltaByAsset, asset, quantity);
@@ -3136,6 +3393,14 @@ public class SessionLendingQueryService {
 
         private Map<String, BigDecimal> principalInByAsset() {
             return canonicalize(principalInByAsset);
+        }
+
+        private Map<String, BigDecimal> openingDepositByAsset() {
+            return canonicalize(openingDepositByAsset);
+        }
+
+        private Map<String, BigDecimal> withdrawYieldByAsset() {
+            return canonicalize(withdrawYieldByAsset);
         }
 
         private Map<String, BigDecimal> principalOutByAsset() {

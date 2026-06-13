@@ -34,6 +34,7 @@ public record SessionLendingResponse(
             BigDecimal healthProgress,
             String healthStatus,
             String healthSource,
+            Boolean healthStale,
             BigDecimal supplyUsd,
             BigDecimal borrowUsd,
             BigDecimal netExposureUsd,

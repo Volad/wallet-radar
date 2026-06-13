@@ -862,6 +862,45 @@ class BybitInternalTransferPairerTest {
     }
 
     @Test
+    void pairsMultiLegSubToSubUniversalTransfer() {
+        String uuid = "1bbc6cf3-e1ef-11ef-8557-0acf7fae4039";
+        NormalizedTransaction receiver = singletonInternalTransfer(
+                "BYBIT-409666492:UNIVERSAL_TRANSFER:uni_trans_" + uuid + "_421325298",
+                null,
+                "BYBIT:409666492:UTA",
+                "USDT",
+                "40",
+                Instant.parse("2025-02-03T05:24:00Z")
+        );
+        NormalizedTransaction senderSub = singletonInternalTransfer(
+                "BYBIT-421325298:UNIVERSAL_TRANSFER:uni_trans_" + uuid + "_421325298",
+                null,
+                "BYBIT:421325298:UTA",
+                "USDT",
+                "-40",
+                Instant.parse("2025-02-03T05:24:00Z")
+        );
+        NormalizedTransaction senderMasterEcho = singletonInternalTransfer(
+                "BYBIT-33625378:UNIVERSAL_TRANSFER:uni_trans_" + uuid + "_421325298",
+                null,
+                "BYBIT:33625378:UTA",
+                "USDT",
+                "-40",
+                Instant.parse("2025-02-03T05:24:00Z")
+        );
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(receiver, senderSub, senderMasterEcho));
+
+        int rewrites = pairer.pairCrossUidUniversalTransfers();
+
+        assertThat(rewrites).isEqualTo(2);
+        assertThat(receiver.getCorrelationId()).startsWith(BybitInternalTransferPairer.CROSS_UID_CORRELATION_PREFIX);
+        assertThat(senderSub.getCorrelationId()).isEqualTo(receiver.getCorrelationId());
+        assertThat(senderMasterEcho.getCorrelationId()).isNull();
+    }
+
+    @Test
     void pairsCrossUidInboundWhenOutboundIsExcluded() {
         String uuid = "866903d7-d743-11f0-b806-825d86cb1b52";
 

@@ -2,6 +2,7 @@ package com.walletradar.ingestion.pipeline.classification.onchain.family;
 
 import com.walletradar.domain.common.ConfidenceLevel;
 import com.walletradar.domain.common.Decimal128Support;
+import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.common.PriceSource;
 import com.walletradar.domain.transaction.normalized.ClassificationSource;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
@@ -12,11 +13,14 @@ import com.walletradar.ingestion.pipeline.classification.ClassificationDecision;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassificationContext;
 import com.walletradar.ingestion.pipeline.classification.onchain.protocol.ProtocolSemanticHint;
 import com.walletradar.ingestion.pipeline.classification.reason.ClassificationReasonCode;
+import com.walletradar.ingestion.adapter.evm.rpc.EvkVaultShareRateResolver;
 import com.walletradar.ingestion.pipeline.classification.support.OnChainClassificationSupport;
 import com.walletradar.ingestion.pipeline.classification.support.RawLeg;
 import com.walletradar.ingestion.pipeline.onchain.OnChainRawTransactionView;
 import org.bson.Document;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.Ordered;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -56,6 +60,29 @@ public class LendingClassifier implements OnChainFamilyClassifier {
     private static final String EULER_STABLE_PRICE_INFERENCE_REASON = "EULER_LOOP_STABLE_ANCHOR";
     private static final String ERC20_TRANSFER_TOPIC =
             "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+
+    /**
+     * Maximum relative divergence between the source-share and replacement-share underlying USD value for
+     * a pairing to be treated as a genuine value-for-value Euler rebalance. Set generously (2x) so only
+     * gross mis-pairings (e.g. a $1,380 collateral relocation mistaken for a $5 share mint) are rejected;
+     * a legitimate same-value collateral swap stays well within this band.
+     */
+    private static final BigDecimal REBALANCE_VALUE_EQUIVALENCE_MAX_DIVERGENCE = new BigDecimal("0.5");
+
+    /** Underlying USD price of a USD-stablecoin EVK vault's underlying asset (peg). */
+    private static final BigDecimal STABLE_UNDERLYING_USD = BigDecimal.ONE;
+
+    private final EvkVaultShareRateResolver shareRateResolver;
+
+    @Autowired
+    public LendingClassifier(@Nullable EvkVaultShareRateResolver shareRateResolver) {
+        this.shareRateResolver = shareRateResolver;
+    }
+
+    /** Convenience constructor for tests / manual wiring without on-chain EVK rate resolution. */
+    public LendingClassifier() {
+        this(null);
+    }
 
     @Override
     public OnChainClassificationInsertionPoint insertionPoint() {
@@ -228,7 +255,8 @@ public class LendingClassifier implements OnChainFamilyClassifier {
         Optional<ProtocolSemanticHint> rebalance = context.protocolSemantics()
                 .firstBySuggestedType(NormalizedTransactionType.LENDING_LOOP_REBALANCE);
         if (rebalance.isPresent()) {
-            Optional<EulerLoopRebalancePattern> rebalancePattern = detectEulerLoopRebalancePattern(context.movementLegs());
+            Optional<EulerLoopRebalancePattern> rebalancePattern =
+                    detectEulerLoopRebalancePattern(context.movementLegs(), context.view());
             if (rebalancePattern.isPresent()) {
                 return Optional.of(FamilyDecisionSupport.buildWithView(
                         context.view(),
@@ -499,7 +527,7 @@ public class LendingClassifier implements OnChainFamilyClassifier {
             ));
         }
 
-        Optional<EulerLoopRebalancePattern> rebalancePattern = detectEulerLoopRebalancePattern(movementLegs);
+        Optional<EulerLoopRebalancePattern> rebalancePattern = detectEulerLoopRebalancePattern(movementLegs, view);
         if (rebalancePattern.isPresent()) {
             return Optional.of(FamilyDecisionSupport.buildWithView(
                     view,
@@ -652,8 +680,9 @@ public class LendingClassifier implements OnChainFamilyClassifier {
             return List.of();
         }
 
-        BigDecimal shareUnitPrice = anchorQuantity.multiply(anchorUnitPrice)
-                .divide(shareQuantity, MathContext.DECIMAL128);
+        BigDecimal shareUnitPrice = resolveEvkShareUnitPriceUsd(view, shareLeg.assetContract(), shareLeg.assetSymbol())
+                .orElseGet(() -> anchorQuantity.multiply(anchorUnitPrice)
+                        .divide(shareQuantity, MathContext.DECIMAL128));
 
         List<NormalizedTransaction.Flow> flows = new ArrayList<>();
         if (debtLeg != null) {
@@ -699,15 +728,19 @@ public class LendingClassifier implements OnChainFamilyClassifier {
             BigDecimal shareUnitPrice
     ) {
         List<NormalizedTransaction.Flow> flows = new ArrayList<>();
+        String shareContract = view.tokenTransferContract(shareTransfer);
+        String shareSymbol = view.tokenTransferSymbol(shareTransfer);
+        BigDecimal resolvedShareUnitPrice = resolveEvkShareUnitPriceUsd(view, shareContract, shareSymbol)
+                .orElse(shareUnitPrice);
         NormalizedTransaction.Flow shareFlow = buildFlow(
                 NormalizedLegRole.SELL,
-                view.tokenTransferContract(shareTransfer),
-                view.tokenTransferSymbol(shareTransfer),
+                shareContract,
+                shareSymbol,
                 view.tokenTransferQuantity(shareTransfer).negate()
         );
         applyResolvedPrice(
                 shareFlow,
-                shareUnitPrice,
+                resolvedShareUnitPrice,
                 PriceSource.SWAP_DERIVED,
                 EULER_SHARE_PRICE_INFERENCE_REASON
         );
@@ -840,7 +873,10 @@ public class LendingClassifier implements OnChainFamilyClassifier {
         return normalized != null && EULER_KNOWN_VAULT_CONTRACTS.contains(normalized);
     }
 
-    private Optional<EulerLoopRebalancePattern> detectEulerLoopRebalancePattern(List<RawLeg> movementLegs) {
+    private Optional<EulerLoopRebalancePattern> detectEulerLoopRebalancePattern(
+            List<RawLeg> movementLegs,
+            OnChainRawTransactionView view
+    ) {
         if (movementLegs == null || movementLegs.isEmpty()) {
             return Optional.empty();
         }
@@ -881,7 +917,85 @@ public class LendingClassifier implements OnChainFamilyClassifier {
             return Optional.empty();
         }
 
+        // Reject grossly value-divergent pairings (EVK shares are NOT 1:1 with their underlying): an
+        // internal collateral relocation worth ~$1,380 must not be paired with a ~$5 share mint, which
+        // would carry the full $1,380 basis onto the tiny lot (~$216/share). Value both legs at their true
+        // convertToAssets underlying; when the rate cannot be resolved, keep the pattern (fail-safe).
+        if (!isValueEquivalentRebalance(view, sourceShare, replacementShare)) {
+            return Optional.empty();
+        }
+
         return Optional.of(new EulerLoopRebalancePattern(sourceShare, replacementShare, sourceRefund));
+    }
+
+    /**
+     * True unless the two share legs can be proven to diverge grossly in underlying USD value. Only applies
+     * to USD-stablecoin EVK shares (valued at $1/underlying via {@code convertToAssets}); for any other
+     * symbol, or when the on-chain rate cannot be resolved, returns true so the caller keeps the existing
+     * pattern (fail-safe — never fabricate a rejection from a missing rate).
+     */
+    private boolean isValueEquivalentRebalance(
+            OnChainRawTransactionView view,
+            RawLeg sourceShare,
+            RawLeg replacementShare
+    ) {
+        if (!isEulerStableLikeShareSymbol(sourceShare.assetSymbol())
+                || !isEulerStableLikeShareSymbol(replacementShare.assetSymbol())) {
+            return true;
+        }
+        Optional<BigDecimal> sourceValue = resolveEvkShareUsdValue(view, sourceShare);
+        Optional<BigDecimal> replacementValue = resolveEvkShareUsdValue(view, replacementShare);
+        if (sourceValue.isEmpty() || replacementValue.isEmpty()) {
+            return true;
+        }
+        BigDecimal source = sourceValue.orElseThrow();
+        BigDecimal replacement = replacementValue.orElseThrow();
+        if (source.signum() <= 0 || replacement.signum() <= 0) {
+            return true;
+        }
+        BigDecimal max = source.max(replacement);
+        BigDecimal divergence = source.subtract(replacement).abs().divide(max, MathContext.DECIMAL128);
+        return divergence.compareTo(REBALANCE_VALUE_EQUIVALENCE_MAX_DIVERGENCE) <= 0;
+    }
+
+    /** USD value of a stablecoin EVK share leg via convertToAssets ($1/underlying), or empty if unresolved. */
+    private Optional<BigDecimal> resolveEvkShareUsdValue(OnChainRawTransactionView view, RawLeg shareLeg) {
+        if (shareLeg == null || shareLeg.quantityDelta() == null) {
+            return Optional.empty();
+        }
+        Optional<BigDecimal> perShare = resolveEvkUnderlyingUnitsPerShare(view, shareLeg.assetContract());
+        return perShare.map(rate -> shareLeg.quantityDelta().abs().multiply(rate).multiply(STABLE_UNDERLYING_USD));
+    }
+
+    /**
+     * USD unit price of one whole stablecoin EVK share via {@code convertToAssets} at the tx block, or empty
+     * when the share is not a USD-stablecoin EVK share or the rate cannot be resolved (fail-safe).
+     */
+    private Optional<BigDecimal> resolveEvkShareUnitPriceUsd(
+            OnChainRawTransactionView view,
+            String shareContract,
+            String shareSymbol
+    ) {
+        if (!isEulerStableLikeShareSymbol(shareSymbol)) {
+            return Optional.empty();
+        }
+        return resolveEvkUnderlyingUnitsPerShare(view, shareContract)
+                .map(rate -> rate.multiply(STABLE_UNDERLYING_USD));
+    }
+
+    private Optional<BigDecimal> resolveEvkUnderlyingUnitsPerShare(
+            OnChainRawTransactionView view,
+            String shareContract
+    ) {
+        if (shareRateResolver == null || view == null || shareContract == null || shareContract.isBlank()) {
+            return Optional.empty();
+        }
+        Long block = view.blockNumber();
+        NetworkId network = view.networkId();
+        if (block == null || network == null) {
+            return Optional.empty();
+        }
+        return shareRateResolver.resolveUnderlyingUnitsPerShare(network, shareContract, block);
     }
 
     private Map<String, RawLeg> aggregateEulerShareLegs(

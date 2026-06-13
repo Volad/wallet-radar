@@ -146,13 +146,19 @@ public class LpReceiptExitReplayHandler {
         PositionSnapshot before = flowSupport.snapshot(position);
 
         if (withdraw.withdrawnQty().signum() > 0) {
-            BigDecimal avco = withdraw.withdrawnBasisUsd().signum() > 0
-                    ? withdraw.withdrawnBasisUsd().divide(withdraw.withdrawnQty(), MC)
+            // U-3: a single-asset receipt pool restore is a same-asset continuity carry. Cap a
+            // USD-stablecoin underlying (e.g. FUSDC/GTUSDCC/MCUSDC/EUSDC vault-share withdraw) at the
+            // $1 peg so ERC4626 share-rate contamination cannot inflate the disposed stablecoin basis.
+            BigDecimal coveredQty = withdraw.withdrawnQty().subtract(withdraw.withdrawnUncoveredQty(), MC);
+            BigDecimal cappedBasis = flowSupport.pegCappedStablecoinCarryBasis(
+                    assetKey, coveredQty, withdraw.withdrawnBasisUsd());
+            BigDecimal avco = cappedBasis.signum() > 0
+                    ? cappedBasis.divide(withdraw.withdrawnQty(), MC)
                     : null;
             flowSupport.restoreToPosition(
                     withdraw.withdrawnQty(),
                     position,
-                    withdraw.withdrawnBasisUsd(),
+                    cappedBasis,
                     withdraw.withdrawnUncoveredQty(),
                     avco
             );

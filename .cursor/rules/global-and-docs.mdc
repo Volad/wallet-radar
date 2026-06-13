@@ -16,13 +16,24 @@ alwaysApply: true
 
 ## Documentation Structure
 
-| File | Purpose |
-|------|---------|
-| `docs/00-context.md` | Product context, goals, not goals, limitations |
-| `docs/01-domain.md` | Entities, glossary, invariants |
-| `docs/02-architecture.md` | Modules architecture, data flow |
-| `docs/03-accounting.md` | Cost basis policy (AVG), PnL, costs |
-| `docs/04-api.md` | API contract or link to OpenAPI spec |
-| `docs/adr/*.md` | Architecture Decision Records — **one ADR per file**; each ADR must explain **why** and **when** the decision was made |
+### Global wiki (authoritative reference)
 
-When creating or updating docs, place content in the correct file and keep ADRs focused (one decision, one file).
+Start at [`docs/README.md`](docs/README.md).
+
+| Area | Path | Purpose |
+|------|------|---------|
+| Overview | `docs/overview/` | Product context, domain, architecture, data model, orchestration |
+| Pipeline | `docs/pipeline/` | Backfill, normalization, linking, pricing, cost basis, replay, portfolio snapshot |
+| Normalization rules | `docs/pipeline/normalization/rules/` | Families, protocols, three-layer contract |
+| Frontend | `docs/frontend/` | Dashboard, move basis, settings, lending UI |
+| Reference | `docs/reference/` | API, glossary, networks/protocols, transaction types, ledger/basis effects |
+| Examples | `docs/examples/` | Synthetic walkthroughs (no real tx hashes) |
+
+### Current work (separate from wiki linear reading order)
+
+| Path | Purpose |
+|------|---------|
+| `docs/adr/*.md` | Architecture Decision Records — **one ADR per file**; explain **why** and **when** |
+| `docs/tasks/` | Implementation plans, cycle closeouts, audit artifacts |
+
+When creating or updating docs, place content in the correct wiki file. Keep ADRs and tasks separate from the global wiki. Keep ADRs focused (one decision, one file).

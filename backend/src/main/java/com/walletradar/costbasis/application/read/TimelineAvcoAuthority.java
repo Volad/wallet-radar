@@ -91,6 +91,22 @@ public final class TimelineAvcoAuthority {
             BigDecimal aggregatedTotalCostBasisUsdAfter,
             Map<String, BigDecimal> lastAvcoByAssetIdentity
     ) {
+        // GAS_ONLY carry-forward: events whose every member point carries a GAS_ONLY basis effect
+        // (SPONSORED_GAS_IN, ADMIN_CONFIG fee-only, etc.) do not represent real buy/sell decisions.
+        // Using their per-wallet AVCO produces V-dips on the chart when a tiny isolated position
+        // is diluted by free ETH or small gas fees.  Carry forward the last known AVCO (or fall
+        // back to the global session AVCO) so the chart remains visually stable for these events.
+        if (isAllGasOnly(memberPoints)) {
+            String identity = selectCarryForwardIdentity(
+                    familyIdentity, memberPoints, null, lastAvcoByAssetIdentity);
+            BigDecimal carriedAvco = resolveCarriedForwardAvco(
+                    familyIdentity, memberPoints, identity,
+                    lastAvcoByAssetIdentity,
+                    aggregatedCoveredQuantityAfter, aggregatedTotalCostBasisUsdAfter);
+            if (carriedAvco != null && carriedAvco.signum() > 0) {
+                return new Resolution(carriedAvco, KIND_CARRIED_FORWARD, identity);
+            }
+        }
         AssetLedgerPoint authoritative = selectAuthoritativePoint(familyIdentity, memberPoints, medianSpotAvcoUsd);
         if (authoritative != null
                 && authoritative.getAvcoAfterUsd() != null
@@ -125,6 +141,28 @@ public final class TimelineAvcoAuthority {
                 return new Resolution(carriedAvco, KIND_CARRIED_FORWARD, accountingAssetIdentity);
             }
         }
+        // LP-lock carry-forward: basis reallocated to LP receipt pool, not destroyed.
+        // When a spot identity is fully drained by REALLOCATE_OUT, preserve visual continuity
+        // by carrying the last known AVCO for that identity — even if the family still holds
+        // the same asset on other networks/venues.
+        AssetLedgerPoint lpLockPoint = selectLpLockReallocateOutPoint(familyIdentity, memberPoints);
+        if (lpLockPoint != null && lastAvcoByAssetIdentity != null) {
+            String identity = lpLockPoint.getAccountingAssetIdentity();
+            if (identity != null && !identity.isBlank()) {
+                boolean familyFullyDrained = aggregatedCoveredQuantityBefore != null
+                        && aggregatedCoveredQuantityBefore.signum() > 0
+                        && (aggregatedCoveredQuantityAfter == null || aggregatedCoveredQuantityAfter.signum() <= 0);
+                BigDecimal identityCoveredAfter = zeroIfNull(lpLockPoint.getBasisBackedQuantityAfter());
+                boolean identityFullyDrained = identityCoveredAfter.signum() <= 0
+                        && zeroIfNull(lpLockPoint.getQuantityDelta()).signum() < 0;
+                if (familyFullyDrained || identityFullyDrained) {
+                    BigDecimal lastAvco = lastAvcoByAssetIdentity.get(identity);
+                    if (lastAvco != null && lastAvco.signum() > 0) {
+                        return new Resolution(lastAvco, KIND_CARRIED_FORWARD, identity);
+                    }
+                }
+            }
+        }
         return new Resolution(
                 null,
                 KIND_UNAVAILABLE,
@@ -155,6 +193,29 @@ public final class TimelineAvcoAuthority {
             return;
         }
         lastAvcoByAssetIdentity.put(resolution.accountingAssetIdentity(), resolution.avcoAfterUsd());
+    }
+
+    private static AssetLedgerPoint selectLpLockReallocateOutPoint(
+            String familyIdentity,
+            List<AssetLedgerPoint> memberPoints
+    ) {
+        if (memberPoints == null || memberPoints.isEmpty()) {
+            return null;
+        }
+        return memberPoints.stream()
+                .filter(point -> AccountingAssetFamilySupport.includeInSpotFamilyTimelineAggregation(
+                        familyIdentity,
+                        point.getAssetSymbol()
+                ))
+                .filter(point -> point.getBasisEffect() == AssetLedgerPoint.BasisEffect.REALLOCATE_OUT)
+                .filter(point -> zeroIfNull(point.getQuantityDelta()).signum() < 0)
+                .max(Comparator
+                        .comparingInt((AssetLedgerPoint point) -> isSpotNativeSymbol(familyIdentity, point.getAssetSymbol()) ? 1 : 0)
+                        .thenComparing(
+                                AssetLedgerPoint::getReplaySequence,
+                                Comparator.nullsLast(Comparator.naturalOrder())
+                        ))
+                .orElse(null);
     }
 
     private static AssetLedgerPoint selectAuthoritativePoint(
@@ -372,5 +433,24 @@ public final class TimelineAvcoAuthority {
 
     private static String normalizeSymbol(String symbol) {
         return symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
+    }
+
+    /**
+     * Returns {@code true} when every member point in the event group has a
+     * {@code GAS_ONLY} basis effect (e.g. {@code SPONSORED_GAS_IN}, {@code ADMIN_CONFIG}
+     * fee-only, standalone gas-payment transactions).
+     *
+     * <p>Pure GAS_ONLY events do not represent real purchases or disposals.
+     * Using their per-wallet AVCO in the timeline produces V-dips when a tiny isolated
+     * position is diluted by free ETH (SPONSORED_GAS_IN) or slightly changed by a gas
+     * fee removal (ADMIN_CONFIG).  For these events the timeline should carry forward the
+     * last known AVCO rather than show the distorted per-wallet value.</p>
+     */
+    private static boolean isAllGasOnly(List<AssetLedgerPoint> memberPoints) {
+        if (memberPoints == null || memberPoints.isEmpty()) {
+            return false;
+        }
+        return memberPoints.stream()
+                .allMatch(p -> p.getBasisEffect() == AssetLedgerPoint.BasisEffect.GAS_ONLY);
     }
 }

@@ -1033,8 +1033,11 @@ class AssetLedgerQueryServiceTest {
         )).thenReturn(List.of(uta, fund, earn));
         when(normalizedTransactionRepository.findAllById(any())).thenReturn(List.of());
         when(mongoOperations.find(any(), eq(OnChainBalance.class))).thenReturn(List.of());
-        when(bybitLiveBalanceService.getUmbrellaBalances("bybit-int-33625378"))
-                .thenReturn(Map.of("LDO", new BigDecimal("500")));
+        when(bybitLiveBalanceService.getSnapshotView("bybit-int-33625378"))
+                .thenReturn(Optional.of(new BybitLiveBalanceService.LiveSnapshotView(
+                        BybitLiveBalanceService.LiveSnapshotAvailability.KNOWN_NON_EMPTY,
+                        Map.of("LDO", new BigDecimal("500")),
+                        Instant.parse("2025-06-01T00:00:00Z"))));
 
         AssetLedgerQueryService.SessionAssetLedgerView view = service()
                 .findSessionFamilyLedger("session-bybit-ldo", "SYMBOL:LDO")
@@ -1066,8 +1069,11 @@ class AssetLedgerQueryServiceTest {
         )).thenReturn(List.of(uta));
         when(normalizedTransactionRepository.findAllById(any())).thenReturn(List.of());
         when(mongoOperations.find(any(), eq(OnChainBalance.class))).thenReturn(List.of());
-        when(bybitLiveBalanceService.getUmbrellaBalances("bybit-int-33625378"))
-                .thenReturn(Map.of("LDO", new BigDecimal("40")));
+        when(bybitLiveBalanceService.getSnapshotView("bybit-int-33625378"))
+                .thenReturn(Optional.of(new BybitLiveBalanceService.LiveSnapshotView(
+                        BybitLiveBalanceService.LiveSnapshotAvailability.KNOWN_NON_EMPTY,
+                        Map.of("LDO", new BigDecimal("40")),
+                        Instant.parse("2025-06-01T00:00:00Z"))));
 
         AssetLedgerQueryService.SessionAssetLedgerView view = service()
                 .findSessionFamilyLedger("session-bybit-clamp", "SYMBOL:LDO")
@@ -1095,8 +1101,11 @@ class AssetLedgerQueryServiceTest {
         )).thenReturn(List.of(uta));
         when(normalizedTransactionRepository.findAllById(any())).thenReturn(List.of());
         when(mongoOperations.find(any(), eq(OnChainBalance.class))).thenReturn(List.of());
-        lenient().when(bybitLiveBalanceService.getUmbrellaBalances("bybit-int-33625378"))
-                .thenReturn(Map.of("LDO", BigDecimal.ZERO));
+        lenient().when(bybitLiveBalanceService.getSnapshotView("bybit-int-33625378"))
+                .thenReturn(Optional.of(new BybitLiveBalanceService.LiveSnapshotView(
+                        BybitLiveBalanceService.LiveSnapshotAvailability.KNOWN_NON_EMPTY,
+                        Map.of("LDO", BigDecimal.ZERO),
+                        Instant.parse("2025-06-01T00:00:00Z"))));
 
         AssetLedgerQueryService.SessionAssetLedgerView view = service()
                 .findSessionFamilyLedger("session-bybit-zero", "SYMBOL:LDO")
@@ -1151,8 +1160,11 @@ class AssetLedgerQueryServiceTest {
         when(mongoOperations.find(any(), eq(OnChainBalance.class))).thenReturn(List.of(
                 balance("wallet-a", NetworkId.MANTLE, "MNT", "10")
         ));
-        when(bybitLiveBalanceService.getUmbrellaBalances("bybit-int-33625378"))
-                .thenReturn(Map.of("MNT", new BigDecimal("200")));
+        when(bybitLiveBalanceService.getSnapshotView("bybit-int-33625378"))
+                .thenReturn(Optional.of(new BybitLiveBalanceService.LiveSnapshotView(
+                        BybitLiveBalanceService.LiveSnapshotAvailability.KNOWN_NON_EMPTY,
+                        Map.of("MNT", new BigDecimal("200")),
+                        Instant.parse("2025-06-01T00:00:00Z"))));
 
         AssetLedgerQueryService.SessionAssetLedgerView view = service()
                 .findSessionFamilyLedger("session-bybit-mnt", "FAMILY:MNT")
@@ -1179,8 +1191,11 @@ class AssetLedgerQueryServiceTest {
         )).thenReturn(List.of());
         when(normalizedTransactionRepository.findAllById(any())).thenReturn(List.of());
         when(mongoOperations.find(any(), eq(OnChainBalance.class))).thenReturn(List.of());
-        lenient().when(bybitLiveBalanceService.getUmbrellaBalances("bybit-int-33625378"))
-                .thenReturn(Map.of("LDO", new BigDecimal("500")));
+        lenient().when(bybitLiveBalanceService.getSnapshotView("bybit-int-33625378"))
+                .thenReturn(Optional.of(new BybitLiveBalanceService.LiveSnapshotView(
+                        BybitLiveBalanceService.LiveSnapshotAvailability.KNOWN_NON_EMPTY,
+                        Map.of("LDO", new BigDecimal("500")),
+                        Instant.parse("2025-06-01T00:00:00Z"))));
 
         AssetLedgerQueryService.SessionAssetLedgerView view = service()
                 .findSessionFamilyLedger("session-bybit-isolate", "FAMILY:USDT")
@@ -1335,8 +1350,11 @@ class AssetLedgerQueryServiceTest {
                         normalized("10", "Bybit", "ETH", "BUY", "1.0", "2873"),
                         normalized("11", "Bybit", "ETH", "TRANSFER", "-0.151", null)
                 ));
-        lenient().when(bybitLiveBalanceService.getUmbrellaBalances("bybit-int-33625378"))
-                .thenReturn(Map.of("ETH", new BigDecimal("1.0")));
+        lenient().when(bybitLiveBalanceService.getSnapshotView("bybit-int-33625378"))
+                .thenReturn(Optional.of(new BybitLiveBalanceService.LiveSnapshotView(
+                        BybitLiveBalanceService.LiveSnapshotAvailability.KNOWN_NON_EMPTY,
+                        Map.of("ETH", new BigDecimal("1.0")),
+                        Instant.parse("2025-06-01T00:00:00Z"))));
 
         AssetLedgerQueryService.SessionAssetLedgerView view = service()
                 .findSessionFamilyLedger("session-earn-carry", "FAMILY:ETH")

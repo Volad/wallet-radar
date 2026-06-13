@@ -25,6 +25,32 @@ class ReplayPendingTransferKeyFactoryTest {
     private final ReplayPendingTransferKeyFactory factory = new ReplayPendingTransferKeyFactory(assetSupport);
 
     @Test
+    @DisplayName("supplemental LINKED inbound on BRIDGE_IN shares bridge queue with supplemental LI.FI source")
+    void supplementalLinkedInboundUsesSupplementalBridgeQueue() {
+        String supplementalSource = "0x585aefbf6646c0b978a6ea4e1dc1dd411e28dd394fef7100932a61d24cf53a3b";
+        NormalizedTransaction destination = baseTransaction(NormalizedTransactionType.BRIDGE_IN);
+        destination.setCorrelationId("bridge:lifi:0x8b471042fca30390a7d9b4a41463c01c2059b37df2d064cecc588a564e2ee032");
+        destination.setContinuityCandidate(false);
+        NormalizedTransaction.Flow ethInbound = transferFlow("ETH", null, "0.013689");
+        ethInbound.setCounterpartyAddress("LINKED:" + supplementalSource);
+        destination.setFlows(new ArrayList<>(List.of(ethInbound)));
+
+        NormalizedTransaction supplementalOut = baseTransaction(NormalizedTransactionType.BRIDGE_OUT);
+        supplementalOut.setCorrelationId("bridge:lifi:" + supplementalSource);
+        supplementalOut.setContinuityCandidate(true);
+        NormalizedTransaction.Flow wethOut = transferFlow("WETH", "0xdeadbeef", "-0.01371");
+        supplementalOut.setFlows(List.of(wethOut));
+
+        var inboundKey = factory.bridgeTransferKey(destination, ethInbound);
+        var outboundKey = factory.bridgeTransferKey(supplementalOut, wethOut);
+
+        assertThat(inboundKey).isNotNull();
+        assertThat(outboundKey).isNotNull();
+        assertThat(inboundKey).isEqualTo(outboundKey);
+        assertThat(inboundKey.value()).contains("bridge:lifi:" + supplementalSource.toLowerCase());
+    }
+
+    @Test
     @DisplayName("LP_ENTRY: all source legs and the receipt share the lp:<lpReceiptIdentity> continuity bucket")
     void lpEntryRoutesAllLegsToCompositeBucket() {
         NormalizedTransaction lpEntry = lpEntryTransaction();

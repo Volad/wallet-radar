@@ -15,6 +15,7 @@ public class BybitIntegrationProperties {
     private String baseUrl = "https://api.bybit.com";
     private long recvWindowMs = 10_000L;
     private long requestTimeoutMs = 15_000L;
+    private long liveBalanceRefreshIntervalMs = 300_000L;
     private int transactionLogWindowDays = 7;
     private int executionWindowDays = 7;
     private int fundingHistoryWindowDays = 7;

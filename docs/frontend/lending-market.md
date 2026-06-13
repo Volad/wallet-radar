@@ -51,7 +51,28 @@ Route `/` shows **simplified** inline lending summary from dashboard API (`lendi
 
 - Clean cycles open on first supply/deposit only
 - Aave: concurrent cycles per market; Fluid/Morpho/Euler/Compound: vault/account keyed
+- Euler EVK: per-vault market key `evk-vault-{address[2..10]}` (see ADR-025)
 - Cycle PnL = lending yield only (interest − gas), gated separately from total valuation
+
+## Yield and APR semantics
+
+| Signal | Source | Precision |
+|--------|--------|-----------|
+| Supply income (closed) | Sum of `BUY` flows on `LENDING_WITHDRAW` only | `ESTIMATED` when present |
+| Supply income (no BUY) | — | `UNAVAILABLE`, reason `NO_YIELD_FLOW_EVIDENCE` |
+| Factual supply APR | `withdrawYield / openingDeposit / durationYears` | `ESTIMATED` or `UNAVAILABLE` |
+| Internal receipt exit APR | `principalOutCash − openingDeposit` when share internal movement | `ESTIMATED` |
+| Factual borrow APR (open) | `(currentDebt − borrowed) / borrowed / duration` | `ESTIMATED` |
+| Factual borrow APR (closed) | `(repaid − borrowed) / borrowed / duration` | `ESTIMATED` |
+
+Never display `$0` yield when evidence is absent — use `UNAVAILABLE`.
+
+## Health factor
+
+| Source | When |
+|--------|------|
+| `LIVE_PROTOCOL` | Fresh snapshot from Aave V3 `getUserAccountData` (Base/Mantle, background refresh) |
+| `ACCOUNTING_ESTIMATE` | Fallback when snapshot missing or stale; `healthStale = true` |
 
 See [Lending cycle example](../examples/lending-cycle-example.md) and backend `SessionLendingQueryService`.
 

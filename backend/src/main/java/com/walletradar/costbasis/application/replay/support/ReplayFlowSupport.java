@@ -90,6 +90,19 @@ public class ReplayFlowSupport {
         genericFlowReplayEngine.applyInboundShortfallSpotFallback(flow, position, before);
     }
 
+    /**
+     * F-5(a): transaction-aware inbound spot fallback — enables market-at-timestamp basis recovery
+     * for corridor/bridge/staking inflows that arrive without a flow price or a paired carry source.
+     */
+    public void applyInboundShortfallSpotFallback(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow,
+            PositionState position,
+            PositionSnapshot before
+    ) {
+        genericFlowReplayEngine.applyInboundShortfallSpotFallback(transaction, flow, position, before);
+    }
+
     public void applyAuthoritativeLateInboundCarryBasis(
             PositionState destination,
             BigDecimal provisionalBasisUsd,
@@ -98,6 +111,41 @@ public class ReplayFlowSupport {
         genericFlowReplayEngine.applyAuthoritativeLateInboundCarryBasis(
                 destination,
                 provisionalBasisUsd,
+                carryBasisUsd
+        );
+    }
+
+    /**
+     * R-3*: applies the USD-stablecoin peg floor to a carried basis before it lands on a position
+     * via the bridge / pending-late-attach path. Delegates to
+     * {@link GenericFlowReplayEngine#pegFlooredStablecoinCarryBasis}.
+     */
+    public BigDecimal pegFlooredStablecoinCarryBasis(
+            com.walletradar.costbasis.application.replay.model.AssetKey assetKey,
+            BigDecimal coveredQuantity,
+            BigDecimal carryBasisUsd
+    ) {
+        return genericFlowReplayEngine.pegFlooredStablecoinCarryBasis(
+                assetKey,
+                coveredQuantity,
+                carryBasisUsd
+        );
+    }
+
+    /**
+     * U-3: applies the USD-stablecoin peg cap to a same-asset continuity carry basis (symmetric peer
+     * of {@link #pegFlooredStablecoinCarryBasis}). Delegates to
+     * {@link GenericFlowReplayEngine#pegCappedStablecoinCarryBasis}. Callers must only invoke this on
+     * confirmed same-asset stablecoin carries (no cross-asset basis), never on cross-asset LP exits.
+     */
+    public BigDecimal pegCappedStablecoinCarryBasis(
+            com.walletradar.costbasis.application.replay.model.AssetKey assetKey,
+            BigDecimal coveredQuantity,
+            BigDecimal carryBasisUsd
+    ) {
+        return genericFlowReplayEngine.pegCappedStablecoinCarryBasis(
+                assetKey,
+                coveredQuantity,
                 carryBasisUsd
         );
     }

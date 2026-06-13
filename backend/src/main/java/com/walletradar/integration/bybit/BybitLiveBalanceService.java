@@ -31,13 +31,13 @@ import java.util.Optional;
  * Bybit holdings.
  *
  * <p>Cache strategy: in-memory {@link CachedSnapshot} keyed by {@code integrationId} with a configurable
- * TTL ({@link #SNAPSHOT_TTL}). When the dashboard requests an umbrella balance map, the service either
- * returns the cached snapshot (if fresh) or re-fetches from the Bybit API and re-persists to Mongo.</p>
+ * TTL ({@link #SNAPSHOT_TTL}). Dashboard reads use {@link #getOrFetch(String)} only — they return the
+ * cached snapshot when fresh, otherwise the last persisted Mongo snapshot. Live API refresh is handled
+ * by {@link BybitLiveBalanceRefreshJob} and {@link #refresh(String)} so HTTP requests never block on
+ * Bybit network latency.</p>
  *
- * <p>If credentials are unavailable, the API call fails, or the API key has been revoked, the service
- * gracefully returns the last-persisted snapshot ({@code bybit_live_balances} collection) so the
- * dashboard never blocks on a live network round-trip. When no persisted snapshot exists either, an
- * empty map is returned and clamping is effectively disabled for that integration.</p>
+ * <p>When no cached or persisted snapshot exists, an empty map is returned and clamping is effectively
+ * disabled for that integration until the background job succeeds.</p>
  */
 @Service
 @RequiredArgsConstructor
@@ -65,6 +65,49 @@ public class BybitLiveBalanceService {
         return snapshot == null ? Map.of() : Collections.unmodifiableMap(snapshot.umbrella());
     }
 
+    public enum LiveSnapshotAvailability {
+        UNKNOWN,
+        KNOWN_EMPTY,
+        KNOWN_NON_EMPTY
+    }
+
+    public record LiveSnapshotView(
+            LiveSnapshotAvailability availability,
+            Map<String, BigDecimal> umbrella,
+            Instant fetchedAt
+    ) {}
+
+    /**
+     * Returns snapshot availability for dashboard / asset-ledger clamping. Distinguishes a successful
+     * zero-balance fetch from a missing snapshot.
+     */
+    public Optional<LiveSnapshotView> getSnapshotView(String integrationId) {
+        return getOrFetch(integrationId).map(snapshot -> {
+            if (isEmptyUmbrellaTombstone(integrationId, snapshot)) {
+                return new LiveSnapshotView(LiveSnapshotAvailability.KNOWN_EMPTY, Map.of(), snapshot.fetchedAt());
+            }
+            if (snapshot.umbrella() == null || snapshot.umbrella().isEmpty()) {
+                return new LiveSnapshotView(LiveSnapshotAvailability.UNKNOWN, Map.of(), snapshot.fetchedAt());
+            }
+            return new LiveSnapshotView(
+                    LiveSnapshotAvailability.KNOWN_NON_EMPTY,
+                    Collections.unmodifiableMap(snapshot.umbrella()),
+                    snapshot.fetchedAt()
+            );
+        });
+    }
+
+    private boolean isEmptyUmbrellaTombstone(String integrationId, BybitApiClient.LiveBybitBalances snapshot) {
+        if (snapshot.umbrella() != null && !snapshot.umbrella().isEmpty()) {
+            return false;
+        }
+        return mongoOperations.exists(
+                Query.query(Criteria.where("integrationId").is(integrationId)
+                        .and("assetSymbol").is(BybitLiveBalance.EMPTY_UMBRELLA_SYMBOL)),
+                BybitLiveBalance.class
+        );
+    }
+
     /**
      * Returns the underlying snapshot with per-sub-account detail, refreshing if stale. Empty when no
      * snapshot can be produced (no integration, no credentials, persistent API failures).
@@ -77,10 +120,6 @@ public class BybitLiveBalanceService {
         Instant now = Instant.now();
         if (cached != null && cached.fetchedAt.isAfter(now.minus(SNAPSHOT_TTL))) {
             return Optional.of(cached.snapshot);
-        }
-        Optional<BybitApiClient.LiveBybitBalances> refreshed = refreshFromApi(integrationId, now);
-        if (refreshed.isPresent()) {
-            return refreshed;
         }
         return loadPersisted(integrationId);
     }
@@ -132,8 +171,16 @@ public class BybitLiveBalanceService {
         Map<String, BigDecimal> earn = new LinkedHashMap<>();
         Map<String, BigDecimal> umbrella = new LinkedHashMap<>();
         Instant fetchedAt = Instant.EPOCH;
+        boolean emptyTombstone = false;
         for (BybitLiveBalance row : persisted) {
             String symbol = row.getAssetSymbol();
+            if (BybitLiveBalance.EMPTY_UMBRELLA_SYMBOL.equals(symbol)) {
+                emptyTombstone = true;
+                if (row.getFetchedAt() != null && row.getFetchedAt().isAfter(fetchedAt)) {
+                    fetchedAt = row.getFetchedAt();
+                }
+                continue;
+            }
             if (row.getUtaQty() != null && row.getUtaQty().signum() > 0) {
                 uta.merge(symbol, row.getUtaQty(), BigDecimal::add);
             }
@@ -150,6 +197,12 @@ public class BybitLiveBalanceService {
                 fetchedAt = row.getFetchedAt();
             }
         }
+        if (emptyTombstone && umbrella.isEmpty()) {
+            return Optional.of(new BybitApiClient.LiveBybitBalances(uta, fund, earn, umbrella, fetchedAt));
+        }
+        if (umbrella.isEmpty() && !emptyTombstone) {
+            return Optional.empty();
+        }
         return Optional.of(new BybitApiClient.LiveBybitBalances(uta, fund, earn, umbrella, fetchedAt));
     }
 
@@ -158,6 +211,16 @@ public class BybitLiveBalanceService {
                 Query.query(Criteria.where("integrationId").is(integrationId)),
                 BybitLiveBalance.class
         );
+        if (snapshot.umbrella().isEmpty()) {
+            BybitLiveBalance tombstone = new BybitLiveBalance();
+            tombstone.setId(BybitLiveBalance.key(integrationId, BybitLiveBalance.EMPTY_UMBRELLA_SYMBOL));
+            tombstone.setIntegrationId(integrationId);
+            tombstone.setAssetSymbol(BybitLiveBalance.EMPTY_UMBRELLA_SYMBOL);
+            tombstone.setUmbrellaQty(BigDecimal.ZERO);
+            tombstone.setFetchedAt(snapshot.fetchedAt());
+            mongoOperations.save(tombstone);
+            return;
+        }
         for (String symbol : snapshot.umbrella().keySet()) {
             BybitLiveBalance row = new BybitLiveBalance();
             row.setId(BybitLiveBalance.key(integrationId, symbol));

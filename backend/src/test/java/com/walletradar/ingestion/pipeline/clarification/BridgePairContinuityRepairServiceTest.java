@@ -68,7 +68,10 @@ class BridgePairContinuityRepairServiceTest {
         assertThat(outbound.getFlows().getFirst().getRole()).isEqualTo(NormalizedLegRole.TRANSFER);
         assertThat(outbound.getFlows().getFirst().getUnitPriceUsd()).isNull();
         assertThat(outbound.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_STAT);
-        assertThat(inbound.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_STAT);
+        // F-1: a USD-stablecoin continuity inbound is routed to PENDING_PRICE so the replay
+        // inbound-shortfall fallback has a $1 quote for any qty continuity carry leaves uncovered
+        // (a fully-carried leg ignores it). The outbound carry leg stays PENDING_STAT.
+        assertThat(inbound.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
     }
 
     @Test

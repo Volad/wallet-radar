@@ -141,6 +141,10 @@ Each handler consumes the per-flow data, mutates the in-memory `BorrowLiabilityB
 
 The same model applies to Aave / Compound / Solana Jupiter borrowing (out of cycle/5 scope but worth fixing the abstraction). The `orderId` is replaced by the chain-side `loanId` / `positionKey`. The `accountRef` becomes `evm:<address>:<protocol>`. No schema change is required to extend the model later — the abstraction is universal.
 
+**Activation for explicit on-chain Aave loans (F-3/F-4).** On-chain `BORROW`/`REPAY` rows carry an Aave-style `variableDebt`/`stableDebt` marker leg. [`AaveDebtLoanCorrelationSupport.syntheticLoanCorrelationId`](../../backend/src/main/java/com/walletradar/ingestion/pipeline/classification/support/AaveDebtLoanCorrelationSupport.java) derives a deterministic `evm:<network>:<debtContract>:<wallet>` key so the same revolving debt position matches its borrow and repay. The debt-marker leg itself is never booked as an asset (the double-subtract guard in `BorrowReplayHandler`/`RepayReplayHandler`).
+
+**Activation for inferred on-chain leverage (ADR-028).** A *leveraged buy* embeds the borrow inside a SWAP and has **no** explicit debt-marker leg — the collateral simply arrives worth more than the consideration paid. The same `BorrowLiability` model is reused with no schema change: a synthetic USD liability of size `marketValue(collateral) − consideration` is recorded against a distinct `evm-lev:<network>:<collateralContract>:<wallet>` key (see [ADR-028](ADR-028-value-divergence-leverage-inference.md)). The leverage path is guarded to skip whenever a debt-marker mint is present, so F-4 and the leverage inference never both own the same liability.
+
 ## Consequences
 
 ### Positive

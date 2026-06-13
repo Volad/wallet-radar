@@ -45,6 +45,24 @@ public class HistoricalPriceCacheService {
                 .map(this::toQuote);
     }
 
+    /**
+     * F-5(a): cross-network market-at-timestamp lookup. Resolves a same-minute quote for a fungible
+     * canonical asset from any network/contract it was priced on, matched by candidate symbols.
+     */
+    public Optional<PriceQuote> findCanonicalQuote(
+            Collection<String> candidateSymbols,
+            Instant occurredAt,
+            PriceSource source
+    ) {
+        if (candidateSymbols == null || candidateSymbols.isEmpty() || occurredAt == null) {
+            return Optional.empty();
+        }
+        Instant bucketStart = bucketStart(occurredAt, DEFAULT_BUCKET_RESOLUTION);
+        return historicalPriceRepository
+                .findFirstBySymbolInAndBucketStartAndSource(candidateSymbols, bucketStart, source)
+                .map(this::toQuote);
+    }
+
     public HistoricalPriceDocument storeQuote(PriceRequest request, PriceQuote quote) {
         return historicalPriceRepository.save(toDocument(request, quote));
     }

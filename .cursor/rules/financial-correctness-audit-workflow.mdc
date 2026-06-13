@@ -9,7 +9,7 @@ Activate when investigating or fixing broken **AVCO**, **move basis**, **cost ba
 
 ## Hard gates
 
-- Do **not** change application code before an **approved implementation plan** and **documentation updates** (`docs/03-accounting.md`, `docs/adr/`, normalization family docs as needed).
+- Do **not** change application code before an **approved implementation plan** and **documentation updates** (`docs/pipeline/cost-basis/`, `docs/pipeline/normalization/rules/`, `docs/adr/`, as needed).
 - Do **not** skip post-implementation verification.
 
 ## Phase 1 — Classify (`financial-logic-auditor`)
@@ -78,4 +78,4 @@ Verify       → prod rebuild (parent) + financial-logic-auditor
 
 - `.codex/skills/financial-logic-auditor/SKILL.md`
 - `ORCHESTRATION.md`
-- `docs/03-accounting.md`
+- `docs/pipeline/cost-basis/` and `docs/reference/ledger-points-and-basis-effects.md`

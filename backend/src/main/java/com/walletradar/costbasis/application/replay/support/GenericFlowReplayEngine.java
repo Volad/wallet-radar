@@ -1,5 +1,6 @@
 package com.walletradar.costbasis.application.replay.support;
 
+import com.walletradar.costbasis.application.replay.model.AssetKey;
 import com.walletradar.costbasis.application.replay.model.CarryTransfer;
 import com.walletradar.costbasis.application.replay.model.PositionSnapshot;
 import com.walletradar.costbasis.application.replay.model.PositionState;
@@ -21,6 +22,26 @@ import java.util.Optional;
 public class GenericFlowReplayEngine {
 
     private static final MathContext MC = MathContext.DECIMAL128;
+
+    /**
+     * R-3*: peg-floor activation threshold for carried/reallocated USD-stablecoin basis.
+     *
+     * <p>A USD-pegged stablecoin carry whose per-covered-unit basis is at or above this value is
+     * left untouched — that band covers genuine rounding / cross-asset bridge unit-conversion
+     * artifacts (e.g. a USDT→USDC LiFi settlement that conserves total basis at ~$0.9998/unit) and
+     * the residual sub-peg USDC shortfall (~$0.977) which the audit asked to keep sane. Only a
+     * carry materially below peg (the observed depressed-source signature: USDT {@code CARRY_IN}
+     * at $0.5575, {@code LENDING_WITHDRAW REALLOCATE_IN} at $0.5716, EARN carry at $0.5397) is
+     * re-pegged to $1. No major USD stablecoin has sustainably carried &gt;10% below peg outside a
+     * terminal depeg, which would arrive as a fresh priced {@code ACQUIRE} (honoured), not a carry.
+     */
+    private static final BigDecimal STABLECOIN_CARRY_PEG_FLOOR_THRESHOLD = new BigDecimal("0.90");
+
+    /**
+     * U-3: the USD-stablecoin peg unit basis ($1.00) — both the floor target and the cap ceiling.
+     * A USD-pegged stablecoin carried basis is clamped to this peg in both directions.
+     */
+    private static final BigDecimal STABLECOIN_PEG_UNIT_USD = BigDecimal.ONE;
 
     private final ReplayMarketAuthority replayMarketAuthority;
 
@@ -346,15 +367,115 @@ public class GenericFlowReplayEngine {
         if (clampedUncov.compareTo(quantity) > 0) {
             clampedUncov = quantity;
         }
+        BigDecimal coveredOfRestore = nonNegative(quantity.subtract(clampedUncov, MC));
+        BigDecimal effectiveCost = pegFlooredStablecoinCarryBasis(
+                position == null ? null : position.assetKey(), coveredOfRestore, cost);
         position.setQuantity(position.quantity().add(quantity));
         position.setUncoveredQuantity(position.uncoveredQuantity().add(clampedUncov));
-        position.setTotalCostBasisUsd(position.totalCostBasisUsd().add(cost));
+        position.setTotalCostBasisUsd(position.totalCostBasisUsd().add(effectiveCost));
         recomputePerWalletAvco(position);
         if (clampedUncov.signum() > 0 || avco == null) {
             markUnresolved(position);
-        } else if (cost.signum() > 0) {
+        } else if (effectiveCost.signum() > 0) {
             clearResolvedPositionFlags(position);
         }
+    }
+
+    /**
+     * R-3*: USD-stablecoin peg floor on carried / reallocated basis. (Symmetric peer:
+     * {@link #pegCappedStablecoinCarryBasis} adds the U-3 above-peg cap for same-asset carries.)
+     *
+     * <p>A USD-pegged stablecoin must never carry below $1 per covered unit when the basis arrives
+     * via any continuity-carry path ({@code CARRY_IN} / {@code REALLOCATE_IN} /
+     * {@code LENDING_WITHDRAW}, the Bybit FUND↔EARN↔UTA sub-ledger moves, and the bridge /
+     * pending-late-attach inbound paths). A depressed source AVCO (e.g. borrow proceeds, an
+     * on-chain USD corridor pool entering at $0.55, or a bridge inbound carried at $0.89) must not
+     * propagate a sub-peg basis through carries — otherwise the receiving sub-ledger settles below
+     * $1 (the observed {@code BYBIT:…:FUND} USDT at $0.846, or {@code BRIDGE_IN} USDC at $0.8874)
+     * and disposals book a fabricated gain.
+     *
+     * <p>Scope discipline: this floors only carried / reallocated basis. Fresh sub-peg
+     * {@code ACQUIRE} legs are NOT touched (they keep their genuine acquisition price via
+     * {@link #applyBuy}). The homoglyph / confusable-symbol guard is inherited from
+     * {@link CanonicalAssetCatalog#isUsdStablecoinBySymbol} (confusable lookalikes return false),
+     * so a spoofed {@code UЅДС} can never be floored to $1.
+     *
+     * @param assetKey         destination asset key (its symbol drives the USD-stablecoin test)
+     * @param coveredQuantity  the covered (basis-backed) quantity portion of the carry
+     * @param carryBasisUsd    the carried cost basis about to be applied to the position
+     * @return {@code carryBasisUsd}, or {@code coveredQuantity × $1} when the carry is a USD
+     * stablecoin whose covered per-unit basis is materially below peg
+     */
+    public BigDecimal pegFlooredStablecoinCarryBasis(
+            AssetKey assetKey,
+            BigDecimal coveredQuantity,
+            BigDecimal carryBasisUsd
+    ) {
+        BigDecimal effectiveCost = carryBasisUsd == null ? BigDecimal.ZERO : carryBasisUsd;
+        if (assetKey == null
+                || !CanonicalAssetCatalog.isUsdStablecoinBySymbol(assetKey.assetSymbol())) {
+            return effectiveCost;
+        }
+        BigDecimal covered = coveredQuantity == null ? BigDecimal.ZERO : coveredQuantity;
+        if (covered.signum() <= 0) {
+            return effectiveCost;
+        }
+        // Activate only for carries materially below peg (covered basis < threshold × covered units),
+        // so near-peg conversion / bridge artifacts and the residual USDC shortfall stay conserved.
+        BigDecimal activationCeiling = covered.multiply(STABLECOIN_CARRY_PEG_FLOOR_THRESHOLD, MC);
+        if (effectiveCost.compareTo(activationCeiling) >= 0) {
+            return effectiveCost;
+        }
+        // Peg floor = covered units × $1.
+        return covered.multiply(STABLECOIN_PEG_UNIT_USD, MC);
+    }
+
+    /**
+     * U-3: USD-stablecoin peg <em>cap</em> on a same-asset continuity carry — the symmetric peer of
+     * the R-3* floor in {@link #pegFlooredStablecoinCarryBasis}.
+     *
+     * <p>A USD-pegged stablecoin can never carry per-unit basis above the $1 peg when it is acquired
+     * via a <b>same-asset</b> vault / lending withdrawal continuity carry ({@code VAULT_WITHDRAW} /
+     * {@code LENDING_WITHDRAW} / {@code REALLOCATE_IN} / {@code CARRY_IN} that yields the canonical
+     * stablecoin from a single-asset USD vault/lending position). ERC4626 / EVK vault-share-rate
+     * contamination (e.g. {@code FUSDC}/{@code GTUSDCC}/{@code MCUSDC}/{@code EUSDC-2} round-trips
+     * carrying USDC basis at $1.27–$3,021/unit) and yield-inflated basis are clamped down to peg, so
+     * the withdrawn stablecoin disposes at ≈$0 realised (peg in ≈ peg out). Genuine yield surfaces as
+     * quantity, never as above-peg per-unit basis.
+     *
+     * <p><b>Scope discipline (conservation):</b> the cap is applied <em>only</em> by callers that
+     * have confirmed the carry is a same-asset stablecoin continuity (no cross-asset basis carried).
+     * A cross-asset LP exit (e.g. a WETH/USDC pool fully exited as USDC, which legitimately carries
+     * the pool's combined basis above $1/unit) must NOT be capped — clamping it would destroy the
+     * cross-asset basis and fabricate a gain. The homoglyph / confusable-symbol guard and the
+     * non-stablecoin exemption are inherited from
+     * {@link CanonicalAssetCatalog#isUsdStablecoinBySymbol}.
+     *
+     * @param assetKey         destination asset key (its symbol drives the USD-stablecoin test)
+     * @param coveredQuantity  the covered (basis-backed) quantity portion of the carry
+     * @param carryBasisUsd    the carried cost basis about to be applied to the position
+     * @return {@code carryBasisUsd}, or {@code coveredQuantity × $1} when the carry is a USD
+     * stablecoin whose covered per-unit basis is above peg
+     */
+    public BigDecimal pegCappedStablecoinCarryBasis(
+            AssetKey assetKey,
+            BigDecimal coveredQuantity,
+            BigDecimal carryBasisUsd
+    ) {
+        BigDecimal effectiveCost = carryBasisUsd == null ? BigDecimal.ZERO : carryBasisUsd;
+        if (assetKey == null
+                || !CanonicalAssetCatalog.isUsdStablecoinBySymbol(assetKey.assetSymbol())) {
+            return effectiveCost;
+        }
+        BigDecimal covered = coveredQuantity == null ? BigDecimal.ZERO : coveredQuantity;
+        if (covered.signum() <= 0) {
+            return effectiveCost;
+        }
+        BigDecimal pegBasis = covered.multiply(STABLECOIN_PEG_UNIT_USD, MC);
+        if (effectiveCost.compareTo(pegBasis) > 0) {
+            return pegBasis;
+        }
+        return effectiveCost;
     }
 
     /**
@@ -392,16 +513,37 @@ public class GenericFlowReplayEngine {
             PositionState position,
             PositionSnapshot before
     ) {
+        applyInboundShortfallSpotFallback(null, flow, position, before);
+    }
+
+    /**
+     * F-5(a): promotes the basisless (uncovered) portion of an inbound TRANSFER leg to a USD basis
+     * so a zero-/sub-market-basis corridor inflow can never dilute the pooled AVCO and fabricate a
+     * later disposal gain.
+     *
+     * <p>The promotion price is, in priority order: the flow's own resolved spot price (e.g. a
+     * pegged-native CMETH receipt that already carries a market price); otherwise the
+     * market-at-timestamp resolved by {@link ReplayMarketAuthority} for the leg's block time
+     * (BRIDGE_IN / STAKING_DEPOSIT REALLOCATE_IN / INTERNAL_TRANSFER CARRY_IN / Bybit
+     * collapsed-asset carry-ins with no paired OUT source). The basis added here is recorded as
+     * provisional by the dispatcher, so a later authoritative paired carry still replaces it.</p>
+     *
+     * <p>Fail-safe: when neither a flow price nor a market-at-timestamp quote can be resolved the
+     * uncovered quantity is left untouched (flagged incomplete-history) rather than fabricating a
+     * basis — i.e. it is excluded from AVCO until a real source/price is found.</p>
+     */
+    public void applyInboundShortfallSpotFallback(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow,
+            PositionState position,
+            PositionSnapshot before
+    ) {
         if (flow == null
                 || position == null
                 || before == null
                 || flow.getRole() != NormalizedLegRole.TRANSFER
                 || flow.getQuantityDelta() == null
                 || flow.getQuantityDelta().signum() <= 0
-                || flow.getUnitPriceUsd() == null
-                || flow.getUnitPriceUsd().signum() <= 0
-                || flow.getPriceSource() == null
-                || flow.getPriceSource() == PriceSource.UNKNOWN
                 || flow.getAssetSymbol() == null) {
             return;
         }
@@ -416,7 +558,11 @@ public class GenericFlowReplayEngine {
         if (coveredPromotion.signum() <= 0) {
             return;
         }
-        BigDecimal addedBasis = coveredPromotion.multiply(flow.getUnitPriceUsd(), MC);
+        ResolvedSpotPrice resolved = resolveInboundSpotUnitPrice(transaction, flow);
+        if (resolved == null) {
+            return;
+        }
+        BigDecimal addedBasis = coveredPromotion.multiply(resolved.unitPriceUsd(), MC);
         position.setUncoveredQuantity(nonNegative(afterUncov.subtract(coveredPromotion, MC)));
         position.setTotalCostBasisUsd(position.totalCostBasisUsd().add(addedBasis, MC));
         recomputePerWalletAvco(position);
@@ -425,13 +571,42 @@ public class GenericFlowReplayEngine {
             clearResolvedPositionFlags(position);
         }
         log.info(
-                "REPLAY_INBOUND_SPOT_FALLBACK wallet={} asset={} qty={} price={} usdAdded={}",
+                "REPLAY_INBOUND_SPOT_FALLBACK wallet={} asset={} qty={} price={} authority={} usdAdded={}",
                 position.assetKey().walletAddress(),
                 flow.getAssetSymbol(),
                 coveredPromotion,
-                flow.getUnitPriceUsd(),
+                resolved.unitPriceUsd(),
+                resolved.authority(),
                 addedBasis
         );
+    }
+
+    /**
+     * Resolves the unit price for promoting an uncovered inbound TRANSFER leg: the flow's own
+     * resolved spot price first (preserves the Cycle/15 pegged-native behaviour and keeps the
+     * null-authority test path working), then a market-at-timestamp quote from the replay market
+     * authority. Returns {@code null} when no trustworthy price exists.
+     */
+    private ResolvedSpotPrice resolveInboundSpotUnitPrice(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow
+    ) {
+        if (flow.getUnitPriceUsd() != null
+                && flow.getUnitPriceUsd().signum() > 0
+                && flow.getPriceSource() != null
+                && flow.getPriceSource() != PriceSource.UNKNOWN) {
+            return new ResolvedSpotPrice(flow.getUnitPriceUsd(), "FLOW");
+        }
+        if (replayMarketAuthority != null && transaction != null) {
+            return replayMarketAuthority.resolve(transaction, flow)
+                    .filter(price -> price.unitPriceUsd() != null && price.unitPriceUsd().signum() > 0)
+                    .map(price -> new ResolvedSpotPrice(price.unitPriceUsd(), price.authority().name()))
+                    .orElse(null);
+        }
+        return null;
+    }
+
+    private record ResolvedSpotPrice(BigDecimal unitPriceUsd, String authority) {
     }
 
     /**

@@ -129,6 +129,10 @@ public class FunctionNameClassifier implements OnChainFamilyClassifier {
             return Optional.empty();
         }
 
+        if (isLendingType(type) && !hasNonFeeEconomicMovement(context.movementLegs())) {
+            return Optional.empty();
+        }
+
         return Optional.of(FamilyDecisionSupport.buildWithView(
                 context.view(),
                 type,
@@ -275,6 +279,24 @@ public class FunctionNameClassifier implements OnChainFamilyClassifier {
         return movementLegs.stream()
                 .filter(leg -> !leg.fee())
                 .anyMatch(leg -> leg.quantityDelta().signum() < 0);
+    }
+
+    private boolean isLendingType(NormalizedTransactionType type) {
+        return type == NormalizedTransactionType.LENDING_DEPOSIT
+                || type == NormalizedTransactionType.LENDING_WITHDRAW
+                || type == NormalizedTransactionType.VAULT_DEPOSIT
+                || type == NormalizedTransactionType.VAULT_WITHDRAW
+                || type == NormalizedTransactionType.BORROW
+                || type == NormalizedTransactionType.REPAY;
+    }
+
+    private boolean hasNonFeeEconomicMovement(List<RawLeg> movementLegs) {
+        if (movementLegs == null || movementLegs.isEmpty()) {
+            return false;
+        }
+        return movementLegs.stream()
+                .filter(leg -> !leg.fee())
+                .anyMatch(leg -> leg.quantityDelta() != null && leg.quantityDelta().signum() != 0);
     }
 
     private boolean isAcrossDepositV3(ProtocolRegistryEntry entry, OnChainRawTransactionView view) {

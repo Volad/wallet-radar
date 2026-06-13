@@ -226,6 +226,61 @@ class FamilyEquivalentCustodyReplayHandlerTest {
     }
 
     @Test
+    void lendingDepositCarriesFullUnderlyingBasisIntoReceiptAndConservesTotal() {
+        // F-2: ETH→aWETH (Aave Mantle supply) must carry the underlying basis into the receipt
+        // token via TRANSFER continuity. Basis is REMOVED from the underlying and RESTORED on the
+        // receipt 1:1 — conserved, never duplicated, never depressed. A depressed aToken basis
+        // (e.g. the audited $656/u vs true ~$2,664/u) is a symptom of an already-depressed source
+        // AVCO, not of this carry; this test pins the carry contract so regressions surface here.
+        NormalizedTransaction.Flow wethOut = flow(NormalizedLegRole.TRANSFER, "WETH", "-1.0");
+        NormalizedTransaction.Flow aManWethIn = flow(NormalizedLegRole.TRANSFER, "aManWETH", "1.0");
+        NormalizedTransaction transaction = transaction(NormalizedTransactionType.LENDING_DEPOSIT, wethOut, aManWethIn);
+        transaction.setBlockTimestamp(Instant.ofEpochSecond(1700000002));
+
+        String wallet = "0xf03b52e8686b962e051a6075a06b96cb8a663021";
+        AssetKey wethKey = new AssetKey(wallet, NetworkId.MANTLE, "0xweth", "WETH", "FAMILY:ETH");
+        AssetKey aWethKey = new AssetKey(wallet, NetworkId.MANTLE, "0xaweth", "aManWETH", "FAMILY:ETH");
+
+        when(assetSupport.assetKey(transaction, wethOut)).thenReturn(wethKey);
+        when(assetSupport.assetKey(transaction, aManWethIn)).thenReturn(aWethKey);
+        when(assetSupport.assetIdentity(transaction, wethOut)).thenReturn("MANTLE:WETH");
+        when(assetSupport.assetIdentity(transaction, aManWethIn)).thenReturn("MANTLE:aManWETH");
+
+        List<AssetLedgerPoint> collected = new ArrayList<>();
+        LedgerPointCollector collector = new LedgerPointCollector("test-universe", collected, Instant.now());
+        ReplayExecutionState replayState = new ReplayExecutionState(
+                com.walletradar.costbasis.application.replay.model.PassThroughCorridorPlan.empty(),
+                collector
+        );
+
+        // Seed the source WETH position with a genuine $2,664/u lot (1.0 unit, $2,664 basis).
+        com.walletradar.costbasis.application.replay.model.PositionState wethPosition = replayState.position(wethKey);
+        wethPosition.setQuantity(new BigDecimal("1.0"));
+        wethPosition.setTotalCostBasisUsd(new BigDecimal("2664.00"));
+        wethPosition.setPerWalletAvco(new BigDecimal("2664.00"));
+
+        IndexedFlow outboundIndexed = new IndexedFlow(0, wethOut);
+        IndexedFlow inboundIndexed = new IndexedFlow(1, aManWethIn);
+        SimpleFamilyCustodySelection selection = new SimpleFamilyCustodySelection(
+                List.of(new SimpleFamilyCustodyPair(outboundIndexed, inboundIndexed)),
+                Map.of(0, outboundIndexed, 1, inboundIndexed)
+        );
+
+        handler.applySelected(transaction, selection, replayState);
+
+        com.walletradar.costbasis.application.replay.model.PositionState aWethPosition = replayState.position(aWethKey);
+        // Receipt inherits the FULL underlying basis — not a depressed fraction.
+        assertThat(aWethPosition.totalCostBasisUsd()).isEqualByComparingTo(new BigDecimal("2664.00"));
+        assertThat(aWethPosition.quantity()).isEqualByComparingTo(new BigDecimal("1.0"));
+        assertThat(aWethPosition.perWalletAvco()).isEqualByComparingTo(new BigDecimal("2664.00"));
+        // Underlying basis is fully removed (conserved, not duplicated).
+        assertThat(wethPosition.totalCostBasisUsd()).isEqualByComparingTo(BigDecimal.ZERO);
+        // Total basis across both buckets is conserved.
+        assertThat(aWethPosition.totalCostBasisUsd().add(wethPosition.totalCostBasisUsd()))
+                .isEqualByComparingTo(new BigDecimal("2664.00"));
+    }
+
+    @Test
     void vaultWithdrawWithEmptyPoolStillProducesReallocationNotAcquire() {
         // Confirm the ACQUIRE fallback does NOT fire for VAULT_WITHDRAW — only for
         // PROTOCOL_CUSTODY_WITHDRAW. Scoping guard must remain strict.

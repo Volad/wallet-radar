@@ -27,6 +27,30 @@ class BridgePairLinkSupportTest {
     }
 
     @Test
+    void retagSupplementalInboundFlowRetagsMatchedEthLegOnly() {
+        NormalizedTransaction destination = new NormalizedTransaction();
+        destination.setType(NormalizedTransactionType.BRIDGE_IN);
+        NormalizedTransaction.Flow stable = flowWithRole(NormalizedLegRole.TRANSFER, "USD₮0", "862.833378");
+        NormalizedTransaction.Flow eth = flowWithRole(NormalizedLegRole.BUY, "ETH", "0.013689");
+        eth.setUnitPriceUsd(new BigDecimal("2500"));
+        destination.setFlows(java.util.List.of(stable, eth));
+
+        boolean changed = BridgePairLinkSupport.retagSupplementalInboundFlow(
+                destination,
+                eth,
+                "0x585aefbf6646c0b978a6ea4e1dc1dd411e28dd394fef7100932a61d24cf53a3b",
+                Instant.now()
+        );
+
+        assertThat(changed).isTrue();
+        assertThat(eth.getRole()).isEqualTo(NormalizedLegRole.TRANSFER);
+        assertThat(eth.getUnitPriceUsd()).isNull();
+        assertThat(eth.getCounterpartyAddress())
+                .isEqualTo("LINKED:0x585aefbf6646c0b978a6ea4e1dc1dd411e28dd394fef7100932a61d24cf53a3b");
+        assertThat(stable.getRole()).isEqualTo(NormalizedLegRole.TRANSFER);
+    }
+
+    @Test
     void bridgeOutPositiveTransferFlowRevertedToBuyToPreventCarryIn() {
         NormalizedTransaction bridgeOut = new NormalizedTransaction();
         bridgeOut.setType(NormalizedTransactionType.BRIDGE_OUT);

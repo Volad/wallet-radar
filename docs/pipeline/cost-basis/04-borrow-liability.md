@@ -18,6 +18,14 @@ Composite key:
 compositeId = universeId + ":" + orderId
 ```
 
+The `orderId` namespace is shared across loan sources and kept disjoint by prefix:
+
+| Source | `orderId` form |
+|--------|----------------|
+| Bybit crypto loan | provider numeric order id |
+| On-chain Aave BORROW/REPAY (F-3/F-4) | `evm:<network>:<debtContract>:<wallet>` |
+| Inferred on-chain leveraged buy (ADR-028) | `evm-lev:<network>:<collateralContract>:<wallet>` |
+
 | Field | Purpose |
 |-------|---------|
 | `orderId` | Provider loan order identifier |
@@ -83,6 +91,17 @@ sequenceDiagram
 
 Zero-PnL roundtrip: when repay matches open borrow, disposal uses liability AVCO — not current spot AVCO — preventing phantom gain/loss on loan closure.
 
+## Inferred on-chain leverage (ADR-028)
+
+A *leveraged buy* receives collateral worth materially more than the consideration paid, with the gap funded by an embedded borrow (Aave borrow, flash loan, or leverage/aggregator router) — and **no** debt-marker leg. It is modelled as `collateral BUY @ market spot` + a synthetic USD borrow of the value gap, reusing this same `BorrowLiability` model.
+
+- **Classification** (`LeverageAcquisitionDetector`): an acquisition-shape SWAP with borrow evidence is annotated on `metadata.leverage`. The F-4 guard skips it when a `variableDebt*`/`stableDebt*` mint is present. Evidence present but no keyable collateral contract ⇒ `PENDING_CLARIFICATION` (`LEVERAGE_BORROW_INFERENCE_REQUIRED`).
+- **Pricing** (`SwapDerivedPriceResolver`): the collateral leg of a leverage candidate skips swap-derived pricing so it resolves to market spot.
+- **Replay** (`LeverageBorrowReplayHook`, GENERIC route): records one synthetic USD liability of `marketValue(collateral) − consideration` (`asset="USD", avco=$1`) and adds no asset lot. Non-divergent acquisitions record nothing.
+- **End-of-ledger close** (`LeverageBorrowReplayHook.closeDrainedLeverageLiabilities`, called once by `AvcoReplayService` after the replay loop): the `evm-lev:` borrow has no on-chain REPAY of its own type, so it is settled by collateral drain. For each OPEN `evm-lev:` liability, the specific collateral-contract position at the leverage wallet is inspected — if drained (|qty| ≤ 1e-6 or absent) the full principal is `recordRepay`'d and the liability **CLOSES**; if still held it stays **OPEN** (genuine outstanding leverage). Explicit `evm:` Aave debts are never touched by this rule.
+
+While open, the liability offsets the collateral MtM so `ΔadjustedMtm = 0` at open — no fabricated gain. On a full round-trip the collateral disposal realises true PnL `≈ (proceeds − own-capital-in)` and the drain-close removes the liability so no phantom open liability lingers in `expectedPnl`.
+
 ## Persistence
 
 `AvcoReplayService` loads liabilities at replay start:
@@ -114,7 +133,8 @@ Borrow-liability stage scope:
 | `LENDING_LOOP_OPEN` | **Not** borrow liability — Euler loop uses share position (`EulerLoopReplayHandler`) |
 | `LENDING_LOOP_*` | No `orderId` liability book |
 | Bybit crypto loan rows | `orderId`-keyed when provider emits deterministic id |
-| `SWAP` / `TRANSFER` | No liability interaction |
+| `SWAP` (inferred leverage) | `LeverageBorrowReplayHook`: collateral BUY at market spot + one synthetic USD borrow of the value gap; **no** asset lot (ADR-028) |
+| `SWAP` / `TRANSFER` (no leverage) | No liability interaction |
 | `FEE` on loan | Priced fee; does not open liability |
 | Partial repay | `status = PARTIAL`; remaining `qtyOpen` |
 | Repay without prior borrow | `RepayMatch.liabilityFound = false`; normal SELL path |

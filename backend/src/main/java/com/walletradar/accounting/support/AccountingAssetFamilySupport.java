@@ -2,6 +2,7 @@ package com.walletradar.accounting.support;
 
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.lending.application.LendingAssetSymbolSupport;
+import com.walletradar.pricing.domain.CanonicalAssetCatalog;
 
 import java.util.Locale;
 import java.util.Map;
@@ -142,6 +143,16 @@ public final class AccountingAssetFamilySupport {
 
     public static String continuityIdentity(String assetSymbol, String assetContract) {
         String symbol = normalizeSymbol(assetSymbol);
+        // Confusable-symbol guard (F-6): a spoofed lookalike ticker (Cyrillic/Lisu/zero-width
+        // homoglyph) must never collapse into a canonical FAMILY:* bucket. Key it by its own
+        // contract (or raw symbol) so it stays an isolated, unpriced scam asset.
+        if (CanonicalAssetCatalog.isConfusableSymbol(assetSymbol)) {
+            String contract = normalizeContract(assetContract);
+            if (contract != null) {
+                return contract;
+            }
+            return symbol.isBlank() ? null : "SYMBOL:" + symbol;
+        }
         if (isLpReceiptSymbol(symbol)) {
             return FAMILY_LP_RECEIPT;
         }

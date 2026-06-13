@@ -113,7 +113,7 @@ Process only rows where:
 - `protocol-registry.json`
   - Contract address to protocol metadata
   - Use for identifying unknown contracts, verifying classifications, and adding missing entries
-- `normalization-architecture-en.md`
+- `docs/pipeline/normalization/classification-spec.md`
   - Complete classification rules and leg extraction specification
   - Read when you need to verify how a transaction should be classified
 

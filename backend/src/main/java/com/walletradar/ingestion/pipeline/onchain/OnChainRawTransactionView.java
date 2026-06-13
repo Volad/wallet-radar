@@ -69,11 +69,11 @@ public final class OnChainRawTransactionView {
     }
 
     public String fromAddress() {
-        return normalizeAddress(stringify(readTxLevelField("from", true)));
+        return normalizeAddress(coerceAddressValue(readTxLevelField("from", true)));
     }
 
     public String toAddress() {
-        return normalizeAddress(stringify(readTxLevelField("to", true)));
+        return normalizeAddress(coerceAddressValue(readTxLevelField("to", true)));
     }
 
     /**
@@ -84,9 +84,9 @@ public final class OnChainRawTransactionView {
     public String interactionToAddress() {
         Object explorerValue = readExplorerTxField("to");
         if (explorerValue != null) {
-            return normalizeAddress(stringify(explorerValue));
+            return normalizeAddress(coerceAddressValue(explorerValue));
         }
-        return normalizeAddress(stringify(readRawField("to")));
+        return normalizeAddress(coerceAddressValue(readRawField("to")));
     }
 
     public String methodId() {
@@ -117,6 +117,9 @@ public final class OnChainRawTransactionView {
 
     public String inputData() {
         String value = stringify(readTxLevelField("input", false));
+        if (value == null || value.isBlank()) {
+            value = stringify(readTxLevelField("raw_input", false));
+        }
         if (value == null) {
             return null;
         }
@@ -126,6 +129,21 @@ public final class OnChainRawTransactionView {
 
     public BigInteger rawValue() {
         return parseUnsignedInteger(readTxLevelField("value", true));
+    }
+
+    /**
+     * Block height of this transaction, or null when unavailable. Used to pin historical on-chain
+     * reads (e.g. EVK {@code convertToAssets}) to the rate that applied at the time of the transaction.
+     */
+    public Long blockNumber() {
+        BigInteger value = parseUnsignedInteger(readTxLevelField("blockNumber", false));
+        if (value == null) {
+            value = parseUnsignedInteger(readRawField("blockNumber"));
+        }
+        if (value == null || value.signum() <= 0 || value.bitLength() > 63) {
+            return null;
+        }
+        return value.longValue();
     }
 
     public BigInteger gasUsed() {
@@ -251,11 +269,11 @@ public final class OnChainRawTransactionView {
     }
 
     public String tokenTransferFrom(Document transfer) {
-        return normalizeAddress(transfer == null ? null : stringify(transfer.get("from")));
+        return normalizeAddress(coerceAddressValue(transfer == null ? null : transfer.get("from")));
     }
 
     public String tokenTransferTo(Document transfer) {
-        return normalizeAddress(transfer == null ? null : stringify(transfer.get("to")));
+        return normalizeAddress(coerceAddressValue(transfer == null ? null : transfer.get("to")));
     }
 
     public String tokenTransferContract(Document transfer) {
@@ -295,11 +313,11 @@ public final class OnChainRawTransactionView {
     }
 
     public String internalTransferFrom(Document transfer) {
-        return normalizeAddress(transfer == null ? null : stringify(transfer.get("from")));
+        return normalizeAddress(coerceAddressValue(transfer == null ? null : transfer.get("from")));
     }
 
     public String internalTransferTo(Document transfer) {
-        return normalizeAddress(transfer == null ? null : stringify(transfer.get("to")));
+        return normalizeAddress(coerceAddressValue(transfer == null ? null : transfer.get("to")));
     }
 
     public BigDecimal internalTransferQuantity(Document transfer) {
@@ -606,6 +624,26 @@ public final class OnChainRawTransactionView {
         }
         String result = value.toString().trim();
         return result.isEmpty() ? null : result;
+    }
+
+    /**
+     * Blockscout v2 encodes addresses as {@code {hash: "0x..."}} objects; legacy explorers use plain strings.
+     */
+    static String coerceAddressValue(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Document document) {
+            String hash = stringify(document.get("hash"));
+            if (hash != null) {
+                return hash;
+            }
+            hash = stringify(document.get("address_hash"));
+            if (hash != null) {
+                return hash;
+            }
+        }
+        return stringify(value);
     }
 
     private static BigInteger parseUnsignedInteger(Object value) {

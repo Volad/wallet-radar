@@ -1,6 +1,6 @@
 # ADR-017 — Timeline AVCO authority (move-basis read model)
 
-**Status:** Accepted (amended 2026-05-29 — staked ETH inclusion)  
+**Status:** Accepted (amended 2026-06-07 — LP-lock carry-forward; amended 2026-05-29 — staked ETH inclusion)  
 **Date:** 2026-05-27  
 **Context:** Cluster E — ETH family move-basis timeline showed misleading AVCO (~$1.60, ~$271k, ~$783k) while per-wallet ledger AVCO remained ~$2k–$4k.
 
@@ -25,7 +25,9 @@ For each grouped timeline event:
 1. Consider only member ledger points eligible for **spot-family timeline aggregation** (see below).
 2. Score candidates by spot-native symbol preference, basis-moving effects (`ACQUIRE`, `DISPOSE`, `CARRY_*`), non-zero `costBasisDeltaUsd`, and inbound legs.
 3. Reject read-time **outliers** (>10× median spot AVCO, or covered ratio <1% with uncovered ratio >50%).
-4. Emit `avcoKind=PRIMARY_FLOW` when a candidate survives; otherwise `avcoKind=UNAVAILABLE` (no `FAMILY_ROLLUP` on the main timeline line).
+4. Emit `avcoKind=PRIMARY_FLOW` when a candidate survives.
+5. When covered family qty drops to zero due to a basis-preserving `REALLOCATE_OUT` (LP/custody lock, no realised PnL), carry forward the last spot AVCO for the drained identity and emit `avcoKind=CARRIED_FORWARD`. This mirrors LENDING_DEPOSIT continuity (ETH→AWETH stays in `FAMILY:ETH`) while LP receipt basis lives in excluded `FAMILY:LP_RECEIPT`.
+6. Otherwise `avcoKind=UNAVAILABLE` (no `FAMILY_ROLLUP` on the main timeline line).
 
 ### Spot-family timeline aggregation filter
 

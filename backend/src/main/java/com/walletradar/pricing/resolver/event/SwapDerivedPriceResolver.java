@@ -1,6 +1,7 @@
 package com.walletradar.pricing.resolver.event;
 
 import com.walletradar.domain.common.PriceSource;
+import com.walletradar.domain.transaction.normalized.LeverageBorrowAnnotation;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
@@ -29,6 +30,13 @@ public class SwapDerivedPriceResolver implements EventLocalPriceResolver {
                 || context.flow().getRole() == NormalizedLegRole.FEE
                 || context.flow().getQuantityDelta() == null
                 || context.flow().getQuantityDelta().signum() == 0) {
+            return Optional.empty();
+        }
+        // ADR-028: the received collateral leg of an inferred leveraged buy must NOT inherit the
+        // swap-implied (depressed) consideration price — its true basis is market spot, with the
+        // value gap modelled as a synthetic borrow at replay. Skipping here lets the external
+        // market source price it.
+        if (isLeverageCollateralLeg(context)) {
             return Optional.empty();
         }
         // Guard: bail if any counterpart-role sibling shares the same canonical symbol.
@@ -85,6 +93,25 @@ public class SwapDerivedPriceResolver implements EventLocalPriceResolver {
                 firstQuote.quoteSymbol(),
                 "swap-derived-multi:" + contributingCount
         ));
+    }
+
+    /**
+     * True when the current flow is the received collateral leg (positive quantity) of a transaction
+     * annotated as a leveraged buy whose collateral matches this leg's symbol.
+     */
+    private boolean isLeverageCollateralLeg(PriceResolutionContext context) {
+        NormalizedTransaction transaction = context.transaction();
+        if (!LeverageBorrowAnnotation.isLeveragedBuy(transaction)) {
+            return false;
+        }
+        NormalizedTransaction.Flow flow = context.flow();
+        if (flow.getQuantityDelta().signum() <= 0) {
+            return false;
+        }
+        String collateralSymbol = LeverageBorrowAnnotation.collateralSymbol(transaction);
+        return collateralSymbol != null
+                && flow.getAssetSymbol() != null
+                && collateralSymbol.equalsIgnoreCase(flow.getAssetSymbol());
     }
 
     private static boolean isCounterpartRole(NormalizedTransaction.Flow current, NormalizedTransaction.Flow sibling) {

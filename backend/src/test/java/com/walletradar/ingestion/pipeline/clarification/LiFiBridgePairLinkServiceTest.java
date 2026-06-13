@@ -273,13 +273,13 @@ class LiFiBridgePairLinkServiceTest {
                 NetworkId.OPTIMISM,
                 NormalizedTransactionSource.ON_CHAIN
         )).thenReturn(List.of());
-        when(liFiReceivingTransactionDiscoveryService.findOrDiscover(any())).thenReturn(Optional.of(destination));
+        when(liFiReceivingTransactionDiscoveryService.findOrDiscover(any(), any())).thenReturn(Optional.of(destination));
 
         int changed = service.reconcileOutstandingSources(25);
 
         assertThat(changed).isEqualTo(1);
         verify(liFiStatusGateway, never()).fetchBridgeStatus(any());
-        verify(liFiReceivingTransactionDiscoveryService).findOrDiscover(any());
+        verify(liFiReceivingTransactionDiscoveryService).findOrDiscover(any(), any());
         assertThat(destination.getType()).isEqualTo(NormalizedTransactionType.BRIDGE_IN);
         assertThat(destination.getMatchedCounterparty()).isEqualTo(source.getTxHash());
     }
@@ -370,8 +370,8 @@ class LiFiBridgePairLinkServiceTest {
     }
 
     @Test
-    @DisplayName("later LI.FI source cannot overwrite an already materialized reciprocal destination pair")
-    void laterLiFiSourceCannotOverwriteAlreadyMaterializedReciprocalDestinationPair() {
+    @DisplayName("later LI.FI supplemental source anchors to already-paired destination without overwriting principal pair")
+    void laterLiFiSupplementalSourceAnchorsToAlreadyPairedDestinationWithoutOverwritingPrincipalPair() {
         RawTransaction principalSourceRaw = sourceRawTransaction(
                 "0x8b471042fca30390a7d9b4a41463c01c2059b37df2d064cecc588a564e2ee032",
                 NetworkId.MANTLE
@@ -397,6 +397,10 @@ class LiFiBridgePairLinkServiceTest {
                 "0xdeaddeaddeaddeaddeaddeaddeaddeaddead1111",
                 "-0.01371"
         );
+        topUpSource.setFlows(new java.util.ArrayList<>(List.of(
+                topUpSource.getFlows().getFirst(),
+                flow(NormalizedLegRole.TRANSFER, "MNT", null, "-0.015747975859123965")
+        )));
         topUpSource.setBlockTimestamp(Instant.parse("2025-09-29T12:15:52Z"));
         topUpSource.setTransactionIndex(2);
 
@@ -431,6 +435,7 @@ class LiFiBridgePairLinkServiceTest {
                 NetworkId.ARBITRUM,
                 NormalizedTransactionSource.ON_CHAIN
         )).thenReturn(List.of(destination));
+        lenient().when(rawTransactionRepository.findById(topUpSource.getId())).thenReturn(Optional.of(topUpSourceRaw));
 
         service.link(principalSourceRaw, principalSource);
         service.link(topUpSourceRaw, topUpSource);
@@ -441,11 +446,18 @@ class LiFiBridgePairLinkServiceTest {
                 .extracting(NormalizedTransaction.Flow::getRole, NormalizedTransaction.Flow::getAssetSymbol)
                 .containsExactly(
                         tuple(NormalizedLegRole.TRANSFER, "USD₮0"),
-                        tuple(NormalizedLegRole.BUY, "ETH")
+                        tuple(NormalizedLegRole.TRANSFER, "ETH")
                 );
         assertThat(principalSource.getMatchedCounterparty()).isEqualTo(destination.getTxHash());
-        assertThat(topUpSource.getMatchedCounterparty()).isNull();
-        assertThat(topUpSource.getCorrelationId()).isNull();
+        assertThat(topUpSource.getMatchedCounterparty()).isEqualTo(destination.getTxHash());
+        assertThat(topUpSource.getCorrelationId()).isEqualTo("bridge:lifi:" + topUpSource.getTxHash());
+        assertThat(topUpSource.getContinuityCandidate()).isTrue();
+        NormalizedTransaction.Flow ethInbound = destination.getFlows().stream()
+                .filter(flow -> "ETH".equals(flow.getAssetSymbol()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(ethInbound.getCounterpartyAddress())
+                .isEqualTo("LINKED:" + topUpSource.getTxHash().toLowerCase());
     }
 
     @Test
@@ -567,12 +579,12 @@ class LiFiBridgePairLinkServiceTest {
                 NetworkId.OPTIMISM,
                 NormalizedTransactionSource.ON_CHAIN
         )).thenReturn(List.of());
-        when(liFiReceivingTransactionDiscoveryService.findOrDiscover(any()))
+        when(liFiReceivingTransactionDiscoveryService.findOrDiscover(any(), any()))
                 .thenReturn(Optional.of(destination));
 
         service.link(sourceRaw, source);
 
-        verify(liFiReceivingTransactionDiscoveryService).findOrDiscover(any());
+        verify(liFiReceivingTransactionDiscoveryService).findOrDiscover(any(), any());
         assertThat(destination.getType()).isEqualTo(NormalizedTransactionType.BRIDGE_IN);
         assertThat(destination.getMatchedCounterparty()).isEqualTo(source.getTxHash());
     }
@@ -613,7 +625,7 @@ class LiFiBridgePairLinkServiceTest {
                 NetworkId.OPTIMISM,
                 NormalizedTransactionSource.ON_CHAIN
         )).thenReturn(List.of());
-        when(liFiReceivingTransactionDiscoveryService.findOrDiscover(any())).thenReturn(Optional.empty());
+        when(liFiReceivingTransactionDiscoveryService.findOrDiscover(any(), any())).thenReturn(Optional.empty());
 
         service.link(sourceRaw, source);
 
@@ -680,12 +692,12 @@ class LiFiBridgePairLinkServiceTest {
                 NetworkId.BASE,
                 NormalizedTransactionSource.ON_CHAIN
         )).thenReturn(List.of(unknownDestination));
-        when(liFiReceivingTransactionDiscoveryService.findOrDiscover(any())).thenReturn(Optional.empty());
+        when(liFiReceivingTransactionDiscoveryService.findOrDiscover(any(), any())).thenReturn(Optional.empty());
 
         service.link(sourceRaw, source);
 
         verify(rawTransactionRepository).save(sourceRaw);
-        verify(liFiReceivingTransactionDiscoveryService).findOrDiscover(any());
+        verify(liFiReceivingTransactionDiscoveryService).findOrDiscover(any(), any());
         verify(normalizedTransactionRepository).save(source);
         verify(normalizedTransactionRepository, never()).saveAll(any());
         assertThat(source.getMatchedCounterparty()).isEqualTo(unknownDestination.getTxHash());
@@ -719,7 +731,7 @@ class LiFiBridgePairLinkServiceTest {
 
         service.link(sourceRaw, source);
 
-        verify(liFiReceivingTransactionDiscoveryService, never()).findOrDiscover(any());
+        verify(liFiReceivingTransactionDiscoveryService, never()).findOrDiscover(any(), any());
         verify(normalizedTransactionRepository, never()).saveAll(any());
         assertThat(source.getMatchedCounterparty()).isNull();
         assertThat(source.getContinuityCandidate()).isNull();

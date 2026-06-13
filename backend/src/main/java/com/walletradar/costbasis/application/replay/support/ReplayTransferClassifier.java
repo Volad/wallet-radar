@@ -24,6 +24,16 @@ public class ReplayTransferClassifier {
         if (transaction == null || flow == null || flow.getRole() == NormalizedLegRole.FEE) {
             return false;
         }
+        // BRIDGE_OUT/IN: only the TRANSFER-role flow carries continuity basis.
+        // BUY/SELL incidental flows (e.g. dust refunds, protocol adjustments) must fall through
+        // to normal BUY/SELL handling — they must NOT steal the carry queue slot meant for the
+        // actual paired destination transaction, which would cause a phantom CARRY_IN on the
+        // source network and leave the destination with a stale provisional/market-price basis.
+        if ((transaction.getType() == NormalizedTransactionType.BRIDGE_OUT
+                || transaction.getType() == NormalizedTransactionType.BRIDGE_IN)
+                && flow.getRole() != NormalizedLegRole.TRANSFER) {
+            return false;
+        }
         if (Boolean.TRUE.equals(transaction.getContinuityCandidate())
                 && ((transaction.getCorrelationId() != null && !transaction.getCorrelationId().isBlank())
                 || (transaction.getTxHash() != null && !transaction.getTxHash().isBlank()))

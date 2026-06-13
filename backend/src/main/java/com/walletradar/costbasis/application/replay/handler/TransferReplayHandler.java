@@ -53,6 +53,18 @@ public class TransferReplayHandler {
      */
     private static final BigDecimal EARN_BUNDLE_PARTIAL_LEG_THRESHOLD = new BigDecimal("0.001");
 
+    /**
+     * R-1*: Coverage ratio used by {@link #resolveCarrySourcePosition} to decide whether a
+     * carry-source position can supply an outbound transfer. The stripped UID umbrella often
+     * retains only a dust residue (e.g. 0.00007969 cmETH) after prior collapsed legs, while the
+     * real inventory sits on the {@code :FUND} sub-account. A qty-only "non-empty" test treats
+     * that dust as inventory and drains it (carrying ~$0), so the inbound leg restores almost
+     * entirely uncovered and FAMILY:ETH AVCO collapses. A position is considered to cover the
+     * transfer only when it holds at least this fraction of the moved quantity, which tolerates
+     * sub-unit fee rounding while rejecting dust residues.
+     */
+    private static final BigDecimal CARRY_SOURCE_COVERAGE_RATIO = new BigDecimal("0.999");
+
     private final ReplayFlowSupport flowSupport;
     private final ContinuityCarryService continuityCarryService;
     private final ReplayPendingTransferKeyFactory keyFactory;
@@ -92,18 +104,34 @@ public class TransferReplayHandler {
         if (classifier.isFamilyEquivalentCustodyTransfer(transaction, flow)) {
             ContinuityBucket bucket = replayState.continuity().bucket(keyFactory.continuityKey(transaction, flow));
             if (flow.getQuantityDelta().signum() < 0) {
+                // R-1: Bybit collapsed FUND-side staking / EARN custody deposits (e.g. ETH→METH
+                // STAKING_DEPOSIT, FUND↔EARN reallocations) resolve their position key to the UID
+                // umbrella, but the ETH-family principal inventory frequently sits on the :FUND
+                // sub-account (credited by UTA→FUND collapsed inbound and EARN→FUND redemption).
+                // Draining the empty umbrella mints the staking receipt at $0; instead drain the
+                // sub-account that actually holds the inventory so the staked-principal AVCO is
+                // carried into the receipt (conserved: basis leaves the source, the receipt-in
+                // leg restores it). Mirrors the generic-transfer carry-source fallback used for
+                // the corridor/venue-internal path below.
+                PositionState carrySource = resolveCarrySourcePosition(
+                        transaction, position, replayState, false, flow.getQuantityDelta().abs());
+                boolean redirectedToInventory = carrySource != position;
                 continuityCarryService.moveToBucket(
                         continuityCarryService.removeTransferCarry(
                                 transaction,
                                 flow,
                                 flowIndex,
-                                position,
+                                carrySource,
                                 replayState.passThroughCorridorPlan(),
-                                replayState.reservedPassThroughCarries()
+                                replayState.reservedPassThroughCarries(),
+                                redirectedToInventory
                         ),
                         bucket
                 );
-                flowSupport.purgeOrphanBasisWhenEmpty(position);
+                flowSupport.purgeOrphanBasisWhenEmpty(carrySource);
+                if (redirectedToInventory) {
+                    flowSupport.purgeOrphanBasisWhenEmpty(position);
+                }
                 return flowSupport.continuityBasisEffect(transaction, flow);
             }
             // PROTOCOL_CUSTODY_WITHDRAW with no matching deposit (empty bucket): the deposit
@@ -170,7 +198,7 @@ public class TransferReplayHandler {
             // inventory, falls back to umbrella BYBIT:UID so the proportional-carry override fires
             // correctly (ADR-019 Rule 1, B-BYBIT-CORRIDOR-2 sub-pattern A fix).
             PositionState carrySource = resolveCarrySourcePosition(
-                    transaction, position, replayState, corridorTransfer);
+                    transaction, position, replayState, corridorTransfer, flow.getQuantityDelta().abs());
             BigDecimal corridorOutboundSliceAvco = corridorTransfer
                     ? derivePositionAvco(carrySource)
                     : null;
@@ -273,10 +301,19 @@ public class TransferReplayHandler {
                     effectiveCarry,
                     replayState
             );
+            // U-3: a matched same-asset continuity inbound (CARRY_IN / REALLOCATE_IN / cross-denomination
+            // vault-share→underlying restore such as a VAULT_WITHDRAW / LENDING_WITHDRAW) must not let a
+            // USD stablecoin inherit per-unit basis above the $1 peg. ERC4626 / lending share-rate
+            // contamination (e.g. 500 vault shares carrying $1,000 onto 500 USDC → $2/unit) is clamped
+            // to peg so the withdrawn stablecoin disposes at ≈$0 realised.
+            BigDecimal cappedInboundBasis = flowSupport.pegCappedStablecoinCarryBasis(
+                    position.assetKey(),
+                    inboundCoveredQuantity(flow.getQuantityDelta().abs(), effectiveCarry),
+                    effectiveCarry.costBasisUsd());
             flowSupport.restoreToPosition(
                     flow.getQuantityDelta().abs(),
                     position,
-                    effectiveCarry.costBasisUsd(),
+                    cappedInboundBasis,
                     effectiveCarry.uncoveredQuantity(),
                     effectiveCarry.avco()
             );
@@ -312,6 +349,19 @@ public class TransferReplayHandler {
 
         enqueuePendingInbound(transaction, flow, flowIndex, position, replayState, transferKey);
         return flowSupport.continuityBasisEffect(transaction, flow);
+    }
+
+    /**
+     * U-3: the covered (basis-backed) destination quantity of a continuity inbound = inbound quantity
+     * minus the uncovered portion carried in. Used to size the USD-stablecoin peg cap so only the
+     * basis-backed units are clamped to peg.
+     */
+    private static BigDecimal inboundCoveredQuantity(BigDecimal inboundQuantity, CarryTransfer carry) {
+        BigDecimal uncovered = carry == null || carry.uncoveredQuantity() == null
+                ? BigDecimal.ZERO
+                : carry.uncoveredQuantity();
+        BigDecimal covered = inboundQuantity.subtract(uncovered, MC);
+        return covered.signum() < 0 ? BigDecimal.ZERO : covered;
     }
 
     /**
@@ -805,10 +855,16 @@ public class TransferReplayHandler {
         ));
         // Cycle/19: when the pending inbound was materialised with a provisional spot-basis,
         // replace it with the authoritative carry basis instead of stacking on top.
+        // R-3*: floor USD-stablecoin carries to $1/covered-unit so a depressed source pool cannot
+        // settle the destination sub-ledger below peg via this late-attach path.
         flowSupport.applyAuthoritativeLateInboundCarryBasis(
                 destination,
                 pendingInbound.provisionalBasisUsd(),
-                effectiveCarry.costBasisUsd()
+                flowSupport.pegFlooredStablecoinCarryBasis(
+                        destination.assetKey(),
+                        effectiveCarry.coveredQuantity(),
+                        effectiveCarry.costBasisUsd()
+                )
         );
         flowSupport.recomputePerWalletAvco(destination);
         if (effectiveCarry.avco() != null && destination.uncoveredQuantity().signum() == 0) {
@@ -848,10 +904,16 @@ public class TransferReplayHandler {
         CarryTransfer effectiveCarry = continuityCarryService.bridgeInboundCarry(carry, pendingInbound.quantity(), pendingInbound.assetKey());
         BigDecimal coveredResolvedQuantity = effectiveCarry.coveredQuantity();
         destination.setUncoveredQuantity(nonNegative(destination.uncoveredQuantity().subtract(coveredResolvedQuantity, MC)));
+        // R-3*: floor USD-stablecoin bridge carries to $1/covered-unit (e.g. BRIDGE_IN USDC at
+        // $0.8874) so a depressed origin pool cannot propagate a sub-peg basis across the corridor.
         flowSupport.applyAuthoritativeLateInboundCarryBasis(
                 destination,
                 pendingInbound.provisionalBasisUsd(),
-                effectiveCarry.costBasisUsd()
+                flowSupport.pegFlooredStablecoinCarryBasis(
+                        destination.assetKey(),
+                        effectiveCarry.coveredQuantity(),
+                        effectiveCarry.costBasisUsd()
+                )
         );
         flowSupport.recomputePerWalletAvco(destination);
         if (effectiveCarry.avco() != null && destination.uncoveredQuantity().signum() == 0) {
@@ -894,10 +956,15 @@ public class TransferReplayHandler {
         );
         BigDecimal coveredResolvedQuantity = effectiveCarry.coveredQuantity();
         destination.setUncoveredQuantity(nonNegative(destination.uncoveredQuantity().subtract(coveredResolvedQuantity, MC)));
+        // R-3*: floor USD-stablecoin settlement carries to $1/covered-unit (depressed-source guard).
         flowSupport.applyAuthoritativeLateInboundCarryBasis(
                 destination,
                 pendingInbound.provisionalBasisUsd(),
-                effectiveCarry.costBasisUsd()
+                flowSupport.pegFlooredStablecoinCarryBasis(
+                        destination.assetKey(),
+                        effectiveCarry.coveredQuantity(),
+                        effectiveCarry.costBasisUsd()
+                )
         );
         flowSupport.recomputePerWalletAvco(destination);
         if (effectiveCarry.avco() != null && destination.uncoveredQuantity().signum() == 0) {
@@ -1010,13 +1077,23 @@ public class TransferReplayHandler {
      *       expose the internal UTA→FUND transfer that precedes every on-chain withdrawal. When
      *       the FUND position has zero inventory at outbound time, fall back to the umbrella
      *       {@code BYBIT:UID} position so the proportional-carry override fires correctly.
+     *   <li><b>:FUND venue-internal drain (R-1 / R-1*)</b> — collapsed FUND↔UTA/EARN legs strip
+     *       {@code :FUND} to the umbrella, but the real inventory sits on the {@code :FUND}
+     *       sub-account. Drain {@code :FUND} when the umbrella cannot cover the moved quantity
+     *       (empty or dust residue) but {@code :FUND} can, so basis is conserved instead of
+     *       carrying ~$0.
      * </ul>
+     *
+     * @param outboundQuantity absolute moved quantity of the outbound leg, used to decide whether
+     *                         a candidate source actually covers the transfer (dust-safe); may be
+     *                         {@code null} for callers that do not perform coverage-based redirect.
      */
     private static PositionState resolveCarrySourcePosition(
             NormalizedTransaction transaction,
             PositionState flowPosition,
             ReplayExecutionState replayState,
-            boolean isCorridorTransfer
+            boolean isCorridorTransfer,
+            BigDecimal outboundQuantity
     ) {
         if (transaction == null || flowPosition == null || replayState == null) {
             return flowPosition;
@@ -1051,7 +1128,58 @@ public class TransferReplayHandler {
             return replayState.position(umbrellaKeyFor(flowPosition.assetKey(), umbrellaWallet));
         }
 
+        // :FUND venue-internal drain (R-1/R-3) — inverse of the corridor fallback above.
+        // Collapsed FUND→EARN and FUND→UTA outbound legs strip :FUND to the UID umbrella
+        // (BYBIT:uid) for their position key (AccountingAssetIdentitySupport.isBybitCollapsedFundSide
+        // preserves :FUND only on inbound/UTA legs). But the real inventory frequently sits on
+        // the :FUND sub-account — credited by UTA→FUND collapsed inbound, EARN→FUND redemption
+        // and on-chain deposits. When the umbrella position the drain resolved to is empty while
+        // :FUND holds inventory, drain :FUND so the basis carried into EARN/staking is the basis
+        // that actually accumulated there (conserved, realised = 0) instead of ~$0. Without this,
+        // FAMILY:ETH AVCO collapses (cmETH/mETH enter at $0) and FUND USDT settles at $0.84.
+        // Model-agnostic: spot-funded FUND inventory keeps basis on the umbrella, so when the
+        // umbrella covers the transfer this branch is skipped and the umbrella is drained as
+        // before. R-1*: the trigger is coverage of the moved quantity, not mere non-emptiness —
+        // a collapsed leg can leave a dust residue (e.g. 0.00007969 cmETH) on the umbrella that a
+        // qty-only test mistook for inventory, draining ~$0 and collapsing FAMILY:ETH AVCO.
+        // Mirrors ReplayAssetSupport.resolveSellAssetKey's cross-sub-account inventory search.
+        if (!isCorridorTransfer
+                && walletUpper.endsWith(":FUND")
+                && !positionCoversQuantity(flowPosition, outboundQuantity)) {
+            AssetKey fundKey = umbrellaKeyFor(flowPosition.assetKey(), wallet.trim());
+            if (!fundKey.equals(flowPosition.assetKey())) {
+                PositionState fundPosition = replayState.position(fundKey);
+                if (positionCoversQuantity(fundPosition, outboundQuantity)) {
+                    return fundPosition;
+                }
+                if (outboundQuantity == null && hasFundCarryInventory(fundPosition)) {
+                    return fundPosition;
+                }
+            }
+        }
+
         return flowPosition;
+    }
+
+    /**
+     * R-1*: True when {@code position} holds at least {@link #CARRY_SOURCE_COVERAGE_RATIO} of the
+     * moved quantity, i.e. it can supply the outbound transfer from real inventory rather than a
+     * dust residue. When {@code outboundQuantity} is null/zero, falls back to a plain non-empty
+     * check so legacy callers keep their previous behaviour.
+     */
+    private static boolean positionCoversQuantity(PositionState position, BigDecimal outboundQuantity) {
+        if (position == null) {
+            return false;
+        }
+        BigDecimal qty = position.quantity();
+        if (qty == null || qty.signum() <= 0) {
+            return false;
+        }
+        if (outboundQuantity == null || outboundQuantity.signum() <= 0) {
+            return true;
+        }
+        BigDecimal required = outboundQuantity.multiply(CARRY_SOURCE_COVERAGE_RATIO, MC);
+        return qty.compareTo(required) >= 0;
     }
 
     /**

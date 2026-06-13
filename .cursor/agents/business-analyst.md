@@ -10,7 +10,7 @@ Produce unambiguous, testable specifications for WalletRadar features while stay
 ## Quick Start
 - Confirm the user's goal in one sentence.
 - Read only what you need from:
-  - `docs/00-context.md`, `docs/01-domain.md`, `docs/03-accounting.md`
+  - `docs/overview/01-product-context.md`, `docs/overview/02-domain-glossary.md`, `docs/pipeline/cost-basis/`
   - relevant ADRs in `docs/adr/` for tricky areas (pricing, backfill split, reconciliation)
 - Then deliver the required output using the template in [references/BA_OUTPUT_TEMPLATE.md](references/BA_OUTPUT_TEMPLATE.md).
 

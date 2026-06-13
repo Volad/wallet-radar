@@ -50,6 +50,7 @@ class UnmatchedBridgeInboundPricingFallbackServiceTest {
     private List<NormalizedTransaction> stubbedInbounds = new ArrayList<>();
     private List<NormalizedTransaction> stubbedOutbounds = new ArrayList<>();
     private List<NormalizedTransaction> stubbedUpstream = new ArrayList<>();
+    private List<NormalizedTransaction> stubbedDestinations = new ArrayList<>();
 
     @BeforeEach
     void setUp() {
@@ -269,6 +270,41 @@ class UnmatchedBridgeInboundPricingFallbackServiceTest {
     }
 
     @Test
+    @DisplayName("supplemental LI.FI source linked on shared destination is not repriced")
+    void supplementalBridgeOutLinkedOnSharedDestinationIsNotRepriced() {
+        String supplementalHash = "0x585aefbf6646c0b978a6ea4e1dc1dd411e28dd394fef7100932a61d24cf53a3b";
+        String destinationHash = "0x826189720417ce31b983c2c7bb79f04ba4e330df80a0c016dab2bbee2fd61269";
+        NormalizedTransaction outbound = bridgeOut(
+                "bridge:lifi:" + supplementalHash,
+                "WETH",
+                "-0.5",
+                Instant.parse("2026-02-06T12:00:00Z")
+        );
+        outbound.setTxHash(supplementalHash);
+        outbound.setMatchedCounterparty(destinationHash);
+
+        NormalizedTransaction destination = bridgeIn("bridge:lifi:0xprincipal", "ETH", "100");
+        destination.setTxHash(destinationHash);
+        NormalizedTransaction.Flow linkedEthIn = new NormalizedTransaction.Flow();
+        linkedEthIn.setAssetSymbol("ETH");
+        linkedEthIn.setQuantityDelta(new BigDecimal("0.5"));
+        linkedEthIn.setRole(NormalizedLegRole.TRANSFER);
+        linkedEthIn.setCounterpartyAddress(BridgePairLinkSupport.supplementalLinkedCounterparty(supplementalHash));
+        destination.setFlows(new ArrayList<>(List.of(linkedEthIn)));
+
+        stubbedOutbounds = List.of(outbound);
+        stubbedDestinations = List.of(destination);
+        stubbedUpstream = List.of();
+
+        int processed = service.reconcileUnsupportedOutbounds();
+
+        assertThat(processed).isZero();
+        assertThat(outbound.getContinuityCandidate()).isTrue();
+        assertThat(outbound.getStatus()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        verify(normalizedTransactionRepository, never()).saveAll(any());
+    }
+
+    @Test
     @DisplayName("reprice preserves correlationId and fee leg on bridge out")
     void repricePreservesCorrelationIdAndFee() {
         NormalizedTransaction outbound = bridgeOut(
@@ -308,6 +344,9 @@ class UnmatchedBridgeInboundPricingFallbackServiceTest {
                     }
                     if (queryString.contains("walletAddress")) {
                         return new ArrayList<>(stubbedUpstream);
+                    }
+                    if (queryString.contains("txHash")) {
+                        return new ArrayList<>(stubbedDestinations);
                     }
                     return new ArrayList<>();
                 });

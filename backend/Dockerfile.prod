@@ -7,7 +7,8 @@ COPY gradle ./gradle
 COPY backend ./backend
 
 RUN chmod +x ./gradlew
-RUN ./gradlew :backend:bootJar --no-daemon -x test
+# Use the Gradle distribution baked into the base image to avoid wrapper download SSL failures in Docker builds.
+RUN gradle :backend:bootJar --no-daemon -x test --project-cache-dir /home/gradle/.gradle
 RUN find /workspace/backend/build/libs -maxdepth 1 -type f -name '*.jar' ! -name '*-plain.jar' -exec cp {} /tmp/backend.jar \;
 
 FROM eclipse-temurin:21-jre

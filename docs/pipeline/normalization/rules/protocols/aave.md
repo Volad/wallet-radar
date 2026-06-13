@@ -74,6 +74,13 @@ Current active runtime usage:
 
 ## Flow Rules
 
+- **Lending page yield evidence:** for cycle income and factual supply APR, only
+  `BUY`-role flows on `LENDING_WITHDRAW` rows count as protocol yield (underlying
+  denomination). These represent exchange-rate accretion on burned receipt tokens.
+- **Excluded from yield:** `BUY` flows on `LENDING_DEPOSIT` (pre-cycle rebasing
+  carry-over in receipt units) must not be summed into cycle income.
+- When no withdraw-time `BUY` flows exist, supply income / APR remain
+  `UNAVAILABLE` with `NO_YIELD_FLOW_EVIDENCE` — never coerced to zero.
 - reserve asset is the economic principal for borrow/repay
 - debt token mint/burn remains continuity-only
 - settlement or refund dust must not become synthetic economic legs

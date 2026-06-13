@@ -185,30 +185,80 @@
               @if (section() === 'tokens') {
                 <section class="breakdown-panel" aria-label="Allocation">
                   <header class="breakdown-head">
-                    <div>
-                      <h3>Allocation</h3>
-                      <p class="muted">Market value breakdown by network and wallet (including CEX).</p>
+                    <div class="breakdown-head-left">
+                      <h3>
+                        Allocation
+                        <span class="breakdown-total mono">{{ formatUsd(filteredTokenTotalUsd()) }}</span>
+                      </h3>
                     </div>
-                    <div class="breakdown-total mono">
-                      {{ formatUsd(filteredTokenTotalUsd()) }}
-                    </div>
+                    @if (onChainVsCexSplit().cexPct > 0) {
+                      <div class="breakdown-chain-split">
+                        <span class="breakdown-chain-onchain">On-chain {{ onChainVsCexSplit().onChainPct.toFixed(1) }}%</span>
+                        <span class="breakdown-chain-cex">CEX {{ onChainVsCexSplit().cexPct.toFixed(1) }}%</span>
+                      </div>
+                    }
                   </header>
 
-                  <div class="breakdown-grid">
-                    <div class="breakdown-card">
+                  @if (tokenUsdByNetwork().length > 0) {
+                    <div class="breakdown-bar" role="presentation">
+                      @for (row of tokenUsdByNetwork(); track row.id) {
+                        <div
+                          class="breakdown-bar-segment"
+                          [style.width.%]="row.sharePct"
+                          [style.background]="row.color"
+                          [title]="row.label + ' ' + row.sharePct.toFixed(1) + '%'"
+                        ></div>
+                      }
+                    </div>
+                  }
+
+                  <div class="breakdown-body">
+                    <div class="breakdown-column">
                       <div class="breakdown-card-title">Networks</div>
                       <div class="breakdown-list" role="list">
-                        @for (row of tokenUsdByNetwork().slice(0, 8); track row.id) {
+                        @for (row of visibleNetworksAllocation(); track row.id) {
                           <div class="breakdown-row" role="listitem">
-                            <div class="breakdown-row-meta">
-                              <span class="breakdown-icon" aria-hidden="true">{{ row.icon ?? '•' }}</span>
-                              <span class="breakdown-label">{{ row.label }}</span>
+                            <div class="breakdown-row-top">
+                              <div class="breakdown-row-meta">
+                                <span
+                                  class="breakdown-icon"
+                                  [style.border-color]="row.color"
+                                  [style.color]="row.color"
+                                  aria-hidden="true"
+                                >{{ row.icon ?? '•' }}</span>
+                                <span class="breakdown-label">{{ row.label }}</span>
+                              </div>
+                              <div class="breakdown-row-right mono">
+                                <span class="breakdown-value">{{ formatUsd(row.valueUsd) }}</span>
+                                <span class="breakdown-pct muted">{{ row.sharePct.toFixed(1) }}%</span>
+                              </div>
                             </div>
-                            <div class="breakdown-row-right mono">
-                              <span class="breakdown-value">{{ formatUsd(row.valueUsd) }}</span>
-                              <span class="breakdown-pct muted">{{ row.sharePct.toFixed(1) }}%</span>
+                            <div class="breakdown-row-bar" aria-hidden="true">
+                              <div
+                                class="breakdown-row-bar-fill"
+                                [style.width.%]="row.sharePct"
+                                [style.background]="row.color"
+                              ></div>
                             </div>
                           </div>
+                        }
+                        @if (networksAllocationMore().count > 0) {
+                          <button
+                            type="button"
+                            class="breakdown-more"
+                            [attr.aria-expanded]="networksAllocationExpanded()"
+                            (click)="toggleNetworksAllocationExpanded()"
+                          >
+                            @if (networksAllocationExpanded()) {
+                              <span class="breakdown-more-label">Show less</span>
+                            } @else {
+                              <span class="breakdown-more-label">... {{ networksAllocationMore().count }} more</span>
+                              <span class="breakdown-more-right mono">
+                                <span class="breakdown-value">{{ formatUsd(networksAllocationMore().valueUsd) }}</span>
+                                <span class="breakdown-pct muted">{{ networksAllocationMore().sharePct.toFixed(1) }}%</span>
+                              </span>
+                            }
+                          </button>
                         }
                         @if (tokenUsdByNetwork().length === 0) {
                           <div class="breakdown-empty muted">No priced positions in current scope.</div>
@@ -216,24 +266,80 @@
                       </div>
                     </div>
 
-                    <div class="breakdown-card">
-                      <div class="breakdown-card-title">Wallets</div>
+                    <div class="breakdown-divider" aria-hidden="true"></div>
+
+                    <div class="breakdown-column breakdown-column-wallets">
+                      <div class="breakdown-card-title">Wallets &amp; Accounts</div>
                       <div class="breakdown-list" role="list">
-                        @for (row of tokenUsdByWallet().slice(0, 8); track row.id) {
+                        @for (row of visibleWalletsAllocation(); track row.id) {
                           <div class="breakdown-row" role="listitem">
-                            <div class="breakdown-row-meta">
-                              <span class="breakdown-wallet-dot" aria-hidden="true"></span>
-                              <span class="breakdown-label">{{ row.label }}</span>
+                            <div class="breakdown-row-top">
+                              <div class="breakdown-row-meta">
+                                <span
+                                  class="breakdown-wallet-dot"
+                                  [style.background]="row.color"
+                                  aria-hidden="true"
+                                ></span>
+                                <span class="breakdown-label">{{ row.label }}</span>
+                              </div>
+                              <div class="breakdown-row-right mono">
+                                <span class="breakdown-value">{{ formatUsd(row.valueUsd) }}</span>
+                                <span class="breakdown-pct muted">{{ row.sharePct.toFixed(1) }}%</span>
+                              </div>
                             </div>
-                            <div class="breakdown-row-right mono">
-                              <span class="breakdown-value">{{ formatUsd(row.valueUsd) }}</span>
-                              <span class="breakdown-pct muted">{{ row.sharePct.toFixed(1) }}%</span>
+                            <div class="breakdown-row-bar" aria-hidden="true">
+                              <div
+                                class="breakdown-row-bar-fill"
+                                [style.width.%]="row.sharePct"
+                                [style.background]="row.color"
+                              ></div>
                             </div>
                           </div>
+                        }
+                        @if (walletsAllocationMore().count > 0) {
+                          <button
+                            type="button"
+                            class="breakdown-more"
+                            [attr.aria-expanded]="walletsAllocationExpanded()"
+                            (click)="toggleWalletsAllocationExpanded()"
+                          >
+                            @if (walletsAllocationExpanded()) {
+                              <span class="breakdown-more-label">Show less</span>
+                            } @else {
+                              <span class="breakdown-more-label">... {{ walletsAllocationMore().count }} more</span>
+                              <span class="breakdown-more-right mono">
+                                <span class="breakdown-value">{{ formatUsd(walletsAllocationMore().valueUsd) }}</span>
+                                <span class="breakdown-pct muted">{{ walletsAllocationMore().sharePct.toFixed(1) }}%</span>
+                              </span>
+                            }
+                          </button>
                         }
                         @if (tokenUsdByWallet().length === 0) {
                           <div class="breakdown-empty muted">No priced positions in current scope.</div>
                         }
+                      </div>
+
+                      <div class="breakdown-pnl-row">
+                        <div class="breakdown-pnl-box">
+                          <div class="breakdown-pnl-label">Unrealised</div>
+                          <div
+                            class="breakdown-pnl-value mono"
+                            [style.color]="filteredUnrealizedPnlUsd() >= 0 ? colors.green : colors.red"
+                          >
+                            {{ formatUsd(filteredUnrealizedPnlUsd()) }}
+                          </div>
+                          <div class="breakdown-pnl-sub muted">{{ formatPercent(filteredUnrealizedPnlPct()) }}</div>
+                        </div>
+                        <div class="breakdown-pnl-box">
+                          <div class="breakdown-pnl-label">Realised</div>
+                          <div
+                            class="breakdown-pnl-value mono"
+                            [style.color]="filteredRealizedPnlUsd() >= 0 ? colors.green : colors.red"
+                          >
+                            {{ formatUsd(filteredRealizedPnlUsd()) }}
+                          </div>
+                          <div class="breakdown-pnl-sub muted">all time</div>
+                        </div>
                       </div>
                     </div>
                   </div>

@@ -16,7 +16,7 @@ Implement backend changes for WalletRadar with strict role boundaries and produc
 ## Start Sequence (Mandatory)
 Always begin by scanning, in this order:
 1. `skills/` (detect role boundaries)
-2. `docs/` (tasks, ADRs, API/domain/accounting context)
+2. `docs/README.md` (wiki), `docs/tasks/`, `docs/adr/`
 3. `.cursor/rules/` (coding conventions)
 4. Existing code in affected modules
 

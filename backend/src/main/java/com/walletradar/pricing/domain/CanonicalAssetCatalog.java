@@ -196,6 +196,7 @@ public final class CanonicalAssetCatalog {
             // historical USD price (otherwise basis defaults to $0 and AVCO coverage drifts).
             Map.entry("DOGE", "dogecoin"),
             Map.entry("LTC", "litecoin"),
+            Map.entry("XRP", "ripple"),
             Map.entry("LINK", "chainlink"),
             Map.entry("LDO", "lido-dao"),
             Map.entry("ONDO", "ondo-finance"),
@@ -249,6 +250,13 @@ public final class CanonicalAssetCatalog {
             "BBSOL"
     );
 
+    /**
+     * Non-ASCII code points that are legitimately part of a canonical symbol and therefore must
+     * NOT trigger the confusable-symbol guard. {@code ₮} (U+20AE, TUGRIK SIGN) is the real glyph
+     * used by Tether's {@code USD₮0} (USDT0) ticker.
+     */
+    private static final Set<Integer> ALLOWED_NON_ASCII_CODE_POINTS = Set.of(0x20AE);
+
     private CanonicalAssetCatalog() {
     }
 
@@ -262,16 +270,34 @@ public final class CanonicalAssetCatalog {
             String assetSymbol,
             NormalizedTransactionSource source
     ) {
+        // F-1: curated stablecoin aToken / receipt aliases (e.g. AMANUSDC -> USDC) resolve $1
+        // parity even though their own contract is the receipt contract. This uses the SYMBOL_ALIASES
+        // whitelist, so a scam token whose symbol merely looks like "USDC" but whose contract is
+        // unknown is still denied (handled by the contract-first branch below).
+        if (assetSymbol != null && !isConfusableSymbol(assetSymbol)) {
+            String canonicalAlias = SYMBOL_ALIASES.get(normalizeSymbol(assetSymbol));
+            if (canonicalAlias != null && USD_STABLE_SYMBOLS.contains(canonicalAlias)) {
+                return true;
+            }
+        }
         String normalizedContract = normalizeContract(assetContract);
         if (normalizedContract != null) {
             return USD_STABLE_CONTRACTS.getOrDefault(networkId, Set.of()).contains(normalizedContract);
         }
-        return assetSymbol != null
-                && USD_STABLE_SYMBOLS.contains(normalizeSymbol(assetSymbol));
+        if (assetSymbol == null || isConfusableSymbol(assetSymbol)) {
+            return false;
+        }
+        return USD_STABLE_SYMBOLS.contains(normalizeSymbol(assetSymbol));
     }
 
     public static String canonicalMarketSymbol(String assetSymbol) {
         String normalized = normalizeSymbol(assetSymbol);
+        // A confusable lookalike (e.g. Cyrillic "UЅDС") must never be aliased onto a canonical
+        // ticker — treat it as a distinct, unpriced asset so a spoofed token cannot inherit the
+        // price, CoinGecko id, or family identity of the asset it impersonates.
+        if (isConfusableSymbol(normalized)) {
+            return normalized;
+        }
         return SYMBOL_ALIASES.getOrDefault(normalized, normalized);
     }
 
@@ -321,10 +347,35 @@ public final class CanonicalAssetCatalog {
      * when continuity carry fails.
      */
     public static boolean isPeggedNative(String assetSymbol) {
-        if (assetSymbol == null) {
+        if (assetSymbol == null || isConfusableSymbol(assetSymbol)) {
             return false;
         }
         return PEGGED_NATIVE_SYMBOLS.contains(normalizeSymbol(assetSymbol));
+    }
+
+    /**
+     * Confusable-symbol guard (F-6, business-analyst invariant).
+     *
+     * <p>Returns {@code true} when a ticker contains a non-ASCII character that is not on the
+     * legitimate allow-list ({@code ₮} for real {@code USD₮0}). Spoofed lookalikes such as Cyrillic
+     * {@code UЅDС}, Lisu {@code ꓴꓢꓓС}, Cyrillic {@code UЅDT}, or zero-width-injected variants must
+     * never be aliased to, priced as, or share family identity with the canonical USD/ETH asset
+     * they impersonate. The guard is symbol-shape based (no hard-coded scam ticker list) so a new
+     * spoofed asset class cannot silently re-breach conservation.</p>
+     */
+    public static boolean isConfusableSymbol(String assetSymbol) {
+        if (assetSymbol == null) {
+            return false;
+        }
+        String trimmed = assetSymbol.trim();
+        for (int index = 0; index < trimmed.length(); ) {
+            int codePoint = trimmed.codePointAt(index);
+            if (codePoint > 0x7F && !ALLOWED_NON_ASCII_CODE_POINTS.contains(codePoint)) {
+                return true;
+            }
+            index += Character.charCount(codePoint);
+        }
+        return false;
     }
 
     public static String normalizeContract(String contract) {
@@ -343,5 +394,50 @@ public final class CanonicalAssetCatalog {
 
     public static boolean sameCanonicalSymbol(String left, String right) {
         return Objects.equals(canonicalMarketSymbol(left), canonicalMarketSymbol(right));
+    }
+
+    /**
+     * F-5(a): returns {@code true} when a canonical asset's USD price is fungible across networks
+     * and contracts, so a market-at-timestamp quote stored under any chain's representation of the
+     * asset can be safely reused for a corridor/bridge inbound leg that arrived without a paired
+     * source basis.
+     *
+     * <p>The gate is intentionally conservative: only assets with a recognised pricing identity
+     * (a CoinGecko id, a 1:1 pegged-native receipt, or a USD-pegged stablecoin) qualify, and any
+     * confusable homoglyph ticker is rejected. This prevents a spoofed lookalike or an unknown
+     * low-cap symbol from inheriting an unrelated asset's price across networks.</p>
+     */
+    public static boolean isCrossNetworkPriceResolvable(String assetSymbol) {
+        if (assetSymbol == null || isConfusableSymbol(assetSymbol)) {
+            return false;
+        }
+        return coinGeckoId(assetSymbol).isPresent()
+                || isPeggedNative(assetSymbol)
+                || isUsdStablecoinBySymbol(assetSymbol);
+    }
+
+    /**
+     * F-5(a): ordered candidate symbols under which a cross-network market-at-timestamp quote for
+     * this asset may have been cached. The order is the leg's own symbol, then its canonical
+     * market symbol, then the wrapped-native form (e.g. {@code WETH}/{@code WMNT}) — enough to find
+     * a same-minute quote priced on any network without pulling in premium-bearing LST aliases
+     * (e.g. {@code WEETH}) that would distort the price. Empty for confusable tickers.
+     */
+    public static List<String> marketEquivalentSymbols(String assetSymbol) {
+        if (assetSymbol == null || isConfusableSymbol(assetSymbol)) {
+            return List.of();
+        }
+        String normalized = normalizeSymbol(assetSymbol);
+        if (normalized.isBlank()) {
+            return List.of();
+        }
+        String canonical = canonicalMarketSymbol(assetSymbol);
+        LinkedHashSet<String> candidates = new LinkedHashSet<>();
+        candidates.add(normalized);
+        if (!canonical.isBlank()) {
+            candidates.add(canonical);
+            candidates.add("W" + canonical);
+        }
+        return List.copyOf(candidates);
     }
 }

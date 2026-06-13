@@ -62,11 +62,18 @@ destination bridge-pair evidence for the `LI.FI / Jumper` route family.
   `RPC`-backed networks; network transport differences must not change LI.FI
   bridge semantics
 - official `receivingTxHash` alone is not enough to materialize a destination
-  row; the fetched tx must still prove real tracked-wallet relevance from
-  actual on-chain evidence:
-  - top-level `from` / `to`
-  - token transfer `from` / `to`
-  - internal transfer `from` / `to`
+  row; the fetched tx must still prove tracked-wallet relevance using the
+  evidence ladder defined in [ADR-027](/docs/adr/ADR-027-lifi-calldata-destination-discovery.md):
+  1. **`WALLET_TOUCH`** — top-level `from` / `to`, token transfer endpoints,
+     internal transfer endpoints
+  2. **`TRACE`** — positive inbound internal transfer credit in explorer raw
+  3. **`LIFI_CALLDATA`** — LiFi `apiStatus=DONE` + allowlisted settlement
+     selector (`BridgeSettlementSupport`) + beneficiary wallet decoded from
+     structured ABI address words in calldata
+- when path **`LIFI_CALLDATA`** applies but explorer raw lacks wallet-touch
+  inbound legs, discovery may synthesize one LiFi-corroborated internal transfer
+  from the paired source `BRIDGE_OUT` principal before classification; tag
+  `discoverySource=LIFI_CORROBORATED_SETTLEMENT`
 - the persisted `rawTransaction.walletAddress` inherited from a targeted fetch
   request is never sufficient proof by itself
 - unresolved route-proven source bridge starts may be revisited by a bounded
@@ -104,6 +111,26 @@ destination bridge-pair evidence for the `LI.FI / Jumper` route family.
   - source cost basis is reallocated into destination acquisition
   - source covered/uncovered ratio is preserved on destination quantity
   - this is not the same as plain move-basis continuity
+
+## Multi-source / supplemental LI.FI routes
+
+- official LI.FI status may return the same `receivingTxHash` for multiple
+  route-proven `BRIDGE_OUT` sources on one bundle (principal stable leg plus
+  supplemental native top-up)
+- the first materialized pair keeps the destination reciprocal anchor on the
+  principal source (`matchedCounterparty`, `correlationId`)
+- later supplemental sources with `apiStatus=DONE` pointing at the same
+  receiving tx receive a **source-only anchor**:
+  - `matchedCounterparty = destination.txHash`
+  - `correlationId = bridge:lifi:<supplementalSourceTxHash>`
+  - destination header fields must not be overwritten
+- when the supplemental outbound leg matches one inbound flow on the
+  destination (for example `WETH -> ETH`), linking retags only that inbound
+  flow to `TRANSFER`, stamps `counterpartyAddress = LINKED:<sourceTxHash>`,
+  and AVCO replay pairs the leg via the supplemental `bridge:lifi:` queue
+- supplemental anchors require a unique qty-compatible inbound leg match via
+  `selectPrimaryInboundBridgeFlow`; unrelated second sources must remain
+  unlinked
 
 ## Clarification Rules
 
@@ -143,6 +170,9 @@ destination bridge-pair evidence for the `LI.FI / Jumper` route family.
   -> `0x4a47ab3cad76be52416e660e044b983acc9837cd9f05b59eabad7560636aa0b2`
 - `0x4bd7b04bc2864b0012f19300690ae5cacb2806fdcc0b1612664d98b5015b48f6`
   -> `0x2108883281ea4cd12eb27e4a540f9f008e149c1e8fe7a1348e80311c1f4d9ff8`
+- `0x4890e907f816a2f573559377fb97943efcbad26750cb3cf3bf96ff48a43504f7`
+  -> `0x25550cf1685a0ce5ab3d546b595d6c43a742b8487ab4fbc2b7913bf03645b7aa`
+  (LayerZero `execute302`, calldata beneficiary, ADR-027)
 
 All three audited rows call `LI.FI Diamond`
 `0x1231deb6f5749ef6ce6943a275a1d3e7486f4eae`, carry bridge-route calldata

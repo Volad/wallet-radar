@@ -28,7 +28,8 @@ sequenceDiagram
 - **Range control** — dual slider; default last 21 days (min 16 points)
 - **Position size chart** — quantity over time
 - **Realised P&L chart** — disposal events + cumulative path
-- **Event log table** — type, protocol, date, qty Δ, AVCO before→after, flows
+- **Event log table** — type, protocol, date, qty Δ, amount, unit price, from, to, realised PnL; expandable row with AVCO/basis/flows/gas
+- **Matched transfers** — correlated bridge/transfer legs collapsed into one marker with expandable legs
 
 ## API
 

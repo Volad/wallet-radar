@@ -103,9 +103,18 @@ interface AllocationRow {
   readonly id: string;
   readonly label: string;
   readonly icon: string | null;
+  readonly color: string;
   readonly valueUsd: number;
   readonly sharePct: number;
 }
+
+interface AllocationMoreSummary {
+  readonly count: number;
+  readonly valueUsd: number;
+  readonly sharePct: number;
+}
+
+const ALLOCATION_VISIBLE_ROW_COUNT = 4;
 
 const TRANSACTION_TYPES_BY_ID = new Set<TransactionType>([
   'SWAP',
@@ -301,6 +310,8 @@ export class DashboardComponent {
   readonly hideDustAssets = signal(true);
   readonly showReconciliationWarnings = signal(true);
   readonly isFiltersCollapsed = signal(false);
+  readonly networksAllocationExpanded = signal(false);
+  readonly walletsAllocationExpanded = signal(false);
   readonly lpTab = signal<LpTab>('all');
 
   readonly data = computed(() => {
@@ -419,7 +430,7 @@ export class DashboardComponent {
     }
     return status.wallets.map((wallet) => {
       const address = wallet.address.trim();
-      const scopeId = address.startsWith('0x') ? address.toLowerCase() : address;
+      const scopeId = address.toLowerCase();
       return {
         id: scopeId,
         label: wallet.label,
@@ -544,7 +555,7 @@ export class DashboardComponent {
     const hideDust = this.hideDustAssets();
 
     return this.data().tokenPositions.filter((asset) => {
-      if (hideDust && asset.quantity * asset.priceUsd < 0.5) {
+      if (hideDust && Math.abs(asset.marketValueUsd ?? 0) < 0.5) {
         return false;
       }
       if (selectedWallets.size > 0 && !selectedWallets.has(asset.walletId)) {
@@ -724,6 +735,26 @@ export class DashboardComponent {
     return this.filteredTokenFamilies().reduce((total, token) => total + token.currentValueUsd, 0);
   });
 
+  readonly filteredUnrealizedPnlUsd = computed(() =>
+    this.filteredTokenFamilies().reduce((total, token) => total + token.unrealizedPnlUsd, 0)
+  );
+
+  readonly filteredRealizedPnlUsd = computed(() =>
+    this.filteredTokenFamilies().reduce((total, token) => total + token.realizedPnlUsd, 0)
+  );
+
+  readonly filteredTotalCostBasisUsd = computed(() =>
+    this.filteredTokenFamilies().reduce((total, token) => total + token.totalCostBasisUsd, 0)
+  );
+
+  readonly filteredUnrealizedPnlPct = computed(() => {
+    const costBasis = this.filteredTotalCostBasisUsd();
+    if (costBasis <= 0) {
+      return 0;
+    }
+    return (this.filteredUnrealizedPnlUsd() / costBasis) * 100;
+  });
+
   readonly tokenUsdByNetwork = computed<ReadonlyArray<AllocationRow>>(() => {
     const positions = this.filteredTokenPositions();
     const totals = new Map<NetworkId, number>();
@@ -746,11 +777,25 @@ export class DashboardComponent {
           id: networkId,
           label: network?.label ?? networkId,
           icon: network?.icon ?? null,
+          color: network?.color ?? COLORS.textSubtle,
           valueUsd,
           sharePct: (valueUsd / totalUsd) * 100,
         };
       })
       .sort((left, right) => right.valueUsd - left.valueUsd);
+  });
+
+  readonly onChainVsCexSplit = computed(() => {
+    const rows = this.tokenUsdByNetwork();
+    const total = rows.reduce((sum, row) => sum + row.valueUsd, 0);
+    const cex = rows
+      .filter((row) => row.id === 'BYBIT')
+      .reduce((sum, row) => sum + row.valueUsd, 0);
+    const onChain = total - cex;
+    return {
+      onChainPct: total > 0 ? (onChain / total) * 100 : 0,
+      cexPct: total > 0 ? (cex / total) * 100 : 0,
+    };
   });
 
   readonly tokenUsdByWallet = computed<ReadonlyArray<AllocationRow>>(() => {
@@ -770,17 +815,39 @@ export class DashboardComponent {
     }
     return [...totals.entries()]
       .map(([walletId, valueUsd]): AllocationRow => {
-        const wallet = this.getWalletById(walletId);
         return {
           id: walletId,
           label: this.walletLabel(walletId),
-          icon: wallet === null ? null : '●',
+          icon: '●',
+          color: this.walletColor(walletId),
           valueUsd,
           sharePct: (valueUsd / totalUsd) * 100,
         };
       })
       .sort((left, right) => right.valueUsd - left.valueUsd);
   });
+
+  readonly visibleNetworksAllocation = computed(() => {
+    const rows = this.tokenUsdByNetwork();
+    return this.networksAllocationExpanded()
+      ? rows
+      : rows.slice(0, ALLOCATION_VISIBLE_ROW_COUNT);
+  });
+
+  readonly visibleWalletsAllocation = computed(() => {
+    const rows = this.tokenUsdByWallet();
+    return this.walletsAllocationExpanded()
+      ? rows
+      : rows.slice(0, ALLOCATION_VISIBLE_ROW_COUNT);
+  });
+
+  readonly networksAllocationMore = computed(() =>
+    this.allocationMoreSummary(this.tokenUsdByNetwork())
+  );
+
+  readonly walletsAllocationMore = computed(() =>
+    this.allocationMoreSummary(this.tokenUsdByWallet())
+  );
 
   readonly totalOpenLpFeesUsd = computed(() => {
     return this.data()
@@ -1133,7 +1200,16 @@ export class DashboardComponent {
   }
 
   getWalletById(walletId: WalletId) {
-    return this.data().wallets.find((wallet) => wallet.id === walletId) ?? null;
+    const normalizedWalletId = walletId.toLowerCase();
+    return this.transactionPaneWallets().find((wallet) => wallet.id.toLowerCase() === normalizedWalletId) ?? null;
+  }
+
+  toggleNetworksAllocationExpanded(): void {
+    this.networksAllocationExpanded.update((expanded) => !expanded);
+  }
+
+  toggleWalletsAllocationExpanded(): void {
+    this.walletsAllocationExpanded.update((expanded) => !expanded);
   }
 
   getIntegrationByRef(accountRef: string): IntegrationInfo | null {
@@ -1615,6 +1691,21 @@ export class DashboardComponent {
     return this.getNetworkById(networkId)?.label ?? networkId;
   }
 
+  walletColor(walletId: WalletId): string {
+    const wallet = this.getWalletById(walletId);
+    if (wallet !== null) {
+      return wallet.color;
+    }
+    const integration = this.getIntegrationByRef(walletId);
+    if (integration !== null) {
+      return integration.color;
+    }
+    if (walletId.toLowerCase().startsWith('bybit:')) {
+      return INTEGRATION_PRESENTATION_BY_PROVIDER.get('BYBIT')?.color ?? COLORS.textSubtle;
+    }
+    return COLORS.textSubtle;
+  }
+
   walletLabel(walletId: WalletId): string {
     const wallet = this.getWalletById(walletId);
     if (wallet !== null) {
@@ -1674,6 +1765,17 @@ export class DashboardComponent {
       color: presentation?.color ?? COLORS.textSubtle,
       icon: presentation?.icon ?? '◎',
       status: integration.status,
+    };
+  }
+
+  private allocationMoreSummary(rows: ReadonlyArray<AllocationRow>): AllocationMoreSummary {
+    const hiddenRows = rows.slice(ALLOCATION_VISIBLE_ROW_COUNT);
+    const totalUsd = rows.reduce((sum, row) => sum + row.valueUsd, 0);
+    const hiddenUsd = hiddenRows.reduce((sum, row) => sum + row.valueUsd, 0);
+    return {
+      count: hiddenRows.length,
+      valueUsd: hiddenUsd,
+      sharePct: totalUsd > 0 ? (hiddenUsd / totalUsd) * 100 : 0,
     };
   }
 

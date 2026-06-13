@@ -121,6 +121,49 @@ class BybitExtractedTradePairerTest {
         assertThat(queryText).contains("convert");
     }
 
+    @Test
+    void loadConvertClusterAcceptsMultiLegDustCleanupCluster() {
+        Instant ts = Instant.parse("2025-02-21T20:37:59.897Z");
+        BybitExtractedEvent anchor = convertLeg("sell-usdt", "CURRENCY_SELL", "USDT", "-0.06778681", ts.plusMillis(2));
+        List<BybitExtractedEvent> cluster = List.of(
+                convertLeg("sell-eth", "CURRENCY_SELL", "ETH", "-0.00000272", ts),
+                convertLeg("buy-mnt-1", "CURRENCY_BUY", "MNT", "0.00760605", ts),
+                convertLeg("sell-bbsol", "CURRENCY_SELL", "BBSOL", "-0.00098135", ts),
+                convertLeg("buy-mnt-2", "CURRENCY_BUY", "MNT", "0.18779781", ts),
+                convertLeg("sell-xrp", "CURRENCY_SELL", "XRP", "-0.009602", ts),
+                convertLeg("buy-mnt-3", "CURRENCY_BUY", "MNT", "0.02579635", ts),
+                convertLeg("buy-mnt-4", "CURRENCY_BUY", "MNT", "0.07190767", ts.plusMillis(2)),
+                anchor
+        );
+
+        when(mongoOperations.find(org.mockito.ArgumentMatchers.any(Query.class), eq(BybitExtractedEvent.class)))
+                .thenReturn(cluster);
+
+        BybitExtractedTradePairer pairer = new BybitExtractedTradePairer(mongoOperations);
+        List<BybitExtractedEvent> loaded = pairer.loadConvertCluster(anchor);
+
+        assertThat(loaded).hasSize(8);
+    }
+
+    private BybitExtractedEvent convertLeg(
+            String id,
+            String bybitType,
+            String asset,
+            String qty,
+            Instant timeUtc
+    ) {
+        BybitExtractedEvent row = new BybitExtractedEvent();
+        row.setId(id);
+        row.setStatus(BybitExtractedEventStatus.RAW);
+        row.setSourceFileType("uta_derivatives");
+        row.setUid("409666492");
+        row.setBybitType(bybitType);
+        row.setAssetSymbol(asset);
+        row.setQuantityRaw(new BigDecimal(qty));
+        row.setTimeUtc(timeUtc);
+        return row;
+    }
+
     private BybitExtractedEvent liquidStakingRow(String id, String assetSymbol, String quantityRaw, Instant timeUtc) {
         BybitExtractedEvent row = new BybitExtractedEvent();
         row.setId(id);

@@ -121,6 +121,10 @@ public class AvcoReplayService {
                 updatedTransactions.add(replayed);
             }
 
+            // ADR-028: settle inferred-leverage synthetic borrows whose collateral has fully drained
+            // by end-of-ledger (no on-chain USD REPAY exists). Fails safe to OPEN if collateral is held.
+            replayDispatcher.closeDrainedLeverageLiabilities(replayState);
+
             if (accountingUniverseId == null || accountingUniverseId.isBlank()) {
                 assetLedgerPointRepository.deleteAll();
             } else {

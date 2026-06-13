@@ -138,6 +138,13 @@ public class UnmatchedBridgeInboundPricingFallbackService {
                 pairedMoveBasisSkipped++;
                 continue;
             }
+            if (hasSupplementalMoveBasisLinkage(outbound)) {
+                // Supplemental LI.FI source anchored to a shared destination: replay carries basis via
+                // LINKED:<sourceHash> on the destination IN leg. Repricing here oscillates with LiFi
+                // supplemental anchor repair every linking batch.
+                pairedMoveBasisSkipped++;
+                continue;
+            }
             if (hasPricedUpstreamInflow(outbound, principal, lookback)) {
                 upstreamPricedSkipped++;
                 continue;
@@ -166,6 +173,23 @@ public class UnmatchedBridgeInboundPricingFallbackService {
      */
     private boolean hasPairedMoveBasisInbound(NormalizedTransaction outbound) {
         return loadPairedMoveBasisInbound(outbound) != null;
+    }
+
+    private boolean hasSupplementalMoveBasisLinkage(NormalizedTransaction outbound) {
+        if (outbound.getMatchedCounterparty() == null || outbound.getMatchedCounterparty().isBlank()) {
+            return false;
+        }
+        NormalizedTransaction destination = loadMatchedDestination(outbound.getMatchedCounterparty());
+        return destination != null && BridgePairLinkSupport.hasSupplementalMoveBasisLinkage(outbound, destination);
+    }
+
+    private NormalizedTransaction loadMatchedDestination(String destinationTxHash) {
+        if (destinationTxHash == null || destinationTxHash.isBlank()) {
+            return null;
+        }
+        Query query = Query.query(Criteria.where("txHash").is(destinationTxHash.trim().toLowerCase(Locale.ROOT)));
+        List<NormalizedTransaction> matches = mongoOperations.find(query, NormalizedTransaction.class);
+        return matches.isEmpty() ? null : matches.getFirst();
     }
 
     /**

@@ -12,8 +12,13 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.time.Instant;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class GenericFlowReplayEngineTest {
 
@@ -68,6 +73,225 @@ class GenericFlowReplayEngineTest {
 
         assertThat(position.quantity()).isEqualByComparingTo("0.5");
         assertThat(position.uncoveredQuantity()).isEqualByComparingTo("0");
+    }
+
+    @Test
+    void restoreToPositionFloorsUsdStablecoinCarriedBasisToPeg() {
+        // R-3*: a depressed source AVCO (e.g. USDT carried at $0.5575 from a mis-priced upstream
+        // pool / borrow proceeds) must not propagate a sub-peg basis through the continuity-carry
+        // restore path (CARRY_IN / REALLOCATE_IN / LENDING_WITHDRAW). The covered portion is
+        // floored to $1/unit so the receiving sub-ledger settles at peg (fixes BYBIT:…:FUND USDT
+        // at $0.846).
+        PositionState position = new PositionState(
+                new AssetKey("BYBIT:33625378:FUND", null, "SYMBOL:USDT", "USDT", "FAMILY:USDT"));
+
+        engine.restoreToPosition(
+                new BigDecimal("1000"),
+                position,
+                new BigDecimal("557.5"),
+                BigDecimal.ZERO,
+                new BigDecimal("0.5575")
+        );
+
+        assertThat(position.totalCostBasisUsd()).isEqualByComparingTo("1000");
+        assertThat(position.perWalletAvco()).isEqualByComparingTo("1");
+    }
+
+    @Test
+    void restoreToPositionDoesNotReduceAbovePegStablecoinCarriedBasis() {
+        // The shared restore path applies only the R-3* floor (not the U-3 cap), so an above-peg
+        // carried basis is left intact here — the cap is applied selectively by the same-asset
+        // stablecoin withdraw handlers (see pegCappedStablecoinCarryBasis tests) to avoid clamping
+        // legitimate cross-asset LP-exit carries that also flow through this method.
+        PositionState position = new PositionState(
+                new AssetKey("BYBIT:1:FUND", null, "SYMBOL:USDC", "USDC", "FAMILY:USDC"));
+
+        engine.restoreToPosition(
+                new BigDecimal("100"),
+                position,
+                new BigDecimal("105"),
+                BigDecimal.ZERO,
+                new BigDecimal("1.05")
+        );
+
+        assertThat(position.totalCostBasisUsd()).isEqualByComparingTo("105");
+    }
+
+    @Test
+    void restoreToPositionDoesNotFloorNearPegStablecoinConversionArtifact() {
+        // A cross-asset bridge (USDT→USDC) conserves total basis but yields a per-unit basis
+        // fractionally below $1 due to differing unit counts. This near-peg artifact must NOT be
+        // floored — flooring would manufacture basis and break conservation.
+        PositionState position = new PositionState(
+                new AssetKey("wallet-a", NetworkId.ARBITRUM, "0xusdc", "USDC", "FAMILY:USDC"));
+
+        engine.restoreToPosition(
+                new BigDecimal("21.818316"),
+                position,
+                new BigDecimal("21.81403"),
+                BigDecimal.ZERO,
+                new BigDecimal("0.9998")
+        );
+
+        assertThat(position.totalCostBasisUsd()).isEqualByComparingTo("21.81403");
+    }
+
+    @Test
+    void restoreToPositionDoesNotFloorNonStablecoinCarriedBasis() {
+        PositionState position = new PositionState(
+                new AssetKey("0xwallet", NetworkId.ETHEREUM, "0xeth", "ETH", "FAMILY:ETH"));
+
+        engine.restoreToPosition(
+                new BigDecimal("1"),
+                position,
+                new BigDecimal("0.5"),
+                BigDecimal.ZERO,
+                new BigDecimal("0.5")
+        );
+
+        assertThat(position.totalCostBasisUsd()).isEqualByComparingTo("0.5");
+    }
+
+    @Test
+    void restoreToPositionDoesNotFloorConfusableStablecoinLookalike() {
+        // F-6 homoglyph guard: a Cyrillic "UЅDT" lookalike must never be floored to peg.
+        PositionState position = new PositionState(
+                new AssetKey("0xwallet", NetworkId.ETHEREUM, "0xscam", "U\u0405DT", "0xscam"));
+
+        engine.restoreToPosition(
+                new BigDecimal("1000"),
+                position,
+                new BigDecimal("10"),
+                BigDecimal.ZERO,
+                new BigDecimal("0.01")
+        );
+
+        assertThat(position.totalCostBasisUsd()).isEqualByComparingTo("10");
+    }
+
+    @Test
+    void pegFlooredStablecoinCarryBasisFloorsBelowPegBridgeCarry() {
+        // R-3* (late-attach path): a BRIDGE_IN USDC corridor carry arriving at $0.8874/unit must be
+        // floored to $1/covered-unit so the depressed origin pool cannot propagate a sub-peg basis
+        // into the destination across the bridge / pending-late-attach restore.
+        AssetKey usdc = new AssetKey("0x1a87", NetworkId.ARBITRUM, "0xusdc", "USDC", "FAMILY:USDC");
+
+        BigDecimal floored = engine.pegFlooredStablecoinCarryBasis(
+                usdc, new BigDecimal("1000"), new BigDecimal("887.4"));
+
+        assertThat(floored).isEqualByComparingTo("1000");
+    }
+
+    @Test
+    void pegCappedStablecoinCarryBasisCapsVaultWithdrawAbovePegToPeg() {
+        // U-3: a VAULT_WITHDRAW / LENDING_WITHDRAW USDC leg whose share-rate contamination yields a
+        // carried basis of $1.99/unit (1990 on 1000 covered) is capped to $1/covered-unit (1000).
+        AssetKey usdc = new AssetKey("0x1a87", NetworkId.MANTLE, "0xusdc", "USDC", "FAMILY:USDC");
+
+        BigDecimal capped = engine.pegCappedStablecoinCarryBasis(
+                usdc, new BigDecimal("1000"), new BigDecimal("1990"));
+
+        assertThat(capped).isEqualByComparingTo("1000");
+    }
+
+    @Test
+    void pegCappedStablecoinCarryBasisCapsExtremeShareRateContaminationToPeg() {
+        // U-3: extreme EVK/ERC4626 share-price contamination ($3,021/unit) clamps to peg, not the
+        // fabricated value.
+        AssetKey usdc = new AssetKey("0x1a87", NetworkId.MANTLE, "0xusdc", "USDC", "FAMILY:USDC");
+
+        BigDecimal capped = engine.pegCappedStablecoinCarryBasis(
+                usdc, new BigDecimal("1"), new BigDecimal("3021.31"));
+
+        assertThat(capped).isEqualByComparingTo("1");
+    }
+
+    @Test
+    void pegCappedStablecoinCarryBasisDoesNotCapNonStablecoinAbovePeg() {
+        // U-3 guard: a non-stable asset (cmETH) carried well above $1/unit is NOT capped.
+        AssetKey cmeth = new AssetKey("0x1a87", NetworkId.MANTLE, "0xcmeth", "cmETH", "FAMILY:ETH");
+
+        BigDecimal result = engine.pegCappedStablecoinCarryBasis(
+                cmeth, new BigDecimal("0.86155"), new BigDecimal("3328.54"));
+
+        assertThat(result).isEqualByComparingTo("3328.54");
+    }
+
+    @Test
+    void pegCappedStablecoinCarryBasisLeavesGenuinePegCarryUnchanged() {
+        // U-3: a genuine $1.00/unit stablecoin carry is unaffected by the cap.
+        AssetKey usdc = new AssetKey("0x1a87", NetworkId.MANTLE, "0xusdc", "USDC", "FAMILY:USDC");
+
+        BigDecimal result = engine.pegCappedStablecoinCarryBasis(
+                usdc, new BigDecimal("500"), new BigDecimal("500"));
+
+        assertThat(result).isEqualByComparingTo("500");
+    }
+
+    @Test
+    void pegCappedStablecoinCarryBasisIgnoresConfusableLookalike() {
+        // F-6 homoglyph guard: a Cyrillic "UЅDC" lookalike above peg is never capped to peg.
+        AssetKey scam = new AssetKey("0x1a87", NetworkId.MANTLE, "0xscam", "U\u0405DC", "0xscam");
+
+        BigDecimal result = engine.pegCappedStablecoinCarryBasis(
+                scam, new BigDecimal("1000"), new BigDecimal("3021.31"));
+
+        assertThat(result).isEqualByComparingTo("3021.31");
+    }
+
+    @Test
+    void stablecoinCarryIsClampedToPegInBothDirections() {
+        // R-3* floor + U-3 cap interaction: $0.84/unit floors up to $1, $1.99/unit caps down to $1.
+        AssetKey usdc = new AssetKey("0x1a87", NetworkId.MANTLE, "0xusdc", "USDC", "FAMILY:USDC");
+
+        BigDecimal floored = engine.pegFlooredStablecoinCarryBasis(
+                usdc, new BigDecimal("1000"), new BigDecimal("840"));
+        BigDecimal capped = engine.pegCappedStablecoinCarryBasis(
+                usdc, new BigDecimal("1000"), new BigDecimal("1990"));
+
+        assertThat(floored).isEqualByComparingTo("1000");
+        assertThat(capped).isEqualByComparingTo("1000");
+    }
+
+    @Test
+    void pegFlooredStablecoinCarryBasisLeavesNearPegCarryUntouched() {
+        AssetKey usdc = new AssetKey("0x1a87", NetworkId.ARBITRUM, "0xusdc", "USDC", "FAMILY:USDC");
+
+        BigDecimal result = engine.pegFlooredStablecoinCarryBasis(
+                usdc, new BigDecimal("1000"), new BigDecimal("999.8"));
+
+        assertThat(result).isEqualByComparingTo("999.8");
+    }
+
+    @Test
+    void pegFlooredStablecoinCarryBasisIgnoresNonStablecoin() {
+        AssetKey eth = new AssetKey("0x1a87", NetworkId.ARBITRUM, "0xeth", "ETH", "FAMILY:ETH");
+
+        BigDecimal result = engine.pegFlooredStablecoinCarryBasis(
+                eth, new BigDecimal("1"), new BigDecimal("0.5"));
+
+        assertThat(result).isEqualByComparingTo("0.5");
+    }
+
+    @Test
+    void pegFlooredStablecoinCarryBasisIgnoresConfusableLookalike() {
+        // F-6 homoglyph guard: a Cyrillic "UЅDC" lookalike is never floored to peg.
+        AssetKey scam = new AssetKey("0x1a87", NetworkId.ARBITRUM, "0xscam", "U\u0405DC", "0xscam");
+
+        BigDecimal result = engine.pegFlooredStablecoinCarryBasis(
+                scam, new BigDecimal("1000"), new BigDecimal("10"));
+
+        assertThat(result).isEqualByComparingTo("10");
+    }
+
+    @Test
+    void pegFlooredStablecoinCarryBasisIgnoresZeroCoveredQuantity() {
+        AssetKey usdc = new AssetKey("0x1a87", NetworkId.ARBITRUM, "0xusdc", "USDC", "FAMILY:USDC");
+
+        BigDecimal result = engine.pegFlooredStablecoinCarryBasis(
+                usdc, BigDecimal.ZERO, new BigDecimal("0"));
+
+        assertThat(result).isEqualByComparingTo("0");
     }
 
     @Test
@@ -177,6 +401,134 @@ class GenericFlowReplayEngineTest {
 
         assertThat(position.uncoveredQuantity()).isEqualByComparingTo("0");
         assertThat(position.totalCostBasisUsd()).isEqualByComparingTo("313.0");
+    }
+
+    @Test
+    void inboundShortfallMarketAtTimeFallbackPromotesUncovWhenNoFlowPrice() {
+        // F-5(a) — an unpaired zkSync ETH BRIDGE_IN/STAKING_DEPOSIT carry-in with NO flow price and
+        // no paired OUT source must inherit market-at-timestamp basis, never enter the pool at $0.
+        ReplayMarketAuthority authority = mock(ReplayMarketAuthority.class);
+        when(authority.resolve(any(), any())).thenReturn(Optional.of(new ReplayMarketAuthority.ResolvedMarketPrice(
+                new BigDecimal("2000"),
+                PriceSource.COINGECKO,
+                ReplayMarketAuthority.ResolvedMarketPrice.Authority.HISTORICAL_CACHE
+        )));
+        GenericFlowReplayEngine marketEngine = new GenericFlowReplayEngine(authority);
+
+        PositionState position = new PositionState(new AssetKey("0xwallet", NetworkId.ZKSYNC, "0xeth", "ETH", "ETH:eth"));
+        position.setQuantity(new BigDecimal("0.5"));
+        position.setUncoveredQuantity(new BigDecimal("0.5"));
+        position.setTotalCostBasisUsd(BigDecimal.ZERO);
+        PositionSnapshot before = new PositionSnapshot(
+                BigDecimal.ZERO, null, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                BigDecimal.ZERO, BigDecimal.ZERO, false, false, 0
+        );
+
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setId("tx-bridge-in");
+        tx.setBlockTimestamp(Instant.parse("2025-06-01T08:30:00Z"));
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(NormalizedLegRole.TRANSFER);
+        flow.setAssetSymbol("ETH");
+        flow.setQuantityDelta(new BigDecimal("0.5"));
+
+        marketEngine.applyInboundShortfallSpotFallback(tx, flow, position, before);
+
+        assertThat(position.uncoveredQuantity()).isEqualByComparingTo("0");
+        assertThat(position.totalCostBasisUsd()).isEqualByComparingTo("1000");
+    }
+
+    @Test
+    void inboundShortfallLeavesUncovWhenNoFlowPriceAndNoMarket() {
+        // Fail-safe — when neither a flow price nor a market-at-timestamp quote can be resolved the
+        // uncovered quantity is left untouched (excluded from AVCO), never fabricated at $0 basis.
+        ReplayMarketAuthority authority = mock(ReplayMarketAuthority.class);
+        when(authority.resolve(any(), any())).thenReturn(Optional.empty());
+        GenericFlowReplayEngine marketEngine = new GenericFlowReplayEngine(authority);
+
+        PositionState position = new PositionState(new AssetKey("0xwallet", NetworkId.ZKSYNC, "0xeth", "ETH", "ETH:eth"));
+        position.setQuantity(new BigDecimal("0.5"));
+        position.setUncoveredQuantity(new BigDecimal("0.5"));
+        position.setTotalCostBasisUsd(BigDecimal.ZERO);
+        PositionSnapshot before = new PositionSnapshot(
+                BigDecimal.ZERO, null, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                BigDecimal.ZERO, BigDecimal.ZERO, false, false, 0
+        );
+
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setId("tx-bridge-in");
+        tx.setBlockTimestamp(Instant.parse("2025-06-01T08:30:00Z"));
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(NormalizedLegRole.TRANSFER);
+        flow.setAssetSymbol("ETH");
+        flow.setQuantityDelta(new BigDecimal("0.5"));
+
+        marketEngine.applyInboundShortfallSpotFallback(tx, flow, position, before);
+
+        assertThat(position.uncoveredQuantity()).isEqualByComparingTo("0.5");
+        assertThat(position.totalCostBasisUsd()).isEqualByComparingTo("0");
+    }
+
+    @Test
+    void inboundShortfallPrefersFlowPriceOverMarketAuthority() {
+        // The flow's own resolved spot price stays authoritative; market-at-time is only a backstop.
+        ReplayMarketAuthority authority = mock(ReplayMarketAuthority.class);
+        GenericFlowReplayEngine marketEngine = new GenericFlowReplayEngine(authority);
+
+        PositionState position = new PositionState(new AssetKey("0xwallet", NetworkId.ARBITRUM, "0xeth", "ETH", "ETH:eth"));
+        position.setQuantity(new BigDecimal("1"));
+        position.setUncoveredQuantity(new BigDecimal("1"));
+        position.setTotalCostBasisUsd(BigDecimal.ZERO);
+        PositionSnapshot before = new PositionSnapshot(
+                BigDecimal.ZERO, null, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                BigDecimal.ZERO, BigDecimal.ZERO, false, false, 0
+        );
+
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setId("tx");
+        tx.setBlockTimestamp(Instant.parse("2025-06-01T08:30:00Z"));
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(NormalizedLegRole.TRANSFER);
+        flow.setAssetSymbol("ETH");
+        flow.setQuantityDelta(new BigDecimal("1"));
+        flow.setUnitPriceUsd(new BigDecimal("3000"));
+        flow.setPriceSource(PriceSource.BYBIT);
+
+        marketEngine.applyInboundShortfallSpotFallback(tx, flow, position, before);
+
+        assertThat(position.totalCostBasisUsd()).isEqualByComparingTo("3000");
+        org.mockito.Mockito.verifyNoInteractions(authority);
+    }
+
+    @Test
+    void inboundShortfallDoesNotTouchCoveredCrossAssetUsdcCarry() {
+        // Regression — a USDC inbound that already absorbed elevated cross-asset basis (VAULT_WITHDRAW
+        // / LP_EXIT REALLOCATE_IN, ~$2.5/u, fully covered) must NOT be re-priced or capped by the
+        // market-at-time backstop. The backstop fires only on uncovered (basisless) quantity.
+        ReplayMarketAuthority authority = mock(ReplayMarketAuthority.class);
+        GenericFlowReplayEngine marketEngine = new GenericFlowReplayEngine(authority);
+
+        PositionState position = new PositionState(new AssetKey("0xwallet", NetworkId.ETHEREUM, "0xusdc", "USDC", "USDC:usdc"));
+        position.setQuantity(new BigDecimal("100"));
+        position.setUncoveredQuantity(BigDecimal.ZERO);
+        position.setTotalCostBasisUsd(new BigDecimal("250"));
+        PositionSnapshot before = new PositionSnapshot(
+                BigDecimal.ZERO, null, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                BigDecimal.ZERO, BigDecimal.ZERO, false, false, 0
+        );
+
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setId("tx-usdc-carry");
+        tx.setBlockTimestamp(Instant.parse("2025-06-01T08:30:00Z"));
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(NormalizedLegRole.TRANSFER);
+        flow.setAssetSymbol("USDC");
+        flow.setQuantityDelta(new BigDecimal("100"));
+
+        marketEngine.applyInboundShortfallSpotFallback(tx, flow, position, before);
+
+        assertThat(position.totalCostBasisUsd()).isEqualByComparingTo("250");
+        org.mockito.Mockito.verifyNoInteractions(authority);
     }
 
     @Test

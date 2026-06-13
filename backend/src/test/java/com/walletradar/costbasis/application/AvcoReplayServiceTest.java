@@ -1099,6 +1099,149 @@ class AvcoReplayServiceTest {
     }
 
     @Test
+    void crossNetworkBridgeInIsNotDedupedAgainstOutboundDustBuyOnSourceNetwork() {
+        NormalizedTransaction priorBuy = tx("0", "0xprior", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flow(NormalizedLegRole.BUY, "ETH", "0.081481", "165", PriceSource.BINANCE));
+        priorBuy.setWalletAddress("0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f");
+        priorBuy.setNetworkId(NetworkId.ARBITRUM);
+
+        NormalizedTransaction bridgeOut = tx(
+                "1",
+                "0x4890e907f816a2f573559377fb97943efcbad26750cb3cf3bf96ff48a43504f7",
+                1,
+                NormalizedTransactionType.BRIDGE_OUT,
+                flow(NormalizedLegRole.BUY, "ETH", "0.000000288551112619", null, null),
+                flow(NormalizedLegRole.TRANSFER, "ETH", "-0.080966355549794125", null, null)
+        );
+        bridgeOut.setWalletAddress("0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f");
+        bridgeOut.setNetworkId(NetworkId.ARBITRUM);
+        bridgeOut.setCorrelationId("bridge:lifi:0x4890e907f816a2f573559377fb97943efcbad26750cb3cf3bf96ff48a43504f7");
+        bridgeOut.setContinuityCandidate(true);
+        bridgeOut.setMatchedCounterparty("0x25550cf1685a0ce5ab3d546b595d6c43a742b8487ab4fbc2b7913bf03645b7aa");
+        bridgeOut.setBlockTimestamp(Instant.parse("2026-06-05T08:32:11Z"));
+
+        NormalizedTransaction bridgeIn = tx(
+                "2",
+                "0x25550cf1685a0ce5ab3d546b595d6c43a742b8487ab4fbc2b7913bf03645b7aa",
+                2,
+                NormalizedTransactionType.BRIDGE_IN,
+                flow(NormalizedLegRole.TRANSFER, "ETH", "0.080966355549794125", null, null)
+        );
+        bridgeIn.setWalletAddress("0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f");
+        bridgeIn.setNetworkId(NetworkId.BASE);
+        bridgeIn.setCorrelationId("bridge:lifi:0x4890e907f816a2f573559377fb97943efcbad26750cb3cf3bf96ff48a43504f7");
+        bridgeIn.setContinuityCandidate(true);
+        bridgeIn.setMatchedCounterparty("0x4890e907f816a2f573559377fb97943efcbad26750cb3cf3bf96ff48a43504f7");
+        bridgeIn.setBlockTimestamp(Instant.parse("2026-06-05T08:37:35Z"));
+
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                NormalizedTransactionStatus.CONFIRMED
+        )).thenReturn(List.of(priorBuy, bridgeOut, bridgeIn));
+
+        service().replayConfirmed();
+
+        List<AssetLedgerPoint> destinationPoints = capturedLedgerPoints().stream()
+                .filter(point -> "0x25550cf1685a0ce5ab3d546b595d6c43a742b8487ab4fbc2b7913bf03645b7aa".equals(point.getTxHash()))
+                .toList();
+        assertThat(destinationPoints).isNotEmpty();
+        AssetLedgerPoint carryIn = destinationPoints.stream()
+                .filter(point -> point.getBasisEffect() == AssetLedgerPoint.BasisEffect.CARRY_IN)
+                .findFirst()
+                .orElseThrow();
+        assertThat(carryIn.getQuantityDelta()).isEqualByComparingTo("0.080966355549794125");
+        assertThat(carryIn.getNetworkId()).isEqualTo(NetworkId.BASE);
+    }
+
+    /**
+     * Regression: BRIDGE_OUT with an incidental dust BUY flow (e.g. LiFi refund dust) must NOT
+     * register the BUY as a pending bridge inbound.  Before the fix, the dust BUY stole the
+     * carry-queue slot and triggered {@code attachLateBridgeCarryToPendingInbound} on the source
+     * ARBITRUM position, injecting ~$162 phantom basis with zero qty change (AVCO→$318 k).
+     * The destination BASE CARRY_IN would then fall back to provisional market price instead of
+     * propagating the authoritative ARBITRUM basis.
+     *
+     * <p>After the fix ({@code shouldTreatAsContinuityTransfer} returns false for BUY/SELL on
+     * BRIDGE_OUT/BRIDGE_IN), the dust BUY is processed as a plain ACQUIRE and the TRANSFER flow's
+     * carry queue is exclusively consumed by the BASE BRIDGE_IN.
+     */
+    @Test
+    void bridgeOutDustBuyDoesNotCreatePhantomCarryInOnSourceNetwork() {
+        NormalizedTransaction priorBuy = tx("0", "0xprior", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flow(NormalizedLegRole.BUY, "ETH", "0.081481", "2010", PriceSource.BINANCE));
+        priorBuy.setWalletAddress("0xwallet");
+        priorBuy.setNetworkId(NetworkId.ARBITRUM);
+
+        // BRIDGE_OUT has a tiny dust BUY (flow[0]) alongside the main TRANSFER (flow[1]).
+        NormalizedTransaction bridgeOut = tx(
+                "1",
+                "0xbridge-out",
+                1,
+                NormalizedTransactionType.BRIDGE_OUT,
+                flow(NormalizedLegRole.BUY, "ETH", "0.000000288", null, null),
+                flow(NormalizedLegRole.TRANSFER, "ETH", "-0.080966", null, null)
+        );
+        bridgeOut.setWalletAddress("0xwallet");
+        bridgeOut.setNetworkId(NetworkId.ARBITRUM);
+        bridgeOut.setCorrelationId("bridge:lifi:0xbridge-out");
+        bridgeOut.setContinuityCandidate(true);
+        bridgeOut.setMatchedCounterparty("0xbridge-in");
+
+        NormalizedTransaction bridgeIn = tx(
+                "2",
+                "0xbridge-in",
+                2,
+                NormalizedTransactionType.BRIDGE_IN,
+                flow(NormalizedLegRole.TRANSFER, "ETH", "0.080966", null, null)
+        );
+        bridgeIn.setWalletAddress("0xwallet");
+        bridgeIn.setNetworkId(NetworkId.BASE);
+        bridgeIn.setCorrelationId("bridge:lifi:0xbridge-out");
+        bridgeIn.setContinuityCandidate(true);
+        bridgeIn.setMatchedCounterparty("0xbridge-out");
+
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                NormalizedTransactionStatus.CONFIRMED
+        )).thenReturn(List.of(priorBuy, bridgeOut, bridgeIn));
+
+        service().replayConfirmed();
+
+        List<AssetLedgerPoint> all = capturedLedgerPoints();
+
+        // 1. No phantom CARRY_IN with qty=0 on ARBITRUM from the bridge OUT transaction
+        List<AssetLedgerPoint> bridgeOutPoints = all.stream()
+                .filter(p -> "0xbridge-out".equals(p.getTxHash()))
+                .toList();
+        bridgeOutPoints.forEach(p ->
+                assertThat(p.getQuantityDelta())
+                        .as("BRIDGE_OUT must not emit a qty=0 CARRY_IN (phantom basis injection) on ARBITRUM")
+                        .isNotEqualByComparingTo("0")
+        );
+
+        // 2. ARBITRUM AVCO after bridge must not spike: should stay near $2010, not $318 k
+        AssetLedgerPoint arbAfterBridge = bridgeOutPoints.stream()
+                .filter(p -> p.getBasisEffect() == AssetLedgerPoint.BasisEffect.CARRY_OUT
+                        && NetworkId.ARBITRUM.equals(p.getNetworkId()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("Expected CARRY_OUT on ARBITRUM"));
+        assertThat(arbAfterBridge.getAvcoAfterUsd())
+                .as("ARBITRUM AVCO after CARRY_OUT must not be inflated by phantom basis")
+                .isLessThan(new java.math.BigDecimal("5000"));
+
+        // 3. BASE BRIDGE_IN receives the authoritative carry (not provisional market price)
+        AssetLedgerPoint baseCarryIn = all.stream()
+                .filter(p -> "0xbridge-in".equals(p.getTxHash())
+                        && p.getBasisEffect() == AssetLedgerPoint.BasisEffect.CARRY_IN
+                        && NetworkId.BASE.equals(p.getNetworkId()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("Expected CARRY_IN on BASE"));
+        assertThat(baseCarryIn.getQuantityDelta()).isEqualByComparingTo("0.080966");
+        // The carried basis comes from ARBITRUM AVCO ($2010) × qty, not provisional market price
+        assertThat(baseCarryIn.getTotalCostBasisAfterUsd())
+                .as("BASE cost basis after CARRY_IN must reflect the carried ARBITRUM basis")
+                .isGreaterThan(new java.math.BigDecimal("100"));
+    }
+
+    @Test
     void bridgeDestinationLowerThanSourceCarriesFullCostIntoSmallerDestinationQuantity() {
         NormalizedTransaction buy = tx("1", "0xbuy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
                 flow(NormalizedLegRole.BUY, "ETH", "1", "100", PriceSource.BINANCE));
@@ -2566,6 +2709,56 @@ class AvcoReplayServiceTest {
     }
 
     @Test
+    void collapsedFundToEarnDrainsFundSubAccountWhenUmbrellaEmpty() {
+        // R-1/R-3: real Bybit shape. ONDO is acquired on UTA (root/umbrella position), swept
+        // UTA→FUND (collapsed pair credits the :FUND sub-account), then FUND→EARN (collapsed).
+        // The FUND→EARN outbound leg strips :FUND to the empty umbrella for its position key,
+        // but the inventory lives on :FUND. Before the fix it drained the empty umbrella and the
+        // EARN inbound carried ~$0 (collapsing AVCO → fabricated gains; FUND USDT $0.84,
+        // cmETH/mETH $0). The carry-source fallback now drains :FUND so EARN inherits the real
+        // ~$2/unit basis (realised = 0).
+        NormalizedTransaction utaBuy = bybitBundleBuyTx("uta-buy", "0xa", 0,
+                "BYBIT:33625378:UTA", "ONDO", "100", "2");
+
+        // UTA→FUND collapsed pair: outbound drains the umbrella, inbound credits :FUND.
+        NormalizedTransaction utaFundOut = bybitBundleOutTx("uta-fund-out", "0xb", 1,
+                "BYBIT:33625378:UTA", "BYBIT:33625378:FUND", "ONDO", "-100",
+                "bybit-collapsed-v1:UTAFUND-1");
+        NormalizedTransaction utaFundIn = bybitBundleOutTx("uta-fund-in", "0xb", 2,
+                "BYBIT:33625378:FUND", "BYBIT:33625378:UTA", "ONDO", "100",
+                "bybit-collapsed-v1:UTAFUND-1");
+
+        // FUND→EARN collapsed pair: outbound resolves to the now-empty umbrella; the fix
+        // redirects the drain to the funded :FUND sub-account.
+        NormalizedTransaction fundEarnOut = bybitBundleOutTx("fund-earn-out", "0xc", 3,
+                "BYBIT:33625378:FUND", "BYBIT:33625378:EARN", "ONDO", "-100",
+                "bybit-collapsed-v1:FUNDEARN-1");
+        NormalizedTransaction fundEarnIn = bybitBundleOutTx("fund-earn-in", "0xc", 4,
+                "BYBIT:33625378:EARN", "BYBIT:33625378:FUND", "ONDO", "100",
+                "bybit-collapsed-v1:FUNDEARN-1");
+
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                NormalizedTransactionStatus.CONFIRMED
+        )).thenReturn(List.of(utaBuy, utaFundOut, utaFundIn, fundEarnOut, fundEarnIn));
+
+        service().replayConfirmed();
+
+        AssetLedgerPoint earnPoint = capturedLedgerPoints().stream()
+                .filter(point -> "BYBIT:33625378:EARN".equals(point.getWalletAddress()))
+                .filter(point -> "ONDO".equalsIgnoreCase(point.getAssetSymbol()))
+                .filter(point -> point.getBasisEffect() == AssetLedgerPoint.BasisEffect.CARRY_IN)
+                .max(Comparator.comparing(AssetLedgerPoint::getReplaySequence))
+                .orElseThrow();
+
+        assertThat(earnPoint.getCostBasisDeltaUsd())
+                .as("EARN inbound carries the funded :FUND basis (~$2/unit), not ~$0")
+                .isGreaterThan(new BigDecimal("150"));
+        assertThat(earnPoint.getTotalCostBasisAfterUsd())
+                .as("EARN total cost basis ≈ $200 (100 ONDO @ $2)")
+                .isBetween(new BigDecimal("199"), new BigDecimal("201"));
+    }
+
+    @Test
     void crossUidCorrFamilyKeyUnaffectedByEarnReorder() {
         var assetSupport = new com.walletradar.costbasis.application.replay.support.ReplayAssetSupport();
         var keyFactory = new com.walletradar.costbasis.application.replay.support.ReplayPendingTransferKeyFactory(assetSupport);
@@ -2978,7 +3171,8 @@ class AvcoReplayServiceTest {
                 new com.walletradar.costbasis.application.replay.handler.BorrowReplayHandler(
                         borrowLiabilityTracker,
                         assetSupport,
-                        replayFlowSupport
+                        replayFlowSupport,
+                        null
                 );
         com.walletradar.costbasis.application.replay.handler.RepayReplayHandler repayReplayHandler =
                 new com.walletradar.costbasis.application.replay.handler.RepayReplayHandler(
@@ -2996,6 +3190,11 @@ class AvcoReplayServiceTest {
                 new com.walletradar.costbasis.application.replay.handler.BybitVenueInternalReplayHandler(
                         transferClassifier,
                         transferReplayHandler
+                );
+        com.walletradar.costbasis.application.replay.support.LeverageBorrowReplayHook leverageBorrowReplayHook =
+                new com.walletradar.costbasis.application.replay.support.LeverageBorrowReplayHook(
+                        new com.walletradar.ingestion.pipeline.classification.support.LeverageAcquisitionDetector(),
+                        borrowLiabilityTracker
                 );
         com.walletradar.costbasis.application.replay.dispatch.ReplayDispatcher replayDispatcher =
                 new com.walletradar.costbasis.application.replay.dispatch.ReplayDispatcher(
@@ -3015,6 +3214,7 @@ class AvcoReplayServiceTest {
                         asyncSpotOrderReplayHandler,
                         eulerLoopReplayHandler,
                         counterpartyBasisPoolReplayHook,
+                        leverageBorrowReplayHook,
                         borrowReplayHandler,
                         repayReplayHandler
                 );

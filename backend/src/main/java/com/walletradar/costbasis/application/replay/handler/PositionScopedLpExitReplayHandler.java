@@ -182,12 +182,22 @@ public class PositionScopedLpExitReplayHandler {
             touchedEligibleIdentities.add(bucketIdentity);
             CarryTransfer sameAssetCarry = bucket.takeSameAssetCarry(bucketIdentity, flow.getQuantityDelta().abs(), position.assetKey());
             if (sameAssetCarry != null) {
+                // U-3: same-asset carry — cap a USD-stablecoin underlying at the $1 peg.
+                BigDecimal sameAssetCovered = sameAssetCarry.coveredQuantity() != null
+                        ? sameAssetCarry.coveredQuantity()
+                        : sameAssetCarry.quantity();
+                BigDecimal sameAssetBasis = flowSupport.pegCappedStablecoinCarryBasis(
+                        position.assetKey(), sameAssetCovered, sameAssetCarry.costBasisUsd());
+                BigDecimal sameAssetAvco = sameAssetBasis.signum() > 0
+                        && sameAssetCovered != null && sameAssetCovered.signum() > 0
+                        ? sameAssetBasis.divide(sameAssetCovered, MC)
+                        : sameAssetCarry.avco();
                 flowSupport.restoreToPosition(
                         sameAssetCarry.quantity(),
                         position,
-                        sameAssetCarry.costBasisUsd(),
+                        sameAssetBasis,
                         sameAssetCarry.uncoveredQuantity(),
-                        sameAssetCarry.avco()
+                        sameAssetAvco
                 );
                 replayState.ledgerPointCollector().record(
                         transaction,
@@ -613,10 +623,20 @@ public class PositionScopedLpExitReplayHandler {
             residualSameAssetQty = BigDecimal.ZERO;
         }
 
-        BigDecimal avco = totalBasis.signum() > 0 && totalQty.signum() > 0
-                ? totalBasis.divide(totalQty, MC)
+        // U-3: when NO cross-asset basis was carried, this is a same-asset stablecoin continuity
+        // carry — cap a USD-stablecoin underlying at the $1 peg. A cross-asset exit (e.g. a WETH/USDC
+        // pool fully returned as USDC) legitimately carries combined basis above $1/unit and must NOT
+        // be capped, or the cross-asset basis would be destroyed and a gain fabricated.
+        BigDecimal effectiveBasis = totalBasis;
+        if (!crossAssetBasisCarried) {
+            BigDecimal coveredForCap = totalQty.subtract(totalUncovered, MC);
+            effectiveBasis = flowSupport.pegCappedStablecoinCarryBasis(
+                    position.assetKey(), coveredForCap, totalBasis);
+        }
+        BigDecimal avco = effectiveBasis.signum() > 0 && totalQty.signum() > 0
+                ? effectiveBasis.divide(totalQty, MC)
                 : null;
-        flowSupport.restoreToPosition(totalQty, position, totalBasis, totalUncovered, avco);
+        flowSupport.restoreToPosition(totalQty, position, effectiveBasis, totalUncovered, avco);
         replayState.ledgerPointCollector().record(
                 transaction,
                 flow,

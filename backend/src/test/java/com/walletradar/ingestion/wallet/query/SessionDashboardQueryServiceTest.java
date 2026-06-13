@@ -358,7 +358,7 @@ class SessionDashboardQueryServiceTest {
     }
 
     @Test
-    void valuesAaveReceiptAndVariableDebtPositionsFromUnderlyingCurrentBalanceQuantity() {
+    void excludesAaveDebtReceiptFromPositionsAndValuesHeldAaveReceipt() {
         UserSession session = new UserSession();
         session.setId("session-aave");
         UserSession.SessionWallet wallet = new UserSession.SessionWallet();
@@ -398,7 +398,9 @@ class SessionDashboardQueryServiceTest {
                 .findSessionDashboard("session-aave")
                 .orElseThrow();
 
-        assertThat(result.tokenPositions()).hasSize(2);
+        // F-4: the held aToken receipt is valued, but the variableDebt* liability marker is
+        // excluded from positions entirely (tracked via borrow_liabilities, never as a held asset).
+        assertThat(result.tokenPositions()).hasSize(1);
         assertThat(result.tokenPositions())
                 .filteredOn(position -> "USDC".equals(position.symbol())
                         && "AAVE_INDEX_ACCRUING".equals(position.valuationModel()))
@@ -410,15 +412,9 @@ class SessionDashboardQueryServiceTest {
                     assertThat(position.valuationUnderlyingSymbol()).isEqualTo("USDC");
                 });
         assertThat(result.tokenPositions())
-                .filteredOn(position -> position.symbol().equals("VARIABLEDEBTMANUSDE"))
-                .singleElement()
-                .satisfies(position -> {
-                    assertThat(position.priceUsd()).isEqualByComparingTo("1");
-                    assertThat(position.marketValueUsd()).isEqualByComparingTo("-4");
-                    assertThat(position.valuationModel()).isEqualTo("AAVE_INDEX_ACCRUING");
-                    assertThat(position.valuationUnderlyingSymbol()).isEqualTo("USDE");
-                });
-        assertThat(result.summary().portfolioValueUsd()).isEqualByComparingTo("6");
+                .noneMatch(position -> position.symbol().startsWith("VARIABLEDEBT"));
+        // No fabricated unrealized PnL from the debt token, and it no longer drags portfolioValue.
+        assertThat(result.summary().portfolioValueUsd()).isEqualByComparingTo("10");
     }
 
     @Test
@@ -520,8 +516,12 @@ class SessionDashboardQueryServiceTest {
         when(mongoOperations.find(any(Query.class), eq(AssetLedgerPoint.class))).thenReturn(List.of(dogePoint));
         when(mongoOperations.find(any(Query.class), eq(OnChainBalance.class))).thenReturn(List.of());
         when(mongoOperations.find(any(Query.class), eq(HistoricalPriceDocument.class))).thenReturn(List.of());
-        when(bybitLiveBalanceService.getUmbrellaBalances("BYBIT-33625378"))
-                .thenReturn(java.util.Map.of("DOGE", new BigDecimal("661.17")));
+        when(bybitLiveBalanceService.getSnapshotView("BYBIT-33625378"))
+                .thenReturn(Optional.of(new BybitLiveBalanceService.LiveSnapshotView(
+                        BybitLiveBalanceService.LiveSnapshotAvailability.KNOWN_NON_EMPTY,
+                        java.util.Map.of("DOGE", new BigDecimal("661.17")),
+                        java.time.Instant.parse("2025-06-01T00:00:00Z")
+                )));
 
         SessionDashboardQueryService.SessionDashboardView result = sessionDashboardQueryService
                 .findSessionDashboard("session-bybit-inflate")

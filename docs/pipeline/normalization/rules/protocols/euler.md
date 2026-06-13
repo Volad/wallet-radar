@@ -73,6 +73,14 @@ Current active semantic hints:
   `LENDING_WITHDRAW`, otherwise it stays review
 - loop decrease / close remain reserved for the audited loop-router lane
 
+## Lending market key (EVK)
+
+- Per-vault grouping uses `matchedCounterparty` (EVK vault address) when present:
+  `evk-vault-{address[2..10]}`
+- Open position attachment uses the same key from ledger `matchedCounterparty`
+  or balance `assetContract` (see ADR-025)
+- Fallback without vault address: `evk-account`
+
 ## Correlation Rules
 
 - exact async pairing is not the default

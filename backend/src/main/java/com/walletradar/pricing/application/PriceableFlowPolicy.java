@@ -218,6 +218,19 @@ public final class PriceableFlowPolicy {
         if (!isInboundTransferFlow(flow)) {
             return false;
         }
+        // F-1: USD-pegged inbound transfers (USDC/USDT/USD₮0/USDE and their curated aToken aliases)
+        // always get a $1 quote so the replay inbound-shortfall fallback can promote any qty that
+        // continuity carry left uncovered, instead of admitting a $0-basis stablecoin lot that
+        // collapses AVCO and books fabricated gains on disposal. The fallback only covers the
+        // uncovered delta, so a fully-carried leg is unaffected.
+        if (CanonicalAssetCatalog.isUsdStablecoin(
+                transaction.getNetworkId(),
+                flow.getAssetContract(),
+                flow.getAssetSymbol(),
+                transaction.getSource()
+        )) {
+            return true;
+        }
         NormalizedTransactionType type = transaction.getType();
         if (type == NormalizedTransactionType.LP_EXIT
                 || type == NormalizedTransactionType.LP_EXIT_PARTIAL

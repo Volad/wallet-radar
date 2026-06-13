@@ -63,6 +63,7 @@ class ReplayDispatcherBybitCollapsedSelfTransferTest {
     @Mock AsyncSpotOrderReplayHandler asyncSpotOrderReplayHandler;
     @Mock EulerLoopReplayHandler eulerLoopReplayHandler;
     @Mock CounterpartyBasisPoolReplayHook counterpartyBasisPoolReplayHook;
+    @Mock com.walletradar.costbasis.application.replay.support.LeverageBorrowReplayHook leverageBorrowReplayHook;
     @Mock BorrowReplayHandler borrowReplayHandler;
     @Mock RepayReplayHandler repayReplayHandler;
     @Mock ReplayExecutionState replayState;
@@ -78,7 +79,8 @@ class ReplayDispatcherBybitCollapsedSelfTransferTest {
                 genericAsyncLifecycleReplayHandler, gmxLpEntryReplayHandler,
                 lpReceiptEntryReplayHandler, positionScopedLpExitReplayHandler,
                 asyncSpotOrderReplayHandler, eulerLoopReplayHandler,
-                counterpartyBasisPoolReplayHook, borrowReplayHandler, repayReplayHandler
+                counterpartyBasisPoolReplayHook, leverageBorrowReplayHook,
+                borrowReplayHandler, repayReplayHandler
         );
     }
 

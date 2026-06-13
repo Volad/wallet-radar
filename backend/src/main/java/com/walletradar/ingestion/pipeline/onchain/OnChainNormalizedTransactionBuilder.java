@@ -6,6 +6,9 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassificationResult;
 import com.walletradar.ingestion.pipeline.classification.reason.ClarificationPolicyService;
+import com.walletradar.domain.transaction.normalized.LeverageBorrowAnnotation;
+import com.walletradar.ingestion.pipeline.classification.support.AaveDebtLoanCorrelationSupport;
+import com.walletradar.ingestion.pipeline.classification.support.LeverageAcquisitionDetector;
 import org.bson.Document;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -46,14 +49,19 @@ public class OnChainNormalizedTransactionBuilder {
     private static final BigInteger TWO_256 = BigInteger.ONE.shiftLeft(256);
 
     private final ClarificationPolicyService clarificationPolicyService;
+    private final LeverageAcquisitionDetector leverageAcquisitionDetector;
 
     @Autowired
-    public OnChainNormalizedTransactionBuilder(ClarificationPolicyService clarificationPolicyService) {
+    public OnChainNormalizedTransactionBuilder(
+            ClarificationPolicyService clarificationPolicyService,
+            LeverageAcquisitionDetector leverageAcquisitionDetector
+    ) {
         this.clarificationPolicyService = clarificationPolicyService;
+        this.leverageAcquisitionDetector = leverageAcquisitionDetector;
     }
 
     public OnChainNormalizedTransactionBuilder() {
-        this(new ClarificationPolicyService());
+        this(new ClarificationPolicyService(), new LeverageAcquisitionDetector());
     }
 
     public NormalizedTransaction build(
@@ -209,12 +217,74 @@ public class OnChainNormalizedTransactionBuilder {
         normalized.setProtocolName(classificationResult.protocolName());
         normalized.setProtocolVersion(classificationResult.protocolVersion());
         normalized.setCorrelationId(classificationResult.correlationId());
+        applySyntheticAaveLoanCorrelationId(normalized);
         normalized.setContinuityCandidate(Boolean.TRUE.equals(classificationResult.continuityCandidate()));
         normalized.setMatchedCounterparty(classificationResult.matchedCounterparty());
         normalized.setExcludedFromAccounting(Boolean.TRUE.equals(classificationResult.excludedFromAccounting()));
         normalized.setAccountingExclusionReason(classificationResult.accountingExclusionReason());
         applyFluidEvidence(normalized, view, classificationResult);
         applyMorphoEvidence(normalized, view, classificationResult);
+        applyLeverageAcquisitionAnnotation(normalized, view);
+    }
+
+    /**
+     * ADR-028: annotate an inferred leveraged buy (acquisition SWAP whose collateral is worth more
+     * than the consideration because the gap is borrowed). The synthetic borrow is sized at replay;
+     * here we persist the borrow evidence and the deterministic correlation key. When the shape has
+     * borrow evidence but no usable correlation key (e.g. native-token collateral with no contract),
+     * route to clarification rather than fabricate a liability we cannot key.
+     */
+    private void applyLeverageAcquisitionAnnotation(
+            NormalizedTransaction normalized,
+            OnChainRawTransactionView view
+    ) {
+        if (normalized.getType() != NormalizedTransactionType.SWAP) {
+            return;
+        }
+        LeverageAcquisitionDetector.LeverageAnnotation annotation = leverageAcquisitionDetector.detect(
+                view,
+                normalized.getNetworkId(),
+                normalized.getWalletAddress(),
+                normalized.getFlows()
+        );
+        if (annotation == null) {
+            return;
+        }
+        if (annotation.borrowEvidence()) {
+            LeverageBorrowAnnotation.write(
+                    normalized,
+                    true,
+                    annotation.evidenceKind() == null ? null : annotation.evidenceKind().name(),
+                    annotation.loanCorrelationId(),
+                    annotation.collateralContract(),
+                    annotation.collateralSymbol()
+            );
+            return;
+        }
+        normalized.setStatus(NormalizedTransactionStatus.PENDING_CLARIFICATION);
+        List<String> reasons = new ArrayList<>(normalized.getMissingDataReasons() == null
+                ? List.of()
+                : normalized.getMissingDataReasons());
+        if (!reasons.contains(LeverageAcquisitionDetector.PENDING_REASON)) {
+            reasons.add(LeverageAcquisitionDetector.PENDING_REASON);
+        }
+        normalized.setMissingDataReasons(reasons);
+    }
+
+    /**
+     * F-3/F-4: stamp a deterministic synthetic loan id on on-chain Aave {@code BORROW}/{@code REPAY}
+     * transactions that lack an exchange-issued correlation id, so the existing
+     * {@code BorrowReplayHandler}/{@code RepayReplayHandler} can register the liability and book the
+     * matched repay at ~$0. Never overrides an authoritative correlation id from another source.
+     */
+    private void applySyntheticAaveLoanCorrelationId(NormalizedTransaction normalized) {
+        if (normalized.getCorrelationId() != null && !normalized.getCorrelationId().isBlank()) {
+            return;
+        }
+        String syntheticLoanId = AaveDebtLoanCorrelationSupport.syntheticLoanCorrelationId(normalized);
+        if (syntheticLoanId != null) {
+            normalized.setCorrelationId(syntheticLoanId);
+        }
     }
 
     private void applyFluidEvidence(

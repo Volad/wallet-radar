@@ -28,7 +28,7 @@ Follow the project rule **financial-correctness-audit-workflow** (`.cursor/rules
 - **Stop before Phase 4** unless the user says the plan is approved.
 
 ### Phase 4–6 (only after user approval)
-- Update docs (`docs/03-accounting.md`, `docs/adr/`, family docs as needed).
+- Update docs (`docs/pipeline/cost-basis/`, `docs/pipeline/normalization/rules/`, `docs/adr/`, as needed).
 - Delegate **`backend-dev`** to implement the approved plan.
 - Verify: `./scripts/prod-reset-rebuild-backend.sh --skip-frontend` (add `--clear-pricing-cache` if pricing policy changed) → wait for normalization/replay → re-run **`financial-logic-auditor`** against plan acceptance.
 

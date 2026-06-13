@@ -3,6 +3,8 @@ package com.walletradar.pricing.application;
 import com.walletradar.domain.common.Decimal128Support;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.common.PriceSource;
+import com.walletradar.domain.session.UserSession;
+import com.walletradar.domain.session.UserSessionRepository;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.pricing.domain.CanonicalAssetCatalog;
 import com.walletradar.pricing.domain.PriceQuote;
@@ -47,6 +49,7 @@ public class CurrentPriceQuoteRefreshService {
     private final MongoOperations mongoOperations;
     private final PriceExternalSourceOrchestrator priceExternalSourceOrchestrator;
     private final GmxProtocolSnapshotValuationService gmxProtocolSnapshotValuationService;
+    private final UserSessionRepository userSessionRepository;
 
     public int refreshForSessionBalances(String sessionId, Instant requestedAt) {
         if (sessionId == null || sessionId.isBlank()) {
@@ -56,6 +59,11 @@ public class CurrentPriceQuoteRefreshService {
         Set<BalanceAsset> balanceAssets = loadCanonicalAssets(sessionId);
         int refreshed = refreshProtocolSymbols(sessionId, balanceAssets, refreshTime);
         Set<String> symbols = canonicalMarketSymbols(balanceAssets);
+        // CEX-only holdings (assets that live solely on a Bybit umbrella and never appear in
+        // on_chain_balances, e.g. ONDO/LINK/LDO/DOGE/LTC/XRP) otherwise never get a fresh current
+        // quote and fall back to a stale "last trade" historical price — overstating the dashboard
+        // CEX value. Include the session's live Bybit umbrella symbols in the refresh set.
+        symbols.addAll(loadBybitLiveSymbols(sessionId));
         refreshed += refreshSymbols(sessionId, symbols, refreshTime);
         log.info(
                 "Current quote refresh complete: sessionId={}, symbols={}, protocolAssets={}, refreshed={}",
@@ -65,6 +73,55 @@ public class CurrentPriceQuoteRefreshService {
                 refreshed
         );
         return refreshed;
+    }
+
+    /**
+     * Canonical market symbols for assets held on the session's Bybit umbrella accounts. These are
+     * sourced from {@code bybit_live_balances} (positive umbrella quantity) so CEX-only positions
+     * receive a fresh current quote instead of a stale last-trade historical price.
+     */
+    private Set<String> loadBybitLiveSymbols(String sessionId) {
+        Set<String> symbols = new LinkedHashSet<>();
+        Set<String> integrationIds = userSessionRepository.findById(sessionId)
+                .map(this::bybitIntegrationIds)
+                .orElse(Set.of());
+        if (integrationIds.isEmpty()) {
+            return symbols;
+        }
+        Query query = Query.query(Criteria.where("integrationId").in(integrationIds));
+        List<Document> balances = mongoOperations.find(query, Document.class, "bybit_live_balances");
+        if (balances == null) {
+            return symbols;
+        }
+        for (Document balance : balances) {
+            BigDecimal umbrellaQty = readDecimal(balance.get("umbrellaQty"));
+            if (umbrellaQty == null || umbrellaQty.signum() <= 0) {
+                continue;
+            }
+            String symbol = CanonicalAssetCatalog.canonicalMarketSymbol(balance.getString("assetSymbol"));
+            if (symbol != null && !symbol.isBlank()) {
+                symbols.add(symbol.trim().toUpperCase(Locale.ROOT));
+            }
+        }
+        return symbols;
+    }
+
+    private Set<String> bybitIntegrationIds(UserSession session) {
+        Set<String> ids = new LinkedHashSet<>();
+        if (session == null || session.getIntegrations() == null) {
+            return ids;
+        }
+        for (UserSession.SessionIntegration integration : session.getIntegrations()) {
+            if (integration == null
+                    || integration.getIntegrationId() == null
+                    || integration.getStatus() == UserSession.IntegrationStatus.DISABLED
+                    || integration.getAccountRef() == null
+                    || !integration.getAccountRef().toUpperCase(Locale.ROOT).startsWith("BYBIT:")) {
+                continue;
+            }
+            ids.add(integration.getIntegrationId());
+        }
+        return ids;
     }
 
     private int refreshProtocolSymbols(String sessionId, Set<BalanceAsset> balanceAssets, Instant refreshTime) {
@@ -255,6 +312,26 @@ public class CurrentPriceQuoteRefreshService {
         Query query = Query.query(criteria);
         query.limit(1);
         return mongoOperations.exists(query, CurrentPriceQuoteDocument.class);
+    }
+
+    private BigDecimal readDecimal(Object value) {
+        if (value instanceof BigDecimal decimal) {
+            return decimal;
+        }
+        if (value instanceof Decimal128 decimal128) {
+            return decimal128.bigDecimalValue();
+        }
+        if (value instanceof Number number) {
+            return BigDecimal.valueOf(number.doubleValue());
+        }
+        if (value instanceof String text && !text.isBlank()) {
+            try {
+                return new BigDecimal(text.trim());
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
     }
 
     private BigDecimal readQuantity(Document balance) {

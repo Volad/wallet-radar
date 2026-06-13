@@ -28,7 +28,7 @@ public final class ReplayExecutionState {
     private final LpReceiptBasisPoolReplayContext lpReceiptBasisPoolContext;
     /**
      * Cycle/7 S5: continuity-path replay duplicate guard.
-     * Holds {@code (correlationId|walletAddress|assetFamily|sign(qty))} fingerprints for flows
+     * Holds {@code (correlationId|walletAddress|networkId|assetFamily|sign(qty))} fingerprints for flows
      * that have already passed through the continuity-transfer dispatch path during this replay
      * pass. If a duplicate appears (e.g., a stream mirror that survived the upstream collapser),
      * the dispatcher logs {@code REPLAY_DEDUP_MIRROR_SKIPPED} and skips the flow.

@@ -46,6 +46,7 @@ const before = {
   historicalPrices: count("historical_prices"),
   assetLedgerPoints: count("asset_ledger_points"),
   onChainBalances: count("on_chain_balances"),
+  lpReceiptBasisPools: count("lp_receipt_basis_pools"),
   sessionsWithPipelineState: count("user_sessions", {pipelineState: {\$exists: true, \$ne: null}})
 };
 
@@ -92,6 +93,11 @@ db.getCollection("normalized_transactions").deleteMany({});
 db.getCollection("asset_ledger_points").deleteMany({});
 db.getCollection("counterparty_basis_pools").deleteMany({});
 db.getCollection("borrow_liabilities").deleteMany({});
+// lp_receipt_basis_pools is a replay-derived accumulator (LpReceiptBasisPoolService.deposit is
+// additive). Like counterparty_basis_pools / borrow_liabilities it MUST be cleared before a full
+// replay; otherwise each rebuild re-deposits every LP_ENTRY on top of the persisted prior run,
+// inflating LP-receipt basis without bound (R-2: FAMILY:LP_RECEIPT phantom basis ~\$516k).
+db.getCollection("lp_receipt_basis_pools").deleteMany({});
 db.getCollection("on_chain_balances").deleteMany({});
 db.getCollection("user_sessions").updateMany({}, {\$unset: {pipelineState: ""}});
 
@@ -109,6 +115,7 @@ const after = {
   historicalPrices: count("historical_prices"),
   assetLedgerPoints: count("asset_ledger_points"),
   onChainBalances: count("on_chain_balances"),
+  lpReceiptBasisPools: count("lp_receipt_basis_pools"),
   sessionsWithPipelineState: count("user_sessions", {pipelineState: {\$exists: true, \$ne: null}})
 };
 

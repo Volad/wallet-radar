@@ -139,6 +139,17 @@ interface MarkerView {
   readonly pathToColor: string | null;
   readonly memberNormalizedTransactionIds: ReadonlyArray<string>;
   readonly flows: ReadonlyArray<FlowChipView>;
+  readonly displaySymbol: string;
+  readonly correlationId: string | null;
+  readonly lifecycleChainId: string | null;
+  readonly isCollapsedGroup: boolean;
+  readonly collapsedLegs: ReadonlyArray<MarkerView>;
+}
+
+interface LedgerPointMeta {
+  readonly correlationId: string | null;
+  readonly lifecycleChainId: string | null;
+  readonly normalizedType: string | null;
 }
 
 interface FlowChipView {
@@ -176,7 +187,7 @@ interface RenderedPnlMarkerView extends RenderedPointView {
   readonly cumulativeY: number;
 }
 
-type RangeDragMode = 'move' | 'start' | 'end';
+type RangeDragMode = 'start' | 'end' | 'move';
 
 const ETH_FAMILY_SYMBOLS = new Set(['ETH', 'WETH', 'AETHWETH', 'AARBWETH', 'ALINWETH', 'AMANWETH', 'AZKSWETH', 'VBETH']);
 const BTC_FAMILY_SYMBOLS = new Set(['BTC', 'WBTC', 'AARBWBTC', 'AETHWBTC', 'ALINWBTC', 'AMANWBTC', 'AZKSWBTC']);
@@ -186,10 +197,20 @@ const USDC_FAMILY_SYMBOLS = new Set(['USDC', 'VBUSDC']);
 const STABLECOIN_SYMBOLS = new Set(['USDT', 'USDC', 'USDE', 'USDS', 'USDD', 'DAI', 'FDUSD', 'PYUSD', 'TUSD', 'USD1']);
 const DEFAULT_RANGE_DAYS = 21;
 const DEFAULT_RANGE_MIN_POINTS = 16;
+const CHART_MARKER_EDGE_MARGIN = 20;
 const DEFAULT_DISABLED_TYPE_KEYS = new Set(['WRAP', 'UNWRAP', 'GAS_ONLY']);
 const DEFAULT_HIDDEN_BASIS_EFFECTS = new Set(['GAS_ONLY']);
 const BASIS_MOVE_EFFECTS = new Set(['CARRY_IN', 'CARRY_OUT', 'REALLOCATE_IN', 'REALLOCATE_OUT']);
-const TRANSFER_TYPE_KEYS = new Set(['BRIDGE_IN', 'BRIDGE_OUT', 'INTERNAL_TRANSFER', 'EXTERNAL_TRANSFER_IN', 'EXTERNAL_TRANSFER_OUT']);
+const TRANSFER_TYPE_KEYS = new Set([
+  'BRIDGE_IN',
+  'BRIDGE_OUT',
+  'INTERNAL_TRANSFER',
+  'EXTERNAL_TRANSFER_IN',
+  'EXTERNAL_TRANSFER_OUT',
+  'COLLAPSED_BRIDGE_TRANSFER',
+  'COLLAPSED_MATCHED_TRANSFER',
+  'COLLAPSED_BYBIT_CORRIDOR',
+]);
 
 type QuickPresetKey = 'economics' | 'all' | 'transfers' | 'basisMoves';
 
@@ -554,6 +575,77 @@ const TYPE_META: Readonly<Record<string, TypeVisualMeta>> = {
       ctx.stroke();
     },
   },
+  COLLAPSED_BRIDGE_TRANSFER: {
+    label: 'Bridge transfer',
+    glyph: '⇋',
+    color: '#06b6d4',
+    icon: (ctx, cx, cy, r) => {
+      const a = r * 0.5;
+      ctx.beginPath();
+      ctx.moveTo(cx - a * 1.05, cy + a * 0.15);
+      ctx.quadraticCurveTo(cx, cy - a * 0.95, cx + a * 1.05, cy + a * 0.15);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(cx - a * 0.95, cy + a * 0.15);
+      ctx.lineTo(cx - a * 0.35, cy + a * 0.15);
+      ctx.moveTo(cx - a * 0.65, cy - a * 0.05);
+      ctx.lineTo(cx - a * 0.35, cy + a * 0.15);
+      ctx.lineTo(cx - a * 0.65, cy + a * 0.35);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(cx + a * 0.95, cy + a * 0.15);
+      ctx.lineTo(cx + a * 0.35, cy + a * 0.15);
+      ctx.moveTo(cx + a * 0.65, cy - a * 0.05);
+      ctx.lineTo(cx + a * 0.35, cy + a * 0.15);
+      ctx.lineTo(cx + a * 0.65, cy + a * 0.35);
+      ctx.stroke();
+    },
+  },
+  COLLAPSED_MATCHED_TRANSFER: {
+    label: 'Matched transfer',
+    glyph: '⛓',
+    color: '#6366f1',
+    icon: (ctx, cx, cy, r) => {
+      const a = r * 0.48;
+      ctx.beginPath();
+      ctx.arc(cx - a * 0.72, cy, a * 0.42, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(cx + a * 0.72, cy, a * 0.42, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(cx - a * 0.3, cy);
+      ctx.lineTo(cx + a * 0.3, cy);
+      ctx.moveTo(cx - a * 0.08, cy - a * 0.22);
+      ctx.lineTo(cx - a * 0.3, cy);
+      ctx.lineTo(cx - a * 0.08, cy + a * 0.22);
+      ctx.moveTo(cx + a * 0.08, cy - a * 0.22);
+      ctx.lineTo(cx + a * 0.3, cy);
+      ctx.lineTo(cx + a * 0.08, cy + a * 0.22);
+      ctx.stroke();
+    },
+  },
+  COLLAPSED_BYBIT_CORRIDOR: {
+    label: 'Bybit corridor',
+    glyph: '⇆',
+    color: '#f59e0b',
+    icon: (ctx, cx, cy, r) => {
+      const a = r * 0.5;
+      ctx.beginPath();
+      ctx.roundRect(cx - a * 0.95, cy - a * 0.55, a * 1.9, a * 1.1, 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(cx - a * 0.55, cy);
+      ctx.lineTo(cx + a * 0.55, cy);
+      ctx.moveTo(cx - a * 0.2, cy - a * 0.25);
+      ctx.lineTo(cx - a * 0.55, cy);
+      ctx.lineTo(cx - a * 0.2, cy + a * 0.25);
+      ctx.moveTo(cx + a * 0.2, cy - a * 0.25);
+      ctx.lineTo(cx + a * 0.55, cy);
+      ctx.lineTo(cx + a * 0.2, cy + a * 0.25);
+      ctx.stroke();
+    },
+  },
   EXTERNAL_TRANSFER_OUT: {
     label: 'External send',
     glyph: '↑',
@@ -773,6 +865,7 @@ export class AssetLedgerPageComponent {
   readonly copiedValueKey = signal<string | null>(null);
   readonly collapsedSections = signal<ReadonlySet<string>>(new Set<string>());
   readonly eventLogSearch = signal('');
+  readonly expandedLogRowId = signal<string | null>(null);
 
   @ViewChild('chartCanvas') private chartCanvasRef?: ElementRef<HTMLCanvasElement>;
   @ViewChild('qtyChartCanvas') private qtyChartCanvasRef?: ElementRef<HTMLCanvasElement>;
@@ -792,6 +885,7 @@ export class AssetLedgerPageComponent {
     startClientX: number;
     startIndex: number;
     endIndex: number;
+    anchorOffset: number;
   } | null = null;
 
   readonly viewState = toSignal(
@@ -1142,8 +1236,7 @@ export class AssetLedgerPageComponent {
     if (!Number.isFinite(parsed)) {
       return;
     }
-    const maxStart = Math.max(0, this.rangeEndIndex() - 1);
-    this.rangeStartIndex.set(Math.max(0, Math.min(Math.round(parsed), maxStart)));
+    this.rangeStartIndex.set(Math.max(0, Math.min(Math.round(parsed), this.rangeEndIndex())));
   }
 
   onRangeEndInput(value: string): void {
@@ -1151,25 +1244,39 @@ export class AssetLedgerPageComponent {
     if (!Number.isFinite(parsed)) {
       return;
     }
-    const minEnd = Math.min(this.maxMarkerIndex(), this.rangeStartIndex() + 1);
-    this.rangeEndIndex.set(Math.max(minEnd, Math.min(Math.round(parsed), this.maxMarkerIndex())));
+    const maxIndex = this.maxMarkerIndex();
+    this.rangeEndIndex.set(Math.max(this.rangeStartIndex(), Math.min(Math.round(parsed), maxIndex)));
+  }
+
+  selectFullRange(event: MouseEvent): void {
+    event.preventDefault();
+    event.stopPropagation();
+    const maxIndex = this.maxMarkerIndex();
+    this.rangeStartIndex.set(0);
+    this.rangeEndIndex.set(maxIndex);
   }
 
   onChartWheel(event: WheelEvent): void {
     event.preventDefault();
   }
 
-  onRangeSelectionPointerDown(event: MouseEvent, mode: RangeDragMode = 'move'): void {
+  onRangeSelectionPointerDown(event: MouseEvent, mode: RangeDragMode): void {
     if (this.maxMarkerIndex() <= 0) {
       return;
     }
     event.preventDefault();
     event.stopPropagation();
+    const rangeShell = this.rangeShellRef?.nativeElement;
+    const anchorOffset =
+      mode === 'move' && rangeShell !== undefined
+        ? this.pointerXToMarkerIndex(event.clientX, rangeShell) - this.rangeStartIndex()
+        : 0;
     this.rangeDragState = {
       mode,
       startClientX: event.clientX,
       startIndex: this.rangeStartIndex(),
       endIndex: this.rangeEndIndex(),
+      anchorOffset,
     };
     this.isRangeDragging.set(true);
   }
@@ -1177,6 +1284,9 @@ export class AssetLedgerPageComponent {
   private avcoKindLabel(kind: string | null): string | null {
     if (kind === 'PRIMARY_FLOW') {
       return 'Venue spot AVCO';
+    }
+    if (kind === 'CARRIED_FORWARD') {
+      return 'Carried forward';
     }
     if (kind === 'FAMILY_ROLLUP') {
       return 'Family aggregate';
@@ -1222,10 +1332,29 @@ export class AssetLedgerPageComponent {
   }
 
   shortHash(value: string): string {
-    if (value.length <= 16) {
-      return value;
+    return this.formatTxReference(value);
+  }
+
+  formatTxReference(value: string): string {
+    const trimmed = value.trim();
+    if (trimmed.length === 0) {
+      return '—';
     }
-    return `${value.slice(0, 10)}…${value.slice(-6)}`;
+    const upper = trimmed.toUpperCase();
+    if (upper.startsWith('BYBIT:')) {
+      const parts = trimmed.split(':');
+      if (parts.length >= 3 && parts[1].toUpperCase() === 'FUNDING_HISTORY') {
+        return 'Bybit · funding history';
+      }
+      if (parts.length >= 2) {
+        const stream = parts[1].replace(/_/g, ' ').toLowerCase();
+        return `Bybit · ${stream}`;
+      }
+    }
+    if (trimmed.length <= 16) {
+      return trimmed;
+    }
+    return `${trimmed.slice(0, 10)}…${trimmed.slice(-6)}`;
   }
 
   formatEventDateTime(value: string): string {
@@ -1252,11 +1381,42 @@ export class AssetLedgerPageComponent {
 
   selectMarkerFromLog(marker: MarkerView, event?: MouseEvent): void {
     event?.stopPropagation();
+    const nextExpanded = this.expandedLogRowId() === marker.id ? null : marker.id;
+    this.expandedLogRowId.set(nextExpanded);
     this.pinnedMarkerId.set(marker.id);
     this.hoveredMarkerId.set(null);
     this.showTooltip.set(false);
     this.renderChart();
     this.renderSupplementalCharts();
+  }
+
+  isLogRowExpanded(markerId: string): boolean {
+    return this.expandedLogRowId() === markerId;
+  }
+
+  expandableDetailRows(marker: MarkerView): ReadonlyArray<MarkerView> {
+    if (marker.isCollapsedGroup && marker.collapsedLegs.length > 0) {
+      return marker.collapsedLegs;
+    }
+    return [marker];
+  }
+
+  bridgePairingNote(marker: MarkerView): string | null {
+    if (marker.isCollapsedGroup) {
+      return null;
+    }
+    const bridgeTypes = new Set(['BRIDGE_OUT', 'BRIDGE_IN']);
+    if (!bridgeTypes.has(marker.typeKey) && marker.lifecycleKind !== 'BRIDGE') {
+      return null;
+    }
+    return 'Unmatched bridge leg — paired settlement not found in this asset timeline.';
+  }
+
+  formatFlowsSummary(flows: ReadonlyArray<FlowChipView>): string {
+    if (flows.length === 0) {
+      return '—';
+    }
+    return flows.map((flow) => `${flow.role} ${flow.assetSymbol} ${flow.quantityLabel}`).join(' · ');
   }
 
   onLogRowPointerEnter(marker: MarkerView): void {
@@ -1455,26 +1615,31 @@ export class AssetLedgerPageComponent {
     if (maxIndex <= 0) {
       return;
     }
-    const deltaX = event.clientX - dragState.startClientX;
-    const deltaIndex = Math.round((deltaX / width) * maxIndex);
-
-    if (dragState.mode === 'move') {
-      const rangeSpan = Math.max(1, dragState.endIndex - dragState.startIndex);
-      const maxStart = Math.max(0, maxIndex - rangeSpan);
-      const nextStart = Math.max(0, Math.min(dragState.startIndex + deltaIndex, maxStart));
-      this.rangeStartIndex.set(nextStart);
-      this.rangeEndIndex.set(Math.min(maxIndex, nextStart + rangeSpan));
-      return;
-    }
+    const hoverIndex = this.pointerXToMarkerIndex(event.clientX, rangeShell);
 
     if (dragState.mode === 'start') {
-      const nextStart = Math.max(0, Math.min(dragState.startIndex + deltaIndex, dragState.endIndex - 1));
-      this.rangeStartIndex.set(nextStart);
+      this.rangeStartIndex.set(Math.max(0, Math.min(hoverIndex, dragState.endIndex)));
       return;
     }
 
-    const nextEnd = Math.max(dragState.startIndex + 1, Math.min(dragState.endIndex + deltaIndex, maxIndex));
-    this.rangeEndIndex.set(nextEnd);
+    if (dragState.mode === 'move') {
+      const span = dragState.endIndex - dragState.startIndex;
+      const nextStart = Math.max(0, Math.min(hoverIndex - dragState.anchorOffset, maxIndex - span));
+      this.rangeStartIndex.set(nextStart);
+      this.rangeEndIndex.set(nextStart + span);
+      return;
+    }
+
+    this.rangeEndIndex.set(Math.max(dragState.startIndex, Math.min(hoverIndex, maxIndex)));
+  }
+
+  private pointerXToMarkerIndex(clientX: number, rangeShell: HTMLElement): number {
+    const rect = rangeShell.getBoundingClientRect();
+    if (rect.width <= 0) {
+      return 0;
+    }
+    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    return Math.round(ratio * this.maxMarkerIndex());
   }
 
   @HostListener('document:mouseup')
@@ -1506,6 +1671,7 @@ export class AssetLedgerPageComponent {
       this.collapsedSections.set(new Set<string>());
       this.hoveredMarkerId.set(null);
       this.pinnedMarkerId.set(null);
+      this.expandedLogRowId.set(null);
       this.copiedValueKey.set(null);
     });
     effect(() => {
@@ -1516,8 +1682,8 @@ export class AssetLedgerPageComponent {
       if (this.rangeStartIndex() > maxIndex) {
         this.rangeStartIndex.set(Math.max(0, maxIndex - 1));
       }
-      if (this.rangeStartIndex() >= this.rangeEndIndex() && maxIndex > 0) {
-        this.rangeStartIndex.set(Math.max(0, this.rangeEndIndex() - 1));
+      if (this.rangeStartIndex() > this.rangeEndIndex()) {
+        this.rangeStartIndex.set(this.rangeEndIndex());
       }
     });
     effect(() => {
@@ -1576,7 +1742,13 @@ export class AssetLedgerPageComponent {
       this.familyDisplaySymbol(ledger.familyIdentity);
 
     const legendItems = this.buildLegendItems(ledger.events);
-    const markers = this.buildMarkers(ledger, walletMeta);
+    const rawMarkers = this.enrichMarkerLinkage(
+      this.buildMarkers(ledger, walletMeta, displaySymbol),
+      ledger
+    );
+    const markers = this.reconcileMarkerAvcoSeries(
+      this.collapseMatchedMarkers(rawMarkers, ledger, displaySymbol)
+    );
     const markerLookup = Object.fromEntries(markers.map((marker) => [marker.id, marker] as const));
     return {
       sessionId: ledger.sessionId,
@@ -1616,7 +1788,8 @@ export class AssetLedgerPageComponent {
 
   private buildMarkers(
     ledger: SessionAssetLedgerResponse,
-    walletMeta: ReadonlyMap<string, WalletVisualMeta>
+    walletMeta: ReadonlyMap<string, WalletVisualMeta>,
+    displaySymbol: string
   ): ReadonlyArray<MarkerView> {
     const eventById = new Map(
       ledger.events.map((event) => [event.eventGroupId ?? event.normalizedTransactionId ?? event.txHash ?? crypto.randomUUID(), event] as const)
@@ -1679,7 +1852,321 @@ export class AssetLedgerPageComponent {
         pathToColor: path.toColor,
         memberNormalizedTransactionIds: entry.memberNormalizedTransactionIds,
         flows: this.toFlowChips(event?.flows ?? []),
+        displaySymbol,
+        correlationId: null,
+        lifecycleChainId: null,
+        isCollapsedGroup: false,
+        collapsedLegs: [],
       };
+    });
+  }
+
+  private buildLedgerPointMetaLookup(
+    ledger: SessionAssetLedgerResponse
+  ): {
+    readonly byTxId: Map<string, LedgerPointMeta>;
+    readonly byTxHash: Map<string, LedgerPointMeta>;
+  } {
+    const byTxId = new Map<string, LedgerPointMeta>();
+    const byTxHash = new Map<string, LedgerPointMeta>();
+    ledger.ledgerPoints.forEach((point) => {
+      const meta: LedgerPointMeta = {
+        correlationId: point.correlationId ?? null,
+        lifecycleChainId: point.lifecycleChainId ?? null,
+        normalizedType: point.normalizedType ?? null,
+      };
+      const txId = point.normalizedTransactionId;
+      if (txId !== null && txId.length > 0) {
+        byTxId.set(txId, meta);
+      }
+      const txHash = point.txHash;
+      if (txHash !== null && txHash.length > 0) {
+        byTxHash.set(txHash.toLowerCase(), meta);
+      }
+    });
+    return { byTxId, byTxHash };
+  }
+
+  private resolveMarkerPointMeta(
+    marker: MarkerView,
+    lookup: {
+      readonly byTxId: Map<string, LedgerPointMeta>;
+      readonly byTxHash: Map<string, LedgerPointMeta>;
+    }
+  ): LedgerPointMeta | null {
+    const txIds =
+      marker.memberNormalizedTransactionIds.length > 0
+        ? marker.memberNormalizedTransactionIds
+        : [marker.id];
+    for (const txId of txIds) {
+      const meta = lookup.byTxId.get(txId);
+      if (meta !== undefined) {
+        return meta;
+      }
+    }
+    return lookup.byTxHash.get(marker.txHash.toLowerCase()) ?? null;
+  }
+
+  private enrichMarkerLinkage(
+    markers: ReadonlyArray<MarkerView>,
+    ledger: SessionAssetLedgerResponse
+  ): ReadonlyArray<MarkerView> {
+    const lookup = this.buildLedgerPointMetaLookup(ledger);
+    return markers.map((marker) => {
+      const meta = this.resolveMarkerPointMeta(marker, lookup);
+      if (meta === null) {
+        return marker;
+      }
+      return {
+        ...marker,
+        correlationId: meta.correlationId,
+        lifecycleChainId: meta.lifecycleChainId,
+      };
+    });
+  }
+
+  private collapseMatchedMarkers(
+    markers: ReadonlyArray<MarkerView>,
+    ledger: SessionAssetLedgerResponse,
+    displaySymbol: string
+  ): ReadonlyArray<MarkerView> {
+    const lookup = this.buildLedgerPointMetaLookup(ledger);
+
+    const markerGroupKey = (marker: MarkerView): string | null => {
+      if (!TRANSFER_TYPE_KEYS.has(marker.typeKey)) {
+        return null;
+      }
+      const meta = this.resolveMarkerPointMeta(marker, lookup);
+      if (meta !== null) {
+        if (meta.correlationId !== null && meta.correlationId.length > 0) {
+          return `corr:${meta.correlationId}`;
+        }
+        if (meta.lifecycleChainId !== null && meta.lifecycleChainId.length > 0) {
+          return `chain:${meta.lifecycleChainId}`;
+        }
+      }
+      if (marker.memberNormalizedTransactionIds.length > 1) {
+        return `group:${marker.id}`;
+      }
+      return null;
+    };
+
+    const groups = new Map<string, MarkerView[]>();
+    markers.forEach((marker) => {
+      const key = markerGroupKey(marker);
+      if (key === null) {
+        return;
+      }
+      const bucket = groups.get(key) ?? [];
+      bucket.push(marker);
+      groups.set(key, bucket);
+    });
+
+    const collapseKeys = new Set<string>();
+    groups.forEach((members, key) => {
+      if (members.length >= 2 && this.shouldCollapseMatchedGroup(members, key)) {
+        collapseKeys.add(key);
+      }
+    });
+
+    if (collapseKeys.size === 0) {
+      return markers;
+    }
+
+    const consumedIds = new Set<string>();
+    const emittedGroups = new Set<string>();
+    const collapsed: MarkerView[] = [];
+
+    markers.forEach((marker) => {
+      const key = markerGroupKey(marker);
+      if (key !== null && collapseKeys.has(key)) {
+        if (emittedGroups.has(key)) {
+          return;
+        }
+        emittedGroups.add(key);
+        const legs = groups.get(key) ?? [marker];
+        legs.forEach((leg) => consumedIds.add(leg.id));
+        collapsed.push(this.buildCollapsedMarker(legs, key, displaySymbol));
+        return;
+      }
+      if (consumedIds.has(marker.id)) {
+        return;
+      }
+      collapsed.push(marker);
+    });
+
+    return collapsed;
+  }
+
+  private shouldCollapseMatchedGroup(members: ReadonlyArray<MarkerView>, groupKey: string): boolean {
+    const outbound = members.filter((marker) => marker.netQuantityDelta < -1e-10);
+    const inbound = members.filter((marker) => marker.netQuantityDelta > 1e-10);
+    if (outbound.length === 0 || inbound.length === 0) {
+      return false;
+    }
+    // Bybit corridor transfers are explicitly matched by the backend — both legs carry the same
+    // correlationId regardless of on-chain fees that cause a small quantity imbalance.
+    // Skip the quantity-balance check for these pairs.
+    if (groupKey.startsWith('corr:BYBIT-CORRIDOR:')) {
+      return true;
+    }
+    const outMag = outbound.reduce((sum, marker) => sum + Math.abs(marker.netQuantityDelta), 0);
+    const inMag = inbound.reduce((sum, marker) => sum + marker.netQuantityDelta, 0);
+    const netSum = members.reduce((sum, marker) => sum + marker.netQuantityDelta, 0);
+    const reference = Math.max(outMag, inMag, 1e-12);
+    const legImbalance = Math.abs(outMag - inMag) / reference;
+    const netImbalance = Math.abs(netSum) / reference;
+    return legImbalance <= 0.02 && netImbalance <= 0.02;
+  }
+
+  private buildCollapsedMarker(
+    legs: ReadonlyArray<MarkerView>,
+    groupKey: string,
+    displaySymbol: string
+  ): MarkerView {
+    const ordered = [...legs].sort((left, right) => left.timestamp.localeCompare(right.timestamp));
+    const first = ordered[0];
+    const last = ordered.at(-1) ?? first;
+    const hasBridge = ordered.some((leg) => leg.typeKey === 'BRIDGE_IN' || leg.typeKey === 'BRIDGE_OUT');
+    const hasBybitCorridor = groupKey.startsWith('corr:BYBIT-CORRIDOR:');
+    const typeKey = hasBybitCorridor
+      ? 'COLLAPSED_BYBIT_CORRIDOR'
+      : hasBridge
+        ? 'COLLAPSED_BRIDGE_TRANSFER'
+        : 'COLLAPSED_MATCHED_TRANSFER';
+    const meta = this.metaForType(typeKey);
+    const label = meta.label;
+    const netQuantityDelta = ordered.reduce((sum, leg) => sum + leg.netQuantityDelta, 0);
+    const displayQuantity = this.resolveCollapsedDisplayQuantity(ordered);
+    const displayLeg = this.selectCollapsedDisplayLeg(ordered);
+    const memberIds = [...new Set(ordered.flatMap((leg) => [...leg.memberNormalizedTransactionIds]))];
+    const networks = [...new Set(ordered.map((leg) => leg.networkLabel))];
+    const flows = ordered.flatMap((leg) => leg.flows);
+    const basisEffects = [...new Set(ordered.flatMap((leg) => leg.basisEffects))];
+
+    return {
+      ...first,
+      id: `collapsed:${groupKey}`,
+      typeKey,
+      label,
+      glyph: meta.glyph,
+      color: meta.color,
+      networkLabel: networks.length > 1 ? networks.join(' → ') : (first.networkLabel ?? networks[0] ?? '—'),
+      quantityDelta: displayQuantity,
+      netQuantityDelta,
+      displayQuantityDerived: Math.abs(displayQuantity - netQuantityDelta) > 1e-10,
+      amountUsd: displayLeg.amountUsd,
+      priceUsd: displayLeg.priceUsd,
+      priceSource: displayLeg.priceSource,
+      avcoAfterUsd: last.avcoAfterUsd,
+      avcoBeforeUsd: first.avcoBeforeUsd,
+      avcoKind: last.avcoKind,
+      avcoKindLabel: last.avcoKindLabel,
+      realisedPnlDeltaUsd: ordered.reduce((sum, leg) => sum + (leg.realisedPnlDeltaUsd ?? 0), 0) || null,
+      basisEffects,
+      basisSummary: basisEffects.length > 0 ? basisEffects.join(' · ') : 'No basis effect',
+      pathFrom: first.pathFrom,
+      pathTo: last.pathTo,
+      pathFromTitle: first.pathFromTitle,
+      pathToTitle: last.pathToTitle,
+      pathFromColor: first.pathFromColor,
+      pathToColor: last.pathToColor,
+      fromAddress: first.fromAddress,
+      toAddress: last.toAddress,
+      memberNormalizedTransactionIds: memberIds,
+      flows,
+      displaySymbol,
+      correlationId: groupKey.startsWith('corr:')
+        ? groupKey.slice('corr:'.length)
+        : (ordered.find((leg) => leg.correlationId !== null)?.correlationId ?? null),
+      lifecycleChainId: groupKey.startsWith('chain:')
+        ? groupKey.slice('chain:'.length)
+        : (ordered.find((leg) => leg.lifecycleChainId !== null)?.lifecycleChainId ?? null),
+      isCollapsedGroup: true,
+      collapsedLegs: ordered,
+    };
+  }
+
+  private resolveCollapsedDisplayQuantity(legs: ReadonlyArray<MarkerView>): number {
+    const netSum = legs.reduce((sum, leg) => sum + leg.netQuantityDelta, 0);
+    const outboundLegs = legs.filter(
+      (leg) =>
+        leg.typeKey.endsWith('_OUT') ||
+        leg.basisEffects.includes('CARRY_OUT') ||
+        leg.netQuantityDelta < -1e-10
+    );
+    const inboundLegs = legs.filter(
+      (leg) =>
+        leg.typeKey.endsWith('_IN') ||
+        leg.basisEffects.includes('CARRY_IN') ||
+        leg.netQuantityDelta > 1e-10
+    );
+    const outboundMag = outboundLegs.reduce((sum, leg) => sum + Math.abs(leg.netQuantityDelta), 0);
+    const inboundMag = inboundLegs.reduce((sum, leg) => sum + leg.netQuantityDelta, 0);
+    const flowMag = Math.max(outboundMag, inboundMag);
+    if (flowMag > 1e-10 && Math.abs(netSum) <= flowMag * 0.02) {
+      return outboundMag > 1e-10 ? -flowMag : flowMag;
+    }
+    if (Math.abs(netSum) > 1e-10) {
+      return netSum;
+    }
+    const fallback = legs.reduce(
+      (best, leg) => Math.max(best, Math.abs(leg.netQuantityDelta), Math.abs(leg.quantityDelta)),
+      0
+    );
+    return fallback > 1e-10 ? fallback : 0;
+  }
+
+  private selectCollapsedDisplayLeg(legs: ReadonlyArray<MarkerView>): MarkerView {
+    const outboundLeg =
+      legs.find(
+        (leg) =>
+          leg.typeKey.endsWith('_OUT') ||
+          leg.basisEffects.includes('CARRY_OUT') ||
+          leg.netQuantityDelta < -1e-10
+      ) ?? null;
+    if (outboundLeg !== null && (outboundLeg.amountUsd !== null || outboundLeg.priceUsd !== null)) {
+      return outboundLeg;
+    }
+    const inboundLeg =
+      legs.find(
+        (leg) =>
+          leg.typeKey.endsWith('_IN') ||
+          leg.basisEffects.includes('CARRY_IN') ||
+          leg.netQuantityDelta > 1e-10
+      ) ?? null;
+    if (inboundLeg !== null && (inboundLeg.amountUsd !== null || inboundLeg.priceUsd !== null)) {
+      return inboundLeg;
+    }
+    return (
+      legs.find((leg) => leg.amountUsd !== null || leg.priceUsd !== null) ??
+      outboundLeg ??
+      inboundLeg ??
+      legs[0]
+    );
+  }
+
+  private reconcileMarkerAvcoSeries(markers: ReadonlyArray<MarkerView>): ReadonlyArray<MarkerView> {
+    let lastAvco: number | null = null;
+    return markers.map((marker) => {
+      const avcoBeforeUsd = lastAvco ?? marker.avcoBeforeUsd;
+      let avcoAfterUsd = marker.avcoAfterUsd;
+      const shouldCarryForward =
+        (avcoAfterUsd === null || Number.isNaN(avcoAfterUsd)) &&
+        lastAvco !== null &&
+        (marker.avcoKind === 'CARRIED_FORWARD' ||
+          marker.typeKey === 'LP_ENTRY' ||
+          marker.typeKey === 'SPONSORED_GAS_IN' ||
+          marker.basisEffects.includes('REALLOCATE_OUT') ||
+          marker.basisEffects.includes('CARRY_OUT'));
+      if (shouldCarryForward) {
+        avcoAfterUsd = lastAvco;
+      }
+      const nextMarker = { ...marker, avcoBeforeUsd, avcoAfterUsd };
+      if (nextMarker.avcoAfterUsd !== null && !Number.isNaN(nextMarker.avcoAfterUsd)) {
+        lastAvco = nextMarker.avcoAfterUsd;
+      }
+      return nextMarker;
     });
   }
 
@@ -2218,22 +2705,23 @@ export class AssetLedgerPageComponent {
     const netQuantityDelta = entry.quantityDelta ?? 0;
     const primaryQuantityDelta = primaryFlow?.quantityDelta ?? null;
     const typeKey = this.normalizeTypeKey(entry.normalizedType);
-    if (
-      primaryQuantityDelta !== null &&
-      Math.abs(primaryQuantityDelta) > 1e-12 &&
-      TRANSFER_TYPE_KEYS.has(typeKey)
-    ) {
-      return { value: primaryQuantityDelta, derived: true };
+    if (Math.abs(netQuantityDelta) > 1e-12) {
+      return { value: netQuantityDelta, derived: false };
     }
     if (
       primaryQuantityDelta !== null &&
-      Math.abs(netQuantityDelta) <= 1e-12 &&
       Math.abs(primaryQuantityDelta) > 1e-12 &&
-      this.hasMixedContinuityEffects(entry.basisEffects)
+      (TRANSFER_TYPE_KEYS.has(typeKey) ||
+        this.hasMixedContinuityEffects(entry.basisEffects) ||
+        this.hasCarryEffect(entry.basisEffects))
     ) {
       return { value: primaryQuantityDelta, derived: true };
     }
     return { value: netQuantityDelta, derived: false };
+  }
+
+  private hasCarryEffect(basisEffects: ReadonlyArray<string>): boolean {
+    return basisEffects.includes('CARRY_IN') || basisEffects.includes('CARRY_OUT');
   }
 
   private hasMixedContinuityEffects(basisEffects: ReadonlyArray<string>): boolean {
@@ -2335,10 +2823,16 @@ export class AssetLedgerPageComponent {
     if (typeKey.startsWith('LP_')) {
       return 'lp';
     }
-    if (typeKey === 'BRIDGE_IN' || typeKey === 'BRIDGE_OUT') {
+    if (typeKey === 'BRIDGE_IN' || typeKey === 'BRIDGE_OUT' || typeKey === 'COLLAPSED_BRIDGE_TRANSFER') {
       return 'bridge';
     }
-    if (typeKey === 'INTERNAL_TRANSFER' || typeKey === 'EXTERNAL_TRANSFER_IN' || typeKey === 'EXTERNAL_TRANSFER_OUT') {
+    if (
+      typeKey === 'INTERNAL_TRANSFER' ||
+      typeKey === 'EXTERNAL_TRANSFER_IN' ||
+      typeKey === 'EXTERNAL_TRANSFER_OUT' ||
+      typeKey === 'COLLAPSED_MATCHED_TRANSFER' ||
+      typeKey === 'COLLAPSED_BYBIT_CORRIDOR'
+    ) {
       return 'transfer';
     }
     if (typeKey.startsWith('LENDING_') || typeKey === 'BORROW' || typeKey === 'REPAY') {
@@ -2496,7 +2990,7 @@ export class AssetLedgerPageComponent {
     const height = cssHeight;
     const selectionStart = (this.rangeStartPercent() / 100) * cssWidth;
     const selectionEnd = (this.rangeEndPercent() / 100) * cssWidth;
-    const projectX = this.buildTimeProjector(markers, cssWidth, 0, 0);
+    const projectX = this.buildIndexProjector(markers.length, cssWidth, 0, 0, 0);
 
     ctx.fillStyle = 'rgba(255,255,255,.04)';
     ctx.beginPath();
@@ -2558,7 +3052,6 @@ export class AssetLedgerPageComponent {
     }
 
     const pad = { top: 20, right: 20, bottom: 50, left: 64 };
-    const innerWidth = cssWidth - pad.left - pad.right;
     const innerHeight = cssHeight - pad.top - pad.bottom;
     const values = [
       ...windowMarkers.map((marker) => marker.priceUsd).filter((value): value is number => value !== null),
@@ -2573,52 +3066,13 @@ export class AssetLedgerPageComponent {
       const ratio = (value - minValue) / Math.max(maxValue - minValue, 1);
       return cssHeight - pad.bottom - ratio * innerHeight;
     };
-    const windowTimestamps = windowMarkers.map((marker) => this.parseMarkerTimestamp(marker.timestamp));
-    const knownTimestamps = windowTimestamps.filter((value): value is number => value !== null);
-    const minTimestamp = knownTimestamps.length > 0 ? Math.min(...knownTimestamps) : null;
-    const maxTimestamp = knownTimestamps.length > 0 ? Math.max(...knownTimestamps) : null;
-    const useTimeScale = minTimestamp !== null && maxTimestamp !== null && maxTimestamp > minTimestamp;
-    const targetXForIndex = (index: number): number => {
-      if (windowMarkers.length <= 1) {
-        return pad.left + innerWidth / 2;
-      }
-      if (!useTimeScale) {
-        return pad.left + (innerWidth * index) / (windowMarkers.length - 1);
-      }
-      const markerTimestamp = windowTimestamps[index];
-      if (markerTimestamp === null || minTimestamp === null || maxTimestamp === null) {
-        return pad.left + (innerWidth * index) / (windowMarkers.length - 1);
-      }
-      const ratio = (markerTimestamp - minTimestamp) / Math.max(maxTimestamp - minTimestamp, 1);
-      return pad.left + innerWidth * ratio;
-    };
-    const minimumMarkerGap =
-      windowMarkers.length <= 18 ? 18 : windowMarkers.length <= 40 ? 14 : windowMarkers.length <= 90 ? 10 : 7;
-    const xTargets = windowMarkers.map((_, index) => targetXForIndex(index));
-    const xPositions = [...xTargets];
-    if (xPositions.length > 1) {
-      for (let index = 1; index < xPositions.length; index += 1) {
-        xPositions[index] = Math.max(xPositions[index], xPositions[index - 1] + minimumMarkerGap);
-      }
-      const maxX = cssWidth - pad.right;
-      const overflow = xPositions.at(-1)! - maxX;
-      if (overflow > 0) {
-        for (let index = 0; index < xPositions.length; index += 1) {
-          xPositions[index] -= overflow;
-        }
-      }
-      const minX = pad.left;
-      const underflow = minX - xPositions[0];
-      if (underflow > 0) {
-        for (let index = 0; index < xPositions.length; index += 1) {
-          xPositions[index] += underflow;
-        }
-      }
-      for (let index = xPositions.length - 2; index >= 0; index -= 1) {
-        xPositions[index] = Math.min(xPositions[index], xPositions[index + 1] - minimumMarkerGap);
-      }
-    }
-    const projectX = (index: number): number => xPositions[index] ?? pad.left + innerWidth / 2;
+    const projectX = this.buildIndexProjector(
+      windowMarkers.length,
+      cssWidth,
+      pad.left,
+      pad.right,
+      CHART_MARKER_EDGE_MARGIN
+    );
 
     for (let i = 0; i <= 5; i += 1) {
       const value = minValue + (i / 5) * (maxValue - minValue);
@@ -2818,7 +3272,13 @@ export class AssetLedgerPageComponent {
       const ratio = (value - paddedMin) / Math.max(paddedMax - paddedMin, 1e-9);
       return cssHeight - pad.bottom - ratio * innerHeight;
     };
-    const projectX = this.buildTimeProjector(windowMarkers, cssWidth, pad.left, pad.right);
+    const projectX = this.buildIndexProjector(
+      windowMarkers.length,
+      cssWidth,
+      pad.left,
+      pad.right,
+      CHART_MARKER_EDGE_MARGIN
+    );
 
     for (let index = 0; index <= 4; index += 1) {
       const value = paddedMin + ((paddedMax - paddedMin) * index) / 4;
@@ -2940,7 +3400,13 @@ export class AssetLedgerPageComponent {
       const ratio = (value - paddedMin) / Math.max(paddedMax - paddedMin, 1e-9);
       return cssHeight - pad.bottom - ratio * innerHeight;
     };
-    const projectX = this.buildTimeProjector(markers, cssWidth, pad.left, pad.right);
+    const projectX = this.buildIndexProjector(
+      markers.length,
+      cssWidth,
+      pad.left,
+      pad.right,
+      CHART_MARKER_EDGE_MARGIN
+    );
 
     for (let index = 0; index <= 4; index += 1) {
       const value = paddedMin + ((paddedMax - paddedMin) * index) / 4;
@@ -3095,62 +3561,20 @@ export class AssetLedgerPageComponent {
     ctx.fillText(message, cssWidth / 2, cssHeight / 2);
   }
 
-  private buildTimeProjector(
-    markers: ReadonlyArray<MarkerView>,
+  private buildIndexProjector(
+    markerCount: number,
     cssWidth: number,
     padLeft: number,
-    padRight: number
+    padRight: number,
+    edgeMargin = CHART_MARKER_EDGE_MARGIN
   ): (index: number) => number {
-    const innerWidth = cssWidth - padLeft - padRight;
-    const timestamps = markers.map((marker) => this.parseMarkerTimestamp(marker.timestamp));
-    const knownTimestamps = timestamps.filter((value): value is number => value !== null);
-    const minTimestamp = knownTimestamps.length > 0 ? Math.min(...knownTimestamps) : null;
-    const maxTimestamp = knownTimestamps.length > 0 ? Math.max(...knownTimestamps) : null;
-    const useTimeScale = minTimestamp !== null && maxTimestamp !== null && maxTimestamp > minTimestamp;
-
-    const targetXForIndex = (index: number): number => {
-      if (markers.length <= 1) {
+    const innerWidth = Math.max(cssWidth - padLeft - padRight - edgeMargin, 1);
+    return (index: number): number => {
+      if (markerCount <= 1) {
         return padLeft + innerWidth / 2;
       }
-      if (!useTimeScale) {
-        return padLeft + (innerWidth * index) / (markers.length - 1);
-      }
-      const markerTimestamp = timestamps[index];
-      if (markerTimestamp === null || minTimestamp === null || maxTimestamp === null) {
-        return padLeft + (innerWidth * index) / (markers.length - 1);
-      }
-      const ratio = (markerTimestamp - minTimestamp) / Math.max(maxTimestamp - minTimestamp, 1);
-      return padLeft + innerWidth * ratio;
+      return padLeft + (innerWidth * index) / (markerCount - 1);
     };
-
-    const minimumMarkerGap =
-      markers.length <= 18 ? 18 : markers.length <= 40 ? 14 : markers.length <= 90 ? 10 : 7;
-    const xTargets = markers.map((_, index) => targetXForIndex(index));
-    const xPositions = [...xTargets];
-    if (xPositions.length > 1) {
-      for (let index = 1; index < xPositions.length; index += 1) {
-        xPositions[index] = Math.max(xPositions[index], xPositions[index - 1] + minimumMarkerGap);
-      }
-      const maxX = cssWidth - padRight;
-      const overflow = xPositions.at(-1)! - maxX;
-      if (overflow > 0) {
-        for (let index = 0; index < xPositions.length; index += 1) {
-          xPositions[index] -= overflow;
-        }
-      }
-      const minX = padLeft;
-      const underflow = minX - xPositions[0];
-      if (underflow > 0) {
-        for (let index = 0; index < xPositions.length; index += 1) {
-          xPositions[index] += underflow;
-        }
-      }
-      for (let index = xPositions.length - 2; index >= 0; index -= 1) {
-        xPositions[index] = Math.min(xPositions[index], xPositions[index + 1] - minimumMarkerGap);
-      }
-    }
-
-    return (index: number) => xPositions[index] ?? padLeft + innerWidth / 2;
   }
 
   private paintTimelineAxis(

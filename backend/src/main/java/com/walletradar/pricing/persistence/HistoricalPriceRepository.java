@@ -4,6 +4,7 @@ import com.walletradar.domain.common.PriceSource;
 import org.springframework.data.mongodb.repository.MongoRepository;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.Optional;
 
 /**
@@ -13,6 +14,18 @@ public interface HistoricalPriceRepository extends MongoRepository<HistoricalPri
 
     Optional<HistoricalPriceDocument> findByAssetKeyAndBucketStartAndSource(
             String assetKey,
+            Instant bucketStart,
+            PriceSource source
+    );
+
+    /**
+     * F-5(a): cross-network market-at-timestamp lookup — finds a same-minute quote for a fungible
+     * canonical asset stored under any of the candidate symbols, regardless of the network/contract
+     * it was originally priced on. Backed by the {@code historical_price_symbol_bucket_source_idx}
+     * index.
+     */
+    Optional<HistoricalPriceDocument> findFirstBySymbolInAndBucketStartAndSource(
+            Collection<String> symbols,
             Instant bucketStart,
             PriceSource source
     );

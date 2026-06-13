@@ -27,6 +27,11 @@ public interface NormalizedTransactionRepository extends MongoRepository<Normali
             NormalizedTransactionSource source
     );
 
+    List<NormalizedTransaction> findAllByTxHashAndSource(
+            String txHash,
+            NormalizedTransactionSource source
+    );
+
     @Query(
             value = "{'status': ?0, '$or': [{'excludedFromAccounting': {'$exists': false}}, {'excludedFromAccounting': false}]}",
             sort = "{'blockTimestamp': 1, 'transactionIndex': 1, '_id': 1}"

@@ -438,7 +438,7 @@ class OnChainClassifierTest {
         OnChainClassificationResult result = classifier.classify(rawTransaction);
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.WRAP);
-        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
         assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.METHOD_ID);
         assertThat(result.flows())
                 .filteredOn(flow -> flow.getRole() == NormalizedLegRole.TRANSFER)
@@ -481,7 +481,7 @@ class OnChainClassifierTest {
         OnChainClassificationResult result = classifier.classify(rawTransaction);
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.WRAP);
-        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
         assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.METHOD_ID);
         assertThat(result.flows())
                 .filteredOn(flow -> flow.getRole() == NormalizedLegRole.TRANSFER && flow.getAssetSymbol().equals("ETH"))
@@ -514,7 +514,7 @@ class OnChainClassifierTest {
         OnChainClassificationResult result = classifier.classify(rawTransaction);
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.UNWRAP);
-        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
         assertThat(result.flows())
                 .filteredOn(flow -> flow.getRole() == NormalizedLegRole.TRANSFER)
                 .hasSize(2);
@@ -552,7 +552,7 @@ class OnChainClassifierTest {
         OnChainClassificationResult result = classifier.classify(rawTransaction);
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.UNWRAP);
-        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
         assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.METHOD_ID);
         assertThat(result.flows())
                 .filteredOn(flow -> flow.getRole() == NormalizedLegRole.TRANSFER && flow.getAssetSymbol().equals("WETH"))
@@ -2245,7 +2245,7 @@ class OnChainClassifierTest {
         OnChainClassificationResult result = classifier.classify(rawTransaction);
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.LP_POSITION_STAKE);
-        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
         assertThat(result.flows())
                 .singleElement()
                 .satisfies(flow -> assertThat(flow.getRole()).isEqualTo(NormalizedLegRole.FEE));
@@ -2716,7 +2716,7 @@ class OnChainClassifierTest {
         OnChainClassificationResult result = classifier.classify(rawTransaction);
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.LP_POSITION_UNSTAKE);
-        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
         assertThat(result.flows())
                 .singleElement()
                 .satisfies(flow -> assertThat(flow.getRole()).isEqualTo(NormalizedLegRole.FEE));
@@ -3423,7 +3423,7 @@ class OnChainClassifierTest {
         OnChainClassificationResult result = classifier.classify(rawTransaction);
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.LP_POSITION_STAKE);
-        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
         assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.PROTOCOL_REGISTRY);
         assertThat(result.flows())
                 .singleElement()
@@ -3455,7 +3455,7 @@ class OnChainClassifierTest {
         OnChainClassificationResult result = classifier.classify(rawTransaction);
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.LP_POSITION_UNSTAKE);
-        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
         assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.PROTOCOL_REGISTRY);
         assertThat(result.flows())
                 .singleElement()
@@ -3496,7 +3496,7 @@ class OnChainClassifierTest {
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.LP_POSITION_STAKE);
         assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.PROTOCOL_REGISTRY);
-        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
     }
 
     @Test
@@ -3533,7 +3533,7 @@ class OnChainClassifierTest {
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.LP_POSITION_UNSTAKE);
         assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.PROTOCOL_REGISTRY);
-        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
     }
 
     @Test
@@ -5517,7 +5517,7 @@ class OnChainClassifierTest {
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.UNWRAP);
         assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.METHOD_ID);
-        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
     }
 
     @Test

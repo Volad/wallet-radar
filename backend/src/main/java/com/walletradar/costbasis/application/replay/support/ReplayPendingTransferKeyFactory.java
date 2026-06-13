@@ -1,5 +1,6 @@
 package com.walletradar.costbasis.application.replay.support;
 
+import com.walletradar.accounting.support.BridgeAssetFamilySupport;
 import com.walletradar.costbasis.application.replay.model.BridgePendingKey;
 import com.walletradar.costbasis.application.replay.model.BridgeSettlementPendingKey;
 import com.walletradar.costbasis.application.replay.model.ContinuityKey;
@@ -11,6 +12,9 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import org.springframework.stereotype.Component;
+
+import java.util.Locale;
+import java.util.Optional;
 
 @Component
 public class ReplayPendingTransferKeyFactory {
@@ -233,6 +237,15 @@ public class ReplayPendingTransferKeyFactory {
             NormalizedTransaction transaction,
             NormalizedTransaction.Flow flow
     ) {
+        Optional<String> supplementalCorrelationId = supplementalBridgeCorrelationId(transaction, flow);
+        if (supplementalCorrelationId.isPresent()) {
+            String bridgeFamilyIdentity = BridgeAssetFamilySupport.continuityIdentity(flow);
+            if (bridgeFamilyIdentity == null || bridgeFamilyIdentity.isBlank()) {
+                return null;
+            }
+            return new BridgePendingKey("bridge:" + supplementalCorrelationId.orElseThrow() + ":" + bridgeFamilyIdentity);
+        }
+
         String bridgeFamilyIdentity = assetSupport.bridgeFamilyIdentity(transaction, flow);
         if (bridgeFamilyIdentity == null
                 || transaction == null
@@ -241,6 +254,36 @@ public class ReplayPendingTransferKeyFactory {
             return null;
         }
         return new BridgePendingKey("bridge:" + transaction.getCorrelationId() + ":" + bridgeFamilyIdentity);
+    }
+
+    private Optional<String> supplementalBridgeCorrelationId(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow
+    ) {
+        if (transaction == null || flow == null) {
+            return Optional.empty();
+        }
+        if (transaction.getType() != NormalizedTransactionType.BRIDGE_IN) {
+            return Optional.empty();
+        }
+        if (flow.getRole() != NormalizedLegRole.TRANSFER) {
+            return Optional.empty();
+        }
+        if (flow.getQuantityDelta() == null || flow.getQuantityDelta().signum() <= 0) {
+            return Optional.empty();
+        }
+        String counterpartyAddress = flow.getCounterpartyAddress();
+        if (counterpartyAddress == null || counterpartyAddress.isBlank()) {
+            return Optional.empty();
+        }
+        if (!counterpartyAddress.regionMatches(true, 0, "LINKED:", 0, 7)) {
+            return Optional.empty();
+        }
+        String sourceHash = counterpartyAddress.substring(7).trim();
+        if (sourceHash.isBlank() || !sourceHash.regionMatches(true, 0, "0x", 0, 2)) {
+            return Optional.empty();
+        }
+        return Optional.of("bridge:lifi:" + sourceHash.toLowerCase(Locale.ROOT));
     }
 
     public BridgeSettlementPendingKey bridgeSettlementKey(

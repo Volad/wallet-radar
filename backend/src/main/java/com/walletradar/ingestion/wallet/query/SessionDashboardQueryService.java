@@ -232,6 +232,10 @@ public class SessionDashboardQueryService {
                         zeroIfNull(realisedPnlByFamily.get(entry.getKey()))
                 ))
                 .filter(position -> position.quantity().signum() > 0)
+                // F-4: Aave variableDebt*/stableDebt* receipts are liability markers, never held
+                // assets. Exclude them from displayed positions; the borrow is surfaced via
+                // borrow_liabilities and subtracted once in the conservation gate (no double-count).
+                .filter(position -> !AccountingAssetIdentitySupport.isDebtIdentity(position.symbol()))
                 .filter(position -> position.priceIssue() != null            // unpriced — never filter
                         || position.marketValueUsd().signum() < 0          // debt / short — always shown
                         || position.marketValueUsd().compareTo(MINIMUM_POSITION_VALUE_USD) >= 0)
@@ -356,6 +360,8 @@ public class SessionDashboardQueryService {
             return;
         }
         Map<String, Map<String, BigDecimal>> liveByAccountRef = new LinkedHashMap<>();
+        Map<String, BybitLiveBalanceService.LiveSnapshotAvailability> liveAvailabilityByAccountRef =
+                new LinkedHashMap<>();
         for (UserSession.SessionIntegration integration : session.getIntegrations()) {
             if (integration == null
                     || integration.getStatus() == UserSession.IntegrationStatus.DISABLED
@@ -364,13 +370,20 @@ public class SessionDashboardQueryService {
                     || !integration.getAccountRef().toUpperCase(Locale.ROOT).startsWith("BYBIT:")) {
                 continue;
             }
-            Map<String, BigDecimal> live = bybitLiveBalanceService.getUmbrellaBalances(integration.getIntegrationId());
-            if (live == null) {
+            Optional<BybitLiveBalanceService.LiveSnapshotView> snapshotView =
+                    bybitLiveBalanceService.getSnapshotView(integration.getIntegrationId());
+            if (snapshotView.isEmpty()) {
                 continue;
             }
-            liveByAccountRef.put(normalizeAddress(integration.getAccountRef()), live);
+            BybitLiveBalanceService.LiveSnapshotView view = snapshotView.get();
+            String accountRef = normalizeAddress(integration.getAccountRef());
+            liveAvailabilityByAccountRef.put(accountRef, view.availability());
+            if (view.availability() == BybitLiveBalanceService.LiveSnapshotAvailability.UNKNOWN) {
+                continue;
+            }
+            liveByAccountRef.put(accountRef, view.umbrella());
         }
-        if (liveByAccountRef.isEmpty()) {
+        if (liveByAccountRef.isEmpty() && liveAvailabilityByAccountRef.isEmpty()) {
             return;
         }
         java.util.Iterator<Map.Entry<FamilyRowKey, TokenPositionAccumulator>> iterator = rows.entrySet().iterator();
@@ -382,8 +395,14 @@ public class SessionDashboardQueryService {
                 continue;
             }
             Map<String, BigDecimal> live = liveByAccountRef.get(key.walletAddress());
+            BybitLiveBalanceService.LiveSnapshotAvailability availability =
+                    liveAvailabilityByAccountRef.get(key.walletAddress());
+            if (availability == BybitLiveBalanceService.LiveSnapshotAvailability.KNOWN_EMPTY) {
+                iterator.remove();
+                continue;
+            }
             if (live == null || live.isEmpty()) {
-                // No live balance data for this wallet — skip clamping so ledger rows are preserved.
+                // No authoritative live snapshot yet — preserve ledger rows.
                 continue;
             }
             BigDecimal liveQty = BybitUmbrellaSupport.liveQuantityForCandidates(

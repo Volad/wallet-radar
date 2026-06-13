@@ -140,6 +140,9 @@ public class BybitInternalTransferPairer {
 
         for (List<NormalizedTransaction> group : groupedByTransferId.values()) {
             if (group.size() != 2) {
+                if (group.size() >= 3) {
+                    rewrites += pairMultiLegCrossUidGroup(group, now, dirty);
+                }
                 continue;
             }
             NormalizedTransaction a = group.get(0);
@@ -395,6 +398,70 @@ public class BybitInternalTransferPairer {
         demoteBuySellToTransfer(right);
         left.setUpdatedAt(now);
         right.setUpdatedAt(now);
+    }
+
+    /**
+     * Pairs sub↔sub (or sub↔master) universal transfers where Bybit emits three or more legs for
+     * one {@code uni_trans_<UUID>} (sender sub, receiver sub, optional master routing echo).
+     */
+    private int pairMultiLegCrossUidGroup(
+            List<NormalizedTransaction> group,
+            Instant now,
+            List<NormalizedTransaction> dirty
+    ) {
+        List<NormalizedTransaction> positives = group.stream()
+                .filter(tx -> !Boolean.TRUE.equals(tx.getExcludedFromAccounting()))
+                .filter(tx -> principalQuantitySign(tx) > 0)
+                .toList();
+        List<NormalizedTransaction> negatives = group.stream()
+                .filter(tx -> !Boolean.TRUE.equals(tx.getExcludedFromAccounting()))
+                .filter(tx -> principalQuantitySign(tx) < 0)
+                .sorted(Comparator.comparing(
+                        (NormalizedTransaction tx) -> extractBybitUid(tx.getWalletAddress()),
+                        Comparator.nullsLast(Comparator.reverseOrder())
+                ))
+                .toList();
+        if (positives.size() != 1 || negatives.isEmpty()) {
+            return 0;
+        }
+        NormalizedTransaction receiver = positives.getFirst();
+        String receiverUid = extractBybitUid(receiver.getWalletAddress());
+        BigDecimal receiverQty = principalQuantityAbs(receiver);
+        if (receiverUid == null || receiverQty == null) {
+            return 0;
+        }
+        NormalizedTransaction sender = negatives.stream()
+                .filter(tx -> {
+                    String uid = extractBybitUid(tx.getWalletAddress());
+                    return uid != null && !uid.equals(receiverUid);
+                })
+                .filter(tx -> receiverQty.compareTo(principalQuantityAbs(tx)) == 0)
+                .findFirst()
+                .orElse(null);
+        if (sender == null) {
+            return 0;
+        }
+        String existingCorr = sender.getCorrelationId();
+        if (existingCorr != null
+                && !existingCorr.isBlank()
+                && !existingCorr.startsWith(CROSS_UID_CORRELATION_PREFIX)) {
+            return 0;
+        }
+        if (existingCorr != null && existingCorr.startsWith(CROSS_UID_CORRELATION_PREFIX)) {
+            return 0;
+        }
+        applyCrossUidPairCorrelation(sender, receiver, now);
+        dirty.add(sender);
+        dirty.add(receiver);
+        return 2;
+    }
+
+    private static BigDecimal principalQuantityAbs(NormalizedTransaction tx) {
+        if (tx == null || tx.getFlows() == null || tx.getFlows().isEmpty()) {
+            return null;
+        }
+        BigDecimal qty = tx.getFlows().getFirst().getQuantityDelta();
+        return qty == null ? null : qty.abs();
     }
 
     /**

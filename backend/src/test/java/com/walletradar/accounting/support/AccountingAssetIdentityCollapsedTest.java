@@ -18,6 +18,20 @@ class AccountingAssetIdentityCollapsedTest {
     private static final String CORR_ID = "bybit-collapsed-v1:abcdef1234567890";
 
     @Test
+    void isDebtIdentity_flagsAaveDebtReceiptsAcrossChainsAndExemptsHeldAssets() {
+        // F-4: variableDebt* / stableDebt* are liability markers (any network prefix), never held.
+        assertThat(AccountingAssetIdentitySupport.isDebtIdentity("VARIABLEDEBTMANUSDE")).isTrue();
+        assertThat(AccountingAssetIdentitySupport.isDebtIdentity("variableDebtBasUSDC")).isTrue();
+        assertThat(AccountingAssetIdentitySupport.isDebtIdentity("STABLEDEBTETHDAI")).isTrue();
+        // Held assets and receipt aTokens are not debt identities.
+        assertThat(AccountingAssetIdentitySupport.isDebtIdentity("USDC")).isFalse();
+        assertThat(AccountingAssetIdentitySupport.isDebtIdentity("AMANWETH")).isFalse();
+        assertThat(AccountingAssetIdentitySupport.isDebtIdentity("ETH")).isFalse();
+        assertThat(AccountingAssetIdentitySupport.isDebtIdentity(null)).isFalse();
+        assertThat(AccountingAssetIdentitySupport.isDebtIdentity("")).isFalse();
+    }
+
+    @Test
     void replayPositionWalletAddress_preservesFullFundAddress_forCollapsedFundSide() {
         // FUND CARRY_IN with UTA counterparty: full :FUND address must be preserved.
         NormalizedTransaction tx = bybitInternalTransferWithCounterparty(
@@ -65,6 +79,30 @@ class AccountingAssetIdentityCollapsedTest {
         String result = AccountingAssetIdentitySupport.replayPositionWalletAddress(tx, null);
 
         assertThat(result).isEqualTo("BYBIT:" + UID);
+    }
+
+    @Test
+    void replayPositionWalletAddress_stripsFundSuffix_forCollapsedFundOutbound() {
+        NormalizedTransaction tx = bybitInternalTransferWithCounterparty(
+                "BYBIT:" + UID + ":FUND", "BYBIT:" + UID + ":UTA", CORR_ID);
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setQuantityDelta(new java.math.BigDecimal("-249.8845"));
+
+        String result = AccountingAssetIdentitySupport.replayPositionWalletAddress(tx, flow);
+
+        assertThat(result).isEqualTo("BYBIT:" + UID);
+    }
+
+    @Test
+    void replayPositionWalletAddress_preservesFullFundAddress_forCollapsedFundInbound() {
+        NormalizedTransaction tx = bybitInternalTransferWithCounterparty(
+                "BYBIT:" + UID + ":FUND", "BYBIT:" + UID + ":UTA", CORR_ID);
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setQuantityDelta(new java.math.BigDecimal("249.8845"));
+
+        String result = AccountingAssetIdentitySupport.replayPositionWalletAddress(tx, flow);
+
+        assertThat(result).isEqualTo("BYBIT:" + UID + ":FUND");
     }
 
     @Test
