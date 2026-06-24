@@ -45,8 +45,12 @@ public class LendingClassifier implements OnChainFamilyClassifier {
             "0x7bdbd0a7114aa42ca957f292145f6a931a345583"
     );
     private static final Set<String> EULER_KNOWN_VAULT_CONTRACTS = Set.of(
+            // Plasma network vaults (wstUSR/USDT0 loop history).
             "0x4718484ac9dc07fbbc078561e8f8ef29e2a369cd",
-            "0xac40d41ab11b0eb991a7d34d55dbdbb7849e92ef"
+            "0xac40d41ab11b0eb991a7d34d55dbdbb7849e92ef",
+            // Avalanche network vaults (eUSDC-2, eUSDt-2 leveraged loops via EVC batch router).
+            "0x39de0f00189306062d79edec6dca5bb6bfd108f9",
+            "0xaba9d2d4b6b93c3dc8976d8eb0690cca56431fe4"
     );
     private static final String EULER_CALL_WITH_CONTEXT_TOPIC =
             "0x6e9738e5aa38fe1517adbb480351ec386ece82947737b18badbcad1e911133ec";
@@ -1143,16 +1147,25 @@ public class LendingClassifier implements OnChainFamilyClassifier {
         return movementLegs.stream()
                 .filter(leg -> !leg.fee() && leg.assetContract() != null)
                 .anyMatch(leg -> (inbound ? leg.quantityDelta().signum() > 0 : leg.quantityDelta().signum() < 0)
-                        && isShareLikeSymbol(leg.assetSymbol()));
+                        && isShareLikeSymbolWithContract(leg.assetSymbol(), leg.assetContract()));
     }
 
     private boolean hasNonShareMovement(List<RawLeg> movementLegs, boolean inbound) {
         return movementLegs.stream()
                 .filter(leg -> !leg.fee() && leg.assetContract() != null)
                 .anyMatch(leg -> (inbound ? leg.quantityDelta().signum() > 0 : leg.quantityDelta().signum() < 0)
-                        && !isShareLikeSymbol(leg.assetSymbol()));
+                        && !isShareLikeSymbolWithContract(leg.assetSymbol(), leg.assetContract()));
     }
 
+    /**
+     * Returns true if the symbol looks like a lending protocol vault-share receipt.
+     *
+     * <p>When a contract address is available, prefer
+     * {@link #isShareLikeSymbolWithContract(String, String)}: for the {@code e} prefix it
+     * additionally verifies the contract is a known Euler vault, preventing false positives on
+     * other {@code e}-prefixed tokens (e.g. Euler debt receipts like {@code eUSDt-2-DEBT} or
+     * arbitrary tokens that happen to start with {@code e}).
+     */
     private boolean isShareLikeSymbol(String assetSymbol) {
         if (assetSymbol == null || assetSymbol.isBlank()) {
             return false;
@@ -1165,6 +1178,30 @@ public class LendingClassifier implements OnChainFamilyClassifier {
                 || normalized.startsWith("c")
                 || normalized.startsWith("s")
                 || normalized.startsWith("e")
+                || normalized.startsWith("gt");
+    }
+
+    /**
+     * Contract-aware share-like check. For the {@code e} prefix the contract must be a
+     * non-null, known Euler vault address; any other {@code e}-prefixed contract (unknown
+     * or a debt position) is NOT treated as a vault share.
+     *
+     * <p>For all other prefixes, behaviour is identical to {@link #isShareLikeSymbol(String)}.
+     */
+    private boolean isShareLikeSymbolWithContract(String assetSymbol, String contract) {
+        if (assetSymbol == null || assetSymbol.isBlank()) {
+            return false;
+        }
+        String normalized = assetSymbol.trim().toLowerCase(Locale.ROOT);
+        if (normalized.startsWith("syrup")) {
+            return false;
+        }
+        if (normalized.startsWith("e")) {
+            return isEulerLikeAddress(contract);
+        }
+        return normalized.startsWith("a")
+                || normalized.startsWith("c")
+                || normalized.startsWith("s")
                 || normalized.startsWith("gt");
     }
 
@@ -1186,7 +1223,7 @@ public class LendingClassifier implements OnChainFamilyClassifier {
         return movementLegs.stream()
                 .filter(leg -> !leg.fee() && leg.assetContract() != null)
                 .anyMatch(leg -> (inbound ? leg.quantityDelta().signum() > 0 : leg.quantityDelta().signum() < 0)
-                        && isShareLikeSymbol(leg.assetSymbol())
+                        && isShareLikeSymbolWithContract(leg.assetSymbol(), leg.assetContract())
                         && !isDebtLikeSymbol(leg.assetSymbol()));
     }
 

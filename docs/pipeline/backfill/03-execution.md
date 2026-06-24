@@ -171,10 +171,12 @@ Other providers would register additional `BackfillSegmentExecutor` beans; the r
 |--------|-------------------|
 | `setRunning` | `RUNNING`, progress, banner |
 | `setRawFetchComplete` | `rawFetchComplete=true`, `lastBlockSynced` |
-| `setComplete` | `COMPLETE`, clears window fields, `backfillComplete=rawFetchComplete` |
+| `setComplete` | `COMPLETE`, clears window fields, **authoritative terminal completion**: sets both `rawFetchComplete=true` and `backfillComplete=true` |
 | `setFailed` | `FAILED`, increments `retryCount`, sets `nextRetryAfter` (exponential backoff + jitter) |
 
-On successful complete with `rawFetchComplete`, publishes `WalletNetworkBackfillCompletedEvent` (`domain/event/WalletNetworkBackfillCompletedEvent.java`).
+`setComplete` is authoritative because reaching `COMPLETE` is terminal for a wallet×network window (every executable segment finished, or there was nothing left to fetch). It always flips both completion booleans, so a window that completes through a "no executable segments" / empty-segment / adapter-skip path (e.g. a refresh that finds zero new transactions) can never persist as `COMPLETE` while the booleans stay `false` — which previously stranded the session-level backfill gate.
+
+On complete, publishes `WalletNetworkBackfillCompletedEvent` (`domain/event/WalletNetworkBackfillCompletedEvent.java`).
 
 ### SessionBackfillCompletionPublisher
 
@@ -182,7 +184,7 @@ On successful complete with `rawFetchComplete`, publishes `WalletNetworkBackfill
 
 Listens for `WalletNetworkBackfillCompletedEvent` (and called directly after Bybit segment complete):
 
-1. For each session containing the wallet, verify **every** wallet×network `sync_status.isBackfillComplete()`.
+1. For each session containing the wallet, verify **every** wallet×network is backfill-complete. A source counts as complete when `sync_status.isBackfillComplete()` is set **or** the `sync_status` reached terminal `COMPLETE` status (robustness net — terminal status cannot coexist with RUNNING/PENDING/FAILED segments, so it never advances an in-flight source while still rescuing a stale completion boolean). The same gate is applied by `SessionPipelineResumeScheduler` (the 60s watchdog).
 2. Verify **every** enabled integration backfill complete (via `sync_status` or segment counts).
 3. Publish `SessionBackfillCompletedEvent` (`domain/event/SessionBackfillCompletedEvent.java`).
 4. Mark session pipeline stage `BACKFILL` complete → downstream `ON_CHAIN_NORMALIZATION` schedulers react.

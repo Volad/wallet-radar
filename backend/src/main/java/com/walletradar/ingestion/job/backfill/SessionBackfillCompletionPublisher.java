@@ -74,7 +74,7 @@ public class SessionBackfillCompletionPublisher {
         for (UserSession.SessionWallet wallet : wallets) {
             for (var network : wallet.getNetworks()) {
                 SyncStatus status = syncStatusByPair.get(pairKey(wallet.getAddress(), network.name()));
-                if (status == null || !status.isBackfillComplete()) {
+                if (!isOnChainBackfillComplete(status)) {
                     return;
                 }
             }
@@ -133,6 +133,19 @@ public class SessionBackfillCompletionPublisher {
                 BackfillSegment.SegmentStatus.COMPLETE
         );
         return completedSegments >= totalSegments;
+    }
+
+    /**
+     * Robustness net: a wallet×network counts as backfill-complete when its boolean flag is set OR the
+     * sync_status reached terminal {@code COMPLETE} status. The terminal status is authoritative and cannot
+     * coexist with RUNNING/PENDING/FAILED segments, so this never advances a source whose fetch is genuinely
+     * still in flight while still rescuing a source whose completion boolean was left stale.
+     */
+    private static boolean isOnChainBackfillComplete(SyncStatus status) {
+        if (status == null) {
+            return false;
+        }
+        return status.isBackfillComplete() || status.getStatus() == SyncStatus.SyncStatusValue.COMPLETE;
     }
 
     private int targetCount(UserSession session) {

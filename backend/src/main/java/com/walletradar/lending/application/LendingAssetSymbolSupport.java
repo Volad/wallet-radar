@@ -3,9 +3,11 @@ package com.walletradar.lending.application;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 public final class LendingAssetSymbolSupport {
 
+    private static final Pattern EULER_INDEXED_RECEIPT = Pattern.compile("^E([A-Z0-9]+)-(\\d+)$");
     private static final List<String> RECEIPT_PREFIXES = List.of(
             "VARIABLEDEBT",
             "STABLEDEBT",
@@ -32,11 +34,22 @@ public final class LendingAssetSymbolSupport {
             "FDAI",
             "FUSDC",
             "FUSDT",
+            "FWETH",
+            "FETH",
             "SOUSDC",
             "SOUSDT",
             "SOWETH"
     );
     private static final List<String> MARKET_PREFIXES = List.of("MANTLE", "MAN", "AVALANCHE", "AVA", "ARBITRUM", "ARB", "BASE", "BAS", "ZKSYNC", "ZKS", "OPT", "POL");
+    private static final Pattern MORPHO_GT_VAULT_SHARE = Pattern.compile("^GT([A-Z0-9]{2,12})C$");
+    private static final Pattern MORPHO_MC_VAULT_SHARE = Pattern.compile("^(MC|RE7)([A-Z0-9]{2,12})$");
+    private static final Set<String> EULER_COLLISION_GUARD = Set.of(
+            "EURC",
+            "EUSDE",
+            "ETHFI",
+            "EIGEN",
+            "ENA"
+    );
     private static final Set<String> COMMON_UNDERLYINGS = Set.of(
             "ETH",
             "WETH",
@@ -52,9 +65,15 @@ public final class LendingAssetSymbolSupport {
             "DEUSD",
             "EURC",
             "MNT",
+            "WMNT",
             "ARB",
             "OP",
-            "POL"
+            "POL",
+            "WSTETH",
+            "WEETH",
+            "SAVAX",
+            "WAVAX",
+            "USD0"
     );
 
     private LendingAssetSymbolSupport() {
@@ -92,6 +111,14 @@ public final class LendingAssetSymbolSupport {
         if (normalized.isBlank()) {
             return "UNKNOWN";
         }
+        String eulerIndexed = eulerIndexedUnderlying(normalized);
+        if (eulerIndexed != null) {
+            return eulerIndexed;
+        }
+        String morphoUnderlying = morphoVaultUnderlying(normalized);
+        if (morphoUnderlying != null) {
+            return morphoUnderlying;
+        }
         String cleaned = normalized.replace("-", "");
         if (cleaned.matches(".*USDC\\d+$")) {
             cleaned = cleaned.replaceAll("\\d+$", "");
@@ -110,7 +137,7 @@ public final class LendingAssetSymbolSupport {
         for (String prefix : List.of("SO", "A", "C", "E", "F")) {
             if (cleaned.startsWith(prefix) && cleaned.length() > prefix.length() + 1) {
                 String candidate = cleaned.substring(prefix.length());
-                if (COMMON_UNDERLYINGS.contains(candidate)) {
+                if (COMMON_UNDERLYINGS.contains(candidate) && !isEulerCollision(candidate, prefix)) {
                     return candidate;
                 }
             }
@@ -127,15 +154,22 @@ public final class LendingAssetSymbolSupport {
     }
 
     static boolean isLendingPositionSymbol(String symbol) {
-        String normalized = normalizeSymbol(symbol).replace("-", "");
+        String normalized = normalizeSymbol(symbol);
         if (normalized.isBlank()) {
             return false;
         }
         if (isBorrowSymbol(normalized)) {
             return true;
         }
+        if (matchesEulerIndexedReceipt(normalized)) {
+            return true;
+        }
+        if (matchesMorphoVaultShare(normalized)) {
+            return true;
+        }
+        String cleaned = normalized.replace("-", "");
         return RECEIPT_PREFIXES.stream().anyMatch(prefix ->
-                normalized.equals(prefix) || normalized.startsWith(prefix) && normalized.length() > prefix.length()
+                cleaned.equals(prefix) || cleaned.startsWith(prefix) && cleaned.length() > prefix.length()
         );
     }
 
@@ -155,10 +189,65 @@ public final class LendingAssetSymbolSupport {
     static String lifecycleAsset(String symbol) {
         String underlying = underlyingSymbol(symbol);
         return switch (underlying) {
-            case "WETH" -> "ETH";
+            case "WETH", "WEETH" -> "ETH";
             case "USDT0", "USD₮0" -> "USDT";
+            case "WBTC" -> "BTC";
+            case "WMNT" -> "MNT";
+            case "WAVAX", "SAVAX" -> "AVAX";
             default -> underlying;
         };
+    }
+
+    private static boolean matchesEulerIndexedReceipt(String normalized) {
+        var matcher = EULER_INDEXED_RECEIPT.matcher(normalized);
+        if (!matcher.matches()) {
+            return false;
+        }
+        String underlying = matcher.group(1);
+        return isPlausibleUnderlying(underlying) && !EULER_COLLISION_GUARD.contains(underlying);
+    }
+
+    private static String eulerIndexedUnderlying(String normalized) {
+        var matcher = EULER_INDEXED_RECEIPT.matcher(normalized);
+        if (!matcher.matches()) {
+            return null;
+        }
+        String underlying = matcher.group(1);
+        if (!isPlausibleUnderlying(underlying) || EULER_COLLISION_GUARD.contains(underlying)) {
+            return null;
+        }
+        return underlying;
+    }
+
+    private static boolean matchesMorphoVaultShare(String normalized) {
+        return morphoVaultUnderlying(normalized) != null;
+    }
+
+    private static String morphoVaultUnderlying(String normalized) {
+        String cleaned = normalized.replace("-", "");
+        var gtMatcher = MORPHO_GT_VAULT_SHARE.matcher(cleaned);
+        if (gtMatcher.matches()) {
+            return plausibleMorphoUnderlying(gtMatcher.group(1));
+        }
+        var mcMatcher = MORPHO_MC_VAULT_SHARE.matcher(cleaned);
+        if (mcMatcher.matches()) {
+            return plausibleMorphoUnderlying(mcMatcher.group(2));
+        }
+        return null;
+    }
+
+    private static String plausibleMorphoUnderlying(String candidate) {
+        if (candidate == null || candidate.isBlank()) {
+            return null;
+        }
+        if (COMMON_UNDERLYINGS.contains(candidate) || isPlausibleUnderlying(candidate)) {
+            return candidate;
+        }
+        return null;
+    }
+
+    private static boolean isEulerCollision(String candidate, String prefix) {
+        return "E".equals(prefix) && EULER_COLLISION_GUARD.contains(candidate);
     }
 
     private static boolean isPlausibleUnderlying(String value) {

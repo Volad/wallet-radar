@@ -699,12 +699,17 @@ public final class OnChainRawTransactionView {
     private boolean explicitlyMissingTxToField() {
         Document explorerTx = explorerTxDocument();
         if (explorerTx != null && explorerTx.containsKey("to")) {
-            return normalizeAddress(stringify(explorerTx.get("to"))) == null;
+            // Use coerceAddressValue so that BlockScout rich-object `to` fields
+            // (e.g. {"hash":"0x…","name":"…","implementations":[…]}) are correctly
+            // resolved to their hex address before the null-check — otherwise
+            // stringify() returns null on Document values and falsely signals a
+            // contract-creation transaction.
+            return normalizeAddress(coerceAddressValue(explorerTx.get("to"))) == null;
         }
         Document rawData = rawTransaction.getRawData();
         return rawData != null
                 && rawData.containsKey("to")
-                && normalizeAddress(stringify(rawData.get("to"))) == null;
+                && normalizeAddress(coerceAddressValue(rawData.get("to"))) == null;
     }
 
     private static boolean parseBoolean(Object value) {

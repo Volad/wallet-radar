@@ -87,6 +87,35 @@ class UnmatchedBridgeInboundPricingFallbackServiceTest {
     }
 
     @Test
+    @DisplayName("BR-2: non-peg orphan inbound market-priced as irreducible is flagged NON_PEG_BASIS_UNVERIFIED")
+    void nonPegOrphanInboundIsFlaggedNotSilentlyAccepted() {
+        NormalizedTransaction orphan = bridgeIn("bridge:lifi:0xeth", "WETH", "0.5");
+        stubbedInbounds = List.of(orphan);
+        stubbedOutbounds = List.of();
+
+        int processed = service.reconcileOrphanInbounds();
+
+        assertThat(processed).isEqualTo(1);
+        assertThat(orphan.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        assertThat(orphan.getMissingDataReasons())
+                .contains(PegNeutralBridgeAssumptionSupport.NON_PEG_BASIS_UNVERIFIED_REASON);
+    }
+
+    @Test
+    @DisplayName("BR-2: peg-neutral (USDC) orphan inbound is accepted without a non-peg flag")
+    void pegNeutralOrphanInboundIsAcceptedWithoutFlag() {
+        NormalizedTransaction orphan = bridgeIn("bridge:lifi:0xusdc", "USDC", "1000");
+        stubbedInbounds = List.of(orphan);
+        stubbedOutbounds = List.of();
+
+        int processed = service.reconcileOrphanInbounds();
+
+        assertThat(processed).isEqualTo(1);
+        assertThat(orphan.getMissingDataReasons())
+                .doesNotContain(PegNeutralBridgeAssumptionSupport.NON_PEG_BASIS_UNVERIFIED_REASON);
+    }
+
+    @Test
     @DisplayName("bridge inbound with matching outbound in the system is left as-is")
     void pairedBridgeInboundIsNotReset() {
         NormalizedTransaction paired = bridgeIn("bridge:lifi:0xpair", "USDC", "1000");

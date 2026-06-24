@@ -201,6 +201,11 @@ const CHART_MARKER_EDGE_MARGIN = 20;
 const DEFAULT_DISABLED_TYPE_KEYS = new Set(['WRAP', 'UNWRAP', 'GAS_ONLY']);
 const DEFAULT_HIDDEN_BASIS_EFFECTS = new Set(['GAS_ONLY']);
 const BASIS_MOVE_EFFECTS = new Set(['CARRY_IN', 'CARRY_OUT', 'REALLOCATE_IN', 'REALLOCATE_OUT']);
+// Backend counterparty placeholder (FlowCounterpartySupport.MULTI_COUNTERPARTY) for genuine
+// multi-flow transactions (aggregators, multi-hop swaps, bridges). It is a sentinel, not a
+// venue: prefer the resolved protocol for display and only fall back when none is known.
+const MULTI_COUNTERPARTY_REF = 'MULTI';
+const MULTI_COUNTERPARTY_FALLBACK_LABEL = 'Multiple parties';
 const TRANSFER_TYPE_KEYS = new Set([
   'BRIDGE_IN',
   'BRIDGE_OUT',
@@ -1842,8 +1847,8 @@ export class AssetLedgerPageComponent {
         priceUsd: displayQuote.unitPriceUsd,
         priceSource: displayQuote.priceSource,
         primaryFlowLabel: primaryFlow === null ? null : `${primaryFlow.assetSymbol ?? 'UNKNOWN'} ${this.formatSignedQuantity(primaryFlow.quantityDelta ?? null, 4)}`,
-        fromAddress: transferEndpoints.fromAddress,
-        toAddress: transferEndpoints.toAddress,
+        fromAddress: this.displayEndpointAddress(transferEndpoints.fromAddress),
+        toAddress: this.displayEndpointAddress(transferEndpoints.toAddress),
         pathFrom: path.fromLabel,
         pathTo: path.toLabel,
         pathFromTitle: path.fromTitle,
@@ -2266,8 +2271,9 @@ export class AssetLedgerPageComponent {
       };
     }
 
-    const fromNode = explicitFrom === null ? null : this.pathNode(explicitFrom, walletMeta);
-    const toNode = explicitTo === null ? null : this.pathNode(explicitTo, walletMeta);
+    const venueLabel = this.resolveVenueLabel(entry, event);
+    const fromNode = this.resolveEndpointNode(explicitFrom, venueLabel, walletMeta);
+    const toNode = this.resolveEndpointNode(explicitTo, venueLabel, walletMeta);
     return {
       fromLabel: fromNode?.label ?? fallbackPath.fromLabel,
       toLabel: toNode?.label ?? fallbackPath.toLabel,
@@ -2454,6 +2460,38 @@ export class AssetLedgerPageComponent {
 
   private uniqueAddress(values: ReadonlySet<string>): string | null {
     return values.size === 1 ? [...values][0] ?? null : null;
+  }
+
+  private displayEndpointAddress(address: string | null): string | null {
+    if (address === null || address.trim().toUpperCase() === MULTI_COUNTERPARTY_REF) {
+      return null;
+    }
+    return address;
+  }
+
+  private resolveEndpointNode(
+    address: string | null,
+    venueLabel: string | null,
+    walletMeta: ReadonlyMap<string, WalletVisualMeta>
+  ): { label: string; title: string | null; color: string | null } | null {
+    if (address === null) {
+      return null;
+    }
+    if (address.trim().toUpperCase() === MULTI_COUNTERPARTY_REF) {
+      if (venueLabel !== null && venueLabel.trim().length > 0) {
+        return {
+          label: venueLabel,
+          title: `${venueLabel} · multiple counterparties`,
+          color: null,
+        };
+      }
+      return {
+        label: MULTI_COUNTERPARTY_FALLBACK_LABEL,
+        title: 'Multiple counterparties · protocol not identified',
+        color: null,
+      };
+    }
+    return this.pathNode(address, walletMeta);
   }
 
   private pathNode(

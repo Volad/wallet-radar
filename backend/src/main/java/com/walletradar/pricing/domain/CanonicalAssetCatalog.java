@@ -385,6 +385,21 @@ public final class CanonicalAssetCatalog {
         return contract.trim().toLowerCase(Locale.ROOT);
     }
 
+    /**
+     * Returns {@code true} when the contract is a registry-known canonical asset on the network
+     * (currently the curated USD-stablecoin contract set). Used by the spoof-token quarantine to
+     * avoid quarantining a legitimate asset whose contract is canonical even if a caller passes an
+     * unexpected symbol — a confusable lookalike spoof is, by construction, never a canonical
+     * contract.
+     */
+    public static boolean isKnownCanonicalContract(NetworkId networkId, String assetContract) {
+        String normalizedContract = normalizeContract(assetContract);
+        if (normalizedContract == null) {
+            return false;
+        }
+        return USD_STABLE_CONTRACTS.getOrDefault(networkId, Set.of()).contains(normalizedContract);
+    }
+
     public static String normalizeSymbol(String symbol) {
         if (symbol == null) {
             return "";

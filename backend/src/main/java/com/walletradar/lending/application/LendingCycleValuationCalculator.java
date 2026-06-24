@@ -24,9 +24,13 @@ final class LendingCycleValuationCalculator {
                 : input.hasMissingGasUsdValuation() ? "missing_gas_usd_valuation" : null;
         String totalPrecision = totalPrecision(input, unavailableReason);
         BigDecimal currentUsdValue = "OPEN".equals(input.status()) ? input.currentUsdValue() : null;
-        BigDecimal unrealizedTotalUsdPnl = currentUsdValue == null || "UNAVAILABLE".equals(totalPrecision)
-                ? null
-                : totalUsdPnl.add(currentUsdValue, MC);
+        BigDecimal unrealizedTotalUsdPnl = null;
+        if (currentUsdValue != null && !"UNAVAILABLE".equals(totalPrecision)) {
+            BigDecimal outstandingBorrow = "OPEN".equals(input.status())
+                    ? input.borrowedUsd().subtract(input.repaidUsd(), MC).max(BigDecimal.ZERO)
+                    : BigDecimal.ZERO;
+            unrealizedTotalUsdPnl = totalUsdPnl.add(currentUsdValue, MC).subtract(outstandingBorrow, MC);
+        }
 
         return new SessionLendingQueryService.LendingTotalValuationView(
                 input.principalInUsd(),

@@ -1,6 +1,6 @@
 # ADR-025 — Euler EVK per-vault market key
 
-**Status:** Accepted  
+**Status:** Superseded by [ADR-036](ADR-036-contract-first-lending-market-key-and-live-debt.md) (2026-06-24)  
 **Date:** 2026-06-07  
 **Inputs:** `docs/tasks/lending-audit-2026-06-07-implementation-plan.md` (L-EULER-CROSS-ASSET-01)
 
@@ -29,6 +29,6 @@ For `EULER` protocol rows and open-position attachment:
 
 ## Related
 
-- `SessionLendingQueryService.marketAsset()`
-- `SessionLendingQueryService.positionMarketAsset()`
+- `LendingMarketKeyResolver` (see [ADR-036](ADR-036-contract-first-lending-market-key-and-live-debt.md)) — single derivation for history + balance paths
+- `SessionLendingQueryService.marketAsset()` delegates to resolver
 - `docs/pipeline/normalization/rules/protocols/euler.md`

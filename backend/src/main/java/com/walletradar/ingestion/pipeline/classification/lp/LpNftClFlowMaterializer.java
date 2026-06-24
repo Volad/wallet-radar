@@ -4,7 +4,6 @@ import com.walletradar.accounting.support.LpReceiptSymbolSupport;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
-import com.walletradar.ingestion.pipeline.classification.support.LpPositionCorrelationSupport;
 import com.walletradar.ingestion.pipeline.classification.support.LpPositionLifecycleSupport;
 import com.walletradar.ingestion.pipeline.classification.support.OnChainClassificationSupport;
 import com.walletradar.ingestion.pipeline.classification.support.RawLeg;
@@ -29,13 +28,12 @@ public final class LpNftClFlowMaterializer {
             OnChainRawTransactionView view,
             List<RawLeg> movementLegs,
             NormalizedTransactionType type,
-            String protocolName,
+            String correlationId,
             List<NormalizedTransaction.Flow> baseFlows
     ) {
         if (view == null || type == null || !supportsMaterialization(type)) {
             return baseFlows == null ? List.of() : baseFlows;
         }
-        String correlationId = LpPositionCorrelationSupport.lifecycleCorrelationId(view, type, protocolName);
         if (correlationId == null) {
             return baseFlows == null ? List.of() : baseFlows;
         }

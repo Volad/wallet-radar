@@ -185,9 +185,19 @@ public class CrossNetworkBridgePairFallbackService {
         Instant now = Instant.now();
         List<NormalizedTransaction> updates = new ArrayList<>();
 
-        boolean outboundChanged = applyPairMetadata(outbound, correlationId, inbound.getTxHash(), continuityCandidate, now);
+        // Cross-asset corridors (cc=false) must not receive matchedCounterparty on the outbound leg;
+        // a set counterparty would route CARRY_OUT through bridgeSettlementKey() which the BRIDGE_IN never drains.
+        boolean outboundChanged = applyPairMetadata(outbound, correlationId, continuityCandidate ? inbound.getTxHash() : null, continuityCandidate, now);
         boolean inboundChanged = applyPairMetadata(inbound, correlationId, outbound.getTxHash(), continuityCandidate, now);
         if (removeMissingReason(inbound, BRIDGE_MISSING_REASON)) {
+            inboundChanged = true;
+        }
+        // BR-1: both corridor legs must carry counterpartyType=BRIDGE so the discovered pair
+        // renders as a connected edge on the dashboard chart (independent of basis-carry).
+        if (BridgePairLinkSupport.stampBridgePrincipalCounterpartyType(outbound, now)) {
+            outboundChanged = true;
+        }
+        if (BridgePairLinkSupport.applyLinkedBridgeCounterparty(outbound, inbound, now)) {
             inboundChanged = true;
         }
         if (continuityCandidate) {
@@ -221,7 +231,10 @@ public class CrossNetworkBridgePairFallbackService {
             transaction.setContinuityCandidate(continuityCandidate);
             changed = true;
         }
-        if (!sameHash(transaction.getMatchedCounterparty(), matchedCounterparty)) {
+        boolean counterpartyMismatch = matchedCounterparty != null
+                ? !sameHash(transaction.getMatchedCounterparty(), matchedCounterparty)
+                : (transaction.getMatchedCounterparty() != null && !transaction.getMatchedCounterparty().isBlank());
+        if (counterpartyMismatch) {
             transaction.setMatchedCounterparty(matchedCounterparty);
             changed = true;
         }

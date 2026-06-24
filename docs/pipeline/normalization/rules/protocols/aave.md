@@ -22,6 +22,10 @@ Current intended runtime ownership:
 - event-name groups for `Supply / Deposit / Withdraw / Borrow / Repay`
 - clarification hints
 
+## Receipt identity
+
+Aave aTokens and debt tokens (`aArbUSDC`, `variableDebtBasWETH`, …) map to underlying via grammar in `LendingAssetSymbolSupport` and via derived contract index when flows include both receipt and underlying legs. See [ADR-035](../../../../adr/ADR-035-lending-receipt-identity-resolver.md).
+
 Current active runtime usage:
 
 - `LendingRegistryClassifier` reads `aave.json` before generic selector

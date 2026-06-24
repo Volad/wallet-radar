@@ -21,6 +21,7 @@ import com.walletradar.ingestion.pipeline.onchain.repair.InternalTransferRawPeer
 import com.walletradar.ingestion.pipeline.onchain.support.RawOrderingMetadataResolver;
 import com.walletradar.ingestion.pipeline.onchain.support.ResolvedRawOrderingMetadata;
 import com.walletradar.ingestion.store.IdempotentNormalizedTransactionStore;
+import com.walletradar.lending.application.LendingReceiptIdentityService;
 import com.walletradar.session.application.AccountingUniverseService;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -66,6 +67,7 @@ public class OnChainNormalizationService {
     private final RegistryBridgeInboundTypeCorrectionService registryBridgeInboundTypeCorrectionService;
     private final CounterpartyEnrichmentService counterpartyEnrichmentService;
     private final AccountingUniverseService accountingUniverseService;
+    private final LendingReceiptIdentityService lendingReceiptIdentityService;
 
     public int processNextBatch() {
         return processNextBatch(null);
@@ -148,8 +150,33 @@ public class OnChainNormalizationService {
             return;
         }
         protocolNameEnrichmentService.enrichInPlace(normalizedTransaction, rawTransaction, now);
+        enrichProtocolFromReceiptIdentity(normalizedTransaction);
         registryBridgeInboundTypeCorrectionService.correctIfApplicable(normalizedTransaction, rawTransaction, now);
         counterpartyEnrichmentService.enrichInPlace(normalizedTransaction, rawTransaction, now);
+    }
+
+    private void enrichProtocolFromReceiptIdentity(
+            com.walletradar.domain.transaction.normalized.NormalizedTransaction normalizedTransaction
+    ) {
+        if (normalizedTransaction == null) {
+            return;
+        }
+        if (normalizedTransaction.getProtocolName() == null || normalizedTransaction.getProtocolName().isBlank()) {
+            List<com.walletradar.domain.transaction.normalized.NormalizedTransaction.Flow> flows =
+                    normalizedTransaction.getFlows() == null ? List.of() : normalizedTransaction.getFlows();
+            for (com.walletradar.domain.transaction.normalized.NormalizedTransaction.Flow flow : flows) {
+                lendingReceiptIdentityService.protocolHint(
+                                normalizedTransaction.getNetworkId(),
+                                flow.getAssetContract(),
+                                flow.getAssetSymbol()
+                        )
+                        .ifPresent(normalizedTransaction::setProtocolName);
+                if (normalizedTransaction.getProtocolName() != null && !normalizedTransaction.getProtocolName().isBlank()) {
+                    break;
+                }
+            }
+        }
+        lendingReceiptIdentityService.indexTransaction(normalizedTransaction);
     }
 
     private void prepareOrdering(RawTransaction rawTransaction) {

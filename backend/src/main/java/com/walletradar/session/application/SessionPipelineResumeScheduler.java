@@ -244,12 +244,36 @@ public class SessionPipelineResumeScheduler {
         for (UserSession.SessionWallet wallet : session.getWallets()) {
             for (var network : wallet.getNetworks()) {
                 SyncStatus status = syncStatusByPair.get(pairKey(wallet.getAddress(), network.name()));
-                if (status == null || !status.isBackfillComplete()) {
+                if (!isOnChainBackfillComplete(status)) {
                     return false;
+                }
+                if (status != null && !status.isBackfillComplete()) {
+                    log.warn(
+                            "Backfill gate treating terminal sync_status as complete despite stale flag: "
+                                    + "sessionId={}, wallet={}, network={}, status={}, progressPct={}",
+                            session.getId(),
+                            wallet.getAddress(),
+                            network.name(),
+                            status.getStatus(),
+                            status.getProgressPct()
+                    );
                 }
             }
         }
         return true;
+    }
+
+    /**
+     * Robustness net: a wallet×network counts as backfill-complete when its boolean flag is set OR the
+     * sync_status reached terminal {@code COMPLETE} status. {@code COMPLETE} cannot coexist with
+     * RUNNING/PENDING/FAILED segments, so a genuinely in-flight source is never advanced prematurely;
+     * this only rescues sessions stranded by a stale completion boolean on an already-terminal source.
+     */
+    private static boolean isOnChainBackfillComplete(SyncStatus status) {
+        if (status == null) {
+            return false;
+        }
+        return status.isBackfillComplete() || status.getStatus() == SyncStatus.SyncStatusValue.COMPLETE;
     }
 
     private boolean hasPendingRaw(List<String> addresses) {

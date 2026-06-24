@@ -38,6 +38,17 @@ Current active runtime profile owns:
 
 - `LENDING_DEPOSIT`
 - `LENDING_WITHDRAW`
+
+## Receipt tokens (EVK indexed shares)
+
+Euler EVK collateral uses indexed receipt tickers `e{Underlying}-{vaultIndex}` (e.g. `eUSDC-2`, `eWBTC-1`). These are **not** plain `EUSDC` legacy prefixes.
+
+`LendingReceiptIdentityService` maps receipt contracts to lifecycle underlying via:
+
+1. derived index from deposit/withdraw pairs
+2. grammar: `^E([A-Z0-9]+)-(\d+)$` → underlying (then lifecycle canonicalization, e.g. `WBTC` → `BTC`)
+
+See [ADR-035](../../../../adr/ADR-035-lending-receipt-identity-resolver.md) and [ADR-036](../../../../adr/ADR-036-contract-first-lending-market-key-and-live-debt.md).
 - `LENDING_LOOP_OPEN`
 - `LENDING_LOOP_REBALANCE`
 - `LENDING_LOOP_DECREASE`
@@ -75,11 +86,14 @@ Current active semantic hints:
 
 ## Lending market key (EVK)
 
-- Per-vault grouping uses `matchedCounterparty` (EVK vault address) when present:
-  `evk-vault-{address[2..10]}`
-- Open position attachment uses the same key from ledger `matchedCounterparty`
-  or balance `assetContract` (see ADR-025)
-- Fallback without vault address: `evk-account`
+Per-vault grouping uses the **receipt/share-token contract** as the primary market key via `LendingMarketKeyResolver`:
+
+- Receipt leg `assetContract` → `evk-vault-{address[2..10]}`
+- Validated `matchedCounterparty` / `counterpartyAddress` fallback (excluding EVC singleton `0xddcbe30a…f36fa1` and underlying flow contracts)
+- Open position attachment uses the same resolver from balance `assetContract` when it is a receipt token
+- Fallback without vault/receipt contract: `evk-account`; loop without vault: `evk-loop-account`
+
+See [ADR-036](../../../../adr/ADR-036-contract-first-lending-market-key-and-live-debt.md) (supersedes [ADR-025](../../../../adr/ADR-025-euler-evk-market-key.md)).
 
 ## Correlation Rules
 

@@ -1,8 +1,8 @@
 # ADR-020 — Bridge Late-Carry Pass-Through Reservation Invariant
 
-**Date**: 2026-05-29  
+**Date**: 2026-05-29 (amended 2026-06-13 — RC-2 out-hash-unique LiFi corridor relaxation)  
 **Status**: Accepted  
-**Related**: ADR-019 (Corridor Carry Policy)
+**Related**: ADR-019 (Corridor Carry Policy), ADR-027 (LiFi destination discovery / corridor linking)
 
 ---
 
@@ -72,7 +72,49 @@ ETH AVCO stuck at $1,953 (vs correct $2,692–$2,828) due to two ZKSync LENDING_
 
 ---
 
+## Amendment (2026-06-13) — RC-2: out-hash-unique LiFi corridor pass-through relaxation
+
+Prod audit (`results/blockers.md` B-ETH-02, `results/protocol-rule-pack.md` RP-2) found
+cross-network LiFi ETH corridors whose destination `BRIDGE_IN` never inherited the source
+`BRIDGE_OUT`'s reserved carry (UNICHAIN→ZKSYNC, BASE→LINEA, BASE→ARBITRUM). The source reserved
+`CARRY_OUT` keyed `bridge:lifi:<outHash>` with `continuityCandidate=true`, but the destination
+re-priced at market (F-5(a)) and left ~$2,945 of `CARRY_OUT` **orphaned** in the continuity
+store. The dollar impact is small (market ≈ source AVCO), but the orphan is a determinism /
+latent-divergence risk.
+
+Root cause is two-fold and addressed in order:
+
+1. **Linking stage (primary, RC-4 prerequisite):** the `bridge:lifi:<outHash>` corridor
+   relationship was not propagated to the destination because the LiFi `BRIDGE_IN` was typed
+   `UNKNOWN_EOA` (relayer EOA), not `BRIDGE`. RC-4 types any `BRIDGE_IN` whose
+   `correlationId=bridge:lifi:<hash>` matches a known LiFi `BRIDGE_OUT` as `counterpartyType=BRIDGE`
+   (ADR-027), making the corridor pairing unambiguous.
+
+2. **Replay carry key (already network-agnostic — no P0-b change required):** the
+   `BRIDGE_OUT → BRIDGE_IN` continuity carry is keyed by `ReplayPendingTransferKeyFactory.bridgeTransferKey`
+   as `bridge:<correlationId>:<bridgeFamilyIdentity>` (and the supplemental
+   `bridge:lifi:<outHash>:<family>` for `LINKED:` inbound legs). Neither embeds `networkId`, so once
+   `materializePair` stamps both legs with the shared `bridge:lifi:<outHash>` correlation,
+   `continuityCandidate=true`, and the `LINKED:<outHash>` inbound counterparty (RC-4), the
+   destination consumes the source's reserved `CARRY_OUT` **across networks** with no further change.
+
+   The **P0-b `selectWalletScopedInboundCandidate` same-`networkId` guard is intentionally left
+   intact.** It governs a *different* path — the pass-through reservation that feeds a same-network
+   downstream consumer (`LENDING_DEPOSIT`/`LP_ENTRY`/…) from a `BRIDGE_IN` — not the
+   `BRIDGE_OUT → BRIDGE_IN` carry. Relaxing it broadly would re-break the same-wallet cross-network
+   mis-pairing P0-b fixed, and it is not on the corridor-carry path, so RC-2 needs no relaxation here.
+   If a future audit shows a residual same-network restriction *on the corridor-carry path itself*,
+   relax it **strictly** for out-hash-unique LiFi corridors only (out-hash equality required; asset +
+   minute proximity alone must never link cross-network).
+
+### Target
+
+Orphaned `CARRY_OUT` basis → 0; the destination inbound inherits the source carried AVCO; any
+genuine excess tail still promotes at market-at-timestamp via F-5(a) (no double application).
+**NOT** "CARRY net → 0" — the net bridged-in inventory (≈ +$8,566) is legitimate and preserved.
+
 ## Rejected Alternatives
 
 - **Adding `networkId` to `PassThroughScopeKey.scope`**: Would break Bybit transit corridors where inbound arrives on ARBITRUM and outbound departs from MANTLE, both paired via the same counterparty address. The counterparty-matched scope path must remain network-agnostic.
 - **Fixing the planner to not build corridors for late-arriving BRIDGE_IN**: The corridor planning is a pre-pass without replay state; it cannot know ordering. The fix must be in the replay handler.
+- **Broadly relaxing the P0-b same-network guard** (RC-2): rejected — only out-hash-unique LiFi corridors qualify; asset+minute proximity must not link cross-network.

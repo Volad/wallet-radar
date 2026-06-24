@@ -88,6 +88,9 @@ public class UnmatchedBridgeInboundPricingFallbackService {
                 continue;
             }
             if (clearContinuityAndRepriceInbound(inbound, now)) {
+                // BR-2: a non-peg orphan inbound is market-priced but its carried basis is
+                // unverified — flag it so it is not silently accepted as irreducible.
+                flagNonPegOrphanIfNeeded(inbound);
                 dirty.add(inbound);
             }
         }
@@ -308,6 +311,20 @@ public class UnmatchedBridgeInboundPricingFallbackService {
             }
         }
         return selected;
+    }
+
+    private static void flagNonPegOrphanIfNeeded(NormalizedTransaction inbound) {
+        if (PegNeutralBridgeAssumptionSupport.isPegNeutralInbound(inbound)) {
+            return;
+        }
+        List<String> reasons = inbound.getMissingDataReasons();
+        if (reasons == null) {
+            reasons = new ArrayList<>();
+            inbound.setMissingDataReasons(reasons);
+        }
+        if (!reasons.contains(PegNeutralBridgeAssumptionSupport.NON_PEG_BASIS_UNVERIFIED_REASON)) {
+            reasons.add(PegNeutralBridgeAssumptionSupport.NON_PEG_BASIS_UNVERIFIED_REASON);
+        }
     }
 
     private boolean clearContinuityAndRepriceInbound(NormalizedTransaction tx, Instant now) {

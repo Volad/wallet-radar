@@ -21,7 +21,7 @@ public class LendingMarketRateRefreshService {
         int saved = 0;
         int unavailable = 0;
         for (LendingActiveMarketDiscoveryService.ActiveMarket market : activeMarkets) {
-            if (!"Aave".equalsIgnoreCase(market.protocol())) {
+            if (!LendingProtocolNameSupport.AAVE.equalsIgnoreCase(market.protocol())) {
                 continue;
             }
             LendingMarketRateSnapshot snapshot = aaveV3MarketRateCollector.collect(market).orElse(null);

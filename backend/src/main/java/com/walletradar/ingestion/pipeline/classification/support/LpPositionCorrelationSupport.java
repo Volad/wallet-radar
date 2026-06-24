@@ -1,5 +1,6 @@
 package com.walletradar.ingestion.pipeline.classification.support;
 
+import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.ingestion.pipeline.onchain.OnChainRawTransactionView;
 import org.bson.Document;
@@ -41,6 +42,17 @@ public final class LpPositionCorrelationSupport {
         return lifecycleCorrelationId(view, type, protocolName);
     }
 
+    /**
+     * Resolves the CL-NFT position correlation id.
+     *
+     * <p>RC-1 (ADR-018): the position identity is keyed by the NonfungiblePositionManager
+     * <b>contract address</b> (derived from {@code rawData.to}), NOT the protocol slug. Protocol
+     * slug ↔ NFPM is not bijective (Uniswap V3 NFPM and V4 PoolManager both map to {@code uniswap}),
+     * and the slug is classifier-dependent, so a slug-keyed identity re-admits entry/exit splits.
+     * The contract address is identical for the LP_ENTRY and LP_EXIT of the same position, so the
+     * pool can never split. The {@code protocolName} argument is retained for signature
+     * compatibility only and no longer participates in the identity (it is display-only).
+     */
     public static String lifecycleCorrelationId(
             OnChainRawTransactionView view,
             NormalizedTransactionType type,
@@ -53,9 +65,126 @@ public final class LpPositionCorrelationSupport {
         if (tokenId == null || tokenId.signum() < 0) {
             return null;
         }
-        String networkId = view.networkId() == null ? "unknown" : view.networkId().name().toLowerCase(Locale.ROOT);
-        String protocolSlug = normalizeProtocolName(protocolName);
-        return "lp-position:" + networkId + ":" + protocolSlug + ":" + tokenId.toString();
+        return contractKeyedCorrelationId(view, tokenId.toString());
+    }
+
+    /**
+     * Builds {@code lp-position:<network>:<nfpmContractLowercased>:<tokenId>} from an already
+     * resolved {@code tokenId}. Returns {@code null} when the NFPM contract cannot be resolved
+     * (fail-safe — never fabricate a slug-keyed identity).
+     */
+    public static String contractKeyedCorrelationId(OnChainRawTransactionView view, String tokenId) {
+        if (view == null || tokenId == null || tokenId.isBlank()) {
+            return null;
+        }
+        String nfpmContract = resolvePositionManagerContract(view);
+        if (nfpmContract == null) {
+            return null;
+        }
+        return contractKeyedCorrelationId(view.networkId(), nfpmContract, tokenId);
+    }
+
+    /**
+     * Pure builder: {@code lp-position:<network>:<contractLowercased>:<tokenId>} from an explicit
+     * (already canonicalized) position-manager contract. RC-5 callers pass the wrapper-canonicalized
+     * NFPM contract here so a staked position keys to the underlying NFPM, not the farming wrapper.
+     */
+    public static String contractKeyedCorrelationId(NetworkId networkId, String contract, String tokenId) {
+        String normalizedContract = OnChainRawTransactionView.normalizeAddress(contract);
+        if (normalizedContract == null || tokenId == null || tokenId.isBlank()) {
+            return null;
+        }
+        String network = networkId == null ? "unknown" : networkId.name().toLowerCase(Locale.ROOT);
+        return "lp-position:" + network + ":" + normalizedContract + ":" + tokenId.trim();
+    }
+
+    /**
+     * Resolves the CL-NFT position correlation id from an <b>explicit canonical position-manager
+     * contract</b> (RC-5): the classifier resolves the interacted contract, canonicalizes a known
+     * staking/farming wrapper to the underlying NFPM, and passes the NFPM here. Returns {@code null}
+     * when the type is not position-scoped, no tokenId resolves, or the contract is blank.
+     */
+    public static String contractKeyedLifecycleCorrelationId(
+            OnChainRawTransactionView view,
+            NormalizedTransactionType type,
+            String canonicalContract
+    ) {
+        if (view == null || type == null || !supportsLpPositionCorrelation(type)) {
+            return null;
+        }
+        String tokenId = positionTokenId(view);
+        if (tokenId == null) {
+            return null;
+        }
+        return contractKeyedCorrelationId(view.networkId(), canonicalContract, tokenId);
+    }
+
+    /**
+     * The resolved CL position tokenId (decimal string) or {@code null} when none is present in
+     * calldata / multicall / mint-burn logs.
+     */
+    public static String positionTokenId(OnChainRawTransactionView view) {
+        if (view == null) {
+            return null;
+        }
+        BigInteger tokenId = resolvePositionTokenId(view);
+        return (tokenId == null || tokenId.signum() < 0) ? null : tokenId.toString();
+    }
+
+    /**
+     * The NonfungiblePositionManager contract that identifies the CL position (lowercased
+     * {@code 0x…}).
+     *
+     * <p>Resolution order (RC-1):
+     * <ol>
+     *   <li>the position-NFT ERC-721 contract — the {@code address} of the ERC-721 {@code Transfer}
+     *       log that mints (zero→wallet) or burns (wallet→zero) the position NFT. This is the true
+     *       NFPM and is router-independent, so a router-wrapped entry and a direct exit still resolve
+     *       to the same contract;</li>
+     *   <li>{@code rawData.to} (the interacted position-manager contract) — for direct NFPM calls
+     *       this equals the log address; it also covers {@code increaseLiquidity}/partial-decrease
+     *       events that carry no mint/burn log;</li>
+     *   <li>the interaction recipient — when the suppressed transfer-row path hides {@code to}.</li>
+     * </ol>
+     */
+    public static String resolvePositionManagerContract(OnChainRawTransactionView view) {
+        if (view == null) {
+            return null;
+        }
+        String fromLog = resolvePositionNftContractFromLogs(view);
+        if (fromLog != null) {
+            return fromLog;
+        }
+        String contract = view.toAddress();
+        if (contract == null) {
+            contract = view.interactionToAddress();
+        }
+        return OnChainRawTransactionView.normalizeAddress(contract);
+    }
+
+    private static String resolvePositionNftContractFromLogs(OnChainRawTransactionView view) {
+        String wallet = OnChainRawTransactionView.normalizeAddress(view.walletAddress());
+        if (wallet == null) {
+            return null;
+        }
+        for (Document log : view.persistedLogs()) {
+            List<String> topics = normalizedTopics(log);
+            if (topics.size() < 4 || !ERC721_TRANSFER_TOPIC.equals(topics.getFirst())) {
+                continue;
+            }
+            String from = topicAddress(topics.get(1));
+            String to = topicAddress(topics.get(2));
+            boolean mintToWallet = zeroAddressTopic(topics.get(1)) && wallet.equals(to);
+            boolean burnFromWallet = zeroAddressTopic(topics.get(2)) && wallet.equals(from);
+            if (!mintToWallet && !burnFromWallet) {
+                continue;
+            }
+            String logAddress = OnChainRawTransactionView.normalizeAddress(stringValue(log.get("address")));
+            if (logAddress != null) {
+                return logAddress;
+            }
+        }
+        return null;
     }
 
     public static boolean supportsLpPositionCorrelation(NormalizedTransactionType type) {
@@ -137,6 +266,15 @@ public final class LpPositionCorrelationSupport {
         if (MINT_SELECTOR.equals(methodId)
                 || STRUCT_MINT_SELECTOR.equals(methodId)) {
             return true;
+        }
+        // RC-6 (ADR-018): a direct Uniswap-V4 modifyLiquidities MINT assigns its tokenId on-chain
+        // (absent from calldata, present only in the resulting ERC-721 mint log). Treat it as a
+        // receipt-clarification mint shape so identity keys to the full PositionManager + minted
+        // tokenId — never the truncated-contract aggregate. Pure decrease/burn modifyLiquidities
+        // carry the tokenId in calldata and are resolved before this method (so they are excluded).
+        if (MODIFY_LIQUIDITIES_SELECTOR.equals(methodId)) {
+            return hasMintActionInModifyLiquidities(view.inputData())
+                    || LpPositionLifecycleSupport.hasPositionNftMintLog(view);
         }
         if (!MULTICALL_SELECTOR.equals(methodId)) {
             return false;
@@ -223,6 +361,37 @@ public final class LpPositionCorrelationSupport {
         return null;
     }
 
+    /**
+     * RC-6: true when a V4 {@code modifyLiquidities} unlock-data action list contains a
+     * {@code MINT_POSITION} (0x02) action (a brand-new position whose tokenId is assigned on-chain).
+     */
+    private static boolean hasMintActionInModifyLiquidities(String inputData) {
+        if (inputData == null || inputData.isBlank()) {
+            return false;
+        }
+        String unlockData = CalldataDecodingSupport.decodeDynamicBytesArgument(inputData, 0);
+        if (unlockData == null || unlockData.isBlank()) {
+            return false;
+        }
+        String actions = CalldataDecodingSupport.decodeTupleDynamicBytesArgument(unlockData, 0);
+        if (actions == null || actions.length() <= 2) {
+            return false;
+        }
+        String actionBytes = actions.startsWith("0x") ? actions.substring(2) : actions;
+        for (int index = 0; index + 2 <= actionBytes.length(); index += 2) {
+            int action;
+            try {
+                action = Integer.parseInt(actionBytes.substring(index, index + 2), 16);
+            } catch (NumberFormatException ex) {
+                continue;
+            }
+            if (action == ACTION_MINT_POSITION) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static boolean actionCarriesExistingPositionTokenId(int action) {
         return action == ACTION_INCREASE_LIQUIDITY
                 || action == ACTION_DECREASE_LIQUIDITY
@@ -301,25 +470,6 @@ public final class LpPositionCorrelationSupport {
             return null;
         }
         return normalized.substring(0, 10);
-    }
-
-    private static String normalizeProtocolName(String protocolName) {
-        if (protocolName == null || protocolName.isBlank()) {
-            return "unknown";
-        }
-        StringBuilder builder = new StringBuilder(protocolName.length());
-        for (char ch : protocolName.trim().toLowerCase(Locale.ROOT).toCharArray()) {
-            if ((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9')) {
-                builder.append(ch);
-            } else if (builder.length() == 0 || builder.charAt(builder.length() - 1) != '-') {
-                builder.append('-');
-            }
-        }
-        String normalized = builder.toString();
-        if (normalized.endsWith("-")) {
-            normalized = normalized.substring(0, normalized.length() - 1);
-        }
-        return normalized.isBlank() ? "unknown" : normalized;
     }
 
     private static String stringValue(Object value) {

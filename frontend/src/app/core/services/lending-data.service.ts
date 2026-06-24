@@ -44,6 +44,7 @@ export class LendingDataService {
         healthProgress: group.healthProgress ?? 0,
         healthStatus: group.healthStatus ?? 'UNKNOWN',
         healthSource: group.healthSource ?? 'UNKNOWN',
+        healthStale: group.healthStale ?? false,
         supplyUsd: group.supplyUsd ?? 0,
         borrowUsd: group.borrowUsd ?? 0,
         netExposureUsd: group.netExposureUsd ?? 0,
@@ -220,6 +221,12 @@ export class LendingDataService {
       netIncomeByAsset: this.toNumberRecord(response?.netIncomeByAsset ?? {}),
       precisionByAsset: this.toStringRecord(response?.precisionByAsset ?? {}),
       reasonByAsset: this.toStringRecord(response?.reasonByAsset ?? {}),
+      supplyPnlUsdByAsset: this.toNumberRecord(response?.supplyPnlUsdByAsset ?? {}),
+      borrowPnlUsdByAsset: this.toNumberRecord(response?.borrowPnlUsdByAsset ?? {}),
+      rewardsUsdByAsset: this.toNumberRecord(response?.rewardsUsdByAsset ?? {}),
+      gasUsdByAsset: this.toNumberRecord(response?.gasUsdByAsset ?? {}),
+      netIncomeUsdByAsset: this.toNumberRecord(response?.netIncomeUsdByAsset ?? {}),
+      usdPrecisionByAsset: this.toStringRecord(response?.usdPrecisionByAsset ?? {}),
     };
   }
 

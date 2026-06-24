@@ -107,7 +107,13 @@ public class LendingController {
                                                                 cycle.pnlAssetBreakdown().gasByAsset(),
                                                                 cycle.pnlAssetBreakdown().netIncomeByAsset(),
                                                                 cycle.pnlAssetBreakdown().precisionByAsset(),
-                                                                cycle.pnlAssetBreakdown().reasonByAsset()
+                                                                cycle.pnlAssetBreakdown().reasonByAsset(),
+                                                                cycle.pnlAssetBreakdown().supplyPnlUsdByAsset(),
+                                                                cycle.pnlAssetBreakdown().borrowPnlUsdByAsset(),
+                                                                cycle.pnlAssetBreakdown().rewardsUsdByAsset(),
+                                                                cycle.pnlAssetBreakdown().gasUsdByAsset(),
+                                                                cycle.pnlAssetBreakdown().netIncomeUsdByAsset(),
+                                                                cycle.pnlAssetBreakdown().usdPrecisionByAsset()
                                                         ),
                                                         new SessionLendingResponse.FactualApy(
                                                                 cycle.factualApy().factualSupplyAprByAsset(),

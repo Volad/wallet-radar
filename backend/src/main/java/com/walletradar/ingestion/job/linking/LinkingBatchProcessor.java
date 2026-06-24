@@ -9,7 +9,9 @@ import com.walletradar.ingestion.pipeline.clarification.InternalTransferPairLink
 import com.walletradar.ingestion.pipeline.clarification.OnChainInternalTransferPairRepairService;
 import com.walletradar.ingestion.pipeline.clarification.LiFiBridgePairLinkService;
 import com.walletradar.ingestion.pipeline.clarification.MayanCctpBridgePairLinkService;
+import com.walletradar.ingestion.pipeline.clarification.MultiCounterpartyCorrectionService;
 import com.walletradar.ingestion.pipeline.clarification.OnChainLifecycleLinkService;
+import com.walletradar.ingestion.pipeline.clarification.OwnWalletBridgeMistypeCorrectionService;
 import com.walletradar.ingestion.pipeline.clarification.BybitInternalTransferOrphanFallbackService;
 import com.walletradar.ingestion.pipeline.clarification.BybitOnChainEarnOrphanRepairService;
 import com.walletradar.ingestion.pipeline.bybit.BybitInternalTransferExternalCpReclassifier;
@@ -21,6 +23,7 @@ import com.walletradar.ingestion.pipeline.clarification.KnownBridgeRouterExterna
 import com.walletradar.ingestion.pipeline.clarification.NftMintRetagger;
 import com.walletradar.ingestion.pipeline.clarification.ProtocolAttributionClassifier;
 import com.walletradar.ingestion.pipeline.clarification.ScamDisperseClonePhishingTagger;
+import com.walletradar.ingestion.pipeline.clarification.SpoofTokenDetector;
 import com.walletradar.ingestion.pipeline.clarification.TurtleVaultBurnRepairService;
 import com.walletradar.ingestion.pipeline.clarification.UnmatchedBridgeInboundPricingFallbackService;
 import com.walletradar.ingestion.pipeline.clarification.UnmatchedExternalTransferInPricingFallbackService;
@@ -54,11 +57,14 @@ class LinkingBatchProcessor {
     private final BybitInternalTransferExternalCpReclassifier bybitInternalTransferExternalCpReclassifier;
 
     private final KnownBridgeRouterExternalTypeCorrectionService knownBridgeRouterExternalTypeCorrectionService;
+    private final OwnWalletBridgeMistypeCorrectionService ownWalletBridgeMistypeCorrectionService;
+    private final MultiCounterpartyCorrectionService multiCounterpartyCorrectionService;
     private final CrossNetworkBridgePairFallbackService crossNetworkBridgePairFallbackService;
     private final TurtleVaultBurnRepairService turtleVaultBurnRepairService;
 
     private final ProtocolAttributionClassifier protocolAttributionClassifier;
     private final AddressPoisoningDetector addressPoisoningDetector;
+    private final SpoofTokenDetector spoofTokenDetector;
     private final ScamDisperseClonePhishingTagger scamDisperseClonePhishingTagger;
     private final GmxV2RefundClassifier gmxV2RefundClassifier;
     private final EtherFiOftBridgeInClassifier etherFiOftBridgeInClassifier;
@@ -96,6 +102,24 @@ class LinkingBatchProcessor {
         processed += knownBridgeRouterExternalTypeCorrectionService.reclassifyKnownRouterExternals(batchSize);
         progressHeartbeat.run();
 
+        // BR-1: a BRIDGE_OUT/IN whose counterparty is another own/member wallet is an own-wallet
+        // move, not a third-party bridge. Reclassify to INTERNAL_TRANSFER before bridge pairing so
+        // internal pairing (not bridge pairing) links the reciprocal leg.
+        processed += ownWalletBridgeMistypeCorrectionService.reclassifyOwnWalletBridgeMistypes(batchSize);
+        progressHeartbeat.run();
+
+        // WS-3b: repair legacy EXTERNAL_TRANSFER rows with counterpartyAddress=MULTI caused by the
+        // FEE leg being counted as a counterparty (root cause fixed by ADR-032 / WS-3a).
+        // Phase A: EXTERNAL_TRANSFER_OUT/IN + MULTI + own wallet → INTERNAL_TRANSFER (own-wallet move)
+        processed += ownWalletBridgeMistypeCorrectionService.reclassifyMultiCpOwnWalletTransfers(batchSize);
+        progressHeartbeat.run();
+        // Phase B: remaining EXTERNAL_TRANSFER_OUT/IN + MULTI → stamp concrete counterparty
+        processed += multiCounterpartyCorrectionService.deMultiExternalTransfers(batchSize);
+        progressHeartbeat.run();
+        // Phase C: EXTERNAL_TRANSFER_OUT + known aggregator counterparty + swap-shape → SWAP
+        processed += multiCounterpartyCorrectionService.retypeAggregatorSwapMistypes(batchSize);
+        progressHeartbeat.run();
+
         processed += bybitTransferContinuityRepairService.reconcileOutstandingPairs(batchSize);
         progressHeartbeat.run();
 
@@ -111,6 +135,10 @@ class LinkingBatchProcessor {
 
         // R11 Fix 5: exclude address-poisoning dust IN (vanity-prefix match)
         processed += addressPoisoningDetector.detectAndExclude(batchSize);
+        progressHeartbeat.run();
+
+        // SF-1(a): quarantine confusable-symbol spoof tokens (homoglyph stablecoin/native impersonation)
+        processed += spoofTokenDetector.detectAndExclude(batchSize);
         progressHeartbeat.run();
 
         // R11 Fix 6: tag phishing OUT via known scam disperse-clone contracts

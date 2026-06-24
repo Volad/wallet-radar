@@ -411,6 +411,81 @@ class SessionTransactionsQueryServiceTest {
     }
 
     @Test
+    void treatsSpoofTokenQuarantineAsSpamLikeRows() {
+        UserSession session = new UserSession();
+        session.setId("session-1");
+
+        NormalizedTransaction spoof = new NormalizedTransaction();
+        spoof.setId("spoof-1");
+        spoof.setSource(NormalizedTransactionSource.ON_CHAIN);
+        spoof.setWalletAddress("0x1");
+        spoof.setNetworkId(NetworkId.BASE);
+        spoof.setTxHash("0xspoof");
+        spoof.setBlockTimestamp(Instant.parse("2026-04-06T10:00:00Z"));
+        spoof.setType(NormalizedTransactionType.UNKNOWN);
+        spoof.setStatus(NormalizedTransactionStatus.CONFIRMED);
+        spoof.setExcludedFromAccounting(Boolean.TRUE);
+        spoof.setAccountingExclusionReason("SPOOF_TOKEN_CONFUSABLE_SYMBOL");
+        spoof.setMissingDataReasons(List.of("SPOOF_TOKEN_CONFUSABLE_SYMBOL"));
+
+        when(userSessionRepository.findById("session-1")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "ACCOUNTING_UNIVERSE:session-1",
+                List.of("0x1"),
+                List.of("0x1")
+        ));
+        when(mongoOperations.count(any(Query.class), eq(NormalizedTransaction.class))).thenReturn(1L);
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class))).thenReturn(List.of(spoof));
+
+        SessionTransactionsQueryService.SessionTransactionsView result = sessionTransactionsQueryService
+                .findSessionTransactions("session-1", SessionTransactionsQueryService.normalizeQuery(
+                        50,
+                        0,
+                        null,
+                        "ALL",
+                        "SPAM_ONLY",
+                        null,
+                        null
+                ))
+                .orElseThrow();
+
+        assertThat(result.items()).singleElement().satisfies(item -> {
+            assertThat(item.issue()).isEqualTo("spam");
+            assertThat(item.txHash()).isEqualTo("0xspoof");
+        });
+
+        ArgumentCaptor<Query> queryCaptor = ArgumentCaptor.forClass(Query.class);
+        verify(mongoOperations).find(queryCaptor.capture(), eq(NormalizedTransaction.class));
+        assertThat(queryCaptor.getValue().toString()).contains("SPOOF_TOKEN_CONFUSABLE_SYMBOL");
+    }
+
+    @Test
+    void hidesSpoofTokenQuarantineFromDefaultVisibleList() {
+        UserSession session = new UserSession();
+        session.setId("session-1");
+
+        when(userSessionRepository.findById("session-1")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "ACCOUNTING_UNIVERSE:session-1",
+                List.of("0x1"),
+                List.of("0x1")
+        ));
+        when(mongoOperations.count(any(Query.class), eq(NormalizedTransaction.class))).thenReturn(0L);
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class))).thenReturn(List.of());
+
+        sessionTransactionsQueryService
+                .findSessionTransactions("session-1", SessionTransactionsQueryService.normalizeQuery(
+                        50, 0, null, null, "HIDE_SPAM", null, null
+                ))
+                .orElseThrow();
+
+        ArgumentCaptor<Query> queryCaptor = ArgumentCaptor.forClass(Query.class);
+        verify(mongoOperations).find(queryCaptor.capture(), eq(NormalizedTransaction.class));
+        // HIDE_SPAM excludes spoof rows via the spam-like reason filter.
+        assertThat(queryCaptor.getValue().toString()).contains("SPOOF_TOKEN_CONFUSABLE_SYMBOL");
+    }
+
+    @Test
     void rebuildReturnsCurrentProjectedTransactionCount() {
         UserSession session = new UserSession();
         session.setId("session-1");

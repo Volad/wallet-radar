@@ -21,9 +21,12 @@ sequenceDiagram
 ## Displays
 
 - **Filters:** wallet, protocol, market, cycle status (OPEN / CLOSED / AMBIGUOUS_NEEDS_REVIEW)
-- **Summary:** total supplied/borrowed USD, closed P&L, Active vs All cycles toggle
-- **Protocol groups:** health factor, supply/borrow USD, running/closed P&L
-- **Cycles:** expandable cards — status, duration, asset deltas, P&L breakdown, factual APY, history timeline, tx groups
+- **Summary:** total supplied/borrowed USD, **net exposure**, closed P&L, Active vs All cycles toggle
+- **Protocol groups (collapsed head):** supply/borrow USD column, health-factor badge (always shown; "No debt" when no borrow; `stale` chip when estimate/stale), running/closed P&L
+- **Protocol groups (expanded):** net-exposure strip `Supplied − Borrowed = Net exposure` plus **Net APY** (value-weighted across positions); position tables with column headers (Qty / Value / Earned|Debt / Current APY)
+- **Cycles (head):** index, date range with `duration` badge, status tag, **Factual APY** (asset-denominated net strategy — USD exposure weights only, not principal price revaluation) and **Protocol Net APY**, accrued/interest, running/net P&L
+- **Cycles (expanded):** mini-stats (peak supply / peak borrow / gas), per-asset P&L strip (quantity primary, USD secondary), history timeline, tx groups
+- **Tx rows:** every transaction hash is a copy button (short hash + copy icon; turns green with a checkmark on copy; click does not toggle the row)
 - **Loop groups:** collapsed 24h Borrow→Supply chains
 
 ## Cycle statuses
@@ -41,6 +44,10 @@ sequenceDiagram
 - Hide `AMBIGUOUS_NEEDS_REVIEW` exit-only orphans (principal out only)
 - Auto-expand OPEN cycles on load
 - Health labels: Safe / Moderate / At risk / Liquidation risk from thresholds
+- Health badge shows `stale` chip when `healthStale` (source `ACCOUNTING_ESTIMATE` / `STALE`)
+- Net APY uses position value-weighting `(Σ supplyValue·apy − Σ borrowValue·apy) / netExposure`; `--` when net exposure ≤ 0 or no APY signal
+- **Factual APY** headline uses asset-denominated per-asset factual rates blended by USD exposure (yield in asset units, not USD price P&L)
+- Per-asset cycle P&L strip: **quantity first** (bold), USD second (`.cs-usd`); USD from `netIncomeUsdByAsset` when available. Backend derivation: `docs/tasks/lending-per-asset-usd-pnl-implementation-plan.md`
 - `precision === 'UNAVAILABLE'` → PnL not shown
 
 ## Contrast with dashboard
@@ -50,9 +57,20 @@ Route `/` shows **simplified** inline lending summary from dashboard API (`lendi
 ## Backend rules (summary)
 
 - Clean cycles open on first supply/deposit only
-- Aave: concurrent cycles per market; Fluid/Morpho/Euler/Compound: vault/account keyed
-- Euler EVK: per-vault market key `evk-vault-{address[2..10]}` (see ADR-025)
+- Aave / Compound: collapsed market keys (`account-pool`, `comet-base-market`)
+- Euler / Fluid / Morpho: per-vault contract keys via `LendingMarketKeyResolver` (see [ADR-036](../adr/ADR-036-contract-first-lending-market-key-and-live-debt.md))
 - Cycle PnL = lending yield only (interest − gas), gated separately from total valuation
+
+## Borrowed vs live debt
+
+| UI signal | Meaning |
+|-----------|---------|
+| **Borrowed** (cycle deltas) | Principal borrowed from tx history (`borrowedByAsset`) — used for factual borrow APR math |
+| **Debt** / borrow USD (positions) | Live outstanding from debt-token `on_chain_balances` when present (includes accrued interest); priced on **underlying** symbol |
+| Synthetic borrow row | Fallback `borrowed − repaid` only when no live debt-token balance exists |
+| Stale debt balance | Show position with `stale` chip; do not silently revert to unflagged synthetic |
+
+Deploy: clear `lending_receipt_identity` cache on rollout so derived receipt mappings stay fresh (no Mongo migration / renormalization required for market keys).
 
 ## Yield and APR semantics
 

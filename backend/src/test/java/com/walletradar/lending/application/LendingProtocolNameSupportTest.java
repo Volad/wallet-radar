@@ -22,6 +22,17 @@ class LendingProtocolNameSupportTest {
     }
 
     @Test
+    void infersAaveFromVariableDebtReceiptSymbolsWhenProtocolNameIsMissing() {
+        assertThat(LendingProtocolNameSupport.displayProtocol(null, "VARIABLEDEBTBASUSDC")).isEqualTo("Aave");
+        assertThat(LendingProtocolNameSupport.displayProtocol(null, "STABLEDEBTETH")).isEqualTo("Aave");
+    }
+
+    @Test
+    void infersAaveFromAwethReceiptSymbolWhenProtocolNameIsMissing() {
+        assertThat(LendingProtocolNameSupport.displayProtocol(null, "AWETH")).isEqualTo("Aave");
+    }
+
+    @Test
     void treatsRewardClaimProtocolsAsKnownLendingProtocolsOnlyWhenSupported() {
         assertThat(LendingProtocolNameSupport.isKnownLendingProtocol("Compound V3")).isTrue();
         assertThat(LendingProtocolNameSupport.isKnownLendingProtocol("Fluid")).isTrue();

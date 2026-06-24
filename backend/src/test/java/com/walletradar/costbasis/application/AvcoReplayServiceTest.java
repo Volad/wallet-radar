@@ -35,6 +35,16 @@ class AvcoReplayServiceTest {
     @Mock
     private AssetLedgerPointRepository assetLedgerPointRepository;
 
+    // RC-12 / ADR-030: stateful accumulator stores so refresh runs re-load prior persisted output
+    // (exercises the empty-seed idempotency invariant — a reintroduced seed would double here).
+    private final Map<String, Map<String, com.walletradar.costbasis.domain.BorrowLiability>> borrowStore =
+            new LinkedHashMap<>();
+    private final Map<String, Map<String, com.walletradar.costbasis.domain.CounterpartyBasisPool>> counterpartyStore =
+            new LinkedHashMap<>();
+    private final Map<String, Map<String, com.walletradar.costbasis.domain.LpReceiptBasisPool>> lpReceiptStore =
+            new LinkedHashMap<>();
+    private com.walletradar.costbasis.domain.BorrowLiabilityRepository borrowLiabilityRepositoryRef;
+
     @Test
     void deterministicReplayOrderingUsesIdAsFinalTieBreaker() {
         NormalizedTransaction sell = tx("b", "0xsell", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_OUT,
@@ -197,6 +207,74 @@ class AvcoReplayServiceTest {
     }
 
     /**
+     * RC-12 / ADR-030 — replay accumulator idempotency. With the empty-seed fix, the persisted
+     * {@code borrow_liabilities} book must be bit-identical across a full rebuild and N incremental
+     * refreshes (the stateful repo re-loads prior output, so a reintroduced double-seed would
+     * surface as a doubled qtyBorrowed on refresh×1). Covers BA edge E2 (a fully-repaid loan stays
+     * {@code qtyOpen == 0} across refresh×N).
+     */
+    @Test
+    void replayAccumulatorBorrowBookIsIdempotentAcrossRefreshN() {
+        // loan-open: borrow 100 MNT, never repaid → qtyBorrowed=100, qtyOpen=100
+        NormalizedTransaction borrowOpen = tx("1", "0xb-open", 0, NormalizedTransactionType.BORROW,
+                flow(NormalizedLegRole.BUY, "MNT", "100", "1", PriceSource.BINANCE));
+        borrowOpen.setCorrelationId("loan-open");
+
+        // loan-partial: borrow 100 ETH, repay 40 ETH → qtyBorrowed=100, qtyOpen=60
+        NormalizedTransaction borrowPartial = tx("2", "0xb-partial", 1, NormalizedTransactionType.BORROW,
+                flow(NormalizedLegRole.BUY, "ETH", "100", "1", PriceSource.BINANCE));
+        borrowPartial.setCorrelationId("loan-partial");
+        NormalizedTransaction repayPartial = tx("3", "0xr-partial", 2, NormalizedTransactionType.REPAY,
+                flow(NormalizedLegRole.SELL, "ETH", "-40", "1", PriceSource.BINANCE));
+        repayPartial.setCorrelationId("loan-partial");
+
+        // loan-closed (edge E2): borrow 50 USDC, repay 50 USDC → qtyOpen=0 stays 0 across refresh×N
+        NormalizedTransaction borrowClosed = tx("4", "0xb-closed", 3, NormalizedTransactionType.BORROW,
+                flow(NormalizedLegRole.BUY, "USDC", "50", "1", PriceSource.BINANCE));
+        borrowClosed.setCorrelationId("loan-closed");
+        NormalizedTransaction repayClosed = tx("5", "0xr-closed", 4, NormalizedTransactionType.REPAY,
+                flow(NormalizedLegRole.SELL, "USDC", "-50", "1", PriceSource.BINANCE));
+        repayClosed.setCorrelationId("loan-closed");
+
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                NormalizedTransactionStatus.CONFIRMED
+        )).thenReturn(List.of(borrowOpen, borrowPartial, repayPartial, borrowClosed, repayClosed));
+
+        AvcoReplayService service = service();
+
+        Map<String, String> rebuild = runAndSnapshotBorrowBook(service);
+        Map<String, String> refresh1 = runAndSnapshotBorrowBook(service);
+        Map<String, String> refresh2 = runAndSnapshotBorrowBook(service);
+
+        // Hard idempotency check: books(rebuild) == books(rebuild→refresh) == books(rebuild→refresh×2).
+        assertThat(refresh1).as("refresh×1 must equal rebuild (no double-seed)").isEqualTo(rebuild);
+        assertThat(refresh2).as("refresh×2 must equal rebuild").isEqualTo(rebuild);
+
+        // Per-loan: qtyBorrowed == on-chain borrowed; qtyOpen == borrowed − repaid.
+        assertThat(rebuild.get("GLOBAL:loan-open")).isEqualTo("100|100|OPEN");
+        assertThat(rebuild.get("GLOBAL:loan-partial")).isEqualTo("100|60|PARTIAL");
+        // Edge E2: fully-repaid loan stays qtyOpen 0 (no negative, no re-double) across refresh×N.
+        assertThat(rebuild.get("GLOBAL:loan-closed")).isEqualTo("50|0|CLOSED");
+    }
+
+    private Map<String, String> runAndSnapshotBorrowBook(AvcoReplayService service) {
+        service.replayConfirmed();
+        Map<String, String> snapshot = new LinkedHashMap<>();
+        for (com.walletradar.costbasis.domain.BorrowLiability liability
+                : borrowLiabilityRepositoryRef.findByUniverseId("GLOBAL")) {
+            snapshot.put(
+                    liability.getCompositeId(),
+                    plain(liability.getQtyBorrowed()) + "|" + plain(liability.getQtyOpen()) + "|" + liability.getStatus()
+            );
+        }
+        return snapshot;
+    }
+
+    private static String plain(BigDecimal value) {
+        return value == null ? "null" : value.stripTrailingZeros().toPlainString();
+    }
+
+    /**
      * ADR-020 — P0: When BRIDGE_IN arrives before its paired BRIDGE_OUT in replay order, the
      * authoritative carry must still be reserved for the downstream LENDING_DEPOSIT.
      * Before the fix, the LENDING_DEPOSIT captured $0 basis (depleted family pool).
@@ -326,6 +404,73 @@ class AvcoReplayServiceTest {
         assertThat(bybit.getQuantityAfter()).isEqualByComparingTo("0.1");
         assertThat(bybit.getTotalCostBasisAfterUsd()).isEqualByComparingTo("400");
         assertThat(bybit.getAvcoAfterUsd()).isEqualByComparingTo("4000");
+    }
+
+    /**
+     * C-1 / WS-B — a {@code bybit-collapsed-v1:} FUND→UTA pair (both legs {@code continuityCandidate}
+     * + same corr) must carry the FUND-side basis into the UTA credit via the shared corr-family
+     * queue. The seq816 defect orphaned the FUND CARRY_OUT because the UTA credit was excluded;
+     * once both legs survive, the inherit-once machinery carries the basis with no synthetic credit.
+     * Asserts quantity-conservation (carried-in qty == carried-out qty) and basis continuity
+     * (UTA avco == FUND avco, not spot/$0).
+     */
+    @Test
+    void bybitCollapsedFundToUtaPairCarriesBasisWithoutOrphan() {
+        // FUND acquires 0.148 ETH @ $1000 (basis $148) — mirrors the seq816 ≈$391.85 carry shape.
+        NormalizedTransaction fundBuy = tx("1", "bybit-fund-buy", 0, NormalizedTransactionType.SWAP,
+                flow(NormalizedLegRole.BUY, "ETH", "0.148", "1000", PriceSource.BINANCE));
+        fundBuy.setSource(NormalizedTransactionSource.BYBIT);
+        fundBuy.setWalletAddress("BYBIT:1:FUND");
+        fundBuy.setNetworkId(null);
+
+        NormalizedTransaction fundOutbound = tx("2", "bybit-fund-out", 1, NormalizedTransactionType.INTERNAL_TRANSFER,
+                flow(NormalizedLegRole.TRANSFER, "ETH", "-0.148", null, null));
+        fundOutbound.setSource(NormalizedTransactionSource.BYBIT);
+        fundOutbound.setWalletAddress("BYBIT:1:FUND");
+        fundOutbound.setNetworkId(null);
+        fundOutbound.setCorrelationId("bybit-collapsed-v1:seq816");
+        fundOutbound.setContinuityCandidate(true);
+        fundOutbound.setMatchedCounterparty("BYBIT:1:UTA");
+
+        NormalizedTransaction utaInbound = tx("3", "bybit-uta-in", 2, NormalizedTransactionType.INTERNAL_TRANSFER,
+                flow(NormalizedLegRole.TRANSFER, "ETH", "0.148", null, null));
+        utaInbound.setSource(NormalizedTransactionSource.BYBIT);
+        utaInbound.setWalletAddress("BYBIT:1:UTA");
+        utaInbound.setNetworkId(null);
+        utaInbound.setCorrelationId("bybit-collapsed-v1:seq816");
+        utaInbound.setContinuityCandidate(true);
+        utaInbound.setMatchedCounterparty("BYBIT:1:FUND");
+
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                NormalizedTransactionStatus.CONFIRMED
+        )).thenReturn(List.of(fundBuy, fundOutbound, utaInbound));
+
+        service().replayConfirmed();
+
+        List<AssetLedgerPoint> points = capturedLedgerPoints();
+        // Collapsed UTA↔FUND legs both resolve to the umbrella root position BYBIT:1
+        // (AccountingAssetIdentitySupport strips :FUND/:UTA for the drain side). The FUND CARRY_OUT
+        // disposes 0.148 ETH to the corr-family queue; the UTA CARRY_IN must inherit that carry, so
+        // the umbrella returns to 0.148 ETH @ avco $1000 — NOT diluted toward $0 by a spot fallback.
+        AssetLedgerPoint umbrellaFinal = points.stream()
+                .filter(point -> "BYBIT:1".equals(point.getWalletAddress()))
+                .filter(point -> "ETH".equals(point.getAssetSymbol()))
+                .max(Comparator.comparing(AssetLedgerPoint::getReplaySequence))
+                .orElseThrow();
+        // Quantity conservation: carried-in qty == carried-out qty (no inflation, no double credit).
+        assertThat(umbrellaFinal.getQuantityAfter()).isEqualByComparingTo("0.148");
+        // Basis continuity: CARRY_IN inherited the FUND CARRY_OUT basis, not spot/$0.
+        assertThat(umbrellaFinal.getTotalCostBasisAfterUsd()).isEqualByComparingTo("148");
+        assertThat(umbrellaFinal.getAvcoAfterUsd()).isEqualByComparingTo("1000");
+        assertThat(umbrellaFinal.getUncoveredQuantityAfter()).isZero();
+
+        // Both a CARRY_OUT (release) and a covered CARRY_IN/REALLOCATE_IN (inherit) must exist —
+        // proving the carry rode the queue rather than orphaning the released basis.
+        assertThat(points.stream()
+                .anyMatch(point -> "ETH".equals(point.getAssetSymbol())
+                        && point.getBasisEffect() == AssetLedgerPoint.BasisEffect.CARRY_OUT))
+                .as("FUND outbound must release a CARRY_OUT")
+                .isTrue();
     }
 
     @Test
@@ -2646,7 +2791,9 @@ class AvcoReplayServiceTest {
     // ── B-ONDO-CARRY-1 tests ───────────────────────────────────────────────────────────────────
 
     @Test
-    void ondoEarnFundSideUsesEarnFifoQueueNotCorrFamily() {
+    void ondoEarnFundSideUsesCorrFamilyForCollapsedV1CorrId() {
+        // T-02: bybit-collapsed-v1: corrIds are excluded from the earn-carry FIFO so both
+        // legs of a FUND↔EARN collapsed pair route to corr-family: and share the same queue.
         var assetSupport = new com.walletradar.costbasis.application.replay.support.ReplayAssetSupport();
         var keyFactory = new com.walletradar.costbasis.application.replay.support.ReplayPendingTransferKeyFactory(assetSupport);
 
@@ -2666,12 +2813,15 @@ class AvcoReplayServiceTest {
         var key = keyFactory.transferKey(fundTx, flow);
 
         assertThat(key).isNotNull();
-        assertThat(key.value()).startsWith("bybit-earn-carry:");
-        assertThat(key.value()).doesNotContain("corr-family");
+        assertThat(key.value()).startsWith("corr-family:bybit-collapsed-v1:ONDO-TEST-1:");
+        assertThat(key.value()).doesNotContain("bybit-earn-carry");
     }
 
     @Test
     void ondoEarnBundleFallsBackToFifoWhenPrimaryQueueEmpty() {
+        // FUND→EARN transfer uses a non-collapsed corrId so it routes to the earn-carry FIFO.
+        // The bundle inbound first tries its own corr-family queue (empty) then falls back to
+        // the earn-carry FIFO, picking up the basis posted by fundOut.
         NormalizedTransaction buy = tx("1", "0xbuy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
                 flow(NormalizedLegRole.BUY, "ONDO", "100", "1.30", PriceSource.BINANCE));
         buy.setSource(NormalizedTransactionSource.BYBIT);
@@ -2682,8 +2832,9 @@ class AvcoReplayServiceTest {
         fundOut.setSource(NormalizedTransactionSource.BYBIT);
         fundOut.setWalletAddress("BYBIT:33625378:FUND");
         fundOut.setMatchedCounterparty("BYBIT:33625378:EARN");
-        fundOut.setCorrelationId("bybit-collapsed-v1:ONDO-TEST-2");
-        fundOut.setContinuityCandidate(true);
+        // Use a non-collapsed corrId so fundOut routes to the earn-carry FIFO (not corr-family)
+        fundOut.setCorrelationId("bybit-econ-v1:ONDO-TEST-2");
+        fundOut.setContinuityCandidate(false);
 
         NormalizedTransaction bundleIn = tx("3", "0xbundle-in", 2, NormalizedTransactionType.INTERNAL_TRANSFER,
                 flow(NormalizedLegRole.TRANSFER, "ONDO", "100", null, null));
@@ -3123,8 +3274,23 @@ class AvcoReplayServiceTest {
                 );
         com.walletradar.costbasis.domain.LpReceiptBasisPoolRepository lpReceiptBasisPoolRepository =
                 org.mockito.Mockito.mock(com.walletradar.costbasis.domain.LpReceiptBasisPoolRepository.class);
-        org.mockito.Mockito.when(lpReceiptBasisPoolRepository.findByUniverseId(org.mockito.ArgumentMatchers.anyString()))
-                .thenReturn(java.util.List.of());
+        org.mockito.Mockito.lenient().when(lpReceiptBasisPoolRepository.findByUniverseId(org.mockito.ArgumentMatchers.anyString()))
+                .thenAnswer(invocation -> new java.util.ArrayList<>(
+                        lpReceiptStore.getOrDefault(invocation.getArgument(0), new LinkedHashMap<>()).values()));
+        org.mockito.Mockito.lenient().doAnswer(invocation -> {
+            lpReceiptStore.remove(invocation.getArgument(0));
+            return null;
+        }).when(lpReceiptBasisPoolRepository).deleteByUniverseId(org.mockito.ArgumentMatchers.anyString());
+        org.mockito.Mockito.lenient().when(lpReceiptBasisPoolRepository.saveAll(org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(invocation -> {
+                    Iterable<com.walletradar.costbasis.domain.LpReceiptBasisPool> pools = invocation.getArgument(0);
+                    for (com.walletradar.costbasis.domain.LpReceiptBasisPool pool : pools) {
+                        lpReceiptStore
+                                .computeIfAbsent(pool.getUniverseId(), ignored -> new LinkedHashMap<>())
+                                .put(pool.getId(), pool);
+                    }
+                    return java.util.Collections.emptyList();
+                });
         LpReceiptBasisPoolService lpReceiptBasisPoolService = new LpReceiptBasisPoolService(lpReceiptBasisPoolRepository);
         com.walletradar.costbasis.application.replay.handler.PositionScopedLpExitReplayHandler positionScopedLpExitReplayHandler =
                 new com.walletradar.costbasis.application.replay.handler.PositionScopedLpExitReplayHandler(
@@ -3150,8 +3316,23 @@ class AvcoReplayServiceTest {
                 org.mockito.Mockito.mock(com.walletradar.session.application.AccountingUniverseService.class);
         com.walletradar.costbasis.domain.CounterpartyBasisPoolRepository counterpartyBasisPoolRepository =
                 org.mockito.Mockito.mock(com.walletradar.costbasis.domain.CounterpartyBasisPoolRepository.class);
-        org.mockito.Mockito.when(counterpartyBasisPoolRepository.findByUniverseId(org.mockito.ArgumentMatchers.anyString()))
-                .thenReturn(java.util.List.of());
+        org.mockito.Mockito.lenient().when(counterpartyBasisPoolRepository.findByUniverseId(org.mockito.ArgumentMatchers.anyString()))
+                .thenAnswer(invocation -> new java.util.ArrayList<>(
+                        counterpartyStore.getOrDefault(invocation.getArgument(0), new LinkedHashMap<>()).values()));
+        org.mockito.Mockito.lenient().doAnswer(invocation -> {
+            counterpartyStore.remove(invocation.getArgument(0));
+            return null;
+        }).when(counterpartyBasisPoolRepository).deleteByUniverseId(org.mockito.ArgumentMatchers.anyString());
+        org.mockito.Mockito.lenient().when(counterpartyBasisPoolRepository.saveAll(org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(invocation -> {
+                    Iterable<com.walletradar.costbasis.domain.CounterpartyBasisPool> pools = invocation.getArgument(0);
+                    for (com.walletradar.costbasis.domain.CounterpartyBasisPool pool : pools) {
+                        counterpartyStore
+                                .computeIfAbsent(pool.getUniverseId(), ignored -> new LinkedHashMap<>())
+                                .put(pool.getId(), pool);
+                    }
+                    return java.util.Collections.emptyList();
+                });
         CounterpartyBasisPoolService counterpartyBasisPoolService = new CounterpartyBasisPoolService(
                 counterpartyBasisPoolRepository,
                 assetFamilyResolver,
@@ -3164,8 +3345,24 @@ class AvcoReplayServiceTest {
         );
         com.walletradar.costbasis.domain.BorrowLiabilityRepository borrowLiabilityRepository =
                 org.mockito.Mockito.mock(com.walletradar.costbasis.domain.BorrowLiabilityRepository.class);
-        org.mockito.Mockito.when(borrowLiabilityRepository.findByUniverseId(org.mockito.ArgumentMatchers.anyString()))
-                .thenReturn(java.util.List.of());
+        org.mockito.Mockito.lenient().when(borrowLiabilityRepository.findByUniverseId(org.mockito.ArgumentMatchers.anyString()))
+                .thenAnswer(invocation -> new java.util.ArrayList<>(
+                        borrowStore.getOrDefault(invocation.getArgument(0), new LinkedHashMap<>()).values()));
+        org.mockito.Mockito.lenient().doAnswer(invocation -> {
+            borrowStore.remove(invocation.getArgument(0));
+            return null;
+        }).when(borrowLiabilityRepository).deleteByUniverseId(org.mockito.ArgumentMatchers.anyString());
+        org.mockito.Mockito.lenient().when(borrowLiabilityRepository.saveAll(org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(invocation -> {
+                    Iterable<com.walletradar.costbasis.domain.BorrowLiability> liabilities = invocation.getArgument(0);
+                    for (com.walletradar.costbasis.domain.BorrowLiability liability : liabilities) {
+                        borrowStore
+                                .computeIfAbsent(liability.getUniverseId(), ignored -> new LinkedHashMap<>())
+                                .put(liability.getCompositeId(), liability);
+                    }
+                    return java.util.Collections.emptyList();
+                });
+        this.borrowLiabilityRepositoryRef = borrowLiabilityRepository;
         BorrowLiabilityTracker borrowLiabilityTracker = new BorrowLiabilityTracker(borrowLiabilityRepository);
         com.walletradar.costbasis.application.replay.handler.BorrowReplayHandler borrowReplayHandler =
                 new com.walletradar.costbasis.application.replay.handler.BorrowReplayHandler(
@@ -3234,7 +3431,9 @@ class AvcoReplayServiceTest {
                 lpReceiptBasisPoolService,
                 borrowLiabilityTracker,
                 accountingShortfallAuditService,
-                accountingUniverseService
+                accountingUniverseService,
+                new com.walletradar.costbasis.application.replay.support.CorridorBasisConservationGuard(),
+                new com.walletradar.costbasis.application.replay.support.ReplayAccumulatorDriftCanary()
         );
     }
 

@@ -68,7 +68,14 @@ public class SyncProgressTracker {
     }
 
     /**
-     * Set status to COMPLETE, clear banner, set backfillComplete=rawFetchComplete.
+     * Set status to COMPLETE, clear banner, and mark the source terminally complete.
+     *
+     * <p>Reaching {@code COMPLETE} is a terminal state for a wallet×network window: every executable
+     * segment finished (or there was nothing left to fetch). It is therefore authoritative — both
+     * {@code rawFetchComplete} and {@code backfillComplete} are flipped to {@code true}. This prevents
+     * a window that completed through a "no executable segments" / empty-segment / adapter-skip path
+     * from being persisted as {@code COMPLETE} while the completion booleans stay {@code false}, which
+     * would otherwise strand the session-level backfill completion gate forever.
      */
     public void setComplete(String walletAddress, String networkId) {
         syncStatusRepository.findByWalletAddressAndNetworkId(walletAddress, networkId)
@@ -79,7 +86,8 @@ public class SyncProgressTracker {
                     s.setStatus(SyncStatus.SyncStatusValue.COMPLETE);
                     s.setProgressPct(100);
                     s.setSyncBannerMessage(null);
-                    s.setBackfillComplete(s.isRawFetchComplete());
+                    s.setRawFetchComplete(true);
+                    s.setBackfillComplete(true);
                     s.setRetryCount(0);
                     s.setNextRetryAfter(null);
                     s.setLastSyncedAt(s.getWindowToTime() == null ? Instant.now() : s.getWindowToTime());

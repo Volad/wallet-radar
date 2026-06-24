@@ -39,7 +39,25 @@ public final class KnownBridgeRouterRegistry {
             // Base transfer proxy bridge router
             "0x4446adc0b8136ffc55ddb7a488ba5509ace2a5ef",
             // Plasma bridge router
-            "0x026f252016a7c47cdef1f05a3fc9e20c92a49c37"
+            "0x026f252016a7c47cdef1f05a3fc9e20c92a49c37",
+            // WS-1: LI.FI Diamond — main multi-network entry (ETHEREUM/ARBITRUM/BASE/BSC/etc.)
+            "0x1231deb6f5749ef6ce6943a275a1d3e7486f4eae",
+            // WS-1: LI.FI Permit2Proxy — ARBITRUM/BASE/AVALANCHE/ETHEREUM
+            "0x89c6340b1a1f4b25d36cd8b063d49045caf3f818",
+            // WS-1: LI.FI Permit2Proxy — LINEA
+            "0xe5a89411c7ef1502123d84ec1f9da9d8574f4293",
+            // WS-1: LI.FI Permit2Proxy — KATANA
+            "0x628d684d57c73a5d8ca77f455fdf2cc8bd503c16",
+            // WS-1: LI.FI Permit2Proxy — UNICHAIN
+            "0xa3681352316c030b06a83b04394a860a49b47706",
+            // WS-1: LI.FI Permit2Proxy — PLASMA
+            "0x3c6b2e0b7421254846c53c118e24c65d59eae75e",
+            // WS-1: LI.FI Permit2Proxy — OPTIMISM/BASE
+            "0x6307119078556fc8ad77781dfc67df20d75fb4f9",
+            // WS-1: LI.FI Permit2Proxy — OPTIMISM
+            "0x2270a09bfc9925e3aa083db3e19051fff8ada053",
+            // WS-1: LI.FI GasZip proxy — UNICHAIN (underlying bridge = GasZip)
+            "0x864b314d4c5a0399368609581d3e8933a63b9232"
     );
 
     private static final Set<String> REWARD_DISTRIBUTORS = Set.of(

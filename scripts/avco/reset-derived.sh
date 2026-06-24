@@ -99,6 +99,7 @@ db.getCollection("borrow_liabilities").deleteMany({});
 // inflating LP-receipt basis without bound (R-2: FAMILY:LP_RECEIPT phantom basis ~\$516k).
 db.getCollection("lp_receipt_basis_pools").deleteMany({});
 db.getCollection("on_chain_balances").deleteMany({});
+db.getCollection("lending_receipt_identity").deleteMany({});
 db.getCollection("user_sessions").updateMany({}, {\$unset: {pipelineState: ""}});
 
 if (clearPricingCache) {

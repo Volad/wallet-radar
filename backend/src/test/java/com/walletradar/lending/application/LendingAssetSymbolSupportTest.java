@@ -37,6 +37,22 @@ class LendingAssetSymbolSupportTest {
     }
 
     @Test
+    void resolvesEulerIndexedSharesToUnderlyingAssets() {
+        assertThat(LendingAssetSymbolSupport.underlyingSymbol("eWBTC-1")).isEqualTo("WBTC");
+        assertThat(LendingAssetSymbolSupport.underlyingSymbol("eUSDC-2")).isEqualTo("USDC");
+        assertThat(LendingAssetSymbolSupport.lifecycleAsset("eWETH-1")).isEqualTo("ETH");
+        assertThat(LendingAssetSymbolSupport.isLendingPositionSymbol("eWBTC-1")).isTrue();
+        assertThat(LendingAssetSymbolSupport.isLendingPositionSymbol("EURC")).isFalse();
+    }
+
+    @Test
+    void resolvesMorphoVaultSharesToUnderlyingAssets() {
+        assertThat(LendingAssetSymbolSupport.underlyingSymbol("gtUSDCc")).isEqualTo("USDC");
+        assertThat(LendingAssetSymbolSupport.underlyingSymbol("MCUSDC")).isEqualTo("USDC");
+        assertThat(LendingAssetSymbolSupport.isLendingPositionSymbol("gtUSDCc")).isTrue();
+    }
+
+    @Test
     void distinguishesPositionTokensFromUnderlyingSpotBalances() {
         assertThat(LendingAssetSymbolSupport.isLendingPositionSymbol("AARBARB")).isTrue();
         assertThat(LendingAssetSymbolSupport.isLendingPositionSymbol("AARBWBTC")).isTrue();

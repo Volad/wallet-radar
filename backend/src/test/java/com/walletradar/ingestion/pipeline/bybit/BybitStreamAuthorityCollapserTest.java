@@ -439,6 +439,216 @@ class BybitStreamAuthorityCollapserTest {
     }
 
     @Test
+    void restoresExcludedUtaInboundCreditWhenFundOutboundActiveInCollapsedPair() {
+        // C-1 / WS-B seq816 direction (FUND→UTA): the FUND-outbound debit survived and releases a
+        // CARRY_OUT, but mirror demotion excluded the UTA-inbound credit, so nothing consumes the
+        // carry. The bidirectional symmetry repair must restore the canonical excluded credit so both
+        // legs ride the same corr-family queue and the inherit-once machinery carries the basis.
+        String corrId = "bybit-collapsed-v1:seq816-symmetry-corr";
+        NormalizedTransaction fundOutbound = mirrorDoc(
+                "BYBIT-33625378:INTERNAL_TRANSFER:fund-out-seq816",
+                corrId,
+                "BYBIT:33625378:FUND",
+                "ETH",
+                "-0.148",
+                Instant.parse("2025-08-12T11:22:33Z")
+        );
+        fundOutbound.setContinuityCandidate(true);
+        fundOutbound.setMatchedCounterparty("BYBIT:33625378:UTA");
+
+        NormalizedTransaction utaInbound = mirrorDoc(
+                "BYBIT-33625378:FUNDING_HISTORY:uta-in-seq816",
+                corrId,
+                "BYBIT:33625378:UTA",
+                "ETH",
+                "0.148",
+                Instant.parse("2025-08-12T11:22:33Z")
+        );
+        utaInbound.setContinuityCandidate(true);
+        utaInbound.setExcludedFromAccounting(true);
+        utaInbound.setAccountingExclusionReason("BYBIT_STREAM_MIRROR_FUNDING_HISTORY");
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(fundOutbound))
+                .thenReturn(List.of(fundOutbound, utaInbound));
+
+        BybitStreamAuthorityCollapser collapser = new BybitStreamAuthorityCollapser(
+                mongoOperations,
+                normalizedTransactionRepository
+        );
+        int dirty = collapser.collapseMirrors();
+
+        assertThat(dirty).isGreaterThan(0);
+        assertThat(utaInbound.getExcludedFromAccounting()).isFalse();
+        assertThat(utaInbound.getAccountingExclusionReason()).isNull();
+        assertThat(utaInbound.getContinuityCandidate()).isTrue();
+        // Quantity conservation: exactly one active debit + one active credit survive (no inflation).
+        assertThat(fundOutbound.getExcludedFromAccounting()).isNotEqualTo(Boolean.TRUE);
+    }
+
+    @Test
+    void doesNotRekeyCorridorDepositLegStampedWithBybitCorridorCorrelation() {
+        // RC-9 refresh determinism: on an incremental refresh the persisted corridor deposit credit
+        // is already an INTERNAL_TRANSFER carrying the deterministic BYBIT-CORRIDOR correlation id and
+        // the on-chain txHash. A coincident opposing-sign internal leg with the same (uid, family,
+        // |qty|) sits inside the drift window. The collapser must NOT re-key the corridor leg onto a
+        // bybit-collapsed-v1 queue (which would orphan the matched on-chain CARRY_OUT and collapse the
+        // Bybit AVCO back to the spot-fallback basis).
+        Instant depositTs = Instant.parse("2026-02-19T20:46:14Z");
+        String corridorCorr = "BYBIT-CORRIDOR:ARBITRUM:"
+                + "0xbc3fe1a56b06077185272a29beb16fda87fcf4c26049f0d6e13785a6b658ce27";
+
+        NormalizedTransaction corridorDeposit = mirrorDoc(
+                "BYBIT-33625378:INTERNAL_TRANSFER:corridor-deposit",
+                corridorCorr,
+                "BYBIT:33625378:FUND",
+                "ETH",
+                "2.5",
+                depositTs
+        );
+        corridorDeposit.setContinuityCandidate(true);
+        corridorDeposit.setMatchedCounterparty("0x1111111111111111111111111111111111111111");
+        corridorDeposit.setTxHash(
+                "0xbc3fe1a56b06077185272a29beb16fda87fcf4c26049f0d6e13785a6b658ce27");
+
+        NormalizedTransaction opposingInternalLeg = mirrorDoc(
+                "BYBIT-33625378:TRANSACTION_LOG:uta-out",
+                "bybit-econ-v1:opposing",
+                "BYBIT:33625378:UTA",
+                "ETH",
+                "-2.5",
+                depositTs.plusSeconds(5)
+        );
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(corridorDeposit, opposingInternalLeg));
+
+        BybitStreamAuthorityCollapser collapser = new BybitStreamAuthorityCollapser(
+                mongoOperations,
+                normalizedTransactionRepository
+        );
+        collapser.collapseMirrors();
+
+        assertThat(corridorDeposit.getCorrelationId()).isEqualTo(corridorCorr);
+        assertThat(corridorDeposit.getExcludedFromAccounting()).isNotEqualTo(Boolean.TRUE);
+        assertThat(corridorDeposit.getMatchedCounterparty())
+                .isEqualTo("0x1111111111111111111111111111111111111111");
+    }
+
+    @Test
+    void doesNotRekeyReMaterialisedCorridorLegIdentifiedOnlyByOnChainTxHash() {
+        // RC-9 refresh determinism: if re-materialisation reset the corridor leg's correlation id back
+        // to a fresh bybit-econ-v1 (before the corridor projection re-stamps it), the intrinsic on-chain
+        // txHash still marks it as a corridor leg. The collapser must leave its correlation id untouched
+        // (never bybit-collapsed-v1) so the corridor projection can deterministically re-stamp it.
+        Instant depositTs = Instant.parse("2026-02-19T20:46:14Z");
+
+        NormalizedTransaction corridorDeposit = mirrorDoc(
+                "BYBIT-33625378:INTERNAL_TRANSFER:corridor-deposit-rematerialised",
+                "bybit-econ-v1:fresh-after-refresh",
+                "BYBIT:33625378:FUND",
+                "ETH",
+                "2.5",
+                depositTs
+        );
+        corridorDeposit.setTxHash(
+                "0xbc3fe1a56b06077185272a29beb16fda87fcf4c26049f0d6e13785a6b658ce27");
+
+        NormalizedTransaction opposingInternalLeg = mirrorDoc(
+                "BYBIT-33625378:TRANSACTION_LOG:uta-out",
+                "bybit-econ-v1:opposing",
+                "BYBIT:33625378:UTA",
+                "ETH",
+                "-2.5",
+                depositTs.plusSeconds(5)
+        );
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(corridorDeposit, opposingInternalLeg));
+
+        BybitStreamAuthorityCollapser collapser = new BybitStreamAuthorityCollapser(
+                mongoOperations,
+                normalizedTransactionRepository
+        );
+        collapser.collapseMirrors();
+
+        assertThat(corridorDeposit.getCorrelationId()).doesNotStartWith("bybit-collapsed-v1:");
+        assertThat(corridorDeposit.getCorrelationId()).isEqualTo("bybit-econ-v1:fresh-after-refresh");
+        assertThat(corridorDeposit.getExcludedFromAccounting()).isNotEqualTo(Boolean.TRUE);
+    }
+
+    @Test
+    void collapsedUtaFundPairLegsReceiveIdenticalCorrId() {
+        // UTA TRANSACTION_LOG selfTransfer (outbound) + FUND FUNDING_HISTORY (inbound).
+        // Both legs must receive the identical bybit-collapsed-v1:HASH corrId so that
+        // corr-family:bybit-collapsed-v1:HASH:FAMILY:ASSET queue matches both carries.
+        // If each leg gets a hash derived from only its own ID, the queue keys never match
+        // and the CARRY_OUT from the UTA leg is orphaned (~$3,938 hidden distortion).
+        Instant utaTs = Instant.parse("2026-03-25T18:00:00Z");
+        Instant fundTs = Instant.parse("2026-03-25T18:00:15Z"); // 15 s after UTA — within 30 s window
+
+        NormalizedTransaction utaTxLog = mirrorDoc(
+                "BYBIT-99:TRANSACTION_LOG:selfTransfer-out-abc",
+                "bybit-econ-v1:uta-econ-abc",
+                "BYBIT:99:UTA",
+                "ETH",
+                "-0.5",
+                utaTs
+        );
+        NormalizedTransaction fundFh = mirrorDoc(
+                "BYBIT-99:FUNDING_HISTORY:fh-in-def",
+                "bybit-econ-v1:fund-econ-def",
+                "BYBIT:99:FUND",
+                "ETH",
+                "0.5",
+                fundTs
+        );
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(utaTxLog, fundFh));
+
+        BybitStreamAuthorityCollapser collapser = new BybitStreamAuthorityCollapser(
+                mongoOperations,
+                normalizedTransactionRepository
+        );
+        collapser.collapseMirrors();
+
+        assertThat(utaTxLog.getCorrelationId()).startsWith("bybit-collapsed-v1:");
+        assertThat(fundFh.getCorrelationId())
+                .as("FUND FH must share the identical bybit-collapsed-v1: corrId with the UTA TX_LOG leg")
+                .isEqualTo(utaTxLog.getCorrelationId());
+        assertThat(utaTxLog.getContinuityCandidate()).isTrue();
+        assertThat(fundFh.getContinuityCandidate()).isTrue();
+    }
+
+    @Test
+    void utaLegWithoutFundCounterpartDoesNotThrowAndKeepsEconCorrId() {
+        // A solo UTA TRANSACTION_LOG selfTransfer with no FUND inbound counterpart.
+        // The collapser must complete without exception and must NOT assign a
+        // bybit-collapsed-v1: corrId to an unpaired leg (no phantom queue match).
+        NormalizedTransaction utaTxLog = mirrorDoc(
+                "BYBIT-99:TRANSACTION_LOG:selfTransfer-solo",
+                "bybit-econ-v1:solo-econ",
+                "BYBIT:99:UTA",
+                "ETH",
+                "-0.5",
+                Instant.parse("2026-03-25T18:00:00Z")
+        );
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(utaTxLog));
+
+        BybitStreamAuthorityCollapser collapser = new BybitStreamAuthorityCollapser(
+                mongoOperations,
+                normalizedTransactionRepository
+        );
+
+        org.assertj.core.api.Assertions.assertThatNoException()
+                .isThrownBy(collapser::collapseMirrors);
+        assertThat(utaTxLog.getCorrelationId()).doesNotStartWith("bybit-collapsed-v1:");
+    }
+
+    @Test
     void noActionWhenOnlyOneCandidate() {
         NormalizedTransaction solo = mirrorDoc(
                 "BYBIT-1:INTERNAL_TRANSFER:solo",

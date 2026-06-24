@@ -35,10 +35,53 @@ public class BridgeStartClassifier implements OnChainFamilyClassifier {
             "0xa6010a66",
             "0xa8f66666"
     );
-    private static final Set<String> BRIDGE_START_FUNCTION_KEYS = Set.of(
+    /**
+     * LI.FI facet function prefixes that signal bridge-out initiation.
+     * Both {@code startBridgeTokensVia<Bridge>} and {@code swapAndStartBridgeTokensVia<Bridge>}
+     * are matched via prefix-key lookup in {@link #isBridgeStartFunctionKey(String)}.
+     */
+    private static final Set<String> BRIDGE_START_FUNCTION_KEY_PREFIXES = Set.of(
+            // explicit-name facets (stable cross-version)
+            "startbridgetokensviastargate",
+            "startbridgetokensviasquid",
+            "startbridgetokensviagaszip",
+            "startbridgetokensviarelay",
+            "startbridgetokensviaacross",
+            "startbridgetokensviahop",
+            "startbridgetokensviacbridge",
+            "startbridgetokensviahopdiamond",
+            "startbridgetokensviaoptimism",
+            "startbridgetokensviabase",
+            "startbridgetokensviasynapse",
+            "startbridgetokensviaomni",
+            "startbridgetokensviaamarok",
+            "startbridgetokensviahyperlane",
+            "startbridgetokensviasymbiosis",
+            "startbridgetokensviamayan",
             "swapandstartbridgetokensviamayan",
             "swapandstartbridgetokensviastargate",
-            "swapandstartbridgetokensviasquid"
+            "swapandstartbridgetokensviasquid",
+            "swapandstartbridgetokensviagaszip",
+            "swapandstartbridgetokensviarelay",
+            "swapandstartbridgetokensviaacross",
+            "swapandstartbridgetokensviahop",
+            "swapandstartbridgetokensviacbridge",
+            "swapandstartbridgetokensviahopdiamond",
+            "swapandstartbridgetokensviaoptimism",
+            "swapandstartbridgetokensviabase",
+            "swapandstartbridgetokensviasynapse",
+            "swapandstartbridgetokensviaomni",
+            "swapandstartbridgetokensviaamarok",
+            "swapandstartbridgetokensviahyperlane",
+            "swapandstartbridgetokensviasymbiosis"
+    );
+    /**
+     * LI.FI callDiamond* selectors (address-anchored — only fires when target is in known LI.FI set).
+     * {@code callDiamondWithEIP2612Signature} = 0xd7a08473; {@code callDiamondWithPermit2} = 0x0193b9fc.
+     */
+    private static final Set<String> LI_FI_CALL_DIAMOND_SELECTORS = Set.of(
+            "0xd7a08473",  // callDiamondWithEIP2612Signature
+            "0x0193b9fc"   // callDiamondWithPermit2
     );
     private static final Set<String> LI_FI_DIAMOND_ROUTE_SELECTORS = Set.of(
             "0xd7a08473",
@@ -118,7 +161,7 @@ public class BridgeStartClassifier implements OnChainFamilyClassifier {
         }
         String functionKey = functionKey(context.view().functionName());
         if (!BRIDGE_START_SELECTORS.contains(context.view().methodId())
-                && !BRIDGE_START_FUNCTION_KEYS.contains(functionKey)) {
+                && !isBridgeStartFunctionKey(functionKey)) {
             return Optional.empty();
         }
 
@@ -154,7 +197,13 @@ public class BridgeStartClassifier implements OnChainFamilyClassifier {
 
     private Optional<ClassificationDecision> classifyLiFiRouteBridge(OnChainClassificationContext context) {
         boolean explicitLiFiRouteSelector = LI_FI_DIAMOND_ROUTE_SELECTORS.contains(context.view().methodId());
+        // callDiamond* selectors must be address-anchored — pattern alone is not enough
+        boolean callDiamondSelector = LI_FI_CALL_DIAMOND_SELECTORS.contains(context.view().methodId());
         Optional<ProtocolRegistryEntry> knownLiFiDiamondEntry = knownLiFiDiamondEntry(context);
+        if (callDiamondSelector && knownLiFiDiamondEntry.isEmpty()) {
+            // Address-anchor check: callDiamond* on unknown address → not LI.FI
+            return Optional.empty();
+        }
         if (!explicitLiFiRouteSelector && knownLiFiDiamondEntry.isEmpty()) {
             return Optional.empty();
         }
@@ -311,5 +360,22 @@ public class BridgeStartClassifier implements OnChainFamilyClassifier {
             return normalized.substring(0, signatureSeparator);
         }
         return normalized;
+    }
+
+    /**
+     * Returns {@code true} when the normalized function key matches a known LI.FI bridge-start
+     * pattern. Covers both {@code startBridgeTokensVia<Bridge>} and
+     * {@code swapAndStartBridgeTokensVia<Bridge>} across all supported underlying bridges.
+     * Uses an exact-set lookup for stability (no regex at runtime).
+     */
+    private static boolean isBridgeStartFunctionKey(String key) {
+        if (key == null || key.isBlank()) {
+            return false;
+        }
+        if (BRIDGE_START_FUNCTION_KEY_PREFIXES.contains(key)) {
+            return true;
+        }
+        // Generic prefix guard for any future LI.FI facet variants
+        return key.startsWith("startbridgetokensvia") || key.startsWith("swapandstartbridgetokensvia");
     }
 }

@@ -30,6 +30,18 @@ Architecture Decision Records for WalletRadar. Each ADR captures a single decisi
 | [ADR-022](ADR-022-lp-exit-per-asset-attribution-and-swap-multi-leg-pricing.md) | LP_EXIT per-asset cost attribution, SWAP multi-same-direction-leg pricing, LP_ENTRY net-by-asset shape detection | Accepted (amended 2026-05-30) | 2026-05-30 | ETH AVCO — LP exit attribution, SWAP split-leg pricing, router-refund LP_ENTRY |
 | [ADR-023](ADR-023-pendle-lpt-receipt-and-bybit-corridor-basis.md) | Pendle LP token receipt detection and Bybit corridor spot-price basis | Accepted | 2026-05-30 | S-4 (Mantle cmETH Pendle LP) + P-B (Bybit corridor basis) |
 | [ADR-024](ADR-024-bybit-per-stream-sync-metadata.md) | Bybit per-stream sync metadata (renumbered from ADR-005) | Accepted | 2026-cycle/4 | Bybit ingestion |
+| [ADR-025](ADR-025-euler-evk-market-key.md) | Euler EVK market key | Superseded by ADR-036 | 2026-06 | Lending |
+| [ADR-026](ADR-026-live-aave-v3-health-factor.md) | Live Aave v3 health factor | Accepted | 2026-06 | Lending |
+| [ADR-027](ADR-027-lifi-calldata-destination-discovery.md) | LiFi calldata destination discovery | Accepted | 2026-06 | Ingestion / bridges |
+| [ADR-028](ADR-028-value-divergence-leverage-inference.md) | Value divergence leverage inference | Accepted | 2026-06 | AVCO / replay |
+| [ADR-029](ADR-029-deterministic-cex-corridor-basis-continuity.md) | Deterministic CEX corridor basis continuity | Accepted | 2026-06 | AVCO / corridor |
+| [ADR-030](ADR-030-replay-accumulator-idempotency.md) | Replay accumulator idempotency | Accepted | 2026-06 | AVCO / replay |
+| [ADR-031](ADR-031-avco-undefined-representation.md) | AVCO undefined representation | Accepted | 2026-06 | AVCO |
+| [ADR-032](ADR-032-multi-counterparty-fee-exclusion.md) | Multi-counterparty fee exclusion | Accepted | 2026-06 | Replay / fees |
+| [ADR-033](ADR-033-bridge-multi-flow-role-alignment.md) | Bridge multi-flow role alignment | Accepted | 2026-06 | Bridge normalization |
+| [ADR-034](ADR-034-nec-transaction-scan.md) | NEC computation via direct transaction scan | Accepted | 2026-06-23 | Conservation gate / NEC |
+| [ADR-035](ADR-035-lending-receipt-identity-resolver.md) | Lending receipt identity resolver | Accepted | 2026-06-24 | Lending |
+| [ADR-036](ADR-036-contract-first-lending-market-key-and-live-debt.md) | Contract-first lending market key + live debt | Accepted | 2026-06-24 | Lending |
 
 ## Cycle/5 N19 cluster — implementation plan mapping
 

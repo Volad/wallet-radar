@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { ChangeDetectionStrategy, Component, DestroyRef, Input, OnChanges, SimpleChanges, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, Input, OnChanges, OnDestroy, SimpleChanges, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { catchError, of, startWith } from 'rxjs';
 
@@ -32,6 +32,8 @@ interface LendingAssetPnlLine {
   readonly value: number | null;
   readonly precision: string;
   readonly reason: string | null;
+  readonly valueUsd: number | null;
+  readonly usdPrecision: string;
 }
 
 @Component({
@@ -42,7 +44,7 @@ interface LendingAssetPnlLine {
   styleUrl: './lending-page.component.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
-export class LendingPageComponent implements OnChanges {
+export class LendingPageComponent implements OnChanges, OnDestroy {
   private readonly lendingDataService = inject(LendingDataService);
   private readonly destroyRef = inject(DestroyRef);
 
@@ -52,6 +54,8 @@ export class LendingPageComponent implements OnChanges {
   readonly colors = COLORS;
   readonly viewState = signal<LendingViewState>({ status: 'idle' });
   readonly showClosed = signal(false);
+  readonly copiedValueKey = signal<string | null>(null);
+  private copyResetTimerId: number | null = null;
   readonly collapsedGroupIds = signal<ReadonlySet<string>>(new Set<string>());
   readonly expandedCycleIds = signal<ReadonlySet<string>>(new Set<string>());
   readonly expandedLoopGroupIds = signal<ReadonlySet<string>>(new Set<string>());
@@ -66,6 +70,51 @@ export class LendingPageComponent implements OnChanges {
     if ('sessionId' in changes || 'refreshNonce' in changes) {
       this.load();
     }
+  }
+
+  ngOnDestroy(): void {
+    if (this.copyResetTimerId !== null) {
+      window.clearTimeout(this.copyResetTimerId);
+    }
+  }
+
+  async copyText(value: string, copyKey = value): Promise<void> {
+    try {
+      if ('clipboard' in navigator && navigator.clipboard !== undefined) {
+        await navigator.clipboard.writeText(value);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = value;
+        textarea.setAttribute('readonly', 'true');
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      }
+      this.copiedValueKey.set(copyKey);
+      if (this.copyResetTimerId !== null) {
+        window.clearTimeout(this.copyResetTimerId);
+      }
+      this.copyResetTimerId = window.setTimeout(() => {
+        this.copiedValueKey.set(null);
+        this.copyResetTimerId = null;
+      }, 1400);
+    } catch {
+      this.copiedValueKey.set(null);
+    }
+  }
+
+  copyTxHash(txHash: string | null): void {
+    if (txHash === null || txHash.length === 0) {
+      return;
+    }
+    void this.copyText(txHash, `tx:${txHash}`);
+  }
+
+  isHashCopied(txHash: string | null): boolean {
+    return txHash !== null && this.copiedValueKey() === `tx:${txHash}`;
   }
 
   data(): LendingData | null {
@@ -411,6 +460,40 @@ export class LendingPageComponent implements OnChanges {
     return group.healthFactor >= 10 ? '∞' : group.healthFactor.toFixed(2);
   }
 
+  groupNetApy(group: LendingGroup): number | null {
+    if (group.netExposureUsd <= 0) {
+      return null;
+    }
+    let supplyYield = 0;
+    let borrowCost = 0;
+    let hasSignal = false;
+    for (const position of group.positions) {
+      const apy = this.currentProtocolApy(position);
+      if (apy === null) {
+        continue;
+      }
+      hasSignal = true;
+      if (position.side === 'BORROW') {
+        borrowCost += position.valueUsd * apy;
+      } else {
+        supplyYield += position.valueUsd * apy;
+      }
+    }
+    if (!hasSignal) {
+      return null;
+    }
+    return (supplyYield - borrowCost) / group.netExposureUsd;
+  }
+
+  formatNetApy(group: LendingGroup): string {
+    const value = this.groupNetApy(group);
+    return value === null ? '--' : `${value.toFixed(1)}%`;
+  }
+
+  isHealthStale(group: LendingGroup): boolean {
+    return group.healthSource === 'ACCOUNTING_ESTIMATE' || group.healthSource === 'STALE';
+  }
+
   shouldShowHealth(group: LendingGroup): boolean {
     return group.status === 'OPEN' && group.borrowUsd > 0;
   }
@@ -562,6 +645,9 @@ export class LendingPageComponent implements OnChanges {
       const reason = cycle.assetDenominatedReasonByAsset[asset]
         ?? cycle.pnlAssetBreakdown.reasonByAsset[asset]
         ?? null;
+      const usdPrecision = cycle.pnlAssetBreakdown.usdPrecisionByAsset[asset]
+        ?? 'UNAVAILABLE';
+      const usdValue = cycle.pnlAssetBreakdown.netIncomeUsdByAsset[asset];
       return {
         asset,
         value: precision === 'UNAVAILABLE'
@@ -569,6 +655,8 @@ export class LendingPageComponent implements OnChanges {
           : cycle.assetDenominatedPnlByAsset[asset] ?? cycle.pnlAssetBreakdown.netIncomeByAsset[asset] ?? 0,
         precision,
         reason,
+        valueUsd: usdPrecision === 'UNAVAILABLE' || usdValue === undefined ? null : usdValue,
+        usdPrecision,
       };
     });
   }
@@ -579,6 +667,20 @@ export class LendingPageComponent implements OnChanges {
     }
     const formatted = `${this.formatQuantity(Math.abs(line.value))} ${line.asset}`;
     return line.value > 0 ? `+${formatted}` : line.value < 0 ? `-${formatted}` : formatted;
+  }
+
+  formatAssetPnlUsd(line: LendingAssetPnlLine): string {
+    if (line.valueUsd === null) {
+      return '--';
+    }
+    return this.formatSignedUsd(line.valueUsd);
+  }
+
+  assetPnlUsdClass(line: LendingAssetPnlLine): string {
+    if (line.valueUsd === null || line.valueUsd === 0) {
+      return 'muted';
+    }
+    return line.valueUsd > 0 ? 'pos' : 'neg';
   }
 
   formatApy(position: LendingPosition): string {
@@ -608,14 +710,31 @@ export class LendingPageComponent implements OnChanges {
   }
 
   factualApyDisplay(cycle: LendingCycle): string {
-    const value = cycle.factualApy.netStrategyApyPct
-      ?? Object.values(cycle.factualApy.factualSupplyApyByAsset)[0]
-      ?? Object.values(cycle.factualApy.factualBorrowApyByAsset)[0]
-      ?? null;
-    if (value === null || cycle.factualApy.apyPrecision === 'UNAVAILABLE') {
+    const apy = cycle.factualApy;
+    if (apy.apyPrecision === 'UNAVAILABLE') {
       return '--';
     }
-    return `${value.toFixed(2)}%`;
+    const netStrategy = apy.netStrategyApyPct;
+    if (netStrategy !== null && Number.isFinite(netStrategy) && Math.abs(netStrategy) <= 1000) {
+      return `${netStrategy.toFixed(2)}%`;
+    }
+    const supplyValues = Object.values(apy.factualSupplyApyByAsset)
+      .filter((value): value is number => value !== null && Number.isFinite(value));
+    if (supplyValues.length > 0) {
+      const supplyApy = supplyValues.reduce((sum, value) => sum + value, 0) / supplyValues.length;
+      if (Math.abs(supplyApy) <= 1000) {
+        return `${supplyApy.toFixed(2)}%`;
+      }
+    }
+    const borrowValues = Object.values(apy.factualBorrowApyByAsset)
+      .filter((value): value is number => value !== null && Number.isFinite(value));
+    if (borrowValues.length > 0 && supplyValues.length === 0) {
+      const borrowApy = borrowValues.reduce((sum, value) => sum + value, 0) / borrowValues.length;
+      if (Math.abs(borrowApy) <= 1000) {
+        return `${borrowApy.toFixed(2)}%`;
+      }
+    }
+    return '--';
   }
 
   factualApyTitle(cycle: LendingCycle): string {
@@ -625,11 +744,50 @@ export class LendingPageComponent implements OnChanges {
     return `${this.humanReason(cycle.factualApy.apyPrecision)} · ${this.humanReason(cycle.factualApy.apyMethod)}`;
   }
 
+  cycleProtocolNetApy(cycle: LendingCycle): number | null {
+    const positions = cycle.positions ?? [];
+    let supplyYield = 0;
+    let borrowCost = 0;
+    let hasSignal = false;
+    for (const position of positions) {
+      if (position.side === 'SUPPLY' && position.protocolSupplyApyPct !== null) {
+        supplyYield += position.valueUsd * position.protocolSupplyApyPct;
+        hasSignal = true;
+      }
+      if (position.side === 'BORROW' && position.protocolBorrowApyPct !== null) {
+        borrowCost += position.valueUsd * position.protocolBorrowApyPct;
+        hasSignal = true;
+      }
+    }
+    if (!hasSignal) {
+      return null;
+    }
+    const supplyUsd = positions
+      .filter((position) => position.side === 'SUPPLY')
+      .reduce((sum, position) => sum + position.valueUsd, 0);
+    const borrowUsd = positions
+      .filter((position) => position.side === 'BORROW')
+      .reduce((sum, position) => sum + position.valueUsd, 0);
+    const net = supplyUsd - borrowUsd;
+    if (net <= 0) {
+      return null;
+    }
+    return (supplyYield - borrowCost) / net;
+  }
+
+  cycleProtocolNetApyDisplay(cycle: LendingCycle): string {
+    const value = this.cycleProtocolNetApy(cycle);
+    if (value === null || !Number.isFinite(value)) {
+      return '--';
+    }
+    return `${value.toFixed(1)}%`;
+  }
+
   private currentProtocolApy(position: LendingPosition): number | null {
     if (position.side === 'BORROW') {
-      return position.protocolBorrowApyPct ?? position.apyPct;
+      return position.protocolBorrowApyPct ?? null;
     }
-    return position.protocolSupplyApyPct ?? position.apyPct;
+    return position.protocolSupplyApyPct ?? null;
   }
 
   humanReason(value: string): string {
@@ -801,6 +959,28 @@ export class LendingPageComponent implements OnChanges {
     const borrowed = this.formatAssetDeltas(cycle.assetDeltas.borrowedByAsset);
     const hasBorrow = borrowed !== '0';
     return hasBorrow ? `Supply ${supplied} -> Borrow ${borrowed}` : `Supply ${supplied}`;
+  }
+
+  cycleMarketLabel(cycle: LendingCycle): string {
+    const supply = this.assetSymbolsFrom(cycle.assetDeltas.principalInByAsset);
+    const borrow = this.assetSymbolsFrom(cycle.assetDeltas.borrowedByAsset);
+    if (supply.length > 0 && borrow.length > 0) {
+      return `${supply.join('+')} / ${borrow.join('+')}`;
+    }
+    if (supply.length > 0) {
+      return supply.join(' + ');
+    }
+    if (borrow.length > 0) {
+      return borrow.join(' + ');
+    }
+    return cycle.marketLabel;
+  }
+
+  private assetSymbolsFrom(values: Readonly<Record<string, number>>): ReadonlyArray<string> {
+    return Object.entries(values)
+      .filter(([, value]) => Math.abs(value) > 0)
+      .map(([asset]) => asset)
+      .slice(0, 3);
   }
 
   protocolTag(group: LendingGroup): string {

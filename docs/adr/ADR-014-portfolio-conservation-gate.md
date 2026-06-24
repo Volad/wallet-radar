@@ -1,6 +1,6 @@
 # ADR-014 — Portfolio conservation gate at dashboard publication
 
-**Status:** Proposed
+**Status:** Proposed (§D2 NEC formula superseded by [ADR-034](ADR-034-nec-transaction-scan.md))
 **Date:** 2026-05-16
 **Inputs:** `cycle-autorun/cycle-data/cycle/5/results/n19-cross-validation.md` §3, `n19-implementation-plan.md` §H; user decisions 2026-05-16 (uniform NEC formula keyed on `isMember`; unified gate threshold; no `EXTERNAL_PASSTHROUGH` / `EXTERNAL_TERMINAL` taxonomy).
 
@@ -35,6 +35,8 @@ The conservation invariant is mechanically derivable in O(1) at dashboard read t
 Add `backend/src/main/java/com/walletradar/ingestion/wallet/query/PortfolioConservationGate.java` invoked by [SessionDashboardQueryService](backend/src/main/java/com/walletradar/ingestion/wallet/query/SessionDashboardQueryService.java) after building the standard `SummaryView`.
 
 ### D2. Computation — uniform formula, no taxonomy branches
+
+> **Note:** The NEC computation in D2 (pool-delta formula) was superseded by [ADR-034](ADR-034-nec-transaction-scan.md) which uses a direct transaction scan with per-flow guards. The MtM formula, threshold, response fields, and breach logging in D3–D8 remain in effect.
 
 For a given session at request time:
 
@@ -194,6 +196,7 @@ For the cycle/5 audit window all loans are closed (per `n19-defect-catalog.md` D
 
 ## References
 
+- [ADR-034](ADR-034-nec-transaction-scan.md) — NEC transaction-scan algorithm (supersedes §D2 pool-delta formula).
 - [cycle-autorun/cycle-data/cycle/5/results/n19-cross-validation.md](cycle-autorun/cycle-data/cycle/5/results/n19-cross-validation.md) §3.
 - [cycle-autorun/cycle-data/cycle/5/results/n19-implementation-plan.md](cycle-autorun/cycle-data/cycle/5/results/n19-implementation-plan.md) §H.
 - [cycle-autorun/cycle-data/cycle/5/results/external-truth.md](cycle-autorun/cycle-data/cycle/5/results/external-truth.md) — authoritative balance ground truth used by the gate during cycle/5 acceptance.

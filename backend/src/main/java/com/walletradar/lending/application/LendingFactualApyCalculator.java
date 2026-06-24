@@ -11,10 +11,25 @@ import java.util.Map;
 final class LendingFactualApyCalculator {
 
     static final String NO_YIELD_FLOW_EVIDENCE = "NO_YIELD_FLOW_EVIDENCE";
+    static final String SHORT_EXPOSURE_WINDOW = "SHORT_EXPOSURE_WINDOW";
+    static final String IMPLAUSIBLE_ANNUALIZATION = "IMPLAUSIBLE_ANNUALIZATION";
 
     private static final MathContext MC = MathContext.DECIMAL128;
     private static final BigDecimal ONE_HUNDRED = BigDecimal.valueOf(100);
     private static final BigDecimal SECONDS_PER_YEAR = BigDecimal.valueOf(31_536_000L);
+    /**
+     * Annualizing an exposure shorter than this window extrapolates a tiny observation over a full
+     * year, which is financially meaningless (a few hours of yield projected to 365 days produces
+     * astronomically large rates). Below one day we refuse to annualize and report UNAVAILABLE.
+     */
+    private static final Duration MIN_EXPOSURE_WINDOW = Duration.ofDays(1);
+    /**
+     * Hard sanity cap on the per-second-compounded APY magnitude. 100000% == 1000x per year; any
+     * computed APY beyond this is treated as numerical noise from an implausible period return and
+     * is dropped (null) rather than emitted. We do NOT invent or smooth yield: we simply refuse to
+     * publish a clearly nonsensical number.
+     */
+    private static final BigDecimal MAX_APY_PCT = BigDecimal.valueOf(100_000L);
 
     private LendingFactualApyCalculator() {
     }
@@ -29,14 +44,36 @@ final class LendingFactualApyCalculator {
         Map<String, BigDecimal> supplyApy = apyByAsset(supplyApr);
         Map<String, BigDecimal> borrowApr = factualBorrowAprByAsset(input, seconds);
         Map<String, BigDecimal> borrowApy = apyByAsset(borrowApr);
+        boolean netStrategyAttempted = input.netStrategyIncomeUsd() != null
+                && input.netCapitalUsd() != null
+                && input.netCapitalUsd().signum() > 0;
         BigDecimal netStrategyApr = null;
         BigDecimal netStrategyApy = null;
-        if (input.netStrategyIncomeUsd() != null && input.netCapitalUsd() != null && input.netCapitalUsd().signum() > 0) {
-            netStrategyApr = apr(input.netStrategyIncomeUsd(), input.netCapitalUsd(), seconds);
-            netStrategyApy = apyFromAprPct(netStrategyApr);
+        if (netStrategyAttempted) {
+            BigDecimal candidateApr = apr(input.netStrategyIncomeUsd(), input.netCapitalUsd(), seconds);
+            BigDecimal candidateApy = apyFromAprPct(candidateApr);
+            // Only surface the net-strategy rates when the annualized APY is plausible; otherwise
+            // drop BOTH the APR and APY so we never emit an exploded annualization.
+            if (candidateApy != null) {
+                netStrategyApr = candidateApr;
+                netStrategyApy = candidateApy;
+            }
         }
         String apyPrecision = resolveApyPrecision(supplyApr, borrowApr, input);
         String apyUnavailableReason = resolveApyUnavailableReason(apyPrecision, supplyApr, input);
+        // Never emit a net-strategy rate alongside an UNAVAILABLE precision.
+        if ("UNAVAILABLE".equals(apyPrecision)) {
+            netStrategyApr = null;
+            netStrategyApy = null;
+        }
+        // If the net strategy was the only computable signal and it annualized implausibly,
+        // mark the whole view UNAVAILABLE with an explicit reason instead of an empty ESTIMATED.
+        boolean nothingComputable = supplyApr.isEmpty() && borrowApr.isEmpty() && netStrategyApy == null;
+        boolean netStrategyImplausible = netStrategyAttempted && netStrategyApy == null;
+        if (nothingComputable && netStrategyImplausible && !"UNAVAILABLE".equals(apyPrecision)) {
+            apyPrecision = "UNAVAILABLE";
+            apyUnavailableReason = IMPLAUSIBLE_ANNUALIZATION;
+        }
         return new SessionLendingQueryService.LendingFactualApyView(
                 supplyApr,
                 supplyApy,
@@ -60,6 +97,9 @@ final class LendingFactualApyCalculator {
         }
         if (!input.endTimestamp().isAfter(input.startTimestamp())) {
             return "NON_POSITIVE_EXPOSURE_DURATION";
+        }
+        if (Duration.between(input.startTimestamp(), input.endTimestamp()).compareTo(MIN_EXPOSURE_WINDOW) < 0) {
+            return SHORT_EXPOSURE_WINDOW;
         }
         boolean hasSupplyDenominator = input.openingDepositByAsset().values().stream().anyMatch(value -> value.signum() > 0);
         boolean hasBorrowDenominator = input.borrowedByAsset().values().stream().anyMatch(value -> value.signum() > 0);
@@ -117,8 +157,12 @@ final class LendingFactualApyCalculator {
             }
             BigDecimal accrual;
             if ("OPEN".equals(input.status())) {
-                BigDecimal currentDebt = input.currentDebtByAsset().getOrDefault(asset, BigDecimal.ZERO);
-                accrual = currentDebt.subtract(borrowedQty, MC);
+                if (!input.currentDebtByAsset().containsKey(asset)) {
+                    continue;
+                }
+                BigDecimal currentDebt = input.currentDebtByAsset().get(asset);
+                BigDecimal repaidQty = input.repaidByAsset().getOrDefault(asset, BigDecimal.ZERO);
+                accrual = currentDebt.add(repaidQty, MC).subtract(borrowedQty, MC);
             } else {
                 BigDecimal repaidQty = input.repaidByAsset().getOrDefault(asset, BigDecimal.ZERO);
                 accrual = repaidQty.subtract(borrowedQty, MC);
@@ -172,13 +216,23 @@ final class LendingFactualApyCalculator {
     private static Map<String, BigDecimal> apyByAsset(Map<String, BigDecimal> aprByAsset) {
         Map<String, BigDecimal> result = new LinkedHashMap<>();
         for (Map.Entry<String, BigDecimal> entry : aprByAsset.entrySet()) {
-            result.put(entry.getKey(), apyFromAprPct(entry.getValue()));
+            BigDecimal apy = apyFromAprPct(entry.getValue());
+            // Omit assets whose annualized APY is null/implausible rather than publishing noise.
+            if (apy != null) {
+                result.put(entry.getKey(), apy);
+            }
         }
         return result;
     }
 
     private static BigDecimal apyFromAprPct(BigDecimal aprPct) {
+        if (aprPct == null) {
+            return null;
+        }
         double apr = aprPct.divide(ONE_HUNDRED, MC).doubleValue();
+        if (!Double.isFinite(apr)) {
+            return null;
+        }
         double base = 1.0d + apr / SECONDS_PER_YEAR.doubleValue();
         if (base <= 0) {
             return null;
@@ -187,7 +241,12 @@ final class LendingFactualApyCalculator {
         if (!Double.isFinite(apy)) {
             return null;
         }
-        return BigDecimal.valueOf(apy).multiply(ONE_HUNDRED, MC).setScale(8, RoundingMode.HALF_UP);
+        BigDecimal apyPct = BigDecimal.valueOf(apy).multiply(ONE_HUNDRED, MC).setScale(8, RoundingMode.HALF_UP);
+        // Guard against implausible magnitudes (exploded annualization of large short-window returns).
+        if (apyPct.abs().compareTo(MAX_APY_PCT) > 0) {
+            return null;
+        }
+        return apyPct;
     }
 
     private static boolean positive(BigDecimal value) {

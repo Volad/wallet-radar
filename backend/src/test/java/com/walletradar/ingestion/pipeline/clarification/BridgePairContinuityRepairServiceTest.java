@@ -75,6 +75,34 @@ class BridgePairContinuityRepairServiceTest {
     }
 
     @Test
+    void repairsLegacySealedPairWhenOutboundContinuityCandidateIsNull() {
+        // After WS-1, newly classified MANTLE LI.FI BRIDGE_OUTs may have continuityCandidate=null
+        // (seeded by seedSourceAnchorFromStatus which doesn't set continuityCandidate). Meanwhile
+        // the paired BRIDGE_IN was repaired by reconcileLegacySealedInbounds to continuityCandidate=true.
+        // loadLegacySealedOutbounds must use ne(true) so null is also picked up.
+        NormalizedTransaction outbound = bridgeOut("0xout", "USDC", "-100");
+        // continuityCandidate is deliberately left null (not set)
+        outbound.setCorrelationId("bridge:lifi:0xout");
+        outbound.getFlows().getFirst().setRole(NormalizedLegRole.SELL);
+
+        NormalizedTransaction inbound = bridgeIn("0xin", NetworkId.ARBITRUM, "USDC", "100");
+        inbound.setCorrelationId("bridge:lifi:0xout");
+        inbound.setContinuityCandidate(true);
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(outbound))
+                .thenReturn(List.of(inbound));
+
+        int repaired = service.reconcileLegacySealedPairs(10);
+
+        assertThat(repaired).isEqualTo(1);
+        verify(normalizedTransactionRepository).saveAll(any());
+        assertThat(outbound.getContinuityCandidate()).isTrue();
+        assertThat(outbound.getFlows().getFirst().getRole()).isEqualTo(NormalizedLegRole.TRANSFER);
+        assertThat(inbound.getContinuityCandidate()).isTrue();
+    }
+
+    @Test
     void repairsPairedInboundMissingCounterparty() {
         NormalizedTransaction outbound = bridgeOut("0xout", "ETH", "-0.000221");
         outbound.setCorrelationId("bridge:lifi:0xout");

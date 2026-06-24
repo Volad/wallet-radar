@@ -333,7 +333,7 @@ public class BridgePairContinuityRepairService {
     private List<NormalizedTransaction> loadLegacySealedOutbounds(int batchSize) {
         Query query = Query.query(new Criteria().andOperator(
                 Criteria.where("type").is(NormalizedTransactionType.BRIDGE_OUT),
-                Criteria.where("continuityCandidate").is(false),
+                Criteria.where("continuityCandidate").ne(true),
                 Criteria.where("correlationId").regex(BRIDGE_CORRELATION_PREFIX)
         ));
         query.with(Sort.by(

@@ -13,8 +13,10 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import org.springframework.stereotype.Component;
 
+import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 
 @Component
 public class ReplayPendingTransferKeyFactory {
@@ -53,10 +55,11 @@ public class ReplayPendingTransferKeyFactory {
         // position key is the stripped BYBIT:uid wallet, and the FIFO queue correctly pairs FUND
         // CARRY_OUT with EARN CARRY_IN using the shared uid+asset key.
         //
-        // NOTE: bybit-collapsed-v1: is intentionally excluded here. UTA↔FUND collapsed pairs
-        // have continuityCandidate=true and are routed to corr-family: via the generic
-        // continuityCandidate path in transferKey(). FUND↔EARN collapsed pairs must fall through
-        // to isBybitEarnInternalTransfer so they use the earn-carry FIFO queue.
+        // NOTE: bybit-collapsed-v1: is intentionally excluded here. All bybit-collapsed-v1:
+        // pairs (UTA↔FUND and FUND↔EARN) have continuityCandidate=true and are routed to
+        // corr-family: via the generic continuityCandidate path in transferKey(). This ensures
+        // both legs of a collapsed pair always land in the same corr-family queue regardless
+        // of whether one leg involves an :EARN wallet.
         return correlationId.startsWith(BybitEarnPrincipalTransferPairer.EARN_PRINCIPAL_CORRELATION_PREFIX)
                 || correlationId.startsWith(BybitOnChainEarnOrphanRepairService.EARN_ONCHAIN_FUND_CORR_PREFIX);
     }
@@ -143,8 +146,17 @@ public class ReplayPendingTransferKeyFactory {
      * cannot match cross-prefix pairs, so ALL EARN-involved transfers use the shared
      * FIFO queue.
      * <p>
-     * Exception: {@code bybit-it-bundle-v1:*} transfers involve multi-leg bundles and
-     * require correlation-based keys for correct grouping.
+     * Exceptions:
+     * <ul>
+     *   <li>{@code bybit-it-bundle-v1:*} — multi-leg bundles require correlation-based keys.</li>
+     *   <li>{@code bybit-collapsed-v1:*} — UTA↔FUND↔EARN collapsed pairs have
+     *       {@code continuityCandidate=true}; both the FUND debit and the EARN credit
+     *       carry the same {@code bybit-collapsed-v1:} corrId and must route to the
+     *       {@code corr-family:} queue via the {@code continuityCandidate} path in
+     *       {@link #transferKey}. Routing the EARN credit to the EARN-carry FIFO while
+     *       the UTA/FUND debit goes to {@code corr-family:} causes a queue mismatch
+     *       that orphans the CARRY_OUT basis.</li>
+     * </ul>
      */
     private boolean isBybitEarnInternalTransfer(NormalizedTransaction transaction) {
         if (transaction == null
@@ -154,7 +166,8 @@ public class ReplayPendingTransferKeyFactory {
         }
         String corrId = transaction.getCorrelationId();
         if (corrId != null && (corrId.startsWith("BYBIT-CORRIDOR:")
-                || corrId.startsWith("bybit-it-bundle-v1:"))) {
+                || corrId.startsWith("bybit-it-bundle-v1:")
+                || corrId.startsWith("bybit-collapsed-v1:"))) {
             return false;
         }
         String wallet = transaction.getWalletAddress();
@@ -192,6 +205,14 @@ public class ReplayPendingTransferKeyFactory {
         }
         String corrId = transaction.getCorrelationId();
         if (corrId != null && corrId.startsWith("BYBIT-CORRIDOR:")) {
+            return false;
+        }
+        // bybit-collapsed-v1: pairs are cross-account carries (UTA↔FUND) and must use
+        // permitUncoveredFallback=true (same as non-Bybit transfers). They already
+        // route to corr-family: via the continuityCandidate path in transferKey(); routing
+        // them through the bybit-earn-carry FIFO queue causes FUND inbounds (which replay
+        // first due to .000Z timestamps) to fail enqueue when no market price is available.
+        if (corrId != null && corrId.startsWith("bybit-collapsed-v1:")) {
             return false;
         }
         return sharesBybitUidWithCounterparty(transaction);
@@ -300,12 +321,37 @@ public class ReplayPendingTransferKeyFactory {
                 || transaction.getCorrelationId().isBlank()
                 || transaction.getMatchedCounterparty() == null
                 || transaction.getMatchedCounterparty().isBlank()
-                || Boolean.TRUE.equals(transaction.getContinuityCandidate())
-                || !hasSinglePrincipalTransferFlow(transaction)) {
+                || Boolean.TRUE.equals(transaction.getContinuityCandidate())) {
             return null;
         }
         if (transaction.getType() != NormalizedTransactionType.BRIDGE_OUT
                 && transaction.getType() != NormalizedTransactionType.BRIDGE_IN) {
+            return null;
+        }
+        // For cross-asset BRIDGE_IN (cc=false), LI.FI may deliver the primary stablecoin asset plus
+        // an ETH gas refund in one transaction. Both arrive as TRANSFER flows before role-alignment.
+        // Rule: when there is exactly one non-ETH TRANSFER plus one or more ETH TRANSFER flows, the
+        // non-ETH flow is the principal and the ETH flows are gas refunds. The ETH gas refund must NOT
+        // produce a settlement key; only the non-ETH principal may.
+        // When ETH is the only TRANSFER flow it IS the principal (USDC→ETH cross-asset bridge) and
+        // the standard single-principal check applies.
+        if (transaction.getType() == NormalizedTransactionType.BRIDGE_IN
+                && Boolean.FALSE.equals(transaction.getContinuityCandidate())
+                && isEthFamilySymbol(flow.getAssetSymbol())
+                && hasSinglePrincipalNonEthTransferFlow(transaction)) {
+            // This ETH flow is a gas refund alongside a stablecoin principal — no settlement key.
+            return null;
+        }
+        if (!hasSinglePrincipalTransferFlow(transaction)) {
+            // Relaxed check for cross-asset BRIDGE_IN: if there's exactly one non-ETH TRANSFER
+            // (the bridged stablecoin) with ETH-family gas refunds occupying the remaining TRANSFER
+            // slots, treat the non-ETH flow as the sole principal.
+            if (transaction.getType() == NormalizedTransactionType.BRIDGE_IN
+                    && Boolean.FALSE.equals(transaction.getContinuityCandidate())
+                    && !isEthFamilySymbol(flow.getAssetSymbol())
+                    && hasSinglePrincipalNonEthTransferFlow(transaction)) {
+                return new BridgeSettlementPendingKey("bridge-settlement:" + transaction.getCorrelationId());
+            }
             return null;
         }
         return new BridgeSettlementPendingKey("bridge-settlement:" + transaction.getCorrelationId());
@@ -565,6 +611,13 @@ public class ReplayPendingTransferKeyFactory {
                 continue;
             }
             if (candidate.getRole() != NormalizedLegRole.TRANSFER) {
+                // For vault/lending withdrawals: inbound BUY-role flows represent yield/interest
+                // payouts on top of the principal return. Skip them — they are not principal legs
+                // and must not abort wrapper-composite detection. The BUY flow is handled
+                // separately by the buy-role handler.
+                if (withdrawShape && candidate.getQuantityDelta().signum() > 0) {
+                    continue;
+                }
                 return null;
             }
             principalLegs++;
@@ -595,5 +648,34 @@ public class ReplayPendingTransferKeyFactory {
                         && flow.getQuantityDelta().signum() != 0)
                 .count();
         return principalTransfers == 1;
+    }
+
+    /**
+     * True when a cross-asset BRIDGE_IN has exactly one non-ETH-family TRANSFER flow.
+     * ETH-family TRANSFER siblings are treated as gas refunds and excluded from the principal count.
+     */
+    private boolean hasSinglePrincipalNonEthTransferFlow(NormalizedTransaction transaction) {
+        if (transaction == null || transaction.getFlows() == null || transaction.getFlows().isEmpty()) {
+            return false;
+        }
+        long nonEthPrincipal = transaction.getFlows().stream()
+                .filter(flow -> flow != null
+                        && flow.getRole() == NormalizedLegRole.TRANSFER
+                        && flow.getQuantityDelta() != null
+                        && flow.getQuantityDelta().signum() != 0
+                        && !isEthFamilySymbol(flow.getAssetSymbol()))
+                .count();
+        return nonEthPrincipal == 1;
+    }
+
+    private static final Set<String> ETH_FAMILY_SYMBOLS_BRIDGE = Set.of(
+            "ETH", "WETH", "WEETH", "STETH", "WSTETH", "RETH", "CBETH"
+    );
+
+    private static boolean isEthFamilySymbol(String symbol) {
+        if (symbol == null) {
+            return false;
+        }
+        return ETH_FAMILY_SYMBOLS_BRIDGE.contains(symbol.trim().toUpperCase(Locale.ROOT));
     }
 }

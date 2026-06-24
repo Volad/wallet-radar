@@ -71,6 +71,35 @@ class SessionBackfillCompletionPublisherTest {
     }
 
     @Test
+    void publishesSessionCompletionWhenTargetIsTerminalDespiteStaleCompletionFlag() {
+        UserSession session = session(
+                "session-1",
+                wallet("0xabc", List.of(NetworkId.ETHEREUM, NetworkId.BASE))
+        );
+
+        when(userSessionRepository.findAllByWalletsAddress("0xabc")).thenReturn(List.of(session));
+        when(syncStatusRepository.findByWalletAddressIn(List.of("0xabc"))).thenReturn(List.of(
+                syncStatus("0xabc", NetworkId.ETHEREUM, true),
+                syncStatus("0xabc", NetworkId.BASE, false, SyncStatus.SyncStatusValue.COMPLETE)
+        ));
+
+        SessionBackfillCompletionPublisher publisher = new SessionBackfillCompletionPublisher(
+                userSessionRepository,
+                syncStatusRepository,
+                backfillSegmentRepository,
+                applicationEventPublisher,
+                sessionPipelineStateService
+        );
+
+        publisher.onWalletNetworkBackfillCompleted(new WalletNetworkBackfillCompletedEvent("0xabc", NetworkId.ETHEREUM));
+
+        ArgumentCaptor<SessionBackfillCompletedEvent> captor = ArgumentCaptor.forClass(SessionBackfillCompletedEvent.class);
+        verify(applicationEventPublisher).publishEvent(captor.capture());
+        assertThat(captor.getValue().sessionId()).isEqualTo("session-1");
+        assertThat(captor.getValue().targetCount()).isEqualTo(2);
+    }
+
+    @Test
     void doesNotPublishSessionCompletionWhenAnyTargetIsStillIncomplete() {
         UserSession session = session(
                 "session-1",
@@ -178,6 +207,17 @@ class SessionBackfillCompletionPublisherTest {
         status.setWalletAddress(walletAddress);
         status.setNetworkId(networkId.name());
         status.setBackfillComplete(complete);
+        return status;
+    }
+
+    private static SyncStatus syncStatus(
+            String walletAddress,
+            NetworkId networkId,
+            boolean complete,
+            SyncStatus.SyncStatusValue statusValue
+    ) {
+        SyncStatus status = syncStatus(walletAddress, networkId, complete);
+        status.setStatus(statusValue);
         return status;
     }
 }

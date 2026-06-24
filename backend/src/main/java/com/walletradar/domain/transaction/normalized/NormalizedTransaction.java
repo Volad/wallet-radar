@@ -102,6 +102,19 @@ import java.util.List;
                 name = "normalized_fund_corridor_idx",
                 def = "{'type': 1, 'walletAddress': 1}",
                 sparse = true
+        ),
+        // RC-9 WS-5: deterministic corridor leg lookup. Drives the order-independent
+        // findAllByTxHashAndNetworkIdAndSource used by BybitTransferContinuityRepairService so the
+        // corridor projection is a pure function of the raw legs, not Mongo scan order.
+        @CompoundIndex(
+                name = "normalized_corridor_network_tx_source_idx",
+                def = "{'networkId': 1, 'txHash': 1, 'source': 1}"
+        ),
+        // RC-9 WS-5: corridor-anchor recognition / idempotent re-stamp (source + correlationId).
+        @CompoundIndex(
+                name = "normalized_source_correlation_idx",
+                def = "{'source': 1, 'correlationId': 1}",
+                sparse = true
         )
 })
 @NoArgsConstructor

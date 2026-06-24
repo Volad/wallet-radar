@@ -267,6 +267,61 @@ class BybitTransferContinuityRepairServiceTest {
         assertThat(bybit.getType()).isEqualTo(NormalizedTransactionType.INTERNAL_TRANSFER);
     }
 
+    @Test
+    @DisplayName("RC-9 T-9/T-10: canonical leg + corrId are order-independent and idempotent across reruns")
+    void canonicalLegSelectionIsOrderIndependentAndIdempotent() {
+        String expectedCorr = "BYBIT-CORRIDOR:ARBITRUM:" + TX_HASH;
+
+        // Full rebuild order: [lowId, highId].
+        NormalizedTransaction onChainA = onChainRow();
+        NormalizedTransaction lowA = unpairedBybitRow("bybit-id-1");
+        NormalizedTransaction highA = unpairedBybitRow("bybit-id-2");
+        when(normalizedTransactionRepository.findAllByTxHashAndNetworkIdAndSource(
+                TX_HASH, NetworkId.ARBITRUM, NormalizedTransactionSource.BYBIT))
+                .thenReturn(List.of(lowA, highA));
+
+        assertThat(service.repair(onChainA)).isTrue();
+        assertThat(onChainA.getCorrelationId()).isEqualTo(expectedCorr);
+        // Lowest _id is the canonical leg; it alone is stamped.
+        assertThat(lowA.getCorrelationId()).isEqualTo(expectedCorr);
+        assertThat(lowA.getMatchedCounterparty()).isEqualTo(WALLET);
+        assertThat(highA.getCorrelationId()).isNull();
+
+        // Incremental refresh re-materialises the same legs in reversed order: [highId, lowId].
+        NormalizedTransaction onChainB = onChainRow();
+        NormalizedTransaction lowB = unpairedBybitRow("bybit-id-1");
+        NormalizedTransaction highB = unpairedBybitRow("bybit-id-2");
+        when(normalizedTransactionRepository.findAllByTxHashAndNetworkIdAndSource(
+                TX_HASH, NetworkId.ARBITRUM, NormalizedTransactionSource.BYBIT))
+                .thenReturn(List.of(highB, lowB));
+
+        assertThat(service.repair(onChainB)).isTrue();
+        // T-9: identical corridor correlation + canonical leg regardless of materialisation order.
+        assertThat(onChainB.getCorrelationId()).isEqualTo(expectedCorr);
+        assertThat(lowB.getCorrelationId()).isEqualTo(expectedCorr);
+        assertThat(lowB.getMatchedCounterparty()).isEqualTo(WALLET);
+        assertThat(highB.getCorrelationId()).isNull();
+
+        // T-10: re-stamping over already-stamped legs is value-idempotent — N further refresh
+        // passes leave the corridor correlation + canonical-leg pairing bit-identical.
+        service.repair(onChainB);
+        service.repair(onChainB);
+        assertThat(onChainB.getCorrelationId()).isEqualTo(expectedCorr);
+        assertThat(onChainB.getMatchedCounterparty()).isEqualTo(BYBIT);
+        assertThat(lowB.getCorrelationId()).isEqualTo(expectedCorr);
+        assertThat(lowB.getMatchedCounterparty()).isEqualTo(WALLET);
+        assertThat(highB.getCorrelationId()).isNull();
+    }
+
+    private NormalizedTransaction unpairedBybitRow(String id) {
+        NormalizedTransaction transaction = bybitRow();
+        transaction.setId(id);
+        transaction.setCorrelationId(null);
+        transaction.setContinuityCandidate(false);
+        transaction.setMatchedCounterparty(null);
+        return transaction;
+    }
+
     private NormalizedTransaction onChainRow() {
         NormalizedTransaction transaction = new NormalizedTransaction();
         transaction.setId("on-chain");

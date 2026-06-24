@@ -57,18 +57,17 @@
               </button>
             }
 
-            <div class="filter-sep">Market</div>
+            <div class="filter-sep">Network</div>
 
-            @for (market of markets(); track market.key) {
+            @for (network of networks(); track network) {
               <button
                 type="button"
-                class="filter-item market"
-                [class.active]="selectedMarkets().has(market.key)"
-                (click)="toggleMarket(market.key)">
-                <span class="filter-square market-square"></span>
+                class="filter-item network"
+                [class.active]="selectedNetworks().has(network)"
+                (click)="toggleNetwork(network)">
+                <span class="filter-square network-square" [style.background]="networkColor(network)"></span>
                 <span class="filter-copy">
-                  <strong>{{ market.label }}</strong>
-                  <small class="mono">{{ market.key }}</small>
+                  <strong>{{ networkLabel(network) }}</strong>
                 </span>
               </button>
             }
@@ -106,6 +105,10 @@
               <strong class="mono borrow">{{ formatUsd(currentData.summary.totalBorrowedUsd) }}</strong>
             </div>
             <div class="summary-stat">
+              <span>Net exposure</span>
+              <strong class="mono">{{ formatUsd(currentData.summary.netExposureUsd) }}</strong>
+            </div>
+            <div class="summary-stat">
               <span>Closed P&L</span>
               <strong class="mono" [ngClass]="pnlClass(closedPnlTotal())">{{ formatSignedUsd(closedPnlTotal()) }}</strong>
             </div>
@@ -135,6 +138,7 @@
                       <span class="network-badge" [style.--networkColor]="networkColor(group.networkId)">
                         {{ networkIcon(group.networkId) }} {{ networkLabel(group.networkId) }}
                       </span>
+                      <span class="wallet-addr mono">{{ shortAddress(group.walletAddress) }}</span>
                       <span class="tag" [class.purple]="isVaultModel(group)">{{ protocolTag(group) }}</span>
                     </span>
                     <span class="protocol-metrics">
@@ -146,31 +150,54 @@
                     </span>
                   </span>
 
+                  <span class="protocol-supply-borrow">
+                    <span class="sb-row">
+                      <small>Supply</small>
+                      <b class="mono pos">{{ formatUsd(group.supplyUsd) }}</b>
+                    </span>
+                    <span class="sb-row">
+                      <small>Borrow</small>
+                      <b class="mono" [ngClass]="group.borrowUsd > 0 ? 'borrow' : 'muted-value'">{{ group.borrowUsd > 0 ? formatUsd(group.borrowUsd) : '--' }}</b>
+                    </span>
+                  </span>
+
                   @if (shouldShowHealth(group)) {
                     <span class="compact-health" [style.--healthColor]="healthColor(group)">
+                      <span class="hf-badge-line">
+                        <small>Health</small>
+                        <strong class="mono">{{ healthDisplay(group) }}</strong>
+                        @if (isHealthStale(group)) {
+                          <span class="stale-dot" title="Health factor is an accounting estimate or stale snapshot">stale</span>
+                        }
+                      </span>
                       <span class="health-track">
                         <span [style.width.%]="group.healthProgress"></span>
                       </span>
-                      <strong class="mono">{{ healthDisplay(group) }}</strong>
                     </span>
                   } @else {
-                    <span class="compact-health placeholder"></span>
+                    <span class="compact-health no-debt">
+                      <small>Health</small>
+                      <strong>No debt</strong>
+                    </span>
                   }
 
                   <span class="protocol-pnl">
                     @let closedPnl = groupClosedPnl(group);
                     @let runningPnl = groupRunningPnl(group);
-                    @if (closedPnl !== null) {
-                      <span>
-                        <small>Closed P&L</small>
-                        <b class="mono" [ngClass]="pnlClass(closedPnl)">{{ formatSignedUsd(closedPnl) }}</b>
-                      </span>
-                    }
                     @if (runningPnl !== null) {
                       <span>
                         <small>Running</small>
                         <b class="mono" [ngClass]="pnlClass(runningPnl)">{{ formatSignedUsd(runningPnl) }}</b>
                       </span>
+                    }
+                    @if (closedPnl !== null) {
+                      <span>
+                        <small>Closed</small>
+                        <b class="mono" [ngClass]="pnlClass(closedPnl)">{{ formatSignedUsd(closedPnl) }}</b>
+                      </span>
+                    }
+                    @if (runningPnl === null && closedPnl === null) {
+                      <span class="pnl-na"><small>P&L unavailable</small></span>
                     }
                   </span>
 
@@ -179,11 +206,39 @@
 
                 @if (isGroupExpanded(group.id)) {
                   <div class="protocol-body">
+                    <div class="net-exposure-strip">
+                      <span class="ne-item">
+                        <small>Net exposure</small>
+                        <b class="mono">{{ formatUsd(group.netExposureUsd) }}</b>
+                      </span>
+                      <span class="ne-item">
+                        <small>Supply</small>
+                        <b class="mono pos">{{ formatUsd(group.supplyUsd) }}</b>
+                      </span>
+                      <span class="ne-item">
+                        <small>Borrow</small>
+                        <b class="mono" [ngClass]="group.borrowUsd > 0 ? 'borrow' : 'muted-value'">{{ group.borrowUsd > 0 ? formatUsd(group.borrowUsd) : '--' }}</b>
+                      </span>
+                      <span class="ne-divider"></span>
+                      <span class="ne-item ne-apy">
+                        <small>Net APY</small>
+                        <b class="mono">{{ formatNetApy(group) }}</b>
+                      </span>
+                    </div>
+
                     @if (group.positions.length > 0) {
                       <section class="positions-risk">
                         <div class="positions-panel">
                           @if (supplyPositions(group).length > 0) {
                             <div class="position-section-label">Supply</div>
+                            <div class="position-col-header">
+                              <span></span>
+                              <span></span>
+                              <span class="align-right">Qty</span>
+                              <span class="align-right">Value</span>
+                              <span class="align-right">Earned</span>
+                              <span class="align-right">Current APY</span>
+                            </div>
                             @for (position of supplyPositions(group); track position.id) {
                               <div class="position-row">
                                 <span class="flow-icon">↑</span>
@@ -192,19 +247,15 @@
                                   <small>{{ position.underlyingSymbol }}</small>
                                 </span>
                                 <span class="align-right">
-                                  <small>Qty</small>
                                   <b class="mono">{{ formatQuantity(position.quantity) }}</b>
                                 </span>
                                 <span class="align-right">
-                                  <small>Value</small>
                                   <b class="mono pos">{{ formatUsd(position.valueUsd) }}</b>
                                 </span>
                                 <span class="align-right">
-                                  <small>Earned</small>
                                   <b class="mono pos">{{ formatUsd(position.earnedUsd) }}</b>
                                 </span>
                                 <span class="align-right" [title]="positionMetricTitle(position)">
-                                  <small>Current APY</small>
                                   <b class="mono" [ngClass]="apyClass(position)">{{ formatApy(position) }}</b>
                                 </span>
                               </div>
@@ -213,6 +264,14 @@
 
                           @if (borrowPositions(group).length > 0) {
                             <div class="position-section-label borrow-label">Borrow</div>
+                            <div class="position-col-header">
+                              <span></span>
+                              <span></span>
+                              <span class="align-right">Qty</span>
+                              <span class="align-right">Value</span>
+                              <span class="align-right">Debt</span>
+                              <span class="align-right">Current APY</span>
+                            </div>
                             @for (position of borrowPositions(group); track position.id) {
                               <div class="position-row borrow-row">
                                 <span class="flow-icon">↓</span>
@@ -221,19 +280,15 @@
                                   <small>{{ position.underlyingSymbol }}</small>
                                 </span>
                                 <span class="align-right">
-                                  <small>Qty</small>
                                   <b class="mono">{{ formatQuantity(position.quantity) }}</b>
                                 </span>
                                 <span class="align-right">
-                                  <small>Value</small>
                                   <b class="mono borrow">{{ formatUsd(position.valueUsd) }}</b>
                                 </span>
                                 <span class="align-right">
-                                  <small>Debt</small>
                                   <b class="mono borrow">{{ formatUsd(position.valueUsd) }}</b>
                                 </span>
                                 <span class="align-right" [title]="positionMetricTitle(position)">
-                                  <small>Current APY</small>
                                   <b class="mono" [ngClass]="apyClass(position)">{{ formatApy(position) }}</b>
                                 </span>
                               </div>
@@ -242,28 +297,47 @@
                         </div>
 
                         <aside class="risk-panel">
-                          <div class="health-box" [style.--healthColor]="healthColor(group)">
-                            <div class="risk-head">
-                              <span>Health</span>
-                              <strong class="mono">{{ healthDisplay(group) }}</strong>
+                          @if (shouldShowHealth(group)) {
+                            <div class="health-box" [style.--healthColor]="healthColor(group)">
+                              <div class="risk-head">
+                                <span>Health</span>
+                                <strong class="mono">{{ healthDisplay(group) }}</strong>
+                              </div>
+                              <div class="risk-gradient">
+                                <span [style.left.%]="group.healthProgress"></span>
+                              </div>
+                              <div class="risk-scale">
+                                <span>1.0</span>
+                                <span>1.5</span>
+                                <span>3.0+</span>
+                              </div>
+                              <strong class="risk-label">{{ healthLabel(group) }}</strong>
+                              <div class="risk-metric-row">
+                                <span>Source</span>
+                                <strong>{{ humanReason(group.healthSource) }}</strong>
+                              </div>
                             </div>
-                            <div class="risk-gradient">
-                              <span [style.left.%]="group.healthProgress"></span>
+                          } @else {
+                            <div class="health-box no-debt-box">
+                              <span class="nd-label">Health</span>
+                              <strong class="nd-value">No debt</strong>
+                              <span class="nd-note">Supply-only position — no liquidation risk.</span>
                             </div>
-                            <div class="risk-scale">
-                              <span>1.0</span>
-                              <span>1.5</span>
-                              <span>3.0+</span>
-                            </div>
-                            <strong class="risk-label">{{ healthLabel(group) }}</strong>
-                            <div class="risk-metric-row">
-                              <span>Source</span>
-                              <strong>{{ humanReason(group.healthSource) }}</strong>
-                            </div>
-                          </div>
+                          }
                         </aside>
                       </section>
                     }
+
+                    <div class="cycles-head">
+                      <span class="cycles-head-label">Cycles</span>
+                      <span class="tag green">{{ activeCycleCount(group) }} open</span>
+                      @if (closedCycleCount(group) > 0) {
+                        <span class="tag">{{ closedCycleCount(group) }} closed</span>
+                      }
+                      @if (reviewCycleCount(group) > 0) {
+                        <span class="tag amber">{{ reviewCycleCount(group) }} review</span>
+                      }
+                    </div>
 
                     @for (section of cycleSections(group); track section.id) {
                       @if (section.isVault) {
@@ -287,11 +361,8 @@
                           <button type="button" class="cycle-head" (click)="toggleCycleExpanded(cycle.id)">
                             <span class="cycle-number mono">#{{ cycleIndex + 1 }}</span>
                             <span class="cycle-copy">
-                              <span class="cycle-date-line">
-                                <span class="mono">{{ formatDate(cycle.startTimestamp) }}</span>
-                                <span class="muted">→</span>
-                                <span class="mono">{{ cycle.closeTimestamp === null ? 'present' : formatDate(cycle.closeTimestamp) }}</span>
-                                <span class="muted">({{ formatDuration(cycle.durationDays) }})</span>
+                              <span class="cycle-market-line">
+                                <strong class="cycle-market">{{ cycleMarketLabel(cycle) }}</strong>
                                 <span class="tag" [class.green]="cycle.status === 'OPEN'">{{ cycleStatusLabel(cycle.status) }}</span>
                                 @if (cycle.warningReason !== null && cycle.status === 'AMBIGUOUS_NEEDS_REVIEW') {
                                   <span class="tag amber" [title]="cycle.warningReason">{{ humanReason(cycle.warningReason) }}</span>
@@ -300,7 +371,23 @@
                                   <span class="tag amber" [title]="cycle.largePnlReasons.join(', ')">{{ humanReason(cycle.primaryLargePnlReason) }}</span>
                                 }
                               </span>
-                              <span class="cycle-summary-text">{{ cycleSummary(cycle) }}</span>
+                              <span class="cycle-date-line">
+                                <span class="mono">{{ formatDate(cycle.startTimestamp) }}</span>
+                                <span class="muted">→</span>
+                                <span class="mono">{{ cycle.closeTimestamp === null ? 'present' : formatDate(cycle.closeTimestamp) }}</span>
+                                <span class="duration-badge mono">{{ formatDuration(cycle.durationDays) }}</span>
+                              </span>
+                            </span>
+
+                            <span class="cycle-apy" [title]="factualApyTitle(cycle)">
+                              <span class="apy-row">
+                                <small>Factual</small>
+                                <b class="mono" [ngClass]="precisionClass(cycle.factualApy.apyPrecision)">{{ factualApyDisplay(cycle) }}</b>
+                              </span>
+                              <span class="apy-row">
+                                <small>Protocol</small>
+                                <b class="mono">{{ cycleProtocolNetApyDisplay(cycle) }}</b>
+                              </span>
                             </span>
 
                             <span class="cycle-interest">
@@ -332,43 +419,42 @@
                                 </div>
                               }
 
-                              <div class="cycle-mini-stats">
-                                <span>
+                              <div class="cycle-stats-strip">
+                                <div class="cs-item">
                                   <small>Peak supply</small>
                                   <b class="mono pos">{{ formatUsd(cycle.peakSupplyUsd) }}</b>
-                                </span>
-                                <span>
+                                </div>
+                                <div class="cs-item">
                                   <small>Peak borrow</small>
-                                  <b class="mono borrow">{{ formatUsd(cycle.peakBorrowUsd) }}</b>
-                                </span>
-                                <span>
+                                  <b class="mono" [ngClass]="cycle.peakBorrowUsd > 0 ? 'borrow' : 'muted-value'">
+                                    {{ cycle.peakBorrowUsd > 0 ? formatUsd(cycle.peakBorrowUsd) : '--' }}
+                                  </b>
+                                </div>
+                                <div class="cs-item">
                                   <small>Gas paid</small>
-                                  <b class="mono muted">{{ formatUsd(cycle.totalValuation.gasUsd) }}</b>
-                                </span>
-                                <span>
-                                  <small>Duration</small>
-                                  <b class="mono muted">{{ formatDuration(cycle.durationDays) }}</b>
-                                </span>
-                                <span [title]="factualApyTitle(cycle)">
-                                  <small>Actual APY</small>
-                                  <b class="mono" [ngClass]="precisionClass(cycle.factualApy.apyPrecision)">{{ factualApyDisplay(cycle) }}</b>
-                                </span>
-                              </div>
-
-                              <div class="asset-pnl-strip">
-                                @for (line of assetPnlLines(cycle); track line.asset) {
-                                  <span [title]="line.reason ?? line.precision">
-                                    <small>{{ line.asset }} · {{ line.precision }}</small>
-                                    <b class="mono" [ngClass]="assetPnlClass(line)">{{ formatAssetPnl(line) }}</b>
-                                  </span>
-                                } @empty {
-                                  <span>
-                                    <small>Asset P&L</small>
-                                    <b class="mono muted">Unavailable</b>
-                                  </span>
+                                  <b class="mono muted-value">{{ formatUsd(cycle.totalValuation.gasUsd) }}</b>
+                                </div>
+                                @if (assetPnlLines(cycle).length > 0) {
+                                  <span class="cs-divider"></span>
+                                  @for (line of assetPnlLines(cycle); track line.asset) {
+                                    <div class="cs-item" [title]="line.reason ?? (line.valueUsd !== null ? line.usdPrecision : line.precision)">
+                                      <small>{{ line.asset }} · {{ line.valueUsd !== null ? line.usdPrecision : line.precision }}</small>
+                                      @if (line.value !== null) {
+                                        <b class="mono" [ngClass]="assetPnlClass(line)">{{ formatAssetPnl(line) }}</b>
+                                        @if (line.valueUsd !== null) {
+                                          <span class="cs-usd mono">{{ formatAssetPnlUsd(line) }}</span>
+                                        }
+                                      } @else if (line.valueUsd !== null) {
+                                        <b class="mono" [ngClass]="assetPnlUsdClass(line)">{{ formatAssetPnlUsd(line) }}</b>
+                                      } @else {
+                                        <b class="mono muted">{{ formatAssetPnl(line) }}</b>
+                                      }
+                                    </div>
+                                  }
                                 }
                               </div>
 
+                              <div class="tx-history-label">Transaction history</div>
                               <div class="tx-timeline">
                                 @for (txGroup of cycle.txGroups; track txGroup.id; let last = $last) {
                                   @if (txGroup.type === 'loop') {
@@ -394,6 +480,16 @@
                                                 <strong>{{ item.assetSymbol }}</strong>
                                                 <span class="mono tx-qty">{{ txSignedQuantity(item.type, item.quantity) }} {{ item.assetSymbol }}</span>
                                                 <span class="mono muted">{{ formatUsd(item.valueUsd) }}</span>
+                                                @if (item.txHash !== null) {
+                                                  <button type="button" class="tx-copy" [class.copied]="isHashCopied(item.txHash)"
+                                                    (click)="$event.stopPropagation(); copyTxHash(item.txHash)"
+                                                    [title]="isHashCopied(item.txHash) ? 'Copied' : 'Copy ' + item.txHash">
+                                                    <span class="mono">{{ shortHash(item.txHash) }}</span>
+                                                    <span class="tx-copy-icon">{{ isHashCopied(item.txHash) ? '✓' : '⧉' }}</span>
+                                                  </button>
+                                                } @else {
+                                                  <span class="mono tx-hash muted">--</span>
+                                                }
                                               </div>
                                             }
                                           </div>
@@ -414,7 +510,16 @@
                                             <strong>{{ item.assetSymbol }}</strong>
                                             <span class="mono tx-qty">{{ txSignedQuantity(item.type, item.quantity) }} {{ item.assetSymbol }}</span>
                                             <span class="mono muted">{{ formatUsd(item.valueUsd) }}</span>
-                                            <span class="mono tx-hash">{{ shortHash(item.txHash) }}</span>
+                                            @if (item.txHash !== null) {
+                                              <button type="button" class="tx-copy" [class.copied]="isHashCopied(item.txHash)"
+                                                (click)="$event.stopPropagation(); copyTxHash(item.txHash)"
+                                                [title]="isHashCopied(item.txHash) ? 'Copied' : 'Copy ' + item.txHash">
+                                                <span class="mono">{{ shortHash(item.txHash) }}</span>
+                                                <span class="tx-copy-icon">{{ isHashCopied(item.txHash) ? '✓' : '⧉' }}</span>
+                                              </button>
+                                            } @else {
+                                              <span class="mono tx-hash muted">--</span>
+                                            }
                                           </div>
                                         }
                                       </div>

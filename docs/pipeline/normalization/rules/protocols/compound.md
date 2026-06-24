@@ -23,6 +23,10 @@ Compound V3 Comet and Bulker `invoke(bytes32[],bytes[])` batch lifecycle on Base
 
 Full-receipt for Bulker bundles when internal transfers missing.
 
+## Receipt identity
+
+Compound V3 Comet flows typically carry the **base asset** symbol (`USDC`, `WETH`), not a `cUSDCv3` receipt ticker. Protocol and market identity come from the Comet contract in `protocol-registry.json` via `LendingReceiptIdentityService`. V2-style `c{Underlying}` receipts use grammar fallback. See [ADR-035](../../../../adr/ADR-035-lending-receipt-identity-resolver.md).
+
 ## Correlation rules
 
 Market key: `comet-{network}-market` in lending read model.

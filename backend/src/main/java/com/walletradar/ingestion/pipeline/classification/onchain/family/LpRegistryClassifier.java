@@ -15,6 +15,7 @@ import com.walletradar.ingestion.pipeline.classification.support.BlockScoutNativ
 import com.walletradar.ingestion.pipeline.classification.support.LpPositionCorrelationSupport;
 import com.walletradar.ingestion.pipeline.classification.support.LpPositionLifecycleSupport;
 import com.walletradar.ingestion.pipeline.classification.support.LpPrincipalCloseEvidence;
+import com.walletradar.ingestion.pipeline.classification.support.LpStakingWrapperResolver;
 import com.walletradar.ingestion.pipeline.classification.support.NativeAssetSymbolResolver;
 import com.walletradar.ingestion.pipeline.classification.support.OnChainClassificationSupport;
 import com.walletradar.ingestion.pipeline.classification.support.RawLeg;
@@ -35,13 +36,16 @@ public class LpRegistryClassifier implements OnChainFamilyClassifier {
 
     private final ProtocolRegistryService protocolRegistryService;
     private final NativeAssetSymbolResolver nativeAssetSymbolResolver;
+    private final LpStakingWrapperResolver lpStakingWrapperResolver;
 
     public LpRegistryClassifier(
             ProtocolRegistryService protocolRegistryService,
-            NativeAssetSymbolResolver nativeAssetSymbolResolver
+            NativeAssetSymbolResolver nativeAssetSymbolResolver,
+            LpStakingWrapperResolver lpStakingWrapperResolver
     ) {
         this.protocolRegistryService = protocolRegistryService;
         this.nativeAssetSymbolResolver = nativeAssetSymbolResolver;
+        this.lpStakingWrapperResolver = lpStakingWrapperResolver;
     }
 
     @Override
@@ -196,12 +200,17 @@ public class LpRegistryClassifier implements OnChainFamilyClassifier {
                 rawType
         );
         List<String> pendingReasons = pendingClarificationReasons(context, entry, type);
-        String correlationId = resolveCorrelationId(context, entry, type);
+        // The contract-keyed (tokenId-resolved) identity drives receipt-leg materialization: a receipt
+        // leg is only emitted for a real position tokenId, never for the vault-style pool fallback.
+        String receiptCorrelationId = resolveContractKeyedCorrelationId(context, type);
+        String correlationId = receiptCorrelationId != null
+                ? receiptCorrelationId
+                : resolveVaultFallbackCorrelationId(context, entry, type);
         List<NormalizedTransaction.Flow> flows = LpClassificationFlowSupport.flows(
                 context.view(),
                 context.movementLegs(),
                 type,
-                entry.protocolName()
+                receiptCorrelationId
         );
         if (!pendingReasons.isEmpty()) {
             return RegistryDecisionSupport.registryResult(
@@ -225,36 +234,54 @@ public class LpRegistryClassifier implements OnChainFamilyClassifier {
         );
     }
 
-    private String resolveCorrelationId(
+    /**
+     * The contract-keyed, tokenId-resolved CL position identity (or {@code null} when no tokenId
+     * resolves). RC-5 (ADR-018): resolve the interacted position-manager contract, then canonicalize
+     * a known LP-staking/farming wrapper to the underlying NFPM so a staked position keys to the
+     * single {@code (network, NFPM, tokenId)} identity instead of a duplicate wrapper-keyed pool.
+     */
+    private String resolveContractKeyedCorrelationId(
+            OnChainClassificationContext context,
+            NormalizedTransactionType type
+    ) {
+        String resolvedContract = LpPositionCorrelationSupport.resolvePositionManagerContract(context.view());
+        String canonicalContract = lpStakingWrapperResolver.canonicalPositionManager(
+                context.view().networkId(),
+                resolvedContract
+        );
+        return LpPositionCorrelationSupport.contractKeyedLifecycleCorrelationId(
+                context.view(),
+                type,
+                canonicalContract
+        );
+    }
+
+    /**
+     * Pool-identity fallback for genuine vault-style LP contracts that have no NFT tokenId (e.g. Angle
+     * vaults on Katana). RC-6: never produce a truncated-contract aggregate — use the FULL contract so
+     * the entry and exit of a no-NFT vault key to the same per-contract pool. This identity is used
+     * only as the decision's pool correlationId; it never materializes a receipt leg (that path is
+     * reserved for a resolved tokenId). Mint-shapes stay PENDING_CLARIFICATION
+     * ({@code requiresReceiptClarification}) so the minted tokenId is resolved downstream.
+     */
+    private String resolveVaultFallbackCorrelationId(
             OnChainClassificationContext context,
             ProtocolRegistryEntry entry,
             NormalizedTransactionType type
     ) {
-        String corrId = LpPositionCorrelationSupport.lifecycleCorrelationId(
-                context.view(),
-                type,
-                entry.protocolName()
+        String resolvedContract = LpPositionCorrelationSupport.resolvePositionManagerContract(context.view());
+        String canonicalContract = lpStakingWrapperResolver.canonicalPositionManager(
+                context.view().networkId(),
+                resolvedContract
         );
-        if (corrId != null) {
-            return corrId;
-        }
-        // Fallback for vault-style LP contracts that have no NFT tokenId (e.g. Angle vaults on Katana).
-        // Only apply when the tx does NOT look like an NFT-minting LP entry that needs clarification —
-        // i.e., skip the fallback when requiresReceiptClarification is true (those should stay PENDING_CLARIFICATION
-        // with null correlationId so the NFT tokenId can be resolved via the clarification pipeline).
         if (entry.role() == com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryRole.POSITION_MANAGER
                 && LpPositionCorrelationSupport.supportsLpPositionCorrelation(type)
                 && !LpPositionCorrelationSupport.requiresReceiptClarification(context.view(), type)
-                && entry.contractAddress() != null && !entry.contractAddress().isBlank()) {
+                && canonicalContract != null && !canonicalContract.isBlank()) {
             String networkId = context.view().networkId() == null
                     ? "unknown"
                     : context.view().networkId().name().toLowerCase(java.util.Locale.ROOT);
-            String protocolSlug = entry.protocolName() == null
-                    ? "unknown"
-                    : entry.protocolName().trim().toLowerCase(java.util.Locale.ROOT).replace(" ", "-");
-            String contractSuffix = entry.contractAddress().toLowerCase(java.util.Locale.ROOT)
-                    .replaceFirst("^0x", "").substring(0, Math.min(16, entry.contractAddress().length()));
-            return "lp-position:" + networkId + ":" + protocolSlug + ":" + contractSuffix;
+            return "lp-position:" + networkId + ":" + canonicalContract + ":vault";
         }
         return null;
     }

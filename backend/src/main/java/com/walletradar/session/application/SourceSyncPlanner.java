@@ -21,6 +21,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.Supplier;
 
 /**
  * Owns source-level sync window planning. It sets windows on sync_status and
@@ -52,7 +53,12 @@ public class SourceSyncPlanner {
                 continue;
             }
             for (NetworkId networkId : wallet.getNetworks() == null ? List.<NetworkId>of() : wallet.getNetworks()) {
-                String syncStatusId = ensureInitialOnChainWindow(normalizedAddress(wallet.getAddress()), networkId, anchor);
+                String syncStatusId = planTarget(
+                        "universe-change",
+                        normalizedAddress(wallet.getAddress()),
+                        networkId,
+                        () -> ensureInitialOnChainWindow(normalizedAddress(wallet.getAddress()), networkId, anchor)
+                );
                 if (syncStatusId != null) {
                     scheduledTargets++;
                     scheduledOnChainSyncStatusIds.add(syncStatusId);
@@ -62,7 +68,12 @@ public class SourceSyncPlanner {
             }
         }
         for (UserSession.SessionIntegration integration : enabledIntegrations(session)) {
-            String syncStatusId = ensureInitialIntegrationWindow(integration, anchor);
+            String syncStatusId = planTarget(
+                    "universe-change",
+                    integration.getIntegrationId(),
+                    null,
+                    () -> ensureInitialIntegrationWindow(integration, anchor)
+            );
             if (syncStatusId != null) {
                 integration.setStatus(UserSession.IntegrationStatus.BACKFILLING);
                 integration.setUpdatedAt(anchor);
@@ -96,7 +107,12 @@ public class SourceSyncPlanner {
                 continue;
             }
             for (NetworkId networkId : wallet.getNetworks() == null ? List.<NetworkId>of() : wallet.getNetworks()) {
-                String syncStatusId = scheduleOnChainRefresh(normalizedAddress(wallet.getAddress()), networkId, anchor);
+                String syncStatusId = planTarget(
+                        "refresh",
+                        normalizedAddress(wallet.getAddress()),
+                        networkId,
+                        () -> scheduleOnChainRefresh(normalizedAddress(wallet.getAddress()), networkId, anchor)
+                );
                 if (syncStatusId != null) {
                     scheduledTargets++;
                     scheduledOnChainSyncStatusIds.add(syncStatusId);
@@ -106,7 +122,12 @@ public class SourceSyncPlanner {
             }
         }
         for (UserSession.SessionIntegration integration : enabledIntegrations(session)) {
-            String syncStatusId = scheduleIntegrationRefresh(integration, anchor);
+            String syncStatusId = planTarget(
+                    "refresh",
+                    integration.getIntegrationId(),
+                    null,
+                    () -> scheduleIntegrationRefresh(integration, anchor)
+            );
             if (syncStatusId != null) {
                 integration.setStatus(UserSession.IntegrationStatus.BACKFILLING);
                 integration.setUpdatedAt(anchor);
@@ -130,7 +151,12 @@ public class SourceSyncPlanner {
         Instant anchor = normalizeAnchor(observedAt);
         int scheduledTargets = 0;
         for (NetworkId networkId : normalizeNetworks(networks)) {
-            if (ensureInitialOnChainWindow(normalizedAddress(address), networkId, anchor) != null) {
+            if (planTarget(
+                    "standalone-initial",
+                    normalizedAddress(address),
+                    networkId,
+                    () -> ensureInitialOnChainWindow(normalizedAddress(address), networkId, anchor)
+            ) != null) {
                 scheduledTargets++;
             }
         }
@@ -141,11 +167,36 @@ public class SourceSyncPlanner {
         Instant anchor = normalizeAnchor(observedAt);
         int scheduledTargets = 0;
         for (NetworkId networkId : normalizeNetworks(networks)) {
-            if (scheduleOnChainRefresh(normalizedAddress(address), networkId, anchor) != null) {
+            if (planTarget(
+                    "standalone-refresh",
+                    normalizedAddress(address),
+                    networkId,
+                    () -> scheduleOnChainRefresh(normalizedAddress(address), networkId, anchor)
+            ) != null) {
                 scheduledTargets++;
             }
         }
         return scheduledTargets;
+    }
+
+    /**
+     * Isolates a single source's window planning so a transient per-network failure (e.g. unresolvable head block:
+     * explorer down, RPC 401/timeout) is treated as a skipped target and never aborts planning for the remaining
+     * wallets/networks/integrations. The failing source is simply not armed and will be retried on the next refresh.
+     */
+    private String planTarget(String mode, String sourceRef, NetworkId networkId, Supplier<String> planner) {
+        try {
+            return planner.get();
+        } catch (RuntimeException e) {
+            log.warn(
+                    "Sync planning skipped a source ({} mode): source={}, network={}, reason={} — other sources continue",
+                    mode,
+                    sourceRef,
+                    networkId == null ? "-" : networkId.name(),
+                    e.getMessage()
+            );
+            return null;
+        }
     }
 
     private String ensureInitialOnChainWindow(String walletAddress, NetworkId networkId, Instant anchor) {

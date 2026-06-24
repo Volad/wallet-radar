@@ -136,12 +136,16 @@ public class BybitTransferContinuityRepairService {
                 ).stream()
                 .filter(bybitRow -> isPairable(onChainCandidate, bybitRow))
                 .toList();
-        if (compatibleBybitRows.size() != 1) {
+        // RC-9 D1: drop the size()==1 hard gate. A re-materialised refresh can present a stream
+        // mirror alongside the real corridor leg, flipping the count from 1 to 2 and producing a
+        // different (or no) correlation than the full rebuild. Instead pick the canonical Bybit leg
+        // deterministically (endpoint-matching FUND deposit anchor first, then lowest _id) so the
+        // corridor triple is a pure, order-stable function of the raw legs.
+        NormalizedTransaction bybitRow = selectCanonicalBybitLeg(onChainCandidate, compatibleBybitRows);
+        if (bybitRow == null) {
             return false;
         }
-
-        NormalizedTransaction bybitRow = compatibleBybitRows.getFirst();
-        String correlationId = correlationId(onChainCandidate.getNetworkId().name(), onChainCandidate.getTxHash());
+        String correlationId = correlationId(onChainCandidate.getNetworkId(), onChainCandidate.getTxHash());
         Instant now = Instant.now();
 
         boolean leftChanged = applyContinuityMetadata(
@@ -448,6 +452,29 @@ public class BybitTransferContinuityRepairService {
         return sameText(counterparty, onChain.getWalletAddress());
     }
 
+    /**
+     * RC-9 D1: deterministic canonical-leg selector. Among all Bybit rows compatible with the
+     * on-chain leg, prefer the wallet-endpoint-matching FUND deposit anchor, then break remaining
+     * ties by lowest {@code _id}. Pure and order-stable: the same candidate set always yields the
+     * same leg regardless of DB iteration order or row materialisation timing.
+     */
+    private NormalizedTransaction selectCanonicalBybitLeg(
+            NormalizedTransaction onChain,
+            List<NormalizedTransaction> compatibleBybitRows
+    ) {
+        if (compatibleBybitRows.isEmpty()) {
+            return null;
+        }
+        if (compatibleBybitRows.size() == 1) {
+            return compatibleBybitRows.getFirst();
+        }
+        return compatibleBybitRows.stream()
+                .min(java.util.Comparator
+                        .comparingInt((NormalizedTransaction row) -> walletEndpointMatches(onChain, row) ? 0 : 1)
+                        .thenComparing(row -> row.getId() == null ? "" : row.getId()))
+                .orElse(null);
+    }
+
     private List<NormalizedTransaction> selectOnChainPartners(NormalizedTransaction bybit) {
         List<NormalizedTransaction> candidates = normalizedTransactionRepository
                 .findAllByTxHashAndNetworkIdAndSource(
@@ -562,26 +589,7 @@ public class BybitTransferContinuityRepairService {
      * {@code BYBIT:<uid>} only when no sub-account suffix is present.
      */
     private String resolveBybitSubAccountRef(String walletRef) {
-        if (blank(walletRef) || !walletRef.toUpperCase(Locale.ROOT).startsWith("BYBIT:")) {
-            return null;
-        }
-        String remainder = walletRef.substring("BYBIT:".length()).trim();
-        if (remainder.isBlank()) {
-            return null;
-        }
-        // Already contains a sub-account separator?
-        int colon = remainder.indexOf(':');
-        if (colon < 0) {
-            // No sub-account suffix — default to FUND, the only sub-account that holds external
-            // deposits per ADR-006 N17.
-            return "BYBIT:" + remainder + ":FUND";
-        }
-        String uid = remainder.substring(0, colon).trim();
-        String subAccount = remainder.substring(colon + 1).trim().toUpperCase(Locale.ROOT);
-        if (uid.isBlank() || subAccount.isBlank()) {
-            return null;
-        }
-        return "BYBIT:" + uid + ":" + subAccount;
+        return CorridorCorrelationKeyFactory.bybitSubAccountEndpoint(walletRef);
     }
 
     /**
@@ -853,15 +861,11 @@ public class BybitTransferContinuityRepairService {
         return normalize(left).equals(normalize(right));
     }
 
-    private String correlationId(String networkId, String txHash) {
-        // FA-001 P1: Solana signatures are case-sensitive base58 — do not lower-case them in the
-        // correlation id. Other networks remain lower-cased (EVM hex, TON raw hash).
-        // Cycle/7 S3: switched prefix to `BYBIT-CORRIDOR:` so the shared corridor id is visually
-        // distinct from per-stream `bybit-econ-v1:` ids and survives the broader regex that
-        // recognises it as "already paired" (see {@link #bybitCorrelationMissingCriteria}).
-        NetworkId resolved = networkId == null ? null : NetworkId.valueOf(networkId);
-        String canonicalHash = NetworkAddressFormat.canonicalTxHash(resolved, txHash);
-        return "BYBIT-CORRIDOR:" + networkId + ":" + (canonicalHash == null ? "" : canonicalHash);
+    private String correlationId(NetworkId networkId, String txHash) {
+        // RC-9 D1: single source of truth. Pure derivation via CorridorCorrelationKeyFactory so the
+        // corridor id is bit-identical between full rebuild and incremental refresh (Solana stays
+        // case-sensitive base58; EVM/TON are lower-cased).
+        return CorridorCorrelationKeyFactory.corridorKey(networkId, txHash);
     }
 
     private String normalize(String value) {

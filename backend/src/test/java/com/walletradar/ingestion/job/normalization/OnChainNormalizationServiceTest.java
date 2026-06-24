@@ -14,6 +14,7 @@ import com.walletradar.ingestion.pipeline.clarification.CounterpartyEnrichmentSe
 import com.walletradar.ingestion.pipeline.clarification.ProtocolNameEnrichmentService;
 import com.walletradar.ingestion.pipeline.clarification.RegistryBridgeInboundTypeCorrectionService;
 import com.walletradar.ingestion.pipeline.onchain.OnChainNormalizedTransactionBuilder;
+import com.walletradar.lending.application.LendingReceiptIdentityService;
 import com.walletradar.ingestion.pipeline.onchain.PendingRawTransactionQueryService;
 import com.walletradar.ingestion.pipeline.onchain.repair.ExplorerRawOrderingRepairGateway;
 import com.walletradar.ingestion.pipeline.onchain.repair.InternalTransferRawPeerRepairService;
@@ -61,6 +62,8 @@ class OnChainNormalizationServiceTest {
     private RegistryBridgeInboundTypeCorrectionService registryBridgeInboundTypeCorrectionService;
     @Mock
     private AccountingUniverseService accountingUniverseService;
+    @Mock
+    private LendingReceiptIdentityService lendingReceiptIdentityService;
 
     private OnChainNormalizationService service;
 
@@ -81,7 +84,8 @@ class OnChainNormalizationServiceTest {
                 protocolNameEnrichmentService,
                 registryBridgeInboundTypeCorrectionService,
                 counterpartyEnrichmentService,
-                accountingUniverseService
+                accountingUniverseService,
+                lendingReceiptIdentityService
         );
     }
 

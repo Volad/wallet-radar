@@ -83,6 +83,63 @@ class SessionPipelineResumeSchedulerTest {
     }
 
     @Test
+    void resumesStrandedBackfillWhenSyncStatusIsTerminalButCompletionFlagIsStale() {
+        // LINEA stall: session stuck in BACKFILL/RUNNING, a sync_status reached terminal COMPLETE but
+        // its backfillComplete boolean was left false. The watchdog gate must treat terminal status as
+        // authoritative and advance the pipeline instead of returning null forever.
+        UserSession session = session(
+                "session-1",
+                wallet("0xabc", List.of(NetworkId.BASE, NetworkId.LINEA))
+        );
+        UserSession.PipelineState state = new UserSession.PipelineState();
+        state.setStage(UserSession.PipelineStage.BACKFILL);
+        state.setStatus(UserSession.PipelineStatus.RUNNING);
+        state.setUpdatedAt(Instant.now().minusSeconds(3600));
+        session.setPipelineState(state);
+
+        when(userSessionRepository.findAll()).thenReturn(List.of(session));
+        lenient().when(sessionPipelineActivityService.latestFreshActivity(eq("session-1"), any())).thenReturn(java.util.Optional.empty());
+        when(syncStatusRepository.findByWalletAddressIn(List.of("0xabc"))).thenReturn(List.of(
+                syncStatus("0xabc", NetworkId.BASE, true, SyncStatus.SyncStatusValue.COMPLETE),
+                syncStatus("0xabc", NetworkId.LINEA, false, SyncStatus.SyncStatusValue.COMPLETE)
+        ));
+        when(mongoOperations.exists(any(Query.class), eq(RawTransaction.class))).thenReturn(true);
+
+        scheduler().resumeReadySessions();
+
+        assertPublishedEvent(SessionBackfillCompletedEvent.class, event -> {
+            assertThat(event.sessionId()).isEqualTo("session-1");
+            assertThat(event.targetCount()).isEqualTo(2);
+        });
+    }
+
+    @Test
+    void doesNotResumeWhenSyncStatusIsGenuinelyRunningWithIncompleteFlag() {
+        // Guard: a source that is genuinely still fetching (status=RUNNING, backfillComplete=false) must
+        // NOT be treated as complete by the terminal-status robustness net.
+        UserSession session = session(
+                "session-1",
+                wallet("0xabc", List.of(NetworkId.BASE, NetworkId.LINEA))
+        );
+        UserSession.PipelineState state = new UserSession.PipelineState();
+        state.setStage(UserSession.PipelineStage.BACKFILL);
+        state.setStatus(UserSession.PipelineStatus.RUNNING);
+        state.setUpdatedAt(Instant.now().minusSeconds(3600));
+        session.setPipelineState(state);
+
+        when(userSessionRepository.findAll()).thenReturn(List.of(session));
+        lenient().when(sessionPipelineActivityService.latestFreshActivity(eq("session-1"), any())).thenReturn(java.util.Optional.empty());
+        when(syncStatusRepository.findByWalletAddressIn(List.of("0xabc"))).thenReturn(List.of(
+                syncStatus("0xabc", NetworkId.BASE, true, SyncStatus.SyncStatusValue.COMPLETE),
+                syncStatus("0xabc", NetworkId.LINEA, false, SyncStatus.SyncStatusValue.RUNNING)
+        ));
+
+        scheduler().resumeReadySessions();
+
+        verify(applicationEventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
     void integrationOnlySessionCanResumeFromBackfillCompletion() {
         UserSession session = new UserSession();
         session.setId("session-1");
@@ -510,6 +567,17 @@ class SessionPipelineResumeSchedulerTest {
         status.setWalletAddress(walletAddress);
         status.setNetworkId(networkId.name());
         status.setBackfillComplete(complete);
+        return status;
+    }
+
+    private static SyncStatus syncStatus(
+            String walletAddress,
+            NetworkId networkId,
+            boolean complete,
+            SyncStatus.SyncStatusValue statusValue
+    ) {
+        SyncStatus status = syncStatus(walletAddress, networkId, complete);
+        status.setStatus(statusValue);
         return status;
     }
 

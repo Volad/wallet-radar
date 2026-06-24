@@ -93,6 +93,42 @@ class CrossNetworkBridgePairFallbackServiceTest {
     }
 
     @Test
+    @DisplayName("BR-1: discovered BASE ETH -> ZKSYNC ETH pair shares corridor key and stamps counterpartyType=BRIDGE on both legs")
+    void crossNetworkEthPairStampsBridgeCounterpartyTypeOnBothLegs() {
+        NormalizedTransaction outbound = bridgeLeg(
+                "out",
+                OUT_HASH,
+                NetworkId.BASE,
+                NormalizedTransactionType.BRIDGE_OUT,
+                "ETH",
+                "-0.0111",
+                Instant.parse("2026-02-01T10:00:00Z")
+        );
+        NormalizedTransaction inbound = bridgeLeg(
+                "in",
+                IN_HASH,
+                NetworkId.ZKSYNC,
+                NormalizedTransactionType.BRIDGE_IN,
+                "ETH",
+                "0.0111",
+                Instant.parse("2026-02-01T10:20:00Z")
+        );
+        inbound.setMissingDataReasons(new ArrayList<>(List.of("BRIDGE_ON_CHAIN_LEG_NOT_FOUND")));
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(inbound), List.of(outbound));
+
+        int paired = service.reconcileOrphanInbounds(25);
+
+        assertThat(paired).isEqualTo(1);
+        String expectedCorrelation = "bridge:crossnet:" + OUT_HASH.toLowerCase();
+        assertThat(outbound.getCorrelationId()).isEqualTo(expectedCorrelation);
+        assertThat(inbound.getCorrelationId()).isEqualTo(expectedCorrelation);
+        assertThat(outbound.getFlows().getFirst().getCounterpartyType()).isEqualTo(CounterpartyType.BRIDGE);
+        assertThat(inbound.getFlows().getFirst().getCounterpartyType()).isEqualTo(CounterpartyType.BRIDGE);
+    }
+
+    @Test
     @DisplayName("ambiguous cross-network matches are not paired")
     void ambiguousCrossNetworkMatchesAreNotPaired() {
         NormalizedTransaction inbound = bridgeLeg(

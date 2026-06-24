@@ -165,7 +165,13 @@ public record SessionLendingResponse(
             Map<String, BigDecimal> gasByAsset,
             Map<String, BigDecimal> netIncomeByAsset,
             Map<String, String> precisionByAsset,
-            Map<String, String> reasonByAsset
+            Map<String, String> reasonByAsset,
+            Map<String, BigDecimal> supplyPnlUsdByAsset,
+            Map<String, BigDecimal> borrowPnlUsdByAsset,
+            Map<String, BigDecimal> rewardsUsdByAsset,
+            Map<String, BigDecimal> gasUsdByAsset,
+            Map<String, BigDecimal> netIncomeUsdByAsset,
+            Map<String, String> usdPrecisionByAsset
     ) {
     }
 

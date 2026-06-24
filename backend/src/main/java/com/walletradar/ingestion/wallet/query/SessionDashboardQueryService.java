@@ -2,6 +2,7 @@ package com.walletradar.ingestion.wallet.query;
 
 import com.walletradar.accounting.support.AccountingAssetFamilySupport;
 import com.walletradar.accounting.support.AccountingAssetIdentitySupport;
+import com.walletradar.accounting.support.OutOfScopeFamilySupport;
 import com.walletradar.costbasis.domain.AssetLedgerPoint;
 import com.walletradar.costbasis.domain.OnChainBalance;
 import com.walletradar.costbasis.support.AssetLedgerSupport;
@@ -94,6 +95,16 @@ public class SessionDashboardQueryService {
         BigDecimal totalRealisedPnlUsd = scopedLedgerPoints.stream()
                 .map(AssetLedgerPoint::getRealisedPnlDeltaUsd)
                 .filter(Objects::nonNull)
+                .reduce(BigDecimal.ZERO, (left, right) -> left.add(right, MC));
+        // RC-8 (ADR-014): the conservation identity feeds realized PnL on IN-SCOPE families only.
+        // Out-of-scope families (SOL / TON / HYPEREVM — lifecycle ends at the CEX, excluded from
+        // adjustedMTM) must be excluded symmetrically from reportedPnL, otherwise their realized
+        // leaks into conservationDelta. The displayed totalRealisedPnlUsd is unchanged.
+        BigDecimal inScopeRealisedPnlUsd = scopedLedgerPoints.stream()
+                .filter(point -> point.getRealisedPnlDeltaUsd() != null)
+                .filter(point -> !OutOfScopeFamilySupport.isOutOfScopeFamily(
+                        point.getAccountingFamilyIdentity(), point.getAssetSymbol()))
+                .map(AssetLedgerPoint::getRealisedPnlDeltaUsd)
                 .reduce(BigDecimal.ZERO, (left, right) -> left.add(right, MC));
 
         Map<BucketKey, OnChainBalance> latestBalances = latestBalanceByBucket(scopedBalances);
@@ -300,7 +311,7 @@ public class SessionDashboardQueryService {
                 new PortfolioConservationGate.ConservationInputs(
                         universeScope.accountingUniverseId(),
                         portfolioValueUsd,
-                        totalRealisedPnlUsd,
+                        inScopeRealisedPnlUsd,
                         totalUnrealizedPnlUsd,
                         tokenPositions
                 )

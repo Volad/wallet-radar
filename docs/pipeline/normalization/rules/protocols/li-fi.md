@@ -159,6 +159,80 @@ destination bridge-pair evidence for the `LI.FI / Jumper` route family.
 - do not let destination-side `BRIDGE_IN` materialization depend on accidental
   clarification order
 
+## WS-2: Facet / Proxy Recognition (multi-network, address-anchored)
+
+### Problem (pre-WS-1)
+
+`0x89c6340b…` (Permit2Proxy) was only registered for ARBITRUM/BASE, causing 41 LI.FI legs on
+AVALANCHE/ETHEREUM to show `protocolResolutionState=TERMINAL_METADATA_ONLY`.
+
+### WS-1 fix: network coverage
+
+Extended `protocol-registry.json` to cover all deployed LI.FI entry points across 12 networks:
+
+| Address prefix | Name | Networks |
+|---|---|---|
+| `0x1231deb6…` | LI.FI Diamond | ETHEREUM, ARBITRUM, BASE, BSC, AVALANCHE, OPTIMISM, LINEA, ZKSYNC, MANTLE, UNICHAIN, KATANA |
+| `0x89c6340b…` | Permit2Proxy | ARBITRUM, BASE, AVALANCHE, ETHEREUM |
+| `0xe5a89411…` | Permit2Proxy | LINEA |
+| `0x628d684d…` | Permit2Proxy | KATANA |
+| `0xa3681352…` | Permit2Proxy | UNICHAIN |
+| `0x3c6b2e0b…` | Permit2Proxy | PLASMA |
+| `0x6307119078…` | Permit2Proxy | OPTIMISM, BASE |
+| `0x2270a09b…` | Permit2Proxy | OPTIMISM |
+| `0x864b314d…` | GasZip Proxy | UNICHAIN (underlying: GasZip) |
+| `0x943e6e07…` | Multicall / Across SpokePool | UNICHAIN |
+
+All of the above are also registered in `KnownBridgeRouterRegistry` for type-only fallback.
+
+### WS-2 fix: function-key pattern matching (address-anchored)
+
+**`callDiamond*` selectors (address-anchored)**
+
+Selectors `0xd7a08473` (`callDiamondWithEIP2612Signature`) and `0x0193b9fc`
+(`callDiamondWithPermit2`) **must only classify as LI.FI when the `toAddress` is in the
+known LI.FI diamond/proxy registry**. Pattern alone without address anchor → NOT LI.FI.
+
+**`startBridgeTokensVia<Bridge>` and `swapAndStartBridgeTokensVia<Bridge>`**
+
+All facet function prefixes are now recognized, including GasZip, Relay, Across, Hop, CBridge,
+Amarok, Hyperlane, Symbiosis, and future additions via generic prefix guard
+(`startBridgeTokensVia*`, `swapAndStartBridgeTokensVia*`).
+
+**Underlying bridge metadata**
+
+When `functionName` contains a bridge suffix (e.g. `startBridgeTokensViaGasZip`), the
+underlying bridge name (`GasZip`) is preserved in `protocolVersion` or available in calldata
+route tags. `LiFiRouteSupport.hasRouteTag` recognizes: `gaszip`, `gaszipbridge`, `relay`,
+`across`, `cbridgebridge`, `cbridge`, `amarok`, `hyperlane`, `mayan`, `squid`.
+
+**Address-anchor rule (non-negotiable)**
+
+Do NOT attribute LI.FI solely from a `callDiamond*` function name or selector without first
+confirming the target address is in the LI.FI registry. An unverified `callDiamond*` on an
+unknown contract is a protocol design detail, not evidence of LI.FI routing.
+
+## Long-tail bridge coverage (BR-2)
+
+- Beyond protocol-owned linkers (LI.FI / Across / Relay / Mayan), the
+  **protocol-name-agnostic** `CrossNetworkBridgePairFallbackService` provides zero-RPC,
+  evidence-only destination discovery for legs with **no `protocolName`** and long-tail bridge
+  families (Hyperlane router pattern, rhino.fi, EtherFi, MetaMask Bridge, 1inch Fusion), **only**
+  where the counterpart leg already exists in the dataset (same wallet, cross-network, same asset
+  family, amount within ±5%, ≤24h window). It stamps `counterpartyType=BRIDGE` on both legs so the
+  pair renders as a connected corridor edge.
+- Known-router externals are first promoted to `BRIDGE_IN/OUT` by
+  `KnownBridgeRouterExternalTypeCorrectionService` using the registry of trusted bridge-router
+  identities (protocol infrastructure addresses in `protocol-registry.json` /
+  `KnownBridgeRouterRegistry`), never per-transaction hashes.
+- **Own-wallet vs `BRIDGE_OUT` (BR-1).** `OwnWalletBridgeMistypeCorrectionService` reclassifies a
+  `BRIDGE_OUT`/`BRIDGE_IN` whose counterparty is another own/member wallet to `INTERNAL_TRANSFER`
+  (own-wallet move), decided by universe membership — no hardcoded address.
+- **Peg-neutral checked assumption.** An orphan `BRIDGE_IN` with no in-session source is only
+  accepted as a basis-neutral irreducible acquisition when its asset is a USD/EUR-pegged stablecoin
+  (`PegNeutralBridgeAssumptionSupport`); a non-stable orphan is flagged
+  `BRIDGE_ORPHAN_NON_PEG_BASIS_UNVERIFIED` for audit, never silently accepted.
+
 ## Regression Anchors
 
 - `0x4bd7b04bc2864b0012f19300690ae5cacb2806fdcc0b1612664d98b5015b48f6`

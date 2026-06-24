@@ -540,7 +540,11 @@ class LiFiBridgePairLinkServiceTest {
 
         assertThat(destination.getType()).isEqualTo(NormalizedTransactionType.BRIDGE_IN);
         assertThat(destination.getMatchedCounterparty()).isEqualTo(source.getTxHash());
-        assertThat(source.getMatchedCounterparty()).isEqualTo(destination.getTxHash());
+        // Fix A (BR-1): cross-asset 1:1 BRIDGE_OUT must NOT carry matchedCounterparty — USDC→USDT0
+        // is a cross-asset pair (cc=false, single-flow each). Stamping it would route CARRY_OUT through
+        // bridgeSettlementKey() while the BRIDGE_IN drains only "bridge:" keys, orphaning the carry.
+        assertThat(source.getMatchedCounterparty()).isNull();
+        assertThat(source.getContinuityCandidate()).isFalse();
     }
 
     @Test
@@ -1144,6 +1148,111 @@ class LiFiBridgePairLinkServiceTest {
                         tuple(NormalizedLegRole.TRANSFER, "USDC"),
                         tuple(NormalizedLegRole.BUY, "ETH")
                 );
+    }
+
+    @Test
+    @DisplayName("cross-asset LI.FI swap: BRIDGE_OUT source must NOT receive matchedCounterparty when continuityCandidate=false")
+    void crossAssetLiFiSwapBridgeOutSourceMustNotReceiveMatchedCounterparty() {
+        // ETH (ARBITRUM) → WBTC (OPTIMISM): different asset families → cc=false.
+        // A stale matchedCounterparty on the BRIDGE_OUT would route its CARRY_OUT through
+        // bridgeSettlementKey() ("bridge-settlement:") while the BRIDGE_IN drains only "bridge:"
+        // keys — they never match, leaving the CARRY_OUT orphaned (~$968 guard breach).
+        String sourceTxHash = "0xaaaaabbbbbcccccdddddeeeeefffffaaaaa00001111122222333334444455555666";
+        String destinationTxHash = "0x7777788888999990000011111222223333344444555556666677777888889999900";
+
+        RawTransaction sourceRaw = sourceRawTransaction(sourceTxHash, NetworkId.ARBITRUM);
+        NormalizedTransaction source = bridgeOut(sourceTxHash, NetworkId.ARBITRUM, "ETH", null, "-1.0");
+        NormalizedTransaction destination = externalTransferIn(
+                destinationTxHash, NetworkId.OPTIMISM, "WBTC", "0x68f180fcce6836688e9084f035309e29bf0a2095", "0.016"
+        );
+
+        when(liFiStatusGateway.fetchBridgeStatus(sourceTxHash))
+                .thenReturn(Optional.of(new LiFiBridgeStatus(
+                        sourceTxHash,
+                        destinationTxHash,
+                        NetworkId.OPTIMISM,
+                        "DONE",
+                        "COMPLETED"
+                )));
+        when(normalizedTransactionRepository.findAllByTxHashAndNetworkIdAndSource(
+                destinationTxHash,
+                NetworkId.OPTIMISM,
+                NormalizedTransactionSource.ON_CHAIN
+        )).thenReturn(List.of(destination));
+
+        service.link(sourceRaw, source);
+
+        // BRIDGE_OUT must have null matchedCounterparty so CARRY_OUT uses bridgeTransferKey().
+        assertThat(source.getMatchedCounterparty()).isNull();
+        assertThat(source.getContinuityCandidate()).isFalse();
+        assertThat(source.getCorrelationId()).isEqualTo("bridge:lifi:" + sourceTxHash);
+
+        // BRIDGE_IN may retain counterparty for UI display — unaffected by the guard.
+        assertThat(destination.getMatchedCounterparty()).isEqualTo(sourceTxHash);
+        assertThat(destination.getType()).isEqualTo(NormalizedTransactionType.BRIDGE_IN);
+    }
+
+    // ──────────────────── T-03: multi-flow BRIDGE_IN role alignment ────────────────────────────
+
+    @Test
+    @DisplayName("multi-flow BRIDGE_IN (USD₮0 TRANSFER + ETH TRANSFER) linked pair: USD₮0 stays TRANSFER, ETH demoted to BUY")
+    void multiFlowBridgeInLinkedPairAlignsRolesForBridgeSettlement() {
+        // Scenario: USDe BRIDGE_OUT on Arbitrum, destination BRIDGE_IN receives USD₮0 + ETH refund
+        String sourceTxHash = "0x826189abc000111122223333444455556666777788889999aaaabbbbccccddddeee";
+        String destinationTxHash = "0x826189def000111122223333444455556666777788889999aaaabbbbccccddddfff";
+
+        RawTransaction sourceRaw = sourceRawTransaction(sourceTxHash, NetworkId.ARBITRUM);
+        NormalizedTransaction source = tx(
+                sourceTxHash,
+                NetworkId.ARBITRUM,
+                NormalizedTransactionType.BRIDGE_OUT,
+                flow(NormalizedLegRole.TRANSFER, "USDe", "0x5d3a1ff2b6bab83b63cd9ad0787074081a52ef34", "-862.75"),
+                flow(NormalizedLegRole.FEE, "ETH", null, "-0.001")
+        );
+
+        // Destination BRIDGE_IN has two TRANSFER flows: primary USD₮0 + ETH gas refund
+        NormalizedTransaction destination = new NormalizedTransaction();
+        destination.setId(destinationTxHash + ":ARBITRUM:" + WALLET);
+        destination.setTxHash(destinationTxHash);
+        destination.setNetworkId(NetworkId.ARBITRUM);
+        destination.setWalletAddress(WALLET);
+        destination.setSource(NormalizedTransactionSource.ON_CHAIN);
+        destination.setType(NormalizedTransactionType.EXTERNAL_TRANSFER_IN);
+        destination.setFlows(new java.util.ArrayList<>(List.of(
+                flow(NormalizedLegRole.TRANSFER, "USD\u20ae0", "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9", "862.30"),
+                flow(NormalizedLegRole.TRANSFER, "ETH", null, "0.013")
+        )));
+
+        when(liFiStatusGateway.fetchBridgeStatus(sourceTxHash))
+                .thenReturn(Optional.of(new LiFiBridgeStatus(
+                        sourceTxHash,
+                        destinationTxHash,
+                        NetworkId.ARBITRUM,
+                        "DONE",
+                        "COMPLETED"
+                )));
+        when(normalizedTransactionRepository.findAllByTxHashAndNetworkIdAndSource(
+                destinationTxHash,
+                NetworkId.ARBITRUM,
+                NormalizedTransactionSource.ON_CHAIN
+        )).thenReturn(List.of(destination));
+
+        service.link(sourceRaw, source);
+
+        // After alignment: USD₮0 remains TRANSFER (primary bridged asset), ETH demoted to BUY
+        assertThat(destination.getType()).isEqualTo(NormalizedTransactionType.BRIDGE_IN);
+        assertThat(destination.getFlows())
+                .extracting(NormalizedTransaction.Flow::getRole, NormalizedTransaction.Flow::getAssetSymbol)
+                .containsExactlyInAnyOrder(
+                        tuple(NormalizedLegRole.TRANSFER, "USD\u20ae0"),
+                        tuple(NormalizedLegRole.BUY, "ETH")
+                );
+        // Exactly 1 TRANSFER flow → hasSinglePrincipalTransferFlow=true → bridgeSettlementKey non-null
+        long transferFlowCount = destination.getFlows().stream()
+                .filter(f -> f.getRole() == NormalizedLegRole.TRANSFER && f.getQuantityDelta().signum() > 0)
+                .count();
+        assertThat(transferFlowCount).isEqualTo(1);
+        assertThat(destination.getMatchedCounterparty()).isEqualTo(sourceTxHash);
     }
 
     private NormalizedTransaction.Flow flow(

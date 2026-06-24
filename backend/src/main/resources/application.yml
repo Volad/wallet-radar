@@ -19,7 +19,7 @@ walletradar:
   lending:
     market-rates:
       startup-refresh-enabled: true
-      refresh-interval-ms: 86400000
+      refresh-interval-ms: 21600000
       aave-v3:
         ARBITRUM:
           enabled: true
@@ -157,7 +157,9 @@ walletradar:
         chain-id: "137"
         explorer:
           etherscan:
-            base-url: https://api.polygonscan.com
+            # Etherscan V2 unified endpoint (chainid=137). The standalone api.polygonscan.com
+            # API was deprecated and now returns HTML, which broke head-block + txlist resolution.
+            base-url: https://api.etherscan.io
             api-key: ${POLYGON_ETHERSCAN_API_KEY:}
         provider:
           enabled: true

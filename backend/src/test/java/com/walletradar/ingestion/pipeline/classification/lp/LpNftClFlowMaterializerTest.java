@@ -66,17 +66,28 @@ class LpNftClFlowMaterializerTest {
         );
         List<NormalizedTransaction.Flow> base = List.of(flow("USDT0", "226.952468", NormalizedLegRole.TRANSFER));
 
+        // RC-1/RC-5 (ADR-018): the classifier now derives the contract-keyed correlationId and passes
+        // it to enrich(); the receipt symbol is a pure function of that identity, not the protocol slug.
+        String correlationId = LpPositionCorrelationSupport.contractKeyedLifecycleCorrelationId(
+                view,
+                NormalizedTransactionType.LP_EXIT,
+                LpPositionCorrelationSupport.resolvePositionManagerContract(view)
+        );
+
         List<NormalizedTransaction.Flow> enriched = LpNftClFlowMaterializer.enrich(
                 view,
                 legs,
                 NormalizedTransactionType.LP_EXIT,
-                "Velodrome",
+                correlationId,
                 base
         );
 
         assertThat(enriched)
                 .anySatisfy(flow -> {
-                    assertThat(flow.getAssetSymbol()).isEqualTo("LP-RECEIPT:OPTIMISM:VELODROME:1702");
+                    // RC-1 (ADR-018): receipt symbol is keyed by the NFPM contract (rawData.to),
+                    // not the protocol slug, so entry and exit cannot split into two pools.
+                    assertThat(flow.getAssetSymbol())
+                            .isEqualTo("LP-RECEIPT:OPTIMISM:0X46A15B0B27311CEDF172AB29E4F4766FBE7F4364:1702");
                     assertThat(flow.getQuantityDelta()).isEqualByComparingTo("-1");
                     assertThat(flow.getRole()).isEqualTo(NormalizedLegRole.TRANSFER);
                 })

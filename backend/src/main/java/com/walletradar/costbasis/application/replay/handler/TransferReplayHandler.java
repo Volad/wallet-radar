@@ -20,9 +20,11 @@ import com.walletradar.costbasis.application.replay.support.ReplayPendingTransfe
 import com.walletradar.costbasis.application.replay.support.ReplayPendingTransferMatcher;
 import com.walletradar.costbasis.application.replay.support.ReplayTransferClassifier;
 import com.walletradar.costbasis.domain.AssetLedgerPoint;
+import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.ingestion.pipeline.bybit.BybitEarnPrincipalTransferPairer;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -31,9 +33,11 @@ import java.util.Deque;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 
 @Component
+@Slf4j
 public class TransferReplayHandler {
 
     private static final MathContext MC = MathContext.DECIMAL128;
@@ -144,7 +148,15 @@ public class TransferReplayHandler {
                 flowSupport.applyBuy(flow, position);
                 return flowSupport.continuityBasisEffect(transaction, flow);
             }
-            restoreFromContinuityBucket(flow, position, bucket);
+            if (transaction.getType() == NormalizedTransactionType.LENDING_DEPOSIT) {
+                // RC-2: distribute bucket carry by USD value (not raw token quantity).
+                // An unpriced leg with billions of raw units must not absorb all outgoing
+                // basis. Compute USD weight for each inbound leg; give proportion to priced
+                // legs only. If all legs are unpriced, leave basis in the source bucket (WARN).
+                restoreFromBucketLendingDepositUsdWeighted(transaction, flow, position, bucket);
+            } else {
+                restoreFromContinuityBucket(flow, position, bucket);
+            }
             return flowSupport.continuityBasisEffect(transaction, flow);
         }
         if (classifier.isBucketOutbound(transaction, flow)) {
@@ -166,7 +178,7 @@ public class TransferReplayHandler {
         if (classifier.isBucketInbound(transaction, flow)) {
             ContinuityBucket bucket = replayState.continuity().bucket(keyFactory.continuityKey(transaction, flow));
             if (keyFactory.usesWrapperCompositeBucket(transaction)) {
-                restoreFullBucket(flow, position, bucket);
+                restoreFullBucket(transaction, flow, position, bucket);
             } else if (transaction.getType() == NormalizedTransactionType.PROTOCOL_CUSTODY_WITHDRAW
                     && bucket.quantity().signum() == 0) {
                 // PROTOCOL_CUSTODY_WITHDRAW with no matching deposit (empty bucket): the deposit
@@ -175,6 +187,12 @@ public class TransferReplayHandler {
                 // destroys cost basis — treat the principal return as a fresh ACQUIRE so
                 // stablecoin $1/unit logic (or market price) fills the gap.
                 flowSupport.applyBuy(flow, position);
+            } else if (transaction.getType() == NormalizedTransactionType.LENDING_DEPOSIT) {
+                // RC-2: distribute bucket carry by USD value (not raw token quantity).
+                // An unpriced leg with billions of raw units must not absorb all outgoing eToken
+                // basis. Compute USD weight for each inbound leg; give proportion to priced legs
+                // only. If all legs are unpriced, leave basis in the source bucket (WARN).
+                restoreFromBucketLendingDepositUsdWeighted(transaction, flow, position, bucket);
             } else {
                 restoreFromContinuityBucket(flow, position, bucket);
             }
@@ -330,10 +348,13 @@ public class TransferReplayHandler {
             return flowSupport.continuityBasisEffect(transaction, flow);
         }
 
-        // BYBIT-CORRIDOR inbound with no matching carry: Bybit is a CEX so no on-chain CARRY_OUT
-        // will ever arrive to resolve the pending inbound. Apply spot-price acquisition immediately
-        // instead of leaving this as an unresolvable pending entry with zero cost basis.
-        if (classifier.isBybitCexCorridor(transaction)) {
+        // RC-9 D2: spot fallback is legal ONLY for the withdrawal direction (CEX → wallet), where
+        // the released basis sits on the untracked CEX spot ledger. A deposit-direction credit
+        // (wallet → CEX) MUST inherit the on-chain CARRY_OUT; a missing carry there is a
+        // determinism/linking defect, so it routes to the pending queue where the end-of-replay
+        // CorridorBasisConservationGuard can detect the orphaned carry-out instead of fabricating
+        // a spot basis that masks the orphan.
+        if (classifier.isCexWithdrawalCorridorInbound(transaction, flow)) {
             BigDecimal qty = flow.getQuantityDelta();
             BigDecimal acquisitionCost = replayMarketAuthority.resolve(transaction, flow)
                     .map(ReplayMarketAuthority.ResolvedMarketPrice::unitPriceUsd)
@@ -581,6 +602,66 @@ public class TransferReplayHandler {
     }
 
     /**
+     * Returns the USD value of a single flow: {@code valueUsd} if set, otherwise
+     * {@code |quantityDelta| × unitPriceUsd}. Returns {@code null} when the flow is unpriced.
+     */
+    private static BigDecimal computeFlowUsdValue(NormalizedTransaction.Flow flow) {
+        if (flow == null || flow.getQuantityDelta() == null) {
+            return null;
+        }
+        if (flow.getValueUsd() != null && flow.getValueUsd().signum() > 0) {
+            return flow.getValueUsd().abs();
+        }
+        if (flow.getUnitPriceUsd() != null && flow.getUnitPriceUsd().signum() > 0) {
+            return flow.getQuantityDelta().abs().multiply(flow.getUnitPriceUsd(), MC);
+        }
+        return null;
+    }
+
+    /**
+     * Asset identity key for same-asset matching: contract address if available, else symbol.
+     */
+    private static String flowAssetMatchKey(NormalizedTransaction.Flow f) {
+        if (f == null) {
+            return null;
+        }
+        String contract = f.getAssetContract();
+        return (contract != null && !contract.isBlank()) ? contract : f.getAssetSymbol();
+    }
+
+    /**
+     * Sums the USD values of all inbound (positive-qty, non-FEE) flows in the transaction that
+     * share the same asset as {@code targetFlow}. Returns {@code null} when no priced inbound
+     * same-asset flow exists.
+     */
+    private static BigDecimal computeTotalSameAssetInboundUsd(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow targetFlow
+    ) {
+        if (transaction.getFlows() == null) {
+            return computeFlowUsdValue(targetFlow);
+        }
+        String targetKey = flowAssetMatchKey(targetFlow);
+        BigDecimal total = BigDecimal.ZERO;
+        for (NormalizedTransaction.Flow f : transaction.getFlows()) {
+            if (f == null || f.getRole() == NormalizedLegRole.FEE) {
+                continue;
+            }
+            if (f.getQuantityDelta() == null || f.getQuantityDelta().signum() <= 0) {
+                continue;
+            }
+            if (!Objects.equals(targetKey, flowAssetMatchKey(f))) {
+                continue;
+            }
+            BigDecimal usdVal = computeFlowUsdValue(f);
+            if (usdVal != null && usdVal.signum() > 0) {
+                total = total.add(usdVal, MC);
+            }
+        }
+        return total.signum() > 0 ? total : null;
+    }
+
+    /**
      * Cycle/12 / B-EARN-BUNDLE: Handles {@code bybit-it-bundle-v1:*} multi-leg Bybit bundle
      * transfers. Only {@code bybit-it-bundle-v1:} correlationId prefixes enter this path;
      * {@code bybit-collapsed-v1:} and {@code bybit-cross-uid-v1:} bundles do NOT.
@@ -785,17 +866,106 @@ public class TransferReplayHandler {
     }
 
     /**
+     * Rounding tolerance for VAULT_WITHDRAW proportional carry: if
+     * |qty_returned − qty_deposited| / qty_deposited is below this threshold the
+     * difference is treated as dust (same-day round-trip) and the full carry basis is
+     * used without proportional scaling.
+     */
+    private static final BigDecimal VAULT_WITHDRAW_ROUND_TRIP_TOLERANCE = new BigDecimal("0.0001");
+
+    /**
      * For wrapper-composite buckets (VAULT_WITHDRAW, STAKING_WITHDRAW returning a
      * different-denomination receipt), drain the ENTIRE bucket carry instead of a
      * proportional slice. The receipt token (e.g., mevUSDC shares) and the returned asset
      * (USDC) have incompatible quantity scales — proportional slicing yields ~$0 basis.
+     *
+     * <p>VAULT_WITHDRAW exception (RC-3): when the vault returns slightly fewer tokens than
+     * deposited (vault fee / rounding), carrying back the full basis inflates AVCO on each
+     * cycle. Apply a proportional carry: basis = depositedBasis × (returned / deposited),
+     * capped at 1.0 to handle yield (excess quantity enters via the BUY/income path).
+     * If the difference is within {@link #VAULT_WITHDRAW_ROUND_TRIP_TOLERANCE} treat as a
+     * same-day round-trip and use full carry to avoid dust drift.
      */
     private void restoreFullBucket(
+            NormalizedTransaction transaction,
             NormalizedTransaction.Flow flow,
             PositionState position,
             ContinuityBucket bucket
     ) {
         CarryTransfer carry = continuityCarryService.drainFullBucket(bucket, position.assetKey());
+        if (carry == null) {
+            flowSupport.applyUnknownTransfer(flow, position);
+            return;
+        }
+        BigDecimal costBasisToRestore = carry.costBasisUsd();
+
+        // RC-3 / RC-vault-yield: proportional carry for vault/lending withdrawals.
+        //
+        // USD-first path: when the inbound leg carries a USD value (priced token), allocate
+        // the deposited basis across all same-asset inbound flows proportionally by USD value.
+        // This handles the mixed TRANSFER+BUY case (principal return + yield on the same asset)
+        // and the cross-denomination case (share scale differs from underlying scale).
+        //
+        // Quantity-based fallback: for VAULT_WITHDRAW with unpriced tokens, fall back to the
+        // original quantity-ratio approach (RC-3). Preserves existing test contracts.
+        boolean isWithdraw = transaction.getType() == NormalizedTransactionType.VAULT_WITHDRAW
+                || transaction.getType() == NormalizedTransactionType.LENDING_WITHDRAW;
+        if (isWithdraw && carry.costBasisUsd() != null && carry.costBasisUsd().signum() > 0) {
+            BigDecimal thisFlowUsd = computeFlowUsdValue(flow);
+            BigDecimal totalReturnedUsd = computeTotalSameAssetInboundUsd(transaction, flow);
+            if (thisFlowUsd != null && totalReturnedUsd != null && totalReturnedUsd.signum() > 0) {
+                // ratio = min(total_returned_usd / deposited_basis_usd, 1.0)
+                BigDecimal ratio = totalReturnedUsd
+                        .divide(carry.costBasisUsd(), MathContext.DECIMAL64)
+                        .min(BigDecimal.ONE);
+                BigDecimal flowFraction = thisFlowUsd.divide(totalReturnedUsd, MathContext.DECIMAL64);
+                costBasisToRestore = carry.costBasisUsd()
+                        .multiply(ratio, MathContext.DECIMAL64)
+                        .multiply(flowFraction, MathContext.DECIMAL64);
+            } else if (transaction.getType() == NormalizedTransactionType.VAULT_WITHDRAW
+                    && carry.quantity() != null && carry.quantity().signum() > 0) {
+                costBasisToRestore = vaultWithdrawQuantityRatioBasis(carry, flow);
+            }
+        } else if (transaction.getType() == NormalizedTransactionType.VAULT_WITHDRAW
+                && carry.quantity() != null && carry.quantity().signum() > 0) {
+            costBasisToRestore = vaultWithdrawQuantityRatioBasis(carry, flow);
+        }
+
+        flowSupport.restoreToPosition(
+                flow.getQuantityDelta().abs(),
+                position,
+                costBasisToRestore,
+                carry.uncoveredQuantity(),
+                carry.avco()
+        );
+    }
+
+    /**
+     * RC-3 quantity-based fallback: proportional carry for VAULT_WITHDRAW when the returned
+     * quantity differs from the deposited quantity (vault fee or yield). Caps the ratio at 1.0
+     * so excess yield enters at zero cost. Dust differences (within
+     * {@link #VAULT_WITHDRAW_ROUND_TRIP_TOLERANCE}) are treated as same-day round-trips and
+     * the full deposited basis is returned unchanged.
+     */
+    private BigDecimal vaultWithdrawQuantityRatioBasis(CarryTransfer carry, NormalizedTransaction.Flow flow) {
+        BigDecimal qtyReturned = flow.getQuantityDelta().abs();
+        BigDecimal qtyDeposited = carry.quantity();
+        BigDecimal diff = qtyReturned.subtract(qtyDeposited, MC).abs();
+        BigDecimal tolerance = qtyDeposited.multiply(VAULT_WITHDRAW_ROUND_TRIP_TOLERANCE, MC);
+        if (diff.compareTo(tolerance) >= 0) {
+            BigDecimal ratio = qtyReturned.divide(qtyDeposited, MathContext.DECIMAL64)
+                    .min(BigDecimal.ONE);
+            return carry.costBasisUsd().multiply(ratio, MathContext.DECIMAL64);
+        }
+        return carry.costBasisUsd();
+    }
+
+    private void restoreFromContinuityBucket(
+            NormalizedTransaction.Flow flow,
+            PositionState position,
+            ContinuityBucket bucket
+    ) {
+        CarryTransfer carry = continuityCarryService.takeFromBucket(bucket, flow.getQuantityDelta().abs(), position.assetKey());
         if (carry == null) {
             flowSupport.applyUnknownTransfer(flow, position);
             return;
@@ -809,12 +979,137 @@ public class TransferReplayHandler {
         );
     }
 
-    private void restoreFromContinuityBucket(
+    /**
+     * RC-vault-yield: USD-value-weighted bucket restoration for VAULT_WITHDRAW and
+     * LENDING_WITHDRAW with mixed inbound flows (principal TRANSFER + yield BUY).
+     *
+     * <p>When a vault/lending withdrawal returns both a principal TRANSFER leg (e.g., 926 USDC)
+     * and a yield BUY leg (e.g., 73 USDC interest), raw-quantity restoration from the carry
+     * bucket would route the entire deposited basis to whichever leg calls first — typically
+     * inflating AVCO for the TRANSFER leg to an absurd level ($1.072 instead of $1.00).
+     *
+     * <p>Instead, distribute the carry proportionally by USD value so each inbound leg gets only
+     * its fair share of the original deposit basis. Unpriced legs fall through to
+     * {@code applyUnknownTransfer}; if ALL legs are unpriced, fall back to standard quantity
+     * restore to avoid losing carry silently.
+     */
+    private void restoreFromContinuityBucketVaultProportional(
+            NormalizedTransaction transaction,
             NormalizedTransaction.Flow flow,
             PositionState position,
             ContinuityBucket bucket
     ) {
-        CarryTransfer carry = continuityCarryService.takeFromBucket(bucket, flow.getQuantityDelta().abs(), position.assetKey());
+        if (transaction.getFlows() == null || transaction.getFlows().isEmpty()) {
+            restoreFromContinuityBucket(flow, position, bucket);
+            return;
+        }
+
+        BigDecimal totalUsdWeight = BigDecimal.ZERO;
+        BigDecimal currentFlowUsdWeight = BigDecimal.ZERO;
+        for (NormalizedTransaction.Flow f : transaction.getFlows()) {
+            if (f == null
+                    || f.getQuantityDelta() == null
+                    || f.getQuantityDelta().signum() <= 0
+                    || f.getRole() == NormalizedLegRole.FEE) {
+                continue;
+            }
+            BigDecimal weight = BigDecimal.ZERO;
+            if (f.getUnitPriceUsd() != null && f.getUnitPriceUsd().signum() > 0) {
+                weight = f.getQuantityDelta().multiply(f.getUnitPriceUsd(), MC);
+            }
+            totalUsdWeight = totalUsdWeight.add(weight, MC);
+            if (f == flow) {
+                currentFlowUsdWeight = weight;
+            }
+        }
+
+        if (totalUsdWeight.signum() == 0) {
+            restoreFromContinuityBucket(flow, position, bucket);
+            return;
+        }
+
+        if (currentFlowUsdWeight.signum() == 0) {
+            flowSupport.applyUnknownTransfer(flow, position);
+            return;
+        }
+
+        BigDecimal weightFraction = currentFlowUsdWeight.divide(totalUsdWeight, MC);
+        BigDecimal virtualQty = bucket.quantity().multiply(weightFraction, MC);
+        CarryTransfer carry = continuityCarryService.takeFromBucket(bucket, virtualQty, position.assetKey());
+        if (carry == null) {
+            flowSupport.applyUnknownTransfer(flow, position);
+            return;
+        }
+        flowSupport.restoreToPosition(
+                flow.getQuantityDelta().abs(),
+                position,
+                carry.costBasisUsd(),
+                carry.uncoveredQuantity(),
+                carry.avco()
+        );
+    }
+
+    /**
+     * RC-2: USD-value-weighted bucket restoration for LENDING_DEPOSIT inbound legs.
+     *
+     * <p>When a composite bucket holds carry from a LENDING_DEPOSIT principal outbound, and
+     * multiple REALLOCATE_IN legs (e.g., eUSDC-2 at $1/unit + an unpriced internal ERC-20
+     * at 4.5 billion units) compete to restore from that bucket, raw-quantity weighting
+     * routes virtually all basis to the unpriced billion-unit leg. Instead, basis is
+     * distributed proportionally by USD value (qty × unitPriceUsd). Unpriced legs receive
+     * $0 carry. If ALL legs are unpriced, the basis is left in the source bucket and a
+     * warning is emitted rather than silently destroying it.
+     */
+    private void restoreFromBucketLendingDepositUsdWeighted(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow,
+            PositionState position,
+            ContinuityBucket bucket
+    ) {
+        if (transaction.getFlows() == null || transaction.getFlows().isEmpty()) {
+            restoreFromContinuityBucket(flow, position, bucket);
+            return;
+        }
+
+        // Compute USD weights for all inbound (positive qty, non-fee) flows in this transaction.
+        BigDecimal totalUsdWeight = BigDecimal.ZERO;
+        BigDecimal currentFlowUsdWeight = BigDecimal.ZERO;
+        for (NormalizedTransaction.Flow f : transaction.getFlows()) {
+            if (f == null
+                    || f.getQuantityDelta() == null
+                    || f.getQuantityDelta().signum() <= 0) {
+                continue;
+            }
+            BigDecimal weight = BigDecimal.ZERO;
+            if (f.getUnitPriceUsd() != null && f.getUnitPriceUsd().signum() > 0) {
+                weight = f.getQuantityDelta().multiply(f.getUnitPriceUsd(), MC);
+            }
+            totalUsdWeight = totalUsdWeight.add(weight, MC);
+            if (f == flow) {
+                currentFlowUsdWeight = weight;
+            }
+        }
+
+        if (totalUsdWeight.signum() == 0) {
+            // All inbound legs are unpriced: leave basis in source pool to avoid silent destruction.
+            log.warn(
+                    "LENDING_DEPOSIT_USD_WEIGHT_ZERO txId={} all inbound legs unpriced; basis left in source bucket",
+                    transaction.getId()
+            );
+            flowSupport.applyUnknownTransfer(flow, position);
+            return;
+        }
+
+        if (currentFlowUsdWeight.signum() == 0) {
+            // This leg is unpriced: it receives no carry from the bucket.
+            flowSupport.applyUnknownTransfer(flow, position);
+            return;
+        }
+
+        // USD-weighted virtual quantity: scale current bucket by this leg's weight fraction.
+        BigDecimal weightFraction = currentFlowUsdWeight.divide(totalUsdWeight, MC);
+        BigDecimal virtualQty = bucket.quantity().multiply(weightFraction, MC);
+        CarryTransfer carry = continuityCarryService.takeFromBucket(bucket, virtualQty, position.assetKey());
         if (carry == null) {
             flowSupport.applyUnknownTransfer(flow, position);
             return;

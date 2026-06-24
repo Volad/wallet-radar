@@ -8,14 +8,21 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.ingestion.pipeline.classification.ClassificationDecision;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassificationContext;
 import com.walletradar.ingestion.pipeline.classification.lp.LpNftClFlowMaterializer;
+import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryEntry;
+import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryService;
+import com.walletradar.ingestion.pipeline.classification.support.LpPositionCorrelationSupport;
 import com.walletradar.ingestion.pipeline.classification.support.LpPositionLifecycleSupport;
+import com.walletradar.ingestion.pipeline.classification.support.LpStakingWrapperResolver;
 import com.walletradar.ingestion.pipeline.classification.support.OnChainClassificationSupport;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.core.Ordered;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
-import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * LP family classifier for clarified NFT-backed LP entry paths.
@@ -33,6 +40,21 @@ public class LpClassifier implements OnChainFamilyClassifier {
 
     private static final String ROUTE_SINGLE_SELECTOR = "0xb94c3609";
     private static final String MULTICALL_SELECTOR = "0xac9650d8";
+    private static final Logger log = LoggerFactory.getLogger(LpClassifier.class);
+
+    /** Dedup set for the one-time "LP NFPM missing from registry" coverage warning (observability only). */
+    private static final Set<String> WARNED_UNREGISTERED_NFPMS = ConcurrentHashMap.newKeySet();
+
+    private final ProtocolRegistryService protocolRegistryService;
+    private final LpStakingWrapperResolver lpStakingWrapperResolver;
+
+    public LpClassifier(
+            ProtocolRegistryService protocolRegistryService,
+            LpStakingWrapperResolver lpStakingWrapperResolver
+    ) {
+        this.protocolRegistryService = protocolRegistryService;
+        this.lpStakingWrapperResolver = lpStakingWrapperResolver;
+    }
 
     @Override
     public OnChainClassificationInsertionPoint insertionPoint() {
@@ -59,7 +81,24 @@ public class LpClassifier implements OnChainFamilyClassifier {
 
         String tokenId = LpPositionLifecycleSupport.extractErc721TokenIdForWallet(context.view());
 
-        if (tokenId == null) {
+        // RC-1 (ADR-018): identity is keyed by the NFPM contract (rawData.to), never the protocol
+        // slug. The slug is display-only, resolved from the registry by contract — an unrecognized
+        // V3-interface NFPM must NOT be silently labeled `uniswap`.
+        // RC-5: if the interacted contract is a known staking/farming wrapper, canonicalize it to the
+        // underlying NFPM so a staked position shares the single (network, NFPM, tokenId) identity.
+        String resolvedContract = LpPositionCorrelationSupport.resolvePositionManagerContract(context.view());
+        String canonicalContract = lpStakingWrapperResolver.canonicalPositionManager(
+                context.view().networkId(),
+                resolvedContract
+        );
+        // Display-label resolution (also emits the one-time unregistered-NFPM coverage warning).
+        resolveDisplayProtocol(context, canonicalContract);
+        String correlationId = tokenId == null
+                ? null
+                : LpPositionCorrelationSupport.contractKeyedCorrelationId(
+                        context.view().networkId(), canonicalContract, tokenId);
+
+        if (tokenId == null || correlationId == null) {
             return Optional.of(new ClassificationDecision(
                     NormalizedTransactionType.LP_ENTRY,
                     NormalizedTransactionStatus.NEEDS_REVIEW,
@@ -77,17 +116,12 @@ public class LpClassifier implements OnChainFamilyClassifier {
             ));
         }
 
-        String networkName = context.view().networkId() != null
-                ? context.view().networkId().name().toLowerCase(Locale.ROOT)
-                : "unknown";
-        String correlationId = "lp-position:" + networkName + ":uniswap:" + tokenId;
-
         return Optional.of(new ClassificationDecision(
                 NormalizedTransactionType.LP_ENTRY,
                 OnChainClassificationSupport.initialStatus(context.view(), NormalizedTransactionType.LP_ENTRY, ConfidenceLevel.MEDIUM),
                 ClassificationSource.HEURISTIC,
                 ConfidenceLevel.MEDIUM,
-                enrichedFlows(context, NormalizedTransactionType.LP_ENTRY, "uniswap"),
+                enrichedFlows(context, NormalizedTransactionType.LP_ENTRY, correlationId),
                 List.of(),
                 correlationId,
                 null,
@@ -99,14 +133,43 @@ public class LpClassifier implements OnChainFamilyClassifier {
         ));
     }
 
+    /**
+     * Resolves the display-only protocol label from the registry by the canonical (wrapper-resolved)
+     * NFPM contract. RC-1: never default to {@code uniswap}; an unregistered V3-interface NFPM yields
+     * {@code null} (contract-derived identity already keys the pool) plus a one-time coverage warning
+     * so the registry can be extended.
+     */
+    private String resolveDisplayProtocol(OnChainClassificationContext context, String canonicalContract) {
+        Optional<ProtocolRegistryEntry> entry = protocolRegistryService.lookup(
+                context.view().networkId(),
+                canonicalContract
+        );
+        if (entry.isPresent() && entry.get().protocolName() != null) {
+            return entry.get().protocolName();
+        }
+        warnUnregisteredNfpmOnce(context, canonicalContract);
+        return null;
+    }
+
+    private void warnUnregisteredNfpmOnce(OnChainClassificationContext context, String contract) {
+        if (contract == null) {
+            return;
+        }
+        String network = context.view().networkId() == null ? "unknown" : context.view().networkId().name();
+        if (WARNED_UNREGISTERED_NFPMS.add(network + ":" + contract)) {
+            log.warn("LP NFPM missing from protocol registry (identity stays contract-keyed): network={} contract={}",
+                    network, contract);
+        }
+    }
+
     private static List<NormalizedTransaction.Flow> enrichedFlows(
             OnChainClassificationContext context,
             NormalizedTransactionType type,
-            String protocolName
+            String correlationId
     ) {
         List<NormalizedTransaction.Flow> base = OnChainClassificationSupport.toFlows(
                 context.movementLegs(), type
         );
-        return LpNftClFlowMaterializer.enrich(context.view(), context.movementLegs(), type, protocolName, base);
+        return LpNftClFlowMaterializer.enrich(context.view(), context.movementLegs(), type, correlationId, base);
     }
 }

@@ -210,6 +210,23 @@ public class GenericFlowReplayEngine {
         if (!permitUncoveredFallback) {
             return Optional.empty();
         }
+        if (transaction != null
+                && CanonicalAssetCatalog.isCrossNetworkPriceResolvable(flow.getAssetSymbol())) {
+            // RC-3 (B-ETH-03): a canonical, cross-network-priceable asset (e.g. ETH on an
+            // ETH-native L2 such as LINEA) that still resolved no quote here is an incomplete
+            // pricing-history gap, not a real $0 acquisition. It is routed to the uncovered /
+            // incomplete-history (PENDING) state below — markUnresolved sets hasIncompleteHistory
+            // / hasUnresolvedFlags — so the inbound is surfaced for review instead of silently
+            // diluting AVCO toward $0 with fabricated covered basis.
+            log.warn(
+                    "REPLAY_INBOUND_UNRESOLVED_CANONICAL wallet={} network={} asset={} qty={} "
+                            + "reason=no_cross_network_quote route=PENDING",
+                    position.assetKey().walletAddress(),
+                    transaction.getNetworkId(),
+                    flow.getAssetSymbol(),
+                    quantity
+            );
+        }
         position.setQuantity(position.quantity().add(quantity));
         position.setUncoveredQuantity(position.uncoveredQuantity().add(quantity));
         markUnresolved(position);
@@ -560,6 +577,32 @@ public class GenericFlowReplayEngine {
         }
         ResolvedSpotPrice resolved = resolveInboundSpotUnitPrice(transaction, flow);
         if (resolved == null) {
+            // RC-7: a bridge / corridor CARRY_IN whose source carry is empty (no covering basis)
+            // must never settle silently at avco $0. The covering carry already booked this leg as
+            // uncovered (markUnresolved); when the leg is a cross-network-priceable canonical asset
+            // (e.g. ETH on an ETH-native L2 such as LINEA) and neither a flow price nor a
+            // market-at-timestamp quote (incl. the cross-network canonical fallback in
+            // ReplayMarketAuthority.resolve) could be resolved, route it explicitly to PENDING /
+            // incomplete-history — symmetric with RC-3's REPLAY_INBOUND_UNRESOLVED_CANONICAL in
+            // materializePendingInbound. No double application with F-5(a): the spot promotion above
+            // is skipped precisely because no price resolved, so this only flags state.
+            // Guard against double-flagging: an inbound-first bridge/corridor leg is already marked
+            // unresolved by materializePendingInbound (RC-3) and is cleared by exactly one
+            // resolveTemporaryUnresolved when its late carry attaches. Re-marking here would inflate
+            // unresolvedFlagCount so the single decrement can no longer clear it. Only flag a leg that
+            // is NOT already pending — i.e. a genuinely empty-source carry-in with no covering carry.
+            if (CanonicalAssetCatalog.isCrossNetworkPriceResolvable(flow.getAssetSymbol())
+                    && !position.hasIncompleteHistory()) {
+                markUnresolved(position);
+                log.warn(
+                        "REPLAY_INBOUND_UNRESOLVED_CANONICAL wallet={} network={} asset={} qty={} "
+                                + "reason=no_cross_network_quote route=PENDING source=carry_in",
+                        position.assetKey().walletAddress(),
+                        transaction == null ? null : transaction.getNetworkId(),
+                        flow.getAssetSymbol(),
+                        coveredPromotion
+                );
+            }
             return;
         }
         BigDecimal addedBasis = coveredPromotion.multiply(resolved.unitPriceUsd(), MC);

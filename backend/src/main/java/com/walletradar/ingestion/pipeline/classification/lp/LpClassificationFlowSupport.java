@@ -20,9 +20,9 @@ public final class LpClassificationFlowSupport {
             OnChainRawTransactionView view,
             List<RawLeg> movementLegs,
             NormalizedTransactionType type,
-            String protocolName
+            String correlationId
     ) {
         List<NormalizedTransaction.Flow> baseFlows = ParityFlowSupport.flows(view, movementLegs, type);
-        return LpNftClFlowMaterializer.enrich(view, movementLegs, type, protocolName, baseFlows);
+        return LpNftClFlowMaterializer.enrich(view, movementLegs, type, correlationId, baseFlows);
     }
 }

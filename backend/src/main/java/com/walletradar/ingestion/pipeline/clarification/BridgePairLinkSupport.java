@@ -205,7 +205,10 @@ public final class BridgePairLinkSupport {
                 flow.setCounterpartyAddress(bridgeAddress);
                 changed = true;
             }
-            if (!hasText(flow.getCounterpartyType())) {
+            // RC-4 (ADR-027): a proven linked LiFi/bridge corridor inbound is a BRIDGE
+            // counterparty, not the relayer EOA. Overwrite an UNKNOWN_EOA stamp (and an absent
+            // type) so corridor matching (RC-2) is unambiguous; never downgrade a stronger type.
+            if (shouldTypeAsBridge(flow.getCounterpartyType())) {
                 flow.setCounterpartyType(CounterpartyType.BRIDGE);
                 changed = true;
             }
@@ -214,6 +217,44 @@ public final class BridgePairLinkSupport {
             FlowCounterpartySupport.applyTransactionCounterparty(destination);
             if (now != null) {
                 destination.setUpdatedAt(now);
+            }
+        }
+        return changed;
+    }
+
+    private static boolean shouldTypeAsBridge(String currentType) {
+        return !hasText(currentType)
+                || CounterpartyType.UNKNOWN_EOA.equals(currentType)
+                || CounterpartyType.UNKNOWN_CONTRACT.equals(currentType)
+                || CounterpartyType.GENUINE_MISSING_SOURCE.equals(currentType);
+    }
+
+    /**
+     * RC-12 BR-1: stamps {@code counterpartyType=BRIDGE} on a leg's principal flows so a linked
+     * cross-network corridor renders as a connected bridge edge on the dashboard chart. Never
+     * downgrades a stronger established counterparty type (CEX/PROTOCOL/PERSONAL_WALLET).
+     */
+    public static boolean stampBridgePrincipalCounterpartyType(NormalizedTransaction transaction, Instant now) {
+        if (transaction == null || transaction.getFlows() == null || transaction.getFlows().isEmpty()) {
+            return false;
+        }
+        boolean changed = false;
+        for (Flow flow : transaction.getFlows()) {
+            if (flow == null || flow.getRole() == NormalizedLegRole.FEE) {
+                continue;
+            }
+            if (flow.getQuantityDelta() == null || flow.getQuantityDelta().signum() == 0) {
+                continue;
+            }
+            if (shouldTypeAsBridge(flow.getCounterpartyType())) {
+                flow.setCounterpartyType(CounterpartyType.BRIDGE);
+                changed = true;
+            }
+        }
+        if (changed) {
+            FlowCounterpartySupport.applyTransactionCounterparty(transaction);
+            if (now != null) {
+                transaction.setUpdatedAt(now);
             }
         }
         return changed;

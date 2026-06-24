@@ -23,6 +23,12 @@ Fluid vault `operate`, wrapper NFT/cast supply, borrow, withdraw, payback on sup
 
 Full-receipt recovery reruns reclassification; not a read-time RPC path.
 
+## Receipt identity
+
+Fluid receipt tickers use `f{Underlying}` (e.g. `fUSDC`, `fWETH`). Many flows surface the **underlying** directly (`USDC`, `USDT0`); identity then comes from the vault contract via `LendingReceiptIdentityService` (registry + derived index).
+
+**Market key:** `vault-{receiptOrVaultContract[2..10]}` — history and balance paths share `LendingMarketKeyResolver` (not static `vault-account`). See [ADR-035](../../../../adr/ADR-035-lending-receipt-identity-resolver.md) and [ADR-036](../../../../adr/ADR-036-contract-first-lending-market-key-and-live-debt.md).
+
 ## Correlation rules
 
 Vault address + NFT id → deterministic position/lifecycle key.

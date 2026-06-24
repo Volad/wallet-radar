@@ -4,6 +4,7 @@ import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
@@ -132,6 +133,57 @@ class ReplayTransferClassifierTest {
 
         assertThat(classifier.isBucketOutbound(tx, tx.getFlows().get(0))).isTrue();
         assertThat(classifier.isBucketInbound(tx, tx.getFlows().get(1))).isTrue();
+    }
+
+    @Test
+    @DisplayName("RC-9 D2: a Bybit-source corridor leg is a deposit-direction corridor (spot forbidden)")
+    void bybitSourceCorridorIsDepositDirection() {
+        NormalizedTransaction deposit = corridorLeg(
+                NormalizedTransactionSource.BYBIT, "BYBIT:33625378:FUND", "3.06", "0xwallet");
+
+        assertThat(classifier.isCexDepositCorridor(deposit)).isTrue();
+        assertThat(classifier.isCexWithdrawalCorridorInbound(deposit, deposit.getFlows().getFirst())).isFalse();
+    }
+
+    @Test
+    @DisplayName("RC-9 D2: an on-chain corridor credit with a Bybit counterpart is a withdrawal inbound (spot legal)")
+    void onChainCorridorCreditWithBybitEndpointIsWithdrawalInbound() {
+        NormalizedTransaction withdrawalIn = corridorLeg(
+                NormalizedTransactionSource.ON_CHAIN, "0xwallet", "3.06", "BYBIT:33625378:FUND");
+
+        assertThat(classifier.isCexWithdrawalCorridorInbound(withdrawalIn, withdrawalIn.getFlows().getFirst())).isTrue();
+        assertThat(classifier.isCexDepositCorridor(withdrawalIn)).isFalse();
+    }
+
+    @Test
+    @DisplayName("RC-9 D2 (T-4 symmetry): an on-chain↔on-chain corridor credit is neither direction (no spot)")
+    void onChainToOnChainCorridorIsNeitherDirection() {
+        NormalizedTransaction onChainIn = corridorLeg(
+                NormalizedTransactionSource.ON_CHAIN, "0xwallet", "3.06", "0xotherwallet");
+
+        assertThat(classifier.isCexWithdrawalCorridorInbound(onChainIn, onChainIn.getFlows().getFirst())).isFalse();
+        assertThat(classifier.isCexDepositCorridor(onChainIn)).isFalse();
+    }
+
+    private static NormalizedTransaction corridorLeg(
+            NormalizedTransactionSource source,
+            String wallet,
+            String signedQty,
+            String matchedCounterparty
+    ) {
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setSource(source);
+        tx.setType(NormalizedTransactionType.INTERNAL_TRANSFER);
+        tx.setWalletAddress(wallet);
+        tx.setCorrelationId("BYBIT-CORRIDOR:MANTLE:0xabc");
+        tx.setContinuityCandidate(true);
+        tx.setMatchedCounterparty(matchedCounterparty);
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(NormalizedLegRole.TRANSFER);
+        flow.setAssetSymbol("ETH");
+        flow.setQuantityDelta(new BigDecimal(signedQty));
+        tx.setFlows(List.of(flow));
+        return tx;
     }
 
     private static NormalizedTransaction wrapperTx(

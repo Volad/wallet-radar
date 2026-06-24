@@ -122,6 +122,12 @@ public class OnChainInternalTransferPairRepairService {
             String correlationId,
             Instant now
     ) {
+        // RC-9 D1: never overwrite an established shared corridor correlation with a generic
+        // internal-tx: key. The orphan candidate filter already excludes corridor rows (they carry
+        // a non-blank corrId), but this guard makes the invariant explicit on the write path.
+        if (CorridorCorrelationKeyFactory.isCorridorKey(transaction.getCorrelationId())) {
+            return false;
+        }
         boolean changed = false;
         if (!Boolean.TRUE.equals(transaction.getContinuityCandidate())) {
             transaction.setContinuityCandidate(true);

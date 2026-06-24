@@ -256,6 +256,69 @@ class AddressPoisoningDetectorTest {
         verify(normalizedTransactionRepository, never()).saveAll(any());
     }
 
+    @Test
+    @DisplayName("SF-2: outbound transfer to a vanity look-alike of a real counterparty is excluded")
+    void mirroredOutboundVanityIsExcluded() {
+        String realCp = "0x6aea6b72aaaaaaaaaaaaaaaaaaaaaaaaaaaa63c6";
+        String spoofCp = "0x6aeaffffffffffffffffffffffffffffffff63c6"; // same 6aea:63c6 fingerprint, different middle
+        Set<String> realCounterparties = Set.of(realCp.toLowerCase());
+        Set<String> realFingerprints = Set.of(AddressPoisoningDetector.fingerprint(realCp));
+
+        NormalizedTransaction tx = externalTransferOut(spoofCp, "0xfakeusdc", "USDC", "-107.315094", null);
+
+        boolean result = detector.isMirroredOutboundSpoof(tx, Set.of(), realCounterparties, realFingerprints);
+        assertThat(result).isTrue();
+    }
+
+    @Test
+    @DisplayName("SF-2: legitimate outbound to a real counterparty (priced asset) is NOT excluded")
+    void legitimateOutboundNotExcluded() {
+        String realCp = "0x6aea6b72aaaaaaaaaaaaaaaaaaaaaaaaaaaa63c6";
+        Set<String> realCounterparties = Set.of(realCp.toLowerCase());
+        Set<String> realFingerprints = Set.of(AddressPoisoningDetector.fingerprint(realCp));
+
+        // Exact real counterparty with a priced leg -> not a poison look-alike.
+        NormalizedTransaction tx = externalTransferOut(realCp, "0xrealusdc", "USDC", "-107.315094", new BigDecimal("1.00"));
+
+        boolean result = detector.isMirroredOutboundSpoof(tx, Set.of(), realCounterparties, realFingerprints);
+        assertThat(result).isFalse();
+    }
+
+    @Test
+    @DisplayName("SF-2: outbound whose counterparty fingerprint matches nothing real is NOT excluded")
+    void unrelatedOutboundNotExcluded() {
+        String realCp = "0x6aea6b72aaaaaaaaaaaaaaaaaaaaaaaaaaaa63c6";
+        Set<String> realCounterparties = Set.of(realCp.toLowerCase());
+        Set<String> realFingerprints = Set.of(AddressPoisoningDetector.fingerprint(realCp));
+
+        String unrelated = "0x1111000000000000000000000000000000002222";
+        NormalizedTransaction tx = externalTransferOut(unrelated, "0xfakeusdc", "USDC", "-5", null);
+
+        boolean result = detector.isMirroredOutboundSpoof(tx, Set.of(), realCounterparties, realFingerprints);
+        assertThat(result).isFalse();
+    }
+
+    private static NormalizedTransaction externalTransferOut(
+            String counterparty, String assetContract, String assetSymbol, String quantity, BigDecimal unitPriceUsd
+    ) {
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setId(counterparty);
+        tx.setSource(NormalizedTransactionSource.ON_CHAIN);
+        tx.setNetworkId(NetworkId.BASE);
+        tx.setType(NormalizedTransactionType.EXTERNAL_TRANSFER_OUT);
+        tx.setCounterpartyAddress(counterparty);
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(NormalizedLegRole.SELL);
+        flow.setAssetContract(assetContract);
+        flow.setAssetSymbol(assetSymbol);
+        flow.setQuantityDelta(new BigDecimal(quantity));
+        flow.setUnitPriceUsd(unitPriceUsd);
+        flow.setCounterpartyAddress(counterparty);
+        tx.setFlows(new ArrayList<>(List.of(flow)));
+        tx.setMissingDataReasons(new ArrayList<>());
+        return tx;
+    }
+
     private boolean detected(NormalizedTransaction tx) {
         return detector.isPoisoningDust(tx, wallets, fullFingerprints, suffixes, prefixes,
                 Set.of(), Set.of());

@@ -20,7 +20,18 @@ public final class LiFiRouteSupport {
             "gaszip",
             "jumper.exchange",
             "lifiadapter",
-            "lifiadapterv2"
+            "lifiadapterv2",
+            // WS-2: additional LI.FI underlying bridge identifiers
+            "cbridgebridge",
+            "cbridge",
+            "amarok",
+            "amarokbridge",
+            "hyperlane",
+            "hyperlanebridge",
+            "mayanbridge",
+            "mayan",
+            "squidbridge",
+            "squid"
     );
 
     private LiFiRouteSupport() {

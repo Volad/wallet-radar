@@ -308,23 +308,78 @@ class ReplayPendingTransferKeyFactoryTest {
     }
 
     @Test
-    @DisplayName("bybit-collapsed-v1: FUND/EARN pair uses earn-carry FIFO key (EARN path must stay on FIFO)")
-    void bybitCollapsedFundEarnPairUsesEarnCarryFifoKey() {
-        // FUND→EARN collapsed pairs must fall through to isBybitEarnInternalTransfer (EARN wallet)
-        // so they use the earn-carry FIFO queue, not corr-family:
+    @DisplayName("bybit-collapsed-v1: FUND/EARN pair uses corr-family key (both legs must share same queue)")
+    void bybitCollapsedFundEarnPairUsesCorrFamilyKey() {
+        // FUND→EARN collapsed pairs have continuityCandidate=true and isBybitEarnInternalTransfer
+        // now excludes bybit-collapsed-v1: corrIds. Both the FUND debit and the EARN credit
+        // route to corr-family: via the continuityCandidate path so they share the same queue.
         NormalizedTransaction fundOut = bybitInternalTransfer(
                 "BYBIT:33625378:FUND", "BYBIT:33625378:EARN",
                 "bybit-collapsed-v1:ondo-test-collapsed",
                 "ONDO", "-100"
         );
         fundOut.setContinuityCandidate(true);
+        NormalizedTransaction earnIn = bybitInternalTransfer(
+                "BYBIT:33625378:EARN", "BYBIT:33625378:FUND",
+                "bybit-collapsed-v1:ondo-test-collapsed",
+                "ONDO", "100"
+        );
+        earnIn.setContinuityCandidate(true);
 
-        var key = factory.transferKey(fundOut, fundOut.getFlows().get(0));
+        var fundKey = factory.transferKey(fundOut, fundOut.getFlows().get(0));
+        var earnKey = factory.transferKey(earnIn, earnIn.getFlows().get(0));
 
+        assertThat(fundKey).isNotNull();
+        assertThat(fundKey.value()).startsWith("corr-family:bybit-collapsed-v1:");
+        assertThat(fundKey.value()).doesNotContain("bybit-earn-carry");
+        assertThat(earnKey).isNotNull();
+        assertThat(earnKey.value()).startsWith("corr-family:bybit-collapsed-v1:");
+        assertThat(fundKey).isEqualTo(earnKey);
+        assertThat(factory.usesBybitVenueInternalCarryQueue(fundOut)).isFalse();
+        assertThat(factory.usesBybitVenueInternalCarryQueue(earnIn)).isFalse();
+    }
+
+    @Test
+    @DisplayName("bybit-collapsed-v1: corrId returns false from isBybitEarnInternalTransfer even for EARN wallet")
+    void bybitCollapsedV1CorrectlyExcludedFromEarnInternalTransferCheck() {
+        // Regression guard: bybit-collapsed-v1: must be excluded from the EARN FIFO queue
+        // so that FUND→EARN collapsed pairs route to corr-family: (matching their UTA debit).
+        NormalizedTransaction earnCredit = bybitInternalTransfer(
+                "BYBIT:33625378:EARN", "BYBIT:33625378:FUND",
+                "bybit-collapsed-v1:abc",
+                "USDT", "153.63"
+        );
+        earnCredit.setContinuityCandidate(true);
+
+        assertThat(factory.usesBybitVenueInternalCarryQueue(earnCredit)).isFalse();
+        var key = factory.transferKey(earnCredit, earnCredit.getFlows().get(0));
         assertThat(key).isNotNull();
-        assertThat(key.value()).startsWith("bybit-earn-carry:");
-        assertThat(key.value()).doesNotContain("corr-family");
-        assertThat(factory.usesBybitVenueInternalCarryQueue(fundOut)).isTrue();
+        assertThat(key.value()).startsWith("corr-family:bybit-collapsed-v1:abc:");
+    }
+
+    @Test
+    @DisplayName("bybit-collapsed-v1: UTA/FUND pair — usesBybitVenueInternalCarryQueue returns false even when counterparty is same Bybit UID")
+    void bybitCollapsedV1UtaFundDoesNotUseVenueInternalCarryQueue() {
+        // After WS-3, FUND↔UTA collapsed pairs get real counterparties (not MULTI).
+        // isBybitSameUidInternalTransfer must still return false for bybit-collapsed-v1: so that
+        // permitUncoveredFallback=true and FUND inbounds enqueue even without a market price.
+        NormalizedTransaction fundIn = bybitInternalTransfer(
+                "BYBIT:33625378:FUND", "BYBIT:33625378:UTA",
+                "bybit-collapsed-v1:cafe0011cafe0022",
+                "USDC", "901.50"
+        );
+        fundIn.setContinuityCandidate(true);
+
+        assertThat(factory.usesBybitVenueInternalCarryQueue(fundIn)).isFalse();
+
+        NormalizedTransaction utaOut = bybitInternalTransfer(
+                "BYBIT:33625378:UTA", "BYBIT:33625378:FUND",
+                "bybit-collapsed-v1:cafe0011cafe0022",
+                "USDC", "-901.50"
+        );
+        utaOut.setContinuityCandidate(true);
+
+        assertThat(factory.usesBybitVenueInternalCarryQueue(utaOut)).isFalse();
     }
 
     @Test
@@ -447,6 +502,112 @@ class ReplayPendingTransferKeyFactoryTest {
                 transferFlow("AETHUSDC", "0x98c23e9d8f34fefb1b7bd6a91b7ff122f4e16f5c", "1000")
         )));
         return tx;
+    }
+
+    @Test
+    @DisplayName("cross-asset BRIDGE_IN (cc=false) with USD stablecoin + ETH gas refund: hasSinglePrincipal=true → settlement key produced")
+    void crossAssetBridgeInWithEthGasRefundProducesSettlementKey() {
+        NormalizedTransaction bridgeIn = baseTransaction(NormalizedTransactionType.BRIDGE_IN);
+        bridgeIn.setCorrelationId("bridge:lifi:0x8b471042fca");
+        bridgeIn.setMatchedCounterparty("0x8b471042fca");
+        bridgeIn.setContinuityCandidate(false);
+        NormalizedTransaction.Flow usdtFlow = transferFlow("USD\u20ae0", "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9", "862.83");
+        NormalizedTransaction.Flow ethFlow = transferFlow("ETH", null, "0.013689");
+        bridgeIn.setFlows(new java.util.ArrayList<>(List.of(usdtFlow, ethFlow)));
+
+        // settlement key must be non-null: ETH is treated as gas refund, USD₮0 is the single principal
+        var key = factory.bridgeSettlementKey(bridgeIn, usdtFlow);
+        assertThat(key).isNotNull();
+        assertThat(key.value()).isEqualTo("bridge-settlement:bridge:lifi:0x8b471042fca");
+    }
+
+    @Test
+    @DisplayName("cross-asset BRIDGE_IN (cc=false) with two stablecoin principals: settlement key null (ambiguous)")
+    void crossAssetBridgeInWithTwoStablecoinsSettlementKeyIsNull() {
+        NormalizedTransaction bridgeIn = baseTransaction(NormalizedTransactionType.BRIDGE_IN);
+        bridgeIn.setCorrelationId("bridge:lifi:0xambig");
+        bridgeIn.setMatchedCounterparty("0xambig");
+        bridgeIn.setContinuityCandidate(false);
+        NormalizedTransaction.Flow usdcFlow = transferFlow("USDC", null, "100");
+        NormalizedTransaction.Flow usdtFlow = transferFlow("USDT", null, "100");
+        bridgeIn.setFlows(new java.util.ArrayList<>(List.of(usdcFlow, usdtFlow)));
+
+        assertThat(factory.bridgeSettlementKey(bridgeIn, usdcFlow)).isNull();
+    }
+
+    @Test
+    @DisplayName("VAULT_WITHDRAW with TRANSFER principal + BUY yield: wrapper composite identity is the receipt token, not null")
+    void wrapperCompositeBucketIdentity_vaultWithdrawWithBuyYieldFlow_shouldReturnReceiptIdentity() {
+        // Simulates a cross-scale vault VAULT_WITHDRAW where the receipt token is NOT in any
+        // asset family (symbol "vaultUSDC" has no FAMILY mapping). Withdrawal flows:
+        //   Flow 0: vaultUSDC OUT (TRANSFER, burn)
+        //   Flow 1: USDC IN     (TRANSFER, principal return)
+        //   Flow 2: USDC IN     (BUY, yield/interest)
+        // The BUY yield flow must NOT abort wrapper-composite detection.
+        String vaultReceiptContract = "0x000000000000000000000000000000000000abcd";
+        String usdcContract  = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48";
+
+        NormalizedTransaction withdraw = baseTransaction(NormalizedTransactionType.VAULT_WITHDRAW);
+        withdraw.setFlows(new java.util.ArrayList<>(List.of(
+                transferFlow("vaultUSDC", vaultReceiptContract, "-926.43"),
+                transferFlow("USDC",      usdcContract,          "926.43"),
+                buyFlow("USDC",           usdcContract,           "73.05")
+        )));
+
+        assertThat(factory.usesWrapperCompositeBucket(withdraw)).isTrue();
+
+        // continuityKey should route to wrapper:<vaultReceiptContract> for both TRANSFER flows
+        List<ContinuityKey> keys = withdraw.getFlows().stream()
+                .filter(f -> f.getRole() == NormalizedLegRole.TRANSFER)
+                .map(f -> factory.continuityKey(withdraw, f))
+                .toList();
+        assertThat(keys).hasSize(2);
+        assertThat(keys).allSatisfy(key ->
+                assertThat(key.continuityIdentity()).isEqualTo("wrapper:" + vaultReceiptContract));
+    }
+
+    @Test
+    @DisplayName("VAULT_DEPOSIT with only TRANSFER flows: wrapper composite identity is set (deposit direction)")
+    void wrapperCompositeBucketIdentity_depositShapeWithTransferOnly_shouldReturnReceiptIdentity() {
+        // Standard 2-leg deposit: non-family receipt token, no BUY flows.
+        String vaultReceiptContract = "0x000000000000000000000000000000000000abcd";
+        String usdcContract  = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48";
+
+        NormalizedTransaction deposit = baseTransaction(NormalizedTransactionType.VAULT_DEPOSIT);
+        deposit.setFlows(new java.util.ArrayList<>(List.of(
+                transferFlow("USDC",      usdcContract,          "-998.84"),
+                transferFlow("vaultUSDC", vaultReceiptContract,   "926.43")
+        )));
+
+        assertThat(factory.usesWrapperCompositeBucket(deposit)).isTrue();
+    }
+
+    @Test
+    @DisplayName("VAULT_WITHDRAW with BUY outbound (not yield inbound): wrapper composite aborts, returns null")
+    void wrapperCompositeBucketIdentity_withdrawShapeWithOutboundBuyFlow_shouldReturnNull() {
+        // An outbound (negative qty) BUY flow on a withdrawal is not a yield pattern —
+        // abort wrapper composite detection as before.
+        String vaultReceiptContract = "0x000000000000000000000000000000000000abcd";
+        String usdcContract  = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48";
+
+        NormalizedTransaction withdraw = baseTransaction(NormalizedTransactionType.VAULT_WITHDRAW);
+        NormalizedTransaction.Flow buyOut = buyFlow("USDC", usdcContract, "-50");
+        withdraw.setFlows(new java.util.ArrayList<>(List.of(
+                transferFlow("vaultUSDC", vaultReceiptContract, "-926.43"),
+                transferFlow("USDC",      usdcContract,          "926.43"),
+                buyOut
+        )));
+
+        assertThat(factory.usesWrapperCompositeBucket(withdraw)).isFalse();
+    }
+
+    private NormalizedTransaction.Flow buyFlow(String symbol, String contract, String quantity) {
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setAssetSymbol(symbol);
+        flow.setAssetContract(contract);
+        flow.setQuantityDelta(new BigDecimal(quantity));
+        flow.setRole(NormalizedLegRole.BUY);
+        return flow;
     }
 
     private NormalizedTransaction baseTransaction(NormalizedTransactionType type) {

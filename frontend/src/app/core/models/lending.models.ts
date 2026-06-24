@@ -97,6 +97,12 @@ export interface LendingPnlAssetBreakdown {
   readonly netIncomeByAsset: Readonly<Record<string, number>>;
   readonly precisionByAsset: Readonly<Record<string, LendingPrecision>>;
   readonly reasonByAsset: Readonly<Record<string, string>>;
+  readonly supplyPnlUsdByAsset: Readonly<Record<string, number>>;
+  readonly borrowPnlUsdByAsset: Readonly<Record<string, number>>;
+  readonly rewardsUsdByAsset: Readonly<Record<string, number>>;
+  readonly gasUsdByAsset: Readonly<Record<string, number>>;
+  readonly netIncomeUsdByAsset: Readonly<Record<string, number>>;
+  readonly usdPrecisionByAsset: Readonly<Record<string, LendingPrecision>>;
 }
 
 export interface LendingTotalValuation {
@@ -207,6 +213,7 @@ export interface LendingGroup {
   readonly healthProgress: number;
   readonly healthStatus: string;
   readonly healthSource: string;
+  readonly healthStale: boolean;
   readonly supplyUsd: number;
   readonly borrowUsd: number;
   readonly netExposureUsd: number;

@@ -204,12 +204,44 @@ public class ReplayTransferClassifier {
     }
 
     /**
-     * True for BYBIT-CORRIDOR:NETWORK:txHash transfers from Bybit CEX to a user wallet.
-     * These have no on-chain CARRY_OUT (Bybit is a CEX), so the pending transfer mechanism
-     * would never resolve. Requires immediate spot-price acquisition treatment.
+     * RC-9 D2 — withdrawal-direction corridor inbound (CEX → user wallet). The credit lands on an
+     * on-chain wallet whose corridor counterpart is the Bybit CEX. The released basis sits on the
+     * CEX spot ledger, which is not always tracked as an on-chain lot, so when no matching carry
+     * arrives a spot-price ACQUIRE is the legal fallback.
+     *
+     * <p>Restricted to the on-chain inbound leg whose {@code matchedCounterparty} is a Bybit
+     * endpoint. On-chain↔on-chain corridors (both endpoints are wallets) and the deposit direction
+     * are deliberately excluded so a missing carry there is treated as an error, not silently
+     * back-filled at spot.
      */
-    public boolean isBybitCexCorridor(NormalizedTransaction transaction) {
-        return isCorridorTransfer(transaction);
+    public boolean isCexWithdrawalCorridorInbound(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow
+    ) {
+        if (!isCorridorTransfer(transaction)
+                || transaction.getSource() != NormalizedTransactionSource.ON_CHAIN
+                || flow == null
+                || flow.getQuantityDelta() == null
+                || flow.getQuantityDelta().signum() <= 0) {
+            return false;
+        }
+        return hasBybitEndpoint(transaction.getMatchedCounterparty())
+                || hasBybitEndpoint(flow.getCounterpartyAddress());
+    }
+
+    /**
+     * RC-9 D2 — deposit-direction corridor (user wallet → CEX). The credit lands on the Bybit side
+     * and MUST inherit the on-chain {@code CARRY_OUT}'s released basis. A spot fallback is
+     * forbidden here: a missing carry means a linking/determinism defect and must surface to the
+     * conservation guard rather than be masked by a fabricated spot acquisition.
+     */
+    public boolean isCexDepositCorridor(NormalizedTransaction transaction) {
+        return isCorridorTransfer(transaction)
+                && transaction.getSource() == NormalizedTransactionSource.BYBIT;
+    }
+
+    private static boolean hasBybitEndpoint(String value) {
+        return value != null && value.toUpperCase(java.util.Locale.ROOT).startsWith("BYBIT:");
     }
 
     public boolean usesBybitVenueInternalCarryQueue(NormalizedTransaction transaction) {

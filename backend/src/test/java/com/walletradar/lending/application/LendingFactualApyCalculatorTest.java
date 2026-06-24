@@ -134,6 +134,152 @@ class LendingFactualApyCalculatorTest {
     }
 
     @Test
+    void openBorrowAprZeroWhenSyntheticOutstandingMatchesBorrowMinusRepaid() {
+        Instant start = Instant.parse("2026-01-01T00:00:00Z");
+        Instant end = Instant.parse("2026-07-01T00:00:00Z");
+
+        LendingFactualApyView result = LendingFactualApyCalculator.calculate(new LendingFactualApyCalculator.Input(
+                "OPEN",
+                start,
+                end,
+                Map.of(),
+                Map.of(),
+                Map.of(),
+                Map.of(),
+                Map.of("USDE", new BigDecimal("5000")),
+                Map.of("USDE", new BigDecimal("2503.72")),
+                Map.of("USDE", new BigDecimal("2496.28")),
+                null,
+                BigDecimal.ZERO
+        ));
+
+        assertThat(result.factualBorrowAprByAsset()).doesNotContainKey("USDE");
+        assertThat(result.factualBorrowApyByAsset()).doesNotContainKey("USDE");
+    }
+
+    @Test
+    void openBorrowSkipsFactualAprWhenCurrentDebtUnknown() {
+        Instant start = Instant.parse("2026-01-01T00:00:00Z");
+        Instant end = Instant.parse("2026-07-01T00:00:00Z");
+
+        LendingFactualApyView result = LendingFactualApyCalculator.calculate(new LendingFactualApyCalculator.Input(
+                "OPEN",
+                start,
+                end,
+                Map.of(),
+                Map.of(),
+                Map.of(),
+                Map.of(),
+                Map.of("USDC", new BigDecimal("600")),
+                Map.of(),
+                Map.of(),
+                null,
+                BigDecimal.ZERO
+        ));
+
+        assertThat(result.factualBorrowAprByAsset()).doesNotContainKey("USDC");
+        assertThat(result.factualBorrowApyByAsset()).doesNotContainKey("USDC");
+    }
+
+    @Test
+    void shortExposureWindowIsUnavailableInsteadOfExploding() {
+        Instant start = Instant.parse("2026-01-01T00:00:00Z");
+        Instant end = Instant.parse("2026-01-01T06:00:00Z");
+
+        LendingFactualApyView result = LendingFactualApyCalculator.calculate(new LendingFactualApyCalculator.Input(
+                "OPEN",
+                start,
+                end,
+                Map.of("USDC", new BigDecimal("1000")),
+                Map.of("USDC", new BigDecimal("5")),
+                Map.of(),
+                Map.of(),
+                Map.of(),
+                Map.of(),
+                Map.of(),
+                new BigDecimal("5"),
+                new BigDecimal("1000")
+        ));
+
+        assertThat(result.apyPrecision()).isEqualTo("UNAVAILABLE");
+        assertThat(result.apyUnavailableReason()).isEqualTo(LendingFactualApyCalculator.SHORT_EXPOSURE_WINDOW);
+        assertThat(result.factualSupplyApyByAsset()).isEmpty();
+        assertThat(result.netStrategyApyPct()).isNull();
+        assertThat(result.netStrategyAprPct()).isNull();
+    }
+
+    @Test
+    void implausiblePeriodReturnDropsNetStrategyApyAndCapsPerAssetApy() {
+        // Large period return over a short-but-valid window: APR annualizes to thousands of percent,
+        // and per-second compounding would explode the APY far beyond any plausible magnitude.
+        Instant start = Instant.parse("2026-01-01T00:00:00Z");
+        Instant end = Instant.parse("2026-01-03T00:00:00Z");
+
+        LendingFactualApyView result = LendingFactualApyCalculator.calculate(new LendingFactualApyCalculator.Input(
+                "OPEN",
+                start,
+                end,
+                Map.of(),
+                Map.of(),
+                Map.of(),
+                Map.of(),
+                Map.of("USDE", new BigDecimal("5000")),
+                Map.of(),
+                Map.of("USDE", new BigDecimal("7500")),
+                new BigDecimal("2500"),
+                new BigDecimal("5000")
+        ));
+
+        // Net strategy annualizes to an implausible APY => both APR and APY are dropped.
+        assertThat(result.netStrategyApyPct()).isNull();
+        assertThat(result.netStrategyAprPct()).isNull();
+        // Per-asset borrow APY is capped out (omitted) even though the raw APR is retained.
+        assertThat(result.factualBorrowApyByAsset()).doesNotContainKey("USDE");
+        assertAllApyWithinCap(result);
+    }
+
+    @Test
+    void normalMultiMonthCycleProducesSaneApy() {
+        // ~3% over ~6 months => low double-digit annualized APY, comfortably below the cap.
+        Instant start = Instant.parse("2026-01-01T00:00:00Z");
+        Instant end = Instant.parse("2026-07-01T00:00:00Z");
+
+        LendingFactualApyView result = LendingFactualApyCalculator.calculate(new LendingFactualApyCalculator.Input(
+                "CLOSED",
+                start,
+                end,
+                Map.of("USDC", new BigDecimal("1000")),
+                Map.of("USDC", new BigDecimal("30")),
+                Map.of(),
+                Map.of(),
+                Map.of(),
+                Map.of(),
+                Map.of(),
+                new BigDecimal("30"),
+                new BigDecimal("1000")
+        ));
+
+        assertThat(result.apyPrecision()).isEqualTo("ESTIMATED");
+        assertThat(result.factualSupplyApyByAsset()).containsKey("USDC");
+        BigDecimal supplyApy = result.factualSupplyApyByAsset().get("USDC");
+        assertThat(supplyApy).isGreaterThan(new BigDecimal("5"));
+        assertThat(supplyApy).isLessThan(new BigDecimal("20"));
+        assertThat(result.netStrategyApyPct()).isNotNull();
+        assertAllApyWithinCap(result);
+    }
+
+    private static void assertAllApyWithinCap(LendingFactualApyView result) {
+        BigDecimal cap = new BigDecimal("100000");
+        result.factualSupplyApyByAsset().values().forEach(value ->
+                assertThat(value.abs()).isLessThanOrEqualTo(cap));
+        result.factualBorrowApyByAsset().values().forEach(value ->
+                assertThat(value.abs()).isLessThanOrEqualTo(cap));
+        if (result.netStrategyApyPct() != null) {
+            assertThat(result.netStrategyApyPct().abs()).isLessThanOrEqualTo(cap);
+        }
+    }
+
+    @Test
     void nonPositiveExposureDurationNullifiesApr() {
         Instant timestamp = Instant.parse("2026-01-01T00:00:00Z");
 

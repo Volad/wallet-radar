@@ -448,7 +448,7 @@ public class AssetLedgerQueryService {
                 point.getTotalCostBasisBeforeUsd(),
                 point.getTotalCostBasisAfterUsd(),
                 point.getAvcoBeforeUsd(),
-                point.getAvcoAfterUsd(),
+                gasOnlyAvcoAfter(point),
                 point.getBasisBackedQuantityAfter(),
                 point.getUncoveredQuantityDelta(),
                 point.getQuantityShortfallAfter(),
@@ -458,6 +458,41 @@ public class AssetLedgerQueryService {
                 point.getUnresolvedFlagCountAfter()
         );
     }
+
+    /**
+     * WS-4: represents {@code avcoAfterUsd} as {@code null} (undefined) instead of 0 when the
+     * basis-backed quantity is approximately zero AND the event is a gas-only or reward-claim type.
+     *
+     * <p>Gate conditions (all must hold):</p>
+     * <ul>
+     *   <li>{@code basisBackedQuantityAfter < 1e-8} — position has no meaningful basis backing</li>
+     *   <li>{@code normalizedType = SPONSORED_GAS_IN} or {@code = REWARD_CLAIM} or
+     *       {@code basisEffect = GAS_ONLY} — event is known to be basis-neutral</li>
+     * </ul>
+     *
+     * <p>Must NOT fire for WRAP/UNWRAP events which have {@code basisBackedQuantityAfter > 0}
+     * by design (they carry and reallocate real basis). The {@code basisBackedQuantityAfter < 1e-8}
+     * threshold is the exclusive gate; WRAP/UNWRAP always satisfy the inverse condition.</p>
+     */
+    static BigDecimal gasOnlyAvcoAfter(AssetLedgerPoint point) {
+        if (point == null) {
+            return null;
+        }
+        BigDecimal basisBacked = point.getBasisBackedQuantityAfter();
+        if (basisBacked == null || basisBacked.compareTo(GAS_ONLY_BASIS_THRESHOLD) >= 0) {
+            // Has meaningful basis-backed quantity — report the stored AVCO as-is
+            return point.getAvcoAfterUsd();
+        }
+        // basisBackedQuantityAfter ≈ 0 — check event type / basis effect
+        AssetLedgerPoint.BasisEffect basisEffect = point.getBasisEffect();
+        String normalizedType = point.getNormalizedType();
+        boolean isGasOnlyEvent = basisEffect == AssetLedgerPoint.BasisEffect.GAS_ONLY
+                || "SPONSORED_GAS_IN".equals(normalizedType)
+                || "REWARD_CLAIM".equals(normalizedType);
+        return isGasOnlyEvent ? null : point.getAvcoAfterUsd();
+    }
+
+    private static final BigDecimal GAS_ONLY_BASIS_THRESHOLD = new BigDecimal("0.00000001");
 
     private Map<String, NormalizedTransaction> findNormalizedTransactions(List<AssetLedgerPoint> points) {
         List<String> normalizedIds = points.stream()

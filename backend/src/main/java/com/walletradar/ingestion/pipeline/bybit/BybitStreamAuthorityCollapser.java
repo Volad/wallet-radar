@@ -6,6 +6,7 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.ingestion.pipeline.clarification.CorridorCorrelationKeyFactory;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.mongodb.core.MongoOperations;
@@ -106,7 +107,17 @@ public class BybitStreamAuthorityCollapser {
                 Criteria.where("type").is(NormalizedTransactionType.INTERNAL_TRANSFER),
                 Criteria.where("excludedFromAccounting").ne(true)
         ));
-        List<NormalizedTransaction> docs = mongoOperations.find(query, NormalizedTransaction.class);
+        // RC-9 refresh determinism: corridor deposit/withdrawal legs are owned by the deterministic
+        // on-chain↔CEX corridor projection (BybitTransferContinuityRepairService), NOT by stream-mirror
+        // collapse. On a full rebuild they are EXTERNAL_TRANSFER_IN/OUT at collapse time and never enter
+        // this query; but on an incremental refresh the persisted corridor leg is already rewritten to
+        // INTERNAL_TRANSFER, so it would be re-keyed onto a bybit-collapsed-v1 queue here and orphan the
+        // matched on-chain CARRY_OUT. Exclude corridor legs from every collapse pass so the Bybit credit
+        // stays on its BYBIT-CORRIDOR queue, bit-identically across rebuild and refresh.
+        List<NormalizedTransaction> docs = mongoOperations.find(query, NormalizedTransaction.class)
+                .stream()
+                .filter(doc -> !isCorridorLeg(doc))
+                .toList();
 
         Instant now = Instant.now();
         List<NormalizedTransaction> dirty = new ArrayList<>();
@@ -169,9 +180,22 @@ public class BybitStreamAuthorityCollapser {
     }
 
     /**
-     * ADR-006 replay symmetry: a {@code bybit-collapsed-v1:} UTA↔FUND pair is one economic transfer.
-     * Mirror demotion must not leave a one-sided {@code INTERNAL_TRANSFER} credit on UTA while the
-     * complementary {@code FUNDING_HISTORY} debit on FUND stays excluded — that inflates umbrella qty.
+     * ADR-006 replay symmetry (C-1 / WS-B): a {@code bybit-collapsed-v1:} pair is one economic
+     * transfer — exactly one debit (outbound, CARRY_OUT) and one credit (inbound, CARRY_IN). Mirror
+     * demotion must never leave a collapsed corr with an active leg on one side and <b>no active leg
+     * on the opposite side</b>. Such asymmetry orphans the surviving leg's carry: the active debit
+     * releases a {@code CARRY_OUT} that no credit inherits (the seq816 −0.148 ETH / −$391.85 case is
+     * the FUND→UTA direction where the UTA-inbound credit was excluded), or the active credit reads a
+     * blind umbrella {@code CARRY_IN} because its debit was excluded.
+     *
+     * <p>This repair is <b>bidirectional</b> and conservation-safe: per collapsed corr, if one sign
+     * has an active leg but the opposite sign has none, it restores exactly the <b>canonical</b>
+     * excluded leg on the empty side (lowest stream priority value, then lowest id) and re-stamps
+     * {@code continuityCandidate=true} + {@code matchedCounterparty} so both legs ride the same
+     * {@code corr-family:<corr>:<assetIdentity>} replay queue. Restoring exactly one leg keeps the
+     * pair balanced (1 debit + 1 credit) — it never re-activates additional mirror duplicates, so it
+     * cannot inflate inventory or double-credit. The carry itself is performed by the replay layer's
+     * inherit-once {@code PendingTransferStore}; no synthetic basis credit is injected here.
      */
     private int enforceCollapsedUtFundPairSymmetry(
             Instant now,
@@ -192,36 +216,77 @@ public class BybitStreamAuthorityCollapser {
         }
         int restored = 0;
         for (List<NormalizedTransaction> group : byCorr.values()) {
-            NormalizedTransaction utaInbound = null;
-            NormalizedTransaction fundOutbound = null;
+            NormalizedTransaction activeDebit = null;
+            NormalizedTransaction activeCredit = null;
             for (NormalizedTransaction tx : group) {
-                String wallet = tx.getWalletAddress();
-                if (wallet == null) {
+                int sign = principalQuantitySign(tx);
+                if (Boolean.TRUE.equals(tx.getExcludedFromAccounting())) {
                     continue;
                 }
-                String upper = wallet.toUpperCase(Locale.ROOT);
-                int sign = principalQuantitySign(tx);
-                if (upper.endsWith(":UTA") && sign > 0 && !Boolean.TRUE.equals(tx.getExcludedFromAccounting())) {
-                    utaInbound = tx;
-                }
-                if (upper.endsWith(":FUND") && sign < 0 && Boolean.TRUE.equals(tx.getExcludedFromAccounting())) {
-                    fundOutbound = tx;
+                if (sign < 0) {
+                    activeDebit = tx;
+                } else if (sign > 0) {
+                    activeCredit = tx;
                 }
             }
-            if (utaInbound == null || fundOutbound == null) {
-                continue;
+            // Restore the missing credit (e.g. excluded UTA-inbound) when only a debit survives.
+            if (activeDebit != null && activeCredit == null) {
+                restored += restoreCanonicalExcludedLeg(group, 1, activeDebit, now, dirtyAccumulator);
             }
-            fundOutbound.setExcludedFromAccounting(false);
-            fundOutbound.setAccountingExclusionReason(null);
-            fundOutbound.setContinuityCandidate(true);
-            if (fundOutbound.getMatchedCounterparty() == null || fundOutbound.getMatchedCounterparty().isBlank()) {
-                fundOutbound.setMatchedCounterparty(utaInbound.getWalletAddress());
+            // Restore the missing debit (e.g. excluded FUND-outbound) when only a credit survives.
+            if (activeCredit != null && activeDebit == null) {
+                restored += restoreCanonicalExcludedLeg(group, -1, activeCredit, now, dirtyAccumulator);
             }
-            fundOutbound.setUpdatedAt(now);
-            dirtyAccumulator.add(fundOutbound);
-            restored++;
         }
         return restored;
+    }
+
+    /**
+     * Restores the single canonical excluded leg of the requested {@code sign} on a collapsed corr
+     * group (lowest stream-priority value, then lowest id) and re-links it to {@code opposingLeg}.
+     * Returns 1 when a leg was restored, 0 otherwise.
+     */
+    private int restoreCanonicalExcludedLeg(
+            List<NormalizedTransaction> group,
+            int sign,
+            NormalizedTransaction opposingLeg,
+            Instant now,
+            List<NormalizedTransaction> dirtyAccumulator
+    ) {
+        NormalizedTransaction canonical = null;
+        for (NormalizedTransaction tx : group) {
+            if (!Boolean.TRUE.equals(tx.getExcludedFromAccounting())) {
+                continue;
+            }
+            if (principalQuantitySign(tx) != sign) {
+                continue;
+            }
+            if (canonical == null || comparePriorityThenId(tx, canonical) < 0) {
+                canonical = tx;
+            }
+        }
+        if (canonical == null) {
+            return 0;
+        }
+        canonical.setExcludedFromAccounting(false);
+        canonical.setAccountingExclusionReason(null);
+        canonical.setContinuityCandidate(true);
+        if (canonical.getMatchedCounterparty() == null || canonical.getMatchedCounterparty().isBlank()) {
+            canonical.setMatchedCounterparty(opposingLeg.getWalletAddress());
+        }
+        canonical.setUpdatedAt(now);
+        dirtyAccumulator.add(canonical);
+        return 1;
+    }
+
+    private int comparePriorityThenId(NormalizedTransaction left, NormalizedTransaction right) {
+        int byPriority = Integer.compare(canonicalPriority(left), canonicalPriority(right));
+        if (byPriority != 0) {
+            return byPriority;
+        }
+        String leftId = left.getId() == null ? "" : left.getId();
+        String rightId = right.getId() == null ? "" : right.getId();
+        return leftId.compareTo(rightId);
     }
 
     private static int principalQuantitySign(NormalizedTransaction tx) {
@@ -792,6 +857,26 @@ public class BybitStreamAuthorityCollapser {
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
+
+    /**
+     * RC-9 refresh determinism: a Bybit row is a corridor leg (FA-001 on-chain↔CEX deposit /
+     * withdrawal) when it already carries a {@code BYBIT-CORRIDOR:} correlation id, OR when it
+     * carries an on-chain {@code txHash}. Internal UTA/FUND/EARN stream transfers never have an
+     * on-chain {@code txHash} (Bybit emits a transferId, not a chain txID), so this intrinsic
+     * signal stays stable across re-materialization (ObjectIds differ between rebuild and refresh,
+     * the chain txHash does not). Such legs are owned by the deterministic corridor projection and
+     * must never be re-keyed by stream-mirror collapse.
+     */
+    private static boolean isCorridorLeg(NormalizedTransaction tx) {
+        if (tx == null) {
+            return false;
+        }
+        if (CorridorCorrelationKeyFactory.isCorridorKey(tx.getCorrelationId())) {
+            return true;
+        }
+        String txHash = tx.getTxHash();
+        return txHash != null && !txHash.isBlank();
+    }
 
     private static String extractBybitUid(String walletAddress) {
         if (walletAddress == null || !walletAddress.startsWith("BYBIT:")) {

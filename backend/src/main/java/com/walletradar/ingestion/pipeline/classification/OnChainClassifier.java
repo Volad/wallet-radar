@@ -9,6 +9,7 @@ import com.walletradar.ingestion.pipeline.classification.onchain.family.BridgeMe
 import com.walletradar.ingestion.pipeline.classification.onchain.family.BridgeSettlementClassifier;
 import com.walletradar.ingestion.pipeline.classification.onchain.family.CompoundCometClassifier;
 import com.walletradar.ingestion.pipeline.classification.onchain.family.DefaultClassifier;
+import com.walletradar.ingestion.pipeline.classification.onchain.family.EulerEvcClassifier;
 import com.walletradar.ingestion.pipeline.classification.onchain.family.FailedExecutionClassifier;
 import com.walletradar.ingestion.pipeline.classification.onchain.family.FluidVaultClassifier;
 import com.walletradar.ingestion.pipeline.classification.onchain.family.FunctionNameClassifier;
@@ -29,6 +30,7 @@ import com.walletradar.ingestion.pipeline.classification.onchain.family.RewardRo
 import com.walletradar.ingestion.pipeline.classification.onchain.family.ResolvedWarningAdminConfigClassifier;
 import com.walletradar.ingestion.pipeline.classification.onchain.family.RoutedAggregatorSendClassifier;
 import com.walletradar.ingestion.pipeline.classification.onchain.family.SpamClassifier;
+import com.walletradar.ingestion.pipeline.classification.onchain.family.SpoofTokenClassifier;
 import com.walletradar.ingestion.pipeline.classification.onchain.family.StakingClassifier;
 import com.walletradar.ingestion.pipeline.classification.onchain.family.SwapClassifier;
 import com.walletradar.ingestion.pipeline.classification.onchain.family.SwapSemanticClassifier;
@@ -56,6 +58,7 @@ import com.walletradar.ingestion.pipeline.classification.onchain.protocol.regist
 import com.walletradar.ingestion.pipeline.classification.onchain.protocol.registry.SpecialHandlerRegistryReviewClassifier;
 import com.walletradar.ingestion.pipeline.classification.onchain.protocol.resolv.ResolvProtocolSemanticClassifier;
 import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryService;
+import com.walletradar.ingestion.pipeline.classification.support.LpStakingWrapperResolver;
 import com.walletradar.ingestion.pipeline.classification.support.MovementLegExtractor;
 import com.walletradar.ingestion.pipeline.classification.support.NativeAssetSymbolResolver;
 import com.walletradar.ingestion.wallet.query.TrackedWalletLookupService;
@@ -122,7 +125,9 @@ public class OnChainClassifier {
                 )),
                 movementLegExtractor
         );
+        LpStakingWrapperResolver lpStakingWrapperResolver = new LpStakingWrapperResolver(protocolRegistryService);
         List<OnChainFamilyClassifier> familyClassifiers = List.of(
+                new SpoofTokenClassifier(),
                 new FailedExecutionClassifier(),
                 new AdminConfigClassifier(),
                 new WrappedNativeClassifier(nativeAssetSymbolResolver),
@@ -130,7 +135,7 @@ public class OnChainClassifier {
                 new RewardRouteClassifier(protocolRegistryService),
                 new BridgeStartClassifier(protocolRegistryService, nativeAssetSymbolResolver),
                 new TransferClassifier(protocolRegistryService),
-                new LpClassifier(),
+                new LpClassifier(protocolRegistryService, lpStakingWrapperResolver),
                 new LpFeeClaimClassifier(),
                 new RoutedAggregatorSendClassifier(protocolRegistryService),
                 new BridgeMethodAwareClassifier(protocolRegistryService),
@@ -154,7 +159,7 @@ public class OnChainClassifier {
                 new CompoundCometClassifier(protocolRegistryService),
                 new FluidVaultClassifier(protocolRegistryService),
                 new SwapRegistryClassifier(protocolRegistryService, nativeAssetSymbolResolver),
-                new LpRegistryClassifier(protocolRegistryService, nativeAssetSymbolResolver),
+                new LpRegistryClassifier(protocolRegistryService, nativeAssetSymbolResolver, lpStakingWrapperResolver),
                 new LendingRegistryClassifier(protocolRegistryService, protocolResourceLoader),
                 new VaultClassifier(protocolRegistryService),
                 new SpecialHandlerRegistryReviewClassifier(),
@@ -162,6 +167,7 @@ public class OnChainClassifier {
                 new RegistryDirectTypeClassifier(protocolRegistryService),
                 new MethodIdClassifier(),
                 new FunctionNameClassifier(protocolRegistryService, nativeAssetSymbolResolver),
+                new EulerEvcClassifier(),
                 new LendingClassifier(),
                 new HeuristicClassifier(protocolRegistryService, trackedWalletLookupService, nativeAssetSymbolResolver)
         );

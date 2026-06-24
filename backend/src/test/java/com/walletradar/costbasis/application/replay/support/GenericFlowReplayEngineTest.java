@@ -470,6 +470,78 @@ class GenericFlowReplayEngineTest {
     }
 
     @Test
+    void bridgeCarryInEmptySourceCanonicalRoutesToPendingNeverAvcoZero() {
+        // RC-7: a bridge CARRY_IN with an empty source carry (uncovered, no flow price) for a
+        // cross-network-priceable canonical asset (ETH on LINEA) that cannot resolve a market quote
+        // must be flagged PENDING / incomplete-history — never settled silently at avco $0 (covered).
+        ReplayMarketAuthority authority = mock(ReplayMarketAuthority.class);
+        when(authority.resolve(any(), any())).thenReturn(Optional.empty());
+        GenericFlowReplayEngine marketEngine = new GenericFlowReplayEngine(authority);
+
+        PositionState position = new PositionState(new AssetKey("0xwallet", NetworkId.LINEA, "0xeth", "ETH", "FAMILY:ETH"));
+        position.setQuantity(new BigDecimal("0.0116"));
+        position.setUncoveredQuantity(new BigDecimal("0.0116"));
+        position.setTotalCostBasisUsd(BigDecimal.ZERO);
+        PositionSnapshot before = new PositionSnapshot(
+                BigDecimal.ZERO, null, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                BigDecimal.ZERO, BigDecimal.ZERO, false, false, 0
+        );
+
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setId("tx-linea-bridge-in");
+        tx.setNetworkId(NetworkId.LINEA);
+        tx.setBlockTimestamp(Instant.parse("2025-06-01T08:30:00Z"));
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(NormalizedLegRole.TRANSFER);
+        flow.setAssetSymbol("ETH");
+        flow.setQuantityDelta(new BigDecimal("0.0116"));
+
+        marketEngine.applyInboundShortfallSpotFallback(tx, flow, position, before);
+
+        // Never fabricates covered basis at $0: the quantity stays uncovered and PENDING-flagged.
+        assertThat(position.totalCostBasisUsd()).isEqualByComparingTo("0");
+        assertThat(position.uncoveredQuantity()).isEqualByComparingTo("0.0116");
+        assertThat(position.hasIncompleteHistory()).isTrue();
+        assertThat(position.hasUnresolvedFlags()).isTrue();
+    }
+
+    @Test
+    void bridgeCarryInEmptySourceCanonicalResolvesCrossNetworkQuote() {
+        // RC-7 option (a): when a cross-network ETH quote IS available at the inbound timestamp the
+        // uncovered bridge carry-in is promoted to covered basis (no PENDING, no $0).
+        ReplayMarketAuthority authority = mock(ReplayMarketAuthority.class);
+        when(authority.resolve(any(), any())).thenReturn(Optional.of(new ReplayMarketAuthority.ResolvedMarketPrice(
+                new BigDecimal("2500"),
+                PriceSource.COINGECKO,
+                ReplayMarketAuthority.ResolvedMarketPrice.Authority.HISTORICAL_CACHE
+        )));
+        GenericFlowReplayEngine marketEngine = new GenericFlowReplayEngine(authority);
+
+        PositionState position = new PositionState(new AssetKey("0xwallet", NetworkId.LINEA, "0xeth", "ETH", "FAMILY:ETH"));
+        position.setQuantity(new BigDecimal("0.0116"));
+        position.setUncoveredQuantity(new BigDecimal("0.0116"));
+        position.setTotalCostBasisUsd(BigDecimal.ZERO);
+        PositionSnapshot before = new PositionSnapshot(
+                BigDecimal.ZERO, null, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                BigDecimal.ZERO, BigDecimal.ZERO, false, false, 0
+        );
+
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setId("tx-linea-bridge-in");
+        tx.setNetworkId(NetworkId.LINEA);
+        tx.setBlockTimestamp(Instant.parse("2025-06-01T08:30:00Z"));
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(NormalizedLegRole.TRANSFER);
+        flow.setAssetSymbol("ETH");
+        flow.setQuantityDelta(new BigDecimal("0.0116"));
+
+        marketEngine.applyInboundShortfallSpotFallback(tx, flow, position, before);
+
+        assertThat(position.uncoveredQuantity()).isEqualByComparingTo("0");
+        assertThat(position.totalCostBasisUsd()).isEqualByComparingTo("29");
+    }
+
+    @Test
     void inboundShortfallPrefersFlowPriceOverMarketAuthority() {
         // The flow's own resolved spot price stays authoritative; market-at-time is only a backstop.
         ReplayMarketAuthority authority = mock(ReplayMarketAuthority.class);

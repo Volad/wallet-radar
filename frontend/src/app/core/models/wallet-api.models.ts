@@ -493,6 +493,12 @@ export interface SessionLendingPnlAssetBreakdownResponse {
   readonly netIncomeByAsset: Readonly<Record<string, number | null>>;
   readonly precisionByAsset: Readonly<Record<string, string | null>>;
   readonly reasonByAsset: Readonly<Record<string, string | null>>;
+  readonly supplyPnlUsdByAsset?: Readonly<Record<string, number | null>> | null;
+  readonly borrowPnlUsdByAsset?: Readonly<Record<string, number | null>> | null;
+  readonly rewardsUsdByAsset?: Readonly<Record<string, number | null>> | null;
+  readonly gasUsdByAsset?: Readonly<Record<string, number | null>> | null;
+  readonly netIncomeUsdByAsset?: Readonly<Record<string, number | null>> | null;
+  readonly usdPrecisionByAsset?: Readonly<Record<string, string | null>> | null;
 }
 
 export interface SessionLendingTotalValuationResponse {
@@ -603,6 +609,7 @@ export interface SessionLendingGroupResponse {
   readonly healthProgress: number | null;
   readonly healthStatus: string | null;
   readonly healthSource: string | null;
+  readonly healthStale: boolean | null;
   readonly supplyUsd: number | null;
   readonly borrowUsd: number | null;
   readonly netExposureUsd: number | null;

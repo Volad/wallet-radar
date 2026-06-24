@@ -42,6 +42,20 @@ Own lending deposit/withdraw flows, borrow/repay, and lending loop lifecycle.
 - correlation is protocol-specific and optional
 - exact pairing is needed only when the protocol lifecycle is explicitly async
 
+## Receipt identity (read model + normalization)
+
+`LendingReceiptIdentityService` is the shared source of truth for mapping a receipt token `(networkId, contractAddress)` to `{ protocol, underlyingSymbol, side }`. See [ADR-035](../../../adr/ADR-035-lending-receipt-identity-resolver.md).
+
+Resolution priority:
+
+1. **Derived index** — `lending_receipt_identity` Mongo collection, built from normalized deposit/withdraw/borrow/repay pairs (`receipt leg` + `underlying leg` + `protocolName`).
+2. **Protocol registry** — pool/vault/Comet contract hit (`protocol-registry.json`).
+3. **Grammar fallback** — consolidated rules in `LendingAssetSymbolSupport` (Aave/Euler indexed/Morpho/Fluid/Compound/Silo).
+
+Normalization calls the same resolver to (a) index receipt contracts after classification and (b) fill `protocolName` when only a known receipt contract is touched. The lending UI (`SessionLendingQueryService`) indexes history on read so cycles reconcile without requiring a separate backfill job for already-normalized data.
+
+Shared **lifecycle underlying** keys prevent false `unresolved_principal_exit` when deposits use underlying symbols (e.g. `WBTC`) and live balances use receipt tickers (e.g. `eWBTC-1`).
+
 ## Disallowed Fallbacks
 
 - do not classify proven loop bundles as plain `LENDING_DEPOSIT`

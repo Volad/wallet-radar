@@ -18,7 +18,8 @@ public enum ProtocolRegistryEventType {
     BRIDGE_IN(NormalizedTransactionType.BRIDGE_IN),
     PROTOCOL_CUSTODY_DEPOSIT(NormalizedTransactionType.PROTOCOL_CUSTODY_DEPOSIT),
     PROTOCOL_CUSTODY_WITHDRAW(NormalizedTransactionType.PROTOCOL_CUSTODY_WITHDRAW),
-    REWARD_CLAIM(NormalizedTransactionType.REWARD_CLAIM);
+    REWARD_CLAIM(NormalizedTransactionType.REWARD_CLAIM),
+    LENDING_LOOP_REBALANCE(NormalizedTransactionType.LENDING_LOOP_REBALANCE);
 
     private final NormalizedTransactionType normalizedType;
 

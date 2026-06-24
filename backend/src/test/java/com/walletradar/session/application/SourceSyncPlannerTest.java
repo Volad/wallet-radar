@@ -201,6 +201,56 @@ class SourceSyncPlannerTest {
         assertThat(saved.getSyncBannerMessage()).isEqualTo("Refresh queued");
     }
 
+    @Test
+    @DisplayName("refresh isolates an unresolvable network so healthy networks still get armed")
+    void planRefresh_isolatesUnresolvableNetwork() {
+        UserSession session = new UserSession();
+        session.setId("session-multi");
+        UserSession.SessionWallet wallet = new UserSession.SessionWallet();
+        wallet.setAddress("0xabc");
+        wallet.setNetworks(List.of(NetworkId.POLYGON, NetworkId.BASE));
+        session.setWallets(List.of(wallet));
+        session.setIntegrations(List.of());
+
+        SyncStatus polygonStatus = new SyncStatus();
+        polygonStatus.setId("sync-polygon");
+        polygonStatus.setSourceKind(SyncStatus.SourceKind.ONCHAIN);
+        polygonStatus.setWalletAddress("0xabc");
+        polygonStatus.setNetworkId(NetworkId.POLYGON.name());
+        polygonStatus.setStatus(SyncStatus.SyncStatusValue.COMPLETE);
+        polygonStatus.setBackfillComplete(true);
+        polygonStatus.setLastBlockSynced(100L);
+
+        SyncStatus baseStatus = new SyncStatus();
+        baseStatus.setId("sync-base");
+        baseStatus.setSourceKind(SyncStatus.SourceKind.ONCHAIN);
+        baseStatus.setWalletAddress("0xabc");
+        baseStatus.setNetworkId(NetworkId.BASE.name());
+        baseStatus.setStatus(SyncStatus.SyncStatusValue.COMPLETE);
+        baseStatus.setBackfillComplete(true);
+        baseStatus.setLastBlockSynced(100L);
+
+        when(syncStatusRepository.findOnChainByWalletAddressAndNetworkId(
+                SyncStatus.SourceKind.ONCHAIN, "0xabc", NetworkId.POLYGON.name()))
+                .thenReturn(Optional.of(polygonStatus));
+        when(syncStatusRepository.findOnChainByWalletAddressAndNetworkId(
+                SyncStatus.SourceKind.ONCHAIN, "0xabc", NetworkId.BASE.name()))
+                .thenReturn(Optional.of(baseStatus));
+        when(blockHeightResolver.supports(any())).thenReturn(true);
+        when(blockHeightResolver.getCurrentBlock(NetworkId.POLYGON))
+                .thenThrow(new RuntimeException("eth_blockNumber 401 Unauthorized"));
+        when(blockHeightResolver.getCurrentBlock(NetworkId.BASE)).thenReturn(150L);
+
+        SourceSyncPlanner.PlanResult result = sourceSyncPlanner.planRefresh(
+                session,
+                Instant.parse("2026-04-12T10:30:45Z")
+        );
+
+        assertThat(result.scheduledTargets()).isEqualTo(1);
+        assertThat(result.skippedTargets()).isEqualTo(1);
+        assertThat(result.scheduledOnChainSyncStatusIds()).containsExactly("sync-base");
+    }
+
     private static UserSession sessionWithWallet() {
         UserSession session = new UserSession();
         session.setId("session-1");

@@ -26,6 +26,8 @@ The `orderId` namespace is shared across loan sources and kept disjoint by prefi
 | On-chain Aave BORROW/REPAY (F-3/F-4) | `evm:<network>:<debtContract>:<wallet>` |
 | Inferred on-chain leveraged buy (ADR-028) | `evm-lev:<network>:<collateralContract>:<wallet>` |
 
+**Lending UI lifecycle:** `SessionLendingQueryService` uses shared receipt→underlying keys from `LendingReceiptIdentityService` so principal-in/out and live receipt balances reconcile (avoids false `unresolved_principal_exit` when deposit uses underlying and balance uses receipt ticker). See [ADR-035](../../adr/ADR-035-lending-receipt-identity-resolver.md).
+
 | Field | Purpose |
 |-------|---------|
 | `orderId` | Provider loan order identifier |

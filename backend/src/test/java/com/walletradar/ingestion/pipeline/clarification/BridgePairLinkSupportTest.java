@@ -27,6 +27,47 @@ class BridgePairLinkSupportTest {
     }
 
     @Test
+    void applyLinkedBridgeCounterpartyOverwritesUnknownEoaWithBridge() {
+        NormalizedTransaction source = new NormalizedTransaction();
+        source.setType(NormalizedTransactionType.BRIDGE_OUT);
+        source.setTxHash("0xD9D3000000000000000000000000000000000000000000000000000000000000");
+        NormalizedTransaction.Flow out = flowWithRole(NormalizedLegRole.TRANSFER, "ETH", "-0.5");
+        source.setFlows(java.util.List.of(out));
+
+        NormalizedTransaction destination = new NormalizedTransaction();
+        destination.setType(NormalizedTransactionType.BRIDGE_IN);
+        NormalizedTransaction.Flow in = flowWithRole(NormalizedLegRole.TRANSFER, "ETH", "0.5");
+        // RC-4: clarification stamped the relayer EOA as UNKNOWN_EOA.
+        in.setCounterpartyAddress("0x8c826f79de4ef9c7e4e1f3c6a8f70000000000aa");
+        in.setCounterpartyType(CounterpartyType.UNKNOWN_EOA);
+        destination.setFlows(java.util.List.of(in));
+
+        boolean changed = BridgePairLinkSupport.applyLinkedBridgeCounterparty(source, destination, Instant.now());
+
+        assertThat(changed).isTrue();
+        assertThat(in.getCounterpartyType()).isEqualTo(CounterpartyType.BRIDGE);
+    }
+
+    @Test
+    void applyLinkedBridgeCounterpartyDoesNotDowngradeStrongerType() {
+        NormalizedTransaction source = new NormalizedTransaction();
+        source.setType(NormalizedTransactionType.BRIDGE_OUT);
+        source.setTxHash("0xabc0000000000000000000000000000000000000000000000000000000000000");
+        source.setFlows(java.util.List.of(flowWithRole(NormalizedLegRole.TRANSFER, "ETH", "-0.5")));
+
+        NormalizedTransaction destination = new NormalizedTransaction();
+        destination.setType(NormalizedTransactionType.BRIDGE_IN);
+        NormalizedTransaction.Flow in = flowWithRole(NormalizedLegRole.TRANSFER, "ETH", "0.5");
+        in.setCounterpartyAddress("0x1111111111111111111111111111111111111111");
+        in.setCounterpartyType(CounterpartyType.CEX);
+        destination.setFlows(java.util.List.of(in));
+
+        BridgePairLinkSupport.applyLinkedBridgeCounterparty(source, destination, Instant.now());
+
+        assertThat(in.getCounterpartyType()).isEqualTo(CounterpartyType.CEX);
+    }
+
+    @Test
     void retagSupplementalInboundFlowRetagsMatchedEthLegOnly() {
         NormalizedTransaction destination = new NormalizedTransaction();
         destination.setType(NormalizedTransactionType.BRIDGE_IN);

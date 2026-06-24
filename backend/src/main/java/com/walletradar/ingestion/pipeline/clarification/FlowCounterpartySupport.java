@@ -42,6 +42,14 @@ public final class FlowCounterpartySupport {
         return "evm:" + trimmed;
     }
 
+    /**
+     * Derives the transaction-level counterparty from its flows.
+     *
+     * <p>ADR-032 / WS-3a: FEE legs (role = FEE) and synthetic placeholder counterparties
+     * matching {@code UNKNOWN:*} are excluded from the distinct-address set before the size&gt;1
+     * → MULTI check. MULTI must only reflect genuine multi-principal transactions (e.g. swaps
+     * with multiple real recipients), not the presence of a gas-fee pseudoparty.</p>
+     */
     public static void applyTransactionCounterparty(NormalizedTransaction transaction) {
         if (transaction == null || transaction.getFlows() == null || transaction.getFlows().isEmpty()) {
             return;
@@ -52,9 +60,16 @@ public final class FlowCounterpartySupport {
             if (flow == null) {
                 continue;
             }
-            if (present(flow.getCounterpartyAddress())) {
-                addresses.add(flow.getCounterpartyAddress().trim());
+            // Exclude FEE legs — they carry a synthetic network-fee pseudoparty, not a real principal
+            if (flow.getRole() == NormalizedLegRole.FEE) {
+                continue;
             }
+            String cp = flow.getCounterpartyAddress();
+            // Exclude synthetic UNKNOWN:* placeholders (no real on-chain counterparty resolved)
+            if (!present(cp) || cp.trim().toUpperCase(Locale.ROOT).startsWith("UNKNOWN:")) {
+                continue;
+            }
+            addresses.add(cp.trim());
             if (present(flow.getCounterpartyType())) {
                 types.add(flow.getCounterpartyType().trim());
             }

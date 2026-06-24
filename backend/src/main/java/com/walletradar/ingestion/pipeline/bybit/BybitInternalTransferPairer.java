@@ -6,6 +6,7 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionReposi
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.ingestion.config.BybitInternalTransferProperties;
+import com.walletradar.ingestion.pipeline.clarification.CorridorCorrelationKeyFactory;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.mongodb.core.MongoOperations;
@@ -107,10 +108,16 @@ public class BybitInternalTransferPairer {
                         Criteria.where("type").is(NormalizedTransactionType.EXTERNAL_TRANSFER_OUT)
                 )
         ));
-        List<NormalizedTransaction> candidates = mongoOperations.find(query, NormalizedTransaction.class);
+        // RC-9 D1: order-independent grouping. Sort the candidate set by stable _id before building
+        // the per-transferId groups so the pairing outcome does not depend on Mongo iteration order
+        // between a full rebuild and an incremental refresh.
+        List<NormalizedTransaction> candidates = new ArrayList<>(
+                mongoOperations.find(query, NormalizedTransaction.class));
         if (candidates.isEmpty()) {
             return 0;
         }
+        candidates.sort(Comparator.comparing(NormalizedTransaction::getId,
+                Comparator.nullsLast(Comparator.naturalOrder())));
 
         Map<String, Integer> corrIdCount = new HashMap<>();
         for (NormalizedTransaction tx : candidates) {
@@ -123,6 +130,11 @@ public class BybitInternalTransferPairer {
         Map<String, List<NormalizedTransaction>> groupedByTransferId = new LinkedHashMap<>();
         for (NormalizedTransaction tx : candidates) {
             String corr = tx.getCorrelationId();
+            // RC-9 D1: corridor anchors are owned by the deterministic on-chain↔CEX corridor
+            // projection; never re-key them via cross-UID pairing.
+            if (corr != null && corr.startsWith(CorridorCorrelationKeyFactory.CORRIDOR_PREFIX)) {
+                continue;
+            }
             boolean alreadyPaired = corr != null && !corr.isBlank()
                     && corrIdCount.getOrDefault(corr, 0) >= 2;
             if (alreadyPaired) {
@@ -315,6 +327,10 @@ public class BybitInternalTransferPairer {
         List<NormalizedTransaction> candidates =
                 fundingByUid.getOrDefault(sourceUid, Collections.emptyList());
         return candidates.stream()
+                // RC-9 D1: stable selection so the linked FUNDING_HISTORY outbound is a pure
+                // function of the candidate set, not Mongo iteration order.
+                .sorted(Comparator.comparing(NormalizedTransaction::getId,
+                        Comparator.nullsLast(Comparator.naturalOrder())))
                 .filter(tx -> principalQuantitySign(tx) < 0)
                 .filter(tx -> assetSymbol.equals(principalAssetSymbol(tx)))
                 .filter(tx -> {
@@ -685,8 +701,13 @@ public class BybitInternalTransferPairer {
             if (docs.size() < 2) {
                 continue;
             }
-            docs.sort(Comparator.comparing(NormalizedTransaction::getBlockTimestamp,
-                    Comparator.nullsLast(Comparator.naturalOrder())));
+            // RC-9 D1: stable keeper selection. blockTimestamp alone is not a total order — two
+            // stream mirrors can share the same minute bucket, so the keeper (and therefore which
+            // sibling is demoted) flipped between full rebuild and incremental refresh. Add a
+            // lowest-_id tiebreaker so the keeper is a pure function of the candidate set.
+            docs.sort(Comparator
+                    .comparing(NormalizedTransaction::getBlockTimestamp, Comparator.nullsLast(Comparator.naturalOrder()))
+                    .thenComparing(NormalizedTransaction::getId, Comparator.nullsLast(Comparator.naturalOrder())));
             NormalizedTransaction keeper = docs.get(0);
             for (int i = 1; i < docs.size(); i++) {
                 NormalizedTransaction mirror = docs.get(i);

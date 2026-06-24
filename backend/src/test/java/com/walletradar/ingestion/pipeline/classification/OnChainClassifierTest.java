@@ -902,8 +902,8 @@ class OnChainClassifierTest {
     }
 
     @Test
-    @DisplayName("Avalanche homoglyph USDC spoof inbound becomes promo spam")
-    void avalancheHomoglyphUsdcSpoofInboundBecomesPromoSpam() {
+    @DisplayName("Avalanche homoglyph USDC spoof inbound is quarantined as a spoof token (SF-1)")
+    void avalancheHomoglyphUsdcSpoofInboundIsQuarantined() {
         RawTransaction rawTransaction = promoInboundRaw(
                 NetworkId.AVALANCHE,
                 "0xa9059cbb",
@@ -918,7 +918,9 @@ class OnChainClassifierTest {
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.UNKNOWN);
         assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
-        assertThat(result.missingDataReasons()).containsExactly("PROMO_SPAM_PHISHING");
+        assertThat(result.excludedFromAccounting()).isTrue();
+        assertThat(result.accountingExclusionReason()).isEqualTo("SPOOF_TOKEN_CONFUSABLE_SYMBOL");
+        assertThat(result.missingDataReasons()).containsExactly("SPOOF_TOKEN_CONFUSABLE_SYMBOL");
     }
 
     @Test
@@ -2291,7 +2293,9 @@ class OnChainClassifierTest {
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.LP_ENTRY);
         assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.PROTOCOL_REGISTRY);
-        assertThat(result.correlationId()).isEqualTo("lp-position:unichain:uniswap:42775");
+        // RC-1 (ADR-018): identity keyed by the NFPM contract, not the protocol slug.
+        assertThat(result.correlationId())
+                .isEqualTo("lp-position:unichain:0x4529a01c7a0410167c5740c487a8de60232617bf:42775");
         assertThat(result.flows())
                 .filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
                 .isNotEmpty()
@@ -2338,7 +2342,9 @@ class OnChainClassifierTest {
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.LP_EXIT);
         assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.PROTOCOL_REGISTRY);
-        assertThat(result.correlationId()).isEqualTo("lp-position:unichain:uniswap:42775");
+        // RC-1 (ADR-018): identity keyed by the NFPM contract; entry+exit share one pool.
+        assertThat(result.correlationId())
+                .isEqualTo("lp-position:unichain:0x4529a01c7a0410167c5740c487a8de60232617bf:42775");
     }
 
     @Test
@@ -2380,7 +2386,8 @@ class OnChainClassifierTest {
         OnChainClassificationResult result = classifier.classify(rawTransaction);
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.LP_EXIT);
-        assertThat(result.correlationId()).isEqualTo("lp-position:unichain:uniswap:44341");
+        assertThat(result.correlationId())
+                .isEqualTo("lp-position:unichain:0x4529a01c7a0410167c5740c487a8de60232617bf:44341");
     }
 
     @Test
@@ -3393,7 +3400,9 @@ class OnChainClassifierTest {
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.LP_ENTRY);
         assertThat(result.protocolName()).isEqualTo("PancakeSwap");
         assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
-        assertThat(result.correlationId()).isEqualTo("lp-position:arbitrum:pancakeswap:196975");
+        // RC-1 (ADR-018): identity keyed by the PancakeSwap V3 NFPM contract, not the slug.
+        assertThat(result.correlationId())
+                .isEqualTo("lp-position:arbitrum:0x46a15b0b27311cedf172ab29e4f4766fbe7f4364:196975");
         assertThat(result.missingDataReasons())
                 .doesNotContain(ClassificationReasonCode.LP_POSITION_CORRELATION_REQUIRED.code());
     }
@@ -5523,8 +5532,22 @@ class OnChainClassifierTest {
     @Test
     @DisplayName("route-tagged LI.FI diamond call becomes BRIDGE_OUT")
     void routeTaggedLifiDiamondCallBecomesBridgeOut() {
+        String mantleProxy = "0xbdff0c1c8b0b779581c4ac3ba1f29667c366c56e";
+        when(protocolRegistryService.lookup(NetworkId.MANTLE, mantleProxy))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        mantleProxy,
+                        Set.of(NetworkId.MANTLE),
+                        ProtocolRegistryFamily.BRIDGE,
+                        ProtocolRegistryRole.BRIDGE_ENTRY,
+                        ProtocolRegistryEventType.BRIDGE_OUT,
+                        ConfidenceLevel.HIGH,
+                        "LI.FI",
+                        "V1",
+                        false,
+                        null
+                )));
         RawTransaction rawTransaction = baseRaw(NetworkId.MANTLE);
-        rawTransaction.getRawData().put("to", "0xbdff0c1c8b0b779581c4ac3ba1f29667c366c56e");
+        rawTransaction.getRawData().put("to", mantleProxy);
         rawTransaction.getRawData().put("methodId", "0xd7a08473");
         rawTransaction.getRawData().put("functionName",
                 "callDiamondWithEIP2612Signature(address tokenAddress,uint256 amount,uint256 deadline,uint8 v,bytes32 r,bytes32 s,bytes diamondCalldata)");
@@ -5534,7 +5557,7 @@ class OnChainClassifierTest {
                         .append("tokenSymbol", "USDC")
                         .append("tokenDecimal", "6")
                         .append("from", WALLET)
-                        .append("to", "0xbdff0c1c8b0b779581c4ac3ba1f29667c366c56e")
+                        .append("to", mantleProxy)
                         .append("value", "1000000")
         )).append("internalTransfers", List.of()));
 

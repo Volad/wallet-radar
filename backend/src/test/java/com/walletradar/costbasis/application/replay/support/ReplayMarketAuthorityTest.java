@@ -152,6 +152,86 @@ class ReplayMarketAuthorityTest {
     }
 
     @Test
+    @DisplayName("RC-3: ETH BRIDGE_IN on LINEA resolves canonical cross-network quote (no avco $0)")
+    void resolveEthCrossNetworkOnLineaNativeChain() {
+        Instant occurredAt = Instant.parse("2026-02-18T09:12:00Z");
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setId("tx-linea-eth");
+        tx.setSource(NormalizedTransactionSource.ON_CHAIN);
+        tx.setNetworkId(com.walletradar.domain.common.NetworkId.LINEA);
+        tx.setBlockTimestamp(occurredAt);
+        tx.setType(NormalizedTransactionType.BRIDGE_IN);
+
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(NormalizedLegRole.TRANSFER);
+        // LINEA's canonical native token is ETH.
+        flow.setAssetSymbol("ETH");
+        flow.setQuantityDelta(new BigDecimal("0.0074"));
+        tx.setFlows(List.of(flow));
+
+        when(priceExternalSourceOrchestrator.prioritizedSources(any(PriceRequest.class)))
+                .thenReturn(List.of(PriceSource.COINGECKO));
+        // The LINEA network/contract-scoped cache missed at this minute.
+        when(historicalPriceCacheService.findQuote(any(PriceRequest.class), eq(PriceSource.COINGECKO)))
+                .thenReturn(Optional.empty());
+        // A same-minute ETH quote priced on any other network resolves the canonical price.
+        when(historicalPriceCacheService.findCanonicalQuote(anyCollection(), eq(occurredAt), eq(PriceSource.COINGECKO)))
+                .thenReturn(Optional.of(new PriceQuote(
+                        new BigDecimal("2780.00"),
+                        PriceSource.COINGECKO,
+                        occurredAt,
+                        "ETH",
+                        "test-eth-linea"
+                )));
+
+        ReplayMarketAuthority authority = new ReplayMarketAuthority(
+                historicalPriceCacheService,
+                priceExternalSourceOrchestrator
+        );
+
+        Optional<ReplayMarketAuthority.ResolvedMarketPrice> resolved = authority.resolve(tx, flow);
+
+        assertThat(resolved).isPresent();
+        assertThat(resolved.get().unitPriceUsd()).isEqualByComparingTo("2780.00");
+        assertThat(resolved.get().authority())
+                .isEqualTo(ReplayMarketAuthority.ResolvedMarketPrice.Authority.HISTORICAL_CACHE);
+    }
+
+    @Test
+    @DisplayName("RC-3: ETH inbound with no quote anywhere stays unresolved (PENDING), never fabricates a price")
+    void resolveEthReturnsEmptyWhenNoCrossNetworkQuoteExists() {
+        Instant occurredAt = Instant.parse("2026-02-18T09:12:00Z");
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setId("tx-linea-eth-gap");
+        tx.setSource(NormalizedTransactionSource.ON_CHAIN);
+        tx.setNetworkId(com.walletradar.domain.common.NetworkId.LINEA);
+        tx.setBlockTimestamp(occurredAt);
+        tx.setType(NormalizedTransactionType.BRIDGE_IN);
+
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(NormalizedLegRole.TRANSFER);
+        flow.setAssetSymbol("ETH");
+        flow.setQuantityDelta(new BigDecimal("0.0074"));
+        tx.setFlows(List.of(flow));
+
+        when(priceExternalSourceOrchestrator.prioritizedSources(any(PriceRequest.class)))
+                .thenReturn(List.of(PriceSource.COINGECKO));
+        when(historicalPriceCacheService.findQuote(any(PriceRequest.class), eq(PriceSource.COINGECKO)))
+                .thenReturn(Optional.empty());
+        when(historicalPriceCacheService.findCanonicalQuote(anyCollection(), eq(occurredAt), eq(PriceSource.COINGECKO)))
+                .thenReturn(Optional.empty());
+
+        ReplayMarketAuthority authority = new ReplayMarketAuthority(
+                historicalPriceCacheService,
+                priceExternalSourceOrchestrator
+        );
+
+        // Empty (not a fabricated $0/▮ price): the engine routes this to the uncovered /
+        // incomplete-history (PENDING) state rather than booking a covered $0 acquisition.
+        assertThat(authority.resolve(tx, flow)).isEmpty();
+    }
+
+    @Test
     @DisplayName("F-5(a): confusable lookalike never inherits a canonical cross-network price")
     void resolveDoesNotCrossNetworkResolveConfusableSymbol() {
         Instant occurredAt = Instant.parse("2025-06-01T08:30:00Z");

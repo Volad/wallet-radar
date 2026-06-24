@@ -5,6 +5,8 @@ import com.walletradar.costbasis.application.replay.persistence.LedgerPointColle
 import com.walletradar.costbasis.application.replay.planning.PassThroughCorridorPlanner;
 import com.walletradar.costbasis.application.replay.query.ConfirmedReplayQueryService;
 import com.walletradar.costbasis.application.replay.state.ReplayExecutionState;
+import com.walletradar.costbasis.application.replay.support.CorridorBasisConservationGuard;
+import com.walletradar.costbasis.application.replay.support.ReplayAccumulatorDriftCanary;
 import com.walletradar.costbasis.application.replay.support.ReplayAssetSupport;
 import com.walletradar.costbasis.application.replay.support.ReplayFlowSupport;
 import com.walletradar.costbasis.application.replay.state.BorrowLiabilityReplayContext;
@@ -28,6 +30,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -53,6 +56,8 @@ public class AvcoReplayService {
     private final BorrowLiabilityTracker borrowLiabilityTracker;
     private final AccountingShortfallAuditService accountingShortfallAuditService;
     private final AccountingUniverseService accountingUniverseService;
+    private final CorridorBasisConservationGuard corridorBasisConservationGuard;
+    private final ReplayAccumulatorDriftCanary replayAccumulatorDriftCanary;
 
     public int replayConfirmed() {
         return replayConfirmed(null, null, null);
@@ -79,23 +84,31 @@ public class AvcoReplayService {
         if (bindUniverse) {
             accountingUniverseService.bindUniverse(universeId);
         }
-        Map<CounterpartyBasisPoolKey, CounterpartyBasisPool> counterpartyPools =
-                counterpartyBasisPoolService.loadAllForUniverse(universeId);
+        // RC-12 / ADR-030: every persisted accumulator book is a pure derived projection of the
+        // FULL CONFIRMED set, which the replay reprocesses in its entirety each run
+        // (ConfirmedReplayQueryService.loadOrderedConfirmed has no since/window filter) and is the
+        // sole writer of via end-of-run replace-only persistence (replaceUniverse* =
+        // deleteByUniverseId -> saveAll; persistDirty is dead code). Seeding these books from prior
+        // persisted output therefore re-accumulated (recordBorrow/safeAdd/deposit) still-open
+        // positions on incremental refresh, doubling them. They must start from an EMPTY map each
+        // run — exactly like asset_ledger_points — so a rebuild-from-empty can only drop stale
+        // state, never legitimate cross-run state. A future incremental-window optimization MUST NOT
+        // reintroduce this seed (see ADR-030).
+        Map<CounterpartyBasisPoolKey, CounterpartyBasisPool> counterpartyPools = new LinkedHashMap<>();
         Set<CounterpartyBasisPoolKey> dirtyCounterpartyPools = new HashSet<>();
         CounterpartyBasisPoolReplayContext poolContext = new CounterpartyBasisPoolReplayContext(
                 universeId,
                 counterpartyPools,
                 dirtyCounterpartyPools
         );
-        Map<String, BorrowLiability> borrowLiabilities = borrowLiabilityTracker.loadAllForUniverse(universeId);
+        Map<String, BorrowLiability> borrowLiabilities = new LinkedHashMap<>();
         Set<String> dirtyBorrowLiabilities = new HashSet<>();
         BorrowLiabilityReplayContext borrowContext = new BorrowLiabilityReplayContext(
                 universeId,
                 borrowLiabilities,
                 dirtyBorrowLiabilities
         );
-        Map<LpReceiptBasisPoolKey, LpReceiptBasisPool> lpReceiptPools =
-                lpReceiptBasisPoolService.loadAllForUniverse(universeId);
+        Map<LpReceiptBasisPoolKey, LpReceiptBasisPool> lpReceiptPools = new LinkedHashMap<>();
         Set<LpReceiptBasisPoolKey> dirtyLpReceiptPools = new HashSet<>();
         LpReceiptBasisPoolReplayContext lpReceiptContext = new LpReceiptBasisPoolReplayContext(
                 universeId,
@@ -125,6 +138,11 @@ public class AvcoReplayService {
             // by end-of-ledger (no on-chain USD REPAY exists). Fails safe to OPEN if collateral is held.
             replayDispatcher.closeDrainedLeverageLiabilities(replayState);
 
+            // RC-9 / RC-7 D3: end-of-replay corridor/bridge basis conservation sweep. WARN-mode by
+            // default (CorridorBasisConservationGuard.SEVERITY); surfaces any released CARRY_OUT
+            // that no credit inherited so an orphaned corridor/bridge basis cannot pass silently.
+            corridorBasisConservationGuard.evaluate(replayState);
+
             if (accountingUniverseId == null || accountingUniverseId.isBlank()) {
                 assetLedgerPointRepository.deleteAll();
             } else {
@@ -136,6 +154,19 @@ public class AvcoReplayService {
             counterpartyBasisPoolService.replaceUniversePools(universeId, counterpartyPools);
             lpReceiptBasisPoolService.replaceUniversePools(universeId, lpReceiptPools);
             borrowLiabilityTracker.replaceUniverseLiabilities(universeId, borrowLiabilities);
+            // RC-12 / ADR-030: compute-vs-persisted drift canary. The replay is the sole writer of
+            // all three accumulator books, so the freshly-computed in-memory books must match the
+            // just-persisted reload bit-for-bit. WARN-only (never blocks replay); the hard check is
+            // the rebuild==refresh==refresh×N idempotency test.
+            replayAccumulatorDriftCanary.check(
+                    universeId,
+                    borrowLiabilities,
+                    borrowLiabilityTracker.loadAllForUniverse(universeId),
+                    counterpartyPools,
+                    counterpartyBasisPoolService.loadAllForUniverse(universeId),
+                    lpReceiptPools,
+                    lpReceiptBasisPoolService.loadAllForUniverse(universeId)
+            );
             List<AccountingShortfallAudit> shortfallAudits =
                     accountingShortfallAuditService.collectFromLedgerPoints(ledgerPoints, replayStartedAt);
             accountingShortfallAuditService.replaceUniverseAudits(universeId, shortfallAudits);

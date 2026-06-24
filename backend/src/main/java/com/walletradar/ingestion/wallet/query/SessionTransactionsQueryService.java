@@ -41,7 +41,8 @@ public class SessionTransactionsQueryService {
     private static final int MAX_LIMIT = 500;
     private static final List<String> SPAM_LIKE_REASON_CODES = List.of(
             "PROMO_SPAM_PHISHING",
-            "CLAIM_LIKE_SPAM_OR_AIRDROP"
+            "CLAIM_LIKE_SPAM_OR_AIRDROP",
+            "SPOOF_TOKEN_CONFUSABLE_SYMBOL"
     );
     private static final Criteria ACTIVE_ACCOUNTING_CRITERIA = new Criteria().orOperator(
             Criteria.where("excludedFromAccounting").exists(false),

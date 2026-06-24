@@ -285,10 +285,24 @@ public class LiFiBridgePairLinkService {
         boolean continuityCandidate = supportsPlainMoveBasis(source, destination);
         List<NormalizedTransaction> updates = new ArrayList<>();
 
-        if (!sameHash(source.getMatchedCounterparty(), destination.getTxHash())
+        // Simple cross-asset bridge swaps (cc=false AND exactly 1:1 flow pair with different families)
+        // must NOT carry matchedCounterparty on the source leg: a set counterparty routes CARRY_OUT
+        // through bridgeSettlementKey() ("bridge-settlement:") while the BRIDGE_IN drains only
+        // "bridge:" keys — they can never match, leaving the CARRY_OUT orphaned (~$968 guard breach).
+        // Multi-flow bridges (cc=false because there are ≥2 source or destination principal flows)
+        // retain the counterparty because hasSinglePrincipalTransferFlow() prevents bridgeSettlementKey()
+        // from firing, and the UI still needs the link.
+        boolean simpleCrossAssetSwap = !continuityCandidate
+                && principalFlows(source, -1).size() == 1
+                && principalFlows(destination, 1).size() == 1;
+        String targetSourceCounterparty = simpleCrossAssetSwap ? null : destination.getTxHash();
+        boolean sourceCounterpartyMismatch = simpleCrossAssetSwap
+                ? hasText(source.getMatchedCounterparty())
+                : !sameHash(source.getMatchedCounterparty(), destination.getTxHash());
+        if (sourceCounterpartyMismatch
                 || !sameCorrelation(source.getCorrelationId(), correlationId)
                 || !Objects.equals(source.getContinuityCandidate(), continuityCandidate)) {
-            source.setMatchedCounterparty(destination.getTxHash());
+            source.setMatchedCounterparty(targetSourceCounterparty);
             source.setCorrelationId(correlationId);
             source.setContinuityCandidate(continuityCandidate);
             source.setUpdatedAt(now);
@@ -413,8 +427,16 @@ public class LiFiBridgePairLinkService {
         List<NormalizedTransaction> updates = new ArrayList<>();
         boolean sourceChanged = false;
 
-        if (!sameHash(source.getMatchedCounterparty(), destination.getTxHash())) {
-            source.setMatchedCounterparty(destination.getTxHash());
+        // Apply the same cross-asset guard as materializePair: suppress matchedCounterparty on the
+        // source only for cc=false single-outbound-flow supplemental anchors.
+        boolean supplementalSimpleCrossAsset = !continuityCandidate && principalFlows(source, -1).size() == 1;
+        if (!supplementalSimpleCrossAsset) {
+            if (!sameHash(source.getMatchedCounterparty(), destination.getTxHash())) {
+                source.setMatchedCounterparty(destination.getTxHash());
+                sourceChanged = true;
+            }
+        } else if (hasText(source.getMatchedCounterparty())) {
+            source.setMatchedCounterparty(null);
             sourceChanged = true;
         }
         if (!sameCorrelation(source.getCorrelationId(), correlationId)) {
