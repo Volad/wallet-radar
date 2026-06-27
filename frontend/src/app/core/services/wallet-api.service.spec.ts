@@ -9,6 +9,8 @@ import {
   SessionBackfillStatusResponse,
   SessionDashboardResponse,
   SessionLendingResponse,
+  SessionLpPositionResponse,
+  SessionLpResponse,
   SessionRefreshResponse,
   SessionSettingsResponse,
   SessionTransactionsResponse,
@@ -117,6 +119,14 @@ describe('WalletApiService', () => {
         totalUnrealizedPnlUsd: 10,
         totalUnrealizedPnlPct: 8.8,
         totalRealizedPnlUsd: 3.2,
+        netExternalCapitalUsd: null,
+        lifetimeExternalInflowUsd: null,
+        markToMarketUsd: null,
+        expectedPnlUsd: null,
+        reportedPnlUsd: null,
+        conservationDeltaUsd: null,
+        conservationThresholdUsd: null,
+        conservationBreached: null,
       },
       wallets: [],
       tokenPositions: [],
@@ -157,6 +167,7 @@ describe('WalletApiService', () => {
           healthProgress: 100,
           healthStatus: 'ESTIMATED',
           healthSource: 'ACCOUNTING_ESTIMATE',
+          healthStale: false,
           supplyUsd: 1000,
           borrowUsd: 250,
           netExposureUsd: 750,
@@ -176,6 +187,83 @@ describe('WalletApiService', () => {
       `${sessionsBaseUrl}/${encodeURIComponent(sessionId)}/lending`
     );
     expect(req.request.method).toBe('GET');
+    req.flush(response);
+  });
+
+  it('gets session LP from /sessions/{id}/lp', () => {
+    const sessionId = '549b0aba-a9af-4789-b125-ebb86314a3f1';
+    const response: SessionLpResponse = {
+      sessionId,
+      summary: {
+        activeTvlUsd: 4991,
+        feesEarnedUsd: 223.6,
+        unclaimedUsd: 41.2,
+        inRange: 1,
+        outOfRange: 0,
+        realizedPnlUsd: null,
+      },
+      positions: [],
+    };
+
+    service.getSessionLp(sessionId).subscribe((result) => {
+      expect(result.summary.activeTvlUsd).toBe(4991);
+    });
+
+    const req = httpMock.expectOne(
+      `${sessionsBaseUrl}/${encodeURIComponent(sessionId)}/lp?scope=active`
+    );
+    expect(req.request.method).toBe('GET');
+    req.flush(response);
+  });
+
+  it('posts LP position refresh to /sessions/{id}/lp/positions/{correlationId}/refresh', () => {
+    const sessionId = '549b0aba-a9af-4789-b125-ebb86314a3f1';
+    const correlationId = 'uni-eth-usdc';
+    const response: SessionLpPositionResponse = {
+      correlationId,
+      protocol: 'Uniswap V3',
+      family: 'CL_NFT',
+      networkId: 'ETHEREUM',
+      wallet: '0x1234',
+      pair: 'ETH / USDC',
+      token0: { symbol: 'ETH', quantity: 1, valueUsd: 3000 },
+      token1: { symbol: 'USDC', quantity: 3000, valueUsd: 3000 },
+      feeTierPct: 0.05,
+      tokenId: '#1',
+      status: 'in_range',
+      staked: false,
+      range: null,
+      tvlUsd: { valueUsd: 6000, precision: 'EXACT' },
+      costBasisUsd: 5500,
+      withdrawnUsd: 0,
+      fees: { claimedUsd: 10, unclaimedUsd: 2, precision: 'EXACT', perToken: [] },
+      il: { pct: -1, usd: -50, precision: 'ESTIMATED' },
+      priceAppreciationUsd: 20,
+      netPnlUsd: 30,
+      accountingUnrealizedUsd: 30,
+      apr: { now: 10, avg: 12, precision: 'ESTIMATED' },
+      earningsDaily: [],
+      aprDaily: [],
+      txns: [],
+      enteredAt: '2024-10-12T00:00:00Z',
+      closedAt: null,
+      snapshotAt: '2026-06-24T12:00:00Z',
+      snapshotStale: false,
+      trackingStartedAt: '2024-10-12T00:00:00Z',
+    };
+
+    service.refreshLpPosition(sessionId, correlationId).subscribe((result) => {
+      expect(result.correlationId).toBe(correlationId);
+      const tvl = result.tvlUsd;
+      const valueUsd = typeof tvl === 'number' ? tvl : tvl?.valueUsd;
+      expect(valueUsd).toBe(6000);
+    });
+
+    const req = httpMock.expectOne(
+      `${sessionsBaseUrl}/${encodeURIComponent(sessionId)}/lp/positions/${encodeURIComponent(correlationId)}/refresh`
+    );
+    expect(req.request.method).toBe('POST');
+    expect(req.request.body).toEqual({});
     req.flush(response);
   });
 

@@ -624,6 +624,159 @@ export interface SessionLendingResponse {
   readonly groups: ReadonlyArray<SessionLendingGroupResponse>;
 }
 
+export interface SessionLpUsdMetricResponse {
+  readonly valueUsd: number | null;
+  readonly precision: string | null;
+}
+
+export interface SessionLpTokenSideResponse {
+  readonly symbol?: string | null;
+  readonly sym?: string | null;
+  readonly quantity?: number | null;
+  readonly qty?: number | null;
+  readonly valueUsd?: number | null;
+  readonly usd?: number | null;
+  readonly hodlUsd?: number | null;
+}
+
+export interface SessionLpLiquidityBinResponse {
+  readonly tickLower: number;
+  readonly tickUpper: number;
+  readonly priceLower: number | null;
+  readonly priceUpper: number | null;
+  readonly liquidityShare: number;
+}
+
+export interface SessionLpPriceRangeResponse {
+  readonly priceLow: number | null;
+  readonly priceHigh: number | null;
+  readonly priceCurrent: number | null;
+  readonly priceUnit?: string | null;
+  readonly tickLower?: number | null;
+  readonly tickUpper?: number | null;
+  readonly currentTick?: number | null;
+  readonly liquidityBins?: ReadonlyArray<SessionLpLiquidityBinResponse> | null;
+  readonly precision?: string | null;
+}
+
+export interface SessionLpFeeTokenResponse {
+  readonly sym?: string | null;
+  readonly symbol?: string | null;
+  readonly qtyUnclaimed?: number | null;
+  readonly usdUnclaimed?: number | null;
+  readonly qtyClaimed?: number | null;
+  readonly usdClaimed?: number | null;
+  readonly claimed?: number | null;
+  readonly unclaimed?: number | null;
+}
+
+export interface SessionLpFeesResponse {
+  readonly claimedUsd: number | null;
+  readonly unclaimedUsd: number | null;
+  readonly precision?: string | null;
+  readonly claimedPrecision?: string | null;
+  readonly unclaimedPrecision?: string | null;
+  readonly perToken?: ReadonlyArray<SessionLpFeeTokenResponse> | Record<string, number> | null;
+}
+
+export interface SessionLpIlResponse {
+  readonly pct: number | null;
+  readonly usd: number | null;
+  readonly precision: string | null;
+}
+
+export interface SessionLpAprResponse {
+  readonly now?: number | null;
+  readonly avg?: number | null;
+  readonly nowPct?: number | null;
+  readonly avgPct?: number | null;
+  readonly precision: string | null;
+}
+
+export interface SessionLpDailyPointResponse {
+  readonly date?: string | null;
+  readonly day?: string | null;
+  readonly value?: number | null;
+  readonly earnedUsd?: number | null;
+  readonly aprPct?: number | null;
+  readonly precision?: string | null;
+}
+
+export interface SessionLpTransactionResponse {
+  readonly id: string | null;
+  readonly type: string | null;
+  readonly label?: string | null;
+  readonly detail?: string | null;
+  readonly assetSymbol?: string | null;
+  readonly quantity?: number | null;
+  readonly valueUsd: number | null;
+  readonly assetSymbol1?: string | null;
+  readonly quantity1?: number | null;
+  readonly valueUsd1?: number | null;
+  readonly totalValueUsd?: number | null;
+  readonly gasFeeUsd?: number | null;
+  readonly valueUsdPrecision?: string | null;
+  readonly txHash: string | null;
+  readonly blockTimestamp?: string | null;
+  readonly timestamp?: string | null;
+}
+
+export interface SessionLpPositionResponse {
+  readonly correlationId: string;
+  readonly protocol: string | null;
+  readonly family: string | null;
+  readonly networkId: EvmNetworkId | null;
+  readonly wallet?: string | null;
+  readonly walletAddress?: string | null;
+  readonly pair: string | null;
+  readonly token0: SessionLpTokenSideResponse | null;
+  readonly token1: SessionLpTokenSideResponse | null;
+  readonly feeTierPct: number | null;
+  readonly tokenId: string | null;
+  readonly status: 'in_range' | 'out_of_range' | 'closed' | 'unknown' | null;
+  readonly staked: boolean | null;
+  readonly range: SessionLpPriceRangeResponse | null;
+  readonly tvlUsd: SessionLpUsdMetricResponse | number | null;
+  readonly tvlPrecision?: string | null;
+  readonly costBasisUsd: number | null;
+  readonly costBasisPrecision?: string | null;
+  readonly depositedMarketUsd?: number | null;
+  readonly depositedMarketPrecision?: string | null;
+  readonly entryToken0?: SessionLpTokenSideResponse | null;
+  readonly entryToken1?: SessionLpTokenSideResponse | null;
+  readonly withdrawnUsd: number | null;
+  readonly fees: SessionLpFeesResponse | null;
+  readonly il: SessionLpIlResponse | null;
+  readonly priceAppreciationUsd: number | null;
+  readonly priceAppreciationPrecision: string | null;
+  readonly netPnlUsd: number | null;
+  readonly accountingUnrealizedUsd: number | null;
+  readonly apr: SessionLpAprResponse | null;
+  readonly earningsDaily: ReadonlyArray<SessionLpDailyPointResponse> | null;
+  readonly aprDaily: ReadonlyArray<SessionLpDailyPointResponse> | null;
+  readonly txns: ReadonlyArray<SessionLpTransactionResponse> | null;
+  readonly enteredAt: string | null;
+  readonly closedAt: string | null;
+  readonly snapshotAt: string | null;
+  readonly snapshotStale: boolean | null;
+  readonly trackingStartedAt: string | null;
+}
+
+export interface SessionLpSummaryResponse {
+  readonly activeTvlUsd: number | null;
+  readonly feesEarnedUsd: number | null;
+  readonly unclaimedUsd: number | null;
+  readonly inRange: number | null;
+  readonly outOfRange: number | null;
+  readonly realizedPnlUsd: number | null;
+}
+
+export interface SessionLpResponse {
+  readonly sessionId: string;
+  readonly summary: SessionLpSummaryResponse;
+  readonly positions: ReadonlyArray<SessionLpPositionResponse>;
+}
+
 // Backward-compatible alias used across current component code.
 export type WalletAddRequestItem = AddSessionRequestItem;
 

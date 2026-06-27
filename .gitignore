@@ -35,6 +35,8 @@ results/
 data/
 raw_data/
 tmp/
+.tmp-*/
+.tmp-shots/
 *.log
 handoff/
 auto-loop-handoff/

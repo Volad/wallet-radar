@@ -146,6 +146,6 @@ class LinkingBatchProcessorTest {
         int processed = processor.processNextBatch(25, heartbeatCount::incrementAndGet);
 
         assertThat(processed).isEqualTo(726);
-        assertThat(heartbeatCount).hasValue(34);
+        assertThat(heartbeatCount).hasValue(35);
     }
 }

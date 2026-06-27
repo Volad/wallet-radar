@@ -23,6 +23,8 @@ public final class LpPositionCorrelationSupport {
     private static final String BURN_SELECTOR = "0x00f714ce";
     private static final String MULTICALL_SELECTOR = "0xac9650d8";
     private static final String MODIFY_LIQUIDITIES_SELECTOR = "0xdd46508f";
+    private static final String SAFE_TRANSFER_FROM_SELECTOR = "0x42842e0e";
+    private static final String SAFE_TRANSFER_FROM_WITH_DATA_SELECTOR = "0xb88d4fde";
     private static final String ERC721_TRANSFER_TOPIC =
             "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
     private static final int ACTION_INCREASE_LIQUIDITY = 0x00;
@@ -188,7 +190,10 @@ public final class LpPositionCorrelationSupport {
     }
 
     public static boolean supportsLpPositionCorrelation(NormalizedTransactionType type) {
-        return isPositionScopedLpType(type) || type == NormalizedTransactionType.LP_FEE_CLAIM;
+        return isPositionScopedLpType(type)
+                || type == NormalizedTransactionType.LP_FEE_CLAIM
+                || type == NormalizedTransactionType.LP_POSITION_STAKE
+                || type == NormalizedTransactionType.LP_POSITION_UNSTAKE;
     }
 
     public static boolean hasDecreaseOrBurnActionInCalldata(OnChainRawTransactionView view) {
@@ -298,6 +303,9 @@ public final class LpPositionCorrelationSupport {
                     COLLECT_SELECTOR,
                     BURN_SELECTOR -> CalldataDecodingSupport.decodeUint256Argument(inputData, 0);
             case MODIFY_LIQUIDITIES_SELECTOR -> decodeModifyLiquiditiesTokenId(inputData);
+            // safeTransferFrom(address from, address to, uint256 tokenId) — tokenId is arg[2]
+            case SAFE_TRANSFER_FROM_SELECTOR,
+                    SAFE_TRANSFER_FROM_WITH_DATA_SELECTOR -> CalldataDecodingSupport.decodeUint256Argument(inputData, 2);
             default -> null;
         };
     }

@@ -24,7 +24,9 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  * Promotes simple same-tx reciprocal on-chain transfer pairs into INTERNAL_TRANSFER
@@ -45,25 +47,79 @@ public class InternalTransferPairLinkService {
     private final SessionWalletAdjacencyService sessionWalletAdjacencyService;
 
     public int reconcileOutstandingPairs(int batchSize) {
+        List<NormalizedTransaction> candidates = loadCandidateBatch(batchSize);
+        if (candidates.isEmpty()) {
+            return 0;
+        }
+
+        // Bulk-prefetch peer transactions: for each candidate we need the ON_CHAIN row at
+        // (candidate.txHash, candidate.networkId, walletAddress=candidate.matchedCounterparty).
+        // Fetching all same-txHash rows in one query avoids N+1 per-candidate lookups.
+        Set<String> txHashes = candidates.stream()
+                .map(NormalizedTransaction::getTxHash)
+                .filter(h -> !blank(h))
+                .collect(Collectors.toSet());
+        Map<String, NormalizedTransaction> peerByKey = buildPeerCache(txHashes);
+
         int changed = 0;
-        for (NormalizedTransaction candidate : loadCandidateBatch(batchSize)) {
-            if (link(candidate)) {
+        for (NormalizedTransaction candidate : candidates) {
+            if (link(candidate, peerByKey)) {
                 changed++;
             }
         }
         return changed;
     }
 
+    private Map<String, NormalizedTransaction> buildPeerCache(Set<String> txHashes) {
+        if (txHashes.isEmpty()) {
+            return Map.of();
+        }
+        Query query = Query.query(new Criteria().andOperator(
+                Criteria.where("source").is(NormalizedTransactionSource.ON_CHAIN),
+                Criteria.where("txHash").in(txHashes)
+        ));
+        // Uses normalized_corridor_network_tx_source_idx (networkId, txHash, source) or
+        // normalized_linking_wallet_source_type_status_idx for efficient retrieval.
+        List<NormalizedTransaction> rows = mongoOperations.find(query, NormalizedTransaction.class);
+        Map<String, NormalizedTransaction> cache = new LinkedHashMap<>();
+        for (NormalizedTransaction row : rows) {
+            if (row.getTxHash() != null && row.getNetworkId() != null && row.getWalletAddress() != null) {
+                String key = peerKey(row.getTxHash(), row.getNetworkId().name(), row.getWalletAddress());
+                cache.put(key, row);
+            }
+        }
+        return cache;
+    }
+
+    private String peerKey(String txHash, String networkId, String walletAddress) {
+        return (txHash == null ? "" : txHash.toLowerCase(Locale.ROOT))
+                + "|" + (networkId == null ? "" : networkId)
+                + "|" + (walletAddress == null ? "" : walletAddress.toLowerCase(Locale.ROOT));
+    }
+
     boolean link(NormalizedTransaction candidate) {
+        return link(candidate, Map.of());
+    }
+
+    private boolean link(NormalizedTransaction candidate, Map<String, NormalizedTransaction> peerCache) {
         if (!isCandidate(candidate)) {
             return false;
         }
-        NormalizedTransaction peer = normalizedTransactionRepository.findByTxHashAndNetworkIdAndWalletAddress(
-                        candidate.getTxHash(),
-                        candidate.getNetworkId(),
-                        candidate.getMatchedCounterparty()
-                )
-                .orElse(null);
+        NormalizedTransaction peer;
+        String key = peerKey(
+                candidate.getTxHash(),
+                candidate.getNetworkId() == null ? null : candidate.getNetworkId().name(),
+                candidate.getMatchedCounterparty()
+        );
+        if (peerCache.containsKey(key)) {
+            peer = peerCache.get(key);
+        } else {
+            peer = normalizedTransactionRepository.findByTxHashAndNetworkIdAndWalletAddress(
+                    candidate.getTxHash(),
+                    candidate.getNetworkId(),
+                    candidate.getMatchedCounterparty()
+            ).orElse(null);
+        }
         if (!isPairable(candidate, peer)) {
             return false;
         }

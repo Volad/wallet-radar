@@ -28,16 +28,36 @@ import com.walletradar.ingestion.pipeline.clarification.TurtleVaultBurnRepairSer
 import com.walletradar.ingestion.pipeline.clarification.UnmatchedBridgeInboundPricingFallbackService;
 import com.walletradar.ingestion.pipeline.clarification.UnmatchedExternalTransferInPricingFallbackService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
+import java.util.concurrent.TimeUnit;
+import java.util.function.IntSupplier;
 
 /**
  * Dedicated driver for deterministic cross-row and cross-source linking passes.
+ *
+ * <p>Passes are split into two groups:
+ * <ol>
+ *   <li><b>Convergent passes</b> ({@link #processConvergentPasses}) — take a {@code batchSize}
+ *       argument and naturally terminate when there are no more candidates. Callers loop these
+ *       until they return 0.</li>
+ *   <li><b>Terminal passes</b> ({@link #runTerminalPasses}) — perform full-collection scans that
+ *       are only meaningful once the convergent passes have converged. They are called once per
+ *       convergence cycle, not on every batch iteration.</li>
+ * </ol>
+ *
+ * <p>Each pass is wrapped in {@link #timedPass} which logs its duration at DEBUG level and emits
+ * an INFO warning for any pass taking longer than {@value SLOW_PASS_THRESHOLD_MS} ms.
  */
 @Component
 @RequiredArgsConstructor
+@Slf4j
 class LinkingBatchProcessor {
+
+    /** Log a WARN if any single pass exceeds this duration (ms). */
+    private static final long SLOW_PASS_THRESHOLD_MS = 500;
 
     private final BybitBridgeLinkService bybitBridgeLinkService;
     private final OnChainLifecycleLinkService onChainLifecycleLinkService;
@@ -70,151 +90,215 @@ class LinkingBatchProcessor {
     private final EtherFiOftBridgeInClassifier etherFiOftBridgeInClassifier;
     private final NftMintRetagger nftMintRetagger;
 
+    // ── Legacy entry-point kept for callers that do not use the split loop ──────
+
     int processNextBatch(int batchSize) {
         return processNextBatch(batchSize, () -> {
         });
     }
 
     int processNextBatch(int batchSize, Runnable progressHeartbeat) {
+        int convergent = processConvergentPasses(batchSize, progressHeartbeat);
+        int terminal   = runTerminalPasses(batchSize, progressHeartbeat);
+        return convergent + terminal;
+    }
+
+    // ── Convergent passes ─────────────────────────────────────────────────────
+    //   These use batchSize and naturally converge to 0 when all candidates
+    //   have been processed.  Call in a loop until the return value is 0.
+
+    int processConvergentPasses(int batchSize, Runnable progressHeartbeat) {
         int processed = 0;
 
-        processed += bybitBridgeLinkService.reconcileOutstandingPairs(batchSize);
+        processed += timedPass("bybitBridgeLink",
+                () -> bybitBridgeLinkService.reconcileOutstandingPairs(batchSize));
         progressHeartbeat.run();
 
-        processed += onChainLifecycleLinkService.processNextBatch(batchSize);
+        processed += timedPass("onChainLifecycleLink",
+                () -> onChainLifecycleLinkService.processNextBatch(batchSize));
         progressHeartbeat.run();
 
-        processed += liFiBridgePairLinkService.reconcileOutstandingSources(batchSize);
+        processed += timedPass("liFiBridgePairLink",
+                () -> liFiBridgePairLinkService.reconcileOutstandingSources(batchSize));
         progressHeartbeat.run();
 
-        processed += mayanCctpBridgePairLinkService.reconcileOutstandingSources(batchSize);
+        processed += timedPass("mayanCctpBridgePairLink",
+                () -> mayanCctpBridgePairLinkService.reconcileOutstandingSources(batchSize));
         progressHeartbeat.run();
 
-        processed += acrossBridgePairLinkService.reconcileOutstandingSources(batchSize);
+        processed += timedPass("acrossBridgePairLink",
+                () -> acrossBridgePairLinkService.reconcileOutstandingSources(batchSize));
         progressHeartbeat.run();
 
-        processed += cowSwapEthFlowSettlementLinkService.linkOutstandingSettlements(batchSize);
+        processed += timedPass("cowSwapEthFlowSettlementLink",
+                () -> cowSwapEthFlowSettlementLinkService.linkOutstandingSettlements(batchSize));
         progressHeartbeat.run();
 
-        processed += internalTransferPairLinkService.reconcileOutstandingPairs(batchSize);
+        processed += timedPass("internalTransferPairLink",
+                () -> internalTransferPairLinkService.reconcileOutstandingPairs(batchSize));
         progressHeartbeat.run();
 
-        processed += knownBridgeRouterExternalTypeCorrectionService.reclassifyKnownRouterExternals(batchSize);
+        processed += timedPass("knownBridgeRouterExternalTypeCorrection",
+                () -> knownBridgeRouterExternalTypeCorrectionService.reclassifyKnownRouterExternals(batchSize));
         progressHeartbeat.run();
 
-        // BR-1: a BRIDGE_OUT/IN whose counterparty is another own/member wallet is an own-wallet
-        // move, not a third-party bridge. Reclassify to INTERNAL_TRANSFER before bridge pairing so
-        // internal pairing (not bridge pairing) links the reciprocal leg.
-        processed += ownWalletBridgeMistypeCorrectionService.reclassifyOwnWalletBridgeMistypes(batchSize);
+        // BR-1: reclassify own-wallet bridge mistypes before bridge pairing
+        processed += timedPass("ownWalletBridgeMistypeCorrection",
+                () -> ownWalletBridgeMistypeCorrectionService.reclassifyOwnWalletBridgeMistypes(batchSize));
         progressHeartbeat.run();
 
-        // WS-3b: repair legacy EXTERNAL_TRANSFER rows with counterpartyAddress=MULTI caused by the
-        // FEE leg being counted as a counterparty (root cause fixed by ADR-032 / WS-3a).
-        // Phase A: EXTERNAL_TRANSFER_OUT/IN + MULTI + own wallet → INTERNAL_TRANSFER (own-wallet move)
-        processed += ownWalletBridgeMistypeCorrectionService.reclassifyMultiCpOwnWalletTransfers(batchSize);
-        progressHeartbeat.run();
-        // Phase B: remaining EXTERNAL_TRANSFER_OUT/IN + MULTI → stamp concrete counterparty
-        processed += multiCounterpartyCorrectionService.deMultiExternalTransfers(batchSize);
-        progressHeartbeat.run();
-        // Phase C: EXTERNAL_TRANSFER_OUT + known aggregator counterparty + swap-shape → SWAP
-        processed += multiCounterpartyCorrectionService.retypeAggregatorSwapMistypes(batchSize);
+        // WS-3b Phase A: EXTERNAL_TRANSFER + MULTI + own wallet → INTERNAL_TRANSFER
+        processed += timedPass("ownWalletMultiCpCorrection",
+                () -> ownWalletBridgeMistypeCorrectionService.reclassifyMultiCpOwnWalletTransfers(batchSize));
         progressHeartbeat.run();
 
-        processed += bybitTransferContinuityRepairService.reconcileOutstandingPairs(batchSize);
+        // WS-3b Phase B: stamp concrete counterparty on remaining MULTI externals
+        processed += timedPass("deMultiExternalTransfers",
+                () -> multiCounterpartyCorrectionService.deMultiExternalTransfers(batchSize));
         progressHeartbeat.run();
 
-        processed += bybitInternalTransferExternalCpReclassifier.reclassifySameUidExternalToInternal(Instant.now());
+        // WS-3b Phase C: EXTERNAL_TRANSFER_OUT + known aggregator → SWAP
+        processed += timedPass("retypeAggregatorSwapMistypes",
+                () -> multiCounterpartyCorrectionService.retypeAggregatorSwapMistypes(batchSize));
+        progressHeartbeat.run();
+
+        processed += timedPass("bybitTransferContinuityRepair1",
+                () -> bybitTransferContinuityRepairService.reconcileOutstandingPairs(batchSize));
+        progressHeartbeat.run();
+
+        processed += timedPass("bybitInternalTransferExternalCpReclassifier",
+                () -> bybitInternalTransferExternalCpReclassifier.reclassifySameUidExternalToInternal(Instant.now()));
         progressHeartbeat.run();
 
         // R12 Fix 11: stamp known protocol counterparties before cross-network pairing
-        processed += protocolAttributionClassifier.classifyProtocolAttribution(batchSize);
+        processed += timedPass("protocolAttributionClassifier",
+                () -> protocolAttributionClassifier.classifyProtocolAttribution(batchSize));
         progressHeartbeat.run();
 
-        processed += crossNetworkBridgePairFallbackService.reconcileOrphanInbounds(batchSize);
+        processed += timedPass("crossNetworkBridgePairFallback",
+                () -> crossNetworkBridgePairFallbackService.reconcileOrphanInbounds(batchSize));
         progressHeartbeat.run();
 
         // R11 Fix 5: exclude address-poisoning dust IN (vanity-prefix match)
-        processed += addressPoisoningDetector.detectAndExclude(batchSize);
+        processed += timedPass("addressPoisoningDetector",
+                () -> addressPoisoningDetector.detectAndExclude(batchSize));
         progressHeartbeat.run();
 
-        // SF-1(a): quarantine confusable-symbol spoof tokens (homoglyph stablecoin/native impersonation)
-        processed += spoofTokenDetector.detectAndExclude(batchSize);
+        // SF-1(a): quarantine confusable-symbol spoof tokens
+        processed += timedPass("spoofTokenDetector",
+                () -> spoofTokenDetector.detectAndExclude(batchSize));
         progressHeartbeat.run();
 
         // R11 Fix 6: tag phishing OUT via known scam disperse-clone contracts
-        processed += scamDisperseClonePhishingTagger.tagPhishingOutbounds(batchSize);
+        processed += timedPass("scamDisperseClonePhishingTagger",
+                () -> scamDisperseClonePhishingTagger.tagPhishingOutbounds(batchSize));
         progressHeartbeat.run();
 
-        // R11 Fix 7: stamp GMX V2 execution-fee refunds with protocol attribution
-        processed += gmxV2RefundClassifier.classifyGmxRefunds(batchSize);
+        // R11 Fix 7: stamp GMX V2 execution-fee refunds
+        processed += timedPass("gmxV2RefundClassifier",
+                () -> gmxV2RefundClassifier.classifyGmxRefunds(batchSize));
         progressHeartbeat.run();
 
         // R11 Fix 8: reclassify EtherFi weETH OFT cross-chain mint IN as BRIDGE_IN
-        processed += etherFiOftBridgeInClassifier.reclassifyEtherFiOftInbounds(batchSize);
+        processed += timedPass("etherFiOftBridgeInClassifier",
+                () -> etherFiOftBridgeInClassifier.reclassifyEtherFiOftInbounds(batchSize));
         progressHeartbeat.run();
 
-        // R11 Fix 9: reclassify NFT mint OUT (ETH out, no token in, mint selector)
-        processed += nftMintRetagger.reclassifyNftMints(batchSize);
+        // R11 Fix 9: reclassify NFT mint OUT
+        processed += timedPass("nftMintRetagger",
+                () -> nftMintRetagger.reclassifyNftMints(batchSize));
         progressHeartbeat.run();
 
-        // Cycle/11 S1: reprice BRIDGE_OUT principals with no priced upstream inflow on the
-        // source wallet/network so continuity carry can propagate basis to the paired IN leg.
-        processed += unmatchedBridgeInboundPricingFallbackService.reconcileUnsupportedOutbounds();
+        // Cycle/14: legacy sealed bridge OUT legs (already correlated, still cont=false)
+        processed += timedPass("bridgePairContinuityRepairLegacySealed",
+                () -> bridgePairContinuityRepairService.reconcileLegacySealedPairs(batchSize));
         progressHeartbeat.run();
 
-        // Cycle/8 S3: terminal pass — any BRIDGE_IN whose OUT partner never materialized in our
-        // session gets demoted to a market-priced ACQUIRE so basis does not stay at $0.
-        processed += unmatchedBridgeInboundPricingFallbackService.reconcileOrphanInbounds();
+        // B-ZERO-5: LI.FI/Across IN legs missing flow counterparty metadata
+        processed += timedPass("bridgePairContinuityRepairPairedInbound",
+                () -> bridgePairContinuityRepairService.reconcilePairedInboundCounterparty(batchSize));
         progressHeartbeat.run();
 
-        // Cycle/15 R3: second pairing pass after cross-batch Bybit normalization (qty drift / minute bucket).
-        bybitInternalTransferPairer.repairAll();
-
-        // Cycle/18 R9b: internal pairer treats BYBIT-CORRIDOR as a Bybit-only singleton and can
-        // overwrite FA-001 deposit anchors. Re-run corridor repair so prices stay stripped.
-        processed += bybitTransferContinuityRepairService.reconcileOutstandingPairs(batchSize);
+        // B-BRIDGE-IN-ACQUIRE: BRIDGE_IN linked but left with continuityCandidate=false
+        processed += timedPass("bridgePairContinuityRepairLegacySealedInbounds",
+                () -> bridgePairContinuityRepairService.reconcileLegacySealedInbounds(batchSize));
         progressHeartbeat.run();
 
-        // B-EARN-DEPOSIT-MISSING: synthesise missing EARN counterpart for On-chain Earn subscription
-        // FUND outflows where Bybit API did not emit the matching EARN inflow event.
-        processed += bybitOnChainEarnOrphanRepairService.repairOrphans();
+        // Cycle/14: same-tx on-chain INTERNAL_TRANSFER orphans across session wallets
+        processed += timedPass("onChainInternalTransferPairRepair",
+                () -> onChainInternalTransferPairRepairService.reconcileOrphanSameTxPairs(batchSize));
         progressHeartbeat.run();
 
-        // Cycle/12: demote Bybit INTERNAL_TRANSFER singletons that survived bundle/round-trip pairing.
-        processed += bybitInternalTransferOrphanFallbackService.reconcileOrphanInternals();
-        progressHeartbeat.run();
-
-        // Cycle/15 R3: pair demoted bybit-econ-v1 EXTERNAL_TRANSFER orphans (qty drift / minute bucket).
-        processed += bybitInternalTransferPairer.pairDemotedEconOrphans();
-        progressHeartbeat.run();
-
-        // Cycle/9 S5: same idea but for EXTERNAL_TRANSFER_IN orphans whose paired
-        // EXTERNAL_TRANSFER_OUT is not in the session (sender wallet outside our universe).
-        processed += unmatchedExternalTransferInPricingFallbackService.reconcileOrphanInbounds();
-        progressHeartbeat.run();
-
-        // Cycle/14: legacy sealed bridge OUT legs (already correlated, still cont=false).
-        processed += bridgePairContinuityRepairService.reconcileLegacySealedPairs(batchSize);
-        progressHeartbeat.run();
-
-        // B-ZERO-5: discovered LI.FI/Across IN legs can miss flow counterparty metadata.
-        processed += bridgePairContinuityRepairService.reconcilePairedInboundCounterparty(batchSize);
-        progressHeartbeat.run();
-
-        // B-BRIDGE-IN-ACQUIRE: BRIDGE_IN rows linked (correlationId + matchedCounterparty set) but
-        // left with continuityCandidate=false — causing ACQUIRE instead of CARRY_IN in replay.
-        processed += bridgePairContinuityRepairService.reconcileLegacySealedInbounds(batchSize);
-        progressHeartbeat.run();
-
-        // Cycle/14: same-tx on-chain INTERNAL_TRANSFER orphans across session wallets.
-        processed += onChainInternalTransferPairRepairService.reconcileOrphanSameTxPairs(batchSize);
-        progressHeartbeat.run();
-
-        // B-VAULT-WITHDRAW: synthesize missing vault-token burn leg on Turtle Finance USDC Vault
-        // VAULT_WITHDRAW transactions where ERC4626 redeem() does not emit an ERC20 burn event.
-        processed += turtleVaultBurnRepairService.repairMissingVaultTokenBurn(batchSize);
+        // B-VAULT-WITHDRAW: synthesize missing vault-token burn leg on Turtle Finance
+        processed += timedPass("turtleVaultBurnRepair",
+                () -> turtleVaultBurnRepairService.repairMissingVaultTokenBurn(batchSize));
         progressHeartbeat.run();
 
         return processed;
+    }
+
+    // ── Terminal passes ───────────────────────────────────────────────────────
+    //   These do full-collection scans and are only meaningful once the
+    //   convergent passes have converged to 0.  Call exactly once per
+    //   convergence cycle.
+
+    int runTerminalPasses(int batchSize, Runnable progressHeartbeat) {
+        int processed = 0;
+
+        // Cycle/11 S1: reprice BRIDGE_OUT principals with no priced upstream inflow
+        processed += timedPass("unmatchedBridgeInboundPricingFallback.unsupportedOutbounds",
+                unmatchedBridgeInboundPricingFallbackService::reconcileUnsupportedOutbounds);
+        progressHeartbeat.run();
+
+        // Cycle/8 S3: demote orphan BRIDGE_IN to market-priced ACQUIRE
+        processed += timedPass("unmatchedBridgeInboundPricingFallback.orphanInbounds",
+                unmatchedBridgeInboundPricingFallbackService::reconcileOrphanInbounds);
+        progressHeartbeat.run();
+
+        // Cycle/15 R3: second Bybit pairing pass after cross-batch normalization (qty drift)
+        processed += timedPass("bybitInternalTransferPairer.repairAll",
+                bybitInternalTransferPairer::repairAll);
+        progressHeartbeat.run();
+
+        // Cycle/18 R9b: re-run corridor repair after repairAll so prices stay stripped
+        processed += timedPass("bybitTransferContinuityRepair2",
+                () -> bybitTransferContinuityRepairService.reconcileOutstandingPairs(batchSize));
+        progressHeartbeat.run();
+
+        // B-EARN-DEPOSIT-MISSING: synthesise missing EARN counterpart
+        processed += timedPass("bybitOnChainEarnOrphanRepair",
+                bybitOnChainEarnOrphanRepairService::repairOrphans);
+        progressHeartbeat.run();
+
+        // Cycle/12: demote Bybit INTERNAL_TRANSFER singletons
+        processed += timedPass("bybitInternalTransferOrphanFallback",
+                bybitInternalTransferOrphanFallbackService::reconcileOrphanInternals);
+        progressHeartbeat.run();
+
+        // Cycle/15 R3: pair demoted bybit-econ-v1 EXTERNAL_TRANSFER orphans
+        processed += timedPass("bybitInternalTransferPairer.pairDemotedEconOrphans",
+                bybitInternalTransferPairer::pairDemotedEconOrphans);
+        progressHeartbeat.run();
+
+        // Cycle/9 S5: EXTERNAL_TRANSFER_IN orphans whose paired OUT is outside our universe
+        processed += timedPass("unmatchedExternalTransferInPricingFallback",
+                unmatchedExternalTransferInPricingFallbackService::reconcileOrphanInbounds);
+        progressHeartbeat.run();
+
+        return processed;
+    }
+
+    // ── Timing helper ─────────────────────────────────────────────────────────
+
+    private int timedPass(String passName, IntSupplier pass) {
+        long startNs = System.nanoTime();
+        int result = pass.getAsInt();
+        long durationMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNs);
+        if (durationMs >= SLOW_PASS_THRESHOLD_MS) {
+            log.info("linking pass [{}] processed={} durationMs={}", passName, result, durationMs);
+        } else {
+            log.debug("linking pass [{}] processed={} durationMs={}", passName, result, durationMs);
+        }
+        return result;
     }
 }

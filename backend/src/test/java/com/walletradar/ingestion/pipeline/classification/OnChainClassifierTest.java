@@ -6607,9 +6607,8 @@ class OnChainClassifierTest {
         OnChainClassificationResult result = classifier.classify(rawTransaction);
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.LP_ENTRY_SETTLEMENT);
-        assertThat(result.correlationId()).isNull();
-        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_CLARIFICATION);
-        assertThat(result.missingDataReasons()).contains("GMX_DEPOSIT_SETTLEMENT_CORRELATION_REQUIRED");
+        assertThat(result.correlationId()).isEqualTo("gmx-lp:arbitrum:weth-usdc");
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
     }
 
     @Test
@@ -6649,7 +6648,7 @@ class OnChainClassifierTest {
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.LP_ENTRY_SETTLEMENT);
         assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
-        assertThat(result.correlationId()).isEqualTo("0x395f6f1dc755f00d492b144a2fcb74f2e084fe5f842ae11b89fe1c6b140268f2");
+        assertThat(result.correlationId()).isEqualTo("gmx-lp:arbitrum:weth-usdc");
         assertThat(result.protocolName()).isEqualTo("GMX");
     }
 
@@ -6697,7 +6696,7 @@ class OnChainClassifierTest {
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.LP_ENTRY_SETTLEMENT);
         assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
-        assertThat(result.correlationId()).isEqualTo("0xcae9309eacbae0ae8fb295bce2293b08c0b0c80624f60b2929d14a4a0176ff6f");
+        assertThat(result.correlationId()).isEqualTo("gmx-lp:arbitrum:weth-usdc");
         assertThat(result.protocolName()).isEqualTo("GMX");
     }
 

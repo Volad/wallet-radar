@@ -7,6 +7,13 @@ REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 clear_pricing_cache=false
 rebuild_frontend=true
 frontend_only=false
+# Targeted partial-reset modes — skip the full MongoDB teardown/renormalization.
+#   --linking-only:           No Mongo wipe; restart backend so linking/pricing/replay re-run.
+#   --reclassification-only:  Reset ON_CHAIN rows to PENDING_RECLASSIFICATION + clear downstream.
+#   --clarification-only:     Reset PENDING_CLARIFICATION evidence + clear pipelineState.
+linking_only=false
+reclassification_only=false
+clarification_only=false
 
 for arg in "$@"; do
   case "$arg" in
@@ -23,9 +30,22 @@ for arg in "$@"; do
       frontend_only=true
       rebuild_frontend=true
       ;;
+    --linking-only)
+      linking_only=true
+      rebuild_frontend=false
+      ;;
+    --reclassification-only)
+      reclassification_only=true
+      rebuild_frontend=false
+      ;;
+    --clarification-only)
+      clarification_only=true
+      rebuild_frontend=false
+      ;;
     *)
       printf 'Unknown argument: %s\n' "$arg" >&2
       printf 'Usage: %s [--clear-pricing-cache] [--start-frontend] [--skip-frontend] [--frontend-only]\n' "$0" >&2
+      printf '           [--linking-only] [--reclassification-only] [--clarification-only]\n' >&2
       exit 1
       ;;
   esac
@@ -34,6 +54,48 @@ done
 compose() {
   docker compose -f "$REPO_ROOT/docker-compose.yml" -f "$REPO_ROOT/docker-compose.prod.yml" --profile prod "$@"
 }
+
+# ─── Targeted partial-reset shortcuts ─────────────────────────────────────────
+
+if [ "$linking_only" = "true" ]; then
+  printf 'Targeted rebuild: linking-only (no Mongo wipe, no renormalization).\n'
+  printf 'MongoDB stays running. Only pipelineState is cleared so linking re-runs from start.\n'
+  compose stop backend-prod
+  compose rm -f -s backend-prod >/dev/null 2>&1 || true
+  # Clear only the pipeline-run state; normalised data is preserved.
+  sh "$SCRIPT_DIR/avco/reset-clarification-state.sh" 2>/dev/null || true
+  # Override: we only want pipelineState cleared, not clarification evidence.
+  # reset-clarification-state handles that conservatively (only PENDING_CLARIFICATION rows).
+  printf 'Rebuilding backend-prod image (no cache)...\n'
+  compose build --no-cache backend-prod
+  compose up -d backend-prod
+  printf 'Done (linking-only rebuild).\n'
+  exit 0
+fi
+
+if [ "$reclassification_only" = "true" ]; then
+  printf 'Targeted rebuild: reclassification-only (resets ON_CHAIN to PENDING_RECLASSIFICATION).\n'
+  compose stop backend-prod
+  compose rm -f -s backend-prod >/dev/null 2>&1 || true
+  sh "$SCRIPT_DIR/avco/reset-reclassification-state.sh"
+  printf 'Rebuilding backend-prod image (no cache)...\n'
+  compose build --no-cache backend-prod
+  compose up -d backend-prod
+  printf 'Done (reclassification-only rebuild).\n'
+  exit 0
+fi
+
+if [ "$clarification_only" = "true" ]; then
+  printf 'Targeted rebuild: clarification-only (resets stuck PENDING_CLARIFICATION rows).\n'
+  compose stop backend-prod
+  compose rm -f -s backend-prod >/dev/null 2>&1 || true
+  sh "$SCRIPT_DIR/avco/reset-clarification-state.sh"
+  printf 'Rebuilding backend-prod image (no cache)...\n'
+  compose build --no-cache backend-prod
+  compose up -d backend-prod
+  printf 'Done (clarification-only rebuild).\n'
+  exit 0
+fi
 
 if [ "$frontend_only" = "true" ]; then
   printf 'Rebuilding frontend-prod only (Mongo and backend unchanged)...\n'

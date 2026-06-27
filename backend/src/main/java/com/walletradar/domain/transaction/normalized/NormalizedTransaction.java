@@ -115,6 +115,21 @@ import java.util.List;
                 name = "normalized_source_correlation_idx",
                 def = "{'source': 1, 'correlationId': 1}",
                 sparse = true
+        ),
+        // Linking performance: InternalTransferPairLinkService queries source+status+continuityCandidate+type
+        // to find own-wallet transfer candidates that need pairing.  The existing
+        // normalized_source_status_type_resolution_idx does not include continuityCandidate, causing
+        // Mongo to do a post-filter scan over all confirmed/pending-price rows.
+        @CompoundIndex(
+                name = "normalized_linking_internal_candidates_idx",
+                def = "{'source': 1, 'status': 1, 'continuityCandidate': 1, 'type': 1}"
+        ),
+        // Linking performance: convergent passes (bybitBridgeLink, crossNetworkBridgePairFallback, etc.)
+        // frequently look up candidates by walletAddress + source + type within a status range.
+        // This index accelerates per-wallet candidate retrieval and hasPendingLinking() gate checks.
+        @CompoundIndex(
+                name = "normalized_linking_wallet_source_type_status_idx",
+                def = "{'walletAddress': 1, 'source': 1, 'type': 1, 'status': 1, 'blockTimestamp': 1}"
         )
 })
 @NoArgsConstructor

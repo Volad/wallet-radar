@@ -23,7 +23,11 @@ import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+import java.util.stream.StreamSupport;
 
 /**
  * Materializes deterministic same-source lifecycle linkage during the dedicated LINKING phase.
@@ -59,9 +63,20 @@ public class OnChainLifecycleLinkService {
         if (mongoOperations == null || rawTransactionRepository == null) {
             return 0;
         }
+        List<NormalizedTransaction> candidates = loadCandidateBatch(batchSize);
+        if (candidates.isEmpty()) {
+            return 0;
+        }
+
+        // Bulk-prefetch all raw transactions in a single query to avoid N+1 per-candidate findById.
+        List<String> ids = candidates.stream().map(NormalizedTransaction::getId).toList();
+        Map<String, RawTransaction> rawById = StreamSupport
+                .stream(rawTransactionRepository.findAllById(ids).spliterator(), false)
+                .collect(Collectors.toMap(RawTransaction::getId, Function.identity()));
+
         int changed = 0;
-        for (NormalizedTransaction candidate : loadCandidateBatch(batchSize)) {
-            RawTransaction rawTransaction = rawTransactionRepository.findById(candidate.getId()).orElse(null);
+        for (NormalizedTransaction candidate : candidates) {
+            RawTransaction rawTransaction = rawById.get(candidate.getId());
             if (rawTransaction != null && link(rawTransaction, candidate)) {
                 changed++;
             }

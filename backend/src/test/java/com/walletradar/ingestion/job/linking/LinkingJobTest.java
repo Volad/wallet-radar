@@ -42,8 +42,10 @@ class LinkingJobTest {
         properties.setBatchSize(25);
         when(linkingDataGateService.snapshot("session-1"))
                 .thenReturn(new LinkingDataGateService.LinkingGateSnapshot(true, 0L, 0L, 0L, 0L, false));
-        when(linkingBatchProcessor.processNextBatch(org.mockito.ArgumentMatchers.eq(25), any(Runnable.class)))
+        when(linkingBatchProcessor.processConvergentPasses(org.mockito.ArgumentMatchers.eq(25), any(Runnable.class)))
                 .thenReturn(2, 1, 0);
+        when(linkingBatchProcessor.runTerminalPasses(org.mockito.ArgumentMatchers.eq(25), any(Runnable.class)))
+                .thenReturn(0);
 
         List<Object> events = new ArrayList<>();
         ApplicationEventPublisher publisher = events::add;
@@ -58,7 +60,8 @@ class LinkingJobTest {
 
         job.onOnChainReclassificationCompleted(new OnChainReclassificationCompletedEvent("session-1", 3, "reclassification"));
 
-        verify(linkingBatchProcessor, times(3)).processNextBatch(org.mockito.ArgumentMatchers.eq(25), any(Runnable.class));
+        verify(linkingBatchProcessor, times(3)).processConvergentPasses(org.mockito.ArgumentMatchers.eq(25), any(Runnable.class));
+        verify(linkingBatchProcessor, times(1)).runTerminalPasses(org.mockito.ArgumentMatchers.eq(25), any(Runnable.class));
         verify(sessionPipelineStateService).markStageRunning(
                 "session-1",
                 com.walletradar.domain.session.UserSession.PipelineStage.LINKING,
@@ -96,7 +99,8 @@ class LinkingJobTest {
 
         job.onBybitNormalizationCompleted(new BybitNormalizationCompletedEvent("session-1", 5, "bybit"));
 
-        verify(linkingBatchProcessor, never()).processNextBatch(org.mockito.ArgumentMatchers.anyInt(), any(Runnable.class));
+        verify(linkingBatchProcessor, never()).processConvergentPasses(org.mockito.ArgumentMatchers.anyInt(), any(Runnable.class));
+        verify(linkingBatchProcessor, never()).runTerminalPasses(org.mockito.ArgumentMatchers.anyInt(), any(Runnable.class));
         verify(sessionPipelineStateService, never()).markStageRunning(
                 org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any(),
@@ -112,7 +116,9 @@ class LinkingJobTest {
         properties.setBatchSize(25);
         when(linkingDataGateService.snapshot("session-1"))
                 .thenReturn(new LinkingDataGateService.LinkingGateSnapshot(true, 0L, 0L, 0L, 0L, false));
-        when(linkingBatchProcessor.processNextBatch(org.mockito.ArgumentMatchers.eq(25), any(Runnable.class)))
+        when(linkingBatchProcessor.processConvergentPasses(org.mockito.ArgumentMatchers.eq(25), any(Runnable.class)))
+                .thenReturn(0);
+        when(linkingBatchProcessor.runTerminalPasses(org.mockito.ArgumentMatchers.eq(25), any(Runnable.class)))
                 .thenReturn(0);
 
         List<Object> events = new ArrayList<>();

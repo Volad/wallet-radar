@@ -14,6 +14,8 @@ import {
   SessionBackfillStatusResponse,
   SessionDashboardResponse,
   SessionLendingResponse,
+  SessionLpPositionResponse,
+  SessionLpResponse,
   SessionRefreshResponse,
   SessionSettingsResponse,
   SessionResponse,
@@ -87,6 +89,20 @@ export class WalletApiService {
   getSessionLending(sessionId: string): Observable<SessionLendingResponse> {
     return this.httpClient.get<SessionLendingResponse>(
       `${this.sessionsEndpoint}/${encodeURIComponent(sessionId)}/lending`
+    );
+  }
+
+  getSessionLp(sessionId: string, scope: 'active' | 'closed' | 'all' = 'active'): Observable<SessionLpResponse> {
+    return this.httpClient.get<SessionLpResponse>(
+      `${this.sessionsEndpoint}/${encodeURIComponent(sessionId)}/lp`,
+      { params: { scope } }
+    );
+  }
+
+  refreshLpPosition(sessionId: string, correlationId: string): Observable<SessionLpPositionResponse> {
+    return this.httpClient.post<SessionLpPositionResponse>(
+      `${this.sessionsEndpoint}/${encodeURIComponent(sessionId)}/lp/positions/${encodeURIComponent(correlationId)}/refresh`,
+      {}
     );
   }
 

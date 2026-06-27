@@ -113,6 +113,7 @@ public class LiFiReceivingTransactionDiscoveryService {
         if (rawOptional.isPresent() && TERMINAL_LIFI_ERROR.equals(rawOptional.get().getLastError())) {
             return Optional.empty();
         }
+        boolean freshlyFetched = rawOptional.isEmpty();
         RawTransaction rawTransaction = rawOptional.orElseGet(() -> receiptClarificationGateway
                 .fetchRawTransactionByHash(status.receivingTxHash(), status.receivingNetworkId(), walletAddress, null)
                 .orElse(null));
@@ -127,6 +128,14 @@ public class LiFiReceivingTransactionDiscoveryService {
                 protocolRegistryService
         );
         if (discoveryPath.isEmpty()) {
+            if (freshlyFetched) {
+                // Cache the fetched tx so the next linking run skips the RPC call.
+                // Without this save the wallet-relevance check always misses in the DB and
+                // triggers an identical RPC fetch on every subsequent linking pass.
+                log.debug("LIFI_DISCOVERY_NO_WALLET_RELEVANCE txHash={} network={} wallet={} — persisting to avoid repeated RPC",
+                        status.receivingTxHash(), status.receivingNetworkId(), walletAddress);
+                rawTransactionRepository.save(rawTransaction);
+            }
             return Optional.empty();
         }
 

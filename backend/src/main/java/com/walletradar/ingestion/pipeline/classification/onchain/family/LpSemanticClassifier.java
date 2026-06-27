@@ -6,6 +6,7 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.ingestion.pipeline.classification.ClassificationDecision;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassificationContext;
+import com.walletradar.ingestion.pipeline.classification.lp.GmxMarketCorrelationSupport;
 import com.walletradar.ingestion.pipeline.classification.lp.PendleLpCorrelationSupport;
 import com.walletradar.ingestion.pipeline.classification.onchain.protocol.ProtocolSemanticHint;
 import com.walletradar.ingestion.pipeline.classification.reason.ClassificationReasonCode;
@@ -49,7 +50,10 @@ public class LpSemanticClassifier implements OnChainFamilyClassifier {
                 // P2 (ADR-018 ETH-C10): Pendle LP txs routed via semantic hints must carry a
                 // Pendle correlation ID derived from the LPT asset in the movement legs, so that
                 // entries, exits, and fee claims share the same `pendle-lp:{net}:{marketId}` key.
-                String correlationId = isPendleProtocol(value)
+                String correlationId = isGmxProtocol(value)
+                        ? GmxMarketCorrelationSupport.correlationIdFromMovementLegs(
+                                context.view(), context.movementLegs())
+                        : isPendleProtocol(value)
                         ? PendleLpCorrelationSupport.correlationIdFromMovementLegs(
                                 context.view(), context.movementLegs())
                         : null;
@@ -130,6 +134,12 @@ public class LpSemanticClassifier implements OnChainFamilyClassifier {
             }
         }
         return Optional.empty();
+    }
+
+    private static boolean isGmxProtocol(ProtocolSemanticHint hint) {
+        return hint != null
+                && hint.protocolName() != null
+                && "GMX".equalsIgnoreCase(hint.protocolName().trim());
     }
 
     private static boolean isPendleProtocol(ProtocolSemanticHint hint) {

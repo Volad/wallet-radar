@@ -7,14 +7,17 @@ import com.walletradar.ingestion.pipeline.classification.OnChainClassificationCo
 import com.walletradar.ingestion.pipeline.classification.onchain.family.OnChainClassificationInsertionPoint;
 import com.walletradar.ingestion.pipeline.classification.onchain.family.OnChainFamilyClassifier;
 import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryEntry;
+import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryFamily;
 import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryService;
 import com.walletradar.ingestion.pipeline.classification.support.DirectMethodIdSupport;
 import com.walletradar.ingestion.pipeline.classification.support.RegistryDecisionSupport;
 import com.walletradar.ingestion.pipeline.classification.support.SameWalletSwapShapeSupport;
+import com.walletradar.ingestion.pipeline.onchain.OnChainRawTransactionView;
 import org.bson.Document;
 import org.springframework.core.Ordered;
 import org.springframework.stereotype.Component;
 
+import java.util.Locale;
 import java.util.Optional;
 
 @Component
@@ -97,6 +100,19 @@ public class RegistryDirectTypeClassifier implements OnChainFamilyClassifier {
             return Optional.empty();
         }
 
+        // For LP POOL entries that declare an underlyingPositionManager (e.g. Katana vbETH-vbUSDC pool
+        // found via token-transfer sender), resolve the vault-style correlationId so LP lifecycle
+        // events (exits, fee claims) link to the same position as LP_ENTRY on the POSITION_MANAGER.
+        String correlationId = resolveVaultCorrelationId(context.view(), entry);
+        if (correlationId != null) {
+            return Optional.of(RegistryDecisionSupport.registryResult(
+                    context.view(),
+                    entry,
+                    type,
+                    context.movementLegs(),
+                    correlationId
+            ));
+        }
         return Optional.of(RegistryDecisionSupport.registryResult(
                 context.view(),
                 entry,
@@ -111,5 +127,25 @@ public class RegistryDirectTypeClassifier implements OnChainFamilyClassifier {
         }
         String functionName = context.view().functionName();
         return functionName != null && functionName.startsWith("approve");
+    }
+
+    /**
+     * When the matched registry entry is an LP POOL with a declared {@code underlyingPositionManager}
+     * (e.g. Katana vbETH-vbUSDC pool → vault), build the vault-style correlationId so that LP_EXIT
+     * and fee-claim events link to the same position identity as the LP_ENTRY on the POSITION_MANAGER.
+     */
+    private static String resolveVaultCorrelationId(OnChainRawTransactionView view, ProtocolRegistryEntry entry) {
+        if (entry.family() != ProtocolRegistryFamily.LP) {
+            return null;
+        }
+        String underlying = OnChainRawTransactionView.normalizeAddress(entry.underlyingPositionManager());
+        if (underlying == null || underlying.isBlank()) {
+            return null;
+        }
+        if (view.networkId() == null) {
+            return null;
+        }
+        String networkId = view.networkId().name().toLowerCase(Locale.ROOT);
+        return "lp-position:" + networkId + ":" + underlying + ":vault";
     }
 }

@@ -59,6 +59,7 @@ import { DashboardTopbarComponent } from './components/dashboard-topbar/dashboar
 import { DashboardTransactionsPaneComponent } from './components/dashboard-transactions-pane/dashboard-transactions-pane.component';
 import { AssetLedgerPageComponent } from '../asset-ledger/asset-ledger-page.component';
 import { LendingPageComponent } from '../lending/lending-page.component';
+import { LpPageComponent } from '../lp/lp-page.component';
 import { SettingsPageComponent } from '../settings/settings-page.component';
 
 type LpTab = 'all' | 'open' | 'closed';
@@ -208,6 +209,7 @@ const BRIDGE_STATUSES = new Set<SessionBridgeStatus>(['BRIDGE_OUT', 'BRIDGE_IN',
     DashboardTransactionsPaneComponent,
     AssetLedgerPageComponent,
     LendingPageComponent,
+    LpPageComponent,
     SettingsPageComponent,
   ],
   templateUrl: './dashboard.component.html',
@@ -277,6 +279,10 @@ export class DashboardComponent {
   readonly isLendingMode = toSignal(
     this.route.data.pipe(map((data) => data['mode'] === 'lending')),
     { initialValue: this.route.snapshot.data['mode'] === 'lending' }
+  );
+  readonly isLpMode = toSignal(
+    this.route.data.pipe(map((data) => data['mode'] === 'lp')),
+    { initialValue: this.route.snapshot.data['mode'] === 'lp' }
   );
 
   readonly viewState = toSignal(
@@ -951,12 +957,25 @@ export class DashboardComponent {
       }
       return;
     }
+    if (sectionId === 'lp') {
+      this.section.set(sectionId);
+      this.selectedAssetFamilyIdentity.set(null);
+      if (!this.isLpMode()) {
+        void this.router.navigate(['/lp']);
+      }
+      return;
+    }
     if (this.isSettingsMode()) {
       this.section.set(sectionId);
       void this.router.navigate(['/']);
       return;
     }
     if (this.isLendingMode()) {
+      this.section.set(sectionId);
+      void this.router.navigate(['/']);
+      return;
+    }
+    if (this.isLpMode()) {
       this.section.set(sectionId);
       void this.router.navigate(['/']);
       return;

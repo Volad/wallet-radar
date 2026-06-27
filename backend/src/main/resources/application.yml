@@ -47,6 +47,12 @@ walletradar:
           version: "v3"
     health-factor:
       refresh-interval-ms: 600000
+  liquidity-pools:
+    enabled: true
+    refresh-interval-ms: 3600000
+    on-demand-debounce-ms: 20000
+    stale-multiplier: 2
+    dust-threshold-usd: 10
   ingestion:
     # Backfill window counted back from the current head.
     # Defaults are calibrated from live chain data with a small safety margin.
@@ -183,10 +189,11 @@ walletradar:
           enabled: true
           base-url: https://rpc.ankr.com/multichain/${ANKR_API_KEY:}
         urls:
+          - https://base-rpc.publicnode.com
+          - https://1rpc.io/base
           - https://rpc.ankr.com/base/${ANKR_API_KEY:}
-          - https://lb.drpc.live/base/${DRPC_API_KEY:}
           - https://mainnet.base.org
-          - https://base.llamarpc.com
+          - https://lb.drpc.live/base/${DRPC_API_KEY:}
         batch-block-size: 1000
         window-blocks: 34000000    # measured ~2y span as of 2026-03-09, rounded +5%
         avg-block-time-seconds: 2.0
@@ -199,8 +206,10 @@ walletradar:
           base-url: https://rpc.ankr.com/multichain/${ANKR_API_KEY:}
           page-size: 100
         urls:
-          #          - https://lb.drpc.live/bsc/${DRPC_API_KEY:}
+          - https://bsc-dataseed.binance.org/
+          - https://bsc-rpc.publicnode.com
           - https://rpc.ankr.com/bsc/${ANKR_API_KEY:}
+          #          - https://lb.drpc.live/bsc/${DRPC_API_KEY:}
         batch-block-size: 250000
         window-blocks: 31500000    # tuned from earliest verified wallet tx at block 56,750,955 with ~0.53M safety from last known head
         avg-block-time-seconds: 0.5

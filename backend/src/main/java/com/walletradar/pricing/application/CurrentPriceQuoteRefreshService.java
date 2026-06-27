@@ -64,6 +64,9 @@ public class CurrentPriceQuoteRefreshService {
         // quote and fall back to a stale "last trade" historical price — overstating the dashboard
         // CEX value. Include the session's live Bybit umbrella symbols in the refresh set.
         symbols.addAll(loadBybitLiveSymbols(sessionId));
+        // LP reward tokens (e.g. CAKE from PancakeSwap MasterChef) appear only as pending
+        // unclaimed fees in LP snapshots, never as held balances — add them explicitly.
+        symbols.addAll(loadLpRewardTokenSymbols(sessionId));
         refreshed += refreshSymbols(sessionId, symbols, refreshTime);
         log.info(
                 "Current quote refresh complete: sessionId={}, symbols={}, protocolAssets={}, refreshed={}",
@@ -101,6 +104,35 @@ public class CurrentPriceQuoteRefreshService {
             String symbol = CanonicalAssetCatalog.canonicalMarketSymbol(balance.getString("assetSymbol"));
             if (symbol != null && !symbol.isBlank()) {
                 symbols.add(symbol.trim().toUpperCase(Locale.ROOT));
+            }
+        }
+        return symbols;
+    }
+
+    /**
+     * Symbols of reward tokens that appear only as unclaimed fees in LP position snapshots
+     * (e.g. CAKE from PancakeSwap MasterChef) and are never tracked as balance assets.
+     * Queries open LP snapshots for the session's accounting universe.
+     */
+    private Set<String> loadLpRewardTokenSymbols(String sessionId) {
+        Set<String> symbols = new LinkedHashSet<>();
+        Optional<UserSession> session = userSessionRepository.findById(sessionId);
+        if (session.isEmpty() || session.get().getAccountingUniverseId() == null) {
+            return symbols;
+        }
+        String universeId = session.get().getAccountingUniverseId();
+        Query q = new Query(Criteria.where("universeId").is(universeId)
+                .and("status").ne("closed")
+                .and("unclaimedFeesByToken").exists(true));
+        q.fields().include("unclaimedFeesByToken");
+        List<Document> snapshots = mongoOperations.find(q, Document.class, "lp_position_snapshots");
+        for (Document snap : snapshots) {
+            Document fees = snap.get("unclaimedFeesByToken", Document.class);
+            if (fees == null) continue;
+            for (String sym : fees.keySet()) {
+                if (sym != null && !sym.isBlank()) {
+                    symbols.add(sym.trim().toUpperCase(Locale.ROOT));
+                }
             }
         }
         return symbols;

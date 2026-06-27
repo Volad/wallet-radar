@@ -150,6 +150,7 @@ describe('DashboardComponent (wallet submit flow)', () => {
         sessionId,
         wallets: [],
         integrations: [],
+        externalVenues: [],
         hideSmallAssets: true,
         showReconciliationWarnings: true,
       })
@@ -485,6 +486,7 @@ describe('DashboardComponent (wallet submit flow)', () => {
             streamSync: [],
           },
         ],
+        externalVenues: [],
         hideSmallAssets: true,
         showReconciliationWarnings: true,
       })

@@ -7,6 +7,7 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.ingestion.pipeline.classification.ClassificationDecision;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassificationContext;
 import com.walletradar.ingestion.pipeline.classification.onchain.protocol.ProtocolSemanticHint;
+import com.walletradar.ingestion.pipeline.classification.lp.GmxMarketCorrelationSupport;
 import com.walletradar.ingestion.pipeline.classification.reason.ClassificationReasonCode;
 import com.walletradar.ingestion.pipeline.classification.support.OnChainClassificationSupport;
 import com.walletradar.ingestion.pipeline.classification.support.RawLeg;
@@ -153,13 +154,16 @@ public class GmxLpClassifier implements OnChainFamilyClassifier {
             ProtocolSemanticHint hint,
             NormalizedTransactionType type
     ) {
+        String marketCorrelationId = GmxMarketCorrelationSupport.correlationIdFromMovementLegs(
+                context.view(),
+                context.movementLegs()
+        );
+        if (marketCorrelationId != null) {
+            return marketCorrelationId;
+        }
         if (hint.correlationId() != null && !hint.correlationId().isBlank()) {
             return hint.correlationId();
         }
-        // Do not fall back to market slug for settlements without a per-deposit key:
-        // a market-slug corrId would be shared across all deposits to the same market and
-        // break the AVCO replay bucket isolation. Returning null causes PENDING_CLARIFICATION
-        // so the receipt-clarification pipeline fetches the deposit/withdrawal key.
         return null;
     }
 }

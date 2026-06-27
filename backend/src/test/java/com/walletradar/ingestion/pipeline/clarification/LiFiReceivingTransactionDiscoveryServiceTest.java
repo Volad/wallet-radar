@@ -37,6 +37,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.atMostOnce;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -278,7 +279,9 @@ class LiFiReceivingTransactionDiscoveryServiceTest {
 
         assertThat(discovered).isEmpty();
         verify(normalizedTransactionStore, never()).upsert(any());
-        verify(rawTransactionRepository, never()).save(any());
+        // Freshly-fetched tx is persisted to avoid repeated RPC calls on subsequent linking passes,
+        // even when the wallet-relevance check fails.
+        verify(rawTransactionRepository, atMostOnce()).save(any());
     }
 
     private NormalizedTransaction sourceBridgeOut(String sourceTx) {

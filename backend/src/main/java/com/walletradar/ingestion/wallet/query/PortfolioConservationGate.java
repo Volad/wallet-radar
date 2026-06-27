@@ -85,7 +85,17 @@ public class PortfolioConservationGate {
             "0x4c1d3fc3fc3c177c3b633427c2f769276c547463",
             // Sep-29-2025 USDe EXT_IN source EOA — $16.96 USDe received as part of a vbUSDC→USDe
             // swap/bridge (BRIDGE_OUT vbUSDC $17.03 same day); Pattern 1 pairs them (0.4% diff).
-            "0x113a327221d2c4660684449bfc39bc14ad1aaf38"
+            "0x113a327221d2c4660684449bfc39bc14ad1aaf38",
+            // Bridge solver delivering USDC on inbound legs — Jul-01-2025 $895.05 USDC (corrId=null)
+            // and multiple Jul-11-2025 corrId-linked receipts. Paired with BRIDGE_OUT USDT0 $895.04
+            // (same day, <0.01% diff) via Pattern 1; symmetric exclusion keeps NEC stable.
+            "0x875d6d37ec55c8cf220b9e5080717549d8aa8eca",
+            // Bridge solver delivering USDC on Jul-11-2025 $895.98 (corrId=null).
+            // Corresponding BRIDGE_OUT USDC $896.03 same day (corrId=null); Pattern 1 pairs them.
+            "0x27a16dc786820b16e5c9028b75b99f6f604b5d26",
+            // Bridge-related ETH transfer (fee refund / tip) on Jul-11-2025 $3.88 (corrId=null).
+            // Corresponding BRIDGE_OUT WETH $3.88 same day (corrId=null); Pattern 1 pairs them.
+            "0x09aea4b2242abc8bb4bb78d537a67a245a7bec64"
     );
     /**
      * Known Relay Protocol source / depositor addresses.  EXT_OUT flows to these addresses

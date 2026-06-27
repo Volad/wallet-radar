@@ -106,14 +106,37 @@ public class LinkingJob {
                     UserSession.PipelineStage.LINKING,
                     "Linking running"
             );
+
+            // ── Split convergence loop ────────────────────────────────────────────
+            // 1. Inner loop: run only convergent (batchSize-aware) passes until they
+            //    return 0 — no more candidates left for this cycle.
+            // 2. Outer iteration: run terminal (full-scan) passes exactly once after
+            //    convergence.  If terminal passes produce work, loop back to step 1
+            //    so convergent passes can process anything that was unlocked.
             while (true) {
-                int batchProcessed = linkingBatchProcessor.processNextBatch(
+                // Step 1 — convergent passes
+                while (true) {
+                    int n = linkingBatchProcessor.processConvergentPasses(
+                            properties.getBatchSize(),
+                            () -> lastHeartbeatAt.set(maybeHeartbeat(sessionId, lastHeartbeatAt.get()))
+                    );
+                    processed += n;
+                    lastHeartbeatAt.set(maybeHeartbeat(sessionId, lastHeartbeatAt.get()));
+                    if (n == 0) {
+                        break;
+                    }
+                }
+
+                // Step 2 — terminal passes (full-scan, run once per convergence)
+                int terminalProcessed = linkingBatchProcessor.runTerminalPasses(
                         properties.getBatchSize(),
                         () -> lastHeartbeatAt.set(maybeHeartbeat(sessionId, lastHeartbeatAt.get()))
                 );
-                processed += batchProcessed;
+                processed += terminalProcessed;
                 lastHeartbeatAt.set(maybeHeartbeat(sessionId, lastHeartbeatAt.get()));
-                if (batchProcessed == 0) {
+
+                if (terminalProcessed == 0) {
+                    // Both convergent and terminal passes are done — linking complete.
                     sessionPipelineStateService.markStageComplete(
                             sessionId,
                             UserSession.PipelineStage.LINKING,
@@ -122,6 +145,7 @@ public class LinkingJob {
                     publishCompletionEvent(sessionId, processed, trigger, publishWhenEmpty);
                     return processed;
                 }
+                // Terminal passes unlocked new work — loop back to convergent passes.
             }
         } catch (RuntimeException error) {
             sessionPipelineStateService.markStageFailed(

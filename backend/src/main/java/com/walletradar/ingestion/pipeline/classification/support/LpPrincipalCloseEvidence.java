@@ -64,6 +64,38 @@ public final class LpPrincipalCloseEvidence {
         return type;
     }
 
+    public static NormalizedTransactionType refineFinalExitType(
+            OnChainRawTransactionView view,
+            List<RawLeg> movementLegs,
+            NormalizedTransactionType type
+    ) {
+        NormalizedTransactionType refined = refineLifecycleType(view, movementLegs, type);
+        if (refined != NormalizedTransactionType.LP_EXIT) {
+            return refined;
+        }
+        if (isFullPositionClose(view)) {
+            return NormalizedTransactionType.LP_EXIT_FINAL;
+        }
+        return refined;
+    }
+
+    private static boolean isFullPositionClose(OnChainRawTransactionView view) {
+        if (view == null) {
+            return false;
+        }
+        String methodId = normalizeSelector(view.methodId());
+        if (BURN_SELECTOR.equals(methodId) && !isMasterChefWithdrawDirectCall(view)) {
+            return true;
+        }
+        String inputData = view.inputData();
+        if (inputData != null && CalldataDecodingSupport.containsEmbeddedSelector(inputData, BURN_SELECTOR)) {
+            return !isMasterChefWithdrawDirectCall(view);
+        }
+        // A decreaseLiquidity(liquidity=0) multicall is a fee-collection pattern, NOT a full close.
+        // Only treat it as a final exit when the BURN selector is also present (burns the position NFT).
+        return false;
+    }
+
     private static boolean isMasterChefWithdrawDirectCall(OnChainRawTransactionView view) {
         if (view == null) return false;
         String methodId = normalizeSelector(view.methodId());

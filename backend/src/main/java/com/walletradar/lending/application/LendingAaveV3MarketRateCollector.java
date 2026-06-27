@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.ingestion.adapter.evm.rpc.EvmRpcClient;
+import com.walletradar.ingestion.adapter.evm.abi.EvmAbiSupport;
 import com.walletradar.lending.config.LendingMarketRateProperties;
 import com.walletradar.lending.persistence.LendingMarketRateSnapshot;
 import lombok.RequiredArgsConstructor;

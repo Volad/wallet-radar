@@ -260,7 +260,8 @@
         "KATANA"
       ],
       "confidence": "HIGH",
-      "notes": "Katana vbETH/vbUSDC LP pool — LP_FEE_CLAIM and LP exit receipts from this address are LP_EXIT, not BRIDGE_IN. Nov-10 2025 vbETH 0.4732 receipt was misclassified as BRIDGE_IN causing $1,706 NEC overcount (NEC RC3b fix)."
+      "underlyingPositionManager": "0x3067bdba0e6628497d527bef511c22da8b32ca3f",
+      "notes": "Katana vbETH/vbUSDC LP pool — LP_FEE_CLAIM and LP exit receipts from this address are LP_EXIT, not BRIDGE_IN. Nov-10 2025 vbETH 0.4732 receipt was misclassified as BRIDGE_IN causing $1,706 NEC overcount (NEC RC3b fix). underlyingPositionManager links POOL exits to the vault POSITION_MANAGER so vault-style correlationId is set correctly."
     },
     "\u2500\u2500 DEX: LFJ / Trader Joe \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500": {},
     "lfj-aggregator-arbitrum-avalanche": {

@@ -1,0 +1,626 @@
+<section class="lp-shell">
+  @if (viewState().status === 'idle') {
+    <div class="lp-state">
+      <h2>No active session</h2>
+      <p>Create or restore a session before opening liquidity pool positions.</p>
+    </div>
+  } @else if (viewState().status === 'loading') {
+    <div class="lp-state">
+      <div class="spinner" aria-hidden="true"></div>
+      <h2>Loading liquidity pools</h2>
+      <p>Building LP positions from accounting snapshots.</p>
+    </div>
+  } @else if (viewState().status === 'error') {
+    <div class="lp-state error">
+      <h2>Unable to load liquidity pools</h2>
+      <p>{{ errorMessage() }}</p>
+    </div>
+  } @else {
+    @let currentData = data();
+    @if (currentData !== null) {
+      @let summary = filteredSummary();
+      <div class="lp-layout">
+        <!-- ── Sidebar ─────────────────────────────────────────────── -->
+        <aside class="lp-sidebar" aria-label="LP filters">
+          <div class="sidebar-head">
+            <div class="sidebar-head-title">
+              <span class="sidebar-title-text">Filters</span>
+              <span class="sidebar-title-arrow">›</span>
+            </div>
+            <span class="sidebar-subtitle">Dashboard</span>
+            <span class="sidebar-subtitle">Wallets &amp; networks</span>
+            @if (activeFilterCount() > 0) {
+              <button type="button" class="sidebar-clear" (click)="clearFilters()">clear {{ activeFilterCount() }}</button>
+            }
+          </div>
+
+          <div class="sidebar-scroll">
+            @if (wallets().length > 0) {
+              <div class="filter-group-label">Wallets</div>
+              @for (wallet of wallets(); track wallet) {
+              <button
+                type="button"
+                class="filter-chip"
+                [class.active]="selectedWallets().has(wallet)"
+                (click)="toggleWallet(wallet)">
+                <span class="chip-check" [style.border-color]="selectedWallets().has(wallet) ? 'var(--wr-cyan)' : 'rgba(221,227,240,0.14)'">
+                  @if (selectedWallets().has(wallet)) {
+                    <span class="chip-check-fill" style="background:var(--wr-cyan)"></span>
+                  }
+                </span>
+                <span class="chip-dot" style="background:var(--wr-cyan)"></span>
+                <span class="chip-label">{{ shortAddress(wallet) }}</span>
+              </button>
+              }
+            }
+
+            <div class="filter-group-label">Protocol</div>
+            @for (protocol of protocols(); track protocol) {
+              <button
+                type="button"
+                class="filter-chip"
+                [class.active]="selectedProtocols().has(protocol)"
+                (click)="toggleProtocol(protocol)">
+                <span class="chip-check" [style.border-color]="selectedProtocols().has(protocol) ? 'var(--wr-green)' : 'rgba(221,227,240,0.14)'">
+                  @if (selectedProtocols().has(protocol)) {
+                    <span class="chip-check-fill" style="background:var(--wr-green)"></span>
+                  }
+                </span>
+                <span class="chip-dot" style="background:var(--wr-green)"></span>
+                <span class="chip-label">{{ protocol }}</span>
+              </button>
+            }
+
+            <div class="filter-group-label">Network</div>
+            @for (network of networks(); track network) {
+              <button
+                type="button"
+                class="filter-chip"
+                [class.active]="selectedNetworks().has(network)"
+                (click)="toggleNetwork(network)">
+                <span class="chip-check" [style.border-color]="selectedNetworks().has(network) ? networkColor(network) : 'rgba(221,227,240,0.14)'">
+                  @if (selectedNetworks().has(network)) {
+                    <span class="chip-check-fill" [style.background]="networkColor(network)"></span>
+                  }
+                </span>
+                <span class="chip-dot" [style.background]="networkColor(network)"></span>
+                <span class="chip-label">{{ networkLabel(network) }}</span>
+              </button>
+            }
+
+            <div class="filter-group-label">Status</div>
+            @for (status of statuses(); track status.id) {
+              <button
+                type="button"
+                class="filter-chip"
+                [class.active]="selectedStatuses().has(status.id)"
+                (click)="toggleStatus(status.id)">
+                <span class="chip-check" [style.border-color]="selectedStatuses().has(status.id) ? statusChipColor(status.id) : 'rgba(221,227,240,0.14)'">
+                  @if (selectedStatuses().has(status.id)) {
+                    <span class="chip-check-fill" [style.background]="statusChipColor(status.id)"></span>
+                  }
+                </span>
+                <span class="chip-dot" [style.background]="statusChipColor(status.id)"></span>
+                <span class="chip-label">{{ status.label }}</span>
+              </button>
+            }
+
+            <div class="filter-group-label">Display</div>
+            <button type="button" class="filter-chip" [class.active]="hideDust()" (click)="toggleHideDust()">
+              <span class="chip-check" [style.border-color]="hideDust() ? 'var(--wr-subtle)' : 'rgba(221,227,240,0.14)'">
+                @if (hideDust()) {
+                  <span class="chip-check-fill" style="background:var(--wr-subtle)"></span>
+                }
+              </span>
+              <span class="chip-dot" style="background:var(--wr-subtle)"></span>
+              <span class="chip-label">Hide dust</span>
+            </button>
+          </div>
+        </aside>
+
+        <!-- ── Main content ──────────────────────────────────────────── -->
+        <main class="lp-content">
+
+          <!-- Section header -->
+          <div class="lp-section-head">
+            <span class="section-glyph">◉</span>
+            <span class="section-title">Liquidity Pools</span>
+          </div>
+
+          <!-- Toolbar: scope tabs + aggregate info -->
+          <div class="lp-toolbar">
+            <div class="scope-tabs" role="tablist" aria-label="Position scope">
+              <button type="button" role="tab" class="scope-tab" [class.active]="positionScope() === 'active'" (click)="setPositionScope('active')">Active</button>
+              <button type="button" role="tab" class="scope-tab" [class.active]="positionScope() === 'closed'" (click)="setPositionScope('closed')">Closed</button>
+              <button type="button" role="tab" class="scope-tab" [class.active]="positionScope() === 'all'" (click)="setPositionScope('all')">All</button>
+            </div>
+            <div class="toolbar-right">
+              <span class="toolbar-label">Total fees:</span>
+              <span class="mono pos toolbar-value">{{ formatUsd(summary.feesEarnedUsd) }}</span>
+            </div>
+          </div>
+
+          <!-- Summary strip -->
+          <div class="lp-summary-strip">
+            @for (stat of summaryStats(); track stat.label) {
+              <div class="strip-stat">
+                <span class="strip-label">{{ stat.label }}</span>
+                <strong class="mono" [class]="stat.cls">{{ stat.value }}</strong>
+              </div>
+            }
+          </div>
+
+          <!-- Column headers -->
+          <div class="lp-col-headers">
+            <span class="col-label">Position</span>
+            <span class="col-label">TVL</span>
+            <span class="col-label">Fees <span class="col-label-sub">/ IL</span></span>
+            <span class="col-label">Net P&amp;L</span>
+            <span class="col-label">APR</span>
+          </div>
+
+          <!-- Scrollable position list -->
+          <div class="position-list">
+            @if (filteredPositions().length === 0) {
+              <div class="lp-empty">
+                <h3>{{ positionScope() === 'active' ? 'No active positions' : 'No positions match filters' }}</h3>
+                <p>{{ positionScope() === 'active' && activeFilterCount() === 0 ? 'Snapshots may still be pending for open pools.' : 'Adjust filters or switch scope.' }}</p>
+              </div>
+            }
+
+            @for (position of filteredPositions(); track position.correlationId) {
+              @let expanded = isExpanded(position.correlationId);
+              @let closed = position.status === 'closed';
+              @let net = netPnl(position);
+              @let earningsValues = earningsSeries(position);
+              @let earningsLayout = barChartLayout(earningsValues);
+              @let earningsLabs = earningsLabels(position);
+              @let aprValues = aprSeries(position);
+              @let aprLayout = lineChartLayout(aprValues, position.apr.avg);
+              @let miniRange = miniRangeStyle(position);
+
+              <article class="position-row" [class.closed]="closed" [class.expanded]="expanded">
+                <button type="button" class="row-head" (click)="toggleExpanded(position.correlationId)">
+
+                  <!-- Identity column -->
+                  <span class="row-identity">
+                    <span class="identity-line1">
+                      <strong class="row-pair">{{ position.pair }}</strong>
+                      <span class="status-badge" [class]="statusClass(position.status)">
+                        <span class="badge-dot"></span>
+                        {{ statusLabel(position.status).toUpperCase() }}
+                      </span>
+                      @if (position.feeTierPct !== null) {
+                        <span class="fee-pill">{{ position.feeTierPct }}%</span>
+                      }
+                    </span>
+                    <span class="identity-line2">
+                      <span class="meta-text">{{ position.protocol }}</span>
+                      <span class="meta-sep">·</span>
+                      <span class="net-chip">
+                        <span class="net-dot" [style.background]="networkColor(position.networkId)"></span>
+                        <span class="meta-text">{{ networkLabel(position.networkId) }}</span>
+                      </span>
+                      <span class="meta-sep">·</span>
+                      <span class="wallet-chip">
+                        <span class="net-dot" style="background:var(--wr-cyan)"></span>
+                        <span class="meta-mono">{{ shortAddress(position.wallet) }}</span>
+                      </span>
+                      @if (position.tokenId !== null) {
+                        <span class="meta-sep">·</span>
+                        <span class="nft-pill">{{ position.tokenId }}</span>
+                      }
+                    </span>
+                  </span>
+
+                  <!-- TVL column -->
+                  <span class="row-tvl">
+                    <span class="tvl-note">{{ familyLabel(position.family) }}</span>
+                    <span class="tvl-value mono" [class.muted-value]="closed">
+                      {{ closed ? '—' : formatPrecisionUsd(position.tvlUsd.valueUsd, position.tvlUsd.precision) }}
+                    </span>
+                  </span>
+
+                  <!-- Fees / IL column -->
+                  <span class="row-fees">
+                    <span class="mono" [class.pos]="feesTotal(position) > 0" [class.muted-value]="feesTotal(position) === 0">
+                      {{ formatPrecisionUsd(feesTotal(position), position.fees.precision) }}
+                    </span>
+                    <span class="il-small">
+                      <span class="mono" [ngClass]="pnlClass(position.il.usd)">
+                        {{ formatPrecisionSignedUsd(position.il.usd, position.il.precision) }}
+                      </span>
+                      <span class="il-label">IL</span>
+                    </span>
+                  </span>
+
+                  <!-- Net P&L column -->
+                  <span class="row-pnl mono" [ngClass]="pnlClass(net)">
+                    {{ formatSignedUsd(net) }}
+                  </span>
+
+                  <!-- APR + chevron -->
+                  <span class="row-apr">
+                    <span class="apr-value mono">{{ formatApr(position.apr.avg ?? position.apr.now, position.apr.precision) }}</span>
+                    <span class="row-chevron" [class.rotated]="expanded">▾</span>
+                  </span>
+
+                </button>
+
+                @if (expanded) {
+                  <div class="position-detail">
+                    <div class="detail-toolbar">
+                      @if (!closed) {
+                        <button
+                          type="button"
+                          class="refresh-btn"
+                          [disabled]="isRefreshing(position.correlationId)"
+                          (click)="refreshPosition(position); $event.stopPropagation()">
+                          {{ isRefreshing(position.correlationId) ? 'Refreshing…' : 'Refresh snapshot' }}
+                        </button>
+                        <span class="freshness" [class.stale]="position.snapshotStale">{{ formatSnapshotFreshness(position) }}</span>
+                      }
+                    </div>
+
+                    <!-- 4 stat cards -->
+                    <div class="stat-cards">
+                      <div class="stat-card">
+                        <span class="stat-label">TVL</span>
+                        <strong class="stat-value mono">{{ formatPrecisionUsd(position.tvlUsd.valueUsd, position.tvlUsd.precision) }}</strong>
+                      </div>
+                      <div class="stat-card">
+                        <span class="stat-label">Net P&amp;L</span>
+                        <strong class="stat-value mono" [ngClass]="pnlClass(net)">{{ formatSignedUsd(net) }}</strong>
+                      </div>
+                      <div class="stat-card">
+                        <span class="stat-label">Fees earned</span>
+                        <strong class="stat-value mono pos">{{ formatPrecisionUsd(feesTotal(position), position.fees.precision) }}</strong>
+                      </div>
+                      <div class="stat-card">
+                        <span class="stat-label">{{ closed ? 'Lifetime APR' : 'Current APR' }}</span>
+                        <strong class="stat-value mono">{{ formatApr(position.apr.avg ?? position.apr.now, position.apr.precision) }}</strong>
+                      </div>
+                    </div>
+
+                    <!-- Charts row -->
+                    <div class="charts-row">
+                      <div class="wr-card">
+                        <div class="wr-card-head">Daily earnings · All time</div>
+                        <div class="wr-card-body chart-body">
+                        <svg class="chart-svg" [attr.viewBox]="'0 0 ' + earningsLayout.width + ' ' + earningsLayout.height" (mouseleave)="hideChartTooltip()">
+                          @for (tick of yAxisTicks(earningsLayout.maxValue); track tick) {
+                            @let y = earningsLayout.padTop + earningsLayout.innerHeight * (1 - tick / earningsLayout.maxValue);
+                            <line [attr.x1]="earningsLayout.padLeft" [attr.y1]="y" [attr.x2]="earningsLayout.width - earningsLayout.padRight" [attr.y2]="y" class="grid-line" />
+                            <text [attr.x]="earningsLayout.padLeft - 5" [attr.y]="y + 3" class="axis-label" text-anchor="end">{{ formatAxisUsd(tick) }}</text>
+                          }
+                          @for (value of earningsValues; track $index; let i = $index) {
+                            @let barH = barHeight(value, earningsLayout);
+                            @let x = barX(i, earningsLayout);
+                            @let y = earningsLayout.padTop + earningsLayout.innerHeight - barH;
+                            <rect
+                              [attr.x]="x" [attr.y]="y"
+                              [attr.width]="earningsLayout.barWidth" [attr.height]="barH"
+                              [class]="barH < 1 ? 'bar-fill zero-bar' : 'bar-fill'"
+                              (mouseenter)="showChartTooltip($event, earningsLabs[i], formatAxisUsd(value))"
+                              (mousemove)="showChartTooltip($event, earningsLabs[i], formatAxisUsd(value))" />
+                          }
+                          @for (label of earningsLabs; track label; let i = $index) {
+                            @if (i % earningsLabelStep(earningsLabs.length) === 0) {
+                              <text [attr.x]="earningsLayout.padLeft + i * earningsLayout.slotWidth + earningsLayout.slotWidth / 2" [attr.y]="earningsLayout.height - 7" class="axis-label" text-anchor="middle">{{ label }}</text>
+                            }
+                          }
+                        </svg>
+                        <p class="chart-footnote">
+                          <span>Avg per day</span>
+                          <span class="mono">{{ formatUsd(earningsValues.length > 0 ? earningsTotal(position) / earningsValues.length : 0) }}</span>
+                        </p>
+                        </div>
+                      </div>
+
+                      <div class="wr-card">
+                        <div class="wr-card-head">Historical APR · All time</div>
+                        <div class="wr-card-body chart-body">
+                        @if (aprValues.length === 0) {
+                          <div class="chart-empty">No APR history yet</div>
+                        } @else {
+                          <svg class="chart-svg" [attr.viewBox]="'0 0 ' + aprLayout.width + ' ' + aprLayout.height" (mouseleave)="hideChartTooltip()">
+                            @for (tick of yAxisTicks(aprLayout.maxValue); track tick) {
+                              @let y = linePointY(tick, aprLayout);
+                              <line [attr.x1]="aprLayout.padLeft" [attr.y1]="y" [attr.x2]="aprLayout.width - aprLayout.padRight" [attr.y2]="y" class="grid-line" />
+                              <text [attr.x]="aprLayout.padLeft - 5" [attr.y]="y + 3" class="axis-label" text-anchor="end">{{ formatAxisPct(tick) }}</text>
+                            }
+                            @if (position.apr.avg !== null) {
+                              @let avgY = linePointY(position.apr.avg, aprLayout);
+                              <line [attr.x1]="aprLayout.padLeft" [attr.y1]="avgY" [attr.x2]="aprLayout.width - aprLayout.padRight" [attr.y2]="avgY" class="avg-line" />
+                            }
+                            <path [attr.d]="lineAreaPath(aprValues, aprLayout)" class="line-area" />
+                            <path [attr.d]="linePath(aprValues, aprLayout)" class="line-stroke" />
+                            @for (value of aprValues; track $index; let i = $index) {
+                              @let cx = linePointX(i, aprValues.length, aprLayout);
+                              @let cy = linePointY(value, aprLayout);
+                              <circle [attr.cx]="cx" [attr.cy]="cy" r="3" class="line-point"
+                                (mouseenter)="showChartTooltip($event, position.aprDaily[i].date, formatApr(value, position.apr.precision))"
+                                (mousemove)="showChartTooltip($event, position.aprDaily[i].date, formatApr(value, position.apr.precision))" />
+                            }
+                          </svg>
+                        }
+                        <p class="chart-footnote">
+                          <span>{{ closed ? 'Lifetime APR' : 'Avg ext. APR' }}</span>
+                          <span class="mono">{{ formatApr(position.apr.avg, position.apr.precision) }}</span>
+                        </p>
+                        </div>
+                      </div>
+
+                      <!-- Liquidity Distribution (3rd chart column) -->
+                      <div class="wr-card">
+                        <div class="wr-card-head">Liquidity Distribution</div>
+                        <div class="wr-card-body wr-card-body-dist">
+                          @if (!hasPriceRange(position)) {
+                            <div class="chart-empty">{{ familyLabel(position.family) }} — no concentrated range</div>
+                          } @else {
+                            @let histBars = liquidityHistogramBars(position);
+                            @let cpX = distributionCurrentPriceX(position);
+                            @let baseY = distBaseY();
+                            @let rlX = distributionRangeX(position, 'low');
+                            @let rhX = distributionRangeX(position, 'high');
+                            @let axisTicks = distributionPriceAxisTicks(position);
+
+                            <div class="asset-split-bar">
+                              @for (side of compareSides(); track side) {
+                                @let share = tokenCompositionShare(position, side);
+                                <span class="asset-split-seg" [class]="side" [style.flex]="share"></span>
+                              }
+                            </div>
+                            <div class="asset-split-labels">
+                              @for (side of compareSides(); track side) {
+                                @let tok = tokenForSide(position, side);
+                                @let share = tokenCompositionShare(position, side);
+                                <span class="asset-split-label" [class]="side">
+                                  <span class="asset-dot" [class]="side"></span>
+                                  {{ tok.symbol }} {{ (share * 100).toFixed(0) }}%
+                                </span>
+                              }
+                            </div>
+                            <div class="dist-divider"></div>
+
+                            @if (hasLiquidityBins(position)) {
+                              <svg class="chart-svg dist-svg" [attr.viewBox]="'0 0 ' + DIST_W + ' ' + DIST_H" (mouseleave)="hideChartTooltip()">
+                                @if (rlX !== null && rhX !== null) {
+                                  <rect [attr.x]="rlX" [attr.y]="DIST_PAD_T" [attr.width]="rhX - rlX" [attr.height]="baseY - DIST_PAD_T" class="range-band-fill" />
+                                }
+                                @for (bar of histBars; track $index) {
+                                  <rect [attr.x]="bar.x" [attr.y]="baseY - bar.height" [attr.width]="bar.barWidth" [attr.height]="bar.height" [class]="bar.inRange ? 'hist-bar in-range' : 'hist-bar out-range'" />
+                                }
+                                @if (rlX !== null) {
+                                  <line [attr.x1]="rlX" [attr.y1]="DIST_PAD_T" [attr.x2]="rlX" [attr.y2]="baseY + 4" class="range-handle" />
+                                  <text [attr.x]="rlX" [attr.y]="baseY + 14" class="range-handle-label" text-anchor="middle">{{ formatPrice(position.range.priceLow) }}</text>
+                                }
+                                @if (rhX !== null) {
+                                  <line [attr.x1]="rhX" [attr.y1]="DIST_PAD_T" [attr.x2]="rhX" [attr.y2]="baseY + 4" class="range-handle" />
+                                  <text [attr.x]="rhX" [attr.y]="baseY + 14" class="range-handle-label" text-anchor="middle">{{ formatPrice(position.range.priceHigh) }}</text>
+                                }
+                                @if (cpX !== null) {
+                                  <line [attr.x1]="cpX" [attr.y1]="DIST_PAD_T - 4" [attr.x2]="cpX" [attr.y2]="baseY" class="current-price-line" />
+                                  <text [attr.x]="cpX" [attr.y]="DIST_PAD_T - 7" class="current-price-label" text-anchor="middle">▾ {{ formatPrice(position.range.priceCurrent) }}</text>
+                                }
+                                @for (tick of axisTicks; track $index) {
+                                  @if ($index % 2 === 0) {
+                                    <text [attr.x]="tick.x" [attr.y]="DIST_H - 4" class="axis-label" text-anchor="middle">{{ tick.label }}</text>
+                                  }
+                                }
+                              </svg>
+                            } @else {
+                              @let rangeCoords = rangeChartCoords(position);
+                              @if (rangeCoords !== null) {
+                                <svg class="chart-svg dist-svg" viewBox="0 0 460 110" (mouseleave)="hideChartTooltip()">
+                                  @let padT = 12; @let padB = 20;
+                                  <path [attr.d]="distributionCurvePath(position)" class="distribution-fill" />
+                                  <rect [attr.x]="rangeCoords.lx" [attr.y]="padT" [attr.width]="rangeCoords.rx - rangeCoords.lx" [attr.height]="110 - padT - padB" [class]="'range-band ' + rangeCoords.band" />
+                                  <line [attr.x1]="rangeCoords.lx" [attr.y1]="padT" [attr.x2]="rangeCoords.lx" [attr.y2]="110 - padB" [class]="'range-edge ' + rangeCoords.band" />
+                                  <line [attr.x1]="rangeCoords.rx" [attr.y1]="padT" [attr.x2]="rangeCoords.rx" [attr.y2]="110 - padB" [class]="'range-edge ' + rangeCoords.band" />
+                                  @if (rangeCoords.cx !== null) {
+                                    <line [attr.x1]="rangeCoords.cx" [attr.y1]="padT - 4" [attr.x2]="rangeCoords.cx" [attr.y2]="110 - padB" [class]="'range-current ' + rangeCoords.band" />
+                                    <text [attr.x]="rangeCoords.cx" [attr.y]="padT - 5" class="range-label" text-anchor="middle">{{ formatPrice(position.range.priceCurrent) }}</text>
+                                  }
+                                  <text [attr.x]="rangeCoords.lx" [attr.y]="padT + 8" class="range-label" text-anchor="middle">{{ formatPrice(position.range.priceLow) }}</text>
+                                  <text [attr.x]="rangeCoords.rx" [attr.y]="padT + 8" class="range-label" text-anchor="middle">{{ formatPrice(position.range.priceHigh) }}</text>
+                                </svg>
+                              }
+                            }
+                          }
+                        </div>
+                      </div>
+                    </div>
+
+                    <!-- P&L / Fees / Entry vs Current row -->
+                    <div class="trio-row">
+                      <!-- P&L Breakdown -->
+                      <div class="wr-card">
+                        <div class="wr-card-head">P&amp;L Breakdown</div>
+                        <div class="wr-card-body">
+                          @if (closed) {
+                            <div class="pnl-line">
+                              <span class="pnl-lbl">Deposited</span>
+                              <span class="mono">{{ formatUsd(position.costBasisUsd ?? 0) }}</span>
+                            </div>
+                            <div class="pnl-line">
+                              <span class="pnl-lbl">Withdrawn</span>
+                              <span class="mono pos">{{ formatUsd(position.withdrawnUsd ?? 0) }}</span>
+                            </div>
+                            <div class="pnl-line">
+                              <span class="pnl-lbl">Fees earned</span>
+                              <span class="mono pos">{{ formatPrecisionUsd(feesTotal(position), position.fees.precision) }}</span>
+                            </div>
+                            <div class="pnl-divider"></div>
+                            <div class="pnl-line bold">
+                              <span class="pnl-lbl">Net realized</span>
+                              <span class="mono" [ngClass]="pnlClass(net)">{{ formatSignedUsd(net) }}</span>
+                            </div>
+                          } @else {
+                            <div class="pnl-line">
+                              <span>
+                                <span class="pnl-lbl">Fees earned</span>
+                                <small class="pnl-sub">accumulated</small>
+                              </span>
+                              <span class="mono pos">{{ formatPrecisionSignedUsd(feesTotal(position), position.fees.precision) }}</span>
+                            </div>
+                            <div class="pnl-divider"></div>
+                            <div class="pnl-line">
+                              <span>
+                                <span class="pnl-lbl">Impermanent loss</span>
+                                <small class="pnl-sub">vs. hold</small>
+                              </span>
+                              <span class="mono" [ngClass]="pnlClass(position.il.usd)">{{ formatPrecisionSignedUsd(position.il.usd, position.il.precision) }}</span>
+                            </div>
+                            @if (position.priceAppreciationPrecision !== 'UNAVAILABLE') {
+                            <div class="pnl-divider"></div>
+                            <div class="pnl-line">
+                              <span>
+                                <span class="pnl-lbl">Price appreciation</span>
+                                <small class="pnl-sub">underlying change</small>
+                              </span>
+                              <span class="mono" [ngClass]="pnlClass(position.priceAppreciationUsd)">{{ formatSignedUsd(position.priceAppreciationUsd) }}</span>
+                            </div>
+                            }
+                            <div class="pnl-divider pnl-divider-strong"></div>
+                            <div class="pnl-line bold">
+                              <span class="pnl-lbl">Net P&amp;L</span>
+                              <span class="mono" [ngClass]="pnlClass(net)">{{ formatSignedUsd(net) }}</span>
+                            </div>
+                          }
+                        </div>
+                      </div>
+
+                      <!-- Fees & Rewards -->
+                      <div class="wr-card">
+                        <div class="wr-card-head">Fees &amp; Rewards</div>
+                        <div class="wr-card-body">
+                          @if (position.fees.perToken.length === 0) {
+                            <div class="reward-line">
+                              <span class="reward-sym">Total</span>
+                              <div class="reward-amounts">
+                                <span class="mono warn">{{ formatPrecisionUsd(position.fees.unclaimedUsd, position.fees.precision) }}</span>
+                                <small class="mono muted-value">{{ formatPrecisionUsd(position.fees.claimedUsd, position.fees.precision) }} claimed</small>
+                              </div>
+                            </div>
+                          } @else {
+                            @for (token of position.fees.perToken; track token.symbol) {
+                              <div class="reward-line">
+                                <div class="reward-icon">{{ token.symbol.slice(0, 4) }}</div>
+                                <div class="reward-body">
+                                  <div class="reward-qty mono">
+                                    @if (token.qtyUnclaimed !== null && token.qtyUnclaimed !== 0) {
+                                      {{ formatQuantity(token.qtyUnclaimed) }}
+                                    }
+                                  </div>
+                                  <div class="reward-sym-sm">{{ token.symbol }}</div>
+                                </div>
+                                <span class="mono pos">
+                                  @if (token.usdUnclaimed !== null) { +{{ formatUsd(token.usdUnclaimed) }} }
+                                </span>
+                              </div>
+                            }
+                          }
+                          <div class="reward-total">
+                            <span class="pnl-lbl">Total</span>
+                            <span class="mono pos">+{{ formatPrecisionUsd(feesTotal(position), position.fees.precision) }}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <!-- Entry vs Current (3rd column of trio-row) -->
+                      <div class="wr-card">
+                        <div class="wr-card-head">Entry vs Current</div>
+                        @if (closed) {
+                          <div class="wr-card-body chart-empty">Closed position</div>
+                        } @else {
+                          <div class="mini-table">
+                            <div class="mini-thead mini-thead-4">
+                              <span>Metric</span><span>At entry</span><span>Current</span><span>Δ</span>
+                            </div>
+                            @for (row of entryVsCurrentRows(position); track row.label; let i = $index) {
+                              <div class="mini-row mini-row-4" [class.mini-row-alt]="i % 2 !== 0">
+                                <span class="muted-value">{{ row.label }}</span>
+                                <span class="mono muted-value">{{ row.entry }}</span>
+                                <span class="mono">{{ row.current }}</span>
+                                <span class="mono" [class.pos]="row.changePositive === true" [class.neg]="row.changePositive === false">{{ row.change }}</span>
+                              </div>
+                            }
+                          </div>
+                        }
+                      </div>
+                    </div>
+
+                    <!-- Transaction history -->
+                    <div class="wr-card txn-card">
+                      <div class="wr-card-head">Transaction History</div>
+                      @if (position.txns.length === 0) {
+                        <div class="chart-empty">No transactions recorded</div>
+                      } @else {
+                        <div class="txn-table">
+                          <div class="txn-thead">
+                            <span>Type</span>
+                            <span>Date</span>
+                            <span>Amount</span>
+                            <span>Total</span>
+                            <span>Txs</span>
+                          </div>
+                          @for (txn of position.txns; track txn.id; let i = $index) {
+                            <div class="txn-trow" [class.txn-row-alt]="i % 2 !== 0">
+                              <!-- Type pill -->
+                              <span class="txn-type-col">
+                                <span class="txn-type-pill">{{ txn.type }}</span>
+                              </span>
+                              <!-- Date -->
+                              <span class="txn-date-col mono muted-value">{{ formatDate(txn.blockTimestamp) }}</span>
+                              <!-- Amount legs -->
+                              <span class="txn-amount-col">
+                                @for (leg of txn.legs; track leg.symbol) {
+                                  <span class="txn-leg-sm mono">
+                                    <b [class]="txnLegClass(leg.quantity)">{{ formatTxnLeg(leg.quantity, leg.symbol) }}</b>
+                                    @if (leg.valueUsd !== null) {
+                                      <small class="txn-leg-usd">/ {{ formatUsd(leg.valueUsd) }}</small>
+                                    }
+                                  </span>
+                                }
+                              </span>
+                              <!-- Total -->
+                              <span class="txn-total-col">
+                                @if (txn.totalValueUsd !== null) {
+                                  <span class="mono">{{ formatUsd(txn.totalValueUsd) }}</span>
+                                }
+                              </span>
+                              <!-- Tx hash (text + copy button) -->
+                              <span class="txn-hash-col">
+                                @if (txn.txHash !== null) {
+                                  <span class="txn-hash-text" [title]="txn.txHash">{{ shortHash(txn.txHash) }}</span>
+                                  <button type="button" class="txn-copy-btn" [class.copied]="isCopied(txn.txHash)" (click)="copyTxHash(txn.txHash)">
+                                    {{ isCopied(txn.txHash) ? 'Copied' : 'Copy' }}
+                                  </button>
+                                }
+                              </span>
+                            </div>
+                          }
+                        </div>
+                      }
+                    </div>
+
+                  </div>
+                }
+              </article>
+            }
+          </div>
+        </main>
+      </div>
+    }
+  }
+
+  @if (chartTooltip(); as tip) {
+    <div id="chart-tip" class="show" [style.left.px]="tip.left" [style.top.px]="tip.top">
+      <div class="tip-inner">
+        <strong>{{ tip.label }}</strong>
+        <span class="mono">{{ tip.value }}</span>
+      </div>
+    </div>
+  }
+</section>

@@ -194,7 +194,7 @@ public class LpRegistryClassifier implements OnChainFamilyClassifier {
             ProtocolRegistryEntry entry,
             NormalizedTransactionType rawType
     ) {
-        NormalizedTransactionType type = LpPrincipalCloseEvidence.refineLifecycleType(
+        NormalizedTransactionType type = LpPrincipalCloseEvidence.refineFinalExitType(
                 context.view(),
                 context.movementLegs(),
                 rawType
@@ -274,7 +274,27 @@ public class LpRegistryClassifier implements OnChainFamilyClassifier {
                 context.view().networkId(),
                 resolvedContract
         );
-        if (entry.role() == com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryRole.POSITION_MANAGER
+        // Accept POSITION_MANAGER entries directly, or POOL entries that declare an
+        // underlyingPositionManager (e.g. Katana vbETH-vbUSDC pool → vault). In the latter
+        // case canonicalContract has already been remapped to the vault POSITION_MANAGER address
+        // by LpStakingWrapperResolver.canonicalPositionManager.
+        boolean isPositionManagerEntry = entry.role() == com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryRole.POSITION_MANAGER;
+        boolean isPoolWithUnderlyingManager = entry.underlyingPositionManager() != null && !entry.underlyingPositionManager().isBlank();
+        // When the raw tx's `to` address is an intermediate router (not in registry), the
+        // contract resolution via the view falls back to null/router address and canonicalContract
+        // is unresolved. For POOL entries with underlyingPositionManager, retry resolution using
+        // the entry's own pool address — the staking wrapper resolver maps it to the vault.
+        if (isPoolWithUnderlyingManager && (canonicalContract == null || canonicalContract.isBlank()
+                || canonicalContract.equalsIgnoreCase(resolvedContract))) {
+            String entryCanonical = lpStakingWrapperResolver.canonicalPositionManager(
+                    context.view().networkId(),
+                    entry.contractAddress()
+            );
+            if (entryCanonical != null && !entryCanonical.isBlank()) {
+                canonicalContract = entryCanonical;
+            }
+        }
+        if ((isPositionManagerEntry || isPoolWithUnderlyingManager)
                 && LpPositionCorrelationSupport.supportsLpPositionCorrelation(type)
                 && !LpPositionCorrelationSupport.requiresReceiptClarification(context.view(), type)
                 && canonicalContract != null && !canonicalContract.isBlank()) {

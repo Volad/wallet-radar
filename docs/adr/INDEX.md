@@ -42,6 +42,7 @@ Architecture Decision Records for WalletRadar. Each ADR captures a single decisi
 | [ADR-034](ADR-034-nec-transaction-scan.md) | NEC computation via direct transaction scan | Accepted | 2026-06-23 | Conservation gate / NEC |
 | [ADR-035](ADR-035-lending-receipt-identity-resolver.md) | Lending receipt identity resolver | Accepted | 2026-06-24 | Lending |
 | [ADR-036](ADR-036-contract-first-lending-market-key-and-live-debt.md) | Contract-first lending market key + live debt | Accepted | 2026-06-24 | Lending |
+| [ADR-037](ADR-037-lp-enrichment-and-earnings-snapshots.md) | LP on-chain enrichment and earnings snapshots | Accepted | 2026-06-24 | Liquidity pools |
 
 ## Cycle/5 N19 cluster — implementation plan mapping
 

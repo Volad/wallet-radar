@@ -48,6 +48,7 @@ Global reference for product context, domain model, backend pipeline stages, fro
 | [Move basis](frontend/move-basis.md) | Asset ledger / AVCO timeline |
 | [Settings](frontend/settings.md) | Wallets, integrations, accounting |
 | [Lending market](frontend/lending-market.md) | Lending cycles UI |
+| [Liquidity pools](frontend/liquidity-pools.md) | LP positions UI |
 
 ### 4. Reference (searchable catalogs)
 
