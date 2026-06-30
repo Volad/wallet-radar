@@ -18,6 +18,7 @@ import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.util.Objects;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -152,6 +153,12 @@ public class SessionQueryService {
         );
         String overallStatus = resolveOverallStatus(session, acquisitionStatus);
 
+        Instant lastSyncedAt = syncStatusByPair.values().stream()
+                .map(SyncStatus::getLastSyncedAt)
+                .filter(Objects::nonNull)
+                .max(Instant::compareTo)
+                .orElse(null);
+
         return new SessionBackfillStatusView(
                 session.getId(),
                 overallStatus,
@@ -169,6 +176,7 @@ public class SessionQueryService {
                         ? null
                         : session.getPipelineState().getMessage(),
                 phaseProgress(session, syncStatusByPair, totalTargets, completedTargets, overallProgress),
+                lastSyncedAt,
                 walletStatuses
         );
     }
@@ -637,6 +645,7 @@ public class SessionQueryService {
             String pipelineStatus,
             String pipelineMessage,
             PhaseProgressView phaseProgress,
+            Instant lastSyncedAt,
             List<WalletBackfillStatusView> wallets
     ) {
     }

@@ -18,5 +18,6 @@ public class LiquidityPoolsProperties {
     private long onDemandDebounceMs = 20_000L;
     private int staleMultiplier = 2;
     private BigDecimal dustThresholdUsd = new BigDecimal("10");
-    private long depthIntervalMs = 86_400_000L;
+    /** TTL for pool-level liquidity depth cache (histogram RPC scan). */
+    private long depthIntervalMs = 21_600_000L;
 }

@@ -1,3 +1,12 @@
+server:
+  # Trust X-Forwarded-Proto/Host headers from Cloudflare → nginx reverse proxy.
+  forward-headers-strategy: framework
+
+logging:
+  level:
+    org.springframework.security: DEBUG
+    org.springframework.security.oauth2: TRACE
+
 spring:
   application:
     name: wallet-radar
@@ -7,6 +16,18 @@ spring:
   data:
     mongodb:
       uri: ${MONGODB_URI:mongodb://localhost:27017/walletradar}
+  security:
+    oauth2:
+      client:
+        registration:
+          google:
+            client-id: ${GOOGLE_CLIENT_ID:dummy}
+            client-secret: ${GOOGLE_CLIENT_SECRET:dummy}
+            scope:
+              - openid
+              - email
+              - profile
+            redirect-uri: ${WALLETRADAR_AUTH_REDIRECT_URI:https://wr.allatone.xyz/login/oauth2/code/google}
 
 # Per-network ingestion config for raw backfill adapters.
 walletradar:
@@ -51,6 +72,7 @@ walletradar:
     enabled: true
     refresh-interval-ms: 3600000
     on-demand-debounce-ms: 20000
+    depth-interval-ms: 21600000  # pool liquidity histogram cache TTL (6h); position TVL/fees still refresh on demand
     stale-multiplier: 2
     dust-threshold-usd: 10
   ingestion:
@@ -129,13 +151,13 @@ walletradar:
           enabled: true
           base-url: https://rpc.ankr.com/multichain/${ANKR_API_KEY:}
         urls:
+          - https://rpc.ankr.com/arbitrum/${ANKR_API_KEY:}
           - https://arb1.arbitrum.io/rpc
           - https://rpc.sentio.xyz/arbitrum-one
           - https://arbitrum.api.onfinality.io/public
           - https://arbitrum-one-rpc.publicnode.com
           - https://arbitrum.blockpi.network/v1/rpc/public
           - https://arbitrum.meowrpc.com
-          #          - https://rpc.ankr.com/arbitrum/${ANKR_API_KEY:}
           - https://lb.drpc.live/arbitrum/${DRPC_API_KEY:}
         batch-block-size: 500
         window-blocks: 252000000   # ~2 years at ~4 blocks/s
@@ -189,10 +211,10 @@ walletradar:
           enabled: true
           base-url: https://rpc.ankr.com/multichain/${ANKR_API_KEY:}
         urls:
-          - https://base-rpc.publicnode.com
-          - https://1rpc.io/base
           - https://rpc.ankr.com/base/${ANKR_API_KEY:}
           - https://mainnet.base.org
+          - https://1rpc.io/base
+          - https://base-rpc.publicnode.com
           - https://lb.drpc.live/base/${DRPC_API_KEY:}
         batch-block-size: 1000
         window-blocks: 34000000    # measured ~2y span as of 2026-03-09, rounded +5%
@@ -520,6 +542,22 @@ walletradar:
       - network-id: ARBITRUM
         token-contract: 0x29103b9e35b3f5f65708804dcc5f945fae992416
         method-id: 0xd43a632f
+  auth:
+    # Set to true in prod to enforce Google OAuth2 login for all session APIs.
+    # Keep false for local development without Google credentials.
+    enabled: ${WALLETRADAR_AUTH_ENABLED:false}
+    post-login-redirect: ${WALLETRADAR_AUTH_POST_LOGIN_REDIRECT:/settings}
+    jwt:
+      # HS256 secret — set WALLETRADAR_AUTH_JWT_SECRET in prod (openssl rand -base64 48).
+      secret: ${WALLETRADAR_AUTH_JWT_SECRET:dev-insecure-secret-change-in-prod}
+      expiration-seconds: 2592000  # 30 days
+    cookie:
+      name: wr_auth
+      max-age-seconds: 2592000  # 30 days
+      secure: true
+      same-site: Lax
+      path: /
+
   # API CORS policy for local SPA development and browser preflight (OPTIONS).
   api:
     cors:

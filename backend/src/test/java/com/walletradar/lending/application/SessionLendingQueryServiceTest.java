@@ -14,6 +14,7 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.pricing.persistence.CurrentPriceQuoteDocument;
 import com.walletradar.pricing.persistence.HistoricalPriceDocument;
 import com.walletradar.lending.persistence.LendingMarketRateSnapshot;
+import com.walletradar.lending.persistence.LendingGroupRefreshStateRepository;
 import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryService;
 import com.walletradar.lending.persistence.LendingReceiptIdentityRepository;
 import com.walletradar.session.application.AccountingUniverseService;
@@ -61,6 +62,8 @@ class SessionLendingQueryServiceTest {
     private LendingReceiptIdentityRepository receiptIdentityRepository;
     @Mock
     private ProtocolRegistryService protocolRegistryService;
+    @Mock
+    private LendingGroupRefreshStateRepository lendingGroupRefreshStateRepository;
 
     private SessionLendingQueryService newService() {
         return newService(null, null);
@@ -83,6 +86,7 @@ class SessionLendingQueryServiceTest {
                 new LendingMarketMetricEstimator(),
                 rateService,
                 healthService,
+                lendingGroupRefreshStateRepository,
                 new LendingMarketKeyResolver(identityService),
                 identityService
         );

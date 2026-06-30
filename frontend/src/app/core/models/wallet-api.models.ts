@@ -77,6 +77,7 @@ export interface SessionIntegrationResponse {
   readonly status: string | null;
   readonly displayName: string | null;
   readonly accountRef: string | null;
+  readonly color: string | null;
   readonly maskedKey: string | null;
   readonly readOnly: boolean;
   readonly capabilities: ReadonlyArray<string>;
@@ -116,6 +117,7 @@ export interface SessionSettingsIntegrationUpdateRequest {
   readonly displayName: string;
   readonly apiKey: string;
   readonly apiSecret: string;
+  readonly color?: string | null;
 }
 
 export interface PutSessionSettingsRequest {
@@ -182,14 +184,13 @@ export interface SessionBackfillStatusResponse {
   readonly pipelineStatus?: string | null;
   readonly pipelineMessage?: string | null;
   readonly phaseProgress?: SessionPhaseProgressResponse | null;
+  readonly lastSyncedAt?: string | null;
   readonly wallets: ReadonlyArray<SessionBackfillWalletStatus>;
 }
 
 export type SessionTransactionSourceType = 'CHAIN' | 'MANUAL' | 'OVERRIDE';
 
 export type SessionBridgeStatus = 'BRIDGE_OUT' | 'BRIDGE_IN' | 'MATCHED' | 'REVIEW';
-export type SessionTransactionsBridgeFilter = 'ALL' | SessionBridgeStatus;
-export type SessionTransactionsSpamFilter = 'HIDE_SPAM' | 'ALL' | 'SPAM_ONLY';
 
 export interface SessionTransactionFlowResponse {
   readonly role: string | null;
@@ -232,8 +233,7 @@ export interface GetSessionTransactionsRequest {
   readonly limit?: number;
   readonly offset?: number;
   readonly search?: string | null;
-  readonly bridgeStatus?: SessionTransactionsBridgeFilter | null;
-  readonly spamFilter?: SessionTransactionsSpamFilter | null;
+  readonly categories?: ReadonlyArray<string> | null;
   readonly walletIds?: ReadonlyArray<string>;
   readonly networkIds?: ReadonlyArray<EvmNetworkId>;
 }
@@ -610,6 +610,7 @@ export interface SessionLendingGroupResponse {
   readonly healthStatus: string | null;
   readonly healthSource: string | null;
   readonly healthStale: boolean | null;
+  readonly lastRefreshedAt: string | null;
   readonly supplyUsd: number | null;
   readonly borrowUsd: number | null;
   readonly netExposureUsd: number | null;
@@ -775,6 +776,27 @@ export interface SessionLpResponse {
   readonly sessionId: string;
   readonly summary: SessionLpSummaryResponse;
   readonly positions: ReadonlyArray<SessionLpPositionResponse>;
+}
+
+export type RefreshStatusValue = 'QUEUED' | 'UPDATING' | 'SYNCED' | 'FAILED';
+
+export type RefreshTriggerValue = 'MANUAL' | 'BULK' | 'SCHEDULED' | 'REPLAY';
+
+export interface RefreshStateItemResponse {
+  readonly id: string;
+  readonly status: RefreshStatusValue;
+  readonly trigger: RefreshTriggerValue | null;
+  readonly requestedAt: string | null;
+  readonly startedAt: string | null;
+  readonly completedAt: string | null;
+  readonly lastSyncedAt: string | null;
+  readonly error: string | null;
+}
+
+export interface RefreshStatusResponse {
+  readonly sessionId: string;
+  readonly items: ReadonlyArray<RefreshStateItemResponse>;
+  readonly anyActive: boolean;
 }
 
 // Backward-compatible alias used across current component code.

@@ -14,4 +14,11 @@ public interface LendingHealthFactorSnapshotRepository extends MongoRepository<L
             String walletAddress,
             Instant capturedAt
     );
+
+    Optional<LendingHealthFactorSnapshot> findFirstBySessionIdAndProtocolKeyAndNetworkIdAndWalletAddressOrderByCapturedAtDesc(
+            String sessionId,
+            String protocolKey,
+            String networkId,
+            String walletAddress
+    );
 }

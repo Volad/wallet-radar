@@ -8,54 +8,37 @@
 
 .settings-section {
   min-width: 0;
+  margin-bottom: 4px;
 }
 
-.integrations-section-head {
+// ── Section header (matches wallet section) ───────────────────────────────────
+
+.ds-row {
   display: flex;
   align-items: center;
   gap: 8px;
   margin-bottom: 10px;
 }
 
-.integrations-section-icon {
+.ds-head-icon {
   flex-shrink: 0;
   color: var(--wr-subtle);
   display: block;
 }
 
-.integrations-section-title {
+.ds-title {
   font-weight: 700;
   font-size: 13px;
   color: var(--wr-text);
 }
 
-.section-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 1rem;
-  margin-bottom: 1rem;
-}
-
-.section-title {
-  font-size: 0.875rem;
-  font-weight: 700;
-  margin-bottom: 0.12rem;
-}
-
-.section-subline {
-  font-size: 0.69rem;
-  color: var(--wr-subtle);
-}
-
-.tag {
+.ds-tag {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 0.625rem;
-  padding: 0 0.38rem;
-  min-height: 1rem;
-  font-size: 0.58rem;
+  border-radius: 3px;
+  padding: 1px 7px;
+  font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.04em;
   border: 1px solid var(--wr-border);
@@ -64,118 +47,108 @@
   font-family: var(--wr-font-mono);
 }
 
-.tag.success {
-  background: var(--wr-green-soft);
-  border-color: var(--wr-green-mid);
-  color: var(--wr-green);
-}
-
-.stream-sync-wrap {
-  margin-top: 0.75rem;
-  padding-top: 0.65rem;
-  border-top: 1px solid var(--wr-border);
-}
-
-.stream-sync-title {
-  font-size: 0.65rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--wr-subtle);
-  margin-bottom: 0.45rem;
-}
-
-.stream-sync-table {
-  display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
-  font-size: 0.69rem;
-}
-
-.stream-sync-row {
-  display: grid;
-  grid-template-columns: minmax(5rem, 1.1fr) 1fr 1fr;
-  gap: 0.35rem;
-  align-items: baseline;
-  color: var(--wr-text);
-}
-
-.stream-sync-header {
-  color: var(--wr-subtle);
-  font-weight: 600;
-  font-size: 0.62rem;
-}
-
-.stream-name {
-  word-break: break-all;
-}
-
-.integration-card {
-  border: 1px solid var(--wr-border-strong);
-  border-radius: 0.5rem;
-  padding: 0.8rem 0.9rem 0.85rem;
-  background: var(--wr-surface);
-  margin-bottom: 0.8rem;
-
-  &.connected {
-    border-color: color-mix(in srgb, var(--wr-green) 35%, transparent);
-  }
-}
-
-.field-label-required {
-  color: var(--wr-red);
-  margin-left: 1px;
-}
-
-.integration-card-head {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.75rem;
-  margin-bottom: 0.85rem;
-}
-
-.integration-mark {
-  width: 2.15rem;
-  height: 2.15rem;
-  border-radius: 0.5rem;
-  border: 1px solid color-mix(in srgb, var(--wr-amber) 28%, transparent);
-  background: var(--wr-amber-soft);
-  color: #f7a600;
-  display: grid;
-  place-items: center;
-  flex-shrink: 0;
-  font-weight: 800;
-  font-family: var(--wr-font-mono);
-}
-
-.integration-copy {
-  min-width: 0;
+.ds-spacer {
   flex: 1;
 }
 
-.integration-title-row {
+.ds-add-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  background: var(--wr-cyan-soft);
+  border: 1px solid var(--wr-cyan-mid);
+  border-radius: 5px;
+  color: var(--wr-cyan);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+
+  &:hover {
+    opacity: 0.85;
+  }
+}
+
+// ── Compact integration row (matches wallet ds-saved-row) ─────────────────────
+
+.int-saved-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.int-row {
+  display: flex;
+  align-items: stretch;
+  background: var(--wr-elevated);
+  border: 1px solid var(--wr-border-strong);
+  border-radius: 7px;
+  overflow: hidden;
+
+  &.is-expanded {
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+    border-bottom-color: transparent;
+  }
+
+  &.is-confirming {
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+    border-color: color-mix(in srgb, var(--wr-red) 32%, transparent);
+  }
+}
+
+.ds-stripe {
+  width: 3px;
+  flex-shrink: 0;
+}
+
+.int-abbr {
+  width: 34px;
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-  margin-bottom: 0.14rem;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 800;
+  font-family: var(--wr-font-mono);
+  color: var(--wr-muted);
+  flex-shrink: 0;
 }
 
-.integration-title {
-  font-size: 0.76rem;
-  font-weight: 700;
+.int-label {
+  width: 120px;
+  flex-shrink: 0;
+  padding: 9px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  border-right: 1px solid var(--wr-border);
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.integration-subline {
-  font-size: 0.66rem;
+.int-account {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 12px;
+  font-size: 10px;
   color: var(--wr-subtle);
-  line-height: 1.45;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .status-pill {
+  flex-shrink: 0;
+  align-self: center;
+  margin: 0 10px;
   border-radius: 999px;
-  padding: 0.24rem 0.55rem;
-  font-size: 0.58rem;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.56rem;
   font-weight: 700;
   letter-spacing: 0.08em;
   background: rgba(255, 255, 255, 0.04);
@@ -201,16 +174,248 @@
   }
 }
 
-.instruction-card {
-  margin-bottom: 0.8rem;
-  padding: 0.7rem 0.75rem;
-  border-radius: 0.45rem;
+.ds-edit-btn {
+  flex-shrink: 0;
+  padding: 0 12px;
+  border-left: 1px solid var(--wr-border);
+  background: transparent;
+  color: var(--wr-subtle);
+  font-size: 11px;
+  font-family: var(--wr-font-mono);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  transition: color 0.12s, background 0.12s;
+
+  &:hover {
+    color: var(--wr-text);
+    background: var(--wr-surface);
+  }
+
+  &.active {
+    color: var(--wr-text);
+  }
+}
+
+// ── Edit panel (expands below the row) ────────────────────────────────────────
+
+.int-edit-panel {
   background: var(--wr-elevated);
+  border: 1px solid var(--wr-border-strong);
+  border-top: none;
+  border-bottom-left-radius: 7px;
+  border-bottom-right-radius: 7px;
+  padding: 0.85rem 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+// ── Summary table ─────────────────────────────────────────────────────────────
+
+.int-summary {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.summary-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-size: 0.69rem;
+  color: var(--wr-subtle);
+}
+
+.progress-track {
+  width: 100%;
+  height: 3px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.06);
+  margin-top: 2px;
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: inherit;
+}
+
+.stream-sync-wrap {
+  margin-top: 0.55rem;
+  padding-top: 0.55rem;
+  border-top: 1px solid var(--wr-border);
+}
+
+.stream-sync-title {
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--wr-subtle);
+  margin-bottom: 0.35rem;
+}
+
+.stream-sync-table {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.66rem;
+}
+
+.stream-sync-row {
+  display: grid;
+  grid-template-columns: minmax(5rem, 1.1fr) 1fr 1fr;
+  gap: 0.35rem;
+  align-items: baseline;
+  color: var(--wr-text);
+}
+
+.stream-sync-header {
+  color: var(--wr-subtle);
+  font-weight: 600;
+  font-size: 0.59rem;
+}
+
+.stream-name {
+  word-break: break-all;
+}
+
+// ── Disconnect confirmation ───────────────────────────────────────────────────
+
+.disconnect-confirm {
+  background: var(--wr-elevated);
+  border: 1px solid color-mix(in srgb, var(--wr-red) 32%, transparent);
+  border-top: none;
+  border-bottom-left-radius: 7px;
+  border-bottom-right-radius: 7px;
+  padding: 0.7rem 0.9rem;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.disconnect-confirm-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.disconnect-confirm-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--wr-text);
+}
+
+.disconnect-confirm-sub {
+  font-size: 0.62rem;
+  color: var(--wr-subtle);
+  line-height: 1.5;
+}
+
+.disconnect-confirm-actions {
+  display: flex;
+  gap: 0.45rem;
+  flex-shrink: 0;
+}
+
+// ── Connect form ──────────────────────────────────────────────────────────────
+
+.int-connect-wrap {
+  background: var(--wr-elevated);
+  border: 1px solid var(--wr-border-strong);
+  border-radius: 7px;
+  padding: 0.85rem 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.int-connect-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.int-connect-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--wr-text);
+}
+
+// ── Provider picker ───────────────────────────────────────────────────────────
+
+.provider-grid {
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.provider-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 8px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--wr-border);
+  background: var(--wr-surface);
+  cursor: pointer;
+  transition: all 0.12s;
+
+  &.selected {
+    border-color: color-mix(in srgb, var(--wr-amber) 55%, transparent);
+    background: var(--wr-amber-soft);
+  }
+
+  &.soon {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  &:not(.soon):hover {
+    border-color: var(--wr-border-strong);
+  }
+}
+
+.provider-abbr-chip {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  background: var(--wr-amber-soft);
+  border: 1px solid color-mix(in srgb, var(--wr-amber) 28%, transparent);
+  color: #f7a600;
+  display: grid;
+  place-items: center;
+  font-size: 0.55rem;
+  font-weight: 800;
+  font-family: var(--wr-font-mono);
+}
+
+.provider-label {
+  font-size: 0.65rem;
+  color: var(--wr-subtle);
+  font-family: var(--wr-font-mono);
+}
+
+.provider-soon {
+  font-size: 0.52rem;
+  color: var(--wr-muted);
+}
+
+// ── Instruction card ──────────────────────────────────────────────────────────
+
+.instruction-card {
+  padding: 0.65rem 0.75rem;
+  border-radius: 0.4rem;
+  background: var(--wr-surface);
   border: 1px solid var(--wr-border);
 }
 
 .instruction-head {
-  margin-bottom: 0.55rem;
+  margin-bottom: 0.5rem;
   font-size: 0.58rem;
   font-weight: 700;
   letter-spacing: 0.1em;
@@ -220,7 +425,7 @@
 
 .instruction-steps {
   display: grid;
-  gap: 0.45rem;
+  gap: 0.4rem;
 }
 
 .instruction-step {
@@ -230,8 +435,8 @@
 }
 
 .instruction-step-index {
-  width: 1.05rem;
-  height: 1.05rem;
+  width: 1rem;
+  height: 1rem;
   border-radius: 0.25rem;
   border: 1px solid color-mix(in srgb, var(--wr-amber) 28%, transparent);
   background: var(--wr-amber-soft);
@@ -241,59 +446,32 @@
   flex-shrink: 0;
   font-size: 0.52rem;
   font-weight: 800;
-  margin-top: 0.02rem;
 }
 
 .instruction-step-copy {
-  font-size: 0.69rem;
-  line-height: 1.55;
+  font-size: 0.66rem;
+  line-height: 1.5;
   color: var(--wr-subtle);
 }
 
 .instruction-link {
   display: inline-flex;
-  margin-top: 0.65rem;
+  margin-top: 0.55rem;
   color: #f7a600;
   text-decoration: none;
   font-size: 0.65rem;
 }
 
-.integration-summary {
-  display: grid;
-  gap: 0.45rem;
-  margin-bottom: 0.8rem;
-}
-
-.summary-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 0.75rem;
-  font-size: 0.72rem;
-  color: #9faccc;
-}
-
-.progress-track {
-  width: 100%;
-  height: 0.45rem;
-  border-radius: 999px;
-  overflow: hidden;
-  background: rgba(255, 255, 255, 0.06);
-}
-
-.progress-fill {
-  height: 100%;
-  background: #f7a600;
-  border-radius: inherit;
-}
+// ── Integration form ──────────────────────────────────────────────────────────
 
 .integration-form {
   display: grid;
-  gap: 0.75rem;
+  gap: 0.65rem;
 }
 
 .editor-field-block {
   display: grid;
-  gap: 0.4rem;
+  gap: 0.35rem;
 }
 
 .field-label {
@@ -304,16 +482,25 @@
   color: var(--wr-subtle);
 }
 
+.field-label-required {
+  color: var(--wr-red);
+  margin-left: 1px;
+}
+
 .ifield {
   width: 100%;
-  background: var(--wr-elevated);
+  background: var(--wr-surface);
   border: 1px solid var(--wr-border);
   border-radius: 6px;
   color: var(--wr-text);
-  padding: 8px 11px;
+  padding: 7px 10px;
   font-size: 12px;
   font-family: var(--wr-font-mono);
   outline: none;
+
+  &:focus {
+    border-color: var(--wr-border-strong);
+  }
 }
 
 .field-input-wrap {
@@ -335,34 +522,29 @@
 }
 
 .integration-warning-card {
-  margin-top: 0.8rem;
   display: flex;
   align-items: flex-start;
-  gap: 0.45rem;
+  gap: 0.4rem;
   background: var(--wr-amber-soft);
   border: 1px solid var(--wr-amber-mid);
   color: var(--wr-amber);
   border-radius: 0.35rem;
-  padding: 0.5rem 0.6rem;
-  font-size: 0.64rem;
-  line-height: 1.55;
+  padding: 0.45rem 0.55rem;
+  font-size: 0.62rem;
+  line-height: 1.5;
 }
 
 .integration-warning-icon {
   flex-shrink: 0;
-  line-height: 1.35;
+  line-height: 1.3;
 }
 
+// ── Action row ────────────────────────────────────────────────────────────────
+
 .editor-actions {
-  margin-top: 0.8rem;
   display: flex;
   align-items: center;
   gap: 0.45rem;
-}
-
-.editor-actions-compact {
-  margin-top: 0.55rem;
-  flex-wrap: wrap;
 }
 
 .editor-actions-spacer {
@@ -378,7 +560,7 @@
   align-items: center;
   justify-content: center;
   gap: 0.35rem;
-  padding: 7px 20px;
+  padding: 6px 16px;
   border-radius: 6px;
   font-size: 12px;
   font-weight: 700;
@@ -390,7 +572,7 @@
 }
 
 .secondary-btn {
-  padding: 7px 16px;
+  padding: 6px 14px;
   background: var(--wr-elevated);
   border: 1px solid var(--wr-border);
   color: var(--wr-subtle);
@@ -409,3 +591,10 @@
   cursor: default;
 }
 
+// ── Empty state ───────────────────────────────────────────────────────────────
+
+.integration-empty {
+  font-size: 0.69rem;
+  color: var(--wr-subtle);
+  padding: 0.2rem 0 0.5rem;
+}

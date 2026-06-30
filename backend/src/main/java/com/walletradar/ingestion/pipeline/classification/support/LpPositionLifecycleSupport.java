@@ -190,13 +190,20 @@ public final class LpPositionLifecycleSupport {
             OnChainRawTransactionView view,
             List<RawLeg> movementLegs
     ) {
+        // ModifyLiquidity event logs are the authoritative source: liquidityDelta=0 means a pure
+        // fee collection even when inbound token legs are present. Check logs first.
+        NormalizedTransactionType fromLogs = resolveModifyLiquiditiesFromLogs(view);
+        if (fromLogs != null) {
+            return fromLogs;
+        }
+        // Fallback when logs are unavailable (e.g. Etherscan-sourced txs with no stored receipt).
         if (hasOutboundNonFeeTokenLeg(movementLegs)) {
             return NormalizedTransactionType.LP_ENTRY;
         }
         if (hasInboundNonFeeTokenLeg(movementLegs)) {
             return NormalizedTransactionType.LP_EXIT;
         }
-        return resolveModifyLiquiditiesFromLogs(view);
+        return null;
     }
 
     private static NormalizedTransactionType resolveModifyLiquiditiesFromLogs(OnChainRawTransactionView view) {
@@ -207,13 +214,19 @@ public final class LpPositionLifecycleSupport {
             if (!MODIFY_LIQUIDITY_TOPIC.equals(firstTopic(log))) {
                 continue;
             }
-            BigInteger amount0 = decodeSignedWord(logData(log), 0);
-            BigInteger amount1 = decodeSignedWord(logData(log), 1);
-            if (isPositive(amount0) || isPositive(amount1)) {
+            // ModifyLiquidity(PoolId indexed, address indexed, int24 tickLower, int24 tickUpper,
+            //                 int256 liquidityDelta, bytes32 salt)
+            // Non-indexed data layout: word0=tickLower, word1=tickUpper, word2=liquidityDelta, word3=salt
+            BigInteger liquidityDelta = decodeSignedWord(logData(log), 2);
+            if (isPositive(liquidityDelta)) {
                 return NormalizedTransactionType.LP_ENTRY;
             }
-            if (isNegative(amount0) || isNegative(amount1)) {
+            if (isNegative(liquidityDelta)) {
                 return NormalizedTransactionType.LP_EXIT;
+            }
+            if (liquidityDelta != null) {
+                // liquidityDelta == 0: no position liquidity changed, only fees collected
+                return NormalizedTransactionType.LP_FEE_CLAIM;
             }
         }
         if (hasPositionNftMintLog(view)) {

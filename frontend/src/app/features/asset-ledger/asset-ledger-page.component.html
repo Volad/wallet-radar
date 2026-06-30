@@ -1,13 +1,13 @@
 <div class="asset-ledger-shell">
   @if (viewState().status === 'loading') {
-    <aside class="asset-ledger-filters loading-shell" aria-hidden="true">
+    <div class="sidebar-loading-shell" aria-hidden="true">
       <div class="filters-head">
         <div class="loading-line loading-line-back"></div>
         <div class="loading-line loading-line-eyebrow"></div>
         <div class="loading-line loading-line-title"></div>
         <div class="loading-line loading-line-subtitle"></div>
       </div>
-      <div class="filters-content loading-filters">
+      <div class="loading-filters">
         <div class="loading-section">
           <div class="loading-line loading-line-label"></div>
           <div class="loading-row"></div>
@@ -30,10 +30,10 @@
           <div class="loading-row"></div>
         </div>
       </div>
-    </aside>
+    </div>
 
     <main class="asset-ledger-content loading-content">
-      <div class="content-summary-sticky">
+      <div class="content-summary">
         <header class="content-head">
           <div>
             <div class="loading-line loading-line-eyebrow"></div>
@@ -114,23 +114,14 @@
       </section>
     } @else {
       @if (assetData(); as data) {
-        <aside class="asset-ledger-filters" aria-label="Timeline filters">
-          <div class="filters-head">
-            <button type="button" class="back-nav back-btn" (click)="back.emit()">← Back to tokens</button>
-            <div class="eyebrow">Move basis</div>
-            <div class="filter-symbol-row">
-              <h1>{{ data.displaySymbol }}</h1>
-              <span class="pill">{{ data.familyIdentity }}</span>
-            </div>
-            <p class="sub">{{ data.subtitle }}</p>
-          </div>
+        <wr-filter-sidebar title="Filters" [activeCount]="0" aria-label="Timeline filters">
 
-          <div class="filters-content">
-            @let families = eventFamilyFilters();
-            @if (families.length > 0) {
-              <section class="filter-group">
-                <h3 class="side-label">Event families</h3>
-                @for (family of families; track family.key) {
+          <!-- Filter content -->
+          @let families = eventFamilyFilters();
+          @if (families.length > 0) {
+            <section class="filter-group">
+              <h3 class="side-label">Event families</h3>
+              @for (family of families; track family.key) {
                 <button
                   type="button"
                   class="filter-row family-row"
@@ -139,89 +130,90 @@
                   [style.--chipColor]="family.color"
                   (click)="toggleEventFamily(family.key)">
                   <canvas #familyCanvas class="family-icon-canvas" [attr.data-family]="family.key" aria-hidden="true"></canvas>
-                    <span
-                      class="check-box"
-                      [class.checked]="isEventFamilySelected(family.key)"
-                      [class.mixed]="isEventFamilyMixed(family.key)"></span>
-                    <span class="filter-row-label">{{ family.label }}</span>
-                    <span class="family-count">{{ family.eventCount }}</span>
-                  </button>
-                }
-              </section>
+                  <span
+                    class="check-box"
+                    [class.checked]="isEventFamilySelected(family.key)"
+                    [class.mixed]="isEventFamilyMixed(family.key)"></span>
+                  <span class="filter-row-label">{{ family.label }}</span>
+                  <span class="family-count">{{ family.eventCount }}</span>
+                </button>
+              }
+            </section>
+          }
+
+          <section class="filter-group">
+            <div class="side-label-row">
+              <h3 class="side-label">Tx types</h3>
+              <button type="button" class="toggle-all-btn" (click)="toggleAllTypes()">
+                toggle all
+              </button>
+            </div>
+            @for (item of data.legendItems; track item.key) {
+              <button
+                type="button"
+                class="filter-row type-row"
+                [class.active]="isTypeSelected(item.typeKey)"
+                [style.--chipColor]="item.color"
+                (click)="toggleTypeVisibility(item.typeKey)">
+                <canvas #legendCanvas class="type-icon-canvas" [attr.data-type]="item.typeKey"></canvas>
+                <span class="check-box" [class.checked]="isTypeSelected(item.typeKey)"></span>
+                <span class="filter-row-label">{{ item.label }}</span>
+              </button>
             }
+          </section>
 
-            <section class="filter-group">
-              <div class="side-label-row">
-                <h3 class="side-label">Tx types</h3>
-                <button type="button" class="toggle-all-btn" (click)="toggleAllTypes()">
-                  toggle all
-                </button>
-              </div>
-              @for (item of data.legendItems; track item.key) {
-                <button
-                  type="button"
-                  class="filter-row type-row"
-                  [class.active]="isTypeSelected(item.typeKey)"
-                  [style.--chipColor]="item.color"
-                  (click)="toggleTypeVisibility(item.typeKey)">
-                  <canvas #legendCanvas class="type-icon-canvas" [attr.data-type]="item.typeKey"></canvas>
-                  <span class="check-box" [class.checked]="isTypeSelected(item.typeKey)"></span>
-                  <span class="filter-row-label">{{ item.label }}</span>
-                </button>
-              }
-            </section>
+          <section class="filter-group">
+            <h3 class="side-label">Basis rules</h3>
+            @for (basisFilter of basisFilterOptions(); track basisFilter.key) {
+              <button
+                type="button"
+                class="filter-row basis-row"
+                [class.active]="isBasisEffectSelected(basisFilter.key)"
+                [style.--chipColor]="basisFilter.color"
+                (click)="toggleBasisEffect(basisFilter.key)">
+                <span class="check-box" [class.checked]="isBasisEffectSelected(basisFilter.key)"></span>
+                <span class="filter-row-label">{{ basisFilter.label }}</span>
+              </button>
+            }
+          </section>
 
-            <section class="filter-group">
-              <h3 class="side-label">Basis rules</h3>
-              @for (basisFilter of basisFilterOptions(); track basisFilter.key) {
-                <button
-                  type="button"
-                  class="filter-row basis-row"
-                  [class.active]="isBasisEffectSelected(basisFilter.key)"
-                  [style.--chipColor]="basisFilter.color"
-                  (click)="toggleBasisEffect(basisFilter.key)">
-                  <span class="check-box" [class.checked]="isBasisEffectSelected(basisFilter.key)"></span>
-                  <span class="filter-row-label">{{ basisFilter.label }}</span>
-                </button>
-              }
-            </section>
+          <section class="filter-group filter-group-range">
+            <h3 class="side-label">Date range</h3>
+            <div class="sidebar-range-box">
+              <span>{{ visibleWindowStartLabel() }}</span>
+              <svg width="14" height="7" viewBox="0 0 14 7" aria-hidden="true">
+                <path
+                  d="M0 3.5h10M7.5 1l2.5 2.5-2.5 2.5"
+                  stroke="currentColor"
+                  stroke-width="1.2"
+                  fill="none"
+                  stroke-linecap="round" />
+              </svg>
+              <span>{{ visibleWindowEndLabel() }}</span>
+            </div>
+          </section>
 
-            <section class="filter-group filter-group-range">
-              <h3 class="side-label">Date range</h3>
-              <div class="sidebar-range-box">
-                <span>{{ visibleWindowStartLabel() }}</span>
-                <svg width="14" height="7" viewBox="0 0 14 7" aria-hidden="true">
-                  <path
-                    d="M0 3.5h10M7.5 1l2.5 2.5-2.5 2.5"
-                    stroke="currentColor"
-                    stroke-width="1.2"
-                    fill="none"
-                    stroke-linecap="round" />
-                </svg>
-                <span>{{ visibleWindowEndLabel() }}</span>
-              </div>
-            </section>
+          <section class="filter-group">
+            <h3 class="side-label">Quick presets</h3>
+            @for (preset of quickPresets; track preset.key) {
+              <button
+                type="button"
+                class="preset-row"
+                [class.active]="selectedPreset() === preset.key"
+                (click)="applyQuickPreset(preset.key)">
+                <span class="preset-radio" [class.checked]="selectedPreset() === preset.key"></span>
+                <span>{{ preset.label }}</span>
+              </button>
+            }
+          </section>
 
-            <section class="filter-group">
-              <h3 class="side-label">Quick presets</h3>
-              @for (preset of quickPresets; track preset.key) {
-                <button
-                  type="button"
-                  class="preset-row"
-                  [class.active]="selectedPreset() === preset.key"
-                  (click)="applyQuickPreset(preset.key)">
-                  <span class="preset-radio" [class.checked]="selectedPreset() === preset.key"></span>
-                  <span>{{ preset.label }}</span>
-                </button>
-              }
-            </section>
-          </div>
-        </aside>
+        </wr-filter-sidebar>
 
         <main class="asset-ledger-content">
-          <div class="content-summary-sticky">
+          <div class="content-summary">
             <header class="content-head">
               <div>
+                <button type="button" class="back-nav back-btn" (click)="back.emit()">← Back to tokens</button>
                 <div class="eyebrow">Move basis</div>
                 <div class="content-title-row">
                   <h2>{{ data.displaySymbol }}</h2>
@@ -295,9 +287,9 @@
                 [style.--range-end.%]="rangeEndPercent()">
                 <div class="range-track" (dblclick)="selectFullRange($event)" title="Double-click to select full timeline"></div>
                 <canvas #rangePreviewCanvas class="range-preview-canvas" aria-hidden="true"></canvas>
-                <div class="range-selection" (mousedown)="onRangeSelectionPointerDown($event, 'move')">
-                  <div class="range-handle range-handle-start" (mousedown)="onRangeSelectionPointerDown($event, 'start'); $event.stopPropagation()"></div>
-                  <div class="range-handle range-handle-end" (mousedown)="onRangeSelectionPointerDown($event, 'end'); $event.stopPropagation()"></div>
+                <div class="range-selection" (pointerdown)="onRangeSelectionPointerDown($event, 'move')">
+                  <div class="range-handle range-handle-start" (pointerdown)="onRangeSelectionPointerDown($event, 'start'); $event.stopPropagation()"></div>
+                  <div class="range-handle range-handle-end" (pointerdown)="onRangeSelectionPointerDown($event, 'end'); $event.stopPropagation()"></div>
                 </div>
                 <input
                   #rangeStartSlider
@@ -319,54 +311,56 @@
             </div>
           }
 
-          <section class="ledger-section" [class.collapsed]="isSectionCollapsed('position')">
-            <button type="button" class="section-head section-toggle" (click)="toggleSection('position')">
-              <span>
-                <span class="section-title">Position size</span>
-                <span class="section-sub">{{ data.displaySymbol }} held over time</span>
-              </span>
-              <span class="section-chevron" [class.collapsed]="isSectionCollapsed('position')">⌃</span>
-            </button>
-            @if (!isSectionCollapsed('position')) {
-              <div class="mini-wrap">
-                <canvas
-                  #qtyChartCanvas
-                  id="qty-chart"
-                  (mousemove)="onQuantityChartPointerMove($event)"
-                  (click)="onQuantityChartClick($event)"
-                  (mouseleave)="onSupplementalChartPointerLeave()"
-                  aria-label="Asset position size timeline"
-                  role="img"></canvas>
-              </div>
-            }
-          </section>
+          <div class="charts-row">
+            <section class="ledger-section" [class.collapsed]="isSectionCollapsed('position')">
+              <button type="button" class="section-head section-toggle" (click)="toggleSection('position')">
+                <span>
+                  <span class="section-title">Position size</span>
+                  <span class="section-sub">{{ data.displaySymbol }} held over time</span>
+                </span>
+                <span class="section-chevron" [class.collapsed]="isSectionCollapsed('position')">⌃</span>
+              </button>
+              @if (!isSectionCollapsed('position')) {
+                <div class="mini-wrap">
+                  <canvas
+                    #qtyChartCanvas
+                    id="qty-chart"
+                    (mousemove)="onQuantityChartPointerMove($event)"
+                    (click)="onQuantityChartClick($event)"
+                    (mouseleave)="onSupplementalChartPointerLeave()"
+                    aria-label="Asset position size timeline"
+                    role="img"></canvas>
+                </div>
+              }
+            </section>
 
-          <section class="ledger-section" [class.collapsed]="isSectionCollapsed('pnl')">
-            <button type="button" class="section-head pnl-head section-toggle" (click)="toggleSection('pnl')">
-              <span>
-                <span class="section-title">Realised P&amp;L</span>
-                <span class="section-sub">Filtered disposal events and cumulative path</span>
-              </span>
-              <span class="section-chevron" [class.collapsed]="isSectionCollapsed('pnl')">⌃</span>
-            </button>
-            @if (!isSectionCollapsed('pnl')) {
-              <div class="pnl-legend" aria-hidden="true">
-                <span><span class="dot pos-dot"></span>Profit</span>
-                <span><span class="dot neg-dot"></span>Loss</span>
-                <span><span class="dot cum-dot"></span>Cumulative</span>
-              </div>
-              <div class="pnl-wrap">
-                <canvas
-                  #pnlChartCanvas
-                  id="pnl-chart"
-                  (mousemove)="onPnlChartPointerMove($event)"
-                  (click)="onPnlChartClick($event)"
-                  (mouseleave)="onSupplementalChartPointerLeave()"
-                  aria-label="Realised P and L timeline"
-                  role="img"></canvas>
-              </div>
-            }
-          </section>
+            <section class="ledger-section" [class.collapsed]="isSectionCollapsed('pnl')">
+              <button type="button" class="section-head section-toggle" (click)="toggleSection('pnl')">
+                <span>
+                  <span class="section-title">Realised P&amp;L</span>
+                  <span class="section-sub">Filtered disposal events and cumulative path</span>
+                </span>
+                <span class="section-chevron" [class.collapsed]="isSectionCollapsed('pnl')">⌃</span>
+              </button>
+              @if (!isSectionCollapsed('pnl')) {
+                <div class="pnl-legend" aria-hidden="true">
+                  <span><span class="dot pos-dot"></span>Profit</span>
+                  <span><span class="dot neg-dot"></span>Loss</span>
+                  <span><span class="dot cum-dot"></span>Cumulative</span>
+                </div>
+                <div class="pnl-wrap">
+                  <canvas
+                    #pnlChartCanvas
+                    id="pnl-chart"
+                    (mousemove)="onPnlChartPointerMove($event)"
+                    (click)="onPnlChartClick($event)"
+                    (mouseleave)="onSupplementalChartPointerLeave()"
+                    aria-label="Realised P and L timeline"
+                    role="img"></canvas>
+                </div>
+              }
+            </section>
+          </div>
 
           <section class="ledger-section" [class.collapsed]="isSectionCollapsed('log')">
             <button type="button" class="section-head section-head-log section-toggle" (click)="toggleSection('log')">
@@ -521,13 +515,7 @@
                                       <td class="r mono-cell">{{ formatUsd(row.amountUsd, 2) }}</td>
                                       <td class="r mono-cell">{{ formatUsd(row.priceUsd, 2) }}</td>
                                       <td class="mono-cell tx-expand-cell">
-                                        <span [title]="row.txHash">{{ shortHash(row.txHash) }}</span>
-                                        <button
-                                          type="button"
-                                          class="copy-btn"
-                                          (click)="copyTxHash(row.txHash); $event.stopPropagation()">
-                                          {{ copiedValueKey() === 'tx:' + row.txHash ? 'Copied' : 'Copy' }}
-                                        </button>
+                                        <wr-copy-hash [hash]="row.txHash" />
                                       </td>
                                       <td>
                                         <span class="table-endpoint" [title]="row.pathFromTitle ?? row.fromAddress ?? row.pathFrom">
@@ -632,10 +620,7 @@
           </div>
           <div class="tr tx-row">
             <span class="k">tx hash</span>
-            <span class="v tx-value" [title]="marker.txHash">{{ shortHash(marker.txHash) }}</span>
-            <button type="button" class="copy-btn" (click)="copyTxHash(marker.txHash)">
-              {{ copiedValueKey() === 'tx:' + marker.txHash ? 'Copied' : 'Copy' }}
-            </button>
+            <wr-copy-hash [hash]="marker.txHash" />
           </div>
           <div class="tr tx-row">
             <span class="k">from</span>

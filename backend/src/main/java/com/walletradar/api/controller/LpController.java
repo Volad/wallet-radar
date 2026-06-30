@@ -1,18 +1,22 @@
 package com.walletradar.api.controller;
 
+import com.walletradar.api.dto.RefreshStatusResponse;
 import com.walletradar.api.dto.SessionLpResponse;
 import com.walletradar.liquiditypools.application.LpFieldPrecision;
-import com.walletradar.liquiditypools.application.LpPositionRefreshService;
+import com.walletradar.liquiditypools.application.LpPositionRefreshStateService;
 import com.walletradar.liquiditypools.application.LpPositionScope;
 import com.walletradar.liquiditypools.application.LpPositionView;
+import com.walletradar.liquiditypools.application.LpRefreshOrchestrator;
 import com.walletradar.liquiditypools.application.SessionLpQueryService;
 import com.walletradar.liquiditypools.application.SessionLpView;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -21,7 +25,8 @@ import org.springframework.web.bind.annotation.RestController;
 public class LpController {
 
     private final SessionLpQueryService sessionLpQueryService;
-    private final LpPositionRefreshService refreshService;
+    private final LpRefreshOrchestrator refreshOrchestrator;
+    private final LpPositionRefreshStateService refreshStateService;
 
     @GetMapping("/{sessionId}/lp")
     public SessionLpResponse getSessionLp(
@@ -34,8 +39,45 @@ public class LpController {
                 .orElseThrow(() -> new ApiNotFoundException("SESSION_NOT_FOUND", "Session not found"));
     }
 
+    @GetMapping("/{sessionId}/lp/positions/{correlationId}")
+    public SessionLpResponse.Position getSessionLpPosition(
+            @PathVariable String sessionId,
+            @PathVariable String correlationId,
+            @RequestParam(name = "scope", defaultValue = "active") String scope
+    ) {
+        String normalized = normalizedSessionIdOrThrow(sessionId);
+        return sessionLpQueryService.findSessionLpPosition(
+                        normalized,
+                        correlationId,
+                        LpPositionScope.fromQuery(scope)
+                )
+                .map(this::toPosition)
+                .orElseThrow(() -> new ApiNotFoundException("LP_POSITION_NOT_FOUND", "LP position not found for session"));
+    }
+
+    @GetMapping("/{sessionId}/lp/refresh-status")
+    public RefreshStatusResponse getLpRefreshStatus(@PathVariable String sessionId) {
+        String normalized = normalizedSessionIdOrThrow(sessionId);
+        if (sessionLpQueryService.findSessionLp(normalized, LpPositionScope.ACTIVE).isEmpty()) {
+            throw new ApiNotFoundException("SESSION_NOT_FOUND", "Session not found");
+        }
+        return refreshStateService.getStatus(normalized);
+    }
+
+    @PostMapping("/{sessionId}/lp/refresh")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public RefreshStatusResponse refreshAllLp(@PathVariable String sessionId) {
+        String normalized = normalizedSessionIdOrThrow(sessionId);
+        if (sessionLpQueryService.findSessionLp(normalized, LpPositionScope.ACTIVE).isEmpty()) {
+            throw new ApiNotFoundException("SESSION_NOT_FOUND", "Session not found");
+        }
+        refreshOrchestrator.triggerRefreshAllOpenForSession(normalized);
+        return refreshStateService.getStatus(normalized);
+    }
+
     @PostMapping("/{sessionId}/lp/positions/{correlationId}/refresh")
-    public SessionLpResponse.Position refreshPosition(
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public RefreshStatusResponse refreshPosition(
             @PathVariable String sessionId,
             @PathVariable String correlationId
     ) {
@@ -43,14 +85,8 @@ public class LpController {
         if (!sessionLpQueryService.ownsCorrelationId(normalized, correlationId)) {
             throw new ApiNotFoundException("LP_POSITION_NOT_FOUND", "LP position not found for session");
         }
-        refreshService.refreshOnDemand(normalized, correlationId);
-        // Use ALL scope so closed positions are included in the lookup
-        return sessionLpQueryService.findSessionLp(normalized, LpPositionScope.ALL)
-                .flatMap(view -> view.positions().stream()
-                        .filter(p -> correlationId.equals(p.correlationId()))
-                        .findFirst()
-                        .map(this::toPosition))
-                .orElseThrow(() -> new ApiNotFoundException("LP_POSITION_NOT_FOUND", "LP position not found for session"));
+        refreshOrchestrator.triggerRefreshPosition(normalized, correlationId);
+        return refreshStateService.getStatus(normalized);
     }
 
     private SessionLpResponse toResponse(SessionLpView view) {

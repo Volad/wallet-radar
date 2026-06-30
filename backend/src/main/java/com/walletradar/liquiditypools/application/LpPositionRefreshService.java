@@ -8,7 +8,9 @@ import com.walletradar.domain.session.UserSessionRepository;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.common.refresh.RefreshTrigger;
 import com.walletradar.liquiditypools.config.LiquidityPoolsProperties;
+import com.walletradar.liquiditypools.enrichment.LpDepthFetchPolicy;
 import com.walletradar.liquiditypools.enrichment.LpOnChainEnrichmentService;
 import com.walletradar.liquiditypools.enrichment.LpPositionContext;
 import com.walletradar.liquiditypools.persistence.LpEarningPoint;
@@ -25,6 +27,7 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.MathContext;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
@@ -36,8 +39,13 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 @Slf4j
 @Service
@@ -45,6 +53,7 @@ import java.util.stream.Collectors;
 public class LpPositionRefreshService {
 
     private static final MathContext MC = MathContext.DECIMAL128;
+    private static final Duration MANUAL_REFRESH_TIMEOUT = Duration.ofSeconds(90);
     private static final EnumSet<NormalizedTransactionType> LP_TYPES = EnumSet.of(
             NormalizedTransactionType.LP_ENTRY,
             NormalizedTransactionType.LP_ENTRY_REQUEST,
@@ -67,58 +76,143 @@ public class LpPositionRefreshService {
     private final LpPositionSnapshotService snapshotService;
     private final LpEarningPointService earningPointService;
     private final LiquidityPoolsProperties properties;
-    private final ConcurrentHashMap<String, Instant> lastRefreshByCorrelation = new ConcurrentHashMap<>();
+    private final LpPositionRefreshStateService refreshStateService;
 
-    public RefreshResult refreshAllOpenPositions() {
+    public List<String> discoverSessionIdsWithOpenPositions() {
+        return userSessionRepository.findAll().stream()
+                .map(UserSession::getId)
+                .filter(sessionId -> !discoverOpenContextsForSession(sessionId).isEmpty())
+                .toList();
+    }
+
+    public Map<String, LpPositionContext> discoverOpenContextsForSession(String sessionId) {
+        return userSessionRepository.findById(sessionId)
+                .map(this::discoverOpenContexts)
+                .orElse(Map.of());
+    }
+
+    public RefreshResult refreshAllOpenPositionsWithState(RefreshTrigger trigger) {
         if (!properties.isEnabled()) {
             return new RefreshResult(0, 0, 0);
         }
+        int total = 0;
         int saved = 0;
         int skipped = 0;
-        Map<String, LpPositionContext> contexts = discoverOpenContexts();
+        for (UserSession session : userSessionRepository.findAll()) {
+            RefreshResult sessionResult = refreshAllOpenForSessionWithState(session.getId(), trigger);
+            total += sessionResult.positions();
+            saved += sessionResult.saved();
+            skipped += sessionResult.skipped();
+        }
+        log.info("LP position refresh complete positions={} saved={} skipped={}", total, saved, skipped);
+        return new RefreshResult(total, saved, skipped);
+    }
+
+    public Optional<LpPositionSnapshot> refreshOnDemandWithState(String sessionId, String correlationId) {
+        if (!properties.isEnabled()) {
+            return Optional.empty();
+        }
+        return discoverOpenContextsForSession(sessionId).values().stream()
+                .filter(ctx -> correlationId.equals(ctx.correlationId()))
+                .findFirst()
+                .flatMap(ctx -> refreshPosition(sessionId, ctx, false));
+    }
+
+    public RefreshResult refreshAllOpenForSessionWithState(String sessionId, RefreshTrigger trigger) {
+        if (!properties.isEnabled()) {
+            return new RefreshResult(0, 0, 0);
+        }
+        Map<String, LpPositionContext> contexts = discoverOpenContextsForSession(sessionId);
+        int saved = 0;
+        int skipped = 0;
+        boolean persistStaleOnFailure = trigger != RefreshTrigger.MANUAL && trigger != RefreshTrigger.BULK;
         for (LpPositionContext context : contexts.values()) {
-            if (refreshPosition(context).isPresent()) {
+            if (refreshPosition(sessionId, context, persistStaleOnFailure).isPresent()) {
                 saved++;
             } else {
                 skipped++;
             }
         }
-        log.info("LP position refresh complete positions={} saved={} skipped={}",
-                contexts.size(), saved, skipped);
+        log.info("LP session refresh complete sessionId={} positions={} saved={} skipped={}",
+                sessionId, contexts.size(), saved, skipped);
         return new RefreshResult(contexts.size(), saved, skipped);
     }
 
-    public Optional<LpPositionSnapshot> refreshOnDemand(String sessionId, String correlationId) {
-        if (!properties.isEnabled()) {
-            return Optional.empty();
-        }
-        Instant last = lastRefreshByCorrelation.get(correlationId);
-        if (last != null && Instant.now().minusMillis(properties.getOnDemandDebounceMs()).isBefore(last)) {
-            return snapshotService.findByCorrelationId(correlationId);
-        }
-        return userSessionRepository.findById(sessionId)
-                .flatMap(session -> discoverOpenContexts(session).values().stream()
-                        .filter(ctx -> correlationId.equals(ctx.correlationId()))
-                        .findFirst()
-                        .flatMap(this::refreshPosition));
-    }
-
-    private Optional<LpPositionSnapshot> refreshPosition(LpPositionContext context) {
+    private Optional<LpPositionSnapshot> refreshPosition(
+            String sessionId,
+            LpPositionContext context,
+            boolean persistStaleOnFailure
+    ) {
         if (context.closed()) {
             return Optional.empty();
         }
-        LpOnChainEnrichmentService.EnrichmentResult result = enrichmentService.enrich(context);
-        LpPositionSnapshot snapshot = result.snapshot().orElseGet(() ->
-                createShellSnapshot(context, result.failureReason()));
-        if (snapshot == null) {
-            return Optional.empty();
+        String correlationId = context.correlationId();
+        refreshStateService.markUpdating(correlationId);
+        try {
+            LpOnChainEnrichmentService.EnrichmentResult result = persistStaleOnFailure
+                    ? enrichmentService.enrich(context)
+                    : enrichOnDemand(context);
+            if (!result.fresh()) {
+                if (!persistStaleOnFailure) {
+                    log.warn("LP on-demand refresh skipped persisting stale snapshot correlationId={} reason={}",
+                            correlationId,
+                            result.failureReason() != null ? result.failureReason() : "enrichment unavailable");
+                    Optional<LpPositionSnapshot> existing = snapshotService.findByCorrelationId(correlationId);
+                    refreshStateService.markFailed(correlationId,
+                            result.failureReason() != null ? result.failureReason() : "enrichment unavailable");
+                    return existing;
+                }
+            }
+            LpPositionSnapshot snapshot = result.snapshot().orElseGet(() ->
+                    persistStaleOnFailure
+                            ? createShellSnapshot(context, result.failureReason())
+                            : null);
+            if (snapshot == null) {
+                Optional<LpPositionSnapshot> existing = snapshotService.findByCorrelationId(correlationId);
+                if (existing.isPresent()) {
+                    refreshStateService.markSynced(correlationId);
+                } else {
+                    refreshStateService.markFailed(correlationId,
+                            result.failureReason() != null ? result.failureReason() : "enrichment unavailable");
+                }
+                return existing;
+            }
+            snapshot.setUniverseId(context.universeId());
+            applyMarks(snapshot);
+            snapshotService.upsert(snapshot);
+            upsertTodayEarningPoint(context, snapshot);
+            refreshStateService.markSynced(correlationId);
+            return Optional.of(snapshot);
+        } catch (Exception error) {
+            refreshStateService.markFailed(correlationId, error.toString());
+            throw error;
         }
-        snapshot.setUniverseId(context.universeId());
-        applyMarks(snapshot);
-        snapshotService.upsert(snapshot);
-        upsertTodayEarningPoint(context, snapshot);
-        lastRefreshByCorrelation.put(context.correlationId(), Instant.now());
-        return Optional.of(snapshot);
+    }
+
+    private LpOnChainEnrichmentService.EnrichmentResult enrichOnDemand(LpPositionContext context) {
+        ExecutorService executor = Executors.newSingleThreadExecutor(r -> {
+            Thread thread = new Thread(r, "lp-on-demand-enrich");
+            thread.setDaemon(true);
+            return thread;
+        });
+        try {
+            Future<LpOnChainEnrichmentService.EnrichmentResult> future = executor.submit(() ->
+                    LpDepthFetchPolicy.callSkippingRpcFetch(() -> enrichmentService.enrich(context)));
+            return future.get(MANUAL_REFRESH_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
+        } catch (TimeoutException timeout) {
+            log.warn("LP on-demand refresh timed out correlationId={} timeoutSec={}",
+                    context.correlationId(), MANUAL_REFRESH_TIMEOUT.getSeconds());
+            return LpOnChainEnrichmentService.EnrichmentResult.failed(
+                    "Refresh timed out after " + MANUAL_REFRESH_TIMEOUT.getSeconds() + "s");
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            return LpOnChainEnrichmentService.EnrichmentResult.failed("Refresh interrupted");
+        } catch (ExecutionException error) {
+            Throwable cause = error.getCause() != null ? error.getCause() : error;
+            return LpOnChainEnrichmentService.EnrichmentResult.failed(cause.toString());
+        } finally {
+            executor.shutdownNow();
+        }
     }
 
     private LpPositionSnapshot createShellSnapshot(LpPositionContext context, String failureReason) {
@@ -247,14 +341,6 @@ public class LpPositionRefreshService {
         return prices.get(sym.toUpperCase(Locale.ROOT));
     }
 
-    private Map<String, LpPositionContext> discoverOpenContexts() {
-        Map<String, LpPositionContext> contexts = new LinkedHashMap<>();
-        for (UserSession session : userSessionRepository.findAll()) {
-            discoverOpenContexts(session).forEach(contexts::putIfAbsent);
-        }
-        return contexts;
-    }
-
     private Map<String, LpPositionContext> discoverOpenContexts(UserSession session) {
         Map<String, LpPositionContext> contexts = new LinkedHashMap<>();
         AccountingUniverseService.AccountingUniverseScope scope = accountingUniverseService.resolveScope(session);
@@ -283,7 +369,13 @@ public class LpPositionRefreshService {
             }
         }
 
-        Query basisQuery = new Query(Criteria.where("universeId").is(scope.accountingUniverseId()));
+        // Load only basis pools with qty > 0 from the DB to avoid iterating closed positions.
+        // Closed pools (qty = 0) are excluded in the loop below anyway, but pre-filtering at
+        // the DB layer avoids loading all 82+ historical pools when only ~6 are open.
+        Query basisQuery = new Query(new Criteria().andOperator(
+                Criteria.where("universeId").is(scope.accountingUniverseId()),
+                Criteria.where("qtyHeld").gt(0)
+        ));
         List<LpReceiptBasisPool> basisPools = mongoOperations.find(basisQuery, LpReceiptBasisPool.class);
         // Track corr IDs that were intentionally excluded by the basisPool loop
         // (zero qty held + LP activity recorded) so the TX fallback loop won't re-add them.
@@ -294,7 +386,9 @@ public class LpPositionRefreshService {
                 continue;
             }
             boolean hasQty = pool.getQtyHeld() != null && pool.getQtyHeld().signum() > 0;
-            if (!hasQty && closedByCorrelation.containsKey(corr)) {
+            if (!hasQty) {
+                // LP receipt fully burned (qty=0): skip RPC regardless of whether an
+                // LP_EXIT_FINAL event was recorded (some exits use other tx types).
                 excludedByBasisPool.add(corr);
                 continue;
             }

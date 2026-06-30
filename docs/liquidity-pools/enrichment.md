@@ -76,7 +76,9 @@ walletradar:
     dust-threshold-usd: 10
 ```
 
-Properties `stale-multiplier` and `depthIntervalMs` exist in `LiquidityPoolsProperties` but are **not read** by LP code — reserved for future use.
+Properties `stale-multiplier` exists in `LiquidityPoolsProperties` but is **not read** by LP code — reserved for future use.
+
+**Pool depth cache:** Mongo collection `lp_pool_depth_cache`; TTL via `depth-interval-ms` (default 6h, `21600000` ms). `LiquidityDepthReader` reads cached pool tick bitmap state when fresh; otherwise fetches via RPC and persists. Manual position refresh always updates TVL/fees; depth histogram reuses pool cache when within TTL.
 
 NFPM addresses are read from `protocol-registry.json` (read-only). Classification may reference `underlyingPositionManager` for vault-style pool correlation IDs (`lp-position:{network}:{underlying}:vault`).
 

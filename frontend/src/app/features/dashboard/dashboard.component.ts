@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, DestroyRef, ViewChild, computed, effect, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { FormsModule, FormArray, FormControl, FormGroup } from '@angular/forms';
 import { HttpErrorResponse } from '@angular/common/http';
 import { takeUntilDestroyed, toObservable, toSignal } from '@angular/core/rxjs-interop';
@@ -14,6 +15,8 @@ import {
   INTEGRATION_PRESENTATION_BY_PROVIDER,
 } from '../../core/data/dashboard.constants';
 import {
+  ALL_TRANSACTION_CATEGORIES,
+  DEFAULT_TRANSACTION_CATEGORIES,
   DashboardSection,
   DashboardViewState,
   FlowRole,
@@ -24,6 +27,8 @@ import {
   PriceSource,
   SectionMeta,
   TokenPosition,
+  TransactionCategory,
+  TRANSACTION_CATEGORIES_STORAGE_KEY,
   TransactionFlow,
   TransactionItem,
   TransactionStatus,
@@ -42,10 +47,8 @@ import {
   SessionBridgeStatus,
   SessionIntegrationResponse,
   SessionRefreshResponse,
-  SessionTransactionsBridgeFilter,
   SessionTransactionFlowResponse,
   SessionTransactionItemResponse,
-  SessionTransactionsSpamFilter,
   SUPPORTED_EVM_NETWORKS,
 } from '../../core/models/wallet-api.models';
 import { WalletApiService } from '../../core/services/wallet-api.service';
@@ -223,6 +226,7 @@ export class DashboardComponent {
   private readonly destroyRef = inject(DestroyRef);
   private readonly router = inject(Router);
   private readonly route = inject(ActivatedRoute);
+  private readonly sanitizer = inject(DomSanitizer);
 
   @ViewChild(DashboardAddWalletDialogComponent)
   private addWalletDialogComponent?: DashboardAddWalletDialogComponent;
@@ -246,9 +250,11 @@ export class DashboardComponent {
   readonly isSessionTransactionsLoading = signal(false);
   readonly sessionTransactionsError = signal<string | null>(null);
   readonly sessionTransactionsLoadPhase = signal<SessionTransactionsLoadPhase>('idle');
+  private pendingTransactionSub: Subscription | null = null;
   readonly transactionSearch = signal('');
-  readonly transactionBridgeStatusFilter = signal<SessionTransactionsBridgeFilter>('ALL');
-  readonly transactionSpamFilter = signal<SessionTransactionsSpamFilter>('HIDE_SPAM');
+  readonly enabledCategories = signal<ReadonlySet<TransactionCategory>>(
+    this.loadCategoriesFromStorage()
+  );
   readonly transactionPage = signal(0);
   readonly transactionPageSize = 50;
   readonly canOpenAssetLedger = computed(() => this.currentSessionId() !== null);
@@ -375,6 +381,20 @@ export class DashboardComponent {
     return `${status.completedTargets}/${status.totalTargets} wallet×network complete`;
   });
 
+  readonly lastSyncedLabel = computed(() => {
+    const status = this.sessionBackfillStatus();
+    const raw = status?.lastSyncedAt;
+    if (!raw) return null;
+    const date = new Date(raw);
+    const diffMs = Date.now() - date.getTime();
+    const diffMin = Math.floor(diffMs / 60_000);
+    if (diffMin < 1) return 'Just now';
+    if (diffMin < 60) return `${diffMin} min ago`;
+    const diffH = Math.floor(diffMin / 60);
+    if (diffH < 24) return `${diffH}h ago`;
+    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  });
+
   readonly showPipelineProgress = computed(() => {
     return this.sessionBackfillStatus() !== null;
   });
@@ -394,6 +414,9 @@ export class DashboardComponent {
     return this.data().sections.find((sectionMeta) => sectionMeta.id === this.section()) ?? null;
   });
 
+  readonly onChainWallets = computed<ReadonlyArray<WalletInfo>>(() =>
+    this.data().wallets.filter((w) => w.address.startsWith('0x'))
+  );
   readonly availableWalletIds = computed<ReadonlyArray<WalletId>>(() => this.data().wallets.map((wallet) => wallet.id));
   readonly availableIntegrationRefs = computed<ReadonlyArray<string>>(() =>
     this.sessionIntegrations().map((integration) => integration.accountRef)
@@ -401,9 +424,12 @@ export class DashboardComponent {
   readonly availableNetworkIds = computed<ReadonlyArray<NetworkId>>(() => this.filterNetworks().map((network) => network.id));
 
   readonly activeFilterCount = computed(() => {
+    // Count only on-chain (0x) wallets shown as chips — bybit virtual wallets are integration-managed
+    const onChainCount = this.onChainWallets().length;
+    const selectedOnChainCount = [...this.selectedWalletIds()].filter((id) => id.startsWith('0x')).length;
     const hiddenWallets = this.walletFilterMode() === 'all'
       ? 0
-      : Math.max(0, this.availableWalletIds().length - this.selectedWalletIds().size);
+      : Math.max(0, onChainCount - selectedOnChainCount);
     const hiddenIntegrations = this.integrationFilterMode() === 'all'
       ? 0
       : Math.max(0, this.availableIntegrationRefs().length - this.selectedIntegrationRefs().size);
@@ -564,13 +590,16 @@ export class DashboardComponent {
       if (hideDust && Math.abs(asset.marketValueUsd ?? 0) < 0.5) {
         return false;
       }
-      if (selectedWallets.size > 0 && !selectedWallets.has(asset.walletId)) {
+      const isOnChain = asset.walletId.startsWith('0x');
+      // Wallet chip filter applies only to on-chain (0x) wallets
+      if (isOnChain && selectedWallets.size > 0 && !selectedWallets.has(asset.walletId)) {
         return false;
       }
-      if (selectedNetworks.size > 0 && !selectedNetworks.has(asset.networkId)) {
+      if (selectedNetworks.size > 0 && !isOnChain && !selectedNetworks.has(asset.networkId)) {
         return false;
       }
-      if (hasCustomIntegrationFilter) {
+      // Integration filter applies only to CEX/virtual wallets (non-0x); on-chain wallets are unaffected
+      if (hasCustomIntegrationFilter && !isOnChain) {
         const walletId = asset.walletId.toLowerCase();
         const matches = [...selectedIntegrations].some((ref) => {
           const normalizedRef = ref.trim().toLowerCase();
@@ -695,14 +724,10 @@ export class DashboardComponent {
 
   readonly filteredLpPositions = computed(() => {
     const selectedWallets = this.selectedWalletFilter();
-    const hasCustomIntegrationFilter = this.integrationFilterMode() === 'custom';
     const selectedNetworks = this.selectedNetworkFilter();
     const currentTab = this.lpTab();
 
     return this.data().lpPositions.filter((position) => {
-      if (hasCustomIntegrationFilter) {
-        return false;
-      }
       if (currentTab !== 'all' && position.status !== currentTab) {
         return false;
       }
@@ -719,13 +744,9 @@ export class DashboardComponent {
 
   readonly filteredLendingPositions = computed(() => {
     const selectedWallets = this.selectedWalletFilter();
-    const hasCustomIntegrationFilter = this.integrationFilterMode() === 'custom';
     const selectedNetworks = this.selectedNetworkFilter();
 
     return this.data().lendingPositions.filter((position) => {
-      if (hasCustomIntegrationFilter) {
-        return false;
-      }
       if (selectedWallets.size > 0 && !selectedWallets.has(position.walletId)) {
         return false;
       }
@@ -747,6 +768,18 @@ export class DashboardComponent {
 
   readonly filteredRealizedPnlUsd = computed(() =>
     this.filteredTokenFamilies().reduce((total, token) => total + token.realizedPnlUsd, 0)
+  );
+
+  readonly totalRealizedPnlUsd = computed(() => this.data().totalRealizedPnlUsd);
+
+  readonly isFiltered = computed(() =>
+    this.walletFilterMode() !== 'all' ||
+    this.networkFilterMode() !== 'all' ||
+    this.integrationFilterMode() !== 'all'
+  );
+
+  readonly displayedRealizedPnlUsd = computed(() =>
+    this.isFiltered() ? this.filteredRealizedPnlUsd() : this.totalRealizedPnlUsd()
   );
 
   readonly filteredTotalCostBasisUsd = computed(() =>
@@ -999,7 +1032,8 @@ export class DashboardComponent {
   toggleWallet(walletId: WalletId): void {
     if (this.walletFilterMode() === 'all') {
       this.walletFilterMode.set('custom');
-      this.selectedWalletIds.set(new Set(this.availableWalletIds().filter((id) => id !== walletId)));
+      // Only track on-chain wallet IDs in the chip filter; bybit virtual wallets bypass wallet filter
+      this.selectedWalletIds.set(new Set(this.onChainWallets().map((w) => w.id).filter((id) => id !== walletId)));
     } else {
       this.selectedWalletIds.set(this.toggleSetValue(this.selectedWalletIds(), walletId));
     }
@@ -1055,13 +1089,11 @@ export class DashboardComponent {
     this.resetTransactionPageAndRefresh();
   }
 
-  onTransactionBridgeFilterChange(value: SessionTransactionsBridgeFilter): void {
-    this.transactionBridgeStatusFilter.set(value);
-    this.resetTransactionPageAndRefresh();
-  }
-
-  onTransactionSpamFilterChange(value: SessionTransactionsSpamFilter): void {
-    this.transactionSpamFilter.set(value);
+  onCategoriesChange(cats: ReadonlySet<TransactionCategory>): void {
+    this.enabledCategories.set(cats);
+    try {
+      localStorage.setItem(TRANSACTION_CATEGORIES_STORAGE_KEY, JSON.stringify([...cats]));
+    } catch { /* ignore */ }
     this.resetTransactionPageAndRefresh();
   }
 
@@ -1199,19 +1231,14 @@ export class DashboardComponent {
     return this.selectedNetworkFilter().has(networkId);
   }
 
-  getSectionIcon(sectionId: DashboardSection): string {
-    switch (sectionId) {
-      case 'tokens':
-        return '◍';
-      case 'lp':
-        return '◢';
-      case 'lending':
-        return '⌂';
-      case 'staking':
-        return '⚡';
-      default:
-        return '•';
-    }
+  getSectionIcon(sectionId: DashboardSection): SafeHtml {
+    const SVG_ATTRS = `xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"`;
+    const icons: Record<DashboardSection, string> = {
+      tokens: `<svg ${SVG_ATTRS}><rect x="1" y="1.5" width="18" height="13" rx="1.5"/><path d="M7.5 14.5v3M12.5 14.5v3M5 17.5h10"/><path d="M4.5 10.5V8M7.5 10.5V6.5M10.5 10.5V8.5M13.5 10.5V5.5M16 10.5V7"/><path d="M3 10.5h14"/></svg>`,
+      lp: `<svg ${SVG_ATTRS}><path d="M7 1.5v9M13 1.5v9"/><path d="M7 5h6M7 8h6"/><path d="M1.5 13q2.5-2.5 5 0t5 0 5 0"/><ellipse cx="6.5" cy="17.5" rx="2.5" ry="1.2"/><ellipse cx="13.5" cy="17.5" rx="2.5" ry="1.2"/></svg>`,
+      lending: `<svg ${SVG_ATTRS}><circle cx="15.5" cy="3.5" r="1.5"/><path d="M13 7c0-1.4 1.1-2.5 2.5-2.5S18 5.6 18 7"/><circle cx="4.5" cy="16.5" r="1.5"/><path d="M2 20c0-1.4 1.1-2.5 2.5-2.5S7 18.6 7 20"/><circle cx="10" cy="10" r="2.5"/><path d="M10 8.3v3.4"/><path d="M13 7.5L11.2 9.2M11.8 9.2l-.6-.6.6-.6"/><path d="M7 12.5L8.8 10.8M8.2 10.8l.6.6-.6.6"/></svg>`,
+    };
+    return this.sanitizer.bypassSecurityTrustHtml(icons[sectionId] ?? '');
   }
 
   getNetworkById(networkId: NetworkId) {
@@ -1463,9 +1490,12 @@ export class DashboardComponent {
     phase: SessionTransactionsLoadPhase = 'final',
     force = false
   ): void {
-    if (this.isSessionTransactionsLoading()) {
-      return;
+    // Cancel any in-flight request so filter changes always use latest state
+    if (this.pendingTransactionSub && !this.pendingTransactionSub.closed) {
+      this.pendingTransactionSub.unsubscribe();
+      this.pendingTransactionSub = null;
     }
+
     if (!force && phase === 'intermediate' && this.sessionTransactionsLoadPhase() !== 'idle') {
       return;
     }
@@ -1476,7 +1506,7 @@ export class DashboardComponent {
     this.isSessionTransactionsLoading.set(true);
     this.sessionTransactionsError.set(null);
 
-    this.walletApiService
+    this.pendingTransactionSub = this.walletApiService
       .getSessionTransactions(sessionId, this.buildSessionTransactionsRequest())
       .pipe(
         takeUntilDestroyed(this.destroyRef),
@@ -1537,8 +1567,7 @@ export class DashboardComponent {
       limit: this.transactionPageSize,
       offset: this.transactionPage() * this.transactionPageSize,
       search: this.transactionSearch(),
-      bridgeStatus: this.transactionBridgeStatusFilter(),
-      spamFilter: this.transactionSpamFilter(),
+      categories: [...this.enabledCategories()],
       walletIds:
         this.walletFilterMode() === 'all' && this.integrationFilterMode() === 'all'
           ? undefined
@@ -1548,7 +1577,7 @@ export class DashboardComponent {
       networkIds:
         this.networkFilterMode() === 'all'
           ? undefined
-          : (Array.from(this.selectedNetworkIds()) as ReadonlyArray<EvmNetworkId>),
+          : (Array.from(this.selectedNetworkIds()).filter((id) => id !== 'BYBIT') as ReadonlyArray<EvmNetworkId>),
     };
   }
 
@@ -1620,6 +1649,22 @@ export class DashboardComponent {
       return priceSource as PriceSource;
     }
     return 'UNKNOWN';
+  }
+
+  private loadCategoriesFromStorage(): ReadonlySet<TransactionCategory> {
+    try {
+      const stored = localStorage.getItem(TRANSACTION_CATEGORIES_STORAGE_KEY);
+      if (stored) {
+        const parsed: unknown = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const valid = (parsed as string[]).filter(
+            (c): c is TransactionCategory => ALL_TRANSACTION_CATEGORIES.includes(c as TransactionCategory)
+          );
+          if (valid.length > 0) return new Set(valid);
+        }
+      }
+    } catch { /* ignore */ }
+    return new Set(DEFAULT_TRANSACTION_CATEGORIES);
   }
 
   private toBridgeStatus(bridgeStatus: string | null): SessionBridgeStatus | null {
@@ -1781,7 +1826,8 @@ export class DashboardComponent {
       provider,
       label: integration.displayName?.trim() || presentation?.label || provider,
       accountRef,
-      color: presentation?.color ?? COLORS.textSubtle,
+      // Prefer per-integration color stored in DB; fall back to provider presentation color
+      color: integration.color ?? presentation?.color ?? COLORS.textSubtle,
       icon: presentation?.icon ?? '◎',
       status: integration.status,
     };

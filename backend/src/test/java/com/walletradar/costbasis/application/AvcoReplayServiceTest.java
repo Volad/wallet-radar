@@ -3487,4 +3487,78 @@ class AvcoReplayServiceTest {
         flow.setAssetContract(contract);
         return flow;
     }
+
+    /**
+     * Silo Finance LENDING_DEPOSIT double-count regression.
+     *
+     * <p>The on-chain tx emits two soUSDC inbound flows:
+     * <ul>
+     *   <li>TRANSFER in raw on-chain units (very large integer, e.g. 199835669)</li>
+     *   <li>BUY in human-readable units (199.95) — an alternative encoding of the same receipt</li>
+     * </ul>
+     *
+     * <p>Before the fix, the TRANSFER was paired by FamilyEquivalentCustodyReplayHandler (REALLOCATE_IN),
+     * and the BUY then fell through to replayGenericFlowsSkipping and was recorded as a second
+     * REALLOCATE_IN, doubling the cost basis and inflating AVCO to ~$2/USDC. On every subsequent
+     * REPAY this generated a phantom realized loss of ~$933 for the user.
+     *
+     * <p>After the fix, the suppressed BUY index is added to selectedByIndex so generic replay
+     * skips it — only one REALLOCATE_IN is recorded and the basis is exactly $200.
+     */
+    @Test
+    void siloStyleLendingDepositDoesNotDoubleCountBuyAndTransferFlowsForSameReceiptToken() {
+        // 200 USDC acquired at $1.00 each
+        NormalizedTransaction usdcBuy = tx("1", "0xbuy-usdc", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flowWithContract(NormalizedLegRole.BUY, "USDC", "0xusdc", "200", "1", PriceSource.BINANCE));
+        usdcBuy.setWalletAddress("wallet-a");
+        usdcBuy.setNetworkId(NetworkId.ARBITRUM);
+
+        // Silo deposit: USDC out, two soUSDC inbound legs with SAME contract.
+        // The TRANSFER is at human-readable scale (200 USDC-equivalent).
+        // The BUY is the raw on-chain ERC-20 transfer in 6-decimal units (200_000_000 = 200e6).
+        // Before the fix the BUY fell through to generic replay and created a second REALLOCATE_IN,
+        // doubling the cost basis to ~$400 and inflating AVCO to ~$2/USDC.
+        NormalizedTransaction siloDeposit = tx("2", "0xsilo-deposit", 1, NormalizedTransactionType.LENDING_DEPOSIT,
+                flowWithContract(NormalizedLegRole.TRANSFER, "USDC", "0xusdc", "-200", null, null),
+                // human-readable inbound: this is the principal flow
+                flowWithContract(NormalizedLegRole.TRANSFER, "soUSDC", "0xsousdc", "200", null, null),
+                // raw on-chain ERC-20 amount (200e6 units at 6 decimals) — must be suppressed
+                flowWithContract(NormalizedLegRole.BUY, "soUSDC", "0xsousdc", "200000000", "0.000001", PriceSource.BINANCE));
+        siloDeposit.setWalletAddress("wallet-a");
+        siloDeposit.setNetworkId(NetworkId.ARBITRUM);
+        siloDeposit.setProtocolName("Silo Finance");
+
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                NormalizedTransactionStatus.CONFIRMED
+        )).thenReturn(List.of(usdcBuy, siloDeposit));
+
+        service().replayConfirmed();
+
+        List<AssetLedgerPoint> points = capturedLedgerPoints();
+
+        AssetLedgerPoint usdcPoint = latestPoint(points, "wallet-a", NetworkId.ARBITRUM, "USDC", "0xusdc");
+        assertThat(usdcPoint.getQuantityAfter()).isZero();
+        assertThat(usdcPoint.getTotalCostBasisAfterUsd()).isZero();
+        assertThat(usdcPoint.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.REALLOCATE_OUT);
+
+        // There must be exactly ONE REALLOCATE_IN for soUSDC — not two.
+        long soUsdcReallocateInCount = points.stream()
+                .filter(p -> "wallet-a".equals(p.getWalletAddress())
+                        && "soUSDC".equalsIgnoreCase(p.getAssetSymbol())
+                        && AssetLedgerPoint.BasisEffect.REALLOCATE_IN.equals(p.getBasisEffect()))
+                .count();
+        assertThat(soUsdcReallocateInCount)
+                .as("soUSDC must receive exactly one REALLOCATE_IN (no double-count from suppressed BUY)")
+                .isEqualTo(1);
+
+        AssetLedgerPoint soUsdcPoint = latestPoint(points, "wallet-a", NetworkId.ARBITRUM, "soUSDC", "0xsousdc");
+        // Basis must equal the original USDC cost, not double that amount
+        assertThat(soUsdcPoint.getTotalCostBasisAfterUsd())
+                .as("soUSDC basis must equal USDC cost ($200), not be doubled to $400")
+                .isEqualByComparingTo("200");
+        // Quantity is the human-readable TRANSFER amount (200), not TRANSFER + BUY (200000200)
+        assertThat(soUsdcPoint.getQuantityAfter())
+                .as("soUSDC quantity must be the human-readable TRANSFER amount only, not inflated by raw BUY")
+                .isEqualByComparingTo("200");
+    }
 }

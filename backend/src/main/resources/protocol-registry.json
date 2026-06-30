@@ -249,6 +249,19 @@
       "confidence": "HIGH",
       "notes": "Angle vbETH-vbUSDC vault accessed via SushiSwap V3 on Katana (chainId 747474). LP_ENTRY tx 0x67f4e9e1767850c427920a1238903ed6fc56e6cadd4d3defcacc7a99e1329499 sends 0.45 ETH here (2025-09-12). Companion pool contract 0xdc0f215c6e6cbb900aa00afdec299d88c15ff743 handles vbETH/vbUSDC flows. ETH-C10 fix."
     },
+    "0x2659c6085d26144117d904c46b48b6d180393d27": {
+      "name": "SushiSwap V3 NonfungiblePositionManager (Katana)",
+      "protocol": "SushiSwap",
+      "version": "V3",
+      "family": "LP",
+      "role": "POSITION_MANAGER",
+      "event_type": null,
+      "networks": [
+        "KATANA"
+      ],
+      "confidence": "HIGH",
+      "notes": "SushiSwap V3 NonfungiblePositionManager on Katana (chainId 747474). collect(0xfc6f7865) → LP_FEE_CLAIM via LpPositionLifecycleSupport.resolvePositionManagerType. LpRegistryClassifier (order 420) intercepts before RegistryDirectTypeClassifier (order 470) so the pool LP_BURN signal no longer overrides fee-claim calls. Confirmed by 3 on-chain collect txs (Sep–Nov 2025, $18 total) that were previously misclassified as LP_EXIT."
+    },
     "0x2a2c512beaa8eb15495726c235472d82effb7a6b": {
       "name": "Katana vbETH-vbUSDC LP Pool",
       "protocol": "SushiSwap",
@@ -3004,17 +3017,17 @@
       "notes": "WS-1: LI.FI proxy (impl 0xfbf7cc...) on Unichain; underlying bridge = GasZip. startBridgeTokensViaGasZip facet."
     },
     "0x943e6e07a7e8e791dafc44083e54041d743c46e9": {
-      "name": "LI.FI Multicall / Across SpokePool",
-      "protocol": "LI.FI",
-      "version": "MultiCall",
-      "family": "BRIDGE",
-      "role": "BRIDGE_ENTRY",
-      "event_type": "BRIDGE_OUT",
+      "name": "PancakeSwap V4 PositionManager (Unichain)",
+      "protocol": "PancakeSwap",
+      "version": "V4",
+      "family": "LP",
+      "role": "POSITION_MANAGER",
+      "event_type": "LP_MINT",
       "networks": [
         "UNICHAIN"
       ],
       "confidence": "HIGH",
-      "notes": "WS-1: Multicall-wrapped LI.FI entry on Unichain; also serves as Across V3 SpokePool."
+      "notes": "PancakeSwap V4 NonfungiblePositionManager on Unichain. Mints ERC721 LP-RECEIPT NFTs (e.g. tokenId 824 in LP_ENTRY 0x29fd1b50, Feb 2025). Previously wrongly labelled as LI.FI Multicall — corrected after observing NFT minting behaviour incompatible with bridge contracts."
     }
   },
   "event_topics": {

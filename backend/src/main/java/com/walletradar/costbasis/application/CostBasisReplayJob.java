@@ -62,7 +62,11 @@ public class CostBasisReplayJob {
         if (!properties.isEnabled() || event == null) {
             return;
         }
-        runReplay("pricing-completed", event.sessionId(), true);
+        // forceReplay=false: rely on the shouldReplay gate inside runReplayForSession.
+        // The gate already covers promoted>0 (new transactions entered CONFIRMED) and
+        // empty-ledger bootstrap — so passing true was only wasting 3-4s per pipeline
+        // iteration even when 0 new transactions were processed.
+        runReplay("pricing-completed", event.sessionId(), false);
     }
 
     private int runReplay(String trigger, String sessionId, boolean forceReplay) {

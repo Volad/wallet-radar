@@ -44,6 +44,16 @@ export class LpDataService {
     );
   }
 
+  getSessionLpPosition(
+    sessionId: string,
+    correlationId: string,
+    scope: LpPositionScope = 'active'
+  ): Observable<LpPosition> {
+    return this.walletApiService.getSessionLpPosition(sessionId, correlationId, scope).pipe(
+      map((response) => this.toPosition(response))
+    );
+  }
+
   mapPosition(response: SessionLpPositionResponse): LpPosition {
     return this.toPosition(response);
   }

@@ -1,5 +1,8 @@
 <section class="settings-layout">
   @if (!hasSession()) {
+    <div class="wizard-auth-banner">
+      <wr-account-settings-section></wr-account-settings-section>
+    </div>
     <wr-settings-wizard (completed)="onWizardCompleted()"></wr-settings-wizard>
   } @else if (loading()) {
     <section class="settings-state-card">
@@ -128,7 +131,7 @@
 
           <wr-integrations-settings-section
             [compact]="true"
-            [bybitIntegration]="bybitIntegration()"
+            [integrations]="allIntegrations()"
             [bybitForm]="bybitForm"
             [showSecret]="showBybitSecret()"
             [saving]="savingScope() === 'integrations'"
@@ -137,7 +140,7 @@
             (toggleSecret)="toggleBybitSecretVisibility()"
             (reset)="resetBybitDraft()"
             (save)="saveBybit()"
-            (disconnect)="disconnectBybit()"></wr-integrations-settings-section>
+            (disconnect)="disconnectIntegration($event)"></wr-integrations-settings-section>
 
           <div class="data-sources-divider"></div>
 
@@ -247,6 +250,7 @@
           [form]="generalForm"
           [saving]="savingScope() === 'general'"
           (save)="saveGeneral()"></wr-general-settings-section>
+        <wr-account-settings-section></wr-account-settings-section>
       }
     </main>
   }

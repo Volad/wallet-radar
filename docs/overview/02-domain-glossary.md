@@ -1111,3 +1111,15 @@ carry may attach basis only and must not add duplicate quantity.
 - Post-normalization provider clarification is out of scope for the new model.
 - If a provider event is still ambiguous after the full provider backfill pass,
   it becomes explicit review work rather than a deferred provider lookup.
+
+## Authentication & Identity
+
+**IdentityProvider** — Supported SSO provider enum (`GOOGLE`). Extensible: new providers added as new enum values + Spring OAuth2 client registration.
+
+**IdentityBinding** — Embedded sub-document on `UserSession` linking the session to an identity provider account. Fields: `provider`, `subject` (Google "sub", stable idpId), `email`, `emailVerified`, `displayName`, `pictureUrl`, `linkedAt`.
+
+**Canonical Session** — The unique `UserSession` bound to a given `IdentityBinding`. Enforced by a unique sparse MongoDB index on `{identity.provider, identity.subject}`. On each login, the backend resolves (or creates) this session and encodes its `_id` as the `sessionId` claim in the JWT.
+
+**wr_auth cookie** — HttpOnly; Secure; SameSite=Lax HS256 JWT cookie issued after successful Google OAuth2 login. Contains `sub`, `sessionId`, `provider`, `email`, `name`, `picture`. Validated by Spring Security `NimbusReactiveJwtDecoder` on every API request when `walletradar.auth.enabled=true`.
+
+**auth.enabled flag** — `walletradar.auth.enabled` (default `false`). When `false`, a permit-all filter chain runs, preserving backward-compatible anonymous access. Set to `true` in prod with `WALLETRADAR_AUTH_ENABLED=true`.

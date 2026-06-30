@@ -7,6 +7,7 @@ REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 clear_pricing_cache=false
 rebuild_frontend=true
 frontend_only=false
+backend_only=false
 # Targeted partial-reset modes — skip the full MongoDB teardown/renormalization.
 #   --linking-only:           No Mongo wipe; restart backend so linking/pricing/replay re-run.
 #   --reclassification-only:  Reset ON_CHAIN rows to PENDING_RECLASSIFICATION + clear downstream.
@@ -30,6 +31,10 @@ for arg in "$@"; do
       frontend_only=true
       rebuild_frontend=true
       ;;
+    --backend-only)
+      backend_only=true
+      rebuild_frontend=false
+      ;;
     --linking-only)
       linking_only=true
       rebuild_frontend=false
@@ -44,7 +49,7 @@ for arg in "$@"; do
       ;;
     *)
       printf 'Unknown argument: %s\n' "$arg" >&2
-      printf 'Usage: %s [--clear-pricing-cache] [--start-frontend] [--skip-frontend] [--frontend-only]\n' "$0" >&2
+      printf 'Usage: %s [--clear-pricing-cache] [--start-frontend] [--skip-frontend] [--frontend-only] [--backend-only]\n' "$0" >&2
       printf '           [--linking-only] [--reclassification-only] [--clarification-only]\n' >&2
       exit 1
       ;;
@@ -103,6 +108,16 @@ if [ "$frontend_only" = "true" ]; then
   compose rm -f -s frontend-prod >/dev/null 2>&1 || true
   compose build frontend-prod
   compose up -d frontend-prod
+  printf 'Done.\n'
+  exit 0
+fi
+
+if [ "$backend_only" = "true" ]; then
+  printf 'Rebuilding backend-prod only (Mongo unchanged, no renormalization)...\n'
+  compose stop backend-prod
+  compose rm -f -s backend-prod >/dev/null 2>&1 || true
+  compose build backend-prod
+  compose up -d backend-prod
   printf 'Done.\n'
   exit 0
 fi

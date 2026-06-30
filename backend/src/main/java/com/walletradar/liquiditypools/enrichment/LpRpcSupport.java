@@ -57,7 +57,7 @@ public class LpRpcSupport {
 
     /** Maximum number of eth_call entries per JSON-RPC batch request. Larger payloads hit
      * provider limits (413 Payload Too Large on Ankr; 429 on drpc) and degrade reliability. */
-    private static final int MAX_BATCH_CHUNK = 50;
+    private static final int MAX_BATCH_CHUNK = 25;
 
     /**
      * When all batch attempts fail for a batch of this size or larger, skip the individual-call

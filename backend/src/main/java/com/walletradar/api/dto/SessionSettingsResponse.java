@@ -39,6 +39,7 @@ public record SessionSettingsResponse(
             String status,
             String displayName,
             String accountRef,
+            String color,
             String maskedKey,
             boolean readOnly,
             List<String> capabilities,

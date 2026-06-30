@@ -10,16 +10,24 @@ import com.walletradar.domain.session.UserSessionRepository;
 import com.walletradar.domain.sync.SyncStatus;
 import com.walletradar.domain.sync.SyncStatusRepository;
 import com.walletradar.session.application.SessionPipelineStateService;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.scheduling.TaskScheduler;
 
+import java.time.Instant;
 import java.util.List;
+import java.util.concurrent.ScheduledFuture;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -37,6 +45,23 @@ class SessionBackfillCompletionPublisherTest {
     private ApplicationEventPublisher applicationEventPublisher;
     @Mock
     private SessionPipelineStateService sessionPipelineStateService;
+    @Mock
+    private TaskScheduler taskScheduler;
+
+    /**
+     * Makes the debounce scheduler run the task immediately (synchronous test execution).
+     * Uses lenient stubbing so tests that never reach the scheduling step do not fail with
+     * UnnecessaryStubbingException.
+     */
+    @BeforeEach
+    @SuppressWarnings("unchecked")
+    void stubSchedulerRunsImmediately() {
+        lenient().doAnswer(invocation -> {
+            Runnable task = invocation.getArgument(0);
+            task.run();
+            return mock(ScheduledFuture.class);
+        }).when(taskScheduler).schedule(any(Runnable.class), any(Instant.class));
+    }
 
     @Test
     void publishesSessionCompletionWhenAllTargetsAreComplete() {
@@ -58,7 +83,8 @@ class SessionBackfillCompletionPublisherTest {
                 syncStatusRepository,
                 backfillSegmentRepository,
                 applicationEventPublisher,
-                sessionPipelineStateService
+                sessionPipelineStateService,
+                taskScheduler
         );
 
         publisher.onWalletNetworkBackfillCompleted(new WalletNetworkBackfillCompletedEvent("0xabc", NetworkId.BASE));
@@ -88,7 +114,8 @@ class SessionBackfillCompletionPublisherTest {
                 syncStatusRepository,
                 backfillSegmentRepository,
                 applicationEventPublisher,
-                sessionPipelineStateService
+                sessionPipelineStateService,
+                taskScheduler
         );
 
         publisher.onWalletNetworkBackfillCompleted(new WalletNetworkBackfillCompletedEvent("0xabc", NetworkId.ETHEREUM));
@@ -117,7 +144,8 @@ class SessionBackfillCompletionPublisherTest {
                 syncStatusRepository,
                 backfillSegmentRepository,
                 applicationEventPublisher,
-                sessionPipelineStateService
+                sessionPipelineStateService,
+                taskScheduler
         );
 
         publisher.onWalletNetworkBackfillCompleted(new WalletNetworkBackfillCompletedEvent("0xabc", NetworkId.ETHEREUM));
@@ -149,7 +177,8 @@ class SessionBackfillCompletionPublisherTest {
                 syncStatusRepository,
                 backfillSegmentRepository,
                 applicationEventPublisher,
-                sessionPipelineStateService
+                sessionPipelineStateService,
+                taskScheduler
         );
 
         publisher.onWalletNetworkBackfillCompleted(new WalletNetworkBackfillCompletedEvent("0xabc", NetworkId.ETHEREUM));
@@ -177,7 +206,8 @@ class SessionBackfillCompletionPublisherTest {
                 syncStatusRepository,
                 backfillSegmentRepository,
                 applicationEventPublisher,
-                sessionPipelineStateService
+                sessionPipelineStateService,
+                taskScheduler
         );
 
         publisher.maybePublishSessionCompletionBySessionId("session-1");

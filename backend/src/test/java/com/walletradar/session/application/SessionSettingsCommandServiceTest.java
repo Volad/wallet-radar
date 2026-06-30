@@ -134,6 +134,7 @@ class SessionSettingsCommandServiceTest {
                         "BYBIT",
                         "Bybit renamed",
                         null,
+                        null,
                         null
                 )),
                 List.of(),
@@ -182,7 +183,8 @@ class SessionSettingsCommandServiceTest {
                         "BYBIT",
                         "Bybit main",
                         "api-key-1234",
-                        "super-secret"
+                        "super-secret",
+                        null
                 )),
                 List.of(),
                 null,
@@ -225,7 +227,8 @@ class SessionSettingsCommandServiceTest {
                         "BYBIT",
                         "Bybit main",
                         "bad-key",
-                        "bad-secret"
+                        "bad-secret",
+                        null
                 )),
                 List.of(),
                 null,

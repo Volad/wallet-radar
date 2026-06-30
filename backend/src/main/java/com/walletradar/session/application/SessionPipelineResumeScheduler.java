@@ -304,7 +304,25 @@ public class SessionPipelineResumeScheduler {
     }
 
     private boolean hasPendingClarification(List<String> addresses) {
-        return hasPendingStatus(addresses, "PENDING_CLARIFICATION");
+        if (addresses.isEmpty()) {
+            return false;
+        }
+        java.util.Date now = new java.util.Date();
+        // Only consider items whose clarification lease has expired (or was never set).
+        // Items still held by an active lease are being processed (or were held by a crashed process
+        // that will release them on the next clarification run). Firing the watchdog for those items
+        // just produces empty clarification cycles and confuses the pipeline progress display.
+        Criteria leaseFree = new Criteria().orOperator(
+                Criteria.where("clarificationLeaseUntil").exists(false),
+                Criteria.where("clarificationLeaseUntil").is(null),
+                Criteria.where("clarificationLeaseUntil").lte(now)
+        );
+        Query query = new Query(new Criteria().andOperator(
+                Criteria.where("walletAddress").in(addresses),
+                Criteria.where("status").is("PENDING_CLARIFICATION"),
+                leaseFree
+        ));
+        return mongoOperations.exists(query, NormalizedTransaction.class);
     }
 
     private boolean hasPendingReclassification(List<String> addresses) {

@@ -101,7 +101,8 @@ public class PriceExternalSourceOrchestrator {
             case ECB -> 0;
             case BYBIT -> 1;
             case BINANCE -> 2;
-            case COINGECKO -> 3;
+            case DEFILLAMA -> 3;
+            case COINGECKO -> 4;
             default -> 100;
         };
     }

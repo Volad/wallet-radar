@@ -322,6 +322,11 @@ public class LpRegistryClassifier implements OnChainFamilyClassifier {
         }
         if (LpPositionCorrelationSupport.requiresReceiptClarification(context.view(), type)) {
             reasons.add(ClassificationReasonCode.LP_POSITION_CORRELATION_REQUIRED.code());
+        } else if (LpPositionCorrelationSupport.requiresVaultReceiptClarification(context.view(), type)) {
+            // Vault-wrapped LP_ENTRY (e.g. routeSingle on Angle vault) with non-standard selector:
+            // the underlying NFPM's ERC-721 mint event is only visible in the full receipt.
+            // Without it we cannot produce an NFT-keyed correlationId, so defer to clarification.
+            reasons.add(ClassificationReasonCode.LP_POSITION_CORRELATION_REQUIRED.code());
         }
         return List.copyOf(reasons);
     }

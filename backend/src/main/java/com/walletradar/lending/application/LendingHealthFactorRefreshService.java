@@ -2,6 +2,7 @@ package com.walletradar.lending.application;
 
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.domain.session.UserSessionRepository;
+import com.walletradar.lending.config.LendingMarketRateProperties;
 import com.walletradar.lending.persistence.LendingHealthFactorSnapshot;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -24,6 +25,7 @@ public class LendingHealthFactorRefreshService {
     private final SessionLendingQueryService lendingQueryService;
     private final LendingAaveV3HealthCollector healthCollector;
     private final LendingHealthFactorSnapshotService snapshotService;
+    private final LendingMarketRateProperties marketRateProperties;
 
     public RefreshResult refreshActiveBorrowGroups() {
         List<LendingAaveV3HealthCollector.ActiveBorrowGroup> groups = discoverActiveBorrowGroups();
@@ -57,8 +59,8 @@ public class LendingHealthFactorRefreshService {
                     if (group.borrowUsd() == null || group.borrowUsd().signum() <= 0) {
                         continue;
                     }
-                    String networkId = group.networkId() == null ? "" : group.networkId().trim().toUpperCase(Locale.ROOT);
-                    if (!isHealthFetchNetwork(networkId)) {
+                    String networkId = group.networkId() == null ? "" : group.networkId().trim();
+                    if (!marketRateProperties.isAaveV3HealthFetchEnabled(networkId)) {
                         continue;
                     }
                     String key = String.join(":",
@@ -77,10 +79,6 @@ public class LendingHealthFactorRefreshService {
             });
         }
         return groups.values().stream().toList();
-    }
-
-    private boolean isHealthFetchNetwork(String networkId) {
-        return "BASE".equals(networkId) || "MANTLE".equals(networkId);
     }
 
     public record RefreshResult(int activeGroups, int saved, int skipped) {

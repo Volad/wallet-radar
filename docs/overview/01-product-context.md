@@ -39,7 +39,7 @@ Users add wallet addresses (read-only) into a persisted `user_sessions` model ke
 | NG-04 | Fiat on/off ramp transaction detection |
 | NG-05 | NFT portfolio tracking |
 | NG-06 | Additional CEX providers or end-user CEX onboarding flows beyond the existing Bybit raw ledger source |
-| NG-07 | User registration, authentication, or multi-user access control |
+| NG-07 | Multi-user access control, user registration flows, or social features | Single-owner Google SSO (identity binding to a session) is in scope (ADR-038); fully public multi-tenant access is not. |
 | NG-08 | Automated tax-loss harvesting recommendations |
 | NG-09 | Transactions older than 2 years from current date |
 | NG-10 | Generic derivative / perpetual accounting beyond the audited GMX V2 order, position, close, cancel, and GM / GLV pool lifecycle currently covered by normalization and clarification |
@@ -52,7 +52,7 @@ Manual compensating transactions may be **positive or negative** (reducing quant
 
 ### Technical Constraints
 - **Monorepo** — backend (Spring Boot) and frontend (Angular) are in the same repository; backend is built with **Gradle** (not Maven).
-- **No user accounts** — session identity is a client-generated UUID, persisted server-side in `user_sessions`
+- **Session identity** — a client-generated UUID persisted server-side in `user_sessions`; optionally bound to a Google identity via SSO (ADR-038) so the session can be restored across devices
 - **Reconciliation UX** — when derived quantity does not match on-chain balance (e.g. for wallets with history within the 2-year window), the UI shows a warning on the asset and the user can add a manual compensating transaction to align balance and AVCO
 - **Read-only access** — system never requests wallet signing or private keys
 - **Public/free data sources only** — no dependency on paid indexers (Alchemy Growth, The Graph paid, Moralis paid)

@@ -25,51 +25,7 @@
   overflow: hidden;
 }
 
-.lending-sidebar {
-  width: 11.375rem;
-  flex: 0 0 11.375rem;
-  min-height: 0;
-  border-right: 1px solid var(--wr-border);
-  background: var(--wr-surface);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.sidebar-head {
-  flex: 0 0 auto;
-  border-bottom: 1px solid var(--wr-border);
-  padding: 0.55rem 0.75rem 0.44rem;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-
-  span {
-    color: var(--wr-subtle);
-    font-size: 0.55rem;
-    font-weight: 800;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-  }
-
-  button {
-    border: 1px solid var(--wr-border);
-    border-radius: 0.2rem;
-    background: var(--wr-elevated);
-    color: var(--wr-subtle);
-    cursor: pointer;
-    font-size: 0.55rem;
-    padding: 0.06rem 0.32rem;
-  }
-}
-
-.sidebar-scroll {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 0.5rem 0;
-}
+// ── Filter items (inside wr-filter-sidebar) ───────────────────────────────────
 
 .filter-sep {
   color: var(--wr-subtle);
@@ -298,6 +254,23 @@
   opacity: 0.75;
 }
 
+.protocol-head-row {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+
+  .protocol-head {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .group-refresh-btn {
+    align-self: center;
+    margin-right: 0.55rem;
+    flex-shrink: 0;
+  }
+}
+
 .protocol-head {
   width: 100%;
   min-width: 0;
@@ -379,6 +352,37 @@
   letter-spacing: 0.01em;
 }
 
+.sync-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--wr-font-mono);
+  font-size: 0.56rem;
+  line-height: 1;
+  white-space: nowrap;
+
+  &.stale,
+  &.failed {
+    color: var(--wr-amber);
+  }
+
+  &.updating {
+    color: var(--wr-cyan);
+  }
+
+  &.fresh {
+    color: var(--wr-subtle);
+  }
+}
+
+.sync-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: currentColor;
+}
+
 .tag {
   display: inline-flex;
   align-items: center;
@@ -455,18 +459,6 @@
       letter-spacing: 0.07em;
       text-transform: uppercase;
     }
-  }
-
-  .stale-dot {
-    color: var(--wr-amber);
-    background: var(--wr-amber-soft);
-    border: 1px solid var(--wr-amber-mid);
-    border-radius: 0.28rem;
-    padding: 0 0.26rem;
-    font-size: 0.44rem;
-    font-weight: 800;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
   }
 
   &.no-debt {
@@ -973,6 +965,11 @@
   background: var(--wr-border);
 }
 
+.summary-spacer {
+  flex: 1;
+  min-width: 0.5rem;
+}
+
 .cycle-toggle-row {
   display: inline-flex;
   gap: 0.28rem;
@@ -1024,9 +1021,79 @@
 }
 
 .protocol-head {
-  grid-template-columns: 2.375rem minmax(0, 1fr) 7.75rem 8.75rem minmax(7rem, auto) 1rem;
+  grid-template-columns: 2.375rem minmax(0, 1fr) 7.75rem 8.75rem minmax(7rem, auto) 3rem;
   gap: 0.85rem;
   padding: 0.85rem 0.95rem;
+}
+
+.protocol-head-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.35rem;
+}
+
+.group-refresh-btn {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  border: 1px solid var(--wr-border);
+  background: transparent;
+  color: var(--wr-subtle);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+
+  &:hover:not(:disabled) {
+    color: var(--wr-text);
+    border-color: var(--wr-border-strong);
+  }
+
+  &:disabled {
+    opacity: 0.4;
+    cursor: wait;
+  }
+}
+
+.summary-update-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.32rem;
+  border: 1px solid var(--wr-border-strong);
+  border-radius: 0.35rem;
+  background: transparent;
+  color: var(--wr-subtle);
+  font-family: var(--wr-font-sans);
+  font-size: 0.64rem;
+  font-weight: 600;
+  padding: 0.22rem 0.72rem;
+  cursor: pointer;
+
+  &:hover:not(:disabled) {
+    color: var(--wr-text);
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  &.loading {
+    color: var(--wr-cyan);
+  }
+}
+
+.sync-spinner {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1.5px solid color-mix(in srgb, var(--wr-cyan) 22%, transparent);
+  border-top-color: var(--wr-cyan);
+  animation: wrLendingSpin 0.8s linear infinite;
+  flex-shrink: 0;
 }
 
 .protocol-supply-borrow {
@@ -1739,5 +1806,28 @@
   .history-head {
     align-items: flex-start;
     flex-direction: column;
+  }
+}
+
+@media (max-width: 900px) {
+  :host {
+    height: auto;
+    overflow: visible;
+  }
+
+  .lending-shell {
+    height: auto;
+    overflow: visible;
+  }
+
+  .lending-layout {
+    overflow: visible;
+    flex-direction: column;
+  }
+
+  .lending-content {
+    overflow: visible;
+    flex: none;
+    min-height: 60vh;
   }
 }

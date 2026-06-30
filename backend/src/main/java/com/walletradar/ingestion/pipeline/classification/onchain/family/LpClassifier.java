@@ -8,6 +8,7 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.ingestion.pipeline.classification.ClassificationDecision;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassificationContext;
 import com.walletradar.ingestion.pipeline.classification.lp.LpNftClFlowMaterializer;
+import com.walletradar.ingestion.pipeline.classification.reason.ClassificationReasonCode;
 import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryEntry;
 import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryService;
 import com.walletradar.ingestion.pipeline.classification.support.LpPositionCorrelationSupport;
@@ -76,6 +77,18 @@ public class LpClassifier implements OnChainFamilyClassifier {
             return Optional.empty();
         }
         if (!LpPositionLifecycleSupport.hasAnyErc721TransferToWallet(context.view())) {
+            // No ERC-721 mint detected in available logs.
+            // For vault-style routeSingle entries (e.g. Angle vault on Katana): the NFT is minted
+            // inside the vault by the underlying NFPM and only appears in the full receipt.
+            // hasFullReceiptClarificationEvidence() returns true even for token-transfer-only
+            // evidence (no receipt logs yet). When no full receipt was fetched yet, claim
+            // LP_ENTRY + PENDING_CLARIFICATION here so classifiers at the same
+            // PRE_PROTOCOL_REVIEW stage (e.g. SwapClassifier) cannot mis-classify the
+            // ETH-out + token-in pattern as SWAP.
+            if (ROUTE_SINGLE_SELECTOR.equals(methodId)
+                    && context.view().fullReceiptClarificationAttemptCount() <= 0) {
+                return Optional.of(vaultLpPendingClarification(context));
+            }
             return Optional.empty();
         }
 
@@ -160,6 +173,29 @@ public class LpClassifier implements OnChainFamilyClassifier {
             log.warn("LP NFPM missing from protocol registry (identity stays contract-keyed): network={} contract={}",
                     network, contract);
         }
+    }
+
+    /**
+     * Produces an LP_ENTRY + PENDING_CLARIFICATION decision for a vault routeSingle entry that has
+     * token-transfer evidence but no full receipt yet. The correlationId remains null; it will be
+     * resolved once the full receipt is fetched and the underlying NFPM ERC-721 mint log is visible.
+     */
+    private ClassificationDecision vaultLpPendingClarification(OnChainClassificationContext context) {
+        return new ClassificationDecision(
+                NormalizedTransactionType.LP_ENTRY,
+                NormalizedTransactionStatus.PENDING_CLARIFICATION,
+                ClassificationSource.HEURISTIC,
+                ConfidenceLevel.MEDIUM,
+                enrichedFlows(context, NormalizedTransactionType.LP_ENTRY, null),
+                List.of(ClassificationReasonCode.LP_POSITION_CORRELATION_REQUIRED.code()),
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+        );
     }
 
     private static List<NormalizedTransaction.Flow> enrichedFlows(

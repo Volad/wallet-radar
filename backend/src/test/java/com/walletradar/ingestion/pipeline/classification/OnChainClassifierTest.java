@@ -4834,7 +4834,7 @@ class OnChainClassifierTest {
     }
 
     @Test
-    @DisplayName("BSC modifyLiquidities with positive log deltas becomes LP_ENTRY")
+    @DisplayName("BSC modifyLiquidities with positive liquidityDelta (word 2) becomes LP_ENTRY")
     void bscModifyLiquiditiesWithPositiveLogDeltasBecomesLpEntry() {
         String positionManager = "0x55f4c8aba71a1e923edc303eb4feff14608cc226";
         RawTransaction rawTransaction = baseRaw(NetworkId.BSC);
@@ -4849,9 +4849,14 @@ class OnChainClassifierTest {
                                 "0x00000000000000000000000055f4c8aba71a1e923edc303eb4feff14608cc226"
                         ))
                         .append("data", "0x"
+                                // word 0 = tickLower (positive tick range)
                                 + "000000000000000000000000000000000000000000000000000000000000cef8"
+                                // word 1 = tickUpper
                                 + "00000000000000000000000000000000000000000000000000000000000144f2"
-                                + "0000000000000000000000000000000000000000000000000000000000000000"
+                                // word 2 = liquidityDelta > 0 → LP_ENTRY (was incorrectly 0 before;
+                                // old code happened to return LP_ENTRY by reading positive ticks as deltas)
+                                + "0000000000000000000000000000000000000000000000000000000000000001"
+                                // word 3 = salt
                                 + "000000000000000000000000000000000000000000000000000000000009d352")
         ));
         rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of()).append("internalTransfers", List.of()));
@@ -5105,6 +5110,45 @@ class OnChainClassifierTest {
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.LP_ENTRY);
         assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        // Vault tx 0x67f4e9e1... also mints SushiSwap V3 NFT tokenId 36201 (0x8d69) from a
+        // different contract than tx.to. The correlationId must be keyed by the NFPM contract
+        // and the tokenId so it matches the LP_EXIT which burns the same NFT.
+        assertThat(result.correlationId())
+                .isEqualTo("lp-position:katana:0x2659c6085d26144117d904c46b48b6d180393d27:36201");
+    }
+
+    @Test
+    @DisplayName("routeSingle with token transfers but no full receipt becomes PENDING_CLARIFICATION")
+    void routeSingleWithTransfersButNoFullReceiptBecomesLpEntryPendingClarification() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.KATANA);
+        rawTransaction.setTxHash("0x67f4e9e1767850c427920a1238903ed6fc56e6cadd4d3defcacc7a99e1329499");
+        rawTransaction.getRawData().put("to", "0x3067bdba0e6628497d527bef511c22da8b32ca3f");
+        rawTransaction.getRawData().put("methodId", "0xb94c3609");
+        rawTransaction.getRawData().put("functionName", "routeSingle(tuple tokenIn,bytes data)");
+        rawTransaction.getRawData().put("value", "450000000000000000");
+        // Token transfers clarification present (second normalization pass) but full receipt
+        // has NOT been fetched yet — simulates the state after a reset when the token transfer
+        // evidence was re-fetched but the NFT mint log (from the underlying SushiSwap V3 NFPM)
+        // is only available in the full receipt.
+        rawTransaction.setClarificationEvidence(new Document()
+                .append("transfers", new Document("tokenTransfers", List.of(
+                        new Document("contractAddress", TOKEN_A)
+                                .append("tokenSymbol", "vbUSDC")
+                                .append("tokenName", "vbUSDC")
+                                .append("tokenDecimal", "6")
+                                .append("from", COUNTERPARTY)
+                                .append("to", WALLET)
+                                .append("value", "2")
+                ))));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.LP_ENTRY);
+        // The vault correlationId must NOT be committed before the full receipt is fetched.
+        // Without the receipt the underlying NFPM ERC-721 mint is invisible.
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_CLARIFICATION);
+        assertThat(result.missingDataReasons())
+                .contains(ClassificationReasonCode.LP_POSITION_CORRELATION_REQUIRED.code());
     }
 
     @Test

@@ -118,7 +118,6 @@ class SessionTransactionsQueryServiceTest {
                         null,
                         null,
                         null,
-                        null,
                         null
                 ))
                 .orElseThrow();
@@ -190,8 +189,7 @@ class SessionTransactionsQueryServiceTest {
                         25,
                         25,
                         "spam",
-                        "ALL",
-                        "SPAM_ONLY",
+                        List.of("SPAM"),
                         List.of("0x1"),
                         List.of(NetworkId.BASE)
                 ))
@@ -244,8 +242,7 @@ class SessionTransactionsQueryServiceTest {
                         50,
                         0,
                         null,
-                        "ALL",
-                        "HIDE_SPAM",
+                        null,
                         null,
                         null
                 ))
@@ -295,7 +292,6 @@ class SessionTransactionsQueryServiceTest {
                 .findSessionTransactions("session-1", SessionTransactionsQueryService.normalizeQuery(
                         50,
                         0,
-                        null,
                         null,
                         null,
                         null,
@@ -351,7 +347,6 @@ class SessionTransactionsQueryServiceTest {
                         null,
                         null,
                         null,
-                        null,
                         null
                 ))
                 .orElseThrow();
@@ -393,8 +388,7 @@ class SessionTransactionsQueryServiceTest {
                         50,
                         0,
                         null,
-                        "ALL",
-                        "SPAM_ONLY",
+                        List.of("SPAM"),
                         null,
                         null
                 ))
@@ -442,8 +436,7 @@ class SessionTransactionsQueryServiceTest {
                         50,
                         0,
                         null,
-                        "ALL",
-                        "SPAM_ONLY",
+                        List.of("SPAM"),
                         null,
                         null
                 ))
@@ -475,7 +468,7 @@ class SessionTransactionsQueryServiceTest {
 
         sessionTransactionsQueryService
                 .findSessionTransactions("session-1", SessionTransactionsQueryService.normalizeQuery(
-                        50, 0, null, null, "HIDE_SPAM", null, null
+                        50, 0, null, null, null, null
                 ))
                 .orElseThrow();
 
@@ -518,13 +511,6 @@ class SessionTransactionsQueryServiceTest {
         assertThatThrownBy(() -> SessionTransactionsQueryService.validateOffsetOrThrow(-1))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("greater than or equal to 0");
-    }
-
-    @Test
-    void rejectsUnknownSpamFilter() {
-        assertThatThrownBy(() -> SessionTransactionsQueryService.validateSpamFilterOrThrow("maybe"))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("spamFilter");
     }
 
     private NormalizedTransaction.Flow flow(

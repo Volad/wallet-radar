@@ -22,6 +22,10 @@ export class LendingDataService {
     );
   }
 
+  mapSessionResponse(response: SessionLendingResponse): LendingData {
+    return this.toLendingData(response);
+  }
+
   private toLendingData(response: SessionLendingResponse): LendingData {
     return {
       sessionId: response.sessionId,
@@ -45,6 +49,7 @@ export class LendingDataService {
         healthStatus: group.healthStatus ?? 'UNKNOWN',
         healthSource: group.healthSource ?? 'UNKNOWN',
         healthStale: group.healthStale ?? false,
+        lastRefreshedAt: group.lastRefreshedAt ?? null,
         supplyUsd: group.supplyUsd ?? 0,
         borrowUsd: group.borrowUsd ?? 0,
         netExposureUsd: group.netExposureUsd ?? 0,

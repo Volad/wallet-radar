@@ -24,6 +24,7 @@
       [canRefresh]="canRefreshSession()"
       [isRefreshing]="isSessionRefreshSubmitting()"
       [refreshMessage]="sessionRefreshMessage() ?? ''"
+      [lastSyncedLabel]="lastSyncedLabel()"
       (refresh)="onRefreshSession()"></wr-dashboard-topbar>
 
     <div class="workspace">
@@ -74,7 +75,7 @@
             <div class="filters-content">
               <section class="filter-group">
                 <h3 class="side-label">Wallet</h3>
-                @for (wallet of data().wallets; track wallet.id) {
+                @for (wallet of onChainWallets(); track wallet.id) {
                   <button
                     type="button"
                     class="select-chip"
@@ -151,7 +152,7 @@
         <main class="content-area">
           <div class="section-header">
             @if (activeSection() !== null) {
-              <span class="section-header-icon" [style.color]="activeSection()!.color">{{ getSectionIcon(activeSection()!.id) }}</span>
+              <span class="section-header-icon" [style.color]="activeSection()!.color" [innerHTML]="getSectionIcon(activeSection()!.id)"></span>
               <span class="section-header-title" [style.color]="activeSection()!.color">{{ activeSection()!.label }}</span>
             }
 
@@ -339,11 +340,11 @@
                           <div class="breakdown-pnl-label">Realised</div>
                           <div
                             class="breakdown-pnl-value mono"
-                            [style.color]="filteredRealizedPnlUsd() >= 0 ? colors.green : colors.red"
+                            [style.color]="displayedRealizedPnlUsd() >= 0 ? colors.green : colors.red"
                           >
-                            {{ formatUsd(filteredRealizedPnlUsd()) }}
+                            {{ formatUsd(displayedRealizedPnlUsd()) }}
                           </div>
-                          <div class="breakdown-pnl-sub muted">all time</div>
+                          <div class="breakdown-pnl-sub muted">{{ isFiltered() ? 'filtered' : 'all time' }}</div>
                         </div>
                       </div>
                     </div>
@@ -577,8 +578,7 @@
               [networks]="transactionPaneNetworks()"
               [sourceTransactions]="transactionPaneTransactions()"
               [transactionSearchValue]="transactionSearch()"
-              [bridgeStatusFilterValue]="transactionBridgeStatusFilter()"
-              [spamFilterValue]="transactionSpamFilter()"
+              [enabledCategories]="enabledCategories()"
               [page]="transactionPage()"
               [pageSize]="transactionPageSize"
               [totalCount]="sessionTransactionsTotalCount()"
@@ -586,8 +586,7 @@
               [isReadOnly]="currentSessionId() !== null"
               [emptyStateMessage]="transactionPaneEmptyStateMessage()"
               (transactionSearchChange)="onTransactionSearchChange($event)"
-              (bridgeStatusFilterChange)="onTransactionBridgeFilterChange($event)"
-              (spamFilterChange)="onTransactionSpamFilterChange($event)"
+              (categoriesChange)="onCategoriesChange($event)"
               (pageChange)="onTransactionPageChange($event)"></wr-dashboard-transactions-pane>
           </div>
         </main>

@@ -9,7 +9,7 @@
       [attr.aria-label]="sectionMeta.label"
       [disabled]="sectionMeta.soon"
       (click)="selectSection(sectionMeta)">
-      <span class="section-glyph" aria-hidden="true">{{ getSectionIcon(sectionMeta.id) }}</span>
+      <span class="section-glyph" aria-hidden="true" [innerHTML]="getSectionIcon(sectionMeta.id)"></span>
       @if (sectionMeta.soon) {
         <span class="soon-dot" aria-hidden="true"></span>
       }
@@ -24,6 +24,6 @@
     [class.active]="isSettingsActive"
     aria-label="Settings"
     (click)="openSettings()">
-    <span class="section-glyph" aria-hidden="true">⚙</span>
+    <span class="section-glyph" aria-hidden="true" [innerHTML]="getSettingsIcon()"></span>
   </button>
 </nav>

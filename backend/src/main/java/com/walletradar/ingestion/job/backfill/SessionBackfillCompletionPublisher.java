@@ -1,5 +1,6 @@
 package com.walletradar.ingestion.job.backfill;
 
+import com.walletradar.config.SchedulerConfig;
 import com.walletradar.domain.event.SessionBackfillCompletedEvent;
 import com.walletradar.domain.event.WalletNetworkBackfillCompletedEvent;
 import com.walletradar.domain.session.UserSession;
@@ -9,29 +10,61 @@ import com.walletradar.domain.sync.BackfillSegmentRepository;
 import com.walletradar.domain.sync.SyncStatus;
 import com.walletradar.domain.sync.SyncStatusRepository;
 import com.walletradar.session.application.SessionPipelineStateService;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
+import org.springframework.scheduling.TaskScheduler;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ScheduledFuture;
 import java.util.stream.Collectors;
 
 /**
  * Promotes wallet×network raw completion into session-scoped backfill completion signals.
+ *
+ * <p>A short debounce window (DEBOUNCE_DELAY) is applied so that rapid sequential completions
+ * from multiple network segments within a single refresh cycle collapse into a single
+ * {@link SessionBackfillCompletedEvent}. Without debouncing, each network's segment fires the
+ * event independently, triggering redundant full-pipeline runs (linking, replay, snapshot).</p>
  */
 @Component
-@RequiredArgsConstructor
 @Slf4j
 public class SessionBackfillCompletionPublisher {
+
+    /** How long to wait after the last segment completion before firing the pipeline event. */
+    private static final Duration DEBOUNCE_DELAY = Duration.ofSeconds(8);
 
     private final UserSessionRepository userSessionRepository;
     private final SyncStatusRepository syncStatusRepository;
     private final BackfillSegmentRepository backfillSegmentRepository;
     private final ApplicationEventPublisher applicationEventPublisher;
     private final SessionPipelineStateService sessionPipelineStateService;
+    private final TaskScheduler taskScheduler;
+
+    /** Tracks the pending debounced fire per session. */
+    private final ConcurrentHashMap<String, ScheduledFuture<?>> pendingFires = new ConcurrentHashMap<>();
+
+    public SessionBackfillCompletionPublisher(
+            UserSessionRepository userSessionRepository,
+            SyncStatusRepository syncStatusRepository,
+            BackfillSegmentRepository backfillSegmentRepository,
+            ApplicationEventPublisher applicationEventPublisher,
+            SessionPipelineStateService sessionPipelineStateService,
+            @Qualifier(SchedulerConfig.SCHEDULER_POOL) TaskScheduler taskScheduler
+    ) {
+        this.userSessionRepository = userSessionRepository;
+        this.syncStatusRepository = syncStatusRepository;
+        this.backfillSegmentRepository = backfillSegmentRepository;
+        this.applicationEventPublisher = applicationEventPublisher;
+        this.sessionPipelineStateService = sessionPipelineStateService;
+        this.taskScheduler = taskScheduler;
+    }
 
     @EventListener
     public void onWalletNetworkBackfillCompleted(WalletNetworkBackfillCompletedEvent event) {
@@ -86,23 +119,56 @@ public class SessionBackfillCompletionPublisher {
             }
         }
 
+        // All segments currently visible are complete. Schedule the pipeline event with a short
+        // debounce so that remaining networks whose segments are still being planned (and will
+        // complete seconds later) don't each trigger a separate full-pipeline run.
+        scheduleDebounced(session);
+    }
+
+    private void scheduleDebounced(UserSession session) {
+        String sessionId = session.getId();
+        List<UserSession.SessionWallet> wallets = session.getWallets() == null ? List.of() : session.getWallets();
         int targetCount = targetCount(session);
 
+        ScheduledFuture<?> newFire = taskScheduler.schedule(
+                () -> fireSessionCompletion(sessionId, wallets, targetCount),
+                Instant.now().plus(DEBOUNCE_DELAY)
+        );
+
+        ScheduledFuture<?> existing = pendingFires.put(sessionId, newFire);
+        if (existing != null && !existing.isDone()) {
+            existing.cancel(false);
+            log.debug(
+                    "Backfill completion debounce reset: sessionId={}, delay={}s",
+                    sessionId,
+                    DEBOUNCE_DELAY.getSeconds()
+            );
+        } else {
+            log.debug(
+                    "Backfill completion debounce armed: sessionId={}, delay={}s",
+                    sessionId,
+                    DEBOUNCE_DELAY.getSeconds()
+            );
+        }
+    }
+
+    private void fireSessionCompletion(String sessionId, List<UserSession.SessionWallet> wallets, int targetCount) {
+        pendingFires.remove(sessionId);
         applicationEventPublisher.publishEvent(new SessionBackfillCompletedEvent(
-                session.getId(),
+                sessionId,
                 wallets.size(),
                 targetCount
         ));
         sessionPipelineStateService.markStageComplete(
-                session.getId(),
+                sessionId,
                 UserSession.PipelineStage.BACKFILL,
                 "Raw backfill complete"
         );
         log.info(
                 "Live session raw backfill complete: sessionId={}, wallets={}, integrations={}, targets={}",
-                session.getId(),
+                sessionId,
                 wallets.size(),
-                enabledIntegrations(session).size(),
+                "-",
                 targetCount
         );
     }

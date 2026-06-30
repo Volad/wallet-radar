@@ -75,27 +75,23 @@ describe('DashboardTransactionsPaneComponent', () => {
     expect(text).toContain('Page 2 / 3');
   });
 
-  it('emits search and filter changes', () => {
+  it('emits search and category changes', () => {
     const searchSpy = jasmine.createSpy('search');
-    const bridgeSpy = jasmine.createSpy('bridge');
-    const spamSpy = jasmine.createSpy('spam');
+    const categoriesSpy = jasmine.createSpy('categories');
 
     component.transactionSearchChange.subscribe(searchSpy);
-    component.bridgeStatusFilterChange.subscribe(bridgeSpy);
-    component.spamFilterChange.subscribe(spamSpy);
+    component.categoriesChange.subscribe(categoriesSpy);
 
     const searchInput = fixture.nativeElement.querySelector('input[type="search"]') as HTMLInputElement;
     searchInput.value = 'eth';
     searchInput.dispatchEvent(new Event('input'));
 
-    const chips = [...fixture.nativeElement.querySelectorAll('.bridge-filter-chip')] as HTMLButtonElement[];
-    chips.find((chip) => chip.textContent?.trim() === 'REVIEW')?.click();
-    chips.find((chip) => chip.textContent?.trim() === 'SPAM')?.click();
+    const chips = [...fixture.nativeElement.querySelectorAll('.cat-chip')] as HTMLButtonElement[];
+    chips.find((chip) => chip.textContent?.trim() === 'Swap')?.click();
     fixture.detectChanges();
 
     expect(searchSpy).toHaveBeenCalledWith('eth');
-    expect(bridgeSpy).toHaveBeenCalledWith('REVIEW');
-    expect(spamSpy).toHaveBeenCalledWith('SPAM_ONLY');
+    expect(categoriesSpy).toHaveBeenCalled();
   });
 
   it('emits page changes', () => {

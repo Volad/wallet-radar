@@ -83,17 +83,27 @@ public class SessionLpQueryService {
         if (sessionId == null || sessionId.isBlank()) {
             return Optional.empty();
         }
-        return userSessionRepository.findById(sessionId.trim()).map(session -> toView(session, scope));
+        return userSessionRepository.findById(sessionId.trim()).map(session -> toView(session, scope, null));
+    }
+
+    public Optional<LpPositionView> findSessionLpPosition(
+            String sessionId,
+            String correlationId,
+            LpPositionScope scope
+    ) {
+        if (sessionId == null || sessionId.isBlank() || correlationId == null || correlationId.isBlank()) {
+            return Optional.empty();
+        }
+        return userSessionRepository.findById(sessionId.trim())
+                .map(session -> toView(session, scope, correlationId.trim()))
+                .flatMap(view -> view.positions().stream().findFirst());
     }
 
     public boolean ownsCorrelationId(String sessionId, String correlationId) {
-        return findSessionLp(sessionId, LpPositionScope.ALL)
-                .map(view -> view.positions().stream()
-                        .anyMatch(p -> correlationId.equals(p.correlationId())))
-                .orElse(false);
+        return findSessionLpPosition(sessionId, correlationId, LpPositionScope.ALL).isPresent();
     }
 
-    private SessionLpView toView(UserSession session, LpPositionScope scope) {
+    private SessionLpView toView(UserSession session, LpPositionScope scope, String targetCorrelationId) {
         List<String> wallets = walletAddresses(session);
         AccountingUniverseService.AccountingUniverseScope universeScope = accountingUniverseService.resolveScope(session);
         List<NormalizedTransaction> txs = loadLpTransactions(wallets);
@@ -126,12 +136,28 @@ public class SessionLpQueryService {
             }
         }
 
-        List<LpPositionView> positions = accumulators.values().stream()
-                .sorted(Comparator.comparing(PositionAccumulator::enteredAt, Comparator.nullsLast(Comparator.reverseOrder())))
-                .map(acc -> toPositionView(acc, snapshots.get(acc.correlationId()), prices, ledgerPoints))
-                .filter(p -> !isDust(p))
-                .filter(p -> matchesScope(p, scope))
-                .toList();
+        List<LpPositionView> positions;
+        if (targetCorrelationId != null) {
+            PositionAccumulator target = accumulators.get(targetCorrelationId);
+            if (target == null) {
+                positions = List.of();
+            } else {
+                LpPositionView view = toPositionView(
+                        target,
+                        snapshots.get(target.correlationId()),
+                        prices,
+                        ledgerPoints
+                );
+                positions = isDust(view) || !matchesScope(view, scope) ? List.of() : List.of(view);
+            }
+        } else {
+            positions = accumulators.values().stream()
+                    .sorted(Comparator.comparing(PositionAccumulator::enteredAt, Comparator.nullsLast(Comparator.reverseOrder())))
+                    .map(acc -> toPositionView(acc, snapshots.get(acc.correlationId()), prices, ledgerPoints))
+                    .filter(p -> !isDust(p))
+                    .filter(p -> matchesScope(p, scope))
+                    .toList();
+        }
 
         return new SessionLpView(session.getId(), buildSummary(positions), positions);
     }
@@ -263,7 +289,7 @@ public class SessionLpQueryService {
         } else {
             openBase = depositsUsd;
         }
-        log.info("LP PnL base corrId={} closed={} depMarket={} hodlNow={} costBasis={} openBase={} isHodl={}",
+        log.debug("LP PnL base corrId={} closed={} depMarket={} hodlNow={} costBasis={} openBase={} isHodl={}",
                 acc.correlationId(), closed,
                 acc.depositedMarketUsd().toPlainString(),
                 hodlNow != null ? hodlNow.toPlainString() : "null",
@@ -1015,7 +1041,13 @@ public class SessionLpQueryService {
                     BigDecimal exitQty = flow.getQuantityDelta().signum() > 0
                             ? flow.getQuantityDelta()
                             : flow.getQuantityDelta().abs();
-                    netQtyBySymbol.merge(sym, exitQty, BigDecimal::subtract);
+                    // Use negate+add instead of subtract: Map.merge inserts the value directly when
+                    // the key is absent, so subtract would store a positive exitQty (wrong for a
+                    // position that has no prior LP_ENTRY in this accumulator). Negating the value
+                    // before merging ensures the key-absent case stores -exitQty (correct net zero
+                    // minus exit = negative), while the key-present case produces the same result:
+                    // existing + (-exitQty) == existing - exitQty.
+                    netQtyBySymbol.merge(sym, exitQty.negate(), BigDecimal::add);
                     if (flow.getValueUsd() != null) {
                         withdrawnUsd = withdrawnUsd.add(flow.getValueUsd(), MC);
                     }

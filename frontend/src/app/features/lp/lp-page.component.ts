@@ -11,7 +11,7 @@ import {
 } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { HttpErrorResponse } from '@angular/common/http';
-import { catchError, of, startWith } from 'rxjs';
+import { catchError, of, startWith, Subscription } from 'rxjs';
 
 import { COLORS, EVM_NETWORK_PRESENTATION_BY_ID } from '../../core/data/dashboard.constants';
 import {
@@ -22,9 +22,12 @@ import {
   LpPrecision,
   LpViewState,
 } from '../../core/models/lp.models';
-import { EvmNetworkId, SessionLpPositionResponse } from '../../core/models/wallet-api.models';
+import { EvmNetworkId, RefreshStateItemResponse, RefreshStatusResponse } from '../../core/models/wallet-api.models';
 import { LpDataService } from '../../core/services/lp-data.service';
+import { RefreshStatusPollerService } from '../../core/services/refresh-status-poller.service';
 import { WalletApiService } from '../../core/services/wallet-api.service';
+import { CopyHashComponent } from '../../core/components/copy-hash/copy-hash.component';
+import { FilterSidebarComponent } from '../../core/components/filter-sidebar/filter-sidebar.component';
 
 type EarningsChartMode = 'daily' | 'total';
 
@@ -75,7 +78,7 @@ const CHART_HEIGHT = 152;
 @Component({
   selector: 'wr-lp-page',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, CopyHashComponent, FilterSidebarComponent],
   templateUrl: './lp-page.component.html',
   styleUrl: './lp-page.component.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -83,6 +86,7 @@ const CHART_HEIGHT = 152;
 export class LpPageComponent implements OnChanges {
   private readonly lpDataService = inject(LpDataService);
   private readonly walletApiService = inject(WalletApiService);
+  private readonly refreshStatusPoller = inject(RefreshStatusPollerService);
   private readonly destroyRef = inject(DestroyRef);
 
   @Input() sessionId: string | null = null;
@@ -98,14 +102,112 @@ export class LpPageComponent implements OnChanges {
   readonly hideDust = signal(true);
   readonly positionScope = signal<LpPositionScope>('active');
   readonly earningsChartModes = signal<ReadonlyMap<string, EarningsChartMode>>(new Map());
-  readonly refreshingPositionIds = signal<ReadonlySet<string>>(new Set<string>());
+  readonly refreshStateById = signal<ReadonlyMap<string, RefreshStateItemResponse>>(new Map());
+  readonly refreshAnyActive = signal(false);
   readonly chartTooltip = signal<ChartTooltipState | null>(null);
   readonly copiedHashes = signal<ReadonlySet<string>>(new Set<string>());
+  private readonly pendingSingleRefreshIds = signal<ReadonlySet<string>>(new Set<string>());
+  private refreshPollSubscription: Subscription | null = null;
 
   ngOnChanges(changes: SimpleChanges): void {
     if ('sessionId' in changes || 'refreshNonce' in changes) {
       this.load();
+      this.startRefreshStatusPolling();
     }
+  }
+
+  private startRefreshStatusPolling(): void {
+    this.refreshPollSubscription?.unsubscribe();
+    this.refreshPollSubscription = null;
+    const sessionId = this.sessionId;
+    if (sessionId === null || sessionId.trim().length === 0) {
+      this.refreshStateById.set(new Map());
+      this.refreshAnyActive.set(false);
+      return;
+    }
+    this.refreshPollSubscription = this.refreshStatusPoller.startAdaptivePolling(
+      () => this.walletApiService.getLpRefreshStatus(sessionId),
+      {
+        onStatus: (status, previous) => this.applyRefreshStatus(status, previous),
+      },
+      this.destroyRef
+    );
+  }
+
+  private applyRefreshStatus(status: RefreshStatusResponse, previous: RefreshStatusResponse | null): void {
+    const priorLocal = this.refreshStateById();
+    const next = new Map<string, RefreshStateItemResponse>();
+    for (const item of status.items) {
+      const merged = item.status === 'SYNCED' && item.lastSyncedAt === null && item.completedAt !== null
+        ? { ...item, lastSyncedAt: item.completedAt }
+        : item;
+      next.set(item.id, merged);
+    }
+    this.refreshStateById.set(next);
+    this.refreshAnyActive.set(status.anyActive);
+
+    const newlySynced = status.items.filter((item) => {
+      if (item.status !== 'SYNCED') {
+        return false;
+      }
+      const prev = previous?.items.find((candidate) => candidate.id === item.id);
+      const local = priorLocal.get(item.id);
+      return prev?.status === 'UPDATING'
+        || prev?.status === 'QUEUED'
+        || local?.status === 'UPDATING'
+        || local?.status === 'QUEUED';
+    });
+    if (newlySynced.length === 0) {
+      return;
+    }
+
+    const pending = this.pendingSingleRefreshIds();
+    const singlePending = newlySynced.length === 1 && pending.has(newlySynced[0].id);
+    if (singlePending) {
+      this.reloadPosition(newlySynced[0].id);
+      const remaining = new Set(pending);
+      remaining.delete(newlySynced[0].id);
+      this.pendingSingleRefreshIds.set(remaining);
+      return;
+    }
+    this.pendingSingleRefreshIds.set(new Set());
+    this.load();
+  }
+
+  private reloadPosition(correlationId: string): void {
+    const sessionId = this.sessionId;
+    if (sessionId === null || sessionId.trim().length === 0) {
+      return;
+    }
+    this.lpDataService.getSessionLpPosition(sessionId, correlationId, this.positionScope()).pipe(
+      catchError(() => of(null)),
+      takeUntilDestroyed(this.destroyRef)
+    ).subscribe((position) => {
+      if (position === null) {
+        this.load();
+        return;
+      }
+      const state = this.viewState();
+      if (state.status !== 'success') {
+        this.load();
+        return;
+      }
+      const exists = state.data.positions.some((item) => item.correlationId === correlationId);
+      const positions = exists
+        ? state.data.positions.map((item) => item.correlationId === correlationId ? position : item)
+        : [...state.data.positions, position];
+      this.viewState.set({
+        status: 'success',
+        data: {
+          ...state.data,
+          positions,
+        },
+      });
+    });
+  }
+
+  refreshAllLoading(): boolean {
+    return this.refreshAnyActive() && this.positionScope() === 'active';
   }
 
   data(): LpData | null {
@@ -275,45 +377,79 @@ export class LpPageComponent implements OnChanges {
 
   refreshPosition(position: LpPosition): void {
     const sessionId = this.sessionId;
-    if (sessionId === null || position.status === 'closed') {
+    if (sessionId === null || position.status === 'closed' || this.isRefreshing(position.correlationId)) {
       return;
     }
-    const correlationId = position.correlationId;
-    this.refreshingPositionIds.set(new Set([...this.refreshingPositionIds(), correlationId]));
-    this.walletApiService.refreshLpPosition(sessionId, correlationId).pipe(
-      catchError((_error: HttpErrorResponse) => {
-        this.refreshingPositionIds.set(new Set(
-          [...this.refreshingPositionIds()].filter((id) => id !== correlationId)
-        ));
-        return of(null);
-      }),
+    this.pendingSingleRefreshIds.update((ids) => {
+      const next = new Set(ids);
+      next.add(position.correlationId);
+      return next;
+    });
+    this.markRefreshQueued(position.correlationId);
+    this.walletApiService.refreshLpPosition(sessionId, position.correlationId).pipe(
+      catchError((_error: HttpErrorResponse) => of(null)),
       takeUntilDestroyed(this.destroyRef)
-    ).subscribe((response: SessionLpPositionResponse | null) => {
-      this.refreshingPositionIds.set(new Set(
-        [...this.refreshingPositionIds()].filter((id) => id !== correlationId)
-      ));
-      if (response === null) {
-        return;
+    ).subscribe((response) => {
+      if (response !== null) {
+        this.applyRefreshStatus(response, { sessionId, items: [...this.refreshStateById().values()], anyActive: this.refreshAnyActive() });
       }
-      const state = this.viewState();
-      if (state.status !== 'success') {
-        return;
-      }
-      const mapped = this.lpDataService.mapPosition(response);
-      this.viewState.set({
-        status: 'success',
-        data: {
-          ...state.data,
-          positions: state.data.positions.map((item) =>
-            item.correlationId === correlationId ? mapped : item
-          ),
-        },
-      });
     });
   }
 
   isRefreshing(correlationId: string): boolean {
-    return this.refreshingPositionIds().has(correlationId);
+    const state = this.refreshStateById().get(correlationId);
+    return state?.status === 'QUEUED' || state?.status === 'UPDATING';
+  }
+
+  refreshAll(): void {
+    const sessionId = this.sessionId;
+    if (sessionId === null || this.refreshAllLoading() || this.positionScope() !== 'active') {
+      return;
+    }
+    this.walletApiService.refreshAllLpPositions(sessionId).pipe(
+      catchError((_error: HttpErrorResponse) => of(null)),
+      takeUntilDestroyed(this.destroyRef)
+    ).subscribe((response) => {
+      if (response !== null) {
+        this.applyRefreshStatus(response, { sessionId, items: [...this.refreshStateById().values()], anyActive: this.refreshAnyActive() });
+      }
+    });
+  }
+
+  syncStatusLabel(position: LpPosition): string {
+    if (this.isRefreshing(position.correlationId)) {
+      return 'Updating…';
+    }
+    const state = this.refreshStateById().get(position.correlationId);
+    if (state?.status === 'FAILED') {
+      return 'Refresh failed';
+    }
+    const freshness = this.formatSyncFreshness(position);
+    if (freshness !== null && (state?.status === 'SYNCED' || this.hasRecentSync(position))) {
+      return freshness;
+    }
+    if (position.snapshotStale) {
+      return 'Stale';
+    }
+    return freshness ?? 'Synced';
+  }
+
+  isSyncStale(position: LpPosition): boolean {
+    if (this.isRefreshing(position.correlationId)) {
+      return false;
+    }
+    const state = this.refreshStateById().get(position.correlationId);
+    if (state?.status === 'FAILED') {
+      return true;
+    }
+    if (this.hasRecentSync(position)) {
+      return false;
+    }
+    return position.snapshotStale;
+  }
+
+  isSyncUpdating(position: LpPosition): boolean {
+    return this.isRefreshing(position.correlationId);
   }
 
   earningsMode(correlationId: string): EarningsChartMode {
@@ -653,22 +789,68 @@ export class LpPageComponent implements OnChanges {
   }
 
   formatSnapshotFreshness(position: LpPosition): string {
-    if (position.snapshotAt === null) {
+    const freshness = this.formatSyncFreshness(position);
+    if (freshness === null) {
       return 'No snapshot';
     }
-    const captured = new Date(position.snapshotAt);
-    const ageMinutes = Math.floor((Date.now() - captured.getTime()) / 60_000);
+    return freshness === 'just now' ? 'Updated just now' : `Updated ${freshness}`;
+  }
+
+  private formatSyncFreshness(position: LpPosition): string | null {
+    const syncedAt = this.latestSyncAt(position);
+    if (syncedAt === null) {
+      return null;
+    }
+    const ageMinutes = Math.floor((Date.now() - syncedAt.getTime()) / 60_000);
     if (ageMinutes < 1) {
-      return 'Updated just now';
+      return 'just now';
     }
     if (ageMinutes < 60) {
-      return `Updated ${ageMinutes}m ago`;
+      return `${ageMinutes}m ago`;
     }
     const hours = Math.floor(ageMinutes / 60);
     if (hours < 48) {
-      return `Updated ${hours}h ago`;
+      return `${hours}h ago`;
     }
-    return `Updated ${Math.floor(hours / 24)}d ago`;
+    return `${Math.floor(hours / 24)}d ago`;
+  }
+
+  private hasRecentSync(position: LpPosition): boolean {
+    const syncedAt = this.latestSyncAt(position);
+    if (syncedAt === null) {
+      return false;
+    }
+    return Date.now() - syncedAt.getTime() < 5 * 60_000;
+  }
+
+  private latestSyncAt(position: LpPosition): Date | null {
+    const state = this.refreshStateById().get(position.correlationId);
+    const candidates = [state?.lastSyncedAt, state?.completedAt, position.snapshotAt]
+      .filter((raw): raw is string => raw !== null && raw !== undefined)
+      .map((raw) => new Date(raw))
+      .filter((date) => !Number.isNaN(date.getTime()));
+    if (candidates.length === 0) {
+      return null;
+    }
+    return new Date(Math.max(...candidates.map((date) => date.getTime())));
+  }
+
+  private markRefreshQueued(correlationId: string): void {
+    const now = new Date().toISOString();
+    const next = new Map(this.refreshStateById());
+    const previous = next.get(correlationId);
+    next.set(correlationId, {
+      id: correlationId,
+      status: 'QUEUED',
+      trigger: 'MANUAL',
+      requestedAt: now,
+      startedAt: null,
+      completedAt: null,
+      lastSyncedAt: previous?.lastSyncedAt ?? null,
+      error: null,
+    });
+    this.refreshStateById.set(next);
+    this.refreshAnyActive.set(true);
   }
 
   miniRangeStyle(position: LpPosition): { readonly leftPct: number; readonly widthPct: number; readonly currentPct: number } | null {

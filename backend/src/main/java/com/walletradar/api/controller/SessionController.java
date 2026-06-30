@@ -198,8 +198,7 @@ public class SessionController {
             @RequestParam(defaultValue = "50") Integer limit,
             @RequestParam(defaultValue = "0") Integer offset,
             @RequestParam(required = false) String search,
-            @RequestParam(required = false) String bridgeStatus,
-            @RequestParam(defaultValue = "HIDE_SPAM") String spamFilter,
+            @RequestParam(name = "category", required = false) List<String> categories,
             @RequestParam(name = "walletId", required = false) List<String> walletIds,
             @RequestParam(name = "networkId", required = false) List<String> networkIds
     ) {
@@ -209,8 +208,7 @@ public class SessionController {
                     limit,
                     offset,
                     search,
-                    bridgeStatus,
-                    spamFilter,
+                    categories,
                     walletIds,
                     parseNetworkIds(networkIds)
             );
@@ -255,6 +253,7 @@ public class SessionController {
                         view.phaseProgress().leftCount(),
                         view.phaseProgress().totalCount()
                 ),
+                view.lastSyncedAt(),
                 view.wallets().stream()
                         .map(wallet -> new SessionBackfillStatusResponse.SessionWalletBackfillStatus(
                                 wallet.address(),
@@ -347,6 +346,7 @@ public class SessionController {
                                 integration.status(),
                                 integration.displayName(),
                                 integration.accountRef(),
+                                integration.color(),
                                 integration.maskedKey(),
                                 integration.readOnly(),
                                 integration.capabilities(),
@@ -428,15 +428,17 @@ public class SessionController {
         if (rawNetworkIds == null || rawNetworkIds.isEmpty()) {
             return List.of();
         }
-        try {
-            return rawNetworkIds.stream()
-                    .filter(value -> value != null && !value.isBlank())
-                    .map(value -> NetworkId.valueOf(value.trim().toUpperCase(Locale.ROOT)))
-                    .distinct()
-                    .toList();
-        } catch (IllegalArgumentException exception) {
-            throw new IllegalArgumentException("networkId contains unsupported value");
-        }
+        return rawNetworkIds.stream()
+                .filter(value -> value != null && !value.isBlank())
+                .flatMap(value -> {
+                    try {
+                        return java.util.stream.Stream.of(NetworkId.valueOf(value.trim().toUpperCase(Locale.ROOT)));
+                    } catch (IllegalArgumentException ignored) {
+                        return java.util.stream.Stream.empty();
+                    }
+                })
+                .distinct()
+                .toList();
     }
 
     private static String normalizedSessionIdOrThrow(String sessionId) {

@@ -1,12 +1,20 @@
 package com.walletradar.api.controller;
 
+import com.walletradar.api.dto.RefreshStatusResponse;
 import com.walletradar.api.dto.SessionLendingResponse;
+import com.walletradar.lending.application.LendingGroupRefreshStateService;
+import com.walletradar.lending.application.LendingRefreshOrchestrator;
 import com.walletradar.lending.application.SessionLendingQueryService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.util.Locale;
 
 /**
  * Session-scoped lending workspace API.
@@ -17,10 +25,49 @@ import org.springframework.web.bind.annotation.RestController;
 public class LendingController {
 
     private final SessionLendingQueryService sessionLendingQueryService;
+    private final LendingRefreshOrchestrator refreshOrchestrator;
+    private final LendingGroupRefreshStateService refreshStateService;
 
     @GetMapping("/{sessionId}/lending")
     public SessionLendingResponse getSessionLending(@PathVariable String sessionId) {
-        return sessionLendingQueryService.findSessionLending(normalizedSessionIdOrThrow(sessionId))
+        return loadSessionLending(normalizedSessionIdOrThrow(sessionId));
+    }
+
+    @GetMapping("/{sessionId}/lending/refresh-status")
+    public RefreshStatusResponse getLendingRefreshStatus(@PathVariable String sessionId) {
+        String normalized = normalizedSessionIdOrThrow(sessionId);
+        sessionLendingQueryService.findSessionLending(normalized)
+                .orElseThrow(() -> new ApiNotFoundException("SESSION_NOT_FOUND", "Session not found"));
+        return refreshStateService.getStatus(normalized);
+    }
+
+    @PostMapping("/{sessionId}/lending/refresh")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public RefreshStatusResponse refreshAllLending(@PathVariable String sessionId) {
+        String normalized = normalizedSessionIdOrThrow(sessionId);
+        sessionLendingQueryService.findSessionLending(normalized)
+                .orElseThrow(() -> new ApiNotFoundException("SESSION_NOT_FOUND", "Session not found"));
+        refreshOrchestrator.triggerRefreshAllOpenGroups(normalized);
+        return refreshStateService.getStatus(normalized);
+    }
+
+    @PostMapping("/{sessionId}/lending/groups/{groupKey}/refresh")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public RefreshStatusResponse refreshGroup(
+            @PathVariable String sessionId,
+            @PathVariable String groupKey
+    ) {
+        String normalized = normalizedSessionIdOrThrow(sessionId);
+        String normalizedGroupKey = groupKey.trim().toLowerCase(Locale.ROOT);
+        if (!sessionLendingQueryService.ownsGroupId(normalized, normalizedGroupKey)) {
+            throw new ApiNotFoundException("LENDING_GROUP_NOT_FOUND", "Lending group not found for session");
+        }
+        refreshOrchestrator.triggerRefreshGroup(normalized, normalizedGroupKey);
+        return refreshStateService.getStatus(normalized);
+    }
+
+    private SessionLendingResponse loadSessionLending(String sessionId) {
+        return sessionLendingQueryService.findSessionLending(sessionId)
                 .map(view -> new SessionLendingResponse(
                         view.sessionId(),
                         new SessionLendingResponse.Summary(
@@ -44,6 +91,7 @@ public class LendingController {
                                         group.healthStatus(),
                                         group.healthSource(),
                                         group.healthStale(),
+                                        group.lastRefreshedAt(),
                                         group.supplyUsd(),
                                         group.borrowUsd(),
                                         group.netExposureUsd(),

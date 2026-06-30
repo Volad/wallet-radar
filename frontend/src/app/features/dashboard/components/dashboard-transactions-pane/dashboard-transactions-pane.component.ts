@@ -1,10 +1,12 @@
 import { CommonModule } from '@angular/common';
-import { ChangeDetectionStrategy, Component, EventEmitter, Input, Output, computed, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, EventEmitter, HostListener, Input, Output, computed, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 
 import { COLORS } from '../../../../core/data/dashboard.constants';
 import {
+  ALL_TRANSACTION_CATEGORIES,
   BridgeStatus,
+  DEFAULT_TRANSACTION_CATEGORIES,
   EditableTransactionDraft,
   EditableTransactionFlow,
   FlowRole,
@@ -12,6 +14,7 @@ import {
   NetworkInfo,
   PriceSource,
   PRICE_SOURCES,
+  TransactionCategory,
   TransactionFlow,
   TransactionItem,
   TransactionStatus,
@@ -19,10 +22,9 @@ import {
   TRANSACTION_TYPES,
   WalletId,
   WalletInfo,
-  TransactionBridgeFilter,
-  TransactionSpamFilter,
 } from '../../../../core/models/dashboard.models';
 import { formatDateTimeWithSeconds } from '../../../../core/utils/date-time.util';
+import { CopyHashComponent } from '../../../../core/components/copy-hash/copy-hash.component';
 
 type SaveState = 'idle' | 'saving' | 'saved';
 type PillVariant = 'def' | 'cyan' | 'green' | 'red' | 'amber' | 'purple' | 'blue';
@@ -30,7 +32,7 @@ type PillVariant = 'def' | 'cyan' | 'green' | 'red' | 'amber' | 'purple' | 'blue
 @Component({
   selector: 'wr-dashboard-transactions-pane',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, CopyHashComponent],
   templateUrl: './dashboard-transactions-pane.component.html',
   styleUrl: './dashboard-transactions-pane.component.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -51,12 +53,8 @@ export class DashboardTransactionsPaneComponent {
     this.transactionSearch.set(value ?? '');
   }
 
-  @Input() set bridgeStatusFilterValue(value: TransactionBridgeFilter) {
-    this.bridgeStatusFilter.set(value ?? 'ALL');
-  }
-
-  @Input() set spamFilterValue(value: TransactionSpamFilter) {
-    this.spamFilter.set(value ?? 'HIDE_SPAM');
+  @Input() set enabledCategories(value: ReadonlySet<TransactionCategory>) {
+    this.enabledCategoriesSignal.set(value ?? new Set(DEFAULT_TRANSACTION_CATEGORIES));
   }
 
   @Input() set page(value: number) {
@@ -79,20 +77,27 @@ export class DashboardTransactionsPaneComponent {
   @Input() emptyStateMessage = 'No transactions for current filters.';
 
   @Output() readonly transactionSearchChange = new EventEmitter<string>();
-  @Output() readonly bridgeStatusFilterChange = new EventEmitter<TransactionBridgeFilter>();
-  @Output() readonly spamFilterChange = new EventEmitter<TransactionSpamFilter>();
+  @Output() readonly categoriesChange = new EventEmitter<ReadonlySet<TransactionCategory>>();
   @Output() readonly pageChange = new EventEmitter<number>();
 
   readonly colors = COLORS;
   readonly transactionTypes = TRANSACTION_TYPES;
   readonly priceSources = PRICE_SOURCES;
   readonly flowRoles: ReadonlyArray<FlowRole> = ['BUY', 'SELL', 'FEE', 'TRANSFER'];
-  readonly bridgeFilters: ReadonlyArray<TransactionBridgeFilter> = ['ALL', 'BRIDGE_OUT', 'BRIDGE_IN', 'MATCHED', 'REVIEW'];
-  readonly spamFilters: ReadonlyArray<TransactionSpamFilter> = ['HIDE_SPAM', 'ALL', 'SPAM_ONLY'];
+
+  readonly INLINE_CATEGORIES: ReadonlyArray<TransactionCategory> = [
+    'SWAP', 'LP', 'LENDING', 'BRIDGE', 'EXTERNAL_TRANSFER', 'INTERNAL_TRANSFER',
+  ];
+  readonly OVERFLOW_CATEGORIES: ReadonlyArray<TransactionCategory> = [
+    'NEED_REVIEW', 'REWARD', 'DUST', 'SPAM',
+  ];
+  private readonly DEFAULT_OVERFLOW = new Set<TransactionCategory>(['NEED_REVIEW', 'REWARD']);
 
   readonly transactionSearch = signal('');
-  readonly bridgeStatusFilter = signal<TransactionBridgeFilter>('ALL');
-  readonly spamFilter = signal<TransactionSpamFilter>('HIDE_SPAM');
+  readonly enabledCategoriesSignal = signal<ReadonlySet<TransactionCategory>>(
+    new Set(DEFAULT_TRANSACTION_CATEGORIES)
+  );
+  readonly overflowOpen = signal(false);
   readonly pageSignal = signal(0);
   readonly totalCountSignal = signal(0);
   readonly expandedTransactionIds = signal<ReadonlySet<string>>(new Set<string>());
@@ -101,6 +106,15 @@ export class DashboardTransactionsPaneComponent {
   readonly saveState = signal<SaveState>('idle');
   readonly transactions = signal<ReadonlyArray<TransactionItem>>([]);
   readonly hasBridgeStatuses = computed(() => this.transactions().some((tx) => tx.bridgeStatus !== null && tx.bridgeStatus !== undefined));
+
+  readonly overflowBadgeCount = computed(() => {
+    const enabled = this.enabledCategoriesSignal();
+    let count = 0;
+    for (const cat of this.OVERFLOW_CATEGORIES) {
+      if (enabled.has(cat) !== this.DEFAULT_OVERFLOW.has(cat)) count++;
+    }
+    return count;
+  });
   readonly totalPages = computed(() => {
     const total = this.totalCountSignal();
     return total === 0 ? 1 : Math.ceil(total / this.pageSize);
@@ -127,22 +141,48 @@ export class DashboardTransactionsPaneComponent {
     this.transactionSearchChange.emit(value);
   }
 
-  setBridgeStatusFilter(value: TransactionBridgeFilter): void {
-    this.bridgeStatusFilter.set(value);
-    this.bridgeStatusFilterChange.emit(value);
+  toggleCategory(cat: TransactionCategory, event?: Event): void {
+    event?.stopPropagation();
+    const current = this.enabledCategoriesSignal();
+    const next = new Set(current);
+    if (next.has(cat)) {
+      next.delete(cat);
+    } else {
+      next.add(cat);
+    }
+    this.enabledCategoriesSignal.set(next);
+    this.categoriesChange.emit(next);
   }
 
-  isBridgeFilterActive(value: TransactionBridgeFilter): boolean {
-    return this.bridgeStatusFilter() === value;
+  isCategoryEnabled(cat: TransactionCategory): boolean {
+    return this.enabledCategoriesSignal().has(cat);
   }
 
-  setSpamFilter(value: TransactionSpamFilter): void {
-    this.spamFilter.set(value);
-    this.spamFilterChange.emit(value);
+  categoryLabel(cat: TransactionCategory): string {
+    switch (cat) {
+      case 'SWAP': return 'Swap';
+      case 'LP': return 'LP';
+      case 'LENDING': return 'Lending';
+      case 'BRIDGE': return 'Bridge';
+      case 'EXTERNAL_TRANSFER': return 'Ext. Transfer';
+      case 'INTERNAL_TRANSFER': return 'Int. Transfer';
+      case 'NEED_REVIEW': return 'Need Review';
+      case 'REWARD': return 'Reward';
+      case 'DUST': return 'Dust';
+      case 'SPAM': return 'Spam';
+    }
   }
 
-  isSpamFilterActive(value: TransactionSpamFilter): boolean {
-    return this.spamFilter() === value;
+  toggleOverflow(event?: Event): void {
+    event?.stopPropagation();
+    this.overflowOpen.update((v) => !v);
+  }
+
+  @HostListener('document:click')
+  closeOverflow(): void {
+    if (this.overflowOpen()) {
+      this.overflowOpen.set(false);
+    }
   }
 
   previousPage(event?: Event): void {

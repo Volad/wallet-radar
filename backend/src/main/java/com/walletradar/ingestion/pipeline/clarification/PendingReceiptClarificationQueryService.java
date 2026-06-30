@@ -434,6 +434,23 @@ public class PendingReceiptClarificationQueryService {
         return claimIfRequested(limited, workerId, leaseSeconds, now);
     }
 
+    /**
+     * Releases all active (future) clarification leases across all PENDING_CLARIFICATION transactions.
+     * Intended to run once at startup so that items leased by a previously crashed process become
+     * immediately claimable — without waiting for the full lease TTL (300 s by default).
+     * Safe for single-instance backends; idempotent.
+     */
+    public int releaseAllStaleLeases() {
+        Instant now = Instant.now();
+        Query query = new Query(new Criteria().andOperator(
+                Criteria.where("status").is(NormalizedTransactionStatus.PENDING_CLARIFICATION),
+                Criteria.where("clarificationLeaseUntil").gt(now)
+        ));
+        Update release = new Update().unset("clarificationLeaseUntil");
+        com.mongodb.client.result.UpdateResult result = mongoOperations.updateMulti(query, release, NormalizedTransaction.class);
+        return (int) result.getModifiedCount();
+    }
+
     private List<NormalizedTransaction> claimIfRequested(
             List<NormalizedTransaction> selected,
             String workerId,

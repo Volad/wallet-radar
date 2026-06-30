@@ -1,5 +1,6 @@
 package com.walletradar.domain.session;
 
+import com.walletradar.auth.IdentityProvider;
 import com.walletradar.domain.common.NetworkId;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
@@ -16,10 +17,12 @@ import java.util.List;
 /**
  * Session-specific wallet configuration for the UI (address + label/color + selected networks).
  * Session identity is provided by client-generated UUID (sessionId).
+ * Authenticated sessions also carry an {@link IdentityBinding} linking them to a Google account.
  */
 @Document(collection = "user_sessions")
 @CompoundIndex(name = "wallets_address_idx", def = "{'wallets.address': 1}")
 @CompoundIndex(name = "integration_account_ref_idx", def = "{'integrations.accountRef': 1}")
+@CompoundIndex(name = "identity_idx", def = "{'identity.provider': 1, 'identity.subject': 1}", unique = true, sparse = true)
 @NoArgsConstructor
 @Getter
 @Setter
@@ -31,6 +34,7 @@ public class UserSession {
     private String id;
 
     private String accountingUniverseId;
+    private IdentityBinding identity;
     private List<SessionWallet> wallets = new ArrayList<>();
     private List<SessionIntegration> integrations = new ArrayList<>();
     private SessionSettings settings;
@@ -38,6 +42,20 @@ public class UserSession {
     private Instant createdAt;
     private Instant updatedAt;
     private Instant lastSeenAt;
+
+    @NoArgsConstructor
+    @Getter
+    @Setter
+    public static class IdentityBinding {
+        private IdentityProvider provider;
+        /** Google "sub" claim — stable user identifier (idpId). */
+        private String subject;
+        private String email;
+        private Boolean emailVerified;
+        private String displayName;
+        private String pictureUrl;
+        private Instant linkedAt;
+    }
 
     @NoArgsConstructor
     @Getter
@@ -59,6 +77,7 @@ public class UserSession {
         private IntegrationStatus status;
         private String displayName;
         private String accountRef;
+        private String color;
         private EncryptedSecret encryptedCredentials;
         private boolean readOnly;
         private List<String> capabilities = new ArrayList<>();

@@ -14,7 +14,10 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.pricing.domain.CanonicalAssetCatalog;
 import com.walletradar.pricing.persistence.CurrentPriceQuoteDocument;
 import com.walletradar.pricing.persistence.HistoricalPriceDocument;
+import com.walletradar.lending.persistence.LendingHealthFactorSnapshot;
 import com.walletradar.lending.persistence.LendingMarketRateSnapshot;
+import com.walletradar.lending.persistence.LendingGroupRefreshState;
+import com.walletradar.lending.persistence.LendingGroupRefreshStateRepository;
 import com.walletradar.session.application.AccountingUniverseService;
 import lombok.RequiredArgsConstructor;
 import org.bson.Document;
@@ -89,6 +92,7 @@ public class SessionLendingQueryService {
     private final LendingMarketMetricEstimator metricEstimator;
     private final LendingMarketRateSnapshotService marketRateSnapshotService;
     private final LendingHealthFactorSnapshotService healthFactorSnapshotService;
+    private final LendingGroupRefreshStateRepository lendingGroupRefreshStateRepository;
     private final LendingMarketKeyResolver marketKeyResolver;
     private final LendingReceiptIdentityService receiptIdentityService;
 
@@ -97,6 +101,16 @@ public class SessionLendingQueryService {
             return Optional.empty();
         }
         return userSessionRepository.findById(sessionId.trim()).map(this::toView);
+    }
+
+    public boolean ownsGroupId(String sessionId, String groupId) {
+        if (sessionId == null || sessionId.isBlank() || groupId == null || groupId.isBlank()) {
+            return false;
+        }
+        String normalizedGroupId = groupId.trim().toLowerCase(Locale.ROOT);
+        return findSessionLending(sessionId)
+                .map(view -> view.groups().stream().anyMatch(group -> normalizedGroupId.equals(group.id())))
+                .orElse(false);
     }
 
     private SessionLendingView toView(UserSession session) {
@@ -635,6 +649,7 @@ public class SessionLendingQueryService {
             String healthStatus,
             String healthSource,
             Boolean healthStale,
+            Instant lastRefreshedAt,
             BigDecimal supplyUsd,
             BigDecimal borrowUsd,
             BigDecimal netExposureUsd,
@@ -860,7 +875,8 @@ public class SessionLendingQueryService {
             BigDecimal healthProgress,
             String status,
             String source,
-            Boolean stale
+            Boolean stale,
+            Instant lastRefreshedAt
     ) {
     }
 
@@ -1309,6 +1325,7 @@ public class SessionLendingQueryService {
                     healthMetric.status(),
                     healthMetric.source(),
                     healthMetric.stale(),
+                    healthMetric.lastRefreshedAt(),
                     supplyUsd.add(closedEarnedUsd, MC),
                     borrowUsd,
                     supplyUsd.subtract(borrowUsd, MC).add(closedEarnedUsd, MC),
@@ -1590,6 +1607,7 @@ public class SessionLendingQueryService {
                     supplyUsd,
                     borrowUsd
             );
+            Instant lastRefreshedAt = resolveLastRefreshedAt();
             if (healthFactorSnapshotService == null
                     || borrowUsd == null
                     || borrowUsd.signum() <= 0
@@ -1601,7 +1619,8 @@ public class SessionLendingQueryService {
                         fallback.healthProgress(),
                         fallback.status(),
                         fallback.source(),
-                        false
+                        false,
+                        lastRefreshedAt
                 );
             }
             String networkId = key.networkId() == null ? null : key.networkId().name();
@@ -1616,15 +1635,46 @@ public class SessionLendingQueryService {
                     healthProgress(snapshot.getHealthFactor()),
                     fallback.status(),
                     LendingHealthFactorSnapshotService.LIVE_PROTOCOL,
-                    false
+                    false,
+                    snapshot.getCapturedAt() != null ? snapshot.getCapturedAt() : lastRefreshedAt
             )).orElseGet(() -> new HealthMetricSnapshot(
                     fallback.healthFactor(),
                     fallback.healthLabel(),
                     fallback.healthProgress(),
                     fallback.status(),
                     "ACCOUNTING_ESTIMATE",
-                    borrowUsd.signum() > 0
+                    borrowUsd.signum() > 0,
+                    lastRefreshedAt
             ));
+        }
+
+        private Instant resolveLastRefreshedAt() {
+            Instant fromHealth = null;
+            if (healthFactorSnapshotService != null
+                    && key.protocol() != null
+                    && key.networkId() != null
+                    && key.walletAddress() != null) {
+                fromHealth = healthFactorSnapshotService.latest(
+                        sessionId,
+                        key.protocol(),
+                        key.networkId().name(),
+                        key.walletAddress()
+                ).map(LendingHealthFactorSnapshot::getCapturedAt).orElse(null);
+            }
+            Instant fromRefreshState = lendingGroupRefreshStateRepository.findById(key.id())
+                    .map(LendingGroupRefreshState::getLastSyncedAt)
+                    .orElse(null);
+            return maxInstant(fromHealth, fromRefreshState);
+        }
+
+        private static Instant maxInstant(Instant left, Instant right) {
+            if (left == null) {
+                return right;
+            }
+            if (right == null) {
+                return left;
+            }
+            return left.isAfter(right) ? left : right;
         }
 
         private String healthLabel(BigDecimal healthFactor) {

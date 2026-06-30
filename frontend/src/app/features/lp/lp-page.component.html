@@ -21,23 +21,16 @@
       @let summary = filteredSummary();
       <div class="lp-layout">
         <!-- ── Sidebar ─────────────────────────────────────────────── -->
-        <aside class="lp-sidebar" aria-label="LP filters">
-          <div class="sidebar-head">
-            <div class="sidebar-head-title">
-              <span class="sidebar-title-text">Filters</span>
-              <span class="sidebar-title-arrow">›</span>
-            </div>
-            <span class="sidebar-subtitle">Dashboard</span>
-            <span class="sidebar-subtitle">Wallets &amp; networks</span>
-            @if (activeFilterCount() > 0) {
-              <button type="button" class="sidebar-clear" (click)="clearFilters()">clear {{ activeFilterCount() }}</button>
-            }
-          </div>
+        <wr-filter-sidebar
+          title="LP"
+          subtitle="Wallets & networks"
+          [activeCount]="activeFilterCount()"
+          (clearFilters)="clearFilters()"
+          aria-label="LP filters">
 
-          <div class="sidebar-scroll">
-            @if (wallets().length > 0) {
-              <div class="filter-group-label">Wallets</div>
-              @for (wallet of wallets(); track wallet) {
+          @if (wallets().length > 0) {
+            <div class="filter-group-label">Wallets</div>
+            @for (wallet of wallets(); track wallet) {
               <button
                 type="button"
                 class="filter-chip"
@@ -51,72 +44,72 @@
                 <span class="chip-dot" style="background:var(--wr-cyan)"></span>
                 <span class="chip-label">{{ shortAddress(wallet) }}</span>
               </button>
-              }
             }
+          }
 
-            <div class="filter-group-label">Protocol</div>
-            @for (protocol of protocols(); track protocol) {
-              <button
-                type="button"
-                class="filter-chip"
-                [class.active]="selectedProtocols().has(protocol)"
-                (click)="toggleProtocol(protocol)">
-                <span class="chip-check" [style.border-color]="selectedProtocols().has(protocol) ? 'var(--wr-green)' : 'rgba(221,227,240,0.14)'">
-                  @if (selectedProtocols().has(protocol)) {
-                    <span class="chip-check-fill" style="background:var(--wr-green)"></span>
-                  }
-                </span>
-                <span class="chip-dot" style="background:var(--wr-green)"></span>
-                <span class="chip-label">{{ protocol }}</span>
-              </button>
-            }
-
-            <div class="filter-group-label">Network</div>
-            @for (network of networks(); track network) {
-              <button
-                type="button"
-                class="filter-chip"
-                [class.active]="selectedNetworks().has(network)"
-                (click)="toggleNetwork(network)">
-                <span class="chip-check" [style.border-color]="selectedNetworks().has(network) ? networkColor(network) : 'rgba(221,227,240,0.14)'">
-                  @if (selectedNetworks().has(network)) {
-                    <span class="chip-check-fill" [style.background]="networkColor(network)"></span>
-                  }
-                </span>
-                <span class="chip-dot" [style.background]="networkColor(network)"></span>
-                <span class="chip-label">{{ networkLabel(network) }}</span>
-              </button>
-            }
-
-            <div class="filter-group-label">Status</div>
-            @for (status of statuses(); track status.id) {
-              <button
-                type="button"
-                class="filter-chip"
-                [class.active]="selectedStatuses().has(status.id)"
-                (click)="toggleStatus(status.id)">
-                <span class="chip-check" [style.border-color]="selectedStatuses().has(status.id) ? statusChipColor(status.id) : 'rgba(221,227,240,0.14)'">
-                  @if (selectedStatuses().has(status.id)) {
-                    <span class="chip-check-fill" [style.background]="statusChipColor(status.id)"></span>
-                  }
-                </span>
-                <span class="chip-dot" [style.background]="statusChipColor(status.id)"></span>
-                <span class="chip-label">{{ status.label }}</span>
-              </button>
-            }
-
-            <div class="filter-group-label">Display</div>
-            <button type="button" class="filter-chip" [class.active]="hideDust()" (click)="toggleHideDust()">
-              <span class="chip-check" [style.border-color]="hideDust() ? 'var(--wr-subtle)' : 'rgba(221,227,240,0.14)'">
-                @if (hideDust()) {
-                  <span class="chip-check-fill" style="background:var(--wr-subtle)"></span>
+          <div class="filter-group-label">Protocol</div>
+          @for (protocol of protocols(); track protocol) {
+            <button
+              type="button"
+              class="filter-chip"
+              [class.active]="selectedProtocols().has(protocol)"
+              (click)="toggleProtocol(protocol)">
+              <span class="chip-check" [style.border-color]="selectedProtocols().has(protocol) ? 'var(--wr-green)' : 'rgba(221,227,240,0.14)'">
+                @if (selectedProtocols().has(protocol)) {
+                  <span class="chip-check-fill" style="background:var(--wr-green)"></span>
                 }
               </span>
-              <span class="chip-dot" style="background:var(--wr-subtle)"></span>
-              <span class="chip-label">Hide dust</span>
+              <span class="chip-dot" style="background:var(--wr-green)"></span>
+              <span class="chip-label">{{ protocol }}</span>
             </button>
-          </div>
-        </aside>
+          }
+
+          <div class="filter-group-label">Network</div>
+          @for (network of networks(); track network) {
+            <button
+              type="button"
+              class="filter-chip"
+              [class.active]="selectedNetworks().has(network)"
+              (click)="toggleNetwork(network)">
+              <span class="chip-check" [style.border-color]="selectedNetworks().has(network) ? networkColor(network) : 'rgba(221,227,240,0.14)'">
+                @if (selectedNetworks().has(network)) {
+                  <span class="chip-check-fill" [style.background]="networkColor(network)"></span>
+                }
+              </span>
+              <span class="chip-dot" [style.background]="networkColor(network)"></span>
+              <span class="chip-label">{{ networkLabel(network) }}</span>
+            </button>
+          }
+
+          <div class="filter-group-label">Status</div>
+          @for (status of statuses(); track status.id) {
+            <button
+              type="button"
+              class="filter-chip"
+              [class.active]="selectedStatuses().has(status.id)"
+              (click)="toggleStatus(status.id)">
+              <span class="chip-check" [style.border-color]="selectedStatuses().has(status.id) ? statusChipColor(status.id) : 'rgba(221,227,240,0.14)'">
+                @if (selectedStatuses().has(status.id)) {
+                  <span class="chip-check-fill" [style.background]="statusChipColor(status.id)"></span>
+                }
+              </span>
+              <span class="chip-dot" [style.background]="statusChipColor(status.id)"></span>
+              <span class="chip-label">{{ status.label }}</span>
+            </button>
+          }
+
+          <div class="filter-group-label">Display</div>
+          <button type="button" class="filter-chip" [class.active]="hideDust()" (click)="toggleHideDust()">
+            <span class="chip-check" [style.border-color]="hideDust() ? 'var(--wr-subtle)' : 'rgba(221,227,240,0.14)'">
+              @if (hideDust()) {
+                <span class="chip-check-fill" style="background:var(--wr-subtle)"></span>
+              }
+            </span>
+            <span class="chip-dot" style="background:var(--wr-subtle)"></span>
+            <span class="chip-label">Hide dust</span>
+          </button>
+
+        </wr-filter-sidebar>
 
         <!-- ── Main content ──────────────────────────────────────────── -->
         <main class="lp-content">
@@ -135,6 +128,21 @@
               <button type="button" role="tab" class="scope-tab" [class.active]="positionScope() === 'all'" (click)="setPositionScope('all')">All</button>
             </div>
             <div class="toolbar-right">
+              @if (positionScope() === 'active') {
+                <button
+                  type="button"
+                  class="toolbar-update-all"
+                  [class.loading]="refreshAllLoading()"
+                  [disabled]="refreshAllLoading()"
+                  (click)="refreshAll()">
+                  @if (refreshAllLoading()) {
+                    <span class="sync-spinner" aria-hidden="true"></span>
+                    Updating…
+                  } @else {
+                    Update all open
+                  }
+                </button>
+              }
               <span class="toolbar-label">Total fees:</span>
               <span class="mono pos toolbar-value">{{ formatUsd(summary.feesEarnedUsd) }}</span>
             </div>
@@ -157,6 +165,7 @@
             <span class="col-label">Fees <span class="col-label-sub">/ IL</span></span>
             <span class="col-label">Net P&amp;L</span>
             <span class="col-label">APR</span>
+            <span class="col-label"></span>
           </div>
 
           <!-- Scrollable position list -->
@@ -192,6 +201,20 @@
                       </span>
                       @if (position.feeTierPct !== null) {
                         <span class="fee-pill">{{ position.feeTierPct }}%</span>
+                      }
+                      @if (!closed) {
+                        <span
+                          class="sync-badge"
+                          [class.stale]="isSyncStale(position)"
+                          [class.updating]="isSyncUpdating(position)"
+                          [class.fresh]="!isSyncStale(position) && !isSyncUpdating(position)">
+                          @if (isSyncUpdating(position)) {
+                            <span class="sync-spinner" aria-hidden="true"></span>
+                          } @else if (isSyncStale(position)) {
+                            <span class="sync-dot" aria-hidden="true"></span>
+                          }
+                          {{ syncStatusLabel(position) }}
+                        </span>
                       }
                     </span>
                     <span class="identity-line2">
@@ -245,23 +268,27 @@
                     <span class="row-chevron" [class.rotated]="expanded">▾</span>
                   </span>
 
+                  <!-- Refresh -->
+                  <span class="row-refresh-cell">
+                    @if (!closed) {
+                      <button
+                        type="button"
+                        class="row-refresh-btn"
+                        [disabled]="isRefreshing(position.correlationId)"
+                        (click)="refreshPosition(position); $event.stopPropagation()"
+                        aria-label="Refresh position">
+                        <svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                          <path d="M9.5 1.5A4.5 4.5 0 1 0 10 5.5"/>
+                          <path d="M9.5 1.5v2.5h-2.5"/>
+                        </svg>
+                      </button>
+                    }
+                  </span>
+
                 </button>
 
                 @if (expanded) {
                   <div class="position-detail">
-                    <div class="detail-toolbar">
-                      @if (!closed) {
-                        <button
-                          type="button"
-                          class="refresh-btn"
-                          [disabled]="isRefreshing(position.correlationId)"
-                          (click)="refreshPosition(position); $event.stopPropagation()">
-                          {{ isRefreshing(position.correlationId) ? 'Refreshing…' : 'Refresh snapshot' }}
-                        </button>
-                        <span class="freshness" [class.stale]="position.snapshotStale">{{ formatSnapshotFreshness(position) }}</span>
-                      }
-                    </div>
-
                     <!-- 4 stat cards -->
                     <div class="stat-cards">
                       <div class="stat-card">
@@ -590,14 +617,9 @@
                                   <span class="mono">{{ formatUsd(txn.totalValueUsd) }}</span>
                                 }
                               </span>
-                              <!-- Tx hash (text + copy button) -->
+                              <!-- Tx hash -->
                               <span class="txn-hash-col">
-                                @if (txn.txHash !== null) {
-                                  <span class="txn-hash-text" [title]="txn.txHash">{{ shortHash(txn.txHash) }}</span>
-                                  <button type="button" class="txn-copy-btn" [class.copied]="isCopied(txn.txHash)" (click)="copyTxHash(txn.txHash)">
-                                    {{ isCopied(txn.txHash) ? 'Copied' : 'Copy' }}
-                                  </button>
-                                }
+                                <wr-copy-hash [hash]="txn.txHash" />
                               </span>
                             </div>
                           }

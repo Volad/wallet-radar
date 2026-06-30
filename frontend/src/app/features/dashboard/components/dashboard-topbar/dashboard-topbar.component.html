@@ -32,35 +32,64 @@
 
   @if (showRefresh) {
     <div class="refresh-wrap">
-      <button
-        type="button"
-        class="wallet-add-btn settings-link refresh-btn"
-        [disabled]="!canRefresh || isRefreshing"
-        (click)="onRefresh()">
-        @if (isRefreshing) {
-          <span class="spinner mini" aria-hidden="true"></span>
+      <div class="refresh-row">
+        @if (!isRefreshing && lastSyncedLabel) {
+          <span class="last-synced-label" aria-label="Last synced">{{ lastSyncedLabel }}</span>
         }
-        <span>{{ isRefreshing ? 'Refreshing…' : 'Refresh' }}</span>
-      </button>
+        <button
+          type="button"
+          class="wallet-add-btn settings-link refresh-btn"
+          [disabled]="!canRefresh || isRefreshing"
+          (click)="onRefresh()">
+          @if (isRefreshing) {
+            <span class="spinner mini" aria-hidden="true"></span>
+          }
+          <span>{{ isRefreshing ? 'Syncing…' : 'Sync' }}</span>
+        </button>
+      </div>
       @if (refreshMessage.length > 0) {
         <span class="refresh-message" aria-live="polite">{{ refreshMessage }}</span>
       }
     </div>
   }
 
-  @for (wallet of wallets; track wallet.id) {
-    <div class="wallet-chip">
-      <span class="wallet-dot" [style.background]="wallet.color" aria-hidden="true"></span>
-      <span class="mono">{{ shortAddress(wallet.address) }}</span>
-      <span>· {{ wallet.label }}</span>
-    </div>
-  }
+  <!-- Universe dropdown -->
+  <div class="universe-wrap" (click)="$event.stopPropagation()">
+    <button
+      type="button"
+      class="universe-trigger"
+      [class.open]="universeOpen"
+      (click)="toggleUniverse($event)"
+      aria-haspopup="listbox"
+      [attr.aria-expanded]="universeOpen">
+      <span class="universe-label">Universe</span>
+      <span class="universe-count">{{ universeCount }}</span>
+      <span class="universe-chevron" [class.rotated]="universeOpen" aria-hidden="true">▾</span>
+    </button>
 
-  @for (integration of integrations; track integration.id) {
-    <div class="wallet-chip integration-chip" [style.--integrationColor]="integration.color">
-      <span class="integration-icon" [style.color]="integration.color" aria-hidden="true">{{ integration.icon }}</span>
-      <span class="mono">{{ shortIntegrationRef(integration.accountRef) }}</span>
-      <span>· {{ integration.label }}</span>
-    </div>
-  }
+    @if (universeOpen) {
+      <div class="universe-panel" role="listbox">
+        @if (onChainWallets.length > 0) {
+          <div class="universe-group-label">On-chain</div>
+          @for (wallet of onChainWallets; track wallet.id) {
+            <div class="universe-row" role="option">
+              <span class="universe-dot" [style.background]="wallet.color"></span>
+              <span class="universe-name">{{ wallet.label }}</span>
+              <span class="universe-ref mono">{{ shortAddress(wallet.address) }}</span>
+            </div>
+          }
+        }
+        @if (integrations.length > 0) {
+          <div class="universe-group-label">Integrations</div>
+          @for (integration of integrations; track integration.id) {
+            <div class="universe-row" role="option">
+              <span class="universe-dot" [style.background]="integration.color"></span>
+              <span class="universe-name">{{ integration.label }}</span>
+              <span class="universe-ref mono">{{ shortIntegrationRef(integration.accountRef) }}</span>
+            </div>
+          }
+        }
+      </div>
+    }
+  </div>
 </header>

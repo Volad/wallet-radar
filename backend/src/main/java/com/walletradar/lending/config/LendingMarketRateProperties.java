@@ -35,6 +35,18 @@ public class LendingMarketRateProperties {
         this.aaveV3 = normalized;
     }
 
+    /** True when on-chain Aave V3 health fetch is configured for the network. */
+    public boolean isAaveV3HealthFetchEnabled(String networkId) {
+        if (networkId == null || networkId.isBlank()) {
+            return false;
+        }
+        AaveV3NetworkConfig config = aaveV3.get(networkId.trim().toUpperCase(Locale.ROOT));
+        return config != null
+                && config.isEnabled()
+                && config.getPoolAddress() != null
+                && !config.getPoolAddress().isBlank();
+    }
+
     @NoArgsConstructor
     @Getter
     @Setter

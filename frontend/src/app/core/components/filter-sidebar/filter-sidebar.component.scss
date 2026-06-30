@@ -1,0 +1,174 @@
+// ── Host ─────────────────────────────────────────────────────────────────────
+
+:host {
+  display: flex;
+  flex-direction: column;
+  width: 11.75rem;
+  flex: 0 0 11.75rem;
+  border-right: 1px solid var(--wr-border);
+  background: var(--wr-surface);
+  font-family: var(--wr-font-mono);
+  overflow-y: scroll;
+  overflow-x: hidden;
+  scrollbar-gutter: stable both-edges;
+  transition: width 0.18s ease;
+  flex-shrink: 0;
+  min-height: 0;
+
+  &.collapsed {
+    width: 2.25rem;
+    flex: 0 0 2.25rem;
+    overflow: hidden;
+  }
+
+  // Thin scrollbar
+  scrollbar-width: thin;
+  scrollbar-color: #222840 transparent;
+
+  &::-webkit-scrollbar {
+    width: 3px;
+    height: 3px;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background: #222840;
+    border-radius: 2px;
+  }
+}
+
+// ── Head ─────────────────────────────────────────────────────────────────────
+
+.sidebar-head {
+  flex: 0 0 auto;
+  padding: 0.65rem 0.75rem 0.7rem;
+  border-bottom: 1px solid var(--wr-border);
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--wr-surface);
+}
+
+.filters-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.35rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 0.52rem;
+  font-weight: 700;
+  color: var(--wr-muted);
+  border: 0;
+  background: transparent;
+  padding: 0;
+  width: 100%;
+  cursor: pointer;
+  font-family: var(--wr-font-mono);
+  margin-bottom: 0.25rem;
+
+  &:last-child {
+    margin-bottom: 0;
+  }
+}
+
+.toggle-label {
+  flex: 1;
+  text-align: left;
+}
+
+.filter-count {
+  min-width: 0.88rem;
+  height: 0.88rem;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--wr-cyan-mid);
+  background: var(--wr-cyan-soft);
+  color: var(--wr-cyan);
+  font-size: 0.5rem;
+  font-weight: 800;
+  padding: 0 0.15rem;
+  flex-shrink: 0;
+}
+
+.chevron {
+  font-size: 0.95rem;
+  color: var(--wr-subtle);
+  transition: transform 0.18s ease;
+  line-height: 1;
+
+  &.rotated {
+    transform: rotate(180deg);
+  }
+}
+
+.filters-sub {
+  color: var(--wr-subtle);
+  font-size: 9px;
+  line-height: 1.45;
+  margin: 0;
+}
+
+// ── Scroll area ───────────────────────────────────────────────────────────────
+
+.sidebar-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 0.5rem 0 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+// ── Clear all ─────────────────────────────────────────────────────────────────
+
+.clear-wrap {
+  flex: 0 0 auto;
+  padding: 0.35rem 0.75rem 0.65rem;
+  border-top: 1px solid var(--wr-border);
+}
+
+.clear-btn {
+  border: 1px solid var(--wr-border);
+  border-radius: 0.22rem;
+  background: var(--wr-elevated);
+  color: var(--wr-subtle);
+  font-size: 0.52rem;
+  padding: 0.18rem 0.42rem;
+  cursor: pointer;
+  font-family: var(--wr-font-mono);
+  width: 100%;
+  text-align: left;
+
+  &:hover {
+    color: var(--wr-text);
+    border-color: var(--wr-border-strong);
+  }
+}
+
+// ── Responsive ────────────────────────────────────────────────────────────────
+
+@media (max-width: 900px) {
+  :host {
+    width: 100% !important;
+    flex: 0 0 auto !important;
+    border-right: 0;
+    border-bottom: 1px solid var(--wr-border);
+    overflow-y: visible;
+    overflow-x: hidden;
+    max-height: 14rem;
+
+    &.collapsed {
+      max-height: none;
+    }
+  }
+
+  .sidebar-scroll {
+    max-height: 10rem;
+    overflow-y: auto;
+  }
+}

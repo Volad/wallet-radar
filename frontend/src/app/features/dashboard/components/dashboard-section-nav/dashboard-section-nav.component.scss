@@ -61,10 +61,17 @@
 }
 
 .section-glyph {
-  font-size: 18px;
-  line-height: 1;
+  width: 18px;
+  height: 18px;
   display: grid;
   place-items: center;
+
+  svg {
+    display: block;
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+  }
 }
 
 .soon-dot {

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.common.PriceSource;
 import com.walletradar.pricing.domain.PriceQuote;
+import com.walletradar.pricing.resolver.external.defillama.DefiLlamaClient;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -36,6 +37,7 @@ public class GmxProtocolSnapshotValuationService {
     private static final String TOTAL_SUPPLY_SELECTOR = "0x18160ddd";
 
     private final WebClient.Builder webClientBuilder;
+    private final DefiLlamaClient defiLlamaClient;
 
     private final Map<NetworkId, SnapshotCacheEntry> snapshotCache = new LinkedHashMap<>();
 
@@ -55,6 +57,24 @@ public class GmxProtocolSnapshotValuationService {
 
         String normalizedMarketToken = normalizeAddress(marketTokenAddress);
         Instant refreshTime = requestedAt == null ? Instant.now() : requestedAt;
+
+        // DefiLlama provides the accurate GM token price that accounts for GMX v2 PnL
+        // and internal pool dynamics; prefer it over our own pool-value / totalSupply formula.
+        Optional<BigDecimal> defiLlamaPrice = defiLlamaClient.currentPrice(networkId, normalizedMarketToken);
+        if (defiLlamaPrice.isPresent()) {
+            log.debug("GMX market token priced via DefiLlama: network={} token={} price={}",
+                    networkId, normalizedMarketToken, defiLlamaPrice.get());
+            return Optional.of(new PriceQuote(
+                    defiLlamaPrice.get(),
+                    PriceSource.DEFILLAMA,
+                    refreshTime,
+                    "USD",
+                    "defillama:" + DefiLlamaClient.chainSlug(networkId).orElse(networkId.name().toLowerCase())
+                            + ":" + normalizedMarketToken
+            ));
+        }
+
+        log.debug("DefiLlama price unavailable for GMX token {}, falling back to pool-value formula", normalizedMarketToken);
         GmxSnapshot snapshot = loadSnapshot(networkId, endpoints, refreshTime).orElse(null);
         if (snapshot == null) {
             return Optional.empty();

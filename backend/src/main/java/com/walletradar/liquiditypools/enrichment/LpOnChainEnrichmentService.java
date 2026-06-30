@@ -84,19 +84,19 @@ public class LpOnChainEnrichmentService {
             boolean fresh,
             String failureReason
     ) {
-        static EnrichmentResult success(LpPositionSnapshot snapshot) {
+        public static EnrichmentResult success(LpPositionSnapshot snapshot) {
             return new EnrichmentResult(Optional.of(snapshot), true, null);
         }
 
-        static EnrichmentResult stale(LpPositionSnapshot snapshot) {
+        public static EnrichmentResult stale(LpPositionSnapshot snapshot) {
             return new EnrichmentResult(Optional.of(snapshot), false, null);
         }
 
-        static EnrichmentResult failed(String reason) {
+        public static EnrichmentResult failed(String reason) {
             return new EnrichmentResult(Optional.empty(), false, reason);
         }
 
-        static EnrichmentResult empty() {
+        public static EnrichmentResult empty() {
             return new EnrichmentResult(Optional.empty(), false, null);
         }
     }

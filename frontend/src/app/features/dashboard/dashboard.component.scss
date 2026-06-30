@@ -1186,6 +1186,18 @@
 
 .section-header-icon {
   font-size: 0.68rem;
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+
+  svg {
+    display: block;
+    width: 14px;
+    height: 14px;
+  }
 }
 
 .section-header-title {
@@ -2121,6 +2133,13 @@ select {
   .workspace {
     display: block;
     overflow: auto;
+  }
+
+  .lp-workspace,
+  .lending-workspace {
+    height: auto;
+    min-height: calc(100vh - 7rem);
+    overflow: visible;
   }
 
   .filters {

@@ -36,6 +36,23 @@ public class LendingHealthFactorSnapshotService {
         ).filter(snapshot -> LIVE_PROTOCOL.equals(snapshot.getSource()) && snapshot.getHealthFactor() != null);
     }
 
+    public Optional<LendingHealthFactorSnapshot> latest(
+            String sessionId,
+            String protocolKey,
+            String networkId,
+            String walletAddress
+    ) {
+        if (sessionId == null || protocolKey == null || networkId == null || walletAddress == null) {
+            return Optional.empty();
+        }
+        return repository.findFirstBySessionIdAndProtocolKeyAndNetworkIdAndWalletAddressOrderByCapturedAtDesc(
+                sessionId,
+                protocolKey,
+                networkId,
+                walletAddress
+        );
+    }
+
     public LendingHealthFactorSnapshot save(LendingHealthFactorSnapshot snapshot) {
         return repository.save(snapshot);
     }

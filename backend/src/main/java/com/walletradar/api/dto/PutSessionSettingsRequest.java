@@ -50,7 +50,8 @@ public record PutSessionSettingsRequest(
             String provider,
             String displayName,
             String apiKey,
-            String apiSecret
+            String apiSecret,
+            String color
     ) {
     }
 

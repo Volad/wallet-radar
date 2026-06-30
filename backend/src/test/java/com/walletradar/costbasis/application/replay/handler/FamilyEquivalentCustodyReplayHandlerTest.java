@@ -131,8 +131,10 @@ class FamilyEquivalentCustodyReplayHandlerTest {
         assertThat(selection.pairs()).hasSize(1);
         assertThat(selection.pairs().getFirst().outbound().flow()).isSameAs(usdcOut);
         assertThat(selection.pairs().getFirst().inbound().flow()).isSameAs(aTokenIn);
-        assertThat(selection.selectedByIndex()).containsOnlyKeys(0, 1);
-        assertThat(selection.selectedByIndex()).doesNotContainKey(2);
+        // The BUY accrual (index 2) is suppressed: added to selectedByIndex so that
+        // replayGenericFlowsSkipping cannot process it as a second REALLOCATE_IN.
+        // This prevents cost basis double-counting (Silo Finance regression).
+        assertThat(selection.selectedByIndex()).containsOnlyKeys(0, 1, 2);
     }
 
     @Test

@@ -10,6 +10,8 @@ import com.walletradar.session.application.AccountingUniverseService;
 import com.walletradar.session.application.SessionPipelineActivityService;
 import com.walletradar.session.application.SessionPipelineStateService;
 import lombok.RequiredArgsConstructor;
+
+import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.event.EventListener;
@@ -30,8 +32,13 @@ public class PortfolioSnapshotRefreshJob {
     private static final Logger log = LoggerFactory.getLogger(PortfolioSnapshotRefreshJob.class);
     private static final String STAGE_NAME = "portfolio-snapshot-refresh";
     private static final Duration HEARTBEAT_INTERVAL = Duration.ofSeconds(30);
+    /** Minimum gap between on-chain balance refreshes for the same session (avoids redundant RPC storms). */
+    private static final Duration SNAPSHOT_MIN_INTERVAL = Duration.ofSeconds(45);
 
     private final AtomicBoolean running = new AtomicBoolean(false);
+
+    /** Tracks when each session's snapshot was last fully refreshed (in-process, non-persistent). */
+    private final ConcurrentHashMap<String, Instant> lastRefreshedAt = new ConcurrentHashMap<>();
 
     private final UserSessionRepository userSessionRepository;
     private final AccountingUniverseService accountingUniverseService;
@@ -80,6 +87,24 @@ public class PortfolioSnapshotRefreshJob {
 
     private int runSnapshotRefreshForSession(String trigger, UserSession session) {
         String sessionId = session.getId();
+
+        // Guard against redundant RPC storms when multiple accounting-replay-completed events
+        // fire in quick succession (e.g. when several backfill batches trigger separate pipeline
+        // runs). The manual trigger bypasses this check.
+        if (!"manual".equals(trigger)) {
+            Instant last = lastRefreshedAt.get(sessionId);
+            if (last != null && Duration.between(last, Instant.now()).compareTo(SNAPSHOT_MIN_INTERVAL) < 0) {
+                log.info(
+                        "Portfolio snapshot refresh skipped (TTL): sessionId={}, trigger={}, lastRefreshedAt={}, minIntervalSec={}",
+                        sessionId,
+                        trigger,
+                        last,
+                        SNAPSHOT_MIN_INTERVAL.getSeconds()
+                );
+                return 0;
+            }
+        }
+
         AccountingUniverseService.AccountingUniverseScope scope = accountingUniverseService.resolveScope(session);
         StageHeartbeat heartbeat = new StageHeartbeat(sessionId);
         sessionPipelineActivityService.markRunning(sessionId, UserSession.PipelineStage.PORTFOLIO_SNAPSHOT_REFRESH);
@@ -108,6 +133,7 @@ public class PortfolioSnapshotRefreshJob {
                     sessionId,
                     refreshedQuotes
             );
+            lastRefreshedAt.put(sessionId, Instant.now());
             sessionPipelineStateService.markStageComplete(
                     sessionId,
                     UserSession.PipelineStage.PORTFOLIO_SNAPSHOT_REFRESH,

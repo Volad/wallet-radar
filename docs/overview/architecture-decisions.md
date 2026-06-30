@@ -47,8 +47,9 @@
 
 ### Assumptions
 
-- A single user or small household runs the instance. No auth and no multi-tenant isolation are required.
-- `sessionId` is client-generated and stable; backend persists the associated wallet set in `user_sessions`.
+- A single user or small household runs the instance. Multi-tenant isolation is not required.
+- Sessions can optionally be bound to a Google identity (ADR-038) for cross-device restore. Without binding, the session UUID is client-generated and stable.
+- `sessionId` is persisted server-side in `user_sessions`; when auth is enabled (`walletradar.auth.enabled=true`), the canonical `sessionId` is taken from the signed JWT cookie, not `localStorage`.
 - `tracked_wallets` is a derived installation-wide projection of all tracked wallet addresses.
 - A 2-year backfill window is sufficient for automated reconstruction; older basis requires explicit incomplete-history handling.
 - Bybit is the only CEX source in scope for v3.

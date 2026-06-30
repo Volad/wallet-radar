@@ -1,7 +1,9 @@
 import { CommonModule } from '@angular/common';
 import { ChangeDetectionStrategy, Component, DestroyRef, Input, OnChanges, OnDestroy, SimpleChanges, inject, signal } from '@angular/core';
+import { FilterSidebarComponent } from '../../core/components/filter-sidebar/filter-sidebar.component';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { catchError, of, startWith } from 'rxjs';
+import { catchError, of, startWith, Subscription } from 'rxjs';
+import { HttpErrorResponse } from '@angular/common/http';
 
 import { COLORS, EVM_NETWORK_PRESENTATION_BY_ID } from '../../core/data/dashboard.constants';
 import {
@@ -15,8 +17,10 @@ import {
   LendingPosition,
   LendingViewState,
 } from '../../core/models/lending.models';
-import { EvmNetworkId } from '../../core/models/wallet-api.models';
+import { EvmNetworkId, RefreshStateItemResponse, RefreshStatusResponse } from '../../core/models/wallet-api.models';
 import { LendingDataService } from '../../core/services/lending-data.service';
+import { RefreshStatusPollerService } from '../../core/services/refresh-status-poller.service';
+import { WalletApiService } from '../../core/services/wallet-api.service';
 
 interface LendingCycleSection {
   readonly id: string;
@@ -39,13 +43,15 @@ interface LendingAssetPnlLine {
 @Component({
   selector: 'wr-lending-page',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, FilterSidebarComponent],
   templateUrl: './lending-page.component.html',
   styleUrl: './lending-page.component.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class LendingPageComponent implements OnChanges, OnDestroy {
   private readonly lendingDataService = inject(LendingDataService);
+  private readonly walletApiService = inject(WalletApiService);
+  private readonly refreshStatusPoller = inject(RefreshStatusPollerService);
   private readonly destroyRef = inject(DestroyRef);
 
   @Input() sessionId: string | null = null;
@@ -57,6 +63,7 @@ export class LendingPageComponent implements OnChanges, OnDestroy {
   readonly copiedValueKey = signal<string | null>(null);
   private copyResetTimerId: number | null = null;
   readonly collapsedGroupIds = signal<ReadonlySet<string>>(new Set<string>());
+  private groupsInitialized = false;
   readonly expandedCycleIds = signal<ReadonlySet<string>>(new Set<string>());
   readonly expandedLoopGroupIds = signal<ReadonlySet<string>>(new Set<string>());
   readonly selectedWallets = signal<ReadonlySet<string>>(new Set<string>());
@@ -65,11 +72,75 @@ export class LendingPageComponent implements OnChanges, OnDestroy {
   readonly selectedMarkets = signal<ReadonlySet<string>>(new Set<string>());
   readonly selectedCycleStatuses = signal<ReadonlySet<string>>(new Set<string>());
   readonly historyFilters = signal<ReadonlyMap<string, LendingHistoryFilter>>(new Map());
+  readonly refreshStateById = signal<ReadonlyMap<string, RefreshStateItemResponse>>(new Map());
+  readonly refreshAnyActive = signal(false);
+  private refreshPollSubscription: Subscription | null = null;
 
   ngOnChanges(changes: SimpleChanges): void {
     if ('sessionId' in changes || 'refreshNonce' in changes) {
+      if ('sessionId' in changes) {
+        this.groupsInitialized = false;
+      }
+      this.load();
+      this.startRefreshStatusPolling();
+    }
+  }
+
+  private startRefreshStatusPolling(): void {
+    this.refreshPollSubscription?.unsubscribe();
+    this.refreshPollSubscription = null;
+    const sessionId = this.sessionId;
+    if (sessionId === null || sessionId.trim().length === 0) {
+      this.refreshStateById.set(new Map());
+      this.refreshAnyActive.set(false);
+      return;
+    }
+    this.refreshPollSubscription = this.refreshStatusPoller.startAdaptivePolling(
+      () => this.walletApiService.getLendingRefreshStatus(sessionId),
+      {
+        onStatus: (status, previous) => this.applyRefreshStatus(status, previous),
+      },
+      this.destroyRef
+    );
+  }
+
+  private applyRefreshStatus(status: RefreshStatusResponse, previous: RefreshStatusResponse | null): void {
+    const priorLocal = this.refreshStateById();
+    const next = new Map<string, RefreshStateItemResponse>();
+    for (const item of status.items) {
+      const normalizedId = this.normalizeGroupId(item.id);
+      const merged = item.status === 'SYNCED' && item.lastSyncedAt === null && item.completedAt !== null
+        ? { ...item, lastSyncedAt: item.completedAt }
+        : item;
+      next.set(normalizedId, merged);
+    }
+    this.refreshStateById.set(next);
+    this.refreshAnyActive.set(status.anyActive);
+
+    const shouldReload = status.items.some((item) => {
+      if (item.status !== 'SYNCED') {
+        return false;
+      }
+      const normalizedId = this.normalizeGroupId(item.id);
+      const prev = previous?.items.find(
+        (candidate) => this.normalizeGroupId(candidate.id) === normalizedId
+      );
+      const local = priorLocal.get(normalizedId);
+      if (prev?.status === 'UPDATING' || prev?.status === 'QUEUED') {
+        return true;
+      }
+      if (local?.status === 'UPDATING' || local?.status === 'QUEUED') {
+        return true;
+      }
+      return prev?.status !== 'SYNCED' && local?.status !== 'SYNCED';
+    });
+    if (shouldReload) {
       this.load();
     }
+  }
+
+  refreshAllLendingLoading(): boolean {
+    return this.refreshAnyActive();
   }
 
   ngOnDestroy(): void {
@@ -215,7 +286,13 @@ export class LendingPageComponent implements OnChanges, OnDestroy {
         const expandedCyclesBefore = this.expandedCycleIds();
         this.viewState.set({ status: 'success', data: value });
         const groupIds = new Set(value.groups.map((group) => group.id));
-        this.collapsedGroupIds.set(new Set([...collapsedBefore].filter((id) => groupIds.has(id))));
+        if (!this.groupsInitialized) {
+          // Collapse all markets by default on first load
+          this.groupsInitialized = true;
+          this.collapsedGroupIds.set(new Set(groupIds));
+        } else {
+          this.collapsedGroupIds.set(new Set([...collapsedBefore].filter((id) => groupIds.has(id))));
+        }
         const cycleIds = new Set(value.groups.flatMap((group) => group.cycles.map((cycle) => cycle.id)));
         const openCycleIds = value.groups.flatMap((group) => group.cycles)
           .filter((cycle) => cycle.status === 'OPEN')
@@ -491,7 +568,223 @@ export class LendingPageComponent implements OnChanges, OnDestroy {
   }
 
   isHealthStale(group: LendingGroup): boolean {
-    return group.healthSource === 'ACCOUNTING_ESTIMATE' || group.healthSource === 'STALE';
+    return group.healthStale;
+  }
+
+  isRefreshingGroup(groupId: string): boolean {
+    const state = this.refreshStateById().get(this.normalizeGroupId(groupId));
+    return state?.status === 'QUEUED' || state?.status === 'UPDATING';
+  }
+
+  isSyncUpdating(groupId: string): boolean {
+    return this.isRefreshingGroup(groupId);
+  }
+
+  isSyncFailed(groupId: string): boolean {
+    return this.refreshStateById().get(this.normalizeGroupId(groupId))?.status === 'FAILED';
+  }
+
+  isSyncStale(group: LendingGroup): boolean {
+    if (this.isSyncUpdating(group.id)) {
+      return false;
+    }
+    if (this.isSyncFailed(group.id)) {
+      return true;
+    }
+    if (this.hasRecentSync(group)) {
+      return false;
+    }
+    return group.healthStale;
+  }
+
+  syncStatusLabel(group: LendingGroup): string {
+    if (this.isSyncUpdating(group.id)) {
+      return 'Updating…';
+    }
+    const state = this.refreshStateById().get(this.normalizeGroupId(group.id));
+    if (state?.status === 'FAILED') {
+      return 'Refresh failed';
+    }
+    const freshness = this.formatGroupFreshness(group);
+    if (freshness !== null && (state?.status === 'SYNCED' || this.hasRecentSync(group))) {
+      return freshness;
+    }
+    if (this.isHealthStale(group)) {
+      return 'Stale';
+    }
+    return freshness ?? 'Synced';
+  }
+
+  syncStatusTitle(group: LendingGroup): string {
+    if (this.isSyncUpdating(group.id)) {
+      return 'Refreshing health factor and protocol APY';
+    }
+    const state = this.refreshStateById().get(this.normalizeGroupId(group.id));
+    if (state?.status === 'FAILED' && state.error !== null) {
+      return state.error;
+    }
+    const freshness = this.formatGroupFreshness(group);
+    if (freshness !== null) {
+      const healthNote = this.isHealthStale(group)
+        ? ' · Health factor is an accounting estimate'
+        : '';
+      return `Last refreshed ${freshness}${healthNote}`;
+    }
+    if (this.isHealthStale(group)) {
+      return 'Health factor is an accounting estimate or stale snapshot';
+    }
+    return 'No refresh recorded yet';
+  }
+
+  private hasRecentSync(group: LendingGroup): boolean {
+    const refreshedAt = this.latestSyncAt(group);
+    if (refreshedAt === null) {
+      return false;
+    }
+    return Date.now() - refreshedAt.getTime() < 5 * 60_000;
+  }
+
+  private latestSyncAt(group: LendingGroup): Date | null {
+    const state = this.refreshStateById().get(this.normalizeGroupId(group.id));
+    const candidates = [state?.lastSyncedAt, state?.completedAt, group.lastRefreshedAt]
+      .filter((raw): raw is string => raw !== null && raw !== undefined)
+      .map((raw) => new Date(raw))
+      .filter((date) => !Number.isNaN(date.getTime()));
+    if (candidates.length === 0) {
+      return null;
+    }
+    return new Date(Math.max(...candidates.map((date) => date.getTime())));
+  }
+
+  refreshGroup(group: LendingGroup, event?: Event): void {
+    event?.stopPropagation();
+    event?.preventDefault();
+    const sessionId = this.sessionId;
+    if (sessionId === null || group.status !== 'OPEN' || this.isRefreshingGroup(group.id)) {
+      return;
+    }
+    this.markRefreshQueued(group.id);
+    this.walletApiService.refreshLendingGroup(sessionId, group.id).pipe(
+      catchError((error: HttpErrorResponse) => {
+        this.markRefreshFailed(group.id, this.refreshErrorMessage(error));
+        return of(null);
+      }),
+      takeUntilDestroyed(this.destroyRef)
+    ).subscribe((response) => {
+      if (response !== null) {
+        this.applyRefreshStatus(response, { sessionId, items: [...this.refreshStateById().values()], anyActive: this.refreshAnyActive() });
+      }
+    });
+  }
+
+  refreshAllLending(): void {
+    const sessionId = this.sessionId;
+    if (sessionId === null || this.refreshAllLendingLoading()) {
+      return;
+    }
+    this.walletApiService.refreshAllLending(sessionId).pipe(
+      catchError((error: HttpErrorResponse) => {
+        for (const group of this.groups().filter((item) => item.status === 'OPEN')) {
+          this.markRefreshFailed(group.id, this.refreshErrorMessage(error));
+        }
+        return of(null);
+      }),
+      takeUntilDestroyed(this.destroyRef)
+    ).subscribe((response) => {
+      if (response !== null) {
+        this.applyRefreshStatus(response, { sessionId, items: [...this.refreshStateById().values()], anyActive: this.refreshAnyActive() });
+      }
+    });
+  }
+
+  private formatGroupFreshness(group: LendingGroup): string | null {
+    const refreshedAt = this.latestSyncAt(group);
+    if (refreshedAt === null) {
+      return null;
+    }
+    const ageMinutes = Math.floor((Date.now() - refreshedAt.getTime()) / 60_000);
+    if (ageMinutes < 1) {
+      return 'just now';
+    }
+    if (ageMinutes < 60) {
+      return `${ageMinutes}m ago`;
+    }
+    const hours = Math.floor(ageMinutes / 60);
+    if (hours < 48) {
+      return `${hours}h ago`;
+    }
+    return `${Math.floor(hours / 24)}d ago`;
+  }
+
+  private markRefreshQueued(groupId: string): void {
+    const normalizedId = this.normalizeGroupId(groupId);
+    const now = new Date().toISOString();
+    const next = new Map(this.refreshStateById());
+    const previous = next.get(normalizedId);
+    next.set(normalizedId, {
+      id: normalizedId,
+      status: 'QUEUED',
+      trigger: 'MANUAL',
+      requestedAt: now,
+      startedAt: null,
+      completedAt: null,
+      lastSyncedAt: previous?.lastSyncedAt ?? null,
+      error: null,
+    });
+    this.refreshStateById.set(next);
+    this.refreshAnyActive.set(true);
+  }
+
+  private markRefreshFailed(groupId: string, error: string): void {
+    const normalizedId = this.normalizeGroupId(groupId);
+    const now = new Date().toISOString();
+    const next = new Map(this.refreshStateById());
+    const previous = next.get(normalizedId);
+    next.set(normalizedId, {
+      id: normalizedId,
+      status: 'FAILED',
+      trigger: 'MANUAL',
+      requestedAt: previous?.requestedAt ?? now,
+      startedAt: previous?.startedAt ?? null,
+      completedAt: now,
+      lastSyncedAt: previous?.lastSyncedAt ?? null,
+      error,
+    });
+    this.refreshStateById.set(next);
+    this.refreshAnyActive.set(false);
+  }
+
+  private refreshErrorMessage(error: HttpErrorResponse): string {
+    if (typeof error.error === 'object' && error.error !== null && 'message' in error.error) {
+      const message = (error.error as { message?: unknown }).message;
+      if (typeof message === 'string' && message.trim().length > 0) {
+        return message;
+      }
+    }
+    if (error.status === 0) {
+      return 'Network error while requesting refresh';
+    }
+    return error.statusText || `Refresh request failed (${error.status})`;
+  }
+
+  private normalizeGroupId(groupId: string): string {
+    return groupId.trim().toLowerCase();
+  }
+
+  private applyLendingData(value: LendingData): void {
+    const collapsedBefore = this.collapsedGroupIds();
+    const expandedCyclesBefore = this.expandedCycleIds();
+    this.viewState.set({ status: 'success', data: value });
+    const groupIds = new Set(value.groups.map((item) => item.id));
+    this.collapsedGroupIds.set(new Set([...collapsedBefore].filter((id) => groupIds.has(id))));
+    const cycleIds = new Set(value.groups.flatMap((item) => item.cycles.map((cycle) => cycle.id)));
+    const openCycleIds = value.groups.flatMap((item) => item.cycles)
+      .filter((cycle) => cycle.status === 'OPEN')
+      .map((cycle) => cycle.id);
+    this.expandedCycleIds.set(new Set([
+      ...openCycleIds,
+      ...[...expandedCyclesBefore].filter((id) => cycleIds.has(id)),
+    ]));
   }
 
   shouldShowHealth(group: LendingGroup): boolean {

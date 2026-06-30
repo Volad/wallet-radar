@@ -16,6 +16,9 @@ sequenceDiagram
   Page->>LDS: getSessionLending(sessionId)
   LDS->>API: GET /sessions/{id}/lending
   API->>BE: build groups, cycles, PnL
+  Page->>API: POST /sessions/{id}/lending/groups/{key}/refresh (202)
+  Page->>API: GET /sessions/{id}/lending/refresh-status (poll)
+  Page->>LDS: reload GET /lending when group → SYNCED
 ```
 
 ## Displays
@@ -45,6 +48,7 @@ sequenceDiagram
 - Auto-expand OPEN cycles on load
 - Health labels: Safe / Moderate / At risk / Liquidation risk from thresholds
 - Health badge shows `stale` chip when `healthStale` (source `ACCOUNTING_ESTIMATE` / `STALE`)
+- On-demand refresh fetches live Aave V3 health factor for every configured `aave-v3` network with borrow (not only Base/Mantle)
 - Net APY uses position value-weighting `(Σ supplyValue·apy − Σ borrowValue·apy) / netExposure`; `--` when net exposure ≤ 0 or no APY signal
 - **Factual APY** headline uses asset-denominated per-asset factual rates blended by USD exposure (yield in asset units, not USD price P&L)
 - Per-asset cycle P&L strip: **quantity first** (bold), USD second (`.cs-usd`); USD from `netIncomeUsdByAsset` when available. Backend derivation: `docs/tasks/lending-per-asset-usd-pnl-implementation-plan.md`
@@ -53,6 +57,15 @@ sequenceDiagram
 ## Contrast with dashboard
 
 Route `/` shows **simplified** inline lending summary from dashboard API (`lendingPositions` often empty). Full market UI is **only** on `/lending`.
+
+## Refresh / sync UX
+
+- **Per open group:** unified sync badge (Stale / Updating… / freshness age / Refresh failed) in protocol head; refresh icon sits outside the expand toggle.
+- **Bulk:** "Update all" in summary bar refreshes all open groups asynchronously.
+- **Status source:** `GET /lending/refresh-status` (Mongo `lending_group_refresh_state`), same adaptive polling as LP page.
+- On `SYNCED`, page reloads `GET /lending`.
+
+See [ADR-039](../adr/ADR-039-async-refresh-status.md).
 
 ## Backend rules (summary)
 

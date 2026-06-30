@@ -291,15 +291,38 @@ public final class ReceiptClarificationEligibilitySupport {
             List<String> reasons,
             OnChainRawTransactionView view
     ) {
-        return normalizedTransaction != null
-                && view != null
-                && normalizedTransaction.getStatus() == NormalizedTransactionStatus.PENDING_CLARIFICATION
-                && reasons.contains(LP_POSITION_CORRELATION_REQUIRED)
-                && (normalizedTransaction.getType() == NormalizedTransactionType.LP_ENTRY
-                || normalizedTransaction.getType() == NormalizedTransactionType.LP_EXIT
-                || normalizedTransaction.getType() == NormalizedTransactionType.LP_EXIT_PARTIAL
-                || normalizedTransaction.getType() == NormalizedTransactionType.LP_EXIT_FINAL)
-                && !view.hasFullReceiptClarificationEvidence();
+        if (normalizedTransaction == null || view == null) {
+            return false;
+        }
+        if (!reasons.contains(LP_POSITION_CORRELATION_REQUIRED)) {
+            return false;
+        }
+        NormalizedTransactionType type = normalizedTransaction.getType();
+        boolean positionScopedType = type == NormalizedTransactionType.LP_ENTRY
+                || type == NormalizedTransactionType.LP_EXIT
+                || type == NormalizedTransactionType.LP_EXIT_PARTIAL
+                || type == NormalizedTransactionType.LP_EXIT_FINAL;
+        if (!positionScopedType) {
+            return false;
+        }
+        if (view.hasFullReceiptClarificationEvidence()) {
+            return false;
+        }
+        if (normalizedTransaction.getStatus() == NormalizedTransactionStatus.PENDING_CLARIFICATION) {
+            return true;
+        }
+        // LP_ENTRY mint transactions (e.g. Velodrome struct-mint) may have been confirmed by the
+        // reclassifier even though the tokenId could not be decoded — leaving them CONFIRMED with
+        // LP_POSITION_CORRELATION_REQUIRED still unresolved and CLARIFICATION_ATTEMPTS_EXHAUSTED
+        // set after a single failed full-receipt fetch.  If the full receipt has never been
+        // successfully fetched (fullReceiptClarificationAttempts == 0) we re-admit the transaction
+        // for another clarification attempt: the failure was transient (RPC unavailable at the time
+        // of the original attempt) rather than permanent.
+        return normalizedTransaction.getStatus() == NormalizedTransactionStatus.CONFIRMED
+                && type == NormalizedTransactionType.LP_ENTRY
+                && reasons.contains(ClassificationReasonCode.CLARIFICATION_ATTEMPTS_EXHAUSTED.code())
+                && (normalizedTransaction.getFullReceiptClarificationAttempts() == null
+                || normalizedTransaction.getFullReceiptClarificationAttempts() == 0);
     }
 
     private static boolean isGmxDerivativeRequest(NormalizedTransaction normalizedTransaction) {

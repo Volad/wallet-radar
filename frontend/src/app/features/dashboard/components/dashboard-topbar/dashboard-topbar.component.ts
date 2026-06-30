@@ -1,5 +1,12 @@
 import { CommonModule } from '@angular/common';
-import { ChangeDetectionStrategy, Component, EventEmitter, Input, Output } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  EventEmitter,
+  HostListener,
+  Input,
+  Output,
+} from '@angular/core';
 
 import { IntegrationInfo, PortfolioMetric, WalletInfo } from '../../../../core/models/dashboard.models';
 
@@ -24,9 +31,34 @@ export class DashboardTopbarComponent {
   @Input() canRefresh = false;
   @Input() isRefreshing = false;
   @Input() refreshMessage = '';
+  @Input() lastSyncedLabel: string | null = null;
 
   @Output() addWallet = new EventEmitter<void>();
   @Output() refresh = new EventEmitter<void>();
+
+  universeOpen = false;
+
+  get onChainWallets(): ReadonlyArray<WalletInfo> {
+    return this.wallets.filter((w) => w.address.startsWith('0x'));
+  }
+
+  get cexWallets(): ReadonlyArray<WalletInfo> {
+    return this.wallets.filter((w) => !w.address.startsWith('0x'));
+  }
+
+  get universeCount(): number {
+    return this.wallets.length + this.integrations.length;
+  }
+
+  toggleUniverse(event: Event): void {
+    event.stopPropagation();
+    this.universeOpen = !this.universeOpen;
+  }
+
+  @HostListener('document:click')
+  closeUniverse(): void {
+    this.universeOpen = false;
+  }
 
   shortAddress(address: string): string {
     if (address.length < 12) {

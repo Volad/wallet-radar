@@ -12,6 +12,7 @@ public enum PriceSource {
     BYBIT,
     BINANCE,
     COINGECKO,
+    DEFILLAMA,
     PROTOCOL_SNAPSHOT,
     MANUAL,
     /** Matched crypto-loan principal disposal at borrow-time AVCO (ADR-012 §D3). */

@@ -86,6 +86,7 @@ export class DashboardDataService {
         progressPct: 0,
         networksLabel: 'No active backfill',
       },
+      totalRealizedPnlUsd: response.summary.totalRealizedPnlUsd ?? 0,
       tokenPositions: response.tokenPositions.map((position) => ({
         familyIdentity: position.familyIdentity,
         symbol: position.symbol,

@@ -3,6 +3,7 @@ import { Injectable, inject } from '@angular/core';
 import { Observable } from 'rxjs';
 
 import { environment } from '../../../environments/environment';
+import { AuthMeResponse } from '../models/auth.models';
 import {
   AddSessionRequest,
   AddSessionResponse,
@@ -14,8 +15,9 @@ import {
   SessionBackfillStatusResponse,
   SessionDashboardResponse,
   SessionLendingResponse,
-  SessionLpPositionResponse,
   SessionLpResponse,
+  SessionLpPositionResponse,
+  RefreshStatusResponse,
   SessionRefreshResponse,
   SessionSettingsResponse,
   SessionResponse,
@@ -29,6 +31,15 @@ export class WalletApiService {
   private readonly httpClient = inject(HttpClient);
   private readonly walletsEndpoint = `${environment.apiBaseUrl}/wallets`;
   private readonly sessionsEndpoint = `${environment.apiBaseUrl}/sessions`;
+  private readonly authEndpoint = `${environment.apiBaseUrl}/auth`;
+
+  authMe(): Observable<AuthMeResponse> {
+    return this.httpClient.get<AuthMeResponse>(`${this.authEndpoint}/me`);
+  }
+
+  logout(): Observable<unknown> {
+    return this.httpClient.post(`${this.authEndpoint}/logout`, {});
+  }
 
   addSession(payload: AddSessionRequest): Observable<AddSessionResponse> {
     return this.httpClient.post<AddSessionResponse>(this.sessionsEndpoint, payload);
@@ -99,9 +110,53 @@ export class WalletApiService {
     );
   }
 
-  refreshLpPosition(sessionId: string, correlationId: string): Observable<SessionLpPositionResponse> {
-    return this.httpClient.post<SessionLpPositionResponse>(
+  getSessionLpPosition(
+    sessionId: string,
+    correlationId: string,
+    scope: 'active' | 'closed' | 'all' = 'active'
+  ): Observable<SessionLpPositionResponse> {
+    return this.httpClient.get<SessionLpPositionResponse>(
+      `${this.sessionsEndpoint}/${encodeURIComponent(sessionId)}/lp/positions/${encodeURIComponent(correlationId)}`,
+      { params: { scope } }
+    );
+  }
+
+  getLpRefreshStatus(sessionId: string): Observable<RefreshStatusResponse> {
+    return this.httpClient.get<RefreshStatusResponse>(
+      `${this.sessionsEndpoint}/${encodeURIComponent(sessionId)}/lp/refresh-status`
+    );
+  }
+
+  refreshLpPosition(sessionId: string, correlationId: string): Observable<RefreshStatusResponse> {
+    return this.httpClient.post<RefreshStatusResponse>(
       `${this.sessionsEndpoint}/${encodeURIComponent(sessionId)}/lp/positions/${encodeURIComponent(correlationId)}/refresh`,
+      {}
+    );
+  }
+
+  refreshAllLpPositions(sessionId: string): Observable<RefreshStatusResponse> {
+    return this.httpClient.post<RefreshStatusResponse>(
+      `${this.sessionsEndpoint}/${encodeURIComponent(sessionId)}/lp/refresh`,
+      {}
+    );
+  }
+
+  getLendingRefreshStatus(sessionId: string): Observable<RefreshStatusResponse> {
+    return this.httpClient.get<RefreshStatusResponse>(
+      `${this.sessionsEndpoint}/${encodeURIComponent(sessionId)}/lending/refresh-status`
+    );
+  }
+
+  refreshLendingGroup(sessionId: string, groupKey: string): Observable<RefreshStatusResponse> {
+    return this.httpClient.post<RefreshStatusResponse>(
+      `${this.sessionsEndpoint}/${encodeURIComponent(sessionId)}/lending/groups/${encodeURIComponent(groupKey)}/refresh`,
+      {}
+    );
+  }
+
+  refreshAllLending(sessionId: string): Observable<RefreshStatusResponse> {
+    return this.httpClient.post<RefreshStatusResponse>(
+      `${this.sessionsEndpoint}/${encodeURIComponent(sessionId)}/lending/refresh`,
       {}
     );
   }
@@ -123,11 +178,8 @@ export class WalletApiService {
     if (request.search !== undefined && request.search !== null && request.search.trim().length > 0) {
       params = params.set('search', request.search.trim());
     }
-    if (request.bridgeStatus !== undefined && request.bridgeStatus !== null) {
-      params = params.set('bridgeStatus', request.bridgeStatus);
-    }
-    if (request.spamFilter !== undefined && request.spamFilter !== null) {
-      params = params.set('spamFilter', request.spamFilter);
+    for (const category of request.categories ?? []) {
+      params = params.append('category', category);
     }
     for (const walletId of request.walletIds ?? []) {
       params = params.append('walletId', walletId);

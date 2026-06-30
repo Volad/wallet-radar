@@ -17,10 +17,14 @@ import org.springframework.stereotype.Service;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.EnumMap;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.Supplier;
 
 /**
@@ -102,6 +106,13 @@ public class SourceSyncPlanner {
         int skippedTargets = 0;
         List<String> scheduledOnChainSyncStatusIds = new ArrayList<>();
         List<String> scheduledIntegrationSyncStatusIds = new ArrayList<>();
+
+        // Pre-fetch the current head block for each UNIQUE network once.
+        // Without this, resolveCurrentBlock() is called per wallet×network pair —
+        // 52 serial RPC calls for 4 wallets × 13 networks instead of 13.
+        Set<NetworkId> requiredNetworks = collectRequiredNetworks(session);
+        Map<NetworkId, Long> headBlockCache = prefetchHeadBlocks(requiredNetworks, "refresh");
+
         for (UserSession.SessionWallet wallet : session.getWallets() == null ? List.<UserSession.SessionWallet>of() : session.getWallets()) {
             if (wallet == null || wallet.getAddress() == null || wallet.getAddress().isBlank()) {
                 continue;
@@ -111,7 +122,7 @@ public class SourceSyncPlanner {
                         "refresh",
                         normalizedAddress(wallet.getAddress()),
                         networkId,
-                        () -> scheduleOnChainRefresh(normalizedAddress(wallet.getAddress()), networkId, anchor)
+                        () -> scheduleOnChainRefresh(normalizedAddress(wallet.getAddress()), networkId, anchor, headBlockCache)
                 );
                 if (syncStatusId != null) {
                     scheduledTargets++;
@@ -165,13 +176,16 @@ public class SourceSyncPlanner {
 
     public int planStandaloneRefreshOnChain(String address, List<NetworkId> networks, Instant observedAt) {
         Instant anchor = normalizeAnchor(observedAt);
+        List<NetworkId> normalized = normalizeNetworks(networks);
+        Set<NetworkId> networkSet = normalized.isEmpty() ? EnumSet.noneOf(NetworkId.class) : EnumSet.copyOf(normalized);
+        Map<NetworkId, Long> headBlockCache = prefetchHeadBlocks(networkSet, "standalone-refresh");
         int scheduledTargets = 0;
-        for (NetworkId networkId : normalizeNetworks(networks)) {
+        for (NetworkId networkId : normalized) {
             if (planTarget(
                     "standalone-refresh",
                     normalizedAddress(address),
                     networkId,
-                    () -> scheduleOnChainRefresh(normalizedAddress(address), networkId, anchor)
+                    () -> scheduleOnChainRefresh(normalizedAddress(address), networkId, anchor, headBlockCache)
             ) != null) {
                 scheduledTargets++;
             }
@@ -217,6 +231,15 @@ public class SourceSyncPlanner {
     }
 
     private String scheduleOnChainRefresh(String walletAddress, NetworkId networkId, Instant anchor) {
+        return scheduleOnChainRefresh(walletAddress, networkId, anchor, Map.of());
+    }
+
+    private String scheduleOnChainRefresh(
+            String walletAddress,
+            NetworkId networkId,
+            Instant anchor,
+            Map<NetworkId, Long> headBlockCache
+    ) {
         SyncStatus status = syncStatusRepository.findOnChainByWalletAddressAndNetworkId(
                         SyncStatus.SourceKind.ONCHAIN,
                         walletAddress,
@@ -226,7 +249,9 @@ public class SourceSyncPlanner {
         if (status == null || !status.isBackfillComplete()) {
             return null;
         }
-        long currentHead = resolveCurrentBlock(networkId);
+        // Use pre-fetched head block when available; fall back to an on-demand RPC call.
+        Long cachedHead = headBlockCache.get(networkId);
+        long currentHead = cachedHead != null ? cachedHead : resolveCurrentBlock(networkId);
         Long checkpoint = resolveOnChainCheckpoint(status);
         if (checkpoint == null) {
             return null;
@@ -237,6 +262,55 @@ public class SourceSyncPlanner {
         }
         SyncStatus target = armOnChainWindow(status, walletAddress, networkId.name(), fromBlock, currentHead, anchor, "Refresh queued");
         return target == null ? null : target.getId();
+    }
+
+    /**
+     * Collects the set of unique on-chain networks referenced by the session's wallets.
+     * Used to pre-fetch block heads once per network rather than once per wallet×network pair.
+     */
+    private Set<NetworkId> collectRequiredNetworks(UserSession session) {
+        Set<NetworkId> networks = EnumSet.noneOf(NetworkId.class);
+        if (session == null || session.getWallets() == null) {
+            return networks;
+        }
+        for (UserSession.SessionWallet wallet : session.getWallets()) {
+            if (wallet == null || wallet.getNetworks() == null) {
+                continue;
+            }
+            for (NetworkId networkId : wallet.getNetworks()) {
+                if (networkId != null) {
+                    networks.add(networkId);
+                }
+            }
+        }
+        return networks;
+    }
+
+    /**
+     * Resolves the current head block for each unique network once and caches the results.
+     * Networks that fail to resolve (RPC error/timeout) are silently excluded from the cache;
+     * callers fall back to an on-demand RPC call for those networks, preserving existing behaviour.
+     */
+    private Map<NetworkId, Long> prefetchHeadBlocks(Set<NetworkId> networks, String mode) {
+        if (networks == null || networks.isEmpty()) {
+            return Map.of();
+        }
+        Map<NetworkId, Long> cache = new EnumMap<>(NetworkId.class);
+        for (NetworkId networkId : networks) {
+            try {
+                long head = resolveCurrentBlock(networkId);
+                cache.put(networkId, head);
+                log.debug("Head block prefetched ({} mode): network={} head={}", mode, networkId.name(), head);
+            } catch (RuntimeException e) {
+                log.warn(
+                        "Head block prefetch failed ({} mode): network={}, reason={} — will retry per-wallet",
+                        mode,
+                        networkId.name(),
+                        e.getMessage()
+                );
+            }
+        }
+        return cache;
     }
 
     private SyncStatus armOnChainWindow(

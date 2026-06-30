@@ -20,6 +20,7 @@
 | `IntegrationsSettingsSectionComponent` | `features/settings/sections/integrations-settings-section.component.ts` |
 | `AccountingSettingsSectionComponent` | `features/settings/sections/accounting-settings-section.component.ts` |
 | `GeneralSettingsSectionComponent` | `features/settings/sections/general-settings-section.component.ts` |
+| `AccountSettingsSectionComponent` | `features/settings/sections/account-settings-section.component.ts` |
 
 ## Flow
 
@@ -60,6 +61,15 @@ sequenceDiagram
 
 - `hideSmallAssets` — dust filter on dashboard
 - `showReconciliationWarnings` — issue tooltips on token rows
+
+## Account section (SSO — ADR-038)
+
+Rendered below the General settings on the "General" sidebar tab.
+
+- **Not authenticated**: shows "Sign in with Google" button → triggers `/oauth2/authorization/google` redirect.
+- **Authenticated**: shows avatar, display name, email, and "Sign out" button → calls `POST /api/v1/auth/logout` (clears `wr_auth` cookie).
+
+Auth state is resolved at app startup by `AuthService.checkAuth()` → `GET /api/v1/auth/me`. If authenticated, the canonical `sessionId` from the backend overrides any `localStorage` value.
 
 ## Related
 

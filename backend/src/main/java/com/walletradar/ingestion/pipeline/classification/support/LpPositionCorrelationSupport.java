@@ -25,6 +25,8 @@ public final class LpPositionCorrelationSupport {
     private static final String MODIFY_LIQUIDITIES_SELECTOR = "0xdd46508f";
     private static final String SAFE_TRANSFER_FROM_SELECTOR = "0x42842e0e";
     private static final String SAFE_TRANSFER_FROM_WITH_DATA_SELECTOR = "0xb88d4fde";
+    /** Angle vault on Katana: wraps an NFPM behind a single-asset entry route. */
+    private static final String ROUTE_SINGLE_VAULT_SELECTOR = "0xb94c3609";
     private static final String ERC721_TRANSFER_TOPIC =
             "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
     private static final int ACTION_INCREASE_LIQUIDITY = 0x00;
@@ -247,6 +249,70 @@ public final class LpPositionCorrelationSupport {
         return isMintShapeWithoutPersistedTokenId(view);
     }
 
+    /**
+     * Vault-wrapped LP_ENTRY clarification gate. Covers vault/router LP entries whose method
+     * selector is NOT a recognized mint shape (e.g. {@code routeSingle(0xb94c3609)} on the Angle
+     * vault on Katana). For these transactions the ERC-721 mint event is emitted by the underlying
+     * NFPM (different from {@code tx.to}), so it only appears in the <em>full</em> receipt — not
+     * in the basic indexer logs stored at normalization time.
+     *
+     * <p>Without the full receipt {@link #decodeMintedTokenIdFromLogs} returns {@code null} and the
+     * classifier falls back to a generic {@code :vault} correlationId that cannot match the
+     * NFT-keyed correlationId produced for the corresponding LP_EXIT. Requesting clarification
+     * ensures the full receipt is fetched before the final correlationId is committed.
+     *
+     * <p>Returns {@code true} only when:
+     * <ol>
+     *   <li>type is {@link NormalizedTransactionType#LP_ENTRY};</li>
+     *   <li>the full receipt evidence has not been fetched yet;</li>
+     *   <li>the standard {@link #requiresReceiptClarification} path already returns {@code false}
+     *       (non-standard selector — standard mints are handled there);</li>
+     *   <li>no NFT contract was found in the currently persisted logs (the real NFPM is hiding
+     *       inside the receipt) <em>and</em> no tokenId can be decoded from calldata.</li>
+     * </ol>
+     */
+    public static boolean requiresVaultReceiptClarification(
+            OnChainRawTransactionView view,
+            NormalizedTransactionType type
+    ) {
+        if (view == null || type != NormalizedTransactionType.LP_ENTRY) {
+            return false;
+        }
+        // Full receipt already fetched — logs are available; decodeMintedTokenIdFromLogs handles it.
+        // Use the attempt counter rather than hasFullReceiptClarificationEvidence() because the
+        // latter also returns true when only token-transfer evidence is present (no receipt logs).
+        if (view.fullReceiptClarificationAttemptCount() > 0) {
+            return false;
+        }
+        // Standard mint shapes are already covered by requiresReceiptClarification.
+        if (requiresReceiptClarification(view, type)) {
+            return false;
+        }
+        // Only the vault routeSingle selector (Angle vault on Katana) needs this path.
+        // Other LP selectors either embed the tokenId directly in calldata (modifyLiquidities,
+        // increaseLiquidity, etc.) or are already handled by requiresReceiptClarification.
+        if (!ROUTE_SINGLE_VAULT_SELECTOR.equals(view.methodId())) {
+            return false;
+        }
+        // If the tokenId is already decodable from calldata, no receipt needed.
+        BigInteger fromCalldata = decodeDirectTokenId(view.methodId(), view.inputData());
+        if (fromCalldata == null) {
+            fromCalldata = decodeMulticallTokenId(view.inputData());
+        }
+        if (fromCalldata != null) {
+            return false;
+        }
+        // If an NFT contract was already identified from existing logs, decodeMintedTokenIdFromLogs
+        // can resolve the tokenId without a full receipt fetch.
+        String nftContractFromLogs = resolvePositionNftContractFromLogs(view);
+        if (nftContractFromLogs != null) {
+            return false;
+        }
+        // No tokenId from calldata, no NFT contract from existing logs — the full receipt is
+        // the only source for the real underlying NFPM and the minted tokenId.
+        return true;
+    }
+
     public static boolean isPositionScopedLpType(NormalizedTransactionType type) {
         return type == NormalizedTransactionType.LP_ENTRY
                 || type == NormalizedTransactionType.LP_EXIT
@@ -416,6 +482,14 @@ public final class LpPositionCorrelationSupport {
             return null;
         }
         String interactedContract = OnChainRawTransactionView.normalizeAddress(view.toAddress());
+        // Two-pass scan: prefer exact match with the interacted contract (direct NFPM calls),
+        // but fall back to the first ERC-721 mint to wallet from any contract.
+        // The fallback covers vault-wrapped mints where the tx.to is a vault/router (e.g. Angle
+        // vbETH-vbUSDC vault on Katana: 0x3067bdba delegates NFT minting to the underlying
+        // SushiSwap V3 NonfungiblePositionManager 0x2659c6085d...). Without the fallback the vault
+        // LP_ENTRY gets a ':vault' correlationId that cannot match the LP_EXIT which uses the
+        // tokenId-keyed correlationId from the same SushiSwap V3 NFPM.
+        BigInteger fallbackTokenId = null;
         for (Document log : view.persistedLogs()) {
             List<String> topics = normalizedTopics(log);
             if (topics.size() < 4 || !ERC721_TRANSFER_TOPIC.equals(topics.getFirst())) {
@@ -424,13 +498,19 @@ public final class LpPositionCorrelationSupport {
             if (!zeroAddressTopic(topics.get(1)) || !wallet.equals(topicAddress(topics.get(2)))) {
                 continue;
             }
-            String logAddress = OnChainRawTransactionView.normalizeAddress(stringValue(log.get("address")));
-            if (interactedContract != null && logAddress != null && !interactedContract.equals(logAddress)) {
+            BigInteger tokenId = parseTopicUint(topics.get(3));
+            if (tokenId == null) {
                 continue;
             }
-            return parseTopicUint(topics.get(3));
+            String logAddress = OnChainRawTransactionView.normalizeAddress(stringValue(log.get("address")));
+            if (interactedContract == null || interactedContract.equals(logAddress)) {
+                return tokenId; // Exact match — highest priority, return immediately.
+            }
+            if (fallbackTokenId == null) {
+                fallbackTokenId = tokenId; // Keep first cross-contract mint as fallback.
+            }
         }
-        return null;
+        return fallbackTokenId;
     }
 
     private static List<String> normalizedTopics(Document log) {

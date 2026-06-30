@@ -9,29 +9,43 @@
         (ngModelChange)="setTransactionSearch($event)"
         placeholder="Search hash or symbol" />
     </label>
-    @if (hasBridgeStatuses()) {
-      <div class="bridge-filter-row" aria-label="Bridge status filters">
-        @for (filter of bridgeFilters; track filter) {
-          <button
-            type="button"
-            class="bridge-filter-chip"
-            [class.active]="isBridgeFilterActive(filter)"
-            (click)="setBridgeStatusFilter(filter)">
-            {{ filter === 'ALL' ? 'ALL' : prettifyLabel(filter) }}
-          </button>
-        }
-      </div>
-    }
-    <div class="bridge-filter-row" aria-label="Spam filters">
-      @for (filter of spamFilters; track filter) {
+    <div class="category-filter-row" aria-label="Transaction category filters">
+      @for (cat of INLINE_CATEGORIES; track cat) {
         <button
           type="button"
-          class="bridge-filter-chip"
-          [class.active]="isSpamFilterActive(filter)"
-          (click)="setSpamFilter(filter)">
-          {{ filter === 'HIDE_SPAM' ? 'NO SPAM' : filter === 'SPAM_ONLY' ? 'SPAM' : 'ALL TX' }}
+          class="cat-chip"
+          [class.active]="isCategoryEnabled(cat)"
+          (click)="toggleCategory(cat, $event)">
+          {{ categoryLabel(cat) }}
         </button>
       }
+      <div class="overflow-wrap" (click)="$event.stopPropagation()">
+        <button
+          type="button"
+          class="cat-chip overflow-btn"
+          [class.changed]="overflowBadgeCount() > 0"
+          (click)="toggleOverflow($event)">
+          More
+          @if (overflowBadgeCount() > 0) {
+            <span class="overflow-badge">{{ overflowBadgeCount() }}</span>
+          }
+          <span class="overflow-chevron" [class.rotated]="overflowOpen()">▾</span>
+        </button>
+        @if (overflowOpen()) {
+          <div class="overflow-panel" (click)="$event.stopPropagation()">
+            @for (cat of OVERFLOW_CATEGORIES; track cat) {
+              <button
+                type="button"
+                class="overflow-item"
+                [class.active]="isCategoryEnabled(cat)"
+                (click)="toggleCategory(cat, $event)">
+                <span class="overflow-check" [class.checked]="isCategoryEnabled(cat)">✓</span>
+                <span>{{ categoryLabel(cat) }}</span>
+              </button>
+            }
+          </div>
+        }
+      </div>
     </div>
     <span class="mono muted">{{ totalCountSignal() }} txns</span>
   </header>
@@ -86,7 +100,7 @@
                   <span class="pill pill-purple">PENDING</span>
                 }
               </div>
-              <div class="mono muted tiny tx-ref" [attr.title]="tx.hash">{{ shortReference(tx.hash) }}</div>
+              <wr-copy-hash [hash]="tx.hash" />
               @if (txCounterpartyDirection(tx); as counterpartyDirection) {
                 <div class="mono muted tiny tx-counterparty-row">
                   <span>{{ counterpartyDirection }}</span>

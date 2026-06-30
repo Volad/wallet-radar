@@ -55,14 +55,14 @@
   }
 }
 
-.bridge-filter-row {
+.category-filter-row {
   display: inline-flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 0.3rem;
 }
 
-.bridge-filter-chip {
+.cat-chip {
   border: 1px solid var(--wr-border);
   border-radius: 999px;
   background: var(--wr-elevated);
@@ -72,10 +72,103 @@
   letter-spacing: 0.05em;
   padding: 0.2rem 0.45rem;
   cursor: pointer;
+  transition: border-color 0.12s, background 0.12s, color 0.12s;
 
   &.active {
     border-color: var(--wr-cyan-mid);
     background: var(--wr-cyan-soft);
+    color: var(--wr-cyan);
+  }
+
+  &.changed {
+    border-color: var(--wr-amber, #f59e0b);
+    color: var(--wr-amber, #f59e0b);
+  }
+}
+
+.overflow-wrap {
+  position: relative;
+}
+
+.overflow-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+.overflow-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--wr-amber, #f59e0b);
+  color: #000;
+  border-radius: 999px;
+  font-size: 0.46rem;
+  font-weight: 800;
+  min-width: 0.85rem;
+  height: 0.85rem;
+  padding: 0 0.2rem;
+}
+
+.overflow-chevron {
+  display: inline-block;
+  font-size: 0.5rem;
+  transition: transform 0.15s;
+
+  &.rotated {
+    transform: rotate(180deg);
+  }
+}
+
+.overflow-panel {
+  position: absolute;
+  top: calc(100% + 0.3rem);
+  right: 0;
+  z-index: 200;
+  background: var(--wr-card, #161c2e);
+  border: 1px solid var(--wr-border);
+  border-radius: 0.5rem;
+  padding: 0.3rem;
+  min-width: 9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+.overflow-item {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 0.35rem;
+  border: none;
+  background: transparent;
+  color: var(--wr-subtle);
+  font-size: 0.6rem;
+  font-weight: 600;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  transition: background 0.1s, color 0.1s;
+
+  &:hover {
+    background: var(--wr-elevated);
+    color: var(--wr-text);
+  }
+
+  &.active {
+    color: var(--wr-cyan);
+  }
+}
+
+.overflow-check {
+  font-size: 0.55rem;
+  width: 0.7rem;
+  color: transparent;
+  flex-shrink: 0;
+
+  &.checked {
     color: var(--wr-cyan);
   }
 }

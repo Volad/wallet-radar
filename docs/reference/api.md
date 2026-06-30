@@ -1,7 +1,7 @@
 # WalletRadar — API Contract
 
 > **Version:** v3 current backend surface
-> **Last updated:** 2026-04-10
+> **Last updated:** 2026-06-27
 > **Status:** Active contract for the currently implemented REST endpoints
 
 ---
@@ -12,12 +12,40 @@ This document describes the API that is currently implemented in the backend.
 
 In scope now:
 
+- **authentication** — Google SSO (OAuth2 Authorization Code), JWT cookie, `/api/v1/auth/me`, `/api/v1/auth/logout`
 - persisted session management
 - persisted session settings and integrations
 - wallet backfill creation
 - wallet and session backfill-status reads
 - session-level transaction-history reads
 - session-level asset-ledger timeline reads
+
+## Security Model
+
+When `walletradar.auth.enabled=true`:
+
+- All `/api/v1/sessions/{sessionId}/**` endpoints require a valid `wr_auth` HttpOnly cookie (HS256 JWT) whose `sessionId` claim matches the path parameter — 401 if no cookie, 403 if wrong session.
+- `POST /api/v1/sessions` requires authentication (no ownership check at the security layer).
+- `GET /api/v1/auth/me` is always public (returns `{authenticated:false}` without cookie).
+- `POST /api/v1/auth/logout` requires authentication.
+- All requests must be sent with `withCredentials: true` so the browser includes the cookie.
+
+When `walletradar.auth.enabled=false` (default, local dev): all endpoints are permit-all.
+
+### Auth Endpoints
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/api/v1/auth/me` | Public | Returns `{authenticated, provider, email, displayName, pictureUrl, sessionId}` |
+| POST | `/api/v1/auth/logout` | Required | Clears `wr_auth` cookie; returns `{authenticated:false}` |
+
+### OAuth2 Flow
+
+1. Frontend: `window.location.href = '/oauth2/authorization/google'`
+2. Backend redirects to Google consent page.
+3. Google callback: `GET /login/oauth2/code/google` (handled by Spring Security).
+4. On success: `wr_auth` cookie set; redirect to `/settings`.
+5. Frontend calls `GET /api/v1/auth/me` → receives `sessionId`; stores as canonical session.
 
 Planned next slice, but not implemented yet:
 
@@ -1240,3 +1268,64 @@ Example token-position entry:
   "issue": "yield_accrual"
 }
 ```
+
+## 9. LP and Lending refresh status
+
+On-demand and background refresh for LP positions and lending groups is **asynchronous**. Clients trigger refresh with `POST`, poll status with `GET`, and reload snapshot read models when items reach `SYNCED`.
+
+### Shared response: `RefreshStatusResponse`
+
+```json
+{
+  "sessionId": "d290f1ee-6c54-4b01-90e6-d701748f0851",
+  "anyActive": true,
+  "items": [
+    {
+      "id": "lp-position:base:0xabc:12345",
+      "status": "UPDATING",
+      "trigger": "MANUAL",
+      "requestedAt": "2026-06-29T19:00:00Z",
+      "startedAt": "2026-06-29T19:00:01Z",
+      "completedAt": null,
+      "lastSyncedAt": "2026-06-29T18:30:00Z",
+      "error": null
+    }
+  ]
+}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `id` | LP: `correlationId`. Lending: `groupId`. |
+| `status` | `QUEUED`, `UPDATING`, `SYNCED`, `FAILED` |
+| `trigger` | `MANUAL`, `BULK`, `SCHEDULED`, `REPLAY` |
+| `anyActive` | `true` when any item is `QUEUED` or `UPDATING` |
+
+### LP endpoints
+
+| Method | Path | Response |
+|--------|------|----------|
+| `GET` | `/api/v1/sessions/{sessionId}/lp/refresh-status` | `200` — `RefreshStatusResponse` |
+| `GET` | `/api/v1/sessions/{sessionId}/lp/positions/{correlationId}?scope=active\|closed\|all` | `200` — single position (use after single-position refresh instead of full `/lp`) |
+| `POST` | `/api/v1/sessions/{sessionId}/lp/refresh` | `202` — seeds bulk refresh for all open positions |
+| `POST` | `/api/v1/sessions/{sessionId}/lp/positions/{correlationId}/refresh` | `202` — seeds single-position refresh |
+
+Snapshot read model unchanged: `GET /api/v1/sessions/{sessionId}/lp?scope=active|closed|all`.
+
+### Lending endpoints
+
+| Method | Path | Response |
+|--------|------|----------|
+| `GET` | `/api/v1/sessions/{sessionId}/lending/refresh-status` | `200` — `RefreshStatusResponse` (`id` = group key) |
+| `POST` | `/api/v1/sessions/{sessionId}/lending/refresh` | `202` — seeds refresh for all open groups |
+| `POST` | `/api/v1/sessions/{sessionId}/lending/groups/{groupKey}/refresh` | `202` — seeds single-group refresh |
+
+Snapshot read model unchanged: `GET /api/v1/sessions/{sessionId}/lending`.
+
+### Client polling guidance
+
+- Poll `refresh-status` every **3s** while `anyActive=true`, else every **~25s** keepalive while the workspace page is open.
+- On `UPDATING → SYNCED` for an item, re-fetch displayed values: **single** LP position → `GET .../lp/positions/{correlationId}`; bulk LP or lending → full snapshot GET.
+- Background scheduled/replay refresh writes the same state rows; no separate client action required.
+
+See [ADR-039](../adr/ADR-039-async-refresh-status.md).

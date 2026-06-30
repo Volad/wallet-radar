@@ -27,6 +27,8 @@ import {
   SessionResponse,
 } from '../../core/models/wallet-api.models';
 import { WalletApiService } from '../../core/services/wallet-api.service';
+import { CopyHashComponent } from '../../core/components/copy-hash/copy-hash.component';
+import { FilterSidebarComponent } from '../../core/components/filter-sidebar/filter-sidebar.component';
 import {
   formatCompactDateTimeWithSeconds,
   formatDateTimeWithSeconds,
@@ -845,7 +847,7 @@ const EVENT_FAMILY_META: Readonly<Record<EventFamilyKey, EventFamilyVisualMeta>>
 @Component({
   selector: 'wr-asset-ledger-page',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, CopyHashComponent, FilterSidebarComponent],
   templateUrl: './asset-ledger-page.component.html',
   styleUrl: './asset-ledger-page.component.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -1265,12 +1267,13 @@ export class AssetLedgerPageComponent {
     event.preventDefault();
   }
 
-  onRangeSelectionPointerDown(event: MouseEvent, mode: RangeDragMode): void {
+  onRangeSelectionPointerDown(event: PointerEvent, mode: RangeDragMode): void {
     if (this.maxMarkerIndex() <= 0) {
       return;
     }
     event.preventDefault();
     event.stopPropagation();
+    (event.target as HTMLElement | null)?.setPointerCapture?.(event.pointerId);
     const rangeShell = this.rangeShellRef?.nativeElement;
     const anchorOffset =
       mode === 'move' && rangeShell !== undefined
@@ -1605,8 +1608,8 @@ export class AssetLedgerPageComponent {
     }
   }
 
-  @HostListener('document:mousemove', ['$event'])
-  onDocumentMouseMove(event: MouseEvent): void {
+  @HostListener('document:pointermove', ['$event'])
+  onDocumentMouseMove(event: PointerEvent): void {
     const dragState = this.rangeDragState;
     const rangeShell = this.rangeShellRef?.nativeElement;
     if (dragState === null || rangeShell === undefined) {
@@ -1647,7 +1650,8 @@ export class AssetLedgerPageComponent {
     return Math.round(ratio * this.maxMarkerIndex());
   }
 
-  @HostListener('document:mouseup')
+  @HostListener('document:pointerup')
+  @HostListener('document:pointercancel')
   onDocumentMouseUp(): void {
     if (this.rangeDragState === null) {
       return;

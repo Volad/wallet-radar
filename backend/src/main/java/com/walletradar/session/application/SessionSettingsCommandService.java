@@ -23,7 +23,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.stream.Collectors;
 
 /**
  * Overwrites user-session settings, wallets, and supported integrations.
@@ -183,6 +182,9 @@ public class SessionSettingsCommandService {
 
         if (!hasCredentials(requestedBybit)) {
             primaryBybit.setDisplayName(normalizeDisplayName(requestedBybit.displayName(), primaryBybit.getDisplayName()));
+            if (requestedBybit.color() != null && !requestedBybit.color().isBlank()) {
+                primaryBybit.setColor(requestedBybit.color().trim().toLowerCase(Locale.ROOT));
+            }
             primaryBybit.setUpdatedAt(now);
             primaryBybit.setLastError(null);
             return;
@@ -226,6 +228,7 @@ public class SessionSettingsCommandService {
         integration.setStatus(UserSession.IntegrationStatus.CONNECTED);
         integration.setDisplayName(normalizeDisplayName(requestedIntegration.displayName(), "Bybit"));
         integration.setAccountRef(accountRef);
+        integration.setColor(requestedIntegration.color());
         integration.setReadOnly(credentialInfo.readOnly());
         integration.setEncryptedCredentials(sessionSecretCryptoService.encrypt(
                 credentialsJson(requestedIntegration.apiKey(), requestedIntegration.apiSecret()),
@@ -247,6 +250,9 @@ public class SessionSettingsCommandService {
         target.setStatus(source.getStatus());
         target.setDisplayName(source.getDisplayName());
         target.setAccountRef(source.getAccountRef());
+        if (source.getColor() != null) {
+            target.setColor(source.getColor());
+        }
         target.setReadOnly(source.isReadOnly());
         target.setEncryptedCredentials(source.getEncryptedCredentials());
         target.setCapabilities(source.getCapabilities());
@@ -256,6 +262,7 @@ public class SessionSettingsCommandService {
         target.setLastSyncAt(source.getLastSyncAt());
         target.setLastError(source.getLastError());
     }
+
 
     private void validateRequestedIntegrations(List<PutSessionSettingsRequest.IntegrationEntry> requestedIntegrations) {
         for (PutSessionSettingsRequest.IntegrationEntry entry : requestedIntegrations) {

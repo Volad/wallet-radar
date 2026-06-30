@@ -75,8 +75,30 @@ export type PriceSource =
   | 'AAVE_INDEX_ACCRUING'
   | 'PROTOCOL_SNAPSHOT';
 export type BridgeStatus = 'BRIDGE_OUT' | 'BRIDGE_IN' | 'MATCHED' | 'REVIEW';
-export type TransactionBridgeFilter = 'ALL' | BridgeStatus;
-export type TransactionSpamFilter = 'HIDE_SPAM' | 'ALL' | 'SPAM_ONLY';
+
+export type TransactionCategory =
+  | 'SWAP'
+  | 'LP'
+  | 'LENDING'
+  | 'BRIDGE'
+  | 'EXTERNAL_TRANSFER'
+  | 'INTERNAL_TRANSFER'
+  | 'REWARD'
+  | 'DUST'
+  | 'NEED_REVIEW'
+  | 'SPAM';
+
+export const ALL_TRANSACTION_CATEGORIES: ReadonlyArray<TransactionCategory> = [
+  'SWAP', 'LP', 'LENDING', 'BRIDGE', 'EXTERNAL_TRANSFER', 'INTERNAL_TRANSFER',
+  'REWARD', 'DUST', 'NEED_REVIEW', 'SPAM',
+];
+
+export const DEFAULT_TRANSACTION_CATEGORIES: ReadonlyArray<TransactionCategory> = [
+  'SWAP', 'LP', 'LENDING', 'BRIDGE', 'EXTERNAL_TRANSFER', 'INTERNAL_TRANSFER',
+  'REWARD', 'NEED_REVIEW',
+];
+
+export const TRANSACTION_CATEGORIES_STORAGE_KEY = 'wr_tx_categories';
 
 export type IssueCode =
   | 'spam'
@@ -91,7 +113,7 @@ export type IssueCode =
   | 'unsupported_protocol_valuation'
   | null;
 
-export type DashboardSection = 'tokens' | 'lp' | 'lending' | 'staking';
+export type DashboardSection = 'tokens' | 'lp' | 'lending';
 
 export interface WalletInfo {
   readonly id: WalletId;
@@ -222,6 +244,7 @@ export interface DashboardData {
   readonly lpPositions: ReadonlyArray<LpPosition>;
   readonly lendingPositions: ReadonlyArray<LendingPosition>;
   readonly transactions: ReadonlyArray<TransactionItem>;
+  readonly totalRealizedPnlUsd: number;
 }
 
 export interface SectionMeta {

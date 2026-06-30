@@ -62,9 +62,21 @@ public class FamilyEquivalentCustodyReplayHandler {
         }
 
         Map<String, List<IndexedFlow>> flowsByFamily = new LinkedHashMap<>();
+        // BUY inbound flows suppressed by isSuppressedAccrualBuy() are tracked separately so they
+        // are included in selectedByIndex after pairing — this prevents replayGenericFlowsSkipping
+        // from processing them a second time as REALLOCATE_IN and double-counting the cost basis.
+        // Observed on Silo Finance LENDING_DEPOSIT: the tx emits a raw TRANSFER of soUSDC (in
+        // on-chain raw units, e.g. 199835669) AND a BUY flow of soUSDC at human-readable scale
+        // (199.95). FamilyEquivalentCustodyReplayHandler correctly pairs the TRANSFER; without the
+        // suppression the BUY would fall through to generic replay and record a second REALLOCATE_IN
+        // that inflates AVCO to ~$2/USDC, creating phantom realized losses on every subsequent REPAY.
+        List<IndexedFlow> suppressedAccrualFlows = new ArrayList<>();
         for (IndexedFlow indexedFlow : flowSupport.indexedFlows(transaction)) {
             NormalizedTransaction.Flow flow = indexedFlow.flow();
             if (!isPrincipalCandidate(transaction, flow)) {
+                if (isSuppressedAccrualBuy(transaction, flow)) {
+                    suppressedAccrualFlows.add(indexedFlow);
+                }
                 continue;
             }
             String continuityIdentity = AccountingAssetFamilySupport.continuityIdentity(flow);
@@ -145,7 +157,11 @@ public class FamilyEquivalentCustodyReplayHandler {
             selectedByIndex.put(outbound.index(), outbound);
             selectedByIndex.put(inbound.index(), inbound);
         }
-        if (pairs.isEmpty()) {
+        // Add suppressed accrual flows to selectedByIndex so replayGenericFlowsSkipping skips them.
+        for (IndexedFlow suppressed : suppressedAccrualFlows) {
+            selectedByIndex.put(suppressed.index(), suppressed);
+        }
+        if (pairs.isEmpty() && selectedByIndex.isEmpty()) {
             return SimpleFamilyCustodySelection.empty();
         }
         pairs.sort(java.util.Comparator.comparingInt(pair -> Math.min(pair.outbound().index(), pair.inbound().index())));
@@ -330,11 +346,54 @@ public class FamilyEquivalentCustodyReplayHandler {
         // (e.g. an Aave V3 withdraw that emits a tiny gateway dust refund alongside the
         // principal repayment), the dust used to win by encounter order and the principal
         // basis carry was lost.
-        return distinctAssetInbound.stream()
+        IndexedFlow selected = distinctAssetInbound.stream()
                 .max(Comparator.comparing(
                         (IndexedFlow flow) -> flow.flow().getQuantityDelta().abs())
                         .thenComparing(flow -> flow.flow().getRole() == NormalizedLegRole.TRANSFER ? 1 : 0))
                 .orElse(null);
+
+        // Morpho Bundler anomaly guard: for VAULT_WITHDRAW where evidence is WALLET_TRANSFERS_ONLY,
+        // the vault's underlying USDC may never touch the wallet (it flows directly into a Morpho Blue
+        // market inside the bundler), and the only wallet-visible underlying transfer is a small
+        // collateral withdrawal from a separate Morpho Blue position. In those cases the selected
+        // inbound quantity is < 1% of the outbound receipt quantity (e.g. 0.66 USDC vs 1738 gtUSDCc),
+        // and pairing them transfers the full vault cost basis (~$1760) to just $0.66 of USDC,
+        // inflating its AVCO to ~$2666 and causing phantom realized losses of ~$933 on later REPAYs.
+        // When the ratio is below 1%, skip the family-custody pair entirely: both flows fall through
+        // to generic replay (DISPOSE for the receipt token, ACQUIRE for the tiny USDC) and the
+        // conservation gap is attributed to the invisible bundler-internal USDC flow.
+        if (selected != null
+                && transaction.getType() == NormalizedTransactionType.VAULT_WITHDRAW
+                && isWalletTransfersOnlyEvidence(transaction)) {
+            BigDecimal outboundAbs = outbound.flow().getQuantityDelta().abs();
+            BigDecimal inboundAbs = selected.flow().getQuantityDelta().abs();
+            if (outboundAbs.signum() > 0) {
+                BigDecimal ratio = inboundAbs.divide(outboundAbs, MC);
+                if (ratio.compareTo(new BigDecimal("0.01")) < 0) {
+                    if (log.isDebugEnabled()) {
+                        log.debug(
+                                "VAULT_WITHDRAW_BUNDLER_PAIRING_SKIPPED txId={} outbound={} qty={} inbound={} qty={} ratio={}",
+                                transaction.getId(),
+                                outbound.flow().getAssetSymbol(),
+                                outboundAbs,
+                                selected.flow().getAssetSymbol(),
+                                inboundAbs,
+                                ratio
+                        );
+                    }
+                    return null;
+                }
+            }
+        }
+
+        return selected;
+    }
+
+    private static boolean isWalletTransfersOnlyEvidence(NormalizedTransaction transaction) {
+        if (transaction.getMetadata() == null) {
+            return false;
+        }
+        return "WALLET_TRANSFERS_ONLY".equals(transaction.getMetadata().getString("evidenceCompleteness"));
     }
 
     private boolean isPrincipalCandidate(NormalizedTransaction transaction, NormalizedTransaction.Flow flow) {
@@ -351,7 +410,7 @@ public class FamilyEquivalentCustodyReplayHandler {
                 && flow.getQuantityDelta().signum() > 0
                 && transaction != null
                 && transaction.getType() == NormalizedTransactionType.LENDING_DEPOSIT
-                && hasLargerTransferInboundOnSameAsset(transaction, flow)) {
+                && hasAnyTransferInboundOnSameAsset(transaction, flow)) {
             return false;
         }
         return (flow.getRole() == NormalizedLegRole.SELL && flow.getQuantityDelta().signum() < 0)
@@ -359,10 +418,37 @@ public class FamilyEquivalentCustodyReplayHandler {
     }
 
     /**
-     * Aave index accrual mints a tiny BUY leg in the same tx as the principal supply TRANSFER.
-     * Leave accrual for generic replay; pair only the principal inbound.
+     * Returns {@code true} when the BUY flow is a suppressed duplicate that must NOT fall through to
+     * generic replay. A LENDING_DEPOSIT BUY inbound is suppressed when ANY TRANSFER inbound of the
+     * same asset already exists in the transaction — the TRANSFER is the canonical principal flow and
+     * the BUY is an alternative encoding of the same receipt token receipt.
+     *
+     * <p>Two known shapes:
+     * <ul>
+     *   <li>Aave: TRANSFER aUSDC at human-readable scale (large) + BUY aUSDC tiny accrual (small).
+     *       Original guard used "larger" comparison; the new any-TRANSFER guard also covers this.</li>
+     *   <li>Silo Finance: TRANSFER soUSDC at human-readable scale (199.95) + BUY soUSDC at raw
+     *       on-chain units (199835669). The BUY is 6-decimal raw, far larger numerically. Letting
+     *       generic replay process the raw-unit BUY inflates the position quantity by 1e6 and doubles
+     *       the cost basis, generating phantom realized losses of ~$933 on every subsequent REPAY.</li>
+     * </ul>
      */
-    private boolean hasLargerTransferInboundOnSameAsset(
+    private boolean isSuppressedAccrualBuy(NormalizedTransaction transaction, NormalizedTransaction.Flow flow) {
+        return flow != null
+                && flow.getRole() == NormalizedLegRole.BUY
+                && flow.getQuantityDelta() != null
+                && flow.getQuantityDelta().signum() > 0
+                && transaction != null
+                && transaction.getType() == NormalizedTransactionType.LENDING_DEPOSIT
+                && hasAnyTransferInboundOnSameAsset(transaction, flow);
+    }
+
+    /**
+     * Returns {@code true} if any TRANSFER-role inbound flow for the same asset as {@code accrualFlow}
+     * exists in the transaction. Used to suppress BUY duplicates in LENDING_DEPOSIT transactions
+     * (see {@link #isSuppressedAccrualBuy}).
+     */
+    private boolean hasAnyTransferInboundOnSameAsset(
             NormalizedTransaction transaction,
             NormalizedTransaction.Flow accrualFlow
     ) {
@@ -370,7 +456,6 @@ public class FamilyEquivalentCustodyReplayHandler {
             return false;
         }
         String accrualAsset = assetSupport.assetIdentity(transaction, accrualFlow);
-        BigDecimal accrualAbs = accrualFlow.getQuantityDelta().abs();
         for (NormalizedTransaction.Flow candidate : transaction.getFlows()) {
             if (candidate == null
                     || candidate.getRole() != NormalizedLegRole.TRANSFER
@@ -381,9 +466,7 @@ public class FamilyEquivalentCustodyReplayHandler {
             if (!Objects.equals(accrualAsset, assetSupport.assetIdentity(transaction, candidate))) {
                 continue;
             }
-            if (candidate.getQuantityDelta().abs().compareTo(accrualAbs) > 0) {
-                return true;
-            }
+            return true;
         }
         return false;
     }

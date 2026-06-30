@@ -18,8 +18,10 @@ sequenceDiagram
   Page->>LDS: getSessionLp(sessionId, scope)
   LDS->>API: GET /sessions/{id}/lp?scope=
   API->>BE: build positions, summary, charts data
-  Page->>API: POST /sessions/{id}/lp/positions/{id}/refresh
-  API->>BE: on-demand enrichment refresh
+  Page->>API: POST /sessions/{id}/lp/positions/{id}/refresh (202)
+  Page->>API: GET /sessions/{id}/lp/refresh-status (poll)
+  API->>BE: async enrichment + Mongo refresh state
+  Page->>LDS: reload GET /lp when item → SYNCED
 ```
 
 ## Layout
@@ -118,12 +120,16 @@ Tx hash displayed as truncated text (`txn-hash-text`) with copy button (`txn-cop
 | NOT_APPLICABLE | `N/A` (range/IL for GMX/Pendle/fungible) |
 | UNAVAILABLE | Label; never `$0` or `0%`; price appreciation row hidden |
 
-## Refresh
+## Refresh / sync UX
 
-- Per open position: **Refresh snapshot** button
-- Shows "updated Xm ago" from `snapshotAt`
-- Disabled while in-flight; stale chip when `snapshotStale`
-- On failure: keeps last values silently (no user-visible error toast)
+- **Per open position:** refresh icon on row head; sync badge shows `Updating…`, age, `Stale`, or `Refresh failed`.
+- **Bulk:** "Update all open" on Active tab triggers async refresh for all open positions.
+- **Status source:** server `GET /lp/refresh-status` (Mongo `lp_position_refresh_state`), polled adaptively (3s active / 25s keepalive).
+- **Background refresh:** scheduled job and post-replay refresh write the same state rows — items show `Updating…` without a manual click.
+- On `SYNCED`, page reloads `GET /lp` for fresh snapshot values.
+- Closed positions are excluded from refresh.
+
+See [ADR-039](../adr/ADR-039-async-refresh-status.md).
 
 ## Styling
 

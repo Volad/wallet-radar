@@ -25,6 +25,7 @@ import { SessionStorageService } from '../../core/services/session-storage.servi
 import { WalletApiService } from '../../core/services/wallet-api.service';
 import { formatDateTimeWithSeconds } from '../../core/utils/date-time.util';
 import { SettingsWizardComponent } from './wizard/settings-wizard.component';
+import { AccountSettingsSectionComponent } from './sections/account-settings-section.component';
 import { AccountingSettingsSectionComponent } from './sections/accounting-settings-section.component';
 import { GeneralSettingsSectionComponent } from './sections/general-settings-section.component';
 import { IntegrationsSettingsSectionComponent } from './sections/integrations-settings-section.component';
@@ -32,6 +33,18 @@ import { WalletsSettingsSectionComponent } from './sections/wallets-settings-sec
 
 type SettingsSectionId = 'wallets' | 'integrations' | 'accounting' | 'general';
 type SettingsSaveScope = SettingsSectionId;
+
+const INTEGRATION_COLOR_PALETTE = [
+  '#f7a600', '#22d3ee', '#60a5fa', '#34d399',
+  '#a78bfa', '#f472b6', '#fb923c', '#e2e8f0',
+];
+
+function pickUnusedIntegrationColor(usedColors: ReadonlyArray<string | null>): string {
+  const used = new Set(usedColors.filter(Boolean));
+  const available = INTEGRATION_COLOR_PALETTE.filter((c) => !used.has(c));
+  const pool = available.length > 0 ? available : INTEGRATION_COLOR_PALETTE;
+  return pool[Math.floor(Math.random() * pool.length)];
+}
 type StatusTone = 'ready' | 'busy' | 'error' | 'idle';
 
 interface DataSourcesChangeItem {
@@ -81,6 +94,7 @@ const EVM_ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/u;
     CommonModule,
     ReactiveFormsModule,
     SettingsWizardComponent,
+    AccountSettingsSectionComponent,
     AccountingSettingsSectionComponent,
     GeneralSettingsSectionComponent,
     IntegrationsSettingsSectionComponent,
@@ -146,6 +160,8 @@ export class SettingsPageComponent {
   readonly bybitIntegration = computed(
     () => this.settings()?.integrations.find((integration) => integration.provider === 'BYBIT') ?? null
   );
+  /** All connected integrations for display */
+  readonly allIntegrations = computed(() => this.settings()?.integrations ?? []);
   readonly formatDateTimeWithSeconds = formatDateTimeWithSeconds;
   readonly walletCount = computed(() => this.walletsDraft().length + this.pendingWallets().length);
   readonly hasWalletsDraft = computed(() => this.walletCount() > 0);
@@ -405,6 +421,37 @@ export class SettingsPageComponent {
     this.persistSettings(this.buildSettingsPayload(false), 'integrations');
   }
 
+  disconnectIntegration(integrationId: string): void {
+    // Build payload keeping all integrations EXCEPT the disconnected one.
+    // Integrations are de-duped by provider server-side; empty key/secret means "keep credentials".
+    const remaining = (this.settings()?.integrations ?? []).filter(
+      (i) => i.integrationId !== integrationId
+    );
+    const seenProviders = new Set<string>();
+    const integrationPayload: PutSessionSettingsRequest['integrations'][number][] = [];
+    for (const i of remaining) {
+      const provider = i.provider ?? 'BYBIT';
+      if (!seenProviders.has(provider)) {
+        seenProviders.add(provider);
+        integrationPayload.push({ provider, displayName: i.displayName ?? '', apiKey: '', apiSecret: '' });
+      }
+    }
+    const walletPayload = [...this.walletsDraft(), ...this.pendingWallets()];
+    const payload: PutSessionSettingsRequest = {
+      wallets: walletPayload.map((wallet, index) => ({
+        address: wallet.address.trim().toLowerCase(),
+        label: wallet.label.trim() || this.defaultWalletLabel(index),
+        color: wallet.color,
+        networks: [...this.allNetworkIds] as ReadonlyArray<OnChainWalletNetworkId>,
+      })),
+      integrations: integrationPayload,
+      externalVenues: this.externalVenues(),
+      hideSmallAssets: this.generalForm.controls.hideSmallAssets.value,
+      showReconciliationWarnings: this.generalForm.controls.showReconciliationWarnings.value,
+    };
+    this.persistSettings(payload, 'integrations');
+  }
+
   private tryBuildPayload(includeBybit: boolean): PutSessionSettingsRequest | null {
     try {
       return this.buildSettingsPayload(includeBybit);
@@ -581,7 +628,8 @@ export class SettingsPageComponent {
       if (apiKey.length === 0 || apiSecret.length === 0) {
         throw new Error('Enter both API key and API secret to connect Bybit.');
       }
-      return { provider: 'BYBIT', displayName, apiKey, apiSecret };
+      const color = pickUnusedIntegrationColor(this.allIntegrations().map((i) => i.color));
+      return { provider: 'BYBIT', displayName, apiKey, apiSecret, color };
     }
 
     if (!this.isBybitCredentialsChanged()) {

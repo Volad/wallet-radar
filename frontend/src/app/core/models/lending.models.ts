@@ -214,6 +214,7 @@ export interface LendingGroup {
   readonly healthStatus: string;
   readonly healthSource: string;
   readonly healthStale: boolean;
+  readonly lastRefreshedAt: string | null;
   readonly supplyUsd: number;
   readonly borrowUsd: number;
   readonly netExposureUsd: number;

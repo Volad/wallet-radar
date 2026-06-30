@@ -1,0 +1,41 @@
+<!-- Optional top area: always visible, projected with wrSidebarTop attribute -->
+<!-- (used by asset-ledger: back nav + asset title) -->
+@if (!isCollapsed()) {
+  <ng-content select="[wrSidebarTop]" />
+}
+
+<!-- Sticky head with collapse toggle -->
+<div class="sidebar-head">
+  <button
+    type="button"
+    class="filters-toggle"
+    [attr.aria-expanded]="!isCollapsed()"
+    (click)="toggle()">
+    @if (!isCollapsed()) {
+      <span class="toggle-label">{{ title }}</span>
+    }
+    @if (activeCount > 0 && !isCollapsed()) {
+      <span class="filter-count">{{ activeCount }}</span>
+    }
+    <span class="chevron" [class.rotated]="isCollapsed()" aria-hidden="true">›</span>
+  </button>
+
+  @if (!isCollapsed() && subtitle) {
+    <p class="filters-sub">{{ subtitle }}</p>
+  }
+</div>
+
+<!-- Collapsible scroll area -->
+@if (!isCollapsed()) {
+  <div class="sidebar-scroll">
+    <ng-content />
+  </div>
+
+  @if (activeCount > 0) {
+    <div class="clear-wrap">
+      <button type="button" class="clear-btn" (click)="clearFilters.emit()">
+        Clear all ({{ activeCount }})
+      </button>
+    </div>
+  }
+}
