@@ -1,0 +1,66 @@
+---
+description: Prod Docker rebuild after AVCO/normalization or frontend changes
+alwaysApply: true
+---
+
+# Prod rebuild workflow
+
+After implementing changes, run the matching command from the **repo root**. Use [scripts/prod-reset-rebuild-backend.sh](scripts/prod-reset-rebuild-backend.sh).
+
+## Choose the right mode
+
+| Change type | Command | Mongo / pipeline |
+|---|---|---|
+| Frontend only (`frontend/**`) | `--frontend-only` | unchanged |
+| Backend API / UI / auth / LP refresh / lending refresh / security / non-pipeline services | `--backend-only` | unchanged |
+| Normalization, classification, linking, clarification, AVCO replay, cost basis, pricing policy | `--skip-frontend` (full reset) | full renormalization |
+| Pricing cache invalid | `--clear-pricing-cache --skip-frontend` | full reset + clear `historical_prices` |
+| Linking only (no renormalization) | `--linking-only` | pipelineState cleared |
+| Reclassification only | `--reclassification-only` | ON_CHAIN → PENDING_RECLASSIFICATION |
+| Clarification stuck rows | `--clarification-only` | PENDING_CLARIFICATION reset |
+| Full stack verify | no flags (or `--start-frontend`) | full reset + frontend |
+
+**Important:** `--skip-frontend` does **not** mean “skip frontend rebuild only”. It still runs `reset-derived.sh` (deletes normalized tx, ledger, LP snapshots, balances, etc.) and triggers full pipeline re-run. Use `--backend-only` when code changes do not require renormalization.
+
+## Examples
+
+### Backend without pipeline reset (most API / feature work)
+
+```bash
+./scripts/prod-reset-rebuild-backend.sh --backend-only
+```
+
+### Cost basis / AVCO / normalization (backend)
+
+Run after changes under `backend/**/costbasis/**`, `backend/**/accounting/**`, `backend/**/pricing/**`, `backend/**/ingestion/**` (normalization, clarification, pipeline).
+
+```bash
+./scripts/prod-reset-rebuild-backend.sh --skip-frontend
+```
+
+When pricing cache must be cleared:
+
+```bash
+./scripts/prod-reset-rebuild-backend.sh --clear-pricing-cache --skip-frontend
+```
+
+### Frontend (Angular)
+
+```bash
+./scripts/prod-reset-rebuild-backend.sh --frontend-only
+```
+
+### Full stack (backend + frontend + renormalization)
+
+Use only when pipeline logic and UI must be verified together:
+
+```bash
+./scripts/prod-reset-rebuild-backend.sh
+```
+
+## Agent checklist
+
+- [ ] Frontend-only change → `--frontend-only`
+- [ ] Backend change without pipeline/accounting impact → `--backend-only`
+- [ ] Backend pipeline / accounting change → `--skip-frontend` (add `--clear-pricing-cache` if needed)
+- [ ] Run from repo root; wait for script to finish before reporting verification done

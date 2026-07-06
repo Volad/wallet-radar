@@ -23,15 +23,21 @@ public class BinanceSymbolMapper {
     }
 
     public List<String> candidateSymbols(PriceRequest request) {
-        String baseSymbol = mappingService.canonicalMarketSymbol(request);
-        if (baseSymbol.isBlank() || NON_BINANCE_SYMBOLS.contains(baseSymbol) || QUOTE_ASSETS.contains(baseSymbol)) {
+        List<String> baseSymbols = mappingService.exchangeMarketSymbols(request);
+        if (baseSymbols.isEmpty()) {
             return List.of();
         }
-        return List.of(
-                baseSymbol + "USDT",
-                baseSymbol + "FDUSD",
-                baseSymbol + "USDC",
-                baseSymbol + "BUSD"
-        );
+        return baseSymbols.stream()
+                .filter(baseSymbol -> !baseSymbol.isBlank())
+                .filter(baseSymbol -> !NON_BINANCE_SYMBOLS.contains(baseSymbol))
+                .filter(baseSymbol -> !QUOTE_ASSETS.contains(baseSymbol))
+                .flatMap(baseSymbol -> List.of(
+                        baseSymbol + "USDT",
+                        baseSymbol + "FDUSD",
+                        baseSymbol + "USDC",
+                        baseSymbol + "BUSD"
+                ).stream())
+                .distinct()
+                .toList();
     }
 }

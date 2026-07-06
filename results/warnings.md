@@ -1,10 +1,10 @@
 # Warnings
 
-- clarification is currently disabled, so the `PENDING_CLARIFICATION=300` queue is expected to persist even though reason hygiene is now correct
-- `NEEDS_REVIEW=182` is still non-trivial in absolute size, but the composition is now healthy: mostly promo/phishing and honest no-evidence tails
-- live router-overload residuals are now only:
-  - Optimism `0x416b433906b1b72fa758e166e239c43d68dc6f29 + 0xac9650d8 = 6`
-  - Base `0x46a15b0b27311cedf172ab29e4f4766fbe7f4364 + 0xac9650d8 = 1`
-- no `zkSync` router-overload rows remain in the current snapshot
-- current selector-recoverable review rows are down to `16` and are mostly no-transfer/no-log containers, not broad selector-parity failures
-- `CLAIM_WITHOUT_MOVEMENT` remains financially correct per-wallet behavior and should not be force-collapsed just to shrink review volume
+Universe `df5e69cc…`.
+
+- **W-1 (HIGH):** LP NFT correlationId protocol segment can diverge from `protocolName` / position-manager contract → receipt-pool starvation. Confirmed `base:938761`, `arbitrum:204401`. Sweep all LP positions for `correlationId.protocol != registry.protocol(rawData.to)`.
+- **W-2 (MED):** 34 `BRIDGE_IN` rows are `counterpartyType=UNKNOWN_EOA` though they belong to LiFi corridors (`bridge:lifi:<outHash>`). Mislabels counterparty and blocks deterministic cross-network carry.
+- **W-3 (MED):** 0.97 ETH of `BRIDGE_IN` quantity carries `uncoveredQuantityAfter>0`; mostly market-repriced by F-5(a), but represents $2,945 of orphaned `CARRY_OUT` basis in the continuity store.
+- **W-4 (LOW):** LINEA `BRIDGE_IN` `0x2108883281` entered at avco $0 — F-5(a) cross-network price/fail-safe gap (~$17).
+- **W-5 (LOW/display):** `TimelineAvcoAuthority` selects different per-bucket points across adjacent events → chart shows AVCO "changes with no intervening tx" (anchor #7). ADR-017 read-model behavior, not a basis error.
+- **W-6 (INFO):** FAMILY:ETH `UNKNOWN` basisEffect present on 2 LP_EXIT points (+$1,304). UNKNOWN effect should never *create* basis; treat as a fabrication symptom of W-1.

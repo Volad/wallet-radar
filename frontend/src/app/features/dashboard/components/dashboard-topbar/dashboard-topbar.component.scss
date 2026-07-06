@@ -34,6 +34,8 @@
   align-items: center;
   gap: 0.85rem;
   padding: 0 0.875rem;
+  position: relative;
+  z-index: 100;
 }
 
 .logo-wrap {
@@ -134,24 +136,137 @@
   font-size: 0.56rem;
 }
 
-.wallet-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25rem;
-  border: 1px solid var(--wr-border);
-  background: var(--wr-elevated);
-  border-radius: 0.35rem;
-  padding: 0.22rem 0.48rem;
-  color: var(--wr-subtle);
-  font-size: 0.58rem;
+/* Universe dropdown */
+.universe-wrap {
+  position: relative;
   flex-shrink: 0;
 }
 
-.wallet-dot {
-  width: 0.35rem;
-  height: 0.35rem;
+.universe-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  border: 1px solid var(--wr-border-strong);
+  background: var(--wr-elevated);
+  border-radius: 0.35rem;
+  padding: 0.28rem 0.6rem;
+  cursor: pointer;
+  color: var(--wr-subtle);
+  font-size: 0.65rem;
+  transition: border-color 0.12s ease, background 0.12s ease;
+
+  &:hover {
+    border-color: color-mix(in srgb, var(--wr-subtle) 40%, var(--wr-border-strong));
+    background: var(--wr-surface-3);
+  }
+
+  &.open {
+    border-color: color-mix(in srgb, var(--wr-cyan) 45%, var(--wr-border-strong));
+    background: var(--wr-cyan-soft);
+  }
+}
+
+.universe-label {
+  color: var(--wr-subtle);
+  font-size: 0.58rem;
+}
+
+.universe-count {
+  color: var(--wr-text);
+  font-weight: 700;
+  font-size: 0.7rem;
+}
+
+.universe-chevron {
+  font-size: 0.7rem;
+  color: var(--wr-subtle);
+  display: inline-block;
+  transition: transform 0.15s ease;
+  line-height: 1;
+
+  &.rotated {
+    transform: rotate(180deg);
+  }
+}
+
+.universe-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 240px;
+  /* Solid colour — no mix-in with transparent parent backdrop */
+  background: #0f1220;
+  border: 1px solid var(--wr-border-strong);
+  border-radius: 0.5rem;
+  overflow: hidden;
+  z-index: 200;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.universe-group-label {
+  padding: 0.45rem 0.75rem 0.2rem;
+  font-size: 0.56rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--wr-subtle);
+  border-bottom: 1px solid var(--wr-border);
+}
+
+.universe-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.75rem;
+  border-bottom: 1px solid var(--wr-border);
+
+  &:last-child {
+    border-bottom: none;
+  }
+
+  &--sub {
+    padding-left: 1.5rem;
+    opacity: 0.8;
+  }
+}
+
+.universe-dot {
+  width: 0.45rem;
+  height: 0.45rem;
   border-radius: 50%;
   flex-shrink: 0;
+}
+
+.universe-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: var(--wr-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.universe-ref {
+  font-size: 0.58rem;
+  color: var(--wr-subtle);
+  flex-shrink: 0;
+}
+
+.refresh-wrap {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.2rem;
+  flex-shrink: 0;
+}
+
+.refresh-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
 }
 
 .wallet-add-btn {
@@ -163,6 +278,41 @@
   font-size: 0.65rem;
   padding: 0.34rem 0.7rem;
   cursor: pointer;
+  text-decoration: none;
+}
+
+.settings-link {
+  background: transparent;
+  color: var(--wr-text);
+  border: 1px solid var(--wr-border);
+}
+
+.refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+}
+
+.refresh-message {
+  color: var(--wr-subtle);
+  font-size: 0.58rem;
+  white-space: nowrap;
+}
+
+.last-synced-label {
+  font-size: 0.65rem;
+  color: var(--wr-text-secondary, var(--wr-muted));
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+
+  &::before {
+    content: 'Synced ';
+  }
 }
 
 .mono {

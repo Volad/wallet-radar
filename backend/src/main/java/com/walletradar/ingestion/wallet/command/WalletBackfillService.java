@@ -1,60 +1,46 @@
 package com.walletradar.ingestion.wallet.command;
 
 import com.walletradar.domain.common.NetworkId;
-import com.walletradar.domain.sync.SyncStatus;
-import com.walletradar.domain.sync.SyncStatusRepository;
-import com.walletradar.domain.event.WalletAddedEvent;
+import com.walletradar.session.application.SourceSyncPlanner;
 import lombok.RequiredArgsConstructor;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
 /**
- * Adds a wallet by creating pending sync_status entries and publishing a backfill event.
+ * Standalone wallet-entry helper for the legacy wallet API. Session-owned
+ * flows use {@link com.walletradar.session.application.AccountUniverseSyncPlanScheduler} /
+ * {@link com.walletradar.session.application.AccountUniverseSyncPlannerService} instead of this service.
  */
 @Service
 @RequiredArgsConstructor
 public class WalletBackfillService {
 
-    private final SyncStatusRepository syncStatusRepository;
-    private final ApplicationEventPublisher applicationEventPublisher;
+    private final SourceSyncPlanner sourceSyncPlanner;
+    private final WalletBackfillPlanner backfillJobPlanner;
 
-    /**
-     * Upsert sync_status PENDING for each (address, network), then publish WalletAddedEvent.
-     * If {@code networks} is null or empty, all supported networks are used.
-     */
     public void addWallet(String address, List<NetworkId> networks) {
         List<NetworkId> targetNetworks = (networks == null || networks.isEmpty())
                 ? Arrays.asList(NetworkId.values())
                 : networks;
-        List<NetworkId> networksNeedingBackfill = new ArrayList<>();
-        for (NetworkId networkId : targetNetworks) {
-            SyncStatus status = syncStatusRepository.findByWalletAddressAndNetworkId(address, networkId.name())
-                    .orElse(new SyncStatus());
-            if (status.isBackfillComplete()) {
-                continue;
-            }
-            if (status.getId() == null) {
-                status.setWalletAddress(address);
-                status.setNetworkId(networkId.name());
-            }
-            status.setStatus(SyncStatus.SyncStatusValue.PENDING);
-            status.setProgressPct(0);
-            status.setLastBlockSynced(null);
-            status.setSyncBannerMessage("Backfill queued");
-            status.setBackfillComplete(false);
-            status.setRetryCount(0);
-            status.setNextRetryAfter(null);
-            status.setUpdatedAt(Instant.now());
-            syncStatusRepository.save(status);
-            networksNeedingBackfill.add(networkId);
+        int scheduledTargets = sourceSyncPlanner.planStandaloneInitialOnChain(address, targetNetworks, Instant.now());
+        if (scheduledTargets > 0) {
+            backfillJobPlanner.planPendingOnChainSources(address, targetNetworks);
         }
-        if (!networksNeedingBackfill.isEmpty()) {
-            applicationEventPublisher.publishEvent(new WalletAddedEvent(address, networksNeedingBackfill));
+    }
+
+    public void scheduleIncrementalBackfill(String address, List<NetworkId> networks) {
+        List<NetworkId> targetNetworks = (networks == null || networks.isEmpty())
+                ? List.of()
+                : networks;
+        if (targetNetworks.isEmpty()) {
+            return;
+        }
+        int scheduledTargets = sourceSyncPlanner.planStandaloneRefreshOnChain(address, targetNetworks, Instant.now());
+        if (scheduledTargets > 0) {
+            backfillJobPlanner.planPendingOnChainSources(address, targetNetworks);
         }
     }
 }

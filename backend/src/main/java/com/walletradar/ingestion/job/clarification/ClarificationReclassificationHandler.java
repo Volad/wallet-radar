@@ -4,7 +4,8 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
 import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassificationResult;
-import com.walletradar.ingestion.pipeline.clarification.OnChainLifecycleLinkService;
+import com.walletradar.ingestion.pipeline.clarification.CounterpartyEnrichmentService;
+import com.walletradar.ingestion.pipeline.clarification.ProtocolNameEnrichmentService;
 import com.walletradar.ingestion.pipeline.clarification.RelatedLifecycleDiscoveryService;
 import com.walletradar.ingestion.pipeline.onchain.OnChainNormalizedTransactionBuilder;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -24,26 +25,38 @@ final class ClarificationReclassificationHandler {
     @Nullable
     private final RelatedLifecycleDiscoveryService relatedLifecycleDiscoveryService;
     @Nullable
-    private final OnChainLifecycleLinkService onChainLifecycleLinkService;
+    private final ProtocolNameEnrichmentService protocolNameEnrichmentService;
+    @Nullable
+    private final CounterpartyEnrichmentService counterpartyEnrichmentService;
 
     @Autowired
     ClarificationReclassificationHandler(
             OnChainNormalizedTransactionBuilder builder,
             NormalizedTransactionRepository normalizedTransactionRepository,
             @Nullable RelatedLifecycleDiscoveryService relatedLifecycleDiscoveryService,
-            @Nullable OnChainLifecycleLinkService onChainLifecycleLinkService
+            @Nullable ProtocolNameEnrichmentService protocolNameEnrichmentService,
+            @Nullable CounterpartyEnrichmentService counterpartyEnrichmentService
     ) {
         this.builder = builder;
         this.normalizedTransactionRepository = normalizedTransactionRepository;
         this.relatedLifecycleDiscoveryService = relatedLifecycleDiscoveryService;
-        this.onChainLifecycleLinkService = onChainLifecycleLinkService;
+        this.protocolNameEnrichmentService = protocolNameEnrichmentService;
+        this.counterpartyEnrichmentService = counterpartyEnrichmentService;
     }
 
     ClarificationReclassificationHandler(
             OnChainNormalizedTransactionBuilder builder,
             NormalizedTransactionRepository normalizedTransactionRepository
     ) {
-        this(builder, normalizedTransactionRepository, null, null);
+        this(builder, normalizedTransactionRepository, null, null, null);
+    }
+
+    ClarificationReclassificationHandler(
+            OnChainNormalizedTransactionBuilder builder,
+            NormalizedTransactionRepository normalizedTransactionRepository,
+            @Nullable RelatedLifecycleDiscoveryService relatedLifecycleDiscoveryService
+    ) {
+        this(builder, normalizedTransactionRepository, relatedLifecycleDiscoveryService, null, null);
     }
 
     NormalizedTransaction persistReclassification(
@@ -58,6 +71,8 @@ final class ClarificationReclassificationHandler {
                 classificationResult,
                 now
         );
+        enrichProtocolName(reclassified, rawTransaction, now);
+        enrichCounterparty(reclassified, rawTransaction, now);
         return normalizedTransactionRepository.save(reclassified);
     }
 
@@ -73,11 +88,9 @@ final class ClarificationReclassificationHandler {
                 classificationResult,
                 now
         );
-        NormalizedTransaction saved = normalizedTransactionRepository.save(clarified);
-        if (onChainLifecycleLinkService != null) {
-            onChainLifecycleLinkService.link(rawTransaction, saved);
-        }
-        return saved;
+        enrichProtocolName(clarified, rawTransaction, now);
+        enrichCounterparty(clarified, rawTransaction, now);
+        return normalizedTransactionRepository.save(clarified);
     }
 
     NormalizedTransaction persistReceiptClarification(
@@ -86,18 +99,42 @@ final class ClarificationReclassificationHandler {
             OnChainClassificationResult classificationResult,
             Instant now
     ) {
-        NormalizedTransaction reclassified = persistReclassification(
+        NormalizedTransaction reclassified = builder.rebuildAfterReclassification(
                 normalizedTransaction,
                 rawTransaction,
                 classificationResult,
                 now
         );
-        if (onChainLifecycleLinkService != null) {
-            onChainLifecycleLinkService.link(rawTransaction, reclassified);
-        }
+        enrichProtocolName(reclassified, rawTransaction, now);
+        enrichCounterparty(reclassified, rawTransaction, now);
+        NormalizedTransaction saved = normalizedTransactionRepository.save(reclassified);
         if (relatedLifecycleDiscoveryService != null) {
             relatedLifecycleDiscoveryService.discoverAndNormalize(rawTransaction, classificationResult);
         }
-        return reclassified;
+        return saved;
+    }
+
+    private void enrichProtocolName(
+            NormalizedTransaction normalizedTransaction,
+            RawTransaction rawTransaction,
+            Instant now
+    ) {
+        if (protocolNameEnrichmentService == null) {
+            return;
+        }
+        protocolNameEnrichmentService.enrichInPlace(normalizedTransaction, rawTransaction, now);
+    }
+
+    private void enrichCounterparty(
+            NormalizedTransaction normalizedTransaction,
+            RawTransaction rawTransaction,
+            Instant now
+    ) {
+        if (counterpartyEnrichmentService == null) {
+            builder.enrichFluidEvidence(normalizedTransaction, rawTransaction);
+            return;
+        }
+        counterpartyEnrichmentService.enrichInPlace(normalizedTransaction, rawTransaction, now);
+        builder.enrichFluidEvidence(normalizedTransaction, rawTransaction);
     }
 }

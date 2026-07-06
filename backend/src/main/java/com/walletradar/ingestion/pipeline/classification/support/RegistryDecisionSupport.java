@@ -39,6 +39,46 @@ public final class RegistryDecisionSupport {
         );
     }
 
+    public static ClassificationDecision registryResultWithMatchedCounterparty(
+            OnChainRawTransactionView view,
+            ProtocolRegistryEntry entry,
+            NormalizedTransactionType type,
+            List<RawLeg> movementLegs,
+            String matchedCounterparty
+    ) {
+        return FamilyDecisionSupport.buildWithView(
+                view,
+                type,
+                OnChainClassificationSupport.initialStatus(view, type, entry.confidence()),
+                ClassificationSource.PROTOCOL_REGISTRY,
+                entry.confidence(),
+                ParityFlowSupport.flows(view, movementLegs, type),
+                List.of(),
+                false,
+                matchedCounterparty,
+                entry.protocolName(),
+                entry.protocolVersion()
+        );
+    }
+
+    public static ClassificationDecision registryResult(
+            OnChainRawTransactionView view,
+            ProtocolRegistryEntry entry,
+            NormalizedTransactionType type,
+            List<RawLeg> movementLegs,
+            String correlationId
+    ) {
+        return registryResult(
+                view,
+                entry,
+                type,
+                OnChainClassificationSupport.initialStatus(view, type, entry.confidence()),
+                ParityFlowSupport.flows(view, movementLegs, type),
+                List.of(),
+                correlationId
+        );
+    }
+
     public static ClassificationDecision registryResult(
             OnChainRawTransactionView view,
             ProtocolRegistryEntry entry,
@@ -46,10 +86,68 @@ public final class RegistryDecisionSupport {
             List<NormalizedTransaction.Flow> flows,
             List<String> missingDataReasons
     ) {
+        return registryResult(
+                view,
+                entry,
+                type,
+                OnChainClassificationSupport.initialStatus(view, type, entry.confidence()),
+                flows,
+                missingDataReasons
+        );
+    }
+
+    public static ClassificationDecision registryResult(
+            OnChainRawTransactionView view,
+            ProtocolRegistryEntry entry,
+            NormalizedTransactionType type,
+            NormalizedTransactionStatus status,
+            List<NormalizedTransaction.Flow> flows,
+            List<String> missingDataReasons,
+            String correlationId
+    ) {
+        ClassificationDecision decision = FamilyDecisionSupport.buildWithView(
+                view,
+                type,
+                status,
+                ClassificationSource.PROTOCOL_REGISTRY,
+                entry.confidence(),
+                flows,
+                missingDataReasons,
+                entry.protocolName(),
+                entry.protocolVersion()
+        );
+        if (correlationId == null || correlationId.isBlank()) {
+            return decision;
+        }
+        return new ClassificationDecision(
+                decision.type(),
+                decision.status(),
+                decision.classifiedBy(),
+                decision.confidence(),
+                decision.flows(),
+                decision.missingDataReasons(),
+                correlationId,
+                decision.continuityCandidate(),
+                decision.matchedCounterparty(),
+                decision.excludedFromAccounting(),
+                decision.accountingExclusionReason(),
+                decision.protocolName(),
+                decision.protocolVersion()
+        );
+    }
+
+    public static ClassificationDecision registryResult(
+            OnChainRawTransactionView view,
+            ProtocolRegistryEntry entry,
+            NormalizedTransactionType type,
+            NormalizedTransactionStatus status,
+            List<NormalizedTransaction.Flow> flows,
+            List<String> missingDataReasons
+    ) {
         return FamilyDecisionSupport.buildWithView(
                 view,
                 type,
-                OnChainClassificationSupport.initialStatus(view, type, entry.confidence()),
+                status,
                 ClassificationSource.PROTOCOL_REGISTRY,
                 entry.confidence(),
                 flows,

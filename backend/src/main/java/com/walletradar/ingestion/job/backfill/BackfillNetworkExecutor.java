@@ -5,7 +5,6 @@ import com.walletradar.domain.sync.BackfillSegmentRepository;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.sync.SyncStatus;
 import com.walletradar.domain.sync.SyncStatusRepository;
-import com.walletradar.ingestion.adapter.BlockHeightResolver;
 import com.walletradar.ingestion.adapter.BlockTimestampResolver;
 import com.walletradar.ingestion.adapter.NetworkAdapter;
 import com.walletradar.ingestion.config.BackfillSegmentConfiguration;
@@ -20,6 +19,7 @@ import org.springframework.stereotype.Component;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
@@ -40,37 +40,27 @@ public class BackfillNetworkExecutor {
     private final SyncStatusRepository syncStatusRepository;
     private final BackfillSegmentRepository backfillSegmentRepository;
 
-    private static final int MAX_SEGMENTS = 1000;
     private static final Set<BackfillSegment.SegmentStatus> EXECUTABLE_STATUSES = Set.of(
             BackfillSegment.SegmentStatus.PENDING,
             BackfillSegment.SegmentStatus.FAILED
     );
 
     public void runBackfillForNetwork(String walletAddress, NetworkId networkId,
-                                      NetworkAdapter adapter, BlockHeightResolver heightResolver,
+                                      NetworkAdapter adapter, com.walletradar.ingestion.adapter.BlockHeightResolver heightResolver,
                                       BlockTimestampResolver timestampResolver) {
         String networkIdStr = networkId.name();
         try {
-            syncProgressTracker.setRunning(walletAddress, networkIdStr, 0, null, "Starting " + networkIdStr + "...");
-            SegmentExecutionConfig segmentConfig = resolveSegmentExecutionConfig(networkIdStr);
             SyncStatus syncStatus = syncStatusRepository.findByWalletAddressAndNetworkId(walletAddress, networkIdStr)
                     .orElseThrow(() -> new IllegalStateException("sync_status not found for " + walletAddress + " " + networkIdStr));
-
-            long toBlock = heightResolver.getCurrentBlock(networkId);
-            long windowBlocks = getWindowBlocksForNetwork(networkIdStr);
-            final long initialFromBlock = Math.max(0, toBlock - windowBlocks + 1);
-            Long lastSynced = syncStatus.getLastBlockSynced() != null && syncStatus.getLastBlockSynced() >= initialFromBlock
-                    ? syncStatus.getLastBlockSynced()
-                    : null;
-            long fromBlock = lastSynced != null ? lastSynced + 1 : initialFromBlock;
-            if (fromBlock > toBlock) {
-                syncProgressTracker.setComplete(walletAddress, networkIdStr);
-                log.info("Backfill already up to date for {} on {}", walletAddress, networkIdStr);
+            String syncStatusId = syncStatus.getId();
+            List<BackfillSegment> allSegments = backfillSegmentRepository.findBySyncStatusIdOrderBySegmentIndexAsc(syncStatusId);
+            if (allSegments.isEmpty() || !segmentsMatchWindow(syncStatus, allSegments)) {
+                log.info("Backfill waiting for planner segments: wallet={}, network={}, syncStatusId={}",
+                        walletAddress, networkIdStr, syncStatusId);
                 return;
             }
-            String syncStatusId = syncStatus.getId();
-            List<BackfillSegment> allSegments = ensureSegments(
-                    syncStatusId, walletAddress, networkIdStr, fromBlock, toBlock, segmentConfig.parallelSegments());
+            syncProgressTracker.setRunning(walletAddress, networkIdStr, 0, syncStatus.getLastBlockSynced(), "Starting " + networkIdStr + "...");
+            SegmentExecutionConfig segmentConfig = resolveSegmentExecutionConfig(networkIdStr);
             recoverStaleSegments(syncStatusId, segmentConfig.segmentStaleAfterMs());
 
             List<BackfillSegment> segmentsToRun = backfillSegmentRepository
@@ -108,52 +98,6 @@ public class BackfillNetworkExecutor {
             log.warn("Backfill failed for {} on {}: {}", walletAddress, networkIdStr, detail, e);
             syncProgressTracker.setFailed(walletAddress, networkIdStr, "Backfill failed: " + detail);
         }
-    }
-
-    private long getWindowBlocksForNetwork(String networkIdStr) {
-        var networkMap = ingestionNetworkProperties.getNetwork();
-        var entry = networkMap != null ? networkMap.get(networkIdStr) : null;
-        if (entry != null && entry.getWindowBlocks() != null && entry.getWindowBlocks() > 0) {
-            return entry.getWindowBlocks();
-        }
-        return Math.max(1, backfillProperties.getWindowBlocks());
-    }
-
-    private List<BackfillSegment> ensureSegments(String syncStatusId, String walletAddress, String networkId,
-                                                 long fromBlock, long toBlock, int requestedParallelSegments) {
-        List<BackfillSegment> existing = backfillSegmentRepository.findBySyncStatusIdOrderBySegmentIndexAsc(syncStatusId);
-        if (!existing.isEmpty()) {
-            return existing;
-        }
-        long totalBlocks = toBlock - fromBlock + 1;
-        int plannedSegments = Math.max(1, Math.min(MAX_SEGMENTS, requestedParallelSegments));
-        int segmentCount = (int) Math.max(1, Math.min(totalBlocks, plannedSegments));
-        long baseSize = totalBlocks / segmentCount;
-        long remainder = totalBlocks % segmentCount;
-        long cursor = fromBlock;
-        List<BackfillSegment> toCreate = new ArrayList<>(segmentCount);
-        for (int i = 0; i < segmentCount; i++) {
-            long size = baseSize + (i < remainder ? 1 : 0);
-            if (size <= 0) {
-                continue;
-            }
-            BackfillSegment s = new BackfillSegment();
-            s.setId(syncStatusId + ":" + i);
-            s.setSyncStatusId(syncStatusId);
-            s.setWalletAddress(walletAddress);
-            s.setNetworkId(networkId);
-            s.setSegmentIndex(i);
-            s.setFromBlock(cursor);
-            s.setToBlock(cursor + size - 1);
-            s.setStatus(BackfillSegment.SegmentStatus.PENDING);
-            s.setProgressPct(0);
-            s.setRetryCount(0);
-            s.setUpdatedAt(java.time.Instant.now());
-            toCreate.add(s);
-            cursor += size;
-        }
-        backfillSegmentRepository.saveAll(toCreate);
-        return backfillSegmentRepository.findBySyncStatusIdOrderBySegmentIndexAsc(syncStatusId);
     }
 
     private void recoverStaleSegments(String syncStatusId, long segmentStaleAfterMs) {
@@ -351,6 +295,27 @@ public class BackfillNetworkExecutor {
                 .mapToInt(p -> p == null ? 0 : Math.max(0, Math.min(100, p)))
                 .sum();
         return Math.max(0, Math.min(100, total / segments.size()));
+    }
+
+    private boolean segmentsMatchWindow(SyncStatus syncStatus, List<BackfillSegment> segments) {
+        if (syncStatus == null || segments == null || segments.isEmpty()) {
+            return false;
+        }
+        if (syncStatus.getWindowFromBlock() == null || syncStatus.getWindowToBlock() == null) {
+            return true;
+        }
+        Long minFrom = segments.stream()
+                .map(BackfillSegment::getFromBlock)
+                .filter(Objects::nonNull)
+                .min(Comparator.naturalOrder())
+                .orElse(null);
+        Long maxTo = segments.stream()
+                .map(BackfillSegment::getToBlock)
+                .filter(Objects::nonNull)
+                .max(Comparator.naturalOrder())
+                .orElse(null);
+        return Objects.equals(minFrom, syncStatus.getWindowFromBlock())
+                && Objects.equals(maxTo, syncStatus.getWindowToBlock());
     }
 
     private long resolveEffectiveFromBlock(BackfillSegment segment) {

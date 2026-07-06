@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, DestroyRef, ViewChild, computed, effect, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { FormsModule, FormArray, FormControl, FormGroup } from '@angular/forms';
 import { HttpErrorResponse } from '@angular/common/http';
 import { takeUntilDestroyed, toObservable, toSignal } from '@angular/core/rxjs-interop';
@@ -11,17 +12,23 @@ import {
   EMPTY_DASHBOARD_DATA,
   EVM_NETWORKS_PRESENTATION,
   EVM_NETWORK_PRESENTATION_BY_ID,
+  INTEGRATION_PRESENTATION_BY_PROVIDER,
 } from '../../core/data/dashboard.constants';
 import {
+  ALL_TRANSACTION_CATEGORIES,
+  DEFAULT_TRANSACTION_CATEGORIES,
   DashboardSection,
   DashboardViewState,
   FlowRole,
+  IntegrationInfo,
   IssueCode,
   NetworkId,
   NetworkInfo,
   PriceSource,
   SectionMeta,
   TokenPosition,
+  TransactionCategory,
+  TRANSACTION_CATEGORIES_STORAGE_KEY,
   TransactionFlow,
   TransactionItem,
   TransactionStatus,
@@ -38,10 +45,10 @@ import {
   SessionBackfillAggregateStatus,
   SessionBackfillStatusResponse,
   SessionBridgeStatus,
-  SessionTransactionsBridgeFilter,
+  SessionIntegrationResponse,
+  SessionRefreshResponse,
   SessionTransactionFlowResponse,
   SessionTransactionItemResponse,
-  SessionTransactionsSpamFilter,
   SUPPORTED_EVM_NETWORKS,
 } from '../../core/models/wallet-api.models';
 import { WalletApiService } from '../../core/services/wallet-api.service';
@@ -54,9 +61,13 @@ import { DashboardSectionNavComponent } from './components/dashboard-section-nav
 import { DashboardTopbarComponent } from './components/dashboard-topbar/dashboard-topbar.component';
 import { DashboardTransactionsPaneComponent } from './components/dashboard-transactions-pane/dashboard-transactions-pane.component';
 import { AssetLedgerPageComponent } from '../asset-ledger/asset-ledger-page.component';
+import { LendingPageComponent } from '../lending/lending-page.component';
+import { LpPageComponent } from '../lp/lp-page.component';
+import { SettingsPageComponent } from '../settings/settings-page.component';
 
 type LpTab = 'all' | 'open' | 'closed';
 type SessionTransactionsLoadPhase = 'idle' | 'intermediate' | 'final';
+type FilterSelectionMode = 'all' | 'custom';
 type WalletFormGroup = FormGroup<{
   address: FormControl<string>;
   label: FormControl<string>;
@@ -71,8 +82,15 @@ interface TokenFamilyRow {
   readonly symbol: string;
   readonly name: string;
   readonly quantity: number;
+  readonly coveredQuantity: number;
   readonly priceUsd: number;
+  readonly priceSource: PriceSource | null;
+  readonly pricedAt: string | null;
+  readonly stalenessSeconds: number | null;
+  readonly isLiveQuote: boolean;
+  readonly priceIssue: IssueCode;
   readonly avcoUsd: number;
+  readonly netAvcoUsd: number;
   readonly unrealizedPnlPct: number;
   readonly unrealizedPnlUsd: number;
   readonly realizedPnlUsd: number;
@@ -81,16 +99,42 @@ interface TokenFamilyRow {
   readonly walletIds: ReadonlyArray<WalletId>;
   readonly currentValueUsd: number;
   readonly totalCostBasisUsd: number;
+  readonly valuationModel: string | null;
+  readonly valuationUnderlyingSymbol: string | null;
+  readonly unsupportedValuationReason: string | null;
 }
+
+interface AllocationRow {
+  readonly id: string;
+  readonly label: string;
+  readonly icon: string | null;
+  readonly color: string;
+  readonly valueUsd: number;
+  readonly sharePct: number;
+}
+
+interface AllocationMoreSummary {
+  readonly count: number;
+  readonly valueUsd: number;
+  readonly sharePct: number;
+}
+
+const ALLOCATION_VISIBLE_ROW_COUNT = 4;
 
 const TRANSACTION_TYPES_BY_ID = new Set<TransactionType>([
   'SWAP',
   'WRAP',
   'UNWRAP',
+  'GAS_ONLY',
   'EXTERNAL_INBOUND',
+  'EXTERNAL_TRANSFER_IN',
   'EXTERNAL_TRANSFER_OUT',
   'LP_ENTRY',
+  'LP_ENTRY_REQUEST',
+  'LP_ENTRY_SETTLEMENT',
   'LP_EXIT',
+  'LP_EXIT_REQUEST',
+  'LP_EXIT_SETTLEMENT',
   'LP_EXIT_PARTIAL',
   'LP_EXIT_FINAL',
   'LP_FEE_CLAIM',
@@ -98,16 +142,47 @@ const TRANSACTION_TYPES_BY_ID = new Set<TransactionType>([
   'LP_POSITION_UNSTAKE',
   'LEND_DEPOSIT',
   'LEND_WITHDRAWAL',
+  'LENDING_DEPOSIT',
+  'LENDING_WITHDRAW',
+  'LENDING_LOOP_OPEN',
+  'LENDING_LOOP_REBALANCE',
+  'LENDING_LOOP_DECREASE',
+  'LENDING_LOOP_CLOSE',
   'BORROW',
   'REPAY',
+  'VAULT_DEPOSIT',
+  'VAULT_WITHDRAW',
+  'BRIDGE_OUT',
+  'BRIDGE_IN',
+  'DEX_ORDER_REQUEST',
+  'DEX_ORDER_SETTLEMENT',
+  'DERIVATIVE_ORDER_REQUEST',
+  'DERIVATIVE_ORDER_EXECUTION',
+  'DERIVATIVE_ORDER_CANCEL',
+  'DERIVATIVE_POSITION_INCREASE',
+  'DERIVATIVE_POSITION_DECREASE',
+  'PROTOCOL_CUSTODY_DEPOSIT',
+  'PROTOCOL_CUSTODY_WITHDRAW',
   'REWARD_CLAIM',
   'STAKE_DEPOSIT',
   'STAKE_WITHDRAWAL',
+  'STAKING_DEPOSIT',
+  'STAKING_WITHDRAW_REQUEST',
+  'STAKING_WITHDRAW',
   'APPROVAL',
+  'APPROVE',
+  'ADMIN_CONFIG',
+  'SPONSORED_GAS_IN',
+  'INTERNAL_TRANSFER',
+  'UNKNOWN',
   'UNCLASSIFIED',
   'MANUAL_COMPENSATING',
   'LP_ADJUST',
 ]);
+
+const TRANSACTION_TYPE_DISPLAY_OVERRIDES: Readonly<Record<string, TransactionType>> = {
+  SPONSORED_GAS_IN: 'GAS_ONLY',
+};
 
 const FLOW_ROLES = new Set<FlowRole>(['BUY', 'SELL', 'FEE', 'TRANSFER']);
 const PRICE_SOURCES = new Set<PriceSource>([
@@ -121,6 +196,8 @@ const PRICE_SOURCES = new Set<PriceSource>([
   'ECB',
   'EXECUTION',
   'WRAPPER',
+  'AAVE_INDEX_ACCRUING',
+  'PROTOCOL_SNAPSHOT',
 ]);
 const BRIDGE_STATUSES = new Set<SessionBridgeStatus>(['BRIDGE_OUT', 'BRIDGE_IN', 'MATCHED', 'REVIEW']);
 
@@ -135,6 +212,9 @@ const BRIDGE_STATUSES = new Set<SessionBridgeStatus>(['BRIDGE_OUT', 'BRIDGE_IN',
     DashboardAddWalletDialogComponent,
     DashboardTransactionsPaneComponent,
     AssetLedgerPageComponent,
+    LendingPageComponent,
+    LpPageComponent,
+    SettingsPageComponent,
   ],
   templateUrl: './dashboard.component.html',
   styleUrl: './dashboard.component.scss',
@@ -147,6 +227,7 @@ export class DashboardComponent {
   private readonly destroyRef = inject(DestroyRef);
   private readonly router = inject(Router);
   private readonly route = inject(ActivatedRoute);
+  private readonly sanitizer = inject(DomSanitizer);
 
   @ViewChild(DashboardAddWalletDialogComponent)
   private addWalletDialogComponent?: DashboardAddWalletDialogComponent;
@@ -163,14 +244,18 @@ export class DashboardComponent {
   readonly currentSessionId = signal<string | null>(null);
   readonly dashboardRefreshNonce = signal(0);
   readonly sessionBackfillStatus = signal<SessionBackfillStatusResponse | null>(null);
+  readonly isSessionRefreshSubmitting = signal(false);
+  readonly sessionRefreshMessage = signal<string | null>(null);
   readonly sessionTransactions = signal<ReadonlyArray<TransactionItem>>([]);
   readonly sessionTransactionsTotalCount = signal(0);
   readonly isSessionTransactionsLoading = signal(false);
   readonly sessionTransactionsError = signal<string | null>(null);
   readonly sessionTransactionsLoadPhase = signal<SessionTransactionsLoadPhase>('idle');
+  private pendingTransactionSub: Subscription | null = null;
   readonly transactionSearch = signal('');
-  readonly transactionBridgeStatusFilter = signal<SessionTransactionsBridgeFilter>('ALL');
-  readonly transactionSpamFilter = signal<SessionTransactionsSpamFilter>('HIDE_SPAM');
+  readonly enabledCategories = signal<ReadonlySet<TransactionCategory>>(
+    this.loadCategoriesFromStorage()
+  );
   readonly transactionPage = signal(0);
   readonly transactionPageSize = 50;
   readonly canOpenAssetLedger = computed(() => this.currentSessionId() !== null);
@@ -194,6 +279,18 @@ export class DashboardComponent {
   );
   readonly assetLedgerSessionId = computed(() => this.routeAssetLedgerSelection().sessionId ?? this.currentSessionId());
   readonly isAssetLedgerMode = computed(() => this.assetLedgerFamilyIdentity() !== null);
+  readonly isSettingsMode = toSignal(
+    this.route.data.pipe(map((data) => data['mode'] === 'settings')),
+    { initialValue: this.route.snapshot.data['mode'] === 'settings' }
+  );
+  readonly isLendingMode = toSignal(
+    this.route.data.pipe(map((data) => data['mode'] === 'lending')),
+    { initialValue: this.route.snapshot.data['mode'] === 'lending' }
+  );
+  readonly isLpMode = toSignal(
+    this.route.data.pipe(map((data) => data['mode'] === 'lp')),
+    { initialValue: this.route.snapshot.data['mode'] === 'lp' }
+  );
 
   readonly viewState = toSignal(
     toObservable(
@@ -216,10 +313,18 @@ export class DashboardComponent {
   );
 
   readonly section = signal<DashboardSection>('tokens');
+  readonly walletFilterMode = signal<FilterSelectionMode>('all');
   readonly selectedWalletIds = signal<ReadonlySet<WalletId>>(new Set<WalletId>());
+  readonly integrationFilterMode = signal<FilterSelectionMode>('all');
+  readonly selectedIntegrationRefs = signal<ReadonlySet<string>>(new Set<string>());
+  readonly networkFilterMode = signal<FilterSelectionMode>('all');
   readonly selectedNetworkIds = signal<ReadonlySet<NetworkId>>(new Set<NetworkId>());
+  readonly sessionIntegrations = signal<ReadonlyArray<IntegrationInfo>>([]);
   readonly hideDustAssets = signal(true);
+  readonly showReconciliationWarnings = signal(true);
   readonly isFiltersCollapsed = signal(false);
+  readonly networksAllocationExpanded = signal(false);
+  readonly walletsAllocationExpanded = signal(false);
   readonly lpTab = signal<LpTab>('all');
 
   readonly data = computed(() => {
@@ -256,6 +361,19 @@ export class DashboardComponent {
     }
     const phaseProgress = status.phaseProgress;
     if (phaseProgress !== null && phaseProgress !== undefined) {
+      if (phaseProgress.phase === 'PRICING') {
+        return `priced tx: ${phaseProgress.processedCount} · left: ${phaseProgress.leftCount}`;
+      }
+      if (
+        phaseProgress.phase === 'BACKFILL' &&
+        phaseProgress.totalCount !== null &&
+        phaseProgress.totalCount !== undefined &&
+        status.totalTargets !== null &&
+        status.totalTargets !== undefined &&
+        phaseProgress.totalCount > status.totalTargets
+      ) {
+        return `segments: ${phaseProgress.processedCount}/${phaseProgress.totalCount} complete · ${phaseProgress.leftCount} pending`;
+      }
       return `processed: ${phaseProgress.processedCount} · left: ${phaseProgress.leftCount}`;
     }
     if (status.pipelineMessage !== null && status.pipelineMessage !== undefined && status.pipelineMessage.length > 0) {
@@ -264,32 +382,105 @@ export class DashboardComponent {
     return `${status.completedTargets}/${status.totalTargets} wallet×network complete`;
   });
 
+  readonly lastSyncedLabel = computed(() => {
+    const status = this.sessionBackfillStatus();
+    const raw = status?.lastSyncedAt;
+    if (!raw) return null;
+    const date = new Date(raw);
+    const diffMs = Date.now() - date.getTime();
+    const diffMin = Math.floor(diffMs / 60_000);
+    if (diffMin < 1) return 'Just now';
+    if (diffMin < 60) return `${diffMin} min ago`;
+    const diffH = Math.floor(diffMin / 60);
+    if (diffH < 24) return `${diffH}h ago`;
+    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  });
+
   readonly showPipelineProgress = computed(() => {
     return this.sessionBackfillStatus() !== null;
+  });
+
+  readonly canRefreshSession = computed(() => {
+    const sessionId = this.currentSessionId();
+    const status = this.sessionBackfillStatus();
+    if (sessionId === null || status === null) {
+      return false;
+    }
+    return this.acquisitionStatus(status) === 'COMPLETE'
+      && !this.isPipelineRunning(status)
+      && !this.isSessionRefreshSubmitting();
   });
 
   readonly activeSection = computed((): SectionMeta | null => {
     return this.data().sections.find((sectionMeta) => sectionMeta.id === this.section()) ?? null;
   });
 
+  readonly onChainWallets = computed<ReadonlyArray<WalletInfo>>(() =>
+    this.data().wallets.filter((w) => w.address.startsWith('0x'))
+  );
+  readonly availableWalletIds = computed<ReadonlyArray<WalletId>>(() => this.data().wallets.map((wallet) => wallet.id));
+  readonly availableIntegrationRefs = computed<ReadonlyArray<string>>(() =>
+    this.sessionIntegrations().map((integration) => integration.accountRef)
+  );
+  readonly availableNetworkIds = computed<ReadonlyArray<NetworkId>>(() => this.filterNetworks().map((network) => network.id));
+
   readonly activeFilterCount = computed(() => {
-    return this.selectedWalletIds().size + this.selectedNetworkIds().size;
+    // Count only on-chain (0x) wallets shown as chips — bybit virtual wallets are integration-managed
+    const onChainCount = this.onChainWallets().length;
+    const selectedOnChainCount = [...this.selectedWalletIds()].filter((id) => id.startsWith('0x')).length;
+    const hiddenWallets = this.walletFilterMode() === 'all'
+      ? 0
+      : Math.max(0, onChainCount - selectedOnChainCount);
+    const hiddenIntegrations = this.integrationFilterMode() === 'all'
+      ? 0
+      : Math.max(0, this.availableIntegrationRefs().length - this.selectedIntegrationRefs().size);
+    const hiddenNetworks = this.networkFilterMode() === 'all'
+      ? 0
+      : Math.max(0, this.availableNetworkIds().length - this.selectedNetworkIds().size);
+
+    return hiddenWallets + hiddenIntegrations + hiddenNetworks;
   });
 
-  readonly selectedWalletFilter = computed(() => this.selectedWalletIds());
-  readonly selectedNetworkFilter = computed(() => this.selectedNetworkIds());
+  readonly selectedWalletFilter = computed(() =>
+    this.walletFilterMode() === 'all'
+      ? new Set<WalletId>(this.availableWalletIds())
+      : new Set<WalletId>(this.selectedWalletIds())
+  );
+  readonly selectedIntegrationFilter = computed(() =>
+    this.integrationFilterMode() === 'all'
+      ? new Set<string>(this.availableIntegrationRefs())
+      : new Set<string>(this.selectedIntegrationRefs())
+  );
+  readonly selectedNetworkFilter = computed(() =>
+    this.networkFilterMode() === 'all'
+      ? new Set<NetworkId>(this.availableNetworkIds())
+      : new Set<NetworkId>(this.selectedNetworkIds())
+  );
   readonly sessionWallets = computed<ReadonlyArray<WalletInfo>>(() => {
     const status = this.sessionBackfillStatus();
     if (status === null) {
       return [];
     }
-    return status.wallets.map((wallet) => ({
-      id: wallet.address.toLowerCase(),
-      label: wallet.label,
-      address: wallet.address.toLowerCase(),
-      color: wallet.color,
-    }));
+    return status.wallets.map((wallet) => {
+      const address = wallet.address.trim();
+      const scopeId = address.toLowerCase();
+      return {
+        id: scopeId,
+        label: wallet.label,
+        address,
+        color: wallet.color,
+      };
+    });
   });
+
+  readonly transactionPaneIntegrations = computed<ReadonlyArray<WalletInfo>>(() =>
+    this.sessionIntegrations().map((integration) => ({
+      id: integration.accountRef.toLowerCase(),
+      label: integration.label,
+      address: integration.accountRef,
+      color: integration.color,
+    }))
+  );
 
   readonly sessionNetworks = computed<ReadonlyArray<NetworkInfo>>(() => {
     const status = this.sessionBackfillStatus();
@@ -325,8 +516,11 @@ export class DashboardComponent {
 
   readonly transactionPaneWallets = computed(() => {
     const sessionWallets = this.sessionWallets();
-    return sessionWallets.length > 0 ? sessionWallets : this.data().wallets;
+    const baseWallets = sessionWallets.length > 0 ? sessionWallets : this.data().wallets;
+    return this.mergeWalletScopes(baseWallets, this.transactionPaneIntegrations());
   });
+
+  readonly filterIntegrations = computed(() => this.sessionIntegrations());
 
   readonly transactionPaneNetworks = computed(() => {
     const sessionNetworks = this.sessionNetworks();
@@ -334,8 +528,34 @@ export class DashboardComponent {
   });
 
   readonly filterNetworks = computed<ReadonlyArray<NetworkInfo>>(() => {
-    const sessionNetworks = this.sessionNetworks();
-    return sessionNetworks.length > 0 ? sessionNetworks : this.data().networks;
+    const fromSession = this.sessionNetworks();
+    const fromData = this.data().networks;
+    const byId = new Map<NetworkId, NetworkInfo>();
+    for (const network of fromSession) {
+      byId.set(network.id, network);
+    }
+    for (const network of fromData) {
+      if (!byId.has(network.id)) {
+        byId.set(network.id, network);
+      }
+    }
+    let merged = [...byId.values()];
+    if (
+      this.sessionIntegrations().length > 0 &&
+      !merged.some((network) => network.id === 'BYBIT')
+    ) {
+      const presentation = INTEGRATION_PRESENTATION_BY_PROVIDER.get('BYBIT');
+      merged = [
+        ...merged,
+        {
+          id: 'BYBIT',
+          icon: presentation?.icon ?? '◈',
+          label: presentation?.label ?? 'Bybit',
+          color: presentation?.color ?? COLORS.textSubtle,
+        },
+      ];
+    }
+    return merged;
   });
 
   readonly transactionPaneTransactions = computed(() => {
@@ -362,18 +582,33 @@ export class DashboardComponent {
 
   readonly filteredTokenPositions = computed(() => {
     const selectedWallets = this.selectedWalletFilter();
+    const hasCustomIntegrationFilter = this.integrationFilterMode() === 'custom';
+    const selectedIntegrations = this.selectedIntegrationFilter();
     const selectedNetworks = this.selectedNetworkFilter();
     const hideDust = this.hideDustAssets();
 
     return this.data().tokenPositions.filter((asset) => {
-      if (hideDust && asset.quantity * asset.priceUsd < 0.5) {
+      if (hideDust && Math.abs(asset.marketValueUsd ?? 0) < 0.5) {
         return false;
       }
-      if (selectedWallets.size > 0 && !selectedWallets.has(asset.walletId)) {
+      const isOnChain = asset.walletId.startsWith('0x');
+      // Wallet chip filter applies only to on-chain (0x) wallets
+      if (isOnChain && selectedWallets.size > 0 && !selectedWallets.has(asset.walletId)) {
         return false;
       }
-      if (selectedNetworks.size > 0 && !selectedNetworks.has(asset.networkId)) {
+      if (selectedNetworks.size > 0 && !isOnChain && !selectedNetworks.has(asset.networkId)) {
         return false;
+      }
+      // Integration filter applies only to CEX/virtual wallets (non-0x); on-chain wallets are unaffected
+      if (hasCustomIntegrationFilter && !isOnChain) {
+        const walletId = asset.walletId.toLowerCase();
+        const matches = [...selectedIntegrations].some((ref) => {
+          const normalizedRef = ref.trim().toLowerCase();
+          return normalizedRef.length > 0 && (walletId === normalizedRef || walletId.startsWith(`${normalizedRef}:`));
+        });
+        if (!matches) {
+          return false;
+        }
       }
 
       return true;
@@ -386,18 +621,29 @@ export class DashboardComponent {
       symbol: string;
       name: string;
       quantity: number;
+      coveredQuantity: number;
       currentValueUsd: number;
       totalCostBasisUsd: number;
+      totalNetCostBasisUsd: number;
       unrealizedPnlUsd: number;
       realizedPnlUsd: number;
+      priceSource: PriceSource | null;
+      pricedAt: string | null;
+      stalenessSeconds: number | null;
+      isLiveQuote: boolean;
+      priceIssue: IssueCode;
       networkIds: Set<NetworkId>;
       walletIds: Set<WalletId>;
       issue: IssueCode;
+      valuationModel: string | null;
+      valuationUnderlyingSymbol: string | null;
+      unsupportedValuationReason: string | null;
     }>();
 
     for (const position of this.filteredTokenPositions()) {
-      const currentValueUsd = position.quantity * position.priceUsd;
-      const totalCostBasisUsd = position.quantity * position.avcoUsd;
+      const currentValueUsd = position.marketValueUsd;
+      const totalCostBasisUsd = position.coveredQuantity * position.avcoUsd;
+      const totalNetCostBasisUsd = position.coveredQuantity * position.netAvcoUsd;
       const existing = grouped.get(position.familyIdentity);
       if (existing === undefined) {
         grouped.set(position.familyIdentity, {
@@ -405,40 +651,69 @@ export class DashboardComponent {
           symbol: position.symbol,
           name: position.name,
           quantity: position.quantity,
+          coveredQuantity: position.coveredQuantity,
           currentValueUsd,
           totalCostBasisUsd,
+          totalNetCostBasisUsd,
           unrealizedPnlUsd: position.unrealizedPnlUsd,
           realizedPnlUsd: position.realizedPnlUsd,
+          priceSource: position.priceSource,
+          pricedAt: position.pricedAt,
+          stalenessSeconds: position.stalenessSeconds,
+          isLiveQuote: position.isLiveQuote,
+          priceIssue: position.priceIssue,
           networkIds: new Set([position.networkId]),
           walletIds: new Set([position.walletId]),
           issue: position.issue,
+          valuationModel: position.valuationModel,
+          valuationUnderlyingSymbol: position.valuationUnderlyingSymbol,
+          unsupportedValuationReason: position.unsupportedValuationReason,
         });
         continue;
       }
 
       existing.quantity += position.quantity;
+      existing.coveredQuantity += position.coveredQuantity;
       existing.currentValueUsd += currentValueUsd;
       existing.totalCostBasisUsd += totalCostBasisUsd;
+      existing.totalNetCostBasisUsd += totalNetCostBasisUsd;
       existing.unrealizedPnlUsd += position.unrealizedPnlUsd;
       existing.realizedPnlUsd += position.realizedPnlUsd;
+      existing.priceSource = this.pickPriceSource(existing, position);
+      existing.pricedAt = this.pickLatestPricedAt(existing.pricedAt, position.pricedAt);
+      existing.stalenessSeconds = this.pickSmallestStaleness(existing.stalenessSeconds, position.stalenessSeconds);
+      existing.isLiveQuote = existing.isLiveQuote || position.isLiveQuote;
+      existing.priceIssue = this.mergeIssueCode(existing.priceIssue, position.priceIssue);
       existing.networkIds.add(position.networkId);
       existing.walletIds.add(position.walletId);
       existing.issue = this.mergeIssueCode(existing.issue, position.issue);
+      existing.valuationModel = existing.valuationModel ?? position.valuationModel;
+      existing.valuationUnderlyingSymbol = existing.valuationUnderlyingSymbol ?? position.valuationUnderlyingSymbol;
+      existing.unsupportedValuationReason = existing.unsupportedValuationReason ?? position.unsupportedValuationReason;
     }
 
     return [...grouped.values()]
       .map((group): TokenFamilyRow => {
         const quantity = group.quantity;
+        const coveredQuantity = group.coveredQuantity;
         const priceUsd = quantity === 0 ? 0 : group.currentValueUsd / quantity;
-        const avcoUsd = quantity === 0 ? 0 : group.totalCostBasisUsd / quantity;
+        const avcoUsd = coveredQuantity === 0 ? 0 : group.totalCostBasisUsd / coveredQuantity;
+        const netAvcoUsd = coveredQuantity === 0 ? 0 : group.totalNetCostBasisUsd / coveredQuantity;
         const unrealizedPnlPct = group.totalCostBasisUsd === 0 ? 0 : (group.unrealizedPnlUsd / group.totalCostBasisUsd) * 100;
         return {
           familyIdentity: group.familyIdentity,
           symbol: group.symbol,
           name: group.name,
           quantity,
+          coveredQuantity: group.coveredQuantity,
           priceUsd,
+          priceSource: group.priceSource,
+          pricedAt: group.pricedAt,
+          stalenessSeconds: group.stalenessSeconds,
+          isLiveQuote: group.isLiveQuote,
+          priceIssue: group.priceIssue,
           avcoUsd,
+          netAvcoUsd,
           unrealizedPnlPct,
           unrealizedPnlUsd: group.unrealizedPnlUsd,
           realizedPnlUsd: group.realizedPnlUsd,
@@ -447,6 +722,9 @@ export class DashboardComponent {
           walletIds: [...group.walletIds],
           currentValueUsd: group.currentValueUsd,
           totalCostBasisUsd: group.totalCostBasisUsd,
+          valuationModel: group.valuationModel,
+          valuationUnderlyingSymbol: group.valuationUnderlyingSymbol,
+          unsupportedValuationReason: group.unsupportedValuationReason,
         };
       })
       .sort((left, right) => right.currentValueUsd - left.currentValueUsd);
@@ -492,6 +770,132 @@ export class DashboardComponent {
     return this.filteredTokenFamilies().reduce((total, token) => total + token.currentValueUsd, 0);
   });
 
+  readonly filteredUnrealizedPnlUsd = computed(() =>
+    this.filteredTokenFamilies().reduce((total, token) => total + token.unrealizedPnlUsd, 0)
+  );
+
+  readonly filteredRealizedPnlUsd = computed(() =>
+    this.filteredTokenFamilies().reduce((total, token) => total + token.realizedPnlUsd, 0)
+  );
+
+  readonly totalRealizedPnlUsd = computed(() => this.data().totalRealizedPnlUsd);
+
+  readonly isFiltered = computed(() =>
+    this.walletFilterMode() !== 'all' ||
+    this.networkFilterMode() !== 'all' ||
+    this.integrationFilterMode() !== 'all'
+  );
+
+  readonly displayedRealizedPnlUsd = computed(() =>
+    this.isFiltered() ? this.filteredRealizedPnlUsd() : this.totalRealizedPnlUsd()
+  );
+
+  readonly filteredTotalCostBasisUsd = computed(() =>
+    this.filteredTokenFamilies().reduce((total, token) => total + token.totalCostBasisUsd, 0)
+  );
+
+  readonly filteredUnrealizedPnlPct = computed(() => {
+    const costBasis = this.filteredTotalCostBasisUsd();
+    if (costBasis <= 0) {
+      return 0;
+    }
+    return (this.filteredUnrealizedPnlUsd() / costBasis) * 100;
+  });
+
+  readonly tokenUsdByNetwork = computed<ReadonlyArray<AllocationRow>>(() => {
+    const positions = this.filteredTokenPositions();
+    const totals = new Map<NetworkId, number>();
+    let totalUsd = 0;
+    for (const position of positions) {
+      const valueUsd = position.marketValueUsd ?? 0;
+      if (!Number.isFinite(valueUsd) || valueUsd <= 0) {
+        continue;
+      }
+      totalUsd += valueUsd;
+      totals.set(position.networkId, (totals.get(position.networkId) ?? 0) + valueUsd);
+    }
+    if (totalUsd <= 0) {
+      return [];
+    }
+    return [...totals.entries()]
+      .map(([networkId, valueUsd]): AllocationRow => {
+        const network = this.getNetworkById(networkId);
+        return {
+          id: networkId,
+          label: network?.label ?? networkId,
+          icon: network?.icon ?? null,
+          color: network?.color ?? COLORS.textSubtle,
+          valueUsd,
+          sharePct: (valueUsd / totalUsd) * 100,
+        };
+      })
+      .sort((left, right) => right.valueUsd - left.valueUsd);
+  });
+
+  readonly onChainVsCexSplit = computed(() => {
+    const rows = this.tokenUsdByNetwork();
+    const total = rows.reduce((sum, row) => sum + row.valueUsd, 0);
+    const cex = rows
+      .filter((row) => row.id === 'BYBIT')
+      .reduce((sum, row) => sum + row.valueUsd, 0);
+    const onChain = total - cex;
+    return {
+      onChainPct: total > 0 ? (onChain / total) * 100 : 0,
+      cexPct: total > 0 ? (cex / total) * 100 : 0,
+    };
+  });
+
+  readonly tokenUsdByWallet = computed<ReadonlyArray<AllocationRow>>(() => {
+    const positions = this.filteredTokenPositions();
+    const totals = new Map<WalletId, number>();
+    let totalUsd = 0;
+    for (const position of positions) {
+      const valueUsd = position.marketValueUsd ?? 0;
+      if (!Number.isFinite(valueUsd) || valueUsd <= 0) {
+        continue;
+      }
+      totalUsd += valueUsd;
+      totals.set(position.walletId, (totals.get(position.walletId) ?? 0) + valueUsd);
+    }
+    if (totalUsd <= 0) {
+      return [];
+    }
+    return [...totals.entries()]
+      .map(([walletId, valueUsd]): AllocationRow => {
+        return {
+          id: walletId,
+          label: this.walletLabel(walletId),
+          icon: '●',
+          color: this.walletColor(walletId),
+          valueUsd,
+          sharePct: (valueUsd / totalUsd) * 100,
+        };
+      })
+      .sort((left, right) => right.valueUsd - left.valueUsd);
+  });
+
+  readonly visibleNetworksAllocation = computed(() => {
+    const rows = this.tokenUsdByNetwork();
+    return this.networksAllocationExpanded()
+      ? rows
+      : rows.slice(0, ALLOCATION_VISIBLE_ROW_COUNT);
+  });
+
+  readonly visibleWalletsAllocation = computed(() => {
+    const rows = this.tokenUsdByWallet();
+    return this.walletsAllocationExpanded()
+      ? rows
+      : rows.slice(0, ALLOCATION_VISIBLE_ROW_COUNT);
+  });
+
+  readonly networksAllocationMore = computed(() =>
+    this.allocationMoreSummary(this.tokenUsdByNetwork())
+  );
+
+  readonly walletsAllocationMore = computed(() =>
+    this.allocationMoreSummary(this.tokenUsdByWallet())
+  );
+
   readonly totalOpenLpFeesUsd = computed(() => {
     return this.data()
       .lpPositions.filter((position) => position.status === 'open')
@@ -531,6 +935,20 @@ export class DashboardComponent {
       this.stopBackfillPolling();
     });
     this.restoreSessionBackfillIfNeeded();
+    effect(() => {
+      if (this.isSettingsMode()) {
+        return;
+      }
+      if (this.currentSessionId() !== null) {
+        return;
+      }
+      const storedSessionId = this.sessionStorageService.getSessionId();
+      if (storedSessionId && storedSessionId.trim().length > 0) {
+        this.currentSessionId.set(storedSessionId.trim());
+        return;
+      }
+      void this.router.navigate(['/settings']);
+    });
     effect(() => {
       const routeSessionId = this.routeAssetLedgerSelection().sessionId;
       if (routeSessionId === null || routeSessionId.length === 0 || routeSessionId === this.currentSessionId()) {
@@ -572,6 +990,37 @@ export class DashboardComponent {
     if (sectionMeta?.soon) {
       return;
     }
+    if (sectionId === 'lending') {
+      this.section.set(sectionId);
+      this.selectedAssetFamilyIdentity.set(null);
+      if (!this.isLendingMode()) {
+        void this.router.navigate(['/lending']);
+      }
+      return;
+    }
+    if (sectionId === 'lp') {
+      this.section.set(sectionId);
+      this.selectedAssetFamilyIdentity.set(null);
+      if (!this.isLpMode()) {
+        void this.router.navigate(['/lp']);
+      }
+      return;
+    }
+    if (this.isSettingsMode()) {
+      this.section.set(sectionId);
+      void this.router.navigate(['/']);
+      return;
+    }
+    if (this.isLendingMode()) {
+      this.section.set(sectionId);
+      void this.router.navigate(['/']);
+      return;
+    }
+    if (this.isLpMode()) {
+      this.section.set(sectionId);
+      void this.router.navigate(['/']);
+      return;
+    }
     if (this.isAssetLedgerMode()) {
       this.section.set(sectionId);
       this.closeAssetLedger();
@@ -580,18 +1029,53 @@ export class DashboardComponent {
     this.section.set(sectionId);
   }
 
+  openSettings(): void {
+    if (this.isSettingsMode()) {
+      return;
+    }
+    this.selectedAssetFamilyIdentity.set(null);
+    void this.router.navigate(['/settings']);
+  }
+
   toggleWallet(walletId: WalletId): void {
-    this.selectedWalletIds.set(this.toggleSetValue(this.selectedWalletIds(), walletId));
+    if (this.walletFilterMode() === 'all') {
+      this.walletFilterMode.set('custom');
+      // Only track on-chain wallet IDs in the chip filter; bybit virtual wallets bypass wallet filter
+      this.selectedWalletIds.set(new Set(this.onChainWallets().map((w) => w.id).filter((id) => id !== walletId)));
+    } else {
+      this.selectedWalletIds.set(this.toggleSetValue(this.selectedWalletIds(), walletId));
+    }
+    this.resetTransactionPageAndRefresh();
+  }
+
+  toggleIntegration(accountRef: string): void {
+    if (this.integrationFilterMode() === 'all') {
+      this.integrationFilterMode.set('custom');
+      this.selectedIntegrationRefs.set(
+        new Set(this.availableIntegrationRefs().filter((ref) => ref !== accountRef))
+      );
+    } else {
+      this.selectedIntegrationRefs.set(this.toggleSetValue(this.selectedIntegrationRefs(), accountRef));
+    }
     this.resetTransactionPageAndRefresh();
   }
 
   toggleNetwork(networkId: NetworkId): void {
-    this.selectedNetworkIds.set(this.toggleSetValue(this.selectedNetworkIds(), networkId));
+    if (this.networkFilterMode() === 'all') {
+      this.networkFilterMode.set('custom');
+      this.selectedNetworkIds.set(new Set(this.availableNetworkIds().filter((id) => id !== networkId)));
+    } else {
+      this.selectedNetworkIds.set(this.toggleSetValue(this.selectedNetworkIds(), networkId));
+    }
     this.resetTransactionPageAndRefresh();
   }
 
   clearFilters(): void {
+    this.walletFilterMode.set('all');
     this.selectedWalletIds.set(new Set<WalletId>());
+    this.integrationFilterMode.set('all');
+    this.selectedIntegrationRefs.set(new Set<string>());
+    this.networkFilterMode.set('all');
     this.selectedNetworkIds.set(new Set<NetworkId>());
     this.resetTransactionPageAndRefresh();
   }
@@ -613,13 +1097,11 @@ export class DashboardComponent {
     this.resetTransactionPageAndRefresh();
   }
 
-  onTransactionBridgeFilterChange(value: SessionTransactionsBridgeFilter): void {
-    this.transactionBridgeStatusFilter.set(value);
-    this.resetTransactionPageAndRefresh();
-  }
-
-  onTransactionSpamFilterChange(value: SessionTransactionsSpamFilter): void {
-    this.transactionSpamFilter.set(value);
+  onCategoriesChange(cats: ReadonlySet<TransactionCategory>): void {
+    this.enabledCategories.set(cats);
+    try {
+      localStorage.setItem(TRANSACTION_CATEGORIES_STORAGE_KEY, JSON.stringify([...cats]));
+    } catch { /* ignore */ }
     this.resetTransactionPageAndRefresh();
   }
 
@@ -645,6 +1127,39 @@ export class DashboardComponent {
   openAddWalletDialog(): void {
     this.resetWalletSubmissionState();
     this.isAddWalletDialogOpen.set(true);
+  }
+
+  onRefreshSession(): void {
+    const sessionId = this.currentSessionId();
+    if (sessionId === null || !this.canRefreshSession()) {
+      return;
+    }
+    this.isSessionRefreshSubmitting.set(true);
+    this.sessionRefreshMessage.set(null);
+
+    this.walletApiService
+      .refreshSession(sessionId)
+      .pipe(
+        takeUntilDestroyed(this.destroyRef),
+        catchError((error: HttpErrorResponse) => {
+          this.isSessionRefreshSubmitting.set(false);
+          this.sessionRefreshMessage.set(this.toBackendErrorMessage(error, 'Session refresh failed. Please retry.'));
+          return EMPTY;
+        })
+      )
+      .subscribe((response: SessionRefreshResponse) => {
+        this.isSessionRefreshSubmitting.set(false);
+        this.sessionRefreshMessage.set(response.message);
+        if (response.status === 'SCHEDULED' && response.scheduledTargets > 0) {
+          this.isBackfillVisible.set(true);
+          this.sessionTransactionsError.set(null);
+          this.sessionTransactionsLoadPhase.set('idle');
+          this.loadSessionPreferences(sessionId);
+          this.startBackfillPolling(sessionId);
+          return;
+        }
+        this.loadSessionBackfillStatus(sessionId);
+      });
   }
 
   closeAddWalletDialog(): void {
@@ -675,11 +1190,11 @@ export class DashboardComponent {
         takeUntilDestroyed(this.destroyRef),
         map((response) => ({
           sessionId: response.sessionId ?? requestPayload.sessionId,
-          message: response.message ?? 'Session saved, backfill started',
+          message: response.message ?? 'Session saved, universe sync scheduled',
         })),
         catchError((error: HttpErrorResponse) => {
           this.walletSubmitState.set('error');
-          this.walletSubmitMessage.set(this.toWalletSubmitError(error));
+          this.walletSubmitMessage.set(this.toBackendErrorMessage(error, 'Wallet submission failed. Please retry.'));
           return EMPTY;
         })
       )
@@ -690,39 +1205,48 @@ export class DashboardComponent {
         this.walletSubmitMessage.set(message);
         this.isBackfillVisible.set(true);
         this.sessionBackfillStatus.set(null);
+        this.isSessionRefreshSubmitting.set(false);
+        this.sessionRefreshMessage.set(null);
         this.sessionTransactions.set([]);
         this.sessionTransactionsError.set(null);
         this.isSessionTransactionsLoading.set(false);
         this.sessionTransactionsLoadPhase.set('idle');
+        this.walletFilterMode.set('all');
         this.selectedWalletIds.set(new Set<WalletId>());
+        this.integrationFilterMode.set('all');
+        this.selectedIntegrationRefs.set(new Set<string>());
+        this.networkFilterMode.set('all');
         this.selectedNetworkIds.set(new Set<NetworkId>());
+        this.sessionIntegrations.set([]);
+        this.hideDustAssets.set(true);
+        this.showReconciliationWarnings.set(true);
         this.dashboardRefreshNonce.update((value) => value + 1);
+        this.loadSessionPreferences(sessionId);
         this.startBackfillPolling(sessionId);
         this.isAddWalletDialogOpen.set(false);
       });
   }
 
   isWalletSelected(walletId: WalletId): boolean {
-    return this.selectedWalletIds().has(walletId);
+    return this.selectedWalletFilter().has(walletId);
+  }
+
+  isIntegrationSelected(accountRef: string): boolean {
+    return this.selectedIntegrationFilter().has(accountRef);
   }
 
   isNetworkSelected(networkId: NetworkId): boolean {
-    return this.selectedNetworkIds().has(networkId);
+    return this.selectedNetworkFilter().has(networkId);
   }
 
-  getSectionIcon(sectionId: DashboardSection): string {
-    switch (sectionId) {
-      case 'tokens':
-        return '◍';
-      case 'lp':
-        return '◢';
-      case 'lending':
-        return '⌂';
-      case 'staking':
-        return '⚡';
-      default:
-        return '•';
-    }
+  getSectionIcon(sectionId: DashboardSection): SafeHtml {
+    const SVG_ATTRS = `xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"`;
+    const icons: Record<DashboardSection, string> = {
+      tokens: `<svg ${SVG_ATTRS}><rect x="1" y="1.5" width="18" height="13" rx="1.5"/><path d="M7.5 14.5v3M12.5 14.5v3M5 17.5h10"/><path d="M4.5 10.5V8M7.5 10.5V6.5M10.5 10.5V8.5M13.5 10.5V5.5M16 10.5V7"/><path d="M3 10.5h14"/></svg>`,
+      lp: `<svg ${SVG_ATTRS}><path d="M7 1.5v9M13 1.5v9"/><path d="M7 5h6M7 8h6"/><path d="M1.5 13q2.5-2.5 5 0t5 0 5 0"/><ellipse cx="6.5" cy="17.5" rx="2.5" ry="1.2"/><ellipse cx="13.5" cy="17.5" rx="2.5" ry="1.2"/></svg>`,
+      lending: `<svg ${SVG_ATTRS}><circle cx="15.5" cy="3.5" r="1.5"/><path d="M13 7c0-1.4 1.1-2.5 2.5-2.5S18 5.6 18 7"/><circle cx="4.5" cy="16.5" r="1.5"/><path d="M2 20c0-1.4 1.1-2.5 2.5-2.5S7 18.6 7 20"/><circle cx="10" cy="10" r="2.5"/><path d="M10 8.3v3.4"/><path d="M13 7.5L11.2 9.2M11.8 9.2l-.6-.6.6-.6"/><path d="M7 12.5L8.8 10.8M8.2 10.8l.6.6-.6.6"/></svg>`,
+    };
+    return this.sanitizer.bypassSecurityTrustHtml(icons[sectionId] ?? '');
   }
 
   getNetworkById(networkId: NetworkId) {
@@ -730,7 +1254,21 @@ export class DashboardComponent {
   }
 
   getWalletById(walletId: WalletId) {
-    return this.data().wallets.find((wallet) => wallet.id === walletId) ?? null;
+    const normalizedWalletId = walletId.toLowerCase();
+    return this.transactionPaneWallets().find((wallet) => wallet.id.toLowerCase() === normalizedWalletId) ?? null;
+  }
+
+  toggleNetworksAllocationExpanded(): void {
+    this.networksAllocationExpanded.update((expanded) => !expanded);
+  }
+
+  toggleWalletsAllocationExpanded(): void {
+    this.walletsAllocationExpanded.update((expanded) => !expanded);
+  }
+
+  getIntegrationByRef(accountRef: string): IntegrationInfo | null {
+    const normalized = accountRef.trim().toLowerCase();
+    return this.sessionIntegrations().find((integration) => integration.accountRef.toLowerCase() === normalized) ?? null;
   }
 
   formatUsd(value: number): string {
@@ -752,7 +1290,12 @@ export class DashboardComponent {
         maximumFractionDigits: 3,
       });
     }
-
+    if (absolute > 0 && absolute < 0.001) {
+      return value.toLocaleString(undefined, {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 8,
+      });
+    }
     return value.toLocaleString(undefined, {
       minimumFractionDigits: 0,
       maximumFractionDigits: 3,
@@ -762,6 +1305,15 @@ export class DashboardComponent {
   formatQuantityFull(value: number): string {
     return value.toLocaleString(undefined, {
       minimumFractionDigits: 0,
+      maximumFractionDigits: 12,
+    });
+  }
+
+  formatUsdFull(value: number): string {
+    return value.toLocaleString(undefined, {
+      style: 'currency',
+      currency: 'USD',
+      minimumFractionDigits: 2,
       maximumFractionDigits: 12,
     });
   }
@@ -778,13 +1330,50 @@ export class DashboardComponent {
         return 'History flags: current balance is covered, but the bucket still carries incomplete or unresolved history flags.';
       case 'missing_replay_point':
         return 'Missing replay point: live balance exists, but no replay state was materialized for this bucket.';
+      case 'unsupported_protocol_valuation':
+        return 'Unsupported protocol valuation: backend has no current protocol snapshot for this position.';
       case 'missing_price':
-        return 'Missing price';
+        return 'Missing price.';
+      case 'stale_price':
+        return 'Stale price: current quote is older than the dashboard freshness window.';
+      case 'historical_price_fallback':
+        return 'Historical fallback price: no current quote snapshot is available.';
       case 'unconfirmed':
         return 'Unconfirmed';
       default:
         return '';
     }
+  }
+
+  priceTooltip(asset: TokenFamilyRow): string {
+    const source = asset.priceSource ?? 'No source';
+    const pricedAt = asset.pricedAt === null ? 'not loaded' : new Date(asset.pricedAt).toLocaleString();
+    const freshness = asset.stalenessSeconds === null ? 'unknown age' : `${this.formatDuration(asset.stalenessSeconds)} old`;
+    const mode = asset.isLiveQuote ? 'current quote' : 'non-live valuation';
+    const issue = asset.priceIssue === null ? '' : ` ${this.issueTitle(asset.priceIssue)}`;
+    const model = asset.valuationModel === null ? '' : ` Valuation: ${asset.valuationModel}.`;
+    const underlying = asset.valuationUnderlyingSymbol === null ? '' : ` Underlying: ${asset.valuationUnderlyingSymbol}.`;
+    const unsupported = asset.unsupportedValuationReason === null ? '' : ` ${asset.unsupportedValuationReason}.`;
+    return `Exact price: ${this.formatUsdFull(asset.priceUsd)}. Loaded: ${pricedAt}. Source: ${source}. ${freshness}, ${mode}.${issue}${model}${underlying}${unsupported}`;
+  }
+
+  avcoTooltip(asset: TokenFamilyRow): string {
+    return `Net AVCO: ${this.formatUsdFull(asset.netAvcoUsd)}. Market AVCO: ${this.formatUsdFull(asset.avcoUsd)}.`;
+  }
+
+  private formatDuration(seconds: number): string {
+    if (seconds < 60) {
+      return `${seconds}s`;
+    }
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) {
+      return `${minutes}m`;
+    }
+    const hours = Math.floor(minutes / 60);
+    if (hours < 48) {
+      return `${hours}h`;
+    }
+    return `${Math.floor(hours / 24)}d`;
   }
 
   shortAddress(address: string): string {
@@ -823,7 +1412,7 @@ export class DashboardComponent {
       .subscribe((status) => {
         this.sessionBackfillStatus.set(status);
         const pipelineRunning = this.isPipelineRunning(status);
-        const terminal = this.isTerminalBackfillStatus(status.status);
+        const terminal = this.isTerminalBackfillStatus(this.acquisitionStatus(status));
         this.isBackfillVisible.set(!terminal || pipelineRunning);
         if (terminal && pipelineRunning) {
           this.refreshSessionTransactions(sessionId, 'intermediate');
@@ -854,6 +1443,7 @@ export class DashboardComponent {
     }
 
     this.currentSessionId.set(storedSessionId);
+    this.loadSessionPreferences(storedSessionId);
     this.loadSessionBackfillStatus(storedSessionId);
   }
 
@@ -872,7 +1462,7 @@ export class DashboardComponent {
       .subscribe((status) => {
         this.sessionBackfillStatus.set(status);
         const pipelineRunning = this.isPipelineRunning(status);
-        const terminal = this.isTerminalBackfillStatus(status.status);
+        const terminal = this.isTerminalBackfillStatus(this.acquisitionStatus(status));
         if (terminal && pipelineRunning) {
           this.isBackfillVisible.set(true);
           this.refreshSessionTransactions(sessionId, 'intermediate', true);
@@ -889,14 +1479,40 @@ export class DashboardComponent {
       });
   }
 
+  private loadSessionPreferences(sessionId: string): void {
+    this.walletApiService
+      .getSessionSettings(sessionId)
+      .pipe(
+        takeUntilDestroyed(this.destroyRef),
+        catchError(() => EMPTY)
+      )
+      .subscribe((settings) => {
+        this.hideDustAssets.set(settings.hideSmallAssets ?? true);
+        this.showReconciliationWarnings.set(settings.showReconciliationWarnings ?? true);
+        const integrations = settings.integrations
+          .map((integration) => this.toIntegrationInfo(integration))
+          .filter((integration): integration is IntegrationInfo => integration !== null);
+        this.sessionIntegrations.set(integrations);
+        const allowedRefs = new Set(integrations.map((integration) => integration.accountRef));
+        if (this.integrationFilterMode() === 'custom') {
+          this.selectedIntegrationRefs.set(
+            new Set([...this.selectedIntegrationRefs()].filter((accountRef) => allowedRefs.has(accountRef)))
+          );
+        }
+      });
+  }
+
   private refreshSessionTransactions(
     sessionId: string,
     phase: SessionTransactionsLoadPhase = 'final',
     force = false
   ): void {
-    if (this.isSessionTransactionsLoading()) {
-      return;
+    // Cancel any in-flight request so filter changes always use latest state
+    if (this.pendingTransactionSub && !this.pendingTransactionSub.closed) {
+      this.pendingTransactionSub.unsubscribe();
+      this.pendingTransactionSub = null;
     }
+
     if (!force && phase === 'intermediate' && this.sessionTransactionsLoadPhase() !== 'idle') {
       return;
     }
@@ -907,7 +1523,7 @@ export class DashboardComponent {
     this.isSessionTransactionsLoading.set(true);
     this.sessionTransactionsError.set(null);
 
-    this.walletApiService
+    this.pendingTransactionSub = this.walletApiService
       .getSessionTransactions(sessionId, this.buildSessionTransactionsRequest())
       .pipe(
         takeUntilDestroyed(this.destroyRef),
@@ -939,7 +1555,7 @@ export class DashboardComponent {
   private refreshCurrentSessionTransactions(force = false): void {
     const sessionId = this.currentSessionId();
     const status = this.sessionBackfillStatus();
-    if (sessionId === null || status === null || !this.isTerminalBackfillStatus(status.status)) {
+    if (sessionId === null || status === null || !this.isTerminalBackfillStatus(this.acquisitionStatus(status))) {
       return;
     }
     const phase: SessionTransactionsLoadPhase = this.isPipelineRunning(status) ? 'intermediate' : 'final';
@@ -952,17 +1568,33 @@ export class DashboardComponent {
   }
 
   private buildSessionTransactionsRequest(): GetSessionTransactionsRequest {
+    const walletRefs =
+      this.walletFilterMode() === 'all' && this.integrationFilterMode() === 'all'
+        ? []
+        : [
+            ...(this.walletFilterMode() === 'all'
+              ? this.availableWalletIds()
+              : Array.from(this.selectedWalletIds())),
+            ...(this.integrationFilterMode() === 'all'
+              ? this.availableIntegrationRefs()
+              : Array.from(this.selectedIntegrationRefs())),
+          ];
+
     return {
       limit: this.transactionPageSize,
       offset: this.transactionPage() * this.transactionPageSize,
       search: this.transactionSearch(),
-      bridgeStatus: this.transactionBridgeStatusFilter(),
-      spamFilter: this.transactionSpamFilter(),
-      walletIds: this.selectedWalletIds().size > 0 ? Array.from(this.selectedWalletIds()) : undefined,
+      categories: [...this.enabledCategories()],
+      walletIds:
+        this.walletFilterMode() === 'all' && this.integrationFilterMode() === 'all'
+          ? undefined
+          : walletRefs.length > 0
+            ? walletRefs
+            : ['__NO_SCOPE__'],
       networkIds:
-        this.selectedNetworkIds().size > 0
-          ? (Array.from(this.selectedNetworkIds()) as ReadonlyArray<EvmNetworkId>)
-          : undefined,
+        this.networkFilterMode() === 'all'
+          ? undefined
+          : (Array.from(this.selectedNetworkIds()).filter((id) => id !== 'BYBIT') as ReadonlyArray<EvmNetworkId>),
     };
   }
 
@@ -1004,8 +1636,14 @@ export class DashboardComponent {
   }
 
   private toTransactionType(type: string | null): TransactionType {
-    if (type !== null && TRANSACTION_TYPES_BY_ID.has(type as TransactionType)) {
-      return type as TransactionType;
+    if (type !== null) {
+      const override = TRANSACTION_TYPE_DISPLAY_OVERRIDES[type];
+      if (override !== undefined) {
+        return override;
+      }
+      if (TRANSACTION_TYPES_BY_ID.has(type as TransactionType)) {
+        return type as TransactionType;
+      }
     }
     return 'UNCLASSIFIED';
   }
@@ -1030,6 +1668,22 @@ export class DashboardComponent {
     return 'UNKNOWN';
   }
 
+  private loadCategoriesFromStorage(): ReadonlySet<TransactionCategory> {
+    try {
+      const stored = localStorage.getItem(TRANSACTION_CATEGORIES_STORAGE_KEY);
+      if (stored) {
+        const parsed: unknown = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const valid = (parsed as string[]).filter(
+            (c): c is TransactionCategory => ALL_TRANSACTION_CATEGORIES.includes(c as TransactionCategory)
+          );
+          if (valid.length > 0) return new Set(valid);
+        }
+      }
+    } catch { /* ignore */ }
+    return new Set(DEFAULT_TRANSACTION_CATEGORIES);
+  }
+
   private toBridgeStatus(bridgeStatus: string | null): SessionBridgeStatus | null {
     if (bridgeStatus !== null && BRIDGE_STATUSES.has(bridgeStatus as SessionBridgeStatus)) {
       return bridgeStatus as SessionBridgeStatus;
@@ -1052,14 +1706,17 @@ export class DashboardComponent {
       issue === 'yield_accrual' ||
       issue === 'coverage_gap' ||
       issue === 'history_flags' ||
-      issue === 'missing_replay_point'
+      issue === 'missing_replay_point' ||
+      issue === 'stale_price' ||
+      issue === 'historical_price_fallback' ||
+      issue === 'unsupported_protocol_valuation'
     ) {
       return issue;
     }
     return null;
   }
 
-  private toWalletSubmitError(error: HttpErrorResponse): string {
+  private toBackendErrorMessage(error: HttpErrorResponse, fallback: string): string {
     if (typeof error.error === 'string' && error.error.trim().length > 0) {
       return error.error;
     }
@@ -1076,23 +1733,35 @@ export class DashboardComponent {
       return backendMessage;
     }
 
-    return 'Wallet submission failed. Please retry.';
+    return fallback;
   }
 
   private isPipelineRunning(status: SessionBackfillStatusResponse): boolean {
     return status.pipelineStatus === 'RUNNING';
   }
 
+  private acquisitionStatus(status: SessionBackfillStatusResponse): SessionBackfillAggregateStatus {
+    return status.acquisitionStatus ?? status.status;
+  }
+
   private phaseDisplayLabel(phase: string | null | undefined): string {
     switch (phase) {
       case 'ON_CHAIN_NORMALIZATION':
-      case 'ON_CHAIN_CLARIFICATION':
       case 'BYBIT_NORMALIZATION':
-        return 'Normalization';
+      case 'INTEGRATION_CLASSIFICATION':
+        return 'Classification';
+      case 'ON_CHAIN_CLARIFICATION':
+        return 'Clarification';
+      case 'ON_CHAIN_RECLASSIFICATION':
+        return 'Reclassification';
+      case 'LINKING':
+        return 'Linking';
       case 'PRICING':
         return 'Pricing';
       case 'ACCOUNTING_REPLAY':
-        return 'Basis';
+        return 'Cost basis';
+      case 'PORTFOLIO_SNAPSHOT_REFRESH':
+        return 'Portfolio snapshot';
       case 'BACKFILL':
       default:
         return 'Backfill';
@@ -1103,8 +1772,35 @@ export class DashboardComponent {
     return this.getNetworkById(networkId)?.label ?? networkId;
   }
 
+  walletColor(walletId: WalletId): string {
+    const wallet = this.getWalletById(walletId);
+    if (wallet !== null) {
+      return wallet.color;
+    }
+    const integration = this.getIntegrationByRef(walletId);
+    if (integration !== null) {
+      return integration.color;
+    }
+    if (walletId.toLowerCase().startsWith('bybit:')) {
+      return INTEGRATION_PRESENTATION_BY_PROVIDER.get('BYBIT')?.color ?? COLORS.textSubtle;
+    }
+    return COLORS.textSubtle;
+  }
+
   walletLabel(walletId: WalletId): string {
-    return this.getWalletById(walletId)?.label ?? walletId;
+    const wallet = this.getWalletById(walletId);
+    if (wallet !== null) {
+      const normalizedId = walletId.toLowerCase();
+      if (normalizedId.startsWith('bybit:')) {
+        const parts = normalizedId.split(':');
+        const suffix = parts.length >= 3 ? parts[2].toUpperCase() : null;
+        if (suffix === 'UTA' || suffix === 'FUND' || suffix === 'EARN') {
+          return `${wallet.label} · ${suffix}`;
+        }
+      }
+      return wallet.label;
+    }
+    return this.getIntegrationByRef(walletId)?.label ?? walletId;
   }
 
   private clearSessionTracking(clearStorage: boolean): void {
@@ -1114,6 +1810,8 @@ export class DashboardComponent {
     this.stopBackfillPolling();
     this.currentSessionId.set(null);
     this.sessionBackfillStatus.set(null);
+    this.isSessionRefreshSubmitting.set(false);
+    this.sessionRefreshMessage.set(null);
     this.isBackfillVisible.set(false);
     this.sessionTransactions.set([]);
     this.sessionTransactionsTotalCount.set(0);
@@ -1121,6 +1819,60 @@ export class DashboardComponent {
     this.isSessionTransactionsLoading.set(false);
     this.sessionTransactionsLoadPhase.set('idle');
     this.transactionPage.set(0);
+    this.walletFilterMode.set('all');
+    this.selectedWalletIds.set(new Set<WalletId>());
+    this.integrationFilterMode.set('all');
+    this.selectedIntegrationRefs.set(new Set<string>());
+    this.networkFilterMode.set('all');
+    this.selectedNetworkIds.set(new Set<NetworkId>());
+    this.sessionIntegrations.set([]);
+    this.hideDustAssets.set(true);
+    this.showReconciliationWarnings.set(true);
+  }
+
+  private toIntegrationInfo(integration: SessionIntegrationResponse): IntegrationInfo | null {
+    const accountRef = integration.accountRef?.trim();
+    const provider = integration.provider?.trim().toUpperCase() ?? '';
+    if (!accountRef || !provider || integration.status === 'DISABLED') {
+      return null;
+    }
+
+    const presentation = INTEGRATION_PRESENTATION_BY_PROVIDER.get(provider);
+    return {
+      id: integration.integrationId,
+      provider,
+      label: integration.displayName?.trim() || presentation?.label || provider,
+      accountRef,
+      // Prefer per-integration color stored in DB; fall back to provider presentation color
+      color: integration.color ?? presentation?.color ?? COLORS.textSubtle,
+      icon: presentation?.icon ?? '◎',
+      status: integration.status,
+    };
+  }
+
+  private allocationMoreSummary(rows: ReadonlyArray<AllocationRow>): AllocationMoreSummary {
+    const hiddenRows = rows.slice(ALLOCATION_VISIBLE_ROW_COUNT);
+    const totalUsd = rows.reduce((sum, row) => sum + row.valueUsd, 0);
+    const hiddenUsd = hiddenRows.reduce((sum, row) => sum + row.valueUsd, 0);
+    return {
+      count: hiddenRows.length,
+      valueUsd: hiddenUsd,
+      sharePct: totalUsd > 0 ? (hiddenUsd / totalUsd) * 100 : 0,
+    };
+  }
+
+  private mergeWalletScopes(
+    wallets: ReadonlyArray<WalletInfo>,
+    integrations: ReadonlyArray<WalletInfo>
+  ): ReadonlyArray<WalletInfo> {
+    const merged = new Map<string, WalletInfo>();
+    for (const wallet of wallets) {
+      merged.set(wallet.id, wallet);
+    }
+    for (const integration of integrations) {
+      merged.set(integration.id, integration);
+    }
+    return [...merged.values()];
   }
 
   private toggleSetValue<T>(set: ReadonlySet<T>, value: T): ReadonlySet<T> {
@@ -1153,12 +1905,60 @@ export class DashboardComponent {
         return 2;
       case 'yield_accrual':
         return 1;
-      case 'spam':
       case 'missing_price':
+      case 'unsupported_protocol_valuation':
+        return 3;
+      case 'stale_price':
+        return 2;
+      case 'historical_price_fallback':
+        return 1;
+      case 'spam':
       case 'unconfirmed':
       case null:
       default:
         return 0;
     }
+  }
+
+  private pickPriceSource(
+    existing: {
+      readonly priceSource: PriceSource | null;
+      readonly pricedAt: string | null;
+      readonly isLiveQuote: boolean;
+    },
+    position: TokenPosition
+  ): PriceSource | null {
+    if (existing.priceSource === null) {
+      return position.priceSource;
+    }
+    if (position.priceSource === null) {
+      return existing.priceSource;
+    }
+    if (position.isLiveQuote && !existing.isLiveQuote) {
+      return position.priceSource;
+    }
+    const existingTime = existing.pricedAt === null ? 0 : Date.parse(existing.pricedAt);
+    const candidateTime = position.pricedAt === null ? 0 : Date.parse(position.pricedAt);
+    return candidateTime > existingTime ? position.priceSource : existing.priceSource;
+  }
+
+  private pickLatestPricedAt(left: string | null, right: string | null): string | null {
+    if (left === null) {
+      return right;
+    }
+    if (right === null) {
+      return left;
+    }
+    return Date.parse(right) > Date.parse(left) ? right : left;
+  }
+
+  private pickSmallestStaleness(left: number | null, right: number | null): number | null {
+    if (left === null) {
+      return right;
+    }
+    if (right === null) {
+      return left;
+    }
+    return Math.min(left, right);
   }
 }

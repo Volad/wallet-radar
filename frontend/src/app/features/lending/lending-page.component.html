@@ -1,0 +1,593 @@
+<section class="lending-shell">
+  @if (viewState().status === 'idle') {
+    <div class="lending-state">
+      <h2>No active session</h2>
+      <p>Create or restore a session before opening lending positions.</p>
+    </div>
+  } @else if (viewState().status === 'loading') {
+    <div class="lending-state">
+      <div class="spinner" aria-hidden="true"></div>
+      <h2>Loading lending</h2>
+      <p>Building protocol groups from accounting snapshots.</p>
+    </div>
+  } @else if (viewState().status === 'error') {
+    <div class="lending-state error">
+      <h2>Unable to load lending</h2>
+      <p>{{ errorMessage() }}</p>
+    </div>
+  } @else {
+    @let currentData = data();
+    @if (currentData !== null) {
+      <div class="lending-layout">
+        <wr-filter-sidebar
+          title="Lending"
+          subtitle="Positions & cycles"
+          [activeCount]="activeFilterCount()"
+          (clearFilters)="clearFilters()"
+          aria-label="Lending filters">
+
+          @for (wallet of wallets(); track wallet) {
+            <button
+              type="button"
+              class="filter-item wallet"
+              [class.active]="selectedWallets().has(wallet)"
+              (click)="toggleWallet(wallet)">
+              <span class="filter-dot"></span>
+              <span class="filter-copy">
+                <strong>{{ shortAddress(wallet) }}</strong>
+                <small class="mono">{{ wallet }}</small>
+              </span>
+            </button>
+          }
+
+          <div class="filter-sep">Protocol</div>
+
+          @for (protocol of protocols(); track protocol) {
+            <button
+              type="button"
+              class="filter-item protocol"
+              [class.active]="selectedProtocols().has(protocol)"
+              (click)="toggleProtocol(protocol)">
+              <span class="filter-square"></span>
+              <span class="filter-copy">
+                <strong>{{ protocol }}</strong>
+              </span>
+            </button>
+          }
+
+          <div class="filter-sep">Network</div>
+
+          @for (network of networks(); track network) {
+            <button
+              type="button"
+              class="filter-item network"
+              [class.active]="selectedNetworks().has(network)"
+              (click)="toggleNetwork(network)">
+              <span class="filter-square network-square" [style.background]="networkColor(network)"></span>
+              <span class="filter-copy">
+                <strong>{{ networkLabel(network) }}</strong>
+              </span>
+            </button>
+          }
+
+          <div class="filter-sep">Cycle</div>
+
+          @for (status of cycleStatuses(); track status) {
+            <button
+              type="button"
+              class="filter-item status"
+              [class.active]="selectedCycleStatuses().has(status)"
+              (click)="toggleCycleStatus(status)">
+              <span class="filter-square status-square"></span>
+              <span class="filter-copy">
+                <strong>{{ cycleStatusLabel(status) }}</strong>
+              </span>
+            </button>
+          }
+
+        </wr-filter-sidebar>
+
+        <main class="lending-content">
+          <div class="lending-page-head">
+            <span class="page-icon">⌂</span>
+            <span class="page-title">Lending</span>
+          </div>
+
+          <header class="cycle-summary-bar">
+            <div class="summary-stat">
+              <span>Total supplied</span>
+              <strong class="mono pos">{{ formatUsd(currentData.summary.totalSuppliedUsd) }}</strong>
+            </div>
+            <div class="summary-stat">
+              <span>Total borrowed</span>
+              <strong class="mono borrow">{{ formatUsd(currentData.summary.totalBorrowedUsd) }}</strong>
+            </div>
+            <div class="summary-stat">
+              <span>Net exposure</span>
+              <strong class="mono">{{ formatUsd(currentData.summary.netExposureUsd) }}</strong>
+            </div>
+            <div class="summary-stat">
+              <span>Closed P&L</span>
+              <strong class="mono" [ngClass]="pnlClass(closedPnlTotal())">{{ formatSignedUsd(closedPnlTotal()) }}</strong>
+            </div>
+            <div class="summary-divider"></div>
+            <div class="cycle-toggle-row">
+              <button type="button" [class.active]="!showClosed()" (click)="showClosed.set(false)">
+                Active ({{ allActiveCycleCount() }} cycles)
+              </button>
+              <button type="button" [class.active]="showClosed()" (click)="showClosed.set(true)">
+                All cycles
+              </button>
+            </div>
+            <div class="summary-spacer"></div>
+            <button
+              type="button"
+              class="summary-update-all"
+              [class.loading]="refreshAllLendingLoading()"
+              [disabled]="refreshAllLendingLoading()"
+              (click)="refreshAllLending()">
+              @if (refreshAllLendingLoading()) {
+                <span class="sync-spinner" aria-hidden="true"></span>
+                Updating…
+              } @else {
+                Update all
+              }
+            </button>
+            <div class="vault-legend">
+              <span class="tag">vault-based</span>
+              <span>Fluid/Morpho use separate account lanes</span>
+            </div>
+          </header>
+
+          <section class="protocol-list">
+            @for (group of filteredGroups(); track group.id) {
+              <article class="protocol-card a-fade" [class.closed]="group.status === 'CLOSED'">
+                <div class="protocol-head-row">
+                <button type="button" class="protocol-head" (click)="toggleExpanded(group.id)">
+                  <span class="protocol-avatar">{{ group.protocol.slice(0, 1) }}</span>
+                  <span class="protocol-title">
+                    <span class="protocol-line">
+                      <strong>{{ group.protocol }}</strong>
+                      <span class="network-badge" [style.--networkColor]="networkColor(group.networkId)">
+                        {{ networkIcon(group.networkId) }} {{ networkLabel(group.networkId) }}
+                      </span>
+                      <span class="wallet-addr mono">{{ shortAddress(group.walletAddress) }}</span>
+                      <span class="tag" [class.purple]="isVaultModel(group)">{{ protocolTag(group) }}</span>
+                      @if (group.status === 'OPEN') {
+                        <span
+                          class="sync-badge"
+                          [class.stale]="isSyncStale(group)"
+                          [class.updating]="isSyncUpdating(group.id)"
+                          [class.failed]="isSyncFailed(group.id)"
+                          [class.fresh]="!isSyncStale(group) && !isSyncUpdating(group.id) && !isSyncFailed(group.id)"
+                          [title]="syncStatusTitle(group)">
+                          @if (isSyncUpdating(group.id)) {
+                            <span class="sync-spinner" aria-hidden="true"></span>
+                          } @else if (isSyncStale(group) || isSyncFailed(group.id)) {
+                            <span class="sync-dot" aria-hidden="true"></span>
+                          }
+                          {{ syncStatusLabel(group) }}
+                        </span>
+                      }
+                    </span>
+                    <span class="protocol-metrics">
+                      <span><b class="mono pos">{{ activeCycleCount(group) }}</b> active cycle{{ activeCycleCount(group) === 1 ? '' : 's' }}</span>
+                      <span><b class="mono muted">{{ closedCycleCount(group) }}</b> closed</span>
+                      @if (reviewCycleCount(group) > 0) {
+                        <span><b class="mono warn">{{ reviewCycleCount(group) }}</b> review</span>
+                      }
+                    </span>
+                  </span>
+
+                  <span class="protocol-supply-borrow">
+                    <span class="sb-row">
+                      <small>Supply</small>
+                      <b class="mono pos">{{ formatUsd(group.supplyUsd) }}</b>
+                    </span>
+                    <span class="sb-row">
+                      <small>Borrow</small>
+                      <b class="mono" [ngClass]="group.borrowUsd > 0 ? 'borrow' : 'muted-value'">{{ group.borrowUsd > 0 ? formatUsd(group.borrowUsd) : '--' }}</b>
+                    </span>
+                  </span>
+
+                  @if (shouldShowHealth(group)) {
+                    <span class="compact-health" [style.--healthColor]="healthColor(group)">
+                      <span class="hf-badge-line">
+                        <small>Health</small>
+                        <strong class="mono">{{ healthDisplay(group) }}</strong>
+                      </span>
+                      <span class="health-track">
+                        <span [style.width.%]="group.healthProgress"></span>
+                      </span>
+                    </span>
+                  } @else {
+                    <span class="compact-health no-debt">
+                      <small>Health</small>
+                      <strong>No debt</strong>
+                    </span>
+                  }
+
+                  <span class="protocol-pnl">
+                    @let closedPnl = groupClosedPnl(group);
+                    @let runningPnl = groupRunningPnl(group);
+                    @if (runningPnl !== null) {
+                      <span>
+                        <small>Running</small>
+                        <b class="mono" [ngClass]="pnlClass(runningPnl)">{{ formatSignedUsd(runningPnl) }}</b>
+                      </span>
+                    }
+                    @if (closedPnl !== null) {
+                      <span>
+                        <small>Closed</small>
+                        <b class="mono" [ngClass]="pnlClass(closedPnl)">{{ formatSignedUsd(closedPnl) }}</b>
+                      </span>
+                    }
+                    @if (runningPnl === null && closedPnl === null) {
+                      <span class="pnl-na"><small>P&L unavailable</small></span>
+                    }
+                  </span>
+
+                  <span class="protocol-head-actions">
+                    <span class="chevron" [class.open]="isGroupExpanded(group.id)">⌄</span>
+                  </span>
+                </button>
+                @if (group.status === 'OPEN') {
+                  <button
+                    type="button"
+                    class="group-refresh-btn"
+                    [disabled]="isRefreshingGroup(group.id)"
+                    (click)="refreshGroup(group, $event)"
+                    aria-label="Refresh lending group">
+                    <svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <path d="M9.5 1.5A4.5 4.5 0 1 0 10 5.5"/>
+                      <path d="M9.5 1.5v2.5h-2.5"/>
+                    </svg>
+                  </button>
+                }
+                </div>
+
+                @if (isGroupExpanded(group.id)) {
+                  <div class="protocol-body">
+                    <div class="net-exposure-strip">
+                      <span class="ne-item">
+                        <small>Net exposure</small>
+                        <b class="mono">{{ formatUsd(group.netExposureUsd) }}</b>
+                      </span>
+                      <span class="ne-item">
+                        <small>Supply</small>
+                        <b class="mono pos">{{ formatUsd(group.supplyUsd) }}</b>
+                      </span>
+                      <span class="ne-item">
+                        <small>Borrow</small>
+                        <b class="mono" [ngClass]="group.borrowUsd > 0 ? 'borrow' : 'muted-value'">{{ group.borrowUsd > 0 ? formatUsd(group.borrowUsd) : '--' }}</b>
+                      </span>
+                      <span class="ne-divider"></span>
+                      <span class="ne-item ne-apy">
+                        <small>Net APY</small>
+                        <b class="mono">{{ formatNetApy(group) }}</b>
+                      </span>
+                    </div>
+
+                    @if (group.positions.length > 0) {
+                      <section class="positions-risk">
+                        <div class="positions-panel">
+                          @if (supplyPositions(group).length > 0) {
+                            <div class="position-section-label">Supply</div>
+                            <div class="position-col-header">
+                              <span></span>
+                              <span></span>
+                              <span class="align-right">Qty</span>
+                              <span class="align-right">Value</span>
+                              <span class="align-right">Earned</span>
+                              <span class="align-right">Current APY</span>
+                            </div>
+                            @for (position of supplyPositions(group); track position.id) {
+                              <div class="position-row">
+                                <span class="flow-icon">↑</span>
+                                <span class="position-asset">
+                                  <strong>{{ position.assetSymbol }}</strong>
+                                  <small>{{ position.underlyingSymbol }}</small>
+                                </span>
+                                <span class="align-right">
+                                  <b class="mono">{{ formatQuantity(position.quantity) }}</b>
+                                </span>
+                                <span class="align-right">
+                                  <b class="mono pos">{{ formatUsd(position.valueUsd) }}</b>
+                                </span>
+                                <span class="align-right">
+                                  <b class="mono pos">{{ formatUsd(position.earnedUsd) }}</b>
+                                </span>
+                                <span class="align-right" [title]="positionMetricTitle(position)">
+                                  <b class="mono" [ngClass]="apyClass(position)">{{ formatApy(position) }}</b>
+                                </span>
+                              </div>
+                            }
+                          }
+
+                          @if (borrowPositions(group).length > 0) {
+                            <div class="position-section-label borrow-label">Borrow</div>
+                            <div class="position-col-header">
+                              <span></span>
+                              <span></span>
+                              <span class="align-right">Qty</span>
+                              <span class="align-right">Value</span>
+                              <span class="align-right">Debt</span>
+                              <span class="align-right">Current APY</span>
+                            </div>
+                            @for (position of borrowPositions(group); track position.id) {
+                              <div class="position-row borrow-row">
+                                <span class="flow-icon">↓</span>
+                                <span class="position-asset">
+                                  <strong>{{ position.assetSymbol }}</strong>
+                                  <small>{{ position.underlyingSymbol }}</small>
+                                </span>
+                                <span class="align-right">
+                                  <b class="mono">{{ formatQuantity(position.quantity) }}</b>
+                                </span>
+                                <span class="align-right">
+                                  <b class="mono borrow">{{ formatUsd(position.valueUsd) }}</b>
+                                </span>
+                                <span class="align-right">
+                                  <b class="mono borrow">{{ formatUsd(position.valueUsd) }}</b>
+                                </span>
+                                <span class="align-right" [title]="positionMetricTitle(position)">
+                                  <b class="mono" [ngClass]="apyClass(position)">{{ formatApy(position) }}</b>
+                                </span>
+                              </div>
+                            }
+                          }
+                        </div>
+
+                        <aside class="risk-panel">
+                          @if (shouldShowHealth(group)) {
+                            <div class="health-box" [style.--healthColor]="healthColor(group)">
+                              <div class="risk-head">
+                                <span>Health</span>
+                                <strong class="mono">{{ healthDisplay(group) }}</strong>
+                              </div>
+                              <div class="risk-gradient">
+                                <span [style.left.%]="group.healthProgress"></span>
+                              </div>
+                              <div class="risk-scale">
+                                <span>1.0</span>
+                                <span>1.5</span>
+                                <span>3.0+</span>
+                              </div>
+                              <strong class="risk-label">{{ healthLabel(group) }}</strong>
+                              <div class="risk-metric-row">
+                                <span>Source</span>
+                                <strong>{{ humanReason(group.healthSource) }}</strong>
+                              </div>
+                            </div>
+                          } @else {
+                            <div class="health-box no-debt-box">
+                              <span class="nd-label">Health</span>
+                              <strong class="nd-value">No debt</strong>
+                              <span class="nd-note">Supply-only position — no liquidation risk.</span>
+                            </div>
+                          }
+                        </aside>
+                      </section>
+                    }
+
+                    <div class="cycles-head">
+                      <span class="cycles-head-label">Cycles</span>
+                      <span class="tag green">{{ activeCycleCount(group) }} open</span>
+                      @if (closedCycleCount(group) > 0) {
+                        <span class="tag">{{ closedCycleCount(group) }} closed</span>
+                      }
+                      @if (reviewCycleCount(group) > 0) {
+                        <span class="tag amber">{{ reviewCycleCount(group) }} review</span>
+                      }
+                    </div>
+
+                    @for (section of cycleSections(group); track section.id) {
+                      @if (section.isVault) {
+                        <section class="vault-section">
+                          <header class="vault-head">
+                            <span class="vault-icon">▣</span>
+                            <span>
+                              <strong>{{ section.label }}</strong>
+                              <small>Supply <b class="mono pos">{{ formatUsd(section.supplyUsd) }}</b> · Borrow <b class="mono borrow">{{ formatUsd(section.borrowUsd) }}</b></small>
+                            </span>
+                            @if (group.status === 'OPEN') {
+                              <span class="vault-health mono" [style.color]="healthColor(group)">{{ healthDisplay(group) }}</span>
+                            }
+                          </header>
+                        </section>
+                      }
+
+                      <section class="cycle-list" [class.vault-cycle-list]="section.isVault">
+                        @for (cycle of section.cycles; track cycle.id; let cycleIndex = $index) {
+                        <article class="cycle-card" [class.active-cycle]="cycle.status === 'OPEN'" [class.closed-cycle]="cycle.status === 'CLOSED'">
+                          <button type="button" class="cycle-head" (click)="toggleCycleExpanded(cycle.id)">
+                            <span class="cycle-number mono">#{{ cycleIndex + 1 }}</span>
+                            <span class="cycle-copy">
+                              <span class="cycle-market-line">
+                                <strong class="cycle-market">{{ cycleMarketLabel(cycle) }}</strong>
+                                <span class="tag" [class.green]="cycle.status === 'OPEN'">{{ cycleStatusLabel(cycle.status) }}</span>
+                                @if (cycle.warningReason !== null && cycle.status === 'AMBIGUOUS_NEEDS_REVIEW') {
+                                  <span class="tag amber" [title]="cycle.warningReason">{{ humanReason(cycle.warningReason) }}</span>
+                                }
+                                @if (cycle.primaryLargePnlReason !== null) {
+                                  <span class="tag amber" [title]="cycle.largePnlReasons.join(', ')">{{ humanReason(cycle.primaryLargePnlReason) }}</span>
+                                }
+                              </span>
+                              <span class="cycle-date-line">
+                                <span class="mono">{{ formatDate(cycle.startTimestamp) }}</span>
+                                <span class="muted">→</span>
+                                <span class="mono">{{ cycle.closeTimestamp === null ? 'present' : formatDate(cycle.closeTimestamp) }}</span>
+                                <span class="duration-badge mono">{{ formatDuration(cycle.durationDays) }}</span>
+                              </span>
+                            </span>
+
+                            <span class="cycle-apy" [title]="factualApyTitle(cycle)">
+                              <span class="apy-row">
+                                <small>Factual</small>
+                                <b class="mono" [ngClass]="precisionClass(cycle.factualApy.apyPrecision)">{{ factualApyDisplay(cycle) }}</b>
+                              </span>
+                              <span class="apy-row">
+                                <small>Protocol</small>
+                                <b class="mono">{{ cycleProtocolNetApyDisplay(cycle) }}</b>
+                              </span>
+                            </span>
+
+                            <span class="cycle-interest">
+                              <small>{{ cycle.status === 'OPEN' ? 'Accrued' : 'Interest' }}</small>
+                              <span [title]="interestTitle(cycle)">
+                                <b class="mono pos">{{ formatPositiveMaybeUsd(cycleInterestEarnedUsd(cycle)) }}</b>
+                                <b class="mono neg">{{ formatNegativeMaybeUsd(cycleInterestPaidUsd(cycle)) }}</b>
+                              </span>
+                            </span>
+
+                            <span class="cycle-net-pnl" [ngClass]="pnlClass(cycle.status === 'OPEN' ? cycle.totalValuation.unrealizedTotalUsdPnl : cycle.totalValuation.totalUsdPnl)">
+                              <small>{{ cycle.status === 'OPEN' ? 'Running P&L' : 'Net P&L' }}</small>
+                              <b class="mono">{{ formatSignedUsd(cycle.status === 'OPEN' ? cycle.totalValuation.unrealizedTotalUsdPnl : cycle.totalValuation.totalUsdPnl) }}</b>
+                            </span>
+
+                            <span class="chevron" [class.open]="isCycleExpanded(cycle)">⌄</span>
+                          </button>
+
+                          @if (isCycleExpanded(cycle)) {
+                            <div class="cycle-body a-fade">
+                              @if (cycle.status === 'AMBIGUOUS_NEEDS_REVIEW' || cycle.totalValuation.unavailableReason !== null) {
+                                <div class="cycle-warning">
+                                  @if (cycle.totalValuation.unavailableReason !== null) {
+                                    <span [title]="cycle.totalValuation.unavailableReason">{{ humanReason(cycle.totalValuation.unavailableReason) }}</span>
+                                  }
+                                  @if (cycle.status === 'AMBIGUOUS_NEEDS_REVIEW' && cycle.pnlBreakdown.reason !== null) {
+                                    <span [title]="cycle.pnlBreakdown.reason">{{ humanReason(cycle.pnlBreakdown.reason) }}</span>
+                                  }
+                                </div>
+                              }
+
+                              <div class="cycle-stats-strip">
+                                <div class="cs-item">
+                                  <small>Peak supply</small>
+                                  <b class="mono pos">{{ formatUsd(cycle.peakSupplyUsd) }}</b>
+                                </div>
+                                <div class="cs-item">
+                                  <small>Peak borrow</small>
+                                  <b class="mono" [ngClass]="cycle.peakBorrowUsd > 0 ? 'borrow' : 'muted-value'">
+                                    {{ cycle.peakBorrowUsd > 0 ? formatUsd(cycle.peakBorrowUsd) : '--' }}
+                                  </b>
+                                </div>
+                                <div class="cs-item">
+                                  <small>Gas paid</small>
+                                  <b class="mono muted-value">{{ formatUsd(cycle.totalValuation.gasUsd) }}</b>
+                                </div>
+                                @if (assetPnlLines(cycle).length > 0) {
+                                  <span class="cs-divider"></span>
+                                  @for (line of assetPnlLines(cycle); track line.asset) {
+                                    <div class="cs-item" [title]="line.reason ?? (line.valueUsd !== null ? line.usdPrecision : line.precision)">
+                                      <small>{{ line.asset }} · {{ line.valueUsd !== null ? line.usdPrecision : line.precision }}</small>
+                                      @if (line.value !== null) {
+                                        <b class="mono" [ngClass]="assetPnlClass(line)">{{ formatAssetPnl(line) }}</b>
+                                        @if (line.valueUsd !== null) {
+                                          <span class="cs-usd mono">{{ formatAssetPnlUsd(line) }}</span>
+                                        }
+                                      } @else if (line.valueUsd !== null) {
+                                        <b class="mono" [ngClass]="assetPnlUsdClass(line)">{{ formatAssetPnlUsd(line) }}</b>
+                                      } @else {
+                                        <b class="mono muted">{{ formatAssetPnl(line) }}</b>
+                                      }
+                                    </div>
+                                  }
+                                }
+                              </div>
+
+                              <div class="tx-history-label">Transaction history</div>
+                              <div class="tx-timeline">
+                                @for (txGroup of cycle.txGroups; track txGroup.id; let last = $last) {
+                                  @if (txGroup.type === 'loop') {
+                                    <div class="tx-group-row loop-row">
+                                      <span class="timeline-slot loop-slot"></span>
+                                      <div class="tx-group-content">
+                                        <button type="button" class="loop-group-head" (click)="toggleLoopGroupExpanded(txGroup.id)">
+                                          <span class="tx-icon loop">↻</span>
+                                          <span class="loop-copy">
+                                            <strong>{{ loopGroupLabel(txGroup.loopSteps ?? txGroup.items.length) }}</strong>
+                                            <small>Borrow {{ txGroup.loopAssetIn ?? 'assets' }} → Supply {{ txGroup.loopAssetOut ?? 'assets' }}</small>
+                                          </span>
+                                          <span class="tag amber">{{ txGroup.items.length }} tx</span>
+                                          <span class="chevron" [class.open]="isLoopGroupExpanded(txGroup.id)">⌄</span>
+                                        </button>
+
+                                        @if (isLoopGroupExpanded(txGroup.id)) {
+                                          <div class="loop-steps a-fade">
+                                            @for (item of txGroup.items; track item.id) {
+                                              <div class="tx-item" [ngClass]="txItemClass(item.type)">
+                                                <span class="tx-icon">{{ txItemIcon(item.type) }}</span>
+                                                <span class="tag" [ngClass]="txItemClass(item.type)">{{ item.label }}</span>
+                                                <strong>{{ item.assetSymbol }}</strong>
+                                                <span class="mono tx-qty">{{ txSignedQuantity(item.type, item.quantity) }} {{ item.assetSymbol }}</span>
+                                                <span class="mono muted">{{ formatUsd(item.valueUsd) }}</span>
+                                                @if (item.txHash !== null) {
+                                                  <button type="button" class="tx-copy" [class.copied]="isHashCopied(item.txHash)"
+                                                    (click)="$event.stopPropagation(); copyTxHash(item.txHash)"
+                                                    [title]="isHashCopied(item.txHash) ? 'Copied' : 'Copy ' + item.txHash">
+                                                    <span class="mono">{{ shortHash(item.txHash) }}</span>
+                                                    <span class="tx-copy-icon">{{ isHashCopied(item.txHash) ? '✓' : '⧉' }}</span>
+                                                  </button>
+                                                } @else {
+                                                  <span class="mono tx-hash muted">--</span>
+                                                }
+                                              </div>
+                                            }
+                                          </div>
+                                        }
+                                      </div>
+                                    </div>
+                                  } @else {
+                                    <div class="tx-group-row" [ngClass]="txGroupClass(txGroup.type)">
+                                      <span class="timeline-slot" [class.last]="last"><span></span></span>
+                                      <div class="tx-group-content">
+                                        <div class="tx-group-label" *ngIf="txGroup.type !== 'mid'">
+                                          {{ txGroupTitle(txGroup.type) }} · {{ formatDate(txGroup.timestamp) }}
+                                        </div>
+                                        @for (item of txGroup.items; track item.id) {
+                                          <div class="tx-item" [ngClass]="txItemClass(item.type)">
+                                            <span class="tx-icon">{{ txItemIcon(item.type) }}</span>
+                                            <span class="tag" [ngClass]="txItemClass(item.type)">{{ item.label }}</span>
+                                            <strong>{{ item.assetSymbol }}</strong>
+                                            <span class="mono tx-qty">{{ txSignedQuantity(item.type, item.quantity) }} {{ item.assetSymbol }}</span>
+                                            <span class="mono muted">{{ formatUsd(item.valueUsd) }}</span>
+                                            @if (item.txHash !== null) {
+                                              <button type="button" class="tx-copy" [class.copied]="isHashCopied(item.txHash)"
+                                                (click)="$event.stopPropagation(); copyTxHash(item.txHash)"
+                                                [title]="isHashCopied(item.txHash) ? 'Copied' : 'Copy ' + item.txHash">
+                                                <span class="mono">{{ shortHash(item.txHash) }}</span>
+                                                <span class="tx-copy-icon">{{ isHashCopied(item.txHash) ? '✓' : '⧉' }}</span>
+                                              </button>
+                                            } @else {
+                                              <span class="mono tx-hash muted">--</span>
+                                            }
+                                          </div>
+                                        }
+                                      </div>
+                                    </div>
+                                  }
+                                } @empty {
+                                  <div class="empty-history">No grouped timeline events.</div>
+                                }
+                              </div>
+                            </div>
+                          }
+                        </article>
+                      } @empty {
+                        <div class="empty-history">No lending cycles for current filters.</div>
+                      }
+                      </section>
+                    }
+                  </div>
+                }
+              </article>
+            } @empty {
+              <div class="lending-empty">No lending positions for current filters.</div>
+            }
+          </section>
+        </main>
+      </div>
+    }
+  }
+</section>

@@ -1,0 +1,177 @@
+<section class="data-sources-wallets">
+  <div class="ds-row">
+    <svg
+      class="ds-head-icon"
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.65"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true">
+      <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+      <path d="M8 21h8" />
+      <path d="M12 17v4" />
+    </svg>
+    <span class="ds-title">Web3 wallets</span>
+    <span class="ds-tag">{{ walletsDraft.length }}</span>
+    <span class="ds-spacer"></span>
+    @if (!isWalletEditing && walletsDraft.length < maxWallets) {
+      <button type="button" class="ds-add-btn" (click)="addWallet.emit()">+ Add wallet</button>
+    }
+  </div>
+
+  @if (hasSavedWallets) {
+    <div class="wallet-saved-list">
+      <div class="wallet-saved-stack">
+        @for (wallet of walletsDraft; track wallet.id; let index = $index) {
+          <div class="ds-saved-row">
+            <div class="ds-stripe" [style.background]="wallet.color"></div>
+            <div class="ds-index mono">{{ index + 1 < 10 ? '0' + (index + 1) : index + 1 }}</div>
+            <div class="ds-label">{{ wallet.label || '—' }}</div>
+            <div class="ds-address mono">{{ wallet.address }}</div>
+            <button type="button" class="ds-nets" (click)="toggleSavedNetworks.emit(wallet.id)">
+              <span class="mono small">All nets</span>
+              <span class="chev" [class.open]="wallet.networksOpen">⌄</span>
+            </button>
+            <button type="button" class="ds-trash" (click)="removeWallet.emit(wallet.id)" aria-label="Remove wallet">🗑</button>
+          </div>
+
+          @if (wallet.networksOpen) {
+            <div class="wallet-draft-network-panel">
+              <div class="wallet-draft-network-grid">
+                @for (network of networksPresentation; track network.id) {
+                  <div class="wallet-draft-network-chip" [style.--networkColor]="network.color">
+                    <span class="network-chip-icon">{{ network.icon }}</span>
+                    <span>{{ network.label }}</span>
+                  </div>
+                }
+              </div>
+            </div>
+          }
+        }
+      </div>
+    </div>
+  }
+
+  @if (walletsDraft.length + pendingWallets.length > 0) {
+    <div class="wallet-draft-zone">
+      @if (isWalletEditing && hasSavedWallets) {
+        <div class="wallet-draft-divider">
+          <span></span>
+          <span>New wallets — pending save</span>
+          <span></span>
+        </div>
+      } @else if (isWalletEditing) {
+        <div class="wallet-saved-head wallet-draft-head">
+          <div></div>
+          <div></div>
+          <div>Label</div>
+          <div>EVM Address</div>
+          <div>Networks</div>
+          <div></div>
+        </div>
+      }
+
+      @if (isWalletEditing) {
+        <div class="wallet-draft-stack">
+          @for (wallet of pendingWallets; track wallet.id; let index = $index) {
+            <article class="wallet-draft-row" [style.--walletAccent]="wallet.color">
+              <div class="wallet-draft-main">
+                <div class="wallet-draft-stripe"></div>
+                <div class="wallet-draft-index">
+                  {{
+                    walletsDraft.length + index + 1 < 10
+                      ? '0' + (walletsDraft.length + index + 1)
+                      : walletsDraft.length + index + 1
+                  }}
+                </div>
+                <input
+                  class="wallet-draft-inline-input wallet-draft-inline-label"
+                  type="text"
+                  [value]="wallet.label"
+                  (input)="updatePendingWalletField.emit({ walletId: wallet.id, field: 'label', value: $any($event.target).value })"
+                  placeholder="Label"
+                  maxlength="40"
+                  autocomplete="off"
+                  spellcheck="false" />
+                <div class="wallet-draft-inline-address-wrap">
+                  <input
+                    class="wallet-draft-inline-input wallet-draft-inline-address"
+                    [class.ok]="wallet.address.trim().length > 0 && walletAddressError(wallet.id) === null"
+                    [class.err]="wallet.address.trim().length > 0 && walletAddressError(wallet.id) !== null"
+                    type="text"
+                    [value]="wallet.address"
+                    (input)="updatePendingWalletField.emit({ walletId: wallet.id, field: 'address', value: $any($event.target).value })"
+                    placeholder="0x… EVM address"
+                    autocomplete="off"
+                    spellcheck="false" />
+                  @if (wallet.address.trim().length > 0) {
+                    <span class="wallet-draft-inline-indicator" [class.ok]="walletAddressError(wallet.id) === null" [class.err]="walletAddressError(wallet.id) !== null">
+                      {{ walletAddressError(wallet.id) === null ? '✓' : '✕' }}
+                    </span>
+                  }
+                </div>
+                <button type="button" class="wallet-draft-networks-toggle" (click)="togglePendingNetworks.emit(wallet.id)">
+                  <span>All networks</span>
+                  <span class="wallet-draft-chevron" [class.open]="wallet.networksOpen">⌄</span>
+                </button>
+                <button type="button" class="wallet-draft-remove" (click)="removeWallet.emit(wallet.id)" aria-label="Remove wallet">🗑</button>
+              </div>
+
+              @if (wallet.networksOpen) {
+                <div class="wallet-draft-network-panel">
+                  <div class="wallet-draft-network-grid">
+                    @for (network of networksPresentation; track network.id) {
+                      <div class="wallet-draft-network-chip" [style.--networkColor]="network.color">
+                        <span class="network-chip-icon">{{ network.icon }}</span>
+                        <span>{{ network.label }}</span>
+                      </div>
+                    }
+                  </div>
+                </div>
+              }
+
+              @if (walletAddressError(wallet.id); as walletError) {
+                <div class="wallet-draft-error">
+                  {{ walletError }}
+                </div>
+              }
+            </article>
+          }
+        </div>
+      }
+
+      @if (canAddMoreWallets) {
+        <button type="button" class="wallet-draft-add-another" (click)="addWallet.emit()">
+          <span class="wallet-draft-add-main">+ Add another</span>
+          <span class="wallet-draft-add-hint">(or paste multiple addresses)</span>
+        </button>
+      }
+
+      @if (isWalletEditing && pendingWallets.length > 1) {
+        <div class="wallet-draft-summary">
+          <span class="wallet-draft-summary-ok">{{ validPendingWalletCount }}</span>
+          /{{ pendingWallets.length }} wallets valid
+          @if (hasInvalidPendingWallets) {
+            <span class="wallet-draft-summary-warn">· fix errors to continue</span>
+          }
+        </div>
+      }
+
+      @if (!embeddedInDataSources && (isWalletEditing || walletListDirty)) {
+        <div class="wallet-draft-actions">
+          @if (isWalletEditing) {
+            <button type="button" class="secondary-btn" (click)="discardPending.emit()">Discard</button>
+          }
+          <button type="button" class="primary-btn wallet-save-btn" [disabled]="!canSaveWallets || saving" (click)="saveWallets.emit()">
+            {{ saving ? 'Saving…' : 'Save wallet settings' }}
+          </button>
+        </div>
+      }
+    </div>
+  }
+</section>
+

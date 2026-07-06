@@ -1,6 +1,7 @@
 package com.walletradar.api.dto;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 
 /**
@@ -16,7 +17,15 @@ public record SessionDashboardResponse(
             BigDecimal portfolioValueUsd,
             BigDecimal totalUnrealizedPnlUsd,
             BigDecimal totalUnrealizedPnlPct,
-            BigDecimal totalRealizedPnlUsd
+            BigDecimal totalRealizedPnlUsd,
+            BigDecimal netExternalCapitalUsd,
+            BigDecimal lifetimeExternalInflowUsd,
+            BigDecimal markToMarketUsd,
+            BigDecimal expectedPnlUsd,
+            BigDecimal reportedPnlUsd,
+            BigDecimal conservationDeltaUsd,
+            BigDecimal conservationThresholdUsd,
+            boolean conservationBreached
     ) {
     }
 
@@ -33,14 +42,25 @@ public record SessionDashboardResponse(
             String symbol,
             String name,
             BigDecimal quantity,
+            BigDecimal coveredQuantity,
             BigDecimal priceUsd,
+            BigDecimal marketValueUsd,
+            String priceSource,
+            Instant pricedAt,
+            Long stalenessSeconds,
+            Boolean isLiveQuote,
+            String priceIssue,
             BigDecimal avcoUsd,
+            BigDecimal netAvcoUsd,
             BigDecimal unrealizedPnlPct,
             BigDecimal unrealizedPnlUsd,
             BigDecimal realizedPnlUsd,
             String networkId,
             String walletAddress,
-            String issue
+            String issue,
+            String valuationModel,
+            String valuationUnderlyingSymbol,
+            String unsupportedValuationReason
     ) {
     }
 }

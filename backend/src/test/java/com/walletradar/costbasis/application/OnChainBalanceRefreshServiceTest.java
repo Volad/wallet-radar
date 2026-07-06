@@ -290,7 +290,6 @@ class OnChainBalanceRefreshServiceTest {
                 )
         ));
         when(ankrAccountBalanceProvider.supports(NetworkId.ZKSYNC)).thenReturn(false);
-        when(etherscanExplorerProvider.supports(NetworkId.ZKSYNC)).thenReturn(false);
         when(blockScoutExplorerProvider.supports(NetworkId.ZKSYNC)).thenReturn(true);
         when(blockScoutExplorerProvider.getNativeBalance(
                 "0x1111111111111111111111111111111111111111",
@@ -336,7 +335,6 @@ class OnChainBalanceRefreshServiceTest {
                 )
         ));
         when(ankrAccountBalanceProvider.supports(NetworkId.ZKSYNC)).thenReturn(false);
-        when(etherscanExplorerProvider.supports(NetworkId.ZKSYNC)).thenReturn(false);
         when(blockScoutExplorerProvider.supports(NetworkId.ZKSYNC)).thenReturn(true);
         when(blockScoutExplorerProvider.getNativeBalance(
                 "0x1111111111111111111111111111111111111111",

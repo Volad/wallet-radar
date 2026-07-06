@@ -175,6 +175,52 @@ class MayanCctpBridgePairLinkServiceTest {
     }
 
     @Test
+    @DisplayName("terminal Mayan status without materialized destination keeps source outstanding for later retry")
+    void terminalMayanStatusWithoutMaterializedDestinationKeepsSourceOutstanding() {
+        RawTransaction sourceRaw = sourceRawTransaction(
+                "0x4f00bba837f9de20e32e5abbefdd53cf0ec5a8b948eebd9a841d170a74506c98",
+                NetworkId.ARBITRUM
+        );
+        NormalizedTransaction source = bridgeOut(
+                "0x4f00bba837f9de20e32e5abbefdd53cf0ec5a8b948eebd9a841d170a74506c98",
+                NetworkId.ARBITRUM,
+                "USDC",
+                "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
+                "-3.139239"
+        );
+
+        when(mayanStatusGateway.fetchBridgeStatus(source.getTxHash()))
+                .thenReturn(Optional.of(new MayanBridgeStatus(
+                        source.getTxHash(),
+                        "0x5a85c1ea1fd0de63ba890b27e6bc6b720c87562010df6572da9f55a04d9ea467",
+                        NetworkId.AVALANCHE,
+                        WALLET,
+                        "MCTP_BRIDGE",
+                        "REDEEMED_ON_EVM_WITH_FEE",
+                        "COMPLETED",
+                        "3.139239",
+                        "3.107299",
+                        "0.03194",
+                        "0"
+                )));
+        when(normalizedTransactionRepository.findAllByTxHashAndNetworkIdAndSource(
+                "0x5a85c1ea1fd0de63ba890b27e6bc6b720c87562010df6572da9f55a04d9ea467",
+                NetworkId.AVALANCHE,
+                NormalizedTransactionSource.ON_CHAIN
+        )).thenReturn(List.of());
+        when(mayanReceivingTransactionDiscoveryService.findOrDiscover(any())).thenReturn(Optional.empty());
+
+        service.link(sourceRaw, source);
+
+        verify(rawTransactionRepository).save(sourceRaw);
+        verify(normalizedTransactionRepository, never()).save(any());
+        verify(normalizedTransactionRepository, never()).saveAll(any());
+        assertThat(source.getMatchedCounterparty()).isNull();
+        assertThat(source.getCorrelationId()).isNull();
+        assertThat(source.getContinuityCandidate()).isNull();
+    }
+
+    @Test
     @DisplayName("destination arrival links previously seeded Mayan source")
     void destinationArrivalLinksPreviouslySeededMayanSource() {
         RawTransaction destinationRaw = destinationRawTransaction(

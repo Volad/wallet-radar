@@ -19,6 +19,7 @@ import java.math.MathContext;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.EnumSet;
 import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -26,6 +27,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
@@ -41,7 +43,8 @@ public class SessionTransactionsQueryService {
     private static final int MAX_LIMIT = 500;
     private static final List<String> SPAM_LIKE_REASON_CODES = List.of(
             "PROMO_SPAM_PHISHING",
-            "CLAIM_LIKE_SPAM_OR_AIRDROP"
+            "CLAIM_LIKE_SPAM_OR_AIRDROP",
+            "SPOOF_TOKEN_CONFUSABLE_SYMBOL"
     );
     private static final Criteria ACTIVE_ACCOUNTING_CRITERIA = new Criteria().orOperator(
             Criteria.where("excludedFromAccounting").exists(false),
@@ -51,6 +54,94 @@ public class SessionTransactionsQueryService {
             NormalizedTransactionStatus.CONFIRMED,
             NormalizedTransactionStatus.PENDING_PRICE,
             NormalizedTransactionStatus.NEEDS_REVIEW
+    );
+
+    // ── Transaction category type buckets ─────────────────────────────────────
+
+    static final Set<NormalizedTransactionType> SWAP_TYPES = EnumSet.of(
+            NormalizedTransactionType.SWAP,
+            NormalizedTransactionType.WRAP,
+            NormalizedTransactionType.UNWRAP,
+            NormalizedTransactionType.DEX_ORDER_REQUEST,
+            NormalizedTransactionType.DEX_ORDER_SETTLEMENT,
+            NormalizedTransactionType.DERIVATIVE_ORDER_REQUEST,
+            NormalizedTransactionType.DERIVATIVE_ORDER_EXECUTION,
+            NormalizedTransactionType.DERIVATIVE_ORDER_CANCEL,
+            NormalizedTransactionType.DERIVATIVE_POSITION_INCREASE,
+            NormalizedTransactionType.DERIVATIVE_POSITION_DECREASE,
+            NormalizedTransactionType.NFT_MINT,
+            NormalizedTransactionType.UNKNOWN,
+            NormalizedTransactionType.MANUAL_COMPENSATING
+    );
+
+    static final Set<NormalizedTransactionType> LP_TYPES = EnumSet.of(
+            NormalizedTransactionType.LP_ENTRY_REQUEST,
+            NormalizedTransactionType.LP_ENTRY_SETTLEMENT,
+            NormalizedTransactionType.LP_EXIT_REQUEST,
+            NormalizedTransactionType.LP_EXIT_SETTLEMENT,
+            NormalizedTransactionType.LP_ENTRY,
+            NormalizedTransactionType.LP_EXIT,
+            NormalizedTransactionType.LP_EXIT_PARTIAL,
+            NormalizedTransactionType.LP_EXIT_FINAL,
+            NormalizedTransactionType.LP_ADJUST,
+            NormalizedTransactionType.LP_POSITION_STAKE,
+            NormalizedTransactionType.LP_POSITION_UNSTAKE,
+            NormalizedTransactionType.LP_FEE_CLAIM
+    );
+
+    static final Set<NormalizedTransactionType> LENDING_TYPES = EnumSet.of(
+            NormalizedTransactionType.LENDING_DEPOSIT,
+            NormalizedTransactionType.LENDING_LOOP_OPEN,
+            NormalizedTransactionType.LENDING_LOOP_REBALANCE,
+            NormalizedTransactionType.LENDING_LOOP_DECREASE,
+            NormalizedTransactionType.LENDING_LOOP_CLOSE,
+            NormalizedTransactionType.LENDING_WITHDRAW,
+            NormalizedTransactionType.EARN_FLEXIBLE_SAVING,
+            NormalizedTransactionType.BORROW,
+            NormalizedTransactionType.REPAY,
+            NormalizedTransactionType.VAULT_DEPOSIT,
+            NormalizedTransactionType.VAULT_WITHDRAW,
+            NormalizedTransactionType.STAKING_DEPOSIT,
+            NormalizedTransactionType.STAKING_WITHDRAW_REQUEST,
+            NormalizedTransactionType.STAKING_WITHDRAW,
+            NormalizedTransactionType.PROTOCOL_CUSTODY_DEPOSIT,
+            NormalizedTransactionType.PROTOCOL_CUSTODY_WITHDRAW
+    );
+
+    static final Set<NormalizedTransactionType> BRIDGE_TYPES = EnumSet.of(
+            NormalizedTransactionType.BRIDGE_IN,
+            NormalizedTransactionType.BRIDGE_OUT
+    );
+
+    static final Set<NormalizedTransactionType> EXTERNAL_TRANSFER_TYPES = EnumSet.of(
+            NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+            NormalizedTransactionType.EXTERNAL_TRANSFER_OUT
+    );
+
+    static final Set<NormalizedTransactionType> INTERNAL_TRANSFER_TYPES = EnumSet.of(
+            NormalizedTransactionType.INTERNAL_TRANSFER
+    );
+
+    static final Set<NormalizedTransactionType> REWARD_TYPES = EnumSet.of(
+            NormalizedTransactionType.REWARD_CLAIM
+    );
+
+    static final Set<NormalizedTransactionType> DUST_TYPES = EnumSet.of(
+            NormalizedTransactionType.APPROVE,
+            NormalizedTransactionType.FEE,
+            NormalizedTransactionType.ADMIN_CONFIG,
+            NormalizedTransactionType.SPONSORED_GAS_IN
+    );
+
+    public static final List<TransactionCategory> DEFAULT_CATEGORIES = List.of(
+            TransactionCategory.SWAP,
+            TransactionCategory.LP,
+            TransactionCategory.LENDING,
+            TransactionCategory.BRIDGE,
+            TransactionCategory.EXTERNAL_TRANSFER,
+            TransactionCategory.INTERNAL_TRANSFER,
+            TransactionCategory.REWARD,
+            TransactionCategory.NEED_REVIEW
     );
 
     private final UserSessionRepository userSessionRepository;
@@ -71,7 +162,6 @@ public class SessionTransactionsQueryService {
         }
         return userSessionRepository.findById(sessionId.trim())
                 .map(session -> {
-                    accountingUniverseService.ensureBybitMembership(session.getId(), Instant.now());
                     long projectedTransactions = countVisibleTransactions(accountingUniverseService.resolveScope(session).memberRefs());
                     return new RebuildTransactionsView(
                             session.getId(),
@@ -101,34 +191,27 @@ public class SessionTransactionsQueryService {
         return requestedOffset;
     }
 
-    public static BridgeFilter validateBridgeFilterOrThrow(String rawBridgeFilter) {
-        if (rawBridgeFilter == null || rawBridgeFilter.isBlank()) {
-            return BridgeFilter.ALL;
+    public static List<TransactionCategory> parseCategories(Collection<String> rawCategories) {
+        if (rawCategories == null || rawCategories.isEmpty()) {
+            return DEFAULT_CATEGORIES;
         }
-        try {
-            return BridgeFilter.valueOf(rawBridgeFilter.trim().toUpperCase(Locale.ROOT));
-        } catch (IllegalArgumentException exception) {
-            throw new IllegalArgumentException("bridgeStatus must be one of ALL, BRIDGE_OUT, BRIDGE_IN, MATCHED, REVIEW");
+        List<TransactionCategory> parsed = new ArrayList<>();
+        for (String raw : rawCategories) {
+            if (raw == null || raw.isBlank()) continue;
+            try {
+                parsed.add(TransactionCategory.valueOf(raw.trim().toUpperCase(Locale.ROOT)));
+            } catch (IllegalArgumentException ignored) {
+                // skip unknown category values
+            }
         }
-    }
-
-    public static SpamFilter validateSpamFilterOrThrow(String rawSpamFilter) {
-        if (rawSpamFilter == null || rawSpamFilter.isBlank()) {
-            return SpamFilter.HIDE_SPAM;
-        }
-        try {
-            return SpamFilter.valueOf(rawSpamFilter.trim().toUpperCase(Locale.ROOT));
-        } catch (IllegalArgumentException exception) {
-            throw new IllegalArgumentException("spamFilter must be one of HIDE_SPAM, ALL, SPAM_ONLY");
-        }
+        return parsed.isEmpty() ? DEFAULT_CATEGORIES : parsed;
     }
 
     public static TransactionsQuery normalizeQuery(
             Integer requestedLimit,
             Integer requestedOffset,
             String rawSearch,
-            String rawBridgeFilter,
-            String rawSpamFilter,
+            Collection<String> rawCategories,
             Collection<String> requestedWalletRefs,
             Collection<NetworkId> requestedNetworkIds
     ) {
@@ -136,8 +219,7 @@ public class SessionTransactionsQueryService {
                 validateLimitOrThrow(requestedLimit),
                 validateOffsetOrThrow(requestedOffset),
                 normalizeSearch(rawSearch),
-                validateBridgeFilterOrThrow(rawBridgeFilter),
-                validateSpamFilterOrThrow(rawSpamFilter),
+                parseCategories(rawCategories),
                 normalizeValues(requestedWalletRefs),
                 requestedNetworkIds == null ? List.of() : requestedNetworkIds.stream().filter(Objects::nonNull).distinct().toList()
         );
@@ -186,7 +268,7 @@ public class SessionTransactionsQueryService {
         }
         return mongoOperations.count(Query.query(transactionsCriteria(
                 memberRefs,
-                new TransactionsQuery(DEFAULT_LIMIT, 0, null, BridgeFilter.ALL, SpamFilter.HIDE_SPAM, List.of(), List.of())
+                new TransactionsQuery(DEFAULT_LIMIT, 0, null, DEFAULT_CATEGORIES, List.of(), List.of())
         )), NormalizedTransaction.class);
     }
 
@@ -194,14 +276,14 @@ public class SessionTransactionsQueryService {
         List<Criteria> criteria = new ArrayList<>();
         criteria.add(Criteria.where("walletAddress").in(walletRefs));
         if (!query.networkIds().isEmpty()) {
-            criteria.add(Criteria.where("networkId").in(query.networkIds()));
+            // Include CEX transactions (networkId=null) regardless of the network filter;
+            // the network filter applies only to on-chain transactions.
+            criteria.add(new Criteria().orOperator(
+                    Criteria.where("networkId").in(query.networkIds()),
+                    Criteria.where("networkId").exists(false)
+            ));
         }
-        criteria.add(visibilityCriteria(query.spamFilter()));
-
-        Criteria bridgeCriteria = bridgeCriteria(query.bridgeFilter());
-        if (bridgeCriteria != null) {
-            criteria.add(bridgeCriteria);
-        }
+        criteria.add(categoryCriteria(query.categories()));
 
         Criteria searchCriteria = searchCriteria(query.search());
         if (searchCriteria != null) {
@@ -211,31 +293,51 @@ public class SessionTransactionsQueryService {
         return new Criteria().andOperator(criteria.toArray(Criteria[]::new));
     }
 
-    private Criteria visibilityCriteria(SpamFilter spamFilter) {
-        Criteria activeVisible = new Criteria().andOperator(
+    private Criteria categoryCriteria(List<TransactionCategory> categories) {
+        if (categories == null || categories.isEmpty()) {
+            return Criteria.where("_id").exists(false);
+        }
+        Criteria spamCrit = spamLikeCriteria();
+        List<Criteria> orParts = new ArrayList<>();
+        for (TransactionCategory category : categories) {
+            switch (category) {
+                case SPAM -> orParts.add(spamCrit);
+                case DUST -> orParts.add(new Criteria().andOperator(
+                        Criteria.where("status").in(VISIBLE_STATUSES),
+                        ACTIVE_ACCOUNTING_CRITERIA,
+                        new Criteria().norOperator(spamCrit),
+                        Criteria.where("type").in(DUST_TYPES)
+                ));
+                case NEED_REVIEW -> orParts.add(new Criteria().andOperator(
+                        Criteria.where("status").in(
+                                NormalizedTransactionStatus.PENDING_PRICE,
+                                NormalizedTransactionStatus.NEEDS_REVIEW
+                        ),
+                        ACTIVE_ACCOUNTING_CRITERIA,
+                        new Criteria().norOperator(spamCrit)
+                ));
+                case SWAP -> orParts.add(typeBucketCriteria(SWAP_TYPES, spamCrit));
+                case LP -> orParts.add(typeBucketCriteria(LP_TYPES, spamCrit));
+                case LENDING -> orParts.add(typeBucketCriteria(LENDING_TYPES, spamCrit));
+                case BRIDGE -> orParts.add(typeBucketCriteria(BRIDGE_TYPES, spamCrit));
+                case EXTERNAL_TRANSFER -> orParts.add(typeBucketCriteria(EXTERNAL_TRANSFER_TYPES, spamCrit));
+                case INTERNAL_TRANSFER -> orParts.add(typeBucketCriteria(INTERNAL_TRANSFER_TYPES, spamCrit));
+                case REWARD -> orParts.add(typeBucketCriteria(REWARD_TYPES, spamCrit));
+            }
+        }
+        if (orParts.isEmpty()) {
+            return Criteria.where("_id").exists(false);
+        }
+        return new Criteria().orOperator(orParts.toArray(Criteria[]::new));
+    }
+
+    private Criteria typeBucketCriteria(Set<NormalizedTransactionType> types, Criteria spamCrit) {
+        return new Criteria().andOperator(
                 Criteria.where("status").in(VISIBLE_STATUSES),
                 ACTIVE_ACCOUNTING_CRITERIA,
-                meaningfulEconomicRowCriteria(),
-                nonSpamLikeCriteria()
+                new Criteria().norOperator(spamCrit),
+                Criteria.where("type").in(types)
         );
-        Criteria spamVisible = spamLikeCriteria();
-
-        return switch (spamFilter) {
-            case HIDE_SPAM -> activeVisible;
-            case ALL -> new Criteria().orOperator(activeVisible, spamVisible);
-            case SPAM_ONLY -> spamVisible;
-        };
-    }
-
-    private Criteria meaningfulEconomicRowCriteria() {
-        return new Criteria().orOperator(
-                Criteria.where("type").ne(NormalizedTransactionType.UNKNOWN),
-                Criteria.where("flows.0").exists(true)
-        );
-    }
-
-    private Criteria nonSpamLikeCriteria() {
-        return new Criteria().norOperator(spamLikeCriteria());
     }
 
     private Criteria spamLikeCriteria() {
@@ -245,39 +347,6 @@ public class SessionTransactionsQueryService {
         );
         Criteria reasonTaggedSpam = Criteria.where("missingDataReasons").in(SPAM_LIKE_REASON_CODES);
         return new Criteria().orOperator(excludedSpam, reasonTaggedSpam);
-    }
-
-    private Criteria bridgeCriteria(BridgeFilter bridgeFilter) {
-        return switch (bridgeFilter) {
-            case ALL -> null;
-            case REVIEW -> new Criteria().andOperator(
-                    Criteria.where("type").in(NormalizedTransactionType.BRIDGE_OUT, NormalizedTransactionType.BRIDGE_IN),
-                    Criteria.where("status").is(NormalizedTransactionStatus.NEEDS_REVIEW)
-            );
-            case MATCHED -> new Criteria().andOperator(
-                    Criteria.where("type").in(NormalizedTransactionType.BRIDGE_OUT, NormalizedTransactionType.BRIDGE_IN),
-                    Criteria.where("matchedCounterparty").exists(true),
-                    Criteria.where("matchedCounterparty").ne("")
-            );
-            case BRIDGE_OUT -> new Criteria().andOperator(
-                    Criteria.where("type").is(NormalizedTransactionType.BRIDGE_OUT),
-                    Criteria.where("status").ne(NormalizedTransactionStatus.NEEDS_REVIEW),
-                    unmatchedCounterpartyCriteria()
-            );
-            case BRIDGE_IN -> new Criteria().andOperator(
-                    Criteria.where("type").is(NormalizedTransactionType.BRIDGE_IN),
-                    Criteria.where("status").ne(NormalizedTransactionStatus.NEEDS_REVIEW),
-                    unmatchedCounterpartyCriteria()
-            );
-        };
-    }
-
-    private Criteria unmatchedCounterpartyCriteria() {
-        return new Criteria().orOperator(
-                Criteria.where("matchedCounterparty").exists(false),
-                Criteria.where("matchedCounterparty").is(null),
-                Criteria.where("matchedCounterparty").is("")
-        );
     }
 
     private Criteria searchCriteria(String search) {
@@ -331,22 +400,45 @@ public class SessionTransactionsQueryService {
                 realisedPnlUsdTotal(transaction),
                 null,
                 transaction.getFlows().stream()
-                        .map(this::toFlowView)
+                        .map(flow -> toFlowView(transaction, flow))
                         .toList()
         );
     }
 
-    private FlowView toFlowView(NormalizedTransaction.Flow flow) {
+    private FlowView toFlowView(NormalizedTransaction transaction, NormalizedTransaction.Flow flow) {
+        BigDecimal unitPrice = flow.getUnitPriceUsd();
+        BigDecimal valueUsd = flow.getValueUsd();
+        // LP receipt tokens (GM, GLV) from settlement carry no reliable historical price —
+        // the system falls back to current market price which misleads the reader into
+        // thinking the deposit settled at a lower value. Cost basis is propagated via the
+        // replay bucket (not from unitPriceUsd), so it is safe to suppress the price here.
+        if (isSuppressedSettlementReceiptFlow(transaction, flow)) {
+            unitPrice = null;
+            valueUsd = null;
+        }
         return new FlowView(
                 flow.getRole() == null ? null : flow.getRole().name(),
                 blankToNull(flow.getAssetContract()),
                 blankToNull(flow.getAssetSymbol()),
                 flow.getQuantityDelta(),
-                flow.getUnitPriceUsd(),
-                flow.getValueUsd(),
+                unitPrice,
+                valueUsd,
                 flow.getPriceSource() == null ? null : flow.getPriceSource().name(),
                 flow.getLogIndex()
         );
+    }
+
+    private boolean isSuppressedSettlementReceiptFlow(NormalizedTransaction tx, NormalizedTransaction.Flow flow) {
+        if (tx.getType() != NormalizedTransactionType.LP_ENTRY_SETTLEMENT) {
+            return false;
+        }
+        String sym = flow.getAssetSymbol();
+        if (sym == null || sym.isBlank()) {
+            return false;
+        }
+        // GM:ETH/USD [WETH-USDC] and GLV [...] tokens — receipt tokens with no historical price feed
+        return sym.regionMatches(true, 0, "GM:", 0, 3)
+                || sym.regionMatches(true, 0, "GLV", 0, 3);
     }
 
     private String mapSourceType(NormalizedTransaction transaction) {
@@ -360,32 +452,10 @@ public class SessionTransactionsQueryService {
         if (type == null) {
             return "UNCLASSIFIED";
         }
-        return switch (type) {
-            case SWAP -> "SWAP";
-            case WRAP -> "WRAP";
-            case UNWRAP -> "UNWRAP";
-            case EXTERNAL_TRANSFER_IN, BRIDGE_IN -> "EXTERNAL_INBOUND";
-            case EXTERNAL_TRANSFER_OUT, BRIDGE_OUT, INTERNAL_TRANSFER -> "EXTERNAL_TRANSFER_OUT";
-            case LP_ENTRY, LP_ENTRY_REQUEST, LP_ENTRY_SETTLEMENT -> "LP_ENTRY";
-            case LP_EXIT, LP_EXIT_REQUEST, LP_EXIT_SETTLEMENT -> "LP_EXIT";
-            case LP_EXIT_PARTIAL -> "LP_EXIT_PARTIAL";
-            case LP_EXIT_FINAL -> "LP_EXIT_FINAL";
-            case LP_FEE_CLAIM -> "LP_FEE_CLAIM";
-            case LP_POSITION_STAKE -> "LP_POSITION_STAKE";
-            case LP_POSITION_UNSTAKE -> "LP_POSITION_UNSTAKE";
-            case LENDING_DEPOSIT -> "LEND_DEPOSIT";
-            case LENDING_WITHDRAW -> "LEND_WITHDRAWAL";
-            case BORROW -> "BORROW";
-            case REPAY -> "REPAY";
-            case STAKING_DEPOSIT -> "STAKE_DEPOSIT";
-            case STAKING_WITHDRAW_REQUEST, STAKING_WITHDRAW -> "STAKE_WITHDRAWAL";
-            case REWARD_CLAIM -> "REWARD_CLAIM";
-            case APPROVE -> "APPROVAL";
-            case LP_ADJUST -> "LP_ADJUST";
-            case MANUAL_COMPENSATING -> "MANUAL_COMPENSATING";
-            case UNKNOWN -> "UNCLASSIFIED";
-            default -> "UNCLASSIFIED";
-        };
+        if (type == NormalizedTransactionType.UNKNOWN) {
+            return "UNCLASSIFIED";
+        }
+        return type.name();
     }
 
     private String bridgeStatus(NormalizedTransaction transaction) {
@@ -515,25 +585,14 @@ public class SessionTransactionsQueryService {
             int limit,
             int offset,
             String search,
-            BridgeFilter bridgeFilter,
-            SpamFilter spamFilter,
+            List<TransactionCategory> categories,
             List<String> walletRefs,
             List<NetworkId> networkIds
     ) {
     }
 
-    public enum BridgeFilter {
-        ALL,
-        BRIDGE_OUT,
-        BRIDGE_IN,
-        MATCHED,
-        REVIEW
-    }
-
-    public enum SpamFilter {
-        HIDE_SPAM,
-        ALL,
-        SPAM_ONLY
+    public enum TransactionCategory {
+        SWAP, LP, LENDING, BRIDGE, EXTERNAL_TRANSFER, INTERNAL_TRANSFER, REWARD, DUST, NEED_REVIEW, SPAM
     }
 
     public record ItemView(

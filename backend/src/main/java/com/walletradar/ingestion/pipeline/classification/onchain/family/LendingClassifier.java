@@ -2,6 +2,7 @@ package com.walletradar.ingestion.pipeline.classification.onchain.family;
 
 import com.walletradar.domain.common.ConfidenceLevel;
 import com.walletradar.domain.common.Decimal128Support;
+import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.common.PriceSource;
 import com.walletradar.domain.transaction.normalized.ClassificationSource;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
@@ -12,11 +13,14 @@ import com.walletradar.ingestion.pipeline.classification.ClassificationDecision;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassificationContext;
 import com.walletradar.ingestion.pipeline.classification.onchain.protocol.ProtocolSemanticHint;
 import com.walletradar.ingestion.pipeline.classification.reason.ClassificationReasonCode;
+import com.walletradar.ingestion.adapter.evm.rpc.EvkVaultShareRateResolver;
 import com.walletradar.ingestion.pipeline.classification.support.OnChainClassificationSupport;
 import com.walletradar.ingestion.pipeline.classification.support.RawLeg;
 import com.walletradar.ingestion.pipeline.onchain.OnChainRawTransactionView;
 import org.bson.Document;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.Ordered;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -27,6 +31,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Lending family classifier for clarified batch and Euler loop semantics that still resolve
@@ -35,7 +40,18 @@ import java.util.Optional;
 @Component
 public class LendingClassifier implements OnChainFamilyClassifier {
 
-    private static final String EULER_BATCH_ROUTER = "0xddcbe30a761edd2e19bba930a977475265f36fa1";
+    private static final Set<String> EULER_BATCH_ROUTERS = Set.of(
+            "0xddcbe30a761edd2e19bba930a977475265f36fa1",
+            "0x7bdbd0a7114aa42ca957f292145f6a931a345583"
+    );
+    private static final Set<String> EULER_KNOWN_VAULT_CONTRACTS = Set.of(
+            // Plasma network vaults (wstUSR/USDT0 loop history).
+            "0x4718484ac9dc07fbbc078561e8f8ef29e2a369cd",
+            "0xac40d41ab11b0eb991a7d34d55dbdbb7849e92ef",
+            // Avalanche network vaults (eUSDC-2, eUSDt-2 leveraged loops via EVC batch router).
+            "0x39de0f00189306062d79edec6dca5bb6bfd108f9",
+            "0xaba9d2d4b6b93c3dc8976d8eb0690cca56431fe4"
+    );
     private static final String EULER_CALL_WITH_CONTEXT_TOPIC =
             "0x6e9738e5aa38fe1517adbb480351ec386ece82947737b18badbcad1e911133ec";
     private static final String EULER_BORROW_EVENT_TOPIC =
@@ -49,14 +65,37 @@ public class LendingClassifier implements OnChainFamilyClassifier {
     private static final String ERC20_TRANSFER_TOPIC =
             "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 
+    /**
+     * Maximum relative divergence between the source-share and replacement-share underlying USD value for
+     * a pairing to be treated as a genuine value-for-value Euler rebalance. Set generously (2x) so only
+     * gross mis-pairings (e.g. a $1,380 collateral relocation mistaken for a $5 share mint) are rejected;
+     * a legitimate same-value collateral swap stays well within this band.
+     */
+    private static final BigDecimal REBALANCE_VALUE_EQUIVALENCE_MAX_DIVERGENCE = new BigDecimal("0.5");
+
+    /** Underlying USD price of a USD-stablecoin EVK vault's underlying asset (peg). */
+    private static final BigDecimal STABLE_UNDERLYING_USD = BigDecimal.ONE;
+
+    private final EvkVaultShareRateResolver shareRateResolver;
+
+    @Autowired
+    public LendingClassifier(@Nullable EvkVaultShareRateResolver shareRateResolver) {
+        this.shareRateResolver = shareRateResolver;
+    }
+
+    /** Convenience constructor for tests / manual wiring without on-chain EVK rate resolution. */
+    public LendingClassifier() {
+        this(null);
+    }
+
     @Override
     public OnChainClassificationInsertionPoint insertionPoint() {
-        return OnChainClassificationInsertionPoint.FINAL_FALLBACK;
+        return OnChainClassificationInsertionPoint.PRE_ECONOMIC_REVIEW;
     }
 
     @Override
     public int getOrder() {
-        return Ordered.HIGHEST_PRECEDENCE + 250;
+        return Ordered.HIGHEST_PRECEDENCE + 90;
     }
 
     @Override
@@ -70,6 +109,11 @@ public class LendingClassifier implements OnChainFamilyClassifier {
             return Optional.empty();
         }
 
+        Optional<ClassificationDecision> eulerLoopDecision = classifyEulerLoopPath(context.view(), context.movementLegs());
+        if (eulerLoopDecision.isPresent()) {
+            return eulerLoopDecision;
+        }
+
         if (isEulerBatchClarificationRequired(context.view(), context.movementLegs())) {
             return Optional.of(pendingReceiptClarification(
                     context.view(),
@@ -78,10 +122,6 @@ public class LendingClassifier implements OnChainFamilyClassifier {
             ));
         }
 
-        Optional<ClassificationDecision> eulerLoopDecision = classifyEulerLoopPath(context.view(), context.movementLegs());
-        if (eulerLoopDecision.isPresent()) {
-            return eulerLoopDecision;
-        }
         if (!context.view().hasFullReceiptClarificationEvidence()) {
             return Optional.empty();
         }
@@ -147,7 +187,7 @@ public class LendingClassifier implements OnChainFamilyClassifier {
             OnChainRawTransactionView view,
             List<RawLeg> movementLegs
     ) {
-        if (EULER_BATCH_ROUTER.equals(view.toAddress())) {
+        if (isEulerBatchRouter(view.toAddress())) {
             return true;
         }
         if (movementLegs != null && movementLegs.stream().anyMatch(this::isEulerLikeMovement)) {
@@ -193,7 +233,10 @@ public class LendingClassifier implements OnChainFamilyClassifier {
         Optional<ProtocolSemanticHint> loopOpen = context.protocolSemantics()
                 .firstBySuggestedType(NormalizedTransactionType.LENDING_LOOP_OPEN);
         if (loopOpen.isPresent()) {
-            List<NormalizedTransaction.Flow> flows = buildEulerLoopOpenFlows(context.view(), context.movementLegs());
+            ProtocolSemanticHint value = loopOpen.orElseThrow();
+            List<NormalizedTransaction.Flow> flows = "Morpho".equalsIgnoreCase(value.protocolName())
+                    ? transferFlows(context.movementLegs())
+                    : buildEulerLoopOpenFlows(context.view(), context.movementLegs());
             if (!flows.isEmpty()) {
                 return Optional.of(FamilyDecisionSupport.buildWithView(
                         context.view(),
@@ -207,8 +250,8 @@ public class LendingClassifier implements OnChainFamilyClassifier {
                         ConfidenceLevel.LOW,
                         flows,
                         List.of(),
-                        loopOpen.orElseThrow().protocolName(),
-                        loopOpen.orElseThrow().protocolVersion()
+                        value.protocolName(),
+                        value.protocolVersion()
                 ));
             }
         }
@@ -216,7 +259,8 @@ public class LendingClassifier implements OnChainFamilyClassifier {
         Optional<ProtocolSemanticHint> rebalance = context.protocolSemantics()
                 .firstBySuggestedType(NormalizedTransactionType.LENDING_LOOP_REBALANCE);
         if (rebalance.isPresent()) {
-            Optional<EulerLoopRebalancePattern> rebalancePattern = detectEulerLoopRebalancePattern(context.movementLegs());
+            Optional<EulerLoopRebalancePattern> rebalancePattern =
+                    detectEulerLoopRebalancePattern(context.movementLegs(), context.view());
             if (rebalancePattern.isPresent()) {
                 return Optional.of(FamilyDecisionSupport.buildWithView(
                         context.view(),
@@ -350,12 +394,117 @@ public class LendingClassifier implements OnChainFamilyClassifier {
         ));
     }
 
+    private Optional<ClassificationDecision> classifyEulerReceiptOnlyLoopOpen(
+            OnChainRawTransactionView view,
+            List<RawLeg> movementLegs
+    ) {
+        if (movementLegs == null || movementLegs.isEmpty()) {
+            return Optional.empty();
+        }
+        boolean stableReceiptInbound = false;
+        boolean collateralReceiptInbound = false;
+        for (RawLeg leg : movementLegs) {
+            if (leg == null
+                    || leg.fee()
+                    || leg.quantityDelta() == null
+                    || leg.quantityDelta().signum() <= 0
+                    || !isShareLikeSymbol(leg.assetSymbol())
+                    || isDebtLikeSymbol(leg.assetSymbol())) {
+                continue;
+            }
+            if (isEulerStableLikeShareSymbol(leg.assetSymbol())) {
+                stableReceiptInbound = true;
+            } else {
+                collateralReceiptInbound = true;
+            }
+        }
+        if (!stableReceiptInbound || !collateralReceiptInbound) {
+            return Optional.empty();
+        }
+        return Optional.of(FamilyDecisionSupport.buildWithView(
+                view,
+                NormalizedTransactionType.LENDING_LOOP_OPEN,
+                OnChainClassificationSupport.initialStatus(
+                        view,
+                        NormalizedTransactionType.LENDING_LOOP_OPEN,
+                        ConfidenceLevel.LOW
+                ),
+                ClassificationSource.HEURISTIC,
+                ConfidenceLevel.LOW,
+                transferFlows(movementLegs),
+                List.of(),
+                "Euler",
+                null
+        ));
+    }
+
+    private Optional<ClassificationDecision> classifyEulerBatchDeposit(
+            OnChainRawTransactionView view,
+            List<RawLeg> movementLegs
+    ) {
+        if (movementLegs == null || movementLegs.isEmpty()) {
+            return Optional.empty();
+        }
+        boolean outboundPrincipalToEulerShareContract = false;
+        for (Document transfer : view.explorerTokenTransfers()) {
+            BigDecimal quantity = view.tokenTransferQuantity(transfer);
+            if (quantity == null || quantity.signum() <= 0) {
+                continue;
+            }
+            String symbol = view.tokenTransferSymbol(transfer);
+            if (isShareLikeSymbol(symbol) || isDebtLikeSymbol(symbol)) {
+                continue;
+            }
+            if (matchesPrimaryWallet(view, view.tokenTransferFrom(transfer))
+                    && isEulerLikeAddress(view.tokenTransferTo(transfer))) {
+                outboundPrincipalToEulerShareContract = true;
+                break;
+            }
+        }
+        if (!outboundPrincipalToEulerShareContract) {
+            return Optional.empty();
+        }
+        boolean hasOutboundPrincipal = movementLegs.stream()
+                .anyMatch(leg -> leg != null
+                        && !leg.fee()
+                        && leg.quantityDelta() != null
+                        && leg.quantityDelta().signum() < 0
+                        && !isShareLikeSymbol(leg.assetSymbol())
+                        && !isDebtLikeSymbol(leg.assetSymbol()));
+        if (!hasOutboundPrincipal) {
+            return Optional.empty();
+        }
+        return Optional.of(FamilyDecisionSupport.buildWithView(
+                view,
+                NormalizedTransactionType.LENDING_DEPOSIT,
+                OnChainClassificationSupport.initialStatus(
+                        view,
+                        NormalizedTransactionType.LENDING_DEPOSIT,
+                        ConfidenceLevel.LOW
+                ),
+                ClassificationSource.HEURISTIC,
+                ConfidenceLevel.LOW,
+                transferFlows(movementLegs),
+                List.of(),
+                "Euler",
+                null
+        ));
+    }
+
     private Optional<ClassificationDecision> classifyEulerLoopPath(
             OnChainRawTransactionView view,
             List<RawLeg> movementLegs
     ) {
-        if (!EULER_BATCH_ROUTER.equals(view.toAddress())) {
+        if (!isEulerBatchRouter(view.toAddress())) {
             return Optional.empty();
+        }
+        Optional<ClassificationDecision> receiptOnlyOpen = classifyEulerReceiptOnlyLoopOpen(view, movementLegs);
+        if (receiptOnlyOpen.isPresent()) {
+            return receiptOnlyOpen;
+        }
+        Optional<ClassificationDecision> batchDeposit = classifyEulerBatchDeposit(view, movementLegs);
+        if (batchDeposit.isPresent()) {
+            return batchDeposit;
         }
         if (isEulerBorrowBackedCollateralOpen(view, movementLegs)) {
             if (!view.hasFullReceiptClarificationEvidence() || !hasEulerClarifiedCollateralOpenLifecycle(view)) {
@@ -382,7 +531,7 @@ public class LendingClassifier implements OnChainFamilyClassifier {
             ));
         }
 
-        Optional<EulerLoopRebalancePattern> rebalancePattern = detectEulerLoopRebalancePattern(movementLegs);
+        Optional<EulerLoopRebalancePattern> rebalancePattern = detectEulerLoopRebalancePattern(movementLegs, view);
         if (rebalancePattern.isPresent()) {
             return Optional.of(FamilyDecisionSupport.buildWithView(
                     view,
@@ -449,6 +598,22 @@ public class LendingClassifier implements OnChainFamilyClassifier {
                 "Euler",
                 null
         ));
+    }
+
+    private List<NormalizedTransaction.Flow> transferFlows(List<RawLeg> movementLegs) {
+        List<NormalizedTransaction.Flow> flows = new ArrayList<>();
+        for (RawLeg leg : movementLegs) {
+            if (leg == null || leg.quantityDelta() == null || leg.quantityDelta().signum() == 0) {
+                continue;
+            }
+            flows.add(leg.fee() ? buildFlow(
+                    NormalizedLegRole.FEE,
+                    leg.assetContract(),
+                    leg.assetSymbol(),
+                    leg.quantityDelta()
+            ) : buildTransferFlow(leg));
+        }
+        return flows;
     }
 
     private ClassificationDecision blockingReview(
@@ -519,8 +684,9 @@ public class LendingClassifier implements OnChainFamilyClassifier {
             return List.of();
         }
 
-        BigDecimal shareUnitPrice = anchorQuantity.multiply(anchorUnitPrice)
-                .divide(shareQuantity, MathContext.DECIMAL128);
+        BigDecimal shareUnitPrice = resolveEvkShareUnitPriceUsd(view, shareLeg.assetContract(), shareLeg.assetSymbol())
+                .orElseGet(() -> anchorQuantity.multiply(anchorUnitPrice)
+                        .divide(shareQuantity, MathContext.DECIMAL128));
 
         List<NormalizedTransaction.Flow> flows = new ArrayList<>();
         if (debtLeg != null) {
@@ -566,15 +732,19 @@ public class LendingClassifier implements OnChainFamilyClassifier {
             BigDecimal shareUnitPrice
     ) {
         List<NormalizedTransaction.Flow> flows = new ArrayList<>();
+        String shareContract = view.tokenTransferContract(shareTransfer);
+        String shareSymbol = view.tokenTransferSymbol(shareTransfer);
+        BigDecimal resolvedShareUnitPrice = resolveEvkShareUnitPriceUsd(view, shareContract, shareSymbol)
+                .orElse(shareUnitPrice);
         NormalizedTransaction.Flow shareFlow = buildFlow(
                 NormalizedLegRole.SELL,
-                view.tokenTransferContract(shareTransfer),
-                view.tokenTransferSymbol(shareTransfer),
+                shareContract,
+                shareSymbol,
                 view.tokenTransferQuantity(shareTransfer).negate()
         );
         applyResolvedPrice(
                 shareFlow,
-                shareUnitPrice,
+                resolvedShareUnitPrice,
                 PriceSource.SWAP_DERIVED,
                 EULER_SHARE_PRICE_INFERENCE_REASON
         );
@@ -691,7 +861,26 @@ public class LendingClassifier implements OnChainFamilyClassifier {
                 || "DEUSD".equals(normalized);
     }
 
-    private Optional<EulerLoopRebalancePattern> detectEulerLoopRebalancePattern(List<RawLeg> movementLegs) {
+    private boolean isEulerStableLikeShareSymbol(String assetSymbol) {
+        if (assetSymbol == null || assetSymbol.isBlank()) {
+            return false;
+        }
+        String normalized = assetSymbol.trim().toUpperCase(Locale.ROOT);
+        return normalized.contains("USDC")
+                || normalized.contains("USDT")
+                || normalized.contains("USD₮0")
+                || normalized.contains("DEUSD");
+    }
+
+    private boolean isEulerLikeAddress(String address) {
+        String normalized = normalizeContract(address);
+        return normalized != null && EULER_KNOWN_VAULT_CONTRACTS.contains(normalized);
+    }
+
+    private Optional<EulerLoopRebalancePattern> detectEulerLoopRebalancePattern(
+            List<RawLeg> movementLegs,
+            OnChainRawTransactionView view
+    ) {
         if (movementLegs == null || movementLegs.isEmpty()) {
             return Optional.empty();
         }
@@ -732,7 +921,85 @@ public class LendingClassifier implements OnChainFamilyClassifier {
             return Optional.empty();
         }
 
+        // Reject grossly value-divergent pairings (EVK shares are NOT 1:1 with their underlying): an
+        // internal collateral relocation worth ~$1,380 must not be paired with a ~$5 share mint, which
+        // would carry the full $1,380 basis onto the tiny lot (~$216/share). Value both legs at their true
+        // convertToAssets underlying; when the rate cannot be resolved, keep the pattern (fail-safe).
+        if (!isValueEquivalentRebalance(view, sourceShare, replacementShare)) {
+            return Optional.empty();
+        }
+
         return Optional.of(new EulerLoopRebalancePattern(sourceShare, replacementShare, sourceRefund));
+    }
+
+    /**
+     * True unless the two share legs can be proven to diverge grossly in underlying USD value. Only applies
+     * to USD-stablecoin EVK shares (valued at $1/underlying via {@code convertToAssets}); for any other
+     * symbol, or when the on-chain rate cannot be resolved, returns true so the caller keeps the existing
+     * pattern (fail-safe — never fabricate a rejection from a missing rate).
+     */
+    private boolean isValueEquivalentRebalance(
+            OnChainRawTransactionView view,
+            RawLeg sourceShare,
+            RawLeg replacementShare
+    ) {
+        if (!isEulerStableLikeShareSymbol(sourceShare.assetSymbol())
+                || !isEulerStableLikeShareSymbol(replacementShare.assetSymbol())) {
+            return true;
+        }
+        Optional<BigDecimal> sourceValue = resolveEvkShareUsdValue(view, sourceShare);
+        Optional<BigDecimal> replacementValue = resolveEvkShareUsdValue(view, replacementShare);
+        if (sourceValue.isEmpty() || replacementValue.isEmpty()) {
+            return true;
+        }
+        BigDecimal source = sourceValue.orElseThrow();
+        BigDecimal replacement = replacementValue.orElseThrow();
+        if (source.signum() <= 0 || replacement.signum() <= 0) {
+            return true;
+        }
+        BigDecimal max = source.max(replacement);
+        BigDecimal divergence = source.subtract(replacement).abs().divide(max, MathContext.DECIMAL128);
+        return divergence.compareTo(REBALANCE_VALUE_EQUIVALENCE_MAX_DIVERGENCE) <= 0;
+    }
+
+    /** USD value of a stablecoin EVK share leg via convertToAssets ($1/underlying), or empty if unresolved. */
+    private Optional<BigDecimal> resolveEvkShareUsdValue(OnChainRawTransactionView view, RawLeg shareLeg) {
+        if (shareLeg == null || shareLeg.quantityDelta() == null) {
+            return Optional.empty();
+        }
+        Optional<BigDecimal> perShare = resolveEvkUnderlyingUnitsPerShare(view, shareLeg.assetContract());
+        return perShare.map(rate -> shareLeg.quantityDelta().abs().multiply(rate).multiply(STABLE_UNDERLYING_USD));
+    }
+
+    /**
+     * USD unit price of one whole stablecoin EVK share via {@code convertToAssets} at the tx block, or empty
+     * when the share is not a USD-stablecoin EVK share or the rate cannot be resolved (fail-safe).
+     */
+    private Optional<BigDecimal> resolveEvkShareUnitPriceUsd(
+            OnChainRawTransactionView view,
+            String shareContract,
+            String shareSymbol
+    ) {
+        if (!isEulerStableLikeShareSymbol(shareSymbol)) {
+            return Optional.empty();
+        }
+        return resolveEvkUnderlyingUnitsPerShare(view, shareContract)
+                .map(rate -> rate.multiply(STABLE_UNDERLYING_USD));
+    }
+
+    private Optional<BigDecimal> resolveEvkUnderlyingUnitsPerShare(
+            OnChainRawTransactionView view,
+            String shareContract
+    ) {
+        if (shareRateResolver == null || view == null || shareContract == null || shareContract.isBlank()) {
+            return Optional.empty();
+        }
+        Long block = view.blockNumber();
+        NetworkId network = view.networkId();
+        if (block == null || network == null) {
+            return Optional.empty();
+        }
+        return shareRateResolver.resolveUnderlyingUnitsPerShare(network, shareContract, block);
     }
 
     private Map<String, RawLeg> aggregateEulerShareLegs(
@@ -880,27 +1147,62 @@ public class LendingClassifier implements OnChainFamilyClassifier {
         return movementLegs.stream()
                 .filter(leg -> !leg.fee() && leg.assetContract() != null)
                 .anyMatch(leg -> (inbound ? leg.quantityDelta().signum() > 0 : leg.quantityDelta().signum() < 0)
-                        && isShareLikeSymbol(leg.assetSymbol()));
+                        && isShareLikeSymbolWithContract(leg.assetSymbol(), leg.assetContract()));
     }
 
     private boolean hasNonShareMovement(List<RawLeg> movementLegs, boolean inbound) {
         return movementLegs.stream()
                 .filter(leg -> !leg.fee() && leg.assetContract() != null)
                 .anyMatch(leg -> (inbound ? leg.quantityDelta().signum() > 0 : leg.quantityDelta().signum() < 0)
-                        && !isShareLikeSymbol(leg.assetSymbol()));
+                        && !isShareLikeSymbolWithContract(leg.assetSymbol(), leg.assetContract()));
     }
 
+    /**
+     * Returns true if the symbol looks like a lending protocol vault-share receipt.
+     *
+     * <p>When a contract address is available, prefer
+     * {@link #isShareLikeSymbolWithContract(String, String)}: for the {@code e} prefix it
+     * additionally verifies the contract is a known Euler vault, preventing false positives on
+     * other {@code e}-prefixed tokens (e.g. Euler debt receipts like {@code eUSDt-2-DEBT} or
+     * arbitrary tokens that happen to start with {@code e}).
+     */
     private boolean isShareLikeSymbol(String assetSymbol) {
         if (assetSymbol == null || assetSymbol.isBlank()) {
             return false;
         }
         String normalized = assetSymbol.trim().toLowerCase(Locale.ROOT);
+        if (normalized.startsWith("syrup")) {
+            return false;
+        }
         return normalized.startsWith("a")
                 || normalized.startsWith("c")
                 || normalized.startsWith("s")
                 || normalized.startsWith("e")
-                || normalized.startsWith("gt")
-                || normalized.startsWith("syrup");
+                || normalized.startsWith("gt");
+    }
+
+    /**
+     * Contract-aware share-like check. For the {@code e} prefix the contract must be a
+     * non-null, known Euler vault address; any other {@code e}-prefixed contract (unknown
+     * or a debt position) is NOT treated as a vault share.
+     *
+     * <p>For all other prefixes, behaviour is identical to {@link #isShareLikeSymbol(String)}.
+     */
+    private boolean isShareLikeSymbolWithContract(String assetSymbol, String contract) {
+        if (assetSymbol == null || assetSymbol.isBlank()) {
+            return false;
+        }
+        String normalized = assetSymbol.trim().toLowerCase(Locale.ROOT);
+        if (normalized.startsWith("syrup")) {
+            return false;
+        }
+        if (normalized.startsWith("e")) {
+            return isEulerLikeAddress(contract);
+        }
+        return normalized.startsWith("a")
+                || normalized.startsWith("c")
+                || normalized.startsWith("s")
+                || normalized.startsWith("gt");
     }
 
     private boolean isDebtLikeSymbol(String assetSymbol) {
@@ -921,7 +1223,7 @@ public class LendingClassifier implements OnChainFamilyClassifier {
         return movementLegs.stream()
                 .filter(leg -> !leg.fee() && leg.assetContract() != null)
                 .anyMatch(leg -> (inbound ? leg.quantityDelta().signum() > 0 : leg.quantityDelta().signum() < 0)
-                        && isShareLikeSymbol(leg.assetSymbol())
+                        && isShareLikeSymbolWithContract(leg.assetSymbol(), leg.assetContract())
                         && !isDebtLikeSymbol(leg.assetSymbol()));
     }
 
@@ -1053,7 +1355,7 @@ public class LendingClassifier implements OnChainFamilyClassifier {
         if (!"0xc16ae7a4".equals(view.methodId())) {
             return false;
         }
-        if (!EULER_BATCH_ROUTER.equals(view.toAddress())) {
+        if (!isEulerBatchRouter(view.toAddress())) {
             return false;
         }
         return wallet.length() == 42
@@ -1061,11 +1363,15 @@ public class LendingClassifier implements OnChainFamilyClassifier {
                 && wallet.substring(0, 40).equals(candidate.substring(0, 40));
     }
 
+    private boolean isEulerBatchRouter(String address) {
+        return address != null && EULER_BATCH_ROUTERS.contains(address.trim().toLowerCase(Locale.ROOT));
+    }
+
     private boolean isEulerBorrowBackedCollateralOpen(
             OnChainRawTransactionView view,
             List<RawLeg> movementLegs
     ) {
-        if (!EULER_BATCH_ROUTER.equals(view.toAddress())) {
+        if (!isEulerBatchRouter(view.toAddress())) {
             return false;
         }
         if (!hasEulerBorrowCallContext(view) || !hasEulerBorrowEvent(view)) {

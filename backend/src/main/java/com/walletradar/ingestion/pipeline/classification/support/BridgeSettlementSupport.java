@@ -18,7 +18,8 @@ public final class BridgeSettlementSupport {
             "0xe2de2a03", // redeemWithFee
             "0xe5c1bf6e", // redeem(bytes cctpMsg,bytes cctpSigs)
             "0xcfc32570", // execute302
-            "0x6befa3a5"  // directFulfill
+            "0x6befa3a5", // directFulfill
+            "0xe4a974cc"  // expressExecuteWithToken
     );
 
     private BridgeSettlementSupport() {
@@ -26,7 +27,20 @@ public final class BridgeSettlementSupport {
 
     public static boolean isSettlementSelector(OnChainRawTransactionView view) {
         return view != null && (SETTLEMENT_SELECTORS.contains(view.methodId())
-                || containsAny(view.functionName(), "fillv3relay", "fillrelay", "redeemwithfee", "execute302", "directfulfill"));
+                || containsAny(
+                view.functionName(),
+                "fillv3relay",
+                "fillrelay",
+                "redeemwithfee",
+                "execute302",
+                "directfulfill",
+                "expressexecutewithtoken"
+        ));
+    }
+
+    public static boolean requiresVerifiedBridgeEvidence(OnChainRawTransactionView view) {
+        return view != null && ("0xe4a974cc".equals(view.methodId())
+                || containsAny(view.functionName(), "expressexecutewithtoken"));
     }
 
     public static boolean requiresMethodAwareDispatch(

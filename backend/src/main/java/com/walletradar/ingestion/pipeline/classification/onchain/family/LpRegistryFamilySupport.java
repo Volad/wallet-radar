@@ -42,6 +42,61 @@ final class LpRegistryFamilySupport {
         );
     }
 
+    /**
+     * Fallback type resolution for vault-style LP POSITION_MANAGER contracts that use
+     * non-standard method selectors (no known Uniswap V3 mint/burn/collect/modify selectors).
+     *
+     * <p>Classification rules (applied to non-fee, non-dust legs):
+     * <ol>
+     *   <li>If only outbound legs → {@code LP_ENTRY}</li>
+     *   <li>If only inbound legs → {@code LP_EXIT}</li>
+     *   <li>If mixed legs: use the sign of the <em>dominant</em> leg (largest absolute quantity
+     *       among legs of the same asset symbol). Vault-style LP entries send a large principal
+     *       outbound (e.g. ETH) and may receive tiny incidental inflow tokens (harvested yield)
+     *       of a completely different asset type. The dominant-leg heuristic reliably separates
+     *       these from true LP exits (where the wallet receives its principal back).</li>
+     *   <li>Tied magnitude → {@code null} (cannot determine)</li>
+     * </ol>
+     */
+    private static final java.math.BigDecimal MIN_LEG_QTY = new java.math.BigDecimal("0.000000001"); // 1e-9
+
+    static NormalizedTransactionType resolveByMovementLegsOnly(List<RawLeg> movementLegs) {
+        if (movementLegs == null || movementLegs.isEmpty()) {
+            return null;
+        }
+        java.math.BigDecimal maxOutbound = java.math.BigDecimal.ZERO;
+        java.math.BigDecimal maxInbound = java.math.BigDecimal.ZERO;
+        for (RawLeg leg : movementLegs) {
+            if (leg == null || leg.fee() || leg.quantityDelta() == null || leg.quantityDelta().signum() == 0) {
+                continue;
+            }
+            java.math.BigDecimal abs = leg.quantityDelta().abs();
+            if (abs.compareTo(MIN_LEG_QTY) < 0) {
+                continue; // sub-threshold dust — ignore
+            }
+            if (leg.quantityDelta().signum() < 0) {
+                if (abs.compareTo(maxOutbound) > 0) {
+                    maxOutbound = abs;
+                }
+            } else {
+                if (abs.compareTo(maxInbound) > 0) {
+                    maxInbound = abs;
+                }
+            }
+        }
+        if (maxOutbound.signum() == 0 && maxInbound.signum() == 0) {
+            return null; // no significant movement
+        }
+        int cmp = maxOutbound.compareTo(maxInbound);
+        if (cmp > 0) {
+            return NormalizedTransactionType.LP_ENTRY;  // dominant outbound
+        }
+        if (cmp < 0) {
+            return NormalizedTransactionType.LP_EXIT;   // dominant inbound
+        }
+        return null; // tied — cannot determine
+    }
+
     static List<RawLeg> removeExactSelfCancelingPairs(List<RawLeg> movementLegs) {
         if (movementLegs == null || movementLegs.isEmpty()) {
             return List.of();

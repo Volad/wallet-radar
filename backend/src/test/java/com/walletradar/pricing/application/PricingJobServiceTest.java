@@ -16,9 +16,12 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Executor;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -31,6 +34,8 @@ class PricingJobServiceTest {
     private NormalizedTransactionRepository normalizedTransactionRepository;
     @Mock
     private PriceResolutionService priceResolutionService;
+    @Mock
+    private BatchPriceQuoteResolver batchPriceQuoteResolver;
 
     @Test
     void processNextBatchSavesConfirmedPricedRows() {
@@ -45,21 +50,30 @@ class PricingJobServiceTest {
         confirmed.getFlows().get(0).setPriceSource(PriceSource.STABLECOIN);
 
         when(pendingPricingQueryService.loadNextBatch(25, 60)).thenReturn(List.of(pending));
-        when(priceResolutionService.resolve(org.mockito.ArgumentMatchers.eq(pending), org.mockito.ArgumentMatchers.any()))
+        when(priceResolutionService.resolve(
+                org.mockito.ArgumentMatchers.eq(pending),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any()
+        ))
                 .thenReturn(confirmed);
+        BatchPriceQuoteResolver.BatchQuotePlan batchQuotePlan = BatchPriceQuoteResolver.BatchQuotePlan.empty();
+        when(batchPriceQuoteResolver.prepare(anyList())).thenReturn(batchQuotePlan);
 
         PricingJobService service = new PricingJobService(
                 pendingPricingQueryService,
                 normalizedTransactionRepository,
                 priceResolutionService,
                 new PricingResultMapper(),
-                properties
+                batchPriceQuoteResolver,
+                properties,
+                directExecutor()
         );
 
         int processed = service.processNextBatch();
 
         assertThat(processed).isEqualTo(1);
-        verify(normalizedTransactionRepository).save(confirmed);
+        verify(batchPriceQuoteResolver).persistFetchedQuotes(batchQuotePlan);
+        verify(normalizedTransactionRepository).saveAll(List.of(confirmed));
     }
 
     @Test
@@ -70,25 +84,84 @@ class PricingJobServiceTest {
 
         NormalizedTransaction pending = pendingTransaction();
         when(pendingPricingQueryService.loadNextBatch(25, 60)).thenReturn(List.of(pending));
-        when(priceResolutionService.resolve(org.mockito.ArgumentMatchers.eq(pending), org.mockito.ArgumentMatchers.any()))
+        when(priceResolutionService.resolve(
+                org.mockito.ArgumentMatchers.eq(pending),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any()
+        ))
                 .thenThrow(new IllegalStateException("boom"));
+        BatchPriceQuoteResolver.BatchQuotePlan batchQuotePlan = BatchPriceQuoteResolver.BatchQuotePlan.empty();
+        when(batchPriceQuoteResolver.prepare(anyList())).thenReturn(batchQuotePlan);
 
         PricingJobService service = new PricingJobService(
                 pendingPricingQueryService,
                 normalizedTransactionRepository,
                 priceResolutionService,
                 new PricingResultMapper(),
-                properties
+                batchPriceQuoteResolver,
+                properties,
+                directExecutor()
         );
 
         service.processNextBatch();
 
-        ArgumentCaptor<NormalizedTransaction> captor = ArgumentCaptor.forClass(NormalizedTransaction.class);
-        verify(normalizedTransactionRepository).save(captor.capture());
-        NormalizedTransaction saved = captor.getValue();
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<NormalizedTransaction>> captor = ArgumentCaptor.forClass(List.class);
+        verify(normalizedTransactionRepository).saveAll(captor.capture());
+        NormalizedTransaction saved = captor.getValue().getFirst();
         assertThat(saved.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
         assertThat(saved.getMissingDataReasons()).contains(PriceableFlowPolicy.PRICING_EXECUTION_FAILED_REASON);
         assertThat(saved.getPricingAttempts()).isEqualTo(1);
+    }
+
+    @Test
+    void multiLaneBatchKeepsPersistenceOrderStable() {
+        PricingProperties properties = new PricingProperties();
+        properties.setBatchSize(25);
+        properties.setRetryDelaySeconds(60);
+        properties.setParallelLanes(2);
+
+        NormalizedTransaction first = pendingTransaction();
+        first.setId("tx-1");
+        NormalizedTransaction second = pendingTransaction();
+        second.setId("tx-2");
+        when(pendingPricingQueryService.loadNextBatch(25, 60)).thenReturn(List.of(first, second));
+        when(priceResolutionService.resolve(
+                org.mockito.ArgumentMatchers.eq(first),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any()
+        ))
+                .thenAnswer(invocation -> confirmedCopy(first));
+        when(priceResolutionService.resolve(
+                org.mockito.ArgumentMatchers.eq(second),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any()
+        ))
+                .thenAnswer(invocation -> confirmedCopy(second));
+        BatchPriceQuoteResolver.BatchQuotePlan batchQuotePlan = BatchPriceQuoteResolver.BatchQuotePlan.empty();
+        when(batchPriceQuoteResolver.prepare(anyList())).thenReturn(batchQuotePlan);
+
+        PricingJobService service = new PricingJobService(
+                pendingPricingQueryService,
+                normalizedTransactionRepository,
+                priceResolutionService,
+                new PricingResultMapper(),
+                batchPriceQuoteResolver,
+                properties,
+                directExecutor()
+        );
+
+        int processed = service.processNextBatch();
+
+        assertThat(processed).isEqualTo(2);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<NormalizedTransaction>> captor = ArgumentCaptor.forClass(List.class);
+        verify(normalizedTransactionRepository).saveAll(captor.capture());
+        assertThat(captor.getValue()).extracting(NormalizedTransaction::getId).containsExactly("tx-1", "tx-2");
+    }
+
+    private Executor directExecutor() {
+        return Runnable::run;
     }
 
     private NormalizedTransaction pendingTransaction() {
@@ -105,6 +178,24 @@ class PricingJobServiceTest {
         transaction.setFlows(List.of(flow()));
         transaction.setPricingAttempts(0);
         return transaction;
+    }
+
+    private NormalizedTransaction confirmedCopy(NormalizedTransaction pending) {
+        NormalizedTransaction confirmed = new NormalizedTransaction();
+        confirmed.setId(pending.getId());
+        confirmed.setTxHash(pending.getTxHash());
+        confirmed.setNetworkId(pending.getNetworkId());
+        confirmed.setWalletAddress(pending.getWalletAddress());
+        confirmed.setSource(pending.getSource());
+        confirmed.setType(pending.getType());
+        confirmed.setStatus(NormalizedTransactionStatus.CONFIRMED);
+        confirmed.setBlockTimestamp(pending.getBlockTimestamp());
+        confirmed.setMissingDataReasons(new ArrayList<>(pending.getMissingDataReasons()));
+        confirmed.setFlows(List.of(flow()));
+        confirmed.getFlows().get(0).setUnitPriceUsd(BigDecimal.ONE);
+        confirmed.getFlows().get(0).setPriceSource(PriceSource.STABLECOIN);
+        confirmed.setPricingAttempts(pending.getPricingAttempts());
+        return confirmed;
     }
 
     private NormalizedTransaction.Flow flow() {

@@ -1,0 +1,59 @@
+<section class="settings-section">
+  <div class="section-head static">
+    <div>
+      <div class="section-title">Account</div>
+      <div class="section-subline">Link your Google account to restore this session on any device.</div>
+    </div>
+  </div>
+
+  @if (authService.authState().authenticated) {
+    <div class="account-card linked">
+      <div class="account-card-left">
+        @if (authService.authState().pictureUrl) {
+          <img
+            class="account-avatar"
+            [src]="authService.authState().pictureUrl"
+            alt="Profile picture"
+            referrerpolicy="no-referrer"
+          />
+        } @else {
+          <div class="account-avatar-placeholder">
+            {{ (authService.authState().email ?? '?')[0].toUpperCase() }}
+          </div>
+        }
+        <div class="account-info">
+          <div class="account-name">{{ authService.authState().displayName }}</div>
+          <div class="account-email">{{ authService.authState().email }}</div>
+        </div>
+      </div>
+      <button
+        type="button"
+        class="signout-btn"
+        [disabled]="signingOut()"
+        (click)="signOut()">
+        {{ signingOut() ? 'Signing out…' : 'Sign out' }}
+      </button>
+    </div>
+  } @else {
+    <div class="account-card unlinked">
+      <div class="account-card-desc">
+        Sign in with Google to save and restore your session across devices.
+      </div>
+      <button type="button" class="google-btn" (click)="signInWithGoogle()">
+        <svg
+          class="google-icon"
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="0 0 48 48"
+          width="16"
+          height="16"
+          aria-hidden="true">
+          <path fill="#FFC107" d="M43.6 20.1H42V20H24v8h11.3C33.6 33 29.3 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.1 7.9 3l5.7-5.7C34.2 6.3 29.4 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.6-.4-3.9z"/>
+          <path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.5 16 19 13 24 13c3.1 0 5.8 1.1 7.9 3l5.7-5.7C34.2 6.3 29.4 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/>
+          <path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.3 35.3 26.8 36 24 36c-5.3 0-9.6-3-11.3-7.4L6.1 33.7C9.5 39.8 16.3 44 24 44z"/>
+          <path fill="#1976D2" d="M43.6 20.1H42V20H24v8h11.3c-.9 2.5-2.5 4.6-4.5 6.1l6.2 5.2C36.9 40.1 44 35 44 24c0-1.3-.1-2.6-.4-3.9z"/>
+        </svg>
+        Sign in with Google
+      </button>
+    </div>
+  }
+</section>

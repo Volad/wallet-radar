@@ -19,12 +19,12 @@ import java.time.Instant;
 @Document(collection = "on_chain_balances")
 @CompoundIndexes({
         @CompoundIndex(
-                name = "on_chain_balance_wallet_network_asset_idx",
-                def = "{'walletAddress': 1, 'networkId': 1, 'assetContract': 1, 'capturedAt': -1}"
+                name = "on_chain_balance_session_wallet_network_asset_idx",
+                def = "{'sessionId': 1, 'walletAddress': 1, 'networkId': 1, 'assetContract': 1, 'capturedAt': -1}"
         ),
         @CompoundIndex(
-                name = "on_chain_balance_wallet_symbol_idx",
-                def = "{'walletAddress': 1, 'assetSymbol': 1, 'capturedAt': -1}"
+                name = "on_chain_balance_session_wallet_symbol_idx",
+                def = "{'sessionId': 1, 'walletAddress': 1, 'assetSymbol': 1, 'capturedAt': -1}"
         )
 })
 @NoArgsConstructor
@@ -37,10 +37,12 @@ public class OnChainBalance {
     @EqualsAndHashCode.Include
     private String id;
 
+    private String sessionId;
     private String walletAddress;
     private NetworkId networkId;
     private String assetSymbol;
     private String assetContract;
+    private Integer tokenDecimals;
     private BigDecimal quantity;
     private Instant capturedAt;
 }

@@ -7,6 +7,7 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.ingestion.pipeline.classification.ClassificationDecision;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassificationContext;
 import com.walletradar.ingestion.pipeline.classification.support.NativeAssetSymbolResolver;
+import com.walletradar.ingestion.pipeline.classification.support.OnChainClassificationSupport;
 import com.walletradar.ingestion.pipeline.classification.support.RawLeg;
 import com.walletradar.ingestion.pipeline.classification.support.WrappedNativeSupport;
 import org.springframework.core.Ordered;
@@ -53,7 +54,7 @@ public class WrappedNativeClassifier implements OnChainFamilyClassifier {
                 && hasWrappedInbound(movementLegs, wrappedContract)) {
             return Optional.of(FamilyDecisionSupport.build(
                     NormalizedTransactionType.WRAP,
-                    NormalizedTransactionStatus.CONFIRMED,
+                    OnChainClassificationSupport.initialStatus(context.view(), NormalizedTransactionType.WRAP, ConfidenceLevel.HIGH),
                     ClassificationSource.METHOD_ID,
                     ConfidenceLevel.HIGH,
                     movementLegs,
@@ -66,7 +67,7 @@ public class WrappedNativeClassifier implements OnChainFamilyClassifier {
                 && hasWrappedOutbound(movementLegs, wrappedContract)) {
             return Optional.of(FamilyDecisionSupport.build(
                     NormalizedTransactionType.UNWRAP,
-                    NormalizedTransactionStatus.CONFIRMED,
+                    OnChainClassificationSupport.initialStatus(context.view(), NormalizedTransactionType.UNWRAP, ConfidenceLevel.HIGH),
                     ClassificationSource.METHOD_ID,
                     ConfidenceLevel.HIGH,
                     movementLegs,

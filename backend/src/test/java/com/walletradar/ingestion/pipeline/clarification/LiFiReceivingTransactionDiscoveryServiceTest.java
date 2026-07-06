@@ -16,6 +16,7 @@ import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.domain.transaction.raw.RawTransactionRepository;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassificationResult;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassifier;
+import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryService;
 import com.walletradar.ingestion.pipeline.onchain.OnChainNormalizedTransactionBuilder;
 import com.walletradar.ingestion.pipeline.onchain.repair.ExplorerRawOrderingRepairGateway;
 import com.walletradar.ingestion.store.IdempotentNormalizedTransactionStore;
@@ -36,6 +37,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.atMostOnce;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -55,6 +57,8 @@ class LiFiReceivingTransactionDiscoveryServiceTest {
     @Mock
     private NormalizedTransactionRepository normalizedTransactionRepository;
     @Mock
+    private ProtocolRegistryService protocolRegistryService;
+    @Mock
     private OnChainClassifier onChainClassifier;
     @Mock
     private OnChainNormalizedTransactionBuilder normalizedTransactionBuilder;
@@ -72,6 +76,7 @@ class LiFiReceivingTransactionDiscoveryServiceTest {
                 trackedWalletRepository,
                 rawTransactionRepository,
                 normalizedTransactionRepository,
+                protocolRegistryService,
                 onChainClassifier,
                 normalizedTransactionBuilder,
                 normalizedTransactionStore,
@@ -148,6 +153,71 @@ class LiFiReceivingTransactionDiscoveryServiceTest {
     }
 
     @Test
+    @DisplayName("LayerZero execute302 calldata settlement is discovered for source wallet via LIFI_CALLDATA")
+    void layerZeroCalldataSettlementIsDiscoveredForSourceWallet() {
+        String sourceTx = "0x4890e907f816a2f573559377fb97943efcbad26750cb3cf3bf96ff48a43504f7";
+        String destinationTx = "0x25550cf1685a0ce5ab3d546b595d6c43a742b8487ab4fbc2b7913bf03645b7aa";
+        LiFiBridgeStatus status = new LiFiBridgeStatus(
+                sourceTx,
+                destinationTx,
+                NetworkId.BASE,
+                "DONE",
+                "COMPLETED"
+        );
+        TrackedWallet sourceWallet = trackedWallet(SOURCE_WALLET);
+        RawTransaction destinationRaw = layerZeroExecute302Raw(destinationTx, SOURCE_WALLET);
+        NormalizedTransaction sourceOutbound = sourceBridgeOut(sourceTx);
+        OnChainClassificationResult classificationResult = new OnChainClassificationResult(
+                NormalizedTransactionType.BRIDGE_IN,
+                NormalizedTransactionStatus.CONFIRMED,
+                ClassificationSource.METHOD_ID,
+                ConfidenceLevel.MEDIUM,
+                List.of(flow(NormalizedLegRole.TRANSFER, "ETH", null, "0.080966355549794125")),
+                List.of(),
+                null,
+                false,
+                null,
+                false,
+                null,
+                null,
+                null
+        );
+        NormalizedTransaction normalized = normalizedDestination(destinationTx, NetworkId.BASE, SOURCE_WALLET);
+        normalized.setType(NormalizedTransactionType.BRIDGE_IN);
+
+        when(normalizedTransactionRepository.findAllByTxHashAndNetworkIdAndSource(
+                destinationTx,
+                NetworkId.BASE,
+                NormalizedTransactionSource.ON_CHAIN
+        )).thenReturn(List.of());
+        when(trackedWalletRepository.findAllByOrderByAddressAsc()).thenReturn(List.of(sourceWallet));
+        when(rawTransactionRepository.findById(destinationTx + ":BASE:" + SOURCE_WALLET)).thenReturn(Optional.empty());
+        when(receiptClarificationGateway.fetchRawTransactionByHash(
+                destinationTx,
+                NetworkId.BASE,
+                SOURCE_WALLET,
+                null
+        )).thenReturn(Optional.of(destinationRaw));
+        when(onChainClassifier.classify(destinationRaw)).thenReturn(classificationResult);
+        when(normalizedTransactionBuilder.build(eq(destinationRaw), eq(classificationResult), any(Instant.class)))
+                .thenReturn(normalized);
+        when(normalizedTransactionStore.upsert(normalized)).thenReturn(normalized);
+
+        Optional<NormalizedTransaction> discovered = service.findOrDiscover(status, sourceOutbound);
+
+        assertThat(discovered).contains(normalized);
+        @SuppressWarnings("unchecked")
+        List<Document> internalTransfers = destinationRaw.getRawData()
+                .get("explorer", Document.class)
+                .get("internalTransfers", List.class);
+        assertThat(internalTransfers).anySatisfy(transfer ->
+                assertThat(transfer.getString("discoverySource"))
+                        .isEqualTo(LiFiDestinationDiscoverySupport.LIFI_CORROBORATED_SETTLEMENT));
+        assertThat(destinationRaw.getClarificationEvidence().getString("lifiDestinationDiscoveryPath"))
+                .isEqualTo(LiFiDestinationDiscoveryPath.LIFI_CALLDATA.name());
+    }
+
+    @Test
     @DisplayName("same-tx LI.FI status echo is ignored before any receiving-tx discovery")
     void sameTxStatusEchoIsIgnored() {
         LiFiBridgeStatus status = new LiFiBridgeStatus(
@@ -209,7 +279,45 @@ class LiFiReceivingTransactionDiscoveryServiceTest {
 
         assertThat(discovered).isEmpty();
         verify(normalizedTransactionStore, never()).upsert(any());
-        verify(rawTransactionRepository, never()).save(any());
+        // Freshly-fetched tx is persisted to avoid repeated RPC calls on subsequent linking passes,
+        // even when the wallet-relevance check fails.
+        verify(rawTransactionRepository, atMostOnce()).save(any());
+    }
+
+    private NormalizedTransaction sourceBridgeOut(String sourceTx) {
+        NormalizedTransaction transaction = new NormalizedTransaction();
+        transaction.setTxHash(sourceTx);
+        transaction.setWalletAddress(SOURCE_WALLET);
+        transaction.setType(NormalizedTransactionType.BRIDGE_OUT);
+        transaction.setFlows(List.of(
+                flow(NormalizedLegRole.TRANSFER, "ETH", null, "-0.080966355549794125")
+        ));
+        return transaction;
+    }
+
+    private RawTransaction layerZeroExecute302Raw(String destinationTx, String walletAddress) {
+        RawTransaction rawTransaction = new RawTransaction();
+        rawTransaction.setId(destinationTx + ":BASE:" + walletAddress);
+        rawTransaction.setTxHash(destinationTx);
+        rawTransaction.setNetworkId(NetworkId.BASE.name());
+        rawTransaction.setWalletAddress(walletAddress);
+        rawTransaction.setRawData(new Document()
+                .append("blockNumber", "46929654")
+                .append("timeStamp", "1749112655")
+                .append("transactionIndex", "131")
+                .append("from", "0x7ddb0773e979cd36ef0dc8b6e594a6ebc876e654")
+                .append("to", "0x2cca08ae69e0c44b18a57ab2a87644234daebaE4")
+                .append("input", layerZeroExecute302Input())
+                .append("methodId", "0xcfc32570")
+                .append("functionName", "execute302")
+                .append("explorer", new Document()
+                        .append("tokenTransfers", List.of())
+                        .append("internalTransfers", List.of())));
+        return rawTransaction;
+    }
+
+    private String layerZeroExecute302Input() {
+        return "0xcfc3257000000000000000000000000000000000000000000000000000000000000000200000000000000000000000005634c4a5fed09819e3c46d86a965dd9447d86e47000000000000000000000000000000000000000000000000000000000000759e00000000000000000000000019cfce47ed54a88614648dc3f19a5980097007dd000000000000000000000000000000000000000000000000000000000009301dc30104245c15b90406479816f3d0a46a7c01e46842db2650eabf1863727e8dad000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001800000000000000000000000000000000000000000000000000000000000021291000000000000000000000000000000000000000000000000000000000000004c0200000000000000000000000000000000000000000000000000002d79883d2000000d0000000000000000000000001a87f12ac07e9746e9b053b8d7ef1d45270d693f0000000000013c340000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
     }
 
     private TrackedWallet trackedWallet(String address) {

@@ -60,7 +60,10 @@ public class CoinGeckoHistoricalClient {
             ));
         } catch (WebClientResponseException error) {
             HttpStatusCode statusCode = error.getStatusCode();
-            if (statusCode.value() == 400 || statusCode.value() == 404) {
+            if (statusCode.value() == 400
+                    || statusCode.value() == 401
+                    || statusCode.value() == 403
+                    || statusCode.value() == 404) {
                 return Optional.empty();
             }
             throw error;

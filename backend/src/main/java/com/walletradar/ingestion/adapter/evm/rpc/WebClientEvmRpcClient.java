@@ -125,15 +125,12 @@ public class WebClientEvmRpcClient implements EvmRpcClient {
     private void logRpcFailure(String endpointUrl, String operation, Throwable error) {
         Throwable root = rootCause(error);
         log.warn(
-                "RPC transport failure endpointHost={} operation={} errorClass={} message={} rootCauseClass={} rootCauseMessage={}",
+                "RPC transport failure endpointHost={} operation={} rootMessage={}",
                 endpointHost(endpointUrl),
                 operation,
-                error == null ? "unknown" : error.getClass().getName(),
-                trimForLog(error == null ? null : error.getMessage()),
-                root == null ? "unknown" : root.getClass().getName(),
-                trimForLog(root == null ? null : root.getMessage()),
-                error
+                trimForLog(root == null ? null : root.getMessage())
         );
+        log.debug("RPC transport failure detail endpointHost={} operation={}", endpointHost(endpointUrl), operation, error);
     }
 
     private Throwable rootCause(Throwable error) {

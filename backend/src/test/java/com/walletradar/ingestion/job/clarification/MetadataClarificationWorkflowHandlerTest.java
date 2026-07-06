@@ -13,16 +13,12 @@ import com.walletradar.domain.transaction.raw.RawSyncMethod;
 import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.domain.transaction.raw.RawTransactionRepository;
 import com.walletradar.ingestion.config.OnChainClarificationProperties;
-import com.walletradar.ingestion.pipeline.classification.OnChainClassifier;
 import com.walletradar.ingestion.pipeline.classification.reason.ClarificationPolicyService;
-import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryService;
-import com.walletradar.ingestion.pipeline.classification.support.NativeAssetSymbolResolver;
 import com.walletradar.ingestion.pipeline.clarification.ClarificationReceiptEnrichment;
 import com.walletradar.ingestion.pipeline.clarification.PendingClarificationQueryService;
+import com.walletradar.ingestion.pipeline.clarification.PendingReceiptClarificationQueryService;
 import com.walletradar.ingestion.pipeline.clarification.RawTransactionClarificationEnricher;
 import com.walletradar.ingestion.pipeline.clarification.ReceiptClarificationGateway;
-import com.walletradar.ingestion.pipeline.onchain.OnChainNormalizedTransactionBuilder;
-import com.walletradar.ingestion.wallet.query.TrackedWalletLookupService;
 import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -40,7 +36,6 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -56,16 +51,13 @@ class MetadataClarificationWorkflowHandlerTest {
     @Mock
     private PendingClarificationQueryService pendingClarificationQueryService;
     @Mock
+    private PendingReceiptClarificationQueryService pendingReceiptClarificationQueryService;
+    @Mock
     private ReceiptClarificationGateway clarificationGateway;
     @Mock
     private RawTransactionRepository rawTransactionRepository;
     @Mock
     private NormalizedTransactionRepository normalizedTransactionRepository;
-    @Mock
-    private ProtocolRegistryService protocolRegistryService;
-    @Mock
-    private TrackedWalletLookupService trackedWalletLookupService;
-
     private MetadataClarificationWorkflowHandler service;
 
     @BeforeEach
@@ -75,28 +67,21 @@ class MetadataClarificationWorkflowHandlerTest {
         properties.setRetryDelaySeconds(120);
         properties.setMaxAttempts(3);
 
-        OnChainClassifier classifier = new OnChainClassifier(
-                protocolRegistryService,
-                trackedWalletLookupService,
-                new NativeAssetSymbolResolver()
-        );
-
         RawTransactionClarificationEnricher enricher = new RawTransactionClarificationEnricher();
         ClarificationPolicyService clarificationPolicyService = new ClarificationPolicyService();
 
         service = new MetadataClarificationWorkflowHandler(
                 pendingClarificationQueryService,
+                pendingReceiptClarificationQueryService,
                 properties,
                 enricher,
-                classifier,
                 new ClarificationFailureHandler(
                         enricher,
                         rawTransactionRepository,
                         normalizedTransactionRepository,
                         clarificationPolicyService
                 ),
-                new ClarificationReclassificationHandler(
-                        new OnChainNormalizedTransactionBuilder(),
+                new ClarificationReclassificationMarker(
                         normalizedTransactionRepository
                 ),
                 new ClarificationPreparationHandler(
@@ -114,16 +99,49 @@ class MetadataClarificationWorkflowHandlerTest {
 
         lenient().when(normalizedTransactionRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
         lenient().when(rawTransactionRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
-        lenient().when(protocolRegistryService.lookup(any(), any())).thenReturn(Optional.empty());
     }
 
     @Test
-    @DisplayName("persisted metadata evidence is reused before external receipt fetch")
-    void persistedMetadataEvidenceIsReusedBeforeExternalReceiptFetch() {
+    @DisplayName("active needs-review rows use the unified full receipt pass and return to reclassification")
+    void activeNeedsReviewRowsUseUnifiedFullReceiptPassAndReturnToReclassification() {
+        NormalizedTransaction needsReview = pendingClarification(NormalizedTransactionType.EXTERNAL_TRANSFER_IN);
+        needsReview.setStatus(NormalizedTransactionStatus.NEEDS_REVIEW);
+        needsReview.setClarificationAttempts(3);
+        needsReview.setFullReceiptClarificationAttempts(0);
+        RawTransaction rawTransaction = receiptCompleteInboundRaw();
+        when(rawTransactionRepository.findById(needsReview.getId())).thenReturn(Optional.of(rawTransaction));
+        when(clarificationGateway.fetchFullReceipt(rawTransaction))
+                .thenReturn(Optional.of(new ClarificationReceiptEnrichment(
+                        "1",
+                        "21000",
+                        "50000000000",
+                        null,
+                        null,
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        new Document("status", "0x1"),
+                        RawSyncMethod.BLOCKSCOUT
+                )));
+
+        boolean clarified = service.clarify(needsReview);
+
+        assertThat(clarified).isTrue();
+        ArgumentCaptor<NormalizedTransaction> normalizedCaptor = ArgumentCaptor.forClass(NormalizedTransaction.class);
+        verify(normalizedTransactionRepository).save(normalizedCaptor.capture());
+        NormalizedTransaction saved = normalizedCaptor.getValue();
+        assertThat(saved.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_RECLASSIFICATION);
+        assertThat(saved.getClarificationAttempts()).isEqualTo(3);
+        assertThat(saved.getFullReceiptClarificationAttempts()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("persisted full receipt evidence is reused before external receipt fetch")
+    void persistedFullReceiptEvidenceIsReusedBeforeExternalReceiptFetch() {
         NormalizedTransaction pending = pendingClarification(NormalizedTransactionType.SWAP);
         RawTransaction rawTransaction = lowConfidenceSwapRaw();
         when(rawTransactionRepository.findById(pending.getId())).thenReturn(Optional.of(rawTransaction));
-        when(clarificationGateway.fromPersistedEvidence(rawTransaction, false))
+        when(clarificationGateway.fetchFullReceipt(rawTransaction))
                 .thenReturn(Optional.of(new ClarificationReceiptEnrichment(
                         "1",
                         "21000",
@@ -140,11 +158,10 @@ class MetadataClarificationWorkflowHandlerTest {
         boolean clarified = service.clarify(pending);
 
         assertThat(clarified).isTrue();
-        verify(clarificationGateway, never()).fetchReceipt(rawTransaction);
 
         ArgumentCaptor<NormalizedTransaction> normalizedCaptor = ArgumentCaptor.forClass(NormalizedTransaction.class);
         verify(normalizedTransactionRepository).save(normalizedCaptor.capture());
-        assertThat(normalizedCaptor.getValue().getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        assertThat(normalizedCaptor.getValue().getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_RECLASSIFICATION);
     }
 
     @Test
@@ -153,7 +170,7 @@ class MetadataClarificationWorkflowHandlerTest {
         NormalizedTransaction pending = pendingClarification(NormalizedTransactionType.SWAP);
         RawTransaction rawTransaction = lowConfidenceSwapRaw();
         when(rawTransactionRepository.findById(pending.getId())).thenReturn(Optional.of(rawTransaction));
-        when(clarificationGateway.fetchReceipt(rawTransaction))
+        when(clarificationGateway.fetchFullReceipt(rawTransaction))
                 .thenReturn(Optional.of(new ClarificationReceiptEnrichment(
                         "1",
                         "21000",
@@ -186,27 +203,20 @@ class MetadataClarificationWorkflowHandlerTest {
         ArgumentCaptor<NormalizedTransaction> normalizedCaptor = ArgumentCaptor.forClass(NormalizedTransaction.class);
         verify(normalizedTransactionRepository).save(normalizedCaptor.capture());
         NormalizedTransaction saved = normalizedCaptor.getValue();
-        assertThat(saved.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        assertThat(saved.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_RECLASSIFICATION);
         assertThat(saved.getClarificationAttempts()).isEqualTo(1);
         assertThat(saved.getType()).isEqualTo(NormalizedTransactionType.SWAP);
         assertThat(saved.getClassifiedBy()).isEqualTo(ClassificationSource.FUNCTION_NAME);
-        assertThat(saved.getFlows())
-                .filteredOn(flow -> flow.getRole() == NormalizedLegRole.FEE)
-                .singleElement()
-                .satisfies(flow -> {
-                    assertThat(flow.getAssetSymbol()).isEqualTo("ETH");
-                    assertThat(flow.getQuantityDelta()).isEqualByComparingTo(new BigDecimal("-0.00105"));
-                });
     }
 
     @Test
-    @DisplayName("clarification stops after max attempts and marks transaction NEEDS_REVIEW")
-    void clarificationStopsAfterMaxAttemptsAndMarksNeedsReview() {
+    @DisplayName("clarification returns exhausted attempts to reclassification")
+    void clarificationReturnsExhaustedAttemptsToReclassification() {
         NormalizedTransaction pending = pendingClarification(NormalizedTransactionType.SWAP);
         pending.setClarificationAttempts(2);
 
         when(rawTransactionRepository.findById(pending.getId())).thenReturn(Optional.of(lowConfidenceSwapRaw()));
-        when(clarificationGateway.fetchReceipt(any(RawTransaction.class)))
+        when(clarificationGateway.fetchFullReceipt(any(RawTransaction.class)))
                 .thenReturn(Optional.empty());
 
         boolean clarified = service.clarify(pending);
@@ -216,14 +226,14 @@ class MetadataClarificationWorkflowHandlerTest {
 
         ArgumentCaptor<NormalizedTransaction> normalizedCaptor = ArgumentCaptor.forClass(NormalizedTransaction.class);
         verify(normalizedTransactionRepository).save(normalizedCaptor.capture());
-        assertThat(normalizedCaptor.getValue().getStatus()).isEqualTo(NormalizedTransactionStatus.NEEDS_REVIEW);
+        assertThat(normalizedCaptor.getValue().getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_RECLASSIFICATION);
         assertThat(normalizedCaptor.getValue().getClarificationAttempts()).isEqualTo(3);
         assertThat(normalizedCaptor.getValue().getMissingDataReasons())
                 .contains(
                         "MISSING_EXECUTION_STATUS",
                         "MISSING_EFFECTIVE_GAS_PRICE",
                         "MISSING_GAS_USED",
-                        "CLARIFICATION_RECEIPT_UNAVAILABLE",
+                        "CLARIFICATION_FULL_RECEIPT_UNAVAILABLE",
                         "CLARIFICATION_ATTEMPTS_EXHAUSTED"
                 );
     }
@@ -234,7 +244,7 @@ class MetadataClarificationWorkflowHandlerTest {
         NormalizedTransaction pending = pendingClarification(NormalizedTransactionType.VAULT_DEPOSIT);
         RawTransaction rawTransaction = lowConfidenceDepositWithSyntheticLogsRaw();
         when(rawTransactionRepository.findById(pending.getId())).thenReturn(Optional.of(rawTransaction));
-        when(clarificationGateway.fetchReceipt(rawTransaction))
+        when(clarificationGateway.fetchFullReceipt(rawTransaction))
                 .thenReturn(Optional.of(new ClarificationReceiptEnrichment(
                         "1",
                         "21000",
@@ -270,39 +280,46 @@ class MetadataClarificationWorkflowHandlerTest {
         NormalizedTransaction saved = normalizedCaptor.getValue();
         assertThat(saved.getType()).isEqualTo(NormalizedTransactionType.VAULT_DEPOSIT);
         assertThat(saved.getClassifiedBy()).isEqualTo(ClassificationSource.FUNCTION_NAME);
-        assertThat(saved.getStatus()).isEqualTo(NormalizedTransactionStatus.NEEDS_REVIEW);
-        assertThat(saved.getMissingDataReasons()).contains("INSUFFICIENT_MOVEMENT_EVIDENCE");
+        assertThat(saved.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_RECLASSIFICATION);
     }
 
     @Test
-    @DisplayName("clarification short-circuits when transaction is no longer receipt-clarifiable")
-    void clarificationShortCircuitsWhenTransactionIsNoLongerReceiptClarifiable() {
+    @DisplayName("clarification with complete raw evidence still returns to reclassification")
+    void clarificationWithCompleteRawEvidenceStillReturnsToReclassification() {
         NormalizedTransaction pending = pendingClarification(NormalizedTransactionType.EXTERNAL_TRANSFER_IN);
         RawTransaction rawTransaction = receiptCompleteInboundRaw();
         when(rawTransactionRepository.findById(pending.getId())).thenReturn(Optional.of(rawTransaction));
+        when(clarificationGateway.fetchFullReceipt(rawTransaction))
+                .thenReturn(Optional.of(new ClarificationReceiptEnrichment(
+                        "1",
+                        "21000",
+                        "50000000000",
+                        null,
+                        null,
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        new Document("status", "0x1"),
+                        null
+                )));
 
         boolean clarified = service.clarify(pending);
 
         assertThat(clarified).isTrue();
-        verifyNoInteractions(clarificationGateway);
-        verify(rawTransactionRepository, never()).save(any(RawTransaction.class));
-
         ArgumentCaptor<NormalizedTransaction> normalizedCaptor = ArgumentCaptor.forClass(NormalizedTransaction.class);
         verify(normalizedTransactionRepository).save(normalizedCaptor.capture());
         NormalizedTransaction saved = normalizedCaptor.getValue();
-        assertThat(saved.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        assertThat(saved.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_RECLASSIFICATION);
         assertThat(saved.getType()).isEqualTo(NormalizedTransactionType.EXTERNAL_TRANSFER_IN);
-        assertThat(saved.getClarificationAttempts()).isEqualTo(0);
-        assertThat(saved.getMissingDataReasons()).isEmpty();
     }
 
     @Test
-    @DisplayName("clarification marks insufficient enrichment instead of forcing pending price")
-    void clarificationMarksInsufficientEnrichmentInsteadOfForcingPendingPrice() {
+    @DisplayName("clarification persists partial evidence and still returns to reclassification")
+    void clarificationPersistsPartialEvidenceAndStillReturnsToReclassification() {
         NormalizedTransaction pending = pendingClarification(NormalizedTransactionType.SWAP);
         RawTransaction rawTransaction = lowConfidenceSwapRaw();
         when(rawTransactionRepository.findById(pending.getId())).thenReturn(Optional.of(rawTransaction));
-        when(clarificationGateway.fetchReceipt(rawTransaction))
+        when(clarificationGateway.fetchFullReceipt(rawTransaction))
                 .thenReturn(Optional.of(new ClarificationReceiptEnrichment(
                         "1",
                         null,
@@ -318,18 +335,13 @@ class MetadataClarificationWorkflowHandlerTest {
 
         boolean clarified = service.clarify(pending);
 
-        assertThat(clarified).isFalse();
+        assertThat(clarified).isTrue();
 
         ArgumentCaptor<NormalizedTransaction> normalizedCaptor = ArgumentCaptor.forClass(NormalizedTransaction.class);
         verify(normalizedTransactionRepository).save(normalizedCaptor.capture());
         NormalizedTransaction saved = normalizedCaptor.getValue();
-        assertThat(saved.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_CLARIFICATION);
+        assertThat(saved.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_RECLASSIFICATION);
         assertThat(saved.getClarificationAttempts()).isEqualTo(1);
-        assertThat(saved.getMissingDataReasons()).contains(
-                "MISSING_EFFECTIVE_GAS_PRICE",
-                "MISSING_GAS_USED",
-                "CLARIFICATION_INSUFFICIENT_EVIDENCE"
-        );
     }
 
     private static NormalizedTransaction pendingClarification(NormalizedTransactionType type) {

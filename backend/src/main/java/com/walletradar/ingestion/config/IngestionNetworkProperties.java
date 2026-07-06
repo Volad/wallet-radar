@@ -1,5 +1,6 @@
 package com.walletradar.ingestion.config;
 
+import com.walletradar.domain.common.NetworkId;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
@@ -25,6 +26,21 @@ public class IngestionNetworkProperties {
      * Per-network entries. Key: NetworkId name.
      */
     private Map<String, NetworkIngestionEntry> network = new HashMap<>();
+
+  /**
+   * Default {@code backfillEnabled} for a newly registered wallet on {@code networkId}.
+   * Mirrors {@code Member.backfillEnabled} bootstrap semantics from ADR-007/009.
+   */
+    public boolean defaultBackfillEnabled(NetworkId networkId) {
+        if (networkId == null) {
+            return true;
+        }
+        NetworkIngestionEntry entry = this.network == null ? null : this.network.get(networkId.name());
+        if (entry == null || entry.getFullIndex() == null) {
+            return true;
+        }
+        return entry.getFullIndex();
+    }
 
     public void setNetwork(Map<String, NetworkIngestionEntry> network) {
         if (network == null) {
@@ -60,6 +76,11 @@ public class IngestionNetworkProperties {
         private Long windowBlocks;
         /** Average block time in seconds for this network. Used as fallback by EstimatingBlockTimestampResolver. */
         private Double avgBlockTimeSeconds;
+        /**
+         * When false, newly registered session wallets on this network default to {@code Member.backfillEnabled=false}.
+         * EVM networks default to true when unset.
+         */
+        private Boolean fullIndex = true;
         /** Explorer source config for this network (etherscan/blockscout). */
         private Explorer explorer = new Explorer();
         /** Optional provider-first acquisition config for advanced RPC APIs. */

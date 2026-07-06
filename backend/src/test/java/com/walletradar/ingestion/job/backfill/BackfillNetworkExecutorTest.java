@@ -93,8 +93,11 @@ class BackfillNetworkExecutorTest {
     }
 
     @Test
-    @DisplayName("creates segment plan, executes all segments and finalizes sync")
+    @DisplayName("executes planned segments and finalizes sync")
     void createsSegmentsAndCompletes() {
+        putSegments(segment(0, 1L, 50L, BackfillSegment.SegmentStatus.PENDING),
+                segment(1, 51L, 100L, BackfillSegment.SegmentStatus.PENDING));
+
         doAnswer(invocation -> {
             BackfillProgressCallback callback = invocation.getArgument(5);
             long segTo = invocation.getArgument(4);
@@ -169,6 +172,9 @@ class BackfillNetworkExecutorTest {
     @Test
     @DisplayName("marks sync failed when one or more segments fail")
     void failedSegmentMarksSyncFailed() {
+        putSegments(segment(0, 1L, 50L, BackfillSegment.SegmentStatus.PENDING),
+                segment(1, 51L, 100L, BackfillSegment.SegmentStatus.PENDING));
+
         doThrow(new RuntimeException("boom"))
                 .when(rawFetchSegmentProcessor)
                 .processSegment(anyString(), any(NetworkId.class), any(NetworkAdapter.class),
@@ -237,6 +243,9 @@ class BackfillNetworkExecutorTest {
         entry.setBatchBlockSize(500);
         when(ingestionNetworkProperties.getNetwork()).thenReturn(Map.of(NETWORK, entry));
         when(backfillProperties.getSegments()).thenReturn(segmentProfiles(2, 2, 180_000L, 3, 1, 120_000L));
+        putSegments(segment(0, 0L, 30L, BackfillSegment.SegmentStatus.PENDING),
+                segment(1, 31L, 60L, BackfillSegment.SegmentStatus.PENDING),
+                segment(2, 61L, 90L, BackfillSegment.SegmentStatus.PENDING));
 
         doAnswer(invocation -> {
             BackfillProgressCallback callback = invocation.getArgument(5);
@@ -280,6 +289,8 @@ class BackfillNetworkExecutorTest {
         entry.setBatchBlockSize(500);
         when(ingestionNetworkProperties.getNetwork()).thenReturn(Map.of(NETWORK, entry));
         when(backfillProperties.getSegments()).thenReturn(segmentProfiles(2, 2, 180_000L, 0, 0, 0L));
+        putSegments(segment(0, 1L, 50L, BackfillSegment.SegmentStatus.PENDING),
+                segment(1, 51L, 100L, BackfillSegment.SegmentStatus.PENDING));
 
         doAnswer(invocation -> {
             BackfillProgressCallback callback = invocation.getArgument(5);
@@ -311,6 +322,8 @@ class BackfillNetworkExecutorTest {
         IngestionNetworkProperties.NetworkIngestionEntry entry = new IngestionNetworkProperties.NetworkIngestionEntry();
         entry.setSyncMethod(IngestionNetworkProperties.NetworkIngestionEntry.SyncMethod.ETHERSCAN);
         when(ingestionNetworkProperties.getNetwork()).thenReturn(Map.of(NETWORK, entry));
+        putSegments(segment(0, 1L, 50L, BackfillSegment.SegmentStatus.PENDING),
+                segment(1, 51L, 100L, BackfillSegment.SegmentStatus.PENDING));
 
         doAnswer(invocation -> {
             BackfillProgressCallback callback = invocation.getArgument(5);
@@ -345,6 +358,12 @@ class BackfillNetworkExecutorTest {
         entry.setBatchBlockSize(500);
         when(ingestionNetworkProperties.getNetwork()).thenReturn(Map.of(NETWORK, entry));
         when(networkAdapter.supportsBlockCheckpointing()).thenReturn(false);
+        putSegments(segment(0, 0L, 16L, BackfillSegment.SegmentStatus.PENDING),
+                segment(1, 17L, 33L, BackfillSegment.SegmentStatus.PENDING),
+                segment(2, 34L, 50L, BackfillSegment.SegmentStatus.PENDING),
+                segment(3, 51L, 66L, BackfillSegment.SegmentStatus.PENDING),
+                segment(4, 67L, 83L, BackfillSegment.SegmentStatus.PENDING),
+                segment(5, 84L, 100L, BackfillSegment.SegmentStatus.PENDING));
 
         doAnswer(invocation -> {
             BackfillProgressCallback callback = invocation.getArgument(5);
@@ -448,6 +467,12 @@ class BackfillNetworkExecutorTest {
             source.setUpdatedAt(Instant.now());
         }
         segments.put(source.getId(), source);
+    }
+
+    private void putSegments(BackfillSegment... plannedSegments) {
+        for (BackfillSegment plannedSegment : plannedSegments) {
+            putSegment(plannedSegment);
+        }
     }
 
     private List<BackfillSegment> findAllSegments() {

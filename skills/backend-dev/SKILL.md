@@ -50,6 +50,11 @@ If touching backend:
 - Respect architecture from docs.
 - Do not invent domain rules.
 
+## Acceptance Basis Discipline
+- If the task is driven by an accepted audit or scorecard, preserve the same metric basis in implementation notes and verification.
+- Keep exact asset, family, and final-clean/proof-clean results separate.
+- Do not report a substitute metric as if it resolves the original failing row.
+
 ## Responsibility Scope
 In scope:
 - Backend implementation and refactoring
@@ -87,8 +92,26 @@ All scheduled/background jobs must be:
 - No magic constants.
 - Explicit domain models and validation.
 - Deterministic business flow.
+- For supported flows, prefer fixing the earliest wrong pipeline stage and validating via rerun over adding post-factum repair, backfill, or sweep logic that mutates already normalized canonical rows.
+- No dataset-specific production logic keyed by real transaction hashes, wallet addresses, or hand-curated live buckets for supported flows.
+- Use live transaction hashes only as evidence anchors in tests, comments, or artifacts, never as runtime decision keys.
+- When touching proof-critical logic, review adjacent code for existing transaction-specific exceptions and remove or replace them with generalized flow-based behavior.
+- Before sign-off on proof-critical changes, perform and record an explicit cleanup review for transaction-hash, wallet-specific, and dataset-derived exception logic on the affected path.
+- Do not introduce recovery, repair, or startup one-shot jobs that patch existing normalized canonical rows as the main correctness path for supported flows unless the user explicitly asked for a one-time migration or legacy cleanup.
+- Patterns like `CounterpartyRepairJob` are acceptable only as explicit one-time legacy cleanup or migration tooling, never as the normal supported-flow recovery path.
 - Safe retries and concurrency controls.
 - Structured logging.
+
+If an accepted audit identifies `EVIDENCE_PRESENT_UNLINKED`, `EVIDENCE_PRESENT_UNUSABLE`, or an upstream classification/linking defect:
+- do not "fix" it only at replay or reporting level
+- change the earliest proof-critical backend stage that is actually wrong
+- prefer rebuilding downstream state from rerun over mutating stored normalized rows after the fact
+- keep implementation aligned with the accepted failed-stage diagnosis unless fresh evidence disproves it
+
+## Verification Discipline
+- Finish the truthful implementation batch and focused regression tests before heavy runtime verification unless one fresh observation is strictly needed to determine the next backend change.
+- Prefer one end-to-end verification rerun after the batch, not one rerun per micro-patch.
+- If a fresh financial audit contradicts the expected runtime result on the same proof-critical path, do not assume the audit is stale; first verify code state, runtime state, and evidence basis.
 
 ## Decision Protocol
 Escalate instead of guessing when request crosses boundaries:
@@ -96,6 +119,7 @@ Escalate instead of guessing when request crosses boundaries:
 - Business-rule change: hand off to `business-analyst`.
 - Accounting/classification rule change: involve `tx-classification-auditor`.
 - UI/UX/frontend request: out of scope for this skill.
+- Unsupported handling is acceptable only for explicit requirement-defined unsupported network or asset families, for example TON or SOL when out of scope, not for arbitrary live transactions.
 
 ## Required Output Format
 For each implementation response, include:

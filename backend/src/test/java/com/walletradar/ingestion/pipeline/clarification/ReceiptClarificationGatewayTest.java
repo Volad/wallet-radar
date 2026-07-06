@@ -80,6 +80,36 @@ class ReceiptClarificationGatewayTest {
     }
 
     @Test
+    @DisplayName("persisted receipt logs without transfer evidence stay retryable for transfer clarification")
+    void persistedReceiptLogsWithoutTransferEvidenceStayRetryableForTransferClarification() {
+        IngestionNetworkProperties networkProperties = networkProperties(NetworkId.AVALANCHE, IngestionNetworkProperties.NetworkIngestionEntry.SyncMethod.ETHERSCAN);
+        ReceiptClarificationGateway gateway = new ReceiptClarificationGateway(
+                etherscanProvider,
+                blockScoutProvider,
+                rpcClient,
+                rpcTokenTransferResolver,
+                networkProperties,
+                new ObjectMapper()
+        );
+
+        RawTransaction rawTransaction = raw(NetworkId.AVALANCHE, RawSyncMethod.ETHERSCAN, "0xreceipt-only");
+        rawTransaction.setClarificationEvidence(new Document()
+                .append("sourceFamily", "ETHERSCAN")
+                .append("receipt", new Document("logs", List.of(
+                        new Document("address", "0xddcbe30a761edd2e19bba930a977475265f36fa1")
+                                .append("topics", List.of("0xborrow"))
+                ))));
+
+        Optional<ClarificationReceiptEnrichment> transferEnrichment = gateway.fromPersistedEvidence(rawTransaction, true);
+        Optional<ClarificationReceiptEnrichment> metadataEnrichment = gateway.fromPersistedEvidence(rawTransaction, false);
+
+        assertThat(transferEnrichment).isEmpty();
+        assertThat(metadataEnrichment).isPresent();
+        assertThat(metadataEnrichment.get().receiptLogs()).hasSize(1);
+        verifyNoInteractions(etherscanProvider, blockScoutProvider, rpcClient, rpcTokenTransferResolver);
+    }
+
+    @Test
     @DisplayName("rpc-backed metadata clarification still persists full fetched receipt")
     void rpcBackedMetadataClarificationStillPersistsFullFetchedReceipt() {
         IngestionNetworkProperties networkProperties = networkProperties(NetworkId.BSC, IngestionNetworkProperties.NetworkIngestionEntry.SyncMethod.RPC);
@@ -108,6 +138,46 @@ class ReceiptClarificationGatewayTest {
         verify(rpcTokenTransferResolver, never()).buildTokenTransfersFromDocuments(any(), any(), any());
         verify(etherscanProvider, never()).getReceipt(any(), any());
         verify(blockScoutProvider, never()).getReceipt(any(), any());
+    }
+
+    @Test
+    @DisplayName("full receipt clarification derives token transfers from receipt logs without metadata RPC")
+    void fullReceiptClarificationDerivesTokenTransfersFromReceiptLogsWithoutMetadataRpc() {
+        IngestionNetworkProperties networkProperties = networkProperties(NetworkId.BSC, IngestionNetworkProperties.NetworkIngestionEntry.SyncMethod.RPC);
+        ReceiptClarificationGateway gateway = new ReceiptClarificationGateway(
+                etherscanProvider,
+                blockScoutProvider,
+                rpcClient,
+                rpcTokenTransferResolver,
+                networkProperties,
+                new ObjectMapper()
+        );
+
+        RawTransaction rawTransaction = raw(NetworkId.BSC, RawSyncMethod.RPC, "0xfull");
+        rawTransaction.setRawData(rawTransaction.getRawData()
+                .append("explorer", new Document("tokenTransfers", List.of(
+                        new Document("contractAddress", "0x55d398326f99059ff775485246999027b3197955")
+                                .append("tokenSymbol", "USDT")
+                                .append("tokenDecimal", "18")
+                                .append("tokenName", "Tether USD")
+                ))));
+        when(rpcClient.call("https://rpc.example", "eth_getTransactionReceipt", List.of("0xfull")))
+                .thenReturn(Mono.just("""
+                        {"jsonrpc":"2.0","id":1,"result":{"status":"0x1","gasUsed":"0x5208","effectiveGasPrice":"0x3b9aca00","logs":[{"address":"0x55d398326f99059ff775485246999027b3197955","logIndex":"0x1","topics":["0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef","0x000000000000000000000000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","0x0000000000000000000000001111111111111111111111111111111111111111"],"data":"0x64"}]}}
+                        """));
+
+        Optional<ClarificationReceiptEnrichment> enrichment = gateway.fetchFullReceipt(rawTransaction);
+
+        assertThat(enrichment).isPresent();
+        assertThat(enrichment.get().tokenTransfers()).singleElement().satisfies(transfer -> {
+            assertThat(transfer.getString("contractAddress")).isEqualTo("0x55d398326f99059ff775485246999027b3197955");
+            assertThat(transfer.getString("from")).isEqualTo("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+            assertThat(transfer.getString("to")).isEqualTo("0x1111111111111111111111111111111111111111");
+            assertThat(transfer.getString("value")).isEqualTo("100");
+            assertThat(transfer.getString("tokenSymbol")).isEqualTo("USDT");
+            assertThat(transfer.getString("tokenDecimal")).isEqualTo("18");
+        });
+        verify(rpcTokenTransferResolver, never()).buildTokenTransfersFromDocuments(any(), any(), any());
     }
 
     @Test

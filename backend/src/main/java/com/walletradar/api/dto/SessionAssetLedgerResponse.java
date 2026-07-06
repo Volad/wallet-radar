@@ -11,24 +11,75 @@ public record SessionAssetLedgerResponse(
         String sessionId,
         String familyIdentity,
         CurrentState current,
+        FullSessionCurrent fullSessionCurrent,
         List<TimelineEntry> timeline,
         List<EventOverlay> events,
         List<LedgerPoint> ledgerPoints
 ) {
+    /**
+     * Ledger-based full-session current state: sums all latest replay points for the family
+     * (on-chain + Bybit venues) without requiring live balance oracles. Satisfies A2.
+     */
+    public record FullSessionCurrent(
+            BigDecimal quantity,
+            BigDecimal coveredQuantity,
+            BigDecimal uncoveredQuantity,
+            BigDecimal totalCostBasisUsd,
+            BigDecimal avcoUsd,
+            BigDecimal netTotalCostBasisUsd,
+            BigDecimal netAvcoUsd
+    ) {
+    }
     public record CurrentState(
             BigDecimal quantity,
             BigDecimal coveredQuantity,
             BigDecimal uncoveredQuantity,
             BigDecimal totalCostBasisUsd,
             BigDecimal avcoUsd,
+            BigDecimal netTotalCostBasisUsd,
+            BigDecimal netAvcoUsd,
             BigDecimal realisedPnlUsd,
-            BigDecimal gasPaidUsd
+            BigDecimal netRealisedPnlUsd,
+            BigDecimal gasPaidUsd,
+            List<UncoveredBucket> uncoveredBuckets,
+            List<ShortfallSource> shortfallSources
+    ) {
+    }
+
+    public record UncoveredBucket(
+            String walletAddress,
+            String networkId,
+            String assetSymbol,
+            String assetContract,
+            BigDecimal quantity,
+            BigDecimal coveredQuantity,
+            BigDecimal uncoveredQuantity,
+            String uncoveredReason,
+            String latestTxHash,
+            String latestNormalizedType,
+            String latestBasisEffect,
+            String latestProtocolName,
+            Boolean hasIncompleteHistory,
+            Boolean hasUnresolvedFlags,
+            Integer unresolvedFlagCount
+    ) {
+    }
+
+    public record ShortfallSource(
+            String walletAddress,
+            String networkId,
+            String txHash,
+            Instant blockTimestamp,
+            String normalizedType,
+            String protocolName,
+            BigDecimal quantityShortfall
     ) {
     }
 
     public record TimelineEntry(
             Instant blockTimestamp,
             String txHash,
+            String eventGroupId,
             String normalizedTransactionId,
             String normalizedType,
             String protocolName,
@@ -43,11 +94,20 @@ public record SessionAssetLedgerResponse(
             BigDecimal coveredQuantityAfter,
             BigDecimal uncoveredQuantityAfter,
             BigDecimal totalCostBasisAfterUsd,
-            BigDecimal avcoAfterUsd
+            BigDecimal avcoBeforeUsd,
+            BigDecimal avcoAfterUsd,
+            BigDecimal netTotalCostBasisAfterUsd,
+            BigDecimal netAvcoBeforeUsd,
+            BigDecimal netAvcoAfterUsd,
+            String avcoKind,
+            String fromAddress,
+            String toAddress,
+            List<String> memberNormalizedTransactionIds
     ) {
     }
 
     public record EventOverlay(
+            String eventGroupId,
             String normalizedTransactionId,
             String txHash,
             Instant blockTimestamp,
@@ -56,7 +116,10 @@ public record SessionAssetLedgerResponse(
             String lifecycleKind,
             List<String> walletAddresses,
             List<String> networkIds,
-            List<EventFlow> flows
+            List<EventFlow> flows,
+            String fromAddress,
+            String toAddress,
+            List<String> memberNormalizedTransactionIds
     ) {
     }
 
@@ -102,6 +165,10 @@ public record SessionAssetLedgerResponse(
             BigDecimal totalCostBasisAfterUsd,
             BigDecimal avcoBeforeUsd,
             BigDecimal avcoAfterUsd,
+            BigDecimal netTotalCostBasisBeforeUsd,
+            BigDecimal netTotalCostBasisAfterUsd,
+            BigDecimal netAvcoBeforeUsd,
+            BigDecimal netAvcoAfterUsd,
             BigDecimal basisBackedQuantityAfter,
             BigDecimal uncoveredQuantityDelta,
             BigDecimal quantityShortfallAfter,

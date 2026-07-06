@@ -44,7 +44,10 @@ class BackfillRunningProgressJobTest {
         BackfillSegment s3 = segment("sync-1:2", "sync-1", 2, 21L, 30L,
                 BackfillSegment.SegmentStatus.PENDING, 0, null);
 
-        when(syncStatusRepository.findByStatusIn(Set.of(SyncStatus.SyncStatusValue.RUNNING)))
+        when(syncStatusRepository.findOnChainByStatusIn(
+                SyncStatus.SourceKind.ONCHAIN,
+                Set.of(SyncStatus.SyncStatusValue.RUNNING)
+        ))
                 .thenReturn(List.of(sync));
         when(backfillSegmentRepository.existsBySyncStatusId("sync-1")).thenReturn(true);
         when(backfillSegmentRepository.findBySyncStatusIdOrderBySegmentIndexAsc("sync-1"))
@@ -78,7 +81,10 @@ class BackfillRunningProgressJobTest {
         sync.setNetworkId("ETHEREUM");
         sync.setStatus(SyncStatus.SyncStatusValue.RUNNING);
 
-        when(syncStatusRepository.findByStatusIn(Set.of(SyncStatus.SyncStatusValue.RUNNING)))
+        when(syncStatusRepository.findOnChainByStatusIn(
+                SyncStatus.SourceKind.ONCHAIN,
+                Set.of(SyncStatus.SyncStatusValue.RUNNING)
+        ))
                 .thenReturn(List.of(sync));
         when(backfillSegmentRepository.existsBySyncStatusId("sync-legacy")).thenReturn(false);
 

@@ -1,5 +1,6 @@
 package com.walletradar.telemetry;
 
+import com.walletradar.domain.transaction.bybit.BybitExtractedEvent;
 import com.walletradar.domain.transaction.externalledger.ExternalLedgerRaw;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
@@ -55,7 +56,8 @@ public class PipelineTelemetrySnapshotService {
                 Criteria.where("sourceFileType").is("withdraw_deposit"),
                 Criteria.where("onChainCorrelation.status").is("UNMATCHED")
         ));
-        return mongoOperations.count(query, ExternalLedgerRaw.class);
+        return mongoOperations.count(query, ExternalLedgerRaw.class)
+                + mongoOperations.count(query, BybitExtractedEvent.class);
     }
 
     private long countBybitOrphans() {

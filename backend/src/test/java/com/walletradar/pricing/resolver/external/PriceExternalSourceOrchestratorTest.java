@@ -17,6 +17,8 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -186,6 +188,26 @@ class PriceExternalSourceOrchestratorTest {
         verify(bybitSource, never()).resolve(request);
         verify(primarySource, never()).resolve(request);
         verify(fallbackSource, never()).resolve(request);
+    }
+
+    @Test
+    void resolvePreCoverageNearestBucketDelegatesToPreCoverageCacheLookup() {
+        // RC-D: the replay-time pre-coverage clamp reuses the orchestrator's source priority + window
+        // and the pre-coverage-only cache lookup (never the general nearest-bucket path).
+        PriceRequest request = bybitRequest();
+        PriceQuote clamp = quote(PriceSource.BYBIT, "0.23246");
+        when(ecbSource.supports(request)).thenReturn(false);
+        when(bybitSource.supports(request)).thenReturn(true);
+        when(bybitSource.source()).thenReturn(PriceSource.BYBIT);
+        when(historicalPriceCacheService.findPreCoverageNearestQuote(eq(request), eq(PriceSource.BYBIT), any()))
+                .thenReturn(Optional.of(clamp));
+
+        PriceExternalSourceOrchestrator orchestrator = new PriceExternalSourceOrchestrator(
+                historicalPriceCacheService,
+                List.of(ecbSource, bybitSource)
+        );
+
+        assertThat(orchestrator.resolvePreCoverageNearestBucket(request)).contains(clamp);
     }
 
     private PriceRequest request() {

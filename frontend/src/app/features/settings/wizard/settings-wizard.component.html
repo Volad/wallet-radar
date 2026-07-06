@@ -1,0 +1,268 @@
+<section class="wizard-layout">
+  <aside class="wizard-sidebar">
+    <div class="wizard-sidebar-head">
+      <span class="wizard-sidebar-icon">⚙</span>
+      <div>
+        <div class="wizard-title">Setup</div>
+        <div class="wizard-subtitle">Create a session to start indexing.</div>
+      </div>
+    </div>
+
+    <div class="wizard-stepper">
+      @for (step of steps; track step.id) {
+        <button
+          type="button"
+          class="wizard-step"
+          [class.active]="activeStep() === step.id"
+          (click)="setStep(step.id)">
+          <span class="wizard-step-icon">{{ step.icon }}</span>
+          <span class="wizard-step-copy">
+            <span class="wizard-step-label">{{ step.label }}</span>
+            <span class="wizard-step-desc">{{ step.desc }}</span>
+          </span>
+          @if (isStepComplete(step.id)) {
+            <span class="wizard-step-check">✓</span>
+          }
+        </button>
+      }
+    </div>
+  </aside>
+
+  <main class="wizard-main">
+    @if (error(); as errorMessage) {
+      <div class="wizard-banner error">{{ errorMessage }}</div>
+    }
+
+    @if (activeStep() === 'wallets') {
+      <section class="wizard-card">
+        <div class="card-head">
+          <div>
+            <div class="card-title">Wallets &amp; Networks</div>
+            <div class="card-subline">Read-only · no signing required · up to {{ maxWallets }} wallets</div>
+          </div>
+        </div>
+
+        <div class="wallet-grid-head">
+          <div></div>
+          <div></div>
+          <div>Label</div>
+          <div>EVM Address</div>
+          <div>Networks</div>
+          <div></div>
+        </div>
+
+        <div class="wallet-grid">
+          @for (wallet of wallets(); track wallet.id; let index = $index) {
+            <article class="wallet-row" [style.--walletAccent]="wallet.color">
+              <div class="wallet-row-main">
+                <div class="wallet-stripe"></div>
+                <div class="wallet-index mono">{{ index + 1 < 10 ? '0' + (index + 1) : index + 1 }}</div>
+
+                <input
+                  class="wallet-input wallet-label"
+                  type="text"
+                  [value]="wallet.label"
+                  (input)="updateWallet(wallet.id, { label: $any($event.target).value })"
+                  placeholder="Label"
+                  maxlength="40"
+                  autocomplete="off"
+                  spellcheck="false" />
+
+                <div class="wallet-address-wrap">
+                  <input
+                    class="wallet-input wallet-address mono"
+                    [class.ok]="wallet.address.trim().length > 0 && walletAddressError(wallet) === null"
+                    [class.err]="wallet.address.trim().length > 0 && walletAddressError(wallet) !== null"
+                    type="text"
+                    [value]="wallet.address"
+                    (paste)="handleAddressPaste($event, index)"
+                    (input)="updateWallet(wallet.id, { address: $any($event.target).value })"
+                    placeholder="0x… EVM address"
+                    autocomplete="off"
+                    spellcheck="false" />
+
+                  @if (wallet.address.trim().length > 0) {
+                    <span class="wallet-indicator" [class.ok]="walletAddressError(wallet) === null" [class.err]="walletAddressError(wallet) !== null">
+                      {{ walletAddressError(wallet) === null ? '✓' : '✕' }}
+                    </span>
+                  }
+                </div>
+
+                <button type="button" class="wallet-networks-toggle" (click)="toggleWalletNetworks(wallet.id)">
+                  <span class="wallet-networks-copy">
+                    {{ wallet.networks.length === allNetworkIds.length ? 'All networks' : wallet.networks.length + ' selected' }}
+                  </span>
+                  <span class="chev" [class.open]="wallet.networksOpen">⌄</span>
+                </button>
+
+                <button type="button" class="wallet-remove" (click)="removeWallet(wallet.id)" aria-label="Remove wallet">🗑</button>
+              </div>
+
+              @if (wallet.networksOpen) {
+                <div class="wallet-networks-panel">
+                  <div class="networks-panel-head">
+                    <span class="networks-panel-title">Networks</span>
+                    <button
+                      type="button"
+                      class="mini-btn"
+                      (click)="setAllNetworks(wallet.id, wallet.networks.length !== allNetworkIds.length)">
+                      {{ wallet.networks.length === allNetworkIds.length ? 'None' : 'All' }}
+                    </button>
+                  </div>
+
+                  <div class="network-grid">
+                    @for (network of networksPresentation; track network.id) {
+                      <button
+                        type="button"
+                        class="network-chip"
+                        [class.active]="wallet.networks.includes(network.id)"
+                        [style.--networkColor]="network.color"
+                        (click)="toggleWalletNetwork(wallet.id, network.id)">
+                        <span class="network-chip-icon">{{ network.icon }}</span>
+                        <span>{{ network.label }}</span>
+                      </button>
+                    }
+                  </div>
+
+                  @if (walletAddressError(wallet); as walletError) {
+                    <div class="wallet-inline-error">{{ walletError }}</div>
+                  }
+                </div>
+              }
+            </article>
+          }
+        </div>
+
+        @if (wallets().length < maxWallets) {
+          <button type="button" class="wallet-add-more" (click)="addWallet()">
+            + Add another wallet
+            <span>(or paste multiple addresses)</span>
+          </button>
+        }
+
+        <div class="info-card">
+          Backfill scans ~2 years per wallet. <span class="mono accent">3–8 min</span> per network. Partial results appear as indexing runs.
+        </div>
+      </section>
+    }
+
+    @if (activeStep() === 'integrations') {
+      <section class="wizard-card">
+        <div class="card-head">
+          <div>
+            <div class="card-title">Integrations</div>
+            <div class="card-subline">Optional exchange connections</div>
+          </div>
+        </div>
+
+        <article class="integration-card">
+          <div class="integration-card-head">
+            <div class="integration-mark">B</div>
+            <div class="integration-copy">
+              <div class="integration-title-row">
+                <span class="integration-title">Bybit</span>
+                <span class="tag">CEX</span>
+              </div>
+              <div class="integration-subline">Import trading history and balances from Bybit.</div>
+            </div>
+          </div>
+
+          <form class="integration-form" [formGroup]="bybitForm">
+            <label class="editor-field-block">
+              <span class="field-label">Integration name</span>
+              <input class="ifield" type="text" formControlName="displayName" maxlength="80" />
+            </label>
+
+            <label class="editor-field-block">
+              <span class="field-label">API key</span>
+              <input class="ifield" type="password" formControlName="apiKey" autocomplete="off" />
+            </label>
+
+            <label class="editor-field-block">
+              <span class="field-label">API secret</span>
+              <input class="ifield" type="password" formControlName="apiSecret" autocomplete="off" />
+            </label>
+          </form>
+
+          <div class="integration-warning-card">
+            Use <strong>read-only</strong> API keys only. Never enable trading or withdrawal permissions.
+          </div>
+        </article>
+      </section>
+    }
+
+    @if (activeStep() === 'accounting') {
+      <section class="wizard-card">
+        <div class="card-head">
+          <div>
+            <div class="card-title">Accounting</div>
+            <div class="card-subline">Cost basis method</div>
+          </div>
+        </div>
+
+        <div class="accounting-card">
+          <div class="accounting-radio on">
+            <div class="radio-dot"></div>
+          </div>
+          <div class="accounting-copy">
+            <div class="accounting-title-row">
+              <div class="accounting-title">AVCO</div>
+              <span class="tag cyan">Recommended</span>
+              <span class="locked-badge">locked</span>
+            </div>
+            <div class="accounting-desc">
+              Weighted average cost — all holdings merge into a running average.
+            </div>
+            <div class="accounting-note">
+              This is the only accounting engine currently supported by WalletRadar.
+            </div>
+          </div>
+        </div>
+      </section>
+    }
+
+    @if (activeStep() === 'review') {
+      <section class="wizard-card">
+        <div class="card-head">
+          <div>
+            <div class="card-title">Review</div>
+            <div class="card-subline">Confirm &amp; start indexing</div>
+          </div>
+        </div>
+
+        <div class="review-grid">
+          <div class="review-row">
+            <span>Wallets</span>
+            <span class="mono">{{ validWallets().length }}</span>
+          </div>
+          <div class="review-row">
+            <span>Networks</span>
+            <span class="mono">Per-wallet selection</span>
+          </div>
+          <div class="review-row">
+            <span>Accounting</span>
+            <span class="mono">{{ accountingMethod() }}</span>
+          </div>
+        </div>
+
+        <div class="wizard-actions">
+          <button type="button" class="secondary-btn" (click)="prev()" [disabled]="busy()">Back</button>
+          <button type="button" class="primary-btn" (click)="submit()" [disabled]="busy() || !canProceed()">
+            {{ busy() ? 'Creating…' : 'Create session' }}
+          </button>
+        </div>
+      </section>
+    }
+
+    @if (activeStep() !== 'review') {
+      <div class="wizard-footer">
+        <button type="button" class="secondary-btn" (click)="prev()" [disabled]="busy() || activeStep() === 'wallets'">Back</button>
+        <div class="wizard-footer-spacer"></div>
+        <button type="button" class="primary-btn" (click)="next()" [disabled]="busy() || !canProceed()">
+          Next
+        </button>
+      </div>
+    }
+  </main>
+</section>
+

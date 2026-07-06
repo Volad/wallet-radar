@@ -26,6 +26,8 @@ public enum NormalizedTransactionType {
     LENDING_LOOP_DECREASE,
     LENDING_LOOP_CLOSE,
     LENDING_WITHDRAW,
+    /** Bybit CEX Flexible Savings principal redemption (EARN account → FUND/UTA). */
+    EARN_FLEXIBLE_SAVING,
     BORROW,
     REPAY,
     VAULT_DEPOSIT,
@@ -44,11 +46,15 @@ public enum NormalizedTransactionType {
     REWARD_CLAIM,
     EXTERNAL_TRANSFER_OUT,
     EXTERNAL_TRANSFER_IN,
+    SPONSORED_GAS_IN,
     INTERNAL_TRANSFER,
     APPROVE,
+    /** Standalone fee or interest charge (e.g. Bybit loan interest, bonus recollect). */
+    FEE,
     ADMIN_CONFIG,
     WRAP,
     UNWRAP,
+    NFT_MINT,
     UNKNOWN,
     MANUAL_COMPENSATING;
 }

@@ -17,7 +17,8 @@ public final class RegistryMethodDispatchSupport {
             "0xac9650d8",
             "0xc16ae7a4",
             "0x3593564c",
-            "0xae0b91e5"
+            "0xae0b91e5",
+            "0xda35bb0d"
     );
 
     private RegistryMethodDispatchSupport() {

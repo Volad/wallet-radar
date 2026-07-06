@@ -57,6 +57,24 @@ class MorphoProtocolSemanticClassifierTest {
                 assertThat(hint.suggestedType()).isEqualTo(NormalizedTransactionType.SWAP));
     }
 
+    @Test
+    void collateralOutboundAndLoanInboundEmitsLoopOpenHint() {
+        List<ProtocolSemanticHint> hints = classifier.classify(context(collateralBorrowRaw()));
+
+        assertThat(hints).singleElement().satisfies(hint -> {
+            assertThat(hint.suggestedType()).isEqualTo(NormalizedTransactionType.LENDING_LOOP_OPEN);
+            assertThat(hint.semanticType()).isEqualTo("collateral_borrow");
+        });
+    }
+
+    @Test
+    void mcVaultShareMintEmitsVaultDepositHint() {
+        List<ProtocolSemanticHint> hints = classifier.classify(context(mcShareDepositRaw()));
+
+        assertThat(hints).singleElement().satisfies(hint ->
+                assertThat(hint.suggestedType()).isEqualTo(NormalizedTransactionType.VAULT_DEPOSIT));
+    }
+
     private ProtocolSemanticContext context(RawTransaction rawTransaction) {
         OnChainRawTransactionView view = OnChainRawTransactionView.wrap(rawTransaction);
         List<RawLeg> movementLegs = movementLegExtractor.extract(view);
@@ -128,6 +146,44 @@ class MorphoProtocolSemanticClassifierTest {
         )));
         rawTransaction.getRawData().put("input", "0x374f435d000000000000000000000000000000000000000000000000000000001af3bbc6");
         return rawTransaction;
+    }
+
+    private RawTransaction collateralBorrowRaw() {
+        return baseRaw(new Document("tokenTransfers", List.of(
+                new Document("from", WALLET)
+                        .append("to", "0x9954afb60bb5a222714c478ac86990f221788b88")
+                        .append("contractAddress", "0x5979d7b546e38e414f7e9822514be443a4800529")
+                        .append("tokenSymbol", "wstETH")
+                        .append("tokenName", "Wrapped liquid staked Ether 2.0")
+                        .append("tokenDecimal", "18")
+                        .append("value", "22742145033450122"),
+                new Document("from", "0x6c247b1f6182318877311737bac0844baa518f5e")
+                        .append("to", WALLET)
+                        .append("contractAddress", "0xaf88d065e77c8cc2239327c5edb3a432268e5831")
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenName", "USD Coin")
+                        .append("tokenDecimal", "6")
+                        .append("value", "50000000")
+        )));
+    }
+
+    private RawTransaction mcShareDepositRaw() {
+        return baseRaw(new Document("tokenTransfers", List.of(
+                new Document("from", WALLET)
+                        .append("to", "0x9954afb60bb5a222714c478ac86990f221788b88")
+                        .append("contractAddress", "0x5979d7b546e38e414f7e9822514be443a4800529")
+                        .append("tokenSymbol", "wstETH")
+                        .append("tokenName", "Wrapped liquid staked Ether 2.0")
+                        .append("tokenDecimal", "18")
+                        .append("value", "24883544264968890"),
+                new Document("from", "0x0000000000000000000000000000000000000000")
+                        .append("to", WALLET)
+                        .append("contractAddress", "0x1234567890123456789012345678901234567890")
+                        .append("tokenSymbol", "MCUSDC")
+                        .append("tokenName", "MEV Capital USDC Vault")
+                        .append("tokenDecimal", "18")
+                        .append("value", "54042446176586083986")
+        )));
     }
 
     private RawTransaction baseRaw(Document explorer) {

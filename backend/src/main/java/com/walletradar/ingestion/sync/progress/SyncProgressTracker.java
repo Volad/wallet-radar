@@ -30,13 +30,21 @@ public class SyncProgressTracker {
     public void setRunning(String walletAddress, String networkId, Integer progressPct, Long lastBlockSynced, String syncBannerMessage) {
         SyncStatus status = syncStatusRepository.findByWalletAddressAndNetworkId(walletAddress, networkId)
                 .orElse(new SyncStatus());
+        if (status.getSourceKind() == null) {
+            status.setSourceKind(SyncStatus.SourceKind.ONCHAIN);
+        }
         if (status.getId() == null) {
+            status.setSourceKind(SyncStatus.SourceKind.ONCHAIN);
             status.setWalletAddress(walletAddress);
             status.setNetworkId(networkId);
         }
         status.setStatus(SyncStatus.SyncStatusValue.RUNNING);
-        status.setProgressPct(progressPct);
-        status.setLastBlockSynced(lastBlockSynced);
+        if (progressPct != null) {
+            status.setProgressPct(progressPct);
+        }
+        if (lastBlockSynced != null) {
+            status.setLastBlockSynced(lastBlockSynced);
+        }
         status.setSyncBannerMessage(syncBannerMessage);
         status.setBackfillComplete(false);
         status.setUpdatedAt(Instant.now());
@@ -49,6 +57,9 @@ public class SyncProgressTracker {
     public void setRawFetchComplete(String walletAddress, String networkId, Long lastBlockSynced) {
         syncStatusRepository.findByWalletAddressAndNetworkId(walletAddress, networkId)
                 .ifPresent(s -> {
+                    if (s.getSourceKind() == null) {
+                        s.setSourceKind(SyncStatus.SourceKind.ONCHAIN);
+                    }
                     s.setRawFetchComplete(true);
                     s.setLastBlockSynced(lastBlockSynced);
                     s.setUpdatedAt(Instant.now());
@@ -57,17 +68,30 @@ public class SyncProgressTracker {
     }
 
     /**
-     * Set status to COMPLETE, clear banner, set backfillComplete=rawFetchComplete.
+     * Set status to COMPLETE, clear banner, and mark the source terminally complete.
+     *
+     * <p>Reaching {@code COMPLETE} is a terminal state for a wallet×network window: every executable
+     * segment finished (or there was nothing left to fetch). It is therefore authoritative — both
+     * {@code rawFetchComplete} and {@code backfillComplete} are flipped to {@code true}. This prevents
+     * a window that completed through a "no executable segments" / empty-segment / adapter-skip path
+     * from being persisted as {@code COMPLETE} while the completion booleans stay {@code false}, which
+     * would otherwise strand the session-level backfill completion gate forever.
      */
     public void setComplete(String walletAddress, String networkId) {
         syncStatusRepository.findByWalletAddressAndNetworkId(walletAddress, networkId)
                 .ifPresent(s -> {
+                    if (s.getSourceKind() == null) {
+                        s.setSourceKind(SyncStatus.SourceKind.ONCHAIN);
+                    }
                     s.setStatus(SyncStatus.SyncStatusValue.COMPLETE);
                     s.setProgressPct(100);
                     s.setSyncBannerMessage(null);
-                    s.setBackfillComplete(s.isRawFetchComplete());
+                    s.setRawFetchComplete(true);
+                    s.setBackfillComplete(true);
                     s.setRetryCount(0);
                     s.setNextRetryAfter(null);
+                    s.setLastSyncedAt(s.getWindowToTime() == null ? Instant.now() : s.getWindowToTime());
+                    clearWindow(s);
                     s.setUpdatedAt(Instant.now());
                     syncStatusRepository.save(s);
                     publishBackfillCompletion(walletAddress, networkId, s.isBackfillComplete());
@@ -80,6 +104,9 @@ public class SyncProgressTracker {
     public void setFailed(String walletAddress, String networkId, String syncBannerMessage) {
         syncStatusRepository.findByWalletAddressAndNetworkId(walletAddress, networkId)
                 .ifPresent(s -> {
+                    if (s.getSourceKind() == null) {
+                        s.setSourceKind(SyncStatus.SourceKind.ONCHAIN);
+                    }
                     int newRetryCount = s.getRetryCount() + 1;
                     s.setStatus(SyncStatus.SyncStatusValue.FAILED);
                     s.setRetryCount(newRetryCount);
@@ -112,5 +139,12 @@ public class SyncProgressTracker {
         } catch (IllegalArgumentException ignored) {
             // Unknown network ids should not block backfill completion persistence.
         }
+    }
+
+    private void clearWindow(SyncStatus status) {
+        status.setWindowFromBlock(null);
+        status.setWindowToBlock(null);
+        status.setWindowFromTime(null);
+        status.setWindowToTime(null);
     }
 }

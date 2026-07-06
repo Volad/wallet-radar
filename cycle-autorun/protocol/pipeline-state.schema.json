@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "cycle-autorun/pipeline-state.schema.json",
+  "type": "object",
+  "required": [
+    "version",
+    "runtime",
+    "currentCycle",
+    "owner",
+    "control",
+    "decision",
+    "goal"
+  ],
+  "properties": {
+    "version": { "type": "integer" },
+    "runtime": { "type": "string" },
+    "currentCycle": { "type": "integer", "minimum": 1 },
+    "status": { "type": "string" },
+    "owner": {
+      "type": "object",
+      "required": ["role", "taskId"],
+      "properties": {
+        "role": { "type": ["string", "null"] },
+        "taskId": { "type": ["string", "null"] },
+        "sessionKey": { "type": ["string", "null"] },
+        "since": { "type": ["string", "null"] }
+      }
+    },
+    "control": { "type": "object" },
+    "decision": { "type": "object" },
+    "goal": { "type": "object" },
+    "observed": { "type": "object" }
+  }
+}

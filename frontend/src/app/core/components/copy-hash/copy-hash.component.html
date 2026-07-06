@@ -1,0 +1,13 @@
+@if (hash) {
+  <button
+    type="button"
+    class="copy-hash-btn"
+    [class.copied]="copied()"
+    [title]="title"
+    (click)="onClick($event)">
+    <span class="mono">{{ short }}</span>
+    <span class="copy-icon" aria-hidden="true">{{ copied() ? '✓' : '⧉' }}</span>
+  </button>
+} @else {
+  <span class="copy-hash-empty mono muted">--</span>
+}

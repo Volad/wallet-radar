@@ -35,6 +35,7 @@ import java.util.Optional;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.groups.Tuple.tuple;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -68,7 +69,7 @@ class OnChainClassifierTest {
     }
 
     @Test
-    @DisplayName("protocol registry takes precedence over method id")
+    @DisplayName("registry BRIDGE_OUT yields to SWAP when same-tx inbound principal is present")
     void protocolRegistryTakesPrecedenceOverMethodId() {
         RawTransaction rawTransaction = tokenSwapRaw(NetworkId.ETHEREUM);
         when(protocolRegistryService.lookup(NetworkId.ETHEREUM, ROUTER))
@@ -87,9 +88,42 @@ class OnChainClassifierTest {
 
         OnChainClassificationResult result = classifier.classify(rawTransaction);
 
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.SWAP);
+        assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.METHOD_ID);
+    }
+
+    @Test
+    @DisplayName("protocol registry BRIDGE_OUT applies for outbound-only same-tx shape")
+    void protocolRegistryBridgeOutAppliesForOutboundOnlyShape() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.ETHEREUM);
+        rawTransaction.getRawData().put("to", ROUTER);
+        rawTransaction.getRawData().put("methodId", "0x38ed1739");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", TOKEN_A)
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenDecimal", "6")
+                        .append("from", WALLET)
+                        .append("to", ROUTER)
+                        .append("value", "1000000")
+        )).append("internalTransfers", List.of()));
+        when(protocolRegistryService.lookup(NetworkId.ETHEREUM, ROUTER))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        ROUTER,
+                        Set.of(NetworkId.ETHEREUM),
+                        ProtocolRegistryFamily.BRIDGE,
+                        ProtocolRegistryRole.ROUTER,
+                        ProtocolRegistryEventType.BRIDGE_OUT,
+                        ConfidenceLevel.HIGH,
+                        "Test Bridge",
+                        "v1",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.BRIDGE_OUT);
         assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.PROTOCOL_REGISTRY);
-        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
         assertThat(result.protocolName()).isEqualTo("Test Bridge");
     }
 
@@ -199,6 +233,79 @@ class OnChainClassifierTest {
     }
 
     @Test
+    @DisplayName("verified relay native top-up becomes sponsored gas in")
+    void verifiedRelayNativeTopUpBecomesSponsoredGasIn() {
+        String relaySender = "0x91604f590d66ace8975eed6bd16cf55647d1c499";
+        RawTransaction rawTransaction = baseRaw(NetworkId.BASE);
+        rawTransaction.setTxHash("0xfc1c27db48579e15d25c8508dedcf4be732ff41f9f55ccfe12e7128dc5a9204e");
+        rawTransaction.getRawData().put("from", relaySender);
+        rawTransaction.getRawData().put("to", WALLET);
+        rawTransaction.getRawData().put("value", "4659018813092");
+        rawTransaction.getRawData().put("methodId", "0x");
+        rawTransaction.getRawData().put("input", "0x");
+        rawTransaction.getRawData().remove("functionName");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of()).append("internalTransfers", List.of()));
+        when(protocolRegistryService.lookup(NetworkId.BASE, relaySender))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        relaySender,
+                        Set.of(NetworkId.BASE),
+                        ProtocolRegistryFamily.AGGREGATOR,
+                        ProtocolRegistryRole.GAS_PAYER,
+                        null,
+                        ConfidenceLevel.HIGH,
+                        "Relay",
+                        "Solver",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.SPONSORED_GAS_IN);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.PROTOCOL_REGISTRY);
+        assertThat(result.protocolName()).isEqualTo("Relay");
+        assertThat(result.protocolVersion()).isEqualTo("Solver");
+        assertThat(result.flows())
+                .extracting(NormalizedTransaction.Flow::getRole, NormalizedTransaction.Flow::getAssetSymbol, NormalizedTransaction.Flow::getQuantityDelta)
+                .containsExactly(tuple(NormalizedLegRole.TRANSFER, "ETH", new BigDecimal("0.000004659018813092")));
+    }
+
+    @Test
+    @DisplayName("oversized relay native payout stays external transfer in")
+    void oversizedRelayNativePayoutStaysExternalTransferIn() {
+        String relaySender = "0x91604f590d66ace8975eed6bd16cf55647d1c499";
+        RawTransaction rawTransaction = baseRaw(NetworkId.BASE);
+        rawTransaction.getRawData().put("from", relaySender);
+        rawTransaction.getRawData().put("to", WALLET);
+        rawTransaction.getRawData().put("value", "500000000000000000");
+        rawTransaction.getRawData().put("methodId", "0x");
+        rawTransaction.getRawData().put("input", "0x");
+        rawTransaction.getRawData().remove("functionName");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of()).append("internalTransfers", List.of()));
+        when(protocolRegistryService.lookup(NetworkId.BASE, relaySender))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        relaySender,
+                        Set.of(NetworkId.BASE),
+                        ProtocolRegistryFamily.AGGREGATOR,
+                        ProtocolRegistryRole.GAS_PAYER,
+                        null,
+                        ConfidenceLevel.HIGH,
+                        "Relay",
+                        "Solver",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.EXTERNAL_TRANSFER_IN);
+        assertThat(result.flows())
+                .extracting(NormalizedTransaction.Flow::getRole)
+                .containsExactly(NormalizedLegRole.BUY);
+    }
+
+    @Test
     @DisplayName("lending deposit keeps principal and receipt flows as transfer")
     void lendingDepositKeepsContinuityRoles() {
         RawTransaction rawTransaction = baseRaw(NetworkId.ETHEREUM);
@@ -227,6 +334,76 @@ class OnChainClassifierTest {
         assertThat(result.flows())
                 .filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
                 .allSatisfy(flow -> assertThat(flow.getRole()).isEqualTo(NormalizedLegRole.TRANSFER));
+    }
+
+    @Test
+    @DisplayName("Aave deposit with rebasing receipt excess splits principal continuity from accrued receipt")
+    void aaveDepositWithRebasingReceiptExcessSplitsPrincipalContinuityFromAccrual() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.ARBITRUM);
+        rawTransaction.getRawData().put("methodId", "0x617ba037");
+        rawTransaction.getRawData().put("functionName", "supply(address,uint256,address,uint16)");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0x82af49447d8a07e3bd95bd0d56f35241523fbab1")
+                        .append("tokenSymbol", "WETH")
+                        .append("tokenDecimal", "18")
+                        .append("from", WALLET)
+                        .append("to", PROTOCOL)
+                        .append("value", "798000000000000000"),
+                new Document("contractAddress", "0xe50fa9b3c56ffb159cb0fca61f5c9d750e8128c8")
+                        .append("tokenSymbol", "aArbWETH")
+                        .append("tokenDecimal", "18")
+                        .append("from", PROTOCOL)
+                        .append("to", WALLET)
+                        .append("value", "798355982952963328")
+        )).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.LENDING_DEPOSIT);
+        assertThat(result.flows()).filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
+                .extracting(flow -> flow.getAssetSymbol()
+                        + ":" + flow.getRole()
+                        + ":" + flow.getQuantityDelta().stripTrailingZeros().toPlainString())
+                .containsExactlyInAnyOrder(
+                        "WETH:TRANSFER:-0.798",
+                        "aArbWETH:TRANSFER:0.798",
+                        "aArbWETH:BUY:0.000355982952963328"
+                );
+    }
+
+    @Test
+    @DisplayName("Aave withdraw with rebasing underlying excess splits principal continuity from accrued receipt")
+    void aaveWithdrawWithRebasingUnderlyingExcessSplitsPrincipalContinuityFromAccrual() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.ARBITRUM);
+        rawTransaction.getRawData().put("methodId", "0x69328dec");
+        rawTransaction.getRawData().put("functionName", "withdraw(address,uint256,address)");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0xe50fa9b3c56ffb159cb0fca61f5c9d750e8128c8")
+                        .append("tokenSymbol", "aArbWETH")
+                        .append("tokenDecimal", "18")
+                        .append("from", WALLET)
+                        .append("to", "0x0000000000000000000000000000000000000000")
+                        .append("value", "3045871023828205936"),
+                new Document("contractAddress", "0x82af49447d8a07e3bd95bd0d56f35241523fbab1")
+                        .append("tokenSymbol", "WETH")
+                        .append("tokenDecimal", "18")
+                        .append("from", PROTOCOL)
+                        .append("to", WALLET)
+                        .append("value", "3048250993852645231")
+        )).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.LENDING_WITHDRAW);
+        assertThat(result.flows()).filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
+                .extracting(flow -> flow.getAssetSymbol()
+                        + ":" + flow.getRole()
+                        + ":" + flow.getQuantityDelta().stripTrailingZeros().toPlainString())
+                .containsExactlyInAnyOrder(
+                        "aArbWETH:TRANSFER:-3.045871023828205936",
+                        "WETH:TRANSFER:3.045871023828205936",
+                        "WETH:BUY:0.002379970024439295"
+                );
     }
 
     @Test
@@ -261,7 +438,7 @@ class OnChainClassifierTest {
         OnChainClassificationResult result = classifier.classify(rawTransaction);
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.WRAP);
-        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
         assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.METHOD_ID);
         assertThat(result.flows())
                 .filteredOn(flow -> flow.getRole() == NormalizedLegRole.TRANSFER)
@@ -304,7 +481,7 @@ class OnChainClassifierTest {
         OnChainClassificationResult result = classifier.classify(rawTransaction);
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.WRAP);
-        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
         assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.METHOD_ID);
         assertThat(result.flows())
                 .filteredOn(flow -> flow.getRole() == NormalizedLegRole.TRANSFER && flow.getAssetSymbol().equals("ETH"))
@@ -337,7 +514,7 @@ class OnChainClassifierTest {
         OnChainClassificationResult result = classifier.classify(rawTransaction);
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.UNWRAP);
-        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
         assertThat(result.flows())
                 .filteredOn(flow -> flow.getRole() == NormalizedLegRole.TRANSFER)
                 .hasSize(2);
@@ -375,7 +552,7 @@ class OnChainClassifierTest {
         OnChainClassificationResult result = classifier.classify(rawTransaction);
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.UNWRAP);
-        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
         assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.METHOD_ID);
         assertThat(result.flows())
                 .filteredOn(flow -> flow.getRole() == NormalizedLegRole.TRANSFER && flow.getAssetSymbol().equals("WETH"))
@@ -725,8 +902,8 @@ class OnChainClassifierTest {
     }
 
     @Test
-    @DisplayName("Avalanche homoglyph USDC spoof inbound becomes promo spam")
-    void avalancheHomoglyphUsdcSpoofInboundBecomesPromoSpam() {
+    @DisplayName("Avalanche homoglyph USDC spoof inbound is quarantined as a spoof token (SF-1)")
+    void avalancheHomoglyphUsdcSpoofInboundIsQuarantined() {
         RawTransaction rawTransaction = promoInboundRaw(
                 NetworkId.AVALANCHE,
                 "0xa9059cbb",
@@ -741,7 +918,9 @@ class OnChainClassifierTest {
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.UNKNOWN);
         assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
-        assertThat(result.missingDataReasons()).containsExactly("PROMO_SPAM_PHISHING");
+        assertThat(result.excludedFromAccounting()).isTrue();
+        assertThat(result.accountingExclusionReason()).isEqualTo("SPOOF_TOKEN_CONFUSABLE_SYMBOL");
+        assertThat(result.missingDataReasons()).containsExactly("SPOOF_TOKEN_CONFUSABLE_SYMBOL");
     }
 
     @Test
@@ -1105,6 +1284,75 @@ class OnChainClassifierTest {
     }
 
     @Test
+    @DisplayName("verified expressExecuteWithToken settlement resolves to BRIDGE_IN")
+    void verifiedExpressExecuteWithTokenSettlementResolvesToBridgeIn() {
+        String settlement = "0xc86eb7b85807020b4548ee05b54bfc956eebbfcd";
+        RawTransaction rawTransaction = baseRaw(NetworkId.ARBITRUM);
+        rawTransaction.getRawData().put("from", ROUTER);
+        rawTransaction.getRawData().put("to", settlement);
+        rawTransaction.getRawData().put("methodId", "0xe4a974cc");
+        rawTransaction.getRawData().put(
+                "functionName",
+                "expressExecuteWithToken(bytes32 commandId,string sourceChain,string sourceAddress,bytes payload,string symbol,uint256 amount)"
+        );
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", TOKEN_A)
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenDecimal", "6")
+                        .append("from", settlement)
+                        .append("to", WALLET)
+                        .append("value", "401459210")
+        )).append("internalTransfers", List.of()));
+        when(protocolRegistryService.lookup(NetworkId.ARBITRUM, settlement))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        settlement,
+                        Set.of(NetworkId.ARBITRUM),
+                        ProtocolRegistryFamily.BRIDGE,
+                        ProtocolRegistryRole.BRIDGE_ENTRY,
+                        ProtocolRegistryEventType.BRIDGE_OUT,
+                        ConfidenceLevel.HIGH,
+                        "Axelar",
+                        "Express",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.BRIDGE_IN);
+        assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.PROTOCOL_REGISTRY);
+        assertThat(result.flows()).extracting(NormalizedTransaction.Flow::getRole)
+                .contains(NormalizedLegRole.TRANSFER)
+                .doesNotContain(NormalizedLegRole.BUY);
+    }
+
+    @Test
+    @DisplayName("expressExecuteWithToken selector without verified bridge evidence does not promote to BRIDGE_IN")
+    void expressExecuteWithTokenWithoutVerifiedBridgeEvidenceDoesNotPromoteToBridgeIn() {
+        String unverifiedSettlement = "0xc86eb7b85807020b4548ee05b54bfc956eebbfcd";
+        RawTransaction rawTransaction = baseRaw(NetworkId.ARBITRUM);
+        rawTransaction.getRawData().put("from", ROUTER);
+        rawTransaction.getRawData().put("to", unverifiedSettlement);
+        rawTransaction.getRawData().put("methodId", "0xe4a974cc");
+        rawTransaction.getRawData().put(
+                "functionName",
+                "expressExecuteWithToken(bytes32 commandId,string sourceChain,string sourceAddress,bytes payload,string symbol,uint256 amount)"
+        );
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", TOKEN_A)
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenDecimal", "6")
+                        .append("from", unverifiedSettlement)
+                        .append("to", WALLET)
+                        .append("value", "401459210")
+        )).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isNotEqualTo(NormalizedTransactionType.BRIDGE_IN);
+    }
+
+    @Test
     @DisplayName("redeemWithFee settlement sourced from bridge sender resolves to BRIDGE_IN and not promo spam")
     void redeemWithFeeSettlementFromBridgeSenderResolvesToBridgeInAndNotPromoSpam() {
         String bridgeContract = "0x875d6d37ec55c8cf220b9e5080717549d8aa8eca";
@@ -1141,6 +1389,48 @@ class OnChainClassifierTest {
         assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.PROTOCOL_REGISTRY);
         assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
         assertThat(result.missingDataReasons()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("empty-input inbound from bridge internal sender resolves to BRIDGE_IN")
+    void emptyInputInboundFromBridgeInternalSenderResolvesToBridgeIn() {
+        String acrossSpokePool = "0x5c7bcd6e7de5423a257d81b442095a1a6ced35c5";
+        RawTransaction rawTransaction = baseRaw(NetworkId.ETHEREUM);
+        rawTransaction.getRawData().put("from", "");
+        rawTransaction.getRawData().put("to", "");
+        rawTransaction.getRawData().put("input", "");
+        rawTransaction.getRawData().remove("methodId");
+        rawTransaction.getRawData().remove("functionName");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of())
+                .append("internalTransfers", List.of(
+                        new Document("from", acrossSpokePool)
+                                .append("to", WALLET)
+                                .append("value", "2746559320438498")
+                                .append("isError", "0")
+                )));
+        when(protocolRegistryService.lookup(NetworkId.ETHEREUM, acrossSpokePool))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        acrossSpokePool,
+                        Set.of(NetworkId.ETHEREUM),
+                        ProtocolRegistryFamily.BRIDGE,
+                        ProtocolRegistryRole.BRIDGE_ENTRY,
+                        ProtocolRegistryEventType.BRIDGE_OUT,
+                        ConfidenceLevel.HIGH,
+                        "Across",
+                        "V2",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.BRIDGE_IN);
+        assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.PROTOCOL_REGISTRY);
+        assertThat(result.protocolName()).isEqualTo("Across");
+        assertThat(result.flows())
+                .filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
+                .extracting(NormalizedTransaction.Flow::getRole)
+                .containsExactly(NormalizedLegRole.TRANSFER);
     }
 
     @Test
@@ -1335,6 +1625,91 @@ class OnChainClassifierTest {
     }
 
     @Test
+    @DisplayName("zkSync LiFi execute with same-tx inbound leg is not BRIDGE_OUT")
+    void zkSyncLifiExecuteWithSameTxInboundIsNotBridgeOut() {
+        String lifiDiamond = "0x341e94069f53234fe6dabef707ad424830525715";
+        RawTransaction rawTransaction = baseRaw(NetworkId.ZKSYNC);
+        rawTransaction.getRawData().put("to", lifiDiamond);
+        rawTransaction.getRawData().put("methodId", "0xae0b91e5");
+        rawTransaction.getRawData().put("functionName", "execute(bytes,bytes[],uint256)");
+        rawTransaction.getRawData().put("value", "0");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", TOKEN_A)
+                        .append("tokenSymbol", "ARB")
+                        .append("tokenDecimal", "18")
+                        .append("from", WALLET)
+                        .append("to", lifiDiamond)
+                        .append("value", "1000000000000000000"),
+                new Document("contractAddress", TOKEN_B)
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenDecimal", "6")
+                        .append("from", lifiDiamond)
+                        .append("to", WALLET)
+                        .append("value", "2000000")
+        )).append("internalTransfers", List.of()));
+        when(protocolRegistryService.lookup(NetworkId.ZKSYNC, lifiDiamond))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        lifiDiamond,
+                        Set.of(NetworkId.ZKSYNC),
+                        ProtocolRegistryFamily.BRIDGE,
+                        ProtocolRegistryRole.BRIDGE_ENTRY,
+                        ProtocolRegistryEventType.BRIDGE_OUT,
+                        ConfidenceLevel.HIGH,
+                        "LiFi",
+                        "Diamond",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type())
+                .as("method-aware BRIDGE_OUT must not apply when inbound principal is in the same tx")
+                .isNotEqualTo(NormalizedTransactionType.BRIDGE_OUT);
+    }
+
+    @Test
+    @DisplayName("registry-direct BRIDGE_OUT entry with same-tx inbound declines bridge and becomes SWAP")
+    void registryDirectBridgeOutWithSameTxInboundDeclinesBridgeOut() {
+        String mantleProxy = "0xbdff0c1c8b0b779581c4ac3ba1f29667c366c56e";
+        RawTransaction rawTransaction = baseRaw(NetworkId.MANTLE);
+        rawTransaction.getRawData().put("to", mantleProxy);
+        rawTransaction.getRawData().put("methodId", "0x12345678");
+        rawTransaction.getRawData().put("functionName", "swap");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", TOKEN_A)
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenDecimal", "6")
+                        .append("from", WALLET)
+                        .append("to", mantleProxy)
+                        .append("value", "2505000000"),
+                new Document("contractAddress", TOKEN_B)
+                        .append("tokenSymbol", "USDe")
+                        .append("tokenDecimal", "18")
+                        .append("from", mantleProxy)
+                        .append("to", WALLET)
+                        .append("value", "2506556385456299072582")
+        )).append("internalTransfers", List.of()));
+        when(protocolRegistryService.lookup(NetworkId.MANTLE, mantleProxy))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        mantleProxy,
+                        Set.of(NetworkId.MANTLE),
+                        ProtocolRegistryFamily.BRIDGE,
+                        ProtocolRegistryRole.BRIDGE_ENTRY,
+                        ProtocolRegistryEventType.BRIDGE_OUT,
+                        ConfidenceLevel.HIGH,
+                        "LI.FI",
+                        "V1",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.SWAP);
+    }
+
+    @Test
     @DisplayName("source-side Mayan bridge-start selector resolves to BRIDGE_OUT before generic swap fallback")
     void sourceSideMayanBridgeStartSelectorResolvesToBridgeOutBeforeGenericSwapFallback() {
         String lifiDiamond = "0x1231deb6f5749ef6ce6943a275a1d3e7486f4eae";
@@ -1399,6 +1774,58 @@ class OnChainClassifierTest {
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.BRIDGE_OUT);
         assertThat(result.missingDataReasons()).doesNotContain(ClarificationEligibilitySupport.BRIDGE_PAIR_EVIDENCE_REQUIRED);
+    }
+
+    @Test
+    @DisplayName("route-funded squid bridge source keeps token principal as transfer and downgrades tx-value funding to fee")
+    void routeFundedSquidBridgeSourceDowngradesTxValueFundingToFee() {
+        String lifiDiamond = "0x1231deb6f5749ef6ce6943a275a1d3e7486f4eae";
+        RawTransaction rawTransaction = baseRaw(NetworkId.MANTLE);
+        rawTransaction.getRawData().put("to", lifiDiamond);
+        rawTransaction.getRawData().put("methodId", "0xa8f66666");
+        rawTransaction.getRawData().put(
+                "functionName",
+                "swapAndStartBridgeTokensViaSquid(tuple _bridgeData,tuple[] _swapData,tuple _squidData)"
+        );
+        rawTransaction.getRawData().put("value", "84340262615309958");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", TOKEN_A)
+                        .append("tokenSymbol", "USDT")
+                        .append("tokenDecimal", "6")
+                        .append("from", WALLET)
+                        .append("to", lifiDiamond)
+                        .append("value", "21814030")
+        )).append("internalTransfers", List.of()));
+        when(protocolRegistryService.lookup(NetworkId.MANTLE, lifiDiamond))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        lifiDiamond,
+                        Set.of(NetworkId.MANTLE),
+                        ProtocolRegistryFamily.BRIDGE,
+                        ProtocolRegistryRole.BRIDGE_ENTRY,
+                        null,
+                        ConfidenceLevel.HIGH,
+                        "LiFi",
+                        "V1",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.BRIDGE_OUT);
+        assertThat(result.flows())
+                .filteredOn(flow -> flow.getRole() == NormalizedLegRole.TRANSFER)
+                .singleElement()
+                .satisfies(flow -> {
+                    assertThat(flow.getAssetSymbol()).isEqualTo("USDT");
+                    assertThat(flow.getQuantityDelta()).isEqualByComparingTo("-21.81403");
+                });
+        assertThat(result.flows())
+                .filteredOn(flow -> flow.getRole() == NormalizedLegRole.FEE)
+                .anySatisfy(flow -> {
+                    assertThat(flow.getAssetSymbol()).isEqualTo("MNT");
+                    assertThat(flow.getQuantityDelta()).isEqualByComparingTo("-0.084340262615309958");
+                });
     }
 
     @Test
@@ -1820,7 +2247,7 @@ class OnChainClassifierTest {
         OnChainClassificationResult result = classifier.classify(rawTransaction);
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.LP_POSITION_STAKE);
-        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
         assertThat(result.flows())
                 .singleElement()
                 .satisfies(flow -> assertThat(flow.getRole()).isEqualTo(NormalizedLegRole.FEE));
@@ -1834,6 +2261,7 @@ class OnChainClassifierTest {
         rawTransaction.getRawData().put("to", positionManager);
         rawTransaction.getRawData().put("methodId", "0xdd46508f");
         rawTransaction.getRawData().put("functionName", "modifyLiquidities(bytes unlockData,uint256 deadline)");
+        rawTransaction.getRawData().put("input", uniswapV4ModifyLiquiditiesInput42775Entry());
         rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
                 new Document("contractAddress", TOKEN_A)
                         .append("tokenSymbol", "USD₮0")
@@ -1865,6 +2293,9 @@ class OnChainClassifierTest {
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.LP_ENTRY);
         assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.PROTOCOL_REGISTRY);
+        // RC-1 (ADR-018): identity keyed by the NFPM contract, not the protocol slug.
+        assertThat(result.correlationId())
+                .isEqualTo("lp-position:unichain:0x4529a01c7a0410167c5740c487a8de60232617bf:42775");
         assertThat(result.flows())
                 .filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
                 .isNotEmpty()
@@ -1879,6 +2310,7 @@ class OnChainClassifierTest {
         rawTransaction.getRawData().put("to", positionManager);
         rawTransaction.getRawData().put("methodId", "0xdd46508f");
         rawTransaction.getRawData().put("functionName", "modifyLiquidities(bytes unlockData,uint256 deadline)");
+        rawTransaction.getRawData().put("input", uniswapV4ModifyLiquiditiesInput42775Exit());
         rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
                 new Document("contractAddress", TOKEN_A)
                         .append("tokenSymbol", "USD₮0")
@@ -1910,6 +2342,52 @@ class OnChainClassifierTest {
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.LP_EXIT);
         assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.PROTOCOL_REGISTRY);
+        // RC-1 (ADR-018): identity keyed by the NFPM contract; entry+exit share one pool.
+        assertThat(result.correlationId())
+                .isEqualTo("lp-position:unichain:0x4529a01c7a0410167c5740c487a8de60232617bf:42775");
+    }
+
+    @Test
+    @DisplayName("second unichain modifyLiquidities exit resolves token id from unlockData")
+    void secondUnichainModifyLiquiditiesExitResolvesTokenIdFromUnlockData() {
+        String positionManager = "0x4529a01c7a0410167c5740c487a8de60232617bf";
+        RawTransaction rawTransaction = baseRaw(NetworkId.UNICHAIN);
+        rawTransaction.getRawData().put("to", positionManager);
+        rawTransaction.getRawData().put("methodId", "0xdd46508f");
+        rawTransaction.getRawData().put("functionName", "modifyLiquidities(bytes unlockData,uint256 deadline)");
+        rawTransaction.getRawData().put("input", uniswapV4ModifyLiquiditiesInput44341Exit());
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", TOKEN_A)
+                        .append("tokenSymbol", "USD₮0")
+                        .append("tokenDecimal", "6")
+                        .append("from", "0x1f98400000000000000000000000000000000004")
+                        .append("to", WALLET)
+                        .append("value", "39095808272")
+        )).append("internalTransfers", List.of(
+                new Document("from", "0x1f98400000000000000000000000000000000004")
+                        .append("to", WALLET)
+                        .append("value", "687198664449794342")
+                        .append("isError", "0")
+        )));
+        when(protocolRegistryService.lookup(NetworkId.UNICHAIN, positionManager))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        positionManager,
+                        Set.of(NetworkId.UNICHAIN),
+                        ProtocolRegistryFamily.DEX,
+                        ProtocolRegistryRole.POSITION_MANAGER,
+                        null,
+                        ConfidenceLevel.HIGH,
+                        "Uniswap",
+                        "V4",
+                        true,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.LP_EXIT);
+        assertThat(result.correlationId())
+                .isEqualTo("lp-position:unichain:0x4529a01c7a0410167c5740c487a8de60232617bf:44341");
     }
 
     @Test
@@ -1975,7 +2453,9 @@ class OnChainClassifierTest {
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.LP_ENTRY);
         assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.PROTOCOL_REGISTRY);
-        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_CLARIFICATION);
+        assertThat(result.missingDataReasons())
+                .contains(ClassificationReasonCode.LP_POSITION_CORRELATION_REQUIRED.code());
     }
 
     @Test
@@ -2243,7 +2723,7 @@ class OnChainClassifierTest {
         OnChainClassificationResult result = classifier.classify(rawTransaction);
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.LP_POSITION_UNSTAKE);
-        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
         assertThat(result.flows())
                 .singleElement()
                 .satisfies(flow -> assertThat(flow.getRole()).isEqualTo(NormalizedLegRole.FEE));
@@ -2648,7 +3128,9 @@ class OnChainClassifierTest {
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.LP_ENTRY);
         assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.PROTOCOL_REGISTRY);
-        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_CLARIFICATION);
+        assertThat(result.missingDataReasons())
+                .contains(ClassificationReasonCode.LP_POSITION_CORRELATION_REQUIRED.code());
     }
 
     @Test
@@ -2793,6 +3275,139 @@ class OnChainClassifierTest {
     }
 
     @Test
+    @DisplayName("Pancake V3 mint without persisted NFT mint log becomes pending clarification for LP position correlation")
+    void pancakeV3MintWithoutPersistedNftMintLogBecomesPendingClarificationForPositionCorrelation() {
+        String positionManager = "0x46a15b0b27311cedf172ab29e4f4766fbe7f4364";
+        RawTransaction rawTransaction = baseRaw(NetworkId.ARBITRUM);
+        rawTransaction.getRawData().put("to", positionManager);
+        rawTransaction.getRawData().put("methodId", "0x88316456");
+        rawTransaction.getRawData().put(
+                "input",
+                "0x88316456"
+                        + "00000000000000000000000082af49447d8a07e3bd95bd0d56f35241523fbab1"
+                        + "000000000000000000000000af88d065e77c8cc2239327c5edb3a432268e5831"
+                        + "0000000000000000000000000000000000000000000000000000000000000064"
+                        + "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffcf975"
+                        + "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffd0345"
+                        + "000000000000000000000000000000000000000000000000036b350f2092a179"
+                        + "000000000000000000000000000000000000000000000000000000001e97377c"
+                        + "000000000000000000000000000000000000000000000000034b9d52d8dbe730"
+                        + "000000000000000000000000000000000000000000000000000000001d22fbcd"
+                        + "0000000000000000000000001111111111111111111111111111111111111111"
+                        + "0000000000000000000000000000000000000000000000000000000067b6f6ac"
+        );
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0x82af49447d8a07e3bd95bd0d56f35241523fbab1")
+                        .append("tokenSymbol", "WETH")
+                        .append("tokenDecimal", "18")
+                        .append("from", WALLET)
+                        .append("to", positionManager)
+                        .append("value", "245785070903643003"),
+                new Document("contractAddress", TOKEN_A)
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenDecimal", "6")
+                        .append("from", WALLET)
+                        .append("to", positionManager)
+                        .append("value", "513226620")
+        )).append("internalTransfers", List.of()));
+        when(protocolRegistryService.lookup(NetworkId.ARBITRUM, positionManager))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        positionManager,
+                        Set.of(NetworkId.ARBITRUM),
+                        ProtocolRegistryFamily.DEX,
+                        ProtocolRegistryRole.POSITION_MANAGER,
+                        null,
+                        ConfidenceLevel.HIGH,
+                        "PancakeSwap",
+                        "V3",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.LP_ENTRY);
+        assertThat(result.protocolName()).isEqualTo("PancakeSwap");
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_CLARIFICATION);
+        assertThat(result.correlationId()).isNull();
+        assertThat(result.missingDataReasons())
+                .contains(ClassificationReasonCode.LP_POSITION_CORRELATION_REQUIRED.code());
+    }
+
+    @Test
+    @DisplayName("Pancake V3 mint with clarified NFT mint log gets deterministic LP position correlation")
+    void pancakeV3MintWithClarifiedNftMintLogGetsDeterministicPositionCorrelation() {
+        String positionManager = "0x46a15b0b27311cedf172ab29e4f4766fbe7f4364";
+        RawTransaction rawTransaction = baseRaw(NetworkId.ARBITRUM);
+        rawTransaction.getRawData().put("to", positionManager);
+        rawTransaction.getRawData().put("methodId", "0x88316456");
+        rawTransaction.getRawData().put(
+                "input",
+                "0x88316456"
+                        + "00000000000000000000000082af49447d8a07e3bd95bd0d56f35241523fbab1"
+                        + "000000000000000000000000af88d065e77c8cc2239327c5edb3a432268e5831"
+                        + "0000000000000000000000000000000000000000000000000000000000000064"
+                        + "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffcf975"
+                        + "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffd0345"
+                        + "000000000000000000000000000000000000000000000000036b350f2092a179"
+                        + "000000000000000000000000000000000000000000000000000000001e97377c"
+                        + "000000000000000000000000000000000000000000000000034b9d52d8dbe730"
+                        + "000000000000000000000000000000000000000000000000000000001d22fbcd"
+                        + "0000000000000000000000001111111111111111111111111111111111111111"
+                        + "0000000000000000000000000000000000000000000000000000000067b6f6ac"
+        );
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0x82af49447d8a07e3bd95bd0d56f35241523fbab1")
+                        .append("tokenSymbol", "WETH")
+                        .append("tokenDecimal", "18")
+                        .append("from", WALLET)
+                        .append("to", positionManager)
+                        .append("value", "245785070903643003"),
+                new Document("contractAddress", TOKEN_A)
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenDecimal", "6")
+                        .append("from", WALLET)
+                        .append("to", positionManager)
+                        .append("value", "513226620")
+        )).append("internalTransfers", List.of()));
+        rawTransaction.setClarificationEvidence(new Document()
+                .append("fullReceipt", new Document("logs", List.of(
+                        new Document("address", positionManager)
+                                .append("topics", List.of(
+                                        "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+                                        "0x0000000000000000000000000000000000000000000000000000000000000000",
+                                        "0x0000000000000000000000001111111111111111111111111111111111111111",
+                                        "0x000000000000000000000000000000000000000000000000000000000003016f"
+                                ))
+                                .append("data", "0x")
+                ))));
+        when(protocolRegistryService.lookup(NetworkId.ARBITRUM, positionManager))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        positionManager,
+                        Set.of(NetworkId.ARBITRUM),
+                        ProtocolRegistryFamily.DEX,
+                        ProtocolRegistryRole.POSITION_MANAGER,
+                        null,
+                        ConfidenceLevel.HIGH,
+                        "PancakeSwap",
+                        "V3",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.LP_ENTRY);
+        assertThat(result.protocolName()).isEqualTo("PancakeSwap");
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        // RC-1 (ADR-018): identity keyed by the PancakeSwap V3 NFPM contract, not the slug.
+        assertThat(result.correlationId())
+                .isEqualTo("lp-position:arbitrum:0x46a15b0b27311cedf172ab29e4f4766fbe7f4364:196975");
+        assertThat(result.missingDataReasons())
+                .doesNotContain(ClassificationReasonCode.LP_POSITION_CORRELATION_REQUIRED.code());
+    }
+
+    @Test
     @DisplayName("pure dex stake contract deposit becomes LP_POSITION_STAKE")
     void pureDexStakeContractDepositBecomesLpPositionStake() {
         String stakeContract = "0x0f5212f63ba8eab0fabd94fc2071d461d9d6ddb2";
@@ -2817,7 +3432,7 @@ class OnChainClassifierTest {
         OnChainClassificationResult result = classifier.classify(rawTransaction);
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.LP_POSITION_STAKE);
-        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
         assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.PROTOCOL_REGISTRY);
         assertThat(result.flows())
                 .singleElement()
@@ -2849,7 +3464,7 @@ class OnChainClassifierTest {
         OnChainClassificationResult result = classifier.classify(rawTransaction);
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.LP_POSITION_UNSTAKE);
-        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
         assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.PROTOCOL_REGISTRY);
         assertThat(result.flows())
                 .singleElement()
@@ -2890,7 +3505,7 @@ class OnChainClassifierTest {
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.LP_POSITION_STAKE);
         assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.PROTOCOL_REGISTRY);
-        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
     }
 
     @Test
@@ -2927,7 +3542,7 @@ class OnChainClassifierTest {
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.LP_POSITION_UNSTAKE);
         assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.PROTOCOL_REGISTRY);
-        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
     }
 
     @Test
@@ -3481,6 +4096,63 @@ class OnChainClassifierTest {
     }
 
     @Test
+    @DisplayName("Euler native EVK deposit with clarified receipt hop resolves to lending deposit")
+    void eulerNativeEvkDepositWithClarifiedReceiptHopResolvesToLendingDeposit() {
+        String router = "0xd8cecee9a04ea3d941a959f68fb4486f23271d09";
+        String wrapper = "0xe5d7c2a44ffddf6b295a15c148167daaaf5cf34f";
+        String share = "0xa8a02e6a894a490d04b6cd480857a19477854968";
+
+        RawTransaction rawTransaction = baseRaw(NetworkId.LINEA);
+        rawTransaction.setTxHash("0x9ee1dd4856c2fb8847e167acea0ae983bb74d3206a0b87296b4bdc995bdc492f");
+        rawTransaction.getRawData().put("to", router);
+        rawTransaction.getRawData().put("methodId", "0xc16ae7a4");
+        rawTransaction.getRawData().put("functionName", "batch(tuple[] items)");
+        rawTransaction.getRawData().put("value", "11527583784449877");
+
+        List<Document> tokenTransfers = List.of(
+                new Document("contractAddress", share)
+                        .append("tokenSymbol", "eWETH-1")
+                        .append("tokenName", "EVK Vault eWETH-1")
+                        .append("tokenDecimal", "18")
+                        .append("from", "0x0000000000000000000000000000000000000000")
+                        .append("to", WALLET)
+                        .append("value", "11519296072704087")
+        );
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", tokenTransfers)
+                .append("internalTransfers", List.of()));
+        rawTransaction.setClarificationEvidence(new Document()
+                .append("fullReceiptClarificationAttempts", 1)
+                .append("fullReceipt", new Document("logs", List.of(
+                        new Document("address", wrapper)
+                                .append("topics", List.of(
+                                        "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+                                        "0x" + paddedAddress(router),
+                                        "0x" + paddedAddress(share)
+                                ))
+                                .append("data", "0x" + paddedUint("11527583784449877")),
+                        new Document("address", share)
+                                .append("topics", List.of(
+                                        "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+                                        "0x" + paddedAddress("0x0000000000000000000000000000000000000000"),
+                                        "0x" + paddedAddress(WALLET)
+                                ))
+                                .append("data", "0x" + paddedUint("11519296072704087"))
+                )))
+                .append("transfers", new Document("tokenTransfers", tokenTransfers).append("internalTransfers", List.of())));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.LENDING_DEPOSIT);
+        assertThat(result.protocolName()).isEqualTo("Euler");
+        assertThat(result.flows()).filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
+                .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getQuantityDelta().stripTrailingZeros().toPlainString())
+                .containsExactlyInAnyOrder(
+                        "ETH:-0.011527583784449877",
+                        "eWETH-1:0.011519296072704087"
+                );
+    }
+
+    @Test
     @DisplayName("Arbitrum Euler eUSDC-6 partial withdraw stays explicit review until clarification proves lifecycle")
     void arbitrumEulerSimpleVaultPartialWithdrawWithoutClarificationStaysExplicitReview() {
         RawTransaction rawTransaction = baseRaw(NetworkId.ARBITRUM);
@@ -3551,7 +4223,8 @@ class OnChainClassifierTest {
                 .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getQuantityDelta().stripTrailingZeros().toPlainString())
                 .containsExactlyInAnyOrder(
                         "eUSDC-6:-1479.515661",
-                        "USDC:1501"
+                        "USDC:1479.515661",
+                        "USDC:21.484339"
                 );
     }
 
@@ -3626,7 +4299,72 @@ class OnChainClassifierTest {
                 .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getQuantityDelta().stripTrailingZeros().toPlainString())
                 .containsExactlyInAnyOrder(
                         "eUSDC-6:-732.899692",
-                        "USDC:746.016993"
+                        "USDC:732.899692",
+                        "USDC:13.117301"
+                );
+    }
+
+    @Test
+    @DisplayName("Plasma Euler batch collateral transfer to EVK vault resolves to lending deposit")
+    void plasmaEulerBatchCollateralTransferToEvkVaultResolvesToLendingDeposit() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.PLASMA);
+        rawTransaction.setTxHash("0x59789920b3d5dd6775c6c93b0dee1457a8a2c132fd9059cd80872a18acd60ce3");
+        rawTransaction.getRawData().put("to", "0x7bdbd0a7114aa42ca957f292145f6a931a345583");
+        rawTransaction.getRawData().put("methodId", "0xc16ae7a4");
+        rawTransaction.getRawData().put("functionName", "batch(tuple[] items)");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0x2a52b289ba68bbd02676640aa9f605700c9e5699")
+                        .append("tokenSymbol", "wstUSR")
+                        .append("tokenName", "Wrapped Staked USR")
+                        .append("tokenDecimal", "18")
+                        .append("from", WALLET)
+                        .append("to", "0xac40d41ab11b0eb991a7d34d55dbdbb7849e92ef")
+                        .append("value", "449782499924914000000")
+        )).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.LENDING_DEPOSIT);
+        assertThat(result.protocolName()).isEqualTo("Euler");
+        assertThat(result.flows()).filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
+                .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getQuantityDelta().stripTrailingZeros().toPlainString())
+                .containsExactly("wstUSR:-449.782499924914");
+    }
+
+    @Test
+    @DisplayName("Plasma Euler receipt-only stable and collateral mint resolves to lending loop open")
+    void plasmaEulerReceiptOnlyStableAndCollateralMintResolvesToLendingLoopOpen() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.PLASMA);
+        rawTransaction.setTxHash("0x972cd358a18776e69ebb3d566d6e59d70ea6499d03469cde6bc1c2da9fd8a6df");
+        rawTransaction.getRawData().put("to", "0x7bdbd0a7114aa42ca957f292145f6a931a345583");
+        rawTransaction.getRawData().put("methodId", "0xc16ae7a4");
+        rawTransaction.getRawData().put("functionName", "batch(tuple[] items)");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0x4718484ac9dc07fbbc078561e8f8ef29e2a369cd")
+                        .append("tokenSymbol", "eUSDT0-9")
+                        .append("tokenName", "EVK Vault eUSDT0-9")
+                        .append("tokenDecimal", "6")
+                        .append("from", "0x0000000000000000000000000000000000000000")
+                        .append("to", WALLET)
+                        .append("value", "2165096"),
+                new Document("contractAddress", "0xac40d41ab11b0eb991a7d34d55dbdbb7849e92ef")
+                        .append("tokenSymbol", "ewstUSR-1")
+                        .append("tokenName", "EVK Vault ewstUSR-1")
+                        .append("tokenDecimal", "18")
+                        .append("from", "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693e")
+                        .append("to", WALLET)
+                        .append("value", "445871113016429597319")
+        )).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.LENDING_LOOP_OPEN);
+        assertThat(result.protocolName()).isEqualTo("Euler");
+        assertThat(result.flows()).filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
+                .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getQuantityDelta().stripTrailingZeros().toPlainString())
+                .containsExactlyInAnyOrder(
+                        "eUSDT0-9:2.165096",
+                        "ewstUSR-1:445.871113016429597319"
                 );
     }
 
@@ -4096,7 +4834,7 @@ class OnChainClassifierTest {
     }
 
     @Test
-    @DisplayName("BSC modifyLiquidities with positive log deltas becomes LP_ENTRY")
+    @DisplayName("BSC modifyLiquidities with positive liquidityDelta (word 2) becomes LP_ENTRY")
     void bscModifyLiquiditiesWithPositiveLogDeltasBecomesLpEntry() {
         String positionManager = "0x55f4c8aba71a1e923edc303eb4feff14608cc226";
         RawTransaction rawTransaction = baseRaw(NetworkId.BSC);
@@ -4111,9 +4849,14 @@ class OnChainClassifierTest {
                                 "0x00000000000000000000000055f4c8aba71a1e923edc303eb4feff14608cc226"
                         ))
                         .append("data", "0x"
+                                // word 0 = tickLower (positive tick range)
                                 + "000000000000000000000000000000000000000000000000000000000000cef8"
+                                // word 1 = tickUpper
                                 + "00000000000000000000000000000000000000000000000000000000000144f2"
-                                + "0000000000000000000000000000000000000000000000000000000000000000"
+                                // word 2 = liquidityDelta > 0 → LP_ENTRY (was incorrectly 0 before;
+                                // old code happened to return LP_ENTRY by reading positive ticks as deltas)
+                                + "0000000000000000000000000000000000000000000000000000000000000001"
+                                // word 3 = salt
                                 + "000000000000000000000000000000000000000000000000000000000009d352")
         ));
         rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of()).append("internalTransfers", List.of()));
@@ -4178,45 +4921,158 @@ class OnChainClassifierTest {
     }
 
     @Test
-    @DisplayName("ParaSwap exact amount out with same-asset refund leaves review as swap")
-    void paraSwapExactAmountOutWithSameAssetRefundLeavesReviewAsSwap() {
+    @DisplayName("ParaSwap exact amount out with native settlement nets refund and restores native buy leg")
+    void paraSwapExactAmountOutWithNativeSettlementNetsRefundAndRestoresNativeBuyLeg() {
         RawTransaction rawTransaction = baseRaw(NetworkId.BASE);
         rawTransaction.setTxHash("0x71edb81701d7c95d92d5ad4ec43574db388c7e5e21974385374883b021e0f5da");
         rawTransaction.getRawData().put("to", "0x6a000f20005980200259b80c5102003040001068");
         rawTransaction.getRawData().put("methodId", "0x");
-        rawTransaction.getRawData().put("input", "0x7f457675" + "00".repeat(128));
-        rawTransaction.setClarificationEvidence(new Document()
-                .append("fullReceiptClarificationAttempts", 1)
-                .append("transfers", new Document("tokenTransfers", List.of(
-                        new Document("contractAddress", TOKEN_A)
-                                .append("tokenSymbol", "USDC")
-                                .append("tokenName", "USD Coin")
-                                .append("tokenDecimal", "6")
-                                .append("from", WALLET)
-                                .append("to", ROUTER)
-                                .append("value", "853605286"),
-                        new Document("contractAddress", TOKEN_A)
-                                .append("tokenSymbol", "USDC")
-                                .append("tokenName", "USD Coin")
-                                .append("tokenDecimal", "6")
-                                .append("from", "0x6a000f20005980200259b80c5102003040001068")
-                                .append("to", WALLET)
-                                .append("value", "842509")
-                )))
-                .append("fullReceipt", new Document("logs", List.of(
-                        new Document("address", "0x4200000000000000000000000000000000000006")
-                                .append("topics", List.of(
-                                        "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
-                                        "0x0000000000000000000000000e5891850bb3f03090f03010000806f080040100",
-                                        "0x0000000000000000000000006a000f20005980200259b80c5102003040001068"
-                                ))
-                                .append("data", "0x01")
-                ))));
+        rawTransaction.getRawData().put("input", "0x7f457675"
+                + "0000000000000000000000000e5891850bb3f03090f03010000806f080040100"
+                + "000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                + "000000000000000000000000eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+                + "0000000000000000000000000000000000000000000000000000000032e0fba6"
+                + "00000000000000000000000000000000000000000000000003f8cb33e001a000"
+                + "0000000000000000000000000000000000000000000000000000000032d3f895"
+                + "1c4572d29dba4ba693b33f57874be5c3000000000000000000000000025e0df1"
+                + "0000000000000000000000000000000000000000000000000000000000000000"
+                + "08a3c2a819e3de7aca384c798269b3ce1cd0e437900000000000000000000000"
+                + "0000000000000000000000000000000000000000000000000000000000000160"
+                + "0000000000000000000000000000000000000000000000000000000000000180"
+                + "0000000000000000000000000000000000000000000000000000000000000000"
+                + "0000000000000000000000000000000000000000000000000000000000000540"
+                + "0000000000000000000000000000000000000000000000000000000000000020"
+                + "0000000000000000000000000000000000000000000000000000000000000560"
+                + "0000018000000000000000000000016c00000000000001370000000000001838"
+                + "1b81d678ffb9c0263b24a97847620c99d213eb140160008400a400d80000000b"
+                + "00000000000000000000000000000000000000000000000000000000f28c0498"
+                + "0000000000000000000000000000000000000000000000000000000000000020"
+                + "00000000000000000000000000000000000000000000000000000000000000a0"
+                + "0000000000000000000000000e5891850bb3f03090f03010000806f080040100"
+                + "00000000000000000000000000000000000000000000000000000000694fb347"
+                + "000000000000000000000000000000000000000000000000027669817148b000"
+                + "000000000000000000000000000000000000000000000000000000001f836ff6"
+                + "000000000000000000000000000000000000000000000000000000000000002b"
+                + "4200000000000000000000000000000000000006000064833589fcd6edb6e08f"
+                + "4c7c32d4f71b54bda02913000000000000000000000000000000000000000000"
+                + "000000000000000000000000eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+                + "0000018000000000000000000000016c00000000000001370000000000000e10"
+                + "1b2b6ce813b99b840fe632c63bca5394938ef01e0160008400a400d80000000b"
+                + "00000000000000000000000000000000000000000000000000000000f28c0498"
+                + "0000000000000000000000000000000000000000000000000000000000000020"
+                + "00000000000000000000000000000000000000000000000000000000000000a0"
+                + "0000000000000000000000000e5891850bb3f03090f03010000806f080040100"
+                + "00000000000000000000000000000000000000000000000000000000694fb347"
+                + "000000000000000000000000000000000000000000000000016e0bb683d7a000"
+                + "00000000000000000000000000000000000000000000000000000000124c542f"
+                + "000000000000000000000000000000000000000000000000000000000000002b"
+                + "4200000000000000000000000000000000000006000001833589fcd6edb6e08f"
+                + "4c7c32d4f71b54bda02913000000000000000000000000000000000000000000"
+                + "000000000000000000000000eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+                + "000001a000000000000000000000010c00000000000000ec00000000000000c8"
+                + "5eded0d7e76c563ff081ca01d9d12d6b404df52701200064010500e40000000b"
+                + "00000000000000000000000000000000000000000000000000000000b800a206"
+                + "0000000000000000000000000e5891850bb3f03090f03010000806f080040100"
+                + "000000000000000000000000df033790907c60c9b81ae355f76f74f52f92114a"
+                + "0000000000000000000000000000000000000000000000000000000000000000"
+                + "00000000000000000000000000000000000000000000000000001455fbeae150"
+                + "00ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7d"
+                + "000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                + "000000000000000000000000eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+                + "0000000000000000000000004200000000000000000000000000000000000006"
+                + "4200000000000000000000000000000000000600400024000400000000000700"
+                + "000000000000000000000000000000000000000000000000000000002e1a7d4d"
+                + "00000000000000000000000000000000000000000000000003f8cb33e001a000");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913")
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenName", "USD Coin")
+                        .append("tokenDecimal", "6")
+                        .append("from", WALLET)
+                        .append("to", "0x0e5891850bb3f03090f03010000806f080040100")
+                        .append("value", "853605286"),
+                new Document("contractAddress", "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913")
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenName", "USD Coin")
+                        .append("tokenDecimal", "6")
+                        .append("from", "0x6a000f20005980200259b80c5102003040001068")
+                        .append("to", WALLET)
+                        .append("value", "842509")
+        )).append("internalTransfers", List.of()));
 
         OnChainClassificationResult result = classifier.classify(rawTransaction);
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.SWAP);
         assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        assertThat(result.flows())
+                .filteredOn(flow -> flow.getRole() == NormalizedLegRole.SELL)
+                .singleElement()
+                .satisfies(flow -> {
+                    assertThat(flow.getAssetSymbol()).isEqualTo("USDC");
+                    assertThat(flow.getQuantityDelta()).isEqualByComparingTo(new BigDecimal("-852.762777"));
+                });
+        assertThat(result.flows())
+                .filteredOn(flow -> flow.getRole() == NormalizedLegRole.BUY)
+                .singleElement()
+                .satisfies(flow -> {
+                    assertThat(flow.getAssetSymbol()).isEqualTo("ETH");
+                    assertThat(flow.getQuantityDelta()).isEqualByComparingTo(new BigDecimal("0.286202"));
+                });
+    }
+
+    @Test
+    @DisplayName("Velora RFQ batch fill overload on aggregator router resolves to SWAP")
+    void veloraRfqBatchFillOverloadOnAggregatorRouterResolvesToSwap() {
+        String veloraRouter = "0x6a000f20005980200259b80c5102003040001068";
+        RawTransaction rawTransaction = baseRaw(NetworkId.AVALANCHE);
+        rawTransaction.setTxHash("0x21815249921ac127f3c52fbf018924f80a55e8fa7fc80505ca2488f0b80f256f");
+        rawTransaction.getRawData().put("to", veloraRouter);
+        rawTransaction.getRawData().put("methodId", "0xda35bb0d");
+        rawTransaction.getRawData().put("functionName",
+                "swapOnAugustusRFQTryBatchFill((uint256 fromAmount, uint256 toAmount, uint8 wrapApproveDirection, bytes32 metadata, address beneficiary) data, ((uint256 nonceAndMeta, uint128 expiry, address makerAsset, address takerAsset, address maker, address taker, uint256 makerAmount, uint256 takerAmount) order, bytes signature, uint256 takerTokenFillAmount, bytes permitTakerAsset, bytes permitMakerAsset)[] orders, bytes permit) payable returns (uint256 spentAmount, uint256 receivedAmount)");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0x9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7")
+                        .append("tokenSymbol", "USDt")
+                        .append("tokenName", "TetherToken")
+                        .append("tokenDecimal", "6")
+                        .append("from", WALLET)
+                        .append("to", veloraRouter)
+                        .append("value", "5331168"),
+                new Document("contractAddress", TOKEN_A)
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenName", "USD Coin")
+                        .append("tokenDecimal", "6")
+                        .append("from", "0x2c6bea966e83dff8619e54fd819da727ed5102e1")
+                        .append("to", WALLET)
+                        .append("value", "5330533")
+        )).append("internalTransfers", List.of()));
+        when(protocolRegistryService.lookup(NetworkId.AVALANCHE, veloraRouter))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        veloraRouter,
+                        Set.of(NetworkId.ARBITRUM, NetworkId.AVALANCHE),
+                        ProtocolRegistryFamily.AGGREGATOR,
+                        ProtocolRegistryRole.ROUTER,
+                        ProtocolRegistryEventType.SWAP,
+                        ConfidenceLevel.HIGH,
+                        "Velora/ParaSwap",
+                        "V6.2",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.SWAP);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.PROTOCOL_REGISTRY);
+        assertThat(result.protocolName()).isEqualTo("Velora/ParaSwap");
+        assertThat(result.flows())
+                .extracting(NormalizedTransaction.Flow::getRole, NormalizedTransaction.Flow::getAssetSymbol)
+                .containsExactlyInAnyOrder(
+                        tuple(NormalizedLegRole.SELL, "USDt"),
+                        tuple(NormalizedLegRole.BUY, "USDC"),
+                        tuple(NormalizedLegRole.FEE, "AVAX")
+                );
     }
 
     @Test
@@ -4254,6 +5110,45 @@ class OnChainClassifierTest {
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.LP_ENTRY);
         assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        // Vault tx 0x67f4e9e1... also mints SushiSwap V3 NFT tokenId 36201 (0x8d69) from a
+        // different contract than tx.to. The correlationId must be keyed by the NFPM contract
+        // and the tokenId so it matches the LP_EXIT which burns the same NFT.
+        assertThat(result.correlationId())
+                .isEqualTo("lp-position:katana:0x2659c6085d26144117d904c46b48b6d180393d27:36201");
+    }
+
+    @Test
+    @DisplayName("routeSingle with token transfers but no full receipt becomes PENDING_CLARIFICATION")
+    void routeSingleWithTransfersButNoFullReceiptBecomesLpEntryPendingClarification() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.KATANA);
+        rawTransaction.setTxHash("0x67f4e9e1767850c427920a1238903ed6fc56e6cadd4d3defcacc7a99e1329499");
+        rawTransaction.getRawData().put("to", "0x3067bdba0e6628497d527bef511c22da8b32ca3f");
+        rawTransaction.getRawData().put("methodId", "0xb94c3609");
+        rawTransaction.getRawData().put("functionName", "routeSingle(tuple tokenIn,bytes data)");
+        rawTransaction.getRawData().put("value", "450000000000000000");
+        // Token transfers clarification present (second normalization pass) but full receipt
+        // has NOT been fetched yet — simulates the state after a reset when the token transfer
+        // evidence was re-fetched but the NFT mint log (from the underlying SushiSwap V3 NFPM)
+        // is only available in the full receipt.
+        rawTransaction.setClarificationEvidence(new Document()
+                .append("transfers", new Document("tokenTransfers", List.of(
+                        new Document("contractAddress", TOKEN_A)
+                                .append("tokenSymbol", "vbUSDC")
+                                .append("tokenName", "vbUSDC")
+                                .append("tokenDecimal", "6")
+                                .append("from", COUNTERPARTY)
+                                .append("to", WALLET)
+                                .append("value", "2")
+                ))));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.LP_ENTRY);
+        // The vault correlationId must NOT be committed before the full receipt is fetched.
+        // Without the receipt the underlying NFPM ERC-721 mint is invisible.
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_CLARIFICATION);
+        assertThat(result.missingDataReasons())
+                .contains(ClassificationReasonCode.LP_POSITION_CORRELATION_REQUIRED.code());
     }
 
     @Test
@@ -4675,14 +5570,28 @@ class OnChainClassifierTest {
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.UNWRAP);
         assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.METHOD_ID);
-        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
     }
 
     @Test
     @DisplayName("route-tagged LI.FI diamond call becomes BRIDGE_OUT")
     void routeTaggedLifiDiamondCallBecomesBridgeOut() {
+        String mantleProxy = "0xbdff0c1c8b0b779581c4ac3ba1f29667c366c56e";
+        when(protocolRegistryService.lookup(NetworkId.MANTLE, mantleProxy))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        mantleProxy,
+                        Set.of(NetworkId.MANTLE),
+                        ProtocolRegistryFamily.BRIDGE,
+                        ProtocolRegistryRole.BRIDGE_ENTRY,
+                        ProtocolRegistryEventType.BRIDGE_OUT,
+                        ConfidenceLevel.HIGH,
+                        "LI.FI",
+                        "V1",
+                        false,
+                        null
+                )));
         RawTransaction rawTransaction = baseRaw(NetworkId.MANTLE);
-        rawTransaction.getRawData().put("to", "0xbdff0c1c8b0b779581c4ac3ba1f29667c366c56e");
+        rawTransaction.getRawData().put("to", mantleProxy);
         rawTransaction.getRawData().put("methodId", "0xd7a08473");
         rawTransaction.getRawData().put("functionName",
                 "callDiamondWithEIP2612Signature(address tokenAddress,uint256 amount,uint256 deadline,uint8 v,bytes32 r,bytes32 s,bytes diamondCalldata)");
@@ -4692,7 +5601,7 @@ class OnChainClassifierTest {
                         .append("tokenSymbol", "USDC")
                         .append("tokenDecimal", "6")
                         .append("from", WALLET)
-                        .append("to", "0xbdff0c1c8b0b779581c4ac3ba1f29667c366c56e")
+                        .append("to", mantleProxy)
                         .append("value", "1000000")
         )).append("internalTransfers", List.of()));
 
@@ -4701,6 +5610,38 @@ class OnChainClassifierTest {
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.BRIDGE_OUT);
         assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.HEURISTIC);
         assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+    }
+
+    @Test
+    @DisplayName("route-tagged LI.FI diamond with same-tx inbound leg becomes SWAP not BRIDGE_OUT")
+    void liFiRouteWithSameTxInboundLegBecomesSwapNotBridgeOut() {
+        String usde = "0x5d3a1ff2b6bab83b63cd9ad0787074081a52ef34";
+        String usdc = "0x09bc4e0d864854c6afb6eb9a9cdf58ac190d0df9";
+        String mantleProxy = "0xbdff0c1c8b0b779581c4ac3ba1f29667c366c56e";
+        RawTransaction rawTransaction = baseRaw(NetworkId.MANTLE);
+        rawTransaction.getRawData().put("to", mantleProxy);
+        rawTransaction.getRawData().put("methodId", "0xd7a08473");
+        rawTransaction.getRawData().put("functionName",
+                "callDiamondWithEIP2612Signature(address tokenAddress,uint256 amount,uint256 deadline,uint8 v,bytes32 r,bytes32 s,bytes diamondCalldata)");
+        rawTransaction.getRawData().put("input", "0xd7a08473" + asciiHex("jumper.exchange|lifiadapter"));
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", usde)
+                        .append("tokenSymbol", "USDe")
+                        .append("tokenDecimal", "18")
+                        .append("from", WALLET)
+                        .append("to", mantleProxy)
+                        .append("value", "2500000000000000000000"),
+                new Document("contractAddress", usdc)
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenDecimal", "6")
+                        .append("from", mantleProxy)
+                        .append("to", WALLET)
+                        .append("value", "2498349904")
+        )).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.SWAP);
     }
 
     @Test
@@ -4754,7 +5695,7 @@ class OnChainClassifierTest {
                         ProtocolRegistryRole.BRIDGE_ENTRY,
                         null,
                         ConfidenceLevel.HIGH,
-                        "LiFi",
+                        "LI.FI",
                         "V1",
                         false,
                         null
@@ -4786,7 +5727,7 @@ class OnChainClassifierTest {
                         ProtocolRegistryRole.BRIDGE_ENTRY,
                         null,
                         ConfidenceLevel.HIGH,
-                        "LiFi",
+                        "LI.FI",
                         "V1",
                         false,
                         null
@@ -5710,8 +6651,8 @@ class OnChainClassifierTest {
         OnChainClassificationResult result = classifier.classify(rawTransaction);
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.LP_ENTRY_SETTLEMENT);
-        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_CLARIFICATION);
-        assertThat(result.missingDataReasons()).contains("GMX_DEPOSIT_SETTLEMENT_CORRELATION_REQUIRED");
+        assertThat(result.correlationId()).isEqualTo("gmx-lp:arbitrum:weth-usdc");
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
     }
 
     @Test
@@ -5751,7 +6692,7 @@ class OnChainClassifierTest {
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.LP_ENTRY_SETTLEMENT);
         assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
-        assertThat(result.correlationId()).isEqualTo("0x395f6f1dc755f00d492b144a2fcb74f2e084fe5f842ae11b89fe1c6b140268f2");
+        assertThat(result.correlationId()).isEqualTo("gmx-lp:arbitrum:weth-usdc");
         assertThat(result.protocolName()).isEqualTo("GMX");
     }
 
@@ -5799,7 +6740,7 @@ class OnChainClassifierTest {
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.LP_ENTRY_SETTLEMENT);
         assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
-        assertThat(result.correlationId()).isEqualTo("0xcae9309eacbae0ae8fb295bce2293b08c0b0c80624f60b2929d14a4a0176ff6f");
+        assertThat(result.correlationId()).isEqualTo("gmx-lp:arbitrum:weth-usdc");
         assertThat(result.protocolName()).isEqualTo("GMX");
     }
 
@@ -5943,6 +6884,148 @@ class OnChainClassifierTest {
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.ADMIN_CONFIG);
         assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
         assertThat(result.missingDataReasons()).contains("FEE_BEARING_CLAIM_ADMIN_ACTION");
+    }
+
+    @Test
+    @DisplayName("blockscout LP exit with partial wallet-scoped transfer evidence waits for receipt clarification")
+    void blockscoutLpExitWithPartialWalletScopedTransferEvidenceWaitsForReceiptClarification() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.BASE);
+        rawTransaction.setTxHash("0x6b57e6439d1bcde7faaff2f43498ef97be9e696f889aeef2b2cc68fa2a5a1cf3");
+        rawTransaction.setId(rawTransaction.getTxHash() + ":" + NetworkId.BASE.name() + ":" + WALLET);
+        rawTransaction.setSyncMethod(com.walletradar.domain.transaction.raw.RawSyncMethod.BLOCKSCOUT);
+        rawTransaction.getRawData().put("from", WALLET);
+        rawTransaction.getRawData().put("to", "0x46a15b0b27311cedf172ab29e4f4766fbe7f4364");
+        rawTransaction.getRawData().put("methodId", "0x");
+        rawTransaction.getRawData().put("functionName", null);
+        rawTransaction.getRawData().put(
+                "input",
+                "0xac9650d8"
+                        + "0000000000000000000000000000000000000000000000000000000000000020"
+                        + "0000000000000000000000000000000000000000000000000000000000000004"
+                        + "0000000000000000000000000000000000000000000000000000000000000080"
+                        + "0000000000000000000000000000000000000000000000000000000000000160"
+                        + "0000000000000000000000000000000000000000000000000000000000000220"
+                        + "00000000000000000000000000000000000000000000000000000000000002a0"
+                        + "000000000000000000000000000000000000000000000000000000000000000a"
+                        + "40c49ccbe"
+                        + "00000000000000000000000000000000000000000000000000000000000747a8"
+                        + "0000000000000000000000000000000000000000000000000000000000000000"
+                        + "0000000000000000000000000000000000000000000000000000000000000084"
+                        + "fc6f7865"
+                        + "0000000000000000000000000000000000000000000000000000000000000747a8"
+        );
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913")
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenDecimal", "6")
+                        .append("from", "0x46a15b0b27311cedf172ab29e4f4766fbe7f4364")
+                        .append("to", WALLET)
+                        .append("value", "9948876")
+        )).append("internalTransfers", List.of()));
+        when(protocolRegistryService.lookup(NetworkId.BASE, "0x46a15b0b27311cedf172ab29e4f4766fbe7f4364"))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        "0x46a15b0b27311cedf172ab29e4f4766fbe7f4364",
+                        Set.of(NetworkId.BASE),
+                        ProtocolRegistryFamily.DEX,
+                        ProtocolRegistryRole.POSITION_MANAGER,
+                        null,
+                        ConfidenceLevel.HIGH,
+                        "PancakeSwap",
+                        "V3",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.LP_EXIT);
+        assertThat(result.protocolName()).isEqualTo("PancakeSwap");
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_CLARIFICATION);
+        assertThat(result.missingDataReasons())
+                .contains(ClassificationReasonCode.NATIVE_SETTLEMENT_TRANSFER_EVIDENCE_REQUIRED.code());
+    }
+
+    @Test
+    @DisplayName("blockscout LP exit with clarified internal settlement recovers native transfer leg")
+    void blockscoutLpExitWithClarifiedInternalSettlementRecoversNativeTransferLeg() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.BASE);
+        rawTransaction.setTxHash("0x6b57e6439d1bcde7faaff2f43498ef97be9e696f889aeef2b2cc68fa2a5a1cf3");
+        rawTransaction.setId(rawTransaction.getTxHash() + ":" + NetworkId.BASE.name() + ":" + WALLET);
+        rawTransaction.setSyncMethod(com.walletradar.domain.transaction.raw.RawSyncMethod.BLOCKSCOUT);
+        rawTransaction.getRawData().put("from", WALLET);
+        rawTransaction.getRawData().put("to", "0x46a15b0b27311cedf172ab29e4f4766fbe7f4364");
+        rawTransaction.getRawData().put("methodId", "0x");
+        rawTransaction.getRawData().put("functionName", null);
+        rawTransaction.getRawData().put(
+                "input",
+                "0xac9650d8"
+                        + "0000000000000000000000000000000000000000000000000000000000000020"
+                        + "0000000000000000000000000000000000000000000000000000000000000004"
+                        + "0000000000000000000000000000000000000000000000000000000000000080"
+                        + "0000000000000000000000000000000000000000000000000000000000000160"
+                        + "0000000000000000000000000000000000000000000000000000000000000220"
+                        + "00000000000000000000000000000000000000000000000000000000000002a0"
+                        + "000000000000000000000000000000000000000000000000000000000000000a"
+                        + "40c49ccbe"
+                        + "00000000000000000000000000000000000000000000000000000000000747a8"
+                        + "0000000000000000000000000000000000000000000000000000000000000000"
+                        + "0000000000000000000000000000000000000000000000000000000000000084"
+                        + "fc6f7865"
+                        + "0000000000000000000000000000000000000000000000000000000000000747a8"
+        );
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913")
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenDecimal", "6")
+                        .append("from", "0x46a15b0b27311cedf172ab29e4f4766fbe7f4364")
+                        .append("to", WALLET)
+                        .append("value", "9948876")
+        )).append("internalTransfers", List.of()));
+        rawTransaction.setClarificationEvidence(new Document()
+                .append("fullReceiptClarificationAttempts", 1)
+                .append("transfers", new Document()
+                        .append("tokenTransfers", List.of(
+                                new Document("contractAddress", "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913")
+                                        .append("tokenSymbol", "USDC")
+                                        .append("tokenDecimal", "6")
+                                        .append("from", "0x46a15b0b27311cedf172ab29e4f4766fbe7f4364")
+                                        .append("to", WALLET)
+                                        .append("value", "9948876")
+                        ))
+                        .append("internalTransfers", List.of(
+                                new Document("from", "0x46a15b0b27311cedf172ab29e4f4766fbe7f4364")
+                                        .append("to", WALLET)
+                                        .append("value", "546279273895213849")
+                                        .append("isError", "0")
+                        ))));
+        when(protocolRegistryService.lookup(NetworkId.BASE, "0x46a15b0b27311cedf172ab29e4f4766fbe7f4364"))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        "0x46a15b0b27311cedf172ab29e4f4766fbe7f4364",
+                        Set.of(NetworkId.BASE),
+                        ProtocolRegistryFamily.DEX,
+                        ProtocolRegistryRole.POSITION_MANAGER,
+                        null,
+                        ConfidenceLevel.HIGH,
+                        "PancakeSwap",
+                        "V3",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.LP_EXIT);
+        assertThat(result.protocolName()).isEqualTo("PancakeSwap");
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        assertThat(result.missingDataReasons()).doesNotContain(
+                ClassificationReasonCode.NATIVE_SETTLEMENT_TRANSFER_EVIDENCE_REQUIRED.code()
+        );
+        assertThat(result.flows()).filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
+                .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getQuantityDelta())
+                .containsExactlyInAnyOrder(
+                        "USDC:9.948876",
+                        "ETH:0.546279273895213849"
+                );
     }
 
     @Test
@@ -6113,10 +7196,13 @@ class OnChainClassifierTest {
         assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.METHOD_ID);
         assertThat(result.protocolName()).isEqualTo("Aave");
         assertThat(result.flows()).filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
-                .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getQuantityDelta().stripTrailingZeros().toPlainString())
+                .extracting(flow -> flow.getAssetSymbol()
+                        + ":" + flow.getRole()
+                        + ":" + flow.getQuantityDelta().stripTrailingZeros().toPlainString())
                 .containsExactlyInAnyOrder(
-                        "WETH:-0.966986134250302027",
-                        "aZksWETH:0.96698658724837732"
+                        "WETH:TRANSFER:-0.966986134250302027",
+                        "aZksWETH:TRANSFER:0.966986134250302027",
+                        "aZksWETH:BUY:0.000000452998075293"
                 );
     }
 
@@ -6161,6 +7247,157 @@ class OnChainClassifierTest {
         OnChainClassificationResult result = classifier.classify(rawTransaction);
 
         assertThat(result.type()).isNotEqualTo(NormalizedTransactionType.LENDING_DEPOSIT);
+    }
+
+    @Test
+    @DisplayName("Avalanche Aave Pool multicall supply with aToken mint classifies as lending deposit")
+    void avalancheAavePoolMulticallSupplyWithATokenMintClassifiesAsLendingDeposit() {
+        String aavePool = "0x794a61358d6845594f94dc1db02a252b5b4814ad";
+        String aAvaUsdc = "0x625e7708f30ca75bfd92586e17077590c60eb4cd";
+        String usdc = "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e";
+        RawTransaction rawTransaction = baseRaw(NetworkId.AVALANCHE);
+        rawTransaction.setTxHash("0xa8d4603640f06d9b2040b11368e6b2a8ebb61f96bc120d8b47dce4684b2a0c04");
+        rawTransaction.getRawData().put("to", aavePool);
+        rawTransaction.getRawData().put("methodId", "0xac9650d8");
+        rawTransaction.getRawData().put("functionName", "multicall(bytes[] data) payable returns (bytes[] results)");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", usdc)
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenDecimal", "6")
+                        .append("from", WALLET)
+                        .append("to", aAvaUsdc)
+                        .append("value", "401429002"),
+                new Document("contractAddress", aAvaUsdc)
+                        .append("tokenSymbol", "aAvaUSDC")
+                        .append("tokenDecimal", "6")
+                        .append("from", "0x0000000000000000000000000000000000000000")
+                        .append("to", WALLET)
+                        .append("value", "401429001")
+        )).append("internalTransfers", List.of()));
+        when(protocolRegistryService.lookup(NetworkId.AVALANCHE, aavePool))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        aavePool,
+                        Set.of(NetworkId.AVALANCHE),
+                        ProtocolRegistryFamily.LENDING,
+                        ProtocolRegistryRole.POOL,
+                        ProtocolRegistryEventType.LENDING_DEPOSIT,
+                        ConfidenceLevel.HIGH,
+                        "Aave",
+                        "V3",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.LENDING_DEPOSIT);
+        assertThat(result.protocolName()).isEqualTo("Aave");
+        assertThat(result.flows()).filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
+                .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getQuantityDelta().stripTrailingZeros().toPlainString())
+                .containsExactlyInAnyOrder(
+                        "USDC:-401.429002",
+                        "aAvaUSDC:401.429001"
+                );
+    }
+
+    @Test
+    @DisplayName("Base Aave depositETH resolves to lending deposit from calldata selector fallback")
+    void baseAaveDepositEthResolvesToLendingDepositFromCalldataSelectorFallback() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.BASE);
+        rawTransaction.setTxHash("0x6b252bf689d6fbd0afde82b633dd5079210422d1de4e75bb109a42fb2d73865b");
+        rawTransaction.getRawData().put("to", "0xa0d9c1e9e48ca30c8d8c3b5d69ff5dc1f6dffc24");
+        rawTransaction.getRawData().put("methodId", "0x");
+        rawTransaction.getRawData().put(
+                "input",
+                "0x474cf53d000000000000000000000000a238dd80c259a72e81d7e4664a9801593f98d1c5"
+                        + "0000000000000000000000001111111111111111111111111111111111111111"
+                        + "0000000000000000000000000000000000000000000000000000000000000000"
+        );
+        rawTransaction.getRawData().put("value", "10699999999999999");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0xd4a0e0b9149bcee3c920d2e00b5de09138fd8bb7")
+                        .append("tokenSymbol", "AWETH")
+                        .append("tokenDecimal", "18")
+                        .append("from", "0x0000000000000000000000000000000000000000")
+                        .append("to", WALLET)
+                        .append("value", "10699999999999999")
+        )).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.LENDING_DEPOSIT);
+        assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.METHOD_ID);
+        assertThat(result.protocolName()).isEqualTo("Aave");
+        assertThat(result.flows()).filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
+                .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getQuantityDelta().stripTrailingZeros().toPlainString())
+                .containsExactlyInAnyOrder(
+                        "ETH:-0.010699999999999999",
+                        "AWETH:0.010699999999999999"
+                );
+    }
+
+    @Test
+    @DisplayName("Base Aave borrowETH resolves to borrow from debt-token mint evidence")
+    void baseAaveBorrowEthResolvesToBorrowFromDebtTokenMintEvidence() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.BASE);
+        rawTransaction.setTxHash("0x9a2e58011cbfb6eab7ce45f576464619041e7a336638e269705ed59a87706874");
+        rawTransaction.getRawData().put("to", "0xa0d9c1e9e48ca30c8d8c3b5d69ff5dc1f6dffc24");
+        rawTransaction.getRawData().remove("functionName");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0x29c7b714a0ab6b2e8ce9e7f2d7aa0dbd1d1adf95")
+                        .append("tokenSymbol", "variableDebtBasWETH")
+                        .append("tokenDecimal", "18")
+                        .append("functionName", "borrowETH(address arg0, uint256 amount, uint16 referralCode)")
+                        .append("from", "0x0000000000000000000000000000000000000000")
+                        .append("to", WALLET)
+                        .append("value", "100000000000000000")
+        )).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.BORROW);
+        assertThat(result.protocolName()).isEqualTo("Aave");
+        assertThat(result.protocolVersion()).isEqualTo("V3");
+        assertThat(result.flows()).filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
+                .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getRole())
+                .contains("variableDebtBasWETH:TRANSFER");
+    }
+
+    @Test
+    @DisplayName("Base Aave repayWithATokens resolves to repay instead of lending deposit")
+    void baseAaveRepayWithATokensResolvesToRepay() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.BASE);
+        rawTransaction.setTxHash("0xceacd8a8229d74366b0dd23b0afa8dcc77dcd11897fc9d416b22b23a21e7ddd3");
+        rawTransaction.getRawData().put("to", "0xa238dd80c259a72e81d7e4664a9801593f98d1c5");
+        rawTransaction.getRawData().remove("functionName");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0x29c7b714a0ab6b2e8ce9e7f2d7aa0dbd1d1adf95")
+                        .append("tokenSymbol", "variableDebtBasWETH")
+                        .append("tokenDecimal", "18")
+                        .append("functionName", "repayWithATokens(address asset, uint256 amount, uint256 interestRateMode)")
+                        .append("from", WALLET)
+                        .append("to", "0x0000000000000000000000000000000000000000")
+                        .append("value", "100000000000000000"),
+                new Document("contractAddress", "0xd4a0e0b9149bcee3c920d2e00b5de09138fd8bb7")
+                        .append("tokenSymbol", "AWETH")
+                        .append("tokenDecimal", "18")
+                        .append("functionName", "repayWithATokens(address asset, uint256 amount, uint256 interestRateMode)")
+                        .append("from", WALLET)
+                        .append("to", "0x0000000000000000000000000000000000000000")
+                        .append("value", "100000000000000000")
+        )).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.REPAY);
+        assertThat(result.protocolName()).isEqualTo("Aave");
+        assertThat(result.protocolVersion()).isEqualTo("V3");
+        assertThat(result.flows()).filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
+                .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getRole())
+                .containsExactlyInAnyOrder(
+                        "variableDebtBasWETH:TRANSFER",
+                        "AWETH:SELL"
+                );
     }
 
     @Test
@@ -6231,6 +7468,352 @@ class OnChainClassifierTest {
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.REPAY);
         assertThat(result.protocolName()).isNull();
+    }
+
+    @Test
+    @DisplayName("Fluid operatePerfect inbound stable debt classifies as borrow")
+    void fluidOperatePerfectInboundStableDebtClassifiesAsBorrow() {
+        String fluidVault = "0xf2c8f54447cbd591c396b0dd7ac15faf552d0fa4";
+        String fluidLiquidity = "0x52aa899454998be5b000ad077a46bbe360f4e497";
+        RawTransaction rawTransaction = baseRaw(NetworkId.PLASMA);
+        rawTransaction.setTxHash("0x2eea032240e639d08eade91429a225a1e4b7e9a5b15c214d074444fed65a0412");
+        rawTransaction.getRawData().put("to", fluidVault);
+        rawTransaction.getRawData().put("methodId", "0x0931bf2d");
+        rawTransaction.getRawData().put(
+                "functionName",
+                "operatePerfect(uint256 ,int256 ,int256 ,int256 ,int256 ,address to)"
+        );
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0xb8ce59fc3717ada4c02eadf9682a9e934f625ebb")
+                        .append("tokenSymbol", "USDT0")
+                        .append("tokenDecimal", "6")
+                        .append("from", fluidLiquidity)
+                        .append("to", WALLET)
+                        .append("value", "454819414")
+        )).append("internalTransfers", List.of()));
+        when(protocolRegistryService.lookup(NetworkId.PLASMA, fluidVault))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        fluidVault,
+                        Set.of(NetworkId.PLASMA),
+                        ProtocolRegistryFamily.LENDING,
+                        ProtocolRegistryRole.VAULT,
+                        null,
+                        ConfidenceLevel.HIGH,
+                        "Fluid",
+                        "V1",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.BORROW);
+        assertThat(result.protocolName()).isEqualTo("Fluid");
+        assertThat(result.flows()).filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
+                .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getRole())
+                .containsExactly("USDT0:BUY");
+    }
+
+    @Test
+    @DisplayName("Fluid operate collateral out and stable in classifies as lending loop open")
+    void fluidOperateCollateralOutAndStableInClassifiesAsLoopOpen() {
+        String fluidVault = "0x3e11b9aeb9c7dbbda4dd41477223cc2f3f24b9d7";
+        String fluidLiquidity = "0x52aa899454998be5b000ad077a46bbe360f4e497";
+        RawTransaction rawTransaction = baseRaw(NetworkId.ARBITRUM);
+        rawTransaction.setTxHash("0x7ffe5642b6d36963e184fb95666e96cb18b67b35fc79ff9565da97699954cb4b");
+        rawTransaction.getRawData().put("to", fluidVault);
+        rawTransaction.getRawData().put("methodId", "0x032d2276");
+        rawTransaction.getRawData().put("functionName", "operate(uint256 nftId_,int256 newCol_,int256 newDebt_,address to_)");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0x2a52b289ba68bbd02676640aa9f605700c9e5699")
+                        .append("tokenSymbol", "wstUSR")
+                        .append("tokenDecimal", "18")
+                        .append("from", WALLET)
+                        .append("to", fluidLiquidity)
+                        .append("value", "1959424764648563000000"),
+                new Document("contractAddress", "0xaf88d065e77c8cc2239327c5edb3a432268e5831")
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenDecimal", "6")
+                        .append("from", fluidLiquidity)
+                        .append("to", WALLET)
+                        .append("value", "1800000000")
+        )).append("internalTransfers", List.of()));
+        when(protocolRegistryService.lookup(NetworkId.ARBITRUM, fluidVault))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        fluidVault,
+                        Set.of(NetworkId.ARBITRUM),
+                        ProtocolRegistryFamily.LENDING,
+                        ProtocolRegistryRole.VAULT,
+                        null,
+                        ConfidenceLevel.HIGH,
+                        "Fluid",
+                        "V1",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.LENDING_LOOP_OPEN);
+        assertThat(result.protocolName()).isEqualTo("Fluid");
+        assertThat(result.flows()).filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
+                .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getRole())
+                .containsExactlyInAnyOrder("wstUSR:TRANSFER", "USDC:TRANSFER");
+    }
+
+    @Test
+    @DisplayName("Fluid vault operation wrapped in DSA cast uses decoded intent before transfer direction")
+    void fluidDsaCastWithNestedVaultUsesDecodedIntentBeforeTransferDirection() {
+        String dsa = "0x440cf1fe0b00d4d9f43cba534f9428b0facb795c";
+        String fluidVault = "0xb4f3bf2d96139563777c0231899ce06ee95cc946";
+        RawTransaction rawTransaction = baseRaw(NetworkId.PLASMA);
+        rawTransaction.setTxHash("0x01ca68421e0a8903e7178c2e7c6d0c9814befb2d837a6a0bff84153ab10063f7");
+        rawTransaction.getRawData().put("to", dsa);
+        rawTransaction.getRawData().put("methodId", "0x57b7bf20");
+        rawTransaction.getRawData().put("functionName", "cast(tuple[] actions_)");
+        rawTransaction.getRawData().put("input", "0x57b7bf20" + paddedAddress(fluidVault));
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0xb8ce59fc3717ada4c02eadf9682a9e934f625ebb")
+                        .append("tokenSymbol", "USDT0")
+                        .append("tokenDecimal", "6")
+                        .append("from", WALLET)
+                        .append("to", dsa)
+                        .append("value", "496366838")
+        )).append("internalTransfers", List.of()));
+        when(protocolRegistryService.lookup(NetworkId.PLASMA, dsa)).thenReturn(Optional.empty());
+        when(protocolRegistryService.lookup(NetworkId.PLASMA, fluidVault))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        fluidVault,
+                        Set.of(NetworkId.PLASMA),
+                        ProtocolRegistryFamily.LENDING,
+                        ProtocolRegistryRole.VAULT,
+                        null,
+                        ConfidenceLevel.HIGH,
+                        "Fluid",
+                        "V1",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.LENDING_LOOP_OPEN);
+        assertThat(result.protocolName()).isEqualTo("Fluid");
+        assertThat(result.flows()).filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
+                .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getRole())
+                .containsExactly("USDT0:TRANSFER");
+    }
+
+    @Test
+    @DisplayName("Fluid vault operation wrapped in NFT safeTransferFrom does not classify inbound stable as borrow")
+    void fluidSafeTransferPayloadWithNestedVaultDoesNotClassifyInboundStableAsBorrow() {
+        String fluidVaultNft = "0x324c5dc1fc42c7a4d43d92df1eba58a54d13bf2d";
+        String dsa = "0x440cf1fe0b00d4d9f43cba534f9428b0facb795c";
+        String fluidVault = "0xf2c8f54447cbd591c396b0dd7ac15faf552d0fa4";
+        RawTransaction rawTransaction = baseRaw(NetworkId.PLASMA);
+        rawTransaction.setTxHash("0xbbba449a9cfa6120dd6fe95704e3eb0a9f6361a8cefca9c325b9664c58969ae4");
+        rawTransaction.getRawData().put("to", fluidVaultNft);
+        rawTransaction.getRawData().put("methodId", "0xb88d4fde");
+        rawTransaction.getRawData().put(
+                "functionName",
+                "safeTransferFrom(address from,address to,uint256 id,bytes data)"
+        );
+        rawTransaction.getRawData().put("input", "0xb88d4fde" + paddedAddress(fluidVault));
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0xb8ce59fc3717ada4c02eadf9682a9e934f625ebb")
+                        .append("tokenSymbol", "USDT0")
+                        .append("tokenDecimal", "6")
+                        .append("from", dsa)
+                        .append("to", WALLET)
+                        .append("value", "38249574")
+        )).append("internalTransfers", List.of()));
+        when(protocolRegistryService.lookup(NetworkId.PLASMA, fluidVaultNft)).thenReturn(Optional.empty());
+        when(protocolRegistryService.lookup(NetworkId.PLASMA, fluidVault))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        fluidVault,
+                        Set.of(NetworkId.PLASMA),
+                        ProtocolRegistryFamily.LENDING,
+                        ProtocolRegistryRole.VAULT,
+                        null,
+                        ConfidenceLevel.HIGH,
+                        "Fluid",
+                        "V1",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.LENDING_LOOP_DECREASE);
+        assertThat(result.protocolName()).isEqualTo("Fluid");
+        assertThat(result.flows()).filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
+                .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getRole())
+                .containsExactly("USDT0:TRANSFER");
+    }
+
+    @Test
+    @DisplayName("Unichain Compound V3 Comet classifies supply and non-base withdraw as Compound lending")
+    void unichainCompoundCometClassifiesSupplyAndWithdrawAsCompoundLending() {
+        String comet = "0x2c7118c4c88b9841fcf839074c26ae8f035f2921";
+        ProtocolRegistryEntry entry = new ProtocolRegistryEntry(
+                comet,
+                Set.of(NetworkId.UNICHAIN),
+                ProtocolRegistryFamily.LENDING,
+                ProtocolRegistryRole.POOL,
+                ProtocolRegistryEventType.LENDING_DEPOSIT,
+                ConfidenceLevel.HIGH,
+                "Compound",
+                "V3",
+                false,
+                null
+        );
+        when(protocolRegistryService.lookup(NetworkId.UNICHAIN, comet)).thenReturn(Optional.of(entry));
+
+        RawTransaction supply = baseRaw(NetworkId.UNICHAIN);
+        supply.setTxHash("0xe31f1ac65ba10a969db3b447af091b2172d422266df5c0c0d7b748ae413ad76b");
+        supply.getRawData().put("to", comet);
+        supply.getRawData().put("methodId", "0xf2b9fdb8");
+        supply.getRawData().put("functionName", "supply(address asset,uint256 amount)");
+        supply.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0x078d782b760474a361dda0af3839290b0ef57ad6")
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenDecimal", "6")
+                        .append("from", WALLET)
+                        .append("to", comet)
+                        .append("value", "62787753")
+        )).append("internalTransfers", List.of()));
+
+        RawTransaction withdraw = baseRaw(NetworkId.UNICHAIN);
+        withdraw.setTxHash("0x56f772e4ec46317b6fa8472d891c5b87a2f99ce6791edaa4891bde6448d2467d");
+        withdraw.getRawData().put("to", comet);
+        withdraw.getRawData().put("methodId", "0xf3fef3a3");
+        withdraw.getRawData().put("functionName", "withdraw(address asset,uint256 amount)");
+        withdraw.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", WRAPPED_NATIVE_PREDEPLOY)
+                        .append("tokenSymbol", "WETH")
+                        .append("tokenDecimal", "18")
+                        .append("from", comet)
+                        .append("to", WALLET)
+                        .append("value", "430603782")
+        )).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult supplyResult = classifier.classify(supply);
+        OnChainClassificationResult withdrawResult = classifier.classify(withdraw);
+
+        assertThat(supplyResult.type()).isEqualTo(NormalizedTransactionType.LENDING_DEPOSIT);
+        assertThat(supplyResult.protocolName()).isEqualTo("Compound");
+        assertThat(withdrawResult.type()).isEqualTo(NormalizedTransactionType.LENDING_WITHDRAW);
+        assertThat(withdrawResult.protocolName()).isEqualTo("Compound");
+    }
+
+    @Test
+    @DisplayName("Unichain Compound Bulker borrow-open bundle is not normalized as a swap")
+    void unichainCompoundBulkerBorrowOpenBundleIsLendingLoopOpen() {
+        String bulker = "0x58ebb8db8b4fdf2dcbbb16e04c2f5b952963b514";
+        String comet = "0x2c7118c4c88b9841fcf839074c26ae8f035f2921";
+        when(protocolRegistryService.lookup(NetworkId.UNICHAIN, bulker))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        bulker,
+                        Set.of(NetworkId.UNICHAIN),
+                        ProtocolRegistryFamily.LENDING,
+                        ProtocolRegistryRole.ROUTER,
+                        null,
+                        ConfidenceLevel.HIGH,
+                        "Compound",
+                        "V3",
+                        false,
+                        null
+                )));
+
+        RawTransaction rawTransaction = baseRaw(NetworkId.UNICHAIN);
+        rawTransaction.setTxHash("0xcb8483b852ac481b55cb9faa4eb6259a04da68a5e3340c79768686dbc8920b94");
+        rawTransaction.getRawData().put("from", WALLET);
+        rawTransaction.getRawData().put("to", bulker);
+        rawTransaction.getRawData().put("value", "919170497571836978");
+        rawTransaction.getRawData().put("methodId", "0x555029a6");
+        rawTransaction.getRawData().put("functionName", "");
+        rawTransaction.getRawData().put(
+                "input",
+                "0x555029a6"
+                        + asciiHex("ACTION_SUPPLY_NATIVE_TOKEN")
+                        + asciiHex("ACTION_WITHDRAW_ASSET")
+                        + paddedAddress(comet)
+        );
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0x078d782b760474a361dda0af3839290b0ef57ad6")
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenDecimal", "6")
+                        .append("from", comet)
+                        .append("to", WALLET)
+                        .append("value", "2050000000")
+        )).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.LENDING_LOOP_OPEN);
+        assertThat(result.protocolName()).isEqualTo("Compound");
+        assertThat(result.matchedCounterparty()).isEqualTo(comet);
+        assertThat(result.flows()).filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
+                .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getQuantityDelta())
+                .contains("USDC:2050.000000", "ETH:-0.919170497571836978");
+    }
+
+    @Test
+    @DisplayName("Paradex withdraw selector collision does not classify as lending")
+    void paradexWithdrawSelectorDoesNotClassifyAsLendingWithdraw() {
+        String paradexCore = "0xe3cbe3a636ab6a754e9e41b12b09d09ce9e53db3";
+        RawTransaction rawTransaction = baseRaw(NetworkId.ETHEREUM);
+        rawTransaction.setTxHash("0xc7aa483f0805a3548ff61a250209059ae8a91e28d172fcf0e8daf8f55d8a68ee");
+        rawTransaction.getRawData().put("to", paradexCore);
+        rawTransaction.getRawData().put("methodId", "0x69328dec");
+        rawTransaction.getRawData().put("functionName", "withdraw(address token, uint256 amount, address destination)");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenDecimal", "6")
+                        .append("from", paradexCore)
+                        .append("to", WALLET)
+                        .append("value", "1266468083")
+        )).append("internalTransfers", List.of()));
+        when(protocolRegistryService.lookup(NetworkId.ETHEREUM, paradexCore))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        paradexCore,
+                        Set.of(NetworkId.ETHEREUM),
+                        ProtocolRegistryFamily.CUSTODY,
+                        ProtocolRegistryRole.BRIDGE_ENTRY,
+                        ProtocolRegistryEventType.PROTOCOL_CUSTODY_WITHDRAW,
+                        ConfidenceLevel.HIGH,
+                        "Paradex",
+                        "L1",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.PROTOCOL_CUSTODY_WITHDRAW);
+        assertThat(result.type()).isNotEqualTo(NormalizedTransactionType.LENDING_WITHDRAW);
+        assertThat(result.protocolName()).isEqualTo("Paradex");
+    }
+
+    @Test
+    @DisplayName("Aave withdraw selector requires verified lending contract evidence")
+    void aaveWithdrawSelectorRequiresVerifiedLendingContract() {
+        RawTransaction rawTransaction = baseRaw(NetworkId.ETHEREUM);
+        rawTransaction.getRawData().put("methodId", "0x69328dec");
+        rawTransaction.getRawData().put("functionName", "withdraw(address token, uint256 amount, address destination)");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")
+                        .append("tokenSymbol", "USDC")
+                        .append("tokenDecimal", "6")
+                        .append("from", COUNTERPARTY)
+                        .append("to", WALLET)
+                        .append("value", "1000000")
+        )).append("internalTransfers", List.of()));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isNotEqualTo(NormalizedTransactionType.LENDING_WITHDRAW);
     }
 
     @Test
@@ -6373,6 +7956,79 @@ class OnChainClassifierTest {
         return rawTransaction;
     }
 
+    @Test
+    @DisplayName("Relay depository startBridgeTokensViaRelayDepository on Katana classifies as BRIDGE_OUT")
+    void relayDepositoryKatanaBridgeOut() {
+        String depository = "0xc59fe32c9549e3e8b5dccdabc45bd287bd5ba2bc";
+        RawTransaction rawTransaction = baseRaw(NetworkId.KATANA);
+        rawTransaction.setTxHash("0x18075f1e8dd52bd84b3b3f30ad7386368824085ca02a7d55fbd4146bcd5fbf47");
+        rawTransaction.getRawData().put("to", depository);
+        rawTransaction.getRawData().put("methodId", "0x092e8fa4");
+        rawTransaction.getRawData().put("value", "2256412857954226");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of())
+                .append("internalTransfers", List.of(
+                        new Document("from", WALLET)
+                                .append("to", depository)
+                                .append("value", "2256412857954226")
+                                .append("isError", "0")
+                )));
+        when(protocolRegistryService.lookup(NetworkId.KATANA, depository))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        depository,
+                        Set.of(NetworkId.KATANA),
+                        ProtocolRegistryFamily.BRIDGE,
+                        ProtocolRegistryRole.BRIDGE_ENTRY,
+                        ProtocolRegistryEventType.BRIDGE_OUT,
+                        ConfidenceLevel.HIGH,
+                        "Relay",
+                        "Depository",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.BRIDGE_OUT);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        assertThat(result.protocolName()).isEqualTo("Relay");
+    }
+
+    @Test
+    @DisplayName("Relay solver payout inbound on Arbitrum classifies as BRIDGE_IN")
+    void relaySolverPayoutArbitrumBridgeIn() {
+        String relaySolver = "0xf70da97812cb96acdf810712aa562db8dfa3dbef";
+        RawTransaction rawTransaction = baseRaw(NetworkId.ARBITRUM);
+        rawTransaction.setTxHash("0x6b659e2f8c26abb85612b64e61f7b40b27439da9e8852a875be9d2f7517f62f7");
+        rawTransaction.getRawData().put("from", relaySolver);
+        rawTransaction.getRawData().put("to", WALLET);
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of())
+                .append("internalTransfers", List.of(
+                        new Document("from", relaySolver)
+                                .append("to", WALLET)
+                                .append("value", "2243255327040116")
+                                .append("isError", "0")
+                )));
+        when(protocolRegistryService.lookup(NetworkId.ARBITRUM, relaySolver))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        relaySolver,
+                        Set.of(NetworkId.ARBITRUM),
+                        ProtocolRegistryFamily.AGGREGATOR,
+                        ProtocolRegistryRole.GAS_PAYER,
+                        null,
+                        ConfidenceLevel.HIGH,
+                        "Relay",
+                        "Solver",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.BRIDGE_IN);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        assertThat(result.protocolName()).isEqualTo("Relay");
+    }
+
     private static RawTransaction baseRaw(NetworkId networkId) {
         RawTransaction rawTransaction = new RawTransaction();
         rawTransaction.setId("0xabc:" + networkId.name() + ":" + WALLET);
@@ -6390,6 +8046,81 @@ class OnChainClassifierTest {
                 .append("gasPrice", "50000000000")
                 .append("explorer", new Document("tokenTransfers", List.of()).append("internalTransfers", List.of())));
         return rawTransaction;
+    }
+
+    private static String uniswapV4ModifyLiquiditiesInput42775Entry() {
+        return "0xdd46508f0000000000000000000000000000000000000000000000000000000000000040"
+                + "00000000000000000000000000000000000000000000000000000000680102a6"
+                + "00000000000000000000000000000000000000000000000000000000000002a0"
+                + "0000000000000000000000000000000000000000000000000000000000000040"
+                + "0000000000000000000000000000000000000000000000000000000000000080"
+                + "0000000000000000000000000000000000000000000000000000000000000003"
+                + "000d140000000000000000000000000000000000000000000000000000000000"
+                + "0000000000000000000000000000000000000000000000000000000000000003"
+                + "0000000000000000000000000000000000000000000000000000000000000060"
+                + "0000000000000000000000000000000000000000000000000000000000000140"
+                + "00000000000000000000000000000000000000000000000000000000000001a0"
+                + "00000000000000000000000000000000000000000000000000000000000000c0"
+                + "000000000000000000000000000000000000000000000000000000000000a717"
+                + "000000000000000000000000000000000000000000000000000006c00555d885"
+                + "0000000000000000000000000000000000000000000000000148273206d3ffa5"
+                + "0000000000000000000000000000000000000000000000000000000007628596"
+                + "00000000000000000000000000000000000000000000000000000000000000a0"
+                + "0000000000000000000000000000000000000000000000000000000000000000"
+                + "0000000000000000000000000000000000000000000000000000000000000040"
+                + "0000000000000000000000000000000000000000000000000000000000000000"
+                + "0000000000000000000000009151434b16b9763660705744891fa906f660ecc5"
+                + "0000000000000000000000000000000000000000000000000000000000000040"
+                + "0000000000000000000000000000000000000000000000000000000000000000"
+                + "0000000000000000000000000000000000000000000000000000000000000001";
+    }
+
+    private static String uniswapV4ModifyLiquiditiesInput42775Exit() {
+        return "0xdd46508f0000000000000000000000000000000000000000000000000000000000000040"
+                + "00000000000000000000000000000000000000000000000000000000680132e8"
+                + "0000000000000000000000000000000000000000000000000000000000000240"
+                + "0000000000000000000000000000000000000000000000000000000000000040"
+                + "0000000000000000000000000000000000000000000000000000000000000080"
+                + "0000000000000000000000000000000000000000000000000000000000000002"
+                + "0111000000000000000000000000000000000000000000000000000000000000"
+                + "0000000000000000000000000000000000000000000000000000000000000002"
+                + "0000000000000000000000000000000000000000000000000000000000000040"
+                + "0000000000000000000000000000000000000000000000000000000000000120"
+                + "00000000000000000000000000000000000000000000000000000000000000c0"
+                + "000000000000000000000000000000000000000000000000000000000000a717"
+                + "000000000000000000000000000000000000000000000000000033c04e004746"
+                + "000000000000000000000000000000000000000000000000095058f2d83fbb0d"
+                + "00000000000000000000000000000000000000000000000000000000355d00ae"
+                + "00000000000000000000000000000000000000000000000000000000000000a0"
+                + "0000000000000000000000000000000000000000000000000000000000000000"
+                + "0000000000000000000000000000000000000000000000000000000000000060"
+                + "0000000000000000000000000000000000000000000000000000000000000000"
+                + "0000000000000000000000009151434b16b9763660705744891fa906f660ecc5"
+                + "0000000000000000000000000000000000000000000000000000000000000001";
+    }
+
+    private static String uniswapV4ModifyLiquiditiesInput44341Exit() {
+        return "0xdd46508f0000000000000000000000000000000000000000000000000000000000000040"
+                + "0000000000000000000000000000000000000000000000000000000068014186"
+                + "0000000000000000000000000000000000000000000000000000000000000240"
+                + "0000000000000000000000000000000000000000000000000000000000000040"
+                + "0000000000000000000000000000000000000000000000000000000000000080"
+                + "0000000000000000000000000000000000000000000000000000000000000002"
+                + "0111000000000000000000000000000000000000000000000000000000000000"
+                + "0000000000000000000000000000000000000000000000000000000000000002"
+                + "0000000000000000000000000000000000000000000000000000000000000040"
+                + "0000000000000000000000000000000000000000000000000000000000000120"
+                + "00000000000000000000000000000000000000000000000000000000000000c0"
+                + "000000000000000000000000000000000000000000000000000000000000ad35"
+                + "000000000000000000000000000000000000000000000000000039d74d8ef024"
+                + "00000000000000000000000000000000000000000000000009443d0a120f8b7f"
+                + "0000000000000000000000000000000000000000000000000000000035603fb1"
+                + "00000000000000000000000000000000000000000000000000000000000000a0"
+                + "0000000000000000000000000000000000000000000000000000000000000000"
+                + "0000000000000000000000000000000000000000000000000000000000000060"
+                + "0000000000000000000000000000000000000000000000000000000000000000"
+                + "0000000000000000000000009151434b16b9763660705744891fa906f660ecc5"
+                + "0000000000000000000000000000000000000000000000000000000000000001";
     }
 
     private static RawTransaction promoDistributionRaw(

@@ -1,0 +1,58 @@
+services:
+  mongodb-prod:
+    profiles:
+      - prod
+    image: mongo:7
+    container_name: walletradar-mongodb-prod
+    ports:
+      - "127.0.0.1:${WR_PROD_MONGODB_PORT:-27019}:27017"
+    volumes:
+      - mongodb_data_prod:/data/db
+    environment:
+      MONGO_INITDB_DATABASE: walletradar
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend-prod:
+    profiles:
+      - prod
+    build:
+      context: .
+      dockerfile: backend/Dockerfile.prod
+    container_name: walletradar-backend-prod
+    env_file:
+      - .env
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      MONGODB_URI: mongodb://mongodb-prod:27017/walletradar
+      SPRING_DATA_MONGODB_URI: mongodb://mongodb-prod:27017/walletradar
+      WALLETRADAR_SESSION_SECRETS_KEY_FILE: /run/secrets/walletradar/session-crypto.key
+      # Admin rebuild token: set in .env (env_file above); do not override with empty compose interpolation.
+    volumes:
+      - ./.secrets:/run/secrets/walletradar:ro
+    depends_on:
+      mongodb-prod:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${WR_PROD_BACKEND_PORT:-18086}:8080"
+    restart: unless-stopped
+
+  frontend-prod:
+    profiles:
+      - prod
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+    container_name: walletradar-frontend-prod
+    depends_on:
+      - backend-prod
+    ports:
+      - "127.0.0.1:${WR_PROD_FRONTEND_PORT:-14206}:80"
+    restart: unless-stopped
+
+volumes:
+  mongodb_data_prod:

@@ -12,6 +12,7 @@ import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegist
 import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryRole;
 import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryService;
 import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistrySpecialHandlerType;
+import com.walletradar.ingestion.pipeline.classification.lp.GmxMarketCorrelationSupport;
 import com.walletradar.ingestion.pipeline.classification.support.CalldataDecodingSupport;
 import com.walletradar.ingestion.pipeline.classification.support.CowSwapSupport;
 import com.walletradar.ingestion.pipeline.classification.support.GmxEventTopicSupport;
@@ -233,7 +234,7 @@ public class GmxProtocolSemanticClassifier implements ProtocolSemanticClassifier
                     SEMANTIC_LP_ENTRY_SETTLEMENT,
                     PROTOCOL_NAME,
                     PROTOCOL_VERSION,
-                    resolveGmxSettlementCorrelationId(view),
+                    resolveGmxSettlementCorrelationId(view, movementLegs),
                     NormalizedTransactionType.LP_ENTRY_SETTLEMENT,
                     com.walletradar.domain.common.ConfidenceLevel.MEDIUM
             ));
@@ -246,7 +247,7 @@ public class GmxProtocolSemanticClassifier implements ProtocolSemanticClassifier
                     SEMANTIC_LP_EXIT_SETTLEMENT,
                     PROTOCOL_NAME,
                     PROTOCOL_VERSION,
-                    resolveGmxWithdrawalSettlementCorrelationId(view),
+                    resolveGmxWithdrawalSettlementCorrelationId(view, movementLegs),
                     NormalizedTransactionType.LP_EXIT_SETTLEMENT,
                     com.walletradar.domain.common.ConfidenceLevel.MEDIUM
             ));
@@ -418,21 +419,31 @@ public class GmxProtocolSemanticClassifier implements ProtocolSemanticClassifier
         return firstGmxEventCorrelationId(view, "orderCancelled", "OrderCancelled");
     }
 
-    private String resolveGmxSettlementCorrelationId(OnChainRawTransactionView view) {
-        if (!view.hasFullReceiptClarificationEvidence()) {
-            return null;
+    private String resolveGmxSettlementCorrelationId(
+            OnChainRawTransactionView view,
+            List<RawLeg> movementLegs
+    ) {
+        if (view.hasFullReceiptClarificationEvidence()) {
+            String glvCorrelationId = firstGmxEventCorrelationIdByTopic(
+                    view,
+                    configuredEventTopics("glvDepositExecuted", "0x168af62e3da2e23e63dfeb41b97ea0feef3c7a45e72ebc59e924f19ae915f14e")
+            );
+            if (glvCorrelationId != null) {
+                return glvCorrelationId;
+            }
+            String depositCorrelationId = firstGmxEventCorrelationIdByTopic(
+                    view,
+                    configuredEventTopics("depositExecuted", "0x2856020a9644603d22d7b029b5649a55d708b88d9049150f146ac26c4107b880")
+            );
+            if (depositCorrelationId != null) {
+                return depositCorrelationId;
+            }
         }
-        String glvCorrelationId = firstGmxEventCorrelationIdByTopic(
-                view,
-                configuredEventTopics("glvDepositExecuted", "0x168af62e3da2e23e63dfeb41b97ea0feef3c7a45e72ebc59e924f19ae915f14e")
-        );
-        if (glvCorrelationId != null) {
-            return glvCorrelationId;
-        }
-        return firstGmxEventCorrelationIdByTopic(
-                view,
-                configuredEventTopics("depositExecuted", "0x2856020a9644603d22d7b029b5649a55d708b88d9049150f146ac26c4107b880")
-        );
+        // Return null when deposit key is unavailable: the classifier sets PENDING_CLARIFICATION so
+        // the receipt-clarification pipeline can fetch the DepositExecuted event and extract the
+        // per-deposit key that matches the paired LP_ENTRY_REQUEST. A market-slug fallback would
+        // produce a shared bucket key across all deposits to the same market and break AVCO replay.
+        return null;
     }
 
     private String resolveGmxWithdrawalRequestCorrelationId(OnChainRawTransactionView view) {
@@ -459,19 +470,33 @@ public class GmxProtocolSemanticClassifier implements ProtocolSemanticClassifier
         return null;
     }
 
-    private String resolveGmxWithdrawalSettlementCorrelationId(OnChainRawTransactionView view) {
-        if (!view.hasFullReceiptClarificationEvidence()) {
-            return null;
+    private String resolveGmxWithdrawalSettlementCorrelationId(
+            OnChainRawTransactionView view,
+            List<RawLeg> movementLegs
+    ) {
+        if (view.hasFullReceiptClarificationEvidence()) {
+            String glvCorrelationId = firstTrackedWalletGmxEventCorrelationId(
+                    view,
+                    "glvWithdrawalExecuted",
+                    "GlvWithdrawalExecuted"
+            );
+            if (glvCorrelationId != null) {
+                return glvCorrelationId;
+            }
+            String withdrawalCorrelationId = firstTrackedWalletGmxEventCorrelationId(
+                    view,
+                    "withdrawalExecuted",
+                    "WithdrawalExecuted"
+            );
+            if (withdrawalCorrelationId != null) {
+                return withdrawalCorrelationId;
+            }
         }
-        String glvCorrelationId = firstTrackedWalletGmxEventCorrelationId(
-                view,
-                "glvWithdrawalExecuted",
-                "GlvWithdrawalExecuted"
-        );
-        if (glvCorrelationId != null) {
-            return glvCorrelationId;
-        }
-        return firstTrackedWalletGmxEventCorrelationId(view, "withdrawalExecuted", "WithdrawalExecuted");
+        // Return null when withdrawal key is unavailable: the classifier sets PENDING_CLARIFICATION
+        // so the receipt-clarification pipeline can fetch the WithdrawalExecuted event and extract
+        // the per-withdrawal key. A market-slug fallback produces a shared bucket key across all
+        // withdrawals to the same market and would break AVCO replay.
+        return null;
     }
 
     private String firstGmxEventCorrelationId(

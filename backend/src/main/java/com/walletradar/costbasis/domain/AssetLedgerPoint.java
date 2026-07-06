@@ -19,16 +19,16 @@ import java.time.Instant;
 @Document(collection = "asset_ledger_points")
 @CompoundIndexes({
         @CompoundIndex(
-                name = "asset_ledger_wallet_family_order_idx",
-                def = "{'walletAddress': 1, 'accountingFamilyIdentity': 1, 'blockTimestamp': 1, 'transactionIndex': 1, 'replaySequence': 1}"
+                name = "asset_ledger_universe_family_order_idx",
+                def = "{'accountingUniverseId': 1, 'accountingFamilyIdentity': 1, 'blockTimestamp': 1, 'transactionIndex': 1, 'replaySequence': 1}"
         ),
         @CompoundIndex(
-                name = "asset_ledger_wallet_asset_order_idx",
-                def = "{'walletAddress': 1, 'networkId': 1, 'accountingAssetIdentity': 1, 'blockTimestamp': 1, 'transactionIndex': 1, 'replaySequence': 1}"
+                name = "asset_ledger_universe_wallet_asset_order_idx",
+                def = "{'accountingUniverseId': 1, 'walletAddress': 1, 'networkId': 1, 'accountingAssetIdentity': 1, 'blockTimestamp': 1, 'transactionIndex': 1, 'replaySequence': 1}"
         ),
         @CompoundIndex(
-                name = "asset_ledger_tx_idx",
-                def = "{'normalizedTransactionId': 1, 'flowIndex': 1, 'replaySequence': 1}",
+                name = "asset_ledger_universe_tx_idx",
+                def = "{'accountingUniverseId': 1, 'normalizedTransactionId': 1, 'flowIndex': 1, 'replaySequence': 1}",
                 unique = true
         )
 })
@@ -42,6 +42,7 @@ public class AssetLedgerPoint {
     @EqualsAndHashCode.Include
     private String id;
 
+    private String accountingUniverseId;
     private String walletAddress;
     private NetworkId networkId;
     private String accountingAssetIdentity;
@@ -81,6 +82,13 @@ public class AssetLedgerPoint {
     private BigDecimal totalCostBasisAfterUsd;
     private BigDecimal avcoBeforeUsd;
     private BigDecimal avcoAfterUsd;
+
+    private BigDecimal netTotalCostBasisBeforeUsd;
+    private BigDecimal netTotalCostBasisAfterUsd;
+    private BigDecimal netAvcoBeforeUsd;
+    private BigDecimal netAvcoAfterUsd;
+    private BigDecimal netCostBasisDeltaUsd;
+    private BigDecimal netRealisedPnlDeltaUsd;
 
     private BigDecimal basisBackedQuantityAfter;
     private BigDecimal quantityShortfallAfter;

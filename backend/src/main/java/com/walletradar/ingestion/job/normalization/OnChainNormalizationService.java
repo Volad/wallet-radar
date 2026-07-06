@@ -10,15 +10,19 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.ingestion.config.OnChainNormalizationProperties;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassifier;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassificationResult;
+import com.walletradar.ingestion.pipeline.clarification.CounterpartyEnrichmentService;
+import com.walletradar.ingestion.pipeline.clarification.ProtocolNameEnrichmentService;
+import com.walletradar.ingestion.pipeline.clarification.RegistryBridgeInboundTypeCorrectionService;
 import com.walletradar.ingestion.pipeline.onchain.OnChainNormalizedTransactionBuilder;
 import com.walletradar.ingestion.pipeline.onchain.OnChainRawTransactionView;
 import com.walletradar.ingestion.pipeline.onchain.PendingRawTransactionQueryService;
-import com.walletradar.ingestion.pipeline.clarification.OnChainLifecycleLinkService;
-import com.walletradar.ingestion.pipeline.clarification.RelatedLifecycleDiscoveryService;
 import com.walletradar.ingestion.pipeline.onchain.repair.ExplorerRawOrderingRepairGateway;
+import com.walletradar.ingestion.pipeline.onchain.repair.InternalTransferRawPeerRepairService;
 import com.walletradar.ingestion.pipeline.onchain.support.RawOrderingMetadataResolver;
 import com.walletradar.ingestion.pipeline.onchain.support.ResolvedRawOrderingMetadata;
 import com.walletradar.ingestion.store.IdempotentNormalizedTransactionStore;
+import com.walletradar.lending.application.LendingReceiptIdentityService;
+import com.walletradar.session.application.AccountingUniverseService;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -58,13 +62,27 @@ public class OnChainNormalizationService {
     private final IdempotentNormalizedTransactionStore normalizedTransactionStore;
     private final RawTransactionRepository rawTransactionRepository;
     private final ExplorerRawOrderingRepairGateway explorerRawOrderingRepairGateway;
-    private final RelatedLifecycleDiscoveryService relatedLifecycleDiscoveryService;
-    private final OnChainLifecycleLinkService onChainLifecycleLinkService;
+    private final InternalTransferRawPeerRepairService internalTransferRawPeerRepairService;
+    private final ProtocolNameEnrichmentService protocolNameEnrichmentService;
+    private final RegistryBridgeInboundTypeCorrectionService registryBridgeInboundTypeCorrectionService;
+    private final CounterpartyEnrichmentService counterpartyEnrichmentService;
+    private final AccountingUniverseService accountingUniverseService;
+    private final LendingReceiptIdentityService lendingReceiptIdentityService;
 
     public int processNextBatch() {
+        return processNextBatch(null);
+    }
+
+    public int processNextBatch(String sessionId) {
+        bindUniverseIfPresent(sessionId);
+        try {
         List<RawTransaction> batch = new ArrayList<>(
                 pendingRawTransactionQueryService.loadNextBatch(properties.getBatchSize())
         );
+        int repairedPeers = internalTransferRawPeerRepairService.repairMissingPeers(batch);
+        if (repairedPeers > 0) {
+            log.info("On-chain internal transfer raw peer repair complete: repaired={}", repairedPeers);
+        }
         for (RawTransaction rawTransaction : batch) {
             prepareOrdering(rawTransaction);
         }
@@ -77,6 +95,15 @@ public class OnChainNormalizationService {
             }
         }
         return completed;
+        } finally {
+            accountingUniverseService.clearUniverseBinding();
+        }
+    }
+
+    private void bindUniverseIfPresent(String sessionId) {
+        if (sessionId != null && !sessionId.isBlank()) {
+            accountingUniverseService.bindUniverse(sessionId.trim());
+        }
     }
 
     public boolean normalize(RawTransaction rawTransaction) {
@@ -99,16 +126,57 @@ public class OnChainNormalizationService {
 
         try {
             OnChainClassificationResult classificationResult = onChainClassifier.classify(rawTransaction);
-            var normalized = normalizedTransactionStore.upsert(builder.build(rawTransaction, classificationResult, now));
-            onChainLifecycleLinkService.link(rawTransaction, normalized);
+            com.walletradar.domain.transaction.normalized.NormalizedTransaction normalized =
+                    builder.build(rawTransaction, classificationResult, now);
+            enrichCanonicalMetadata(normalized, rawTransaction, now);
+            normalizedTransactionStore.upsert(normalized);
             markComplete(rawTransaction);
-            relatedLifecycleDiscoveryService.discoverAndNormalize(rawTransaction, classificationResult);
             return true;
         } catch (RuntimeException ex) {
             log.warn("On-chain normalization shell failed for rawTxId={}: {}", rawTransaction.getId(), ex.getMessage());
             markRetry(rawTransaction, ex.getMessage(), now);
             return false;
         }
+    }
+
+    private void enrichCanonicalMetadata(
+            com.walletradar.domain.transaction.normalized.NormalizedTransaction normalizedTransaction,
+            RawTransaction rawTransaction,
+            Instant now
+    ) {
+        if (normalizedTransaction == null
+                || normalizedTransaction.getStatus() == NormalizedTransactionStatus.PENDING_CLARIFICATION
+                || normalizedTransaction.getType() == NormalizedTransactionType.UNKNOWN) {
+            return;
+        }
+        protocolNameEnrichmentService.enrichInPlace(normalizedTransaction, rawTransaction, now);
+        enrichProtocolFromReceiptIdentity(normalizedTransaction);
+        registryBridgeInboundTypeCorrectionService.correctIfApplicable(normalizedTransaction, rawTransaction, now);
+        counterpartyEnrichmentService.enrichInPlace(normalizedTransaction, rawTransaction, now);
+    }
+
+    private void enrichProtocolFromReceiptIdentity(
+            com.walletradar.domain.transaction.normalized.NormalizedTransaction normalizedTransaction
+    ) {
+        if (normalizedTransaction == null) {
+            return;
+        }
+        if (normalizedTransaction.getProtocolName() == null || normalizedTransaction.getProtocolName().isBlank()) {
+            List<com.walletradar.domain.transaction.normalized.NormalizedTransaction.Flow> flows =
+                    normalizedTransaction.getFlows() == null ? List.of() : normalizedTransaction.getFlows();
+            for (com.walletradar.domain.transaction.normalized.NormalizedTransaction.Flow flow : flows) {
+                lendingReceiptIdentityService.protocolHint(
+                                normalizedTransaction.getNetworkId(),
+                                flow.getAssetContract(),
+                                flow.getAssetSymbol()
+                        )
+                        .ifPresent(normalizedTransaction::setProtocolName);
+                if (normalizedTransaction.getProtocolName() != null && !normalizedTransaction.getProtocolName().isBlank()) {
+                    break;
+                }
+            }
+        }
+        lendingReceiptIdentityService.indexTransaction(normalizedTransaction);
     }
 
     private void prepareOrdering(RawTransaction rawTransaction) {

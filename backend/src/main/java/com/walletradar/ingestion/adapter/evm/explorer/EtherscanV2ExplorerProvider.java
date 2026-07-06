@@ -9,6 +9,7 @@ import com.walletradar.ingestion.adapter.evm.explorer.model.ExplorerReceipt;
 import com.walletradar.ingestion.adapter.evm.explorer.model.ExplorerTokenTransfer;
 import com.walletradar.ingestion.adapter.evm.explorer.model.ExplorerTransactionDetails;
 import com.walletradar.ingestion.adapter.evm.explorer.model.ExplorerTransaction;
+import com.walletradar.ingestion.adapter.ReactorBlocking;
 import com.walletradar.ingestion.config.IngestionExplorerProperties;
 import com.walletradar.ingestion.config.IngestionNetworkProperties;
 import lombok.RequiredArgsConstructor;
@@ -288,13 +289,15 @@ public class EtherscanV2ExplorerProvider implements ExplorerProvider {
 
     private JsonNode execute(String url) throws Exception {
         long timeoutMs = Math.max(1_000L, explorerProperties.getRequestTimeoutMs());
-        String body = explorerClient()
-                .get()
-                .uri(url)
-                .retrieve()
-                .bodyToMono(String.class)
-                .timeout(Duration.ofMillis(timeoutMs))
-                .block();
+        String body = ReactorBlocking.block(
+                explorerClient()
+                        .get()
+                        .uri(url)
+                        .retrieve()
+                        .bodyToMono(String.class)
+                        .timeout(Duration.ofMillis(timeoutMs)),
+                Duration.ofMillis(timeoutMs + 5_000L)
+        );
         if (body == null || body.isBlank()) {
             return null;
         }

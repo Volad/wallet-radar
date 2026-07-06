@@ -1,0 +1,10 @@
+server:
+  forward-headers-strategy: framework
+
+walletradar:
+  api:
+    cors:
+      allowed-origins:
+        - http://localhost:4300
+        - http://127.0.0.1:4300
+        - http://192.168.1.165:4300

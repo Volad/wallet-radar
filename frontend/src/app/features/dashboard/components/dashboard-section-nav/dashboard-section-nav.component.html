@@ -3,16 +3,27 @@
     <button
       type="button"
       class="icon-nav-btn"
-      [class.active]="activeSection === sectionMeta.id"
+      [class.active]="activeSection === sectionMeta.id && !isSettingsActive"
       [class.soon]="sectionMeta.soon"
       [style.--sectionColor]="sectionMeta.color"
       [attr.aria-label]="sectionMeta.label"
       [disabled]="sectionMeta.soon"
       (click)="selectSection(sectionMeta)">
-      <span class="section-glyph" aria-hidden="true">{{ getSectionIcon(sectionMeta.id) }}</span>
+      <span class="section-glyph" aria-hidden="true" [innerHTML]="getSectionIcon(sectionMeta.id)"></span>
       @if (sectionMeta.soon) {
         <span class="soon-dot" aria-hidden="true"></span>
       }
     </button>
   }
+
+  <div class="icon-nav-spacer"></div>
+
+  <button
+    type="button"
+    class="icon-nav-btn settings-btn"
+    [class.active]="isSettingsActive"
+    aria-label="Settings"
+    (click)="openSettings()">
+    <span class="section-glyph" aria-hidden="true" [innerHTML]="getSettingsIcon()"></span>
+  </button>
 </nav>

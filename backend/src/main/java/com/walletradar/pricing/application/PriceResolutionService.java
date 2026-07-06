@@ -1,6 +1,9 @@
 package com.walletradar.pricing.application;
 
+import com.walletradar.domain.common.PriceSource;
+import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.pricing.domain.CanonicalAssetCatalog;
 import com.walletradar.pricing.domain.PriceQuote;
 import com.walletradar.pricing.domain.PriceRequest;
 import com.walletradar.pricing.domain.PriceResolutionContext;
@@ -36,7 +39,16 @@ public class PriceResolutionService {
     }
 
     public NormalizedTransaction resolve(NormalizedTransaction original, Instant now) {
+        return resolve(original, now, this::resolveExternalQuote);
+    }
+
+    public NormalizedTransaction resolve(
+            NormalizedTransaction original,
+            Instant now,
+            ExternalQuoteResolver externalQuoteResolver
+    ) {
         NormalizedTransaction priced = pricingResultMapper.copy(original);
+        stampPricingSkippedFlows(priced);
         Map<Integer, PriceQuote> resolvedQuotes = preloadResolvedQuotes(priced);
         Set<Integer> priceRequired = requiredFlowIndices(priced);
         boolean unresolvedRequired = false;
@@ -61,7 +73,7 @@ public class PriceResolutionService {
                     resolvedQuotes
             ).toPriceRequest();
 
-            Optional<PriceQuote> externalQuote = externalSources.resolve(request);
+            Optional<PriceQuote> externalQuote = externalQuoteResolver.resolve(request);
             if (externalQuote.isPresent()) {
                 applyQuote(priced, flowIndex, externalQuote.orElseThrow(), resolvedQuotes);
                 resolveEventLocalUntilFixedPoint(priced, priceRequired, resolvedQuotes);
@@ -74,6 +86,39 @@ public class PriceResolutionService {
 
         pricingResultMapper.finalizePricing(priced, unresolvedRequired, now);
         return priced;
+    }
+
+    public Optional<PriceQuote> resolveExternalQuote(PriceRequest request) {
+        return externalSources.resolve(request);
+    }
+
+    /**
+     * Cycle/9 S5: stamp {@link PriceSource#PRICING_SKIPPED} on flows whose asset symbol has no
+     * resolvable historical USD source (per {@link CanonicalAssetCatalog#isPricingSkipped}).
+     * This explicit marker keeps the dashboard/audit aware that the position was intentionally
+     * left unpriced and prevents repeated resolution attempts in subsequent pricing batches.
+     */
+    private void stampPricingSkippedFlows(NormalizedTransaction priced) {
+        if (priced == null || priced.getFlows() == null) {
+            return;
+        }
+        for (NormalizedTransaction.Flow flow : priced.getFlows()) {
+            if (flow == null
+                    || flow.getAssetSymbol() == null
+                    || flow.getAssetSymbol().isBlank()
+                    || flow.getRole() == NormalizedLegRole.TRANSFER) {
+                continue;
+            }
+            if (!CanonicalAssetCatalog.isPricingSkipped(flow.getAssetSymbol())) {
+                continue;
+            }
+            if (PriceableFlowPolicy.hasResolvedPrice(flow)) {
+                continue;
+            }
+            flow.setPriceSource(PriceSource.PRICING_SKIPPED);
+            flow.setUnitPriceUsd(null);
+            flow.setValueUsd(null);
+        }
     }
 
     private void resolveEventLocalUntilFixedPoint(
@@ -170,5 +215,10 @@ public class PriceResolutionService {
     ) {
         pricingResultMapper.applyResolvedQuote(priced.getFlows().get(flowIndex), quote);
         resolvedQuotes.put(flowIndex, quote);
+    }
+
+    @FunctionalInterface
+    public interface ExternalQuoteResolver {
+        Optional<PriceQuote> resolve(PriceRequest request);
     }
 }

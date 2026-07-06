@@ -11,6 +11,8 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Minimal Bybit spot kline client for one-minute historical price buckets.
@@ -23,6 +25,7 @@ public class BybitKlineClient {
 
     private final PricingProperties pricingProperties;
     private final WebClient webClient;
+    private final Set<String> unsupportedSymbols = ConcurrentHashMap.newKeySet();
 
     public BybitKlineClient(WebClient.Builder webClientBuilder, PricingProperties pricingProperties) {
         this.pricingProperties = pricingProperties;
@@ -32,6 +35,9 @@ public class BybitKlineClient {
     }
 
     public Optional<BybitKline> fetchKline(String symbol, Instant occurredAt) {
+        if (unsupportedSymbols.contains(symbol)) {
+            return Optional.empty();
+        }
         Instant bucketStart = occurredAt.truncatedTo(ChronoUnit.MINUTES);
         long startTime = bucketStart.toEpochMilli();
         long endTime = bucketStart.plusSeconds(60).toEpochMilli();
@@ -64,6 +70,7 @@ public class BybitKlineClient {
             ));
         } catch (WebClientResponseException error) {
             if (error.getStatusCode().value() == 400 || error.getStatusCode().value() == 404) {
+                unsupportedSymbols.add(symbol);
                 return Optional.empty();
             }
             throw error;

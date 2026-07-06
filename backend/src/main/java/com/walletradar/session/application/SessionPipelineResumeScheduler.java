@@ -1,17 +1,24 @@
 package com.walletradar.session.application;
 
-import com.walletradar.domain.event.BybitNormalizationCompletedEvent;
-import com.walletradar.domain.event.OnChainClarificationCompletedEvent;
+import com.walletradar.domain.event.AccountingReplayCompletedEvent;
+import com.walletradar.domain.event.BybitNormalizationRequestedEvent;
+import com.walletradar.domain.event.LinkingRequestedEvent;
 import com.walletradar.domain.event.OnChainNormalizationCompletedEvent;
+import com.walletradar.domain.event.OnChainReclassificationRequestedEvent;
 import com.walletradar.domain.event.PricingCompletedEvent;
+import com.walletradar.domain.event.PricingRequestedEvent;
 import com.walletradar.domain.event.SessionBackfillCompletedEvent;
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.domain.session.UserSessionRepository;
+import com.walletradar.domain.sync.BackfillSegment;
+import com.walletradar.domain.sync.BackfillSegmentRepository;
 import com.walletradar.domain.sync.SyncStatus;
 import com.walletradar.domain.sync.SyncStatusRepository;
+import com.walletradar.domain.transaction.bybit.BybitExtractedEvent;
 import com.walletradar.domain.transaction.externalledger.ExternalLedgerRaw;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.raw.RawTransaction;
+import com.walletradar.ingestion.job.linking.LinkingDataGateService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -41,12 +48,28 @@ public class SessionPipelineResumeScheduler {
             Criteria.where("excludedFromAccounting").exists(false),
             Criteria.where("excludedFromAccounting").is(Boolean.FALSE)
     );
+    private static final Criteria IN_SCOPE_BYBIT_RAW_CRITERIA = new Criteria().andOperator(
+            Criteria.where("status").is("RAW"),
+            Criteria.where("basisRelevant").is(Boolean.TRUE),
+            new Criteria().orOperator(
+                    Criteria.where("outOfScope").exists(false),
+                    Criteria.where("outOfScope").is(Boolean.FALSE)
+            ),
+            new Criteria().orOperator(
+                    Criteria.where("canonicalType").exists(false),
+                    Criteria.where("canonicalType").ne("UNKNOWN_CEX")
+            )
+    );
 
     private final UserSessionRepository userSessionRepository;
     private final SyncStatusRepository syncStatusRepository;
+    private final BackfillSegmentRepository backfillSegmentRepository;
+    private final AccountingUniverseService accountingUniverseService;
+    private final LinkingDataGateService linkingDataGateService;
     private final MongoOperations mongoOperations;
     private final ApplicationEventPublisher applicationEventPublisher;
     private final SessionPipelineStateService sessionPipelineStateService;
+    private final SessionPipelineActivityService sessionPipelineActivityService;
 
     @Scheduled(fixedDelayString = "${walletradar.pipeline.resume-interval-ms:60000}")
     public void resumeReadySessions() {
@@ -66,7 +89,18 @@ public class SessionPipelineResumeScheduler {
     }
 
     private ResumeAction nextAction(UserSession session) {
-        if (session == null || session.getId() == null || session.getWallets() == null || session.getWallets().isEmpty()) {
+        if (session == null || session.getId() == null || targetCount(session) == 0) {
+            return null;
+        }
+        var freshActivity = sessionPipelineActivityService.latestFreshActivity(session.getId(), RUNNING_STATE_STALE_AFTER);
+        if (freshActivity.isPresent()) {
+            SessionPipelineActivityService.ActivitySnapshot snapshot = freshActivity.get();
+            log.info(
+                    "Session pipeline resume deferred by in-memory activity: sessionId={}, stage={}, heartbeatAt={}",
+                    session.getId(),
+                    snapshot.stage(),
+                    snapshot.heartbeatAt()
+            );
             return null;
         }
         if (hasFreshRunningState(session)) {
@@ -81,7 +115,8 @@ public class SessionPipelineResumeScheduler {
         if (!allBackfillTargetsComplete(session)) {
             return null;
         }
-        List<String> addresses = trackedAddresses(session);
+        AccountingUniverseService.AccountingUniverseScope scope = accountingUniverseService.resolveScope(session);
+        List<String> addresses = scope.memberRefs();
         boolean pendingRaw = hasPendingRaw(addresses);
         boolean hasNormalized = hasNormalizedRows(addresses);
         if (pendingRaw || !hasNormalized) {
@@ -100,24 +135,49 @@ public class SessionPipelineResumeScheduler {
                     new OnChainNormalizationCompletedEvent(session.getId(), 0, "resume-watchdog")
             );
         }
+        boolean pendingReclassification = hasPendingReclassification(addresses);
+        if (pendingReclassification) {
+            return new ResumeAction(
+                    UserSession.PipelineStage.ON_CHAIN_RECLASSIFICATION,
+                    "pending-reclassification",
+                    new OnChainReclassificationRequestedEvent(session.getId(), "resume-watchdog")
+            );
+        }
         boolean pendingBybit = hasPendingBybitWork(session);
         if (pendingBybit) {
             return new ResumeAction(
                     UserSession.PipelineStage.BYBIT_NORMALIZATION,
                     "raw-bybit-or-unmatched-rematch",
-                    new OnChainClarificationCompletedEvent(session.getId(), 0, "resume-watchdog")
+                    new BybitNormalizationRequestedEvent(session.getId(), "resume-watchdog")
             );
         }
+        boolean pendingLinking = linkingDataGateService.hasPendingLinking(session.getId());
         boolean pendingPrice = hasPendingPrice(addresses);
+        // Cycle/14: linking (incl. legacy bridge repair) must run before snapshot refresh when
+        // balances were wiped by replay-only reset — otherwise repair never executes.
+        if (pendingLinking && !isPipelineAlreadyComplete(session)) {
+            return new ResumeAction(
+                    UserSession.PipelineStage.LINKING,
+                    "pending-linking",
+                    new LinkingRequestedEvent(session.getId(), "resume-watchdog")
+            );
+        }
+        if (requiresBalanceSnapshotRefresh(session)) {
+            return new ResumeAction(
+                    UserSession.PipelineStage.PORTFOLIO_SNAPSHOT_REFRESH,
+                    "portfolio-snapshot-refresh-missing-balances",
+                    new AccountingReplayCompletedEvent(session.getId(), 0, "resume-watchdog")
+            );
+        }
         if (pendingPrice) {
             return new ResumeAction(
                     UserSession.PipelineStage.PRICING,
                     "pending-price",
-                    new BybitNormalizationCompletedEvent(session.getId(), 0, "resume-watchdog")
+                    new PricingRequestedEvent(session.getId(), "resume-watchdog")
             );
         }
         boolean pendingStat = hasPendingStat(addresses);
-        boolean replayBootstrapRequired = requiresReplayBootstrap(addresses);
+        boolean replayBootstrapRequired = requiresReplayBootstrap(scope);
         if (pendingStat || replayBootstrapRequired) {
             return new ResumeAction(
                     UserSession.PipelineStage.ACCOUNTING_REPLAY,
@@ -127,10 +187,13 @@ public class SessionPipelineResumeScheduler {
         }
         if (shouldHealReplayCompletion(
                 session,
+                scope,
                 pendingRaw,
                 hasNormalized,
                 pendingClarification,
+                pendingReclassification,
                 pendingBybit,
+                pendingLinking,
                 pendingPrice,
                 pendingStat,
                 replayBootstrapRequired
@@ -140,13 +203,37 @@ public class SessionPipelineResumeScheduler {
                     UserSession.PipelineStage.ACCOUNTING_REPLAY,
                     "Accounting replay complete"
             );
+            return null;
+        }
+        if (requiresPortfolioSnapshotRefresh(session, scope)) {
+            return new ResumeAction(
+                    UserSession.PipelineStage.PORTFOLIO_SNAPSHOT_REFRESH,
+                    "portfolio-snapshot-refresh",
+                    new AccountingReplayCompletedEvent(session.getId(), 0, "resume-watchdog")
+            );
         }
         return null;
     }
 
     private boolean allBackfillTargetsComplete(UserSession session) {
+        if (!allOnChainBackfillTargetsComplete(session)) {
+            return false;
+        }
+        for (UserSession.SessionIntegration integration : enabledIntegrations(session)) {
+            if (!isIntegrationBackfillComplete(integration)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean allOnChainBackfillTargetsComplete(UserSession session) {
+        if (session.getWallets() == null || session.getWallets().isEmpty()) {
+            return true;
+        }
         List<String> addresses = trackedAddresses(session);
         Map<String, SyncStatus> syncStatusByPair = syncStatusRepository.findByWalletAddressIn(addresses).stream()
+                .filter(status -> status.getSourceKind() == null || status.getSourceKind() == SyncStatus.SourceKind.ONCHAIN)
                 .filter(status -> status.getWalletAddress() != null && status.getNetworkId() != null)
                 .collect(Collectors.toMap(
                         status -> pairKey(status.getWalletAddress(), status.getNetworkId()),
@@ -157,15 +244,42 @@ public class SessionPipelineResumeScheduler {
         for (UserSession.SessionWallet wallet : session.getWallets()) {
             for (var network : wallet.getNetworks()) {
                 SyncStatus status = syncStatusByPair.get(pairKey(wallet.getAddress(), network.name()));
-                if (status == null || !status.isBackfillComplete()) {
+                if (!isOnChainBackfillComplete(status)) {
                     return false;
+                }
+                if (status != null && !status.isBackfillComplete()) {
+                    log.warn(
+                            "Backfill gate treating terminal sync_status as complete despite stale flag: "
+                                    + "sessionId={}, wallet={}, network={}, status={}, progressPct={}",
+                            session.getId(),
+                            wallet.getAddress(),
+                            network.name(),
+                            status.getStatus(),
+                            status.getProgressPct()
+                    );
                 }
             }
         }
         return true;
     }
 
+    /**
+     * Robustness net: a wallet×network counts as backfill-complete when its boolean flag is set OR the
+     * sync_status reached terminal {@code COMPLETE} status. {@code COMPLETE} cannot coexist with
+     * RUNNING/PENDING/FAILED segments, so a genuinely in-flight source is never advanced prematurely;
+     * this only rescues sessions stranded by a stale completion boolean on an already-terminal source.
+     */
+    private static boolean isOnChainBackfillComplete(SyncStatus status) {
+        if (status == null) {
+            return false;
+        }
+        return status.isBackfillComplete() || status.getStatus() == SyncStatus.SyncStatusValue.COMPLETE;
+    }
+
     private boolean hasPendingRaw(List<String> addresses) {
+        if (addresses.isEmpty()) {
+            return false;
+        }
         Query pendingRawQuery = new Query(new Criteria().andOperator(
                 Criteria.where("walletAddress").in(addresses),
                 Criteria.where("normalizationStatus").is("PENDING")
@@ -174,32 +288,62 @@ public class SessionPipelineResumeScheduler {
     }
 
     private boolean hasPendingBybitWork(UserSession session) {
-        Query rawBybitQuery = new Query(new Criteria().andOperator(
+        Query rawExtractedQuery = new Query(new Criteria().andOperator(
                 Criteria.where("sessionId").is(session.getId()),
-                Criteria.where("status").is("RAW")
+                IN_SCOPE_BYBIT_RAW_CRITERIA
         ));
-        if (mongoOperations.exists(rawBybitQuery, ExternalLedgerRaw.class)) {
+        if (mongoOperations.exists(rawExtractedQuery, BybitExtractedEvent.class)) {
             return true;
         }
 
-        Query bybitRematchQuery = new Query(new Criteria().andOperator(
+        Query rawBybitQuery = new Query(new Criteria().andOperator(
                 Criteria.where("sessionId").is(session.getId()),
-                Criteria.where("status").is("CONFIRMED"),
-                Criteria.where("sourceFileType").is("withdraw_deposit"),
-                Criteria.where("onChainCorrelation.status").is("UNMATCHED")
+                IN_SCOPE_BYBIT_RAW_CRITERIA
         ));
-        return mongoOperations.exists(bybitRematchQuery, ExternalLedgerRaw.class);
+        return mongoOperations.exists(rawBybitQuery, ExternalLedgerRaw.class);
     }
 
     private boolean hasPendingClarification(List<String> addresses) {
+        if (addresses.isEmpty()) {
+            return false;
+        }
+        java.util.Date now = new java.util.Date();
+        // Only consider items whose clarification lease has expired (or was never set).
+        // Items still held by an active lease are being processed (or were held by a crashed process
+        // that will release them on the next clarification run). Firing the watchdog for those items
+        // just produces empty clarification cycles and confuses the pipeline progress display.
+        Criteria leaseFree = new Criteria().orOperator(
+                Criteria.where("clarificationLeaseUntil").exists(false),
+                Criteria.where("clarificationLeaseUntil").is(null),
+                Criteria.where("clarificationLeaseUntil").lte(now)
+        );
         Query query = new Query(new Criteria().andOperator(
                 Criteria.where("walletAddress").in(addresses),
-                Criteria.where("status").is("PENDING_CLARIFICATION")
+                Criteria.where("status").is("PENDING_CLARIFICATION"),
+                leaseFree
+        ));
+        return mongoOperations.exists(query, NormalizedTransaction.class);
+    }
+
+    private boolean hasPendingReclassification(List<String> addresses) {
+        return hasPendingStatus(addresses, "PENDING_RECLASSIFICATION");
+    }
+
+    private boolean hasPendingStatus(List<String> addresses, String status) {
+        if (addresses.isEmpty()) {
+            return false;
+        }
+        Query query = new Query(new Criteria().andOperator(
+                Criteria.where("walletAddress").in(addresses),
+                Criteria.where("status").is(status)
         ));
         return mongoOperations.exists(query, NormalizedTransaction.class);
     }
 
     private boolean hasPendingPrice(List<String> addresses) {
+        if (addresses.isEmpty()) {
+            return false;
+        }
         Query query = new Query(new Criteria().andOperator(
                 Criteria.where("walletAddress").in(addresses),
                 Criteria.where("status").is("PENDING_PRICE"),
@@ -209,6 +353,9 @@ public class SessionPipelineResumeScheduler {
     }
 
     private boolean hasPendingStat(List<String> addresses) {
+        if (addresses.isEmpty()) {
+            return false;
+        }
         Query query = new Query(new Criteria().andOperator(
                 Criteria.where("walletAddress").in(addresses),
                 Criteria.where("status").is("PENDING_STAT"),
@@ -217,19 +364,10 @@ public class SessionPipelineResumeScheduler {
         return mongoOperations.exists(query, NormalizedTransaction.class);
     }
 
-    private boolean requiresReplayBootstrap(List<String> addresses) {
-        Query confirmedQuery = new Query(new Criteria().andOperator(
-                Criteria.where("walletAddress").in(addresses),
-                Criteria.where("status").is("CONFIRMED"),
-                ACTIVE_ACCOUNTING_CRITERIA
-        ));
-        if (!mongoOperations.exists(confirmedQuery, NormalizedTransaction.class)) {
+    private boolean hasNormalizedRows(List<String> addresses) {
+        if (addresses.isEmpty()) {
             return false;
         }
-        return !hasAssetLedgerRows(addresses);
-    }
-
-    private boolean hasNormalizedRows(List<String> addresses) {
         Query normalizedQuery = new Query(Criteria.where("walletAddress").in(addresses));
         return mongoOperations.exists(normalizedQuery, "normalized_transactions");
     }
@@ -246,12 +384,30 @@ public class SessionPipelineResumeScheduler {
         return updatedAt.isAfter(Instant.now().minus(RUNNING_STATE_STALE_AFTER));
     }
 
+    private boolean isPipelineAlreadyComplete(UserSession session) {
+        UserSession.PipelineState pipelineState = session.getPipelineState();
+        return pipelineState != null
+                && (pipelineState.getStage() == UserSession.PipelineStage.ACCOUNTING_REPLAY
+                || pipelineState.getStage() == UserSession.PipelineStage.PORTFOLIO_SNAPSHOT_REFRESH)
+                && pipelineState.getStatus() == UserSession.PipelineStatus.COMPLETE;
+    }
+
+    private boolean isPortfolioSnapshotComplete(UserSession session) {
+        UserSession.PipelineState pipelineState = session.getPipelineState();
+        return pipelineState != null
+                && pipelineState.getStage() == UserSession.PipelineStage.PORTFOLIO_SNAPSHOT_REFRESH
+                && pipelineState.getStatus() == UserSession.PipelineStatus.COMPLETE;
+    }
+
     private boolean shouldHealReplayCompletion(
             UserSession session,
+            AccountingUniverseService.AccountingUniverseScope scope,
             boolean pendingRaw,
             boolean hasNormalized,
             boolean pendingClarification,
+            boolean pendingReclassification,
             boolean pendingBybit,
+            boolean pendingLinking,
             boolean pendingPrice,
             boolean pendingStat,
             boolean replayBootstrapRequired
@@ -266,28 +422,86 @@ public class SessionPipelineResumeScheduler {
         if (pendingRaw
                 || !hasNormalized
                 || pendingClarification
+                || pendingReclassification
                 || pendingBybit
+                || pendingLinking
                 || pendingPrice
                 || pendingStat
                 || replayBootstrapRequired) {
             return false;
         }
-        List<String> addresses = trackedAddresses(session);
-        return hasAssetLedgerRows(addresses)
-                && hasOnChainBalanceRows(addresses);
+        List<String> addresses = scope.memberRefs();
+        return hasAssetLedgerRows(scope.accountingUniverseId(), addresses);
     }
 
     private boolean hasAssetLedgerRows(List<String> addresses) {
+        if (addresses.isEmpty()) {
+            return false;
+        }
         Query query = new Query(Criteria.where("walletAddress").in(addresses));
         return mongoOperations.exists(query, "asset_ledger_points");
     }
 
-    private boolean hasOnChainBalanceRows(List<String> addresses) {
-        Query query = new Query(Criteria.where("walletAddress").in(addresses));
+    private boolean hasAssetLedgerRows(String accountingUniverseId, List<String> addresses) {
+        if (accountingUniverseId != null && !accountingUniverseId.isBlank()) {
+            Query query = new Query(Criteria.where("accountingUniverseId").is(accountingUniverseId));
+            return mongoOperations.exists(query, "asset_ledger_points");
+        }
+        return hasAssetLedgerRows(addresses);
+    }
+
+    private boolean hasOnChainBalanceRows(String sessionId, List<String> addresses) {
+        if (addresses == null || addresses.isEmpty()) {
+            return true;
+        }
+        Query query = new Query(new Criteria().andOperator(
+                Criteria.where("sessionId").is(sessionId),
+                Criteria.where("walletAddress").in(addresses)
+        ));
         return mongoOperations.exists(query, "on_chain_balances");
     }
 
+    private boolean requiresBalanceSnapshotRefresh(UserSession session) {
+        if (isPortfolioSnapshotComplete(session)) {
+            return false;
+        }
+        List<String> addresses = trackedAddresses(session);
+        return !addresses.isEmpty() && !hasOnChainBalanceRows(session.getId(), addresses);
+    }
+
+    private boolean requiresPortfolioSnapshotRefresh(
+            UserSession session,
+            AccountingUniverseService.AccountingUniverseScope scope
+    ) {
+        if (isPortfolioSnapshotComplete(session)) {
+            return false;
+        }
+        if (!hasAssetLedgerRows(scope.accountingUniverseId(), scope.memberRefs())) {
+            return false;
+        }
+        return true;
+    }
+
+    private boolean requiresReplayBootstrap(AccountingUniverseService.AccountingUniverseScope scope) {
+        List<String> addresses = scope.memberRefs();
+        if (addresses.isEmpty()) {
+            return false;
+        }
+        Query confirmedQuery = new Query(new Criteria().andOperator(
+                Criteria.where("walletAddress").in(addresses),
+                Criteria.where("status").is("CONFIRMED"),
+                ACTIVE_ACCOUNTING_CRITERIA
+        ));
+        if (!mongoOperations.exists(confirmedQuery, NormalizedTransaction.class)) {
+            return false;
+        }
+        return !hasAssetLedgerRows(scope.accountingUniverseId(), addresses);
+    }
+
     private List<String> trackedAddresses(UserSession session) {
+        if (session.getWallets() == null || session.getWallets().isEmpty()) {
+            return List.of();
+        }
         return session.getWallets().stream()
                 .map(UserSession.SessionWallet::getAddress)
                 .distinct()
@@ -295,9 +509,38 @@ public class SessionPipelineResumeScheduler {
     }
 
     private int targetCount(UserSession session) {
-        return session.getWallets().stream()
+        int walletTargets = session.getWallets() == null ? 0 : session.getWallets().stream()
                 .mapToInt(wallet -> wallet.getNetworks() == null ? 0 : wallet.getNetworks().size())
                 .sum();
+        return walletTargets + enabledIntegrations(session).size();
+    }
+
+    private List<UserSession.SessionIntegration> enabledIntegrations(UserSession session) {
+        if (session.getIntegrations() == null || session.getIntegrations().isEmpty()) {
+            return List.of();
+        }
+        return session.getIntegrations().stream()
+                .filter(integration -> integration != null
+                        && integration.getStatus() != UserSession.IntegrationStatus.DISABLED
+                        && integration.getIntegrationId() != null
+                        && !integration.getIntegrationId().isBlank())
+                .toList();
+    }
+
+    private boolean isIntegrationBackfillComplete(UserSession.SessionIntegration integration) {
+        SyncStatus integrationStatus = syncStatusRepository.findLatestByIntegrationId(integration.getIntegrationId()).orElse(null);
+        if (integrationStatus != null) {
+            return integrationStatus.isBackfillComplete();
+        }
+        long totalSegments = backfillSegmentRepository.countByIntegrationId(integration.getIntegrationId());
+        if (totalSegments <= 0) {
+            return integration.getStatus() == UserSession.IntegrationStatus.READY;
+        }
+        long completedSegments = backfillSegmentRepository.countByIntegrationIdAndStatus(
+                integration.getIntegrationId(),
+                BackfillSegment.SegmentStatus.COMPLETE
+        );
+        return completedSegments >= totalSegments;
     }
 
     private static String pairKey(String walletAddress, String networkId) {

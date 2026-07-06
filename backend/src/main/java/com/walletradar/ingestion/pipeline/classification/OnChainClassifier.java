@@ -1,13 +1,21 @@
 package com.walletradar.ingestion.pipeline.classification;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.raw.RawTransaction;
+import com.walletradar.ingestion.config.NativeSettlementRecoveryProperties;
+import com.walletradar.ingestion.pipeline.classification.reason.ClassificationReasonCode;
+import com.walletradar.ingestion.pipeline.classification.support.NativeSettlementClarificationTrigger;
 import com.walletradar.ingestion.pipeline.classification.onchain.family.AdminConfigClassifier;
+import com.walletradar.ingestion.pipeline.classification.onchain.family.AaveReceiptShapeClassifier;
 import com.walletradar.ingestion.pipeline.classification.onchain.family.BridgeStartClassifier;
 import com.walletradar.ingestion.pipeline.classification.onchain.family.BridgeMethodAwareClassifier;
 import com.walletradar.ingestion.pipeline.classification.onchain.family.BridgeSettlementClassifier;
+import com.walletradar.ingestion.pipeline.classification.onchain.family.CompoundCometClassifier;
 import com.walletradar.ingestion.pipeline.classification.onchain.family.DefaultClassifier;
+import com.walletradar.ingestion.pipeline.classification.onchain.family.EulerEvcClassifier;
 import com.walletradar.ingestion.pipeline.classification.onchain.family.FailedExecutionClassifier;
+import com.walletradar.ingestion.pipeline.classification.onchain.family.FluidVaultClassifier;
 import com.walletradar.ingestion.pipeline.classification.onchain.family.FunctionNameClassifier;
 import com.walletradar.ingestion.pipeline.classification.onchain.family.GmxLpClassifier;
 import com.walletradar.ingestion.pipeline.classification.onchain.family.HeuristicClassifier;
@@ -26,6 +34,7 @@ import com.walletradar.ingestion.pipeline.classification.onchain.family.RewardRo
 import com.walletradar.ingestion.pipeline.classification.onchain.family.ResolvedWarningAdminConfigClassifier;
 import com.walletradar.ingestion.pipeline.classification.onchain.family.RoutedAggregatorSendClassifier;
 import com.walletradar.ingestion.pipeline.classification.onchain.family.SpamClassifier;
+import com.walletradar.ingestion.pipeline.classification.onchain.family.SpoofTokenClassifier;
 import com.walletradar.ingestion.pipeline.classification.onchain.family.StakingClassifier;
 import com.walletradar.ingestion.pipeline.classification.onchain.family.SwapClassifier;
 import com.walletradar.ingestion.pipeline.classification.onchain.family.SwapSemanticClassifier;
@@ -53,12 +62,14 @@ import com.walletradar.ingestion.pipeline.classification.onchain.protocol.regist
 import com.walletradar.ingestion.pipeline.classification.onchain.protocol.registry.SpecialHandlerRegistryReviewClassifier;
 import com.walletradar.ingestion.pipeline.classification.onchain.protocol.resolv.ResolvProtocolSemanticClassifier;
 import com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryService;
+import com.walletradar.ingestion.pipeline.classification.support.LpStakingWrapperResolver;
 import com.walletradar.ingestion.pipeline.classification.support.MovementLegExtractor;
 import com.walletradar.ingestion.pipeline.classification.support.NativeAssetSymbolResolver;
 import com.walletradar.ingestion.wallet.query.TrackedWalletLookupService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
@@ -78,13 +89,19 @@ public class OnChainClassifier {
     private final List<OnChainFamilyClassifier> postSpamReviewFamilyClassifiers;
     private final List<OnChainFamilyClassifier> finalFallbackFamilyClassifiers;
     private final ClassificationDecisionMapper decisionMapper;
+    private final NativeAssetSymbolResolver nativeAssetSymbolResolver;
+    private final NativeSettlementRecoveryProperties nativeSettlementRecoveryProperties;
 
     @Autowired
     public OnChainClassifier(
             OnChainClassificationContextFactory contextFactory,
             List<OnChainFamilyClassifier> familyClassifiers,
-            ClassificationDecisionMapper decisionMapper
+            ClassificationDecisionMapper decisionMapper,
+            NativeAssetSymbolResolver nativeAssetSymbolResolver,
+            NativeSettlementRecoveryProperties nativeSettlementRecoveryProperties
     ) {
+        this.nativeAssetSymbolResolver = nativeAssetSymbolResolver;
+        this.nativeSettlementRecoveryProperties = nativeSettlementRecoveryProperties;
         this.contextFactory = contextFactory;
         this.earlyGuardFamilyClassifiers = classifiersFor(familyClassifiers, OnChainClassificationInsertionPoint.EARLY_GUARDS);
         this.preEconomicReviewFamilyClassifiers = classifiersFor(familyClassifiers, OnChainClassificationInsertionPoint.PRE_ECONOMIC_REVIEW);
@@ -104,6 +121,8 @@ public class OnChainClassifier {
             TrackedWalletLookupService trackedWalletLookupService,
             NativeAssetSymbolResolver nativeAssetSymbolResolver
     ) {
+        this.nativeAssetSymbolResolver = nativeAssetSymbolResolver;
+        this.nativeSettlementRecoveryProperties = new NativeSettlementRecoveryProperties();
         MovementLegExtractor movementLegExtractor = new MovementLegExtractor(nativeAssetSymbolResolver);
         ProtocolResourceLoader protocolResourceLoader = new ProtocolResourceLoader(new ObjectMapper());
         this.contextFactory = new OnChainClassificationContextFactory(
@@ -119,7 +138,9 @@ public class OnChainClassifier {
                 )),
                 movementLegExtractor
         );
+        LpStakingWrapperResolver lpStakingWrapperResolver = new LpStakingWrapperResolver(protocolRegistryService);
         List<OnChainFamilyClassifier> familyClassifiers = List.of(
+                new SpoofTokenClassifier(),
                 new FailedExecutionClassifier(),
                 new AdminConfigClassifier(),
                 new WrappedNativeClassifier(nativeAssetSymbolResolver),
@@ -127,7 +148,7 @@ public class OnChainClassifier {
                 new RewardRouteClassifier(protocolRegistryService),
                 new BridgeStartClassifier(protocolRegistryService, nativeAssetSymbolResolver),
                 new TransferClassifier(protocolRegistryService),
-                new LpClassifier(),
+                new LpClassifier(protocolRegistryService, lpStakingWrapperResolver),
                 new LpFeeClaimClassifier(),
                 new RoutedAggregatorSendClassifier(protocolRegistryService),
                 new BridgeMethodAwareClassifier(protocolRegistryService),
@@ -142,13 +163,16 @@ public class OnChainClassifier {
                 new SpamClassifier(protocolRegistryService),
                 new NonEconomicClassifier(),
                 new ZkSyncAcrossRoutedBridgeClassifier(),
+                new AaveReceiptShapeClassifier(protocolRegistryService),
                 new ZkSyncAaveGatewayClassifier(),
                 new SwapSemanticClassifier(),
-                new LpSemanticClassifier(),
+                new LpSemanticClassifier(nativeAssetSymbolResolver),
                 new LendingSemanticClassifier(),
                 new VaultSemanticClassifier(),
+                new CompoundCometClassifier(protocolRegistryService),
+                new FluidVaultClassifier(protocolRegistryService),
                 new SwapRegistryClassifier(protocolRegistryService, nativeAssetSymbolResolver),
-                new LpRegistryClassifier(protocolRegistryService),
+                new LpRegistryClassifier(protocolRegistryService, nativeAssetSymbolResolver, lpStakingWrapperResolver),
                 new LendingRegistryClassifier(protocolRegistryService, protocolResourceLoader),
                 new VaultClassifier(protocolRegistryService),
                 new SpecialHandlerRegistryReviewClassifier(),
@@ -156,6 +180,7 @@ public class OnChainClassifier {
                 new RegistryDirectTypeClassifier(protocolRegistryService),
                 new MethodIdClassifier(),
                 new FunctionNameClassifier(protocolRegistryService, nativeAssetSymbolResolver),
+                new EulerEvcClassifier(),
                 new LendingClassifier(),
                 new HeuristicClassifier(protocolRegistryService, trackedWalletLookupService, nativeAssetSymbolResolver)
         );
@@ -173,40 +198,93 @@ public class OnChainClassifier {
         OnChainClassificationContext context = contextFactory.create(rawTransaction);
         Optional<ClassificationDecision> earlyGuardDecision = firstDecision(earlyGuardFamilyClassifiers, context);
         if (earlyGuardDecision.isPresent()) {
-            return decisionMapper.toResult(earlyGuardDecision.get());
+            return finalizeDecision(earlyGuardDecision.get(), context);
         }
 
         Optional<ClassificationDecision> preEconomicReviewDecision =
                 firstDecision(preEconomicReviewFamilyClassifiers, context);
         if (preEconomicReviewDecision.isPresent()) {
-            return decisionMapper.toResult(preEconomicReviewDecision.get());
+            return finalizeDecision(preEconomicReviewDecision.get(), context);
         }
 
         Optional<ClassificationDecision> preProtocolReviewDecision = firstDecision(preProtocolReviewFamilyClassifiers, context);
         if (preProtocolReviewDecision.isPresent()) {
-            return decisionMapper.toResult(preProtocolReviewDecision.get());
+            return finalizeDecision(preProtocolReviewDecision.get(), context);
         }
 
         Optional<ClassificationDecision> protocolLifecycleDecision = firstDecision(protocolLifecycleFamilyClassifiers, context);
         if (protocolLifecycleDecision.isPresent()) {
-            return decisionMapper.toResult(protocolLifecycleDecision.get());
+            return finalizeDecision(protocolLifecycleDecision.get(), context);
         }
 
         Optional<ClassificationDecision> preSpamReviewDecision = firstDecision(preSpamReviewFamilyClassifiers, context);
         if (preSpamReviewDecision.isPresent()) {
-            return decisionMapper.toResult(preSpamReviewDecision.get());
+            return finalizeDecision(preSpamReviewDecision.get(), context);
         }
 
         Optional<ClassificationDecision> postSpamReviewDecision = firstDecision(postSpamReviewFamilyClassifiers, context);
         if (postSpamReviewDecision.isPresent()) {
-            return decisionMapper.toResult(postSpamReviewDecision.get());
+            return finalizeDecision(postSpamReviewDecision.get(), context);
         }
 
         Optional<ClassificationDecision> finalFallbackDecision = firstDecision(finalFallbackFamilyClassifiers, context);
         if (finalFallbackDecision.isPresent()) {
-            return decisionMapper.toResult(finalFallbackDecision.get());
+            return finalizeDecision(finalFallbackDecision.get(), context);
         }
         throw new IllegalStateException("Final fallback classifiers must produce a terminal decision");
+    }
+
+    private OnChainClassificationResult finalizeDecision(ClassificationDecision decision, OnChainClassificationContext context) {
+        return decisionMapper.toResult(applyNativeSettlementClarification(decision, context));
+    }
+
+    /**
+     * ADR-044 D3: route a native-output {@code SWAP} / {@code LP_EXIT*} / {@code LP_FEE_CLAIM} /
+     * {@code UNWRAP} that would otherwise finalize without its native inbound leg to the existing
+     * full-receipt clarification path so the WETH {@code Withdrawal} evidence is fetched. Gated by
+     * the per-chain {@code native-settlement-recovery} flag (defaults off); a no-op otherwise.
+     */
+    private ClassificationDecision applyNativeSettlementClarification(
+            ClassificationDecision decision,
+            OnChainClassificationContext context
+    ) {
+        if (decision == null
+                || context == null
+                || !nativeSettlementRecoveryProperties.isEnabledForChain(context.view().networkId())) {
+            return decision;
+        }
+        NormalizedTransactionStatus status = decision.status();
+        // Only downgrade decisions that would otherwise silently finalize without the native leg.
+        if (status != NormalizedTransactionStatus.CONFIRMED
+                && status != NormalizedTransactionStatus.PENDING_PRICE) {
+            return decision;
+        }
+        if (!NativeSettlementClarificationTrigger.requiresReceiptClarification(
+                context.view(), context.movementLegs(), decision.type(), nativeAssetSymbolResolver)) {
+            return decision;
+        }
+        List<String> reasons = decision.missingDataReasons() == null
+                ? new ArrayList<>()
+                : new ArrayList<>(decision.missingDataReasons());
+        String reason = ClassificationReasonCode.NATIVE_SETTLEMENT_TRANSFER_EVIDENCE_REQUIRED.code();
+        if (!reasons.contains(reason)) {
+            reasons.add(reason);
+        }
+        return new ClassificationDecision(
+                decision.type(),
+                NormalizedTransactionStatus.PENDING_CLARIFICATION,
+                decision.classifiedBy(),
+                decision.confidence(),
+                decision.flows(),
+                List.copyOf(reasons),
+                decision.correlationId(),
+                decision.continuityCandidate(),
+                decision.matchedCounterparty(),
+                decision.excludedFromAccounting(),
+                decision.accountingExclusionReason(),
+                decision.protocolName(),
+                decision.protocolVersion()
+        );
     }
 
     private static List<OnChainFamilyClassifier> classifiersFor(

@@ -20,6 +20,8 @@ import java.time.Instant;
 @CompoundIndex(name = "wallet_network_slot", def = "{'walletAddress': 1, 'networkId': 1, 'slot': 1}")
 @CompoundIndex(name = "wallet_network_status", def = "{'walletAddress': 1, 'networkId': 1, 'normalizationStatus': 1}")
 @CompoundIndex(name = "normalization_status_retry_idx", def = "{'normalizationStatus': 1, 'nextRetryAt': 1}")
+@CompoundIndex(name = "raw_network_explorer_token_contract_idx", def = "{'networkId': 1, 'rawData.explorer.tokenTransfers.contractAddress': 1}")
+@CompoundIndex(name = "raw_network_clarification_token_contract_idx", def = "{'networkId': 1, 'clarificationEvidence.transfers.tokenTransfers.contractAddress': 1}")
 @NoArgsConstructor
 @Getter
 @Setter

@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "cycle-autorun/command.schema.json",
+  "type": "object",
+  "required": [
+    "id",
+    "type",
+    "status",
+    "createdAt",
+    "payload"
+  ],
+  "properties": {
+    "id": { "type": "string" },
+    "type": {
+      "type": "string",
+      "enum": [
+        "reconcile_pipeline",
+        "dispatch_role_prompt",
+        "question_open",
+        "question_answer",
+        "question_resolve",
+        "question_cancel"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "queued",
+        "running",
+        "succeeded",
+        "failed",
+        "cancelled",
+        "timed_out"
+      ]
+    },
+    "createdAt": { "type": "string" },
+    "startedAt": { "type": "string" },
+    "completedAt": { "type": "string" },
+    "payload": { "type": "object" },
+    "result": { "type": "object" },
+    "error": { "type": "string" }
+  }
+}

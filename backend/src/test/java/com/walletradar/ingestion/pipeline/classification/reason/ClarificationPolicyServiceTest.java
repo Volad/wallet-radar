@@ -31,7 +31,7 @@ class ClarificationPolicyServiceTest {
     }
 
     @Test
-    void failureDecisionBecomesNeedsReviewWhenAttemptsExhausted() {
+    void failureDecisionBecomesReclassificationWhenAttemptsExhausted() {
         ClarificationPolicyService service = new ClarificationPolicyService();
         NormalizedTransaction normalizedTransaction = new NormalizedTransaction()
                 .setType(NormalizedTransactionType.SWAP)
@@ -57,7 +57,7 @@ class ClarificationPolicyServiceTest {
                 3,
                 3
         );
-        assertThat(exhausted.status()).isEqualTo(NormalizedTransactionStatus.NEEDS_REVIEW);
+        assertThat(exhausted.status()).isEqualTo(NormalizedTransactionStatus.PENDING_RECLASSIFICATION);
         assertThat(exhausted.missingDataReasons()).contains(
                 ClassificationReasonCode.CLARIFICATION_INSUFFICIENT_EVIDENCE.code(),
                 ClassificationReasonCode.CLARIFICATION_ATTEMPTS_EXHAUSTED.code()
@@ -65,7 +65,7 @@ class ClarificationPolicyServiceTest {
     }
 
     @Test
-    void receiptFailureDecisionPreservesStatusAndAppendsReason() {
+    void receiptFailureDecisionReclassifiesAfterAttemptsExhausted() {
         ClarificationPolicyService service = new ClarificationPolicyService();
         NormalizedTransaction normalizedTransaction = new NormalizedTransaction()
                 .setType(NormalizedTransactionType.UNKNOWN)
@@ -74,13 +74,17 @@ class ClarificationPolicyServiceTest {
 
         ClarificationDecision decision = service.nextReceiptFailureDecision(
                 normalizedTransaction,
-                ClassificationReasonCode.CLARIFICATION_FULL_RECEIPT_UNAVAILABLE.code()
+                rawWithoutReceiptEvidence(),
+                ClassificationReasonCode.CLARIFICATION_FULL_RECEIPT_UNAVAILABLE.code(),
+                1,
+                1
         );
 
-        assertThat(decision.status()).isEqualTo(NormalizedTransactionStatus.NEEDS_REVIEW);
+        assertThat(decision.status()).isEqualTo(NormalizedTransactionStatus.PENDING_RECLASSIFICATION);
         assertThat(decision.missingDataReasons()).containsExactly(
                 ClassificationReasonCode.CLASSIFICATION_FAILED.code(),
-                ClassificationReasonCode.CLARIFICATION_FULL_RECEIPT_UNAVAILABLE.code()
+                ClassificationReasonCode.CLARIFICATION_FULL_RECEIPT_UNAVAILABLE.code(),
+                ClassificationReasonCode.CLARIFICATION_ATTEMPTS_EXHAUSTED.code()
         );
     }
 
@@ -95,6 +99,34 @@ class ClarificationPolicyServiceTest {
         assertThat(service.isReceiptClarificationEligible(
                 normalizedTransaction,
                 OnChainRawTransactionView.wrap(reviewTailRaw())
+        )).isTrue();
+    }
+
+    @Test
+    void receiptEligibilityKeepsEulerBatchRowsRetryableWhenOnlyReceiptLogsPersisted() {
+        ClarificationPolicyService service = new ClarificationPolicyService();
+        NormalizedTransaction normalizedTransaction = new NormalizedTransaction()
+                .setType(NormalizedTransactionType.UNKNOWN)
+                .setStatus(NormalizedTransactionStatus.NEEDS_REVIEW)
+                .setProtocolName("Euler")
+                .setMissingDataReasons(List.of(ClassificationReasonCode.CLASSIFICATION_FAILED.code()));
+
+        RawTransaction rawTransaction = new RawTransaction()
+                .setTxHash("0x305f37a69956a13001962216c845385996114876173bdbaef644bbe3baadf5df")
+                .setNetworkId("AVALANCHE")
+                .setWalletAddress("0x1111111111111111111111111111111111111111")
+                .setRawData(new Document("from", "0x1111111111111111111111111111111111111111")
+                        .append("to", "0xddcbe30a761edd2e19bba930a977475265f36fa1")
+                        .append("methodId", "0xc16ae7a4")
+                        .append("input", "0xc16ae7a4000000000000000000000000"))
+                .setClarificationEvidence(new Document("receipt", new Document("logs", List.of(
+                        new Document("address", "0xddcbe30a761edd2e19bba930a977475265f36fa1")
+                                .append("topics", List.of("0xborrow"))
+                ))));
+
+        assertThat(service.isReceiptClarificationEligible(
+                normalizedTransaction,
+                OnChainRawTransactionView.wrap(rawTransaction)
         )).isTrue();
     }
 

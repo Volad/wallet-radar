@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Euler protocol-owned clarified batch lifecycle semantics.
@@ -40,7 +41,10 @@ public class EulerProtocolSemanticClassifier implements ProtocolSemanticClassifi
     public static final String SEMANTIC_LENDING_LOOP_DECREASE = "lending_loop_decrease";
     public static final String SEMANTIC_LENDING_LOOP_CLOSE = "lending_loop_close";
 
-    private static final String EULER_BATCH_ROUTER = "0xddcbe30a761edd2e19bba930a977475265f36fa1";
+    private static final Set<String> EULER_BATCH_ROUTERS = Set.of(
+            "0xddcbe30a761edd2e19bba930a977475265f36fa1",
+            "0x7bdbd0a7114aa42ca957f292145f6a931a345583"
+    );
     private static final String EULER_CALL_WITH_CONTEXT_TOPIC =
             "0x6e9738e5aa38fe1517adbb480351ec386ece82947737b18badbcad1e911133ec";
     private static final String EULER_BORROW_EVENT_TOPIC =
@@ -49,6 +53,13 @@ public class EulerProtocolSemanticClassifier implements ProtocolSemanticClassifi
     private static final String EULER_DEUSD_CONTRACT = "0xb57b25851fe2311cc3fe511c8f10e868932e0680";
     private static final String ERC20_TRANSFER_TOPIC =
             "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+
+    /**
+     * {@link Set#of} rejects {@code contains(null)} with NPE; explorer-only rows often omit top-level {@code to}.
+     */
+    private static boolean isEulerBatchRouter(String toAddress) {
+        return toAddress != null && EULER_BATCH_ROUTERS.contains(toAddress);
+    }
 
     private final ProtocolResourceDefinition resource;
 
@@ -115,8 +126,9 @@ public class EulerProtocolSemanticClassifier implements ProtocolSemanticClassifi
                 || hasAnyInboundFungibleTransferToWallet(view);
         boolean principalOutbound = hasNonShareMovement(movementLegs, false)
                 || hasAnyOutboundFungibleTransferFromWallet(view);
+        boolean clarifiedNativeValueDeposit = hasClarifiedNativeValueDepositLifecycle(view, movementLegs);
 
-        if (shareInbound && principalOutbound) {
+        if (shareInbound && (principalOutbound || clarifiedNativeValueDeposit)) {
             return List.of(hint(SEMANTIC_LENDING_DEPOSIT));
         }
         if (shareOutbound && principalInbound) {
@@ -156,14 +168,14 @@ public class EulerProtocolSemanticClassifier implements ProtocolSemanticClassifi
     }
 
     private boolean isAuditedLoopRouter(OnChainRawTransactionView view) {
-        return EULER_BATCH_ROUTER.equals(view.toAddress());
+        return isEulerBatchRouter(view.toAddress());
     }
 
     private boolean isEulerBorrowBackedCollateralOpen(
             OnChainRawTransactionView view,
             List<RawLeg> movementLegs
     ) {
-        if (!EULER_BATCH_ROUTER.equals(view.toAddress())) {
+        if (!isEulerBatchRouter(view.toAddress())) {
             return false;
         }
         if (!hasEulerBorrowCallContext(view) || !hasEulerBorrowEvent(view)) {
@@ -431,7 +443,10 @@ public class EulerProtocolSemanticClassifier implements ProtocolSemanticClassifi
             return false;
         }
         String normalized = assetSymbol.trim().toLowerCase(Locale.ROOT);
-        return matchesPrefixAssetMarker(normalized, "shareSymbolPrefixes", "a", "c", "s", "e", "gt", "syrup");
+        if (normalized.startsWith("syrup")) {
+            return false;
+        }
+        return matchesPrefixAssetMarker(normalized, "shareSymbolPrefixes", "a", "c", "s", "e", "gt");
     }
 
     private boolean isDebtLikeSymbol(String assetSymbol) {
@@ -506,6 +521,43 @@ public class EulerProtocolSemanticClassifier implements ProtocolSemanticClassifi
             if (matchesWalletAccount(view, from) && !isZeroAddress(to)) {
                 return true;
             }
+        }
+        return false;
+    }
+
+    private boolean hasClarifiedNativeValueDepositLifecycle(
+            OnChainRawTransactionView view,
+            List<RawLeg> movementLegs
+    ) {
+        if (view.rawValue() == null || view.rawValue().signum() <= 0) {
+            return false;
+        }
+        if (!hasMintedFungibleTransferToWallet(view)) {
+            return false;
+        }
+        if (hasBurnedFungibleTransferFromWallet(view)) {
+            return false;
+        }
+        if (hasDebtLikeMovement(movementLegs, true) || hasDebtLikeMovement(movementLegs, false)) {
+            return false;
+        }
+        return hasProtocolLocalFungibleHop(view);
+    }
+
+    private boolean hasProtocolLocalFungibleHop(OnChainRawTransactionView view) {
+        for (Document log : view.persistedLogs()) {
+            if (!isErc20TransferLog(log)) {
+                continue;
+            }
+            String from = topicAddress(topicAt(log, 1));
+            String to = topicAddress(topicAt(log, 2));
+            if (isZeroAddress(from) || isZeroAddress(to)) {
+                continue;
+            }
+            if (matchesWalletAccount(view, from) || matchesWalletAccount(view, to)) {
+                continue;
+            }
+            return true;
         }
         return false;
     }
@@ -594,7 +646,7 @@ public class EulerProtocolSemanticClassifier implements ProtocolSemanticClassifi
         if (!"0xc16ae7a4".equals(view.methodId())) {
             return false;
         }
-        if (!EULER_BATCH_ROUTER.equals(view.toAddress())) {
+        if (!isEulerBatchRouter(view.toAddress())) {
             return false;
         }
         return wallet.length() == 42

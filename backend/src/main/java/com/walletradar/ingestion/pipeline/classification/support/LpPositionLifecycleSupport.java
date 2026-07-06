@@ -99,8 +99,11 @@ public final class LpPositionLifecycleSupport {
         if ((decreaseLiquidity || burn) && hasInboundNonFeeLeg(movementLegs)) {
             return NormalizedTransactionType.LP_EXIT;
         }
-        if (collect && hasInboundNonFeeLeg(movementLegs) && !hasOutboundNonFeeLeg(movementLegs)) {
-            return hasAnyErc721TransferToWallet(view)
+        // collect-only multicall (no decreaseLiquidity/burn in calldata): route through
+        // hasPositionReductionEvidence regardless of outbound dust legs (tiny WETH-to-ETH sweep
+        // or other contract-mandated outflows must not suppress LP_FEE_CLAIM classification).
+        if (collect && hasInboundNonFeeLeg(movementLegs)) {
+            return LpPrincipalCloseEvidence.hasPositionReductionEvidence(view)
                     ? NormalizedTransactionType.LP_EXIT
                     : NormalizedTransactionType.LP_FEE_CLAIM;
         }
@@ -187,13 +190,20 @@ public final class LpPositionLifecycleSupport {
             OnChainRawTransactionView view,
             List<RawLeg> movementLegs
     ) {
+        // ModifyLiquidity event logs are the authoritative source: liquidityDelta=0 means a pure
+        // fee collection even when inbound token legs are present. Check logs first.
+        NormalizedTransactionType fromLogs = resolveModifyLiquiditiesFromLogs(view);
+        if (fromLogs != null) {
+            return fromLogs;
+        }
+        // Fallback when logs are unavailable (e.g. Etherscan-sourced txs with no stored receipt).
         if (hasOutboundNonFeeTokenLeg(movementLegs)) {
             return NormalizedTransactionType.LP_ENTRY;
         }
         if (hasInboundNonFeeTokenLeg(movementLegs)) {
             return NormalizedTransactionType.LP_EXIT;
         }
-        return resolveModifyLiquiditiesFromLogs(view);
+        return null;
     }
 
     private static NormalizedTransactionType resolveModifyLiquiditiesFromLogs(OnChainRawTransactionView view) {
@@ -204,13 +214,19 @@ public final class LpPositionLifecycleSupport {
             if (!MODIFY_LIQUIDITY_TOPIC.equals(firstTopic(log))) {
                 continue;
             }
-            BigInteger amount0 = decodeSignedWord(logData(log), 0);
-            BigInteger amount1 = decodeSignedWord(logData(log), 1);
-            if (isPositive(amount0) || isPositive(amount1)) {
+            // ModifyLiquidity(PoolId indexed, address indexed, int24 tickLower, int24 tickUpper,
+            //                 int256 liquidityDelta, bytes32 salt)
+            // Non-indexed data layout: word0=tickLower, word1=tickUpper, word2=liquidityDelta, word3=salt
+            BigInteger liquidityDelta = decodeSignedWord(logData(log), 2);
+            if (isPositive(liquidityDelta)) {
                 return NormalizedTransactionType.LP_ENTRY;
             }
-            if (isNegative(amount0) || isNegative(amount1)) {
+            if (isNegative(liquidityDelta)) {
                 return NormalizedTransactionType.LP_EXIT;
+            }
+            if (liquidityDelta != null) {
+                // liquidityDelta == 0: no position liquidity changed, only fees collected
+                return NormalizedTransactionType.LP_FEE_CLAIM;
             }
         }
         if (hasPositionNftMintLog(view)) {
@@ -266,7 +282,10 @@ public final class LpPositionLifecycleSupport {
                 continue;
             }
             List<String> topics = normalizedTopics(log);
-            if (topics.size() < 3) {
+            // ERC-721 Transfer has tokenId as 4th indexed topic (4 total); ERC-20 Transfer only has 3.
+            // Requiring 4 topics prevents ERC-20 transfers (e.g. USDC sent to wallet) from being
+            // misidentified as NFT transfers, which would incorrectly trigger LP_EXIT classification.
+            if (topics.size() < 4) {
                 continue;
             }
             if (wallet.equals(topicAddress(topics.get(2)))) {
@@ -274,6 +293,45 @@ public final class LpPositionLifecycleSupport {
             }
         }
         return false;
+    }
+
+    /**
+     * Extracts the ERC-721 tokenId from the first Transfer log whose recipient is the wallet.
+     *
+     * <p>ERC-721 Transfer events have 4 indexed topics: [event_sig, from, to, tokenId].
+     * This method requires exactly 4 topics to avoid confusing ERC-20 Transfer logs (3 topics)
+     * with NFT Transfer logs.
+     *
+     * @return decimal string tokenId, or {@code null} if no matching log is found
+     */
+    public static String extractErc721TokenIdForWallet(OnChainRawTransactionView view) {
+        String wallet = OnChainRawTransactionView.normalizeAddress(view.walletAddress());
+        if (wallet == null) {
+            return null;
+        }
+        for (Document log : view.persistedLogs()) {
+            if (!ERC721_TRANSFER_TOPIC.equals(firstTopic(log))) {
+                continue;
+            }
+            List<String> topics = normalizedTopics(log);
+            if (topics.size() < 4) {
+                continue;
+            }
+            if (!wallet.equals(topicAddress(topics.get(2)))) {
+                continue;
+            }
+            String tokenIdHex = topics.get(3);
+            String normalized = tokenIdHex.startsWith("0x") ? tokenIdHex.substring(2) : tokenIdHex;
+            if (normalized.isBlank()) {
+                continue;
+            }
+            try {
+                return new BigInteger(normalized, 16).toString(10);
+            } catch (NumberFormatException ignored) {
+                // malformed topic; try next log
+            }
+        }
+        return null;
     }
 
     private static String firstTopic(Document log) {

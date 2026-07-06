@@ -13,6 +13,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -37,10 +38,30 @@ public class PendingReceiptClarificationQueryService {
     private final ReceiptClarificationGateway receiptClarificationGateway;
 
     public List<NormalizedTransaction> loadNextBatch(int batchSize, int maxAttempts, long retryDelaySeconds) {
+        return loadNextBatch(batchSize, maxAttempts, retryDelaySeconds, null, 0L);
+    }
+
+    public List<NormalizedTransaction> claimNextBatch(
+            int batchSize,
+            int maxAttempts,
+            long retryDelaySeconds,
+            String workerId,
+            long leaseSeconds
+    ) {
+        return loadNextBatch(batchSize, maxAttempts, retryDelaySeconds, workerId, leaseSeconds);
+    }
+
+    public List<NormalizedTransaction> claimActiveNeedsReviewBatch(
+            int batchSize,
+            int maxAttempts,
+            long retryDelaySeconds,
+            String workerId,
+            long leaseSeconds
+    ) {
         int boundedBatchSize = Math.max(1, batchSize);
         int boundedMaxAttempts = Math.max(1, maxAttempts);
-        int selectionLimit = Math.max(boundedBatchSize, boundedBatchSize * 4);
-        Instant retryCutoff = Instant.now().minusSeconds(Math.max(0L, retryDelaySeconds));
+        Instant now = Instant.now();
+        Instant retryCutoff = now.minusSeconds(Math.max(0L, retryDelaySeconds));
 
         Criteria attemptsCriteria = new Criteria().orOperator(
                 Criteria.where("fullReceiptClarificationAttempts").exists(false),
@@ -51,17 +72,207 @@ public class PendingReceiptClarificationQueryService {
                 Criteria.where("fullReceiptClarificationAttempts").lte(0),
                 Criteria.where("updatedAt").lte(retryCutoff)
         );
-        Criteria reviewReasonsCriteria = Criteria.where("missingDataReasons").in(
-                ClassificationReasonCode.ROUTER_METHOD_OVERLOAD_UNSUPPORTED.code(),
-                ClassificationReasonCode.CLASSIFICATION_FAILED.code(),
-                ClassificationReasonCode.INSUFFICIENT_MOVEMENT_EVIDENCE.code(),
-                ClassificationReasonCode.GMX_DEPOSIT_REQUEST_CORRELATION_REQUIRED.code(),
-                ClassificationReasonCode.GMX_DEPOSIT_SETTLEMENT_CORRELATION_REQUIRED.code(),
-                ClassificationReasonCode.EULER_BATCH_DECODER_REQUIRED.code()
+        Criteria leaseCriteria = new Criteria().orOperator(
+                Criteria.where("clarificationLeaseUntil").exists(false),
+                Criteria.where("clarificationLeaseUntil").is(null),
+                Criteria.where("clarificationLeaseUntil").lte(now)
+        );
+        Criteria activeAccountingCriteria = new Criteria().orOperator(
+                Criteria.where("excludedFromAccounting").exists(false),
+                Criteria.where("excludedFromAccounting").ne(true)
+        );
+
+        Query query = new Query(new Criteria().andOperator(
+                Criteria.where("source").is(NormalizedTransactionSource.ON_CHAIN),
+                Criteria.where("status").is(NormalizedTransactionStatus.NEEDS_REVIEW),
+                activeAccountingCriteria,
+                attemptsCriteria,
+                dueCriteria,
+                leaseCriteria
+        ));
+        query.with(Sort.by(
+                Sort.Order.asc("blockTimestamp"),
+                Sort.Order.asc("transactionIndex"),
+                Sort.Order.asc("_id")
+        ));
+        query.limit(boundedBatchSize);
+        return claimIfRequested(
+                mongoOperations.find(query, NormalizedTransaction.class),
+                workerId,
+                leaseSeconds,
+                now
+        );
+    }
+
+    /**
+     * Claims EXTERNAL_TRANSFER_OUT transactions that used the multicall (0xac9650d8) method and are classified with
+     * counterpartyAddress=MULTI, targeting cases where BlockScout failed to index ERC-20 token transfers due to
+     * indexer lag. The RPC receipt fallback in the clarification gateway recovers the missing token transfers.
+     *
+     * <p>Uses {@code clarificationAttempts} as the gate because this path goes through the metadata clarification
+     * workflow (non-NEEDS_REVIEW branch), which increments {@code clarificationAttempts} on both success and failure.
+     */
+    public List<NormalizedTransaction> claimMulticallMissingTransferBatch(
+            int batchSize,
+            int maxAttempts,
+            long retryDelaySeconds,
+            String workerId,
+            long leaseSeconds
+    ) {
+        int boundedBatchSize = Math.max(1, batchSize);
+        int boundedMaxAttempts = Math.max(1, maxAttempts);
+        Instant now = Instant.now();
+        Instant retryCutoff = now.minusSeconds(Math.max(0L, retryDelaySeconds));
+
+        // Gate on clarificationAttempts: the metadata clarification path increments this field on both success and
+        // failure, preventing re-selection of already-processed rows within the same pipeline run.
+        Criteria attemptsCriteria = new Criteria().orOperator(
+                Criteria.where("clarificationAttempts").exists(false),
+                Criteria.where("clarificationAttempts").lt(boundedMaxAttempts)
+        );
+        Criteria dueCriteria = new Criteria().orOperator(
+                Criteria.where("clarificationAttempts").exists(false),
+                Criteria.where("clarificationAttempts").lte(0),
+                Criteria.where("updatedAt").lte(retryCutoff)
+        );
+        Criteria leaseCriteria = new Criteria().orOperator(
+                Criteria.where("clarificationLeaseUntil").exists(false),
+                Criteria.where("clarificationLeaseUntil").is(null),
+                Criteria.where("clarificationLeaseUntil").lte(now)
+        );
+        Criteria activeAccountingCriteria = new Criteria().orOperator(
+                Criteria.where("excludedFromAccounting").exists(false),
+                Criteria.where("excludedFromAccounting").ne(true)
+        );
+
+        Query query = new Query(new Criteria().andOperator(
+                Criteria.where("source").is(NormalizedTransactionSource.ON_CHAIN),
+                Criteria.where("status").in(
+                        NormalizedTransactionStatus.CONFIRMED,
+                        NormalizedTransactionStatus.PENDING_PRICE
+                ),
+                Criteria.where("type").is(NormalizedTransactionType.EXTERNAL_TRANSFER_OUT),
+                Criteria.where("counterpartyAddress").is(FlowCounterpartySupport.MULTI_COUNTERPARTY),
+                activeAccountingCriteria,
+                attemptsCriteria,
+                dueCriteria,
+                leaseCriteria
+        ));
+        query.with(Sort.by(
+                Sort.Order.asc("blockTimestamp"),
+                Sort.Order.asc("transactionIndex"),
+                Sort.Order.asc("_id")
+        ));
+        query.limit(boundedBatchSize);
+        return claimIfRequested(
+                mongoOperations.find(query, NormalizedTransaction.class),
+                workerId,
+                leaseSeconds,
+                now
+        );
+    }
+
+    public List<NormalizedTransaction> claimConfirmedFluidReceiptBatch(
+            int batchSize,
+            int maxAttempts,
+            long retryDelaySeconds,
+            String workerId,
+            long leaseSeconds
+    ) {
+        int boundedBatchSize = Math.max(1, batchSize);
+        int boundedMaxAttempts = Math.max(1, maxAttempts);
+        Instant now = Instant.now();
+        Instant retryCutoff = now.minusSeconds(Math.max(0L, retryDelaySeconds));
+
+        Criteria attemptsCriteria = new Criteria().orOperator(
+                Criteria.where("fullReceiptClarificationAttempts").exists(false),
+                Criteria.where("fullReceiptClarificationAttempts").lt(boundedMaxAttempts)
+        );
+        Criteria dueCriteria = new Criteria().orOperator(
+                Criteria.where("fullReceiptClarificationAttempts").exists(false),
+                Criteria.where("fullReceiptClarificationAttempts").lte(0),
+                Criteria.where("updatedAt").lte(retryCutoff)
+        );
+        Criteria leaseCriteria = new Criteria().orOperator(
+                Criteria.where("clarificationLeaseUntil").exists(false),
+                Criteria.where("clarificationLeaseUntil").is(null),
+                Criteria.where("clarificationLeaseUntil").lte(now)
+        );
+        Criteria activeAccountingCriteria = new Criteria().orOperator(
+                Criteria.where("excludedFromAccounting").exists(false),
+                Criteria.where("excludedFromAccounting").ne(true)
+        );
+        Criteria missingFluidFullLogEvidenceCriteria = new Criteria().orOperator(
+                Criteria.where("metadata.evidenceCompleteness").exists(false),
+                Criteria.where("metadata.evidenceCompleteness").ne("FULL_LOGS_PRESENT")
+        );
+
+        Query query = new Query(new Criteria().andOperator(
+                Criteria.where("source").is(NormalizedTransactionSource.ON_CHAIN),
+                Criteria.where("status").in(
+                        NormalizedTransactionStatus.CONFIRMED,
+                        NormalizedTransactionStatus.PENDING_PRICE,
+                        NormalizedTransactionStatus.PENDING_STAT
+                ),
+                Criteria.where("protocolName").is("Fluid"),
+                Criteria.where("type").in(
+                        NormalizedTransactionType.LENDING_LOOP_OPEN,
+                        NormalizedTransactionType.LENDING_LOOP_DECREASE,
+                        NormalizedTransactionType.LENDING_LOOP_CLOSE,
+                        NormalizedTransactionType.LENDING_WITHDRAW,
+                        NormalizedTransactionType.REPAY,
+                        NormalizedTransactionType.BORROW
+                ),
+                missingFluidFullLogEvidenceCriteria,
+                activeAccountingCriteria,
+                attemptsCriteria,
+                dueCriteria,
+                leaseCriteria
+        ));
+        query.with(Sort.by(
+                Sort.Order.asc("blockTimestamp"),
+                Sort.Order.asc("transactionIndex"),
+                Sort.Order.asc("_id")
+        ));
+        query.limit(boundedBatchSize);
+        List<NormalizedTransaction> selected = mongoOperations.find(query, NormalizedTransaction.class);
+        return claimIfRequested(selected, workerId, leaseSeconds, now);
+    }
+
+    private List<NormalizedTransaction> loadNextBatch(
+            int batchSize,
+            int maxAttempts,
+            long retryDelaySeconds,
+            String workerId,
+            long leaseSeconds
+    ) {
+        int boundedBatchSize = Math.max(1, batchSize);
+        int boundedMaxAttempts = Math.max(1, maxAttempts);
+        int selectionLimit = Math.max(boundedBatchSize, boundedBatchSize * 4);
+        Instant now = Instant.now();
+        Instant retryCutoff = now.minusSeconds(Math.max(0L, retryDelaySeconds));
+
+        Criteria attemptsCriteria = new Criteria().orOperator(
+                Criteria.where("fullReceiptClarificationAttempts").exists(false),
+                Criteria.where("fullReceiptClarificationAttempts").lt(boundedMaxAttempts)
+        );
+        Criteria dueCriteria = new Criteria().orOperator(
+                Criteria.where("fullReceiptClarificationAttempts").exists(false),
+                Criteria.where("fullReceiptClarificationAttempts").lte(0),
+                Criteria.where("updatedAt").lte(retryCutoff)
+        );
+        Criteria leaseCriteria = new Criteria().orOperator(
+                Criteria.where("clarificationLeaseUntil").exists(false),
+                Criteria.where("clarificationLeaseUntil").is(null),
+                Criteria.where("clarificationLeaseUntil").lte(now)
+        );
+        Criteria activeAccountingCriteria = new Criteria().orOperator(
+                Criteria.where("excludedFromAccounting").exists(false),
+                Criteria.where("excludedFromAccounting").ne(true)
         );
         Criteria reviewTailCriteria = new Criteria().andOperator(
                 Criteria.where("status").is(NormalizedTransactionStatus.NEEDS_REVIEW),
-                reviewReasonsCriteria
+                activeAccountingCriteria
         );
         Criteria gmxPendingClarificationCriteria = new Criteria().andOperator(
                 Criteria.where("status").is(NormalizedTransactionStatus.PENDING_CLARIFICATION),
@@ -108,18 +319,62 @@ public class PendingReceiptClarificationQueryService {
                 Criteria.where("protocolName").is("Euler"),
                 Criteria.where("missingDataReasons").in(ClassificationReasonCode.EULER_BATCH_DECODER_REQUIRED.code())
         );
+        // ADR-044 D3: broadened beyond LP_EXIT/LP_FEE_CLAIM to SWAP/UNWRAP/LP_EXIT_PARTIAL/
+        // LP_EXIT_FINAL. Safe: only rows carrying NATIVE_SETTLEMENT_TRANSFER_EVIDENCE_REQUIRED at
+        // PENDING_CLARIFICATION match, which the (per-chain flag-gated) classification trigger
+        // produces — with the flag off no SWAP/UNWRAP row carries this reason.
+        Criteria nativeSettlementTransferRecoveryCriteria = new Criteria().andOperator(
+                Criteria.where("status").is(NormalizedTransactionStatus.PENDING_CLARIFICATION),
+                Criteria.where("type").in(
+                        NormalizedTransactionType.LP_EXIT,
+                        NormalizedTransactionType.LP_EXIT_PARTIAL,
+                        NormalizedTransactionType.LP_EXIT_FINAL,
+                        NormalizedTransactionType.LP_FEE_CLAIM,
+                        NormalizedTransactionType.SWAP,
+                        NormalizedTransactionType.UNWRAP
+                ),
+                Criteria.where("missingDataReasons")
+                        .in(ClassificationReasonCode.NATIVE_SETTLEMENT_TRANSFER_EVIDENCE_REQUIRED.code())
+        );
+        Criteria lpPositionCorrelationRecoveryCriteria = new Criteria().andOperator(
+                Criteria.where("status").is(NormalizedTransactionStatus.PENDING_CLARIFICATION),
+                Criteria.where("type").in(
+                        NormalizedTransactionType.LP_ENTRY,
+                        NormalizedTransactionType.LP_EXIT,
+                        NormalizedTransactionType.LP_EXIT_PARTIAL,
+                        NormalizedTransactionType.LP_EXIT_FINAL
+                ),
+                Criteria.where("missingDataReasons")
+                        .in(ClassificationReasonCode.LP_POSITION_CORRELATION_REQUIRED.code())
+        );
+        // Multicall (0xac9650d8) + ETH-value transactions classified as EXTERNAL_TRANSFER_OUT
+        // when BlockScout hasn't indexed the sub-call token transfers yet.
+        // The eligibility gate filters by methodId and rawValue via the raw_transaction view,
+        // so the MongoDB pre-filter uses the broader counterpartyAddress=MULTI signal.
+        Criteria multicallMissingTransferCriteria = new Criteria().andOperator(
+                Criteria.where("status").in(
+                        NormalizedTransactionStatus.CONFIRMED,
+                        NormalizedTransactionStatus.PENDING_PRICE
+                ),
+                Criteria.where("type").is(NormalizedTransactionType.EXTERNAL_TRANSFER_OUT),
+                Criteria.where("counterpartyAddress").is("MULTI")
+        );
 
         Query query = new Query(new Criteria().andOperator(
                 Criteria.where("source").is(NormalizedTransactionSource.ON_CHAIN),
                 attemptsCriteria,
                 dueCriteria,
+                leaseCriteria,
                 new Criteria().orOperator(
                         reviewTailCriteria,
                         gmxPendingClarificationCriteria,
                         cowPendingClarificationCriteria,
                         bridgeEvidenceCriteria,
                         oneInchNativeSettlementCriteria,
-                        eulerPendingClarificationCriteria
+                        eulerPendingClarificationCriteria,
+                        nativeSettlementTransferRecoveryCriteria,
+                        lpPositionCorrelationRecoveryCriteria,
+                        multicallMissingTransferCriteria
                 )
         ));
         query.with(Sort.by(
@@ -132,7 +387,7 @@ public class PendingReceiptClarificationQueryService {
                 mongoOperations.find(query, NormalizedTransaction.class)
         );
         if (selected.size() >= boundedBatchSize) {
-            return List.copyOf(selected.subList(0, boundedBatchSize));
+            return claimIfRequested(List.copyOf(selected.subList(0, boundedBatchSize)), workerId, leaseSeconds, now);
         }
 
         Map<String, NormalizedTransaction> deduplicated = new LinkedHashMap<>();
@@ -181,9 +436,69 @@ public class PendingReceiptClarificationQueryService {
             }
         }
         List<NormalizedTransaction> filtered = excludeRowsWithPersistedReceiptEvidence(deduplicated.values());
-        return filtered.size() <= boundedBatchSize
+        List<NormalizedTransaction> limited = filtered.size() <= boundedBatchSize
                 ? List.copyOf(filtered)
                 : List.copyOf(filtered.subList(0, boundedBatchSize));
+        return claimIfRequested(limited, workerId, leaseSeconds, now);
+    }
+
+    /**
+     * Releases all active (future) clarification leases across all PENDING_CLARIFICATION transactions.
+     * Intended to run once at startup so that items leased by a previously crashed process become
+     * immediately claimable — without waiting for the full lease TTL (300 s by default).
+     * Safe for single-instance backends; idempotent.
+     */
+    public int releaseAllStaleLeases() {
+        Instant now = Instant.now();
+        Query query = new Query(new Criteria().andOperator(
+                Criteria.where("status").is(NormalizedTransactionStatus.PENDING_CLARIFICATION),
+                Criteria.where("clarificationLeaseUntil").gt(now)
+        ));
+        Update release = new Update().unset("clarificationLeaseUntil");
+        com.mongodb.client.result.UpdateResult result = mongoOperations.updateMulti(query, release, NormalizedTransaction.class);
+        return (int) result.getModifiedCount();
+    }
+
+    private List<NormalizedTransaction> claimIfRequested(
+            List<NormalizedTransaction> selected,
+            String workerId,
+            long leaseSeconds,
+            Instant now
+    ) {
+        if (workerId == null || workerId.isBlank() || selected.isEmpty()) {
+            return selected;
+        }
+        List<String> ids = new ArrayList<>(selected.size());
+        for (NormalizedTransaction transaction : selected) {
+            ids.add(transaction.getId());
+        }
+        Instant leaseUntil = now.plusSeconds(Math.max(1L, leaseSeconds));
+        Criteria leaseCriteria = new Criteria().orOperator(
+                Criteria.where("clarificationLeaseUntil").exists(false),
+                Criteria.where("clarificationLeaseUntil").is(null),
+                Criteria.where("clarificationLeaseUntil").lte(now)
+        );
+        Query claimQuery = new Query(new Criteria().andOperator(
+                Criteria.where("_id").in(ids),
+                leaseCriteria
+        ));
+        Update claim = new Update()
+                .set("clarificationWorkerId", workerId)
+                .set("clarificationLeaseUntil", leaseUntil)
+                .set("updatedAt", now);
+        mongoOperations.updateMulti(claimQuery, claim, NormalizedTransaction.class);
+
+        Query claimedQuery = new Query(new Criteria().andOperator(
+                Criteria.where("_id").in(ids),
+                Criteria.where("clarificationWorkerId").is(workerId),
+                Criteria.where("clarificationLeaseUntil").is(leaseUntil)
+        ));
+        claimedQuery.with(Sort.by(
+                Sort.Order.asc("blockTimestamp"),
+                Sort.Order.asc("transactionIndex"),
+                Sort.Order.asc("_id")
+        ));
+        return mongoOperations.find(claimedQuery, NormalizedTransaction.class);
     }
 
     private List<NormalizedTransaction> loadGmxDerivativeExecutionCandidates(

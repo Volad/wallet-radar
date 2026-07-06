@@ -14,20 +14,40 @@
     <wr-dashboard-topbar
       [metrics]="data().metrics"
       [wallets]="data().wallets"
+      [integrations]="sessionIntegrations()"
       [isBackfillVisible]="isBackfillVisible()"
       [backfillProgressPct]="backfillProgressPct()"
       [statusLabel]="pipelineStatusLabel()"
       [statusSubline]="pipelineStatusSubline()"
       [showProgress]="showPipelineProgress()"
-      (addWallet)="openAddWalletDialog()"></wr-dashboard-topbar>
+      [showRefresh]="currentSessionId() !== null"
+      [canRefresh]="canRefreshSession()"
+      [isRefreshing]="isSessionRefreshSubmitting()"
+      [refreshMessage]="sessionRefreshMessage() ?? ''"
+      [lastSyncedLabel]="lastSyncedLabel()"
+      (refresh)="onRefreshSession()"></wr-dashboard-topbar>
 
     <div class="workspace">
       <wr-dashboard-section-nav
         [sections]="data().sections"
-        [activeSection]="isAssetLedgerMode() ? 'tokens' : section()"
-        (sectionChange)="toggleSection($event)"></wr-dashboard-section-nav>
+        [activeSection]="isAssetLedgerMode() ? 'tokens' : isLendingMode() ? 'lending' : isLpMode() ? 'lp' : section()"
+        [isSettingsActive]="isSettingsMode()"
+        (sectionChange)="toggleSection($event)"
+        (settingsSelect)="openSettings()"></wr-dashboard-section-nav>
 
-      @if (isAssetLedgerMode() && assetLedgerSessionId() !== null && assetLedgerFamilyIdentity() !== null) {
+      @if (isSettingsMode()) {
+        <wr-settings-page class="settings-workspace"></wr-settings-page>
+      } @else if (isLendingMode()) {
+        <wr-lending-page
+          class="lending-workspace"
+          [sessionId]="currentSessionId()"
+          [refreshNonce]="dashboardRefreshNonce()"></wr-lending-page>
+      } @else if (isLpMode()) {
+        <wr-lp-page
+          class="lp-workspace"
+          [sessionId]="currentSessionId()"
+          [refreshNonce]="dashboardRefreshNonce()"></wr-lp-page>
+      } @else if (isAssetLedgerMode() && assetLedgerSessionId() !== null && assetLedgerFamilyIdentity() !== null) {
         <wr-asset-ledger-page
           class="asset-ledger-workspace"
           [sessionId]="assetLedgerSessionId()!"
@@ -35,21 +55,27 @@
           (back)="closeAssetLedger()"></wr-asset-ledger-page>
       } @else {
         <aside class="filters" [class.collapsed]="isFiltersCollapsed()">
-          <button type="button" class="filters-toggle" (click)="toggleFiltersCollapsed()">
+          <div class="filters-head">
+            <button type="button" class="filters-toggle" (click)="toggleFiltersCollapsed()">
+              @if (!isFiltersCollapsed()) {
+                <span>Filters</span>
+              }
+              @if (activeFilterCount() > 0 && !isFiltersCollapsed()) {
+                <span class="filter-count">{{ activeFilterCount() }}</span>
+              }
+              <span class="chevron" [class.rotated]="isFiltersCollapsed()">›</span>
+            </button>
             @if (!isFiltersCollapsed()) {
-              <span>Filters</span>
+              <div class="eyebrow">Dashboard</div>
+              <p class="filters-sub">Wallets, integrations, and networks</p>
             }
-            @if (activeFilterCount() > 0 && !isFiltersCollapsed()) {
-              <span class="filter-count">{{ activeFilterCount() }}</span>
-            }
-            <span class="chevron" [class.rotated]="isFiltersCollapsed()">›</span>
-          </button>
+          </div>
 
           @if (!isFiltersCollapsed()) {
             <div class="filters-content">
               <section class="filter-group">
                 <h3 class="side-label">Wallet</h3>
-                @for (wallet of data().wallets; track wallet.id) {
+                @for (wallet of onChainWallets(); track wallet.id) {
                   <button
                     type="button"
                     class="select-chip"
@@ -57,14 +83,39 @@
                     [style.--chipColor]="wallet.color"
                     (click)="toggleWallet(wallet.id)">
                     <span class="check-box" [class.checked]="isWalletSelected(wallet.id)"></span>
-                    <span class="wallet-dot" [style.background]="wallet.color" aria-hidden="true"></span>
+                    <span class="filter-icon-slot" aria-hidden="true">
+                      <span class="filter-wallet-dot" [style.background]="wallet.color"></span>
+                    </span>
                     <span class="wallet-chip-content">
-                      <span>{{ wallet.label }}</span>
-                      <span class="mono muted">{{ shortAddress(wallet.address) }}</span>
+                      <span class="filter-row-label wallet-primary">{{ wallet.label }}</span>
+                      <span class="filter-row-meta mono muted">{{ shortAddress(wallet.address) }}</span>
                     </span>
                   </button>
                 }
               </section>
+
+              @if (filterIntegrations().length > 0) {
+                <section class="filter-group">
+                  <h3 class="side-label">Integration</h3>
+                  @for (integration of filterIntegrations(); track integration.id) {
+                    <button
+                      type="button"
+                      class="select-chip"
+                      [class.active]="isIntegrationSelected(integration.accountRef)"
+                      [style.--chipColor]="integration.color"
+                      (click)="toggleIntegration(integration.accountRef)">
+                      <span class="check-box" [class.checked]="isIntegrationSelected(integration.accountRef)"></span>
+                      <span class="filter-icon-slot" [style.color]="integration.color" aria-hidden="true">
+                        <span class="integration-filter-icon">{{ integration.icon }}</span>
+                      </span>
+                      <span class="wallet-chip-content">
+                        <span class="filter-row-label wallet-primary">{{ integration.label }}</span>
+                        <span class="filter-row-meta mono muted">{{ integration.accountRef }}</span>
+                      </span>
+                    </button>
+                  }
+                </section>
+              }
 
               <section class="filter-group">
                 <h3 class="side-label">Network</h3>
@@ -76,26 +127,13 @@
                     [style.--chipColor]="network.color"
                     (click)="toggleNetwork(network.id)">
                     <span class="check-box" [class.checked]="isNetworkSelected(network.id)"></span>
-                    <span class="network-icon" aria-hidden="true">{{ network.icon }}</span>
-                    <span>{{ network.label }}</span>
+                    <span class="filter-icon-slot" [style.color]="network.color" aria-hidden="true">
+                      <span class="network-icon">{{ network.icon }}</span>
+                    </span>
+                    <span class="filter-row-label">{{ network.label }}</span>
                   </button>
                 }
               </section>
-
-              @if (section() === 'tokens') {
-                <section class="filter-group">
-                  <h3 class="side-label">Settings</h3>
-                  <button
-                    type="button"
-                    class="select-chip setting-chip"
-                    [class.active]="hideDustAssets()"
-                    [style.--chipColor]="colors.cyan"
-                    (click)="setHideDustAssets(!hideDustAssets())">
-                    <span class="check-box" [class.checked]="hideDustAssets()"></span>
-                    <span class="setting-chip-text">Hide &lt; $0.5 assets</span>
-                  </button>
-                </section>
-              }
 
               @if (section() === 'lending') {
                 <div class="warning-note">
@@ -114,7 +152,7 @@
         <main class="content-area">
           <div class="section-header">
             @if (activeSection() !== null) {
-              <span class="section-header-icon" [style.color]="activeSection()!.color">{{ getSectionIcon(activeSection()!.id) }}</span>
+              <span class="section-header-icon" [style.color]="activeSection()!.color" [innerHTML]="getSectionIcon(activeSection()!.id)"></span>
               <span class="section-header-title" [style.color]="activeSection()!.color">{{ activeSection()!.label }}</span>
             }
 
@@ -137,12 +175,182 @@
                   </span>
                 }
               }
+              @for (accountRef of selectedIntegrationRefs(); track accountRef) {
+                @let selectedIntegration = getIntegrationByRef(accountRef);
+                @if (selectedIntegration !== null) {
+                  <span class="scope-pill" [style.--scopeColor]="selectedIntegration.color">
+                    {{ selectedIntegration.icon }} {{ selectedIntegration.label }}
+                  </span>
+                }
+              }
             }
           </div>
 
           <div class="panes">
             <section class="left-pane">
               @if (section() === 'tokens') {
+                <section class="breakdown-panel" aria-label="Allocation">
+                  <header class="breakdown-head">
+                    <div class="breakdown-head-left">
+                      <h3>
+                        Allocation
+                        <span class="breakdown-total mono">{{ formatUsd(filteredTokenTotalUsd()) }}</span>
+                      </h3>
+                    </div>
+                    @if (onChainVsCexSplit().cexPct > 0) {
+                      <div class="breakdown-chain-split">
+                        <span class="breakdown-chain-onchain">On-chain {{ onChainVsCexSplit().onChainPct.toFixed(1) }}%</span>
+                        <span class="breakdown-chain-cex">CEX {{ onChainVsCexSplit().cexPct.toFixed(1) }}%</span>
+                      </div>
+                    }
+                  </header>
+
+                  @if (tokenUsdByNetwork().length > 0) {
+                    <div class="breakdown-bar" role="presentation">
+                      @for (row of tokenUsdByNetwork(); track row.id) {
+                        <div
+                          class="breakdown-bar-segment"
+                          [style.width.%]="row.sharePct"
+                          [style.background]="row.color"
+                          [title]="row.label + ' ' + row.sharePct.toFixed(1) + '%'"
+                        ></div>
+                      }
+                    </div>
+                  }
+
+                  <div class="breakdown-body">
+                    <div class="breakdown-column">
+                      <div class="breakdown-card-title">Networks</div>
+                      <div class="breakdown-list" role="list">
+                        @for (row of visibleNetworksAllocation(); track row.id) {
+                          <div class="breakdown-row" role="listitem">
+                            <div class="breakdown-row-top">
+                              <div class="breakdown-row-meta">
+                                <span
+                                  class="breakdown-icon"
+                                  [style.border-color]="row.color"
+                                  [style.color]="row.color"
+                                  aria-hidden="true"
+                                >{{ row.icon ?? '•' }}</span>
+                                <span class="breakdown-label">{{ row.label }}</span>
+                              </div>
+                              <div class="breakdown-row-right mono">
+                                <span class="breakdown-value">{{ formatUsd(row.valueUsd) }}</span>
+                                <span class="breakdown-pct muted">{{ row.sharePct.toFixed(1) }}%</span>
+                              </div>
+                            </div>
+                            <div class="breakdown-row-bar" aria-hidden="true">
+                              <div
+                                class="breakdown-row-bar-fill"
+                                [style.width.%]="row.sharePct"
+                                [style.background]="row.color"
+                              ></div>
+                            </div>
+                          </div>
+                        }
+                        @if (networksAllocationMore().count > 0) {
+                          <button
+                            type="button"
+                            class="breakdown-more"
+                            [attr.aria-expanded]="networksAllocationExpanded()"
+                            (click)="toggleNetworksAllocationExpanded()"
+                          >
+                            @if (networksAllocationExpanded()) {
+                              <span class="breakdown-more-label">Show less</span>
+                            } @else {
+                              <span class="breakdown-more-label">... {{ networksAllocationMore().count }} more</span>
+                              <span class="breakdown-more-right mono">
+                                <span class="breakdown-value">{{ formatUsd(networksAllocationMore().valueUsd) }}</span>
+                                <span class="breakdown-pct muted">{{ networksAllocationMore().sharePct.toFixed(1) }}%</span>
+                              </span>
+                            }
+                          </button>
+                        }
+                        @if (tokenUsdByNetwork().length === 0) {
+                          <div class="breakdown-empty muted">No priced positions in current scope.</div>
+                        }
+                      </div>
+                    </div>
+
+                    <div class="breakdown-divider" aria-hidden="true"></div>
+
+                    <div class="breakdown-column breakdown-column-wallets">
+                      <div class="breakdown-card-title">Wallets &amp; Accounts</div>
+                      <div class="breakdown-list" role="list">
+                        @for (row of visibleWalletsAllocation(); track row.id) {
+                          <div class="breakdown-row" role="listitem">
+                            <div class="breakdown-row-top">
+                              <div class="breakdown-row-meta">
+                                <span
+                                  class="breakdown-wallet-dot"
+                                  [style.background]="row.color"
+                                  aria-hidden="true"
+                                ></span>
+                                <span class="breakdown-label">{{ row.label }}</span>
+                              </div>
+                              <div class="breakdown-row-right mono">
+                                <span class="breakdown-value">{{ formatUsd(row.valueUsd) }}</span>
+                                <span class="breakdown-pct muted">{{ row.sharePct.toFixed(1) }}%</span>
+                              </div>
+                            </div>
+                            <div class="breakdown-row-bar" aria-hidden="true">
+                              <div
+                                class="breakdown-row-bar-fill"
+                                [style.width.%]="row.sharePct"
+                                [style.background]="row.color"
+                              ></div>
+                            </div>
+                          </div>
+                        }
+                        @if (walletsAllocationMore().count > 0) {
+                          <button
+                            type="button"
+                            class="breakdown-more"
+                            [attr.aria-expanded]="walletsAllocationExpanded()"
+                            (click)="toggleWalletsAllocationExpanded()"
+                          >
+                            @if (walletsAllocationExpanded()) {
+                              <span class="breakdown-more-label">Show less</span>
+                            } @else {
+                              <span class="breakdown-more-label">... {{ walletsAllocationMore().count }} more</span>
+                              <span class="breakdown-more-right mono">
+                                <span class="breakdown-value">{{ formatUsd(walletsAllocationMore().valueUsd) }}</span>
+                                <span class="breakdown-pct muted">{{ walletsAllocationMore().sharePct.toFixed(1) }}%</span>
+                              </span>
+                            }
+                          </button>
+                        }
+                        @if (tokenUsdByWallet().length === 0) {
+                          <div class="breakdown-empty muted">No priced positions in current scope.</div>
+                        }
+                      </div>
+
+                      <div class="breakdown-pnl-row">
+                        <div class="breakdown-pnl-box">
+                          <div class="breakdown-pnl-label">Unrealised</div>
+                          <div
+                            class="breakdown-pnl-value mono"
+                            [style.color]="filteredUnrealizedPnlUsd() >= 0 ? colors.green : colors.red"
+                          >
+                            {{ formatUsd(filteredUnrealizedPnlUsd()) }}
+                          </div>
+                          <div class="breakdown-pnl-sub muted">{{ formatPercent(filteredUnrealizedPnlPct()) }}</div>
+                        </div>
+                        <div class="breakdown-pnl-box">
+                          <div class="breakdown-pnl-label">Realised</div>
+                          <div
+                            class="breakdown-pnl-value mono"
+                            [style.color]="displayedRealizedPnlUsd() >= 0 ? colors.green : colors.red"
+                          >
+                            {{ formatUsd(displayedRealizedPnlUsd()) }}
+                          </div>
+                          <div class="breakdown-pnl-sub muted">{{ isFiltered() ? 'filtered' : 'all time' }}</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+
                 <div class="table-head tokens-grid">
                   <span></span>
                   <span>Asset</span>
@@ -150,7 +358,6 @@
                   <span class="align-right">Net</span>
                   <span class="align-right">Avg Cost</span>
                   <span class="align-right">Price</span>
-                  <span class="align-right">P&L</span>
                 </div>
 
               <div class="table-body">
@@ -167,7 +374,7 @@
                       <div class="token-meta">
                         <div class="token-title">
                           <span>{{ asset.symbol }}</span>
-                          @if (asset.issue !== null) {
+                          @if (showReconciliationWarnings() && asset.issue !== null) {
                             <span
                               class="token-scope-anchor warn-mark-anchor"
                               [attr.data-tooltip]="issueTitle(asset.issue)"
@@ -212,13 +419,12 @@
                       </div>
                       <div class="mono align-right" [attr.title]="formatQuantityFull(asset.quantity)">{{ formatQuantity(asset.quantity) }}</div>
                       <div class="mono align-right" [attr.title]="formatUsd(asset.currentValueUsd)">{{ formatUsd(asset.currentValueUsd) }}</div>
-                      <div class="mono align-right" [attr.title]="formatUsd(asset.avcoUsd)">{{ formatUsd(asset.avcoUsd) }}</div>
-                      <div class="mono align-right" [attr.title]="formatUsd(asset.priceUsd)">{{ formatUsd(asset.priceUsd) }}</div>
-                      <div class="align-right">
-                        <div class="mono" [class.pos]="asset.unrealizedPnlPct >= 0" [class.neg]="asset.unrealizedPnlPct < 0">
-                          {{ formatPercent(asset.unrealizedPnlPct) }}
-                        </div>
-                        <div class="mono token-subline">{{ formatUsd(asset.unrealizedPnlUsd) }}</div>
+                      <div class="mono align-right price-cell" [attr.title]="avcoTooltip(asset)">
+                        <div>{{ formatUsd(asset.netAvcoUsd) }}</div>
+                        <div class="token-subline price-subline">Tax {{ formatUsd(asset.avcoUsd) }}</div>
+                      </div>
+                      <div class="align-right price-cell" [attr.title]="priceTooltip(asset)">
+                        <div class="mono">{{ formatUsd(asset.priceUsd) }}</div>
                       </div>
                     </article>
                   } @empty {
@@ -375,8 +581,7 @@
               [networks]="transactionPaneNetworks()"
               [sourceTransactions]="transactionPaneTransactions()"
               [transactionSearchValue]="transactionSearch()"
-              [bridgeStatusFilterValue]="transactionBridgeStatusFilter()"
-              [spamFilterValue]="transactionSpamFilter()"
+              [enabledCategories]="enabledCategories()"
               [page]="transactionPage()"
               [pageSize]="transactionPageSize"
               [totalCount]="sessionTransactionsTotalCount()"
@@ -384,8 +589,7 @@
               [isReadOnly]="currentSessionId() !== null"
               [emptyStateMessage]="transactionPaneEmptyStateMessage()"
               (transactionSearchChange)="onTransactionSearchChange($event)"
-              (bridgeStatusFilterChange)="onTransactionBridgeFilterChange($event)"
-              (spamFilterChange)="onTransactionSpamFilterChange($event)"
+              (categoriesChange)="onCategoriesChange($event)"
               (pageChange)="onTransactionPageChange($event)"></wr-dashboard-transactions-pane>
           </div>
         </main>

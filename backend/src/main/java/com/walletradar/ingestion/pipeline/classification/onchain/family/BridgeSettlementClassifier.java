@@ -46,7 +46,9 @@ public class BridgeSettlementClassifier implements OnChainFamilyClassifier {
 
     @Override
     public Optional<ClassificationDecision> classify(OnChainClassificationContext context) {
-        if (!BridgeSettlementSupport.isSettlementSelector(context.view())) {
+        boolean selectorProven = BridgeSettlementSupport.isSettlementSelector(context.view());
+        boolean passiveSettlementCandidate = isPassiveBridgeSettlementCandidate(context);
+        if (!selectorProven && !passiveSettlementCandidate) {
             return Optional.empty();
         }
         if (!onlyInbound(context.movementLegs())) {
@@ -72,6 +74,9 @@ public class BridgeSettlementClassifier implements OnChainFamilyClassifier {
                     entry.protocolVersion()
             ));
         }
+        if (selectorProven && BridgeSettlementSupport.requiresVerifiedBridgeEvidence(context.view())) {
+            return Optional.empty();
+        }
 
         return Optional.of(new ClassificationDecision(
                 NormalizedTransactionType.BRIDGE_IN,
@@ -90,12 +95,64 @@ public class BridgeSettlementClassifier implements OnChainFamilyClassifier {
         ));
     }
 
+    private boolean isPassiveBridgeSettlementCandidate(OnChainClassificationContext context) {
+        if (context == null || context.view() == null) {
+            return false;
+        }
+        String inputData = context.view().inputData();
+        if (inputData != null && !"0x".equals(inputData)) {
+            return false;
+        }
+        String functionName = context.view().functionName();
+        if (functionName != null && !functionName.isBlank()) {
+            return false;
+        }
+        String walletAddress = context.view().walletAddress();
+        for (Document transfer : context.view().explorerTokenTransfers()) {
+            String recipient = context.view().tokenTransferTo(transfer);
+            if (walletAddress != null && recipient != null && !walletAddress.equalsIgnoreCase(recipient)) {
+                continue;
+            }
+            if (protocolRegistryService.lookup(context.view().networkId(), context.view().tokenTransferFrom(transfer))
+                    .filter(this::isBridgeEntry)
+                    .isPresent()) {
+                return true;
+            }
+        }
+        for (Document transfer : context.view().explorerInternalTransfers()) {
+            if (context.view().internalTransferErrored(transfer)) {
+                continue;
+            }
+            String recipient = context.view().internalTransferTo(transfer);
+            if (walletAddress != null && recipient != null && !walletAddress.equalsIgnoreCase(recipient)) {
+                continue;
+            }
+            if (protocolRegistryService.lookup(context.view().networkId(), context.view().internalTransferFrom(transfer))
+                    .filter(this::isBridgeEntry)
+                    .isPresent()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private Optional<ProtocolRegistryEntry> findKnownBridgeSettlementEntry(OnChainClassificationContext context) {
         Map<String, ProtocolRegistryEntry> candidates = new LinkedHashMap<>();
         putBridgeCandidate(candidates, protocolRegistryService.lookup(context.view().networkId(), context.view().toAddress()));
         putBridgeCandidate(candidates, protocolRegistryService.lookup(context.view().networkId(), context.view().fromAddress()));
         for (Document transfer : context.view().explorerTokenTransfers()) {
             putBridgeCandidate(candidates, protocolRegistryService.lookup(context.view().networkId(), context.view().tokenTransferFrom(transfer)));
+        }
+        String walletAddress = context.view().walletAddress();
+        for (Document transfer : context.view().explorerInternalTransfers()) {
+            if (context.view().internalTransferErrored(transfer)) {
+                continue;
+            }
+            String recipient = context.view().internalTransferTo(transfer);
+            if (walletAddress != null && recipient != null && !walletAddress.equalsIgnoreCase(recipient)) {
+                continue;
+            }
+            putBridgeCandidate(candidates, protocolRegistryService.lookup(context.view().networkId(), context.view().internalTransferFrom(transfer)));
         }
         return candidates.values().stream().findFirst();
     }
@@ -111,10 +168,17 @@ public class BridgeSettlementClassifier implements OnChainFamilyClassifier {
         if (value.family() != ProtocolRegistryFamily.BRIDGE) {
             return;
         }
-        if (value.role() != ProtocolRegistryRole.BRIDGE_ENTRY && value.role() != ProtocolRegistryRole.ROUTER) {
+        if (!isBridgeEntry(value)) {
             return;
         }
         candidates.putIfAbsent(value.contractAddress(), value);
+    }
+
+    private boolean isBridgeEntry(ProtocolRegistryEntry entry) {
+        return entry != null
+                && entry.family() == ProtocolRegistryFamily.BRIDGE
+                && (entry.role() == ProtocolRegistryRole.BRIDGE_ENTRY
+                || entry.role() == ProtocolRegistryRole.ROUTER);
     }
 
     private boolean onlyInbound(List<RawLeg> movementLegs) {

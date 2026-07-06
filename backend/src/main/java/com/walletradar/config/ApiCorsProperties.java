@@ -19,7 +19,11 @@ public class ApiCorsProperties {
 
     private List<String> allowedOrigins = new ArrayList<>(List.of(
             "http://localhost:4200",
-            "http://127.0.0.1:4200"
+            "http://127.0.0.1:4200",
+            "http://localhost:4206",
+            "http://127.0.0.1:4206",
+            "http://localhost:4300",
+            "http://127.0.0.1:4300"
     ));
     private List<String> allowedMethods = new ArrayList<>(List.of(
             "GET",

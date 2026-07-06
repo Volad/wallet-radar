@@ -13,7 +13,9 @@ import com.walletradar.ingestion.pipeline.classification.support.ClarificationEl
 import com.walletradar.ingestion.pipeline.classification.support.LiFiRouteSupport;
 import com.walletradar.ingestion.pipeline.classification.support.OnChainClassificationSupport;
 import com.walletradar.ingestion.pipeline.classification.support.RawLeg;
+import com.walletradar.ingestion.pipeline.classification.support.RelayBridgeClassificationSupport;
 import com.walletradar.ingestion.pipeline.classification.support.NativeAssetSymbolResolver;
+import com.walletradar.ingestion.pipeline.classification.support.SameWalletSwapShapeSupport;
 import org.springframework.core.Ordered;
 import org.springframework.stereotype.Component;
 
@@ -33,10 +35,53 @@ public class BridgeStartClassifier implements OnChainFamilyClassifier {
             "0xa6010a66",
             "0xa8f66666"
     );
-    private static final Set<String> BRIDGE_START_FUNCTION_KEYS = Set.of(
+    /**
+     * LI.FI facet function prefixes that signal bridge-out initiation.
+     * Both {@code startBridgeTokensVia<Bridge>} and {@code swapAndStartBridgeTokensVia<Bridge>}
+     * are matched via prefix-key lookup in {@link #isBridgeStartFunctionKey(String)}.
+     */
+    private static final Set<String> BRIDGE_START_FUNCTION_KEY_PREFIXES = Set.of(
+            // explicit-name facets (stable cross-version)
+            "startbridgetokensviastargate",
+            "startbridgetokensviasquid",
+            "startbridgetokensviagaszip",
+            "startbridgetokensviarelay",
+            "startbridgetokensviaacross",
+            "startbridgetokensviahop",
+            "startbridgetokensviacbridge",
+            "startbridgetokensviahopdiamond",
+            "startbridgetokensviaoptimism",
+            "startbridgetokensviabase",
+            "startbridgetokensviasynapse",
+            "startbridgetokensviaomni",
+            "startbridgetokensviaamarok",
+            "startbridgetokensviahyperlane",
+            "startbridgetokensviasymbiosis",
+            "startbridgetokensviamayan",
             "swapandstartbridgetokensviamayan",
             "swapandstartbridgetokensviastargate",
-            "swapandstartbridgetokensviasquid"
+            "swapandstartbridgetokensviasquid",
+            "swapandstartbridgetokensviagaszip",
+            "swapandstartbridgetokensviarelay",
+            "swapandstartbridgetokensviaacross",
+            "swapandstartbridgetokensviahop",
+            "swapandstartbridgetokensviacbridge",
+            "swapandstartbridgetokensviahopdiamond",
+            "swapandstartbridgetokensviaoptimism",
+            "swapandstartbridgetokensviabase",
+            "swapandstartbridgetokensviasynapse",
+            "swapandstartbridgetokensviaomni",
+            "swapandstartbridgetokensviaamarok",
+            "swapandstartbridgetokensviahyperlane",
+            "swapandstartbridgetokensviasymbiosis"
+    );
+    /**
+     * LI.FI callDiamond* selectors (address-anchored — only fires when target is in known LI.FI set).
+     * {@code callDiamondWithEIP2612Signature} = 0xd7a08473; {@code callDiamondWithPermit2} = 0x0193b9fc.
+     */
+    private static final Set<String> LI_FI_CALL_DIAMOND_SELECTORS = Set.of(
+            "0xd7a08473",  // callDiamondWithEIP2612Signature
+            "0x0193b9fc"   // callDiamondWithPermit2
     );
     private static final Set<String> LI_FI_DIAMOND_ROUTE_SELECTORS = Set.of(
             "0xd7a08473",
@@ -79,7 +124,35 @@ public class BridgeStartClassifier implements OnChainFamilyClassifier {
             return liFiRouteBridge;
         }
 
+        Optional<ClassificationDecision> relayDepositoryBridge = classifyRelayDepositoryBridge(context);
+        if (relayDepositoryBridge.isPresent()) {
+            return relayDepositoryBridge;
+        }
+
         return classifyTransferRemoteBridge(context);
+    }
+
+    private Optional<ClassificationDecision> classifyRelayDepositoryBridge(OnChainClassificationContext context) {
+        if (!RelayBridgeClassificationSupport.isRelayDepositoryBridgeOut(context.view())
+                || !RelayBridgeClassificationSupport.onlyOutbound(context.movementLegs())) {
+            return Optional.empty();
+        }
+        Optional<ProtocolRegistryEntry> entry = RelayBridgeClassificationSupport.resolveRelayDepositoryBridgeEntry(
+                protocolRegistryService,
+                context.view()
+        );
+        if (entry.isEmpty()) {
+            return Optional.empty();
+        }
+        ProtocolRegistryEntry bridgeEntry = entry.orElseThrow();
+        return Optional.of(build(
+                context,
+                bridgeEntry.confidence() != null ? ClassificationSource.PROTOCOL_REGISTRY : ClassificationSource.METHOD_ID,
+                bridgeEntry.confidence() != null ? bridgeEntry.confidence() : ConfidenceLevel.MEDIUM,
+                List.of(),
+                bridgeEntry.protocolName(),
+                bridgeEntry.protocolVersion()
+        ));
     }
 
     private Optional<ClassificationDecision> classifyExplicitBridgeStart(OnChainClassificationContext context) {
@@ -88,7 +161,7 @@ public class BridgeStartClassifier implements OnChainFamilyClassifier {
         }
         String functionKey = functionKey(context.view().functionName());
         if (!BRIDGE_START_SELECTORS.contains(context.view().methodId())
-                && !BRIDGE_START_FUNCTION_KEYS.contains(functionKey)) {
+                && !isBridgeStartFunctionKey(functionKey)) {
             return Optional.empty();
         }
 
@@ -124,8 +197,14 @@ public class BridgeStartClassifier implements OnChainFamilyClassifier {
 
     private Optional<ClassificationDecision> classifyLiFiRouteBridge(OnChainClassificationContext context) {
         boolean explicitLiFiRouteSelector = LI_FI_DIAMOND_ROUTE_SELECTORS.contains(context.view().methodId());
-        boolean knownLiFiDiamond = isKnownLiFiDiamond(context);
-        if (!explicitLiFiRouteSelector && !knownLiFiDiamond) {
+        // callDiamond* selectors must be address-anchored — pattern alone is not enough
+        boolean callDiamondSelector = LI_FI_CALL_DIAMOND_SELECTORS.contains(context.view().methodId());
+        Optional<ProtocolRegistryEntry> knownLiFiDiamondEntry = knownLiFiDiamondEntry(context);
+        if (callDiamondSelector && knownLiFiDiamondEntry.isEmpty()) {
+            // Address-anchor check: callDiamond* on unknown address → not LI.FI
+            return Optional.empty();
+        }
+        if (!explicitLiFiRouteSelector && knownLiFiDiamondEntry.isEmpty()) {
             return Optional.empty();
         }
         if ("0x".equals(context.view().methodId())) {
@@ -137,13 +216,17 @@ public class BridgeStartClassifier implements OnChainFamilyClassifier {
         if (!LiFiRouteSupport.hasRouteTag(context.view())) {
             return Optional.empty();
         }
+        if (SameWalletSwapShapeSupport.hasSameWalletInboundTransfer(context.movementLegs())) {
+            return Optional.empty();
+        }
+        ProtocolRegistryEntry entry = knownLiFiDiamondEntry.orElse(null);
         return Optional.of(build(
                 context,
                 ClassificationSource.HEURISTIC,
-                ConfidenceLevel.MEDIUM,
+                entry != null ? entry.confidence() : ConfidenceLevel.MEDIUM,
                 List.of(),
-                null,
-                null
+                entry != null ? entry.protocolName() : null,
+                entry != null ? entry.protocolVersion() : null
         ));
     }
 
@@ -153,6 +236,9 @@ public class BridgeStartClassifier implements OnChainFamilyClassifier {
             return Optional.empty();
         }
         if (!hasOutbound(context.movementLegs())) {
+            return Optional.empty();
+        }
+        if (SameWalletSwapShapeSupport.hasSameWalletInboundTransfer(context.movementLegs())) {
             return Optional.empty();
         }
         if (!hasNativeOutbound(context) || tokenOutboundCount(context) < 1) {
@@ -181,7 +267,11 @@ public class BridgeStartClassifier implements OnChainFamilyClassifier {
                 OnChainClassificationSupport.initialStatus(context.view(), NormalizedTransactionType.BRIDGE_OUT, confidence),
                 classifiedBy,
                 confidence,
-                OnChainClassificationSupport.toFlows(context.movementLegs(), NormalizedTransactionType.BRIDGE_OUT),
+                OnChainClassificationSupport.toFlows(
+                        context.view(),
+                        context.movementLegs(),
+                        NormalizedTransactionType.BRIDGE_OUT
+                ),
                 missingDataReasons,
                 null,
                 null,
@@ -218,14 +308,20 @@ public class BridgeStartClassifier implements OnChainFamilyClassifier {
                 || (context.view().rawValue() != null && context.view().rawValue().signum() > 0);
     }
 
-    private boolean isKnownLiFiDiamond(OnChainClassificationContext context) {
+    private Optional<ProtocolRegistryEntry> knownLiFiDiamondEntry(OnChainClassificationContext context) {
         return protocolRegistryService.lookup(context.view().networkId(), context.view().toAddress())
                 .filter(entry -> entry.family() == ProtocolRegistryFamily.BRIDGE)
                 .filter(entry -> entry.role() == ProtocolRegistryRole.BRIDGE_ENTRY
                         || entry.role() == ProtocolRegistryRole.ROUTER)
-                .filter(entry -> entry.protocolName() != null
-                        && entry.protocolName().toLowerCase(Locale.ROOT).contains("lifi"))
-                .isPresent();
+                .filter(entry -> isLiFiProtocol(entry.protocolName()));
+    }
+
+    private boolean isLiFiProtocol(String protocolName) {
+        if (protocolName == null || protocolName.isBlank()) {
+            return false;
+        }
+        String normalized = protocolName.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]", "");
+        return normalized.contains("lifi");
     }
 
     private boolean hasNativeOutbound(OnChainClassificationContext context) {
@@ -264,5 +360,22 @@ public class BridgeStartClassifier implements OnChainFamilyClassifier {
             return normalized.substring(0, signatureSeparator);
         }
         return normalized;
+    }
+
+    /**
+     * Returns {@code true} when the normalized function key matches a known LI.FI bridge-start
+     * pattern. Covers both {@code startBridgeTokensVia<Bridge>} and
+     * {@code swapAndStartBridgeTokensVia<Bridge>} across all supported underlying bridges.
+     * Uses an exact-set lookup for stability (no regex at runtime).
+     */
+    private static boolean isBridgeStartFunctionKey(String key) {
+        if (key == null || key.isBlank()) {
+            return false;
+        }
+        if (BRIDGE_START_FUNCTION_KEY_PREFIXES.contains(key)) {
+            return true;
+        }
+        // Generic prefix guard for any future LI.FI facet variants
+        return key.startsWith("startbridgetokensvia") || key.startsWith("swapandstartbridgetokensvia");
     }
 }

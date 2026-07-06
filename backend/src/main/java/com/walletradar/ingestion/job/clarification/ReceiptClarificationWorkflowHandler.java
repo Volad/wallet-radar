@@ -3,8 +3,6 @@ package com.walletradar.ingestion.job.clarification;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.ingestion.config.OnChainClarificationProperties;
-import com.walletradar.ingestion.pipeline.classification.OnChainClassificationResult;
-import com.walletradar.ingestion.pipeline.classification.OnChainClassifier;
 import com.walletradar.ingestion.pipeline.clarification.ClarificationReceiptEnrichment;
 import com.walletradar.ingestion.pipeline.clarification.PendingReceiptClarificationQueryService;
 import com.walletradar.ingestion.pipeline.clarification.RawTransactionClarificationEnricher;
@@ -27,34 +25,33 @@ final class ReceiptClarificationWorkflowHandler {
     private final PendingReceiptClarificationQueryService pendingReceiptClarificationQueryService;
     private final OnChainClarificationProperties properties;
     private final RawTransactionClarificationEnricher rawTransactionClarificationEnricher;
-    private final OnChainClassifier onChainClassifier;
     private final ClarificationFailureHandler clarificationFailureHandler;
-    private final ClarificationReclassificationHandler clarificationReclassificationHandler;
+    private final ClarificationReclassificationMarker clarificationReclassificationMarker;
     private final ClarificationPreparationHandler clarificationPreparationHandler;
 
     ReceiptClarificationWorkflowHandler(
             PendingReceiptClarificationQueryService pendingReceiptClarificationQueryService,
             OnChainClarificationProperties properties,
             RawTransactionClarificationEnricher rawTransactionClarificationEnricher,
-            OnChainClassifier onChainClassifier,
             ClarificationFailureHandler clarificationFailureHandler,
-            ClarificationReclassificationHandler clarificationReclassificationHandler,
+            ClarificationReclassificationMarker clarificationReclassificationMarker,
             ClarificationPreparationHandler clarificationPreparationHandler
     ) {
         this.pendingReceiptClarificationQueryService = pendingReceiptClarificationQueryService;
         this.properties = properties;
         this.rawTransactionClarificationEnricher = rawTransactionClarificationEnricher;
-        this.onChainClassifier = onChainClassifier;
         this.clarificationFailureHandler = clarificationFailureHandler;
-        this.clarificationReclassificationHandler = clarificationReclassificationHandler;
+        this.clarificationReclassificationMarker = clarificationReclassificationMarker;
         this.clarificationPreparationHandler = clarificationPreparationHandler;
     }
 
     int processNextBatch() {
-        List<NormalizedTransaction> batch = pendingReceiptClarificationQueryService.loadNextBatch(
+        List<NormalizedTransaction> batch = pendingReceiptClarificationQueryService.claimNextBatch(
                 properties.getFullReceipt().getBatchSize(),
                 properties.getFullReceipt().getMaxAttempts(),
-                properties.getFullReceipt().getRetryDelaySeconds()
+                properties.getFullReceipt().getRetryDelaySeconds(),
+                "receipt-" + java.util.UUID.randomUUID(),
+                properties.getLeaseSeconds()
         );
 
         int completed = 0;
@@ -84,7 +81,8 @@ final class ReceiptClarificationWorkflowHandler {
             Optional<ClarificationReceiptEnrichment> enrichment = clarificationPreparationHandler.fetchFullReceiptOrMarkFailure(
                     normalizedTransaction,
                     rawTransaction,
-                    now
+                    now,
+                    properties.getFullReceipt().getMaxAttempts()
             );
             if (enrichment.isEmpty()) {
                 return false;
@@ -92,12 +90,9 @@ final class ReceiptClarificationWorkflowHandler {
 
             rawTransactionClarificationEnricher.merge(rawTransaction, enrichment.get());
             clarificationFailureHandler.recordReceiptAttemptSuccess(normalizedTransaction, rawTransaction);
-
-            OnChainClassificationResult classificationResult = onChainClassifier.classify(rawTransaction);
-            clarificationReclassificationHandler.persistReceiptClarification(
+            clarificationReclassificationMarker.markPendingReclassification(
                     normalizedTransaction,
                     rawTransaction,
-                    classificationResult,
                     now
             );
             return true;

@@ -1,0 +1,257 @@
+<section class="settings-layout">
+  @if (!hasSession()) {
+    <div class="wizard-auth-banner">
+      <wr-account-settings-section></wr-account-settings-section>
+    </div>
+    <wr-settings-wizard (completed)="onWizardCompleted()"></wr-settings-wizard>
+  } @else if (loading()) {
+    <section class="settings-state-card">
+      <h2>Loading settings</h2>
+      <p>Preparing wallet, integration, and session preferences.</p>
+    </section>
+  } @else {
+    <aside class="settings-sidebar">
+      <div class="settings-sidebar-head">
+        <svg
+          class="settings-sidebar-head-gear"
+          width="13"
+          height="13"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.65"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true">
+          <circle cx="12" cy="12" r="3" />
+          <path
+            d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+        </svg>
+        <span class="settings-sidebar-head-title">Settings</span>
+      </div>
+
+      <div class="settings-sidebar-scroll">
+        @for (section of sections; track section.id) {
+          <button
+            type="button"
+            class="settings-sidebar-item"
+            [class.active]="activeSection() === section.id"
+            (click)="setActiveSection(section.id)">
+            <span class="settings-sidebar-item-leading" aria-hidden="true">
+              @switch (section.navIcon) {
+                @case ('monitor') {
+                  <svg
+                    class="settings-sidebar-item-svg"
+                    width="12"
+                    height="12"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.65"
+                    stroke-linecap="round"
+                    stroke-linejoin="round">
+                    <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+                    <path d="M8 21h8" />
+                    <path d="M12 17v4" />
+                  </svg>
+                }
+                @case ('gear') {
+                  <svg
+                    class="settings-sidebar-item-svg"
+                    width="12"
+                    height="12"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.65"
+                    stroke-linecap="round"
+                    stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="3" />
+                    <path
+                      d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                  </svg>
+                }
+              }
+            </span>
+            <span class="settings-sidebar-item-label">{{ section.label }}</span>
+          </button>
+        }
+      </div>
+    </aside>
+
+    <main class="settings-main">
+      @if (error(); as errorMessage) {
+        <div class="settings-banner error">{{ errorMessage }}</div>
+      }
+
+      @if (saveMessage(); as infoMessage) {
+        <div class="settings-banner success">{{ infoMessage }}</div>
+      }
+
+      @if (activeSection() === 'wallets') {
+        <div class="data-sources-page">
+          <div class="data-sources-head">
+            <div>
+              <div class="data-sources-title">Data sources</div>
+              <div class="data-sources-sub">Wallets, integrations and accounting method</div>
+            </div>
+
+            @if (dataSourcesChangesCount() > 0 && !dataSourcesReviewOpen()) {
+              <button type="button" class="ds-review-btn" (click)="openDataSourcesReview()">
+                <span class="ds-review-icon">⚠</span>
+                Review changes ({{ dataSourcesChangesCount() }})
+              </button>
+            }
+          </div>
+
+          <wr-wallets-settings-section
+            [embeddedInDataSources]="true"
+            [maxWallets]="maxWallets"
+            [walletsDraft]="walletsDraft()"
+            [pendingWallets]="pendingWallets()"
+            [networksPresentation]="networksPresentation"
+            [hasSavedWallets]="hasSavedWallets()"
+            [isWalletEditing]="isWalletEditing()"
+            [walletListDirty]="walletListDirty()"
+            [canAddMoreWallets]="canAddMoreWallets()"
+            [canSaveWallets]="canSaveWallets()"
+            [saving]="savingScope() === 'wallets'"
+            [validPendingWalletCount]="validPendingWalletCount()"
+            [hasInvalidPendingWallets]="hasInvalidPendingWallets()"
+            [walletAddressError]="walletAddressError.bind(this)"
+            (addWallet)="startAddWallet()"
+            (toggleSavedNetworks)="toggleSavedWalletNetworks($event)"
+            (togglePendingNetworks)="togglePendingWalletNetworks($event)"
+            (removeWallet)="removeWallet($event)"
+            (updatePendingWalletField)="updatePendingWalletField($event.walletId, $event.field, $event.value)"
+            (discardPending)="discardPendingWallets()"
+            (saveWallets)="saveWallets()"></wr-wallets-settings-section>
+
+          <div class="data-sources-divider"></div>
+
+          <wr-integrations-settings-section
+            [compact]="true"
+            [integrations]="allIntegrations()"
+            [bybitForm]="bybitForm"
+            [showSecret]="showBybitSecret()"
+            [saving]="savingScope() === 'integrations'"
+            [statusTone]="statusTone"
+            [formatDateTime]="formatDateTimeWithSeconds"
+            (toggleSecret)="toggleBybitSecretVisibility()"
+            (reset)="resetBybitDraft()"
+            (save)="saveBybit()"
+            (disconnect)="disconnectIntegration($event)"></wr-integrations-settings-section>
+
+          <div class="data-sources-divider"></div>
+
+          <wr-accounting-settings-section></wr-accounting-settings-section>
+
+          @if (dataSourcesReviewOpen()) {
+            <div class="ds-review-scrim" (click)="closeDataSourcesReview()"></div>
+            <section class="ds-review-drawer" aria-label="Re-normalization required">
+              <div class="ds-review-warn">
+                <div class="ds-review-warn-icon">⟳</div>
+                <div class="ds-review-warn-copy">
+                  <div class="ds-review-title">Re-normalization required</div>
+                  <div class="ds-review-sub">
+                    These changes trigger a full re-processing of all transactions across
+                    <span class="mono ds-review-mono"> {{ dataSourcesWalletsCount() }}</span>
+                    wallet{{ dataSourcesWalletsCount() > 1 ? 's' : '' }}. All AVCO calculations, P&amp;L and cost basis
+                    data will be recalculated. Estimated time:
+                    <span class="mono ds-review-estimate">
+                      {{ dataSourcesEstimatedMinMinutes() }}–{{ dataSourcesEstimatedMaxMinutes() }} min
+                    </span>.
+                    The app remains usable with the previous data while re-normalization runs.
+                  </div>
+                </div>
+                <button type="button" class="ds-review-close" [disabled]="dataSourcesSaving()" (click)="closeDataSourcesReview()">
+                  ×
+                </button>
+              </div>
+
+              <div class="ds-review-body">
+                <div class="ds-review-changes">
+                  <div class="ds-review-changes-title">Changes queued</div>
+                  <div class="ds-review-changes-list">
+                    @for (change of dataSourcesChanges(); track $index) {
+                      <div class="ds-review-change">
+                        <span class="ds-review-dot"></span>
+                        <span class="ds-review-change-label">{{ change.label }}</span>
+                        @if (change.tag) {
+                          <span
+                            class="tag"
+                            [class.success]="change.tagTone === 'green'"
+                            [class.cyan]="change.tagTone === 'cyan'"
+                            [class.amber]="change.tagTone === 'amber'"
+                            [class.danger]="change.tagTone === 'red'">
+                            {{ change.tag }}
+                          </span>
+                        }
+                      </div>
+                    }
+                  </div>
+                </div>
+
+                <div class="ds-review-actions">
+                  <button
+                    type="button"
+                    class="amber-btn ds-review-confirm"
+                    [class.ds-review-confirm-saving]="dataSourcesSaving()"
+                    [disabled]="dataSourcesSaving() || hasInvalidPendingWallets()"
+                    (click)="confirmDataSourcesSave()">
+                    @if (dataSourcesSaving()) {
+                      <svg
+                        class="ds-review-spinner"
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        aria-hidden="true">
+                        <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-opacity="0.22" stroke-width="3" />
+                        <path
+                          d="M12 2a10 10 0 0 1 10 10"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="3"
+                          stroke-linecap="round" />
+                      </svg>
+                      <span>Restarting pipeline…</span>
+                    } @else {
+                      <svg
+                        class="ds-review-confirm-idle-icon"
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        aria-hidden="true">
+                        <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                        <path d="M3 3v5h5" />
+                        <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+                        <path d="M16 16h5v5" />
+                      </svg>
+                      <span>Confirm &amp; restart pipeline</span>
+                    }
+                  </button>
+                  <button type="button" class="secondary-btn" [disabled]="dataSourcesSaving()" (click)="closeDataSourcesReview()">
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </section>
+          }
+        </div>
+      }
+
+      @if (activeSection() === 'general') {
+        <wr-general-settings-section
+          [form]="generalForm"
+          [saving]="savingScope() === 'general'"
+          (save)="saveGeneral()"></wr-general-settings-section>
+        <wr-account-settings-section></wr-account-settings-section>
+      }
+    </main>
+  }
+</section>

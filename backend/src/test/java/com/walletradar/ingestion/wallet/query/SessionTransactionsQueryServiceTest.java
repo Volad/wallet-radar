@@ -56,7 +56,6 @@ class SessionTransactionsQueryServiceTest {
     void readsSessionTransactionsFromAccountingUniverseScope() {
         UserSession session = new UserSession();
         session.setId("session-1");
-        session.setAccountingUniverseId("ACCOUNTING_UNIVERSE:session-1");
         UserSession.SessionWallet wallet = new UserSession.SessionWallet();
         wallet.setAddress("0x1A87f12aC07E9746e9B053B8D7EF1d45270D693f");
         wallet.setLabel("Main");
@@ -105,7 +104,7 @@ class SessionTransactionsQueryServiceTest {
 
         when(userSessionRepository.findById("session-1")).thenReturn(Optional.of(session));
         when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
-                "ACCOUNTING_UNIVERSE:session-1",
+                "session-1",
                 List.of(wallet.getAddress(), "BYBIT:33625378"),
                 List.of(wallet.getAddress())
         ));
@@ -116,7 +115,6 @@ class SessionTransactionsQueryServiceTest {
                 .findSessionTransactions("session-1", SessionTransactionsQueryService.normalizeQuery(
                         100,
                         0,
-                        null,
                         null,
                         null,
                         null,
@@ -134,7 +132,7 @@ class SessionTransactionsQueryServiceTest {
         assertThat(bridgeView.id()).isEqualTo("tx-bridge");
         assertThat(bridgeView.sourceType()).isEqualTo("CHAIN");
         assertThat(bridgeView.networkId()).isEqualTo("BASE");
-        assertThat(bridgeView.type()).isEqualTo("EXTERNAL_TRANSFER_OUT");
+        assertThat(bridgeView.type()).isEqualTo("BRIDGE_OUT");
         assertThat(bridgeView.status()).isEqualTo("CONFIRMED");
         assertThat(bridgeView.issue()).isNull();
         assertThat(bridgeView.bridgeStatus()).isEqualTo("MATCHED");
@@ -145,7 +143,7 @@ class SessionTransactionsQueryServiceTest {
         SessionTransactionsQueryService.ItemView bybitView = result.items().get(1);
         assertThat(bybitView.walletAddress()).isEqualTo("BYBIT:33625378");
         assertThat(bybitView.txHash()).isNull();
-        assertThat(bybitView.type()).isEqualTo("STAKE_DEPOSIT");
+        assertThat(bybitView.type()).isEqualTo("STAKING_DEPOSIT");
         assertThat(bybitView.status()).isEqualTo("PENDING_PRICE");
         assertThat(bybitView.issue()).isEqualTo("missing_price");
         assertThat(bybitView.bridgeStatus()).isNull();
@@ -191,8 +189,7 @@ class SessionTransactionsQueryServiceTest {
                         25,
                         25,
                         "spam",
-                        "ALL",
-                        "SPAM_ONLY",
+                        List.of("SPAM"),
                         List.of("0x1"),
                         List.of(NetworkId.BASE)
                 ))
@@ -245,8 +242,7 @@ class SessionTransactionsQueryServiceTest {
                         50,
                         0,
                         null,
-                        "ALL",
-                        "HIDE_SPAM",
+                        null,
                         null,
                         null
                 ))
@@ -299,13 +295,12 @@ class SessionTransactionsQueryServiceTest {
                         null,
                         null,
                         null,
-                        null,
                         null
                 ))
                 .orElseThrow();
 
         assertThat(result.items()).singleElement().satisfies(item -> {
-            assertThat(item.type()).isEqualTo("EXTERNAL_INBOUND");
+            assertThat(item.type()).isEqualTo("BRIDGE_IN");
             assertThat(item.issue()).isNull();
             assertThat(item.bridgeStatus()).isEqualTo("MATCHED");
         });
@@ -352,13 +347,12 @@ class SessionTransactionsQueryServiceTest {
                         null,
                         null,
                         null,
-                        null,
                         null
                 ))
                 .orElseThrow();
 
         assertThat(result.items()).singleElement().satisfies(item -> {
-            assertThat(item.type()).isEqualTo("EXTERNAL_INBOUND");
+            assertThat(item.type()).isEqualTo("EXTERNAL_TRANSFER_IN");
             assertThat(item.issue()).isNull();
             assertThat(item.matchedCounterparty()).isEqualTo("BYBIT:33625378");
         });
@@ -394,8 +388,7 @@ class SessionTransactionsQueryServiceTest {
                         50,
                         0,
                         null,
-                        "ALL",
-                        "SPAM_ONLY",
+                        List.of("SPAM"),
                         null,
                         null
                 ))
@@ -409,6 +402,80 @@ class SessionTransactionsQueryServiceTest {
         ArgumentCaptor<Query> queryCaptor = ArgumentCaptor.forClass(Query.class);
         verify(mongoOperations).find(queryCaptor.capture(), eq(NormalizedTransaction.class));
         assertThat(queryCaptor.getValue().toString()).contains("CLAIM_LIKE_SPAM_OR_AIRDROP");
+    }
+
+    @Test
+    void treatsSpoofTokenQuarantineAsSpamLikeRows() {
+        UserSession session = new UserSession();
+        session.setId("session-1");
+
+        NormalizedTransaction spoof = new NormalizedTransaction();
+        spoof.setId("spoof-1");
+        spoof.setSource(NormalizedTransactionSource.ON_CHAIN);
+        spoof.setWalletAddress("0x1");
+        spoof.setNetworkId(NetworkId.BASE);
+        spoof.setTxHash("0xspoof");
+        spoof.setBlockTimestamp(Instant.parse("2026-04-06T10:00:00Z"));
+        spoof.setType(NormalizedTransactionType.UNKNOWN);
+        spoof.setStatus(NormalizedTransactionStatus.CONFIRMED);
+        spoof.setExcludedFromAccounting(Boolean.TRUE);
+        spoof.setAccountingExclusionReason("SPOOF_TOKEN_CONFUSABLE_SYMBOL");
+        spoof.setMissingDataReasons(List.of("SPOOF_TOKEN_CONFUSABLE_SYMBOL"));
+
+        when(userSessionRepository.findById("session-1")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "ACCOUNTING_UNIVERSE:session-1",
+                List.of("0x1"),
+                List.of("0x1")
+        ));
+        when(mongoOperations.count(any(Query.class), eq(NormalizedTransaction.class))).thenReturn(1L);
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class))).thenReturn(List.of(spoof));
+
+        SessionTransactionsQueryService.SessionTransactionsView result = sessionTransactionsQueryService
+                .findSessionTransactions("session-1", SessionTransactionsQueryService.normalizeQuery(
+                        50,
+                        0,
+                        null,
+                        List.of("SPAM"),
+                        null,
+                        null
+                ))
+                .orElseThrow();
+
+        assertThat(result.items()).singleElement().satisfies(item -> {
+            assertThat(item.issue()).isEqualTo("spam");
+            assertThat(item.txHash()).isEqualTo("0xspoof");
+        });
+
+        ArgumentCaptor<Query> queryCaptor = ArgumentCaptor.forClass(Query.class);
+        verify(mongoOperations).find(queryCaptor.capture(), eq(NormalizedTransaction.class));
+        assertThat(queryCaptor.getValue().toString()).contains("SPOOF_TOKEN_CONFUSABLE_SYMBOL");
+    }
+
+    @Test
+    void hidesSpoofTokenQuarantineFromDefaultVisibleList() {
+        UserSession session = new UserSession();
+        session.setId("session-1");
+
+        when(userSessionRepository.findById("session-1")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "ACCOUNTING_UNIVERSE:session-1",
+                List.of("0x1"),
+                List.of("0x1")
+        ));
+        when(mongoOperations.count(any(Query.class), eq(NormalizedTransaction.class))).thenReturn(0L);
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class))).thenReturn(List.of());
+
+        sessionTransactionsQueryService
+                .findSessionTransactions("session-1", SessionTransactionsQueryService.normalizeQuery(
+                        50, 0, null, null, null, null
+                ))
+                .orElseThrow();
+
+        ArgumentCaptor<Query> queryCaptor = ArgumentCaptor.forClass(Query.class);
+        verify(mongoOperations).find(queryCaptor.capture(), eq(NormalizedTransaction.class));
+        // HIDE_SPAM excludes spoof rows via the spam-like reason filter.
+        assertThat(queryCaptor.getValue().toString()).contains("SPOOF_TOKEN_CONFUSABLE_SYMBOL");
     }
 
     @Test
@@ -429,7 +496,7 @@ class SessionTransactionsQueryServiceTest {
 
         assertThat(result.projectedTransactions()).isEqualTo(17);
         assertThat(result.message()).contains("canonical normalized transactions");
-        verify(accountingUniverseService).ensureBybitMembership(eq("session-1"), any(Instant.class));
+        verify(accountingUniverseService).resolveScope(session);
     }
 
     @Test
@@ -444,13 +511,6 @@ class SessionTransactionsQueryServiceTest {
         assertThatThrownBy(() -> SessionTransactionsQueryService.validateOffsetOrThrow(-1))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("greater than or equal to 0");
-    }
-
-    @Test
-    void rejectsUnknownSpamFilter() {
-        assertThatThrownBy(() -> SessionTransactionsQueryService.validateSpamFilterOrThrow("maybe"))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("spamFilter");
     }
 
     private NormalizedTransaction.Flow flow(

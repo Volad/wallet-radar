@@ -5,10 +5,15 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionReposi
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.domain.transaction.raw.RawTransaction;
+import com.walletradar.domain.transaction.raw.RawTransactionRepository;
 import com.walletradar.ingestion.pipeline.classification.support.GmxEventTopicSupport;
 import com.walletradar.ingestion.pipeline.onchain.OnChainRawTransactionView;
 import org.bson.Document;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.mongodb.core.MongoOperations;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 
@@ -18,10 +23,14 @@ import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+import java.util.stream.StreamSupport;
 
 /**
- * Materializes deterministic lifecycle and bridge linkage once correlation evidence is known.
+ * Materializes deterministic same-source lifecycle linkage during the dedicated LINKING phase.
  */
 @Service
 public class OnChainLifecycleLinkService {
@@ -31,47 +40,59 @@ public class OnChainLifecycleLinkService {
 
     private final NormalizedTransactionRepository normalizedTransactionRepository;
     @Nullable
-    private final LiFiBridgePairLinkService liFiBridgePairLinkService;
+    private final RawTransactionRepository rawTransactionRepository;
     @Nullable
-    private final MayanCctpBridgePairLinkService mayanCctpBridgePairLinkService;
-    @Nullable
-    private final AcrossBridgePairLinkService acrossBridgePairLinkService;
+    private final MongoOperations mongoOperations;
 
     @Autowired
     public OnChainLifecycleLinkService(
             NormalizedTransactionRepository normalizedTransactionRepository,
-            @Nullable LiFiBridgePairLinkService liFiBridgePairLinkService,
-            @Nullable MayanCctpBridgePairLinkService mayanCctpBridgePairLinkService,
-            @Nullable AcrossBridgePairLinkService acrossBridgePairLinkService
+            @Nullable RawTransactionRepository rawTransactionRepository,
+            @Nullable MongoOperations mongoOperations
     ) {
         this.normalizedTransactionRepository = normalizedTransactionRepository;
-        this.liFiBridgePairLinkService = liFiBridgePairLinkService;
-        this.mayanCctpBridgePairLinkService = mayanCctpBridgePairLinkService;
-        this.acrossBridgePairLinkService = acrossBridgePairLinkService;
+        this.rawTransactionRepository = rawTransactionRepository;
+        this.mongoOperations = mongoOperations;
     }
 
     public OnChainLifecycleLinkService(NormalizedTransactionRepository normalizedTransactionRepository) {
-        this(normalizedTransactionRepository, null, null, null);
+        this(normalizedTransactionRepository, null, null);
     }
 
-    public void link(RawTransaction rawTransaction, NormalizedTransaction normalizedTransaction) {
+    public int processNextBatch(int batchSize) {
+        if (mongoOperations == null || rawTransactionRepository == null) {
+            return 0;
+        }
+        List<NormalizedTransaction> candidates = loadCandidateBatch(batchSize);
+        if (candidates.isEmpty()) {
+            return 0;
+        }
+
+        // Bulk-prefetch all raw transactions in a single query to avoid N+1 per-candidate findById.
+        List<String> ids = candidates.stream().map(NormalizedTransaction::getId).toList();
+        Map<String, RawTransaction> rawById = StreamSupport
+                .stream(rawTransactionRepository.findAllById(ids).spliterator(), false)
+                .collect(Collectors.toMap(RawTransaction::getId, Function.identity()));
+
+        int changed = 0;
+        for (NormalizedTransaction candidate : candidates) {
+            RawTransaction rawTransaction = rawById.get(candidate.getId());
+            if (rawTransaction != null && link(rawTransaction, candidate)) {
+                changed++;
+            }
+        }
+        return changed;
+    }
+
+    public boolean link(RawTransaction rawTransaction, NormalizedTransaction normalizedTransaction) {
         if (rawTransaction == null || normalizedTransaction == null) {
-            return;
-        }
-        if (liFiBridgePairLinkService != null) {
-            liFiBridgePairLinkService.link(rawTransaction, normalizedTransaction);
-        }
-        if (mayanCctpBridgePairLinkService != null) {
-            mayanCctpBridgePairLinkService.link(rawTransaction, normalizedTransaction);
-        }
-        if (acrossBridgePairLinkService != null) {
-            acrossBridgePairLinkService.link(normalizedTransaction);
+            return false;
         }
         Set<String> correlationIds = relatedCorrelationIds(rawTransaction, normalizedTransaction);
         if (correlationIds.isEmpty()
                 || normalizedTransaction.getWalletAddress() == null
                 || normalizedTransaction.getNetworkId() == null) {
-            return;
+            return false;
         }
 
         List<NormalizedTransaction> related = normalizedTransactionRepository
@@ -82,7 +103,7 @@ public class OnChainLifecycleLinkService {
                         normalizedTransaction.getNetworkId()
                 );
         if (related == null || related.isEmpty()) {
-            return;
+            return false;
         }
 
         Instant now = Instant.now();
@@ -110,7 +131,74 @@ public class OnChainLifecycleLinkService {
         }
         if (!updates.isEmpty()) {
             normalizedTransactionRepository.saveAll(updates);
+            return true;
         }
+        return false;
+    }
+
+    private List<NormalizedTransaction> loadCandidateBatch(int batchSize) {
+        Query query = Query.query(new Criteria().andOperator(
+                Criteria.where("source").is(NormalizedTransactionSource.ON_CHAIN),
+                Criteria.where("status").in("CONFIRMED", "PENDING_PRICE"),
+                Criteria.where("walletAddress").exists(true).ne(null),
+                Criteria.where("networkId").exists(true).ne(null),
+                Criteria.where("txHash").exists(true).ne(""),
+                missingCounterpartyCriteria(),
+                new Criteria().orOperator(
+                        asyncLifecycleCandidateCriteria(),
+                        gmxLifecycleCandidateCriteria()
+                )
+        ));
+        query.with(Sort.by(
+                Sort.Order.asc("blockTimestamp"),
+                Sort.Order.asc("transactionIndex"),
+                Sort.Order.asc("_id")
+        ));
+        query.limit(Math.max(1, batchSize));
+        return mongoOperations.find(query, NormalizedTransaction.class);
+    }
+
+    private Criteria asyncLifecycleCandidateCriteria() {
+        return new Criteria().andOperator(
+                Criteria.where("type").in(
+                        NormalizedTransactionType.LP_ENTRY_REQUEST,
+                        NormalizedTransactionType.LP_ENTRY_SETTLEMENT,
+                        NormalizedTransactionType.LP_EXIT_REQUEST,
+                        NormalizedTransactionType.LP_EXIT_SETTLEMENT,
+                        NormalizedTransactionType.DEX_ORDER_REQUEST,
+                        NormalizedTransactionType.DEX_ORDER_SETTLEMENT,
+                        NormalizedTransactionType.DERIVATIVE_ORDER_REQUEST,
+                        NormalizedTransactionType.DERIVATIVE_ORDER_EXECUTION,
+                        NormalizedTransactionType.DERIVATIVE_ORDER_CANCEL,
+                        NormalizedTransactionType.DERIVATIVE_POSITION_INCREASE,
+                        NormalizedTransactionType.DERIVATIVE_POSITION_DECREASE
+                ),
+                Criteria.where("correlationId").exists(true).ne("")
+        );
+    }
+
+    private Criteria gmxLifecycleCandidateCriteria() {
+        return new Criteria().andOperator(
+                Criteria.where("protocolName").regex("^GMX$", "i"),
+                Criteria.where("type").in(
+                        NormalizedTransactionType.DERIVATIVE_ORDER_EXECUTION,
+                        NormalizedTransactionType.DERIVATIVE_ORDER_CANCEL,
+                        NormalizedTransactionType.DERIVATIVE_POSITION_INCREASE,
+                        NormalizedTransactionType.DERIVATIVE_POSITION_DECREASE,
+                        NormalizedTransactionType.LP_ENTRY_REQUEST,
+                        NormalizedTransactionType.LP_ENTRY_SETTLEMENT,
+                        NormalizedTransactionType.LP_EXIT_REQUEST,
+                        NormalizedTransactionType.LP_EXIT_SETTLEMENT
+                )
+        );
+    }
+
+    private Criteria missingCounterpartyCriteria() {
+        return new Criteria().orOperator(
+                Criteria.where("matchedCounterparty").exists(false),
+                Criteria.where("matchedCounterparty").is(null),
+                Criteria.where("matchedCounterparty").is("")
+        );
     }
 
     private NormalizedTransaction selectPrimaryCounterparty(

@@ -38,20 +38,35 @@ public class ClarificationPolicyService {
 
         if (nextAttempts >= Math.max(1, maxAttempts)) {
             addReason(reasons, ClassificationReasonCode.CLARIFICATION_ATTEMPTS_EXHAUSTED.code());
-            return new ClarificationDecision(NormalizedTransactionStatus.NEEDS_REVIEW, List.copyOf(reasons));
+            NormalizedTransactionStatus status = rawTransaction == null
+                    ? NormalizedTransactionStatus.NEEDS_REVIEW
+                    : NormalizedTransactionStatus.PENDING_RECLASSIFICATION;
+            return new ClarificationDecision(status, List.copyOf(reasons));
         }
         return new ClarificationDecision(NormalizedTransactionStatus.PENDING_CLARIFICATION, List.copyOf(reasons));
     }
 
     public ClarificationDecision nextReceiptFailureDecision(
             NormalizedTransaction normalizedTransaction,
-            String runtimeReason
+            RawTransaction rawTransaction,
+            String runtimeReason,
+            int nextAttempts,
+            int maxAttempts
     ) {
         List<String> reasons = normalizedTransaction.getMissingDataReasons() == null
                 ? new ArrayList<>()
                 : new ArrayList<>(normalizedTransaction.getMissingDataReasons());
         addReason(reasons, runtimeReason);
-        return new ClarificationDecision(normalizedTransaction.getStatus(), List.copyOf(reasons));
+        NormalizedTransactionStatus status;
+        if (rawTransaction == null) {
+            status = NormalizedTransactionStatus.NEEDS_REVIEW;
+        } else if (nextAttempts >= Math.max(1, maxAttempts)) {
+            addReason(reasons, ClassificationReasonCode.CLARIFICATION_ATTEMPTS_EXHAUSTED.code());
+            status = NormalizedTransactionStatus.PENDING_RECLASSIFICATION;
+        } else {
+            status = normalizedTransaction.getStatus();
+        }
+        return new ClarificationDecision(status, List.copyOf(reasons));
     }
 
     public boolean isReceiptClarificationEligible(

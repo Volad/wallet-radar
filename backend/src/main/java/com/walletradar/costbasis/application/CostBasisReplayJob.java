@@ -1,19 +1,28 @@
 package com.walletradar.costbasis.application;
 
+import com.walletradar.config.AsyncConfig;
+import com.walletradar.domain.event.AccountingReplayCompletedEvent;
 import com.walletradar.domain.event.PricingCompletedEvent;
 import com.walletradar.domain.session.UserSession;
+import com.walletradar.domain.session.UserSessionRepository;
 import com.walletradar.costbasis.domain.AssetLedgerPointRepository;
 import com.walletradar.ingestion.job.support.StageExecutionLogSupport;
 import com.walletradar.pricing.application.PricingDataGateService;
 import com.walletradar.pricing.application.PricingDataGateSnapshot;
+import com.walletradar.session.application.AccountingUniverseService;
+import com.walletradar.session.application.SessionPipelineActivityService;
 import com.walletradar.session.application.SessionPipelineStateService;
 import com.walletradar.telemetry.PipelineTelemetrySnapshot;
 import com.walletradar.telemetry.PipelineTelemetrySnapshotService;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -22,21 +31,25 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 @Component
 @RequiredArgsConstructor
-@Slf4j
 public class CostBasisReplayJob {
 
+    private static final Logger log = LoggerFactory.getLogger(CostBasisReplayJob.class);
     private static final String STAGE_NAME = "costbasis-replay";
+    private static final Duration HEARTBEAT_INTERVAL = Duration.ofSeconds(30);
 
     private final AtomicBoolean running = new AtomicBoolean(false);
 
     private final CostBasisProperties properties;
+    private final UserSessionRepository userSessionRepository;
+    private final AccountingUniverseService accountingUniverseService;
     private final PricingDataGateService pricingDataGateService;
     private final PendingStatQueryService pendingStatQueryService;
     private final StatValidationService statValidationService;
     private final AvcoReplayService avcoReplayService;
-    private final OnChainBalanceRefreshService onChainBalanceRefreshService;
     private final AssetLedgerPointRepository assetLedgerPointRepository;
     private final PipelineTelemetrySnapshotService pipelineTelemetrySnapshotService;
+    private final ApplicationEventPublisher applicationEventPublisher;
+    private final SessionPipelineActivityService sessionPipelineActivityService;
     private final SessionPipelineStateService sessionPipelineStateService;
 
     public int runReplay() {
@@ -44,11 +57,16 @@ public class CostBasisReplayJob {
     }
 
     @EventListener
+    @Async(AsyncConfig.PIPELINE_STAGE_EXECUTOR)
     public void onPricingCompleted(PricingCompletedEvent event) {
         if (!properties.isEnabled() || event == null) {
             return;
         }
-        runReplay("pricing-completed", event.sessionId(), true);
+        // forceReplay=false: rely on the shouldReplay gate inside runReplayForSession.
+        // The gate already covers promoted>0 (new transactions entered CONFIRMED) and
+        // empty-ledger bootstrap — so passing true was only wasting 3-4s per pipeline
+        // iteration even when 0 new transactions were processed.
+        runReplay("pricing-completed", event.sessionId(), false);
     }
 
     private int runReplay(String trigger, String sessionId, boolean forceReplay) {
@@ -57,32 +75,62 @@ public class CostBasisReplayJob {
             return 0;
         }
 
+        long startedAtNanos = StageExecutionLogSupport.logStart(log, STAGE_NAME, trigger);
+        int processed = 0;
+        try {
+            if (sessionId == null || sessionId.isBlank()) {
+                for (UserSession session : userSessionRepository.findAll()) {
+                    processed += runReplayForSession(trigger, session, forceReplay);
+                }
+                return processed;
+            }
+            processed = userSessionRepository.findById(sessionId.trim())
+                    .map(session -> runReplayForSession(trigger, session, forceReplay))
+                    .orElse(0);
+            return processed;
+        } catch (RuntimeException error) {
+            throw error;
+        } finally {
+            StageExecutionLogSupport.logFinish(log, STAGE_NAME, trigger, processed, startedAtNanos);
+            running.set(false);
+        }
+    }
+
+    private int runReplayForSession(String trigger, UserSession session, boolean forceReplay) {
+        String sessionId = session.getId();
+        AccountingUniverseService.AccountingUniverseScope scope = accountingUniverseService.resolveScope(session);
+        sessionPipelineActivityService.markRunning(sessionId, UserSession.PipelineStage.ACCOUNTING_REPLAY);
+        sessionPipelineStateService.markStageRunning(
+                sessionId,
+                UserSession.PipelineStage.ACCOUNTING_REPLAY,
+                "Accounting replay running"
+        );
+
         int statProcessed = 0;
         int replayed = 0;
-        long startedAtNanos = StageExecutionLogSupport.logStart(log, STAGE_NAME, trigger);
+        int promoted = 0;
+        int demoted = 0;
+        int replaySafeReviewPromoted = 0;
+        Instant lastHeartbeatAt = Instant.now();
         try {
-            sessionPipelineStateService.markStageRunning(
-                    sessionId,
-                    UserSession.PipelineStage.ACCOUNTING_REPLAY,
-                    "Accounting replay running"
-            );
-            int promoted = 0;
-            int demoted = 0;
             while (true) {
                 StatValidationOutcome outcome = statValidationService.processNextBatch(
                         properties.getValidationBatchSize(),
-                        properties.getRetryDelaySeconds()
+                        properties.getRetryDelaySeconds(),
+                        scope.memberRefs()
                 );
                 statProcessed += outcome.processed();
                 promoted += outcome.promotedToConfirmed();
                 demoted += outcome.demotedToNeedsReview();
+                lastHeartbeatAt = maybeHeartbeat(sessionId, lastHeartbeatAt);
                 if (outcome.processed() == 0) {
                     break;
                 }
             }
 
-            PricingDataGateSnapshot gateSnapshot = pricingDataGateService.snapshot();
-            long pendingStatCount = pendingStatQueryService.countPending();
+            replaySafeReviewPromoted = statValidationService.promoteReplaySafeNeedsReview(scope.memberRefs());
+            PricingDataGateSnapshot gateSnapshot = pricingDataGateService.snapshot(scope.memberRefs());
+            long pendingStatCount = pendingStatQueryService.countPending(scope.memberRefs());
             if (!gateSnapshot.avcoReady() || pendingStatCount > 0L) {
                 String blockedMessage = String.format(
                         "Accounting replay blocked: active review or pending stat remains (pendingStat=%d, blockingNeedsReview=%d)",
@@ -90,16 +138,18 @@ public class CostBasisReplayJob {
                         gateSnapshot.needsReviewCount()
                 );
                 log.info(
-                        "Costbasis replay gate blocked: avcoReady={}, pendingStat={}, pendingPrice={}, pendingClarification={}, blockingNeedsReview={}, excludedNeedsReview={}, unresolvedPrice={}",
+                        "Costbasis replay gate blocked: sessionId={}, avcoReady={}, pendingStat={}, pendingPrice={}, pendingClarification={}, pendingReclassification={}, blockingNeedsReview={}, excludedNeedsReview={}, unresolvedPrice={}",
+                        sessionId,
                         gateSnapshot.avcoReady(),
                         pendingStatCount,
                         gateSnapshot.pendingPriceCount(),
                         gateSnapshot.pendingClarificationCount(),
+                        gateSnapshot.pendingReclassificationCount(),
                         gateSnapshot.needsReviewCount(),
                         gateSnapshot.excludedNeedsReviewCount(),
                         gateSnapshot.unresolvedPriceCount()
                 );
-                logStatOutcome(promoted, demoted, statProcessed);
+                logStatOutcome(promoted, demoted, statProcessed, replaySafeReviewPromoted);
                 logSnapshot();
                 sessionPipelineStateService.markStageBlocked(
                         sessionId,
@@ -109,26 +159,30 @@ public class CostBasisReplayJob {
                 return 0;
             }
 
-            boolean shouldReplay = forceReplay || promoted > 0 || assetLedgerPointRepository.count() == 0L;
+            boolean shouldReplay = forceReplay
+                    || promoted > 0
+                    || assetLedgerPointRepository.countByAccountingUniverseId(scope.accountingUniverseId()) == 0L;
+            StageHeartbeat stageHeartbeat = new StageHeartbeat(sessionId);
             if (shouldReplay) {
-                replayed = avcoReplayService.replayConfirmed();
+                replayed = avcoReplayService.replayConfirmed(
+                        scope.accountingUniverseId(),
+                        scope.memberRefs(),
+                        stageHeartbeat::pulse
+                );
             } else {
-                log.info("Costbasis replay skipped: no pending stat rows and asset_ledger_points already materialized");
+                log.info(
+                        "Costbasis replay skipped: sessionId={}, no pending stat rows and universe ledger already materialized",
+                        sessionId
+                );
             }
-            Instant evidenceCapturedAt = Instant.now();
-            int refreshedBalances = onChainBalanceRefreshService.refreshCurrentBalances(evidenceCapturedAt);
-            log.info(
-                    "Costbasis on-chain balance refresh outcome: refreshed={}",
-                    refreshedBalances
-            );
-
-            logStatOutcome(promoted, demoted, statProcessed);
+            logStatOutcome(promoted, demoted, statProcessed, replaySafeReviewPromoted);
             logSnapshot();
             sessionPipelineStateService.markStageComplete(
                     sessionId,
                     UserSession.PipelineStage.ACCOUNTING_REPLAY,
                     "Accounting replay complete"
             );
+            applicationEventPublisher.publishEvent(new AccountingReplayCompletedEvent(sessionId, replayed, trigger));
             return replayed;
         } catch (RuntimeException error) {
             sessionPipelineStateService.markStageFailed(
@@ -138,17 +192,31 @@ public class CostBasisReplayJob {
             );
             throw error;
         } finally {
-            StageExecutionLogSupport.logFinish(log, STAGE_NAME, trigger, statProcessed + replayed, startedAtNanos);
-            running.set(false);
+            sessionPipelineActivityService.markFinished(sessionId, UserSession.PipelineStage.ACCOUNTING_REPLAY);
         }
     }
 
-    private void logStatOutcome(int promoted, int demoted, int processed) {
+    private Instant maybeHeartbeat(String sessionId, Instant lastHeartbeatAt) {
+        Instant now = Instant.now();
+        if (Duration.between(lastHeartbeatAt, now).compareTo(HEARTBEAT_INTERVAL) < 0) {
+            return lastHeartbeatAt;
+        }
+        sessionPipelineActivityService.heartbeat(sessionId, UserSession.PipelineStage.ACCOUNTING_REPLAY);
+        sessionPipelineStateService.markStageRunning(
+                sessionId,
+                UserSession.PipelineStage.ACCOUNTING_REPLAY,
+                "Accounting replay running"
+        );
+        return now;
+    }
+
+    private void logStatOutcome(int promoted, int demoted, int processed, int replaySafeReviewPromoted) {
         log.info(
-                "Costbasis stat validation outcome: processed={}, promotedToConfirmed={}, demotedToNeedsReview={}",
+                "Costbasis stat validation outcome: processed={}, promotedToConfirmed={}, demotedToNeedsReview={}, replaySafeNeedsReviewPromoted={}",
                 processed,
                 promoted,
-                demoted
+                demoted,
+                replaySafeReviewPromoted
         );
     }
 
@@ -166,5 +234,18 @@ public class CostBasisReplayJob {
                 snapshot.excludedNeedsReviewCount(),
                 assetLedgerPointRepository.count()
         );
+    }
+
+    private final class StageHeartbeat {
+        private final String sessionId;
+        private Instant lastHeartbeatAt = Instant.now();
+
+        private StageHeartbeat(String sessionId) {
+            this.sessionId = sessionId;
+        }
+
+        private void pulse() {
+            lastHeartbeatAt = maybeHeartbeat(sessionId, lastHeartbeatAt);
+        }
     }
 }

@@ -1,14 +1,17 @@
 package com.walletradar.ingestion.pipeline.classification.support;
 
 import com.walletradar.domain.common.NetworkId;
+import com.walletradar.ingestion.config.NativeSettlementRecoveryProperties;
 import com.walletradar.ingestion.pipeline.onchain.OnChainRawTransactionView;
 import org.bson.Document;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Builds the authoritative movement legs from the raw transaction view before family/protocol rules are applied.
@@ -16,13 +19,30 @@ import java.util.List;
 @Component
 public class MovementLegExtractor {
 
-    private static final String EULER_BATCH_ROUTER = "0xddcbe30a761edd2e19bba930a977475265f36fa1";
+    private static final Set<String> EULER_BATCH_ROUTERS = Set.of(
+            "0xddcbe30a761edd2e19bba930a977475265f36fa1",
+            "0x7bdbd0a7114aa42ca957f292145f6a931a345583"
+    );
     private static final String ZKSYNC_SYSTEM_FEE_SINK = "0x0000000000000000000000000000000000008001";
 
     private final NativeAssetSymbolResolver nativeAssetSymbolResolver;
+    private final NativeSettlementRecoveryProperties nativeSettlementRecoveryProperties;
 
+    /**
+     * Convenience constructor used by tests and manual wiring; native-settlement recovery
+     * (ADR-044 D2) defaults off.
+     */
     public MovementLegExtractor(NativeAssetSymbolResolver nativeAssetSymbolResolver) {
+        this(nativeAssetSymbolResolver, new NativeSettlementRecoveryProperties());
+    }
+
+    @Autowired
+    public MovementLegExtractor(
+            NativeAssetSymbolResolver nativeAssetSymbolResolver,
+            NativeSettlementRecoveryProperties nativeSettlementRecoveryProperties
+    ) {
         this.nativeAssetSymbolResolver = nativeAssetSymbolResolver;
+        this.nativeSettlementRecoveryProperties = nativeSettlementRecoveryProperties;
     }
 
     public List<RawLeg> extract(OnChainRawTransactionView view) {
@@ -83,6 +103,7 @@ public class MovementLegExtractor {
         }
 
         legs = OneInchNativeSettlementSupport.enrichLegs(view, nativeAssetSymbolResolver, legs);
+        legs = ParaSwapNativeSettlementSupport.enrichLegs(view, nativeAssetSymbolResolver, legs);
 
         if (walletAddress.equals(view.fromAddress())) {
             BigInteger gasFeeValue = gasFeeValue(view);
@@ -92,7 +113,13 @@ public class MovementLegExtractor {
             }
         }
 
-        return WrappedNativeSupport.enrichLegs(view, nativeAssetSymbolResolver, legs);
+        legs = WrappedNativeSupport.enrichLegs(view, nativeAssetSymbolResolver, legs);
+        legs = LpNativeExitLegEnricher.enrichLegs(view, nativeAssetSymbolResolver, legs);
+        // ADR-044 D2: router-agnostic native-settlement recovery runs last, after the existing
+        // selector-specific enrichers, and only fires when the hasInboundNative guard is false.
+        legs = NativeSettlementRecovery.enrichLegs(
+                view, nativeAssetSymbolResolver, legs, nativeSettlementRecoveryProperties);
+        return legs;
     }
 
     private boolean isDirectValueCoveredByInternalTransfer(OnChainRawTransactionView view) {
@@ -192,7 +219,8 @@ public class MovementLegExtractor {
         if (!"0xc16ae7a4".equals(view.methodId())) {
             return false;
         }
-        if (!EULER_BATCH_ROUTER.equals(view.toAddress())) {
+        String interacted = view.toAddress();
+        if (interacted == null || !EULER_BATCH_ROUTERS.contains(interacted)) {
             return false;
         }
         return wallet.length() == 42

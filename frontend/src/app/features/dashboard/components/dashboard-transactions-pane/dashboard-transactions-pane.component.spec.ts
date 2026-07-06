@@ -75,27 +75,23 @@ describe('DashboardTransactionsPaneComponent', () => {
     expect(text).toContain('Page 2 / 3');
   });
 
-  it('emits search and filter changes', () => {
+  it('emits search and category changes', () => {
     const searchSpy = jasmine.createSpy('search');
-    const bridgeSpy = jasmine.createSpy('bridge');
-    const spamSpy = jasmine.createSpy('spam');
+    const categoriesSpy = jasmine.createSpy('categories');
 
     component.transactionSearchChange.subscribe(searchSpy);
-    component.bridgeStatusFilterChange.subscribe(bridgeSpy);
-    component.spamFilterChange.subscribe(spamSpy);
+    component.categoriesChange.subscribe(categoriesSpy);
 
     const searchInput = fixture.nativeElement.querySelector('input[type="search"]') as HTMLInputElement;
     searchInput.value = 'eth';
     searchInput.dispatchEvent(new Event('input'));
 
-    const chips = [...fixture.nativeElement.querySelectorAll('.bridge-filter-chip')] as HTMLButtonElement[];
-    chips.find((chip) => chip.textContent?.trim() === 'REVIEW')?.click();
-    chips.find((chip) => chip.textContent?.trim() === 'SPAM')?.click();
+    const chips = [...fixture.nativeElement.querySelectorAll('.cat-chip')] as HTMLButtonElement[];
+    chips.find((chip) => chip.textContent?.trim() === 'Swap')?.click();
     fixture.detectChanges();
 
     expect(searchSpy).toHaveBeenCalledWith('eth');
-    expect(bridgeSpy).toHaveBeenCalledWith('REVIEW');
-    expect(spamSpy).toHaveBeenCalledWith('SPAM_ONLY');
+    expect(categoriesSpy).toHaveBeenCalled();
   });
 
   it('emits page changes', () => {
@@ -111,6 +107,61 @@ describe('DashboardTransactionsPaneComponent', () => {
   it('does not show PRICE label for transfer-only rows without missing_price issue', () => {
     const text = fixture.nativeElement.textContent as string;
     expect(text).not.toContain('PRICE?');
+  });
+
+  it('shortens long hashes and keeps the full value in a hover hint', () => {
+    const longHash = '0xb7125978461a46854d9956eb73abb3109c91695e89a4d30e37fbe8aaddb74afc';
+    component.sourceTransactions = [
+      {
+        ...transactions[0],
+        hash: longHash,
+      },
+    ];
+    fixture.detectChanges();
+
+    const ref = fixture.nativeElement.querySelector('.tx-ref') as HTMLElement;
+    expect(ref.textContent?.trim()).toBe('0xb7125978…b74afc');
+    expect(ref.getAttribute('title')).toBe(longHash);
+  });
+
+  it('previews the material transaction body without signs or fee flows', () => {
+    component.sourceTransactions = [
+      {
+        ...transactions[0],
+        flows: [
+          {
+            role: 'TRANSFER',
+            symbol: 'AMANUSDC',
+            quantity: 1010.618,
+            signedQuantity: 1010.618,
+            priceUsd: 1,
+            source: 'STABLECOIN',
+          },
+          {
+            role: 'SELL',
+            symbol: 'USDC',
+            quantity: 1004.54,
+            signedQuantity: -1004.54,
+            priceUsd: 1,
+            source: 'STABLECOIN',
+          },
+          {
+            role: 'FEE',
+            symbol: 'ETH',
+            quantity: 0.001,
+            signedQuantity: -0.001,
+            priceUsd: 2500,
+            source: 'COINGECKO',
+          },
+        ],
+      },
+    ];
+    fixture.detectChanges();
+
+    const preview = fixture.nativeElement.querySelector('.tx-flow-preview') as HTMLElement;
+    expect(preview.textContent).toContain('1,004.54 USDC');
+    expect(preview.textContent).not.toContain('-1,004.54 USDC');
+    expect(preview.textContent).not.toContain('ETH');
   });
 
   it('does not render UNKNOWN source pill for flows without price source', () => {

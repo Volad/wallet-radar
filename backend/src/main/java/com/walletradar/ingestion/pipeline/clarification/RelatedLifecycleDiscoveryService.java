@@ -39,7 +39,6 @@ public class RelatedLifecycleDiscoveryService {
     private final OnChainNormalizedTransactionBuilder normalizedTransactionBuilder;
     private final IdempotentNormalizedTransactionStore normalizedTransactionStore;
     private final ExplorerRawOrderingRepairGateway explorerRawOrderingRepairGateway;
-    private final OnChainLifecycleLinkService onChainLifecycleLinkService;
 
     public int discoverAndNormalize(RawTransaction anchorRawTransaction, OnChainClassificationResult anchorClassification) {
         if (!shouldDiscover(anchorRawTransaction, anchorClassification)) {
@@ -101,10 +100,9 @@ public class RelatedLifecycleDiscoveryService {
             }
 
             Instant now = Instant.now();
-            var normalized = normalizedTransactionStore.upsert(
+            normalizedTransactionStore.upsert(
                     normalizedTransactionBuilder.build(candidateRaw, candidateClassification, now)
             );
-            onChainLifecycleLinkService.link(candidateRaw, normalized);
             candidateRaw.setNormalizationStatus(NormalizationStatus.COMPLETE);
             candidateRaw.setRetryCount(0);
             candidateRaw.setLastError(null);

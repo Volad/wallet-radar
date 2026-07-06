@@ -7,6 +7,7 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.ingestion.pipeline.classification.ClassificationDecision;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassificationContext;
 import com.walletradar.ingestion.pipeline.classification.onchain.protocol.ProtocolSemanticHint;
+import com.walletradar.ingestion.pipeline.classification.lp.GmxMarketCorrelationSupport;
 import com.walletradar.ingestion.pipeline.classification.reason.ClassificationReasonCode;
 import com.walletradar.ingestion.pipeline.classification.support.OnChainClassificationSupport;
 import com.walletradar.ingestion.pipeline.classification.support.RawLeg;
@@ -16,6 +17,7 @@ import org.springframework.stereotype.Component;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 
 /**
@@ -54,17 +56,37 @@ public class GmxLpClassifier implements OnChainFamilyClassifier {
         return Optional.empty();
     }
 
+    private static final String GMX_LP_PREFIX = "gmx-lp:";
+    private static final String GMX_EXIT_RAW_KEY_PREFIX = "gmx-exit-raw-key:";
+
     private ClassificationDecision buildRequestDecision(
             OnChainClassificationContext context,
             ProtocolSemanticHint hint,
             NormalizedTransactionType type
     ) {
-        NormalizedTransactionStatus status = hint.correlationId() == null
+        // For LP_EXIT_REQUEST the GM/GLV tokens are OUTGOING (negative delta), so the standard
+        // positive-only scan misses them. Use the all-legs variant which accepts any sign.
+        String resolvedCorrelationId = GmxMarketCorrelationSupport.correlationIdFromAllLegs(
+                context.view(), context.movementLegs());
+        if (resolvedCorrelationId == null) {
+            resolvedCorrelationId = hint.correlationId();
+        }
+
+        List<String> reasons = new ArrayList<>();
+        if (resolvedCorrelationId == null) {
+            reasons.add(missingReason(type));
+        } else if (type == NormalizedTransactionType.LP_EXIT_REQUEST
+                && hint.correlationId() != null
+                && !hint.correlationId().isBlank()
+                && !hint.correlationId().startsWith(GMX_LP_PREFIX)) {
+            // Store the raw event key so GmxExitSettlementLinkService can match the paired
+            // LP_EXIT_SETTLEMENT (which carries the same raw key as its correlationId).
+            reasons.add(GMX_EXIT_RAW_KEY_PREFIX + hint.correlationId().toLowerCase(Locale.ROOT));
+        }
+
+        NormalizedTransactionStatus status = resolvedCorrelationId == null
                 ? NormalizedTransactionStatus.PENDING_CLARIFICATION
                 : OnChainClassificationSupport.initialStatus(context.view(), type, ConfidenceLevel.MEDIUM);
-        List<String> reasons = hint.correlationId() == null
-                ? List.of(missingReason(type))
-                : List.of();
         return new ClassificationDecision(
                 type,
                 status,
@@ -72,7 +94,7 @@ public class GmxLpClassifier implements OnChainFamilyClassifier {
                 ConfidenceLevel.MEDIUM,
                 OnChainClassificationSupport.toFlows(context.movementLegs(), type),
                 reasons,
-                hint.correlationId(),
+                resolvedCorrelationId,
                 null,
                 null,
                 false,
@@ -87,10 +109,11 @@ public class GmxLpClassifier implements OnChainFamilyClassifier {
             ProtocolSemanticHint hint,
             NormalizedTransactionType type
     ) {
-        NormalizedTransactionStatus status = hint.correlationId() == null
+        String correlationId = resolveSettlementCorrelationId(context, hint, type);
+        NormalizedTransactionStatus status = correlationId == null
                 ? NormalizedTransactionStatus.PENDING_CLARIFICATION
                 : OnChainClassificationSupport.initialStatus(context.view(), type, ConfidenceLevel.MEDIUM);
-        List<String> reasons = hint.correlationId() == null
+        List<String> reasons = correlationId == null
                 ? List.of(missingReason(type))
                 : List.of();
         return new ClassificationDecision(
@@ -100,7 +123,7 @@ public class GmxLpClassifier implements OnChainFamilyClassifier {
                 ConfidenceLevel.MEDIUM,
                 OnChainClassificationSupport.toFlows(orderAsyncLpSettlementLegs(context.movementLegs()), type),
                 reasons,
-                hint.correlationId(),
+                correlationId,
                 null,
                 null,
                 false,
@@ -145,5 +168,23 @@ public class GmxLpClassifier implements OnChainFamilyClassifier {
         }
         return symbol.regionMatches(true, 0, "GM:", 0, 3)
                 || symbol.regionMatches(true, 0, "GLV", 0, 3);
+    }
+
+    private String resolveSettlementCorrelationId(
+            OnChainClassificationContext context,
+            ProtocolSemanticHint hint,
+            NormalizedTransactionType type
+    ) {
+        String marketCorrelationId = GmxMarketCorrelationSupport.correlationIdFromMovementLegs(
+                context.view(),
+                context.movementLegs()
+        );
+        if (marketCorrelationId != null) {
+            return marketCorrelationId;
+        }
+        if (hint.correlationId() != null && !hint.correlationId().isBlank()) {
+            return hint.correlationId();
+        }
+        return null;
     }
 }

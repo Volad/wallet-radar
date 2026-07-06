@@ -1,5 +1,6 @@
 package com.walletradar.api.dto;
 
+import java.time.Instant;
 import java.util.List;
 
 /**
@@ -8,6 +9,7 @@ import java.util.List;
 public record SessionBackfillStatusResponse(
         String sessionId,
         String status,
+        String acquisitionStatus,
         Integer overallProgressPct,
         Integer totalTargets,
         Integer completedTargets,
@@ -15,6 +17,7 @@ public record SessionBackfillStatusResponse(
         String pipelineStatus,
         String pipelineMessage,
         PhaseProgress phaseProgress,
+        Instant lastSyncedAt,
         List<SessionWalletBackfillStatus> wallets
 ) {
     public record PhaseProgress(

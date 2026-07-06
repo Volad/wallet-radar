@@ -27,7 +27,15 @@ public final class CalldataDecodingSupport {
     }
 
     public static BigInteger decodeUint256Argument(String inputData, int argumentIndex) {
-        String word = decodeWord(inputData, argumentIndex);
+        return decodeUint256Argument(inputData, argumentIndex, true);
+    }
+
+    public static BigInteger decodeTupleUint256Argument(String encodedData, int argumentIndex) {
+        return decodeUint256Argument(encodedData, argumentIndex, false);
+    }
+
+    private static BigInteger decodeUint256Argument(String inputData, int argumentIndex, boolean hasSelector) {
+        String word = decodeWord(inputData, argumentIndex, hasSelector);
         if (word == null) {
             return null;
         }
@@ -36,6 +44,14 @@ public final class CalldataDecodingSupport {
         } catch (NumberFormatException ex) {
             return null;
         }
+    }
+
+    public static String decodeDynamicBytesArgument(String inputData, int argumentIndex) {
+        return decodeDynamicBytesArgument(inputData, argumentIndex, true);
+    }
+
+    public static String decodeTupleDynamicBytesArgument(String encodedData, int argumentIndex) {
+        return decodeDynamicBytesArgument(encodedData, argumentIndex, false);
     }
 
     public static boolean containsEmbeddedSelector(String inputData, String selector) {
@@ -50,16 +66,56 @@ public final class CalldataDecodingSupport {
     }
 
     public static List<String> decodeDynamicBytesArrayElements(String inputData) {
+        return decodeDynamicBytesArrayElements(inputData, 0, true);
+    }
+
+    public static List<String> decodeTupleDynamicBytesArrayElements(String encodedData, int argumentIndex) {
+        return decodeDynamicBytesArrayElements(encodedData, argumentIndex, false);
+    }
+
+    private static String decodeDynamicBytesArgument(String inputData, int argumentIndex, boolean hasSelector) {
+        if (inputData == null || argumentIndex < 0 || !inputData.startsWith("0x")) {
+            return null;
+        }
+        String normalized = inputData.trim().toLowerCase(Locale.ROOT);
+        String payload = normalized.substring(2);
+        int headStart = headStart(hasSelector, argumentIndex);
+        BigInteger segmentOffset = parseWord(payload, headStart);
+        long segmentOffsetBytes = safeLongValue(segmentOffset);
+        if (segmentOffsetBytes < 0) {
+            return null;
+        }
+        int payloadBase = payloadBase(hasSelector);
+        int segmentStart = payloadBase + (int) (segmentOffsetBytes * 2L);
+        if (!hasWord(payload, segmentStart)) {
+            return null;
+        }
+        BigInteger segmentLength = parseWord(payload, segmentStart);
+        long segmentLengthBytes = safeLongValue(segmentLength);
+        if (segmentLengthBytes < 0 || segmentLengthBytes > Integer.MAX_VALUE) {
+            return null;
+        }
+        int dataStart = segmentStart + WORD_HEX_LENGTH;
+        int dataEnd = dataStart + (int) (segmentLengthBytes * 2L);
+        if (dataStart < 0 || dataEnd > payload.length() || dataEnd < dataStart) {
+            return null;
+        }
+        return "0x" + payload.substring(dataStart, dataEnd);
+    }
+
+    private static List<String> decodeDynamicBytesArrayElements(String inputData, int argumentIndex, boolean hasSelector) {
         if (inputData == null || !inputData.startsWith("0x")) {
             return List.of();
         }
         String normalized = inputData.trim().toLowerCase(Locale.ROOT);
         String payload = normalized.substring(2);
-        if (payload.length() < SELECTOR_HEX_LENGTH + WORD_HEX_LENGTH) {
+        int payloadBase = payloadBase(hasSelector);
+        int headStart = headStart(hasSelector, argumentIndex);
+        if (payload.length() < headStart + WORD_HEX_LENGTH) {
             return List.of();
         }
 
-        BigInteger arrayOffset = parseWord(payload, SELECTOR_HEX_LENGTH);
+        BigInteger arrayOffset = parseWord(payload, headStart);
         if (arrayOffset == null || arrayOffset.signum() < 0) {
             return List.of();
         }
@@ -68,7 +124,7 @@ public final class CalldataDecodingSupport {
             return List.of();
         }
 
-        int arrayStart = SELECTOR_HEX_LENGTH + (int) (arrayOffsetBytes * 2L);
+        int arrayStart = payloadBase + (int) (arrayOffsetBytes * 2L);
         if (!hasWord(payload, arrayStart)) {
             return List.of();
         }
@@ -153,16 +209,28 @@ public final class CalldataDecodingSupport {
     }
 
     private static String decodeWord(String inputData, int argumentIndex) {
+        return decodeWord(inputData, argumentIndex, true);
+    }
+
+    private static String decodeWord(String inputData, int argumentIndex, boolean hasSelector) {
         if (inputData == null || argumentIndex < 0 || !inputData.startsWith("0x")) {
             return null;
         }
-        int start = 2 + SELECTOR_HEX_LENGTH + (argumentIndex * WORD_HEX_LENGTH);
+        int start = 2 + headStart(hasSelector, argumentIndex);
         int end = start + WORD_HEX_LENGTH;
         if (inputData.length() < end) {
             return null;
         }
         String word = inputData.substring(start, end);
         return word.matches("[0-9a-fA-F]{64}") ? word : null;
+    }
+
+    private static int payloadBase(boolean hasSelector) {
+        return hasSelector ? SELECTOR_HEX_LENGTH : 0;
+    }
+
+    private static int headStart(boolean hasSelector, int argumentIndex) {
+        return payloadBase(hasSelector) + (argumentIndex * WORD_HEX_LENGTH);
     }
 
     private static BigInteger parseWord(String normalizedHex, int start) {

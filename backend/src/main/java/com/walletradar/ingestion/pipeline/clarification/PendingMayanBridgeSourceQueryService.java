@@ -19,12 +19,22 @@ import java.util.List;
 @RequiredArgsConstructor
 public class PendingMayanBridgeSourceQueryService {
 
+    private static final Criteria UNRESOLVED_PAIRING_CRITERIA = new Criteria().orOperator(
+            Criteria.where("correlationId").exists(false),
+            Criteria.where("correlationId").is(null),
+            Criteria.where("correlationId").is(""),
+            Criteria.where("matchedCounterparty").exists(false),
+            Criteria.where("matchedCounterparty").is(null),
+            Criteria.where("matchedCounterparty").is("")
+    );
+
     private final MongoOperations mongoOperations;
 
     public List<NormalizedTransaction> loadNextBatch(int batchSize) {
         Query query = new Query(new Criteria().andOperator(
                 Criteria.where("source").is(NormalizedTransactionSource.ON_CHAIN),
-                Criteria.where("type").is(NormalizedTransactionType.BRIDGE_OUT)
+                Criteria.where("type").is(NormalizedTransactionType.BRIDGE_OUT),
+                UNRESOLVED_PAIRING_CRITERIA
         ));
         query.with(Sort.by(
                 Sort.Order.asc("blockTimestamp"),

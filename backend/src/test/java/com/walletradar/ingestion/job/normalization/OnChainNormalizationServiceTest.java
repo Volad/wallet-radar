@@ -10,13 +10,17 @@ import com.walletradar.domain.transaction.raw.RawTransactionRepository;
 import com.walletradar.ingestion.config.OnChainNormalizationProperties;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassificationResult;
 import com.walletradar.ingestion.pipeline.classification.OnChainClassifier;
-import com.walletradar.ingestion.pipeline.clarification.OnChainLifecycleLinkService;
+import com.walletradar.ingestion.pipeline.clarification.CounterpartyEnrichmentService;
+import com.walletradar.ingestion.pipeline.clarification.ProtocolNameEnrichmentService;
+import com.walletradar.ingestion.pipeline.clarification.RegistryBridgeInboundTypeCorrectionService;
 import com.walletradar.ingestion.pipeline.onchain.OnChainNormalizedTransactionBuilder;
+import com.walletradar.lending.application.LendingReceiptIdentityService;
 import com.walletradar.ingestion.pipeline.onchain.PendingRawTransactionQueryService;
-import com.walletradar.ingestion.pipeline.clarification.RelatedLifecycleDiscoveryService;
 import com.walletradar.ingestion.pipeline.onchain.repair.ExplorerRawOrderingRepairGateway;
+import com.walletradar.ingestion.pipeline.onchain.repair.InternalTransferRawPeerRepairService;
 import com.walletradar.ingestion.pipeline.onchain.support.ResolvedRawOrderingMetadata;
 import com.walletradar.ingestion.store.IdempotentNormalizedTransactionStore;
+import com.walletradar.session.application.AccountingUniverseService;
 import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -49,9 +53,17 @@ class OnChainNormalizationServiceTest {
     @Mock
     private ExplorerRawOrderingRepairGateway explorerRawOrderingRepairGateway;
     @Mock
-    private RelatedLifecycleDiscoveryService relatedLifecycleDiscoveryService;
+    private InternalTransferRawPeerRepairService internalTransferRawPeerRepairService;
     @Mock
-    private OnChainLifecycleLinkService onChainLifecycleLinkService;
+    private ProtocolNameEnrichmentService protocolNameEnrichmentService;
+    @Mock
+    private CounterpartyEnrichmentService counterpartyEnrichmentService;
+    @Mock
+    private RegistryBridgeInboundTypeCorrectionService registryBridgeInboundTypeCorrectionService;
+    @Mock
+    private AccountingUniverseService accountingUniverseService;
+    @Mock
+    private LendingReceiptIdentityService lendingReceiptIdentityService;
 
     private OnChainNormalizationService service;
 
@@ -68,8 +80,12 @@ class OnChainNormalizationServiceTest {
                 normalizedTransactionStore,
                 rawTransactionRepository,
                 explorerRawOrderingRepairGateway,
-                relatedLifecycleDiscoveryService,
-                onChainLifecycleLinkService
+                internalTransferRawPeerRepairService,
+                protocolNameEnrichmentService,
+                registryBridgeInboundTypeCorrectionService,
+                counterpartyEnrichmentService,
+                accountingUniverseService,
+                lendingReceiptIdentityService
         );
     }
 
@@ -81,6 +97,7 @@ class OnChainNormalizationServiceTest {
         RawTransaction sameTimestampLowerIndex = raw("0xbbb", 1_700_000_001L, 2);
         when(pendingRawTransactionQueryService.loadNextBatch(10))
                 .thenReturn(List.of(laterIndex, sameTimestampLowerIndex, earliest));
+        when(internalTransferRawPeerRepairService.repairMissingPeers(any())).thenReturn(0);
 
         service.processNextBatch();
 
@@ -99,6 +116,7 @@ class OnChainNormalizationServiceTest {
         RawTransaction existingLater = raw("0xbbb", 1_700_000_001L, 7);
         when(pendingRawTransactionQueryService.loadNextBatch(10))
                 .thenReturn(List.of(existingLater, repairedEarlier));
+        when(internalTransferRawPeerRepairService.repairMissingPeers(any())).thenReturn(0);
         when(explorerRawOrderingRepairGateway.fetch("0xccc", NetworkId.ETHEREUM))
                 .thenReturn(java.util.Optional.of(new ResolvedRawOrderingMetadata(1_700_000_001L, 2)));
 
@@ -126,6 +144,32 @@ class OnChainNormalizationServiceTest {
         assertThat(rawTransaction.getRetryCount()).isZero();
         assertThat(rawTransaction.getLastError()).isNull();
         assertThat(rawTransaction.getNextRetryAt()).isNull();
+    }
+
+    @Test
+    @DisplayName("enriches canonical metadata before upsert for typed rows")
+    void enrichesCanonicalMetadataBeforeUpsertForTypedRows() {
+        RawTransaction rawTransaction = raw("0xabc", 1_700_000_000L, 5);
+        when(onChainClassifier.classify(rawTransaction)).thenReturn(classification());
+
+        boolean normalized = service.normalize(rawTransaction);
+
+        assertThat(normalized).isTrue();
+        verify(protocolNameEnrichmentService).enrichInPlace(any(), org.mockito.Mockito.same(rawTransaction), any());
+        verify(counterpartyEnrichmentService).enrichInPlace(any(), org.mockito.Mockito.same(rawTransaction), any());
+    }
+
+    @Test
+    @DisplayName("skips metadata enrichment for unknown review rows")
+    void skipsMetadataEnrichmentForUnknownReviewRows() {
+        RawTransaction rawTransaction = raw("0xabc", null, 5);
+        rawTransaction.setRawData(new Document("transactionIndex", "5"));
+
+        boolean normalized = service.normalize(rawTransaction);
+
+        assertThat(normalized).isTrue();
+        verify(protocolNameEnrichmentService, never()).enrichInPlace(any(), any(), any());
+        verify(counterpartyEnrichmentService, never()).enrichInPlace(any(), any(), any());
     }
 
     @Test
@@ -204,6 +248,18 @@ class OnChainNormalizationServiceTest {
         assertThat(rawTransaction.getRetryCount()).isZero();
         assertThat(rawTransaction.getLastError()).isNull();
         assertThat(rawTransaction.getNextRetryAt()).isNull();
+    }
+
+    @Test
+    @DisplayName("repairs missing raw peers before normalizing current batch")
+    void repairsMissingRawPeersBeforeNormalizingCurrentBatch() {
+        RawTransaction rawTransaction = raw("0xabc", 1_700_000_000L, 5);
+        when(pendingRawTransactionQueryService.loadNextBatch(10)).thenReturn(List.of(rawTransaction));
+        when(internalTransferRawPeerRepairService.repairMissingPeers(any())).thenReturn(1);
+
+        service.processNextBatch();
+
+        verify(internalTransferRawPeerRepairService).repairMissingPeers(any());
     }
 
     private static RawTransaction raw(String txHash, Long epochSeconds, int transactionIndex) {

@@ -3,6 +3,7 @@ package com.walletradar.ingestion.pipeline.clarification;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.domain.transaction.raw.RawSyncMethod;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.ingestion.pipeline.classification.reason.ClassificationReasonCode;
 import com.walletradar.ingestion.pipeline.classification.support.ClarificationEligibilitySupport;
@@ -40,6 +41,7 @@ public final class ReceiptClarificationEligibilitySupport {
             "0x4673757b36119b4632f798ad4e0d72fbd170ee0b7be4e4901bd1155ab3881775"
     );
 
+    private static final String MULTICALL_SELECTOR = "0xac9650d8";
     private static final String GMX_HELPER_SEND_WNT_SELECTOR = "7d39aaf1";
     private static final String GMX_HELPER_SEND_TOKENS_SELECTOR = "e6d66ac8";
     private static final String GMX_DEPOSIT_REQUEST_CORRELATION_REQUIRED = ClassificationReasonCode.GMX_DEPOSIT_REQUEST_CORRELATION_REQUIRED.code();
@@ -50,6 +52,10 @@ public final class ReceiptClarificationEligibilitySupport {
     private static final String GMX_DERIVATIVE_EXECUTION_EVIDENCE_REQUIRED = ClassificationReasonCode.GMX_DERIVATIVE_EXECUTION_EVIDENCE_REQUIRED.code();
     private static final String COW_ORDER_SETTLEMENT_CORRELATION_REQUIRED = ClassificationReasonCode.COW_ORDER_SETTLEMENT_CORRELATION_REQUIRED.code();
     private static final String EULER_BATCH_DECODER_REQUIRED = ClassificationReasonCode.EULER_BATCH_DECODER_REQUIRED.code();
+    private static final String NATIVE_SETTLEMENT_TRANSFER_EVIDENCE_REQUIRED =
+            ClassificationReasonCode.NATIVE_SETTLEMENT_TRANSFER_EVIDENCE_REQUIRED.code();
+    private static final String LP_POSITION_CORRELATION_REQUIRED =
+            ClassificationReasonCode.LP_POSITION_CORRELATION_REQUIRED.code();
     private static final String GPV2_SETTLEMENT_SELECTOR = "0x13d79a0b";
     private static final String ROUTED_AGGREGATOR_OUTBOUND_ONLY = ClassificationReasonCode.ROUTED_AGGREGATOR_OUTBOUND_ONLY.code();
 
@@ -60,12 +66,16 @@ public final class ReceiptClarificationEligibilitySupport {
         if (normalizedTransaction == null || view == null) {
             return false;
         }
-        if (view.hasFullReceiptClarificationEvidence()) {
+        if (Boolean.TRUE.equals(normalizedTransaction.getExcludedFromAccounting())) {
             return false;
         }
         List<String> reasons = normalizedTransaction.getMissingDataReasons() == null
                 ? List.of()
                 : normalizedTransaction.getMissingDataReasons();
+        if (view.hasFullReceiptClarificationEvidence()
+                && !requiresTransferEvidenceRecovery(normalizedTransaction, reasons, view)) {
+            return false;
+        }
         boolean bridgeEvidenceCandidate = normalizedTransaction.getStatus() == NormalizedTransactionStatus.PENDING_PRICE
                 && normalizedTransaction.getType() == NormalizedTransactionType.BRIDGE_OUT;
         boolean gmxDerivativeExecutionCandidate = isGmxDerivativeExecutionCandidate(normalizedTransaction, view);
@@ -74,6 +84,12 @@ public final class ReceiptClarificationEligibilitySupport {
         boolean gmxPendingClarificationCandidate = isGmxPendingClarificationCandidate(normalizedTransaction, reasons);
         boolean oneInchNativeSettlementCandidate = isOneInchNativeSettlementCandidate(normalizedTransaction, reasons);
         boolean eulerPendingClarificationCandidate = isEulerPendingClarificationCandidate(normalizedTransaction, reasons, view);
+        boolean nativeSettlementTransferRecoveryCandidate =
+                isNativeSettlementTransferRecoveryCandidate(normalizedTransaction, reasons, view);
+        boolean lpPositionCorrelationCandidate =
+                isLpPositionCorrelationCandidate(normalizedTransaction, reasons, view);
+        boolean multicallMissingTransferCandidate =
+                isMulticallWithMissingNativeValueTransferEvidence(normalizedTransaction, view);
         if (normalizedTransaction.getStatus() != NormalizedTransactionStatus.NEEDS_REVIEW
                 && !bridgeEvidenceCandidate
                 && !gmxDerivativeExecutionCandidate
@@ -81,7 +97,10 @@ public final class ReceiptClarificationEligibilitySupport {
                 && !cowSettlementCandidate
                 && !gmxPendingClarificationCandidate
                 && !oneInchNativeSettlementCandidate
-                && !eulerPendingClarificationCandidate) {
+                && !eulerPendingClarificationCandidate
+                && !nativeSettlementTransferRecoveryCandidate
+                && !lpPositionCorrelationCandidate
+                && !multicallMissingTransferCandidate) {
             return false;
         }
         if (bridgeEvidenceCandidate
@@ -117,6 +136,18 @@ public final class ReceiptClarificationEligibilitySupport {
             return true;
         }
         if (eulerPendingClarificationCandidate) {
+            return true;
+        }
+        if (nativeSettlementTransferRecoveryCandidate) {
+            return true;
+        }
+        if (lpPositionCorrelationCandidate) {
+            return true;
+        }
+        if (multicallMissingTransferCandidate) {
+            return true;
+        }
+        if (normalizedTransaction.getStatus() == NormalizedTransactionStatus.NEEDS_REVIEW) {
             return true;
         }
         String txHash = String.valueOf(view.txHash()).toLowerCase();
@@ -222,6 +253,90 @@ public final class ReceiptClarificationEligibilitySupport {
                 && "0xc16ae7a4".equals(view.methodId());
     }
 
+    private static boolean isNativeSettlementTransferRecoveryCandidate(
+            NormalizedTransaction normalizedTransaction,
+            List<String> reasons,
+            OnChainRawTransactionView view
+    ) {
+        return normalizedTransaction != null
+                && view != null
+                && normalizedTransaction.getStatus() == NormalizedTransactionStatus.PENDING_CLARIFICATION
+                && isNativeSettlementRecoveryType(normalizedTransaction.getType())
+                && reasons.contains(NATIVE_SETTLEMENT_TRANSFER_EVIDENCE_REQUIRED)
+                && view.syncMethod() == RawSyncMethod.BLOCKSCOUT
+                && !view.hasFullReceiptClarificationEvidence();
+    }
+
+    /**
+     * ADR-044 D3: native-output families whose missing native settlement is recovered via full-receipt
+     * WETH {@code Withdrawal} evidence. Broadened from LP_EXIT/LP_FEE_CLAIM to SWAP/UNWRAP/LP_EXIT_*.
+     */
+    private static boolean isNativeSettlementRecoveryType(NormalizedTransactionType type) {
+        return type == NormalizedTransactionType.LP_EXIT
+                || type == NormalizedTransactionType.LP_EXIT_PARTIAL
+                || type == NormalizedTransactionType.LP_EXIT_FINAL
+                || type == NormalizedTransactionType.LP_FEE_CLAIM
+                || type == NormalizedTransactionType.SWAP
+                || type == NormalizedTransactionType.UNWRAP;
+    }
+
+    private static boolean requiresTransferEvidenceRecovery(
+            NormalizedTransaction normalizedTransaction,
+            List<String> reasons,
+            OnChainRawTransactionView view
+    ) {
+        if (normalizedTransaction == null || view == null || reasons == null || reasons.isEmpty()) {
+            return false;
+        }
+        if (!"0xc16ae7a4".equals(view.methodId())) {
+            return false;
+        }
+        if (!view.explorerTokenTransfers().isEmpty() || !view.explorerInternalTransfers().isEmpty()) {
+            return false;
+        }
+        return reasons.contains(ClassificationReasonCode.CLASSIFICATION_FAILED.code())
+                || reasons.contains(EULER_BATCH_DECODER_REQUIRED);
+    }
+
+    private static boolean isLpPositionCorrelationCandidate(
+            NormalizedTransaction normalizedTransaction,
+            List<String> reasons,
+            OnChainRawTransactionView view
+    ) {
+        if (normalizedTransaction == null || view == null) {
+            return false;
+        }
+        if (!reasons.contains(LP_POSITION_CORRELATION_REQUIRED)) {
+            return false;
+        }
+        NormalizedTransactionType type = normalizedTransaction.getType();
+        boolean positionScopedType = type == NormalizedTransactionType.LP_ENTRY
+                || type == NormalizedTransactionType.LP_EXIT
+                || type == NormalizedTransactionType.LP_EXIT_PARTIAL
+                || type == NormalizedTransactionType.LP_EXIT_FINAL;
+        if (!positionScopedType) {
+            return false;
+        }
+        if (view.hasFullReceiptClarificationEvidence()) {
+            return false;
+        }
+        if (normalizedTransaction.getStatus() == NormalizedTransactionStatus.PENDING_CLARIFICATION) {
+            return true;
+        }
+        // LP_ENTRY mint transactions (e.g. Velodrome struct-mint) may have been confirmed by the
+        // reclassifier even though the tokenId could not be decoded — leaving them CONFIRMED with
+        // LP_POSITION_CORRELATION_REQUIRED still unresolved and CLARIFICATION_ATTEMPTS_EXHAUSTED
+        // set after a single failed full-receipt fetch.  If the full receipt has never been
+        // successfully fetched (fullReceiptClarificationAttempts == 0) we re-admit the transaction
+        // for another clarification attempt: the failure was transient (RPC unavailable at the time
+        // of the original attempt) rather than permanent.
+        return normalizedTransaction.getStatus() == NormalizedTransactionStatus.CONFIRMED
+                && type == NormalizedTransactionType.LP_ENTRY
+                && reasons.contains(ClassificationReasonCode.CLARIFICATION_ATTEMPTS_EXHAUSTED.code())
+                && (normalizedTransaction.getFullReceiptClarificationAttempts() == null
+                || normalizedTransaction.getFullReceiptClarificationAttempts() == 0);
+    }
+
     private static boolean isGmxDerivativeRequest(NormalizedTransaction normalizedTransaction) {
         return normalizedTransaction != null
                 && normalizedTransaction.getType() == NormalizedTransactionType.DERIVATIVE_ORDER_REQUEST
@@ -291,6 +406,40 @@ public final class ReceiptClarificationEligibilitySupport {
             return false;
         }
         return !view.explorerTokenTransfers().isEmpty() || !view.explorerInternalTransfers().isEmpty();
+    }
+
+    /**
+     * Detects multicall transactions (0xac9650d8) that send native ETH but have no token or
+     * internal transfer evidence — a symptom of BlockScout indexer lag where the block has
+     * been processed in the main tx list but the sub-call logs have not been indexed yet.
+     *
+     * <p>When this fires, the receipt clarification will fall back to RPC
+     * ({@code eth_getTransactionReceipt}) to recover ERC-20 Transfer events from the receipt
+     * logs, which are always present even when the explorer has not indexed them.
+     */
+    private static boolean isMulticallWithMissingNativeValueTransferEvidence(
+            NormalizedTransaction normalizedTransaction,
+            OnChainRawTransactionView view
+    ) {
+        if (normalizedTransaction == null || view == null) {
+            return false;
+        }
+        if (normalizedTransaction.getType() != NormalizedTransactionType.EXTERNAL_TRANSFER_OUT) {
+            return false;
+        }
+        if (view.syncMethod() != RawSyncMethod.BLOCKSCOUT) {
+            return false;
+        }
+        if (view.hasFullReceiptClarificationEvidence()) {
+            return false;
+        }
+        if (!MULTICALL_SELECTOR.equals(view.methodId())) {
+            return false;
+        }
+        if (view.rawValue() == null || view.rawValue().signum() <= 0) {
+            return false;
+        }
+        return view.explorerTokenTransfers().isEmpty() && view.explorerInternalTransfers().isEmpty();
     }
 
     private static boolean isCowSettlementCandidate(

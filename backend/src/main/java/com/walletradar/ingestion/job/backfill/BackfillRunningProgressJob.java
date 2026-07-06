@@ -32,7 +32,10 @@ public class BackfillRunningProgressJob {
         long startedAt = System.currentTimeMillis();
         log.debug("BackfillRunningProgressJob started");
         try {
-            List<SyncStatus> running = syncStatusRepository.findByStatusIn(Set.of(SyncStatus.SyncStatusValue.RUNNING));
+            List<SyncStatus> running = syncStatusRepository.findOnChainByStatusIn(
+                    SyncStatus.SourceKind.ONCHAIN,
+                    Set.of(SyncStatus.SyncStatusValue.RUNNING)
+            );
             int updated = 0;
             for (SyncStatus sync : running) {
                 if (sync.getId() == null || sync.getWalletAddress() == null || sync.getNetworkId() == null) {

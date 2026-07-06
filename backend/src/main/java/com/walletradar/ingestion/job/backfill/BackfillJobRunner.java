@@ -4,11 +4,11 @@ import com.walletradar.domain.sync.BackfillSegmentRepository;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.sync.SyncStatus;
 import com.walletradar.domain.sync.SyncStatusRepository;
-import com.walletradar.domain.event.WalletAddedEvent;
 import com.walletradar.ingestion.adapter.BlockHeightResolver;
 import com.walletradar.ingestion.adapter.BlockTimestampResolver;
 import com.walletradar.ingestion.adapter.NetworkAdapter;
 import com.walletradar.ingestion.config.BackfillProperties;
+import com.walletradar.domain.sync.BackfillSegment;
 import com.walletradar.ingestion.sync.progress.SyncProgressTracker;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -19,7 +19,9 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
@@ -30,7 +32,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import static com.walletradar.domain.sync.SyncStatus.SyncStatusValue;
 
 /**
- * Orchestrates wallet backfill queueing, worker loops, startup resume, and retry handling.
+ * Orchestrates source-level backfill queueing, worker loops, startup resume,
+ * and retry handling for already-planned segments.
  */
 @Component
 @Slf4j
@@ -42,6 +45,7 @@ public class BackfillJobRunner {
     private final BlockingQueue<BackfillWorkItem> backfillQueue = new LinkedBlockingQueue<>();
     private final Set<String> inFlightItems = ConcurrentHashMap.newKeySet();
     private final AtomicBoolean workersStarted = new AtomicBoolean(false);
+    private final AtomicBoolean integrationSegmentsRunning = new AtomicBoolean(false);
 
     private final List<NetworkAdapter> networkAdapters;
     private final List<BlockHeightResolver> blockHeightResolvers;
@@ -51,33 +55,17 @@ public class BackfillJobRunner {
     private final SyncProgressTracker syncProgressTracker;
     private final SyncStatusRepository syncStatusRepository;
     private final BackfillSegmentRepository backfillSegmentRepository;
+    private final BackfillJobPlanner backfillJobPlanner;
+    private final List<BackfillSegmentExecutor> backfillSegmentExecutors;
     @Qualifier("backfill-coordinator-executor")
     private final Executor backfillCoordinatorExecutor;
     @Qualifier("backfill-executor")
     private final Executor backfillExecutor;
 
-    @EventListener
-    public void onWalletAdded(WalletAddedEvent event) {
-        backfillCoordinatorExecutor.execute(() -> enqueueWork(event.walletAddress(), event.networks()));
-    }
-
     @EventListener(ApplicationReadyEvent.class)
     public void onApplicationReady(ApplicationReadyEvent event) {
         startWorkersIfNeeded();
-        List<SyncStatus> incomplete = syncStatusRepository.findByStatusIn(
-                Set.of(SyncStatusValue.PENDING, SyncStatusValue.RUNNING, SyncStatusValue.FAILED));
-        if (incomplete.isEmpty()) return;
-        int enqueued = 0;
-        for (SyncStatus s : incomplete) {
-            if (s.getWalletAddress() == null || s.getNetworkId() == null) continue;
-            try {
-                BackfillWorkItem item = new BackfillWorkItem(s.getWalletAddress(), NetworkId.valueOf(s.getNetworkId()));
-                if (enqueueItemIfSupported(item)) enqueued++;
-            } catch (IllegalArgumentException ignored) { /* unknown network */ }
-        }
-        if (enqueued > 0) {
-            log.info("Resuming backfill: {} work item(s) enqueued (PENDING/RUNNING/FAILED), workers will take next available", enqueued);
-        }
+        dispatchPendingOnChainBackfills();
     }
 
     void runBackfill(String walletAddress, List<NetworkId> networks) {
@@ -111,6 +99,40 @@ public class BackfillJobRunner {
 
     private static String itemKey(String walletAddress, NetworkId networkId) {
         return walletAddress + ":" + networkId.name();
+    }
+
+    @Scheduled(fixedDelayString = "${walletradar.ingestion.backfill.dispatch-interval-ms:5000}")
+    public void dispatchPendingOnChainBackfills() {
+        startWorkersIfNeeded();
+        List<SyncStatus> incomplete = syncStatusRepository.findOnChainByStatusIn(
+                SyncStatus.SourceKind.ONCHAIN,
+                Set.of(SyncStatusValue.PENDING, SyncStatusValue.RUNNING, SyncStatusValue.FAILED)
+        );
+        if (incomplete.isEmpty()) {
+            return;
+        }
+        int enqueued = 0;
+        for (SyncStatus status : incomplete) {
+            if (status.getWalletAddress() == null || status.getNetworkId() == null || status.getId() == null) {
+                continue;
+            }
+            if (!hasSegmentsForCurrentWindow(status)) {
+                if (!repairMissingCurrentWindowSegments(status)) {
+                    continue;
+                }
+            }
+            try {
+                BackfillWorkItem item = new BackfillWorkItem(status.getWalletAddress(), NetworkId.valueOf(status.getNetworkId()));
+                if (enqueueItemIfSupported(item)) {
+                    enqueued++;
+                }
+            } catch (IllegalArgumentException ignored) {
+                // Unknown networks remain skipped until config supports them.
+            }
+        }
+        if (enqueued > 0) {
+            log.info("On-chain backfill dispatch enqueued {} work item(s)", enqueued);
+        }
     }
 
     private void startWorkersIfNeeded() {
@@ -151,6 +173,70 @@ public class BackfillJobRunner {
         return backfillQueue.isEmpty() && inFlightItems.isEmpty();
     }
 
+    @Scheduled(fixedDelayString = "${walletradar.integration.backfill.poll-interval-ms:15000}")
+    public void processPendingIntegrationSegments() {
+        if (!integrationSegmentsRunning.compareAndSet(false, true)) {
+            return;
+        }
+        long startedAt = System.currentTimeMillis();
+        try {
+            requeueStaleRunningIntegrationSegments();
+            List<BackfillSegment> candidates = backfillSegmentRepository.findBySourceKindAndStatusInOrderByUpdatedAtAsc(
+                    BackfillSegment.SourceKind.INTEGRATION,
+                    Set.of(BackfillSegment.SegmentStatus.PENDING, BackfillSegment.SegmentStatus.FAILED)
+            );
+            int processed = 0;
+            for (BackfillSegment segment : candidates) {
+                BackfillSegmentExecutor executor = backfillSegmentExecutors.stream()
+                        .filter(candidate -> candidate.supports(segment))
+                        .findFirst()
+                        .orElse(null);
+                if (executor == null) {
+                    log.warn(
+                            "No backfill segment executor registered: segmentId={}, sourceKind={}, provider={}, stream={}",
+                            segment.getId(),
+                            segment.getSourceKind(),
+                            segment.getProvider(),
+                            segment.getStream()
+                    );
+                    continue;
+                }
+                executor.execute(segment);
+                processed++;
+            }
+            log.debug(
+                    "IntegrationBackfillDispatch finished: candidates={}, processed={}, durationMs={}",
+                    candidates.size(),
+                    processed,
+                    System.currentTimeMillis() - startedAt
+            );
+        } finally {
+            integrationSegmentsRunning.set(false);
+        }
+    }
+
+    private void requeueStaleRunningIntegrationSegments() {
+        Instant staleBefore = Instant.now().minusMillis(backfillProperties.getRetrySchedulerIntervalMs());
+        List<BackfillSegment> runningSegments = backfillSegmentRepository.findBySourceKindAndStatusInOrderByUpdatedAtAsc(
+                BackfillSegment.SourceKind.INTEGRATION,
+                Set.of(BackfillSegment.SegmentStatus.RUNNING)
+        );
+        int requeued = 0;
+        for (BackfillSegment segment : runningSegments) {
+            if (segment.getUpdatedAt() == null || !segment.getUpdatedAt().isBefore(staleBefore)) {
+                continue;
+            }
+            segment.setStatus(BackfillSegment.SegmentStatus.PENDING);
+            segment.setStartedAt(null);
+            segment.setUpdatedAt(Instant.now());
+            backfillSegmentRepository.save(segment);
+            requeued++;
+        }
+        if (requeued > 0) {
+            log.info("Requeued stale integration RUNNING segments: {}", requeued);
+        }
+    }
+
     @Scheduled(fixedDelayString = "${walletradar.ingestion.backfill.retry-scheduler-interval-ms:120000}")
     public void retryFailedBackfills() {
         long startedAt = System.currentTimeMillis();
@@ -159,11 +245,14 @@ public class BackfillJobRunner {
             Instant now = Instant.now();
             int maxRetries = backfillProperties.getMaxRetries();
 
-            List<SyncStatus> failed = syncStatusRepository.findByStatusIn(Set.of(SyncStatusValue.FAILED, SyncStatusValue.RUNNING));
+            List<SyncStatus> failed = syncStatusRepository.findOnChainByStatusIn(
+                    SyncStatus.SourceKind.ONCHAIN,
+                    Set.of(SyncStatusValue.FAILED, SyncStatusValue.RUNNING)
+            );
             int enqueued = 0;
             for (SyncStatus s : failed) {
                 if (s.getWalletAddress() == null || s.getNetworkId() == null) continue;
-                boolean segmentMode = s.getId() != null && backfillSegmentRepository.existsBySyncStatusId(s.getId());
+                boolean segmentMode = hasSegmentsForCurrentWindow(s);
 
                 if (s.getStatus() == SyncStatusValue.RUNNING) {
                     if (!segmentMode) {
@@ -223,5 +312,56 @@ public class BackfillJobRunner {
 
     private BlockTimestampResolver findBlockTimestampResolver(NetworkId networkId) {
         return blockTimestampResolvers.stream().filter(r -> r.supports(networkId)).findFirst().orElse(null);
+    }
+
+    private boolean repairMissingCurrentWindowSegments(SyncStatus status) {
+        if (status == null || status.getId() == null || status.getStatus() != SyncStatus.SyncStatusValue.PENDING) {
+            return false;
+        }
+        int plannedSegments = backfillJobPlanner.planOnChainSyncStatus(status.getId());
+        if (plannedSegments > 0 && hasSegmentsForCurrentWindow(status)) {
+            log.info(
+                    "Recovered missing current-window segments: wallet={}, network={}, syncStatusId={}, segments={}",
+                    status.getWalletAddress(),
+                    status.getNetworkId(),
+                    status.getId(),
+                    plannedSegments
+            );
+            return true;
+        }
+        log.warn(
+                "Skipping pending on-chain sync without current-window segments: wallet={}, network={}, syncStatusId={}, fromBlock={}, toBlock={}",
+                status.getWalletAddress(),
+                status.getNetworkId(),
+                status.getId(),
+                status.getWindowFromBlock(),
+                status.getWindowToBlock()
+        );
+        return false;
+    }
+
+    private boolean hasSegmentsForCurrentWindow(SyncStatus status) {
+        if (status == null || status.getId() == null) {
+            return false;
+        }
+        List<BackfillSegment> segments = backfillSegmentRepository.findBySyncStatusIdOrderBySegmentIndexAsc(status.getId());
+        if (segments.isEmpty()) {
+            return false;
+        }
+        if (status.getWindowFromBlock() == null || status.getWindowToBlock() == null) {
+            return true;
+        }
+        Long minFrom = segments.stream()
+                .map(BackfillSegment::getFromBlock)
+                .filter(Objects::nonNull)
+                .min(Comparator.naturalOrder())
+                .orElse(null);
+        Long maxTo = segments.stream()
+                .map(BackfillSegment::getToBlock)
+                .filter(Objects::nonNull)
+                .max(Comparator.naturalOrder())
+                .orElse(null);
+        return Objects.equals(minFrom, status.getWindowFromBlock())
+                && Objects.equals(maxTo, status.getWindowToBlock());
     }
 }

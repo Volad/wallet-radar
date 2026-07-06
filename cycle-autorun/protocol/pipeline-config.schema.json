@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "cycle-autorun/pipeline-config.schema.json",
+  "type": "object",
+  "required": [
+    "name",
+    "version",
+    "runtime",
+    "paths",
+    "promptTemplates",
+    "handoff",
+    "questions",
+    "goal",
+    "workflow",
+    "roles"
+  ],
+  "properties": {
+    "name": { "type": "string" },
+    "version": { "type": "integer", "minimum": 1 },
+    "runtime": { "type": "object" },
+    "paths": { "type": "object" },
+    "promptTemplates": { "type": "object" },
+    "handoff": { "type": "object" },
+    "questions": { "type": "object" },
+    "goal": { "type": "object" },
+    "workflow": {
+      "type": "object",
+      "required": ["forwardEdges"],
+      "properties": {
+        "forwardEdges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["from", "to", "taskId"],
+            "properties": {
+              "from": { "type": "string" },
+              "to": { "type": "string" },
+              "taskId": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "roles": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["taskId", "roleDoc", "description", "canAsk"],
+        "properties": {
+          "taskId": { "type": "string" },
+          "roleDoc": { "type": "string" },
+          "description": { "type": "string" },
+          "canAsk": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}

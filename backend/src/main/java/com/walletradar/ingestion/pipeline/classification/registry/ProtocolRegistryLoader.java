@@ -59,9 +59,10 @@ public class ProtocolRegistryLoader {
                     continue;
                 }
 
-                String normalizedAddress = OnChainRawTransactionView.normalizeAddress(field.getKey());
+                String entryAddress = optionalText(entryNode, "address").orElse(field.getKey());
+                String normalizedAddress = OnChainRawTransactionView.normalizeAddress(entryAddress);
                 if (normalizedAddress == null) {
-                    throw new IllegalStateException("Invalid contract address in protocol registry: " + field.getKey());
+                    throw new IllegalStateException("Invalid contract address in protocol registry: " + entryAddress);
                 }
 
                 ProtocolRegistryFamily family = parseEnum(ProtocolRegistryFamily.class, requiredText(entryNode, "family", normalizedAddress));
@@ -80,6 +81,13 @@ public class ProtocolRegistryLoader {
                 Set<NetworkId> networks = readEntryNetworks(entryNode.path("networks"), normalizedAddress);
                 coveredNetworks.addAll(networks);
 
+                // RC-5 (ADR-018): a staking/farming wrapper that custodies a position-manager NFT
+                // declares the underlying NFPM so its staked LP flows canonicalize to the underlying
+                // position identity instead of forming a duplicate wrapper-keyed pool.
+                String underlyingPositionManager = optionalText(entryNode, "underlyingPositionManager")
+                        .map(OnChainRawTransactionView::normalizeAddress)
+                        .orElse(null);
+
                 ProtocolRegistryEntry entry = new ProtocolRegistryEntry(
                         normalizedAddress,
                         Collections.unmodifiableSet(networks),
@@ -90,7 +98,8 @@ public class ProtocolRegistryLoader {
                         optionalText(entryNode, "protocol").orElse(optionalText(entryNode, "name").orElse(null)),
                         optionalText(entryNode, "version").orElse(null),
                         decomposeByLegs,
-                        specialHandler
+                        specialHandler,
+                        underlyingPositionManager
                 );
 
                 for (NetworkId networkId : networks) {

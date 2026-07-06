@@ -8,7 +8,14 @@ import {
   EVM_NETWORK_PRESENTATION_BY_ID,
   SECTIONS,
 } from '../data/dashboard.constants';
-import { DashboardData, NetworkInfo, PortfolioMetric, WalletInfo } from '../models/dashboard.models';
+import {
+  DashboardData,
+  IssueCode,
+  NetworkInfo,
+  PortfolioMetric,
+  PriceSource,
+  WalletInfo,
+} from '../models/dashboard.models';
 import { EvmNetworkId, SessionDashboardResponse } from '../models/wallet-api.models';
 import { WalletApiService } from './wallet-api.service';
 
@@ -63,6 +70,11 @@ export class DashboardDataService {
         value: this.formatUsd(response.summary.totalRealizedPnlUsd ?? 0),
         color: (response.summary.totalRealizedPnlUsd ?? 0) >= 0 ? COLORS.green : COLORS.red,
       },
+      {
+        label: 'Net Inflow',
+        value: this.formatUsd(response.summary.lifetimeExternalInflowUsd ?? 0),
+        color: COLORS.text,
+      },
     ];
 
     return {
@@ -74,19 +86,31 @@ export class DashboardDataService {
         progressPct: 0,
         networksLabel: 'No active backfill',
       },
+      totalRealizedPnlUsd: response.summary.totalRealizedPnlUsd ?? 0,
       tokenPositions: response.tokenPositions.map((position) => ({
         familyIdentity: position.familyIdentity,
         symbol: position.symbol,
         name: position.name,
         quantity: position.quantity,
+        coveredQuantity: position.coveredQuantity,
         priceUsd: position.priceUsd,
+        marketValueUsd: position.marketValueUsd,
+        priceSource: this.toPriceSource(position.priceSource),
+        pricedAt: position.pricedAt,
+        stalenessSeconds: position.stalenessSeconds,
+        isLiveQuote: position.isLiveQuote,
+        priceIssue: this.toIssueCode(position.priceIssue),
         avcoUsd: position.avcoUsd,
+        netAvcoUsd: position.netAvcoUsd ?? position.avcoUsd,
         unrealizedPnlPct: position.unrealizedPnlPct,
         unrealizedPnlUsd: position.unrealizedPnlUsd,
         realizedPnlUsd: position.realizedPnlUsd,
         networkId: position.networkId,
         walletId: position.walletAddress.toLowerCase(),
         issue: this.toIssueCode(position.issue),
+        valuationModel: position.valuationModel,
+        valuationUnderlyingSymbol: position.valuationUnderlyingSymbol,
+        unsupportedValuationReason: position.unsupportedValuationReason,
       })),
       lpPositions: [],
       lendingPositions: [],
@@ -105,17 +129,38 @@ export class DashboardDataService {
     return `${prefix}${value.toFixed(1)}%`;
   }
 
-  private toIssueCode(
-    issue: string | null
-  ): 'yield_accrual' | 'coverage_gap' | 'history_flags' | 'missing_replay_point' | 'missing_price' | null {
+  private toIssueCode(issue: string | null): IssueCode {
     if (
       issue === 'yield_accrual' ||
       issue === 'coverage_gap' ||
       issue === 'history_flags' ||
       issue === 'missing_replay_point' ||
-      issue === 'missing_price'
+      issue === 'missing_price' ||
+      issue === 'stale_price' ||
+      issue === 'historical_price_fallback' ||
+      issue === 'unsupported_protocol_valuation'
     ) {
       return issue;
+    }
+    return null;
+  }
+
+  private toPriceSource(priceSource: string | null): PriceSource | null {
+    if (
+      priceSource === 'STABLECOIN' ||
+      priceSource === 'SWAP_DERIVED' ||
+      priceSource === 'COINGECKO' ||
+      priceSource === 'MANUAL' ||
+      priceSource === 'UNKNOWN' ||
+      priceSource === 'BYBIT' ||
+      priceSource === 'BINANCE' ||
+      priceSource === 'ECB' ||
+      priceSource === 'EXECUTION' ||
+      priceSource === 'WRAPPER' ||
+      priceSource === 'AAVE_INDEX_ACCRUING' ||
+      priceSource === 'PROTOCOL_SNAPSHOT'
+    ) {
+      return priceSource;
     }
     return null;
   }

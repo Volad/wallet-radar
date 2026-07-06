@@ -39,13 +39,56 @@ public class AssetLedgerController {
                         view.current().uncoveredQuantity(),
                         view.current().totalCostBasisUsd(),
                         view.current().avcoUsd(),
+                        view.current().netTotalCostBasisUsd(),
+                        view.current().netAvcoUsd(),
                         view.current().realisedPnlUsd(),
-                        view.current().gasPaidUsd()
+                        view.current().netRealisedPnlUsd(),
+                        view.current().gasPaidUsd(),
+                        view.current().uncoveredBuckets().stream()
+                                .map(bucket -> new SessionAssetLedgerResponse.UncoveredBucket(
+                                        bucket.walletAddress(),
+                                        bucket.networkId(),
+                                        bucket.assetSymbol(),
+                                        bucket.assetContract(),
+                                        bucket.quantity(),
+                                        bucket.coveredQuantity(),
+                                        bucket.uncoveredQuantity(),
+                                        bucket.uncoveredReason(),
+                                        bucket.latestTxHash(),
+                                        bucket.latestNormalizedType(),
+                                        bucket.latestBasisEffect(),
+                                        bucket.latestProtocolName(),
+                                        bucket.hasIncompleteHistory(),
+                                        bucket.hasUnresolvedFlags(),
+                                        bucket.unresolvedFlagCount()
+                                ))
+                                .toList(),
+                        view.current().shortfallSources().stream()
+                                .map(source -> new SessionAssetLedgerResponse.ShortfallSource(
+                                        source.walletAddress(),
+                                        source.networkId(),
+                                        source.txHash(),
+                                        source.blockTimestamp(),
+                                        source.normalizedType(),
+                                        source.protocolName(),
+                                        source.quantityShortfall()
+                                ))
+                                .toList()
+                ),
+                new SessionAssetLedgerResponse.FullSessionCurrent(
+                        view.fullSessionCurrent().quantity(),
+                        view.fullSessionCurrent().coveredQuantity(),
+                        view.fullSessionCurrent().uncoveredQuantity(),
+                        view.fullSessionCurrent().totalCostBasisUsd(),
+                        view.fullSessionCurrent().avcoUsd(),
+                        view.fullSessionCurrent().netTotalCostBasisUsd(),
+                        view.fullSessionCurrent().netAvcoUsd()
                 ),
                 view.timeline().stream()
                         .map(entry -> new SessionAssetLedgerResponse.TimelineEntry(
                                 entry.blockTimestamp(),
                                 entry.txHash(),
+                                entry.eventGroupId(),
                                 entry.normalizedTransactionId(),
                                 entry.normalizedType(),
                                 entry.protocolName(),
@@ -60,11 +103,20 @@ public class AssetLedgerController {
                                 entry.coveredQuantityAfter(),
                                 entry.uncoveredQuantityAfter(),
                                 entry.totalCostBasisAfterUsd(),
-                                entry.avcoAfterUsd()
+                                entry.avcoBeforeUsd(),
+                                entry.avcoAfterUsd(),
+                                entry.netTotalCostBasisAfterUsd(),
+                                entry.netAvcoBeforeUsd(),
+                                entry.netAvcoAfterUsd(),
+                                entry.avcoKind(),
+                                entry.fromAddress(),
+                                entry.toAddress(),
+                                entry.memberNormalizedTransactionIds()
                         ))
                         .toList(),
                 view.events().stream()
                         .map(event -> new SessionAssetLedgerResponse.EventOverlay(
+                                event.eventGroupId(),
                                 event.normalizedTransactionId(),
                                 event.txHash(),
                                 event.blockTimestamp(),
@@ -84,7 +136,10 @@ public class AssetLedgerController {
                                                 flow.priceSource(),
                                                 flow.logIndex()
                                         ))
-                                        .toList()
+                                        .toList(),
+                                event.fromAddress(),
+                                event.toAddress(),
+                                event.memberNormalizedTransactionIds()
                         ))
                         .toList(),
                 view.ledgerPoints().stream()
@@ -118,6 +173,10 @@ public class AssetLedgerController {
                                 point.totalCostBasisAfterUsd(),
                                 point.avcoBeforeUsd(),
                                 point.avcoAfterUsd(),
+                                point.netTotalCostBasisBeforeUsd(),
+                                point.netTotalCostBasisAfterUsd(),
+                                point.netAvcoBeforeUsd(),
+                                point.netAvcoAfterUsd(),
                                 point.basisBackedQuantityAfter(),
                                 point.uncoveredQuantityDelta(),
                                 point.quantityShortfallAfter(),

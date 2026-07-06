@@ -18,6 +18,13 @@ public final class AssetLedgerSupport {
         return AccountingAssetIdentitySupport.positionAssetIdentity(transaction, flow);
     }
 
+    public static String accountingWalletAddress(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow
+    ) {
+        return AccountingAssetIdentitySupport.replayPositionWalletAddress(transaction, flow);
+    }
+
     public static String accountingFamilyIdentity(NormalizedTransaction transaction, NormalizedTransaction.Flow flow) {
         String familyIdentity = AccountingAssetFamilySupport.continuityIdentity(flow);
         if (familyIdentity != null && !familyIdentity.isBlank()) {
@@ -44,11 +51,11 @@ public final class AssetLedgerSupport {
         }
         return switch (type) {
             case SWAP -> AssetLedgerPoint.LifecycleKind.SPOT;
-            case EXTERNAL_TRANSFER_IN, EXTERNAL_TRANSFER_OUT, INTERNAL_TRANSFER, APPROVE, ADMIN_CONFIG ->
-                    AssetLedgerPoint.LifecycleKind.TRANSFER;
+            case EXTERNAL_TRANSFER_IN, EXTERNAL_TRANSFER_OUT, SPONSORED_GAS_IN, INTERNAL_TRANSFER, APPROVE, ADMIN_CONFIG,
+                    NFT_MINT -> AssetLedgerPoint.LifecycleKind.TRANSFER;
             case BRIDGE_IN, BRIDGE_OUT -> AssetLedgerPoint.LifecycleKind.BRIDGE;
             case PROTOCOL_CUSTODY_DEPOSIT, PROTOCOL_CUSTODY_WITHDRAW -> AssetLedgerPoint.LifecycleKind.CUSTODY;
-            case LENDING_DEPOSIT, LENDING_WITHDRAW, BORROW, REPAY -> AssetLedgerPoint.LifecycleKind.LENDING;
+            case LENDING_DEPOSIT, LENDING_WITHDRAW, EARN_FLEXIBLE_SAVING, BORROW, REPAY -> AssetLedgerPoint.LifecycleKind.LENDING;
             case STAKING_DEPOSIT, STAKING_WITHDRAW_REQUEST, STAKING_WITHDRAW -> AssetLedgerPoint.LifecycleKind.STAKING;
             case VAULT_DEPOSIT, VAULT_WITHDRAW -> AssetLedgerPoint.LifecycleKind.VAULT;
             case LP_ENTRY_REQUEST, LP_ENTRY_SETTLEMENT, LP_EXIT_REQUEST, LP_EXIT_SETTLEMENT, LP_ENTRY,
@@ -59,6 +66,7 @@ public final class AssetLedgerSupport {
                     AssetLedgerPoint.LifecycleKind.LOOP;
             case WRAP, UNWRAP -> AssetLedgerPoint.LifecycleKind.WRAP;
             case REWARD_CLAIM -> AssetLedgerPoint.LifecycleKind.REWARD;
+            case FEE -> AssetLedgerPoint.LifecycleKind.UNKNOWN;
             case DERIVATIVE_ORDER_REQUEST, DERIVATIVE_ORDER_EXECUTION, DERIVATIVE_ORDER_CANCEL,
                     DERIVATIVE_POSITION_INCREASE, DERIVATIVE_POSITION_DECREASE -> AssetLedgerPoint.LifecycleKind.DERIVATIVE;
             case MANUAL_COMPENSATING -> AssetLedgerPoint.LifecycleKind.MANUAL;

@@ -118,11 +118,43 @@ class ProtocolRegistryLoaderTest {
                 .containsKey(new ProtocolRegistryLoader.RegistryKey(
                         NetworkId.BSC,
                         "0x212102fc6d0ed9ee784b25404db02b22b1e6dc42"
+                ))
+                .containsKey(new ProtocolRegistryLoader.RegistryKey(
+                        NetworkId.MANTLE,
+                        "0x888888888889758f76e7103c6cbf23abbf58f946"
+                ))
+                .containsKey(new ProtocolRegistryLoader.RegistryKey(
+                        NetworkId.LINEA,
+                        "0x5828a3c0f07c6b841205d12660e0abb869bf98dc"
+                ))
+                .containsKey(new ProtocolRegistryLoader.RegistryKey(
+                        NetworkId.MANTLE,
+                        "0xed884f0460a634c69dbb7def54858465808aacef"
+                ))
+                .containsKey(new ProtocolRegistryLoader.RegistryKey(
+                        NetworkId.KATANA,
+                        "0xac4c6e212a361c968f1725b4d055b47e63f80b75"
+                ))
+                .containsKey(new ProtocolRegistryLoader.RegistryKey(
+                        NetworkId.KATANA,
+                        "0x3067bdba0e6628497d527bef511c22da8b32ca3f"
                 ));
         assertThat(loaded.entriesByKey().get(new ProtocolRegistryLoader.RegistryKey(
                 NetworkId.ARBITRUM,
                 "0x1fa4431bc113d308bee1d46b0e98cb805fb48c13"
         )).specialHandler()).isEqualTo(ProtocolRegistrySpecialHandlerType.MORPHO_BUNDLER);
+        assertThat(loaded.entriesByKey().get(new ProtocolRegistryLoader.RegistryKey(
+                NetworkId.MANTLE,
+                "0x888888888889758f76e7103c6cbf23abbf58f946"
+        )).protocolName()).isEqualTo("Pendle");
+        assertThat(loaded.entriesByKey().get(new ProtocolRegistryLoader.RegistryKey(
+                NetworkId.KATANA,
+                "0x3067bdba0e6628497d527bef511c22da8b32ca3f"
+        )).protocolName()).isEqualTo("SushiSwap");
+        assertThat(loaded.entriesByKey().get(new ProtocolRegistryLoader.RegistryKey(
+                NetworkId.KATANA,
+                "0x3067bdba0e6628497d527bef511c22da8b32ca3f"
+        )).role()).isEqualTo(com.walletradar.ingestion.pipeline.classification.registry.ProtocolRegistryRole.POSITION_MANAGER);
         assertThat(loaded.methodDescriptions()).containsKey("0x0ad58d2f");
     }
 
@@ -164,6 +196,63 @@ class ProtocolRegistryLoaderTest {
 
         assertThat(loaded.entriesByKey()).hasSize(1);
         assertThat(loaded.methodDescriptions()).containsEntry("0x12345678", "swap()");
+    }
+
+    @Test
+    @DisplayName("supports explicit address override so the same address can map to different protocols on different networks")
+    void supportsExplicitAddressOverrideForCrossNetworkAddressReuse() {
+        String json = """
+                {
+                  "supported_networks": ["ARBITRUM", "AVALANCHE", "MANTLE"],
+                  "families": ["DEX", "AGGREGATOR"],
+                  "contracts": {
+                    "lfj-aggregator-arb-avax": {
+                      "address": "0x45a62b090df48243f12a21897e7ed91863e2c86b",
+                      "name": "LFJ Joe Aggregator",
+                      "protocol": "LFJ",
+                      "version": "Aggregator",
+                      "family": "AGGREGATOR",
+                      "role": "ROUTER",
+                      "networks": ["ARBITRUM", "AVALANCHE"],
+                      "confidence": "HIGH"
+                    },
+                    "merchant-moe-aggregator-mantle": {
+                      "address": "0x45a62b090df48243f12a21897e7ed91863e2c86b",
+                      "name": "Merchant Moe Aggregator",
+                      "protocol": "Merchant Moe",
+                      "version": "V1",
+                      "family": "AGGREGATOR",
+                      "role": "ROUTER",
+                      "networks": ["MANTLE"],
+                      "confidence": "HIGH"
+                    }
+                  },
+                  "method_ids": {}
+                }
+                """;
+
+        ProtocolRegistryLoader.LoadedProtocolRegistry loaded = loader.load(
+                new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8)),
+                "inline"
+        );
+
+        assertThat(loaded.entriesByKey())
+                .containsKey(new ProtocolRegistryLoader.RegistryKey(
+                        NetworkId.AVALANCHE,
+                        "0x45a62b090df48243f12a21897e7ed91863e2c86b"
+                ))
+                .containsKey(new ProtocolRegistryLoader.RegistryKey(
+                        NetworkId.MANTLE,
+                        "0x45a62b090df48243f12a21897e7ed91863e2c86b"
+                ));
+        assertThat(loaded.entriesByKey().get(new ProtocolRegistryLoader.RegistryKey(
+                NetworkId.AVALANCHE,
+                "0x45a62b090df48243f12a21897e7ed91863e2c86b"
+        )).protocolName()).isEqualTo("LFJ");
+        assertThat(loaded.entriesByKey().get(new ProtocolRegistryLoader.RegistryKey(
+                NetworkId.MANTLE,
+                "0x45a62b090df48243f12a21897e7ed91863e2c86b"
+        )).protocolName()).isEqualTo("Merchant Moe");
     }
 
     @Test

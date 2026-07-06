@@ -47,9 +47,6 @@ class RelatedLifecycleDiscoveryServiceTest {
     private IdempotentNormalizedTransactionStore normalizedTransactionStore;
     @Mock
     private ExplorerRawOrderingRepairGateway explorerRawOrderingRepairGateway;
-    @Mock
-    private OnChainLifecycleLinkService onChainLifecycleLinkService;
-
     private RelatedLifecycleDiscoveryService service;
 
     @BeforeEach
@@ -65,8 +62,7 @@ class RelatedLifecycleDiscoveryServiceTest {
                 onChainClassifier,
                 new OnChainNormalizedTransactionBuilder(),
                 normalizedTransactionStore,
-                explorerRawOrderingRepairGateway,
-                onChainLifecycleLinkService
+                explorerRawOrderingRepairGateway
         );
     }
 

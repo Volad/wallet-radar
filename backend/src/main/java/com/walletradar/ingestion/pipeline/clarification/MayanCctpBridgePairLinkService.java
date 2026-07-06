@@ -18,6 +18,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -35,6 +36,15 @@ public class MayanCctpBridgePairLinkService {
     private static final String MAYAN_BRIDGE_SELECTOR = "0x30c48952";
     private static final String MAYAN_SETTLEMENT_SELECTOR = "0xe2de2a03";
     private static final String MAYAN_STATUS_KEY = "mayanStatus";
+    private static final Comparator<NormalizedTransaction> DESTINATION_SELECTION_ORDER = Comparator
+            .comparingInt(MayanCctpBridgePairLinkService::destinationSelectionRank)
+            .thenComparing(NormalizedTransaction::getBlockTimestamp, Comparator.nullsLast(Instant::compareTo))
+            .thenComparing(NormalizedTransaction::getTransactionIndex, Comparator.nullsLast(Integer::compareTo))
+            .thenComparing(NormalizedTransaction::getId, Comparator.nullsLast(String::compareTo));
+    private static final Comparator<NormalizedTransaction> SOURCE_SELECTION_ORDER = Comparator
+            .comparing(NormalizedTransaction::getBlockTimestamp, Comparator.nullsLast(Instant::compareTo))
+            .thenComparing(NormalizedTransaction::getTransactionIndex, Comparator.nullsLast(Integer::compareTo))
+            .thenComparing(NormalizedTransaction::getId, Comparator.nullsLast(String::compareTo));
 
     private final MayanStatusGateway mayanStatusGateway;
     private final PendingMayanBridgeSourceQueryService pendingMayanBridgeSourceQueryService;
@@ -122,21 +132,6 @@ public class MayanCctpBridgePairLinkService {
             return Optional.empty();
         }
 
-        boolean changed = false;
-        String correlationId = correlationId(source.getTxHash());
-        if (!sameHash(source.getMatchedCounterparty(), status.receivingTxHash())) {
-            source.setMatchedCounterparty(status.receivingTxHash());
-            changed = true;
-        }
-        if (!sameCorrelation(source.getCorrelationId(), correlationId)) {
-            source.setCorrelationId(correlationId);
-            changed = true;
-        }
-        if (changed) {
-            source.setUpdatedAt(Instant.now());
-            normalizedTransactionRepository.save(source);
-        }
-
         List<NormalizedTransaction> currentDestinations = normalizedTransactionRepository.findAllByTxHashAndNetworkIdAndSource(
                 status.receivingTxHash(),
                 status.receivingNetworkId(),
@@ -147,7 +142,7 @@ public class MayanCctpBridgePairLinkService {
                 .filter(this::isMaterializableDestination)
                 .filter(destination -> status.destinationWalletAddress() == null
                         || status.destinationWalletAddress().equalsIgnoreCase(destination.getWalletAddress()))
-                .sorted((left, right) -> Integer.compare(destinationRank(left), destinationRank(right)))
+                .sorted(DESTINATION_SELECTION_ORDER)
                 .findFirst();
         if (existingDestination.isPresent()) {
             return existingDestination;
@@ -160,7 +155,7 @@ public class MayanCctpBridgePairLinkService {
         String correlationId = hasText(source.getCorrelationId())
                 ? source.getCorrelationId()
                 : correlationId(source.getTxHash());
-        boolean continuityCandidate = supportsPlainMoveBasis(source, destination);
+        boolean continuityCandidate = BridgePairLinkSupport.supportsPlainMoveBasis(source, destination);
         List<NormalizedTransaction> updates = new ArrayList<>();
 
         if (!sameHash(source.getMatchedCounterparty(), destination.getTxHash())
@@ -197,6 +192,16 @@ public class MayanCctpBridgePairLinkService {
             destination.setContinuityCandidate(continuityCandidate);
             destinationChanged = true;
         }
+        if (continuityCandidate) {
+            if (BridgePairLinkSupport.retagPrincipalFlowsForBridgeContinuity(source, now)) {
+                if (!updates.contains(source)) {
+                    updates.add(source);
+                }
+            }
+            if (BridgePairLinkSupport.retagPrincipalFlowsForBridgeContinuity(destination, now)) {
+                destinationChanged = true;
+            }
+        }
         if (destinationChanged) {
             destination.setUpdatedAt(now);
             updates.add(destination);
@@ -219,33 +224,8 @@ public class MayanCctpBridgePairLinkService {
                 .filter(candidate -> hasText(candidate.getCorrelationId())
                         && candidate.getCorrelationId().toLowerCase(Locale.ROOT).startsWith("bridge:mayan:"))
                 .filter(candidate -> !sameHash(candidate.getTxHash(), destination.getTxHash()))
+                .sorted(SOURCE_SELECTION_ORDER)
                 .findFirst();
-    }
-
-    private boolean supportsPlainMoveBasis(NormalizedTransaction source, NormalizedTransaction destination) {
-        List<NormalizedTransaction.Flow> sourcePrincipal = principalFlows(source, -1);
-        List<NormalizedTransaction.Flow> destinationPrincipal = principalFlows(destination, 1);
-        if (sourcePrincipal.size() != 1 || destinationPrincipal.size() != 1) {
-            return false;
-        }
-        String sourceAsset = BridgeAssetFamilySupport.continuityIdentity(sourcePrincipal.getFirst());
-        String destinationAsset = BridgeAssetFamilySupport.continuityIdentity(destinationPrincipal.getFirst());
-        if (sourceAsset == null || !sourceAsset.equals(destinationAsset)) {
-            return false;
-        }
-        return sourcePrincipal.getFirst().getQuantityDelta() != null
-                && destinationPrincipal.getFirst().getQuantityDelta() != null;
-    }
-
-    private List<NormalizedTransaction.Flow> principalFlows(NormalizedTransaction transaction, int direction) {
-        if (transaction == null || transaction.getFlows() == null) {
-            return List.of();
-        }
-        return transaction.getFlows().stream()
-                .filter(Objects::nonNull)
-                .filter(flow -> flow.getRole() != NormalizedLegRole.FEE)
-                .filter(flow -> flow.getQuantityDelta() != null && Integer.signum(flow.getQuantityDelta().signum()) == direction)
-                .toList();
     }
 
     private boolean isInboundOnly(NormalizedTransaction transaction) {
@@ -375,6 +355,19 @@ public class MayanCctpBridgePairLinkService {
             return 0;
         }
         if (destination.getType() == NormalizedTransactionType.EXTERNAL_TRANSFER_IN && isInboundOnly(destination)) {
+            return 1;
+        }
+        return 2;
+    }
+
+    private static int destinationSelectionRank(NormalizedTransaction destination) {
+        if (destination == null) {
+            return 99;
+        }
+        if (destination.getType() == NormalizedTransactionType.BRIDGE_IN) {
+            return 0;
+        }
+        if (destination.getType() == NormalizedTransactionType.EXTERNAL_TRANSFER_IN) {
             return 1;
         }
         return 2;

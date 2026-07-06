@@ -3,14 +3,24 @@ import { HttpClientTestingModule, HttpTestingController } from '@angular/common/
 
 import {
   AddSessionRequest,
+  DeleteIntegrationResponse,
+  PutSessionSettingsRequest,
   RebuildSessionTransactionsResponse,
   SessionBackfillStatusResponse,
   SessionDashboardResponse,
+  SessionLendingResponse,
+  SessionLpPositionResponse,
+  SessionLpResponse,
+  SessionRefreshResponse,
+  SessionSettingsResponse,
   SessionTransactionsResponse,
+  UpsertBybitIntegrationResponse,
 } from '../models/wallet-api.models';
 import { WalletApiService } from './wallet-api.service';
 
 describe('WalletApiService', () => {
+  const sessionsBaseUrl = '/api/v1/sessions';
+
   let service: WalletApiService;
   let httpMock: HttpTestingController;
 
@@ -46,15 +56,15 @@ describe('WalletApiService', () => {
       responseMessage = response.message;
     });
 
-    const req = httpMock.expectOne('http://localhost:8080/api/v1/sessions');
+    const req = httpMock.expectOne(`${sessionsBaseUrl}`);
     expect(req.request.method).toBe('POST');
     expect(req.request.body).toEqual(payload);
     req.flush({
       sessionId: payload.sessionId,
-      message: 'Session saved, backfill started',
+      message: 'Session saved, universe sync scheduled',
     });
 
-    expect(responseMessage).toBe('Session saved, backfill started');
+    expect(responseMessage).toBe('Session saved, universe sync scheduled');
   });
 
   it('gets session backfill status from /sessions/{id}/backfill-status', () => {
@@ -62,6 +72,7 @@ describe('WalletApiService', () => {
     const mockResponse: SessionBackfillStatusResponse = {
       sessionId,
       status: 'RUNNING',
+      acquisitionStatus: 'RUNNING',
       overallProgressPct: 35,
       totalTargets: 8,
       completedTargets: 2,
@@ -91,7 +102,7 @@ describe('WalletApiService', () => {
     });
 
     const req = httpMock.expectOne(
-      `http://localhost:8080/api/v1/sessions/${encodeURIComponent(sessionId)}/backfill-status`
+      `${sessionsBaseUrl}/${encodeURIComponent(sessionId)}/backfill-status`
     );
     expect(req.request.method).toBe('GET');
     req.flush(mockResponse);
@@ -108,6 +119,14 @@ describe('WalletApiService', () => {
         totalUnrealizedPnlUsd: 10,
         totalUnrealizedPnlPct: 8.8,
         totalRealizedPnlUsd: 3.2,
+        netExternalCapitalUsd: null,
+        lifetimeExternalInflowUsd: null,
+        markToMarketUsd: null,
+        expectedPnlUsd: null,
+        reportedPnlUsd: null,
+        conservationDeltaUsd: null,
+        conservationThresholdUsd: null,
+        conservationBreached: null,
       },
       wallets: [],
       tokenPositions: [],
@@ -118,9 +137,156 @@ describe('WalletApiService', () => {
     });
 
     const req = httpMock.expectOne(
-      `http://localhost:8080/api/v1/sessions/${encodeURIComponent(sessionId)}/dashboard`
+      `${sessionsBaseUrl}/${encodeURIComponent(sessionId)}/dashboard`
     );
     expect(req.request.method).toBe('GET');
+    req.flush(response);
+  });
+
+  it('gets session lending from /sessions/{id}/lending', () => {
+    const sessionId = '549b0aba-a9af-4789-b125-ebb86314a3f1';
+    const response: SessionLendingResponse = {
+      sessionId,
+      summary: {
+        totalSuppliedUsd: 1000,
+        totalBorrowedUsd: 250,
+        netExposureUsd: 750,
+        openGroups: 1,
+        closedGroups: 0,
+        protocols: 1,
+      },
+      groups: [
+        {
+          id: 'aave:mantle:0x1234',
+          protocol: 'Aave',
+          networkId: 'MANTLE',
+          walletAddress: '0x1234',
+          status: 'OPEN',
+          healthFactor: 3.12,
+          healthLabel: 'Safe',
+          healthProgress: 100,
+          healthStatus: 'ESTIMATED',
+          healthSource: 'ACCOUNTING_ESTIMATE',
+          healthStale: false,
+          supplyUsd: 1000,
+          borrowUsd: 250,
+          netExposureUsd: 750,
+          positions: [],
+          cycles: [],
+          history: [],
+        },
+      ],
+    };
+
+    service.getSessionLending(sessionId).subscribe((result) => {
+      expect(result.summary.netExposureUsd).toBe(750);
+      expect(result.groups[0].protocol).toBe('Aave');
+    });
+
+    const req = httpMock.expectOne(
+      `${sessionsBaseUrl}/${encodeURIComponent(sessionId)}/lending`
+    );
+    expect(req.request.method).toBe('GET');
+    req.flush(response);
+  });
+
+  it('gets session LP from /sessions/{id}/lp', () => {
+    const sessionId = '549b0aba-a9af-4789-b125-ebb86314a3f1';
+    const response: SessionLpResponse = {
+      sessionId,
+      summary: {
+        activeTvlUsd: 4991,
+        feesEarnedUsd: 223.6,
+        unclaimedUsd: 41.2,
+        inRange: 1,
+        outOfRange: 0,
+        realizedPnlUsd: null,
+      },
+      positions: [],
+    };
+
+    service.getSessionLp(sessionId).subscribe((result) => {
+      expect(result.summary.activeTvlUsd).toBe(4991);
+    });
+
+    const req = httpMock.expectOne(
+      `${sessionsBaseUrl}/${encodeURIComponent(sessionId)}/lp?scope=active`
+    );
+    expect(req.request.method).toBe('GET');
+    req.flush(response);
+  });
+
+  it('posts LP position refresh to /sessions/{id}/lp/positions/{correlationId}/refresh', () => {
+    const sessionId = '549b0aba-a9af-4789-b125-ebb86314a3f1';
+    const correlationId = 'uni-eth-usdc';
+    const response: SessionLpPositionResponse = {
+      correlationId,
+      protocol: 'Uniswap V3',
+      family: 'CL_NFT',
+      networkId: 'ETHEREUM',
+      wallet: '0x1234',
+      pair: 'ETH / USDC',
+      token0: { symbol: 'ETH', quantity: 1, valueUsd: 3000 },
+      token1: { symbol: 'USDC', quantity: 3000, valueUsd: 3000 },
+      feeTierPct: 0.05,
+      tokenId: '#1',
+      status: 'in_range',
+      staked: false,
+      range: null,
+      tvlUsd: { valueUsd: 6000, precision: 'EXACT' },
+      costBasisUsd: 5500,
+      withdrawnUsd: 0,
+      fees: { claimedUsd: 10, unclaimedUsd: 2, precision: 'EXACT', perToken: [] },
+      il: { pct: -1, usd: -50, precision: 'ESTIMATED' },
+      priceAppreciationUsd: 20,
+      netPnlUsd: 30,
+      accountingUnrealizedUsd: 30,
+      apr: { now: 10, avg: 12, precision: 'ESTIMATED' },
+      earningsDaily: [],
+      aprDaily: [],
+      txns: [],
+      enteredAt: '2024-10-12T00:00:00Z',
+      closedAt: null,
+      snapshotAt: '2026-06-24T12:00:00Z',
+      snapshotStale: false,
+      trackingStartedAt: '2024-10-12T00:00:00Z',
+    };
+
+    service.refreshLpPosition(sessionId, correlationId).subscribe((result) => {
+      expect(result.correlationId).toBe(correlationId);
+      const tvl = result.tvlUsd;
+      const valueUsd = typeof tvl === 'number' ? tvl : tvl?.valueUsd;
+      expect(valueUsd).toBe(6000);
+    });
+
+    const req = httpMock.expectOne(
+      `${sessionsBaseUrl}/${encodeURIComponent(sessionId)}/lp/positions/${encodeURIComponent(correlationId)}/refresh`
+    );
+    expect(req.request.method).toBe('POST');
+    expect(req.request.body).toEqual({});
+    req.flush(response);
+  });
+
+  it('posts session refresh to /sessions/{id}/refresh', () => {
+    const sessionId = '549b0aba-a9af-4789-b125-ebb86314a3f1';
+    const response: SessionRefreshResponse = {
+      sessionId,
+      status: 'SCHEDULED',
+      scheduledTargets: 2,
+      skippedTargets: 0,
+      message: 'Incremental refresh queued',
+    };
+
+    service.refreshSession(sessionId).subscribe((result) => {
+      expect(result.status).toBe('SCHEDULED');
+      expect(result.scheduledTargets).toBe(2);
+    });
+
+    const req = httpMock.expectOne(
+      `${sessionsBaseUrl}/${encodeURIComponent(sessionId)}/refresh`
+    );
+    expect(req.request.method).toBe('POST');
+    expect(req.request.body).toEqual({});
     req.flush(response);
   });
 
@@ -138,7 +304,7 @@ describe('WalletApiService', () => {
     });
 
     const req = httpMock.expectOne(
-      `http://localhost:8080/api/v1/sessions/${encodeURIComponent(sessionId)}/transactions/rebuild`
+      `${sessionsBaseUrl}/${encodeURIComponent(sessionId)}/transactions/rebuild`
     );
     expect(req.request.method).toBe('POST');
     expect(req.request.body).toEqual({});
@@ -190,7 +356,7 @@ describe('WalletApiService', () => {
     const req = httpMock.expectOne(
       (request) =>
         request.url ===
-          `http://localhost:8080/api/v1/sessions/${encodeURIComponent(sessionId)}/transactions` &&
+          `${sessionsBaseUrl}/${encodeURIComponent(sessionId)}/transactions` &&
         request.params.get('limit') === '10' &&
         request.params.get('offset') === '25' &&
         request.params.get('search') === 'eth' &&
@@ -200,6 +366,144 @@ describe('WalletApiService', () => {
         request.params.getAll('networkId')?.includes('BSC') === true
     );
     expect(req.request.method).toBe('GET');
+    req.flush(response);
+  });
+
+  it('gets session settings from /sessions/{id}/settings', () => {
+    const sessionId = '549b0aba-a9af-4789-b125-ebb86314a3f1';
+    const response: SessionSettingsResponse = {
+      sessionId,
+      wallets: [],
+      integrations: [
+        {
+          integrationId: 'BYBIT-33625378',
+          provider: 'BYBIT',
+          status: 'READY',
+          displayName: 'Bybit main',
+          accountRef: 'BYBIT:33625378',
+          maskedKey: 'abcd...1234',
+          readOnly: true,
+          capabilities: ['ASSET'],
+          lastValidatedAt: '2026-04-07T10:00:00Z',
+          lastSyncAt: '2026-04-07T10:05:00Z',
+          lastError: null,
+          totalSegments: 7,
+          completedSegments: 7,
+          failedSegments: 0,
+          progressPct: 100,
+          streamSync: [],
+        },
+      ],
+      externalVenues: [],
+      hideSmallAssets: true,
+      showReconciliationWarnings: true,
+    };
+
+    service.getSessionSettings(sessionId).subscribe((result) => {
+      expect(result.integrations[0].accountRef).toBe('BYBIT:33625378');
+      expect(result.hideSmallAssets).toBeTrue();
+      expect(result.showReconciliationWarnings).toBeTrue();
+    });
+
+    const req = httpMock.expectOne(
+      `${sessionsBaseUrl}/${encodeURIComponent(sessionId)}/settings`
+    );
+    expect(req.request.method).toBe('GET');
+    req.flush(response);
+  });
+
+  it('puts session settings to /sessions/{id}/settings', () => {
+    const sessionId = '549b0aba-a9af-4789-b125-ebb86314a3f1';
+    const payload: PutSessionSettingsRequest = {
+      wallets: [
+        {
+          address: '0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f',
+          label: 'Main',
+          color: '#22d3ee',
+          networks: ['ETHEREUM', 'ARBITRUM'],
+        },
+      ],
+      integrations: [
+        {
+          provider: 'BYBIT',
+          displayName: 'Bybit main',
+          apiKey: '',
+          apiSecret: '',
+        },
+      ],
+      externalVenues: [],
+      hideSmallAssets: true,
+      showReconciliationWarnings: false,
+    };
+    const response: SessionSettingsResponse = {
+      sessionId,
+      wallets: payload.wallets,
+      integrations: [],
+      externalVenues: [],
+      hideSmallAssets: true,
+      showReconciliationWarnings: false,
+    };
+
+    service.putSessionSettings(sessionId, payload).subscribe((result) => {
+      expect(result.hideSmallAssets).toBeTrue();
+      expect(result.showReconciliationWarnings).toBeFalse();
+    });
+
+    const req = httpMock.expectOne(
+      `${sessionsBaseUrl}/${encodeURIComponent(sessionId)}/settings`
+    );
+    expect(req.request.method).toBe('PUT');
+    expect(req.request.body).toEqual(payload);
+    req.flush(response);
+  });
+
+  it('upserts Bybit integration via /sessions/{id}/integrations/bybit', () => {
+    const sessionId = '549b0aba-a9af-4789-b125-ebb86314a3f1';
+    const payload = {
+      displayName: 'Bybit main',
+      apiKey: 'api-key',
+      apiSecret: 'secret',
+    };
+    const response: UpsertBybitIntegrationResponse = {
+      integrationId: 'BYBIT-33625378',
+      provider: 'BYBIT',
+      status: 'BACKFILLING',
+      displayName: 'Bybit main',
+      accountRef: 'BYBIT:33625378',
+      maskedKey: 'api-...key',
+      message: 'Bybit integration saved, universe sync scheduled',
+    };
+
+    service.upsertBybitIntegration(sessionId, payload).subscribe((result) => {
+      expect(result.integrationId).toBe('BYBIT-33625378');
+      expect(result.status).toBe('BACKFILLING');
+    });
+
+    const req = httpMock.expectOne(
+      `${sessionsBaseUrl}/${encodeURIComponent(sessionId)}/integrations/bybit`
+    );
+    expect(req.request.method).toBe('PUT');
+    expect(req.request.body).toEqual(payload);
+    req.flush(response);
+  });
+
+  it('deletes integration via /sessions/{id}/integrations/{integrationId}', () => {
+    const sessionId = '549b0aba-a9af-4789-b125-ebb86314a3f1';
+    const integrationId = 'BYBIT-33625378';
+    const response: DeleteIntegrationResponse = {
+      integrationId,
+      message: 'Integration removed',
+    };
+
+    service.deleteIntegration(sessionId, integrationId).subscribe((result) => {
+      expect(result.integrationId).toBe(integrationId);
+      expect(result.message).toBe('Integration removed');
+    });
+
+    const req = httpMock.expectOne(
+      `${sessionsBaseUrl}/${encodeURIComponent(sessionId)}/integrations/${encodeURIComponent(integrationId)}`
+    );
+    expect(req.request.method).toBe('DELETE');
     req.flush(response);
   });
 });

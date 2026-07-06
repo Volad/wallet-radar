@@ -36,10 +36,18 @@ public class PricingResultMapper {
         copy.setCorrelationId(transaction.getCorrelationId());
         copy.setContinuityCandidate(transaction.getContinuityCandidate());
         copy.setMatchedCounterparty(transaction.getMatchedCounterparty());
+        copy.setCounterpartyAddress(transaction.getCounterpartyAddress());
+        copy.setCounterpartyType(transaction.getCounterpartyType());
+        copy.setCounterpartyResolutionState(transaction.getCounterpartyResolutionState());
+        copy.setCounterpartyResolutionEvidence(transaction.getCounterpartyResolutionEvidence());
         copy.setExcludedFromAccounting(transaction.getExcludedFromAccounting());
         copy.setAccountingExclusionReason(transaction.getAccountingExclusionReason());
         copy.setProtocolName(transaction.getProtocolName());
         copy.setProtocolVersion(transaction.getProtocolVersion());
+        copy.setProtocolResolutionState(transaction.getProtocolResolutionState());
+        copy.setProtocolResolutionEvidence(transaction.getProtocolResolutionEvidence());
+        copy.setMetadata(copyDocument(transaction.getMetadata()));
+        copy.setClarificationEvidence(copyDocument(transaction.getClarificationEvidence()));
         copy.setClarificationAttempts(transaction.getClarificationAttempts());
         copy.setFullReceiptClarificationAttempts(transaction.getFullReceiptClarificationAttempts());
         copy.setPricingAttempts(transaction.getPricingAttempts());
@@ -68,10 +76,17 @@ public class PricingResultMapper {
             flowCopy.setAvcoAtTimeOfSale(flow.getAvcoAtTimeOfSale());
             flowCopy.setRealisedPnlUsd(flow.getRealisedPnlUsd());
             flowCopy.setLogIndex(flow.getLogIndex());
+            flowCopy.setCounterpartyAddress(flow.getCounterpartyAddress());
+            flowCopy.setCounterpartyType(flow.getCounterpartyType());
+            flowCopy.setAccountRef(flow.getAccountRef());
             flows.add(flowCopy);
         }
         copy.setFlows(flows);
         return copy;
+    }
+
+    private org.bson.Document copyDocument(org.bson.Document document) {
+        return document == null ? null : new org.bson.Document(document);
     }
 
     public void applyResolvedQuote(
@@ -95,7 +110,7 @@ public class PricingResultMapper {
             boolean hasUnresolvedPrice,
             Instant now
     ) {
-        boolean unresolvedPrice = hasUnresolvedPrice || hasReplayRelevantUnresolvedPrice(transaction);
+        boolean unresolvedPrice = hasUnresolvedPrice || PriceableFlowPolicy.hasReplayRelevantUnresolvedPrice(transaction);
         Set<String> reasons = new LinkedHashSet<>(transaction.getMissingDataReasons() == null
                 ? List.of()
                 : transaction.getMissingDataReasons());
@@ -130,20 +145,5 @@ public class PricingResultMapper {
 
     private int safeIncrement(Integer value) {
         return Math.max(0, value == null ? 0 : value) + 1;
-    }
-
-    private boolean hasReplayRelevantUnresolvedPrice(NormalizedTransaction transaction) {
-        if (transaction == null || transaction.getFlows() == null) {
-            return false;
-        }
-        for (NormalizedTransaction.Flow flow : transaction.getFlows()) {
-            if (!PriceableFlowPolicy.requiresMarketPrice(transaction, flow)) {
-                continue;
-            }
-            if (!PriceableFlowPolicy.hasResolvedPrice(flow)) {
-                return true;
-            }
-        }
-        return false;
     }
 }

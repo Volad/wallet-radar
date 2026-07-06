@@ -1,0 +1,48 @@
+:host {
+  display: inline-flex;
+}
+
+.copy-hash-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  border: 1px solid var(--wr-border);
+  border-radius: 0.3rem;
+  background: var(--wr-surface);
+  color: var(--wr-subtle);
+  padding: 0.1rem 0.34rem;
+  cursor: pointer;
+  font-size: 0.5rem;
+  font-family: inherit;
+  transition: border-color 0.12s ease, color 0.12s ease, background 0.12s ease;
+
+  .mono {
+    font-family: var(--wr-font-mono);
+  }
+
+  .copy-icon {
+    font-size: 0.56rem;
+    line-height: 1;
+  }
+
+  &:hover {
+    border-color: var(--wr-border-strong);
+    color: var(--wr-text);
+  }
+
+  &.copied {
+    color: var(--wr-green);
+    border-color: var(--wr-green-mid);
+    background: var(--wr-green-soft);
+  }
+}
+
+.copy-hash-empty {
+  font-family: var(--wr-font-mono);
+  font-size: 0.58rem;
+  color: var(--wr-subtle);
+}
+
+.muted {
+  color: var(--wr-subtle);
+}

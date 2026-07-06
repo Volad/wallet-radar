@@ -1,3 +1,12 @@
+server:
+  # Trust X-Forwarded-Proto/Host headers from Cloudflare → nginx reverse proxy.
+  forward-headers-strategy: framework
+
+logging:
+  level:
+    org.springframework.security: DEBUG
+    org.springframework.security.oauth2: TRACE
+
 spring:
   application:
     name: wallet-radar
@@ -7,9 +16,65 @@ spring:
   data:
     mongodb:
       uri: ${MONGODB_URI:mongodb://localhost:27017/walletradar}
+  security:
+    oauth2:
+      client:
+        registration:
+          google:
+            client-id: ${GOOGLE_CLIENT_ID:dummy}
+            client-secret: ${GOOGLE_CLIENT_SECRET:dummy}
+            scope:
+              - openid
+              - email
+              - profile
+            redirect-uri: ${WALLETRADAR_AUTH_REDIRECT_URI:https://wr.allatone.xyz/login/oauth2/code/google}
 
 # Per-network ingestion config for raw backfill adapters.
 walletradar:
+  admin:
+    # Set WR_ADMIN_INTEGRATION_REBUILD_TOKEN in prod; POST /api/v1/admin/integrations/{id}/full-rebuild requires X-WalletRadar-Admin-Token.
+    integration-rebuild-token: ${WR_ADMIN_INTEGRATION_REBUILD_TOKEN:}
+  integration:
+    bybit:
+      live-balance-refresh-interval-ms: 300000
+  lending:
+    market-rates:
+      startup-refresh-enabled: true
+      refresh-interval-ms: 21600000
+      aave-v3:
+        ARBITRUM:
+          enabled: true
+          pool-address: "0x794a61358d6845594f94dc1db02a252b5b4814ad"
+          pool-addresses-provider: "0xa97684ead0e402dc232d5a977953df7ecbab3cdb"
+          source: "protocol-registry+aave-pool-addresses-provider"
+          version: "v3"
+        AVALANCHE:
+          enabled: true
+          pool-address: "0x794a61358d6845594f94dc1db02a252b5b4814ad"
+          pool-addresses-provider: "0xa97684ead0e402dc232d5a977953df7ecbab3cdb"
+          source: "protocol-registry+aave-pool-addresses-provider"
+          version: "v3"
+        MANTLE:
+          enabled: true
+          pool-address: "0x458f293454fe0d67ec0655f3672301301dd51422"
+          pool-addresses-provider: "0xba50cd2a20f6da35d788639e581bca8d0b5d4d5f"
+          source: "protocol-registry+aave-pool-addresses-provider"
+          version: "v3"
+        BASE:
+          enabled: true
+          pool-address: "0xa238dd80c259a72e81d7e4664a9801593f98d1c5"
+          pool-addresses-provider: "0xe20fcbdbff4dd086226b80fc4e8d85d67a43d894"
+          source: "protocol-registry+aave-pool-addresses-provider"
+          version: "v3"
+    health-factor:
+      refresh-interval-ms: 600000
+  liquidity-pools:
+    enabled: true
+    refresh-interval-ms: 3600000
+    on-demand-debounce-ms: 20000
+    depth-interval-ms: 21600000  # pool liquidity histogram cache TTL (6h); position TVL/fees still refresh on demand
+    stale-multiplier: 2
+    dust-threshold-usd: 10
   ingestion:
     # Backfill window counted back from the current head.
     # Defaults are calibrated from live chain data with a small safety margin.
@@ -45,6 +110,13 @@ walletradar:
       base-delay-ms: 1000
       jitter-factor: 0.2
       request-timeout-ms: 15000
+    bybit:
+      internal-transfer:
+        bundle-window-seconds: 60
+        bundle-residual-pct: 0.01
+        bundle-min-members: 3
+        roundtrip-window-days: 14
+        roundtrip-tolerance-pct: 0.001
     network:
       # If backfill fails with "RPC failed after 5 attempts", public RPCs may be rate-limiting. Try: reduce batch-block-size (e.g. 500), or add a paid RPC URL (Alchemy/Infura) first in urls.
       # avg-block-time-seconds: fallback for EstimatingBlockTimestampResolver when calibration
@@ -79,13 +151,13 @@ walletradar:
           enabled: true
           base-url: https://rpc.ankr.com/multichain/${ANKR_API_KEY:}
         urls:
+          - https://rpc.ankr.com/arbitrum/${ANKR_API_KEY:}
           - https://arb1.arbitrum.io/rpc
           - https://rpc.sentio.xyz/arbitrum-one
           - https://arbitrum.api.onfinality.io/public
           - https://arbitrum-one-rpc.publicnode.com
           - https://arbitrum.blockpi.network/v1/rpc/public
           - https://arbitrum.meowrpc.com
-          #          - https://rpc.ankr.com/arbitrum/${ANKR_API_KEY:}
           - https://lb.drpc.live/arbitrum/${DRPC_API_KEY:}
         batch-block-size: 500
         window-blocks: 252000000   # ~2 years at ~4 blocks/s
@@ -113,7 +185,9 @@ walletradar:
         chain-id: "137"
         explorer:
           etherscan:
-            base-url: https://api.polygonscan.com
+            # Etherscan V2 unified endpoint (chainid=137). The standalone api.polygonscan.com
+            # API was deprecated and now returns HTML, which broke head-block + txlist resolution.
+            base-url: https://api.etherscan.io
             api-key: ${POLYGON_ETHERSCAN_API_KEY:}
         provider:
           enabled: true
@@ -138,9 +212,10 @@ walletradar:
           base-url: https://rpc.ankr.com/multichain/${ANKR_API_KEY:}
         urls:
           - https://rpc.ankr.com/base/${ANKR_API_KEY:}
-          - https://lb.drpc.live/base/${DRPC_API_KEY:}
           - https://mainnet.base.org
-          - https://base.llamarpc.com
+          - https://1rpc.io/base
+          - https://base-rpc.publicnode.com
+          - https://lb.drpc.live/base/${DRPC_API_KEY:}
         batch-block-size: 1000
         window-blocks: 34000000    # measured ~2y span as of 2026-03-09, rounded +5%
         avg-block-time-seconds: 2.0
@@ -153,8 +228,10 @@ walletradar:
           base-url: https://rpc.ankr.com/multichain/${ANKR_API_KEY:}
           page-size: 100
         urls:
-          #          - https://lb.drpc.live/bsc/${DRPC_API_KEY:}
+          - https://bsc-dataseed.binance.org/
+          - https://bsc-rpc.publicnode.com
           - https://rpc.ankr.com/bsc/${ANKR_API_KEY:}
+          #          - https://lb.drpc.live/bsc/${DRPC_API_KEY:}
         batch-block-size: 250000
         window-blocks: 31500000    # tuned from earliest verified wallet tx at block 56,750,955 with ~0.53M safety from last known head
         avg-block-time-seconds: 0.5
@@ -258,8 +335,13 @@ walletradar:
         avg-block-time-seconds: 1.0
       SOLANA:
         syncMethod: RPC
+        fullIndex: false
         urls:
           - https://api.mainnet-beta.solana.com
+      TON:
+        syncMethod: RPC
+        fullIndex: false
+        urls: []
     solana:
       # Max signatures per getSignaturesForAddress call (1-1000). Rate/batch limit.
       signatures-limit: 1000
@@ -278,9 +360,17 @@ walletradar:
       enabled: true
       batch-size: 250
       schedule-interval-ms: 90000
+    # ADR-044 D5: router-agnostic native-settlement recovery (D2) + clarification trigger (D3).
+    # Defaults OFF; enable per-chain (empty `chains` = all EVM) after the reconciliation gate is
+    # green on a clean rebuild for the affected chains.
+    native-settlement-recovery:
+      enabled: true
+      chains: ["BASE"]
     clarification:
       enabled: true
-      batch-size: 100
+      batch-size: 30
+      threads: 2
+      lease-seconds: 300
       retry-delay-seconds: 120
       max-attempts: 3
       li-fi-status:
@@ -306,6 +396,10 @@ walletradar:
     validation-batch-size: 250
     schedule-interval-ms: 120000
     retry-delay-seconds: 120
+    # ADR-044 D4: native-pool reconciliation gate severity. WARN emits diagnostics; flip to
+    # HARD_FAIL only after a clean rebuild reconciles every in-scope NATIVE:<chain> pool.
+    native-pool-reconciliation:
+      severity: WARN
   tools:
     classification-baseline:
       enabled: false
@@ -315,7 +409,11 @@ walletradar:
 
   pricing:
     enabled: true
-    batch-size: 150
+    bridge-out:
+      upstream-lookback-hours: 24
+    batch-size: 1000
+    parallel-lanes: 4
+    quote-resolve-parallel-lanes: 16
     schedule-interval-ms: 120000
     retry-delay-seconds: 120
     external:
@@ -454,12 +552,31 @@ walletradar:
       - network-id: ARBITRUM
         token-contract: 0x29103b9e35b3f5f65708804dcc5f945fae992416
         method-id: 0xd43a632f
+  auth:
+    # Set to true in prod to enforce Google OAuth2 login for all session APIs.
+    # Keep false for local development without Google credentials.
+    enabled: ${WALLETRADAR_AUTH_ENABLED:false}
+    post-login-redirect: ${WALLETRADAR_AUTH_POST_LOGIN_REDIRECT:/settings}
+    jwt:
+      # HS256 secret — set WALLETRADAR_AUTH_JWT_SECRET in prod (openssl rand -base64 48).
+      secret: ${WALLETRADAR_AUTH_JWT_SECRET:dev-insecure-secret-change-in-prod}
+      expiration-seconds: 2592000  # 30 days
+    cookie:
+      name: wr_auth
+      max-age-seconds: 2592000  # 30 days
+      secure: true
+      same-site: Lax
+      path: /
+
   # API CORS policy for local SPA development and browser preflight (OPTIONS).
   api:
     cors:
       allowed-origins:
         - http://localhost:4200
         - http://127.0.0.1:4200
+        - http://localhost:4206
+        - http://127.0.0.1:4206
+        - http://192.168.1.165:4300
       allowed-methods:
         - GET
         - POST

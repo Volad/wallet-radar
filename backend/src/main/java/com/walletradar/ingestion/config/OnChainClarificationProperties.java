@@ -16,7 +16,11 @@ public class OnChainClarificationProperties {
 
     private boolean enabled = false;
 
-    private int batchSize = 100;
+    private int batchSize = 30;
+
+    private int threads = 2;
+
+    private long leaseSeconds = 300;
 
     private long retryDelaySeconds = 120;
 
@@ -57,6 +61,22 @@ public class OnChainClarificationProperties {
 
     public void setBatchSize(int batchSize) {
         this.batchSize = batchSize;
+    }
+
+    public int getThreads() {
+        return threads;
+    }
+
+    public void setThreads(int threads) {
+        this.threads = threads;
+    }
+
+    public long getLeaseSeconds() {
+        return leaseSeconds;
+    }
+
+    public void setLeaseSeconds(long leaseSeconds) {
+        this.leaseSeconds = leaseSeconds;
     }
 
     public long getRetryDelaySeconds() {

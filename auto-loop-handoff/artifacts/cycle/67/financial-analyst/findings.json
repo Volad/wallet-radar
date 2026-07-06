@@ -1,0 +1,161 @@
+{
+  "cycle": 67,
+  "task": "FA-001",
+  "generatedFrom": "/Users/vladislav/projects/wallet-radar/data/derived/financial-audit-live-current.json",
+  "findings": [
+    {
+      "id": "FA67-B1",
+      "title": "ETH exact carry leak and ETH-family receipt-token continuity are not final-clean",
+      "severity": "high",
+      "surfaces": [
+        "ETH exact",
+        "ETH family"
+      ],
+      "currentDatabaseTruth": "ETH exact coverage is 0.758585565758092328 with uncovered 0.005604525124182205 across 3 materially dirty exact buckets. ETH family coverage is 0.995413775064410755 but still has uncovered 0.014182496956267075 and 19 dirty buckets.",
+      "auditorTruth": "Same-family bridge, wrapper, and lending receipt-token principal must carry basis end to end. Only explicit positive excess over the carried principal should become acquisition.",
+      "firstFailedStage": "normalization + move_basis",
+      "evidenceDiagnosis": "EVIDENCE_PRESENT_UNLINKED for native bridge/native dust buckets; EVIDENCE_PRESENT_UNUSABLE for receipt-token rows that still hide yield inside one coarse continuity leg.",
+      "typeAdequacy": "Current canonical split is semantically lossy for receipt-token and rebasing-family exits because principal and yield are not separated strongly enough before replay.",
+      "remediationClass": "normalization, move_basis, replay",
+      "pipelineCorrectionPoint": "Normalize principal-vs-yield split on supported receipt-token rows before move-basis replay, then rerun continuity replay.",
+      "terminalState": "AUTHORITATIVE_RECONSTRUCTION_COMPLETE",
+      "anchors": [
+        "0x101c297d1a67fc0a30fc96c1aa5cc8786d630bbb00d274c9dc7bbced4c6dccd7",
+        "0xda6537107ce79f1adca4abeeef7abc49da76cf4b23de3f17ee8c43cbfbb8c9b2",
+        "0x3b8592a7465ce33bd64b266e11d1f665954cc3735be6e1590dffd226ac8664bd"
+      ]
+    },
+    {
+      "id": "FA67-B2",
+      "title": "AVAX native and family continuity still lose basis across receipt-token and staking-wrapper transitions",
+      "severity": "high",
+      "surfaces": [
+        "AVAX exact",
+        "AVAX family"
+      ],
+      "currentDatabaseTruth": "AVAX exact coverage is 0.628797411316525223 with uncovered 0.093456895658393546. AVAX family coverage is 0.58750224244027005 with uncovered 1.101439081571954581, dominated by `sAVAX` plus native AVAX.",
+      "auditorTruth": "Aave-style receipt-token exits and native staking-wrapper transitions are continuity. Principal basis should move from `aAvaWAVAX` and native AVAX into the returned AVAX or `sAVAX` position; only net excess should be acquisition.",
+      "firstFailedStage": "move_basis",
+      "evidenceDiagnosis": "EVIDENCE_PRESENT_UNLINKED",
+      "typeAdequacy": "The type model is adequate, but the move-basis engine is not carrying native-family basis across supported AVAX family reallocations.",
+      "remediationClass": "move_basis, cost_basis, replay",
+      "pipelineCorrectionPoint": "Carry basis across `aAvaWAVAX -> AVAX` and `AVAX -> sAVAX` continuity before AVCO and replay consume the rows.",
+      "terminalState": "AUTHORITATIVE_RECONSTRUCTION_COMPLETE",
+      "anchors": [
+        "0xfbbfd2293154db9a2cd678596eae84f8f8ed9b140d9a9115f055f6c47c9ac931",
+        "0x682992de7690b96b0710f5817481994d0288f8ac4a4677e116372b38640a4cb4",
+        "0x5e30c5086e680e2c6313074d796af64051338d9e1b0a27882c1ce1f436f18543"
+      ]
+    },
+    {
+      "id": "FA67-B3",
+      "title": "USDC exact and family continuity remain broken on Arbitrum vault and bridge corridors",
+      "severity": "high",
+      "surfaces": [
+        "USDC exact",
+        "USDC family"
+      ],
+      "currentDatabaseTruth": "USDC exact coverage is 0.755283255824940825 with uncovered 330.858363999999937732. Two Arbitrum buckets explain nearly all of it: 320.586617000000046573 on `0x0765...` and 10.271747000000004846 on `0x101c...`.",
+      "auditorTruth": "Bridge carry, vault receipt-token carry, and supported swap chronology are all present. Basis should flow from bridge source rows into Arbitrum USDC and from `eUSDC-6` back into underlying USDC, leaving only explicit vault yield or fee effects as acquisition/disposal.",
+      "firstFailedStage": "normalization + move_basis",
+      "evidenceDiagnosis": "EVIDENCE_PRESENT_UNLINKED on supported bridge/vault/swap chronology and EVIDENCE_PRESENT_UNUSABLE where vault receipt-token exits remain too coarse.",
+      "typeAdequacy": "Current canonical representation is too coarse for `eUSDC-6 -> USDC` principal-vs-yield decomposition and for preserving exact/family continuity after bridge corridors.",
+      "remediationClass": "normalization, linking, move_basis, replay",
+      "pipelineCorrectionPoint": "Split vault withdraw principal from yield, persist protocol/counterparty metadata for the vault, then replay carry through bridge and swap chronology.",
+      "terminalState": "AUTHORITATIVE_RECONSTRUCTION_COMPLETE",
+      "anchors": [
+        "0x0765f4b17d9961c3cd7e63b4dc1e69c948954d51816807a4ba51a8ac4709f977",
+        "0x9f6983d00441ed13bf45e1b7ac34e94540fb61f58e4a9a2189826b1e761a2f7f",
+        "0x7d8c79a327637fda080bcfa9204181359de791ccff95dd4b2f1b020b8af0b678",
+        "0x101c297d1a67fc0a30fc96c1aa5cc8786d630bbb00d274c9dc7bbced4c6dccd7"
+      ]
+    },
+    {
+      "id": "FA67-B4",
+      "title": "Supported LP exits still surface as `basisEffect=UNKNOWN`, breaking exact USDT and broader LP accounting",
+      "severity": "high",
+      "surfaces": [
+        "USDT exact",
+        "USDT family"
+      ],
+      "currentDatabaseTruth": "USDT exact/family coverage is 0.000218599015255947 with uncovered 1.234868226418219139, entirely anchored at PancakeSwap Infinity LP exit `0x091e...`.",
+      "auditorTruth": "A supported LP exit should close the carried LP-position basis, then reallocate that basis onto the returned assets proportionally. Returned assets must not remain fully uncovered only because the exit row is still tagged `UNKNOWN`.",
+      "firstFailedStage": "normalization",
+      "evidenceDiagnosis": "EVIDENCE_PRESENT_UNUSABLE",
+      "typeAdequacy": "The current LP-exit canonical output is missing a deterministic principal-basis allocation rule, so move basis and AVCO have no authoritative input.",
+      "remediationClass": "normalization, move_basis, cost_basis, avco",
+      "pipelineCorrectionPoint": "Emit deterministic LP-exit basis allocation from the carried LP position into returned assets before replay and AVCO.",
+      "terminalState": "AUTHORITATIVE_RECONSTRUCTION_COMPLETE",
+      "anchors": [
+        "0x091e356020745e6555732067a025cee9243dee6848c47dd8eb97259293735e70",
+        "0x8cd845033478862d78ae2214fa63e822a9dd217fab4c428801285eb1bb40d2e1"
+      ]
+    },
+    {
+      "id": "FA67-B5",
+      "title": "Protocol detection is materially incomplete on rows where the protocol is already provable from current raw evidence",
+      "severity": "medium",
+      "surfaces": [
+        "Protocol detection"
+      ],
+      "currentDatabaseTruth": "WRAP=343, UNWRAP=336, SWAP=130, BRIDGE_IN=98, BRIDGE_OUT=98, VAULT_DEPOSIT=19, VAULT_WITHDRAW=18, REWARD_CLAIM=15, LP_ENTRY=12, LP_EXIT=10, LENDING_DEPOSIT=10, LP_FEE_CLAIM=6, LENDING_WITHDRAW=4, STAKING_DEPOSIT=2 currently lack `protocolName`. The biggest clusters are wrap/unwrap, swap, and bridge rows.",
+      "auditorTruth": "Protocol labels are best-effort metadata, but they should still be deterministically attached whenever the interacted contract, canonical selector, or audited lifecycle pairing already proves the protocol brand.",
+      "firstFailedStage": "protocol enrichment",
+      "evidenceDiagnosis": "EVIDENCE_PRESENT_UNLINKED",
+      "typeAdequacy": "The metadata model is adequate; the defect is missing registry coverage plus missing clarification-time enrichment on already-canonical rows.",
+      "remediationClass": "registry coverage, clarification, repair sweep",
+      "pipelineCorrectionPoint": "Expand registry/enrichment rules and backfill `protocolName` without changing already-correct economics.",
+      "terminalState": "AUTHORITATIVE_RECONSTRUCTION_COMPLETE",
+      "anchors": [
+        "0x0765f4b17d9961c3cd7e63b4dc1e69c948954d51816807a4ba51a8ac4709f977",
+        "0xc0ca8c4022bbfbb8bfd0660155e4857dd80c0cf5c521b8ad5f61ab4738fc0cab",
+        "0x9f6983d00441ed13bf45e1b7ac34e94540fb61f58e4a9a2189826b1e761a2f7f",
+        "0x7d8c79a327637fda080bcfa9204181359de791ccff95dd4b2f1b020b8af0b678"
+      ]
+    },
+    {
+      "id": "FA67-B6",
+      "title": "Counterparty construction is incomplete on core bridge, swap, lending, and vault families",
+      "severity": "medium",
+      "surfaces": [
+        "Counterparty construction"
+      ],
+      "currentDatabaseTruth": "SWAP=268, EXTERNAL_TRANSFER_IN=187, BRIDGE_OUT=138, EXTERNAL_TRANSFER_OUT=127, BRIDGE_IN=116, LP_ENTRY=90, LENDING_DEPOSIT=87, LP_EXIT=62, LENDING_WITHDRAW=44, VAULT_DEPOSIT=26, VAULT_WITHDRAW=26, BORROW=21, REPAY=16, STAKING_DEPOSIT=6, STAKING_WITHDRAW=1 currently lack `counterpartyAddress`. Gaps are concentrated on swaps, external transfers, bridge rows, lending, and vault operations.",
+      "auditorTruth": "For on-chain protocol rows, `counterpartyAddress` should point to the interacted contract or deterministic peer. Lifecycle pairing belongs in `correlationId` and `matchedCounterparty`, not inside `counterpartyAddress`.",
+      "firstFailedStage": "clarification + linking",
+      "evidenceDiagnosis": "EVIDENCE_PRESENT_UNLINKED",
+      "typeAdequacy": "The model is adequate if `counterpartyAddress`, `correlationId`, and `matchedCounterparty` are kept distinct. The current defect is incomplete population of those fields.",
+      "remediationClass": "clarification, linking, repair sweep",
+      "pipelineCorrectionPoint": "Populate `counterpartyAddress` from deterministic row-local evidence and persist reciprocal lifecycle links only through `correlationId` and `matchedCounterparty`.",
+      "terminalState": "AUTHORITATIVE_RECONSTRUCTION_COMPLETE",
+      "anchors": [
+        "0x101c297d1a67fc0a30fc96c1aa5cc8786d630bbb00d274c9dc7bbced4c6dccd7",
+        "0x0765f4b17d9961c3cd7e63b4dc1e69c948954d51816807a4ba51a8ac4709f977",
+        "0x9f6983d00441ed13bf45e1b7ac34e94540fb61f58e4a9a2189826b1e761a2f7f",
+        "0x7d8c79a327637fda080bcfa9204181359de791ccff95dd4b2f1b020b8af0b678"
+      ]
+    },
+    {
+      "id": "FA67-B7",
+      "title": "Bybit family reconstruction remains broader-goal blocked because the live DB snapshot has no raw CEX source collection",
+      "severity": "medium",
+      "surfaces": [
+        "MNT family",
+        "Bybit broader-goal coverage"
+      ],
+      "currentDatabaseTruth": "MNT exact is clean, but MNT family coverage is only 0.008451767781545872 with uncovered 1675.520059541154068938 dominated by Bybit reward inventory. At the same time `external_ledger_raw = 0`.",
+      "auditorTruth": "A full raw-first CEX family reconstruction requires raw venue rows. `bybit_extracted_events` is useful context, but it is not the source-of-truth collection specified for authoritative Bybit replay.",
+      "firstFailedStage": "source availability",
+      "evidenceDiagnosis": "GENUINE_EVIDENCE_MISSING",
+      "typeAdequacy": "The family metric is broader-goal valid, but this live snapshot does not contain the raw Bybit source collection required for authoritative CEX reconstruction.",
+      "remediationClass": "source ingestion, broader-goal replay",
+      "pipelineCorrectionPoint": "Restore raw Bybit source availability or document the explicit broader-goal limitation; do not present the current family remainder as a normal supported on-chain normalization defect.",
+      "terminalState": "GENUINE_EVIDENCE_MISSING_PROVEN",
+      "anchors": [
+        "BYBIT:33625378",
+        "SYMBOL:MNT",
+        "FAMILY:MNT"
+      ]
+    }
+  ]
+}
