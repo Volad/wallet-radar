@@ -1,8 +1,10 @@
 package com.walletradar.ingestion.pipeline.classification.support;
 
 import com.walletradar.domain.common.NetworkId;
+import com.walletradar.ingestion.config.NativeSettlementRecoveryProperties;
 import com.walletradar.ingestion.pipeline.onchain.OnChainRawTransactionView;
 import org.bson.Document;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -24,9 +26,23 @@ public class MovementLegExtractor {
     private static final String ZKSYNC_SYSTEM_FEE_SINK = "0x0000000000000000000000000000000000008001";
 
     private final NativeAssetSymbolResolver nativeAssetSymbolResolver;
+    private final NativeSettlementRecoveryProperties nativeSettlementRecoveryProperties;
 
+    /**
+     * Convenience constructor used by tests and manual wiring; native-settlement recovery
+     * (ADR-044 D2) defaults off.
+     */
     public MovementLegExtractor(NativeAssetSymbolResolver nativeAssetSymbolResolver) {
+        this(nativeAssetSymbolResolver, new NativeSettlementRecoveryProperties());
+    }
+
+    @Autowired
+    public MovementLegExtractor(
+            NativeAssetSymbolResolver nativeAssetSymbolResolver,
+            NativeSettlementRecoveryProperties nativeSettlementRecoveryProperties
+    ) {
         this.nativeAssetSymbolResolver = nativeAssetSymbolResolver;
+        this.nativeSettlementRecoveryProperties = nativeSettlementRecoveryProperties;
     }
 
     public List<RawLeg> extract(OnChainRawTransactionView view) {
@@ -99,6 +115,10 @@ public class MovementLegExtractor {
 
         legs = WrappedNativeSupport.enrichLegs(view, nativeAssetSymbolResolver, legs);
         legs = LpNativeExitLegEnricher.enrichLegs(view, nativeAssetSymbolResolver, legs);
+        // ADR-044 D2: router-agnostic native-settlement recovery runs last, after the existing
+        // selector-specific enrichers, and only fires when the hasInboundNative guard is false.
+        legs = NativeSettlementRecovery.enrichLegs(
+                view, nativeAssetSymbolResolver, legs, nativeSettlementRecoveryProperties);
         return legs;
     }
 

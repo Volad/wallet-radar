@@ -171,13 +171,7 @@ public class GmxLpEntryReplayHandler {
                     position.assetKey()
             );
             if (refundCarry != null) {
-                flowSupport.restoreToPosition(
-                        refundCarry.quantity(),
-                        position,
-                        refundCarry.costBasisUsd(),
-                        refundCarry.uncoveredQuantity(),
-                        refundCarry.avco()
-                );
+                flowSupport.restoreToPosition(refundCarry, position);
                 replayState.ledgerPointCollector().record(
                         transaction,
                         flow,
@@ -211,13 +205,7 @@ public class GmxLpEntryReplayHandler {
                     position.assetKey()
             );
             if (principalCarry != null) {
-                flowSupport.restoreToPosition(
-                        principalCarry.quantity(),
-                        position,
-                        principalCarry.costBasisUsd(),
-                        principalCarry.uncoveredQuantity(),
-                        principalCarry.avco()
-                );
+                flowSupport.restoreToPosition(principalCarry, position);
                 replayState.ledgerPointCollector().record(
                         transaction,
                         flow,

@@ -22,7 +22,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class ContinuityCarryServiceTest {
 
-    private final GenericFlowReplayEngine engine = new GenericFlowReplayEngine();
+    private final GenericFlowReplayEngine engine = new GenericFlowReplayEngine(null);
     private final ReplayFlowSupport flowSupport = new ReplayFlowSupport(engine);
     private final ContinuityCarryService service = new ContinuityCarryService(engine, flowSupport);
 
@@ -51,6 +51,8 @@ class ContinuityCarryServiceTest {
                         new BigDecimal("0.545880216141647307"),
                         new BigDecimal("0.545880216141647307"),
                         BigDecimal.ZERO,
+                        BigDecimal.ZERO,
+                        null,
                         BigDecimal.ZERO,
                         null,
                         false,
@@ -83,6 +85,8 @@ class ContinuityCarryServiceTest {
                 new BigDecimal("0.14291964"),
                 new BigDecimal("392"),
                 new BigDecimal("784000"),
+                new BigDecimal("392"),
+                new BigDecimal("784000"),
                 false,
                 earn
         );
@@ -108,6 +112,8 @@ class ContinuityCarryServiceTest {
                 BigDecimal.ZERO,
                 new BigDecimal("7127.80"),
                 null,
+                new BigDecimal("7127.80"),
+                null,
                 false,
                 ethKey
         );
@@ -126,6 +132,8 @@ class ContinuityCarryServiceTest {
                 new BigDecimal("1266.468"),
                 new BigDecimal("1266.468"),
                 BigDecimal.ZERO,
+                new BigDecimal("1266.468"),
+                BigDecimal.ONE,
                 new BigDecimal("1266.468"),
                 BigDecimal.ONE,
                 false,
@@ -163,6 +171,8 @@ class ContinuityCarryServiceTest {
                         new BigDecimal("1266.468083"),
                         new BigDecimal("1266.468083"),
                         BigDecimal.ZERO,
+                        BigDecimal.ZERO,
+                        null,
                         BigDecimal.ZERO,
                         null,
                         false,
@@ -211,6 +221,8 @@ class ContinuityCarryServiceTest {
                 BigDecimal.ZERO,
                 BigDecimal.ZERO,
                 BigDecimal.ZERO,
+                new BigDecimal("7127.80"),
+                null,
                 new BigDecimal("7127.80"),
                 null,
                 false,

@@ -58,7 +58,7 @@ class TransferReplayHandlerCorridorContinuityTest {
     @BeforeEach
     void setUp() {
         var assetSupport = new ReplayAssetSupport();
-        var engine = new GenericFlowReplayEngine();
+        var engine = new GenericFlowReplayEngine(null);
         var flowSupport = new ReplayFlowSupport(engine);
         var carryService = new ContinuityCarryService(engine, flowSupport);
         var keyFactory = new ReplayPendingTransferKeyFactory(assetSupport);
@@ -197,6 +197,50 @@ class TransferReplayHandlerCorridorContinuityTest {
         assertThat(dstPos.totalCostBasisUsd()).isEqualByComparingTo("0");
         assertThat(dstPos.uncoveredQuantity()).isEqualByComparingTo("2.0");
         assertThat(dstPos.hasIncompleteHistory() || dstPos.hasUnresolvedFlags()).isTrue();
+    }
+
+    @Test
+    @DisplayName("ADR-042/RC-9: a self-funded :FUND corridor-out still posts a single CARRY_OUT to :FUND; the accountRef rule does not fan out onto a sibling umbrella lot")
+    void selfFundedFundCorridorOutStaysSingleFundDrain() {
+        // RC-9 shape: an EXTERNAL_INBOUND deposit funded :FUND with exactly 3.06 (self-funded), and
+        // the corridor-out spends that same 3.06 off :FUND. A distinct umbrella lot exists — the
+        // coverage-and-existence-gated accountRef rule must NOT fan the drain onto it: :FUND covers
+        // the leg, so a single CARRY_OUT is released from :FUND and the umbrella lot is untouched.
+        AssetKey bybitEth = new AssetKey(BYBIT, NetworkId.MANTLE, "SYMBOL:ETH", "ETH", "FAMILY:ETH");
+        PositionState bybitPos = replayState.position(bybitEth);
+        bybitPos.setQuantity(new BigDecimal("3.06"));
+        bybitPos.setTotalCostBasisUsd(new BigDecimal("9272.11"));
+        bybitPos.setUncoveredQuantity(BigDecimal.ZERO);
+        bybitPos.setPerWalletAvco(new BigDecimal("3030.10"));
+
+        // A distinct umbrella sibling lot that MUST NOT be drained.
+        AssetKey umbrellaEth = new AssetKey("BYBIT:33625378", NetworkId.MANTLE, "SYMBOL:ETH", "ETH", "FAMILY:ETH");
+        PositionState umbrellaPos = replayState.position(umbrellaEth);
+        umbrellaPos.setQuantity(new BigDecimal("5.0"));
+        umbrellaPos.setTotalCostBasisUsd(new BigDecimal("15000"));
+        umbrellaPos.setUncoveredQuantity(BigDecimal.ZERO);
+        umbrellaPos.setPerWalletAvco(new BigDecimal("3000"));
+
+        // CEX → wallet corridor-out on :FUND, with the flow explicitly naming its :FUND account.
+        NormalizedTransaction outLeg = corridorTx(NormalizedTransactionSource.BYBIT, BYBIT, WALLET, "-3.06");
+        outLeg.getFlows().getFirst().setAccountRef(BYBIT);
+        handler.applyTransfer(outLeg, outLeg.getFlows().getFirst(), 0, bybitPos, replayState);
+
+        assertThat(bybitPos.quantity()).as(":FUND fully drained by the single corridor-out").isEqualByComparingTo("0");
+        assertThat(umbrellaPos.quantity())
+                .as("sibling umbrella lot untouched — the accountRef rule did not fan out")
+                .isEqualByComparingTo("5.0");
+        assertThat(umbrellaPos.totalCostBasisUsd()).isEqualByComparingTo("15000");
+
+        // The on-chain credit inherits the full released :FUND basis (a single coherent CARRY_OUT).
+        AssetKey mantleEth = new AssetKey(WALLET, NetworkId.MANTLE, "SYMBOL:ETH", "ETH", "FAMILY:ETH");
+        PositionState mantlePos = replayState.position(mantleEth);
+        NormalizedTransaction inLeg = corridorTx(NormalizedTransactionSource.ON_CHAIN, WALLET, BYBIT, "3.06");
+        inLeg.getFlows().getFirst().setAccountRef(BYBIT);
+        handler.applyTransfer(inLeg, inLeg.getFlows().getFirst(), 0, mantlePos, replayState);
+
+        assertThat(mantlePos.totalCostBasisUsd()).isCloseTo(new BigDecimal("9272.11"), within(new BigDecimal("0.01")));
+        assertThat(guard.evaluate(replayState).conserved()).isTrue();
     }
 
     private static NormalizedTransaction bridgeTx(

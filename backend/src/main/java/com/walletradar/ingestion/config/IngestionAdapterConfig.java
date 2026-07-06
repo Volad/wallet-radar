@@ -33,6 +33,7 @@ import java.util.stream.Collectors;
         IngestionExplorerProperties.class,
         OnChainNormalizationProperties.class,
         OnChainClarificationProperties.class,
+        NativeSettlementRecoveryProperties.class,
         BybitNormalizationProperties.class,
         BybitInternalTransferProperties.class,
         LinkingProperties.class

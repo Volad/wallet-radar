@@ -261,11 +261,23 @@ public final class ReceiptClarificationEligibilitySupport {
         return normalizedTransaction != null
                 && view != null
                 && normalizedTransaction.getStatus() == NormalizedTransactionStatus.PENDING_CLARIFICATION
-                && (normalizedTransaction.getType() == NormalizedTransactionType.LP_EXIT
-                || normalizedTransaction.getType() == NormalizedTransactionType.LP_FEE_CLAIM)
+                && isNativeSettlementRecoveryType(normalizedTransaction.getType())
                 && reasons.contains(NATIVE_SETTLEMENT_TRANSFER_EVIDENCE_REQUIRED)
                 && view.syncMethod() == RawSyncMethod.BLOCKSCOUT
                 && !view.hasFullReceiptClarificationEvidence();
+    }
+
+    /**
+     * ADR-044 D3: native-output families whose missing native settlement is recovered via full-receipt
+     * WETH {@code Withdrawal} evidence. Broadened from LP_EXIT/LP_FEE_CLAIM to SWAP/UNWRAP/LP_EXIT_*.
+     */
+    private static boolean isNativeSettlementRecoveryType(NormalizedTransactionType type) {
+        return type == NormalizedTransactionType.LP_EXIT
+                || type == NormalizedTransactionType.LP_EXIT_PARTIAL
+                || type == NormalizedTransactionType.LP_EXIT_FINAL
+                || type == NormalizedTransactionType.LP_FEE_CLAIM
+                || type == NormalizedTransactionType.SWAP
+                || type == NormalizedTransactionType.UNWRAP;
     }
 
     private static boolean requiresTransferEvidenceRecovery(

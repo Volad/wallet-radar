@@ -81,6 +81,15 @@ public class BybitStreamAuthorityCollapser {
     private static final String EXCLUSION_REASON_PREFIX = "BYBIT_STREAM_MIRROR_";
     /** Cycle/15 round 2: orphan cont=false leg with a collapsed-pair neighbor outside the bucket. */
     private static final String EXCLUSION_REASON_DRIFT = EXCLUSION_REASON_PREFIX + "DRIFT_GT_BUCKET";
+    /** Fix A.2: collapse leg suppressed as a corridor-deposit-and-stake cycle FUND↔UTA duplicate. */
+    private static final String EXCLUSION_REASON_CORRIDOR_STAKE_CYCLE =
+            EXCLUSION_REASON_PREFIX + "CORRIDOR_STAKE_CYCLE";
+    /** Fix A.2: how far before a :FUND staking outbound to gather matching corridor :FUND deposits. */
+    private static final Duration CORRIDOR_STAKE_CYCLE_LOOKBACK = Duration.ofHours(6);
+    /** Fix A.2: symmetric margin around the corridor→stake cycle window for collapse-leg membership. */
+    private static final Duration CORRIDOR_STAKE_CYCLE_MARGIN = Duration.ofMinutes(10);
+    /** Fix A.2: relative tolerance when matching summed corridor deposits to the staking outbound. */
+    private static final BigDecimal CORRIDOR_STAKE_CYCLE_QTY_TOLERANCE = new BigDecimal("0.0001");
     private static final int QTY_SCALE = 10;
     /**
      * Cycle/13: tighten from 6 minutes — real UTA↔FUND transfers can occur 2–3 minutes after a
@@ -177,6 +186,355 @@ public class BybitStreamAuthorityCollapser {
             );
         }
         return dirty.size();
+    }
+
+    /**
+     * Fix A.2 entry point — a terminal linking pass, run AFTER the deterministic corridor projection
+     * ({@code BybitTransferContinuityRepairService}) has stamped the {@code BYBIT-CORRIDOR:} deposits.
+     *
+     * <p>This pass MUST NOT run inside {@link #collapseMirrors()}: that runs during normalization,
+     * before corridor legs are labelled, so the corridor-deposit half of the double-count signature
+     * does not yet exist and the suppression would silently no-op (the observed replay-#8 failure).
+     * Idempotent: legs already excluded are skipped, so a second convergence cycle returns 0.
+     *
+     * @return number of collapse-group legs newly suppressed as corridor-deposit-and-stake duplicates
+     */
+    public int suppressCorridorDepositStakeCycles() {
+        Instant now = Instant.now();
+        List<NormalizedTransaction> dirty = new ArrayList<>();
+        int suppressed = suppressCorridorDepositStakeCycleMirrors(now, dirty);
+        int symmetryRestores = enforceEarnCorridorExclusionSymmetry(now, dirty);
+        if (!dirty.isEmpty()) {
+            normalizedTransactionRepository.saveAll(dirty);
+            log.info(
+                    "BYBIT_CORRIDOR_STAKE_CYCLE_SUPPRESSION suppressed_legs={} earn_symmetry_restores={}",
+                    suppressed, symmetryRestores
+            );
+        }
+        return suppressed + symmetryRestores;
+    }
+
+    /**
+     * RC-0 / RC-B (ADR-043) — paired-exclusion symmetry across the Earn subscribe↔redeem corridor.
+     *
+     * <p>ADR-041 forbids one-sided exclusion: an Earn principal leg may be excluded only if its
+     * paired leg is also excluded. When a subscribe (or redeem) principal leg of a
+     * pairer-eligible type ({@code EARN_FLEXIBLE_SAVING} / {@code LENDING_DEPOSIT} /
+     * {@code LENDING_WITHDRAW}) was one-sidedly demoted while its opposite-sign counterpart of the
+     * same corridor signature {@code (uid, family, |qty|)} stays booked, the excluded leg is the
+     * missing inbound the pairer needs. We restore it (choose the "neither excluded" branch) so
+     * {@code BybitEarnPrincipalTransferPairer} can correlate the closed cycle and replay can conserve
+     * basis. We never silently drop inventory and never exclude the surviving booked leg.
+     *
+     * <p>Bounded + safe: only a leg whose opposite-sign counterpart is already booked (and which has
+     * no non-excluded same-sign sibling for the same signature) is restored; it is keyed purely on
+     * {@code (uid, family, |qty|, sign)}, never on a transaction hash or wallet-specific bucket, and
+     * it is idempotent (a restored leg is no longer excluded on the next pass).
+     */
+    private int enforceEarnCorridorExclusionSymmetry(Instant now, List<NormalizedTransaction> dirty) {
+        Criteria pairerEligible = Criteria.where("type").in(
+                NormalizedTransactionType.EARN_FLEXIBLE_SAVING,
+                NormalizedTransactionType.LENDING_DEPOSIT,
+                NormalizedTransactionType.LENDING_WITHDRAW
+        );
+        List<NormalizedTransaction> booked = mongoOperations.find(Query.query(new Criteria().andOperator(
+                Criteria.where("source").is(NormalizedTransactionSource.BYBIT),
+                pairerEligible,
+                Criteria.where("excludedFromAccounting").ne(true)
+        )), NormalizedTransaction.class);
+        if (booked.isEmpty()) {
+            return 0;
+        }
+        Map<String, Set<Integer>> bookedSignsBySignature = new HashMap<>();
+        for (NormalizedTransaction leg : booked) {
+            String sig = earnCorridorSignature(leg);
+            int sign = principalSign(leg);
+            if (sig == null || sign == 0) {
+                continue;
+            }
+            bookedSignsBySignature.computeIfAbsent(sig, ignored -> new HashSet<>()).add(sign);
+        }
+
+        List<NormalizedTransaction> excluded = mongoOperations.find(Query.query(new Criteria().andOperator(
+                Criteria.where("source").is(NormalizedTransactionSource.BYBIT),
+                pairerEligible,
+                Criteria.where("excludedFromAccounting").is(true)
+        )), NormalizedTransaction.class);
+        int restored = 0;
+        for (NormalizedTransaction leg : excluded) {
+            String sig = earnCorridorSignature(leg);
+            int sign = principalSign(leg);
+            if (sig == null || sign == 0) {
+                continue;
+            }
+            Set<Integer> bookedSigns = bookedSignsBySignature.get(sig);
+            if (bookedSigns == null) {
+                continue;
+            }
+            // Opposite side is booked (one-sided exclusion) and this side has no surviving booked
+            // leg — restore this excluded leg so the pair is symmetric (neither one-sidedly dropped).
+            if (bookedSigns.contains(-sign) && !bookedSigns.contains(sign)) {
+                leg.setExcludedFromAccounting(false);
+                leg.setAccountingExclusionReason(null);
+                leg.setContinuityCandidate(true);
+                leg.setUpdatedAt(now);
+                dirty.add(leg);
+                restored++;
+                // Reflect the restoration so a second excluded same-signature leg is not also
+                // restored (keeps the pair balanced at one debit + one credit per signature).
+                bookedSigns.add(sign);
+            }
+        }
+        return restored;
+    }
+
+    /** Corridor signature for earn-principal symmetry: {@code uid|family|absQty}. */
+    private String earnCorridorSignature(NormalizedTransaction tx) {
+        String uid = extractBybitUid(tx == null ? null : tx.getWalletAddress());
+        String family = principalFamily(tx);
+        BigDecimal absQty = principalAbsQty(tx);
+        if (uid == null || family == null || absQty == null || absQty.signum() <= 0) {
+            return null;
+        }
+        return uid + "|" + family + "|"
+                + absQty.setScale(QTY_SCALE, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString();
+    }
+
+    /**
+     * Fix A.2 — corridor-deposit-and-stake cycle suppression.
+     *
+     * <p>When a family's on-chain inventory arrives via corridor deposits onto {@code :FUND} (the
+     * authoritative {@code BYBIT-CORRIDOR :FUND CARRY_IN}, owned by the deterministic corridor
+     * projection and excluded from the normal collapse passes) and is then staked out of
+     * {@code :FUND} into a receipt of the same family (the 2025-03-12 "ETH 2.0" cycle: two ARBITRUM
+     * ETH deposits +0.01/+0.699 → :FUND, then a −0.709 ETH staking → METH), Bybit ALSO records the
+     * deposits' FUND↔UTA auto-route and the UTA→FUND consolidation as separate stream rows. Those
+     * rows are keyed onto {@code bybit-collapsed-v1:} queues and strip {@code :FUND}/{@code :UTA} to
+     * the umbrella. They are pure duplicates of the corridor deposits (the venue quantity is already
+     * on {@code :FUND}); left active they FIFO cross-consume on the umbrella and, once the staking
+     * outbound is re-keyed to {@code :FUND} (Fix A.1 in {@code LiquidStakingReplayHandler}), strand a
+     * same-quantity phantom on the umbrella.</p>
+     *
+     * <p>Tight scoping (blast radius): a {@code bybit-collapsed-v1} FUND↔UTA group is suppressed only
+     * when, for the same {@code (uid, family)}, the in-window sum of {@code BYBIT-CORRIDOR :FUND
+     * CARRY_IN}s matches a {@code :FUND} principal-deposit outbound (STAKING/EARN/LENDING/VAULT)
+     * within tolerance, and the group falls inside that cycle window. A legitimate net corridor
+     * deposit (no matching staking outbound — e.g. RC-9 MANTLE 3.06 ETH, RC-2) is never touched, and
+     * a plain FUND↔UTA collapse round-trip outside a corridor+stake cycle is never touched.</p>
+     */
+    private int suppressCorridorDepositStakeCycleMirrors(Instant now, List<NormalizedTransaction> dirty) {
+        List<NormalizedTransaction> corridorIns = mongoOperations.find(Query.query(new Criteria().andOperator(
+                Criteria.where("source").is(NormalizedTransactionSource.BYBIT),
+                Criteria.where("correlationId").regex("^" + java.util.regex.Pattern.quote("BYBIT-CORRIDOR")),
+                Criteria.where("excludedFromAccounting").ne(true)
+        )), NormalizedTransaction.class).stream().filter(this::isFundInboundCorridor).toList();
+        if (corridorIns.isEmpty()) {
+            return 0;
+        }
+        List<NormalizedTransaction> stakingOuts = mongoOperations.find(Query.query(new Criteria().andOperator(
+                Criteria.where("source").is(NormalizedTransactionSource.BYBIT),
+                Criteria.where("type").in(
+                        NormalizedTransactionType.STAKING_DEPOSIT,
+                        NormalizedTransactionType.EARN_FLEXIBLE_SAVING,
+                        NormalizedTransactionType.LENDING_DEPOSIT,
+                        NormalizedTransactionType.VAULT_DEPOSIT),
+                Criteria.where("excludedFromAccounting").ne(true)
+        )), NormalizedTransaction.class).stream().filter(this::hasFundPrincipalOutbound).toList();
+        if (stakingOuts.isEmpty()) {
+            return 0;
+        }
+
+        Map<String, List<NormalizedTransaction>> collapseGroups = new LinkedHashMap<>();
+        for (NormalizedTransaction tx : mongoOperations.find(Query.query(new Criteria().andOperator(
+                Criteria.where("source").is(NormalizedTransactionSource.BYBIT),
+                Criteria.where("correlationId").regex("^" + java.util.regex.Pattern.quote(COLLAPSED_CORR_PREFIX)),
+                Criteria.where("excludedFromAccounting").ne(true)
+        )), NormalizedTransaction.class)) {
+            String corr = tx.getCorrelationId();
+            if (corr != null && corr.startsWith(COLLAPSED_CORR_PREFIX)) {
+                collapseGroups.computeIfAbsent(corr, ignored -> new ArrayList<>()).add(tx);
+            }
+        }
+        if (collapseGroups.isEmpty()) {
+            return 0;
+        }
+
+        int suppressed = 0;
+        for (NormalizedTransaction staking : stakingOuts) {
+            String uid = extractBybitUid(staking.getWalletAddress());
+            String family = principalFamily(staking);
+            BigDecimal stakedQty = fundPrincipalOutboundQty(staking);
+            Instant stakedAt = staking.getBlockTimestamp();
+            if (uid == null || family == null || stakedQty == null || stakedAt == null) {
+                continue;
+            }
+            Instant lookbackStart = stakedAt.minus(CORRIDOR_STAKE_CYCLE_LOOKBACK);
+            Instant windowStart = null;
+            BigDecimal corridorSum = BigDecimal.ZERO;
+            for (NormalizedTransaction corridorIn : corridorIns) {
+                if (!uid.equals(extractBybitUid(corridorIn.getWalletAddress()))
+                        || !family.equals(principalFamily(corridorIn))) {
+                    continue;
+                }
+                Instant ts = corridorIn.getBlockTimestamp();
+                if (ts == null || ts.isBefore(lookbackStart) || ts.isAfter(stakedAt.plus(CORRIDOR_STAKE_CYCLE_MARGIN))) {
+                    continue;
+                }
+                BigDecimal qty = principalAbsQty(corridorIn);
+                if (qty == null) {
+                    continue;
+                }
+                corridorSum = corridorSum.add(qty);
+                if (windowStart == null || ts.isBefore(windowStart)) {
+                    windowStart = ts;
+                }
+            }
+            if (windowStart == null || !quantitiesMatch(corridorSum, stakedQty)) {
+                continue;
+            }
+            Instant cycleStart = windowStart.minus(CORRIDOR_STAKE_CYCLE_MARGIN);
+            Instant cycleEnd = stakedAt.plus(CORRIDOR_STAKE_CYCLE_MARGIN);
+            for (List<NormalizedTransaction> group : collapseGroups.values()) {
+                if (!isFundUtaInternalTransferGroup(group, uid, family)) {
+                    continue;
+                }
+                boolean withinCycle = group.stream().anyMatch(leg -> {
+                    Instant ts = leg.getBlockTimestamp();
+                    return ts != null && !ts.isBefore(cycleStart) && !ts.isAfter(cycleEnd);
+                });
+                if (!withinCycle) {
+                    continue;
+                }
+                for (NormalizedTransaction leg : group) {
+                    if (Boolean.TRUE.equals(leg.getExcludedFromAccounting())) {
+                        continue;
+                    }
+                    leg.setExcludedFromAccounting(true);
+                    leg.setAccountingExclusionReason(EXCLUSION_REASON_CORRIDOR_STAKE_CYCLE);
+                    leg.setUpdatedAt(now);
+                    dirty.add(leg);
+                    suppressed++;
+                }
+            }
+        }
+        return suppressed;
+    }
+
+    private boolean isFundInboundCorridor(NormalizedTransaction tx) {
+        if (tx == null || tx.getType() != NormalizedTransactionType.INTERNAL_TRANSFER) {
+            return false;
+        }
+        // Self-contained (does not rely on the query criteria): only a deterministic on-chain↔CEX
+        // corridor deposit credit qualifies, never a stream-mirror / plain internal transfer.
+        String corr = tx.getCorrelationId();
+        if (corr == null || !corr.startsWith(CorridorCorrelationKeyFactory.CORRIDOR_PREFIX)) {
+            return false;
+        }
+        if (!"FUND".equals(extractSubAccount(tx.getWalletAddress()))) {
+            return false;
+        }
+        NormalizedTransaction.Flow principal = principalFlow(tx);
+        return principal != null
+                && principal.getQuantityDelta() != null
+                && principal.getQuantityDelta().signum() > 0;
+    }
+
+    private boolean hasFundPrincipalOutbound(NormalizedTransaction tx) {
+        // Self-contained: only a genuine :FUND principal-deposit outbound (staking / earn / lending /
+        // vault) qualifies, so the predicate is correct even if the caller's query is broadened.
+        return isFundPrincipalDepositType(tx == null ? null : tx.getType())
+                && fundPrincipalOutboundQty(tx) != null;
+    }
+
+    private static boolean isFundPrincipalDepositType(NormalizedTransactionType type) {
+        return type == NormalizedTransactionType.STAKING_DEPOSIT
+                || type == NormalizedTransactionType.EARN_FLEXIBLE_SAVING
+                || type == NormalizedTransactionType.LENDING_DEPOSIT
+                || type == NormalizedTransactionType.VAULT_DEPOSIT;
+    }
+
+    /**
+     * Absolute quantity of the outbound (negative) principal leg that genuinely sits on {@code :FUND}
+     * for a principal-deposit transaction — either the transaction wallet or the flow's account ref
+     * ends with {@code :FUND}. {@code null} when no such leg exists.
+     */
+    private BigDecimal fundPrincipalOutboundQty(NormalizedTransaction tx) {
+        if (tx == null || tx.getFlows() == null) {
+            return null;
+        }
+        boolean walletFund = "FUND".equals(extractSubAccount(tx.getWalletAddress()));
+        for (NormalizedTransaction.Flow flow : tx.getFlows()) {
+            if (flow == null || flow.getRole() == NormalizedLegRole.FEE || flow.getQuantityDelta() == null) {
+                continue;
+            }
+            if (flow.getQuantityDelta().signum() >= 0) {
+                continue;
+            }
+            boolean flowFund = "FUND".equals(extractSubAccount(flow.getAccountRef()));
+            if (walletFund || flowFund) {
+                return flow.getQuantityDelta().abs();
+            }
+        }
+        return null;
+    }
+
+    private boolean isFundUtaInternalTransferGroup(
+            List<NormalizedTransaction> group,
+            String uid,
+            String family
+    ) {
+        if (group == null || group.size() < 2) {
+            return false;
+        }
+        boolean sawFund = false;
+        boolean sawUta = false;
+        for (NormalizedTransaction leg : group) {
+            if (leg.getType() != NormalizedTransactionType.INTERNAL_TRANSFER) {
+                return false;
+            }
+            if (!uid.equals(extractBybitUid(leg.getWalletAddress())) || !family.equals(principalFamily(leg))) {
+                return false;
+            }
+            String sub = extractSubAccount(leg.getWalletAddress());
+            if ("FUND".equals(sub)) {
+                sawFund = true;
+            } else if ("UTA".equals(sub)) {
+                sawUta = true;
+            } else {
+                return false;
+            }
+        }
+        return sawFund && sawUta;
+    }
+
+    private String principalFamily(NormalizedTransaction tx) {
+        NormalizedTransaction.Flow principal = principalFlow(tx);
+        if (principal == null) {
+            return null;
+        }
+        String family = AccountingAssetFamilySupport.continuityIdentity(principal);
+        if (family != null) {
+            return family;
+        }
+        return principal.getAssetSymbol() == null
+                ? null
+                : principal.getAssetSymbol().trim().toUpperCase(Locale.ROOT);
+    }
+
+    private static BigDecimal principalAbsQty(NormalizedTransaction tx) {
+        NormalizedTransaction.Flow principal = principalFlow(tx);
+        return principal == null || principal.getQuantityDelta() == null
+                ? null
+                : principal.getQuantityDelta().abs();
+    }
+
+    private static boolean quantitiesMatch(BigDecimal left, BigDecimal right) {
+        if (left == null || right == null || left.signum() <= 0 || right.signum() <= 0) {
+            return false;
+        }
+        BigDecimal diff = left.subtract(right).abs();
+        BigDecimal tolerance = right.multiply(CORRIDOR_STAKE_CYCLE_QTY_TOLERANCE);
+        return diff.compareTo(tolerance) <= 0;
     }
 
     /**

@@ -22,7 +22,7 @@ Architecture Decision Records for WalletRadar. Each ADR captures a single decisi
 | [ADR-014](ADR-014-portfolio-conservation-gate.md) | Portfolio conservation gate at dashboard publication | Proposed | 2026-05-16 | N19 — invariants |
 | [ADR-015](ADR-015-per-counterparty-basis-pool.md) | Per-counterparty AVCO basis pool | Proposed | 2026-05-16 | N19 — basis engine |
 | [ADR-016](ADR-016-bybit-internal-transfer-bundling.md) | Bybit multi-stream internal-transfer bundling and round-trip pairing | Accepted | 2026-05-20 | Cycle 12 — Bybit coverage |
-| [ADR-017](ADR-017-timeline-avco-authority.md) | Timeline AVCO authority (move-basis read model) | Accepted (amended) | 2026-05-27 | Cluster E — timeline AVCO |
+| [ADR-017](ADR-017-timeline-avco-authority.md) | Timeline AVCO authority (move-basis read model) | Accepted (amended; chart-source superseded by ADR-045) | 2026-05-27 | Cluster E — timeline AVCO |
 | [ADR-018](ADR-018-lp-protocol-family-materialization.md) | LP Protocol-Family Flow Materialization | Accepted (amended) | 2026-05-27 | LP families + ETH-C10 |
 | [ADR-019](ADR-019-corridor-carry-policy.md) | Corridor carry policy: outbound-AVCO preservation | Accepted | 2026-05-29 | ETH-C1 — corridor AVCO |
 | [ADR-020](ADR-020-bridge-late-carry-passthrough-reservation.md) | Bridge late-carry pass-through reservation invariant | Accepted | 2026-05-29 | ETH-V2-C1 — bridge ordering |
@@ -43,6 +43,11 @@ Architecture Decision Records for WalletRadar. Each ADR captures a single decisi
 | [ADR-035](ADR-035-lending-receipt-identity-resolver.md) | Lending receipt identity resolver | Accepted | 2026-06-24 | Lending |
 | [ADR-036](ADR-036-contract-first-lending-market-key-and-live-debt.md) | Contract-first lending market key + live debt | Accepted | 2026-06-24 | Lending |
 | [ADR-037](ADR-037-lp-enrichment-and-earnings-snapshots.md) | LP on-chain enrichment and earnings snapshots | Accepted | 2026-06-24 | Liquidity pools |
+| [ADR-040](ADR-040-dual-cost-basis-net-tax-avco.md) | Dual cost basis — Net AVCO and Tax AVCO | Accepted | 2026-06-30 | Cost basis / replay / UI |
+| [ADR-041](ADR-041-bybit-earn-corridor-pairing-and-fund-carry-symmetry.md) | Bybit Earn corridor pairing and `:FUND` carry symmetry | Accepted | 2026-06-30 | Bybit corridor / linking / replay |
+| [ADR-042](ADR-042-honor-flow-accountref-in-replay-position-resolution.md) | Honor `flow.accountRef` in replay position resolution | Accepted | 2026-07-01 | Bybit sub-account / replay |
+| [ADR-043](ADR-043-corridor-carry-basis-conservation.md) | Corridor carry basis conservation (continuation of ADR-041) | Accepted | 2026-07-01 | Bybit corridor / linking / replay / pricing |
+| [ADR-045](ADR-045-family-covered-weighted-move-basis-avco-series.md) | Family covered-weighted move-basis AVCO series (supersedes ADR-017 chart source) | Accepted | 2026-07-02 | Move-basis chart / read model |
 
 ## Cycle/5 N19 cluster — implementation plan mapping
 

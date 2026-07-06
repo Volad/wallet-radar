@@ -101,6 +101,7 @@ export class DashboardDataService {
         isLiveQuote: position.isLiveQuote,
         priceIssue: this.toIssueCode(position.priceIssue),
         avcoUsd: position.avcoUsd,
+        netAvcoUsd: position.netAvcoUsd ?? position.avcoUsd,
         unrealizedPnlPct: position.unrealizedPnlPct,
         unrealizedPnlUsd: position.unrealizedPnlUsd,
         realizedPnlUsd: position.realizedPnlUsd,

@@ -3,6 +3,7 @@ package com.walletradar.liquiditypools.application;
 import com.walletradar.costbasis.domain.AssetLedgerPoint;
 import com.walletradar.costbasis.domain.LpReceiptBasisPool;
 import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.common.PriceSource;
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.domain.session.UserSessionRepository;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
@@ -13,7 +14,10 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.liquiditypools.config.LiquidityPoolsProperties;
 import com.walletradar.liquiditypools.persistence.LpEarningPoint;
 import com.walletradar.liquiditypools.persistence.LpPositionSnapshot;
+import com.walletradar.pricing.domain.PriceQuote;
 import com.walletradar.pricing.persistence.CurrentPriceQuoteDocument;
+import com.walletradar.pricing.persistence.HistoricalPriceCacheService;
+import com.walletradar.pricing.resolver.external.PriceExternalSourceOrchestrator;
 import com.walletradar.session.application.AccountingUniverseService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -31,6 +35,7 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -51,6 +56,10 @@ class SessionLpQueryServiceTest {
     private LpPositionSnapshotService snapshotService;
     @Mock
     private LpEarningPointService earningPointService;
+    @Mock
+    private HistoricalPriceCacheService historicalPriceCacheService;
+    @Mock
+    private PriceExternalSourceOrchestrator priceExternalSourceOrchestrator;
 
     @Test
     void costBasisTiesToBasisPools() {
@@ -162,6 +171,60 @@ class SessionLpQueryServiceTest {
     }
 
     @Test
+    void openEntryUsesHistoricalUsdWhenFlowValueMissing() {
+        NormalizedTransaction entry = lpTx(NormalizedTransactionType.LP_ENTRY, Instant.parse("2026-06-26T16:12:19Z"));
+        entry.setFlows(List.of(
+                flow(NormalizedLegRole.TRANSFER, "WETH", "-0.20999999980759044", null),
+                flow(NormalizedLegRole.TRANSFER, "USDC", "-233.089686", null)
+        ));
+
+        when(priceExternalSourceOrchestrator.prioritizedSources(any()))
+                .thenReturn(List.of(PriceSource.BYBIT, PriceSource.COINGECKO));
+        when(historicalPriceCacheService.findCanonicalQuote(any(), eq(entry.getBlockTimestamp()), eq(PriceSource.BYBIT)))
+                .thenReturn(Optional.of(new PriceQuote(
+                        new BigDecimal("1578.96"),
+                        PriceSource.BYBIT,
+                        entry.getBlockTimestamp(),
+                        "USD",
+                        "hist:eth"
+                )));
+
+        LpPositionSnapshot snap = wethSnapshot();
+        SessionLpView view = query(List.of(entry), basisPools(new BigDecimal("596.7520464442760874")), ledgerPoints(), snap);
+
+        LpPositionView position = view.positions().getFirst();
+        assertThat(position.depositedMarketUsd()).isEqualByComparingTo("564.6712856961930011424");
+        assertThat(position.entryToken0().sym()).isEqualTo("WETH");
+        assertThat(position.entryToken0().usd()).isEqualByComparingTo("331.5815996961930011424");
+        assertThat(position.entryToken1().sym()).isEqualTo("USDC");
+        assertThat(position.entryToken1().usd()).isEqualByComparingTo("233.089686");
+        assertThat(position.txns().getFirst().valueUsd()).isEqualByComparingTo("331.5815996961930011424");
+        assertThat(position.txns().getFirst().valueUsd1()).isEqualByComparingTo("233.089686");
+        assertThat(position.txns().getFirst().totalValueUsd()).isEqualByComparingTo("564.6712856961930011424");
+    }
+
+    @Test
+    void entryTokenSidesFollowSnapshotOrderInsteadOfAlphabeticalOrder() {
+        NormalizedTransaction entry = lpTx(NormalizedTransactionType.LP_ENTRY, Instant.parse("2026-06-26T16:12:19Z"));
+        entry.setFlows(List.of(
+                flow(NormalizedLegRole.TRANSFER, "WETH", "-0.20999999980759044", new BigDecimal("331.5815996961930011424")),
+                flow(NormalizedLegRole.TRANSFER, "USDC", "-233.089686", new BigDecimal("233.089686"))
+        ));
+
+        LpPositionView position = query(
+                List.of(entry),
+                basisPools(new BigDecimal("596.7520464442760874")),
+                ledgerPoints(),
+                wethSnapshot()
+        ).positions().getFirst();
+
+        assertThat(position.entryToken0().sym()).isEqualTo("WETH");
+        assertThat(position.entryToken0().qty()).isEqualByComparingTo("0.20999999980759044");
+        assertThat(position.entryToken1().sym()).isEqualTo("USDC");
+        assertThat(position.entryToken1().qty()).isEqualByComparingTo("233.089686");
+    }
+
+    @Test
     void openPositionSurvivesMissingCurrentPrices() {
         SessionLpView view = query(
                 openPositionTxs(),
@@ -172,7 +235,7 @@ class SessionLpQueryServiceTest {
         );
         LpPositionView position = view.positions().getFirst();
         assertThat(position.tvlUsd()).isNotNull();
-        assertThat(position.depositedMarketUsd()).isEqualByComparingTo("4991");
+        assertThat(position.depositedMarketUsd()).isEqualByComparingTo("6720");
         assertThat(position.token0().usd()).isNull();
     }
 
@@ -207,6 +270,8 @@ class SessionLpQueryServiceTest {
         when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(prices);
         when(snapshotService.findByUniverseId(UNIVERSE_ID)).thenReturn(snapshot == null ? List.of() : List.of(snapshot));
         when(earningPointService.findSeriesByCorrelationId(CORR)).thenReturn(List.of());
+        lenient().when(priceExternalSourceOrchestrator.prioritizedSources(any()))
+                .thenReturn(List.of(PriceSource.BYBIT, PriceSource.COINGECKO));
 
         LiquidityPoolsProperties properties = new LiquidityPoolsProperties();
         properties.setDustThresholdUsd(BigDecimal.ZERO);
@@ -216,6 +281,8 @@ class SessionLpQueryServiceTest {
                 mongoOperations,
                 snapshotService,
                 earningPointService,
+                historicalPriceCacheService,
+                priceExternalSourceOrchestrator,
                 properties
         );
         return service.findSessionLp(SESSION_ID, LpPositionScope.ALL).orElseThrow();
@@ -256,6 +323,20 @@ class SessionLpQueryServiceTest {
 
         tx.setFlows(List.of(eth, usdc));
         return tx;
+    }
+
+    private static NormalizedTransaction.Flow flow(
+            NormalizedLegRole role,
+            String symbol,
+            String qty,
+            BigDecimal valueUsd
+    ) {
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(role);
+        flow.setAssetSymbol(symbol);
+        flow.setQuantityDelta(new BigDecimal(qty));
+        flow.setValueUsd(valueUsd);
+        return flow;
     }
 
     private static List<LpReceiptBasisPool> basisPools(BigDecimal basisUsd) {
@@ -303,6 +384,28 @@ class SessionLpQueryServiceTest {
         usdc.setQty(new BigDecimal("2410"));
         usdc.setUsd(new BigDecimal("2410"));
         snapshot.setToken0(eth);
+        snapshot.setToken1(usdc);
+        return snapshot;
+    }
+
+    private static LpPositionSnapshot wethSnapshot() {
+        LpPositionSnapshot snapshot = new LpPositionSnapshot();
+        snapshot.setCorrelationId(CORR);
+        snapshot.setUniverseId(UNIVERSE_ID);
+        snapshot.setStatus("in_range");
+        snapshot.setTvlUsd(new BigDecimal("584.91"));
+        snapshot.setUnclaimedFeesUsd(new BigDecimal("2.14"));
+        snapshot.setSnapshotAt(Instant.parse("2026-07-02T13:23:00Z"));
+        snapshot.setSnapshotStale(false);
+        LpPositionSnapshot.TokenSide weth = new LpPositionSnapshot.TokenSide();
+        weth.setSym("WETH");
+        weth.setQty(new BigDecimal("0.188633564864138622"));
+        weth.setUsd(new BigDecimal("317.08"));
+        LpPositionSnapshot.TokenSide usdc = new LpPositionSnapshot.TokenSide();
+        usdc.setSym("USDC");
+        usdc.setQty(new BigDecimal("267.83"));
+        usdc.setUsd(new BigDecimal("267.83"));
+        snapshot.setToken0(weth);
         snapshot.setToken1(usdc);
         return snapshot;
     }

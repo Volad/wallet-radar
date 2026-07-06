@@ -97,6 +97,8 @@ public final class AsyncLifecycleBucket {
         BigDecimal appliedCoveredQuantity = BigDecimal.ZERO;
         BigDecimal appliedUncoveredQuantity = BigDecimal.ZERO;
         BigDecimal appliedCost = BigDecimal.ZERO;
+        // ADR-040 Change 2: track net cost lane through bucket slicing
+        BigDecimal appliedNetCost = BigDecimal.ZERO;
 
         while (remainingRequested.signum() > 0 && queue != null && !queue.isEmpty()) {
             CarryTransfer carry = queue.removeFirst();
@@ -107,11 +109,17 @@ public final class AsyncLifecycleBucket {
             BigDecimal usedCost = carry.avco() == null
                     ? BigDecimal.ZERO
                     : usedCoveredQuantity.multiply(carry.avco(), MC);
+            // ADR-040 Change 2: net cost uses netAvco (falls back to avco for legacy carries)
+            BigDecimal effectiveNetAvco = carry.netAvco() != null ? carry.netAvco() : carry.avco();
+            BigDecimal usedNetCost = effectiveNetAvco == null
+                    ? BigDecimal.ZERO
+                    : usedCoveredQuantity.multiply(effectiveNetAvco, MC);
 
             appliedQuantity = appliedQuantity.add(usedQuantity, MC);
             appliedCoveredQuantity = appliedCoveredQuantity.add(usedCoveredQuantity, MC);
             appliedUncoveredQuantity = appliedUncoveredQuantity.add(usedUncoveredQuantity, MC);
             appliedCost = appliedCost.add(usedCost, MC);
+            appliedNetCost = appliedNetCost.add(usedNetCost, MC);
 
             if (carryQuantity.compareTo(usedQuantity) > 0) {
                 BigDecimal remainingQuantity = carryQuantity.subtract(usedQuantity, MC);
@@ -120,15 +128,22 @@ public final class AsyncLifecycleBucket {
                 BigDecimal remainingUncoveredQuantity =
                         nonNegative(carry.uncoveredQuantity().subtract(usedUncoveredQuantity, MC));
                 BigDecimal remainingCost = nonNegative(carry.costBasisUsd().subtract(usedCost, MC));
+                BigDecimal srcNetCost = carry.netCostBasisUsd() != null ? carry.netCostBasisUsd() : carry.costBasisUsd();
+                BigDecimal remainingNetCost = nonNegative(srcNetCost.subtract(usedNetCost, MC));
                 BigDecimal remainingAvco = remainingCoveredQuantity.signum() <= 0
                         ? null
                         : safeDivide(remainingCost, remainingCoveredQuantity);
+                BigDecimal remainingNetAvco = remainingCoveredQuantity.signum() <= 0
+                        ? null
+                        : safeDivide(remainingNetCost, remainingCoveredQuantity);
                 queue.addFirst(new CarryTransfer(
                         remainingQuantity,
                         remainingCoveredQuantity,
                         remainingUncoveredQuantity,
                         remainingCost,
                         remainingAvco,
+                        remainingNetCost,
+                        remainingNetAvco,
                         carry.pendingInbound(),
                         carry.assetKey()
                 ));
@@ -145,12 +160,17 @@ public final class AsyncLifecycleBucket {
         BigDecimal appliedAvco = appliedCoveredQuantity.signum() <= 0
                 ? null
                 : safeDivide(appliedCost, appliedCoveredQuantity);
+        BigDecimal appliedNetAvco = appliedCoveredQuantity.signum() <= 0
+                ? null
+                : safeDivide(appliedNetCost, appliedCoveredQuantity);
         return new CarryTransfer(
                 appliedQuantity,
                 appliedCoveredQuantity,
                 appliedUncoveredQuantity,
                 appliedCost,
                 appliedAvco,
+                appliedNetCost,
+                appliedNetAvco,
                 false,
                 restoreAssetKey
         );

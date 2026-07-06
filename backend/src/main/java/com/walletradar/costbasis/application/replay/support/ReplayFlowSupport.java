@@ -39,12 +39,36 @@ public class ReplayFlowSupport {
         genericFlowReplayEngine.applyBuy(flow, position);
     }
 
+    public void applyBuy(NormalizedTransaction transaction, NormalizedTransaction.Flow flow, PositionState position) {
+        genericFlowReplayEngine.applyBuy(transaction, flow, position);
+    }
+
     public void applyBuyWithAcquisitionCost(
             NormalizedTransaction.Flow flow,
             PositionState position,
             BigDecimal acquisitionCostUsd
     ) {
         genericFlowReplayEngine.applyBuyWithAcquisitionCost(flow, position, acquisitionCostUsd);
+    }
+
+    public void applyBuyWithAcquisitionCost(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow,
+            PositionState position,
+            BigDecimal acquisitionCostUsd
+    ) {
+        boolean zeroNet = transaction != null
+                && com.walletradar.costbasis.support.ZeroCostAcquisitionSupport.isZeroCostAcquisition(transaction.getType());
+        genericFlowReplayEngine.applyBuyWithAcquisitionCost(flow, position, acquisitionCostUsd, zeroNet);
+    }
+
+    public void applyBuyWithAcquisitionCost(
+            NormalizedTransaction.Flow flow,
+            PositionState position,
+            BigDecimal acquisitionCostUsd,
+            com.walletradar.domain.transaction.normalized.NormalizedTransactionType acquisitionType
+    ) {
+        genericFlowReplayEngine.applyBuyWithAcquisitionCost(flow, position, acquisitionCostUsd, acquisitionType);
     }
 
     public void applySell(NormalizedTransaction.Flow flow, PositionState position) {
@@ -78,6 +102,22 @@ public class ReplayFlowSupport {
         genericFlowReplayEngine.restoreToPosition(quantity, position, cost, uncoveredQuantity, avco);
     }
 
+    public void restoreToPosition(
+            BigDecimal quantity,
+            PositionState position,
+            BigDecimal cost,
+            BigDecimal netCost,
+            BigDecimal uncoveredQuantity,
+            BigDecimal avco
+    ) {
+        genericFlowReplayEngine.restoreToPosition(quantity, position, cost, netCost, uncoveredQuantity, avco);
+    }
+
+    /** ADR-040 Change 2: net-conserving carry-aware restore. */
+    public void restoreToPosition(CarryTransfer carry, PositionState position) {
+        genericFlowReplayEngine.restoreToPosition(carry, position);
+    }
+
     public void applyUnknownTransfer(NormalizedTransaction.Flow flow, PositionState position) {
         genericFlowReplayEngine.applyUnknownTransfer(flow, position);
     }
@@ -109,9 +149,19 @@ public class ReplayFlowSupport {
             BigDecimal carryBasisUsd
     ) {
         genericFlowReplayEngine.applyAuthoritativeLateInboundCarryBasis(
-                destination,
-                provisionalBasisUsd,
-                carryBasisUsd
+                destination, provisionalBasisUsd, carryBasisUsd
+        );
+    }
+
+    /** ADR-040 Change 2: net-lane-aware late-attach. */
+    public void applyAuthoritativeLateInboundCarryBasis(
+            PositionState destination,
+            BigDecimal provisionalBasisUsd,
+            BigDecimal carryBasisUsd,
+            BigDecimal netCarryBasisUsd
+    ) {
+        genericFlowReplayEngine.applyAuthoritativeLateInboundCarryBasis(
+                destination, provisionalBasisUsd, carryBasisUsd, netCarryBasisUsd
         );
     }
 
@@ -197,8 +247,11 @@ public class ReplayFlowSupport {
                 position.quantity(),
                 position.perWalletAvco(),
                 position.totalCostBasisUsd(),
+                position.perWalletNetAvco(),
+                position.netTotalCostBasisUsd(),
                 position.totalGasPaidUsd(),
                 position.totalRealisedPnlUsd(),
+                position.totalNetRealisedPnlUsd(),
                 position.quantityShortfall(),
                 position.uncoveredQuantity(),
                 position.hasIncompleteHistory(),

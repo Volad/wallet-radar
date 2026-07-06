@@ -1,6 +1,6 @@
 # ADR-017 — Timeline AVCO authority (move-basis read model)
 
-**Status:** Accepted (amended 2026-06-07 — LP-lock carry-forward; amended 2026-05-29 — staked ETH inclusion)  
+**Status:** Accepted (amended 2026-06-30 — dual Net/Tax lane authority per ADR-040; amended 2026-06-07 — LP-lock carry-forward; amended 2026-05-29 — staked ETH inclusion). **Chart-source decision superseded by [ADR-045](ADR-045-family-covered-weighted-move-basis-avco-series.md) (2026-07-02):** the primary move-basis chart line is now the family covered-weighted per-bucket-snapshot series, not the per-`accountingAssetIdentity` selection below. The spot-family filter and staked-ETH inclusion table here remain authoritative and are reused by ADR-045.  
 **Date:** 2026-05-27  
 **Context:** Cluster E — ETH family move-basis timeline showed misleading AVCO (~$1.60, ~$271k, ~$783k) while per-wallet ledger AVCO remained ~$2k–$4k.
 
@@ -16,7 +16,7 @@ The UI chart connects `avcoBefore = previous.avcoAfter` without changing layout.
 
 ## Decision
 
-Introduce **`TimelineAvcoAuthority`** as the sole selector of timeline `avcoAfterUsd` for family ledger pages.
+Introduce **`TimelineAvcoAuthority`** as the sole selector of timeline **`avcoAfterUsd` and `netAvcoAfterUsd`** for family ledger pages (ADR-040). Family rollup numerators are never chart AVCO sources for either lane.
 
 ### Selection rules
 

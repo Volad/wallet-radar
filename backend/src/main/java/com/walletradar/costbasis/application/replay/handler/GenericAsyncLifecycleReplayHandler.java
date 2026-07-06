@@ -115,13 +115,7 @@ public class GenericAsyncLifecycleReplayHandler {
         BigDecimal requestedQuantity = flow.getQuantityDelta().abs();
         CarryTransfer sameAssetCarry = bucket.takeSameAssetCarry(assetIdentity, requestedQuantity, position.assetKey());
         if (sameAssetCarry != null) {
-            flowSupport.restoreToPosition(
-                    sameAssetCarry.quantity(),
-                    position,
-                    sameAssetCarry.costBasisUsd(),
-                    sameAssetCarry.uncoveredQuantity(),
-                    sameAssetCarry.avco()
-            );
+            flowSupport.restoreToPosition(sameAssetCarry, position);
             BigDecimal residualQuantity = requestedQuantity.subtract(sameAssetCarry.quantity(), MC);
             if (residualQuantity.signum() <= 0) {
                 if (bucket.isEmpty()) {
@@ -191,13 +185,7 @@ public class GenericAsyncLifecycleReplayHandler {
                         position.assetKey()
                 );
                 if (sameAssetCarry != null) {
-                    flowSupport.restoreToPosition(
-                            sameAssetCarry.quantity(),
-                            position,
-                            sameAssetCarry.costBasisUsd(),
-                            sameAssetCarry.uncoveredQuantity(),
-                            sameAssetCarry.avco()
-                    );
+                    flowSupport.restoreToPosition(sameAssetCarry, position);
                     replayState.ledgerPointCollector().record(
                             transaction,
                             flow,

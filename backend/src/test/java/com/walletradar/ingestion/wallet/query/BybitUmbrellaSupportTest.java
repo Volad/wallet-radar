@@ -70,6 +70,7 @@ class BybitUmbrellaSupportTest {
         assertThat(scaled.quantity()).isEqualByComparingTo("40");
         assertThat(scaled.coveredQuantity()).isEqualByComparingTo("32");
         assertThat(scaled.totalCostBasisUsd()).isEqualByComparingTo("64");
+        assertThat(scaled.ledgerScale()).isEqualByComparingTo("0.4");
     }
 
     @Test
@@ -85,6 +86,7 @@ class BybitUmbrellaSupportTest {
         assertThat(scaled.quantity()).isEqualByComparingTo("661.17");
         assertThat(scaled.coveredQuantity()).isEqualByComparingTo("200");
         assertThat(scaled.totalCostBasisUsd()).isEqualByComparingTo("36");
+        assertThat(scaled.ledgerScale()).isEqualByComparingTo("1");
     }
 
     @Test
@@ -100,5 +102,6 @@ class BybitUmbrellaSupportTest {
         assertThat(scaled.quantity()).isEqualByComparingTo("100");
         assertThat(scaled.coveredQuantity()).isEqualByComparingTo("80");
         assertThat(scaled.totalCostBasisUsd()).isEqualByComparingTo("160");
+        assertThat(scaled.ledgerScale()).isEqualByComparingTo("1");
     }
 }

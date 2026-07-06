@@ -55,7 +55,7 @@ class BorrowLiabilityTrackerTest {
     void setUp() {
         tracker = new BorrowLiabilityTracker(repository);
         lenient().when(repository.findByUniverseId(anyString())).thenReturn(List.of());
-        GenericFlowReplayEngine engine = new GenericFlowReplayEngine();
+        GenericFlowReplayEngine engine = new GenericFlowReplayEngine(null);
         flowSupport = new ReplayFlowSupport(engine);
         assetSupport = new ReplayAssetSupport();
         borrowHandler = new BorrowReplayHandler(tracker, assetSupport, flowSupport, null);

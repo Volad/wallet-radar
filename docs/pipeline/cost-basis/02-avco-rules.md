@@ -1,9 +1,23 @@
 # Cost Basis — AVCO Rules
 
-> **Last updated:** 2026-06-05  
+> **Last updated:** 2026-06-30  
 > **Pipeline stage:** `ACCOUNTING_REPLAY`
 
 Core AVCO mechanics live in `GenericFlowReplayEngine` and are invoked by `ReplayDispatcher` / `TransferReplayHandler` for generic flows. All math uses `MathContext.DECIMAL128`.
+
+## Dual lanes: Net AVCO and Tax AVCO
+
+Since ADR-040, replay maintains **two parallel cost numerators** on the same quantity pool:
+
+| Lane | API field | Acquisition cost for rewards / LP fee claims |
+|---|---|---|
+| **Tax AVCO** | `avcoUsd`, `totalCostBasisUsd` | FMV at receipt (existing behavior) |
+| **Net AVCO** | `netAvcoUsd`, `netTotalCostBasisUsd` | $0 when `ZeroCostAcquisitionSupport.isZeroCostAcquisition(type)` |
+
+- Disposals relieve covered basis from both numerators using each lane's AVCO at time of sale.
+- Realised PnL is tracked separately: `realisedPnlDeltaUsd` (tax) vs `netRealisedPnlDeltaUsd` (net).
+- Carry transfers store `netCostBasisUsd` / `netAvco` alongside tax fields in `CarryTransfer`.
+- BORROW and REPAY follow the same rules in both lanes.
 
 ## AVCO formulas
 
@@ -128,6 +142,93 @@ while rejecting dust residues. When the umbrella cannot cover the outbound leg b
 drain resolves to `:FUND`, so the principal AVCO is **conserved** into the receipt (basis leaves
 the source, the inbound restores it) instead of carrying `~$0`. Spot-funded inventory that genuinely
 sits on the umbrella still covers the transfer and is drained as before.
+
+#### F-6 — corridor carry basis follows quantity; the paired carry is authoritative (ADR-043)
+
+For a Bybit intra-account custody round-trip (`FUND ↔ UTA ↔ EARN` subscribe ↔ redeem), the **paired
+carry value** released by the OUT leg (`drainCarrySlice` → pending queue → IN restore) is the **sole
+authoritative basis** restored to the matched IN leg. Basis follows quantity onto one key; the redeem
+IN leg inherits exactly the subscribe OUT leg's basis in **both** the Tax and Net lanes.
+
+The AVCO-re-derivation fallbacks (`ContinuityCarryService.syntheticBybitEarnProductCarry`,
+`TransferReplayHandler.resolveEarnPrincipalFallbackAvco` / `applyEarnPrincipalLotCarryOverride`) are
+**demoted**: they fire **only** when the pending queue proves no paired carry exists (an open /
+unredeemed position, or a genuinely unpaired boundary leg). A redeem must never inject `$0`-cost
+quantity on the IN leg — that dilutes AVCO 5–9× and leaks the net lane equally.
+
+- **Net lane independence:** the matched-carry path routes through the 8-arg `CarryTransfer`
+  constructor so `Σ(netCostBasisDelta) = 0` is enforced independently and is never inferred by
+  collapsing `netCostBasisUsd` into `costBasisUsd`.
+- **Interest (deferred):** earn-principal legs are not corridor transfers, so the matched IN leg is
+  resolved by the quantity-strict matcher (`ReplayPendingTransferMatcher`, ±0.0001). A redeem exceeding
+  the subscribed principal by more than that tolerance never reaches the matched carry branch, so the
+  excess cannot be booked there. Widening that **shared** bridge/corridor matcher is out of scope
+  (RC-9 blast radius); the principal/interest split belongs upstream in the pairer (RC-0/linking). In
+  practice Bybit credits interest as a separate row (reward qty < 0.5%, NET ≈ TAX), so this is deferred
+  rather than forced through the shared matcher.
+- **FUND-drain symmetry:** the `:FUND` outbound drain is symmetric for **all** `FUND ↔ UTA` legs, not
+  only earn-principal context, so the umbrella-phantom class cannot reappear on non-earn legs.
+- **Scope guard:** restricted to the earn/internal carry constructors — the bridge / pass-through
+  constructors (`bridgeInboundCarry`, `bridgeSettlementInboundCarry`, reserved pass-through carries)
+  are untouched, preserving the RC-9 ETH corridor (AMANWETH 3.06 @ ~$2936).
+- **Co-event sibling pairing (RC-0 amendment):** the pairer links the two legs of ONE subscribe/redeem
+  event (same `blockTimestamp`, equal principal, opposite earn/non-earn) FIRST so both share one
+  `correlationId`; the cross-event subscribe→redeem FIFO then uses **equal-principal** matching (never
+  partial `min`). This keeps an OPEN subscribe's `:EARN` inbound and `:FUND` outbound in the same replay
+  queue so the inbound is credited from its own paired carry.
+- **Materialize-then-refine (RC-B amendment):** a paired earn inbound materialises its covered quantity
+  at market first, then the authoritative paired carry only REFINES the basis (never re-adds quantity).
+  Quantity is conserved for the OPEN-subscribe path while the covered basis stays authoritative.
+
+Invariant (per ADR-043): (a) per-transfer `Σ costBasisDelta(OUT+IN) = 0` and `Σ netCostBasisDelta = 0`;
+(b) per-family (umbrella + subs) `Σ` over all internal `INTERNAL_TRANSFER + EARN_*` legs `= 0` (±dust),
+**for both basis and quantity**. The `CorridorBasisConservationGuard` end-of-replay sweep flags a
+leftover OUT carry with no matched IN as `CORRIDOR_BASIS_IMBALANCE`; `BybitEarnSubPoolConservationGuard`
+flags a non-zero `Σ internal quantityDelta` per `uid|symbol` as `CORRIDOR_QTY_IMBALANCE` (so a dropped
+paired inbound surfaces instead of silently destroying inventory).
+
+#### F-7 — pre-coverage inflow pricing is bounded, never out-of-range (ADR-043, RC-D)
+
+An inflow dated **before** an asset's first `historical_prices` bucket must resolve to a bounded
+nearest-valid-bucket market price (`PriceExternalSourceOrchestrator.resolveBoundedNearestBucket`,
+`PRE_COVERAGE_NEAREST_WINDOW = 400 d`), never an out-of-range fallback value.
+
+The DOGE `150.591 @ $0.5766/unit` "Bot" lot (2025-01-31) is **not** an out-of-range historical bucket —
+it is derived by `BybitBotTransferCostBasisService` at normalization from net stablecoin consumed
+(`BOT_LEDGER`) and marked CONFIRMED, so it never enters the pricing orchestrator, and on a clean rebuild
+(`--clear-pricing-cache`) `historical_prices` is empty during normalization. The clamp therefore lands
+at the **replay market authority** (`ReplayMarketAuthority.resolve`), where prices are fully populated:
+a `BOT_LEDGER` flow whose event predates the asset's first cached bucket is clamped to the nearest valid
+bucket via the pre-coverage-only projection (`resolvePreCoverageNearestBucket` →
+`HistoricalPriceCacheService.findPreCoverageNearestQuote`, same 400-day window). The gate is narrow
+(`BOT_LEDGER` **and** genuinely pre-coverage), so in-coverage bot lots keep their derived price and no
+other flow is affected: DOGE `150.591 × 0.23246 ≈ $35.0` replaces `$86.833`.
+
+**`applyBuy` must route `BOT_LEDGER` through the authority (ADR-043 Amendment A1).** The clamp above
+was dead for a normally-priced acquire: `GenericFlowReplayEngine.applyBuy` short-circuits on
+`hasKnownPrice(flow)` (TRUE for a `BOT_LEDGER` lot, whose unit price is stamped at normalization) and
+booked `qty × flow.unitPriceUsd` directly, so the acquire never consulted `ReplayMarketAuthority`
+(only pending-inbound materialization did). `applyBuy` now — **before** the `hasKnownPrice`
+short-circuit — routes a `BOT_LEDGER` flow (with a non-null transaction and authority) through
+`replayMarketAuthority.resolve(transaction, flow)` and books `qty × resolvedUnitPrice`. `resolve()`
+clamps a genuinely pre-coverage bot lot and returns the FLOW price unchanged for an in-coverage bot
+lot; blast radius is `BOT_LEDGER` only (ETH and normally-priced spot acquires keep the short-circuit).
+
+**The A1 clamp was DEAD in production — DI defect (ADR-043 Amendment A6).** `GenericFlowReplayEngine`
+had a no-arg constructor competing with `GenericFlowReplayEngine(ReplayMarketAuthority)` whose
+`@Autowired` sat on the **parameter**, not the constructor. Spring only promotes a constructor for
+autowiring at CONSTRUCTOR level, so it silently picked the no-arg one and left `replayMarketAuthority`
+`null` — killing the `BOT_LEDGER` clamp **and** every `resolve()` path in `materializePendingInbound` /
+`applyInboundShortfallSpotFallback`. The no-arg constructor is removed and the DI constructor now
+carries constructor-level `@Autowired` (a structural test guards against reintroducing the footgun).
+Wiring the authority also revives market-at-timestamp materialization for **unpaired** `:EARN` inbounds
+(the netted-consolidation and UTA→EARN cases the shared quantity-strict matcher cannot pair — ADR-043
+Amendment A7), so they enter the pool at market price instead of `$0` / being dropped.
+
+**Interest is not synthesized by the earn pairer (ADR-043 Amendment A5).** Flexible-Savings interest
+arrives only as Bybit's real daily `REWARD_CLAIM` (`FUNDING_HISTORY`) legs; the removed
+`INTEREST_BAND_FRACTION` synthesis double-counted income and stole principal, so earn-principal pairing
+is now equal-principal only.
 
 ### On SELL (DISPOSE)
 
@@ -274,9 +375,21 @@ AVCO math application per type:
 
 ## Move-basis timeline AVCO (read model)
 
-Per ADR-017, `TimelineAvcoAuthority` selects `avcoAfterUsd` for family ledger pages. Replay write remains authoritative for bucket economics.
+**As of ADR-045 (2026-07-02)** the primary move-basis **chart line** is the **family covered-weighted
+per-bucket AVCO**: at each grouped event, `avcoAfterUsd = Σ coveredᵢ·avcoᵢ / Σ coveredᵢ` (and the Net
+analogue) over the live per-bucket states of spot-family-filtered members. This supersedes the
+per-`accountingAssetIdentity` `TimelineAvcoAuthority` selection below as the chart source. It is
+deterministic (no median/outlier/cap heuristics), reconciles to the summary/headline family AVCO, and
+breaks (null) when family covered qty = 0 (ADR-031). It is **not** the non-conserving cumulative-delta
+`Σ costBasisDelta / coveredQty` estimator, which overstates and manufactures artifacts. Replay write remains
+authoritative for bucket economics. The `TimelineAvcoAuthority` `avcoKind` classification table below is
+retained for historical context; the spot-family filter it references (ADR-017) is still authoritative and
+reused by ADR-045.
 
-| Scenario | Timeline AVCO |
+Note: the covered-weighted line still shows large **economically-real** swings when the bulk of an asset
+moves in/out of the excluded `FAMILY:LP_RECEIPT` view — this is the honest metric, not a defect.
+
+| Scenario | Timeline AVCO (legacy `TimelineAvcoAuthority` classification) |
 |----------|---------------|
 | Normal ACQUIRE/DISPOSE | `PRIMARY_FLOW` from spot-family member point |
 | LENDING_DEPOSIT (spot→receipt in family) | `PRIMARY_FLOW` or `CARRIED_FORWARD` from in-family receipt |

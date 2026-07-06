@@ -2158,14 +2158,14 @@ class AvcoReplayServiceTest {
     }
 
     @Test
-    void bybitExecutionSpotCmethSellDisposesFromFundInventory() {
+    void bybitExecutionSpotCmethSellDisposesFromUmbrellaInventory() {
+        // RC-1: a Bybit spot CMETH acquisition consolidates on the UID umbrella (FUND/UTA collapse),
+        // clearing the ETH-family :FUND phantom, so the spot sell disposes from the umbrella lot.
         NormalizedTransaction fundAcquire = tx("1", "0xcmeth-acquire", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
                 flow(NormalizedLegRole.BUY, "CMETH", "0.14379048", "2873", PriceSource.BINANCE));
         fundAcquire.setSource(NormalizedTransactionSource.BYBIT);
         fundAcquire.setWalletAddress("BYBIT:33625378:FUND");
         fundAcquire.getFlows().getFirst().setAccountRef("BYBIT:33625378:FUND");
-        fundAcquire.setContinuityCandidate(true);
-        fundAcquire.setCorrelationId("bybit-earn-principal-v1:cmeth-fund");
 
         NormalizedTransaction sell = tx(
                 "BYBIT-33625378:EXECUTION_SPOT:2200000000707964104:CMETHUSDT",
@@ -2189,7 +2189,7 @@ class AvcoReplayServiceTest {
                 .filter(point -> point.getBasisEffect() == AssetLedgerPoint.BasisEffect.DISPOSE)
                 .findFirst()
                 .orElseThrow();
-        assertThat(dispose.getWalletAddress()).isEqualTo("BYBIT:33625378:FUND");
+        assertThat(dispose.getWalletAddress()).isEqualTo("BYBIT:33625378");
         assertThat(dispose.getQuantityDelta()).isEqualByComparingTo("-0.0038");
         assertThat(dispose.getCostBasisDeltaUsd())
                 .isLessThan(BigDecimal.ZERO)
@@ -2198,6 +2198,8 @@ class AvcoReplayServiceTest {
 
     @Test
     void bybitEarnPrincipalRedeemRestoresCoveredBasisOnFundInbound() {
+        // RC-1: the redeem FUND-side credit (reported on :FUND) consolidates onto the UID umbrella,
+        // where the Flexible-Savings principal actually lives, restoring covered basis there.
         NormalizedTransaction buy = tx("1", "0xbuy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
                 flow(NormalizedLegRole.BUY, "AGLD", "500", "5", PriceSource.BINANCE));
         buy.setSource(NormalizedTransactionSource.BYBIT);
@@ -2229,7 +2231,7 @@ class AvcoReplayServiceTest {
         service().replayConfirmed();
 
         AssetLedgerPoint fund = capturedLedgerPoints().stream()
-                .filter(point -> "BYBIT:33625378:FUND".equals(point.getWalletAddress()))
+                .filter(point -> "BYBIT:33625378".equals(point.getWalletAddress()))
                 .filter(point -> "AGLD".equalsIgnoreCase(point.getAssetSymbol()))
                 .filter(point -> point.getQuantityDelta() != null && point.getQuantityDelta().signum() > 0)
                 .max(Comparator.comparing(AssetLedgerPoint::getReplaySequence))
@@ -2633,12 +2635,14 @@ class AvcoReplayServiceTest {
     void corridorFundOutboundUsesFundAvcoWhenFundHasBasis() {
         // Sub-pattern A guard: when FUND has real inventory (qty>0), resolveCarrySourcePosition
         // must NOT fall back to umbrella — it should use FUND's own basis.
+        // Establish :FUND inventory via the on-chain-fund corridor corr, which legitimately keeps the
+        // :FUND sub-account key (RC-1 only consolidates bybit-earn-principal-v1: FUND onto the umbrella).
         NormalizedTransaction fundAcquire = tx("1", "0xfund-buy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
                 flow(NormalizedLegRole.BUY, "USDC", "100", "1", PriceSource.BINANCE));
         fundAcquire.setSource(NormalizedTransactionSource.BYBIT);
         fundAcquire.setWalletAddress("BYBIT:2:FUND");
         fundAcquire.setContinuityCandidate(true);
-        fundAcquire.setCorrelationId("bybit-earn-principal-v1:fund-setup");
+        fundAcquire.setCorrelationId("bybit-earn-onchain-fund-v1:fund-setup");
 
         NormalizedTransaction fundCorridorOut = tx("2", "0xcorr-b", 1, NormalizedTransactionType.EXTERNAL_TRANSFER_OUT,
                 flow(NormalizedLegRole.SELL, "USDC", "-100", null, null));
@@ -2734,6 +2738,78 @@ class AvcoReplayServiceTest {
         AssetLedgerPoint carryIn = latestPoint(points, "user-on-chain-3", NetworkId.ARBITRUM, "ETH", null);
         assertThat(carryIn.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.CARRY_IN);
         assertThat(carryIn.getTotalCostBasisAfterUsd()).isEqualByComparingTo("0");
+    }
+
+    @Test
+    void corridorOutboundDrainsFundSliceAndUmbrellaRemainder_emittingBothPoints() {
+        // ETH umbrella-phantom regression anchor: the principal a corridor withdrawal spends is
+        // split between the :FUND slice (earn-onchain-fund basis) and a larger umbrella lot (an
+        // ETH buy that never drained when ETH left the venue). The drain plan must drain BOTH and
+        // emit a ledger point for EACH, so the persisted trail conserves: umbrella qtyAfter→0 and
+        // :FUND qtyAfter→0, with Σ|CARRY_OUT qtyDelta| == outbound qty and the combined basis
+        // carried onto the on-chain CARRY_IN.
+        NormalizedTransaction fundAcquire = tx("1", "0xfund-eth", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flow(NormalizedLegRole.BUY, "ETH", "0.6929", "3000", PriceSource.BINANCE));
+        fundAcquire.setSource(NormalizedTransactionSource.BYBIT);
+        fundAcquire.setWalletAddress("BYBIT:9:FUND");
+        fundAcquire.setContinuityCandidate(true);
+        fundAcquire.setCorrelationId("bybit-earn-onchain-fund-v1:eth-fund-setup");
+
+        // Umbrella ETH lot that the corridor outbound must also drain (the 1.149 phantom).
+        NormalizedTransaction umbrellaAcquire = tx("2", "0xumbrella-eth", 1, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flow(NormalizedLegRole.BUY, "ETH", "1.149", "3818", PriceSource.BINANCE));
+        umbrellaAcquire.setSource(NormalizedTransactionSource.BYBIT);
+        umbrellaAcquire.setWalletAddress("BYBIT:9");
+
+        // Off-venue corridor withdrawal of the full 1.8419 ETH from :FUND. :FUND only covers
+        // 0.6929 → the 1.149 remainder waterfalls onto the BYBIT:9 umbrella sibling.
+        NormalizedTransaction fundCorridorOut = tx("3", "0xcorr-eth", 2, NormalizedTransactionType.EXTERNAL_TRANSFER_OUT,
+                flow(NormalizedLegRole.SELL, "ETH", "-1.8419", null, null));
+        fundCorridorOut.setSource(NormalizedTransactionSource.BYBIT);
+        fundCorridorOut.setWalletAddress("BYBIT:9:FUND");
+        fundCorridorOut.setCorrelationId("BYBIT-CORRIDOR:ARBITRUM:0xcorr-eth");
+        fundCorridorOut.setContinuityCandidate(true);
+        fundCorridorOut.setMatchedCounterparty("user-on-chain-eth");
+
+        NormalizedTransaction onChainIn = tx("4", "0xcorr-eth", 3, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flow(NormalizedLegRole.BUY, "ETH", "1.8419", null, null));
+        onChainIn.setWalletAddress("user-on-chain-eth");
+        onChainIn.setNetworkId(NetworkId.ARBITRUM);
+        onChainIn.setCorrelationId("BYBIT-CORRIDOR:ARBITRUM:0xcorr-eth");
+        onChainIn.setContinuityCandidate(true);
+        onChainIn.setMatchedCounterparty("BYBIT:9:FUND");
+
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                NormalizedTransactionStatus.CONFIRMED
+        )).thenReturn(List.of(fundAcquire, umbrellaAcquire, fundCorridorOut, onChainIn));
+
+        service().replayConfirmed();
+
+        List<AssetLedgerPoint> points = capturedLedgerPoints();
+
+        // Both Bybit sub-pools drained to zero (network is null for BYBIT-source positions).
+        AssetLedgerPoint fundPoint = latestPoint(points, "BYBIT:9:FUND", null, "ETH", null);
+        assertThat(fundPoint.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.CARRY_OUT);
+        assertThat(fundPoint.getQuantityAfter()).isEqualByComparingTo("0");
+
+        AssetLedgerPoint umbrellaPoint = latestPoint(points, "BYBIT:9", null, "ETH", null);
+        assertThat(umbrellaPoint.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.CARRY_OUT);
+        assertThat(umbrellaPoint.getQuantityAfter()).isEqualByComparingTo("0");
+
+        // Σ|CARRY_OUT qtyDelta| across the two emitted drain points == outbound quantity.
+        BigDecimal drainedTotal = points.stream()
+                .filter(point -> point.getBasisEffect() == AssetLedgerPoint.BasisEffect.CARRY_OUT)
+                .filter(point -> "ETH".equalsIgnoreCase(point.getAssetSymbol()))
+                .filter(point -> point.getWalletAddress() != null
+                        && point.getWalletAddress().startsWith("BYBIT:9"))
+                .map(point -> point.getQuantityDelta().abs())
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        assertThat(drainedTotal).isEqualByComparingTo("1.8419");
+
+        // Combined basis (≈0.6929×3000 + 1.149×3818) carried onto the on-chain inbound.
+        AssetLedgerPoint carryIn = latestPoint(points, "user-on-chain-eth", NetworkId.ARBITRUM, "ETH", null);
+        assertThat(carryIn.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.CARRY_IN);
+        assertThat(carryIn.getTotalCostBasisAfterUsd()).isGreaterThan(new BigDecimal("6000"));
     }
 
     @Test
@@ -3192,7 +3268,7 @@ class AvcoReplayServiceTest {
         com.walletradar.costbasis.application.replay.support.ReplayAssetSupport assetSupport =
                 new com.walletradar.costbasis.application.replay.support.ReplayAssetSupport();
         com.walletradar.costbasis.application.replay.support.GenericFlowReplayEngine genericFlowReplayEngine =
-                new com.walletradar.costbasis.application.replay.support.GenericFlowReplayEngine();
+                new com.walletradar.costbasis.application.replay.support.GenericFlowReplayEngine(null);
         com.walletradar.costbasis.application.replay.support.ReplayFlowSupport replayFlowSupport =
                 new com.walletradar.costbasis.application.replay.support.ReplayFlowSupport(genericFlowReplayEngine);
         com.walletradar.costbasis.application.replay.support.ContinuityCarryService continuityCarryService =
@@ -3433,6 +3509,8 @@ class AvcoReplayServiceTest {
                 accountingShortfallAuditService,
                 accountingUniverseService,
                 new com.walletradar.costbasis.application.replay.support.CorridorBasisConservationGuard(),
+                org.mockito.Mockito.mock(com.walletradar.ingestion.pipeline.bybit.BybitEarnSubPoolConservationGuard.class),
+                org.mockito.Mockito.mock(com.walletradar.costbasis.application.replay.support.NativePoolReconciliationGate.class),
                 new com.walletradar.costbasis.application.replay.support.ReplayAccumulatorDriftCanary()
         );
     }

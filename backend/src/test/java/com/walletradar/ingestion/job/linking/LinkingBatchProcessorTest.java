@@ -16,8 +16,11 @@ import com.walletradar.ingestion.pipeline.clarification.BybitInternalTransferOrp
 import com.walletradar.ingestion.pipeline.clarification.BybitOnChainEarnOrphanRepairService;
 import com.walletradar.ingestion.pipeline.bybit.BybitInternalTransferExternalCpReclassifier;
 import com.walletradar.ingestion.pipeline.bybit.BybitInternalTransferPairer;
+import com.walletradar.ingestion.pipeline.bybit.BybitStreamAuthorityCollapser;
 import com.walletradar.ingestion.pipeline.clarification.AddressPoisoningDetector;
 import com.walletradar.ingestion.pipeline.clarification.EtherFiOftBridgeInClassifier;
+import com.walletradar.ingestion.pipeline.clarification.GmxEntryRequestLinkService;
+import com.walletradar.ingestion.pipeline.clarification.GmxExitSettlementLinkService;
 import com.walletradar.ingestion.pipeline.clarification.GmxV2RefundClassifier;
 import com.walletradar.ingestion.pipeline.clarification.KnownBridgeRouterExternalTypeCorrectionService;
 import com.walletradar.ingestion.pipeline.clarification.NftMintRetagger;
@@ -62,6 +65,7 @@ class LinkingBatchProcessorTest {
         BybitInternalTransferPairer bybitInternalTransferPairer = mock(BybitInternalTransferPairer.class);
         BybitInternalTransferExternalCpReclassifier bybitInternalTransferExternalCpReclassifier =
                 mock(BybitInternalTransferExternalCpReclassifier.class);
+        BybitStreamAuthorityCollapser bybitStreamAuthorityCollapser = mock(BybitStreamAuthorityCollapser.class);
         KnownBridgeRouterExternalTypeCorrectionService knownBridgeRouterExternalTypeCorrectionService =
                 mock(KnownBridgeRouterExternalTypeCorrectionService.class);
         OwnWalletBridgeMistypeCorrectionService ownWalletBridgeMistypeCorrectionService =
@@ -74,6 +78,8 @@ class LinkingBatchProcessorTest {
         AddressPoisoningDetector addressPoisoningDetector = mock(AddressPoisoningDetector.class);
         SpoofTokenDetector spoofTokenDetector = mock(SpoofTokenDetector.class);
         ScamDisperseClonePhishingTagger scamDisperseClonePhishingTagger = mock(ScamDisperseClonePhishingTagger.class);
+        GmxExitSettlementLinkService gmxExitSettlementLinkService = mock(GmxExitSettlementLinkService.class);
+        GmxEntryRequestLinkService gmxEntryRequestLinkService = mock(GmxEntryRequestLinkService.class);
         GmxV2RefundClassifier gmxV2RefundClassifier = mock(GmxV2RefundClassifier.class);
         EtherFiOftBridgeInClassifier etherFiOftBridgeInClassifier = mock(EtherFiOftBridgeInClassifier.class);
         NftMintRetagger nftMintRetagger = mock(NftMintRetagger.class);
@@ -94,11 +100,14 @@ class LinkingBatchProcessorTest {
         when(bybitTransferContinuityRepairService.reconcileOutstandingPairs(25)).thenReturn(17);
         when(bybitInternalTransferExternalCpReclassifier.reclassifySameUidExternalToInternal(org.mockito.ArgumentMatchers.any()))
                 .thenReturn(18);
+        when(bybitStreamAuthorityCollapser.suppressCorridorDepositStakeCycles()).thenReturn(44);
         when(protocolAttributionClassifier.classifyProtocolAttribution(25)).thenReturn(32);
         when(crossNetworkBridgePairFallbackService.reconcileOrphanInbounds(25)).thenReturn(20);
         when(addressPoisoningDetector.detectAndExclude(25)).thenReturn(25);
         when(spoofTokenDetector.detectAndExclude(25)).thenReturn(35);
         when(scamDisperseClonePhishingTagger.tagPhishingOutbounds(25)).thenReturn(26);
+        when(gmxExitSettlementLinkService.linkOutstandingSettlements(25)).thenReturn(0);
+        when(gmxEntryRequestLinkService.linkOutstandingRequests(25)).thenReturn(0);
         when(gmxV2RefundClassifier.classifyGmxRefunds(25)).thenReturn(27);
         when(etherFiOftBridgeInClassifier.reclassifyEtherFiOftInbounds(25)).thenReturn(28);
         when(nftMintRetagger.reclassifyNftMints(25)).thenReturn(30);
@@ -128,6 +137,7 @@ class LinkingBatchProcessorTest {
                 bridgePairContinuityRepairService,
                 onChainInternalTransferPairRepairService,
                 bybitInternalTransferExternalCpReclassifier,
+                bybitStreamAuthorityCollapser,
                 knownBridgeRouterExternalTypeCorrectionService,
                 ownWalletBridgeMistypeCorrectionService,
                 multiCounterpartyCorrectionService,
@@ -137,6 +147,8 @@ class LinkingBatchProcessorTest {
                 addressPoisoningDetector,
                 spoofTokenDetector,
                 scamDisperseClonePhishingTagger,
+                gmxExitSettlementLinkService,
+                gmxEntryRequestLinkService,
                 gmxV2RefundClassifier,
                 etherFiOftBridgeInClassifier,
                 nftMintRetagger
@@ -145,7 +157,7 @@ class LinkingBatchProcessorTest {
         AtomicInteger heartbeatCount = new AtomicInteger();
         int processed = processor.processNextBatch(25, heartbeatCount::incrementAndGet);
 
-        assertThat(processed).isEqualTo(726);
-        assertThat(heartbeatCount).hasValue(35);
+        assertThat(processed).isEqualTo(770);
+        assertThat(heartbeatCount).hasValue(38);
     }
 }

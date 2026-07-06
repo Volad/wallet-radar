@@ -6,6 +6,8 @@ import com.walletradar.costbasis.application.replay.planning.PassThroughCorridor
 import com.walletradar.costbasis.application.replay.query.ConfirmedReplayQueryService;
 import com.walletradar.costbasis.application.replay.state.ReplayExecutionState;
 import com.walletradar.costbasis.application.replay.support.CorridorBasisConservationGuard;
+import com.walletradar.costbasis.application.replay.support.NativePoolReconciliationGate;
+import com.walletradar.ingestion.pipeline.bybit.BybitEarnSubPoolConservationGuard;
 import com.walletradar.costbasis.application.replay.support.ReplayAccumulatorDriftCanary;
 import com.walletradar.costbasis.application.replay.support.ReplayAssetSupport;
 import com.walletradar.costbasis.application.replay.support.ReplayFlowSupport;
@@ -57,6 +59,8 @@ public class AvcoReplayService {
     private final AccountingShortfallAuditService accountingShortfallAuditService;
     private final AccountingUniverseService accountingUniverseService;
     private final CorridorBasisConservationGuard corridorBasisConservationGuard;
+    private final BybitEarnSubPoolConservationGuard bybitEarnSubPoolConservationGuard;
+    private final NativePoolReconciliationGate nativePoolReconciliationGate;
     private final ReplayAccumulatorDriftCanary replayAccumulatorDriftCanary;
 
     public int replayConfirmed() {
@@ -142,6 +146,13 @@ public class AvcoReplayService {
             // default (CorridorBasisConservationGuard.SEVERITY); surfaces any released CARRY_OUT
             // that no credit inherited so an orphaned corridor/bridge basis cannot pass silently.
             corridorBasisConservationGuard.evaluate(replayState);
+            // Evaluate against the just-computed in-memory points: the persisted asset_ledger_points
+            // are still the previous run's state at this sweep (saved below), so a DB re-query here
+            // would report ledgerQty=0 for every Bybit asset.
+            bybitEarnSubPoolConservationGuard.evaluate(ledgerPoints);
+            // ADR-044 D4: end-of-replay native-pool reconciliation sweep against on-chain native
+            // balances. WARN-mode by default; proves NATIVE:<chain> pools reconcile within dust.
+            nativePoolReconciliationGate.evaluate(ledgerPoints);
 
             if (accountingUniverseId == null || accountingUniverseId.isBlank()) {
                 assetLedgerPointRepository.deleteAll();

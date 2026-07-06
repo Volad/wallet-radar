@@ -83,6 +83,13 @@ public class AssetLedgerPoint {
     private BigDecimal avcoBeforeUsd;
     private BigDecimal avcoAfterUsd;
 
+    private BigDecimal netTotalCostBasisBeforeUsd;
+    private BigDecimal netTotalCostBasisAfterUsd;
+    private BigDecimal netAvcoBeforeUsd;
+    private BigDecimal netAvcoAfterUsd;
+    private BigDecimal netCostBasisDeltaUsd;
+    private BigDecimal netRealisedPnlDeltaUsd;
+
     private BigDecimal basisBackedQuantityAfter;
     private BigDecimal quantityShortfallAfter;
     private BigDecimal uncoveredQuantityAfter;

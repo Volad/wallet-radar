@@ -25,7 +25,9 @@ public record SessionAssetLedgerResponse(
             BigDecimal coveredQuantity,
             BigDecimal uncoveredQuantity,
             BigDecimal totalCostBasisUsd,
-            BigDecimal avcoUsd
+            BigDecimal avcoUsd,
+            BigDecimal netTotalCostBasisUsd,
+            BigDecimal netAvcoUsd
     ) {
     }
     public record CurrentState(
@@ -34,7 +36,10 @@ public record SessionAssetLedgerResponse(
             BigDecimal uncoveredQuantity,
             BigDecimal totalCostBasisUsd,
             BigDecimal avcoUsd,
+            BigDecimal netTotalCostBasisUsd,
+            BigDecimal netAvcoUsd,
             BigDecimal realisedPnlUsd,
+            BigDecimal netRealisedPnlUsd,
             BigDecimal gasPaidUsd,
             List<UncoveredBucket> uncoveredBuckets,
             List<ShortfallSource> shortfallSources
@@ -89,7 +94,11 @@ public record SessionAssetLedgerResponse(
             BigDecimal coveredQuantityAfter,
             BigDecimal uncoveredQuantityAfter,
             BigDecimal totalCostBasisAfterUsd,
+            BigDecimal avcoBeforeUsd,
             BigDecimal avcoAfterUsd,
+            BigDecimal netTotalCostBasisAfterUsd,
+            BigDecimal netAvcoBeforeUsd,
+            BigDecimal netAvcoAfterUsd,
             String avcoKind,
             String fromAddress,
             String toAddress,
@@ -156,6 +165,10 @@ public record SessionAssetLedgerResponse(
             BigDecimal totalCostBasisAfterUsd,
             BigDecimal avcoBeforeUsd,
             BigDecimal avcoAfterUsd,
+            BigDecimal netTotalCostBasisBeforeUsd,
+            BigDecimal netTotalCostBasisAfterUsd,
+            BigDecimal netAvcoBeforeUsd,
+            BigDecimal netAvcoAfterUsd,
             BigDecimal basisBackedQuantityAfter,
             BigDecimal uncoveredQuantityDelta,
             BigDecimal quantityShortfallAfter,

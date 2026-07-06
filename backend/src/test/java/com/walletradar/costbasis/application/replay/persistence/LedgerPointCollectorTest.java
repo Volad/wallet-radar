@@ -165,7 +165,7 @@ class LedgerPointCollectorTest {
     }
 
     private static PositionSnapshot emptySnapshot() {
-        return new PositionSnapshot(
+        return PositionSnapshot.mirrorTax(
                 BigDecimal.ZERO,
                 null,
                 BigDecimal.ZERO,

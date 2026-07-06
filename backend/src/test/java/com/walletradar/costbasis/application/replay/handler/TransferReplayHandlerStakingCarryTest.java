@@ -47,7 +47,7 @@ class TransferReplayHandlerStakingCarryTest {
     @BeforeEach
     void setUp() {
         var assetSupport = new ReplayAssetSupport();
-        var engine = new GenericFlowReplayEngine();
+        var engine = new GenericFlowReplayEngine(null);
         var flowSupport = new ReplayFlowSupport(engine);
         var carryService = new ContinuityCarryService(engine, flowSupport);
         var keyFactory = new ReplayPendingTransferKeyFactory(assetSupport);

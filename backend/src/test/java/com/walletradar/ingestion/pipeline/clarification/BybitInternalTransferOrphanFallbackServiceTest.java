@@ -131,6 +131,35 @@ class BybitInternalTransferOrphanFallbackServiceTest {
         verifyNoInteractions(normalizedTransactionRepository);
     }
 
+    @Test
+    void earnPrincipalPairedLegIsNotDemoted() {
+        // RC-1: a FUND debit paired to its real EARN_FLEXIBLE_SAVING credit by
+        // BybitOnChainEarnOrphanRepairService carries a bybit-earn-principal-v1: corrId and must stay
+        // INTERNAL_TRANSFER. Its EARN counterpart is EARN_FLEXIBLE_SAVING-typed (absent from this
+        // INTERNAL_TRANSFER candidate set), so the leg looks like a singleton; without the guard it
+        // would be demoted and the linking convergence loop would never reach a fixed point.
+        String earnPrincipalCorr =
+                com.walletradar.ingestion.pipeline.bybit.BybitEarnPrincipalTransferPairer
+                        .EARN_PRINCIPAL_CORRELATION_PREFIX + "deadbeef";
+        NormalizedTransaction fund = internalTransfer(
+                "earn-principal-fund", earnPrincipalCorr, "BYBIT:33625378:FUND", "-263.6026");
+        fund.setMatchedCounterparty("BYBIT:33625378:EARN");
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(fund));
+
+        BybitInternalTransferOrphanFallbackService service = new BybitInternalTransferOrphanFallbackService(
+                mongoOperations,
+                normalizedTransactionRepository
+        );
+
+        assertThat(service.reconcileOrphanInternals()).isZero();
+        verifyNoInteractions(normalizedTransactionRepository);
+        // The protected leg keeps its INTERNAL_TRANSFER type, corrId and continuity flag intact.
+        assertThat(fund.getType()).isEqualTo(NormalizedTransactionType.INTERNAL_TRANSFER);
+        assertThat(fund.getCorrelationId()).isEqualTo(earnPrincipalCorr);
+        assertThat(fund.getContinuityCandidate()).isTrue();
+    }
+
     private static NormalizedTransaction internalTransfer(
             String id,
             String correlationId,

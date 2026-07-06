@@ -770,6 +770,7 @@ public class SessionDashboardQueryService {
             Boolean isLiveQuote,
             String priceIssue,
             BigDecimal avcoUsd,
+            BigDecimal netAvcoUsd,
             BigDecimal unrealizedPnlPct,
             BigDecimal unrealizedPnlUsd,
             BigDecimal realizedPnlUsd,
@@ -812,6 +813,7 @@ public class SessionDashboardQueryService {
         private BigDecimal quantity = BigDecimal.ZERO;
         private BigDecimal coveredQuantity = BigDecimal.ZERO;
         private BigDecimal totalCostBasisUsd = BigDecimal.ZERO;
+        private BigDecimal totalNetCostBasisUsd = BigDecimal.ZERO;
         private String issue;
         private ProtocolValuationMetadata valuationMetadata;
 
@@ -835,11 +837,22 @@ public class SessionDashboardQueryService {
                     ? BigDecimal.ZERO
                     : zeroIfNull(latestPoint.getBasisBackedQuantityAfter()).min(currentQuantity);
             coveredQuantity = coveredQuantity.add(exactCoveredQuantity, MC);
-            if (latestPoint != null && latestPoint.getAvcoAfterUsd() != null && exactCoveredQuantity.signum() > 0) {
-                totalCostBasisUsd = totalCostBasisUsd.add(
-                    latestPoint.getAvcoAfterUsd().multiply(exactCoveredQuantity, MC),
-                    MC
-                );
+            if (latestPoint != null && exactCoveredQuantity.signum() > 0) {
+                if (latestPoint.getAvcoAfterUsd() != null) {
+                    totalCostBasisUsd = totalCostBasisUsd.add(
+                            latestPoint.getAvcoAfterUsd().multiply(exactCoveredQuantity, MC),
+                            MC
+                    );
+                }
+                BigDecimal netAvcoPoint = latestPoint.getNetAvcoAfterUsd() != null
+                        ? latestPoint.getNetAvcoAfterUsd()
+                        : latestPoint.getAvcoAfterUsd();
+                if (netAvcoPoint != null) {
+                    totalNetCostBasisUsd = totalNetCostBasisUsd.add(
+                            netAvcoPoint.multiply(exactCoveredQuantity, MC),
+                            MC
+                    );
+                }
             }
             issue = mergeIssueCodes(issue, classifyIssue(latestPoint, currentQuantity, exactCoveredQuantity));
             String valuationLookup = blank(protocolLookupSymbol) ? symbol : protocolLookupSymbol;
@@ -868,6 +881,7 @@ public class SessionDashboardQueryService {
             quantity = liveLimit;
             coveredQuantity = coveredQuantity.multiply(scale, MC);
             totalCostBasisUsd = totalCostBasisUsd.multiply(scale, MC);
+            totalNetCostBasisUsd = totalNetCostBasisUsd.multiply(scale, MC);
         }
 
         /**
@@ -924,10 +938,19 @@ public class SessionDashboardQueryService {
                     ? coveredQuantity.divide(quantity, MC)
                     : BigDecimal.ONE;
             BigDecimal avcoUsd = rawAvcoUsd;
+            BigDecimal rawNetAvcoUsd = coveredQuantity.signum() <= 0
+                    ? BigDecimal.ZERO
+                    : totalNetCostBasisUsd.divide(coveredQuantity, MC);
+            BigDecimal netAvcoUsd = rawNetAvcoUsd;
             if (coverageRatio.compareTo(AVCO_CAP_COVERAGE_THRESHOLD) < 0
                     && priceUsd.signum() > 0
                     && rawAvcoUsd.compareTo(priceUsd.multiply(AVCO_CAP_PRICE_MULTIPLIER, MC)) > 0) {
                 avcoUsd = priceUsd;
+            }
+            if (coverageRatio.compareTo(AVCO_CAP_COVERAGE_THRESHOLD) < 0
+                    && priceUsd.signum() > 0
+                    && rawNetAvcoUsd.compareTo(priceUsd.multiply(AVCO_CAP_PRICE_MULTIPLIER, MC)) > 0) {
+                netAvcoUsd = priceUsd;
             }
             BigDecimal unrealizedPnlUsd = coveredQuantity.multiply(priceUsd, MC).subtract(totalCostBasisUsd, MC);
             BigDecimal unrealizedPnlPct = totalCostBasisUsd.signum() <= 0
@@ -947,6 +970,7 @@ public class SessionDashboardQueryService {
                     effectivePriceSnapshot.isLiveQuote(),
                     effectivePriceSnapshot.priceIssue(),
                     avcoUsd,
+                    netAvcoUsd,
                     unrealizedPnlPct,
                     unrealizedPnlUsd,
                     realizedPnlUsd,

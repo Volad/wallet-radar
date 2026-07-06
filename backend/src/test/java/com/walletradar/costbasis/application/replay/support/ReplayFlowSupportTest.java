@@ -19,7 +19,7 @@ class ReplayFlowSupportTest {
 
     @Test
     void copyTransactionRetainsCounterpartyAddress() {
-        ReplayFlowSupport support = new ReplayFlowSupport(new GenericFlowReplayEngine());
+        ReplayFlowSupport support = new ReplayFlowSupport(new GenericFlowReplayEngine(null));
 
         NormalizedTransaction transaction = new NormalizedTransaction();
         transaction.setId("tx-1");

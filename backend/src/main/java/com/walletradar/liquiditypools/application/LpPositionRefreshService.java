@@ -196,8 +196,10 @@ public class LpPositionRefreshService {
             return thread;
         });
         try {
+            // Pool-level cache (LpPoolDepthCacheService) prevents duplicate depth RPC fetches
+            // across positions sharing the same pool, so skipping the fetch policy here is safe.
             Future<LpOnChainEnrichmentService.EnrichmentResult> future = executor.submit(() ->
-                    LpDepthFetchPolicy.callSkippingRpcFetch(() -> enrichmentService.enrich(context)));
+                    enrichmentService.enrich(context));
             return future.get(MANUAL_REFRESH_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
         } catch (TimeoutException timeout) {
             log.warn("LP on-demand refresh timed out correlationId={} timeoutSec={}",
@@ -246,6 +248,21 @@ public class LpPositionRefreshService {
                 ? daily.divide(tvl, MC).multiply(BigDecimal.valueOf(36500), MC)
                 : null;
 
+        // Compounding-receipt protocols (GMX, Pendle) embed fee growth into TVL — there are no
+        // separate claimable/unclaimed fee entries. Always synthesise daily earnings and APR from
+        // the protocol-reported fee APR stored in the snapshot. This avoids spurious negative
+        // daily values that appear when the estimated cumulative changes (e.g., formula update or
+        // partial exit changing the fee base). The delta approach is unreliable for estimates.
+        if (isCompoundingFamily(context.family()) && tvl.signum() > 0) {
+            BigDecimal protocolApr = snapshot.getFeeAprPct() != null
+                    ? snapshot.getFeeAprPct() : snapshot.getAprNow();
+            if (protocolApr != null && protocolApr.signum() > 0) {
+                dailyApr = protocolApr;
+                daily = tvl.multiply(protocolApr, MC).divide(BigDecimal.valueOf(36500), MC);
+                cumulative = priorCumulative.add(daily, MC);
+            }
+        }
+
         LpEarningPoint point = new LpEarningPoint();
         point.setCorrelationId(context.correlationId());
         point.setUniverseId(context.universeId());
@@ -256,6 +273,10 @@ public class LpPositionRefreshService {
         point.setPositionValueUsd(tvl);
         point.setUpdatedAt(Instant.now());
         earningPointService.upsertDailyPoint(point);
+    }
+
+    private static boolean isCompoundingFamily(String family) {
+        return "GMX_LP".equals(family) || "GLV_LP".equals(family) || "PENDLE_LP".equals(family);
     }
 
     private BigDecimal claimedFeesUsd(String universeId, String correlationId) {
@@ -453,6 +474,7 @@ public class LpPositionRefreshService {
         boolean staked = txs.stream()
                 .anyMatch(tx -> correlationId.equals(tx.getCorrelationId())
                         && tx.getType() == NormalizedTransactionType.LP_POSITION_STAKE);
+        Instant entryAt = extractEntryAt(txs, correlationId);
         return new LpPositionContext(
                 correlationId,
                 universeId,
@@ -466,8 +488,21 @@ public class LpPositionRefreshService {
                 lpToken,
                 marketSlug,
                 Boolean.TRUE.equals(closedByCorrelation.get(correlationId)),
-                staked
+                staked,
+                entryAt
         );
+    }
+
+    /** Returns the earliest LP_ENTRY_REQUEST or LP_ENTRY_SETTLEMENT timestamp for this position. */
+    private static Instant extractEntryAt(List<NormalizedTransaction> txs, String correlationId) {
+        return txs.stream()
+                .filter(tx -> correlationId.equals(tx.getCorrelationId()))
+                .filter(tx -> tx.getType() == NormalizedTransactionType.LP_ENTRY_REQUEST
+                        || tx.getType() == NormalizedTransactionType.LP_ENTRY_SETTLEMENT)
+                .map(NormalizedTransaction::getBlockTimestamp)
+                .filter(java.util.Objects::nonNull)
+                .min(Instant::compareTo)
+                .orElse(null);
     }
 
     /**
@@ -511,6 +546,12 @@ public class LpPositionRefreshService {
             return "CL_NFT";
         }
         if (correlationId.startsWith("gmx-lp:")) {
+            // GLV positions get a distinct family so they can be labelled separately in the UI.
+            // GLV correlation IDs have the form "gmx-lp:{network}:glv-{slug}".
+            String[] parts = correlationId.split(":", 4);
+            if (parts.length >= 3 && parts[2].startsWith("glv-")) {
+                return "GLV_LP";
+            }
             return "GMX_LP";
         }
         if (correlationId.startsWith("pendle-lp:")) {

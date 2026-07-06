@@ -535,21 +535,17 @@ public class BybitNormalizationService {
         Optional<ExternalLedgerRaw> paired = bybitTradePairer.findLiquidStakingCounterLeg(row);
         if (paired.isPresent()) {
             ExternalLedgerRaw pair = paired.orElseThrow();
-            if (!sameBybitSubAccount(row, pair)) {
-                // Cycle/9 S4: cross-sub-account liquid-staking pairs (e.g., FUND METH ↔ EARN
-                // CMETH) cannot collapse into a single STAKING_DEPOSIT because NormalizedTransaction
-                // carries a single walletAddress. Emit each leg as INTERNAL_TRANSFER and stamp a
-                // SHARED family-aware correlationId so FamilyEquivalentCustodyReplayHandler pairs
-                // them and basis carries across sub-accounts.
-                String pairCorrelationId = builder.crossSubAccountStakingCorrelationId(row, pair);
-                String counterpartyRef = blankToNull(pair.getWalletRef());
-                NormalizedTransaction normalized = builder.buildMappedRow(row, now);
-                applyCrossSubAccountStakingLinkage(normalized, pairCorrelationId, counterpartyRef);
-                normalizedTransactionStore.upsert(normalized);
-                markConfirmed(row);
-                return true;
-            }
-            NormalizedTransaction normalized = builder.buildStakingPair(row, pair, now);
+            // Cycle/9 S4 (superseded): cross-sub-account liquid-staking pairs (e.g. FUND METH ↔
+            // EARN CMETH) are ETH-family conversions. The former path emitted each leg as an
+            // INTERNAL_TRANSFER under a shared correlationId, expecting the family-equivalent
+            // continuity bucket to carry basis — but that bucket is keyed by the raw sub-account
+            // walletAddress, so the two legs never shared a bucket and the source basis stranded
+            // (phantom same-asset EARN credit). They are now fused into one umbrella-booked
+            // STAKING_DEPOSIT so LiquidStakingReplayHandler carries the source family basis into
+            // the received token — the same carrier as the same-sub-account ETH→METH control.
+            NormalizedTransaction normalized = sameBybitSubAccount(row, pair)
+                    ? builder.buildStakingPair(row, pair, now)
+                    : builder.buildCrossSubAccountStakingPair(liquidStakingDebit(row, pair), liquidStakingCredit(row, pair), now);
             normalizedTransactionStore.upsert(normalized);
             markConfirmed(row);
             markConfirmed(pair);
@@ -566,24 +562,14 @@ public class BybitNormalizationService {
         Optional<BybitExtractedEvent> paired = bybitExtractedTradePairer.findLiquidStakingCounterLeg(row);
         if (paired.isPresent()) {
             BybitExtractedEvent pair = paired.orElseThrow();
-            if (!sameBybitSubAccount(row, pair)) {
-                // Cycle/9 S4: see legacy-path comment above. Shared family-aware correlationId is
-                // computed against the legacy-raw projections so both legs converge regardless of
-                // which row arrives at normalization first.
-                ExternalLedgerRaw pairLegacy = bybitExtractedEventMapper.toLegacyRaw(pair);
-                String pairCorrelationId = builder.crossSubAccountStakingCorrelationId(mappedRow, pairLegacy);
-                String counterpartyRef = blankToNull(pairLegacy.getWalletRef());
-                NormalizedTransaction normalized = builder.buildMappedRow(mappedRow, now);
-                applyCrossSubAccountStakingLinkage(normalized, pairCorrelationId, counterpartyRef);
-                normalizedTransactionStore.upsert(normalized);
-                markConfirmed(row);
-                return true;
-            }
-            NormalizedTransaction normalized = builder.buildStakingPair(
-                    mappedRow,
-                    bybitExtractedEventMapper.toLegacyRaw(pair),
-                    now
-            );
+            // Cycle/9 S4 (superseded): see legacy-path comment above. Cross-sub-account ETH-family
+            // conversions are fused into one umbrella-booked STAKING_DEPOSIT so the source family
+            // basis carries into the received liquid-staking token via LiquidStakingReplayHandler.
+            ExternalLedgerRaw pairLegacy = bybitExtractedEventMapper.toLegacyRaw(pair);
+            NormalizedTransaction normalized = sameBybitSubAccount(row, pair)
+                    ? builder.buildStakingPair(mappedRow, pairLegacy, now)
+                    : builder.buildCrossSubAccountStakingPair(
+                            liquidStakingDebit(mappedRow, pairLegacy), liquidStakingCredit(mappedRow, pairLegacy), now);
             normalizedTransactionStore.upsert(normalized);
             markConfirmed(row);
             markConfirmed(pair);
@@ -596,23 +582,23 @@ public class BybitNormalizationService {
         return true;
     }
 
-    private void applyCrossSubAccountStakingLinkage(
-            NormalizedTransaction normalized,
-            String pairCorrelationId,
-            String counterpartyRef
-    ) {
-        if (normalized == null || pairCorrelationId == null || pairCorrelationId.isBlank()) {
-            return;
-        }
-        normalized.setCorrelationId(pairCorrelationId);
-        normalized.setContinuityCandidate(true);
-        if (counterpartyRef != null && !counterpartyRef.isBlank()) {
-            normalized.setMatchedCounterparty(counterpartyRef);
-        }
+    /**
+     * The outflow (debit, negative signed quantity) leg of a liquid-staking conversion pair. Used
+     * to anchor a cross-sub-account fused {@code STAKING_DEPOSIT} on the source sub-account.
+     */
+    private ExternalLedgerRaw liquidStakingDebit(ExternalLedgerRaw a, ExternalLedgerRaw b) {
+        return isDebitLeg(a) ? a : b;
     }
 
-    private static String blankToNull(String value) {
-        return value == null || value.isBlank() ? null : value;
+    /**
+     * The inflow (credit, positive signed quantity) leg of a liquid-staking conversion pair.
+     */
+    private ExternalLedgerRaw liquidStakingCredit(ExternalLedgerRaw a, ExternalLedgerRaw b) {
+        return isDebitLeg(a) ? b : a;
+    }
+
+    private boolean isDebitLeg(ExternalLedgerRaw row) {
+        return row != null && row.getQuantityRaw() != null && row.getQuantityRaw().signum() < 0;
     }
 
     /**

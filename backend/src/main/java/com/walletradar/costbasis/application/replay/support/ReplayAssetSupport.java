@@ -124,6 +124,14 @@ public class ReplayAssetSupport {
      * Bybit EXECUTION_SPOT / SWAP SELL rows often normalize on {@code :UTA} while inventory
      * remains on {@code :FUND} or {@code :EARN} from earn-principal / corridor paths.
      * Route disposals to the sub-wallet position that actually holds quantity.
+     *
+     * <p>ADR-042: when the flow carries an explicit {@code accountRef} naming a
+     * {@code :FUND}/{@code :UTA}/{@code :EARN} sub-account that already exists with enough inventory
+     * to cover the fill, route the disposal to that named sub-position <em>before</em> the
+     * max-quantity scan. This keeps every fill of a multi-fill convert sticky to the pool the
+     * convert names — the max-quantity tiebreak otherwise flips to the umbrella mid-convert once the
+     * named sub-account drops below the umbrella lot, stranding the remaining fills on the umbrella
+     * and leaving a phantom residual on the sub-account.
      */
     public AssetKey resolveSellAssetKey(
             NormalizedTransaction transaction,
@@ -135,6 +143,15 @@ public class ReplayAssetSupport {
             return defaultKey;
         }
         BigDecimal requestedQuantity = flow.getQuantityDelta().abs();
+        // ADR-042: honour the named sub-account FIRST, before the default-key coverage check and the
+        // max-quantity scan. This keeps every fill of a multi-fill convert sticky to the pool the
+        // convert names ({@code flow.accountRef}) even after that pool drops below a sibling umbrella
+        // lot mid-convert, so the sub-account fully drains and no phantom residual is stranded.
+        AssetKey accountRefKey = AccountRefPositionResolver.resolveInventoryBearingAccountRefKey(
+                defaultKey, flow.getAccountRef(), positions, requestedQuantity);
+        if (!accountRefKey.equals(defaultKey)) {
+            return accountRefKey;
+        }
         PositionState defaultPosition = positions.get(defaultKey);
         if (defaultPosition != null && coversSell(defaultPosition, requestedQuantity)) {
             return defaultKey;

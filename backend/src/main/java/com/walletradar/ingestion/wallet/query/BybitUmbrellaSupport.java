@@ -167,22 +167,35 @@ public final class BybitUmbrellaSupport {
             BigDecimal liveQty
     ) {
         if (quantity == null || quantity.signum() <= 0) {
-            return new ScaledUmbrellaTotals(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, false);
+            return new ScaledUmbrellaTotals(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, false);
         }
         if (liveQty == null || liveQty.signum() <= 0) {
-            return new ScaledUmbrellaTotals(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, true);
+            return new ScaledUmbrellaTotals(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, true);
         }
         if (quantity.compareTo(liveQty) < 0) {
-            return new ScaledUmbrellaTotals(liveQty, coveredQuantity, totalCostBasisUsd, false);
+            return new ScaledUmbrellaTotals(
+                    liveQty,
+                    zeroIfNull(coveredQuantity),
+                    zeroIfNull(totalCostBasisUsd),
+                    BigDecimal.ONE,
+                    false
+            );
         }
         if (quantity.compareTo(liveQty) == 0) {
-            return new ScaledUmbrellaTotals(quantity, coveredQuantity, totalCostBasisUsd, false);
+            return new ScaledUmbrellaTotals(
+                    quantity,
+                    zeroIfNull(coveredQuantity),
+                    zeroIfNull(totalCostBasisUsd),
+                    BigDecimal.ONE,
+                    false
+            );
         }
         BigDecimal scale = liveQty.divide(quantity, MC);
         return new ScaledUmbrellaTotals(
                 liveQty,
                 zeroIfNull(coveredQuantity).multiply(scale, MC),
                 zeroIfNull(totalCostBasisUsd).multiply(scale, MC),
+                scale,
                 false
         );
     }
@@ -203,6 +216,7 @@ public final class BybitUmbrellaSupport {
             BigDecimal quantity,
             BigDecimal coveredQuantity,
             BigDecimal totalCostBasisUsd,
+            BigDecimal ledgerScale,
             boolean dropped
     ) {
     }

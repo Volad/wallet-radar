@@ -367,8 +367,10 @@ public class PositionScopedLpExitReplayHandler {
         PositionSnapshot before = flowSupport.snapshot(receiptPosition);
         receiptPosition.setQuantity(BigDecimal.ZERO);
         receiptPosition.setTotalCostBasisUsd(BigDecimal.ZERO);
+        receiptPosition.setNetTotalCostBasisUsd(BigDecimal.ZERO);
         receiptPosition.setUncoveredQuantity(BigDecimal.ZERO);
         receiptPosition.setPerWalletAvco(null);
+        receiptPosition.setPerWalletNetAvco(null);
         IndexedFlow markerFlow = null;
         for (IndexedFlow indexedFlow : flowSupport.indexedFlows(transaction)) {
             NormalizedTransaction.Flow flow = indexedFlow.flow();
@@ -449,7 +451,12 @@ public class PositionScopedLpExitReplayHandler {
                 if (pricedFlow.getPriceSource() == null || pricedFlow.getPriceSource() == PriceSource.UNKNOWN) {
                     pricedFlow.setPriceSource(PriceSource.STABLECOIN);
                 }
-                flowSupport.applyBuy(pricedFlow, position);
+                flowSupport.applyBuyWithAcquisitionCost(
+                        pricedFlow,
+                        position,
+                        pricedFlow.getQuantityDelta().abs().multiply(replayUnitPriceUsd, MC),
+                        com.walletradar.domain.transaction.normalized.NormalizedTransactionType.REWARD_CLAIM
+                );
                 replayState.ledgerPointCollector().record(
                         transaction,
                         pricedFlow,

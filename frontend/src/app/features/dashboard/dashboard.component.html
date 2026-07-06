@@ -419,7 +419,10 @@
                       </div>
                       <div class="mono align-right" [attr.title]="formatQuantityFull(asset.quantity)">{{ formatQuantity(asset.quantity) }}</div>
                       <div class="mono align-right" [attr.title]="formatUsd(asset.currentValueUsd)">{{ formatUsd(asset.currentValueUsd) }}</div>
-                      <div class="mono align-right" [attr.title]="formatUsd(asset.avcoUsd)">{{ formatUsd(asset.avcoUsd) }}</div>
+                      <div class="mono align-right price-cell" [attr.title]="avcoTooltip(asset)">
+                        <div>{{ formatUsd(asset.netAvcoUsd) }}</div>
+                        <div class="token-subline price-subline">Tax {{ formatUsd(asset.avcoUsd) }}</div>
+                      </div>
                       <div class="align-right price-cell" [attr.title]="priceTooltip(asset)">
                         <div class="mono">{{ formatUsd(asset.priceUsd) }}</div>
                       </div>

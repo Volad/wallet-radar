@@ -360,6 +360,12 @@ walletradar:
       enabled: true
       batch-size: 250
       schedule-interval-ms: 90000
+    # ADR-044 D5: router-agnostic native-settlement recovery (D2) + clarification trigger (D3).
+    # Defaults OFF; enable per-chain (empty `chains` = all EVM) after the reconciliation gate is
+    # green on a clean rebuild for the affected chains.
+    native-settlement-recovery:
+      enabled: true
+      chains: ["BASE"]
     clarification:
       enabled: true
       batch-size: 30
@@ -390,6 +396,10 @@ walletradar:
     validation-batch-size: 250
     schedule-interval-ms: 120000
     retry-delay-seconds: 120
+    # ADR-044 D4: native-pool reconciliation gate severity. WARN emits diagnostics; flip to
+    # HARD_FAIL only after a clean rebuild reconciles every in-scope NATIVE:<chain> pool.
+    native-pool-reconciliation:
+      severity: WARN
   tools:
     classification-baseline:
       enabled: false

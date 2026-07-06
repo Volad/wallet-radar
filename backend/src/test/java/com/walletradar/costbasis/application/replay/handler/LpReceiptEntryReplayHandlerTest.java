@@ -45,7 +45,7 @@ class LpReceiptEntryReplayHandlerTest {
     void setUp() {
         lenient().when(lpReceiptBasisPoolRepository.findByUniverseId("u1")).thenReturn(List.of());
         ReplayAssetSupport assetSupport = new ReplayAssetSupport();
-        ReplayFlowSupport flowSupport = new ReplayFlowSupport(new GenericFlowReplayEngine());
+        ReplayFlowSupport flowSupport = new ReplayFlowSupport(new GenericFlowReplayEngine(null));
         handler = new LpReceiptEntryReplayHandler(
                 assetSupport,
                 flowSupport,

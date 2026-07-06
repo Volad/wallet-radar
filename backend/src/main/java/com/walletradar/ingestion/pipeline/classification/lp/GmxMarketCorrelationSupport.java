@@ -58,8 +58,8 @@ public final class GmxMarketCorrelationSupport {
             return null;
         }
         String normalized = assetSymbol.trim();
-        if (!normalized.regionMatches(true, 0, "GM:", 0, 3)
-                && !normalized.regionMatches(true, 0, "GLV", 0, 3)) {
+        boolean isGlv = normalized.regionMatches(true, 0, "GLV", 0, 3);
+        if (!normalized.regionMatches(true, 0, "GM:", 0, 3) && !isGlv) {
             return null;
         }
         String marketLabel = normalized;
@@ -71,7 +71,34 @@ public final class GmxMarketCorrelationSupport {
         if (bracketMatcher.find()) {
             marketLabel = bracketMatcher.group(1).trim();
         }
-        return slugify(marketLabel);
+        String slug = slugify(marketLabel);
+        // GLV symbols must be prefixed with "glv-" to avoid colliding with the GM pool
+        // that shares the same underlying token pair (e.g. "GLV [WETH-USDC]" vs
+        // "GM: ETH/USD [WETH-USDC]" both yield slug "weth-usdc" without this prefix).
+        if (slug != null && isGlv) {
+            slug = "glv-" + slug;
+        }
+        return slug;
+    }
+
+    /**
+     * Like {@link #correlationIdFromMovementLegs} but also inspects outgoing (negative delta)
+     * legs — needed for LP_EXIT_REQUEST where GM/GLV tokens are sent out.
+     */
+    public static String correlationIdFromAllLegs(OnChainRawTransactionView view, List<RawLeg> movementLegs) {
+        if (view == null || movementLegs == null) {
+            return null;
+        }
+        for (RawLeg leg : movementLegs) {
+            if (leg == null || leg.fee() || leg.quantityDelta() == null) {
+                continue;
+            }
+            String marketSlug = marketSlugFromShareSymbol(leg.assetSymbol());
+            if (marketSlug != null) {
+                return formatCorrelationId(view.networkId(), marketSlug);
+            }
+        }
+        return null;
     }
 
     public static String formatCorrelationId(NetworkId networkId, String marketSlug) {

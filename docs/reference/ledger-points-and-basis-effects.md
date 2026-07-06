@@ -2,9 +2,22 @@
 
 > **Entity:** `AssetLedgerPoint` — `backend/.../costbasis/domain/AssetLedgerPoint.java`  
 > **Collection:** `asset_ledger_points`  
-> **Last updated:** 2026-06-05
+> **Last updated:** 2026-06-30
 
 Immutable replay trace row for one applied accounting state transition. Source of truth for move-basis timeline and AVCO history reads.
+
+## Dual cost basis fields (ADR-040)
+
+Each ledger point stores parallel **Tax** and **Net** lanes on the shared quantity pool:
+
+| Tax lane | Net lane |
+|---|---|
+| `totalCostBasisBeforeUsd` / `After` | `netTotalCostBasisBeforeUsd` / `After` |
+| `avcoBeforeUsd` / `After` | `netAvcoBeforeUsd` / `After` |
+| `costBasisDeltaUsd` | `netCostBasisDeltaUsd` |
+| `realisedPnlDeltaUsd` | `netRealisedPnlDeltaUsd` |
+
+Net lane uses $0 acquisition for zero-cost types (`REWARD_CLAIM`, LP fee-claim sideflows). Tax lane keeps FMV-at-receipt semantics.
 
 ## BasisEffect decision flow
 
@@ -95,6 +108,21 @@ flowchart TD
 ### REALLOCATE_IN {#reallocate-in}
 
 **Definition:** Receive reallocated basis at destination pool/position.
+
+#### CARRY / REALLOCATE basis symmetry (ADR-043)
+
+For a Bybit intra-account custody round-trip, the OUT leg (`CARRY_OUT` / `REALLOCATE_OUT`) and the
+matched IN leg (`CARRY_IN` / `REALLOCATE_IN`) are **basis-symmetric** on both lanes:
+
+- `Σ costBasisDelta(OUT + IN) = 0` and `Σ netCostBasisDelta(OUT + IN) = 0` for one transfer, across
+  the source + destination keys. The IN leg's `costBasisDeltaUsd` equals the OUT leg's released carry
+  value — the paired carry is authoritative, not a re-derived AVCO or a `$0` injection.
+- Per-family (umbrella + all subs), `Σ` over all internal `INTERNAL_TRANSFER + EARN_*` legs `= 0` in
+  both lanes (±dust). Both legs of an *open* subscribe offset within the family sum, provided every
+  OUT has a materialized IN.
+- A `REALLOCATE_IN` / `CARRY_IN` with `quantityDelta = 0` and `costBasisDeltaUsd > 0` is the ghost
+  signature the `CorridorBasisConservationGuard` (leftover OUT carry) and
+  `BybitEarnSubPoolConservationGuard` (sub-pool basis orphan) flag.
 
 ### GAS_ONLY {#gas-only}
 

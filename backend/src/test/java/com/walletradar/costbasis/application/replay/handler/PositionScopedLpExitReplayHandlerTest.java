@@ -61,7 +61,7 @@ class PositionScopedLpExitReplayHandlerTest {
     @Test
     void pricedSideflowAcquiresStablecoinWithoutConsumingLpReceiptPoolPrincipal() {
         ReplayAssetSupport assetSupport = new ReplayAssetSupport();
-        ReplayFlowSupport flowSupport = new ReplayFlowSupport(new GenericFlowReplayEngine());
+        ReplayFlowSupport flowSupport = new ReplayFlowSupport(new GenericFlowReplayEngine(null));
         ReplaySettlementAllocator settlementAllocator =
                 new ReplaySettlementAllocator(assetSupport, flowSupport);
         LpReceiptBasisPoolRepository repo = mock(LpReceiptBasisPoolRepository.class);
@@ -123,7 +123,7 @@ class PositionScopedLpExitReplayHandlerTest {
         String multiCorr = "lp-position:base:pancakeswap:multi";
         String multiUniverse = "MULTI";
         ReplayAssetSupport assetSupport = new ReplayAssetSupport();
-        ReplayFlowSupport flowSupport = new ReplayFlowSupport(new GenericFlowReplayEngine());
+        ReplayFlowSupport flowSupport = new ReplayFlowSupport(new GenericFlowReplayEngine(null));
         ReplaySettlementAllocator settlementAllocator =
                 new ReplaySettlementAllocator(assetSupport, flowSupport);
         LpReceiptBasisPoolRepository repo = mock(LpReceiptBasisPoolRepository.class);
@@ -221,7 +221,7 @@ class PositionScopedLpExitReplayHandlerTest {
         String corr = "lp-position:base:fluid:fusdc";
         String universe = "U3";
         ReplayAssetSupport assetSupport = new ReplayAssetSupport();
-        ReplayFlowSupport flowSupport = new ReplayFlowSupport(new GenericFlowReplayEngine());
+        ReplayFlowSupport flowSupport = new ReplayFlowSupport(new GenericFlowReplayEngine(null));
         ReplaySettlementAllocator settlementAllocator =
                 new ReplaySettlementAllocator(assetSupport, flowSupport);
         LpReceiptBasisPoolRepository repo = mock(LpReceiptBasisPoolRepository.class);
@@ -293,7 +293,7 @@ class PositionScopedLpExitReplayHandlerTest {
     @Test
     void feeOnlyLpExitDoesNotDrainReceiptPool() {
         ReplayAssetSupport assetSupport = new ReplayAssetSupport();
-        ReplayFlowSupport flowSupport = new ReplayFlowSupport(new GenericFlowReplayEngine());
+        ReplayFlowSupport flowSupport = new ReplayFlowSupport(new GenericFlowReplayEngine(null));
         ReplaySettlementAllocator settlementAllocator =
                 new ReplaySettlementAllocator(assetSupport, flowSupport);
         LpReceiptBasisPoolRepository repo = mock(LpReceiptBasisPoolRepository.class);
@@ -351,7 +351,7 @@ class PositionScopedLpExitReplayHandlerTest {
     void principalExitWithoutReceiptBurnDrainsSyntheticMarkerWhenPoolsEmpty() {
         String corr = "lp-position:base:pancakeswap:938761";
         ReplayAssetSupport assetSupport = new ReplayAssetSupport();
-        ReplayFlowSupport flowSupport = new ReplayFlowSupport(new GenericFlowReplayEngine());
+        ReplayFlowSupport flowSupport = new ReplayFlowSupport(new GenericFlowReplayEngine(null));
         ReplaySettlementAllocator settlementAllocator =
                 new ReplaySettlementAllocator(assetSupport, flowSupport);
         LpReceiptBasisPoolRepository repo = mock(LpReceiptBasisPoolRepository.class);
@@ -426,7 +426,7 @@ class PositionScopedLpExitReplayHandlerTest {
     void principalCloseZerosSyntheticReceiptMarkerAndPools() {
         ReplayAssetSupport assetSupport = new ReplayAssetSupport();
         String corr = "lp-position:unichain:uniswap:42775";
-        ReplayFlowSupport flowSupport = new ReplayFlowSupport(new GenericFlowReplayEngine());
+        ReplayFlowSupport flowSupport = new ReplayFlowSupport(new GenericFlowReplayEngine(null));
         ReplaySettlementAllocator settlementAllocator =
                 new ReplaySettlementAllocator(assetSupport, flowSupport);
         LpReceiptBasisPoolRepository repo = mock(LpReceiptBasisPoolRepository.class);
@@ -506,7 +506,7 @@ class PositionScopedLpExitReplayHandlerTest {
         String universe = "TEST-CL";
 
         ReplayAssetSupport assetSupport = new ReplayAssetSupport();
-        ReplayFlowSupport flowSupport = new ReplayFlowSupport(new GenericFlowReplayEngine());
+        ReplayFlowSupport flowSupport = new ReplayFlowSupport(new GenericFlowReplayEngine(null));
         ReplaySettlementAllocator settlementAllocator = new ReplaySettlementAllocator(assetSupport, flowSupport);
         LpReceiptBasisPoolRepository repo = mock(LpReceiptBasisPoolRepository.class);
         when(repo.findByUniverseId(anyString())).thenReturn(List.of());
@@ -608,7 +608,7 @@ class PositionScopedLpExitReplayHandlerTest {
         String universe = "TEST-SINGLE-WETH";
 
         ReplayAssetSupport assetSupport = new ReplayAssetSupport();
-        ReplayFlowSupport flowSupport = new ReplayFlowSupport(new GenericFlowReplayEngine());
+        ReplayFlowSupport flowSupport = new ReplayFlowSupport(new GenericFlowReplayEngine(null));
         ReplaySettlementAllocator settlementAllocator = new ReplaySettlementAllocator(assetSupport, flowSupport);
         LpReceiptBasisPoolRepository repo = mock(LpReceiptBasisPoolRepository.class);
         when(repo.findByUniverseId(anyString())).thenReturn(List.of());
@@ -690,7 +690,7 @@ class PositionScopedLpExitReplayHandlerTest {
         String universe = "TEST-SINGLE-USDC";
 
         ReplayAssetSupport assetSupport = new ReplayAssetSupport();
-        ReplayFlowSupport flowSupport = new ReplayFlowSupport(new GenericFlowReplayEngine());
+        ReplayFlowSupport flowSupport = new ReplayFlowSupport(new GenericFlowReplayEngine(null));
         ReplaySettlementAllocator settlementAllocator = new ReplaySettlementAllocator(assetSupport, flowSupport);
         LpReceiptBasisPoolRepository repo = mock(LpReceiptBasisPoolRepository.class);
         when(repo.findByUniverseId(anyString())).thenReturn(List.of());
@@ -764,7 +764,7 @@ class PositionScopedLpExitReplayHandlerTest {
 
     private static PositionScopedLpExitReplayHandler handler() {
         ReplayAssetSupport assetSupport = new ReplayAssetSupport();
-        ReplayFlowSupport flowSupport = new ReplayFlowSupport(new GenericFlowReplayEngine());
+        ReplayFlowSupport flowSupport = new ReplayFlowSupport(new GenericFlowReplayEngine(null));
         ReplaySettlementAllocator settlementAllocator =
                 new ReplaySettlementAllocator(assetSupport, flowSupport);
         ReplayPendingTransferKeyFactory keyFactory = new ReplayPendingTransferKeyFactory(assetSupport);

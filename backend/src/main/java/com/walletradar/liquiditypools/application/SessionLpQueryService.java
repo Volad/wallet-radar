@@ -3,17 +3,24 @@ package com.walletradar.liquiditypools.application;
 import com.walletradar.costbasis.domain.AssetLedgerPoint;
 import com.walletradar.costbasis.domain.LpReceiptBasisPool;
 import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.common.PriceSource;
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.domain.session.UserSessionRepository;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.liquiditypools.config.LiquidityPoolsProperties;
+import com.walletradar.liquiditypools.enrichment.GmxCollectedFeesReader;
 import com.walletradar.liquiditypools.persistence.LpEarningPoint;
 import com.walletradar.liquiditypools.persistence.LpPositionSnapshot;
 import com.walletradar.pricing.domain.CanonicalAssetCatalog;
+import com.walletradar.pricing.domain.PriceQuote;
+import com.walletradar.pricing.domain.PriceRequest;
 import com.walletradar.pricing.persistence.CurrentPriceQuoteDocument;
+import com.walletradar.pricing.persistence.HistoricalPriceCacheService;
+import com.walletradar.pricing.resolver.external.PriceExternalSourceOrchestrator;
 import com.walletradar.session.application.AccountingUniverseService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -73,6 +80,8 @@ public class SessionLpQueryService {
     private final MongoOperations mongoOperations;
     private final LpPositionSnapshotService snapshotService;
     private final LpEarningPointService earningPointService;
+    private final HistoricalPriceCacheService historicalPriceCacheService;
+    private final PriceExternalSourceOrchestrator priceExternalSourceOrchestrator;
     private final LiquidityPoolsProperties properties;
 
     public Optional<SessionLpView> findSessionLp(String sessionId) {
@@ -113,6 +122,10 @@ public class SessionLpQueryService {
                 .stream()
                 .collect(Collectors.toMap(LpPositionSnapshot::getCorrelationId, s -> s, (a, b) -> a, LinkedHashMap::new));
         Map<String, BigDecimal> prices = loadCurrentPrices(txs, basisPools, snapshots);
+        HistoricalFlowUsdResolver historicalFlowUsdResolver = new HistoricalFlowUsdResolver(
+                historicalPriceCacheService,
+                priceExternalSourceOrchestrator
+        );
 
         Map<String, PositionAccumulator> accumulators = new LinkedHashMap<>();
         for (NormalizedTransaction tx : txs) {
@@ -121,7 +134,7 @@ public class SessionLpQueryService {
                 continue;
             }
             accumulators.computeIfAbsent(corr, key -> new PositionAccumulator(key, tx))
-                    .addTransaction(tx);
+                    .addTransaction(tx, historicalFlowUsdResolver);
         }
         for (LpReceiptBasisPool pool : basisPools) {
             if (pool.getLpCorrelationId() != null) {
@@ -146,14 +159,15 @@ public class SessionLpQueryService {
                         target,
                         snapshots.get(target.correlationId()),
                         prices,
-                        ledgerPoints
+                        ledgerPoints,
+                        historicalFlowUsdResolver
                 );
                 positions = isDust(view) || !matchesScope(view, scope) ? List.of() : List.of(view);
             }
         } else {
             positions = accumulators.values().stream()
                     .sorted(Comparator.comparing(PositionAccumulator::enteredAt, Comparator.nullsLast(Comparator.reverseOrder())))
-                    .map(acc -> toPositionView(acc, snapshots.get(acc.correlationId()), prices, ledgerPoints))
+                    .map(acc -> toPositionView(acc, snapshots.get(acc.correlationId()), prices, ledgerPoints, historicalFlowUsdResolver))
                     .filter(p -> !isDust(p))
                     .filter(p -> matchesScope(p, scope))
                     .toList();
@@ -224,7 +238,8 @@ public class SessionLpQueryService {
             PositionAccumulator acc,
             LpPositionSnapshot snapshot,
             Map<String, BigDecimal> prices,
-            List<AssetLedgerPoint> ledgerPoints
+            List<AssetLedgerPoint> ledgerPoints,
+            HistoricalFlowUsdResolver historicalFlowUsdResolver
     ) {
         boolean closed = resolveClosed(acc, snapshot);
         BigDecimal costBasisUsd = acc.costBasisUsd();
@@ -252,6 +267,34 @@ public class SessionLpQueryService {
             }
         }
 
+        // GMX / GLV: fees compound into pool token price rather than being claimable separately.
+        // Compute earned fees from the delta of cumulativeFeeUsdPerPoolValue (Subsquid GraphQL)
+        // multiplied by the user's net-deposited principal (total deposits minus total withdrawals).
+        // Using net-deposited avoids overcounting when the user made partial exits — the base
+        // correctly shrinks by the amount already returned to the user.
+        if (!closed && acc.singleReceiptFamily()
+                && snapshot != null
+                && snapshot.getEntryFeePerPoolValue() != null
+                && snapshot.getCurrentFeePerPoolValue() != null) {
+            BigDecimal grossDeposited = acc.depositedMarketUsd();
+            BigDecimal withdrawn = acc.withdrawnUsd();
+            BigDecimal netDeposited = grossDeposited.subtract(withdrawn, MC);
+            // If net is negative (shouldn't normally happen) fall back to gross deposited.
+            BigDecimal feeBase = netDeposited.signum() > 0 ? netDeposited : grossDeposited;
+            if (feeBase != null && feeBase.signum() > 0) {
+                BigDecimal delta = snapshot.getCurrentFeePerPoolValue()
+                        .subtract(snapshot.getEntryFeePerPoolValue(), MC);
+                if (delta.signum() > 0) {
+                    BigDecimal earnedFees = delta.divide(GmxCollectedFeesReader.FEE_SCALE, MC)
+                            .multiply(feeBase, MC);
+                    if (earnedFees.signum() > 0) {
+                        unclaimedUsd = earnedFees;
+                        unclaimedPrecision = LpFieldPrecision.ESTIMATE;
+                    }
+                }
+            }
+        }
+
         BigDecimal feesTotal = claimedUsd.add(unclaimedUsd, MC);
         LpPositionView.IlView il = buildIl(acc, snapshot, closed, prices, tvlUsd);
         BigDecimal hodlNow = acc.hodlValueFromEntryUsd(prices);
@@ -259,6 +302,10 @@ public class SessionLpQueryService {
         // AVCO cost basis (used for closed-position tax accounting & "Deposited" display)
         BigDecimal depositsUsd = costBasisUsd.signum() > 0 ? costBasisUsd : acc.depositedMarketUsd();
         boolean hasDeposits = depositsUsd != null && depositsUsd.signum() > 0;
+        BigDecimal depositedMarketUsd = acc.depositedMarketUsd();
+        LpFieldPrecision depositedMarketPrecision = depositedMarketUsd != null && depositedMarketUsd.signum() > 0
+                ? LpFieldPrecision.EXACT
+                : LpFieldPrecision.UNAVAILABLE;
 
         // For OPEN position PnL we isolate LP-specific performance (IL + fees),
         // independent of the user's pre-LP asset price history:
@@ -321,7 +368,6 @@ public class SessionLpQueryService {
         }
 
         BigDecimal accountingUnrealized = closed || tvlUsd == null ? null : tvlUsd.add(unclaimedUsd, MC).subtract(costBasisUsd, MC);
-        LpFieldPrecision depositedPrecision = hasDeposits ? LpFieldPrecision.EXACT : LpFieldPrecision.UNAVAILABLE;
 
         List<LpEarningPoint> earningSeries = earningPointService.findSeriesByCorrelationId(acc.correlationId());
         // Pass closedAt only for truly closed positions to bound the APR period correctly.
@@ -387,10 +433,15 @@ public class SessionLpQueryService {
 
         String resolvedProtocol = acc.protocol() != null ? acc.protocol()
                 : snapshot != null ? snapshot.getProtocol() : null;
+        // Prefer snapshot family (e.g. GLV_LP vs GMX_LP) over the accumulator heuristic which
+        // can only distinguish CL_NFT/GMX_LP/PENDLE_LP from the correlationId prefix.
+        String resolvedFamily = snapshot != null && snapshot.getFamily() != null
+                ? snapshot.getFamily()
+                : acc.family();
         return new LpPositionView(
                 acc.correlationId(),
                 resolvedProtocol,
-                acc.family(),
+                resolvedFamily,
                 acc.networkId(),
                 acc.walletAddress(),
                 acc.pair() != null ? acc.pair() : derivePair(acc.correlationId(), snapshot),
@@ -405,10 +456,10 @@ public class SessionLpQueryService {
                 tvlPrecision,
                 costBasisUsd,
                 LpFieldPrecision.EXACT,
-                depositsUsd,
-                depositedPrecision,
-                entryTokenView(acc, 0, prices, closed),
-                entryTokenView(acc, 1, prices, closed),
+                depositedMarketUsd,
+                depositedMarketPrecision,
+                entryTokenView(acc, snapshot, 0, closed),
+                entryTokenView(acc, snapshot, 1, closed),
                 withdrawnUsd,
                 LpFieldPrecision.EXACT,
                 new LpPositionView.FeesView(
@@ -434,7 +485,7 @@ public class SessionLpQueryService {
                         .map(p -> new LpPositionView.AprDayView(
                                 p.getDay(), p.getDailyAprPct(), LpFieldPrecision.ESTIMATE))
                         .toList(),
-                acc.txns().stream().map(tx -> toTxnView(tx, prices, txLedgerUsd)).toList(),
+                acc.txns().stream().map(tx -> toTxnView(tx, prices, txLedgerUsd, historicalFlowUsdResolver)).toList(),
                 acc.enteredAt(),
                 acc.closedAt(),
                 snapshot != null ? snapshot.getSnapshotAt() : null,
@@ -469,6 +520,15 @@ public class SessionLpQueryService {
         if (snapshot != null && "closed".equals(snapshot.getStatus())) {
             return true;
         }
+        // Snapshot explicitly says the position is open — trust it over the transaction heuristic.
+        // This is critical for single-receipt protocols (GMX, Pendle) where LP tokens received
+        // on entry are positive flows (not tracked as netQtyBySymbol) while exit settlements
+        // return underlying tokens (also positive) that get negated, making fullyExited() return
+        // a false positive "closed".
+        if (snapshot != null
+                && ("in_range".equals(snapshot.getStatus()) || "out_of_range".equals(snapshot.getStatus()))) {
+            return false;
+        }
         return acc.fullyExited();
     }
 
@@ -486,28 +546,50 @@ public class SessionLpQueryService {
         return snapshotStatus;
     }
 
-    private static LpPositionView.TokenView entryTokenView(PositionAccumulator acc, int index,
-                                                            Map<String, BigDecimal> prices, boolean closed) {
-        String sym = acc.entrySymbol(index);
+    private static LpPositionView.TokenView entryTokenView(
+            PositionAccumulator acc,
+            LpPositionSnapshot snapshot,
+            int index,
+            boolean closed
+    ) {
+        // For single-receipt families, token1 has no entry data (only one LP receipt token).
+        if (index == 1 && acc.singleReceiptFamily()) {
+            LpPositionSnapshot.TokenSide side1 = snapshot != null ? snapshot.getToken1() : null;
+            if (side1 == null) {
+                return new LpPositionView.TokenView(null, null, null, null, null,
+                        LpFieldPrecision.NOT_APPLICABLE, LpFieldPrecision.NOT_APPLICABLE);
+            }
+        }
+        String sym = snapshotTokenSymbol(snapshot, index);
+        if (sym == null) {
+            sym = acc.tokenSymbol(index);
+        }
+        if (sym == null) {
+            sym = acc.entrySymbol(index);
+        }
         if (sym == null) {
             return new LpPositionView.TokenView(null, null, null, null, null,
                     LpFieldPrecision.UNAVAILABLE, LpFieldPrecision.UNAVAILABLE);
         }
-        BigDecimal qty = acc.entryQty(index);
+        BigDecimal qty = acc.entryQtyForSymbol(sym);
+        if (qty == null) {
+            qty = acc.entryQty(index);
+        }
         BigDecimal usd;
         LpFieldPrecision usdPrec;
         if (closed) {
             // For closed positions: show AVCO cost basis (tax-relevant historical cost).
             usd = acc.basisUsdForSymbol(sym);
-            if (usd == null && qty != null) {
-                usd = markQty(sym, qty, prices);
+            if (usd == null) {
+                usd = acc.entryValueForSymbol(sym);
             }
             usdPrec = usd == null ? LpFieldPrecision.UNAVAILABLE : LpFieldPrecision.ESTIMATE;
         } else {
-            // For open positions: price entry quantity at CURRENT market price.
-            // This makes "At entry" show entry-qty × current-price (= hodlNow component),
-            // so the Δ column in Entry vs Current equals impermanent loss at current prices.
-            usd = qty != null ? markQty(sym, qty, prices) : null;
+            // For open positions: show the historical entry market value for this token side.
+            // If historical valuation is unavailable, keep USD empty instead of silently
+            // re-marking the entry quantity at the CURRENT price under the misleading
+            // "At entry" label.
+            usd = acc.entryValueForSymbol(sym);
             usdPrec = usd == null ? LpFieldPrecision.UNAVAILABLE : LpFieldPrecision.ESTIMATE;
         }
         return new LpPositionView.TokenView(
@@ -519,6 +601,14 @@ public class SessionLpQueryService {
                 qty == null ? LpFieldPrecision.UNAVAILABLE : LpFieldPrecision.EXACT,
                 usdPrec
         );
+    }
+
+    private static String snapshotTokenSymbol(LpPositionSnapshot snapshot, int index) {
+        if (snapshot == null) {
+            return null;
+        }
+        LpPositionSnapshot.TokenSide side = index == 0 ? snapshot.getToken0() : snapshot.getToken1();
+        return side != null && side.getSym() != null ? side.getSym().trim().toUpperCase(Locale.ROOT) : null;
     }
 
     private static LpPositionView.RangeView rangeView(LpPositionSnapshot snapshot, boolean singleReceipt, boolean closed) {
@@ -553,6 +643,13 @@ public class SessionLpQueryService {
     ) {
         LpPositionSnapshot.TokenSide side = snapshot != null
                 ? (index == 0 ? snapshot.getToken0() : snapshot.getToken1()) : null;
+        // For single-receipt protocols (GMX, Pendle), netQtyBySymbol is polluted by
+        // exit-settlement inbound flows (WETH/USDC received on exit). Only show token1
+        // if the snapshot explicitly has a token1 — otherwise return an empty slot.
+        if (index == 1 && acc.singleReceiptFamily() && side == null) {
+            return new LpPositionView.TokenView(null, null, null, null, null,
+                    LpFieldPrecision.NOT_APPLICABLE, LpFieldPrecision.NOT_APPLICABLE);
+        }
         String sym = side != null && side.getSym() != null ? side.getSym() : acc.tokenSymbol(index);
         String contract = side != null ? side.getContract() : acc.tokenContract(index);
         BigDecimal qty = closed ? BigDecimal.ZERO : side != null ? side.getQty() : acc.netQty(index);
@@ -573,6 +670,15 @@ public class SessionLpQueryService {
     }
 
     private static BigDecimal markTvl(PositionAccumulator acc, LpPositionSnapshot snapshot, Map<String, BigDecimal> prices) {
+        // For single-receipt protocols (GMX, Pendle), netQtyBySymbol is polluted by exit-settlement
+        // inbound flows (WETH/USDC received on exit). The snapshot's stored TVL — computed by the
+        // enrichment service from the on-chain GM/GLV balance — is authoritative.
+        if (acc.singleReceiptFamily()) {
+            if (snapshot != null && snapshot.getTvlUsd() != null && snapshot.getTvlUsd().signum() >= 0) {
+                return snapshot.getTvlUsd();
+            }
+            return null;
+        }
         BigDecimal fromTokens = BigDecimal.ZERO;
         boolean any = false;
         for (int i = 0; i < 2; i++) {
@@ -589,7 +695,7 @@ public class SessionLpQueryService {
         if (any) {
             return fromTokens;
         }
-        // Fall back to the TVL stored in the snapshot (e.g. GMX positions where the GM token
+        // Fall back to the TVL stored in the snapshot (e.g. protocols where the LP token
         // is priced by the enrichment service but not in the standard prices map).
         if (snapshot != null && snapshot.getTvlUsd() != null && snapshot.getTvlUsd().signum() > 0) {
             return snapshot.getTvlUsd();
@@ -737,7 +843,8 @@ public class SessionLpQueryService {
     private LpPositionView.TxnView toTxnView(
             NormalizedTransaction tx,
             Map<String, BigDecimal> prices,
-            Map<String, BigDecimal> txLedgerUsd
+            Map<String, BigDecimal> txLedgerUsd,
+            HistoricalFlowUsdResolver historicalFlowUsdResolver
     ) {
         List<NormalizedTransaction.Flow> flows = tx.getFlows() == null ? List.of() : tx.getFlows().stream()
                 .filter(flow -> flow != null
@@ -750,8 +857,8 @@ public class SessionLpQueryService {
         NormalizedTransaction.Flow flow0 = flows.isEmpty() ? null : flows.getFirst();
         NormalizedTransaction.Flow flow1 = flows.size() > 1 ? flows.get(1) : null;
 
-        BigDecimal leg0Usd = flowUsd(flow0, prices);
-        BigDecimal leg1Usd = flowUsd(flow1, prices);
+        BigDecimal leg0Usd = flowUsd(tx, flow0, prices, historicalFlowUsdResolver);
+        BigDecimal leg1Usd = flowUsd(tx, flow1, prices, historicalFlowUsdResolver);
         BigDecimal gasFee = tx.getFlows() == null ? null : tx.getFlows().stream()
                 .filter(f -> f != null && f.getRole() == NormalizedLegRole.FEE && f.getValueUsd() != null)
                 .map(NormalizedTransaction.Flow::getValueUsd)
@@ -781,17 +888,54 @@ public class SessionLpQueryService {
         );
     }
 
-    private static BigDecimal flowUsd(NormalizedTransaction.Flow flow, Map<String, BigDecimal> prices) {
+    private static BigDecimal flowUsd(
+            NormalizedTransaction tx,
+            NormalizedTransaction.Flow flow,
+            Map<String, BigDecimal> prices,
+            HistoricalFlowUsdResolver historicalFlowUsdResolver
+    ) {
+        if (flow == null) {
+            return null;
+        }
+        BigDecimal historicalUsd = flowUsdAtEvent(tx, flow, historicalFlowUsdResolver);
+        if (historicalUsd != null) {
+            return historicalUsd;
+        }
+        if (flow.getQuantityDelta() == null || flow.getAssetSymbol() == null) {
+            return null;
+        }
+        // GM/GLV receipt tokens in LP_ENTRY_SETTLEMENT have no reliable historical price —
+        // falling back to current market price is misleading because it implies the settlement
+        // was worth less than the actual deposit (ETH price movement). Suppress the fallback
+        // so that the total comes from the ledger cost basis instead.
+        if (tx.getType() == NormalizedTransactionType.LP_ENTRY_SETTLEMENT
+                && isGmxReceiptSymbol(flow.getAssetSymbol())) {
+            return null;
+        }
+        return markQty(flow.getAssetSymbol(), flow.getQuantityDelta().abs(), prices);
+    }
+
+    private static boolean isGmxReceiptSymbol(String symbol) {
+        if (symbol == null) return false;
+        String upper = symbol.toUpperCase(Locale.ROOT);
+        return upper.startsWith("GM:") || upper.startsWith("GLV");
+    }
+
+    private static BigDecimal flowUsdAtEvent(
+            NormalizedTransaction tx,
+            NormalizedTransaction.Flow flow,
+            HistoricalFlowUsdResolver historicalFlowUsdResolver
+    ) {
         if (flow == null) {
             return null;
         }
         if (flow.getValueUsd() != null) {
             return flow.getValueUsd().abs();
         }
-        if (flow.getQuantityDelta() == null || flow.getAssetSymbol() == null) {
-            return null;
+        if (flow.getUnitPriceUsd() != null && flow.getQuantityDelta() != null) {
+            return flow.getQuantityDelta().abs().multiply(flow.getUnitPriceUsd(), MC);
         }
-        return markQty(flow.getAssetSymbol(), flow.getQuantityDelta().abs(), prices);
+        return historicalFlowUsdResolver == null ? null : historicalFlowUsdResolver.resolve(tx, flow);
     }
 
     private static BigDecimal sumNullable(BigDecimal a, BigDecimal b) {
@@ -950,7 +1094,11 @@ public class SessionLpQueryService {
                     tokenId = parts[3];
                 }
             } else if (correlationId.startsWith("gmx-lp:")) {
-                family = "GMX_LP";
+                // GLV positions (gmx-lp:{network}:glv-{slug}) get a distinct family;
+                // the snapshot will override this in toPositionView, but use GLV_LP here
+                // so that singleReceiptFamily() and other accumulator-level checks work correctly.
+                String[] parts = correlationId.split(":", 4);
+                family = (parts.length >= 3 && parts[2].startsWith("glv-")) ? "GLV_LP" : "GMX_LP";
             } else if (correlationId.startsWith("pendle-lp:")) {
                 family = "PENDLE_LP";
             }
@@ -961,7 +1109,7 @@ public class SessionLpQueryService {
             }
         }
 
-        void addTransaction(NormalizedTransaction tx) {
+        void addTransaction(NormalizedTransaction tx, HistoricalFlowUsdResolver historicalFlowUsdResolver) {
             txns.add(tx);
             if (protocol == null) {
                 protocol = nonBridgeProtocol(tx.getProtocolName());
@@ -1024,18 +1172,36 @@ public class SessionLpQueryService {
                     BigDecimal entryQty = flow.getQuantityDelta().abs();
                     netQtyBySymbol.merge(sym, entryQty, BigDecimal::add);
                     entryQtyBySymbol.merge(sym, entryQty, BigDecimal::add);
-                    if (flow.getValueUsd() != null) {
-                        entryValueBySymbol.merge(sym, flow.getValueUsd().abs(), BigDecimal::add);
-                        depositedMarketUsd = depositedMarketUsd.add(flow.getValueUsd().abs(), MC);
+                    BigDecimal entryUsd = flowUsdAtEvent(tx, flow, historicalFlowUsdResolver);
+                    if (entryUsd != null && entryUsd.signum() > 0) {
+                        entryValueBySymbol.merge(sym, entryUsd, BigDecimal::add);
+                        depositedMarketUsd = depositedMarketUsd.add(entryUsd, MC);
                     }
                 }
-                // Single-receipt protocols (GMX, Pendle): LP_ENTRY_SETTLEMENT records receiving the
-                // LP token (positive inflow). Track its USD value as the effective deposited amount.
+                // Single-receipt protocols (GMX, Pendle): LP_ENTRY_SETTLEMENT receives the LP
+                // receipt token (positive inflow, no historical price) plus a small execution-fee
+                // refund in ETH (which DOES have a price). Track only the LP receipt token
+                // (unpriced) for "At Entry" quantity; exclude fee refunds.
                 if (singleReceiptFamily()
                         && tx.getType() == NormalizedTransactionType.LP_ENTRY_SETTLEMENT
-                        && flow.getQuantityDelta().signum() > 0
-                        && flow.getValueUsd() != null && flow.getValueUsd().signum() > 0) {
-                    depositedMarketUsd = depositedMarketUsd.add(flow.getValueUsd(), MC);
+                        && flow.getQuantityDelta().signum() > 0) {
+                    BigDecimal settlementUsd = flowUsdAtEvent(tx, flow, historicalFlowUsdResolver);
+                    if (settlementUsd == null || settlementUsd.signum() == 0) {
+                        // No historical price → this is the LP receipt token (GM/GLV), not a fee refund
+                        entryQtyBySymbol.merge(sym, flow.getQuantityDelta(), BigDecimal::add);
+                    }
+                    // depositedMarketUsd is populated from LP_ENTRY_REQUEST (see below), not here.
+                }
+                // Single-receipt protocols (GMX, Pendle): LP_ENTRY_REQUEST records the actual assets
+                // deposited (USDC + execution ETH). Track non-FEE negative flows as depositedMarketUsd.
+                // Note: FEE-role flows are already skipped by the guard above (line 1124).
+                if (singleReceiptFamily()
+                        && tx.getType() == NormalizedTransactionType.LP_ENTRY_REQUEST
+                        && flow.getQuantityDelta().signum() < 0) {
+                    BigDecimal requestUsd = flowUsdAtEvent(tx, flow, historicalFlowUsdResolver);
+                    if (requestUsd != null && requestUsd.signum() > 0) {
+                        depositedMarketUsd = depositedMarketUsd.add(requestUsd, MC);
+                    }
                 }
                 if (EXIT_TYPES.contains(tx.getType()) && flow.getQuantityDelta().signum() != 0) {
                     BigDecimal exitQty = flow.getQuantityDelta().signum() > 0
@@ -1048,8 +1214,9 @@ public class SessionLpQueryService {
                     // minus exit = negative), while the key-present case produces the same result:
                     // existing + (-exitQty) == existing - exitQty.
                     netQtyBySymbol.merge(sym, exitQty.negate(), BigDecimal::add);
-                    if (flow.getValueUsd() != null) {
-                        withdrawnUsd = withdrawnUsd.add(flow.getValueUsd(), MC);
+                    BigDecimal exitUsd = flowUsdAtEvent(tx, flow, historicalFlowUsdResolver);
+                    if (exitUsd != null && exitUsd.signum() > 0) {
+                        withdrawnUsd = withdrawnUsd.add(exitUsd, MC);
                     }
                 }
             }
@@ -1084,10 +1251,28 @@ public class SessionLpQueryService {
         }
 
         BigDecimal entryQtyForHodl(String sym) {
+            return entryQtyForSymbol(sym);
+        }
+
+        BigDecimal entryQtyForSymbol(String sym) {
             if (sym == null || sym.isBlank()) return null;
             String targetCanonical = CanonicalAssetCatalog.canonicalMarketSymbol(sym.toUpperCase(Locale.ROOT));
             String targetKey = targetCanonical.isBlank() ? sym.toUpperCase(Locale.ROOT) : targetCanonical;
             for (var entry : entryQtyBySymbol.entrySet()) {
+                String entryCanonical = CanonicalAssetCatalog.canonicalMarketSymbol(entry.getKey());
+                String entryKey = entryCanonical.isBlank() ? entry.getKey() : entryCanonical;
+                if (targetKey.equals(entryKey)) {
+                    return entry.getValue();
+                }
+            }
+            return null;
+        }
+
+        BigDecimal entryValueForSymbol(String sym) {
+            if (sym == null || sym.isBlank()) return null;
+            String targetCanonical = CanonicalAssetCatalog.canonicalMarketSymbol(sym.toUpperCase(Locale.ROOT));
+            String targetKey = targetCanonical.isBlank() ? sym.toUpperCase(Locale.ROOT) : targetCanonical;
+            for (var entry : entryValueBySymbol.entrySet()) {
                 String entryCanonical = CanonicalAssetCatalog.canonicalMarketSymbol(entry.getKey());
                 String entryKey = entryCanonical.isBlank() ? entry.getKey() : entryCanonical;
                 if (targetKey.equals(entryKey)) {
@@ -1113,7 +1298,7 @@ public class SessionLpQueryService {
         }
 
         boolean singleReceiptFamily() {
-            return "GMX_LP".equals(family) || "PENDLE_LP".equals(family);
+            return "GMX_LP".equals(family) || "GLV_LP".equals(family) || "PENDLE_LP".equals(family);
         }
 
         String pair() {
@@ -1268,5 +1453,65 @@ public class SessionLpQueryService {
         if (protocol == null) return null;
         String trimmed = protocol.trim();
         return BRIDGE_PROTOCOLS.stream().anyMatch(b -> b.equalsIgnoreCase(trimmed)) ? null : trimmed;
+    }
+
+    private static final class HistoricalFlowUsdResolver {
+        private final HistoricalPriceCacheService historicalPriceCacheService;
+        private final PriceExternalSourceOrchestrator priceExternalSourceOrchestrator;
+        private final Map<String, BigDecimal> cache = new LinkedHashMap<>();
+
+        private HistoricalFlowUsdResolver(
+                HistoricalPriceCacheService historicalPriceCacheService,
+                PriceExternalSourceOrchestrator priceExternalSourceOrchestrator
+        ) {
+            this.historicalPriceCacheService = historicalPriceCacheService;
+            this.priceExternalSourceOrchestrator = priceExternalSourceOrchestrator;
+        }
+
+        private BigDecimal resolve(NormalizedTransaction tx, NormalizedTransaction.Flow flow) {
+            if (tx == null || flow == null || tx.getBlockTimestamp() == null
+                    || flow.getAssetSymbol() == null || flow.getQuantityDelta() == null) {
+                return null;
+            }
+            BigDecimal qtyAbs = flow.getQuantityDelta().abs();
+            if (qtyAbs.signum() == 0) {
+                return null;
+            }
+            if (CanonicalAssetCatalog.isUsdStablecoinBySymbol(flow.getAssetSymbol())) {
+                return qtyAbs;
+            }
+            String cacheKey = tx.getId() + "|" + tx.getBlockTimestamp().toEpochMilli() + "|"
+                    + flow.getAssetContract() + "|" + flow.getAssetSymbol() + "|" + qtyAbs.toPlainString();
+            if (cache.containsKey(cacheKey)) {
+                return cache.get(cacheKey);
+            }
+
+            List<String> candidateSymbols = CanonicalAssetCatalog.marketEquivalentSymbols(flow.getAssetSymbol());
+            if (candidateSymbols == null || candidateSymbols.isEmpty()) {
+                candidateSymbols = List.of(flow.getAssetSymbol().trim().toUpperCase(Locale.ROOT));
+            }
+            PriceRequest request = new PriceRequest(
+                    tx.getId(),
+                    tx.getSource() == null ? NormalizedTransactionSource.ON_CHAIN : tx.getSource(),
+                    tx.getNetworkId(),
+                    flow.getAssetContract(),
+                    flow.getAssetSymbol(),
+                    tx.getBlockTimestamp()
+            );
+            BigDecimal resolved = null;
+            for (PriceSource source : priceExternalSourceOrchestrator.prioritizedSources(request)) {
+                Optional<PriceQuote> quote = historicalPriceCacheService.findCanonicalQuote(
+                        candidateSymbols,
+                        tx.getBlockTimestamp(),
+                        source
+                );
+                if (quote.isPresent() && quote.get().unitPriceUsd() != null && quote.get().unitPriceUsd().signum() > 0) {
+                    resolved = qtyAbs.multiply(quote.get().unitPriceUsd(), MC);
+                    break;
+                }
+            }
+            cache.put(cacheKey, resolved);
+            return resolved;
+        }
     }
 }

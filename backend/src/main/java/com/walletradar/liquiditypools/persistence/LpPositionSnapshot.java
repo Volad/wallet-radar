@@ -56,6 +56,22 @@ public class LpPositionSnapshot {
     private BigDecimal ilPct;
     private BigDecimal ilUsd;
     private BigDecimal aprNow;
+    /** Protocol-provided fee APR (e.g. from GMX /markets/info). Null for protocols that track fees via earning points. */
+    private BigDecimal feeAprPct;
+
+    /**
+     * GMX-specific: {@code cumulativeFeeUsdPerPoolValue} at the time of the first LP entry,
+     * in 10^30 scale (same as GMX price format). Populated once on first snapshot and preserved
+     * across subsequent refreshes. Combined with {@link #currentFeePerPoolValue} to compute
+     * total earned fees: {@code (current - entry) / 10^30 × depositedUsd}.
+     */
+    private BigDecimal entryFeePerPoolValue;
+
+    /**
+     * GMX-specific: latest {@code cumulativeFeeUsdPerPoolValue} from the Subsquid GraphQL,
+     * in 10^30 scale. Updated on every refresh.
+     */
+    private BigDecimal currentFeePerPoolValue;
 
     private Instant snapshotAt;
     private Boolean snapshotStale;

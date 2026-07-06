@@ -40,6 +40,14 @@ public class ConfirmedReplayQueryService {
         if (tx == null || tx.getSource() != NormalizedTransactionSource.BYBIT) {
             return 0;
         }
+        // Genuine external inbound deposits bring new inventory onto the umbrella. They must settle
+        // before any same-timestamp internal drain (e.g. a bybit-collapsed-v1 FUND->UTA outbound
+        // ordered outbound-first by corridorContinuityFlowSign). Otherwise the drain clamps against
+        // an unfunded umbrella and the matching inbound credits it back, manufacturing a phantom
+        // equal to the deposit quantity (root cause of the MNT/USDT umbrella inflation).
+        if (tx.getType() == NormalizedTransactionType.EXTERNAL_TRANSFER_IN) {
+            return -3;
+        }
         if (isBybitSpotDisposition(tx)) {
             return -2;
         }
@@ -57,19 +65,26 @@ public class ConfirmedReplayQueryService {
                 || tx.getType() == NormalizedTransactionType.DEX_ORDER_SETTLEMENT;
     }
 
-    // B-2: also orders on-chain BYBIT-CORRIDOR: INTERNAL_TRANSFER corridors outbound-first
-    // to prevent transient double-count when destination CARRY_IN lands before source CARRY_OUT.
+    // B-2 / B-SPIKE-03: order bybit-collapsed-v1 and corridor rows outbound-first so FUND
+    // CARRY_OUT lands before umbrella CARRY_IN at the same timestamp.
     private static int corridorContinuityFlowSign(NormalizedTransaction tx) {
         if (tx == null || tx.getFlows() == null) {
             return 0;
         }
         boolean isBybit = tx.getSource() == NormalizedTransactionSource.BYBIT;
+        String correlationId = tx.getCorrelationId();
+        boolean isBybitCollapsed = isBybit
+                && correlationId != null
+                && correlationId.startsWith("bybit-collapsed-v1:");
         boolean isOnChainCorridor = !isBybit
                 && tx.getType() == NormalizedTransactionType.INTERNAL_TRANSFER
-                && tx.getCorrelationId() != null
-                && tx.getCorrelationId().startsWith("BYBIT-CORRIDOR:");
-        if (!isBybit && !isOnChainCorridor) {
+                && correlationId != null
+                && correlationId.startsWith("BYBIT-CORRIDOR:");
+        if (!isBybit && !isOnChainCorridor && !isBybitCollapsed) {
             return 0;
+        }
+        if (isBybitCollapsed) {
+            return bybitPrincipalFlowSign(tx);
         }
         return switch (tx.getType()) {
             case INTERNAL_TRANSFER, LENDING_DEPOSIT, LENDING_WITHDRAW, EARN_FLEXIBLE_SAVING -> bybitPrincipalFlowSign(tx);

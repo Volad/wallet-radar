@@ -30,16 +30,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 
 /**
- * R-1* — Bybit {@code bybit-collapsed-v1} single-leg INTERNAL_TRANSFER carry source.
- *
- * <p>A collapsed FUND→UTA self-transfer (same UID) is emitted as two single-leg rows sharing a
- * {@code bybit-collapsed-v1:} correlation id; both resolve their position key to the UID umbrella.
- * After prior collapsed legs the umbrella retains only a dust residue of the asset while the real
- * inventory sits on the {@code :FUND} sub-account. The previous qty-only carry-source test treated
- * that dust as inventory and drained it (carrying ~$0), so the inbound leg restored almost entirely
- * uncovered and FAMILY:ETH AVCO collapsed (cmETH at $0.21/u, fabricating realised gains on later
- * disposal). The carry source must resolve to the {@code :FUND} sub-account that can cover the
- * moved quantity so the principal AVCO is conserved into the receipt.
+ * RC-2 — Bybit {@code bybit-collapsed-v1} UTA↔FUND legs net on the umbrella position key.
  */
 class TransferReplayHandlerCollapsedTransferCarryTest {
 
@@ -51,7 +42,7 @@ class TransferReplayHandlerCollapsedTransferCarryTest {
     @BeforeEach
     void setUp() {
         var assetSupport = new ReplayAssetSupport();
-        var engine = new GenericFlowReplayEngine();
+        var engine = new GenericFlowReplayEngine(null);
         var flowSupport = new ReplayFlowSupport(engine);
         var carryService = new ContinuityCarryService(engine, flowSupport);
         var keyFactory = new ReplayPendingTransferKeyFactory(assetSupport);
@@ -73,24 +64,14 @@ class TransferReplayHandlerCollapsedTransferCarryTest {
     }
 
     @Test
-    void collapsedFundToUtaTransferDrainsFundInventoryNotUmbrellaDustResidue() {
-        // Real cmETH inventory sits on :FUND (0.95209 @ $1785.6); the UID umbrella retains only a
-        // dust residue (0.00007969 @ $0.142) left by an earlier collapsed leg.
-        AssetKey fundKey = new AssetKey("BYBIT:33625378:FUND", null, "SYMBOL:CMETH", "CMETH", "FAMILY:ETH");
-        PositionState fund = replayState.position(fundKey);
-        fund.setQuantity(new BigDecimal("0.95209"));
-        fund.setTotalCostBasisUsd(new BigDecimal("1700.05"));
-        fund.setUncoveredQuantity(BigDecimal.ZERO);
-        fund.setPerWalletAvco(new BigDecimal("1785.6"));
-
+    void collapsedFundToUtaTransferDrainsUmbrellaInventory() {
         AssetKey umbrellaKey = new AssetKey("BYBIT:33625378", null, "SYMBOL:CMETH", "CMETH", "FAMILY:ETH");
         PositionState umbrella = replayState.position(umbrellaKey);
-        umbrella.setQuantity(new BigDecimal("0.00007969"));
-        umbrella.setTotalCostBasisUsd(new BigDecimal("0.142"));
+        umbrella.setQuantity(new BigDecimal("0.95209"));
+        umbrella.setTotalCostBasisUsd(new BigDecimal("1700.05"));
         umbrella.setUncoveredQuantity(BigDecimal.ZERO);
         umbrella.setPerWalletAvco(new BigDecimal("1785.6"));
 
-        // Outbound FUND leg (wallet :FUND, stripped position key = umbrella).
         NormalizedTransaction outbound = collapsedLeg(
                 "BYBIT-33625378:FUNDING_HISTORY:bea683",
                 "BYBIT:33625378:FUND",
@@ -98,11 +79,8 @@ class TransferReplayHandlerCollapsedTransferCarryTest {
                 new BigDecimal("-0.66955681"));
         handler.applyTransfer(outbound, outbound.getFlows().get(0), 0, umbrella, replayState);
 
-        // FUND was drained (basis conserved out), not the dust umbrella.
-        assertThat(fund.quantity()).isEqualByComparingTo("0.28253319");
-        assertThat(umbrella.quantity()).isEqualByComparingTo("0.00007969");
+        assertThat(umbrella.quantity()).isEqualByComparingTo("0.28253319");
 
-        // Inbound UTA leg (stripped position key = umbrella) restores the conserved basis.
         NormalizedTransaction inbound = collapsedLeg(
                 "BYBIT-33625378:INTERNAL_TRANSFER:selfTransfer_4320",
                 "BYBIT:33625378:UTA",
@@ -110,8 +88,7 @@ class TransferReplayHandlerCollapsedTransferCarryTest {
                 new BigDecimal("0.66955681"));
         handler.applyTransfer(inbound, inbound.getFlows().get(0), 0, umbrella, replayState);
 
-        // The receipt inherits ~$1785/u (the FUND principal AVCO), not the depressed $0.21/u.
-        assertThat(umbrella.quantity()).isEqualByComparingTo("0.6696365");
+        assertThat(umbrella.quantity()).isEqualByComparingTo("0.95209");
         assertThat(umbrella.perWalletAvco()).isGreaterThan(new BigDecimal("1700"));
         assertThat(umbrella.totalCostBasisUsd()).isGreaterThan(new BigDecimal("1190"));
         assertThat(umbrella.uncoveredQuantity()).isZero();

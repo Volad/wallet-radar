@@ -1,6 +1,5 @@
 package com.walletradar.costbasis.application;
 
-import com.walletradar.costbasis.application.read.TimelineAvcoAuthority;
 import com.walletradar.costbasis.domain.AssetLedgerPoint;
 import com.walletradar.costbasis.domain.AssetLedgerPointRepository;
 import com.walletradar.costbasis.domain.OnChainBalance;
@@ -860,7 +859,7 @@ class AssetLedgerQueryServiceTest {
 
         assertThat(view.timeline()).hasSize(1);
         assertThat(view.timeline().getFirst().avcoAfterUsd()).isEqualByComparingTo("2000");
-        assertThat(view.timeline().getFirst().avcoKind()).isEqualTo(TimelineAvcoAuthority.KIND_PRIMARY_FLOW);
+        assertThat(view.timeline().getFirst().avcoKind()).isEqualTo("PRIMARY_FLOW");
         assertThat(view.ledgerPoints()).hasSize(2);
     }
 
@@ -936,7 +935,7 @@ class AssetLedgerQueryServiceTest {
 
         assertThat(view.timeline()).hasSize(1);
         assertThat(view.timeline().getFirst().avcoAfterUsd()).isEqualByComparingTo("2722");
-        assertThat(view.timeline().getFirst().avcoKind()).isEqualTo(TimelineAvcoAuthority.KIND_PRIMARY_FLOW);
+        assertThat(view.timeline().getFirst().avcoKind()).isEqualTo("PRIMARY_FLOW");
     }
 
     @Test
@@ -1011,7 +1010,7 @@ class AssetLedgerQueryServiceTest {
 
         assertThat(view.timeline()).hasSize(1);
         assertThat(view.timeline().getFirst().avcoAfterUsd()).isEqualByComparingTo("2062");
-        assertThat(view.timeline().getFirst().avcoKind()).isEqualTo(TimelineAvcoAuthority.KIND_PRIMARY_FLOW);
+        assertThat(view.timeline().getFirst().avcoKind()).isEqualTo("PRIMARY_FLOW");
     }
 
     @Test
@@ -1303,7 +1302,7 @@ class AssetLedgerQueryServiceTest {
     }
 
     @Test
-    void sessionFamilyLedgerTimelineCarriesForwardAvcoOnEarnWithdraw() {
+    void sessionFamilyLedgerTimelineHoldsFamilyAvcoAcrossEarnWithdraw() {
         UserSession session = bybitSession("session-earn-carry", "33625378");
 
         AssetLedgerPoint priorBuy = bybitVenuePoint("10", "BYBIT:33625378", "FAMILY:ETH", "ETH", "1.0", "1.0", "2873");
@@ -1330,8 +1329,8 @@ class AssetLedgerQueryServiceTest {
         fundIn.setBasisEffect(AssetLedgerPoint.BasisEffect.REALLOCATE_IN);
         fundIn.setNormalizedType("LENDING_WITHDRAW");
         fundIn.setQuantityDelta(new BigDecimal("0.151"));
-        fundIn.setTotalCostBasisAfterUsd(new BigDecimal("434"));
-        fundIn.setAvcoAfterUsd(null);
+        fundIn.setTotalCostBasisAfterUsd(new BigDecimal("433.823"));
+        fundIn.setAvcoAfterUsd(new BigDecimal("2873"));
         fundIn.setCostBasisDeltaUsd(new BigDecimal("434"));
         fundIn.setBlockTimestamp(Instant.parse("2026-04-05T10:01:00Z"));
 
@@ -1360,11 +1359,230 @@ class AssetLedgerQueryServiceTest {
                 .findSessionFamilyLedger("session-earn-carry", "FAMILY:ETH")
                 .orElseThrow();
 
+        // ADR-045 Method B: the covered-weighted family AVCO holds at ~$2873 across the earn
+        // withdraw (EARN drains to 0 covered, FUND receives the same basis-backed ETH), and the
+        // series self-chains (entry-1 before == entry-0 after). No CARRIED_FORWARD kind exists.
         assertThat(view.timeline()).hasSize(2);
-        assertThat(view.timeline().get(1).avcoKind()).isEqualTo(TimelineAvcoAuthority.KIND_CARRIED_FORWARD);
+        assertThat(view.timeline().get(0).avcoAfterUsd()).isEqualByComparingTo("2873");
+        assertThat(view.timeline().get(1).avcoKind()).isEqualTo("PRIMARY_FLOW");
         assertThat(view.timeline().get(1).avcoAfterUsd()).isEqualByComparingTo("2873");
+        assertThat(view.timeline().get(1).avcoBeforeUsd())
+                .isEqualByComparingTo(view.timeline().get(0).avcoAfterUsd());
     }
 
+
+    @Test
+    void sessionFamilyLedgerTimelinePlotsCoveredWeightedFamilyAvcoAndSelfChains() {
+        // ADR-045 Method B: two live buckets — a low-basis on-chain WETH lane ($1849) and a
+        // high-basis Bybit ETH lane ($3715). The plotted series is Σ coveredᵢ·avcoᵢ / Σ coveredᵢ,
+        // and avcoBeforeUsd chains to the previous entry's avcoAfterUsd (AC-1b).
+        UserSession session = new UserSession();
+        session.setId("session-methodb");
+        UserSession.SessionWallet wallet = new UserSession.SessionWallet();
+        wallet.setAddress("wallet-a");
+        wallet.setNetworks(List.of(NetworkId.BASE));
+        session.setWallets(List.of(wallet));
+
+        AssetLedgerPoint baseWeth = point(
+                "1", "wallet-a", NetworkId.BASE, "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.ACQUIRE, AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "1", "1849", "0", "0", "1", "1849"
+        );
+        baseWeth.setNormalizedType("BUY");
+
+        AssetLedgerPoint bybitEth = point(
+                "2", "BYBIT:33625378", null, "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.ACQUIRE, AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "1", "3715", "0", "0", "1", "3715"
+        );
+        bybitEth.setNormalizedType("BUY");
+        bybitEth.setBlockTimestamp(Instant.parse("2026-04-05T10:01:00Z"));
+
+        when(userSessionRepository.findById("session-methodb")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "ACCOUNTING_UNIVERSE:session-methodb",
+                List.of("wallet-a", "BYBIT:33625378"),
+                List.of("wallet-a")
+        ));
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-methodb",
+                "FAMILY:ETH"
+        )).thenReturn(List.of(baseWeth, bybitEth));
+        when(normalizedTransactionRepository.findAllById(List.of("1", "2")))
+                .thenReturn(List.of(
+                        normalized("1", "Aerodrome", "ETH", "BUY", "1", "1849"),
+                        normalized("2", "Bybit", "ETH", "BUY", "1", "3715")
+                ));
+        when(mongoOperations.find(any(), eq(OnChainBalance.class))).thenReturn(List.of(
+                balance("wallet-a", NetworkId.BASE, "ETH", "1")
+        ));
+
+        AssetLedgerQueryService.SessionAssetLedgerView view = service()
+                .findSessionFamilyLedger("session-methodb", "FAMILY:ETH")
+                .orElseThrow();
+
+        assertThat(view.timeline()).hasSize(2);
+        AssetLedgerQueryService.TimelineEntryView first = view.timeline().get(0);
+        AssetLedgerQueryService.TimelineEntryView second = view.timeline().get(1);
+
+        assertThat(first.avcoBeforeUsd()).isNull();
+        assertThat(first.avcoAfterUsd()).isEqualByComparingTo("1849");
+        assertThat(first.avcoKind()).isEqualTo("PRIMARY_FLOW");
+
+        // (1·1849 + 1·3715) / 2 = 2782
+        assertThat(second.avcoAfterUsd()).isEqualByComparingTo("2782");
+        assertThat(second.netAvcoAfterUsd()).isEqualByComparingTo("2782");
+        assertThat(second.avcoKind()).isEqualTo("PRIMARY_FLOW");
+        // AC-1b self-chaining
+        assertThat(second.avcoBeforeUsd()).isEqualByComparingTo(first.avcoAfterUsd());
+        assertThat(second.netAvcoBeforeUsd()).isEqualByComparingTo(first.netAvcoAfterUsd());
+
+        assertThat(view.timeline())
+                .extracting(AssetLedgerQueryService.TimelineEntryView::avcoKind)
+                .doesNotContain("FAMILY_ROLLUP");
+    }
+
+    @Test
+    void sessionFamilyLedgerTimelineDustGasOnlyEventDoesNotMoveSeries() {
+        // AC-1a: a GAS_ONLY dust event (|qtyΔ| < 0.001) with unchanged bucket AVCO leaves the
+        // covered-weighted family series essentially flat.
+        UserSession session = new UserSession();
+        session.setId("session-dust");
+        UserSession.SessionWallet wallet = new UserSession.SessionWallet();
+        wallet.setAddress("wallet-a");
+        wallet.setNetworks(List.of(NetworkId.BASE));
+        session.setWallets(List.of(wallet));
+
+        AssetLedgerPoint acquire = point(
+                "1", "wallet-a", NetworkId.BASE, "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.ACQUIRE, AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "1", "2000", "0", "0", "1", "2000"
+        );
+        acquire.setNormalizedType("BUY");
+
+        AssetLedgerPoint dust = point(
+                "2", "wallet-a", NetworkId.BASE, "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.GAS_ONLY, AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "-0.0001", "0", "0", "-0.05", "0.9999", "1999.8"
+        );
+        dust.setNormalizedType("SPONSORED_GAS_IN");
+        dust.setAvcoAfterUsd(new BigDecimal("2000"));
+        dust.setBlockTimestamp(Instant.parse("2026-04-05T10:01:00Z"));
+
+        when(userSessionRepository.findById("session-dust")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "ACCOUNTING_UNIVERSE:session-dust",
+                List.of("wallet-a"),
+                List.of("wallet-a")
+        ));
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-dust",
+                "FAMILY:ETH"
+        )).thenReturn(List.of(acquire, dust));
+        when(normalizedTransactionRepository.findAllById(List.of("1", "2")))
+                .thenReturn(List.of(
+                        normalized("1", "Aerodrome", "ETH", "BUY", "1", "2000"),
+                        normalized("2", "Relay", "ETH", "SELL", "-0.0001", null)
+                ));
+        when(mongoOperations.find(any(), eq(OnChainBalance.class))).thenReturn(List.of(
+                balance("wallet-a", NetworkId.BASE, "ETH", "0.9999")
+        ));
+
+        AssetLedgerQueryService.SessionAssetLedgerView view = service()
+                .findSessionFamilyLedger("session-dust", "FAMILY:ETH")
+                .orElseThrow();
+
+        assertThat(view.timeline()).hasSize(2);
+        AssetLedgerQueryService.TimelineEntryView dustEntry = view.timeline().get(1);
+        assertThat(dustEntry.avcoBeforeUsd()).isEqualByComparingTo("2000");
+        assertThat(dustEntry.avcoAfterUsd()).isEqualByComparingTo("2000");
+        assertThat(dustEntry.avcoAfterUsd().subtract(dustEntry.avcoBeforeUsd()).abs())
+                .as("dust event must not move the plotted AVCO by more than $1")
+                .isLessThan(BigDecimal.ONE);
+    }
+
+    @Test
+    void sessionFamilyLedgerTimelineBreaksSeriesWhenFamilyDrainedThenReacquires() {
+        // AC-2 / ADR-031: a fully drained family emits null AVCO (line breaks, not $0); a following
+        // re-acquisition starts a fresh non-null segment (avcoBeforeUsd == prior null entry's after).
+        UserSession session = new UserSession();
+        session.setId("session-drain");
+        UserSession.SessionWallet wallet = new UserSession.SessionWallet();
+        wallet.setAddress("wallet-a");
+        wallet.setNetworks(List.of(NetworkId.BASE));
+        session.setWallets(List.of(wallet));
+
+        AssetLedgerPoint acquire = point(
+                "1", "wallet-a", NetworkId.BASE, "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.ACQUIRE, AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "1", "2000", "0", "0", "1", "2000"
+        );
+        acquire.setNormalizedType("BUY");
+
+        AssetLedgerPoint disposeAll = point(
+                "2", "wallet-a", NetworkId.BASE, "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.DISPOSE, AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "-1", "-2000", "0", "0", "0", "0"
+        );
+        disposeAll.setNormalizedType("SELL");
+        disposeAll.setBlockTimestamp(Instant.parse("2026-04-05T10:01:00Z"));
+
+        AssetLedgerPoint reacquire = point(
+                "3", "wallet-a", NetworkId.BASE, "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.ACQUIRE, AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "0.5", "1500", "0", "0", "0.5", "1500"
+        );
+        reacquire.setNormalizedType("BUY");
+        reacquire.setBlockTimestamp(Instant.parse("2026-04-05T10:02:00Z"));
+
+        when(userSessionRepository.findById("session-drain")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "ACCOUNTING_UNIVERSE:session-drain",
+                List.of("wallet-a"),
+                List.of("wallet-a")
+        ));
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-drain",
+                "FAMILY:ETH"
+        )).thenReturn(List.of(acquire, disposeAll, reacquire));
+        when(normalizedTransactionRepository.findAllById(List.of("1", "2", "3")))
+                .thenReturn(List.of(
+                        normalized("1", "Aerodrome", "ETH", "BUY", "1", "2000"),
+                        normalized("2", "Aerodrome", "ETH", "SELL", "-1", "2000"),
+                        normalized("3", "Aerodrome", "ETH", "BUY", "0.5", "3000")
+                ));
+        when(mongoOperations.find(any(), eq(OnChainBalance.class))).thenReturn(List.of(
+                balance("wallet-a", NetworkId.BASE, "ETH", "0.5")
+        ));
+
+        AssetLedgerQueryService.SessionAssetLedgerView view = service()
+                .findSessionFamilyLedger("session-drain", "FAMILY:ETH")
+                .orElseThrow();
+
+        assertThat(view.timeline()).hasSize(3);
+        AssetLedgerQueryService.TimelineEntryView drained = view.timeline().get(1);
+        AssetLedgerQueryService.TimelineEntryView reacquired = view.timeline().get(2);
+
+        assertThat(drained.avcoAfterUsd()).isNull();
+        assertThat(drained.netAvcoAfterUsd()).isNull();
+        assertThat(drained.avcoKind()).isEqualTo("UNAVAILABLE");
+        assertThat(drained.avcoBeforeUsd()).isEqualByComparingTo("2000");
+
+        assertThat(reacquired.avcoBeforeUsd()).as("re-acquire chains to prior null after").isNull();
+        assertThat(reacquired.avcoAfterUsd()).isEqualByComparingTo("3000");
+        assertThat(reacquired.avcoKind()).isEqualTo("PRIMARY_FLOW");
+
+        assertThat(view.timeline())
+                .extracting(AssetLedgerQueryService.TimelineEntryView::avcoKind)
+                .doesNotContain("FAMILY_ROLLUP");
+    }
 
     private UserSession bybitSession(String sessionId, String uid) {
         UserSession session = new UserSession();

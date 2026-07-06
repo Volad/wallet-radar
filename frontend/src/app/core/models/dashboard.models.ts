@@ -164,6 +164,7 @@ export interface TokenPosition {
   readonly isLiveQuote: boolean;
   readonly priceIssue: IssueCode;
   readonly avcoUsd: number;
+  readonly netAvcoUsd: number;
   readonly unrealizedPnlPct: number;
   readonly unrealizedPnlUsd: number;
   readonly realizedPnlUsd: number;

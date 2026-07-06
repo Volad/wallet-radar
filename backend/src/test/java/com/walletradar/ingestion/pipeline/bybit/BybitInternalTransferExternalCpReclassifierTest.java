@@ -198,6 +198,42 @@ class BybitInternalTransferExternalCpReclassifierTest {
     }
 
     @Test
+    @DisplayName("earn-principal corrId is preserved when demoting same-uid external to internal")
+    void earnPrincipalCorrIdSurvivesSameUidDemotion() {
+        // Defense-in-depth (ADR-029 D1): if a paired earn-principal FUND leg ever lands here as an
+        // EXTERNAL_TRANSFER_OUT, demoting it back to INTERNAL_TRANSFER must NOT null its
+        // bybit-earn-principal-v1: corrId — otherwise BybitOnChainEarnOrphanRepairService would treat
+        // it as a blank-corr orphan and re-link it forever (linking convergence loop).
+        String earnPrincipalCorr =
+                BybitEarnPrincipalTransferPairer.EARN_PRINCIPAL_CORRELATION_PREFIX + "deadbeef";
+        NormalizedTransaction tx = externalTransfer(
+                "BYBIT-33625378:INTERNAL_TRANSFER:earnPrincipalLeg",
+                "BYBIT:33625378:FUND",
+                "BYBIT:33625378:EARN",
+                "MNT",
+                "263.6026",
+                NormalizedTransactionType.EXTERNAL_TRANSFER_OUT
+        );
+        tx.setCorrelationId(earnPrincipalCorr);
+        tx.setContinuityCandidate(true);
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(tx));
+
+        BybitInternalTransferExternalCpReclassifier reclassifier = new BybitInternalTransferExternalCpReclassifier(
+                mongoOperations,
+                normalizedTransactionRepository,
+                accountingUniverseService
+        );
+        int count = reclassifier.reclassifySameUidExternalToInternal(Instant.now());
+
+        assertThat(count).isEqualTo(1);
+        assertThat(tx.getType()).isEqualTo(NormalizedTransactionType.INTERNAL_TRANSFER);
+        // corrId and continuity flag survive so replay still pairs the earn-principal legs.
+        assertThat(tx.getCorrelationId()).isEqualTo(earnPrincipalCorr);
+        assertThat(tx.getContinuityCandidate()).isTrue();
+    }
+
+    @Test
     @DisplayName("different Bybit uid stays EXTERNAL_TRANSFER")
     void differentUidLeavesExternalUntouched() {
         NormalizedTransaction tx = externalTransfer(

@@ -400,22 +400,45 @@ public class SessionTransactionsQueryService {
                 realisedPnlUsdTotal(transaction),
                 null,
                 transaction.getFlows().stream()
-                        .map(this::toFlowView)
+                        .map(flow -> toFlowView(transaction, flow))
                         .toList()
         );
     }
 
-    private FlowView toFlowView(NormalizedTransaction.Flow flow) {
+    private FlowView toFlowView(NormalizedTransaction transaction, NormalizedTransaction.Flow flow) {
+        BigDecimal unitPrice = flow.getUnitPriceUsd();
+        BigDecimal valueUsd = flow.getValueUsd();
+        // LP receipt tokens (GM, GLV) from settlement carry no reliable historical price —
+        // the system falls back to current market price which misleads the reader into
+        // thinking the deposit settled at a lower value. Cost basis is propagated via the
+        // replay bucket (not from unitPriceUsd), so it is safe to suppress the price here.
+        if (isSuppressedSettlementReceiptFlow(transaction, flow)) {
+            unitPrice = null;
+            valueUsd = null;
+        }
         return new FlowView(
                 flow.getRole() == null ? null : flow.getRole().name(),
                 blankToNull(flow.getAssetContract()),
                 blankToNull(flow.getAssetSymbol()),
                 flow.getQuantityDelta(),
-                flow.getUnitPriceUsd(),
-                flow.getValueUsd(),
+                unitPrice,
+                valueUsd,
                 flow.getPriceSource() == null ? null : flow.getPriceSource().name(),
                 flow.getLogIndex()
         );
+    }
+
+    private boolean isSuppressedSettlementReceiptFlow(NormalizedTransaction tx, NormalizedTransaction.Flow flow) {
+        if (tx.getType() != NormalizedTransactionType.LP_ENTRY_SETTLEMENT) {
+            return false;
+        }
+        String sym = flow.getAssetSymbol();
+        if (sym == null || sym.isBlank()) {
+            return false;
+        }
+        // GM:ETH/USD [WETH-USDC] and GLV [...] tokens — receipt tokens with no historical price feed
+        return sym.regionMatches(true, 0, "GM:", 0, 3)
+                || sym.regionMatches(true, 0, "GLV", 0, 3);
     }
 
     private String mapSourceType(NormalizedTransaction transaction) {

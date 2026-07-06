@@ -196,7 +196,8 @@ public class LpReceiptEntryReplayHandler {
                 poolContext.dirtyKeys(),
                 touchedAt
         );
-        lpReceiptBasisPoolService.deposit(pool, carry.quantity(), carry.costBasisUsd(), carry.uncoveredQuantity());
+        // ADR-040 Change 2: deposit both tax and net basis into the pool
+        lpReceiptBasisPoolService.deposit(pool, carry.quantity(), carry.costBasisUsd(), carry.netCostBasisUsd(), carry.uncoveredQuantity());
 
         replayState.ledgerPointCollector().record(
                 transaction,
@@ -233,10 +234,12 @@ public class LpReceiptEntryReplayHandler {
         );
         BigDecimal requested = flow.getQuantityDelta().abs();
         BigDecimal basisUsd = BigDecimal.ZERO;
+        BigDecimal netBasisUsd = BigDecimal.ZERO;
         BigDecimal uncovered = BigDecimal.ZERO;
         if (pool != null) {
             var withdraw = lpReceiptBasisPoolService.withdraw(pool, requested);
             basisUsd = withdraw.withdrawnBasisUsd();
+            netBasisUsd = withdraw.withdrawnNetBasisUsd();
             uncovered = withdraw.withdrawnUncoveredQty();
             requested = withdraw.withdrawnQty();
             poolContext.dirtyKeys().add(
@@ -251,7 +254,8 @@ public class LpReceiptEntryReplayHandler {
             BigDecimal avco = basisUsd.signum() > 0 && requested.signum() > 0
                     ? basisUsd.divide(requested, MC)
                     : null;
-            flowSupport.restoreToPosition(requested, position, basisUsd, uncovered, avco);
+            // ADR-040 Change 2: restore net basis from pool alongside tax basis
+            flowSupport.restoreToPosition(requested, position, basisUsd, netBasisUsd, uncovered, avco);
         }
 
         replayState.ledgerPointCollector().record(
@@ -296,8 +300,10 @@ public class LpReceiptEntryReplayHandler {
         BigDecimal avco = totalBasis.signum() > 0 ? totalBasis.divide(BigDecimal.ONE, MC) : null;
         receiptPosition.setQuantity(BigDecimal.ONE);
         receiptPosition.setTotalCostBasisUsd(totalBasis);
+        receiptPosition.setNetTotalCostBasisUsd(totalBasis);
         receiptPosition.setUncoveredQuantity(totalUncovered);
         receiptPosition.setPerWalletAvco(avco);
+        receiptPosition.setPerWalletNetAvco(avco);
         IndexedFlow marker = outboundPrincipal.getFirst();
         replayState.recordLpReceiptEntryEvent(corrId);
         replayState.ledgerPointCollector().record(

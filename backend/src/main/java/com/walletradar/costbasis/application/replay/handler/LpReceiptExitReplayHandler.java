@@ -152,6 +152,9 @@ public class LpReceiptExitReplayHandler {
             BigDecimal coveredQty = withdraw.withdrawnQty().subtract(withdraw.withdrawnUncoveredQty(), MC);
             BigDecimal cappedBasis = flowSupport.pegCappedStablecoinCarryBasis(
                     assetKey, coveredQty, withdraw.withdrawnBasisUsd());
+            // ADR-040 Change 2: cap net lane with same stablecoin peg guard
+            BigDecimal cappedNetBasis = flowSupport.pegCappedStablecoinCarryBasis(
+                    assetKey, coveredQty, withdraw.withdrawnNetBasisUsd());
             BigDecimal avco = cappedBasis.signum() > 0
                     ? cappedBasis.divide(withdraw.withdrawnQty(), MC)
                     : null;
@@ -159,6 +162,7 @@ public class LpReceiptExitReplayHandler {
                     withdraw.withdrawnQty(),
                     position,
                     cappedBasis,
+                    cappedNetBasis,
                     withdraw.withdrawnUncoveredQty(),
                     avco
             );
@@ -195,8 +199,10 @@ public class LpReceiptExitReplayHandler {
         if (receiptPosition.quantity().signum() > 0) {
             receiptPosition.setQuantity(BigDecimal.ZERO);
             receiptPosition.setTotalCostBasisUsd(BigDecimal.ZERO);
+            receiptPosition.setNetTotalCostBasisUsd(BigDecimal.ZERO);
             receiptPosition.setUncoveredQuantity(BigDecimal.ZERO);
             receiptPosition.setPerWalletAvco(null);
+            receiptPosition.setPerWalletNetAvco(null);
         }
     }
 

@@ -107,6 +107,112 @@ class ReplayMarketAuthorityTest {
     }
 
     @Test
+    @DisplayName("RC-D: pre-coverage BOT_LEDGER lot is clamped to the nearest valid bucket")
+    void botLedgerPreCoverageLotClampsToNearestBucket() {
+        Instant occurredAt = Instant.parse("2025-01-31T12:00:00Z");
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setId("tx-doge-bot");
+        tx.setSource(NormalizedTransactionSource.BYBIT);
+        tx.setBlockTimestamp(occurredAt);
+        tx.setType(NormalizedTransactionType.EXTERNAL_TRANSFER_IN);
+
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(NormalizedLegRole.TRANSFER);
+        flow.setAssetSymbol("DOGE");
+        flow.setQuantityDelta(new BigDecimal("150.591"));
+        // Bot stablecoin-consumed derivation: out-of-range $0.5766/unit for a pre-coverage lot.
+        flow.setUnitPriceUsd(new BigDecimal("0.5766"));
+        flow.setPriceSource(PriceSource.BOT_LEDGER);
+        tx.setFlows(List.of(flow));
+
+        when(priceExternalSourceOrchestrator.resolvePreCoverageNearestBucket(any(PriceRequest.class)))
+                .thenReturn(Optional.of(new PriceQuote(
+                        new BigDecimal("0.23246"),
+                        PriceSource.BINANCE,
+                        Instant.parse("2025-09-22T00:00:00Z"),
+                        "DOGE",
+                        "test-doge"
+                )));
+
+        ReplayMarketAuthority authority = new ReplayMarketAuthority(
+                historicalPriceCacheService,
+                priceExternalSourceOrchestrator
+        );
+
+        Optional<ReplayMarketAuthority.ResolvedMarketPrice> resolved = authority.resolve(tx, flow);
+
+        assertThat(resolved).isPresent();
+        assertThat(resolved.get().unitPriceUsd()).isEqualByComparingTo("0.23246");
+        assertThat(resolved.get().authority())
+                .isEqualTo(ReplayMarketAuthority.ResolvedMarketPrice.Authority.HISTORICAL_CACHE);
+    }
+
+    @Test
+    @DisplayName("RC-D: in-coverage BOT_LEDGER lot keeps its stablecoin-derived price")
+    void botLedgerInCoverageLotKeepsDerivedPrice() {
+        Instant occurredAt = Instant.parse("2025-10-05T12:00:00Z");
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setId("tx-doge-bot-incov");
+        tx.setSource(NormalizedTransactionSource.BYBIT);
+        tx.setBlockTimestamp(occurredAt);
+        tx.setType(NormalizedTransactionType.EXTERNAL_TRANSFER_IN);
+
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(NormalizedLegRole.TRANSFER);
+        flow.setAssetSymbol("DOGE");
+        flow.setQuantityDelta(new BigDecimal("100"));
+        flow.setUnitPriceUsd(new BigDecimal("0.31"));
+        flow.setPriceSource(PriceSource.BOT_LEDGER);
+        tx.setFlows(List.of(flow));
+
+        // In-coverage: no pre-coverage clamp available.
+        when(priceExternalSourceOrchestrator.resolvePreCoverageNearestBucket(any(PriceRequest.class)))
+                .thenReturn(Optional.empty());
+
+        ReplayMarketAuthority authority = new ReplayMarketAuthority(
+                historicalPriceCacheService,
+                priceExternalSourceOrchestrator
+        );
+
+        Optional<ReplayMarketAuthority.ResolvedMarketPrice> resolved = authority.resolve(tx, flow);
+
+        assertThat(resolved).isPresent();
+        assertThat(resolved.get().unitPriceUsd()).isEqualByComparingTo("0.31");
+        assertThat(resolved.get().authority())
+                .isEqualTo(ReplayMarketAuthority.ResolvedMarketPrice.Authority.FLOW);
+    }
+
+    @Test
+    @DisplayName("RC-D: a non-bot resolved flow price is never routed through the pre-coverage clamp")
+    void nonBotResolvedFlowNeverClamps() {
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setId("tx-eth-flow");
+        tx.setSource(NormalizedTransactionSource.BYBIT);
+        tx.setBlockTimestamp(Instant.parse("2025-01-31T12:00:00Z"));
+
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(NormalizedLegRole.TRANSFER);
+        flow.setAssetSymbol("ETH");
+        flow.setQuantityDelta(new BigDecimal("1"));
+        flow.setUnitPriceUsd(new BigDecimal("3000"));
+        flow.setPriceSource(PriceSource.COINGECKO);
+        tx.setFlows(List.of(flow));
+
+        ReplayMarketAuthority authority = new ReplayMarketAuthority(
+                historicalPriceCacheService,
+                priceExternalSourceOrchestrator
+        );
+
+        Optional<ReplayMarketAuthority.ResolvedMarketPrice> resolved = authority.resolve(tx, flow);
+
+        assertThat(resolved).isPresent();
+        assertThat(resolved.get().unitPriceUsd()).isEqualByComparingTo("3000");
+        assertThat(resolved.get().authority())
+                .isEqualTo(ReplayMarketAuthority.ResolvedMarketPrice.Authority.FLOW);
+        verify(priceExternalSourceOrchestrator, never()).resolvePreCoverageNearestBucket(any());
+    }
+
+    @Test
     @DisplayName("F-5(a): cross-chain MNT borrow resolves canonical price when network/contract cache misses")
     void resolveCanonicalCrossNetworkWhenNetworkContractCacheMisses() {
         Instant occurredAt = Instant.parse("2025-06-01T08:30:00Z");

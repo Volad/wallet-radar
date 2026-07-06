@@ -9,6 +9,7 @@ import com.walletradar.costbasis.application.replay.model.LiquidStakingFlowSelec
 import com.walletradar.costbasis.application.replay.model.PositionSnapshot;
 import com.walletradar.costbasis.application.replay.model.PositionState;
 import com.walletradar.costbasis.application.replay.state.ReplayExecutionState;
+import com.walletradar.costbasis.application.replay.support.AccountRefPositionResolver;
 import com.walletradar.costbasis.application.replay.support.ReplayAssetSupport;
 import com.walletradar.costbasis.application.replay.support.ReplayFlowSupport;
 import com.walletradar.costbasis.application.replay.support.ReplaySettlementAllocator;
@@ -23,6 +24,7 @@ import java.math.MathContext;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 
@@ -30,6 +32,8 @@ import java.util.Objects;
 public class LiquidStakingReplayHandler {
 
     private static final MathContext MC = MathContext.DECIMAL128;
+    /** Same dust-safe coverage threshold as {@code TransferReplayHandler.CARRY_SOURCE_COVERAGE_RATIO}. */
+    private static final BigDecimal CARRY_SOURCE_COVERAGE_RATIO = new BigDecimal("0.999");
 
     private final ReplayAssetSupport assetSupport;
     private final ReplayFlowSupport flowSupport;
@@ -108,7 +112,8 @@ public class LiquidStakingReplayHandler {
             flow.setRealisedPnlUsd(null);
 
             AssetKey assetKey = assetSupport.assetKey(transaction, flow);
-            PositionState position = replayState.position(assetKey);
+            PositionState position = resolveOutboundDrainPosition(
+                    transaction, flow, assetKey, replayState, flow.getQuantityDelta().abs());
             position.setLastEventTimestamp(flowSupport.laterOf(position.lastEventTimestamp(), transaction.getBlockTimestamp()));
             PositionSnapshot before = flowSupport.snapshot(position);
             CarryTransfer removedCarry = flowSupport.removeFromPosition(flow, position);
@@ -146,6 +151,8 @@ public class LiquidStakingReplayHandler {
         }
 
         BigDecimal remainingCost = carry.totalCostBasisUsd();
+        // ADR-040 Change 2: track net lane separately through allocation
+        BigDecimal remainingNetCost = carry.totalNetCostBasisUsd();
         BigDecimal remainingCoveredQuantity = carry.totalCoveredQuantity();
         BigDecimal totalCoveredDestinationQuantity = totalInboundQuantity(inboundFlows).min(carry.totalCoveredQuantity());
         for (int index = 0; index < inboundFlows.size(); index++) {
@@ -168,13 +175,20 @@ public class LiquidStakingReplayHandler {
                     : consumesFinalCoveredPrincipal
                     ? remainingCost
                     : allocatedCost(carry.totalCostBasisUsd(), coveredQuantity, totalCoveredDestinationQuantity);
+            // ADR-040 Change 2: proportionally allocate net cost in the same way as tax cost
+            BigDecimal allocatedNetCost = coveredQuantity.signum() == 0
+                    ? BigDecimal.ZERO
+                    : consumesFinalCoveredPrincipal
+                    ? remainingNetCost
+                    : allocatedCost(carry.totalNetCostBasisUsd(), coveredQuantity, totalCoveredDestinationQuantity);
             remainingCost = remainingCost.subtract(allocatedCost, MC);
+            remainingNetCost = remainingNetCost.subtract(allocatedNetCost, MC);
             remainingCoveredQuantity = nonNegative(remainingCoveredQuantity.subtract(coveredQuantity, MC));
             BigDecimal uncoveredQuantity = nonNegative(quantity.subtract(coveredQuantity, MC));
             BigDecimal avco = coveredQuantity.signum() > 0
                     ? safeDivide(allocatedCost, coveredQuantity)
                     : null;
-            flowSupport.restoreToPosition(quantity, position, allocatedCost, uncoveredQuantity, avco);
+            flowSupport.restoreToPosition(quantity, position, allocatedCost, allocatedNetCost, uncoveredQuantity, avco);
             replayState.ledgerPointCollector().record(
                     transaction,
                     flow,
@@ -185,6 +199,83 @@ public class LiquidStakingReplayHandler {
                     AssetLedgerPoint.BasisEffect.REALLOCATE_IN
             );
         }
+    }
+
+    /**
+     * R-1 (Fix A.1): a Bybit {@code STAKING_DEPOSIT} whose principal genuinely sits on {@code :FUND}
+     * (corridor-funded liquid staking, e.g. the 2025-03-12 "ETH 2.0" cycle) must drain the
+     * {@code :FUND} sub-account, not the umbrella. The outbound flow keys to the umbrella (because
+     * {@code positionWalletAddress} strips {@code :FUND}), so when the umbrella cannot cover the
+     * moved quantity (its inventory is dust / the corridor duplicate has been collapsed away) but
+     * the {@code :FUND} position can, drain {@code :FUND}. This mirrors the established, tested
+     * {@code TransferReplayHandler.resolveCarrySourcePosition} R-1 redirect — which is unreachable
+     * for {@code STAKING_DEPOSIT} because staking routes through this handler, not the transfer
+     * handler. Spot-funded staking (inventory on the umbrella) keeps its umbrella key because the
+     * umbrella covers; the ETH→METH control and Part-1 METH→CMETH (umbrella-booked) are unaffected.
+     *
+     * <p><b>ADR-042.</b> The Fix A.1 guard below keys on the <em>transaction</em>
+     * {@code walletAddress} suffix ending {@code :FUND}. A collapsed {@code STAKING_DEPOSIT} (e.g.
+     * the 2025-04-18 ETH cycle) instead carries the plain umbrella as {@code walletAddress}, so that
+     * guard never fires — but {@code flow.accountRef} still names the {@code :FUND} sub-account that
+     * funded the principal. The shared, coverage-and-existence-gated {@code accountRef} redirect runs
+     * first: when the named sub-position exists and can cover the leg, drain it so the staked
+     * principal basis carries into the receipt and the sub-account keeps no phantom.
+     */
+    private PositionState resolveOutboundDrainPosition(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow,
+            AssetKey umbrellaKey,
+            ReplayExecutionState replayState,
+            BigDecimal outboundQuantity
+    ) {
+        PositionState umbrellaPosition = replayState.position(umbrellaKey);
+        AssetKey accountRefKey = AccountRefPositionResolver.resolveInventoryBearingAccountRefKey(
+                umbrellaKey,
+                flow == null ? null : flow.getAccountRef(),
+                replayState.positions().asMap(),
+                outboundQuantity
+        );
+        if (!accountRefKey.equals(umbrellaKey)) {
+            return replayState.position(accountRefKey);
+        }
+        String wallet = transaction == null ? null : transaction.getWalletAddress();
+        if (wallet == null || !wallet.trim().toUpperCase(Locale.ROOT).endsWith(":FUND")) {
+            return umbrellaPosition;
+        }
+        if (positionCoversQuantity(umbrellaPosition, outboundQuantity)) {
+            return umbrellaPosition;
+        }
+        AssetKey fundKey = new AssetKey(
+                wallet.trim(),
+                umbrellaKey.networkId(),
+                umbrellaKey.assetContract(),
+                umbrellaKey.assetSymbol(),
+                umbrellaKey.assetIdentity()
+        );
+        if (fundKey.equals(umbrellaKey)) {
+            return umbrellaPosition;
+        }
+        PositionState fundPosition = replayState.position(fundKey);
+        return positionCoversQuantity(fundPosition, outboundQuantity) ? fundPosition : umbrellaPosition;
+    }
+
+    /**
+     * True when {@code position} holds at least {@link #CARRY_SOURCE_COVERAGE_RATIO} of the moved
+     * quantity — i.e. it can supply the outbound staking leg from real inventory rather than a dust
+     * residue. Mirrors {@code TransferReplayHandler.positionCoversQuantity}.
+     */
+    private static boolean positionCoversQuantity(PositionState position, BigDecimal outboundQuantity) {
+        if (position == null) {
+            return false;
+        }
+        BigDecimal qty = position.quantity();
+        if (qty == null || qty.signum() <= 0) {
+            return false;
+        }
+        if (outboundQuantity == null || outboundQuantity.signum() <= 0) {
+            return true;
+        }
+        return qty.compareTo(outboundQuantity.multiply(CARRY_SOURCE_COVERAGE_RATIO, MC)) >= 0;
     }
 
     private boolean isPrincipalCandidate(NormalizedTransaction.Flow flow) {

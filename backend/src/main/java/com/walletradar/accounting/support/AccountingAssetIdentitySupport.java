@@ -3,6 +3,7 @@ package com.walletradar.accounting.support;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 
 import java.util.Locale;
 import java.util.Map;
@@ -83,9 +84,18 @@ public final class AccountingAssetIdentitySupport {
     }
 
     /**
-     * Replay position wallet for ledger and carry attachment. Earn-principal paired rows keep
-     * their venue sub-account ({@code :FUND}, {@code :EARN}, {@code :UTA}) so inbound restore
-     * lands on the same wallet as normalized evidence and pending carry keys can match.
+     * Replay position wallet for ledger and carry attachment.
+     *
+     * <p>RC-1: Flexible-Savings earn-principal pairs ({@code bybit-earn-principal-v1:}) keep their
+     * held {@code :EARN} sub-account but route their FUND/UTA-side principal to the UID umbrella.
+     * The collapsed UTA↔FUND inbound that funds {@code :FUND} nets onto the umbrella under RC-2,
+     * leaving {@code :FUND} empty, so the subscribe must drain the umbrella (where the inventory
+     * actually sits) and the redeem must credit it back. Stripping {@code :FUND}/{@code :UTA} for
+     * these pairs lets a closed subscribe→redeem cycle net to zero on a single {@code :EARN} key.
+     *
+     * <p>{@code bybit-earn-onchain-fund-v1:} corridor-funded repairs are intentionally NOT stripped:
+     * those rows place basis directly on {@code :FUND}, so the {@code CARRY_OUT} must drain that
+     * sub-account.
      *
      * <p>BYBIT-CORRIDOR transactions from the {@code :FUND} sub-account also keep the full
      * wallet address because the earn-principal transfer that placed assets into {@code :FUND}
@@ -97,11 +107,20 @@ public final class AccountingAssetIdentitySupport {
             NormalizedTransaction.Flow flow
     ) {
         if (isEarnPrincipalPaired(transaction)) {
-            if (flow != null && flow.getAccountRef() != null && !flow.getAccountRef().isBlank()) {
-                return flow.getAccountRef().trim();
+            String wallet = (flow != null && flow.getAccountRef() != null && !flow.getAccountRef().isBlank())
+                    ? flow.getAccountRef().trim()
+                    : (transaction == null ? null : transaction.getWalletAddress());
+            if (wallet == null || wallet.isBlank()) {
+                return null;
             }
-            String wallet = transaction == null ? null : transaction.getWalletAddress();
-            return wallet == null || wallet.isBlank() ? null : wallet.trim();
+            wallet = wallet.trim();
+            if (isFlexibleEarnPrincipal(transaction)) {
+                String upper = wallet.toUpperCase(Locale.ROOT);
+                if (upper.endsWith(":FUND") || upper.endsWith(":UTA")) {
+                    return wallet.substring(0, wallet.lastIndexOf(':'));
+                }
+            }
+            return wallet;
         }
         if (isBybitCorridorFromFund(transaction)) {
             String wallet = transaction.getWalletAddress();
@@ -115,7 +134,31 @@ public final class AccountingAssetIdentitySupport {
                 return wallet.trim();
             }
         }
+        // XPL double-count: a Bybit REWARD_CLAIM is claimed yield, i.e. liquid spendable balance,
+        // not staked principal. Route it to the UID umbrella (stripping :EARN as well as :FUND/:UTA)
+        // so a subsequent collapsed FUND->UTA move drains a real umbrella lot instead of an empty
+        // one. Otherwise the reward stays siloed on :EARN while the collapsed UTA-inbound
+        // materialises a fresh uncovered phantom on the umbrella, doubling the reward across
+        // :EARN + umbrella. Combined per-asset balance is unchanged (:FUND rewards already strip to
+        // the umbrella via positionWalletAddress), so reconciled earn assets (LDO/ONDO/LTC) keep
+        // their combined totals.
+        if (isBybitRewardClaim(transaction)) {
+            String wallet = transaction.getWalletAddress();
+            if (wallet != null && wallet.startsWith("BYBIT:")) {
+                String upper = wallet.toUpperCase(Locale.ROOT);
+                if (upper.endsWith(":EARN") || upper.endsWith(":FUND") || upper.endsWith(":UTA")) {
+                    return wallet.substring(0, wallet.lastIndexOf(':'));
+                }
+                return wallet;
+            }
+        }
         return positionWalletAddress(transaction);
+    }
+
+    private static boolean isBybitRewardClaim(NormalizedTransaction transaction) {
+        return transaction != null
+                && transaction.getSource() == NormalizedTransactionSource.BYBIT
+                && transaction.getType() == NormalizedTransactionType.REWARD_CLAIM;
     }
 
     private static boolean isEarnPrincipalPaired(NormalizedTransaction transaction) {
@@ -140,42 +183,26 @@ public final class AccountingAssetIdentitySupport {
     }
 
     /**
-     * Returns true for the FUND CARRY_IN leg of a {@code bybit-collapsed-v1:} UTA↔FUND pair.
-     * These legs must use the full {@code :FUND} wallet address so that the CARRY_IN credits
-     * the FUND sub-account rather than the collapsed main wallet.
-     *
-     * <p>FUND↔EARN collapsed pairs are excluded: for those, the acquisition was recorded on the
-     * stripped root position ({@code BYBIT:uid}) and the FUND drain must address the same root
-     * position. Only UTA↔FUND pairs (counterparty is {@code :UTA}) need the full sub-account
-     * address preserved.</p>
+     * RC-1: Flexible-Savings earn-principal pairs only ({@code bybit-earn-principal-v1:}). Their
+     * FUND/UTA-side principal lives on the UID umbrella (collapsed UTA↔FUND inbound nets there),
+     * so the FUND/UTA leg routes to the umbrella while the held {@code :EARN} leg stays scoped.
+     * Excludes {@code bybit-earn-onchain-fund-v1:}, whose basis legitimately sits on {@code :FUND}.
+     */
+    private static boolean isFlexibleEarnPrincipal(NormalizedTransaction transaction) {
+        String correlationId = transaction == null ? null : transaction.getCorrelationId();
+        return correlationId != null && correlationId.startsWith(EARN_PRINCIPAL_CORRELATION_PREFIX);
+    }
+
+    /**
+     * Formerly preserved {@code :FUND} on inbound UTA↔FUND {@code bybit-collapsed-v1:} legs while
+     * outbound stripped to the umbrella — that asymmetry created inbound-only phantom {@code :FUND}
+     * pools (RC-2). Both halves now strip to the umbrella so round-trips net to zero on one key.
      */
     private static boolean isBybitCollapsedFundSide(
             NormalizedTransaction transaction,
             NormalizedTransaction.Flow flow
     ) {
-        if (transaction == null) {
-            return false;
-        }
-        // Outbound FUND legs of UTA↔FUND collapsed pairs drain the UID umbrella position where
-        // cross-UID credits land (BYBIT:uid). Inbound FUND credits stay on :FUND sub-wallet.
-        if (flow != null && flow.getQuantityDelta() != null && flow.getQuantityDelta().signum() < 0) {
-            return false;
-        }
-        String corrId = transaction.getCorrelationId();
-        if (corrId == null || !corrId.startsWith(BYBIT_COLLAPSED_CORRELATION_PREFIX)) return false;
-        String wallet = transaction.getWalletAddress();
-        if (wallet == null || !wallet.toUpperCase(Locale.ROOT).endsWith(":FUND")) return false;
-        // Only UTA↔FUND pairs should preserve :FUND in the replay position wallet.
-        // For FUND↔EARN pairs the counterparty is :EARN; those must continue to use the
-        // stripped root position (BYBIT:uid) where the original acquisition was recorded.
-        String cp = transaction.getMatchedCounterparty();
-        if (cp == null || cp.isBlank()) {
-            cp = transaction.getCounterpartyAddress();
-        }
-        if (cp != null && cp.toUpperCase(Locale.ROOT).endsWith(":EARN")) {
-            return false;
-        }
-        return true;
+        return false;
     }
 
     /**

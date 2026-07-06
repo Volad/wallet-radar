@@ -27,7 +27,10 @@ public class ConcentratedLiquidityReader implements LpPositionReader {
     private static final String FEE_GROWTH1_SELECTOR = "0x" + EvmAbiSupport.selector("feeGrowthGlobal1X128()");
     private static final String TICKS_SELECTOR = "0x" + EvmAbiSupport.selector("ticks(int24)");
     private static final String FACTORY_SELECTOR = "0x" + EvmAbiSupport.selector("factory()");
+    // Uniswap V3 / Uniswap V3 forks use uint24 fee tier; Aerodrome/Velodrome Slipstream use int24 tickSpacing
     private static final String GET_POOL_SELECTOR = "0x" + EvmAbiSupport.selector("getPool(address,address,uint24)");
+    private static final String GET_POOL_INT24_SELECTOR = "0x" + EvmAbiSupport.selector("getPool(address,address,int24)");
+    private static final String ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 
     private final LpRpcSupport rpc;
     private final LiquidityDepthReader depthReader;
@@ -134,8 +137,9 @@ public class ConcentratedLiquidityReader implements LpPositionReader {
 
         BigDecimal unclaimed0 = LpLiquidityAmountsSupport.toHuman(tokensOwed0, decimals0);
         BigDecimal unclaimed1 = LpLiquidityAmountsSupport.toHuman(tokensOwed1, decimals1);
-        BigDecimal[] growthFees = accumulateFeeGrowthUnclaimed(network, pool, tickLower, tickUpper, liquidity,
-                feeGrowthInside0Last, feeGrowthInside1Last, decimals0, decimals1);
+        int tickFeeGrowthOffset = tickFeeGrowthOffset(context);
+        BigDecimal[] growthFees = accumulateFeeGrowthUnclaimed(network, pool, tickLower, tickUpper, currentTick, liquidity,
+                feeGrowthInside0Last, feeGrowthInside1Last, decimals0, decimals1, tickFeeGrowthOffset);
         unclaimed0 = unclaimed0.add(growthFees[0], MC);
         unclaimed1 = unclaimed1.add(growthFees[1], MC);
 
@@ -234,28 +238,70 @@ public class ConcentratedLiquidityReader implements LpPositionReader {
         return new TokenPair(token1, token0, decimals1, decimals0, sym1, sym0, true);
     }
 
+    // Uniswap V3 fee growth uses uint256 overflow arithmetic. All intermediate subtractions
+    // must be performed mod 2^256 to match on-chain behaviour.
+    private static final BigInteger TWO_256 = BigInteger.ONE.shiftLeft(256);
+
+    /**
+     * Word offset of feeGrowthOutside0X128 inside the ticks(int24) ABI response.
+     *
+     * <ul>
+     *   <li>Uniswap V3 and standard forks: liquidityGross | liquidityNet | feeGrowthOutside0 | … → offset 2</li>
+     *   <li>Aerodrome / Velodrome Slipstream: liquidityGross | liquidityNet | <b>stakedLiquidityNet</b>
+     *       | feeGrowthOutside0 | … → offset 3 (extra field shifts everything by one)</li>
+     * </ul>
+     */
+    private static int tickFeeGrowthOffset(LpPositionContext context) {
+        String protocol = context.protocol();
+        if (protocol != null) {
+            String lc = protocol.toLowerCase(Locale.ROOT);
+            if (lc.contains("aerodrome") || lc.contains("velodrome")) {
+                return 3;
+            }
+        }
+        return 2;
+    }
+
+    /**
+     * Implements Uniswap V3 Tick.getFeeGrowthInside() with correct uint256 modular arithmetic.
+     * The simple {@code global - lower - upper} formula is only valid when the position is
+     * in-range AND the tick feeGrowthOutside values are already in the "below/above" orientation.
+     * Out-of-range positions (currentTick < tickLower or currentTick >= tickUpper) require
+     * adjusting the tick-outside values relative to the global accumulator.
+     */
     private BigDecimal[] accumulateFeeGrowthUnclaimed(
             String network,
             String pool,
             int tickLower,
             int tickUpper,
+            int currentTick,
             BigInteger liquidity,
             BigInteger feeGrowthInside0Last,
             BigInteger feeGrowthInside1Last,
             int decimals0,
-            int decimals1
+            int decimals1,
+            int tickFeeGrowthOffset
     ) {
-        BigInteger feeGrowthGlobal0 = rpc.call(network, pool, FEE_GROWTH0_SELECTOR)
+        BigInteger global0 = rpc.call(network, pool, FEE_GROWTH0_SELECTOR)
                 .map(EvmAbiSupport::uintFromWord).orElse(BigInteger.ZERO);
-        BigInteger feeGrowthGlobal1 = rpc.call(network, pool, FEE_GROWTH1_SELECTOR)
+        BigInteger global1 = rpc.call(network, pool, FEE_GROWTH1_SELECTOR)
                 .map(EvmAbiSupport::uintFromWord).orElse(BigInteger.ZERO);
-        BigInteger lower0 = tickFeeGrowthOutside(network, pool, tickLower, 0);
-        BigInteger lower1 = tickFeeGrowthOutside(network, pool, tickLower, 1);
-        BigInteger upper0 = tickFeeGrowthOutside(network, pool, tickUpper, 0);
-        BigInteger upper1 = tickFeeGrowthOutside(network, pool, tickUpper, 1);
+        BigInteger lower0 = tickFeeGrowthOutside(network, pool, tickLower, 0, tickFeeGrowthOffset);
+        BigInteger lower1 = tickFeeGrowthOutside(network, pool, tickLower, 1, tickFeeGrowthOffset);
+        BigInteger upper0 = tickFeeGrowthOutside(network, pool, tickUpper, 0, tickFeeGrowthOffset);
+        BigInteger upper1 = tickFeeGrowthOutside(network, pool, tickUpper, 1, tickFeeGrowthOffset);
 
-        BigInteger inside0Now = feeGrowthGlobal0.subtract(lower0).subtract(upper0);
-        BigInteger inside1Now = feeGrowthGlobal1.subtract(lower1).subtract(upper1);
+        // feeGrowthOutside is stored as "below the tick" when currentTick >= tick, else "above the tick".
+        // Adjust to get feeGrowthBelow (fees accumulated strictly below tickLower) and
+        // feeGrowthAbove (fees accumulated at or above tickUpper) — Uniswap V3 white paper §6.3.
+        BigInteger below0 = currentTick >= tickLower ? lower0 : uint256Sub(global0, lower0);
+        BigInteger below1 = currentTick >= tickLower ? lower1 : uint256Sub(global1, lower1);
+        BigInteger above0 = currentTick < tickUpper ? upper0 : uint256Sub(global0, upper0);
+        BigInteger above1 = currentTick < tickUpper ? upper1 : uint256Sub(global1, upper1);
+
+        BigInteger inside0Now = uint256Sub(uint256Sub(global0, below0), above0);
+        BigInteger inside1Now = uint256Sub(uint256Sub(global1, below1), above1);
+
         BigInteger delta0 = LpLiquidityAmountsSupport.feeGrowthDelta(inside0Now, feeGrowthInside0Last);
         BigInteger delta1 = LpLiquidityAmountsSupport.feeGrowthDelta(inside1Now, feeGrowthInside1Last);
 
@@ -263,16 +309,23 @@ public class ConcentratedLiquidityReader implements LpPositionReader {
                 delta0.multiply(liquidity).shiftRight(128), decimals0);
         BigDecimal extra1 = LpLiquidityAmountsSupport.toHuman(
                 delta1.multiply(liquidity).shiftRight(128), decimals1);
-        return new BigDecimal[]{extra0, extra1};
+        // Guard: fee accrual can only be non-negative; clamp any residual rounding artefacts.
+        return new BigDecimal[]{extra0.max(BigDecimal.ZERO), extra1.max(BigDecimal.ZERO)};
     }
 
-    private BigInteger tickFeeGrowthOutside(String network, String pool, int tick, int tokenIndex) {
+    /** Subtraction in uint256 space: wraps around 2^256 on underflow, matching EVM behaviour. */
+    private static BigInteger uint256Sub(BigInteger a, BigInteger b) {
+        BigInteger result = a.subtract(b);
+        return result.signum() < 0 ? result.add(TWO_256) : result;
+    }
+
+    private BigInteger tickFeeGrowthOutside(String network, String pool, int tick, int tokenIndex, int feeGrowthOffset) {
         String data = TICKS_SELECTOR + EvmAbiSupport.encodeInt24(tick);
         String hex = rpc.call(network, pool, data).orElse(null);
         if (hex == null) {
             return BigInteger.ZERO;
         }
-        return EvmAbiSupport.uintFromWord(EvmAbiSupport.wordAt(hex, tokenIndex + 2));
+        return EvmAbiSupport.uintFromWord(EvmAbiSupport.wordAt(hex, tokenIndex + feeGrowthOffset));
     }
 
     private Optional<String> resolvePool(LpPositionContext context, String network, String token0, String token1, int fee) {
@@ -281,14 +334,23 @@ public class ConcentratedLiquidityReader implements LpPositionReader {
         }
         String factoryHex = rpc.call(network, context.nfpmContract(), FACTORY_SELECTOR).orElse(null);
         String factory = factoryHex == null ? null : EvmAbiSupport.addressFromWord(factoryHex);
-        if (factory == null) {
+        if (factory == null || ZERO_ADDRESS.equals(factory)) {
             return Optional.empty();
         }
-        String data = GET_POOL_SELECTOR
-                + EvmAbiSupport.encodeAddress(token0)
+        String encodedArgs = EvmAbiSupport.encodeAddress(token0)
                 + EvmAbiSupport.encodeAddress(token1)
                 + EvmAbiSupport.encodeUint256(BigInteger.valueOf(fee));
-        return rpc.call(network, factory, data).map(EvmAbiSupport::addressFromWord);
+        // Try Uniswap V3 style (uint24 fee tier) first
+        Optional<String> pool = rpc.call(network, factory, GET_POOL_SELECTOR + encodedArgs)
+                .map(EvmAbiSupport::addressFromWord)
+                .filter(addr -> addr != null && !ZERO_ADDRESS.equals(addr));
+        if (pool.isPresent()) {
+            return pool;
+        }
+        // Fallback: Aerodrome/Velodrome Slipstream factory uses int24 tickSpacing instead of uint24 fee
+        return rpc.call(network, factory, GET_POOL_INT24_SELECTOR + encodedArgs)
+                .map(EvmAbiSupport::addressFromWord)
+                .filter(addr -> addr != null && !ZERO_ADDRESS.equals(addr));
     }
 
     private static LpPositionSnapshot.TokenSide tokenSide(String sym, String contract, BigDecimal qty) {

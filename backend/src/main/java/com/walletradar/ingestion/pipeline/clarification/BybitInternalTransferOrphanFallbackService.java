@@ -6,6 +6,7 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionReposi
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.ingestion.pipeline.bybit.BybitEarnPrincipalTransferPairer;
 import com.walletradar.ingestion.pipeline.bybit.BybitInternalTransferPairer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -59,6 +60,9 @@ public class BybitInternalTransferOrphanFallbackService {
         int outboundDemoted = 0;
         for (NormalizedTransaction tx : candidates) {
             if (isFa001OnChainCorridorAnchor(tx)) {
+                continue;
+            }
+            if (isEarnPrincipalPairedLeg(tx)) {
                 continue;
             }
             if (isProtectedFundEarnPairerCorrelation(tx, corrIdCount)) {
@@ -197,6 +201,21 @@ public class BybitInternalTransferOrphanFallbackService {
             }
         }
         return 0;
+    }
+
+    /**
+     * RC-1 idempotency: a FUND debit already paired to its real {@code EARN_FLEXIBLE_SAVING} /
+     * {@code LENDING_DEPOSIT} credit by {@link BybitOnChainEarnOrphanRepairService} carries a
+     * {@code bybit-earn-principal-v1:} corrId and must stay {@code INTERNAL_TRANSFER}. Its EARN
+     * counterpart is {@code EARN_FLEXIBLE_SAVING}-typed (not counted in this {@code INTERNAL_TRANSFER}
+     * candidate set), so without this guard the leg looks like a corrId singleton, gets demoted to
+     * {@code EXTERNAL_TRANSFER_OUT}, then re-classified back to a blank-corr orphan, re-linked, and the
+     * linking convergence loop never reaches a fixed point (cf. ADR-029 D1: corridor corrIds are final).
+     */
+    private static boolean isEarnPrincipalPairedLeg(NormalizedTransaction tx) {
+        String corr = tx == null ? null : tx.getCorrelationId();
+        return corr != null
+                && corr.startsWith(BybitEarnPrincipalTransferPairer.EARN_PRINCIPAL_CORRELATION_PREFIX);
     }
 
     /**

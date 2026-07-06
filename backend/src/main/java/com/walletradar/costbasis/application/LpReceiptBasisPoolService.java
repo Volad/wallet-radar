@@ -36,6 +36,7 @@ public class LpReceiptBasisPoolService {
     public record WithdrawResult(
             BigDecimal withdrawnQty,
             BigDecimal withdrawnBasisUsd,
+            BigDecimal withdrawnNetBasisUsd,
             BigDecimal withdrawnUncoveredQty,
             BigDecimal residualQty
     ) {
@@ -98,6 +99,7 @@ public class LpReceiptBasisPoolService {
             pool.setAssetContract(assetContract);
             pool.setQtyHeld(BigDecimal.ZERO);
             pool.setBasisHeldUsd(BigDecimal.ZERO);
+            pool.setNetBasisHeldUsd(BigDecimal.ZERO);
             pool.setUncoveredQtyHeld(BigDecimal.ZERO);
             pool.setAvcoUsd(null);
             pool.setCreatedAt(touchedAt);
@@ -114,13 +116,26 @@ public class LpReceiptBasisPoolService {
             BigDecimal basisUsd,
             BigDecimal uncoveredQty
     ) {
+        return deposit(pool, quantity, basisUsd, basisUsd, uncoveredQty);
+    }
+
+    /** ADR-040 Change 2: net-lane deposit. {@code netBasisUsd} is the reward-discounted net basis. */
+    public DepositResult deposit(
+            LpReceiptBasisPool pool,
+            BigDecimal quantity,
+            BigDecimal basisUsd,
+            BigDecimal netBasisUsd,
+            BigDecimal uncoveredQty
+    ) {
         if (pool == null || quantity == null || quantity.signum() <= 0) {
             return new DepositResult(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
         }
         BigDecimal basis = basisUsd == null ? BigDecimal.ZERO : basisUsd;
+        BigDecimal net = netBasisUsd != null ? netBasisUsd : basis;
         BigDecimal uncovered = uncoveredQty == null ? BigDecimal.ZERO : uncoveredQty;
         pool.setQtyHeld(zeroIfNull(pool.getQtyHeld()).add(quantity, MC));
         pool.setBasisHeldUsd(zeroIfNull(pool.getBasisHeldUsd()).add(basis, MC));
+        pool.setNetBasisHeldUsd(zeroIfNull(pool.getNetBasisHeldUsd()).add(net, MC));
         pool.setUncoveredQtyHeld(zeroIfNull(pool.getUncoveredQtyHeld()).add(uncovered, MC));
         recomputeAvco(pool);
         return new DepositResult(quantity, basis, uncovered);
@@ -128,22 +143,26 @@ public class LpReceiptBasisPoolService {
 
     public WithdrawResult withdraw(LpReceiptBasisPool pool, BigDecimal requestedQuantity) {
         if (pool == null || requestedQuantity == null || requestedQuantity.signum() <= 0) {
-            return new WithdrawResult(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, requestedQuantity);
+            return new WithdrawResult(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, requestedQuantity);
         }
         BigDecimal held = zeroIfNull(pool.getQtyHeld());
         BigDecimal withdrawnQty = requestedQuantity.min(held);
         if (withdrawnQty.signum() <= 0) {
-            return new WithdrawResult(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, requestedQuantity);
+            return new WithdrawResult(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, requestedQuantity);
         }
         BigDecimal ratio = held.signum() == 0 ? BigDecimal.ZERO : withdrawnQty.divide(held, MC);
         BigDecimal basis = zeroIfNull(pool.getBasisHeldUsd()).multiply(ratio, MC);
+        // ADR-040 Change 2: null netBasisHeldUsd on legacy documents → fall back to tax basis
+        BigDecimal netHeld = pool.getNetBasisHeldUsd() != null ? pool.getNetBasisHeldUsd() : pool.getBasisHeldUsd();
+        BigDecimal netBasis = zeroIfNull(netHeld).multiply(ratio, MC);
         BigDecimal uncovered = zeroIfNull(pool.getUncoveredQtyHeld()).multiply(ratio, MC);
         pool.setQtyHeld(held.subtract(withdrawnQty, MC));
         pool.setBasisHeldUsd(zeroIfNull(pool.getBasisHeldUsd()).subtract(basis, MC));
+        pool.setNetBasisHeldUsd(zeroIfNull(netHeld).subtract(netBasis, MC));
         pool.setUncoveredQtyHeld(zeroIfNull(pool.getUncoveredQtyHeld()).subtract(uncovered, MC));
         recomputeAvco(pool);
         BigDecimal residual = requestedQuantity.subtract(withdrawnQty, MC);
-        return new WithdrawResult(withdrawnQty, basis, uncovered, residual);
+        return new WithdrawResult(withdrawnQty, basis, netBasis, uncovered, residual);
     }
 
     public static LpReceiptBasisPoolKey toKey(LpReceiptBasisPool pool) {

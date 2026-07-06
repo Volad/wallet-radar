@@ -8,9 +8,8 @@ import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Verifies that {@code bybit-collapsed-v1:} FUND-side transactions preserve the full
- * {@code :FUND} wallet address in {@code replayPositionWalletAddress()}, so CARRY_IN basis
- * lands on the correct sub-account position rather than the stripped root position.
+ * Verifies replay position wallet resolution for {@code bybit-collapsed-v1:} pairs.
+ * RC-2: UTA↔FUND collapsed legs both strip to the umbrella so round-trips net on one key.
  */
 class AccountingAssetIdentityCollapsedTest {
 
@@ -19,11 +18,9 @@ class AccountingAssetIdentityCollapsedTest {
 
     @Test
     void isDebtIdentity_flagsAaveDebtReceiptsAcrossChainsAndExemptsHeldAssets() {
-        // F-4: variableDebt* / stableDebt* are liability markers (any network prefix), never held.
         assertThat(AccountingAssetIdentitySupport.isDebtIdentity("VARIABLEDEBTMANUSDE")).isTrue();
         assertThat(AccountingAssetIdentitySupport.isDebtIdentity("variableDebtBasUSDC")).isTrue();
         assertThat(AccountingAssetIdentitySupport.isDebtIdentity("STABLEDEBTETHDAI")).isTrue();
-        // Held assets and receipt aTokens are not debt identities.
         assertThat(AccountingAssetIdentitySupport.isDebtIdentity("USDC")).isFalse();
         assertThat(AccountingAssetIdentitySupport.isDebtIdentity("AMANWETH")).isFalse();
         assertThat(AccountingAssetIdentitySupport.isDebtIdentity("ETH")).isFalse();
@@ -32,14 +29,13 @@ class AccountingAssetIdentityCollapsedTest {
     }
 
     @Test
-    void replayPositionWalletAddress_preservesFullFundAddress_forCollapsedFundSide() {
-        // FUND CARRY_IN with UTA counterparty: full :FUND address must be preserved.
+    void replayPositionWalletAddress_stripsFundSuffix_forCollapsedFundSide() {
         NormalizedTransaction tx = bybitInternalTransferWithCounterparty(
                 "BYBIT:" + UID + ":FUND", "BYBIT:" + UID + ":UTA", CORR_ID);
 
         String result = AccountingAssetIdentitySupport.replayPositionWalletAddress(tx, null);
 
-        assertThat(result).isEqualTo("BYBIT:" + UID + ":FUND");
+        assertThat(result).isEqualTo("BYBIT:" + UID);
     }
 
     @Test
@@ -62,8 +58,6 @@ class AccountingAssetIdentityCollapsedTest {
 
     @Test
     void replayPositionWalletAddress_stripsFundSuffix_forCollapsedFundToEarnTransfer() {
-        // FUND→EARN collapsed pair: EARN is the counterparty; acquisitions sit on the root
-        // position so :FUND must be stripped, not preserved.
         NormalizedTransaction tx = bybitInternalTransferWithCounterparty(
                 "BYBIT:" + UID + ":FUND", "BYBIT:" + UID + ":EARN", CORR_ID);
 
@@ -94,7 +88,7 @@ class AccountingAssetIdentityCollapsedTest {
     }
 
     @Test
-    void replayPositionWalletAddress_preservesFullFundAddress_forCollapsedFundInbound() {
+    void replayPositionWalletAddress_stripsFundSuffix_forCollapsedFundInbound() {
         NormalizedTransaction tx = bybitInternalTransferWithCounterparty(
                 "BYBIT:" + UID + ":FUND", "BYBIT:" + UID + ":UTA", CORR_ID);
         NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
@@ -102,13 +96,45 @@ class AccountingAssetIdentityCollapsedTest {
 
         String result = AccountingAssetIdentitySupport.replayPositionWalletAddress(tx, flow);
 
+        assertThat(result).isEqualTo("BYBIT:" + UID);
+    }
+
+    @Test
+    void replayPositionWalletAddress_keepsFundSuffix_forEarnOnchainFundRepair() {
+        // bybit-earn-onchain-fund-v1: repairs place basis directly on :FUND, so the carry-out must
+        // drain that sub-account. They must stay on :FUND (not stripped to the umbrella).
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setSource(NormalizedTransactionSource.BYBIT);
+        tx.setType(NormalizedTransactionType.INTERNAL_TRANSFER);
+        tx.setWalletAddress("BYBIT:" + UID + ":FUND");
+        tx.setCorrelationId("bybit-earn-onchain-fund-v1:deadbeef");
+        tx.setContinuityCandidate(true);
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setQuantityDelta(new java.math.BigDecimal("-1.0"));
+
+        String result = AccountingAssetIdentitySupport.replayPositionWalletAddress(tx, flow);
+
         assertThat(result).isEqualTo("BYBIT:" + UID + ":FUND");
     }
 
     @Test
+    void replayPositionWalletAddress_stripsEarnSuffix_forBybitRewardClaim() {
+        // XPL double-count: a REWARD_CLAIM on :EARN must route to the umbrella so a later collapsed
+        // FUND->UTA move drains a real umbrella lot instead of materialising a fresh phantom there.
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setSource(NormalizedTransactionSource.BYBIT);
+        tx.setType(NormalizedTransactionType.REWARD_CLAIM);
+        tx.setWalletAddress("BYBIT:" + UID + ":EARN");
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setQuantityDelta(new java.math.BigDecimal("3.70372886"));
+
+        String result = AccountingAssetIdentitySupport.replayPositionWalletAddress(tx, flow);
+
+        assertThat(result).isEqualTo("BYBIT:" + UID);
+    }
+
+    @Test
     void positionWalletAddress_alwaysStripsCollapsedFundSuffix() {
-        // positionWalletAddress() (no-arg version) always strips — only replayPositionWalletAddress
-        // preserves :FUND for collapsed pairs.
         assertThat(AccountingAssetIdentitySupport.positionWalletAddress("BYBIT:" + UID + ":FUND"))
                 .isEqualTo("BYBIT:" + UID);
         assertThat(AccountingAssetIdentitySupport.positionWalletAddress("BYBIT:" + UID + ":UTA"))

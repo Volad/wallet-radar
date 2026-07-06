@@ -582,6 +582,12 @@ export class DashboardTransactionsPaneComponent {
         maximumFractionDigits: 3,
       });
     }
+    if (absolute > 0 && absolute < 0.001) {
+      return absolute.toLocaleString(undefined, {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 8,
+      });
+    }
     return absolute.toLocaleString(undefined, {
       minimumFractionDigits: 0,
       maximumFractionDigits: 3,

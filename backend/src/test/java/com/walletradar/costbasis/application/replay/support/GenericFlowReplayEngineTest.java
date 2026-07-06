@@ -10,7 +10,9 @@ import com.walletradar.domain.common.PriceSource;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
 
+import java.lang.reflect.Constructor;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Optional;
@@ -18,11 +20,12 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class GenericFlowReplayEngineTest {
 
-    private final GenericFlowReplayEngine engine = new GenericFlowReplayEngine();
+    private final GenericFlowReplayEngine engine = new GenericFlowReplayEngine(null);
 
     @Test
     void restoreToPositionClampsExcessUncoveredQuantity() {
@@ -331,7 +334,7 @@ class GenericFlowReplayEngineTest {
         position.setQuantity(new BigDecimal("0.622"));
         position.setUncoveredQuantity(new BigDecimal("0.622"));
         position.setTotalCostBasisUsd(BigDecimal.ZERO);
-        PositionSnapshot before = new PositionSnapshot(
+        PositionSnapshot before = PositionSnapshot.mirrorTax(
                 BigDecimal.ZERO, null, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
                 BigDecimal.ZERO, BigDecimal.ZERO, false, false, 0
         );
@@ -359,7 +362,7 @@ class GenericFlowReplayEngineTest {
         position.setQuantity(new BigDecimal("0.144"));
         position.setUncoveredQuantity(new BigDecimal("0.144"));
         position.setTotalCostBasisUsd(BigDecimal.ZERO);
-        PositionSnapshot before = new PositionSnapshot(
+        PositionSnapshot before = PositionSnapshot.mirrorTax(
                 BigDecimal.ZERO, null, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
                 BigDecimal.ZERO, BigDecimal.ZERO, false, false, 0
         );
@@ -385,7 +388,7 @@ class GenericFlowReplayEngineTest {
         position.setQuantity(new BigDecimal("0.144"));
         position.setUncoveredQuantity(BigDecimal.ZERO);
         position.setTotalCostBasisUsd(new BigDecimal("313.0"));
-        PositionSnapshot before = new PositionSnapshot(
+        PositionSnapshot before = PositionSnapshot.mirrorTax(
                 BigDecimal.ZERO, null, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
                 BigDecimal.ZERO, BigDecimal.ZERO, false, false, 0
         );
@@ -419,7 +422,7 @@ class GenericFlowReplayEngineTest {
         position.setQuantity(new BigDecimal("0.5"));
         position.setUncoveredQuantity(new BigDecimal("0.5"));
         position.setTotalCostBasisUsd(BigDecimal.ZERO);
-        PositionSnapshot before = new PositionSnapshot(
+        PositionSnapshot before = PositionSnapshot.mirrorTax(
                 BigDecimal.ZERO, null, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
                 BigDecimal.ZERO, BigDecimal.ZERO, false, false, 0
         );
@@ -450,7 +453,7 @@ class GenericFlowReplayEngineTest {
         position.setQuantity(new BigDecimal("0.5"));
         position.setUncoveredQuantity(new BigDecimal("0.5"));
         position.setTotalCostBasisUsd(BigDecimal.ZERO);
-        PositionSnapshot before = new PositionSnapshot(
+        PositionSnapshot before = PositionSnapshot.mirrorTax(
                 BigDecimal.ZERO, null, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
                 BigDecimal.ZERO, BigDecimal.ZERO, false, false, 0
         );
@@ -482,7 +485,7 @@ class GenericFlowReplayEngineTest {
         position.setQuantity(new BigDecimal("0.0116"));
         position.setUncoveredQuantity(new BigDecimal("0.0116"));
         position.setTotalCostBasisUsd(BigDecimal.ZERO);
-        PositionSnapshot before = new PositionSnapshot(
+        PositionSnapshot before = PositionSnapshot.mirrorTax(
                 BigDecimal.ZERO, null, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
                 BigDecimal.ZERO, BigDecimal.ZERO, false, false, 0
         );
@@ -521,7 +524,7 @@ class GenericFlowReplayEngineTest {
         position.setQuantity(new BigDecimal("0.0116"));
         position.setUncoveredQuantity(new BigDecimal("0.0116"));
         position.setTotalCostBasisUsd(BigDecimal.ZERO);
-        PositionSnapshot before = new PositionSnapshot(
+        PositionSnapshot before = PositionSnapshot.mirrorTax(
                 BigDecimal.ZERO, null, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
                 BigDecimal.ZERO, BigDecimal.ZERO, false, false, 0
         );
@@ -551,7 +554,7 @@ class GenericFlowReplayEngineTest {
         position.setQuantity(new BigDecimal("1"));
         position.setUncoveredQuantity(new BigDecimal("1"));
         position.setTotalCostBasisUsd(BigDecimal.ZERO);
-        PositionSnapshot before = new PositionSnapshot(
+        PositionSnapshot before = PositionSnapshot.mirrorTax(
                 BigDecimal.ZERO, null, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
                 BigDecimal.ZERO, BigDecimal.ZERO, false, false, 0
         );
@@ -584,7 +587,7 @@ class GenericFlowReplayEngineTest {
         position.setQuantity(new BigDecimal("100"));
         position.setUncoveredQuantity(BigDecimal.ZERO);
         position.setTotalCostBasisUsd(new BigDecimal("250"));
-        PositionSnapshot before = new PositionSnapshot(
+        PositionSnapshot before = PositionSnapshot.mirrorTax(
                 BigDecimal.ZERO, null, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
                 BigDecimal.ZERO, BigDecimal.ZERO, false, false, 0
         );
@@ -609,7 +612,7 @@ class GenericFlowReplayEngineTest {
         position.setQuantity(new BigDecimal("100"));
         position.setUncoveredQuantity(new BigDecimal("100"));
         position.setTotalCostBasisUsd(BigDecimal.ZERO);
-        PositionSnapshot before = new PositionSnapshot(
+        PositionSnapshot before = PositionSnapshot.mirrorTax(
                 BigDecimal.ZERO, null, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
                 BigDecimal.ZERO, BigDecimal.ZERO, false, false, 0
         );
@@ -675,7 +678,7 @@ class GenericFlowReplayEngineTest {
         position.setQuantity(new BigDecimal("100"));
         position.setUncoveredQuantity(new BigDecimal("100"));
         position.setTotalCostBasisUsd(BigDecimal.ZERO);
-        PositionSnapshot before = new PositionSnapshot(
+        PositionSnapshot before = PositionSnapshot.mirrorTax(
                 BigDecimal.ZERO, null, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
                 BigDecimal.ZERO, BigDecimal.ZERO, false, false, 0
         );
@@ -729,5 +732,203 @@ class GenericFlowReplayEngineTest {
         engine.applyAuthoritativeLateInboundCarryBasis(position, new BigDecimal("3200"), new BigDecimal("7128"));
 
         assertThat(position.totalCostBasisUsd()).isEqualByComparingTo("13928");
+    }
+
+    @Test
+    void zeroCostAcquisitionAddsTaxBasisButNotNetBasis() {
+        PositionState position = new PositionState(new AssetKey("0xwallet", NetworkId.ARBITRUM, "cake", "CAKE", "CAKE:cake"));
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(NormalizedLegRole.BUY);
+        flow.setAssetSymbol("CAKE");
+        flow.setQuantityDelta(new BigDecimal("10"));
+
+        engine.applyBuyWithAcquisitionCost(
+                flow,
+                position,
+                new BigDecimal("50"),
+                com.walletradar.domain.transaction.normalized.NormalizedTransactionType.REWARD_CLAIM
+        );
+
+        assertThat(position.quantity()).isEqualByComparingTo("10");
+        assertThat(position.totalCostBasisUsd()).isEqualByComparingTo("50");
+        assertThat(position.netTotalCostBasisUsd()).isEqualByComparingTo("0");
+        assertThat(position.perWalletAvco()).isEqualByComparingTo("5");
+        assertThat(position.perWalletNetAvco()).isEqualByComparingTo("0");
+    }
+
+    @Test
+    void applySellTracksNetRealisedPnlSeparatelyFromTax() {
+        PositionState position = new PositionState(new AssetKey("0xwallet", NetworkId.ARBITRUM, "eth", "ETH", "ETH:eth"));
+        position.setQuantity(new BigDecimal("2"));
+        position.setTotalCostBasisUsd(new BigDecimal("4000"));
+        position.setNetTotalCostBasisUsd(new BigDecimal("3000"));
+        position.setPerWalletAvco(new BigDecimal("2000"));
+        position.setPerWalletNetAvco(new BigDecimal("1500"));
+
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(NormalizedLegRole.SELL);
+        flow.setAssetSymbol("ETH");
+        flow.setQuantityDelta(new BigDecimal("-1"));
+        flow.setUnitPriceUsd(new BigDecimal("2500"));
+        flow.setPriceSource(PriceSource.COINGECKO);
+
+        engine.applySell(flow, position);
+
+        assertThat(position.totalRealisedPnlUsd()).isEqualByComparingTo("500");
+        assertThat(position.totalNetRealisedPnlUsd()).isEqualByComparingTo("1000");
+    }
+
+    @Test
+    void applyBuyRoutesBotLedgerPreCoverageLotThroughAuthorityAndClamps() {
+        // Issue 3 (ADR-043): a BOT_LEDGER lot carries a stablecoin-derived unitPrice ($0.5766) that
+        // hasKnownPrice would otherwise book directly, bypassing the RC-D clamp. applyBuy must route
+        // BOT_LEDGER through ReplayMarketAuthority.resolve(), which clamps a genuinely pre-coverage
+        // bot lot to the nearest valid market bucket (DOGE $0.23246) → basis 150.591 × 0.23246.
+        ReplayMarketAuthority authority = mock(ReplayMarketAuthority.class);
+        GenericFlowReplayEngine engineWithAuthority = new GenericFlowReplayEngine(authority);
+        PositionState position = new PositionState(
+                new AssetKey("BYBIT:421325298", null, "SYMBOL:DOGE", "DOGE", "FAMILY:DOGE"));
+
+        NormalizedTransaction transaction = new NormalizedTransaction();
+        transaction.setBlockTimestamp(Instant.parse("2025-01-31T00:00:00Z"));
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(NormalizedLegRole.BUY);
+        flow.setAssetSymbol("DOGE");
+        flow.setQuantityDelta(new BigDecimal("150.591"));
+        flow.setUnitPriceUsd(new BigDecimal("0.5766"));
+        flow.setPriceSource(PriceSource.BOT_LEDGER);
+
+        when(authority.resolve(any(), any())).thenReturn(Optional.of(
+                new ReplayMarketAuthority.ResolvedMarketPrice(
+                        new BigDecimal("0.23246"),
+                        PriceSource.COINGECKO,
+                        ReplayMarketAuthority.ResolvedMarketPrice.Authority.HISTORICAL_CACHE)));
+
+        engineWithAuthority.applyBuy(transaction, flow, position);
+
+        assertThat(position.quantity()).isEqualByComparingTo("150.591");
+        assertThat(position.totalCostBasisUsd()).isEqualByComparingTo("35.00638386");
+    }
+
+    @Test
+    void applyBuyDoesNotRouteNonBotLedgerLotThroughAuthority() {
+        // Issue 3 (ADR-043): the blast radius is BOT_LEDGER only — a normally-priced spot execution
+        // (e.g. the 2025-10-10 in-coverage DOGE lot) keeps the hasKnownPrice short-circuit and is NOT
+        // routed through the authority, so its book price is untouched.
+        ReplayMarketAuthority authority = mock(ReplayMarketAuthority.class);
+        GenericFlowReplayEngine engineWithAuthority = new GenericFlowReplayEngine(authority);
+        PositionState position = new PositionState(
+                new AssetKey("BYBIT:421325298", null, "SYMBOL:DOGE", "DOGE", "FAMILY:DOGE"));
+
+        NormalizedTransaction transaction = new NormalizedTransaction();
+        transaction.setBlockTimestamp(Instant.parse("2025-10-10T00:00:00Z"));
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(NormalizedLegRole.BUY);
+        flow.setAssetSymbol("DOGE");
+        flow.setQuantityDelta(new BigDecimal("111.189"));
+        flow.setUnitPriceUsd(new BigDecimal("0.2121"));
+        flow.setPriceSource(PriceSource.EXECUTION);
+
+        engineWithAuthority.applyBuy(transaction, flow, position);
+
+        assertThat(position.quantity()).isEqualByComparingTo("111.189");
+        assertThat(position.totalCostBasisUsd()).isEqualByComparingTo(
+                new BigDecimal("111.189").multiply(new BigDecimal("0.2121")));
+        verifyNoInteractions(authority);
+    }
+
+    // ── ADR-040 Change 2: Net AVCO carry conservation ────────────────────────────
+
+    /**
+     * WRAP→UNWRAP round-trip: the net basis after the round-trip equals the pre-wrap net
+     * basis (not the tax basis). The carry-aware restoreToPosition overload must route
+     * carry.netCostBasisUsd() instead of forcing net = tax.
+     */
+    @Test
+    void wrapUnwrapRoundTripConservesNetBasis() {
+        AssetKey eth = new AssetKey("0xwallet", NetworkId.ETHEREUM, "0xeth", "ETH", "ETH:eth");
+        // Pre-wrap state: ETH position with tax $3000, net $1975 (reward-discounted)
+        BigDecimal taxBasis = new BigDecimal("3000.00");
+        BigDecimal netBasis = new BigDecimal("1975.00");
+        BigDecimal qty = new BigDecimal("1.0");
+
+        // Simulate WRAP: build carry as removeFromPosition would produce (9-param, net != tax)
+        CarryTransfer carry = new CarryTransfer(
+                qty, qty, BigDecimal.ZERO,
+                taxBasis, taxBasis,    // avco = $3000
+                netBasis, netBasis,    // netAvco = $1975
+                false, eth
+        );
+
+        assertThat(carry.costBasisUsd()).isEqualByComparingTo("3000.00");
+        assertThat(carry.netCostBasisUsd()).isEqualByComparingTo("1975.00");
+
+        // UNWRAP: restore using carry-aware overload → net must NOT be re-seeded from tax
+        PositionState position = new PositionState(eth);
+        engine.restoreToPosition(carry, position);
+
+        assertThat(position.quantity()).isEqualByComparingTo("1.0");
+        assertThat(position.totalCostBasisUsd()).isEqualByComparingTo("3000.00");
+        assertThat(position.netTotalCostBasisUsd())
+                .as("Net basis must be conserved to pre-wrap value, not inflated to tax")
+                .isEqualByComparingTo("1975.00");
+        // Σnet residual after round-trip == 0
+        assertThat(position.netTotalCostBasisUsd().subtract(netBasis).abs())
+                .isLessThan(new BigDecimal("0.000001"));
+    }
+
+    /**
+     * CARRY_OUT + CARRY_IN corridor: the net AVCO on the IN side equals the source net AVCO.
+     * The 9-param CarryTransfer constructor preserves net independently of tax.
+     */
+    @Test
+    void carryInCorridorPreservesNetAvco() {
+        AssetKey dst = new AssetKey("BYBIT:1", null, "eth", "ETH", "ETH:eth");
+        BigDecimal taxBasis = new BigDecimal("6000.00");
+        BigDecimal netBasis = new BigDecimal("3500.00"); // net < tax (reward-discount)
+        BigDecimal qty = new BigDecimal("2.0");
+        BigDecimal taxAvco = new BigDecimal("3000.00");
+        BigDecimal netAvco = new BigDecimal("1750.00");
+
+        // CARRY_OUT carry with separate net fields
+        CarryTransfer outCarry = new CarryTransfer(
+                qty, qty, BigDecimal.ZERO,
+                taxBasis, taxAvco,
+                netBasis, netAvco,
+                false, dst
+        );
+
+        assertThat(outCarry.netCostBasisUsd()).isEqualByComparingTo("3500.00");
+        assertThat(outCarry.netAvco()).isEqualByComparingTo("1750.00");
+
+        // CARRY_IN: restore to destination using carry-aware overload
+        PositionState dest = new PositionState(dst);
+        engine.restoreToPosition(outCarry, dest);
+
+        assertThat(dest.totalCostBasisUsd()).isEqualByComparingTo("6000.00");
+        assertThat(dest.netTotalCostBasisUsd())
+                .as("CARRY_IN must transport source net basis, not re-seed from tax")
+                .isEqualByComparingTo("3500.00");
+        assertThat(dest.perWalletNetAvco())
+                .as("Net AVCO at destination must equal source net AVCO")
+                .isEqualByComparingTo("1750.00");
+        // Invariant: net AVCO <= tax AVCO
+        assertThat(dest.perWalletNetAvco()).isLessThanOrEqualTo(dest.perWalletAvco());
+    }
+
+    @Test
+    void beanExposesExactlyOneAutowiredConstructorTakingMarketAuthority() {
+        // FIX 2 (ADR-043, replay #13b): the RC-D clamp (and the resolve() paths in
+        // materializePendingInbound / applyInboundShortfallSpotFallback) were DEAD in production
+        // because a competing no-arg GenericFlowReplayEngine() constructor with @Autowired only on the
+        // PARAMETER of the second constructor let Spring select the no-arg one → replayMarketAuthority
+        // was null. Guard structurally: there must be EXACTLY ONE constructor, it must be annotated at
+        // CONSTRUCTOR level with @Autowired, and it must take the ReplayMarketAuthority so Spring is
+        // forced to inject the bean (no no-arg footgun can reappear).
+        Constructor<?>[] constructors = GenericFlowReplayEngine.class.getDeclaredConstructors();
+        assertThat(constructors).hasSize(1);
+        Constructor<?> constructor = constructors[0];
+        assertThat(constructor.isAnnotationPresent(Autowired.class)).isTrue();
+        assertThat(constructor.getParameterTypes()).containsExactly(ReplayMarketAuthority.class);
     }
 }

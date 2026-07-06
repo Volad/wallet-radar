@@ -42,8 +42,18 @@ public class CorridorBasisConservationGuard {
      */
     static final BigDecimal RESIDUAL_BASIS_EPSILON_USD = new BigDecimal("1.00");
 
+    /**
+     * RC-A (ADR-043) — Bybit earn-principal / venue-internal queues are guarded alongside the
+     * corridor/bridge queues. Paired earn-principal legs ({@code bybit-earn-principal-v1:} /
+     * {@code bybit-earn-onchain-fund-v1:}) and every collapsed FUND↔UTA↔EARN pair route to
+     * {@code corr-family:}; the same-UID venue FIFO (Earn subscribe/redeem, universal transfers)
+     * routes to {@code bybit-earn-carry:}. A leftover {@code CARRY_OUT} on either queue with no
+     * matched {@code CARRY_IN} at end of replay is a genuinely-unpaired boundary leg (RC-B), which
+     * must surface as {@code CORRIDOR_BASIS_IMBALANCE} rather than silently drop inventory. The $1
+     * dust epsilon and the out-of-scope carve-out keep open-position and OOS-venue residues quiet.
+     */
     private static final List<String> GUARDED_QUEUE_PREFIXES =
-            List.of("corr-family:", "bridge:", "bridge-settlement:");
+            List.of("corr-family:", "bridge:", "bridge-settlement:", "bybit-earn-carry:");
 
     /**
      * G-1 (WS-E) — queue keys end with the asset/family identity (e.g. {@code :SYMBOL:USDE} or

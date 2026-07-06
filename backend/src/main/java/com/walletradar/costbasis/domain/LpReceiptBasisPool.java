@@ -46,6 +46,8 @@ public class LpReceiptBasisPool {
     private BigDecimal basisHeldUsd;
     private BigDecimal uncoveredQtyHeld;
     private BigDecimal avcoUsd;
+    /** ADR-040 Change 2: net cost lane — null on legacy documents (treated as basisHeldUsd). */
+    private BigDecimal netBasisHeldUsd;
 
     private Instant lastTouchedAt;
     private Instant createdAt;

@@ -5,9 +5,11 @@ import com.walletradar.costbasis.application.replay.model.CarryTransfer;
 import com.walletradar.costbasis.application.replay.model.PositionSnapshot;
 import com.walletradar.costbasis.application.replay.model.PositionState;
 import com.walletradar.costbasis.application.replay.model.QuantityConsumption;
+import com.walletradar.costbasis.support.ZeroCostAcquisitionSupport;
 import com.walletradar.domain.common.PriceSource;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.pricing.domain.CanonicalAssetCatalog;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -45,23 +47,59 @@ public class GenericFlowReplayEngine {
 
     private final ReplayMarketAuthority replayMarketAuthority;
 
-    public GenericFlowReplayEngine() {
-        this(null);
-    }
-
-    public GenericFlowReplayEngine(@Autowired(required = false) ReplayMarketAuthority replayMarketAuthority) {
+    /**
+     * RC-D (ADR-043, replay #13b amendment): the constructor-level {@link Autowired} is REQUIRED.
+     * Spring only promotes a constructor for autowiring when the annotation is at CONSTRUCTOR level;
+     * the previous {@code @Autowired} on the PARAMETER of a second constructor did not promote it, so
+     * with a competing no-arg constructor present Spring silently selected the no-arg one and left
+     * {@code replayMarketAuthority = null}. That made the entire BOT_LEDGER pre-coverage clamp (and the
+     * {@code resolve()} paths in {@link #materializePendingInbound}/{@link #applyInboundShortfallSpotFallback})
+     * dead code (DOGE never clamped across three attempts). The no-arg constructor is removed from the
+     * production/bean path; tests construct with an explicit authority (or {@code null}).
+     */
+    @Autowired
+    public GenericFlowReplayEngine(ReplayMarketAuthority replayMarketAuthority) {
         this.replayMarketAuthority = replayMarketAuthority;
     }
 
     public void applyBuy(NormalizedTransaction.Flow flow, PositionState position) {
+        applyBuy(null, flow, position);
+    }
+
+    public void applyBuy(NormalizedTransaction transaction, NormalizedTransaction.Flow flow, PositionState position) {
+        boolean zeroNetCost = isZeroNetCostAcquisition(transaction);
         BigDecimal quantity = flow.getQuantityDelta().abs();
+        // RC-D (ADR-043): a BOT_LEDGER lot is priced at normalization from net stablecoin consumed
+        // (before historical prices exist) and is marked CONFIRMED, so it never reaches the pricing
+        // orchestrator's pre-coverage fallback. hasKnownPrice(flow) is TRUE for it, so a normally
+        // priced acquire would short-circuit below and book the out-of-range stablecoin-derived
+        // price. Route BOT_LEDGER flows through the replay market authority first: resolve() applies
+        // clampPreCoverageBotLot for genuinely pre-coverage bot lots (returns the nearest valid
+        // market bucket) and returns the FLOW price unchanged for in-coverage bot lots. Blast radius
+        // is BOT_LEDGER only — normally priced ACQUIRE/BUY legs keep the hasKnownPrice short-circuit.
+        if (flow.getPriceSource() == PriceSource.BOT_LEDGER
+                && transaction != null
+                && replayMarketAuthority != null) {
+            Optional<ReplayMarketAuthority.ResolvedMarketPrice> resolvedBotLot =
+                    replayMarketAuthority.resolve(transaction, flow);
+            if (resolvedBotLot.isPresent()
+                    && resolvedBotLot.get().unitPriceUsd() != null
+                    && resolvedBotLot.get().unitPriceUsd().signum() > 0) {
+                applyBuyWithAcquisitionCost(
+                        flow,
+                        position,
+                        quantity.multiply(resolvedBotLot.get().unitPriceUsd(), MC),
+                        zeroNetCost
+                );
+                return;
+            }
+        }
         if (hasKnownPrice(flow)) {
-            applyBuyWithAcquisitionCost(flow, position, quantity.multiply(flow.getUnitPriceUsd(), MC));
+            applyBuyWithAcquisitionCost(flow, position, quantity.multiply(flow.getUnitPriceUsd(), MC), zeroNetCost);
             return;
         }
-        // Cycle/19: USD stablecoin $1 fallback for unpriced BUY legs.
         if (CanonicalAssetCatalog.isUsdStablecoinBySymbol(flow.getAssetSymbol())) {
-            applyBuyWithAcquisitionCost(flow, position, quantity);
+            applyBuyWithAcquisitionCost(flow, position, quantity, zeroNetCost);
             return;
         }
         position.setQuantity(position.quantity().add(quantity));
@@ -75,9 +113,29 @@ public class GenericFlowReplayEngine {
             PositionState position,
             BigDecimal acquisitionCostUsd
     ) {
+        applyBuyWithAcquisitionCost(flow, position, acquisitionCostUsd, false);
+    }
+
+    public void applyBuyWithAcquisitionCost(
+            NormalizedTransaction.Flow flow,
+            PositionState position,
+            BigDecimal acquisitionCostUsd,
+            boolean zeroNetCost
+    ) {
+        applyBuyWithAcquisitionCost(flow, position, acquisitionCostUsd, zeroNetCost ? NormalizedTransactionType.REWARD_CLAIM : null);
+    }
+
+    public void applyBuyWithAcquisitionCost(
+            NormalizedTransaction.Flow flow,
+            PositionState position,
+            BigDecimal acquisitionCostUsd,
+            NormalizedTransactionType acquisitionType
+    ) {
         BigDecimal quantity = flow.getQuantityDelta().abs();
         BigDecimal cost = acquisitionCostUsd == null ? BigDecimal.ZERO : acquisitionCostUsd;
+        BigDecimal netCost = ZeroCostAcquisitionSupport.isZeroCostAcquisition(acquisitionType) ? BigDecimal.ZERO : cost;
         position.setTotalCostBasisUsd(position.totalCostBasisUsd().add(cost));
+        position.setNetTotalCostBasisUsd(position.netTotalCostBasisUsd().add(netCost));
         position.setQuantity(position.quantity().add(quantity));
         recomputePerWalletAvco(position);
     }
@@ -85,6 +143,7 @@ public class GenericFlowReplayEngine {
     public void applySell(NormalizedTransaction.Flow flow, PositionState position) {
         BigDecimal requestedQuantity = flow.getQuantityDelta().abs();
         BigDecimal avcoAtTimeOfSale = position.perWalletAvco();
+        BigDecimal netAvcoAtTimeOfSale = position.perWalletNetAvco();
         QuantityConsumption consumption = consumeQuantity(position, requestedQuantity);
         BigDecimal soldCoveredQuantity = consumption.coveredQuantity();
         if (consumption.externalShortfallQuantity().signum() > 0) {
@@ -94,12 +153,17 @@ public class GenericFlowReplayEngine {
             flow.setAvcoAtTimeOfSale(avcoAtTimeOfSale);
             BigDecimal relievedCost = soldCoveredQuantity.multiply(avcoAtTimeOfSale, MC);
             position.setTotalCostBasisUsd(nonNegative(position.totalCostBasisUsd().subtract(relievedCost, MC)));
+            BigDecimal netAvco = netAvcoAtTimeOfSale != null ? netAvcoAtTimeOfSale : avcoAtTimeOfSale;
+            BigDecimal relievedNetCost = soldCoveredQuantity.multiply(netAvco, MC);
+            position.setNetTotalCostBasisUsd(nonNegative(position.netTotalCostBasisUsd().subtract(relievedNetCost, MC)));
             if (hasKnownPrice(flow)
                     && consumption.externalShortfallQuantity().signum() == 0
                     && consumption.uncoveredQuantity().signum() == 0) {
                 BigDecimal realised = flow.getUnitPriceUsd().subtract(avcoAtTimeOfSale, MC).multiply(soldCoveredQuantity, MC);
                 flow.setRealisedPnlUsd(realised);
                 position.setTotalRealisedPnlUsd(position.totalRealisedPnlUsd().add(realised));
+                BigDecimal netRealised = flow.getUnitPriceUsd().subtract(netAvco, MC).multiply(soldCoveredQuantity, MC);
+                position.setTotalNetRealisedPnlUsd(position.totalNetRealisedPnlUsd().add(netRealised));
             } else {
                 flow.setAvcoAtTimeOfSale(null);
                 flow.setRealisedPnlUsd(null);
@@ -127,6 +191,11 @@ public class GenericFlowReplayEngine {
             if (avcoAtTimeOfCharge != null && chargedCoveredQuantity.signum() > 0) {
                 position.setTotalCostBasisUsd(nonNegative(position.totalCostBasisUsd().subtract(
                         chargedCoveredQuantity.multiply(avcoAtTimeOfCharge, MC),
+                        MC
+                )));
+                BigDecimal netAvco = position.perWalletNetAvco() != null ? position.perWalletNetAvco() : avcoAtTimeOfCharge;
+                position.setNetTotalCostBasisUsd(nonNegative(position.netTotalCostBasisUsd().subtract(
+                        chargedCoveredQuantity.multiply(netAvco, MC),
                         MC
                 )));
             }
@@ -237,17 +306,22 @@ public class GenericFlowReplayEngine {
     public CarryTransfer removeFromPosition(NormalizedTransaction.Flow flow, PositionState position) {
         BigDecimal requestedQuantity = flow.getQuantityDelta().abs();
         BigDecimal effectiveAvco = effectiveRemovalAvco(position);
+        BigDecimal effectiveNetAvco = effectiveNetRemovalAvco(position);
         QuantityConsumption consumption = consumeQuantityCoveredFirst(position, requestedQuantity);
         BigDecimal cost = effectiveAvco == null
                 ? BigDecimal.ZERO
                 : consumption.coveredQuantity().multiply(effectiveAvco, MC);
-        // Cycle/17 R7: a full-position removal must drain all remaining basis into the carry.
-        // AVCO-derived cost can under-shoot stored basis on wrapper REALLOCATE_OUT (zkSync WETH
-        // seq≈7581: basisDelta=0 while qty→0, orphan basis inflated AMANWETH AVCO).
+        BigDecimal netCost = effectiveNetAvco == null
+                ? BigDecimal.ZERO
+                : consumption.coveredQuantity().multiply(effectiveNetAvco, MC);
         if (position.quantity().signum() == 0 && position.totalCostBasisUsd().signum() > 0) {
             cost = position.totalCostBasisUsd();
         }
+        if (position.quantity().signum() == 0 && position.netTotalCostBasisUsd().signum() > 0) {
+            netCost = position.netTotalCostBasisUsd();
+        }
         position.setTotalCostBasisUsd(nonNegative(position.totalCostBasisUsd().subtract(cost, MC)));
+        position.setNetTotalCostBasisUsd(nonNegative(position.netTotalCostBasisUsd().subtract(netCost, MC)));
         purgeOrphanBasisWhenEmpty(position);
         recomputePerWalletAvco(position);
         if (consumption.externalShortfallQuantity().signum() > 0) {
@@ -260,12 +334,18 @@ public class GenericFlowReplayEngine {
         if (carryAvco == null && consumption.coveredQuantity().signum() > 0 && cost.signum() > 0) {
             carryAvco = cost.divide(consumption.coveredQuantity(), MC);
         }
+        BigDecimal carryNetAvco = effectiveNetAvco;
+        if (carryNetAvco == null && consumption.coveredQuantity().signum() > 0 && netCost.signum() > 0) {
+            carryNetAvco = netCost.divide(consumption.coveredQuantity(), MC);
+        }
         return new CarryTransfer(
                 requestedQuantity,
                 consumption.coveredQuantity(),
                 requestedQuantity.subtract(consumption.coveredQuantity(), MC),
                 cost,
                 carryAvco,
+                netCost,
+                carryNetAvco,
                 false,
                 position.assetKey()
         );
@@ -287,6 +367,7 @@ public class GenericFlowReplayEngine {
         BigDecimal availableQty = position.quantity() == null ? BigDecimal.ZERO : position.quantity();
         BigDecimal availableUncov = position.uncoveredQuantity() == null ? BigDecimal.ZERO : position.uncoveredQuantity();
         BigDecimal totalCost = position.totalCostBasisUsd() == null ? BigDecimal.ZERO : position.totalCostBasisUsd();
+        BigDecimal totalNetCost = position.netTotalCostBasisUsd() == null ? BigDecimal.ZERO : position.netTotalCostBasisUsd();
 
         if (availableQty.signum() <= 0 || totalCost.signum() <= 0) {
             return removeFromPosition(flow, position);
@@ -296,6 +377,7 @@ public class GenericFlowReplayEngine {
         BigDecimal shortfall = nonNegative(requestedQuantity.subtract(appliedQty, MC));
         BigDecimal proportion = appliedQty.divide(availableQty, MC).min(BigDecimal.ONE);
         BigDecimal proportionalCost = totalCost.multiply(proportion, MC);
+        BigDecimal proportionalNetCost = totalNetCost.multiply(proportion, MC);
         BigDecimal proportionalUncov = availableUncov.multiply(proportion, MC);
 
         BigDecimal newQty = nonNegative(availableQty.subtract(appliedQty, MC));
@@ -307,6 +389,7 @@ public class GenericFlowReplayEngine {
         position.setQuantity(newQty);
         position.setUncoveredQuantity(newUncov);
         position.setTotalCostBasisUsd(nonNegative(totalCost.subtract(proportionalCost, MC)));
+        position.setNetTotalCostBasisUsd(nonNegative(totalNetCost.subtract(proportionalNetCost, MC)));
         purgeOrphanBasisWhenEmpty(position);
         recomputePerWalletAvco(position);
 
@@ -317,6 +400,9 @@ public class GenericFlowReplayEngine {
         BigDecimal carryAvco = appliedQty.signum() > 0
                 ? proportionalCost.divide(appliedQty, MC)
                 : null;
+        BigDecimal carryNetAvco = appliedQty.signum() > 0
+                ? proportionalNetCost.divide(appliedQty, MC)
+                : null;
 
         return new CarryTransfer(
                 requestedQuantity,
@@ -324,9 +410,27 @@ public class GenericFlowReplayEngine {
                 BigDecimal.ZERO,
                 proportionalCost,
                 carryAvco,
+                proportionalNetCost,
+                carryNetAvco,
                 false,
                 position.assetKey()
         );
+    }
+
+    private static BigDecimal effectiveNetRemovalAvco(PositionState position) {
+        if (position == null) {
+            return null;
+        }
+        BigDecimal coveredQuantity = nonNegative(position.quantity().subtract(position.uncoveredQuantity(), MC));
+        BigDecimal derivedAvco = null;
+        if (coveredQuantity.signum() > 0 && position.netTotalCostBasisUsd().signum() > 0) {
+            derivedAvco = position.netTotalCostBasisUsd().divide(coveredQuantity, MC);
+        }
+        BigDecimal storedAvco = position.perWalletNetAvco();
+        if (storedAvco != null && storedAvco.signum() > 0) {
+            return storedAvco;
+        }
+        return derivedAvco;
     }
 
     /**
@@ -371,6 +475,30 @@ public class GenericFlowReplayEngine {
             BigDecimal uncoveredQuantity,
             BigDecimal avco
     ) {
+        restoreToPosition(quantity, position, cost, cost, uncoveredQuantity, avco);
+    }
+
+    /**
+     * ADR-040 Change 2: net-conserving carry-aware restore. Routes through the 6-arg net-aware
+     * overload so the net cost lane receives {@code carry.netCostBasisUsd()} instead of cloning
+     * the tax basis, which would inject phantom net cost on every WRAP/UNWRAP/corridor CARRY_IN.
+     */
+    public void restoreToPosition(CarryTransfer carry, PositionState position) {
+        restoreToPosition(
+                carry.quantity(), position,
+                carry.costBasisUsd(), carry.netCostBasisUsd(),
+                carry.uncoveredQuantity(), carry.avco()
+        );
+    }
+
+    public void restoreToPosition(
+            BigDecimal quantity,
+            PositionState position,
+            BigDecimal cost,
+            BigDecimal netCost,
+            BigDecimal uncoveredQuantity,
+            BigDecimal avco
+    ) {
         // Cycle/15 R5 F2: math invariant — the uncovered quantity applied to a position
         // on inbound restore cannot exceed the inbound quantity itself. Diagnosed via
         // 0xf03b/ARBITRUM/ETH where a Pancakeswap LP_EXIT bucket restoration injected
@@ -387,9 +515,13 @@ public class GenericFlowReplayEngine {
         BigDecimal coveredOfRestore = nonNegative(quantity.subtract(clampedUncov, MC));
         BigDecimal effectiveCost = pegFlooredStablecoinCarryBasis(
                 position == null ? null : position.assetKey(), coveredOfRestore, cost);
+        BigDecimal effectiveNetCost = pegFlooredStablecoinCarryBasis(
+                position == null ? null : position.assetKey(), coveredOfRestore,
+                netCost == null ? effectiveCost : netCost);
         position.setQuantity(position.quantity().add(quantity));
         position.setUncoveredQuantity(position.uncoveredQuantity().add(clampedUncov));
         position.setTotalCostBasisUsd(position.totalCostBasisUsd().add(effectiveCost));
+        position.setNetTotalCostBasisUsd(position.netTotalCostBasisUsd().add(effectiveNetCost));
         recomputePerWalletAvco(position);
         if (clampedUncov.signum() > 0 || avco == null) {
             markUnresolved(position);
@@ -507,22 +639,47 @@ public class GenericFlowReplayEngine {
      * provisional basis captured at materialisation (and any later spot-fallback promotion)
      * instead of stacking carry on top or using whole-position AVCO heuristics.
      */
+    /**
+     * ADR-040 Change 2: 3-arg wrapper kept for callers that don't distinguish net carry — delegates
+     * to the 4-arg overload with {@code netCarryBasisUsd = carryBasisUsd} (net mirrors tax).
+     */
     public void applyAuthoritativeLateInboundCarryBasis(
             PositionState destination,
             BigDecimal provisionalBasisUsd,
             BigDecimal carryBasisUsd
     ) {
+        applyAuthoritativeLateInboundCarryBasis(destination, provisionalBasisUsd, carryBasisUsd, carryBasisUsd);
+    }
+
+    /**
+     * ADR-040 Change 2: net-lane-aware late-attach. Subtracts the same provisional from both lanes
+     * (the provisional was booked identically to tax and net at materialisation time), then adds the
+     * authoritative carry basis to the tax lane and {@code netCarryBasisUsd} to the net lane.
+     */
+    public void applyAuthoritativeLateInboundCarryBasis(
+            PositionState destination,
+            BigDecimal provisionalBasisUsd,
+            BigDecimal carryBasisUsd,
+            BigDecimal netCarryBasisUsd
+    ) {
         if (destination == null || carryBasisUsd == null || carryBasisUsd.signum() <= 0) {
             return;
         }
         BigDecimal provisional = provisionalBasisUsd == null ? BigDecimal.ZERO : provisionalBasisUsd;
+        BigDecimal effectiveNetCarry = netCarryBasisUsd != null ? netCarryBasisUsd : carryBasisUsd;
         if (provisional.signum() > 0) {
             destination.setTotalCostBasisUsd(
                     destination.totalCostBasisUsd().subtract(provisional, MC).add(carryBasisUsd, MC)
             );
+            destination.setNetTotalCostBasisUsd(
+                    destination.netTotalCostBasisUsd().subtract(provisional, MC).add(effectiveNetCarry, MC)
+            );
+            recomputePerWalletAvco(destination);
             return;
         }
         destination.setTotalCostBasisUsd(destination.totalCostBasisUsd().add(carryBasisUsd, MC));
+        destination.setNetTotalCostBasisUsd(destination.netTotalCostBasisUsd().add(effectiveNetCarry, MC));
+        recomputePerWalletAvco(destination);
     }
 
     public void applyInboundShortfallSpotFallback(
@@ -608,6 +765,7 @@ public class GenericFlowReplayEngine {
         BigDecimal addedBasis = coveredPromotion.multiply(resolved.unitPriceUsd(), MC);
         position.setUncoveredQuantity(nonNegative(afterUncov.subtract(coveredPromotion, MC)));
         position.setTotalCostBasisUsd(position.totalCostBasisUsd().add(addedBasis, MC));
+        position.setNetTotalCostBasisUsd(position.netTotalCostBasisUsd().add(addedBasis, MC));
         recomputePerWalletAvco(position);
         if (position.uncoveredQuantity().signum() == 0) {
             resolveTemporaryUnresolved(position);
@@ -703,6 +861,8 @@ public class GenericFlowReplayEngine {
         if (newQuantity.signum() == 0 && position.totalCostBasisUsd().signum() > 0) {
             position.setTotalCostBasisUsd(BigDecimal.ZERO);
             position.setPerWalletAvco(null);
+            position.setNetTotalCostBasisUsd(BigDecimal.ZERO);
+            position.setPerWalletNetAvco(null);
         }
         return new QuantityConsumption(appliedQuantity, coveredQuantity, uncoveredQuantity, externalShortfallQuantity);
     }
@@ -720,6 +880,8 @@ public class GenericFlowReplayEngine {
         }
         position.setTotalCostBasisUsd(BigDecimal.ZERO);
         position.setPerWalletAvco(null);
+        position.setNetTotalCostBasisUsd(BigDecimal.ZERO);
+        position.setPerWalletNetAvco(null);
     }
 
     private QuantityConsumption consumeQuantityCoveredFirst(PositionState position, BigDecimal requestedQuantity) {
@@ -741,6 +903,8 @@ public class GenericFlowReplayEngine {
         if (newQuantity.signum() == 0 && position.totalCostBasisUsd().signum() > 0) {
             position.setTotalCostBasisUsd(BigDecimal.ZERO);
             position.setPerWalletAvco(null);
+            position.setNetTotalCostBasisUsd(BigDecimal.ZERO);
+            position.setPerWalletNetAvco(null);
         }
         return new QuantityConsumption(appliedQuantity, coveredQuantity, uncoveredQuantity, externalShortfallQuantity);
     }
@@ -750,6 +914,16 @@ public class GenericFlowReplayEngine {
         position.setPerWalletAvco(coveredQuantity.signum() == 0
                 ? null
                 : safeDivide(position.totalCostBasisUsd(), coveredQuantity));
+        position.setPerWalletNetAvco(coveredQuantity.signum() == 0
+                ? null
+                : safeDivide(position.netTotalCostBasisUsd(), coveredQuantity));
+    }
+
+    private static boolean isZeroNetCostAcquisition(NormalizedTransaction transaction) {
+        if (transaction == null || transaction.getType() == null) {
+            return false;
+        }
+        return ZeroCostAcquisitionSupport.isZeroCostAcquisition(transaction.getType());
     }
 
     /**

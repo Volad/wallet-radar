@@ -41,7 +41,7 @@ class CorridorBasisConservationGuardTest {
         BigDecimal q = new BigDecimal(qty);
         BigDecimal basis = new BigDecimal(basisUsd);
         // avco is irrelevant to the guard; pass null to avoid non-terminating division noise.
-        return new CarryTransfer(q, q, BigDecimal.ZERO, basis, null, false, ETH);
+        return new CarryTransfer(q, q, BigDecimal.ZERO, basis, null, basis, null, false, ETH);
     }
 
     @Test
@@ -136,7 +136,7 @@ class CorridorBasisConservationGuardTest {
                 .queue(new TransferPendingKey("corr-family:BYBIT-CORRIDOR:ARBITRUM:0xswap:SYMBOL:USDE"))
                 .addLast(new CarryTransfer(
                         new BigDecimal("862"), new BigDecimal("862"), BigDecimal.ZERO,
-                        new BigDecimal("862"), null, false, usde));
+                        new BigDecimal("862"), null, new BigDecimal("862"), null, false, usde));
         // Destination credit (USDT) on the SAME corridor base, different asset → legitimate swap.
         state.pendingTransfers()
                 .queue(new TransferPendingKey("corr-family:BYBIT-CORRIDOR:ARBITRUM:0xswap:SYMBOL:USDT"))
@@ -156,7 +156,7 @@ class CorridorBasisConservationGuardTest {
                 .queue(new TransferPendingKey("corr-family:BYBIT-CORRIDOR:SOLANA:0xoos:FAMILY:SOL"))
                 .addLast(new CarryTransfer(
                         new BigDecimal("5"), new BigDecimal("5"), BigDecimal.ZERO,
-                        new BigDecimal("277"), null, false, sol));
+                        new BigDecimal("277"), null, new BigDecimal("277"), null, false, sol));
 
         CorridorBasisConservationResult result = guard.evaluate(state);
 
@@ -179,6 +179,43 @@ class CorridorBasisConservationGuardTest {
         assertThat(result.breaches()).hasSize(1);
         assertThat(result.breaches().getFirst().assetSymbol()).isEqualTo("ETH");
         assertThat(result.totalOrphanedBasisUsd()).isEqualByComparingTo("391.85");
+    }
+
+    @Test
+    @DisplayName("RC-A: an orphaned earn-principal CARRY_OUT on a bybit-earn-carry queue fires a breach")
+    void orphanedEarnPrincipalCarryOutFiresBreach() {
+        ReplayExecutionState state = newState();
+        AssetKey ltc = new AssetKey("BYBIT:33625378", null, "SYMBOL:LTC", "LTC", "SYMBOL:LTC");
+        // A subscribe FUND CARRY_OUT drained but its EARN CARRY_IN never materialised (genuinely
+        // unpaired boundary): the released covered carry sits orphaned on the venue FIFO queue.
+        state.pendingTransfers()
+                .queue(new TransferPendingKey("bybit-earn-carry:33625378:SYMBOL:LTC"))
+                .addLast(new CarryTransfer(
+                        new BigDecimal("0.75"), new BigDecimal("0.75"), BigDecimal.ZERO,
+                        new BigDecimal("41.54"), null, new BigDecimal("41.54"), null, false, ltc));
+
+        CorridorBasisConservationResult result = guard.evaluate(state);
+
+        assertThat(result.conserved()).isFalse();
+        assertThat(result.breaches()).hasSize(1);
+        assertThat(result.breaches().getFirst().assetSymbol()).isEqualTo("LTC");
+        assertThat(result.totalOrphanedBasisUsd()).isEqualByComparingTo("41.54");
+    }
+
+    @Test
+    @DisplayName("RC-A: an open subscribe (pending-inbound only) on a bybit-earn-carry queue is not a breach")
+    void openEarnSubscribePendingInboundIsNotBreach() {
+        ReplayExecutionState state = newState();
+        AssetKey link = new AssetKey("BYBIT:33625378", null, "SYMBOL:LINK", "LINK", "SYMBOL:LINK");
+        // An open position materialises the IN leg (pendingInbound) with no released covered carry-out
+        // — the offsetting OUT restored the principal in-place, so nothing is orphaned.
+        state.pendingTransfers()
+                .queue(new TransferPendingKey("bybit-earn-carry:33625378:SYMBOL:LINK"))
+                .addLast(CarryTransfer.pendingInbound(new BigDecimal("12.5"), link, BigDecimal.ZERO));
+
+        CorridorBasisConservationResult result = guard.evaluate(state);
+
+        assertThat(result.conserved()).isTrue();
     }
 
     @Test

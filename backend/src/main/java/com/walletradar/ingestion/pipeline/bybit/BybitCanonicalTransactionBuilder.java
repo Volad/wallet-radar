@@ -282,6 +282,36 @@ public class BybitCanonicalTransactionBuilder {
         return transaction;
     }
 
+    /**
+     * Cross-sub-account ETH-family liquid-staking conversion (e.g. FUND {@code METH}/{@code ETH}
+     * debit ↔ EARN {@code CMETH} credit). These are economically one conversion (source disposed,
+     * liquid-staking token received) but land on two Bybit sub-accounts, so they cannot be paired
+     * cross-document by the family-equivalent continuity bucket (that bucket is keyed by the raw
+     * sub-account {@code walletAddress}).
+     *
+     * <p>They are fused here into a single two-flow {@code STAKING_DEPOSIT} so
+     * {@code LiquidStakingReplayHandler} — the same handler that carries the same-sub-account
+     * {@code ETH→METH} staking control — moves the source family basis into the received token.
+     * Both legs are booked on the UID umbrella ({@code BYBIT:<uid>}, ADR-017 family rollup): the
+     * replay position key strips {@code :FUND}/{@code :UTA} to the umbrella, and {@code :EARN} would
+     * otherwise stay siloed, so the whole conversion is normalized onto the umbrella where the
+     * source acquisition lot lives and where any later corridor-out drains it. The anchor is the
+     * debit (outflow) leg — deterministic and independent of Mongo {@code _id} ordering (ADR-041).
+     */
+    public NormalizedTransaction buildCrossSubAccountStakingPair(
+            ExternalLedgerRaw debit,
+            ExternalLedgerRaw credit,
+            Instant now
+    ) {
+        NormalizedTransaction transaction = baseTransaction(
+                pairId(debit, credit), debit, NormalizedTransactionType.STAKING_DEPOSIT, now);
+        transaction.setWalletAddress(BYBIT_PREFIX + extractUid(resolveWalletRef(debit)));
+        transaction.setFlows(stakingPairFlows(debit, credit));
+        finalizeBybitFlows(transaction, debit);
+        initializeStatus(transaction, now);
+        return transaction;
+    }
+
     public NormalizedTransaction buildNeedsReviewRow(
             ExternalLedgerRaw row,
             Instant now,
@@ -565,6 +595,10 @@ public class BybitCanonicalTransactionBuilder {
             return Optional.of(NormalizedTransactionType.LENDING_WITHDRAW);
         }
         if (lower.contains("flexible") && (lower.contains("redemption") || lower.contains("principal redemption"))) {
+            return Optional.of(NormalizedTransactionType.EARN_FLEXIBLE_SAVING);
+        }
+        // Principal Flexible-Savings subscription (not auto-compounded interest/reward rows).
+        if (lower.contains("flexible") && lower.contains("subscription") && !lower.contains("interest")) {
             return Optional.of(NormalizedTransactionType.EARN_FLEXIBLE_SAVING);
         }
         return Optional.empty();

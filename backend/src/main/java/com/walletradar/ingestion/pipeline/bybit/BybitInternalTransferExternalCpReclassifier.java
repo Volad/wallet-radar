@@ -180,7 +180,14 @@ public class BybitInternalTransferExternalCpReclassifier {
             }
         }
         String correlationId = tx.getCorrelationId();
-        if (correlationId == null || !correlationId.startsWith("BYBIT-CORRIDOR:")) {
+        // Corridor corrIds (BYBIT-CORRIDOR:) and earn-principal corrIds (bybit-earn-principal-v1:)
+        // are final pairing keys (ADR-029 D1): never null them or this same-uid demotion would turn a
+        // paired earn-principal FUND leg back into a blank-corr orphan, which BybitOnChainEarnOrphanRepairService
+        // would re-link on the next pass — preventing the linking convergence loop from reaching a fixed point.
+        if (correlationId == null
+                || (!correlationId.startsWith("BYBIT-CORRIDOR:")
+                        && !correlationId.startsWith(
+                                BybitEarnPrincipalTransferPairer.EARN_PRINCIPAL_CORRELATION_PREFIX))) {
             if (Boolean.TRUE.equals(tx.getContinuityCandidate())) {
                 tx.setContinuityCandidate(false);
                 changed = true;

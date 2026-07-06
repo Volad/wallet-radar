@@ -9,11 +9,13 @@ public final class ContinuityBucket {
 
     private BigDecimal quantity = BigDecimal.ZERO;
     private BigDecimal totalCostBasisUsd = BigDecimal.ZERO;
+    private BigDecimal netTotalCostBasisUsd = BigDecimal.ZERO;
     private BigDecimal uncoveredQuantity = BigDecimal.ZERO;
 
     public void add(CarryTransfer carry) {
         quantity = quantity.add(carry.quantity());
         totalCostBasisUsd = totalCostBasisUsd.add(carry.costBasisUsd());
+        netTotalCostBasisUsd = netTotalCostBasisUsd.add(carry.netCostBasisUsd());
         uncoveredQuantity = uncoveredQuantity.add(carry.uncoveredQuantity());
     }
 
@@ -27,11 +29,18 @@ public final class ContinuityBucket {
         BigDecimal avco = availableCovered.signum() <= 0
                 ? null
                 : safeDivide(totalCostBasisUsd, availableCovered);
+        BigDecimal netAvco = availableCovered.signum() <= 0
+                ? null
+                : safeDivide(netTotalCostBasisUsd, availableCovered);
         BigDecimal cost = avco == null
                 ? BigDecimal.ZERO
                 : coveredQuantity.multiply(avco, MC);
+        BigDecimal netCost = netAvco == null
+                ? BigDecimal.ZERO
+                : coveredQuantity.multiply(netAvco, MC);
         quantity = nonNegative(quantity.subtract(appliedQuantity, MC));
         totalCostBasisUsd = nonNegative(totalCostBasisUsd.subtract(cost, MC));
+        netTotalCostBasisUsd = nonNegative(netTotalCostBasisUsd.subtract(netCost, MC));
         uncoveredQuantity = nonNegative(availableUncovered.subtract(nonNegative(appliedQuantity.subtract(coveredQuantity, MC)), MC));
         return new CarryTransfer(
                 appliedQuantity,
@@ -39,6 +48,8 @@ public final class ContinuityBucket {
                 uncoveredQuantityToApply,
                 cost,
                 avco,
+                netCost,
+                netAvco,
                 false,
                 assetKey
         );

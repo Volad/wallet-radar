@@ -319,11 +319,19 @@ public class PendingReceiptClarificationQueryService {
                 Criteria.where("protocolName").is("Euler"),
                 Criteria.where("missingDataReasons").in(ClassificationReasonCode.EULER_BATCH_DECODER_REQUIRED.code())
         );
+        // ADR-044 D3: broadened beyond LP_EXIT/LP_FEE_CLAIM to SWAP/UNWRAP/LP_EXIT_PARTIAL/
+        // LP_EXIT_FINAL. Safe: only rows carrying NATIVE_SETTLEMENT_TRANSFER_EVIDENCE_REQUIRED at
+        // PENDING_CLARIFICATION match, which the (per-chain flag-gated) classification trigger
+        // produces — with the flag off no SWAP/UNWRAP row carries this reason.
         Criteria nativeSettlementTransferRecoveryCriteria = new Criteria().andOperator(
                 Criteria.where("status").is(NormalizedTransactionStatus.PENDING_CLARIFICATION),
                 Criteria.where("type").in(
                         NormalizedTransactionType.LP_EXIT,
-                        NormalizedTransactionType.LP_FEE_CLAIM
+                        NormalizedTransactionType.LP_EXIT_PARTIAL,
+                        NormalizedTransactionType.LP_EXIT_FINAL,
+                        NormalizedTransactionType.LP_FEE_CLAIM,
+                        NormalizedTransactionType.SWAP,
+                        NormalizedTransactionType.UNWRAP
                 ),
                 Criteria.where("missingDataReasons")
                         .in(ClassificationReasonCode.NATIVE_SETTLEMENT_TRANSFER_EVIDENCE_REQUIRED.code())

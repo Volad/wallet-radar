@@ -89,6 +89,10 @@ public class ReplayMarketAuthority {
             return Optional.empty();
         }
         if (PriceableFlowPolicy.hasResolvedPrice(flow)) {
+            Optional<ResolvedMarketPrice> clampedBotLot = clampPreCoverageBotLot(transaction, flow);
+            if (clampedBotLot.isPresent()) {
+                return clampedBotLot;
+            }
             return Optional.of(new ResolvedMarketPrice(
                     flow.getUnitPriceUsd(),
                     flow.getPriceSource(),
@@ -122,6 +126,37 @@ public class ReplayMarketAuthority {
             ));
         }
         return Optional.empty();
+    }
+
+    /**
+     * RC-D (ADR-043) — clamp a genuinely pre-coverage Bybit trading-bot lot to the nearest valid
+     * market bucket. A {@link PriceSource#BOT_LEDGER} lot is priced at normalization from net
+     * stablecoin consumed (before historical prices exist) and marked CONFIRMED, so it never reaches
+     * the pricing orchestrator's pre-coverage fallback; on a clean rebuild ({@code --clear-pricing-cache})
+     * historical prices are also empty during normalization, so the derived unit price stands even when
+     * it is out of range (e.g. the 2025-01 DOGE lot at $0.5766/unit vs the asset's first bucket at
+     * $0.23246 in 2025-09). At replay time historical prices are fully populated, so this reuses the
+     * orchestrator's bounded pre-coverage window to clamp ONLY lots whose event predates the asset's
+     * first cached bucket. In-coverage bot lots keep their stablecoin-derived price untouched.
+     */
+    private Optional<ResolvedMarketPrice> clampPreCoverageBotLot(NormalizedTransaction transaction, Flow flow) {
+        if (flow.getPriceSource() != PriceSource.BOT_LEDGER) {
+            return Optional.empty();
+        }
+        Instant occurredAt = transaction.getBlockTimestamp();
+        if (occurredAt == null) {
+            return Optional.empty();
+        }
+        PriceRequest request = toPriceRequest(transaction, flow, occurredAt);
+        Optional<PriceQuote> clamp = priceExternalSourceOrchestrator.resolvePreCoverageNearestBucket(request);
+        if (clamp.isEmpty() || clamp.get().unitPriceUsd() == null || clamp.get().unitPriceUsd().signum() <= 0) {
+            return Optional.empty();
+        }
+        return Optional.of(new ResolvedMarketPrice(
+                clamp.get().unitPriceUsd(),
+                clamp.get().source(),
+                ResolvedMarketPrice.Authority.HISTORICAL_CACHE
+        ));
     }
 
     /**

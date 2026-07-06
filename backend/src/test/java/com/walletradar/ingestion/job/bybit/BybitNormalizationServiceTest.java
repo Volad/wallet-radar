@@ -547,9 +547,13 @@ class BybitNormalizationServiceTest {
     }
 
     @Test
-    void extractedLiquidStakingPairThatCrossesBybitSubAccountsIsNormalizedAsIndependentLegs() {
-        // Cycle/5 N13: METH out on FUND + CMETH in on EARN must not collapse into one
-        // STAKING_DEPOSIT (single walletAddress would leak the debit). See ADR-006 §9.
+    void extractedLiquidStakingPairThatCrossesBybitSubAccountsIsFusedOntoUmbrella() {
+        // Cross-asset ETH-family earn conversion: METH out on FUND + CMETH in on EARN. Formerly
+        // (Cycle/5 N13) these were kept as two independent INTERNAL_TRANSFER legs under a shared
+        // correlationId, expecting the family-equivalent continuity bucket to carry basis — but that
+        // bucket is keyed by the raw sub-account walletAddress, so the source basis stranded. They
+        // are now fused into ONE umbrella-booked STAKING_DEPOSIT so LiquidStakingReplayHandler
+        // carries the source family basis into the received token (same carrier as ETH→METH).
         BybitExtractedEvent methFundLeg = extractedLiquidStakingRow(
                 "meth-fund-leg",
                 "METH",
@@ -576,10 +580,20 @@ class BybitNormalizationServiceTest {
         ArgumentCaptor<NormalizedTransaction> captor = ArgumentCaptor.forClass(NormalizedTransaction.class);
         verify(normalizedTransactionStore).upsert(captor.capture());
         NormalizedTransaction saved = captor.getValue();
-        assertThat(saved.getType()).isNotEqualTo(NormalizedTransactionType.STAKING_DEPOSIT);
-        // Counter leg on EARN must NOT be marked confirmed by the pair path — it remains pending
-        // for its own normalization pass.
-        verify(bybitExtractedEventRepository, never()).save(cmethEarnLeg);
+        assertThat(saved.getType()).isEqualTo(NormalizedTransactionType.STAKING_DEPOSIT);
+        assertThat(saved.getStatus()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        // Booked on the UID umbrella (no sub-account suffix) — the disposal drains the umbrella lot
+        // and the received cmETH lands there too (ADR-017 family rollup).
+        assertThat(saved.getWalletAddress()).isEqualTo("BYBIT:UID");
+        assertThat(saved.getFlows())
+                .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getRole() + ":" + flow.getQuantityDelta())
+                .containsExactlyInAnyOrder(
+                        "METH:TRANSFER:-0.66865026",
+                        "CMETH:TRANSFER:0.66865026"
+                );
+        // Both legs are confirmed by the fused-pair path (the EARN counter leg is consumed here and
+        // must NOT be reprocessed / synthesised as a same-asset EARN credit downstream).
+        verify(bybitExtractedEventRepository, org.mockito.Mockito.atLeastOnce()).save(cmethEarnLeg);
     }
 
     @Test

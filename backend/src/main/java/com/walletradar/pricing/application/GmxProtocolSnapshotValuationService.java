@@ -33,6 +33,7 @@ public class GmxProtocolSnapshotValuationService {
     private static final MathContext MC = MathContext.DECIMAL128;
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(8);
     private static final Duration SNAPSHOT_TTL = Duration.ofSeconds(60);
+    private static final Duration APY_CACHE_TTL = Duration.ofMinutes(30);
     private static final int GM_TOKEN_DECIMALS = 18;
     private static final String TOTAL_SUPPLY_SELECTOR = "0x18160ddd";
 
@@ -40,6 +41,78 @@ public class GmxProtocolSnapshotValuationService {
     private final DefiLlamaClient defiLlamaClient;
 
     private final Map<NetworkId, SnapshotCacheEntry> snapshotCache = new LinkedHashMap<>();
+    private final Map<NetworkId, ApyCacheEntry> apyCache = new LinkedHashMap<>();
+
+    /**
+     * Returns the protocol-reported fee APY (0–100 scale) for a GM/GLV market token, or empty if unavailable.
+     * The fee APY is sourced from GMX's /apy?period=7d endpoint. Values are returned in decimal (0–1) by
+     * the API and converted to percentage (0–100) here for consistency with the rest of the system.
+     */
+    public Optional<BigDecimal> resolveMarketFeeApr(
+            NetworkId networkId,
+            String marketTokenAddress
+    ) {
+        if (networkId == null || !present(marketTokenAddress)) {
+            return Optional.empty();
+        }
+        ChainEndpoints endpoints = endpoints(networkId).orElse(null);
+        if (endpoints == null) {
+            return Optional.empty();
+        }
+        String normalizedToken = normalizeAddress(marketTokenAddress);
+        Map<String, BigDecimal> apyByToken = loadApySnapshot(networkId, endpoints, Instant.now()).orElse(null);
+        if (apyByToken == null) {
+            return Optional.empty();
+        }
+        BigDecimal apy = apyByToken.get(normalizedToken);
+        if (apy == null || apy.signum() <= 0) {
+            return Optional.empty();
+        }
+        // /apy returns values in 0–1 range; convert to 0–100 percentage scale.
+        return Optional.of(apy.multiply(BigDecimal.valueOf(100), MC));
+    }
+
+    private Optional<Map<String, BigDecimal>> loadApySnapshot(
+            NetworkId networkId,
+            ChainEndpoints endpoints,
+            Instant requestedAt
+    ) {
+        ApyCacheEntry cached = apyCache.get(networkId);
+        if (cached != null && Duration.between(cached.fetchedAt(), requestedAt).compareTo(APY_CACHE_TTL) < 0) {
+            return Optional.of(cached.apyByToken());
+        }
+
+        JsonNode apyResponse = fetchFromAnyEndpoint(endpoints.apiBaseUrls(), "/apy?period=7d").orElse(null);
+        if (apyResponse == null) {
+            return Optional.empty();
+        }
+
+        Map<String, BigDecimal> apyByToken = new LinkedHashMap<>();
+        // markets section
+        JsonNode marketsNode = apyResponse.path("markets");
+        if (marketsNode.isObject()) {
+            marketsNode.fields().forEachRemaining(entry -> {
+                BigDecimal apy = decimal(entry.getValue().path("apy").asText(null));
+                if (apy.signum() > 0) {
+                    apyByToken.put(normalizeAddress(entry.getKey()), apy);
+                }
+            });
+        }
+        // glvs section
+        JsonNode glvsNode = apyResponse.path("glvs");
+        if (glvsNode.isObject()) {
+            glvsNode.fields().forEachRemaining(entry -> {
+                BigDecimal apy = decimal(entry.getValue().path("apy").asText(null));
+                if (apy.signum() > 0) {
+                    apyByToken.put(normalizeAddress(entry.getKey()), apy);
+                }
+            });
+        }
+
+        apyCache.put(networkId, new ApyCacheEntry(apyByToken, requestedAt));
+        log.debug("GMX APY snapshot loaded: network={} markets={}", networkId, apyByToken.size());
+        return Optional.of(apyByToken);
+    }
 
     public Optional<PriceQuote> resolveMarketTokenQuote(
             NetworkId networkId,
@@ -338,6 +411,9 @@ public class GmxProtocolSnapshotValuationService {
     }
 
     private record SnapshotCacheEntry(GmxSnapshot snapshot, Instant fetchedAt) {
+    }
+
+    private record ApyCacheEntry(Map<String, BigDecimal> apyByToken, Instant fetchedAt) {
     }
 
     private record MarketInfo(

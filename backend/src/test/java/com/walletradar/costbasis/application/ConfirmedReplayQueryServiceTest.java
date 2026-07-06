@@ -78,8 +78,67 @@ class ConfirmedReplayQueryServiceTest {
         assertThat(result).extracting(NormalizedTransaction::getId).containsExactly("b", "a");
     }
 
+    @Test
+    void bybitCollapsedInternalTransferSortsFundOutboundBeforeUmbrellaInboundAtSameTimestamp() {
+        Instant sameTimestamp = Instant.parse("2026-03-12T00:00:00Z");
+        Integer sameIndex = 0;
+        String corrId = "bybit-collapsed-v1:abc123";
+
+        NormalizedTransaction fundOutbound = bybitCollapsedTransfer("fund-out", sameTimestamp, sameIndex, corrId, "-1.0", "BYBIT:33625378:FUND");
+        NormalizedTransaction umbrellaInbound = bybitCollapsedTransfer("umbrella-in", sameTimestamp, sameIndex, corrId, "1.0", "BYBIT:33625378");
+
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                NormalizedTransactionStatus.CONFIRMED
+        )).thenReturn(List.of(umbrellaInbound, fundOutbound));
+
+        List<NormalizedTransaction> result = service().loadOrderedConfirmed();
+
+        assertThat(result).extracting(NormalizedTransaction::getId).containsExactly("fund-out", "umbrella-in");
+    }
+
+    @Test
+    void bybitExternalDepositSortsBeforeSameTimestampCollapsedOutboundDrain() {
+        // MNT/USDT umbrella phantom: a genuine deposit (EXTERNAL_TRANSFER_IN) and a
+        // bybit-collapsed-v1 FUND->UTA transfer share the same timestamp+index. Without the fix,
+        // corridorContinuityFlowSign sorts the collapsed outbound (sign=-1) before the deposit
+        // (sign=0), so the drain clamps an unfunded umbrella and the inbound credits it back,
+        // manufacturing a phantom equal to the deposit. The deposit must settle first.
+        Instant sameTimestamp = Instant.parse("2025-04-11T16:30:00Z");
+        Integer sameIndex = 0;
+        String corrId = "bybit-collapsed-v1:8e38ede";
+
+        NormalizedTransaction deposit = bybitExternalTransferIn("deposit", sameTimestamp, sameIndex, "1074.68");
+        NormalizedTransaction collapsedOut =
+                bybitCollapsedTransfer("collapsed-out", sameTimestamp, sameIndex, corrId, "-1074.68", "BYBIT:33625378:FUND");
+        NormalizedTransaction collapsedIn =
+                bybitCollapsedTransfer("collapsed-in", sameTimestamp, sameIndex, corrId, "1074.68", "BYBIT:33625378");
+
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                NormalizedTransactionStatus.CONFIRMED
+        )).thenReturn(List.of(collapsedIn, collapsedOut, deposit));
+
+        List<NormalizedTransaction> result = service().loadOrderedConfirmed();
+
+        assertThat(result).extracting(NormalizedTransaction::getId)
+                .containsExactly("deposit", "collapsed-out", "collapsed-in");
+    }
+
     private ConfirmedReplayQueryService service() {
         return new ConfirmedReplayQueryService(normalizedTransactionRepository);
+    }
+
+    private NormalizedTransaction bybitExternalTransferIn(
+            String id, Instant timestamp, Integer txIndex, String quantityDelta
+    ) {
+        NormalizedTransaction tx = transaction(id, timestamp, txIndex);
+        tx.setSource(NormalizedTransactionSource.BYBIT);
+        tx.setType(NormalizedTransactionType.EXTERNAL_TRANSFER_IN);
+        tx.setWalletAddress("BYBIT:33625378:FUND");
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(NormalizedLegRole.TRANSFER);
+        flow.setQuantityDelta(new BigDecimal(quantityDelta));
+        tx.setFlows(List.of(flow));
+        return tx;
     }
 
     private NormalizedTransaction transaction(String id, Instant timestamp, Integer transactionIndex) {
@@ -97,6 +156,26 @@ class ConfirmedReplayQueryServiceTest {
         tx.setSource(NormalizedTransactionSource.ON_CHAIN);
         tx.setType(NormalizedTransactionType.INTERNAL_TRANSFER);
         tx.setCorrelationId(corrId);
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(NormalizedLegRole.TRANSFER);
+        flow.setQuantityDelta(new BigDecimal(quantityDelta));
+        tx.setFlows(List.of(flow));
+        return tx;
+    }
+
+    private NormalizedTransaction bybitCollapsedTransfer(
+            String id,
+            Instant timestamp,
+            Integer txIndex,
+            String corrId,
+            String quantityDelta,
+            String walletAddress
+    ) {
+        NormalizedTransaction tx = transaction(id, timestamp, txIndex);
+        tx.setSource(NormalizedTransactionSource.BYBIT);
+        tx.setType(NormalizedTransactionType.INTERNAL_TRANSFER);
+        tx.setCorrelationId(corrId);
+        tx.setWalletAddress(walletAddress);
         NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
         flow.setRole(NormalizedLegRole.TRANSFER);
         flow.setQuantityDelta(new BigDecimal(quantityDelta));

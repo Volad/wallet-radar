@@ -250,8 +250,21 @@ export interface SessionAssetLedgerCurrentResponse {
   readonly uncoveredQuantity: number | null;
   readonly totalCostBasisUsd: number | null;
   readonly avcoUsd: number | null;
+  readonly netTotalCostBasisUsd: number | null;
+  readonly netAvcoUsd: number | null;
   readonly realisedPnlUsd: number | null;
+  readonly netRealisedPnlUsd: number | null;
   readonly gasPaidUsd: number | null;
+}
+
+export interface SessionAssetLedgerFullSessionCurrentResponse {
+  readonly quantity: number | null;
+  readonly coveredQuantity: number | null;
+  readonly uncoveredQuantity: number | null;
+  readonly totalCostBasisUsd: number | null;
+  readonly avcoUsd: number | null;
+  readonly netTotalCostBasisUsd: number | null;
+  readonly netAvcoUsd: number | null;
 }
 
 export interface SessionAssetLedgerTimelineEntryResponse {
@@ -272,8 +285,17 @@ export interface SessionAssetLedgerTimelineEntryResponse {
   readonly coveredQuantityAfter: number | null;
   readonly uncoveredQuantityAfter: number | null;
   readonly totalCostBasisAfterUsd: number | null;
+  /** Family covered-weighted AVCO of the previous entry (backend-owned before/after chaining, ADR-045). */
+  readonly avcoBeforeUsd: number | null;
   readonly avcoAfterUsd: number | null;
-  /** PRIMARY_FLOW = venue spot AVCO; FAMILY_ROLLUP = family aggregate (may include LP shares). */
+  readonly netTotalCostBasisAfterUsd: number | null;
+  readonly netAvcoBeforeUsd: number | null;
+  readonly netAvcoAfterUsd: number | null;
+  /**
+   * Family covered-weighted per-bucket AVCO series kind (ADR-045).
+   * PRIMARY_FLOW = family covered-weighted AVCO; UNAVAILABLE = family drained (avcoAfterUsd null → line breaks).
+   * FAMILY_ROLLUP is never emitted.
+   */
   readonly avcoKind: string | null;
   readonly fromAddress: string | null;
   readonly toAddress: string | null;
@@ -337,6 +359,10 @@ export interface SessionAssetLedgerPointResponse {
   readonly totalCostBasisAfterUsd: number | null;
   readonly avcoBeforeUsd: number | null;
   readonly avcoAfterUsd: number | null;
+  readonly netTotalCostBasisBeforeUsd: number | null;
+  readonly netTotalCostBasisAfterUsd: number | null;
+  readonly netAvcoBeforeUsd: number | null;
+  readonly netAvcoAfterUsd: number | null;
   readonly basisBackedQuantityAfter: number | null;
   readonly uncoveredQuantityDelta: number | null;
   readonly quantityShortfallAfter: number | null;
@@ -350,6 +376,7 @@ export interface SessionAssetLedgerResponse {
   readonly sessionId: string;
   readonly familyIdentity: string;
   readonly current: SessionAssetLedgerCurrentResponse;
+  readonly fullSessionCurrent?: SessionAssetLedgerFullSessionCurrentResponse | null;
   readonly timeline: ReadonlyArray<SessionAssetLedgerTimelineEntryResponse>;
   readonly events: ReadonlyArray<SessionAssetLedgerEventOverlayResponse>;
   readonly ledgerPoints: ReadonlyArray<SessionAssetLedgerPointResponse>;
@@ -384,6 +411,7 @@ export interface SessionDashboardTokenPositionResponse {
   readonly isLiveQuote: boolean;
   readonly priceIssue: string | null;
   readonly avcoUsd: number;
+  readonly netAvcoUsd: number;
   readonly unrealizedPnlPct: number;
   readonly unrealizedPnlUsd: number;
   readonly realizedPnlUsd: number;

@@ -188,14 +188,24 @@ public class EulerLoopReplayHandler {
         BigDecimal coveredRefundQuantity = effectiveQuantity.min(carry.coveredQuantity());
         BigDecimal uncoveredRefundQuantity = nonNegative(effectiveQuantity.subtract(coveredRefundQuantity, MC));
         BigDecimal avco = carry.avco();
+        BigDecimal netAvco = carry.netAvco() != null ? carry.netAvco() : avco;
         BigDecimal refundCost = avco == null ? BigDecimal.ZERO : coveredRefundQuantity.multiply(avco, MC);
-        flowSupport.restoreToPosition(effectiveQuantity, position, refundCost, uncoveredRefundQuantity, avco);
+        // ADR-040 Change 2: net refund cost uses netAvco
+        BigDecimal netRefundCost = netAvco == null ? BigDecimal.ZERO : coveredRefundQuantity.multiply(netAvco, MC);
+        flowSupport.restoreToPosition(effectiveQuantity, position, refundCost, netRefundCost, uncoveredRefundQuantity, avco);
+        BigDecimal remainingNetBasis = nonNegative(
+                (carry.netCostBasisUsd() != null ? carry.netCostBasisUsd() : carry.costBasisUsd()).subtract(netRefundCost, MC)
+        );
+        BigDecimal remainingNetAvco = nonNegative(carry.coveredQuantity().subtract(coveredRefundQuantity, MC)).signum() > 0
+                ? netAvco : null;
         return new CarryTransfer(
                 nonNegative(carry.quantity().subtract(effectiveQuantity, MC)),
                 nonNegative(carry.coveredQuantity().subtract(coveredRefundQuantity, MC)),
                 nonNegative(carry.uncoveredQuantity().subtract(uncoveredRefundQuantity, MC)),
                 nonNegative(carry.costBasisUsd().subtract(refundCost, MC)),
                 avco,
+                remainingNetBasis,
+                remainingNetAvco,
                 false,
                 carry.assetKey()
         );

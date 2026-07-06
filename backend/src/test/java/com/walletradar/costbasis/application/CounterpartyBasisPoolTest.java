@@ -94,7 +94,7 @@ class CounterpartyBasisPoolTest {
                 new ReplayPendingTransferKeyFactory(new com.walletradar.costbasis.application.replay.support.ReplayAssetSupport())
         );
         replayHook = new CounterpartyBasisPoolReplayHook(poolService, transferClassifier);
-        engine = new GenericFlowReplayEngine();
+        engine = new GenericFlowReplayEngine(null);
         flowSupport = new ReplayFlowSupport(engine);
         pools = new HashMap<>();
         dirtyKeys = new HashSet<>();

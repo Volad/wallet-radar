@@ -649,6 +649,173 @@ class BybitStreamAuthorityCollapserTest {
     }
 
     @Test
+    void suppressesCorridorDepositAndStakeCycleCollapseGroupsOnFund() {
+        // Fix A.2: the 2025-03-12 "ETH 2.0" cycle. Two ARBITRUM ETH corridor deposits (+0.01, +0.699)
+        // credit :FUND (BYBIT-CORRIDOR :FUND CARRY_IN), then a :FUND STAKING_DEPOSIT stakes −0.709 ETH
+        // → METH. Bybit ALSO records the deposits' FUND↔UTA auto-route + the UTA→FUND consolidation as
+        // three bybit-collapsed-v1 FUND↔UTA groups that duplicate the corridor deposits onto the
+        // umbrella. Those three groups must be suppressed so the collapse cycle nets to 0.
+        String uid = "33625378";
+        Instant dep1 = Instant.parse("2025-03-12T19:52:00Z");
+        Instant dep2 = Instant.parse("2025-03-12T20:06:00Z");
+        Instant consolidate = Instant.parse("2025-03-12T20:07:00Z");
+        Instant stakedAt = Instant.parse("2025-03-12T20:08:00Z");
+
+        NormalizedTransaction corridorIn1 = corridorInDoc(uid, "0.01", dep1);
+        NormalizedTransaction corridorIn2 = corridorInDoc(uid, "0.699", dep2);
+        NormalizedTransaction staking = stakingDepositDoc(uid, "0.709", "0.66865026", stakedAt);
+
+        NormalizedTransaction g1Fund = collapsedLeg(uid, "grp-1", "FUND", "-0.01", dep1);
+        NormalizedTransaction g1Uta = collapsedLeg(uid, "grp-1", "UTA", "0.01", dep1);
+        NormalizedTransaction g2Fund = collapsedLeg(uid, "grp-2", "FUND", "-0.699", dep2);
+        NormalizedTransaction g2Uta = collapsedLeg(uid, "grp-2", "UTA", "0.699", dep2);
+        NormalizedTransaction g3Uta = collapsedLeg(uid, "grp-3", "UTA", "-0.709", consolidate);
+        NormalizedTransaction g3Fund = collapsedLeg(uid, "grp-3", "FUND", "0.709", consolidate);
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(corridorIn1, corridorIn2)) // corridorIns
+                .thenReturn(List.of(staking))                  // stakingOuts
+                .thenReturn(List.of(g1Fund, g1Uta, g2Fund, g2Uta, g3Uta, g3Fund)); // collapseGroups
+
+        BybitStreamAuthorityCollapser collapser = new BybitStreamAuthorityCollapser(
+                mongoOperations,
+                normalizedTransactionRepository
+        );
+        int suppressed = collapser.suppressCorridorDepositStakeCycles();
+        assertThat(suppressed).isEqualTo(6);
+
+        for (NormalizedTransaction leg : List.of(g1Fund, g1Uta, g2Fund, g2Uta, g3Uta, g3Fund)) {
+            assertThat(leg.getExcludedFromAccounting())
+                    .as("collapse leg %s suppressed", leg.getId())
+                    .isTrue();
+            assertThat(leg.getAccountingExclusionReason())
+                    .isEqualTo("BYBIT_STREAM_MIRROR_CORRIDOR_STAKE_CYCLE");
+        }
+        // The authoritative corridor deposits and the staking outbound stay active.
+        assertThat(corridorIn1.getExcludedFromAccounting()).isNotEqualTo(Boolean.TRUE);
+        assertThat(corridorIn2.getExcludedFromAccounting()).isNotEqualTo(Boolean.TRUE);
+        assertThat(staking.getExcludedFromAccounting()).isNotEqualTo(Boolean.TRUE);
+    }
+
+    @Test
+    void doesNotSuppressCollapseGroupWithoutMatchingStakeCycle() {
+        // Blast-radius guard: a legitimate net corridor deposit (RC-9-style) with NO matching :FUND
+        // staking outbound of the same family/qty must never be suppressed. Here the corridor deposit
+        // is MNT while the only staking outbound is ETH → the corridor→stake cycle never forms, so the
+        // MNT FUND↔UTA collapse group is left fully active.
+        String uid = "33625378";
+        Instant depTs = Instant.parse("2025-04-01T10:00:00Z");
+        Instant stakeTs = Instant.parse("2025-04-01T10:05:00Z");
+
+        NormalizedTransaction corridorInMnt = corridorInDoc(uid, "5.0", depTs);
+        corridorInMnt.getFlows().get(0).setAssetSymbol("MNT");
+        NormalizedTransaction stakingEth = stakingDepositDoc(uid, "0.709", "0.668", stakeTs);
+
+        NormalizedTransaction mntFund = collapsedLeg(uid, "mnt-grp", "FUND", "-5.0", depTs);
+        mntFund.getFlows().get(0).setAssetSymbol("MNT");
+        NormalizedTransaction mntUta = collapsedLeg(uid, "mnt-grp", "UTA", "5.0", depTs);
+        mntUta.getFlows().get(0).setAssetSymbol("MNT");
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(corridorInMnt))
+                .thenReturn(List.of(stakingEth))
+                .thenReturn(List.of(mntFund, mntUta));
+
+        BybitStreamAuthorityCollapser collapser = new BybitStreamAuthorityCollapser(
+                mongoOperations,
+                normalizedTransactionRepository
+        );
+        int suppressed = collapser.suppressCorridorDepositStakeCycles();
+
+        assertThat(suppressed).isZero();
+        assertThat(mntFund.getExcludedFromAccounting()).isNotEqualTo(Boolean.TRUE);
+        assertThat(mntUta.getExcludedFromAccounting()).isNotEqualTo(Boolean.TRUE);
+    }
+
+    @Test
+    void restoresOneSidedExcludedEarnPrincipalSubscribeLeg() {
+        // RC-0 (ADR-043): a subscribe (LENDING_DEPOSIT −0.75 LTC) was one-sidedly excluded while its
+        // paired redeem (LENDING_WITHDRAW +0.75 LTC) of the same (uid, family, |qty|) stayed booked.
+        // Paired-exclusion symmetry must restore the subscribe leg so the pairer can correlate the
+        // closed cycle (unblocks RC-B) instead of leaving the inbound EARN leg missing.
+        NormalizedTransaction redeemBooked = mirrorDoc(
+                "BYBIT-409666492:LENDING_WITHDRAW:ltc-redeem",
+                "bybit-econ-v1:ltc-redeem",
+                "BYBIT:409666492:FUND",
+                "LTC",
+                "0.75",
+                Instant.parse("2025-02-10T00:00:00Z"));
+        redeemBooked.setType(NormalizedTransactionType.LENDING_WITHDRAW);
+
+        NormalizedTransaction subscribeExcluded = mirrorDoc(
+                "BYBIT-409666492:LENDING_DEPOSIT:ltc-subscribe",
+                "bybit-econ-v1:ltc-subscribe",
+                "BYBIT:409666492:EARN",
+                "LTC",
+                "-0.75",
+                Instant.parse("2025-01-10T00:00:00Z"));
+        subscribeExcluded.setType(NormalizedTransactionType.LENDING_DEPOSIT);
+        subscribeExcluded.setExcludedFromAccounting(true);
+        subscribeExcluded.setAccountingExclusionReason("BYBIT_STREAM_MIRROR_FUNDING_HISTORY");
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of())                      // corridorIns → mirror suppression no-ops
+                .thenReturn(List.of(redeemBooked))          // enforce symmetry: booked legs
+                .thenReturn(List.of(subscribeExcluded));    // enforce symmetry: excluded legs
+
+        BybitStreamAuthorityCollapser collapser = new BybitStreamAuthorityCollapser(
+                mongoOperations,
+                normalizedTransactionRepository
+        );
+        int restored = collapser.suppressCorridorDepositStakeCycles();
+
+        assertThat(restored).isEqualTo(1);
+        assertThat(subscribeExcluded.getExcludedFromAccounting()).isFalse();
+        assertThat(subscribeExcluded.getAccountingExclusionReason()).isNull();
+        assertThat(subscribeExcluded.getContinuityCandidate()).isTrue();
+        // The surviving booked redeem leg is never excluded (no leg silently dropped).
+        assertThat(redeemBooked.getExcludedFromAccounting()).isNotEqualTo(Boolean.TRUE);
+    }
+
+    @Test
+    void doesNotRestoreWhenBothEarnPrincipalLegsAlreadyBooked() {
+        // Blast-radius: paired-exclusion symmetry already holds (neither leg excluded), so the pass
+        // must restore nothing and never mutate the balanced pair.
+        NormalizedTransaction redeem = mirrorDoc(
+                "BYBIT-409666492:LENDING_WITHDRAW:link-redeem",
+                "bybit-econ-v1:link-redeem",
+                "BYBIT:409666492:FUND",
+                "LINK",
+                "12.5",
+                Instant.parse("2025-02-10T00:00:00Z"));
+        redeem.setType(NormalizedTransactionType.LENDING_WITHDRAW);
+        NormalizedTransaction subscribe = mirrorDoc(
+                "BYBIT-409666492:LENDING_DEPOSIT:link-subscribe",
+                "bybit-econ-v1:link-subscribe",
+                "BYBIT:409666492:EARN",
+                "LINK",
+                "-12.5",
+                Instant.parse("2025-01-10T00:00:00Z"));
+        subscribe.setType(NormalizedTransactionType.LENDING_DEPOSIT);
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of())                          // corridorIns → mirror suppression no-ops
+                .thenReturn(List.of(redeem, subscribe))         // enforce symmetry: booked legs (both)
+                .thenReturn(List.of());                         // enforce symmetry: excluded legs (none)
+
+        BybitStreamAuthorityCollapser collapser = new BybitStreamAuthorityCollapser(
+                mongoOperations,
+                normalizedTransactionRepository
+        );
+        int restored = collapser.suppressCorridorDepositStakeCycles();
+
+        assertThat(restored).isZero();
+        assertThat(redeem.getExcludedFromAccounting()).isNotEqualTo(Boolean.TRUE);
+        assertThat(subscribe.getExcludedFromAccounting()).isNotEqualTo(Boolean.TRUE);
+        verifyNoInteractions(normalizedTransactionRepository);
+    }
+
+    @Test
     void noActionWhenOnlyOneCandidate() {
         NormalizedTransaction solo = mirrorDoc(
                 "BYBIT-1:INTERNAL_TRANSFER:solo",
@@ -668,6 +835,70 @@ class BybitStreamAuthorityCollapserTest {
         int dirty = collapser.collapseMirrors();
         assertThat(dirty).isZero();
         verifyNoInteractions(normalizedTransactionRepository);
+    }
+
+    private NormalizedTransaction corridorInDoc(String uid, String quantity, Instant timestamp) {
+        NormalizedTransaction tx = mirrorDoc(
+                "BYBIT-" + uid + ":INTERNAL_TRANSFER:corridor-in-" + quantity,
+                "BYBIT-CORRIDOR:ARBITRUM:0x" + Integer.toHexString(quantity.hashCode()),
+                "BYBIT:" + uid + ":FUND",
+                "ETH",
+                quantity,
+                timestamp
+        );
+        tx.setContinuityCandidate(true);
+        return tx;
+    }
+
+    private NormalizedTransaction collapsedLeg(
+            String uid,
+            String group,
+            String sub,
+            String quantity,
+            Instant timestamp
+    ) {
+        NormalizedTransaction tx = mirrorDoc(
+                "BYBIT-" + uid + ":INTERNAL_TRANSFER:" + group + "-" + sub,
+                "bybit-collapsed-v1:" + group,
+                "BYBIT:" + uid + ":" + sub,
+                "ETH",
+                quantity,
+                timestamp
+        );
+        tx.setContinuityCandidate(true);
+        return tx;
+    }
+
+    private NormalizedTransaction stakingDepositDoc(
+            String uid,
+            String outboundQty,
+            String inboundQty,
+            Instant timestamp
+    ) {
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setId("BYBIT-" + uid + ":EARN_FLEXIBLE_SAVING:eth2-stake");
+        tx.setSource(NormalizedTransactionSource.BYBIT);
+        tx.setType(NormalizedTransactionType.STAKING_DEPOSIT);
+        tx.setWalletAddress("BYBIT:" + uid + ":FUND");
+        tx.setCorrelationId("bybit-stake-pair-v1:eth2-stake");
+        tx.setBlockTimestamp(timestamp);
+        tx.setExcludedFromAccounting(false);
+
+        NormalizedTransaction.Flow ethOut = new NormalizedTransaction.Flow();
+        ethOut.setRole(NormalizedLegRole.TRANSFER);
+        ethOut.setAssetSymbol("ETH");
+        ethOut.setAccountRef("BYBIT:" + uid + ":FUND");
+        ethOut.setQuantityDelta(new BigDecimal(outboundQty).negate());
+        NormalizedTransaction.Flow methIn = new NormalizedTransaction.Flow();
+        methIn.setRole(NormalizedLegRole.TRANSFER);
+        methIn.setAssetSymbol("METH");
+        methIn.setAccountRef("BYBIT:" + uid + ":FUND");
+        methIn.setQuantityDelta(new BigDecimal(inboundQty));
+        List<NormalizedTransaction.Flow> flows = new ArrayList<>();
+        flows.add(ethOut);
+        flows.add(methIn);
+        tx.setFlows(flows);
+        return tx;
     }
 
     private NormalizedTransaction mirrorDoc(

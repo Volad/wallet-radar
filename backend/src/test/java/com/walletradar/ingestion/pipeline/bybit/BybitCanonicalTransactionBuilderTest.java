@@ -912,6 +912,77 @@ class BybitCanonicalTransactionBuilderTest {
     }
 
     @Test
+    void buildCrossSubAccountStakingPairFusesFundDebitAndEarnCreditOntoUmbrella() {
+        BybitCanonicalTransactionBuilder builder = new BybitCanonicalTransactionBuilder();
+        // FUND METH debit ↔ EARN CMETH credit — a cross-asset ETH-family earn conversion.
+        ExternalLedgerRaw fundDebit = new ExternalLedgerRaw();
+        fundDebit.setId("meth-fund-debit");
+        fundDebit.setUid("33625378");
+        fundDebit.setWalletRef("BYBIT:33625378:FUND");
+        fundDebit.setAssetSymbol("METH");
+        fundDebit.setQuantityRaw(new BigDecimal("-0.66865026"));
+        fundDebit.setBybitType("Earn");
+        fundDebit.setBybitDescription("On-chain Earn subscription");
+        fundDebit.setTimeUtc(Instant.parse("2025-03-12T22:42:40Z"));
+
+        ExternalLedgerRaw earnCredit = new ExternalLedgerRaw();
+        earnCredit.setId("cmeth-earn-credit");
+        earnCredit.setUid("33625378");
+        earnCredit.setWalletRef("BYBIT:33625378:EARN");
+        earnCredit.setAssetSymbol("CMETH");
+        earnCredit.setQuantityRaw(new BigDecimal("0.66865026"));
+        earnCredit.setBybitType("Earn");
+        earnCredit.setBybitDescription("On-chain Earn subscription");
+        earnCredit.setTimeUtc(Instant.parse("2025-03-13T02:38:23Z"));
+
+        NormalizedTransaction tx = builder.buildCrossSubAccountStakingPair(
+                fundDebit, earnCredit, Instant.parse("2025-03-13T03:00:00Z"));
+
+        assertThat(tx.getType()).isEqualTo(NormalizedTransactionType.STAKING_DEPOSIT);
+        // Booked on the UID umbrella (no sub-account suffix) so the replay position key resolves the
+        // whole conversion onto BYBIT:33625378, where the source acquisition lot lives (ADR-017).
+        assertThat(tx.getWalletAddress()).isEqualTo("BYBIT:33625378");
+        assertThat(tx.getFlows()).hasSize(2);
+        assertThat(tx.getFlows()).allSatisfy(flow ->
+                assertThat(flow.getRole()).isEqualTo(NormalizedLegRole.TRANSFER));
+        NormalizedTransaction.Flow methFlow = tx.getFlows().stream()
+                .filter(f -> "METH".equals(f.getAssetSymbol())).findFirst().orElseThrow();
+        NormalizedTransaction.Flow cmethFlow = tx.getFlows().stream()
+                .filter(f -> "CMETH".equals(f.getAssetSymbol())).findFirst().orElseThrow();
+        assertThat(methFlow.getQuantityDelta()).isEqualByComparingTo("-0.66865026");
+        assertThat(cmethFlow.getQuantityDelta()).isEqualByComparingTo("0.66865026");
+    }
+
+    @Test
+    void buildCrossSubAccountStakingPairAnchorsUmbrellaOnFundDebitRegardlessOfArgOrder() {
+        BybitCanonicalTransactionBuilder builder = new BybitCanonicalTransactionBuilder();
+        // ETH FUND debit ↔ CMETH EARN credit, different magnitudes (redemption ratio) — not qty-gated.
+        ExternalLedgerRaw fundDebit = new ExternalLedgerRaw();
+        fundDebit.setId("zzz-eth-fund-debit"); // deliberately larger id than the credit
+        fundDebit.setUid("33625378");
+        fundDebit.setWalletRef("BYBIT:33625378:FUND");
+        fundDebit.setAssetSymbol("ETH");
+        fundDebit.setQuantityRaw(new BigDecimal("-0.6929746"));
+        fundDebit.setTimeUtc(Instant.parse("2025-04-18T07:39:44Z"));
+
+        ExternalLedgerRaw earnCredit = new ExternalLedgerRaw();
+        earnCredit.setId("aaa-cmeth-earn-credit");
+        earnCredit.setUid("33625378");
+        earnCredit.setWalletRef("BYBIT:33625378:EARN");
+        earnCredit.setAssetSymbol("CMETH");
+        earnCredit.setQuantityRaw(new BigDecimal("0.65107655"));
+        earnCredit.setTimeUtc(Instant.parse("2025-04-18T07:42:26Z"));
+
+        NormalizedTransaction tx = builder.buildCrossSubAccountStakingPair(
+                fundDebit, earnCredit, Instant.parse("2025-04-18T08:00:00Z"));
+
+        // Umbrella booking is independent of Mongo _id ordering (ADR-041): even though the credit's
+        // id sorts first, the transaction is booked on the umbrella, never on :EARN.
+        assertThat(tx.getWalletAddress()).isEqualTo("BYBIT:33625378");
+        assertThat(tx.getType()).isEqualTo(NormalizedTransactionType.STAKING_DEPOSIT);
+    }
+
+    @Test
     void launchpoolSubscriptionReclassifiesToLendingDepositWithoutInternalCorrelation() {
         BybitCanonicalTransactionBuilder builder = new BybitCanonicalTransactionBuilder();
         ExternalLedgerRaw row = new ExternalLedgerRaw();
@@ -956,6 +1027,29 @@ class BybitCanonicalTransactionBuilderTest {
         assertThat(transaction.getType()).isEqualTo(NormalizedTransactionType.EARN_FLEXIBLE_SAVING);
         assertThat(transaction.getFlows()).hasSize(1);
         assertThat(transaction.getFlows().get(0).getQuantityDelta()).isEqualByComparingTo("500");
+    }
+
+    @Test
+    void flexibleSavingsSubscriptionReclassifiesToEarnFlexibleSaving() {
+        BybitCanonicalTransactionBuilder builder = new BybitCanonicalTransactionBuilder();
+        ExternalLedgerRaw row = new ExternalLedgerRaw();
+        row.setId("bybit-mnt-flexible-sub-1");
+        row.setUid("33625378");
+        row.setWalletRef("BYBIT:33625378:FUND");
+        row.setSourceFile("EARN_FLEXIBLE_SAVING");
+        row.setTimeUtc(Instant.parse("2026-03-25T12:00:00Z"));
+        row.setCanonicalType("INTERNAL_TRANSFER");
+        row.setBybitType("Earn");
+        row.setBybitDescription("Flexible Savings Subscription");
+        row.setBasisRelevant(true);
+        row.setAssetSymbol("MNT");
+        row.setQuantityRaw(new BigDecimal("-108.776"));
+
+        NormalizedTransaction transaction = builder.buildMappedRow(row, Instant.parse("2026-03-25T12:01:00Z"));
+
+        assertThat(transaction.getType()).isEqualTo(NormalizedTransactionType.EARN_FLEXIBLE_SAVING);
+        assertThat(transaction.getFlows()).hasSize(1);
+        assertThat(transaction.getFlows().get(0).getQuantityDelta()).isEqualByComparingTo("-108.776");
     }
 
     @Test

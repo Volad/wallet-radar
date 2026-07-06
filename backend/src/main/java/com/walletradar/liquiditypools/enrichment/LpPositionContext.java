@@ -2,6 +2,8 @@ package com.walletradar.liquiditypools.enrichment;
 
 import com.walletradar.domain.common.NetworkId;
 
+import java.time.Instant;
+
 public record LpPositionContext(
         String correlationId,
         String universeId,
@@ -15,6 +17,8 @@ public record LpPositionContext(
         String lpTokenContract,
         String marketSlug,
         boolean closed,
-        boolean staked
+        boolean staked,
+        /** Timestamp of the first LP_ENTRY_REQUEST or LP_ENTRY_SETTLEMENT, used to anchor fee accumulator reads. */
+        Instant entryAt
 ) {
 }

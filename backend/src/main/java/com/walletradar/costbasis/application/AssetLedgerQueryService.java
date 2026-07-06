@@ -2,7 +2,6 @@ package com.walletradar.costbasis.application;
 
 import com.walletradar.accounting.support.AccountingAssetFamilySupport;
 import com.walletradar.accounting.support.AccountingAssetIdentitySupport;
-import com.walletradar.costbasis.application.read.TimelineAvcoAuthority;
 import com.walletradar.costbasis.domain.AssetLedgerPoint;
 import com.walletradar.costbasis.domain.AssetLedgerPointRepository;
 import com.walletradar.costbasis.domain.OnChainBalance;
@@ -26,6 +25,7 @@ import java.math.BigDecimal;
 import java.math.MathContext;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -43,6 +43,10 @@ import java.util.Set;
 public class AssetLedgerQueryService {
 
     private static final MathContext MC = MathContext.DECIMAL128;
+
+    /** ADR-045 chart-series AVCO kinds. FAMILY_ROLLUP is never emitted on the plotted line. */
+    private static final String AVCO_KIND_PRIMARY_FLOW = "PRIMARY_FLOW";
+    private static final String AVCO_KIND_UNAVAILABLE = "UNAVAILABLE";
 
     private final UserSessionRepository userSessionRepository;
     private final AssetLedgerPointRepository assetLedgerPointRepository;
@@ -83,23 +87,22 @@ public class AssetLedgerQueryService {
         List<EventAccumulator> groupedEvents = groupPoints(timelinePoints, normalizedById);
         List<DisplayEventAccumulator> displayEvents = collapseDisplayEvents(groupedEvents);
         AggregatedState state = new AggregatedState();
-        BigDecimal medianSpotAvco = TimelineAvcoAuthority.medianSpotAvco(familyIdentity, timelinePoints);
-        Map<String, BigDecimal> lastAvcoByAssetIdentity = TimelineAvcoAuthority.newSeriesTracker();
+        // ADR-045 Method B: covered-weighted per-bucket-snapshot family AVCO series.
+        // Keyed by the same BucketKey used for the current-state rollups; each bucket keeps its
+        // latest stored avcoAfter / netAvcoAfter and covered qty. The chart series is
+        // Σ coveredᵢ·avcoᵢ / Σ coveredᵢ over the live bucket map after each grouped event.
+        Map<BucketKey, BucketAvcoState> liveAvcoBuckets = new LinkedHashMap<>();
+        BigDecimal previousAvcoAfterUsd = null;
+        BigDecimal previousNetAvcoAfterUsd = null;
         List<TimelineEntryView> timeline = new ArrayList<>();
         List<EventOverlayView> overlays = new ArrayList<>();
         for (DisplayEventAccumulator accumulator : displayEvents) {
-            BigDecimal coveredQuantityBefore = state.coveredQuantity();
             state.apply(accumulator);
-            TimelineAvcoAuthority.Resolution avcoResolution = TimelineAvcoAuthority.resolve(
-                    familyIdentity,
-                    accumulator.memberPoints(),
-                    medianSpotAvco,
-                    coveredQuantityBefore,
-                    state.coveredQuantity(),
-                    state.totalCostBasisUsd,
-                    lastAvcoByAssetIdentity
-            );
-            TimelineAvcoAuthority.updateSeries(lastAvcoByAssetIdentity, avcoResolution);
+            applyMethodBBuckets(familyIdentity, accumulator.memberPoints(), liveAvcoBuckets);
+            CoveredWeightedAvco series = coveredWeightedFamilyAvco(liveAvcoBuckets);
+            BigDecimal avcoAfterUsd = series.taxAvco();
+            BigDecimal netAvcoAfterUsd = series.netAvco();
+            String avcoKind = avcoAfterUsd == null ? AVCO_KIND_UNAVAILABLE : AVCO_KIND_PRIMARY_FLOW;
             timeline.add(new TimelineEntryView(
                     accumulator.blockTimestamp,
                     accumulator.txHash,
@@ -118,12 +121,18 @@ public class AssetLedgerQueryService {
                     state.coveredQuantity(),
                     state.uncoveredQuantity,
                     state.totalCostBasisUsd,
-                    avcoResolution.avcoAfterUsd(),
-                    avcoResolution.avcoKind(),
+                    previousAvcoAfterUsd,
+                    avcoAfterUsd,
+                    state.netTotalCostBasisUsd,
+                    previousNetAvcoAfterUsd,
+                    netAvcoAfterUsd,
+                    avcoKind,
                     accumulator.fromAddress,
                     accumulator.toAddress,
                     List.copyOf(accumulator.memberNormalizedTransactionIds)
             ));
+            previousAvcoAfterUsd = avcoAfterUsd;
+            previousNetAvcoAfterUsd = netAvcoAfterUsd;
             overlays.add(new EventOverlayView(
                     accumulator.eventGroupId,
                     accumulator.normalizedTransactionId,
@@ -146,6 +155,7 @@ public class AssetLedgerQueryService {
                 familyIdentity,
                 points,
                 state.totalRealisedPnlUsd,
+                state.totalNetRealisedPnlUsd,
                 state.totalGasPaidUsd
         );
 
@@ -181,6 +191,7 @@ public class AssetLedgerQueryService {
         BigDecimal quantity = BigDecimal.ZERO;
         BigDecimal coveredQuantity = BigDecimal.ZERO;
         BigDecimal totalCostBasisUsd = BigDecimal.ZERO;
+        BigDecimal netTotalCostBasisUsd = BigDecimal.ZERO;
         for (AssetLedgerPoint point : latestPointByBucket.values()) {
             String pointFamily = resolvedFamilyIdentity(
                     point,
@@ -203,12 +214,27 @@ public class AssetLedgerQueryService {
                         point.getAvcoAfterUsd().multiply(covered, MC), MC
                 );
             }
+            if (point.getNetAvcoAfterUsd() != null && covered.signum() > 0) {
+                netTotalCostBasisUsd = netTotalCostBasisUsd.add(
+                        point.getNetAvcoAfterUsd().multiply(covered, MC), MC
+                );
+            } else if (point.getAvcoAfterUsd() != null && covered.signum() > 0) {
+                netTotalCostBasisUsd = netTotalCostBasisUsd.add(
+                        point.getAvcoAfterUsd().multiply(covered, MC), MC
+                );
+            }
         }
         BigDecimal uncoveredQuantity = quantity.subtract(coveredQuantity, MC).max(BigDecimal.ZERO);
         BigDecimal avcoUsd = coveredQuantity.signum() <= 0
                 ? null
                 : totalCostBasisUsd.divide(coveredQuantity, MC);
-        return new FullSessionCurrentView(quantity, coveredQuantity, uncoveredQuantity, totalCostBasisUsd, avcoUsd);
+        BigDecimal netAvcoUsd = coveredQuantity.signum() <= 0
+                ? null
+                : netTotalCostBasisUsd.divide(coveredQuantity, MC);
+        return new FullSessionCurrentView(
+                quantity, coveredQuantity, uncoveredQuantity,
+                totalCostBasisUsd, avcoUsd, netTotalCostBasisUsd, netAvcoUsd
+        );
     }
 
     private CurrentStateView currentStateView(
@@ -216,6 +242,7 @@ public class AssetLedgerQueryService {
             String familyIdentity,
             List<AssetLedgerPoint> universePoints,
             BigDecimal realisedPnlUsd,
+            BigDecimal netRealisedPnlUsd,
             BigDecimal gasPaidUsd
     ) {
         AllowedScope allowedScope = AllowedScope.from(session.getWallets());
@@ -228,6 +255,7 @@ public class AssetLedgerQueryService {
         BigDecimal quantity = BigDecimal.ZERO;
         BigDecimal coveredQuantity = BigDecimal.ZERO;
         BigDecimal totalCostBasisUsd = BigDecimal.ZERO;
+        BigDecimal netTotalCostBasisUsd = BigDecimal.ZERO;
         List<UncoveredBucketView> uncoveredBuckets = new ArrayList<>();
         for (OnChainBalance balance : latestBalances.values()) {
             if (!matchesFamily(balance, familyIdentity, latestPointByBucket)) {
@@ -250,6 +278,17 @@ public class AssetLedgerQueryService {
                         latestPoint.getAvcoAfterUsd().multiply(exactCoveredQuantity, MC),
                         MC
                 );
+            }
+            if (latestPoint != null && exactCoveredQuantity.signum() > 0) {
+                BigDecimal netAvcoPoint = latestPoint.getNetAvcoAfterUsd() != null
+                        ? latestPoint.getNetAvcoAfterUsd()
+                        : latestPoint.getAvcoAfterUsd();
+                if (netAvcoPoint != null) {
+                    netTotalCostBasisUsd = netTotalCostBasisUsd.add(
+                            netAvcoPoint.multiply(exactCoveredQuantity, MC),
+                            MC
+                    );
+                }
             }
             BigDecimal exactUncoveredQuantity = currentQuantity.subtract(exactCoveredQuantity, MC).max(BigDecimal.ZERO);
             if (exactUncoveredQuantity.signum() > 0) {
@@ -324,15 +363,20 @@ public class AssetLedgerQueryService {
                 if (scaled.dropped() || scaled.quantity().signum() <= 0) {
                     continue;
                 }
-                BigDecimal scale = umbrella.quantity().signum() <= 0
+                BigDecimal quantityScale = umbrella.quantity().signum() <= 0
                         ? BigDecimal.ONE
                         : scaled.quantity().divide(umbrella.quantity(), MC);
+                BigDecimal ledgerScale = scaled.ledgerScale() == null ? BigDecimal.ONE : scaled.ledgerScale();
                 quantity = quantity.add(scaled.quantity(), MC);
                 coveredQuantity = coveredQuantity.add(scaled.coveredQuantity(), MC);
                 totalCostBasisUsd = totalCostBasisUsd.add(scaled.totalCostBasisUsd(), MC);
+                netTotalCostBasisUsd = netTotalCostBasisUsd.add(
+                        umbrella.netTotalCostBasisUsd().multiply(ledgerScale, MC),
+                        MC
+                );
                 for (VenuePositionSlice venue : umbrella.venueSlices()) {
-                    BigDecimal venueQty = venue.quantity().multiply(scale, MC);
-                    BigDecimal venueCovered = venue.coveredQuantity().multiply(scale, MC);
+                    BigDecimal venueQty = venue.quantity().multiply(quantityScale.min(BigDecimal.ONE), MC);
+                    BigDecimal venueCovered = venue.coveredQuantity().multiply(ledgerScale, MC);
                     BigDecimal venueUncovered = venueQty.subtract(venueCovered, MC).max(BigDecimal.ZERO);
                     if (venueUncovered.signum() <= 0) {
                         continue;
@@ -364,6 +408,9 @@ public class AssetLedgerQueryService {
         BigDecimal avcoUsd = coveredQuantity.signum() <= 0
                 ? null
                 : totalCostBasisUsd.divide(coveredQuantity, MC);
+        BigDecimal netAvcoUsd = coveredQuantity.signum() <= 0
+                ? null
+                : netTotalCostBasisUsd.divide(coveredQuantity, MC);
         uncoveredBuckets.sort((left, right) -> right.uncoveredQuantity().compareTo(left.uncoveredQuantity()));
         List<ShortfallSourceView> shortfallSources = familyShortfallSources(universePoints);
         return new CurrentStateView(
@@ -372,7 +419,10 @@ public class AssetLedgerQueryService {
                 uncoveredQuantity,
                 totalCostBasisUsd,
                 avcoUsd,
+                netTotalCostBasisUsd,
+                netAvcoUsd,
                 realisedPnlUsd,
+                netRealisedPnlUsd,
                 gasPaidUsd,
                 List.copyOf(uncoveredBuckets),
                 shortfallSources
@@ -449,6 +499,12 @@ public class AssetLedgerQueryService {
                 point.getTotalCostBasisAfterUsd(),
                 point.getAvcoBeforeUsd(),
                 gasOnlyAvcoAfter(point),
+                point.getNetTotalCostBasisBeforeUsd(),
+                point.getNetTotalCostBasisAfterUsd(),
+                point.getNetAvcoBeforeUsd(),
+                point.getNetAvcoAfterUsd(),
+                point.getNetCostBasisDeltaUsd(),
+                point.getNetRealisedPnlDeltaUsd(),
                 point.getBasisBackedQuantityAfter(),
                 point.getUncoveredQuantityDelta(),
                 point.getQuantityShortfallAfter(),
@@ -563,6 +619,87 @@ public class AssetLedgerQueryService {
             latest.put(bucketKey(balance), balance);
         }
         return latest;
+    }
+
+    /**
+     * ADR-045 Method B: fold the (spot-family-filtered) member points of a single grouped event
+     * into the live per-bucket AVCO state. Within one event only the <em>last</em> point per bucket
+     * (by {@code replaySequence}) is retained, mirroring how the current-state rollups read the
+     * latest stored point per bucket. Unchanged buckets keep their prior snapshot.
+     */
+    private static void applyMethodBBuckets(
+            String familyIdentity,
+            List<AssetLedgerPoint> memberPoints,
+            Map<BucketKey, BucketAvcoState> liveAvcoBuckets
+    ) {
+        if (memberPoints == null || memberPoints.isEmpty()) {
+            return;
+        }
+        Map<BucketKey, AssetLedgerPoint> lastPointByBucket = new LinkedHashMap<>();
+        memberPoints.stream()
+                .filter(point -> AccountingAssetFamilySupport.includeInSpotFamilyTimelineAggregation(
+                        familyIdentity,
+                        point.getAssetSymbol()
+                ))
+                .sorted(Comparator.comparing(
+                        AssetLedgerPoint::getReplaySequence,
+                        Comparator.nullsLast(Comparator.naturalOrder())
+                ))
+                .forEach(point -> lastPointByBucket.put(methodBBucketKey(point), point));
+        for (Map.Entry<BucketKey, AssetLedgerPoint> entry : lastPointByBucket.entrySet()) {
+            AssetLedgerPoint point = entry.getValue();
+            BigDecimal quantityAfter = zeroIfNull(point.getQuantityAfter());
+            BigDecimal covered = zeroIfNull(point.getBasisBackedQuantityAfter())
+                    .min(quantityAfter)
+                    .max(BigDecimal.ZERO);
+            liveAvcoBuckets.put(
+                    entry.getKey(),
+                    new BucketAvcoState(point.getAvcoAfterUsd(), point.getNetAvcoAfterUsd(), covered)
+            );
+        }
+    }
+
+    /**
+     * ADR-045 Method B: covered-weighted family AVCO over the live bucket snapshots.
+     * {@code avco = Σ coveredᵢ·avcoᵢ / Σ coveredᵢ}. ADR-031: when {@code Σ coveredᵢ ≤ 0} both lanes
+     * are {@code null} (the line breaks — never plotted as $0). A bucket missing its net lane falls
+     * back to its tax AVCO (mirrors {@code netAvcoOnPoint}).
+     */
+    private static CoveredWeightedAvco coveredWeightedFamilyAvco(Map<BucketKey, BucketAvcoState> liveAvcoBuckets) {
+        BigDecimal coveredTotal = BigDecimal.ZERO;
+        BigDecimal taxBasisTotal = BigDecimal.ZERO;
+        BigDecimal netBasisTotal = BigDecimal.ZERO;
+        for (BucketAvcoState bucket : liveAvcoBuckets.values()) {
+            BigDecimal covered = bucket.coveredQuantity();
+            if (covered == null || covered.signum() <= 0) {
+                continue;
+            }
+            coveredTotal = coveredTotal.add(covered, MC);
+            if (bucket.avcoAfterUsd() != null) {
+                taxBasisTotal = taxBasisTotal.add(bucket.avcoAfterUsd().multiply(covered, MC), MC);
+            }
+            BigDecimal netAvco = bucket.netAvcoAfterUsd() != null
+                    ? bucket.netAvcoAfterUsd()
+                    : bucket.avcoAfterUsd();
+            if (netAvco != null) {
+                netBasisTotal = netBasisTotal.add(netAvco.multiply(covered, MC), MC);
+            }
+        }
+        if (coveredTotal.signum() <= 0) {
+            return new CoveredWeightedAvco(null, null);
+        }
+        return new CoveredWeightedAvco(
+                taxBasisTotal.divide(coveredTotal, MC),
+                netBasisTotal.divide(coveredTotal, MC)
+        );
+    }
+
+    private static BucketKey methodBBucketKey(AssetLedgerPoint point) {
+        return new BucketKey(
+                normalizeAddress(point.getWalletAddress()),
+                point.getNetworkId(),
+                point.getAccountingAssetIdentity()
+        );
     }
 
     private Map<BucketKey, AssetLedgerPoint> latestLedgerPointByBucket(List<AssetLedgerPoint> points) {
@@ -730,7 +867,9 @@ public class AssetLedgerQueryService {
             BigDecimal coveredQuantity,
             BigDecimal uncoveredQuantity,
             BigDecimal totalCostBasisUsd,
-            BigDecimal avcoUsd
+            BigDecimal avcoUsd,
+            BigDecimal netTotalCostBasisUsd,
+            BigDecimal netAvcoUsd
     ) {
     }
 
@@ -740,7 +879,10 @@ public class AssetLedgerQueryService {
             BigDecimal uncoveredQuantity,
             BigDecimal totalCostBasisUsd,
             BigDecimal avcoUsd,
+            BigDecimal netTotalCostBasisUsd,
+            BigDecimal netAvcoUsd,
             BigDecimal realisedPnlUsd,
+            BigDecimal netRealisedPnlUsd,
             BigDecimal gasPaidUsd,
             List<UncoveredBucketView> uncoveredBuckets,
             List<ShortfallSourceView> shortfallSources
@@ -795,7 +937,11 @@ public class AssetLedgerQueryService {
             BigDecimal coveredQuantityAfter,
             BigDecimal uncoveredQuantityAfter,
             BigDecimal totalCostBasisAfterUsd,
+            BigDecimal avcoBeforeUsd,
             BigDecimal avcoAfterUsd,
+            BigDecimal netTotalCostBasisAfterUsd,
+            BigDecimal netAvcoBeforeUsd,
+            BigDecimal netAvcoAfterUsd,
             String avcoKind,
             String fromAddress,
             String toAddress,
@@ -862,6 +1008,12 @@ public class AssetLedgerQueryService {
             BigDecimal totalCostBasisAfterUsd,
             BigDecimal avcoBeforeUsd,
             BigDecimal avcoAfterUsd,
+            BigDecimal netTotalCostBasisBeforeUsd,
+            BigDecimal netTotalCostBasisAfterUsd,
+            BigDecimal netAvcoBeforeUsd,
+            BigDecimal netAvcoAfterUsd,
+            BigDecimal netCostBasisDeltaUsd,
+            BigDecimal netRealisedPnlDeltaUsd,
             BigDecimal basisBackedQuantityAfter,
             BigDecimal uncoveredQuantityDelta,
             BigDecimal quantityShortfallAfter,
@@ -876,6 +1028,21 @@ public class AssetLedgerQueryService {
             String walletAddress,
             NetworkId networkId,
             String accountingAssetIdentity
+    ) {
+    }
+
+    /** ADR-045 Method B live per-bucket AVCO snapshot (latest stored point for the bucket). */
+    private record BucketAvcoState(
+            BigDecimal avcoAfterUsd,
+            BigDecimal netAvcoAfterUsd,
+            BigDecimal coveredQuantity
+    ) {
+    }
+
+    /** ADR-045 Method B covered-weighted family AVCO (Tax + Net lanes); null when Σ covered ≤ 0. */
+    private record CoveredWeightedAvco(
+            BigDecimal taxAvco,
+            BigDecimal netAvco
     ) {
     }
 
@@ -962,6 +1129,7 @@ public class AssetLedgerQueryService {
         private BigDecimal quantity = BigDecimal.ZERO;
         private BigDecimal coveredQuantity = BigDecimal.ZERO;
         private BigDecimal totalCostBasisUsd = BigDecimal.ZERO;
+        private BigDecimal netTotalCostBasisUsd = BigDecimal.ZERO;
         private final LinkedHashSet<String> priceLookupCandidates = new LinkedHashSet<>();
         private String fallbackSymbol;
         private final List<VenuePositionSlice> venueSlices = new ArrayList<>();
@@ -977,6 +1145,17 @@ public class AssetLedgerQueryService {
                         latestPoint.getAvcoAfterUsd().multiply(exactCoveredQuantity, MC),
                         MC
                 );
+            }
+            if (latestPoint != null && exactCoveredQuantity.signum() > 0) {
+                BigDecimal netAvcoPoint = latestPoint.getNetAvcoAfterUsd() != null
+                        ? latestPoint.getNetAvcoAfterUsd()
+                        : latestPoint.getAvcoAfterUsd();
+                if (netAvcoPoint != null) {
+                    netTotalCostBasisUsd = netTotalCostBasisUsd.add(
+                            netAvcoPoint.multiply(exactCoveredQuantity, MC),
+                            MC
+                    );
+                }
             }
             if (latestPoint != null && latestPoint.getAssetSymbol() != null) {
                 priceLookupCandidates.addAll(BybitUmbrellaSupport.priceLookupCandidates(latestPoint.getAssetSymbol()));
@@ -1006,6 +1185,10 @@ public class AssetLedgerQueryService {
             return totalCostBasisUsd;
         }
 
+        private BigDecimal netTotalCostBasisUsd() {
+            return netTotalCostBasisUsd;
+        }
+
         private List<String> priceLookupCandidates() {
             return List.copyOf(priceLookupCandidates);
         }
@@ -1033,14 +1216,18 @@ public class AssetLedgerQueryService {
         private BigDecimal quantity = BigDecimal.ZERO;
         private BigDecimal uncoveredQuantity = BigDecimal.ZERO;
         private BigDecimal totalCostBasisUsd = BigDecimal.ZERO;
+        private BigDecimal netTotalCostBasisUsd = BigDecimal.ZERO;
         private BigDecimal totalRealisedPnlUsd = BigDecimal.ZERO;
+        private BigDecimal totalNetRealisedPnlUsd = BigDecimal.ZERO;
         private BigDecimal totalGasPaidUsd = BigDecimal.ZERO;
 
         private void apply(DisplayEventAccumulator accumulator) {
             quantity = quantity.add(accumulator.quantityDelta, MC);
             uncoveredQuantity = uncoveredQuantity.add(accumulator.uncoveredQuantityDelta, MC);
             totalCostBasisUsd = totalCostBasisUsd.add(accumulator.costBasisDeltaUsd, MC);
+            netTotalCostBasisUsd = netTotalCostBasisUsd.add(accumulator.netCostBasisDeltaUsd, MC);
             totalRealisedPnlUsd = totalRealisedPnlUsd.add(accumulator.realisedPnlDeltaUsd, MC);
+            totalNetRealisedPnlUsd = totalNetRealisedPnlUsd.add(accumulator.netRealisedPnlDeltaUsd, MC);
             totalGasPaidUsd = totalGasPaidUsd.add(accumulator.gasDeltaUsd, MC);
             if (quantity.signum() < 0) {
                 quantity = BigDecimal.ZERO;
@@ -1054,6 +1241,9 @@ public class AssetLedgerQueryService {
             if (totalCostBasisUsd.signum() < 0) {
                 totalCostBasisUsd = BigDecimal.ZERO;
             }
+            if (netTotalCostBasisUsd.signum() < 0) {
+                netTotalCostBasisUsd = BigDecimal.ZERO;
+            }
         }
 
         private BigDecimal coveredQuantity() {
@@ -1063,6 +1253,11 @@ public class AssetLedgerQueryService {
         private BigDecimal avco() {
             BigDecimal coveredQuantity = coveredQuantity();
             return coveredQuantity.signum() <= 0 ? null : totalCostBasisUsd.divide(coveredQuantity, MC);
+        }
+
+        private BigDecimal netAvco() {
+            BigDecimal coveredQuantity = coveredQuantity();
+            return coveredQuantity.signum() <= 0 ? null : netTotalCostBasisUsd.divide(coveredQuantity, MC);
         }
     }
 
@@ -1083,7 +1278,9 @@ public class AssetLedgerQueryService {
         private final List<EventFlowView> flows;
         private BigDecimal quantityDelta = BigDecimal.ZERO;
         private BigDecimal costBasisDeltaUsd = BigDecimal.ZERO;
+        private BigDecimal netCostBasisDeltaUsd = BigDecimal.ZERO;
         private BigDecimal realisedPnlDeltaUsd = BigDecimal.ZERO;
+        private BigDecimal netRealisedPnlDeltaUsd = BigDecimal.ZERO;
         private BigDecimal gasDeltaUsd = BigDecimal.ZERO;
         private BigDecimal uncoveredQuantityDelta = BigDecimal.ZERO;
         private final List<AssetLedgerPoint> memberPoints = new ArrayList<>();
@@ -1119,7 +1316,19 @@ public class AssetLedgerQueryService {
             }
             quantityDelta = quantityDelta.add(zeroIfNull(point.getQuantityDelta()), MC);
             costBasisDeltaUsd = costBasisDeltaUsd.add(zeroIfNull(point.getCostBasisDeltaUsd()), MC);
+            netCostBasisDeltaUsd = netCostBasisDeltaUsd.add(
+                    zeroIfNull(point.getNetCostBasisDeltaUsd() != null
+                            ? point.getNetCostBasisDeltaUsd()
+                            : point.getCostBasisDeltaUsd()),
+                    MC
+            );
             realisedPnlDeltaUsd = realisedPnlDeltaUsd.add(zeroIfNull(point.getRealisedPnlDeltaUsd()), MC);
+            netRealisedPnlDeltaUsd = netRealisedPnlDeltaUsd.add(
+                    zeroIfNull(point.getNetRealisedPnlDeltaUsd() != null
+                            ? point.getNetRealisedPnlDeltaUsd()
+                            : point.getRealisedPnlDeltaUsd()),
+                    MC
+            );
             gasDeltaUsd = gasDeltaUsd.add(zeroIfNull(point.getGasDeltaUsd()), MC);
             uncoveredQuantityDelta = uncoveredQuantityDelta.add(zeroIfNull(point.getUncoveredQuantityDelta()), MC);
             memberPoints.add(point);
@@ -1148,7 +1357,9 @@ public class AssetLedgerQueryService {
         private final String toAddress;
         private final BigDecimal quantityDelta;
         private final BigDecimal costBasisDeltaUsd;
+        private final BigDecimal netCostBasisDeltaUsd;
         private final BigDecimal realisedPnlDeltaUsd;
+        private final BigDecimal netRealisedPnlDeltaUsd;
         private final BigDecimal gasDeltaUsd;
         private final BigDecimal uncoveredQuantityDelta;
         private final List<AssetLedgerPoint> memberPoints;
@@ -1171,7 +1382,9 @@ public class AssetLedgerQueryService {
                 String toAddress,
                 BigDecimal quantityDelta,
                 BigDecimal costBasisDeltaUsd,
+                BigDecimal netCostBasisDeltaUsd,
                 BigDecimal realisedPnlDeltaUsd,
+                BigDecimal netRealisedPnlDeltaUsd,
                 BigDecimal gasDeltaUsd,
                 BigDecimal uncoveredQuantityDelta,
                 List<AssetLedgerPoint> memberPoints
@@ -1193,7 +1406,9 @@ public class AssetLedgerQueryService {
             this.toAddress = toAddress;
             this.quantityDelta = quantityDelta;
             this.costBasisDeltaUsd = costBasisDeltaUsd;
+            this.netCostBasisDeltaUsd = netCostBasisDeltaUsd;
             this.realisedPnlDeltaUsd = realisedPnlDeltaUsd;
+            this.netRealisedPnlDeltaUsd = netRealisedPnlDeltaUsd;
             this.gasDeltaUsd = gasDeltaUsd;
             this.uncoveredQuantityDelta = uncoveredQuantityDelta;
             this.memberPoints = List.copyOf(memberPoints);
@@ -1222,7 +1437,9 @@ public class AssetLedgerQueryService {
                     inferredToAddress(event),
                     event.quantityDelta,
                     event.costBasisDeltaUsd,
+                    event.netCostBasisDeltaUsd,
                     event.realisedPnlDeltaUsd,
+                    event.netRealisedPnlDeltaUsd,
                     event.gasDeltaUsd,
                     event.uncoveredQuantityDelta,
                     event.memberPoints()
@@ -1261,7 +1478,9 @@ public class AssetLedgerQueryService {
                     inbound.primaryWalletAddress,
                     outbound.quantityDelta.add(inbound.quantityDelta, MC),
                     outbound.costBasisDeltaUsd.add(inbound.costBasisDeltaUsd, MC),
+                    outbound.netCostBasisDeltaUsd.add(inbound.netCostBasisDeltaUsd, MC),
                     outbound.realisedPnlDeltaUsd.add(inbound.realisedPnlDeltaUsd, MC),
+                    outbound.netRealisedPnlDeltaUsd.add(inbound.netRealisedPnlDeltaUsd, MC),
                     outbound.gasDeltaUsd.add(inbound.gasDeltaUsd, MC),
                     outbound.uncoveredQuantityDelta.add(inbound.uncoveredQuantityDelta, MC),
                     memberPoints

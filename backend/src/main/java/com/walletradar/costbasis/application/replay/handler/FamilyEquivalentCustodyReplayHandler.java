@@ -260,13 +260,7 @@ public class FamilyEquivalentCustodyReplayHandler {
                     inbound.flow().getQuantityDelta().abs(),
                     inboundPosition.assetKey()
             );
-            flowSupport.restoreToPosition(
-                    inbound.flow().getQuantityDelta().abs(),
-                    inboundPosition,
-                    effectiveCarry.costBasisUsd(),
-                    effectiveCarry.uncoveredQuantity(),
-                    effectiveCarry.avco()
-            );
+            flowSupport.restoreToPosition(effectiveCarry, inboundPosition);
             replayState.ledgerPointCollector().record(
                     transaction,
                     inbound.flow(),

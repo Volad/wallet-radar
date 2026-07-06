@@ -902,7 +902,7 @@ canvas#chart {
 
 .stats {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 1px;
   background: var(--b0);
   border: 1px solid var(--b0);
@@ -931,6 +931,11 @@ canvas#chart {
 
   &.avco {
     color: #22d3ee;
+  }
+
+  &.avco-secondary {
+    color: rgba(255, 255, 255, 0.72);
+    font-size: 16px;
   }
 }
 
@@ -1228,6 +1233,11 @@ canvas#chart {
 
 .qty-delta {
   font-weight: 500;
+}
+
+.avco-tax-cell,
+.avco-tax-value {
+  color: var(--sub);
 }
 
 .avco-change {

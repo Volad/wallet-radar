@@ -675,9 +675,12 @@ export class LpPageComponent implements OnChanges {
         return 'Concentrated (NFT)';
       case 'FUNGIBLE':
         return 'Full-range (LP token)';
-      case 'GMX':
+      case 'GMX_LP':
         return 'GMX GM pool';
+      case 'GLV_LP':
+        return 'GMX GLV vault';
       case 'PENDLE':
+      case 'PENDLE_LP':
         return 'Pendle LPT';
       default:
         return family.replaceAll('_', ' ');

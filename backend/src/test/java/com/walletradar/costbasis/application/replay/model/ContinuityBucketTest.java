@@ -18,6 +18,8 @@ class ContinuityBucketTest {
                 BigDecimal.ZERO,
                 new BigDecimal("1000"),
                 new BigDecimal("2000"),
+                new BigDecimal("1000"),
+                new BigDecimal("2000"),
                 false,
                 null
         ));

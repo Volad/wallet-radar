@@ -384,6 +384,19 @@
       ],
       "confidence": "HIGH"
     },
+    "0x827922686190790b37229fd06084350e74485b72": {
+      "name": "Aerodrome Slipstream NonfungiblePositionManager",
+      "protocol": "Aerodrome",
+      "version": "Slipstream",
+      "family": "DEX",
+      "role": "POSITION_MANAGER",
+      "event_type": "LP_MINT",
+      "networks": [
+        "BASE"
+      ],
+      "confidence": "HIGH",
+      "notes": "BASE concentrated-liquidity position manager (Aerodrome Slipstream / CL fork of Velodrome Slipstream). Mints ERC721 NFT positions (e.g. tokenId 72612405). mint() = LP_ENTRY; collect() alone = LP_FEE_CLAIM; decreaseLiquidity()+collect() = LP_EXIT or LP_EXIT_PARTIAL; full burn = LP_EXIT_FINAL. Interface identical to Uniswap V3 NonfungiblePositionManager and Velodrome Slipstream on OPTIMISM."
+    },
     "\u2500\u2500 DEX: Velodrome (Optimism) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500": {},
     "0xa062ae8a9c5e11aaa026fc2670b0d65ccc8b2858": {
       "name": "Velodrome Router",

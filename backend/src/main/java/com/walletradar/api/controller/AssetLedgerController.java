@@ -39,7 +39,10 @@ public class AssetLedgerController {
                         view.current().uncoveredQuantity(),
                         view.current().totalCostBasisUsd(),
                         view.current().avcoUsd(),
+                        view.current().netTotalCostBasisUsd(),
+                        view.current().netAvcoUsd(),
                         view.current().realisedPnlUsd(),
+                        view.current().netRealisedPnlUsd(),
                         view.current().gasPaidUsd(),
                         view.current().uncoveredBuckets().stream()
                                 .map(bucket -> new SessionAssetLedgerResponse.UncoveredBucket(
@@ -77,7 +80,9 @@ public class AssetLedgerController {
                         view.fullSessionCurrent().coveredQuantity(),
                         view.fullSessionCurrent().uncoveredQuantity(),
                         view.fullSessionCurrent().totalCostBasisUsd(),
-                        view.fullSessionCurrent().avcoUsd()
+                        view.fullSessionCurrent().avcoUsd(),
+                        view.fullSessionCurrent().netTotalCostBasisUsd(),
+                        view.fullSessionCurrent().netAvcoUsd()
                 ),
                 view.timeline().stream()
                         .map(entry -> new SessionAssetLedgerResponse.TimelineEntry(
@@ -98,7 +103,11 @@ public class AssetLedgerController {
                                 entry.coveredQuantityAfter(),
                                 entry.uncoveredQuantityAfter(),
                                 entry.totalCostBasisAfterUsd(),
+                                entry.avcoBeforeUsd(),
                                 entry.avcoAfterUsd(),
+                                entry.netTotalCostBasisAfterUsd(),
+                                entry.netAvcoBeforeUsd(),
+                                entry.netAvcoAfterUsd(),
                                 entry.avcoKind(),
                                 entry.fromAddress(),
                                 entry.toAddress(),
@@ -164,6 +173,10 @@ public class AssetLedgerController {
                                 point.totalCostBasisAfterUsd(),
                                 point.avcoBeforeUsd(),
                                 point.avcoAfterUsd(),
+                                point.netTotalCostBasisBeforeUsd(),
+                                point.netTotalCostBasisAfterUsd(),
+                                point.netAvcoBeforeUsd(),
+                                point.netAvcoAfterUsd(),
                                 point.basisBackedQuantityAfter(),
                                 point.uncoveredQuantityDelta(),
                                 point.quantityShortfallAfter(),

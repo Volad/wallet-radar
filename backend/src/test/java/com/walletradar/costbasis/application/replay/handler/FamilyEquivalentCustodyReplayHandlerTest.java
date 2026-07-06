@@ -31,7 +31,7 @@ import static org.mockito.Mockito.when;
 class FamilyEquivalentCustodyReplayHandlerTest {
 
     private final ReplayAssetSupport assetSupport = mock(ReplayAssetSupport.class);
-    private final GenericFlowReplayEngine replayEngine = new GenericFlowReplayEngine();
+    private final GenericFlowReplayEngine replayEngine = new GenericFlowReplayEngine(null);
     private final ReplayFlowSupport flowSupport = new ReplayFlowSupport(replayEngine);
     private final ReplayPendingTransferKeyFactory keyFactory = new ReplayPendingTransferKeyFactory(assetSupport);
     private final FamilyEquivalentCustodyReplayHandler handler = new FamilyEquivalentCustodyReplayHandler(

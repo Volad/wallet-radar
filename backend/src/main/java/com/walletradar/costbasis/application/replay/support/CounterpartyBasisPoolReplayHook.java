@@ -126,6 +126,9 @@ public class CounterpartyBasisPoolReplayHook {
             position.setTotalRealisedPnlUsd(
                     position.totalRealisedPnlUsd().subtract(realised, MC)
             );
+            position.setTotalNetRealisedPnlUsd(
+                    position.totalNetRealisedPnlUsd().subtract(realised, MC)
+            );
         }
         flow.setRealisedPnlUsd(BigDecimal.ZERO);
         flow.setAvcoAtTimeOfSale(beforeSell.perWalletAvco());

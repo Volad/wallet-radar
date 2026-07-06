@@ -454,10 +454,10 @@ public class ReplayDispatcher {
                 continuityTransferPath
         );
         if (poolAcquisitionCost != null) {
-            flowSupport.applyBuyWithAcquisitionCost(flow, position, poolAcquisitionCost);
+            flowSupport.applyBuyWithAcquisitionCost(transaction, flow, position, poolAcquisitionCost);
             return;
         }
-        flowSupport.applyBuy(flow, position);
+        flowSupport.applyBuy(transaction, flow, position);
     }
 
     private void applySellWithOptionalPool(

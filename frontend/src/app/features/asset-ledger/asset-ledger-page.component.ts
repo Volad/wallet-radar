@@ -56,7 +56,10 @@ interface AssetCurrentView {
   readonly uncoveredQuantity: number;
   readonly totalCostBasisUsd: number | null;
   readonly avcoUsd: number | null;
+  readonly netTotalCostBasisUsd: number | null;
+  readonly netAvcoUsd: number | null;
   readonly realisedPnlUsd: number;
+  readonly netRealisedPnlUsd: number | null;
   readonly gasPaidUsd: number;
 }
 
@@ -122,6 +125,8 @@ interface MarkerView {
   readonly totalCostBasisAfterUsd: number | null;
   readonly avcoBeforeUsd: number | null;
   readonly avcoAfterUsd: number | null;
+  readonly netAvcoBeforeUsd: number | null;
+  readonly netAvcoAfterUsd: number | null;
   readonly avcoKind: string | null;
   readonly avcoKindLabel: string | null;
   readonly realisedPnlDeltaUsd: number | null;
@@ -1290,14 +1295,12 @@ export class AssetLedgerPageComponent {
   }
 
   private avcoKindLabel(kind: string | null): string | null {
+    // ADR-045: the plotted line is the family covered-weighted per-bucket AVCO series.
     if (kind === 'PRIMARY_FLOW') {
-      return 'Venue spot AVCO';
+      return 'Family covered-weighted AVCO';
     }
-    if (kind === 'CARRIED_FORWARD') {
-      return 'Carried forward';
-    }
-    if (kind === 'FAMILY_ROLLUP') {
-      return 'Family aggregate';
+    if (kind === 'UNAVAILABLE') {
+      return 'AVCO unavailable (family drained)';
     }
     return null;
   }
@@ -1750,7 +1753,6 @@ export class AssetLedgerPageComponent {
       ledger.ledgerPoints.find((point) => point.familyDisplaySymbol !== null)?.familyDisplaySymbol ??
       this.familyDisplaySymbol(ledger.familyIdentity);
 
-    const legendItems = this.buildLegendItems(ledger.events);
     const rawMarkers = this.enrichMarkerLinkage(
       this.buildMarkers(ledger, walletMeta, displaySymbol),
       ledger
@@ -1758,6 +1760,11 @@ export class AssetLedgerPageComponent {
     const markers = this.reconcileMarkerAvcoSeries(
       this.collapseMatchedMarkers(rawMarkers, ledger, displaySymbol)
     );
+    // Legend / type filter must reflect the markers actually displayed on the chart, so it is built
+    // from the post-collapse markers rather than raw events. This surfaces the synthetic collapsed
+    // types (matched transfer / bridge / Bybit corridor) as toggleable entries and drops raw types
+    // (e.g. INTERNAL_TRANSFER, BRIDGE_IN/OUT) that were fully collapsed and no longer render.
+    const legendItems = this.buildLegendItems(markers);
     const markerLookup = Object.fromEntries(markers.map((marker) => [marker.id, marker] as const));
     return {
       sessionId: ledger.sessionId,
@@ -1770,7 +1777,10 @@ export class AssetLedgerPageComponent {
         uncoveredQuantity: ledger.current.uncoveredQuantity ?? 0,
         totalCostBasisUsd: ledger.current.totalCostBasisUsd,
         avcoUsd: ledger.current.avcoUsd,
+        netTotalCostBasisUsd: ledger.current.netTotalCostBasisUsd,
+        netAvcoUsd: ledger.current.netAvcoUsd,
         realisedPnlUsd: ledger.current.realisedPnlUsd ?? 0,
+        netRealisedPnlUsd: ledger.current.netRealisedPnlUsd,
         gasPaidUsd: ledger.current.gasPaidUsd ?? 0,
       },
       legendItems,
@@ -1779,10 +1789,13 @@ export class AssetLedgerPageComponent {
     };
   }
 
-  private buildLegendItems(events: ReadonlyArray<SessionAssetLedgerEventOverlayResponse>): ReadonlyArray<LegendItemView> {
+  private buildLegendItems(markers: ReadonlyArray<MarkerView>): ReadonlyArray<LegendItemView> {
     const ordered = new Map<string, LegendItemView>();
-    events.forEach((event) => {
-      const typeKey = this.normalizeTypeKey(event.normalizedType);
+    markers.forEach((marker) => {
+      const typeKey = marker.typeKey;
+      if (ordered.has(typeKey)) {
+        return;
+      }
       const meta = this.metaForType(typeKey);
       ordered.set(typeKey, {
         key: typeKey,
@@ -1840,8 +1853,10 @@ export class AssetLedgerPageComponent {
         coveredQuantityAfter: entry.coveredQuantityAfter ?? 0,
         uncoveredQuantityAfter: entry.uncoveredQuantityAfter ?? 0,
         totalCostBasisAfterUsd: entry.totalCostBasisAfterUsd,
-        avcoBeforeUsd: previous?.avcoAfterUsd ?? null,
+        avcoBeforeUsd: entry.avcoBeforeUsd ?? previous?.avcoAfterUsd ?? null,
         avcoAfterUsd: entry.avcoAfterUsd,
+        netAvcoBeforeUsd: entry.netAvcoBeforeUsd ?? previous?.netAvcoAfterUsd ?? null,
+        netAvcoAfterUsd: entry.netAvcoAfterUsd,
         avcoKind: entry.avcoKind ?? null,
         avcoKindLabel: this.avcoKindLabel(entry.avcoKind ?? null),
         realisedPnlDeltaUsd: entry.realisedPnlDeltaUsd,
@@ -2069,6 +2084,8 @@ export class AssetLedgerPageComponent {
       priceSource: displayLeg.priceSource,
       avcoAfterUsd: last.avcoAfterUsd,
       avcoBeforeUsd: first.avcoBeforeUsd,
+      netAvcoAfterUsd: last.netAvcoAfterUsd,
+      netAvcoBeforeUsd: first.netAvcoBeforeUsd,
       avcoKind: last.avcoKind,
       avcoKindLabel: last.avcoKindLabel,
       realisedPnlDeltaUsd: ordered.reduce((sum, leg) => sum + (leg.realisedPnlDeltaUsd ?? 0), 0) || null,
@@ -2155,56 +2172,99 @@ export class AssetLedgerPageComponent {
     );
   }
 
+  /**
+   * Split an AVCO series into contiguous non-null segments so the plotted line BREAKS on a `null`
+   * (family drained, ADR-031 / ADR-045) instead of dropping to $0 or connecting across the gap.
+   * A new segment starts on the next non-null value.
+   */
+  private buildAvcoLineSegments(
+    markers: ReadonlyArray<MarkerView>,
+    projectX: (index: number) => number,
+    projectY: (value: number | null) => number,
+    selector: (marker: MarkerView) => number | null
+  ): ReadonlyArray<ReadonlyArray<{ readonly x: number; readonly y: number }>> {
+    const segments: Array<Array<{ x: number; y: number }>> = [];
+    let current: Array<{ x: number; y: number }> = [];
+    markers.forEach((marker, index) => {
+      const value = selector(marker);
+      if (value === null || Number.isNaN(value)) {
+        if (current.length > 0) {
+          segments.push(current);
+          current = [];
+        }
+        return;
+      }
+      current.push({ x: projectX(index), y: projectY(value) });
+    });
+    if (current.length > 0) {
+      segments.push(current);
+    }
+    return segments;
+  }
+
+  private strokeAvcoSegments(
+    ctx: CanvasRenderingContext2D,
+    segments: ReadonlyArray<ReadonlyArray<{ readonly x: number; readonly y: number }>>
+  ): void {
+    segments.forEach((segment) => {
+      if (segment.length === 1) {
+        // Isolated point between two gaps — draw a dot so a single-event segment stays visible.
+        const point = segment[0];
+        ctx.beginPath();
+        ctx.arc(point.x, point.y, Math.max(ctx.lineWidth, 1), 0, Math.PI * 2);
+        ctx.fillStyle = ctx.strokeStyle;
+        ctx.fill();
+        return;
+      }
+      ctx.beginPath();
+      segment.forEach((point, index) => {
+        if (index === 0) {
+          ctx.moveTo(point.x, point.y);
+        } else {
+          ctx.lineTo(point.x, point.y);
+        }
+      });
+      ctx.stroke();
+    });
+  }
+
+  /**
+   * Pass-through chaining of the backend Method-B family covered-weighted AVCO series (ADR-045).
+   *
+   * The backend owns the before/after contract and emits a single continuous, self-chaining series.
+   * After {@link collapseMatchedMarkers} may merge non-contiguous legs, so we re-chain each displayed
+   * marker's `before` to the immediately preceding displayed marker's `after` (AC-1b). A `null` `after`
+   * means the family is drained (undefined AVCO, ADR-031) — it stays `null` so the line BREAKS; it is
+   * never carried forward.
+   */
   private reconcileMarkerAvcoSeries(markers: ReadonlyArray<MarkerView>): ReadonlyArray<MarkerView> {
-    let lastAvco: number | null = null;
+    const normaliseAvco = (value: number | null): number | null =>
+      value === null || Number.isNaN(value) ? null : value;
+    let previousTaxAfter: number | null = null;
+    let previousNetAfter: number | null = null;
     return markers.map((marker) => {
-      const avcoBeforeUsd = lastAvco ?? marker.avcoBeforeUsd;
-      let avcoAfterUsd = marker.avcoAfterUsd;
-      const shouldCarryForward =
-        (avcoAfterUsd === null || Number.isNaN(avcoAfterUsd)) &&
-        lastAvco !== null &&
-        (marker.avcoKind === 'CARRIED_FORWARD' ||
-          marker.typeKey === 'LP_ENTRY' ||
-          marker.typeKey === 'SPONSORED_GAS_IN' ||
-          marker.basisEffects.includes('REALLOCATE_OUT') ||
-          marker.basisEffects.includes('CARRY_OUT'));
-      if (shouldCarryForward) {
-        avcoAfterUsd = lastAvco;
-      }
-      const nextMarker = { ...marker, avcoBeforeUsd, avcoAfterUsd };
-      if (nextMarker.avcoAfterUsd !== null && !Number.isNaN(nextMarker.avcoAfterUsd)) {
-        lastAvco = nextMarker.avcoAfterUsd;
-      }
+      const nextMarker: MarkerView = {
+        ...marker,
+        avcoBeforeUsd: previousTaxAfter,
+        netAvcoBeforeUsd: previousNetAfter,
+      };
+      previousTaxAfter = normaliseAvco(marker.avcoAfterUsd);
+      previousNetAfter = normaliseAvco(marker.netAvcoAfterUsd);
       return nextMarker;
     });
   }
 
   private buildYProjection(
     timeline: ReadonlyArray<SessionAssetLedgerTimelineEntryResponse>,
-    events: ReadonlyArray<SessionAssetLedgerEventOverlayResponse>,
-    familyIdentity: string
+    _events: ReadonlyArray<SessionAssetLedgerEventOverlayResponse>,
+    _familyIdentity: string
   ): (value: number | null) => number {
-    const eventById = new Map(
-      events.map((event) => [event.eventGroupId ?? event.normalizedTransactionId ?? event.txHash ?? crypto.randomUUID(), event] as const)
-    );
-    const prices = timeline
-      .map((entry) => {
-        const id = entry.eventGroupId ?? entry.normalizedTransactionId ?? entry.txHash ?? '';
-        const event = eventById.get(id) ?? null;
-        return this.resolveDisplayQuote(
-          event,
-          familyIdentity,
-          event === null ? null : this.primaryFlow(entry, event, familyIdentity)
-        ).unitPriceUsd;
-      })
-      .filter((value): value is number => value !== null);
     const avcos = timeline
       .filter((entry) => entry.avcoKind !== 'FAMILY_ROLLUP')
-      .map((entry) => entry.avcoAfterUsd)
-      .filter((value): value is number => value !== null);
-    const values = [...prices, ...avcos];
-    const min = values.length === 0 ? 0 : Math.min(...values) * 0.88;
-    const max = values.length === 0 ? 1 : Math.max(...values) * 1.08;
+      .flatMap((entry) => [entry.avcoAfterUsd, entry.netAvcoAfterUsd])
+      .filter((value): value is number => value !== null && value > 0);
+    const min = avcos.length === 0 ? 0 : Math.min(...avcos) * 0.88;
+    const max = this.clampedAvcoDisplayMax(avcos);
     const plotHeight = CHART.height - CHART.top - CHART.bottom;
 
     return (value: number | null) => {
@@ -2214,6 +2274,16 @@ export class AssetLedgerPageComponent {
       const ratio = (value - min) / Math.max(max - min, 1);
       return CHART.height - CHART.bottom - ratio * plotHeight;
     };
+  }
+
+  /** Display-only clamp: 95th percentile × 1.2 so a single outlier cannot flatten the AVCO series. */
+  private clampedAvcoDisplayMax(avcos: ReadonlyArray<number>): number {
+    if (avcos.length === 0) {
+      return 1;
+    }
+    const sorted = [...avcos].sort((left, right) => left - right);
+    const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil(sorted.length * 0.95) - 1));
+    return Math.max(sorted[index] * 1.2, 1);
   }
 
   private resolvePath(
@@ -2628,6 +2698,8 @@ export class AssetLedgerPageComponent {
       marker.totalCostBasisAfterUsd?.toString() ?? '',
       marker.avcoBeforeUsd?.toString() ?? '',
       marker.avcoAfterUsd?.toString() ?? '',
+      marker.netAvcoBeforeUsd?.toString() ?? '',
+      marker.netAvcoAfterUsd?.toString() ?? '',
       marker.realisedPnlDeltaUsd?.toString() ?? '',
       marker.gasDeltaUsd?.toString() ?? '',
       marker.priceUsd?.toString() ?? '',
@@ -3098,6 +3170,7 @@ export class AssetLedgerPageComponent {
     const values = [
       ...windowMarkers.map((marker) => marker.priceUsd).filter((value): value is number => value !== null),
       ...windowMarkers.map((marker) => marker.avcoAfterUsd).filter((value): value is number => value !== null),
+      ...windowMarkers.map((marker) => marker.netAvcoAfterUsd).filter((value): value is number => value !== null),
     ];
     const minValue = values.length === 0 ? 0 : Math.min(...values) * 0.85;
     const maxValue = values.length === 0 ? 1 : Math.max(...values) * 1.1;
@@ -3131,55 +3204,68 @@ export class AssetLedgerPageComponent {
       ctx.fillText(`$${Math.round(value)}`, pad.left - 6, y + 3);
     }
 
-    const avcoPoints = windowMarkers
-      .map((marker, index) => ({ x: projectX(index), y: projectY(marker.avcoAfterUsd) }))
-      .filter((point) => Number.isFinite(point.y));
-    if (avcoPoints.length > 0) {
-      ctx.beginPath();
-      avcoPoints.forEach((point, index) => {
-        if (index === 0) {
-          ctx.moveTo(point.x, point.y);
-        } else {
-          ctx.lineTo(point.x, point.y);
-        }
-      });
-      ctx.strokeStyle = 'rgba(255,255,255,.45)';
-      ctx.lineWidth = 1.5;
-      ctx.setLineDash([5, 4]);
-      ctx.stroke();
-      ctx.setLineDash([]);
+    // ADR-045: plot the family covered-weighted AVCO series and BREAK the line where avcoAfterUsd is
+    // null (family drained, ADR-031) — never a point at $0 and never connected across the gap.
+    const taxAvcoSegments = this.buildAvcoLineSegments(
+      windowMarkers,
+      projectX,
+      projectY,
+      (marker) => marker.avcoAfterUsd
+    );
+    ctx.strokeStyle = 'rgba(255,255,255,.28)';
+    ctx.lineWidth = 1.25;
+    ctx.setLineDash([5, 4]);
+    this.strokeAvcoSegments(ctx, taxAvcoSegments);
+    ctx.setLineDash([]);
 
+    const netAvcoSegments = this.buildAvcoLineSegments(
+      windowMarkers,
+      projectX,
+      projectY,
+      (marker) => marker.netAvcoAfterUsd
+    );
+    ctx.strokeStyle = 'rgba(34,211,238,.85)';
+    ctx.lineWidth = 1.75;
+    ctx.setLineDash([]);
+    this.strokeAvcoSegments(ctx, netAvcoSegments);
+
+    const baselineY = cssHeight - pad.bottom;
+    const gradient = ctx.createLinearGradient(0, 0, 0, cssHeight);
+    gradient.addColorStop(0, 'rgba(34,211,238,.08)');
+    gradient.addColorStop(1, 'rgba(34,211,238,0)');
+    ctx.fillStyle = gradient;
+    netAvcoSegments.forEach((segment) => {
+      if (segment.length < 2) {
+        return;
+      }
       ctx.beginPath();
-      avcoPoints.forEach((point, index) => {
+      segment.forEach((point, index) => {
         if (index === 0) {
           ctx.moveTo(point.x, point.y);
         } else {
           ctx.lineTo(point.x, point.y);
         }
       });
-      ctx.lineTo(avcoPoints.at(-1)!.x, cssHeight - pad.bottom);
-      ctx.lineTo(avcoPoints[0].x, cssHeight - pad.bottom);
+      ctx.lineTo(segment.at(-1)!.x, baselineY);
+      ctx.lineTo(segment[0].x, baselineY);
       ctx.closePath();
-      const gradient = ctx.createLinearGradient(0, 0, 0, cssHeight);
-      gradient.addColorStop(0, 'rgba(255,255,255,.05)');
-      gradient.addColorStop(1, 'rgba(255,255,255,0)');
-      ctx.fillStyle = gradient;
       ctx.fill();
-    }
+    });
 
+    const primaryAvcoAfter = (marker: MarkerView): number | null => marker.netAvcoAfterUsd ?? marker.avcoAfterUsd;
     const layoutById = new Map(
       windowMarkers.map((marker, index) => [
         marker.id,
         {
           x: projectX(index),
-          avcoY: projectY(marker.avcoAfterUsd),
+          avcoY: projectY(primaryAvcoAfter(marker)),
         },
       ] as const)
     );
     this.renderedMarkers = visibleMarkers.map((marker) => {
-      const layout = layoutById.get(marker.id) ?? { x: projectX(0), avcoY: projectY(marker.avcoAfterUsd) };
+      const layout = layoutById.get(marker.id) ?? { x: projectX(0), avcoY: projectY(primaryAvcoAfter(marker)) };
       const x = layout.x;
-      const y = projectY(marker.priceUsd ?? marker.avcoAfterUsd);
+      const y = projectY(marker.priceUsd ?? primaryAvcoAfter(marker));
       return {
         markerId: marker.id,
         x,
@@ -3187,8 +3273,8 @@ export class AssetLedgerPageComponent {
         avcoY: layout.avcoY,
         hasStem:
           marker.priceUsd !== null &&
-          marker.avcoAfterUsd !== null &&
-          Math.abs(marker.priceUsd - marker.avcoAfterUsd) > 0.0001,
+          primaryAvcoAfter(marker) !== null &&
+          Math.abs(marker.priceUsd - primaryAvcoAfter(marker)!) > 0.0001,
       };
     });
 

@@ -11,6 +11,8 @@ public final class LiquidStakingCarry {
     private BigDecimal totalCoveredQuantity = BigDecimal.ZERO;
     private BigDecimal totalUncoveredQuantity = BigDecimal.ZERO;
     private BigDecimal totalCostBasisUsd = BigDecimal.ZERO;
+    /** ADR-040 Change 2: net cost lane — tracks the lower reward-discounted basis. */
+    private BigDecimal totalNetCostBasisUsd = BigDecimal.ZERO;
 
     public void add(CarryTransfer carry) {
         if (carry == null) {
@@ -20,6 +22,8 @@ public final class LiquidStakingCarry {
         totalCoveredQuantity = totalCoveredQuantity.add(carry.coveredQuantity(), MC);
         totalUncoveredQuantity = totalUncoveredQuantity.add(carry.uncoveredQuantity(), MC);
         totalCostBasisUsd = totalCostBasisUsd.add(carry.costBasisUsd(), MC);
+        BigDecimal net = carry.netCostBasisUsd() != null ? carry.netCostBasisUsd() : carry.costBasisUsd();
+        totalNetCostBasisUsd = totalNetCostBasisUsd.add(net, MC);
     }
 
     public BigDecimal totalSourceQuantity() {
@@ -36,5 +40,10 @@ public final class LiquidStakingCarry {
 
     public BigDecimal totalCostBasisUsd() {
         return totalCostBasisUsd;
+    }
+
+    /** ADR-040 Change 2: net cost basis sum across all outbound legs. */
+    public BigDecimal totalNetCostBasisUsd() {
+        return totalNetCostBasisUsd;
     }
 }

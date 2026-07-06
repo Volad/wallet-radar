@@ -51,6 +51,7 @@ public record SessionDashboardResponse(
             Boolean isLiveQuote,
             String priceIssue,
             BigDecimal avcoUsd,
+            BigDecimal netAvcoUsd,
             BigDecimal unrealizedPnlPct,
             BigDecimal unrealizedPnlUsd,
             BigDecimal realizedPnlUsd,

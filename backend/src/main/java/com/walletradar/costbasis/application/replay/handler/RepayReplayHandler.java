@@ -90,6 +90,7 @@ public class RepayReplayHandler {
             BigDecimal priorRealised = flow.getRealisedPnlUsd() == null ? BigDecimal.ZERO : flow.getRealisedPnlUsd();
             if (priorRealised.signum() != 0) {
                 position.setTotalRealisedPnlUsd(position.totalRealisedPnlUsd().subtract(priorRealised, MC));
+                position.setTotalNetRealisedPnlUsd(position.totalNetRealisedPnlUsd().subtract(priorRealised, MC));
                 flow.setRealisedPnlUsd(BigDecimal.ZERO);
             }
         } else {
@@ -122,6 +123,7 @@ public class RepayReplayHandler {
             BigDecimal priorRealised = flow.getRealisedPnlUsd() == null ? BigDecimal.ZERO : flow.getRealisedPnlUsd();
             if (match.matchedQty().signum() > 0) {
                 position.setTotalRealisedPnlUsd(position.totalRealisedPnlUsd().subtract(priorRealised, MC));
+                position.setTotalNetRealisedPnlUsd(position.totalNetRealisedPnlUsd().subtract(priorRealised, MC));
                 flow.setRealisedPnlUsd(BigDecimal.ZERO);
                 flow.setAvcoAtTimeOfSale(match.liabilityAvcoUsd());
                 flow.setPriceSource(PriceSource.LIABILITY_MATCH);
@@ -132,6 +134,9 @@ public class RepayReplayHandler {
         BigDecimal priorRealised = flow.getRealisedPnlUsd() == null ? BigDecimal.ZERO : flow.getRealisedPnlUsd();
         position.setTotalRealisedPnlUsd(
                 position.totalRealisedPnlUsd().subtract(priorRealised, MC).add(residualRealised, MC)
+        );
+        position.setTotalNetRealisedPnlUsd(
+                position.totalNetRealisedPnlUsd().subtract(priorRealised, MC).add(residualRealised, MC)
         );
         flow.setRealisedPnlUsd(residualRealised);
         flow.setAvcoAtTimeOfSale(avcoBefore);

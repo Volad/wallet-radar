@@ -16,8 +16,11 @@ import com.walletradar.ingestion.pipeline.clarification.BybitInternalTransferOrp
 import com.walletradar.ingestion.pipeline.clarification.BybitOnChainEarnOrphanRepairService;
 import com.walletradar.ingestion.pipeline.bybit.BybitInternalTransferExternalCpReclassifier;
 import com.walletradar.ingestion.pipeline.bybit.BybitInternalTransferPairer;
+import com.walletradar.ingestion.pipeline.bybit.BybitStreamAuthorityCollapser;
 import com.walletradar.ingestion.pipeline.clarification.AddressPoisoningDetector;
 import com.walletradar.ingestion.pipeline.clarification.EtherFiOftBridgeInClassifier;
+import com.walletradar.ingestion.pipeline.clarification.GmxEntryRequestLinkService;
+import com.walletradar.ingestion.pipeline.clarification.GmxExitSettlementLinkService;
 import com.walletradar.ingestion.pipeline.clarification.GmxV2RefundClassifier;
 import com.walletradar.ingestion.pipeline.clarification.KnownBridgeRouterExternalTypeCorrectionService;
 import com.walletradar.ingestion.pipeline.clarification.NftMintRetagger;
@@ -75,6 +78,7 @@ class LinkingBatchProcessor {
     private final BridgePairContinuityRepairService bridgePairContinuityRepairService;
     private final OnChainInternalTransferPairRepairService onChainInternalTransferPairRepairService;
     private final BybitInternalTransferExternalCpReclassifier bybitInternalTransferExternalCpReclassifier;
+    private final BybitStreamAuthorityCollapser bybitStreamAuthorityCollapser;
 
     private final KnownBridgeRouterExternalTypeCorrectionService knownBridgeRouterExternalTypeCorrectionService;
     private final OwnWalletBridgeMistypeCorrectionService ownWalletBridgeMistypeCorrectionService;
@@ -86,6 +90,8 @@ class LinkingBatchProcessor {
     private final AddressPoisoningDetector addressPoisoningDetector;
     private final SpoofTokenDetector spoofTokenDetector;
     private final ScamDisperseClonePhishingTagger scamDisperseClonePhishingTagger;
+    private final GmxExitSettlementLinkService gmxExitSettlementLinkService;
+    private final GmxEntryRequestLinkService gmxEntryRequestLinkService;
     private final GmxV2RefundClassifier gmxV2RefundClassifier;
     private final EtherFiOftBridgeInClassifier etherFiOftBridgeInClassifier;
     private final NftMintRetagger nftMintRetagger;
@@ -116,6 +122,16 @@ class LinkingBatchProcessor {
 
         processed += timedPass("onChainLifecycleLink",
                 () -> onChainLifecycleLinkService.processNextBatch(batchSize));
+        progressHeartbeat.run();
+
+        // GMX-EXIT-LINK: copy gmx-lp: correlationId from resolved LP_EXIT_REQUEST to LP_EXIT_SETTLEMENT
+        processed += timedPass("gmxExitSettlementLink",
+                () -> gmxExitSettlementLinkService.linkOutstandingSettlements(batchSize));
+        progressHeartbeat.run();
+
+        // GMX-ENTRY-LINK: copy gmx-lp: correlationId from LP_ENTRY_SETTLEMENT to LP_ENTRY_REQUEST
+        processed += timedPass("gmxEntryRequestLink",
+                () -> gmxEntryRequestLinkService.linkOutstandingRequests(batchSize));
         progressHeartbeat.run();
 
         processed += timedPass("liFiBridgePairLink",
@@ -263,6 +279,13 @@ class LinkingBatchProcessor {
         // Cycle/18 R9b: re-run corridor repair after repairAll so prices stay stripped
         processed += timedPass("bybitTransferContinuityRepair2",
                 () -> bybitTransferContinuityRepairService.reconcileOutstandingPairs(batchSize));
+        progressHeartbeat.run();
+
+        // Fix A.2: suppress corridor-deposit-and-stake cycle collapse duplicates. Runs HERE (after the
+        // corridor projection has stamped the BYBIT-CORRIDOR: deposits) rather than inside
+        // collapseMirrors(), where the corridor half of the double-count signature does not yet exist.
+        processed += timedPass("bybitCorridorStakeCycleSuppression",
+                bybitStreamAuthorityCollapser::suppressCorridorDepositStakeCycles);
         progressHeartbeat.run();
 
         // B-EARN-DEPOSIT-MISSING: synthesise missing EARN counterpart

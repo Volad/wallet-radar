@@ -210,10 +210,19 @@ public class LiquidityDepthReader {
         int dispLow = tickLower - contextTicks;
         int dispHigh = tickUpper + contextTicks;
 
-        BigInteger maxL = liquidityByIntervalStart.values().stream()
-                .max(BigInteger::compareTo).orElse(BigInteger.ONE);
-        if (maxL.signum() == 0) {
-            maxL = BigInteger.ONE;
+        // Compute maxL only within the display window — far-OOR ticks can have astronomically large
+        // liquidityNet values that would make all in-range bars appear near-zero if included in the max.
+        BigInteger maxL = BigInteger.ONE;
+        for (int i = 0; i < sortedTicks.size() - 1; i++) {
+            int tLow = sortedTicks.get(i);
+            int tHigh = sortedTicks.get(i + 1);
+            if (tHigh <= dispLow || tLow >= dispHigh) {
+                continue;
+            }
+            BigInteger intervalL = liquidityByIntervalStart.getOrDefault(tLow, BigInteger.ZERO);
+            if (intervalL.compareTo(maxL) > 0) {
+                maxL = intervalL;
+            }
         }
 
         List<LpPositionSnapshot.LiquidityBin> bins = new ArrayList<>();

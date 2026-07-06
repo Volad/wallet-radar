@@ -286,3 +286,31 @@ touched. This is purely a read-path presentation filter.
 **Joint acceptance with WS-B (corridor carry):** WS-4 must not suppress AVCO at points that have
 genuine basis from WS-B carry-through. The gate uses `basisBackedQuantityAfter` not `quantityAfter`,
 so carry-created basis positions correctly satisfy `basisBackedQty > 1e-8` and bypass the gate.
+
+## Dual-lane net-carry conservation (ADR-040 amendment, 2026-07-02)
+
+ADR-040 introduced parallel Tax and Net cost-basis lanes. The **net-carry conservation invariant** requires
+that net basis travels with quantity on every IN leg — never silently re-seeded from the tax lane.
+
+### Invariant
+
+> For any closed intra-family round-trip (WRAP↔UNWRAP, spot↔receipt, REALLOCATE_IN↔OUT) on a single
+> position key: `|Σ netCostBasisDelta| ≤ dust` — exactly as `Σ taxCostBasisDelta = 0` holds for Tax.
+> Net AVCO ≤ Tax AVCO for every position. Net AVCO ≥ 0.
+
+### Mechanism
+
+The canonical seam is the **apply site**: `GenericFlowReplayEngine.restoreToPosition(CarryTransfer, position)`
+credits both lanes independently from the carry (`carry.costBasisUsd()` → Tax, `carry.netCostBasisUsd()` →
+Net). All IN-leg handlers route through this method. The 5-arg tax-only overload is retired from IN-leg use.
+
+`CarryTransfer` net-less general constructors are deleted; every "known" carry must supply explicit net args.
+`pendingInbound*(...)` factories retain `net=null→tax` (unknown until refine — correct for provisional
+materialization). Source-less orphan CARRY_INs keep `net=tax` (no reward-discount evidence).
+
+### Why Net ≠ Tax for reward-bearing families
+
+When a family accrues rewards / LP fees booked at **$0 net** (e.g. `REWARD_CLAIM`, `LP_FEE_CLAIM`), the
+acquisition adds quantity without adding to net cost → net basis grows slower than tax basis → Net AVCO sits
+below Tax/Market AVCO. This discount is preserved by the net-carry transport invariant. Assets with no $0-net
+acquisitions will correctly show Net ≈ Tax (e.g. LINK, DOGE).

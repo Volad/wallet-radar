@@ -11,6 +11,7 @@ import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Collection;
@@ -61,6 +62,94 @@ public class HistoricalPriceCacheService {
         return historicalPriceRepository
                 .findFirstBySymbolInAndBucketStartAndSource(candidateSymbols, bucketStart, source)
                 .map(this::toQuote);
+    }
+
+    /**
+     * RC-D (ADR-043, F-7) — bounded nearest-valid-bucket fallback. When the exact-minute bucket
+     * misses (a pre-coverage / out-of-range request such as a 2025-01 DOGE lot that predates the
+     * asset's first cached bucket), resolve to the temporally closest cached bucket for the same
+     * asset+source, but only within {@code maxWindow}. Returns empty when no bucket sits within the
+     * window, so a genuinely unpriceable request still fails safe instead of clamping to a far,
+     * wrong value.
+     */
+    public Optional<PriceQuote> findNearestQuoteWithinWindow(
+            PriceRequest request,
+            PriceSource source,
+            Duration maxWindow
+    ) {
+        if (request == null || source == null || maxWindow == null || maxWindow.isNegative()) {
+            return Optional.empty();
+        }
+        Instant target = bucketStart(request.occurredAt(), DEFAULT_BUCKET_RESOLUTION);
+        HistoricalPriceDocument after = historicalPriceRepository
+                .findFirstByAssetKeyAndSourceAndBucketStartGreaterThanEqualOrderByBucketStartAsc(
+                        request.assetKey(), source, target)
+                .orElse(null);
+        HistoricalPriceDocument before = historicalPriceRepository
+                .findFirstByAssetKeyAndSourceAndBucketStartLessThanEqualOrderByBucketStartDesc(
+                        request.assetKey(), source, target)
+                .orElse(null);
+        HistoricalPriceDocument nearest = pickNearestWithinWindow(target, before, after, maxWindow);
+        return nearest == null ? Optional.empty() : Optional.of(toQuote(nearest));
+    }
+
+    /**
+     * RC-D (ADR-043) — pre-coverage-only nearest bucket. Unlike {@link #findNearestQuoteWithinWindow},
+     * this returns a clamp ONLY when the request is genuinely pre-coverage for the asset+source: there
+     * is no cached bucket at or before the event minute. It lets a bot-derived ACQUIRE lot dated before
+     * the asset's first market bucket borrow the nearest forward bucket (bounded by {@code maxWindow}),
+     * while a lot that already sits inside coverage keeps its own resolution untouched.
+     */
+    public Optional<PriceQuote> findPreCoverageNearestQuote(
+            PriceRequest request,
+            PriceSource source,
+            Duration maxWindow
+    ) {
+        if (request == null || source == null || maxWindow == null || maxWindow.isNegative()) {
+            return Optional.empty();
+        }
+        Instant target = bucketStart(request.occurredAt(), DEFAULT_BUCKET_RESOLUTION);
+        HistoricalPriceDocument before = historicalPriceRepository
+                .findFirstByAssetKeyAndSourceAndBucketStartLessThanEqualOrderByBucketStartDesc(
+                        request.assetKey(), source, target)
+                .orElse(null);
+        if (before != null) {
+            // A bucket exists at or before the event minute → not pre-coverage; do not clamp.
+            return Optional.empty();
+        }
+        HistoricalPriceDocument after = historicalPriceRepository
+                .findFirstByAssetKeyAndSourceAndBucketStartGreaterThanEqualOrderByBucketStartAsc(
+                        request.assetKey(), source, target)
+                .orElse(null);
+        HistoricalPriceDocument nearest = pickNearestWithinWindow(target, null, after, maxWindow);
+        return nearest == null ? Optional.empty() : Optional.of(toQuote(nearest));
+    }
+
+    private static HistoricalPriceDocument pickNearestWithinWindow(
+            Instant target,
+            HistoricalPriceDocument before,
+            HistoricalPriceDocument after,
+            Duration maxWindow
+    ) {
+        HistoricalPriceDocument nearest = null;
+        Duration nearestDistance = null;
+        for (HistoricalPriceDocument candidate : new HistoricalPriceDocument[]{before, after}) {
+            if (candidate == null
+                    || candidate.getBucketStart() == null
+                    || candidate.getPriceUsd() == null
+                    || candidate.getPriceUsd().signum() <= 0) {
+                continue;
+            }
+            Duration distance = Duration.between(candidate.getBucketStart(), target).abs();
+            if (distance.compareTo(maxWindow) > 0) {
+                continue;
+            }
+            if (nearestDistance == null || distance.compareTo(nearestDistance) < 0) {
+                nearest = candidate;
+                nearestDistance = distance;
+            }
+        }
+        return nearest;
     }
 
     public HistoricalPriceDocument storeQuote(PriceRequest request, PriceQuote quote) {

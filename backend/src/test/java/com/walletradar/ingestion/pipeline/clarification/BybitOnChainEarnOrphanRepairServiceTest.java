@@ -6,6 +6,7 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionReposi
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.ingestion.pipeline.bybit.BybitEarnPrincipalTransferPairer;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -22,6 +23,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -128,6 +130,162 @@ class BybitOnChainEarnOrphanRepairServiceTest {
 
         assertThat(repaired).isEqualTo(0);
         verify(normalizedTransactionRepository, never()).saveAll(any());
+    }
+
+    // ------------------------------------------------------------------
+    // Real EARN_FLEXIBLE_SAVING credit exists: pair (no duplicate synthesis)
+    // ------------------------------------------------------------------
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void repairOrphans_realEarnFlexibleSavingCredit_pairsInsteadOfDuplicating() {
+        Instant ts = Instant.parse("2026-01-28T10:34:00Z");
+        // Subscribe FUND debit recorded as a blank-corr INTERNAL_TRANSFER orphan.
+        NormalizedTransaction fund = fundTransfer(
+                "BYBIT-33625378:FH:mnt-sub", "BYBIT:33625378:FUND", "MNT", "-263.6026", ts);
+        // The REAL EARN-side credit Bybit emitted — typed EARN_FLEXIBLE_SAVING, not INTERNAL_TRANSFER.
+        NormalizedTransaction earn = internalTransfer(
+                "BYBIT-33625378:FH:mnt-earn", "BYBIT:33625378:EARN", "MNT", "263.6026", ts);
+        earn.setType(NormalizedTransactionType.EARN_FLEXIBLE_SAVING);
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(fund))
+                .thenReturn(List.of(earn));
+
+        int repaired = service().repairOrphans();
+
+        assertThat(repaired).isEqualTo(1);
+
+        ArgumentCaptor<Iterable<NormalizedTransaction>> captor = ArgumentCaptor.forClass(Iterable.class);
+        verify(normalizedTransactionRepository).saveAll(captor.capture());
+        List<NormalizedTransaction> saved = (List<NormalizedTransaction>) captor.getValue();
+        // No synthetic created: only the FUND debit and the existing EARN credit are persisted.
+        assertThat(saved).hasSize(2);
+        assertThat(saved.stream().noneMatch(t ->
+                t.getId().startsWith(BybitOnChainEarnOrphanRepairService.SYNTHETIC_ID_PREFIX))).isTrue();
+
+        NormalizedTransaction savedFund = saved.stream()
+                .filter(t -> "BYBIT:33625378:FUND".equals(t.getWalletAddress()))
+                .findFirst().orElseThrow();
+        NormalizedTransaction savedEarn = saved.stream()
+                .filter(t -> "BYBIT:33625378:EARN".equals(t.getWalletAddress()))
+                .findFirst().orElseThrow();
+
+        // Both legs share a single deterministic earn-principal corrId (single-key materialisation).
+        assertThat(savedFund.getCorrelationId())
+                .startsWith(BybitEarnPrincipalTransferPairer.EARN_PRINCIPAL_CORRELATION_PREFIX);
+        assertThat(savedEarn.getCorrelationId()).isEqualTo(savedFund.getCorrelationId());
+        assertThat(savedFund.getContinuityCandidate()).isTrue();
+        assertThat(savedEarn.getContinuityCandidate()).isTrue();
+        assertThat(savedFund.getMatchedCounterparty()).isEqualTo("BYBIT:33625378:EARN");
+        assertThat(savedEarn.getMatchedCounterparty()).isEqualTo("BYBIT:33625378:FUND");
+        // The real EARN credit keeps its canonical type — only correlation metadata is added.
+        assertThat(savedEarn.getType()).isEqualTo(NormalizedTransactionType.EARN_FLEXIBLE_SAVING);
+    }
+
+    // ------------------------------------------------------------------
+    // Cross-asset ETH-family earn conversion (METH/ETH → cmETH): the different-symbol
+    // same-family EARN credit means this is a conversion fused into a STAKING_DEPOSIT during
+    // normalization. Synthesising a SAME-asset EARN credit here would create an irreducible
+    // phantom, so synthesis is skipped. Quantity is intentionally NOT gated (redemption ratio).
+    // ------------------------------------------------------------------
+
+    @Test
+    void repairOrphans_crossAssetFamilyEarnCredit_skipsSynthesis() {
+        Instant ts = Instant.parse("2025-04-18T07:39:44Z");
+        NormalizedTransaction fund = fundTransfer(
+                "BYBIT-33625378:FH:eth-conv", "BYBIT:33625378:FUND", "ETH", "-0.6929746", ts);
+        // cmETH received on :EARN — different symbol, same ETH family, different magnitude.
+        NormalizedTransaction earn = earnTransfer(
+                "BYBIT-33625378:FH:cmeth-earn", "BYBIT:33625378:EARN", "CMETH", "0.65107655", ts.plusSeconds(162));
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(fund))
+                .thenReturn(List.of(earn));
+
+        int repaired = service().repairOrphans();
+
+        assertThat(repaired).isEqualTo(0);
+        verify(normalizedTransactionRepository, never()).saveAll(any());
+    }
+
+    // ------------------------------------------------------------------
+    // Blast-radius guard: a SAME-symbol earn credit (even if not qty-matched) must NOT be treated
+    // as a cross-asset conversion — synthesis still proceeds so same-symbol earn (MNT/LTC/…) is
+    // unaffected by the cross-asset skip.
+    // ------------------------------------------------------------------
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void repairOrphans_sameSymbolNonMatchedEarnCredit_stillSynthesises() {
+        Instant ts = Instant.parse("2025-06-01T10:00:00Z");
+        NormalizedTransaction fund = fundTransfer(
+                "BYBIT-516601508:FH:mnt-sub", "BYBIT:516601508:FUND", "MNT", "-100.0", ts);
+        // Same symbol (MNT), different magnitude — not a cross-asset conversion.
+        NormalizedTransaction earn = earnTransfer(
+                "BYBIT-516601508:FH:mnt-earn", "BYBIT:516601508:EARN", "MNT", "50.0", ts.plusSeconds(120));
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(fund))
+                .thenReturn(List.of(earn))
+                .thenReturn(List.of()); // no corridor deposit
+        when(mongoOperations.exists(any(Query.class), eq(NormalizedTransaction.class))).thenReturn(false);
+
+        int repaired = service().repairOrphans();
+
+        assertThat(repaired).isEqualTo(1);
+        verify(normalizedTransactionRepository, times(1)).saveAll(any());
+    }
+
+    // ------------------------------------------------------------------
+    // Idempotency / linking convergence: running the repair twice over the
+    // same input pairs once, then makes ZERO changes on the second pass.
+    //
+    // Regression guard for the LinkingBatchProcessor infinite loop: the first
+    // pass stamps the FUND debit with a bybit-earn-principal-v1: corrId; the
+    // second pass MUST treat the already-stamped row as done (repaired=0, no
+    // corrId churn, no extra saveAll) so the convergence loop reaches a fixed
+    // point. We deliberately hand the (now-stamped) FUND row back to the second
+    // invocation to prove the in-memory guard catches it even if the DB query
+    // were ever to return it.
+    // ------------------------------------------------------------------
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void repairOrphans_runTwiceOverSameInput_secondPassMakesZeroChanges() {
+        Instant ts = Instant.parse("2026-01-28T10:34:00Z");
+        NormalizedTransaction fund = fundTransfer(
+                "BYBIT-33625378:FH:mnt-sub", "BYBIT:33625378:FUND", "MNT", "-263.6026", ts);
+        NormalizedTransaction earn = internalTransfer(
+                "BYBIT-33625378:FH:mnt-earn", "BYBIT:33625378:EARN", "MNT", "263.6026", ts);
+        earn.setType(NormalizedTransactionType.EARN_FLEXIBLE_SAVING);
+
+        // 1st invocation: loadFundOrphans → [fund], loadEarnCreditLegs → [earn].
+        // 2nd invocation: same objects handed back (fund now carries a corrId).
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(fund))
+                .thenReturn(List.of(earn))
+                .thenReturn(List.of(fund))
+                .thenReturn(List.of(earn));
+
+        BybitOnChainEarnOrphanRepairService service = service();
+
+        int first = service.repairOrphans();
+        assertThat(first).isEqualTo(1);
+        String firstCorrId = fund.getCorrelationId();
+        assertThat(firstCorrId)
+                .startsWith(BybitEarnPrincipalTransferPairer.EARN_PRINCIPAL_CORRELATION_PREFIX);
+        assertThat(earn.getCorrelationId()).isEqualTo(firstCorrId);
+
+        int second = service.repairOrphans();
+        assertThat(second).isEqualTo(0);
+
+        // No corrId churn: the deterministic key is unchanged on the second pass.
+        assertThat(fund.getCorrelationId()).isEqualTo(firstCorrId);
+        assertThat(earn.getCorrelationId()).isEqualTo(firstCorrId);
+
+        // Exactly one persistence: the second (no-op) pass writes nothing.
+        verify(normalizedTransactionRepository, times(1)).saveAll(any());
     }
 
     // ------------------------------------------------------------------

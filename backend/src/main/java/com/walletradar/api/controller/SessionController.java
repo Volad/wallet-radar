@@ -314,6 +314,7 @@ public class SessionController {
                                 position.isLiveQuote(),
                                 position.priceIssue(),
                                 position.avcoUsd(),
+                                position.netAvcoUsd(),
                                 position.unrealizedPnlPct(),
                                 position.unrealizedPnlUsd(),
                                 position.realizedPnlUsd(),

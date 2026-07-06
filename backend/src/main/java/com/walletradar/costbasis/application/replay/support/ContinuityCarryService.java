@@ -141,6 +141,20 @@ public class ContinuityCarryService {
             BigDecimal basisRemovedFromPosition,
             AssetKey assetKey
     ) {
+        return alignCarryToRemovedBasis(carry, basisRemovedFromPosition, basisRemovedFromPosition, assetKey);
+    }
+
+    /**
+     * ADR-040 Change 2: net-aware variant of {@link #alignCarryToRemovedBasis}. Accepts the actual
+     * net basis removed from the position so the carry's net lane reflects the true net cost that
+     * left the wallet, not a clone of the tax basis.
+     */
+    public CarryTransfer alignCarryToRemovedBasis(
+            CarryTransfer carry,
+            BigDecimal basisRemovedFromPosition,
+            BigDecimal netBasisRemovedFromPosition,
+            AssetKey assetKey
+    ) {
         if (carry == null
                 || basisRemovedFromPosition == null
                 || basisRemovedFromPosition.signum() <= 0) {
@@ -160,12 +174,18 @@ public class ContinuityCarryService {
         BigDecimal avco = coveredQuantity.signum() > 0
                 ? safeDivide(basisRemovedFromPosition, coveredQuantity)
                 : carry.avco();
+        BigDecimal netBasis = netBasisRemovedFromPosition != null ? netBasisRemovedFromPosition : basisRemovedFromPosition;
+        BigDecimal netAvco = coveredQuantity.signum() > 0
+                ? safeDivide(netBasis, coveredQuantity)
+                : carry.netAvco();
         return new CarryTransfer(
                 quantity,
                 coveredQuantity,
                 uncoveredQuantity,
                 basisRemovedFromPosition,
                 avco,
+                netBasis,
+                netAvco,
                 false,
                 assetKey
         );
@@ -250,24 +270,32 @@ public class ContinuityCarryService {
             return reservedPortion;
         }
         BigDecimal orphanBasis = position.totalCostBasisUsd();
+        BigDecimal orphanNetBasis = position.netTotalCostBasisUsd();
         position.setTotalCostBasisUsd(BigDecimal.ZERO);
         position.setPerWalletAvco(null);
+        position.setNetTotalCostBasisUsd(BigDecimal.ZERO);
+        position.setPerWalletNetAvco(null);
         BigDecimal quantity = reservedPortion.quantity() == null ? BigDecimal.ZERO : reservedPortion.quantity();
         BigDecimal covered = reservedPortion.coveredQuantity() == null ? BigDecimal.ZERO : reservedPortion.coveredQuantity();
         BigDecimal uncovered = reservedPortion.uncoveredQuantity() == null ? BigDecimal.ZERO : reservedPortion.uncoveredQuantity();
         BigDecimal updatedBasis = (reservedPortion.costBasisUsd() == null ? BigDecimal.ZERO : reservedPortion.costBasisUsd())
                 .add(orphanBasis, MC);
+        BigDecimal updatedNetBasis = (reservedPortion.netCostBasisUsd() == null ? BigDecimal.ZERO : reservedPortion.netCostBasisUsd())
+                .add(orphanNetBasis, MC);
         if (covered.signum() <= 0 && quantity.signum() > 0 && updatedBasis.signum() > 0) {
             covered = quantity;
             uncovered = BigDecimal.ZERO;
         }
         BigDecimal updatedAvco = covered.signum() > 0 ? updatedBasis.divide(covered, MC) : reservedPortion.avco();
+        BigDecimal updatedNetAvco = covered.signum() > 0 ? updatedNetBasis.divide(covered, MC) : reservedPortion.netAvco();
         return new CarryTransfer(
                 quantity,
                 covered,
                 uncovered,
                 updatedBasis,
                 updatedAvco,
+                updatedNetBasis,
+                updatedNetAvco,
                 reservedPortion.pendingInbound(),
                 reservedPortion.assetKey()
         );
@@ -295,6 +323,7 @@ public class ContinuityCarryService {
         position.setQuantity(nonNegative(position.quantity().subtract(carry.quantity(), MC)));
         position.setUncoveredQuantity(nonNegative(position.uncoveredQuantity().subtract(carry.uncoveredQuantity(), MC)));
         position.setTotalCostBasisUsd(nonNegative(position.totalCostBasisUsd().subtract(carry.costBasisUsd(), MC)));
+        position.setNetTotalCostBasisUsd(nonNegative(position.netTotalCostBasisUsd().subtract(carry.netCostBasisUsd(), MC)));
         genericFlowReplayEngine.recomputePerWalletAvco(position);
     }
 
@@ -313,13 +342,17 @@ public class ContinuityCarryService {
                 && carry.costBasisUsd() != null
                 && carry.costBasisUsd().signum() > 0) {
             BigDecimal orphanBasis = carry.costBasisUsd();
+            BigDecimal orphanNetBasis = carry.netCostBasisUsd() == null ? orphanBasis : carry.netCostBasisUsd();
             BigDecimal avco = safeDivide(orphanBasis, requestedQuantity);
+            BigDecimal netAvco = safeDivide(orphanNetBasis, requestedQuantity);
             return new CarryTransfer(
                     requestedQuantity,
                     requestedQuantity,
                     BigDecimal.ZERO,
                     orphanBasis,
                     avco,
+                    orphanNetBasis,
+                    netAvco,
                     false,
                     assetKey
             );
@@ -331,12 +364,30 @@ public class ContinuityCarryService {
         BigDecimal effectiveCost = effectiveAvco == null
                 ? BigDecimal.ZERO
                 : effectiveCoveredQuantity.multiply(effectiveAvco, MC);
+        BigDecimal effectiveNetAvco = carry.netAvco();
+        BigDecimal effectiveNetCost = effectiveNetAvco == null
+                ? BigDecimal.ZERO
+                : effectiveCoveredQuantity.multiply(effectiveNetAvco, MC);
+        if (effectiveNetCost.signum() == 0
+                && carry.netCostBasisUsd() != null
+                && carry.quantity() != null
+                && carry.quantity().signum() > 0) {
+            effectiveNetCost = carry.netCostBasisUsd().multiply(
+                    effectiveQuantity.divide(carry.quantity(), MC),
+                    MC
+            );
+            effectiveNetAvco = effectiveCoveredQuantity.signum() > 0
+                    ? safeDivide(effectiveNetCost, effectiveCoveredQuantity)
+                    : carry.netAvco();
+        }
         return new CarryTransfer(
                 effectiveQuantity,
                 effectiveCoveredQuantity,
                 effectiveUncoveredQuantity,
                 effectiveCost,
                 effectiveAvco,
+                effectiveNetCost,
+                effectiveNetAvco,
                 false,
                 assetKey
         );
@@ -375,14 +426,11 @@ public class ContinuityCarryService {
         BigDecimal basis = avco == null ? BigDecimal.ZERO : requestedQuantity.multiply(avco, MC);
         BigDecimal covered = basis.signum() > 0 ? requestedQuantity : BigDecimal.ZERO;
         BigDecimal uncovered = requestedQuantity.subtract(covered, MC);
+        // Synthetic earn-product carry: net = tax (no separate reward-discount evidence)
         return new CarryTransfer(
-                requestedQuantity,
-                covered,
-                uncovered,
-                basis,
-                avco,
-                false,
-                assetKey
+                requestedQuantity, covered, uncovered,
+                basis, avco, basis, avco,
+                false, assetKey
         );
     }
 
@@ -400,14 +448,19 @@ public class ContinuityCarryService {
         }
         BigDecimal sliceQuantity = destinationQuantity.min(sourceQuantity);
         BigDecimal sourceBasis = sourceCarry.costBasisUsd() == null ? BigDecimal.ZERO : sourceCarry.costBasisUsd();
+        BigDecimal sourceNetBasis = sourceCarry.netCostBasisUsd() == null ? sourceBasis : sourceCarry.netCostBasisUsd();
         BigDecimal allocatedBasis = sourceBasis.multiply(sliceQuantity.divide(sourceQuantity, MC), MC);
+        BigDecimal allocatedNetBasis = sourceNetBasis.multiply(sliceQuantity.divide(sourceQuantity, MC), MC);
         BigDecimal avco = sliceQuantity.signum() <= 0 ? null : safeDivide(allocatedBasis, sliceQuantity);
+        BigDecimal netAvco = sliceQuantity.signum() <= 0 ? null : safeDivide(allocatedNetBasis, sliceQuantity);
         return new CarryTransfer(
                 sliceQuantity,
                 sliceQuantity,
                 BigDecimal.ZERO,
                 allocatedBasis,
                 avco,
+                allocatedNetBasis,
+                netAvco,
                 false,
                 assetKey
         );
@@ -426,15 +479,15 @@ public class ContinuityCarryService {
                 && sourceCarry.costBasisUsd() != null
                 && sourceCarry.costBasisUsd().signum() > 0) {
             BigDecimal orphanBasis = sourceCarry.costBasisUsd();
+            // ADR-040 Change 2: propagate source net basis (or fall back to tax when absent)
+            BigDecimal orphanNetBasis = sourceCarry.netCostBasisUsd() != null
+                    ? sourceCarry.netCostBasisUsd() : orphanBasis;
             BigDecimal avco = safeDivide(orphanBasis, destinationQuantity);
+            BigDecimal netAvco = safeDivide(orphanNetBasis, destinationQuantity);
             return new CarryTransfer(
-                    destinationQuantity,
-                    destinationQuantity,
-                    BigDecimal.ZERO,
-                    orphanBasis,
-                    avco,
-                    false,
-                    assetKey
+                    destinationQuantity, destinationQuantity, BigDecimal.ZERO,
+                    orphanBasis, avco, orphanNetBasis, netAvco,
+                    false, assetKey
             );
         }
         BigDecimal sourceQuantity = sourceCarry.quantity();
@@ -451,17 +504,15 @@ public class ContinuityCarryService {
         BigDecimal coveredQuantity = destinationQuantity.min(sourceCovered);
         BigDecimal uncoveredQuantity = nonNegative(destinationQuantity.subtract(coveredQuantity, MC));
         BigDecimal costBasisUsd = sourceCarry.costBasisUsd() == null ? BigDecimal.ZERO : sourceCarry.costBasisUsd();
-        BigDecimal avco = coveredQuantity.signum() <= 0
-                ? null
-                : safeDivide(costBasisUsd, coveredQuantity);
+        // ADR-040 Change 2: propagate source net basis (or fall back to tax when absent)
+        BigDecimal netCostBasisUsd = sourceCarry.netCostBasisUsd() != null
+                ? sourceCarry.netCostBasisUsd() : costBasisUsd;
+        BigDecimal avco = coveredQuantity.signum() <= 0 ? null : safeDivide(costBasisUsd, coveredQuantity);
+        BigDecimal netAvco = coveredQuantity.signum() <= 0 ? null : safeDivide(netCostBasisUsd, coveredQuantity);
         return new CarryTransfer(
-                destinationQuantity,
-                coveredQuantity,
-                uncoveredQuantity,
-                costBasisUsd,
-                avco,
-                false,
-                assetKey
+                destinationQuantity, coveredQuantity, uncoveredQuantity,
+                costBasisUsd, avco, netCostBasisUsd, netAvco,
+                false, assetKey
         );
     }
 
@@ -477,25 +528,21 @@ public class ContinuityCarryService {
         if (sourceQuantity == null || sourceQuantity.signum() <= 0) {
             if (sourceCarry.costBasisUsd() != null && sourceCarry.costBasisUsd().signum() > 0) {
                 BigDecimal orphanBasis = sourceCarry.costBasisUsd();
+                // ADR-040 Change 2: propagate source net basis
+                BigDecimal orphanNetBasis = sourceCarry.netCostBasisUsd() != null
+                        ? sourceCarry.netCostBasisUsd() : orphanBasis;
                 BigDecimal avco = safeDivide(orphanBasis, destinationQuantity);
+                BigDecimal netAvco = safeDivide(orphanNetBasis, destinationQuantity);
                 return new CarryTransfer(
-                        destinationQuantity,
-                        destinationQuantity,
-                        BigDecimal.ZERO,
-                        orphanBasis,
-                        avco,
-                        false,
-                        assetKey
+                        destinationQuantity, destinationQuantity, BigDecimal.ZERO,
+                        orphanBasis, avco, orphanNetBasis, netAvco,
+                        false, assetKey
                 );
             }
             return new CarryTransfer(
-                    destinationQuantity,
-                    BigDecimal.ZERO,
-                    destinationQuantity,
-                    BigDecimal.ZERO,
-                    null,
-                    false,
-                    assetKey
+                    destinationQuantity, BigDecimal.ZERO, destinationQuantity,
+                    BigDecimal.ZERO, null, BigDecimal.ZERO, null,
+                    false, assetKey
             );
         }
         BigDecimal sourceCoveredQuantity = sourceCarry.coveredQuantity().min(sourceQuantity);
@@ -505,17 +552,15 @@ public class ContinuityCarryService {
                 : destinationQuantity.multiply(coverageRatio, MC).min(destinationQuantity);
         BigDecimal uncoveredQuantity = nonNegative(destinationQuantity.subtract(coveredQuantity, MC));
         BigDecimal costBasisUsd = sourceCarry.costBasisUsd();
-        BigDecimal avco = coveredQuantity.signum() <= 0
-                ? null
-                : safeDivide(costBasisUsd, coveredQuantity);
+        // ADR-040 Change 2: propagate source net basis
+        BigDecimal netCostBasisUsd = sourceCarry.netCostBasisUsd() != null
+                ? sourceCarry.netCostBasisUsd() : costBasisUsd;
+        BigDecimal avco = coveredQuantity.signum() <= 0 ? null : safeDivide(costBasisUsd, coveredQuantity);
+        BigDecimal netAvco = coveredQuantity.signum() <= 0 ? null : safeDivide(netCostBasisUsd, coveredQuantity);
         return new CarryTransfer(
-                destinationQuantity,
-                coveredQuantity,
-                uncoveredQuantity,
-                costBasisUsd,
-                avco,
-                false,
-                assetKey
+                destinationQuantity, coveredQuantity, uncoveredQuantity,
+                costBasisUsd, avco, netCostBasisUsd, netAvco,
+                false, assetKey
         );
     }
 
@@ -528,8 +573,10 @@ public class ContinuityCarryService {
         BigDecimal coveredQuantity = safeAdd(left == null ? null : left.coveredQuantity(), right == null ? null : right.coveredQuantity());
         BigDecimal uncoveredQuantity = safeAdd(left == null ? null : left.uncoveredQuantity(), right == null ? null : right.uncoveredQuantity());
         BigDecimal costBasisUsd = safeAdd(left == null ? null : left.costBasisUsd(), right == null ? null : right.costBasisUsd());
+        BigDecimal netCostBasisUsd = safeAdd(left == null ? null : left.netCostBasisUsd(), right == null ? null : right.netCostBasisUsd());
         BigDecimal avco = coveredQuantity.signum() <= 0 ? null : safeDivide(costBasisUsd, coveredQuantity);
-        return new CarryTransfer(quantity, coveredQuantity, uncoveredQuantity, costBasisUsd, avco, false, assetKey);
+        BigDecimal netAvco = coveredQuantity.signum() <= 0 ? null : safeDivide(netCostBasisUsd, coveredQuantity);
+        return new CarryTransfer(quantity, coveredQuantity, uncoveredQuantity, costBasisUsd, avco, netCostBasisUsd, netAvco, false, assetKey);
     }
 
     /**
@@ -542,11 +589,32 @@ public class ContinuityCarryService {
             return emptyCarry(assetKey);
         }
         BigDecimal avco = safeDivide(basis, qty);
-        return new CarryTransfer(qty, qty, BigDecimal.ZERO, basis, avco, false, assetKey);
+        // net = tax for explicit/synthetic basis (earn-principal lot override)
+        return new CarryTransfer(qty, qty, BigDecimal.ZERO, basis, avco, basis, avco, false, assetKey);
+    }
+
+    /**
+     * ADR-040 Change 2: net-aware variant for corridor proportional carry. Accepts the actual
+     * net basis removed from the position so the carry's net lane reflects the true net cost
+     * exported (rewards/LP-fees discount is preserved across the corridor).
+     */
+    public CarryTransfer buildExplicitCarryTransfer(
+            BigDecimal qty, BigDecimal basis, BigDecimal netBasis, AssetKey assetKey) {
+        if (qty == null || qty.signum() <= 0 || basis == null || basis.signum() <= 0) {
+            return emptyCarry(assetKey);
+        }
+        BigDecimal avco = safeDivide(basis, qty);
+        BigDecimal effectiveNet = netBasis != null ? netBasis : basis;
+        BigDecimal netAvco = safeDivide(effectiveNet, qty);
+        return new CarryTransfer(qty, qty, BigDecimal.ZERO, basis, avco, effectiveNet, netAvco, false, assetKey);
     }
 
     private CarryTransfer emptyCarry(AssetKey assetKey) {
-        return new CarryTransfer(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, null, false, assetKey);
+        return new CarryTransfer(
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                BigDecimal.ZERO, null, BigDecimal.ZERO, null,
+                false, assetKey
+        );
     }
 
     private BigDecimal safeAdd(BigDecimal left, BigDecimal right) {

@@ -90,6 +90,7 @@ interface TokenFamilyRow {
   readonly isLiveQuote: boolean;
   readonly priceIssue: IssueCode;
   readonly avcoUsd: number;
+  readonly netAvcoUsd: number;
   readonly unrealizedPnlPct: number;
   readonly unrealizedPnlUsd: number;
   readonly realizedPnlUsd: number;
@@ -623,6 +624,7 @@ export class DashboardComponent {
       coveredQuantity: number;
       currentValueUsd: number;
       totalCostBasisUsd: number;
+      totalNetCostBasisUsd: number;
       unrealizedPnlUsd: number;
       realizedPnlUsd: number;
       priceSource: PriceSource | null;
@@ -640,7 +642,8 @@ export class DashboardComponent {
 
     for (const position of this.filteredTokenPositions()) {
       const currentValueUsd = position.marketValueUsd;
-      const totalCostBasisUsd = position.quantity * position.avcoUsd;
+      const totalCostBasisUsd = position.coveredQuantity * position.avcoUsd;
+      const totalNetCostBasisUsd = position.coveredQuantity * position.netAvcoUsd;
       const existing = grouped.get(position.familyIdentity);
       if (existing === undefined) {
         grouped.set(position.familyIdentity, {
@@ -651,6 +654,7 @@ export class DashboardComponent {
           coveredQuantity: position.coveredQuantity,
           currentValueUsd,
           totalCostBasisUsd,
+          totalNetCostBasisUsd,
           unrealizedPnlUsd: position.unrealizedPnlUsd,
           realizedPnlUsd: position.realizedPnlUsd,
           priceSource: position.priceSource,
@@ -672,6 +676,7 @@ export class DashboardComponent {
       existing.coveredQuantity += position.coveredQuantity;
       existing.currentValueUsd += currentValueUsd;
       existing.totalCostBasisUsd += totalCostBasisUsd;
+      existing.totalNetCostBasisUsd += totalNetCostBasisUsd;
       existing.unrealizedPnlUsd += position.unrealizedPnlUsd;
       existing.realizedPnlUsd += position.realizedPnlUsd;
       existing.priceSource = this.pickPriceSource(existing, position);
@@ -690,8 +695,10 @@ export class DashboardComponent {
     return [...grouped.values()]
       .map((group): TokenFamilyRow => {
         const quantity = group.quantity;
+        const coveredQuantity = group.coveredQuantity;
         const priceUsd = quantity === 0 ? 0 : group.currentValueUsd / quantity;
-        const avcoUsd = quantity === 0 ? 0 : group.totalCostBasisUsd / quantity;
+        const avcoUsd = coveredQuantity === 0 ? 0 : group.totalCostBasisUsd / coveredQuantity;
+        const netAvcoUsd = coveredQuantity === 0 ? 0 : group.totalNetCostBasisUsd / coveredQuantity;
         const unrealizedPnlPct = group.totalCostBasisUsd === 0 ? 0 : (group.unrealizedPnlUsd / group.totalCostBasisUsd) * 100;
         return {
           familyIdentity: group.familyIdentity,
@@ -706,6 +713,7 @@ export class DashboardComponent {
           isLiveQuote: group.isLiveQuote,
           priceIssue: group.priceIssue,
           avcoUsd,
+          netAvcoUsd,
           unrealizedPnlPct,
           unrealizedPnlUsd: group.unrealizedPnlUsd,
           realizedPnlUsd: group.realizedPnlUsd,
@@ -1282,7 +1290,12 @@ export class DashboardComponent {
         maximumFractionDigits: 3,
       });
     }
-
+    if (absolute > 0 && absolute < 0.001) {
+      return value.toLocaleString(undefined, {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 8,
+      });
+    }
     return value.toLocaleString(undefined, {
       minimumFractionDigits: 0,
       maximumFractionDigits: 3,
@@ -1342,6 +1355,10 @@ export class DashboardComponent {
     const underlying = asset.valuationUnderlyingSymbol === null ? '' : ` Underlying: ${asset.valuationUnderlyingSymbol}.`;
     const unsupported = asset.unsupportedValuationReason === null ? '' : ` ${asset.unsupportedValuationReason}.`;
     return `Exact price: ${this.formatUsdFull(asset.priceUsd)}. Loaded: ${pricedAt}. Source: ${source}. ${freshness}, ${mode}.${issue}${model}${underlying}${unsupported}`;
+  }
+
+  avcoTooltip(asset: TokenFamilyRow): string {
+    return `Net AVCO: ${this.formatUsdFull(asset.netAvcoUsd)}. Market AVCO: ${this.formatUsdFull(asset.avcoUsd)}.`;
   }
 
   private formatDuration(seconds: number): string {

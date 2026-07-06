@@ -101,6 +101,12 @@ public final class LedgerPointCollector {
         point.setTotalCostBasisAfterUsd(after.totalCostBasisUsd());
         point.setAvcoBeforeUsd(before.perWalletAvco());
         point.setAvcoAfterUsd(after.perWalletAvco());
+        point.setNetTotalCostBasisBeforeUsd(before.netTotalCostBasisUsd());
+        point.setNetTotalCostBasisAfterUsd(after.netTotalCostBasisUsd());
+        point.setNetAvcoBeforeUsd(before.perWalletNetAvco());
+        point.setNetAvcoAfterUsd(after.perWalletNetAvco());
+        point.setNetCostBasisDeltaUsd(delta(after.netTotalCostBasisUsd(), before.netTotalCostBasisUsd()));
+        point.setNetRealisedPnlDeltaUsd(delta(after.totalNetRealisedPnlUsd(), before.totalNetRealisedPnlUsd()));
         point.setQuantityShortfallAfter(after.quantityShortfall());
         BigDecimal qtyAfter = after.quantity() == null ? BigDecimal.ZERO : after.quantity();
         BigDecimal uncovAfter = after.uncoveredQuantity() == null ? BigDecimal.ZERO : after.uncoveredQuantity();

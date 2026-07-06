@@ -36,16 +36,11 @@ class TransferReplayHandlerEarnPrincipalTest {
     private TransferReplayHandler handler;
     private ReplayPendingTransferKeyFactory keyFactory;
     private ReplayExecutionState replayState;
+    private java.util.List<com.walletradar.costbasis.domain.AssetLedgerPoint> ledgerPoints;
 
     @BeforeEach
     void setUp() {
         var assetSupport = new com.walletradar.costbasis.application.replay.support.ReplayAssetSupport();
-        var engine = new GenericFlowReplayEngine();
-        var flowSupport = new ReplayFlowSupport(engine);
-        var carryService = new ContinuityCarryService(engine, flowSupport);
-        keyFactory = new ReplayPendingTransferKeyFactory(assetSupport);
-        var classifier = new ReplayTransferClassifier(keyFactory);
-        var matcher = new ReplayPendingTransferMatcher();
         var cache = mock(com.walletradar.pricing.persistence.HistoricalPriceCacheService.class);
         var orchestrator = mock(com.walletradar.pricing.resolver.external.PriceExternalSourceOrchestrator.class);
         when(orchestrator.prioritizedSources(any())).thenReturn(java.util.List.of(PriceSource.BINANCE));
@@ -59,6 +54,16 @@ class TransferReplayHandlerEarnPrincipalTest {
                 )
         ));
         var marketAuthority = new ReplayMarketAuthority(cache, orchestrator);
+        // FIX B (ADR-043): the engine MUST carry the same market authority so materialize-then-refine
+        // can price the paired EARN inbound at market (permitUncovered=false). Without it the engine
+        // cannot price and the inbound falls back to the deferred-zero boundary path — which is the
+        // production behaviour only when the leg is genuinely unpriceable, not the common case.
+        var engine = new GenericFlowReplayEngine(marketAuthority);
+        var flowSupport = new ReplayFlowSupport(engine);
+        var carryService = new ContinuityCarryService(engine, flowSupport);
+        keyFactory = new ReplayPendingTransferKeyFactory(assetSupport);
+        var classifier = new ReplayTransferClassifier(keyFactory);
+        var matcher = new ReplayPendingTransferMatcher();
         handler = new TransferReplayHandler(
                 flowSupport,
                 carryService,
@@ -67,9 +72,10 @@ class TransferReplayHandlerEarnPrincipalTest {
                 matcher,
                 marketAuthority
         );
+        ledgerPoints = new ArrayList<>();
         replayState = new ReplayExecutionState(
                 new PassThroughCorridorPlan(Map.of(), Map.of()),
-                new LedgerPointCollector("u1", new ArrayList<>(), Instant.now()),
+                new LedgerPointCollector("u1", ledgerPoints, Instant.now()),
                 null,
                 null,
                 null
@@ -92,6 +98,7 @@ class TransferReplayHandlerEarnPrincipalTest {
         earnOut.setWalletAddress("BYBIT:33625378:EARN");
         earnOut.setContinuityCandidate(true);
         earnOut.setCorrelationId("bybit-earn-principal-v1:ae372912");
+        earnOut.setBlockTimestamp(Instant.parse("2026-03-25T10:00:00Z"));
         NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
         flow.setRole(NormalizedLegRole.TRANSFER);
         flow.setAssetSymbol("ETH");
@@ -161,6 +168,7 @@ class TransferReplayHandlerEarnPrincipalTest {
         earnOut.setWalletAddress("BYBIT:33625378:EARN");
         earnOut.setContinuityCandidate(true);
         earnOut.setCorrelationId("bybit-earn-principal-v1:88b50f43");
+        earnOut.setBlockTimestamp(Instant.parse("2026-03-25T10:00:00Z"));
         NormalizedTransaction.Flow outFlow = new NormalizedTransaction.Flow();
         outFlow.setRole(NormalizedLegRole.TRANSFER);
         outFlow.setAssetSymbol("AGLD");
@@ -246,5 +254,127 @@ class TransferReplayHandlerEarnPrincipalTest {
         assertThat(umbrella.quantity()).isEqualByComparingTo("0.151");
         assertThat(umbrella.totalCostBasisUsd()).isGreaterThan(new BigDecimal("400"));
         assertThat(umbrella.uncoveredQuantity()).isLessThan(new BigDecimal("0.02"));
+    }
+
+    /**
+     * FIX B (ADR-043): subscribe with the EARN-side inbound leg replayed BEFORE the paired FUND-side
+     * outbound leg (the production ordering for the LTC defect). Under "materialize-then-refine" the
+     * paired EARN inbound materialises its covered quantity immediately at market (no unconditional
+     * zero-defer), so :EARN inventory is conserved even before the FUND-out carry arrives; the later
+     * authoritative paired carry then REFINES the basis without double-crediting quantity. No
+     * quantityDelta=0 / costBasisDelta>0 ghost is ever produced on :EARN.
+     *
+     * <p>Note: this test drives {@code handler.applyTransfer} directly, so the {@code +0.75}
+     * acquisition ledger point (emitted by the dispatcher at materialize time from its own
+     * before/after snapshot) is not observable here — the invariants are asserted on the resulting
+     * {@link PositionState}. The refine path emits a basis-only CARRY_IN (quantityDelta≈0).</p>
+     */
+    @Test
+    void subscribeInboundFirstMaterialisesQuantityAndBasisWithoutGhost() {
+        AssetKey umbrellaKey = new AssetKey("BYBIT:33625378", null, "SYMBOL:ETH", "ETH", "SYMBOL:ETH");
+        PositionState umbrella = replayState.position(umbrellaKey);
+        umbrella.setQuantity(new BigDecimal("0.76"));
+        umbrella.setTotalCostBasisUsd(new BigDecimal("2280"));
+        umbrella.setUncoveredQuantity(BigDecimal.ZERO);
+        umbrella.setPerWalletAvco(new BigDecimal("3000"));
+
+        AssetKey earnKey = new AssetKey("BYBIT:33625378:EARN", null, "SYMBOL:ETH", "ETH", "SYMBOL:ETH");
+        PositionState earn = replayState.position(earnKey);
+
+        NormalizedTransaction earnIn = earnPrincipalTx("earn-in", "BYBIT:33625378:EARN",
+                "bybit-earn-principal-v1:sub", new BigDecimal("0.75"));
+        handler.applyTransfer(earnIn, earnIn.getFlows().get(0), 0, earn, replayState);
+
+        // Materialize-then-refine: the paired EARN inbound conserves quantity immediately at market,
+        // instead of the #11 unconditional zero-defer that dropped the OPEN-subscribe :EARN leg.
+        assertThat(earn.quantity()).isEqualByComparingTo("0.75");
+        assertThat(earn.uncoveredQuantity()).isZero();
+
+        NormalizedTransaction fundOut = earnPrincipalTx("fund-out", "BYBIT:33625378:FUND",
+                "bybit-earn-principal-v1:sub", new BigDecimal("-0.75"));
+        handler.applyTransfer(fundOut, fundOut.getFlows().get(0), 0, umbrella, replayState);
+
+        // The authoritative paired carry REFINES basis WITHOUT double-crediting quantity (still 0.75).
+        assertThat(earn.quantity()).isEqualByComparingTo("0.75");
+        assertThat(earn.totalCostBasisUsd()).isBetween(new BigDecimal("2200"), new BigDecimal("2300"));
+        assertThat(earn.uncoveredQuantity()).isZero();
+        assertThat(umbrella.quantity()).isEqualByComparingTo("0.01");
+
+        // RC-A demotion preserved: basis is authoritative (no $0-cost dilution), and no qty=0 ghost.
+        assertThat(earnSubPoolGhostPoints()).isEmpty();
+    }
+
+    /**
+     * RC-1 / ADR-041 invariant: a closed subscribe→redeem cycle nets to ZERO on :EARN and restores
+     * the principal (quantity + basis) onto the umbrella, with no qty=0 basis ghost on :EARN.
+     */
+    @Test
+    void closedSubscribeRedeemCycleNetsToZeroOnEarn() {
+        AssetKey umbrellaKey = new AssetKey("BYBIT:33625378", null, "SYMBOL:ETH", "ETH", "SYMBOL:ETH");
+        PositionState umbrella = replayState.position(umbrellaKey);
+        umbrella.setQuantity(new BigDecimal("0.76"));
+        umbrella.setTotalCostBasisUsd(new BigDecimal("2280"));
+        umbrella.setUncoveredQuantity(BigDecimal.ZERO);
+        umbrella.setPerWalletAvco(new BigDecimal("3000"));
+
+        AssetKey earnKey = new AssetKey("BYBIT:33625378:EARN", null, "SYMBOL:ETH", "ETH", "SYMBOL:ETH");
+        PositionState earn = replayState.position(earnKey);
+
+        // Subscribe (corr S): EARN inbound first, then FUND outbound.
+        NormalizedTransaction subEarnIn = earnPrincipalTx("sub-earn-in", "BYBIT:33625378:EARN",
+                "bybit-earn-principal-v1:sub", new BigDecimal("0.75"));
+        handler.applyTransfer(subEarnIn, subEarnIn.getFlows().get(0), 0, earn, replayState);
+        NormalizedTransaction subFundOut = earnPrincipalTx("sub-fund-out", "BYBIT:33625378:FUND",
+                "bybit-earn-principal-v1:sub", new BigDecimal("-0.75"));
+        handler.applyTransfer(subFundOut, subFundOut.getFlows().get(0), 0, umbrella, replayState);
+
+        assertThat(earn.quantity()).isEqualByComparingTo("0.75");
+
+        // Redeem (corr R): EARN outbound first, then FUND inbound.
+        NormalizedTransaction redEarnOut = earnPrincipalTx("red-earn-out", "BYBIT:33625378:EARN",
+                "bybit-earn-principal-v1:red", new BigDecimal("-0.75"));
+        handler.applyTransfer(redEarnOut, redEarnOut.getFlows().get(0), 0, earn, replayState);
+        NormalizedTransaction redFundIn = earnPrincipalTx("red-fund-in", "BYBIT:33625378:FUND",
+                "bybit-earn-principal-v1:red", new BigDecimal("0.75"));
+        handler.applyTransfer(redFundIn, redFundIn.getFlows().get(0), 0, umbrella, replayState);
+
+        assertThat(earn.quantity()).isEqualByComparingTo("0");
+        assertThat(umbrella.quantity()).isEqualByComparingTo("0.76");
+        assertThat(umbrella.totalCostBasisUsd()).isBetween(new BigDecimal("2270"), new BigDecimal("2290"));
+        assertThat(earnSubPoolGhostPoints()).isEmpty();
+    }
+
+    private java.util.List<com.walletradar.costbasis.domain.AssetLedgerPoint> earnSubPoolGhostPoints() {
+        return ledgerPoints.stream()
+                .filter(point -> point.getWalletAddress() != null
+                        && point.getWalletAddress().toUpperCase(java.util.Locale.ROOT).endsWith(":EARN"))
+                .filter(point -> point.getQuantityDelta() != null
+                        && point.getQuantityDelta().signum() == 0)
+                .filter(point -> point.getCostBasisDeltaUsd() != null
+                        && point.getCostBasisDeltaUsd().abs().compareTo(new BigDecimal("0.01")) > 0)
+                .toList();
+    }
+
+    private static NormalizedTransaction earnPrincipalTx(
+            String id,
+            String wallet,
+            String correlationId,
+            BigDecimal quantityDelta
+    ) {
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setId(id);
+        tx.setSource(NormalizedTransactionSource.BYBIT);
+        tx.setType(NormalizedTransactionType.EARN_FLEXIBLE_SAVING);
+        tx.setWalletAddress(wallet);
+        tx.setContinuityCandidate(true);
+        tx.setCorrelationId(correlationId);
+        tx.setBlockTimestamp(Instant.parse("2026-03-25T10:00:00Z"));
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(NormalizedLegRole.TRANSFER);
+        flow.setAssetSymbol("ETH");
+        flow.setAccountRef(wallet);
+        flow.setQuantityDelta(quantityDelta);
+        tx.setFlows(java.util.List.of(flow));
+        return tx;
     }
 }

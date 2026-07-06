@@ -7,6 +7,7 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionReposi
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.ingestion.pipeline.bybit.BybitEarnPrincipalTransferPairer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.mongodb.core.MongoOperations;
@@ -24,9 +25,11 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 /**
  * B-EARN-DEPOSIT-MISSING: synthesises missing EARN-account counterpart for Bybit "On-chain Earn
@@ -44,7 +47,21 @@ import java.util.Locale;
  * {@code bybit-earn-onchain-v1:} corrId to both. The replay engine then routes both legs to the
  * same {@code corr-family} queue, correctly emitting CARRY_OUT at FUND and CARRY_IN at EARN.
  *
- * <p>Idempotent: skips candidates whose synthetic partner already exists by deterministic ID.
+ * <p><b>Existing real EARN credit (no synthesis — link instead).</b> For many subscriptions Bybit
+ * <em>does</em> emit the EARN-side credit, but typed as {@code EARN_FLEXIBLE_SAVING} (or
+ * {@code LENDING_DEPOSIT}) rather than {@code INTERNAL_TRANSFER}. Previously the counterpart probe
+ * only looked at {@code INTERNAL_TRANSFER} EARN legs, so it missed these and synthesised a
+ * <em>duplicate</em> EARN credit — the real {@code EARN_FLEXIBLE_SAVING} credit AND the synthetic
+ * both landed on {@code :EARN}, while only the real one was later redeemed. The synthetic residue
+ * accumulated on {@code :EARN} every cycle (e.g. MNT/USDT/METH phantom pools). The probe now
+ * recognises {@code EARN_FLEXIBLE_SAVING}/{@code LENDING_DEPOSIT} EARN credits, and when one
+ * exists the FUND debit is <em>paired to that real credit</em> with a shared
+ * {@code bybit-earn-principal-v1:} corrId instead of synthesising a duplicate. Replay then carries
+ * the FUND principal basis into the existing {@code :EARN} credit (single key) and a closed
+ * subscribe→redeem cycle nets to zero on {@code :EARN}.
+ *
+ * <p>Idempotent: skips candidates whose synthetic partner already exists by deterministic ID, and
+ * linked legs gain a non-blank corrId so they are no longer FUND orphans on re-run.
  */
 @Service
 @Slf4j
@@ -83,13 +100,23 @@ public class BybitOnChainEarnOrphanRepairService {
             return 0;
         }
 
-        List<NormalizedTransaction> allEarnLegs = loadEarnInternalTransfers();
+        List<NormalizedTransaction> allEarnLegs = loadEarnCreditLegs();
+        // EARN credits already consumed by a FUND debit in this run must not be linked twice.
+        Set<String> consumedEarnIds = new HashSet<>();
 
         Instant now = Instant.now();
         List<NormalizedTransaction> dirty = new ArrayList<>();
         int repaired = 0;
 
         for (NormalizedTransaction fund : candidates) {
+            // Idempotency guard (linking convergence): a FUND debit already carrying a correlation
+            // id was paired/handled on a prior pass and must never be re-processed. loadFundOrphans
+            // already filters blank corrIds at the DB level; this in-memory guard keeps the repair a
+            // true fixed point (second invocation over the same input reports repaired=0) even if a
+            // stamped row is handed back to us, so the LinkingBatchProcessor convergence loop ends.
+            if (fund.getCorrelationId() != null && !fund.getCorrelationId().isBlank()) {
+                continue;
+            }
             NormalizedTransaction.Flow principal = principalFlow(fund);
             if (principal == null || principal.getQuantityDelta() == null
                     || principal.getQuantityDelta().signum() >= 0) {
@@ -106,8 +133,38 @@ public class BybitOnChainEarnOrphanRepairService {
             BigDecimal absQty = principal.getQuantityDelta().abs();
             String assetFamily = assetFamily(principal);
 
-            // Skip if an EARN counterpart already exists (either fully paired or just present).
-            if (earnCounterpartExists(allEarnLegs, uid, assetFamily, absQty, fund.getBlockTimestamp())) {
+            NormalizedTransaction earnCounterpart = findEarnCounterpart(
+                    allEarnLegs, uid, assetFamily, absQty, fund.getBlockTimestamp(), consumedEarnIds);
+            if (earnCounterpart != null) {
+                // A real EARN-side credit (EARN_FLEXIBLE_SAVING / LENDING_DEPOSIT) already records
+                // this subscription: pair the FUND debit to it under a shared earn-principal corrId
+                // rather than synthesising a duplicate EARN credit (which would double-count :EARN).
+                // INTERNAL_TRANSFER counterparts are left untouched (already handled/synthesised
+                // elsewhere) — same skip behaviour as before.
+                if (isLinkableEarnCredit(earnCounterpart)) {
+                    linkEarnPrincipalPair(fund, earnCounterpart, assetFamily, absQty, now);
+                    consumedEarnIds.add(earnCounterpart.getId());
+                    dirty.add(fund);
+                    dirty.add(earnCounterpart);
+                    repaired++;
+                }
+                continue;
+            }
+
+            // Cross-asset ETH-family earn conversion guard. A Bybit on-chain "Earn" subscription in
+            // the ETH family is a cross-asset conversion (e.g. METH/ETH → cmETH): the FUND debit and
+            // the different-symbol EARN credit are fused into a single STAKING_DEPOSIT during
+            // normalization (BybitCanonicalTransactionBuilder#buildCrossSubAccountStakingPair) so the
+            // source family basis carries into the received token. If such a fused pair was NOT formed
+            // (e.g. the credit leg fell just outside the liquid-staking window), synthesising a
+            // SAME-asset EARN credit here would create an irreducible phantom — a standing :EARN
+            // credit with no redemption to ever close it. Skip synthesis in that case. Same-symbol
+            // earn (MNT/LTC/LDO/ARB/LINK/USDT) has no different-symbol same-family credit, so this
+            // guard never fires for it.
+            if (hasCrossAssetFamilyEarnCredit(
+                    allEarnLegs, uid, assetFamily, assetSymbol, fund.getBlockTimestamp(), consumedEarnIds)) {
+                log.info("BYBIT_EARN_ONCHAIN_CROSS_ASSET_SKIP fundId={} symbol={} family={}",
+                        fund.getId(), assetSymbol, assetFamily);
                 continue;
             }
 
@@ -146,6 +203,47 @@ public class BybitOnChainEarnOrphanRepairService {
             log.info("BYBIT_EARN_ONCHAIN_ORPHAN_REPAIR candidates={} repaired={}", candidates.size(), repaired);
         }
         return repaired;
+    }
+
+    /**
+     * Real EARN-side credit recorded by Bybit (not a synthetic INTERNAL_TRANSFER from a prior run).
+     * These are the canonical earn events whose FUND debit we pair to instead of duplicating.
+     */
+    private static boolean isLinkableEarnCredit(NormalizedTransaction earn) {
+        NormalizedTransactionType type = earn.getType();
+        return type == NormalizedTransactionType.EARN_FLEXIBLE_SAVING
+                || type == NormalizedTransactionType.LENDING_DEPOSIT;
+    }
+
+    /**
+     * Pairs the orphan FUND debit with the existing real EARN credit under a deterministic
+     * {@code bybit-earn-principal-v1:} corrId so replay carries FUND principal basis into the
+     * single {@code :EARN} credit (no duplicate, closed cycle nets to zero on {@code :EARN}).
+     */
+    private static void linkEarnPrincipalPair(
+            NormalizedTransaction fund,
+            NormalizedTransaction earn,
+            String assetFamily,
+            BigDecimal absQty,
+            Instant now
+    ) {
+        String corrId = earnPrincipalCorrId(fund.getId(), assetFamily, absQty);
+        fund.setCorrelationId(corrId);
+        fund.setContinuityCandidate(true);
+        fund.setMatchedCounterparty(earn.getWalletAddress());
+        fund.setUpdatedAt(now);
+
+        earn.setCorrelationId(corrId);
+        earn.setContinuityCandidate(true);
+        earn.setMatchedCounterparty(fund.getWalletAddress());
+        earn.setUpdatedAt(now);
+    }
+
+    private static String earnPrincipalCorrId(String fundId, String assetFamily, BigDecimal absQty) {
+        String qtyPlain = absQty.setScale(QTY_SCALE, RoundingMode.HALF_UP)
+                .stripTrailingZeros().toPlainString();
+        String payload = (fundId == null ? "" : fundId) + "|" + assetFamily + "|" + qtyPlain;
+        return BybitEarnPrincipalTransferPairer.EARN_PRINCIPAL_CORRELATION_PREFIX + sha256Hex(payload);
     }
 
     // -------------------------------------------------------------------------
@@ -208,10 +306,20 @@ public class BybitOnChainEarnOrphanRepairService {
                 .toList();
     }
 
-    private List<NormalizedTransaction> loadEarnInternalTransfers() {
+    /**
+     * EARN-side credit legs that may already record a subscription's EARN side. Beyond the
+     * synthetic {@code INTERNAL_TRANSFER} legs, Bybit emits the real EARN credit as
+     * {@code EARN_FLEXIBLE_SAVING} or {@code LENDING_DEPOSIT}; recognising those prevents the
+     * service from synthesising a duplicate EARN credit on top of the real one.
+     */
+    private List<NormalizedTransaction> loadEarnCreditLegs() {
         Query query = Query.query(new Criteria().andOperator(
                 Criteria.where("source").is(NormalizedTransactionSource.BYBIT),
-                Criteria.where("type").is(NormalizedTransactionType.INTERNAL_TRANSFER),
+                Criteria.where("type").in(
+                        NormalizedTransactionType.INTERNAL_TRANSFER,
+                        NormalizedTransactionType.EARN_FLEXIBLE_SAVING,
+                        NormalizedTransactionType.LENDING_DEPOSIT
+                ),
                 Criteria.where("excludedFromAccounting").ne(true)
         ));
         return mongoOperations.find(query, NormalizedTransaction.class).stream()
@@ -230,14 +338,25 @@ public class BybitOnChainEarnOrphanRepairService {
     // Counterpart matching
     // -------------------------------------------------------------------------
 
-    private boolean earnCounterpartExists(
+    /**
+     * Returns the earliest unconsumed EARN-side credit (same uid, family, |qty| ±ε, within ±6h)
+     * for this FUND debit, or {@code null} if none exists. Deterministic: candidates are scanned in
+     * block-timestamp order so the same pairing is chosen on every run regardless of import order.
+     */
+    private NormalizedTransaction findEarnCounterpart(
             List<NormalizedTransaction> earnLegs,
             String uid,
             String assetFamily,
             BigDecimal absQty,
-            Instant fundTimestamp
+            Instant fundTimestamp,
+            Set<String> consumedEarnIds
     ) {
+        NormalizedTransaction best = null;
+        Instant bestTs = null;
         for (NormalizedTransaction earn : earnLegs) {
+            if (consumedEarnIds.contains(earn.getId())) {
+                continue;
+            }
             if (!uid.equals(extractBybitUid(earn.getWalletAddress()))) {
                 continue;
             }
@@ -249,6 +368,58 @@ public class BybitOnChainEarnOrphanRepairService {
                 continue;
             }
             if (flow.getQuantityDelta().subtract(absQty).abs().compareTo(QTY_TOLERANCE) > 0) {
+                continue;
+            }
+            if (fundTimestamp != null && earn.getBlockTimestamp() != null) {
+                Duration drift = Duration.between(fundTimestamp, earn.getBlockTimestamp()).abs();
+                if (drift.compareTo(EARN_COUNTERPART_WINDOW) > 0) {
+                    continue;
+                }
+            }
+            Instant ts = earn.getBlockTimestamp();
+            if (best == null
+                    || (bestTs == null && ts != null)
+                    || (bestTs != null && ts != null && ts.isBefore(bestTs))) {
+                best = earn;
+                bestTs = ts;
+            }
+        }
+        return best;
+    }
+
+    /**
+     * Returns {@code true} when an EARN-side credit of the SAME accounting family but a DIFFERENT
+     * asset symbol exists within ±6h of this FUND debit — i.e. this is a cross-asset ETH-family
+     * earn conversion (METH/ETH → cmETH) rather than a same-asset earn subscription. Quantity is
+     * intentionally NOT gated: cross-asset conversions carry a redemption ratio (e.g. 0.6929746 ETH
+     * → 0.65107655 cmETH), so the two legs do not share a magnitude.
+     */
+    private boolean hasCrossAssetFamilyEarnCredit(
+            List<NormalizedTransaction> earnLegs,
+            String uid,
+            String assetFamily,
+            String assetSymbol,
+            Instant fundTimestamp,
+            Set<String> consumedEarnIds
+    ) {
+        String sourceSymbol = assetSymbol == null ? "" : assetSymbol.trim().toUpperCase(Locale.ROOT);
+        for (NormalizedTransaction earn : earnLegs) {
+            if (consumedEarnIds.contains(earn.getId())) {
+                continue;
+            }
+            if (!uid.equals(extractBybitUid(earn.getWalletAddress()))) {
+                continue;
+            }
+            NormalizedTransaction.Flow flow = principalFlow(earn);
+            if (flow == null || flow.getQuantityDelta() == null || flow.getQuantityDelta().signum() <= 0) {
+                continue;
+            }
+            if (!assetFamily.equals(assetFamily(flow))) {
+                continue;
+            }
+            String candidateSymbol = flow.getAssetSymbol() == null
+                    ? "" : flow.getAssetSymbol().trim().toUpperCase(Locale.ROOT);
+            if (candidateSymbol.isEmpty() || candidateSymbol.equals(sourceSymbol)) {
                 continue;
             }
             if (fundTimestamp != null && earn.getBlockTimestamp() != null) {

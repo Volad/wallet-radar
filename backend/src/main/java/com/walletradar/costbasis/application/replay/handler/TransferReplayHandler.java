@@ -13,6 +13,8 @@ import com.walletradar.costbasis.application.replay.model.TransferPendingKey;
 import com.walletradar.costbasis.application.replay.persistence.LedgerPointCollector;
 import com.walletradar.costbasis.application.replay.state.PositionStore;
 import com.walletradar.costbasis.application.replay.state.ReplayExecutionState;
+import com.walletradar.costbasis.application.replay.support.AccountRefPositionResolver;
+import com.walletradar.costbasis.application.replay.support.BybitCarrySourceResolver;
 import com.walletradar.costbasis.application.replay.support.ContinuityCarryService;
 import com.walletradar.costbasis.application.replay.support.ReplayFlowSupport;
 import com.walletradar.costbasis.application.replay.support.ReplayMarketAuthority;
@@ -24,6 +26,7 @@ import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.ingestion.pipeline.bybit.BybitEarnPrincipalTransferPairer;
+import com.walletradar.pricing.domain.CanonicalAssetCatalog;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -49,6 +52,7 @@ public class TransferReplayHandler {
      * is used to replace the dust carry with the authoritative lot basis.
      */
     private static final java.math.BigDecimal EARN_PRINCIPAL_DUST_BASIS_THRESHOLD = new java.math.BigDecimal("100");
+    private static final BigDecimal EARN_CORRIDOR_INFLATED_BASIS_MULTIPLIER = new BigDecimal("10");
 
     /**
      * B-EARN-BUNDLE: Minimum carry quantity for a partial-leg detection in
@@ -56,6 +60,7 @@ public class TransferReplayHandler {
      * treated as dust and fall through to the full-consume path.
      */
     private static final BigDecimal EARN_BUNDLE_PARTIAL_LEG_THRESHOLD = new BigDecimal("0.001");
+    private static final BigDecimal EARN_PRINCIPAL_PARTIAL_MATCH_THRESHOLD = new BigDecimal("0.00000001");
 
     /**
      * R-1*: Coverage ratio used by {@link #resolveCarrySourcePosition} to decide whether a
@@ -118,7 +123,7 @@ public class TransferReplayHandler {
                 // leg restores it). Mirrors the generic-transfer carry-source fallback used for
                 // the corridor/venue-internal path below.
                 PositionState carrySource = resolveCarrySourcePosition(
-                        transaction, position, replayState, false, flow.getQuantityDelta().abs());
+                        transaction, flow, position, replayState, false, flow.getQuantityDelta().abs());
                 boolean redirectedToInventory = carrySource != position;
                 continuityCarryService.moveToBucket(
                         continuityCarryService.removeTransferCarry(
@@ -212,75 +217,90 @@ public class TransferReplayHandler {
 
         if (flow.getQuantityDelta().signum() < 0) {
             boolean venueInternal = classifier.usesBybitVenueInternalCarryQueue(transaction);
-            // P0-C: Resolve carry source before drain. For :FUND corridor outbounds with zero
-            // inventory, falls back to umbrella BYBIT:UID so the proportional-carry override fires
-            // correctly (ADR-019 Rule 1, B-BYBIT-CORRIDOR-2 sub-pattern A fix).
+            BigDecimal outboundQty = flow.getQuantityDelta().abs();
+            // P0-C: Resolve the primary carry source (encodes the :EARN earn-principal redirect,
+            // corridor sub-pattern A, and the R-1 venue-internal :FUND drain contracts). The drain
+            // plan then layers an umbrella-remainder slice on top when the suffix slice under-covers
+            // the outbound and a distinct umbrella sibling holds the inventory, so the umbrella lot
+            // is both drained AND recorded (the ETH/USDT umbrella phantom fix). Single-slice plans
+            // are behaviour-preserving.
             PositionState carrySource = resolveCarrySourcePosition(
-                    transaction, position, replayState, corridorTransfer, flow.getQuantityDelta().abs());
-            BigDecimal corridorOutboundSliceAvco = corridorTransfer
-                    ? derivePositionAvco(carrySource)
-                    : null;
-            // B-3: capture pre-drain totals for proportional carry basis (ADR-019 Rule 1)
-            BigDecimal preDrainTotalBasis = carrySource.totalCostBasisUsd();
-            BigDecimal preDrainTotalQty   = carrySource.quantity();
-            BigDecimal preDrainAvco = derivePositionAvco(carrySource);
-            CarryTransfer carry = continuityCarryService.removeTransferCarry(
-                    transaction,
-                    flow,
-                    flowIndex,
-                    carrySource,
-                    replayState.passThroughCorridorPlan(),
-                    replayState.reservedPassThroughCarries(),
-                    venueInternal || isBybitEarnPrincipalPaired(transaction)
-            );
-            carry = normalizeBybitEarnProductCarry(
-                    transaction,
-                    flow,
-                    carry,
-                    replayState,
-                    carrySource,
-                    carrySource.assetKey(),
-                    preDrainAvco
-            );
-            // P0-A: For earn-principal outbound, override dust carry with authoritative lot basis.
-            carry = applyEarnPrincipalLotCarryOverride(transaction, flow, carry, carrySource, replayState);
-            // P0-C: For corridor outbound, compute carry basis as proportional slice of total
-            // position cost (ADR-019 Rule 1 amended). Do NOT use perWalletAvco × movedQty — that
-            // divides by covered-qty only and inflates basis when uncoveredQuantity > 0.
-            if (corridorOutboundSliceAvco != null && corridorOutboundSliceAvco.signum() > 0) {
-                BigDecimal movedQty = flow.getQuantityDelta().abs();
-                BigDecimal corridorCarryBasis;
-                if (preDrainTotalQty != null && preDrainTotalQty.signum() > 0
-                        && preDrainTotalBasis != null && preDrainTotalBasis.signum() > 0) {
-                    corridorCarryBasis = preDrainTotalBasis
-                            .multiply(movedQty, MC)
-                            .divide(preDrainTotalQty, MC);
-                } else {
-                    corridorCarryBasis = movedQty.multiply(corridorOutboundSliceAvco, MC);
-                }
-                // Cap: guard against movedQty > preDrainTotalQty edge case (shortfall scenario)
-                if (preDrainTotalBasis != null && preDrainTotalBasis.signum() > 0) {
-                    corridorCarryBasis = corridorCarryBasis.min(preDrainTotalBasis);
-                }
-                carry = continuityCarryService.buildExplicitCarryTransfer(
-                        movedQty, corridorCarryBasis, carrySource.assetKey()
+                    transaction, flow, position, replayState, corridorTransfer, outboundQty);
+            BybitCarrySourceResolver.BybitDrainPlan plan = BybitCarrySourceResolver.plan(
+                    position, carrySource, replayState.positions(), outboundQty);
+            CarryTransfer carry = null;
+            for (BybitCarrySourceResolver.DrainSlice slice : plan.slices()) {
+                CarryTransfer sliceCarry = drainCarrySlice(
+                        transaction,
+                        flow,
+                        flowIndex,
+                        slice.position(),
+                        slice.quantity(),
+                        position,
+                        corridorTransfer,
+                        venueInternal,
+                        replayState
                 );
+                carry = carry == null
+                        ? sliceCarry
+                        : continuityCarryService.mergeCarryTransfers(position.assetKey(), carry, sliceCarry);
             }
             Deque<CarryTransfer> queue = replayState.pendingTransfers().queue(transferKey);
             int pendingInboundIndex = corridorTransfer
                     ? matcher.findUniqueBridgeQueueIndex(queue, true)
+                    : multiSourceEarnPrincipalBundle(transaction)
+                    ? matcher.findUniqueBridgeQueueIndex(queue, true)
                     : matcher.findUniqueCompatibleQueueIndex(queue, true, carry.quantity());
             if (pendingInboundIndex >= 0) {
                 CarryTransfer pendingInbound = matcher.removeQueueElement(queue, pendingInboundIndex);
-                attachLateCarryToPendingInbound(
-                        transaction,
-                        flow,
-                        flowIndex,
-                        replayState.positions(),
-                        pendingInbound,
-                        carry,
-                        replayState.ledgerPointCollector()
-                );
+                if (multiSourceEarnPrincipalBundle(transaction)
+                        && pendingInbound.quantity() != null
+                        && carry.quantity() != null
+                        && pendingInbound.quantity().subtract(carry.quantity(), MC)
+                        .compareTo(EARN_PRINCIPAL_PARTIAL_MATCH_THRESHOLD) > 0) {
+                    BigDecimal fullProvisional = pendingInbound.provisionalBasisUsd() != null
+                            ? pendingInbound.provisionalBasisUsd() : BigDecimal.ZERO;
+                    BigDecimal scaledProvisional = pendingInbound.quantity().signum() > 0
+                            ? fullProvisional.multiply(
+                            carry.quantity().divide(pendingInbound.quantity(), MC), MC)
+                            : BigDecimal.ZERO;
+                    BigDecimal remainingProvisional = fullProvisional.subtract(scaledProvisional, MC);
+                    CarryTransfer slicedForAttach = new CarryTransfer(
+                            carry.quantity(),
+                            BigDecimal.ZERO,
+                            carry.quantity(),
+                            BigDecimal.ZERO,
+                            null,
+                            BigDecimal.ZERO,
+                            null,
+                            true,
+                            pendingInbound.assetKey(),
+                            scaledProvisional,
+                            pendingInbound.sourceFlowRef(),
+                            pendingInbound.materialized()
+                    );
+                    attachLateCarryToPendingInbound(
+                            transaction,
+                            flow,
+                            flowIndex,
+                            replayState.positions(),
+                            slicedForAttach,
+                            carry,
+                            replayState.ledgerPointCollector()
+                    );
+                    BigDecimal remainingQty = pendingInbound.quantity().subtract(carry.quantity(), MC);
+                    queue.addFirst(pendingInbound.withReducedQuantityAndProvisional(remainingQty, remainingProvisional));
+                } else {
+                    attachLateCarryToPendingInbound(
+                            transaction,
+                            flow,
+                            flowIndex,
+                            replayState.positions(),
+                            pendingInbound,
+                            carry,
+                            replayState.ledgerPointCollector()
+                    );
+                }
                 if (queue.isEmpty()) {
                     replayState.pendingTransfers().remove(transferKey);
                 }
@@ -293,32 +313,92 @@ public class TransferReplayHandler {
         Deque<CarryTransfer> queue = replayState.pendingTransfers().find(transferKey);
         int carryIndex = corridorTransfer
                 ? matcher.findUniqueBridgeQueueIndex(queue, false)
+                : multiSourceEarnPrincipalBundle(transaction)
+                ? matcher.findUniqueBridgeQueueIndex(queue, false)
                 : matcher.findUniqueCompatibleQueueIndex(queue, false, flow.getQuantityDelta().abs());
         if (carryIndex >= 0) {
+            if (multiSourceEarnPrincipalBundle(transaction) && !corridorTransfer) {
+                BigDecimal remaining = flow.getQuantityDelta().abs();
+                while (remaining.signum() > 0) {
+                    int nextCarryIndex = matcher.findUniqueBridgeQueueIndex(queue, false);
+                    if (nextCarryIndex < 0) {
+                        break;
+                    }
+                    CarryTransfer carry = matcher.removeQueueElement(queue, nextCarryIndex);
+                    BigDecimal inboundQuantity = remaining.min(carry.quantity());
+                    CarryTransfer effectiveCarry = continuityCarryService.internalAccountInboundCarry(
+                            carry,
+                            inboundQuantity,
+                            position.assetKey()
+                    );
+                    flowSupport.restoreToPosition(
+                            inboundQuantity,
+                            position,
+                            flowSupport.pegCappedStablecoinCarryBasis(
+                                    position.assetKey(),
+                                    inboundCoveredQuantity(inboundQuantity, effectiveCarry),
+                                    effectiveCarry.costBasisUsd()),
+                            flowSupport.pegCappedStablecoinCarryBasis(
+                                    position.assetKey(),
+                                    inboundCoveredQuantity(inboundQuantity, effectiveCarry),
+                                    effectiveCarry.netCostBasisUsd()),
+                            effectiveCarry.uncoveredQuantity(),
+                            effectiveCarry.avco()
+                    );
+                    continuityCarryService.reservePassThroughCarryIfPlanned(
+                            transaction,
+                            flowIndex,
+                            effectiveCarry,
+                            replayState.passThroughCorridorPlan(),
+                            replayState.reservedPassThroughCarries()
+                    );
+                    remaining = remaining.subtract(inboundQuantity, MC);
+                }
+                if (queue.isEmpty()) {
+                    replayState.pendingTransfers().remove(transferKey);
+                }
+                if (remaining.signum() <= 0) {
+                    return flowSupport.continuityBasisEffect(transaction, flow);
+                }
+                NormalizedTransaction.Flow remainderFlow = flowWithQuantity(flow, remaining);
+                enqueuePendingInbound(transaction, remainderFlow, flowIndex, position, replayState, transferKey);
+                return flowSupport.continuityBasisEffect(transaction, flow);
+            }
             CarryTransfer carry = matcher.removeQueueElement(queue, carryIndex);
-            carry = normalizeBybitEarnProductCarry(
-                    transaction,
-                    flow,
-                    carry,
-                    replayState,
-                    position,
-                    position.assetKey(),
-                    derivePositionAvco(position)
-            );
+            // RC-A (ADR-043): a matched earn-principal leg's queued paired carry is the SOLE
+            // authoritative basis source. The AVCO-re-derivation fallbacks
+            // (normalizeBybitEarnProductCarry / backfillEarnPrincipalInboundCarry) are demoted to
+            // fire ONLY when NO paired carry proves the basis (open/unredeemed position or a genuine
+            // unpaired boundary — those never reach this matched branch). Never inject $0-cost or
+            // market-derived quantity on a redeem when the paired subscribe carry is present.
+            boolean pairedCarryAuthoritative = isBybitEarnPrincipalPaired(transaction);
+            if (!pairedCarryAuthoritative) {
+                carry = normalizeBybitEarnProductCarry(
+                        transaction,
+                        flow,
+                        carry,
+                        replayState,
+                        position,
+                        position.assetKey(),
+                        derivePositionAvco(position)
+                );
+            }
             BigDecimal inboundQuantity = flow.getQuantityDelta().abs();
             boolean venueStyleInbound = classifier.usesBybitVenueInternalCarryQueue(transaction)
-                    || isBybitEarnPrincipalPaired(transaction);
+                    || pairedCarryAuthoritative;
             CarryTransfer effectiveCarry = venueStyleInbound
                     ? continuityCarryService.internalAccountInboundCarry(carry, inboundQuantity, position.assetKey())
                     : continuityCarryService.sliceCarryTransfer(carry, inboundQuantity, position.assetKey());
-            effectiveCarry = backfillEarnPrincipalInboundCarry(
-                    transaction,
-                    flow,
-                    inboundQuantity,
-                    position,
-                    effectiveCarry,
-                    replayState
-            );
+            if (!pairedCarryAuthoritative) {
+                effectiveCarry = backfillEarnPrincipalInboundCarry(
+                        transaction,
+                        flow,
+                        inboundQuantity,
+                        position,
+                        effectiveCarry,
+                        replayState
+                );
+            }
             // U-3: a matched same-asset continuity inbound (CARRY_IN / REALLOCATE_IN / cross-denomination
             // vault-share→underlying restore such as a VAULT_WITHDRAW / LENDING_WITHDRAW) must not let a
             // USD stablecoin inherit per-unit basis above the $1 peg. ERC4626 / lending share-rate
@@ -328,10 +408,16 @@ public class TransferReplayHandler {
                     position.assetKey(),
                     inboundCoveredQuantity(flow.getQuantityDelta().abs(), effectiveCarry),
                     effectiveCarry.costBasisUsd());
+            // ADR-040 Change 2: apply same stablecoin cap to net lane
+            BigDecimal cappedNetBasis = flowSupport.pegCappedStablecoinCarryBasis(
+                    position.assetKey(),
+                    inboundCoveredQuantity(flow.getQuantityDelta().abs(), effectiveCarry),
+                    effectiveCarry.netCostBasisUsd());
             flowSupport.restoreToPosition(
                     flow.getQuantityDelta().abs(),
                     position,
                     cappedInboundBasis,
+                    cappedNetBasis,
                     effectiveCarry.uncoveredQuantity(),
                     effectiveCarry.avco()
             );
@@ -370,6 +456,112 @@ public class TransferReplayHandler {
 
         enqueuePendingInbound(transaction, flow, flowIndex, position, replayState, transferKey);
         return flowSupport.continuityBasisEffect(transaction, flow);
+    }
+
+    /**
+     * Drains {@code sliceQty} from a single planned position and returns the carry it released,
+     * applying ADR-019 Rule 1 proportional/explicit basis against THAT position. Reproduces the
+     * legacy single-source carry-building (venue/earn-principal coverage preservation, earn-principal
+     * lot-basis override, corridor proportional slice) but parameterised by the drained position and
+     * its slice quantity, so a multi-slice waterfall computes each slice's basis from its own pool.
+     *
+     * <p><b>Drain-emission completeness.</b> When the drained position is NOT the dispatcher's flow
+     * position (an umbrella remainder slice, or a redirect such as corridor sub-pattern A), this
+     * method records the {@code CARRY_OUT}/{@code REALLOCATE_OUT} ledger point at the drain site via
+     * {@link ReplayExecutionState#ledgerPointCollector()} — generalising the blessed
+     * {@code attachLateCarryToPendingInbound} pattern of recording against a non-flow position.
+     * Otherwise it emits nothing: the dispatcher's outer {@code record(flowPosition,...)} captures
+     * the flow-position slice (and is suppressed by {@code before.sameAs(after)} when the flow
+     * position is untouched). Σ|quantityDelta| over the emitted CARRY_OUT points therefore equals the
+     * outbound quantity (modulo a genuine shortfall on the last slice).
+     */
+    private CarryTransfer drainCarrySlice(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow,
+            int flowIndex,
+            PositionState drainedPosition,
+            BigDecimal sliceQty,
+            PositionState flowPosition,
+            boolean corridorTransfer,
+            boolean venueInternal,
+            ReplayExecutionState replayState
+    ) {
+        NormalizedTransaction.Flow sliceFlow = sliceQty != null
+                && sliceQty.compareTo(flow.getQuantityDelta().abs()) == 0
+                ? flow
+                : flowSupport.copyFlowWithQuantity(flow, sliceQty);
+        BigDecimal movedQty = sliceFlow.getQuantityDelta().abs();
+        PositionSnapshot before = flowSupport.snapshot(drainedPosition);
+
+        BigDecimal corridorOutboundSliceAvco = corridorTransfer ? derivePositionAvco(drainedPosition) : null;
+        // B-3: capture pre-drain totals for proportional carry basis (ADR-019 Rule 1)
+        BigDecimal preDrainTotalBasis = drainedPosition.totalCostBasisUsd();
+        BigDecimal preDrainNetTotalBasis = drainedPosition.netTotalCostBasisUsd();
+        BigDecimal preDrainTotalQty = drainedPosition.quantity();
+        BigDecimal preDrainAvco = derivePositionAvco(drainedPosition);
+        CarryTransfer carry = continuityCarryService.removeTransferCarry(
+                transaction,
+                sliceFlow,
+                flowIndex,
+                drainedPosition,
+                replayState.passThroughCorridorPlan(),
+                replayState.reservedPassThroughCarries(),
+                venueInternal || isBybitEarnPrincipalPaired(transaction)
+        );
+        carry = normalizeBybitEarnProductCarry(
+                transaction,
+                sliceFlow,
+                carry,
+                replayState,
+                drainedPosition,
+                drainedPosition.assetKey(),
+                preDrainAvco
+        );
+        // P0-A: For earn-principal outbound, override dust carry with authoritative lot basis.
+        carry = applyEarnPrincipalLotCarryOverride(transaction, sliceFlow, carry, drainedPosition, replayState);
+        // P0-C: For corridor outbound, compute carry basis as a proportional slice of total position
+        // cost (ADR-019 Rule 1 amended). Do NOT use perWalletAvco × movedQty — that divides by
+        // covered-qty only and inflates basis when uncoveredQuantity > 0.
+        if (corridorOutboundSliceAvco != null && corridorOutboundSliceAvco.signum() > 0) {
+            BigDecimal corridorCarryBasis;
+            BigDecimal corridorNetCarryBasis;
+            if (preDrainTotalQty != null && preDrainTotalQty.signum() > 0
+                    && preDrainTotalBasis != null && preDrainTotalBasis.signum() > 0) {
+                corridorCarryBasis = preDrainTotalBasis
+                        .multiply(movedQty, MC)
+                        .divide(preDrainTotalQty, MC);
+                // ADR-040 Change 2: proportional net slice mirrors tax computation
+                BigDecimal effectiveNetBasis = preDrainNetTotalBasis != null
+                        ? preDrainNetTotalBasis : preDrainTotalBasis;
+                corridorNetCarryBasis = effectiveNetBasis
+                        .multiply(movedQty, MC)
+                        .divide(preDrainTotalQty, MC);
+            } else {
+                corridorCarryBasis = movedQty.multiply(corridorOutboundSliceAvco, MC);
+                corridorNetCarryBasis = corridorCarryBasis;
+            }
+            // Cap: guard against movedQty > preDrainTotalQty edge case (shortfall scenario)
+            if (preDrainTotalBasis != null && preDrainTotalBasis.signum() > 0) {
+                corridorCarryBasis = corridorCarryBasis.min(preDrainTotalBasis);
+                corridorNetCarryBasis = corridorNetCarryBasis.min(corridorCarryBasis);
+            }
+            carry = continuityCarryService.buildExplicitCarryTransfer(
+                    movedQty, corridorCarryBasis, corridorNetCarryBasis, drainedPosition.assetKey()
+            );
+        }
+        if (drainedPosition != flowPosition
+                && !drainedPosition.assetKey().equals(flowPosition.assetKey())) {
+            replayState.ledgerPointCollector().record(
+                    transaction,
+                    sliceFlow,
+                    flowIndex,
+                    drainedPosition.assetKey(),
+                    before,
+                    drainedPosition,
+                    flowSupport.continuityBasisEffect(transaction, sliceFlow)
+            );
+        }
+        return carry;
     }
 
     /**
@@ -427,8 +619,17 @@ public class TransferReplayHandler {
             com.walletradar.costbasis.application.replay.model.PendingTransferKey key
     ) {
         FlowRef sourceFlowRef = flowSupport.flowRef(transaction, flowIndex);
+        // FIX B (ADR-043 amendment): materialize-then-refine. For a paired earn-principal inbound we
+        // still materialize covered quantity + basis at market first (permitUncovered=false), then
+        // let the later authoritative paired CARRY_OUT REFINE the basis in attachLateCarryToPendingInbound
+        // (no double-credit of quantity). Only when materialization genuinely cannot price the leg
+        // (unpriced boundary → Optional.empty) do we defer a zero-quantity pending inbound whose
+        // quantity is restored by the matched-carry branch when the FUND/UTA out arrives first.
+        // This conserves quantity for the OPEN-subscribe path while keeping the RC-A basis demotion
+        // authoritative, and unblocks the QUANTITY-CONSERVATION regression that the #11 unconditional
+        // zero-defer introduced.
         boolean permitUncovered = !classifier.usesBybitVenueInternalCarryQueue(transaction)
-                && !isBybitEarnPrincipalPaired(transaction);
+                || isBybitEarnPrincipalPaired(transaction);
         Optional<BigDecimal> provisionalBasis = flowSupport.materializePendingInbound(
                 transaction,
                 flow,
@@ -437,11 +638,14 @@ public class TransferReplayHandler {
         );
         if (provisionalBasis.isEmpty()) {
             if (isBybitEarnPrincipalPaired(transaction)) {
+                // Issue 2 (ADR-043): the leg could not be priced at enqueue time, so its quantity was
+                // NOT added to the position. Queue an UNMATERIALIZED deferred pending inbound so the
+                // later authoritative paired CARRY_OUT materializes the quantity (LTC :EARN 0.75 @
+                // $41.54) instead of the refine-only path dropping it.
                 replayState.pendingTransfers().queue(key)
-                        .addLast(CarryTransfer.pendingInbound(
+                        .addLast(CarryTransfer.pendingInboundUnmaterialized(
                                 flow.getQuantityDelta().abs(),
                                 position.assetKey(),
-                                BigDecimal.ZERO,
                                 sourceFlowRef
                         ));
             }
@@ -507,13 +711,7 @@ public class TransferReplayHandler {
         if (carryIndex >= 0) {
             CarryTransfer carry = matcher.removeQueueElement(queue, carryIndex);
             CarryTransfer effectiveCarry = continuityCarryService.bridgeInboundCarry(carry, flow.getQuantityDelta().abs(), position.assetKey());
-            flowSupport.restoreToPosition(
-                    flow.getQuantityDelta().abs(),
-                    position,
-                    effectiveCarry.costBasisUsd(),
-                    effectiveCarry.uncoveredQuantity(),
-                    effectiveCarry.avco()
-            );
+            flowSupport.restoreToPosition(effectiveCarry, position);
             continuityCarryService.reservePassThroughCarryIfPlanned(
                     transaction,
                     flowIndex,
@@ -584,13 +782,7 @@ public class TransferReplayHandler {
                     flow.getQuantityDelta().abs(),
                     position.assetKey()
             );
-            flowSupport.restoreToPosition(
-                    flow.getQuantityDelta().abs(),
-                    position,
-                    effectiveCarry.costBasisUsd(),
-                    effectiveCarry.uncoveredQuantity(),
-                    effectiveCarry.avco()
-            );
+            flowSupport.restoreToPosition(effectiveCarry, position);
             if (queue.isEmpty()) {
                 replayState.pendingTransfers().remove(settlementKey);
             }
@@ -735,8 +927,8 @@ public class TransferReplayHandler {
                     BigDecimal remainingProvisional = fullProvisional.subtract(scaledProvisional, MC);
                     CarryTransfer slicedForAttach = new CarryTransfer(
                             carry.quantity(), BigDecimal.ZERO, carry.quantity(),
-                            BigDecimal.ZERO, null, true,
-                            pendingInbound.assetKey(), scaledProvisional,
+                            BigDecimal.ZERO, null, null, null,
+                            true, pendingInbound.assetKey(), scaledProvisional,
                             pendingInbound.sourceFlowRef()
                     );
                     attachLateCarryToPendingInbound(
@@ -786,13 +978,7 @@ public class TransferReplayHandler {
                     takeQty,
                     position.assetKey()
             );
-            flowSupport.restoreToPosition(
-                    takeQty,
-                    position,
-                    effectiveCarry.costBasisUsd(),
-                    effectiveCarry.uncoveredQuantity(),
-                    effectiveCarry.avco()
-            );
+            flowSupport.restoreToPosition(effectiveCarry, position);
             continuityCarryService.reservePassThroughCarryIfPlanned(
                     transaction,
                     flowIndex,
@@ -817,13 +1003,7 @@ public class TransferReplayHandler {
                 BigDecimal takeQty = remaining.min(carry.quantity());
                 CarryTransfer effectiveCarry = continuityCarryService.sliceCarryTransfer(
                         carry, takeQty, position.assetKey());
-                flowSupport.restoreToPosition(
-                        takeQty,
-                        position,
-                        effectiveCarry.costBasisUsd(),
-                        effectiveCarry.uncoveredQuantity(),
-                        effectiveCarry.avco()
-                );
+                flowSupport.restoreToPosition(effectiveCarry, position);
                 continuityCarryService.reservePassThroughCarryIfPlanned(
                         transaction,
                         flowIndex,
@@ -931,10 +1111,21 @@ public class TransferReplayHandler {
             costBasisToRestore = vaultWithdrawQuantityRatioBasis(carry, flow);
         }
 
+        // ADR-040 Change 2: apply same scaling ratio to net lane
+        BigDecimal netCostBasisToRestore;
+        if (carry.costBasisUsd() != null && carry.costBasisUsd().signum() > 0
+                && costBasisToRestore.compareTo(carry.costBasisUsd()) != 0) {
+            BigDecimal netSrc = carry.netCostBasisUsd() != null ? carry.netCostBasisUsd() : carry.costBasisUsd();
+            BigDecimal ratio = costBasisToRestore.divide(carry.costBasisUsd(), MC);
+            netCostBasisToRestore = netSrc.multiply(ratio, MC);
+        } else {
+            netCostBasisToRestore = carry.netCostBasisUsd() != null ? carry.netCostBasisUsd() : costBasisToRestore;
+        }
         flowSupport.restoreToPosition(
                 flow.getQuantityDelta().abs(),
                 position,
                 costBasisToRestore,
+                netCostBasisToRestore,
                 carry.uncoveredQuantity(),
                 carry.avco()
         );
@@ -974,6 +1165,7 @@ public class TransferReplayHandler {
                 flow.getQuantityDelta().abs(),
                 position,
                 carry.costBasisUsd(),
+                carry.netCostBasisUsd(),
                 carry.uncoveredQuantity(),
                 carry.avco()
         );
@@ -1044,6 +1236,7 @@ public class TransferReplayHandler {
                 flow.getQuantityDelta().abs(),
                 position,
                 carry.costBasisUsd(),
+                carry.netCostBasisUsd(),
                 carry.uncoveredQuantity(),
                 carry.avco()
         );
@@ -1118,6 +1311,7 @@ public class TransferReplayHandler {
                 flow.getQuantityDelta().abs(),
                 position,
                 carry.costBasisUsd(),
+                carry.netCostBasisUsd(),
                 carry.uncoveredQuantity(),
                 carry.avco()
         );
@@ -1134,10 +1328,52 @@ public class TransferReplayHandler {
     ) {
         PositionState destination = positions.position(pendingInbound.assetKey());
         PositionSnapshot before = flowSupport.snapshot(destination);
+        // FIX B (ADR-043 amendment): HEAD "materialize-then-refine" late-attach. The pending inbound
+        // was materialized at enqueue time (covered quantity + provisional basis) when priceable, so
+        // this path only REFINES the basis with the authoritative paired carry via
+        // applyAuthoritativeLateInboundCarryBasis — it must NOT re-add pendingInbound.quantity()
+        // (that would double-credit quantity). The prior #11 paired branch that unconditionally
+        // re-added quantity relied on an always-deferred zero inbound; that combined with the
+        // upstream cross-event mis-pairing dropped the OPEN-subscribe :EARN inbound entirely.
         CarryTransfer effectiveCarry = classifier.usesBybitVenueInternalCarryQueue(transaction)
                 || isBybitEarnPrincipalPaired(transaction)
                 ? continuityCarryService.internalAccountInboundCarry(carry, pendingInbound.quantity(), pendingInbound.assetKey())
                 : continuityCarryService.sliceCarryTransfer(carry, pendingInbound.quantity(), pendingInbound.assetKey());
+        if (!pendingInbound.materialized()) {
+            // Issue 2 (ADR-043): the pending inbound was DEFERRED unmaterialized — its quantity was
+            // never added to the destination (materializePendingInbound could not price the unpriced
+            // boundary leg → Optional.empty). The authoritative paired carry now supplies both quantity
+            // AND basis, so MATERIALIZE it onto the destination (LTC :EARN 0.75 @ $41.54) instead of
+            // the refine-only path that would drop the quantity. Conservation-safe: this quantity was
+            // already drained from the paired FUND/UTA source (gated on isBybitEarnPrincipalPaired via
+            // the enqueue defer branch) — it cannot resurrect an inbound-only phantom.
+            flowSupport.restoreToPosition(
+                    effectiveCarry.quantity(),
+                    destination,
+                    flowSupport.pegFlooredStablecoinCarryBasis(
+                            destination.assetKey(),
+                            effectiveCarry.coveredQuantity(),
+                            effectiveCarry.costBasisUsd()
+                    ),
+                    effectiveCarry.netCostBasisUsd(),
+                    effectiveCarry.uncoveredQuantity(),
+                    effectiveCarry.avco()
+            );
+            flowSupport.recomputePerWalletAvco(destination);
+            if (effectiveCarry.avco() != null && destination.uncoveredQuantity().signum() == 0) {
+                flowSupport.resolveTemporaryUnresolved(destination);
+            }
+            ledgerPointCollector.record(
+                    transaction,
+                    flow,
+                    flowIndex,
+                    destination.assetKey(),
+                    before,
+                    destination,
+                    AssetLedgerPoint.BasisEffect.CARRY_IN
+            );
+            return;
+        }
         // Cycle/19: resolve the full carry quantity against the pending inbound's uncovered
         // portion — the carry represents the actual transfer and its covered portion provides
         // real basis. The uncovered portion from the carry stays uncovered at the destination.
@@ -1159,6 +1395,12 @@ public class TransferReplayHandler {
                         destination.assetKey(),
                         effectiveCarry.coveredQuantity(),
                         effectiveCarry.costBasisUsd()
+                ),
+                // ADR-040 Change 2: net lane gets the floored net carry basis, not tax
+                flowSupport.pegFlooredStablecoinCarryBasis(
+                        destination.assetKey(),
+                        effectiveCarry.coveredQuantity(),
+                        effectiveCarry.netCostBasisUsd()
                 )
         );
         flowSupport.recomputePerWalletAvco(destination);
@@ -1208,6 +1450,12 @@ public class TransferReplayHandler {
                         destination.assetKey(),
                         effectiveCarry.coveredQuantity(),
                         effectiveCarry.costBasisUsd()
+                ),
+                // ADR-040 Change 2: net lane
+                flowSupport.pegFlooredStablecoinCarryBasis(
+                        destination.assetKey(),
+                        effectiveCarry.coveredQuantity(),
+                        effectiveCarry.netCostBasisUsd()
                 )
         );
         flowSupport.recomputePerWalletAvco(destination);
@@ -1259,6 +1507,12 @@ public class TransferReplayHandler {
                         destination.assetKey(),
                         effectiveCarry.coveredQuantity(),
                         effectiveCarry.costBasisUsd()
+                ),
+                // ADR-040 Change 2: net lane
+                flowSupport.pegFlooredStablecoinCarryBasis(
+                        destination.assetKey(),
+                        effectiveCarry.coveredQuantity(),
+                        effectiveCarry.netCostBasisUsd()
                 )
         );
         flowSupport.recomputePerWalletAvco(destination);
@@ -1290,17 +1544,30 @@ public class TransferReplayHandler {
                 || inboundQuantity.signum() <= 0) {
             return effectiveCarry;
         }
-        BigDecimal cost = effectiveCarry.costBasisUsd() == null ? BigDecimal.ZERO : effectiveCarry.costBasisUsd();
-        if (cost.signum() > 0) {
+        BigDecimal fallbackAvco = resolveEarnPrincipalFallbackAvco(transaction, flow, position, replayState);
+        if (fallbackAvco == null || fallbackAvco.signum() <= 0) {
             return effectiveCarry;
         }
-        BigDecimal avco = resolveEarnPrincipalFallbackAvco(transaction, flow, position, replayState);
-        return continuityCarryService.syntheticBybitEarnProductCarry(
-                flow,
-                inboundQuantity,
-                position.assetKey(),
-                avco
-        );
+        BigDecimal authoritativeBasis = inboundQuantity.multiply(fallbackAvco, MC);
+        BigDecimal cost = effectiveCarry.costBasisUsd() == null ? BigDecimal.ZERO : effectiveCarry.costBasisUsd();
+        if (cost.signum() <= 0) {
+            return continuityCarryService.syntheticBybitEarnProductCarry(
+                    flow,
+                    inboundQuantity,
+                    position.assetKey(),
+                    fallbackAvco
+            );
+        }
+        if (flow != null
+                && CanonicalAssetCatalog.isPeggedNative(flow.getAssetSymbol())
+                && cost.compareTo(authoritativeBasis.multiply(EARN_CORRIDOR_INFLATED_BASIS_MULTIPLIER, MC)) > 0) {
+            return continuityCarryService.buildExplicitCarryTransfer(
+                    inboundQuantity,
+                    authoritativeBasis,
+                    position.assetKey()
+            );
+        }
+        return effectiveCarry;
     }
 
     /**
@@ -1361,6 +1628,10 @@ public class TransferReplayHandler {
                 && !transaction.getWalletAddress().toUpperCase(Locale.ROOT).endsWith(":EARN"));
     }
 
+    private static boolean multiSourceEarnPrincipalBundle(NormalizedTransaction transaction) {
+        return isBybitEarnPrincipalPaired(transaction);
+    }
+
     /**
      * Resolves the position from which carry basis should be drained for an outbound transfer.
      *
@@ -1379,12 +1650,23 @@ public class TransferReplayHandler {
      *       carrying ~$0.
      * </ul>
      *
+     *   <li><b>accountRef sub-account (ADR-042)</b> — when the flow carries an explicit
+     *       {@code accountRef} naming a {@code :FUND}/{@code :UTA}/{@code :EARN} sub-account that
+     *       already exists with enough inventory to cover the leg, drain that named sub-position.
+     *       This is the corridor carry/drain source selection: the collapsed flow-position KEY is
+     *       unchanged, only the drain source is redirected. It runs first and keys purely on
+     *       {@code accountRef} + inventory (never on counterparty/type/correlationId), so a
+     *       self-funded corridor-out (RC-9) is structurally immune — it already drains its
+     *       {@code :FUND} pool and the redirect returns that same position.
+     * </ul>
+     *
      * @param outboundQuantity absolute moved quantity of the outbound leg, used to decide whether
      *                         a candidate source actually covers the transfer (dust-safe); may be
      *                         {@code null} for callers that do not perform coverage-based redirect.
      */
     private static PositionState resolveCarrySourcePosition(
             NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow,
             PositionState flowPosition,
             ReplayExecutionState replayState,
             boolean isCorridorTransfer,
@@ -1392,6 +1674,19 @@ public class TransferReplayHandler {
     ) {
         if (transaction == null || flowPosition == null || replayState == null) {
             return flowPosition;
+        }
+        // ADR-042: honour flow.accountRef — prefer the existing inventory-bearing sub-account the
+        // flow names when it can cover the outbound. Coverage + existence gated, so plain collapsed
+        // FUND↔UTA legs whose inventory sits on the umbrella (RC-2) find no covering :FUND
+        // sub-position and keep netting on the umbrella.
+        AssetKey accountRefKey = AccountRefPositionResolver.resolveInventoryBearingAccountRefKey(
+                flowPosition.assetKey(),
+                flow == null ? null : flow.getAccountRef(),
+                replayState.positions().asMap(),
+                outboundQuantity
+        );
+        if (!accountRefKey.equals(flowPosition.assetKey())) {
+            return replayState.position(accountRefKey);
         }
         String wallet = transaction.getWalletAddress();
         if (wallet == null) {
@@ -1423,21 +1718,18 @@ public class TransferReplayHandler {
             return replayState.position(umbrellaKeyFor(flowPosition.assetKey(), umbrellaWallet));
         }
 
-        // :FUND venue-internal drain (R-1/R-3) — inverse of the corridor fallback above.
-        // Collapsed FUND→EARN and FUND→UTA outbound legs strip :FUND to the UID umbrella
-        // (BYBIT:uid) for their position key (AccountingAssetIdentitySupport.isBybitCollapsedFundSide
-        // preserves :FUND only on inbound/UTA legs). But the real inventory frequently sits on
-        // the :FUND sub-account — credited by UTA→FUND collapsed inbound, EARN→FUND redemption
-        // and on-chain deposits. When the umbrella position the drain resolved to is empty while
-        // :FUND holds inventory, drain :FUND so the basis carried into EARN/staking is the basis
-        // that actually accumulated there (conserved, realised = 0) instead of ~$0. Without this,
-        // FAMILY:ETH AVCO collapses (cmETH/mETH enter at $0) and FUND USDT settles at $0.84.
-        // Model-agnostic: spot-funded FUND inventory keeps basis on the umbrella, so when the
-        // umbrella covers the transfer this branch is skipped and the umbrella is drained as
-        // before. R-1*: the trigger is coverage of the moved quantity, not mere non-emptiness —
-        // a collapsed leg can leave a dust residue (e.g. 0.00007969 cmETH) on the umbrella that a
-        // qty-only test mistook for inventory, draining ~$0 and collapsing FAMILY:ETH AVCO.
-        // Mirrors ReplayAssetSupport.resolveSellAssetKey's cross-sub-account inventory search.
+        // :FUND venue-internal drain (R-1/R-3, RC-A FUND-drain symmetry, ADR-043).
+        //
+        // The redirect is now symmetric for ALL FUND↔UTA legs, gated purely on COVERAGE — not on an
+        // earn-principal context whitelist. Coverage preserves RC-2: a plain collapsed FUND↔UTA leg
+        // whose inventory sits on the umbrella finds the umbrella covers the moved quantity, so no
+        // :FUND redirect fires and both legs net on the umbrella (no inbound-only phantom). Only when
+        // the umbrella cannot cover but a named :FUND sub-position holds the inventory does the drain
+        // resolve to :FUND — draining the pool that actually holds the principal instead of stranding
+        // a same-quantity phantom on the umbrella (the B-REG-01 umbrella-phantom class, which
+        // previously reappeared on non-earn FUND↔UTA legs that the earn-context gate excluded). RC-9
+        // (self-funded :FUND corridor-out) already drains :FUND via the accountRef redirect above and
+        // is unaffected. ETH is 0 post-ADR-042 and does not regress (its legs carry accountRef).
         if (!isCorridorTransfer
                 && walletUpper.endsWith(":FUND")
                 && !positionCoversQuantity(flowPosition, outboundQuantity)) {
@@ -1619,9 +1911,43 @@ public class TransferReplayHandler {
                 }
             }
         }
+        if (flow != null
+                && CanonicalAssetCatalog.isPeggedNative(flow.getAssetSymbol())
+                && replayState != null) {
+            BigDecimal ethFamilyAvco = resolveBybitOutboundEthFamilyAvco(transaction, replayState);
+            if (ethFamilyAvco != null && ethFamilyAvco.signum() > 0) {
+                return ethFamilyAvco;
+            }
+        }
         return replayMarketAuthority.resolve(transaction, flow)
                 .map(ReplayMarketAuthority.ResolvedMarketPrice::unitPriceUsd)
                 .orElse(null);
+    }
+
+    private BigDecimal resolveBybitOutboundEthFamilyAvco(
+            NormalizedTransaction transaction,
+            ReplayExecutionState replayState
+    ) {
+        if (transaction == null || replayState == null) {
+            return null;
+        }
+        String uid = extractBybitUid(transaction.getWalletAddress());
+        if (uid == null) {
+            return null;
+        }
+        String[] walletSuffixes = {"", ":UTA", ":FUND"};
+        String[] symbols = {"ETH", "WETH"};
+        for (String suffix : walletSuffixes) {
+            String wallet = "BYBIT:" + uid + suffix;
+            for (String symbol : symbols) {
+                AssetKey symbolKey = new AssetKey(wallet, null, null, symbol, "SYMBOL:" + symbol);
+                BigDecimal avco = firstPositiveAvco(replayState.position(symbolKey));
+                if (avco != null) {
+                    return avco;
+                }
+            }
+        }
+        return null;
     }
 
     private static BigDecimal firstPositiveAvco(PositionState position) {

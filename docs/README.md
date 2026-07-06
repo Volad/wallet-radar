@@ -39,6 +39,10 @@ Global reference for product context, domain model, backend pipeline stages, fro
 | [Replay](pipeline/replay/01-overview.md) | Deterministic state rebuild |
 | [Portfolio snapshot](pipeline/portfolio-snapshot/01-overview.md) | Live balances + dashboard read model |
 
+> Current Bybit Earn corridor work: see `tasks/bybit-earn-corridor-pairing-implementation-plan.md`
+> and `adr/ADR-041-bybit-earn-corridor-pairing-and-fund-carry-symmetry.md` for the linking contract,
+> same-asset continuity semantics, and the read-model rule that live excess above ledger stays uncovered.
+
 ### 3. Frontend
 
 | Doc | Description |

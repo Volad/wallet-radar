@@ -67,6 +67,11 @@
             <div class="loading-line loading-line-stat-value"></div>
             <div class="loading-line loading-line-stat-sub"></div>
           </div>
+          <div class="sc">
+            <div class="loading-line loading-line-stat-label"></div>
+            <div class="loading-line loading-line-stat-value"></div>
+            <div class="loading-line loading-line-stat-sub"></div>
+          </div>
         </div>
       </div>
 
@@ -232,9 +237,14 @@
 
             <div class="stats">
               <div class="sc">
-                <div class="sc-l">AVCO</div>
-                <div class="sc-v avco">{{ formatUsd(data.current.avcoUsd, 0) }}</div>
+                <div class="sc-l">Net AVCO</div>
+                <div class="sc-v avco">{{ formatUsd(data.current.netAvcoUsd, 0) }}</div>
                 <div class="sc-s">avg cost / {{ data.displaySymbol }}</div>
+              </div>
+              <div class="sc">
+                <div class="sc-l">Market AVCO</div>
+                <div class="sc-v avco-secondary">{{ formatUsd(data.current.avcoUsd, 0) }}</div>
+                <div class="sc-s">market basis / {{ data.displaySymbol }}</div>
               </div>
               <div class="sc">
                 <div class="sc-l">qty held</div>
@@ -489,8 +499,10 @@
                                     <th>From</th>
                                     <th>To</th>
                                     <th>Basis</th>
-                                    <th class="r">AVCO before</th>
-                                    <th class="r">AVCO after</th>
+                                    <th class="r">Net AVCO before</th>
+                                    <th class="r">Net AVCO after</th>
+                                    <th class="r">Market AVCO before</th>
+                                    <th class="r">Market AVCO after</th>
                                     <th class="r">Gas</th>
                                     <th>Flows</th>
                                   </tr>
@@ -535,8 +547,10 @@
                                           <div class="log-expand-meta">{{ row.avcoKindLabel }}</div>
                                         }
                                       </td>
-                                      <td class="r mono-cell">{{ formatUsd(row.avcoBeforeUsd, 2) }}</td>
-                                      <td class="r mono-cell">{{ formatUsd(row.avcoAfterUsd, 2) }}</td>
+                                      <td class="r mono-cell">{{ formatUsd(row.netAvcoBeforeUsd, 2) }}</td>
+                                      <td class="r mono-cell">{{ formatUsd(row.netAvcoAfterUsd, 2) }}</td>
+                                      <td class="r mono-cell avco-tax-cell">{{ formatUsd(row.avcoBeforeUsd, 2) }}</td>
+                                      <td class="r mono-cell avco-tax-cell">{{ formatUsd(row.avcoAfterUsd, 2) }}</td>
                                       <td class="r mono-cell">{{ formatUsd(row.gasDeltaUsd, 2) }}</td>
                                       <td class="flows-cell">
                                         @if (row.flows.length > 0) {
@@ -669,12 +683,20 @@
         <div class="ti-avco">
           <div class="ti-ft">AVCO / Basis</div>
           <div class="tr">
-            <span class="k">AVCO before</span>
-            <span class="v">{{ formatUsd(marker.avcoBeforeUsd, 2) }}</span>
+            <span class="k">Net AVCO before</span>
+            <span class="v">{{ formatUsd(marker.netAvcoBeforeUsd, 2) }}</span>
           </div>
           <div class="tr">
-            <span class="k">AVCO after</span>
-            <span class="v">{{ formatUsd(marker.avcoAfterUsd, 2) }}</span>
+            <span class="k">Net AVCO after</span>
+            <span class="v">{{ formatUsd(marker.netAvcoAfterUsd, 2) }}</span>
+          </div>
+          <div class="tr">
+            <span class="k">Market AVCO before</span>
+            <span class="v avco-tax-value">{{ formatUsd(marker.avcoBeforeUsd, 2) }}</span>
+          </div>
+          <div class="tr">
+            <span class="k">Market AVCO after</span>
+            <span class="v avco-tax-value">{{ formatUsd(marker.avcoAfterUsd, 2) }}</span>
           </div>
           @if (marker.avcoKindLabel) {
             <div class="tr">
