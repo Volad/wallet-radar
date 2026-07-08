@@ -32,6 +32,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class BybitNormalizationJob {
 
     private static final String STAGE_NAME = "bybit-normalization";
+    private static final Duration HEARTBEAT_INTERVAL = Duration.ofSeconds(30);
 
     private final AtomicBoolean running = new AtomicBoolean(false);
 
