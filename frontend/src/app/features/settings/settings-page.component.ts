@@ -115,6 +115,9 @@ export class SettingsPageComponent {
   readonly sections = SETTINGS_SECTIONS;
   readonly networksPresentation = EVM_NETWORKS_PRESENTATION;
   readonly allNetworkIds: ReadonlyArray<EvmNetworkId> = this.networksPresentation.map((network) => network.id);
+  /** On-chain-only network IDs (excludes exchange buckets like BYBIT that are not EVM chains). */
+  private readonly onChainNetworkIds: ReadonlyArray<OnChainWalletNetworkId> = this.allNetworkIds
+    .filter((id) => id !== 'BYBIT') as ReadonlyArray<OnChainWalletNetworkId>;
 
   readonly sessionId = signal<string | null>(this.sessionStorageService.getSessionId());
   readonly settings = signal<SessionSettingsResponse | null>(null);
@@ -442,7 +445,7 @@ export class SettingsPageComponent {
         address: wallet.address.trim().toLowerCase(),
         label: wallet.label.trim() || this.defaultWalletLabel(index),
         color: wallet.color,
-        networks: [...this.allNetworkIds] as ReadonlyArray<OnChainWalletNetworkId>,
+        networks: this.onChainNetworkIds,
       })),
       integrations: integrationPayload,
       externalVenues: this.externalVenues(),
@@ -603,7 +606,7 @@ export class SettingsPageComponent {
         address: wallet.address.trim().toLowerCase(),
         label: wallet.label.trim() || this.defaultWalletLabel(index),
         color: wallet.color,
-        networks: [...this.allNetworkIds] as ReadonlyArray<OnChainWalletNetworkId>,
+        networks: this.onChainNetworkIds,
       })),
       integrations: bybitEntry === null ? [] : [bybitEntry],
       externalVenues: this.externalVenues(),

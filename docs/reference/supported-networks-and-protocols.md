@@ -37,7 +37,7 @@ Config prefix: `walletradar.ingestion.network.<NETWORK>` in `application.yml`.
 | Aerodrome | 2 | BASE | DEX | registry-backed | no | — |
 | Angle | 1 | ARBITRUM, AVALANCHE, BASE, ETHEREUM (+3) | YIELD | heuristic-only | no | — |
 | Arbitrum | 3 | ARBITRUM, ETHEREUM | BRIDGE | registry-backed | no | — |
-| Aura | 1 | AVALANCHE | LP | heuristic-only | no | — |
+| Aura | 2 | AVALANCHE | YIELD | dedicated-semantic (AuraProtocolSemanticClassifier) | no | withdrawAndUnwrap → REWARD_CLAIM |
 | Axelar | 1 | ARBITRUM | BRIDGE | heuristic-only | no | — |
 | Balancer | 1 | ARBITRUM, AVALANCHE, BASE, ETHEREUM (+3) | DEX | dedicated-semantic | yes | [doc](../pipeline/normalization/rules/protocols/balancer.md) |
 | Base | 1 | ETHEREUM | BRIDGE | heuristic-only | no | — |

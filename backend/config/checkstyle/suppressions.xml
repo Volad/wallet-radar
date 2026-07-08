@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<!DOCTYPE suppressions PUBLIC
+        "-//Checkstyle//DTD SuppressionFilter Configuration 1.2//EN"
+        "https://checkstyle.org/dtds/suppressions_1_2.dtd">
+<!--
+  God-class burn-down list (Track A / A5). Remove entries as classes are split below 1000 lines.
+  See docs/tasks/extensibility-refactor-implementation-plan.md
+-->
+<suppressions>
+    <suppress files="SessionLendingQueryService\.java" checks="FileLength"/>
+    <suppress files="TransferReplayHandler\.java" checks="FileLength"/>
+    <suppress files="AssetLedgerQueryService\.java" checks="FileLength"/>
+    <suppress files="LendingClassifier\.java" checks="FileLength"/>
+    <suppress files="SessionLpQueryService\.java" checks="FileLength"/>
+    <suppress files="SessionDashboardQueryService\.java" checks="FileLength"/>
+    <suppress files="PortfolioConservationGate\.java" checks="FileLength"/>
+    <suppress files="LiFiBridgePairLinkService\.java" checks="FileLength"/>
+    <suppress files="ScamFilter\.java" checks="FileLength"/>
+    <suppress files="BybitExtractionService\.java" checks="FileLength"/>
+    <suppress files="ReplayDispatcher\.java" checks="FileLength"/>
+    <suppress files="EvmNetworkAdapter\.java" checks="FileLength"/>
+    <suppress files="ReceiptClarificationGateway\.java" checks="FileLength"/>
+</suppressions>

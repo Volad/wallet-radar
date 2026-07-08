@@ -36,6 +36,8 @@ data/
 raw_data/
 tmp/
 .tmp-*/
+.tmp-backups/
+.tmp-migrations/
 .tmp-shots/
 *.log
 handoff/

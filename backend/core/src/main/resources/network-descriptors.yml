@@ -1,0 +1,163 @@
+# Track A / A5 — per-network metadata (imported from application.yml).
+walletradar:
+  networks:
+    entries:
+      ETHEREUM:
+        address-format: EVM
+        native-symbol: ETH
+        wrapped-native:
+          contract: "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
+          symbol: WETH
+        wallet-supported: true
+        evm-wallet-supported: true
+        usd-stable-contracts:
+          - "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+          - "0xdac17f958d2ee523a2206206994597c13d831ec7"
+          - "0x6b175474e89094c44da98b954eedeac495271d0f"
+          - "0xc5f0f7b66764f6ec8c8dff7ba683102295e16409"
+          - "0x4c9edd5852cd905f086c759e8383e09bff1e68b3"
+      ARBITRUM:
+        address-format: EVM
+        native-symbol: ETH
+        wrapped-native:
+          contract: "0x82af49447d8a07e3bd95bd0d56f35241523fbab1"
+          symbol: WETH
+        wallet-supported: true
+        evm-wallet-supported: true
+        usd-stable-contracts:
+          - "0xaf88d065e77c8cc2239327c5edb3a432268e5831"
+          - "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9"
+          - "0xda10009cbd5d07dd0cecc66161fc93d7c9000da1"
+          - "0x5d3a1ff2b6bab83b63cd9ad0787074081a52ef34"
+      OPTIMISM:
+        address-format: EVM
+        native-symbol: ETH
+        wrapped-native:
+          contract: "0x4200000000000000000000000000000000000006"
+          symbol: WETH
+        wallet-supported: true
+        evm-wallet-supported: true
+        usd-stable-contracts:
+          - "0x0b2c639c533813f4aa9d7837caf62653d097ff85"
+          - "0x94b008aa00579c1307b0ef2c499ad98a8ce58e58"
+          - "0x01bff41798a0bcf287b996046ca68b395dbc1071"
+      BASE:
+        address-format: EVM
+        native-symbol: ETH
+        wrapped-native:
+          contract: "0x4200000000000000000000000000000000000006"
+          symbol: WETH
+        wallet-supported: true
+        evm-wallet-supported: true
+        usd-stable-contracts:
+          - "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+          - "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2"
+          - "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca"
+      UNICHAIN:
+        address-format: EVM
+        native-symbol: ETH
+        wrapped-native:
+          contract: "0x4200000000000000000000000000000000000006"
+          symbol: WETH
+        wallet-supported: true
+        evm-wallet-supported: true
+        usd-stable-contracts:
+          - "0x078d782b760474a361dda0af3839290b0ef57ad6"
+          - "0x9151434b16b9763660705744891fa906f660ecc5"
+      ZKSYNC:
+        address-format: EVM
+        native-symbol: ETH
+        wrapped-native:
+          contract: "0x5aea5775959fbc2557cc8789bc1bf90a239d9a91"
+          symbol: WETH
+        native-alias-contracts:
+          - "0x000000000000000000000000000000000000800a"
+        wallet-supported: true
+        evm-wallet-supported: true
+        usd-stable-contracts:
+          - "0x1d17cbcf0d6d143135ae902365d2e5e2a16538d4"
+          - "0x3355df6d4c9c3035724fd0e3914de96a5a83aaf4"
+      LINEA:
+        address-format: EVM
+        native-symbol: ETH
+        wrapped-native:
+          contract: "0xe5d7c2a44ffddf6b295a15c148167daaaf5cf34f"
+          symbol: WETH
+        wallet-supported: true
+        evm-wallet-supported: true
+        usd-stable-contracts:
+          - "0xa219439258ca9da29e9cc4ce5596924745e12b93"
+      KATANA:
+        address-format: EVM
+        native-symbol: ETH
+        wrapped-native:
+          symbol: WETH
+        wallet-supported: true
+        evm-wallet-supported: true
+      BSC:
+        address-format: EVM
+        native-symbol: BNB
+        wrapped-native:
+          contract: "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c"
+          symbol: WBNB
+        wallet-supported: true
+        evm-wallet-supported: true
+        usd-stable-contracts:
+          - "0x55d398326f99059ff775485246999027b3197955"
+          - "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d"
+      POLYGON:
+        address-format: EVM
+        native-symbol: MATIC
+        wrapped-native:
+          contract: "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270"
+          symbol: WMATIC
+        wallet-supported: true
+        evm-wallet-supported: true
+        usd-stable-contracts:
+          - "0x2791bca1f2de4661ed88a30c99a7a9449aa84174"
+          - "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359"
+          - "0xc2132d05d31c914a87c6611c10748aeb04b58e8f"
+      AVALANCHE:
+        address-format: EVM
+        native-symbol: AVAX
+        wrapped-native:
+          contract: "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7"
+          symbol: WAVAX
+        wallet-supported: true
+        evm-wallet-supported: true
+        usd-stable-contracts:
+          - "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e"
+          - "0x9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7"
+          - "0xfc421ad3c883bf9e7c4f42de845c4e4405799e73"
+          - "0x00000000efe302beaa2b3e6e1b18d08d69a9012a"
+      MANTLE:
+        address-format: EVM
+        native-symbol: MNT
+        wrapped-native:
+          contract: "0x78c1b0c915c4faa5fffa6cabf0219da63d7f4cb8"
+          symbol: WMNT
+        wallet-supported: true
+        evm-wallet-supported: true
+        usd-stable-contracts:
+          - "0x09bc4e0d864854c6afb6eb9a9cdf58ac190d0df9"
+          - "0x201eba5cc46d216ce6dc03f6a759e8e766e956ae"
+          - "0x779ded0c9e1022225f8e0630b35a9b54be713736"
+          - "0x5d3a1ff2b6bab83b63cd9ad0787074081a52ef34"
+      PLASMA:
+        address-format: EVM
+        native-symbol: XPL
+        wrapped-native:
+          contract: "0x6100e367285b01f48d07953803a2d8dca5d19873"
+          symbol: WXPL9
+        wallet-supported: true
+        evm-wallet-supported: true
+        usd-stable-contracts:
+          - "0xb8ce59fc3717ada4c02eadf9682a9e934f625ebb"
+      SOLANA:
+        address-format: SOLANA
+        wallet-supported: true
+        evm-wallet-supported: false
+      TON:
+        address-format: TON
+        wallet-supported: true
+        evm-wallet-supported: false

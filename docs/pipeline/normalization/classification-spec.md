@@ -1039,6 +1039,24 @@ BRIDGE-04  Destination-side bridge settlement methods such as
            and `directFulfill` on recognized bridge contracts are
            `BRIDGE_IN` continuity events, not `REPAY`, `LENDING_WITHDRAW`,
            or generic `EXTERNAL_TRANSFER_IN`.
+
+BRIDGE-05  Terminal reclassification of a LI.FI/Jumper BRIDGE_OUT whose
+           settlement proves a foreign (untracked) destination.
+           when a LI.FI/Jumper BRIDGE_OUT's status resolves to status=DONE
+           and substatus=COMPLETED with a toAddress that does not match any
+           tracked wallet in the active accounting universe, and the
+           destination network is fully backfilled for the session,
+           reclassify to EXTERNAL_TRANSFER_OUT/SELL with
+           counterpartyAddress=toAddress (confidence EXACT, i.e.
+           counterpartyResolutionState=RESOLVED_EXACT); do not apply while
+           status is not yet DONE+COMPLETED (a DONE+PARTIAL settlement is a
+           materially different, out-of-scope case) or while the destination
+           network's backfill is incomplete.
+           Implemented by LiFiForeignDestinationReclassificationService.
+           Note: the missing-data reason cleared on reclassification is the
+           reason actually stamped by BRIDGE-01 in code —
+           `BRIDGE_ON_CHAIN_LEG_NOT_FOUND` — not the literal string
+           "BRIDGE_DESTINATION_UNKNOWN" shown above.
 ```
 
 ### 6.5 LP tokens — not tracked for basis

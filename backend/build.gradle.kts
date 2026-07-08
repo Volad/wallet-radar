@@ -1,46 +1,28 @@
 plugins {
     java
-    id("org.springframework.boot") version "3.2.5"
-    id("io.spring.dependency-management") version "1.1.4"
-}
-
-group = "com.walletradar"
-version = "0.1.0-SNAPSHOT"
-
-java {
-    sourceCompatibility = JavaVersion.VERSION_21
-    targetCompatibility = JavaVersion.VERSION_21
-}
-
-repositories {
-    mavenCentral()
+    id("org.springframework.boot")
+    id("io.spring.dependency-management")
 }
 
 dependencies {
-    compileOnly("org.projectlombok:lombok")
-    annotationProcessor("org.projectlombok:lombok")
-    implementation("org.springframework.boot:spring-boot-starter")
-    implementation("org.springframework.boot:spring-boot-starter-data-mongodb")
-    implementation("org.springframework.boot:spring-boot-starter-cache")
-    implementation("org.springframework.boot:spring-boot-starter-webflux")
-    implementation("org.springframework.boot:spring-boot-starter-validation")
-    implementation("org.springframework.boot:spring-boot-starter-security")
-    implementation("org.springframework.boot:spring-boot-starter-oauth2-client")
-    implementation("org.springframework.boot:spring-boot-starter-oauth2-resource-server")
-    implementation("com.github.ben-manes.caffeine:caffeine")
-    implementation("io.github.resilience4j:resilience4j-ratelimiter:2.2.0")
-    implementation("org.bouncycastle:bcprov-jdk18on:1.80")
+    implementation(project(":backend:core"))
+}
 
-    testImplementation("org.springframework.boot:spring-boot-starter-test")
-    testImplementation("org.testcontainers:testcontainers")
-    testImplementation("org.testcontainers:mongodb")
-    testImplementation("org.testcontainers:junit-jupiter")
-    testImplementation("com.tngtech.archunit:archunit-junit5:1.2.1")
-    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+springBoot {
+    mainClass.set("com.walletradar.WalletRadarApplication")
+}
+
+tasks.named<Jar>("jar") {
+    enabled = false
 }
 
 tasks.test {
     useJUnitPlatform()
+    dependsOn(
+        ":backend:core:test",
+        ":backend:domain:test",
+        ":backend:canonical:test"
+    )
 }
 
 tasks.named<org.springframework.boot.gradle.tasks.run.BootRun>("bootRun") {

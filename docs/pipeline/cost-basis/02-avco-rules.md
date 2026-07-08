@@ -17,7 +17,8 @@ Since ADR-040, replay maintains **two parallel cost numerators** on the same qua
 - Disposals relieve covered basis from both numerators using each lane's AVCO at time of sale.
 - Realised PnL is tracked separately: `realisedPnlDeltaUsd` (tax) vs `netRealisedPnlDeltaUsd` (net).
 - Carry transfers store `netCostBasisUsd` / `netAvco` alongside tax fields in `CarryTransfer`.
-- BORROW and REPAY follow the same rules in both lanes.
+- BORROW inflows: **Tax lane** = `qty × marketPrice`; **Net lane** = `$0` (borrowed asset is a liability, not purchased). See ADR-046 / Bug-D.
+- REPAY follows the same rules in both lanes (matched liability principal: $0 PnL per ADR-012).
 
 ## AVCO formulas
 
@@ -358,7 +359,7 @@ AVCO math application per type:
 | `LENDING_WITHDRAW` | REALLOCATE_IN to spot |
 | `VAULT_DEPOSIT` / `VAULT_WITHDRAW` | Same as lending |
 | `LP_ENTRY` | Principal to receipt pool; no synthetic LP token lot |
-| `LP_EXIT` | Restore from per-asset receipt pool (ADR-022) |
+| `LP_EXIT` | Restore from per-asset receipt pool (ADR-022); net lane restored from `netBasisHeldUsd` (BB-LP-CMETH-1) |
 | `LP_ENTRY_REQUEST` / `LP_EXIT_REQUEST` | Escrow REALLOCATE; no PnL |
 | `BORROW` | Reserve BUY + liability record |
 | `REPAY` | Reserve SELL + liability match (zero-PnL roundtrip when matched) |

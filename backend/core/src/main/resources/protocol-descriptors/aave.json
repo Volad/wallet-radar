@@ -1,0 +1,17 @@
+{
+  "protocol": "Aave",
+  "version": "V3",
+  "capabilities": ["CLASSIFICATION", "LENDING", "VALUATION"],
+  "classification": {
+    "semanticClassifier": "aave-v3",
+    "supportedFamilies": ["LENDING"]
+  },
+  "lending": {
+    "marketRateSource": "protocol-registry+aave-pool-addresses-provider",
+    "supportsVariableDebt": true
+  },
+  "valuationSource": {
+    "primarySource": "aave-oracle",
+    "fallbackSources": ["coingecko-underlying"]
+  }
+}
