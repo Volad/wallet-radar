@@ -1,15 +1,16 @@
 package com.walletradar.application.linking.job;
 
-import com.walletradar.config.AsyncConfig;
+import com.walletradar.platform.common.config.AsyncConfig;
 import com.walletradar.domain.event.BybitNormalizationCompletedEvent;
 import com.walletradar.domain.event.LinkingCompletedEvent;
 import com.walletradar.domain.event.LinkingRequestedEvent;
 import com.walletradar.domain.event.OnChainReclassificationCompletedEvent;
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.application.linking.config.LinkingProperties;
-import com.walletradar.application.pipeline.job.support.StageExecutionLogSupport;
-import com.walletradar.session.application.SessionPipelineActivityService;
-import com.walletradar.session.application.SessionPipelineStateService;
+import com.walletradar.application.pipeline.config.JobHeartbeatProperties;
+import com.walletradar.platform.common.job.StageExecutionLogSupport;
+import com.walletradar.application.session.application.SessionPipelineActivityService;
+import com.walletradar.application.session.application.SessionPipelineStateService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -32,10 +33,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class LinkingJob {
 
     private static final String STAGE_NAME = "linking";
-    private static final Duration HEARTBEAT_INTERVAL = Duration.ofSeconds(30);
 
     private final AtomicBoolean running = new AtomicBoolean(false);
 
+    private final JobHeartbeatProperties jobHeartbeatProperties;
     private final LinkingProperties properties;
     private final LinkingBatchProcessor linkingBatchProcessor;
     private final LinkingDataGateService linkingDataGateService;
@@ -163,7 +164,7 @@ public class LinkingJob {
 
     private Instant maybeHeartbeat(String sessionId, Instant lastHeartbeatAt) {
         Instant now = Instant.now();
-        if (Duration.between(lastHeartbeatAt, now).compareTo(HEARTBEAT_INTERVAL) < 0) {
+        if (Duration.between(lastHeartbeatAt, now).compareTo(jobHeartbeatProperties.heartbeatInterval()) < 0) {
             return lastHeartbeatAt;
         }
         sessionPipelineActivityService.heartbeat(sessionId, UserSession.PipelineStage.LINKING);

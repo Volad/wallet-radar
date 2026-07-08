@@ -3,7 +3,7 @@ package com.walletradar.integration;
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.domain.sync.BackfillSegment;
 import com.walletradar.domain.sync.BackfillSegmentRepository;
-import com.walletradar.session.application.IntegrationSyncStatusService;
+import com.walletradar.application.session.application.IntegrationSyncStatusService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;

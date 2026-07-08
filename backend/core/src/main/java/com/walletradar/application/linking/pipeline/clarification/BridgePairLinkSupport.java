@@ -1,11 +1,12 @@
 package com.walletradar.application.linking.pipeline.clarification;
 
-import com.walletradar.accounting.support.BridgeAssetFamilySupport;
+import com.walletradar.application.costbasis.support.BridgeAssetFamilySupport;
+import com.walletradar.domain.counterparty.CounterpartyType;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction.Flow;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
-import com.walletradar.pricing.domain.CanonicalAssetCatalog;
+import com.walletradar.application.pricing.domain.CanonicalAssetCatalog;
 
 import java.math.BigDecimal;
 import java.time.Instant;

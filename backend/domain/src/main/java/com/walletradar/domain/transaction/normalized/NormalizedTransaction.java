@@ -130,6 +130,18 @@ import java.util.List;
         @CompoundIndex(
                 name = "normalized_linking_wallet_source_type_status_idx",
                 def = "{'walletAddress': 1, 'source': 1, 'type': 1, 'status': 1, 'blockTimestamp': 1}"
+        ),
+        @CompoundIndex(
+                name = "normalized_wallet_status_clarification_lease_idx",
+                def = "{'walletAddress': 1, 'status': 1, 'clarificationLeaseUntil': 1}"
+        ),
+        @CompoundIndex(
+                name = "normalized_type_missing_reason_idx",
+                def = "{'type': 1, 'missingDataReasons': 1}"
+        ),
+        @CompoundIndex(
+                name = "normalized_source_type_excluded_idx",
+                def = "{'source': 1, 'type': 1, 'excludedFromAccounting': 1}"
         )
 })
 @NoArgsConstructor

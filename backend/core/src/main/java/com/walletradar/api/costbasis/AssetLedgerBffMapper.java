@@ -1,7 +1,7 @@
 package com.walletradar.api.costbasis;
 
 import com.walletradar.api.dto.SessionAssetLedgerResponse;
-import com.walletradar.costbasis.application.AssetLedgerQueryService;
+import com.walletradar.application.costbasis.application.AssetLedgerQueryService;
 import org.springframework.stereotype.Component;
 
 /**

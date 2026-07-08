@@ -1,6 +1,6 @@
 package com.walletradar.application.linking.pipeline.clarification;
 
-import com.walletradar.accounting.support.AccountingAssetFamilySupport;
+import com.walletradar.application.costbasis.support.AccountingAssetFamilySupport;
 import com.walletradar.domain.common.NetworkAddressFormat;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;

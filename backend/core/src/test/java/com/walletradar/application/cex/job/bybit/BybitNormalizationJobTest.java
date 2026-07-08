@@ -3,8 +3,9 @@ package com.walletradar.application.cex.job.bybit;
 import com.walletradar.domain.event.BybitNormalizationCompletedEvent;
 import com.walletradar.domain.event.SessionBackfillCompletedEvent;
 import com.walletradar.application.normalization.config.BybitNormalizationProperties;
-import com.walletradar.session.application.SessionPipelineActivityService;
-import com.walletradar.session.application.SessionPipelineStateService;
+import com.walletradar.application.session.application.SessionPipelineActivityService;
+import com.walletradar.application.session.application.SessionPipelineStateService;
+import com.walletradar.application.pipeline.config.JobHeartbeatProperties;
 import com.walletradar.platform.telemetry.PipelineTelemetrySnapshot;
 import com.walletradar.platform.telemetry.PipelineTelemetrySnapshotService;
 import org.junit.jupiter.api.Test;
@@ -49,6 +50,7 @@ class BybitNormalizationJobTest {
         SessionPipelineActivityService pipelineActivityService = org.mockito.Mockito.mock(SessionPipelineActivityService.class);
         SessionPipelineStateService pipelineStateService = org.mockito.Mockito.mock(SessionPipelineStateService.class);
         BybitNormalizationJob job = new BybitNormalizationJob(
+                new JobHeartbeatProperties(),
                 properties,
                 bybitNormalizationService,
                 pipelineTelemetrySnapshotService,
@@ -84,6 +86,7 @@ class BybitNormalizationJobTest {
         SessionPipelineActivityService pipelineActivityService = org.mockito.Mockito.mock(SessionPipelineActivityService.class);
         SessionPipelineStateService pipelineStateService = org.mockito.Mockito.mock(SessionPipelineStateService.class);
         BybitNormalizationJob job = new BybitNormalizationJob(
+                new JobHeartbeatProperties(),
                 properties,
                 bybitNormalizationService,
                 pipelineTelemetrySnapshotService,

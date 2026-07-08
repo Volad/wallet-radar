@@ -8,7 +8,7 @@ import com.walletradar.application.normalization.pipeline.classification.registr
 import com.walletradar.application.normalization.pipeline.classification.registry.ProtocolRegistryRole;
 import com.walletradar.application.normalization.pipeline.classification.registry.ProtocolRegistryService;
 import com.walletradar.application.normalization.pipeline.onchain.OnChainRawTransactionView;
-import com.walletradar.application.pipeline.pipeline.support.BsonCoercionSupport;
+import com.walletradar.platform.persistence.support.BsonCoercionSupport;
 import lombok.RequiredArgsConstructor;
 import org.bson.Document;
 import org.springframework.stereotype.Service;

@@ -15,7 +15,7 @@ import com.walletradar.application.linking.pipeline.clarification.ProtocolNameEn
 import com.walletradar.application.linking.pipeline.clarification.RegistryBridgeInboundTypeCorrectionService;
 import com.walletradar.application.normalization.pipeline.onchain.OnChainNormalizedTransactionBuilder;
 import com.walletradar.application.normalization.pipeline.onchain.PendingReclassificationQueryService;
-import com.walletradar.session.application.AccountingUniverseService;
+import com.walletradar.application.session.application.AccountingUniverseService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;

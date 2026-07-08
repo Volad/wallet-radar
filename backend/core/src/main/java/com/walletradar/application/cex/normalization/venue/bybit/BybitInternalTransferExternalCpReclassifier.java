@@ -7,7 +7,7 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionReposi
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
-import com.walletradar.session.application.AccountingUniverseService;
+import com.walletradar.application.session.application.AccountingUniverseService;
 import com.walletradar.domain.common.ton.TonAddressCanonicalizer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -294,7 +294,7 @@ public class BybitInternalTransferExternalCpReclassifier {
         if (uid == null) {
             return null;
         }
-        String family = com.walletradar.accounting.support.AccountingAssetFamilySupport
+        String family = com.walletradar.application.costbasis.support.AccountingAssetFamilySupport
                 .continuityIdentity(principal);
         if (family == null) {
             String sym = principal.getAssetSymbol();

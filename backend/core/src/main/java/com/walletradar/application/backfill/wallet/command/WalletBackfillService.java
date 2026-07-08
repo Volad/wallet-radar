@@ -1,7 +1,7 @@
 package com.walletradar.application.backfill.wallet.command;
 
 import com.walletradar.domain.common.NetworkId;
-import com.walletradar.session.application.SourceSyncPlanner;
+import com.walletradar.application.session.application.SourceSyncPlanner;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -11,8 +11,8 @@ import java.util.List;
 
 /**
  * Standalone wallet-entry helper for the legacy wallet API. Session-owned
- * flows use {@link com.walletradar.session.application.AccountUniverseSyncPlanScheduler} /
- * {@link com.walletradar.session.application.AccountUniverseSyncPlannerService} instead of this service.
+ * flows use {@link com.walletradar.application.session.application.AccountUniverseSyncPlanScheduler} /
+ * {@link com.walletradar.application.session.application.AccountUniverseSyncPlannerService} instead of this service.
  */
 @Service
 @RequiredArgsConstructor

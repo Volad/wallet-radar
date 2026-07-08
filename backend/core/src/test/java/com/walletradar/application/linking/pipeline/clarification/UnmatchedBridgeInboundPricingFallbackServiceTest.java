@@ -7,7 +7,7 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionReposi
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
-import com.walletradar.pricing.application.PricingProperties;
+import com.walletradar.application.pricing.application.PricingProperties;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

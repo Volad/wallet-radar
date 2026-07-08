@@ -5,7 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.walletradar.platform.networks.ReactorBlocking;
-import com.walletradar.integration.config.BybitIntegrationProperties;
+import com.walletradar.application.cex.config.BybitIntegrationProperties;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;

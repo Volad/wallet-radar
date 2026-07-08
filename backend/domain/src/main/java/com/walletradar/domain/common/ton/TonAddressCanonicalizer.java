@@ -9,7 +9,7 @@ import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
- * Canonical TON address forms for {@link com.walletradar.session.application.AccountingUniverseService}
+ * Canonical TON address forms for {@link com.walletradar.application.session.application.AccountingUniverseService}
  * index keys: user-facing {@code UQ…}/{@code EQ…} and raw {@code workchain:hex}.
  */
 public final class TonAddressCanonicalizer {

@@ -1,10 +1,11 @@
 package com.walletradar.api.controller;
 
+import com.walletradar.application.lending.view.*;
 import com.walletradar.api.dto.RefreshStatusResponse;
 import com.walletradar.api.dto.SessionLendingResponse;
-import com.walletradar.lending.application.LendingGroupRefreshStateService;
-import com.walletradar.lending.application.LendingRefreshOrchestrator;
-import com.walletradar.lending.application.SessionLendingQueryService;
+import com.walletradar.application.lending.application.LendingGroupRefreshStateService;
+import com.walletradar.application.lending.application.LendingRefreshOrchestrator;
+import com.walletradar.application.lending.application.SessionLendingQueryService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -259,7 +260,7 @@ public class LendingController {
         return sessionId.trim();
     }
 
-    private SessionLendingResponse.Position toPosition(SessionLendingQueryService.LendingPositionView position) {
+    private SessionLendingResponse.Position toPosition(LendingPositionView position) {
         return new SessionLendingResponse.Position(
                 position.id(),
                 position.marketKey(),
@@ -289,7 +290,7 @@ public class LendingController {
     }
 
     private SessionLendingResponse.HistoryEntry toHistoryEntry(
-            SessionLendingQueryService.LendingHistoryEntryView history
+            LendingHistoryEntryView history
     ) {
         return new SessionLendingResponse.HistoryEntry(
                 history.id(),

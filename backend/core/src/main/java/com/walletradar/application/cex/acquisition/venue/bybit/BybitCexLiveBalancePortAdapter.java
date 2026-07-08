@@ -1,6 +1,6 @@
 package com.walletradar.application.cex.acquisition.venue.bybit;
 
-import com.walletradar.costbasis.application.port.CexLiveBalancePort;
+import com.walletradar.application.costbasis.application.port.CexLiveBalancePort;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 

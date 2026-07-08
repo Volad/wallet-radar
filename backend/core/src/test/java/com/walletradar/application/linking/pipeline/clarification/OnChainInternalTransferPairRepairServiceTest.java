@@ -7,8 +7,8 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionReposi
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
-import com.walletradar.session.application.AccountingUniverseService;
-import com.walletradar.session.application.SessionWalletAdjacencyService;
+import com.walletradar.application.session.application.AccountingUniverseService;
+import com.walletradar.application.session.application.SessionWalletAdjacencyService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;

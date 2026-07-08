@@ -17,6 +17,7 @@ dependencyManagement {
 dependencies {
     api(project(":backend:domain"))
     api(project(":backend:canonical"))
+    implementation(project(":backend:platform"))
 
     compileOnly("org.projectlombok:lombok")
     annotationProcessor("org.projectlombok:lombok")
@@ -60,7 +61,7 @@ tasks.named<Checkstyle>("checkstyleTest") {
 
 tasks.test {
     useJUnitPlatform()
-    dependsOn(":backend:domain:test", ":backend:canonical:test")
+    dependsOn(":backend:domain:test", ":backend:canonical:test", ":backend:platform:test")
     // Forward wr.test.* system properties (e.g. wr.test.bybit.dumpPath) to the forked test JVM so
     // gated, manual-only integration tests like BybitRepairChainIdempotencyIntegrationTest can be
     // invoked locally via -Dwr.test.bybit.dumpPath=... without affecting default/CI runs, where

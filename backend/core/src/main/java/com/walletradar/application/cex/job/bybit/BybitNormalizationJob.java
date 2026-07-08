@@ -1,14 +1,15 @@
 package com.walletradar.application.cex.job.bybit;
 
-import com.walletradar.config.AsyncConfig;
+import com.walletradar.platform.common.config.AsyncConfig;
 import com.walletradar.domain.event.BybitNormalizationCompletedEvent;
 import com.walletradar.domain.event.BybitNormalizationRequestedEvent;
 import com.walletradar.domain.event.SessionBackfillCompletedEvent;
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.application.normalization.config.BybitNormalizationProperties;
-import com.walletradar.application.pipeline.job.support.StageExecutionLogSupport;
-import com.walletradar.session.application.SessionPipelineActivityService;
-import com.walletradar.session.application.SessionPipelineStateService;
+import com.walletradar.application.pipeline.config.JobHeartbeatProperties;
+import com.walletradar.platform.common.job.StageExecutionLogSupport;
+import com.walletradar.application.session.application.SessionPipelineActivityService;
+import com.walletradar.application.session.application.SessionPipelineStateService;
 import com.walletradar.platform.telemetry.PipelineTelemetrySnapshot;
 import com.walletradar.platform.telemetry.PipelineTelemetrySnapshotService;
 import lombok.RequiredArgsConstructor;
@@ -31,10 +32,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class BybitNormalizationJob {
 
     private static final String STAGE_NAME = "bybit-normalization";
-    private static final Duration HEARTBEAT_INTERVAL = Duration.ofSeconds(30);
 
     private final AtomicBoolean running = new AtomicBoolean(false);
 
+    private final JobHeartbeatProperties jobHeartbeatProperties;
     private final BybitNormalizationProperties properties;
     private final BybitNormalizationService bybitNormalizationService;
     private final PipelineTelemetrySnapshotService pipelineTelemetrySnapshotService;
@@ -120,7 +121,7 @@ public class BybitNormalizationJob {
             Instant lastHeartbeatAt
     ) {
         Instant now = Instant.now();
-        if (Duration.between(lastHeartbeatAt, now).compareTo(HEARTBEAT_INTERVAL) < 0) {
+        if (Duration.between(lastHeartbeatAt, now).compareTo(jobHeartbeatProperties.heartbeatInterval()) < 0) {
             return lastHeartbeatAt;
         }
         sessionPipelineActivityService.heartbeat(sessionId, stage);

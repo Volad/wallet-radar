@@ -6,7 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
-import com.walletradar.pricing.application.PriceableFlowPolicy;
+import com.walletradar.application.pricing.application.PriceableFlowPolicy;
 import org.bson.Document;
 
 import java.math.BigDecimal;

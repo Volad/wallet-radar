@@ -1,6 +1,6 @@
 package com.walletradar.application.normalization.pipeline.classification.support;
 
-import com.walletradar.accounting.support.AccountingAssetFamilySupport;
+import com.walletradar.application.costbasis.support.AccountingAssetFamilySupport;
 import com.walletradar.domain.common.ConfidenceLevel;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;

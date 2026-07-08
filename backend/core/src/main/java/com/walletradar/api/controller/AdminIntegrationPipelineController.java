@@ -1,6 +1,6 @@
 package com.walletradar.api.controller;
 
-import com.walletradar.integration.admin.IntegrationPipelineAdminService;
+import com.walletradar.application.pipeline.admin.IntegrationPipelineAdminService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;

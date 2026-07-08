@@ -409,6 +409,44 @@ walletradar:
       output-dir: results/refactor-baseline/adr-001/manual
       baseline-dir:
 
+  replay:
+    tolerance:
+      carry-source-coverage-ratio: 0.999
+      absolute-floor-usd: 50
+      relative-mtm-fraction: 0.01
+      bridge-pair-amount-tolerance: 0.015
+
+  pipeline:
+    jobs:
+      heartbeat-interval-ms: 30000
+      resume-interval-ms: 60000
+    resume-interval-ms: 60000
+
+  async:
+    backfill-coordinator:
+      core-size: 1
+      max-size: 1
+      queue-capacity: 0
+    backfill:
+      core-size: 4
+      max-size: 18
+      queue-capacity: 0
+    pipeline-stage:
+      core-size: 4
+      max-size: 4
+      queue-capacity: 16
+    pricing:
+      core-size: 16
+      max-size: 16
+      queue-capacity: 64
+    universe-sync-plan:
+      core-size: 2
+      max-size: 4
+      queue-capacity: 256
+
+  scheduler:
+    pool-size: 4
+
   pricing:
     enabled: true
     bridge-out:
@@ -429,6 +467,11 @@ walletradar:
         base-url: https://api.binance.com
       coin-gecko:
         base-url: https://api.coingecko.com/api/v3
+    endpoints:
+      defi-llama-base-url: https://coins.llama.fi
+      request-timeout: 8s
+      gmx-snapshot-ttl: 60s
+      gmx-apy-cache-ttl: 30m
   scam-filter:
     enabled: true
     drop-threshold: 100

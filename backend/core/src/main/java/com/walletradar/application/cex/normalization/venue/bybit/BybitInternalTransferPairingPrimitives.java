@@ -266,7 +266,7 @@ final class BybitInternalTransferPairingPrimitives {
         if (principal == null) {
             return null;
         }
-        String familyKey = com.walletradar.accounting.support.AccountingAssetFamilySupport
+        String familyKey = com.walletradar.application.costbasis.support.AccountingAssetFamilySupport
                 .continuityIdentity(principal.getAssetSymbol(), principal.getAssetContract());
         if (familyKey == null || familyKey.isBlank()) {
             familyKey = principal.getAssetSymbol() == null
@@ -363,7 +363,7 @@ final class BybitInternalTransferPairingPrimitives {
         String familyKey = "";
         String qtyPlain = "";
         if (principal != null) {
-            familyKey = com.walletradar.accounting.support.AccountingAssetFamilySupport
+            familyKey = com.walletradar.application.costbasis.support.AccountingAssetFamilySupport
                     .continuityIdentity(principal.getAssetSymbol(), principal.getAssetContract());
             if (familyKey == null || familyKey.isBlank()) {
                 familyKey = principal.getAssetSymbol() == null

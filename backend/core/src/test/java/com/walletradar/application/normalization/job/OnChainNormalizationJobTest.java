@@ -3,8 +3,9 @@ package com.walletradar.application.normalization.job;
 import com.walletradar.domain.event.OnChainNormalizationCompletedEvent;
 import com.walletradar.domain.event.SessionBackfillCompletedEvent;
 import com.walletradar.application.normalization.config.OnChainNormalizationProperties;
-import com.walletradar.session.application.SessionPipelineActivityService;
-import com.walletradar.session.application.SessionPipelineStateService;
+import com.walletradar.application.session.application.SessionPipelineActivityService;
+import com.walletradar.application.session.application.SessionPipelineStateService;
+import com.walletradar.application.pipeline.config.JobHeartbeatProperties;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.ApplicationEventPublisher;
@@ -35,6 +36,7 @@ class OnChainNormalizationJobTest {
         SessionPipelineStateService pipelineStateService = mock(SessionPipelineStateService.class);
 
         OnChainNormalizationJob job = new OnChainNormalizationJob(
+                new JobHeartbeatProperties(),
                 properties,
                 normalizationService,
                 publisher,
@@ -65,6 +67,7 @@ class OnChainNormalizationJobTest {
         SessionPipelineStateService pipelineStateService = mock(SessionPipelineStateService.class);
 
         OnChainNormalizationJob job = new OnChainNormalizationJob(
+                new JobHeartbeatProperties(),
                 properties,
                 normalizationService,
                 publisher,
@@ -93,6 +96,7 @@ class OnChainNormalizationJobTest {
         SessionPipelineStateService pipelineStateService = mock(SessionPipelineStateService.class);
 
         OnChainNormalizationJob job = new OnChainNormalizationJob(
+                new JobHeartbeatProperties(),
                 properties,
                 normalizationService,
                 publisher,

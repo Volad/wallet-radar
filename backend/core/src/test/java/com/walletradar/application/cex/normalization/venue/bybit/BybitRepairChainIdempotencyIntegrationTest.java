@@ -1,8 +1,8 @@
 package com.walletradar.application.cex.normalization.venue.bybit;
 
 import com.walletradar.WalletRadarApplication;
-import com.walletradar.costbasis.application.CostBasisReplayJob;
-import com.walletradar.costbasis.application.replay.support.CorridorBasisConservationException;
+import com.walletradar.application.costbasis.application.CostBasisReplayJob;
+import com.walletradar.application.costbasis.application.replay.support.CorridorBasisConservationException;
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.domain.session.UserSessionRepository;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
@@ -22,7 +22,7 @@ import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
-import com.walletradar.costbasis.domain.AssetLedgerPoint;
+import com.walletradar.application.costbasis.domain.AssetLedgerPoint;
 import org.bson.Document;
 
 import java.io.IOException;

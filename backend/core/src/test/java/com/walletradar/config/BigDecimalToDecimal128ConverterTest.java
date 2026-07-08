@@ -1,4 +1,4 @@
-package com.walletradar.config;
+package com.walletradar.platform.common.config;
 
 import com.walletradar.platform.persistence.config.BigDecimalToDecimal128Converter;
 import org.bson.types.Decimal128;

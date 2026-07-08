@@ -13,8 +13,8 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.domain.transaction.raw.RawTransactionRepository;
-import com.walletradar.session.application.AccountingUniverseService;
-import com.walletradar.session.application.SessionWalletAdjacencyService;
+import com.walletradar.application.session.application.AccountingUniverseService;
+import com.walletradar.application.session.application.SessionWalletAdjacencyService;
 import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;

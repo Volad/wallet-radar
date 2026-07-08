@@ -24,6 +24,10 @@ class DocumentationCoverageTest {
             "application-cex.md",
             "application-costbasis.md",
             "application-portfolio.md",
+            "application-pricing.md",
+            "application-lending.md",
+            "application-liquiditypools.md",
+            "application-session.md",
             "api-bff.md"
     );
 

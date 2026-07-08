@@ -1,6 +1,7 @@
 package com.walletradar.application.linking.pipeline.clarification;
 
 import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.counterparty.CounterpartyType;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.domain.transaction.raw.RawTransaction;
@@ -9,7 +10,7 @@ import com.walletradar.application.normalization.pipeline.classification.registr
 import com.walletradar.application.normalization.pipeline.classification.registry.ProtocolRegistryService;
 import com.walletradar.application.normalization.pipeline.onchain.OnChainRawTransactionView;
 import com.walletradar.domain.session.AccountingUniverse;
-import com.walletradar.session.application.AccountingUniverseService;
+import com.walletradar.application.session.application.AccountingUniverseService;
 import org.bson.Document;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.lang.Nullable;

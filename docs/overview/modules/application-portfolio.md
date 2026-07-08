@@ -1,4 +1,4 @@
-# Application portfolio (`portfolio.application`)
+# Application portfolio (`application.portfolio`)
 
 ## Purpose
 
@@ -6,7 +6,7 @@ Owns the **dashboard read model**: session portfolio snapshot, conservation gate
 
 > Alias: older doc `portfolio.md` — same module; this page is the Track A canonical name.
 
-## Public port (`portfolio.application.port`)
+## Public port (`application.portfolio.port`)
 
 | Port | Contract |
 |------|----------|
@@ -26,25 +26,25 @@ Portfolio GET paths are **read-only** over Mongo evidence produced by upstream p
 
 | Source module | Port / DTO | Purpose |
 |---------------|------------|---------|
-| `session.application` | `AccountingUniverseService` | Scope member refs for universe-scoped reads |
+| `application.session` | `AccountingUniverseService` | Scope member refs for universe-scoped reads |
 | `application.linking.query` | `LinkingPendingStatusQuery` | Backfill status linking-pending signal |
-| `costbasis.application.port` | `CexLiveBalancePort` | CEX umbrella balance clamp on dashboard |
-| `costbasis` domain | `AssetLedgerPoint`, `OnChainBalance`, basis pools | Quantity / AVCO / liability evidence |
-| `pricing` | `HistoricalPriceDocument`, `CurrentPriceQuoteDocument` | Mark-to-market |
+| `application.costbasis.port` | `CexLiveBalancePort` | CEX umbrella balance clamp on dashboard |
+| `application.costbasis.domain` | `AssetLedgerPoint`, `OnChainBalance`, basis pools | Quantity / AVCO / liability evidence |
+| `application.pricing` | `HistoricalPriceDocument`, `CurrentPriceQuoteDocument` | Mark-to-market |
 
 ## Key packages
 
 | Package | Responsibility |
 |---------|----------------|
-| `portfolio.application.port` | BFF-stable read interfaces |
-| `portfolio.application` | Query services, `PortfolioConservationGate`, `OnChainBalanceRefreshService` |
+| `application.portfolio.port` | BFF-stable read interfaces |
+| `application.portfolio.application` | Query services, `PortfolioConservationGate`, `OnChainBalanceRefreshService` |
 | `api.portfolio` | REST DTO mappers for session portfolio GET paths |
 
 ## Allowed dependencies
 
-- `canonical`, `domain`, `accounting.support`
-- `session.application` (universe scope)
-- `costbasis.domain` / `pricing` persistence for read joins
+- `canonical`, `domain`, `application.costbasis.support`
+- `application.session` (universe scope)
+- `application.costbasis.domain` / `application.pricing` persistence for read joins
 - `application.linking.query.LinkingPendingStatusQuery` (narrow query port)
 - Other apps: `application.*.port` only
 

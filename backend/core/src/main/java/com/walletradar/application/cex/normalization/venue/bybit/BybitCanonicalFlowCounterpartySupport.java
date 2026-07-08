@@ -1,6 +1,6 @@
 package com.walletradar.application.cex.normalization.venue.bybit;
 
-import com.walletradar.application.linking.pipeline.clarification.CounterpartyType;
+import com.walletradar.domain.counterparty.CounterpartyType;
 import com.walletradar.application.linking.pipeline.clarification.FlowCounterpartySupport;
 import com.walletradar.domain.common.Decimal128Support;
 import com.walletradar.domain.common.NetworkAddressFormat;
@@ -9,7 +9,7 @@ import com.walletradar.domain.common.PriceSource;
 import com.walletradar.domain.session.AccountingUniverse;
 import com.walletradar.domain.transaction.externalledger.ExternalLedgerRaw;
 import com.walletradar.domain.transaction.normalized.*;
-import com.walletradar.session.application.AccountingUniverseService;
+import com.walletradar.application.session.application.AccountingUniverseService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.lang.Nullable;

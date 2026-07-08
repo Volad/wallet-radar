@@ -20,7 +20,7 @@ import com.walletradar.application.normalization.pipeline.classification.support
 import com.walletradar.application.normalization.pipeline.classification.support.CowSwapSupport;
 import com.walletradar.application.normalization.pipeline.classification.support.GmxEventTopicSupport;
 import com.walletradar.application.normalization.pipeline.classification.support.NativeAssetSymbolResolver;
-import com.walletradar.session.application.TrackedWalletLookupService;
+import com.walletradar.application.session.application.TrackedWalletLookupService;
 import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;

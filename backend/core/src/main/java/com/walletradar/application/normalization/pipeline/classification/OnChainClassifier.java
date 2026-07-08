@@ -65,7 +65,7 @@ import com.walletradar.application.normalization.pipeline.classification.registr
 import com.walletradar.application.normalization.pipeline.classification.support.LpStakingWrapperResolver;
 import com.walletradar.application.normalization.pipeline.classification.support.MovementLegExtractor;
 import com.walletradar.application.normalization.pipeline.classification.support.NativeAssetSymbolResolver;
-import com.walletradar.session.application.TrackedWalletLookupService;
+import com.walletradar.application.session.application.TrackedWalletLookupService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 

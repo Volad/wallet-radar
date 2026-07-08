@@ -1,5 +1,6 @@
 package com.walletradar.application.normalization.pipeline.classification.support;
 
+import com.walletradar.application.costbasis.support.leverage.AaveDebtLoanCorrelationSupport;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;

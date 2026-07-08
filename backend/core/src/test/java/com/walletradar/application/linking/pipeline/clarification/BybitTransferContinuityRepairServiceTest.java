@@ -1,13 +1,14 @@
 package com.walletradar.application.linking.pipeline.clarification;
 
 import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.counterparty.CounterpartyType;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
-import com.walletradar.session.application.AccountingUniverseService;
+import com.walletradar.application.session.application.AccountingUniverseService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

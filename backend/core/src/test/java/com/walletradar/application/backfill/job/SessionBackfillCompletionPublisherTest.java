@@ -9,7 +9,7 @@ import com.walletradar.domain.sync.BackfillSegmentRepository;
 import com.walletradar.domain.session.UserSessionRepository;
 import com.walletradar.domain.sync.SyncStatus;
 import com.walletradar.domain.sync.SyncStatusRepository;
-import com.walletradar.session.application.SessionPipelineStateService;
+import com.walletradar.application.session.application.SessionPipelineStateService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;

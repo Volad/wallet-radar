@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last updated:** 2026-07-06  
+> **Last updated:** 2026-07-08  
 > Modular monolith: Spring Boot backend + Angular SPA frontend.
 
 For accepted design decisions (D-xx rationale), see [Architecture decisions (SAD)](architecture-decisions.md).  
@@ -22,9 +22,12 @@ flowchart TB
     Cex[application.cex]
     Norm[application.normalization]
     Link[application.linking]
-    Cost[costbasis.application]
-    Port[portfolio.application]
-    Price[pricing]
+    Cost[application.costbasis]
+    Port[application.portfolio]
+    Price[application.pricing]
+    Session[application.session]
+    Lending[application.lending]
+    Lp[application.liquiditypools]
   end
   subgraph platLayer [platform — technical services]
     Networks[platform.networks]
@@ -61,7 +64,7 @@ flowchart TB
 |-------|---------------|------|----------|
 | **canonical** | `com.walletradar.canonical` | Cross-cutting correlation prefixes, shared accounting vocabulary, pure helpers | Spring, Mongo, HTTP, jobs |
 | **platform** | `com.walletradar.platform.*` | RPC/explorer transport, persistence helpers, security, telemetry | Normalization rules, replay, BFF DTOs |
-| **application** | `com.walletradar.application.*`, `costbasis`, `portfolio`, `pricing`, `session`, `lending`, `liquiditypools` | Pipeline stages, write owners for domain collections, public `*.port` contracts | Direct cross-app `service`/`infrastructure` imports |
+| **application** | `com.walletradar.application.*` | Pipeline stages, AVCO replay, pricing, portfolio/LP/lending read models, session orchestration, public `*.port` contracts | Direct cross-app `service`/`infrastructure` imports |
 | **api (BFF)** | `com.walletradar.api` | REST surface, validation, view→DTO mapping | Live RPC on GET paths; pipeline write jobs |
 
 ArchUnit guards live in `ModuleBoundaryTest` and `DocumentationCoverageTest` (Track A).
@@ -76,11 +79,14 @@ ArchUnit guards live in `ModuleBoundaryTest` and `DocumentationCoverageTest` (Tr
 | [application.cex](modules/application-cex.md) | `application.cex` | CEX acquisition + Bybit normalization |
 | [application.normalization](modules/application-normalization.md) | `application.normalization` | On-chain canonicalization |
 | [application.linking](modules/application-linking.md) | `application.linking` | Correlation, continuity, repairs |
-| [application.costbasis](modules/application-costbasis.md) | `costbasis.application` | AVCO replay, ledger, basis pools |
-| [application.portfolio](modules/application-portfolio.md) | `portfolio.application` | Dashboard read model |
+| [application.costbasis](modules/application-costbasis.md) | `application.costbasis` | AVCO replay, ledger, basis pools |
+| [application.portfolio](modules/application-portfolio.md) | `application.portfolio` | Dashboard read model |
+| [application.pricing](modules/application-pricing.md) | `application.pricing` | Price resolution and price gate |
+| [application.lending](modules/application-lending.md) | `application.lending` | Lending position monitoring |
+| [application.liquiditypools](modules/application-liquiditypools.md) | `application.liquiditypools` | LP snapshots and earnings |
 | [api BFF](modules/api-bff.md) | `api/` | REST + mappers |
 
-Legacy packages (`ingestion/`, `integration/`) remain during migration; new work lands in `application.*` and `platform.*`.
+Legacy packages (`integration/`) remain during migration; new work lands in `application.*` and `platform.*`.
 
 ## Frontend structure
 

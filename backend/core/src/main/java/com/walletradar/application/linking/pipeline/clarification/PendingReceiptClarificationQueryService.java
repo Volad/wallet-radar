@@ -1,6 +1,7 @@
 package com.walletradar.application.linking.pipeline.clarification;
 
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
@@ -18,7 +19,10 @@ import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.Set;
 import java.util.List;
 import java.util.Map;
 
@@ -522,54 +526,17 @@ public class PendingReceiptClarificationQueryService {
         ));
 
         List<NormalizedTransaction> requests = mongoOperations.find(requestsQuery, NormalizedTransaction.class);
-        LinkedHashMap<String, NormalizedTransaction> candidates = new LinkedHashMap<>();
-        for (NormalizedTransaction request : requests) {
-            if (request == null
-                    || request.getBlockTimestamp() == null
-                    || request.getWalletAddress() == null
-                    || request.getNetworkId() == null) {
-                continue;
-            }
-
-            Criteria attemptsCriteria = new Criteria().orOperator(
-                    Criteria.where("fullReceiptClarificationAttempts").exists(false),
-                    Criteria.where("fullReceiptClarificationAttempts").lt(Math.max(1, maxAttempts))
-            );
-            Criteria dueCriteria = new Criteria().orOperator(
-                    Criteria.where("fullReceiptClarificationAttempts").exists(false),
-                    Criteria.where("fullReceiptClarificationAttempts").lte(0),
-                    Criteria.where("updatedAt").lte(retryCutoff)
-            );
-            Query candidateQuery = new Query(new Criteria().andOperator(
-                    Criteria.where("source").is(NormalizedTransactionSource.ON_CHAIN),
-                    Criteria.where("walletAddress").is(request.getWalletAddress()),
-                    Criteria.where("networkId").is(request.getNetworkId()),
-                    Criteria.where("status").is(NormalizedTransactionStatus.PENDING_PRICE),
-                    Criteria.where("type").in(
-                            NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
-                            NormalizedTransactionType.EXTERNAL_TRANSFER_OUT
-                    ),
-                    Criteria.where("_id").ne(request.getId()),
-                    Criteria.where("blockTimestamp").gte(request.getBlockTimestamp()),
-                    Criteria.where("blockTimestamp").lte(request.getBlockTimestamp().plusSeconds(GMX_EXECUTION_CORRELATION_WINDOW_SECONDS)),
-                    attemptsCriteria,
-                    dueCriteria
-            ));
-            candidateQuery.with(Sort.by(
-                    Sort.Order.asc("blockTimestamp"),
-                    Sort.Order.asc("transactionIndex"),
-                    Sort.Order.asc("_id")
-            ));
-            candidateQuery.limit(Math.max(limit, limit * 4));
-
-            for (NormalizedTransaction candidate : mongoOperations.find(candidateQuery, NormalizedTransaction.class)) {
-                candidates.putIfAbsent(candidate.getId(), candidate);
-                if (candidates.size() >= limit) {
-                    return List.copyOf(candidates.values());
-                }
-            }
-        }
-        return List.copyOf(candidates.values());
+        return loadCorrelatedSettlementCandidates(
+                limit,
+                maxAttempts,
+                retryCutoff,
+                requests,
+                List.of(
+                        NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                        NormalizedTransactionType.EXTERNAL_TRANSFER_OUT
+                ),
+                GMX_EXECUTION_CORRELATION_WINDOW_SECONDS
+        );
     }
 
     private List<NormalizedTransaction> loadAsyncRequestSettlementCandidates(
@@ -597,44 +564,83 @@ public class PendingReceiptClarificationQueryService {
         ));
 
         List<NormalizedTransaction> requests = mongoOperations.find(requestsQuery, NormalizedTransaction.class);
-        LinkedHashMap<String, NormalizedTransaction> candidates = new LinkedHashMap<>();
+        return loadCorrelatedSettlementCandidates(
+                limit,
+                maxAttempts,
+                retryCutoff,
+                requests,
+                candidateTypes,
+                forwardWindowSeconds
+        );
+    }
+
+    private List<NormalizedTransaction> loadCorrelatedSettlementCandidates(
+            int limit,
+            int maxAttempts,
+            Instant retryCutoff,
+            List<NormalizedTransaction> requests,
+            List<NormalizedTransactionType> candidateTypes,
+            long forwardWindowSeconds
+    ) {
+        if (limit <= 0 || requests.isEmpty()) {
+            return List.of();
+        }
+
+        Set<String> wallets = new LinkedHashSet<>();
+        Set<NetworkId> networks = new LinkedHashSet<>();
+        Set<String> requestIds = new LinkedHashSet<>();
+        Instant minTimestamp = null;
+        Instant maxTimestamp = null;
+        List<NormalizedTransaction> validRequests = new ArrayList<>();
         for (NormalizedTransaction request : requests) {
             if (request == null
+                    || request.getId() == null
                     || request.getBlockTimestamp() == null
                     || request.getWalletAddress() == null
                     || request.getNetworkId() == null) {
                 continue;
             }
+            validRequests.add(request);
+            wallets.add(request.getWalletAddress());
+            networks.add(request.getNetworkId());
+            requestIds.add(request.getId());
+            Instant windowEnd = request.getBlockTimestamp().plusSeconds(Math.max(1L, forwardWindowSeconds));
+            minTimestamp = minTimestamp == null || request.getBlockTimestamp().isBefore(minTimestamp)
+                    ? request.getBlockTimestamp()
+                    : minTimestamp;
+            maxTimestamp = maxTimestamp == null || windowEnd.isAfter(maxTimestamp) ? windowEnd : maxTimestamp;
+        }
+        if (validRequests.isEmpty() || wallets.isEmpty() || networks.isEmpty()) {
+            return List.of();
+        }
 
-            Criteria attemptsCriteria = new Criteria().orOperator(
-                    Criteria.where("fullReceiptClarificationAttempts").exists(false),
-                    Criteria.where("fullReceiptClarificationAttempts").lt(Math.max(1, maxAttempts))
-            );
-            Criteria dueCriteria = new Criteria().orOperator(
-                    Criteria.where("fullReceiptClarificationAttempts").exists(false),
-                    Criteria.where("fullReceiptClarificationAttempts").lte(0),
-                    Criteria.where("updatedAt").lte(retryCutoff)
-            );
-            Query candidateQuery = new Query(new Criteria().andOperator(
-                    Criteria.where("source").is(NormalizedTransactionSource.ON_CHAIN),
-                    Criteria.where("walletAddress").is(request.getWalletAddress()),
-                    Criteria.where("networkId").is(request.getNetworkId()),
-                    Criteria.where("status").is(NormalizedTransactionStatus.PENDING_PRICE),
-                    Criteria.where("type").in(candidateTypes),
-                    Criteria.where("_id").ne(request.getId()),
-                    Criteria.where("blockTimestamp").gte(request.getBlockTimestamp()),
-                    Criteria.where("blockTimestamp").lte(request.getBlockTimestamp().plusSeconds(Math.max(1L, forwardWindowSeconds))),
-                    attemptsCriteria,
-                    dueCriteria
-            ));
-            candidateQuery.with(Sort.by(
-                    Sort.Order.asc("blockTimestamp"),
-                    Sort.Order.asc("transactionIndex"),
-                    Sort.Order.asc("_id")
-            ));
-            candidateQuery.limit(Math.max(limit, limit * 4));
+        Criteria attemptsCriteria = fullReceiptAttemptsCriteria(maxAttempts, retryCutoff);
+        Query candidateQuery = new Query(new Criteria().andOperator(
+                Criteria.where("source").is(NormalizedTransactionSource.ON_CHAIN),
+                Criteria.where("walletAddress").in(wallets),
+                Criteria.where("networkId").in(networks),
+                Criteria.where("status").is(NormalizedTransactionStatus.PENDING_PRICE),
+                Criteria.where("type").in(candidateTypes),
+                Criteria.where("_id").nin(requestIds),
+                Criteria.where("blockTimestamp").gte(minTimestamp),
+                Criteria.where("blockTimestamp").lte(maxTimestamp),
+                attemptsCriteria
+        ));
+        candidateQuery.with(Sort.by(
+                Sort.Order.asc("blockTimestamp"),
+                Sort.Order.asc("transactionIndex"),
+                Sort.Order.asc("_id")
+        ));
 
-            for (NormalizedTransaction candidate : mongoOperations.find(candidateQuery, NormalizedTransaction.class)) {
+        List<NormalizedTransaction> candidatePool = mongoOperations.find(candidateQuery, NormalizedTransaction.class);
+        LinkedHashMap<String, NormalizedTransaction> candidates = new LinkedHashMap<>();
+        for (NormalizedTransaction request : validRequests) {
+            Instant windowStart = request.getBlockTimestamp();
+            Instant windowEnd = windowStart.plusSeconds(Math.max(1L, forwardWindowSeconds));
+            for (NormalizedTransaction candidate : candidatePool) {
+                if (!correlatesWithRequest(request, candidate, windowStart, windowEnd)) {
+                    continue;
+                }
                 candidates.putIfAbsent(candidate.getId(), candidate);
                 if (candidates.size() >= limit) {
                     return List.copyOf(candidates.values());
@@ -642,6 +648,39 @@ public class PendingReceiptClarificationQueryService {
             }
         }
         return List.copyOf(candidates.values());
+    }
+
+    private Criteria fullReceiptAttemptsCriteria(int maxAttempts, Instant retryCutoff) {
+        Criteria attemptsCriteria = new Criteria().orOperator(
+                Criteria.where("fullReceiptClarificationAttempts").exists(false),
+                Criteria.where("fullReceiptClarificationAttempts").lt(Math.max(1, maxAttempts))
+        );
+        Criteria dueCriteria = new Criteria().orOperator(
+                Criteria.where("fullReceiptClarificationAttempts").exists(false),
+                Criteria.where("fullReceiptClarificationAttempts").lte(0),
+                Criteria.where("updatedAt").lte(retryCutoff)
+        );
+        return new Criteria().andOperator(attemptsCriteria, dueCriteria);
+    }
+
+    private static boolean correlatesWithRequest(
+            NormalizedTransaction request,
+            NormalizedTransaction candidate,
+            Instant windowStart,
+            Instant windowEnd
+    ) {
+        if (candidate == null
+                || candidate.getId() == null
+                || candidate.getBlockTimestamp() == null
+                || candidate.getWalletAddress() == null
+                || candidate.getNetworkId() == null) {
+            return false;
+        }
+        return request.getWalletAddress().equals(candidate.getWalletAddress())
+                && request.getNetworkId() == candidate.getNetworkId()
+                && !request.getId().equals(candidate.getId())
+                && !candidate.getBlockTimestamp().isBefore(windowStart)
+                && !candidate.getBlockTimestamp().isAfter(windowEnd);
     }
 
     private List<NormalizedTransaction> excludeRowsWithPersistedReceiptEvidence(

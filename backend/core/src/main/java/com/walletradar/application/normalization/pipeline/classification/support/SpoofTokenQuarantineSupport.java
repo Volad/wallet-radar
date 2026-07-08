@@ -2,7 +2,7 @@ package com.walletradar.application.normalization.pipeline.classification.suppor
 
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.application.normalization.pipeline.classification.reason.ClassificationReasonCode;
-import com.walletradar.pricing.domain.CanonicalAssetCatalog;
+import com.walletradar.application.pricing.domain.CanonicalAssetCatalog;
 
 /**
  * Shared spoof-token (confusable-symbol) quarantine predicate (SF-1).

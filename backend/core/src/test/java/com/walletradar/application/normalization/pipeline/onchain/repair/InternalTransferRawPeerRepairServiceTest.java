@@ -4,7 +4,7 @@ import com.walletradar.domain.transaction.raw.NormalizationStatus;
 import com.walletradar.domain.transaction.raw.RawSyncMethod;
 import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.domain.transaction.raw.RawTransactionRepository;
-import com.walletradar.session.application.AccountingUniverseService;
+import com.walletradar.application.session.application.AccountingUniverseService;
 import org.bson.Document;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

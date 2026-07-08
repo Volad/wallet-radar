@@ -1,4 +1,4 @@
-package com.walletradar.config;
+package com.walletradar.platform.common.config;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

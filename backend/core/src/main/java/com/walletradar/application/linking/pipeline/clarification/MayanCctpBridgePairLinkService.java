@@ -1,6 +1,6 @@
 package com.walletradar.application.linking.pipeline.clarification;
 
-import com.walletradar.accounting.support.BridgeAssetFamilySupport;
+import com.walletradar.application.costbasis.support.BridgeAssetFamilySupport;
 import com.walletradar.domain.common.ConfidenceLevel;
 import com.walletradar.domain.transaction.normalized.ClassificationSource;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;

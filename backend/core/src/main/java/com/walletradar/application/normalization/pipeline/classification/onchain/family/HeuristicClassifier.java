@@ -19,7 +19,7 @@ import com.walletradar.application.normalization.pipeline.classification.support
 import com.walletradar.application.normalization.pipeline.classification.support.ParityFlowSupport;
 import com.walletradar.application.normalization.pipeline.classification.support.RelayBridgeClassificationSupport;
 import com.walletradar.application.normalization.pipeline.classification.support.SponsoredGasTopUpSupport;
-import com.walletradar.session.application.TrackedWalletLookupService;
+import com.walletradar.application.session.application.TrackedWalletLookupService;
 import com.walletradar.application.normalization.pipeline.onchain.OnChainRawTransactionView;
 import org.bson.Document;
 import org.springframework.core.Ordered;

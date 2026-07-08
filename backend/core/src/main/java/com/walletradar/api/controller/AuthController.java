@@ -1,7 +1,7 @@
 package com.walletradar.api.controller;
 
-import com.walletradar.auth.AuthProperties;
-import com.walletradar.auth.AuthTokenService;
+import com.walletradar.platform.security.auth.AuthProperties;
+import com.walletradar.platform.security.auth.AuthTokenService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseCookie;
 import org.springframework.security.core.context.ReactiveSecurityContextHolder;

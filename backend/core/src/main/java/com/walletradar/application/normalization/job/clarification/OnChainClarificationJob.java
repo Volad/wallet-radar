@@ -1,13 +1,14 @@
 package com.walletradar.application.normalization.job.clarification;
 
-import com.walletradar.config.AsyncConfig;
+import com.walletradar.platform.common.config.AsyncConfig;
 import com.walletradar.domain.event.OnChainClarificationCompletedEvent;
 import com.walletradar.domain.event.OnChainNormalizationCompletedEvent;
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.application.normalization.config.OnChainClarificationProperties;
-import com.walletradar.application.pipeline.job.support.StageExecutionLogSupport;
-import com.walletradar.session.application.SessionPipelineActivityService;
-import com.walletradar.session.application.SessionPipelineStateService;
+import com.walletradar.application.pipeline.config.JobHeartbeatProperties;
+import com.walletradar.platform.common.job.StageExecutionLogSupport;
+import com.walletradar.application.session.application.SessionPipelineActivityService;
+import com.walletradar.application.session.application.SessionPipelineStateService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -29,10 +30,10 @@ import java.util.concurrent.atomic.AtomicReference;
 public class OnChainClarificationJob {
 
     private static final String STAGE_NAME = "on-chain-clarification";
-    private static final Duration HEARTBEAT_INTERVAL = Duration.ofSeconds(30);
 
     private final AtomicBoolean running = new AtomicBoolean(false);
 
+    private final JobHeartbeatProperties jobHeartbeatProperties;
     private final OnChainClarificationProperties properties;
     private final OnChainClarificationService onChainClarificationService;
     private final ClarificationBatchDrainer clarificationBatchDrainer;
@@ -96,7 +97,7 @@ public class OnChainClarificationJob {
 
     private Instant maybeHeartbeat(String sessionId, Instant lastHeartbeatAt) {
         Instant now = Instant.now();
-        if (Duration.between(lastHeartbeatAt, now).compareTo(HEARTBEAT_INTERVAL) < 0) {
+        if (Duration.between(lastHeartbeatAt, now).compareTo(jobHeartbeatProperties.heartbeatInterval()) < 0) {
             return lastHeartbeatAt;
         }
         sessionPipelineActivityService.heartbeat(sessionId, UserSession.PipelineStage.ON_CHAIN_CLARIFICATION);

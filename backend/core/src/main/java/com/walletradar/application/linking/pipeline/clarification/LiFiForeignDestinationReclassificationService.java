@@ -1,6 +1,7 @@
 package com.walletradar.application.linking.pipeline.clarification;
 
 import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.counterparty.CounterpartyType;
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.domain.session.UserSessionRepository;
 import com.walletradar.domain.sync.SyncStatus;
@@ -13,8 +14,8 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.domain.transaction.raw.RawTransactionRepository;
-import com.walletradar.session.application.AccountingUniverseService;
-import com.walletradar.session.application.SessionWalletAdjacencyService;
+import com.walletradar.application.session.application.AccountingUniverseService;
+import com.walletradar.application.session.application.SessionWalletAdjacencyService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.bson.Document;

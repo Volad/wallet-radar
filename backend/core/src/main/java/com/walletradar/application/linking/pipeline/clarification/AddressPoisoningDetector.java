@@ -10,7 +10,7 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.application.normalization.pipeline.classification.support.GmxV2HandlerRegistry;
 import com.walletradar.application.normalization.pipeline.classification.support.KnownBridgeRouterRegistry;
 import com.walletradar.application.normalization.pipeline.classification.support.SpoofTokenQuarantineSupport;
-import com.walletradar.pricing.domain.CanonicalAssetCatalog;
+import com.walletradar.application.pricing.domain.CanonicalAssetCatalog;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.mongodb.core.MongoOperations;

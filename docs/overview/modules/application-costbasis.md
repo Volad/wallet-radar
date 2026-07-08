@@ -1,10 +1,10 @@
-# Application cost basis (`costbasis.application`)
+# Application cost basis (`application.costbasis`)
 
 ## Purpose
 
 Owns **AVCO replay**, immutable `asset_ledger_points`, auxiliary basis books (counterparty pools, LP receipt pools, borrow liabilities), and portfolio-snapshot refresh triggers. Consumes priced, linked, `CONFIRMED` canonical rows only. Must **not** fetch raw chain data or call CEX APIs directly.
 
-## Public port (`costbasis.application.port`)
+## Public port (`application.costbasis.port`)
 
 | Port | Contract |
 |------|----------|
@@ -28,26 +28,29 @@ Owns **AVCO replay**, immutable `asset_ledger_points`, auxiliary basis books (co
 |---------------|------------|---------|
 | `application.normalization` / query | confirmed canonical rows | Replay input |
 | `application.linking` | linkage metadata on rows | Continuity / corridor plans |
-| `pricing` | flow `unitPriceUsd` | Mark-to-market at replay |
+| `application.pricing` | flow `unitPriceUsd` | Mark-to-market at replay |
 | `canonical.correlation` | prefix constants | Bybit corridor matching |
-| `accounting.support` | asset identity, leverage hooks | Family equivalence |
+| `application.costbasis.support` | asset identity, leverage hooks | Family equivalence |
 
 ## Key packages
 
 | Package | Responsibility |
 |---------|----------------|
-| `costbasis.application.port` | BFF- and portfolio-stable reads |
-| `costbasis.application.replay` | `AvcoReplayService`, handlers, engine |
-| `costbasis.application.replay.handler` | `ReplayHandler` per canonical type family |
-| `costbasis.application` | Query services, snapshot refresh job |
-| `costbasis.domain` | Ledger entities and repositories |
+| `application.costbasis.port` | BFF- and portfolio-stable reads |
+| `application.costbasis.application.replay` | `AvcoReplayService`, handlers, engine |
+| `application.costbasis.application.replay.handler` | `ReplayHandler` per canonical type family |
+| `application.costbasis.application` | Query services, snapshot refresh job |
+| `application.costbasis.domain` | Ledger entities and repositories |
+| `application.costbasis.support` | Shared accounting identity and family helpers |
 
 ## Allowed dependencies
 
 - `canonical`
 - `domain` (normalized tx read models via query services, not write repos in other apps)
-- `accounting.support`
+- `application.costbasis.support`
 - `application.cex.port` / `CexLiveBalancePort` only (no `application.cex.acquisition`)
+- `application.pricing` (price gate)
+- `application.session` (universe scope)
 
 Forbidden: `ingestion`, `integration` (enforced by `ModuleBoundaryTest`).
 

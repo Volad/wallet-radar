@@ -5,9 +5,9 @@ import com.walletradar.api.dto.SessionBackfillStatusResponse;
 import com.walletradar.api.dto.SessionDashboardResponse;
 import com.walletradar.api.dto.SessionResponse;
 import com.walletradar.api.dto.SessionTransactionsResponse;
-import com.walletradar.portfolio.application.SessionDashboardQueryService;
-import com.walletradar.portfolio.application.SessionQueryService;
-import com.walletradar.portfolio.application.SessionTransactionsQueryService;
+import com.walletradar.application.portfolio.application.SessionDashboardQueryService;
+import com.walletradar.application.portfolio.application.SessionQueryService;
+import com.walletradar.application.portfolio.application.SessionTransactionsQueryService;
 import org.springframework.stereotype.Component;
 
 /**

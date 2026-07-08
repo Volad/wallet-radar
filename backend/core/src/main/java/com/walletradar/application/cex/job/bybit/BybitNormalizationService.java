@@ -21,7 +21,7 @@ import com.walletradar.application.cex.normalization.venue.bybit.BybitTradePaire
 import com.walletradar.application.cex.normalization.venue.bybit.BybitTransferShadowPairer;
 import com.walletradar.application.cex.normalization.venue.bybit.PendingExternalLedgerRowQueryService;
 import com.walletradar.application.normalization.store.IdempotentNormalizedTransactionStore;
-import com.walletradar.session.application.AccountingUniverseService;
+import com.walletradar.application.session.application.AccountingUniverseService;
 import com.walletradar.application.cex.acquisition.venue.bybit.BybitExtractionService;
 import com.walletradar.application.cex.acquisition.venue.bybit.BybitExtractedEventMapper;
 import com.walletradar.application.cex.acquisition.venue.bybit.BybitExtractedTradePairer;

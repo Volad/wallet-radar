@@ -1,6 +1,6 @@
 package com.walletradar.application.cex.acquisition.venue.bybit;
 
-import com.walletradar.accounting.support.AccountingAssetFamilySupport;
+import com.walletradar.application.costbasis.support.AccountingAssetFamilySupport;
 import com.walletradar.domain.transaction.bybit.BybitExtractedEvent;
 import com.walletradar.domain.transaction.bybit.BybitExtractedEventStatus;
 import lombok.RequiredArgsConstructor;

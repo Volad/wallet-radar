@@ -1,7 +1,7 @@
 package com.walletradar.application.linking.pipeline.clarification;
 
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
-import com.walletradar.pricing.domain.CanonicalAssetCatalog;
+import com.walletradar.application.pricing.domain.CanonicalAssetCatalog;
 
 /**
  * BR-2: makes the "peg-neutral" bridge assumption explicit and checked.

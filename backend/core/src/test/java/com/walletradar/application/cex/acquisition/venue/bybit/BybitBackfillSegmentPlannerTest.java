@@ -2,8 +2,8 @@ package com.walletradar.application.cex.acquisition.venue.bybit;
 
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.domain.sync.BackfillSegment;
-import com.walletradar.integration.config.BybitIntegrationProperties;
-import com.walletradar.integration.config.IntegrationBackfillProperties;
+import com.walletradar.application.cex.config.BybitIntegrationProperties;
+import com.walletradar.application.cex.config.IntegrationBackfillProperties;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.junit.jupiter.MockitoExtension;

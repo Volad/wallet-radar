@@ -5,8 +5,9 @@ import com.walletradar.domain.event.OnChainReclassificationCompletedEvent;
 import com.walletradar.application.normalization.config.OnChainNormalizationProperties;
 import com.walletradar.application.normalization.job.clarification.ClarificationBatchDrainer;
 import com.walletradar.application.normalization.job.clarification.OnChainClarificationService;
-import com.walletradar.session.application.SessionPipelineActivityService;
-import com.walletradar.session.application.SessionPipelineStateService;
+import com.walletradar.application.session.application.SessionPipelineActivityService;
+import com.walletradar.application.session.application.SessionPipelineStateService;
+import com.walletradar.application.pipeline.config.JobHeartbeatProperties;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.ApplicationEventPublisher;
@@ -146,6 +147,7 @@ class OnChainReclassificationJobTest {
             ApplicationEventPublisher publisher
     ) {
         return new OnChainReclassificationJob(
+                new JobHeartbeatProperties(),
                 properties,
                 service,
                 clarificationService,

@@ -11,7 +11,7 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.domain.transaction.raw.RawTransactionRepository;
 import com.walletradar.application.cex.normalization.venue.bybit.BybitCanonicalTransactionBuilder;
-import com.walletradar.session.application.TrackedWalletLookupService;
+import com.walletradar.application.session.application.TrackedWalletLookupService;
 import com.walletradar.application.cex.acquisition.venue.bybit.BybitExtractedEventMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;

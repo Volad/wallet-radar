@@ -1,7 +1,7 @@
 package com.walletradar.application.linking.pipeline.clarification;
 
 import com.walletradar.domain.transaction.raw.RawTransaction;
-import com.walletradar.application.pipeline.pipeline.support.BsonCoercionSupport;
+import com.walletradar.platform.persistence.support.BsonCoercionSupport;
 import org.bson.Document;
 import org.springframework.stereotype.Component;
 

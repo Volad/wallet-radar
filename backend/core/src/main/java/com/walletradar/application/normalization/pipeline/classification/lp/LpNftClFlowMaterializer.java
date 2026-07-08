@@ -1,6 +1,6 @@
 package com.walletradar.application.normalization.pipeline.classification.lp;
 
-import com.walletradar.accounting.support.LpReceiptSymbolSupport;
+import com.walletradar.application.costbasis.support.LpReceiptSymbolSupport;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;

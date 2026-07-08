@@ -1,6 +1,6 @@
 package com.walletradar.application.cex.normalization.venue.bybit;
 
-import com.walletradar.accounting.support.AccountingAssetFamilySupport;
+import com.walletradar.application.costbasis.support.AccountingAssetFamilySupport;
 import com.walletradar.domain.common.Decimal128Support;
 import com.walletradar.domain.common.NetworkAddressFormat;
 import com.walletradar.domain.common.NetworkId;
@@ -13,10 +13,10 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
-import com.walletradar.application.linking.pipeline.clarification.CounterpartyType;
+import com.walletradar.domain.counterparty.CounterpartyType;
 import com.walletradar.application.linking.pipeline.clarification.FlowCounterpartySupport;
-import com.walletradar.pricing.domain.CanonicalAssetCatalog;
-import com.walletradar.session.application.AccountingUniverseService;
+import com.walletradar.application.pricing.domain.CanonicalAssetCatalog;
+import com.walletradar.application.session.application.AccountingUniverseService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;

@@ -14,13 +14,13 @@ import com.walletradar.application.linking.pipeline.clarification.CounterpartyEn
 import com.walletradar.application.linking.pipeline.clarification.ProtocolNameEnrichmentService;
 import com.walletradar.application.linking.pipeline.clarification.RegistryBridgeInboundTypeCorrectionService;
 import com.walletradar.application.normalization.pipeline.onchain.OnChainNormalizedTransactionBuilder;
-import com.walletradar.lending.application.LendingReceiptIdentityService;
+import com.walletradar.application.lending.application.LendingReceiptIdentityService;
 import com.walletradar.application.normalization.pipeline.onchain.PendingRawTransactionQueryService;
 import com.walletradar.application.normalization.pipeline.onchain.repair.ExplorerRawOrderingRepairGateway;
 import com.walletradar.application.normalization.pipeline.onchain.repair.InternalTransferRawPeerRepairService;
 import com.walletradar.application.normalization.pipeline.onchain.support.ResolvedRawOrderingMetadata;
 import com.walletradar.application.normalization.store.IdempotentNormalizedTransactionStore;
-import com.walletradar.session.application.AccountingUniverseService;
+import com.walletradar.application.session.application.AccountingUniverseService;
 import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;

@@ -1,6 +1,6 @@
 package com.walletradar.application.backfill.job;
 
-import com.walletradar.config.SchedulerConfig;
+import com.walletradar.platform.common.config.SchedulerConfig;
 import com.walletradar.domain.event.SessionBackfillCompletedEvent;
 import com.walletradar.domain.event.WalletNetworkBackfillCompletedEvent;
 import com.walletradar.domain.session.UserSession;
@@ -9,7 +9,7 @@ import com.walletradar.domain.sync.BackfillSegment;
 import com.walletradar.domain.sync.BackfillSegmentRepository;
 import com.walletradar.domain.sync.SyncStatus;
 import com.walletradar.domain.sync.SyncStatusRepository;
-import com.walletradar.session.application.SessionPipelineStateService;
+import com.walletradar.application.session.application.SessionPipelineStateService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.ApplicationEventPublisher;

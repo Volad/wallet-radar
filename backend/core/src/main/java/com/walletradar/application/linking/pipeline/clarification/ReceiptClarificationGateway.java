@@ -19,7 +19,7 @@ import com.walletradar.platform.networks.evm.rpc.support.RpcTokenTransferResolve
 import com.walletradar.platform.networks.config.IngestionNetworkProperties;
 import com.walletradar.application.normalization.pipeline.classification.support.TokenSymbolFallbackSupport;
 import com.walletradar.application.normalization.pipeline.onchain.OnChainRawTransactionView;
-import com.walletradar.application.pipeline.pipeline.support.BsonCoercionSupport;
+import com.walletradar.platform.persistence.support.BsonCoercionSupport;
 import lombok.RequiredArgsConstructor;
 import org.bson.Document;
 import org.springframework.stereotype.Service;

@@ -13,8 +13,9 @@ wallet-radar/
 ├── build.gradle.kts
 └── backend/
     ├── build.gradle.kts     # :backend — Spring Boot launcher (bootJar / bootRun)
-    ├── core/                # :backend:core — application (api, platform, application.*, costbasis, …)
+    ├── core/                # :backend:core — application (api, platform, application.*, …)
     │   └── src/
+    ├── platform/            # :backend:platform — shared infra (Mongo, RPC, security, async)
     ├── domain/              # :backend:domain — shared entities + Mongo @Document models
     ├── canonical/           # :backend:canonical — pure correlation/carry helpers
     └── config/checkstyle/
@@ -25,12 +26,14 @@ wallet-radar/
 ```
 :backend:domain
    ↑
-:backend:canonical
-   ↑
-:backend:core          (java-library; all former backend/src code)
-   ↑
-:backend               (Spring Boot fat JAR aggregator)
+:backend:canonical    :backend:platform
+   ↑                        ↑
+   └──────── :backend:core ──┘
+              ↑
+           :backend               (Spring Boot fat JAR aggregator)
 ```
+
+`:backend:platform` is **Done** (2026): `com.walletradar.platform.**` extracted with `PlatformModuleBoundaryTest`.
 
 ## Commands
 
@@ -48,7 +51,7 @@ Docker Compose still uses `:backend:bootRun`.
 
 ## Package naming decision
 
-Packages `costbasis/`, `pricing/`, `lending/`, `liquiditypools/`, `portfolio/` are **intentionally kept at top level** — they will become separate Gradle subprojects without renaming to `application.costbasis` etc. Rationale: names are stable in ADRs, docs and tests; compiler-enforced boundaries are more valuable than naming uniformity. No cross-package moves planned before Gradle splits.
+Top-level packages `costbasis/`, `pricing/`, `lending/`, `liquiditypools/`, `portfolio/`, and `session/` were renamed to `application.*` (e.g. `application.costbasis`) before Gradle splits. Compiler-enforced boundaries remain the primary goal.
 
 ## Remaining splits (next milestones)
 
@@ -56,10 +59,10 @@ Split `:backend:core` into vertical modules (same packages, compiler-enforced DA
 
 | # | Subproject | Source packages (target) | Depends on | Status |
 |---|------------|--------------------------|------------|--------|
-| 1 | `:backend:platform` | `com.walletradar.platform.**` | `:backend:domain` | **Next** |
-| 2 | `:backend:app-costbasis` | `costbasis.**` | `:backend:domain`, `:backend:canonical`, `:backend:platform` | Pending |
-| 3 | `:backend:app-pricing` | `pricing.**` | `:backend:domain`, `:backend:platform` | Pending |
-| 4 | `:backend:app-portfolio` | `portfolio.**`, `liquiditypools.**`, `lending.**` | `:backend:domain`, ports | Pending |
+| 1 | `:backend:platform` | `com.walletradar.platform.**` | `:backend:domain` | **Done** |
+| 2 | `:backend:app-costbasis` | `application.costbasis.**` | `:backend:domain`, `:backend:canonical`, `:backend:platform` | Pending |
+| 3 | `:backend:app-pricing` | `application.pricing.**` | `:backend:domain`, `:backend:platform` | Pending |
+| 4 | `:backend:app-portfolio` | `application.portfolio.**`, `application.liquiditypools.**`, `application.lending.**` | `:backend:domain`, ports | Pending |
 | 5 | `:backend:app-cex` | `application.cex.**` | `:backend:domain`, `:backend:canonical`, `:backend:platform` | Pending |
 | 6 | `:backend:app-normalization` | `application.normalization.**` | `:backend:domain`, `:backend:canonical`, `:backend:platform` | Pending |
 | 7 | `:backend:app-backfill` | `application.backfill.**` | `:backend:domain`, `:backend:platform` | Pending |

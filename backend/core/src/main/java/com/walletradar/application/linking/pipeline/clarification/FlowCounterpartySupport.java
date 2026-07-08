@@ -1,6 +1,7 @@
 package com.walletradar.application.linking.pipeline.clarification;
 
 import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.counterparty.CounterpartyType;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.application.normalization.pipeline.onchain.OnChainRawTransactionView;

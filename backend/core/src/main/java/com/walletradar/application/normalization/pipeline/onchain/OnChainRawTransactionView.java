@@ -4,7 +4,7 @@ import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.transaction.raw.RawSyncMethod;
 import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.application.normalization.pipeline.onchain.support.RawOrderingMetadataResolver;
-import com.walletradar.application.pipeline.pipeline.support.BsonCoercionSupport;
+import com.walletradar.platform.persistence.support.BsonCoercionSupport;
 import org.bson.Document;
 
 import java.math.BigDecimal;

@@ -5,8 +5,9 @@ import com.walletradar.domain.event.LinkingCompletedEvent;
 import com.walletradar.domain.event.LinkingRequestedEvent;
 import com.walletradar.domain.event.OnChainReclassificationCompletedEvent;
 import com.walletradar.application.linking.config.LinkingProperties;
-import com.walletradar.session.application.SessionPipelineActivityService;
-import com.walletradar.session.application.SessionPipelineStateService;
+import com.walletradar.application.session.application.SessionPipelineActivityService;
+import com.walletradar.application.session.application.SessionPipelineStateService;
+import com.walletradar.application.pipeline.config.JobHeartbeatProperties;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -50,6 +51,7 @@ class LinkingJobTest {
         List<Object> events = new ArrayList<>();
         ApplicationEventPublisher publisher = events::add;
         LinkingJob job = new LinkingJob(
+                new JobHeartbeatProperties(),
                 properties,
                 linkingBatchProcessor,
                 linkingDataGateService,
@@ -89,6 +91,7 @@ class LinkingJobTest {
         List<Object> events = new ArrayList<>();
         ApplicationEventPublisher publisher = events::add;
         LinkingJob job = new LinkingJob(
+                new JobHeartbeatProperties(),
                 properties,
                 linkingBatchProcessor,
                 linkingDataGateService,
@@ -124,6 +127,7 @@ class LinkingJobTest {
         List<Object> events = new ArrayList<>();
         ApplicationEventPublisher publisher = events::add;
         LinkingJob job = new LinkingJob(
+                new JobHeartbeatProperties(),
                 properties,
                 linkingBatchProcessor,
                 linkingDataGateService,

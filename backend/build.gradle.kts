@@ -21,7 +21,8 @@ tasks.test {
     dependsOn(
         ":backend:core:test",
         ":backend:domain:test",
-        ":backend:canonical:test"
+        ":backend:canonical:test",
+        ":backend:platform:test"
     )
 }
 

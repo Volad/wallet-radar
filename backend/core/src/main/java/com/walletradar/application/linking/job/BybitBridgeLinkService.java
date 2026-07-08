@@ -1,6 +1,6 @@
 package com.walletradar.application.linking.job;
 
-import com.walletradar.accounting.support.AccountingAssetFamilySupport;
+import com.walletradar.application.costbasis.support.AccountingAssetFamilySupport;
 import com.walletradar.domain.transaction.bybit.BybitExtractedEvent;
 import com.walletradar.domain.transaction.bybit.BybitExtractedEventRepository;
 import com.walletradar.domain.transaction.externalledger.ExternalLedgerRaw;
@@ -14,7 +14,7 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.domain.transaction.raw.RawTransactionRepository;
 import com.walletradar.application.cex.normalization.venue.bybit.BybitCanonicalTransactionBuilder;
-import com.walletradar.session.application.TrackedWalletLookupService;
+import com.walletradar.application.session.application.TrackedWalletLookupService;
 import com.walletradar.application.cex.acquisition.venue.bybit.BybitExtractedEventMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Sort;

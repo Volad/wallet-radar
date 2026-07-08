@@ -3,7 +3,7 @@ package com.walletradar.application.linking.pipeline.clarification;
 import com.walletradar.domain.transaction.raw.RawSyncMethod;
 import com.walletradar.platform.networks.evm.explorer.model.ExplorerReceipt;
 import com.walletradar.application.normalization.pipeline.onchain.OnChainRawTransactionView;
-import com.walletradar.application.pipeline.pipeline.support.BsonCoercionSupport;
+import com.walletradar.platform.persistence.support.BsonCoercionSupport;
 import org.bson.Document;
 
 import java.util.List;

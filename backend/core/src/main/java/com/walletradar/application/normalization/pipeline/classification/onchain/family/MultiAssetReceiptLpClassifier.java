@@ -1,6 +1,6 @@
 package com.walletradar.application.normalization.pipeline.classification.onchain.family;
 
-import com.walletradar.accounting.support.AccountingAssetFamilySupport;
+import com.walletradar.application.costbasis.support.AccountingAssetFamilySupport;
 import com.walletradar.domain.common.ConfidenceLevel;
 import com.walletradar.domain.transaction.normalized.ClassificationSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
@@ -14,7 +14,7 @@ import com.walletradar.application.normalization.pipeline.classification.registr
 import com.walletradar.application.normalization.pipeline.classification.support.LpPositionLifecycleSupport;
 import com.walletradar.application.normalization.pipeline.classification.support.OnChainClassificationSupport;
 import com.walletradar.application.normalization.pipeline.classification.support.RawLeg;
-import com.walletradar.lending.application.LendingAssetSymbolSupport;
+import com.walletradar.application.lending.application.LendingAssetSymbolSupport;
 import org.springframework.core.Ordered;
 import org.springframework.stereotype.Component;
 

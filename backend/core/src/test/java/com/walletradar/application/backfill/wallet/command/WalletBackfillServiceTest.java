@@ -1,7 +1,7 @@
 package com.walletradar.application.backfill.wallet.command;
 
 import com.walletradar.domain.common.NetworkId;
-import com.walletradar.session.application.SourceSyncPlanner;
+import com.walletradar.application.session.application.SourceSyncPlanner;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;

@@ -9,7 +9,7 @@ Template: [_template.md](_template.md). CI guard: `DocumentationCoverageTest.req
 |-------|-------|
 | **canonical** | [canonical.md](canonical.md) |
 | **platform** | [platform.md](platform.md) · [platform-networks](platform-networks.md) · [platform-persistence](platform-persistence.md) · [platform-security](platform-security.md) · [platform-telemetry](platform-telemetry.md) · [platform-common](platform-common.md) |
-| **application** | [application-backfill](application-backfill.md) · [application-cex](application-cex.md) · [application-normalization](application-normalization.md) · [application-linking](application-linking.md) · [application-costbasis](application-costbasis.md) · [application-portfolio](application-portfolio.md) · [application-pipeline](application-pipeline.md) |
+| **application** | [application-backfill](application-backfill.md) · [application-cex](application-cex.md) · [application-normalization](application-normalization.md) · [application-linking](application-linking.md) · [application-costbasis](application-costbasis.md) · [application-portfolio](application-portfolio.md) · [application-pricing](application-pricing.md) · [application-lending](application-lending.md) · [application-liquiditypools](application-liquiditypools.md) · [application-session](application-session.md) · [application-pipeline](application-pipeline.md) |
 | **api (BFF)** | [api-bff.md](api-bff.md) |
 
 ## Track A required pages

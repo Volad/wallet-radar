@@ -2,7 +2,7 @@ package com.walletradar.application.linking.pipeline.clarification;
 
 import com.walletradar.canonical.correlation.BybitCarryContinuitySupport;
 import com.walletradar.canonical.correlation.CorrelationContract;
-import com.walletradar.accounting.support.AccountingAssetFamilySupport;
+import com.walletradar.application.costbasis.support.AccountingAssetFamilySupport;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
@@ -73,7 +73,7 @@ public class BybitOnChainEarnOrphanRepairService {
     /**
      * Used for FUND events that arrived via spot trading (not a corridor deposit). The position
      * key for these is the stripped {@code BYBIT:uid} wallet — {@code isEarnPrincipalPaired}
-     * in {@link com.walletradar.accounting.support.AccountingAssetIdentitySupport} does NOT
+     * in {@link com.walletradar.application.costbasis.support.AccountingAssetIdentitySupport} does NOT
      * activate for this prefix so the FUND sub-account suffix is stripped as normal.
      */
     public static final String EARN_ONCHAIN_CORR_PREFIX = CorrelationContract.BYBIT_EARN_ONCHAIN_V1_PREFIX;

@@ -1,6 +1,6 @@
 package com.walletradar.application.linking.pipeline.clarification;
 
-import com.walletradar.accounting.support.BridgeAssetFamilySupport;
+import com.walletradar.application.costbasis.support.BridgeAssetFamilySupport;
 import com.walletradar.domain.common.ConfidenceLevel;
 import com.walletradar.domain.transaction.normalized.ClassificationSource;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
@@ -16,7 +16,7 @@ import com.walletradar.application.normalization.pipeline.classification.registr
 import com.walletradar.application.normalization.pipeline.classification.registry.ProtocolRegistryService;
 import com.walletradar.application.normalization.pipeline.classification.support.LiFiRouteSupport;
 import com.walletradar.application.normalization.pipeline.onchain.OnChainRawTransactionView;
-import com.walletradar.pricing.domain.CanonicalAssetCatalog;
+import com.walletradar.application.pricing.domain.CanonicalAssetCatalog;
 import lombok.RequiredArgsConstructor;
 import org.bson.Document;
 import org.springframework.data.domain.Sort;

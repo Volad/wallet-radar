@@ -1,5 +1,6 @@
 package com.walletradar.application.linking.pipeline.clarification;
 
+import com.walletradar.domain.counterparty.CounterpartyType;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.domain.transaction.raw.RawTransaction;

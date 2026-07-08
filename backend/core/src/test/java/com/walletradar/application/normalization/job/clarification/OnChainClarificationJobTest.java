@@ -3,8 +3,9 @@ package com.walletradar.application.normalization.job.clarification;
 import com.walletradar.domain.event.OnChainClarificationCompletedEvent;
 import com.walletradar.domain.event.OnChainNormalizationCompletedEvent;
 import com.walletradar.application.normalization.config.OnChainClarificationProperties;
-import com.walletradar.session.application.SessionPipelineActivityService;
-import com.walletradar.session.application.SessionPipelineStateService;
+import com.walletradar.application.session.application.SessionPipelineActivityService;
+import com.walletradar.application.session.application.SessionPipelineStateService;
+import com.walletradar.application.pipeline.config.JobHeartbeatProperties;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.ApplicationEventPublisher;
@@ -35,6 +36,7 @@ class OnChainClarificationJobTest {
         SessionPipelineStateService pipelineStateService = mock(SessionPipelineStateService.class);
 
         OnChainClarificationJob job = new OnChainClarificationJob(
+                new JobHeartbeatProperties(),
                 properties,
                 metadataService,
                 new ClarificationBatchDrainer(),
@@ -64,6 +66,7 @@ class OnChainClarificationJobTest {
         SessionPipelineStateService pipelineStateService = mock(SessionPipelineStateService.class);
 
         OnChainClarificationJob job = new OnChainClarificationJob(
+                new JobHeartbeatProperties(),
                 properties,
                 metadataService,
                 new ClarificationBatchDrainer(),
@@ -94,6 +97,7 @@ class OnChainClarificationJobTest {
         SessionPipelineStateService pipelineStateService = mock(SessionPipelineStateService.class);
 
         OnChainClarificationJob job = new OnChainClarificationJob(
+                new JobHeartbeatProperties(),
                 properties,
                 metadataService,
                 new ClarificationBatchDrainer(),

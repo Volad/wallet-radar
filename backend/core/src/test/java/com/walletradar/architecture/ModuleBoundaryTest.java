@@ -61,7 +61,7 @@ class ModuleBoundaryTest {
     @Test
     void portfolio_read_model_must_not_depend_on_ingestion_job_or_pipeline_write() {
         ArchRule rule = noClasses()
-                .that().resideInAPackage("..portfolio.application..")
+                .that().resideInAPackage("..application.portfolio.application..")
                 .and().haveSimpleNameNotContaining("OnChainBalanceRefreshService")
                 .should().dependOnClassesThat().resideInAnyPackage(
                         "..application.backfill.job..",
@@ -95,7 +95,12 @@ class ModuleBoundaryTest {
                         "..application.linking..",
                         "..application.normalization..",
                         "..application.pipeline..",
-                        "..costbasis.application.."
+                        "..application.costbasis..",
+                        "..application.pricing..",
+                        "..application.lending..",
+                        "..application.liquiditypools..",
+                        "..application.portfolio..",
+                        "..application.session.."
                 )
                 .should().dependOnClassesThat().resideInAnyPackage(
                         "..application..service..",

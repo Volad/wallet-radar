@@ -21,8 +21,8 @@ import com.walletradar.application.normalization.pipeline.onchain.repair.Interna
 import com.walletradar.application.normalization.pipeline.onchain.support.RawOrderingMetadataResolver;
 import com.walletradar.application.normalization.pipeline.onchain.support.ResolvedRawOrderingMetadata;
 import com.walletradar.application.normalization.store.IdempotentNormalizedTransactionStore;
-import com.walletradar.lending.application.LendingReceiptIdentityService;
-import com.walletradar.session.application.AccountingUniverseService;
+import com.walletradar.application.lending.application.LendingReceiptIdentityService;
+import com.walletradar.application.session.application.AccountingUniverseService;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
