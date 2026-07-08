@@ -19,7 +19,8 @@ Global reference for product context, domain model, backend pipeline stages, fro
 |-----|-------------|
 | [Product context](overview/01-product-context.md) | Goals, non-goals, constraints |
 | [Domain & glossary](overview/02-domain-glossary.md) | Entities, invariants, terminology |
-| [Architecture](overview/03-architecture.md) | Module map, pipeline summary, terminology corrections |
+| [Architecture](overview/03-architecture.md) | Layered model (canonical / platform / application / api-BFF), module map, extensibility seams |
+| [Module index](overview/modules/README.md) | Per-bounded-context pages (canonical, platform, application.*, api) |
 | [Architecture decisions (SAD)](overview/architecture-decisions.md) | Accepted system-architecture decisions (D-xx rationale) |
 | [Data model](overview/04-data-model.md) | Mongo collections, domain entities, status lifecycles |
 | [Pipeline orchestration](overview/05-pipeline-orchestration.md) | Events, schedulers, stage state machine |
@@ -65,6 +66,9 @@ Global reference for product context, domain model, backend pipeline stages, fro
 | [Ledger points & basis effects](reference/ledger-points-and-basis-effects.md) | `AssetLedgerPoint`, `BasisEffect`, fields |
 | [RawTransaction field mapping (Explorer vs RPC)](reference/evm-rawtransaction-rpc-field-mapping.md) | `rawData.*` provenance per JSON-RPC method |
 | [RawTransaction field mapping (Etherscan vs Blockscout)](reference/evm-etherscan-vs-blockscout-field-mapping.md) | Explorer API compatibility for `rawData.*` |
+| [Protocol descriptor](reference/protocol-descriptor.md) | Stable `protocolKey` contract (A5) |
+| [Capability / behavior SPI](reference/capability-behavior-spi.md) | CEX ledger, network family, protocol test kit |
+| [Extensibility guides](reference/extensibility/) | [Add a network](reference/extensibility/add-a-network.md) · [Add a protocol](reference/extensibility/add-a-protocol.md) · [Add an integration](reference/extensibility/add-an-integration.md) |
 
 ### 5. Examples (synthetic — no real DB hashes)
 

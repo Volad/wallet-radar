@@ -1,0 +1,12 @@
+package com.walletradar.application.costbasis.domain;
+
+import org.springframework.data.mongodb.repository.MongoRepository;
+
+import java.util.List;
+
+public interface BorrowLiabilityRepository extends MongoRepository<BorrowLiability, String> {
+
+    List<BorrowLiability> findByUniverseId(String universeId);
+
+    void deleteByUniverseId(String universeId);
+}

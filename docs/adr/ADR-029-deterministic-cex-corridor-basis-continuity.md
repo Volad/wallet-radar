@@ -65,6 +65,33 @@ not inherit the source bridge `CARRY_OUT` basis (LiFi `bridge:lifi:<outHash>` co
   and refresh; the chain txHash does not), so the corridor credit joins the same
   `corr-family:BYBIT-CORRIDOR:…` queue bit-identically in both cycles.
 
+**Addendum (RC-9): extension to the remaining stream-mirror/pairing passes.** D1's "deterministic,
+idempotent, pure function of the candidate set" principle was previously enforced only on the
+paths listed above. It is now also restored on the following paths, all of which select one
+canonical document among 2+ tied/near-tied candidates and previously broke the tie on the leaked
+Mongo scan order rather than on a stable key:
+
+- `BybitStreamAuthorityCollapser`: the `collapseMirrors()` main query now carries an explicit
+  ascending `_id` `Sort`; `unifyOpposingCorrelations`'s bucket sort and `demoteResidualMirrors`'s
+  canonical-leg selection both end in a lowest-`_id` tiebreak (the latter via a local
+  timestamp-then-`_id` comparator, not `comparePriorityThenId` — its bucket can legitimately span
+  multiple sub-accounts with incomparable `canonicalPriority` scales); `demoteEventCountMirrors`'s
+  `canonicalSource` selection gains a secondary `source` string-compare tiebreak.
+- `BybitInternalTransferPairer`: `pairBroadEconomicFingerprint`, `pairDemotedEconOrphans`,
+  `repairSingletonPairs`, `pairBundles`, and `pairSameWalletRoundTrips` all sort candidates with a
+  trailing lowest-`_id` tiebreak, mirroring the pattern already shipped on `dedupSameSignMirrors`.
+- `BybitEarnPrincipalTransferPairer`: `pairEarnPrincipalTransfers`'s corridor sort gains the same
+  tiebreak; `pairCoEventSiblings`'s `isPreferredSibling` gains a lowest-`_id` fallback for the
+  "both candidates still unclaimed" case (the corridor-sort fix alone only fixes iteration order,
+  not this method's own tie among multiple free candidates).
+- `BybitStakingConversionPairer`: `pairConversions`'s `group.sort(...)` gains the same tiebreak.
+
+The shared `idTiebreak()` helper lives in `BybitStreamAuthorityCollapserSupport` and is reused by
+every path above. Regression coverage lives in `BybitStreamAuthorityCollapserTest`,
+`BybitInternalTransferPairerTest`, `BybitEarnPrincipalTransferPairerTest`,
+`BybitStakingConversionPairerTest` (fix-scoped reordered-scan unit tests), and the
+system-property-gated whole-chain `BybitRepairChainIdempotencyIntegrationTest`.
+
 ### D2 — Carry-continuity rule in replay
 
 - `ReplayTransferClassifier` splits the corridor predicate into direction-aware predicates:

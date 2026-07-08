@@ -1,0 +1,273 @@
+package com.walletradar.application.costbasis.application;
+
+import com.walletradar.application.costbasis.domain.AssetLedgerPointRepository;
+import com.walletradar.domain.event.AccountingReplayCompletedEvent;
+import com.walletradar.domain.event.PricingCompletedEvent;
+import com.walletradar.domain.session.UserSession;
+import com.walletradar.application.pricing.application.PricingDataGateService;
+import com.walletradar.application.pricing.application.PricingDataGateSnapshot;
+import com.walletradar.domain.session.UserSessionRepository;
+import com.walletradar.application.session.application.AccountingUniverseService;
+import com.walletradar.application.session.application.SessionPipelineActivityService;
+import com.walletradar.application.session.application.SessionPipelineStateService;
+import com.walletradar.application.pipeline.config.JobHeartbeatProperties;
+import com.walletradar.platform.telemetry.PipelineTelemetrySnapshot;
+import com.walletradar.platform.telemetry.PipelineTelemetrySnapshotService;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InOrder;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
+
+import java.util.List;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+@ExtendWith(MockitoExtension.class)
+class CostBasisReplayJobTest {
+
+    @Mock
+    private PricingDataGateService pricingDataGateService;
+    @Mock
+    private UserSessionRepository userSessionRepository;
+    @Mock
+    private AccountingUniverseService accountingUniverseService;
+    @Mock
+    private PendingStatQueryService pendingStatQueryService;
+    @Mock
+    private StatValidationService statValidationService;
+    @Mock
+    private AvcoReplayService avcoReplayService;
+    @Mock
+    private AssetLedgerPointRepository assetLedgerPointRepository;
+    @Mock
+    private PipelineTelemetrySnapshotService pipelineTelemetrySnapshotService;
+    @Mock
+    private ApplicationEventPublisher applicationEventPublisher;
+    @Mock
+    private SessionPipelineActivityService pipelineActivityService;
+    @Mock
+    private SessionPipelineStateService sessionPipelineStateService;
+
+    @Test
+    void runReplayValidatesThenReplaysWhenGateIsGreen() {
+        CostBasisProperties properties = properties();
+        UserSession session = session("session-1");
+        AccountingUniverseService.AccountingUniverseScope scope = scope("session-1", "wallet-a");
+        when(userSessionRepository.findAll()).thenReturn(List.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(scope);
+        when(statValidationService.processNextBatch(25, 60, scope.memberRefs())).thenReturn(
+                new StatValidationOutcome(2, 2, 0),
+                new StatValidationOutcome(0, 0, 0)
+        );
+        when(pricingDataGateService.snapshot(scope.memberRefs())).thenReturn(new PricingDataGateSnapshot(0L, 0L, 0L, 0L, 1L, 2L, true));
+        when(pendingStatQueryService.countPending(scope.memberRefs())).thenReturn(0L);
+        when(avcoReplayService.replayConfirmed(
+                eq("ACCOUNTING_UNIVERSE:session-1"),
+                eq(scope.memberRefs()),
+                org.mockito.ArgumentMatchers.any(Runnable.class)
+        )).thenReturn(7);
+        when(pipelineTelemetrySnapshotService.snapshot()).thenReturn(snapshot());
+
+        CostBasisReplayJob job = new CostBasisReplayJob(
+                properties,
+                new JobHeartbeatProperties(),
+                userSessionRepository,
+                accountingUniverseService,
+                pricingDataGateService,
+                pendingStatQueryService,
+                statValidationService,
+                avcoReplayService,
+                assetLedgerPointRepository,
+                pipelineTelemetrySnapshotService,
+                applicationEventPublisher,
+                pipelineActivityService,
+                sessionPipelineStateService
+        );
+
+        int replayed = job.runReplay();
+
+        assertThat(replayed).isEqualTo(7);
+        verify(avcoReplayService).replayConfirmed(
+                eq("ACCOUNTING_UNIVERSE:session-1"),
+                eq(scope.memberRefs()),
+                org.mockito.ArgumentMatchers.any(Runnable.class)
+        );
+        InOrder inOrder = org.mockito.Mockito.inOrder(avcoReplayService, applicationEventPublisher);
+        inOrder.verify(avcoReplayService).replayConfirmed(
+                eq("ACCOUNTING_UNIVERSE:session-1"),
+                eq(scope.memberRefs()),
+                org.mockito.ArgumentMatchers.any(Runnable.class)
+        );
+        inOrder.verify(applicationEventPublisher).publishEvent(
+                eq(new AccountingReplayCompletedEvent("session-1", 7, "manual"))
+        );
+    }
+
+    @Test
+    void runReplayStopsWhenPendingStatStillExists() {
+        CostBasisProperties properties = properties();
+        UserSession session = session("session-1");
+        AccountingUniverseService.AccountingUniverseScope scope = scope("session-1", "wallet-a");
+        when(userSessionRepository.findAll()).thenReturn(List.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(scope);
+        when(statValidationService.processNextBatch(25, 60, scope.memberRefs())).thenReturn(new StatValidationOutcome(0, 0, 0));
+        when(pricingDataGateService.snapshot(scope.memberRefs())).thenReturn(new PricingDataGateSnapshot(0L, 0L, 0L, 0L, 0L, 2L, true));
+        when(pendingStatQueryService.countPending(scope.memberRefs())).thenReturn(3L);
+        when(pipelineTelemetrySnapshotService.snapshot()).thenReturn(snapshot());
+
+        CostBasisReplayJob job = new CostBasisReplayJob(
+                properties,
+                new JobHeartbeatProperties(),
+                userSessionRepository,
+                accountingUniverseService,
+                pricingDataGateService,
+                pendingStatQueryService,
+                statValidationService,
+                avcoReplayService,
+                assetLedgerPointRepository,
+                pipelineTelemetrySnapshotService,
+                applicationEventPublisher,
+                pipelineActivityService,
+                sessionPipelineStateService
+        );
+
+        int replayed = job.runReplay();
+
+        assertThat(replayed).isZero();
+        verify(avcoReplayService, never()).replayConfirmed(
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyCollection(),
+                org.mockito.ArgumentMatchers.any(Runnable.class)
+        );
+        verify(applicationEventPublisher, never()).publishEvent(org.mockito.ArgumentMatchers.any());
+        verify(sessionPipelineStateService).markStageBlocked(
+                eq("session-1"),
+                eq(UserSession.PipelineStage.ACCOUNTING_REPLAY),
+                contains("Accounting replay blocked")
+        );
+    }
+
+    @Test
+    void manualReplayStillRunsWhenExplicitlyTriggeredAfterPricing() {
+        CostBasisProperties properties = properties();
+        properties.setEnabled(true);
+        UserSession session = session("session-1");
+        AccountingUniverseService.AccountingUniverseScope scope = scope("session-1", "wallet-a");
+        when(userSessionRepository.findAll()).thenReturn(List.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(scope);
+        when(statValidationService.processNextBatch(25, 60, scope.memberRefs())).thenReturn(new StatValidationOutcome(0, 0, 0));
+        when(pricingDataGateService.snapshot(scope.memberRefs())).thenReturn(new PricingDataGateSnapshot(0L, 0L, 0L, 0L, 0L, 2L, true));
+        when(pendingStatQueryService.countPending(scope.memberRefs())).thenReturn(0L);
+        when(avcoReplayService.replayConfirmed(
+                eq("ACCOUNTING_UNIVERSE:session-1"),
+                eq(scope.memberRefs()),
+                org.mockito.ArgumentMatchers.any(Runnable.class)
+        )).thenReturn(3);
+        when(pipelineTelemetrySnapshotService.snapshot()).thenReturn(snapshot());
+
+        CostBasisReplayJob job = new CostBasisReplayJob(
+                properties,
+                new JobHeartbeatProperties(),
+                userSessionRepository,
+                accountingUniverseService,
+                pricingDataGateService,
+                pendingStatQueryService,
+                statValidationService,
+                avcoReplayService,
+                assetLedgerPointRepository,
+                pipelineTelemetrySnapshotService,
+                applicationEventPublisher,
+                pipelineActivityService,
+                sessionPipelineStateService
+        );
+
+        job.runReplay();
+
+        verify(avcoReplayService).replayConfirmed(
+                eq("ACCOUNTING_UNIVERSE:session-1"),
+                eq(scope.memberRefs()),
+                org.mockito.ArgumentMatchers.any(Runnable.class)
+        );
+        verify(applicationEventPublisher).publishEvent(
+                eq(new AccountingReplayCompletedEvent("session-1", 3, "manual"))
+        );
+    }
+
+    @Test
+    void pricingCompletionForcesReplayCheckThroughEventPath() {
+        CostBasisProperties properties = properties();
+        properties.setEnabled(true);
+        UserSession session = session("session-1");
+        AccountingUniverseService.AccountingUniverseScope scope = scope("session-1", "wallet-a");
+        when(userSessionRepository.findById("session-1")).thenReturn(java.util.Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(scope);
+        when(statValidationService.processNextBatch(25, 60, scope.memberRefs())).thenReturn(new StatValidationOutcome(0, 0, 0));
+        when(pricingDataGateService.snapshot(scope.memberRefs())).thenReturn(new PricingDataGateSnapshot(0L, 0L, 0L, 0L, 0L, 0L, true));
+        when(pendingStatQueryService.countPending(scope.memberRefs())).thenReturn(0L);
+        when(avcoReplayService.replayConfirmed(
+                eq("ACCOUNTING_UNIVERSE:session-1"),
+                eq(scope.memberRefs()),
+                org.mockito.ArgumentMatchers.any(Runnable.class)
+        )).thenReturn(4);
+        when(pipelineTelemetrySnapshotService.snapshot()).thenReturn(snapshot());
+
+        CostBasisReplayJob job = new CostBasisReplayJob(
+                properties,
+                new JobHeartbeatProperties(),
+                userSessionRepository,
+                accountingUniverseService,
+                pricingDataGateService,
+                pendingStatQueryService,
+                statValidationService,
+                avcoReplayService,
+                assetLedgerPointRepository,
+                pipelineTelemetrySnapshotService,
+                applicationEventPublisher,
+                pipelineActivityService,
+                sessionPipelineStateService
+        );
+
+        job.onPricingCompleted(new PricingCompletedEvent("session-1", 0, "bybit-normalization-completed"));
+
+        verify(avcoReplayService).replayConfirmed(
+                eq("ACCOUNTING_UNIVERSE:session-1"),
+                eq(scope.memberRefs()),
+                org.mockito.ArgumentMatchers.any(Runnable.class)
+        );
+        verify(applicationEventPublisher).publishEvent(
+                eq(new AccountingReplayCompletedEvent("session-1", 4, "pricing-completed"))
+        );
+    }
+
+    private UserSession session(String sessionId) {
+        UserSession session = new UserSession();
+        session.setId(sessionId);
+        return session;
+    }
+
+    private AccountingUniverseService.AccountingUniverseScope scope(String sessionId, String walletAddress) {
+        return new AccountingUniverseService.AccountingUniverseScope(
+                "ACCOUNTING_UNIVERSE:" + sessionId,
+                List.of(walletAddress),
+                List.of(walletAddress)
+        );
+    }
+
+    private CostBasisProperties properties() {
+        CostBasisProperties properties = new CostBasisProperties();
+        properties.setValidationBatchSize(25);
+        properties.setRetryDelaySeconds(60);
+        return properties;
+    }
+
+    private PipelineTelemetrySnapshot snapshot() {
+        return new PipelineTelemetrySnapshot(10L, 2L, 0L, 1L, 1L, 1L, 0L, 2L);
+    }
+}

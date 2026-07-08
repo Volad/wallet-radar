@@ -162,11 +162,22 @@ export class LpPageComponent implements OnChanges {
     }
 
     const pending = this.pendingSingleRefreshIds();
-    const singlePending = newlySynced.length === 1 && pending.has(newlySynced[0].id);
-    if (singlePending) {
-      this.reloadPosition(newlySynced[0].id);
+
+    // Only react to pools the user explicitly refreshed. Background cron completions
+    // (pools not in pending) must not trigger a page reload.
+    const userInitiatedSynced = pending.size > 0
+      ? newlySynced.filter((item) => pending.has(item.id))
+      : newlySynced;  // refreshAll(): no pending tracking, treat all as user-initiated
+
+    if (userInitiatedSynced.length === 0) {
+      // All completions are background cron — suppress reload.
+      return;
+    }
+
+    if (pending.size > 0 && userInitiatedSynced.length === 1) {
+      this.reloadPosition(userInitiatedSynced[0].id);
       const remaining = new Set(pending);
-      remaining.delete(newlySynced[0].id);
+      remaining.delete(userInitiatedSynced[0].id);
       this.pendingSingleRefreshIds.set(remaining);
       return;
     }

@@ -43,11 +43,16 @@ Architecture Decision Records for WalletRadar. Each ADR captures a single decisi
 | [ADR-035](ADR-035-lending-receipt-identity-resolver.md) | Lending receipt identity resolver | Accepted | 2026-06-24 | Lending |
 | [ADR-036](ADR-036-contract-first-lending-market-key-and-live-debt.md) | Contract-first lending market key + live debt | Accepted | 2026-06-24 | Lending |
 | [ADR-037](ADR-037-lp-enrichment-and-earnings-snapshots.md) | LP on-chain enrichment and earnings snapshots | Accepted | 2026-06-24 | Liquidity pools |
+| [ADR-038](ADR-038-google-sso-identity-binding.md) | Google SSO identity binding | Accepted | 2026-06 | Auth / identity |
+| [ADR-039](ADR-039-async-refresh-status.md) | Async refresh status | Accepted | 2026-06 | Frontend / refresh |
 | [ADR-040](ADR-040-dual-cost-basis-net-tax-avco.md) | Dual cost basis — Net AVCO and Tax AVCO | Accepted | 2026-06-30 | Cost basis / replay / UI |
 | [ADR-041](ADR-041-bybit-earn-corridor-pairing-and-fund-carry-symmetry.md) | Bybit Earn corridor pairing and `:FUND` carry symmetry | Accepted | 2026-06-30 | Bybit corridor / linking / replay |
 | [ADR-042](ADR-042-honor-flow-accountref-in-replay-position-resolution.md) | Honor `flow.accountRef` in replay position resolution | Accepted | 2026-07-01 | Bybit sub-account / replay |
 | [ADR-043](ADR-043-corridor-carry-basis-conservation.md) | Corridor carry basis conservation (continuation of ADR-041) | Accepted | 2026-07-01 | Bybit corridor / linking / replay / pricing |
+| [ADR-044](ADR-044-router-agnostic-native-settlement-recovery-and-native-pool-reconciliation-gate.md) | Router-agnostic native settlement recovery and native-pool reconciliation gate | Accepted | 2026-07 | Native settlement / AVCO |
 | [ADR-045](ADR-045-family-covered-weighted-move-basis-avco-series.md) | Family covered-weighted move-basis AVCO series (supersedes ADR-017 chart source) | Accepted | 2026-07-02 | Move-basis chart / read model |
+| [ADR-046](ADR-046-init-capital-collateral-borrow-classification.md) | INIT Capital collateral-borrow classification and BORROW net cost rule | Accepted | 2026-07-07 | On-chain classification / Lending / AVCO |
+| [ADR-047](ADR-047-equilibria-staking-lp-corridor.md) | Equilibria staking deposit and Pendle LP corridor threading | Accepted | 2026-07-07 | On-chain classification / LP receipt corridor |
 
 ## Cycle/5 N19 cluster — implementation plan mapping
 

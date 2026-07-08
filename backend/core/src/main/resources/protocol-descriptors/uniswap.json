@@ -1,0 +1,13 @@
+{
+  "protocol": "Uniswap",
+  "version": "V3",
+  "capabilities": ["CLASSIFICATION", "LP_PRESENTATION"],
+  "classification": {
+    "semanticClassifier": "uniswap-v3",
+    "supportedFamilies": ["DEX", "LP"]
+  },
+  "lpPresentation": {
+    "positionIdentityStrategy": "nfpm-token-id",
+    "receiptTokenPatterns": ["UNI-V3-POS"]
+  }
+}
