@@ -4,6 +4,8 @@ import com.walletradar.application.cex.port.VenueDescriptor;
 import com.walletradar.application.cex.port.VenueLiveBalanceCapability;
 import com.walletradar.application.costbasis.application.port.CexLiveBalancePort;
 import com.walletradar.domain.wallet.WalletRef;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -23,12 +25,16 @@ import java.util.Optional;
  * linking, api). Enforced by ArchUnit in {@code ModuleDependencyArchTest}.</p>
  */
 @Component
+@Slf4j
 public class VenueRegistry {
 
     private final List<VenueDescriptor> descriptors;
 
-    public VenueRegistry(List<VenueDescriptor> descriptors) {
-        this.descriptors = List.copyOf(descriptors);
+    public VenueRegistry(ObjectProvider<VenueDescriptor> descriptorProvider) {
+        this.descriptors = descriptorProvider.stream().toList();
+        log.info("VenueRegistry initialized with {} venue descriptors: {}",
+                descriptors.size(),
+                descriptors.stream().map(d -> d.getClass().getSimpleName()).toList());
     }
 
     /**

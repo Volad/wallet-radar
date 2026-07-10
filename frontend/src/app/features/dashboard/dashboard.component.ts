@@ -356,6 +356,14 @@ export class DashboardComponent {
       return `Backfill ${this.backfillProgressPct()}%`;
     }
     const phase = status.phaseProgress?.phase ?? status.pipelineStage ?? 'BACKFILL';
+    // Inter-stage gap: last stage COMPLETE but not the final one — next stage starting
+    if (
+      status.pipelineStatus === 'COMPLETE' &&
+      status.pipelineStage &&
+      status.pipelineStage !== 'PORTFOLIO_SNAPSHOT_REFRESH'
+    ) {
+      return `${this.phaseDisplayLabel(phase)}: preparing next stage…`;
+    }
     return `${this.phaseDisplayLabel(phase)}: ${this.backfillProgressPct()}% done`;
   });
 
@@ -363,6 +371,14 @@ export class DashboardComponent {
     const status = this.sessionBackfillStatus();
     if (status === null) {
       return this.data().backfill.networksLabel;
+    }
+    // Inter-stage gap label
+    if (
+      status.pipelineStatus === 'COMPLETE' &&
+      status.pipelineStage &&
+      status.pipelineStage !== 'PORTFOLIO_SNAPSHOT_REFRESH'
+    ) {
+      return 'Starting next pipeline stage…';
     }
     const phaseProgress = status.phaseProgress;
     if (phaseProgress !== null && phaseProgress !== undefined) {
@@ -1778,7 +1794,19 @@ export class DashboardComponent {
   }
 
   private isPipelineRunning(status: SessionBackfillStatusResponse): boolean {
-    return status.pipelineStatus === 'RUNNING';
+    if (status.pipelineStatus === 'RUNNING') return true;
+    // Handle inter-stage gaps: pipelineStatus briefly shows COMPLETE between stages while
+    // the next stage has not yet marked itself RUNNING. Treat any non-final COMPLETE stage
+    // as "running" so the poller keeps active and the user sees continuous progress.
+    // The final completed state is PORTFOLIO_SNAPSHOT_REFRESH/COMPLETE.
+    if (
+      status.pipelineStatus === 'COMPLETE' &&
+      status.pipelineStage &&
+      status.pipelineStage !== 'PORTFOLIO_SNAPSHOT_REFRESH'
+    ) {
+      return true;
+    }
+    return false;
   }
 
   private acquisitionStatus(status: SessionBackfillStatusResponse): SessionBackfillAggregateStatus {

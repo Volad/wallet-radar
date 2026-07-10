@@ -56,6 +56,7 @@ public class PricingResultMapper {
         copy.setUpdatedAt(transaction.getUpdatedAt());
         copy.setConfirmedAt(transaction.getConfirmedAt());
         copy.setClientId(transaction.getClientId());
+        copy.setExternalCapitalBoundary(transaction.getExternalCapitalBoundary());
         copy.setMissingDataReasons(new ArrayList<>(transaction.getMissingDataReasons() == null
                 ? List.of()
                 : transaction.getMissingDataReasons()));

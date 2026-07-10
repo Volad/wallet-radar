@@ -378,6 +378,7 @@ public class ReplayFlowSupport {
         copy.setUpdatedAt(transaction.getUpdatedAt());
         copy.setConfirmedAt(transaction.getConfirmedAt());
         copy.setClientId(transaction.getClientId());
+        copy.setExternalCapitalBoundary(transaction.getExternalCapitalBoundary());
         copy.setMissingDataReasons(transaction.getMissingDataReasons() == null
                 ? List.of()
                 : new ArrayList<>(transaction.getMissingDataReasons()));

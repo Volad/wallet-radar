@@ -3,6 +3,8 @@ package com.walletradar.application.normalization.store;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -17,6 +19,7 @@ import java.util.List;
  * additional boundary-contract fields without modifying individual normalization builders.</p>
  */
 @Service
+@Slf4j
 public class IdempotentNormalizedTransactionStore {
 
     private final NormalizedTransactionRepository repository;
@@ -24,10 +27,13 @@ public class IdempotentNormalizedTransactionStore {
 
     public IdempotentNormalizedTransactionStore(
             NormalizedTransactionRepository repository,
-            List<NormalizedTransactionPostProcessor> postProcessors
+            ObjectProvider<NormalizedTransactionPostProcessor> postProcessorProvider
     ) {
         this.repository = repository;
-        this.postProcessors = List.copyOf(postProcessors);
+        this.postProcessors = postProcessorProvider.stream().toList();
+        log.info("IdempotentNormalizedTransactionStore initialized with {} post-processors: {}",
+                postProcessors.size(),
+                postProcessors.stream().map(p -> p.getClass().getSimpleName()).toList());
     }
 
     public NormalizedTransaction upsert(NormalizedTransaction candidate) {

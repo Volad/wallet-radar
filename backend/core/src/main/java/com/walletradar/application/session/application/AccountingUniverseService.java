@@ -252,7 +252,10 @@ public class AccountingUniverseService {
     private List<String> cexRefCandidates(String normalizedRef) {
         WalletRef ref = WalletRef.parse(normalizedRef);
         if (ref.domain() == WalletDomainKind.CEX && ref.subAccount() != null) {
-            String umbrella = ref.umbrellaKey().toLowerCase(Locale.ROOT);
+            // umbrellaKey() returns "BYBIT:<uid>" (uppercase prefix, no sub-account),
+            // which matches the form stored in accounting_universes.members.ref.
+            // Do NOT lowercase it — the universe stores the uppercase-prefixed canonical form.
+            String umbrella = ref.umbrellaKey();
             if (!umbrella.equals(normalizedRef)) {
                 return List.of(normalizedRef, umbrella);
             }

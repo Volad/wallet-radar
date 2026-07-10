@@ -9,6 +9,8 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.domain.wallet.OnChainAddressClassifier;
 import com.walletradar.domain.wallet.WalletDomainKind;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 /**
@@ -37,6 +39,8 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class CexBoundaryContractStamper implements NormalizedTransactionPostProcessor {
 
+    private static final Logger log = LoggerFactory.getLogger(CexBoundaryContractStamper.class);
+
     private final VenueRegistry venueRegistry;
 
     /** {@inheritDoc} Stamps {@code externalCapitalBoundary} on {@code tx} if applicable. */
@@ -52,11 +56,13 @@ public class CexBoundaryContractStamper implements NormalizedTransactionPostProc
         if (tx == null || tx.getWalletAddress() == null) {
             return;
         }
-        if (OnChainAddressClassifier.classifyDomain(tx.getWalletAddress()) != WalletDomainKind.CEX) {
+        WalletDomainKind domain = OnChainAddressClassifier.classifyDomain(tx.getWalletAddress());
+        if (domain != WalletDomainKind.CEX) {
             return;
         }
         VenueDescriptor descriptor = venueRegistry.findByWalletAddress(tx.getWalletAddress()).orElse(null);
         if (descriptor == null) {
+            log.warn("stamp: no descriptor for wallet={}", tx.getWalletAddress());
             return;
         }
         if (!descriptor.isCapitalGateWallet(tx.getWalletAddress())) {
@@ -64,6 +70,7 @@ public class CexBoundaryContractStamper implements NormalizedTransactionPostProc
         }
         NormalizedTransactionType type = tx.getType();
         if (type == null) {
+            log.warn("stamp: null type for tx={}", tx.getId());
             return;
         }
         if (type == NormalizedTransactionType.EXTERNAL_TRANSFER_IN) {
@@ -72,10 +79,19 @@ public class CexBoundaryContractStamper implements NormalizedTransactionPostProc
                     .anyMatch(f -> descriptor.isEligibleInflowAsset(f.getAssetSymbol()));
             if (hasEligibleFlow) {
                 tx.setExternalCapitalBoundary(ExternalCapitalBoundary.INFLOW);
+                log.info("stamp: INFLOW set wallet={} id={} boundary={}", tx.getWalletAddress(), tx.getId(), tx.getExternalCapitalBoundary());
+            } else {
+                log.warn("stamp: EXTERNAL_TRANSFER_IN has no eligible inflow asset wallet={} flows={}",
+                        tx.getWalletAddress(),
+                        tx.getFlows() == null ? "null" : tx.getFlows().stream()
+                                .filter(f -> f != null)
+                                .map(f -> f.getRole() + ":" + f.getAssetSymbol())
+                                .toList());
             }
         } else if (type == NormalizedTransactionType.EXTERNAL_TRANSFER_OUT
                 || type == NormalizedTransactionType.FIAT_EXIT) {
             tx.setExternalCapitalBoundary(ExternalCapitalBoundary.OUTFLOW);
+            log.info("stamp: OUTFLOW set wallet={} id={} boundary={}", tx.getWalletAddress(), tx.getId(), tx.getExternalCapitalBoundary());
         }
     }
 }

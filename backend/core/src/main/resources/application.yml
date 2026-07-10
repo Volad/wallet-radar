@@ -430,8 +430,8 @@ walletradar:
   pipeline:
     jobs:
       heartbeat-interval-ms: 30000
-      resume-interval-ms: 60000
-    resume-interval-ms: 60000
+      resume-interval-ms: 15000
+    resume-interval-ms: 15000
 
   async:
     backfill-coordinator:
