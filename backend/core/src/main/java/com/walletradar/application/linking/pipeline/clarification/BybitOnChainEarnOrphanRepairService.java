@@ -9,6 +9,8 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionReposi
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.domain.wallet.WalletDomainKind;
+import com.walletradar.domain.wallet.WalletRef;
 import com.walletradar.application.cex.normalization.venue.bybit.BybitEarnPrincipalTransferPairer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -261,7 +263,7 @@ public class BybitOnChainEarnOrphanRepairService {
         if (uid == null || assetFamily == null || absQty == null || timestamp == null) {
             return false;
         }
-        String fundWallet = "BYBIT:" + uid + ":FUND";
+        String fundWallet = CorrelationContract.VENUE_BYBIT + ":" + uid + CorrelationContract.WALLET_SUFFIX_FUND;
         Instant windowStart = timestamp.minus(EARN_COUNTERPART_WINDOW);
         Instant windowEnd = timestamp.plus(EARN_COUNTERPART_WINDOW);
 
@@ -495,26 +497,30 @@ public class BybitOnChainEarnOrphanRepairService {
     // -------------------------------------------------------------------------
 
     private static boolean isFundAccount(String walletAddress) {
-        return walletAddress != null
-                && walletAddress.toUpperCase(Locale.ROOT).endsWith(":FUND");
+        if (walletAddress == null) return false;
+        WalletRef ref = WalletRef.parse(walletAddress);
+        return ref.domain() == WalletDomainKind.CEX && "FUND".equalsIgnoreCase(ref.subAccount());
     }
 
     private static boolean isEarnAccount(String walletAddress) {
-        return walletAddress != null
-                && walletAddress.toUpperCase(Locale.ROOT).endsWith(":EARN");
+        if (walletAddress == null) return false;
+        WalletRef ref = WalletRef.parse(walletAddress);
+        return ref.domain() == WalletDomainKind.CEX && "EARN".equalsIgnoreCase(ref.subAccount());
     }
 
     private static String earnWallet(String uid) {
-        return "BYBIT:" + uid + ":EARN";
+        return CorrelationContract.VENUE_BYBIT + ":" + uid + CorrelationContract.WALLET_SUFFIX_EARN;
     }
 
     private static String extractBybitUid(String walletAddress) {
-        if (walletAddress == null || !walletAddress.startsWith("BYBIT:")) {
+        if (walletAddress == null) {
             return null;
         }
-        String remainder = walletAddress.substring("BYBIT:".length());
-        int colon = remainder.indexOf(':');
-        return colon >= 0 ? remainder.substring(0, colon) : remainder;
+        WalletRef ref = WalletRef.parse(walletAddress);
+        if (ref.domain() != WalletDomainKind.CEX || ref.uid().isBlank()) {
+            return null;
+        }
+        return ref.uid();
     }
 
     // -------------------------------------------------------------------------

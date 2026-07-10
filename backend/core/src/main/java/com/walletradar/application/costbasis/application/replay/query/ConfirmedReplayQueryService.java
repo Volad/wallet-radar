@@ -1,5 +1,6 @@
 package com.walletradar.application.costbasis.application.replay.query;
 
+import com.walletradar.canonical.correlation.CorrelationContract;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
@@ -76,11 +77,11 @@ public class ConfirmedReplayQueryService {
         String correlationId = tx.getCorrelationId();
         boolean isBybitCollapsed = isBybit
                 && correlationId != null
-                && correlationId.startsWith("bybit-collapsed-v1:");
+                && correlationId.startsWith(CorrelationContract.BYBIT_COLLAPSED_V1_PREFIX);
         boolean isOnChainCorridor = !isBybit
                 && tx.getType() == NormalizedTransactionType.INTERNAL_TRANSFER
                 && correlationId != null
-                && correlationId.startsWith("BYBIT-CORRIDOR:");
+                && correlationId.startsWith(CorrelationContract.BYBIT_CORRIDOR_PREFIX);
         if (!isBybit && !isOnChainCorridor && !isBybitCollapsed) {
             return 0;
         }

@@ -4,6 +4,7 @@ import com.walletradar.application.costbasis.support.OutOfScopeFamilySupport;
 import com.walletradar.application.costbasis.application.replay.model.CarryTransfer;
 import com.walletradar.application.costbasis.application.replay.state.PendingTransferStore;
 import com.walletradar.application.costbasis.application.replay.state.ReplayExecutionState;
+import com.walletradar.canonical.correlation.CorrelationContract;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -55,7 +56,7 @@ public class CorridorBasisConservationGuard {
      * dust epsilon and the out-of-scope carve-out keep open-position and OOS-venue residues quiet.
      */
     private static final List<String> GUARDED_QUEUE_PREFIXES =
-            List.of("corr-family:", "bridge:", "bridge-settlement:", "bybit-earn-carry:");
+            List.of(CorrelationContract.CORR_FAMILY_PREFIX, "bridge:", "bridge-settlement:", CorrelationContract.BYBIT_EARN_CARRY_PREFIX);
 
     /**
      * G-1 (WS-E) — queue keys end with the asset/family identity (e.g. {@code :SYMBOL:USDE} or

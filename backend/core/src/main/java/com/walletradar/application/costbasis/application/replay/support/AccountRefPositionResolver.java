@@ -2,6 +2,7 @@ package com.walletradar.application.costbasis.application.replay.support;
 
 import com.walletradar.application.costbasis.application.replay.model.AssetKey;
 import com.walletradar.application.costbasis.application.replay.model.PositionState;
+import com.walletradar.canonical.correlation.CorrelationContract;
 
 import java.math.BigDecimal;
 import java.math.MathContext;
@@ -38,7 +39,11 @@ public final class AccountRefPositionResolver {
 
     private static final MathContext MC = MathContext.DECIMAL128;
 
-    private static final List<String> SUB_ACCOUNT_SUFFIXES = List.of(":FUND", ":UTA", ":EARN");
+    private static final List<String> SUB_ACCOUNT_SUFFIXES = List.of(
+            CorrelationContract.WALLET_SUFFIX_FUND,
+            CorrelationContract.WALLET_SUFFIX_UTA,
+            CorrelationContract.WALLET_SUFFIX_EARN
+    );
 
     private AccountRefPositionResolver() {
     }

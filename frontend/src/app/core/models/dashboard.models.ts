@@ -1,6 +1,9 @@
 export type WalletId = string;
 export type NetworkId = string;
 
+/** Wallet domain from the backend WalletRef parser. */
+export type WalletDomain = 'EVM' | 'SOLANA' | 'TON' | 'CEX';
+
 export type TransactionType =
   | 'SWAP'
   | 'WRAP'
@@ -175,6 +178,12 @@ export interface TokenPosition {
   readonly valuationModel: string | null;
   readonly valuationUnderlyingSymbol: string | null;
   readonly unsupportedValuationReason: string | null;
+  /** Wallet domain: EVM, SOLANA, TON, or CEX. */
+  readonly domain: WalletDomain | null;
+  /** CEX venue id (e.g. 'bybit', 'dzengi'); null for on-chain wallets. */
+  readonly venueId: string | null;
+  /** CEX sub-account kind (e.g. 'FUND', 'UTA', 'EARN'); null if not applicable. */
+  readonly subAccount: string | null;
 }
 
 export interface LpPosition {

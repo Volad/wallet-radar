@@ -14,6 +14,8 @@ import com.walletradar.canonical.correlation.CorrelationContract;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.domain.wallet.WalletDomainKind;
+import com.walletradar.domain.wallet.WalletRef;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -200,26 +202,26 @@ public class CarryTransferReplaySupport {
             return flowPosition;
         }
         String walletUpper = wallet.toUpperCase(Locale.ROOT);
+        WalletRef walletRef = WalletRef.parse(wallet);
+        String walletSubAccount = walletRef.subAccount() != null ? walletRef.subAccount().toUpperCase(Locale.ROOT) : null;
         String correlationId = transaction.getCorrelationId();
         if (correlationId != null
                 && correlationId.startsWith(CorrelationContract.BYBIT_EARN_PRINCIPAL_V1_PREFIX)
-                && walletUpper.endsWith(":EARN")) {
+                && "EARN".equals(walletSubAccount)) {
             if (TransferEarnPrincipalReplaySupport.hasEarnPrincipalCarryBasis(flowPosition)) {
                 return flowPosition;
             }
-            String umbrellaWallet = wallet.substring(0, wallet.length() - ":EARN".length());
-            return replayState.position(TransferEarnPrincipalReplaySupport.umbrellaKeyFor(flowPosition.assetKey(), umbrellaWallet));
+            return replayState.position(TransferEarnPrincipalReplaySupport.umbrellaKeyFor(flowPosition.assetKey(), walletRef.umbrellaKey()));
         }
 
         if (isCorridorTransfer
-                && walletUpper.endsWith(":FUND")
+                && "FUND".equals(walletSubAccount)
                 && !hasFundCarryInventory(flowPosition)) {
-            String umbrellaWallet = wallet.substring(0, wallet.length() - ":FUND".length());
-            return replayState.position(TransferEarnPrincipalReplaySupport.umbrellaKeyFor(flowPosition.assetKey(), umbrellaWallet));
+            return replayState.position(TransferEarnPrincipalReplaySupport.umbrellaKeyFor(flowPosition.assetKey(), walletRef.umbrellaKey()));
         }
 
         if (!isCorridorTransfer
-                && walletUpper.endsWith(":FUND")
+                && "FUND".equals(walletSubAccount)
                 && !positionCoversQuantity(flowPosition, outboundQuantity)) {
             AssetKey fundKey = TransferEarnPrincipalReplaySupport.umbrellaKeyFor(flowPosition.assetKey(), wallet.trim());
             if (!fundKey.equals(flowPosition.assetKey())) {

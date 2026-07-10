@@ -18,6 +18,8 @@ import com.walletradar.application.costbasis.domain.AssetLedgerPoint;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.domain.wallet.WalletDomainKind;
+import com.walletradar.domain.wallet.WalletRef;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -239,7 +241,11 @@ public class LiquidStakingReplayHandler {
             return replayState.position(accountRefKey);
         }
         String wallet = transaction == null ? null : transaction.getWalletAddress();
-        if (wallet == null || !wallet.trim().toUpperCase(Locale.ROOT).endsWith(":FUND")) {
+        if (wallet == null) {
+            return umbrellaPosition;
+        }
+        WalletRef walletRef = WalletRef.parse(wallet.trim());
+        if (walletRef.domain() != WalletDomainKind.CEX || !"FUND".equalsIgnoreCase(walletRef.subAccount())) {
             return umbrellaPosition;
         }
         if (positionCoversQuantity(umbrellaPosition, outboundQuantity)) {

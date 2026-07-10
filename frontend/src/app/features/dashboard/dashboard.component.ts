@@ -51,6 +51,7 @@ import {
   SessionTransactionItemResponse,
   SUPPORTED_EVM_NETWORKS,
 } from '../../core/models/wallet-api.models';
+import { isCexAddress, isOnChainAddress, parseSubAccount, parseVenueId } from '../../core/utils/wallet-ref.util';
 import { WalletApiService } from '../../core/services/wallet-api.service';
 import { SessionStorageService } from '../../core/services/session-storage.service';
 import {
@@ -420,7 +421,7 @@ export class DashboardComponent {
   });
 
   readonly onChainWallets = computed<ReadonlyArray<WalletInfo>>(() =>
-    this.data().wallets.filter((w) => w.address.startsWith('0x'))
+    this.data().wallets.filter((w) => isOnChainAddress(w.address))
   );
   readonly availableWalletIds = computed<ReadonlyArray<WalletId>>(() => this.data().wallets.map((wallet) => wallet.id));
   readonly availableIntegrationRefs = computed<ReadonlyArray<string>>(() =>
@@ -429,9 +430,9 @@ export class DashboardComponent {
   readonly availableNetworkIds = computed<ReadonlyArray<NetworkId>>(() => this.filterNetworks().map((network) => network.id));
 
   readonly activeFilterCount = computed(() => {
-    // Count only on-chain (0x) wallets shown as chips — bybit virtual wallets are integration-managed
+    // Count only on-chain wallets shown as chips — CEX virtual wallets are integration-managed
     const onChainCount = this.onChainWallets().length;
-    const selectedOnChainCount = [...this.selectedWalletIds()].filter((id) => id.startsWith('0x')).length;
+    const selectedOnChainCount = [...this.selectedWalletIds()].filter((id) => isOnChainAddress(id)).length;
     const hiddenWallets = this.walletFilterMode() === 'all'
       ? 0
       : Math.max(0, onChainCount - selectedOnChainCount);
@@ -544,20 +545,20 @@ export class DashboardComponent {
       }
     }
     let merged = [...byId.values()];
-    if (
-      this.sessionIntegrations().length > 0 &&
-      !merged.some((network) => network.id === 'BYBIT')
-    ) {
-      const presentation = INTEGRATION_PRESENTATION_BY_PROVIDER.get('BYBIT');
-      merged = [
-        ...merged,
-        {
-          id: 'BYBIT',
-          icon: presentation?.icon ?? '◈',
-          label: presentation?.label ?? 'Bybit',
-          color: presentation?.color ?? COLORS.textSubtle,
-        },
-      ];
+    for (const integration of this.sessionIntegrations()) {
+      const venueId = integration.provider.toUpperCase();
+      if (!merged.some((network) => network.id === venueId)) {
+        const presentation = INTEGRATION_PRESENTATION_BY_PROVIDER.get(venueId);
+        merged = [
+          ...merged,
+          {
+            id: venueId,
+            icon: presentation?.icon ?? '◈',
+            label: presentation?.label ?? integration.label,
+            color: presentation?.color ?? COLORS.textSubtle,
+          },
+        ];
+      }
     }
     return merged;
   });
@@ -592,8 +593,8 @@ export class DashboardComponent {
     const hideDust = this.hideDustAssets();
 
     return this.data().tokenPositions.filter((asset) => {
-      const isOnChain = asset.walletId.startsWith('0x');
-      // Wallet chip filter applies only to on-chain (0x) wallets
+      const isOnChain = asset.domain !== 'CEX';
+      // Wallet chip filter applies only to on-chain wallets
       if (isOnChain && selectedWallets.size > 0 && !selectedWallets.has(asset.walletId)) {
         return false;
       }
@@ -866,16 +867,23 @@ export class DashboardComponent {
   });
 
   readonly onChainVsCexSplit = computed(() => {
-    const rows = this.tokenUsdByNetwork();
-    const total = rows.reduce((sum, row) => sum + row.valueUsd, 0);
-    const CEX_NETWORK_IDS = new Set(['BYBIT', 'DZENGI']);
-    const cex = rows
-      .filter((row) => CEX_NETWORK_IDS.has(row.id))
-      .reduce((sum, row) => sum + row.valueUsd, 0);
-    const onChain = total - cex;
+    const positions = this.filteredTokenPositions();
+    let totalUsd = 0;
+    let cexUsd = 0;
+    for (const position of positions) {
+      const valueUsd = position.marketValueUsd ?? 0;
+      if (!Number.isFinite(valueUsd) || valueUsd <= 0) {
+        continue;
+      }
+      totalUsd += valueUsd;
+      if (position.domain === 'CEX') {
+        cexUsd += valueUsd;
+      }
+    }
+    const onChainUsd = totalUsd - cexUsd;
     return {
-      onChainPct: total > 0 ? (onChain / total) * 100 : 0,
-      cexPct: total > 0 ? (cex / total) * 100 : 0,
+      onChainPct: totalUsd > 0 ? (onChainUsd / totalUsd) * 100 : 0,
+      cexPct: totalUsd > 0 ? (cexUsd / totalUsd) * 100 : 0,
     };
   });
 
@@ -1627,7 +1635,7 @@ export class DashboardComponent {
       networkIds:
         this.networkFilterMode() === 'all'
           ? undefined
-          : (Array.from(this.selectedNetworkIds()).filter((id) => id !== 'BYBIT') as ReadonlyArray<EvmNetworkId>),
+          : Array.from(this.selectedNetworkIds()).filter((id) => !INTEGRATION_PRESENTATION_BY_PROVIDER.has(id)),
     };
   }
 
@@ -1814,8 +1822,9 @@ export class DashboardComponent {
     if (integration !== null) {
       return integration.color;
     }
-    if (walletId.toLowerCase().startsWith('bybit:')) {
-      return INTEGRATION_PRESENTATION_BY_PROVIDER.get('BYBIT')?.color ?? COLORS.textSubtle;
+    if (isCexAddress(walletId)) {
+      const venueId = parseVenueId(walletId);
+      return (venueId ? INTEGRATION_PRESENTATION_BY_PROVIDER.get(venueId)?.color : undefined) ?? COLORS.textSubtle;
     }
     return COLORS.textSubtle;
   }
@@ -1823,13 +1832,9 @@ export class DashboardComponent {
   walletLabel(walletId: WalletId): string {
     const wallet = this.getWalletById(walletId);
     if (wallet !== null) {
-      const normalizedId = walletId.toLowerCase();
-      if (normalizedId.startsWith('bybit:')) {
-        const parts = normalizedId.split(':');
-        const suffix = parts.length >= 3 ? parts[2].toUpperCase() : null;
-        if (suffix === 'UTA' || suffix === 'FUND' || suffix === 'EARN') {
-          return `${wallet.label} · ${suffix}`;
-        }
+      const sub = parseSubAccount(walletId);
+      if (sub !== null) {
+        return `${wallet.label} · ${sub}`;
       }
       return wallet.label;
     }

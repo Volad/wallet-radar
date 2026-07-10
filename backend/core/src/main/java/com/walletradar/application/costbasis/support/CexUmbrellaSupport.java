@@ -1,8 +1,10 @@
 package com.walletradar.application.costbasis.support;
 
 import com.walletradar.application.costbasis.domain.AssetLedgerPoint;
-import com.walletradar.domain.session.UserSession;
 import com.walletradar.application.pricing.domain.CanonicalAssetCatalog;
+import com.walletradar.domain.session.UserSession;
+import com.walletradar.domain.wallet.WalletDomainKind;
+import com.walletradar.domain.wallet.WalletRef;
 
 import java.math.BigDecimal;
 import java.math.MathContext;
@@ -14,17 +16,29 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Shared helpers for collapsing {@code bybit:<uid>:fund|uta|earn} ledger venues into a single umbrella
- * wallet ({@code bybit:<uid>}) and reconciling against live Bybit balances.
+ * Venue-neutral helpers for collapsing CEX ledger wallets into umbrella keys and reconciling
+ * against live balances.
+ *
+ * <p>Replaces the former venue-specific BybitUmbrellaSupport and DzengiUmbrellaSupport helpers
+ * with a single implementation keyed by {@link WalletRef#umbrellaKey()}.</p>
+ *
+ * <p>Umbrella-key convention: lowercase {@code PROVIDER:uid} without sub-account suffix,
+ * e.g. {@code bybit:123456}, {@code dzengi:abc_def}.</p>
+ *
+ * <p>Pure static utility — no Spring, no ports, no venue registry.</p>
  */
-public final class BybitUmbrellaSupport {
+public final class CexUmbrellaSupport {
 
     private static final MathContext MC = MathContext.DECIMAL128;
 
-    private BybitUmbrellaSupport() {
+    private CexUmbrellaSupport() {
     }
 
-    public static List<String> enabledBybitAccountRefs(UserSession session) {
+    /**
+     * Returns the lowercase umbrella keys of all enabled (non-DISABLED) CEX integrations
+     * in the session. Works for any venue (Bybit, Dzengi, future venues).
+     */
+    public static List<String> enabledCexAccountRefs(UserSession session) {
         if (session.getIntegrations() == null || session.getIntegrations().isEmpty()) {
             return List.of();
         }
@@ -37,67 +51,57 @@ public final class BybitUmbrellaSupport {
             if (accountRef == null || accountRef.isBlank()) {
                 continue;
             }
-            if (!accountRef.toUpperCase(Locale.ROOT).startsWith("BYBIT:")) {
+            WalletRef ref = WalletRef.parse(accountRef);
+            if (ref.domain() != WalletDomainKind.CEX) {
                 continue;
             }
-            for (String bybitWalletRef : bybitDashboardWalletRefs(accountRef)) {
-                refs.add(normalizeAddress(bybitWalletRef));
-            }
+            refs.add(ref.umbrellaKey().toLowerCase(Locale.ROOT));
         }
         return List.copyOf(refs);
     }
 
-    public static List<String> bybitDashboardWalletRefs(String baseAccountRef) {
-        if (baseAccountRef == null || baseAccountRef.isBlank()) {
-            return List.of();
-        }
-        String normalized = baseAccountRef.trim();
-        if (!normalized.toUpperCase(Locale.ROOT).startsWith("BYBIT:")) {
-            return List.of(normalized);
-        }
-        if (normalized.split(":").length >= 3) {
-            return List.of(normalized);
-        }
-        return List.of(normalized);
-    }
-
-    public static boolean bybitLedgerMatchesEnabledVenue(String ledgerWallet, Set<String> enabledBybitVenueRefs) {
-        if (ledgerWallet == null || ledgerWallet.isBlank() || enabledBybitVenueRefs.isEmpty()) {
+    /**
+     * Returns true if the given ledger {@code walletAddress} belongs to one of the
+     * enabled CEX umbrella refs (case-insensitive).
+     *
+     * <p>Sub-account suffixes are stripped via {@link WalletRef#umbrellaKey()} before comparison,
+     * so {@code BYBIT:123456:FUND} matches the umbrella {@code bybit:123456}.</p>
+     */
+    public static boolean cexLedgerMatchesEnabledVenue(String walletAddress, Set<String> enabledCexVenueRefs) {
+        if (walletAddress == null || walletAddress.isBlank() || enabledCexVenueRefs.isEmpty()) {
             return false;
         }
-        String norm = normalizeAddress(ledgerWallet);
-        if (!norm.startsWith("bybit:")) {
+        WalletRef ref = WalletRef.parse(walletAddress);
+        if (ref.domain() != WalletDomainKind.CEX) {
             return false;
         }
-        String[] parts = norm.split(":", -1);
-        if (parts.length < 3) {
-            return enabledBybitVenueRefs.contains(norm);
-        }
-        String base = parts[0] + ":" + parts[1];
-        return enabledBybitVenueRefs.contains(base);
+        return enabledCexVenueRefs.contains(ref.umbrellaKey().toLowerCase(Locale.ROOT));
     }
 
-    public static String ledgerWalletKeyForAggregation(String walletAddress, Set<String> enabledBybitVenueRefs) {
-        if (walletAddress == null || walletAddress.isBlank() || enabledBybitVenueRefs == null || enabledBybitVenueRefs.isEmpty()) {
+    /**
+     * Returns the aggregation key for a ledger wallet address.
+     *
+     * <p>For CEX wallets that belong to one of the enabled umbrella refs, returns the
+     * umbrella key (strips sub-account suffix). Otherwise returns the lowercased address.</p>
+     */
+    public static String ledgerWalletKeyForAggregation(String walletAddress, Set<String> enabledCexVenueRefs) {
+        if (walletAddress == null || walletAddress.isBlank()) {
             return normalizeAddress(walletAddress);
         }
-        String norm = normalizeAddress(walletAddress);
-        if (!norm.startsWith("bybit:")) {
-            return norm;
+        WalletRef ref = WalletRef.parse(walletAddress);
+        if (ref.domain() != WalletDomainKind.CEX) {
+            return normalizeAddress(walletAddress);
         }
-        String[] parts = norm.split(":", -1);
-        if (parts.length < 3) {
-            return norm;
+        String umbrellaKey = ref.umbrellaKey().toLowerCase(Locale.ROOT);
+        if (enabledCexVenueRefs == null || !enabledCexVenueRefs.contains(umbrellaKey)) {
+            return normalizeAddress(walletAddress);
         }
-        String base = parts[0] + ":" + parts[1];
-        String sub = parts[2];
-        if (("fund".equals(sub) || "uta".equals(sub) || "earn".equals(sub)) && enabledBybitVenueRefs.contains(base)) {
-            return base;
-        }
-        return norm;
+        return umbrellaKey;
     }
 
-    public static BigDecimal bybitRawQuantityAfter(AssetLedgerPoint latestPoint) {
+    // ---- pure math helpers (ported from BybitUmbrellaSupport) ----
+
+    public static BigDecimal cexRawQuantityAfter(AssetLedgerPoint latestPoint) {
         return latestPoint == null ? BigDecimal.ZERO : zeroIfNull(latestPoint.getQuantityAfter());
     }
 
@@ -145,19 +149,6 @@ public final class BybitUmbrellaSupport {
             return qty;
         }
         return total;
-    }
-
-    public static BigDecimal clampToLive(BigDecimal quantity, BigDecimal coveredQuantity, BigDecimal totalCostBasisUsd, BigDecimal liveQty) {
-        if (quantity == null || quantity.signum() <= 0) {
-            return quantity;
-        }
-        if (liveQty == null || liveQty.signum() <= 0) {
-            return BigDecimal.ZERO;
-        }
-        if (quantity.compareTo(liveQty) <= 0) {
-            return quantity;
-        }
-        return liveQty;
     }
 
     public static ScaledUmbrellaTotals scaleUmbrellaToLive(

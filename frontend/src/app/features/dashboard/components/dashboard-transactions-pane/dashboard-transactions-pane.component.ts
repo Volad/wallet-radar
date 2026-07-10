@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { SmartAmountComponent } from '../../../../core/components/smart-amount/smart-amount.component';
 
 import { COLORS } from '../../../../core/data/dashboard.constants';
+import { isCexAddress } from '../../../../core/utils/wallet-ref.util';
 import {
   ALL_TRANSACTION_CATEGORIES,
   BridgeStatus,
@@ -403,7 +404,7 @@ export class DashboardTransactionsPaneComponent {
       return false;
     }
     const normalized = ref.trim();
-    return normalized.length > 0 && !normalized.startsWith('0x') && normalized.includes(':');
+    return normalized.length > 0 && isCexAddress(normalized);
   }
 
   walletTooltip(tx: TransactionItem): string {

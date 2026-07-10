@@ -4,17 +4,23 @@
 
 Owns **centralized exchange** acquisition, extraction, and normalization into the same canonical schema as on-chain rows. Currently implements **Bybit** (master/sub streams, earn corridors, live balances) and **Dzengi** (spot, fiat ledger, derivative settlements). Must **not** own AVCO replay or dashboard read-model assembly.
 
-## Public port (`application.cex.port`)
+## Public port (`application.cex.port`) — ADR-052
 
-Design-ready SPI (Track B1) — stable venue boundary before full multi-CEX wiring:
+Full segregated venue SPI — adding a CEX venue requires zero changes post-normalization ([ADR-052](../../adr/ADR-052-venue-capability-spi-walletref-normalization-boundary-invariant.md)):
 
-| Interface | Role |
-|-----------|------|
-| `CexLedgerSource` | Identifies a venue stream and pages immutable ledger evidence |
-| `CexVenueProfile` | Declares supported account kinds, streams, and symbol mapping policy |
+| Interface / class | Role |
+|-------------------|------|
+| `VenueDescriptor` | Composes all four capabilities below |
+| `VenueIdentity` (extends `CexVenueProfile`) | `venueId`, `providerCode`, stream ownership predicates, `accountKindSuffixes()` |
+| `VenueWalletModel` | `umbrellaKey()`, `expandBackfillRefs()`, `dashboardWalletRefs()`; default no-op for flat venues |
+| `VenueLiveBalanceCapability` | `Optional<CexLiveBalancePort> liveBalancePort()` |
+| `VenueExternalCapitalPolicy` | Decides at normalization time: external-capital boundary + eligible USD basis |
+| `VenueRegistry` | `@Component` holding `List<VenueDescriptor>` — **ingestion-plane only** (normalization, backfill, live-balance routing) |
+| `RoutingCexLiveBalancePort` | Routes live-balance refresh to venue's `CexLiveBalancePort` via registry |
+| `CexLedgerSource` | Pages immutable extracted evidence for a venue stream |
 | `CexLedgerEvent` | Normalized extracted-row view before canonical builder mapping |
 
-See [add-an-integration](../../reference/extensibility/add-an-integration.md) and [capability-behavior-spi](../../reference/capability-behavior-spi.md#cex-ledger-spi-b1).
+See [add-an-integration](../../reference/extensibility/add-an-integration.md) and [capability-behavior-spi](../../reference/capability-behavior-spi.md#cex-ledger-spi-b1--adr-052).
 
 ## Owned collections (write owner)
 
@@ -55,9 +61,11 @@ Writes `normalized_transactions` for CEX-origin rows (shared canonical collectio
 
 ## Extension seams
 
-- `CexLedgerSource` + `CexVenueProfile` — register a new venue without touching costbasis
-- `BybitCanonicalTransactionBuilder` / `DzengiCanonicalTransactionBuilder` — reference implementations for canonical mapping
-- Pairing primitives (`BybitInternalTransferPairingPrimitives`) — reuse patterns for other venues
+- `VenueDescriptor` SPI — implement four interfaces and register as a Spring `@Component`; normalization, backfill, and live-balance routing pick it up automatically
+- `BybitCanonicalTransactionBuilder` / `DzengiCanonicalTransactionBuilder` — reference implementations for canonical mapping; both stamp the venue-neutral boundary contract onto `NormalizedTransaction`
+- Pairing primitives (`BybitInternalTransferPairingPrimitives`) — reuse patterns for other venues with internal sub-accounts
+
+**Invariant:** post-normalization packages (`costbasis`, `portfolio`, `pricing`, `linking`, `api`, frontend) must **never** import `VenueRegistry`, `VenueDescriptor`, or any concrete descriptor — enforced by `ModuleDependencyArchTest` + `VenuePrefixGuardTest`.
 
 ## Worked examples
 

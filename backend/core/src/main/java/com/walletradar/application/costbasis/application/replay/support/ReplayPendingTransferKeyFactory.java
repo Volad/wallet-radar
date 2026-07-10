@@ -10,6 +10,8 @@ import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.domain.wallet.WalletDomainKind;
+import com.walletradar.domain.wallet.WalletRef;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -95,7 +97,7 @@ public class ReplayPendingTransferKeyFactory {
             return false;
         }
         String corrId = transaction.getCorrelationId();
-        if (corrId != null && corrId.startsWith("BYBIT-CORRIDOR:")) {
+        if (corrId != null && corrId.startsWith(CorrelationContract.BYBIT_CORRIDOR_PREFIX)) {
             return false;
         }
         return sharesBybitUidWithCounterparty(transaction);
@@ -164,9 +166,9 @@ public class ReplayPendingTransferKeyFactory {
             return false;
         }
         String corrId = transaction.getCorrelationId();
-        if (corrId != null && (corrId.startsWith("BYBIT-CORRIDOR:")
-                || corrId.startsWith("bybit-it-bundle-v1:")
-                || corrId.startsWith("bybit-collapsed-v1:"))) {
+        if (corrId != null && (corrId.startsWith(CorrelationContract.BYBIT_CORRIDOR_PREFIX)
+                || corrId.startsWith(CorrelationContract.BYBIT_IT_BUNDLE_V1_PREFIX)
+                || corrId.startsWith(CorrelationContract.BYBIT_COLLAPSED_V1_PREFIX))) {
             return false;
         }
         String wallet = transaction.getWalletAddress();
@@ -174,8 +176,8 @@ public class ReplayPendingTransferKeyFactory {
         if (counterparty == null || counterparty.isBlank()) {
             counterparty = transaction.getCounterpartyAddress();
         }
-        boolean walletIsEarn = wallet != null && wallet.endsWith(":EARN");
-        boolean cpIsEarn = counterparty != null && counterparty.endsWith(":EARN");
+        boolean walletIsEarn = wallet != null && wallet.endsWith(CorrelationContract.WALLET_SUFFIX_EARN);
+        boolean cpIsEarn = counterparty != null && counterparty.endsWith(CorrelationContract.WALLET_SUFFIX_EARN);
         if (!walletIsEarn && !cpIsEarn) {
             return false;
         }
@@ -194,10 +196,11 @@ public class ReplayPendingTransferKeyFactory {
         if (counterparty == null || counterparty.isBlank()) {
             return true;
         }
-        if (!counterparty.toUpperCase(java.util.Locale.ROOT).startsWith("BYBIT:")) {
+        WalletRef cpRef = WalletRef.parse(counterparty);
+        if (cpRef.domain() != WalletDomainKind.CEX || !CorrelationContract.VENUE_BYBIT.equalsIgnoreCase(cpRef.venueId())) {
             return false;
         }
-        return walletUid.equals(extractBybitUid(counterparty));
+        return walletUid.equals(cpRef.uid());
     }
 
     /**
@@ -214,7 +217,7 @@ public class ReplayPendingTransferKeyFactory {
             return false;
         }
         String corrId = transaction.getCorrelationId();
-        if (corrId != null && corrId.startsWith("BYBIT-CORRIDOR:")) {
+        if (corrId != null && corrId.startsWith(CorrelationContract.BYBIT_CORRIDOR_PREFIX)) {
             return false;
         }
         // bybit-collapsed-v1: pairs are cross-account carries (UTA↔FUND) and must use
@@ -222,7 +225,7 @@ public class ReplayPendingTransferKeyFactory {
         // route to corr-family: via the continuityCandidate path in transferKey(); routing
         // them through the bybit-earn-carry FIFO queue causes FUND inbounds (which replay
         // first due to .000Z timestamps) to fail enqueue when no market price is available.
-        if (corrId != null && corrId.startsWith("bybit-collapsed-v1:")) {
+        if (corrId != null && corrId.startsWith(CorrelationContract.BYBIT_COLLAPSED_V1_PREFIX)) {
             return false;
         }
         // RC-C (ADR-043): a non-EARN wallet → EARN INTERNAL_TRANSFER that was NOT confirmed
@@ -235,8 +238,8 @@ public class ReplayPendingTransferKeyFactory {
         if (cpRaw == null || cpRaw.isBlank()) {
             cpRaw = transaction.getCounterpartyAddress();
         }
-        boolean walletIsEarn = wallet != null && wallet.endsWith(":EARN");
-        boolean cpIsEarn = cpRaw != null && cpRaw.endsWith(":EARN");
+        boolean walletIsEarn = wallet != null && wallet.endsWith(CorrelationContract.WALLET_SUFFIX_EARN);
+        boolean cpIsEarn = cpRaw != null && cpRaw.endsWith(CorrelationContract.WALLET_SUFFIX_EARN);
         if (!walletIsEarn && cpIsEarn
                 && !Boolean.TRUE.equals(transaction.getContinuityCandidate())
                 && (corrId == null || corrId.isBlank())) {
@@ -259,19 +262,19 @@ public class ReplayPendingTransferKeyFactory {
         if (counterparty == null || counterparty.isBlank()) {
             return false;
         }
-        if (!counterparty.toUpperCase(java.util.Locale.ROOT).startsWith("BYBIT:")) {
+        WalletRef cpRef = WalletRef.parse(counterparty);
+        if (cpRef.domain() != WalletDomainKind.CEX || !CorrelationContract.VENUE_BYBIT.equalsIgnoreCase(cpRef.venueId())) {
             return false;
         }
-        return walletUid.equals(extractBybitUid(counterparty));
+        return walletUid.equals(cpRef.uid());
     }
 
     private static String extractBybitUid(String walletAddress) {
-        if (walletAddress == null || !walletAddress.startsWith("BYBIT:")) {
+        WalletRef ref = WalletRef.parse(walletAddress);
+        if (ref.domain() != WalletDomainKind.CEX || ref.uid().isBlank()) {
             return "unknown";
         }
-        String withoutPrefix = walletAddress.substring("BYBIT:".length());
-        int colonPos = withoutPrefix.indexOf(':');
-        return colonPos > 0 ? withoutPrefix.substring(0, colonPos) : withoutPrefix;
+        return ref.uid();
     }
 
     /**

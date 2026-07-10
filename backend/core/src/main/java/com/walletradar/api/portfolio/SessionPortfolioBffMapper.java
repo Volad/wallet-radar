@@ -119,7 +119,10 @@ public class SessionPortfolioBffMapper {
                                 position.issue(),
                                 position.valuationModel(),
                                 position.valuationUnderlyingSymbol(),
-                                position.unsupportedValuationReason()
+                                position.unsupportedValuationReason(),
+                                position.domain(),
+                                position.venueId(),
+                                position.subAccount()
                         ))
                         .toList()
         );

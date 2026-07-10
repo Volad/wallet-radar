@@ -205,6 +205,17 @@ public class NormalizedTransaction {
     /** Bybit master UID extracted from {@code walletAddress} for venue-internal routing. */
     private String bybitUid;
 
+    // ---- Boundary contract (venue-neutral, stamped at normalization time) ----
+
+    /**
+     * External-capital boundary direction for CEX capital-gate sub-accounts.
+     * {@code null} for on-chain rows and non-capital-gate CEX sub-accounts.
+     * Post-normalization consumers use this field instead of venue-specific predicates.
+     *
+     * @see ExternalCapitalBoundary
+     */
+    private ExternalCapitalBoundary externalCapitalBoundary;
+
     @NoArgsConstructor
     @Getter
     @Setter

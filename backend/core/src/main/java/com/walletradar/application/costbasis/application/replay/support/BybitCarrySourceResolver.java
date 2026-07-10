@@ -3,6 +3,7 @@ package com.walletradar.application.costbasis.application.replay.support;
 import com.walletradar.application.costbasis.application.replay.model.AssetKey;
 import com.walletradar.application.costbasis.application.replay.model.PositionState;
 import com.walletradar.application.costbasis.application.replay.state.PositionStore;
+import com.walletradar.canonical.correlation.CorrelationContract;
 
 import java.math.BigDecimal;
 import java.math.MathContext;
@@ -43,7 +44,11 @@ public final class BybitCarrySourceResolver {
      * from real inventory (mirrors {@link ReplayToleranceSupport#carrySourceCoverageRatio()}); the
      * tolerance absorbs sub-unit fee rounding while rejecting dust residues.
      */
-    private static final List<String> SUB_ACCOUNT_SUFFIXES = List.of(":FUND", ":UTA", ":EARN");
+    private static final List<String> SUB_ACCOUNT_SUFFIXES = List.of(
+            CorrelationContract.WALLET_SUFFIX_FUND,
+            CorrelationContract.WALLET_SUFFIX_UTA,
+            CorrelationContract.WALLET_SUFFIX_EARN
+    );
 
     private BybitCarrySourceResolver() {
     }

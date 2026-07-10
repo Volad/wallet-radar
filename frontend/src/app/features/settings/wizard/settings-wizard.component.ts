@@ -238,7 +238,7 @@ export class SettingsWizardComponent {
       address: wallet.address.trim(),
       label: wallet.label.trim(),
       color: wallet.color,
-      networks: wallet.networks.filter((network) => network !== 'BYBIT') as ReadonlyArray<OnChainWalletNetworkId>,
+      networks: wallet.networks as ReadonlyArray<OnChainWalletNetworkId>,
     }));
 
     const payload: PutSessionSettingsRequest = {

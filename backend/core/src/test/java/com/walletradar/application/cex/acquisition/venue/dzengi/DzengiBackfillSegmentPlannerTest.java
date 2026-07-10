@@ -88,7 +88,11 @@ class DzengiBackfillSegmentPlannerTest {
         exchangeInfo.set("symbols", JsonNodeFactory.instance.arrayNode());
         when(apiClient.fetchExchangeInfo()).thenReturn(exchangeInfo);
         when(rawEventRepository.findByIntegrationIdAndStream(eq("DZENGI-1"), any()))
-                .thenReturn(List.of(positionHistoryRawEvent("NVDA.")));
+                .thenReturn(List.of(
+                        positionHistoryRawEvent("NVDA."),
+                        positionHistoryRawEvent("BABA."),
+                        positionHistoryRawEvent("SNAP.")
+                ));
 
         DzengiBackfillSegmentPlanner planner = new DzengiBackfillSegmentPlanner(
                 dzengiProperties,

@@ -15,6 +15,7 @@ import {
   NetworkInfo,
   PortfolioMetric,
   PriceSource,
+  WalletDomain,
   WalletInfo,
 } from '../models/dashboard.models';
 import { EvmNetworkId, SessionDashboardResponse } from '../models/wallet-api.models';
@@ -112,6 +113,9 @@ export class DashboardDataService {
         valuationModel: position.valuationModel,
         valuationUnderlyingSymbol: position.valuationUnderlyingSymbol,
         unsupportedValuationReason: position.unsupportedValuationReason,
+        domain: (position.domain as WalletDomain) ?? null,
+        venueId: position.venueId ?? null,
+        subAccount: position.subAccount ?? null,
       })),
       lpPositions: [],
       lendingPositions: [],

@@ -1,6 +1,7 @@
 package com.walletradar.application.linking.pipeline.clarification;
 
 import com.walletradar.application.costbasis.support.AccountingAssetFamilySupport;
+import com.walletradar.canonical.correlation.CorrelationContract;
 import com.walletradar.domain.counterparty.CounterpartyType;
 import com.walletradar.domain.common.NetworkAddressFormat;
 import com.walletradar.domain.common.NetworkId;
@@ -10,6 +11,8 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionReposi
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.domain.wallet.WalletDomainKind;
+import com.walletradar.domain.wallet.WalletRef;
 import com.walletradar.application.cex.normalization.venue.bybit.BybitInternalTransferPairer;
 import com.walletradar.application.pricing.application.PriceableFlowPolicy;
 import com.walletradar.application.session.application.AccountingUniverseService;
@@ -231,9 +234,9 @@ public class BybitTransferContinuityRepairService {
                         NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
                         NormalizedTransactionType.EXTERNAL_TRANSFER_OUT
                 ),
-                Criteria.where("correlationId").regex("^BYBIT-CORRIDOR:"),
+                Criteria.where("correlationId").regex("^" + CorrelationContract.BYBIT_CORRIDOR_PREFIX),
                 Criteria.where("matchedCounterparty").exists(true).ne(""),
-                Criteria.where("matchedCounterparty").not().regex("^BYBIT:", "i")
+                Criteria.where("matchedCounterparty").not().regex("^" + CorrelationContract.VENUE_BYBIT + ":", "i")
         ));
         query.limit(Math.max(1, batchSize));
         List<NormalizedTransaction> candidates = mongoOperations.find(query, NormalizedTransaction.class);
@@ -408,7 +411,7 @@ public class BybitTransferContinuityRepairService {
                 Criteria.where("matchedCounterparty").exists(false),
                 Criteria.where("matchedCounterparty").is(null),
                 Criteria.where("matchedCounterparty").is(""),
-                Criteria.where("matchedCounterparty").not().regex("^BYBIT:")
+                Criteria.where("matchedCounterparty").not().regex("^" + CorrelationContract.VENUE_BYBIT + ":")
         );
     }
 
@@ -509,8 +512,7 @@ public class BybitTransferContinuityRepairService {
             return false;
         }
         String counterparty = cex.getCounterpartyAddress().trim();
-        if (counterparty.regionMatches(true, 0, "BYBIT:", 0, "BYBIT:".length())
-                || counterparty.regionMatches(true, 0, "DZENGI:", 0, "DZENGI:".length())) {
+        if (WalletRef.parse(counterparty).domain() == WalletDomainKind.CEX) {
             return false;
         }
         if (!hasOnChainWalletShape(counterparty, onChain.getNetworkId())) {
@@ -691,11 +693,11 @@ public class BybitTransferContinuityRepairService {
         if (walletRef == null || walletRef.isBlank()) {
             return null;
         }
-        String trimmed = walletRef.trim();
-        if (!trimmed.regionMatches(true, 0, "DZENGI:", 0, "DZENGI:".length())) {
+        WalletRef ref = WalletRef.parse(walletRef.trim());
+        if (ref.domain() != WalletDomainKind.CEX || !"dzengi".equals(ref.venueId())) {
             return null;
         }
-        return trimmed.toUpperCase(Locale.ROOT);
+        return ref.canonicalRef();
     }
 
     /**
@@ -910,7 +912,7 @@ public class BybitTransferContinuityRepairService {
     }
 
     private static boolean hasBybitCorridorCorrelation(String correlationId) {
-        return correlationId != null && correlationId.startsWith("BYBIT-CORRIDOR:");
+        return correlationId != null && correlationId.startsWith(CorrelationContract.BYBIT_CORRIDOR_PREFIX);
     }
 
     private List<NormalizedTransaction.Flow> principalFlows(NormalizedTransaction transaction) {
@@ -961,7 +963,7 @@ public class BybitTransferContinuityRepairService {
                     && trimmed.length() <= 64
                     && !trimmed.contains(" ")
                     && !trimmed.startsWith("0x")
-                    && !trimmed.startsWith("BYBIT:");
+                    && WalletRef.parse(trimmed).domain() != WalletDomainKind.CEX;
         }
         if (networkId == NetworkId.TON) {
             return com.walletradar.domain.common.ton.TonAddressCanonicalizer.looksLikeTon(value);

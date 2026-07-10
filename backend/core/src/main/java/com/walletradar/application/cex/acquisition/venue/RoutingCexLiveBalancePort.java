@@ -1,42 +1,30 @@
 package com.walletradar.application.cex.acquisition.venue;
 
-import com.walletradar.application.cex.acquisition.venue.bybit.BybitCexLiveBalancePortAdapter;
-import com.walletradar.application.cex.acquisition.venue.dzengi.DzengiCexLiveBalancePortAdapter;
 import com.walletradar.application.costbasis.application.port.CexLiveBalancePort;
+import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
 import java.util.Optional;
 
 /**
- * Routes live-balance reads to the venue-specific CEX adapter by integration id prefix.
+ * Routes live-balance reads to the venue-specific CEX adapter via {@link VenueRegistry}.
+ *
+ * <p>Replaces hardcoded prefix {@code if}s with registry-based dispatch
+ * ({@code registry.liveBalancePortFor(integrationId)}). Adding a new venue only requires
+ * registering its {@link com.walletradar.application.cex.port.VenueLiveBalanceCapability}
+ * implementation as a Spring component — no edits needed here.</p>
  */
 @Component
 @Primary
+@RequiredArgsConstructor
 public class RoutingCexLiveBalancePort implements CexLiveBalancePort {
 
-    private final BybitCexLiveBalancePortAdapter bybitAdapter;
-    private final DzengiCexLiveBalancePortAdapter dzengiAdapter;
-
-    public RoutingCexLiveBalancePort(
-            BybitCexLiveBalancePortAdapter bybitAdapter,
-            DzengiCexLiveBalancePortAdapter dzengiAdapter
-    ) {
-        this.bybitAdapter = bybitAdapter;
-        this.dzengiAdapter = dzengiAdapter;
-    }
+    private final VenueRegistry venueRegistry;
 
     @Override
     public Optional<SnapshotView> getSnapshotView(String integrationId) {
-        if (integrationId == null || integrationId.isBlank()) {
-            return Optional.empty();
-        }
-        if (integrationId.startsWith("DZENGI-")) {
-            return dzengiAdapter.getSnapshotView(integrationId);
-        }
-        if (integrationId.startsWith("BYBIT-")) {
-            return bybitAdapter.getSnapshotView(integrationId);
-        }
-        return Optional.empty();
+        return venueRegistry.liveBalancePortFor(integrationId)
+                .flatMap(port -> port.getSnapshotView(integrationId));
     }
 }

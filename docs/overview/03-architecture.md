@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last updated:** 2026-07-08  
+> **Last updated:** 2026-07-10  
 > Modular monolith: Spring Boot backend + Angular SPA frontend.
 
 For accepted design decisions (D-xx rationale), see [Architecture decisions (SAD)](architecture-decisions.md).  
@@ -134,9 +134,11 @@ Full stage list and orchestration: [Pipeline orchestration](05-pipeline-orchestr
 |------|-----|-------|
 | Add a network | [add-a-network](../reference/extensibility/add-a-network.md) | B2 `NetworkFamily` |
 | Add a protocol | [add-a-protocol](../reference/extensibility/add-a-protocol.md) | B3 capability contract kit |
-| Add a CEX integration | [add-an-integration](../reference/extensibility/add-an-integration.md) | B1 CEX ledger SPI |
+| Add a CEX integration | [add-an-integration](../reference/extensibility/add-an-integration.md) | B4/B5/B6 `VenueDescriptor` SPI |
 | Protocol descriptor | [protocol-descriptor](../reference/protocol-descriptor.md) | A5 |
-| Capability / behavior SPI | [capability-behavior-spi](../reference/capability-behavior-spi.md) | A5 / B3 |
+| Capability / behavior SPI | [capability-behavior-spi](../reference/capability-behavior-spi.md) | A5 / B3 / ADR-052 |
+
+**CEX extensibility (ADR-052):** adding a new CEX venue requires implementing `VenueDescriptor` (four segregated capabilities) and no post-normalization changes. `VenueRegistry` is **ingestion-plane only** — post-normalization packages read venue-neutral fields stamped by the normalization stage (`walletDomainKind`, `venueId`, `subAccount`, `umbrellaKey`, `externalCapitalBoundary`). Enforced by ArchUnit.
 
 ## Terminology corrections
 
@@ -153,7 +155,7 @@ Full stage list and orchestration: [Pipeline orchestration](05-pipeline-orchestr
 
 - **Networks:** 15 values in `NetworkId` — see [Networks & protocols](../reference/supported-networks-and-protocols.md).
 - **On-chain:** EVM (Etherscan, Blockscout, RPC) + Solana RPC; scam filter; 2-year backfill window.
-- **CEX:** Bybit (`integration_raw_events`, `bybit_extracted_events`).
+- **CEX:** Bybit and Dzengi (`integration_raw_events`, `bybit_extracted_events`, `dzengi_extracted_events`); architecture supports additional venues via `VenueDescriptor` SPI (ADR-052).
 - **Protocols:** ~100 registry entries + dedicated semantic classifiers — see [Normalization rules](../pipeline/normalization/rules/README.md).
 
 ## Design rules (selected)

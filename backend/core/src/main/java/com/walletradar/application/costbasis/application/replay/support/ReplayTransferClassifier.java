@@ -6,6 +6,8 @@ import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.domain.wallet.WalletDomainKind;
+import com.walletradar.domain.wallet.WalletRef;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -242,7 +244,7 @@ public class ReplayTransferClassifier {
     }
 
     private static boolean hasBybitEndpoint(String value) {
-        return value != null && value.toUpperCase(java.util.Locale.ROOT).startsWith("BYBIT:");
+        return value != null && WalletRef.parse(value).domain() == WalletDomainKind.CEX;
     }
 
     public boolean usesBybitVenueInternalCarryQueue(NormalizedTransaction transaction) {
@@ -254,6 +256,6 @@ public class ReplayTransferClassifier {
             return false;
         }
         String correlationId = transaction.getCorrelationId();
-        return correlationId != null && correlationId.startsWith("bybit-it-bundle-v1:");
+        return correlationId != null && correlationId.startsWith(CorrelationContract.BYBIT_IT_BUNDLE_V1_PREFIX);
     }
 }

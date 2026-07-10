@@ -60,7 +60,13 @@ public record SessionDashboardResponse(
             String issue,
             String valuationModel,
             String valuationUnderlyingSymbol,
-            String unsupportedValuationReason
+            String unsupportedValuationReason,
+            /** Wallet domain: EVM, SOLANA, TON, or CEX. */
+            String domain,
+            /** CEX venue id (e.g. "bybit", "dzengi"); null for on-chain wallets. */
+            String venueId,
+            /** CEX sub-account kind (e.g. "FUND", "UTA", "EARN"); null if not applicable. */
+            String subAccount
     ) {
     }
 }

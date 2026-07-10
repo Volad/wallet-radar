@@ -3,6 +3,8 @@ package com.walletradar.application.costbasis.application.replay.support;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.domain.wallet.WalletDomainKind;
+import com.walletradar.domain.wallet.WalletRef;
 import com.walletradar.application.pricing.domain.CanonicalAssetCatalog;
 
 import java.util.Locale;
@@ -82,13 +84,10 @@ public final class BybitPledgeLoanCorrelationSupport {
         if (reference == null) {
             return null;
         }
-        String trimmed = reference.trim();
-        if (!trimmed.toUpperCase(Locale.ROOT).startsWith("BYBIT:")) {
+        WalletRef ref = WalletRef.parse(reference.trim());
+        if (ref.domain() != WalletDomainKind.CEX || ref.uid().isBlank()) {
             return null;
         }
-        String without = trimmed.substring("BYBIT:".length());
-        int colon = without.indexOf(':');
-        String uid = colon > 0 ? without.substring(0, colon) : without;
-        return uid.isBlank() ? null : uid;
+        return ref.uid();
     }
 }

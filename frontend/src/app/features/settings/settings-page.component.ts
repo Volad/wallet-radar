@@ -115,9 +115,8 @@ export class SettingsPageComponent {
   readonly sections = SETTINGS_SECTIONS;
   readonly networksPresentation = EVM_NETWORKS_PRESENTATION;
   readonly allNetworkIds: ReadonlyArray<EvmNetworkId> = this.networksPresentation.map((network) => network.id);
-  /** On-chain-only network IDs (excludes exchange buckets like BYBIT that are not EVM chains). */
-  private readonly onChainNetworkIds: ReadonlyArray<OnChainWalletNetworkId> = this.allNetworkIds
-    .filter((id) => id !== 'BYBIT') as ReadonlyArray<OnChainWalletNetworkId>;
+  /** On-chain-only network IDs (all EvmNetworkId values are on-chain since BYBIT was removed from the union). */
+  private readonly onChainNetworkIds: ReadonlyArray<OnChainWalletNetworkId> = this.allNetworkIds as ReadonlyArray<OnChainWalletNetworkId>;
 
   readonly sessionId = signal<string | null>(this.sessionStorageService.getSessionId());
   readonly settings = signal<SessionSettingsResponse | null>(null);

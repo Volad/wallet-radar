@@ -5,6 +5,8 @@ import com.walletradar.domain.counterparty.CounterpartyType;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.domain.transaction.raw.RawTransaction;
+import com.walletradar.domain.wallet.WalletDomainKind;
+import com.walletradar.domain.wallet.WalletRef;
 import com.walletradar.application.normalization.pipeline.classification.registry.ProtocolRegistryEntry;
 import com.walletradar.application.normalization.pipeline.classification.registry.ProtocolRegistryRole;
 import com.walletradar.application.normalization.pipeline.classification.registry.ProtocolRegistryService;
@@ -136,7 +138,7 @@ public class CounterpartyResolutionService {
             }
         }
         String matchedCounterparty = normalizedTransaction.getMatchedCounterparty();
-        if (present(matchedCounterparty) && matchedCounterparty.trim().toUpperCase(Locale.ROOT).startsWith("BYBIT:")) {
+        if (present(matchedCounterparty) && WalletRef.parse(matchedCounterparty.trim()).domain() == WalletDomainKind.CEX) {
             return CounterpartyType.CEX;
         }
         NormalizedTransactionType type = normalizedTransaction.getType();

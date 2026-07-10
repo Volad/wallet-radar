@@ -57,6 +57,7 @@ Architecture Decision Records for WalletRadar. Each ADR captures a single decisi
 | [ADR-049](ADR-049-venue-agnostic-cex-transfer-linking.md) | Venue-agnostic CEX transfer linking (FA-001 beyond Bybit) | Accepted | 2026-07-08 | Linking — CEX cross-system |
 | [ADR-050](ADR-050-dzengi-fiat-fx-pricing.md) | Dzengi fiat FX pricing (BYN via venue klines) | Accepted | 2026-07-08 | Pricing — Dzengi FX |
 | [ADR-051](ADR-051-cex-fee-capitalization-net-avco.md) | CEX fee capitalization into Net AVCO (Market = clean price) | Accepted | 2026-07-09 | AVCO / Cost-basis |
+|| [ADR-052](ADR-052-venue-capability-spi-walletref-normalization-boundary-invariant.md) | Venue Capability SPI, WalletRef, and the Normalization Boundary Invariant | Accepted | 2026-07-10 | CEX abstraction / extensibility |
 
 ## Cycle/5 N19 cluster — implementation plan mapping
 

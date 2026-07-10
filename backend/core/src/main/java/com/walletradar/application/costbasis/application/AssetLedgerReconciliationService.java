@@ -5,10 +5,11 @@ import com.walletradar.application.costbasis.domain.AssetLedgerPoint;
 import com.walletradar.application.costbasis.domain.OnChainBalance;
 import com.walletradar.application.costbasis.support.AccountingAssetFamilySupport;
 import com.walletradar.application.costbasis.support.AccountingAssetIdentitySupport;
-import com.walletradar.application.costbasis.support.BybitUmbrellaSupport;
-import com.walletradar.application.costbasis.support.DzengiUmbrellaSupport;
+import com.walletradar.application.costbasis.support.CexUmbrellaSupport;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.session.UserSession;
+import com.walletradar.domain.wallet.WalletDomainKind;
+import com.walletradar.domain.wallet.WalletRef;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoOperations;
@@ -158,13 +159,13 @@ class AssetLedgerReconciliationService {
             }
         }
 
-        LinkedHashSet<String> enabledBybitVenueRefs = new LinkedHashSet<>(BybitUmbrellaSupport.enabledBybitAccountRefs(session));
-        if (!enabledBybitVenueRefs.isEmpty()) {
-            Map<String, BybitFamilyUmbrellaAccumulator> umbrellas = new LinkedHashMap<>();
+        LinkedHashSet<String> enabledCexVenueRefs = new LinkedHashSet<>(CexUmbrellaSupport.enabledCexAccountRefs(session));
+        if (!enabledCexVenueRefs.isEmpty()) {
+            Map<String, CexFamilyUmbrellaAccumulator> umbrellas = new LinkedHashMap<>();
             for (Map.Entry<BucketKey, AssetLedgerPoint> ledgerEntry : latestPointByBucket.entrySet()) {
                 BucketKey bucketKey = ledgerEntry.getKey();
                 AssetLedgerPoint latestPoint = ledgerEntry.getValue();
-                if (!BybitUmbrellaSupport.bybitLedgerMatchesEnabledVenue(bucketKey.walletAddress(), enabledBybitVenueRefs)) {
+                if (!CexUmbrellaSupport.cexLedgerMatchesEnabledVenue(bucketKey.walletAddress(), enabledCexVenueRefs)) {
                     continue;
                 }
                 String pointFamilyIdentity = resolvedFamilyIdentity(
@@ -176,31 +177,31 @@ class AssetLedgerReconciliationService {
                 if (!Objects.equals(pointFamilyIdentity, familyIdentity)) {
                     continue;
                 }
-                BigDecimal currentQuantity = BybitUmbrellaSupport.bybitRawQuantityAfter(latestPoint);
+                BigDecimal currentQuantity = CexUmbrellaSupport.cexRawQuantityAfter(latestPoint);
                 if (currentQuantity.signum() <= 0) {
                     continue;
                 }
-                String aggregatedWallet = BybitUmbrellaSupport.ledgerWalletKeyForAggregation(
+                String aggregatedWallet = CexUmbrellaSupport.ledgerWalletKeyForAggregation(
                         bucketKey.walletAddress(),
-                        enabledBybitVenueRefs
+                        enabledCexVenueRefs
                 );
-                umbrellas.computeIfAbsent(aggregatedWallet, ignored -> new BybitFamilyUmbrellaAccumulator())
+                umbrellas.computeIfAbsent(aggregatedWallet, ignored -> new CexFamilyUmbrellaAccumulator())
                         .addVenue(latestPoint.getWalletAddress(), currentQuantity, latestPoint);
             }
 
-            Map<String, Map<String, BigDecimal>> liveByAccountRef = loadLiveBybitBalances(session);
-            for (Map.Entry<String, BybitFamilyUmbrellaAccumulator> umbrellaEntry : umbrellas.entrySet()) {
+            Map<String, Map<String, BigDecimal>> liveByCexAccountRef = loadLiveCexBalances(session);
+            for (Map.Entry<String, CexFamilyUmbrellaAccumulator> umbrellaEntry : umbrellas.entrySet()) {
                 String umbrellaWallet = umbrellaEntry.getKey();
-                BybitFamilyUmbrellaAccumulator umbrella = umbrellaEntry.getValue();
-                Map<String, BigDecimal> live = liveByAccountRef.get(umbrellaWallet);
+                CexFamilyUmbrellaAccumulator umbrella = umbrellaEntry.getValue();
+                Map<String, BigDecimal> live = liveByCexAccountRef.get(umbrellaWallet);
                 BigDecimal liveQty = live == null
                         ? BigDecimal.ZERO
-                        : BybitUmbrellaSupport.liveQuantityForCandidates(
+                        : CexUmbrellaSupport.liveQuantityForCandidates(
                         live,
                         umbrella.priceLookupCandidates(),
                         umbrella.fallbackSymbol()
                 );
-                BybitUmbrellaSupport.ScaledUmbrellaTotals scaled = BybitUmbrellaSupport.scaleUmbrellaToLive(
+                CexUmbrellaSupport.ScaledUmbrellaTotals scaled = CexUmbrellaSupport.scaleUmbrellaToLive(
                         umbrella.quantity(),
                         umbrella.coveredQuantity(),
                         umbrella.totalCostBasisUsd(),
@@ -245,81 +246,6 @@ class AssetLedgerReconciliationService {
                             venue.latestPoint() != null && Boolean.TRUE.equals(venue.latestPoint().getHasIncompleteHistoryAfter()),
                             venue.latestPoint() != null && Boolean.TRUE.equals(venue.latestPoint().getHasUnresolvedFlagsAfter()),
                             unresolvedFlagCountAfter(venue.latestPoint())
-                    ));
-                }
-            }
-        }
-
-        // Dzengi umbrella: each enabled dzengi:<uid> integration contributes ledger points that
-        // are not on-chain balances. Include them here, clamped to live balances the same way
-        // as Bybit (scaled totals when live qty differs from ledger qty).
-        LinkedHashSet<String> enabledDzengiVenueRefs = new LinkedHashSet<>(DzengiUmbrellaSupport.enabledDzengiAccountRefs(session));
-        if (!enabledDzengiVenueRefs.isEmpty()) {
-            Map<String, DzengiFamilyAccumulator> dzengiAccumulators = new LinkedHashMap<>();
-            for (Map.Entry<BucketKey, AssetLedgerPoint> ledgerEntry : latestPointByBucket.entrySet()) {
-                BucketKey bucketKey = ledgerEntry.getKey();
-                AssetLedgerPoint latestPoint = ledgerEntry.getValue();
-                if (!DzengiUmbrellaSupport.dzengiLedgerMatchesEnabledVenue(bucketKey.walletAddress(), enabledDzengiVenueRefs)) {
-                    continue;
-                }
-                String pointFamilyIdentity = resolvedFamilyIdentity(
-                        latestPoint,
-                        bucketKey.networkId(),
-                        latestPoint.getAssetSymbol(),
-                        latestPoint.getAssetContract()
-                );
-                if (!Objects.equals(pointFamilyIdentity, familyIdentity)) {
-                    continue;
-                }
-                BigDecimal ledgerQty = zeroIfNull(latestPoint.getQuantityAfter());
-                if (ledgerQty.signum() <= 0) {
-                    continue;
-                }
-                String umbrellaWallet = DzengiUmbrellaSupport.ledgerWalletKeyForAggregation(bucketKey.walletAddress());
-                dzengiAccumulators.computeIfAbsent(umbrellaWallet, ignored -> new DzengiFamilyAccumulator())
-                        .add(ledgerQty, latestPoint);
-            }
-
-            for (Map.Entry<String, DzengiFamilyAccumulator> entry : dzengiAccumulators.entrySet()) {
-                String umbrellaWallet = entry.getKey();
-                DzengiFamilyAccumulator acc = entry.getValue();
-                BigDecimal liveQty = loadDzengiLiveQty(session, umbrellaWallet, familyIdentity);
-                BigDecimal ledgerQty = acc.quantity();
-                // Clamp or inflate to live qty using Bybit-symmetric scale logic.
-                BybitUmbrellaSupport.ScaledUmbrellaTotals scaled = BybitUmbrellaSupport.scaleUmbrellaToLive(
-                        ledgerQty,
-                        acc.coveredQuantity(),
-                        acc.totalCostBasisUsd(),
-                        liveQty
-                );
-                if (scaled.dropped() || scaled.quantity().signum() <= 0) {
-                    continue;
-                }
-                BigDecimal ledgerScale = scaled.ledgerScale() == null ? BigDecimal.ONE : scaled.ledgerScale();
-                quantity = quantity.add(scaled.quantity(), MC);
-                coveredQuantity = coveredQuantity.add(scaled.coveredQuantity(), MC);
-                totalCostBasisUsd = totalCostBasisUsd.add(scaled.totalCostBasisUsd(), MC);
-                netTotalCostBasisUsd = netTotalCostBasisUsd.add(
-                        acc.netTotalCostBasisUsd().multiply(ledgerScale, MC), MC);
-                BigDecimal uncoveredFromDzengi = scaled.quantity().subtract(scaled.coveredQuantity(), MC)
-                        .max(BigDecimal.ZERO);
-                if (uncoveredFromDzengi.signum() > 0 && acc.samplePoint() != null) {
-                    uncoveredBuckets.add(new AssetLedgerQueryService.UncoveredBucketView(
-                            umbrellaWallet,
-                            null,
-                            acc.samplePoint().getAssetSymbol(),
-                            acc.samplePoint().getAssetContract(),
-                            scaled.quantity(),
-                            scaled.coveredQuantity(),
-                            uncoveredFromDzengi,
-                            uncoveredReason(acc.samplePoint(), scaled.quantity(), scaled.coveredQuantity()),
-                            acc.samplePoint().getTxHash(),
-                            acc.samplePoint().getNormalizedType(),
-                            acc.samplePoint().getBasisEffect() == null ? null : acc.samplePoint().getBasisEffect().name(),
-                            acc.samplePoint().getProtocolName(),
-                            Boolean.TRUE.equals(acc.samplePoint().getHasIncompleteHistoryAfter()),
-                            Boolean.TRUE.equals(acc.samplePoint().getHasUnresolvedFlagsAfter()),
-                            unresolvedFlagCountAfter(acc.samplePoint())
                     ));
                 }
             }
@@ -406,7 +332,7 @@ class AssetLedgerReconciliationService {
         return mongoOperations.find(query, OnChainBalance.class);
     }
 
-    private Map<String, Map<String, BigDecimal>> loadLiveBybitBalances(UserSession session) {
+    private Map<String, Map<String, BigDecimal>> loadLiveCexBalances(UserSession session) {
         Map<String, Map<String, BigDecimal>> liveByAccountRef = new LinkedHashMap<>();
         if (session.getIntegrations() == null) {
             return liveByAccountRef;
@@ -415,8 +341,11 @@ class AssetLedgerReconciliationService {
             if (integration == null
                     || integration.getStatus() == UserSession.IntegrationStatus.DISABLED
                     || integration.getAccountRef() == null
-                    || integration.getIntegrationId() == null
-                    || !integration.getAccountRef().toUpperCase(Locale.ROOT).startsWith("BYBIT:")) {
+                    || integration.getIntegrationId() == null) {
+                continue;
+            }
+            WalletRef ref = WalletRef.parse(integration.getAccountRef());
+            if (ref.domain() != WalletDomainKind.CEX) {
                 continue;
             }
             Optional<CexLiveBalancePort.SnapshotView> snapshotView =
@@ -429,89 +358,11 @@ class AssetLedgerReconciliationService {
                 continue;
             }
             liveByAccountRef.put(
-                    BybitUmbrellaSupport.normalizeAddress(integration.getAccountRef()),
+                    CexUmbrellaSupport.normalizeAddress(integration.getAccountRef()),
                     view.umbrella()
             );
         }
         return liveByAccountRef;
-    }
-
-    /**
-     * Returns the live Dzengi quantity for the given family symbol from the matching integration,
-     * or ZERO if unavailable (falls back to ledger quantity, no phantom-clamp).
-     */
-    private BigDecimal loadDzengiLiveQty(UserSession session, String umbrellaWallet, String familyIdentity) {
-        if (session.getIntegrations() == null || umbrellaWallet == null) {
-            return BigDecimal.ZERO;
-        }
-        // familyIdentity format is "symbol:googl" (from accountingFamilyIdentity in ledger).
-        // Strip "symbol:" prefix (case-insensitive) and uppercase to match the umbrella map keys (e.g. "GOOGL").
-        String familySymbol = familyIdentity == null ? null
-                : familyIdentity.replaceFirst("(?i)^(FAMILY|SYMBOL):", "").trim().toUpperCase(Locale.ROOT);
-        for (UserSession.SessionIntegration integration : session.getIntegrations()) {
-            if (integration == null
-                    || integration.getStatus() == UserSession.IntegrationStatus.DISABLED
-                    || integration.getAccountRef() == null
-                    || integration.getIntegrationId() == null) {
-                continue;
-            }
-            String normalizedRef = integration.getAccountRef().trim().toLowerCase(Locale.ROOT);
-            if (!normalizedRef.startsWith("dzengi:")) {
-                continue;
-            }
-            if (!umbrellaWallet.equals(normalizedRef)) {
-                continue;
-            }
-            Optional<CexLiveBalancePort.SnapshotView> snapshotView =
-                    cexLiveBalancePort.getSnapshotView(integration.getIntegrationId());
-            if (snapshotView.isEmpty()) {
-                return BigDecimal.ZERO;
-            }
-            CexLiveBalancePort.SnapshotView view = snapshotView.get();
-            if (view.availability() == CexLiveBalancePort.Availability.UNKNOWN) {
-                return BigDecimal.ZERO;
-            }
-            if (familySymbol != null && view.umbrella() != null) {
-                BigDecimal qty = view.umbrella().get(familySymbol);
-                return qty == null ? BigDecimal.ZERO : qty.max(BigDecimal.ZERO);
-            }
-            return BigDecimal.ZERO;
-        }
-        return BigDecimal.ZERO;
-    }
-
-    /** Accumulates ledger totals for a single Dzengi umbrella wallet + family. */
-    private static final class DzengiFamilyAccumulator {
-        private static final MathContext MC = MathContext.DECIMAL128;
-        private BigDecimal quantity = BigDecimal.ZERO;
-        private BigDecimal coveredQuantity = BigDecimal.ZERO;
-        private BigDecimal totalCostBasisUsd = BigDecimal.ZERO;
-        private BigDecimal netTotalCostBasisUsd = BigDecimal.ZERO;
-        private AssetLedgerPoint samplePoint;
-
-        void add(BigDecimal ledgerQty, AssetLedgerPoint point) {
-            quantity = quantity.add(ledgerQty, MC);
-            BigDecimal covered = zeroIfNull(point.getBasisBackedQuantityAfter()).min(ledgerQty);
-            coveredQuantity = coveredQuantity.add(covered, MC);
-            if (point.getAvcoAfterUsd() != null && covered.signum() > 0) {
-                totalCostBasisUsd = totalCostBasisUsd.add(point.getAvcoAfterUsd().multiply(covered, MC), MC);
-            }
-            BigDecimal netAvco = point.getNetAvcoAfterUsd() != null ? point.getNetAvcoAfterUsd() : point.getAvcoAfterUsd();
-            if (netAvco != null && covered.signum() > 0) {
-                netTotalCostBasisUsd = netTotalCostBasisUsd.add(netAvco.multiply(covered, MC), MC);
-            }
-            if (samplePoint == null) {
-                samplePoint = point;
-            }
-        }
-
-        BigDecimal quantity() { return quantity; }
-        BigDecimal coveredQuantity() { return coveredQuantity; }
-        BigDecimal totalCostBasisUsd() { return totalCostBasisUsd; }
-        BigDecimal netTotalCostBasisUsd() { return netTotalCostBasisUsd; }
-        AssetLedgerPoint samplePoint() { return samplePoint; }
-
-        private static BigDecimal zeroIfNull(BigDecimal v) { return v == null ? BigDecimal.ZERO : v; }
     }
 
     private Map<BucketKey, OnChainBalance> latestBalanceByBucket(List<OnChainBalance> balances) {
@@ -724,7 +575,7 @@ class AssetLedgerReconciliationService {
         }
     }
 
-    private static final class BybitFamilyUmbrellaAccumulator {
+    private static final class CexFamilyUmbrellaAccumulator {
         private BigDecimal quantity = BigDecimal.ZERO;
         private BigDecimal coveredQuantity = BigDecimal.ZERO;
         private BigDecimal totalCostBasisUsd = BigDecimal.ZERO;
@@ -757,7 +608,7 @@ class AssetLedgerReconciliationService {
                 }
             }
             if (latestPoint != null && latestPoint.getAssetSymbol() != null) {
-                priceLookupCandidates.addAll(BybitUmbrellaSupport.priceLookupCandidates(latestPoint.getAssetSymbol()));
+                priceLookupCandidates.addAll(CexUmbrellaSupport.priceLookupCandidates(latestPoint.getAssetSymbol()));
                 if (fallbackSymbol == null) {
                     fallbackSymbol = latestPoint.getAssetSymbol();
                 }

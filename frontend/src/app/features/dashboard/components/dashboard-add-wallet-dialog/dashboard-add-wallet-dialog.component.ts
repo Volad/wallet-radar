@@ -346,5 +346,5 @@ function networksForWalletKind(
   if (kind === 'ton') {
     return ['TON'];
   }
-  return evmNetworks.filter((network) => network !== 'BYBIT') as ReadonlyArray<OnChainWalletNetworkId>;
+  return evmNetworks as ReadonlyArray<OnChainWalletNetworkId>;
 }

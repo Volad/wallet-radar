@@ -166,8 +166,7 @@ public class CurrentPriceQuoteRefreshService {
             if (integration == null
                     || integration.getIntegrationId() == null
                     || integration.getStatus() == UserSession.IntegrationStatus.DISABLED
-                    || integration.getAccountRef() == null
-                    || !integration.getAccountRef().toUpperCase(Locale.ROOT).startsWith("BYBIT:")) {
+                    || integration.getProvider() != UserSession.IntegrationProvider.BYBIT) {
                 continue;
             }
             ids.add(integration.getIntegrationId());

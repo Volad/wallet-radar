@@ -11,12 +11,10 @@ export type EvmNetworkId =
   | 'UNICHAIN'
   | 'ZKSYNC'
   | 'KATANA'
-  | 'PLASMA'
-  /** Exchange custody bucket (dashboard / allocation); not an EVM chain. */
-  | 'BYBIT';
+  | 'PLASMA';
 
 /** On-chain wallet networks selectable in session settings (EVM chains + non-EVM tracking-only). */
-export type OnChainWalletNetworkId = Exclude<EvmNetworkId, 'BYBIT'> | 'SOLANA' | 'TON';
+export type OnChainWalletNetworkId = EvmNetworkId | 'SOLANA' | 'TON';
 
 export type SessionBackfillAggregateStatus =
   | 'PENDING'
@@ -239,7 +237,8 @@ export interface SessionTransactionItemResponse {
   readonly id: string;
   readonly sourceType: SessionTransactionSourceType | null;
   readonly txHash: string | null;
-  readonly networkId: EvmNetworkId | null;
+  /** On-chain chain ID (e.g. 'ETHEREUM') or null for CEX transactions. */
+  readonly networkId: string | null;
   readonly walletAddress: string | null;
   readonly matchedCounterparty: string | null;
   readonly blockTimestamp: string | null;
@@ -267,7 +266,8 @@ export interface GetSessionTransactionsRequest {
   readonly search?: string | null;
   readonly categories?: ReadonlyArray<string> | null;
   readonly walletIds?: ReadonlyArray<string>;
-  readonly networkIds?: ReadonlyArray<EvmNetworkId>;
+  /** On-chain chain IDs to filter by; CEX venue IDs should be excluded (CEX transactions always appear). */
+  readonly networkIds?: ReadonlyArray<string>;
 }
 
 export interface RebuildSessionTransactionsResponse {
@@ -447,12 +447,19 @@ export interface SessionDashboardTokenPositionResponse {
   readonly unrealizedPnlPct: number;
   readonly unrealizedPnlUsd: number;
   readonly realizedPnlUsd: number;
-  readonly networkId: EvmNetworkId;
+  /** On-chain chain ID (e.g. 'ETHEREUM') or CEX venue ID (e.g. 'BYBIT'). Use `domain` field to distinguish. */
+  readonly networkId: string;
   readonly walletAddress: string;
   readonly issue: string | null;
   readonly valuationModel: string | null;
   readonly valuationUnderlyingSymbol: string | null;
   readonly unsupportedValuationReason: string | null;
+  /** Wallet domain: EVM, SOLANA, TON, or CEX. */
+  readonly domain: string | null;
+  /** CEX venue id (e.g. 'bybit', 'dzengi'); null for on-chain wallets. */
+  readonly venueId: string | null;
+  /** CEX sub-account kind (e.g. 'FUND', 'UTA', 'EARN'); null if not applicable. */
+  readonly subAccount: string | null;
 }
 
 export interface SessionDashboardResponse {

@@ -19,6 +19,7 @@ import { toObservable, toSignal } from '@angular/core/rxjs-interop';
 import { combineLatest, map, of, startWith, switchMap, catchError } from 'rxjs';
 
 import { INTEGRATION_PRESENTATION_BY_PROVIDER } from '../../core/data/dashboard.constants';
+import { isCexAddress, parseVenueId } from '../../core/utils/wallet-ref.util';
 import {
   SessionAssetLedgerEventFlowResponse,
   SessionAssetLedgerEventOverlayResponse,
@@ -1351,15 +1352,16 @@ export class AssetLedgerPageComponent {
     if (trimmed.length === 0) {
       return '—';
     }
-    const upper = trimmed.toUpperCase();
-    if (upper.startsWith('BYBIT:')) {
+    if (isCexAddress(trimmed)) {
+      const venueId = parseVenueId(trimmed);
+      const venueLabel = (venueId ? INTEGRATION_PRESENTATION_BY_PROVIDER.get(venueId)?.label : null) ?? venueId ?? 'CEX';
       const parts = trimmed.split(':');
       if (parts.length >= 3 && parts[1].toUpperCase() === 'FUNDING_HISTORY') {
-        return 'Bybit · funding history';
+        return `${venueLabel} · funding history`;
       }
       if (parts.length >= 2) {
         const stream = parts[1].replace(/_/g, ' ').toLowerCase();
-        return `Bybit · ${stream}`;
+        return `${venueLabel} · ${stream}`;
       }
     }
     if (trimmed.length <= 16) {
@@ -2635,7 +2637,7 @@ export class AssetLedgerPageComponent {
   }
 
   private shortDisplayRef(value: string): string {
-    if (value.trim().toUpperCase().startsWith('BYBIT:')) {
+    if (isCexAddress(value.trim())) {
       return value.trim();
     }
     return this.shortHash(value);
@@ -2890,7 +2892,7 @@ export class AssetLedgerPageComponent {
     if (event === null) {
       return false;
     }
-    return event.walletAddresses.some((walletAddress) => walletAddress.trim().toUpperCase().startsWith('BYBIT:'));
+    return event.walletAddresses.some((walletAddress) => isCexAddress(walletAddress.trim()));
   }
 
   private toFlowChips(flows: ReadonlyArray<SessionAssetLedgerEventFlowResponse>): ReadonlyArray<FlowChipView> {

@@ -1,9 +1,12 @@
 package com.walletradar.application.costbasis.support;
 
+import com.walletradar.canonical.correlation.CorrelationContract;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.domain.wallet.WalletDomainKind;
+import com.walletradar.domain.wallet.WalletRef;
 
 import java.util.Locale;
 import java.util.Map;
@@ -14,10 +17,10 @@ import java.util.Set;
  */
 public final class AccountingAssetIdentitySupport {
 
-    private static final String EARN_PRINCIPAL_CORRELATION_PREFIX = "bybit-earn-principal-v1:";
-    private static final String EARN_ONCHAIN_FUND_CORRELATION_PREFIX = "bybit-earn-onchain-fund-v1:";
-    private static final String BYBIT_CORRIDOR_CORRELATION_PREFIX = "BYBIT-CORRIDOR:";
-    private static final String BYBIT_COLLAPSED_CORRELATION_PREFIX = "bybit-collapsed-v1:";
+    private static final String EARN_PRINCIPAL_CORRELATION_PREFIX = CorrelationContract.BYBIT_EARN_PRINCIPAL_V1_PREFIX;
+    private static final String EARN_ONCHAIN_FUND_CORRELATION_PREFIX = CorrelationContract.BYBIT_EARN_ONCHAIN_FUND_V1_PREFIX;
+    private static final String BYBIT_CORRIDOR_CORRELATION_PREFIX = CorrelationContract.BYBIT_CORRIDOR_PREFIX;
+    private static final String BYBIT_COLLAPSED_CORRELATION_PREFIX = CorrelationContract.BYBIT_COLLAPSED_V1_PREFIX;
     private static final String ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 
     private static final Map<NetworkId, String> NATIVE_SYMBOLS = Map.ofEntries(
@@ -91,11 +94,15 @@ public final class AccountingAssetIdentitySupport {
     }
 
     public static String positionWalletAddress(String walletAddress) {
-        if (walletAddress == null || !walletAddress.startsWith("BYBIT:")) {
-            return walletAddress;
+        if (walletAddress == null) {
+            return null;
         }
-        if (walletAddress.endsWith(":UTA") || walletAddress.endsWith(":FUND")) {
-            return walletAddress.substring(0, walletAddress.lastIndexOf(':'));
+        WalletRef ref = WalletRef.parse(walletAddress);
+        if (ref.domain() == WalletDomainKind.CEX && ref.subAccount() != null) {
+            String sub = ref.subAccount().toUpperCase(Locale.ROOT);
+            if (sub.equals("UTA") || sub.equals("FUND")) {
+                return ref.umbrellaKey();
+            }
         }
         return walletAddress;
     }
@@ -132,9 +139,12 @@ public final class AccountingAssetIdentitySupport {
             }
             wallet = wallet.trim();
             if (isFlexibleEarnPrincipal(transaction)) {
-                String upper = wallet.toUpperCase(Locale.ROOT);
-                if (upper.endsWith(":FUND") || upper.endsWith(":UTA")) {
-                    return wallet.substring(0, wallet.lastIndexOf(':'));
+                WalletRef walletRef = WalletRef.parse(wallet);
+                if (walletRef.domain() == WalletDomainKind.CEX && walletRef.subAccount() != null) {
+                    String sub = walletRef.subAccount().toUpperCase(Locale.ROOT);
+                    if (sub.equals("FUND") || sub.equals("UTA")) {
+                        return walletRef.umbrellaKey();
+                    }
                 }
             }
             return wallet;
@@ -161,10 +171,10 @@ public final class AccountingAssetIdentitySupport {
         // their combined totals.
         if (isBybitRewardClaim(transaction)) {
             String wallet = transaction.getWalletAddress();
-            if (wallet != null && wallet.startsWith("BYBIT:")) {
-                String upper = wallet.toUpperCase(Locale.ROOT);
-                if (upper.endsWith(":EARN") || upper.endsWith(":FUND") || upper.endsWith(":UTA")) {
-                    return wallet.substring(0, wallet.lastIndexOf(':'));
+            if (wallet != null) {
+                WalletRef ref = WalletRef.parse(wallet);
+                if (ref.domain() == WalletDomainKind.CEX && ref.subAccount() != null) {
+                    return ref.umbrellaKey();
                 }
                 return wallet;
             }
@@ -236,7 +246,9 @@ public final class AccountingAssetIdentitySupport {
             return false;
         }
         String wallet = transaction.getWalletAddress();
-        return wallet != null && wallet.toUpperCase(Locale.ROOT).endsWith(":FUND");
+        if (wallet == null) return false;
+        WalletRef ref = WalletRef.parse(wallet);
+        return ref.domain() == WalletDomainKind.CEX && "FUND".equalsIgnoreCase(ref.subAccount());
     }
 
     public static boolean isVenueScopedCex(NormalizedTransactionSource source) {

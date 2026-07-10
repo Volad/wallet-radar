@@ -1,6 +1,6 @@
 # Data Model
 
-> **Last updated:** 2026-07-08  
+> **Last updated:** 2026-07-10  
 > MongoDB collections and core domain entities. Canonical economic document: **`NormalizedTransaction`** (not `EconomicEvent`).
 
 ## Entity relationship (core)
@@ -23,6 +23,12 @@ classDiagram
     List flows
     String correlationId
     Boolean continuityCandidate
+    WalletDomainKind walletDomainKind
+    String venueId
+    String subAccount
+    String umbrellaKey
+    Boolean externalCapitalBoundary
+    BigDecimal externalCapitalEligibleUsd
   }
   class AssetLedgerPoint {
     String accountingUniverseId
@@ -86,6 +92,19 @@ Enum: `NormalizedTransactionStatus` — `backend/.../domain/transaction/normaliz
 
 Rows with `excludedFromAccounting=true` never enter replay.
 
+## NormalizedTransaction — venue-neutral boundary contract (ADR-052)
+
+CEX normalization stamps the following venue-neutral fields so downstream packages never depend on `VenueRegistry` or concrete venue descriptors:
+
+| Field | Type | Set by | Consumed by |
+|-------|------|--------|-------------|
+| `walletDomainKind` | `WalletDomainKind` enum (`EVM`, `SOLANA`, `TON`, `CEX`) | canonical builder via `WalletRef.parse()` | `AccountingUniverseService`, reconciliation |
+| `venueId` | `String` (e.g. `BYBIT`, `DZENGI`) | canonical builder | dashboard label, API DTO |
+| `subAccount` | `String` (e.g. `FUND`, `UTA`, `EARN`) | canonical builder | replay, conservation |
+| `umbrellaKey` | `String` (`<venueId>:<uid>`) | canonical builder | umbrella aggregation in dashboard and AVCO |
+| `externalCapitalBoundary` | `Boolean` | `VenueExternalCapitalPolicy` | `PortfolioConservationGate` NEC |
+| `externalCapitalEligibleUsd` | `BigDecimal` | `VenueExternalCapitalPolicy` | NEC eligible basis |
+
 ## NormalizedTransactionType
 
 Full catalog with per-stage behavior: [Transaction types reference](../reference/transaction-types.md).
@@ -110,6 +129,7 @@ ON_CHAIN_NORMALIZATION,
 ON_CHAIN_CLARIFICATION,
 ON_CHAIN_RECLASSIFICATION,
 BYBIT_NORMALIZATION,
+DZENGI_NORMALIZATION,
 LINKING,
 PRICING,
 ACCOUNTING_REPLAY,

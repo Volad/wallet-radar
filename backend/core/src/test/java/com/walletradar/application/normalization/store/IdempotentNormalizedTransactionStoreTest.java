@@ -16,6 +16,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -31,7 +32,7 @@ class IdempotentNormalizedTransactionStoreTest {
     @Test
     @DisplayName("reprocessing existing canonical id preserves original createdAt")
     void reprocessingExistingCanonicalIdPreservesCreatedAt() {
-        IdempotentNormalizedTransactionStore store = new IdempotentNormalizedTransactionStore(repository);
+        IdempotentNormalizedTransactionStore store = new IdempotentNormalizedTransactionStore(repository, List.of());
         Instant originalCreatedAt = Instant.parse("2026-03-19T10:00:00Z");
 
         NormalizedTransaction existing = normalized("raw-id", originalCreatedAt);
@@ -51,7 +52,7 @@ class IdempotentNormalizedTransactionStoreTest {
     @Test
     @DisplayName("confirmed merge preserves higher clarification counters from candidate")
     void confirmedMergePreservesHigherClarificationCountersFromCandidate() {
-        IdempotentNormalizedTransactionStore store = new IdempotentNormalizedTransactionStore(repository);
+        IdempotentNormalizedTransactionStore store = new IdempotentNormalizedTransactionStore(repository, List.of());
         Instant originalCreatedAt = Instant.parse("2026-03-19T10:00:00Z");
 
         NormalizedTransaction existing = normalized("raw-id", originalCreatedAt);
@@ -78,7 +79,7 @@ class IdempotentNormalizedTransactionStoreTest {
     @Test
     @DisplayName("ADR-051: confirmed merge propagates acquisitionFeeUsd from candidate BUY flow")
     void confirmedMergePropagateskAcquisitionFeeUsdOnBuyFlow() {
-        IdempotentNormalizedTransactionStore store = new IdempotentNormalizedTransactionStore(repository);
+        IdempotentNormalizedTransactionStore store = new IdempotentNormalizedTransactionStore(repository, List.of());
 
         NormalizedTransaction existing = normalized("dz-tsla-1", Instant.parse("2026-03-19T10:00:00Z"));
         existing.setStatus(NormalizedTransactionStatus.CONFIRMED);

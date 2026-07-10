@@ -8,11 +8,13 @@ import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.common.PriceSource;
 import com.walletradar.domain.session.AccountingUniverse;
 import com.walletradar.domain.session.AccountingUniverseRepository;
+import com.walletradar.domain.transaction.normalized.ExternalCapitalBoundary;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.application.costbasis.application.ReplayToleranceProperties;
 import com.walletradar.application.pricing.persistence.HistoricalPriceCacheService;
+import com.walletradar.domain.wallet.WalletRef;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -45,13 +47,8 @@ public class PortfolioConservationGate {
     private static final Logger log = LoggerFactory.getLogger(PortfolioConservationGate.class);
     private static final MathContext MC = MathContext.DECIMAL128;
     private static final int DIAGNOSTIC_LIMIT = 20;
-    private static final String BYBIT_PREFIX = "bybit:";
-    /** Matches {@code BYBIT:<uid>:FUND} deposit/withdraw anchors (Cycle/11 S3). */
-    private static final String BYBIT_FUND_WALLET_PATTERN = "^BYBIT:[^:]+:FUND$";
     /** Normalized (lowercase) EVM address pattern — 0x + 40 hex chars. */
     private static final String EVM_ADDRESS_PATTERN = "^0x[0-9a-f]{40}$";
-    /** Matches {@code DZENGI:<uid>} umbrella wallets (ADR-048 single-account model). */
-    private static final String DZENGI_UMBRELLA_WALLET_PATTERN = "^DZENGI:[^:]+$";
     /** Counterparty sentinel used when a tx touches multiple external addresses. */
     private static final String MULTI_COUNTERPARTY = "MULTI";
     private static final Set<String> STABLECOIN_SYMBOLS = Set.of(
@@ -236,22 +233,16 @@ public class PortfolioConservationGate {
         List<CounterpartyBasisPool> pools = counterpartyBasisPoolRepository.findByUniverseId(universeId);
 
         Map<String, AccountingUniverse.Member> membersByRef = loadMembersByRef(universeId);
-        // Cycle/11 S3: NEC counts priced EXTERNAL_TRANSFER into BYBIT:*:FUND from non-universe
-        // counterparties (crypto + fiat) plus EXTERNAL_TRANSFER_IN/OUT and BRIDGE_IN/OUT on
-        // on-chain EVM universe member wallets from/to non-universe external counterparties.
-        // Query order: BYBIT FUND IN → BYBIT FUND OUT → EVM capital flows → DZENGI umbrella.
-        BigDecimal fundInflow = computeLifetimeFundInflow(membersByRef);
-        BigDecimal fundOutflow = computeLifetimeFundOutflow(membersByRef);
+        // NEC from CEX venues: read the venue-neutral externalCapitalBoundary marker stamped
+        // at normalization time by CexBoundaryContractStamper. No per-venue wallet patterns here.
+        BigDecimal cexInflow = sumCexBoundaryFlows(ExternalCapitalBoundary.INFLOW, membersByRef);
+        BigDecimal cexOutflow = sumCexBoundaryFlows(ExternalCapitalBoundary.OUTFLOW, membersByRef);
+        // NEC from on-chain EVM wallets: EXTERNAL_TRANSFER_IN/OUT and BRIDGE_IN/OUT
+        // from/to non-universe external counterparties.
         Set<String> evmMemberAddresses = extractEvmMemberAddresses(membersByRef);
         EvmNecContribution evmContrib = computeEvmNecContribution(membersByRef, evmMemberAddresses);
-        // ADR-048: Dzengi single-umbrella NEC — count stablecoin EXTERNAL_TRANSFER_IN/OUT
-        // on DZENGI:<uid> wallets (no sub-account split, unlike Bybit FUND/UTA).
-        BigDecimal dzengiInflow = computeDzengiLifetimeTransfers(NormalizedTransactionType.EXTERNAL_TRANSFER_IN, membersByRef);
-        // FIAT_EXIT is a sub-type of EXTERNAL_TRANSFER_OUT — include both in NEC outflow.
-        BigDecimal dzengiOutflow = computeDzengiLifetimeTransfers(NormalizedTransactionType.EXTERNAL_TRANSFER_OUT, membersByRef)
-                .add(computeDzengiLifetimeTransfers(NormalizedTransactionType.FIAT_EXIT, membersByRef), MC);
-        BigDecimal lifetimeInflow = fundInflow.add(evmContrib.inflow(), MC).add(dzengiInflow, MC);
-        BigDecimal lifetimeOutflow = fundOutflow.add(evmContrib.outflow(), MC).add(dzengiOutflow, MC);
+        BigDecimal lifetimeInflow = cexInflow.add(evmContrib.inflow(), MC);
+        BigDecimal lifetimeOutflow = cexOutflow.add(evmContrib.outflow(), MC);
         BigDecimal nec = lifetimeInflow.subtract(lifetimeOutflow, MC);
         BigDecimal mtm = computeMarkToMarket(inputs, pools, membersByRef);
         BigDecimal totalLiabilityUsd = computeOpenLiabilityUsd(universeId);
@@ -290,27 +281,66 @@ public class PortfolioConservationGate {
     }
 
     /**
-     * Cycle/11 S3: gross lifetime deposits into {@code BYBIT:*:FUND} shown as dashboard "Net Inflow".
+     * Reads the venue-neutral {@link ExternalCapitalBoundary} marker stamped by
+     * {@code CexBoundaryContractStamper} at normalization time and sums priced flows.
      *
-     * <p>Counts priced {@code EXTERNAL_TRANSFER_IN} on the FUND sub-account where the
-     * counterparty is <em>not</em> a universe member (excludes internal Bybit↔EVM corridors and
-     * registered external venues like Paradex/MEX).</p>
+     * <p>No venue-specific wallet address patterns are applied here. Eligibility (stablecoin
+     * requirement for Bybit, all-priced for Dzengi) is fully encoded in the boundary marker.
+     * The counterparty universe-membership guard remains here to exclude internal CEX↔EVM
+     * corridors and registered external venues.</p>
+     *
+     * <p>RC-fund-dust: tiny inbound flows below {@link #MIN_FUND_FLOW_USD} are excluded.</p>
      */
-    private BigDecimal computeLifetimeFundInflow(Map<String, AccountingUniverse.Member> membersByRef) {
-        return sumFundExternalTransfers(
-                NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
-                membersByRef
-        );
-    }
-
-    /**
-     * Cycle/11 S3: gross lifetime withdrawals from {@code BYBIT:*:FUND}, symmetric to inflow.
-     */
-    private BigDecimal computeLifetimeFundOutflow(Map<String, AccountingUniverse.Member> membersByRef) {
-        return sumFundExternalTransfers(
-                NormalizedTransactionType.EXTERNAL_TRANSFER_OUT,
-                membersByRef
-        );
+    private BigDecimal sumCexBoundaryFlows(
+            ExternalCapitalBoundary boundary,
+            Map<String, AccountingUniverse.Member> membersByRef
+    ) {
+        Query query = Query.query(Criteria.where("externalCapitalBoundary").is(boundary));
+        query.fields()
+                .include("walletAddress")
+                .include("txHash")
+                .include("flows")
+                .include("counterpartyAddress")
+                .include("matchedCounterparty");
+        List<NormalizedTransaction> transactions = mongoOperations.find(query, NormalizedTransaction.class);
+        if (transactions.isEmpty()) {
+            return BigDecimal.ZERO;
+        }
+        Set<String> seenDedupeKeys = new HashSet<>();
+        BigDecimal total = BigDecimal.ZERO;
+        for (NormalizedTransaction tx : transactions) {
+            if (tx == null || tx.getFlows() == null) {
+                continue;
+            }
+            if (!isUniverseMember(membersByRef, tx.getWalletAddress())) {
+                continue;
+            }
+            String dedupeKey = depositDedupeKey(tx);
+            if (dedupeKey != null && !seenDedupeKeys.add(dedupeKey)) {
+                continue;
+            }
+            for (NormalizedTransaction.Flow flow : tx.getFlows()) {
+                if (flow == null || flow.getRole() == NormalizedLegRole.FEE) {
+                    continue;
+                }
+                if (flow.getQuantityDelta() == null || flow.getQuantityDelta().signum() == 0) {
+                    continue;
+                }
+                if (!isNonUniverseCounterparty(membersByRef, tx, flow)) {
+                    continue;
+                }
+                BigDecimal valueUsd = pricedFlowValueUsd(flow);
+                if (valueUsd == null || valueUsd.signum() == 0) {
+                    continue;
+                }
+                if (boundary == ExternalCapitalBoundary.INFLOW
+                        && valueUsd.compareTo(MIN_FUND_FLOW_USD) < 0) {
+                    continue;
+                }
+                total = total.add(valueUsd, MC);
+            }
+        }
+        return total;
     }
 
     /**
@@ -556,127 +586,6 @@ public class PortfolioConservationGate {
                 .include("excludedFromAccounting")
                 .include("blockTimestamp");
         return mongoOperations.find(query, NormalizedTransaction.class);
-    }
-
-    private BigDecimal sumFundExternalTransfers(
-            NormalizedTransactionType transferType,
-            Map<String, AccountingUniverse.Member> membersByRef
-    ) {
-        Query query = Query.query(new Criteria().andOperator(
-                Criteria.where("type").is(transferType),
-                Criteria.where("walletAddress").regex(BYBIT_FUND_WALLET_PATTERN)
-        ));
-        query.fields()
-                .include("walletAddress")
-                .include("txHash")
-                .include("flows")
-                .include("counterpartyAddress")
-                .include("matchedCounterparty");
-        List<NormalizedTransaction> transactions = mongoOperations.find(query, NormalizedTransaction.class);
-        if (transactions.isEmpty()) {
-            return BigDecimal.ZERO;
-        }
-        Set<String> seenDepositKeys = new HashSet<>();
-        BigDecimal total = BigDecimal.ZERO;
-        for (NormalizedTransaction transaction : transactions) {
-            if (transaction == null || transaction.getFlows() == null) {
-                continue;
-            }
-            if (!isUniverseMember(membersByRef, transaction.getWalletAddress())) {
-                continue;
-            }
-            String dedupeKey = depositDedupeKey(transaction);
-            if (dedupeKey != null && !seenDepositKeys.add(dedupeKey)) {
-                continue;
-            }
-            for (NormalizedTransaction.Flow flow : transaction.getFlows()) {
-                if (flow == null || flow.getRole() == NormalizedLegRole.FEE) {
-                    continue;
-                }
-                if (flow.getQuantityDelta() == null || flow.getQuantityDelta().signum() == 0) {
-                    continue;
-                }
-                // RC1: Bybit FUND inflows must be stablecoin-denominated to count as net external
-                // capital. Non-stablecoin crypto (MNT, DOGS, SOL, …) deposited to FUND from an
-                // external wallet is a crypto-to-crypto movement, not a fiat injection.
-                if (transferType == NormalizedTransactionType.EXTERNAL_TRANSFER_IN) {
-                    String normalizedSym = normalizeStablecoinSymbol(flow.getAssetSymbol());
-                    if (!STABLECOIN_SYMBOLS.contains(normalizedSym)) {
-                        continue;
-                    }
-                }
-                if (!isNonUniverseCounterparty(membersByRef, transaction, flow)) {
-                    continue;
-                }
-                BigDecimal valueUsd = pricedFlowValueUsd(flow);
-                if (valueUsd == null || valueUsd.signum() == 0) {
-                    continue;
-                }
-                // RC-fund-dust: skip tiny flows (test deposits, fractional earn credits, etc.)
-                if (transferType == NormalizedTransactionType.EXTERNAL_TRANSFER_IN
-                        && valueUsd.compareTo(MIN_FUND_FLOW_USD) < 0) {
-                    continue;
-                }
-                total = total.add(valueUsd, MC);
-            }
-        }
-        return total;
-    }
-
-    /**
-     * ADR-048: Dzengi NEC contribution — EXTERNAL_TRANSFER_IN (deposits) or EXTERNAL_TRANSFER_OUT
-     * (withdrawals) on {@code DZENGI:<uid>} umbrella wallets.
-     * Unlike Bybit, there is no FUND sub-account; the single umbrella wallet is the capital gate.
-     * All priced flows are counted (BYN + USD + stablecoins) — Dzengi is a fiat-entry exchange
-     * where users deposit Belarusian Rubles or USD directly.
-     */
-    private BigDecimal computeDzengiLifetimeTransfers(
-            NormalizedTransactionType transferType,
-            Map<String, AccountingUniverse.Member> membersByRef
-    ) {
-        Query query = Query.query(new Criteria().andOperator(
-                Criteria.where("type").is(transferType),
-                Criteria.where("walletAddress").regex(DZENGI_UMBRELLA_WALLET_PATTERN)
-        ));
-        query.fields()
-                .include("walletAddress")
-                .include("txHash")
-                .include("flows")
-                .include("counterpartyAddress")
-                .include("matchedCounterparty");
-        List<NormalizedTransaction> transactions = mongoOperations.find(query, NormalizedTransaction.class);
-        if (transactions.isEmpty()) {
-            return BigDecimal.ZERO;
-        }
-        BigDecimal total = BigDecimal.ZERO;
-        for (NormalizedTransaction transaction : transactions) {
-            if (transaction == null || transaction.getFlows() == null) {
-                continue;
-            }
-            if (!isUniverseMember(membersByRef, transaction.getWalletAddress())) {
-                continue;
-            }
-            for (NormalizedTransaction.Flow flow : transaction.getFlows()) {
-                if (flow == null || flow.getRole() == NormalizedLegRole.FEE) {
-                    continue;
-                }
-                if (flow.getQuantityDelta() == null || flow.getQuantityDelta().signum() == 0) {
-                    continue;
-                }
-                // Dzengi accepts both BYN (Belarusian Ruble) and USD fiat deposits — accept any
-                // priced flow (BYN priced via DzengiFxPriceSourceAdapter, USD at 1:1).
-                BigDecimal valueUsd = pricedFlowValueUsd(flow);
-                if (valueUsd == null || valueUsd.signum() == 0) {
-                    continue;
-                }
-                if (transferType == NormalizedTransactionType.EXTERNAL_TRANSFER_IN
-                        && valueUsd.compareTo(MIN_FUND_FLOW_USD) < 0) {
-                    continue;
-                }
-                total = total.add(valueUsd, MC);
-            }
-        }
-        return total;
     }
 
     /**
@@ -1146,28 +1055,16 @@ public class PortfolioConservationGate {
         if (direct != null) {
             return direct;
         }
-        if (normalized.startsWith(BYBIT_PREFIX)) {
-            String rootBybitRef = bybitRootRef(normalized);
-            if (rootBybitRef != null) {
-                AccountingUniverse.Member root = membersByRef.get(rootBybitRef);
-                if (root != null) {
-                    return root;
-                }
+        WalletRef ref = WalletRef.parse(counterpartyAddress);
+        String umbrellaKey = ref.umbrellaKey();
+        if (umbrellaKey != null && !umbrellaKey.equals(counterpartyAddress)) {
+            String normalizedUmbrella = normalizeRef(umbrellaKey);
+            AccountingUniverse.Member umbrella = membersByRef.get(normalizedUmbrella);
+            if (umbrella != null) {
+                return umbrella;
             }
         }
         return null;
-    }
-
-    private static String bybitRootRef(String normalizedRef) {
-        if (normalizedRef == null || !normalizedRef.startsWith(BYBIT_PREFIX)) {
-            return null;
-        }
-        int firstColon = normalizedRef.indexOf(':');
-        int secondColon = normalizedRef.indexOf(':', firstColon + 1);
-        if (secondColon <= 0) {
-            return normalizedRef;
-        }
-        return normalizedRef.substring(0, secondColon);
     }
 
     private static boolean memberBackfillEnabled(AccountingUniverse.Member member) {

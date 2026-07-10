@@ -3,6 +3,8 @@ package com.walletradar.application.linking.pipeline.clarification;
 import com.walletradar.canonical.correlation.CorrelationContract;
 import com.walletradar.domain.common.NetworkAddressFormat;
 import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.wallet.WalletDomainKind;
+import com.walletradar.domain.wallet.WalletRef;
 
 import java.util.Locale;
 
@@ -53,23 +55,14 @@ public final class CorridorCorrelationKeyFactory {
      * the input is not a Bybit wallet ref.
      */
     public static String bybitSubAccountEndpoint(String bybitWalletRef) {
-        if (bybitWalletRef == null || bybitWalletRef.isBlank()
-                || !bybitWalletRef.toUpperCase(Locale.ROOT).startsWith("BYBIT:")) {
+        if (bybitWalletRef == null || bybitWalletRef.isBlank()) {
             return null;
         }
-        String remainder = bybitWalletRef.substring("BYBIT:".length()).trim();
-        if (remainder.isBlank()) {
+        WalletRef ref = WalletRef.parse(bybitWalletRef.trim());
+        if (ref.domain() != WalletDomainKind.CEX || ref.uid().isBlank()) {
             return null;
         }
-        int colon = remainder.indexOf(':');
-        if (colon < 0) {
-            return "BYBIT:" + remainder + ":FUND";
-        }
-        String uid = remainder.substring(0, colon).trim();
-        String subAccount = remainder.substring(colon + 1).trim().toUpperCase(Locale.ROOT);
-        if (uid.isBlank() || subAccount.isBlank()) {
-            return null;
-        }
-        return "BYBIT:" + uid + ":" + subAccount;
+        String subAccount = ref.subAccount() != null ? ref.subAccount().toUpperCase(Locale.ROOT) : "FUND";
+        return ref.providerPrefix() + ":" + ref.uid() + ":" + subAccount;
     }
 }
