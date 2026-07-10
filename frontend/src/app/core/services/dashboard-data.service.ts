@@ -1,6 +1,7 @@
 import { Injectable } from '@angular/core';
 import { Observable, of } from 'rxjs';
 import { map } from 'rxjs/operators';
+import { smartFormatUsd } from '../utils/amount.util';
 
 import {
   COLORS,
@@ -119,9 +120,7 @@ export class DashboardDataService {
   }
 
   private formatUsd(value: number): string {
-    const absolute = Math.abs(value);
-    const compact = absolute >= 1000 ? `$${(absolute / 1000).toFixed(1)}k` : `$${absolute.toFixed(2)}`;
-    return value < 0 ? `-${compact}` : compact;
+    return smartFormatUsd(value);
   }
 
   private formatPercent(value: number): string {

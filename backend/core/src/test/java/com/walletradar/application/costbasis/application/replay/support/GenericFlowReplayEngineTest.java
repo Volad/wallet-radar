@@ -916,6 +916,74 @@ class GenericFlowReplayEngineTest {
         assertThat(dest.perWalletNetAvco()).isLessThanOrEqualTo(dest.perWalletAvco());
     }
 
+    // ─── ADR-051: capitalizeFeeIntoNetLane ───────────────────────────────────────
+
+    @Test
+    void capitalizeFeeIntoNetLane_raisesNetCostOnly_marketCostUnchanged() {
+        // A simple BUY of 1 TSLA at 371.528 is followed by a 0.186 USD commission capitalized
+        // into Net only. Market AVCO must stay 371.528; Net AVCO must be 371.714.
+        PositionState position = new PositionState(
+                new AssetKey("DZENGI:123", null, "SYMBOL:TSLA", "TSLA", "SYMBOL:TSLA"));
+
+        NormalizedTransaction.Flow buyFlow = new NormalizedTransaction.Flow();
+        buyFlow.setRole(NormalizedLegRole.BUY);
+        buyFlow.setAssetSymbol("TSLA");
+        buyFlow.setQuantityDelta(new BigDecimal("1.0"));
+        buyFlow.setUnitPriceUsd(new BigDecimal("371.528"));
+        buyFlow.setPriceSource(com.walletradar.domain.common.PriceSource.SWAP_DERIVED);
+
+        engine.applyBuyWithAcquisitionCost(buyFlow, position, new BigDecimal("371.528"));
+
+        // Verify Market AVCO set correctly
+        assertThat(position.perWalletAvco()).isEqualByComparingTo("371.528");
+        assertThat(position.perWalletNetAvco()).isEqualByComparingTo("371.528");
+
+        // ADR-051: capitalize fee into Net lane only
+        engine.capitalizeFeeIntoNetLane(new BigDecimal("0.186"), position);
+
+        assertThat(position.totalCostBasisUsd())
+                .as("Market cost basis must be unchanged")
+                .isEqualByComparingTo("371.528");
+        assertThat(position.netTotalCostBasisUsd())
+                .as("Net cost basis must include the fee")
+                .isEqualByComparingTo("371.714");
+        assertThat(position.perWalletAvco())
+                .as("Market AVCO must be unchanged")
+                .isEqualByComparingTo("371.528");
+        assertThat(position.perWalletNetAvco())
+                .as("Net AVCO must be fee-inclusive")
+                .isEqualByComparingTo("371.714");
+        assertThat(position.totalGasPaidUsd())
+                .as("Gas paid must include the capitalized fee")
+                .isEqualByComparingTo("0.186");
+    }
+
+    @Test
+    void capitalizeFeeIntoNetLane_nullOrZeroFee_positionUnchanged() {
+        PositionState position = new PositionState(
+                new AssetKey("BYBIT:1", null, "SYMBOL:BTC", "BTC", "SYMBOL:BTC"));
+
+        NormalizedTransaction.Flow buyFlow = new NormalizedTransaction.Flow();
+        buyFlow.setRole(NormalizedLegRole.BUY);
+        buyFlow.setAssetSymbol("BTC");
+        buyFlow.setQuantityDelta(new BigDecimal("0.5"));
+        buyFlow.setUnitPriceUsd(new BigDecimal("60000"));
+        buyFlow.setPriceSource(com.walletradar.domain.common.PriceSource.EXECUTION);
+        engine.applyBuyWithAcquisitionCost(buyFlow, position, new BigDecimal("30000"));
+
+        BigDecimal marketBefore = position.totalCostBasisUsd();
+        BigDecimal netBefore = position.netTotalCostBasisUsd();
+        BigDecimal gasBefore = position.totalGasPaidUsd();
+
+        engine.capitalizeFeeIntoNetLane(null, position);
+        engine.capitalizeFeeIntoNetLane(BigDecimal.ZERO, position);
+        engine.capitalizeFeeIntoNetLane(new BigDecimal("-1"), position);
+
+        assertThat(position.totalCostBasisUsd()).isEqualByComparingTo(marketBefore);
+        assertThat(position.netTotalCostBasisUsd()).isEqualByComparingTo(netBefore);
+        assertThat(position.totalGasPaidUsd()).isEqualByComparingTo(gasBefore);
+    }
+
     @Test
     void beanExposesExactlyOneAutowiredConstructorTakingMarketAuthority() {
         // FIX 2 (ADR-043, replay #13b): the RC-D clamp (and the resolve() paths in

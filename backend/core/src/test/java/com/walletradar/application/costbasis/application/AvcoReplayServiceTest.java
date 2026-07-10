@@ -3487,6 +3487,7 @@ class AvcoReplayServiceTest {
                         transferClassifier,
                         keyFactory,
                         replayRouteHandlerRegistry,
+                        org.mockito.Mockito.mock(com.walletradar.application.costbasis.support.AcquisitionFeeCapitalizationPolicy.class),
                         transferReplayHandler,
                         bybitVenueInternalReplayHandler,
                         liquidStakingReplayHandler,

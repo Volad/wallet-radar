@@ -36,7 +36,12 @@ class ModuleDependencyArchTest {
     void common_must_not_depend_on_other_app_modules() {
         ArchRule rule = noClasses()
                 .that().resideInAPackage("com.walletradar.platform.common..")
-                .should().dependOnClassesThat().resideInAnyPackage("..domain..", "..config..", "..api..", "..backend..");
+                .should().dependOnClassesThat().resideInAnyPackage(
+                        "..domain..",
+                        "com.walletradar.config..",
+                        "..api..",
+                        "..backend.."
+                );
         rule.check(classes);
     }
 

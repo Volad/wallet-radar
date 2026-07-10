@@ -1,8 +1,8 @@
 # Transaction Types Reference
 
-> **Last updated:** 2026-06-05
+> **Last updated:** 2026-07-08
 
-Authoritative enum: `NormalizedTransactionType.java` (51 values).
+Authoritative enum: `NormalizedTransactionType.java` (52 values).
 
 Cross-stage index. Per-stage detail also in each `pipeline/<stage>/` doc.
 
@@ -59,6 +59,7 @@ Each column in the matrix below answers "what happens to this type at that stage
 | `DERIVATIVE_ORDER_CANCEL` | Trading | TradingClassifier | Cancel refund | Refund legs | Generic | ACQUIRE/DISPOSE DERI |
 | `DERIVATIVE_POSITION_INCREASE` | Trading | GmxProtocolSemantic | Position correlation | Legs priced | Generic | DERIVATIVE |
 | `DERIVATIVE_POSITION_DECREASE` | Trading | GmxProtocolSemantic | Decrease | Legs priced | Generic DISPOSE | DERIVATIVE DISPOSE |
+| `CEX_DERIVATIVE_SETTLEMENT` | Trading | Dzengi trading position history | No continuity | Settlement legs priced | Generic derivative | DERIVATIVE |
 | `PROTOCOL_CUSTODY_DEPOSIT` | Custody | Registry CUSTODY | continuityCandidate | Deposit leg | TransferReplayHandler | CARRY_OUT CUSTODY |
 | `PROTOCOL_CUSTODY_WITHDRAW` | Custody | Registry CUSTODY | continuity | Withdraw leg | CARRY_IN CUSTODY | CARRY_IN CUSTODY |
 | `REWARD_CLAIM` | Reward | TransferClassifier / rewards | May attach lending cycle | Reward leg priced | ACQUIRE REWARD | ACQUIRE REWARD |
@@ -870,6 +871,28 @@ Generic DISPOSE. See [replay handlers](../pipeline/replay/02-handlers.md).
 
 #### Ledger output
 Typical `BasisEffect` + `LifecycleKind`: DERIVATIVE DISPOSE. See [ledger points](ledger-points-and-basis-effects.md).
+
+### CEX_DERIVATIVE_SETTLEMENT {#cex-derivative-settlement}
+
+**Family:** Trading (CEX)
+
+#### Meaning / when produced
+Canonical type `CEX_DERIVATIVE_SETTLEMENT` assigned during **Dzengi** normalization from `TRADING_POSITIONS_HISTORY` extracted rows (`DzengiCanonicalTransactionBuilder`). Represents realized derivative position settlement lines on the exchange ledger — not on-chain GMX/Perp protocol semantics.
+
+#### Normalization rules
+[Dzengi adaptation](../pipeline/normalization/rules/dzengi-adaptation.md). Leverage/CFD **fills** are excluded at extraction; only position **history** settlements become this type.
+
+#### Linking
+No custody continuity. May participate in FA-001 only when accompanied by on-chain deposit/withdraw types with `txHash` (separate types).
+
+#### Pricing
+Settlement flows priceable via execution or external sources; fiat **BYN** legs may use `PriceSource.DZENGI` ([ADR-050](../adr/ADR-050-dzengi-fiat-fx-pricing.md)).
+
+#### Replay / AVCO
+`AssetLedgerSupport` maps to `LifecycleKind.DERIVATIVE`. Treated as realized derivative PnL/settlement, not LP or lending lifecycle.
+
+#### Ledger output
+Typical `BasisEffect` + `LifecycleKind`: DERIVATIVE. See [ledger points](ledger-points-and-basis-effects.md).
 
 ### PROTOCOL_CUSTODY_DEPOSIT {#protocol-custody-deposit}
 

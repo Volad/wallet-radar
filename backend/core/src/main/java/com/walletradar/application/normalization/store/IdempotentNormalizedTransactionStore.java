@@ -34,6 +34,11 @@ public class IdempotentNormalizedTransactionStore {
             existing.setClarificationAttempts(normalizedCounter(candidate.getClarificationAttempts()));
             existing.setFullReceiptClarificationAttempts(normalizedCounter(candidate.getFullReceiptClarificationAttempts()));
             existing.setUpdatedAt(now);
+            // Propagate per-flow buy-side fee signal (ADR-051): this field is newly computed at
+            // normalization and must be refreshed even on already-CONFIRMED transactions so that
+            // replay picks up the correct acquisitionFeeUsd after a rebuild. The field is additive
+            // and does not affect pricing, stat-validation, or clarification counters.
+            propagateAcquisitionFeeUsd(existing, candidate);
             return existing;
         }
         candidate.setId(existing.getId());
@@ -45,6 +50,35 @@ public class IdempotentNormalizedTransactionStore {
         }
         candidate.setUpdatedAt(now);
         return candidate;
+    }
+
+    /**
+     * ADR-051: merges {@code acquisitionFeeUsd} from candidate flows into existing flows by
+     * matching on {@code role} + {@code assetSymbol}. Leaves existing flows unmodified when the
+     * candidate does not supply a fee value for that leg.
+     */
+    private void propagateAcquisitionFeeUsd(
+            NormalizedTransaction existing,
+            NormalizedTransaction candidate
+    ) {
+        if (existing.getFlows() == null || candidate.getFlows() == null) {
+            return;
+        }
+        for (NormalizedTransaction.Flow candidateFlow : candidate.getFlows()) {
+            if (candidateFlow == null || candidateFlow.getAcquisitionFeeUsd() == null) {
+                continue;
+            }
+            for (NormalizedTransaction.Flow existingFlow : existing.getFlows()) {
+                if (existingFlow == null) {
+                    continue;
+                }
+                if (existingFlow.getRole() == candidateFlow.getRole()
+                        && java.util.Objects.equals(existingFlow.getAssetSymbol(), candidateFlow.getAssetSymbol())) {
+                    existingFlow.setAcquisitionFeeUsd(candidateFlow.getAcquisitionFeeUsd());
+                    break;
+                }
+            }
+        }
     }
 
     private int normalizedCounter(Integer value) {

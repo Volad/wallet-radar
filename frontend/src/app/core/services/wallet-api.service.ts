@@ -22,8 +22,12 @@ import {
   SessionSettingsResponse,
   SessionResponse,
   SessionTransactionsResponse,
+  TestIntegrationConnectionRequest,
+  TestIntegrationConnectionResponse,
   UpsertBybitIntegrationRequest,
   UpsertBybitIntegrationResponse,
+  UpsertDzengiIntegrationRequest,
+  UpsertDzengiIntegrationResponse,
 } from '../models/wallet-api.models';
 
 @Injectable({ providedIn: 'root' })
@@ -72,9 +76,29 @@ export class WalletApiService {
     );
   }
 
+  upsertDzengiIntegration(
+    sessionId: string,
+    payload: UpsertDzengiIntegrationRequest
+  ): Observable<UpsertDzengiIntegrationResponse> {
+    return this.httpClient.put<UpsertDzengiIntegrationResponse>(
+      `${this.sessionsEndpoint}/${encodeURIComponent(sessionId)}/integrations/dzengi`,
+      payload
+    );
+  }
+
   deleteIntegration(sessionId: string, integrationId: string): Observable<DeleteIntegrationResponse> {
     return this.httpClient.delete<DeleteIntegrationResponse>(
       `${this.sessionsEndpoint}/${encodeURIComponent(sessionId)}/integrations/${encodeURIComponent(integrationId)}`
+    );
+  }
+
+  testIntegrationConnection(
+    sessionId: string,
+    payload: TestIntegrationConnectionRequest
+  ): Observable<TestIntegrationConnectionResponse> {
+    return this.httpClient.post<TestIntegrationConnectionResponse>(
+      `${this.sessionsEndpoint}/${encodeURIComponent(sessionId)}/integrations/test`,
+      payload
     );
   }
 

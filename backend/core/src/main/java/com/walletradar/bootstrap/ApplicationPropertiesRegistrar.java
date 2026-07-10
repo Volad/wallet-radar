@@ -4,6 +4,7 @@ import com.walletradar.application.backfill.config.BackfillProperties;
 import com.walletradar.application.linking.config.LinkingProperties;
 import com.walletradar.application.normalization.config.BybitInternalTransferProperties;
 import com.walletradar.application.normalization.config.BybitNormalizationProperties;
+import com.walletradar.application.normalization.config.DzengiNormalizationProperties;
 import com.walletradar.application.normalization.config.NativeSettlementRecoveryProperties;
 import com.walletradar.application.normalization.config.OnChainClarificationProperties;
 import com.walletradar.application.normalization.config.OnChainNormalizationProperties;
@@ -23,6 +24,7 @@ import org.springframework.context.annotation.Configuration;
         OnChainClarificationProperties.class,
         NativeSettlementRecoveryProperties.class,
         BybitNormalizationProperties.class,
+        DzengiNormalizationProperties.class,
         BybitInternalTransferProperties.class,
         LinkingProperties.class
 })

@@ -108,6 +108,47 @@ Deposit/withdraw rows that carry on-chain `txHash` participate in FA-001 linking
 3. `./scripts/prod-reset-rebuild-backend.sh --skip-frontend`
 4. Financial snapshot + conservation guards
 
+## Dzengi (Track B2 — second venue)
+
+Dzengi follows the same acquisition → extraction → normalization pattern as Bybit with a narrower product scope (ADR-048).
+
+| Field | Value |
+|-------|-------|
+| `IntegrationProvider` | `DZENGI` |
+| Account ref prefix | `DZENGI:<userId>` |
+| REST base | `https://api-adapter.dzengi.com` (Binance-compatible signed REST) |
+| Extracted collection | `dzengi_extracted_events` |
+| Normalization stage | `DZENGI_NORMALIZATION` |
+| Pipeline event | `DzengiNormalizationCompletedEvent` |
+
+### Dzengi streams
+
+| Stream | Role |
+|--------|------|
+| `LEDGER` | Fiat/crypto ledger movements (deposits, withdrawals, fees) |
+| `DEPOSITS` | On-chain deposit records (`blockchainTransactionHash` for FA-001) |
+| `WITHDRAWALS` | On-chain withdrawal records |
+| `MY_TRADES:<symbol>` | Spot fills (leverage/CFD symbols excluded at extraction) |
+| `TRADING_POSITIONS_HISTORY` | Derivative settlements → `CEX_DERIVATIVE_SETTLEMENT` |
+| `EXCHANGE_INFO` | Symbol catalog for quote/base resolution |
+
+### Dzengi packages (reference)
+
+- `application.cex.acquisition.venue.dzengi.DzengiApiClient`
+- `DzengiExtractionService` → `dzengi_extracted_events`
+- `DzengiCanonicalTransactionBuilder`
+- `application.cex.job.dzengi.DzengiNormalizationJob`
+
+### Frontend settings
+
+- Provider chip `DZENGI` enabled in `AVAILABLE_PROVIDERS` (`soon: false`).
+- Connect/edit flows use the shared integration form; **Test connection** calls `POST /api/v1/sessions/{id}/integrations/test` before save.
+- Session overwrite via `PUT /sessions/{id}/settings` with `{ provider: "DZENGI", ... }`.
+
+### Pricing note
+
+Fiat **BYN** legs on Dzengi rows resolve via `PriceSource.DZENGI` (`DzengiFxPriceSourceAdapter` inverts USD/BYN kline). See ADR-050 and [pricing resolver chain](../../pipeline/pricing/02-resolver-chain.md).
+
 ## Checklist
 
 - [ ] `CexVenueProfile` + `CexLedgerSource` + `CexLedgerEvent` stubs or implementations
@@ -117,10 +158,16 @@ Deposit/withdraw rows that carry on-chain `txHash` participate in FA-001 linking
 - [ ] `CexLiveBalancePort` if dashboard shows venue balances
 - [ ] Module doc [application-cex](../../overview/modules/application-cex.md) updated
 - [ ] No `Bybit` string literals in `costbasis` core (ArchUnit A1)
+- [ ] Settings UI provider chip + test-connection wired (Dzengi reference)
 
 ## Related
 
 - [CEX ledger SPI](../capability-behavior-spi.md#cex-ledger-spi-b1)
 - [Bybit normalization](../../pipeline/normalization/03-bybit-normalization.md)
+- [Dzengi normalization](../../pipeline/normalization/04-dzengi-normalization.md)
+- [Dzengi adaptation rules](../../pipeline/normalization/rules/dzengi-adaptation.md)
+- [ADR-048 Dzengi product scope](../../adr/ADR-048-dzengi-product-scope.md)
+- [ADR-049 Venue-agnostic CEX transfer linking](../../adr/ADR-049-venue-agnostic-cex-transfer-linking.md)
+- [ADR-050 Dzengi fiat FX pricing](../../adr/ADR-050-dzengi-fiat-fx-pricing.md)
 - [ADR-013 CEX cross-system linking](../../adr/ADR-013-cex-cross-system-linking.md)
 - [application.cex module](../../overview/modules/application-cex.md)

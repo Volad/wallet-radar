@@ -9,6 +9,7 @@ export type TransactionType =
   | 'EXTERNAL_INBOUND'
   | 'EXTERNAL_TRANSFER_IN'
   | 'EXTERNAL_TRANSFER_OUT'
+  | 'FIAT_EXIT'
   | 'LP_ENTRY'
   | 'LP_ENTRY_REQUEST'
   | 'LP_ENTRY_SETTLEMENT'

@@ -76,7 +76,7 @@ ArchUnit guards live in `ModuleBoundaryTest` and `DocumentationCoverageTest` (Tr
 | [canonical](modules/canonical.md) | `canonical/` | Pure shared contracts |
 | [platform](modules/platform.md) | `platform.*` | Technical adapters |
 | [application.backfill](modules/application-backfill.md) | `application.backfill` | Raw on-chain acquisition |
-| [application.cex](modules/application-cex.md) | `application.cex` | CEX acquisition + Bybit normalization |
+| [application.cex](modules/application-cex.md) | `application.cex` | CEX acquisition + Bybit/Dzengi normalization |
 | [application.normalization](modules/application-normalization.md) | `application.normalization` | On-chain canonicalization |
 | [application.linking](modules/application-linking.md) | `application.linking` | Correlation, continuity, repairs |
 | [application.costbasis](modules/application-costbasis.md) | `application.costbasis` | AVCO replay, ledger, basis pools |
@@ -145,7 +145,7 @@ Full stage list and orchestration: [Pipeline orchestration](05-pipeline-orchestr
 | Pipeline stage `INGESTION` | Stage is `BACKFILL`; ingestion = adapter subsystem inside `platform.networks` |
 | Entity `EconomicEvent` | `NormalizedTransaction` in `normalized_transactions` |
 | Persisted portfolio snapshot document | Stage + `on_chain_balances` + `current_price_quotes` + read-time join |
-| Route `/move-basis` | `/sessions/:sessionId/assets/:familyIdentity` (asset ledger) |
+| Route `/move-basis` | `/move-basis/:familyIdentity` (asset ledger; session id from storage) |
 | `transfer_links` collection required today | Planned (ADR-003); continuity via metadata + repair services |
 | Package `integration.bybit` | Migrating to `application.cex` |
 

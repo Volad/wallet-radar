@@ -128,6 +128,22 @@ export interface PutSessionSettingsRequest {
   readonly showReconciliationWarnings: boolean;
 }
 
+export type IntegrationProviderId = 'BYBIT' | 'DZENGI' | 'BINANCE' | 'OKX';
+
+export interface TestIntegrationConnectionRequest {
+  readonly provider: string;
+  readonly apiKey: string;
+  readonly apiSecret: string;
+}
+
+export interface TestIntegrationConnectionResponse {
+  readonly provider: string;
+  readonly accountRef: string;
+  readonly maskedKey: string;
+  readonly readOnly: boolean;
+  readonly message: string;
+}
+
 export interface UpsertBybitIntegrationRequest {
   readonly displayName: string;
   readonly apiKey: string;
@@ -135,6 +151,22 @@ export interface UpsertBybitIntegrationRequest {
 }
 
 export interface UpsertBybitIntegrationResponse {
+  readonly integrationId: string;
+  readonly provider: string;
+  readonly status: string;
+  readonly displayName: string;
+  readonly accountRef: string;
+  readonly maskedKey: string;
+  readonly message: string;
+}
+
+export interface UpsertDzengiIntegrationRequest {
+  readonly displayName: string;
+  readonly apiKey: string;
+  readonly apiSecret: string;
+}
+
+export interface UpsertDzengiIntegrationResponse {
   readonly integrationId: string;
   readonly provider: string;
   readonly status: string;

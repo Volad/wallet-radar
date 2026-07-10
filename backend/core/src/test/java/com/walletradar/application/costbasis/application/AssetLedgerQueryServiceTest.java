@@ -263,7 +263,7 @@ class AssetLedgerQueryServiceTest {
         );
         wrapPoint.setAssetSymbol("WETH");
         wrapPoint.setAssetContract("0x4200000000000000000000000000000000000006");
-        wrapPoint.setAccountingAssetIdentity("0x4200000000000000000000000000000000000006");
+        wrapPoint.setAccountingAssetIdentity("NATIVE:" + NetworkId.BASE.name());
         wrapPoint.setBasisBackedQuantityAfter(BigDecimal.ZERO);
         wrapPoint.setUncoveredQuantityAfter(new BigDecimal("1"));
         wrapPoint.setHasIncompleteHistoryAfter(true);

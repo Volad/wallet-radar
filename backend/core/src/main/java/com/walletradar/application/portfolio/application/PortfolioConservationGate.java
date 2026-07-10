@@ -50,6 +50,8 @@ public class PortfolioConservationGate {
     private static final String BYBIT_FUND_WALLET_PATTERN = "^BYBIT:[^:]+:FUND$";
     /** Normalized (lowercase) EVM address pattern — 0x + 40 hex chars. */
     private static final String EVM_ADDRESS_PATTERN = "^0x[0-9a-f]{40}$";
+    /** Matches {@code DZENGI:<uid>} umbrella wallets (ADR-048 single-account model). */
+    private static final String DZENGI_UMBRELLA_WALLET_PATTERN = "^DZENGI:[^:]+$";
     /** Counterparty sentinel used when a tx touches multiple external addresses. */
     private static final String MULTI_COUNTERPARTY = "MULTI";
     private static final Set<String> STABLECOIN_SYMBOLS = Set.of(
@@ -237,13 +239,19 @@ public class PortfolioConservationGate {
         // Cycle/11 S3: NEC counts priced EXTERNAL_TRANSFER into BYBIT:*:FUND from non-universe
         // counterparties (crypto + fiat) plus EXTERNAL_TRANSFER_IN/OUT and BRIDGE_IN/OUT on
         // on-chain EVM universe member wallets from/to non-universe external counterparties.
-        // Query order: BYBIT FUND IN → BYBIT FUND OUT → EVM capital flows.
+        // Query order: BYBIT FUND IN → BYBIT FUND OUT → EVM capital flows → DZENGI umbrella.
         BigDecimal fundInflow = computeLifetimeFundInflow(membersByRef);
         BigDecimal fundOutflow = computeLifetimeFundOutflow(membersByRef);
         Set<String> evmMemberAddresses = extractEvmMemberAddresses(membersByRef);
         EvmNecContribution evmContrib = computeEvmNecContribution(membersByRef, evmMemberAddresses);
-        BigDecimal lifetimeInflow = fundInflow.add(evmContrib.inflow(), MC);
-        BigDecimal lifetimeOutflow = fundOutflow.add(evmContrib.outflow(), MC);
+        // ADR-048: Dzengi single-umbrella NEC — count stablecoin EXTERNAL_TRANSFER_IN/OUT
+        // on DZENGI:<uid> wallets (no sub-account split, unlike Bybit FUND/UTA).
+        BigDecimal dzengiInflow = computeDzengiLifetimeTransfers(NormalizedTransactionType.EXTERNAL_TRANSFER_IN, membersByRef);
+        // FIAT_EXIT is a sub-type of EXTERNAL_TRANSFER_OUT — include both in NEC outflow.
+        BigDecimal dzengiOutflow = computeDzengiLifetimeTransfers(NormalizedTransactionType.EXTERNAL_TRANSFER_OUT, membersByRef)
+                .add(computeDzengiLifetimeTransfers(NormalizedTransactionType.FIAT_EXIT, membersByRef), MC);
+        BigDecimal lifetimeInflow = fundInflow.add(evmContrib.inflow(), MC).add(dzengiInflow, MC);
+        BigDecimal lifetimeOutflow = fundOutflow.add(evmContrib.outflow(), MC).add(dzengiOutflow, MC);
         BigDecimal nec = lifetimeInflow.subtract(lifetimeOutflow, MC);
         BigDecimal mtm = computeMarkToMarket(inputs, pools, membersByRef);
         BigDecimal totalLiabilityUsd = computeOpenLiabilityUsd(universeId);
@@ -605,6 +613,62 @@ public class PortfolioConservationGate {
                     continue;
                 }
                 // RC-fund-dust: skip tiny flows (test deposits, fractional earn credits, etc.)
+                if (transferType == NormalizedTransactionType.EXTERNAL_TRANSFER_IN
+                        && valueUsd.compareTo(MIN_FUND_FLOW_USD) < 0) {
+                    continue;
+                }
+                total = total.add(valueUsd, MC);
+            }
+        }
+        return total;
+    }
+
+    /**
+     * ADR-048: Dzengi NEC contribution — EXTERNAL_TRANSFER_IN (deposits) or EXTERNAL_TRANSFER_OUT
+     * (withdrawals) on {@code DZENGI:<uid>} umbrella wallets.
+     * Unlike Bybit, there is no FUND sub-account; the single umbrella wallet is the capital gate.
+     * All priced flows are counted (BYN + USD + stablecoins) — Dzengi is a fiat-entry exchange
+     * where users deposit Belarusian Rubles or USD directly.
+     */
+    private BigDecimal computeDzengiLifetimeTransfers(
+            NormalizedTransactionType transferType,
+            Map<String, AccountingUniverse.Member> membersByRef
+    ) {
+        Query query = Query.query(new Criteria().andOperator(
+                Criteria.where("type").is(transferType),
+                Criteria.where("walletAddress").regex(DZENGI_UMBRELLA_WALLET_PATTERN)
+        ));
+        query.fields()
+                .include("walletAddress")
+                .include("txHash")
+                .include("flows")
+                .include("counterpartyAddress")
+                .include("matchedCounterparty");
+        List<NormalizedTransaction> transactions = mongoOperations.find(query, NormalizedTransaction.class);
+        if (transactions.isEmpty()) {
+            return BigDecimal.ZERO;
+        }
+        BigDecimal total = BigDecimal.ZERO;
+        for (NormalizedTransaction transaction : transactions) {
+            if (transaction == null || transaction.getFlows() == null) {
+                continue;
+            }
+            if (!isUniverseMember(membersByRef, transaction.getWalletAddress())) {
+                continue;
+            }
+            for (NormalizedTransaction.Flow flow : transaction.getFlows()) {
+                if (flow == null || flow.getRole() == NormalizedLegRole.FEE) {
+                    continue;
+                }
+                if (flow.getQuantityDelta() == null || flow.getQuantityDelta().signum() == 0) {
+                    continue;
+                }
+                // Dzengi accepts both BYN (Belarusian Ruble) and USD fiat deposits — accept any
+                // priced flow (BYN priced via DzengiFxPriceSourceAdapter, USD at 1:1).
+                BigDecimal valueUsd = pricedFlowValueUsd(flow);
+                if (valueUsd == null || valueUsd.signum() == 0) {
+                    continue;
+                }
                 if (transferType == NormalizedTransactionType.EXTERNAL_TRANSFER_IN
                         && valueUsd.compareTo(MIN_FUND_FLOW_USD) < 0) {
                     continue;

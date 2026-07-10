@@ -239,8 +239,12 @@ public final class AccountingAssetIdentitySupport {
         return wallet != null && wallet.toUpperCase(Locale.ROOT).endsWith(":FUND");
     }
 
+    public static boolean isVenueScopedCex(NormalizedTransactionSource source) {
+        return source == NormalizedTransactionSource.BYBIT || source == NormalizedTransactionSource.DZENGI;
+    }
+
     public static NetworkId positionNetwork(NormalizedTransaction transaction) {
-        if (transaction != null && transaction.getSource() == NormalizedTransactionSource.BYBIT) {
+        if (transaction != null && isVenueScopedCex(transaction.getSource())) {
             return null;
         }
         return transaction == null ? null : transaction.getNetworkId();
@@ -257,7 +261,7 @@ public final class AccountingAssetIdentitySupport {
                 transaction == null ? null : transaction.getNetworkId(),
                 flow.getAssetSymbol(),
                 flow.getAssetContract(),
-                transaction != null && transaction.getSource() == NormalizedTransactionSource.BYBIT
+                transaction != null && isVenueScopedCex(transaction.getSource())
         );
     }
 
@@ -273,12 +277,12 @@ public final class AccountingAssetIdentitySupport {
             NetworkId networkId,
             String assetSymbol,
             String assetContract,
-            boolean venueScopedBybit
+            boolean venueScopedCex
     ) {
         String symbol = normalizeSymbol(assetSymbol);
         String contract = normalizeContract(assetContract);
 
-        if (venueScopedBybit) {
+        if (venueScopedCex) {
             if (!symbol.isBlank()) {
                 return "SYMBOL:" + symbol;
             }

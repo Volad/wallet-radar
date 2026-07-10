@@ -39,7 +39,8 @@ export class FilterSidebarComponent implements OnInit {
   }
 
   ngOnInit(): void {
-    if (this.startCollapsed) {
+    const isMobile = typeof window !== 'undefined' && window.innerWidth <= 900;
+    if (this.startCollapsed || isMobile) {
       this.isCollapsed.set(true);
     }
   }

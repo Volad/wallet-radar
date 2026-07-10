@@ -7,12 +7,14 @@ import com.walletradar.domain.sync.BackfillSegmentRepository;
 import com.walletradar.domain.sync.SyncStatus;
 import com.walletradar.domain.sync.SyncStatusRepository;
 import com.walletradar.domain.transaction.bybit.BybitExtractedEvent;
+import com.walletradar.domain.transaction.dzengi.DzengiExtractedEvent;
 import com.walletradar.domain.transaction.integration.IntegrationRawEvent;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.application.backfill.job.BackfillJobPlanner;
 import com.walletradar.integration.IntegrationBackfillPlanningService;
 import com.walletradar.application.cex.acquisition.venue.bybit.BybitLiveBalanceService;
+import com.walletradar.application.cex.acquisition.venue.dzengi.DzengiLiveBalanceService;
 import com.walletradar.application.session.application.SourceSyncPlanner;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -43,20 +45,49 @@ public class IntegrationPipelineAdminService {
     private final BackfillJobPlanner backfillJobPlanner;
     private final SyncStatusRepository syncStatusRepository;
     private final BybitLiveBalanceService bybitLiveBalanceService;
+    private final DzengiLiveBalanceService dzengiLiveBalanceService;
 
-    public FullRebuildBybitResult fullRebuildBybit(String integrationId, boolean repairSessionOnChainWindows) {
+    /** Supported venues for the destructive per-integration cold rebuild. */
+    private enum RebuildVenue {
+        BYBIT("BYBIT-", "BYBIT", NormalizedTransactionSource.BYBIT, BybitExtractedEvent.class),
+        DZENGI("DZENGI-", "DZENGI", NormalizedTransactionSource.DZENGI, DzengiExtractedEvent.class);
+
+        private final String idPrefix;
+        private final String walletPrefix;
+        private final NormalizedTransactionSource source;
+        private final Class<?> extractedType;
+
+        RebuildVenue(String idPrefix, String walletPrefix, NormalizedTransactionSource source, Class<?> extractedType) {
+            this.idPrefix = idPrefix;
+            this.walletPrefix = walletPrefix;
+            this.source = source;
+            this.extractedType = extractedType;
+        }
+
+        static RebuildVenue fromIntegrationId(String upperId) {
+            for (RebuildVenue venue : values()) {
+                if (upperId.startsWith(venue.idPrefix)) {
+                    return venue;
+                }
+            }
+            throw new IllegalArgumentException("Only BYBIT and DZENGI integrations are supported");
+        }
+    }
+
+    public FullRebuildResult fullRebuild(String integrationId, boolean repairSessionOnChainWindows) {
         if (integrationId == null || integrationId.isBlank()) {
             throw new IllegalArgumentException("integrationId is required");
         }
         String trimmedId = integrationId.trim();
-        if (!trimmedId.toUpperCase(Locale.ROOT).startsWith("BYBIT-")) {
-            throw new IllegalArgumentException("Only BYBIT integrations are supported");
-        }
-        String uid = trimmedId.substring("BYBIT-".length()).trim();
+        RebuildVenue venue = RebuildVenue.fromIntegrationId(trimmedId.toUpperCase(Locale.ROOT));
+        String uid = trimmedId.substring(venue.idPrefix.length()).trim();
         if (uid.isEmpty()) {
             throw new IllegalArgumentException("Invalid integration id");
         }
-        Pattern walletPattern = Pattern.compile("^BYBIT:" + Pattern.quote(uid) + "(?::[A-Za-z]+)?$", Pattern.CASE_INSENSITIVE);
+        Pattern walletPattern = Pattern.compile(
+                "^" + venue.walletPrefix + ":" + Pattern.quote(uid) + "(?::[A-Za-z]+)?$",
+                Pattern.CASE_INSENSITIVE
+        );
 
         List<UserSession> sessions = userSessionRepository.findAllByIntegrationsIntegrationId(trimmedId);
         if (sessions.isEmpty()) {
@@ -65,7 +96,7 @@ public class IntegrationPipelineAdminService {
 
         long normalizedDeleted = mongoOperations.remove(
                 Query.query(Criteria.where("source")
-                        .is(NormalizedTransactionSource.BYBIT)
+                        .is(venue.source)
                         .and("walletAddress")
                         .regex(walletPattern)),
                 NormalizedTransaction.class
@@ -83,7 +114,7 @@ public class IntegrationPipelineAdminService {
 
         long extractedDeleted = mongoOperations.remove(
                 Query.query(Criteria.where("integrationId").is(trimmedId)),
-                BybitExtractedEvent.class
+                venue.extractedType
         ).getDeletedCount();
 
         backfillSegmentRepository.deleteByIntegrationId(trimmedId);
@@ -119,6 +150,14 @@ public class IntegrationPipelineAdminService {
             integration.setStatus(UserSession.IntegrationStatus.BACKFILLING);
             integration.setUpdatedAt(now);
             integration.setLastError(null);
+            // Reset pipeline state so the UI shows BACKFILL progress instead of the stale
+            // PORTFOLIO_SNAPSHOT_REFRESH/COMPLETE status from the previous run.
+            UserSession.PipelineState backfillState = new UserSession.PipelineState();
+            backfillState.setStage(UserSession.PipelineStage.BACKFILL);
+            backfillState.setStatus(UserSession.PipelineStatus.RUNNING);
+            backfillState.setMessage("Integration re-backfill in progress");
+            backfillState.setUpdatedAt(now);
+            session.setPipelineState(backfillState);
 
             if (repairSessionOnChainWindows) {
                 List<String> walletRefs = onChainWalletRefs(session);
@@ -141,12 +180,16 @@ public class IntegrationPipelineAdminService {
             sessionsUpdated++;
         }
 
-        // Cycle/5 N15: pre-warm the live Bybit balance snapshot so the dashboard's umbrella clamp is
+        // Cycle/5 N15: pre-warm the live balance snapshot so the dashboard's umbrella clamp is
         // authoritative immediately after rebuild instead of waiting for the first dashboard query.
         try {
-            bybitLiveBalanceService.refresh(trimmedId);
+            if (venue == RebuildVenue.BYBIT) {
+                bybitLiveBalanceService.refresh(trimmedId);
+            } else if (venue == RebuildVenue.DZENGI) {
+                dzengiLiveBalanceService.refresh(trimmedId);
+            }
         } catch (RuntimeException ex) {
-            log.warn("Bybit live snapshot pre-warm failed for {}: {}", trimmedId, ex.getMessage());
+            log.warn("Live snapshot pre-warm failed for {}: {}", trimmedId, ex.getMessage());
         }
 
         log.info(
@@ -159,7 +202,7 @@ public class IntegrationPipelineAdminService {
                 ledgerDeleted
         );
 
-        return new FullRebuildBybitResult(
+        return new FullRebuildResult(
                 trimmedId,
                 sessionsUpdated,
                 rawDeleted,
@@ -183,11 +226,11 @@ public class IntegrationPipelineAdminService {
         return refs;
     }
 
-    public record FullRebuildBybitResult(
+    public record FullRebuildResult(
         String integrationId,
         int sessionsUpdated,
         long integrationRawEventsDeleted,
-        long bybitExtractedEventsDeleted,
+        long extractedEventsDeleted,
         long normalizedTransactionsDeleted,
         long assetLedgerPointsDeleted
     ) {

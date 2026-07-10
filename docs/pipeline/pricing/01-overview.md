@@ -1,6 +1,6 @@
 # Pricing — Overview
 
-> **Last updated:** 2026-06-05  
+> **Last updated:** 2026-07-08  
 > **Pipeline stage:** `PRICING` (`UserSession.PipelineStage.PRICING`)
 
 Pricing resolves **USD unit prices** for priceable flows on canonical `normalized_transactions` and persists them on each flow (`unitPriceUsd`, `valueUsd`, `priceSource`). Pricing does not compute AVCO, move basis, or mutate quantity semantics — replay consumes priced flows downstream.
@@ -85,6 +85,7 @@ Pricing failure does **not** remove quantity from replay; unresolved prices set 
 
 - Euro-backed stables (`EURC`) prefer ECB FX over exchange candles
 - Bybit market data may rank before Binance for listed assets
+- **Dzengi BYN:** `DzengiFxPriceSourceAdapter` (`PriceSource.DZENGI`) inverts USD/BYN kline for Dzengi-origin rows ([ADR-050](../../adr/ADR-050-dzengi-fiat-fx-pricing.md))
 - CoinGecko is fallback only — not primary for two-year DeFi backfill
 - `SWAP_DERIVED` requires exactly one priced asset among non-fee swap legs (see ADR-021 multi-sell rule)
 - Rows with `excludedFromAccounting = true` never enter pricing

@@ -31,6 +31,7 @@ describe('SettingsPageComponent', () => {
         status: 'READY',
         displayName: 'Bybit main',
         accountRef: 'BYBIT:33625378',
+        color: '#f7a600',
         maskedKey: 'abcd...1234',
         readOnly: true,
         capabilities: ['ASSET'],
@@ -58,6 +59,7 @@ describe('SettingsPageComponent', () => {
       'getSessionSettings',
       'putSessionSettings',
       'refreshSession',
+      'testIntegrationConnection',
     ]);
     sessionStorageServiceSpy = jasmine.createSpyObj<SessionStorageService>('SessionStorageService', [
       'getSessionId',
@@ -170,10 +172,10 @@ describe('SettingsPageComponent', () => {
     tick();
     fixture.detectChanges();
 
-    component.bybitForm.controls.displayName.setValue('Bybit treasury');
-    component.bybitForm.controls.apiKey.setValue('api-key');
-    component.bybitForm.controls.apiSecret.setValue('api-secret');
-    component.saveBybit();
+    component.integrationForm.controls.displayName.setValue('Bybit treasury');
+    component.integrationForm.controls.apiKey.setValue('api-key');
+    component.integrationForm.controls.apiSecret.setValue('api-secret');
+    component.saveIntegration('BYBIT');
     tick();
 
     expect(walletApiServiceSpy.putSessionSettings).toHaveBeenCalledWith(sessionId, jasmine.objectContaining({
@@ -186,8 +188,8 @@ describe('SettingsPageComponent', () => {
         }),
       ],
     }));
-    expect(component.bybitForm.controls.apiKey.value).toBe('abcd...1234');
-    expect(component.bybitForm.controls.apiSecret.value).toBe('');
+    expect(component.integrationForm.controls.apiKey.value).toBe('abcd...1234');
+    expect(component.integrationForm.controls.apiSecret.value).toBe('');
   }));
 
   it('keeps separate pending wallet rows so several wallets can be queued before one save', fakeAsync(() => {
@@ -258,8 +260,8 @@ describe('SettingsPageComponent', () => {
 
     expect(component.bybitIntegration()).toBeNull();
 
-    component.bybitForm.controls.apiKey.setValue('new-key');
-    component.bybitForm.controls.apiSecret.setValue('new-secret');
+    component.integrationForm.controls.apiKey.setValue('new-key');
+    component.integrationForm.controls.apiSecret.setValue('new-secret');
     expect(component.dataSourcesChangesCount()).toBeGreaterThan(0);
     component.openDataSourcesReview();
     component.confirmDataSourcesSave();
@@ -296,8 +298,8 @@ describe('SettingsPageComponent', () => {
     const w = component.pendingWallets()[0]!;
     component.updatePendingWalletField(w.id, 'address', '0xf03b52e8686b962e051a6075a06b96cb8a663021');
     component.updatePendingWalletField(w.id, 'label', 'Second');
-    component.bybitForm.controls.apiKey.setValue('k');
-    component.bybitForm.controls.apiSecret.setValue('s');
+    component.integrationForm.controls.apiKey.setValue('k');
+    component.integrationForm.controls.apiSecret.setValue('s');
     component.saveWallets();
     tick();
 
@@ -309,6 +311,70 @@ describe('SettingsPageComponent', () => {
         ],
       })
     );
+  }));
+
+  it('tests integration connection without persisting credentials', fakeAsync(() => {
+    walletApiServiceSpy.testIntegrationConnection.and.returnValue(
+      of({
+        provider: 'DZENGI',
+        accountRef: 'DZENGI:12345678',
+        maskedKey: 'abcd...1234',
+        readOnly: true,
+        message: 'Dzengi credentials validated',
+      })
+    );
+
+    const fixture = TestBed.createComponent(SettingsPageComponent);
+    const component = fixture.componentInstance;
+
+    fixture.detectChanges();
+    tick();
+    fixture.detectChanges();
+
+    component.integrationForm.controls.apiKey.setValue('test-key');
+    component.integrationForm.controls.apiSecret.setValue('test-secret');
+    component.testIntegrationConnection('DZENGI');
+    tick();
+
+    expect(walletApiServiceSpy.testIntegrationConnection).toHaveBeenCalledWith(sessionId, {
+      provider: 'DZENGI',
+      apiKey: 'test-key',
+      apiSecret: 'test-secret',
+    });
+    expect(component.testConnectionMessage()).toBe('Dzengi credentials validated');
+  }));
+
+  it('connects Dzengi through the same overwrite endpoint', fakeAsync(() => {
+    const fixture = TestBed.createComponent(SettingsPageComponent);
+    const component = fixture.componentInstance;
+
+    fixture.detectChanges();
+    tick();
+    fixture.detectChanges();
+
+    component.onIntegrationProviderSelected('DZENGI');
+    component.integrationForm.controls.displayName.setValue('Dzengi main');
+    component.integrationForm.controls.apiKey.setValue('dz-key');
+    component.integrationForm.controls.apiSecret.setValue('dz-secret');
+    component.saveIntegration('DZENGI');
+    tick();
+
+    expect(walletApiServiceSpy.putSessionSettings).toHaveBeenCalledWith(sessionId, jasmine.objectContaining({
+      integrations: jasmine.arrayContaining([
+        jasmine.objectContaining({
+          provider: 'BYBIT',
+          displayName: 'Bybit main',
+          apiKey: '',
+          apiSecret: '',
+        }),
+        jasmine.objectContaining({
+          provider: 'DZENGI',
+          displayName: 'Dzengi main',
+          apiKey: 'dz-key',
+          apiSecret: 'dz-secret',
+        }),
+      ]),
+    }));
   }));
 
   it('creates an empty session from sign in button when no session is active', fakeAsync(() => {

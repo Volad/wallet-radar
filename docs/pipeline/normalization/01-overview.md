@@ -1,6 +1,6 @@
 # Normalization Overview
 
-> **Last updated:** 2026-06-05  
+> **Last updated:** 2026-07-08  
 > Converts raw acquisition evidence into canonical `normalized_transactions` documents ready for linking, pricing, and AVCO replay.
 
 Full classification-rule reference and leg-extraction detail: [classification-spec.md](classification-spec.md).
@@ -11,7 +11,7 @@ The normalization stage is the first accounting-facing transform in the WalletRa
 
 1. Classifies on-chain `raw_transactions` into typed economic events.
 2. Enriches ambiguous rows through clarification and reclassification.
-3. Materializes Bybit CEX ledger rows into the same canonical schema.
+3. Materializes Bybit and Dzengi CEX ledger rows into the same canonical schema.
 
 All outputs land in MongoDB collection `normalized_transactions`. Downstream stages (linking, pricing, replay) read only from this collection plus session-scoped universe filters.
 
@@ -23,11 +23,13 @@ All outputs land in MongoDB collection `normalized_transactions`. Downstream sta
 | On-chain clarification | `ON_CHAIN_CLARIFICATION` | `OnChainClarificationJob`, `OnChainClarificationService` |
 | On-chain reclassification | `ON_CHAIN_RECLASSIFICATION` | `OnChainReclassificationJob`, `OnChainReclassificationService` |
 | Bybit normalization | `BYBIT_NORMALIZATION` | `BybitNormalizationJob`, `BybitNormalizationService` |
+| Dzengi normalization | `DZENGI_NORMALIZATION` | `DzengiNormalizationJob`, `DzengiNormalizationService` |
 
 Detailed docs:
 
 - [On-chain classification](02-onchain-classification.md)
 - [Bybit normalization](03-bybit-normalization.md)
+- [Dzengi normalization](04-dzengi-normalization.md)
 - [Clarification & reclassification](04-clarification-reclassification.md)
 
 Rule documents (families, protocols, three-layer contract): [rules/README.md](rules/README.md).
@@ -42,6 +44,7 @@ sequenceDiagram
   participant CL as OnChainClarificationJob
   participant RC as OnChainReclassificationJob
   participant BB as BybitNormalizationJob
+  participant DZ as DzengiNormalizationJob
   participant LK as LinkingJob
   participant RT as raw_transactions
   participant NT as normalized_transactions
@@ -62,25 +65,30 @@ sequenceDiagram
   BF->>BB: SessionBackfillCompletedEvent (parallel)
   BB->>NT: upsert Bybit canonical docs
   BB->>LK: BybitNormalizationCompletedEvent
+  BF->>DZ: SessionBackfillCompletedEvent (when Dzengi enabled)
+  DZ->>NT: upsert Dzengi canonical docs
+  DZ->>LK: DzengiNormalizationCompletedEvent
 ```
 
-On-chain and Bybit normalization both start after backfill. Linking waits for **both** `OnChainReclassificationCompletedEvent` and `BybitNormalizationCompletedEvent` (whichever arrives last triggers the gate).
+On-chain and CEX normalization both start after backfill. Linking waits for `OnChainReclassificationCompletedEvent` and completion events from **each enabled** CEX venue (`BybitNormalizationCompletedEvent`, `DzengiNormalizationCompletedEvent`, …).
 
 ## Event-driven triggers
 
 | Event | Publisher | Listener | Notes |
 |-------|-----------|----------|-------|
-| `SessionBackfillCompletedEvent` | `SessionBackfillCompletionPublisher` | `OnChainNormalizationJob`, `BybitNormalizationJob` | Primary session handoff |
+| `SessionBackfillCompletedEvent` | `SessionBackfillCompletionPublisher` | `OnChainNormalizationJob`, `BybitNormalizationJob`, `DzengiNormalizationJob` | Primary session handoff |
 | `OnChainNormalizationCompletedEvent` | `OnChainNormalizationJob` | `OnChainClarificationJob` | Published even when `processed == 0` for session runs |
 | `OnChainClarificationCompletedEvent` | `OnChainClarificationJob` | `OnChainReclassificationJob` | May be re-published by reclassification for Fluid recovery |
 | `OnChainReclassificationCompletedEvent` | `OnChainReclassificationJob` | `LinkingJob` | Gates on-chain linking readiness |
 | `OnChainReclassificationRequestedEvent` | ops / resume | `OnChainReclassificationJob` | Manual or watchdog re-run |
 | `BybitNormalizationCompletedEvent` | `BybitNormalizationJob` | `LinkingJob` | Gates Bybit linking readiness |
 | `BybitNormalizationRequestedEvent` | ops / resume | `BybitNormalizationJob` | Manual or watchdog re-run |
+| `DzengiNormalizationCompletedEvent` | `DzengiNormalizationJob` | `LinkingJob` | Gates Dzengi linking readiness |
+| `DzengiNormalizationRequestedEvent` | ops / resume | `DzengiNormalizationJob` | Manual or watchdog re-run |
 
 Jobs are `@Async` on `PIPELINE_STAGE_EXECUTOR`, single-flight guarded by an `AtomicBoolean running` flag per job class.
 
-Manual entry points: `runNormalization()` (on-chain and Bybit), `runClarification()`, `runReclassification()`.
+Manual entry points: `runNormalization()` (on-chain, Bybit, Dzengi), `runClarification()`, `runReclassification()`.
 
 ## Inputs and outputs
 
@@ -100,6 +108,14 @@ Manual entry points: `runNormalization()` (on-chain and Bybit), `runClarificatio
 | Read | `external_ledger_raw` | `status = RAW` (legacy CSV fallback) |
 | Write | above sources | `status = CONFIRMED` after canonical upsert |
 | Write | `normalized_transactions` | `source = BYBIT`; wallet ref dimensioned as `BYBIT:<uid>:UTA\|FUND\|EARN` |
+
+### Dzengi path
+
+| Direction | Collection | Key fields / status |
+|-----------|------------|---------------------|
+| Read | `dzengi_extracted_events` | `status = RAW`; `outOfScope = false` |
+| Write | `dzengi_extracted_events` | `status = CONFIRMED` after canonical upsert |
+| Write | `normalized_transactions` | `source = DZENGI`; wallet ref `DZENGI:<userId>` |
 
 ### Canonical document shape
 

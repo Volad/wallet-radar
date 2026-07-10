@@ -150,6 +150,7 @@ public class UserSession {
         ON_CHAIN_CLARIFICATION,
         ON_CHAIN_RECLASSIFICATION,
         BYBIT_NORMALIZATION,
+        DZENGI_NORMALIZATION,
         LINKING,
         PRICING,
         ACCOUNTING_REPLAY,

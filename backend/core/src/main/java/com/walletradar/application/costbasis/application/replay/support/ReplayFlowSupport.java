@@ -93,6 +93,11 @@ public class ReplayFlowSupport {
         genericFlowReplayEngine.applyFee(flow, position);
     }
 
+    /** ADR-051: capitalizes a CEX acquisition fee into Net AVCO + gasPaidUsd (Market untouched). */
+    public void capitalizeFeeIntoNetLane(BigDecimal feeUsd, PositionState position) {
+        genericFlowReplayEngine.capitalizeFeeIntoNetLane(feeUsd, position);
+    }
+
     public CarryTransfer removeFromPosition(NormalizedTransaction.Flow flow, PositionState position) {
         return genericFlowReplayEngine.removeFromPosition(flow, position);
     }
@@ -396,6 +401,9 @@ public class ReplayFlowSupport {
                 flowCopy.setCounterpartyAddress(flow.getCounterpartyAddress());
                 flowCopy.setCounterpartyType(flow.getCounterpartyType());
                 flowCopy.setAccountRef(flow.getAccountRef());
+                // ADR-051: preserve buy-side fee signal through the replay copy so it survives
+                // the AvcoReplayService.saveAll(updatedTransactions) write-back.
+                flowCopy.setAcquisitionFeeUsd(flow.getAcquisitionFeeUsd());
                 copy.getFlows().add(flowCopy);
             }
         }

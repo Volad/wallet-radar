@@ -62,6 +62,7 @@ public class ConfirmedReplayQueryService {
             return true;
         }
         return tx.getType() == NormalizedTransactionType.EXTERNAL_TRANSFER_OUT
+                || tx.getType() == NormalizedTransactionType.FIAT_EXIT
                 || tx.getType() == NormalizedTransactionType.DEX_ORDER_SETTLEMENT;
     }
 

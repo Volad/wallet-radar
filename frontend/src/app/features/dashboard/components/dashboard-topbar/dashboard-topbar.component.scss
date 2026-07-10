@@ -43,6 +43,9 @@
   align-items: center;
   gap: 0.48rem;
   flex-shrink: 0;
+  text-decoration: none;
+  color: inherit;
+  cursor: pointer;
 }
 
 .logo-mark {
@@ -329,5 +332,21 @@
   .metric-strip {
     order: 3;
     width: 100%;
+  }
+}
+
+@media (max-width: 640px) {
+  .metric-strip {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.4rem 0.75rem;
+  }
+
+  .metric-label {
+    font-size: 0.5rem;
+  }
+
+  .metric-value {
+    font-size: 0.7rem;
   }
 }

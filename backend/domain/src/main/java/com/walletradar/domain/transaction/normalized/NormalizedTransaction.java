@@ -225,5 +225,12 @@ public class NormalizedTransaction {
         private String counterpartyAddress;
         private String counterpartyType;
         private String accountRef;
+        /**
+         * Buy-side venue commission in USD attributed to this BUY leg.
+         * Set at normalization time for CEX venues (Dzengi, Bybit) where fee data is available.
+         * Null / zero means no capitalization — on-chain flows always leave this null.
+         * Consumed by the replay engine to raise Net AVCO without touching Market AVCO.
+         */
+        private BigDecimal acquisitionFeeUsd;
     }
 }

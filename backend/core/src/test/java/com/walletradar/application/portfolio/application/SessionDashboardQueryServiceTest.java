@@ -9,6 +9,7 @@ import com.walletradar.domain.session.UserSessionRepository;
 import com.walletradar.application.costbasis.application.port.CexLiveBalancePort;
 import com.walletradar.application.pricing.persistence.CurrentPriceQuoteDocument;
 import com.walletradar.application.pricing.persistence.HistoricalPriceDocument;
+import com.walletradar.application.pricing.resolver.external.dzengi.DzengiKlineClient;
 import com.walletradar.application.session.application.AccountingUniverseService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -42,6 +43,8 @@ class SessionDashboardQueryServiceTest {
     @Mock
     private CexLiveBalancePort cexLiveBalancePort;
     @Mock
+    private DzengiKlineClient dzengiKlineClient;
+    @Mock
     private PortfolioConservationGate portfolioConservationGate;
 
     private SessionDashboardQueryService sessionDashboardQueryService;
@@ -53,6 +56,7 @@ class SessionDashboardQueryServiceTest {
                 mongoOperations,
                 accountingUniverseService,
                 cexLiveBalancePort,
+                dzengiKlineClient,
                 portfolioConservationGate
         );
         lenient().when(portfolioConservationGate.evaluate(any())).thenReturn(
@@ -644,6 +648,67 @@ class SessionDashboardQueryServiceTest {
             assertThat(token.walletAddress()).isEqualTo("bybit:33625378");
             assertThat(token.quantity()).isEqualByComparingTo("1000");
             assertThat(token.realizedPnlUsd()).isEqualByComparingTo("12.5");
+        });
+    }
+
+    @Test
+    void buildsDzengiUmbrellaRowsFromLedgerWithVenueNativePricing() {
+        UserSession session = new UserSession();
+        session.setId("session-dzengi-dash");
+        session.setWallets(List.of());
+
+        UserSession.SessionIntegration integration = new UserSession.SessionIntegration();
+        integration.setIntegrationId("DZENGI-1023141508");
+        integration.setAccountRef("DZENGI:1023141508");
+        integration.setDisplayName("Dzengi");
+        integration.setStatus(UserSession.IntegrationStatus.READY);
+        session.setIntegrations(List.of(integration));
+
+        AssetLedgerPoint tslaPoint = new AssetLedgerPoint();
+        tslaPoint.setAccountingUniverseId("session-dzengi-dash");
+        tslaPoint.setWalletAddress("DZENGI:1023141508");
+        tslaPoint.setNetworkId(null);
+        tslaPoint.setAccountingAssetIdentity("SYMBOL:TSLA");
+        tslaPoint.setAccountingFamilyIdentity("symbol:tsla");
+        tslaPoint.setFamilyDisplaySymbol("TSLA");
+        tslaPoint.setAssetSymbol("TSLA");
+        tslaPoint.setAssetContract("SYMBOL:TSLA");
+        tslaPoint.setQuantityAfter(new BigDecimal("0.2"));
+        tslaPoint.setQuantityShortfallAfter(BigDecimal.ZERO);
+        tslaPoint.setBasisBackedQuantityAfter(new BigDecimal("0.2"));
+        tslaPoint.setAvcoAfterUsd(new BigDecimal("371.53"));
+        tslaPoint.setRealisedPnlDeltaUsd(new BigDecimal("12.05"));
+        tslaPoint.setHasIncompleteHistoryAfter(false);
+        tslaPoint.setHasUnresolvedFlagsAfter(false);
+        tslaPoint.setReplaySequence(1L);
+
+        when(userSessionRepository.findById("session-dzengi-dash")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "session-dzengi-dash",
+                List.of("DZENGI:1023141508"),
+                List.of()
+        ));
+        when(mongoOperations.find(any(Query.class), eq(AssetLedgerPoint.class))).thenReturn(List.of(tslaPoint));
+        when(mongoOperations.find(any(Query.class), eq(HistoricalPriceDocument.class))).thenReturn(List.of());
+        when(dzengiKlineClient.fetchUsdPerUnit(any(), any())).thenReturn(Optional.of(
+                new DzengiKlineClient.DzengiKline("TSLA.", Instant.parse("2026-07-08T00:00:00Z"), new BigDecimal("392.35"))
+        ));
+
+        SessionDashboardQueryService.SessionDashboardView result = sessionDashboardQueryService
+                .findSessionDashboard("session-dzengi-dash")
+                .orElseThrow();
+
+        assertThat(result.wallets().stream().map(SessionDashboardQueryService.WalletView::address))
+                .contains("dzengi:1023141508");
+        assertThat(result.tokenPositions()).singleElement().satisfies(token -> {
+            assertThat(token.networkId()).isEqualTo("DZENGI");
+            assertThat(token.walletAddress()).isEqualTo("dzengi:1023141508");
+            assertThat(token.symbol()).isEqualTo("TSLA");
+            assertThat(token.quantity()).isEqualByComparingTo("0.2");
+            assertThat(token.avcoUsd()).isEqualByComparingTo("371.53");
+            assertThat(token.marketValueUsd()).isEqualByComparingTo("78.47");
+            assertThat(token.realizedPnlUsd()).isEqualByComparingTo("12.05");
+            assertThat(token.priceIssue()).isNull();
         });
     }
 }

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Owns **centralized exchange** acquisition, extraction, and normalization into the same canonical schema as on-chain rows. Currently implements Bybit (master/sub streams, earn corridors, live balances). Must **not** own AVCO replay or dashboard read-model assembly.
+Owns **centralized exchange** acquisition, extraction, and normalization into the same canonical schema as on-chain rows. Currently implements **Bybit** (master/sub streams, earn corridors, live balances) and **Dzengi** (spot, fiat ledger, derivative settlements). Must **not** own AVCO replay or dashboard read-model assembly.
 
 ## Public port (`application.cex.port`)
 
@@ -21,7 +21,8 @@ See [add-an-integration](../../reference/extensibility/add-an-integration.md) an
 | Collection | Role |
 |------------|------|
 | `integration_raw_events` | Immutable API payloads per venue stream |
-| `bybit_extracted_events` | Typed extracted ledger rows (Bybit today) |
+| `bybit_extracted_events` | Typed extracted ledger rows (Bybit) |
+| `dzengi_extracted_events` | Typed extracted ledger rows (Dzengi) |
 | `external_ledger_raw` | Optional external ledger imports |
 
 Writes `normalized_transactions` for CEX-origin rows (shared canonical collection; co-owned with on-chain normalization).
@@ -38,9 +39,12 @@ Writes `normalized_transactions` for CEX-origin rows (shared canonical collectio
 | Package | Responsibility |
 |---------|----------------|
 | `application.cex.port` | CEX ledger SPI (B1) |
-| `application.cex.acquisition.venue.bybit` | API client, extraction, live balance |
+| `application.cex.acquisition.venue.bybit` | Bybit API client, extraction, live balance |
+| `application.cex.acquisition.venue.dzengi` | Dzengi API client, extraction, symbol cache |
 | `application.cex.normalization.venue.bybit` | Pairing, canonical builder, stream collapse |
+| `application.cex.normalization.venue.dzengi` | Dzengi canonical builder |
 | `application.cex.job.bybit` | `BybitNormalizationJob`, batch service |
+| `application.cex.job.dzengi` | `DzengiNormalizationJob`, batch service |
 
 ## Allowed dependencies
 
@@ -52,16 +56,26 @@ Writes `normalized_transactions` for CEX-origin rows (shared canonical collectio
 ## Extension seams
 
 - `CexLedgerSource` + `CexVenueProfile` — register a new venue without touching costbasis
-- `BybitCanonicalTransactionBuilder` — reference implementation for canonical mapping
+- `BybitCanonicalTransactionBuilder` / `DzengiCanonicalTransactionBuilder` — reference implementations for canonical mapping
 - Pairing primitives (`BybitInternalTransferPairingPrimitives`) — reuse patterns for other venues
 
-## Worked example
+## Worked examples
+
+### Bybit
 
 1. User adds Bybit API keys → `BybitExtractionService` pulls `integration_raw_events`.
 2. Mapper emits `bybit_extracted_events` with `canonicalType` hints.
 3. `BybitNormalizationService` pairs IT/earn/trade rows, upserts `normalized_transactions`.
 4. `BybitNormalizationCompletedEvent` triggers linking; replay consumes `CONFIRMED` rows only.
 
+### Dzengi
+
+1. User connects Dzengi in Settings (provider chip + test connection) → credentials stored on `user_sessions.integrations`.
+2. `DzengiBackfillSegmentPlanner` schedules LEDGER, deposits, withdrawals, trades, exchange info segments.
+3. `DzengiExtractionService` emits `dzengi_extracted_events` (leverage/CFD fills excluded).
+4. `DzengiNormalizationService` upserts canonical rows; `DzengiNormalizationCompletedEvent` triggers linking.
+5. BYN fiat legs price via `PriceSource.DZENGI` ([ADR-050](../../adr/ADR-050-dzengi-fiat-fx-pricing.md)).
+
 ## Microservice extraction
 
-CEX worker owns raw + extracted collections and normalization through `CONFIRMED`. Wire contract: `CexLedgerEvent` stream + canonical upsert API. Costbasis reads normalized rows via port, never Bybit API.
+CEX worker owns raw + extracted collections and normalization through `CONFIRMED`. Wire contract: `CexLedgerEvent` stream + canonical upsert API. Costbasis reads normalized rows via port, never venue APIs.

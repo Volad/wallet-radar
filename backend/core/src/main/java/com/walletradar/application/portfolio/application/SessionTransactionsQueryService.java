@@ -356,6 +356,7 @@ public class SessionTransactionsQueryService implements SessionTransactionsReadP
         }
         String pattern = Pattern.quote(search);
         return new Criteria().orOperator(
+                Criteria.where("_id").regex(pattern, "i"),
                 Criteria.where("txHash").regex(pattern, "i"),
                 Criteria.where("flows.assetSymbol").regex(pattern, "i")
         );

@@ -1,10 +1,12 @@
 # Move Basis (Asset Ledger)
 
-> **Route:** `/sessions/:sessionId/assets/:familyIdentity`  
-> **Component:** `frontend/src/app/features/asset-ledger/asset-ledger-page.component.ts`  
+> **Route:** `/move-basis/:familyIdentity`  
+> **Component:** `frontend/src/app/features/asset-ledger/asset-ledger-page.component.ts` (embedded in `DashboardComponent` shell)  
 > **UI title:** "Move basis"
 
-There is **no** `/move-basis` route.
+Session id is resolved from browser session storage (same as dashboard), not from the URL.
+
+Legacy deep links `/sessions/:sessionId/assets/:familyIdentity` redirect to `/move-basis/:familyIdentity` and persist `sessionId` into storage.
 
 ## Data flow
 

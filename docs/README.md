@@ -31,7 +31,7 @@ Global reference for product context, domain model, backend pipeline stages, fro
 |-------|-------|
 | [Pipeline index](pipeline/README.md) | End-to-end sequence diagram |
 | [Backfill](pipeline/backfill/01-overview.md) | Raw acquisition |
-| [Normalization](pipeline/normalization/01-overview.md) | On-chain + Bybit canonicalization |
+| [Normalization](pipeline/normalization/01-overview.md) | On-chain + Bybit + Dzengi canonicalization |
 | [Normalization rules](pipeline/normalization/rules/README.md) | Families, protocols, three-layer contract |
 | [Classification spec](pipeline/normalization/classification-spec.md) | Full classification rules + leg-extraction reference |
 | [Linking](pipeline/linking/01-overview.md) | Correlation, continuity, repairs |
@@ -93,7 +93,7 @@ Global reference for product context, domain model, backend pipeline stages, fro
 | **Ingestion** | Java subsystem (`com.walletradar.ingestion` adapters) inside backfill; **not** a pipeline stage |
 | **NormalizedTransaction** | Canonical economic document in `normalized_transactions` (no separate `EconomicEvent` entity) |
 | **Portfolio snapshot** | Stage `PORTFOLIO_SNAPSHOT_REFRESH` + collections `on_chain_balances`, `current_price_quotes` + read-time dashboard assembly |
-| **Move basis** | UI name for asset-ledger page; route `/sessions/:sessionId/assets/:familyIdentity` |
+| **Move basis** | UI name for asset-ledger page; route `/move-basis/:familyIdentity` |
 
 ## Pipeline stage order
 
@@ -103,6 +103,7 @@ BACKFILL
   → ON_CHAIN_CLARIFICATION
   → ON_CHAIN_RECLASSIFICATION
   → BYBIT_NORMALIZATION
+  → DZENGI_NORMALIZATION
   → LINKING
   → PRICING
   → ACCOUNTING_REPLAY

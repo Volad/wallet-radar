@@ -7,13 +7,14 @@ import {
   Input,
   Output,
 } from '@angular/core';
+import { RouterLink } from '@angular/router';
 
 import { IntegrationInfo, PortfolioMetric, WalletInfo } from '../../../../core/models/dashboard.models';
 
 @Component({
   selector: 'wr-dashboard-topbar',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, RouterLink],
   templateUrl: './dashboard-topbar.component.html',
   styleUrl: './dashboard-topbar.component.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,

@@ -92,6 +92,7 @@ class ReplayDispatcherBybitEarnPrincipalMultiSourceTest {
                 transferClassifier,
                 keyFactory,
                 replayRouteHandlerRegistry,
+                mock(com.walletradar.application.costbasis.support.AcquisitionFeeCapitalizationPolicy.class),
                 transferReplayHandler,
                 bybitVenueInternalReplayHandler,
                 mock(LiquidStakingReplayHandler.class),

@@ -198,6 +198,25 @@ public class GenericFlowReplayEngine {
         recomputePerWalletAvco(position);
     }
 
+    /**
+     * ADR-051: Adds a buy-side CEX acquisition fee to the Net AVCO lane only.
+     *
+     * <p>Called after the standard BUY application so that the Market (tax) lane is never touched.
+     * The fee is also accumulated into {@code totalGasPaidUsd} so the move-basis "gas paid"
+     * header reflects real CEX commissions paid on the position.
+     *
+     * @param feeUsd   positive USD commission to capitalize; must be {@code > 0}
+     * @param position the position being updated
+     */
+    public void capitalizeFeeIntoNetLane(BigDecimal feeUsd, PositionState position) {
+        if (feeUsd == null || feeUsd.signum() <= 0 || position == null) {
+            return;
+        }
+        position.setNetTotalCostBasisUsd(position.netTotalCostBasisUsd().add(feeUsd));
+        position.setTotalGasPaidUsd(position.totalGasPaidUsd().add(feeUsd));
+        recomputePerWalletAvco(position);
+    }
+
     public void applyFee(NormalizedTransaction.Flow flow, PositionState position) {
         BigDecimal requestedQuantity = flow.getQuantityDelta().abs();
         BigDecimal avcoAtTimeOfCharge = position.perWalletAvco();

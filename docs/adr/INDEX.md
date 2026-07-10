@@ -53,6 +53,10 @@ Architecture Decision Records for WalletRadar. Each ADR captures a single decisi
 | [ADR-045](ADR-045-family-covered-weighted-move-basis-avco-series.md) | Family covered-weighted move-basis AVCO series (supersedes ADR-017 chart source) | Accepted | 2026-07-02 | Move-basis chart / read model |
 | [ADR-046](ADR-046-init-capital-collateral-borrow-classification.md) | INIT Capital collateral-borrow classification and BORROW net cost rule | Accepted | 2026-07-07 | On-chain classification / Lending / AVCO |
 | [ADR-047](ADR-047-equilibria-staking-lp-corridor.md) | Equilibria staking deposit and Pendle LP corridor threading | Accepted | 2026-07-07 | On-chain classification / LP receipt corridor |
+| [ADR-048](ADR-048-dzengi-product-scope.md) | Dzengi product scope (streams, exclusions, pipeline stage) | Accepted | 2026-07-08 | CEX integration — Dzengi |
+| [ADR-049](ADR-049-venue-agnostic-cex-transfer-linking.md) | Venue-agnostic CEX transfer linking (FA-001 beyond Bybit) | Accepted | 2026-07-08 | Linking — CEX cross-system |
+| [ADR-050](ADR-050-dzengi-fiat-fx-pricing.md) | Dzengi fiat FX pricing (BYN via venue klines) | Accepted | 2026-07-08 | Pricing — Dzengi FX |
+| [ADR-051](ADR-051-cex-fee-capitalization-net-avco.md) | CEX fee capitalization into Net AVCO (Market = clean price) | Accepted | 2026-07-09 | AVCO / Cost-basis |
 
 ## Cycle/5 N19 cluster — implementation plan mapping
 

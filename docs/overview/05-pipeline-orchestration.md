@@ -1,6 +1,6 @@
 # Pipeline Orchestration
 
-> **Last updated:** 2026-06-05  
+> **Last updated:** 2026-07-08  
 > How live sessions move through pipeline stages: Spring events, schedulers, and recovery.
 
 ## Stage state machine
@@ -12,6 +12,9 @@ stateDiagram-v2
   ON_CHAIN_NORMALIZATION --> ON_CHAIN_CLARIFICATION: OnChainNormalizationCompletedEvent
   ON_CHAIN_CLARIFICATION --> ON_CHAIN_RECLASSIFICATION: clarification complete
   ON_CHAIN_RECLASSIFICATION --> BYBIT_NORMALIZATION: reclassification complete
+  BYBIT_NORMALIZATION --> DZENGI_NORMALIZATION: Bybit complete (when Dzengi enabled)
+  ON_CHAIN_RECLASSIFICATION --> DZENGI_NORMALIZATION: reclassification complete (when Dzengi only)
+  DZENGI_NORMALIZATION --> LINKING: DzengiNormalizationCompletedEvent
   BYBIT_NORMALIZATION --> LINKING: BybitNormalizationCompletedEvent
   ON_CHAIN_RECLASSIFICATION --> LINKING: OnChainReclassificationCompletedEvent
   LINKING --> PRICING: LinkingCompletedEvent
@@ -31,6 +34,7 @@ Each stage records `PipelineStatus`: RUNNING, BLOCKED, COMPLETE, FAILED on `User
 | Clarification complete | Clarification workflow | `OnChainReclassificationJob` |
 | `OnChainReclassificationCompletedEvent` | Reclassification job | `LinkingJob` |
 | `BybitNormalizationCompletedEvent` | `BybitNormalizationService` | `LinkingJob` |
+| `DzengiNormalizationCompletedEvent` | `DzengiNormalizationService` | `LinkingJob` |
 | `LinkingCompletedEvent` | `LinkingJob` | `PricingJob` |
 | `PricingCompletedEvent` | `PricingJob` | `CostBasisReplayJob` |
 | `AccountingReplayCompletedEvent` | `CostBasisReplayJob` | `PortfolioSnapshotRefreshJob` |
@@ -76,7 +80,7 @@ Otherwise stage `ACCOUNTING_REPLAY` = BLOCKED.
 
 | Method | Class |
 |--------|-------|
-| `runNormalization()` | `OnChainNormalizationJob`, `BybitNormalizationJob` |
+| `runNormalization()` | `OnChainNormalizationJob`, `BybitNormalizationJob`, `DzengiNormalizationJob` |
 | `runLinking()` | `LinkingJob` |
 | `runPricing()` | `PricingJob` |
 | `runSnapshotRefresh()` | `PortfolioSnapshotRefreshJob` |

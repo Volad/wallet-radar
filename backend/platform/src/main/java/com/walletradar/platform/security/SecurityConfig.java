@@ -88,6 +88,8 @@ public class SecurityConfig {
                 .securityMatcher(ServerWebExchangeMatchers.pathMatchers("/api/**"))
                 .authorizeExchange(auth -> auth
                         .pathMatchers("/api/v1/auth/me").permitAll()
+                        // Admin endpoints are guarded by X-WalletRadar-Admin-Token at the controller level.
+                        .pathMatchers("/api/v1/admin/**").permitAll()
                         .pathMatchers(HttpMethod.POST, "/api/v1/sessions").authenticated()
                         .pathMatchers("/api/v1/sessions/{sessionId}", "/api/v1/sessions/{sessionId}/**")
                             .access(ownershipManager)

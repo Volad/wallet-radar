@@ -323,6 +323,44 @@ class BybitTransferContinuityRepairServiceTest {
         return transaction;
     }
 
+    @Test
+    @DisplayName("Dzengi deposit without networkId pairs to on-chain row by txHash")
+    void dzengiDepositWithoutNetworkIdPairsToOnChainByTxHash() {
+        String dzengiRef = "DZENGI:user123";
+        NormalizedTransaction onChain = onChainRow();
+        onChain.setCorrelationId(null);
+        onChain.setContinuityCandidate(false);
+        onChain.setMatchedCounterparty(null);
+
+        NormalizedTransaction dzengi = dzengiRow();
+        dzengi.setWalletAddress(dzengiRef);
+        dzengi.setNetworkId(null);
+        dzengi.setCorrelationId(null);
+        dzengi.setContinuityCandidate(false);
+        dzengi.setMatchedCounterparty(null);
+
+        when(accountingUniverseService.shareUniverseMembers(WALLET, dzengiRef)).thenReturn(true);
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(onChain), List.of(), List.of(dzengi));
+        when(normalizedTransactionRepository.findAllByTxHashAndNetworkIdAndSource(
+                TX_HASH,
+                NetworkId.ARBITRUM,
+                NormalizedTransactionSource.BYBIT
+        )).thenReturn(List.of());
+        when(normalizedTransactionRepository.findAllByTxHashAndSource(
+                TX_HASH,
+                NormalizedTransactionSource.DZENGI
+        )).thenReturn(List.of(dzengi));
+
+        int changed = service.reconcileOutstandingPairs(50);
+
+        assertThat(changed).isEqualTo(1);
+        assertThat(onChain.getCorrelationId()).isEqualTo("BYBIT-CORRIDOR:ARBITRUM:" + TX_HASH);
+        assertThat(onChain.getMatchedCounterparty()).isEqualTo(dzengiRef);
+        assertThat(dzengi.getMatchedCounterparty()).isEqualTo(WALLET);
+        verify(normalizedTransactionRepository).saveAll(any());
+    }
+
     private NormalizedTransaction onChainRow() {
         NormalizedTransaction transaction = new NormalizedTransaction();
         transaction.setId("on-chain");
@@ -350,6 +388,20 @@ class BybitTransferContinuityRepairServiceTest {
         transaction.setCorrelationId("BYBIT-CORRIDOR:ARBITRUM:" + TX_HASH);
         transaction.setContinuityCandidate(true);
         transaction.setMatchedCounterparty(WALLET);
+        transaction.setBlockTimestamp(Instant.parse("2026-03-12T10:00:01Z"));
+        transaction.setTransactionIndex(0);
+        transaction.setFlows(List.of(flow("3.06", NormalizedLegRole.BUY)));
+        return transaction;
+    }
+
+    private NormalizedTransaction dzengiRow() {
+        NormalizedTransaction transaction = new NormalizedTransaction();
+        transaction.setId("dzengi");
+        transaction.setTxHash(TX_HASH);
+        transaction.setWalletAddress("DZENGI:user123");
+        transaction.setSource(NormalizedTransactionSource.DZENGI);
+        transaction.setType(NormalizedTransactionType.EXTERNAL_TRANSFER_IN);
+        transaction.setStatus(NormalizedTransactionStatus.CONFIRMED);
         transaction.setBlockTimestamp(Instant.parse("2026-03-12T10:00:01Z"));
         transaction.setTransactionIndex(0);
         transaction.setFlows(List.of(flow("3.06", NormalizedLegRole.BUY)));

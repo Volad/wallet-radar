@@ -145,6 +145,7 @@ public class PriceExternalSourceOrchestrator {
 
     private int sourcePriority(PriceRequest request, PriceSource source) {
         return switch (source) {
+            case DZENGI -> 0;
             case ECB -> 0;
             case BYBIT -> 1;
             case BINANCE -> 2;

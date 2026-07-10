@@ -194,7 +194,7 @@
                     <div class="breakdown-head-left">
                       <h3>
                         Allocation
-                        <span class="breakdown-total mono">{{ formatUsd(filteredTokenTotalUsd()) }}</span>
+                        <span class="breakdown-total mono"><wr-smart-amount [value]="filteredTokenTotalUsd()" /></span>
                       </h3>
                     </div>
                     @if (onChainVsCexSplit().cexPct > 0) {
@@ -235,7 +235,7 @@
                                 <span class="breakdown-label">{{ row.label }}</span>
                               </div>
                               <div class="breakdown-row-right mono">
-                                <span class="breakdown-value">{{ formatUsd(row.valueUsd) }}</span>
+                                <span class="breakdown-value"><wr-smart-amount [value]="row.valueUsd" /></span>
                                 <span class="breakdown-pct muted">{{ row.sharePct.toFixed(1) }}%</span>
                               </div>
                             </div>
@@ -260,7 +260,7 @@
                             } @else {
                               <span class="breakdown-more-label">... {{ networksAllocationMore().count }} more</span>
                               <span class="breakdown-more-right mono">
-                                <span class="breakdown-value">{{ formatUsd(networksAllocationMore().valueUsd) }}</span>
+                                <span class="breakdown-value"><wr-smart-amount [value]="networksAllocationMore().valueUsd" /></span>
                                 <span class="breakdown-pct muted">{{ networksAllocationMore().sharePct.toFixed(1) }}%</span>
                               </span>
                             }
@@ -289,7 +289,7 @@
                                 <span class="breakdown-label">{{ row.label }}</span>
                               </div>
                               <div class="breakdown-row-right mono">
-                                <span class="breakdown-value">{{ formatUsd(row.valueUsd) }}</span>
+                                <span class="breakdown-value"><wr-smart-amount [value]="row.valueUsd" /></span>
                                 <span class="breakdown-pct muted">{{ row.sharePct.toFixed(1) }}%</span>
                               </div>
                             </div>
@@ -314,7 +314,7 @@
                             } @else {
                               <span class="breakdown-more-label">... {{ walletsAllocationMore().count }} more</span>
                               <span class="breakdown-more-right mono">
-                                <span class="breakdown-value">{{ formatUsd(walletsAllocationMore().valueUsd) }}</span>
+                                <span class="breakdown-value"><wr-smart-amount [value]="walletsAllocationMore().valueUsd" /></span>
                                 <span class="breakdown-pct muted">{{ walletsAllocationMore().sharePct.toFixed(1) }}%</span>
                               </span>
                             }
@@ -332,7 +332,7 @@
                             class="breakdown-pnl-value mono"
                             [style.color]="filteredUnrealizedPnlUsd() >= 0 ? colors.green : colors.red"
                           >
-                            {{ formatUsd(filteredUnrealizedPnlUsd()) }}
+                            <wr-smart-amount [value]="filteredUnrealizedPnlUsd()" />
                           </div>
                           <div class="breakdown-pnl-sub muted">{{ formatPercent(filteredUnrealizedPnlPct()) }}</div>
                         </div>
@@ -342,7 +342,7 @@
                             class="breakdown-pnl-value mono"
                             [style.color]="displayedRealizedPnlUsd() >= 0 ? colors.green : colors.red"
                           >
-                            {{ formatUsd(displayedRealizedPnlUsd()) }}
+                            <wr-smart-amount [value]="displayedRealizedPnlUsd()" />
                           </div>
                           <div class="breakdown-pnl-sub muted">{{ isFiltered() ? 'filtered' : 'all time' }}</div>
                         </div>
@@ -351,16 +351,41 @@
                   </div>
                 </section>
 
+              <div class="table-body">
                 <div class="table-head tokens-grid">
                   <span></span>
-                  <span>Asset</span>
-                  <span class="align-right">Qty</span>
-                  <span class="align-right">Net</span>
-                  <span class="align-right">Avg Cost</span>
-                  <span class="align-right">Price</span>
+                  <button type="button" class="sort-btn" (click)="setSort('asset')">
+                    Asset
+                    <span class="sort-icon" [class.active]="sortColumn() === 'asset'">
+                      {{ sortColumn() === 'asset' ? (sortDir() === 'desc' ? '↓' : '↑') : '↕' }}
+                    </span>
+                  </button>
+                  <button type="button" class="sort-btn align-right" (click)="setSort('qty')">
+                    Qty
+                    <span class="sort-icon" [class.active]="sortColumn() === 'qty'">
+                      {{ sortColumn() === 'qty' ? (sortDir() === 'desc' ? '↓' : '↑') : '↕' }}
+                    </span>
+                  </button>
+                  <button type="button" class="sort-btn align-right" (click)="setSort('net')">
+                    Net
+                    <span class="sort-icon" [class.active]="sortColumn() === 'net'">
+                      {{ sortColumn() === 'net' ? (sortDir() === 'desc' ? '↓' : '↑') : '↕' }}
+                    </span>
+                  </button>
+                  <button type="button" class="sort-btn align-right" (click)="setSort('avgCost')">
+                    Avg Cost
+                    <span class="sort-icon" [class.active]="sortColumn() === 'avgCost'">
+                      {{ sortColumn() === 'avgCost' ? (sortDir() === 'desc' ? '↓' : '↑') : '↕' }}
+                    </span>
+                  </button>
+                  <button type="button" class="sort-btn align-right" (click)="setSort('price')">
+                    Price
+                    <span class="sort-icon" [class.active]="sortColumn() === 'price'">
+                      {{ sortColumn() === 'price' ? (sortDir() === 'desc' ? '↓' : '↑') : '↕' }}
+                    </span>
+                  </button>
                 </div>
 
-              <div class="table-body">
                   @for (asset of filteredTokenFamilies(); track asset.familyIdentity) {
                     <article
                       class="tokens-grid token-row"
@@ -400,7 +425,7 @@
                           <div class="token-scope-row">
                             <span class="token-scope-label">Networks</span>
                             <span class="token-scope-group" aria-label="Networks">
-                              @for (networkId of asset.networkIds; track networkId) {
+                              @for (networkId of visibleNetworks(asset.networkIds); track networkId) {
                                 @let network = getNetworkById(networkId);
                                 <span
                                   class="token-scope-anchor"
@@ -413,18 +438,26 @@
                                   </span>
                                 </span>
                               }
+                              @if (hiddenNetworkCount(asset.networkIds) > 0) {
+                                <span
+                                  class="token-scope-anchor networks-overflow"
+                                  [attr.data-tooltip]="hiddenNetworkTooltip(asset.networkIds)"
+                                  [attr.aria-label]="hiddenNetworkTooltip(asset.networkIds)">
+                                  +{{ hiddenNetworkCount(asset.networkIds) }}
+                                </span>
+                              }
                             </span>
                           </div>
                         </div>
                       </div>
-                      <div class="mono align-right" [attr.title]="formatQuantityFull(asset.quantity)">{{ formatQuantity(asset.quantity) }}</div>
-                      <div class="mono align-right" [attr.title]="formatUsd(asset.currentValueUsd)">{{ formatUsd(asset.currentValueUsd) }}</div>
+                      <div class="mono align-right"><wr-smart-amount [value]="asset.quantity" mode="qty" /></div>
+                      <div class="mono align-right"><wr-smart-amount [value]="asset.currentValueUsd" /></div>
                       <div class="mono align-right price-cell" [attr.title]="avcoTooltip(asset)">
-                        <div>{{ formatUsd(asset.netAvcoUsd) }}</div>
-                        <div class="token-subline price-subline">Tax {{ formatUsd(asset.avcoUsd) }}</div>
+                        <div><wr-smart-amount [value]="asset.netAvcoUsd" /></div>
+                        <div class="token-subline price-subline">Tax <wr-smart-amount [value]="asset.avcoUsd" /></div>
                       </div>
                       <div class="align-right price-cell" [attr.title]="priceTooltip(asset)">
-                        <div class="mono">{{ formatUsd(asset.priceUsd) }}</div>
+                        <div class="mono"><wr-smart-amount [value]="asset.priceUsd" /></div>
                       </div>
                     </article>
                   } @empty {
@@ -434,7 +467,7 @@
 
                 <footer class="table-footer">
                   <span class="mono muted">{{ filteredTokenFamilies().length }} assets</span>
-                  <span class="mono">{{ formatUsd(filteredTokenTotalUsd()) }} total</span>
+                  <span class="mono"><wr-smart-amount [value]="filteredTokenTotalUsd()" /> total</span>
                 </footer>
               }
 
@@ -451,7 +484,7 @@
                   }
                   <span class="lp-fees">
                     Total fees:
-                    <strong class="mono">{{ formatUsd(totalOpenLpFeesUsd()) }}</strong>
+                    <strong class="mono"><wr-smart-amount [value]="totalOpenLpFeesUsd()" /></strong>
                   </span>
                 </div>
 
@@ -480,7 +513,7 @@
                           </p>
                         </div>
                         <div class="lp-value">
-                          <strong class="mono">{{ formatUsd(position.currentValueUsd) }}</strong>
+                          <strong class="mono"><wr-smart-amount [value]="position.currentValueUsd" /></strong>
                           <span class="muted tiny">current value</span>
                         </div>
                       </div>
@@ -488,21 +521,21 @@
                       <div class="lp-metrics">
                         <div>
                           <span class="muted tiny">Fees earned</span>
-                          <strong class="mono pos">{{ formatUsd(position.feesUsd) }}</strong>
+                          <strong class="mono pos"><wr-smart-amount [value]="position.feesUsd" /></strong>
                         </div>
                         <div>
                           <span class="muted tiny">Imp. loss</span>
                           <strong class="mono" [class.pos]="position.impermanentLossPct >= 0" [class.neg]="position.impermanentLossPct < 0">
                             {{ formatPercent(position.impermanentLossPct) }}
                           </strong>
-                          <span class="mono muted tiny">{{ formatUsd(position.impermanentLossUsd) }}</span>
+                          <span class="mono muted tiny"><wr-smart-amount [value]="position.impermanentLossUsd" /></span>
                         </div>
                         <div>
                           <span class="muted tiny">Total P&L</span>
                           <strong class="mono" [class.pos]="position.totalPnlPct >= 0" [class.neg]="position.totalPnlPct < 0">
                             {{ formatPercent(position.totalPnlPct) }}
                           </strong>
-                          <span class="mono muted tiny">{{ formatUsd(position.totalPnlUsd) }}</span>
+                          <span class="mono muted tiny"><wr-smart-amount [value]="position.totalPnlUsd" /></span>
                         </div>
                         <div>
                           <span class="muted tiny">Entered</span>
@@ -527,8 +560,8 @@
                     <div class="progress-fill" [style.background]="lending.healthColor" [style.width.%]="lending.healthProgress"></div>
                   </div>
                   <p class="muted">
-                    Supply <span class="mono pos">{{ formatUsd(lending.totalSupply) }}</span>
-                    · Borrow <span class="mono neg">{{ formatUsd(lending.totalBorrow) }}</span>
+                    Supply <span class="mono pos"><wr-smart-amount [value]="lending.totalSupply" /></span>
+                    · Borrow <span class="mono neg"><wr-smart-amount [value]="lending.totalBorrow" /></span>
                   </p>
                 </div>
 
@@ -544,10 +577,10 @@
                             <div class="row-title">{{ position.asset }} <span class="muted tiny">· {{ position.protocol }}</span></div>
                             <div class="muted tiny">{{ network?.icon }} {{ position.networkId }}</div>
                           </div>
-                          <div class="mono align-right" [attr.title]="formatQuantityFull(position.quantity)">{{ formatQuantity(position.quantity) }} {{ position.asset }}</div>
-                          <div class="mono align-right">{{ formatUsd(position.valueUsd) }}</div>
+                          <div class="mono align-right"><wr-smart-amount [value]="position.quantity" mode="qty" [suffix]="position.asset" /></div>
+                          <div class="mono align-right"><wr-smart-amount [value]="position.valueUsd" /></div>
                           <div class="mono align-right pos">{{ position.apyPct.toFixed(1) }}%</div>
-                          <div class="mono align-right pos">+{{ formatUsd(position.earnedUsd ?? 0) }}</div>
+                          <div class="mono align-right pos">+<wr-smart-amount [value]="position.earnedUsd ?? 0" /></div>
                         </article>
                       }
                     }
@@ -564,10 +597,10 @@
                             <div class="row-title">{{ position.asset }} <span class="muted tiny">· {{ position.protocol }}</span></div>
                             <div class="muted tiny">{{ network?.icon }} {{ position.networkId }}</div>
                           </div>
-                          <div class="mono align-right" [attr.title]="formatQuantityFull(position.quantity)">{{ formatQuantity(position.quantity) }} {{ position.asset }}</div>
-                          <div class="mono align-right">{{ formatUsd(position.valueUsd) }}</div>
+                          <div class="mono align-right"><wr-smart-amount [value]="position.quantity" mode="qty" [suffix]="position.asset" /></div>
+                          <div class="mono align-right"><wr-smart-amount [value]="position.valueUsd" /></div>
                           <div class="mono align-right neg">{{ position.apyPct.toFixed(1) }}%</div>
-                          <div class="mono align-right neg">{{ formatUsd(position.interestUsd ?? 0) }}</div>
+                          <div class="mono align-right neg"><wr-smart-amount [value]="position.interestUsd ?? 0" /></div>
                         </article>
                       }
                     }

@@ -1,6 +1,7 @@
 package com.walletradar.application.costbasis.application.replay.dispatch;
 
 import com.walletradar.application.costbasis.support.AccountingAssetIdentitySupport;
+import com.walletradar.application.costbasis.support.AcquisitionFeeCapitalizationPolicy;
 import com.walletradar.canonical.correlation.BybitCarryContinuitySupport;
 import com.walletradar.application.costbasis.application.replay.handler.AsyncSpotOrderReplayHandler;
 import com.walletradar.application.costbasis.application.replay.handler.BorrowReplayHandler;
@@ -48,6 +49,7 @@ public class ReplayDispatcher {
     private final ReplayTransferClassifier transferClassifier;
     private final ReplayPendingTransferKeyFactory pendingTransferKeyFactory;
     private final ReplayRouteHandlerRegistry replayRouteHandlerRegistry;
+    private final AcquisitionFeeCapitalizationPolicy feeCapitalizationPolicy;
     private final TransferReplayHandler transferReplayHandler;
     private final BybitVenueInternalReplayHandler bybitVenueInternalReplayHandler;
     private final LiquidStakingReplayHandler liquidStakingReplayHandler;
@@ -69,6 +71,7 @@ public class ReplayDispatcher {
             ReplayTransferClassifier transferClassifier,
             ReplayPendingTransferKeyFactory pendingTransferKeyFactory,
             ReplayRouteHandlerRegistry replayRouteHandlerRegistry,
+            AcquisitionFeeCapitalizationPolicy feeCapitalizationPolicy,
             TransferReplayHandler transferReplayHandler,
             BybitVenueInternalReplayHandler bybitVenueInternalReplayHandler,
             LiquidStakingReplayHandler liquidStakingReplayHandler,
@@ -89,6 +92,7 @@ public class ReplayDispatcher {
         this.transferClassifier = transferClassifier;
         this.pendingTransferKeyFactory = pendingTransferKeyFactory;
         this.replayRouteHandlerRegistry = replayRouteHandlerRegistry;
+        this.feeCapitalizationPolicy = feeCapitalizationPolicy;
         this.transferReplayHandler = transferReplayHandler;
         this.bybitVenueInternalReplayHandler = bybitVenueInternalReplayHandler;
         this.liquidStakingReplayHandler = liquidStakingReplayHandler;
@@ -113,6 +117,10 @@ public class ReplayDispatcher {
         }
         if (isBybitSelfTransfer(transaction)) {
             log.debug("REPLAY_SKIP_SELF_TRANSFER txId={} wallet={}", transaction.getId(), transaction.getWalletAddress());
+            return;
+        }
+        if (transaction.getType() == NormalizedTransactionType.CEX_DERIVATIVE_SETTLEMENT) {
+            replayDerivativeSettlement(transaction, replayState);
             return;
         }
         ReplayRoutingDecision routingDecision = replayTransactionRouter.route(
@@ -172,6 +180,55 @@ public class ReplayDispatcher {
             ReplayExecutionState replayState
     ) {
         replayGenericFlowsSkipping(transaction, replayState, java.util.Set.of());
+    }
+
+    private void replayDerivativeSettlement(
+            NormalizedTransaction transaction,
+            ReplayExecutionState replayState
+    ) {
+        if (transaction.getFlows() == null) {
+            return;
+        }
+        for (int flowIndex = 0; flowIndex < transaction.getFlows().size(); flowIndex++) {
+            NormalizedTransaction.Flow flow = transaction.getFlows().get(flowIndex);
+            if (flow == null || flow.getQuantityDelta() == null || flow.getQuantityDelta().signum() == 0) {
+                continue;
+            }
+            if (flow.getRole() == NormalizedLegRole.FEE) {
+                applyFlowWithEffect(
+                        transaction,
+                        flow,
+                        flowIndex,
+                        replayState,
+                        flowSupport.defaultBasisEffect(flow),
+                        position -> flowSupport.applyFee(flow, position)
+                );
+                continue;
+            }
+            if (flow.getQuantityDelta().signum() > 0) {
+                applyFlowWithEffect(
+                        transaction,
+                        flow,
+                        flowIndex,
+                        replayState,
+                        AssetLedgerPoint.BasisEffect.ACQUIRE,
+                        position -> {
+                            BigDecimal unitPriceUsd = assetSupport.replayUnitPriceUsd(transaction, flow);
+                            BigDecimal acquisitionCostUsd = flow.getQuantityDelta().multiply(unitPriceUsd, MC);
+                            flowSupport.applyBuyWithAcquisitionCost(transaction, flow, position, acquisitionCostUsd);
+                        }
+                );
+            } else {
+                applyFlowWithEffect(
+                        transaction,
+                        flow,
+                        flowIndex,
+                        replayState,
+                        AssetLedgerPoint.BasisEffect.DISPOSE,
+                        position -> flowSupport.applySell(flow, position)
+                );
+            }
+        }
     }
 
     private void replayGenericFlowsSkipping(
@@ -489,6 +546,10 @@ public class ReplayDispatcher {
      * ADR-040 Bug B: {@code swapNetRef} carries the net basis released by prior SELL flows in the
      * same SWAP transaction. When set, the inbound BUY leg inherits that net cost (tax lane still
      * uses market price), preventing reward-derived disposals from raising Net AVCO.
+     *
+     * <p>ADR-051: after applying the standard buy logic, any CEX acquisition fee stored in
+     * {@code flow.acquisitionFeeUsd} is capitalized into the Net lane only via
+     * {@link ReplayFlowSupport#capitalizeFeeIntoNetLane}. Market AVCO is never affected.
      */
     private void applyBuyWithOptionalPool(
             NormalizedTransaction transaction,
@@ -521,13 +582,31 @@ public class ReplayDispatcher {
             // Consume the swap net context so subsequent BUY flows use standard pricing
             swapNetRef[0] = BigDecimal.ZERO;
             swapNetRef[1] = BigDecimal.ZERO;
+            capitalizeCexFeeIfApplicable(transaction, flow, position);
             return;
         }
         if (poolAcquisitionCost != null) {
             flowSupport.applyBuyWithAcquisitionCost(transaction, flow, position, poolAcquisitionCost);
+            capitalizeCexFeeIfApplicable(transaction, flow, position);
             return;
         }
         flowSupport.applyBuy(transaction, flow, position);
+        capitalizeCexFeeIfApplicable(transaction, flow, position);
+    }
+
+    /**
+     * ADR-051: if the policy allows and the flow carries a buy-side CEX commission, adds it to the
+     * Net AVCO lane (and {@code gasPaidUsd}) without touching the Market (tax) lane.
+     */
+    private void capitalizeCexFeeIfApplicable(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow,
+            PositionState position
+    ) {
+        BigDecimal feeUsd = feeCapitalizationPolicy.capitalizableFeeUsd(transaction, flow);
+        if (feeUsd != null) {
+            flowSupport.capitalizeFeeIntoNetLane(feeUsd, position);
+        }
     }
 
     private void applySellWithOptionalPool(

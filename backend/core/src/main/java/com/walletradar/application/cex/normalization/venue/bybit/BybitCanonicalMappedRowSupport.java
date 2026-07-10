@@ -258,6 +258,40 @@ class BybitCanonicalMappedRowSupport {
         return leg.getQuantityRaw().add(fee);
     }
 
+    /**
+     * Computes the USD equivalent of the buy-side commission charged on a Bybit spot BUY leg.
+     *
+     * <p>Bybit charges the taker fee in the received (base) asset. The fee is already netted into
+     * the received quantity via {@link #netExecutionLegQuantity}. This method converts the raw fee
+     * back to USD so the replay engine can add it to Net AVCO without affecting Market AVCO.
+     *
+     * <ul>
+     *   <li>If the base asset is a USD-stablecoin, effective price = 1.0.</li>
+     *   <li>Otherwise, effective price = execution fill price (falls back to {@code executionPrice}).</li>
+     * </ul>
+     *
+     * @return non-null positive value if a fee can be computed, {@code null} otherwise
+     */
+    BigDecimal acquisitionFeeUsd(
+            ExternalLedgerRaw buyRow,
+            FlowPricing buyPricing,
+            BigDecimal executionPrice
+    ) {
+        if (buyRow == null || buyRow.getFeePaid() == null || buyRow.getFeePaid().signum() == 0) {
+            return null;
+        }
+        BigDecimal feeAbs = buyRow.getFeePaid().abs();
+        // Use the already-resolved unit price; fall back to raw execution price for non-stable pairs
+        // where buyPricing may be null/empty (SWAP_DERIVED path).
+        BigDecimal unitPrice = buyPricing != null && buyPricing.unitPriceUsd() != null
+                ? buyPricing.unitPriceUsd()
+                : (isStablecoin(buyRow.getAssetSymbol()) ? BigDecimal.ONE : executionPrice);
+        if (unitPrice == null || unitPrice.signum() <= 0) {
+            return null;
+        }
+        return feeAbs.multiply(unitPrice);
+    }
+
     BigDecimal signedQuantity(ExternalLedgerRaw row) {
         if (row == null || row.getQuantityRaw() == null) {
             return null;

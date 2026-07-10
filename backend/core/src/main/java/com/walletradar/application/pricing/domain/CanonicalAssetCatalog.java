@@ -20,6 +20,7 @@ public final class CanonicalAssetCatalog {
     private static final Set<String> USD_STABLE_SYMBOLS = Set.of(
             "USDC",
             "USDT",
+            "USD",
             "USD₮0",
             "USDT0",
             "USDB",

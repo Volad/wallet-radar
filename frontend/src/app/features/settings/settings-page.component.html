@@ -132,14 +132,18 @@
           <wr-integrations-settings-section
             [compact]="true"
             [integrations]="allIntegrations()"
-            [bybitForm]="bybitForm"
-            [showSecret]="showBybitSecret()"
+            [integrationForm]="integrationForm"
+            [showSecret]="showIntegrationSecret()"
             [saving]="savingScope() === 'integrations'"
+            [testingConnection]="testingConnection()"
+            [testConnectionMessage]="testConnectionMessage()"
             [statusTone]="statusTone"
             [formatDateTime]="formatDateTimeWithSeconds"
-            (toggleSecret)="toggleBybitSecretVisibility()"
-            (reset)="resetBybitDraft()"
-            (save)="saveBybit()"
+            (toggleSecret)="toggleIntegrationSecretVisibility()"
+            (reset)="resetIntegrationDraft()"
+            (providerSelected)="onIntegrationProviderSelected($event)"
+            (save)="saveIntegration($event)"
+            (testConnection)="testIntegrationConnection($event)"
             (disconnect)="disconnectIntegration($event)"></wr-integrations-settings-section>
 
           <div class="data-sources-divider"></div>

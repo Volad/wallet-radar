@@ -1,6 +1,6 @@
 # Data Model
 
-> **Last updated:** 2026-06-05  
+> **Last updated:** 2026-07-08  
 > MongoDB collections and core domain entities. Canonical economic document: **`NormalizedTransaction`** (not `EconomicEvent`).
 
 ## Entity relationship (core)
@@ -49,8 +49,9 @@ classDiagram
 | `sync_status` | `SyncStatus` | Backfill planner | Backfill runner |
 | `backfill_segments` | `BackfillSegment` | Backfill planner | Backfill executors |
 | `raw_transactions` | `RawTransaction` | Backfill fetch | Normalization |
-| `integration_raw_events` | `IntegrationRawEvent` | Bybit backfill | Bybit normalization |
+| `integration_raw_events` | `IntegrationRawEvent` | CEX backfill (Bybit, Dzengi, …) | CEX normalization |
 | `bybit_extracted_events` | `BybitExtractedEvent` | Bybit extraction | Bybit normalization |
+| `dzengi_extracted_events` | `DzengiExtractedEvent` | Dzengi extraction | Dzengi normalization |
 | `external_ledger_raw` | `ExternalLedgerRaw` | Legacy Bybit import | Bybit normalization (if present) |
 | `normalized_transactions` | `NormalizedTransaction` | Normalization, linking, pricing, replay | All downstream |
 | `asset_ledger_points` | `AssetLedgerPoint` | Replay (replace per universe) | Dashboard, asset-ledger API |

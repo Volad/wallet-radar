@@ -28,7 +28,7 @@ import { SettingsWizardComponent } from './wizard/settings-wizard.component';
 import { AccountSettingsSectionComponent } from './sections/account-settings-section.component';
 import { AccountingSettingsSectionComponent } from './sections/accounting-settings-section.component';
 import { GeneralSettingsSectionComponent } from './sections/general-settings-section.component';
-import { IntegrationsSettingsSectionComponent } from './sections/integrations-settings-section.component';
+import { IntegrationsSettingsSectionComponent, AVAILABLE_PROVIDERS } from './sections/integrations-settings-section.component';
 import { WalletsSettingsSectionComponent } from './sections/wallets-settings-section.component';
 
 type SettingsSectionId = 'wallets' | 'integrations' | 'accounting' | 'general';
@@ -136,28 +136,34 @@ export class SettingsPageComponent {
   readonly saveMessage = signal<string | null>(null);
   readonly dataSourcesReviewOpen = signal(false);
   readonly dataSourcesSaving = signal(false);
-  readonly showBybitSecret = signal(false);
+  readonly showIntegrationSecret = signal(false);
+  readonly testingConnection = signal(false);
+  readonly testConnectionMessage = signal<string | null>(null);
   readonly signingIn = signal(false);
   readonly walletListDirty = signal(false);
+  readonly activeIntegrationProvider = signal<string>('BYBIT');
 
   readonly generalForm = this.formBuilder.nonNullable.group({
     hideSmallAssets: [true],
     showReconciliationWarnings: [true],
   });
 
-  readonly bybitForm = this.formBuilder.nonNullable.group({
+  readonly integrationForm = this.formBuilder.nonNullable.group({
     displayName: ['Bybit'],
     apiKey: [''],
     apiSecret: [''],
   });
 
-  private readonly bybitDraft = signal<{ displayName: string; apiKey: string; apiSecret: string }>({
+  private readonly integrationDraft = signal<{ displayName: string; apiKey: string; apiSecret: string }>({
     displayName: 'Bybit',
     apiKey: '',
     apiSecret: '',
   });
 
-  private readonly bybitInitialSnapshot = signal<{ apiKey: string }>({ apiKey: '' });
+  private readonly integrationInitialSnapshot = signal<{ provider: string; apiKey: string }>({
+    provider: 'BYBIT',
+    apiKey: '',
+  });
 
   readonly hasSession = computed(() => this.sessionId() !== null);
   readonly bybitIntegration = computed(
@@ -202,11 +208,13 @@ export class SettingsPageComponent {
       });
     }
 
-    if (this.isBybitCredentialsChanged()) {
-      const integration = this.bybitIntegration();
+    if (this.isActiveIntegrationCredentialsChanged()) {
+      const provider = this.activeIntegrationProvider();
+      const integration = this.integrationForProvider(provider);
+      const label = this.providerLabel(provider);
       changes.push({
-        label: integration === null ? 'Connect Bybit integration' : 'Update Bybit API credentials',
-        tag: 'Bybit',
+        label: integration === null ? `Connect ${label} integration` : `Update ${label} API credentials`,
+        tag: label,
         tagTone: 'amber',
       });
     }
@@ -235,13 +243,19 @@ export class SettingsPageComponent {
   constructor() {
     this.loadSettings();
 
-    this.bybitForm.valueChanges.pipe(takeUntilDestroyed(this.destroyRef)).subscribe((value) => {
-      this.bybitDraft.set({
-        displayName: value.displayName ?? 'Bybit',
+    this.integrationForm.valueChanges.pipe(takeUntilDestroyed(this.destroyRef)).subscribe((value) => {
+      this.integrationDraft.set({
+        displayName: value.displayName ?? this.providerDefaultDisplayName(this.activeIntegrationProvider()),
         apiKey: value.apiKey ?? '',
         apiSecret: value.apiSecret ?? '',
       });
     });
+  }
+
+  onIntegrationProviderSelected(provider: string): void {
+    this.loadIntegrationForm(provider);
+    this.testConnectionMessage.set(null);
+    this.error.set(null);
   }
 
   onWizardCompleted(): void {
@@ -397,7 +411,7 @@ export class SettingsPageComponent {
       this.error.set('Fix invalid or duplicate wallet addresses before saving.');
       return;
     }
-    const payload = this.tryBuildPayload(this.shouldIncludeBybitInSettingsPayload());
+    const payload = this.tryBuildPayload(this.shouldIncludeIntegrationsInSettingsPayload());
     if (payload === null) {
       return;
     }
@@ -405,14 +419,15 @@ export class SettingsPageComponent {
   }
 
   saveGeneral(): void {
-    const payload = this.tryBuildPayload(this.shouldIncludeBybitInSettingsPayload());
+    const payload = this.tryBuildPayload(this.shouldIncludeIntegrationsInSettingsPayload());
     if (payload === null) {
       return;
     }
     this.persistSettings(payload, 'general');
   }
 
-  saveBybit(): void {
+  saveIntegration(provider: string): void {
+    this.activeIntegrationProvider.set(provider);
     const payload = this.tryBuildPayload(true);
     if (payload === null) {
       return;
@@ -420,8 +435,37 @@ export class SettingsPageComponent {
     this.persistSettings(payload, 'integrations');
   }
 
-  disconnectBybit(): void {
-    this.persistSettings(this.buildSettingsPayload(false), 'integrations');
+  testIntegrationConnection(provider: string): void {
+    const sessionId = this.sessionId();
+    if (!sessionId || this.testingConnection()) {
+      return;
+    }
+
+    this.activeIntegrationProvider.set(provider);
+    const apiKey = this.integrationForm.controls.apiKey.value.trim();
+    const apiSecret = this.integrationForm.controls.apiSecret.value.trim();
+    if (apiKey.length === 0 || apiSecret.length === 0) {
+      this.testConnectionMessage.set('Enter both API key and secret to test the connection.');
+      return;
+    }
+
+    this.testingConnection.set(true);
+    this.testConnectionMessage.set(null);
+    this.error.set(null);
+
+    this.walletApiService
+      .testIntegrationConnection(sessionId, { provider, apiKey, apiSecret })
+      .pipe(finalize(() => this.testingConnection.set(false)))
+      .subscribe({
+        next: (response) => {
+          this.testConnectionMessage.set(response.message ?? `Connected to ${response.accountRef}`);
+        },
+        error: (errorResponse) => {
+          this.testConnectionMessage.set(
+            errorResponse?.error?.message ?? 'Connection test failed.'
+          );
+        },
+      });
   }
 
   disconnectIntegration(integrationId: string): void {
@@ -455,34 +499,24 @@ export class SettingsPageComponent {
     this.persistSettings(payload, 'integrations');
   }
 
-  private tryBuildPayload(includeBybit: boolean): PutSessionSettingsRequest | null {
+  private tryBuildPayload(includeIntegrations: boolean): PutSessionSettingsRequest | null {
     try {
-      return this.buildSettingsPayload(includeBybit);
+      return this.buildSettingsPayload(includeIntegrations);
     } catch (validation) {
-      this.error.set(validation instanceof Error ? validation.message : 'Invalid Bybit credentials.');
+      this.error.set(validation instanceof Error ? validation.message : 'Invalid integration credentials.');
       return null;
     }
   }
 
-  resetBybitDraft(): void {
-    const bybit = this.bybitIntegration();
-    const initialApiKey = this.bybitInitialSnapshot().apiKey;
-    const displayName = bybit?.displayName ?? 'Bybit';
-    this.bybitForm.reset(
-      {
-        displayName,
-        apiKey: initialApiKey,
-        apiSecret: '',
-      },
-      { emitEvent: false }
-    );
-    this.bybitDraft.set({ displayName, apiKey: initialApiKey, apiSecret: '' });
-    this.showBybitSecret.set(false);
+  resetIntegrationDraft(): void {
+    this.loadIntegrationForm(this.activeIntegrationProvider());
+    this.showIntegrationSecret.set(false);
+    this.testConnectionMessage.set(null);
     this.error.set(null);
   }
 
-  toggleBybitSecretVisibility(): void {
-    this.showBybitSecret.update((visible) => !visible);
+  toggleIntegrationSecretVisibility(): void {
+    this.showIntegrationSecret.update((visible) => !visible);
   }
 
   networkIcon(networkId: EvmNetworkId): string {
@@ -527,9 +561,9 @@ export class SettingsPageComponent {
 
     let payload: PutSessionSettingsRequest;
     try {
-      payload = this.buildSettingsPayload(this.shouldIncludeBybitInSettingsPayload());
+      payload = this.buildSettingsPayload(this.shouldIncludeIntegrationsInSettingsPayload());
     } catch (validation) {
-      this.error.set(validation instanceof Error ? validation.message : 'Invalid Bybit credentials.');
+      this.error.set(validation instanceof Error ? validation.message : 'Invalid integration credentials.');
       return;
     }
 
@@ -569,27 +603,31 @@ export class SettingsPageComponent {
     return 'busy';
   }
 
-  hasBybitPayload(): boolean {
-    const integration = this.bybitIntegration();
+  hasIntegrationPayload(provider: string): boolean {
+    if (this.activeIntegrationProvider() !== provider) {
+      return false;
+    }
+    const integration = this.integrationForProvider(provider);
+    const apiKey = this.integrationForm.controls.apiKey.value.trim();
+    const apiSecret = this.integrationForm.controls.apiSecret.value.trim();
     if (integration !== null) {
-      const apiKey = this.bybitForm.controls.apiKey.value.trim();
-      const apiSecret = this.bybitForm.controls.apiSecret.value.trim();
       return (apiKey.length === 0 && apiSecret.length === 0) || (apiKey.length > 0 && apiSecret.length > 0);
     }
-    return (
-      this.bybitForm.controls.apiKey.value.trim().length > 0 &&
-      this.bybitForm.controls.apiSecret.value.trim().length > 0
-    );
+    return apiKey.length > 0 && apiSecret.length > 0;
   }
 
-  /** Keep existing integration on any save; include new credentials when both key and secret are filled. */
-  private shouldIncludeBybitInSettingsPayload(): boolean {
-    return this.bybitIntegration() !== null || this.hasBybitPayload();
+  /** Keep existing integrations on any save; include new credentials when both key and secret are filled. */
+  private shouldIncludeIntegrationsInSettingsPayload(): boolean {
+    const activeProvider = this.activeIntegrationProvider();
+    return this.integrationForProvider(activeProvider) !== null || this.hasIntegrationPayload(activeProvider);
   }
 
-  private isBybitCredentialsChanged(): boolean {
-    const draft = this.bybitDraft();
-    const snapshot = this.bybitInitialSnapshot();
+  private isActiveIntegrationCredentialsChanged(): boolean {
+    const draft = this.integrationDraft();
+    const snapshot = this.integrationInitialSnapshot();
+    if (snapshot.provider !== this.activeIntegrationProvider()) {
+      return false;
+    }
     const apiKey = draft.apiKey.trim();
     const apiSecret = draft.apiSecret.trim();
     if (apiSecret.length > 0) {
@@ -598,9 +636,8 @@ export class SettingsPageComponent {
     return apiKey !== snapshot.apiKey.trim() && apiKey.length > 0;
   }
 
-  private buildSettingsPayload(includeBybit: boolean): PutSessionSettingsRequest {
+  private buildSettingsPayload(includeIntegrations: boolean): PutSessionSettingsRequest {
     const walletPayload = [...this.walletsDraft(), ...this.pendingWallets()];
-    const bybitEntry = includeBybit ? this.buildBybitIntegrationEntry() : null;
     return {
       wallets: walletPayload.map((wallet, index) => ({
         address: wallet.address.trim().toLowerCase(),
@@ -608,42 +645,127 @@ export class SettingsPageComponent {
         color: wallet.color,
         networks: this.onChainNetworkIds,
       })),
-      integrations: bybitEntry === null ? [] : [bybitEntry],
+      integrations: includeIntegrations ? this.buildIntegrationsPayload() : this.buildPreservedIntegrationsPayload(),
       externalVenues: this.externalVenues(),
       hideSmallAssets: this.generalForm.controls.hideSmallAssets.value,
       showReconciliationWarnings: this.generalForm.controls.showReconciliationWarnings.value,
     };
   }
 
-  private buildBybitIntegrationEntry(): PutSessionSettingsRequest['integrations'][number] | null {
-    const integration = this.bybitIntegration();
-    const draft = this.bybitDraft();
-    const snapshot = this.bybitInitialSnapshot();
+  private buildPreservedIntegrationsPayload(): PutSessionSettingsRequest['integrations'] {
+    return (this.settings()?.integrations ?? []).map((integration) => ({
+      provider: integration.provider ?? 'BYBIT',
+      displayName: integration.displayName ?? '',
+      apiKey: '',
+      apiSecret: '',
+    }));
+  }
+
+  private buildIntegrationsPayload(): PutSessionSettingsRequest['integrations'] {
+    const existing = this.settings()?.integrations ?? [];
+    const activeProvider = this.activeIntegrationProvider();
+    const payload: PutSessionSettingsRequest['integrations'][number][] = [];
+    const seenProviders = new Set<string>();
+
+    for (const integration of existing) {
+      const provider = integration.provider ?? 'BYBIT';
+      seenProviders.add(provider);
+      if (provider === activeProvider) {
+        const entry = this.buildIntegrationEntry(provider);
+        if (entry !== null) {
+          payload.push(entry);
+        } else {
+          payload.push({
+            provider,
+            displayName: integration.displayName ?? '',
+            apiKey: '',
+            apiSecret: '',
+          });
+        }
+      } else {
+        payload.push({
+          provider,
+          displayName: integration.displayName ?? '',
+          apiKey: '',
+          apiSecret: '',
+        });
+      }
+    }
+
+    if (!seenProviders.has(activeProvider) && this.hasIntegrationPayload(activeProvider)) {
+      const entry = this.buildIntegrationEntry(activeProvider);
+      if (entry !== null) {
+        payload.push(entry);
+      }
+    }
+
+    return payload;
+  }
+
+  private buildIntegrationEntry(
+    provider: string
+  ): PutSessionSettingsRequest['integrations'][number] | null {
+    const integration = this.integrationForProvider(provider);
+    const draft = this.integrationDraft();
+    const snapshot = this.integrationInitialSnapshot();
     const apiKey = draft.apiKey.trim();
     const apiSecret = draft.apiSecret.trim();
+    const label = this.providerLabel(provider);
     const displayName =
-      this.bybitForm.controls.displayName.value.trim() || integration?.displayName || 'Bybit';
+      this.integrationForm.controls.displayName.value.trim() ||
+      integration?.displayName ||
+      this.providerDefaultDisplayName(provider);
 
     if (integration === null) {
       if (apiKey.length === 0 && apiSecret.length === 0) {
         return null;
       }
       if (apiKey.length === 0 || apiSecret.length === 0) {
-        throw new Error('Enter both API key and API secret to connect Bybit.');
+        throw new Error(`Enter both API key and API secret to connect ${label}.`);
       }
-      const color = pickUnusedIntegrationColor(this.allIntegrations().map((i) => i.color));
-      return { provider: 'BYBIT', displayName, apiKey, apiSecret, color };
+      const color = pickUnusedIntegrationColor(this.allIntegrations().map((item) => item.color));
+      return { provider, displayName, apiKey, apiSecret, color };
     }
 
-    if (!this.isBybitCredentialsChanged()) {
-      return { provider: 'BYBIT', displayName, apiKey: '', apiSecret: '' };
+    if (!this.isActiveIntegrationCredentialsChanged()) {
+      return { provider, displayName, apiKey: '', apiSecret: '' };
     }
 
     const snapshotKey = snapshot.apiKey.trim();
     if (apiKey.length === 0 || apiSecret.length === 0 || apiKey === snapshotKey) {
-      throw new Error('To update Bybit credentials, enter both new API key and secret.');
+      throw new Error(`To update ${label} credentials, enter both new API key and secret.`);
     }
-    return { provider: 'BYBIT', displayName, apiKey, apiSecret };
+    return { provider, displayName, apiKey, apiSecret };
+  }
+
+  private integrationForProvider(provider: string): SessionIntegrationResponse | null {
+    return this.settings()?.integrations.find((integration) => integration.provider === provider) ?? null;
+  }
+
+  private providerLabel(provider: string): string {
+    return AVAILABLE_PROVIDERS.find((candidate) => candidate.id === provider)?.label ?? provider;
+  }
+
+  private providerDefaultDisplayName(provider: string): string {
+    return AVAILABLE_PROVIDERS.find((candidate) => candidate.id === provider)?.defaultDisplayName ?? provider;
+  }
+
+  private loadIntegrationForm(provider: string): void {
+    const integration = this.integrationForProvider(provider);
+    const initialApiKey = integration?.maskedKey ?? '';
+    const displayName = integration?.displayName ?? this.providerDefaultDisplayName(provider);
+    this.activeIntegrationProvider.set(provider);
+    this.integrationForm.reset(
+      {
+        displayName,
+        apiKey: initialApiKey,
+        apiSecret: '',
+      },
+      { emitEvent: false }
+    );
+    this.integrationDraft.set({ displayName, apiKey: initialApiKey, apiSecret: '' });
+    this.integrationInitialSnapshot.set({ provider, apiKey: initialApiKey });
+    this.showIntegrationSecret.set(false);
   }
 
   private persistSettings(payload: PutSessionSettingsRequest, scope: SettingsSaveScope): void {
@@ -676,7 +798,7 @@ export class SettingsPageComponent {
       case 'general':
         return 'General settings saved';
       case 'integrations':
-        return this.bybitIntegration() === null ? 'Integration removed' : 'Integration settings saved';
+        return this.allIntegrations().length === 0 ? 'Integration removed' : 'Integration settings saved';
       default:
         return 'Settings saved';
     }
@@ -705,20 +827,9 @@ export class SettingsPageComponent {
       { emitEvent: false }
     );
 
-    const bybit = response.integrations.find((integration) => integration.provider === 'BYBIT') ?? null;
-    const initialApiKey = bybit?.maskedKey ?? '';
-    const displayName = bybit?.displayName ?? 'Bybit';
-    this.bybitForm.reset(
-      {
-        displayName,
-        apiKey: initialApiKey,
-        apiSecret: '',
-      },
-      { emitEvent: false }
-    );
-    this.bybitDraft.set({ displayName, apiKey: initialApiKey, apiSecret: '' });
-    this.bybitInitialSnapshot.set({ apiKey: initialApiKey });
-    this.showBybitSecret.set(false);
+    const firstIntegration = response.integrations[0];
+    const initialProvider = firstIntegration?.provider ?? 'BYBIT';
+    this.loadIntegrationForm(initialProvider);
   }
 
   private createWalletDraft(index: number, networksOpen = false): SettingsWalletDraft {

@@ -127,13 +127,18 @@ public class BybitCanonicalTransactionBuilder {
                 sellRow.getAssetSymbol(),
                 executionPrice
         );
-        flows.add(mappedRowSupport.flow(
+        NormalizedTransaction.Flow buyFlow = mappedRowSupport.flow(
                 NormalizedLegRole.BUY,
                 buyRow.getAssetSymbol(),
                 buyNet,
                 buyPricing.unitPriceUsd(),
                 buyPricing.priceSource()
-        ));
+        );
+        // Bybit fees are charged in the received (base) asset and already netted into buyNet.
+        // Record the USD equivalent on the BUY leg so the replay engine can capitalize it into
+        // Net AVCO only — Market AVCO continues to reflect the clean fill price.
+        buyFlow.setAcquisitionFeeUsd(mappedRowSupport.acquisitionFeeUsd(buyRow, buyPricing, executionPrice));
+        flows.add(buyFlow);
         BybitCanonicalMappedRowSupport.FlowPricing sellPricing = mappedRowSupport.tradeFlowPricing(
                 sellRow.getAssetSymbol(),
                 NormalizedLegRole.SELL,

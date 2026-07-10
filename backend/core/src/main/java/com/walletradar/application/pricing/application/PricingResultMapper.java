@@ -79,6 +79,10 @@ public class PricingResultMapper {
             flowCopy.setCounterpartyAddress(flow.getCounterpartyAddress());
             flowCopy.setCounterpartyType(flow.getCounterpartyType());
             flowCopy.setAccountRef(flow.getAccountRef());
+            // ADR-051: propagate buy-side fee signal so the replay engine can capitalize it into
+            // Net AVCO. This field is set at normalization time (CEX venues only) and must survive
+            // the pricing copy-and-replace cycle.
+            flowCopy.setAcquisitionFeeUsd(flow.getAcquisitionFeeUsd());
             flows.add(flowCopy);
         }
         copy.setFlows(flows);

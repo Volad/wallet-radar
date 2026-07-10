@@ -222,12 +222,12 @@
                 <div class="eyebrow">Move basis</div>
                 <div class="content-title-row">
                   <h2>{{ data.displaySymbol }}</h2>
-                  <span class="pill" [attr.title]="formatQuantity(data.current.coveredQuantity, 12)">
-                    {{ formatQuantity(data.current.coveredQuantity, 3) }} covered
+                  <span class="pill">
+                    <wr-smart-amount [value]="data.current.coveredQuantity" mode="qty" /> covered
                   </span>
                   @if (data.current.uncoveredQuantity > 0) {
-                    <span class="pill warning" [attr.title]="formatQuantity(data.current.uncoveredQuantity, 12)">
-                      {{ formatQuantity(data.current.uncoveredQuantity, 3) }} uncovered
+                    <span class="pill warning">
+                      <wr-smart-amount [value]="data.current.uncoveredQuantity" mode="qty" /> uncovered
                     </span>
                   }
                 </div>
@@ -238,18 +238,22 @@
             <div class="stats">
               <div class="sc">
                 <div class="sc-l">Net AVCO</div>
-                <div class="sc-v avco">{{ formatUsd(data.current.netAvcoUsd, 0) }}</div>
+                <div class="sc-v avco">
+                  <wr-smart-amount [value]="data.current.netAvcoUsd" />
+                </div>
                 <div class="sc-s">avg cost / {{ data.displaySymbol }}</div>
               </div>
               <div class="sc">
                 <div class="sc-l">Market AVCO</div>
-                <div class="sc-v avco-secondary">{{ formatUsd(data.current.avcoUsd, 0) }}</div>
+                <div class="sc-v avco-secondary">
+                  <wr-smart-amount [value]="data.current.avcoUsd" />
+                </div>
                 <div class="sc-s">market basis / {{ data.displaySymbol }}</div>
               </div>
               <div class="sc">
                 <div class="sc-l">qty held</div>
-                <div class="sc-v" [attr.title]="formatQuantity(data.current.quantity, 12)">
-                  {{ formatQuantity(data.current.quantity, 3) }} {{ data.displaySymbol }}
+                <div class="sc-v">
+                  <wr-smart-amount [value]="data.current.quantity" mode="qty" [suffix]="data.displaySymbol" />
                 </div>
                 <div class="sc-s">net position</div>
               </div>
@@ -259,13 +263,15 @@
                   class="sc-v"
                   [class.pos]="data.current.realisedPnlUsd >= 0"
                   [class.neg]="data.current.realisedPnlUsd < 0">
-                  {{ formatSignedUsd(data.current.realisedPnlUsd, 0) }}
+                  <wr-smart-amount [value]="data.current.realisedPnlUsd" mode="usd-signed" />
                 </div>
                 <div class="sc-s">all SELL events</div>
               </div>
               <div class="sc">
                 <div class="sc-l">gas paid</div>
-                <div class="sc-v">{{ formatUsd(data.current.gasPaidUsd, 0) }}</div>
+                <div class="sc-v">
+                  <wr-smart-amount [value]="data.current.gasPaidUsd" />
+                </div>
                 <div class="sc-s">USD equiv</div>
               </div>
             </div>
@@ -444,8 +450,8 @@
                           {{ formatSignedQuantity(marker.quantityDelta, 6) }}
                         </span>
                       </td>
-                      <td class="r mono-cell">{{ formatUsd(marker.amountUsd, 2) }}</td>
-                      <td class="r mono-cell">{{ formatUsd(marker.priceUsd, 2) }}</td>
+                      <td class="r mono-cell"><wr-smart-amount [value]="marker.amountUsd" /></td>
+                      <td class="r mono-cell"><wr-smart-amount [value]="marker.priceUsd" /></td>
                       <td>
                         <span class="table-endpoint" [title]="marker.pathFromTitle ?? marker.pathFrom">
                           <span class="endpoint-dot" [class.colored]="marker.pathFromColor !== null" [style.--endpointColor]="marker.pathFromColor ?? 'transparent'"></span>
@@ -463,7 +469,7 @@
                           <span
                             [class.pos]="(marker.realisedPnlDeltaUsd ?? 0) > 0"
                             [class.neg]="(marker.realisedPnlDeltaUsd ?? 0) < 0">
-                            {{ formatSignedUsd(marker.realisedPnlDeltaUsd, 2) }}
+                            <wr-smart-amount [value]="marker.realisedPnlDeltaUsd" mode="usd-signed" />
                           </span>
                         } @else {
                           <span class="muted-c">—</span>
@@ -524,8 +530,8 @@
                                           {{ formatSignedQuantity(row.quantityDelta, 6) }}
                                         </span>
                                       </td>
-                                      <td class="r mono-cell">{{ formatUsd(row.amountUsd, 2) }}</td>
-                                      <td class="r mono-cell">{{ formatUsd(row.priceUsd, 2) }}</td>
+                                      <td class="r mono-cell"><wr-smart-amount [value]="row.amountUsd" /></td>
+                                      <td class="r mono-cell"><wr-smart-amount [value]="row.priceUsd" /></td>
                                       <td class="mono-cell tx-expand-cell">
                                         <wr-copy-hash [hash]="row.txHash" />
                                       </td>
@@ -547,11 +553,11 @@
                                           <div class="log-expand-meta">{{ row.avcoKindLabel }}</div>
                                         }
                                       </td>
-                                      <td class="r mono-cell">{{ formatUsd(row.netAvcoBeforeUsd, 2) }}</td>
-                                      <td class="r mono-cell">{{ formatUsd(row.netAvcoAfterUsd, 2) }}</td>
-                                      <td class="r mono-cell avco-tax-cell">{{ formatUsd(row.avcoBeforeUsd, 2) }}</td>
-                                      <td class="r mono-cell avco-tax-cell">{{ formatUsd(row.avcoAfterUsd, 2) }}</td>
-                                      <td class="r mono-cell">{{ formatUsd(row.gasDeltaUsd, 2) }}</td>
+                                      <td class="r mono-cell"><wr-smart-amount [value]="row.netAvcoBeforeUsd" /></td>
+                                      <td class="r mono-cell"><wr-smart-amount [value]="row.netAvcoAfterUsd" /></td>
+                                      <td class="r mono-cell avco-tax-cell"><wr-smart-amount [value]="row.avcoBeforeUsd" /></td>
+                                      <td class="r mono-cell avco-tax-cell"><wr-smart-amount [value]="row.avcoAfterUsd" /></td>
+                                      <td class="r mono-cell"><wr-smart-amount [value]="row.gasDeltaUsd" /></td>
                                       <td class="flows-cell">
                                         @if (row.flows.length > 0) {
                                           <div class="log-expand-flows">
@@ -626,11 +632,11 @@
           </div>
           <div class="tr">
             <span class="k">usd amount</span>
-            <span class="v">{{ formatUsd(marker.amountUsd, 2) }}</span>
+            <span class="v"><wr-smart-amount [value]="marker.amountUsd" /></span>
           </div>
           <div class="tr">
             <span class="k">price</span>
-            <span class="v">{{ formatUsd(marker.priceUsd, 2) }}</span>
+            <span class="v"><wr-smart-amount [value]="marker.priceUsd" /></span>
           </div>
           <div class="tr tx-row">
             <span class="k">tx hash</span>
@@ -676,7 +682,7 @@
           </div>
           <div class="tr">
             <span class="k">gas</span>
-            <span class="v">{{ formatUsd(marker.gasDeltaUsd, 2) }}</span>
+            <span class="v"><wr-smart-amount [value]="marker.gasDeltaUsd" /></span>
           </div>
         </div>
 
@@ -684,19 +690,19 @@
           <div class="ti-ft">AVCO / Basis</div>
           <div class="tr">
             <span class="k">Net AVCO before</span>
-            <span class="v">{{ formatUsd(marker.netAvcoBeforeUsd, 2) }}</span>
+            <span class="v"><wr-smart-amount [value]="marker.netAvcoBeforeUsd" /></span>
           </div>
           <div class="tr">
             <span class="k">Net AVCO after</span>
-            <span class="v">{{ formatUsd(marker.netAvcoAfterUsd, 2) }}</span>
+            <span class="v"><wr-smart-amount [value]="marker.netAvcoAfterUsd" /></span>
           </div>
           <div class="tr">
             <span class="k">Market AVCO before</span>
-            <span class="v avco-tax-value">{{ formatUsd(marker.avcoBeforeUsd, 2) }}</span>
+            <span class="v avco-tax-value"><wr-smart-amount [value]="marker.avcoBeforeUsd" /></span>
           </div>
           <div class="tr">
             <span class="k">Market AVCO after</span>
-            <span class="v avco-tax-value">{{ formatUsd(marker.avcoAfterUsd, 2) }}</span>
+            <span class="v avco-tax-value"><wr-smart-amount [value]="marker.avcoAfterUsd" /></span>
           </div>
           @if (marker.avcoKindLabel) {
             <div class="tr">

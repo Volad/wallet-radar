@@ -3,6 +3,7 @@ package com.walletradar.application.portfolio.application;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.walletradar.application.costbasis.support.BybitUmbrellaSupport;
+import com.walletradar.application.costbasis.support.DzengiUmbrellaSupport;
 import com.walletradar.application.costbasis.support.AccountingAssetFamilySupport;
 import com.walletradar.application.costbasis.support.AccountingAssetIdentitySupport;
 import com.walletradar.application.costbasis.support.OutOfScopeFamilySupport;
@@ -17,6 +18,7 @@ import com.walletradar.application.costbasis.application.port.CexLiveBalancePort
 import com.walletradar.application.pricing.domain.CanonicalAssetCatalog;
 import com.walletradar.application.pricing.persistence.CurrentPriceQuoteDocument;
 import com.walletradar.application.pricing.persistence.HistoricalPriceDocument;
+import com.walletradar.application.pricing.resolver.external.dzengi.DzengiKlineClient;
 import com.walletradar.application.portfolio.application.port.SessionDashboardReadPort;
 import com.walletradar.application.session.application.AccountingUniverseService;
 import lombok.RequiredArgsConstructor;
@@ -72,6 +74,7 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
     private final MongoOperations mongoOperations;
     private final AccountingUniverseService accountingUniverseService;
     private final CexLiveBalancePort cexLiveBalancePort;
+    private final DzengiKlineClient dzengiKlineClient;
     private final PortfolioConservationGate portfolioConservationGate;
     private final Cache<String, SessionDashboardView> sessionDashboardCache = Caffeine.newBuilder()
             .maximumSize(64)
@@ -104,9 +107,14 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
                 .toList();
 
         LinkedHashSet<String> enabledBybitVenueRefs = new LinkedHashSet<>(BybitUmbrellaSupport.enabledBybitAccountRefs(session));
+        LinkedHashSet<String> enabledDzengiVenueRefs = new LinkedHashSet<>(DzengiUmbrellaSupport.enabledDzengiAccountRefs(session));
 
         Map<BucketKey, AssetLedgerPoint> latestPointByBucket = latestLedgerPointByBucket(scopedLedgerPoints);
-        Map<FamilyRowKey, BigDecimal> realisedPnlByFamily = realisedPnlByFamily(scopedLedgerPoints, enabledBybitVenueRefs);
+        Map<FamilyRowKey, BigDecimal> realisedPnlByFamily = realisedPnlByFamily(
+                scopedLedgerPoints,
+                enabledBybitVenueRefs,
+                enabledDzengiVenueRefs
+        );
         BigDecimal totalRealisedPnlUsd = scopedLedgerPoints.stream()
                 .map(AssetLedgerPoint::getRealisedPnlDeltaUsd)
                 .filter(Objects::nonNull)
@@ -237,19 +245,71 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
             }
         }
 
+        if (!enabledDzengiVenueRefs.isEmpty()) {
+            for (Map.Entry<BucketKey, AssetLedgerPoint> ledgerEntry : latestPointByBucket.entrySet()) {
+                BucketKey bucketKey = ledgerEntry.getKey();
+                if (!DzengiUmbrellaSupport.dzengiLedgerMatchesEnabledVenue(bucketKey.walletAddress(), enabledDzengiVenueRefs)) {
+                    continue;
+                }
+                AssetLedgerPoint latestPoint = ledgerEntry.getValue();
+                BigDecimal currentQuantity = physicalQuantityAfter(latestPoint);
+                if (currentQuantity.signum() <= 0) {
+                    continue;
+                }
+                if (AccountingAssetFamilySupport.isLpReceiptSymbol(latestPoint.getAssetSymbol())) {
+                    continue;
+                }
+                String familyIdentity = resolvedFamilyIdentity(
+                        latestPoint,
+                        bucketKey.networkId(),
+                        latestPoint.getAssetSymbol(),
+                        latestPoint.getAssetContract()
+                );
+                String familyDisplaySymbol = latestPoint == null || blank(latestPoint.getFamilyDisplaySymbol())
+                        ? AssetLedgerSupport.familyDisplaySymbol(familyIdentity, latestPoint.getAssetSymbol())
+                        : latestPoint.getFamilyDisplaySymbol();
+                String rowSymbol = blank(familyDisplaySymbol)
+                        ? normalizeSymbol(latestPoint.getAssetSymbol())
+                        : familyDisplaySymbol;
+                String aggregatedWallet = DzengiUmbrellaSupport.ledgerWalletKeyForAggregation(bucketKey.walletAddress());
+                FamilyRowKey rowKey = new FamilyRowKey(
+                        aggregatedWallet,
+                        bucketKey.networkId(),
+                        familyIdentity
+                );
+                TokenPositionAccumulator accumulator = rows.computeIfAbsent(
+                        rowKey,
+                        ignored -> new TokenPositionAccumulator(
+                                familyIdentity,
+                                rowSymbol,
+                                displayName(rowSymbol),
+                                bucketKey.networkId(),
+                                aggregatedWallet
+                        )
+                );
+                accumulator.addBalance(currentQuantity, latestPoint, latestPoint.getAssetSymbol());
+            }
+        }
+
         // Cycle/5 N15 + Cycle/18: reconcile each Bybit umbrella accumulator's quantity against the
         // authoritative live {@code /v5/...} balance for the integration. Phantom positions
         // (ledger > live) are clamped down; ledger shortfalls (ledger < live) are inflated up so
         // the dashboard always displays the real Bybit holding. AVCO metrics are scaled
         // proportionally on clamp-down and left unchanged on inflate (the gap is uncovered).
         clampBybitUmbrellaToLive(rows, session, enabledBybitVenueRefs);
-        addMissingLiveBybitRows(rows, session, enabledBybitVenueRefs);
+        addMissingLiveCexRows(rows, session);
 
+        Set<String> dzengiPriceSymbols = rows.entrySet().stream()
+                .filter(entry -> entry.getKey().walletAddress() != null
+                        && entry.getKey().walletAddress().startsWith("dzengi:"))
+                .flatMap(entry -> entry.getValue().priceLookupCandidates().stream())
+                .collect(Collectors.toCollection(LinkedHashSet::new));
         Map<String, DashboardPriceSnapshot> latestPricesBySymbol = loadLatestPrices(
                 rows.values().stream()
                 .flatMap(accumulator -> accumulator.priceLookupCandidates().stream())
                 .collect(Collectors.toCollection(LinkedHashSet::new)),
-                responseTime
+                responseTime,
+                dzengiPriceSymbols
         );
 
         List<TokenPositionView> tokenPositions = rows.entrySet().stream()
@@ -319,6 +379,20 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
                 for (String bybitWalletRef : BybitUmbrellaSupport.bybitDashboardWalletRefs(accountRef)) {
                     wallets.add(new WalletView(normalizeAddress(bybitWalletRef), label, null, bybitNetworksForFilter));
                 }
+            }
+            for (UserSession.SessionIntegration integration : session.getIntegrations()) {
+                if (integration == null || integration.getStatus() == UserSession.IntegrationStatus.DISABLED) {
+                    continue;
+                }
+                String accountRef = integration.getAccountRef();
+                if (accountRef == null || accountRef.isBlank()) {
+                    continue;
+                }
+                if (!accountRef.toUpperCase(Locale.ROOT).startsWith("DZENGI:")) {
+                    continue;
+                }
+                String label = blank(integration.getDisplayName()) ? "Dzengi" : integration.getDisplayName();
+                wallets.add(new WalletView(normalizeAddress(accountRef), label, null, List.of("DZENGI")));
             }
         }
 
@@ -393,7 +467,7 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
                     || integration.getStatus() == UserSession.IntegrationStatus.DISABLED
                     || integration.getAccountRef() == null
                     || integration.getIntegrationId() == null
-                    || !integration.getAccountRef().toUpperCase(Locale.ROOT).startsWith("BYBIT:")) {
+                    || !isSupportedCexAccountRef(integration.getAccountRef())) {
                 continue;
             }
             Optional<CexLiveBalancePort.SnapshotView> snapshotView =
@@ -417,7 +491,7 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
             Map.Entry<FamilyRowKey, TokenPositionAccumulator> entry = iterator.next();
             FamilyRowKey key = entry.getKey();
             TokenPositionAccumulator accumulator = entry.getValue();
-            if (key.walletAddress() == null || !key.walletAddress().startsWith("bybit:")) {
+            if (key.walletAddress() == null || !isCexUmbrellaWallet(key.walletAddress())) {
                 continue;
             }
             Map<String, BigDecimal> live = liveByAccountRef.get(key.walletAddress());
@@ -458,17 +532,14 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
     }
 
     /**
-     * Cycle/18: creates dashboard rows for Bybit assets that appear in the live balance but have
-     * no ledger entries at all (e.g. newly purchased assets before a pipeline run, or assets
-     * whose entire ledger history was excluded by normalization). These rows have zero AVCO
-     * coverage and are flagged as {@link #ISSUE_MISSING_REPLAY_POINT}.
+     * Cycle/18: creates dashboard rows for CEX assets that appear in the live balance but have
+     * no ledger entries at all.
      */
-    private void addMissingLiveBybitRows(
+    private void addMissingLiveCexRows(
             Map<FamilyRowKey, TokenPositionAccumulator> rows,
-            UserSession session,
-            Set<String> enabledBybitVenueRefs
+            UserSession session
     ) {
-        if (enabledBybitVenueRefs.isEmpty() || session.getIntegrations() == null) {
+        if (session.getIntegrations() == null) {
             return;
         }
         for (UserSession.SessionIntegration integration : session.getIntegrations()) {
@@ -476,7 +547,7 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
                     || integration.getStatus() == UserSession.IntegrationStatus.DISABLED
                     || integration.getAccountRef() == null
                     || integration.getIntegrationId() == null
-                    || !integration.getAccountRef().toUpperCase(Locale.ROOT).startsWith("BYBIT:")) {
+                    || !isSupportedCexAccountRef(integration.getAccountRef())) {
                 continue;
             }
             String umbrellaWallet = normalizeAddress(integration.getAccountRef());
@@ -496,7 +567,10 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
                 if (normalizedSymbol.isBlank()) {
                     continue;
                 }
-                String familyIdentity = "SYMBOL:" + normalizedSymbol;
+                String familyIdentity = AccountingAssetFamilySupport.continuityIdentity(normalizedSymbol, null);
+                if (familyIdentity == null || familyIdentity.isBlank()) {
+                    familyIdentity = "SYMBOL:" + normalizedSymbol;
+                }
                 FamilyRowKey rowKey = new FamilyRowKey(umbrellaWallet, null, familyIdentity);
                 if (rows.containsKey(rowKey)) {
                     continue;
@@ -519,6 +593,19 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
                 rows.put(rowKey, accumulator);
             }
         }
+    }
+
+    private static boolean isSupportedCexAccountRef(String accountRef) {
+        if (accountRef == null || accountRef.isBlank()) {
+            return false;
+        }
+        String upper = accountRef.toUpperCase(Locale.ROOT);
+        return upper.startsWith("BYBIT:") || upper.startsWith("DZENGI:");
+    }
+
+    private static boolean isCexUmbrellaWallet(String walletAddress) {
+        return walletAddress != null
+                && (walletAddress.startsWith("bybit:") || walletAddress.startsWith("dzengi:"));
     }
 
     private List<OnChainBalance> loadOnChainBalances(String sessionId, Collection<String> walletAddresses) {
@@ -554,7 +641,11 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
         return mongoOperations.find(query, AssetLedgerPoint.class);
     }
 
-    private Map<String, DashboardPriceSnapshot> loadLatestPrices(Collection<String> symbols, Instant responseTime) {
+    private Map<String, DashboardPriceSnapshot> loadLatestPrices(
+            Collection<String> symbols,
+            Instant responseTime,
+            Set<String> dzengiVenueSymbols
+    ) {
         if (symbols.isEmpty()) {
             return Map.of();
         }
@@ -597,7 +688,38 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
             String symbol = normalizeSymbol(document.getSymbol());
             latestPrices.putIfAbsent(symbol, DashboardPriceSnapshot.historicalFallback(document, responseTime));
         }
+        if (!dzengiVenueSymbols.isEmpty()) {
+            enrichMissingDzengiVenuePrices(dzengiVenueSymbols, responseTime, latestPrices);
+        }
         return latestPrices;
+    }
+
+    private void enrichMissingDzengiVenuePrices(
+            Collection<String> symbols,
+            Instant responseTime,
+            Map<String, DashboardPriceSnapshot> latestPrices
+    ) {
+        for (String symbol : symbols) {
+            String normalized = normalizeSymbol(symbol);
+            if (normalized.isBlank() || latestPrices.containsKey(normalized)) {
+                continue;
+            }
+            DashboardPriceSnapshot existing = latestPrices.get(normalized);
+            if (existing != null && existing.priceUsd() != null) {
+                continue;
+            }
+            dzengiKlineClient.fetchUsdPerUnit(normalized, responseTime).ifPresent(kline -> {
+                latestPrices.put(normalized, new DashboardPriceSnapshot(
+                        kline.usdPrice(),
+                        PriceSource.DZENGI.name(),
+                        kline.openTime(),
+                        DashboardPriceSnapshot.stalenessSeconds(kline.openTime(), responseTime),
+                        true,
+                        null,
+                        null
+                ));
+            });
+        }
     }
 
     private Map<BucketKey, OnChainBalance> latestBalanceByBucket(List<OnChainBalance> balances) {
@@ -633,18 +755,32 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
 
     private Map<FamilyRowKey, BigDecimal> realisedPnlByFamily(
             List<AssetLedgerPoint> points,
-            LinkedHashSet<String> enabledBybitVenueRefs
+            LinkedHashSet<String> enabledBybitVenueRefs,
+            LinkedHashSet<String> enabledDzengiVenueRefs
     ) {
         Map<FamilyRowKey, BigDecimal> totals = new LinkedHashMap<>();
         for (AssetLedgerPoint point : points) {
             if (blank(point.getAccountingFamilyIdentity())) {
                 continue;
             }
+            String aggregatedWallet;
             if (point.getNetworkId() == null) {
                 String wallet = normalizeAddress(point.getWalletAddress());
-                if (!wallet.startsWith("bybit:")) {
+                if (wallet.startsWith("bybit:")) {
+                    aggregatedWallet = BybitUmbrellaSupport.ledgerWalletKeyForAggregation(
+                            point.getWalletAddress(),
+                            enabledBybitVenueRefs
+                    );
+                } else if (wallet.startsWith("dzengi:")) {
+                    if (!DzengiUmbrellaSupport.dzengiLedgerMatchesEnabledVenue(wallet, enabledDzengiVenueRefs)) {
+                        continue;
+                    }
+                    aggregatedWallet = DzengiUmbrellaSupport.ledgerWalletKeyForAggregation(point.getWalletAddress());
+                } else {
                     continue;
                 }
+            } else {
+                aggregatedWallet = normalizeAddress(point.getWalletAddress());
             }
             String familyIdentity = resolvedFamilyIdentity(
                     point,
@@ -653,7 +789,7 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
                     point.getAssetContract()
             );
             FamilyRowKey key = new FamilyRowKey(
-                    BybitUmbrellaSupport.ledgerWalletKeyForAggregation(point.getWalletAddress(), enabledBybitVenueRefs),
+                    aggregatedWallet,
                     point.getNetworkId(),
                     familyIdentity
             );
@@ -1012,6 +1148,9 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
         String wallet = normalizeAddress(walletAddress);
         if (wallet.startsWith("bybit:")) {
             return "BYBIT";
+        }
+        if (wallet.startsWith("dzengi:")) {
+            return "DZENGI";
         }
         return null;
     }

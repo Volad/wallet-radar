@@ -7,6 +7,7 @@ import com.walletradar.domain.session.UserSession;
 import com.walletradar.domain.session.UserSessionRepository;
 import com.walletradar.domain.sync.BackfillSegmentRepository;
 import com.walletradar.application.cex.acquisition.venue.bybit.BybitApiClient;
+import com.walletradar.application.cex.acquisition.venue.dzengi.DzengiApiClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -32,6 +33,8 @@ class SessionIntegrationCommandServiceTest {
     @Mock
     private BybitApiClient bybitApiClient;
     @Mock
+    private DzengiApiClient dzengiApiClient;
+    @Mock
     private IntegrationSyncStatusService integrationSyncStatusService;
     @Mock
     private AccountUniverseSyncPlanScheduler accountUniverseSyncPlanScheduler;
@@ -45,6 +48,7 @@ class SessionIntegrationCommandServiceTest {
                 backfillSegmentRepository,
                 sessionSecretCryptoService,
                 bybitApiClient,
+                dzengiApiClient,
                 integrationSyncStatusService,
                 accountUniverseSyncPlanScheduler,
                 new ObjectMapper()
@@ -95,6 +99,52 @@ class SessionIntegrationCommandServiceTest {
             assertThat(integration.getSyncState()).isNotNull();
         });
         verify(accountUniverseSyncPlanScheduler).schedule("session-1", saved.getUpdatedAt());
+    }
+
+    @Test
+    void savesValidatedDzengiIntegrationIntoSession() {
+        UserSession session = new UserSession();
+        session.setId("session-1");
+        when(userSessionRepository.findById("session-1")).thenReturn(Optional.of(session));
+        when(dzengiApiClient.validateCredentials("api-key-1234", "super-secret")).thenReturn(
+                new DzengiApiClient.CredentialInfo("998877", true, true, true, true)
+        );
+
+        UserSession.EncryptedSecret encryptedSecret = new UserSession.EncryptedSecret();
+        encryptedSecret.setMaskedKey("api-...1234");
+        when(sessionSecretCryptoService.encrypt("{\"apiKey\":\"api-key-1234\",\"apiSecret\":\"super-secret\"}", "api-...1234"))
+                .thenReturn(encryptedSecret);
+
+        SessionIntegrationCommandService.IntegrationCommandResult result = sessionIntegrationCommandService
+                .upsertDzengi("session-1", "Dzengi main", "api-key-1234", "super-secret")
+                .orElseThrow();
+
+        assertThat(result.integrationId()).isEqualTo("DZENGI-998877");
+        assertThat(result.accountRef()).isEqualTo("DZENGI:998877");
+        assertThat(result.provider()).isEqualTo("DZENGI");
+
+        ArgumentCaptor<UserSession> sessionCaptor = ArgumentCaptor.forClass(UserSession.class);
+        verify(userSessionRepository).save(sessionCaptor.capture());
+        assertThat(sessionCaptor.getValue().getIntegrations()).singleElement().satisfies(integration -> {
+            assertThat(integration.getProvider()).isEqualTo(UserSession.IntegrationProvider.DZENGI);
+            assertThat(integration.getAccountRef()).isEqualTo("DZENGI:998877");
+            assertThat(integration.getCapabilities()).containsExactly("DEPOSIT", "TRADE", "WITHDRAW");
+        });
+    }
+
+    @Test
+    void testIntegrationValidatesDzengiCredentials() {
+        when(dzengiApiClient.validateCredentials("api-key-1234", "super-secret")).thenReturn(
+                new DzengiApiClient.CredentialInfo("998877", true, true, false, false)
+        );
+
+        SessionIntegrationCommandService.IntegrationTestResult result = sessionIntegrationCommandService
+                .testIntegration("DZENGI", "api-key-1234", "super-secret")
+                .orElseThrow();
+
+        assertThat(result.provider()).isEqualTo("DZENGI");
+        assertThat(result.userId()).isEqualTo("998877");
+        assertThat(result.readOnly()).isTrue();
     }
 
     @Test

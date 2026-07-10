@@ -214,14 +214,16 @@ class ReplayPendingTransferKeyFactoryTest {
     }
 
     @Test
-    @DisplayName("Uncorrelated same-UID Bybit INTERNAL_TRANSFER uses bybit-earn-carry key")
+    @DisplayName("Uncorrelated same-UID Bybit INTERNAL_TRANSFER with continuity candidate uses bybit-earn-carry key")
     void bybitUncorrelatedSameUidUsesEarnCarryKey() {
         NormalizedTransaction outbound = bybitInternalTransfer(
                 "BYBIT:33625378:FUND", "BYBIT:33625378:EARN", null, "LDO", "-68.665"
         );
+        outbound.setContinuityCandidate(true);
         NormalizedTransaction inbound = bybitInternalTransfer(
                 "BYBIT:33625378:EARN", "BYBIT:33625378:FUND", null, "LDO", "68.665"
         );
+        inbound.setContinuityCandidate(true);
 
         var outKey = factory.transferKey(outbound, outbound.getFlows().get(0));
         var inKey = factory.transferKey(inbound, inbound.getFlows().get(0));
@@ -233,16 +235,13 @@ class ReplayPendingTransferKeyFactoryTest {
     }
 
     @Test
-    @DisplayName("Same-UID Bybit INTERNAL_TRANSFER with null counterparty still uses earn-carry key")
+    @DisplayName("Same-UID Bybit INTERNAL_TRANSFER with null counterparty does not use earn-carry key (RC-B)")
     void bybitNullCounterpartySameUidFallback() {
         NormalizedTransaction tx = bybitInternalTransfer(
                 "BYBIT:33625378:FUND", null, null, "DOGE", "150"
         );
 
-        var key = factory.transferKey(tx, tx.getFlows().get(0));
-
-        assertThat(key).isNotNull();
-        assertThat(key.value()).startsWith("bybit-earn-carry:33625378:");
+        assertThat(factory.transferKey(tx, tx.getFlows().get(0))).isNull();
     }
 
     @Test

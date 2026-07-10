@@ -11,6 +11,7 @@ import com.walletradar.domain.session.UserSessionRepository;
 import com.walletradar.domain.sync.BackfillSegmentRepository;
 import com.walletradar.application.session.application.TrackedWalletProjectionService;
 import com.walletradar.application.cex.acquisition.venue.bybit.BybitApiClient;
+import com.walletradar.application.cex.acquisition.venue.dzengi.DzengiApiClient;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -36,6 +37,7 @@ public class SessionSettingsCommandService {
     private final AccountUniverseSyncPlanScheduler accountUniverseSyncPlanScheduler;
     private final SessionSecretCryptoService sessionSecretCryptoService;
     private final BybitApiClient bybitApiClient;
+    private final DzengiApiClient dzengiApiClient;
     private final BackfillSegmentRepository backfillSegmentRepository;
     private final IntegrationSyncStatusService integrationSyncStatusService;
     private final ObjectMapper objectMapper;
@@ -142,9 +144,9 @@ public class SessionSettingsCommandService {
     }
 
     /**
-     * Syncs Bybit integrations from the settings request. Only touches the primary (first)
-     * Bybit integration — sub-account integrations added via the dedicated
-     * {@code PUT /integrations/bybit} endpoint are preserved.
+     * Syncs supported CEX integrations from the settings request. Only touches the primary
+     * integration per provider — sub-account integrations added via dedicated PUT endpoints
+     * are preserved.
      */
     private void syncIntegrations(
             UserSession session,
@@ -156,47 +158,70 @@ public class SessionSettingsCommandService {
         }
         validateRequestedIntegrations(requestedIntegrations);
 
-        UserSession.SessionIntegration primaryBybit = session.getIntegrations().stream()
-                .filter(integration -> integration.getProvider() == UserSession.IntegrationProvider.BYBIT)
-                .findFirst()
-                .orElse(null);
-
-        PutSessionSettingsRequest.IntegrationEntry requestedBybit = requestedIntegrations.stream()
-                .filter(integration -> "BYBIT".equalsIgnoreCase(integration.provider()))
-                .findFirst()
-                .orElse(null);
-
-        if (requestedBybit == null) {
-            if (primaryBybit != null) {
-                session.getIntegrations().remove(primaryBybit);
-                backfillSegmentRepository.deleteByIntegrationId(primaryBybit.getIntegrationId());
-                integrationSyncStatusService.delete(primaryBybit.getIntegrationId());
+        Map<UserSession.IntegrationProvider, UserSession.SessionIntegration> primaryByProvider = new LinkedHashMap<>();
+        for (UserSession.SessionIntegration integration : session.getIntegrations()) {
+            if (integration != null && integration.getProvider() != null) {
+                primaryByProvider.putIfAbsent(integration.getProvider(), integration);
             }
-            return;
         }
 
-        if (primaryBybit == null) {
-            session.getIntegrations().add(createBybitIntegration(session, requestedBybit, now));
-            return;
+        Map<UserSession.IntegrationProvider, PutSessionSettingsRequest.IntegrationEntry> requestedByProvider =
+                new LinkedHashMap<>();
+        for (PutSessionSettingsRequest.IntegrationEntry entry : requestedIntegrations) {
+            UserSession.IntegrationProvider provider = parseProvider(entry.provider());
+            requestedByProvider.put(provider, entry);
         }
 
-        if (!hasCredentials(requestedBybit)) {
-            primaryBybit.setDisplayName(normalizeDisplayName(requestedBybit.displayName(), primaryBybit.getDisplayName()));
-            if (requestedBybit.color() != null && !requestedBybit.color().isBlank()) {
-                primaryBybit.setColor(requestedBybit.color().trim().toLowerCase(Locale.ROOT));
+        for (UserSession.IntegrationProvider provider : List.of(
+                UserSession.IntegrationProvider.BYBIT,
+                UserSession.IntegrationProvider.DZENGI
+        )) {
+            PutSessionSettingsRequest.IntegrationEntry requested = requestedByProvider.get(provider);
+            UserSession.SessionIntegration primary = primaryByProvider.get(provider);
+            if (requested == null) {
+                if (primary != null) {
+                    session.getIntegrations().remove(primary);
+                    backfillSegmentRepository.deleteByIntegrationId(primary.getIntegrationId());
+                    integrationSyncStatusService.delete(primary.getIntegrationId());
+                }
+                continue;
             }
-            primaryBybit.setUpdatedAt(now);
-            primaryBybit.setLastError(null);
-            return;
+            if (primary == null) {
+                if (hasCredentials(requested)) {
+                    session.getIntegrations().add(createIntegration(session, requested, now));
+                }
+                continue;
+            }
+            if (!hasCredentials(requested)) {
+                primary.setDisplayName(normalizeDisplayName(requested.displayName(), providerDisplayName(provider)));
+                if (requested.color() != null && !requested.color().isBlank()) {
+                    primary.setColor(requested.color().trim().toLowerCase(Locale.ROOT));
+                }
+                primary.setUpdatedAt(now);
+                primary.setLastError(null);
+                continue;
+            }
+            String previousIntegrationId = primary.getIntegrationId();
+            UserSession.SessionIntegration refreshed = createIntegration(session, requested, now);
+            copyIntegration(primary, refreshed);
+            if (previousIntegrationId != null && !previousIntegrationId.equals(primary.getIntegrationId())) {
+                backfillSegmentRepository.deleteByIntegrationId(previousIntegrationId);
+                integrationSyncStatusService.delete(previousIntegrationId);
+            }
         }
+    }
 
-        String previousIntegrationId = primaryBybit.getIntegrationId();
-        UserSession.SessionIntegration refreshed = createBybitIntegration(session, requestedBybit, now);
-        copyIntegration(primaryBybit, refreshed);
-        if (previousIntegrationId != null && !previousIntegrationId.equals(primaryBybit.getIntegrationId())) {
-            backfillSegmentRepository.deleteByIntegrationId(previousIntegrationId);
-            integrationSyncStatusService.delete(previousIntegrationId);
-        }
+    private UserSession.SessionIntegration createIntegration(
+            UserSession session,
+            PutSessionSettingsRequest.IntegrationEntry requestedIntegration,
+            Instant now
+    ) {
+        UserSession.IntegrationProvider provider = parseProvider(requestedIntegration.provider());
+        return switch (provider) {
+            case BYBIT -> createBybitIntegration(session, requestedIntegration, now);
+            case DZENGI -> createDzengiIntegration(session, requestedIntegration, now);
+            default -> throw new IllegalArgumentException("Unsupported integration provider: " + provider);
+        };
     }
 
     private UserSession.SessionIntegration createBybitIntegration(
@@ -244,6 +269,51 @@ public class SessionSettingsCommandService {
         return integration;
     }
 
+    private UserSession.SessionIntegration createDzengiIntegration(
+            UserSession session,
+            PutSessionSettingsRequest.IntegrationEntry requestedIntegration,
+            Instant now
+    ) {
+        requireCredentials(requestedIntegration, "Dzengi");
+        DzengiApiClient.CredentialInfo credentialInfo;
+        try {
+            credentialInfo = dzengiApiClient.validateCredentials(
+                    requestedIntegration.apiKey().trim(),
+                    requestedIntegration.apiSecret().trim()
+            );
+        } catch (IllegalStateException exception) {
+            throw new IllegalArgumentException("Dzengi credential validation failed: " + exception.getMessage(), exception);
+        }
+        if (credentialInfo.userId() == null || credentialInfo.userId().isBlank()) {
+            throw new IllegalStateException("Dzengi credential validation did not return userId");
+        }
+
+        String integrationId = "DZENGI-" + credentialInfo.userId().trim();
+        String accountRef = "DZENGI:" + credentialInfo.userId().trim();
+        String maskedKey = maskApiKey(requestedIntegration.apiKey());
+
+        UserSession.SessionIntegration integration = new UserSession.SessionIntegration();
+        integration.setIntegrationId(integrationId);
+        integration.setProvider(UserSession.IntegrationProvider.DZENGI);
+        integration.setStatus(UserSession.IntegrationStatus.CONNECTED);
+        integration.setDisplayName(normalizeDisplayName(requestedIntegration.displayName(), "Dzengi"));
+        integration.setAccountRef(accountRef);
+        integration.setColor(requestedIntegration.color());
+        integration.setReadOnly(credentialInfo.readOnly());
+        integration.setEncryptedCredentials(sessionSecretCryptoService.encrypt(
+                credentialsJson(requestedIntegration.apiKey(), requestedIntegration.apiSecret()),
+                maskedKey
+        ));
+        integration.setCapabilities(List.of());
+        integration.setSyncState(new UserSession.IntegrationSyncState());
+        integration.setCreatedAt(now);
+        integration.setUpdatedAt(now);
+        integration.setLastValidatedAt(now);
+        integration.setLastSyncAt(null);
+        integration.setLastError(null);
+        return integration;
+    }
+
     private void copyIntegration(UserSession.SessionIntegration target, UserSession.SessionIntegration source) {
         target.setIntegrationId(source.getIntegrationId());
         target.setProvider(source.getProvider());
@@ -266,18 +336,39 @@ public class SessionSettingsCommandService {
 
     private void validateRequestedIntegrations(List<PutSessionSettingsRequest.IntegrationEntry> requestedIntegrations) {
         for (PutSessionSettingsRequest.IntegrationEntry entry : requestedIntegrations) {
-            String provider = entry.provider().trim().toUpperCase(Locale.ROOT);
-            if (!"BYBIT".equals(provider)) {
-                throw new IllegalArgumentException("Unsupported integration provider: " + provider);
-            }
+            parseProvider(entry.provider());
+        }
+    }
+
+    private static UserSession.IntegrationProvider parseProvider(String provider) {
+        if (provider == null || provider.isBlank()) {
+            throw new IllegalArgumentException("Integration provider is required");
+        }
+        String normalized = provider.trim().toUpperCase(Locale.ROOT);
+        return switch (normalized) {
+            case "BYBIT" -> UserSession.IntegrationProvider.BYBIT;
+            case "DZENGI" -> UserSession.IntegrationProvider.DZENGI;
+            default -> throw new IllegalArgumentException("Unsupported integration provider: " + provider);
+        };
+    }
+
+    private static String providerDisplayName(UserSession.IntegrationProvider provider) {
+        return switch (provider) {
+            case BYBIT -> "Bybit";
+            case DZENGI -> "Dzengi";
+            default -> provider.name();
+        };
+    }
+
+    private void requireCredentials(PutSessionSettingsRequest.IntegrationEntry requestedIntegration, String label) {
+        if (requestedIntegration.apiKey() == null || requestedIntegration.apiKey().isBlank()
+                || requestedIntegration.apiSecret() == null || requestedIntegration.apiSecret().isBlank()) {
+            throw new IllegalArgumentException(label + " credentials are required");
         }
     }
 
     private void requireCredentials(PutSessionSettingsRequest.IntegrationEntry requestedIntegration) {
-        if (requestedIntegration.apiKey() == null || requestedIntegration.apiKey().isBlank()
-                || requestedIntegration.apiSecret() == null || requestedIntegration.apiSecret().isBlank()) {
-            throw new IllegalArgumentException("Bybit credentials are required");
-        }
+        requireCredentials(requestedIntegration, "Bybit");
     }
 
     private boolean hasCredentials(PutSessionSettingsRequest.IntegrationEntry requestedIntegration) {
@@ -384,7 +475,6 @@ public class SessionSettingsCommandService {
             String apiSecret
     ) {
     }
-
     private Set<String> sourceKeys(
             List<UserSession.SessionWallet> wallets,
             List<UserSession.SessionIntegration> integrations,

@@ -29,10 +29,12 @@ import {
 import { WalletApiService } from '../../core/services/wallet-api.service';
 import { CopyHashComponent } from '../../core/components/copy-hash/copy-hash.component';
 import { FilterSidebarComponent } from '../../core/components/filter-sidebar/filter-sidebar.component';
+import { SmartAmountComponent } from '../../core/components/smart-amount/smart-amount.component';
 import {
   formatCompactDateTimeWithSeconds,
   formatDateTimeWithSeconds,
 } from '../../core/utils/date-time.util';
+import { smartFormatQty, smartFormatSignedUsd, smartFormatUsd } from '../../core/utils/amount.util';
 
 type PageState =
   | { readonly status: 'loading' }
@@ -679,6 +681,21 @@ const TYPE_META: Readonly<Record<string, TypeVisualMeta>> = {
       ctx.stroke();
     },
   },
+  FIAT_EXIT: {
+    label: 'Fiat withdrawal',
+    glyph: '💵',
+    color: '#f97316',
+    icon: (ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number) => {
+      const a = r * 0.52;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - a);
+      ctx.lineTo(cx, cy + a);
+      ctx.moveTo(cx - a * 0.5, cy - a * 0.4);
+      ctx.lineTo(cx, cy - a);
+      ctx.lineTo(cx + a * 0.5, cy - a * 0.4);
+      ctx.stroke();
+    },
+  },
   EXTERNAL_TRANSFER_IN: {
     label: 'External receive',
     glyph: '↓',
@@ -852,7 +869,7 @@ const EVENT_FAMILY_META: Readonly<Record<EventFamilyKey, EventFamilyVisualMeta>>
 @Component({
   selector: 'wr-asset-ledger-page',
   standalone: true,
-  imports: [CommonModule, CopyHashComponent, FilterSidebarComponent],
+  imports: [CommonModule, CopyHashComponent, FilterSidebarComponent, SmartAmountComponent],
   templateUrl: './asset-ledger-page.component.html',
   styleUrl: './asset-ledger-page.component.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -1305,33 +1322,16 @@ export class AssetLedgerPageComponent {
     return null;
   }
 
-  formatUsd(value: number | null, digits = 2): string {
-    if (value === null || Number.isNaN(value)) {
-      return '—';
-    }
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-      maximumFractionDigits: digits,
-    }).format(value);
+  formatUsd(value: number | null, _digits = 2): string {
+    return smartFormatUsd(value);
   }
 
-  formatSignedUsd(value: number | null, digits = 2): string {
-    if (value === null || Number.isNaN(value)) {
-      return '—';
-    }
-    const prefix = value > 0 ? '+' : '';
-    return `${prefix}${this.formatUsd(value, digits)}`;
+  formatSignedUsd(value: number | null, _digits = 2): string {
+    return smartFormatSignedUsd(value);
   }
 
-  formatQuantity(value: number | null, digits = 6): string {
-    if (value === null || Number.isNaN(value)) {
-      return '—';
-    }
-    return new Intl.NumberFormat('en-US', {
-      minimumFractionDigits: 0,
-      maximumFractionDigits: digits,
-    }).format(value);
+  formatQuantity(value: number | null, _digits = 6): string {
+    return smartFormatQty(value);
   }
 
   formatSignedQuantity(value: number | null, digits = 6): string {
@@ -2432,7 +2432,7 @@ export class AssetLedgerPageComponent {
   }
 
   private supportsTransferEndpointInference(typeKey: string): boolean {
-    return typeKey === 'INTERNAL_TRANSFER' || typeKey === 'EXTERNAL_TRANSFER_IN' || typeKey === 'EXTERNAL_TRANSFER_OUT';
+    return typeKey === 'INTERNAL_TRANSFER' || typeKey === 'EXTERNAL_TRANSFER_IN' || typeKey === 'EXTERNAL_TRANSFER_OUT' || typeKey === 'FIAT_EXIT';
   }
 
   private transferEndpointWalletRef(
@@ -2775,6 +2775,7 @@ export class AssetLedgerPageComponent {
       case 'WRAP':
       case 'INTERNAL_TRANSFER':
       case 'EXTERNAL_TRANSFER_OUT':
+      case 'FIAT_EXIT':
       case 'BRIDGE_OUT':
         return outbound ?? inbound ?? largest;
       case 'LENDING_WITHDRAW':

@@ -276,6 +276,7 @@ public class StatValidationService {
             flowCopy.setCounterpartyAddress(flow.getCounterpartyAddress());
             flowCopy.setCounterpartyType(flow.getCounterpartyType());
             flowCopy.setAccountRef(flow.getAccountRef());
+            flowCopy.setAcquisitionFeeUsd(flow.getAcquisitionFeeUsd());
             flows.add(flowCopy);
         }
         copy.setFlows(flows);

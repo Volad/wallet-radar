@@ -3,8 +3,10 @@ package com.walletradar.application.linking.job;
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.domain.session.UserSessionRepository;
 import com.walletradar.domain.transaction.bybit.BybitExtractedEvent;
+import com.walletradar.domain.transaction.dzengi.DzengiExtractedEvent;
 import com.walletradar.domain.transaction.externalledger.ExternalLedgerRaw;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.application.linking.query.LinkingPendingStatusQuery;
 import com.walletradar.application.session.application.AccountingUniverseService;
 import com.walletradar.application.session.application.SessionPipelineActivityService;
@@ -16,7 +18,9 @@ import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Session-scoped readiness gate for the dedicated linking phase.
@@ -29,11 +33,16 @@ public class LinkingDataGateService implements LinkingPendingStatusQuery {
     private static final String BRIDGE_MISSING_REASON = "BRIDGE_ON_CHAIN_LEG_NOT_FOUND";
     private static final String EXTERNAL_CUSTODY_REASON = "EXTERNAL_CUSTODY_UNTRACKED_VENUE";
 
+    private static final List<NormalizedTransactionSource> CEX_LINKING_SOURCES = List.of(
+            NormalizedTransactionSource.BYBIT,
+            NormalizedTransactionSource.DZENGI
+    );
+
     private static final Criteria ACTIVE_ACCOUNTING_CRITERIA = new Criteria().orOperator(
             Criteria.where("excludedFromAccounting").exists(false),
             Criteria.where("excludedFromAccounting").is(Boolean.FALSE)
     );
-    private static final Criteria IN_SCOPE_BYBIT_RAW_CRITERIA = new Criteria().andOperator(
+    private static final Criteria IN_SCOPE_CEX_RAW_CRITERIA = new Criteria().andOperator(
             Criteria.where("status").is("RAW"),
             Criteria.where("basisRelevant").is(Boolean.TRUE),
             new Criteria().orOperator(
@@ -53,11 +62,11 @@ public class LinkingDataGateService implements LinkingPendingStatusQuery {
 
     public LinkingGateSnapshot snapshot(String sessionId) {
         if (sessionId == null || sessionId.isBlank()) {
-            return new LinkingGateSnapshot(false, 0L, 0L, 0L, 0L, false);
+            return emptySnapshot();
         }
         return userSessionRepository.findById(sessionId.trim())
                 .map(this::snapshot)
-                .orElseGet(() -> new LinkingGateSnapshot(false, 0L, 0L, 0L, 0L, false));
+                .orElseGet(LinkingDataGateService::emptySnapshot);
     }
 
     public boolean ready(String sessionId) {
@@ -79,19 +88,20 @@ public class LinkingDataGateService implements LinkingPendingStatusQuery {
         long pendingOnChainClassification = countPendingOnChainClassification(scope.memberRefs());
         long pendingClarification = countPendingClarification(scope.memberRefs());
         long pendingReclassification = countPendingReclassification(scope.memberRefs());
-        long pendingBybitClassification = countPendingBybitClassification(session.getId());
-        boolean classificationStillRunning = hasActiveClassificationActivity(session.getId())
+        Map<String, Long> pendingCexByProvider = countPendingCexClassification(session);
+        boolean classificationStillRunning = hasActiveClassificationActivity(session)
                 || hasFreshClassificationRunningState(session);
+        long pendingCexTotal = pendingCexByProvider.values().stream().mapToLong(Long::longValue).sum();
         return new LinkingGateSnapshot(
                 pendingOnChainClassification == 0L
                         && pendingClarification == 0L
                         && pendingReclassification == 0L
-                        && pendingBybitClassification == 0L
+                        && pendingCexTotal == 0L
                         && !classificationStillRunning,
                 pendingOnChainClassification,
                 pendingClarification,
                 pendingReclassification,
-                pendingBybitClassification,
+                pendingCexByProvider,
                 classificationStillRunning
         );
     }
@@ -107,7 +117,7 @@ public class LinkingDataGateService implements LinkingPendingStatusQuery {
                 ACTIVE_ACCOUNTING_CRITERIA,
                 new Criteria().orOperator(
                         onChainLinkingCandidateCriteria(),
-                        bybitLinkingCandidateCriteria(),
+                        cexLinkingCandidateCriteria(),
                         legacySealedBridgeRepairCriteria(),
                         onChainInternalTransferRepairCriteria()
                 )
@@ -149,12 +159,11 @@ public class LinkingDataGateService implements LinkingPendingStatusQuery {
         );
     }
 
-    private Criteria bybitLinkingCandidateCriteria() {
+    private Criteria cexLinkingCandidateCriteria() {
         return new Criteria().andOperator(
-                Criteria.where("source").is("BYBIT"),
+                Criteria.where("source").in(CEX_LINKING_SOURCES.stream().map(Enum::name).toList()),
                 Criteria.where("status").in("CONFIRMED", "PENDING_PRICE"),
                 Criteria.where("txHash").exists(true).ne(""),
-                Criteria.where("networkId").exists(true).ne(null),
                 Criteria.where("type").in("EXTERNAL_TRANSFER_IN", "EXTERNAL_TRANSFER_OUT"),
                 new Criteria().orOperator(
                         Criteria.where("missingDataReasons").exists(false),
@@ -209,28 +218,61 @@ public class LinkingDataGateService implements LinkingPendingStatusQuery {
         return mongoOperations.count(query, "raw_transactions");
     }
 
-    private long countPendingBybitClassification(String sessionId) {
-        if (sessionId == null || sessionId.isBlank()) {
-            return 0L;
+    private Map<String, Long> countPendingCexClassification(UserSession session) {
+        Map<String, Long> pendingByProvider = new LinkedHashMap<>();
+        for (UserSession.SessionIntegration integration : enabledIntegrations(session)) {
+            long pending = countPendingExtractedRaw(session.getId(), integration.getProvider());
+            pendingByProvider.merge(integration.getProvider().name(), pending, Long::sum);
         }
-        Query extractedRaw = new Query(new Criteria().andOperator(
-                Criteria.where("sessionId").is(sessionId),
-                IN_SCOPE_BYBIT_RAW_CRITERIA
-        ));
-        long pending = mongoOperations.count(extractedRaw, BybitExtractedEvent.class);
-        if (pending > 0L) {
-            return pending;
-        }
-
-        Query legacyRaw = new Query(new Criteria().andOperator(
-                Criteria.where("sessionId").is(sessionId),
-                IN_SCOPE_BYBIT_RAW_CRITERIA
-        ));
-        pending += mongoOperations.count(legacyRaw, ExternalLedgerRaw.class);
-        return pending;
+        return Map.copyOf(pendingByProvider);
     }
 
-    private boolean hasActiveClassificationActivity(String sessionId) {
+    private long countPendingExtractedRaw(String sessionId, UserSession.IntegrationProvider provider) {
+        if (sessionId == null || sessionId.isBlank() || provider == null) {
+            return 0L;
+        }
+        return switch (provider) {
+            case BYBIT -> {
+                Query extractedRaw = new Query(new Criteria().andOperator(
+                        Criteria.where("sessionId").is(sessionId),
+                        IN_SCOPE_CEX_RAW_CRITERIA
+                ));
+                long pending = mongoOperations.count(extractedRaw, BybitExtractedEvent.class);
+                if (pending > 0L) {
+                    yield pending;
+                }
+                Query legacyRaw = new Query(new Criteria().andOperator(
+                        Criteria.where("sessionId").is(sessionId),
+                        IN_SCOPE_CEX_RAW_CRITERIA
+                ));
+                yield mongoOperations.count(legacyRaw, ExternalLedgerRaw.class);
+            }
+            case DZENGI -> {
+                Query extractedRaw = new Query(new Criteria().andOperator(
+                        Criteria.where("sessionId").is(sessionId),
+                        IN_SCOPE_CEX_RAW_CRITERIA
+                ));
+                yield mongoOperations.count(extractedRaw, DzengiExtractedEvent.class);
+            }
+            default -> 0L;
+        };
+    }
+
+    private List<UserSession.SessionIntegration> enabledIntegrations(UserSession session) {
+        if (session.getIntegrations() == null || session.getIntegrations().isEmpty()) {
+            return List.of();
+        }
+        return session.getIntegrations().stream()
+                .filter(integration -> integration != null
+                        && integration.getStatus() != UserSession.IntegrationStatus.DISABLED
+                        && integration.getProvider() != null
+                        && integration.getIntegrationId() != null
+                        && !integration.getIntegrationId().isBlank())
+                .toList();
+    }
+
+    private boolean hasActiveClassificationActivity(UserSession session) {
+        String sessionId = session.getId();
         return sessionPipelineActivityService.hasFreshActivity(
                 sessionId,
                 UserSession.PipelineStage.ON_CHAIN_NORMALIZATION,
@@ -246,6 +288,10 @@ public class LinkingDataGateService implements LinkingPendingStatusQuery {
         ) || sessionPipelineActivityService.hasFreshActivity(
                 sessionId,
                 UserSession.PipelineStage.BYBIT_NORMALIZATION,
+                CLASSIFICATION_ACTIVITY_STALE_AFTER
+        ) || sessionPipelineActivityService.hasFreshActivity(
+                sessionId,
+                UserSession.PipelineStage.DZENGI_NORMALIZATION,
                 CLASSIFICATION_ACTIVITY_STALE_AFTER
         );
     }
@@ -263,9 +309,14 @@ public class LinkingDataGateService implements LinkingPendingStatusQuery {
             return false;
         }
         return switch (pipelineState.getStage()) {
-            case ON_CHAIN_NORMALIZATION, ON_CHAIN_CLARIFICATION, ON_CHAIN_RECLASSIFICATION, BYBIT_NORMALIZATION -> true;
+            case ON_CHAIN_NORMALIZATION, ON_CHAIN_CLARIFICATION, ON_CHAIN_RECLASSIFICATION,
+                    BYBIT_NORMALIZATION, DZENGI_NORMALIZATION -> true;
             default -> false;
         };
+    }
+
+    private static LinkingGateSnapshot emptySnapshot() {
+        return new LinkingGateSnapshot(false, 0L, 0L, 0L, Map.of(), false);
     }
 
     public record LinkingGateSnapshot(
@@ -273,8 +324,11 @@ public class LinkingDataGateService implements LinkingPendingStatusQuery {
             long pendingOnChainClassificationCount,
             long pendingClarificationCount,
             long pendingReclassificationCount,
-            long pendingBybitClassificationCount,
+            Map<String, Long> pendingCexClassificationByProvider,
             boolean classificationStillRunning
     ) {
+        public long pendingCexClassificationCount() {
+            return pendingCexClassificationByProvider.values().stream().mapToLong(Long::longValue).sum();
+        }
     }
 }

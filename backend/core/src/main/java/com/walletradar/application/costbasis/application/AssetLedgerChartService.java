@@ -349,7 +349,8 @@ class AssetLedgerChartService {
     }
 
     private static boolean isExternalTransferOut(EventAccumulator event) {
-        return "EXTERNAL_TRANSFER_OUT".equals(event.normalizedType);
+        return "EXTERNAL_TRANSFER_OUT".equals(event.normalizedType)
+                || "FIAT_EXIT".equals(event.normalizedType);
     }
 
     private static boolean isExternalTransferIn(EventAccumulator event) {

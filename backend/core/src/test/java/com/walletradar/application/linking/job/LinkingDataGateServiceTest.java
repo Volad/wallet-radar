@@ -7,6 +7,8 @@ import com.walletradar.application.session.application.AccountingUniverseService
 import com.walletradar.application.session.application.SessionPipelineActivityService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.mongodb.core.MongoOperations;
@@ -22,6 +24,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
 class LinkingDataGateServiceTest {
 
     @Mock
@@ -60,7 +63,7 @@ class LinkingDataGateServiceTest {
         assertThat(snapshot.ready()).isFalse();
         assertThat(snapshot.pendingOnChainClassificationCount()).isZero();
         assertThat(snapshot.pendingClarificationCount()).isZero();
-        assertThat(snapshot.pendingBybitClassificationCount()).isZero();
+        assertThat(snapshot.pendingCexClassificationCount()).isZero();
         assertThat(snapshot.classificationStillRunning()).isTrue();
     }
 
@@ -83,6 +86,8 @@ class LinkingDataGateServiceTest {
         when(sessionPipelineActivityService.hasFreshActivity(eq("session-1"), eq(UserSession.PipelineStage.ON_CHAIN_RECLASSIFICATION), any()))
                 .thenReturn(false);
         when(sessionPipelineActivityService.hasFreshActivity(eq("session-1"), eq(UserSession.PipelineStage.BYBIT_NORMALIZATION), any()))
+                .thenReturn(false);
+        when(sessionPipelineActivityService.hasFreshActivity(eq("session-1"), eq(UserSession.PipelineStage.DZENGI_NORMALIZATION), any()))
                 .thenReturn(false);
 
         LinkingDataGateService.LinkingGateSnapshot snapshot = service().snapshot("session-1");
@@ -122,6 +127,8 @@ class LinkingDataGateServiceTest {
                 .thenReturn(false);
         when(sessionPipelineActivityService.hasFreshActivity(eq("session-1"), eq(UserSession.PipelineStage.BYBIT_NORMALIZATION), any()))
                 .thenReturn(false);
+        when(sessionPipelineActivityService.hasFreshActivity(eq("session-1"), eq(UserSession.PipelineStage.DZENGI_NORMALIZATION), any()))
+                .thenReturn(false);
 
         LinkingDataGateService.LinkingGateSnapshot snapshot = service().snapshot("session-1");
 
@@ -153,7 +160,13 @@ class LinkingDataGateServiceTest {
                 .thenReturn(false);
         when(sessionPipelineActivityService.hasFreshActivity(eq("session-1"), eq(UserSession.PipelineStage.ON_CHAIN_RECLASSIFICATION), any()))
                 .thenReturn(false);
+        when(mongoOperations.count(any(Query.class), eq(com.walletradar.domain.transaction.dzengi.DzengiExtractedEvent.class)))
+                .thenReturn(0L);
         when(sessionPipelineActivityService.hasFreshActivity(eq("session-1"), eq(UserSession.PipelineStage.BYBIT_NORMALIZATION), any()))
+                .thenReturn(false);
+        when(sessionPipelineActivityService.hasFreshActivity(eq("session-1"), eq(UserSession.PipelineStage.DZENGI_NORMALIZATION), any()))
+                .thenReturn(false);
+        when(sessionPipelineActivityService.hasFreshActivity(eq("session-1"), eq(UserSession.PipelineStage.DZENGI_NORMALIZATION), any()))
                 .thenReturn(false);
 
         LinkingDataGateService.LinkingGateSnapshot snapshot = service().snapshot("session-1");
@@ -171,6 +184,40 @@ class LinkingDataGateServiceTest {
         );
     }
 
+    @Test
+    void snapshotBlocksWhileEnabledDzengiIntegrationHasPendingExtractedRows() {
+        UserSession session = sessionWithDzengi("session-1", "0xabc");
+        when(userSessionRepository.findById("session-1")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(
+                new AccountingUniverseService.AccountingUniverseScope(
+                        "universe-1",
+                        List.of("0xabc"),
+                        List.of("0xabc")
+                )
+        );
+        when(mongoOperations.count(any(Query.class), eq("raw_transactions"))).thenReturn(0L);
+        when(mongoOperations.count(any(Query.class), eq(com.walletradar.domain.transaction.normalized.NormalizedTransaction.class)))
+                .thenReturn(0L);
+        when(mongoOperations.count(any(Query.class), eq(com.walletradar.domain.transaction.dzengi.DzengiExtractedEvent.class)))
+                .thenReturn(4L);
+        when(sessionPipelineActivityService.hasFreshActivity(eq("session-1"), eq(UserSession.PipelineStage.ON_CHAIN_NORMALIZATION), any()))
+                .thenReturn(false);
+        when(sessionPipelineActivityService.hasFreshActivity(eq("session-1"), eq(UserSession.PipelineStage.ON_CHAIN_CLARIFICATION), any()))
+                .thenReturn(false);
+        when(sessionPipelineActivityService.hasFreshActivity(eq("session-1"), eq(UserSession.PipelineStage.ON_CHAIN_RECLASSIFICATION), any()))
+                .thenReturn(false);
+        when(sessionPipelineActivityService.hasFreshActivity(eq("session-1"), eq(UserSession.PipelineStage.BYBIT_NORMALIZATION), any()))
+                .thenReturn(false);
+        when(sessionPipelineActivityService.hasFreshActivity(eq("session-1"), eq(UserSession.PipelineStage.DZENGI_NORMALIZATION), any()))
+                .thenReturn(false);
+
+        LinkingDataGateService.LinkingGateSnapshot snapshot = service().snapshot("session-1");
+
+        assertThat(snapshot.ready()).isFalse();
+        assertThat(snapshot.pendingCexClassificationByProvider()).containsEntry("DZENGI", 4L);
+        assertThat(snapshot.pendingCexClassificationCount()).isEqualTo(4L);
+    }
+
     private static UserSession session(String sessionId, String walletAddress) {
         UserSession session = new UserSession();
         session.setId(sessionId);
@@ -178,6 +225,16 @@ class LinkingDataGateServiceTest {
         wallet.setAddress(walletAddress);
         wallet.setNetworks(List.of(NetworkId.ETHEREUM));
         session.setWallets(List.of(wallet));
+        return session;
+    }
+
+    private static UserSession sessionWithDzengi(String sessionId, String walletAddress) {
+        UserSession session = session(sessionId, walletAddress);
+        UserSession.SessionIntegration integration = new UserSession.SessionIntegration();
+        integration.setIntegrationId("DZENGI-12345");
+        integration.setProvider(UserSession.IntegrationProvider.DZENGI);
+        integration.setStatus(UserSession.IntegrationStatus.CONNECTED);
+        session.setIntegrations(List.of(integration));
         return session;
     }
 }

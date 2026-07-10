@@ -175,7 +175,14 @@ public final class AccountingAssetFamilySupport {
         if (contract == null || contract.isBlank()) {
             return null;
         }
-        return contract.trim().toLowerCase(Locale.ROOT);
+        String normalized = contract.trim();
+        // Preserve prefix-keyed identities (SYMBOL:, NATIVE:) in uppercase so they round-trip
+        // correctly. A plain EVM contract address is stored lowercase.
+        String upper = normalized.toUpperCase(Locale.ROOT);
+        if (upper.startsWith("NATIVE:") || upper.startsWith("SYMBOL:") || upper.startsWith("FAMILY:")) {
+            return upper;
+        }
+        return normalized.toLowerCase(Locale.ROOT);
     }
 
     private static String normalizeSymbol(String symbol) {

@@ -39,6 +39,7 @@ public class ReplayTransferClassifier {
                 || (transaction.getTxHash() != null && !transaction.getTxHash().isBlank()))
                 && (transaction.getType() == NormalizedTransactionType.EXTERNAL_TRANSFER_IN
                 || transaction.getType() == NormalizedTransactionType.EXTERNAL_TRANSFER_OUT
+                || transaction.getType() == NormalizedTransactionType.FIAT_EXIT
                 || transaction.getType() == NormalizedTransactionType.BRIDGE_IN
                 || transaction.getType() == NormalizedTransactionType.BRIDGE_OUT
                 || transaction.getType() == NormalizedTransactionType.INTERNAL_TRANSFER
