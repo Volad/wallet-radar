@@ -27,7 +27,8 @@ public final class CanonicalAssetCatalog {
             "USDBC",
             "USDE",
             "GHO",
-            "AUSD"
+            "AUSD",
+            "DAI"
     );
 
     private static final Set<String> EUR_STABLE_SYMBOLS = Set.of(

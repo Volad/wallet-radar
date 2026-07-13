@@ -1051,7 +1051,8 @@ class AvcoReplayServiceTest {
         lpEntry.setCorrelationId("lp-position:bsc:pancakeswap:reward-sideflow");
 
         NormalizedTransaction partialExit = tx("3", "0xlp-exit-partial", 2, NormalizedTransactionType.LP_EXIT,
-                flowWithContract(NormalizedLegRole.TRANSFER, "USDT", "0x55d398326f99059ff775485246999027b3197955", "5", null, null),
+                // No contract on USDT: NetworkStablecoinContracts is unbound in unit tests.
+                flowWithContract(NormalizedLegRole.TRANSFER, "USDT", null, "5", null, null),
                 flowWithContract(NormalizedLegRole.TRANSFER, "XYZ", "0xxyz", "40", null, null));
         partialExit.setWalletAddress("wallet-a");
         partialExit.setNetworkId(NetworkId.BSC);
@@ -1072,7 +1073,7 @@ class AvcoReplayServiceTest {
         service().replayConfirmed();
 
         List<AssetLedgerPoint> points = capturedLedgerPoints();
-        AssetLedgerPoint usdt = latestPoint(points, "wallet-a", NetworkId.BSC, "USDT", "0x55d398326f99059ff775485246999027b3197955");
+        AssetLedgerPoint usdt = latestPoint(points, "wallet-a", NetworkId.BSC, "USDT", null);
         AssetLedgerPoint xyz = latestPoint(points, "wallet-a", NetworkId.BSC, "XYZ", "0xxyz");
 
         assertThat(usdt.getQuantityAfter()).isEqualByComparingTo("5");
@@ -1115,8 +1116,10 @@ class AvcoReplayServiceTest {
 
         NormalizedTransaction lpExit = tx("4", "0xlp-exit", 3, NormalizedTransactionType.LP_EXIT,
                 flowWithContract(NormalizedLegRole.TRANSFER, "USDC", "0xaf88d065e77c8cc2239327c5edb3a432268e5831", "200", null, null),
-                flowWithContract(NormalizedLegRole.TRANSFER, "USDT", "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9", "50", null, null),
-                flowWithContract(NormalizedLegRole.TRANSFER, "DAI", "0xda10009cbd5d07dd0cecc66161fc93d7c9000da1", "50", null, null));
+                // No contract on USDT/DAI: NetworkStablecoinContracts is unbound in unit tests
+                // (returns empty set), so the symbol-based stablecoin fallback must be used.
+                flowWithContract(NormalizedLegRole.TRANSFER, "USDT", null, "50", null, null),
+                flowWithContract(NormalizedLegRole.TRANSFER, "DAI", null, "50", null, null));
         lpExit.setWalletAddress("wallet-a");
         lpExit.setNetworkId(NetworkId.ARBITRUM);
         lpExit.setProtocolName("PancakeSwap");
@@ -1128,8 +1131,8 @@ class AvcoReplayServiceTest {
 
         service().replayConfirmed();
 
-        AssetLedgerPoint usdt = latestPoint(capturedLedgerPoints(), "wallet-a", NetworkId.ARBITRUM, "USDT", "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9");
-        AssetLedgerPoint dai = latestPoint(capturedLedgerPoints(), "wallet-a", NetworkId.ARBITRUM, "DAI", "0xda10009cbd5d07dd0cecc66161fc93d7c9000da1");
+        AssetLedgerPoint usdt = latestPoint(capturedLedgerPoints(), "wallet-a", NetworkId.ARBITRUM, "USDT", null);
+        AssetLedgerPoint dai = latestPoint(capturedLedgerPoints(), "wallet-a", NetworkId.ARBITRUM, "DAI", null);
 
         // Cycle/15 round 2: multi-asset outbound LP_ENTRY now routes to per-asset
         // LpReceiptBasisPool entries; cross-asset basis carries to the same-asset return leg

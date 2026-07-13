@@ -7,6 +7,8 @@ import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.walletradar.application.cex.config.DzengiIntegrationProperties;
 import com.walletradar.platform.networks.ReactorBlocking;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
@@ -34,6 +36,7 @@ import java.util.TreeMap;
 @RequiredArgsConstructor
 public class DzengiApiClient {
 
+    private static final Logger log = LoggerFactory.getLogger(DzengiApiClient.class);
     private final WebClient.Builder webClientBuilder;
     private final DzengiIntegrationProperties properties;
     private final ObjectMapper objectMapper;
@@ -76,6 +79,38 @@ public class DzengiApiClient {
 
     public JsonNode fetchExchangeInfo() {
         return publicGet("/api/v1/exchangeInfo");
+    }
+
+    /**
+     * Fetches 24-hour ticker statistics for all available symbols.
+     * Used by the latest-price refresh subsystem for a single bulk price fetch.
+     * Public endpoint — no authentication required.
+     *
+     * @return JSON array of ticker objects; each contains {@code symbol}, {@code lastPrice}, {@code closeTime}
+     */
+    public JsonNode fetchTicker24hr() {
+        String path = "/api/v2/ticker/24hr";
+        // The ticker endpoint returns a large payload; use 4MB buffer to avoid DataBufferLimitException
+        WebClient largeBufferClient = webClientBuilder
+                .baseUrl(properties.getBaseUrl())
+                .codecs(cfg -> cfg.defaultCodecs().maxInMemorySize(4 * 1024 * 1024))
+                .build();
+        Mono<JsonNode> request = largeBufferClient.get()
+                .uri(URI.create(properties.getBaseUrl() + path))
+                .header("User-Agent", properties.getUserAgent())
+                .exchangeToMono(response -> {
+                    if (response.statusCode().is2xxSuccessful()) {
+                        return response.bodyToMono(JsonNode.class);
+                    }
+                    return Mono.just(objectMapper.createArrayNode());
+                })
+                .timeout(Duration.ofMillis(properties.getRequestTimeoutMs()))
+                .onErrorResume(ex -> {
+                    log.warn("DzengiApiClient.fetchTicker24hr: request failed: {}", ex.getMessage());
+                    return Mono.just(objectMapper.createArrayNode());
+                });
+        JsonNode body = ReactorBlocking.block(request, Duration.ofMillis(properties.getRequestTimeoutMs()));
+        return body == null ? objectMapper.createArrayNode() : body;
     }
 
     public LiveDzengiBalances fetchLiveBalances(String apiKey, String apiSecret) {

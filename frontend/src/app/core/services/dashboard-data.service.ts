@@ -157,6 +157,8 @@ export class DashboardDataService {
       priceSource === 'UNKNOWN' ||
       priceSource === 'BYBIT' ||
       priceSource === 'BINANCE' ||
+      priceSource === 'DZENGI' ||
+      priceSource === 'YAHOO_FINANCE' ||
       priceSource === 'ECB' ||
       priceSource === 'EXECUTION' ||
       priceSource === 'WRAPPER' ||

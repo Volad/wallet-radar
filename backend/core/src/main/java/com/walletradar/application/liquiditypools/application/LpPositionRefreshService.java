@@ -436,13 +436,13 @@ public class LpPositionRefreshService {
             }
         }
 
-        // Load only basis pools with qty > 0 from the DB to avoid iterating closed positions.
-        // Closed pools (qty = 0) are excluded in the loop below anyway, but pre-filtering at
-        // the DB layer avoids loading all 82+ historical pools when only ~6 are open.
-        Query basisQuery = new Query(new Criteria().andOperator(
-                Criteria.where("universeId").is(scope.accountingUniverseId()),
-                Criteria.where("qtyHeld").gt(0)
-        ));
+        // Load ALL basis pools (both open and closed) so that pools with qtyHeld = 0
+        // can be added to the excludedByBasisPool set in the loop below.
+        // Pre-filtering to qtyHeld > 0 would silently drop closed pools, allowing the TX
+        // fallback to re-add them even though the pipeline already confirmed they are fully burned.
+        Query basisQuery = new Query(
+                Criteria.where("universeId").is(scope.accountingUniverseId())
+        );
         List<LpReceiptBasisPool> basisPools = mongoOperations.find(basisQuery, LpReceiptBasisPool.class);
         // Track corr IDs that were intentionally excluded by the basisPool loop
         // (zero qty held + LP activity recorded) so the TX fallback loop won't re-add them.

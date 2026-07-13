@@ -3305,7 +3305,11 @@ class OnChainClassifierTest {
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.LP_EXIT);
         assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.PROTOCOL_REGISTRY);
-        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        // R1: V3 exit with decreaseLiquidity calldata → triggers full-receipt clarification to
+        // fetch DecreaseLiquidity/Collect event logs for fee-split decomposition.
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_CLARIFICATION);
+        assertThat(result.missingDataReasons())
+                .contains(ClassificationReasonCode.LP_FEE_SPLIT_EVIDENCE_REQUIRED.code());
         assertThat(result.flows())
                 .filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
                 .isNotEmpty()

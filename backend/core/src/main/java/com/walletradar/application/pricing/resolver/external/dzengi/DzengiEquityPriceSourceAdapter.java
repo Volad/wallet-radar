@@ -43,7 +43,10 @@ public class DzengiEquityPriceSourceAdapter implements ExternalPriceSource {
 
     @Override
     public boolean supports(PriceRequest request) {
-        if (request.transactionSource() != NormalizedTransactionSource.DZENGI) {
+        NormalizedTransactionSource source = request.transactionSource();
+        if (source != NormalizedTransactionSource.DZENGI
+                && source != NormalizedTransactionSource.ON_CHAIN
+                && source != null) {
             return false;
         }
         String symbol = CanonicalAssetCatalog.normalizeSymbol(request.assetSymbol());

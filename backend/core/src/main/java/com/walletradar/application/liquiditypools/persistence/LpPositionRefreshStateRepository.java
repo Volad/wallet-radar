@@ -16,4 +16,6 @@ public interface LpPositionRefreshStateRepository extends MongoRepository<LpPosi
     Optional<LpPositionRefreshState> findTopBySessionIdOrderByLastSyncedAtDesc(String sessionId);
 
     List<LpPositionRefreshState> findByStatusAndStartedAtBefore(RefreshStatus status, Instant startedAtBefore);
+
+    List<LpPositionRefreshState> findByStatusAndRequestedAtBefore(RefreshStatus status, Instant requestedAtBefore);
 }

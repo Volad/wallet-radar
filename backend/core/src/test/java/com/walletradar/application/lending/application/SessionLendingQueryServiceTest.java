@@ -65,6 +65,8 @@ class SessionLendingQueryServiceTest {
     private ProtocolRegistryService protocolRegistryService;
     @Mock
     private LendingGroupRefreshStateRepository lendingGroupRefreshStateRepository;
+    @Mock
+    private com.walletradar.application.pricing.latest.CurrentPriceReadService currentPriceReadService;
 
     private SessionLendingQueryService newService() {
         return newService(marketRateSnapshotService, healthFactorSnapshotService);
@@ -92,7 +94,8 @@ class SessionLendingQueryServiceTest {
                 userSessionRepository,
                 accountingUniverseService,
                 mongoOperations,
-                lendingCycleBuilder
+                lendingCycleBuilder,
+                currentPriceReadService
         );
     }
 
@@ -108,7 +111,7 @@ class SessionLendingQueryServiceTest {
         when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class))).thenReturn(List.of(fluidBorrow()));
         when(mongoOperations.find(any(Query.class), eq(AssetLedgerPoint.class))).thenReturn(List.of());
         when(mongoOperations.find(any(Query.class), eq(OnChainBalance.class))).thenReturn(List.of());
-        when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
+        lenient().when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
 
         SessionLendingQueryService service = newService();
 
@@ -145,7 +148,7 @@ class SessionLendingQueryServiceTest {
         ));
         when(mongoOperations.find(any(Query.class), eq(AssetLedgerPoint.class))).thenReturn(List.of(aaveLedgerPoint(aAvaUsdc)));
         when(mongoOperations.find(any(Query.class), eq(OnChainBalance.class))).thenReturn(List.of(aaveBalance(aAvaUsdc)));
-        when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
+        lenient().when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
 
         SessionLendingQueryService service = newService();
 
@@ -203,7 +206,7 @@ class SessionLendingQueryServiceTest {
         ));
         when(mongoOperations.find(any(Query.class), eq(AssetLedgerPoint.class))).thenReturn(List.of(aaveMantleLedgerPoint(aManWeth)));
         when(mongoOperations.find(any(Query.class), eq(OnChainBalance.class))).thenReturn(List.of(aaveMantleBalance(aManWeth)));
-        when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
+        lenient().when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
 
         SessionLendingQueryService service = newService();
 
@@ -245,7 +248,7 @@ class SessionLendingQueryServiceTest {
         ));
         when(mongoOperations.find(any(Query.class), eq(AssetLedgerPoint.class))).thenReturn(List.of(aaveMantleLedgerPoint(aManWeth)));
         when(mongoOperations.find(any(Query.class), eq(OnChainBalance.class))).thenReturn(List.of(aaveMantleBalance(aManWeth)));
-        when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
+        lenient().when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
         when(healthFactorSnapshotService.latestFresh(any(), any(), any(), any())).thenReturn(Optional.empty());
         when(marketRateSnapshotService.latestFresh(any(), any(), any(), any(), any(), any()))
                 .thenAnswer(invocation -> {
@@ -323,7 +326,7 @@ class SessionLendingQueryServiceTest {
                 aaveMantleBalance(aManWeth),
                 aaveMantleDebtBalance(debtUsde)
         ));
-        when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
+        lenient().when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
 
         SessionLendingQueryService service = newService();
 
@@ -367,7 +370,7 @@ class SessionLendingQueryServiceTest {
         ));
         when(mongoOperations.find(any(Query.class), eq(AssetLedgerPoint.class))).thenReturn(List.of());
         when(mongoOperations.find(any(Query.class), eq(OnChainBalance.class))).thenReturn(List.of());
-        when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
+        lenient().when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
 
         SessionLendingQueryService service = newService();
 
@@ -408,7 +411,7 @@ class SessionLendingQueryServiceTest {
         ));
         when(mongoOperations.find(any(Query.class), eq(AssetLedgerPoint.class))).thenReturn(List.of());
         when(mongoOperations.find(any(Query.class), eq(OnChainBalance.class))).thenReturn(List.of());
-        when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
+        lenient().when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
 
         SessionLendingQueryService service = newService();
 
@@ -485,7 +488,7 @@ class SessionLendingQueryServiceTest {
         ));
         when(mongoOperations.find(any(Query.class), eq(AssetLedgerPoint.class))).thenReturn(List.of());
         when(mongoOperations.find(any(Query.class), eq(OnChainBalance.class))).thenReturn(List.of());
-        when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
+        lenient().when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
 
         SessionLendingQueryService service = newService();
 
@@ -548,7 +551,7 @@ class SessionLendingQueryServiceTest {
         ));
         when(mongoOperations.find(any(Query.class), eq(AssetLedgerPoint.class))).thenReturn(List.of());
         when(mongoOperations.find(any(Query.class), eq(OnChainBalance.class))).thenReturn(List.of());
-        when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
+        lenient().when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
 
         SessionLendingQueryService service = newService();
 
@@ -611,7 +614,7 @@ class SessionLendingQueryServiceTest {
         ));
         when(mongoOperations.find(any(Query.class), eq(AssetLedgerPoint.class))).thenReturn(List.of());
         when(mongoOperations.find(any(Query.class), eq(OnChainBalance.class))).thenReturn(List.of());
-        when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
+        lenient().when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
 
         SessionLendingQueryService service = newService();
 
@@ -663,7 +666,7 @@ class SessionLendingQueryServiceTest {
         ));
         when(mongoOperations.find(any(Query.class), eq(AssetLedgerPoint.class))).thenReturn(List.of());
         when(mongoOperations.find(any(Query.class), eq(OnChainBalance.class))).thenReturn(List.of());
-        when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
+        lenient().when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
         when(mongoOperations.find(any(Query.class), eq(HistoricalPriceDocument.class))).thenReturn(List.of(
                 historicalPrice("wstUSR", first.plus(Duration.ofDays(7)).plusSeconds(41), "1.1184495487210164"),
                 historicalPrice("wstETH", first.plus(Duration.ofDays(16)).plusSeconds(89), "3424.001475258698")
@@ -715,7 +718,7 @@ class SessionLendingQueryServiceTest {
         ));
         when(mongoOperations.find(any(Query.class), eq(AssetLedgerPoint.class))).thenReturn(List.of());
         when(mongoOperations.find(any(Query.class), eq(OnChainBalance.class))).thenReturn(List.of());
-        when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
+        lenient().when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
 
         SessionLendingQueryService service = newService();
 
@@ -761,7 +764,7 @@ class SessionLendingQueryServiceTest {
         ));
         when(mongoOperations.find(any(Query.class), eq(AssetLedgerPoint.class))).thenReturn(List.of());
         when(mongoOperations.find(any(Query.class), eq(OnChainBalance.class))).thenReturn(List.of());
-        when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
+        lenient().when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
 
         SessionLendingQueryService service = newService();
 
@@ -812,7 +815,7 @@ class SessionLendingQueryServiceTest {
         ));
         when(mongoOperations.find(any(Query.class), eq(AssetLedgerPoint.class))).thenReturn(List.of());
         when(mongoOperations.find(any(Query.class), eq(OnChainBalance.class))).thenReturn(List.of());
-        when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
+        lenient().when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
 
         SessionLendingQueryService service = newService();
 
@@ -861,7 +864,7 @@ class SessionLendingQueryServiceTest {
         ));
         when(mongoOperations.find(any(Query.class), eq(AssetLedgerPoint.class))).thenReturn(List.of());
         when(mongoOperations.find(any(Query.class), eq(OnChainBalance.class))).thenReturn(List.of());
-        when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
+        lenient().when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
         when(mongoOperations.find(any(Query.class), eq(HistoricalPriceDocument.class))).thenReturn(List.of());
 
         SessionLendingQueryService service = newService();
@@ -904,7 +907,7 @@ class SessionLendingQueryServiceTest {
         ));
         when(mongoOperations.find(any(Query.class), eq(AssetLedgerPoint.class))).thenReturn(List.of());
         when(mongoOperations.find(any(Query.class), eq(OnChainBalance.class))).thenReturn(List.of());
-        when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
+        lenient().when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
         when(mongoOperations.find(any(Query.class), eq(HistoricalPriceDocument.class))).thenReturn(List.of(
                 historicalPrice("WSTUSR", timestamp, "1.10")
         ));
@@ -960,7 +963,7 @@ class SessionLendingQueryServiceTest {
         ));
         when(mongoOperations.find(any(Query.class), eq(AssetLedgerPoint.class))).thenReturn(List.of());
         when(mongoOperations.find(any(Query.class), eq(OnChainBalance.class))).thenReturn(List.of());
-        when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
+        lenient().when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
 
         SessionLendingQueryService service = newService();
 
@@ -1020,7 +1023,7 @@ class SessionLendingQueryServiceTest {
                 aaveBalance(NetworkId.ARBITRUM, "aArbWBTC", aArbWbtc, "0.01"),
                 aaveBalance(NetworkId.ARBITRUM, "aArbARB", aArbArb, "25")
         ));
-        when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
+        lenient().when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
 
         SessionLendingQueryService service = newService();
 
@@ -1526,7 +1529,7 @@ class SessionLendingQueryServiceTest {
         ));
         when(mongoOperations.find(any(Query.class), eq(AssetLedgerPoint.class))).thenReturn(List.of());
         when(mongoOperations.find(any(Query.class), eq(OnChainBalance.class))).thenReturn(List.of());
-        when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
+        lenient().when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
 
         SessionLendingQueryService service = newService();
 
@@ -1566,7 +1569,7 @@ class SessionLendingQueryServiceTest {
         ));
         when(mongoOperations.find(any(Query.class), eq(AssetLedgerPoint.class))).thenReturn(List.of());
         when(mongoOperations.find(any(Query.class), eq(OnChainBalance.class))).thenReturn(List.of());
-        when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
+        lenient().when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
 
         SessionLendingQueryService service = newService();
 
@@ -1610,7 +1613,7 @@ class SessionLendingQueryServiceTest {
         ));
         when(mongoOperations.find(any(Query.class), eq(AssetLedgerPoint.class))).thenReturn(List.of());
         when(mongoOperations.find(any(Query.class), eq(OnChainBalance.class))).thenReturn(List.of());
-        when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
+        lenient().when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
 
         SessionLendingQueryService service = newService();
 
@@ -1659,7 +1662,7 @@ class SessionLendingQueryServiceTest {
         ));
         when(mongoOperations.find(any(Query.class), eq(AssetLedgerPoint.class))).thenReturn(List.of());
         when(mongoOperations.find(any(Query.class), eq(OnChainBalance.class))).thenReturn(List.of());
-        when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
+        lenient().when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
 
         SessionLendingQueryService service = newService();
 
@@ -1697,7 +1700,7 @@ class SessionLendingQueryServiceTest {
         ));
         when(mongoOperations.find(any(Query.class), eq(AssetLedgerPoint.class))).thenReturn(List.of());
         when(mongoOperations.find(any(Query.class), eq(OnChainBalance.class))).thenReturn(List.of());
-        when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
+        lenient().when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
 
         SessionLendingQueryService service = newService();
 
@@ -1735,7 +1738,7 @@ class SessionLendingQueryServiceTest {
         ));
         when(mongoOperations.find(any(Query.class), eq(AssetLedgerPoint.class))).thenReturn(List.of());
         when(mongoOperations.find(any(Query.class), eq(OnChainBalance.class))).thenReturn(List.of());
-        when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
+        lenient().when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
 
         SessionLendingQueryService service = newService();
 
@@ -1782,7 +1785,7 @@ class SessionLendingQueryServiceTest {
         ));
         when(mongoOperations.find(any(Query.class), eq(AssetLedgerPoint.class))).thenReturn(List.of());
         when(mongoOperations.find(any(Query.class), eq(OnChainBalance.class))).thenReturn(List.of());
-        when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
+        lenient().when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
 
         SessionLendingQueryService service = newService();
 
@@ -1837,7 +1840,7 @@ class SessionLendingQueryServiceTest {
         ));
         when(mongoOperations.find(any(Query.class), eq(AssetLedgerPoint.class))).thenReturn(List.of());
         when(mongoOperations.find(any(Query.class), eq(OnChainBalance.class))).thenReturn(List.of());
-        when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
+        lenient().when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
 
         SessionLendingQueryService service = newService();
 
@@ -1883,7 +1886,7 @@ class SessionLendingQueryServiceTest {
         when(mongoOperations.find(any(Query.class), eq(OnChainBalance.class))).thenReturn(List.of(
                 aaveBalance(NetworkId.AVALANCHE, "aAvaUSDC", aAvaUsdc, "101")
         ));
-        when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
+        lenient().when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
 
         SessionLendingQueryService service = newService();
 

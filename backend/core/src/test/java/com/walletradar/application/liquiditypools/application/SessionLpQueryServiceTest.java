@@ -60,6 +60,8 @@ class SessionLpQueryServiceTest {
     private HistoricalPriceCacheService historicalPriceCacheService;
     @Mock
     private PriceExternalSourceOrchestrator priceExternalSourceOrchestrator;
+    @Mock
+    private com.walletradar.application.pricing.latest.CurrentPriceReadService currentPriceReadService;
 
     @Test
     void costBasisTiesToBasisPools() {
@@ -261,13 +263,27 @@ class SessionLpQueryServiceTest {
         wallet.setAddress(WALLET);
         session.setWallets(List.of(wallet));
 
+        // Build a resolved-price map from the legacy price-quote list for backward compat
+        java.util.Map<String, com.walletradar.application.pricing.latest.ResolvedPrice> resolvedMap = new java.util.LinkedHashMap<>();
+        for (CurrentPriceQuoteDocument price : prices) {
+            if (price.getSymbol() != null && price.getPriceUsd() != null) {
+                resolvedMap.put(price.getSymbol().toUpperCase(java.util.Locale.ROOT),
+                        new com.walletradar.application.pricing.latest.ResolvedPrice(
+                                price.getPriceUsd(),
+                                price.getSource() != null ? price.getSource() : com.walletradar.domain.common.PriceSource.UNKNOWN,
+                                java.time.Instant.now(),
+                                false
+                        ));
+            }
+        }
+        lenient().when(currentPriceReadService.resolveLatest(any())).thenReturn(resolvedMap);
+
         when(userSessionRepository.findById(SESSION_ID)).thenReturn(Optional.of(session));
         when(accountingUniverseService.resolveScope(session)).thenReturn(
                 new AccountingUniverseService.AccountingUniverseScope(UNIVERSE_ID, List.of(WALLET), List.of(WALLET)));
         when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class))).thenReturn(txs);
         when(mongoOperations.find(any(Query.class), eq(LpReceiptBasisPool.class))).thenReturn(basis);
         when(mongoOperations.find(any(Query.class), eq(AssetLedgerPoint.class))).thenReturn(ledger);
-        when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(prices);
         when(snapshotService.findByUniverseId(UNIVERSE_ID)).thenReturn(snapshot == null ? List.of() : List.of(snapshot));
         when(earningPointService.findSeriesByCorrelationId(CORR)).thenReturn(List.of());
         lenient().when(priceExternalSourceOrchestrator.prioritizedSources(any()))
@@ -283,7 +299,8 @@ class SessionLpQueryServiceTest {
                 earningPointService,
                 historicalPriceCacheService,
                 priceExternalSourceOrchestrator,
-                properties
+                properties,
+                currentPriceReadService
         );
         return service.findSessionLp(SESSION_ID, LpPositionScope.ALL).orElseThrow();
     }

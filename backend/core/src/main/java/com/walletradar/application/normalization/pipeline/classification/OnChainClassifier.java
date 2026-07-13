@@ -5,6 +5,7 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus
 import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.application.normalization.config.NativeSettlementRecoveryProperties;
 import com.walletradar.application.normalization.pipeline.classification.reason.ClassificationReasonCode;
+import com.walletradar.application.normalization.pipeline.classification.support.LpExitFeeClarificationTrigger;
 import com.walletradar.application.normalization.pipeline.classification.support.NativeSettlementClarificationTrigger;
 import com.walletradar.application.normalization.pipeline.classification.onchain.family.AdminConfigClassifier;
 import com.walletradar.application.normalization.pipeline.classification.onchain.family.AaveReceiptShapeClassifier;
@@ -172,7 +173,7 @@ public class OnChainClassifier {
                 new CompoundCometClassifier(protocolRegistryService),
                 new FluidVaultClassifier(protocolRegistryService),
                 new SwapRegistryClassifier(protocolRegistryService, nativeAssetSymbolResolver),
-                new LpRegistryClassifier(protocolRegistryService, nativeAssetSymbolResolver, lpStakingWrapperResolver),
+                new LpRegistryClassifier(protocolRegistryService, nativeAssetSymbolResolver, lpStakingWrapperResolver, null),
                 new LendingRegistryClassifier(protocolRegistryService, protocolResourceLoader),
                 new VaultClassifier(protocolRegistryService),
                 new SpecialHandlerRegistryReviewClassifier(),
@@ -235,7 +236,9 @@ public class OnChainClassifier {
     }
 
     private OnChainClassificationResult finalizeDecision(ClassificationDecision decision, OnChainClassificationContext context) {
-        return decisionMapper.toResult(applyNativeSettlementClarification(decision, context));
+        ClassificationDecision d = applyNativeSettlementClarification(decision, context);
+        d = applyLpExitFeeClarification(d, context);
+        return decisionMapper.toResult(d);
     }
 
     /**
@@ -267,6 +270,52 @@ public class OnChainClassifier {
                 ? new ArrayList<>()
                 : new ArrayList<>(decision.missingDataReasons());
         String reason = ClassificationReasonCode.NATIVE_SETTLEMENT_TRANSFER_EVIDENCE_REQUIRED.code();
+        if (!reasons.contains(reason)) {
+            reasons.add(reason);
+        }
+        return new ClassificationDecision(
+                decision.type(),
+                NormalizedTransactionStatus.PENDING_CLARIFICATION,
+                decision.classifiedBy(),
+                decision.confidence(),
+                decision.flows(),
+                List.copyOf(reasons),
+                decision.correlationId(),
+                decision.continuityCandidate(),
+                decision.matchedCounterparty(),
+                decision.excludedFromAccounting(),
+                decision.accountingExclusionReason(),
+                decision.protocolName(),
+                decision.protocolVersion()
+        );
+    }
+
+    /**
+     * R1: for a V3/Slipstream LP exit that has {@code decreaseLiquidity} calldata but no full
+     * receipt yet, routes to the existing full-receipt clarification path so that
+     * {@code DecreaseLiquidity} and {@code Collect} event logs are persisted. A no-op when the
+     * evidence is already present or the exit is not V3-shaped.
+     */
+    private ClassificationDecision applyLpExitFeeClarification(
+            ClassificationDecision decision,
+            OnChainClassificationContext context
+    ) {
+        if (decision == null || context == null) {
+            return decision;
+        }
+        NormalizedTransactionStatus status = decision.status();
+        if (status != NormalizedTransactionStatus.CONFIRMED
+                && status != NormalizedTransactionStatus.PENDING_PRICE) {
+            return decision;
+        }
+        if (!LpExitFeeClarificationTrigger.requiresReceiptClarification(
+                context.view(), decision.type())) {
+            return decision;
+        }
+        List<String> reasons = decision.missingDataReasons() == null
+                ? new ArrayList<>()
+                : new ArrayList<>(decision.missingDataReasons());
+        String reason = ClassificationReasonCode.LP_FEE_SPLIT_EVIDENCE_REQUIRED.code();
         if (!reasons.contains(reason)) {
             reasons.add(reason);
         }

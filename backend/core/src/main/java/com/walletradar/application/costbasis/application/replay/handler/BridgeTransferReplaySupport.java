@@ -202,6 +202,10 @@ public class BridgeTransferReplaySupport {
             CarryTransferReplaySupport carryTransferReplaySupport
     ) {
         boolean corridorTransfer = classifier.isCorridorTransfer(transaction);
+        // Rekeyed FUND→UTA carries share bridge-style (qty-agnostic) matching with corridors:
+        // Bybit reports slightly different amounts on the FUND-debit vs the UTA-credit leg, so the
+        // strict qty-compatible matcher fails. Bridge matching bypasses that check.
+        boolean useBridgeMatching = corridorTransfer || classifier.isRekeyedVenueTransfer(transaction);
 
         if (flow.getQuantityDelta().signum() < 0) {
             boolean venueInternal = classifier.usesBybitVenueInternalCarryQueue(transaction);
@@ -228,7 +232,7 @@ public class BridgeTransferReplaySupport {
                         : continuityCarryService.mergeCarryTransfers(position.assetKey(), carry, sliceCarry);
             }
             Deque<CarryTransfer> queue = replayState.pendingTransfers().queue(transferKey);
-            int pendingInboundIndex = corridorTransfer
+            int pendingInboundIndex = useBridgeMatching
                     ? matcher.findUniqueBridgeQueueIndex(queue, true)
                     : TransferEarnPrincipalReplaySupport.multiSourceEarnPrincipalBundle(transaction)
                     ? matcher.findUniqueBridgeQueueIndex(queue, true)
@@ -293,7 +297,7 @@ public class BridgeTransferReplaySupport {
         }
 
         Deque<CarryTransfer> queue = replayState.pendingTransfers().find(transferKey);
-        int carryIndex = corridorTransfer
+        int carryIndex = useBridgeMatching
                 ? matcher.findUniqueBridgeQueueIndex(queue, false)
                 : TransferEarnPrincipalReplaySupport.multiSourceEarnPrincipalBundle(transaction)
                 ? matcher.findUniqueBridgeQueueIndex(queue, false)

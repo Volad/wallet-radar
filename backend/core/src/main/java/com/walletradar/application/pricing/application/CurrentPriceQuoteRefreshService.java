@@ -5,12 +5,9 @@ import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.common.PriceSource;
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.domain.session.UserSessionRepository;
-import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.application.pricing.domain.CanonicalAssetCatalog;
 import com.walletradar.application.pricing.domain.PriceQuote;
-import com.walletradar.application.pricing.domain.PriceRequest;
 import com.walletradar.application.pricing.persistence.CurrentPriceQuoteDocument;
-import com.walletradar.application.pricing.resolver.external.PriceExternalSourceOrchestrator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.bson.Document;
@@ -47,7 +44,6 @@ public class CurrentPriceQuoteRefreshService {
     private static final Duration FRESH_QUOTE_TTL = Duration.ofMinutes(15);
 
     private final MongoOperations mongoOperations;
-    private final PriceExternalSourceOrchestrator priceExternalSourceOrchestrator;
     private final GmxProtocolSnapshotValuationService gmxProtocolSnapshotValuationService;
     private final UserSessionRepository userSessionRepository;
 
@@ -83,6 +79,7 @@ public class CurrentPriceQuoteRefreshService {
         // quote and fall back to a stale "last trade" historical price — overstating the dashboard
         // CEX value. Include the session's live Bybit umbrella symbols in the refresh set.
         symbols.addAll(loadBybitLiveSymbols(sessionId));
+        symbols.addAll(loadDzengiLiveSymbols(sessionId));
         // LP reward tokens (e.g. CAKE from PancakeSwap MasterChef) appear only as pending
         // unclaimed fees in LP snapshots, never as held balances — add them explicitly.
         symbols.addAll(loadLpRewardTokenSymbols(sessionId));
@@ -157,6 +154,36 @@ public class CurrentPriceQuoteRefreshService {
         return symbols;
     }
 
+    private Set<String> loadDzengiLiveSymbols(String sessionId) {
+        Set<String> symbols = new LinkedHashSet<>();
+        Set<String> integrationIds = userSessionRepository.findById(sessionId)
+                .map(this::dzengiIntegrationIds)
+                .orElse(Set.of());
+        if (integrationIds.isEmpty()) {
+            return symbols;
+        }
+        Query query = Query.query(Criteria.where("integrationId").in(integrationIds));
+        List<Document> balances = mongoOperations.find(query, Document.class, "dzengi_live_balances");
+        if (balances == null) {
+            return symbols;
+        }
+        for (Document balance : balances) {
+            String assetSymbol = balance.getString("assetSymbol");
+            if (assetSymbol == null || assetSymbol.isBlank() || "__EMPTY_UMBRELLA__".equals(assetSymbol)) {
+                continue;
+            }
+            BigDecimal umbrellaQty = readDecimal(balance.get("umbrellaQty"));
+            if (umbrellaQty == null || umbrellaQty.signum() <= 0) {
+                continue;
+            }
+            String symbol = CanonicalAssetCatalog.canonicalMarketSymbol(assetSymbol);
+            if (symbol != null && !symbol.isBlank()) {
+                symbols.add(symbol.trim().toUpperCase(Locale.ROOT));
+            }
+        }
+        return symbols;
+    }
+
     private Set<String> bybitIntegrationIds(UserSession session) {
         Set<String> ids = new LinkedHashSet<>();
         if (session == null || session.getIntegrations() == null) {
@@ -167,6 +194,23 @@ public class CurrentPriceQuoteRefreshService {
                     || integration.getIntegrationId() == null
                     || integration.getStatus() == UserSession.IntegrationStatus.DISABLED
                     || integration.getProvider() != UserSession.IntegrationProvider.BYBIT) {
+                continue;
+            }
+            ids.add(integration.getIntegrationId());
+        }
+        return ids;
+    }
+
+    private Set<String> dzengiIntegrationIds(UserSession session) {
+        Set<String> ids = new LinkedHashSet<>();
+        if (session == null || session.getIntegrations() == null) {
+            return ids;
+        }
+        for (UserSession.SessionIntegration integration : session.getIntegrations()) {
+            if (integration == null
+                    || integration.getIntegrationId() == null
+                    || integration.getStatus() == UserSession.IntegrationStatus.DISABLED
+                    || integration.getProvider() != UserSession.IntegrationProvider.DZENGI) {
                 continue;
             }
             ids.add(integration.getIntegrationId());
@@ -250,28 +294,10 @@ public class CurrentPriceQuoteRefreshService {
             ), refreshTime);
             return true;
         }
-        if (!isMarketQuoteEligible(symbol)) {
-            log.debug("Current quote skipped for non-market symbol: sessionId={}, symbol={}", sessionId, symbol);
-            return false;
-        }
-        if (hasFreshCurrentQuote(symbol, refreshTime)) {
-            return true;
-        }
-        PriceRequest request = new PriceRequest(
-                "current:" + symbol,
-                NormalizedTransactionSource.ON_CHAIN,
-                null,
-                null,
-                symbol,
-                refreshTime
-        );
-        Optional<PriceQuote> quote = priceExternalSourceOrchestrator.resolveExternalOnly(request);
-        if (quote.isEmpty()) {
-            log.debug("Current quote unresolved: sessionId={}, symbol={}", sessionId, symbol);
-            return false;
-        }
-        upsert(symbol, quote.orElseThrow(), refreshTime);
-        return true;
+        // Market-symbol live prices are now handled by the independent LatestPriceRefreshJob.
+        // This method retains stablecoin pins only; all other market-symbol per-symbol HTTP calls
+        // are removed to avoid redundant API calls.
+        return false;
     }
 
     private Set<BalanceAsset> loadCanonicalAssets(String sessionId) {
@@ -328,24 +354,6 @@ public class CurrentPriceQuoteRefreshService {
             }
         }
         return null;
-    }
-
-    private boolean isMarketQuoteEligible(String symbol) {
-        if (symbol == null || symbol.isBlank()) {
-            return false;
-        }
-        String normalized = symbol.trim().toUpperCase(Locale.ROOT);
-        return !normalized.startsWith("GM:")
-                && !normalized.startsWith("GLV:")
-                && !normalized.contains("/")
-                && !normalized.contains("[")
-                && !normalized.contains("]")
-                && !normalized.contains(":")
-                && !normalized.contains(" ");
-    }
-
-    private boolean hasFreshCurrentQuote(String symbol, Instant refreshTime) {
-        return hasFreshCurrentQuote(symbol, null, refreshTime);
     }
 
     private boolean hasFreshCurrentQuote(String symbol, PriceSource source, Instant refreshTime) {

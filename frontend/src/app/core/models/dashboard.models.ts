@@ -73,6 +73,8 @@ export type PriceSource =
   | 'UNKNOWN'
   | 'BYBIT'
   | 'BINANCE'
+  | 'DZENGI'
+  | 'YAHOO_FINANCE'
   | 'ECB'
   | 'EXECUTION'
   | 'WRAPPER'
@@ -352,6 +354,8 @@ export const PRICE_SOURCES: ReadonlyArray<PriceSource> = [
   'MANUAL',
   'BYBIT',
   'BINANCE',
+  'DZENGI',
+  'YAHOO_FINANCE',
   'ECB',
   'EXECUTION',
   'WRAPPER',

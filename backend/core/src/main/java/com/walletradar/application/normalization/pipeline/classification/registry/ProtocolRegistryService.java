@@ -37,6 +37,14 @@ public class ProtocolRegistryService {
         return Optional.ofNullable(entriesByKey.get(new ProtocolRegistryLoader.RegistryKey(networkId, normalizedAddress)));
     }
 
+    /**
+     * Returns all entries across all networks. Used by classifiers that need to build in-memory
+     * indexes at startup (e.g. the LFJ pair index in {@code LpRegistryClassifier}).
+     */
+    public java.util.Collection<ProtocolRegistryEntry> allEntries() {
+        return entriesByKey.values();
+    }
+
     public Optional<String> lookupMethodDescription(String methodId) {
         if (methodId == null || methodId.isBlank()) {
             return Optional.empty();

@@ -88,6 +88,18 @@ public class ProtocolRegistryLoader {
                         .map(OnChainRawTransactionView::normalizeAddress)
                         .orElse(null);
 
+                // C1 (R7 LFJ): LFJ Liquidity Book pair token addresses and binStep.
+                // Present only for LFJ_LB_PAIR entries; null for all other handler types.
+                String tokenX = optionalText(entryNode, "tokenX")
+                        .map(OnChainRawTransactionView::normalizeAddress)
+                        .orElse(null);
+                String tokenY = optionalText(entryNode, "tokenY")
+                        .map(OnChainRawTransactionView::normalizeAddress)
+                        .orElse(null);
+                Integer binStep = entryNode.path("binStep").isNumber()
+                        ? entryNode.path("binStep").intValue()
+                        : null;
+
                 ProtocolRegistryEntry entry = new ProtocolRegistryEntry(
                         normalizedAddress,
                         Collections.unmodifiableSet(networks),
@@ -99,7 +111,10 @@ public class ProtocolRegistryLoader {
                         optionalText(entryNode, "version").orElse(null),
                         decomposeByLegs,
                         specialHandler,
-                        underlyingPositionManager
+                        underlyingPositionManager,
+                        tokenX,
+                        tokenY,
+                        binStep
                 );
 
                 for (NetworkId networkId : networks) {

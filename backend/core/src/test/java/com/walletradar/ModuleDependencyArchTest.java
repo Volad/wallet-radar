@@ -133,4 +133,35 @@ class ModuleDependencyArchTest {
                 );
         rule.check(classes);
     }
+
+    /**
+     * A4 (RR-7a): The normalization module must NOT import from liquiditypools.enrichment.
+     *
+     * LP enrichment runs at a later pipeline stage after normalization.  Classification-time
+     * CL math must live in {@code normalization..classification.support} (e.g. LpClMathSupport)
+     * so the V4 fee reader never couples to the enrichment layer at classification time.
+     */
+    @Test
+    void normalization_must_not_depend_on_liquiditypools_enrichment() {
+        ArchRule rule = noClasses()
+                .that().resideInAPackage("..application.normalization..")
+                .should().dependOnClassesThat().resideInAPackage("..application.liquiditypools.enrichment..");
+        rule.check(classes);
+    }
+
+    /**
+     * A4 (RR-7b): The cost-basis replay must NOT import from platform.networks.evm.rpc.
+     *
+     * Archive-RPC calls are a classification-time concern (V4 fee reader, vault share rate).
+     * Results must be persisted (v4_pool_state_cache, historical_prices) before replay runs.
+     * A replay dependency on the RPC layer would mean live-node calls inside the accounting
+     * engine — a non-determinism risk and an ordering violation.
+     */
+    @Test
+    void costbasis_replay_must_not_depend_on_evm_rpc() {
+        ArchRule rule = noClasses()
+                .that().resideInAPackage("..application.costbasis..")
+                .should().dependOnClassesThat().resideInAPackage("..platform.networks.evm.rpc..");
+        rule.check(classes);
+    }
 }

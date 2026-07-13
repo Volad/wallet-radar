@@ -27,6 +27,8 @@ public final class LpPositionLifecycleSupport {
     private static final String MODIFY_LIQUIDITIES_SELECTOR = "0xdd46508f";
     private static final String STAKE_DEPOSIT_SELECTOR = "0xb6b55f25";
     private static final String STAKE_WITHDRAW_SELECTOR = "0x2e1a7d4d";
+    /** Aura Finance BaseRewardPool {@code withdrawAndUnwrap(uint256 amount, bool claim)} */
+    private static final String AURA_WITHDRAW_AND_UNWRAP_SELECTOR = "0xc32e7202";
     private static final String SAFE_TRANSFER_FROM_SELECTOR = "0x42842e0e";
     private static final String SAFE_TRANSFER_FROM_WITH_DATA_SELECTOR = "0xb88d4fde";
     private static final String ERC721_TRANSFER_TOPIC =
@@ -68,9 +70,11 @@ public final class LpPositionLifecycleSupport {
             OnChainRawTransactionView view,
             List<RawLeg> movementLegs
     ) {
-        return switch (String.valueOf(view.methodId())) {
+        NormalizedTransactionType selectorType = switch (String.valueOf(view.methodId())) {
             case STAKE_DEPOSIT_SELECTOR -> NormalizedTransactionType.LP_POSITION_STAKE;
             case STAKE_WITHDRAW_SELECTOR -> NormalizedTransactionType.LP_POSITION_UNSTAKE;
+            // Aura Finance BaseRewardPool withdrawAndUnwrap(uint256, bool): BPT returned + optional reward claim
+            case AURA_WITHDRAW_AND_UNWRAP_SELECTOR -> NormalizedTransactionType.LP_POSITION_UNSTAKE;
             case MASTER_CHEF_INCREASE_LIQUIDITY_SELECTOR -> hasNonFeeMovement(movementLegs)
                     ? NormalizedTransactionType.LP_ENTRY
                     : null;
@@ -81,6 +85,54 @@ public final class LpPositionLifecycleSupport {
                     : NormalizedTransactionType.LP_POSITION_UNSTAKE;
             default -> null;
         };
+        if (selectorType != null) {
+            return selectorType;
+        }
+        // Fallback: use net movement direction for DEX stake contracts with unknown selectors.
+        // Excluded: multicall (handled by resolveDexStakeContractMulticallType) and SAFE_TRANSFER_FROM.
+        String methodId = String.valueOf(view.methodId());
+        if (MULTICALL_SELECTOR.equals(methodId)
+                || SAFE_TRANSFER_FROM_SELECTOR.equals(methodId)
+                || SAFE_TRANSFER_FROM_WITH_DATA_SELECTOR.equals(methodId)) {
+            return null;
+        }
+        return resolveDexStakeContractTypeByMovementLegs(movementLegs);
+    }
+
+    /**
+     * Movement-leg direction fallback for DEX stake contracts with non-standard selectors.
+     * Net outbound = STAKE (tokens going in); net inbound = UNSTAKE (tokens coming back).
+     */
+    private static NormalizedTransactionType resolveDexStakeContractTypeByMovementLegs(List<RawLeg> movementLegs) {
+        if (movementLegs == null || movementLegs.isEmpty()) {
+            return null;
+        }
+        int outbound = 0;
+        int inbound = 0;
+        for (RawLeg leg : movementLegs) {
+            if (leg == null || leg.fee()) {
+                continue;
+            }
+            if (leg.quantityDelta() == null || leg.quantityDelta().signum() == 0) {
+                continue;
+            }
+            if (leg.quantityDelta().signum() < 0) {
+                outbound++;
+            } else {
+                inbound++;
+            }
+        }
+        if (outbound > 0 && inbound == 0) {
+            return NormalizedTransactionType.LP_POSITION_STAKE;
+        }
+        if (inbound > 0 && outbound == 0) {
+            return NormalizedTransactionType.LP_POSITION_UNSTAKE;
+        }
+        // Mixed (e.g. claim rewards on unstake): treat as UNSTAKE since the principal comes back
+        if (inbound > 0) {
+            return NormalizedTransactionType.LP_POSITION_UNSTAKE;
+        }
+        return null;
     }
 
     public static NormalizedTransactionType resolveDexStakeContractMulticallType(

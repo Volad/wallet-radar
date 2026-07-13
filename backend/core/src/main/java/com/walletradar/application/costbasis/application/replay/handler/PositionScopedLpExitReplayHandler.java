@@ -22,6 +22,8 @@ import com.walletradar.domain.common.PriceSource;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -34,6 +36,7 @@ import java.util.Set;
 @Component
 public class PositionScopedLpExitReplayHandler {
 
+    private static final Logger log = LoggerFactory.getLogger(PositionScopedLpExitReplayHandler.class);
     private static final MathContext MC = MathContext.DECIMAL128;
 
     private final ReplayAssetSupport assetSupport;
@@ -132,6 +135,27 @@ public class PositionScopedLpExitReplayHandler {
                 );
                 continue;
             }
+            if (flow.getRole() == NormalizedLegRole.LP_FEE_INCOME) {
+                // R1: fee income at LP exit — zero-cost acquisition (income stays implicit in AVCO).
+                // Net lane: $0 cost (ZeroCostAcquisitionSupport recognises LP_FEE_CLAIM as zero-net).
+                // Tax lane: FMV at exit time (applied by the replay engine using unit price if available).
+                flowSupport.applyBuyWithAcquisitionCost(
+                        flow,
+                        position,
+                        BigDecimal.ZERO,
+                        NormalizedTransactionType.LP_FEE_CLAIM
+                );
+                replayState.ledgerPointCollector().record(
+                        transaction,
+                        flow,
+                        indexedFlow.index(),
+                        position.assetKey(),
+                        before,
+                        position,
+                        AssetLedgerPoint.BasisEffect.ACQUIRE
+                );
+                continue;
+            }
             if (flow.getRole() != NormalizedLegRole.TRANSFER) {
                 flowSupport.applyUnknownTransfer(flow, position);
                 replayState.ledgerPointCollector().record(
@@ -155,6 +179,14 @@ public class PositionScopedLpExitReplayHandler {
                         residualPrincipalInflows
                 )) {
                     touchedLpReceiptPrincipal = true;
+                    // R2: mark this LP-pool-restored asset as a touched eligible identity so that
+                    // shouldIsolateNonPrincipalInflows can isolate sideflows (e.g. USDT reward)
+                    // that co-arrive in a dual-asset exit but do not belong to the LP principal set.
+                    String lpRestoredId = assetSupport.continuityIdentity(transaction, flow);
+                    if (lpRestoredId != null) {
+                        touchedEligibleIdentities.add(lpRestoredId);
+                        touchedEligiblePrincipal = true;
+                    }
                     continue;
                 }
             }
@@ -418,8 +450,17 @@ public class PositionScopedLpExitReplayHandler {
             if (pool == null) {
                 continue;
             }
+            BigDecimal danglingNet = pool.getNetBasisHeldUsd();
+            if (danglingNet != null && danglingNet.signum() != 0) {
+                // R3: dangling net basis (reward-discounted lane) was not carried during per-flow
+                // restore — zero it out here so pools are fully clean after close.
+                // Root cause: peg-cap on stable lane stranded net basis; R2 injects tax excess to
+                // volatile sibling but this catch-all ensures any residual is not silently orphaned.
+                log.debug("R3 drain: zeroing dangling netBasisHeldUsd={} on pool key={}", danglingNet, entry.getKey());
+            }
             pool.setQtyHeld(BigDecimal.ZERO);
             pool.setBasisHeldUsd(BigDecimal.ZERO);
+            pool.setNetBasisHeldUsd(BigDecimal.ZERO);
             pool.setUncoveredQtyHeld(BigDecimal.ZERO);
             poolContext.dirtyKeys().add(entry.getKey());
         }
@@ -459,7 +500,7 @@ public class PositionScopedLpExitReplayHandler {
                         pricedFlow,
                         position,
                         pricedFlow.getQuantityDelta().abs().multiply(replayUnitPriceUsd, MC),
-                        com.walletradar.domain.transaction.normalized.NormalizedTransactionType.REWARD_CLAIM
+                        NormalizedTransactionType.REWARD_CLAIM
                 );
                 replayState.ledgerPointCollector().record(
                         transaction,
@@ -652,6 +693,22 @@ public class PositionScopedLpExitReplayHandler {
             // Apply same-asset peg cap to the net lane symmetrically.
             effectiveNetBasis = flowSupport.pegCappedStablecoinCarryBasis(
                     position.assetKey(), coveredForCap, totalNetBasis);
+
+            // R2: peg-cap gating — if stablecoin basis was capped, inject the surplus into
+            // directly-returned volatile sibling pools so combined LP basis is conserved.
+            // The volatile principal (e.g. WETH) drains its own pool later and absorbs the surplus.
+            BigDecimal taxSurplus = totalBasis.subtract(effectiveBasis, MC).max(BigDecimal.ZERO);
+            BigDecimal netSurplus = totalNetBasis.subtract(effectiveNetBasis, MC).max(BigDecimal.ZERO);
+            if (taxSurplus.signum() > 0) {
+                injectPegCapSurplusToSiblingPool(
+                        corrId, sameKey, taxSurplus, netSurplus,
+                        directlyReturnedIdentities, poolContext
+                );
+            }
+        }
+        // R2: net ≤ tax invariant — clamp effective net so it never exceeds effective tax.
+        if (effectiveNetBasis.compareTo(effectiveBasis) > 0) {
+            effectiveNetBasis = effectiveBasis;
         }
         BigDecimal avco = effectiveBasis.signum() > 0 && totalQty.signum() > 0
                 ? effectiveBasis.divide(totalQty, MC)
@@ -675,6 +732,57 @@ public class PositionScopedLpExitReplayHandler {
             ));
         }
         return true;
+    }
+
+    /**
+     * R2: When a stablecoin's pool basis is peg-capped (basis > qty×$1), the excess would
+     * otherwise be discarded. This method re-injects the surplus into the first directly-returned
+     * volatile sibling pool so the combined LP basis is conserved.
+     *
+     * <p>Only fires when {@code crossAssetBasisCarried = false} (same-asset carry with peg-cap).
+     * In a dual-token exit (WETH+USDC both returned), WETH is in {@code directlyReturnedIdentities}
+     * and its pool receives the USDC peg-cap surplus. When WETH drains its own pool later in the
+     * same settlement pass, the injected surplus is included proportionally — no double-count.</p>
+     *
+     * <p>All-stablecoin exits (no volatile sibling): no injection occurs; excess is consumed.
+     * This is acceptable for stable/stable pools where compounded yield is minimal.</p>
+     */
+    private void injectPegCapSurplusToSiblingPool(
+            String corrId,
+            LpReceiptBasisPoolKey sameKey,
+            BigDecimal taxSurplus,
+            BigDecimal netSurplus,
+            Set<String> directlyReturnedIdentities,
+            LpReceiptBasisPoolReplayContext poolContext
+    ) {
+        if (taxSurplus.signum() <= 0 || directlyReturnedIdentities.isEmpty()) {
+            return;
+        }
+        for (var entry : poolContext.pools().entrySet()) {
+            LpReceiptBasisPoolKey key = entry.getKey();
+            if (!corrId.equals(key.lpCorrelationId()) || sameKey.equals(key)) {
+                continue;
+            }
+            // Only inject into pools whose asset is directly returned as principal in this tx.
+            // These pools will be drained later in the same settlement pass and absorb the surplus.
+            if (!directlyReturnedIdentities.contains(key.assetIdentity())) {
+                continue;
+            }
+            LpReceiptBasisPool sibling = entry.getValue();
+            if (sibling == null) {
+                continue;
+            }
+            BigDecimal currentTax = sibling.getBasisHeldUsd() != null ? sibling.getBasisHeldUsd() : BigDecimal.ZERO;
+            BigDecimal currentNet = sibling.getNetBasisHeldUsd() != null ? sibling.getNetBasisHeldUsd() : BigDecimal.ZERO;
+            // net ≤ tax: injected net must not push sibling net above sibling tax + injected tax.
+            BigDecimal clampedNetSurplus = netSurplus.min(taxSurplus);
+            sibling.setBasisHeldUsd(currentTax.add(taxSurplus, MC));
+            sibling.setNetBasisHeldUsd(currentNet.add(clampedNetSurplus, MC));
+            poolContext.dirtyKeys().add(key);
+            log.info("R2 peg-cap surplus carry: corrId={} stablePool={} volatilePool={} taxSurplus={} netSurplus={}",
+                    corrId, sameKey.assetIdentity(), key.assetIdentity(), taxSurplus, clampedNetSurplus);
+            return; // inject into the first eligible volatile sibling only
+        }
     }
 
     private boolean isLpExitType(NormalizedTransactionType type) {

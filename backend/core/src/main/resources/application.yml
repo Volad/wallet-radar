@@ -459,6 +459,11 @@ walletradar:
     pool-size: 4
 
   pricing:
+    latest:
+      refresh-interval-ms: 1800000
+      divergence-tolerance-pct: 0.05
+      stale-after-ms: 5400000
+      registry-prune-ttl-days: 7
     enabled: true
     bridge-out:
       upstream-lookback-hours: 24

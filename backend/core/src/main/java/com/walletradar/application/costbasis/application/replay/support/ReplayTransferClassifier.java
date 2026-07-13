@@ -258,4 +258,20 @@ public class ReplayTransferClassifier {
         String correlationId = transaction.getCorrelationId();
         return correlationId != null && correlationId.startsWith(CorrelationContract.BYBIT_IT_BUNDLE_V1_PREFIX);
     }
+
+    /**
+     * Returns true for bybit-rekeyed-v1 FUND→UTA internal carries.
+     *
+     * <p>Bybit captures FUND→UTA amounts with two decimal precisions that often differ by a small
+     * rounding error (e.g. 1.569276 vs 1.5692). The default qty-compatible matching rejects these
+     * pairs. Bridge-style matching (qty-agnostic) is therefore required so the carry-out created by
+     * the FUND debit can be consumed by the UTA credit despite the tiny quantity mismatch.
+     */
+    public boolean isRekeyedVenueTransfer(NormalizedTransaction transaction) {
+        if (transaction == null) {
+            return false;
+        }
+        String correlationId = transaction.getCorrelationId();
+        return correlationId != null && correlationId.startsWith(CorrelationContract.BYBIT_REKEYED_V1_PREFIX);
+    }
 }

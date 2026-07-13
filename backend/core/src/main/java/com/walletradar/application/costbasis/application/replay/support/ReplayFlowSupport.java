@@ -420,6 +420,7 @@ public class ReplayFlowSupport {
             case BUY -> AssetLedgerPoint.BasisEffect.ACQUIRE;
             case SELL -> AssetLedgerPoint.BasisEffect.DISPOSE;
             case FEE -> AssetLedgerPoint.BasisEffect.GAS_ONLY;
+            case LP_FEE_INCOME -> AssetLedgerPoint.BasisEffect.ACQUIRE;
             case TRANSFER -> flow.getQuantityDelta().signum() < 0
                     ? AssetLedgerPoint.BasisEffect.REALLOCATE_OUT
                     : AssetLedgerPoint.BasisEffect.REALLOCATE_IN;

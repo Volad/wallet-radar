@@ -9,7 +9,7 @@ import com.walletradar.domain.session.UserSessionRepository;
 import com.walletradar.application.costbasis.application.port.CexLiveBalancePort;
 import com.walletradar.application.pricing.persistence.CurrentPriceQuoteDocument;
 import com.walletradar.application.pricing.persistence.HistoricalPriceDocument;
-import com.walletradar.application.pricing.resolver.external.dzengi.DzengiKlineClient;
+import com.walletradar.application.pricing.latest.CurrentPriceReadService;
 import com.walletradar.application.session.application.AccountingUniverseService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -43,7 +43,7 @@ class SessionDashboardQueryServiceTest {
     @Mock
     private CexLiveBalancePort cexLiveBalancePort;
     @Mock
-    private DzengiKlineClient dzengiKlineClient;
+    private CurrentPriceReadService currentPriceReadService;
     @Mock
     private PortfolioConservationGate portfolioConservationGate;
 
@@ -56,7 +56,7 @@ class SessionDashboardQueryServiceTest {
                 mongoOperations,
                 accountingUniverseService,
                 cexLiveBalancePort,
-                dzengiKlineClient,
+                currentPriceReadService,
                 portfolioConservationGate
         );
         lenient().when(portfolioConservationGate.evaluate(any())).thenReturn(
@@ -72,6 +72,8 @@ class SessionDashboardQueryServiceTest {
                 )
         );
         lenient().when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of());
+        lenient().when(mongoOperations.find(any(Query.class), eq(HistoricalPriceDocument.class))).thenReturn(List.of());
+        lenient().when(currentPriceReadService.resolveLatest(any())).thenReturn(java.util.Map.of());
         lenient().when(cexLiveBalancePort.getSnapshotView(org.mockito.ArgumentMatchers.anyString()))
                 .thenReturn(Optional.empty());
     }
@@ -396,7 +398,7 @@ class SessionDashboardQueryServiceTest {
         ));
         when(mongoOperations.find(any(Query.class), eq(AssetLedgerPoint.class))).thenReturn(List.of());
         when(mongoOperations.find(any(Query.class), eq(OnChainBalance.class))).thenReturn(List.of(receiptBalance, debtBalance));
-        when(mongoOperations.find(any(Query.class), eq(HistoricalPriceDocument.class))).thenReturn(List.of());
+        lenient().when(mongoOperations.find(any(Query.class), eq(HistoricalPriceDocument.class))).thenReturn(List.of());
 
         SessionDashboardQueryService.SessionDashboardView result = sessionDashboardQueryService
                 .findSessionDashboard("session-aave")
@@ -440,15 +442,6 @@ class SessionDashboardQueryServiceTest {
         balance.setQuantity(new BigDecimal("10"));
         balance.setCapturedAt(Instant.parse("2026-04-26T10:00:00Z"));
 
-        CurrentPriceQuoteDocument quote = new CurrentPriceQuoteDocument();
-        quote.setId("GM: ETH/USD [WETH-USDC]:PROTOCOL_SNAPSHOT");
-        quote.setSymbol("GM: ETH/USD [WETH-USDC]");
-        quote.setSource(PriceSource.PROTOCOL_SNAPSHOT);
-        quote.setPriceUsd(new BigDecimal("1.82"));
-        quote.setQuoteSymbol("USD");
-        quote.setPricedAt(Instant.now());
-        quote.setFetchedAt(Instant.now());
-
         when(userSessionRepository.findById("session-gmx")).thenReturn(Optional.of(session));
         when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
                 "session-gmx",
@@ -457,8 +450,11 @@ class SessionDashboardQueryServiceTest {
         ));
         when(mongoOperations.find(any(Query.class), eq(AssetLedgerPoint.class))).thenReturn(List.of());
         when(mongoOperations.find(any(Query.class), eq(OnChainBalance.class))).thenReturn(List.of(balance));
-        when(mongoOperations.find(any(Query.class), eq(CurrentPriceQuoteDocument.class))).thenReturn(List.of(quote));
-        when(mongoOperations.find(any(Query.class), eq(HistoricalPriceDocument.class))).thenReturn(List.of());
+        lenient().when(currentPriceReadService.resolveLatest(any())).thenReturn(java.util.Map.of(
+                "GM: ETH/USD [WETH-USDC]", new com.walletradar.application.pricing.latest.ResolvedPrice(
+                        new BigDecimal("1.82"), PriceSource.PROTOCOL_SNAPSHOT, Instant.now(), false)
+        ));
+        lenient().when(mongoOperations.find(any(Query.class), eq(HistoricalPriceDocument.class))).thenReturn(List.of());
 
         SessionDashboardQueryService.SessionDashboardView result = sessionDashboardQueryService
                 .findSessionDashboard("session-gmx")
@@ -519,7 +515,7 @@ class SessionDashboardQueryServiceTest {
         ));
         when(mongoOperations.find(any(Query.class), eq(AssetLedgerPoint.class))).thenReturn(List.of(dogePoint));
         when(mongoOperations.find(any(Query.class), eq(OnChainBalance.class))).thenReturn(List.of());
-        when(mongoOperations.find(any(Query.class), eq(HistoricalPriceDocument.class))).thenReturn(List.of());
+        lenient().when(mongoOperations.find(any(Query.class), eq(HistoricalPriceDocument.class))).thenReturn(List.of());
         when(cexLiveBalancePort.getSnapshotView("BYBIT-33625378"))
                 .thenReturn(Optional.of(new CexLiveBalancePort.SnapshotView(
                         CexLiveBalancePort.Availability.KNOWN_NON_EMPTY,
@@ -565,7 +561,7 @@ class SessionDashboardQueryServiceTest {
         ));
         when(mongoOperations.find(any(Query.class), eq(AssetLedgerPoint.class))).thenReturn(List.of());
         when(mongoOperations.find(any(Query.class), eq(OnChainBalance.class))).thenReturn(List.of());
-        when(mongoOperations.find(any(Query.class), eq(HistoricalPriceDocument.class))).thenReturn(List.of());
+        lenient().when(mongoOperations.find(any(Query.class), eq(HistoricalPriceDocument.class))).thenReturn(List.of());
         when(cexLiveBalancePort.getSnapshotView("BYBIT-33625378"))
                 .thenReturn(Optional.of(new CexLiveBalancePort.SnapshotView(
                         CexLiveBalancePort.Availability.KNOWN_NON_EMPTY,
@@ -635,7 +631,7 @@ class SessionDashboardQueryServiceTest {
         ));
         when(mongoOperations.find(any(Query.class), eq(AssetLedgerPoint.class))).thenReturn(List.of(bybitPoint));
         when(mongoOperations.find(any(Query.class), eq(OnChainBalance.class))).thenReturn(List.of());
-        when(mongoOperations.find(any(Query.class), eq(HistoricalPriceDocument.class))).thenReturn(List.of(usdtPrice));
+        lenient().when(mongoOperations.find(any(Query.class), eq(HistoricalPriceDocument.class))).thenReturn(List.of(usdtPrice));
 
         SessionDashboardQueryService.SessionDashboardView result = sessionDashboardQueryService
                 .findSessionDashboard("session-bybit-dash")
@@ -689,9 +685,10 @@ class SessionDashboardQueryServiceTest {
                 List.of()
         ));
         when(mongoOperations.find(any(Query.class), eq(AssetLedgerPoint.class))).thenReturn(List.of(tslaPoint));
-        when(mongoOperations.find(any(Query.class), eq(HistoricalPriceDocument.class))).thenReturn(List.of());
-        when(dzengiKlineClient.fetchUsdPerUnit(any(), any())).thenReturn(Optional.of(
-                new DzengiKlineClient.DzengiKline("TSLA.", Instant.parse("2026-07-08T00:00:00Z"), new BigDecimal("392.35"))
+        lenient().when(mongoOperations.find(any(Query.class), eq(HistoricalPriceDocument.class))).thenReturn(List.of());
+        lenient().when(currentPriceReadService.resolveLatest(any())).thenReturn(java.util.Map.of(
+                "TSLA", new com.walletradar.application.pricing.latest.ResolvedPrice(
+                        new BigDecimal("392.35"), PriceSource.DZENGI, Instant.parse("2026-07-08T00:00:00Z"), false)
         ));
 
         SessionDashboardQueryService.SessionDashboardView result = sessionDashboardQueryService

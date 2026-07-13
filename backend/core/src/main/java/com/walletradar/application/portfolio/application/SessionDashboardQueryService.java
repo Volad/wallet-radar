@@ -19,7 +19,8 @@ import com.walletradar.application.costbasis.application.port.CexLiveBalancePort
 import com.walletradar.application.pricing.domain.CanonicalAssetCatalog;
 import com.walletradar.application.pricing.persistence.CurrentPriceQuoteDocument;
 import com.walletradar.application.pricing.persistence.HistoricalPriceDocument;
-import com.walletradar.application.pricing.resolver.external.dzengi.DzengiKlineClient;
+import com.walletradar.application.pricing.latest.CurrentPriceReadService;
+import com.walletradar.application.pricing.latest.ResolvedPrice;
 import com.walletradar.application.portfolio.application.port.SessionDashboardReadPort;
 import com.walletradar.application.session.application.AccountingUniverseService;
 import lombok.RequiredArgsConstructor;
@@ -66,7 +67,7 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
     private static final String VALUATION_AAVE_INDEX_ACCRUING = "AAVE_INDEX_ACCRUING";
     private static final String VALUATION_GMX_MARKET_TOKEN_SNAPSHOT = "GMX_MARKET_TOKEN_SNAPSHOT";
     private static final String PRICE_SOURCE_PROTOCOL_SNAPSHOT = "PROTOCOL_SNAPSHOT";
-    private static final long CURRENT_QUOTE_STALE_AFTER_SECONDS = 15 * 60;
+    private static final long CURRENT_QUOTE_STALE_AFTER_SECONDS = 90 * 60;
     private static final BigDecimal AVCO_CAP_COVERAGE_THRESHOLD = new BigDecimal("0.05");
     private static final BigDecimal MINIMUM_POSITION_VALUE_USD = new BigDecimal("0.01");
     private static final BigDecimal AVCO_CAP_PRICE_MULTIPLIER = BigDecimal.TEN;
@@ -75,7 +76,7 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
     private final MongoOperations mongoOperations;
     private final AccountingUniverseService accountingUniverseService;
     private final CexLiveBalancePort cexLiveBalancePort;
-    private final DzengiKlineClient dzengiKlineClient;
+    private final CurrentPriceReadService currentPriceReadService;
     private final PortfolioConservationGate portfolioConservationGate;
     private final Cache<String, SessionDashboardView> sessionDashboardCache = Caffeine.newBuilder()
             .maximumSize(64)
@@ -248,21 +249,11 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
         clampCexUmbrellaToLive(rows, session, enabledCexVenueRefs);
         addMissingLiveCexRows(rows, session);
 
-        Set<String> dzengiPriceSymbols = rows.entrySet().stream()
-                .filter(entry -> {
-                    String addr = entry.getKey().walletAddress();
-                    if (addr == null) return false;
-                    WalletRef ref = WalletRef.parse(addr);
-                    return ref.domain() == WalletDomainKind.CEX && "dzengi".equals(ref.venueId());
-                })
-                .flatMap(entry -> entry.getValue().priceLookupCandidates().stream())
-                .collect(Collectors.toCollection(LinkedHashSet::new));
         Map<String, DashboardPriceSnapshot> latestPricesBySymbol = loadLatestPrices(
                 rows.values().stream()
                 .flatMap(accumulator -> accumulator.priceLookupCandidates().stream())
                 .collect(Collectors.toCollection(LinkedHashSet::new)),
-                responseTime,
-                dzengiPriceSymbols
+                responseTime
         );
 
         List<TokenPositionView> tokenPositions = rows.entrySet().stream()
@@ -566,83 +557,52 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
 
     private Map<String, DashboardPriceSnapshot> loadLatestPrices(
             Collection<String> symbols,
-            Instant responseTime,
-            Set<String> dzengiVenueSymbols
+            Instant responseTime
     ) {
         if (symbols.isEmpty()) {
             return Map.of();
         }
         Map<String, DashboardPriceSnapshot> latestPrices = new LinkedHashMap<>();
+
+        // Stablecoin pins — handled locally to avoid mock dependencies in tests
         for (String symbol : symbols) {
             if (CanonicalAssetCatalog.isUsdStablecoin(null, null, symbol, null)) {
                 latestPrices.put(normalizeSymbol(symbol), DashboardPriceSnapshot.stablecoin(responseTime));
             }
         }
 
-        Query currentQuery = Query.query(Criteria.where("symbol").in(symbols))
-                .with(Sort.by(
-                        Sort.Order.desc("pricedAt"),
-                        Sort.Order.desc("fetchedAt")
-                ));
-        List<CurrentPriceQuoteDocument> currentQuotes = mongoOperations.find(currentQuery, CurrentPriceQuoteDocument.class);
-        if (currentQuotes != null) {
-            for (CurrentPriceQuoteDocument document : currentQuotes) {
-                String symbol = normalizeSymbol(document.getSymbol());
-                if (latestPrices.containsKey(symbol)) {
-                    continue;
-                }
-                DashboardPriceSnapshot snapshot = DashboardPriceSnapshot.current(document, responseTime);
-                if (snapshot.priceUsd() != null) {
-                    latestPrices.put(symbol, snapshot);
-                }
+        // Resolve current prices via shared service (multi-source selection)
+        Map<String, ResolvedPrice> resolved = currentPriceReadService.resolveLatest(symbols);
+        for (Map.Entry<String, ResolvedPrice> entry : resolved.entrySet()) {
+            String sym = normalizeSymbol(entry.getKey());
+            if (!latestPrices.containsKey(sym)) {
+                latestPrices.put(sym, DashboardPriceSnapshot.fromResolved(entry.getValue(), responseTime));
             }
         }
 
-        Query historicalQuery = Query.query(Criteria.where("symbol").in(symbols))
-                .with(Sort.by(
-                        Sort.Order.desc("bucketStart"),
-                        Sort.Order.desc("fetchedAt")
-                ));
-        List<HistoricalPriceDocument> historicalPrices = mongoOperations.find(historicalQuery, HistoricalPriceDocument.class);
-        if (historicalPrices == null) {
-            return latestPrices;
-        }
-        for (HistoricalPriceDocument document : historicalPrices) {
-            String symbol = normalizeSymbol(document.getSymbol());
-            latestPrices.putIfAbsent(symbol, DashboardPriceSnapshot.historicalFallback(document, responseTime));
-        }
-        if (!dzengiVenueSymbols.isEmpty()) {
-            enrichMissingDzengiVenuePrices(dzengiVenueSymbols, responseTime, latestPrices);
-        }
-        return latestPrices;
-    }
-
-    private void enrichMissingDzengiVenuePrices(
-            Collection<String> symbols,
-            Instant responseTime,
-            Map<String, DashboardPriceSnapshot> latestPrices
-    ) {
+        // Historical fallback for symbols not covered by the latest-price refresh subsystem
+        Set<String> missing = new java.util.LinkedHashSet<>();
         for (String symbol : symbols) {
-            String normalized = normalizeSymbol(symbol);
-            if (normalized.isBlank() || latestPrices.containsKey(normalized)) {
-                continue;
+            if (!latestPrices.containsKey(normalizeSymbol(symbol))) {
+                missing.add(symbol);
             }
-            DashboardPriceSnapshot existing = latestPrices.get(normalized);
-            if (existing != null && existing.priceUsd() != null) {
-                continue;
-            }
-            dzengiKlineClient.fetchUsdPerUnit(normalized, responseTime).ifPresent(kline -> {
-                latestPrices.put(normalized, new DashboardPriceSnapshot(
-                        kline.usdPrice(),
-                        PriceSource.DZENGI.name(),
-                        kline.openTime(),
-                        DashboardPriceSnapshot.stalenessSeconds(kline.openTime(), responseTime),
-                        true,
-                        null,
-                        null
-                ));
-            });
         }
+        if (!missing.isEmpty()) {
+            Query historicalQuery = Query.query(Criteria.where("symbol").in(missing))
+                    .with(Sort.by(
+                            Sort.Order.desc("bucketStart"),
+                            Sort.Order.desc("fetchedAt")
+                    ));
+            List<HistoricalPriceDocument> historicalPrices = mongoOperations.find(historicalQuery, HistoricalPriceDocument.class);
+            if (historicalPrices != null) {
+                for (HistoricalPriceDocument document : historicalPrices) {
+                    String symbol = normalizeSymbol(document.getSymbol());
+                    latestPrices.putIfAbsent(symbol, DashboardPriceSnapshot.historicalFallback(document, responseTime));
+                }
+            }
+        }
+
+        return latestPrices;
     }
 
     private Map<BucketKey, OnChainBalance> latestBalanceByBucket(List<OnChainBalance> balances) {
@@ -1306,6 +1266,20 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
                     pricedAt,
                     stalenessSeconds,
                     true,
+                    priceIssue,
+                    null
+            );
+        }
+
+        private static DashboardPriceSnapshot fromResolved(ResolvedPrice resolved, Instant responseTime) {
+            Long stalenessSeconds = stalenessSeconds(resolved.pricedAt(), responseTime);
+            String priceIssue = resolved.stale() ? PRICE_ISSUE_STALE : null;
+            return new DashboardPriceSnapshot(
+                    resolved.priceUsd(),
+                    resolved.source() == null ? null : resolved.source().name(),
+                    resolved.pricedAt(),
+                    stalenessSeconds,
+                    !resolved.stale(),
                     priceIssue,
                     null
             );

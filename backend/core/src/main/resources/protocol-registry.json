@@ -293,18 +293,36 @@
       "notes": "Official LFJ Joe Aggregator router on Arbitrum and Avalanche per LFJ deployment docs."
     },
     "0x18556da13313f3532c54711497a8fedac273220e": {
-      "name": "LFJ LBRouter",
+      "name": "LFJ LBRouter V2.2 (Avalanche/Arbitrum)",
       "protocol": "LFJ",
       "version": "V2.2",
       "family": "DEX",
       "role": "ROUTER",
       "event_type": null,
+      "specialHandler": "LFJ_LB_ROUTER",
       "networks": [
         "ARBITRUM",
         "AVALANCHE"
       ],
       "confidence": "HIGH",
-      "notes": "Official LFJ Liquidity Book router on Arbitrum and Avalanche per LFJ deployment docs."
+      "notes": "C1 (R7): LFJ Liquidity Book router — addLiquidity (0xa3c7271a) and removeLiquidity (0xc22159b6) selectors are decoded to resolve tokenX/tokenY/binStep → pair address via lfjPairIndex built at startup. All other selectors fall through to HEURISTIC."
+    },
+    "0x8573f98175d816d520248b5facf40d309b1c9cee": {
+      "name": "LFJ Liquidity Book AUSD/USDC (Avalanche)",
+      "protocol": "LFJ",
+      "version": "V2.2",
+      "family": "DEX",
+      "role": "POSITION_MANAGER",
+      "event_type": null,
+      "networks": [
+        "AVALANCHE"
+      ],
+      "specialHandler": "LFJ_LB_PAIR",
+      "tokenX": "0x00000000efe302beaa2b3e6e1b18d08d69a9012a",
+      "tokenY": "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e",
+      "binStep": 1,
+      "confidence": "HIGH",
+      "notes": "R7/C1: LFJ Liquidity Book ERC-1155 pair AUSD/USDC. Correlation: lp-position:<net>:lfj:<thisAddress>. tokenX=AUSD, tokenY=USDC, binStep=1 (stable pair, 0.01% fee). Direct pair interactions go here; router interactions go via LFJ_LB_ROUTER (0x18556da1...) which resolves to this pair via lfjPairIndex."
     },
     "\u2500\u2500 DEX: Curve Finance \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500": {},
     "0x99a58482bd75cbab83b27ec03ca68ff489b5788f": {
@@ -954,31 +972,78 @@
       "notes": "zkSync Era Aave V3 pool. Supply=LENDING_DEPOSIT, Withdraw=LENDING_WITHDRAW, Borrow=BORROW, Repay=REPAY"
     },
     "\u2500\u2500 LP: Aave stable pools \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500": {},
-    "0xfcec3c8d86329defb548202fe1b86ff2188603a8": {
-      "name": "Aave GHO/USDT/USDC stable pool",
-      "protocol": "Aave",
+    "\u2500\u2500 DEX: Balancer V3 (Avalanche) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500": {},
+    "0xba1333333333a1ba1108e8412f11850a5c319ba9": {
+      "name": "Balancer V3 Vault",
+      "protocol": "Balancer",
       "version": "V3",
-      "family": "LP",
+      "family": "DEX",
+      "role": "VAULT",
+      "event_type": null,
+      "networks": [
+        "AVALANCHE"
+      ],
+      "decomposeByLegs": true,
+      "specialHandler": "BALANCER_V3_VAULT",
+      "confidence": "HIGH",
+      "notes": "R6a: Balancer V3 singleton Vault. JOIN (addLiquidity) / BURN (removeLiquidity) classified by LpRegistryClassifier via BALANCER_V3_VAULT handler. Pool BPT presence in movement legs determines ENTRY vs EXIT. Correlation: lp-position:<net>:balancerv3:<bptPoolAddress>."
+    },
+    "0x0c8f71d19f87c0bd1b9bad2484ecc3388d5dbb98": {
+      "name": "Balancer V3 Composite Liquidity Router",
+      "protocol": "Balancer",
+      "version": "V3",
+      "family": "DEX",
+      "role": "VAULT",
+      "event_type": null,
+      "networks": [
+        "AVALANCHE"
+      ],
+      "decomposeByLegs": true,
+      "specialHandler": "BALANCER_V3_VAULT",
+      "confidence": "HIGH",
+      "notes": "R6b: Balancer V3 CompositeLiquidityRouter — entry point for ERC4626 pool operations (addLiquidityUnbalancedToERC4626Pool, removeLiquidityProportionalFromERC4626Pool). Internally calls the Vault. Same BALANCER_V3_VAULT handler: BPT presence in movement legs determines ENTRY vs EXIT. Method 0x19c6989f observed on Avalanche."
+    },
+    "0xa084c11cb55e67c9becf9607f1dbb20ec4d5e7b2": {
+      "name": "Balancer Relayer (Avalanche)",
+      "protocol": "Balancer",
+      "version": "Relayer",
+      "family": "DEX",
+      "role": "VAULT",
+      "event_type": null,
+      "networks": [
+        "AVALANCHE"
+      ],
+      "decomposeByLegs": true,
+      "specialHandler": "BALANCER_V3_VAULT",
+      "confidence": "HIGH",
+      "notes": "R6b: Balancer multicall Relayer on Avalanche — used for gauge deposit/withdraw batched calls (LP_POSITION_STAKE/UNSTAKE). BALANCER_V3_VAULT handler detects gauge + BPT movement legs to determine STAKE vs UNSTAKE direction."
+    },
+    "0xfcec3c8d86329defb548202fe1b86ff2188603a8": {
+      "name": "Balancer V3 GHO/USDT/USDC boosted stable pool (BPT)",
+      "protocol": "Balancer",
+      "version": "V3",
+      "family": "DEX",
       "role": "POOL",
-      "event_type": "LP_MINT",
+      "event_type": null,
       "networks": [
         "AVALANCHE"
       ],
       "confidence": "HIGH",
-      "notes": "Cycle/9 S3: multi-asset stable LP pool. Deposits classified as LP_ENTRY with composite-bucket basis carry."
+      "notes": "R6a: Balancer V3 ERC-20 BPT for GHO/USDT/USDC boosted pool. Pool address = BPT address. Detected from movement legs on V3 Vault txs to derive lp-position:<net>:balancerv3:<thisAddress> correlation. Previously mis-labelled as Aave LP."
     },
     "0x8e8c3d4313fd5c5051a02b9e580415691a0f7951": {
-      "name": "Aave GHO/USDT/USDC-gauge",
-      "protocol": "Curve",
+      "name": "Balancer V3 GHO/USDT/USDC gauge",
+      "protocol": "Balancer",
       "version": "Gauge",
-      "family": "LP",
+      "family": "DEX",
       "role": "STAKE_CONTRACT",
-      "event_type": "LENDING_DEPOSIT",
+      "event_type": null,
+      "underlyingPositionManager": "0xfcec3c8d86329defb548202fe1b86ff2188603a8",
       "networks": [
         "AVALANCHE"
       ],
       "confidence": "HIGH",
-      "notes": "Cycle/15 R3: Curve gauge for Aave GHO/USDT/USDC LP on Avalanche. Wrapper basis carry via wrapper: composite bucket."
+      "notes": "R6a: Balancer V3 gauge for GHO/USDT/USDC pool. deposit()/withdraw() → LP_POSITION_STAKE/UNSTAKE. underlyingPositionManager = BPT pool address. Previously mis-labelled as Curve gauge / LENDING_DEPOSIT."
     },
     "0x98ef32edd24e2c92525e59afc4475c1242a30184": {
       "name": "Aura BoosterLite",
@@ -990,19 +1055,21 @@
         "AVALANCHE"
       ],
       "confidence": "HIGH",
-      "notes": "Aura Finance BoosterLite on Avalanche. Main staking and reward distribution contract. Sends LP tokens back during withdrawAndUnwrap. Source: docs.aura.finance/developers/deployed-addresses/sidechain-deployment-addresses"
+      "notes": "Aura Finance BoosterLite on Avalanche. Orchestrates staking/unstaking to reward pools. Not the direct LP staking target."
     },
     "0x7037358a6f2c1d9e5cc9b4a29e7415a7060dadcc": {
-      "name": "auraAave GHO/USDT/USDC-vault",
+      "name": "auraAave GHO/USDT/USDC-vault (Aura BaseRewardPool)",
       "protocol": "Aura",
       "version": "Vault",
-      "family": "YIELD",
-      "role": "VAULT",
+      "family": "DEX",
+      "role": "STAKE_CONTRACT",
+      "event_type": null,
+      "underlyingPositionManager": "0xfcec3c8d86329defb548202fe1b86ff2188603a8",
       "networks": [
         "AVALANCHE"
       ],
       "confidence": "HIGH",
-      "notes": "Aura boosted vault for Aave GHO/USDT/USDC LP on Avalanche. withdrawAndUnwrap classified as REWARD_CLAIM by AuraProtocolSemanticClassifier."
+      "notes": "R6a: Aura BaseRewardPool for Balancer V3 GHO/USDT/USDC BPT on Avalanche. deposit() → LP_POSITION_STAKE; withdrawAndUnwrap() → LP_POSITION_UNSTAKE (BPT basis-neutral; BAL/AURA/WAVAX rewards zero-cost). underlyingPositionManager = BPT pool. Previously mis-labelled YIELD/VAULT → REWARD_CLAIM."
     },
     "\u2500\u2500 LENDING: Aave V2 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500": {},
     "0x7d2768de32b0b80b7a3454c06bdac94a69ddc7a9": {

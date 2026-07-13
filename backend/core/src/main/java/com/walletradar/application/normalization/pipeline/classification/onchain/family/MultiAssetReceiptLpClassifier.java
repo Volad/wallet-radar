@@ -66,6 +66,16 @@ public class MultiAssetReceiptLpClassifier implements OnChainFamilyClassifier {
         if (context == null || context.view() == null || context.movementLegs() == null) {
             return Optional.empty();
         }
+        // C1 (R7): Defer to LpRegistryClassifier for any registered protocol entry with a special
+        // handler (e.g. LFJ_LB_ROUTER). The shape-based LP detection below would incorrectly match
+        // addLiquidity calls where the "change" tokens returned from the pool look like a non-family
+        // receipt, causing false LP_ENTRY classification without a correlationId.
+        Optional<ProtocolRegistryEntry> registryEntry = protocolRegistryService.lookup(
+                context.view().networkId(), context.view().toAddress()
+        );
+        if (registryEntry.isPresent() && registryEntry.get().specialHandler() != null) {
+            return Optional.empty();
+        }
         if (LpPositionLifecycleSupport.hasAnyErc721TransferToWallet(context.view())) {
             // NFT-backed LP positions are handled by LpClassifier — no overlap.
             return Optional.empty();

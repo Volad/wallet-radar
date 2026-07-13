@@ -53,11 +53,17 @@ public final class BybitCarryContinuitySupport {
             return false;
         }
         if (correlationId != null
-                && correlationId.startsWith(CorrelationContract.BYBIT_COLLAPSED_V1_PREFIX)) {
+                && (correlationId.startsWith(CorrelationContract.BYBIT_COLLAPSED_V1_PREFIX)
+                    || correlationId.startsWith(CorrelationContract.BYBIT_REKEYED_V1_PREFIX))) {
             String wallet = transaction.getWalletAddress();
             String counterparty = resolveCounterparty(transaction);
             if (walletEndsWith(wallet, CorrelationContract.WALLET_SUFFIX_FUND)
                     || walletEndsWith(counterparty, CorrelationContract.WALLET_SUFFIX_FUND)) {
+                // FUND leg transfers inventory that was specifically deposited into the :FUND
+                // sub-account (e.g. via a BYBIT-CORRIDOR on-chain deposit). positionWalletAddress()
+                // normalises :FUND and :UTA to the same umbrella, so resolveSelfTransferNoop would
+                // return true and the replay would skip both legs, leaving the corridor-deposited
+                // cost basis stranded in FUND while root/UTA keeps a stale AVCO.
                 return false;
             }
         }

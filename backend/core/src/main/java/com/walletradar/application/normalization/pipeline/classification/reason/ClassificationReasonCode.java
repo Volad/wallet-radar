@@ -35,7 +35,19 @@ public enum ClassificationReasonCode {
     CLARIFICATION_RECEIPT_UNAVAILABLE("CLARIFICATION_RECEIPT_UNAVAILABLE"),
     CLARIFICATION_FULL_RECEIPT_UNAVAILABLE("CLARIFICATION_FULL_RECEIPT_UNAVAILABLE"),
     CLARIFICATION_INSUFFICIENT_EVIDENCE("CLARIFICATION_INSUFFICIENT_EVIDENCE"),
-    CLARIFICATION_ATTEMPTS_EXHAUSTED("CLARIFICATION_ATTEMPTS_EXHAUSTED");
+    CLARIFICATION_ATTEMPTS_EXHAUSTED("CLARIFICATION_ATTEMPTS_EXHAUSTED"),
+    LP_FEE_SPLIT_EVIDENCE_REQUIRED("LP_FEE_SPLIT_EVIDENCE_REQUIRED"),
+    /**
+     * V4 / Pancake Infinity in-range exit: sqrtPriceX96 could not be resolved from the archive
+     * RPC at the exit block (node pruned / unavailable). Fee split is skipped; full received
+     * amount is treated as principal (fee = 0). Conservative — never fabricates income.
+     */
+    V4_FEE_SPLIT_UNRESOLVED("V4_FEE_SPLIT_UNRESOLVED"),
+    /**
+     * V4 / Pancake Infinity: computed principal exceeded received quantity — clamped to received.
+     * Indicates tick-math rounding or imprecise sqrtPriceX96 for this block.
+     */
+    LP_FEE_CLAMPED("LP_FEE_CLAMPED");
 
     private final String code;
 
