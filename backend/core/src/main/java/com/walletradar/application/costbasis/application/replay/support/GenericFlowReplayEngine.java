@@ -969,6 +969,11 @@ public class GenericFlowReplayEngine {
     /**
      * Cycle/15 Cluster A: stale {@code hasUnresolvedFlags} from earlier orphan materialisations
      * must not permanently mark a fully covered position as non-authoritative for dashboard AVCO.
+     *
+     * <p>Secondary path: fully-sold-out positions where qty=0, uncovered=0, and shortfall=0
+     * (e.g. USDT sold out with no remaining basis gap) must also have flags cleared. Without
+     * this path the early-return {@code quantity <= 0} guard blocks flag clearing permanently
+     * on sold-out positions.
      */
     void clearResolvedPositionFlags(PositionState position) {
         if (position == null) {
@@ -976,12 +981,20 @@ public class GenericFlowReplayEngine {
         }
         BigDecimal quantity = position.quantity() == null ? BigDecimal.ZERO : position.quantity();
         BigDecimal uncovered = position.uncoveredQuantity() == null ? BigDecimal.ZERO : position.uncoveredQuantity();
+        BigDecimal shortfall = position.quantityShortfall() == null ? BigDecimal.ZERO : position.quantityShortfall();
+        if (quantity.signum() == 0 && uncovered.signum() == 0 && shortfall.signum() == 0) {
+            position.setHasIncompleteHistory(false);
+            position.setHasUnresolvedFlags(false);
+            position.setUnresolvedFlagCount(0);
+            return;
+        }
         if (quantity.signum() <= 0 || uncovered.signum() > 0) {
             return;
         }
         position.setHasIncompleteHistory(false);
         position.setHasUnresolvedFlags(false);
         position.setUnresolvedFlagCount(0);
+        position.setQuantityShortfall(BigDecimal.ZERO);
     }
 
     public void resolveTemporaryUnresolved(PositionState position) {

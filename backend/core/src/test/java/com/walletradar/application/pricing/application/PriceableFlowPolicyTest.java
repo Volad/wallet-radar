@@ -43,14 +43,16 @@ class PriceableFlowPolicyTest {
 
     @Test
     void peggedNativeTransferOnInternalTransferDoesNotRequireMarketPrice() {
-        // On-chain wallet↔wallet cmETH uses continuity carry, not stat-time market price.
+        // On-chain wallet↔wallet pegged-native BBSOL uses continuity carry, not stat-time market
+        // price. NOTE (ADR-054 §6 / plan §7c): the ETH-derivatives (e.g. CMETH) were removed from
+        // PEGGED_NATIVE_SYMBOLS, so BBSOL is used here as the still-pegged-native probe.
         NormalizedTransaction tx = new NormalizedTransaction();
         tx.setSource(NormalizedTransactionSource.ON_CHAIN);
         tx.setType(NormalizedTransactionType.INTERNAL_TRANSFER);
         tx.setContinuityCandidate(true);
         NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
         flow.setRole(NormalizedLegRole.TRANSFER);
-        flow.setAssetSymbol("CMETH");
+        flow.setAssetSymbol("BBSOL");
         flow.setQuantityDelta(new BigDecimal("0.144"));
         tx.setFlows(new java.util.ArrayList<>(java.util.List.of(flow)));
 
@@ -59,6 +61,8 @@ class PriceableFlowPolicyTest {
 
     @Test
     void peggedNativeBybitExternalTransferInRequiresMarketPriceDespiteContinuityPrincipal() {
+        // NOTE (ADR-054 §6 / plan §7c): pegged-native probe switched to BBSOL; the ETH-derivatives
+        // (e.g. CMETH) were removed from PEGGED_NATIVE_SYMBOLS.
         NormalizedTransaction tx = new NormalizedTransaction();
         tx.setSource(NormalizedTransactionSource.BYBIT);
         tx.setType(NormalizedTransactionType.EXTERNAL_TRANSFER_IN);
@@ -66,7 +70,7 @@ class PriceableFlowPolicyTest {
         tx.setCorrelationId("BYBIT-CORRIDOR:MANTLE:0xabc");
         NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
         flow.setRole(NormalizedLegRole.TRANSFER);
-        flow.setAssetSymbol("CMETH");
+        flow.setAssetSymbol("BBSOL");
         flow.setQuantityDelta(new BigDecimal("0.862"));
         tx.setFlows(new java.util.ArrayList<>(java.util.List.of(flow)));
 
@@ -75,13 +79,15 @@ class PriceableFlowPolicyTest {
 
     @Test
     void bybitPeggedNativeInternalTransferRequiresMarketPrice() {
+        // NOTE (ADR-054 §6 / plan §7c): pegged-native probe switched to BBSOL; the ETH-derivatives
+        // (e.g. CMETH) were removed from PEGGED_NATIVE_SYMBOLS.
         NormalizedTransaction tx = new NormalizedTransaction();
         tx.setSource(NormalizedTransactionSource.BYBIT);
         tx.setType(NormalizedTransactionType.INTERNAL_TRANSFER);
         tx.setContinuityCandidate(true);
         NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
         flow.setRole(NormalizedLegRole.TRANSFER);
-        flow.setAssetSymbol("CMETH");
+        flow.setAssetSymbol("BBSOL");
         flow.setQuantityDelta(new BigDecimal("0.144"));
         tx.setFlows(new java.util.ArrayList<>(java.util.List.of(flow)));
 
@@ -122,12 +128,14 @@ class PriceableFlowPolicyTest {
 
     @Test
     void peggedNativeTransferOnExternalTransferInRequiresMarketPrice() {
+        // NOTE (ADR-054 §6 / plan §7c): pegged-native external-transfer routing is now probed with
+        // BBSOL; the ETH-derivatives (e.g. CMETH) were removed from PEGGED_NATIVE_SYMBOLS.
         NormalizedTransaction tx = new NormalizedTransaction();
         tx.setType(NormalizedTransactionType.EXTERNAL_TRANSFER_IN);
         tx.setContinuityCandidate(false);
         NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
         flow.setRole(NormalizedLegRole.TRANSFER);
-        flow.setAssetSymbol("CMETH");
+        flow.setAssetSymbol("BBSOL");
         flow.setQuantityDelta(new BigDecimal("0.144"));
         tx.setFlows(new java.util.ArrayList<>(java.util.List.of(flow)));
 

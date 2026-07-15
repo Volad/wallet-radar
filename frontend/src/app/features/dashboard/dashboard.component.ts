@@ -66,6 +66,7 @@ import { LendingPageComponent } from '../lending/lending-page.component';
 import { LpPageComponent } from '../lp/lp-page.component';
 import { SettingsPageComponent } from '../settings/settings-page.component';
 import { SmartAmountComponent } from '../../core/components/smart-amount/smart-amount.component';
+import { AllocationBreakdownComponent } from './components/allocation-breakdown/allocation-breakdown.component';
 
 type LpTab = 'all' | 'open' | 'closed';
 type SessionTransactionsLoadPhase = 'idle' | 'intermediate' | 'final';
@@ -221,6 +222,7 @@ const BRIDGE_STATUSES = new Set<SessionBridgeStatus>(['BRIDGE_OUT', 'BRIDGE_IN',
     LpPageComponent,
     SettingsPageComponent,
     SmartAmountComponent,
+    AllocationBreakdownComponent,
   ],
   templateUrl: './dashboard.component.html',
   styleUrl: './dashboard.component.scss',

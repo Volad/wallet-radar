@@ -306,9 +306,6 @@ public final class ReceiptClarificationEligibilitySupport {
         if (normalizedTransaction == null || view == null) {
             return false;
         }
-        if (!reasons.contains(LP_POSITION_CORRELATION_REQUIRED)) {
-            return false;
-        }
         NormalizedTransactionType type = normalizedTransaction.getType();
         boolean positionScopedType = type == NormalizedTransactionType.LP_ENTRY
                 || type == NormalizedTransactionType.LP_EXIT
@@ -318,6 +315,20 @@ public final class ReceiptClarificationEligibilitySupport {
             return false;
         }
         if (view.hasFullReceiptClarificationEvidence()) {
+            return false;
+        }
+        // LP_ENTRY mint() calls where LP_POSITION_CORRELATION_REQUIRED was never set because
+        // Blockscout's ERC-20 transfer API omits ERC-721 mint events — the classifier had no
+        // tokenId to extract.  Re-admit for a full-receipt fetch as long as the correlationId
+        // is still missing and there is fetch budget (< 3 attempts to avoid infinite loops).
+        if (type == NormalizedTransactionType.LP_ENTRY
+                && (normalizedTransaction.getCorrelationId() == null
+                    || normalizedTransaction.getCorrelationId().isBlank())
+                && (normalizedTransaction.getFullReceiptClarificationAttempts() == null
+                    || normalizedTransaction.getFullReceiptClarificationAttempts() < 3)) {
+            return true;
+        }
+        if (!reasons.contains(LP_POSITION_CORRELATION_REQUIRED)) {
             return false;
         }
         if (normalizedTransaction.getStatus() == NormalizedTransactionStatus.PENDING_CLARIFICATION) {

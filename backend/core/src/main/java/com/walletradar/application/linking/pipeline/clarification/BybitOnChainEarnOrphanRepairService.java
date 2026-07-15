@@ -2,6 +2,7 @@ package com.walletradar.application.linking.pipeline.clarification;
 
 import com.walletradar.canonical.correlation.BybitCarryContinuitySupport;
 import com.walletradar.canonical.correlation.CorrelationContract;
+import com.walletradar.application.costbasis.support.AccountingAssetClassificationSupport;
 import com.walletradar.application.costbasis.support.AccountingAssetFamilySupport;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
@@ -34,6 +35,7 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * B-EARN-DEPOSIT-MISSING: synthesises missing EARN-account counterpart for Bybit "On-chain Earn
@@ -137,8 +139,17 @@ public class BybitOnChainEarnOrphanRepairService {
             BigDecimal absQty = principal.getQuantityDelta().abs();
             String assetFamily = assetFamily(principal);
 
+            // Determine corridor funding up-front: corridor-funded events use a 1% quantity
+            // tolerance for EARN counterpart matching (Bybit truncates EARN amounts to fewer
+            // decimal places than the FUND debit, causing a sub-microsecond diff that exceeds
+            // the absolute tolerance). BLOCKER-5A fix.
+            String corrIdPrefix = hasRecentCorridorDeposit(uid, assetFamily, absQty, fund.getBlockTimestamp())
+                    ? EARN_ONCHAIN_FUND_CORR_PREFIX
+                    : EARN_ONCHAIN_CORR_PREFIX;
+            boolean corridorFunded = EARN_ONCHAIN_FUND_CORR_PREFIX.equals(corrIdPrefix);
+
             NormalizedTransaction earnCounterpart = findEarnCounterpart(
-                    allEarnLegs, uid, assetFamily, absQty, fund.getBlockTimestamp(), consumedEarnIds);
+                    allEarnLegs, uid, assetFamily, absQty, fund.getBlockTimestamp(), consumedEarnIds, corridorFunded);
             if (earnCounterpart != null) {
                 // A real EARN-side credit (EARN_FLEXIBLE_SAVING / LENDING_DEPOSIT) already records
                 // this subscription: pair the FUND debit to it under a shared earn-principal corrId
@@ -146,10 +157,26 @@ public class BybitOnChainEarnOrphanRepairService {
                 // INTERNAL_TRANSFER counterparts are left untouched (already handled/synthesised
                 // elsewhere) — same skip behaviour as before.
                 if (isLinkableEarnCredit(earnCounterpart)) {
+                    // Capture existing EARN corrId before overwriting: if the EARN credit was
+                    // already paired to a UTA transfer via bybit-earn-principal-v1, that UTA
+                    // counterpart must be excluded from accounting to avoid a redundant umbrella
+                    // drain that creates a phantom shortfall (corridor-funded FUND→EARN scenario).
+                    String existingEarnCorrId = earnCounterpart.getCorrelationId();
                     linkEarnPrincipalPair(fund, earnCounterpart, assetFamily, absQty, now);
                     consumedEarnIds.add(earnCounterpart.getId());
                     dirty.add(fund);
                     dirty.add(earnCounterpart);
+                    if (corridorFunded
+                            && existingEarnCorrId != null
+                            && existingEarnCorrId.startsWith(CorrelationContract.BYBIT_EARN_PRINCIPAL_V1_PREFIX)) {
+                        NormalizedTransaction utaCounterpart = findEarnPrincipalUtaCounterpart(
+                                existingEarnCorrId, earnCounterpart.getId());
+                        if (utaCounterpart != null) {
+                            utaCounterpart.setExcludedFromAccounting(true);
+                            utaCounterpart.setUpdatedAt(now);
+                            dirty.add(utaCounterpart);
+                        }
+                    }
                     repaired++;
                 }
                 continue;
@@ -178,13 +205,7 @@ public class BybitOnChainEarnOrphanRepairService {
                 continue;
             }
 
-            // Choose the corrId prefix based on whether this FUND event was funded via a
-            // BYBIT-CORRIDOR deposit into :FUND. Corridor-funded events need the full :FUND
-            // wallet preserved in the replay position key; spot-funded events use the stripped
-            // BYBIT:uid position.
-            String corrIdPrefix = hasRecentCorridorDeposit(uid, assetFamily, absQty, fund.getBlockTimestamp())
-                    ? EARN_ONCHAIN_FUND_CORR_PREFIX
-                    : EARN_ONCHAIN_CORR_PREFIX;
+            // corrIdPrefix already computed above based on corridor detection.
             String corrId = corrId(corrIdPrefix, fund.getId(), assetFamily, absQty);
 
             NormalizedTransaction synthetic = buildSyntheticEarnTransaction(
@@ -205,6 +226,101 @@ public class BybitOnChainEarnOrphanRepairService {
         if (!dirty.isEmpty()) {
             normalizedTransactionRepository.saveAll(dirty);
             log.info("BYBIT_EARN_ONCHAIN_ORPHAN_REPAIR candidates={} repaired={}", candidates.size(), repaired);
+        }
+        return repaired;
+    }
+
+    /**
+     * Retroactive repair for corridor-funded earn duplicates that were incorrectly synthesised
+     * on a prior run.
+     *
+     * <p>Root cause: {@link #repairOrphans()} used an absolute quantity tolerance ({@code 1e-8})
+     * that failed to match EARN_FLEXIBLE_SAVING events where Bybit truncated the amount to fewer
+     * decimal places than the FUND debit (typical difference: ~1e-7). The service synthesised a
+     * duplicate EARN credit (via {@code bybit-earn-onchain-fund-v1:}) instead of linking to the
+     * existing EARN_FLEXIBLE_SAVING. This caused:
+     * <ol>
+     *   <li>A double credit on {@code :EARN} (synthetic + EARN_FLEXIBLE_SAVING).</li>
+     *   <li>The UTA counterpart of the EARN_FLEXIBLE_SAVING draining the already-empty umbrella,
+     *       creating a phantom {@code quantityShortfall} without a ledger point (suppressed by
+     *       phantom-carry detection).</li>
+     * </ol>
+     *
+     * <p>This method finds those already-stamped FUND drains (corrId prefix
+     * {@code bybit-earn-onchain-fund-v1:}), re-links them to the existing EARN_FLEXIBLE_SAVING
+     * using a loose (1%) quantity tolerance, excludes the synthetic, and excludes the UTA
+     * counterpart that was previously paired with the EARN_FLEXIBLE_SAVING.
+     *
+     * <p>Idempotent: FUND drains that were already re-linked (corrId changed to
+     * {@code bybit-earn-principal-v1:}) are no longer found by the corridor-drain query.
+     */
+    public int repairCorridorEarnDuplicates() {
+        List<NormalizedTransaction> corridorFundDrains = loadCorridorFundedFundDrains();
+        if (corridorFundDrains.isEmpty()) {
+            return 0;
+        }
+        List<NormalizedTransaction> allEarnLegs = loadEarnCreditLegs();
+        Set<String> consumedEarnIds = new HashSet<>();
+        Instant now = Instant.now();
+        List<NormalizedTransaction> dirty = new ArrayList<>();
+        int repaired = 0;
+
+        for (NormalizedTransaction fund : corridorFundDrains) {
+            NormalizedTransaction.Flow principal = principalFlow(fund);
+            if (principal == null || principal.getQuantityDelta() == null
+                    || principal.getQuantityDelta().signum() >= 0) {
+                continue;
+            }
+            String uid = extractBybitUid(fund.getWalletAddress());
+            if (uid == null) {
+                continue;
+            }
+            BigDecimal absQty = principal.getQuantityDelta().abs();
+            String assetFamily = assetFamily(principal);
+
+            // Use corridor (1%) tolerance: Bybit truncates EARN amounts to fewer decimal places.
+            NormalizedTransaction earnCredit = findEarnCounterpart(
+                    allEarnLegs, uid, assetFamily, absQty, fund.getBlockTimestamp(), consumedEarnIds, true);
+            if (earnCredit == null || !isLinkableEarnCredit(earnCredit)) {
+                continue;
+            }
+            // Only re-link if the EARN credit is already associated with a UTA earn-principal pair:
+            // that UTA drain is the duplicate that creates the phantom umbrella shortfall.
+            String existingEarnCorrId = earnCredit.getCorrelationId();
+            if (existingEarnCorrId == null
+                    || !existingEarnCorrId.startsWith(CorrelationContract.BYBIT_EARN_PRINCIPAL_V1_PREFIX)) {
+                continue;
+            }
+
+            // Find UTA counterpart to exclude (paired with EARN credit via earn-principal corrId).
+            NormalizedTransaction utaCounterpart = findEarnPrincipalUtaCounterpart(
+                    existingEarnCorrId, earnCredit.getId());
+
+            // Find the synthetic to exclude (was created for this FUND drain on the prior run).
+            NormalizedTransaction synthetic = loadSyntheticForFund(fund.getId());
+
+            // Re-link FUND drain directly to the existing EARN credit.
+            linkEarnPrincipalPair(fund, earnCredit, assetFamily, absQty, now);
+            consumedEarnIds.add(earnCredit.getId());
+            dirty.add(fund);
+            dirty.add(earnCredit);
+            repaired++;
+
+            if (utaCounterpart != null) {
+                utaCounterpart.setExcludedFromAccounting(true);
+                utaCounterpart.setUpdatedAt(now);
+                dirty.add(utaCounterpart);
+            }
+            if (synthetic != null) {
+                synthetic.setExcludedFromAccounting(true);
+                synthetic.setUpdatedAt(now);
+                dirty.add(synthetic);
+            }
+        }
+
+        if (!dirty.isEmpty()) {
+            normalizedTransactionRepository.saveAll(dirty);
+            log.info("BYBIT_EARN_CORRIDOR_DUPLICATE_REPAIR corridorDrains={} repaired={}", corridorFundDrains.size(), repaired);
         }
         return repaired;
     }
@@ -346,6 +462,11 @@ public class BybitOnChainEarnOrphanRepairService {
      * Returns the earliest unconsumed EARN-side credit (same uid, family, |qty| ±ε, within ±6h)
      * for this FUND debit, or {@code null} if none exists. Deterministic: candidates are scanned in
      * block-timestamp order so the same pairing is chosen on every run regardless of import order.
+     *
+     * <p>When {@code corridorFunded=true} a percentage tolerance ({@link #CORRIDOR_QTY_TOLERANCE_PCT})
+     * is applied instead of the absolute {@link #QTY_TOLERANCE}: Bybit truncates EARN-side amounts
+     * to fewer decimal places than the corridor-deposited FUND debit, causing differences of ~1e-7
+     * that exceed the absolute gate but are well within 1%.
      */
     private NormalizedTransaction findEarnCounterpart(
             List<NormalizedTransaction> earnLegs,
@@ -353,8 +474,12 @@ public class BybitOnChainEarnOrphanRepairService {
             String assetFamily,
             BigDecimal absQty,
             Instant fundTimestamp,
-            Set<String> consumedEarnIds
+            Set<String> consumedEarnIds,
+            boolean corridorFunded
     ) {
+        BigDecimal effectiveTolerance = corridorFunded
+                ? absQty.multiply(CORRIDOR_QTY_TOLERANCE_PCT, MC)
+                : QTY_TOLERANCE;
         NormalizedTransaction best = null;
         Instant bestTs = null;
         for (NormalizedTransaction earn : earnLegs) {
@@ -371,7 +496,7 @@ public class BybitOnChainEarnOrphanRepairService {
             if (!assetFamily.equals(assetFamily(flow))) {
                 continue;
             }
-            if (flow.getQuantityDelta().subtract(absQty).abs().compareTo(QTY_TOLERANCE) > 0) {
+            if (flow.getQuantityDelta().subtract(absQty).abs().compareTo(effectiveTolerance) > 0) {
                 continue;
             }
             if (fundTimestamp != null && earn.getBlockTimestamp() != null) {
@@ -389,6 +514,61 @@ public class BybitOnChainEarnOrphanRepairService {
             }
         }
         return best;
+    }
+
+    /**
+     * Finds the UTA (non-EARN) INTERNAL_TRANSFER counterpart that was previously paired with
+     * {@code earnCreditId} under {@code existingCorrId}. Returns {@code null} if not found.
+     *
+     * <p>Used to exclude the UTA transfer from accounting when the corridor-funded FUND drain is
+     * re-linked directly to the EARN_FLEXIBLE_SAVING, making the UTA drain redundant.
+     */
+    private NormalizedTransaction findEarnPrincipalUtaCounterpart(
+            String existingCorrId, String earnCreditId
+    ) {
+        if (existingCorrId == null || earnCreditId == null) {
+            return null;
+        }
+        Query query = Query.query(new Criteria().andOperator(
+                Criteria.where("source").is(NormalizedTransactionSource.BYBIT),
+                Criteria.where("type").is(NormalizedTransactionType.INTERNAL_TRANSFER),
+                Criteria.where("correlationId").is(existingCorrId),
+                Criteria.where("_id").ne(earnCreditId),
+                Criteria.where("excludedFromAccounting").ne(true)
+        ));
+        List<NormalizedTransaction> candidates = mongoOperations.find(query, NormalizedTransaction.class);
+        // The UTA counterpart lives on a non-EARN wallet address.
+        return candidates.stream()
+                .filter(tx -> !isEarnAccount(tx.getWalletAddress()))
+                .findFirst()
+                .orElse(null);
+    }
+
+    /**
+     * Loads the synthetic EARN INTERNAL_TRANSFER that was created for a given FUND drain ID on a
+     * prior repair run. Returns {@code null} if no synthetic was persisted for this FUND drain.
+     */
+    private NormalizedTransaction loadSyntheticForFund(String fundId) {
+        String syntheticId = syntheticId(fundId);
+        Query query = Query.query(Criteria.where("_id").is(syntheticId));
+        return mongoOperations.findOne(query, NormalizedTransaction.class);
+    }
+
+    /**
+     * Returns FUND-side drains that were stamped with a corridor-funded earn-onchain corrId on a
+     * prior repair run. These are candidates for retroactive re-linking to existing EARN credits.
+     */
+    private List<NormalizedTransaction> loadCorridorFundedFundDrains() {
+        Query query = Query.query(new Criteria().andOperator(
+                Criteria.where("source").is(NormalizedTransactionSource.BYBIT),
+                Criteria.where("type").is(NormalizedTransactionType.INTERNAL_TRANSFER),
+                Criteria.where("excludedFromAccounting").ne(true),
+                Criteria.where("correlationId").regex(
+                        "^" + Pattern.quote(EARN_ONCHAIN_FUND_CORR_PREFIX))
+        ));
+        return mongoOperations.find(query, NormalizedTransaction.class).stream()
+                .filter(tx -> isFundAccount(tx.getWalletAddress()))
+                .toList();
     }
 
     /**
@@ -418,7 +598,8 @@ public class BybitOnChainEarnOrphanRepairService {
             if (flow == null || flow.getQuantityDelta() == null || flow.getQuantityDelta().signum() <= 0) {
                 continue;
             }
-            if (!assetFamily.equals(assetFamily(flow))) {
+            if (!AccountingAssetClassificationSupport.sharesLiquidStakingNormalizationCluster(
+                    assetSymbol, flow.getAssetSymbol())) {
                 continue;
             }
             String candidateSymbol = flow.getAssetSymbol() == null

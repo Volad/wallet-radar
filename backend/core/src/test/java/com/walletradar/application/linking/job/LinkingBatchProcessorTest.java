@@ -25,7 +25,9 @@ import com.walletradar.application.linking.pipeline.clarification.GmxExitSettlem
 import com.walletradar.application.linking.pipeline.clarification.GmxV2RefundClassifier;
 import com.walletradar.application.linking.pipeline.clarification.KnownBridgeRouterExternalTypeCorrectionService;
 import com.walletradar.application.linking.pipeline.clarification.NftMintRetagger;
+import com.walletradar.application.linking.pipeline.clarification.AaveVariableDebtTokenTagger;
 import com.walletradar.application.linking.pipeline.clarification.ProtocolAttributionClassifier;
+import com.walletradar.application.linking.pipeline.clarification.EulerEvkDebtTokenTagger;
 import com.walletradar.application.linking.pipeline.clarification.ScamDisperseClonePhishingTagger;
 import com.walletradar.application.linking.pipeline.clarification.SpoofTokenDetector;
 import com.walletradar.application.linking.pipeline.clarification.TurtleVaultBurnRepairService;
@@ -81,6 +83,8 @@ class LinkingBatchProcessorTest {
         AddressPoisoningDetector addressPoisoningDetector = mock(AddressPoisoningDetector.class);
         SpoofTokenDetector spoofTokenDetector = mock(SpoofTokenDetector.class);
         ScamDisperseClonePhishingTagger scamDisperseClonePhishingTagger = mock(ScamDisperseClonePhishingTagger.class);
+        AaveVariableDebtTokenTagger aaveVariableDebtTokenTagger = mock(AaveVariableDebtTokenTagger.class);
+        EulerEvkDebtTokenTagger eulerEvkDebtTokenTagger = mock(EulerEvkDebtTokenTagger.class);
         GmxExitSettlementLinkService gmxExitSettlementLinkService = mock(GmxExitSettlementLinkService.class);
         GmxEntryRequestLinkService gmxEntryRequestLinkService = mock(GmxEntryRequestLinkService.class);
         GmxV2RefundClassifier gmxV2RefundClassifier = mock(GmxV2RefundClassifier.class);
@@ -110,6 +114,8 @@ class LinkingBatchProcessorTest {
         when(addressPoisoningDetector.detectAndExclude(25)).thenReturn(25);
         when(spoofTokenDetector.detectAndExclude(25)).thenReturn(35);
         when(scamDisperseClonePhishingTagger.tagPhishingOutbounds(25)).thenReturn(26);
+        when(eulerEvkDebtTokenTagger.tagDebtTokenInflows(25)).thenReturn(46);
+        when(aaveVariableDebtTokenTagger.tagDebtTokenFlows(25)).thenReturn(47);
         when(gmxExitSettlementLinkService.linkOutstandingSettlements(25)).thenReturn(0);
         when(gmxEntryRequestLinkService.linkOutstandingRequests(25)).thenReturn(0);
         when(gmxV2RefundClassifier.classifyGmxRefunds(25)).thenReturn(27);
@@ -119,6 +125,7 @@ class LinkingBatchProcessorTest {
         when(unmatchedBridgeInboundPricingFallbackService.reconcileOrphanInbounds()).thenReturn(21);
         when(bybitInternalTransferOrphanFallbackService.reconcileOrphanInternals()).thenReturn(22);
         when(bybitOnChainEarnOrphanRepairService.repairOrphans()).thenReturn(34);
+        when(bybitOnChainEarnOrphanRepairService.repairCorridorEarnDuplicates()).thenReturn(38);
         when(unmatchedExternalTransferInPricingFallbackService.reconcileOrphanInbounds()).thenReturn(23);
         when(bridgePairContinuityRepairService.reconcileLegacySealedPairs(25)).thenReturn(29);
         when(onChainInternalTransferPairRepairService.reconcileOrphanSameTxPairs(25)).thenReturn(31);
@@ -152,6 +159,8 @@ class LinkingBatchProcessorTest {
                 addressPoisoningDetector,
                 spoofTokenDetector,
                 scamDisperseClonePhishingTagger,
+                aaveVariableDebtTokenTagger,
+                eulerEvkDebtTokenTagger,
                 gmxExitSettlementLinkService,
                 gmxEntryRequestLinkService,
                 gmxV2RefundClassifier,
@@ -162,7 +171,7 @@ class LinkingBatchProcessorTest {
         AtomicInteger heartbeatCount = new AtomicInteger();
         int processed = processor.processNextBatch(25, heartbeatCount::incrementAndGet);
 
-        assertThat(processed).isEqualTo(815);
-        assertThat(heartbeatCount).hasValue(39);
+        assertThat(processed).isEqualTo(946);
+        assertThat(heartbeatCount).hasValue(42);
     }
 }

@@ -20,6 +20,7 @@ import com.walletradar.domain.transaction.raw.RawTransactionRepository;
 import com.walletradar.application.cex.normalization.venue.bybit.BybitBotTransferCostBasisService;
 import com.walletradar.application.cex.normalization.venue.bybit.BybitCanonicalTransactionBuilder;
 import com.walletradar.application.cex.normalization.venue.bybit.BybitEarnPrincipalTransferPairer;
+import com.walletradar.application.cex.normalization.venue.bybit.BybitOnChainEarnFundPairer;
 import com.walletradar.application.cex.normalization.venue.bybit.BybitPrincipalEventExclusivityService;
 import com.walletradar.application.cex.normalization.venue.bybit.BybitInternalTransferExternalCpReclassifier;
 import com.walletradar.application.cex.normalization.venue.bybit.BybitStakingConversionPairer;
@@ -100,6 +101,8 @@ class BybitNormalizationServiceTest {
     private BybitStreamAuthorityCollapser bybitStreamAuthorityCollapser;
     @Mock
     private BybitStakingConversionPairer bybitStakingConversionPairer;
+    @Mock
+    private BybitOnChainEarnFundPairer bybitOnChainEarnFundPairer;
     @Mock
     private BybitBotTransferCostBasisService bybitBotTransferCostBasisService;
 
@@ -793,6 +796,7 @@ class BybitNormalizationServiceTest {
                 bybitInternalTransferExternalCpReclassifier,
                 bybitStreamAuthorityCollapser,
                 bybitStakingConversionPairer,
+                bybitOnChainEarnFundPairer,
                 bybitBotTransferCostBasisService
         );
     }

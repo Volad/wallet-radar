@@ -79,6 +79,16 @@ public final class LpNftClFlowMaterializer {
         if (isPrincipalExitType(type)) {
             return enrichPrincipalExit(view, movementLegs, type, receiptSymbol, baseFlows, externalFeeFractions);
         }
+        // BLOCKER-3: Balancer V3 gauge stake/unstake — canonicalize BPT → LP-RECEIPT.
+        // Only applies when the receipt symbol is a registered Balancer V3 BPT pool (otherwise
+        // we return baseFlows unchanged and preserve existing behaviour for other protocols).
+        if (type == NormalizedTransactionType.LP_POSITION_STAKE
+                || type == NormalizedTransactionType.LP_POSITION_UNSTAKE) {
+            if (!isBalancerV3BptReceipt(receiptSymbol)) {
+                return baseFlows == null ? List.of() : baseFlows;
+            }
+            return enrichBptStakeUnstake(movementLegs, type, receiptSymbol, baseFlows);
+        }
         return baseFlows == null ? List.of() : baseFlows;
     }
 
@@ -86,7 +96,13 @@ public final class LpNftClFlowMaterializer {
         return type == NormalizedTransactionType.LP_ENTRY
                 || type == NormalizedTransactionType.LP_EXIT
                 || type == NormalizedTransactionType.LP_EXIT_PARTIAL
-                || type == NormalizedTransactionType.LP_EXIT_FINAL;
+                || type == NormalizedTransactionType.LP_EXIT_FINAL
+                // BLOCKER-3: BPT canonicalization for Balancer V3 gauge stake/unstake lifecycle.
+                // LP_POSITION_STAKE sends the BPT to the gauge; LP_POSITION_UNSTAKE returns it.
+                // Both require the raw BPT flow to be rewritten as LP-RECEIPT so the position
+                // uses the same canonical key throughout its lifecycle (entry → stake → unstake → exit).
+                || type == NormalizedTransactionType.LP_POSITION_STAKE
+                || type == NormalizedTransactionType.LP_POSITION_UNSTAKE;
     }
 
     private static List<NormalizedTransaction.Flow> enrichEntry(
@@ -96,7 +112,13 @@ public final class LpNftClFlowMaterializer {
             String receiptSymbol,
             List<NormalizedTransaction.Flow> baseFlows
     ) {
-        if (!LpPositionLifecycleSupport.hasPositionNftMintLog(view)) {
+        boolean hasNftMintLog = LpPositionLifecycleSupport.hasPositionNftMintLog(view);
+        // When an operator-supplied manualCorrelationOverride is present the full receipt is
+        // permanently unavailable, so hasPositionNftMintLog is always false. Treat the override
+        // as equivalent evidence — emit a synthetic qty=+1 NFT receipt leg so the position
+        // tracks under the canonical LP-RECEIPT key throughout its lifecycle.
+        boolean hasManualOverride = view != null && view.manualCorrelationOverride() != null;
+        if (!hasNftMintLog && !hasManualOverride) {
             // A2 (minimal, R6a): ERC-20 BPT receipt for Balancer V3 pool-level positions.
             // The BPT token IS the receipt; its inbound quantity replaces the raw BPT transfer leg.
             if (isBalancerV3BptReceipt(receiptSymbol)) {
@@ -182,6 +204,144 @@ public final class LpNftClFlowMaterializer {
             flows.add(receipt);
         }
         return flows;
+    }
+
+    /**
+     * BLOCKER-3: Balancer V3 gauge stake/unstake BPT canonicalization.
+     *
+     * <p>For {@code LP_POSITION_STAKE} the BPT (which is the LP receipt) is sent to the gauge:
+     * the raw BPT outbound leg is replaced by an LP-RECEIPT outbound leg so the position tracks
+     * under the canonical {@code LP-RECEIPT:NETWORK:BALANCERV3:poolAddress} key, consistent with
+     * the LP_ENTRY inbound flow and the LP_EXIT outbound burn.</p>
+     *
+     * <p>For {@code LP_POSITION_UNSTAKE} the BPT is returned from the gauge: the raw BPT inbound
+     * leg is replaced by an LP-RECEIPT inbound leg (symmetric with LP_POSITION_STAKE).</p>
+     *
+     * <p>Gauge token legs (any flow whose contract ≠ BPT pool address) are preserved unchanged.</p>
+     */
+    private static List<NormalizedTransaction.Flow> enrichBptStakeUnstake(
+            List<RawLeg> movementLegs,
+            NormalizedTransactionType type,
+            String receiptSymbol,
+            List<NormalizedTransaction.Flow> baseFlows
+    ) {
+        String bptAddr = extractBptPoolAddrFromReceipt(receiptSymbol);
+        boolean isStake = type == NormalizedTransactionType.LP_POSITION_STAKE;
+        List<NormalizedTransaction.Flow> flows = new ArrayList<>();
+        BigDecimal bptQty = BigDecimal.ZERO;
+        // effectiveReceiptSymbol may be rewritten below (STAKE gauge-receipt fallback).
+        String effectiveReceiptSymbol = receiptSymbol;
+
+        if (baseFlows != null) {
+            for (NormalizedTransaction.Flow flow : baseFlows) {
+                if (flow == null) {
+                    continue;
+                }
+                // Skip the raw BPT leg — replace it with LP-RECEIPT below.
+                if (bptAddr != null && bptAddr.equalsIgnoreCase(flow.getAssetContract())
+                        && flow.getQuantityDelta() != null
+                        && (isStake
+                                ? flow.getQuantityDelta().signum() < 0
+                                : flow.getQuantityDelta().signum() > 0)) {
+                    bptQty = flow.getQuantityDelta().abs();
+                    continue;
+                }
+                flows.add(flow);
+            }
+        }
+
+        // Fallback A: scan raw movement legs if baseFlows did not contain the BPT leg.
+        if (bptQty.signum() == 0 && bptAddr != null && movementLegs != null) {
+            for (RawLeg leg : movementLegs) {
+                if (leg == null || leg.fee()) {
+                    continue;
+                }
+                if (bptAddr.equalsIgnoreCase(leg.assetContract())
+                        && leg.quantityDelta() != null
+                        && (isStake
+                                ? leg.quantityDelta().signum() < 0
+                                : leg.quantityDelta().signum() > 0)) {
+                    bptQty = leg.quantityDelta().abs();
+                    break;
+                }
+            }
+        }
+
+        // Fallback B (STAKE only): the receiptSymbol may point to the gauge contract rather than
+        // the BPT pool (e.g. LP-RECEIPT:AVALANCHE:BALANCERV3:0x<gauge>). In that case bptAddr is
+        // the gauge address, which does not match the negative BPT flow. Scan movementLegs for any
+        // negative non-gauge non-fee flow, treat that contract as the BPT address, and rewrite
+        // receiptSymbol accordingly. Also handles the case where baseFlows is null (common for
+        // LP_POSITION_STAKE when no pre-built flows are passed).
+        if (isStake && bptQty.signum() == 0 && movementLegs != null) {
+            String networkSegment = extractNetworkSegmentFromReceipt(receiptSymbol); // e.g. "AVALANCHE"
+            for (RawLeg leg : movementLegs) {
+                if (leg == null || leg.fee()) {
+                    continue;
+                }
+                if (leg.assetContract() == null) {
+                    continue;
+                }
+                if (leg.quantityDelta() == null || leg.quantityDelta().signum() >= 0) {
+                    continue;
+                }
+                String candidateContract = leg.assetContract().toLowerCase(Locale.ROOT);
+                // Skip the gauge contract itself.
+                if (bptAddr != null && bptAddr.equalsIgnoreCase(candidateContract)) {
+                    continue;
+                }
+                // This negative raw leg is the BPT being staked. Rebuild the LP-RECEIPT symbol.
+                if (networkSegment != null) {
+                    effectiveReceiptSymbol = "LP-RECEIPT:" + networkSegment + ":BALANCERV3:" + candidateContract;
+                    bptQty = leg.quantityDelta().abs();
+                    // Remove the raw BPT flow from the output list (may already be there if baseFlows was non-null).
+                    final String finalCandidateContract = candidateContract;
+                    flows.removeIf(f -> f != null && finalCandidateContract.equalsIgnoreCase(f.getAssetContract())
+                            && f.getQuantityDelta() != null && f.getQuantityDelta().signum() < 0);
+                    break;
+                }
+            }
+        }
+
+        if (bptQty.signum() > 0) {
+            NormalizedTransaction.Flow receipt = new NormalizedTransaction.Flow();
+            receipt.setAssetSymbol(effectiveReceiptSymbol);
+            receipt.setQuantityDelta(isStake ? bptQty.negate() : bptQty);
+            receipt.setRole(NormalizedLegRole.TRANSFER);
+            flows.add(receipt);
+        }
+        return flows;
+    }
+
+    /** Extracts the network segment (e.g. {@code "AVALANCHE"}) from an LP-RECEIPT symbol. */
+    private static String extractNetworkSegmentFromReceipt(String receiptSymbol) {
+        if (receiptSymbol == null) {
+            return null;
+        }
+        // Format: LP-RECEIPT:<NET>:PROTOCOL:<poolAddr>
+        String[] parts = receiptSymbol.split(":", 4);
+        if (parts.length < 2) {
+            return null;
+        }
+        return parts[1]; // network segment
+    }
+
+    /**
+     * BLOCKER-3: Removes the raw BPT outbound flow from a Balancer V3 LP_EXIT flow list so that
+     * the canonical LP-RECEIPT burn is the sole representation of the BPT disposal.
+     *
+     * <p>The raw ERC-20 BPT transfer-to-zero is already semantically captured by the LP-RECEIPT
+     * outbound leg. Keeping both creates a double-burn in the replay engine.</p>
+     */
+    private static void removeRawBptOutboundFlow(List<NormalizedTransaction.Flow> flows, String receiptSymbol) {
+        String bptAddr = extractBptPoolAddrFromReceipt(receiptSymbol);
+        if (bptAddr == null) {
+            return;
+        }
+        flows.removeIf(flow -> flow != null
+                && bptAddr.equalsIgnoreCase(flow.getAssetContract())
+                && flow.getQuantityDelta() != null
+                && flow.getQuantityDelta().signum() < 0);
     }
 
     /**
@@ -303,11 +463,16 @@ public final class LpNftClFlowMaterializer {
             flows = applyFeeSplitIfAvailable(view, flows);
         }
         if (!containsReceiptSymbol(flows, receiptSymbol)) {
-            // A2 (minimal, R6a): Balancer V3 BPT — use actual burned BPT quantity, not qty=1.
-            NormalizedTransaction.Flow receipt = isBalancerV3BptReceipt(receiptSymbol)
-                    ? buildBptOutboundReceiptLeg(flows, movementLegs, receiptSymbol)
-                    : buildNftOutboundReceiptLeg(receiptSymbol);
-            flows.add(receipt);
+            if (isBalancerV3BptReceipt(receiptSymbol)) {
+                // A2 / BLOCKER-3: replace the raw BPT outbound flow with the canonical LP-RECEIPT
+                // outbound leg so LP_EXIT does not double-burn both "Aave GHO/USDT/USDC" and
+                // "LP-RECEIPT:AVALANCHE:BALANCERV3:0xfcec3c8d...".
+                NormalizedTransaction.Flow receipt = buildBptOutboundReceiptLeg(flows, movementLegs, receiptSymbol);
+                removeRawBptOutboundFlow(flows, receiptSymbol);
+                flows.add(receipt);
+            } else {
+                flows.add(buildNftOutboundReceiptLeg(receiptSymbol));
+            }
         }
         return flows;
     }

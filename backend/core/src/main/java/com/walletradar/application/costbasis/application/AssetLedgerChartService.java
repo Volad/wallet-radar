@@ -48,7 +48,7 @@ class AssetLedgerChartService {
             state.apply(accumulator);
             applyMethodBBuckets(familyIdentity, accumulator.memberPoints(), liveAvcoBuckets);
             CoveredWeightedAvco series = coveredWeightedFamilyAvco(liveAvcoBuckets);
-            BigDecimal avcoAfterUsd = series.taxAvco();
+            BigDecimal avcoAfterUsd = series.marketAvco();
             BigDecimal netAvcoAfterUsd = series.netAvco();
             String avcoKind = avcoAfterUsd == null ? AVCO_KIND_UNAVAILABLE : AVCO_KIND_PRIMARY_FLOW;
 
@@ -216,7 +216,7 @@ class AssetLedgerChartService {
 
     private static CoveredWeightedAvco coveredWeightedFamilyAvco(Map<BucketKey, BucketAvcoState> liveAvcoBuckets) {
         BigDecimal coveredTotal = BigDecimal.ZERO;
-        BigDecimal taxBasisTotal = BigDecimal.ZERO;
+        BigDecimal marketBasisTotal = BigDecimal.ZERO;
         BigDecimal netBasisTotal = BigDecimal.ZERO;
         for (BucketAvcoState bucket : liveAvcoBuckets.values()) {
             BigDecimal covered = bucket.coveredQuantity();
@@ -225,7 +225,7 @@ class AssetLedgerChartService {
             }
             coveredTotal = coveredTotal.add(covered, MC);
             if (bucket.avcoAfterUsd() != null) {
-                taxBasisTotal = taxBasisTotal.add(bucket.avcoAfterUsd().multiply(covered, MC), MC);
+                marketBasisTotal = marketBasisTotal.add(bucket.avcoAfterUsd().multiply(covered, MC), MC);
             }
             BigDecimal netAvco = bucket.netAvcoAfterUsd() != null
                     ? bucket.netAvcoAfterUsd()
@@ -238,7 +238,7 @@ class AssetLedgerChartService {
             return new CoveredWeightedAvco(null, null);
         }
         return new CoveredWeightedAvco(
-                taxBasisTotal.divide(coveredTotal, MC),
+                marketBasisTotal.divide(coveredTotal, MC),
                 netBasisTotal.divide(coveredTotal, MC)
         );
     }
@@ -485,7 +485,7 @@ class AssetLedgerChartService {
 
     private record BucketAvcoState(BigDecimal avcoAfterUsd, BigDecimal netAvcoAfterUsd, BigDecimal coveredQuantity) {}
 
-    private record CoveredWeightedAvco(BigDecimal taxAvco, BigDecimal netAvco) {}
+    private record CoveredWeightedAvco(BigDecimal marketAvco, BigDecimal netAvco) {}
 
     private static final class AggregatedState {
         private BigDecimal quantity = BigDecimal.ZERO;

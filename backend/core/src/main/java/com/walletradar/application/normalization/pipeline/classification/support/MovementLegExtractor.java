@@ -65,7 +65,13 @@ public class MovementLegExtractor {
             if (matchesWalletAccount(view, view.tokenTransferTo(transfer))) {
                 legs.add(RawLeg.asset(contract, symbol, quantity));
             }
-            if (matchesWalletAccount(view, view.tokenTransferFrom(transfer))) {
+            // Only generate a DEBIT when the primary (main) wallet is the direct sender.
+            // Euler-controlled sub-account outflows must not produce a DEBIT against the main
+            // wallet's basis pool because:
+            //   - sub-account → main wallet is an intra-user move (CREDIT above is the only leg)
+            //   - sub-account → address(0) burns are loop-internal vault exits that the main
+            //     wallet's pool did not fund directly (the leveraged portion lives on the sub-account)
+            if (matchesPrimaryWallet(view, view.tokenTransferFrom(transfer))) {
                 legs.add(RawLeg.asset(contract, symbol, quantity.negate()));
             }
         }
@@ -201,6 +207,12 @@ public class MovementLegExtractor {
             return null;
         }
         return gasUsed.multiply(gasPrice);
+    }
+
+    private boolean matchesPrimaryWallet(OnChainRawTransactionView view, String address) {
+        String wallet = OnChainRawTransactionView.normalizeAddress(view.walletAddress());
+        String normalizedAddress = OnChainRawTransactionView.normalizeAddress(address);
+        return wallet != null && wallet.equals(normalizedAddress);
     }
 
     private boolean matchesWalletAccount(OnChainRawTransactionView view, String address) {

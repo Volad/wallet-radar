@@ -291,14 +291,29 @@ public class LpReceiptEntryReplayHandler {
         if (totalQty.signum() <= 0 || outboundPrincipal.isEmpty()) {
             return;
         }
-        AssetKey receiptKey = assetSupport.lpReceiptPositionKey(transaction, corrId);
-        if (receiptKey == null) {
+
+        // Cycle/Z3 fix: When LP_ENTRY has an explicit LP-RECEIPT inbound flow (e.g., Balancer V3
+        // BPT that appears as a same-tx inbound), synthesize the position on the CONTRACT-BASED
+        // asset key using the actual BPT quantity. This allows LP_POSITION_STAKE to correctly drain
+        // from the position. For NFT-style LP receipts (Uniswap V3, Aerodrome) there is no
+        // explicit LP-RECEIPT flow, so the original corrId-keyed synthetic qty=1 path is preserved.
+        NormalizedTransaction.Flow explicitReceiptFlow = findExplicitLpReceiptInboundFlow(transaction);
+        AssetKey receiptKey;
+        BigDecimal syntheticQty;
+        if (explicitReceiptFlow != null) {
+            receiptKey = assetSupport.assetKey(transaction, explicitReceiptFlow);
+            syntheticQty = explicitReceiptFlow.getQuantityDelta().abs();
+        } else {
+            receiptKey = assetSupport.lpReceiptPositionKey(transaction, corrId);
+            syntheticQty = BigDecimal.ONE;
+        }
+        if (receiptKey == null || syntheticQty.signum() <= 0) {
             return;
         }
         PositionState receiptPosition = replayState.position(receiptKey);
         PositionSnapshot before = flowSupport.snapshot(receiptPosition);
-        BigDecimal avco = totalBasis.signum() > 0 ? totalBasis.divide(BigDecimal.ONE, MC) : null;
-        receiptPosition.setQuantity(BigDecimal.ONE);
+        BigDecimal avco = totalBasis.signum() > 0 ? totalBasis.divide(syntheticQty, MC) : null;
+        receiptPosition.setQuantity(syntheticQty);
         receiptPosition.setTotalCostBasisUsd(totalBasis);
         receiptPosition.setNetTotalCostBasisUsd(totalBasis);
         receiptPosition.setUncoveredQuantity(totalUncovered);
@@ -315,6 +330,29 @@ public class LpReceiptEntryReplayHandler {
                 receiptPosition,
                 AssetLedgerPoint.BasisEffect.REALLOCATE_IN
         );
+    }
+
+    /**
+     * Returns the first explicit LP-RECEIPT inbound TRANSFER flow in the transaction, or
+     * {@code null} if none exists. Present in Balancer V3 / Curve-style pools that mint
+     * fungible LP tokens in the same transaction; absent for NFT-receipt protocols (Uniswap V3).
+     */
+    private static NormalizedTransaction.Flow findExplicitLpReceiptInboundFlow(NormalizedTransaction transaction) {
+        if (transaction == null || transaction.getFlows() == null) {
+            return null;
+        }
+        for (NormalizedTransaction.Flow flow : transaction.getFlows()) {
+            if (flow == null
+                    || flow.getRole() != NormalizedLegRole.TRANSFER
+                    || flow.getQuantityDelta() == null
+                    || flow.getQuantityDelta().signum() <= 0) {
+                continue;
+            }
+            if (isLpReceiptMarker(flow)) {
+                return flow;
+            }
+        }
+        return null;
     }
 
     private static boolean isLpReceiptMarker(NormalizedTransaction.Flow flow) {

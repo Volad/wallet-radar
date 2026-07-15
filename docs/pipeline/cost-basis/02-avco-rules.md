@@ -5,13 +5,13 @@
 
 Core AVCO mechanics live in `GenericFlowReplayEngine` and are invoked by `ReplayDispatcher` / `TransferReplayHandler` for generic flows. All math uses `MathContext.DECIMAL128`.
 
-## Dual lanes: Net AVCO and Tax AVCO
+## Dual lanes: Net AVCO and Market AVCO
 
-Since ADR-040, replay maintains **two parallel cost numerators** on the same quantity pool:
+Since ADR-040 (amended 2026-07-13), replay maintains **two parallel cost numerators** on the same quantity pool:
 
 | Lane | API field | Acquisition cost for rewards / LP fee claims |
 |---|---|---|
-| **Tax AVCO** | `avcoUsd`, `totalCostBasisUsd` | FMV at receipt (existing behavior) |
+| **Market AVCO** | `avcoUsd`, `totalCostBasisUsd` | FMV at receipt (existing behavior) |
 | **Net AVCO** | `netAvcoUsd`, `netTotalCostBasisUsd` | $0 when `ZeroCostAcquisitionSupport.isZeroCostAcquisition(type)` |
 
 - Disposals relieve covered basis from both numerators using each lane's AVCO at time of sale.
@@ -363,8 +363,8 @@ AVCO math application per type:
 | `LP_ENTRY_REQUEST` / `LP_EXIT_REQUEST` | Escrow REALLOCATE; no PnL |
 | `BORROW` | Reserve BUY + liability record |
 | `REPAY` | Reserve SELL + liability match (zero-PnL roundtrip when matched) |
-| `STAKING_DEPOSIT` | Carry principal → derivative; no conversion PnL |
-| `STAKING_WITHDRAW` | Carry derivative → principal |
+| `STAKING_DEPOSIT` | **C1↔C1 same canonical identity:** REALLOCATE, no P&amp;L. **C1↔C2 or C2↔C2 identity change:** generic DISPOSE+ACQUIRE at market, realize P&amp;L (ADR-054) |
+| `STAKING_WITHDRAW` | Symmetric to `STAKING_DEPOSIT` (ADR-054) |
 | `LENDING_LOOP_OPEN` | ACQUIRE share at event-local price |
 | `LENDING_LOOP_REBALANCE` | CARRY between share assets |
 | `LENDING_LOOP_DECREASE` / `CLOSE` | DISPOSE share; ACQUIRE returned asset |

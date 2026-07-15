@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Accepted (amended 2026-07-02 — net-carry conservation invariant; UI label "Market AVCO") |
+| **Status** | Accepted (amended 2026-07-02 — net-carry conservation invariant; UI label "Market AVCO"; amended 2026-07-13 — "Tax" lane renamed to "Market" everywhere, see ADR-054) |
 | **Date** | 2026-06-30 |
 | **Theme** | Cost basis / replay / UI |
 
@@ -56,6 +56,16 @@ Concretely:
 
 The Tax AVCO lane is displayed in the UI as **"Market AVCO"** (rewards/fees booked at fair-market value).
 Internal field names (`avcoUsd`, `avcoAfterUsd`, etc.) are unchanged for backward compatibility.
+
+### Lane rename: "Tax" → "Market" everywhere (amendment 2026-07-13, per ADR-054)
+
+The gross lane is renamed **Market** consistently across the whole system — UI labels (already done),
+`avcoKind`/enum values, DTOs, code comments, docs, and ADR prose. The two lanes are henceforth **Market
+AVCO** and **Net AVCO**; the term "Tax AVCO" is retired. Backward-compatible **field names**
+(`avcoUsd`, `avcoAfterUsd`, `totalCostBasisUsd`, `realisedPnlDeltaUsd`) are kept — they denote the Market
+lane. An ArchTest/grep gate asserts no lingering "Tax" AVCO references remain in code or docs. The Net-lane
+semantics (income booked at $0) are unchanged; note ADR-054 §4 additionally forbids adding quantity at $0
+basis in the **Market** (AVCO-authoritative) lane.
 
 ## Consequences
 

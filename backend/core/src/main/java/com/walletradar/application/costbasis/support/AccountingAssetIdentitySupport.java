@@ -2,6 +2,7 @@ package com.walletradar.application.costbasis.support;
 
 import com.walletradar.canonical.correlation.CorrelationContract;
 import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
@@ -121,10 +122,17 @@ public final class AccountingAssetIdentitySupport {
      * those rows place basis directly on {@code :FUND}, so the {@code CARRY_OUT} must drain that
      * sub-account.
      *
-     * <p>BYBIT-CORRIDOR transactions from the {@code :FUND} sub-account also keep the full
-     * wallet address because the earn-principal transfer that placed assets into {@code :FUND}
-     * stored them under {@code BYBIT:UID:FUND}. Stripping the suffix would cause the carry-out
-     * to drain an empty root position instead of the actual funded position.
+     * <p>BYBIT-CORRIDOR legs are direction-aware (BLOCKER-4). An <em>outbound drain</em>
+     * ({@code quantityDelta < 0}, non-FEE flow) from the {@code :FUND} sub-account keeps the full
+     * {@code BYBIT:UID:FUND} wallet because the earn-principal transfer that placed assets into
+     * {@code :FUND} stored them there; stripping the suffix would drain an empty root position.
+     * An <em>inbound deposit</em> ({@code quantityDelta > 0}) instead collapses {@code :FUND}/
+     * {@code :UTA} to the UID umbrella so the credited inventory lands on the same key that all
+     * other spot activity (converts, EXECUTION_SPOT sells, {@code bybit-collapsed-v1} transfers)
+     * consumes — otherwise the deposit is stranded on {@code :FUND} and later spot disposals
+     * over-sell against a phantom shortfall. Conservation still holds: the corridor conservation
+     * guards key on the corridor queue (correlationId + asset identity), not the position wallet,
+     * so the {@code CARRY_IN}→queue consumption is invariant to this position-key collapse.
      */
     public static String replayPositionWalletAddress(
             NormalizedTransaction transaction,
@@ -149,7 +157,7 @@ public final class AccountingAssetIdentitySupport {
             }
             return wallet;
         }
-        if (isBybitCorridorFromFund(transaction)) {
+        if (isBybitCorridorOutboundDrainFromFund(transaction, flow)) {
             String wallet = transaction.getWalletAddress();
             if (wallet != null && !wallet.isBlank()) {
                 return wallet.trim();
@@ -233,11 +241,24 @@ public final class AccountingAssetIdentitySupport {
     }
 
     /**
-     * Returns true for BYBIT-CORRIDOR transactions whose Bybit-side wallet is the {@code :FUND}
-     * sub-account. These transactions carry out assets that earn-principal transfers deposited
-     * directly into {@code :FUND}, so the full sub-account address must be preserved.
+     * Returns true only for BYBIT-CORRIDOR <em>outbound drains</em> from the {@code :FUND}
+     * sub-account (BLOCKER-4). The full {@code :FUND} wallet is preserved so the carry-out drains
+     * the sub-account pool that earn-principal transfers funded directly on {@code :FUND}.
+     *
+     * <p>Gate: correlationId under {@link CorrelationContract#BYBIT_CORRIDOR_PREFIX}, wallet is a
+     * CEX {@code :FUND} sub-account, and the flow is an outbound value move (non-{@code FEE} role,
+     * negative {@code quantityDelta}). Bybit corridor legs are single-flow {@code INTERNAL_TRANSFER}
+     * rows with role {@code TRANSFER} and no FEE legs, so the flow sign is the direction signal.
+     *
+     * <p>Inbound corridor deposits ({@code quantityDelta > 0}) return false and fall through to
+     * {@link #positionWalletAddress(NormalizedTransaction)}, which collapses {@code :FUND}/
+     * {@code :UTA} onto the UID umbrella. FEE-role or zero/null-delta flows also return false and
+     * never preserve {@code :FUND}.
      */
-    private static boolean isBybitCorridorFromFund(NormalizedTransaction transaction) {
+    private static boolean isBybitCorridorOutboundDrainFromFund(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow
+    ) {
         if (transaction == null) {
             return false;
         }
@@ -246,9 +267,17 @@ public final class AccountingAssetIdentitySupport {
             return false;
         }
         String wallet = transaction.getWalletAddress();
-        if (wallet == null) return false;
+        if (wallet == null) {
+            return false;
+        }
         WalletRef ref = WalletRef.parse(wallet);
-        return ref.domain() == WalletDomainKind.CEX && "FUND".equalsIgnoreCase(ref.subAccount());
+        if (ref.domain() != WalletDomainKind.CEX || !"FUND".equalsIgnoreCase(ref.subAccount())) {
+            return false;
+        }
+        return flow != null
+                && flow.getRole() != NormalizedLegRole.FEE
+                && flow.getQuantityDelta() != null
+                && flow.getQuantityDelta().signum() < 0;
     }
 
     public static boolean isVenueScopedCex(NormalizedTransactionSource source) {

@@ -1,5 +1,6 @@
 package com.walletradar.application.costbasis.application.replay.support;
 
+import com.walletradar.application.costbasis.support.AccountingAssetFamilySupport;
 import com.walletradar.application.costbasis.support.BridgeAssetFamilySupport;
 import com.walletradar.canonical.correlation.CorrelationContract;
 import com.walletradar.application.costbasis.application.replay.model.BridgePendingKey;
@@ -516,6 +517,25 @@ public class ReplayPendingTransferKeyFactory {
             return null;
         }
 
+        // LP-RECEIPT burns are the authoritative position marker for explicit LP exits.
+        // AccountingAssetFamilySupport.continuityIdentity maps LP-RECEIPT tokens to
+        // "FAMILY:LP-RECEIPT", which is then filtered out by dominantNonFamilyReceipt (it
+        // excludes all "FAMILY:" identities). To avoid picking a wrong receipt (e.g. GHO
+        // contract address) that would break shouldIgnoreLpReceiptMarker, detect the
+        // burned LP-RECEIPT leg directly via its assetIdentity before falling through.
+        if (isExplicitExit) {
+            for (NormalizedTransaction.Flow candidate : transaction.getFlows()) {
+                if (candidate == null || candidate.getQuantityDelta() == null
+                        || candidate.getQuantityDelta().signum() >= 0
+                        || candidate.getRole() == NormalizedLegRole.FEE) {
+                    continue;
+                }
+                if (AccountingAssetFamilySupport.isLpReceiptSymbol(candidate.getAssetSymbol())) {
+                    return assetSupport.assetIdentity(transaction, candidate);
+                }
+            }
+        }
+
         NonFamilyReceiptCandidate positiveReceipt = dominantNonFamilyReceipt(transaction, 1, assetSupport);
         NonFamilyReceiptCandidate negativeReceipt = dominantNonFamilyReceipt(transaction, -1, assetSupport);
 
@@ -636,6 +656,13 @@ public class ReplayPendingTransferKeyFactory {
         int receiptSign = depositShape ? 1 : -1;
         int counterpartySign = -receiptSign;
 
+        // LP_POSITION_STAKE / UNSTAKE may carry extra reward TRANSFER flows (e.g. BAL accrual)
+        // alongside the principal GAUGE↔LP-RECEIPT pair. These rewards must not be counted as
+        // principal legs or they will prevent wrapper-composite detection (principalLegs != 2).
+        boolean isLpPositionStakeOrUnstake =
+                type == NormalizedTransactionType.LP_POSITION_STAKE
+                        || type == NormalizedTransactionType.LP_POSITION_UNSTAKE;
+
         String receiptIdentity = null;
         int principalLegs = 0;
         for (NormalizedTransaction.Flow candidate : transaction.getFlows()) {
@@ -655,6 +682,16 @@ public class ReplayPendingTransferKeyFactory {
                 }
                 return null;
             }
+            // For LP_POSITION_UNSTAKE: skip positive TRANSFER flows that are not LP-RECEIPT
+            // markers. These are gauge rewards (e.g. BAL) credited in the same transaction;
+            // they are not part of the 2-leg GAUGE→LP-RECEIPT unwrap and must not inflate
+            // principalLegs beyond 2. The reward flows are handled by the generic ACQUIRE path.
+            if (isLpPositionStakeOrUnstake
+                    && withdrawShape
+                    && candidate.getQuantityDelta().signum() > 0
+                    && !isLpReceiptSymbol(candidate.getAssetSymbol())) {
+                continue;
+            }
             principalLegs++;
             int sign = candidate.getQuantityDelta().signum();
             if (sign != receiptSign) {
@@ -670,6 +707,13 @@ public class ReplayPendingTransferKeyFactory {
             return null;
         }
         return receiptIdentity;
+    }
+
+    private static boolean isLpReceiptSymbol(String symbol) {
+        if (symbol == null) {
+            return false;
+        }
+        return symbol.trim().toUpperCase(Locale.ROOT).startsWith("LP-RECEIPT:");
     }
 
     private boolean hasSinglePrincipalTransferFlow(NormalizedTransaction transaction) {

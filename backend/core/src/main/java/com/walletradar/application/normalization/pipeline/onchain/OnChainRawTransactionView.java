@@ -3,6 +3,7 @@ package com.walletradar.application.normalization.pipeline.onchain;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.transaction.raw.RawSyncMethod;
 import com.walletradar.domain.transaction.raw.RawTransaction;
+import com.walletradar.application.normalization.pipeline.classification.support.TokenSymbolFallbackSupport;
 import com.walletradar.application.normalization.pipeline.onchain.support.RawOrderingMetadataResolver;
 import com.walletradar.platform.persistence.support.BsonCoercionSupport;
 import org.bson.Document;
@@ -38,6 +39,16 @@ public final class OnChainRawTransactionView {
         }
         String value = rawTransaction.getTxHash().trim();
         return value.isEmpty() ? null : value;
+    }
+
+    /**
+     * Operator-supplied LP position correlationId override. When non-null and non-blank, the
+     * normalizer uses this value instead of attempting to decode the tokenId from calldata or
+     * receipt logs. Populated manually for transactions whose full receipt is permanently unavailable.
+     */
+    public String manualCorrelationOverride() {
+        String override = rawTransaction.getManualCorrelationOverride();
+        return (override == null || override.isBlank()) ? null : override.trim();
     }
 
     public String walletAddress() {
@@ -307,7 +318,18 @@ public final class OnChainRawTransactionView {
         if (value == null) {
             return null;
         }
+        // RC-2: check for authoritative decimal override first (takes precedence over explorer data).
+        // Some explorers (Etherscan) report incorrect tokenDecimal for certain contracts; the override
+        // map in TokenSymbolFallbackSupport provides the on-chain-verified correct decimal.
+        String contract = tokenTransferContract(transfer);
+        Integer overrideDecimal = TokenSymbolFallbackSupport.resolveDecimalOverride(contract);
+        if (overrideDecimal != null) {
+            return new BigDecimal(value).movePointLeft(Math.max(0, overrideDecimal));
+        }
         Integer decimals = parseInteger(transfer.get("tokenDecimal"));
+        if (decimals == null) {
+            decimals = TokenSymbolFallbackSupport.resolveDecimalsByContract(contract);
+        }
         int scale = decimals == null ? 0 : Math.max(0, decimals);
         return new BigDecimal(value).movePointLeft(scale);
     }

@@ -334,6 +334,14 @@ public class BybitInternalTransferPairer {
                 if (BybitInternalTransferPairingPrimitives.isEarnPrincipalOwned(mirror)) {
                     continue;
                 }
+                // ADR-056: On-chain Earn subscribe-pending rows are waiting for BybitOnChainEarnFundPairer
+                // to confirm the round-trip. They must not be demoted as same-sign mirrors.
+                if (com.walletradar.canonical.correlation.CorrelationContract.BYBIT_EARN_SELF_RT_V1_PREFIX != null
+                        && mirror.getCorrelationId() != null
+                        && mirror.getCorrelationId().startsWith(
+                                com.walletradar.canonical.correlation.CorrelationContract.BYBIT_EARN_SELF_RT_V1_PREFIX)) {
+                    continue;
+                }
                 if (keeper.getBlockTimestamp() == null || mirror.getBlockTimestamp() == null) {
                     continue;
                 }

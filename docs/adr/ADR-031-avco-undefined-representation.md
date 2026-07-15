@@ -1,6 +1,6 @@
 # ADR-031 — AVCO Null/Undefined Representation for Gas-Only and Reward Events
 
-**Status:** Accepted  
+**Status:** Accepted (amended 2026-07-13 — extended to replay-time fail-closed for unpriceable C2 conversions, see ADR-054)  
 **Date:** 2026-06-13  
 **Workstream:** WS-4 (multi-counterparty bridge coverage / sponsored-gas AVCO)
 
@@ -54,6 +54,16 @@ hold:
   already handles this via `isAllGasOnly` carry-forward (ADR-017); no change needed there.
 
 ---
+
+## Amendment 2026-07-13 — replay-time fail-closed for unpriceable C2 conversions (ADR-054)
+
+The original decision is a **read-path** presentation filter. ADR-054 ("one asset, one cost-basis pool")
+extends the AVCO-undefined semantics to **replay time**: when a C2 (staked / value-accruing derivative)
+conversion cannot resolve a market price for a leg, replay must **fail closed** — mark the affected
+position/point `AVCO undefined` and flag it — rather than silently carrying the source basis 1:1 (which
+would fabricate a price and defeat the per-asset model). This is a genuine replay-time state, distinct from
+the read-path gate above; both surface as `null`/undefined AVCO to the frontend with the same "AVCO
+unavailable" contract. A silent 1:1 carry on an unpriceable C2 leg is prohibited.
 
 ## Alternatives considered
 

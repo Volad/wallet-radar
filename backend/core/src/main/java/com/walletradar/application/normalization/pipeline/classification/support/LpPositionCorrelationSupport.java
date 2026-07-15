@@ -65,6 +65,11 @@ public final class LpPositionCorrelationSupport {
         if (view == null || type == null || !supportsLpPositionCorrelation(type)) {
             return null;
         }
+        // Operator-supplied override for transactions whose receipt is permanently unavailable.
+        String manualOverride = view.manualCorrelationOverride();
+        if (manualOverride != null) {
+            return manualOverride;
+        }
         BigInteger tokenId = resolvePositionTokenId(view);
         if (tokenId == null || tokenId.signum() < 0) {
             return null;
@@ -115,6 +120,11 @@ public final class LpPositionCorrelationSupport {
     ) {
         if (view == null || type == null || !supportsLpPositionCorrelation(type)) {
             return null;
+        }
+        // Operator-supplied override for transactions whose receipt is permanently unavailable.
+        String manualOverride = view.manualCorrelationOverride();
+        if (manualOverride != null) {
+            return manualOverride;
         }
         String tokenId = positionTokenId(view);
         if (tokenId == null) {
@@ -241,6 +251,11 @@ public final class LpPositionCorrelationSupport {
             NormalizedTransactionType type
     ) {
         if (view == null || type == null || !isPositionScopedLpType(type)) {
+            return false;
+        }
+        // If an operator-supplied override is set, the correlationId is already known
+        // and no receipt clarification is required.
+        if (view.manualCorrelationOverride() != null) {
             return false;
         }
         if (resolvePositionTokenId(view) != null) {

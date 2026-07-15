@@ -137,6 +137,13 @@ public class ScamDisperseClonePhishingTagger {
             reasons.add(REASON);
             changed = true;
         }
+        // Exclude from AVCO accounting — phishing transfers must never create phantom disposals
+        // against the user's real asset position (BLOCKER-8: fake native-symbol ERC-20 tokens).
+        if (!Boolean.TRUE.equals(tx.getExcludedFromAccounting())) {
+            tx.setExcludedFromAccounting(true);
+            tx.setAccountingExclusionReason(REASON);
+            changed = true;
+        }
         for (NormalizedTransaction.Flow flow : tx.getFlows()) {
             if (flow != null && flow.getRole() != NormalizedLegRole.FEE) {
                 if (!CP_TYPE_SCAM.equals(flow.getCounterpartyType())) {

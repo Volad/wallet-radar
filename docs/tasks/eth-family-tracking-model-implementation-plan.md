@@ -1,6 +1,6 @@
 # Per-Asset AVCO for Staked / Derivative Assets — Definitive Long-Term Model
 
-**Status:** PROPOSED long-term design (Phase 2) — awaiting user approval to implement (stop gate). Existing data is disposable (full renormalization + replay reset assumed).
+**Status:** APPROVED — stop gate cleared; ADRs written (Phase 4 docs done); **price-source prep implemented + verified** (§7c; tests green). Phase 5 (family split / routing / read-model / Tax→Market rename) pending; then Phase 6 reset + re-audit. Existing data is disposable (full renormalization + replay reset assumed).
 **Date:** 2026-07-12 (rev. 2026-07-13 — reframed from mitigation to definitive correct model per user directive)
 **Slug:** `eth-family-tracking-model`
 **Directive:** *"I don't need to mitigate the problem. I need financially correct long-term behaviour. A single valid long-term solution for AVCO calculation per family assets (staked assets which can be independently sold or converted to each other or to independent assets). I don't care about existing data — we can always renormalize."*
@@ -13,7 +13,7 @@
 ## 1. Scope
 
 - **Accounting model under review:** `AccountingAssetFamilySupport.SYMBOL_FAMILIES` — the mapping that collapses ETH + all ETH derivatives into a single `FAMILY:ETH` continuity identity, and the replay handlers that carry basis **1:1 by covered quantity** between family members.
-- **Assets actually present in this dataset:** `ETH`, `WETH`, `AWETH`, `AARBWETH`/`AMANWETH` (Aave receipts), `VBETH`, `CMETH`, `METH`. (No `wstETH`/`weETH`/`rETH`/`cbETH`/`rsETH` holdings — but they are in-scope for the model decision because the map claims them.)
+- **Assets actually present in this dataset (corrected per auditor DB scan 2026-07-13):** `ETH`, `WETH`, `AWETH`, `AARBWETH`/`AMANWETH` (Aave receipts), `VBETH`, `CMETH`, `METH`, **`WSTETH` (26 ledger points), `WEETH` (15 points), `EWETH-1` (Euler eWETH receipt), `EWEETH-1`, `YVVBETH`** — all currently collapsed into `FAMILY:ETH`. wstETH/weETH ARE held and ARE mis-carried today (a ~1.20× rate-drifting `WSTETH` swap on `0x68bc3b81…` currently reallocates 1:1 with `realisedPnl=0`), so the fix is **material now, not merely latent**. Non-ETH analogues with the same defect: `SAVAX → FAMILY:AVAX`, `BBSOL → FAMILY:SOL` (A-12).
 - **Wallets:** `0x1a87f12…`, `0xf03b52e8…`, `0x68bc3b81…`, `BYBIT:33625378`, `BYBIT:409666492`.
 - **Out of scope:** BTC/USDC/USDT/AVAX/MNT/SOL families (same pattern, but not the reported symptom); the LP-exit fee split (BLOCKER-2) and Balancer V3 (BLOCKER-3) tracked separately in `results/`.
 
@@ -116,20 +116,22 @@ This resolves all three cases in the directive:
 | **C2 — Distinct market assets (staked / value-accruing / restaked / yield-vault shares)** | Own market price; NOT fixed-1:1-redeemable; can be independently sold | **own per-token family**, unified across chains, e.g. `FAMILY:WSTETH`, `FAMILY:CMETH`, `FAMILY:STETH` | **disposal + acquisition at market, REALIZE P&L** |
 | **C3 — Everything else** | default | own asset identity | normal swap semantics (already correct) |
 
-**Boundary rule to encode (declarative, prevents future misclassification — per BA review):**
-- Rebasing receipt where **balance grows and quantity == underlying 1:1** (Aave aTokens) → **C1**.
-- Receipt/share where **quantity is fixed and the exchange/redemption rate drifts** (Compound/Venus vTokens, ERC-4626 vault shares, all value-accruing LST/LRT) → **C2**.
+**Boundary rule to encode (declarative, prevents future misclassification — per BA + auditor review):**
+- Rebasing receipt where **balance grows and quantity == underlying 1:1** (Aave `a*WETH` aTokens) → **C1**.
+- **ERC-4626 vault share of the SAME underlying** (Euler `eWETH`, Morpho/MetaMorpho WETH vaults) where **quantity is fixed and the share→underlying rate drifts** → **C2** (NOT C1 — even though the underlying is WETH). The registry must distinguish *Aave a\*WETH rebasing 1:1* (C1) from *Euler/Morpho ERC-4626 receipts of WETH* (C2). ⚠️ Auditor: `EWETH-1` is held and currently mis-mapped to `FAMILY:ETH`.
+- Receipt/share where **quantity is fixed and the exchange/redemption rate drifts** (Compound/Venus vTokens, all value-accruing LST/LRT) → **C2**.
 - A **receipt of a C2 asset** (Euler/Yearn wrapping an LST/LRT) → **C2**.
 
 **C1 for ETH (share `FAMILY:ETH`, no P&L on move):**
 - `ETH ↔ WETH` (canonical wrap — always 1:1, redeem on demand)
 - `WETH ↔ aWETH` and all Aave `A*WETH` variants (rebasing aToken, quantity stays 1:1 with WETH; accrued interest = income)
+- **`VBETH`** — **ETH on the Katana network** (user decision 2026-07-13): treat as bridged ETH → **C1**, carry basis, no P&L. (Earlier BA guess of "Venus vToken" was wrong.)
 - Same ETH **bridged across chains** (canonical corridor) — same asset, different chain
 
 **C2 for ETH-derivatives (each its OWN `FAMILY:<TOKEN>`, P&L on conversion):**
 - Liquid staking: `STETH`, `WSTETH`, `RETH`, `CBETH`, `METH`, `CMETH`, `OSETH`
 - Restaking: `EETH`, `WEETH`, `EWEETH` (Euler receipt of weETH — currently mis-mapped to `FAMILY:ETH`, must move out), `EZETH`, `RSETH`
-- **`VBETH`** — Venus (Compound-style) vToken: fixed balance, **exchange rate drifts >1** → behaves like an LST → **C2** (default). Only C1 if the pipeline tracks it in underlying-equivalent units with a reliable per-event exchange rate + interest-as-income (no such oracle today ⇒ C2).
+- **`EWETH`** — Euler ERC-4626 receipt of **WETH** (rate drifts; held as `EWETH-1`, currently mis-mapped to `FAMILY:ETH`) → **C2**.
 - **`YVVBETH`** — Yearn ERC-4626 vault share (value-accruing price-per-share, tradeable) → **C2**.
 - Any other value-accruing yield-vault share of ETH (ERC-4626).
 
@@ -147,6 +149,51 @@ This resolves all three cases in the directive:
 - **Not Model A (one family, 1:1):** conflates distinct assets; a cmETH sale realizes P&L against the wrong (ETH-blended) basis; wstETH's 1.2× rate corrupts family quantity. Financially wrong.
 - **Not Model B (rate-normalized single family):** requires a deterministic historical redemption-rate oracle per token at backfill time (not reliably available), and still hides genuinely distinct assets (different depeg/price risk) behind one AVCO. Over-engineered and still economically lossy.
 - **This model (per-asset pools + market-priced conversions):** matches how the assets actually behave (independently priced & tradable), needs only market USD price at the event (already the pricing chain's job; C2 tokens are priceable because they are tradable), is deterministic, and unifies the three directive cases under one rule.
+
+### 6.4 Worked example — `ETH → cmETH → ETH` on the dual **Market / Net** lanes
+
+Concrete walkthrough of how basis moves under P1 (§7b). cmETH is a **C2** value-accruing LST (own pool, own market price). "Market" lane = income booked at FMV; "Net" lane = income booked at $0 (unchanged for pure purchases). Numbers are illustrative.
+
+**Setup — buy 1 ETH @ $2,000.**
+
+| Pool | qty | Market basis | Net basis | Market AVCO | Net AVCO |
+|---|---|---|---|---|---|
+| ETH | 1.0 | $2,000 | $2,000 | $2,000 | $2,000 |
+
+**Step 1 — stake `ETH → cmETH`** (ETH market $3,000; cmETH rate 1.03 ⇒ 0.9709 cmETH @ ≈$3,090, total value $3,000). This is an **identity change (C1→C2) = disposal + acquisition at market**, NOT a carry:
+
+- Dispose 1 ETH @ $3,000 → **realized P&L = $3,000 − $2,000 = +$1,000** (both lanes; a stake is a market-priced move, not income, so Net == Market).
+- Acquire 0.9709 cmETH at market, fresh basis $3,000.
+
+| Pool | qty | Market basis | Net basis | Market AVCO | Net AVCO | realized P&L |
+|---|---|---|---|---|---|---|
+| ETH | 0.0 | $0 | $0 | — | — | +$1,000 |
+| cmETH | 0.9709 | $3,000 | $3,000 | $3,090 | $3,090 | — |
+
+> The old ETH AVCO ($2,000) is **NOT** carried onto cmETH. cmETH gets a fresh basis = its own market value. (Contrast Model A: it would carry $2,000 onto 0.9709 cmETH → synthetic AVCO $2,060 matching no real price, and defer all P&L.)
+
+**Step 2 — unstake/swap `cmETH → ETH`** (later; ETH market $3,500; cmETH rate drifted to 1.06 ⇒ cmETH market ≈$3,710; sell 0.9709 cmETH = $3,602 proceeds → receive 1.029 ETH @ $3,500). Again **C2→C1 = disposal + acquisition at market**:
+
+- Dispose 0.9709 cmETH @ $3,710 → **realized P&L = $3,602 − $3,000 = +$602** (both lanes).
+- Acquire 1.029 ETH at market, fresh basis $3,602.
+
+| Pool | qty | Market basis | Net basis | Market AVCO | Net AVCO | realized P&L |
+|---|---|---|---|---|---|---|
+| cmETH | 0.0 | $0 | $0 | — | — | +$602 |
+| ETH | 1.029 | $3,602 | $3,602 | $3,500 | $3,500 | — |
+
+**Conservation check:** total realized P&L = $1,000 + $602 = **$1,602**; economic gain = final 1.029 ETH ($3,602) − initial 1 ETH ($2,000) = **$1,602**. ✓
+
+**Where the Market/Net lanes actually diverge:** only on **income** events (rebases / reward claims / lending interest), never on a market-priced conversion. Example — hold 1 stETH (Market basis $2,000, Net basis $2,000); a **rebase of +0.05 stETH** arrives when stETH market = $2,200:
+
+| Lane | qty | basis | AVCO after |
+|---|---|---|---|
+| Market (income @ FMV) | 1.05 | $2,000 + 0.05×$2,200 = $2,110 | $2,010 |
+| Net (income @ $0) | 1.05 | $2,000 + $0 = $2,000 | $1,905 |
+
+The reward is recognized as income in the **Market** lane (becomes basis; per-unit AVCO ≈ stable) and as pure future profit in the **Net** lane (Net AVCO < Market). Crucially, under the new model **quantity is never added at $0 basis in the AVCO-authoritative Market lane** (§6.2 [I-2]) — the old zero-cost `REWARD_CLAIM` path that inflated/blended cmETH is removed.
+
+**Carve-out reminder:** a **same-token** move (cmETH CEX→wallet corridor, cmETH bridged across chains) is NOT a conversion — it **carries basis with no P&L** (§6.1). P&L is realized only when the asset identity actually changes.
 
 ---
 
@@ -167,9 +214,9 @@ This resolves all three cases in the directive:
 2. **Conversion routing (replay) — no new handler.**
    - `ReplayTransferClassifier`: a move is **basis-carry** (REALLOCATE, no P&L) **iff both legs share the same canonical-token identity** (C1↔C1 same family, or same-token cross-chain/cross-venue incl. corridor). Otherwise it is the existing generic **disposal+acquisition** at `flow.unitPriceUsd`.
    - `LiquidStakingReplayHandler` / `FamilyEquivalentCustodyReplayHandler`: stop firing for ETH↔C2 (they exist to carry basis 1:1); those now flow through the generic swap/disposal path. Gate carry on **canonical-token identity**, not family membership (clarifies ADR-019/029/043 corridor carry).
-3. **Pricing — the load-bearing change (architect: currently silently defeats the model).**
-   - **`CanonicalAssetCatalog` actively aliases `CMETH/METH/WEETH → ETH` and flags them `isPeggedNative`; `WSTETH` is priced as stETH.** These MUST be removed/corrected, or C2 "disposal at market" silently uses ETH's price = Model A with extra steps.
-   - Each C2 token must resolve its **own** market USD price at each conversion timestamp via the resolver chain (Bybit K-line / DEX-derived / CoinGecko last resort per policy).
+3. **Pricing — the load-bearing change (architect + auditor: currently silently defeats the model).**
+   - **`CanonicalAssetCatalog` (confirmed at code + data level)** aliases `CMETH/METH/WEETH → ETH` with `PEGGED_NATIVE_SYMBOLS = {CMETH, METH, WEETH, BBSOL}`, and maps `WSTETH → staked-ether` (the **stETH** CoinGecko id, +fallbacks `STETH, ETH`). Auditor DB evidence: on 2025-04-17 `historical_prices` has wstETH ($1,586.68) ≈ weETH ($1,586.88) ≈ ETH — impossible for rate-drifting tokens ⇒ all aliased.
+   - **"Remove the alias" is NOT sufficient — each C2 must resolve its OWN market price.** Resolve via **FREE, high-limit sources first** (user directive 2026-07-13; CoinGecko is paid/rate-limited → last resort only): **DefiLlama by contract (priority 3, free) is the primary independent source** — verified live to cover every held C2 on every chain in the dataset, including historical (see §7c). **Bybit (priority 1, free)** independently prices `mETH` (`METHUSDT` verified live = $1953.04). CoinGecko id is corrected only as a last-resort (fix `WSTETH staked-ether → wrapped-steth`) but should rarely be hit.
    - Rebasing/lending income accrual valued at market at the accrual (or next-priced) event (§6.2).
 4. **Read-model (ADR-045 / timeline).**
    - `includeInSpotFamilyTimelineAggregation`: C2 tokens no longer roll into the `FAMILY:ETH` spot line; each C2 renders its **own** per-asset AVCO line. `FAMILY:ETH` shows only true same-asset ETH.
@@ -179,6 +226,42 @@ This resolves all three cases in the directive:
    - ArchTest binding the single C1/C2 registry across pricing/pooling/read-model.
    - Conservation: on every C2 conversion, source pool basis −= disposed cost, realized P&L = proceeds − disposed cost, target basis = proceeds; no stranded basis.
    - Unpriceable C2 event → **replay-time fail-closed** to `AVCO undefined` (ADR-031 extended), never a silent 1:1 carry.
+
+### 7a. Lane rename — "Tax" → "Market" (user decision 2026-07-13)
+
+Keep the ADR-040 dual lane, but rename the gross lane from **Tax** to **Market** everywhere: fields, DTOs, ledger-point columns (`avcoAfterUsd` semantics = Market lane; `netAvcoAfterUsd` = Net lane), services, frontend labels, docs, and ADR text. Net lane keeps its name. Deliverable: a single consistent rename with no lingering "Tax" references (ArchTest/grep gate). Amend ADR-040 to reflect Market/Net naming.
+
+### 7b. Staking conversion P&L policy — RESOLVED: P1 (realize P&L at market)
+
+`financial-logic-auditor` verdict (2026-07-13): `ETH→C2` (stake) and `C2→ETH` (unstake) **realize P&L at market** — dispose the source at market (realized gain/loss vs source pool) and acquire the target at market (fresh basis = market value), symmetric on stake/unstake. Rationale: an identity change into/out of an independently-priced asset is an economic disposal; carrying basis (P2) is internally incoherent and reproduces the stale-blend/lane-divergence defect. Applies equally to rebasing (stETH) and non-rebasing value-accruing C2 (wstETH/cmETH) — the rebase only governs income recognition, not the disposal boundary.
+
+**Hard prerequisite (else P1 silently degrades to P2):** remove the `CanonicalAssetCatalog` pricing aliases (`CMETH/METH/WEETH→ETH`, `WSTETH`→stETH) so each C2 leg is priced at its own market. Tracked in §7 change vision and §11 risks.
+
+**Carve-outs:** same-token custody moves (corridor/bridge of the same C2 token) carry regardless (§6.1); an unpriceable C2 leg fails closed to `AVCO undefined` (ADR-031 extended), never a silent 1:1 carry.
+
+### 7c. Price-source preparation — verified free-first coverage (2026-07-13)
+
+Held C2 contracts (from `normalized_transactions`) and their **verified live** free price source. Resolver priority: DZENGI/ECB(0) → **BYBIT(1)** → BINANCE(2) → **DEFILLAMA(3)** → CoinGecko(4, paid → avoid).
+
+| Token | Network | Contract | Free source (verified) | Note |
+|---|---|---|---|---|
+| cmETH | MANTLE | `0xe6829d9a7ee3040e1276fa75293bde931859e8fa` | **DefiLlama** `mantle:…` = $1945.5 | not on Bybit (CMETHUSDT 0 rows) |
+| mETH | MANTLE | `0xcda86a272531e8640cd7f1a92c01839911b90bb0` | **Bybit** `METHUSDT` = $1953.04 (+ DefiLlama $1946) | minute-granular on Bybit |
+| wstETH | ARBITRUM | `0x5979d7b546e38e414f7e9822514be443a4800529` | **DefiLlama** `arbitrum:…` (hist 2025-04-17 = $1890.37) | not on Bybit |
+| wstETH | UNICHAIN | `0xc02fe7317d4eb8753a02c35fe019786854a92001` | **DefiLlama** `unichain:…` = $2203.7 | ⚠️ needs UNICHAIN slug added |
+| weETH | UNICHAIN | `0x7dcc39b4d1c53cb31e1abc0e358b43987fef80f7` | **DefiLlama** `unichain:…` = $1955.5 | ⚠️ needs UNICHAIN slug |
+| weETH | KATANA | `0x9893989433e7a383cb313953e4c2365107dc19a7` | **DefiLlama** `katana:…` = $1955.5 | ⚠️ needs KATANA slug |
+| yvvbETH | KATANA | `0xe007ca01894c863d7898045ed5a3b4abf0b18f37` | **DefiLlama** `katana:…` = $1802.3 (conf 0.9) | ⚠️ needs KATANA slug; **NOT fail-closed** |
+| vbETH (C1) | KATANA | `0xee7d8bcfb72bc1880d0cf19822eb0a2e6577ab62` | priced as ETH (C1, correct) | keep `VBETH→ETH` alias |
+
+**Required code changes to prepare the source (backend-dev):**
+1. **`DefiLlamaClient.chainSlug`** — add `KATANA → "katana"` and `UNICHAIN → "unichain"` (both confirmed supported by DefiLlama `coins.llama.fi`). This alone makes weETH/yvvbETH/wstETH-on-unichain independently priceable for free.
+2. **`CanonicalAssetCatalog.SYMBOL_ALIASES`** — remove `CMETH/METH/WEETH/YVVBETH → ETH` (keep `VBETH → ETH`, C1). Without this, Bybit(1) short-circuits to ETHUSDT before DefiLlama(3) runs.
+3. **`CanonicalAssetCatalog.PEGGED_NATIVE_SYMBOLS`** — remove `CMETH/METH/WEETH` (keep `BBSOL`).
+4. **`CanonicalAssetCatalog.EXCHANGE_MARKET_FALLBACKS`** — drop the `WSTETH → [STETH, ETH]` distorting fallback (so wstETH resolves via DefiLlama contract, not ETH).
+5. **CoinGecko (last resort only):** fix `WSTETH staked-ether → wrapped-steth`; optionally add own-ids `CMETH mantle-restaked-eth`, `METH mantle-staked-ether`, `WEETH wrapped-eeth` — but these should rarely be reached since DefiLlama/Bybit cover them. Do **not** rely on CoinGecko.
+
+Outcome: **no fail-closed expected for the held C2 set** — all covered by free DefiLlama/Bybit. Fail-closed (A-8) remains the guard for genuinely unlisted future tokens.
 
 ---
 
@@ -196,7 +279,7 @@ This resolves all three cases in the directive:
 
 ## 9. Acceptance (DoD — refined per BA review)
 
-- **[A-1] Identity separation.** For every C2 token, `continuityIdentity()` returns `FAMILY:<TOKEN>` (never `FAMILY:ETH`), asserted via declarative `C1_SAME_ASSET` / `C2_DISTINCT_ASSET` sets. `EWEETH` (and any receipt-of-C2) resolves to a C2 family.
+- **[A-1] Identity separation.** For every C2 token, `continuityIdentity()` returns `FAMILY:<TOKEN>` (never `FAMILY:ETH`), asserted via declarative `C1_SAME_ASSET` / `C2_DISTINCT_ASSET` sets. Assertion set must explicitly include the held C2 symbols `CMETH, METH, WSTETH, WEETH, EWEETH, EWETH, YVVBETH` (and any receipt-of-C2). The registry distinguishes **Aave `a*WETH` (C1, rebasing 1:1)** from **Euler/Morpho ERC-4626 receipts of WETH (`EWETH` → C2)**.
 - **[A-2] C1 carry, no P&L.** `ETH↔WETH↔aWETH` and all `A*WETH` cross-chain moves → REALLOCATE, `realizedPnL == 0`, total basis preserved.
 - **[A-3] C2 conversion realizes P&L at market.** Every C1↔C2, C2↔C2, C2↔stable/other move realizes P&L = `proceeds − disposedCost` vs the **source** pool; target basis == proceeds.
 - **[A-4] Same-asset custody carry (both classes).** Same-token cross-venue/cross-chain moves (incl. **cmETH CEX→wallet corridor**, C2 bridged) carry basis with **no P&L**.
@@ -207,17 +290,18 @@ This resolves all three cases in the directive:
   - **[I-3]** if the ADR-040 dual Net/Tax lane is retained, its income-offset is an explicit documented policy keyed off the same priced accrual — never an accidental un-priced artifact.
   - **[I-4]** realized income is reconcilable as income, not as a change in average cost.
 - **[A-7] Partial/dust determinism.** Partial conversions dispose proportional basis; residual per-unit AVCO unchanged; dust deterministic, no stranded basis.
-- **[A-8] Unpriceable fallback.** A C2 conversion with no obtainable market price → explicit `AVCO undefined` (ADR-031) + flag; **never** a silent 1:1 carry.
+- **[A-8] Unpriceable fallback.** A C2 conversion with no obtainable market price → explicit `AVCO undefined` (ADR-031) + flag; **never** a silent 1:1 carry. **A-5↔A-8 interaction:** a fail-closed disposal must **flag + defer** (not silently strand basis); the conservation gate (A-5) explicitly accounts for fail-closed events so a deferred/unpriced C2 leg surfaces as a flagged imbalance, never as a masked loss/gain.
 - **[A-9] Cross-chain unification.** Same C2 token on ≥2 chains shares exactly one pool.
 - **[A-10] Read-model.** `FAMILY:ETH` line contains only C1 same-asset ETH; each C2 renders its own AVCO line; no C2 quantity rolls into the ETH spot series.
 - **[A-11] Determinism.** Full reset + rerun reproduces identical pools and realized P&L.
 - **[A-12] Non-ETH regression.** Same C1/C2 rule applied to BTC/AVAX/MNT/SOL families (`SAVAX`, `BBSOL` → C2 own pool; `WBTC`/`A*WBTC` → C1 only if 1:1-redeemable).
-- **[A-13] VBETH boundary decision recorded** in the ADR (C2 default; underlying-equivalent-units exception stated explicitly).
+- **[A-13] VBETH recorded as C1** in the ADR (ETH on Katana network — bridged ETH, carry basis, no P&L).
+- **[A-14] Pricing-alias positive guard (auditor top-risk test).** ArchTest/grep asserts **no C2 symbol maps to a base-asset market symbol or `isPeggedNative`** (`PEGGED_NATIVE_SYMBOLS` contains no C2 token). Plus a **positive** pricing test: a `WSTETH` disposal resolves at wstETH's **own** market id (e.g. `wrapped-steth`) and differs from ETH on a date where they diverge (data: 2025-04-17 aliased equal → must diverge after fix). Without A-14, P1 silently degrades to Model A.
 
-### Open stop-gate questions (from BA review — need user decision before ADR is written)
-1. **VBETH:** confirm Venus exchange-rate vToken → default **C2**? (Or is there a reliable exchange-rate feed to keep it C1-with-income?)
-2. **Net lane policy:** keep ADR-040 dual Net/Tax lanes with documented income-offset, or converge on the single market-priced (Tax) treatment?
-3. **"Wrap = taxable" confirmation:** `ETH→cmETH` staking realizes P&L in your mental model? (Directive implies yes — staked assets are independently sold/converted — but confirm before the ADR.)
+### Stop-gate decisions (user, 2026-07-13)
+1. **VBETH → C1** — it is ETH on the Katana network (bridged ETH). ✅ RESOLVED.
+2. **Dual lane kept, "Tax" renamed to "Market"** — retain the ADR-040 dual lane, but rename the gross/tax lane to **Market** everywhere (see §7a). Lanes become **Market AVCO** + **Net AVCO**. ✅ RESOLVED.
+3. **Staking = realize P&L → YES (P1).** `financial-logic-auditor` verdict (2026-07-13): both `ETH→C2` (stake) and `C2→ETH` (unstake) **realize P&L at market** — once C2 is an independent, independently-priced asset, the identity change is an economic disposal; P2 (carry basis) is incoherent (gives C2 a synthetic `basis/q` unit cost matching no real price) and is exactly what produces the stale-$3,688 blend and Net-vs-Market divergence. Symmetric; same for rebasing stETH (rebase governs income recognition, not the disposal boundary). ✅ RESOLVED (see §7b). **Hard prerequisite:** remove `CanonicalAssetCatalog` pricing aliases or P1 silently degrades to P2 (§7). Carve-outs: same-token custody carries; unpriceable C2 legs fail-closed to AVCO-undefined (ADR-031).
 
 ---
 
@@ -234,6 +318,7 @@ This resolves all three cases in the directive:
 
 - **Pricing aliases silently defeat the model (architect: top risk).** `CanonicalAssetCatalog` aliases `CMETH/METH/WEETH→ETH` (`isPeggedNative`) and prices `WSTETH` as stETH. If not removed, C2 "disposal at market" uses ETH's price and the whole change is a no-op. This is the first thing to fix and to test.
 - **Pricing coverage for C2 at every conversion timestamp** is load-bearing (a missing price blocks P&L realization) → confirm/extend sources; replay-time fail-closed to `AVCO undefined` (ADR-031), never a silent 1:1 carry.
+- **Pre-implementation coverage check (auditor 2026-07-13) — RESOLVED via free sources (§7c).** Verified live that **DefiLlama (free, by contract)** covers every held C2 on every chain in the dataset — mantle, arbitrum, and **katana/unichain** (the latter two require adding the chain slugs to `DefiLlamaClient`) — including historical (wstETH ARB @2025-04-17 = $1890.37, distinct from ETH). **mETH** is additionally on **Bybit** (`METHUSDT`). Therefore **no `AVCO undefined` wave is expected** for the held C2 set after the reset, provided §7c changes ship first. CoinGecko (paid/rate-limited) is avoided per user directive; kept only as corrected last-resort.
 - **Do NOT re-key positions.** Keep L2 pools per (wallet, network, contract); cross-chain unification is L3 read-model only. Re-keying would be an invasive, risky migration for no accounting benefit.
 - **Boundary calls** (C1 vs C2) must live in one declarative registry with an ArchTest; wrong placement = wrong P&L. VBETH/YVVBETH default C2 (see §6.1).
 - **Full renormalization + replay reset required** (accepted — existing data disposable); `--clear-pricing-cache` needed because pricing aliases change.
@@ -244,4 +329,10 @@ This resolves all three cases in the directive:
 
 - [x] Definitive model specified (§6) + consolidated change vision (§7) + straight instructions (§10).
 - [x] Phase 3 design review: **business-analyst APPROVE-with-changes** (C1/C2 list, VBETH/YVVBETH→C2, income invariants, DoD A-1…A-13) and **system-architect APPROVE-with-changes** (3-layer identity, no position re-key, pricing-alias removal, ADR list, single declarative registry) — folded into §6–§8, §11.
-- [ ] **STOP GATE:** await user approval (ADR/policy change) before Phase 4 code, plus the 3 open questions in §9.
+- [x] **STOP GATE cleared** — all 3 policy decisions resolved (§9): VBETH→C1, Tax→Market rename, staking=P1 realize P&L (`financial-logic-auditor` verdict).
+- [x] **Phase 4 (docs):** ADR-054 written; ADR-040 (Tax→Market), ADR-045 (C2 excluded), ADR-031 (replay-time fail-closed), ADR-017 (staked-ETH inclusion superseded) amended; INDEX updated; worked example added to §6.4 + `docs/examples/avco-replay-examples.md` Example 5.
+- [x] **Phase 3b — `financial-logic-auditor` review via Mongo MCP (2026-07-13): APPROVE-with-changes.** DB-corroborated (cmETH terminal $3,688 Market/$1,830 Net matches §4; wstETH/weETH held & mis-carried; aliases confirmed at code+data). 5 changes folded: (1) A-14 pricing-alias positive guard + WSTETH→`wrapped-steth` own id; (2) EWETH (Euler ERC-4626 of WETH)→C2 + Aave-vs-4626 boundary; (3) §11 pre-reset pricing-coverage check (wstETH/weETH/mETH/yvvbETH lack independent quotes); (4) A-5↔A-8 fail-closed conservation; (5) §1 scope corrected. Reconstruction in `results/eth_basis.md` §8.
+- [x] **Phase 5 (`backend-dev`):** §7 implemented — `AccountingAssetClassificationSupport` (C1/C2 registry), family split, replay routing on canonical identity, read-model, Tax→Market rename, ArchTest + wiki; **2084 tests green** (2026-07-13).
+- [x] **Phase 6 reset:** `--clear-pricing-cache --skip-frontend` completed; replay **11 400** ledger points / **8051** normalized tx / **~4196** prices.
+- [x] **Phase 6 audit** (`financial-logic-auditor`, 2026-07-13): **PARTIAL_PASS** — see `results/eth_basis.md` §9. **PASS:** A-1 identity, A-4 same-token carry, A-10 read-model. **FAIL/PARTIAL:** A-3 (Bybit cmETH `STAKING_DEPOSIT` fail-closed, not market P&L; wstETH swap P&L ✓), A-5 (uncovered cmETH ~1.57), A-14 (WSTETH 0 cached price rows). cmETH terminal **$3,946 / $3,433** (was $3,688 / $1,830); `FAMILY:ETH` stable.
+- [ ] **Phase 6b — blockers:** (1) Bybit ETH↔cmETH stake path → market DISPOSE+ACQUIRE; (2) WSTETH price cache population via DefiLlama on replay; (3) cmETH flagged ledger cleanup after (1).

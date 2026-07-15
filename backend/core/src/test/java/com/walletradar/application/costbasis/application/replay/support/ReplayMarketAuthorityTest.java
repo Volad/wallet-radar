@@ -326,6 +326,8 @@ class ReplayMarketAuthorityTest {
                 .thenReturn(Optional.empty());
         when(historicalPriceCacheService.findCanonicalQuote(anyCollection(), eq(occurredAt), eq(PriceSource.COINGECKO)))
                 .thenReturn(Optional.empty());
+        when(priceExternalSourceOrchestrator.resolveBoundedNearestCachedBucket(any(PriceRequest.class)))
+                .thenReturn(Optional.empty());
 
         ReplayMarketAuthority authority = new ReplayMarketAuthority(
                 historicalPriceCacheService,
@@ -335,6 +337,50 @@ class ReplayMarketAuthorityTest {
         // Empty (not a fabricated $0/▮ price): the engine routes this to the uncovered /
         // incomplete-history (PENDING) state rather than booking a covered $0 acquisition.
         assertThat(authority.resolve(tx, flow)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("ADR-054: unpriced Bybit STAKING_DEPOSIT leg uses bounded nearest cached bucket")
+    void resolveBybitStakingDepositFromNearestCachedBucket() {
+        Instant occurredAt = Instant.parse("2025-01-12T16:21:03Z");
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setId("tx-cmeth-stake");
+        tx.setSource(NormalizedTransactionSource.BYBIT);
+        tx.setBlockTimestamp(occurredAt);
+        tx.setType(NormalizedTransactionType.STAKING_DEPOSIT);
+
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(NormalizedLegRole.TRANSFER);
+        flow.setAssetSymbol("CMETH");
+        flow.setQuantityDelta(new BigDecimal("0.1432901"));
+        tx.setFlows(List.of(flow));
+
+        when(priceExternalSourceOrchestrator.prioritizedSources(any(PriceRequest.class)))
+                .thenReturn(List.of(PriceSource.BYBIT));
+        when(historicalPriceCacheService.findQuote(any(PriceRequest.class), eq(PriceSource.BYBIT)))
+                .thenReturn(Optional.empty());
+        when(historicalPriceCacheService.findCanonicalQuote(anyCollection(), eq(occurredAt), eq(PriceSource.BYBIT)))
+                .thenReturn(Optional.empty());
+        when(priceExternalSourceOrchestrator.resolveBoundedNearestCachedBucket(any(PriceRequest.class)))
+                .thenReturn(Optional.of(new PriceQuote(
+                        new BigDecimal("2853.09"),
+                        PriceSource.BYBIT,
+                        Instant.parse("2025-02-16T00:30:00Z"),
+                        "CMETH",
+                        "test-cmeth"
+                )));
+
+        ReplayMarketAuthority authority = new ReplayMarketAuthority(
+                historicalPriceCacheService,
+                priceExternalSourceOrchestrator
+        );
+
+        Optional<ReplayMarketAuthority.ResolvedMarketPrice> resolved = authority.resolve(tx, flow);
+
+        assertThat(resolved).isPresent();
+        assertThat(resolved.get().unitPriceUsd()).isEqualByComparingTo("2853.09");
+        assertThat(resolved.get().authority())
+                .isEqualTo(ReplayMarketAuthority.ResolvedMarketPrice.Authority.HISTORICAL_CACHE);
     }
 
     @Test

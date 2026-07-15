@@ -15,6 +15,7 @@ class AccountingAssetIdentityCollapsedTest {
 
     private static final String UID = "33625378";
     private static final String CORR_ID = "bybit-collapsed-v1:abcdef1234567890";
+    private static final String CORRIDOR_CORR_ID = "BYBIT-CORRIDOR:cmeth-2025-04-17";
 
     @Test
     void isDebtIdentity_flagsAaveDebtReceiptsAcrossChainsAndExemptsHeldAssets() {
@@ -134,6 +135,66 @@ class AccountingAssetIdentityCollapsedTest {
     }
 
     @Test
+    void replayPositionWalletAddress_collapsesFundToUmbrella_forCorridorInboundDeposit() {
+        // BLOCKER-4: an inbound corridor CARRY_IN (+qty) credits :FUND, but all other spot activity
+        // consumes the umbrella-collapsed key. Route the deposit to the umbrella so it is reachable.
+        NormalizedTransaction tx = bybitCorridorLeg("BYBIT:" + UID + ":FUND");
+        NormalizedTransaction.Flow flow = transferFlow(new java.math.BigDecimal("0.10000000"));
+
+        String result = AccountingAssetIdentitySupport.replayPositionWalletAddress(tx, flow);
+
+        assertThat(result).isEqualTo("BYBIT:" + UID);
+    }
+
+    @Test
+    void replayPositionWalletAddress_keepsFundSuffix_forCorridorOutboundDrain() {
+        // BLOCKER-4: an outbound corridor CARRY_OUT (-qty) must drain the :FUND-funded pool, so the
+        // full :FUND wallet is preserved (regression guard for corridor withdrawals).
+        NormalizedTransaction tx = bybitCorridorLeg("BYBIT:" + UID + ":FUND");
+        NormalizedTransaction.Flow flow = transferFlow(new java.math.BigDecimal("-16.04000000"));
+
+        String result = AccountingAssetIdentitySupport.replayPositionWalletAddress(tx, flow);
+
+        assertThat(result).isEqualTo("BYBIT:" + UID + ":FUND");
+    }
+
+    @Test
+    void replayPositionWalletAddress_collapsesUTAToUmbrella_forCorridorInboundDeposit() {
+        // :UTA already collapses today; corridor inbound on :UTA remains on the umbrella (no-op).
+        NormalizedTransaction tx = bybitCorridorLeg("BYBIT:" + UID + ":UTA");
+        NormalizedTransaction.Flow flow = transferFlow(new java.math.BigDecimal("0.10000000"));
+
+        String result = AccountingAssetIdentitySupport.replayPositionWalletAddress(tx, flow);
+
+        assertThat(result).isEqualTo("BYBIT:" + UID);
+    }
+
+    @Test
+    void replayPositionWalletAddress_collapsesFundToUmbrella_forCorridorFeeFlowOnDeposit() {
+        // Fee-role guard (E5): a FEE flow on a corridor row must not preserve :FUND even if its
+        // delta is negative. Corridor legs have no FEE legs, so this must fall through to umbrella.
+        NormalizedTransaction tx = bybitCorridorLeg("BYBIT:" + UID + ":FUND");
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(com.walletradar.domain.transaction.normalized.NormalizedLegRole.FEE);
+        flow.setQuantityDelta(new java.math.BigDecimal("-0.00010000"));
+
+        String result = AccountingAssetIdentitySupport.replayPositionWalletAddress(tx, flow);
+
+        assertThat(result).isEqualTo("BYBIT:" + UID);
+    }
+
+    @Test
+    void replayPositionWalletAddress_collapsesFundToUmbrella_forCorridorZeroDeltaFlow() {
+        // Zero-delta guard (E5): a non-negative delta is not an outbound drain, so :FUND collapses.
+        NormalizedTransaction tx = bybitCorridorLeg("BYBIT:" + UID + ":FUND");
+        NormalizedTransaction.Flow flow = transferFlow(java.math.BigDecimal.ZERO);
+
+        String result = AccountingAssetIdentitySupport.replayPositionWalletAddress(tx, flow);
+
+        assertThat(result).isEqualTo("BYBIT:" + UID);
+    }
+
+    @Test
     void positionWalletAddress_alwaysStripsCollapsedFundSuffix() {
         assertThat(AccountingAssetIdentitySupport.positionWalletAddress("BYBIT:" + UID + ":FUND"))
                 .isEqualTo("BYBIT:" + UID);
@@ -143,6 +204,23 @@ class AccountingAssetIdentityCollapsedTest {
 
     private static NormalizedTransaction bybitInternalTransfer(String walletAddress, String correlationId) {
         return bybitInternalTransferWithCounterparty(walletAddress, null, correlationId);
+    }
+
+    private static NormalizedTransaction bybitCorridorLeg(String walletAddress) {
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setSource(NormalizedTransactionSource.BYBIT);
+        tx.setType(NormalizedTransactionType.INTERNAL_TRANSFER);
+        tx.setWalletAddress(walletAddress);
+        tx.setCorrelationId(CORRIDOR_CORR_ID);
+        tx.setContinuityCandidate(true);
+        return tx;
+    }
+
+    private static NormalizedTransaction.Flow transferFlow(java.math.BigDecimal quantityDelta) {
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(com.walletradar.domain.transaction.normalized.NormalizedLegRole.TRANSFER);
+        flow.setQuantityDelta(quantityDelta);
+        return flow;
     }
 
     private static NormalizedTransaction bybitInternalTransferWithCounterparty(

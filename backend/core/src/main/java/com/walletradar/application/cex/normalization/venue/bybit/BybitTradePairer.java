@@ -1,6 +1,6 @@
 package com.walletradar.application.cex.normalization.venue.bybit;
 
-import com.walletradar.application.costbasis.support.AccountingAssetFamilySupport;
+import com.walletradar.application.costbasis.support.AccountingAssetClassificationSupport;
 import com.walletradar.domain.transaction.externalledger.ExternalLedgerRaw;
 import com.walletradar.domain.transaction.externalledger.ExternalLedgerRawStatus;
 import lombok.RequiredArgsConstructor;
@@ -139,9 +139,8 @@ public class BybitTradePairer {
     }
 
     private boolean sameLiquidStakingFamily(ExternalLedgerRaw left, ExternalLedgerRaw right) {
-        String leftFamily = AccountingAssetFamilySupport.continuityIdentity(left.getAssetSymbol(), null);
-        String rightFamily = AccountingAssetFamilySupport.continuityIdentity(right.getAssetSymbol(), null);
-        return leftFamily != null && leftFamily.equals(rightFamily);
+        return AccountingAssetClassificationSupport.sharesLiquidStakingNormalizationCluster(
+                left.getAssetSymbol(), right.getAssetSymbol());
     }
 
     private boolean exactAbsQuantityMatch(ExternalLedgerRaw left, ExternalLedgerRaw right) {

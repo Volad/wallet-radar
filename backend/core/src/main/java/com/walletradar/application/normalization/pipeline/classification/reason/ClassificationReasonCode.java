@@ -30,6 +30,13 @@ public enum ClassificationReasonCode {
     PENDING_UNBONDING_REQUEST("PENDING_UNBONDING_REQUEST"),
     PROMO_SPAM_PHISHING("PROMO_SPAM_PHISHING"),
     SPOOF_TOKEN_CONFUSABLE_SYMBOL("SPOOF_TOKEN_CONFUSABLE_SYMBOL"),
+    /**
+     * SF-1(c): An ERC-20 token whose symbol is identical to a network's native asset (e.g. an
+     * ERC-20 named "ETH" on Arbitrum) and whose contract is not the canonical wrapped-native
+     * contract. These are address-poisoning tokens that, if processed, would create phantom
+     * disposals against the real native-asset ledger position.
+     */
+    SPOOF_TOKEN_NATIVE_SYMBOL_IMPERSONATION("SPOOF_TOKEN_NATIVE_SYMBOL_IMPERSONATION"),
     ZERO_AMOUNT_TOKEN_TRANSFER("ZERO_AMOUNT_TOKEN_TRANSFER"),
     RAW_TRANSACTION_MISSING("RAW_TRANSACTION_MISSING"),
     CLARIFICATION_RECEIPT_UNAVAILABLE("CLARIFICATION_RECEIPT_UNAVAILABLE"),
@@ -47,7 +54,23 @@ public enum ClassificationReasonCode {
      * V4 / Pancake Infinity: computed principal exceeded received quantity — clamped to received.
      * Indicates tick-math rounding or imprecise sqrtPriceX96 for this block.
      */
-    LP_FEE_CLAMPED("LP_FEE_CLAMPED");
+    LP_FEE_CLAMPED("LP_FEE_CLAMPED"),
+    /**
+     * BLOCKER-9 (ADR-057): Euler Finance v2 EVK internal variable-debt tracking token.
+     * These tokens are pure internal protocol mechanics (debt-position bookkeeping) and must never
+     * enter user inventory. Any transaction that receives a positive inflow from a registered EVK
+     * debt-token contract is a flash-loan or collateral-loop rebalance; the inflow is transient and
+     * carries no real economic value for the user.
+     */
+    EULER_EVK_INTERNAL_DEBT_TOKEN("EULER_EVK_INTERNAL_DEBT_TOKEN"),
+    /**
+     * RC-3: Aave protocol-internal variable debt tracking token.
+     * These tokens (e.g. variableDebtAvaUSDT, variableDebtAvaEURC on AVALANCHE) are pure
+     * liability instruments emitted by Aave V3 to record a user's outstanding variable-rate
+     * borrow. They carry no real economic value for the user and must never enter the AVCO
+     * ledger. Any flow touching a registered variable-debt contract is excluded from accounting.
+     */
+    AAVE_VARIABLE_DEBT_TOKEN("AAVE_VARIABLE_DEBT_TOKEN");
 
     private final String code;
 

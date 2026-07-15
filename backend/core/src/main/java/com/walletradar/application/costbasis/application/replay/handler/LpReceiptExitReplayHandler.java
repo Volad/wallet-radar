@@ -21,6 +21,7 @@ import org.springframework.stereotype.Component;
 import java.math.BigDecimal;
 import java.math.MathContext;
 import java.time.Instant;
+import java.util.Locale;
 
 /**
  * Cycle/15 Z3: restores principal basis from {@code lp_receipt_basis_pools} on position-scoped
@@ -107,6 +108,15 @@ public class LpReceiptExitReplayHandler {
             if (positionScopedLpExitReplayHandler.shouldIgnoreLpReceiptMarker(transaction, flow)) {
                 continue;
             }
+            // RC-1 Scenario B: for pool-backed exits, also skip negative TRANSFER flows whose
+            // symbol matches the LP receipt for this correlation. shouldIgnoreLpReceiptMarker
+            // uses the composite receipt identity; for Balancer V3 / LFJ BPT burns the
+            // lpCompositeReceiptIdentity may be null, causing the burn to fall through to
+            // applyUnknown. drainMaterializedReceiptMarker already handles these burns via
+            // symbol matching, so double-recording is prevented by skipping here.
+            if (isLpReceiptBurnBySymbol(corrId, flow)) {
+                continue;
+            }
             if (flow.getRole() != NormalizedLegRole.TRANSFER || flow.getQuantityDelta().signum() <= 0) {
                 applyUnknown(transaction, indexedFlow, replayState);
                 continue;
@@ -114,6 +124,10 @@ public class LpReceiptExitReplayHandler {
             if (restoreInboundFromPool(transaction, indexedFlow, corrId, poolContext, touchedAt, replayState)) {
                 restored = true;
             } else {
+                // BLOCKER-C: inbound asset (e.g. WETH from Optimism LP_EXIT) has no basis pool
+                // entry. Leave as UNKNOWN rather than crediting at market price — market-price
+                // crediting would inflate the ETH family basis pool and cascade into downstream
+                // AVCO spikes when WETH is later disposed in a SWAP with a tiny ETH dust leg.
                 applyUnknown(transaction, indexedFlow, replayState);
             }
         }
@@ -223,8 +237,8 @@ public class LpReceiptExitReplayHandler {
         if (receiptSymbol == null) {
             return;
         }
-        AssetKey receiptKey = assetSupport.lpReceiptPositionKey(transaction, corrId);
-        if (receiptKey == null) {
+        AssetKey corrIdReceiptKey = assetSupport.lpReceiptPositionKey(transaction, corrId);
+        if (corrIdReceiptKey == null) {
             return;
         }
         for (IndexedFlow indexedFlow : flowSupport.indexedFlows(transaction)) {
@@ -236,22 +250,105 @@ public class LpReceiptExitReplayHandler {
                     || !receiptSymbol.equalsIgnoreCase(flow.getAssetSymbol())) {
                 continue;
             }
-            PositionState receiptPosition = replayState.position(receiptKey);
-            if (receiptPosition.quantity().signum() <= 0) {
-                continue;
+            // Drain the corrId-keyed synthetic position (NFT-style LP receipts — qty=1, full basis).
+            PositionState corrIdReceiptPosition = replayState.position(corrIdReceiptKey);
+            if (corrIdReceiptPosition.quantity().signum() > 0) {
+                PositionSnapshot before = flowSupport.snapshot(corrIdReceiptPosition);
+                flowSupport.removeFromPosition(flow, corrIdReceiptPosition);
+                replayState.ledgerPointCollector().record(
+                        transaction,
+                        flow,
+                        indexedFlow.index(),
+                        corrIdReceiptPosition.assetKey(),
+                        before,
+                        corrIdReceiptPosition,
+                        AssetLedgerPoint.BasisEffect.REALLOCATE_OUT
+                );
             }
-            PositionSnapshot before = flowSupport.snapshot(receiptPosition);
-            flowSupport.removeFromPosition(flow, receiptPosition);
-            replayState.ledgerPointCollector().record(
-                    transaction,
-                    flow,
-                    indexedFlow.index(),
-                    receiptPosition.assetKey(),
-                    before,
-                    receiptPosition,
-                    AssetLedgerPoint.BasisEffect.REALLOCATE_OUT
-            );
+            // Cycle/Z3 fix: Also drain the contract-based LP-RECEIPT position that was
+            // synthesized with the actual BPT quantity (Balancer V3 / Curve style). The
+            // underlying asset basis was already restored from lp_receipt_basis_pools, so this
+            // drain cleans up the position without double-counting basis.
+            AssetKey contractReceiptKey = assetSupport.assetKey(transaction, flow);
+            if (!contractReceiptKey.equals(corrIdReceiptKey)) {
+                PositionState contractReceiptPosition = replayState.position(contractReceiptKey);
+                if (contractReceiptPosition.quantity().signum() > 0) {
+                    PositionSnapshot before = flowSupport.snapshot(contractReceiptPosition);
+                    flowSupport.removeFromPosition(flow, contractReceiptPosition);
+                    replayState.ledgerPointCollector().record(
+                            transaction,
+                            flow,
+                            indexedFlow.index(),
+                            contractReceiptPosition.assetKey(),
+                            before,
+                            contractReceiptPosition,
+                            AssetLedgerPoint.BasisEffect.REALLOCATE_OUT
+                    );
+                }
+            }
         }
+    }
+
+    /**
+     * RC-1 Scenario B: Returns {@code true} when a negative TRANSFER flow's symbol matches the
+     * LP receipt symbol derived from the pool correlation ID. Such flows represent LP-RECEIPT token
+     * burns (e.g. Balancer V3 BPT, LFJ LP token) whose basis drain is already handled by
+     * {@link #drainMaterializedReceiptMarker}. Skipping them in the main loop prevents
+     * double-recording (UNKNOWN + REALLOCATE_OUT) on the same flow.
+     */
+    private boolean isLpReceiptBurnBySymbol(String corrId, NormalizedTransaction.Flow flow) {
+        if (flow.getRole() != NormalizedLegRole.TRANSFER || flow.getQuantityDelta().signum() >= 0) {
+            return false;
+        }
+        String receiptSymbol = LpReceiptSymbolSupport.fromLpPositionCorrelation(corrId);
+        if (receiptSymbol == null || flow.getAssetSymbol() == null) {
+            return false;
+        }
+        return receiptSymbol.equalsIgnoreCase(flow.getAssetSymbol());
+    }
+
+    /**
+     * RC-1 Scenario C: Attempts to acquire an LP_EXIT inbound flow at market price when the
+     * asset has no corresponding entry in the LP receipt basis pool. This covers cases such as
+     * WETH returned from an Optimism single-asset exit where only the stablecoin side was
+     * deposited into the pool at entry time.
+     *
+     * <p>Returns {@code true} if a market price was available and the flow was recorded as
+     * {@link AssetLedgerPoint.BasisEffect#ACQUIRE}; returns {@code false} otherwise (caller
+     * falls back to {@link #applyUnknown}).</p>
+     */
+    private boolean applyMarketPriceAcquire(
+            NormalizedTransaction transaction,
+            IndexedFlow indexedFlow,
+            ReplayExecutionState replayState
+    ) {
+        NormalizedTransaction.Flow flow = indexedFlow.flow();
+        BigDecimal replayUnitPrice = assetSupport.replayUnitPriceUsd(transaction, flow);
+        if (replayUnitPrice == null || replayUnitPrice.signum() <= 0) {
+            return false;
+        }
+        BigDecimal qty = flow.getQuantityDelta().abs();
+        BigDecimal acquisitionCost = qty.multiply(replayUnitPrice, MC);
+        AssetKey assetKey = assetSupport.assetKey(transaction, flow);
+        PositionState position = replayState.position(assetKey);
+        position.setLastEventTimestamp(flowSupport.laterOf(position.lastEventTimestamp(), transaction.getBlockTimestamp()));
+        PositionSnapshot before = flowSupport.snapshot(position);
+        NormalizedTransaction.Flow pricedFlow = flowSupport.copyFlowWithQuantity(flow, qty);
+        pricedFlow.setUnitPriceUsd(replayUnitPrice);
+        if (flow.getPriceSource() != null) {
+            pricedFlow.setPriceSource(flow.getPriceSource());
+        }
+        flowSupport.applyBuyWithAcquisitionCost(pricedFlow, position, acquisitionCost);
+        replayState.ledgerPointCollector().record(
+                transaction,
+                pricedFlow,
+                indexedFlow.index(),
+                position.assetKey(),
+                before,
+                position,
+                AssetLedgerPoint.BasisEffect.ACQUIRE
+        );
+        return true;
     }
 
     private void applyFee(

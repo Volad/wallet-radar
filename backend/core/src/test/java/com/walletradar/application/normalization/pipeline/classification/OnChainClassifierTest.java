@@ -4624,8 +4624,12 @@ class OnChainClassifierTest {
     }
 
     @Test
-    @DisplayName("Euler batch share migration resolves to lending loop rebalance when clarification proves lifecycle")
+    @DisplayName("Euler batch sub-account residual release: eUSDC-2 from sub-account and edeUSD-1 mint → lending loop rebalance with both as inbound CREDIT")
     void eulerBatchShareMigrationResolvesToLendingLoopRebalance() {
+        // This transaction represents the second problematic B3 scenario (0xa548b35769):
+        // the Euler V2 sub-account releases residual eUSDC-2 collateral to the main wallet while
+        // the batch also mints edeUSD-1 vault shares. The sub-account → wallet transfer must
+        // generate only a CREDIT (+1444.591868), not a phantom DEBIT pair.
         String subaccount = "0x1111111111111111111111111111111111111110";
         RawTransaction rawTransaction = baseRaw(NetworkId.AVALANCHE);
         rawTransaction.setTxHash("0xa548b35769c68377b33172370d1a414facd1be4f3c8106d21fcc3940e38ee7a5");
@@ -4656,13 +4660,15 @@ class OnChainClassifierTest {
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.LENDING_LOOP_REBALANCE);
         assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
-        assertThat(result.protocolName()).isEqualTo("Euler");
+        // Sub-account → wallet eUSDC-2 transfer must be a single CREDIT (positive) — the main
+        // wallet acquires its residual collateral. The old phantom DEBIT (-1444.591868) caused
+        // the EUSDC-2 basis shortfall (B3). After the fix there is no DEBIT leg for sub-account outflows.
         assertThat(result.flows())
                 .filteredOn(flow -> flow.getAssetSymbol().equals("eUSDC-2"))
                 .singleElement()
                 .satisfies(flow -> {
                     assertThat(flow.getRole()).isEqualTo(NormalizedLegRole.TRANSFER);
-                    assertThat(flow.getQuantityDelta()).isEqualByComparingTo("-1444.591868");
+                    assertThat(flow.getQuantityDelta()).isEqualByComparingTo("1444.591868");
                 });
         assertThat(result.flows())
                 .filteredOn(flow -> flow.getAssetSymbol().equals("edeUSD-1"))

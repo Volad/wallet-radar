@@ -1,5 +1,6 @@
 package com.walletradar.application.costbasis.application.replay.dispatch;
 
+import com.walletradar.application.costbasis.support.AccountingAssetClassificationSupport;
 import com.walletradar.application.costbasis.support.AccountingAssetIdentitySupport;
 import com.walletradar.application.costbasis.support.AcquisitionFeeCapitalizationPolicy;
 import com.walletradar.canonical.correlation.BybitCarryContinuitySupport;
@@ -24,9 +25,11 @@ import com.walletradar.application.costbasis.application.replay.support.Counterp
 import com.walletradar.application.costbasis.application.replay.support.LeverageBorrowReplayHook;
 import com.walletradar.application.costbasis.application.replay.support.ReplayAssetSupport;
 import com.walletradar.application.costbasis.application.replay.support.ReplayFlowSupport;
+import com.walletradar.application.costbasis.application.replay.support.ReplayMarketAuthority;
 import com.walletradar.application.costbasis.application.replay.support.ReplayPendingTransferKeyFactory;
 import com.walletradar.application.costbasis.application.replay.support.ReplayTransferClassifier;
 import com.walletradar.application.costbasis.domain.AssetLedgerPoint;
+import com.walletradar.domain.common.PriceSource;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
@@ -36,6 +39,7 @@ import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.math.MathContext;
+import java.util.Optional;
 
 @Component
 @Slf4j
@@ -63,6 +67,7 @@ public class ReplayDispatcher {
     private final LeverageBorrowReplayHook leverageBorrowReplayHook;
     private final BorrowReplayHandler borrowReplayHandler;
     private final RepayReplayHandler repayReplayHandler;
+    private final ReplayMarketAuthority replayMarketAuthority;
 
     public ReplayDispatcher(
             ReplayTransactionRouter replayTransactionRouter,
@@ -84,7 +89,8 @@ public class ReplayDispatcher {
             CounterpartyBasisPoolReplayHook counterpartyBasisPoolReplayHook,
             LeverageBorrowReplayHook leverageBorrowReplayHook,
             BorrowReplayHandler borrowReplayHandler,
-            RepayReplayHandler repayReplayHandler
+            RepayReplayHandler repayReplayHandler,
+            ReplayMarketAuthority replayMarketAuthority
     ) {
         this.replayTransactionRouter = replayTransactionRouter;
         this.assetSupport = assetSupport;
@@ -106,6 +112,7 @@ public class ReplayDispatcher {
         this.leverageBorrowReplayHook = leverageBorrowReplayHook;
         this.borrowReplayHandler = borrowReplayHandler;
         this.repayReplayHandler = repayReplayHandler;
+        this.replayMarketAuthority = replayMarketAuthority;
     }
 
     public void dispatch(
@@ -236,26 +243,84 @@ public class ReplayDispatcher {
             ReplayExecutionState replayState,
             java.util.Set<Integer> skippedIndexes
     ) {
-        // ADR-040 Bug B: for SWAP transactions, track net basis released by SELL flows
-        // so that BUY flows can inherit the correct net cost instead of using market price.
+        // ADR-040 Bug B: for SWAP transactions (and ADR-054 cross-canonical C1→C2 staking/vault
+        // conversions), track net basis released by SELL/outbound flows so that BUY/inbound flows
+        // can inherit the correct net cost instead of using fresh market price.
         // swapNetRef[0] accumulates net basis released; swapNetRef[1] accumulates market basis released.
-        // null means "not a SWAP" — BUY flows fall back to standard market-price net cost.
-        BigDecimal[] swapNetRef = transaction.getType() == NormalizedTransactionType.SWAP
+        // null means neither type — BUY flows fall back to standard market-price net cost.
+        boolean isCrossCanonicalStaking = (transaction.getType() == NormalizedTransactionType.STAKING_DEPOSIT
+                || transaction.getType() == NormalizedTransactionType.STAKING_WITHDRAW
+                || transaction.getType() == NormalizedTransactionType.VAULT_DEPOSIT
+                || transaction.getType() == NormalizedTransactionType.VAULT_WITHDRAW)
+                && AccountingAssetClassificationSupport.hasCrossCanonicalIdentityPrincipalPair(transaction);
+        BigDecimal[] swapNetRef = (transaction.getType() == NormalizedTransactionType.SWAP || isCrossCanonicalStaking)
                 ? new BigDecimal[]{BigDecimal.ZERO, BigDecimal.ZERO}
                 : null;
-        for (int flowIndex : compositeAwareFlowOrder(transaction, skippedIndexes)) {
+        for (int flowIndex : compositeAwareFlowOrder(transaction, skippedIndexes, isCrossCanonicalStaking)) {
             NormalizedTransaction.Flow flow = transaction.getFlows().get(flowIndex);
+            // BLOCKER-9 / ADR-057: within a LENDING_LOOP_REBALANCE, skip inbound flows whose
+            // counterpartyAddress matches the within-transaction sentinel pattern
+            // "UNKNOWN:<txHash>:...". These are transient flash-loan legs that are self-cancelling
+            // within the same block and must not credit user inventory.
+            if (isLendingLoopRebalanceFlashLoanInflow(transaction, flow)) {
+                log.debug("REPLAY_SKIP_FLASH_LOAN_INFLOW txId={} flowIndex={} asset={}",
+                        transaction.getId(), flowIndex,
+                        flow == null ? null : flow.getAssetSymbol());
+                continue;
+            }
             applyFlow(transaction, flow, flowIndex, replayState, swapNetRef);
         }
     }
 
     /**
+     * BLOCKER-9 / ADR-057: Returns {@code true} when a flow is a within-transaction flash-loan
+     * inflow inside a {@code LENDING_LOOP_REBALANCE} transaction.
+     *
+     * <p>Euler Finance v2 EVK rebalance transactions flash-loan the user's existing share tokens
+     * (e.g. eUSDC-2) back into the same transaction. The loan is repaid within the same block;
+     * the inbound leg is transient and carries no real economic acquisition for the user. The
+     * sentinel counterparty pattern {@code UNKNOWN:<txHash>:…} is stamped by the on-chain flow
+     * builder to mark these ephemeral within-transaction counterparties.</p>
+     */
+    static boolean isLendingLoopRebalanceFlashLoanInflow(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow
+    ) {
+        if (transaction.getType() != NormalizedTransactionType.LENDING_LOOP_REBALANCE) {
+            return false;
+        }
+        if (flow == null || flow.getQuantityDelta() == null || flow.getQuantityDelta().signum() <= 0) {
+            return false;
+        }
+        String counterparty = flow.getCounterpartyAddress();
+        if (counterparty == null || counterparty.isBlank()) {
+            return false;
+        }
+        String txHash = transaction.getTxHash();
+        if (txHash == null || txHash.isBlank()) {
+            return false;
+        }
+        // Sentinel pattern: UNKNOWN:<txHash>:NETWORK:WALLET:TRANSFER:ASSET:INDEX
+        String counterpartyUpper = counterparty.toUpperCase(java.util.Locale.ROOT);
+        if (!counterpartyUpper.startsWith("UNKNOWN:")) {
+            return false;
+        }
+        return counterparty.toLowerCase(java.util.Locale.ROOT)
+                .contains(txHash.toLowerCase(java.util.Locale.ROOT));
+    }
+
+    /**
      * Composite {@code lp:}/{@code wrapper:} buckets must receive outbound deposits before inbound
      * restores in the same transaction. Production Curve mint txs list the LP receipt leg first.
+     *
+     * <p>ADR-054: cross-canonical staking/vault transactions also require the disposal (outbound) leg
+     * to be processed before the acquisition (inbound) leg so the {@code swapNetRef} accumulator is
+     * populated before the BUY leg consumes it. Ordering uses quantity-sign: negative = outbound.
      */
     private java.util.List<Integer> compositeAwareFlowOrder(
             NormalizedTransaction transaction,
-            java.util.Set<Integer> skippedIndexes
+            java.util.Set<Integer> skippedIndexes,
+            boolean isCrossCanonicalStaking
     ) {
         int flowCount = transaction.getFlows() == null ? 0 : transaction.getFlows().size();
         java.util.List<Integer> naturalOrder = new java.util.ArrayList<>();
@@ -264,7 +329,7 @@ public class ReplayDispatcher {
                 naturalOrder.add(flowIndex);
             }
         }
-        if (!pendingTransferKeyFactory.usesCompositeContinuityBucket(transaction)) {
+        if (!pendingTransferKeyFactory.usesCompositeContinuityBucket(transaction) && !isCrossCanonicalStaking) {
             return naturalOrder;
         }
         java.util.List<Integer> outbound = new java.util.ArrayList<>();
@@ -272,9 +337,21 @@ public class ReplayDispatcher {
         java.util.List<Integer> other = new java.util.ArrayList<>();
         for (int flowIndex : naturalOrder) {
             NormalizedTransaction.Flow flow = transaction.getFlows().get(flowIndex);
-            if (transferClassifier.isBucketOutbound(transaction, flow)) {
+            boolean isOutbound;
+            boolean isInbound;
+            if (isCrossCanonicalStaking) {
+                // Use quantity sign to identify disposal-before-acquisition ordering.
+                // This handles both TRANSFER-role (shouldApplyCrossCanonicalMarketLeg) and
+                // BUY/SELL-role flows that may arrive inbound-first in production data.
+                isOutbound = flow.getQuantityDelta() != null && flow.getQuantityDelta().signum() < 0;
+                isInbound = flow.getQuantityDelta() != null && flow.getQuantityDelta().signum() > 0;
+            } else {
+                isOutbound = transferClassifier.isBucketOutbound(transaction, flow);
+                isInbound = transferClassifier.isBucketInbound(transaction, flow);
+            }
+            if (isOutbound) {
                 outbound.add(flowIndex);
-            } else if (transferClassifier.isBucketInbound(transaction, flow)) {
+            } else if (isInbound) {
                 inbound.add(flowIndex);
             } else {
                 other.add(flowIndex);
@@ -495,6 +572,58 @@ public class ReplayDispatcher {
             case SELL -> applySellWithOptionalPool(transaction, flow, position, replayState, continuityTransferPath, swapNetRef);
             case FEE -> flowSupport.applyFee(flow, position);
             case TRANSFER -> {
+                if (shouldApplyCrossCanonicalMarketLeg(transaction, flow)) {
+                    if (!stampCrossCanonicalMarketPrice(transaction, flow)) {
+                        // ADR-054: when the cross-canonical inbound leg has no market price but the
+                        // paired outbound disposal released basis into swapNetRef, inherit that basis
+                        // as the acquisition cost. This preserves cost continuity for unpriced receipt
+                        // tokens (e.g. METH acquired via ETH staking, GTUSDCC via wstETH vault deposit).
+                        if (swapNetRef != null
+                                && swapNetRef[1].signum() > 0
+                                && flow.getQuantityDelta() != null
+                                && flow.getQuantityDelta().signum() > 0) {
+                            applyBuyWithOptionalPool(transaction, flow, position, replayState, continuityTransferPath, swapNetRef);
+                            replayState.ledgerPointCollector().record(
+                                    transaction,
+                                    flow,
+                                    flowIndex,
+                                    position.assetKey(),
+                                    before,
+                                    position,
+                                    AssetLedgerPoint.BasisEffect.ACQUIRE
+                            );
+                            return;
+                        }
+                        flowSupport.applyUnknownTransfer(flow, position);
+                        replayState.ledgerPointCollector().record(
+                                transaction,
+                                flow,
+                                flowIndex,
+                                position.assetKey(),
+                                before,
+                                position,
+                                AssetLedgerPoint.BasisEffect.UNKNOWN
+                        );
+                        return;
+                    }
+                    if (flow.getQuantityDelta().signum() < 0) {
+                        applySellWithOptionalPool(transaction, flow, position, replayState, continuityTransferPath, swapNetRef);
+                    } else {
+                        applyBuyWithOptionalPool(transaction, flow, position, replayState, continuityTransferPath, swapNetRef);
+                    }
+                    replayState.ledgerPointCollector().record(
+                            transaction,
+                            flow,
+                            flowIndex,
+                            position.assetKey(),
+                            before,
+                            position,
+                            flow.getQuantityDelta().signum() < 0
+                                    ? AssetLedgerPoint.BasisEffect.DISPOSE
+                                    : AssetLedgerPoint.BasisEffect.ACQUIRE
+                    );
+                    return;
+                }
                 AssetLedgerPoint.BasisEffect basisEffect = transferReplayHandler.applyTransfer(
                         transaction,
                         flow,
@@ -566,15 +695,18 @@ public class ReplayDispatcher {
                 continuityTransferPath
         );
         // ADR-040 Bug B: when net basis from SELL is available, use it as the net acquisition cost
-        // for the BUY leg. Tax (market) cost is computed normally.
+        // for the BUY leg. Market cost is computed normally.
+        // ADR-040 invariant: Net AVCO ≤ Market AVCO — cap inherited net basis at market basis.
         if (swapNetRef != null && swapNetRef[1].signum() > 0) {
             BigDecimal netBasisReleased = swapNetRef[0];
             if (poolAcquisitionCost != null) {
-                flowSupport.applyBuyWithExplicitNetCost(flow, position, poolAcquisitionCost, netBasisReleased);
+                BigDecimal effectiveNetBasis = netBasisReleased.min(poolAcquisitionCost);
+                flowSupport.applyBuyWithExplicitNetCost(flow, position, poolAcquisitionCost, effectiveNetBasis);
             } else {
                 BigDecimal taxCost = computeMarketCost(transaction, flow);
                 if (taxCost != null) {
-                    flowSupport.applyBuyWithExplicitNetCost(flow, position, taxCost, netBasisReleased);
+                    BigDecimal effectiveNetBasis = netBasisReleased.min(taxCost);
+                    flowSupport.applyBuyWithExplicitNetCost(flow, position, taxCost, effectiveNetBasis);
                 } else {
                     flowSupport.applyBuy(transaction, flow, position);
                 }
@@ -656,6 +788,12 @@ public class ReplayDispatcher {
         if (flow.getUnitPriceUsd() != null && flow.getUnitPriceUsd().signum() > 0) {
             return quantity.multiply(flow.getUnitPriceUsd(), MC);
         }
+        if (replayMarketAuthority != null && transaction != null) {
+            return replayMarketAuthority.resolve(transaction, flow)
+                    .filter(resolved -> resolved.unitPriceUsd() != null && resolved.unitPriceUsd().signum() > 0)
+                    .map(resolved -> quantity.multiply(resolved.unitPriceUsd(), MC))
+                    .orElse(null);
+        }
         return null;
     }
 
@@ -730,6 +868,55 @@ public class ReplayDispatcher {
             return null;
         }
         return corrId + "|" + wallet + "|" + network + "|" + family + "|" + sign;
+    }
+
+    /**
+     * ADR-054: C1↔C2 / C2↔C2 identity changes on staking/vault txs dispose+acquire at market when priced.
+     */
+    private static boolean shouldApplyCrossCanonicalMarketLeg(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow
+    ) {
+        if (transaction == null || flow == null) {
+            return false;
+        }
+        if (!AccountingAssetClassificationSupport.hasCrossCanonicalIdentityPrincipalPair(transaction)) {
+            return false;
+        }
+        return switch (transaction.getType()) {
+            case STAKING_DEPOSIT, STAKING_WITHDRAW, VAULT_DEPOSIT, VAULT_WITHDRAW -> true;
+            default -> false;
+        };
+    }
+
+    /**
+     * Stamps an unpriced cross-canonical leg with replay-time market authority so BUY/SELL handlers
+     * can realise P&L. Bybit {@code STAKING_DEPOSIT} rows often arrive without flow prices.
+     */
+    private boolean stampCrossCanonicalMarketPrice(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow
+    ) {
+        if (assetSupport.hasKnownPrice(flow)) {
+            return true;
+        }
+        if (replayMarketAuthority == null) {
+            return false;
+        }
+        Optional<ReplayMarketAuthority.ResolvedMarketPrice> resolved =
+                replayMarketAuthority.resolve(transaction, flow);
+        if (resolved.isEmpty()
+                || resolved.get().unitPriceUsd() == null
+                || resolved.get().unitPriceUsd().signum() <= 0) {
+            return false;
+        }
+        flow.setUnitPriceUsd(resolved.get().unitPriceUsd());
+        if (resolved.get().priceSource() != null) {
+            flow.setPriceSource(resolved.get().priceSource());
+        } else {
+            flow.setPriceSource(PriceSource.UNKNOWN);
+        }
+        return flow.getPriceSource() != PriceSource.UNKNOWN;
     }
 
     /**

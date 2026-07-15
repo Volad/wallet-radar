@@ -56,11 +56,13 @@ class ConfirmedReplayQueryServiceTest {
     }
 
     @Test
-    void onChainBybitCorridorInternalTransferSortsOutboundBeforeInboundAtSameTimestamp() {
-        // B-2: on-chain BYBIT-CORRIDOR: INTERNAL_TRANSFER corridors must sort CARRY_OUT before
-        // CARRY_IN when both share the same blockTimestamp and transactionIndex. Without the fix,
-        // lexicographic ID order puts "a" (inbound) before "b" (outbound). With the fix,
-        // corridorContinuityFlowSign returns -1 for outbound and +1 for inbound.
+    void onChainBybitCorridorInternalTransferSortsInboundBeforeOutboundAtSameTimestamp() {
+        // BLOCKER-5A: Bybit-sourced BYBIT-CORRIDOR INTERNAL_TRANSFER events (source=BYBIT, e.g.
+        // FUNDING_HISTORY corridor legs) must sort CARRY_IN (deposit, quantityDelta > 0) BEFORE
+        // CARRY_OUT (drain, quantityDelta < 0) at the same blockTimestamp and transactionIndex.
+        // The corridorContinuityFlowSign inversion gives CARRY_IN sign=-1 and CARRY_OUT sign=+1,
+        // so the deposit lands first and populates the pending-transfer queue before the drain
+        // consumes it.
         Instant sameTimestamp = Instant.parse("2025-09-10T00:00:00Z");
         Integer sameIndex = 0;
         String corrId = "BYBIT-CORRIDOR:MANTLE:0xd7c7736b";
@@ -70,12 +72,12 @@ class ConfirmedReplayQueryServiceTest {
 
         when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
-        )).thenReturn(List.of(inbound, outbound));
+        )).thenReturn(List.of(outbound, inbound));
 
         List<NormalizedTransaction> result = service().loadOrderedConfirmed();
 
-        // Outbound (CARRY_OUT, sign=-1) must precede inbound (CARRY_IN, sign=+1)
-        assertThat(result).extracting(NormalizedTransaction::getId).containsExactly("b", "a");
+        // CARRY_IN ("a", inverted sign=-1) must precede CARRY_OUT ("b", inverted sign=+1)
+        assertThat(result).extracting(NormalizedTransaction::getId).containsExactly("a", "b");
     }
 
     @Test
@@ -153,7 +155,8 @@ class ConfirmedReplayQueryServiceTest {
             String id, Instant timestamp, Integer txIndex, String corrId, String quantityDelta
     ) {
         NormalizedTransaction tx = transaction(id, timestamp, txIndex);
-        tx.setSource(NormalizedTransactionSource.ON_CHAIN);
+        // BLOCKER-5A: BYBIT-CORRIDOR FUND events have source=BYBIT (FUNDING_HISTORY records)
+        tx.setSource(NormalizedTransactionSource.BYBIT);
         tx.setType(NormalizedTransactionType.INTERNAL_TRANSFER);
         tx.setCorrelationId(corrId);
         NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();

@@ -300,11 +300,18 @@ public class LpRegistryClassifier implements OnChainFamilyClassifier {
             v4FeeFractions = lpV4ExitFeeDecomposer.feeFractionsForContracts(context.view())
                     .orElse(null);
         }
+        // For Balancer V3 gauge STAKE/UNSTAKE (receiptCorrelationId is null, balancerV3CorrelationId
+        // is set), pass the BPT-pool correlation ID to the materializer so it can rewrite raw BPT
+        // flows to canonical LP-RECEIPT legs. For all other cases keep receiptCorrelationId so that
+        // PancakeSwap/Uniswap V3 NFT positions and vault-fallback paths are unaffected.
+        String flowsCorrelationId = (receiptCorrelationId == null && balancerV3CorrelationId != null)
+                ? balancerV3CorrelationId
+                : receiptCorrelationId;
         List<NormalizedTransaction.Flow> flows = LpClassificationFlowSupport.flows(
                 context.view(),
                 context.movementLegs(),
                 type,
-                receiptCorrelationId,
+                flowsCorrelationId,
                 v4FeeFractions
         );
         if (!pendingReasons.isEmpty()) {

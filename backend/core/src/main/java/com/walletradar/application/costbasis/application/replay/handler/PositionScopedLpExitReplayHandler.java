@@ -85,7 +85,13 @@ public class PositionScopedLpExitReplayHandler {
         if (receiptIdentity == null) {
             return false;
         }
-        String flowIdentity = assetSupport.continuityIdentity(transaction, flow);
+        // LP-RECEIPT tokens have continuityIdentity == "FAMILY:LP-RECEIPT" (generic family alias).
+        // lpCompositeReceiptIdentity now returns the specific assetIdentity for LP-RECEIPT burns
+        // (e.g. "SYMBOL:LP-RECEIPT:AVALANCHE:BALANCERV3:0x..."), so compare with assetIdentity
+        // on the flow side to ensure the identities are symmetrically specific.
+        String flowIdentity = AccountingAssetFamilySupport.isLpReceiptSymbol(flow.getAssetSymbol())
+                ? assetSupport.assetIdentity(transaction, flow)
+                : assetSupport.continuityIdentity(transaction, flow);
         return receiptIdentity.equals(flowIdentity);
     }
 
@@ -391,11 +397,58 @@ public class PositionScopedLpExitReplayHandler {
             return;
         }
         replayState.recordLpReceiptPrincipalExitEvent(transaction.getCorrelationId());
-        AssetKey receiptKey = assetSupport.lpReceiptPositionKey(transaction, transaction.getCorrelationId());
+
+        // Locate the explicit LP-RECEIPT burn flow. When synthesizeReceiptFromOutbound stored the
+        // position via assetKey(transaction, explicitReceiptFlow) (Balancer V3 BPT style), that key
+        // has assetContract = "SYMBOL:LP-RECEIPT:..." and differs from the lpReceiptPositionKey
+        // (assetContract=null). We resolve the active receipt position by checking both key forms
+        // so that Balancer V3 BPT pools and NFT-style pools (Uniswap V3, Aerodrome) are both covered.
+        IndexedFlow markerFlow = null;
+        for (IndexedFlow indexedFlow : flowSupport.indexedFlows(transaction)) {
+            NormalizedTransaction.Flow f = indexedFlow.flow();
+            if (f == null
+                    || f.getRole() != NormalizedLegRole.TRANSFER
+                    || f.getQuantityDelta() == null
+                    || f.getQuantityDelta().signum() >= 0) {
+                continue;
+            }
+            if (AccountingAssetFamilySupport.isLpReceiptSymbol(f.getAssetSymbol())) {
+                markerFlow = indexedFlow;
+                break;
+            }
+        }
+
+        // Primary key: correlationId-derived (NFT-style / legacy path).
+        AssetKey corrKey = assetSupport.lpReceiptPositionKey(transaction, transaction.getCorrelationId());
+        // Flow key: assetKey from the explicit burn flow (Balancer V3 BPT style).
+        AssetKey flowKey = markerFlow != null ? assetSupport.assetKey(transaction, markerFlow.flow()) : null;
+
+        // Pick whichever position actually holds the receipt quantity.
+        AssetKey receiptKey = null;
+        PositionState receiptPosition = null;
+        if (corrKey != null) {
+            PositionState cp = replayState.position(corrKey);
+            if (cp.quantity().signum() > 0) {
+                receiptKey = corrKey;
+                receiptPosition = cp;
+            }
+        }
+        if (receiptKey == null && flowKey != null && !flowKey.equals(corrKey)) {
+            PositionState fp = replayState.position(flowKey);
+            if (fp.quantity().signum() > 0) {
+                receiptKey = flowKey;
+                receiptPosition = fp;
+            }
+        }
+        // Fall back to corrKey even if quantity ≤ 0 (so pool drain still runs).
         if (receiptKey == null) {
+            receiptKey = corrKey != null ? corrKey : flowKey;
+            receiptPosition = receiptKey != null ? replayState.position(receiptKey) : null;
+        }
+
+        if (receiptKey == null || receiptPosition == null) {
             return;
         }
-        PositionState receiptPosition = replayState.position(receiptKey);
         if (receiptPosition.quantity().signum() <= 0) {
             drainAllLpReceiptPoolsForCorrelation(transaction.getCorrelationId(), replayState);
             return;
@@ -407,19 +460,6 @@ public class PositionScopedLpExitReplayHandler {
         receiptPosition.setUncoveredQuantity(BigDecimal.ZERO);
         receiptPosition.setPerWalletAvco(null);
         receiptPosition.setPerWalletNetAvco(null);
-        IndexedFlow markerFlow = null;
-        for (IndexedFlow indexedFlow : flowSupport.indexedFlows(transaction)) {
-            NormalizedTransaction.Flow flow = indexedFlow.flow();
-            if (flow == null
-                    || flow.getRole() != NormalizedLegRole.TRANSFER
-                    || flow.getQuantityDelta() == null
-                    || flow.getQuantityDelta().signum() >= 0
-                    || !receiptKey.assetSymbol().equalsIgnoreCase(flow.getAssetSymbol())) {
-                continue;
-            }
-            markerFlow = indexedFlow;
-            break;
-        }
         if (markerFlow != null) {
             replayState.ledgerPointCollector().record(
                     transaction,

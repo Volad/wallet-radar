@@ -26,6 +26,8 @@ import com.walletradar.application.linking.pipeline.clarification.GmxV2RefundCla
 import com.walletradar.application.linking.pipeline.clarification.KnownBridgeRouterExternalTypeCorrectionService;
 import com.walletradar.application.linking.pipeline.clarification.NftMintRetagger;
 import com.walletradar.application.linking.pipeline.clarification.ProtocolAttributionClassifier;
+import com.walletradar.application.linking.pipeline.clarification.AaveVariableDebtTokenTagger;
+import com.walletradar.application.linking.pipeline.clarification.EulerEvkDebtTokenTagger;
 import com.walletradar.application.linking.pipeline.clarification.ScamDisperseClonePhishingTagger;
 import com.walletradar.application.linking.pipeline.clarification.SpoofTokenDetector;
 import com.walletradar.application.linking.pipeline.clarification.TurtleVaultBurnRepairService;
@@ -92,6 +94,8 @@ class LinkingBatchProcessor {
     private final AddressPoisoningDetector addressPoisoningDetector;
     private final SpoofTokenDetector spoofTokenDetector;
     private final ScamDisperseClonePhishingTagger scamDisperseClonePhishingTagger;
+    private final AaveVariableDebtTokenTagger aaveVariableDebtTokenTagger;
+    private final EulerEvkDebtTokenTagger eulerEvkDebtTokenTagger;
     private final GmxExitSettlementLinkService gmxExitSettlementLinkService;
     private final GmxEntryRequestLinkService gmxEntryRequestLinkService;
     private final GmxV2RefundClassifier gmxV2RefundClassifier;
@@ -218,6 +222,16 @@ class LinkingBatchProcessor {
                 () -> scamDisperseClonePhishingTagger.tagPhishingOutbounds(batchSize));
         progressHeartbeat.run();
 
+        // BLOCKER-9 / ADR-057: exclude Euler Finance v2 EVK internal debt-token inflows
+        processed += timedPass("eulerEvkDebtTokenTagger",
+                () -> eulerEvkDebtTokenTagger.tagDebtTokenInflows(batchSize));
+        progressHeartbeat.run();
+
+        // RC-3: exclude Aave V3 internal variable-debt token flows on AVALANCHE
+        processed += timedPass("aaveVariableDebtTokenTagger",
+                () -> aaveVariableDebtTokenTagger.tagDebtTokenFlows(batchSize));
+        progressHeartbeat.run();
+
         // R11 Fix 7: stamp GMX V2 execution-fee refunds
         processed += timedPass("gmxV2RefundClassifier",
                 () -> gmxV2RefundClassifier.classifyGmxRefunds(batchSize));
@@ -299,6 +313,13 @@ class LinkingBatchProcessor {
         // B-EARN-DEPOSIT-MISSING: synthesise missing EARN counterpart
         processed += timedPass("bybitOnChainEarnOrphanRepair",
                 bybitOnChainEarnOrphanRepairService::repairOrphans);
+        progressHeartbeat.run();
+
+        // B-EARN-CORRIDOR-DEDUP: retroactively re-link corridor-funded FUND drains that were
+        // incorrectly synthesised on a prior run, eliminating the phantom double-credit and the
+        // resulting umbrella shortfall.
+        processed += timedPass("bybitEarnCorridorDuplicateRepair",
+                bybitOnChainEarnOrphanRepairService::repairCorridorEarnDuplicates);
         progressHeartbeat.run();
 
         // Cycle/12: demote Bybit INTERNAL_TRANSFER singletons

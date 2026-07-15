@@ -14,12 +14,14 @@ import com.walletradar.application.cex.normalization.venue.bybit.BybitCanonicalT
 import com.walletradar.application.cex.normalization.venue.bybit.BybitEarnPrincipalTransferPairer;
 import com.walletradar.application.cex.normalization.venue.bybit.BybitInternalTransferExternalCpReclassifier;
 import com.walletradar.application.cex.normalization.venue.bybit.BybitInternalTransferPairer;
+import com.walletradar.application.cex.normalization.venue.bybit.BybitOnChainEarnFundPairer;
 import com.walletradar.application.cex.normalization.venue.bybit.BybitPrincipalEventExclusivityService;
 import com.walletradar.application.cex.normalization.venue.bybit.BybitStakingConversionPairer;
 import com.walletradar.application.cex.normalization.venue.bybit.BybitStreamAuthorityCollapser;
 import com.walletradar.application.cex.normalization.venue.bybit.BybitTradePairer;
 import com.walletradar.application.cex.normalization.venue.bybit.BybitTransferShadowPairer;
 import com.walletradar.application.cex.normalization.venue.bybit.PendingExternalLedgerRowQueryService;
+import com.walletradar.application.costbasis.support.AccountingAssetClassificationSupport;
 import com.walletradar.application.normalization.store.IdempotentNormalizedTransactionStore;
 import com.walletradar.application.session.application.AccountingUniverseService;
 import com.walletradar.application.cex.acquisition.venue.bybit.BybitExtractionService;
@@ -48,6 +50,13 @@ public class BybitNormalizationService {
     private static final String TRANSFER_SHADOW_EXCLUSION_REASON = "BYBIT_TRANSFER_SHADOW_ROW";
     private static final List<String> CONVERT_TYPES = List.of("convert", "currency_buy", "currency_sell");
     private static final String BYBIT_PREFIX = "BYBIT:";
+    /**
+     * ADR-056: pending-subscribe marker set on non-clustered On-chain Earn subscription rows
+     * (e.g. TON) when no EARN-sub-account counterpart exists. The {@link BybitOnChainEarnFundPairer}
+     * queries this marker to find subscribe-out legs and match them with their redeem-in partners.
+     */
+    static final String ONCHAIN_EARN_SELF_RT_SUBSCRIBE_PENDING =
+            com.walletradar.canonical.correlation.CorrelationContract.BYBIT_EARN_SELF_RT_V1_PREFIX + "subscribe-pending";
 
     private final PendingBybitExtractedRowQueryService pendingBybitExtractedRowQueryService;
     private final BybitExtractedEventRepository bybitExtractedEventRepository;
@@ -69,6 +78,7 @@ public class BybitNormalizationService {
     private final BybitInternalTransferExternalCpReclassifier bybitInternalTransferExternalCpReclassifier;
     private final BybitStreamAuthorityCollapser bybitStreamAuthorityCollapser;
     private final BybitStakingConversionPairer bybitStakingConversionPairer;
+    private final BybitOnChainEarnFundPairer bybitOnChainEarnFundPairer;
     private final BybitBotTransferCostBasisService bybitBotTransferCostBasisService;
 
     public int processNextBatch(int batchSize) {
@@ -91,6 +101,10 @@ public class BybitNormalizationService {
                 int earnPaired = bybitEarnPrincipalTransferPairer.pairEarnPrincipalTransfers();
                 if (earnPaired > 0) {
                     log.info("BYBIT_EARN_PRINCIPAL_PAIRER batchProcessed={} rewrites={}", processed, earnPaired);
+                }
+                int onChainEarnPaired = bybitOnChainEarnFundPairer.pairOnChainEarnFundRoundTrips();
+                if (onChainEarnPaired > 0) {
+                    log.info("BYBIT_ONCHAIN_EARN_FUND_PAIRER batchProcessed={} pairs={}", processed, onChainEarnPaired);
                 }
                 int principalDeduped = bybitPrincipalEventExclusivityService.demoteDuplicatePrincipalEvents();
                 if (principalDeduped > 0) {
@@ -185,6 +199,10 @@ public class BybitNormalizationService {
             return normalizeTransferShadowRow(row, now);
         }
 
+        if (isNonClusteredOnChainEarnRedemptionRow(row)) {
+            return normalizeNonClusteredOnChainEarnRedemption(row, now);
+        }
+
         NormalizedTransaction normalized = builder.buildMappedRow(row, now);
         normalizedTransactionStore.upsert(normalized);
         markConfirmed(row);
@@ -220,6 +238,10 @@ public class BybitNormalizationService {
         }
         if (isTransferShadowRow(mappedRow)) {
             return normalizeTransferShadowRow(row, mappedRow, now);
+        }
+
+        if (isNonClusteredOnChainEarnRedemptionRow(mappedRow)) {
+            return normalizeNonClusteredOnChainEarnRedemption(row, mappedRow, now);
         }
 
         NormalizedTransaction normalized = builder.buildMappedRow(mappedRow, now);
@@ -370,6 +392,45 @@ public class BybitNormalizationService {
     private boolean isConvertRow(ExternalLedgerRaw row) {
         return "swap".equals(normalize(row.getCanonicalType()))
                 && isConvertType(row.getBybitType());
+    }
+
+    /**
+     * ADR-056: non-clustered On-chain Earn redemption (e.g. TON "On-chain Earn redemption").
+     * These rows would otherwise fall into the catch-all {@code buildMappedRow} path, which
+     * assigns a {@code bybit-econ-v1:} correlationId and sets {@code continuityCandidate=true}.
+     * That prevents {@link BybitOnChainEarnFundPairer} from finding them (the pairer queries for
+     * null/absent/empty correlationId). This guard intercepts redemptions early so we can clear
+     * the econ corrId before saving.
+     */
+    private boolean isNonClusteredOnChainEarnRedemptionRow(ExternalLedgerRaw row) {
+        return "internal_transfer".equals(normalize(row.getCanonicalType()))
+                && "earn".equals(normalize(row.getBybitType()))
+                && "on-chain earn redemption".equals(normalize(row.getBybitDescription()))
+                && isNonClusteredOnChainEarnAsset(row.getAssetSymbol());
+    }
+
+    private boolean normalizeNonClusteredOnChainEarnRedemption(ExternalLedgerRaw row, Instant now) {
+        log.warn("BYBIT_ONCHAIN_EARN_NON_CLUSTERED_REDEEM assetSymbol={} rowId={}",
+                row.getAssetSymbol(), row.getId());
+        NormalizedTransaction normalized = builder.buildMappedRow(row, now);
+        // ADR-056: clear bybit-econ-v1: corrId and continuityCandidate so BybitOnChainEarnFundPairer
+        // can match this redemption with the subscribe-pending row via null-corrId query.
+        normalized.setContinuityCandidate(false);
+        normalized.setCorrelationId(null);
+        normalizedTransactionStore.upsert(normalized);
+        markConfirmed(row);
+        return true;
+    }
+
+    private boolean normalizeNonClusteredOnChainEarnRedemption(BybitExtractedEvent row, ExternalLedgerRaw mappedRow, Instant now) {
+        log.warn("BYBIT_ONCHAIN_EARN_NON_CLUSTERED_REDEEM assetSymbol={} rowId={}",
+                mappedRow.getAssetSymbol(), row.getId());
+        NormalizedTransaction normalized = builder.buildMappedRow(mappedRow, now);
+        normalized.setContinuityCandidate(false);
+        normalized.setCorrelationId(null);
+        normalizedTransactionStore.upsert(normalized);
+        markConfirmed(row);
+        return true;
     }
 
     private boolean isLiquidStakingRow(ExternalLedgerRaw row) {
@@ -552,6 +613,26 @@ public class BybitNormalizationService {
             return true;
         }
 
+        // ADR-056: non-clustered assets (e.g. TON) have no EARN sub-account counterpart — the
+        // On-chain Earn subscribe-out AND redeem-in both land on :FUND. Emit as CONFIRMED
+        // INTERNAL_TRANSFER with a pending marker so BybitOnChainEarnFundPairer can match the
+        // round trip and assign a shared continuity correlationId. ETH/AVAX/SOL-family assets
+        // (CMETH, METH, BBSOL, SAVAX) continue to route through BybitOnChainEarnOrphanRepairService.
+        if (isNonClusteredOnChainEarnAsset(row.getAssetSymbol())) {
+            log.warn("BYBIT_ONCHAIN_EARN_NON_CLUSTERED assetSymbol={} rowId={}",
+                    row.getAssetSymbol(), row.getId());
+            NormalizedTransaction normalized = builder.buildMappedRow(row, now);
+            normalized.setCorrelationId(ONCHAIN_EARN_SELF_RT_SUBSCRIBE_PENDING);
+            // ADR-056: suppress continuityCandidate until BybitOnChainEarnFundPairer confirms the pair.
+            // buildMappedRow sets continuityCandidate=true (economy corrId) — clearing it prevents
+            // BybitInternalTransferPairer.dedupSameSignMirrors from demoting this subscribe-pending row
+            // as a false same-sign duplicate before pairing completes.
+            normalized.setContinuityCandidate(false);
+            normalizedTransactionStore.upsert(normalized);
+            markConfirmed(row);
+            return true;
+        }
+
         NormalizedTransaction review = builder.buildNeedsReviewRow(row, now, "BYBIT_LIQUID_STAKING_PAIR_NOT_FOUND");
         normalizedTransactionStore.upsert(review);
         markConfirmed(row);
@@ -573,6 +654,18 @@ public class BybitNormalizationService {
             normalizedTransactionStore.upsert(normalized);
             markConfirmed(row);
             markConfirmed(pair);
+            return true;
+        }
+
+        // ADR-056: non-clustered assets (e.g. TON) — same logic as the ExternalLedgerRaw overload.
+        if (isNonClusteredOnChainEarnAsset(mappedRow.getAssetSymbol())) {
+            log.warn("BYBIT_ONCHAIN_EARN_NON_CLUSTERED assetSymbol={} rowId={}",
+                    mappedRow.getAssetSymbol(), row.getId());
+            NormalizedTransaction normalized = builder.buildMappedRow(mappedRow, now);
+            normalized.setCorrelationId(ONCHAIN_EARN_SELF_RT_SUBSCRIBE_PENDING);
+            normalized.setContinuityCandidate(false);
+            normalizedTransactionStore.upsert(normalized);
+            markConfirmed(row);
             return true;
         }
 
@@ -724,5 +817,16 @@ public class BybitNormalizationService {
 
     private boolean blank(String value) {
         return value == null || value.isBlank();
+    }
+
+    /**
+     * ADR-056: returns {@code true} when the asset symbol does not belong to any liquid-staking
+     * normalization cluster (ETH/AVAX/SOL). Non-clustered On-chain Earn rows (e.g. TON) have both
+     * legs on {@code :FUND} with no {@code :EARN} counterpart and must be emitted as CONFIRMED
+     * INTERNAL_TRANSFER rather than NEEDS_REVIEW so the {@link BybitOnChainEarnFundPairer} can
+     * match the round trip.
+     */
+    private static boolean isNonClusteredOnChainEarnAsset(String assetSymbol) {
+        return AccountingAssetClassificationSupport.normalizationClusterForSymbol(assetSymbol) == null;
     }
 }

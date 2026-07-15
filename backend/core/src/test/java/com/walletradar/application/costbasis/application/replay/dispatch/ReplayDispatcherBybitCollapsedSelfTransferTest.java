@@ -84,7 +84,8 @@ class ReplayDispatcherBybitCollapsedSelfTransferTest {
                 lpReceiptEntryReplayHandler, positionScopedLpExitReplayHandler,
                 asyncSpotOrderReplayHandler,
                 counterpartyBasisPoolReplayHook, leverageBorrowReplayHook,
-                borrowReplayHandler, repayReplayHandler
+                borrowReplayHandler, repayReplayHandler,
+                mock(com.walletradar.application.costbasis.application.replay.support.ReplayMarketAuthority.class)
         );
     }
 

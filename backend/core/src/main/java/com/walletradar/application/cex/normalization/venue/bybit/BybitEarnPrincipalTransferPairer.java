@@ -76,6 +76,16 @@ public class BybitEarnPrincipalTransferPairer {
     private final MongoOperations mongoOperations;
     private final NormalizedTransactionRepository normalizedTransactionRepository;
 
+    // TODO(BLOCKER-5 §5D — deferred, see results/blockers.md): Bybit "On-chain Earn subscription/
+    // redemption" reallocations are a SAME-ASSET FUND→(off-chain)→FUND round trip with NO
+    // EARN_FLEXIBLE_SAVING stream counterpart, so BOTH legs land on :FUND. This pairer requires one
+    // :EARN + one non-earn leg (isEarnPrincipalOppositePair), so those legs are structurally unpairable
+    // here and the redeem-inbound replays as an uncovered UNKNOWN inflow (TON seq 1122/1749). The
+    // correct fix is a distinct same-asset :FUND self-round-trip continuity pairing (keyed on
+    // uid|asset|qty, subscribe-out ↔ redeem-in) that must NOT touch the ETH-family liquid-staking
+    // on-chain-earn path (CMETH/METH/BBSOL land inbound on :EARN as a distinct receipt asset). Deferred
+    // because it is a new accounting/continuity mechanism (ADR-041/043/054 territory), not a safe
+    // extraction-only change.
     public int pairEarnPrincipalTransfers() {
         Query query = Query.query(new Criteria().andOperator(
                 Criteria.where("source").is(NormalizedTransactionSource.BYBIT),

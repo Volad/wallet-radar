@@ -1,5 +1,6 @@
 package com.walletradar.application.costbasis.application.replay.handler;
 
+import com.walletradar.application.costbasis.support.AccountingAssetClassificationSupport;
 import com.walletradar.application.costbasis.support.AccountingAssetFamilySupport;
 import com.walletradar.application.costbasis.application.replay.model.AssetKey;
 import com.walletradar.application.costbasis.application.replay.model.CarryTransfer;
@@ -154,6 +155,14 @@ public class FamilyEquivalentCustodyReplayHandler {
                 continue;
             }
             if (selectedByIndex.containsKey(outbound.index()) || selectedByIndex.containsKey(inbound.index())) {
+                continue;
+            }
+            if (!AccountingAssetClassificationSupport.sharesCanonicalTokenIdentity(
+                    outbound.flow().getAssetSymbol(),
+                    outbound.flow().getAssetContract(),
+                    inbound.flow().getAssetSymbol(),
+                    inbound.flow().getAssetContract()
+            )) {
                 continue;
             }
             pairs.add(new SimpleFamilyCustodyPair(outbound, inbound));
@@ -501,31 +510,63 @@ public class FamilyEquivalentCustodyReplayHandler {
      * <p>Detection criterion: transaction type is SWAP and all principal (non-zero-qty) flows
      * belong to exactly one asset family (e.g. FAMILY:AVAX). If flows span multiple families (e.g.
      * ETH→USDC), the swap is a genuine cross-family exchange and must use normal DISPOSE+ACQUIRE.
+     *
+     * <p>Quantity-ratio guard: a true wrap/unwrap exchanges assets at approximately a 1:1 ratio
+     * (e.g. 1 WETH → 1 ETH). If total inbound quantity is less than 10% of total outbound quantity
+     * (or vice versa), the captured flows represent only a fragment of the actual trade — the
+     * primary output was directed elsewhere (e.g. a WETH→USDC swap routed via an internal ETH
+     * unwrap, where only the WETH sold and ETH dust are captured). In such cases the same-family
+     * detection is a false positive and normal DISPOSE+ACQUIRE must be used to prevent the full
+     * outbound basis from being allocated to a trivially small inbound quantity, causing an absurd
+     * AVCO spike (e.g. LINEA WETH 0.01153 → ETH 6.77e-7 = 17,000× mismatch → ETH AVCO $208k).
      */
     private boolean isSameFamilySwap(NormalizedTransaction transaction) {
         if (transaction == null || transaction.getType() != NormalizedTransactionType.SWAP) {
             return false;
         }
-        Set<String> families = new HashSet<>();
+        Set<String> canonicalIdentities = new HashSet<>();
+        BigDecimal totalOutbound = BigDecimal.ZERO;
+        BigDecimal totalInbound = BigDecimal.ZERO;
         boolean hasOutbound = false;
         boolean hasInbound = false;
         for (NormalizedTransaction.Flow flow : transaction.getFlows()) {
             if (flow == null || flow.getQuantityDelta() == null || flow.getQuantityDelta().signum() == 0) {
                 continue;
             }
-            String family = AccountingAssetFamilySupport.continuityIdentity(flow);
-            if (family == null || !family.startsWith("FAMILY:")) {
-                // Flow doesn't belong to any known family (e.g. exotic token) → not a pure same-family swap
+            if (flow.getRole() == NormalizedLegRole.FEE) {
+                // FEE flows do not participate in the identity check or quantity ratio guard.
+                continue;
+            }
+            String identity = AccountingAssetClassificationSupport.canonicalTokenIdentity(
+                    flow.getAssetSymbol(),
+                    flow.getAssetContract()
+            );
+            if (identity == null || identity.isBlank()) {
                 return false;
             }
-            families.add(family);
+            canonicalIdentities.add(identity);
             if (flow.getQuantityDelta().signum() < 0) {
                 hasOutbound = true;
+                totalOutbound = totalOutbound.add(flow.getQuantityDelta().abs());
             } else {
                 hasInbound = true;
+                totalInbound = totalInbound.add(flow.getQuantityDelta());
             }
         }
-        return families.size() == 1 && hasOutbound && hasInbound;
+        if (canonicalIdentities.size() != 1 || !hasOutbound || !hasInbound) {
+            return false;
+        }
+        // Quantity-ratio guard: for a true wrap/unwrap the inbound and outbound quantities must be
+        // within one order of magnitude of each other. Ratio < 0.1 indicates a false positive where
+        // only a dust fragment of the trade was captured in this direction.
+        if (totalOutbound.signum() > 0 && totalInbound.signum() > 0) {
+            BigDecimal ratio = totalInbound.divide(totalOutbound, MathContext.DECIMAL128);
+            BigDecimal threshold = new BigDecimal("0.10");
+            if (ratio.compareTo(threshold) < 0 || ratio.compareTo(BigDecimal.ONE.divide(threshold, MathContext.DECIMAL128)) > 0) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private boolean isSimpleFamilyEquivalentCustodyType(NormalizedTransactionType type) {

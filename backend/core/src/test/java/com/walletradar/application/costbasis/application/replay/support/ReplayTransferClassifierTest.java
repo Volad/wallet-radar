@@ -165,6 +165,36 @@ class ReplayTransferClassifierTest {
         assertThat(classifier.isCexDepositCorridor(onChainIn)).isFalse();
     }
 
+    @Test
+    void ethToCmethStakingDepositIsNotFamilyEquivalentCustody() {
+        NormalizedTransaction tx = wrapperTx(
+                NormalizedTransactionType.STAKING_DEPOSIT,
+                "ETH", "eth", "-1.0",
+                "CMETH", "cmeth", "0.97"
+        );
+
+        assertThat(classifier.isFamilyEquivalentCustodyTransfer(tx, tx.getFlows().get(0))).isFalse();
+    }
+
+    @Test
+    void wethToAwethLendingDepositIsFamilyEquivalentCustody() {
+        NormalizedTransaction tx = wrapperTx(
+                NormalizedTransactionType.LENDING_DEPOSIT,
+                "WETH", "weth", "-1.0",
+                "AMANWETH", "amanweth", "1.0"
+        );
+
+        assertThat(classifier.isFamilyEquivalentCustodyTransfer(tx, tx.getFlows().get(0))).isTrue();
+    }
+
+    @Test
+    void cmethSameTokenSharesCanonicalIdentityForCorridorCarry() {
+        assertThat(com.walletradar.application.costbasis.support.AccountingAssetClassificationSupport
+                .sharesCanonicalTokenIdentity("CMETH", null, "CMETH", null)).isTrue();
+        assertThat(com.walletradar.application.costbasis.support.AccountingAssetFamilySupport
+                .continuityIdentity("CMETH", null)).isEqualTo("FAMILY:METH");
+    }
+
     private static NormalizedTransaction corridorLeg(
             NormalizedTransactionSource source,
             String wallet,

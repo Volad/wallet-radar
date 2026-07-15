@@ -1,5 +1,6 @@
 package com.walletradar.application.costbasis.application.replay.handler;
 
+import com.walletradar.application.costbasis.support.AccountingAssetClassificationSupport;
 import com.walletradar.application.costbasis.support.AccountingAssetFamilySupport;
 import com.walletradar.application.costbasis.application.replay.model.AssetKey;
 import com.walletradar.application.costbasis.application.replay.model.CarryTransfer;
@@ -84,6 +85,9 @@ public class LiquidStakingReplayHandler {
                     .distinct()
                     .count();
             if (!hasOutbound || !hasInbound || distinctAssets < 2) {
+                continue;
+            }
+            if (!familyFlowsShareCanonicalTokenIdentity(familyFlows)) {
                 continue;
             }
             for (IndexedFlow familyFlow : familyFlows) {
@@ -282,6 +286,26 @@ public class LiquidStakingReplayHandler {
             return true;
         }
         return qty.compareTo(outboundQuantity.multiply(ReplayToleranceSupport.carrySourceCoverageRatio(), MC)) >= 0;
+    }
+
+    private static boolean familyFlowsShareCanonicalTokenIdentity(List<IndexedFlow> familyFlows) {
+        String sharedIdentity = null;
+        for (IndexedFlow indexedFlow : familyFlows) {
+            NormalizedTransaction.Flow flow = indexedFlow.flow();
+            String identity = AccountingAssetClassificationSupport.canonicalTokenIdentity(
+                    flow.getAssetSymbol(),
+                    flow.getAssetContract()
+            );
+            if (identity == null || identity.isBlank()) {
+                return false;
+            }
+            if (sharedIdentity == null) {
+                sharedIdentity = identity;
+            } else if (!sharedIdentity.equals(identity)) {
+                return false;
+            }
+        }
+        return sharedIdentity != null;
     }
 
     private boolean isPrincipalCandidate(NormalizedTransaction.Flow flow) {

@@ -26,7 +26,18 @@ flowchart TB
 Key: `AssetKey(walletAddress, networkId, accountingAssetIdentity)`  
 State: `PositionState` — quantity, totalCostBasisUsd, perWalletAvco, uncoveredQuantity, realised PnL, gas.
 
-Exact-asset identity at rest; **family continuity** applied at carry match time via `AccountingAssetFamilySupport`.
+Exact-asset identity at rest; **canonical-token identity** (ADR-054 C1/C2 registry via
+`AccountingAssetClassificationSupport`) governs carry-vs-realize at match time. Family continuity
+(`AccountingAssetFamilySupport`) keys read-model rollup; C2 staked derivatives no longer roll into
+`FAMILY:ETH` (ADR-045 amendment).
+
+### C1 / C2 carry boundary (ADR-054)
+
+| Class | Examples | Identity | Move between classes |
+|---|---|---|---|
+| **C1** — same underlying, 1:1 fixed rate | ETH, WETH, Aave `a*WETH`, VBETH; WBTC, `a*WBTC` | underlying family (`FAMILY:ETH`, `FAMILY:BTC`, …) | REALLOCATE, no P&amp;L |
+| **C2** — distinct market asset | STETH, WSTETH, CMETH, WEETH, EWETH, YVVBETH; sAVAX, BBSOL | own per-token family (`FAMILY:CMETH`, …) | DISPOSE + ACQUIRE at market, realize P&amp;L |
+| **Same-token custody** (both classes) | cmETH CEX→wallet corridor, C2 bridge | unchanged | REALLOCATE, no P&amp;L |
 
 ## Counterparty basis pools (ADR-015)
 
@@ -247,7 +258,7 @@ Carry / pool routing per type:
 | `LENDING_WITHDRAW` | REALLOCATE restore |
 | `VAULT_DEPOSIT` / `VAULT_WITHDRAW` | Same |
 | `PROTOCOL_CUSTODY_*` | Counterparty pool push/pop |
-| `STAKING_DEPOSIT` / `WITHDRAW` | `LiquidStakingReplayHandler` carry |
+| `STAKING_DEPOSIT` / `WITHDRAW` | **Same canonical-token identity:** `LiquidStakingReplayHandler` or family-equivalent REALLOCATE (C1 only). **Identity change (C1↔C2):** generic swap path — realize P&amp;L at market (ADR-054) |
 | `LP_ENTRY_REQUEST` / `SETTLEMENT` | `GmxLpEntryReplayHandler` escrow |
 | `LP_EXIT_REQUEST` / `SETTLEMENT` | `GenericAsyncLifecycleReplayHandler` |
 | `DEX_ORDER_*` | `AsyncSpotOrderReplayHandler` open bucket |
@@ -289,14 +300,14 @@ so carry-created basis positions correctly satisfy `basisBackedQty > 1e-8` and b
 
 ## Dual-lane net-carry conservation (ADR-040 amendment, 2026-07-02)
 
-ADR-040 introduced parallel Tax and Net cost-basis lanes. The **net-carry conservation invariant** requires
-that net basis travels with quantity on every IN leg — never silently re-seeded from the tax lane.
+ADR-040 introduced parallel Market and Net cost-basis lanes. The **net-carry conservation invariant** requires
+that net basis travels with quantity on every IN leg — never silently re-seeded from the Market lane.
 
 ### Invariant
 
 > For any closed intra-family round-trip (WRAP↔UNWRAP, spot↔receipt, REALLOCATE_IN↔OUT) on a single
-> position key: `|Σ netCostBasisDelta| ≤ dust` — exactly as `Σ taxCostBasisDelta = 0` holds for Tax.
-> Net AVCO ≤ Tax AVCO for every position. Net AVCO ≥ 0.
+> position key: `|Σ netCostBasisDelta| ≤ dust` — exactly as `Σ marketCostBasisDelta = 0` holds for Market.
+> Net AVCO ≤ Market AVCO for every position. Net AVCO ≥ 0.
 
 ### Mechanism
 

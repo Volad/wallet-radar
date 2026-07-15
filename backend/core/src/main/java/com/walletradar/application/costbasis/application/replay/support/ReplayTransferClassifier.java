@@ -1,5 +1,6 @@
 package com.walletradar.application.costbasis.application.replay.support;
 
+import com.walletradar.application.costbasis.support.AccountingAssetClassificationSupport;
 import com.walletradar.application.costbasis.support.AccountingAssetFamilySupport;
 import com.walletradar.canonical.correlation.CorrelationContract;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
@@ -104,6 +105,9 @@ public class ReplayTransferClassifier {
         if (continuityIdentity == null || !continuityIdentity.startsWith("FAMILY:")) {
             return false;
         }
+        if (AccountingAssetClassificationSupport.hasCrossCanonicalIdentityPrincipalPair(transaction)) {
+            return false;
+        }
         return switch (transaction.getType()) {
             case PROTOCOL_CUSTODY_DEPOSIT,
                     PROTOCOL_CUSTODY_WITHDRAW,
@@ -120,6 +124,9 @@ public class ReplayTransferClassifier {
 
     public boolean isBucketOutbound(NormalizedTransaction transaction, NormalizedTransaction.Flow flow) {
         if (isBybitSource(transaction)) {
+            return false;
+        }
+        if (blocksCrossCanonicalBucketCarry(transaction)) {
             return false;
         }
         return flow != null
@@ -160,10 +167,25 @@ public class ReplayTransferClassifier {
         if (isBybitSource(transaction)) {
             return false;
         }
-        return flow != null
-                && flow.getQuantityDelta() != null
-                && flow.getQuantityDelta().signum() > 0
-                && switch (transaction.getType()) {
+        if (blocksCrossCanonicalBucketCarry(transaction)) {
+            return false;
+        }
+        if (flow == null || flow.getQuantityDelta() == null || flow.getQuantityDelta().signum() <= 0) {
+            return false;
+        }
+        // For LP_POSITION_UNSTAKE: only the LP-RECEIPT positive TRANSFER (the principal return)
+        // should restore from the wrapper bucket. Extra reward flows credited in the same
+        // transaction (e.g. BAL gauge rewards) are standard ACQUIRE events and must not drain the
+        // bucket before the LP-RECEIPT restore runs. Without this guard, a BAL reward inbound
+        // would consume the wrapper:<gauge> carry placed by the GAUGE outbound, leaving the
+        // LP-RECEIPT restore with an empty bucket and forcing $0 basis onto the position.
+        if (transaction.getType() == NormalizedTransactionType.LP_POSITION_UNSTAKE) {
+            String sym = flow.getAssetSymbol();
+            if (sym == null || !sym.trim().toUpperCase(java.util.Locale.ROOT).startsWith("LP-RECEIPT:")) {
+                return false;
+            }
+        }
+        return switch (transaction.getType()) {
             // Cycle/8 S5: LP_ENTRY inbound (the minted LP receipt) restores from the composite
             // bucket populated by the source legs above. Was missing, leaving LP tokens with
             // $0 basis throughout their holding period.
@@ -273,5 +295,18 @@ public class ReplayTransferClassifier {
         }
         String correlationId = transaction.getCorrelationId();
         return correlationId != null && correlationId.startsWith(CorrelationContract.BYBIT_REKEYED_V1_PREFIX);
+    }
+
+    /**
+     * ADR-054: identity-changing staking/vault moves must not use continuity buckets (1:1 carry).
+     */
+    private static boolean blocksCrossCanonicalBucketCarry(NormalizedTransaction transaction) {
+        if (!AccountingAssetClassificationSupport.hasCrossCanonicalIdentityPrincipalPair(transaction)) {
+            return false;
+        }
+        return switch (transaction.getType()) {
+            case STAKING_DEPOSIT, STAKING_WITHDRAW, VAULT_DEPOSIT, VAULT_WITHDRAW -> true;
+            default -> false;
+        };
     }
 }

@@ -22,7 +22,7 @@ Architecture Decision Records for WalletRadar. Each ADR captures a single decisi
 | [ADR-014](ADR-014-portfolio-conservation-gate.md) | Portfolio conservation gate at dashboard publication | Proposed | 2026-05-16 | N19 — invariants |
 | [ADR-015](ADR-015-per-counterparty-basis-pool.md) | Per-counterparty AVCO basis pool | Proposed | 2026-05-16 | N19 — basis engine |
 | [ADR-016](ADR-016-bybit-internal-transfer-bundling.md) | Bybit multi-stream internal-transfer bundling and round-trip pairing | Accepted | 2026-05-20 | Cycle 12 — Bybit coverage |
-| [ADR-017](ADR-017-timeline-avco-authority.md) | Timeline AVCO authority (move-basis read model) | Accepted (amended; chart-source superseded by ADR-045) | 2026-05-27 | Cluster E — timeline AVCO |
+| [ADR-017](ADR-017-timeline-avco-authority.md) | Timeline AVCO authority (move-basis read model) | Accepted (amended; chart-source superseded by ADR-045; staked-ETH inclusion superseded by ADR-054) | 2026-05-27 | Cluster E — timeline AVCO |
 | [ADR-018](ADR-018-lp-protocol-family-materialization.md) | LP Protocol-Family Flow Materialization | Accepted (amended) | 2026-05-27 | LP families + ETH-C10 |
 | [ADR-019](ADR-019-corridor-carry-policy.md) | Corridor carry policy: outbound-AVCO preservation | Accepted | 2026-05-29 | ETH-C1 — corridor AVCO |
 | [ADR-020](ADR-020-bridge-late-carry-passthrough-reservation.md) | Bridge late-carry pass-through reservation invariant | Accepted | 2026-05-29 | ETH-V2-C1 — bridge ordering |
@@ -36,7 +36,7 @@ Architecture Decision Records for WalletRadar. Each ADR captures a single decisi
 | [ADR-028](ADR-028-value-divergence-leverage-inference.md) | Value divergence leverage inference | Accepted | 2026-06 | AVCO / replay |
 | [ADR-029](ADR-029-deterministic-cex-corridor-basis-continuity.md) | Deterministic CEX corridor basis continuity | Accepted | 2026-06 | AVCO / corridor |
 | [ADR-030](ADR-030-replay-accumulator-idempotency.md) | Replay accumulator idempotency | Accepted | 2026-06 | AVCO / replay |
-| [ADR-031](ADR-031-avco-undefined-representation.md) | AVCO undefined representation | Accepted | 2026-06 | AVCO |
+| [ADR-031](ADR-031-avco-undefined-representation.md) | AVCO undefined representation | Accepted (amended by ADR-054) | 2026-06 | AVCO |
 | [ADR-032](ADR-032-multi-counterparty-fee-exclusion.md) | Multi-counterparty fee exclusion | Accepted | 2026-06 | Replay / fees |
 | [ADR-033](ADR-033-bridge-multi-flow-role-alignment.md) | Bridge multi-flow role alignment | Accepted | 2026-06 | Bridge normalization |
 | [ADR-034](ADR-034-nec-transaction-scan.md) | NEC computation via direct transaction scan | Accepted | 2026-06-23 | Conservation gate / NEC |
@@ -45,12 +45,12 @@ Architecture Decision Records for WalletRadar. Each ADR captures a single decisi
 | [ADR-037](ADR-037-lp-enrichment-and-earnings-snapshots.md) | LP on-chain enrichment and earnings snapshots | Accepted | 2026-06-24 | Liquidity pools |
 | [ADR-038](ADR-038-google-sso-identity-binding.md) | Google SSO identity binding | Accepted | 2026-06 | Auth / identity |
 | [ADR-039](ADR-039-async-refresh-status.md) | Async refresh status | Accepted | 2026-06 | Frontend / refresh |
-| [ADR-040](ADR-040-dual-cost-basis-net-tax-avco.md) | Dual cost basis — Net AVCO and Tax AVCO | Accepted | 2026-06-30 | Cost basis / replay / UI |
+| [ADR-040](ADR-040-dual-cost-basis-net-tax-avco.md) | Dual cost basis — Net AVCO and Market AVCO (Tax→Market rename) | Accepted (amended by ADR-054) | 2026-06-30 | Cost basis / replay / UI |
 | [ADR-041](ADR-041-bybit-earn-corridor-pairing-and-fund-carry-symmetry.md) | Bybit Earn corridor pairing and `:FUND` carry symmetry | Accepted | 2026-06-30 | Bybit corridor / linking / replay |
 | [ADR-042](ADR-042-honor-flow-accountref-in-replay-position-resolution.md) | Honor `flow.accountRef` in replay position resolution | Accepted | 2026-07-01 | Bybit sub-account / replay |
 | [ADR-043](ADR-043-corridor-carry-basis-conservation.md) | Corridor carry basis conservation (continuation of ADR-041) | Accepted | 2026-07-01 | Bybit corridor / linking / replay / pricing |
 | [ADR-044](ADR-044-router-agnostic-native-settlement-recovery-and-native-pool-reconciliation-gate.md) | Router-agnostic native settlement recovery and native-pool reconciliation gate | Accepted | 2026-07 | Native settlement / AVCO |
-| [ADR-045](ADR-045-family-covered-weighted-move-basis-avco-series.md) | Family covered-weighted move-basis AVCO series (supersedes ADR-017 chart source) | Accepted | 2026-07-02 | Move-basis chart / read model |
+| [ADR-045](ADR-045-family-covered-weighted-move-basis-avco-series.md) | Family covered-weighted move-basis AVCO series (supersedes ADR-017 chart source) | Accepted (amended by ADR-054) | 2026-07-02 | Move-basis chart / read model |
 | [ADR-046](ADR-046-init-capital-collateral-borrow-classification.md) | INIT Capital collateral-borrow classification and BORROW net cost rule | Accepted | 2026-07-07 | On-chain classification / Lending / AVCO |
 | [ADR-047](ADR-047-equilibria-staking-lp-corridor.md) | Equilibria staking deposit and Pendle LP corridor threading | Accepted | 2026-07-07 | On-chain classification / LP receipt corridor |
 | [ADR-048](ADR-048-dzengi-product-scope.md) | Dzengi product scope (streams, exclusions, pipeline stage) | Accepted | 2026-07-08 | CEX integration — Dzengi |
@@ -59,6 +59,10 @@ Architecture Decision Records for WalletRadar. Each ADR captures a single decisi
 | [ADR-051](ADR-051-cex-fee-capitalization-net-avco.md) | CEX fee capitalization into Net AVCO (Market = clean price) | Accepted | 2026-07-09 | AVCO / Cost-basis |
 | [ADR-052](ADR-052-venue-capability-spi-walletref-normalization-boundary-invariant.md) | Venue Capability SPI, WalletRef, and the Normalization Boundary Invariant | Accepted | 2026-07-10 | CEX abstraction / extensibility |
 | [ADR-053](ADR-053-independent-latest-price-refresh-subsystem.md) | Independent Latest-Price Refresh Subsystem | Accepted | 2026-07-12 | Pricing — latest-price refresh / current quotes |
+| [ADR-054](ADR-054-per-asset-avco-for-staked-derivatives.md) | Per-asset AVCO for staked / value-accruing derivatives (one asset, one cost-basis pool) | Accepted | 2026-07-13 | Cost basis / asset identity / replay / pricing / read model |
+| [ADR-055](ADR-055-fh-crypto-loans-source-authority.md) | Funding-History `Crypto Loans` source-authority for BORROW/REPAY | Accepted | 2026-07-13 | Bybit ingestion / extraction authority / loan accounting |
+| [ADR-056](ADR-056-onchain-earn-fund-round-trip-continuity.md) | Bybit On-chain Earn — FUND self-round-trip continuity for non-ETH-family assets | Accepted | 2026-07-14 | Bybit normalization / continuity / AVCO |
+| [ADR-057](ADR-057-euler-evk-internal-debt-token-exclusion.md) | Euler Finance EVK internal debt-token exclusion (BLOCKER-9) | Accepted | 2026-07-14 | Normalization / inventory hygiene |
 
 ## Cycle/5 N19 cluster — implementation plan mapping
 

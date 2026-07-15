@@ -111,6 +111,16 @@ public class PriceExternalSourceOrchestrator {
     }
 
     /**
+     * RC-D (ADR-043, F-7) — bounded nearest-valid-bucket fallback for replay-time cache lookups.
+     * Used when the exact-minute bucket misses but a temporally close cached quote exists within
+     * {@link #PRE_COVERAGE_NEAREST_WINDOW} (e.g. Bybit {@code STAKING_DEPOSIT} legs priced only
+     * from historical cache during replay).
+     */
+    public Optional<PriceQuote> resolveBoundedNearestCachedBucket(PriceRequest request) {
+        return resolveBoundedNearestBucket(request);
+    }
+
+    /**
      * RC-D (ADR-043) — pre-coverage-only projection of the bounded nearest-valid-bucket fallback,
      * exposed for replay so it can clamp a bot-derived ACQUIRE lot ({@code BOT_LEDGER}) whose event
      * predates the asset's first cached bucket. Such a lot is priced at normalization from net

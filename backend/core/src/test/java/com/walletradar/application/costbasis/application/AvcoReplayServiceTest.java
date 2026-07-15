@@ -2103,8 +2103,9 @@ class AvcoReplayServiceTest {
         service().replayConfirmed();
 
         List<AssetLedgerPoint> points = capturedLedgerPoints();
-        // BYBIT-CORRIDOR inbound to :FUND now keeps the full sub-account address (P-B fix).
-        AssetLedgerPoint destination = latestPoint(points, "BYBIT:1:FUND", null, "ETH", null);
+        // BLOCKER-4: BYBIT-CORRIDOR inbound to :FUND now collapses onto the UID umbrella so the
+        // deposit is reachable by umbrella-level spot activity (P-B inbound reversed).
+        AssetLedgerPoint destination = latestPoint(points, "BYBIT:1", null, "ETH", null);
         // Without dedup, the mirror would push quantity to 2.0. With dedup, it stays at 1.0.
         assertThat(destination.getQuantityAfter()).isEqualByComparingTo("1.0");
         assertThat(destination.getTotalCostBasisAfterUsd()).isEqualByComparingTo("100");
@@ -2155,7 +2156,8 @@ class AvcoReplayServiceTest {
         List<AssetLedgerPoint> points = capturedLedgerPoints();
         // B-3 fix: carry basis = totalBasis × (movedQty / totalQty) = $65 × 1.0 = $65.
         // Without fix: perWalletAvco × movedQty = ($65/0.65) × 1.0 = $100 (inflated by $35).
-        AssetLedgerPoint bybitFund = latestPoint(points, "BYBIT:1:FUND", null, "ETH", null);
+        // BLOCKER-4: the corridor CARRY_IN destination now collapses onto the UID umbrella.
+        AssetLedgerPoint bybitFund = latestPoint(points, "BYBIT:1", null, "ETH", null);
         assertThat(bybitFund.getTotalCostBasisAfterUsd()).isEqualByComparingTo("65");
         assertThat(bybitFund.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.CARRY_IN);
     }
@@ -2197,6 +2199,73 @@ class AvcoReplayServiceTest {
         assertThat(dispose.getCostBasisDeltaUsd())
                 .isLessThan(BigDecimal.ZERO)
                 .isCloseTo(new BigDecimal("-10.9174"), org.assertj.core.data.Offset.offset(new BigDecimal("0.15")));
+    }
+
+    @Test
+    void corridorDepositLotAndUmbrellaLotConvertAcrossUnifiedPoolWithZeroShortfall() {
+        // BLOCKER-4 anchor: the 2025-04-17 CMETH convert oversold by 0.09992031 because a 0.1 CMETH
+        // corridor DEPOSIT was stranded on :FUND while the umbrella held only 0.56939617. After the
+        // fix the inbound corridor deposit collapses onto the UID umbrella, so the unified pool
+        // (0.56939617 + 0.1 = 0.66939617) fully covers the 0.66931648 SWAP sell with zero shortfall.
+        NormalizedTransaction umbrellaBuy = tx("1", "0xcmeth-umbrella", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flow(NormalizedLegRole.BUY, "CMETH", "0.56939617", "2873", PriceSource.BINANCE));
+        umbrellaBuy.setSource(NormalizedTransactionSource.BYBIT);
+        umbrellaBuy.setWalletAddress("BYBIT:33625378");
+        umbrellaBuy.getFlows().getFirst().setAccountRef("BYBIT:33625378");
+
+        // Corridor deposit: an on-chain wallet sends 0.1 CMETH into Bybit :FUND (a covered lot).
+        NormalizedTransaction onChainBuy = tx("2", "0xcmeth-onchain-buy", 1, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flow(NormalizedLegRole.BUY, "CMETH", "0.1", "2873", PriceSource.BINANCE));
+        onChainBuy.setWalletAddress("user-cmeth-wallet");
+        onChainBuy.setNetworkId(NetworkId.MANTLE);
+
+        NormalizedTransaction corridorOnChainOut = tx("3", "0xcmeth-corridor", 2, NormalizedTransactionType.EXTERNAL_TRANSFER_OUT,
+                flow(NormalizedLegRole.SELL, "CMETH", "-0.1", null, null));
+        corridorOnChainOut.setWalletAddress("user-cmeth-wallet");
+        corridorOnChainOut.setNetworkId(NetworkId.MANTLE);
+        corridorOnChainOut.setCorrelationId("BYBIT-CORRIDOR:MANTLE:0xcmeth-corridor");
+        corridorOnChainOut.setContinuityCandidate(true);
+        corridorOnChainOut.setMatchedCounterparty("BYBIT:33625378:FUND");
+
+        NormalizedTransaction corridorFundIn = tx("4", "0xcmeth-corridor", 3, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flow(NormalizedLegRole.BUY, "CMETH", "0.1", null, null));
+        corridorFundIn.setSource(NormalizedTransactionSource.BYBIT);
+        corridorFundIn.setWalletAddress("BYBIT:33625378:FUND");
+        corridorFundIn.setCorrelationId("BYBIT-CORRIDOR:MANTLE:0xcmeth-corridor");
+        corridorFundIn.setContinuityCandidate(true);
+        corridorFundIn.setMatchedCounterparty("user-cmeth-wallet");
+
+        // The convert (EXECUTION_SPOT SWAP) on :UTA sells across the unified umbrella pool.
+        NormalizedTransaction sell = tx(
+                "BYBIT-33625378:EXECUTION_SPOT:2200000000707964104:CMETHUSDT",
+                "2200000000707964104",
+                4,
+                NormalizedTransactionType.SWAP,
+                flow(NormalizedLegRole.SELL, "CMETH", "-0.66931648", "2873", PriceSource.BINANCE),
+                flow(NormalizedLegRole.BUY, "USDT", "1922.94", "1", PriceSource.BINANCE)
+        );
+        sell.setSource(NormalizedTransactionSource.BYBIT);
+        sell.setWalletAddress("BYBIT:33625378:UTA");
+
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                NormalizedTransactionStatus.CONFIRMED
+        )).thenReturn(List.of(umbrellaBuy, onChainBuy, corridorOnChainOut, corridorFundIn, sell));
+
+        service().replayConfirmed();
+
+        AssetLedgerPoint dispose = capturedLedgerPoints().stream()
+                .filter(point -> "CMETH".equalsIgnoreCase(point.getAssetSymbol()))
+                .filter(point -> point.getBasisEffect() == AssetLedgerPoint.BasisEffect.DISPOSE)
+                .max(Comparator.comparing(AssetLedgerPoint::getReplaySequence))
+                .orElseThrow();
+        assertThat(dispose.getWalletAddress()).isEqualTo("BYBIT:33625378");
+        assertThat(dispose.getQuantityDelta()).isEqualByComparingTo("-0.66931648");
+        // The whole point of the fix: the disposal no longer oversells the umbrella inventory.
+        assertThat(dispose.getQuantityShortfallAfter())
+                .satisfiesAnyOf(
+                        v -> assertThat(v).isNull(),
+                        v -> assertThat(v).isEqualByComparingTo("0"));
+        assertThat(dispose.getQuantityAfter()).isGreaterThanOrEqualTo(BigDecimal.ZERO);
     }
 
     @Test
@@ -2339,7 +2408,7 @@ class AvcoReplayServiceTest {
     }
 
     @Test
-    void liquidStakingConversionCarriesFullBasisIntoDerivativeWithoutRealizedPnl() {
+    void c1ToC2StakingDepositRealizesPnlAtMarketInsteadOfOneToOneCarry() {
         NormalizedTransaction buy = tx("1", "0xbuy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
                 flow(NormalizedLegRole.BUY, "ETH", "1", "1000", PriceSource.BINANCE));
         buy.setWalletAddress("wallet-a");
@@ -2349,8 +2418,8 @@ class AvcoReplayServiceTest {
                 "0xstake",
                 1,
                 NormalizedTransactionType.STAKING_DEPOSIT,
-                flow(NormalizedLegRole.TRANSFER, "ETH", "-1", null, null),
-                flow(NormalizedLegRole.TRANSFER, "METH", "0.95", null, null)
+                flow(NormalizedLegRole.TRANSFER, "ETH", "-1", "3000", PriceSource.BINANCE),
+                flow(NormalizedLegRole.TRANSFER, "METH", "0.95", "3100", PriceSource.BINANCE)
         );
         stake.setWalletAddress("wallet-a");
 
@@ -2364,14 +2433,10 @@ class AvcoReplayServiceTest {
         AssetLedgerPoint eth = latestPoint(points, "wallet-a", NetworkId.BASE, "ETH", null);
         AssetLedgerPoint meth = latestPoint(points, "wallet-a", NetworkId.BASE, "METH", null);
         assertThat(eth.getQuantityAfter()).isZero();
-        assertThat(eth.getTotalCostBasisAfterUsd()).isZero();
-        assertThat(eth.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.REALLOCATE_OUT);
+        assertThat(eth.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.DISPOSE);
         assertThat(meth.getQuantityAfter()).isEqualByComparingTo("0.95");
-        assertThat(meth.getBasisBackedQuantityAfter()).isEqualByComparingTo("0.95");
-        assertThat(meth.getUncoveredQuantityAfter()).isZero();
-        assertThat(meth.getTotalCostBasisAfterUsd()).isEqualByComparingTo("1000");
-        assertThat(meth.getAvcoAfterUsd()).isEqualByComparingTo("1052.631578947368421052631578947368");
-        assertThat(meth.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.REALLOCATE_IN);
+        assertThat(meth.getTotalCostBasisAfterUsd()).isEqualByComparingTo("2945");
+        assertThat(meth.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.ACQUIRE);
 
         ArgumentCaptor<List<NormalizedTransaction>> txCaptor = ArgumentCaptor.forClass(List.class);
         verify(normalizedTransactionRepository).saveAll(txCaptor.capture());
@@ -2379,53 +2444,42 @@ class AvcoReplayServiceTest {
                 .filter(tx -> "2".equals(tx.getId()))
                 .findFirst()
                 .orElseThrow();
-        assertThat(replayedStake.getFlows())
-                .allSatisfy(flow -> {
-                    assertThat(flow.getAvcoAtTimeOfSale()).isNull();
-                    assertThat(flow.getRealisedPnlUsd()).isNull();
-                });
+        assertThat(replayedStake.getFlows().getFirst().getRealisedPnlUsd()).isEqualByComparingTo("2000");
     }
 
     @Test
-    void liquidStakingCarriesAvailableCoveredPrincipalWithoutRatioCuttingDerivative() {
+    void avaxToSavaxStakingDepositRealizesPnlAgainstSourceAvco() {
         NormalizedTransaction coveredBuy = tx("1", "0xavax-covered", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
-                flow(NormalizedLegRole.BUY, "AVAX", "0.4", "10", PriceSource.BINANCE));
+                flow(NormalizedLegRole.BUY, "AVAX", "0.5", "10", PriceSource.BINANCE));
         coveredBuy.setWalletAddress("wallet-a");
         coveredBuy.setNetworkId(NetworkId.AVALANCHE);
-
-        NormalizedTransaction uncoveredBuy = tx("2", "0xavax-uncovered", 1, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
-                flow(NormalizedLegRole.BUY, "AVAX", "0.1", null, PriceSource.UNKNOWN));
-        uncoveredBuy.setWalletAddress("wallet-a");
-        uncoveredBuy.setNetworkId(NetworkId.AVALANCHE);
 
         NormalizedTransaction stake = tx(
                 "3",
                 "0xavax-stake",
                 2,
                 NormalizedTransactionType.STAKING_DEPOSIT,
-                flow(NormalizedLegRole.TRANSFER, "AVAX", "-0.5", null, null),
-                flow(NormalizedLegRole.TRANSFER, "sAVAX", "0.4", null, null)
+                flow(NormalizedLegRole.TRANSFER, "AVAX", "-0.5", "12", PriceSource.BINANCE),
+                flow(NormalizedLegRole.TRANSFER, "sAVAX", "0.4", "15", PriceSource.BINANCE)
         );
         stake.setWalletAddress("wallet-a");
         stake.setNetworkId(NetworkId.AVALANCHE);
 
         when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
                 NormalizedTransactionStatus.CONFIRMED
-        )).thenReturn(List.of(coveredBuy, uncoveredBuy, stake));
+        )).thenReturn(List.of(coveredBuy, stake));
 
         service().replayConfirmed();
 
         List<AssetLedgerPoint> points = capturedLedgerPoints();
         AssetLedgerPoint derivative = latestPoint(points, "wallet-a", NetworkId.AVALANCHE, "sAVAX", null);
         assertThat(derivative.getQuantityAfter()).isEqualByComparingTo("0.4");
-        assertThat(derivative.getBasisBackedQuantityAfter()).isEqualByComparingTo("0.4");
-        assertThat(derivative.getUncoveredQuantityAfter()).isZero();
-        assertThat(derivative.getTotalCostBasisAfterUsd()).isEqualByComparingTo("4");
-        assertThat(derivative.getAvcoAfterUsd()).isEqualByComparingTo("10");
+        assertThat(derivative.getTotalCostBasisAfterUsd()).isEqualByComparingTo("6");
+        assertThat(derivative.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.ACQUIRE);
     }
 
     @Test
-    void familyEquivalentVaultWithdrawCarriesBasisFromYvvbethIntoVbeth() {
+    void c2ToC1VaultWithdrawRealizesPnlInsteadOfFamilyEquivalentCarry() {
         NormalizedTransaction buy = tx("1", "0xbuy-yvvbeth", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
                 flow(NormalizedLegRole.BUY, "YVVBETH", "0.435428171459772105", "2809.177530660769159772942625393432", PriceSource.BINANCE));
         buy.setWalletAddress("wallet-a");
@@ -2436,8 +2490,8 @@ class AvcoReplayServiceTest {
                 "0xvault-withdraw",
                 1,
                 NormalizedTransactionType.VAULT_WITHDRAW,
-                flow(NormalizedLegRole.TRANSFER, "YVVBETH", "-0.435428171459772105", null, null),
-                flow(NormalizedLegRole.TRANSFER, "VBETH", "0.438269104813635143", null, null)
+                flow(NormalizedLegRole.TRANSFER, "YVVBETH", "-0.435428171459772105", "2800", PriceSource.BINANCE),
+                flow(NormalizedLegRole.TRANSFER, "VBETH", "0.438269104813635143", "2790", PriceSource.BINANCE)
         );
         unwrap.setWalletAddress("wallet-a");
         unwrap.setNetworkId(NetworkId.KATANA);
@@ -2452,12 +2506,11 @@ class AvcoReplayServiceTest {
         AssetLedgerPoint yvvbeth = latestPoint(points, "wallet-a", NetworkId.KATANA, "YVVBETH", null);
         AssetLedgerPoint vbeth = latestPoint(points, "wallet-a", NetworkId.KATANA, "VBETH", null);
         assertThat(yvvbeth.getQuantityAfter()).isZero();
-        assertThat(yvvbeth.getTotalCostBasisAfterUsd()).isZero();
+        assertThat(yvvbeth.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.DISPOSE);
         assertThat(vbeth.getQuantityAfter()).isEqualByComparingTo("0.438269104813635143");
-        assertThat(vbeth.getBasisBackedQuantityAfter()).isEqualByComparingTo("0.435428171459772105");
-        assertThat(vbeth.getUncoveredQuantityAfter()).isEqualByComparingTo("0.002840933353863038");
-        assertThat(vbeth.getTotalCostBasisAfterUsd()).isEqualByComparingTo("1223.195035481496603283743060170887");
-        assertThat(vbeth.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.REALLOCATE_IN);
+        assertThat(vbeth.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.ACQUIRE);
+        assertThat(vbeth.getTotalCostBasisAfterUsd())
+                .isEqualByComparingTo(vbeth.getQuantityAfter().multiply(new BigDecimal("2790")));
     }
 
     // ── B-VAULT-WITHDRAW Bug A: wrapper bucket denomination mismatch ──────────────────────────
@@ -2677,13 +2730,15 @@ class AvcoReplayServiceTest {
     }
 
     @Test
-    void corridorFundSubPatternBNotFixed() {
-        // Sub-pattern B: FUND qty>0 but AVCO=0 (e.g. UNIVERSAL_TRANSFER inbound with missing
-        // basis). hasFundCarryInventory returns true → no umbrella fallback → carry cbD=0 is
-        // preserved unchanged. This is explicitly out of scope for this fix.
+    void corridorInboundCommingsWithUmbrellaThenOutboundDrainsProportionalBasis() {
+        // BLOCKER-4: an inbound corridor deposit no longer establishes a :FUND-only zero-basis pool
+        // — it collapses onto the UID umbrella and commingles with umbrella spot inventory. A later
+        // corridor outbound from :FUND therefore drains the unified umbrella pool via the carry
+        // waterfall, carrying proportional basis instead of the old FUND-only cbD=0.
         //
-        // Setup: establish FUND with qty=1 ETH, cbD=0 via a corridor carry from a zero-basis
-        // source wallet, then verify a second corridor outbound from that FUND carries cbD=0.
+        // Setup: a zero-basis corridor inbound (qty=1 ETH, cbD=0) commingles onto BYBIT:3 with a
+        // $3705 umbrella buy (qty=1) → umbrella holds qty=2, totalBasis=$3705. The outbound corridor
+        // then moves 1 ETH: proportional basis = $3705 × (1/2) = $1852.50 lands on the on-chain leg.
         NormalizedTransaction noBasisBuy = tx("1", "0xno-basis-buy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
                 flow(NormalizedLegRole.BUY, "ETH", "1", null, null));
         noBasisBuy.setWalletAddress("no-basis-wallet");
@@ -2736,11 +2791,12 @@ class AvcoReplayServiceTest {
         service().replayConfirmed();
 
         List<AssetLedgerPoint> points = capturedLedgerPoints();
-        // Sub-pattern B: FUND qty=1 > 0 → hasFundCarryInventory=true → no umbrella fallback
-        // → carry cbD=0 (umbrella $3705 basis is NOT used — sub-pattern B out of scope)
+        // BLOCKER-4: the inbound corridor deposit commingled onto BYBIT:3 (umbrella qty=2,
+        // totalBasis=$3705). The outbound corridor drains 1 ETH via the umbrella waterfall carrying
+        // proportional basis = $3705 × (1/2) = $1852.50 (not the old FUND-only cbD=0).
         AssetLedgerPoint carryIn = latestPoint(points, "user-on-chain-3", NetworkId.ARBITRUM, "ETH", null);
         assertThat(carryIn.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.CARRY_IN);
-        assertThat(carryIn.getTotalCostBasisAfterUsd()).isEqualByComparingTo("0");
+        assertThat(carryIn.getTotalCostBasisAfterUsd()).isEqualByComparingTo("1852.5");
     }
 
     @Test
@@ -3503,7 +3559,8 @@ class AvcoReplayServiceTest {
                         counterpartyBasisPoolReplayHook,
                         leverageBorrowReplayHook,
                         borrowReplayHandler,
-                        repayReplayHandler
+                        repayReplayHandler,
+                        replayMarketAuthority
                 );
         com.walletradar.application.costbasis.domain.AccountingShortfallAuditRepository shortfallAuditRepository =
                 org.mockito.Mockito.mock(com.walletradar.application.costbasis.domain.AccountingShortfallAuditRepository.class);
