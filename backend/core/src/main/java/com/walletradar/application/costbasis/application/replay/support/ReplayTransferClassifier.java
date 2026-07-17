@@ -2,6 +2,7 @@ package com.walletradar.application.costbasis.application.replay.support;
 
 import com.walletradar.application.costbasis.support.AccountingAssetClassificationSupport;
 import com.walletradar.application.costbasis.support.AccountingAssetFamilySupport;
+import com.walletradar.application.costbasis.support.AccountingAssetIdentitySupport;
 import com.walletradar.canonical.correlation.CorrelationContract;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
@@ -129,10 +130,19 @@ public class ReplayTransferClassifier {
         if (blocksCrossCanonicalBucketCarry(transaction)) {
             return false;
         }
-        return flow != null
-                && flow.getQuantityDelta() != null
-                && flow.getQuantityDelta().signum() < 0
-                && switch (transaction.getType()) {
+        if (flow == null
+                || flow.getQuantityDelta() == null
+                || flow.getQuantityDelta().signum() >= 0) {
+            return false;
+        }
+        // B-ETH-02: a linked LENDING_LOOP_OPEN parks its collateral principal outbound leg into a
+        // network-agnostic continuity bucket so the later DECREASE/CLOSE restores the carried basis
+        // instead of re-pricing the returned collateral at market. The borrow/debt leg is excluded
+        // by dominantCollateralPrincipal so it is not double-counted.
+        if (isLendingLoopCollateralPrincipal(transaction, flow, true)) {
+            return true;
+        }
+        return switch (transaction.getType()) {
             // Cycle/8 S5: LP_EXIT* is added so the burned LP receipt token carries its basis
             // INTO the composite bucket, where the inbound underlying restorations can pick it
             // up. Without this the LP token disposal would dispose against AVCO and lose
@@ -172,6 +182,12 @@ public class ReplayTransferClassifier {
         }
         if (flow == null || flow.getQuantityDelta() == null || flow.getQuantityDelta().signum() <= 0) {
             return false;
+        }
+        // B-ETH-02: a linked LENDING_LOOP_DECREASE/CLOSE restores its collateral principal inbound
+        // leg pro-rata from the network-agnostic bucket parked on the OPEN. Any residual basis stays
+        // in the bucket for the next decrease/final close.
+        if (isLendingLoopCollateralPrincipal(transaction, flow, false)) {
+            return true;
         }
         // For LP_POSITION_UNSTAKE: only the LP-RECEIPT positive TRANSFER (the principal return)
         // should restore from the wrapper bucket. Extra reward flows credited in the same
@@ -295,6 +311,94 @@ public class ReplayTransferClassifier {
         }
         String correlationId = transaction.getCorrelationId();
         return correlationId != null && correlationId.startsWith(CorrelationContract.BYBIT_REKEYED_V1_PREFIX);
+    }
+
+    /**
+     * B-ETH-02: true when {@code flow} is the collateral principal leg of a linked lending-loop
+     * OPEN (outbound, {@code openSide=true}) or DECREASE/CLOSE (inbound, {@code openSide=false}).
+     *
+     * <p>Gating anchors: the transaction type, a {@code lending-loop:} correlation id (only linked
+     * loops route through the bucket — an unpaired loop keeps today's market pricing), a
+     * TRANSFER-role leg of the required sign, and dominance over any sibling same-sign leg. The
+     * debt/borrow receipt (variable/stable debt token) is explicitly excluded so only the collateral
+     * is parked/restored and the borrow leg is never double-counted through the continuity bucket.
+     */
+    private static boolean isLendingLoopCollateralPrincipal(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow,
+            boolean openSide
+    ) {
+        if (transaction == null || flow == null || flow.getQuantityDelta() == null) {
+            return false;
+        }
+        NormalizedTransactionType type = transaction.getType();
+        boolean typeMatches = openSide
+                ? type == NormalizedTransactionType.LENDING_LOOP_OPEN
+                : (type == NormalizedTransactionType.LENDING_LOOP_DECREASE
+                        || type == NormalizedTransactionType.LENDING_LOOP_CLOSE);
+        if (!typeMatches) {
+            return false;
+        }
+        String correlationId = transaction.getCorrelationId();
+        if (correlationId == null || !correlationId.startsWith(CorrelationContract.LENDING_LOOP_PREFIX)) {
+            return false;
+        }
+        if (flow.getRole() != NormalizedLegRole.TRANSFER) {
+            return false;
+        }
+        int requiredSign = openSide ? -1 : 1;
+        if (flow.getQuantityDelta().signum() != requiredSign) {
+            return false;
+        }
+        return flow == dominantCollateralPrincipal(transaction, requiredSign);
+    }
+
+    /**
+     * B-ETH-02: selects the dominant collateral principal leg among the same-sign TRANSFER flows,
+     * excluding debt/borrow receipts. Ranks by resolvable USD value, falling back to absolute
+     * quantity when no USD value is available (the loop OPEN/CLOSE has a single collateral principal
+     * of each sign in practice, so the fallback merely provides deterministic behaviour).
+     */
+    private static NormalizedTransaction.Flow dominantCollateralPrincipal(
+            NormalizedTransaction transaction,
+            int requiredSign
+    ) {
+        if (transaction == null || transaction.getFlows() == null) {
+            return null;
+        }
+        NormalizedTransaction.Flow best = null;
+        java.math.BigDecimal bestValue = null;
+        for (NormalizedTransaction.Flow candidate : transaction.getFlows()) {
+            if (candidate == null
+                    || candidate.getRole() != NormalizedLegRole.TRANSFER
+                    || candidate.getQuantityDelta() == null
+                    || candidate.getQuantityDelta().signum() != requiredSign) {
+                continue;
+            }
+            if (AccountingAssetIdentitySupport.isDebtIdentity(candidate.getAssetSymbol())) {
+                continue;
+            }
+            java.math.BigDecimal candidateValue = principalRankingValue(candidate);
+            if (best == null || candidateValue.compareTo(bestValue) > 0) {
+                best = candidate;
+                bestValue = candidateValue;
+            }
+        }
+        return best;
+    }
+
+    private static java.math.BigDecimal principalRankingValue(NormalizedTransaction.Flow flow) {
+        if (flow.getValueUsd() != null && flow.getValueUsd().abs().signum() > 0) {
+            return flow.getValueUsd().abs();
+        }
+        if (flow.getUnitPriceUsd() != null
+                && flow.getUnitPriceUsd().signum() > 0
+                && flow.getQuantityDelta() != null) {
+            return flow.getQuantityDelta().abs().multiply(flow.getUnitPriceUsd());
+        }
+        return flow.getQuantityDelta() == null
+                ? java.math.BigDecimal.ZERO
+                : flow.getQuantityDelta().abs();
     }
 
     /**

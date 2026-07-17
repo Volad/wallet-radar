@@ -389,6 +389,29 @@ public class LiFiBridgePairLinkService {
                 destinationChanged = true;
             }
         }
+
+        // B-ETH-01 / B-ETH-03: stamp the settlement sub-mode (+ realize-on-convert decision for the
+        // asset-converting corridor) on both legs so AVCO replay can distinguish the two BRIDGE_IN
+        // sub-modes and realize P&L on non-peg cross-family converts. Peg/same-asset stay unchanged.
+        if (continuityCandidate) {
+            if (BridgeSettlementLinkStamper.stampSameAssetContinuity(source) && !updates.contains(source)) {
+                source.setUpdatedAt(now);
+                updates.add(source);
+            }
+            if (BridgeSettlementLinkStamper.stampSameAssetContinuity(destination)) {
+                destinationChanged = true;
+            }
+        } else if (crossAssetSettlementPair) {
+            if (BridgeSettlementLinkStamper.stampAssetConvertingSettlement(source, source, destination)
+                    && !updates.contains(source)) {
+                source.setUpdatedAt(now);
+                updates.add(source);
+            }
+            if (BridgeSettlementLinkStamper.stampAssetConvertingSettlement(destination, source, destination)) {
+                destinationChanged = true;
+            }
+        }
+
         if (destinationChanged) {
             destination.setUpdatedAt(now);
             updates.add(destination);

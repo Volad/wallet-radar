@@ -329,6 +329,21 @@ export interface SessionAssetLedgerTimelineEntryResponse {
    * FAMILY_ROLLUP is never emitted.
    */
   readonly avcoKind: string | null;
+  /**
+   * Blended total-exposure AVCO series (RC-E3 / ADR-061). Re-includes ETH-origin basis parked in
+   * basis-conserving receipt corridors (LP/lending/GLV). All fields nullable → additive/backward-compatible;
+   * the ADR-045 spot-family lines are unchanged. Backend owns before/after chaining.
+   */
+  readonly blendedAvcoBeforeUsd: number | null;
+  readonly blendedAvcoAfterUsd: number | null;
+  readonly blendedNetAvcoBeforeUsd: number | null;
+  readonly blendedNetAvcoAfterUsd: number | null;
+  /** Total-exposure covered quantity backing the blended AVCO; blended line breaks when this <= epsilon. */
+  readonly blendedCoveredQuantityAfter: number | null;
+  /** Liquid (spot-family) quantity after the event; drives pool≈0 markers. */
+  readonly liquidQuantityAfter: number | null;
+  /** PRIMARY_FLOW = blended covered-weighted AVCO; UNAVAILABLE = total exposure drained (line breaks). */
+  readonly blendedAvcoKind: string | null;
   readonly fromAddress: string | null;
   readonly toAddress: string | null;
   readonly memberNormalizedTransactionIds: ReadonlyArray<string>;

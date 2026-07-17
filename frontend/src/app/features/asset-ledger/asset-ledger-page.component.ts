@@ -132,6 +132,14 @@ interface MarkerView {
   readonly netAvcoAfterUsd: number | null;
   readonly avcoKind: string | null;
   readonly avcoKindLabel: string | null;
+  // RC-E3 / ADR-061 — blended total-exposure AVCO series (re-includes parked ETH-origin basis).
+  readonly blendedAvcoBeforeUsd: number | null;
+  readonly blendedAvcoAfterUsd: number | null;
+  readonly blendedNetAvcoBeforeUsd: number | null;
+  readonly blendedNetAvcoAfterUsd: number | null;
+  readonly blendedCoveredQuantityAfter: number | null;
+  readonly liquidQuantityAfter: number | null;
+  readonly blendedAvcoKind: string | null;
   readonly realisedPnlDeltaUsd: number | null;
   readonly gasDeltaUsd: number | null;
   readonly basisEffects: ReadonlyArray<string>;
@@ -207,6 +215,11 @@ const USDC_FAMILY_SYMBOLS = new Set(['USDC', 'VBUSDC']);
 const STABLECOIN_SYMBOLS = new Set(['USDT', 'USDC', 'USDE', 'USDS', 'USDD', 'DAI', 'FDUSD', 'PYUSD', 'TUSD', 'USD1']);
 const DEFAULT_RANGE_DAYS = 21;
 const DEFAULT_RANGE_MIN_POINTS = 16;
+/**
+ * Pool≈0 threshold (ETH) for the RC-E3 / ADR-061 blended overlay: below this the liquid ETH pool /
+ * total ETH-origin covered quantity is treated as drained. Drives blended-line breaks and pool≈0 markers.
+ */
+const POOL_EPSILON_ETH = 1e-6;
 const CHART_MARKER_EDGE_MARGIN = 20;
 const DEFAULT_DISABLED_TYPE_KEYS = new Set(['WRAP', 'UNWRAP', 'GAS_ONLY']);
 const DEFAULT_HIDDEN_BASIS_EFFECTS = new Set(['GAS_ONLY']);
@@ -842,6 +855,7 @@ const TYPE_DISPLAY_OVERRIDES: Readonly<Record<string, TypeDisplayOverride>> = {
   LENDING_LOOP_REBALANCE: { label: 'Loop rebalance', baseType: 'LENDING_DEPOSIT' },
   LENDING_LOOP_DECREASE: { label: 'Loop decrease', baseType: 'LENDING_WITHDRAW' },
   LENDING_LOOP_CLOSE: { label: 'Loop close', baseType: 'LENDING_WITHDRAW' },
+  EARN_FLEXIBLE_SAVING: { label: 'Earn redemption', baseType: 'LENDING_WITHDRAW' },
   VAULT_WITHDRAW: { label: 'Vault withdraw', baseType: 'VAULT_DEPOSIT' },
   PROTOCOL_CUSTODY_WITHDRAW: { label: 'Protocol custody out', baseType: 'PROTOCOL_CUSTODY_DEPOSIT' },
   DEX_ORDER_REQUEST: { label: 'DEX order request', baseType: 'SWAP' },
@@ -896,6 +910,12 @@ export class AssetLedgerPageComponent {
   readonly collapsedSections = signal<ReadonlySet<string>>(new Set<string>());
   readonly eventLogSearch = signal('');
   readonly expandedLogRowId = signal<string | null>(null);
+
+  // AVCO chart-line visibility toggles (all ON by default). Presentation-only: they gate what is
+  // DRAWN on the main canvas; tooltip rows and header cards always show every value.
+  readonly showBalanceAvco = signal(true);
+  readonly showBlendedAvco = signal(true);
+  readonly showMarketAvco = signal(true);
 
   @ViewChild('chartCanvas') private chartCanvasRef?: ElementRef<HTMLCanvasElement>;
   @ViewChild('qtyChartCanvas') private qtyChartCanvasRef?: ElementRef<HTMLCanvasElement>;
@@ -1041,6 +1061,25 @@ export class AssetLedgerPageComponent {
     const start = Math.max(0, Math.min(this.rangeStartIndex(), data.markers.length - 1));
     const end = Math.max(start, Math.min(this.rangeEndIndex(), data.markers.length - 1));
     return data.markers.slice(start, end + 1);
+  });
+
+  /**
+   * Terminal blended (total-exposure) net AVCO for the header card (ADR-061). There is no
+   * `data.current` field for it, so we take the last defined `blendedNetAvcoAfterUsd` across the full
+   * markers series (or `null` when the total-exposure basis is undefined everywhere).
+   */
+  readonly blendedNetAvcoCurrent = computed<number | null>(() => {
+    const data = this.assetData();
+    if (data === null) {
+      return null;
+    }
+    for (let index = data.markers.length - 1; index >= 0; index -= 1) {
+      const value = data.markers[index].blendedNetAvcoAfterUsd;
+      if (value !== null && !Number.isNaN(value)) {
+        return value;
+      }
+    }
+    return null;
   });
 
   readonly visibleMarkers = computed(() => {
@@ -1390,6 +1429,22 @@ export class AssetLedgerPageComponent {
       next.add(sectionKey);
     }
     this.collapsedSections.set(next);
+  }
+
+  /** Flip an AVCO chart-line visibility toggle and re-render the main canvas (presentation-only). */
+  toggleAvcoLine(line: 'balance' | 'blended' | 'market'): void {
+    switch (line) {
+      case 'balance':
+        this.showBalanceAvco.update((value) => !value);
+        break;
+      case 'blended':
+        this.showBlendedAvco.update((value) => !value);
+        break;
+      case 'market':
+        this.showMarketAvco.update((value) => !value);
+        break;
+    }
+    this.renderChart();
   }
 
   selectMarkerFromLog(marker: MarkerView, event?: MouseEvent): void {
@@ -1861,6 +1916,13 @@ export class AssetLedgerPageComponent {
         netAvcoAfterUsd: entry.netAvcoAfterUsd,
         avcoKind: entry.avcoKind ?? null,
         avcoKindLabel: this.avcoKindLabel(entry.avcoKind ?? null),
+        blendedAvcoBeforeUsd: entry.blendedAvcoBeforeUsd ?? previous?.blendedAvcoAfterUsd ?? null,
+        blendedAvcoAfterUsd: entry.blendedAvcoAfterUsd,
+        blendedNetAvcoBeforeUsd: entry.blendedNetAvcoBeforeUsd ?? previous?.blendedNetAvcoAfterUsd ?? null,
+        blendedNetAvcoAfterUsd: entry.blendedNetAvcoAfterUsd,
+        blendedCoveredQuantityAfter: entry.blendedCoveredQuantityAfter,
+        liquidQuantityAfter: entry.liquidQuantityAfter ?? entry.quantityAfter ?? null,
+        blendedAvcoKind: entry.blendedAvcoKind ?? null,
         realisedPnlDeltaUsd: entry.realisedPnlDeltaUsd,
         gasDeltaUsd: entry.gasDeltaUsd,
         basisEffects: entry.basisEffects,
@@ -2090,6 +2152,13 @@ export class AssetLedgerPageComponent {
       netAvcoBeforeUsd: first.netAvcoBeforeUsd,
       avcoKind: last.avcoKind,
       avcoKindLabel: last.avcoKindLabel,
+      blendedAvcoAfterUsd: last.blendedAvcoAfterUsd,
+      blendedAvcoBeforeUsd: first.blendedAvcoBeforeUsd,
+      blendedNetAvcoAfterUsd: last.blendedNetAvcoAfterUsd,
+      blendedNetAvcoBeforeUsd: first.blendedNetAvcoBeforeUsd,
+      blendedCoveredQuantityAfter: last.blendedCoveredQuantityAfter,
+      liquidQuantityAfter: last.liquidQuantityAfter,
+      blendedAvcoKind: last.blendedAvcoKind,
       realisedPnlDeltaUsd: ordered.reduce((sum, leg) => sum + (leg.realisedPnlDeltaUsd ?? 0), 0) || null,
       basisEffects,
       basisSummary: basisEffects.length > 0 ? basisEffects.join(' · ') : 'No basis effect',
@@ -2183,13 +2252,15 @@ export class AssetLedgerPageComponent {
     markers: ReadonlyArray<MarkerView>,
     projectX: (index: number) => number,
     projectY: (value: number | null) => number,
-    selector: (marker: MarkerView) => number | null
+    selector: (marker: MarkerView) => number | null,
+    breakSelector?: (marker: MarkerView) => boolean
   ): ReadonlyArray<ReadonlyArray<{ readonly x: number; readonly y: number }>> {
     const segments: Array<Array<{ x: number; y: number }>> = [];
     let current: Array<{ x: number; y: number }> = [];
     markers.forEach((marker, index) => {
       const value = selector(marker);
-      if (value === null || Number.isNaN(value)) {
+      const broken = value === null || Number.isNaN(value) || (breakSelector?.(marker) ?? false);
+      if (broken) {
         if (current.length > 0) {
           segments.push(current);
           current = [];
@@ -2203,6 +2274,56 @@ export class AssetLedgerPageComponent {
     }
     return segments;
   }
+
+  /**
+   * Single shared AVCO-series render helper (RC-E3 / ADR-061). Splits the series into contiguous
+   * segments (per-line break semantics via {@link buildAvcoLineSegments}) and strokes them with the
+   * supplied line style. Returns the computed segments so callers can reuse them (e.g. gradient fill).
+   * Distinct dash patterns per line keep the three series distinguishable without relying on hue (a11y).
+   */
+  private renderAvcoSeries(
+    ctx: CanvasRenderingContext2D,
+    markers: ReadonlyArray<MarkerView>,
+    projectX: (index: number) => number,
+    projectY: (value: number | null) => number,
+    opts: {
+      readonly selector: (marker: MarkerView) => number | null;
+      readonly stroke: string;
+      readonly lineWidth: number;
+      readonly dash: ReadonlyArray<number>;
+      readonly breakSelector?: (marker: MarkerView) => boolean;
+      readonly lineCap?: CanvasLineCap;
+    }
+  ): ReadonlyArray<ReadonlyArray<{ readonly x: number; readonly y: number }>> {
+    const segments = this.buildAvcoLineSegments(markers, projectX, projectY, opts.selector, opts.breakSelector);
+    ctx.strokeStyle = opts.stroke;
+    ctx.lineWidth = opts.lineWidth;
+    ctx.setLineDash([...opts.dash]);
+    ctx.lineCap = opts.lineCap ?? 'butt';
+    this.strokeAvcoSegments(ctx, segments);
+    ctx.setLineDash([]);
+    ctx.lineCap = 'butt';
+    return segments;
+  }
+
+  /**
+   * pool≈0 "drained-but-parked" predicate (RC-E3 / ADR-061): the liquid pool is empty
+   * (`liquidQuantityAfter < ε`) yet ETH-origin basis remains parked in receipt corridors
+   * (`blendedCoveredQuantityAfter >= ε`). This is the expected state where a fresh buy snaps the
+   * liquid line to spot; it drives the chart pool≈0 marker and the marker tooltip note.
+   */
+  isPoolNearZeroDrainedButParked(marker: MarkerView): boolean {
+    return (
+      marker.liquidQuantityAfter !== null &&
+      marker.liquidQuantityAfter < POOL_EPSILON_ETH &&
+      marker.blendedCoveredQuantityAfter !== null &&
+      marker.blendedCoveredQuantityAfter >= POOL_EPSILON_ETH
+    );
+  }
+
+  /** Marker tooltip copy shown at pool≈0 drained-but-parked events (RC-E3 / ADR-061). */
+  readonly poolNearZeroNote =
+    'Balance ETH ≈ 0 — basis parked in LP/lending; a fresh buy snaps the balance line to spot — expected.';
 
   private strokeAvcoSegments(
     ctx: CanvasRenderingContext2D,
@@ -2244,14 +2365,20 @@ export class AssetLedgerPageComponent {
       value === null || Number.isNaN(value) ? null : value;
     let previousTaxAfter: number | null = null;
     let previousNetAfter: number | null = null;
+    let previousBlendedMarketAfter: number | null = null;
+    let previousBlendedNetAfter: number | null = null;
     return markers.map((marker) => {
       const nextMarker: MarkerView = {
         ...marker,
         avcoBeforeUsd: previousTaxAfter,
         netAvcoBeforeUsd: previousNetAfter,
+        blendedAvcoBeforeUsd: previousBlendedMarketAfter,
+        blendedNetAvcoBeforeUsd: previousBlendedNetAfter,
       };
       previousTaxAfter = normaliseAvco(marker.avcoAfterUsd);
       previousNetAfter = normaliseAvco(marker.netAvcoAfterUsd);
+      previousBlendedMarketAfter = normaliseAvco(marker.blendedAvcoAfterUsd);
+      previousBlendedNetAfter = normaliseAvco(marker.blendedNetAvcoAfterUsd);
       return nextMarker;
     });
   }
@@ -2263,7 +2390,12 @@ export class AssetLedgerPageComponent {
   ): (value: number | null) => number {
     const avcos = timeline
       .filter((entry) => entry.avcoKind !== 'FAMILY_ROLLUP')
-      .flatMap((entry) => [entry.avcoAfterUsd, entry.netAvcoAfterUsd])
+      .flatMap((entry) => [
+        entry.avcoAfterUsd,
+        entry.netAvcoAfterUsd,
+        entry.blendedAvcoAfterUsd,
+        entry.blendedNetAvcoAfterUsd,
+      ])
       .filter((value): value is number => value !== null && value > 0);
     const min = avcos.length === 0 ? 0 : Math.min(...avcos) * 0.88;
     const max = this.clampedAvcoDisplayMax(avcos);
@@ -3174,6 +3306,8 @@ export class AssetLedgerPageComponent {
       ...windowMarkers.map((marker) => marker.priceUsd).filter((value): value is number => value !== null),
       ...windowMarkers.map((marker) => marker.avcoAfterUsd).filter((value): value is number => value !== null),
       ...windowMarkers.map((marker) => marker.netAvcoAfterUsd).filter((value): value is number => value !== null),
+      ...windowMarkers.map((marker) => marker.blendedNetAvcoAfterUsd).filter((value): value is number => value !== null),
+      ...windowMarkers.map((marker) => marker.blendedAvcoAfterUsd).filter((value): value is number => value !== null),
     ];
     const minValue = values.length === 0 ? 0 : Math.min(...values) * 0.85;
     const maxValue = values.length === 0 ? 1 : Math.max(...values) * 1.1;
@@ -3207,52 +3341,99 @@ export class AssetLedgerPageComponent {
       ctx.fillText(`$${Math.round(value)}`, pad.left - 6, y + 3);
     }
 
-    // ADR-045: plot the family covered-weighted AVCO series and BREAK the line where avcoAfterUsd is
-    // null (family drained, ADR-031) — never a point at $0 and never connected across the gap.
-    const taxAvcoSegments = this.buildAvcoLineSegments(
-      windowMarkers,
-      projectX,
-      projectY,
-      (marker) => marker.avcoAfterUsd
-    );
-    ctx.strokeStyle = 'rgba(255,255,255,.28)';
-    ctx.lineWidth = 1.25;
-    ctx.setLineDash([5, 4]);
-    this.strokeAvcoSegments(ctx, taxAvcoSegments);
-    ctx.setLineDash([]);
+    // ADR-045 / ADR-061: three AVCO series through one shared helper. Each line has a distinct dash
+    // pattern (a11y — distinguishable without hue) and its own per-line break semantics:
+    //  - Market/Tax (dashed white) and Liquid-pool (solid cyan) break where the value is null
+    //    (family drained, ADR-031) — never a point at $0, never connected across the gap.
+    //  - Blended total-exposure (dotted amber) breaks only where the total ETH-origin covered
+    //    quantity drains to ~0 (blendedCoveredQuantityAfter <= POOL_EPSILON_ETH), per ADR-061.
+    // Draw order keeps the existing two lines pixel-identical: the NEW blended line is stroked FIRST
+    // (bottom), then Market/Tax, then the solid cyan Liquid-pool line last — so both existing lines
+    // sit on top of the blended line and their pixels are unchanged.
 
-    const netAvcoSegments = this.buildAvcoLineSegments(
-      windowMarkers,
-      projectX,
-      projectY,
-      (marker) => marker.netAvcoAfterUsd
-    );
-    ctx.strokeStyle = 'rgba(34,211,238,.85)';
-    ctx.lineWidth = 1.75;
-    ctx.setLineDash([]);
-    this.strokeAvcoSegments(ctx, netAvcoSegments);
+    // Blended (total-exposure) AVCO — NEW: amber, dotted round pattern; breaks only at pool≈0.
+    if (this.showBlendedAvco()) {
+      this.renderAvcoSeries(ctx, windowMarkers, projectX, projectY, {
+        selector: (marker) => marker.blendedNetAvcoAfterUsd,
+        stroke: 'rgba(245,158,11,.9)',
+        lineWidth: 1.75,
+        dash: [1, 5],
+        lineCap: 'round',
+        breakSelector: (marker) =>
+          marker.blendedCoveredQuantityAfter === null || marker.blendedCoveredQuantityAfter <= POOL_EPSILON_ETH,
+      });
+    }
 
+    // Market / Tax AVCO — existing dashed white, unchanged.
+    if (this.showMarketAvco()) {
+      this.renderAvcoSeries(ctx, windowMarkers, projectX, projectY, {
+        selector: (marker) => marker.avcoAfterUsd,
+        stroke: 'rgba(255,255,255,.28)',
+        lineWidth: 1.25,
+        dash: [5, 4],
+      });
+    }
+
+    // Balance AVCO — existing solid cyan, unchanged. Stroked last so its pixels stay on top.
+    // The cyan gradient area-fill below is tied to this line, so it is only computed/drawn when the
+    // Balance line is visible.
+    let netAvcoSegments: ReadonlyArray<ReadonlyArray<{ readonly x: number; readonly y: number }>> = [];
     const baselineY = cssHeight - pad.bottom;
-    const gradient = ctx.createLinearGradient(0, 0, 0, cssHeight);
-    gradient.addColorStop(0, 'rgba(34,211,238,.08)');
-    gradient.addColorStop(1, 'rgba(34,211,238,0)');
-    ctx.fillStyle = gradient;
-    netAvcoSegments.forEach((segment) => {
-      if (segment.length < 2) {
+    if (this.showBalanceAvco()) {
+      netAvcoSegments = this.renderAvcoSeries(ctx, windowMarkers, projectX, projectY, {
+        selector: (marker) => marker.netAvcoAfterUsd,
+        stroke: 'rgba(34,211,238,.85)',
+        lineWidth: 1.75,
+        dash: [],
+      });
+
+      const gradient = ctx.createLinearGradient(0, 0, 0, cssHeight);
+      gradient.addColorStop(0, 'rgba(34,211,238,.08)');
+      gradient.addColorStop(1, 'rgba(34,211,238,0)');
+      ctx.fillStyle = gradient;
+      netAvcoSegments.forEach((segment) => {
+        if (segment.length < 2) {
+          return;
+        }
+        ctx.beginPath();
+        segment.forEach((point, index) => {
+          if (index === 0) {
+            ctx.moveTo(point.x, point.y);
+          } else {
+            ctx.lineTo(point.x, point.y);
+          }
+        });
+        ctx.lineTo(segment.at(-1)!.x, baselineY);
+        ctx.lineTo(segment[0].x, baselineY);
+        ctx.closePath();
+        ctx.fill();
+      });
+    }
+
+    // pool≈0 markers (RC-E3 / ADR-061): the liquid ETH pool is drained (liquidQuantityAfter < ε) but
+    // ETH-origin basis is still parked in LP/lending (blendedCoveredQuantityAfter >= ε). A small hollow
+    // ring on the blended line + a baseline tick flag the "drained-but-parked" event where the liquid
+    // line breaks yet the blended line stays defined. Accessible via the marker tooltip copy.
+    windowMarkers.forEach((marker, index) => {
+      if (!this.isPoolNearZeroDrainedButParked(marker)) {
         return;
       }
+      const x = projectX(index);
+      const ringY =
+        marker.blendedNetAvcoAfterUsd !== null ? projectY(marker.blendedNetAvcoAfterUsd) : baselineY - 6;
+      ctx.save();
+      ctx.strokeStyle = 'rgba(245,158,11,.9)';
+      ctx.fillStyle = 'transparent';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([]);
       ctx.beginPath();
-      segment.forEach((point, index) => {
-        if (index === 0) {
-          ctx.moveTo(point.x, point.y);
-        } else {
-          ctx.lineTo(point.x, point.y);
-        }
-      });
-      ctx.lineTo(segment.at(-1)!.x, baselineY);
-      ctx.lineTo(segment[0].x, baselineY);
-      ctx.closePath();
-      ctx.fill();
+      ctx.arc(x, ringY, 3.5, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(x, baselineY - 4);
+      ctx.lineTo(x, baselineY + 4);
+      ctx.stroke();
+      ctx.restore();
     });
 
     const primaryAvcoAfter = (marker: MarkerView): number | null => marker.netAvcoAfterUsd ?? marker.avcoAfterUsd;

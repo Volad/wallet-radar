@@ -142,6 +142,15 @@ import java.util.List;
         @CompoundIndex(
                 name = "normalized_source_type_excluded_idx",
                 def = "{'source': 1, 'type': 1, 'excludedFromAccounting': 1}"
+        ),
+        // B-ETH-02: LendingLoopOpenClosePairLinkService looks back for the still-open
+        // LENDING_LOOP_OPEN of a given wallet whose type/timestamp precede a
+        // LENDING_LOOP_DECREASE/CLOSE. The lookback is keyed by walletAddress + type with a
+        // blockTimestamp range (protocolName / positionKey are low-selectivity residual filters),
+        // so a leading {walletAddress, type, blockTimestamp} index keeps it out of a full scan.
+        @CompoundIndex(
+                name = "normalized_wallet_type_timestamp_idx",
+                def = "{'walletAddress': 1, 'type': 1, 'blockTimestamp': 1}"
         )
 })
 @NoArgsConstructor

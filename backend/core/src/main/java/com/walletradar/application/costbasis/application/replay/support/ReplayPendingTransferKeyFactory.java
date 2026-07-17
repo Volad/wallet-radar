@@ -439,6 +439,16 @@ public class ReplayPendingTransferKeyFactory {
         // Cycle/17 R7: gauge↔LP round-trip must reuse the same bucket key as stake. Stake deposits
         // into {@code wrapper:<gauge>} via LENDING_DEPOSIT; misclassified unstake as LP_EXIT used
         // to route through {@code lp:<lpToken>} and read an empty bucket (AAVE GHO gauge cov=0%).
+        // B-ETH-02: a linked lending loop parks/restores its collateral principal in a
+        // NETWORK-AGNOSTIC bucket anchored on the shared {@code lending-loop:{openTxHash}}
+        // correlation (+ collateral asset identity), NOT on (wallet, network). Loops may open on
+        // one network and close on another, so a (wallet, network)-keyed bucket would strand the
+        // parked basis. The correlation id is unique per OPEN instance, so a reopened position gets
+        // a fresh bucket and basis never bleeds across loop lifecycles.
+        ContinuityKey lendingLoopKey = lendingLoopContinuityKey(transaction, flow);
+        if (lendingLoopKey != null) {
+            return lendingLoopKey;
+        }
         String wrapperCompositeIdentity = wrapperCompositeBucketIdentity(transaction);
         String lpCompositeIdentity = lpCompositeBucketIdentity(transaction);
         if (wrapperCompositeIdentity != null && lpCompositeIdentity != null) {
@@ -467,6 +477,38 @@ public class ReplayPendingTransferKeyFactory {
                 transaction.getNetworkId(),
                 assetSupport.continuityIdentity(transaction, flow)
         );
+    }
+
+    /**
+     * B-ETH-02: network-agnostic continuity key for a linked lending-loop collateral principal, or
+     * {@code null} when {@code transaction} is not a lending-loop OPEN/DECREASE/CLOSE carrying a
+     * {@code lending-loop:} correlation. The continuity identity is
+     * {@code {correlationId}:{collateralAssetIdentity}} — the correlation id already carries the
+     * {@code lending-loop:} prefix, so the guarded {@code lending-loop:} bucket namespace is
+     * preserved while remaining unique per OPEN instance and independent of wallet/network.
+     */
+    ContinuityKey lendingLoopContinuityKey(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow
+    ) {
+        if (transaction == null || flow == null) {
+            return null;
+        }
+        NormalizedTransactionType type = transaction.getType();
+        if (type != NormalizedTransactionType.LENDING_LOOP_OPEN
+                && type != NormalizedTransactionType.LENDING_LOOP_DECREASE
+                && type != NormalizedTransactionType.LENDING_LOOP_CLOSE) {
+            return null;
+        }
+        String correlationId = transaction.getCorrelationId();
+        if (correlationId == null || !correlationId.startsWith(CorrelationContract.LENDING_LOOP_PREFIX)) {
+            return null;
+        }
+        String collateralIdentity = assetSupport.continuityIdentity(transaction, flow);
+        if (collateralIdentity == null || collateralIdentity.isBlank()) {
+            return null;
+        }
+        return new ContinuityKey(null, null, correlationId + ":" + collateralIdentity);
     }
 
     /**

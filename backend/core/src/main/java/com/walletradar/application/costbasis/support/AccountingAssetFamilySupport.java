@@ -18,7 +18,7 @@ public final class AccountingAssetFamilySupport {
     private static final String FAMILY_USDT = "FAMILY:USDT";
     private static final String FAMILY_DEUSD = "FAMILY:DEUSD";
     private static final String FAMILY_WSTUSR = "FAMILY:WSTUSR";
-    private static final String FAMILY_LP_RECEIPT = "FAMILY:LP_RECEIPT";
+    public static final String FAMILY_LP_RECEIPT = "FAMILY:LP_RECEIPT";
     private static final String FAMILY_ETH_IDENTITY = "FAMILY:ETH";
 
     /**

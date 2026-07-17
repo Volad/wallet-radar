@@ -26,6 +26,7 @@ import com.walletradar.application.linking.pipeline.clarification.GmxExitSettlem
 import com.walletradar.application.linking.pipeline.clarification.GmxV2RefundClassifier;
 import com.walletradar.application.linking.pipeline.clarification.GmxWithdrawalSettlementLinkService;
 import com.walletradar.application.linking.pipeline.clarification.KnownBridgeRouterExternalTypeCorrectionService;
+import com.walletradar.application.linking.pipeline.clarification.LendingLoopOpenClosePairLinkService;
 import com.walletradar.application.linking.pipeline.clarification.NftMintRetagger;
 import com.walletradar.application.linking.pipeline.clarification.AaveVariableDebtTokenTagger;
 import com.walletradar.application.linking.pipeline.clarification.ProtocolAttributionClassifier;
@@ -97,6 +98,8 @@ class LinkingBatchProcessorTest {
         EtherFiOftBridgeInClassifier etherFiOftBridgeInClassifier = mock(EtherFiOftBridgeInClassifier.class);
         NftMintRetagger nftMintRetagger = mock(NftMintRetagger.class);
         TurtleVaultBurnRepairService turtleVaultBurnRepairService = mock(TurtleVaultBurnRepairService.class);
+        LendingLoopOpenClosePairLinkService lendingLoopOpenClosePairLinkService =
+                mock(LendingLoopOpenClosePairLinkService.class);
 
         when(bybitBridgeLinkService.reconcileOutstandingPairs(25)).thenReturn(2);
         when(onChainLifecycleLinkService.processNextBatch(25)).thenReturn(3);
@@ -138,6 +141,7 @@ class LinkingBatchProcessorTest {
         when(bridgePairContinuityRepairService.reconcileLegacySealedPairs(25)).thenReturn(29);
         when(onChainInternalTransferPairRepairService.reconcileOrphanSameTxPairs(25)).thenReturn(31);
         when(turtleVaultBurnRepairService.repairMissingVaultTokenBurn(25)).thenReturn(33);
+        when(lendingLoopOpenClosePairLinkService.reconcileOutstandingLoops(25)).thenReturn(49);
 
         LinkingBatchProcessor processor = new LinkingBatchProcessor(
                 bybitBridgeLinkService,
@@ -163,6 +167,7 @@ class LinkingBatchProcessorTest {
                 multiCounterpartyCorrectionService,
                 crossNetworkBridgePairFallbackService,
                 turtleVaultBurnRepairService,
+                lendingLoopOpenClosePairLinkService,
                 protocolAttributionClassifier,
                 addressPoisoningDetector,
                 spoofTokenDetector,
@@ -181,7 +186,7 @@ class LinkingBatchProcessorTest {
         AtomicInteger heartbeatCount = new AtomicInteger();
         int processed = processor.processNextBatch(25, heartbeatCount::incrementAndGet);
 
-        assertThat(processed).isEqualTo(1033);
-        assertThat(heartbeatCount).hasValue(44);
+        assertThat(processed).isEqualTo(1082);
+        assertThat(heartbeatCount).hasValue(45);
     }
 }

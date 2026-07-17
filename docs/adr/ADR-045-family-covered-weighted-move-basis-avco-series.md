@@ -1,6 +1,7 @@
 # ADR-045 — Family covered-weighted move-basis AVCO series (supersedes ADR-017 chart-source decision)
 
 **Status:** Accepted (amended 2026-07-13 — C2 staked/value-accruing derivatives excluded from the ETH spot-family series, see ADR-054)
+**Amended by ADR-061:** RC-E3 adds a second, additive read-model line — the *blended total-exposure AVCO* — that re-includes ETH-origin basis parked in receipt corridors so the line does not spike when the liquid pool drains. This ADR-045 Method-B spot-family series is retained **byte-identical** (rendered as the "Liquid-pool AVCO" line). See [ADR-061](ADR-061-blended-total-exposure-avco-series.md).
 **Date:** 2026-07-02
 **Supersedes:** ADR-017 §Decision ("Family rollup numerators are never chart AVCO sources") and its
 per-`accountingAssetIdentity` `TimelineAvcoAuthority` selection for the primary move-basis chart line.

@@ -8088,6 +8088,127 @@ class OnChainClassifierTest {
     }
 
     @Test
+    @DisplayName("Mantle Merkl claim with wrapped aToken burn-to-0x0 becomes reward claim, not LP exit")
+    void mantleMerklClaimWithWrappedAtokenBurnToZeroBecomesRewardClaim() {
+        // Anchored on tx 0xfe0ad9d20c6d0f10c4006087d40c7785fd4dbdf8d46419daedc5c227b09706b3 (MANTLE):
+        // a Merkl reward claim whose reward token is an Aave aToken that is wrapped then burned to
+        // 0x0 within the same tx (reward-receipt unwrap). The self-canceling wrapper mint/burn must
+        // not trip the generic LP-receipt-burn -> LP_EXIT heuristic.
+        String merklDistributor = "0x3ef3d8ba38ebe18db133cec108f4d14ce00dd9ae";
+        String merklCore = "0xdef1fa4cefe67365ba046a7c630d6b885298e210";
+        String aaveAToken = "0x85d86061e94ce01d3da0f9efa289c86ff136125a";
+        String wrappedReceipt = "0x09e4c43b7ce78ac58ff6a920f1fd5d84a7975f78";
+        RawTransaction rawTransaction = baseRaw(NetworkId.MANTLE);
+        rawTransaction.getRawData().put("to", merklDistributor);
+        rawTransaction.getRawData().put("methodId", "0x71ee95c0");
+        rawTransaction.getRawData().put("functionName", "claim(address[] users,address[] tokens,uint256[] amounts,bytes32[][] proofs)");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", aaveAToken)
+                        .append("tokenSymbol", "aManWMNT")
+                        .append("tokenName", "Aave Mantle WMNT")
+                        .append("tokenDecimal", "18")
+                        .append("from", merklDistributor)
+                        .append("to", WALLET)
+                        .append("value", "5535385623173230779"),
+                new Document("contractAddress", aaveAToken)
+                        .append("tokenSymbol", "aManWMNT")
+                        .append("tokenName", "Aave Mantle WMNT")
+                        .append("tokenDecimal", "18")
+                        .append("from", merklCore)
+                        .append("to", WALLET)
+                        .append("value", "16113560210662131120"),
+                new Document("contractAddress", wrappedReceipt)
+                        .append("tokenSymbol", "aManWMNT")
+                        .append("tokenName", "Aave Mantle WMNT (wrapped)")
+                        .append("tokenDecimal", "18")
+                        .append("from", merklDistributor)
+                        .append("to", WALLET)
+                        .append("value", "16113560210662131120"),
+                new Document("contractAddress", wrappedReceipt)
+                        .append("tokenSymbol", "aManWMNT")
+                        .append("tokenName", "Aave Mantle WMNT (wrapped)")
+                        .append("tokenDecimal", "18")
+                        .append("from", WALLET)
+                        .append("to", "0x0000000000000000000000000000000000000000")
+                        .append("value", "16113560210662131120")
+        )).append("internalTransfers", List.of()));
+        when(protocolRegistryService.lookup(NetworkId.MANTLE, merklDistributor))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        merklDistributor,
+                        Set.of(NetworkId.MANTLE),
+                        ProtocolRegistryFamily.YIELD,
+                        ProtocolRegistryRole.REWARD_ROUTER,
+                        ProtocolRegistryEventType.REWARD_CLAIM,
+                        ConfidenceLevel.HIGH,
+                        "Merkl",
+                        "V1",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.REWARD_CLAIM);
+        assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.PROTOCOL_REGISTRY);
+        List<NormalizedTransaction.Flow> rewardFlows = result.flows().stream()
+                .filter(flow -> flow.getRole() != NormalizedLegRole.FEE)
+                .toList();
+        // The wrapper mint (+) and burn-to-0x0 (-) must be netted out entirely: no wrapped-token leg
+        // survives, and every remaining reward leg is a positive ACQUIRE (BUY) on the real aToken.
+        assertThat(rewardFlows).isNotEmpty();
+        assertThat(rewardFlows).allSatisfy(flow -> {
+            assertThat(flow.getRole()).isEqualTo(NormalizedLegRole.BUY);
+            assertThat(flow.getAssetContract()).isEqualTo(aaveAToken);
+            assertThat(flow.getQuantityDelta().signum()).isPositive();
+        });
+        assertThat(rewardFlows).extracting(flow -> flow.getAssetContract()).doesNotContain(wrappedReceipt);
+        BigDecimal netReward = rewardFlows.stream()
+                .map(NormalizedTransaction.Flow::getQuantityDelta)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        assertThat(netReward).isEqualByComparingTo("21.648945833835361899");
+    }
+
+    @Test
+    @DisplayName("Mantle Merkl claimWithRecipient with inbound reward becomes reward claim")
+    void mantleMerklClaimWithRecipientWithInboundBecomesRewardClaim() {
+        String merklDistributor = "0x3ef3d8ba38ebe18db133cec108f4d14ce00dd9ae";
+        RawTransaction rawTransaction = baseRaw(NetworkId.MANTLE);
+        rawTransaction.getRawData().put("to", merklDistributor);
+        rawTransaction.getRawData().put("methodId", "0x9fb67b58");
+        rawTransaction.getRawData().put("functionName", "claimWithRecipient(address[] users,address[] tokens,uint256[] amounts,bytes32[][] proofs,address[] recipients,bytes[] datas)");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0x85d86061e94ce01d3da0f9efa289c86ff136125a")
+                        .append("tokenSymbol", "aManWMNT")
+                        .append("tokenName", "Aave Mantle WMNT")
+                        .append("tokenDecimal", "18")
+                        .append("from", merklDistributor)
+                        .append("to", WALLET)
+                        .append("value", "2500000000000000000")
+        )).append("internalTransfers", List.of()));
+        when(protocolRegistryService.lookup(NetworkId.MANTLE, merklDistributor))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        merklDistributor,
+                        Set.of(NetworkId.MANTLE),
+                        ProtocolRegistryFamily.YIELD,
+                        ProtocolRegistryRole.REWARD_ROUTER,
+                        ProtocolRegistryEventType.REWARD_CLAIM,
+                        ConfidenceLevel.HIGH,
+                        "Merkl",
+                        "V1",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.REWARD_CLAIM);
+        assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.PROTOCOL_REGISTRY);
+        assertThat(result.flows()).filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
+                .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getRole())
+                .containsExactly("aManWMNT:BUY");
+    }
+
+    @Test
     @DisplayName("Pendle zap out bundle becomes LP exit with reward side-flow")
     void pendleZapOutBundleBecomesLpExitWithRewardSideFlow() {
         String pendleDistributor = "0x70f61901658aafb7ae57da0c30695ce4417e72b9";

@@ -102,7 +102,16 @@ public record SessionAssetLedgerResponse(
             String avcoKind,
             String fromAddress,
             String toAddress,
-            List<String> memberNormalizedTransactionIds
+            List<String> memberNormalizedTransactionIds,
+            // RC-E3 / ADR-061 — additive blended total-exposure AVCO series. All nullable →
+            // backward-compatible; older frontends ignore them, the ADR-045 spot lines are unchanged.
+            BigDecimal blendedAvcoBeforeUsd,
+            BigDecimal blendedAvcoAfterUsd,
+            BigDecimal blendedNetAvcoBeforeUsd,
+            BigDecimal blendedNetAvcoAfterUsd,
+            BigDecimal blendedCoveredQuantityAfter,
+            BigDecimal liquidQuantityAfter,
+            String blendedAvcoKind
     ) {
     }
 

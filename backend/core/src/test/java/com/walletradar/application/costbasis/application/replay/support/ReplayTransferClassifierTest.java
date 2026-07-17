@@ -195,6 +195,83 @@ class ReplayTransferClassifierTest {
                 .continuityIdentity("CMETH", null)).isEqualTo("FAMILY:METH");
     }
 
+    @Test
+    @DisplayName("B-ETH-02: linked LENDING_LOOP_OPEN collateral principal is bucket-outbound; the borrow leg is not")
+    void lendingLoopOpenCollateralPrincipalIsBucketOutbound() {
+        NormalizedTransaction open = lendingLoop(
+                NormalizedTransactionType.LENDING_LOOP_OPEN, "lending-loop:0xopen",
+                "ETH", "-0.919170497571836978",
+                "USDC", "2050");
+
+        // flow 0 = ETH collateral outbound → bucketed; flow 1 = USDC borrow inbound → not bucketed.
+        assertThat(classifier.isBucketOutbound(open, open.getFlows().get(0))).isTrue();
+        assertThat(classifier.isBucketOutbound(open, open.getFlows().get(1))).isFalse();
+        assertThat(classifier.isBucketInbound(open, open.getFlows().get(1))).isFalse();
+    }
+
+    @Test
+    @DisplayName("B-ETH-02: linked LENDING_LOOP_CLOSE collateral principal is bucket-inbound; the repay leg is not")
+    void lendingLoopCloseCollateralPrincipalIsBucketInbound() {
+        NormalizedTransaction close = lendingLoop(
+                NormalizedTransactionType.LENDING_LOOP_CLOSE, "lending-loop:0xopen",
+                "ETH", "0.419170497141233196",
+                "USDC", "-789");
+
+        assertThat(classifier.isBucketInbound(close, close.getFlows().get(0))).isTrue();
+        assertThat(classifier.isBucketInbound(close, close.getFlows().get(1))).isFalse();
+        assertThat(classifier.isBucketOutbound(close, close.getFlows().get(1))).isFalse();
+    }
+
+    @Test
+    @DisplayName("B-ETH-02: a variable-debt collateral leg is never treated as the collateral principal")
+    void lendingLoopDebtLegIsNotCollateralPrincipal() {
+        // Both legs share the outbound sign; the variableDebt token must be excluded so the real
+        // collateral (WETH) is selected as the parked principal.
+        NormalizedTransaction open = lendingLoop(
+                NormalizedTransactionType.LENDING_LOOP_OPEN, "lending-loop:0xopen",
+                "WETH", "-1.0",
+                "variableDebtWETH", "-5.0");
+
+        assertThat(classifier.isBucketOutbound(open, open.getFlows().get(0))).isTrue();
+        assertThat(classifier.isBucketOutbound(open, open.getFlows().get(1))).isFalse();
+    }
+
+    @Test
+    @DisplayName("B-ETH-02: an UNPAIRED lending loop (no lending-loop: correlation) is not bucketed")
+    void unpairedLendingLoopIsNotBucketed() {
+        NormalizedTransaction close = lendingLoop(
+                NormalizedTransactionType.LENDING_LOOP_CLOSE, null,
+                "ETH", "0.4",
+                "USDC", "-789");
+
+        assertThat(classifier.isBucketInbound(close, close.getFlows().get(0))).isFalse();
+    }
+
+    private static NormalizedTransaction lendingLoop(
+            NormalizedTransactionType type,
+            String correlationId,
+            String collateralSymbol,
+            String collateralQty,
+            String debtSymbol,
+            String debtQty
+    ) {
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setType(type);
+        tx.setWalletAddress("0xwallet");
+        tx.setProtocolName("Euler");
+        tx.setCorrelationId(correlationId);
+        NormalizedTransaction.Flow collateral = new NormalizedTransaction.Flow();
+        collateral.setRole(NormalizedLegRole.TRANSFER);
+        collateral.setAssetSymbol(collateralSymbol);
+        collateral.setQuantityDelta(new BigDecimal(collateralQty));
+        NormalizedTransaction.Flow debt = new NormalizedTransaction.Flow();
+        debt.setRole(NormalizedLegRole.TRANSFER);
+        debt.setAssetSymbol(debtSymbol);
+        debt.setQuantityDelta(new BigDecimal(debtQty));
+        tx.setFlows(List.of(collateral, debt));
+        return tx;
+    }
+
     private static NormalizedTransaction corridorLeg(
             NormalizedTransactionSource source,
             String wallet,

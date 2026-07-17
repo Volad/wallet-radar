@@ -12,11 +12,18 @@ public final class ContinuityBucket {
     private BigDecimal netTotalCostBasisUsd = BigDecimal.ZERO;
     private BigDecimal uncoveredQuantity = BigDecimal.ZERO;
 
+    // B-ETH-02: lifetime carry-in / carry-out cost-basis accumulators. They are never decremented
+    // and let LendingLoopBasisConservationGuard assert, to the cent, that
+    // Σ parked (added) == Σ restored (taken) + residual (current totalCostBasisUsd) per bucket.
+    private BigDecimal cumulativeAddedCostBasisUsd = BigDecimal.ZERO;
+    private BigDecimal cumulativeTakenCostBasisUsd = BigDecimal.ZERO;
+
     public void add(CarryTransfer carry) {
         quantity = quantity.add(carry.quantity());
         totalCostBasisUsd = totalCostBasisUsd.add(carry.costBasisUsd());
         netTotalCostBasisUsd = netTotalCostBasisUsd.add(carry.netCostBasisUsd());
         uncoveredQuantity = uncoveredQuantity.add(carry.uncoveredQuantity());
+        cumulativeAddedCostBasisUsd = cumulativeAddedCostBasisUsd.add(carry.costBasisUsd());
     }
 
     public CarryTransfer take(BigDecimal requestedQuantity, AssetKey assetKey) {
@@ -40,6 +47,7 @@ public final class ContinuityBucket {
                 : coveredQuantity.multiply(netAvco, MC);
         quantity = nonNegative(quantity.subtract(appliedQuantity, MC));
         totalCostBasisUsd = nonNegative(totalCostBasisUsd.subtract(cost, MC));
+        cumulativeTakenCostBasisUsd = cumulativeTakenCostBasisUsd.add(cost, MC);
         netTotalCostBasisUsd = nonNegative(netTotalCostBasisUsd.subtract(netCost, MC));
         uncoveredQuantity = nonNegative(availableUncovered.subtract(nonNegative(appliedQuantity.subtract(coveredQuantity, MC)), MC));
         return new CarryTransfer(
@@ -61,6 +69,21 @@ public final class ContinuityBucket {
 
     public BigDecimal totalQuantity() {
         return quantity;
+    }
+
+    /** Residual (still-parked) covered cost basis currently held by this bucket. */
+    public BigDecimal totalCostBasisUsd() {
+        return totalCostBasisUsd;
+    }
+
+    /** B-ETH-02: lifetime cost basis parked into this bucket (never decremented). */
+    public BigDecimal cumulativeAddedCostBasisUsd() {
+        return cumulativeAddedCostBasisUsd;
+    }
+
+    /** B-ETH-02: lifetime cost basis restored (taken) out of this bucket (never decremented). */
+    public BigDecimal cumulativeTakenCostBasisUsd() {
+        return cumulativeTakenCostBasisUsd;
     }
 
     /**

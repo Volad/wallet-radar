@@ -24,6 +24,18 @@ public final class CorrelationContract {
     public static final String CORR_FAMILY_PREFIX = "corr-family:";
     public static final String BYBIT_EARN_CARRY_PREFIX = "bybit-earn-carry:";
 
+    /**
+     * B-ETH-02: shared correlation prefix stamped on a {@code LENDING_LOOP_OPEN} and each of its
+     * subsequent {@code LENDING_LOOP_DECREASE} / {@code LENDING_LOOP_CLOSE} legs by
+     * {@code LendingLoopOpenClosePairLinkService}. The full correlation id is
+     * {@code lending-loop:{openTxHash}} — unique per OPEN instance so a position reopened after a
+     * full close receives a fresh correlation (basis conservation must not bleed across loop
+     * instances). Replay anchors a network-agnostic continuity bucket on this correlation so the
+     * collateral principal parked on open is restored on close/decrease regardless of the network
+     * on which the loop is unwound.
+     */
+    public static final String LENDING_LOOP_PREFIX = "lending-loop:";
+
     public static final String WALLET_SUFFIX_FUND = ":FUND";
     public static final String WALLET_SUFFIX_UTA = ":UTA";
     public static final String WALLET_SUFFIX_EARN = ":EARN";

@@ -26,6 +26,7 @@ import com.walletradar.application.linking.pipeline.clarification.GmxExitSettlem
 import com.walletradar.application.linking.pipeline.clarification.GmxV2RefundClassifier;
 import com.walletradar.application.linking.pipeline.clarification.GmxWithdrawalSettlementLinkService;
 import com.walletradar.application.linking.pipeline.clarification.KnownBridgeRouterExternalTypeCorrectionService;
+import com.walletradar.application.linking.pipeline.clarification.LendingLoopOpenClosePairLinkService;
 import com.walletradar.application.linking.pipeline.clarification.NftMintRetagger;
 import com.walletradar.application.linking.pipeline.clarification.ProtocolAttributionClassifier;
 import com.walletradar.application.linking.pipeline.clarification.AaveVariableDebtTokenTagger;
@@ -91,6 +92,7 @@ class LinkingBatchProcessor {
     private final MultiCounterpartyCorrectionService multiCounterpartyCorrectionService;
     private final CrossNetworkBridgePairFallbackService crossNetworkBridgePairFallbackService;
     private final TurtleVaultBurnRepairService turtleVaultBurnRepairService;
+    private final LendingLoopOpenClosePairLinkService lendingLoopOpenClosePairLinkService;
 
     private final ProtocolAttributionClassifier protocolAttributionClassifier;
     private final AddressPoisoningDetector addressPoisoningDetector;
@@ -290,6 +292,13 @@ class LinkingBatchProcessor {
         // B-VAULT-WITHDRAW: synthesize missing vault-token burn leg on Turtle Finance
         processed += timedPass("turtleVaultBurnRepair",
                 () -> turtleVaultBurnRepairService.repairMissingVaultTokenBurn(batchSize));
+        progressHeartbeat.run();
+
+        // B-ETH-02: link LENDING_LOOP_OPEN → its DECREASE/CLOSE legs (shared lending-loop: corrId)
+        // so replay parks the collateral basis on open and restores it on close instead of
+        // re-pricing the returned collateral at market. Converges to zero like GMX.
+        processed += timedPass("lendingLoopOpenClosePairLink",
+                () -> lendingLoopOpenClosePairLinkService.reconcileOutstandingLoops(batchSize));
         progressHeartbeat.run();
 
         return processed;

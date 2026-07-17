@@ -2450,8 +2450,8 @@
       "notes": "Legacy reward router; superseded by V2 above"
     },
     "0x3ef3d8ba38ebe18db133cec108f4d14ce00dd9ae": {
-      "name": "Angle Protocol: Distributor",
-      "protocol": "Angle",
+      "name": "Merkl Distributor",
+      "protocol": "Merkl",
       "version": "V1",
       "family": "YIELD",
       "role": "REWARD_ROUTER",
@@ -2463,10 +2463,24 @@
         "AVALANCHE",
         "KATANA",
         "PLASMA",
-        "UNICHAIN"
+        "UNICHAIN",
+        "MANTLE"
       ],
       "confidence": "HIGH",
-      "notes": "Morpho / Angle reward-distribution contract. claim(...) is reward claim, not plain inbound."
+      "notes": "Merkl (Angle Labs) reward Distributor, deployed at the same address on every EVM chain. claim(0x71ee95c0)/claimWithRecipient(0x9fb67b58) is a reward claim, not plain inbound. Reward legs can arrive as a wrapped receipt token that is minted then burned to 0x0 within the claim tx (reward-receipt unwrap); RewardRouteClassifier nets that self-canceling wrapper pair out so it must NOT be treated as an LP receipt burn / LP_EXIT."
+    },
+    "0xdef1fa4cefe67365ba046a7c630d6b885298e210": {
+      "name": "Merkl Distributor (core)",
+      "protocol": "Merkl",
+      "version": "V2",
+      "family": "YIELD",
+      "role": "REWARD_ROUTER",
+      "event_type": "REWARD_CLAIM",
+      "networks": [
+        "MANTLE"
+      ],
+      "confidence": "HIGH",
+      "notes": "Merkl core distributor that funds reward legs inside a claim(...) tx routed through the Merkl Distributor (0x3ef3d8ba...). Registered so the reward inflow it sources is recognized as REWARD_CLAIM income, not an inbound transfer or LP flow."
     },
     "0x94312a608246cecfce6811db84b3ef4b2619054e": {
       "name": "FLUID Rewards Distributor",

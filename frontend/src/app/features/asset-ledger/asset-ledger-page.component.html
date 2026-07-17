@@ -237,18 +237,25 @@
 
             <div class="stats">
               <div class="sc">
-                <div class="sc-l">Net AVCO</div>
-                <div class="sc-v avco">
-                  <wr-smart-amount [value]="data.current.netAvcoUsd" />
-                </div>
-                <div class="sc-s">avg cost / {{ data.displaySymbol }}</div>
-              </div>
-              <div class="sc">
                 <div class="sc-l">Market AVCO</div>
                 <div class="sc-v avco-secondary">
                   <wr-smart-amount [value]="data.current.avcoUsd" />
                 </div>
                 <div class="sc-s">market basis / {{ data.displaySymbol }}</div>
+              </div>
+              <div class="sc">
+                <div class="sc-l">Balance AVCO</div>
+                <div class="sc-v avco">
+                  <wr-smart-amount [value]="data.current.netAvcoUsd" />
+                </div>
+                <div class="sc-s">balance avg cost / {{ data.displaySymbol }}</div>
+              </div>
+              <div class="sc">
+                <div class="sc-l">Blended AVCO</div>
+                <div class="sc-v avco-blended-value">
+                  <wr-smart-amount [value]="blendedNetAvcoCurrent()" />
+                </div>
+                <div class="sc-s">total-exposure avg cost / {{ data.displaySymbol }}</div>
               </div>
               <div class="sc">
                 <div class="sc-l">qty held</div>
@@ -276,6 +283,65 @@
               </div>
             </div>
           </div>
+
+          <!-- AVCO-series legend (RC-E3 / ADR-061). Each item is a toggle button that shows/hides its
+               line on the canvas (all ON by default). Swatches render each line's actual dash pattern
+               (line-style, not colour-only) so the three series are distinguishable without hue (a11y). -->
+          <ul class="avco-legend" aria-label="AVCO series legend">
+            <li>
+              <button
+                type="button"
+                class="avco-legend-item"
+                [class.active]="showBalanceAvco()"
+                [attr.aria-pressed]="showBalanceAvco()"
+                [style.--chipColor]="'rgb(34,211,238)'"
+                (click)="toggleAvcoLine('balance')">
+                <span class="check-box" [class.checked]="showBalanceAvco()"></span>
+                <svg class="avco-swatch" width="26" height="8" viewBox="0 0 26 8" aria-hidden="true" focusable="false">
+                  <line x1="1" y1="4" x2="25" y2="4" stroke="rgb(34,211,238)" stroke-width="1.75" />
+                </svg>
+                <span class="avco-legend-label">Balance AVCO</span>
+              </button>
+            </li>
+            <li>
+              <button
+                type="button"
+                class="avco-legend-item"
+                [class.active]="showBlendedAvco()"
+                [attr.aria-pressed]="showBlendedAvco()"
+                [style.--chipColor]="'rgb(245,158,11)'"
+                (click)="toggleAvcoLine('blended')">
+                <span class="check-box" [class.checked]="showBlendedAvco()"></span>
+                <svg class="avco-swatch" width="26" height="8" viewBox="0 0 26 8" aria-hidden="true" focusable="false">
+                  <line
+                    x1="1"
+                    y1="4"
+                    x2="25"
+                    y2="4"
+                    stroke="rgb(245,158,11)"
+                    stroke-width="1.75"
+                    stroke-linecap="round"
+                    stroke-dasharray="1 5" />
+                </svg>
+                <span class="avco-legend-label">Blended AVCO</span>
+              </button>
+            </li>
+            <li>
+              <button
+                type="button"
+                class="avco-legend-item"
+                [class.active]="showMarketAvco()"
+                [attr.aria-pressed]="showMarketAvco()"
+                [style.--chipColor]="'rgb(255,255,255)'"
+                (click)="toggleAvcoLine('market')">
+                <span class="check-box" [class.checked]="showMarketAvco()"></span>
+                <svg class="avco-swatch" width="26" height="8" viewBox="0 0 26 8" aria-hidden="true" focusable="false">
+                  <line x1="1" y1="4" x2="25" y2="4" stroke="rgb(255,255,255)" stroke-width="1.25" stroke-dasharray="5 4" />
+                </svg>
+                <span class="avco-legend-label">Market AVCO</span>
+              </button>
+            </li>
+          </ul>
 
           <div class="cv-wrap">
             <canvas
@@ -505,8 +571,8 @@
                                     <th>From</th>
                                     <th>To</th>
                                     <th>Basis</th>
-                                    <th class="r">Net AVCO before</th>
-                                    <th class="r">Net AVCO after</th>
+                                    <th class="r">Balance AVCO before</th>
+                                    <th class="r">Balance AVCO after</th>
                                     <th class="r">Market AVCO before</th>
                                     <th class="r">Market AVCO after</th>
                                     <th class="r">Gas</th>
@@ -689,12 +755,20 @@
         <div class="ti-avco">
           <div class="ti-ft">AVCO / Basis</div>
           <div class="tr">
-            <span class="k">Net AVCO before</span>
+            <span class="k">Balance AVCO before</span>
             <span class="v"><wr-smart-amount [value]="marker.netAvcoBeforeUsd" /></span>
           </div>
           <div class="tr">
-            <span class="k">Net AVCO after</span>
+            <span class="k">Balance AVCO after</span>
             <span class="v"><wr-smart-amount [value]="marker.netAvcoAfterUsd" /></span>
+          </div>
+          <div class="tr">
+            <span class="k">Blended AVCO before</span>
+            <span class="v avco-blended-value"><wr-smart-amount [value]="marker.blendedNetAvcoBeforeUsd" /></span>
+          </div>
+          <div class="tr">
+            <span class="k">Blended AVCO after</span>
+            <span class="v avco-blended-value"><wr-smart-amount [value]="marker.blendedNetAvcoAfterUsd" /></span>
           </div>
           <div class="tr">
             <span class="k">Market AVCO before</span>
@@ -703,6 +777,14 @@
           <div class="tr">
             <span class="k">Market AVCO after</span>
             <span class="v avco-tax-value"><wr-smart-amount [value]="marker.avcoAfterUsd" /></span>
+          </div>
+          <div class="tr">
+            <span class="k">Balance qty</span>
+            <span class="v"><wr-smart-amount [value]="marker.liquidQuantityAfter" mode="qty" [suffix]="marker.displaySymbol" /></span>
+          </div>
+          <div class="tr">
+            <span class="k">Covered qty (blended)</span>
+            <span class="v avco-blended-value"><wr-smart-amount [value]="marker.blendedCoveredQuantityAfter" mode="qty" [suffix]="marker.displaySymbol" /></span>
           </div>
           @if (marker.avcoKindLabel) {
             <div class="tr">
@@ -714,6 +796,11 @@
             <span class="k">basis</span>
             <span class="v neu">{{ marker.basisSummary }}</span>
           </div>
+          @if (isPoolNearZeroDrainedButParked(marker)) {
+            <div class="tr ti-pool-note">
+              <span class="v">{{ poolNearZeroNote }}</span>
+            </div>
+          }
         </div>
       </div>
     </div>

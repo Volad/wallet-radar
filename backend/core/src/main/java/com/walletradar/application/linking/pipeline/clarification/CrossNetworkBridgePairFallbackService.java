@@ -249,6 +249,25 @@ public class CrossNetworkBridgePairFallbackService {
         if (BridgePairLinkSupport.applyLinkedBridgeCounterparty(outbound, inbound, now)) {
             inboundChanged = true;
         }
+        // B-ETH-01 / B-ETH-03: stamp the settlement sub-mode (+ realize-on-convert decision for the
+        // asset-converting corridor) on both legs BEFORE the principal retag below clears the
+        // destination price fields, so the captured destination fair value is preserved. Peg/same-asset
+        // corridors stay byte-identical (sub-mode only; realize flag false).
+        if (continuityCandidate) {
+            if (BridgeSettlementLinkStamper.stampSameAssetContinuity(outbound)) {
+                outboundChanged = true;
+            }
+            if (BridgeSettlementLinkStamper.stampSameAssetContinuity(inbound)) {
+                inboundChanged = true;
+            }
+        } else if (crossAssetSettlement) {
+            if (BridgeSettlementLinkStamper.stampAssetConvertingSettlement(outbound, outbound, inbound)) {
+                outboundChanged = true;
+            }
+            if (BridgeSettlementLinkStamper.stampAssetConvertingSettlement(inbound, outbound, inbound)) {
+                inboundChanged = true;
+            }
+        }
         if (continuityCandidate || crossAssetSettlement) {
             // Same-asset (cc=true) → plain move-basis carry; cross-asset (cc=false) → asset-changing
             // settlement carry. Both require BOTH principal legs as single-principal TRANSFER (prices

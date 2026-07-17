@@ -24,6 +24,19 @@ class AssetLedgerChartService {
     private static final String AVCO_KIND_PRIMARY_FLOW = "PRIMARY_FLOW";
     private static final String AVCO_KIND_UNAVAILABLE = "UNAVAILABLE";
     private static final BigDecimal GAS_ONLY_BASIS_THRESHOLD = new BigDecimal("0.00000001");
+    /**
+     * B-ETH-04: a zero-cost-basis LP-exit inbound leg (e.g. an unpriced {@code LP_FEE_INCOME}
+     * leg booked as a zero-cost acquisition) on a dust residual position whose total cost basis
+     * after the event is below this USD threshold. Such a leg dilutes the covered-AVCO denominator
+     * without adding basis, so the reported per-event AVCO is a spurious dust artifact.
+     */
+    private static final BigDecimal LP_EXIT_ZERO_BASIS_DUST_THRESHOLD_USD = new BigDecimal("1.00");
+
+    private final BlendedExposureAvcoSeriesBuilder blendedExposureAvcoSeriesBuilder;
+
+    AssetLedgerChartService(BlendedExposureAvcoSeriesBuilder blendedExposureAvcoSeriesBuilder) {
+        this.blendedExposureAvcoSeriesBuilder = blendedExposureAvcoSeriesBuilder;
+    }
 
     List<AssetLedgerQueryService.LedgerPointView> mapRawPoints(List<AssetLedgerPoint> points) {
         return points.stream().map(this::toRawPoint).toList();
@@ -32,6 +45,10 @@ class AssetLedgerChartService {
     ChartProjection buildTimelineProjection(
             String familyIdentity,
             List<AssetLedgerPoint> timelinePoints,
+            List<AssetLedgerPoint> familySupersetPoints,
+            List<AssetLedgerPoint> lpReceiptSupersetPoints,
+            List<AssetLedgerPoint> crossFamilySettlementPoints,
+            Map<String, BlendedExposureAvcoSeriesBuilder.EthOriginHolding> familyOriginHoldingByCorrelationId,
             Map<String, NormalizedTransaction> normalizedById
     ) {
         List<EventAccumulator> groupedEvents = groupPoints(timelinePoints, normalizedById);
@@ -41,16 +58,44 @@ class AssetLedgerChartService {
         Map<BucketKey, BucketAvcoState> liveAvcoBuckets = new LinkedHashMap<>();
         BigDecimal previousAvcoAfterUsd = null;
         BigDecimal previousNetAvcoAfterUsd = null;
+        // RC-E3 / ADR-061: additive blended total-exposure series reconstructed from the family
+        // superset. The spot Method-B lane above is untouched and stays byte-identical.
+        BlendedExposureAvcoSeriesBuilder.BlendedSeriesSession blendedSession =
+                blendedExposureAvcoSeriesBuilder.newSession(
+                        familyIdentity,
+                        familySupersetPoints,
+                        lpReceiptSupersetPoints,
+                        crossFamilySettlementPoints,
+                        familyOriginHoldingByCorrelationId
+                );
+        BigDecimal previousBlendedAvcoAfterUsd = null;
+        BigDecimal previousBlendedNetAvcoAfterUsd = null;
         List<AssetLedgerQueryService.TimelineEntryView> timeline = new ArrayList<>();
         List<AssetLedgerQueryService.EventOverlayView> overlays = new ArrayList<>();
 
-        for (DisplayEventAccumulator accumulator : displayEvents) {
+        int lastEventIndex = displayEvents.size() - 1;
+        for (int eventIndex = 0; eventIndex < displayEvents.size(); eventIndex++) {
+            DisplayEventAccumulator accumulator = displayEvents.get(eventIndex);
             state.apply(accumulator);
             applyMethodBBuckets(familyIdentity, accumulator.memberPoints(), liveAvcoBuckets);
             CoveredWeightedAvco series = coveredWeightedFamilyAvco(liveAvcoBuckets);
             BigDecimal avcoAfterUsd = series.marketAvco();
             BigDecimal netAvcoAfterUsd = series.netAvco();
             String avcoKind = avcoAfterUsd == null ? AVCO_KIND_UNAVAILABLE : AVCO_KIND_PRIMARY_FLOW;
+
+            // B-ETH-05: apply this event's FAMILY:ETH park/unpark, then flush every FAMILY:LP_RECEIPT
+            // burn that has occurred by this event, then (at the terminal event) reconcile the parked
+            // pool to the authoritative lp_receipt_basis_pools family-origin holdings.
+            blendedSession.applyEvent(accumulator.memberNormalizedTransactionIds);
+            blendedSession.flushReceiptBurnsUpTo(eventOrderingKey(accumulator));
+            if (eventIndex == lastEventIndex) {
+                blendedSession.applyTerminalClamp();
+            }
+            BlendedExposureAvcoSeriesBuilder.BlendedPoint blended = blendedSession.blend(
+                    series.coveredTotal(),
+                    series.marketBasisTotal(),
+                    series.netBasisTotal()
+            );
 
             timeline.add(new AssetLedgerQueryService.TimelineEntryView(
                     accumulator.blockTimestamp,
@@ -78,10 +123,19 @@ class AssetLedgerChartService {
                     avcoKind,
                     accumulator.fromAddress,
                     accumulator.toAddress,
-                    List.copyOf(accumulator.memberNormalizedTransactionIds)
+                    List.copyOf(accumulator.memberNormalizedTransactionIds),
+                    previousBlendedAvcoAfterUsd,
+                    blended.marketAvco(),
+                    previousBlendedNetAvcoAfterUsd,
+                    blended.netAvco(),
+                    blended.coveredQuantity(),
+                    state.quantity,
+                    blended.avcoKind()
             ));
             previousAvcoAfterUsd = avcoAfterUsd;
             previousNetAvcoAfterUsd = netAvcoAfterUsd;
+            previousBlendedAvcoAfterUsd = blended.marketAvco();
+            previousBlendedNetAvcoAfterUsd = blended.netAvco();
 
             overlays.add(new AssetLedgerQueryService.EventOverlayView(
                     accumulator.eventGroupId,
@@ -169,6 +223,10 @@ class AssetLedgerChartService {
         if (point == null) {
             return null;
         }
+        // B-ETH-04: zero-cost-basis LP-exit inbound on a dust residual → AVCO undefined (ADR-031).
+        if (AssetLedgerQueryService.isZeroBasisLpExitDustRestoration(point, LP_EXIT_ZERO_BASIS_DUST_THRESHOLD_USD)) {
+            return null;
+        }
         BigDecimal basisBacked = point.getBasisBackedQuantityAfter();
         if (basisBacked == null || basisBacked.compareTo(GAS_ONLY_BASIS_THRESHOLD) >= 0) {
             return point.getAvcoAfterUsd();
@@ -235,11 +293,14 @@ class AssetLedgerChartService {
             }
         }
         if (coveredTotal.signum() <= 0) {
-            return new CoveredWeightedAvco(null, null);
+            return new CoveredWeightedAvco(null, null, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
         }
         return new CoveredWeightedAvco(
                 marketBasisTotal.divide(coveredTotal, MC),
-                netBasisTotal.divide(coveredTotal, MC)
+                netBasisTotal.divide(coveredTotal, MC),
+                coveredTotal,
+                marketBasisTotal,
+                netBasisTotal
         );
     }
 
@@ -386,6 +447,27 @@ class AssetLedgerChartService {
         return value == null ? BigDecimal.ZERO : value;
     }
 
+    /**
+     * B-ETH-05: the replay-ordering key of a grouped timeline event, used to merge
+     * {@code FAMILY:LP_RECEIPT} burn clamps into the {@code FAMILY:ETH} stream. Uses the latest
+     * member point (max {@code (blockTimestamp, transactionIndex, replaySequence)}) so all receipt
+     * burns that occurred up to and including this event's span are flushed before it is plotted.
+     */
+    private static BlendedExposureAvcoSeriesBuilder.OrderingKey eventOrderingKey(DisplayEventAccumulator accumulator) {
+        BlendedExposureAvcoSeriesBuilder.OrderingKey latest = null;
+        for (AssetLedgerPoint point : accumulator.memberPoints()) {
+            BlendedExposureAvcoSeriesBuilder.OrderingKey candidate = new BlendedExposureAvcoSeriesBuilder.OrderingKey(
+                    point.getBlockTimestamp(),
+                    point.getTransactionIndex(),
+                    point.getReplaySequence()
+            );
+            if (latest == null || BlendedExposureAvcoSeriesBuilder.OrderingKey.COMPARATOR.compare(candidate, latest) > 0) {
+                latest = candidate;
+            }
+        }
+        return latest;
+    }
+
     private static String inferredFromAddress(EventAccumulator event) {
         if (isExternalTransferOut(event)) {
             return event.primaryWalletAddress;
@@ -485,7 +567,13 @@ class AssetLedgerChartService {
 
     private record BucketAvcoState(BigDecimal avcoAfterUsd, BigDecimal netAvcoAfterUsd, BigDecimal coveredQuantity) {}
 
-    private record CoveredWeightedAvco(BigDecimal marketAvco, BigDecimal netAvco) {}
+    private record CoveredWeightedAvco(
+            BigDecimal marketAvco,
+            BigDecimal netAvco,
+            BigDecimal coveredTotal,
+            BigDecimal marketBasisTotal,
+            BigDecimal netBasisTotal
+    ) {}
 
     private static final class AggregatedState {
         private BigDecimal quantity = BigDecimal.ZERO;

@@ -12,6 +12,7 @@ import com.walletradar.application.costbasis.application.replay.persistence.Ledg
 import com.walletradar.application.costbasis.application.replay.state.PositionStore;
 import com.walletradar.application.costbasis.application.replay.state.ReplayExecutionState;
 import com.walletradar.application.costbasis.domain.AssetLedgerPoint;
+import com.walletradar.application.costbasis.support.BridgeSettlementMetadataSupport;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import org.springframework.stereotype.Component;
 
@@ -146,7 +147,19 @@ public class LinkedBridgeTransferReplaySupport {
             return AssetLedgerPoint.BasisEffect.UNKNOWN;
         }
 
+        // B-ETH-01: an asset-converting bridge with a non-peg source (e.g. WBTC→ETH, ETH→USDC)
+        // realizes P&L on the source and acquires the destination at its stamped fair market value,
+        // instead of blindly copying the source USD basis onto a different-family asset. The decision
+        // and destination fair value are stamped at the OUTBOUND link decision
+        // (BridgeSettlementMetadataSupport). Peg-neutral + same-asset corridors keep the existing
+        // byte-identical settlement/continuity behavior below.
+        boolean realizeOnConvert = BridgeSettlementMetadataSupport.isRealizeOnConvert(transaction);
+
         if (flow.getQuantityDelta().signum() < 0) {
+            if (realizeOnConvert) {
+                return applyAssetConvertingSettlementOutbound(
+                        transaction, flow, flowIndex, position, replayState, settlementKey);
+            }
             CarryTransfer carry = continuityCarryService.removeTransferCarry(
                     transaction,
                     flow,
@@ -166,7 +179,8 @@ public class LinkedBridgeTransferReplaySupport {
                         replayState.positions(),
                         pendingInbound,
                         carry,
-                        replayState.ledgerPointCollector()
+                        replayState.ledgerPointCollector(),
+                        AssetLedgerPoint.BasisEffect.REALLOCATE_IN
                 );
                 if (queue.isEmpty()) {
                     replayState.pendingTransfers().remove(settlementKey);
@@ -175,6 +189,11 @@ public class LinkedBridgeTransferReplaySupport {
             }
             queue.addLast(carry);
             return flowSupport.routeSettlementBasisEffect(flow);
+        }
+
+        if (realizeOnConvert) {
+            return applyAssetConvertingSettlementInbound(
+                    transaction, flow, flowIndex, position, replayState, settlementKey, pendingInboundEnqueuer);
         }
 
         Deque<CarryTransfer> queue = replayState.pendingTransfers().find(settlementKey);
@@ -195,6 +214,110 @@ public class LinkedBridgeTransferReplaySupport {
 
         pendingInboundEnqueuer.enqueue(transaction, flow, flowIndex, position, replayState, settlementKey);
         return flowSupport.routeSettlementBasisEffect(flow);
+    }
+
+    /**
+     * B-ETH-01 OUTBOUND (asset-converting, non-peg source): realize-on-convert.
+     *
+     * <p>DISPOSEs the source against its own AVCO on the source family (tax + net lanes) with
+     * proceeds equal to the destination fair market value at the settlement timestamp, then enqueues
+     * a carry whose basis is exactly those realized proceeds so the matched INBOUND leg can ACQUIRE
+     * the destination at that USD. Mirrors the same-tx SWAP {@code swapNetRef} semantics: the net
+     * lane is carried to the destination capped at market, so only the un-carryable excess realizes.
+     *
+     * <p>Guard-orphan safety: the enqueued carry is drained by the matched INBOUND leg (or attached
+     * immediately when the INBOUND already parked a pending inbound), so no residual carry remains on
+     * the asset-suffix-less {@code bridge-settlement:} queue for {@link CorridorBasisConservationGuard}.
+     */
+    private AssetLedgerPoint.BasisEffect applyAssetConvertingSettlementOutbound(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow,
+            int flowIndex,
+            PositionState position,
+            ReplayExecutionState replayState,
+            BridgeSettlementPendingKey settlementKey
+    ) {
+        BigDecimal destFairValueUsd = BridgeSettlementMetadataSupport.destFairValueUsd(transaction);
+        CarryTransfer sourceCarry = continuityCarryService.removeTransferCarry(
+                transaction,
+                flow,
+                flowIndex,
+                position,
+                replayState.passThroughCorridorPlan(),
+                replayState.reservedPassThroughCarries()
+        );
+        BigDecimal sourceTaxBasis = nonNegative(sourceCarry.costBasisUsd());
+        BigDecimal sourceNetBasis = sourceCarry.netCostBasisUsd() == null
+                ? sourceTaxBasis
+                : nonNegative(sourceCarry.netCostBasisUsd());
+        // Tax lane realizes fully at market: proceeds − source tax basis relieved.
+        position.setTotalRealisedPnlUsd(
+                position.totalRealisedPnlUsd().add(destFairValueUsd.subtract(sourceTaxBasis, MC), MC));
+        // Net lane is carried to the destination capped at market; only the excess above market
+        // realizes on the source (usually zero — source net basis ≤ destination market value).
+        BigDecimal netCarried = sourceNetBasis.min(destFairValueUsd);
+        position.setTotalNetRealisedPnlUsd(
+                position.totalNetRealisedPnlUsd().add(sourceNetBasis.subtract(netCarried, MC), MC));
+        flowSupport.purgeOrphanBasisWhenEmpty(position);
+
+        BigDecimal quantity = flow.getQuantityDelta().abs();
+        CarryTransfer realizeCarry = continuityCarryService.buildExplicitCarryTransfer(
+                quantity, destFairValueUsd, netCarried, position.assetKey());
+
+        Deque<CarryTransfer> queue = replayState.pendingTransfers().queue(settlementKey);
+        int pendingInboundIndex = matcher.findUniqueBridgeQueueIndex(queue, true);
+        if (pendingInboundIndex >= 0) {
+            CarryTransfer pendingInbound = matcher.removeQueueElement(queue, pendingInboundIndex);
+            attachLateBridgeSettlementCarryToPendingInbound(
+                    transaction,
+                    flow,
+                    flowIndex,
+                    replayState.positions(),
+                    pendingInbound,
+                    realizeCarry,
+                    replayState.ledgerPointCollector(),
+                    AssetLedgerPoint.BasisEffect.ACQUIRE
+            );
+            if (queue.isEmpty()) {
+                replayState.pendingTransfers().remove(settlementKey);
+            }
+        } else {
+            queue.addLast(realizeCarry);
+        }
+        return AssetLedgerPoint.BasisEffect.DISPOSE;
+    }
+
+    /**
+     * B-ETH-01 INBOUND (asset-converting, non-peg source): ACQUIRE the destination at the carried
+     * realized proceeds when the OUTBOUND leg already parked its realize carry; otherwise park a
+     * pending inbound (materialized at destination market value) for the OUTBOUND leg to attach to.
+     */
+    private AssetLedgerPoint.BasisEffect applyAssetConvertingSettlementInbound(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow,
+            int flowIndex,
+            PositionState position,
+            ReplayExecutionState replayState,
+            BridgeSettlementPendingKey settlementKey,
+            PendingInboundEnqueuer pendingInboundEnqueuer
+    ) {
+        Deque<CarryTransfer> queue = replayState.pendingTransfers().find(settlementKey);
+        int carryIndex = matcher.findUniqueBridgeQueueIndex(queue, false);
+        if (carryIndex >= 0) {
+            CarryTransfer carry = matcher.removeQueueElement(queue, carryIndex);
+            CarryTransfer effectiveCarry = continuityCarryService.bridgeSettlementInboundCarry(
+                    carry,
+                    flow.getQuantityDelta().abs(),
+                    position.assetKey()
+            );
+            flowSupport.restoreToPosition(effectiveCarry, position);
+            if (queue.isEmpty()) {
+                replayState.pendingTransfers().remove(settlementKey);
+            }
+            return AssetLedgerPoint.BasisEffect.ACQUIRE;
+        }
+        pendingInboundEnqueuer.enqueue(transaction, flow, flowIndex, position, replayState, settlementKey);
+        return AssetLedgerPoint.BasisEffect.ACQUIRE;
     }
 
     private void attachLateBridgeCarryToPendingInbound(
@@ -263,7 +386,8 @@ public class LinkedBridgeTransferReplaySupport {
             PositionStore positions,
             CarryTransfer pendingInbound,
             CarryTransfer carry,
-            LedgerPointCollector ledgerPointCollector
+            LedgerPointCollector ledgerPointCollector,
+            AssetLedgerPoint.BasisEffect basisEffect
     ) {
         PositionState destination = positions.position(pendingInbound.assetKey());
         PositionSnapshot before = flowSupport.snapshot(destination);
@@ -301,7 +425,7 @@ public class LinkedBridgeTransferReplaySupport {
                 destination.assetKey(),
                 before,
                 destination,
-                AssetLedgerPoint.BasisEffect.REALLOCATE_IN
+                basisEffect
         );
     }
 

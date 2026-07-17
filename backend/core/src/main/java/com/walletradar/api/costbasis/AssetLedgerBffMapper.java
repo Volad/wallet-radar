@@ -92,7 +92,14 @@ public class AssetLedgerBffMapper {
                                 entry.avcoKind(),
                                 entry.fromAddress(),
                                 entry.toAddress(),
-                                entry.memberNormalizedTransactionIds()
+                                entry.memberNormalizedTransactionIds(),
+                                entry.blendedAvcoBeforeUsd(),
+                                entry.blendedAvcoAfterUsd(),
+                                entry.blendedNetAvcoBeforeUsd(),
+                                entry.blendedNetAvcoAfterUsd(),
+                                entry.blendedCoveredQuantityAfter(),
+                                entry.liquidQuantityAfter(),
+                                entry.blendedAvcoKind()
                         ))
                         .toList(),
                 view.events().stream()

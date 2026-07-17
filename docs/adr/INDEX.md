@@ -66,6 +66,7 @@ Architecture Decision Records for WalletRadar. Each ADR captures a single decisi
 | [ADR-058](ADR-058-bybit-bot-compartment-cost-basis.md) | Bybit Trading-Bot per-uid `:BOT` compartment deterministic cost basis (NEW-12 Phase 2 + NEW-12-R per-asset execution cap) | Accepted | 2026-07-16 | Bybit normalization / cost basis / anti-Phase-1 conservation |
 | [ADR-059](ADR-059-counterparty-hints-config-plane.md) | Counterparty-hints config plane for network-agnostic bridge/payout/LP addresses (consolidation Wave W2) | Accepted | 2026-07-16 | Config consolidation / normalization / linking / conservation gate |
 | [ADR-060](ADR-060-asset-family-registry-consolidation.md) | Accounting asset-family registry consolidation — keep pricing vs accounting separate, dedup SYMBOL_FAMILIES onto the C1/C2 registry (consolidation Wave W9) | Accepted | 2026-07-17 | Config consolidation / cost-basis / AVCO family identity |
+| [ADR-061](ADR-061-blended-total-exposure-avco-series.md) | Blended total-exposure move-basis AVCO series (RC-E3; amends ADR-045) | Accepted | 2026-07-17 | Move-basis chart / read model |
 
 ## Cycle/5 N19 cluster — implementation plan mapping
 
