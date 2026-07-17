@@ -3,6 +3,7 @@ package com.walletradar.platform.networks.descriptor;
 import com.walletradar.domain.common.NetworkAddressFormatKind;
 import com.walletradar.domain.common.NetworkDescriptor;
 import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.common.NetworkNativeAssets;
 import com.walletradar.domain.common.NetworkStablecoinContracts;
 import com.walletradar.domain.common.ton.TonAddressCanonicalizer;
 import lombok.extern.slf4j.Slf4j;
@@ -55,7 +56,8 @@ public class NetworkRegistry {
                     normalizeContracts(config.getNativeAliasContracts()),
                     walletSupportedFlag,
                     evmWalletSupportedFlag,
-                    normalizeContracts(config.getUsdStableContracts())
+                    normalizeContracts(config.getUsdStableContracts()),
+                    normalizeContracts(config.getEthFamilyContracts())
             );
             built.put(networkId, descriptor);
             if (walletSupportedFlag) {
@@ -70,6 +72,10 @@ public class NetworkRegistry {
         this.walletSupportedNetworks = Collections.unmodifiableSet(walletSupported);
         this.evmWalletSupportedNetworks = Collections.unmodifiableSet(evmWalletSupported);
         NetworkStablecoinContracts.bind(this::usdStableContracts);
+        NetworkNativeAssets.bind(
+                id -> find(id).map(NetworkDescriptor::nativeSymbol).orElse(null),
+                this::wrappedNativeContract,
+                this::nativeAliasIdentityContracts);
         log.info("Loaded network registry: {} descriptors ({} wallet-supported, {} EVM-wallet-supported)",
                 descriptorsById.size(),
                 walletSupportedNetworks.size(),
@@ -122,6 +128,54 @@ public class NetworkRegistry {
 
     public Set<String> usdStableContracts(NetworkId networkId) {
         return find(networkId).map(NetworkDescriptor::usdStableContracts).orElse(Set.of());
+    }
+
+    /**
+     * All contract addresses (lowercase) that legitimately represent ETH/WETH across every network,
+     * derived from configuration rather than a hardcoded allowlist. Comprises, for each network whose
+     * native token is ETH, its {@code wrapped-native} contract plus any {@code native-alias-contracts}
+     * (e.g. the zkSync native-ETH system proxy); plus, for any network, its explicit
+     * {@code eth-family-contracts} (bridged WETH on non-ETH chains such as Mantle / Avalanche).
+     *
+     * <p>Networks whose native token is not ETH contribute ONLY their explicit
+     * {@code eth-family-contracts} — never their wrapped-native (WBNB/WMATIC/WAVAX/WMNT/WXPL), so a
+     * fake "WETH" reusing a non-ETH wrapper contract is not accidentally allowlisted.</p>
+     */
+    public Set<String> ethFamilyEquivalentContracts() {
+        Set<String> result = new HashSet<>();
+        for (NetworkDescriptor descriptor : descriptorsById.values()) {
+            if ("ETH".equalsIgnoreCase(descriptor.nativeSymbol())) {
+                String wrapped = descriptor.wrappedNativeContract();
+                if (wrapped != null && !wrapped.isBlank()) {
+                    result.add(wrapped);
+                }
+                result.addAll(descriptor.nativeAliasContracts());
+            }
+            result.addAll(descriptor.ethFamilyContracts());
+        }
+        return Set.copyOf(result);
+    }
+
+    /**
+     * Returns the union of the network's wrapped-native contract and its configured
+     * native-alias contracts (all lowercase). This is the set of contracts the cost-basis
+     * layer treats as accounting-identical to the network's native token (wrap/unwrap are
+     * same-asset moves with no cost-basis impact). Never {@code null}.
+     */
+    Set<String> nativeAliasIdentityContracts(NetworkId networkId) {
+        if (networkId == null) {
+            return Set.of();
+        }
+        return find(networkId)
+                .map(descriptor -> {
+                    Set<String> union = new HashSet<>(descriptor.nativeAliasContracts());
+                    String wrapped = descriptor.wrappedNativeContract();
+                    if (wrapped != null && !wrapped.isBlank()) {
+                        union.add(wrapped);
+                    }
+                    return (Set<String>) Collections.unmodifiableSet(union);
+                })
+                .orElse(Set.of());
     }
 
     public Set<NetworkId> walletSupportedNetworks() {

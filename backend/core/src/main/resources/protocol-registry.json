@@ -45,7 +45,8 @@
     "BRIDGE_IN",
     "PROTOCOL_CUSTODY_DEPOSIT",
     "PROTOCOL_CUSTODY_WITHDRAW",
-    "REWARD_CLAIM"
+    "REWARD_CLAIM",
+    "LENDING_LOOP_REBALANCE"
   ],
   "contracts": {
     "\u2500\u2500 DEX: Uniswap \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500": {},
@@ -1778,6 +1779,24 @@
       "confidence": "HIGH"
     },
     "\u2500\u2500 AGGREGATORS: Relay Gas Top-Up \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500": {},
+    "0x76dd65529dc6c073c1e0af2a5ecc78434bdbf7d9": {
+      "name": "Rabby Gas Fee Payer",
+      "protocol": "Rabby",
+      "version": "GasAccount",
+      "family": "AGGREGATOR",
+      "role": "GAS_PAYER",
+      "networks": [
+        "ETHEREUM",
+        "ARBITRUM",
+        "OPTIMISM",
+        "BASE",
+        "BSC",
+        "AVALANCHE",
+        "LINEA"
+      ],
+      "confidence": "HIGH",
+      "notes": "Rabby wallet gas-account payer (etherscan/basescan/bscscan label 'Rabby: Gas Fee Payer'). Plain native top-ups (input=0x, 21000 gas) classify as SPONSORED_GAS_IN/GAS_ONLY (basis-neutral). Verified single occurrence 0x39dca64e... BASE."
+    },
     "0xf70da97812cb96acdf810712aa562db8dfa3dbef": {
       "name": "Relay Solver Payout",
       "protocol": "Relay",
@@ -1830,9 +1849,22 @@
         "LINEA",
         "UNICHAIN",
         "KATANA",
-        "PLASMA"
+        "PLASMA",
+        "ZKSYNC"
       ],
       "confidence": "HIGH"
+    },
+    "0x1619de6b6b20ed217a58d00f37b9d47c7663feca": {
+      "name": "Relay Solver Payout",
+      "protocol": "Relay",
+      "version": "Solver",
+      "family": "AGGREGATOR",
+      "role": "GAS_PAYER",
+      "networks": [
+        "ARBITRUM"
+      ],
+      "confidence": "HIGH",
+      "notes": "relay() 0xcdd1b25d settlement receiver; delivers destination-chain funds (WETH unwrap -> native ETH). Inbound receipts classify as BRIDGE_IN; no tracked source leg => market ACQUIRE fallback (AVCO-neutral)."
     },
     "0xcad97616f91872c02ba3553db315db4015cbe850": {
       "name": "Relay Solver Payout",
@@ -3053,6 +3085,19 @@
       ],
       "confidence": "HIGH",
       "notes": "WS-1: LI.FI Permit2Proxy on Unichain."
+    },
+    "0x1bcd304fdad1d1d66529159b1bc8d13c9158d586": {
+      "name": "LI.FI Permit2Proxy (Unichain executor)",
+      "protocol": "LI.FI",
+      "version": "Permit2Proxy",
+      "family": "BRIDGE",
+      "role": "BRIDGE_ENTRY",
+      "event_type": "BRIDGE_OUT",
+      "networks": [
+        "UNICHAIN"
+      ],
+      "confidence": "HIGH",
+      "notes": "NEW-08: Unichain LI.FI Permit2Proxy for callDiamondWithEIP2612Signature (0xd7a08473) / callDiamondWithPermit2 (0x0193b9fc) bridge-out. Provenance: LI.FI /v1/chains permit2Proxy field for Unichain (chainId 130); raw tx 0xda7d556e...558de7 carries jumper.exchange + gasZipBridge route tags and GasZip proxy 0x864b314d...9232, USDC out to this address. Address-anchored (BridgeStartClassifier.knownLiFiDiamondEntry); route tag required, not amount-heuristic."
     },
     "0x3c6b2e0b7421254846c53c118e24c65d59eae75e": {
       "name": "LI.FI Permit2Proxy",

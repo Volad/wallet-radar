@@ -9,6 +9,7 @@ import com.walletradar.domain.transaction.externalledger.ExternalLedgerRawReposi
 import com.walletradar.domain.transaction.externalledger.ExternalLedgerRawStatus;
 import com.walletradar.domain.transaction.integration.IntegrationRawEventRepository;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.application.cex.normalization.venue.bybit.BybitBotExecutionAttributionService;
 import com.walletradar.application.cex.normalization.venue.bybit.BybitBotTransferCostBasisService;
 import com.walletradar.application.cex.normalization.venue.bybit.BybitCanonicalTransactionBuilder;
 import com.walletradar.application.cex.normalization.venue.bybit.BybitEarnPrincipalTransferPairer;
@@ -79,6 +80,7 @@ public class BybitNormalizationService {
     private final BybitStreamAuthorityCollapser bybitStreamAuthorityCollapser;
     private final BybitStakingConversionPairer bybitStakingConversionPairer;
     private final BybitOnChainEarnFundPairer bybitOnChainEarnFundPairer;
+    private final BybitBotExecutionAttributionService bybitBotExecutionAttributionService;
     private final BybitBotTransferCostBasisService bybitBotTransferCostBasisService;
 
     public int processNextBatch(int batchSize) {
@@ -113,6 +115,11 @@ public class BybitNormalizationService {
                 int stakingPaired = bybitStakingConversionPairer.pairConversions();
                 if (stakingPaired > 0) {
                     log.info("BYBIT_STAKING_CONVERSION_PAIRER batchProcessed={} pairs={}", processed, stakingPaired);
+                }
+                int botExecutionsTagged = bybitBotExecutionAttributionService.tagBotWindowExecutions();
+                if (botExecutionsTagged > 0) {
+                    log.info("BYBIT_BOT_EXECUTION_ATTRIBUTION batchProcessed={} tagged={}",
+                            processed, botExecutionsTagged);
                 }
                 int botCostResolved = bybitBotTransferCostBasisService.computeBotCostBasis();
                 if (botCostResolved > 0) {

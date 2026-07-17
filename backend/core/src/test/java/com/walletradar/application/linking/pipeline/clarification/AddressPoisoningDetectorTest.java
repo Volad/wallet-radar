@@ -8,6 +8,8 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.testsupport.CounterpartyHintTestFixtures;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -50,6 +52,11 @@ class AddressPoisoningDetectorTest {
     private Set<String> fullFingerprints;
     private Set<String> suffixes;
     private Set<String> prefixes;
+
+    @BeforeAll
+    static void bindCounterpartyHints() {
+        CounterpartyHintTestFixtures.service();
+    }
 
     @BeforeEach
     void setUp() {

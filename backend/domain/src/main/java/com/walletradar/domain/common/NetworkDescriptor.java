@@ -14,7 +14,8 @@ public record NetworkDescriptor(
         Set<String> nativeAliasContracts,
         boolean walletSupported,
         boolean evmWalletSupported,
-        Set<String> usdStableContracts
+        Set<String> usdStableContracts,
+        Set<String> ethFamilyContracts
 ) {
     public boolean isEvm() {
         return addressFormat == NetworkAddressFormatKind.EVM;

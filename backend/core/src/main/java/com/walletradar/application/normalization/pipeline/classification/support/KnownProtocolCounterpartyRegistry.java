@@ -2,15 +2,23 @@ package com.walletradar.application.normalization.pipeline.classification.suppor
 
 import com.walletradar.domain.common.NetworkId;
 
-import java.util.Locale;
-import java.util.Map;
 import java.util.Optional;
+import java.util.function.BiFunction;
 
 /**
- * Static registry of known protocol counterparty addresses that should receive
- * protocol attribution when encountered in normalized transactions.
+ * Registry of known protocol counterparty addresses that should receive protocol attribution
+ * when encountered in normalized transactions.
+ *
+ * <p>ADR-059 (Wave W2): the {@code (NetworkId, address) -> ProtocolAttribution} mapping now lives
+ * in the {@code counterparty-hints.json} config plane (category {@code PROTOCOL_COUNTERPARTY}).
+ * This class is a thin bind-backed adapter: {@code CounterpartyHintService} binds the lookup at
+ * startup, and the public API (including the nested {@link ProtocolAttribution} record) is
+ * unchanged so all existing call sites keep working.</p>
  */
 public final class KnownProtocolCounterpartyRegistry {
+
+    private static volatile BiFunction<NetworkId, String, Optional<ProtocolAttribution>> lookupBinding =
+            (networkId, address) -> Optional.empty();
 
     private KnownProtocolCounterpartyRegistry() {
     }
@@ -18,30 +26,19 @@ public final class KnownProtocolCounterpartyRegistry {
     public record ProtocolAttribution(String name, String counterpartyType, boolean asBridge) {
     }
 
-    private record Key(NetworkId networkId, String address) {
+    /**
+     * Binds the network-scoped counterparty lookup (called at startup by
+     * {@code CounterpartyHintService}).
+     */
+    public static void bind(BiFunction<NetworkId, String, Optional<ProtocolAttribution>> lookup) {
+        lookupBinding = lookup == null ? (networkId, address) -> Optional.empty() : lookup;
     }
-
-    private static final Map<Key, ProtocolAttribution> REGISTRY = Map.of(
-            new Key(NetworkId.BASE, "0x8c826f795466e39acbff1bb4eeeb759609377ba1"),
-            new ProtocolAttribution("LI.FI", "BRIDGE", false),
-
-            new Key(NetworkId.BASE, "0xf70da97812cb96acdf810712aa562db8dfa3dbef"),
-            new ProtocolAttribution("Relay", "BRIDGE", false),
-
-            new Key(NetworkId.ZKSYNC, "0x1fa66e2b38d0cc496ec51f81c3e05e6a6708986f"),
-            new ProtocolAttribution("rhino.fi", "BRIDGE", true),
-
-            new Key(NetworkId.ZKSYNC, "0x91604f590d66ace8975eed6bd16cf55647d1c499"),
-            new ProtocolAttribution("ZkSync Paymaster", "PROTOCOL", false)
-    );
 
     public static Optional<ProtocolAttribution> lookup(NetworkId networkId, String address) {
         if (networkId == null || address == null || address.isBlank()) {
             return Optional.empty();
         }
-        return Optional.ofNullable(REGISTRY.get(
-                new Key(networkId, address.toLowerCase(Locale.ROOT))
-        ));
+        return lookupBinding.apply(networkId, address);
     }
 
     public static boolean isKnownProtocol(NetworkId networkId, String address) {

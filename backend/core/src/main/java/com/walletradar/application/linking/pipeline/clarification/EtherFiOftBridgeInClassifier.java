@@ -6,7 +6,8 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionReposi
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.domain.transaction.raw.RawTransaction;
-import lombok.RequiredArgsConstructor;
+import com.walletradar.application.normalization.pipeline.classification.onchain.protocol.ProtocolResourceCatalog;
+import com.walletradar.application.normalization.pipeline.classification.onchain.protocol.ProtocolResourceDefinition;
 import lombok.extern.slf4j.Slf4j;
 import org.bson.Document;
 import org.springframework.data.mongodb.core.MongoOperations;
@@ -27,33 +28,46 @@ import java.util.Set;
  *
  * <p>Once reclassified, the existing {@code CrossNetworkBridgePairFallbackService} can pair
  * the BRIDGE_IN with a corresponding BRIDGE_OUT on another chain.</p>
+ *
+ * <p>The weETH OFT token set and minter proxy set are loaded (Wave W7) from the authoritative
+ * {@code protocols/etherfi.json} config plane ({@code contractSets.weethOftTokens} /
+ * {@code contractSets.minterProxies}) rather than hardcoded here.</p>
  */
 @Service
 @Slf4j
-@RequiredArgsConstructor
 public class EtherFiOftBridgeInClassifier {
 
     private static final String REASON = "BRIDGE_ON_CHAIN_LEG_NOT_FOUND";
     private static final String PROTOCOL = "EtherFi";
     private static final String CP_TYPE_PROTOCOL = "PROTOCOL";
-
-    private static final Set<String> ETHERFI_WEETH_TOKENS = Set.of(
-            "0x1bf74c010e6320bab11e2e5a532b5ac15e0b8aa6", // Linea
-            "0x04c0599ae5a44757c0af6f9ec3b93da8976c150a", // Base, BNB
-            "0x01f0a31698c4d065659b9bdc21b3610292a1c506", // Scroll
-            "0x5a7facb970d094b6c7ff1df0ea68d99e6e73cbff", // Optimism
-            "0xc1fa6e2e8667d9be0ca938a54c7e0285e9df924a", // zkSync
-            "0xa3d68b74bf0528fdd07263c60d6488749044914b", // Avalanche, Sonic, HyperEVM, Plasma
-            "0x7dcc39b4d1c53cb31e1abc0e358b43987fef80f7", // Berachain, Unichain, Morph
-            "0xa6cb988942610f6731e664379d15ffcfbf282b44"  // Swell
-    );
-
-    private static final Set<String> ETHERFI_MINTER_PROXIES = Set.of(
-            "0xeeeeee9ec4769a09a76a83c7bc42b185872860ee"
-    );
+    private static final String WEETH_OFT_TOKENS_ROLE = "weethOftTokens";
+    private static final String MINTER_PROXIES_ROLE = "minterProxies";
 
     private final MongoOperations mongoOperations;
     private final NormalizedTransactionRepository normalizedTransactionRepository;
+    private final Set<String> etherFiWeethTokens;
+    private final Set<String> etherFiMinterProxies;
+
+    public EtherFiOftBridgeInClassifier(
+            MongoOperations mongoOperations,
+            NormalizedTransactionRepository normalizedTransactionRepository,
+            ProtocolResourceCatalog protocolResourceCatalog
+    ) {
+        this.mongoOperations = mongoOperations;
+        this.normalizedTransactionRepository = normalizedTransactionRepository;
+        ProtocolResourceDefinition definition = protocolResourceCatalog.find(PROTOCOL, null)
+                .orElseThrow(() -> new IllegalStateException(
+                        "Missing protocols/etherfi.json protocol resource for " + PROTOCOL));
+        this.etherFiWeethTokens = definition.contractSet(WEETH_OFT_TOKENS_ROLE);
+        this.etherFiMinterProxies = definition.contractSet(MINTER_PROXIES_ROLE);
+        if (etherFiWeethTokens.isEmpty() || etherFiMinterProxies.isEmpty()) {
+            throw new IllegalStateException(
+                    "protocols/etherfi.json must define non-empty contractSets."
+                            + WEETH_OFT_TOKENS_ROLE + " and contractSets." + MINTER_PROXIES_ROLE);
+        }
+        log.info("Loaded EtherFi OFT bridge-in registry: {} weETH OFT tokens, {} minter proxies",
+                etherFiWeethTokens.size(), etherFiMinterProxies.size());
+    }
 
     public int reclassifyEtherFiOftInbounds(int batchSize) {
         List<NormalizedTransaction> candidates = loadCandidates(batchSize);
@@ -119,8 +133,8 @@ public class EtherFiOftBridgeInClassifier {
             String contract = tt.getString("contractAddress");
             String from = tt.getString("from");
             if (contract != null && from != null
-                    && ETHERFI_WEETH_TOKENS.contains(contract.toLowerCase(Locale.ROOT))
-                    && ETHERFI_MINTER_PROXIES.contains(from.toLowerCase(Locale.ROOT))) {
+                    && etherFiWeethTokens.contains(contract.toLowerCase(Locale.ROOT))
+                    && etherFiMinterProxies.contains(from.toLowerCase(Locale.ROOT))) {
                 return true;
             }
         }

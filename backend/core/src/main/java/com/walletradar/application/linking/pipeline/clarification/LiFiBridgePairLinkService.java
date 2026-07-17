@@ -56,6 +56,15 @@ public class LiFiBridgePairLinkService {
     private static final BigDecimal ROUTED_BRIDGE_FALLBACK_MAX_RELATIVE_QTY_DIFF = new BigDecimal("0.15");
     private static final Duration ROUTED_BRIDGE_GENERIC_MAX_TIME_DELTA = Duration.ofSeconds(90);
     private static final BigDecimal ROUTED_BRIDGE_GENERIC_MAX_RELATIVE_QTY_DIFF = new BigDecimal("0.02");
+    /**
+     * NEW-08 cross-asset USD-value tolerance. A cross-asset LiFi/Jumper bridge marks the destination
+     * (volatile) leg at a market quote that legitimately diverges from the source consideration given
+     * by bridge slippage/fees plus market-quote vs bridge-execution-rate noise (the proven Katana
+     * USDC→ETH pair diverges ≈4% between the STABLECOIN source USD and the DZENGI-marked ETH USD).
+     * Mirrors the existing trusted same-asset 15% quantity band. Safety is carried by the hard
+     * registered-contract + route + time + uniqueness anchors, not by this tolerance.
+     */
+    private static final BigDecimal CROSS_ASSET_MAX_RELATIVE_USD_DIFF = new BigDecimal("0.15");
     private static final Duration STATUS_MISS_RETRY_DELAY = Duration.ofHours(6);
     private static final int ROUTED_BRIDGE_FALLBACK_CANDIDATE_LIMIT = 12;
     private static final int STATUS_LOOKUP_LANES = 4;
@@ -285,18 +294,27 @@ public class LiFiBridgePairLinkService {
         boolean continuityCandidate = supportsPlainMoveBasis(source, destination);
         List<NormalizedTransaction> updates = new ArrayList<>();
 
-        // Simple cross-asset bridge swaps (cc=false AND exactly 1:1 flow pair with different families)
-        // must NOT carry matchedCounterparty on the source leg: a set counterparty routes CARRY_OUT
-        // through bridgeSettlementKey() ("bridge-settlement:") while the BRIDGE_IN drains only
-        // "bridge:" keys — they can never match, leaving the CARRY_OUT orphaned (~$968 guard breach).
-        // Multi-flow bridges (cc=false because there are ≥2 source or destination principal flows)
-        // retain the counterparty because hasSinglePrincipalTransferFlow() prevents bridgeSettlementKey()
-        // from firing, and the UI still needs the link.
-        boolean simpleCrossAssetSwap = !continuityCandidate
+        // NEW-08 Layer C: the primary simple 1:1 cross-asset pair (single principal each side, no
+        // supplemental LINKED inbound already on the destination) is shaped into the EXISTING
+        // asset-changing bridge-settlement value-carry: KEEP matchedCounterparty on BOTH legs so
+        // ReplayPendingTransferKeyFactory.bridgeSettlementKey() emits "bridge-settlement:<corrId>" on
+        // both, draining the source basis into the destination via REALLOCATE_OUT/REALLOCATE_IN.
+        // Only the supplemental/multi-flow shape (destination already carrying a LINKED: inbound)
+        // suppresses the source counterparty: there the destination drains "bridge:" (bridgeTransferKey)
+        // while the source would emit "bridge-settlement:" — that key-family mismatch orphaned the
+        // historical ~$968 supplemental carry.
+        boolean singlePrincipalCrossAsset = !continuityCandidate
                 && principalFlows(source, -1).size() == 1
                 && principalFlows(destination, 1).size() == 1;
-        String targetSourceCounterparty = simpleCrossAssetSwap ? null : destination.getTxHash();
-        boolean sourceCounterpartyMismatch = simpleCrossAssetSwap
+        // Same-wallet is required (plan gate #1): a cross-wallet destination lives in a different
+        // accounting universe, so a settlement carry from this source would orphan there. Cross-wallet
+        // and supplemental/multi-flow shapes keep the legacy source-counterparty suppression.
+        boolean crossAssetSettlementPair = singlePrincipalCrossAsset
+                && !hasSupplementalLinkedInbound(destination)
+                && sameWallet(source, destination);
+        boolean suppressSourceCounterparty = singlePrincipalCrossAsset && !crossAssetSettlementPair;
+        String targetSourceCounterparty = suppressSourceCounterparty ? null : destination.getTxHash();
+        boolean sourceCounterpartyMismatch = suppressSourceCounterparty
                 ? hasText(source.getMatchedCounterparty())
                 : !sameHash(source.getMatchedCounterparty(), destination.getTxHash());
         if (sourceCounterpartyMismatch
@@ -307,6 +325,18 @@ public class LiFiBridgePairLinkService {
             source.setContinuityCandidate(continuityCandidate);
             source.setUpdatedAt(now);
             updates.add(source);
+        }
+        if (crossAssetSettlementPair) {
+            // Drain the source outbound principal as a TRANSFER (prices cleared) so replay routes it
+            // through REALLOCATE_OUT into the shared bridge-settlement queue rather than a market DISPOSE.
+            if (BridgePairLinkSupport.retagPrincipalFlowsForBridgeContinuity(source, now)
+                    && !updates.contains(source)) {
+                updates.add(source);
+            }
+            if (BridgePairLinkSupport.stampBridgePrincipalCounterpartyType(source, now)
+                    && !updates.contains(source)) {
+                updates.add(source);
+            }
         }
 
         boolean destinationChanged = false;
@@ -564,32 +594,91 @@ public class LiFiBridgePairLinkService {
         }
         NormalizedTransaction.Flow sourceFlow = sourcePrincipal.getFirst();
         NormalizedTransaction.Flow destinationFlow = destinationPrincipal.getFirst();
-        if (!supportsBridgeContinuity(sourceFlow, destinationFlow)) {
-            return false;
-        }
         if (sourceFlow.getQuantityDelta() == null || destinationFlow.getQuantityDelta() == null) {
-            return false;
-        }
-        if (destinationFlow.getQuantityDelta().abs().compareTo(sourceFlow.getQuantityDelta().abs()) > 0) {
             return false;
         }
         long deltaSeconds = Math.abs(Duration.between(source.getBlockTimestamp(), destination.getBlockTimestamp()).toSeconds());
         if (deltaSeconds > ROUTED_BRIDGE_FALLBACK_MAX_TIME_DELTA.toSeconds()) {
             return false;
         }
-        BigDecimal relativeQuantityDiff = relativeQuantityDiff(sourceFlow, destinationFlow);
-        if (relativeQuantityDiff.compareTo(ROUTED_BRIDGE_FALLBACK_MAX_RELATIVE_QTY_DIFF) > 0) {
+        // Same-asset corridor (plain move-basis) keeps precedence and its existing quantity tolerance.
+        if (supportsBridgeContinuity(sourceFlow, destinationFlow)) {
+            if (destinationFlow.getQuantityDelta().abs().compareTo(sourceFlow.getQuantityDelta().abs()) > 0) {
+                return false;
+            }
+            BigDecimal relativeQuantityDiff = relativeQuantityDiff(sourceFlow, destinationFlow);
+            if (relativeQuantityDiff.compareTo(ROUTED_BRIDGE_FALLBACK_MAX_RELATIVE_QTY_DIFF) > 0) {
+                return false;
+            }
+            if (!hasTrustedSettlementEvidence) {
+                if (deltaSeconds > ROUTED_BRIDGE_GENERIC_MAX_TIME_DELTA.toSeconds()) {
+                    return false;
+                }
+                if (relativeQuantityDiff.compareTo(ROUTED_BRIDGE_GENERIC_MAX_RELATIVE_QTY_DIFF) > 0) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        // Cross-asset corridor (USDC → ETH etc.): NEW-08 deterministic branch (Layer B/D).
+        return acceptsCrossAssetRoutedBridge(sourceFlow, destinationFlow, hasTrustedSettlementEvidence);
+    }
+
+    /**
+     * Layer B/D (NEW-08): deterministic cross-asset bridge acceptance. A {@code BRIDGE_OUT(assetX)}
+     * is paired with a cross-network inbound(assetY) only when ALL hard anchors hold:
+     * <ul>
+     *   <li><b>Registered-contract anchor (destination):</b> trusted registered settlement evidence
+     *       ({@code resolveRoutedSettlementEntry} present — a registered bridge or a LiFi/Relay/Across
+     *       {@code GAS_PAYER} payout). A receive from an unregistered EOA/token can never become a bridge.</li>
+     *   <li><b>Route/protocol anchor (source):</b> guaranteed by the caller precondition
+     *       {@code isRoutedBridgeFallbackSource → isLiFiSourceCandidate} (LiFi route tag or LiFi protocol name).</li>
+     *   <li><b>USD-value proximity:</b> both legs must be USD-resolvable and within
+     *       {@link #CROSS_ASSET_MAX_RELATIVE_USD_DIFF}; if either leg's USD is unresolvable we ABSTAIN
+     *       (never quantity across different assets). A $2,050 out vs a $0.001 dust in fails here.</li>
+     * </ul>
+     * Time proximity (≤180s), uniqueness (caller {@code accepted.size()==1}), same-wallet, cross-network
+     * and single-principal-each-side are enforced by the caller.
+     */
+    private boolean acceptsCrossAssetRoutedBridge(
+            NormalizedTransaction.Flow sourceFlow,
+            NormalizedTransaction.Flow destinationFlow,
+            boolean hasTrustedSettlementEvidence
+    ) {
+        if (!hasTrustedSettlementEvidence) {
             return false;
         }
-        if (!hasTrustedSettlementEvidence) {
-            if (deltaSeconds > ROUTED_BRIDGE_GENERIC_MAX_TIME_DELTA.toSeconds()) {
-                return false;
-            }
-            if (relativeQuantityDiff.compareTo(ROUTED_BRIDGE_GENERIC_MAX_RELATIVE_QTY_DIFF) > 0) {
-                return false;
+        BigDecimal sourceUsd = resolveFlowUsdValue(sourceFlow);
+        BigDecimal destinationUsd = resolveFlowUsdValue(destinationFlow);
+        if (sourceUsd == null || destinationUsd == null) {
+            return false;
+        }
+        return relativeUsdDiff(sourceUsd, destinationUsd).compareTo(CROSS_ASSET_MAX_RELATIVE_USD_DIFF) <= 0;
+    }
+
+    private BigDecimal resolveFlowUsdValue(NormalizedTransaction.Flow flow) {
+        if (flow == null) {
+            return null;
+        }
+        if (flow.getValueUsd() != null && flow.getValueUsd().signum() > 0) {
+            return flow.getValueUsd().abs();
+        }
+        if (flow.getUnitPriceUsd() != null && flow.getUnitPriceUsd().signum() > 0
+                && flow.getQuantityDelta() != null && flow.getQuantityDelta().signum() != 0) {
+            BigDecimal usd = flow.getQuantityDelta().abs().multiply(flow.getUnitPriceUsd(), MathContext.DECIMAL64);
+            if (usd.signum() > 0) {
+                return usd;
             }
         }
-        return true;
+        return null;
+    }
+
+    private BigDecimal relativeUsdDiff(BigDecimal left, BigDecimal right) {
+        BigDecimal denominator = left.max(right);
+        if (denominator.signum() == 0) {
+            return BigDecimal.ONE;
+        }
+        return left.subtract(right).abs().divide(denominator, MathContext.DECIMAL64);
     }
 
     private Optional<ProtocolRegistryEntry> resolveRoutedSettlementEntry(
@@ -648,7 +737,7 @@ public class LiFiBridgePairLinkService {
             return Optional.empty();
         }
         return protocolRegistryService.lookup(destination.getNetworkId(), view.fromAddress())
-                .filter(this::isRelayPayoutEntry);
+                .filter(this::isTrustedRoutedGasPayerEntry);
     }
 
     private boolean supportsPlainMoveBasis(
@@ -708,6 +797,31 @@ public class LiFiBridgePairLinkService {
                 .filter(flow -> flow.getRole() != NormalizedLegRole.FEE)
                 .filter(flow -> flow.getQuantityDelta() != null && Integer.signum(flow.getQuantityDelta().signum()) == direction)
                 .toList();
+    }
+
+    /**
+     * NEW-08 Layer C: true when a destination principal inbound flow already carries a
+     * {@code LINKED:<sourceHash>} counterparty from a supplemental bridge anchor. Such a destination
+     * drains through {@code bridgeTransferKey} ("bridge:"), so the primary source must NOT be shaped
+     * for "bridge-settlement:" — that key-family mismatch would orphan the supplemental carry.
+     */
+    private boolean hasSupplementalLinkedInbound(NormalizedTransaction destination) {
+        if (destination == null || destination.getFlows() == null) {
+            return false;
+        }
+        for (NormalizedTransaction.Flow flow : destination.getFlows()) {
+            if (flow == null || flow.getRole() == NormalizedLegRole.FEE) {
+                continue;
+            }
+            if (flow.getQuantityDelta() == null || flow.getQuantityDelta().signum() <= 0) {
+                continue;
+            }
+            String counterparty = flow.getCounterpartyAddress();
+            if (counterparty != null && counterparty.regionMatches(true, 0, "LINKED:", 0, 7)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private boolean isInboundOnly(NormalizedTransaction transaction) {
@@ -1080,10 +1194,18 @@ public class LiFiBridgePairLinkService {
                 && isAcrossProtocol(entry.protocolName());
     }
 
-    private boolean isRelayPayoutEntry(ProtocolRegistryEntry entry) {
+    /**
+     * A registered {@code GAS_PAYER} relayer/solver whose inbound top-level native/token send to the
+     * wallet is trusted destination-bridge settlement evidence. Mirrors the long-standing Relay
+     * solver acceptance and, per NEW-08, also accepts the LI.FI relayer agent
+     * ({@code 0x8c826f79…}, family=AGGREGATOR/role=GAS_PAYER) without mis-promoting its registry
+     * family/role to BRIDGE. Address-anchored: {@code resolveRelayPayoutEntry} already checks the
+     * top-level {@code from} is this registered relayer and the recipient is the wallet.
+     */
+    private boolean isTrustedRoutedGasPayerEntry(ProtocolRegistryEntry entry) {
         return entry != null
                 && entry.role() == ProtocolRegistryRole.GAS_PAYER
-                && isRelayProtocol(entry.protocolName());
+                && (isRelayProtocol(entry.protocolName()) || isLiFiProtocol(entry.protocolName()));
     }
 
     private boolean isLiFiProtocol(String protocolName) {

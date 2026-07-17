@@ -4,6 +4,7 @@ import com.walletradar.application.costbasis.domain.BorrowLiability;
 import com.walletradar.application.costbasis.domain.BorrowLiabilityRepository;
 import com.walletradar.application.costbasis.domain.CounterpartyBasisPool;
 import com.walletradar.application.costbasis.domain.CounterpartyBasisPoolRepository;
+import com.walletradar.domain.common.ConservationCounterpartyHints;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.common.PriceSource;
 import com.walletradar.domain.session.AccountingUniverse;
@@ -15,6 +16,7 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.application.costbasis.application.ReplayToleranceProperties;
 import com.walletradar.application.pricing.persistence.HistoricalPriceCacheService;
 import com.walletradar.domain.wallet.WalletRef;
+import com.walletradar.platform.networks.descriptor.NetworkRegistry;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -53,88 +55,6 @@ public class PortfolioConservationGate {
     private static final String MULTI_COUNTERPARTY = "MULTI";
     private static final Set<String> STABLECOIN_SYMBOLS = Set.of(
             "USDT", "USDC", "USDE", "USDS", "USDD", "USD"
-    );
-    /**
-     * Known bridge payout / solver addresses.  Inbound transactions from these addresses are
-     * always bridge receipts (never direct external capital), but may or may not correspond to
-     * intra-universe corridors.  We apply amount+time matching against outbound legs to decide.
-     */
-    private static final Set<String> KNOWN_BRIDGE_PAYOUT_ADDRESSES = Set.of(
-            // Relay Protocol solvers
-            "0xcad97616f91872c02ba3553db315db4015cbe850",
-            "0x7ff8bbf9c8ab106db589e7863fb100525f61cce5",
-            "0xf70da97812cb96acdf810712aa562db8dfa3dbef",
-            "0x91604f590d66ace8975eed6bd16cf55647d1c499",
-            // LiFi relayer / agent
-            "0x8c826f795466e39acbff1bb4eeeb759609377ba1",
-            // Hyperlane / LiFi bridge payout — BRIDGE_OUT 2829.12 USDC → EXT_IN 2828.31 USDC 19 min later (2026-01-12)
-            "0xf5f93d26229482adca3e42f84d08d549cf131658",
-            // Relay/LiFi bridge payout — BRIDGE_IN $500.38/$29.86 USDC paired with EXT_OUT $500.66/$30.00 (2025-07-31)
-            "0xc38e4e6a15593f908255214653d3d947ca1c2338",
-            // EtherFi protocol address — inbound weETH and stablecoin flows from this address
-            // are staking yield distributions (rebasing), not external capital deposits.
-            "0xeeeeee9ec4769a09a76a83c7bc42b185872860ee",
-            // LiFi solver on Mantle — delivers USDC to destination wallet; the originating
-            // BRIDGE_OUT (corrId set) is not linked to the BRIDGE_IN (corrId=null) due to a
-            // LiFi destination-discovery gap. Pattern 1 matches against BRIDGE_OUT $100.
-            "0x00a55649e597d463fd212fbe48a3b40f0e227d06",
-            // Across Protocol SpokePool (zkSync/L2) — relayer that delivers bridge payouts.
-            // BRIDGE_IN corrId=null because LiFi routed through Across without destination linking.
-            "0x4c1d3fc3fc3c177c3b633427c2f769276c547463",
-            // Sep-29-2025 USDe EXT_IN source EOA — $16.96 USDe received as part of a vbUSDC→USDe
-            // swap/bridge (BRIDGE_OUT vbUSDC $17.03 same day); Pattern 1 pairs them (0.4% diff).
-            "0x113a327221d2c4660684449bfc39bc14ad1aaf38",
-            // Bridge solver delivering USDC on inbound legs — Jul-01-2025 $895.05 USDC (corrId=null)
-            // and multiple Jul-11-2025 corrId-linked receipts. Paired with BRIDGE_OUT USDT0 $895.04
-            // (same day, <0.01% diff) via Pattern 1; symmetric exclusion keeps NEC stable.
-            "0x875d6d37ec55c8cf220b9e5080717549d8aa8eca",
-            // Bridge solver delivering USDC on Jul-11-2025 $895.98 (corrId=null).
-            // Corresponding BRIDGE_OUT USDC $896.03 same day (corrId=null); Pattern 1 pairs them.
-            "0x27a16dc786820b16e5c9028b75b99f6f604b5d26",
-            // Bridge-related ETH transfer (fee refund / tip) on Jul-11-2025 $3.88 (corrId=null).
-            // Corresponding BRIDGE_OUT WETH $3.88 same day (corrId=null); Pattern 1 pairs them.
-            "0x09aea4b2242abc8bb4bb78d537a67a245a7bec64"
-    );
-    /**
-     * Known Relay Protocol source / depositor addresses.  EXT_OUT flows to these addresses
-     * are bridge-start transactions and should be paired with BRIDGE_IN from Relay solvers.
-     */
-    private static final Set<String> RELAY_SOURCE_ADDRESSES = Set.of(
-            "0x2ec2c4c3dc212c990d1bc2b48b0392a3951d926e"
-    );
-    /**
-     * Known LP pool addresses.  Inbound flows from these are LP exit receipts, not external
-     * capital (e.g. Katana vbETH / vbUSDC pool paying back the user's LP share).
-     */
-    private static final Set<String> KNOWN_LP_POOL_ADDRESSES = Set.of(
-            "0x2a2c512beaa8eb15495726c235472d82effb7a6b",  // Katana vbETH-vbUSDC LP pool
-            // Katana vault/bridge contract (Nov-1-2025): delivers vbUSDC + ETH on Katana exit.
-            // BRIDGE_IN from this address is always an LP position withdrawal, not new capital.
-            // Deposit to Katana was Oct-22-2025, outside the 72-h Pattern-1 window.
-            "0x2659c6085d26144117d904c46b48b6d180393d27",
-            // Katana weETH vault (Nov-21-2025): ETH leg of weETH+ETH LP exit, flow-level cp.
-            // Paired with weETH vault 0xba9dd716... in the same BRIDGE_IN transaction.
-            "0x223ec22d67716fca620aee72b25ffe4ece436f25",
-            // Katana weETH LP source vault (Nov-21-2025): weETH leg of the same LP exit.
-            "0xba9dd716ba2a4b9fa7818802beb631f10bd28073"
-    );
-
-    /**
-     * Legitimate WETH contract addresses across all supported chains.
-     * A flow labeled ETH or WETH that carries a non-null assetContract not in this set
-     * is a scam/airdrop fake token (e.g. "DisperseClone:Scam") and must be excluded from NEC.
-     * Native ETH has no assetContract; real WETH uses chain-specific canonical contracts.
-     */
-    private static final Set<String> KNOWN_WETH_CONTRACTS = Set.of(
-            "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",  // WETH — Ethereum mainnet
-            "0x4200000000000000000000000000000000000006",  // WETH — Base / Optimism / Linea / Unichain
-            "0x82af49447d8a07e3bd95bd0d56f35241523fbab1",  // WETH — Arbitrum One
-            "0x5aea5775959fbc2557cc8789bc1bf90a239d9a91",  // WETH — zkSync Era
-            "0x000000000000000000000000000000000000800a",  // ETH (native) — zkSync Era system proxy
-            "0xdeaddeaddeaddeaddeaddeaddeaddeaddead1111",  // WETH — Mantle (L2 precompile address)
-            "0xe5d7c2a44ffddf6b295a15c148167daaaf5cf34f",  // WETH — Linea
-            "0x2def4285787d58a2f811af24755a8150622f4361",  // WETH — Cronos zkEVM
-            "0x49d5c2bdffac6ce2bfdb6640f4f80f226bc10bab"   // WETH.e — Avalanche C-Chain
     );
 
     /** Maximum time window (minutes) to match a BRIDGE_IN payout with its originating outbound. */
@@ -187,6 +107,14 @@ public class PortfolioConservationGate {
     private final MongoOperations mongoOperations;
     private final HistoricalPriceCacheService historicalPriceCacheService;
     private final ReplayToleranceProperties replayToleranceProperties;
+    /**
+     * Legitimate ETH/WETH contract addresses across all supported chains, derived from
+     * {@code network-descriptors.yml} (W11). A flow labeled ETH or WETH that carries a non-null
+     * {@code assetContract} not in this set is a scam/airdrop fake token (e.g. "DisperseClone:Scam")
+     * and must be excluded from NEC. Native ETH has no assetContract; real WETH uses chain-specific
+     * canonical contracts.
+     */
+    private final Set<String> knownWethContracts;
 
     public PortfolioConservationGate(
             CounterpartyBasisPoolRepository counterpartyBasisPoolRepository,
@@ -194,7 +122,8 @@ public class PortfolioConservationGate {
             AccountingUniverseRepository accountingUniverseRepository,
             MongoOperations mongoOperations,
             HistoricalPriceCacheService historicalPriceCacheService,
-            ReplayToleranceProperties replayToleranceProperties
+            ReplayToleranceProperties replayToleranceProperties,
+            NetworkRegistry networkRegistry
     ) {
         this.counterpartyBasisPoolRepository = counterpartyBasisPoolRepository;
         this.borrowLiabilityRepository = borrowLiabilityRepository;
@@ -202,6 +131,7 @@ public class PortfolioConservationGate {
         this.mongoOperations = mongoOperations;
         this.historicalPriceCacheService = historicalPriceCacheService;
         this.replayToleranceProperties = replayToleranceProperties;
+        this.knownWethContracts = networkRegistry.ethFamilyEquivalentContracts();
     }
 
     public record ConservationResult(
@@ -460,7 +390,7 @@ public class PortfolioConservationGate {
             // inbound hash was not retained in corridorPairedHashes for any reason.
             if (isInbound) {
                 String cp = normalizeRef(txCounterparty(tx));
-                if (KNOWN_BRIDGE_PAYOUT_ADDRESSES.contains(cp)) {
+                if (ConservationCounterpartyHints.isBridgePayout(cp)) {
                     continue;
                 }
             }
@@ -518,7 +448,7 @@ public class PortfolioConservationGate {
                     }
                 }
                 // RC-fake-native: a flow labeled ETH/WETH that carries a non-null ERC-20 contract
-                // address not in KNOWN_WETH_CONTRACTS is a scam/airdrop fake token distributed via
+                // address not in knownWethContracts is a scam/airdrop fake token distributed via
                 // phishing contracts (e.g. DisperseClone:Scam). Real native ETH has no assetContract;
                 // real WETH uses well-known chain-specific contracts. Applies to both inflow and
                 // outflow so that NEC remains balanced (a fake drain is not a real capital loss).
@@ -527,7 +457,7 @@ public class PortfolioConservationGate {
                 if (ETH_FAMILY_SYMBOLS.contains(rawSymForFakeCheck)) {
                     String contract = flow.getAssetContract();
                     if (contract != null && !contract.isBlank()
-                            && !KNOWN_WETH_CONTRACTS.contains(contract.trim().toLowerCase(Locale.ROOT))) {
+                            && !knownWethContracts.contains(contract.trim().toLowerCase(Locale.ROOT))) {
                         continue;
                     }
                 }
@@ -536,7 +466,7 @@ public class PortfolioConservationGate {
                 // not external capital; the pool returns the user's own previously-deployed assets).
                 if (isInbound) {
                     String cp = resolveCounterpartyAddress(tx, flow);
-                    if (cp != null && KNOWN_LP_POOL_ADDRESSES.contains(normalizeRef(cp))) {
+                    if (cp != null && ConservationCounterpartyHints.isLpPool(cp)) {
                         continue;
                     }
                 }
@@ -595,8 +525,9 @@ public class PortfolioConservationGate {
      * {@code lifetimeExternalInflowUsd}.
      *
      * <h4>Pattern 1 — Relay/solver payout corridors (RC3a)</h4>
-     * For each BRIDGE_IN (or EXT_IN) from a {@link #KNOWN_BRIDGE_PAYOUT_ADDRESSES} address
-     * that has no {@code correlationId}: find a matching BRIDGE_OUT or EXT_OUT to a known
+     * For each BRIDGE_IN (or EXT_IN) from a bridge-payout address (see
+     * {@code ConservationCounterpartyHints#isBridgePayout}) that has no {@code correlationId}: find
+     * a matching BRIDGE_OUT or EXT_OUT to a known
      * Relay source address in the same universe within ±4 h and ±1.5% USD amount.  Add BOTH
      * txHashes to the set.
      *
@@ -614,7 +545,7 @@ public class PortfolioConservationGate {
             // bridge receipts from known solver/payout addresses (Pattern 1) can be
             // matched against any same-wallet EXT_OUT or BRIDGE_OUT (not just those
             // sent to the few known Relay source addresses).  Pattern 1 still guards
-            // the inbound side with KNOWN_BRIDGE_PAYOUT_ADDRESSES, so only corridors
+            // the inbound side with the bridge-payout hint set, so only corridors
             // whose receipt comes from a known bridge solver/payout can ever be paired.
             boolean isExtOut = tx.getType() == NormalizedTransactionType.EXTERNAL_TRANSFER_OUT;
             boolean isBridgeOut = tx.getType() == NormalizedTransactionType.BRIDGE_OUT;
@@ -638,7 +569,7 @@ public class PortfolioConservationGate {
                 if (ETH_FAMILY_SYMBOLS.contains(symUp)) {
                     String c = flow.getAssetContract();
                     if (c != null && !c.isBlank()
-                            && !KNOWN_WETH_CONTRACTS.contains(c.trim().toLowerCase(Locale.ROOT))) {
+                            && !knownWethContracts.contains(c.trim().toLowerCase(Locale.ROOT))) {
                         continue;
                     }
                 }
@@ -678,7 +609,7 @@ public class PortfolioConservationGate {
                 continue;
             }
             String cp = normalizeRef(txCounterparty(tx));
-            if (!KNOWN_BRIDGE_PAYOUT_ADDRESSES.contains(cp)) {
+            if (!ConservationCounterpartyHints.isBridgePayout(cp)) {
                 continue;
             }
             BigDecimal inUsd = BigDecimal.ZERO;

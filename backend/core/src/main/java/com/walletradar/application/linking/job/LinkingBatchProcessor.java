@@ -21,8 +21,10 @@ import com.walletradar.application.cex.normalization.venue.bybit.BybitStreamAuth
 import com.walletradar.application.linking.pipeline.clarification.AddressPoisoningDetector;
 import com.walletradar.application.linking.pipeline.clarification.EtherFiOftBridgeInClassifier;
 import com.walletradar.application.linking.pipeline.clarification.GmxEntryRequestLinkService;
+import com.walletradar.application.linking.pipeline.clarification.GmxExecutionFeeRefundBasisNeutralService;
 import com.walletradar.application.linking.pipeline.clarification.GmxExitSettlementLinkService;
 import com.walletradar.application.linking.pipeline.clarification.GmxV2RefundClassifier;
+import com.walletradar.application.linking.pipeline.clarification.GmxWithdrawalSettlementLinkService;
 import com.walletradar.application.linking.pipeline.clarification.KnownBridgeRouterExternalTypeCorrectionService;
 import com.walletradar.application.linking.pipeline.clarification.NftMintRetagger;
 import com.walletradar.application.linking.pipeline.clarification.ProtocolAttributionClassifier;
@@ -99,6 +101,8 @@ class LinkingBatchProcessor {
     private final GmxExitSettlementLinkService gmxExitSettlementLinkService;
     private final GmxEntryRequestLinkService gmxEntryRequestLinkService;
     private final GmxV2RefundClassifier gmxV2RefundClassifier;
+    private final GmxWithdrawalSettlementLinkService gmxWithdrawalSettlementLinkService;
+    private final GmxExecutionFeeRefundBasisNeutralService gmxExecutionFeeRefundBasisNeutralService;
     private final EtherFiOftBridgeInClassifier etherFiOftBridgeInClassifier;
     private final NftMintRetagger nftMintRetagger;
 
@@ -235,6 +239,22 @@ class LinkingBatchProcessor {
         // R11 Fix 7: stamp GMX V2 execution-fee refunds
         processed += timedPass("gmxV2RefundClassifier",
                 () -> gmxV2RefundClassifier.classifyGmxRefunds(batchSize));
+        progressHeartbeat.run();
+
+        // NEW-09: pair two-step GMX GLV/GM withdrawal settlements (fee-refund-stamped native
+        // inflows) to their open LP_EXIT_REQUEST so the async carry drains instead of fabricating
+        // a market ACQUIRE. Runs immediately after gmxV2RefundClassifier so candidates are stamped.
+        processed += timedPass("gmxWithdrawalSettlementLink",
+                () -> gmxWithdrawalSettlementLinkService.linkOutstandingWithdrawalSettlements(batchSize));
+        progressHeartbeat.run();
+
+        // NEW-13: demote residual GMX execution-fee refunds (no matching open LP_EXIT_REQUEST) to a
+        // basis-neutral SPONSORED_GAS_IN. MUST run strictly after gmxWithdrawalSettlementLink so
+        // genuine GLV/GM settlements are already LP_EXIT_SETTLEMENT (and thus excluded here),
+        // preserving the NEW-09 guardrail while stopping return-of-capital gas dust from booking a
+        // phantom market ACQUIRE.
+        processed += timedPass("gmxExecutionFeeRefundBasisNeutral",
+                () -> gmxExecutionFeeRefundBasisNeutralService.reclassifyResidualRefunds(batchSize));
         progressHeartbeat.run();
 
         // R11 Fix 8: reclassify EtherFi weETH OFT cross-chain mint IN as BRIDGE_IN

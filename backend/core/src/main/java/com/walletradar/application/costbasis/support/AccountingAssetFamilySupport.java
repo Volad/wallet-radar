@@ -14,109 +14,30 @@ import java.util.Set;
  */
 public final class AccountingAssetFamilySupport {
 
-    private static final String FAMILY_BTC = "FAMILY:BTC";
-    private static final String FAMILY_ETH = "FAMILY:ETH";
-    private static final String FAMILY_AVAX = "FAMILY:AVAX";
-    private static final String FAMILY_MNT = "FAMILY:MNT";
     private static final String FAMILY_USDC = "FAMILY:USDC";
     private static final String FAMILY_USDT = "FAMILY:USDT";
     private static final String FAMILY_DEUSD = "FAMILY:DEUSD";
-    private static final String FAMILY_USDE = "FAMILY:USDE";
     private static final String FAMILY_WSTUSR = "FAMILY:WSTUSR";
-    private static final String FAMILY_ARB = "FAMILY:ARB";
-    private static final String FAMILY_SOL = "FAMILY:SOL";
     private static final String FAMILY_LP_RECEIPT = "FAMILY:LP_RECEIPT";
     private static final String FAMILY_ETH_IDENTITY = "FAMILY:ETH";
 
-    static final Map<String, String> SYMBOL_FAMILIES = Map.ofEntries(
-            // BTC family (C1 only)
-            Map.entry("BTC", FAMILY_BTC),
-            Map.entry("WBTC", FAMILY_BTC),
-            Map.entry("AARBWBTC", FAMILY_BTC),
-            Map.entry("AETHWBTC", FAMILY_BTC),
-            Map.entry("ALINWBTC", FAMILY_BTC),
-            Map.entry("AMANWBTC", FAMILY_BTC),
-            Map.entry("AZKSWBTC", FAMILY_BTC),
-            Map.entry("ABASWBTC", FAMILY_BTC),
-            Map.entry("AOPTWBTC", FAMILY_BTC),
-            // ETH family (C1 only — C2 staked derivatives have own per-token families)
-            Map.entry("ETH", FAMILY_ETH),
-            Map.entry("WETH", FAMILY_ETH),
-            Map.entry("AWETH", FAMILY_ETH),
-            Map.entry("AETHWETH", FAMILY_ETH),
-            Map.entry("AARBWETH", FAMILY_ETH),
-            Map.entry("ALINWETH", FAMILY_ETH),
-            Map.entry("AMANWETH", FAMILY_ETH),
-            Map.entry("AZKSWETH", FAMILY_ETH),
-            Map.entry("ABASWETH", FAMILY_ETH),
-            Map.entry("AOPTWETH", FAMILY_ETH),
-            Map.entry("VBETH", FAMILY_ETH),
-            // C2 ETH-derivatives — per-token families (ADR-054)
-            Map.entry("STETH", "FAMILY:STETH"),
-            Map.entry("WSTETH", "FAMILY:WSTETH"),
-            Map.entry("RETH", "FAMILY:RETH"),
-            Map.entry("CBETH", "FAMILY:CBETH"),
-            Map.entry("EETH", "FAMILY:EETH"),
-            Map.entry("WEETH", "FAMILY:WEETH"),
-            Map.entry("EWEETH", "FAMILY:EWEETH"),
-            Map.entry("EWETH", "FAMILY:EWETH"),
-            Map.entry("EZETH", "FAMILY:EZETH"),
-            Map.entry("RSETH", "FAMILY:RSETH"),
-            Map.entry("OSETH", "FAMILY:OSETH"),
-            Map.entry("METH", "FAMILY:METH"),
-            Map.entry("CMETH", "FAMILY:METH"),
-            Map.entry("YVVBETH", "FAMILY:YVVBETH"),
-            // SOL family (native only; BBSOL is C2)
-            Map.entry("SOL", FAMILY_SOL),
-            Map.entry("BBSOL", "FAMILY:BBSOL"),
-            // ARB family
-            Map.entry("ARB", FAMILY_ARB),
-            Map.entry("AARBARB", FAMILY_ARB),
-            // USDC family
-            Map.entry("USDC", FAMILY_USDC),
-            Map.entry("USDBC", FAMILY_USDC),
-            Map.entry("AAVAUSDC", FAMILY_USDC),
-            Map.entry("AMANUSDC", FAMILY_USDC),
-            Map.entry("AARBUSDC", FAMILY_USDC),
-            Map.entry("AETHUSDC", FAMILY_USDC),
-            Map.entry("ABASUSDC", FAMILY_USDC),
-            Map.entry("AOPTUSDC", FAMILY_USDC),
-            Map.entry("AZKSUSDC", FAMILY_USDC),
-            Map.entry("VBUSDC", FAMILY_USDC),
-            Map.entry("EUSDC", FAMILY_USDC),
-            Map.entry("EEUSDC", FAMILY_USDC),
-            Map.entry("FUSDC", FAMILY_USDC),
-            Map.entry("MCUSDC", FAMILY_USDC),
-            Map.entry("GTUSDCC", FAMILY_USDC),
-            Map.entry("RE7USDC", FAMILY_USDC),
-            Map.entry("SOUSDC", FAMILY_USDC),
-            // USDT family
-            Map.entry("USDT", FAMILY_USDT),
-            Map.entry("USDT0", FAMILY_USDT),
-            Map.entry("USD₮0", FAMILY_USDT),
-            Map.entry("EUSDT", FAMILY_USDT),
-            Map.entry("EUSDT0", FAMILY_USDT),
-            Map.entry("FUSDT", FAMILY_USDT),
-            Map.entry("SOUSDT", FAMILY_USDT),
-            Map.entry("VBUSDT", FAMILY_USDT),
-            // DEUSD / USDE / WSTUSR families
-            Map.entry("DEUSD", FAMILY_DEUSD),
-            Map.entry("EDEUSD", FAMILY_DEUSD),
-            Map.entry("USDE", FAMILY_USDE),
-            Map.entry("USDE0", FAMILY_USDE),
-            Map.entry("EWSTUSR", FAMILY_WSTUSR),
-            Map.entry("WSTUSR", FAMILY_WSTUSR),
-            // AVAX family (native only; sAVAX is C2)
-            Map.entry("AVAX", FAMILY_AVAX),
-            Map.entry("WAVAX", FAMILY_AVAX),
-            Map.entry("SAVAX", "FAMILY:SAVAX"),
-            Map.entry("AAVAWAVAX", FAMILY_AVAX),
-            Map.entry("AAVASAVAX", "FAMILY:SAVAX"),
-            // MNT family
-            Map.entry("MNT", FAMILY_MNT),
-            Map.entry("WMNT", FAMILY_MNT),
-            Map.entry("AMANMNT", FAMILY_MNT),
-            Map.entry("AMANWMNT", FAMILY_MNT)
+    /**
+     * Supplemental accounting-family entries that are intentionally NOT owned by the C1/C2 registry
+     * (ADR-060 / Wave W9). Every other symbol→family mapping is the single responsibility of
+     * {@link AccountingAssetClassificationSupport} — which {@link #continuityIdentity(String, String)}
+     * consults <em>first</em>, so a registry-classified symbol never reaches this fallback. Prior to
+     * W9 an ~80-entry {@code SYMBOL_FAMILIES} map duplicated the registry; it was proven subsumed for
+     * every key except the one below and removed.
+     *
+     * <p>{@code AAVASAVAX} (Aave aAvaSAVAX) is a 1:1 receipt of sAVAX and shares its
+     * {@code FAMILY:SAVAX} pool, but is not currently classified C1/C2. It is resolved here — after
+     * the registry, <em>before</em> {@link #inferredFamilyIdentity(String)} — to preserve exact
+     * behavior and to defeat the lending-inference reroute that would otherwise mis-send it to
+     * {@code FAMILY:AVAX} (the SAVAX→AVAX lifecycle mapping). Promoting it to a C1 receipt is a
+     * reviewer-gated follow-up (ADR-060 §B3c).</p>
+     */
+    static final Map<String, String> SUPPLEMENTAL_FAMILIES = Map.of(
+            "AAVASAVAX", "FAMILY:SAVAX"
     );
 
     private AccountingAssetFamilySupport() {
@@ -145,7 +66,7 @@ public final class AccountingAssetFamilySupport {
         if (registryIdentity != null) {
             return registryIdentity;
         }
-        String familyIdentity = SYMBOL_FAMILIES.get(symbol);
+        String familyIdentity = SUPPLEMENTAL_FAMILIES.get(symbol);
         if (familyIdentity != null) {
             return familyIdentity;
         }
@@ -234,7 +155,7 @@ public final class AccountingAssetFamilySupport {
         }
         String lendingLifecycle = LendingAssetSymbolSupport.lendingReceiptLifecycleUnderlying(symbol);
         if (lendingLifecycle != null && !lendingLifecycle.isBlank() && !"UNKNOWN".equals(lendingLifecycle)) {
-            String familyIdentity = SYMBOL_FAMILIES.get(lendingLifecycle);
+            String familyIdentity = SUPPLEMENTAL_FAMILIES.get(lendingLifecycle);
             if (familyIdentity != null) {
                 return familyIdentity;
             }

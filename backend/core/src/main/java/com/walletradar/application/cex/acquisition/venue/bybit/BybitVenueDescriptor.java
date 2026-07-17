@@ -71,7 +71,9 @@ public class BybitVenueDescriptor implements VenueDescriptor, VenueLiveBalanceCa
 
     @Override
     public Set<String> accountKindSuffixes() {
-        return Set.of(":FUND", ":UTA", ":EARN");
+        // ADR-058 C.3: :BOT is a Bybit Trading-Bot compartment. It collapses to the BYBIT:<uid>
+        // umbrella exactly like :FUND/:UTA/:EARN (observability-only, no new replay position key).
+        return Set.of(":FUND", ":UTA", ":EARN", ":BOT");
     }
 
     // ---- VenueWalletModel ----
@@ -93,7 +95,8 @@ public class BybitVenueDescriptor implements VenueDescriptor, VenueLiveBalanceCa
         return List.of(
                 normalized + ":UTA",
                 normalized + ":FUND",
-                normalized + ":EARN"
+                normalized + ":EARN",
+                normalized + ":BOT"
         );
     }
 
@@ -126,7 +129,7 @@ public class BybitVenueDescriptor implements VenueDescriptor, VenueLiveBalanceCa
 
     @Override
     public Set<String> subAccountKinds() {
-        return Set.of("FUND", "UTA", "EARN");
+        return Set.of("FUND", "UTA", "EARN", "BOT");
     }
 
     // ---- VenueExternalCapitalPolicy ----

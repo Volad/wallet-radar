@@ -11,7 +11,7 @@ Full segregated venue SPI — adding a CEX venue requires zero changes post-norm
 | Interface / class | Role |
 |-------------------|------|
 | `VenueDescriptor` | Composes all four capabilities below |
-| `VenueIdentity` (extends `CexVenueProfile`) | `venueId`, `providerCode`, stream ownership predicates, `accountKindSuffixes()` |
+| `VenueIdentity` (extends `CexVenueProfile`) | `venueId`, `providerCode`, stream ownership predicates, `accountKindSuffixes()` (Bybit: `:UTA`/`:FUND`/`:EARN`/`:BOT`) |
 | `VenueWalletModel` | `umbrellaKey()`, `expandBackfillRefs()`, `dashboardWalletRefs()`; default no-op for flat venues |
 | `VenueLiveBalanceCapability` | `Optional<CexLiveBalancePort> liveBalancePort()` |
 | `VenueExternalCapitalPolicy` | Decides at normalization time: external-capital boundary + eligible USD basis |
@@ -75,6 +75,12 @@ Writes `normalized_transactions` for CEX-origin rows (shared canonical collectio
 2. Mapper emits `bybit_extracted_events` with `canonicalType` hints.
 3. `BybitNormalizationService` pairs IT/earn/trade rows, upserts `normalized_transactions`.
 4. `BybitNormalizationCompletedEvent` triggers linking; replay consumes `CONFIRMED` rows only.
+
+Bybit sub-account topology uses the umbrella key `BYBIT:<uid>` with account-kind suffixes
+`:UTA`/`:FUND`/`:EARN`/`:BOT`. The `:BOT` Trading-Bot compartment ([ADR-058](../../adr/ADR-058-bybit-bot-compartment-cost-basis.md))
+resolves per-session basis at normalization (`BybitBotTransferCostBasisService`) and collapses to the
+`BYBIT:<uid>` umbrella exactly like the other suffixes — observability-only, adding no new replay
+position.
 
 ### Dzengi
 

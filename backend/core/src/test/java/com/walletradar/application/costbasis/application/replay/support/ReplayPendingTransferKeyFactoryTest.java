@@ -521,6 +521,40 @@ class ReplayPendingTransferKeyFactoryTest {
     }
 
     @Test
+    @DisplayName("NEW-08: shaped USDC BRIDGE_OUT and ETH BRIDGE_IN both emit the same bridge-settlement key")
+    void crossAssetUsdcOutEthInEmitMatchingSettlementKeys() {
+        String correlationId = "bridge:lifi:0xda7d556e558de7";
+
+        NormalizedTransaction source = baseTransaction(NormalizedTransactionType.BRIDGE_OUT);
+        source.setNetworkId(NetworkId.UNICHAIN);
+        source.setCorrelationId(correlationId);
+        source.setMatchedCounterparty("0xc0aaf96b5712c");
+        source.setContinuityCandidate(false);
+        NormalizedTransaction.Flow usdcOut = transferFlow("USDC", "0x078d782b760474a361dda0af3839290b0ef57ad6", "-2050.040045");
+        source.setFlows(new java.util.ArrayList<>(List.of(usdcOut)));
+
+        NormalizedTransaction destination = baseTransaction(NormalizedTransactionType.BRIDGE_IN);
+        destination.setNetworkId(NetworkId.KATANA);
+        destination.setCorrelationId(correlationId);
+        destination.setMatchedCounterparty("0xda7d556e558de7");
+        destination.setContinuityCandidate(false);
+        NormalizedTransaction.Flow ethIn = transferFlow("ETH", null, "0.452894");
+        destination.setFlows(new java.util.ArrayList<>(List.of(ethIn)));
+
+        var outKey = factory.bridgeSettlementKey(source, usdcOut);
+        var inKey = factory.bridgeSettlementKey(destination, ethIn);
+
+        assertThat(outKey).isNotNull();
+        assertThat(inKey).isNotNull();
+        assertThat(outKey.value()).isEqualTo("bridge-settlement:" + correlationId);
+        assertThat(inKey.value()).isEqualTo("bridge-settlement:" + correlationId);
+        assertThat(outKey).isEqualTo(inKey);
+        // Same-asset (cc=true) never emits a settlement key — it uses bridgeTransferKey ("bridge:").
+        source.setContinuityCandidate(true);
+        assertThat(factory.bridgeSettlementKey(source, usdcOut)).isNull();
+    }
+
+    @Test
     @DisplayName("cross-asset BRIDGE_IN (cc=false) with two stablecoin principals: settlement key null (ambiguous)")
     void crossAssetBridgeInWithTwoStablecoinsSettlementKeyIsNull() {
         NormalizedTransaction bridgeIn = baseTransaction(NormalizedTransactionType.BRIDGE_IN);

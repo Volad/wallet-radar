@@ -1,6 +1,6 @@
 # Transaction Types Reference
 
-> **Last updated:** 2026-07-08
+> **Last updated:** 2026-07-16
 
 Authoritative enum: `NormalizedTransactionType.java` (52 values).
 
@@ -239,13 +239,18 @@ Typical `BasisEffect` + `LifecycleKind`: REQUEST LP. See [ledger points](ledger-
 **Family:** LP
 
 #### Meaning / when produced
-Canonical type `LP_EXIT_SETTLEMENT` assigned during on-chain or Bybit normalization.
+Canonical type `LP_EXIT_SETTLEMENT` assigned during on-chain or Bybit normalization, **or** promoted at
+linking for GMX GLV/GM keeper withdrawals (NEW-09) — see Linking.
 
 #### Normalization rules
 GmxLp / LpSemantic. See [normalization rules](../pipeline/normalization/rules/README.md).
 
 #### Linking
-correlationId. See [linking](../pipeline/linking/02-rules-and-repairs.md).
+`correlationId`. **GMX GLV/GM settlement (NEW-09):** an internal-transfer-only ETH payout from a GMX
+handler/keeper is linked to the open `gmx-lp:*` `LP_EXIT_REQUEST` by `GmxWithdrawalSettlementLinkService`,
+reclassified from the fee-refund-stamped inflow to `LP_EXIT_SETTLEMENT`, given the shared `correlationId`,
+and reshaped `BUY`→`TRANSFER` so replay reuses the REALLOCATE carry (`REALLOCATE_IN` of carried basis)
+rather than fabricating a market ACQUIRE. See [linking](../pipeline/linking/02-rules-and-repairs.md).
 
 #### Pricing
 All return legs priced. See [pricing resolver chain](../pipeline/pricing/02-resolver-chain.md).
@@ -685,7 +690,12 @@ Canonical type `BRIDGE_OUT` assigned during on-chain or Bybit normalization.
 BridgeStartClassifier. See [normalization rules](../pipeline/normalization/rules/README.md).
 
 #### Linking
-continuityCandidate; pair BRIDGE_IN. See [linking](../pipeline/linking/02-rules-and-repairs.md).
+continuityCandidate; pair BRIDGE_IN. **Cross-asset pairing (NEW-08):** `LiFiBridgePairLinkService`
+(accepting a LiFi `GAS_PAYER` relayer as trusted destination evidence) and
+`CrossNetworkBridgePairFallbackService` pair asset-changing routes (e.g. `USDC`→`ETH`) by USD-value
+proximity. Such pairs keep `continuityCandidate = false` and settle via the asset-changing REALLOCATE
+path — source disposed as `REALLOCATE_OUT`, destination restored with source carried basis. See
+[linking](../pipeline/linking/02-rules-and-repairs.md).
 
 #### Pricing
 Outbound leg; orphan fallback if no IN. See [pricing resolver chain](../pipeline/pricing/02-resolver-chain.md).
@@ -707,7 +717,11 @@ Canonical type `BRIDGE_IN` assigned during on-chain or Bybit normalization.
 BridgeSettlementClassifier / linking. See [normalization rules](../pipeline/normalization/rules/README.md).
 
 #### Linking
-continuityCandidate after repair. See [linking](../pipeline/linking/02-rules-and-repairs.md).
+continuityCandidate after repair. **Cross-asset settlement (NEW-08):** an orphan cross-asset
+`BRIDGE_IN` is paired to its `BRIDGE_OUT` by USD-value proximity within a tight window and settles via
+the asset-changing REALLOCATE path (`continuityCandidate = false`, no plain carry). **Relay payout
+(NEW-11):** registry-backed Relay `GAS_PAYER`/solver payouts (ARBITRUM `0x1619de6b…`, ZKSYNC solver)
+classify as `BRIDGE_IN`. See [linking](../pipeline/linking/02-rules-and-repairs.md).
 
 #### Pricing
 Inbound; market if orphan. See [pricing resolver chain](../pipeline/pricing/02-resolver-chain.md).
@@ -1009,7 +1023,11 @@ Typical `BasisEffect` + `LifecycleKind`: ACQUIRE/CARRY_IN TRANSFER. See [ledger 
 **Family:** Transfer
 
 #### Meaning / when produced
-Canonical type `SPONSORED_GAS_IN` assigned during on-chain or Bybit normalization.
+Canonical type `SPONSORED_GAS_IN` assigned during on-chain or Bybit normalization, **or** at linking for
+basis-neutral gas refunds: **NEW-13** — a residual GMX execution-fee refund with no matching open
+`LP_EXIT_REQUEST` (demoted by `GmxExecutionFeeRefundBasisNeutralService`, strictly after the NEW-09
+settlement link); **NEW-14** — a plain native top-up from a registry `GAS_PAYER`-role EOA (e.g. the Rabby
+"Gas Fee Payer" `0x76dd6552…`). All resolve basis-neutral (`GAS_ONLY`, `costBasisDelta = 0`).
 
 #### Normalization rules
 SponsoredGasTopUpSupport. See [normalization rules](../pipeline/normalization/rules/README.md).

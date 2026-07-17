@@ -69,7 +69,13 @@ class LendingRegistryClassifierTest {
                                 Map.of(),
                                 Map.of(),
                                 Map.of()
-                        )
+                        ),
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null
                 )
         );
 

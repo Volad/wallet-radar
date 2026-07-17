@@ -45,6 +45,11 @@ import java.time.Instant;
                 name = "bybit_extracted_integration_stream_key_idx",
                 def = "{'integrationId': 1, 'sourceStream': 1, 'providerEventKey': 1}",
                 unique = false
+        ),
+        // ADR-058 Section H: in-window bot execution lookup and per-uid bot-window attribution.
+        @CompoundIndex(
+                name = "bybit_extracted_integration_uid_stream_time_idx",
+                def = "{'integrationId': 1, 'uid': 1, 'sourceStream': 1, 'timeUtc': 1}"
         )
 })
 @NoArgsConstructor

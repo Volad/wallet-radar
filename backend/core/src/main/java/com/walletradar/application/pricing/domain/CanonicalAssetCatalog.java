@@ -70,7 +70,6 @@ public final class CanonicalAssetCatalog {
             Map.entry("AAVASAVAX", "AVAX"),
             Map.entry("WMNT", "MNT"),
             Map.entry("WXPL", "XPL"),
-            Map.entry("WXPL9", "XPL"),
             Map.entry("USDBC", "USDC"),
             Map.entry("USD₮0", "USDT"),
             Map.entry("USDT0", "USDT"),

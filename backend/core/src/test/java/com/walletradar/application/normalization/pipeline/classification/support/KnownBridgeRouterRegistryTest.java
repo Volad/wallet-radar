@@ -1,5 +1,7 @@
 package com.walletradar.application.normalization.pipeline.classification.support;
 
+import com.walletradar.testsupport.CounterpartyHintTestFixtures;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -7,6 +9,13 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class KnownBridgeRouterRegistryTest {
+
+    @BeforeAll
+    static void bindCounterpartyHints() {
+        // Constructing the service binds the static adapter (same convention as W1 tests binding
+        // NetworkNativeAssets via NetworkTestFixtures). Without this the adapter returns false.
+        CounterpartyHintTestFixtures.service();
+    }
 
     @Test
     void acrossV3SpokePoolIsKnownBridgeRouter() {

@@ -10,6 +10,7 @@ import com.walletradar.application.costbasis.application.replay.state.LpReceiptB
 import com.walletradar.application.costbasis.application.replay.state.ReplayExecutionState;
 import com.walletradar.application.costbasis.application.replay.support.ReplayAssetSupport;
 import com.walletradar.application.costbasis.application.replay.support.ReplayFlowSupport;
+import com.walletradar.application.costbasis.support.AccountingAssetFamilySupport;
 import com.walletradar.application.costbasis.domain.AssetLedgerPoint;
 import com.walletradar.application.costbasis.domain.LpReceiptBasisPool;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
@@ -33,6 +34,13 @@ public class LpReceiptEntryReplayHandler {
     private static final MathContext MC = MathContext.DECIMAL128;
     private static final String LP_CORR_PREFIX = "lp-position:";
     private static final String PENDLE_LP_CORR_PREFIX = "pendle-lp:";
+
+    /** Absolute USD floor below which a net-positive family (or the whole deposit) is negligible. */
+    private static final BigDecimal MATERIALITY_USD_FLOOR = new BigDecimal("1.00");
+    /** Relative dust fraction: a net-positive family under 1% of the outbound USD is dust. */
+    private static final BigDecimal DUST_USD_RELATIVE_FRACTION = new BigDecimal("0.01");
+    /** Relative quantity epsilon for unpriced dust, scaled by the largest net-outbound quantity. */
+    private static final BigDecimal DUST_QTY_RELATIVE_EPSILON = new BigDecimal("0.000001");
 
     private final ReplayAssetSupport assetSupport;
     private final ReplayFlowSupport flowSupport;
@@ -67,21 +75,24 @@ public class LpReceiptEntryReplayHandler {
      * {@link LpReceiptBasisPool} per outbound asset family, all sharing the same
      * {@code lpCorrelationId}.
      *
-     * <p>Net-by-asset aggregation: Uniswap V3/V4 routers may refund excess deposited tokens
-     * in the same transaction. A small positive inbound of a deposited asset does not make
-     * this a Curve/Balancer-style mixed receipt — as long as the NET flow for every principal
-     * asset remains negative (net outbound), this LP_ENTRY is routed to the receipt-pool path.
-     * The refund is handled inside {@link #apply} via {@code applyInboundReceipt}.
+     * <p>Net-by-<b>family</b> aggregation with USD dust tolerance: Uniswap/SushiSwap V3/V4
+     * routers may refund excess deposited tokens in the same transaction. Single-token
+     * concentrated-liquidity "zap-in" entries additionally refund <em>dust</em> of the sibling
+     * pool token(s). Netting by {@link AccountingAssetFamilySupport#continuityIdentity} (rather
+     * than raw symbol) collapses those siblings into the deposit's family so the family stays
+     * net-outbound; a genuinely material inbound of a different asset (Curve/Balancer mixed
+     * receipt) still produces a net-positive family and is rejected. A net-positive family is
+     * treated as dust when it is immaterial in USD (below {@code max($1, 1% × outbound USD)}) or,
+     * when unpriced, negligible in quantity relative to the largest net-outbound quantity. The
+     * refund is handled inside {@link #apply} via {@code applyInboundReceipt}.
      */
     static boolean hasOnlyOutboundPrincipalFlows(NormalizedTransaction transaction) {
         if (transaction == null || transaction.getFlows() == null) {
             return false;
         }
-        // Aggregate net quantity per asset symbol (FEE and LP-receipt markers excluded).
-        // A Uniswap router may return excess tokens (refund) in the same tx; the net per
-        // asset is still negative. Curve/Balancer shapes where the pool returns a different
-        // asset produce net positive flows for that asset and are correctly rejected.
-        java.util.Map<String, java.math.BigDecimal> netByAsset = new java.util.LinkedHashMap<>();
+        // Aggregate net quantity AND net USD per continuity family (FEE + LP-receipt markers
+        // excluded). Family netting merges sibling-token dust refunds into the deposit family.
+        java.util.Map<String, FamilyNet> netByFamily = new java.util.LinkedHashMap<>();
         for (NormalizedTransaction.Flow flow : transaction.getFlows()) {
             if (flow == null || flow.getQuantityDelta() == null || flow.getQuantityDelta().signum() == 0) {
                 continue;
@@ -92,24 +103,97 @@ public class LpReceiptEntryReplayHandler {
             if (flow.getRole() != NormalizedLegRole.TRANSFER) {
                 continue;
             }
-            String key = flow.getAssetSymbol() == null
-                    ? ""
-                    : flow.getAssetSymbol().trim().toLowerCase(java.util.Locale.ROOT);
-            netByAsset.merge(key, flow.getQuantityDelta(), java.math.BigDecimal::add);
+            String family = AccountingAssetFamilySupport.continuityIdentity(
+                    flow.getAssetSymbol(), flow.getAssetContract());
+            String key = family == null ? "" : family;
+            FamilyNet acc = netByFamily.computeIfAbsent(key, k -> new FamilyNet());
+            BigDecimal qty = flow.getQuantityDelta();
+            acc.netQty = acc.netQty.add(qty, MC);
+            BigDecimal usdMagnitude = flowUsdMagnitude(flow);
+            if (usdMagnitude == null) {
+                acc.allPriced = false;
+            } else {
+                acc.netUsd = acc.netUsd.add(qty.signum() < 0 ? usdMagnitude.negate() : usdMagnitude, MC);
+            }
         }
-        if (netByAsset.isEmpty()) {
+        if (netByFamily.isEmpty()) {
             return false;
         }
+
+        // Outbound aggregates: total resolved outbound USD (materiality scale) and the largest
+        // net-outbound quantity (unpriced dust epsilon scale).
+        BigDecimal totalOutboundUsd = BigDecimal.ZERO;
+        boolean anyOutboundUsdResolved = false;
+        BigDecimal maxOutboundQty = BigDecimal.ZERO;
         boolean hasNetOutbound = false;
-        for (java.math.BigDecimal net : netByAsset.values()) {
-            if (net.signum() > 0) {
-                return false;  // net inbound for some asset → Curve/Balancer or unexpected shape
-            }
-            if (net.signum() < 0) {
+        for (FamilyNet acc : netByFamily.values()) {
+            if (acc.netQty.signum() < 0) {
                 hasNetOutbound = true;
+                BigDecimal absQty = acc.netQty.abs();
+                if (absQty.compareTo(maxOutboundQty) > 0) {
+                    maxOutboundQty = absQty;
+                }
+                if (acc.allPriced) {
+                    totalOutboundUsd = totalOutboundUsd.add(acc.netUsd.abs(), MC);
+                    anyOutboundUsdResolved = true;
+                }
             }
         }
-        return hasNetOutbound;
+        if (!hasNetOutbound) {
+            return false;
+        }
+
+        // A real deposit must exist. When outbound USD is resolvable, require it to clear the
+        // absolute floor; otherwise fall back to quantity presence (fully-unpriced all-outbound
+        // entries keep their legacy behaviour).
+        if (anyOutboundUsdResolved && totalOutboundUsd.compareTo(MATERIALITY_USD_FLOOR) < 0) {
+            return false;
+        }
+
+        BigDecimal dustUsdThreshold = totalOutboundUsd.multiply(DUST_USD_RELATIVE_FRACTION, MC);
+        if (dustUsdThreshold.compareTo(MATERIALITY_USD_FLOOR) < 0) {
+            dustUsdThreshold = MATERIALITY_USD_FLOOR;
+        }
+        BigDecimal dustQtyThreshold = maxOutboundQty.multiply(DUST_QTY_RELATIVE_EPSILON, MC);
+
+        // Every net-positive family must be dust; any material net-positive family means the pool
+        // returned a materially different asset (Curve/Balancer) → not a clean single-side deposit.
+        for (FamilyNet acc : netByFamily.values()) {
+            if (acc.netQty.signum() <= 0) {
+                continue;
+            }
+            boolean dust = acc.allPriced
+                    ? acc.netUsd.compareTo(dustUsdThreshold) < 0
+                    : acc.netQty.compareTo(dustQtyThreshold) < 0;
+            if (!dust) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Per-flow USD magnitude (always non-negative): {@code valueUsd} when present and positive,
+     * else {@code |quantityDelta| × unitPriceUsd} when the unit price is present and positive,
+     * else {@code null} (unresolved for this flow).
+     */
+    private static BigDecimal flowUsdMagnitude(NormalizedTransaction.Flow flow) {
+        BigDecimal valueUsd = flow.getValueUsd();
+        if (valueUsd != null && valueUsd.signum() > 0) {
+            return valueUsd.abs();
+        }
+        BigDecimal unitPriceUsd = flow.getUnitPriceUsd();
+        if (unitPriceUsd != null && unitPriceUsd.signum() > 0) {
+            return flow.getQuantityDelta().abs().multiply(unitPriceUsd, MC);
+        }
+        return null;
+    }
+
+    /** Mutable per-family accumulator for {@link #hasOnlyOutboundPrincipalFlows}. */
+    private static final class FamilyNet {
+        private BigDecimal netQty = BigDecimal.ZERO;
+        private BigDecimal netUsd = BigDecimal.ZERO;
+        private boolean allPriced = true;
     }
 
     public void apply(NormalizedTransaction transaction, ReplayExecutionState replayState) {

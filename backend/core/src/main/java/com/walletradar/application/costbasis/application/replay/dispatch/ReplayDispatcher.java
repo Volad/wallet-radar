@@ -554,6 +554,9 @@ public class ReplayDispatcher {
             PositionSnapshot afterTransfer = flowSupport.snapshot(position);
             flowSupport.applyInboundShortfallSpotFallback(transaction, flow, position, before);
             accumulateInboundSpotFallbackProvisional(transaction, flow, position, afterTransfer, replayState);
+            // NEW-02: after the spot fallback prices an unpaired external-capital INFLOW at market
+            // value it is economically an acquisition — relabel UNKNOWN → ACQUIRE (label only).
+            basisEffect = resolveExternalCapitalInflowAcquisition(transaction, flow, position, basisEffect);
             replayState.ledgerPointCollector().record(
                     transaction,
                     flow,
@@ -638,6 +641,9 @@ public class ReplayDispatcher {
                 PositionSnapshot afterTransfer = flowSupport.snapshot(position);
                 flowSupport.applyInboundShortfallSpotFallback(transaction, flow, position, before);
                 accumulateInboundSpotFallbackProvisional(transaction, flow, position, afterTransfer, replayState);
+                // NEW-02: external-capital INFLOW priced via the spot fallback is an acquisition,
+                // not an UNKNOWN transfer — relabel UNKNOWN → ACQUIRE (label only).
+                basisEffect = resolveExternalCapitalInflowAcquisition(transaction, flow, position, basisEffect);
                 replayState.ledgerPointCollector().record(
                     transaction,
                     flow,
@@ -934,6 +940,47 @@ public class ReplayDispatcher {
             return stamped;
         }
         return Boolean.TRUE.equals(BybitCarryContinuitySupport.resolveSelfTransferNoop(transaction));
+    }
+
+    /**
+     * NEW-02: relabels a fully-priced, unpaired external-capital {@code INFLOW} deposit from
+     * {@code UNKNOWN} to {@code ACQUIRE}.
+     *
+     * <p>Dzengi fiat {@code EXTERNAL_TRANSFER_IN} legs have no pending/continuity match, so
+     * {@link TransferReplayHandler#applyTransfer} returns {@code UNKNOWN}. The dispatcher then runs
+     * {@link ReplayFlowSupport#applyInboundShortfallSpotFallback} which books the correct market/spot
+     * basis (so AVCO is already right). Semantically such an inflow booked at market value is an
+     * acquisition, so the emitted label should be {@code ACQUIRE}. This is a label-only resolution:
+     * it never mutates quantity, cost basis, net lane, or AVCO.</p>
+     *
+     * <p>Returns {@code ACQUIRE} only when the effect is still {@code UNKNOWN} (never downgrades a
+     * resolved carry/dispose), the transaction is an {@code EXTERNAL_TRANSFER_IN} with
+     * {@code ExternalCapitalBoundary.INFLOW}, the flow is inbound, and the position is fully
+     * basis-backed after the fallback ({@code uncoveredQuantity} is null/zero). If the fallback
+     * could not price the capital (uncovered remains), the label stays {@code UNKNOWN}.</p>
+     */
+    private AssetLedgerPoint.BasisEffect resolveExternalCapitalInflowAcquisition(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow,
+            PositionState position,
+            AssetLedgerPoint.BasisEffect currentEffect
+    ) {
+        if (currentEffect != AssetLedgerPoint.BasisEffect.UNKNOWN
+                || transaction == null
+                || transaction.getType() != NormalizedTransactionType.EXTERNAL_TRANSFER_IN
+                || transaction.getExternalCapitalBoundary()
+                        != com.walletradar.domain.transaction.normalized.ExternalCapitalBoundary.INFLOW
+                || flow == null
+                || flow.getQuantityDelta() == null
+                || flow.getQuantityDelta().signum() <= 0
+                || position == null) {
+            return currentEffect;
+        }
+        BigDecimal uncovered = position.uncoveredQuantity();
+        if (uncovered != null && uncovered.signum() != 0) {
+            return currentEffect;
+        }
+        return AssetLedgerPoint.BasisEffect.ACQUIRE;
     }
 
     private void accumulateInboundSpotFallbackProvisional(

@@ -117,6 +117,7 @@ public class DefiLlamaClient {
             case KATANA -> "katana";
             case UNICHAIN -> "unichain";
             case ZKSYNC -> "era";
+            case PLASMA -> "plasma";
             default -> null;
         };
         return Optional.ofNullable(slug);

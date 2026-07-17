@@ -1,0 +1,16 @@
+{
+  "key": "pancakeswap-v3",
+  "protocol": "PancakeSwap",
+  "version": "v3",
+  "aliases": ["PancakeSwap", "Pancake", "PancakeSwap V3"],
+  "families": ["DEX", "LP"],
+  "_comment": "contractSets keyed by NETWORK ID (not a semantic role): PancakeSwap MasterChef V3 reward contract per chain, previously hardcoded in PancakeMasterChefEnricher (MASTER_CHEF_BY_NETWORK). Each network maps to exactly one MasterChef V3 address. Source: https://docs.pancakeswap.finance/developers/smart-contracts/pancakeswap-exchange/v3-contracts. Addresses are normalized lowercase (RPC eth_call `to` is case-insensitive).",
+  "contractSets": {
+    "BSC": ["0x556B9306565093C855AEA9AE92A594704c2Cd59e"],
+    "ETHEREUM": ["0xe9c7f3196ab8c09f6616365e8873daeb207c0391"],
+    "ARBITRUM": ["0x5e09acf80c0296740ec5d6f643005a4ef8dcaa75"],
+    "BASE": ["0xC6A2Db661D5a5690172d8eB0a7DEA2d3008665A3"],
+    "ZKSYNC": ["0x825d989F5258B61e8a5E7b1bC2b8fFfBc57b8cC8"],
+    "LINEA": ["0x22E2f236065B780FA33EC8C4E58b99ebc8B55c57"]
+  }
+}

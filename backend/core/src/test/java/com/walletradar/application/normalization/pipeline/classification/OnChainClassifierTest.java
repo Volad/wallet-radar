@@ -310,6 +310,78 @@ class OnChainClassifierTest {
     }
 
     @Test
+    @DisplayName("NEW-14: Rabby gas-payer native top-up becomes sponsored gas in")
+    void rabbyGasPayerNativeTopUpBecomesSponsoredGasIn() {
+        String rabbySender = "0x76dd65529dc6c073c1e0af2a5ecc78434bdbf7d9";
+        RawTransaction rawTransaction = baseRaw(NetworkId.BASE);
+        rawTransaction.setTxHash("0x39dca64e00000000000000000000000000000000000000000000000000000f3d");
+        rawTransaction.getRawData().put("from", rabbySender);
+        rawTransaction.getRawData().put("to", WALLET);
+        rawTransaction.getRawData().put("value", "23691701676293");
+        rawTransaction.getRawData().put("methodId", "0x");
+        rawTransaction.getRawData().put("input", "0x");
+        rawTransaction.getRawData().remove("functionName");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of()).append("internalTransfers", List.of()));
+        when(protocolRegistryService.lookup(NetworkId.BASE, rabbySender))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        rabbySender,
+                        Set.of(NetworkId.BASE),
+                        ProtocolRegistryFamily.AGGREGATOR,
+                        ProtocolRegistryRole.GAS_PAYER,
+                        null,
+                        ConfidenceLevel.HIGH,
+                        "Rabby",
+                        "GasAccount",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.SPONSORED_GAS_IN);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.PROTOCOL_REGISTRY);
+        assertThat(result.protocolName()).isEqualTo("Rabby");
+        assertThat(result.flows())
+                .extracting(NormalizedTransaction.Flow::getRole, NormalizedTransaction.Flow::getAssetSymbol, NormalizedTransaction.Flow::getQuantityDelta)
+                .containsExactly(tuple(NormalizedLegRole.TRANSFER, "ETH", new BigDecimal("0.000023691701676293")));
+    }
+
+    @Test
+    @DisplayName("NEW-14: oversized Rabby native payout stays external transfer in")
+    void oversizedRabbyNativePayoutStaysExternalTransferIn() {
+        String rabbySender = "0x76dd65529dc6c073c1e0af2a5ecc78434bdbf7d9";
+        RawTransaction rawTransaction = baseRaw(NetworkId.BASE);
+        rawTransaction.getRawData().put("from", rabbySender);
+        rawTransaction.getRawData().put("to", WALLET);
+        rawTransaction.getRawData().put("value", "500000000000000000");
+        rawTransaction.getRawData().put("methodId", "0x");
+        rawTransaction.getRawData().put("input", "0x");
+        rawTransaction.getRawData().remove("functionName");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of()).append("internalTransfers", List.of()));
+        when(protocolRegistryService.lookup(NetworkId.BASE, rabbySender))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        rabbySender,
+                        Set.of(NetworkId.BASE),
+                        ProtocolRegistryFamily.AGGREGATOR,
+                        ProtocolRegistryRole.GAS_PAYER,
+                        null,
+                        ConfidenceLevel.HIGH,
+                        "Rabby",
+                        "GasAccount",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.EXTERNAL_TRANSFER_IN);
+        assertThat(result.flows())
+                .extracting(NormalizedTransaction.Flow::getRole)
+                .containsExactly(NormalizedLegRole.BUY);
+    }
+
+    @Test
     @DisplayName("lending deposit keeps principal and receipt flows as transfer")
     void lendingDepositKeepsContinuityRoles() {
         RawTransaction rawTransaction = baseRaw(NetworkId.ETHEREUM);

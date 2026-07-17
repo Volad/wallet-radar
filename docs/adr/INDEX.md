@@ -63,6 +63,9 @@ Architecture Decision Records for WalletRadar. Each ADR captures a single decisi
 | [ADR-055](ADR-055-fh-crypto-loans-source-authority.md) | Funding-History `Crypto Loans` source-authority for BORROW/REPAY | Accepted | 2026-07-13 | Bybit ingestion / extraction authority / loan accounting |
 | [ADR-056](ADR-056-onchain-earn-fund-round-trip-continuity.md) | Bybit On-chain Earn — FUND self-round-trip continuity for non-ETH-family assets | Accepted | 2026-07-14 | Bybit normalization / continuity / AVCO |
 | [ADR-057](ADR-057-euler-evk-internal-debt-token-exclusion.md) | Euler Finance EVK internal debt-token exclusion (BLOCKER-9) | Accepted | 2026-07-14 | Normalization / inventory hygiene |
+| [ADR-058](ADR-058-bybit-bot-compartment-cost-basis.md) | Bybit Trading-Bot per-uid `:BOT` compartment deterministic cost basis (NEW-12 Phase 2 + NEW-12-R per-asset execution cap) | Accepted | 2026-07-16 | Bybit normalization / cost basis / anti-Phase-1 conservation |
+| [ADR-059](ADR-059-counterparty-hints-config-plane.md) | Counterparty-hints config plane for network-agnostic bridge/payout/LP addresses (consolidation Wave W2) | Accepted | 2026-07-16 | Config consolidation / normalization / linking / conservation gate |
+| [ADR-060](ADR-060-asset-family-registry-consolidation.md) | Accounting asset-family registry consolidation — keep pricing vs accounting separate, dedup SYMBOL_FAMILIES onto the C1/C2 registry (consolidation Wave W9) | Accepted | 2026-07-17 | Config consolidation / cost-basis / AVCO family identity |
 
 ## Cycle/5 N19 cluster — implementation plan mapping
 

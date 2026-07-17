@@ -91,6 +91,8 @@ walletradar:
         address-format: EVM
         native-symbol: ETH
         wrapped-native:
+          # Katana WETH (aka vbETH / Vault Bridge ETH) — NOT the default OP-Stack 0x420...006.
+          contract: "0xee7d8bcfb72bc1880d0cf19822eb0a2e6577ab62"
           symbol: WETH
         wallet-supported: true
         evm-wallet-supported: true
@@ -123,6 +125,10 @@ walletradar:
         wrapped-native:
           contract: "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7"
           symbol: WAVAX
+        # Bridged ETH-family tokens whose native is NOT ETH (so they are not wrapped-native).
+        # Used by the portfolio conservation gate's ETH/WETH scam-token allowlist.
+        eth-family-contracts:
+          - "0x49d5c2bdffac6ce2bfdb6640f4f80f226bc10bab"  # WETH.e — Avalanche C-Chain
         wallet-supported: true
         evm-wallet-supported: true
         usd-stable-contracts:
@@ -136,6 +142,10 @@ walletradar:
         wrapped-native:
           contract: "0x78c1b0c915c4faa5fffa6cabf0219da63d7f4cb8"
           symbol: WMNT
+        # Bridged ETH-family tokens whose native is NOT ETH (so they are not wrapped-native).
+        # Used by the portfolio conservation gate's ETH/WETH scam-token allowlist.
+        eth-family-contracts:
+          - "0xdeaddeaddeaddeaddeaddeaddeaddeaddead1111"  # WETH — Mantle (L2 precompile), distinct from WMNT
         wallet-supported: true
         evm-wallet-supported: true
         usd-stable-contracts:
@@ -148,7 +158,7 @@ walletradar:
         native-symbol: XPL
         wrapped-native:
           contract: "0x6100e367285b01f48d07953803a2d8dca5d19873"
-          symbol: WXPL9
+          symbol: WXPL
         wallet-supported: true
         evm-wallet-supported: true
         usd-stable-contracts:

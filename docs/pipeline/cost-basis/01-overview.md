@@ -1,6 +1,6 @@
 # Cost Basis — Overview
 
-> **Last updated:** 2026-07-09  
+> **Last updated:** 2026-07-16  
 > **Pipeline stage:** `ACCOUNTING_REPLAY` (`UserSession.PipelineStage.ACCOUNTING_REPLAY`)
 
 Cost basis is WalletRadar's **average cost (AVCO)** accounting layer. It replays confirmed canonical transactions in deterministic order, materializes immutable ledger points, and persists auxiliary books (counterparty pools, LP receipt pools, borrow liabilities).
@@ -25,7 +25,7 @@ WalletRadar computes cost basis with **AVCO (weighted average cost)** and delibe
 - **Matches the product's purpose.** WalletRadar tracks the *average purchase price* of assets held across many wallets, chains, and venues — a single blended number, not tax-lot disposal accounting.
 - **Path-independent and lot-free.** DeFi activity (swaps, bridges, LP entries/exits, rewards, wraps) rarely carries clean, orderable tax lots across venues. AVCO needs only a running `(quantity, costBasis)` pair, so it survives carries, corridor continuity, and cross-venue transfers where per-lot identity is lost.
 - **Deterministic replay.** A single average numerator per quantity pool makes the chronological replay reproducible and cheap to materialize into `asset_ledger_points`.
-- **Dual-lane friendly.** The Net/Tax AVCO split (ADR-040) and reward zero-cost handling layer cleanly on top of one averaged numerator; per-lot FIFO/LIFO would multiply that bookkeeping.
+- **Dual-lane friendly.** The Net/Market AVCO split (ADR-040; the "Market" lane was formerly "Tax") and reward zero-cost handling layer cleanly on top of one averaged numerator; per-lot FIFO/LIFO would multiply that bookkeeping.
 
 ### Why your numbers may differ from a broker / portfolio tracker
 
@@ -48,6 +48,7 @@ Both are correct for their method; WalletRadar is average-cost by design.
 | [Borrow liability](04-borrow-liability.md) | Crypto-loan tracker |
 | [Replay overview](../replay/01-overview.md) | Job, handlers, ledger |
 | [Ledger points & basis effects](../../reference/ledger-points-and-basis-effects.md) | `AssetLedgerPoint`, `BasisEffect` semantics |
+| [ADR-054](../../adr/ADR-054-per-asset-avco-for-staked-derivatives.md) | Per-asset AVCO pools; staked/derivative ETH (C2) held out of `FAMILY:ETH`; Market/Net lane naming |
 
 ## Stage placement
 
@@ -126,7 +127,7 @@ Replay replaces universe-scoped collections atomically per run.
 | Family timeline | `TimelineAvcoAuthority` | Historical spot chart |
 | Per-point ledger | `AssetLedgerPoint.avcoAfterUsd` | Audit / debugging |
 
-See [ADR-017](../../adr/ADR-017-timeline-avco-authority.md).
+See [ADR-017](../../adr/ADR-017-timeline-avco-authority.md). Per [ADR-054](../../adr/ADR-054-per-asset-avco-for-staked-derivatives.md), staked/derivative ETH (C2 — wstETH, cmETH, …) is **not** rolled into the `FAMILY:ETH` spot chart; each holds its own per-asset AVCO pool.
 
 ## Current holding diagnostics (read-time)
 

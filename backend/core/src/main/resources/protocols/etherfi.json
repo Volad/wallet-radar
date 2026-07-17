@@ -1,0 +1,22 @@
+{
+  "key": "etherfi",
+  "protocol": "EtherFi",
+  "aliases": ["EtherFi", "ether.fi"],
+  "families": ["LIQUID_STAKING", "BRIDGE"],
+  "_comment": "contractSets: weETH LayerZero OFT deployments + canonical minter proxy, previously hardcoded in EtherFiOftBridgeInClassifier. Consumed network-agnostically: an inbound external transfer is reclassified BRIDGE_IN when the token contract is in weethOftTokens AND the sender is in minterProxies. weETH OFT deployments by network: 0x1bf74c=Linea, 0x04c0599=Base+BNB, 0x01f0a316=Scroll, 0x5a7facb9=Optimism, 0xc1fa6e2e=zkSync, 0xa3d68b74=Avalanche+Sonic+HyperEVM+Plasma, 0x7dcc39b4=Berachain+Unichain+Morph, 0xa6cb9889=Swell.",
+  "contractSets": {
+    "weethOftTokens": [
+      "0x1bf74c010e6320bab11e2e5a532b5ac15e0b8aa6",
+      "0x04c0599ae5a44757c0af6f9ec3b93da8976c150a",
+      "0x01f0a31698c4d065659b9bdc21b3610292a1c506",
+      "0x5a7facb970d094b6c7ff1df0ea68d99e6e73cbff",
+      "0xc1fa6e2e8667d9be0ca938a54c7e0285e9df924a",
+      "0xa3d68b74bf0528fdd07263c60d6488749044914b",
+      "0x7dcc39b4d1c53cb31e1abc0e358b43987fef80f7",
+      "0xa6cb988942610f6731e664379d15ffcfbf282b44"
+    ],
+    "minterProxies": [
+      "0xeeeeee9ec4769a09a76a83c7bc42b185872860ee"
+    ]
+  }
+}

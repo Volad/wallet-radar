@@ -2,7 +2,8 @@ package com.walletradar.application.liquiditypools.enrichment;
 
 import com.walletradar.platform.networks.evm.abi.EvmAbiSupport;
 import com.walletradar.application.liquiditypools.persistence.LpPositionSnapshot;
-import lombok.RequiredArgsConstructor;
+import com.walletradar.application.normalization.pipeline.classification.onchain.protocol.ProtocolResourceCatalog;
+import com.walletradar.application.normalization.pipeline.classification.onchain.protocol.ProtocolResourceDefinition;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -26,7 +27,6 @@ import java.util.Map;
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class PancakeMasterChefEnricher implements LpSnapshotEnricher {
 
     /** pendingCake(uint256 tokenId) → uint256 reward */
@@ -35,21 +35,35 @@ public class PancakeMasterChefEnricher implements LpSnapshotEnricher {
 
     private static final int CAKE_DECIMALS = 18;
     private static final String CAKE_SYMBOL = "CAKE";
-
-    /**
-     * PancakeSwap MasterChef V3 contract addresses by network ID.
-     * Source: https://docs.pancakeswap.finance/developers/smart-contracts/pancakeswap-exchange/v3-contracts
-     */
-    private static final Map<String, String> MASTER_CHEF_BY_NETWORK = Map.of(
-            "BSC",      "0x556B9306565093C855AEA9AE92A594704c2Cd59e",
-            "ETHEREUM", "0xe9c7f3196ab8c09f6616365e8873daeb207c0391",
-            "ARBITRUM", "0x5e09acf80c0296740ec5d6f643005a4ef8dcaa75",
-            "BASE",     "0xC6A2Db661D5a5690172d8eB0a7DEA2d3008665A3",
-            "ZKSYNC",   "0x825d989F5258B61e8a5E7b1bC2b8fFfBc57b8cC8",
-            "LINEA",    "0x22E2f236065B780FA33EC8C4E58b99ebc8B55c57"
-    );
+    private static final String PROTOCOL = "PancakeSwap";
+    private static final String PROTOCOL_VERSION = "v3";
 
     private final LpRpcSupport rpc;
+
+    /**
+     * PancakeSwap MasterChef V3 reward contract by uppercase network name, loaded (Wave W8) from
+     * {@code protocols/pancake.json} ({@code contractSets} keyed by network id) instead of hardcoded.
+     */
+    private final Map<String, String> masterChefByNetwork;
+
+    public PancakeMasterChefEnricher(LpRpcSupport rpc, ProtocolResourceCatalog protocolResourceCatalog) {
+        this.rpc = rpc;
+        ProtocolResourceDefinition definition = protocolResourceCatalog.find(PROTOCOL, PROTOCOL_VERSION)
+                .orElseThrow(() -> new IllegalStateException(
+                        "Missing protocols/pancake.json protocol resource for " + PROTOCOL + " " + PROTOCOL_VERSION));
+        Map<String, String> byNetwork = new LinkedHashMap<>();
+        definition.contractSets().forEach((network, addresses) -> {
+            if (network != null && addresses != null && !addresses.isEmpty()) {
+                byNetwork.put(network.toUpperCase(Locale.ROOT), addresses.getFirst());
+            }
+        });
+        if (byNetwork.isEmpty()) {
+            throw new IllegalStateException(
+                    "protocols/pancake.json must define a non-empty contractSets map (network -> MasterChef V3 address)");
+        }
+        this.masterChefByNetwork = Map.copyOf(byNetwork);
+        log.info("Loaded PancakeSwap MasterChef V3 registry: {} networks", masterChefByNetwork.size());
+    }
 
     @Override
     public boolean supports(LpPositionContext context) {
@@ -102,7 +116,7 @@ public class PancakeMasterChefEnricher implements LpSnapshotEnricher {
         return context.networkId() != null ? context.networkId().name() : "";
     }
 
-    private static String masterChefAddress(LpPositionContext context) {
-        return MASTER_CHEF_BY_NETWORK.get(networkName(context));
+    private String masterChefAddress(LpPositionContext context) {
+        return masterChefByNetwork.get(networkName(context));
     }
 }

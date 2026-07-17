@@ -14,21 +14,23 @@ import java.util.Locale;
  */
 public final class LpPositionCorrelationSupport {
 
-    private static final String MINT_SELECTOR = "0x88316456";
-    private static final String STRUCT_MINT_SELECTOR = "0xb5007d1f";
-    private static final String INCREASE_LIQUIDITY_SELECTOR = "0x4f1eb3d8";
-    private static final String MASTER_CHEF_INCREASE_LIQUIDITY_SELECTOR = "0x219f5d17";
-    private static final String DECREASE_LIQUIDITY_SELECTOR = "0x0c49ccbe";
-    private static final String COLLECT_SELECTOR = "0xfc6f7865";
-    private static final String BURN_SELECTOR = "0x00f714ce";
-    private static final String MULTICALL_SELECTOR = "0xac9650d8";
-    private static final String MODIFY_LIQUIDITIES_SELECTOR = "0xdd46508f";
-    private static final String SAFE_TRANSFER_FROM_SELECTOR = "0x42842e0e";
-    private static final String SAFE_TRANSFER_FROM_WITH_DATA_SELECTOR = "0xb88d4fde";
+    // Cross-protocol position-manager ABI vocabulary — single source of truth in
+    // LpPositionManagerAbi (classpath:lp-position-manager-abi.json), shared with
+    // LpPositionLifecycleSupport so the coupled classify/correlate selector sets cannot drift.
+    private static final String MINT_SELECTOR = LpPositionManagerAbi.MINT_SELECTOR;
+    private static final String STRUCT_MINT_SELECTOR = LpPositionManagerAbi.STRUCT_MINT_SELECTOR;
+    private static final String INCREASE_LIQUIDITY_SELECTOR = LpPositionManagerAbi.INCREASE_LIQUIDITY_SELECTOR;
+    private static final String MASTER_CHEF_INCREASE_LIQUIDITY_SELECTOR = LpPositionManagerAbi.MASTER_CHEF_INCREASE_LIQUIDITY_SELECTOR;
+    private static final String DECREASE_LIQUIDITY_SELECTOR = LpPositionManagerAbi.DECREASE_LIQUIDITY_SELECTOR;
+    private static final String COLLECT_SELECTOR = LpPositionManagerAbi.COLLECT_SELECTOR;
+    private static final String BURN_SELECTOR = LpPositionManagerAbi.BURN_SELECTOR;
+    private static final String MULTICALL_SELECTOR = LpPositionManagerAbi.MULTICALL_SELECTOR;
+    private static final String MODIFY_LIQUIDITIES_SELECTOR = LpPositionManagerAbi.MODIFY_LIQUIDITIES_SELECTOR;
+    private static final String SAFE_TRANSFER_FROM_SELECTOR = LpPositionManagerAbi.SAFE_TRANSFER_FROM_SELECTOR;
+    private static final String SAFE_TRANSFER_FROM_WITH_DATA_SELECTOR = LpPositionManagerAbi.SAFE_TRANSFER_FROM_WITH_DATA_SELECTOR;
     /** Angle vault on Katana: wraps an NFPM behind a single-asset entry route. */
-    private static final String ROUTE_SINGLE_VAULT_SELECTOR = "0xb94c3609";
-    private static final String ERC721_TRANSFER_TOPIC =
-            "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+    private static final String ROUTE_SINGLE_VAULT_SELECTOR = LpPositionManagerAbi.ROUTE_SINGLE_VAULT_SELECTOR;
+    private static final String ERC721_TRANSFER_TOPIC = LpPositionManagerAbi.ERC721_TRANSFER_TOPIC;
     private static final int ACTION_INCREASE_LIQUIDITY = 0x00;
     private static final int ACTION_DECREASE_LIQUIDITY = 0x01;
     private static final int ACTION_MINT_POSITION = 0x02;
@@ -377,18 +379,22 @@ public final class LpPositionCorrelationSupport {
         if (selector == null || inputData == null || inputData.isBlank()) {
             return null;
         }
-        return switch (selector) {
-            case INCREASE_LIQUIDITY_SELECTOR,
-                    MASTER_CHEF_INCREASE_LIQUIDITY_SELECTOR,
-                    DECREASE_LIQUIDITY_SELECTOR,
-                    COLLECT_SELECTOR,
-                    BURN_SELECTOR -> CalldataDecodingSupport.decodeUint256Argument(inputData, 0);
-            case MODIFY_LIQUIDITIES_SELECTOR -> decodeModifyLiquiditiesTokenId(inputData);
-            // safeTransferFrom(address from, address to, uint256 tokenId) — tokenId is arg[2]
-            case SAFE_TRANSFER_FROM_SELECTOR,
-                    SAFE_TRANSFER_FROM_WITH_DATA_SELECTOR -> CalldataDecodingSupport.decodeUint256Argument(inputData, 2);
-            default -> null;
-        };
+        if (INCREASE_LIQUIDITY_SELECTOR.equals(selector)
+                || MASTER_CHEF_INCREASE_LIQUIDITY_SELECTOR.equals(selector)
+                || DECREASE_LIQUIDITY_SELECTOR.equals(selector)
+                || COLLECT_SELECTOR.equals(selector)
+                || BURN_SELECTOR.equals(selector)) {
+            return CalldataDecodingSupport.decodeUint256Argument(inputData, 0);
+        }
+        if (MODIFY_LIQUIDITIES_SELECTOR.equals(selector)) {
+            return decodeModifyLiquiditiesTokenId(inputData);
+        }
+        // safeTransferFrom(address from, address to, uint256 tokenId) — tokenId is arg[2]
+        if (SAFE_TRANSFER_FROM_SELECTOR.equals(selector)
+                || SAFE_TRANSFER_FROM_WITH_DATA_SELECTOR.equals(selector)) {
+            return CalldataDecodingSupport.decodeUint256Argument(inputData, 2);
+        }
+        return null;
     }
 
     private static BigInteger decodeMulticallTokenId(String inputData) {

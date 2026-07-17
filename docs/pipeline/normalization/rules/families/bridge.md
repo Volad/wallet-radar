@@ -93,6 +93,19 @@ families.
   deterministic bridge pairs when clarification proves one unique same-wallet
   Relay payout destination from current canonical evidence plus verified
   registry-backed `Relay` top-level payout sender proof
+- routed `LI.FI / Jumper` destinations may also be proven by a registry-backed
+  LiFi `GAS_PAYER` relayer as the settlement sender, and may pair **cross-asset**
+  routes (e.g. `USDC -> ETH`) by USD-value proximity rather than same-symbol
+  match (NEW-08); such asset-changing pairs keep `continuityCandidate = false`
+  and settle via the asset-changing REALLOCATE path
+- cross-asset orphan `BRIDGE_IN`/`BRIDGE_OUT` legs (same wallet, cross-network,
+  differing asset) may be paired by `CrossNetworkBridgePairFallbackService`
+  within a tight time window plus USD-value proximity (NEW-08), never by
+  timestamp proximity alone
+- registry-backed `Relay` `GAS_PAYER` / solver payouts classify as `BRIDGE_IN`,
+  including the ARBITRUM Relay `GAS_PAYER` `0x1619de6b…` and the ZKSYNC Relay
+  solver `0x91604f59…`, covering the same-asset ZKSYNC -> ARBITRUM ETH inbound
+  (NEW-11)
 - post-clarification same-wallet `Across` source/destination pairs may receive
   deterministic `correlationId` and `matchedCounterparty` when bridge
   continuity is uniquely provable from current canonical rows

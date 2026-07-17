@@ -32,10 +32,8 @@ import java.util.List;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -50,19 +48,6 @@ public class BybitCanonicalTransactionBuilder {
     private final BybitCanonicalMappedRowSupport mappedRowSupport;
 
     private static final Logger LOGGER = LoggerFactory.getLogger(BybitCanonicalTransactionBuilder.class);
-
-    private static final Set<String> STABLECOIN_SYMBOLS = Set.of(
-            "USDT",
-            "USDC",
-            "USDE",
-            "USDS",
-            "USDD",
-            "DAI",
-            "FDUSD",
-            "PYUSD",
-            "TUSD",
-            "USD1"
-    );
 
     private static final Pattern SELF_TRANSFER_PATTERN =
             Pattern.compile("selfTransfer_([0-9a-fA-F-]{36})");

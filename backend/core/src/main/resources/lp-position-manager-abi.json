@@ -1,0 +1,24 @@
+{
+  "_comment": "Cross-protocol concentrated-liquidity / staking position-manager ABI vocabulary. These are de-facto ABI standards (Uniswap V3 NonfungiblePositionManager + V4 PositionManager, reused verbatim by PancakeSwap V3, SushiSwap V3, Angle, Aura, MasterChef forks) and ERC-721 transfer topics. Shared single source of truth for LpPositionLifecycleSupport + LpPositionCorrelationSupport so the coupled classify/correlate selector sets can never drift apart (a drift would split an LP entry/exit correlation and corrupt AVCO).",
+  "methodSelectors": {
+    "mint": "0x88316456",
+    "structMint": "0xb5007d1f",
+    "increaseLiquidity": "0x4f1eb3d8",
+    "masterChefIncreaseLiquidity": "0x219f5d17",
+    "decreaseLiquidity": "0x0c49ccbe",
+    "collect": "0xfc6f7865",
+    "burn": "0x00f714ce",
+    "multicall": "0xac9650d8",
+    "modifyLiquidities": "0xdd46508f",
+    "stakeDeposit": "0xb6b55f25",
+    "stakeWithdraw": "0x2e1a7d4d",
+    "auraWithdrawAndUnwrap": "0xc32e7202",
+    "safeTransferFrom": "0x42842e0e",
+    "safeTransferFromWithData": "0xb88d4fde",
+    "routeSingleVault": "0xb94c3609"
+  },
+  "eventTopics": {
+    "erc721Transfer": "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+    "modifyLiquidity": "0xf208f4912782fd25c7f114ca3723a2d5dd6f3bcc3ac8db5af63baa85f711d5ec"
+  }
+}

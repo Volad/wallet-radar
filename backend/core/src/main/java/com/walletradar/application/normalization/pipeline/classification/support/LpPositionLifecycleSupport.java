@@ -16,25 +16,26 @@ import java.util.Optional;
  */
 public final class LpPositionLifecycleSupport {
 
-    private static final String MINT_SELECTOR = "0x88316456";
-    private static final String STRUCT_MINT_SELECTOR = "0xb5007d1f";
-    private static final String INCREASE_LIQUIDITY_SELECTOR = "0x4f1eb3d8";
-    private static final String MASTER_CHEF_INCREASE_LIQUIDITY_SELECTOR = "0x219f5d17";
-    private static final String DECREASE_LIQUIDITY_SELECTOR = "0x0c49ccbe";
-    private static final String COLLECT_SELECTOR = "0xfc6f7865";
-    private static final String BURN_SELECTOR = "0x00f714ce";
-    private static final String MULTICALL_SELECTOR = "0xac9650d8";
-    private static final String MODIFY_LIQUIDITIES_SELECTOR = "0xdd46508f";
-    private static final String STAKE_DEPOSIT_SELECTOR = "0xb6b55f25";
-    private static final String STAKE_WITHDRAW_SELECTOR = "0x2e1a7d4d";
+    // Cross-protocol position-manager ABI vocabulary — single source of truth in
+    // LpPositionManagerAbi (classpath:lp-position-manager-abi.json), shared with
+    // LpPositionCorrelationSupport so the coupled classify/correlate selector sets cannot drift.
+    private static final String MINT_SELECTOR = LpPositionManagerAbi.MINT_SELECTOR;
+    private static final String STRUCT_MINT_SELECTOR = LpPositionManagerAbi.STRUCT_MINT_SELECTOR;
+    private static final String INCREASE_LIQUIDITY_SELECTOR = LpPositionManagerAbi.INCREASE_LIQUIDITY_SELECTOR;
+    private static final String MASTER_CHEF_INCREASE_LIQUIDITY_SELECTOR = LpPositionManagerAbi.MASTER_CHEF_INCREASE_LIQUIDITY_SELECTOR;
+    private static final String DECREASE_LIQUIDITY_SELECTOR = LpPositionManagerAbi.DECREASE_LIQUIDITY_SELECTOR;
+    private static final String COLLECT_SELECTOR = LpPositionManagerAbi.COLLECT_SELECTOR;
+    private static final String BURN_SELECTOR = LpPositionManagerAbi.BURN_SELECTOR;
+    private static final String MULTICALL_SELECTOR = LpPositionManagerAbi.MULTICALL_SELECTOR;
+    private static final String MODIFY_LIQUIDITIES_SELECTOR = LpPositionManagerAbi.MODIFY_LIQUIDITIES_SELECTOR;
+    private static final String STAKE_DEPOSIT_SELECTOR = LpPositionManagerAbi.STAKE_DEPOSIT_SELECTOR;
+    private static final String STAKE_WITHDRAW_SELECTOR = LpPositionManagerAbi.STAKE_WITHDRAW_SELECTOR;
     /** Aura Finance BaseRewardPool {@code withdrawAndUnwrap(uint256 amount, bool claim)} */
-    private static final String AURA_WITHDRAW_AND_UNWRAP_SELECTOR = "0xc32e7202";
-    private static final String SAFE_TRANSFER_FROM_SELECTOR = "0x42842e0e";
-    private static final String SAFE_TRANSFER_FROM_WITH_DATA_SELECTOR = "0xb88d4fde";
-    private static final String ERC721_TRANSFER_TOPIC =
-            "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
-    private static final String MODIFY_LIQUIDITY_TOPIC =
-            "0xf208f4912782fd25c7f114ca3723a2d5dd6f3bcc3ac8db5af63baa85f711d5ec";
+    private static final String AURA_WITHDRAW_AND_UNWRAP_SELECTOR = LpPositionManagerAbi.AURA_WITHDRAW_AND_UNWRAP_SELECTOR;
+    private static final String SAFE_TRANSFER_FROM_SELECTOR = LpPositionManagerAbi.SAFE_TRANSFER_FROM_SELECTOR;
+    private static final String SAFE_TRANSFER_FROM_WITH_DATA_SELECTOR = LpPositionManagerAbi.SAFE_TRANSFER_FROM_WITH_DATA_SELECTOR;
+    private static final String ERC721_TRANSFER_TOPIC = LpPositionManagerAbi.ERC721_TRANSFER_TOPIC;
+    private static final String MODIFY_LIQUIDITY_TOPIC = LpPositionManagerAbi.MODIFY_LIQUIDITY_TOPIC;
 
     private LpPositionLifecycleSupport() {
     }
@@ -45,52 +46,69 @@ public final class LpPositionLifecycleSupport {
             Optional<ProtocolRegistryEntry> decodedFromEntry,
             Optional<ProtocolRegistryEntry> decodedToEntry
     ) {
-        return switch (String.valueOf(view.methodId())) {
-            case MINT_SELECTOR, STRUCT_MINT_SELECTOR, INCREASE_LIQUIDITY_SELECTOR, MASTER_CHEF_INCREASE_LIQUIDITY_SELECTOR ->
-                    hasOutboundNonFeeLeg(movementLegs) || hasPositionNftMintLog(view)
-                            ? NormalizedTransactionType.LP_ENTRY
-                            : null;
-            case DECREASE_LIQUIDITY_SELECTOR -> hasInboundNonFeeLeg(movementLegs)
+        String methodId = String.valueOf(view.methodId());
+        if (MINT_SELECTOR.equals(methodId)
+                || STRUCT_MINT_SELECTOR.equals(methodId)
+                || INCREASE_LIQUIDITY_SELECTOR.equals(methodId)
+                || MASTER_CHEF_INCREASE_LIQUIDITY_SELECTOR.equals(methodId)) {
+            return hasOutboundNonFeeLeg(movementLegs) || hasPositionNftMintLog(view)
+                    ? NormalizedTransactionType.LP_ENTRY
+                    : null;
+        }
+        if (DECREASE_LIQUIDITY_SELECTOR.equals(methodId)) {
+            return hasInboundNonFeeLeg(movementLegs)
                     ? NormalizedTransactionType.LP_EXIT
                     : NormalizedTransactionType.LP_FEE_CLAIM;
-            case COLLECT_SELECTOR -> hasInboundNonFeeLeg(movementLegs)
+        }
+        if (COLLECT_SELECTOR.equals(methodId)) {
+            return hasInboundNonFeeLeg(movementLegs)
                     ? NormalizedTransactionType.LP_FEE_CLAIM
                     : null;
-            case BURN_SELECTOR -> hasInboundNonFeeLeg(movementLegs)
+        }
+        if (BURN_SELECTOR.equals(methodId)) {
+            return hasInboundNonFeeLeg(movementLegs)
                     ? NormalizedTransactionType.LP_EXIT
                     : null;
-            case MODIFY_LIQUIDITIES_SELECTOR -> resolveModifyLiquiditiesType(view, movementLegs);
-            case SAFE_TRANSFER_FROM_SELECTOR, SAFE_TRANSFER_FROM_WITH_DATA_SELECTOR ->
-                    resolveSafeTransferType(decodedFromEntry, decodedToEntry).orElse(null);
-            default -> null;
-        };
+        }
+        if (MODIFY_LIQUIDITIES_SELECTOR.equals(methodId)) {
+            return resolveModifyLiquiditiesType(view, movementLegs);
+        }
+        if (SAFE_TRANSFER_FROM_SELECTOR.equals(methodId)
+                || SAFE_TRANSFER_FROM_WITH_DATA_SELECTOR.equals(methodId)) {
+            return resolveSafeTransferType(decodedFromEntry, decodedToEntry).orElse(null);
+        }
+        return null;
     }
 
     public static NormalizedTransactionType resolveDexStakeContractType(
             OnChainRawTransactionView view,
             List<RawLeg> movementLegs
     ) {
-        NormalizedTransactionType selectorType = switch (String.valueOf(view.methodId())) {
-            case STAKE_DEPOSIT_SELECTOR -> NormalizedTransactionType.LP_POSITION_STAKE;
-            case STAKE_WITHDRAW_SELECTOR -> NormalizedTransactionType.LP_POSITION_UNSTAKE;
+        String methodId = String.valueOf(view.methodId());
+        NormalizedTransactionType selectorType = null;
+        if (STAKE_DEPOSIT_SELECTOR.equals(methodId)) {
+            selectorType = NormalizedTransactionType.LP_POSITION_STAKE;
+        } else if (STAKE_WITHDRAW_SELECTOR.equals(methodId)) {
+            selectorType = NormalizedTransactionType.LP_POSITION_UNSTAKE;
+        } else if (AURA_WITHDRAW_AND_UNWRAP_SELECTOR.equals(methodId)) {
             // Aura Finance BaseRewardPool withdrawAndUnwrap(uint256, bool): BPT returned + optional reward claim
-            case AURA_WITHDRAW_AND_UNWRAP_SELECTOR -> NormalizedTransactionType.LP_POSITION_UNSTAKE;
-            case MASTER_CHEF_INCREASE_LIQUIDITY_SELECTOR -> hasNonFeeMovement(movementLegs)
+            selectorType = NormalizedTransactionType.LP_POSITION_UNSTAKE;
+        } else if (MASTER_CHEF_INCREASE_LIQUIDITY_SELECTOR.equals(methodId)) {
+            selectorType = hasNonFeeMovement(movementLegs)
                     ? NormalizedTransactionType.LP_ENTRY
                     : null;
-            case BURN_SELECTOR -> CalldataDecodingSupport.decodeAddressArgument(view.inputData(), 1) == null
+        } else if (BURN_SELECTOR.equals(methodId)) {
+            selectorType = CalldataDecodingSupport.decodeAddressArgument(view.inputData(), 1) == null
                     ? null
                     : hasNonFeeMovement(movementLegs)
                     ? NormalizedTransactionType.LP_EXIT
                     : NormalizedTransactionType.LP_POSITION_UNSTAKE;
-            default -> null;
-        };
+        }
         if (selectorType != null) {
             return selectorType;
         }
         // Fallback: use net movement direction for DEX stake contracts with unknown selectors.
         // Excluded: multicall (handled by resolveDexStakeContractMulticallType) and SAFE_TRANSFER_FROM.
-        String methodId = String.valueOf(view.methodId());
         if (MULTICALL_SELECTOR.equals(methodId)
                 || SAFE_TRANSFER_FROM_SELECTOR.equals(methodId)
                 || SAFE_TRANSFER_FROM_WITH_DATA_SELECTOR.equals(methodId)) {
@@ -300,18 +318,44 @@ public final class LpPositionLifecycleSupport {
     public static boolean hasPositionNftMintLog(OnChainRawTransactionView view) {
         String positionManager = OnChainRawTransactionView.normalizeAddress(view.toAddress());
         String wallet = OnChainRawTransactionView.normalizeAddress(view.walletAddress());
-        if (positionManager == null || wallet == null) {
+        if (wallet == null) {
             return false;
         }
-        for (Document log : view.persistedLogs()) {
-            if (!positionManager.equals(OnChainRawTransactionView.normalizeAddress(stringValue(log.get("address"))))) {
-                continue;
+        // Primary check: ERC-721 mint emitted by the contract called directly (positionManager).
+        // This is the standard pattern for direct NonfungiblePositionManager calls (Uniswap V3,
+        // PancakeSwap V3). Only 3 topics are required here because the contract filter is already
+        // a strong guard against ERC-20 Transfer collisions.
+        if (positionManager != null) {
+            for (Document log : view.persistedLogs()) {
+                if (!positionManager.equals(OnChainRawTransactionView.normalizeAddress(stringValue(log.get("address"))))) {
+                    continue;
+                }
+                if (!ERC721_TRANSFER_TOPIC.equals(firstTopic(log))) {
+                    continue;
+                }
+                List<String> topics = normalizedTopics(log);
+                if (topics.size() < 3) {
+                    continue;
+                }
+                if (!zeroAddressTopic(topics.get(1))) {
+                    continue;
+                }
+                if (wallet.equals(topicAddress(topics.get(2)))) {
+                    return true;
+                }
             }
+        }
+        // Fallback: ERC-721 mint from ANY contract in the receipt.
+        // Covers router → position-manager call chains (e.g. Katana/SushiSwap on Katana chain)
+        // where the NonfungiblePositionManager is an indirect callee that emits the ERC-721 Transfer
+        // but is NOT view.toAddress(). ERC-721 Transfers have 4 indexed topics (event, from, to, tokenId);
+        // requiring 4 topics distinguishes them from ERC-20 Transfer logs (3 topics).
+        for (Document log : view.persistedLogs()) {
             if (!ERC721_TRANSFER_TOPIC.equals(firstTopic(log))) {
                 continue;
             }
             List<String> topics = normalizedTopics(log);
-            if (topics.size() < 3) {
+            if (topics.size() < 4) {
                 continue;
             }
             if (!zeroAddressTopic(topics.get(1))) {

@@ -67,6 +67,7 @@ class WalletRefTest {
             "BYBIT:123456:FUND,       bybit, 123456, FUND,  BYBIT:123456:FUND",
             "BYBIT:123456:UTA,        bybit, 123456, UTA,   BYBIT:123456:UTA",
             "BYBIT:123456:EARN,       bybit, 123456, EARN,  BYBIT:123456:EARN",
+            "BYBIT:123456:BOT,        bybit, 123456, BOT,   BYBIT:123456:BOT",
             "DZENGI:abc_def,          dzengi, abc_def, '',  DZENGI:abc_def",
     })
     void cexParsing(String input, String venueId, String uid, String subAccount, String canonical) {
@@ -82,6 +83,16 @@ class WalletRefTest {
     void cex_umbrellaKey_stripsSubaccount() {
         WalletRef ref = WalletRef.parse("BYBIT:123456:FUND");
         assertThat(ref.umbrellaKey()).isEqualTo("BYBIT:123456");
+    }
+
+    @Test
+    void walletRef_bot_collapsesToUmbrella() {
+        // ADR-058 A7: the :BOT Trading-Bot compartment collapses to the BYBIT:<uid> umbrella,
+        // exactly like :FUND/:UTA/:EARN — no new replay position key.
+        WalletRef ref = WalletRef.parse("BYBIT:516601508:BOT");
+        assertThat(ref.domain()).isEqualTo(WalletDomainKind.CEX);
+        assertThat(ref.subAccount()).isEqualTo("BOT");
+        assertThat(ref.umbrellaKey()).isEqualTo("BYBIT:516601508");
     }
 
     @Test

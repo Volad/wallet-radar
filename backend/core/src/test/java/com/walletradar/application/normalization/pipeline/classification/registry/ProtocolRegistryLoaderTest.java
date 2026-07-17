@@ -138,6 +138,10 @@ class ProtocolRegistryLoaderTest {
                 .containsKey(new ProtocolRegistryLoader.RegistryKey(
                         NetworkId.KATANA,
                         "0x3067bdba0e6628497d527bef511c22da8b32ca3f"
+                ))
+                .containsKey(new ProtocolRegistryLoader.RegistryKey(
+                        NetworkId.UNICHAIN,
+                        "0x1bcd304fdad1d1d66529159b1bc8d13c9158d586"
                 ));
         assertThat(loaded.entriesByKey().get(new ProtocolRegistryLoader.RegistryKey(
                 NetworkId.ARBITRUM,
@@ -156,6 +160,49 @@ class ProtocolRegistryLoaderTest {
                 "0x3067bdba0e6628497d527bef511c22da8b32ca3f"
         )).role()).isEqualTo(com.walletradar.application.normalization.pipeline.classification.registry.ProtocolRegistryRole.POSITION_MANAGER);
         assertThat(loaded.methodDescriptions()).containsKey("0x0ad58d2f");
+        // NEW-08: UNICHAIN LI.FI Permit2Proxy diamond enables source BRIDGE_OUT classification.
+        ProtocolRegistryEntry unichainLiFiDiamond = loaded.entriesByKey().get(
+                new ProtocolRegistryLoader.RegistryKey(
+                        NetworkId.UNICHAIN,
+                        "0x1bcd304fdad1d1d66529159b1bc8d13c9158d586"
+                ));
+        assertThat(unichainLiFiDiamond).isNotNull();
+        assertThat(unichainLiFiDiamond.family()).isEqualTo(ProtocolRegistryFamily.BRIDGE);
+        assertThat(unichainLiFiDiamond.role()).isEqualTo(ProtocolRegistryRole.BRIDGE_ENTRY);
+        assertThat(unichainLiFiDiamond.protocolName()).isEqualTo("LI.FI");
+
+        // NEW-11: ARBITRUM relay() settlement receiver registered as a Relay GAS_PAYER.
+        ProtocolRegistryEntry relayArbReceiver = loaded.entriesByKey().get(
+                new ProtocolRegistryLoader.RegistryKey(
+                        NetworkId.ARBITRUM,
+                        "0x1619de6b6b20ed217a58d00f37b9d47c7663feca"
+                ));
+        assertThat(relayArbReceiver).isNotNull();
+        assertThat(relayArbReceiver.family()).isEqualTo(ProtocolRegistryFamily.AGGREGATOR);
+        assertThat(relayArbReceiver.role()).isEqualTo(ProtocolRegistryRole.GAS_PAYER);
+        assertThat(relayArbReceiver.protocolName()).isEqualTo("Relay");
+
+        // NEW-11: ZKSYNC coverage added to the Relay solver that delivered ZKSYNC dust.
+        ProtocolRegistryEntry relayZkSyncSolver = loaded.entriesByKey().get(
+                new ProtocolRegistryLoader.RegistryKey(
+                        NetworkId.ZKSYNC,
+                        "0x91604f590d66ace8975eed6bd16cf55647d1c499"
+                ));
+        assertThat(relayZkSyncSolver).isNotNull();
+        assertThat(relayZkSyncSolver.role()).isEqualTo(ProtocolRegistryRole.GAS_PAYER);
+        assertThat(relayZkSyncSolver.protocolName()).isEqualTo("Relay");
+
+        // NEW-14: Rabby "Gas Fee Payer" EOA registered as a GAS_PAYER so plain native top-ups
+        // classify as SPONSORED_GAS_IN/GAS_ONLY (basis-neutral) instead of a market ACQUIRE.
+        ProtocolRegistryEntry rabbyGasPayer = loaded.entriesByKey().get(
+                new ProtocolRegistryLoader.RegistryKey(
+                        NetworkId.BASE,
+                        "0x76dd65529dc6c073c1e0af2a5ecc78434bdbf7d9"
+                ));
+        assertThat(rabbyGasPayer).isNotNull();
+        assertThat(rabbyGasPayer.family()).isEqualTo(ProtocolRegistryFamily.AGGREGATOR);
+        assertThat(rabbyGasPayer.role()).isEqualTo(ProtocolRegistryRole.GAS_PAYER);
+        assertThat(rabbyGasPayer.protocolName()).isEqualTo("Rabby");
     }
 
     @Test

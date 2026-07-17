@@ -20,9 +20,13 @@ rows that are not custody continuity events.
 ## Runtime Ownership
 
 - Bybit normalization:
-  [BybitNormalizationService.java](/Users/vladislavkondratenko/projects/wallet-radar/backend/src/main/java/com/walletradar/ingestion/job/bybit/BybitNormalizationService.java)
+  [BybitNormalizationService.java](../../../../../backend/core/src/main/java/com/walletradar/application/cex/job/bybit/BybitNormalizationService.java)
 - Bybit canonical builder:
-  [BybitCanonicalTransactionBuilder.java](/Users/vladislavkondratenko/projects/wallet-radar/backend/src/main/java/com/walletradar/ingestion/pipeline/bybit/BybitCanonicalTransactionBuilder.java)
+  [BybitCanonicalTransactionBuilder.java](../../../../../backend/core/src/main/java/com/walletradar/application/cex/normalization/venue/bybit/BybitCanonicalTransactionBuilder.java)
+- Trading-bot compartment basis:
+  [BybitBotTransferCostBasisService.java](../../../../../backend/core/src/main/java/com/walletradar/application/cex/normalization/venue/bybit/BybitBotTransferCostBasisService.java)
+- Trading-bot execution tagging:
+  [BybitBotExecutionAttributionService.java](../../../../../backend/core/src/main/java/com/walletradar/application/cex/normalization/venue/bybit/BybitBotExecutionAttributionService.java)
 
 ## Authoritative Evidence
 
@@ -115,6 +119,44 @@ rows that are not custody continuity events.
   - `CMETH -0.66931648 / CURRENCY_SELL`
   - `ETH +0.70215876 / CURRENCY_BUY`
   must normalize as one canonical `SWAP`.
+
+### Trading Bot compartment (ADR-058)
+
+Bybit Trading Bots move stablecoins (typically USDT) from the user's FUND/UTA wallet into a managed
+bot compartment, trade them into one or more crypto assets, and later return the crypto (plus
+stablecoin dust). The FUND-side moves surface as single-legged `FUNDING_HISTORY` rows
+(`bybitType = "Bot"`, description `"Transfer to/from Trading Bot"`), tagged with the `BOT_TRANSFER`
+marker.
+
+- **Compartment identity:** the bot is materialised only as the `accountRef`/`walletRef` suffix
+  `BYBIT:<uid>:BOT`, which collapses to the `BYBIT:<uid>` umbrella exactly like `:FUND`/`:UTA`/`:EARN`.
+  It adds audit visibility, not a new replay position or conservation surface.
+- **Anti-Phase-1 invariant:** `BOT_TRANSFER` rows keep `correlationId = null`,
+  `continuityCandidate = false`, and stay `EXTERNAL_TRANSFER_IN`/`EXTERNAL_TRANSFER_OUT` on the
+  standalone path. They **never** enqueue a `CARRY_OUT` on a guarded continuity queue, so
+  `CorridorBasisConservationGuard` cannot fire on them. No bot leg may ever be made a continuity
+  candidate or given a correlation id.
+- **Basis resolved at normalization time** by `BybitBotTransferCostBasisService`, before replay
+  (preventing double-counting between the execution `SWAP` legs and the transfer legs):
+  - **Total session basis** = net stablecoin actually consumed
+    (`netConsumed = Σ(to-bot stable) − Σ(from-bot stable dust)`). No fair-market value is introduced.
+  - **Per-asset basis** = `returnedQty × own avgExecPrice`, where `avgExecPrice = Σ execValue / Σ execQty`
+    over that asset's `EXECUTION_SPOT` BUY fills **inside the session window**. Each asset is valued at
+    its own execution cost, never a sibling's.
+  - **Capped down only:** if `Σ assetBasis > netConsumed`, all priced assets scale down by
+    `netConsumed / Σ assetBasis`. If `Σ assetBasis < netConsumed`, the shortfall is retained as an
+    unallocated compartment residual and is **never** pushed onto a priced asset — an asset's per-unit
+    basis can only be scaled down, never up (the **NEW-12-R** fix: no cross-asset cost dumping).
+  - **Unpriced returns → bounded `EVIDENCE_MISSING`** (undefined AVCO per [ADR-031](../../../../adr/ADR-031-avco-undefined-representation.md)),
+    never FMV and never sibling-funded; the asset's share of `netConsumed` stays unallocated.
+  - **Single-asset degenerate case** with execution coverage = legacy `BOT_LEDGER` net/qty
+    (`netConsumed / returnedQty`), bit-identical to the prior path.
+  - Resolved returns are `CONFIRMED` with `PriceSource = BOT_LEDGER`; stablecoin dust keeps the
+    `STABLECOIN` $1 peg.
+- **Observability-only tagging:** `BybitBotExecutionAttributionService` stamps the `:BOT` compartment
+  on the in-window `EXECUTION_SPOT` fills for audit visibility; it does not alter basis or replay.
+
+See [ADR-058](../../../../adr/ADR-058-bybit-bot-compartment-cost-basis.md).
 
 ### Matched continuity
 

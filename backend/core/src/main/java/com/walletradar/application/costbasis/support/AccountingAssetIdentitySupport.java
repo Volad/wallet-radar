@@ -2,6 +2,7 @@ package com.walletradar.application.costbasis.support;
 
 import com.walletradar.canonical.correlation.CorrelationContract;
 import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.common.NetworkNativeAssets;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
@@ -10,8 +11,6 @@ import com.walletradar.domain.wallet.WalletDomainKind;
 import com.walletradar.domain.wallet.WalletRef;
 
 import java.util.Locale;
-import java.util.Map;
-import java.util.Set;
 
 /**
  * Replay/materialization identity contract separate from immutable audit evidence.
@@ -23,44 +22,6 @@ public final class AccountingAssetIdentitySupport {
     private static final String BYBIT_CORRIDOR_CORRELATION_PREFIX = CorrelationContract.BYBIT_CORRIDOR_PREFIX;
     private static final String BYBIT_COLLAPSED_CORRELATION_PREFIX = CorrelationContract.BYBIT_COLLAPSED_V1_PREFIX;
     private static final String ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
-
-    private static final Map<NetworkId, String> NATIVE_SYMBOLS = Map.ofEntries(
-            Map.entry(NetworkId.ETHEREUM, "ETH"),
-            Map.entry(NetworkId.ARBITRUM, "ETH"),
-            Map.entry(NetworkId.OPTIMISM, "ETH"),
-            Map.entry(NetworkId.BASE, "ETH"),
-            Map.entry(NetworkId.UNICHAIN, "ETH"),
-            Map.entry(NetworkId.ZKSYNC, "ETH"),
-            Map.entry(NetworkId.LINEA, "ETH"),
-            Map.entry(NetworkId.KATANA, "ETH"),
-            Map.entry(NetworkId.BSC, "BNB"),
-            Map.entry(NetworkId.POLYGON, "MATIC"),
-            Map.entry(NetworkId.AVALANCHE, "AVAX"),
-            Map.entry(NetworkId.MANTLE, "MNT"),
-            Map.entry(NetworkId.PLASMA, "XPL")
-    );
-
-    /**
-     * Wrapped-native contracts that are accounting-identical to the network's native token.
-     * Wrap/unwrap swaps between native and these contracts are treated as same-asset moves
-     * (no cost-basis impact). Addresses are lowercase.
-     */
-    private static final Map<NetworkId, Set<String>> NATIVE_ALIAS_CONTRACTS = Map.ofEntries(
-            Map.entry(NetworkId.ETHEREUM,  Set.of("0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2")),  // WETH
-            Map.entry(NetworkId.ARBITRUM,  Set.of("0x82af49447d8a07e3bd95bd0d56f35241523fbab1")),  // WETH
-            Map.entry(NetworkId.OPTIMISM,  Set.of("0x4200000000000000000000000000000000000006")),  // WETH
-            Map.entry(NetworkId.BASE,      Set.of("0x4200000000000000000000000000000000000006")),  // WETH
-            Map.entry(NetworkId.UNICHAIN,  Set.of("0x4200000000000000000000000000000000000006")),  // WETH
-            Map.entry(NetworkId.ZKSYNC,    Set.of(
-                    "0x000000000000000000000000000000000000800a",  // native ETH alias (system contract)
-                    "0x5aea5775959fbc2557cc8789bc1bf90a239d9a91"   // WETH
-            )),
-            Map.entry(NetworkId.LINEA,     Set.of("0xe5d7c2a44ffddf6b295a15c148167daaaf5cf34f")),  // WETH
-            Map.entry(NetworkId.BSC,       Set.of("0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c")),  // WBNB
-            Map.entry(NetworkId.POLYGON,   Set.of("0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270")),  // WMATIC
-            Map.entry(NetworkId.AVALANCHE, Set.of("0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7")),  // WAVAX
-            Map.entry(NetworkId.MANTLE,    Set.of("0x78c1b0c915c4faa5fffa6cabf0219da63d7f4cb8"))   // WMNT
-    );
 
     private static final String VARIABLE_DEBT_PREFIX = "VARIABLEDEBT";
     private static final String STABLE_DEBT_PREFIX = "STABLEDEBT";
@@ -348,14 +309,16 @@ public final class AccountingAssetIdentitySupport {
         if (networkId == null) {
             return false;
         }
-        // Contract check first: if the contract is in the alias map the token is treated as
+        // Contract check first: if the contract is in the alias set the token is treated as
         // the network native regardless of symbol (e.g. WAVAX contract → AVAX accounting
         // identity). Symbol-only check (native token with no contract) comes second.
+        // Source of truth: network-descriptors.yml (wrapped-native ∪ native-alias contracts),
+        // bridged at startup via NetworkNativeAssets.
         if (contract != null) {
-            return NATIVE_ALIAS_CONTRACTS.getOrDefault(networkId, Set.of()).contains(contract);
+            return NetworkNativeAssets.nativeAliasContracts(networkId).contains(contract);
         }
         // No contract → pure native token; accept only when symbol matches.
-        String nativeSymbol = NATIVE_SYMBOLS.get(networkId);
+        String nativeSymbol = NetworkNativeAssets.nativeSymbol(networkId);
         return nativeSymbol != null && nativeSymbol.equals(symbol);
     }
 

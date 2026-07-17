@@ -17,6 +17,7 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.domain.transaction.raw.RawTransactionRepository;
+import com.walletradar.application.cex.normalization.venue.bybit.BybitBotExecutionAttributionService;
 import com.walletradar.application.cex.normalization.venue.bybit.BybitBotTransferCostBasisService;
 import com.walletradar.application.cex.normalization.venue.bybit.BybitCanonicalTransactionBuilder;
 import com.walletradar.application.cex.normalization.venue.bybit.BybitEarnPrincipalTransferPairer;
@@ -103,6 +104,8 @@ class BybitNormalizationServiceTest {
     private BybitStakingConversionPairer bybitStakingConversionPairer;
     @Mock
     private BybitOnChainEarnFundPairer bybitOnChainEarnFundPairer;
+    @Mock
+    private BybitBotExecutionAttributionService bybitBotExecutionAttributionService;
     @Mock
     private BybitBotTransferCostBasisService bybitBotTransferCostBasisService;
 
@@ -797,6 +800,7 @@ class BybitNormalizationServiceTest {
                 bybitStreamAuthorityCollapser,
                 bybitStakingConversionPairer,
                 bybitOnChainEarnFundPairer,
+                bybitBotExecutionAttributionService,
                 bybitBotTransferCostBasisService
         );
     }

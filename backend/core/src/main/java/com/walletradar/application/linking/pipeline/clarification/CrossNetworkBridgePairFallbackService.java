@@ -40,6 +40,15 @@ public class CrossNetworkBridgePairFallbackService {
     private static final MathContext MC = MathContext.DECIMAL64;
     private static final BigDecimal MAX_RELATIVE_QTY_DIFF = new BigDecimal("0.05");
     private static final Duration MAX_INBOUND_DELAY = Duration.ofHours(24);
+    /**
+     * NEW-08 Layer B/D: a cross-asset orphan bridge pair (e.g. USDC BRIDGE_OUT → ETH BRIDGE_IN) is
+     * only accepted inside a tight window, unlike the loose 24h same-asset lookback. Both legs are
+     * already pre-classified bridges (registered-contract/route anchored at classification), so the
+     * hard anchors here are: tight time proximity, USD-value proximity, single principal each side,
+     * and caller uniqueness ({@link #pair} requires exactly one match).
+     */
+    private static final Duration CROSS_ASSET_MAX_TIME_DELTA = Duration.ofSeconds(180);
+    private static final BigDecimal CROSS_ASSET_MAX_RELATIVE_USD_DIFF = new BigDecimal("0.15");
     private static final String BRIDGE_MISSING_REASON = "BRIDGE_ON_CHAIN_LEG_NOT_FOUND";
     private static final String CROSSNET_CORR_PREFIX = "bridge:crossnet:";
 
@@ -170,13 +179,48 @@ public class CrossNetworkBridgePairFallbackService {
             return false;
         }
         String outboundFamily = AccountingAssetFamilySupport.continuityIdentity(outboundPrincipal.get());
-        if (!Objects.equals(inboundFamily, outboundFamily)) {
+        if (outboundFamily == null) {
             return false;
         }
-        return quantitiesCompatible(
-                inboundPrincipal.getQuantityDelta().abs(),
-                outboundPrincipal.get().getQuantityDelta().abs()
-        );
+        // Same-asset corridor keeps precedence with its existing quantity tolerance and 24h window.
+        if (Objects.equals(inboundFamily, outboundFamily)) {
+            return quantitiesCompatible(
+                    inboundPrincipal.getQuantityDelta().abs(),
+                    outboundPrincipal.get().getQuantityDelta().abs()
+            );
+        }
+        // NEW-08 Layer B/D: cross-asset corridor (USDC → ETH etc.) — deterministic, USD-value gated.
+        return acceptsCrossAssetOrphanBridge(inbound, inboundPrincipal, outbound, outboundPrincipal.get());
+    }
+
+    /**
+     * NEW-08 Layer B/D: accept a cross-asset orphan {@code BRIDGE_OUT → BRIDGE_IN} pair only when the
+     * hard anchors hold — single principal each side, tight time proximity ({@link #CROSS_ASSET_MAX_TIME_DELTA}),
+     * and USD-value proximity ({@link #CROSS_ASSET_MAX_RELATIVE_USD_DIFF}) with BOTH legs USD-resolvable
+     * (never quantity across different assets — abstain otherwise). The registered-contract and route
+     * anchors are already carried by the pre-classification of both legs as bridges; uniqueness is
+     * enforced by the caller ({@link #pair} requires exactly one match).
+     */
+    private boolean acceptsCrossAssetOrphanBridge(
+            NormalizedTransaction inbound,
+            NormalizedTransaction.Flow inboundPrincipal,
+            NormalizedTransaction outbound,
+            NormalizedTransaction.Flow outboundPrincipal
+    ) {
+        if (principalFlowCount(outbound, -1) != 1 || principalFlowCount(inbound, 1) != 1) {
+            return false;
+        }
+        long deltaSeconds = Math.abs(Duration.between(
+                outbound.getBlockTimestamp(), inbound.getBlockTimestamp()).toSeconds());
+        if (deltaSeconds > CROSS_ASSET_MAX_TIME_DELTA.toSeconds()) {
+            return false;
+        }
+        BigDecimal outboundUsd = resolveFlowUsdValue(outboundPrincipal);
+        BigDecimal inboundUsd = resolveFlowUsdValue(inboundPrincipal);
+        if (outboundUsd == null || inboundUsd == null) {
+            return false;
+        }
+        return relativeUsdDiff(outboundUsd, inboundUsd).compareTo(CROSS_ASSET_MAX_RELATIVE_USD_DIFF) <= 0;
     }
 
     private boolean materializePair(NormalizedTransaction outbound, NormalizedTransaction inbound) {
@@ -185,9 +229,14 @@ public class CrossNetworkBridgePairFallbackService {
         Instant now = Instant.now();
         List<NormalizedTransaction> updates = new ArrayList<>();
 
-        // Cross-asset corridors (cc=false) must not receive matchedCounterparty on the outbound leg;
-        // a set counterparty would route CARRY_OUT through bridgeSettlementKey() which the BRIDGE_IN never drains.
-        boolean outboundChanged = applyPairMetadata(outbound, correlationId, continuityCandidate ? inbound.getTxHash() : null, continuityCandidate, now);
+        // NEW-08 Layer C: a simple 1:1 cross-asset pair is shaped into the existing asset-changing
+        // bridge-settlement carry — KEEP matchedCounterparty on BOTH legs so bridgeSettlementKey()
+        // emits "bridge-settlement:<corrId>" on both, draining the source basis into the destination
+        // via REALLOCATE_OUT/REALLOCATE_IN. Only genuinely ambiguous multi-flow cross-asset shapes
+        // (not single principal each side) suppress the outbound counterparty.
+        boolean crossAssetSettlement = !continuityCandidate && isSinglePrincipalCrossAsset(outbound, inbound);
+        boolean keepOutboundCounterparty = continuityCandidate || crossAssetSettlement;
+        boolean outboundChanged = applyPairMetadata(outbound, correlationId, keepOutboundCounterparty ? inbound.getTxHash() : null, continuityCandidate, now);
         boolean inboundChanged = applyPairMetadata(inbound, correlationId, outbound.getTxHash(), continuityCandidate, now);
         if (removeMissingReason(inbound, BRIDGE_MISSING_REASON)) {
             inboundChanged = true;
@@ -200,7 +249,10 @@ public class CrossNetworkBridgePairFallbackService {
         if (BridgePairLinkSupport.applyLinkedBridgeCounterparty(outbound, inbound, now)) {
             inboundChanged = true;
         }
-        if (continuityCandidate) {
+        if (continuityCandidate || crossAssetSettlement) {
+            // Same-asset (cc=true) → plain move-basis carry; cross-asset (cc=false) → asset-changing
+            // settlement carry. Both require BOTH principal legs as single-principal TRANSFER (prices
+            // cleared) so bridgeSettlementKey/bridgeTransferKey fires symmetrically in replay.
             if (BridgePairLinkSupport.retagPrincipalFlowsForBridgeContinuity(outbound, now)) {
                 outboundChanged = true;
             }
@@ -252,6 +304,59 @@ public class CrossNetworkBridgePairFallbackService {
             hash = hash.toLowerCase(Locale.ROOT);
         }
         return CROSSNET_CORR_PREFIX + (hash == null ? "" : hash);
+    }
+
+    private boolean isSinglePrincipalCrossAsset(NormalizedTransaction outbound, NormalizedTransaction inbound) {
+        if (principalFlowCount(outbound, -1) != 1 || principalFlowCount(inbound, 1) != 1) {
+            return false;
+        }
+        Optional<NormalizedTransaction.Flow> outboundPrincipal = BridgePairLinkSupport
+                .selectPrimaryPrincipalFlow(outbound, -1);
+        Optional<NormalizedTransaction.Flow> inboundPrincipal = BridgePairLinkSupport
+                .selectPrimaryPrincipalFlow(inbound, 1);
+        if (outboundPrincipal.isEmpty() || inboundPrincipal.isEmpty()) {
+            return false;
+        }
+        String outboundFamily = AccountingAssetFamilySupport.continuityIdentity(outboundPrincipal.get());
+        String inboundFamily = AccountingAssetFamilySupport.continuityIdentity(inboundPrincipal.get());
+        return outboundFamily != null && inboundFamily != null && !outboundFamily.equals(inboundFamily);
+    }
+
+    private int principalFlowCount(NormalizedTransaction transaction, int direction) {
+        if (transaction == null || transaction.getFlows() == null) {
+            return 0;
+        }
+        return (int) transaction.getFlows().stream()
+                .filter(Objects::nonNull)
+                .filter(flow -> flow.getRole() != NormalizedLegRole.FEE)
+                .filter(flow -> flow.getQuantityDelta() != null
+                        && Integer.signum(flow.getQuantityDelta().signum()) == direction)
+                .count();
+    }
+
+    private BigDecimal resolveFlowUsdValue(NormalizedTransaction.Flow flow) {
+        if (flow == null) {
+            return null;
+        }
+        if (flow.getValueUsd() != null && flow.getValueUsd().signum() > 0) {
+            return flow.getValueUsd().abs();
+        }
+        if (flow.getUnitPriceUsd() != null && flow.getUnitPriceUsd().signum() > 0
+                && flow.getQuantityDelta() != null && flow.getQuantityDelta().signum() != 0) {
+            BigDecimal usd = flow.getQuantityDelta().abs().multiply(flow.getUnitPriceUsd(), MC);
+            if (usd.signum() > 0) {
+                return usd;
+            }
+        }
+        return null;
+    }
+
+    private BigDecimal relativeUsdDiff(BigDecimal left, BigDecimal right) {
+        BigDecimal denominator = left.max(right);
+        if (denominator.signum() == 0) {
+            return BigDecimal.ONE;
+        }
+        return left.subtract(right).abs().divide(denominator, MC);
     }
 
     private boolean quantitiesCompatible(BigDecimal left, BigDecimal right) {

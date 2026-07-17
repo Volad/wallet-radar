@@ -63,17 +63,10 @@ public final class InboundSignalSupport {
             "achivx"
     );
 
-    private static final Set<String> CLAIM_LIKE_SELECTORS = Set.of(
-            "0x9fb67b58", // claimWithRecipient
-            "0x71ee95c0", // Angle claim
-            "0xb7034f7e", // Compound claim
-            "0xbe5013dc", // FLUID claim
-            "0x5eac6239", // Pendle claim
-            "0x5d4df3bf", // generic claim(uint256,address,...)
-            "0x8b681820", // BSC claim
-            "0x379607f5", // stream claim
-            "0x2f52ebb7"  // merkle claim
-    );
+    // Shared reward-claim core (RewardClaimSelectors) plus the generic claim(uint256,address,…)
+    // selector that is claim-like for inbound classification but not a ScamFilter legit-bridge marker.
+    private static final Set<String> CLAIM_LIKE_SELECTORS =
+            RewardClaimSelectors.withExtra("0x5d4df3bf");
 
     private InboundSignalSupport() {
     }

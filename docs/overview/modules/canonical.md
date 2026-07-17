@@ -13,7 +13,9 @@ No Spring beans. Other modules import static constants and pure types only.
 | `canonical.correlation.CorrelationContract` | Bybit corridor / earn / IT bundle prefix constants |
 | `canonical.correlation.BybitCarryContinuitySupport` | Pure carry-continuity helpers |
 
-Future: `ProtocolDescriptor` value types (A5) land here before application wiring.
+Note: the earlier `ProtocolDescriptor` A5 value types were retired (2026-07-16);
+protocol identity now lives in `protocols/*.json` → `ProtocolResourceDefinition`
+(application layer). See [protocol-descriptor](../../reference/protocol-descriptor.md).
 
 ## Owned collections (write owner)
 

@@ -1,50 +1,41 @@
 package com.walletradar.application.normalization.pipeline.classification.support;
 
 import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.common.NetworkNativeAssets;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 
 import java.util.Locale;
-import java.util.Map;
 
 /**
- * C2 (R1): Per-network canonical WETH / wrapped-native addresses for the classification layer.
+ * C2 (R1): Per-network canonical wrapped-native (WETH/WBNB/WMATIC/WAVAX/WMNT/WXPL…) resolver
+ * for the classification layer.
  *
- * <p>Used by {@link LpExitFeeDecomposer} and {@link LpNftClFlowMaterializer} to resolve
- * the WETH slot when a V3/Slipstream pool returns native ETH via {@code unwrapWETH9}. In that
- * case no ERC-20 Transfer reaches the wallet directly, so the fee fraction must be keyed by the
- * WETH contract address and applied to the native ETH flow.
+ * <p>Used by {@link LpExitFeeDecomposer} and {@link LpNftClFlowMaterializer} to resolve the
+ * wrapped-native slot when a V3/Slipstream pool returns the native asset via {@code unwrapWETH9}
+ * (or the chain-equivalent unwrap). In that case no ERC-20 Transfer reaches the wallet directly,
+ * so the fee fraction must be keyed by the wrapped-native contract address and applied to the
+ * native flow. On non-ETH-native chains the wrapped-native contract (WBNB/WMATIC/WAVAX/WMNT/WXPL)
+ * is the correct key for the same reason.
  *
- * <p><strong>Cross-reference:</strong> mirrors
- * {@code AccountingAssetIdentitySupport.NATIVE_ALIAS_CONTRACTS} in the cost-basis layer.
- * Both maps must stay in sync when new networks are added.
+ * <p><strong>Source of truth:</strong> the wrapped-native contract is read from
+ * {@code network-descriptors.yml} via {@link NetworkNativeAssets} — a single source shared with
+ * the cost-basis layer ({@code AccountingAssetIdentitySupport}), so there is no per-class map to
+ * keep in sync. Coverage now spans every network with a configured wrapped-native (Ethereum,
+ * Arbitrum, Optimism, Base, Unichain, zkSync, Linea, Katana, BSC, Polygon, Avalanche, Mantle,
+ * Plasma).
  */
 public final class NativeWrappedTokenSupport {
-
-    // Canonical WETH contract addresses, normalized to lowercase.
-    // Only networks where V3/Slipstream pools are confirmed to exist in the dataset are listed.
-    // BSC (WBNB), AVALANCHE (WAVAX), MANTLE (WMNT): not currently in V3/Slipstream scope;
-    // add here when confirmed.
-    private static final Map<NetworkId, String> CANONICAL_WETH = Map.of(
-            NetworkId.ETHEREUM, "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
-            NetworkId.ARBITRUM,  "0x82af49447d8a07e3bd95bd0d56f35241523fbab1",
-            NetworkId.OPTIMISM,  "0x4200000000000000000000000000000000000006",
-            NetworkId.BASE,      "0x4200000000000000000000000000000000000006",
-            NetworkId.UNICHAIN,  "0x4200000000000000000000000000000000000006",
-            NetworkId.ZKSYNC,    "0x5aea5775959fbc2557cc8789bc1bf90a239d9a91"
-    );
 
     private NativeWrappedTokenSupport() {
     }
 
     /**
-     * Returns the canonical WETH contract address (lowercase) for {@code networkId},
-     * or {@code null} if this network is not in scope for V3/Slipstream native-ETH pools.
+     * Returns the canonical wrapped-native contract address (lowercase) for {@code networkId}
+     * from {@code network-descriptors.yml}, or {@code null} if the network has no configured
+     * wrapped-native.
      */
     public static String canonicalWeth(NetworkId networkId) {
-        if (networkId == null) {
-            return null;
-        }
-        return CANONICAL_WETH.get(networkId);
+        return networkId == null ? null : NetworkNativeAssets.wrappedNativeContract(networkId);
     }
 
     /**

@@ -13,6 +13,8 @@ class DefiLlamaClientTest {
         assertThat(DefiLlamaClient.chainSlug(NetworkId.ARBITRUM)).contains("arbitrum");
         assertThat(DefiLlamaClient.chainSlug(NetworkId.MANTLE)).contains("mantle");
         assertThat(DefiLlamaClient.chainSlug(NetworkId.ZKSYNC)).contains("era");
+        // w4plus: DefiLlama exposes Plasma under the "plasma" coins slug (verified WXPL price live).
+        assertThat(DefiLlamaClient.chainSlug(NetworkId.PLASMA)).contains("plasma");
     }
 
     @Test

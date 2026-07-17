@@ -55,4 +55,58 @@ class ProtocolResourceLoaderTest {
                     assertThat(resource.matchesAssetMarker("debtSymbolFragments", "variableDebtAvaEURC")).isTrue();
                 });
     }
+
+    @Test
+    void foldedDescriptorFieldsParseFromProtocolProfiles() {
+        ProtocolResourceLoader loader = new ProtocolResourceLoader(new ObjectMapper());
+
+        assertThat(loader.find("Aave", "V3"))
+                .isPresent()
+                .get()
+                .satisfies(resource -> {
+                    assertThat(resource.semanticClassifier()).isEqualTo("aave-v3");
+                    assertThat(resource.lending()).isNotNull();
+                    assertThat(resource.lending().marketRateSource())
+                            .isEqualTo("protocol-registry+aave-pool-addresses-provider");
+                    assertThat(resource.lending().supportsVariableDebt()).isTrue();
+                    assertThat(resource.valuationSource()).isNotNull();
+                    assertThat(resource.valuationSource().primarySource()).isEqualTo("aave-oracle");
+                    assertThat(resource.valuationSource().fallbackSources()).containsExactly("coingecko-underlying");
+                    assertThat(resource.lpPresentation()).isNull();
+                });
+
+        assertThat(loader.find("GMX", "v2"))
+                .isPresent()
+                .get()
+                .satisfies(resource -> {
+                    assertThat(resource.semanticClassifier()).isEqualTo("gmx-v2");
+                    assertThat(resource.lpPresentation()).isNotNull();
+                    assertThat(resource.lpPresentation().positionIdentityStrategy()).isEqualTo("gmx-market-key");
+                    assertThat(resource.lpPresentation().receiptTokenPatterns()).containsExactly("GM", "GLP");
+                    assertThat(resource.valuationSource()).isNotNull();
+                    assertThat(resource.valuationSource().primarySource()).isEqualTo("gmx-reader");
+                });
+
+        assertThat(loader.find("Uniswap", "v3"))
+                .isPresent()
+                .get()
+                .satisfies(resource -> {
+                    assertThat(resource.semanticClassifier()).isEqualTo("uniswap-v3");
+                    assertThat(resource.lpPresentation()).isNotNull();
+                    assertThat(resource.lpPresentation().positionIdentityStrategy()).isEqualTo("nfpm-token-id");
+                    assertThat(resource.lpPresentation().receiptTokenPatterns()).containsExactly("UNI-V3-POS");
+                    assertThat(resource.lending()).isNull();
+                    assertThat(resource.valuationSource()).isNull();
+                });
+
+        assertThat(loader.find("CoWSwap", "v1"))
+                .isPresent()
+                .get()
+                .satisfies(resource -> {
+                    assertThat(resource.semanticClassifier()).isNull();
+                    assertThat(resource.lpPresentation()).isNull();
+                    assertThat(resource.lending()).isNull();
+                    assertThat(resource.valuationSource()).isNull();
+                });
+    }
 }

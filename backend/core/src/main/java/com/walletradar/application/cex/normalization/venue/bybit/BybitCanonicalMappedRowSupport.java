@@ -16,14 +16,9 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 
 @Component
 class BybitCanonicalMappedRowSupport {
-
-    private static final Set<String> STABLECOIN_SYMBOLS = Set.of(
-            "USDT", "USDC", "USDE", "USDS", "USDD", "DAI", "FDUSD", "PYUSD", "TUSD", "USD1"
-    );
 
     record TradeLeg(NormalizedLegRole role) {
     }
@@ -320,10 +315,7 @@ class BybitCanonicalMappedRowSupport {
     }
 
     boolean isStablecoin(String assetSymbol) {
-        if (assetSymbol == null || assetSymbol.isBlank()) {
-            return false;
-        }
-        return STABLECOIN_SYMBOLS.contains(assetSymbol.trim().toUpperCase(Locale.ROOT));
+        return BybitStablecoinPegSymbols.isPegged(assetSymbol);
     }
 
     String normalize(String value) {

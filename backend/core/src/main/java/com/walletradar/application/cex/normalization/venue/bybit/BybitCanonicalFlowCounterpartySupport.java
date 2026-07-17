@@ -22,7 +22,6 @@ import java.util.regex.*;
 @Component
 class BybitCanonicalFlowCounterpartySupport {
     private static final Logger LOGGER = LoggerFactory.getLogger(BybitCanonicalFlowCounterpartySupport.class);
-    private static final Set<String> STABLECOIN_SYMBOLS = Set.of("USDT","USDC","USDE","USDS","USDD","DAI","FDUSD","PYUSD","TUSD","USD1");
     private static final String BYBIT_PREFIX = "BYBIT:";
     private static final String FIAT_P2P_COUNTERPARTY = "FIAT:P2P";
     private static final String TX_HASH_MISSING_BYBIT_CORRIDOR = "TX_HASH_MISSING_BYBIT_CORRIDOR";
@@ -210,9 +209,17 @@ boolean isBotTransfer(ExternalLedgerRaw row) {
         return row != null && "Bot".equalsIgnoreCase(row.getBybitType() == null ? null : row.getBybitType().trim());
     }
 void reclassifyBotTransfer(NormalizedTransaction transaction, ExternalLedgerRaw row, Instant now) {
+        // ADR-058 A2/D5 (anti-Phase-1 invariant): bot legs MUST stay on the non-guarded standalone
+        // path. Never set a correlationId or continuityCandidate here — that is exactly what routed
+        // Phase-1 bot legs onto a guarded continuity queue and aborted replay.
         transaction.setCorrelationId(null);
         transaction.setContinuityCandidate(false);
         transaction.setMatchedCounterparty(null);
+
+        // ADR-058 C.3: materialise the bot compartment as the :BOT accountRef so the ledger shows the
+        // compartment. :BOT collapses to the BYBIT:<uid> umbrella (like :FUND/:UTA/:EARN) via
+        // WalletRef.umbrellaKey(), so this adds audit visibility without a new replay position key.
+        applyBotCompartmentAccountRef(transaction, row);
 
         BigDecimal qty = row.getQuantityRaw();
         int sign = qty == null ? 0 : qty.signum();
@@ -243,6 +250,25 @@ void reclassifyBotTransfer(NormalizedTransaction transaction, ExternalLedgerRaw 
         if (nonStablecoinReturn) {
             if (!transaction.getMissingDataReasons().contains(BOT_TRANSFER_PENDING_COST)) {
                 transaction.getMissingDataReasons().add(BOT_TRANSFER_PENDING_COST);
+            }
+        }
+    }
+void applyBotCompartmentAccountRef(NormalizedTransaction transaction, ExternalLedgerRaw row) {
+        if (transaction == null || transaction.getFlows() == null) {
+            return;
+        }
+        String walletRef = resolveWalletRef(row);
+        String masterUid = extractUid(walletRef);
+        if (masterUid.isBlank()) {
+            masterUid = normalize(row == null ? null : row.getUid());
+        }
+        if (masterUid == null || masterUid.isBlank()) {
+            return;
+        }
+        String botRef = BYBIT_PREFIX + masterUid + ":BOT";
+        for (NormalizedTransaction.Flow flow : transaction.getFlows()) {
+            if (flow != null) {
+                flow.setAccountRef(botRef);
             }
         }
     }
@@ -500,7 +526,6 @@ String fallbackInternalTransferCounterparty(String walletRef, String masterUid) 
     }
     private String normalize(String value) { return value == null ? "" : value.trim().toLowerCase(Locale.ROOT); }
     private boolean isStablecoin(String assetSymbol) {
-        if (assetSymbol == null || assetSymbol.isBlank()) return false;
-        return STABLECOIN_SYMBOLS.contains(assetSymbol.trim().toUpperCase(Locale.ROOT));
+        return BybitStablecoinPegSymbols.isPegged(assetSymbol);
     }
 }

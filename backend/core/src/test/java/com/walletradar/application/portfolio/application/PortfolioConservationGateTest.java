@@ -17,7 +17,9 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.application.pricing.domain.PriceQuote;
 import com.walletradar.application.pricing.persistence.HistoricalPriceCacheService;
+import com.walletradar.testsupport.CounterpartyHintTestFixtures;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -57,6 +59,13 @@ class PortfolioConservationGateTest {
     private PortfolioConservationGate gate;
     private ListAppender<ILoggingEvent> logAppender;
 
+    @BeforeAll
+    static void bindCounterpartyHints() {
+        // Binds ConservationCounterpartyHints (bridge-payout / relay-source / lp-pool sets) that the
+        // gate reads at runtime — same convention as W1 tests binding NetworkNativeAssets.
+        CounterpartyHintTestFixtures.service();
+    }
+
     @BeforeEach
     void setUp() {
         gate = new PortfolioConservationGate(
@@ -65,7 +74,8 @@ class PortfolioConservationGateTest {
                 accountingUniverseRepository,
                 mongoOperations,
                 historicalPriceCacheService,
-                new ReplayToleranceProperties()
+                new ReplayToleranceProperties(),
+                com.walletradar.testsupport.NetworkTestFixtures.registry()
         );
         lenient().when(historicalPriceCacheService.findCanonicalQuote(any(), any(), any()))
                 .thenReturn(Optional.empty());

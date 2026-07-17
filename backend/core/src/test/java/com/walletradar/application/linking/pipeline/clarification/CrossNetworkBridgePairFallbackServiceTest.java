@@ -171,6 +171,164 @@ class CrossNetworkBridgePairFallbackServiceTest {
         verify(normalizedTransactionRepository, never()).saveAll(any());
     }
 
+    @Test
+    @DisplayName("NEW-08: cross-asset USDC BRIDGE_OUT pairs with ETH BRIDGE_IN via settlement carry (cc=false, both TRANSFER)")
+    void crossAssetOrphanBridgePairsWithSettlementCarry() {
+        NormalizedTransaction outbound = bridgeLegWithUsd(
+                "out",
+                OUT_HASH,
+                NetworkId.UNICHAIN,
+                NormalizedTransactionType.BRIDGE_OUT,
+                "USDC",
+                "-2050.040045",
+                "2050.040045",
+                Instant.parse("2026-02-01T10:00:00Z")
+        );
+        NormalizedTransaction inbound = bridgeLegWithUsd(
+                "in",
+                IN_HASH,
+                NetworkId.KATANA,
+                NormalizedTransactionType.BRIDGE_IN,
+                "ETH",
+                "0.452894",
+                "2135.70",
+                Instant.parse("2026-02-01T10:00:02Z")
+        );
+        inbound.setMissingDataReasons(new ArrayList<>(List.of("BRIDGE_ON_CHAIN_LEG_NOT_FOUND")));
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(inbound), List.of(outbound));
+
+        int paired = service.reconcileOrphanInbounds(25);
+
+        assertThat(paired).isEqualTo(1);
+        String expectedCorrelation = "bridge:crossnet:" + OUT_HASH.toLowerCase();
+        assertThat(outbound.getCorrelationId()).isEqualTo(expectedCorrelation);
+        assertThat(inbound.getCorrelationId()).isEqualTo(expectedCorrelation);
+        assertThat(outbound.getContinuityCandidate()).isFalse();
+        assertThat(inbound.getContinuityCandidate()).isFalse();
+        assertThat(outbound.getMatchedCounterparty()).isEqualTo(IN_HASH);
+        assertThat(inbound.getMatchedCounterparty()).isEqualTo(OUT_HASH);
+        assertThat(outbound.getFlows().getFirst().getRole()).isEqualTo(NormalizedLegRole.TRANSFER);
+        assertThat(inbound.getFlows().getFirst().getRole()).isEqualTo(NormalizedLegRole.TRANSFER);
+    }
+
+    @Test
+    @DisplayName("NEW-08 guardrail: cross-asset pair outside the 180s window is not paired")
+    void crossAssetOutsideTimeWindowIsNotPaired() {
+        NormalizedTransaction outbound = bridgeLegWithUsd(
+                "out",
+                OUT_HASH,
+                NetworkId.UNICHAIN,
+                NormalizedTransactionType.BRIDGE_OUT,
+                "USDC",
+                "-2050.040045",
+                "2050.040045",
+                Instant.parse("2026-02-01T10:00:00Z")
+        );
+        NormalizedTransaction inbound = bridgeLegWithUsd(
+                "in",
+                IN_HASH,
+                NetworkId.KATANA,
+                NormalizedTransactionType.BRIDGE_IN,
+                "ETH",
+                "0.452894",
+                "2135.70",
+                Instant.parse("2026-02-01T10:10:00Z")
+        );
+        inbound.setMissingDataReasons(new ArrayList<>(List.of("BRIDGE_ON_CHAIN_LEG_NOT_FOUND")));
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(inbound), List.of(outbound));
+
+        int paired = service.reconcileOrphanInbounds(25);
+
+        assertThat(paired).isZero();
+        verify(normalizedTransactionRepository, never()).saveAll(any());
+    }
+
+    @Test
+    @DisplayName("NEW-08 guardrail: dust inbound against a large source fails USD-value proximity")
+    void crossAssetDustInboundFailsValueProximity() {
+        NormalizedTransaction outbound = bridgeLegWithUsd(
+                "out",
+                OUT_HASH,
+                NetworkId.UNICHAIN,
+                NormalizedTransactionType.BRIDGE_OUT,
+                "USDC",
+                "-2050.040045",
+                "2050.040045",
+                Instant.parse("2026-02-01T10:00:00Z")
+        );
+        NormalizedTransaction inbound = bridgeLegWithUsd(
+                "in",
+                IN_HASH,
+                NetworkId.KATANA,
+                NormalizedTransactionType.BRIDGE_IN,
+                "ETH",
+                "0.0000002",
+                "0.001",
+                Instant.parse("2026-02-01T10:00:02Z")
+        );
+        inbound.setMissingDataReasons(new ArrayList<>(List.of("BRIDGE_ON_CHAIN_LEG_NOT_FOUND")));
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(inbound), List.of(outbound));
+
+        int paired = service.reconcileOrphanInbounds(25);
+
+        assertThat(paired).isZero();
+        verify(normalizedTransactionRepository, never()).saveAll(any());
+    }
+
+    @Test
+    @DisplayName("NEW-08 guardrail: cross-asset pair with unresolvable destination USD abstains")
+    void crossAssetUnresolvableUsdAbstains() {
+        NormalizedTransaction outbound = bridgeLegWithUsd(
+                "out",
+                OUT_HASH,
+                NetworkId.UNICHAIN,
+                NormalizedTransactionType.BRIDGE_OUT,
+                "USDC",
+                "-2050.040045",
+                "2050.040045",
+                Instant.parse("2026-02-01T10:00:00Z")
+        );
+        NormalizedTransaction inbound = bridgeLeg(
+                "in",
+                IN_HASH,
+                NetworkId.KATANA,
+                NormalizedTransactionType.BRIDGE_IN,
+                "ETH",
+                "0.452894",
+                Instant.parse("2026-02-01T10:00:02Z")
+        );
+        inbound.setMissingDataReasons(new ArrayList<>(List.of("BRIDGE_ON_CHAIN_LEG_NOT_FOUND")));
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(inbound), List.of(outbound));
+
+        int paired = service.reconcileOrphanInbounds(25);
+
+        assertThat(paired).isZero();
+        verify(normalizedTransactionRepository, never()).saveAll(any());
+    }
+
+    private static NormalizedTransaction bridgeLegWithUsd(
+            String id,
+            String txHash,
+            NetworkId networkId,
+            NormalizedTransactionType type,
+            String assetSymbol,
+            String quantity,
+            String valueUsd,
+            Instant timestamp
+    ) {
+        NormalizedTransaction transaction = bridgeLeg(id, txHash, networkId, type, assetSymbol, quantity, timestamp);
+        transaction.getFlows().getFirst().setValueUsd(new BigDecimal(valueUsd));
+        return transaction;
+    }
+
     private static NormalizedTransaction bridgeLeg(
             String id,
             String txHash,

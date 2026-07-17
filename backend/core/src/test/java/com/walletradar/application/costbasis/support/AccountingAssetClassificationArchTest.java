@@ -11,7 +11,10 @@ import java.util.stream.Stream;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * ADR-054: C1/C2 registry must stay aligned with {@link AccountingAssetFamilySupport#SYMBOL_FAMILIES}.
+ * ADR-054 / ADR-060: {@link AccountingAssetClassificationSupport} (the C1/C2 registry) is the single
+ * source of accounting-family identity. These tests assert that the registry resolves through
+ * {@link AccountingAssetFamilySupport#continuityIdentity} exactly as declared, and that the W9
+ * consolidation left only the documented {@code AAVASAVAX} supplemental entry outside it.
  */
 class AccountingAssetClassificationArchTest {
 
@@ -38,21 +41,32 @@ class AccountingAssetClassificationArchTest {
     }
 
     @Test
-    void registryC2FamiliesMatchSymbolFamiliesMap() {
+    void registryC2FamiliesResolveToDeclaredFamily() {
         for (Map.Entry<String, String> entry : AccountingAssetClassificationSupport.c2ContinuityFamilies().entrySet()) {
-            assertThat(AccountingAssetFamilySupport.SYMBOL_FAMILIES.get(entry.getKey()))
-                    .as("SYMBOL_FAMILIES entry for C2 %s", entry.getKey())
+            assertThat(AccountingAssetFamilySupport.continuityIdentity(entry.getKey(), null))
+                    .as("continuityIdentity for C2 %s", entry.getKey())
                     .isEqualTo(entry.getValue());
         }
     }
 
     @Test
-    void noC2SymbolInEthFamilyBlock() {
+    void supplementalFamiliesHoldOnlyAaveSavaxAndNeverShadowRegistry() {
+        assertThat(AccountingAssetFamilySupport.SUPPLEMENTAL_FAMILIES)
+                .as("W9 residue is exactly the aAvaSAVAX supplemental entry (ADR-060)")
+                .containsExactlyInAnyOrderEntriesOf(Map.of("AAVASAVAX", "FAMILY:SAVAX"));
+        for (String symbol : AccountingAssetFamilySupport.SUPPLEMENTAL_FAMILIES.keySet()) {
+            assertThat(AccountingAssetClassificationSupport.continuityFamilyIdentity(symbol, null))
+                    .as("supplemental %s must not be classified by the registry", symbol)
+                    .isNull();
+        }
+    }
+
+    @Test
+    void noC2SymbolResolvesToEthFamily() {
         for (String symbol : AccountingAssetClassificationSupport.c2DistinctAssetSymbols()) {
-            String mapped = AccountingAssetFamilySupport.SYMBOL_FAMILIES.get(symbol);
-            if (mapped != null) {
-                assertThat(mapped).isNotEqualTo("FAMILY:ETH");
-            }
+            assertThat(AccountingAssetFamilySupport.continuityIdentity(symbol, null))
+                    .as("C2 symbol %s must not resolve to FAMILY:ETH", symbol)
+                    .isNotEqualTo("FAMILY:ETH");
         }
     }
 

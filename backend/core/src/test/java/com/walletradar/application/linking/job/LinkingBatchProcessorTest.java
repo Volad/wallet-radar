@@ -21,8 +21,10 @@ import com.walletradar.application.cex.normalization.venue.bybit.BybitStreamAuth
 import com.walletradar.application.linking.pipeline.clarification.AddressPoisoningDetector;
 import com.walletradar.application.linking.pipeline.clarification.EtherFiOftBridgeInClassifier;
 import com.walletradar.application.linking.pipeline.clarification.GmxEntryRequestLinkService;
+import com.walletradar.application.linking.pipeline.clarification.GmxExecutionFeeRefundBasisNeutralService;
 import com.walletradar.application.linking.pipeline.clarification.GmxExitSettlementLinkService;
 import com.walletradar.application.linking.pipeline.clarification.GmxV2RefundClassifier;
+import com.walletradar.application.linking.pipeline.clarification.GmxWithdrawalSettlementLinkService;
 import com.walletradar.application.linking.pipeline.clarification.KnownBridgeRouterExternalTypeCorrectionService;
 import com.walletradar.application.linking.pipeline.clarification.NftMintRetagger;
 import com.walletradar.application.linking.pipeline.clarification.AaveVariableDebtTokenTagger;
@@ -88,6 +90,10 @@ class LinkingBatchProcessorTest {
         GmxExitSettlementLinkService gmxExitSettlementLinkService = mock(GmxExitSettlementLinkService.class);
         GmxEntryRequestLinkService gmxEntryRequestLinkService = mock(GmxEntryRequestLinkService.class);
         GmxV2RefundClassifier gmxV2RefundClassifier = mock(GmxV2RefundClassifier.class);
+        GmxWithdrawalSettlementLinkService gmxWithdrawalSettlementLinkService =
+                mock(GmxWithdrawalSettlementLinkService.class);
+        GmxExecutionFeeRefundBasisNeutralService gmxExecutionFeeRefundBasisNeutralService =
+                mock(GmxExecutionFeeRefundBasisNeutralService.class);
         EtherFiOftBridgeInClassifier etherFiOftBridgeInClassifier = mock(EtherFiOftBridgeInClassifier.class);
         NftMintRetagger nftMintRetagger = mock(NftMintRetagger.class);
         TurtleVaultBurnRepairService turtleVaultBurnRepairService = mock(TurtleVaultBurnRepairService.class);
@@ -119,6 +125,8 @@ class LinkingBatchProcessorTest {
         when(gmxExitSettlementLinkService.linkOutstandingSettlements(25)).thenReturn(0);
         when(gmxEntryRequestLinkService.linkOutstandingRequests(25)).thenReturn(0);
         when(gmxV2RefundClassifier.classifyGmxRefunds(25)).thenReturn(27);
+        when(gmxWithdrawalSettlementLinkService.linkOutstandingWithdrawalSettlements(25)).thenReturn(39);
+        when(gmxExecutionFeeRefundBasisNeutralService.reclassifyResidualRefunds(25)).thenReturn(48);
         when(etherFiOftBridgeInClassifier.reclassifyEtherFiOftInbounds(25)).thenReturn(28);
         when(nftMintRetagger.reclassifyNftMints(25)).thenReturn(30);
         when(unmatchedBridgeInboundPricingFallbackService.reconcileUnsupportedOutbounds()).thenReturn(19);
@@ -164,6 +172,8 @@ class LinkingBatchProcessorTest {
                 gmxExitSettlementLinkService,
                 gmxEntryRequestLinkService,
                 gmxV2RefundClassifier,
+                gmxWithdrawalSettlementLinkService,
+                gmxExecutionFeeRefundBasisNeutralService,
                 etherFiOftBridgeInClassifier,
                 nftMintRetagger
         );
@@ -171,7 +181,7 @@ class LinkingBatchProcessorTest {
         AtomicInteger heartbeatCount = new AtomicInteger();
         int processed = processor.processNextBatch(25, heartbeatCount::incrementAndGet);
 
-        assertThat(processed).isEqualTo(946);
-        assertThat(heartbeatCount).hasValue(42);
+        assertThat(processed).isEqualTo(1033);
+        assertThat(heartbeatCount).hasValue(44);
     }
 }

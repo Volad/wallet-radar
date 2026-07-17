@@ -1,6 +1,8 @@
 package com.walletradar.application.normalization.pipeline.classification.support;
 
 import com.walletradar.domain.common.NetworkId;
+import com.walletradar.testsupport.CounterpartyHintTestFixtures;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -9,6 +11,13 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class KnownProtocolCounterpartyRegistryTest {
+
+    @BeforeAll
+    static void bindCounterpartyHints() {
+        // Constructing the service binds the static adapter (same convention as W1 tests binding
+        // NetworkNativeAssets via NetworkTestFixtures). Without this the adapter returns empty.
+        CounterpartyHintTestFixtures.service();
+    }
 
     @Test
     @DisplayName("LI.FI Permit2 Proxy on BASE is found")

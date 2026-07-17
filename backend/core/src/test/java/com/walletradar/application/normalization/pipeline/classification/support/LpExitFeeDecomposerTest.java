@@ -3,7 +3,9 @@ package com.walletradar.application.normalization.pipeline.classification.suppor
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.application.normalization.pipeline.onchain.OnChainRawTransactionView;
+import com.walletradar.testsupport.NetworkTestFixtures;
 import org.bson.Document;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
@@ -37,6 +39,14 @@ class LpExitFeeDecomposerTest {
     private static final String WALLET = "0x1111111111111111111111111111111111111111";
     private static final String WETH_CONTRACT = "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2";
     private static final String USDC_CONTRACT = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48";
+
+    @BeforeAll
+    static void bindNetworkNativeAssets() {
+        // NativeWrappedTokenSupport.canonicalWeth now reads from network-descriptors.yml via the
+        // NetworkNativeAssets bridge, which NetworkRegistry binds on construction. Building the test
+        // registry (same convention as NetworkStablecoinContracts) populates the bridge.
+        NetworkTestFixtures.registry();
+    }
 
     // ---- scenario A: normal V3 exit with principal + fee in both slots ----
 

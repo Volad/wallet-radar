@@ -931,7 +931,9 @@ public class BybitExtractionService {
     enum BybitSubAccount {
         UTA,
         FUND,
-        EARN
+        EARN,
+        /** ADR-058 A7: Bybit Trading-Bot compartment; collapses to the BYBIT:<uid> umbrella. */
+        BOT
     }
 
     private void hydrateTradeLeg(
